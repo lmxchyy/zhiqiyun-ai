@@ -1,0 +1,10 @@
+.git
+.gitignore
+data
+node_modules
+frontend-vue/node_modules
+frontend-vue/dist
+*.log
+项目说明.md
+先知AI平台开发文档.md
+实施进度.md

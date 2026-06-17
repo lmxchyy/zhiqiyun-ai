@@ -1,0 +1,17 @@
+{
+  "pages": [
+    {
+      "path": "pages/AiCreationPage",
+      "style": {
+        "navigationBarTitleText": "先知 AI",
+        "navigationStyle": "custom"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "先知 AI",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f8fafc"
+  }
+}

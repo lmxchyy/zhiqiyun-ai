@@ -1,0 +1,157 @@
+services:
+  xianzhi-ai:
+    build: .
+    image: xianzhi-ai-platform:local
+    ports:
+      - "3100:3100"
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+    environment:
+      PORT: "3100"
+      XIANZHI_DATA_PATH: "/app/data/store.json"
+      XIANZHI_STATIC_DIR: "/app/frontend-vue/dist"
+      DATABASE_URL: "postgresql://xianzhi:xianzhi@postgres:5432/xianzhi"
+      REDIS_URL: "redis://redis:6379"
+      RABBITMQ_URL: "amqp://xianzhi:xianzhi@rabbitmq:5672"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_ACCESS_KEY: "xianzhi"
+      S3_SECRET_KEY: "xianzhi-minio"
+      MODEL_PROVIDER_URL: "${MODEL_PROVIDER_URL:-}"
+      MODEL_PROVIDER_API_KEY: "${MODEL_PROVIDER_API_KEY:-}"
+      MODEL_PROVIDER_KIND: "${MODEL_PROVIDER_KIND:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://api.openai.com}"
+      MODEL_PROVIDER_IMAGE_MODEL: "${MODEL_PROVIDER_IMAGE_MODEL:-gpt-image-2}"
+      MODEL_PROVIDER_VIDEO_MODEL: "${MODEL_PROVIDER_VIDEO_MODEL:-sora-2}"
+      MODEL_PROVIDER_TIMEOUT_MS: "${MODEL_PROVIDER_TIMEOUT_MS:-30000}"
+      MODEL_PROVIDERS_JSON: "${MODEL_PROVIDERS_JSON:-}"
+      PAYMENT_CALLBACK_SECRET: "${PAYMENT_CALLBACK_SECRET:-xianzhi-demo-payment-secret}"
+      WECHAT_PAY_CALLBACK_SECRET: "${WECHAT_PAY_CALLBACK_SECRET:-}"
+      ALIPAY_CALLBACK_SECRET: "${ALIPAY_CALLBACK_SECRET:-}"
+      METRICS_TOKEN: "${METRICS_TOKEN:-}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: xianzhi
+      POSTGRES_USER: xianzhi
+      POSTGRES_PASSWORD: xianzhi
+    ports:
+      - "54321:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xianzhi -d xianzhi"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: xianzhi
+      BACKUP_INTERVAL_SECONDS: "${BACKUP_INTERVAL_SECONDS:-86400}"
+    volumes:
+      - postgres-backups:/backups
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          file="/backups/xianzhi-$$(date -u +%Y%m%dT%H%M%SZ).sql"
+          pg_dump -h postgres -U xianzhi -d xianzhi --clean --if-exists > "$$file"
+          echo "Created PostgreSQL backup: $$file"
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGPASSWORD: xianzhi
+    volumes:
+      - ./database/migrations:/migrations:ro
+    command:
+      - sh
+      - -c
+      - |
+        for file in /migrations/*.sql; do
+          echo "Applying $$file"
+          psql -h postgres -U xianzhi -d xianzhi -v ON_ERROR_STOP=1 -f "$$file"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "63791:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: xianzhi
+      RABBITMQ_DEFAULT_PASS: xianzhi
+    ports:
+      - "56721:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 8s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: xianzhi
+      MINIO_ROOT_PASSWORD: xianzhi-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  app-data:
+  postgres-data:
+  postgres-backups:
+  redis-data:
+  rabbitmq-data:
+  minio-data:

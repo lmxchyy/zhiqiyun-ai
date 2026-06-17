@@ -1,0 +1,26 @@
+{
+  "name": "xianzhi-ai-platform",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "先知 AI 一站式内容生产与代理商运营平台",
+  "scripts": {
+    "start": "cd backend-go && go run ./cmd/api",
+    "dev:api": "cd backend-go && go run ./cmd/api",
+    "dev:web": "npm --prefix frontend-vue run dev",
+    "dev:uni": "npm --prefix frontend-vue run dev",
+    "build:api": "cd backend-go && go build ./cmd/api",
+    "build:web": "npm --prefix frontend-vue run build",
+    "build:uni": "npm --prefix frontend-vue run build",
+    "test": "cd backend-go && go test ./...",
+    "docker:up": "docker compose -f compose.yml up -d --build",
+    "docker:ps": "docker compose -f compose.yml ps",
+    "docker:logs": "docker compose -f compose.yml logs -f xianzhi-ai",
+    "docker:down": "docker compose -f compose.yml down"
+  },
+  "engines": {
+    "node": ">=22",
+    "go": ">=1.22"
+  },
+  "dependencies": {}
+}
