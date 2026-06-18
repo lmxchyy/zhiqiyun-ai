@@ -10,6 +10,7 @@
     "dev:web": "npm --prefix frontend-vue run dev",
     "dev:uni": "npm --prefix frontend-vue run dev",
     "build:api": "cd backend-go && go build ./cmd/api",
+    "build:admin": "node -e \"for (const f of ['admin-web/index.html','admin-web/styles.css','admin-web/app.js']) require('node:fs').accessSync(f)\"",
     "build:web": "npm --prefix frontend-vue run build",
     "build:uni": "npm --prefix frontend-vue run build",
     "test": "cd backend-go && go test ./...",

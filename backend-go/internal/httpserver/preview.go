@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	previewImageWidth  = 1920
+	previewImageHeight = 1080
+)
+
 func promptPreviewImage(prompt string) string {
 	svg := genericPromptSVG(prompt)
 	lowerPrompt := strings.ToLower(prompt)
@@ -18,7 +23,7 @@ func promptPreviewImage(prompt string) string {
 
 func catPromptSVG(prompt string) string {
 	escapedPrompt := html.EscapeString(prompt)
-	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-label="%s">
+	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 960 540" role="img" aria-label="%s">
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#fff7ed"/>
@@ -47,12 +52,12 @@ func catPromptSVG(prompt string) string {
     <path d="M334 414 q-86 24-124-42 q44-7 74 18 q32 26 50 24" fill="none" stroke="#f8fafc" stroke-width="42" stroke-linecap="round"/>
   </g>
   <text x="480" y="492" text-anchor="middle" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="24" fill="#344054">%s</text>
-</svg>`, escapedPrompt, escapedPrompt)
+</svg>`, previewImageWidth, previewImageHeight, escapedPrompt, escapedPrompt)
 }
 
 func genericPromptSVG(prompt string) string {
 	escapedPrompt := html.EscapeString(prompt)
-	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-label="%s">
+	return fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 960 540" role="img" aria-label="%s">
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#ecfeff"/>
@@ -65,5 +70,5 @@ func genericPromptSVG(prompt string) string {
   <rect x="410" y="166" width="238" height="108" rx="24" fill="#111827" opacity=".9"/>
   <path d="M272 344 C374 286 440 386 530 320 C606 264 650 322 704 288" fill="none" stroke="#f97316" stroke-width="18" stroke-linecap="round"/>
   <text x="480" y="470" text-anchor="middle" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="24" fill="#344054">%s</text>
-</svg>`, escapedPrompt, escapedPrompt)
+</svg>`, previewImageWidth, previewImageHeight, escapedPrompt, escapedPrompt)
 }

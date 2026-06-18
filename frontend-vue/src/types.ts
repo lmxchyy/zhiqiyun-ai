@@ -20,6 +20,13 @@ export interface Asset {
   url: string;
   mediaType: "image" | "video" | "document";
   taskId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReferenceImage {
+  path: string;
+  name: string;
+  sourceAssetId?: string;
 }
 
 export interface ModelInfo {

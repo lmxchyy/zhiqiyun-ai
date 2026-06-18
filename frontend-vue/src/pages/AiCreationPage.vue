@@ -1,8 +1,48 @@
 <template>
-  <view :class="['app-shell', { 'canvas-mode': activeModule === 'generate' || activeModule === 'assets' }]">
+  <view v-if="!isLoggedIn" class="login-shell">
+    <view class="login-card">
+      <text class="eyebrow">WELCOME</text>
+      <text class="login-title">登录先知 AI</text>
+      <text class="login-copy">进入统一工作台，继续管理画布、作品和业务模块。</text>
+      <view class="login-form">
+        <label>
+          <text>邮箱</text>
+          <input v-model="loginEmail" type="text" placeholder="demo@xianzhi.ai" />
+        </label>
+        <label>
+          <text>密码</text>
+          <input v-model="loginPassword" type="password" placeholder="Demo123!" />
+        </label>
+        <button type="button" class="login-submit" @click="login">登录</button>
+      </view>
+    </view>
+  </view>
+
+  <view
+    v-else
+    :class="[
+      'app-shell',
+      `module-${activeModule}`,
+      {
+        'canvas-mode': activeModule === 'generate' || activeModule === 'assets',
+        'module-open': isModuleDrawerOpen
+      }
+    ]"
+  >
+    <button
+      type="button"
+      class="module-fab"
+      aria-label="打开模块菜单"
+      @click="isModuleDrawerOpen = true"
+    >
+      <text></text>
+      <text></text>
+      <text></text>
+      <text></text>
+    </button>
     <aside class="sidebar">
       <view class="brand-block">
-        <text class="brand-title">先知 AI</text>
+        <text class="brand-title">默认项目</text>
         <text class="brand-subtitle">AI Operating System</text>
       </view>
       <view class="mobile-module-bar">
@@ -16,13 +56,20 @@
         <button
           v-for="item in sidebarModules"
           :key="item.id"
-          :class="['nav-item', { active: activeModule === item.id }]"
+          :class="['nav-item', `nav-${item.id}`, { active: activeModule === item.id }]"
           @click="selectModule(item.id)"
         >
           {{ item.label }}
         </button>
+        <button type="button" class="nav-item more-nav-button" @click.stop="isModuleDrawerOpen = true">更多</button>
+        <button type="button" class="nav-item logout-nav-button" @click.stop="logout">退出</button>
       </view>
     </aside>
+    <view
+      v-if="isModuleDrawerOpen"
+      class="mobile-sidebar-backdrop"
+      @click="isModuleDrawerOpen = false"
+    ></view>
 
     <view class="workspace">
       <scroll-view v-if="activeModule === 'dashboard'" class="workspace-scroll" scroll-y>
@@ -60,7 +107,7 @@
               {{ models.length ? "ONLINE" : "OFFLINE" }}
             </text>
             <text class="user-pill"><text class="user-badge">先</text>先知 · 普通用户</text>
-            <button class="logout-button">退出</button>
+            <button type="button" class="logout-button" @click.stop="logout">退出</button>
           </view>
         </view>
         <template v-if="activeModule === 'generate'">
@@ -71,7 +118,9 @@
           :showing-history="showHistory"
           :quota="quota"
           :running-count="runningTaskCount"
+          :pending-count="pendingGenerationCount"
           @reuse="reuseTask"
+          @edit="editAsset"
           @select-history="selectHistoryItem"
           @delete="deleteAsset"
           @restore-history="restoreHistory"
@@ -83,8 +132,11 @@
           v-model:model="model"
           v-model:count="count"
           v-model:ratio="ratio"
+          v-model:reference-images="referenceImages"
           :models="models"
+          :quota="quota"
           @submit="submit"
+          @upload="setReferenceImage"
           />
         </template>
         <scroll-view v-else class="creation-assets workspace-scroll" scroll-y>
@@ -118,7 +170,7 @@
       </scroll-view>
     </view>
 
-    <view v-if="isModuleDrawerOpen" class="module-drawer-layer" @click="isModuleDrawerOpen = false">
+    <view v-if="false" class="module-drawer-layer" @click="isModuleDrawerOpen = false">
       <view class="module-drawer" @click.stop>
         <view class="drawer-handle"></view>
         <view class="drawer-head">
@@ -138,6 +190,10 @@
             <text class="drawer-module-title">{{ item.label }}</text>
             <text class="drawer-module-status">{{ item.status }}</text>
           </button>
+          <button type="button" class="drawer-module logout-drawer-module" @click.stop="logout">
+            <text class="drawer-module-title">退出</text>
+            <text class="drawer-module-status">清除登录状态</text>
+          </button>
         </view>
       </view>
     </view>
@@ -145,13 +201,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { api } from "../api/client";
 import CreationCanvas from "../components/CreationCanvas.vue";
 import ComposerBar from "../components/ComposerBar.vue";
-import type { Asset, GenerationTask, ModelInfo, PointAccount } from "../types";
+import type { Asset, GenerationTask, ModelInfo, PointAccount, ReferenceImage } from "../types";
 
 type ModuleId = "dashboard" | "generate" | "assets" | "ppt" | "agents" | "geo" | "enterprise" | "membership" | "channel" | "admin";
+
+const loginRoute = "/login";
+const moduleRoutes: Record<ModuleId, string> = {
+  generate: "/ai-canvas",
+  dashboard: "/dashboard",
+  assets: "/works",
+  ppt: "/ai-ppt",
+  agents: "/agents",
+  geo: "/geo",
+  enterprise: "/enterprise",
+  membership: "/membership",
+  channel: "/channel",
+  admin: "/admin"
+};
+
+const routeModules = Object.entries(moduleRoutes).reduce<Record<string, ModuleId>>((routes, [id, path]) => {
+  routes[path] = id as ModuleId;
+  return routes;
+}, {});
+const canvasSessionKey = "xianzhi-canvas-started-at";
 
 const modules: Array<{
   id: ModuleId;
@@ -181,13 +257,18 @@ const prompt = ref("");
 const model = ref("gpt-image-2");
 const count = ref(1);
 const ratio = ref("4:3");
+const referenceImages = ref<ReferenceImage[]>([]);
+const isLoggedIn = ref(false);
+const loginEmail = ref("demo@xianzhi.ai");
+const loginPassword = ref("Demo123!");
 const isModuleDrawerOpen = ref(false);
-const canvasStartedAt = ref(new Date().toISOString());
+const canvasStartedAt = ref("");
 const showHistory = ref(false);
 const selectedHistoryAssetId = ref<string | null>(null);
+const pendingGenerationCount = ref(0);
 
 const currentModule = computed(() => modules.find(item => item.id === activeModule.value) || modules[0]);
-const sidebarModules = computed(() => modules.filter(item => item.id !== "assets"));
+const sidebarModules = computed(() => modules);
 const quota = computed(() => pointAccount.value?.available || 0);
 const runningTaskCount = computed(() => tasks.value.filter(item => ["QUEUED", "PROCESSING", "RETRYING"].includes(item.status)).length);
 const metrics = computed(() => [
@@ -219,11 +300,27 @@ const canvasItems = computed(() => {
     return allCanvasItems.value.filter(item => item.asset.id === selectedHistoryAssetId.value);
   }
   if (showHistory.value) return allCanvasItems.value;
+  if (!canvasStartedAt.value) {
+    return allCanvasItems.value.slice(-8);
+  }
   const startedAt = new Date(canvasStartedAt.value).getTime();
   return allCanvasItems.value.filter(item => new Date(item.task.createdAt || 0).getTime() >= startedAt);
 });
 
-onMounted(refresh);
+onMounted(() => {
+  syncModuleFromLocation();
+  window.addEventListener("popstate", syncModuleFromLocation);
+  canvasStartedAt.value = String(uni.getStorageSync(canvasSessionKey) || "");
+  isLoggedIn.value = Boolean(uni.getStorageSync("token"));
+  if (window.location.pathname === loginRoute) {
+    isLoggedIn.value = false;
+  }
+  if (isLoggedIn.value) void refresh();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("popstate", syncModuleFromLocation);
+});
 
 async function refresh() {
   const [taskItems, assetItems, modelItems, points] = await Promise.all([
@@ -260,6 +357,7 @@ function selectHistoryItem(item: { task: GenerationTask; asset: Asset }) {
 
 function newCanvas() {
   canvasStartedAt.value = new Date().toISOString();
+  uni.setStorageSync(canvasSessionKey, canvasStartedAt.value);
   showHistory.value = false;
   selectedHistoryAssetId.value = null;
   prompt.value = "";
@@ -269,9 +367,41 @@ function clearCanvas() {
   newCanvas();
 }
 
+function setReferenceImage(images: ReferenceImage[]) {
+  referenceImages.value = images;
+  if (images.length) {
+    uni.showToast({ title: `已上传 ${images.length} 张图片`, icon: "success" });
+  }
+}
+
+function editAsset(asset: Asset) {
+  selectModule("generate");
+  referenceImages.value = [{ path: asset.url, name: asset.name || "参考图", sourceAssetId: asset.id }];
+  prompt.value = "";
+  showHistory.value = false;
+  selectedHistoryAssetId.value = null;
+  uni.showToast({ title: "已加入参考图", icon: "success" });
+}
+
 function selectModule(id: ModuleId) {
   activeModule.value = id;
   isModuleDrawerOpen.value = false;
+  pushModuleRoute(id);
+}
+
+function syncModuleFromLocation() {
+  const path = window.location.pathname.replace(/\/$/, "") || "/";
+  if (path === loginRoute) {
+    isLoggedIn.value = false;
+    return;
+  }
+  activeModule.value = routeModules[path] || "generate";
+}
+
+function pushModuleRoute(id: ModuleId) {
+  const path = moduleRoutes[id];
+  if (!path || window.location.pathname === path) return;
+  window.history.pushState({ module: id }, "", path);
 }
 
 async function deleteAsset(asset: Asset) {
@@ -290,20 +420,61 @@ async function deleteAsset(asset: Asset) {
 
 async function submit() {
   if (!prompt.value.trim()) return;
-  await api("/api/v1/generation-tasks", {
-    method: "POST",
-    body: JSON.stringify({
-      type: "TEXT_TO_IMAGE",
-      prompt: prompt.value,
-      model: model.value,
-      params: { count: count.value, imageRatio: ratio.value },
-      idempotencyKey: crypto.randomUUID()
-    })
-  });
-  if (!showHistory.value) {
-    selectedHistoryAssetId.value = null;
-    canvasStartedAt.value = new Date(Date.now() - 1000).toISOString();
+  if (pendingGenerationCount.value > 0) {
+    uni.showToast({ title: "图片正在生成中", icon: "none" });
+    return;
   }
+  if (quota.value < count.value) {
+    uni.showToast({ title: "剩余张数不足", icon: "none" });
+    return;
+  }
+  const requestCount = count.value;
+  const requestStartedAt = new Date(Date.now() - 1000).toISOString();
+  pendingGenerationCount.value = requestCount;
+  selectedHistoryAssetId.value = null;
+  showHistory.value = false;
+  canvasStartedAt.value = requestStartedAt;
+  uni.setStorageSync(canvasSessionKey, canvasStartedAt.value);
+  try {
+    await api("/api/v1/generation-tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        type: referenceImages.value.length ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
+        prompt: prompt.value,
+        model: model.value,
+        params: { count: requestCount, imageRatio: ratio.value, referenceImages: referenceImages.value },
+        idempotencyKey: crypto.randomUUID()
+      })
+    });
+    await refresh();
+  } catch (error) {
+    uni.showToast({ title: "生成失败，请稍后重试", icon: "none" });
+    throw error;
+  } finally {
+    pendingGenerationCount.value = 0;
+  }
+}
+
+function logout() {
+  uni.removeStorageSync("token");
+  isLoggedIn.value = false;
+  isModuleDrawerOpen.value = false;
+  showHistory.value = false;
+  selectedHistoryAssetId.value = null;
+  prompt.value = "";
+  window.history.pushState({ loggedOut: true }, "", loginRoute);
+  uni.showToast({ title: "已退出", icon: "success" });
+}
+
+async function login() {
+  if (!loginEmail.value.trim() || !loginPassword.value.trim()) {
+    uni.showToast({ title: "请输入账号密码", icon: "none" });
+    return;
+  }
+  uni.setStorageSync("token", `demo-token-${Date.now()}`);
+  isLoggedIn.value = true;
+  activeModule.value = "generate";
+  window.history.pushState({ module: "generate" }, "", moduleRoutes.generate);
   await refresh();
 }
 </script>

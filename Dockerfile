@@ -15,9 +15,11 @@ FROM alpine:3.20
 WORKDIR /app
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
 COPY --from=web-build /src/frontend-vue/dist/build/h5 /app/frontend-vue/dist
+COPY admin-web /app/admin-web
 ENV PORT=3100
 ENV XIANZHI_DATA_PATH=/app/data/store.json
 ENV XIANZHI_STATIC_DIR=/app/frontend-vue/dist
+ENV XIANZHI_ADMIN_STATIC_DIR=/app/admin-web
 RUN mkdir -p /app/data \
   && printf '{"generationTasks":[],"assets":[],"counters":{}}\n' > /app/data/store.json \
   && adduser -D -H xianzhi \

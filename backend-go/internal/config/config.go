@@ -3,9 +3,14 @@ package config
 import "os"
 
 type Config struct {
-	Addr      string
-	DataPath  string
-	StaticDir string
+	Addr                string
+	DataPath            string
+	StaticDir           string
+	AdminStaticDir      string
+	ModelProviderURL    string
+	ModelProviderAPIKey string
+	ImageModel          string
+	ModelTimeoutMS      string
 }
 
 func Load() Config {
@@ -27,9 +32,34 @@ func Load() Config {
 	if staticDir == "" {
 		staticDir = "frontend-vue/dist"
 	}
+	adminStaticDir := os.Getenv("XIANZHI_ADMIN_STATIC_DIR")
+	if adminStaticDir == "" {
+		adminStaticDir = "admin-web"
+	}
+	modelProviderURL := os.Getenv("MODEL_PROVIDER_URL")
+	if modelProviderURL == "" {
+		modelProviderURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	modelProviderAPIKey := os.Getenv("MODEL_PROVIDER_API_KEY")
+	if modelProviderAPIKey == "" {
+		modelProviderAPIKey = os.Getenv("OPENAI_API_KEY")
+	}
+	imageModel := os.Getenv("MODEL_PROVIDER_IMAGE_MODEL")
+	if imageModel == "" {
+		imageModel = "gpt-image-2"
+	}
+	modelTimeoutMS := os.Getenv("MODEL_PROVIDER_TIMEOUT_MS")
+	if modelTimeoutMS == "" {
+		modelTimeoutMS = "30000"
+	}
 	return Config{
-		Addr:      addr,
-		DataPath:  dataPath,
-		StaticDir: staticDir,
+		Addr:                addr,
+		DataPath:            dataPath,
+		StaticDir:           staticDir,
+		AdminStaticDir:      adminStaticDir,
+		ModelProviderURL:    modelProviderURL,
+		ModelProviderAPIKey: modelProviderAPIKey,
+		ImageModel:          imageModel,
+		ModelTimeoutMS:      modelTimeoutMS,
 	}
 }
