@@ -7,10 +7,13 @@ type Config struct {
 	DataPath            string
 	StaticDir           string
 	AdminStaticDir      string
+	DatabaseURL         string
+	RedisURL            string
 	ModelProviderURL    string
 	ModelProviderAPIKey string
 	ImageModel          string
 	ModelTimeoutMS      string
+	ModelProvidersJSON  string
 }
 
 func Load() Config {
@@ -34,7 +37,7 @@ func Load() Config {
 	}
 	adminStaticDir := os.Getenv("XIANZHI_ADMIN_STATIC_DIR")
 	if adminStaticDir == "" {
-		adminStaticDir = "admin-web"
+		adminStaticDir = "admin-vue/dist"
 	}
 	modelProviderURL := os.Getenv("MODEL_PROVIDER_URL")
 	if modelProviderURL == "" {
@@ -48,6 +51,7 @@ func Load() Config {
 	if imageModel == "" {
 		imageModel = "gpt-image-2"
 	}
+	modelProvidersJSON := os.Getenv("MODEL_PROVIDERS_JSON")
 	modelTimeoutMS := os.Getenv("MODEL_PROVIDER_TIMEOUT_MS")
 	if modelTimeoutMS == "" {
 		modelTimeoutMS = "30000"
@@ -57,9 +61,12 @@ func Load() Config {
 		DataPath:            dataPath,
 		StaticDir:           staticDir,
 		AdminStaticDir:      adminStaticDir,
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		RedisURL:            os.Getenv("REDIS_URL"),
 		ModelProviderURL:    modelProviderURL,
 		ModelProviderAPIKey: modelProviderAPIKey,
 		ImageModel:          imageModel,
 		ModelTimeoutMS:      modelTimeoutMS,
+		ModelProvidersJSON:  modelProvidersJSON,
 	}
 }

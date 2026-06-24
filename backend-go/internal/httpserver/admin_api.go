@@ -4,7 +4,9 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -70,16 +72,26 @@ func (a adminAPI) customers(w http.ResponseWriter, _ *http.Request) {
 	}
 	plans := planMap(data.Plans)
 	points := pointMap(data.PointAccounts)
-	agents := agentByUserMap(data.ChannelAgents)
+	users := userMap(data.Users)
+	agentsByUser := agentByUserMap(data.ChannelAgents)
+	agentsByID := agentByIDMap(data.ChannelAgents)
 	items := make([]map[string]any, 0, len(data.Users))
 	for _, user := range data.Users {
 		plan := plans[user.PlanID]
-		channel := agents[user.ID]
+		ownChannel := agentsByUser[user.ID]
+		sourceAgent := agentsByUser[user.ReferredBy]
+		sourceUser := users[sourceAgent.UserID]
+		parentAgent := agentsByID[sourceAgent.ParentID]
+		parentUser := users[parentAgent.UserID]
 		items = append(items, map[string]any{
 			"id": user.ID, "name": user.Name, "email": user.Email, "role": user.Role,
 			"status": user.Status, "plan": planName(plan), "planId": user.PlanID,
 			"pointsAvailable": points[user.ID].Available, "subscriptionExpiresAt": user.SubscriptionExpiresAt,
-			"channelAgentId": channel.ID, "channelLevel": channel.Level, "createdAt": user.CreatedAt,
+			"referredBy": user.ReferredBy, "ownChannelAgentId": ownChannel.ID,
+			"sourceAgentId": sourceAgent.ID, "sourceAgentName": sourceUser.Name,
+			"sourceInviteCode": sourceAgent.InviteCode, "sourceChannelLevel": sourceAgent.Level,
+			"sourceParentAgentId": parentAgent.ID, "sourceParentAgentName": parentUser.Name,
+			"createdAt": user.CreatedAt,
 		})
 	}
 	writeJSON(w, map[string]any{"items": items})
@@ -157,6 +169,40 @@ func (a adminAPI) channelAgentTree(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"items": roots})
+}
+
+func (a adminAPI) createChannelAgent(w http.ResponseWriter, r *http.Request) {
+	var req adminChannelCreateMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Email = strings.TrimSpace(req.Email)
+	req.ParentID = strings.TrimSpace(req.ParentID)
+	req.Status = strings.ToUpper(strings.TrimSpace(req.Status))
+	req.InviteCode = strings.ToUpper(strings.TrimSpace(req.InviteCode))
+	if req.Name == "" || req.Email == "" {
+		writeError(w, http.StatusBadRequest, errors.New("name and email are required"))
+		return
+	}
+	if req.Level == 0 {
+		req.Level = 1
+	}
+	if req.Level < 1 || req.Level > 2 {
+		writeError(w, http.StatusBadRequest, errors.New("level must be 1 or 2"))
+		return
+	}
+	if req.Level == 2 && req.ParentID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("parentId is required for level 2 agents"))
+		return
+	}
+	agent, user, err := a.store.CreateAdminChannelAgent(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": channelAgentView(agent, user), "user": userView(user)})
 }
 
 func (a adminAPI) updateChannelAgent(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +365,30 @@ func (a adminAPI) updateDeliveryProject(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]any{"item": item})
 }
 
+func (a adminAPI) generationTasks(w http.ResponseWriter, _ *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	users := userMap(data.Users)
+	assetsByTask := map[string][]asset{}
+	for _, item := range data.Assets {
+		assetsByTask[item.TaskID] = append(assetsByTask[item.TaskID], item)
+	}
+	items := make([]map[string]any, 0, len(data.GenerationTasks))
+	for _, task := range data.GenerationTasks {
+		user := users[task.UserID]
+		items = append(items, map[string]any{
+			"id": task.ID, "userId": task.UserID, "user": user.Name,
+			"type": task.Type, "model": task.Model, "status": task.Status,
+			"progress": task.Progress, "pointCost": task.PointCost,
+			"resultIds": task.ResultIDs, "assets": assetsByTask[task.ID],
+			"createdAt": task.CreatedAt, "updatedAt": task.UpdatedAt,
+		})
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
 func (a adminAPI) usage(w http.ResponseWriter, r *http.Request) {
 	data, err := a.store.AdminData()
 	if err != nil {
@@ -435,14 +505,16 @@ func (a adminAPI) systemSettings(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	settings := data.SystemSettings
+	apiKeys := publicAPIKeys(data.APIKeys)
+	apiChannels := annotateAPIChannelsWithKeys(data.APIChannels, data.APIKeys)
 	writeJSON(w, map[string]any{
 		"brand":          settings.Brand,
 		"payments":       settings.Payments,
 		"permissions":    settings.Permissions,
 		"apiGateway":     settings.APIGateway,
-		"apiChannels":    data.APIChannels,
+		"apiChannels":    apiChannels,
 		"apiModels":      data.APIModels,
-		"apiKeys":        data.APIKeys,
+		"apiKeys":        apiKeys,
 		"customerGroups": data.CustomerGroups,
 	})
 }
@@ -499,12 +571,46 @@ func (a adminAPI) updateAPIProviderChannel(w http.ResponseWriter, r *http.Reques
 }
 
 func (a adminAPI) testAPIProviderChannel(w http.ResponseWriter, r *http.Request) {
-	item, err := a.store.TestAdminAPIChannel(r.PathValue("id"))
+	var req adminAPIChannelTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.TestAdminAPIChannel(r.PathValue("id"), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a adminAPI) fetchAPIProviderChannelModels(w http.ResponseWriter, r *http.Request) {
+	var req adminAPIChannelTestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ProbeProtocol = false
+	item, err := a.store.TestAdminAPIChannel(r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if ok, _ := item["ok"].(bool); !ok {
+		writeJSON(w, map[string]any{"item": item})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"total":            intFromAny(item["modelCount"]),
+		"all":              stringSliceFromAny(item["all"]),
+		"imageModels":      stringSliceFromAny(item["imageModels"]),
+		"chatModels":       stringSliceFromAny(item["chatModels"]),
+		"videoModels":      stringSliceFromAny(item["videoModels"]),
+		"protocol":         item["protocol"],
+		"imageRequestMode": item["imageRequestMode"],
+		"raw":              item["raw"],
+		"item":             item,
+	})
 }
 
 func (a adminAPI) apiModels(w http.ResponseWriter, _ *http.Request) {
@@ -536,7 +642,7 @@ func (a adminAPI) apiKeys(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, map[string]any{"items": data.APIKeys})
+	writeJSON(w, map[string]any{"items": publicAPIKeys(data.APIKeys)})
 }
 
 func (a adminAPI) createAPIKey(w http.ResponseWriter, r *http.Request) {
@@ -550,6 +656,7 @@ func (a adminAPI) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	item.Secret = ""
 	writeJSON(w, map[string]any{"item": item})
 }
 
@@ -611,7 +718,7 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.Users) == 0 {
 		data.Users = []adminUser{
 			{ID: "user_000001", Email: "admin@xianzhi.ai", Name: "平台管理员", Role: "SUPER_ADMIN", Status: "ACTIVE", PlanID: "plan_free"},
-			{ID: "user_000002", Email: "demo@xianzhi.ai", Name: "演示用户", Role: "MEMBER", Status: "ACTIVE", PlanID: "plan_month"},
+			{ID: "user_000002", Email: "demo@xianzhi.ai", Name: "演示用户", Role: "MEMBER", Status: "ACTIVE", PlanID: "plan_month", ReferredBy: "user_000003"},
 			{ID: "user_000003", Email: "agent1@xianzhi.ai", Name: "华东一级代理", Role: "AGENT_L1", Status: "ACTIVE", PlanID: "plan_free"},
 		}
 	}
@@ -631,6 +738,12 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	}
 	if len(data.ChannelAgents) == 0 {
 		data.ChannelAgents = []adminChannelAgent{{ID: "channel_000001", UserID: "user_000003", Level: 1, Status: "ACTIVE", InviteCode: "EAST001"}}
+	}
+	if len(data.Commissions) == 0 {
+		data.Commissions = []adminCommission{{ID: "commission_000001", OrderID: "order_000001", AgentID: "channel_000001", AmountCents: 990, Rate: 0.1, Status: "SETTLED"}}
+	}
+	if len(data.Withdrawals) == 0 {
+		data.Withdrawals = []adminWithdrawal{{ID: "withdrawal_000001", AgentID: "channel_000001", AmountCents: 300, Status: "PENDING"}}
 	}
 	if len(data.AdminProducts) == 0 {
 		data.AdminProducts = defaultAdminProducts(data)
@@ -693,16 +806,87 @@ func defaultSystemSettings() adminSystemSettings {
 }
 
 func defaultAPIChannels() []adminAPIChannel {
-	return []adminAPIChannel{
-		{ID: "channel_openai", Name: "OpenAI 官方", BaseURL: "https://api.openai.com/v1", Status: "CONFIGURABLE", Priority: 10, Models: []string{"gpt-image-2", "mock-standard"}},
-		{ID: "channel_compatible", Name: "OpenAI 兼容上游", BaseURL: "https://example-compatible-provider/v1", Status: "PLANNED", Priority: 20, Models: []string{"gpt-image-2"}},
+	items := []adminAPIChannel{
+		{
+			ID: "channel_apimart", Name: "APIMart 生图聚合", BaseURL: "https://api.apimart.ai", Protocol: "apimart",
+			ImageRequestMode: "openai-json", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
+			FetchModelsPath: "/v1/models", APIKeyEnv: "APIMART_API_KEY", Notes: "参考 Infinite-Canvas 推荐平台，适合聚合图片、视频和 LLM 模型。",
+			Status: "CONFIGURABLE", Priority: 10, Models: []string{"gpt-image-2", "nano-banana-edit", "veo3.1-fast"},
+		},
+		{
+			ID: "channel_openai", Name: "OpenAI 官方", BaseURL: "https://api.openai.com/v1", Protocol: "openai",
+			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
+			FetchModelsPath: "/models", APIKeyEnv: "OPENAI_API_KEY", Status: "CONFIGURABLE", Priority: 20, Models: []string{"gpt-image-2", "mock-standard"},
+		},
+		{
+			ID: "channel_modelscope", Name: "ModelScope", BaseURL: "https://api-inference.modelscope.cn/v1", Protocol: "openai",
+			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
+			FetchModelsPath: "/models", APIKeyEnv: "MODELSCOPE_API_KEY", Notes: "可作为免费工作流、LoRA 和国产模型补充通道。",
+			Status: "CONFIGURABLE", Priority: 30, Models: []string{"Tongyi-MAI/Z-Image-Turbo", "Qwen/Qwen-Image-2512"},
+		},
+		{
+			ID: "channel_comfyui", Name: "本地 ComfyUI 集群", BaseURL: "http://127.0.0.1:8188", Protocol: "comfyui",
+			ImageRequestMode: "workflow", FetchModelsPath: "/api/workflows", ComfyInstances: comfyInstancesFromEnv(),
+			Notes:  "用于内网工作流和私有部署，主控后台只管理节点与工作流可见范围。",
+			Status: "CONFIGURABLE", Priority: 40, Models: []string{"custom-workflow"},
+		},
 	}
+	baseURL := strings.TrimSpace(os.Getenv("MODEL_PROVIDER_URL"))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+	}
+	model := strings.TrimSpace(os.Getenv("MODEL_PROVIDER_IMAGE_MODEL"))
+	if model == "" {
+		model = "gpt-image-2"
+	}
+	if baseURL != "" {
+		items = append([]adminAPIChannel{{
+			ID:                      "channel_runtime_env",
+			Name:                    "当前运行上游",
+			BaseURL:                 baseURL,
+			Protocol:                "openai",
+			ImageRequestMode:        "openai",
+			ImageGenerationEndpoint: "/v1/images/generations",
+			ImageEditEndpoint:       "/v1/images/edits",
+			FetchModelsPath:         "/models",
+			APIKeyEnv:               "MODEL_PROVIDER_API_KEY",
+			Primary:                 true,
+			Status:                  "ACTIVE",
+			Priority:                1,
+			Models:                  []string{model},
+			APIKeyConfigured:        os.Getenv("MODEL_PROVIDER_API_KEY") != "" || os.Getenv("OPENAI_API_KEY") != "",
+		}}, items...)
+	}
+	return items
+}
+
+func comfyInstancesFromEnv() []string {
+	raw := strings.TrimSpace(os.Getenv("COMFYUI_INSTANCES"))
+	if raw == "" {
+		return []string{"127.0.0.1:8188"}
+	}
+	parts := strings.Split(raw, ",")
+	items := []string{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			items = append(items, part)
+		}
+	}
+	if len(items) == 0 {
+		return []string{"127.0.0.1:8188"}
+	}
+	return items
 }
 
 func defaultAPIModels() []adminAPIModel {
+	model := strings.TrimSpace(os.Getenv("MODEL_PROVIDER_IMAGE_MODEL"))
+	if model == "" {
+		model = "gpt-image-2"
+	}
 	return []adminAPIModel{
 		{ID: "model_mock_standard", Model: "mock-standard", Name: "本地演示模型", Capability: "TEXT_TO_IMAGE", BillingMode: "PER_REQUEST", FixedQuota: 1, ModelRatio: 1, CompletionRatio: 1, Status: "ACTIVE"},
-		{ID: "model_gpt_image_2", Model: "gpt-image-2", Name: "OpenAI 图像模型", Capability: "IMAGE", BillingMode: "PER_REQUEST", FixedQuota: 10, ModelRatio: 1, CompletionRatio: 1, Status: "ACTIVE"},
+		{ID: "model_gpt_image_2", Model: model, Name: "当前图像模型", Capability: "IMAGE", BillingMode: "PER_REQUEST", FixedQuota: 10, ModelRatio: 1, CompletionRatio: 1, Status: "ACTIVE"},
 		{ID: "model_agent_chat", Model: "agent-chat", Name: "Agent 对话", Capability: "CHAT", BillingMode: "TOKEN", ModelRatio: 1, CompletionRatio: 2, Status: "ACTIVE"},
 	}
 }
@@ -774,6 +958,14 @@ func agentByUserMap(agents []adminChannelAgent) map[string]adminChannelAgent {
 	items := map[string]adminChannelAgent{}
 	for _, item := range agents {
 		items[item.UserID] = item
+	}
+	return items
+}
+
+func agentByIDMap(agents []adminChannelAgent) map[string]adminChannelAgent {
+	items := map[string]adminChannelAgent{}
+	for _, item := range agents {
+		items[item.ID] = item
 	}
 	return items
 }
@@ -868,6 +1060,14 @@ func userIDs(items []adminUser) map[string]bool {
 }
 
 func pointIDs(items []adminPointAccount) map[string]bool {
+	ids := map[string]bool{}
+	for _, item := range items {
+		ids[item.ID] = true
+	}
+	return ids
+}
+
+func channelAgentIDs(items []adminChannelAgent) map[string]bool {
 	ids := map[string]bool{}
 	for _, item := range items {
 		ids[item.ID] = true

@@ -1,5 +1,7 @@
 package httpserver
 
+import "xianzhi-ai/backend-go/internal/app/generation"
+
 type platformData struct {
 	Users           []adminUser         `json:"users,omitempty"`
 	Plans           []adminPlan         `json:"plans,omitempty"`
@@ -17,6 +19,7 @@ type platformData struct {
 	AdminProducts   []adminProduct      `json:"adminProducts,omitempty"`
 	GenerationTasks []generationTask    `json:"generationTasks"`
 	Assets          []asset             `json:"assets"`
+	AIState         userAIState         `json:"aiState,omitempty"`
 	Counters        map[string]int      `json:"counters"`
 	PointsAvailable *int                `json:"pointsAvailable,omitempty"`
 }
@@ -39,25 +42,20 @@ type generationTask struct {
 }
 
 type asset struct {
-	ID        string         `json:"id"`
-	UserID    string         `json:"userId"`
-	TaskID    string         `json:"taskId"`
-	Name      string         `json:"name"`
-	MediaType string         `json:"mediaType"`
-	URL       string         `json:"url"`
-	Favorite  bool           `json:"favorite"`
-	Metadata  map[string]any `json:"metadata"`
-	CreatedAt string         `json:"createdAt"`
-	UpdatedAt string         `json:"updatedAt"`
+	ID           string         `json:"id"`
+	UserID       string         `json:"userId"`
+	TaskID       string         `json:"taskId"`
+	Name         string         `json:"name"`
+	MediaType    string         `json:"mediaType"`
+	URL          string         `json:"url"`
+	ThumbnailURL string         `json:"thumbnailUrl,omitempty"`
+	Favorite     bool           `json:"favorite"`
+	Metadata     map[string]any `json:"metadata"`
+	CreatedAt    string         `json:"createdAt"`
+	UpdatedAt    string         `json:"updatedAt"`
 }
 
-type createGenerationTaskRequest struct {
-	Type            string           `json:"type"`
-	Prompt          string           `json:"prompt"`
-	Model           string           `json:"model"`
-	Params          map[string]any   `json:"params"`
-	GeneratedImages []generatedImage `json:"-"`
-}
+type createGenerationTaskRequest = generation.CreateRequest
 
 type pointAccount struct {
 	ID        string `json:"id"`
@@ -66,10 +64,44 @@ type pointAccount struct {
 	Frozen    int    `json:"frozen"`
 }
 
-type generatedImage struct {
-	URL         string
-	ContentType string
-	Width       int
-	Height      int
-	Source      string
+type generatedImage = generation.GeneratedImage
+
+type assetImageInfo struct {
+	ThumbnailURL string
+	Width        int
+	Height       int
+}
+
+type aiFavoriteCollection struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	TaskIDs   []string `json:"taskIds"`
+	CreatedAt string   `json:"createdAt,omitempty"`
+	UpdatedAt string   `json:"updatedAt,omitempty"`
+}
+
+type aiAgentMessage struct {
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"createdAt,omitempty"`
+}
+
+type aiAgentConversation struct {
+	ID        string           `json:"id"`
+	Title     string           `json:"title"`
+	Messages  []aiAgentMessage `json:"messages"`
+	CreatedAt string           `json:"createdAt"`
+	UpdatedAt string           `json:"updatedAt,omitempty"`
+}
+
+type userAIState struct {
+	UserID                string                 `json:"userId"`
+	FavoriteTaskIDs       []string               `json:"favoriteTaskIds"`
+	HiddenTaskIDs         []string               `json:"hiddenTaskIds"`
+	FavoriteCollections   []aiFavoriteCollection `json:"favoriteCollections"`
+	DefaultCollectionID   string                 `json:"defaultFavoriteCollectionId,omitempty"`
+	AgentConversations    []aiAgentConversation  `json:"agentConversations"`
+	ActiveConversationID  string                 `json:"activeConversationId,omitempty"`
+	ActiveCollectionID    string                 `json:"activeCollectionId,omitempty"`
+	UpdatedAt             string                 `json:"updatedAt,omitempty"`
 }

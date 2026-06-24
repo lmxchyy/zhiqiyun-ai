@@ -49,17 +49,14 @@ input {
   padding: 6px 8px 22px;
 }
 
-.brand-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  place-items: center;
+.brand-logo {
+  width: 46px;
+  height: 46px;
   border-radius: 8px;
-  background: var(--accent);
-  color: white;
-  font-weight: 800;
+  background: #ffffff;
+  object-fit: contain;
+  padding: 3px;
 }
-
 .brand strong,
 .brand small {
   display: block;
@@ -287,6 +284,7 @@ th {
   color: #475467;
   font-size: 12px;
   font-weight: 800;
+  text-decoration: none;
 }
 
 tr:last-child td {
@@ -354,3 +352,188 @@ tr:last-child td {
 .error-box {
   color: var(--danger);
 }
+
+.logout-button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #101828;
+  color: #fff;
+  cursor: pointer;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.logout-button:hover {
+  background: #1d2939;
+}
+.account-menu {
+  position: relative;
+}
+
+.account-menu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.account-caret {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.account-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 150px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.account-menu:not([open]) .account-menu-panel {
+  display: none;
+}
+
+.account-menu-item {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 9px 10px;
+  text-align: left;
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.account-menu-item:hover {
+  background: var(--surface-muted);
+}
+
+.account-menu-item.danger {
+  color: var(--danger);
+}
+.account-menu summary {
+  list-style: none;
+}
+
+.account-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.account-menu[open] .account-caret {
+  transform: rotate(180deg);
+}
+
+.modal-dialog {
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  width: min(420px, calc(100vw - 32px));
+  box-shadow: var(--shadow);
+}
+
+.modal-dialog::backdrop {
+  background: rgba(16, 24, 40, 0.42);
+}
+
+.modal-card {
+  display: grid;
+  gap: 14px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 20px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.modal-head h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+
+.modal-close {
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 20px;
+  height: 34px;
+  line-height: 1;
+  width: 34px;
+}
+
+.form-field {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.form-field input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 10px 11px;
+}
+
+.form-status {
+  min-height: 18px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.form-status.error {
+  color: var(--danger);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.primary-button,
+.secondary-button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 9px 13px;
+}
+
+.primary-button {
+  background: var(--accent);
+  color: #fff;
+}
+
+.secondary-button {
+  background: var(--surface);
+  color: var(--text);
+}
+

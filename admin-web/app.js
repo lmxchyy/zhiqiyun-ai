@@ -25,8 +25,18 @@ const sectionMeta = document.querySelector("#section-meta");
 const panel = document.querySelector("#panel");
 const metrics = document.querySelector("#metrics");
 const apiStatus = document.querySelector("#api-status");
+const logoutButton = document.querySelector("#logout-button");
+const changePasswordButton = document.querySelector("#change-password-button");
+const passwordDialog = document.querySelector("#password-dialog");
+const passwordForm = document.querySelector("#password-form");
+const passwordStatus = document.querySelector("#password-status");
 
 function init() {
+  if (logoutButton) logoutButton.addEventListener("click", logoutAdmin);
+  if (changePasswordButton) changePasswordButton.addEventListener("click", openPasswordDialog);
+  document.querySelector("#password-cancel-button")?.addEventListener("click", closePasswordDialog);
+  document.querySelector("#password-cancel-secondary")?.addEventListener("click", closePasswordDialog);
+  if (passwordForm) passwordForm.addEventListener("submit", submitPasswordChange);
   nav.innerHTML = modules.map((item) => `
     <button type="button" data-module="${item.id}">
       <span class="icon">${item.icon}</span>
@@ -163,13 +173,6 @@ function renderSystem(data) {
   renderTable([...rows, ...channels, ...models, ...keys, ...groups], ["item", "value", "status", "_actions"], ["配置项", "值", "状态", "操作"], toolbarFor("system"));
 }
 
-function renderCommissions(data) {
-  sectionMeta.textContent = `${(data.items || []).length} 条分润，${(data.withdrawals || []).length} 条提现`;
-  const commissions = (data.items || []).map((item) => ({ ...item, type: "分润", _kind: "commission" }));
-  const withdrawals = (data.withdrawals || []).map((item) => ({ ...item, type: "提现", orderId: "-", rate: "-", _kind: "withdrawal" }));
-  renderTable([...commissions, ...withdrawals], ["type", "id", "agentId", "orderId", "amountCents", "rate", "status", "_actions"], ["类型", "ID", "代理", "订单", "金额", "比例", "状态", "操作"], toolbarFor("commissions"));
-}
-
 function renderTable(items, keys, labels, toolbar = "") {
   state.currentRows = items;
   sectionMeta.textContent = `${items.length} 条记录`;
@@ -206,6 +209,7 @@ function formatCell(value, key, item) {
 function toolbarFor(moduleId) {
   const buttons = {
     customers: [["create-customer", "新建客户"]],
+    channels: [["create-channel", "新增代理商"]],
     orders: [["create-order", "新建订单"]],
     usage: [["filter-usage", "筛选产品"], ["export-usage", "导出 CSV"]],
     commissions: [["create-commission", "登记分润"], ["create-withdrawal", "申请提现"]],
@@ -255,6 +259,20 @@ async function handlePanelAction(event) {
 }
 
 async function runAction(action, item) {
+  if (action === "create-channel") {
+    const name = prompt("代理商名称");
+    if (!name) return;
+    const email = prompt("代理商登录邮箱", `agent${Date.now()}@example.com`);
+    if (!email) return;
+    const level = Number(prompt("代理等级：1 或 2", "1"));
+    if (![1, 2].includes(level)) throw new Error("代理等级只能是 1 或 2");
+    const parentId = level === 2 ? prompt("上级代理 ID", "channel_000001") : "";
+    if (level === 2 && !parentId) return;
+    const inviteCode = prompt("邀请码（可留空自动生成）", "");
+    await apiRequest("POST", "/api/v1/admin/channel-agents", { name, email, level, parentId, inviteCode, status: "ACTIVE", available: 0 });
+    alert("代理商已新增，默认登录密码：Agent123!");
+    return;
+  }
   if (action === "create-customer") {
     const name = prompt("客户名称");
     if (!name) return;
@@ -461,3 +479,72 @@ function escapeHTML(value) {
 }
 
 init();
+
+
+
+function openPasswordDialog() {
+  passwordForm?.reset();
+  if (passwordStatus) passwordStatus.textContent = "";
+  if (passwordDialog?.showModal) {
+    passwordDialog.showModal();
+  } else {
+    passwordDialog?.setAttribute("open", "");
+  }
+}
+
+function closePasswordDialog() {
+  if (passwordDialog?.close) {
+    passwordDialog.close();
+  } else {
+    passwordDialog?.removeAttribute("open");
+  }
+}
+
+async function submitPasswordChange(event) {
+  event.preventDefault();
+  const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+  if (!token) {
+    setPasswordStatus("登录状态已失效，请重新登录。", true);
+    return;
+  }
+  const currentPassword = document.querySelector("#current-password")?.value || "";
+  const newPassword = document.querySelector("#new-password")?.value || "";
+  const confirmPassword = document.querySelector("#confirm-password")?.value || "";
+  if (newPassword.length < 8) {
+    setPasswordStatus("新密码至少 8 位。", true);
+    return;
+  }
+  if (newPassword !== confirmPassword) {
+    setPasswordStatus("两次输入的新密码不一致。", true);
+    return;
+  }
+  setPasswordStatus("正在保存...", false);
+  try {
+    const response = await fetch("/api/v1/auth/change-password", {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error?.message || `HTTP ${response.status}`);
+    setPasswordStatus("密码已修改，请使用新密码重新登录。", false);
+    setTimeout(() => logoutAdmin(), 600);
+  } catch (error) {
+    setPasswordStatus(error.message || "修改失败", true);
+  }
+}
+
+function setPasswordStatus(message, isError) {
+  if (!passwordStatus) return;
+  passwordStatus.textContent = message;
+  passwordStatus.classList.toggle("error", Boolean(isError));
+}
+function logoutAdmin() {
+  localStorage.removeItem("token");
+  sessionStorage.clear();
+  location.href = "/login";
+}

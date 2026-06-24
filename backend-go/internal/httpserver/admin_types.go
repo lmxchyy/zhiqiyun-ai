@@ -32,6 +32,7 @@ type adminUser struct {
 	Name                  string `json:"name"`
 	Role                  string `json:"role"`
 	Status                string `json:"status"`
+	PasswordHash          string `json:"passwordHash,omitempty"`
 	PlanID                string `json:"planId"`
 	ReferredBy            string `json:"referredBy"`
 	SubscriptionExpiresAt string `json:"subscriptionExpiresAt"`
@@ -177,16 +178,27 @@ type adminProduct struct {
 }
 
 type adminCustomerMutation struct {
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	Status    string `json:"status"`
-	PlanID    string `json:"planId"`
-	Available int    `json:"available"`
+	Name       string `json:"name"`
+	Email      string `json:"email"`
+	Role       string `json:"role"`
+	Status     string `json:"status"`
+	PlanID     string `json:"planId"`
+	ReferredBy string `json:"referredBy"`
+	Available  int    `json:"available"`
 }
 
 type adminChannelMutation struct {
 	Status string `json:"status"`
+}
+
+type adminChannelCreateMutation struct {
+	Name       string `json:"name"`
+	Email      string `json:"email"`
+	Level      int    `json:"level"`
+	ParentID   string `json:"parentId"`
+	Status     string `json:"status"`
+	InviteCode string `json:"inviteCode"`
+	Available  int    `json:"available"`
 }
 
 type adminProductMutation struct {
@@ -237,12 +249,23 @@ type adminPaymentChannel struct {
 }
 
 type adminAPIChannel struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	Status   string   `json:"status"`
-	Priority int      `json:"priority"`
-	Models   []string `json:"models"`
+	ID                      string   `json:"id"`
+	Name                    string   `json:"name"`
+	BaseURL                 string   `json:"baseUrl"`
+	Protocol                string   `json:"protocol"`
+	ImageRequestMode        string   `json:"imageRequestMode"`
+	ImageGenerationEndpoint string   `json:"imageGenerationEndpoint"`
+	ImageEditEndpoint       string   `json:"imageEditEndpoint"`
+	FetchModelsPath         string   `json:"fetchModelsPath"`
+	APIKeyEnv               string   `json:"apiKeyEnv"`
+	ComfyInstances          []string `json:"comfyInstances"`
+	Notes                   string   `json:"notes"`
+	Primary                 bool     `json:"primary"`
+	Status                  string   `json:"status"`
+	Priority                int      `json:"priority"`
+	Models                  []string `json:"models"`
+	APIKeyConfigured        bool     `json:"apiKeyConfigured"`
+	KeyPreview              string   `json:"keyPreview"`
 }
 
 type adminAPIModel struct {
@@ -261,6 +284,7 @@ type adminAPIKey struct {
 	ID         string   `json:"id"`
 	Customer   string   `json:"customer"`
 	Prefix     string   `json:"prefix"`
+	Secret     string   `json:"secret,omitempty"`
 	Status     string   `json:"status"`
 	Models     []string `json:"models"`
 	QuotaLimit int      `json:"quotaLimit"`
@@ -281,11 +305,29 @@ type adminSystemMutation struct {
 }
 
 type adminAPIChannelMutation struct {
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	Status   string   `json:"status"`
-	Priority int      `json:"priority"`
-	Models   []string `json:"models"`
+	Name                    string   `json:"name"`
+	BaseURL                 string   `json:"baseUrl"`
+	Protocol                string   `json:"protocol"`
+	ImageRequestMode        string   `json:"imageRequestMode"`
+	ImageGenerationEndpoint string   `json:"imageGenerationEndpoint"`
+	ImageEditEndpoint       string   `json:"imageEditEndpoint"`
+	FetchModelsPath         string   `json:"fetchModelsPath"`
+	APIKeyEnv               string   `json:"apiKeyEnv"`
+	ComfyInstances          []string `json:"comfyInstances"`
+	Notes                   string   `json:"notes"`
+	Primary                 bool     `json:"primary"`
+	Status                  string   `json:"status"`
+	Priority                int      `json:"priority"`
+	Models                  []string `json:"models"`
+}
+
+type adminAPIChannelTestRequest struct {
+	BaseURL          string `json:"baseUrl"`
+	APIKey           string `json:"apiKey"`
+	Protocol         string `json:"protocol"`
+	ImageRequestMode string `json:"imageRequestMode"`
+	FetchModelsPath  string `json:"fetchModelsPath"`
+	ProbeProtocol    bool   `json:"probeProtocol"`
 }
 
 type adminAPIModelMutation struct {
@@ -303,6 +345,8 @@ type adminAPIKeyMutation struct {
 	Status     string   `json:"status"`
 	Models     []string `json:"models"`
 	QuotaLimit int      `json:"quotaLimit"`
+	Secret     string   `json:"secret"`
+	APIKey     string   `json:"apiKey"`
 }
 
 type adminCustomerGroupMutation struct {

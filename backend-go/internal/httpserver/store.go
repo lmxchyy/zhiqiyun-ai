@@ -1,6 +1,8 @@
 package httpserver
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,13 +18,115 @@ var errAssetNotFound = errors.New("asset not found")
 
 const defaultPointsAvailable = 959
 
-type jsonStore struct {
+type stateBackend interface {
+	Read() ([]byte, error)
+	Write([]byte) error
+}
+
+type fileStateBackend struct {
 	path string
-	mu   sync.Mutex
+}
+
+func (b fileStateBackend) Read() ([]byte, error) {
+	return os.ReadFile(b.path)
+}
+
+func (b fileStateBackend) Write(content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(b.path), 0o755); err != nil {
+		return err
+	}
+	return writeFileAtomically(b.path, content)
+}
+
+type postgresStateBackend struct {
+	db           *sql.DB
+	fallbackPath string
+}
+
+func (b postgresStateBackend) Read() ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := b.ensureSchema(ctx); err != nil {
+		return nil, err
+	}
+	var raw []byte
+	err := b.db.QueryRowContext(ctx, `select state from platform_state where id = $1`, "default").Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return b.importFallback(ctx)
+	}
+	return raw, err
+}
+
+func (b postgresStateBackend) Write(content []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := b.ensureSchema(ctx); err != nil {
+		return err
+	}
+	if err := b.ensureProjectionSchema(ctx); err != nil {
+		return err
+	}
+	_, err := b.db.ExecContext(ctx, `
+		insert into platform_state (id, state, version, updated_at)
+		values ($1, $2::jsonb, 1, now())
+		on conflict (id) do update set
+			state = excluded.state,
+			version = platform_state.version + 1,
+			updated_at = now()
+	`, "default", string(content))
+	if err != nil {
+		return err
+	}
+	return b.syncRuntimeProjections(ctx, content)
+}
+
+func (b postgresStateBackend) ensureSchema(ctx context.Context) error {
+	_, err := b.db.ExecContext(ctx, `
+		create table if not exists platform_state (
+			id varchar(50) primary key,
+			state jsonb not null,
+			version bigint not null default 0,
+			updated_at timestamptz not null default now()
+		)
+	`)
+	return err
+}
+
+func (b postgresStateBackend) ensureProjectionSchema(ctx context.Context) error {
+	_, err := b.db.ExecContext(ctx, runtimeProjectionSchema)
+	return err
+}
+
+func (b postgresStateBackend) importFallback(ctx context.Context) ([]byte, error) {
+	if b.fallbackPath == "" {
+		return nil, os.ErrNotExist
+	}
+	raw, err := os.ReadFile(b.fallbackPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := b.db.ExecContext(ctx, `
+		insert into platform_state (id, state, version, updated_at)
+		values ($1, $2::jsonb, 1, now())
+		on conflict (id) do nothing
+	`, "default", string(raw)); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+type jsonStore struct {
+	path    string
+	mu      sync.Mutex
+	backend stateBackend
 }
 
 func newJSONStore(path string) *jsonStore {
-	return &jsonStore{path: path}
+	return &jsonStore{path: path, backend: fileStateBackend{path: path}}
+}
+
+func newPostgresStore(db *sql.DB, fallbackPath string) *jsonStore {
+	return &jsonStore{path: fallbackPath, backend: postgresStateBackend{db: db, fallbackPath: fallbackPath}}
 }
 
 func (s *jsonStore) ListGenerationTasks() ([]generationTask, error) {
@@ -39,6 +143,96 @@ func (s *jsonStore) ListAssets() ([]asset, error) {
 		return nil, err
 	}
 	return data.Assets, nil
+}
+
+func (s *jsonStore) UserAIState(userID string) (userAIState, error) {
+	data, err := s.load()
+	if err != nil {
+		return userAIState{}, err
+	}
+	return normalizeUserAIState(data.AIState, userID), nil
+}
+
+func (s *jsonStore) UpdateUserAIState(userID string, req userAIState) (userAIState, error) {
+	var updated userAIState
+	err := s.update(func(data *platformData) error {
+		updated = normalizeUserAIState(req, userID)
+		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		data.AIState = updated
+		return nil
+	})
+	return updated, err
+}
+
+func (s *jsonStore) UpdateAssetThumbnails(updates map[string]string) (int, error) {
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	updated := 0
+	err := s.update(func(data *platformData) error {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for i := range data.Assets {
+			thumbnailURL := updates[data.Assets[i].ID]
+			if thumbnailURL == "" || data.Assets[i].ThumbnailURL != "" {
+				continue
+			}
+			data.Assets[i].ThumbnailURL = thumbnailURL
+			data.Assets[i].UpdatedAt = now
+			if data.Assets[i].Metadata == nil {
+				data.Assets[i].Metadata = map[string]any{}
+			}
+			data.Assets[i].Metadata["thumbnailUrl"] = thumbnailURL
+			updated++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return updated, nil
+}
+
+func (s *jsonStore) UpdateAssetImageInfo(updates map[string]assetImageInfo) (int, error) {
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	updated := 0
+	err := s.update(func(data *platformData) error {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for i := range data.Assets {
+			info, ok := updates[data.Assets[i].ID]
+			if !ok {
+				continue
+			}
+			changed := false
+			if data.Assets[i].Metadata == nil {
+				data.Assets[i].Metadata = map[string]any{}
+			}
+			if info.ThumbnailURL != "" && data.Assets[i].ThumbnailURL == "" {
+				data.Assets[i].ThumbnailURL = info.ThumbnailURL
+				data.Assets[i].Metadata["thumbnailUrl"] = info.ThumbnailURL
+				changed = true
+			}
+			if info.Width > 0 && info.Height > 0 {
+				resolution := fmt.Sprintf("%dx%d", info.Width, info.Height)
+				data.Assets[i].Metadata["width"] = info.Width
+				data.Assets[i].Metadata["height"] = info.Height
+				data.Assets[i].Metadata["resolution"] = resolution
+				changed = true
+			}
+			if changed {
+				data.Assets[i].UpdatedAt = now
+				updated++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return updated, nil
 }
 
 func (s *jsonStore) PointAccount() (pointAccount, error) {
@@ -60,19 +254,36 @@ func (s *jsonStore) AdminData() (adminPlatformData, error) {
 	return s.loadAdminLocked()
 }
 
+func (s *jsonStore) UpdateUserPassword(userID string, passwordHash string) (adminUser, error) {
+	var updated adminUser
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.Users {
+			if data.Users[i].ID != userID {
+				continue
+			}
+			data.Users[i].PasswordHash = passwordHash
+			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.Users[i]
+			return nil
+		}
+		return fmt.Errorf("user not found: %s", userID)
+	})
+	return updated, err
+}
 func (s *jsonStore) CreateAdminCustomer(req adminCustomerMutation) (adminUser, error) {
 	var created adminUser
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		created = adminUser{
-			ID:        uniqueAdminID("user", userIDs(data.Users)),
-			Email:     req.Email,
-			Name:      req.Name,
-			Role:      fallback(req.Role, "MEMBER"),
-			Status:    fallback(req.Status, "ACTIVE"),
-			PlanID:    fallback(req.PlanID, "plan_free"),
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:         uniqueAdminID("user", userIDs(data.Users)),
+			Email:      req.Email,
+			Name:       req.Name,
+			Role:       fallback(req.Role, "MEMBER"),
+			Status:     fallback(req.Status, "ACTIVE"),
+			PlanID:     fallback(req.PlanID, "plan_free"),
+			ReferredBy: strings.TrimSpace(req.ReferredBy),
+			CreatedAt:  now,
+			UpdatedAt:  now,
 		}
 		data.Users = append(data.Users, created)
 		data.PointAccounts = append(data.PointAccounts, adminPointAccount{
@@ -107,6 +318,7 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 			if req.PlanID != "" {
 				data.Users[i].PlanID = req.PlanID
 			}
+			data.Users[i].ReferredBy = strings.TrimSpace(req.ReferredBy)
 			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			updated = data.Users[i]
 			if req.Available >= 0 {
@@ -117,6 +329,67 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 		return fmt.Errorf("customer not found: %s", id)
 	})
 	return updated, err
+}
+
+func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adminChannelAgent, adminUser, error) {
+	var createdAgent adminChannelAgent
+	var createdUser adminUser
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for _, user := range data.Users {
+			if strings.EqualFold(user.Email, req.Email) {
+				return fmt.Errorf("email already exists: %s", req.Email)
+			}
+		}
+		if req.Level == 2 {
+			foundParent := false
+			for _, agent := range data.ChannelAgents {
+				if agent.ID == req.ParentID {
+					foundParent = true
+					break
+				}
+			}
+			if !foundParent {
+				return fmt.Errorf("parent channel agent not found: %s", req.ParentID)
+			}
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		role := "AGENT_L1"
+		if req.Level == 2 {
+			role = "AGENT_L2"
+		}
+		createdUser = adminUser{
+			ID:        uniqueAdminID("user", userIDs(data.Users)),
+			Email:     req.Email,
+			Name:      req.Name,
+			Role:      role,
+			Status:    fallback(req.Status, "ACTIVE"),
+			PlanID:    "plan_free",
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		createdAgent = adminChannelAgent{
+			ID:         uniqueAdminID("channel", channelAgentIDs(data.ChannelAgents)),
+			UserID:     createdUser.ID,
+			ParentID:   req.ParentID,
+			Level:      req.Level,
+			Status:     fallback(req.Status, "ACTIVE"),
+			InviteCode: req.InviteCode,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		if createdAgent.InviteCode == "" {
+			createdAgent.InviteCode = strings.ToUpper("AG" + fmtSix(len(data.ChannelAgents)+1))
+		}
+		data.Users = append(data.Users, createdUser)
+		data.ChannelAgents = append(data.ChannelAgents, createdAgent)
+		data.PointAccounts = append(data.PointAccounts, adminPointAccount{
+			ID:        uniqueAdminID("points", pointIDs(data.PointAccounts)),
+			UserID:    createdUser.ID,
+			Available: req.Available,
+		})
+		return nil
+	})
+	return createdAgent, createdUser, err
 }
 
 func (s *jsonStore) UpdateAdminChannelAgent(id string, req adminChannelMutation) (adminChannelAgent, error) {
@@ -311,12 +584,21 @@ func (s *jsonStore) CreateAdminAPIChannel(req adminAPIChannelMutation) (adminAPI
 	var created adminAPIChannel
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		created = adminAPIChannel{
-			ID:       uniqueAdminID("channel_api", apiChannelIDs(data.APIChannels)),
-			Name:     fallback(req.Name, "新上游渠道"),
-			BaseURL:  fallback(req.BaseURL, "https://example.com/v1"),
-			Status:   fallback(req.Status, "CONFIGURABLE"),
-			Priority: req.Priority,
-			Models:   req.Models,
+			ID:                      uniqueAdminID("channel_api", apiChannelIDs(data.APIChannels)),
+			Name:                    fallback(req.Name, "新上游渠道"),
+			BaseURL:                 fallback(req.BaseURL, "https://example.com/v1"),
+			Protocol:                fallback(req.Protocol, "openai"),
+			ImageRequestMode:        fallback(req.ImageRequestMode, "openai"),
+			ImageGenerationEndpoint: fallback(req.ImageGenerationEndpoint, "/v1/images/generations"),
+			ImageEditEndpoint:       fallback(req.ImageEditEndpoint, "/v1/images/edits"),
+			FetchModelsPath:         fallback(req.FetchModelsPath, "/models"),
+			APIKeyEnv:               req.APIKeyEnv,
+			ComfyInstances:          req.ComfyInstances,
+			Notes:                   req.Notes,
+			Primary:                 req.Primary,
+			Status:                  fallback(req.Status, "CONFIGURABLE"),
+			Priority:                req.Priority,
+			Models:                  req.Models,
 		}
 		if created.Priority == 0 {
 			created.Priority = 100
@@ -340,6 +622,31 @@ func (s *jsonStore) UpdateAdminAPIChannel(id string, req adminAPIChannelMutation
 			if req.BaseURL != "" {
 				data.APIChannels[i].BaseURL = req.BaseURL
 			}
+			if req.Protocol != "" {
+				data.APIChannels[i].Protocol = req.Protocol
+			}
+			if req.ImageRequestMode != "" {
+				data.APIChannels[i].ImageRequestMode = req.ImageRequestMode
+			}
+			if req.ImageGenerationEndpoint != "" {
+				data.APIChannels[i].ImageGenerationEndpoint = req.ImageGenerationEndpoint
+			}
+			if req.ImageEditEndpoint != "" {
+				data.APIChannels[i].ImageEditEndpoint = req.ImageEditEndpoint
+			}
+			if req.FetchModelsPath != "" {
+				data.APIChannels[i].FetchModelsPath = req.FetchModelsPath
+			}
+			if req.APIKeyEnv != "" {
+				data.APIChannels[i].APIKeyEnv = req.APIKeyEnv
+			}
+			if len(req.ComfyInstances) > 0 {
+				data.APIChannels[i].ComfyInstances = req.ComfyInstances
+			}
+			if req.Notes != "" {
+				data.APIChannels[i].Notes = req.Notes
+			}
+			data.APIChannels[i].Primary = req.Primary
 			if req.Status != "" {
 				data.APIChannels[i].Status = req.Status
 			}
@@ -357,14 +664,17 @@ func (s *jsonStore) UpdateAdminAPIChannel(id string, req adminAPIChannelMutation
 	return updated, err
 }
 
-func (s *jsonStore) TestAdminAPIChannel(id string) (map[string]any, error) {
+func (s *jsonStore) TestAdminAPIChannel(id string, req adminAPIChannelTestRequest) (map[string]any, error) {
 	data, err := s.AdminData()
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range data.APIChannels {
 		if item.ID == id {
-			return map[string]any{"id": id, "status": "OK", "baseUrl": item.BaseURL, "latencyMs": 42, "checkedAt": time.Now().UTC().Format(time.RFC3339Nano)}, nil
+			if strings.TrimSpace(req.APIKey) == "" {
+				req.APIKey = savedAPIKeyForChannel(data.APIKeys, item)
+			}
+			return testAPIChannelConnection(item, req), nil
 		}
 	}
 	return nil, fmt.Errorf("api channel not found: %s", id)
@@ -409,10 +719,12 @@ func (s *jsonStore) UpdateAdminAPIModel(id string, req adminAPIModelMutation) (a
 func (s *jsonStore) CreateAdminAPIKey(req adminAPIKeyMutation) (adminAPIKey, error) {
 	var created adminAPIKey
 	err := s.updateAdmin(func(data *adminPlatformData) error {
+		secret := strings.TrimSpace(firstNonEmptyString(req.Secret, req.APIKey))
 		created = adminAPIKey{
 			ID:         uniqueAdminID("key", apiKeyIDs(data.APIKeys)),
 			Customer:   fallback(req.Customer, "未命名客户"),
-			Prefix:     "sk-" + fmtSix(len(data.APIKeys)+1),
+			Prefix:     apiKeyPrefix(secret, len(data.APIKeys)+1),
+			Secret:     secret,
 			Status:     fallback(req.Status, "ACTIVE"),
 			Models:     req.Models,
 			QuotaLimit: req.QuotaLimit,
@@ -441,6 +753,10 @@ func (s *jsonStore) UpdateAdminAPIKey(id string, req adminAPIKeyMutation) (admin
 			}
 			if req.Status != "" {
 				data.APIKeys[i].Status = req.Status
+			}
+			if secret := strings.TrimSpace(firstNonEmptyString(req.Secret, req.APIKey)); secret != "" {
+				data.APIKeys[i].Secret = secret
+				data.APIKeys[i].Prefix = apiKeyPrefix(secret, i+1)
 			}
 			if len(req.Models) > 0 {
 				data.APIKeys[i].Models = req.Models
@@ -554,9 +870,10 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 	var task generationTask
 	if err := s.update(func(data *platformData) error {
 		count := imageCount(req.Params)
+		pointCost := count * modelPointCost(req.Model)
 		available := pointsAvailable(*data)
-		if available < count {
-			return fmt.Errorf("insufficient remaining images: available %d, requested %d", available, count)
+		if available < pointCost {
+			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
 		}
 		taskID := nextID(data.Counters, "task")
 		now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -570,7 +887,7 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 			Model:            req.Model,
 			Status:           "SUCCEEDED",
 			Progress:         100,
-			PointCost:        count,
+			PointCost:        pointCost,
 			ResultIDs:        resultIDs,
 			CreatedAt:        now,
 			UpdatedAt:        now,
@@ -578,13 +895,20 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		}
 		for i := 0; i < count; i++ {
 			assetID := nextID(data.Counters, "asset")
+			referenceCount := 0
+			referenceImages := req.Params["referenceImages"]
+			if items, ok := referenceImages.([]any); ok {
+				referenceCount = len(items)
+			}
 			imageURL := promptPreviewImage(req.Prompt)
 			contentType := "image/svg+xml"
 			source := "local-prompt-preview"
 			width := previewImageWidth
 			height := previewImageHeight
+			thumbnailURL := imageURL
 			if i < len(req.GeneratedImages) && req.GeneratedImages[i].URL != "" {
 				imageURL = req.GeneratedImages[i].URL
+				thumbnailURL = req.GeneratedImages[i].ThumbnailURL
 				contentType = req.GeneratedImages[i].ContentType
 				source = req.GeneratedImages[i].Source
 				width = req.GeneratedImages[i].Width
@@ -600,37 +924,71 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 					height = previewImageHeight
 				}
 			}
+			if thumbnailURL == "" {
+				thumbnailURL = imageURL
+			}
 			task.ResultIDs = append(task.ResultIDs, assetID)
 			data.Assets = append(data.Assets, asset{
-				ID:        assetID,
-				UserID:    "user_000002",
-				TaskID:    taskID,
-				Name:      fmt.Sprintf("TEXT_TO_IMAGE-%s-%02d", taskID, i+1),
-				MediaType: "image",
-				URL:       imageURL,
-				Favorite:  false,
+				ID:           assetID,
+				UserID:       "user_000002",
+				TaskID:       taskID,
+				Name:         fmt.Sprintf("TEXT_TO_IMAGE-%s-%02d", taskID, i+1),
+				MediaType:    "image",
+				URL:          imageURL,
+				ThumbnailURL: thumbnailURL,
+				Favorite:     false,
 				Metadata: map[string]any{
-					"prompt":      req.Prompt,
-					"model":       req.Model,
-					"contentType": contentType,
-					"source":      source,
-					"width":       width,
-					"height":      height,
-					"resolution":  fmt.Sprintf("%dx%d", width, height),
-					"index":       i + 1,
+					"prompt":          req.Prompt,
+					"model":           req.Model,
+					"type":            req.Type,
+					"sourceType":      req.Type,
+					"contentType":     contentType,
+					"source":          source,
+					"thumbnailUrl":    thumbnailURL,
+					"width":           width,
+					"height":          height,
+					"resolution":      fmt.Sprintf("%dx%d", width, height),
+					"index":           i + 1,
+					"referenceCount":  referenceCount,
+					"referenceImages": referenceImages,
 				},
 				CreatedAt: now,
 				UpdatedAt: now,
 			})
 		}
 		data.GenerationTasks = append(data.GenerationTasks, task)
-		nextAvailable := available - count
+		nextAvailable := available - pointCost
 		data.PointsAvailable = &nextAvailable
+		setPlatformPointAccount(data, task.UserID, nextAvailable)
 		return nil
 	}); err != nil {
 		return generationTask{}, err
 	}
 	return task, nil
+}
+
+func modelPointCost(model string) int {
+	switch model {
+	case "gpt-image-2":
+		return 10
+	case "mock-standard":
+		return 1
+	default:
+		return 1
+	}
+}
+func setPlatformPointAccount(data *platformData, userID string, available int) {
+	for i := range data.PointAccounts {
+		if data.PointAccounts[i].UserID == userID {
+			data.PointAccounts[i].Available = available
+			return
+		}
+	}
+	data.PointAccounts = append(data.PointAccounts, adminPointAccount{
+		ID:        uniqueAdminID("points", pointIDs(data.PointAccounts)),
+		UserID:    userID,
+		Available: available,
+	})
 }
 
 func (s *jsonStore) DeleteAsset(id string) error {
@@ -703,7 +1061,7 @@ func (s *jsonStore) updateAdmin(mutator func(*adminPlatformData) error) error {
 
 func (s *jsonStore) loadLocked() (platformData, error) {
 	var data platformData
-	raw, err := os.ReadFile(s.path)
+	raw, err := s.backend.Read()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			data.Counters = map[string]int{}
@@ -726,7 +1084,7 @@ func (s *jsonStore) loadLocked() (platformData, error) {
 
 func (s *jsonStore) loadAdminLocked() (adminPlatformData, error) {
 	var data adminPlatformData
-	raw, err := os.ReadFile(s.path)
+	raw, err := s.backend.Read()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return seedAdminData(), nil
@@ -754,10 +1112,7 @@ func (s *jsonStore) saveLocked(data platformData) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
-	return writeFileAtomically(s.path, append(raw, '\n'))
+	return s.backend.Write(append(raw, '\n'))
 }
 
 func (s *jsonStore) saveAdminLocked(data adminPlatformData) error {
@@ -765,10 +1120,7 @@ func (s *jsonStore) saveAdminLocked(data adminPlatformData) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
-	return writeFileAtomically(s.path, append(raw, '\n'))
+	return s.backend.Write(append(raw, '\n'))
 }
 
 func writeFileAtomically(path string, content []byte) error {
@@ -837,4 +1189,86 @@ func imageCount(params map[string]any) int {
 		return 8
 	}
 	return count
+}
+
+func normalizeUserAIState(state userAIState, userID string) userAIState {
+	if userID == "" {
+		userID = "user_000002"
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	state.UserID = userID
+	state.FavoriteTaskIDs = uniqueNonEmptyStrings(state.FavoriteTaskIDs)
+	state.HiddenTaskIDs = uniqueNonEmptyStrings(state.HiddenTaskIDs)
+	if len(state.FavoriteCollections) == 0 {
+		state.FavoriteCollections = []aiFavoriteCollection{{ID: "default", Name: "默认收藏夹", TaskIDs: []string{}, CreatedAt: now, UpdatedAt: now}}
+	}
+	defaultCollectionExists := false
+	for i := range state.FavoriteCollections {
+		if strings.TrimSpace(state.FavoriteCollections[i].ID) == "" {
+			state.FavoriteCollections[i].ID = fmt.Sprintf("collection_%06d", i+1)
+		}
+		if strings.TrimSpace(state.FavoriteCollections[i].Name) == "" {
+			state.FavoriteCollections[i].Name = "未命名收藏夹"
+		}
+		state.FavoriteCollections[i].TaskIDs = uniqueNonEmptyStrings(state.FavoriteCollections[i].TaskIDs)
+		if state.FavoriteCollections[i].CreatedAt == "" {
+			state.FavoriteCollections[i].CreatedAt = now
+		}
+		state.FavoriteCollections[i].UpdatedAt = now
+		if state.FavoriteCollections[i].ID == state.DefaultCollectionID {
+			defaultCollectionExists = true
+		}
+	}
+	if state.DefaultCollectionID == "" || !defaultCollectionExists {
+		state.DefaultCollectionID = state.FavoriteCollections[0].ID
+	}
+	if len(state.AgentConversations) == 0 {
+		state.AgentConversations = []aiAgentConversation{{
+			ID:        "agent-default",
+			Title:     "默认对话",
+			CreatedAt: now,
+			UpdatedAt: now,
+			Messages:  []aiAgentMessage{{Role: "assistant", Content: "我可以根据提示词、参考图和当前参数协助规划生成任务。", CreatedAt: now}},
+		}}
+	}
+	for i := range state.AgentConversations {
+		if strings.TrimSpace(state.AgentConversations[i].ID) == "" {
+			state.AgentConversations[i].ID = fmt.Sprintf("agent_%06d", i+1)
+		}
+		if strings.TrimSpace(state.AgentConversations[i].Title) == "" {
+			state.AgentConversations[i].Title = "新对话"
+		}
+		if state.AgentConversations[i].CreatedAt == "" {
+			state.AgentConversations[i].CreatedAt = now
+		}
+		state.AgentConversations[i].UpdatedAt = now
+		for j := range state.AgentConversations[i].Messages {
+			role := strings.ToLower(strings.TrimSpace(state.AgentConversations[i].Messages[j].Role))
+			if role != "user" && role != "assistant" {
+				role = "assistant"
+			}
+			state.AgentConversations[i].Messages[j].Role = role
+			if state.AgentConversations[i].Messages[j].CreatedAt == "" {
+				state.AgentConversations[i].Messages[j].CreatedAt = now
+			}
+		}
+	}
+	if state.ActiveConversationID == "" && len(state.AgentConversations) > 0 {
+		state.ActiveConversationID = state.AgentConversations[0].ID
+	}
+	return state
+}
+
+func uniqueNonEmptyStrings(items []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		result = append(result, item)
+	}
+	return result
 }

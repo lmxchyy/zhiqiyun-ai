@@ -10,7 +10,7 @@
     <div class="shell">
       <aside class="sidebar">
         <div class="brand">
-          <span class="brand-mark">先</span>
+          <img class="brand-logo" src="/admin/assets/xianzhi-ai-logo.png" alt="先知 AI" />
           <div>
             <strong>先知 AI</strong>
             <small>主控 SaaS</small>
@@ -26,7 +26,17 @@
           </div>
           <div class="top-actions">
             <span id="api-status" class="status-dot">连接中</span>
-            <span class="account">平台管理员</span>
+            <details class="account-menu">
+              <summary class="account-menu-button">
+                <span>平台管理员</span>
+                <span class="account-caret">▼</span>
+              </summary>
+              <div class="account-menu-panel">
+                <button type="button" class="account-menu-item" onclick="alert('账号信息：平台管理员')">账号信息</button>
+                <button id="change-password-button" type="button" class="account-menu-item">修改密码</button>
+                <a id="logout-button" class="account-menu-item danger" href="/login" onclick="localStorage.clear();sessionStorage.clear();">退出登录</a>
+              </div>
+            </details>
           </div>
         </header>
         <section id="metrics" class="metrics"></section>
@@ -42,6 +52,34 @@
         </section>
       </main>
     </div>
+    <dialog id="password-dialog" class="modal-dialog">
+      <form id="password-form" class="modal-card" method="dialog">
+        <div class="modal-head">
+          <div>
+            <p class="eyebrow">Account Security</p>
+            <h2>修改密码</h2>
+          </div>
+          <button id="password-cancel-button" class="modal-close" type="button">×</button>
+        </div>
+        <label class="form-field">
+          <span>当前密码</span>
+          <input id="current-password" type="password" autocomplete="current-password" required />
+        </label>
+        <label class="form-field">
+          <span>新密码</span>
+          <input id="new-password" type="password" autocomplete="new-password" minlength="8" required />
+        </label>
+        <label class="form-field">
+          <span>确认新密码</span>
+          <input id="confirm-password" type="password" autocomplete="new-password" minlength="8" required />
+        </label>
+        <p id="password-status" class="form-status"></p>
+        <div class="modal-actions">
+          <button type="button" class="secondary-button" id="password-cancel-secondary">取消</button>
+          <button type="submit" class="primary-button">保存并重新登录</button>
+        </div>
+      </form>
+    </dialog>
     <script src="/admin/app.js"></script>
   </body>
 </html>

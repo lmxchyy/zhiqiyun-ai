@@ -12,5 +12,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["@dcloudio/types"]
   },
-  "include": ["src/**/*.ts", "src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"]
 }

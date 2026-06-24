@@ -1,4 +1,4 @@
-services:
+﻿services:
   xianzhi-ai:
     build: .
     image: xianzhi-ai-platform:local
@@ -11,7 +11,7 @@ services:
       PORT: "3100"
       XIANZHI_DATA_PATH: "/app/data/store.json"
       XIANZHI_STATIC_DIR: "/app/frontend-vue/dist"
-      XIANZHI_ADMIN_STATIC_DIR: "/app/admin-web"
+      XIANZHI_ADMIN_STATIC_DIR: "/app/admin-vue/dist"
       DATABASE_URL: "postgresql://xianzhi:xianzhi@postgres:5432/xianzhi"
       REDIS_URL: "redis://redis:6379"
       RABBITMQ_URL: "amqp://xianzhi:xianzhi@rabbitmq:5672"
@@ -156,3 +156,4 @@ volumes:
   redis-data:
   rabbitmq-data:
   minio-data:
+

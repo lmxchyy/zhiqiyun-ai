@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mobile canvas fab preview</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        display: grid;
+        min-height: 100vh;
+        margin: 0;
+        place-items: center;
+        background: #f2f4f7;
+        font-family: Inter, "Microsoft YaHei", sans-serif;
+      }
+
+      .phone {
+        position: relative;
+        width: 390px;
+        height: 844px;
+        overflow: hidden;
+        border-radius: 34px;
+        background: #050506;
+        box-shadow: 0 28px 80px rgba(15, 23, 42, 0.24);
+      }
+
+      .grid {
+        position: absolute;
+        inset: 0;
+        opacity: 0.66;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+        background-size: 42px 42px;
+      }
+
+      .module-fab {
+        position: absolute;
+        top: 36px;
+        left: 10px;
+        z-index: 20;
+        display: grid;
+        width: 46px;
+        height: 46px;
+        place-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 14px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06)),
+          rgba(8, 8, 10, 0.88);
+        box-shadow: 0 14px 32px rgba(0, 0, 0, 0.34);
+      }
+
+      .module-fab span {
+        display: block;
+        width: 22px;
+        height: 3px;
+        margin: 2px 0;
+        border-radius: 999px;
+        background: #ffffff;
+      }
+
+      .header {
+        position: absolute;
+        top: 10px;
+        left: 68px;
+        right: 10px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: auto auto;
+        gap: 8px;
+      }
+
+      .title {
+        color: #ffffff;
+        font-size: 21px;
+        font-weight: 900;
+        line-height: 1.4;
+      }
+
+      .quota {
+        display: inline-grid;
+        min-height: 28px;
+        grid-template-columns: auto auto;
+        align-items: center;
+        gap: 4px;
+        border-radius: 999px;
+        background: #ffffff;
+        color: #111827;
+        padding: 0 8px;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .tabs {
+        grid-column: 1 / -1;
+        justify-self: center;
+        display: inline-flex;
+        width: 304px;
+        justify-content: center;
+        gap: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 12px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.055)),
+          rgba(8, 8, 10, 0.72);
+        padding: 3px;
+        box-shadow: 0 14px 35px rgba(0, 0, 0, 0.24);
+      }
+
+      .tabs button {
+        min-width: 58px;
+        height: 28px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: rgba(255, 255, 255, 0.68);
+        padding: 0 8px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .tabs button:first-child {
+        background: #ffffff;
+        color: #111827;
+      }
+
+      .toolbar {
+        position: absolute;
+        top: 88px;
+        left: 10px;
+        right: 10px;
+        display: flex;
+        gap: 6px;
+        overflow: hidden;
+      }
+
+      .tool {
+        display: inline-flex;
+        height: 32px;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 999px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06)),
+          rgba(8, 8, 10, 0.78);
+        color: rgba(255, 255, 255, 0.9);
+        padding: 0 9px;
+        font-size: 10px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .tool .count {
+        color: #86efac;
+      }
+
+      .guide {
+        position: absolute;
+        top: 36px;
+        left: 58px;
+        width: 1px;
+        height: 84px;
+        background: linear-gradient(#22c55e, rgba(34, 197, 94, 0));
+      }
+
+      .note {
+        position: absolute;
+        top: 128px;
+        left: 20px;
+        right: 20px;
+        border: 1px solid rgba(34, 197, 94, 0.34);
+        border-radius: 12px;
+        background: rgba(220, 252, 231, 0.95);
+        color: #14532d;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.55;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="phone">
+      <div class="grid"></div>
+      <button class="module-fab" aria-label="模块菜单">
+        <div>
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </button>
+      <div class="guide"></div>
+      <div class="header">
+        <div class="title">灵感画布</div>
+        <div class="quota">额度 <span>900</span></div>
+        <div class="tabs">
+          <button>画布</button>
+          <button>我的作品</button>
+          <button>使用记录</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="tool">↗ 历史画布 <span class="count">10</span></div>
+        <div class="tool">＋ 新增画布</div>
+        <div class="tool">清除所有画布</div>
+      </div>
+      <div class="note">预览：模块悬浮按钮上移到顶部左侧，历史画布从 x=10 开始仍完整可读，不再被遮挡。</div>
+    </div>
+  </body>
+</html>
