@@ -71,7 +71,7 @@
       PGPASSWORD: xianzhi
       BACKUP_INTERVAL_SECONDS: "${BACKUP_INTERVAL_SECONDS:-86400}"
     volumes:
-      - postgres-backups:/backups
+      - ./backups/postgres:/backups
     command:
       - sh
       - -c
@@ -157,7 +157,6 @@
 volumes:
   app-data:
   postgres-data:
-  postgres-backups:
   redis-data:
   rabbitmq-data:
   minio-data:
