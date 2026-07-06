@@ -1,28 +1,29 @@
-# Git
-.git
-
-# Node dependencies
+# Dependencies
 node_modules/
 frontend-vue/node_modules/
 admin-vue/node_modules/
 
-# Codex / preview temp
+# Runtime data and temporary files
+tmp/
+data/
+aicc_log/
+jsc_log/
+backups/
+
+# Codex temporary directories
 .codex-preview/
 .codex-reference/
 .codex-edge-profile/
 .codex-edge-profile-live/
 
-# Temp / runtime data
-tmp/
-data/
-aicc_log/
-jsc_log/
-
-# Env files
+# Environment files and secrets
 .env
 .env.*
 !.env.example
 !.env.production.example
+*.pem
+*.key
+*.crt
 
 # Logs
 *.log
@@ -35,11 +36,15 @@ build/
 .nuxt/
 .vite/
 
-# Removed duplicate static assets
-frontend-vue/public/static/
+# Large archives and temporary media
+*.mp4
+*.mov
+*.zip
+*.tar
+*.tar.gz
 
 # OS / IDE
-.DS_Store
-Thumbs.db
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db

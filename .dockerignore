@@ -1,9 +1,11 @@
 .git
 .gitignore
+
 .env
 .env.*
 !.env.production.example
 !.env.example
+
 .codex-preview
 .codex-reference
 .codex-edge-profile
@@ -14,17 +16,20 @@ tmp
 data
 aicc_log
 jsc_log
+backups
 
 node_modules
 frontend-vue/node_modules
-frontend-vue/dist
 admin-vue/node_modules
-admin-vue/dist
+
 *.log
-frontend-vue/public/static
+logs
 
 dist
 build
+.next
+.nuxt
+.vite
 
 .vscode
 .idea

@@ -49,5 +49,5 @@ RUN mkdir -p /app/data \
 USER xianzhi
 EXPOSE 3100
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
-  CMD wget -qO- http://127.0.0.1:3100/api/v1/health >/dev/null || exit 1
+  CMD curl -fsS http://127.0.0.1:3100/api/v1/health >/dev/null || exit 1
 CMD ["/app/xianzhi-api"]
