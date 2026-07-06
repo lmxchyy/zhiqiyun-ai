@@ -147,13 +147,56 @@ func savedAPIKeyForChannel(keys []adminAPIKey, channel adminAPIChannel) string {
 		if customer == "" {
 			continue
 		}
-		if customer == channelName || customer == channelID || strings.Contains(channelName, customer) || strings.Contains(customer, channelName) {
+		if customer == channelName || customer == channelID {
+			if strings.TrimSpace(key.Secret) != "" {
+				return strings.TrimSpace(key.Secret)
+			}
+		}
+	}
+	for _, key := range keys {
+		if !strings.EqualFold(key.Status, "ACTIVE") {
+			continue
+		}
+		customer := strings.TrimSpace(strings.ToLower(key.Customer))
+		if len(customer) < 4 || len(channelName) < 4 {
+			continue
+		}
+		if strings.Contains(channelName, customer) || strings.Contains(customer, channelName) {
 			if strings.TrimSpace(key.Secret) != "" {
 				return strings.TrimSpace(key.Secret)
 			}
 		}
 	}
 	return ""
+}
+
+func savedNonPlaceholderAPIKeyForChannel(keys []adminAPIKey, channel adminAPIChannel) string {
+	channelName := strings.TrimSpace(strings.ToLower(channel.Name))
+	channelID := strings.TrimSpace(strings.ToLower(channel.ID))
+	for _, key := range keys {
+		if !strings.EqualFold(key.Status, "ACTIVE") || isPlaceholderAPIKeySecret(key.Secret) {
+			continue
+		}
+		customer := strings.TrimSpace(strings.ToLower(key.Customer))
+		if customer != "" && customer == channelName {
+			return strings.TrimSpace(key.Secret)
+		}
+	}
+	for _, key := range keys {
+		if !strings.EqualFold(key.Status, "ACTIVE") || isPlaceholderAPIKeySecret(key.Secret) {
+			continue
+		}
+		customer := strings.TrimSpace(strings.ToLower(key.Customer))
+		if customer != "" && customer == channelID {
+			return strings.TrimSpace(key.Secret)
+		}
+	}
+	return ""
+}
+
+func isPlaceholderAPIKeySecret(secret string) bool {
+	secret = strings.TrimSpace(secret)
+	return secret == "" || strings.HasPrefix(secret, "sk-user-") || strings.EqualFold(secret, "sk-local-admin")
 }
 
 func probeAPIChannelProtocol(result map[string]any, baseURL string, apiKey string, imageRequestMode string, fetchModelsPath string) {

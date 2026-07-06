@@ -1,5 +1,45 @@
-data/
+# Git
+.git
+
+# Node dependencies
 node_modules/
-frontend-vue/dist/
+frontend-vue/node_modules/
+admin-vue/node_modules/
+
+# Codex / preview temp
+.codex-preview/
+.codex-reference/
+.codex-edge-profile/
+.codex-edge-profile-live/
+
+# Temp / runtime data
+tmp/
+data/
+aicc_log/
+jsc_log/
+
+# Env files
 .env
+.env.*
+!.env.example
+!.env.production.example
+
+# Logs
 *.log
+logs/
+
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+.vite/
+
+# Removed duplicate static assets
+frontend-vue/public/static/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

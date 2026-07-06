@@ -5,7 +5,7 @@
     "type":  "module",
     "scripts":  {
                     "dev":  "uni -p h5 --host 0.0.0.0",
-                    "build":  "uni build -p h5",
+                    "build":  "uni build -p h5 && node scripts/copy-static.cjs",
                     "typecheck":  "vue-tsc --noEmit",
                     "preview":  "vite preview --host 0.0.0.0 dist/build/h5",
                     "build:h5":  "uni build -p h5",

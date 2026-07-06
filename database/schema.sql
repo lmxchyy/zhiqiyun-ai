@@ -151,23 +151,109 @@ create table model_pricing_rules (
   unique(model_code, capability)
 );
 
+create table if not exists ai_modules (
+  id text primary key,
+  module_code text not null unique,
+  name text not null,
+  description text not null default '',
+  status text not null default 'ACTIVE',
+  open_tenant_ids jsonb not null default '[]'::jsonb,
+  open_package_ids jsonb not null default '[]'::jsonb,
+  bound_models jsonb not null default '[]'::jsonb,
+  default_schema_id text,
+  allow_agents boolean not null default true,
+  allow_end_users boolean not null default true,
+  config jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists ai_models (
+  id text primary key,
+  model_name text not null,
+  model_type text not null,
+  provider text not null,
+  capability_code jsonb not null default '[]'::jsonb,
+  module_code text not null references ai_modules(module_code),
+  status text not null default 'ACTIVE',
+  fallback_model text,
+  sort_weight integer not null default 0,
+  allow_fallback_switch boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (module_code, model_name)
+);
+
+create table if not exists ai_parameter_schemas (
+  id text primary key,
+  module_code text not null references ai_modules(module_code),
+  model_name text,
+  schema_json jsonb not null default '{"fields":[]}'::jsonb,
+  status text not null default 'ACTIVE',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists tenant_module_limits (
+  id text primary key,
+  tenant_id text not null default 'default',
+  agent_id text,
+  package_id text,
+  module_code text not null references ai_modules(module_code),
+  model_name text,
+  limit_json jsonb not null default '{}'::jsonb,
+  status text not null default 'ACTIVE',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists billing_rules (
+  id text primary key,
+  module_code text not null references ai_modules(module_code),
+  model_name text,
+  billing_type text not null default 'per_request',
+  base_price numeric(12,4) not null default 1,
+  cost_price numeric(12,4) not null default 0,
+  currency_type text not null default 'credit',
+  parameter_multiplier jsonb not null default '{}'::jsonb,
+  status text not null default 'ACTIVE',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table generation_tasks (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id),
+  tenant_id text,
+  agent_id text,
+  operation_center_id text,
+  module_code text,
   type varchar(40) not null,
   model_code varchar(100) not null,
   prompt text not null,
   params jsonb not null default '{}',
+  billing_type text,
+  final_schema_snapshot jsonb not null default '{}'::jsonb,
+  limit_snapshot jsonb not null default '{}'::jsonb,
+  upstream_provider text,
+  upstream_request_id text,
+  user_charge_amount bigint not null default 0,
+  upstream_cost bigint not null default 0,
+  platform_profit bigint not null default 0,
+  agent_commission bigint not null default 0,
+  operation_center_commission bigint not null default 0,
   status varchar(30) not null,
   progress integer not null default 0 check (progress between 0 and 100),
   point_cost bigint not null,
   idempotency_key varchar(100) unique,
   retry_of_task_id uuid references generation_tasks(id),
   error text,
+  failure_reason text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 create index generation_tasks_user_idx on generation_tasks(user_id, created_at desc);
+create index generation_tasks_module_code_idx on generation_tasks(module_code);
 
 create table generation_task_attempts (
   id uuid primary key default gen_random_uuid(),

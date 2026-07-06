@@ -47,6 +47,7 @@ export interface PointAccount {
   userId: string;
   available: number;
   frozen: number;
+  total?: number;
 }
 
 export interface PointAccountResponse {
@@ -72,6 +73,7 @@ export interface ChannelAgent {
   level: number;
   status: string;
   inviteCode: string;
+  inviteLink?: string;
   createdAt?: string;
 }
 
@@ -92,6 +94,37 @@ export interface ChannelWithdrawal {
   status: string;
   createdAt?: string;
   reviewedAt?: string;
+}
+
+export interface ChannelOrder {
+  id: string;
+  orderId?: string;
+  customer?: string;
+  plan?: string;
+  amountCents?: number;
+  status: string;
+  createdAt?: string;
+}
+
+export interface ChannelUsageEvent {
+  id: string;
+  transactionId: string;
+  userId: string;
+  customerId?: string;
+  agentId?: string;
+  taskId: string;
+  assetIds?: string[];
+  metricCode: string;
+  quantity: number;
+  unitAmountCents: number;
+  amountCents: number;
+  pointCost: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  model: string;
+  status: string;
+  occurredAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export type WorkspaceRole = "user" | "agent" | "admin";
@@ -121,6 +154,8 @@ export interface ChannelCenterResponse {
   agent: ChannelAgent;
   summary: ChannelCenterSummary;
   customers: AuthUser[];
+  orders?: ChannelOrder[];
+  usageEvents?: ChannelUsageEvent[];
   commissions: ChannelCommission[];
   withdrawals: ChannelWithdrawal[];
   children: ChannelAgent[];

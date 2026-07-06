@@ -31,10 +31,6 @@ func (s *postgresStore) auditMiddleware() gin.HandlerFunc {
 
 func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !rbacEnforced() {
-			c.Next()
-			return
-		}
 		data, err := s.AdminData()
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -43,6 +39,16 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 		user, err := auth.authenticatedUser(c.Request, data)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if !rbacEnforced() {
+			if user.Role != "SUPER_ADMIN" {
+				c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{"error": errForbidden.Error()})
+				return
+			}
+			c.Set("actorID", user.ID)
+			c.Set("actorRole", user.Role)
+			c.Next()
 			return
 		}
 		ok, err := s.roleHasPermission(c.Request.Context(), user.Role, permission)

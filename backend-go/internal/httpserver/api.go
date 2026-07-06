@@ -2,33 +2,47 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 
 	"xianzhi-ai/backend-go/internal/config"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
+	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 )
+
+const maxReferenceImageUploadBytes = 20 << 20
 
 type platformStore interface {
 	ListGenerationTasks() ([]generationTask, error)
 	CreateGenerationTask(createGenerationTaskRequest) (generationTask, error)
+	CreatePendingGenerationTask(createGenerationTaskRequest) (generationTask, error)
+	CompleteGenerationTask(string, createGenerationTaskRequest) (generationTask, error)
+	FailGenerationTask(string, string) (generationTask, error)
+	RecordPPTGenerationUsage(pptapp.Task) (adminBillingEvent, error)
 	ListAssets() ([]asset, error)
 	UserAIState(string) (userAIState, error)
 	UpdateUserAIState(string, userAIState) (userAIState, error)
 	UpdateAssetThumbnails(map[string]string) (int, error)
 	UpdateAssetImageInfo(map[string]assetImageInfo) (int, error)
 	DeleteAsset(id string) error
-	PointAccount() (pointAccount, error)
+	PointAccount(string) (pointAccount, error)
 	AdminData() (adminPlatformData, error)
 	UpdateUserPassword(string, string) (adminUser, error)
 	CreateAdminCustomer(adminCustomerMutation) (adminUser, error)
@@ -42,6 +56,7 @@ type platformStore interface {
 	RenewAdminOrder(string) (adminOrder, error)
 	UpdateAdminDeliveryProject(string, adminDeliveryMutation) (map[string]any, error)
 	UpdateAdminSystemSettings(adminSystemMutation) (adminSystemSettings, error)
+	SyncAdminCustomerNewAPI(string, adminNewAPISyncRequest) (adminUserModelRoute, error)
 	CreateAdminAPIChannel(adminAPIChannelMutation) (adminAPIChannel, error)
 	UpdateAdminAPIChannel(string, adminAPIChannelMutation) (adminAPIChannel, error)
 	TestAdminAPIChannel(string, adminAPIChannelTestRequest) (map[string]any, error)
@@ -49,7 +64,15 @@ type platformStore interface {
 	CreateAdminAPIKey(adminAPIKeyMutation) (adminAPIKey, error)
 	UpdateAdminAPIKey(string, adminAPIKeyMutation) (adminAPIKey, error)
 	UpdateAdminCustomerGroup(string, adminCustomerGroupMutation) (adminCustomerGroup, error)
+	UpdateAdminAIModule(string, adminAIModuleMutation) (adminAIModule, error)
+	CreateAdminAIModel(adminAIModelMutation) (adminAIModel, error)
+	UpdateAdminAIModel(string, adminAIModelMutation) (adminAIModel, error)
+	UpdateAdminAIParameterSchema(string, adminAIParameterSchemaMutation) (adminAIParameterSchema, error)
+	UpdateAdminTenantModuleLimit(string, adminTenantModuleLimitMutation) (adminTenantModuleLimit, error)
+	UpdateAdminBillingRule(string, adminBillingRuleMutation) (adminBillingRule, error)
 	CreateAdminCommission(adminCommissionMutation) (adminCommission, error)
+	ReviewAdminCommission(string, string) (adminCommission, error)
+	UpdateMarketingCommissionRule(string, adminCommissionRuleMutation) (adminCommissionRule, error)
 	CreateAdminWithdrawal(adminWithdrawalMutation) (adminWithdrawal, error)
 	ReviewAdminWithdrawal(string, string) (adminWithdrawal, error)
 }
@@ -57,7 +80,9 @@ type platformStore interface {
 type api struct {
 	store             platformStore
 	generationService generation.Service
+	pptService        *pptapp.Service
 	cfg               config.Config
+	sessions          authSessionStore
 }
 
 type generatedImageDecorator struct{}
@@ -73,31 +98,120 @@ func (generatedImageDecorator) Decorate(ctx context.Context, images []generation
 	return images
 }
 
-func newAPI(store platformStore, cfg config.Config) api {
+func newAPI(store platformStore, cfg config.Config, sessions authSessionStore) api {
 	provider := imageprovider.NewDefaultRouter(cfg)
-	service := generation.NewService(provider, generatedImageDecorator{}, func(req generation.CreateRequest) (any, error) {
-		return store.CreateGenerationTask(req)
+	service := generation.NewServiceWithOptions(generation.ServiceOptions{
+		ImageProvider:  provider,
+		VideoProvider:  videoprovider.NewMockProvider(),
+		ImageDecorator: generatedImageDecorator{},
+		CreateTask: func(req generation.CreateRequest) (any, error) {
+			return store.CreateGenerationTask(req)
+		},
 	})
-	return api{store: store, generationService: service, cfg: cfg}
+	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+	return api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions}
 }
 
-func (a api) listGenerationTasks(w http.ResponseWriter, _ *http.Request) {
+func (a api) authenticatedUser(r *http.Request) (adminPlatformData, adminUser, error) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		return adminPlatformData{}, adminUser{}, err
+	}
+	user, err := authAPI{store: a.store, sessions: a.sessions}.authenticatedUser(r, data)
+	if err != nil {
+		return adminPlatformData{}, adminUser{}, err
+	}
+	return data, user, nil
+}
+
+func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, tasks)
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	tasks = filterGenerationTasksForUser(tasks, user.ID)
+	assets = filterAssetsForUser(assets, user.ID)
+	writeJSON(w, attachAssetImagesToTasks(tasks, assets))
+}
+
+func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	id := strings.TrimSpace(path.Base(r.URL.Path))
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	assets = filterAssetsForUser(assets, user.ID)
+	for _, task := range tasks {
+		if task.ID == id && task.UserID == user.ID {
+			enriched := attachAssetImagesToTasks([]generationTask{task}, assets)
+			if len(enriched) > 0 {
+				writeJSON(w, enriched[0])
+				return
+			}
+			writeJSON(w, task)
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, fmt.Errorf("generation task not found: %s", id))
 }
 
 func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	var req generation.CreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.UserID = user.ID
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	if req.Prompt == "" {
+		writeError(w, http.StatusBadRequest, generation.ErrInvalidPrompt)
+		return
+	}
+	if req.Type == "" {
+		req.Type = "TEXT_TO_IMAGE"
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req, err = a.prepareGenerationRequest(data, user, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	service := a.generationService
-	if providerID := selectedGenerationProvider(req.Params); providerID != "" {
+	if routeService, ok, err := a.generationServiceForUserRoute(user, req.Model); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	} else if ok {
+		service = routeService
+	} else if providerID := selectedGenerationProvider(req.Params); providerID != "" {
 		dynamicService, err := a.generationServiceForProvider(providerID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -110,16 +224,167 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	} else if ok {
 		service = configuredService
 	}
-	task, err := service.Create(r.Context(), req)
-	if err != nil {
-		if errors.Is(err, generation.ErrInvalidPrompt) {
+	if isVideoGenerationRequest(req.Type) {
+		task, err := a.store.CreatePendingGenerationTask(req)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		writeError(w, http.StatusBadGateway, err)
+		go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
+		writeJSON(w, task)
 		return
 	}
+	if !isImageGenerationRequest(req.Type) || strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
+		task, err := service.Create(r.Context(), req)
+		if err != nil {
+			if errors.Is(err, generation.ErrInvalidPrompt) {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, task)
+		return
+	}
+	task, err := a.store.CreatePendingGenerationTask(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	go a.runGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 	writeJSON(w, task)
+}
+
+func isImageGenerationRequest(taskType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(taskType)) {
+	case "", "TEXT_TO_IMAGE", "IMAGE_TO_IMAGE":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVideoGenerationRequest(taskType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(taskType)) {
+	case "TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_TO_VIDEO":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneGenerationCreateRequest(req generation.CreateRequest) generation.CreateRequest {
+	req.Params = cloneAnyMap(req.Params)
+	if req.GeneratedImages != nil {
+		req.GeneratedImages = append([]generation.GeneratedImage{}, req.GeneratedImages...)
+	}
+	req.VideoTask = cloneAnyValue(req.VideoTask)
+	req.ChatResponse = cloneAnyValue(req.ChatResponse)
+	return req
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		output[key] = cloneAnyValue(value)
+	}
+	return output
+}
+
+func cloneAnySlice(input []any) []any {
+	if input == nil {
+		return nil
+	}
+	output := make([]any, len(input))
+	for i, value := range input {
+		output[i] = cloneAnyValue(value)
+	}
+	return output
+}
+
+func cloneAnyValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAnyMap(typed)
+	case []any:
+		return cloneAnySlice(typed)
+	case []string:
+		return append([]string{}, typed...)
+	case []int:
+		return append([]int{}, typed...)
+	case []float64:
+		return append([]float64{}, typed...)
+	case []bool:
+		return append([]bool{}, typed...)
+	default:
+		return value
+	}
+}
+
+func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	prepared, err := service.PrepareImageTask(ctx, req)
+	if err != nil {
+		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
+	}
+	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+	}
+}
+
+func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	prepared, err := service.PrepareVideoTask(ctx, req)
+	if err != nil {
+		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
+	}
+	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+	}
+}
+
+func generationErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "生成超时，请稍后重试"
+	}
+	return compactGenerationErrorMessage(err.Error())
+}
+
+func compactGenerationErrorMessage(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "生成失败"
+	}
+	if item := regexp.MustCompile(`当前账号处未订购[^"\\\r\n]*`).FindString(message); item != "" {
+		return strings.TrimSpace(item)
+	}
+	if item := regexp.MustCompile(`"(?:message|error|detail|reason)"\s*:\s*"([^"]+)"`).FindStringSubmatch(message); len(item) > 1 {
+		if decoded, err := strconv.Unquote(`"` + item[1] + `"`); err == nil && strings.TrimSpace(decoded) != "" {
+			return compactGenerationErrorMessage(decoded)
+		}
+	}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "create_video_generation_task returned empty task id") && strings.Contains(lower, "seedance") {
+		return "移动云 Seedance 创建任务失败，请检查模型资费包、API Key 和模型权限"
+	}
+	message = strings.Join(strings.Fields(message), " ")
+	const maxMessageLen = 240
+	if len([]rune(message)) <= maxMessageLen {
+		return message
+	}
+	runes := []rune(message)
+	return strings.TrimSpace(string(runes[:maxMessageLen])) + "..."
 }
 
 func selectedGenerationProvider(params map[string]any) string {
@@ -141,8 +406,76 @@ func selectedGenerationProvider(params map[string]any) string {
 	return provider
 }
 
+func (a api) generationServiceForUserRoute(user adminUser, model string) (generation.Service, bool, error) {
+	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") || strings.EqualFold(strings.TrimSpace(model), "mock-video") {
+		return generation.Service{}, false, nil
+	}
+	route := primaryUserModelRoute(user)
+	if route.ID == "" || !apiRouteUsableForGeneration(route) {
+		return generation.Service{}, false, nil
+	}
+	if strings.TrimSpace(model) != "" && len(route.Models) > 0 && !stringListContains(route.Models, model) {
+		return generation.Service{}, false, nil
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		return generation.Service{}, false, err
+	}
+	channel, ok := findAPIChannelByRoute(data.APIChannels, route)
+	if !ok {
+		return generation.Service{}, false, fmt.Errorf("用户模型路由 %s 绑定的渠道不存在或不可用", route.ID)
+	}
+	if newAPIChannel, newAPIOK := channelForNewAPIRoute(data, route); newAPIOK {
+		channel = newAPIChannel
+	}
+	if len(route.Models) > 0 {
+		channel.Models = route.Models
+	}
+	service, err := a.generationServiceForChannelWithRouteKey(data, channel, route)
+	return service, err == nil, err
+}
+
+func channelForNewAPIRoute(data adminPlatformData, route adminUserModelRoute) (adminAPIChannel, bool) {
+	if !strings.EqualFold(strings.TrimSpace(route.Provider), "newapi") && strings.TrimSpace(route.ExternalKey) == "" {
+		return adminAPIChannel{}, false
+	}
+	cfg := newAPISyncConfigFromSettings(data.SystemSettings)
+	baseURL := normalizedURLOrigin(cfg.BaseURL)
+	if baseURL == "" {
+		return adminAPIChannel{}, false
+	}
+	for _, channel := range data.APIChannels {
+		if !apiChannelUsableForGeneration(channel) {
+			continue
+		}
+		if normalizedURLOrigin(channel.BaseURL) == baseURL {
+			return channel, true
+		}
+	}
+	return adminAPIChannel{}, false
+}
+
+func normalizedURLOrigin(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
+}
+
+func (a api) generationServiceForChannelWithRouteKey(data adminPlatformData, channel adminAPIChannel, route adminUserModelRoute) (generation.Service, error) {
+	if strings.TrimSpace(route.APIKeyID) == "" {
+		return generation.Service{}, fmt.Errorf("用户模型路由 %s 未绑定 API Key", route.ID)
+	}
+	apiKey := savedAPIKeyByID(data.APIKeys, route.APIKeyID)
+	if apiKey == "" {
+		return generation.Service{}, fmt.Errorf("用户模型路由 %s 的 API Key 不存在或未启用", route.ID)
+	}
+	return a.generationServiceForChannelWithAPIKey(channel, apiKey, route)
+}
+
 func (a api) generationServiceForConfiguredModel(model string) (generation.Service, bool, error) {
-	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") {
+	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") || strings.EqualFold(strings.TrimSpace(model), "mock-video") {
 		return generation.Service{}, false, nil
 	}
 	data, err := a.store.AdminData()
@@ -196,29 +529,102 @@ func (a api) generationServiceForChannel(data adminPlatformData, channel adminAP
 		}
 		return generation.Service{}, fmt.Errorf("api provider %s requires saved API Key", channel.Name)
 	}
+	return a.generationServiceForChannelWithAPIKey(channel, apiKey, adminUserModelRoute{})
+}
+
+func (a api) generationServiceForChannelWithAPIKey(channel adminAPIChannel, apiKey string, route adminUserModelRoute) (generation.Service, error) {
 	model := firstNonEmpty(channel.Models)
-	provider := imageprovider.NewOpenAICompatibleWithOptions(imageprovider.OpenAICompatibleOptions{
-		Code:       channel.ID,
-		BaseURL:    channel.BaseURL,
-		APIKey:     apiKey,
-		ImageModel: model,
-		Models:     channel.Models,
-		TimeoutMS:  intConfigValue(a.cfg.ModelTimeoutMS),
+	imageProvider := imageprovider.NewOpenAICompatibleWithOptions(imageprovider.OpenAICompatibleOptions{
+		Code:                    channel.ID,
+		BaseURL:                 channel.BaseURL,
+		APIKey:                  apiKey,
+		ImageModel:              model,
+		Models:                  channel.Models,
+		ImageGenerationEndpoint: channel.ImageGenerationEndpoint,
+		ImageEditEndpoint:       channel.ImageEditEndpoint,
+		TimeoutMS:               intConfigValue(a.cfg.ModelTimeoutMS),
 	})
-	return generation.NewService(provider, generatedImageDecorator{}, func(req generation.CreateRequest) (any, error) {
-		if req.Params == nil {
-			req.Params = map[string]any{}
-		}
-		req.Params["provider"] = channel.ID
-		req.Params["providerName"] = channel.Name
-		return a.store.CreateGenerationTask(req)
+	videoProvider := videoprovider.NewOpenAICompatibleWithOptions(videoprovider.OpenAICompatibleOptions{
+		Code:          channel.ID,
+		BaseURL:       channel.BaseURL,
+		APIKey:        apiKey,
+		Model:         model,
+		Models:        channel.Models,
+		Endpoint:      channel.VideoGenerationEndpoint,
+		TimeoutMS:     intConfigValue(a.cfg.ModelTimeoutMS),
+		OutputDir:     a.generatedMediaDir(),
+		PublicURLBase: "/api/v1/generated-media/",
+	})
+	return generation.NewServiceWithOptions(generation.ServiceOptions{
+		ImageProvider:  imageProvider,
+		VideoProvider:  videoProvider,
+		ImageDecorator: generatedImageDecorator{},
+		CreateTask: func(req generation.CreateRequest) (any, error) {
+			if req.Params == nil {
+				req.Params = map[string]any{}
+			}
+			req.Params["provider"] = channel.ID
+			req.Params["providerName"] = channel.Name
+			if route.ID != "" {
+				req.Params["modelRouteId"] = route.ID
+				req.Params["modelGroup"] = route.GroupName
+				req.Params["modelApiKeyId"] = route.APIKeyID
+			}
+			return a.store.CreateGenerationTask(req)
+		},
 	}), nil
+}
+
+func apiRouteUsableForGeneration(route adminUserModelRoute) bool {
+	return route.ID != "" && (strings.EqualFold(route.Status, "ACTIVE") || strings.EqualFold(route.Status, "ENABLED"))
+}
+
+func findAPIChannelByRoute(channels []adminAPIChannel, route adminUserModelRoute) (adminAPIChannel, bool) {
+	for _, channel := range channels {
+		if route.ChannelID != "" && channel.ID == route.ChannelID && apiChannelUsableForGeneration(channel) {
+			return channel, true
+		}
+	}
+	for _, channel := range channels {
+		if route.Channel != "" && strings.EqualFold(channel.Name, route.Channel) && apiChannelUsableForGeneration(channel) {
+			return channel, true
+		}
+	}
+	return adminAPIChannel{}, false
+}
+
+func savedAPIKeyByID(keys []adminAPIKey, id string) string {
+	for _, key := range keys {
+		if key.ID == id && strings.EqualFold(key.Status, "ACTIVE") && strings.TrimSpace(key.Secret) != "" {
+			return strings.TrimSpace(key.Secret)
+		}
+	}
+	return ""
+}
+
+func stringListContains(items []string, value string) bool {
+	value = strings.TrimSpace(value)
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item), value) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendIfMissingString(items []string, value string) []string {
+	if stringListContains(items, value) {
+		return items
+	}
+	return append(items, value)
 }
 
 func selectAPIChannelForModel(channels []adminAPIChannel, model string) (adminAPIChannel, bool) {
 	model = strings.TrimSpace(model)
 	var fallback adminAPIChannel
+	var matched adminAPIChannel
 	hasFallback := false
+	hasMatched := false
 	for _, channel := range channels {
 		if !apiChannelUsableForGeneration(channel) {
 			continue
@@ -228,8 +634,14 @@ func selectAPIChannelForModel(channels []adminAPIChannel, model string) (adminAP
 			hasFallback = true
 		}
 		if model != "" && apiChannelSupportsModel(channel, model) {
-			return channel, true
+			if !hasMatched || channel.Primary || priorityLess(channel, matched) {
+				matched = channel
+				hasMatched = true
+			}
 		}
+	}
+	if hasMatched {
+		return matched, true
 	}
 	if model == "" && hasFallback {
 		return fallback, true
@@ -239,6 +651,17 @@ func selectAPIChannelForModel(channels []adminAPIChannel, model string) (adminAP
 
 func configuredGenerationChannels(data adminPlatformData) []adminAPIChannel {
 	channels := annotateAPIChannelsWithKeys(data.APIChannels, data.APIKeys)
+	if runtimeChannel, ok := runtimeGenerationChannelFromEnv(); ok {
+		filtered := make([]adminAPIChannel, 0, len(channels)+1)
+		filtered = append(filtered, runtimeChannel)
+		for _, channel := range channels {
+			if strings.EqualFold(channel.ID, runtimeChannel.ID) {
+				continue
+			}
+			filtered = append(filtered, channel)
+		}
+		channels = filtered
+	}
 	defaultModels := configuredImageModels(data)
 	result := make([]adminAPIChannel, 0, len(channels))
 	for _, channel := range channels {
@@ -250,7 +673,52 @@ func configuredGenerationChannels(data adminPlatformData) []adminAPIChannel {
 		}
 		result = append(result, channel)
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return priorityLess(result[i], result[j])
+	})
 	return result
+}
+
+func runtimeGenerationChannelFromEnv() (adminAPIChannel, bool) {
+	baseURL := strings.TrimSpace(os.Getenv("MODEL_PROVIDER_URL"))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+	}
+	if baseURL == "" {
+		return adminAPIChannel{}, false
+	}
+	apiKeyEnv := "MODEL_PROVIDER_API_KEY"
+	if strings.TrimSpace(os.Getenv(apiKeyEnv)) == "" && strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
+		apiKeyEnv = "OPENAI_API_KEY"
+	}
+	if strings.TrimSpace(os.Getenv(apiKeyEnv)) == "" {
+		return adminAPIChannel{}, false
+	}
+	model := strings.TrimSpace(os.Getenv("MODEL_PROVIDER_IMAGE_MODEL"))
+	if model == "" {
+		model = "gpt-image-2"
+	}
+	models := []string{model}
+	if videoModel := strings.TrimSpace(os.Getenv("MODEL_PROVIDER_VIDEO_MODEL")); videoModel != "" {
+		models = appendIfMissingString(models, videoModel)
+	}
+	return adminAPIChannel{
+		ID:                      "channel_runtime_env",
+		Name:                    "当前运行上游",
+		BaseURL:                 baseURL,
+		Protocol:                "openai",
+		ImageRequestMode:        "openai",
+		ImageGenerationEndpoint: "/v1/images/generations",
+		ImageEditEndpoint:       "/v1/images/edits",
+		VideoGenerationEndpoint: "",
+		FetchModelsPath:         "/models",
+		APIKeyEnv:               apiKeyEnv,
+		Primary:                 true,
+		Status:                  "ACTIVE",
+		Priority:                1,
+		Models:                  models,
+		APIKeyConfigured:        true,
+	}, true
 }
 
 func nonEmptyStringItems(values ...string) []string {
@@ -296,7 +764,7 @@ func apiChannelHasCredential(keys []adminAPIKey, channel adminAPIChannel) bool {
 }
 
 func apiChannelUsableForGeneration(channel adminAPIChannel) bool {
-	if channel.ID == "" || strings.EqualFold(channel.ID, "channel_runtime_env") {
+	if channel.ID == "" {
 		return false
 	}
 	return strings.EqualFold(channel.Status, "ACTIVE") || strings.EqualFold(channel.Status, "CONFIGURABLE") || strings.EqualFold(channel.Status, "ENABLED")
@@ -368,16 +836,106 @@ func (a api) models(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, items)
 }
-func (a api) listAssets(w http.ResponseWriter, _ *http.Request) {
+func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	assets, err := a.store.ListAssets()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, assets)
+	writeJSON(w, filterAssetsForUser(assets, user.ID))
+}
+
+func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
+	_, _, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxReferenceImageUploadBytes+(1<<20))
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		file, header, err = r.FormFile("files")
+	}
+	if err != nil {
+		file, header, err = r.FormFile("image[]")
+	}
+	if err != nil {
+		file, header, err = r.FormFile("image")
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("missing image file"))
+		return
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxReferenceImageUploadBytes+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(raw) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("empty image file"))
+		return
+	}
+	if len(raw) > maxReferenceImageUploadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, errors.New("image file is too large"))
+		return
+	}
+	contentType := detectReferenceImageContentType(raw, header.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "image/") {
+		writeError(w, http.StatusBadRequest, errors.New("unsupported image file"))
+		return
+	}
+	dir := a.referenceImageDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	name, err := randomReferenceImageName(referenceImageExtension(header.Filename, contentType))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"item": map[string]any{
+			"id":          strings.TrimSuffix(name, filepath.Ext(name)),
+			"name":        header.Filename,
+			"storedName":  name,
+			"url":         "/api/v1/reference-images/" + name,
+			"contentType": contentType,
+			"size":        len(raw),
+		},
+	})
+}
+
+func (a api) serveReferenceImage(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" || filepath.Base(name) != name {
+		writeError(w, http.StatusBadRequest, errors.New("invalid image name"))
+		return
+	}
+	path := filepath.Join(a.referenceImageDir(), name)
+	if _, err := os.Stat(path); err != nil {
+		writeError(w, http.StatusNotFound, errors.New("reference image not found"))
+		return
+	}
+	http.ServeFile(w, r, path)
 }
 
 func (a api) downloadAsset(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	id := r.PathValue("id")
 	assets, err := a.store.ListAssets()
 	if err != nil {
@@ -387,6 +945,10 @@ func (a api) downloadAsset(w http.ResponseWriter, r *http.Request) {
 	for _, item := range assets {
 		if item.ID != id {
 			continue
+		}
+		if item.UserID != user.ID {
+			writeError(w, http.StatusNotFound, errAssetNotFound)
+			return
 		}
 		if item.URL == "" {
 			writeError(w, http.StatusNotFound, errAssetNotFound)
@@ -398,10 +960,96 @@ func (a api) downloadAsset(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, errAssetNotFound)
 }
 
+func (a api) downloadVideoByURL(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if rawURL == "" {
+		writeError(w, http.StatusBadRequest, errors.New("video url is required"))
+		return
+	}
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	userAssets := filterAssetsForUser(assets, user.ID)
+	if !videoURLBelongsToUser(rawURL, filterGenerationTasksForUser(attachAssetImagesToTasks(tasks, userAssets), user.ID), userAssets) {
+		writeError(w, http.StatusNotFound, errors.New("video not found"))
+		return
+	}
+	filename := sanitizeVideoDownloadFilename(r.URL.Query().Get("filename"))
+	if filename == "" {
+		filename = "video.mp4"
+	}
+	if _, ok := generatedMediaNameFromURL(rawURL); ok {
+		a.writeGeneratedMediaDownload(w, rawURL, filename)
+		return
+	}
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		writeError(w, http.StatusBadRequest, errors.New("invalid video url"))
+		return
+	}
+	if parsedURL.Scheme != "https" && parsedURL.Scheme != "http" {
+		writeError(w, http.StatusBadRequest, errors.New("unsupported video url scheme"))
+		return
+	}
+	a.writeRemoteDownload(w, r, rawURL, "video/mp4", filename)
+}
+
+func videoURLBelongsToUser(rawURL string, tasks []generationTask, assets []asset) bool {
+	for _, item := range assets {
+		if videoURLsEqual(item.URL, rawURL) && strings.EqualFold(item.MediaType, "video") {
+			return true
+		}
+	}
+	for _, task := range tasks {
+		if videoURLsEqual(task.OutputURL, rawURL) || videoURLsEqual(task.ResultURL, rawURL) || videoURLsEqual(task.ImageURL, rawURL) {
+			return true
+		}
+	}
+	return false
+}
+
+func videoURLsEqual(left string, right string) bool {
+	if left == right {
+		return true
+	}
+	leftName, leftOK := generatedMediaNameFromURL(left)
+	rightName, rightOK := generatedMediaNameFromURL(right)
+	return leftOK && rightOK && leftName == rightName
+}
+
+func sanitizeVideoDownloadFilename(filename string) string {
+	name := strings.TrimSpace(filename)
+	name = regexp.MustCompile(`[\\/:*?"<>|]+`).ReplaceAllString(name, "-")
+	name = strings.Trim(name, ". ")
+	if name == "" {
+		return ""
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".mp4") {
+		name += ".mp4"
+	}
+	return name
+}
+
 func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item asset) {
 	contentType := stringMetadataValue(item, "contentType")
 	if contentType == "" {
 		contentType = "application/octet-stream"
+	}
+	if _, ok := generatedMediaNameFromURL(item.URL); ok {
+		a.writeGeneratedMediaDownload(w, item.URL, downloadAssetName(item, "video/mp4"))
+		return
 	}
 	if strings.HasPrefix(item.URL, "data:") {
 		comma := strings.IndexByte(item.URL, ',')
@@ -426,7 +1074,45 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 		_, _ = w.Write(raw)
 		return
 	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, item.URL, nil)
+	a.writeRemoteDownload(w, r, item.URL, contentType, downloadAssetName(item, contentType))
+}
+
+func (a api) serveGeneratedMedia(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" || filepath.Base(name) != name || !strings.HasSuffix(strings.ToLower(name), ".mp4") {
+		writeError(w, http.StatusBadRequest, errors.New("invalid generated media name"))
+		return
+	}
+	path := filepath.Join(a.generatedMediaDir(), name)
+	if _, err := os.Stat(path); err != nil {
+		writeError(w, http.StatusNotFound, errors.New("generated media not found"))
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp4")
+	http.ServeFile(w, r, path)
+}
+
+func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, rawURL string, filename string) {
+	name, ok := generatedMediaNameFromURL(rawURL)
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("invalid generated media url"))
+		return
+	}
+	file, err := os.Open(filepath.Join(a.generatedMediaDir(), name))
+	if err != nil {
+		writeError(w, http.StatusNotFound, errors.New("generated media not found"))
+		return
+	}
+	defer file.Close()
+	if info, err := file.Stat(); err == nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	}
+	writeAttachmentHeaders(w, "video/mp4", filename)
+	_, _ = io.Copy(w, file)
+}
+
+func (a api) writeRemoteDownload(w http.ResponseWriter, r *http.Request, rawURL string, contentType string, filename string) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -444,13 +1130,97 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 	if res.Header.Get("Content-Type") != "" {
 		contentType = res.Header.Get("Content-Type")
 	}
-	writeAttachmentHeaders(w, contentType, downloadAssetName(item, contentType))
-	_, _ = io.Copy(w, io.LimitReader(res.Body, 50<<20))
+	writeAttachmentHeaders(w, contentType, filename)
+	_, _ = io.Copy(w, io.LimitReader(res.Body, 512<<20))
+}
+
+func (a api) referenceImageDir() string {
+	base := filepath.Dir(a.cfg.DataPath)
+	if base == "." || base == "" {
+		base = "data"
+	}
+	return filepath.Join(base, "reference-images")
+}
+
+func (a api) generatedMediaDir() string {
+	base := filepath.Dir(a.cfg.DataPath)
+	if base == "." || base == "" {
+		base = "data"
+	}
+	return filepath.Join(base, "generated-media")
+}
+
+func generatedMediaNameFromURL(rawURL string) (string, bool) {
+	const prefix = "/api/v1/generated-media/"
+	text := strings.TrimSpace(rawURL)
+	if text == "" {
+		return "", false
+	}
+	pathValue := text
+	if parsed, err := url.Parse(text); err == nil {
+		if parsed.Path != "" {
+			pathValue = parsed.Path
+		}
+	}
+	if !strings.HasPrefix(pathValue, prefix) {
+		return "", false
+	}
+	name, err := url.PathUnescape(path.Base(pathValue))
+	if err != nil || name == "" || filepath.Base(name) != name || !strings.HasSuffix(strings.ToLower(name), ".mp4") {
+		return "", false
+	}
+	return name, true
+}
+
+func detectReferenceImageContentType(raw []byte, declared string) string {
+	contentType := ""
+	if len(raw) > 0 {
+		limit := len(raw)
+		if limit > 512 {
+			limit = 512
+		}
+		contentType = http.DetectContentType(raw[:limit])
+	}
+	if !strings.HasPrefix(contentType, "image/") && strings.HasPrefix(declared, "image/") {
+		contentType = strings.Split(declared, ";")[0]
+	}
+	return contentType
+}
+
+func referenceImageExtension(filename string, contentType string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+		return ext
+	}
+	switch strings.ToLower(strings.Split(contentType, ";")[0]) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
+}
+
+func randomReferenceImageName(ext string) (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x%s", raw, ext), nil
 }
 
 func writeAttachmentHeaders(w http.ResponseWriter, contentType string, filename string) {
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	asciiFilename := regexp.MustCompile(`[^\x20-\x7E]+`).ReplaceAllString(filename, "_")
+	asciiFilename = strings.ReplaceAll(asciiFilename, `"`, "-")
+	if strings.TrimSpace(asciiFilename) == "" {
+		asciiFilename = "download"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiFilename, url.PathEscape(filename)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
@@ -459,10 +1229,12 @@ func downloadAssetName(item asset, contentType string) string {
 	if name == "" {
 		name = item.ID
 	}
-	if regexp.MustCompile(`(?i)\.(png|jpe?g|webp|gif|svg)$`).MatchString(name) {
+	if regexp.MustCompile(`(?i)\.(png|jpe?g|webp|gif|svg|mp4)$`).MatchString(name) {
 		return name
 	}
 	switch {
+	case strings.Contains(contentType, "video"):
+		return name + ".mp4"
 	case strings.Contains(contentType, "svg"):
 		return name + ".svg"
 	case strings.Contains(contentType, "jpeg"), strings.Contains(contentType, "jpg"):
@@ -487,6 +1259,11 @@ func stringMetadataValue(item asset, key string) string {
 }
 
 func (a api) backfillAssetThumbnails(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	assets, err := a.store.ListAssets()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -497,18 +1274,20 @@ func (a api) backfillAssetThumbnails(w http.ResponseWriter, r *http.Request) {
 	infoUpdates := map[string]assetImageInfo{}
 	missing := 0
 	for _, item := range assets {
-		if item.MediaType != "image" || item.URL == "" {
+		if item.UserID != user.ID || item.MediaType != "image" || item.URL == "" {
 			continue
 		}
 		info := assetImageInfo{}
-		if item.ThumbnailURL == "" {
+		needsThumbnail := item.ThumbnailURL == "" || item.ThumbnailURL == item.URL
+		if needsThumbnail {
 			missing++
-			if thumbnailURL := thumbnailForImage(r.Context(), item.URL); thumbnailURL != "" {
+			if thumbnailURL, width, height, ok := thumbnailAndDimensionsForImage(r.Context(), item.URL); ok {
 				info.ThumbnailURL = thumbnailURL
 				thumbnailUpdates[item.ID] = thumbnailURL
+				info.Width = width
+				info.Height = height
 			}
-		}
-		if width, height, ok := imageDimensionsForImage(r.Context(), item.URL); ok {
+		} else if width, height, ok := imageDimensionsForImage(r.Context(), item.URL); ok {
 			info.Width = width
 			info.Height = height
 		}
@@ -535,19 +1314,754 @@ func (a api) backfillAssetThumbnails(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a api) pointAccount(w http.ResponseWriter, _ *http.Request) {
-	account, err := a.store.PointAccount()
+func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	account, err := a.store.PointAccount(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	orders := userMembershipOrders(data, user.ID)
+	writeJSON(w, map[string]any{
+		"account":      account,
+		"orders":       orders,
+		"transactions": userPointTransactions(data.BillingEvents, user.ID),
+	})
+}
+
+func (a api) plans(w http.ResponseWriter, r *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	planType := normalizePlanTypeString(r.URL.Query().Get("planType"))
+	if planType == "" {
+		planType = normalizePlanTypeString(r.URL.Query().Get("type"))
+	}
+	items := make([]map[string]any, 0, len(data.Plans))
+	for _, plan := range data.Plans {
+		if !commercePlanVisible(plan) {
+			continue
+		}
+		if planType != "" && planBusinessType(plan) != planType {
+			continue
+		}
+		items = append(items, commercePlanView(plan))
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return intValue(items[i]["sort"]) < intValue(items[j]["sort"])
+	})
+	writeJSON(w, map[string]any{"items": items})
+}
+
+func (a api) planDetail(w http.ResponseWriter, r *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	plan, ok := commercePlanByID(data, r.PathValue("id"))
+	if !ok || !commercePlanVisible(plan) {
+		writeError(w, http.StatusNotFound, errors.New("plan not found"))
+		return
+	}
+	writeJSON(w, map[string]any{"item": commercePlanView(plan)})
+}
+
+func (a api) createCommerceOrder(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req struct {
+		PlanID         string `json:"planId"`
+		AmountCents    int    `json:"amountCents"`
+		PaymentMethod  string `json:"paymentMethod"`
+		IdempotencyKey string `json:"idempotencyKey"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	plan, ok := commercePlanByID(data, req.PlanID)
+	if !ok || !commercePlanVisible(plan) {
+		writeError(w, http.StatusBadRequest, errors.New("valid planId is required"))
+		return
+	}
+	order, err := a.createOrderForPlan(user, plan, req.AmountCents, req.PaymentMethod, req.IdempotencyKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, commerceOrderResponse(order, plan))
+}
+
+func (a api) createAgentJoinOrder(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok && strings.EqualFold(agent.Status, "ACTIVE") {
+		writeError(w, http.StatusConflict, errors.New("agent identity is already active"))
+		return
+	}
+	var req struct {
+		PlanID         string `json:"planId"`
+		PaymentMethod  string `json:"paymentMethod"`
+		IdempotencyKey string `json:"idempotencyKey"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	planID := firstNonEmptyString(req.PlanID, "plan_agent_join_996")
+	plan, ok := commercePlanByID(data, planID)
+	if !ok || planBusinessType(plan) != planTypeAgentJoinPackage {
+		writeError(w, http.StatusBadRequest, errors.New("valid agent join plan is required"))
+		return
+	}
+	order, err := a.createOrderForPlan(user, plan, 0, req.PaymentMethod, req.IdempotencyKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, commerceOrderResponse(order, plan))
+}
+
+func (a api) createOperationCenterJoinOrder(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if center, ok := operationCenterForUser(data.OperationCenters, user.ID); ok && strings.EqualFold(center.Status, "ACTIVE") {
+		writeError(w, http.StatusConflict, errors.New("operation center identity is already active"))
+		return
+	}
+	var req struct {
+		PlanID         string `json:"planId"`
+		PaymentMethod  string `json:"paymentMethod"`
+		IdempotencyKey string `json:"idempotencyKey"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	planID := firstNonEmptyString(req.PlanID, "plan_operation_center_5000")
+	plan, ok := commercePlanByID(data, planID)
+	if !ok || planBusinessType(plan) != planTypeOperationCenterPackage {
+		writeError(w, http.StatusBadRequest, errors.New("valid operation center plan is required"))
+		return
+	}
+	order, err := a.createOrderForPlan(user, plan, 0, req.PaymentMethod, req.IdempotencyKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, commerceOrderResponse(order, plan))
+}
+
+func (a api) payCallback(w http.ResponseWriter, r *http.Request) {
+	if secret := strings.TrimSpace(os.Getenv("PAYMENT_CALLBACK_SECRET")); secret != "" {
+		headerSecret := strings.TrimSpace(firstNonEmptyString(r.Header.Get("X-Xianzhi-Payment-Secret"), r.Header.Get("X-Payment-Secret")))
+		if headerSecret != secret {
+			writeError(w, http.StatusUnauthorized, errors.New("invalid payment callback secret"))
+			return
+		}
+	}
+	var req struct {
+		OrderID       string `json:"orderId"`
+		OrderNo       string `json:"orderNo"`
+		Status        string `json:"status"`
+		PaymentStatus string `json:"paymentStatus"`
+		EventType     string `json:"eventType"`
+		Paid          bool   `json:"paid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	orderID := strings.TrimSpace(firstNonEmptyString(req.OrderID, req.OrderNo))
+	if orderID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("orderId is required"))
+		return
+	}
+	status := strings.ToUpper(strings.TrimSpace(firstNonEmptyString(req.Status, req.PaymentStatus, req.EventType)))
+	if !req.Paid && status != "" && !isPaidStatus(status) && status != "PAYMENT_SUCCEEDED" {
+		writeJSON(w, map[string]any{"ok": true, "ignored": true, "status": status})
+		return
+	}
+	order, err := a.store.MarkAdminOrderPaid(orderID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "item": order})
+}
+
+func (a api) memberProfile(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	account, err := a.store.PointAccount(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	response := map[string]any{
+		"user":            memberUserView(user),
+		"account":         account,
+		"plan":            commercePlanView(planMap(data.Plans)[user.PlanID]),
+		"agent":           nil,
+		"operationCenter": nil,
+	}
+	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok {
+		response["agent"] = channelAgentView(agent, user)
+	}
+	if center, ok := operationCenterForUser(data.OperationCenters, user.ID); ok {
+		response["operationCenter"] = center
+	}
+	writeJSON(w, response)
+}
+
+func (a api) memberWallet(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	account, err := a.store.PointAccount(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	data, err := a.store.AdminData()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, map[string]any{
 		"account":      account,
-		"transactions": []any{},
+		"tokenRecords": userTokenRecords(data.TokenRecords, user.ID),
+		"orders":       userMembershipOrders(data, user.ID),
+		"transactions": userPointTransactions(data.BillingEvents, user.ID),
 	})
 }
 
-func (a api) userDashboard(w http.ResponseWriter, _ *http.Request) {
+func (a api) memberTokenRecords(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": userTokenRecords(data.TokenRecords, user.ID)})
+}
+
+func (a api) agentProfile(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	response := map[string]any{
+		"user":     memberUserView(user),
+		"agent":    nil,
+		"joinPlan": commercePlanView(planMap(data.Plans)["plan_agent_join_996"]),
+	}
+	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok {
+		response["agent"] = channelAgentView(agent, user)
+		response["summary"] = channelSummary(
+			channelCustomers(data.Users, data.Plans, data.PointAccounts, channelVisibleCustomerIDs(data.Users, data.ChannelAgents, user.ID, agent.ID)),
+			channelCommissions(data.Commissions, agent.ID),
+			channelWithdrawals(data.Withdrawals, agent.ID),
+			channelChildren(data.ChannelAgents, data.Users, agent.ID),
+		)
+	}
+	writeJSON(w, response)
+}
+
+func (a api) operationCenterProfile(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	response := map[string]any{
+		"user":            memberUserView(user),
+		"operationCenter": nil,
+		"joinPlan":        commercePlanView(planMap(data.Plans)["plan_operation_center_5000"]),
+	}
+	if center, ok := operationCenterForUser(data.OperationCenters, user.ID); ok {
+		response["operationCenter"] = center
+		response["summary"] = operationCenterSummary(data, center.ID)
+	}
+	writeJSON(w, response)
+}
+
+func (a api) operationCenterAgents(w http.ResponseWriter, r *http.Request) {
+	data, _, center, ok := a.authenticatedOperationCenter(r)
+	if !ok {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
+	users := userMap(data.Users)
+	items := []map[string]any{}
+	for _, agent := range data.ChannelAgents {
+		if agent.OperationCenterID != center.ID {
+			continue
+		}
+		items = append(items, channelAgentView(agent, users[agent.UserID]))
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
+func (a api) operationCenterOrders(w http.ResponseWriter, r *http.Request) {
+	data, _, center, ok := a.authenticatedOperationCenter(r)
+	if !ok {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
+	users := userMap(data.Users)
+	plans := planMap(data.Plans)
+	items := []map[string]any{}
+	for _, order := range data.Orders {
+		if orderOperationCenterID(order) != center.ID {
+			continue
+		}
+		items = append(items, adminOrderView(order, users, plans))
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
+func (a api) operationCenterCommissions(w http.ResponseWriter, r *http.Request) {
+	data, _, center, ok := a.authenticatedOperationCenter(r)
+	if !ok {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
+	items := []adminCommission{}
+	for _, commission := range data.Commissions {
+		if commission.ReceiverType == receiverTypeOperationCenter && commission.ReceiverID == center.ID {
+			items = append(items, commission)
+		}
+	}
+	writeJSON(w, map[string]any{"summary": operationCenterCommissionSummary(items), "items": items})
+}
+
+func (a api) createRechargeOrder(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req struct {
+		AmountCents       int    `json:"amountCents"`
+		RechargePackageID string `json:"rechargePackageId"`
+		PaymentMethod     string `json:"paymentMethod"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	planID := strings.TrimSpace(req.RechargePackageID)
+	if planID == "" {
+		planID = rechargePackageIDForAmount(req.AmountCents)
+	}
+	if plan, ok := planCatalogByID(planID); ok && strings.EqualFold(stringValue(plan.Entitlements["planType"]), "recharge") {
+		req.AmountCents = planPrice(plan)
+	} else {
+		planID = fmt.Sprintf("recharge_%d", req.AmountCents/100)
+	}
+	if req.AmountCents == 0 {
+		planID = "recharge_standard"
+		if plan, ok := planCatalogByID(planID); ok {
+			req.AmountCents = planPrice(plan)
+		}
+	}
+	if req.AmountCents < 100 {
+		writeError(w, http.StatusBadRequest, errors.New("amountCents must be at least 100"))
+		return
+	}
+	order, err := a.store.CreateAdminOrder(adminOrderMutation{
+		UserID:        user.ID,
+		PlanID:        planID,
+		AmountCents:   req.AmountCents,
+		Status:        "PENDING",
+		PaymentMethod: req.PaymentMethod,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"item":           order,
+		"rechargePoints": rechargePointsForOrder(order),
+		"message":        "充值订单已创建，请等待主控确认收款",
+	})
+}
+
+func (a api) createSubscriptionOrder(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req struct {
+		PlanID        string `json:"planId"`
+		AmountCents   int    `json:"amountCents"`
+		PaymentMethod string `json:"paymentMethod"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.PlanID = strings.TrimSpace(req.PlanID)
+	if req.PlanID == "" || req.AmountCents <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("planId and amountCents are required"))
+		return
+	}
+	if plan, ok := planCatalogByID(req.PlanID); ok && strings.EqualFold(stringValue(plan.Entitlements["planType"]), "subscription") && planPrice(plan) > 0 {
+		req.AmountCents = planPrice(plan)
+	}
+	order, err := a.store.CreateAdminOrder(adminOrderMutation{
+		UserID:        user.ID,
+		PlanID:        req.PlanID,
+		AmountCents:   req.AmountCents,
+		Status:        "PENDING",
+		PaymentMethod: req.PaymentMethod,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"item":    order,
+		"message": "订阅订单已创建，请等待主控确认收款",
+	})
+}
+
+func userMembershipOrders(data adminPlatformData, userID string) []map[string]any {
+	plans := planMap(data.Plans)
+	items := []map[string]any{}
+	for _, order := range data.Orders {
+		if order.UserID != userID {
+			continue
+		}
+		item := adminOrderView(order, map[string]adminUser{}, plans)
+		item["rechargePoints"] = intValue(order.PriceSnapshot["rechargePoints"])
+		items = append(items, item)
+	}
+	return items
+}
+
+func userPointTransactions(events []adminBillingEvent, userID string) []map[string]any {
+	items := []map[string]any{}
+	for _, event := range events {
+		if event.UserID != userID {
+			continue
+		}
+		items = append(items, map[string]any{
+			"id":            event.ID,
+			"taskId":        event.TaskID,
+			"metricCode":    event.MetricCode,
+			"pointCost":     event.PointCost,
+			"amountCents":   event.AmountCents,
+			"balanceBefore": event.BalanceBefore,
+			"balanceAfter":  event.BalanceAfter,
+			"status":        event.Status,
+			"occurredAt":    event.OccurredAt,
+		})
+	}
+	return items
+}
+
+func (a api) createOrderForPlan(user adminUser, plan adminPlan, requestedAmountCents int, paymentMethod string, idempotencyKey string) (adminOrder, error) {
+	if user.ID == "" {
+		return adminOrder{}, errors.New("user is required")
+	}
+	if plan.ID == "" || !commercePlanVisible(plan) {
+		return adminOrder{}, errors.New("valid plan is required")
+	}
+	amountCents := planPrice(plan)
+	if amountCents <= 0 {
+		amountCents = requestedAmountCents
+	} else if requestedAmountCents > 0 && requestedAmountCents != amountCents {
+		return adminOrder{}, fmt.Errorf("amountCents must match plan price: %d", amountCents)
+	}
+	if amountCents < 0 {
+		return adminOrder{}, errors.New("amountCents must be greater than or equal to 0")
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey != "" {
+		data, err := a.store.AdminData()
+		if err != nil {
+			return adminOrder{}, err
+		}
+		for _, order := range data.Orders {
+			if order.UserID == user.ID && order.PlanID == plan.ID && stringValue(order.PriceSnapshot["idempotencyKey"]) == idempotencyKey {
+				return order, nil
+			}
+		}
+	}
+	return a.store.CreateAdminOrder(adminOrderMutation{
+		UserID:         user.ID,
+		PlanID:         plan.ID,
+		AmountCents:    amountCents,
+		Status:         "PENDING",
+		PaymentMethod:  paymentMethod,
+		IdempotencyKey: idempotencyKey,
+	})
+}
+
+func commercePlanByID(data adminPlatformData, id string) (adminPlan, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return adminPlan{}, false
+	}
+	for _, plan := range data.Plans {
+		if plan.ID == id {
+			return plan, true
+		}
+	}
+	return planCatalogByID(id)
+}
+
+func commercePlanVisible(plan adminPlan) bool {
+	return plan.ID != "" && planBusinessType(plan) != ""
+}
+
+func commercePlanView(plan adminPlan) map[string]any {
+	if plan.ID == "" {
+		return nil
+	}
+	entitlements := planEntitlements(plan)
+	planType := planBusinessType(plan)
+	sortValue := intValue(entitlements["sort"])
+	if sortValue == 0 {
+		sortValue = 1000
+	}
+	return map[string]any{
+		"id":                    plan.ID,
+		"code":                  fallback(plan.Code, plan.ID),
+		"name":                  plan.Name,
+		"planType":              planType,
+		"priceCents":            planPrice(plan),
+		"grantPoints":           planPoints(plan),
+		"tokenGrantAmount":      planTokenGrantAmount(plan),
+		"tokenRightsValueCents": planTokenRightsValueCents(plan),
+		"memberLevel":           planMemberLevel(plan),
+		"agentLevel":            plan.AgentLevel,
+		"durationDays":          plan.DurationDays,
+		"concurrency":           plan.Concurrency,
+		"displayPrice":          stringValue(entitlements["displayPrice"]),
+		"businessDescription":   stringValue(entitlements["businessDescription"]),
+		"active":                plan.Active || plan.ID != "",
+		"sort":                  sortValue,
+		"entitlements":          entitlements,
+	}
+}
+
+func commerceOrderResponse(order adminOrder, plan adminPlan) map[string]any {
+	buyerUserID := firstNonEmptyString(order.BuyerUserID, order.UserID, stringValue(order.PriceSnapshot["buyerUserId"]))
+	return map[string]any{
+		"item": order,
+		"plan": commercePlanView(plan),
+		"checkout": map[string]any{
+			"orderId":           order.ID,
+			"orderNo":           firstNonEmptyString(order.OrderNo, order.ID),
+			"buyerUserId":       buyerUserID,
+			"businessOrderType": firstNonEmptyString(order.BusinessOrderType, businessOrderTypeForPlanType(planBusinessType(plan))),
+			"amountCents":       orderAmount(order),
+			"tokenAmount":       firstNonEmptyInt(order.TokenAmount, order.TokenGrantAmount, planTokenGrantAmount(plan)),
+			"status":            order.Status,
+		},
+		"message": "order created",
+	}
+}
+
+func memberUserView(user adminUser) map[string]any {
+	view := userView(user)
+	view["memberLevel"] = user.MemberLevel
+	view["agentStatus"] = user.AgentStatus
+	view["operationCenterStatus"] = user.OperationCenterStatus
+	view["referredBy"] = user.ReferredBy
+	view["subscriptionExpiresAt"] = user.SubscriptionExpiresAt
+	return view
+}
+
+func userTokenRecords(records []adminTokenRecord, userID string) []adminTokenRecord {
+	items := []adminTokenRecord{}
+	for _, record := range records {
+		if record.UserID == userID {
+			items = append(items, record)
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].CreatedAt > items[j].CreatedAt
+	})
+	return items
+}
+
+func operationCenterForUser(centers []adminOperationCenter, userID string) (adminOperationCenter, bool) {
+	for _, center := range centers {
+		if center.UserID == userID {
+			return center, true
+		}
+	}
+	return adminOperationCenter{}, false
+}
+
+func (a api) authenticatedOperationCenter(r *http.Request) (adminPlatformData, adminUser, adminOperationCenter, bool) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		return adminPlatformData{}, adminUser{}, adminOperationCenter{}, false
+	}
+	center, ok := operationCenterForUser(data.OperationCenters, user.ID)
+	if !ok || !strings.EqualFold(center.Status, "ACTIVE") {
+		return data, user, adminOperationCenter{}, false
+	}
+	return data, user, center, true
+}
+
+func operationCenterSummary(data adminPlatformData, centerID string) map[string]any {
+	agentCount := 0
+	orderCount := 0
+	paidOrderAmount := 0
+	for _, agent := range data.ChannelAgents {
+		if agent.OperationCenterID == centerID && strings.EqualFold(agent.Status, "ACTIVE") {
+			agentCount++
+		}
+	}
+	for _, order := range data.Orders {
+		if orderOperationCenterID(order) == centerID && isPaidStatus(order.Status) {
+			orderCount++
+			paidOrderAmount += orderAmount(order)
+		}
+	}
+	commissions := []adminCommission{}
+	for _, item := range data.Commissions {
+		if item.ReceiverType == receiverTypeOperationCenter && item.ReceiverID == centerID {
+			commissions = append(commissions, item)
+		}
+	}
+	summary := operationCenterCommissionSummary(commissions)
+	summary["agents"] = agentCount
+	summary["paidOrderAmountCents"] = paidOrderAmount
+	summary["orders"] = orderCount
+	return summary
+}
+
+func operationCenterCommissionSummary(items []adminCommission) map[string]any {
+	total := 0
+	settled := 0
+	pending := 0
+	for _, item := range items {
+		total += item.AmountCents
+		if strings.EqualFold(item.SettleStatus, "SETTLED") || strings.EqualFold(item.Status, "SETTLED") || strings.EqualFold(item.Status, "APPROVED") {
+			settled += item.AmountCents
+		} else {
+			pending += item.AmountCents
+		}
+	}
+	return map[string]any{
+		"totalCents":   total,
+		"settledCents": settled,
+		"pendingCents": pending,
+		"records":      len(items),
+	}
+}
+
+func orderOperationCenterID(order adminOrder) string {
+	if strings.TrimSpace(order.OperationCenterID) != "" {
+		return strings.TrimSpace(order.OperationCenterID)
+	}
+	if order.PriceSnapshot != nil {
+		return stringValue(order.PriceSnapshot["operationCenterId"])
+	}
+	return ""
+}
+
+func adminOrderView(order adminOrder, users map[string]adminUser, plans map[string]adminPlan) map[string]any {
+	orderType := order.OrderType
+	if orderType == "" && order.PriceSnapshot != nil {
+		orderType = stringValue(order.PriceSnapshot["orderType"])
+	}
+	fulfillmentStatus := order.FulfillmentStatus
+	if fulfillmentStatus == "" && order.PriceSnapshot != nil {
+		fulfillmentStatus = stringValue(order.PriceSnapshot["fulfillmentStatus"])
+	}
+	directAgentID := firstNonEmptyString(order.DirectAgentID, stringValue(order.PriceSnapshot["directAgentId"]))
+	parentAgentID := firstNonEmptyString(order.ParentAgentID, stringValue(order.PriceSnapshot["parentAgentId"]))
+	operationCenterID := firstNonEmptyString(order.OperationCenterID, stringValue(order.PriceSnapshot["operationCenterId"]))
+	tokenGrantAmount := order.TokenGrantAmount
+	if tokenGrantAmount == 0 && order.PriceSnapshot != nil {
+		tokenGrantAmount = intValue(order.PriceSnapshot["tokenGrantAmount"])
+	}
+	tokenAmount := firstNonEmptyInt(order.TokenAmount, tokenGrantAmount, intValue(order.PriceSnapshot["tokenAmount"]))
+	platformIncomeCents := order.PlatformIncomeCents
+	if platformIncomeCents == 0 && order.PriceSnapshot != nil {
+		platformIncomeCents = intValue(order.PriceSnapshot["platformIncomeCents"])
+	}
+	rewardSnapshot := order.RewardSnapshot
+	if rewardSnapshot == nil && order.PriceSnapshot != nil {
+		rewardSnapshot, _ = mapValue(order.PriceSnapshot["rewardSnapshot"])
+	}
+	buyerUserID := firstNonEmptyString(order.BuyerUserID, order.UserID, stringValue(order.PriceSnapshot["buyerUserId"]))
+	return map[string]any{
+		"id":                  order.ID,
+		"orderNo":             firstNonEmptyString(order.OrderNo, order.ID),
+		"userId":              order.UserID,
+		"buyerUserId":         buyerUserID,
+		"customer":            users[order.UserID].Name,
+		"planId":              order.PlanID,
+		"plan":                planName(plans[order.PlanID]),
+		"orderType":           orderType,
+		"businessOrderType":   firstNonEmptyString(order.BusinessOrderType, stringValue(order.PriceSnapshot["businessOrderType"]), businessOrderTypeForPlanType(stringValue(order.PriceSnapshot["planType"]))),
+		"paymentMethod":       stringValue(order.PriceSnapshot["paymentMethod"]),
+		"amountCents":         orderAmount(order),
+		"status":              order.Status,
+		"directAgentId":       directAgentID,
+		"parentAgentId":       parentAgentID,
+		"operationCenterId":   operationCenterID,
+		"tokenGrantAmount":    tokenGrantAmount,
+		"tokenAmount":         tokenAmount,
+		"platformIncomeCents": platformIncomeCents,
+		"rewardSnapshot":      rewardSnapshot,
+		"fulfillmentStatus":   fulfillmentStatus,
+		"fulfilledAt":         firstNonEmptyString(order.FulfilledAt, stringValue(order.PriceSnapshot["fulfilledAt"])),
+		"paidAt":              order.PaidAt,
+		"createdAt":           order.CreatedAt,
+	}
+}
+
+func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -558,7 +2072,10 @@ func (a api) userDashboard(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	points, err := a.store.PointAccount()
+	tasks = filterGenerationTasksForUser(tasks, user.ID)
+	assets = filterAssetsForUser(assets, user.ID)
+	tasks = attachAssetImagesToTasks(tasks, assets)
+	points, err := a.store.PointAccount(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -590,7 +2107,12 @@ func (a api) userDashboard(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (a api) userOnlineImage(w http.ResponseWriter, _ *http.Request) {
+func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -601,7 +2123,10 @@ func (a api) userOnlineImage(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	points, err := a.store.PointAccount()
+	tasks = filterGenerationTasksForUser(tasks, user.ID)
+	assets = filterAssetsForUser(assets, user.ID)
+	tasks = attachAssetImagesToTasks(tasks, assets)
+	points, err := a.store.PointAccount(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -611,7 +2136,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	aiState, err := a.store.UserAIState("user_000002")
+	aiState, err := a.store.UserAIState(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -643,6 +2168,8 @@ func (a api) userOnlineImage(w http.ResponseWriter, _ *http.Request) {
 			"name":             channel.Name,
 			"baseUrl":          channel.BaseURL,
 			"status":           channel.Status,
+			"primary":          channel.Primary,
+			"priority":         channel.Priority,
 			"models":           channel.Models,
 			"apiKeyConfigured": channel.APIKeyConfigured,
 			"latencyMs":        120 + index*35,
@@ -673,12 +2200,17 @@ func (a api) userOnlineImage(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a api) updateUserAIState(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	var req userAIState
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	state, err := a.store.UpdateUserAIState("user_000002", req)
+	state, err := a.store.UpdateUserAIState(user.ID, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -706,33 +2238,77 @@ func (a api) userAPISettings(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (a api) userUsage(w http.ResponseWriter, _ *http.Request) {
-	tasks, err := a.store.ListGenerationTasks()
+func (a api) userUsage(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	data, err := a.store.AdminData()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	items := make([]map[string]any, 0, len(tasks))
+	items := make([]map[string]any, 0, len(data.BillingEvents))
 	totalPointCost := 0
-	for _, task := range tasks {
-		totalPointCost += task.PointCost
+	totalAmountCents := 0
+	succeeded := 0
+	for _, event := range data.BillingEvents {
+		if event.UserID != user.ID || event.PointCost <= 0 || !isUsageBillingMetric(event.MetricCode) {
+			continue
+		}
+		totalPointCost += event.PointCost
+		totalAmountCents += event.AmountCents
+		if strings.EqualFold(event.Status, "SUCCEEDED") {
+			succeeded++
+		}
 		items = append(items, map[string]any{
-			"id":        task.ID,
-			"model":     task.Model,
-			"type":      task.Type,
-			"status":    task.Status,
-			"pointCost": task.PointCost,
-			"createdAt": task.CreatedAt,
+			"id":              event.ID,
+			"transactionId":   event.TransactionID,
+			"taskId":          event.TaskID,
+			"metricCode":      event.MetricCode,
+			"model":           event.Model,
+			"type":            usageTypeForMetric(event.MetricCode),
+			"quantity":        event.Quantity,
+			"unitAmountCents": event.UnitAmountCents,
+			"amountCents":     event.AmountCents,
+			"pointCost":       event.PointCost,
+			"balanceBefore":   event.BalanceBefore,
+			"balanceAfter":    event.BalanceAfter,
+			"status":          event.Status,
+			"occurredAt":      event.OccurredAt,
+			"createdAt":       event.OccurredAt,
 		})
 	}
 	writeJSON(w, map[string]any{
-		"summary": map[string]any{"records": len(items), "totalPointCost": totalPointCost},
+		"summary": map[string]any{"records": len(items), "totalPointCost": totalPointCost, "totalAmountCents": totalAmountCents, "succeeded": succeeded},
 		"items":   items,
 	})
 }
 
 func (a api) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	found := false
+	for _, item := range assets {
+		if item.ID == id && item.UserID == user.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errAssetNotFound)
+		return
+	}
 	if err := a.store.DeleteAsset(id); err != nil {
 		if errors.Is(err, errAssetNotFound) {
 			writeError(w, http.StatusNotFound, err)
@@ -742,4 +2318,73 @@ func (a api) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func filterGenerationTasksForUser(tasks []generationTask, userID string) []generationTask {
+	items := make([]generationTask, 0, len(tasks))
+	for _, task := range tasks {
+		if task.UserID == userID {
+			items = append(items, task)
+		}
+	}
+	return items
+}
+
+func filterAssetsForUser(assets []asset, userID string) []asset {
+	items := make([]asset, 0, len(assets))
+	for _, item := range assets {
+		if item.UserID == userID {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generationTask {
+	if len(tasks) == 0 || len(assets) == 0 {
+		return tasks
+	}
+	assetByID := make(map[string]asset, len(assets))
+	assetByTaskID := make(map[string]asset, len(assets))
+	for _, item := range assets {
+		if item.ID != "" {
+			assetByID[item.ID] = item
+		}
+		if item.TaskID != "" {
+			if _, exists := assetByTaskID[item.TaskID]; !exists {
+				assetByTaskID[item.TaskID] = item
+			}
+		}
+	}
+	items := make([]generationTask, 0, len(tasks))
+	for _, task := range tasks {
+		if item, ok := firstAssetForTask(task, assetByID, assetByTaskID); ok {
+			if task.ImageURL == "" {
+				task.ImageURL = item.URL
+			}
+			if task.OutputURL == "" {
+				task.OutputURL = item.URL
+			}
+			if task.ResultURL == "" {
+				task.ResultURL = item.URL
+			}
+			if task.ThumbnailURL == "" {
+				task.ThumbnailURL = firstNonEmptyString(item.ThumbnailURL, item.URL)
+			}
+		}
+		items = append(items, task)
+	}
+	return items
+}
+
+func firstAssetForTask(task generationTask, assetByID map[string]asset, assetByTaskID map[string]asset) (asset, bool) {
+	for _, id := range task.ResultIDs {
+		if item, ok := assetByID[id]; ok {
+			return item, true
+		}
+	}
+	if item, ok := assetByTaskID[task.ID]; ok {
+		return item, true
+	}
+	return asset{}, false
 }

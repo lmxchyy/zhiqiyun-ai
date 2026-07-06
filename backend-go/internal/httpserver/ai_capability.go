@@ -1,0 +1,1244 @@
+package httpserver
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+
+	"xianzhi-ai/backend-go/internal/app/generation"
+)
+
+const (
+	moduleImageGeneration = "image_generation"
+	moduleVideoGeneration = "video_generation"
+	modulePPTGeneration   = "ppt_generation"
+)
+
+type adminAICapabilityConfig struct {
+	AIModules          []adminAIModule          `json:"aiModules"`
+	AIModels           []adminAIModel           `json:"aiModels"`
+	AIParameterSchemas []adminAIParameterSchema `json:"aiParameterSchemas"`
+	TenantModuleLimits []adminTenantModuleLimit `json:"tenantModuleLimits"`
+	BillingRules       []adminBillingRule       `json:"billingRules"`
+}
+
+type resolvedModuleSchema struct {
+	Module      adminAIModule
+	Model       adminAIModel
+	Schema      adminAIParameterSchema
+	FinalSchema adminAIParameterSchemaJSON
+	Limit       adminTenantModuleLimit
+	BillingRule adminBillingRule
+}
+
+func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if len(data.AIModules) == 0 {
+		data.AIModules = defaultAIModules(now)
+	}
+	if len(data.AIModels) == 0 {
+		data.AIModels = defaultAIModels(now)
+	}
+	if len(data.AIParameterSchemas) == 0 {
+		data.AIParameterSchemas = defaultAIParameterSchemas(now)
+	} else {
+		data.AIParameterSchemas = mergeDefaultAIParameterSchemaFields(data.AIParameterSchemas, defaultAIParameterSchemas(now))
+	}
+	if len(data.TenantModuleLimits) == 0 {
+		data.TenantModuleLimits = defaultTenantModuleLimits(now)
+	}
+	if len(data.BillingRules) == 0 {
+		data.BillingRules = defaultBillingRules(now)
+	} else {
+		data.BillingRules = mergeDefaultBillingRules(data.BillingRules, defaultBillingRules(now))
+	}
+	return data
+}
+
+func mergeDefaultBillingRules(current []adminBillingRule, defaults []adminBillingRule) []adminBillingRule {
+	result := make([]adminBillingRule, len(current))
+	copy(result, current)
+	known := map[string]bool{}
+	for _, rule := range result {
+		rule = normalizeBillingRuleAliases(rule)
+		key := canonicalModuleCode(rule.ModuleCode) + "\x00" + strings.ToLower(strings.TrimSpace(rule.ModelName))
+		known[key] = true
+	}
+	for _, fallback := range defaults {
+		fallback = normalizeBillingRuleAliases(fallback)
+		key := canonicalModuleCode(fallback.ModuleCode) + "\x00" + strings.ToLower(strings.TrimSpace(fallback.ModelName))
+		if known[key] {
+			continue
+		}
+		result = append(result, fallback)
+		known[key] = true
+	}
+	return result
+}
+
+func mergeDefaultAIParameterSchemaFields(current []adminAIParameterSchema, defaults []adminAIParameterSchema) []adminAIParameterSchema {
+	result := make([]adminAIParameterSchema, len(current))
+	copy(result, current)
+	for _, fallback := range defaults {
+		for index := range result {
+			if !strings.EqualFold(strings.TrimSpace(result[index].ModuleCode), strings.TrimSpace(fallback.ModuleCode)) ||
+				!strings.EqualFold(strings.TrimSpace(result[index].ModelName), strings.TrimSpace(fallback.ModelName)) {
+				continue
+			}
+			known := map[string]bool{}
+			for _, field := range result[index].SchemaJSON.Fields {
+				known[field.Key] = true
+			}
+			for _, field := range fallback.SchemaJSON.Fields {
+				if known[field.Key] {
+					continue
+				}
+				result[index].SchemaJSON.Fields = append(result[index].SchemaJSON.Fields, field)
+				known[field.Key] = true
+			}
+			break
+		}
+	}
+	return result
+}
+
+func defaultAIModules(now string) []adminAIModule {
+	return []adminAIModule{
+		{
+			ID: "ai_module_image_generation", ModuleCode: moduleImageGeneration, Name: "AI生图",
+			Description: "统一管理文生图、图生图、图片编辑的模型、参数和调用策略。",
+			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_free", "plan_month", "plan_basic_single", "plan_pro", "plan_year"},
+			BoundModels: []string{"mock-standard", "gpt-image-2"}, DefaultSchemaID: "schema_image_generation_default",
+			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "ai_module_video_generation", ModuleCode: moduleVideoGeneration, Name: "视频生成",
+			Description: "统一管理文生视频、图生视频、首尾帧视频的模型、参数和调用策略。",
+			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_month", "plan_pro", "plan_year"},
+			BoundModels: []string{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}, DefaultSchemaID: "schema_video_generation_default",
+			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "ai_module_ppt_generation", ModuleCode: modulePPTGeneration, Name: "PPT文档生成",
+			Description: "统一管理 PPT 提纲、内容生成、配图和导出参数。",
+			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_month", "plan_pro", "plan_year"},
+			BoundModels: []string{"kimi-k2.6", "ppt-text-model"}, DefaultSchemaID: "schema_ppt_generation_default",
+			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
+		},
+	}
+}
+
+func defaultAIModels(now string) []adminAIModel {
+	return []adminAIModel{
+		{ID: "ai_model_mock_standard", ModelName: "mock-standard", ModelType: "image", Provider: "Local", CapabilityCode: []string{"text_to_image", "image_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_gpt_image_2", ModelName: "gpt-image-2", ModelType: "image", Provider: "NewAPI", CapabilityCode: []string{"text_to_image", "image_to_image", "image_edit"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", FallbackModel: "mock-standard", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_mock_video", ModelName: "mock-video", ModelType: "video", Provider: "Local", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_seedance_fast_20", ModelName: "seedance-fast-2.0", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_doubao_seedance_20", ModelName: "doubao-seedance-2.0", ModelType: "video", Provider: "移动云", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 30, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_kimi_k26", ModelName: "kimi-k2.6", ModelType: "text", Provider: "NewAPI", CapabilityCode: []string{"ppt_outline", "ppt_content", "ppt_export"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", FallbackModel: "ppt-text-model", SortWeight: 10, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_ppt_text", ModelName: "ppt-text-model", ModelType: "text", Provider: "Local", CapabilityCode: []string{"ppt_outline", "ppt_content"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", SortWeight: 20, CreatedAt: now, UpdatedAt: now},
+	}
+}
+
+func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
+	return []adminAIParameterSchema{
+		{
+			ID: "schema_image_generation_default", ModuleCode: moduleImageGeneration, ModelName: "mock-standard",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024"), UserEditable: true, Visible: true},
+				{Key: "quality", Label: "图片质量", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high"), UserEditable: true, Visible: true},
+				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Min: floatPtr(1), Max: floatPtr(8), UserEditable: true, Visible: true},
+				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
+				{Key: "seed", Label: "种子值", Type: "number", UserEditable: true, Visible: true},
+				{Key: "negative_prompt", Label: "负面提示词", Type: "textarea", UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "schema_video_generation_default", ModuleCode: moduleVideoGeneration, ModelName: "mock-video",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "视频提示词", Type: "textarea", Required: true, Placeholder: "描述视频画面、运动和风格", UserEditable: true, Visible: true},
+				{Key: "duration", Label: "视频时长", Type: "select", Required: true, Default: float64(5), Options: anyOptions(float64(4), float64(5), float64(6), float64(8), float64(10), float64(12), float64(15)), Unit: "秒", UserEditable: true, Visible: true},
+				{Key: "resolution", Label: "分辨率", Type: "select", Required: true, Default: "720p", Options: anyOptions("480p", "720p", "1080p", "4k"), UserEditable: true, Visible: true},
+				{Key: "aspect_ratio", Label: "画面比例", Type: "select", Required: true, Default: "16:9", Options: anyOptions("16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"), UserEditable: true, Visible: true},
+				{Key: "fps", Label: "帧率", Type: "select", Default: float64(24), Options: anyOptions(float64(24), float64(30)), UserEditable: true, Visible: true},
+				{Key: "motion_strength", Label: "运动强度", Type: "select", Options: anyOptions("low", "medium", "high"), UserEditable: true, Visible: true},
+				{Key: "camera_movement", Label: "镜头运动", Type: "select", Options: anyOptions("static", "pan", "push", "pull"), UserEditable: true, Visible: true},
+				{Key: "generate_audio", Label: "生成音频", Type: "boolean", Default: true, UserEditable: true, Visible: true},
+				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
+				{Key: "first_frame", Label: "首帧图", Type: "image_upload", UserEditable: true, Visible: true},
+				{Key: "last_frame", Label: "尾帧图", Type: "image_upload", UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "schema_ppt_generation_default", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "topic", Label: "PPT主题", Type: "textarea", Required: true, Placeholder: "输入演示文稿主题和要求", UserEditable: true, Visible: true},
+				{Key: "page_count", Label: "页数", Type: "select", Required: true, Default: float64(10), Options: anyOptions(float64(6), float64(8), float64(10), float64(15), float64(20)), UserEditable: true, Visible: true},
+				{Key: "template_id", Label: "模板ID", Type: "template_select", UserEditable: true, Visible: true},
+				{Key: "theme_style", Label: "主题风格", Type: "select", Default: "business", Options: anyOptions("business", "minimal", "technology", "education"), UserEditable: true, Visible: true},
+				{Key: "language", Label: "语言", Type: "select", Default: "zh-CN", Options: anyOptions("zh-CN", "en-US"), UserEditable: true, Visible: true},
+				{Key: "export_format", Label: "导出格式", Type: "select", Default: "pptx", Options: anyOptions("pptx", "pdf"), UserEditable: true, Visible: true},
+				{Key: "with_images", Label: "生成配图", Type: "switch", Default: true, UserEditable: true, Visible: true},
+				{Key: "web_search_enabled", Label: "联网搜索", Type: "switch", Default: false, UserEditable: true, Visible: true},
+				{Key: "uploaded_file", Label: "上传参考文档", Type: "file_upload", UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+	}
+}
+
+func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
+	return []adminTenantModuleLimit{
+		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(15)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"kimi-k2.6", "ppt-text-model"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_plan_free_image", TenantID: "default", PackageID: "plan_free", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard"}}, "n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+	}
+}
+
+func defaultBillingRules(now string) []adminBillingRule {
+	return []adminBillingRule{
+		{ID: "billing_rule_image_mock", ModuleCode: moduleImageGeneration, ModelName: "mock-standard", BillingType: "per_image", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"standard": float64(1), "high": float64(1.5)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_image_gpt", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2", BillingType: "per_image", BasePrice: 10, CostPrice: 6, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"standard": float64(1), "high": float64(1.5)}, "size": map[string]any{"1024x1024": float64(1), "1024x1536": float64(1.2), "1536x1024": float64(1.2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_mock", ModuleCode: moduleVideoGeneration, ModelName: "mock-video", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_grok_image", ModuleCode: moduleVideoGeneration, ModelName: "grok-video-image", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_seedance", ModuleCode: moduleVideoGeneration, ModelName: "seedance-fast-2.0", BillingType: "per_second", BasePrice: 12, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_doubao_seedance", ModuleCode: moduleVideoGeneration, ModelName: "doubao-seedance-2.0", BillingType: "per_second", BasePrice: 12, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2), "4k": float64(4)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_ppt_kimi", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6", BillingType: "per_page", BasePrice: 1, CostPrice: 0.4, CurrencyType: "credit", ParameterMultiplier: map[string]any{"with_images": map[string]any{"true": float64(1), "false": float64(1)}, "uploaded_file": map[string]any{"true": float64(1), "false": float64(1)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+	}
+}
+
+func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	moduleCode := canonicalModuleCode(r.URL.Query().Get("module_code"))
+	if moduleCode == "" {
+		moduleCode = canonicalModuleCode(r.URL.Query().Get("moduleCode"))
+	}
+	modelName := strings.TrimSpace(firstNonEmptyString(r.URL.Query().Get("model_name"), r.URL.Query().Get("modelName")))
+	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, moduleSchemaResponse(resolved, user))
+}
+
+func (a api) aiOverview(w http.ResponseWriter, _ *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"summary": map[string]any{
+			"modules": len(data.AIModules), "models": len(data.AIModels), "schemas": len(data.AIParameterSchemas),
+			"limits": len(data.TenantModuleLimits), "billingRules": len(data.BillingRules), "logs": len(data.GenerationTasks) + len(data.BillingEvents),
+		},
+		"modules":      data.AIModules,
+		"models":       data.AIModels,
+		"schemas":      data.AIParameterSchemas,
+		"limits":       data.TenantModuleLimits,
+		"channels":     data.APIChannels,
+		"billingRules": data.BillingRules,
+		"logs":         aiGenerationLogRows(data),
+	})
+}
+
+func (a adminAPI) aiOverview(w http.ResponseWriter, _ *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"summary": map[string]any{
+			"modules": len(data.AIModules), "models": len(data.AIModels), "schemas": len(data.AIParameterSchemas),
+			"limits": len(data.TenantModuleLimits), "billingRules": len(data.BillingRules), "logs": len(data.GenerationTasks) + len(data.BillingEvents),
+		},
+		"modules":      data.AIModules,
+		"models":       data.AIModels,
+		"schemas":      data.AIParameterSchemas,
+		"limits":       data.TenantModuleLimits,
+		"channels":     data.APIChannels,
+		"billingRules": data.BillingRules,
+		"logs":         aiGenerationLogRows(data),
+	})
+}
+
+func (a adminAPI) updateAIModule(w http.ResponseWriter, r *http.Request) {
+	var req adminAIModuleMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.UpdateAdminAIModule(r.PathValue("code"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a adminAPI) createAIModel(w http.ResponseWriter, r *http.Request) {
+	var req adminAIModelMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.CreateAdminAIModel(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a adminAPI) updateAIModel(w http.ResponseWriter, r *http.Request) {
+	var req adminAIModelMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.UpdateAdminAIModel(r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a adminAPI) updateAIParameterSchema(w http.ResponseWriter, r *http.Request) {
+	var req adminAIParameterSchemaMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.UpdateAdminAIParameterSchema(r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a adminAPI) updateTenantModuleLimit(w http.ResponseWriter, r *http.Request) {
+	var req adminTenantModuleLimitMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.UpdateAdminTenantModuleLimit(r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a adminAPI) updateBillingRule(w http.ResponseWriter, r *http.Request) {
+	var req adminBillingRuleMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	item, err := a.store.UpdateAdminBillingRule(r.PathValue("id"), req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": item})
+}
+
+func (a api) prepareGenerationRequest(data adminPlatformData, user adminUser, req generation.CreateRequest) (generation.CreateRequest, error) {
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	moduleCode := requestModuleCode(req)
+	if moduleCode == "" {
+		moduleCode = moduleCodeForType(req.Type)
+	}
+	moduleCode = canonicalModuleCode(moduleCode)
+	if moduleCode == "" {
+		return req, errors.New("module_code is required")
+	}
+	if moduleCode == modulePPTGeneration {
+		return req, errors.New("ppt_generation must use /api/v1/ppt/generate")
+	}
+	if req.Type == "" {
+		req.Type = defaultTaskTypeForModule(moduleCode)
+	}
+	if !typeBelongsToModule(req.Type, moduleCode) {
+		return req, fmt.Errorf("task type %s does not belong to module_code %s", req.Type, moduleCode)
+	}
+	req.ModuleCode = moduleCode
+	req.ModuleCodeCamel = ""
+	if req.Prompt == "" {
+		req.Prompt = strings.TrimSpace(stringValue(req.Params["prompt"]))
+	}
+	if req.Model == "" {
+		req.Model = defaultModelNameForModule(data, moduleCode)
+	}
+	normalizeRequestParamAliases(&req)
+	resolved, err := resolveModuleSchema(data, user, moduleCode, req.Model)
+	if err != nil {
+		return req, err
+	}
+	if err := validateGenerationParams(req, resolved); err != nil {
+		return req, err
+	}
+	req.Model = resolved.Model.ModelName
+	req.Params["module_code"] = moduleCode
+	req.Params["model_name"] = req.Model
+	req.Params["billing_type"] = resolved.BillingRule.BillingType
+	req.Params["final_schema_snapshot"] = map[string]any{"fields": resolved.FinalSchema.Fields}
+	req.Params["limit_snapshot"] = resolved.Limit.LimitJSON
+	req.Params["tenant_id"] = effectiveTenantID(user)
+	req.Params["agent_id"] = effectiveAgentID(data, user)
+	req.Params["package_id"] = user.PlanID
+	return req, nil
+}
+
+func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {
+	moduleCode = canonicalModuleCode(moduleCode)
+	if moduleCode == "" {
+		return resolvedModuleSchema{}, errors.New("module_code is required")
+	}
+	module := findAIModule(data.AIModules, moduleCode)
+	if module.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("ai module not found: %s", moduleCode)
+	}
+	if !isActiveLike(module.Status) {
+		return resolvedModuleSchema{}, fmt.Errorf("ai module is disabled: %s", moduleCode)
+	}
+	if strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") && !module.AllowAgents {
+		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to agents", moduleCode)
+	}
+	if !strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") && !module.AllowEndUsers {
+		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to end users", moduleCode)
+	}
+	if modelName == "" {
+		modelName = defaultModelNameForModule(data, moduleCode)
+	}
+	model := findAIModel(data.AIModels, moduleCode, modelName)
+	if model.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("ai model %s is not configured for module %s", modelName, moduleCode)
+	}
+	if !isActiveLike(model.Status) {
+		return resolvedModuleSchema{}, fmt.Errorf("ai model is disabled: %s", model.ModelName)
+	}
+	schema := findAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
+	if schema.ID == "" {
+		schema = findAIParameterSchema(data.AIParameterSchemas, moduleCode, "")
+	}
+	if schema.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for module %s", moduleCode)
+	}
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, model.ModelName)
+	if err := validateModelAllowedByLimit(model.ModelName, limit.LimitJSON); err != nil {
+		return resolvedModuleSchema{}, err
+	}
+	rule := selectBillingRule(data.BillingRules, moduleCode, model.ModelName)
+	if rule.ID == "" {
+		rule = fallbackBillingRule(moduleCode, model.ModelName)
+	}
+	finalSchema := applyLimitToSchema(schema.SchemaJSON, limit.LimitJSON)
+	return resolvedModuleSchema{Module: module, Model: model, Schema: schema, FinalSchema: finalSchema, Limit: limit, BillingRule: rule}, nil
+}
+
+func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[string]any {
+	return map[string]any{
+		"module_code":  resolved.Module.ModuleCode,
+		"model_name":   resolved.Model.ModelName,
+		"schema":       resolved.FinalSchema,
+		"fields":       resolved.FinalSchema.Fields,
+		"limit_json":   resolved.Limit.LimitJSON,
+		"module":       resolved.Module,
+		"model":        resolved.Model,
+		"billing_rule": resolved.BillingRule,
+		"context": map[string]any{
+			"user_id": user.ID, "tenant_id": effectiveTenantID(user), "agent_id": user.ReferredBy, "package_id": user.PlanID,
+		},
+	}
+}
+
+func validateGenerationParams(req generation.CreateRequest, resolved resolvedModuleSchema) error {
+	fields := map[string]adminAIParameterField{}
+	for _, field := range resolved.Schema.SchemaJSON.Fields {
+		fields[field.Key] = field
+		if _, ok := req.Params[field.Key]; !ok && field.Default != nil {
+			req.Params[field.Key] = field.Default
+		}
+	}
+	for _, field := range resolved.Schema.SchemaJSON.Fields {
+		value, ok := valueForField(req, field.Key)
+		if field.Required && !hasNonEmptyValue(value) {
+			return fmt.Errorf("parameter %s is required", field.Key)
+		}
+		if !ok || !hasNonEmptyValue(value) {
+			continue
+		}
+		if err := validateFieldValue(field, value); err != nil {
+			return err
+		}
+		if err := validateLimitValue(field.Key, value, resolved.Limit.LimitJSON); err != nil {
+			return err
+		}
+	}
+	for key := range req.Params {
+		if _, ok := fields[key]; ok || allowedGenerationInternalParam(key) {
+			continue
+		}
+		return fmt.Errorf("parameter %s is not allowed by schema for module %s", key, resolved.Module.ModuleCode)
+	}
+	return nil
+}
+
+func validateFieldValue(field adminAIParameterField, value any) error {
+	switch field.Type {
+	case "number":
+		number, ok := anyToFloat(value)
+		if !ok {
+			return fmt.Errorf("parameter %s must be a number", field.Key)
+		}
+		if field.Min != nil && number < *field.Min {
+			return fmt.Errorf("parameter %s must be >= %s", field.Key, formatFloat(*field.Min))
+		}
+		if field.Max != nil && number > *field.Max {
+			return fmt.Errorf("parameter %s must be <= %s", field.Key, formatFloat(*field.Max))
+		}
+	case "select", "radio":
+		if len(field.Options) > 0 && !anyListContains(field.Options, value) {
+			return fmt.Errorf("parameter %s value %v is not in schema options", field.Key, value)
+		}
+	}
+	return nil
+}
+
+func validateLimitValue(key string, value any, limit map[string]any) error {
+	rule, ok := mapValue(limit[key])
+	if !ok {
+		return nil
+	}
+	if enabled, ok := optionalBoolValue(rule["enabled"]); ok && !enabled && hasNonEmptyValue(value) {
+		return fmt.Errorf("parameter %s is disabled by tenant/package limit", key)
+	}
+	if allowed, ok := anySlice(rule["allowed"]); ok && len(allowed) > 0 && !anyListContains(allowed, value) {
+		return fmt.Errorf("parameter %s value %v exceeds tenant/package allowed list", key, value)
+	}
+	if max, ok := anyToFloat(rule["max"]); ok {
+		if number, numberOK := anyToFloat(value); numberOK && number > max {
+			return fmt.Errorf("parameter %s must be <= %s by tenant/package limit", key, formatFloat(max))
+		}
+	}
+	if min, ok := anyToFloat(rule["min"]); ok {
+		if number, numberOK := anyToFloat(value); numberOK && number < min {
+			return fmt.Errorf("parameter %s must be >= %s by tenant/package limit", key, formatFloat(min))
+		}
+	}
+	return nil
+}
+
+func applyLimitToSchema(schema adminAIParameterSchemaJSON, limit map[string]any) adminAIParameterSchemaJSON {
+	result := adminAIParameterSchemaJSON{Fields: make([]adminAIParameterField, 0, len(schema.Fields))}
+	for _, field := range schema.Fields {
+		if rule, ok := mapValue(limit[field.Key]); ok {
+			if enabled, ok := optionalBoolValue(rule["enabled"]); ok && !enabled {
+				field.Visible = false
+				field.UserEditable = false
+			}
+			if allowed, ok := anySlice(rule["allowed"]); ok && len(allowed) > 0 {
+				field.Options = allowed
+			}
+			if max, ok := anyToFloat(rule["max"]); ok {
+				field.Max = &max
+			}
+			if min, ok := anyToFloat(rule["min"]); ok {
+				field.Min = &min
+			}
+		}
+		result.Fields = append(result.Fields, field)
+	}
+	return result
+}
+
+func generationPointCostForRequest(req createGenerationTaskRequest, data adminPlatformData) int {
+	rule := billingRuleForRequest(req, data)
+	if rule.ID == "" {
+		moduleCode := canonicalModuleCode(requestModuleCode(req))
+		if moduleCode == "" {
+			moduleCode = moduleCodeForType(req.Type)
+		}
+		if moduleCode == moduleImageGeneration || moduleCode == "" {
+			return imageCount(req.Params) * modelPointCost(req.Model)
+		}
+		return 1
+	}
+	quantity := billingQuantity(rule.BillingType, req)
+	multiplier := billingMultiplier(rule.ParameterMultiplier, req.Params)
+	total := int(math.Ceil(rule.BasePrice * quantity * multiplier))
+	if total < 1 {
+		return 1
+	}
+	return total
+}
+
+func billingRuleForRequest(req createGenerationTaskRequest, data adminPlatformData) adminBillingRule {
+	data = normalizeAICapabilityDefaults(data)
+	moduleCode := canonicalModuleCode(requestModuleCode(req))
+	if moduleCode == "" {
+		moduleCode = moduleCodeForType(req.Type)
+	}
+	rule := selectBillingRule(data.BillingRules, moduleCode, req.Model)
+	if rule.ID == "" {
+		return fallbackBillingRule(moduleCode, req.Model)
+	}
+	return rule
+}
+
+func adminDataFromPlatformData(data platformData) adminPlatformData {
+	return normalizeAICapabilityDefaults(adminPlatformData{
+		Users:              data.Users,
+		Plans:              data.Plans,
+		PointAccounts:      data.PointAccounts,
+		ChannelAgents:      data.ChannelAgents,
+		Commissions:        data.Commissions,
+		CommissionRules:    data.CommissionRules,
+		BillingRules:       data.BillingRules,
+		BillingEvents:      data.BillingEvents,
+		Withdrawals:        data.Withdrawals,
+		AdminProducts:      data.AdminProducts,
+		AIModules:          data.AIModules,
+		AIModels:           data.AIModels,
+		AIParameterSchemas: data.AIParameterSchemas,
+		TenantModuleLimits: data.TenantModuleLimits,
+		GenerationTasks:    data.GenerationTasks,
+		Assets:             data.Assets,
+		Counters:           data.Counters,
+		PointsAvailable:    data.PointsAvailable,
+	})
+}
+
+func billingQuantity(billingType string, req createGenerationTaskRequest) float64 {
+	switch strings.ToLower(strings.TrimSpace(billingType)) {
+	case "per_second":
+		if value, ok := anyToFloat(req.Params["duration"]); ok && value > 0 {
+			return value
+		}
+		return 1
+	case "per_page":
+		if value, ok := anyToFloat(firstPresent(req.Params, "page_count", "slideCount", "pageCount")); ok && value > 0 {
+			return value
+		}
+		return 1
+	case "per_image":
+		return float64(imageCount(req.Params))
+	default:
+		return 1
+	}
+}
+
+func billingQuantityField(billingType string) string {
+	switch strings.ToLower(strings.TrimSpace(billingType)) {
+	case "per_second":
+		return "duration"
+	case "per_page":
+		return "page_count"
+	case "per_image":
+		return "count"
+	default:
+		return "request"
+	}
+}
+
+func billingMultiplier(config map[string]any, params map[string]any) float64 {
+	multiplier := 1.0
+	for key, raw := range config {
+		options, ok := mapValue(raw)
+		if !ok {
+			continue
+		}
+		value := firstPresent(params, key)
+		if value == nil {
+			continue
+		}
+		if ratio, ok := anyToFloat(options[fmt.Sprint(value)]); ok && ratio > 0 {
+			multiplier *= ratio
+			continue
+		}
+		if ratio, ok := anyToFloat(options[strings.ToLower(fmt.Sprint(value))]); ok && ratio > 0 {
+			multiplier *= ratio
+		}
+	}
+	if multiplier <= 0 {
+		return 1
+	}
+	return multiplier
+}
+
+func applyGenerationTaskCapabilitySnapshot(task *generationTask, req createGenerationTaskRequest, rule adminBillingRule) {
+	if task == nil {
+		return
+	}
+	moduleCode := canonicalModuleCode(requestModuleCode(req))
+	if moduleCode == "" {
+		moduleCode = canonicalModuleCode(stringValue(req.Params["module_code"]))
+	}
+	task.ModuleCode = moduleCode
+	task.BillingType = firstNonEmptyString(stringValue(req.Params["billing_type"]), rule.BillingType)
+	task.TenantID = stringValue(req.Params["tenant_id"])
+	task.AgentID = stringValue(req.Params["agent_id"])
+	task.OperationCenterID = stringValue(req.Params["operation_center_id"])
+	task.FinalSchemaSnapshot, _ = mapValue(req.Params["final_schema_snapshot"])
+	task.LimitSnapshot, _ = mapValue(req.Params["limit_snapshot"])
+	task.UpstreamProvider = firstNonEmptyString(stringValue(req.Params["provider"]), stringValue(req.Params["upstream_provider"]))
+	task.UpstreamRequestID = providerTaskString(req, "id")
+	task.UserChargeAmount = task.PointCost * pointUnitAmountCents
+	task.UpstreamCost = int(math.Ceil(rule.CostPrice * billingQuantity(rule.BillingType, req)))
+	task.PlatformProfit = task.UserChargeAmount - task.UpstreamCost
+}
+
+func enrichBillingEventWithTask(event adminBillingEvent, task generationTask) adminBillingEvent {
+	event.ModuleCode = task.ModuleCode
+	event.TenantID = task.TenantID
+	event.OperationCenterID = task.OperationCenterID
+	if event.Metadata == nil {
+		event.Metadata = map[string]any{}
+	}
+	event.Metadata["module_code"] = task.ModuleCode
+	event.Metadata["billing_type"] = task.BillingType
+	event.Metadata["request_params"] = task.Params
+	event.Metadata["final_schema_snapshot"] = task.FinalSchemaSnapshot
+	event.Metadata["limit_snapshot"] = task.LimitSnapshot
+	event.Metadata["upstream_provider"] = task.UpstreamProvider
+	event.Metadata["upstream_request_id"] = task.UpstreamRequestID
+	event.Metadata["upstream_cost"] = task.UpstreamCost
+	event.Metadata["platform_profit"] = task.PlatformProfit
+	return event
+}
+
+func aiGenerationLogRows(data adminPlatformData) []map[string]any {
+	eventsByTask := map[string]adminBillingEvent{}
+	for _, event := range data.BillingEvents {
+		eventsByTask[event.TaskID] = event
+	}
+	users := userMap(data.Users)
+	rows := []map[string]any{}
+	for _, task := range data.GenerationTasks {
+		moduleCode := firstNonEmptyString(task.ModuleCode, stringValue(task.Params["module_code"]), moduleCodeForType(task.Type))
+		event := eventsByTask[task.ID]
+		rows = append(rows, map[string]any{
+			"id": task.ID, "user_id": task.UserID, "user": users[task.UserID].Name, "tenant_id": firstNonEmptyString(task.TenantID, stringValue(task.Params["tenant_id"])),
+			"agent_id": firstNonEmptyString(task.AgentID, event.AgentID), "operation_center_id": task.OperationCenterID,
+			"module_code": moduleCode, "model_name": firstNonEmptyString(task.Model, event.Model), "billing_type": firstNonEmptyString(task.BillingType, stringValue(task.Params["billing_type"])),
+			"request_params": task.Params, "final_schema_snapshot": task.FinalSchemaSnapshot, "limit_snapshot": task.LimitSnapshot,
+			"upstream_provider": firstNonEmptyString(task.UpstreamProvider, stringValue(task.Params["provider"])), "upstream_request_id": task.UpstreamRequestID,
+			"user_charge_amount": firstNonEmptyInt(task.UserChargeAmount, event.AmountCents), "upstream_cost": task.UpstreamCost, "platform_profit": task.PlatformProfit,
+			"agent_commission": task.AgentCommission, "operation_center_commission": task.OperationCenterCommission,
+			"task_status": task.Status, "failure_reason": firstNonEmptyString(task.FailureReason, stringValue(task.Error)), "result_url": firstNonEmptyString(task.ResultURL, task.OutputURL, task.ImageURL),
+			"created_at": task.CreatedAt, "updated_at": task.UpdatedAt,
+		})
+	}
+	return rows
+}
+
+func requestModuleCode(req generation.CreateRequest) string {
+	return canonicalModuleCode(firstNonEmptyString(req.ModuleCode, req.ModuleCodeCamel, stringValue(req.Params["module_code"]), stringValue(req.Params["moduleCode"])))
+}
+
+func moduleCodeForType(taskType string) string {
+	switch strings.ToUpper(strings.TrimSpace(taskType)) {
+	case "", "TEXT_TO_IMAGE", "IMAGE_TO_IMAGE":
+		return moduleImageGeneration
+	case "TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_TO_VIDEO":
+		return moduleVideoGeneration
+	case "PPT_GENERATION":
+		return modulePPTGeneration
+	default:
+		return ""
+	}
+}
+
+func canonicalModuleCode(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	switch value {
+	case "image", "text_to_image", "image_to_image", "image_generation":
+		return moduleImageGeneration
+	case "video", "text_to_video", "image_to_video", "video_generation":
+		return moduleVideoGeneration
+	case "ppt", "ppt_generation", "presentation", "presentation_generation":
+		return modulePPTGeneration
+	default:
+		return ""
+	}
+}
+
+func defaultTaskTypeForModule(moduleCode string) string {
+	switch canonicalModuleCode(moduleCode) {
+	case moduleVideoGeneration:
+		return "TEXT_TO_VIDEO"
+	case modulePPTGeneration:
+		return "PPT_GENERATION"
+	default:
+		return "TEXT_TO_IMAGE"
+	}
+}
+
+func defaultAIModelTypeForModule(moduleCode string) string {
+	switch canonicalModuleCode(moduleCode) {
+	case moduleVideoGeneration:
+		return "video"
+	case modulePPTGeneration:
+		return "text"
+	default:
+		return "image"
+	}
+}
+
+func defaultAICapabilitiesForModule(moduleCode string) []string {
+	switch canonicalModuleCode(moduleCode) {
+	case moduleVideoGeneration:
+		return []string{"text_to_video", "image_to_video"}
+	case modulePPTGeneration:
+		return []string{"ppt_outline", "ppt_content"}
+	default:
+		return []string{"text_to_image"}
+	}
+}
+
+func bindAIModelToModule(data *adminPlatformData, moduleCode string, modelName string) {
+	if data == nil {
+		return
+	}
+	moduleCode = canonicalModuleCode(moduleCode)
+	modelName = strings.TrimSpace(modelName)
+	if moduleCode == "" || modelName == "" {
+		return
+	}
+	for index := range data.AIModules {
+		if canonicalModuleCode(data.AIModules[index].ModuleCode) != moduleCode {
+			continue
+		}
+		for _, existing := range data.AIModules[index].BoundModels {
+			if strings.EqualFold(strings.TrimSpace(existing), modelName) {
+				return
+			}
+		}
+		data.AIModules[index].BoundModels = append(data.AIModules[index].BoundModels, modelName)
+		data.AIModules[index].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		return
+	}
+}
+
+func typeBelongsToModule(taskType string, moduleCode string) bool {
+	return moduleCodeForType(taskType) == canonicalModuleCode(moduleCode)
+}
+
+func normalizeRequestParamAliases(req *generation.CreateRequest) {
+	if req == nil {
+		return
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	if req.ModuleCode == moduleImageGeneration {
+		if _, ok := req.Params["n"]; !ok {
+			if count, exists := req.Params["count"]; exists {
+				req.Params["n"] = count
+			}
+		}
+		if _, ok := req.Params["count"]; !ok {
+			if n, exists := req.Params["n"]; exists {
+				req.Params["count"] = n
+			}
+		}
+	}
+	if req.ModuleCode == moduleVideoGeneration {
+		if _, ok := req.Params["aspect_ratio"]; !ok {
+			if ratio, exists := req.Params["ratio"]; exists {
+				req.Params["aspect_ratio"] = ratio
+			}
+		}
+	}
+}
+
+func findAIModule(items []adminAIModule, moduleCode string) adminAIModule {
+	for _, item := range items {
+		if canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel)) == moduleCode {
+			return item
+		}
+	}
+	return adminAIModule{}
+}
+
+func findAIModel(items []adminAIModel, moduleCode string, modelName string) adminAIModel {
+	for _, item := range items {
+		if canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel)) != moduleCode {
+			continue
+		}
+		if strings.EqualFold(firstNonEmptyString(item.ModelName, item.ModelNameCamel), modelName) {
+			if item.ModelName == "" {
+				item.ModelName = item.ModelNameCamel
+			}
+			return item
+		}
+	}
+	return adminAIModel{}
+}
+
+func findAIParameterSchema(items []adminAIParameterSchema, moduleCode string, modelName string) adminAIParameterSchema {
+	var fallback adminAIParameterSchema
+	for _, item := range items {
+		if canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel)) != moduleCode || !isActiveLike(item.Status) {
+			continue
+		}
+		if modelName == "" && fallback.ID == "" {
+			fallback = item
+		}
+		if modelName != "" && (strings.EqualFold(item.ModelName, modelName) || item.ModelName == "") {
+			return item
+		}
+	}
+	return fallback
+}
+
+func defaultModelNameForModule(data adminPlatformData, moduleCode string) string {
+	module := findAIModule(data.AIModules, moduleCode)
+	if len(module.BoundModels) > 0 {
+		return module.BoundModels[0]
+	}
+	for _, model := range data.AIModels {
+		if canonicalModuleCode(model.ModuleCode) == moduleCode && isActiveLike(model.Status) {
+			return model.ModelName
+		}
+	}
+	return ""
+}
+
+func effectiveTenantModuleLimit(items []adminTenantModuleLimit, user adminUser, moduleCode string, modelName string) adminTenantModuleLimit {
+	base := adminTenantModuleLimit{ID: "limit_system_default", TenantID: "default", ModuleCode: moduleCode, ModelName: modelName, Status: "ACTIVE", LimitJSON: map[string]any{}}
+	candidates := []adminTenantModuleLimit{}
+	for _, item := range items {
+		if !isActiveLike(item.Status) || canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel)) != moduleCode {
+			continue
+		}
+		itemModel := firstNonEmptyString(item.ModelName, item.ModelNameCamel)
+		if itemModel != "" && !strings.EqualFold(itemModel, modelName) {
+			continue
+		}
+		candidates = append(candidates, item)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return limitSpecificity(candidates[i], user) < limitSpecificity(candidates[j], user)
+	})
+	for _, item := range candidates {
+		if limitMatchesUser(item, user) {
+			base.LimitJSON = mergeMap(base.LimitJSON, firstNonNilMap(item.LimitJSON, item.LimitJSONCamel))
+			base.ID = item.ID
+			base.TenantID = firstNonEmptyString(item.TenantID, item.TenantIDCamel, base.TenantID)
+			base.AgentID = firstNonEmptyString(item.AgentID, item.AgentIDCamel, base.AgentID)
+			base.PackageID = firstNonEmptyString(item.PackageID, item.PackageIDCamel, base.PackageID)
+		}
+	}
+	return base
+}
+
+func limitMatchesUser(item adminTenantModuleLimit, user adminUser) bool {
+	tenantID := firstNonEmptyString(item.TenantID, item.TenantIDCamel)
+	agentID := firstNonEmptyString(item.AgentID, item.AgentIDCamel)
+	packageID := firstNonEmptyString(item.PackageID, item.PackageIDCamel)
+	if tenantID != "" && tenantID != "default" && tenantID != effectiveTenantID(user) {
+		return false
+	}
+	if agentID != "" && agentID != user.ReferredBy {
+		return false
+	}
+	if packageID != "" && packageID != user.PlanID {
+		return false
+	}
+	return true
+}
+
+func limitSpecificity(item adminTenantModuleLimit, user adminUser) int {
+	score := 0
+	if firstNonEmptyString(item.TenantID, item.TenantIDCamel) != "" {
+		score++
+	}
+	if firstNonEmptyString(item.AgentID, item.AgentIDCamel) != "" {
+		score += 2
+	}
+	if firstNonEmptyString(item.PackageID, item.PackageIDCamel) != "" {
+		score += 3
+	}
+	return score
+}
+
+func validateModelAllowedByLimit(modelName string, limit map[string]any) error {
+	models, ok := mapValue(limit["models"])
+	if !ok {
+		return nil
+	}
+	allowed, ok := anySlice(models["allowed"])
+	if ok && len(allowed) > 0 && !anyListContains(allowed, modelName) {
+		return fmt.Errorf("model %s is not allowed by tenant/package limit", modelName)
+	}
+	return nil
+}
+
+func selectBillingRule(items []adminBillingRule, moduleCode string, modelName string) adminBillingRule {
+	for _, item := range items {
+		if !isActiveLike(item.Status) {
+			continue
+		}
+		itemModuleCode := canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel))
+		itemModelName := firstNonEmptyString(item.ModelName, item.ModelNameCamel)
+		if itemModuleCode == moduleCode && strings.EqualFold(itemModelName, modelName) {
+			return normalizeBillingRuleAliases(item)
+		}
+	}
+	return adminBillingRule{}
+}
+
+func fallbackBillingRule(moduleCode string, modelName string) adminBillingRule {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rule := adminBillingRule{ID: "billing_rule_fallback_" + safeID(moduleCode+"_"+modelName), ModuleCode: moduleCode, ModelName: modelName, BillingType: "per_request", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now}
+	if moduleCode == moduleImageGeneration {
+		rule.BillingType = "per_image"
+	}
+	if moduleCode == moduleVideoGeneration {
+		rule.BillingType = "per_second"
+	}
+	if moduleCode == modulePPTGeneration {
+		rule.BillingType = "per_page"
+	}
+	return rule
+}
+
+func normalizeBillingRuleAliases(rule adminBillingRule) adminBillingRule {
+	rule.ModuleCode = firstNonEmptyString(rule.ModuleCode, rule.ModuleCodeCamel)
+	rule.ModelName = firstNonEmptyString(rule.ModelName, rule.ModelNameCamel)
+	rule.BillingType = firstNonEmptyString(rule.BillingType, rule.BillingTypeCamel)
+	if rule.BasePrice == 0 {
+		rule.BasePrice = rule.BasePriceCamel
+	}
+	if rule.CostPrice == 0 {
+		rule.CostPrice = rule.CostPriceCamel
+	}
+	rule.CurrencyType = firstNonEmptyString(rule.CurrencyType, rule.CurrencyTypeCamel)
+	if rule.ParameterMultiplier == nil {
+		rule.ParameterMultiplier = rule.ParameterMultiplierCamel
+	}
+	if rule.ParameterMultiplier == nil {
+		rule.ParameterMultiplier = map[string]any{}
+	}
+	return rule
+}
+
+func allowedGenerationInternalParam(key string) bool {
+	switch key {
+	case "module_code", "moduleCode", "model_name", "modelName", "count", "provider", "providerName", "providerTask",
+		"modelRouteId", "modelGroup", "modelApiKeyId", "billing_type", "tenant_id", "agent_id", "package_id", "operation_center_id",
+		"final_schema_snapshot", "limit_snapshot", "sourceModule", "apiMode", "taskSnapshot", "referenceImages",
+		"referenceImageCount", "referenceImageNames", "referenceImageOrder", "inputImageIds", "inputImagesSnapshot",
+		"maskDraft", "maskTargetImageId", "maskImageId", "imageQuality", "imageRatio", "output_format", "outputFormat",
+		"output_compression", "outputCompression", "transparent_output", "transparentOutput", "moderation", "ratio",
+		"resolution", "width", "height", "inputMode", "hasInputImage", "hasInputVideo", "userPrompt", "effectivePrompt", "promptForApi",
+		"generate_audio", "generateAudio",
+		"image_url", "imageUrl", "image_urls", "imageUrls", "inputImageUrl", "input_image_url", "inputImageUrls",
+		"reference_images", "input_reference", "inputVideoUrl", "video_url", "videoUrl":
+		return true
+	default:
+		return false
+	}
+}
+
+func valueForField(req generation.CreateRequest, key string) (any, bool) {
+	if key == "prompt" && strings.TrimSpace(req.Prompt) != "" {
+		return req.Prompt, true
+	}
+	if value, ok := req.Params[key]; ok {
+		return value, true
+	}
+	if key == "n" {
+		if value, ok := req.Params["count"]; ok {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func firstPresent(params map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := params[key]; ok {
+			return value
+		}
+	}
+	return nil
+}
+
+func hasNonEmptyValue(value any) bool {
+	if value == nil {
+		return false
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text) != ""
+	}
+	return true
+}
+
+func anyOptions(values ...any) []any {
+	return values
+}
+
+func floatPtr(value float64) *float64 {
+	return &value
+}
+
+func anyToFloat(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case json.Number:
+		value, err := typed.Float64()
+		return value, err == nil
+	case string:
+		var result float64
+		if _, err := fmt.Sscanf(strings.TrimSpace(typed), "%f", &result); err == nil {
+			return result, true
+		}
+	}
+	return 0, false
+}
+
+func anySlice(value any) ([]any, bool) {
+	switch typed := value.(type) {
+	case []any:
+		return typed, true
+	case []string:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items, true
+	case []int:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, float64(item))
+		}
+		return items, true
+	}
+	return nil, false
+}
+
+func anyListContains(items []any, value any) bool {
+	for _, item := range items {
+		if strings.EqualFold(fmt.Sprint(item), fmt.Sprint(value)) {
+			return true
+		}
+		if left, ok := anyToFloat(item); ok {
+			if right, rightOK := anyToFloat(value); rightOK && math.Abs(left-right) < 0.000001 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mapValue(value any) (map[string]any, bool) {
+	if value == nil {
+		return nil, false
+	}
+	if typed, ok := value.(map[string]any); ok {
+		return typed, true
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, false
+	}
+	return result, true
+}
+
+func optionalBoolValue(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "enabled":
+			return true, true
+		case "false", "0", "no", "disabled":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func firstNonNilMap(values ...map[string]any) map[string]any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return map[string]any{}
+}
+
+func firstNonEmptyInt(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func isActiveLike(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "", "ACTIVE", "ENABLED", "CONFIGURABLE":
+		return true
+	default:
+		return false
+	}
+}
+
+func effectiveTenantID(user adminUser) string {
+	return firstNonEmptyString(user.ReferredBy, user.ID)
+}
+
+func effectiveAgentID(data adminPlatformData, user adminUser) string {
+	if user.ReferredBy == "" {
+		return ""
+	}
+	if agent, ok := agentByUserMap(data.ChannelAgents)[user.ReferredBy]; ok {
+		return agent.ID
+	}
+	return user.ReferredBy
+}
+
+func formatFloat(value float64) string {
+	if math.Abs(value-math.Round(value)) < 0.000001 {
+		return fmt.Sprintf("%.0f", value)
+	}
+	return fmt.Sprintf("%.2f", value)
+}

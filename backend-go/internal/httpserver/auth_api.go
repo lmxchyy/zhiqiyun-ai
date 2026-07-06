@@ -73,6 +73,15 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type registerRequest struct {
+	Username        string `json:"username"`
+	Name            string `json:"name"`
+	Email           string `json:"email"`
+	Password        string `json:"password"`
+	ConfirmPassword string `json:"confirmPassword"`
+	InviteCode      string `json:"inviteCode"`
+}
+
 type changePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
@@ -112,6 +121,84 @@ func (a authAPI) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := a.sessions.Put(r.Context(), token, user.ID, authSessionTTL); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
+	response["accessToken"] = token
+	writeJSON(w, response)
+}
+
+func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
+	var req registerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Username = strings.TrimSpace(firstNonEmpty([]string{req.Username, req.Name}))
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Password = strings.TrimSpace(req.Password)
+	req.ConfirmPassword = strings.TrimSpace(req.ConfirmPassword)
+	req.InviteCode = strings.ToUpper(strings.TrimSpace(req.InviteCode))
+	if req.Username == "" || req.Email == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, errors.New("username, email and password are required"))
+		return
+	}
+	if len(req.Password) < 8 {
+		writeError(w, http.StatusBadRequest, errors.New("password must be at least 8 characters"))
+		return
+	}
+	if req.ConfirmPassword != "" && req.ConfirmPassword != req.Password {
+		writeError(w, http.StatusBadRequest, errors.New("password confirmation does not match"))
+		return
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, user := range data.Users {
+		if strings.EqualFold(user.Email, req.Email) {
+			writeError(w, http.StatusBadRequest, errors.New("email already exists"))
+			return
+		}
+	}
+	referredBy := ""
+	if req.InviteCode != "" {
+		agent, ok := channelAgentForInviteCode(data.ChannelAgents, req.InviteCode)
+		if !ok {
+			writeError(w, http.StatusBadRequest, errors.New("invite code not found"))
+			return
+		}
+		referredBy = agent.UserID
+	}
+	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+		Name:       req.Username,
+		Email:      req.Email,
+		Role:       "MEMBER",
+		Status:     "ACTIVE",
+		PlanID:     "plan_free",
+		ReferredBy: referredBy,
+		Available:  100,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	created, err = a.store.UpdateUserPassword(created.ID, hashPassword(req.Password))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	response := authResponse(dataWithRegisteredUser(data, created), created, false)
+	token := encodeAuthToken(created.ID)
+	if a.sessions != nil {
+		token, err = randomAuthToken()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := a.sessions.Put(r.Context(), token, created.ID, authSessionTTL); err != nil {
 			writeError(w, http.StatusServiceUnavailable, err)
 			return
 		}
@@ -226,6 +313,21 @@ func findLoginUser(users []adminUser, email string, password string) (adminUser,
 	return adminUser{}, false
 }
 
+func channelAgentForInviteCode(agents []adminChannelAgent, inviteCode string) (adminChannelAgent, bool) {
+	inviteCode = strings.ToUpper(strings.TrimSpace(inviteCode))
+	for _, agent := range agents {
+		if strings.EqualFold(agent.InviteCode, inviteCode) && strings.EqualFold(agent.Status, "ACTIVE") {
+			return agent, true
+		}
+	}
+	return adminChannelAgent{}, false
+}
+
+func dataWithRegisteredUser(data adminPlatformData, user adminUser) adminPlatformData {
+	data.Users = append(data.Users, user)
+	return data
+}
+
 func passwordMatches(user adminUser, password string) bool {
 	if user.PasswordHash != "" {
 		return user.PasswordHash == hashPassword(password)
@@ -250,9 +352,10 @@ func demoPasswordForRole(role string, email string) string {
 }
 
 func authResponse(data adminPlatformData, user adminUser, includeToken bool) map[string]any {
+	agent, hasAgent := channelAgentForUser(data.ChannelAgents, user.ID)
 	response := map[string]any{
 		"user":          userView(user),
-		"permissions":   permissionsForRole(user.Role),
+		"permissions":   permissionsForIdentity(user.Role, hasAgent),
 		"defaultModule": defaultModuleForRole(user.Role),
 		"workspace":     workspaceForRole(user.Role),
 		"defaultRoute":  defaultRouteForRole(user.Role),
@@ -260,7 +363,7 @@ func authResponse(data adminPlatformData, user adminUser, includeToken bool) map
 	if includeToken {
 		response["accessToken"] = encodeAuthToken(user.ID)
 	}
-	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok {
+	if hasAgent {
 		response["agent"] = channelAgentView(agent, user)
 	}
 	return response
@@ -293,14 +396,17 @@ func decodeAuthToken(token string) (authTokenPayload, error) {
 
 func userView(user adminUser) map[string]any {
 	return map[string]any{
-		"id":        user.ID,
-		"email":     user.Email,
-		"name":      user.Name,
-		"role":      user.Role,
-		"status":    user.Status,
-		"planId":    user.PlanID,
-		"createdAt": user.CreatedAt,
-		"updatedAt": user.UpdatedAt,
+		"id":                    user.ID,
+		"email":                 user.Email,
+		"name":                  user.Name,
+		"role":                  user.Role,
+		"memberLevel":           user.MemberLevel,
+		"agentStatus":           user.AgentStatus,
+		"operationCenterStatus": user.OperationCenterStatus,
+		"status":                user.Status,
+		"planId":                user.PlanID,
+		"createdAt":             user.CreatedAt,
+		"updatedAt":             user.UpdatedAt,
 	}
 }
 
@@ -318,16 +424,30 @@ func permissionsForRole(role string) []string {
 	case role == "SUPER_ADMIN":
 		return []string{"admin.full", "channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create"}
 	case strings.HasPrefix(role, "AGENT"):
-		return []string{"channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create"}
+		return []string{"workspace.use", "generation.create", "assets.read", "channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create"}
 	default:
 		return []string{"workspace.use", "generation.create", "assets.read"}
 	}
 }
 
-func defaultModuleForRole(role string) string {
-	if strings.HasPrefix(role, "AGENT") {
-		return "agentHome"
+func permissionsForIdentity(role string, hasAgent bool) []string {
+	permissions := append([]string{}, permissionsForRole(role)...)
+	if hasAgent && !stringSliceContains(permissions, "channel.dashboard") {
+		permissions = append(permissions, "channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create")
 	}
+	return permissions
+}
+
+func stringSliceContains(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultModuleForRole(role string) string {
 	if role == "SUPER_ADMIN" {
 		return "admin"
 	}
@@ -335,9 +455,6 @@ func defaultModuleForRole(role string) string {
 }
 
 func workspaceForRole(role string) string {
-	if strings.HasPrefix(role, "AGENT") {
-		return "agent"
-	}
 	if role == "SUPER_ADMIN" {
 		return "admin"
 	}

@@ -9,14 +9,62 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 )
 
 var errAssetNotFound = errors.New("asset not found")
 
-const defaultPointsAvailable = 959
+const (
+	defaultPointsAvailable     = 959
+	pointUnitAmountCents       = 10
+	billingMetricImageGenerate = "image.generations"
+	billingMetricPPTGenerate   = "ppt.generations"
+)
+
+func isVideoGenerationType(taskType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(taskType)) {
+	case "TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_TO_VIDEO":
+		return true
+	default:
+		return false
+	}
+}
+
+func providerTaskPayload(req createGenerationTaskRequest) map[string]any {
+	if req.Params != nil {
+		if item, ok := req.Params["providerTask"].(map[string]any); ok {
+			return item
+		}
+	}
+	if item, ok := req.VideoTask.(map[string]any); ok {
+		return item
+	}
+	if req.VideoTask == nil {
+		return nil
+	}
+	raw, err := json.Marshal(req.VideoTask)
+	if err != nil {
+		return nil
+	}
+	var item map[string]any
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil
+	}
+	return item
+}
+
+func providerTaskString(req createGenerationTaskRequest, key string) string {
+	task := providerTaskPayload(req)
+	if task == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(task[key]))
+}
 
 type stateBackend interface {
 	Read() ([]byte, error)
@@ -210,7 +258,7 @@ func (s *jsonStore) UpdateAssetImageInfo(updates map[string]assetImageInfo) (int
 			if data.Assets[i].Metadata == nil {
 				data.Assets[i].Metadata = map[string]any{}
 			}
-			if info.ThumbnailURL != "" && data.Assets[i].ThumbnailURL == "" {
+			if info.ThumbnailURL != "" && (data.Assets[i].ThumbnailURL == "" || data.Assets[i].ThumbnailURL == data.Assets[i].URL) {
 				data.Assets[i].ThumbnailURL = info.ThumbnailURL
 				data.Assets[i].Metadata["thumbnailUrl"] = info.ThumbnailURL
 				changed = true
@@ -235,16 +283,23 @@ func (s *jsonStore) UpdateAssetImageInfo(updates map[string]assetImageInfo) (int
 	return updated, nil
 }
 
-func (s *jsonStore) PointAccount() (pointAccount, error) {
+func (s *jsonStore) PointAccount(userID string) (pointAccount, error) {
 	data, err := s.load()
 	if err != nil {
 		return pointAccount{}, err
 	}
+	for _, item := range data.PointAccounts {
+		if item.UserID == userID {
+			return pointAccount{ID: item.ID, UserID: item.UserID, Available: item.Available, Frozen: item.Frozen, Total: totalPointsForUser(data.BillingEvents, userID, item.Available, item.Frozen)}, nil
+		}
+	}
+	available := pointsAvailableForUser(data, userID)
 	return pointAccount{
-		ID:        "points_000001",
-		UserID:    "user_000002",
-		Available: pointsAvailable(data),
+		ID:        "points_" + shortID(userID),
+		UserID:    userID,
+		Available: available,
 		Frozen:    0,
+		Total:     totalPointsForUser(data.BillingEvents, userID, available, 0),
 	}, nil
 }
 
@@ -318,6 +373,12 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 			if req.PlanID != "" {
 				data.Users[i].PlanID = req.PlanID
 			}
+			if customerModelRouteRequested(req) {
+				route := applyCustomerModelRoute(data, data.Users[i], req, data.Users[i].UpdatedAt)
+				if route.ID != "" {
+					data.Users[i].ModelRoutes = upsertUserModelRoute(data.Users[i].ModelRoutes, route)
+				}
+			}
 			data.Users[i].ReferredBy = strings.TrimSpace(req.ReferredBy)
 			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			updated = data.Users[i]
@@ -331,6 +392,116 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 	return updated, err
 }
 
+func customerModelRouteRequested(req adminCustomerMutation) bool {
+	return strings.TrimSpace(req.ModelChannelID) != "" ||
+		strings.TrimSpace(req.ModelChannel) != "" ||
+		strings.TrimSpace(req.ModelGroup) != "" ||
+		strings.TrimSpace(req.ModelModels) != "" ||
+		strings.TrimSpace(req.ModelAPIKey) != "" ||
+		strings.TrimSpace(req.ModelKeyStatus) != "" ||
+		req.ModelQuotaLimit > 0 ||
+		req.ModelRouteEnabled != nil
+}
+
+func applyCustomerModelRoute(data *adminPlatformData, user adminUser, req adminCustomerMutation, now string) adminUserModelRoute {
+	if data == nil {
+		return adminUserModelRoute{}
+	}
+	channel := findAPIChannelForRoute(data.APIChannels, req.ModelChannelID, req.ModelChannel)
+	if channel.ID == "" {
+		channel = preferredImageBackupChannel(data.APIChannels)
+	}
+	if channel.ID == "" {
+		return adminUserModelRoute{}
+	}
+	quota := req.ModelQuotaLimit
+	if quota <= 0 {
+		quota = 100000
+	}
+	key := upsertUserModelAPIKey(&data.APIKeys, user, quota)
+	if secret := strings.TrimSpace(req.ModelAPIKey); secret != "" {
+		key.Secret = secret
+		key.Prefix = apiKeyPrefix(secret, 1)
+		for i := range data.APIKeys {
+			if data.APIKeys[i].ID == key.ID {
+				data.APIKeys[i].Secret = key.Secret
+				data.APIKeys[i].Prefix = key.Prefix
+				break
+			}
+		}
+	}
+	models := parseRouteModels(req.ModelModels)
+	if len(models) == 0 {
+		models = []string{"gpt-image-2"}
+	}
+	status := strings.ToUpper(strings.TrimSpace(req.ModelKeyStatus))
+	if status == "" {
+		status = "ACTIVE"
+	}
+	if req.ModelRouteEnabled != nil && !*req.ModelRouteEnabled {
+		status = "DISABLED"
+	}
+	group := strings.TrimSpace(req.ModelGroup)
+	if group == "" {
+		group = "生图备份"
+	}
+	return adminUserModelRoute{
+		ID:         "route_" + user.ID + "_image_backup",
+		Provider:   "newapi",
+		ChannelID:  channel.ID,
+		Channel:    fallback(channel.Name, req.ModelChannel),
+		APIKeyID:   key.ID,
+		KeyPrefix:  key.Prefix,
+		GroupName:  group,
+		Models:     models,
+		QuotaLimit: quota,
+		Status:     status,
+		UpdatedAt:  now,
+	}
+}
+
+func upsertUserModelRoute(routes []adminUserModelRoute, route adminUserModelRoute) []adminUserModelRoute {
+	for i := range routes {
+		if routes[i].ID == route.ID {
+			route.QuotaUsed = routes[i].QuotaUsed
+			routes[i] = route
+			return routes
+		}
+	}
+	return append(routes, route)
+}
+
+func findAPIChannelForRoute(channels []adminAPIChannel, channelID string, channelName string) adminAPIChannel {
+	channelID = strings.TrimSpace(channelID)
+	channelName = strings.TrimSpace(channelName)
+	for _, channel := range channels {
+		if channelID != "" && channel.ID == channelID {
+			return channel
+		}
+		if channelName != "" && strings.EqualFold(channel.Name, channelName) {
+			return channel
+		}
+	}
+	return adminAPIChannel{}
+}
+
+func parseRouteModels(value string) []string {
+	value = strings.ReplaceAll(value, "，", ",")
+	value = strings.ReplaceAll(value, "、", ",")
+	parts := strings.Split(value, ",")
+	models := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		model := strings.TrimSpace(part)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		models = append(models, model)
+	}
+	return models
+}
+
 func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adminChannelAgent, adminUser, error) {
 	var createdAgent adminChannelAgent
 	var createdUser adminUser
@@ -340,7 +511,7 @@ func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adm
 				return fmt.Errorf("email already exists: %s", req.Email)
 			}
 		}
-		if req.Level == 2 {
+		if strings.TrimSpace(req.ParentID) != "" {
 			foundParent := false
 			for _, agent := range data.ChannelAgents {
 				if agent.ID == req.ParentID {
@@ -353,10 +524,7 @@ func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adm
 			}
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		role := "AGENT_L1"
-		if req.Level == 2 {
-			role = "AGENT_L2"
-		}
+		role := agentRoleForLevel(req.Level)
 		createdUser = adminUser{
 			ID:        uniqueAdminID("user", userIDs(data.Users)),
 			Email:     req.Email,
@@ -399,9 +567,62 @@ func (s *jsonStore) UpdateAdminChannelAgent(id string, req adminChannelMutation)
 			if data.ChannelAgents[i].ID != id {
 				continue
 			}
-			data.ChannelAgents[i].Status = fallback(req.Status, data.ChannelAgents[i].Status)
-			data.ChannelAgents[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			updated = data.ChannelAgents[i]
+			item := data.ChannelAgents[i]
+			if req.Level > 0 {
+				item.Level = req.Level
+			}
+			if strings.TrimSpace(req.ParentID) != "" {
+				parentID := fallback(req.ParentID, item.ParentID)
+				foundParent := false
+				for _, agent := range data.ChannelAgents {
+					if agent.ID == parentID && agent.ID != item.ID {
+						foundParent = true
+						break
+					}
+				}
+				if !foundParent {
+					return fmt.Errorf("parent channel agent not found: %s", parentID)
+				}
+				item.ParentID = parentID
+			} else if req.Level > 0 {
+				item.ParentID = ""
+			} else if req.ParentID != "" {
+				item.ParentID = req.ParentID
+			}
+			if req.Status != "" {
+				item.Status = req.Status
+			}
+			if req.InviteCode != "" {
+				item.InviteCode = req.InviteCode
+			}
+			item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			for j := range data.Users {
+				if data.Users[j].ID != item.UserID {
+					continue
+				}
+				if req.Email != "" && !strings.EqualFold(req.Email, data.Users[j].Email) {
+					for _, user := range data.Users {
+						if user.ID != data.Users[j].ID && strings.EqualFold(user.Email, req.Email) {
+							return fmt.Errorf("email already exists: %s", req.Email)
+						}
+					}
+					data.Users[j].Email = req.Email
+				}
+				if req.Name != "" {
+					data.Users[j].Name = req.Name
+				}
+				data.Users[j].Role = agentRoleForLevel(item.Level)
+				if req.Status != "" {
+					data.Users[j].Status = req.Status
+				}
+				data.Users[j].UpdatedAt = item.UpdatedAt
+				break
+			}
+			if req.Available != nil {
+				setPointAccount(data, item.UserID, *req.Available)
+			}
+			data.ChannelAgents[i] = item
+			updated = item
 			return nil
 		}
 		return fmt.Errorf("channel agent not found: %s", id)
@@ -478,18 +699,90 @@ func (s *jsonStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, error)
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		created = adminOrder{
-			ID:          uniqueAdminID("order", orderIDs(data.Orders)),
-			UserID:      req.UserID,
-			PlanID:      req.PlanID,
-			Amount:      req.AmountCents,
-			AmountCents: req.AmountCents,
-			Status:      fallback(req.Status, "PENDING"),
-			CreatedAt:   now,
+			ID:                uniqueAdminID("order", orderIDs(data.Orders)),
+			UserID:            req.UserID,
+			BuyerUserID:       req.UserID,
+			PlanID:            req.PlanID,
+			BusinessOrderType: businessOrderTypeForPlanID(req.PlanID),
+			Amount:            req.AmountCents,
+			AmountCents:       req.AmountCents,
+			Status:            fallback(req.Status, "PENDING"),
+			PriceSnapshot:     orderPriceSnapshot(req),
+			CreatedAt:         now,
 		}
 		data.Orders = append(data.Orders, created)
 		return nil
 	})
 	return created, err
+}
+
+func orderPriceSnapshot(req adminOrderMutation) map[string]any {
+	snapshot := map[string]any{}
+	paymentMethod := normalizePaymentMethod(req.PaymentMethod)
+	if paymentMethod != "" {
+		snapshot["paymentMethod"] = paymentMethod
+	}
+	if strings.TrimSpace(req.IdempotencyKey) != "" {
+		snapshot["idempotencyKey"] = strings.TrimSpace(req.IdempotencyKey)
+	}
+	if plan, ok := planCatalogByID(req.PlanID); ok && plan.Entitlements != nil {
+		planType := planBusinessType(plan)
+		snapshot["buyerUserId"] = req.UserID
+		snapshot["businessOrderType"] = businessOrderTypeForPlanType(planType)
+		snapshot["planName"] = plan.Name
+		snapshot["planCode"] = plan.Code
+		snapshot["planType"] = planType
+		snapshot["productType"] = planType
+		snapshot["displayPrice"] = stringValue(plan.Entitlements["displayPrice"])
+		snapshot["tokenGrantAmount"] = planTokenGrantAmount(plan)
+		snapshot["tokenAmount"] = planTokenGrantAmount(plan)
+		snapshot["tokenGrantValueCents"] = planTokenRightsValueCents(plan)
+		if level := planMemberLevel(plan); level != "" {
+			snapshot["memberLevel"] = level
+		}
+		if audience := stringValue(plan.Entitlements["audience"]); audience != "" {
+			snapshot["audience"] = audience
+		}
+	}
+	if plan, ok := planCatalogByID(req.PlanID); ok && planBusinessType(plan) == planTypeTokenRecharge {
+		snapshot["orderType"] = "COMPUTE_RECHARGE"
+		snapshot["rechargePoints"] = planPoints(plan)
+		snapshot["amountCents"] = planPrice(plan)
+	} else if plan, ok := planCatalogByID(req.PlanID); ok && planBusinessType(plan) == planTypeAgentJoinPackage {
+		snapshot["orderType"] = orderTypeAgentJoin
+		snapshot["grantPoints"] = planTokenGrantAmount(plan)
+		snapshot["amountCents"] = planPrice(plan)
+	} else if plan, ok := planCatalogByID(req.PlanID); ok && planBusinessType(plan) == planTypeOperationCenterPackage {
+		snapshot["orderType"] = orderTypeOperationCenterJoin
+		snapshot["grantPoints"] = planTokenGrantAmount(plan)
+		snapshot["amountCents"] = planPrice(plan)
+	} else if strings.Contains(strings.ToUpper(strings.TrimSpace(req.PlanID)), "RECHARGE") {
+		snapshot["orderType"] = "COMPUTE_RECHARGE"
+		snapshot["rechargePoints"] = rechargePointsForAmount(req.AmountCents)
+	} else if strings.TrimSpace(req.PlanID) != "" {
+		snapshot["orderType"] = "PLAN_ORDER"
+		if plan, ok := planCatalogByID(req.PlanID); ok {
+			snapshot["grantPoints"] = planPoints(plan)
+			snapshot["durationDays"] = plan.DurationDays
+		}
+	}
+	if len(snapshot) == 0 {
+		return nil
+	}
+	return snapshot
+}
+
+func normalizePaymentMethod(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "cash", "manual", "offline":
+		return "cash"
+	case "wechat", "wechat_pay", "wxpay":
+		return "wechat"
+	case "alipay", "ali_pay":
+		return "alipay"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
 }
 
 func (s *jsonStore) MarkAdminOrderPaid(id string) (adminOrder, error) {
@@ -499,15 +792,585 @@ func (s *jsonStore) MarkAdminOrderPaid(id string) (adminOrder, error) {
 			if data.Orders[i].ID != id {
 				continue
 			}
+			if strings.EqualFold(data.Orders[i].Status, "PAID") {
+				now := data.Orders[i].PaidAt
+				if now == "" {
+					now = time.Now().UTC().Format(time.RFC3339Nano)
+				}
+				if err := applyCommerceOrderFulfillment(data, &data.Orders[i], now); err != nil {
+					return err
+				}
+				updated = data.Orders[i]
+				return nil
+			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			data.Orders[i].Status = "PAID"
 			data.Orders[i].PaidAt = now
+			if err := applyCommerceOrderFulfillment(data, &data.Orders[i], now); err != nil {
+				return err
+			}
 			updated = data.Orders[i]
 			return nil
 		}
 		return fmt.Errorf("order not found: %s", id)
 	})
 	return updated, err
+}
+
+func applyCommerceOrderFulfillment(data *adminPlatformData, order *adminOrder, now string) error {
+	if order == nil {
+		return nil
+	}
+	if order.FulfillmentStatus == "FULFILLED" || stringValue(order.PriceSnapshot["fulfillmentStatus"]) == "FULFILLED" {
+		if isRechargeOrder(*order) {
+			ensurePaidRechargeRoute(data, order)
+		}
+		return nil
+	}
+	if isRechargeOrder(*order) {
+		applyRechargeSettlement(data, order, now)
+		return nil
+	}
+	plan, ok := planCatalogByID(order.PlanID)
+	if !ok {
+		return nil
+	}
+	planType := planBusinessType(plan)
+	switch planType {
+	case planTypeMemberPackage, planTypeAgentJoinPackage, planTypeOperationCenterPackage:
+	default:
+		return nil
+	}
+	ctx := commerceContextForOrder(data, *order, plan)
+	result, err := calculateCommissionSettlement(ctx)
+	if err != nil {
+		return err
+	}
+	applySettlementToOrder(order, ctx, result, planType)
+	if result.TokenGrantAmount > 0 && !tokenRecordExists(data.TokenRecords, order.ID, tokenChangeTypeForPlan(planType)) {
+		grantTokensToUser(data, order.UserID, order.ID, tokenChangeTypeForPlan(planType), result.TokenGrantAmount, now)
+	}
+	for _, commission := range settlementCommissionRecords(ctx, result, now) {
+		if !commissionRecordExists(data.Commissions, commission.ID) {
+			data.Commissions = append(data.Commissions, commission)
+		}
+	}
+	fulfillIdentityForOrder(data, order, plan, result, now)
+	order.FulfillmentStatus = "FULFILLED"
+	order.FulfilledAt = now
+	order.PriceSnapshot["fulfillmentStatus"] = "FULFILLED"
+	order.PriceSnapshot["fulfilledAt"] = now
+	return nil
+}
+
+func commerceContextForOrder(data *adminPlatformData, order adminOrder, plan adminPlan) commissionOrderContext {
+	direct, hasDirect := directActiveAgentForUser(data.Users, data.ChannelAgents, order.UserID)
+	parentID := ""
+	operationCenterID := ""
+	if hasDirect {
+		parentID = direct.ParentID
+		operationCenterID = direct.OperationCenterID
+		if operationCenterID == "" && parentID != "" {
+			if parent := agentByIDMap(data.ChannelAgents)[parentID]; parent.ID != "" {
+				operationCenterID = parent.OperationCenterID
+			}
+		}
+	}
+	if operationCenterID == "" {
+		operationCenterID = firstActiveOperationCenterID(data.OperationCenters)
+	}
+	orderType := orderTypeForCommerceOrder(planBusinessType(plan), hasDirect, parentID)
+	directID := ""
+	if hasDirect {
+		directID = direct.ID
+	}
+	return commissionOrderContext{
+		OrderID:              order.ID,
+		OrderType:            orderType,
+		PlanType:             planBusinessType(plan),
+		AmountCents:          orderAmount(order),
+		BuyerUserID:          order.UserID,
+		DirectAgentID:        directID,
+		ParentAgentID:        parentID,
+		OperationCenterID:    operationCenterID,
+		TokenGrantAmount:     planTokenGrantAmount(plan),
+		TokenGrantValueCents: planTokenRightsValueCents(plan),
+	}
+}
+
+func orderTypeForCommerceOrder(planType string, hasDirectAgent bool, parentAgentID string) string {
+	switch normalizePlanTypeString(planType) {
+	case planTypeAgentJoinPackage:
+		return orderTypeAgentJoin
+	case planTypeOperationCenterPackage:
+		return orderTypeOperationCenterJoin
+	case planTypeMemberPackage, planTypeTokenRecharge:
+		if !hasDirectAgent {
+			return orderTypePlatformDirectRecharge
+		}
+		if strings.TrimSpace(parentAgentID) != "" {
+			return orderTypeUserRechargeSecondLevel
+		}
+		return orderTypeUserRechargeDirect
+	default:
+		return ""
+	}
+}
+
+func grantTokensToUser(data *adminPlatformData, userID string, orderID string, changeType string, amount int, now string) {
+	before := 0
+	after := amount
+	for i := range data.PointAccounts {
+		if data.PointAccounts[i].UserID != userID {
+			continue
+		}
+		before = data.PointAccounts[i].Available
+		after = before + amount
+		data.PointAccounts[i].Available = after
+		data.PointAccounts[i].TotalGranted += amount
+		data.TokenRecords = append(data.TokenRecords, adminTokenRecord{
+			ID:           "token_" + shortID(orderID+"_"+changeType),
+			UserID:       userID,
+			OrderID:      orderID,
+			ChangeType:   changeType,
+			Amount:       amount,
+			BalanceAfter: after,
+			Remark:       "commerce_order_grant",
+			CreatedAt:    now,
+		})
+		return
+	}
+	after = before + amount
+	data.PointAccounts = append(data.PointAccounts, adminPointAccount{
+		ID:           uniqueAdminID("points", pointIDs(data.PointAccounts)),
+		UserID:       userID,
+		Available:    after,
+		TotalGranted: amount,
+	})
+	data.TokenRecords = append(data.TokenRecords, adminTokenRecord{
+		ID:           "token_" + shortID(orderID+"_"+changeType),
+		UserID:       userID,
+		OrderID:      orderID,
+		ChangeType:   changeType,
+		Amount:       amount,
+		BalanceAfter: after,
+		Remark:       "commerce_order_grant",
+		CreatedAt:    now,
+	})
+}
+
+func fulfillIdentityForOrder(data *adminPlatformData, order *adminOrder, plan adminPlan, result commissionSettlementResult, now string) {
+	planType := planBusinessType(plan)
+	for i := range data.Users {
+		if data.Users[i].ID != order.UserID {
+			continue
+		}
+		switch planType {
+		case planTypeMemberPackage:
+			data.Users[i].PlanID = order.PlanID
+			data.Users[i].MemberLevel = planMemberLevel(plan)
+			if data.Users[i].AgentStatus == "" {
+				data.Users[i].AgentStatus = agentStatusNone
+			}
+			if data.Users[i].OperationCenterStatus == "" {
+				data.Users[i].OperationCenterStatus = operationStatusNone
+			}
+			if plan.DurationDays > 0 {
+				data.Users[i].SubscriptionExpiresAt = time.Now().UTC().Add(time.Duration(plan.DurationDays) * 24 * time.Hour).Format(time.RFC3339Nano)
+			}
+		case planTypeAgentJoinPackage:
+			data.Users[i].AgentStatus = agentStatusActive
+			if data.Users[i].MemberLevel == "" {
+				data.Users[i].MemberLevel = memberLevelFree
+			}
+			if strings.TrimSpace(data.Users[i].Role) == "" {
+				data.Users[i].Role = "MEMBER"
+			}
+			ensureAgentForUser(data, data.Users[i], order, result, now)
+		case planTypeOperationCenterPackage:
+			data.Users[i].OperationCenterStatus = operationStatusActive
+			if data.Users[i].MemberLevel == "" {
+				data.Users[i].MemberLevel = memberLevelFree
+			}
+			ensureOperationCenterForUser(data, data.Users[i], order, now)
+		}
+		data.Users[i].UpdatedAt = now
+		return
+	}
+}
+
+func ensureAgentForUser(data *adminPlatformData, user adminUser, order *adminOrder, result commissionSettlementResult, now string) {
+	for i := range data.ChannelAgents {
+		if data.ChannelAgents[i].UserID == user.ID {
+			data.ChannelAgents[i].Status = "ACTIVE"
+			data.ChannelAgents[i].ParentID = order.DirectAgentID
+			data.ChannelAgents[i].OperationCenterID = order.OperationCenterID
+			data.ChannelAgents[i].JoinOrderID = order.ID
+			data.ChannelAgents[i].JoinFeeCents = orderAmount(*order)
+			data.ChannelAgents[i].TokenRightsAmount = result.TokenGrantAmount
+			data.ChannelAgents[i].UpdatedAt = now
+			return
+		}
+	}
+	agentID := uniqueAdminID("channel", channelAgentIDs(data.ChannelAgents))
+	inviteCode := strings.ToUpper("AG" + shortID(agentID))
+	data.ChannelAgents = append(data.ChannelAgents, adminChannelAgent{
+		ID:                agentID,
+		UserID:            user.ID,
+		ParentID:          order.DirectAgentID,
+		OperationCenterID: order.OperationCenterID,
+		Level:             2,
+		Status:            "ACTIVE",
+		InviteCode:        inviteCode,
+		JoinOrderID:       order.ID,
+		JoinFeeCents:      orderAmount(*order),
+		TokenRightsAmount: result.TokenGrantAmount,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	})
+}
+
+func ensureOperationCenterForUser(data *adminPlatformData, user adminUser, order *adminOrder, now string) {
+	for i := range data.OperationCenters {
+		if data.OperationCenters[i].UserID == user.ID {
+			data.OperationCenters[i].Status = "ACTIVE"
+			data.OperationCenters[i].JoinOrderID = order.ID
+			data.OperationCenters[i].JoinFeeCents = orderAmount(*order)
+			data.OperationCenters[i].ApprovedAt = now
+			data.OperationCenters[i].UpdatedAt = now
+			return
+		}
+	}
+	centerID := uniqueOperationCenterID(data.OperationCenters)
+	data.OperationCenters = append(data.OperationCenters, adminOperationCenter{
+		ID:           centerID,
+		UserID:       user.ID,
+		Name:         user.Name + "运营中心",
+		InviteCode:   strings.ToUpper("OC" + shortID(centerID)),
+		Status:       "ACTIVE",
+		JoinOrderID:  order.ID,
+		JoinFeeCents: orderAmount(*order),
+		ApprovedAt:   now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+}
+
+func tokenChangeTypeForPlan(planType string) string {
+	switch normalizePlanTypeString(planType) {
+	case planTypeAgentJoinPackage:
+		return "AGENT_JOIN_GRANT"
+	case planTypeOperationCenterPackage:
+		return "OPERATION_CENTER_GRANT"
+	case planTypeTokenRecharge:
+		return "USER_RECHARGE_GRANT"
+	default:
+		return "MEMBER_PACKAGE_GRANT"
+	}
+}
+
+func firstActiveOperationCenterID(items []adminOperationCenter) string {
+	for _, item := range items {
+		if strings.EqualFold(item.Status, "ACTIVE") {
+			return item.ID
+		}
+	}
+	return ""
+}
+
+func tokenRecordExists(items []adminTokenRecord, orderID string, changeType string) bool {
+	for _, item := range items {
+		if item.OrderID == orderID && strings.EqualFold(item.ChangeType, changeType) {
+			return true
+		}
+	}
+	return false
+}
+
+func commissionRecordExists(items []adminCommission, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueOperationCenterID(items []adminOperationCenter) string {
+	ids := map[string]bool{}
+	for _, item := range items {
+		ids[item.ID] = true
+	}
+	return uniqueAdminID("operation_center", ids)
+}
+
+func ensurePaidRechargeRoute(data *adminPlatformData, order *adminOrder) {
+	if data == nil || order == nil || !isRechargeOrder(*order) {
+		return
+	}
+	if order.PriceSnapshot != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(order.PriceSnapshot["newapiSyncStatus"])), "READY") {
+		return
+	}
+	now := order.PaidAt
+	if now == "" {
+		now = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	points := rechargePointsForOrder(*order)
+	route := ensureRechargeImageBackupRoute(data, order.UserID, points, now)
+	if route.ID == "" {
+		return
+	}
+	if order.PriceSnapshot == nil {
+		order.PriceSnapshot = map[string]any{}
+	}
+	order.PriceSnapshot["orderType"] = "COMPUTE_RECHARGE"
+	order.PriceSnapshot["rechargePoints"] = points
+	order.PriceSnapshot["newapiSyncStatus"] = "READY"
+	order.PriceSnapshot["newapiSyncAmountCents"] = orderAmount(*order)
+	order.PriceSnapshot["modelRouteId"] = route.ID
+	order.PriceSnapshot["newapiGroup"] = route.GroupName
+	order.PriceSnapshot["newapiKeyId"] = route.APIKeyID
+}
+
+func applyRechargeSettlement(data *adminPlatformData, order *adminOrder, now string) {
+	if order == nil || !isRechargeOrder(*order) {
+		return
+	}
+	points := rechargePointsForOrder(*order)
+	if points <= 0 {
+		return
+	}
+	if order.PriceSnapshot == nil {
+		order.PriceSnapshot = map[string]any{}
+	}
+	order.PriceSnapshot["orderType"] = "COMPUTE_RECHARGE"
+	order.PriceSnapshot["rechargePoints"] = points
+	order.PriceSnapshot["newapiSyncAmountCents"] = orderAmount(*order)
+	route := ensureRechargeImageBackupRoute(data, order.UserID, points, now)
+	if route.ID != "" {
+		order.PriceSnapshot["newapiSyncStatus"] = "READY"
+		order.PriceSnapshot["modelRouteId"] = route.ID
+		order.PriceSnapshot["newapiGroup"] = route.GroupName
+		order.PriceSnapshot["newapiKeyId"] = route.APIKeyID
+	} else {
+		order.PriceSnapshot["newapiSyncStatus"] = "PENDING"
+	}
+	if billingEventExists(data.BillingEvents, order.ID, "compute.recharge") {
+		return
+	}
+	pointsByUser := pointMap(data.PointAccounts)
+	before := pointsByUser[order.UserID].Available
+	after := before + points
+	setPointAccount(data, order.UserID, after)
+	directAgent, hasDirectAgent := directActiveAgentForUser(data.Users, data.ChannelAgents, order.UserID)
+	event := adminBillingEvent{
+		ID:              uniqueAdminID("evt", billingEventIDs(data.BillingEvents)),
+		TransactionID:   "txn_" + shortID(order.ID),
+		UserID:          order.UserID,
+		TaskID:          order.ID,
+		MetricCode:      "compute.recharge",
+		Quantity:        points,
+		UnitAmountCents: 10,
+		AmountCents:     orderAmount(*order),
+		PointCost:       -points,
+		BalanceBefore:   before,
+		BalanceAfter:    after,
+		Model:           "recharge",
+		Status:          "SUCCEEDED",
+		OccurredAt:      now,
+		Metadata: map[string]any{
+			"source":        "order_recharge",
+			"orderId":       order.ID,
+			"newapiSync":    order.PriceSnapshot["newapiSyncStatus"],
+			"newapiGroup":   order.PriceSnapshot["newapiGroup"],
+			"modelRouteId":  order.PriceSnapshot["modelRouteId"],
+			"rechargeCents": orderAmount(*order),
+		},
+	}
+	if hasDirectAgent {
+		event.AgentID = directAgent.ID
+	}
+	data.Commissions = append(data.Commissions, commissionArtifactsForUser(data, order.UserID, order.ID, "COMPUTE_RECHARGE", "compute_recharge", orderAmount(*order), now)...)
+	data.BillingEvents = append(data.BillingEvents, event)
+}
+
+func ensureRechargeImageBackupRoute(data *adminPlatformData, userID string, quotaLimit int, now string) adminUserModelRoute {
+	if data == nil || strings.TrimSpace(userID) == "" {
+		return adminUserModelRoute{}
+	}
+	channel := preferredImageBackupChannel(data.APIChannels)
+	if channel.ID == "" {
+		return adminUserModelRoute{}
+	}
+	userIndex := -1
+	for i := range data.Users {
+		if data.Users[i].ID == userID {
+			userIndex = i
+			break
+		}
+	}
+	if userIndex < 0 {
+		return adminUserModelRoute{}
+	}
+	key := upsertUserModelAPIKey(&data.APIKeys, data.Users[userIndex], quotaLimit)
+	route := buildUserImageBackupRoute(data.Users[userIndex], channel, key, quotaLimit, now)
+	routes := data.Users[userIndex].ModelRoutes
+	replaced := false
+	for i := range routes {
+		if routes[i].ID == route.ID || strings.EqualFold(routes[i].GroupName, route.GroupName) {
+			route.QuotaUsed = routes[i].QuotaUsed
+			if route.QuotaLimit < routes[i].QuotaLimit {
+				route.QuotaLimit = routes[i].QuotaLimit
+			}
+			routes[i] = route
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		routes = append(routes, route)
+	}
+	data.Users[userIndex].ModelRoutes = routes
+	return route
+}
+
+func preferredImageBackupChannel(channels []adminAPIChannel) adminAPIChannel {
+	for _, channel := range channels {
+		if !apiChannelUsableForGeneration(channel) {
+			continue
+		}
+		text := strings.ToLower(channel.Name + " " + channel.BaseURL + " " + channel.Notes)
+		if strings.Contains(text, "newapi") || strings.Contains(text, "new-api") || strings.Contains(text, "uni-api") || strings.Contains(text, "生图备份") {
+			return channel
+		}
+	}
+	for _, channel := range channels {
+		if apiChannelUsableForGeneration(channel) {
+			return channel
+		}
+	}
+	return adminAPIChannel{}
+}
+
+func upsertUserModelAPIKey(keys *[]adminAPIKey, user adminUser, quotaLimit int) adminAPIKey {
+	keyID := "key_" + user.ID
+	secret := "sk-user-" + shortID(user.ID) + "-newapi-backup"
+	customer := fallback(user.Email, user.Name)
+	if customer == "" {
+		customer = user.ID
+	}
+	if quotaLimit <= 0 {
+		quotaLimit = 100000
+	}
+	for i := range *keys {
+		if (*keys)[i].ID != keyID {
+			continue
+		}
+		(*keys)[i].Customer = customer
+		(*keys)[i].Status = "ACTIVE"
+		(*keys)[i].Models = mergeStringSet((*keys)[i].Models, []string{"gpt-image-2"})
+		if (*keys)[i].QuotaLimit < quotaLimit {
+			(*keys)[i].QuotaLimit = quotaLimit
+		}
+		if (*keys)[i].Secret == "" {
+			(*keys)[i].Secret = secret
+			(*keys)[i].Prefix = apiKeyPrefix(secret, i+1)
+		}
+		return (*keys)[i]
+	}
+	key := adminAPIKey{
+		ID:         keyID,
+		Customer:   customer,
+		Prefix:     apiKeyPrefix(secret, len(*keys)+1),
+		Secret:     secret,
+		Status:     "ACTIVE",
+		Models:     []string{"gpt-image-2"},
+		QuotaLimit: quotaLimit,
+	}
+	*keys = append(*keys, key)
+	return key
+}
+
+func buildUserImageBackupRoute(user adminUser, channel adminAPIChannel, key adminAPIKey, quotaLimit int, now string) adminUserModelRoute {
+	if quotaLimit <= 0 {
+		quotaLimit = key.QuotaLimit
+	}
+	return adminUserModelRoute{
+		ID:         "route_" + user.ID + "_image_backup",
+		Provider:   "newapi",
+		ChannelID:  channel.ID,
+		Channel:    fallback(channel.Name, "NewAPI"),
+		APIKeyID:   key.ID,
+		KeyPrefix:  key.Prefix,
+		GroupName:  "生图备份",
+		Models:     []string{"gpt-image-2"},
+		QuotaLimit: quotaLimit,
+		Status:     "ACTIVE",
+		UpdatedAt:  now,
+	}
+}
+
+func mergeStringSet(base []string, extra []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(base)+len(extra))
+	for _, value := range append(base, extra...) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func isRechargeOrder(order adminOrder) bool {
+	if strings.Contains(strings.ToUpper(strings.TrimSpace(order.PlanID)), "RECHARGE") {
+		return true
+	}
+	if order.PriceSnapshot == nil {
+		return false
+	}
+	for _, key := range []string{"orderType", "type"} {
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(order.PriceSnapshot[key])), "COMPUTE_RECHARGE") ||
+			strings.EqualFold(strings.TrimSpace(fmt.Sprint(order.PriceSnapshot[key])), "RECHARGE") {
+			return true
+		}
+	}
+	return false
+}
+
+func rechargePointsForOrder(order adminOrder) int {
+	if order.PriceSnapshot != nil {
+		if points := intValue(order.PriceSnapshot["rechargePoints"]); points > 0 {
+			return points
+		}
+	}
+	if plan, ok := rechargePackageByOrder(order); ok {
+		return planPoints(plan)
+	}
+	return rechargePointsForAmount(orderAmount(order))
+}
+
+func rechargePointsForAmount(amountCents int) int {
+	if amountCents <= 0 {
+		return 0
+	}
+	return amountCents / 10
+}
+
+func rechargeAgentForUser(users []adminUser, agents []adminChannelAgent, userID string) (adminChannelAgent, bool) {
+	usersByID := userMap(users)
+	user := usersByID[userID]
+	if strings.TrimSpace(user.ReferredBy) == "" {
+		return adminChannelAgent{}, false
+	}
+	agentsByUserID := agentByUserMap(agents)
+	agent, ok := agentsByUserID[user.ReferredBy]
+	if !ok || !strings.EqualFold(agent.Status, "ACTIVE") {
+		return adminChannelAgent{}, false
+	}
+	return agent, true
 }
 
 func (s *jsonStore) RenewAdminOrder(id string) (adminOrder, error) {
@@ -574,6 +1437,9 @@ func (s *jsonStore) UpdateAdminSystemSettings(req adminSystemMutation) (adminSys
 		if len(req.Permissions) > 0 {
 			data.SystemSettings.Permissions = req.Permissions
 		}
+		if len(req.APIGateway) > 0 {
+			data.SystemSettings.APIGateway = mergeMap(data.SystemSettings.APIGateway, req.APIGateway)
+		}
 		updated = data.SystemSettings
 		return nil
 	})
@@ -591,6 +1457,7 @@ func (s *jsonStore) CreateAdminAPIChannel(req adminAPIChannelMutation) (adminAPI
 			ImageRequestMode:        fallback(req.ImageRequestMode, "openai"),
 			ImageGenerationEndpoint: fallback(req.ImageGenerationEndpoint, "/v1/images/generations"),
 			ImageEditEndpoint:       fallback(req.ImageEditEndpoint, "/v1/images/edits"),
+			VideoGenerationEndpoint: req.VideoGenerationEndpoint,
 			FetchModelsPath:         fallback(req.FetchModelsPath, "/models"),
 			APIKeyEnv:               req.APIKeyEnv,
 			ComfyInstances:          req.ComfyInstances,
@@ -634,6 +1501,7 @@ func (s *jsonStore) UpdateAdminAPIChannel(id string, req adminAPIChannelMutation
 			if req.ImageEditEndpoint != "" {
 				data.APIChannels[i].ImageEditEndpoint = req.ImageEditEndpoint
 			}
+			data.APIChannels[i].VideoGenerationEndpoint = req.VideoGenerationEndpoint
 			if req.FetchModelsPath != "" {
 				data.APIChannels[i].FetchModelsPath = req.FetchModelsPath
 			}
@@ -799,6 +1667,262 @@ func (s *jsonStore) UpdateAdminCustomerGroup(id string, req adminCustomerGroupMu
 	return updated, err
 }
 
+func (s *jsonStore) UpdateAdminAIModule(code string, req adminAIModuleMutation) (adminAIModule, error) {
+	var updated adminAIModule
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		code = canonicalModuleCode(code)
+		for i := range data.AIModules {
+			if canonicalModuleCode(data.AIModules[i].ModuleCode) != code {
+				continue
+			}
+			if req.Name != "" {
+				data.AIModules[i].Name = req.Name
+			}
+			if req.Description != "" {
+				data.AIModules[i].Description = req.Description
+			}
+			if req.Status != "" {
+				data.AIModules[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
+			}
+			if req.OpenTenantIDs != nil {
+				data.AIModules[i].OpenTenantIDs = req.OpenTenantIDs
+			}
+			if req.OpenPackageIDs != nil {
+				data.AIModules[i].OpenPackageIDs = req.OpenPackageIDs
+			}
+			if req.BoundModels != nil {
+				data.AIModules[i].BoundModels = req.BoundModels
+			}
+			if req.DefaultSchemaID != "" {
+				data.AIModules[i].DefaultSchemaID = req.DefaultSchemaID
+			}
+			if req.AllowAgents != nil {
+				data.AIModules[i].AllowAgents = *req.AllowAgents
+			}
+			if req.AllowEndUsers != nil {
+				data.AIModules[i].AllowEndUsers = *req.AllowEndUsers
+			}
+			if req.Config != nil {
+				data.AIModules[i].Config = req.Config
+			}
+			data.AIModules[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.AIModules[i]
+			return nil
+		}
+		return fmt.Errorf("ai module not found: %s", code)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIModel, error) {
+	var created adminAIModel
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		modelName := strings.TrimSpace(req.ModelName)
+		if modelName == "" {
+			return errors.New("model_name is required")
+		}
+		moduleCode := canonicalModuleCode(req.ModuleCode)
+		if moduleCode == "" {
+			moduleCode = moduleImageGeneration
+		}
+		for _, item := range data.AIModels {
+			if canonicalModuleCode(item.ModuleCode) == moduleCode && strings.EqualFold(strings.TrimSpace(item.ModelName), modelName) {
+				return fmt.Errorf("ai model already exists: %s", modelName)
+			}
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		fallbackModel := ""
+		if req.FallbackModel != nil {
+			fallbackModel = strings.TrimSpace(*req.FallbackModel)
+		}
+		sortWeight := req.SortWeight
+		if sortWeight <= 0 {
+			sortWeight = len(data.AIModels)*10 + 10
+		}
+		modelType := strings.TrimSpace(req.ModelType)
+		if modelType == "" {
+			modelType = defaultAIModelTypeForModule(moduleCode)
+		}
+		provider := strings.TrimSpace(req.Provider)
+		if provider == "" {
+			provider = "NewAPI"
+		}
+		status := strings.ToUpper(strings.TrimSpace(req.Status))
+		if status == "" {
+			status = "ACTIVE"
+		}
+		created = adminAIModel{
+			ID:                  uniqueAdminID("ai_model", aiModelIDs(data.AIModels)),
+			ModelName:           modelName,
+			ModelType:           modelType,
+			Provider:            provider,
+			CapabilityCode:      uniqueNonEmptyStrings(req.CapabilityCode),
+			ModuleCode:          moduleCode,
+			Status:              status,
+			FallbackModel:       fallbackModel,
+			SortWeight:          sortWeight,
+			AllowFallbackSwitch: req.AllowFallbackSwitch != nil && *req.AllowFallbackSwitch,
+			CreatedAt:           now,
+			UpdatedAt:           now,
+		}
+		if len(created.CapabilityCode) == 0 {
+			created.CapabilityCode = defaultAICapabilitiesForModule(moduleCode)
+		}
+		data.AIModels = append(data.AIModels, created)
+		bindAIModelToModule(data, moduleCode, modelName)
+		return nil
+	})
+	return created, err
+}
+
+func (s *jsonStore) UpdateAdminAIModel(id string, req adminAIModelMutation) (adminAIModel, error) {
+	var updated adminAIModel
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		for i := range data.AIModels {
+			if data.AIModels[i].ID != id {
+				continue
+			}
+			oldModelName := data.AIModels[i].ModelName
+			if req.ModelName != "" {
+				nextModelName := strings.TrimSpace(req.ModelName)
+				data.AIModels[i].ModelName = nextModelName
+				for moduleIndex := range data.AIModules {
+					for modelIndex, modelName := range data.AIModules[moduleIndex].BoundModels {
+						if strings.EqualFold(strings.TrimSpace(modelName), oldModelName) {
+							data.AIModules[moduleIndex].BoundModels[modelIndex] = nextModelName
+						}
+					}
+				}
+			}
+			if req.ModelType != "" {
+				data.AIModels[i].ModelType = req.ModelType
+			}
+			if req.Provider != "" {
+				data.AIModels[i].Provider = req.Provider
+			}
+			if req.CapabilityCode != nil {
+				data.AIModels[i].CapabilityCode = req.CapabilityCode
+			}
+			if req.ModuleCode != "" {
+				data.AIModels[i].ModuleCode = canonicalModuleCode(req.ModuleCode)
+			}
+			if req.Status != "" {
+				data.AIModels[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
+			}
+			if req.FallbackModel != nil {
+				data.AIModels[i].FallbackModel = strings.TrimSpace(*req.FallbackModel)
+			}
+			if req.SortWeight > 0 {
+				data.AIModels[i].SortWeight = req.SortWeight
+			}
+			if req.AllowFallbackSwitch != nil {
+				data.AIModels[i].AllowFallbackSwitch = *req.AllowFallbackSwitch
+			}
+			data.AIModels[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.AIModels[i]
+			return nil
+		}
+		return fmt.Errorf("ai model not found: %s", id)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) UpdateAdminAIParameterSchema(id string, req adminAIParameterSchemaMutation) (adminAIParameterSchema, error) {
+	var updated adminAIParameterSchema
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		for i := range data.AIParameterSchemas {
+			if data.AIParameterSchemas[i].ID != id {
+				continue
+			}
+			if req.SchemaJSON.Fields != nil {
+				data.AIParameterSchemas[i].SchemaJSON = req.SchemaJSON
+			}
+			if req.Status != "" {
+				data.AIParameterSchemas[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
+			}
+			data.AIParameterSchemas[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.AIParameterSchemas[i]
+			return nil
+		}
+		return fmt.Errorf("ai parameter schema not found: %s", id)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) UpdateAdminTenantModuleLimit(id string, req adminTenantModuleLimitMutation) (adminTenantModuleLimit, error) {
+	var updated adminTenantModuleLimit
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		for i := range data.TenantModuleLimits {
+			if data.TenantModuleLimits[i].ID != id {
+				continue
+			}
+			if req.TenantID != "" {
+				data.TenantModuleLimits[i].TenantID = req.TenantID
+			}
+			if req.AgentID != "" {
+				data.TenantModuleLimits[i].AgentID = req.AgentID
+			}
+			if req.PackageID != "" {
+				data.TenantModuleLimits[i].PackageID = req.PackageID
+			}
+			if req.ModelName != "" {
+				data.TenantModuleLimits[i].ModelName = req.ModelName
+			}
+			if req.LimitJSON != nil {
+				data.TenantModuleLimits[i].LimitJSON = req.LimitJSON
+			}
+			if req.Status != "" {
+				data.TenantModuleLimits[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
+			}
+			data.TenantModuleLimits[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.TenantModuleLimits[i]
+			return nil
+		}
+		return fmt.Errorf("tenant module limit not found: %s", id)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) UpdateAdminBillingRule(id string, req adminBillingRuleMutation) (adminBillingRule, error) {
+	var updated adminBillingRule
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		*data = normalizeAICapabilityDefaults(*data)
+		for i := range data.BillingRules {
+			if data.BillingRules[i].ID != id {
+				continue
+			}
+			if req.BillingType != "" {
+				data.BillingRules[i].BillingType = req.BillingType
+			}
+			if req.BasePrice >= 0 {
+				data.BillingRules[i].BasePrice = req.BasePrice
+			}
+			if req.CostPrice >= 0 {
+				data.BillingRules[i].CostPrice = req.CostPrice
+			}
+			if req.CurrencyType != "" {
+				data.BillingRules[i].CurrencyType = req.CurrencyType
+			}
+			if req.ParameterMultiplier != nil {
+				data.BillingRules[i].ParameterMultiplier = req.ParameterMultiplier
+			}
+			if req.Status != "" {
+				data.BillingRules[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
+			}
+			data.BillingRules[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = normalizeBillingRuleAliases(data.BillingRules[i])
+			return nil
+		}
+		return fmt.Errorf("billing rule not found: %s", id)
+	})
+	return updated, err
+}
+
 func (s *jsonStore) CreateAdminCommission(req adminCommissionMutation) (adminCommission, error) {
 	var created adminCommission
 	err := s.updateAdmin(func(data *adminPlatformData) error {
@@ -825,11 +1949,59 @@ func (s *jsonStore) CreateAdminCommission(req adminCommissionMutation) (adminCom
 	return created, err
 }
 
+func (s *jsonStore) ReviewAdminCommission(id string, status string) (adminCommission, error) {
+	var updated adminCommission
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		status = strings.ToUpper(strings.TrimSpace(status))
+		if status != "APPROVED" && status != "REJECTED" {
+			return fmt.Errorf("invalid commission status: %s", status)
+		}
+		for i := range data.Commissions {
+			if data.Commissions[i].ID != id {
+				continue
+			}
+			data.Commissions[i].Status = status
+			if data.Commissions[i].RuleSnapshot == nil {
+				data.Commissions[i].RuleSnapshot = map[string]any{}
+			}
+			data.Commissions[i].RuleSnapshot["reviewedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.Commissions[i]
+			return nil
+		}
+		return fmt.Errorf("commission not found: %s", id)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) UpdateMarketingCommissionRule(id string, req adminCommissionRuleMutation) (adminCommissionRule, error) {
+	var updated adminCommissionRule
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		if len(data.CommissionRules) == 0 {
+			data.CommissionRules = defaultCommissionRules()
+		}
+		for i := range data.CommissionRules {
+			if data.CommissionRules[i].ID != id {
+				continue
+			}
+			rule := applyCommissionRuleMutation(data.CommissionRules[i], req)
+			data.CommissionRules[i] = rule
+			updated = rule
+			return nil
+		}
+		return fmt.Errorf("commission rule not found: %s", id)
+	})
+	return updated, err
+}
+
 func (s *jsonStore) CreateAdminWithdrawal(req adminWithdrawalMutation) (adminWithdrawal, error) {
 	var created adminWithdrawal
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		if req.AgentID == "" || req.AmountCents <= 0 {
 			return errors.New("agentId and positive amountCents are required")
+		}
+		available := availableWithdrawalCents(data.Commissions, data.Withdrawals, req.AgentID)
+		if req.AmountCents > available {
+			return fmt.Errorf("可提现余额不足：当前可提现 %s，申请提现 %s", moneyText(available), moneyText(req.AmountCents))
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		created = adminWithdrawal{
@@ -843,6 +2015,38 @@ func (s *jsonStore) CreateAdminWithdrawal(req adminWithdrawalMutation) (adminWit
 		return nil
 	})
 	return created, err
+}
+
+func availableWithdrawalCents(commissions []adminCommission, withdrawals []adminWithdrawal, agentID string) int {
+	settledCommission := 0
+	for _, item := range commissions {
+		if item.AgentID != agentID {
+			continue
+		}
+		switch strings.ToUpper(item.Status) {
+		case "SETTLED", "PAID", "APPROVED":
+			settledCommission += item.AmountCents
+		}
+	}
+	lockedWithdrawal := 0
+	for _, item := range withdrawals {
+		if item.AgentID != agentID {
+			continue
+		}
+		switch strings.ToUpper(item.Status) {
+		case "APPROVED", "PAID", "SETTLED", "PENDING":
+			lockedWithdrawal += item.AmountCents
+		}
+	}
+	available := settledCommission - lockedWithdrawal
+	if available < 0 {
+		return 0
+	}
+	return available
+}
+
+func moneyText(cents int) string {
+	return fmt.Sprintf("￥%.2f", float64(cents)/100)
 }
 
 func (s *jsonStore) ReviewAdminWithdrawal(id string, status string) (adminWithdrawal, error) {
@@ -869,9 +2073,15 @@ func (s *jsonStore) ReviewAdminWithdrawal(id string, status string) (adminWithdr
 func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (generationTask, error) {
 	var task generationTask
 	if err := s.update(func(data *platformData) error {
+		userID := strings.TrimSpace(req.UserID)
+		if userID == "" {
+			userID = "user_000002"
+		}
+		adminData := adminDataFromPlatformData(*data)
+		rule := billingRuleForRequest(req, adminData)
 		count := imageCount(req.Params)
-		pointCost := count * modelPointCost(req.Model)
-		available := pointsAvailable(*data)
+		pointCost := generationPointCostForRequest(req, adminData)
+		available := pointsAvailableForUser(*data, userID)
 		if available < pointCost {
 			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
 		}
@@ -880,7 +2090,7 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		resultIDs := make([]string, 0, count)
 		task = generationTask{
 			ID:               taskID,
-			UserID:           "user_000002",
+			UserID:           userID,
 			Type:             req.Type,
 			Prompt:           req.Prompt,
 			Params:           req.Params,
@@ -893,16 +2103,23 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 			UpdatedAt:        now,
 			WorkerFinishedAt: now,
 		}
+		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 		for i := 0; i < count; i++ {
 			assetID := nextID(data.Counters, "asset")
 			referenceCount := 0
 			referenceImages := req.Params["referenceImages"]
+			inputImageIds := req.Params["inputImageIds"]
+			inputImagesSnapshot := req.Params["inputImagesSnapshot"]
+			maskDraft := req.Params["maskDraft"]
+			maskTargetImageId := req.Params["maskTargetImageId"]
+			maskImageId := req.Params["maskImageId"]
 			if items, ok := referenceImages.([]any); ok {
 				referenceCount = len(items)
 			}
 			imageURL := promptPreviewImage(req.Prompt)
 			contentType := "image/svg+xml"
 			source := "local-prompt-preview"
+			mediaType := "image"
 			width := previewImageWidth
 			height := previewImageHeight
 			thumbnailURL := imageURL
@@ -927,30 +2144,46 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 			if thumbnailURL == "" {
 				thumbnailURL = imageURL
 			}
+			if isVideoGenerationType(req.Type) {
+				if videoURL := providerTaskString(req, "videoUrl"); videoURL != "" {
+					imageURL = videoURL
+					mediaType = "video"
+					contentType = "video/mp4"
+					source = firstNonEmptyString(providerTaskString(req, "provider"), "video-provider")
+					thumbnailURL = firstNonEmptyString(providerTaskString(req, "thumbnailUrl"), thumbnailURL)
+				}
+			}
 			task.ResultIDs = append(task.ResultIDs, assetID)
 			data.Assets = append(data.Assets, asset{
 				ID:           assetID,
-				UserID:       "user_000002",
+				UserID:       userID,
 				TaskID:       taskID,
-				Name:         fmt.Sprintf("TEXT_TO_IMAGE-%s-%02d", taskID, i+1),
-				MediaType:    "image",
+				Name:         generationAssetName(req.Type, taskID, i),
+				MediaType:    mediaType,
 				URL:          imageURL,
 				ThumbnailURL: thumbnailURL,
 				Favorite:     false,
 				Metadata: map[string]any{
-					"prompt":          req.Prompt,
-					"model":           req.Model,
-					"type":            req.Type,
-					"sourceType":      req.Type,
-					"contentType":     contentType,
-					"source":          source,
-					"thumbnailUrl":    thumbnailURL,
-					"width":           width,
-					"height":          height,
-					"resolution":      fmt.Sprintf("%dx%d", width, height),
-					"index":           i + 1,
-					"referenceCount":  referenceCount,
-					"referenceImages": referenceImages,
+					"prompt":              req.Prompt,
+					"model":               req.Model,
+					"type":                req.Type,
+					"module_code":         task.ModuleCode,
+					"billing_type":        task.BillingType,
+					"sourceType":          req.Type,
+					"contentType":         contentType,
+					"source":              source,
+					"thumbnailUrl":        thumbnailURL,
+					"width":               width,
+					"height":              height,
+					"resolution":          fmt.Sprintf("%dx%d", width, height),
+					"index":               i + 1,
+					"referenceCount":      referenceCount,
+					"referenceImages":     referenceImages,
+					"inputImageIds":       inputImageIds,
+					"inputImagesSnapshot": inputImagesSnapshot,
+					"maskDraft":           maskDraft,
+					"maskTargetImageId":   maskTargetImageId,
+					"maskImageId":         maskImageId,
 				},
 				CreatedAt: now,
 				UpdatedAt: now,
@@ -960,11 +2193,562 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		nextAvailable := available - pointCost
 		data.PointsAvailable = &nextAvailable
 		setPlatformPointAccount(data, task.UserID, nextAvailable)
+		adminDefaults := withAdminDefaults(adminPlatformData{
+			Users:         data.Users,
+			ChannelAgents: data.ChannelAgents,
+		})
+		user := userMap(adminDefaults.Users)[task.UserID]
+		directAgent, hasDirectAgent := directActiveAgentForUser(adminDefaults.Users, adminDefaults.ChannelAgents, task.UserID)
+		event := generationBillingEvent(task, available, nextAvailable, now, user, directAgent, hasDirectAgent)
+		data.BillingEvents = append(data.BillingEvents, event)
+		commissionData := withAdminDefaults(adminPlatformData{
+			Users:           data.Users,
+			ChannelAgents:   data.ChannelAgents,
+			Commissions:     data.Commissions,
+			CommissionRules: data.CommissionRules,
+		})
+		data.Commissions = append(data.Commissions, commissionArtifactsForUser(&commissionData, task.UserID, task.ID, commissionOrderTypeForModule(task.ModuleCode), task.ModuleCode, event.AmountCents, now)...)
 		return nil
 	}); err != nil {
 		return generationTask{}, err
 	}
 	return task, nil
+}
+
+func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest) (generationTask, error) {
+	var task generationTask
+	if err := s.update(func(data *platformData) error {
+		userID := strings.TrimSpace(req.UserID)
+		if userID == "" {
+			userID = "user_000002"
+		}
+		adminData := adminDataFromPlatformData(*data)
+		rule := billingRuleForRequest(req, adminData)
+		pointCost := generationPointCostForRequest(req, adminData)
+		available := pointsAvailableForUser(*data, userID)
+		if available < pointCost {
+			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		task = generationTask{
+			ID:        nextID(data.Counters, "task"),
+			UserID:    userID,
+			Type:      req.Type,
+			Prompt:    req.Prompt,
+			Params:    req.Params,
+			Model:     req.Model,
+			Status:    "PROCESSING",
+			Progress:  5,
+			PointCost: pointCost,
+			ResultIDs: []string{},
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+		data.GenerationTasks = append(data.GenerationTasks, task)
+		return nil
+	}); err != nil {
+		return generationTask{}, err
+	}
+	return task, nil
+}
+
+func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRequest) (generationTask, error) {
+	var task generationTask
+	if err := s.update(func(data *platformData) error {
+		index := -1
+		for i := range data.GenerationTasks {
+			if data.GenerationTasks[i].ID == id {
+				index = i
+				task = data.GenerationTasks[i]
+				break
+			}
+		}
+		if index < 0 {
+			return fmt.Errorf("generation task not found: %s", id)
+		}
+		if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+			return nil
+		}
+		pointCost := task.PointCost
+		if pointCost <= 0 {
+			pointCost = generationPointCostForRequest(req, adminDataFromPlatformData(*data))
+		}
+		available := pointsAvailableForUser(*data, task.UserID)
+		if available < pointCost {
+			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		req.UserID = task.UserID
+		req.Type = firstNonEmptyString(req.Type, task.Type)
+		req.Prompt = firstNonEmptyString(req.Prompt, task.Prompt)
+		req.Model = firstNonEmptyString(req.Model, task.Model)
+		if req.Params == nil {
+			req.Params = task.Params
+		}
+		adminData := adminDataFromPlatformData(*data)
+		rule := billingRuleForRequest(req, adminData)
+		task.Status = "SUCCEEDED"
+		task.Progress = 100
+		task.PointCost = pointCost
+		task.Error = nil
+		task.UpdatedAt = now
+		task.WorkerFinishedAt = now
+		task.ResultIDs = []string{}
+		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+		count := imageCount(req.Params)
+		for i := 0; i < count; i++ {
+			assetID := nextID(data.Counters, "asset")
+			item := generatedAssetForRequest(req, task.UserID, task.ID, assetID, i, now)
+			data.Assets = append(data.Assets, item)
+			task.ResultIDs = append(task.ResultIDs, assetID)
+		}
+		data.GenerationTasks[index] = task
+		nextAvailable := available - pointCost
+		data.PointsAvailable = &nextAvailable
+		setPlatformPointAccount(data, task.UserID, nextAvailable)
+		adminDefaults := withAdminDefaults(adminPlatformData{
+			Users:         data.Users,
+			ChannelAgents: data.ChannelAgents,
+		})
+		user := userMap(adminDefaults.Users)[task.UserID]
+		directAgent, hasDirectAgent := directActiveAgentForUser(adminDefaults.Users, adminDefaults.ChannelAgents, task.UserID)
+		event := generationBillingEvent(task, available, nextAvailable, now, user, directAgent, hasDirectAgent)
+		data.BillingEvents = append(data.BillingEvents, event)
+		commissionData := withAdminDefaults(adminPlatformData{
+			Users:           data.Users,
+			ChannelAgents:   data.ChannelAgents,
+			Commissions:     data.Commissions,
+			CommissionRules: data.CommissionRules,
+		})
+		data.Commissions = append(data.Commissions, commissionArtifactsForUser(&commissionData, task.UserID, task.ID, commissionOrderTypeForModule(task.ModuleCode), task.ModuleCode, event.AmountCents, now)...)
+		return nil
+	}); err != nil {
+		return generationTask{}, err
+	}
+	return task, nil
+}
+
+func (s *jsonStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBillingEvent, error) {
+	var event adminBillingEvent
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		userID := strings.TrimSpace(task.UserID)
+		if userID == "" {
+			userID = "user_000002"
+		}
+		task.UserID = userID
+		for _, item := range data.BillingEvents {
+			if item.TaskID == task.TaskID && strings.EqualFold(item.MetricCode, billingMetricPPTGenerate) {
+				event = item
+				return nil
+			}
+		}
+		pointCost := pptPointCostWithRules(task, *data)
+		available := pointsAvailableForAdminUser(*data, userID)
+		if available < pointCost {
+			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		nextAvailable := available - pointCost
+		data.PointsAvailable = &nextAvailable
+		setPointAccount(data, userID, nextAvailable)
+
+		user := userMap(data.Users)[userID]
+		directAgent, hasDirectAgent := directActiveAgentForUser(data.Users, data.ChannelAgents, userID)
+		event = pptBillingEvent(task, pointCost, available, nextAvailable, now, user, directAgent, hasDirectAgent)
+		data.BillingEvents = append(data.BillingEvents, event)
+		data.Commissions = append(data.Commissions, commissionArtifactsForUser(data, userID, task.TaskID, "PPT_GENERATION", "ppt_generation", event.AmountCents, now)...)
+		return nil
+	})
+	return event, err
+}
+
+func (s *jsonStore) FailGenerationTask(id string, message string) (generationTask, error) {
+	var task generationTask
+	if err := s.update(func(data *platformData) error {
+		for i := range data.GenerationTasks {
+			if data.GenerationTasks[i].ID != id {
+				continue
+			}
+			task = data.GenerationTasks[i]
+			if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+				return nil
+			}
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			task.Status = "FAILED"
+			task.Progress = 100
+			task.Error = map[string]any{"message": message}
+			task.FailureReason = message
+			task.UpdatedAt = now
+			task.WorkerFinishedAt = now
+			data.GenerationTasks[i] = task
+			return nil
+		}
+		return fmt.Errorf("generation task not found: %s", id)
+	}); err != nil {
+		return generationTask{}, err
+	}
+	return task, nil
+}
+
+func generationBillingEvent(task generationTask, before int, after int, now string, user adminUser, agent adminChannelAgent, hasAgent bool) adminBillingEvent {
+	amountCents := task.PointCost * pointUnitAmountCents
+	agentID := ""
+	if hasAgent {
+		agentID = agent.ID
+	}
+	moduleCode := firstNonEmptyString(task.ModuleCode, stringValue(task.Params["module_code"]), moduleCodeForType(task.Type))
+	billingType := firstNonEmptyString(task.BillingType, stringValue(task.Params["billing_type"]))
+	quantity := int(math.Ceil(billingQuantity(billingType, createGenerationTaskRequest{Type: task.Type, Model: task.Model, Params: task.Params, ModuleCode: moduleCode})))
+	if quantity < 1 {
+		quantity = 1
+	}
+	event := adminBillingEvent{
+		ID:                "evt_" + shortID(task.ID),
+		TransactionID:     "txn_" + shortID(task.ID),
+		UserID:            task.UserID,
+		AgentID:           agentID,
+		TenantID:          task.TenantID,
+		OperationCenterID: task.OperationCenterID,
+		ModuleCode:        moduleCode,
+		TaskID:            task.ID,
+		AssetIDs:          task.ResultIDs,
+		MetricCode:        billingMetricForModule(moduleCode),
+		Quantity:          quantity,
+		UnitAmountCents:   pointUnitAmountCents,
+		AmountCents:       amountCents,
+		PointCost:         task.PointCost,
+		BalanceBefore:     before,
+		BalanceAfter:      after,
+		Model:             task.Model,
+		Status:            strings.ToUpper(task.Status),
+		OccurredAt:        now,
+		Metadata: map[string]any{
+			"prompt":      task.Prompt,
+			"source":      "generation_task",
+			"module_code": moduleCode,
+			"customer":    user.Name,
+			"referredBy":  user.ReferredBy,
+		},
+	}
+	return enrichBillingEventWithTask(event, task)
+}
+
+func pptBillingEvent(task pptapp.Task, pointCost int, before int, after int, now string, user adminUser, agent adminChannelAgent, hasAgent bool) adminBillingEvent {
+	amountCents := pointCost * pointUnitAmountCents
+	agentID := ""
+	if hasAgent {
+		agentID = agent.ID
+	}
+	model := strings.TrimSpace(task.TextModel)
+	if model == "" {
+		model = "ppt-text-model"
+	}
+	return adminBillingEvent{
+		ID:              "evt_" + shortID(task.TaskID+"_ppt"),
+		TransactionID:   "txn_" + shortID(task.TaskID+"_ppt"),
+		UserID:          task.UserID,
+		AgentID:         agentID,
+		TenantID:        task.UserID,
+		ModuleCode:      modulePPTGeneration,
+		TaskID:          task.TaskID,
+		AssetIDs:        []string{},
+		MetricCode:      billingMetricPPTGenerate,
+		Quantity:        pptSlideQuantity(task),
+		UnitAmountCents: pointUnitAmountCents,
+		AmountCents:     amountCents,
+		PointCost:       pointCost,
+		BalanceBefore:   before,
+		BalanceAfter:    after,
+		Model:           model,
+		Status:          "SUCCEEDED",
+		OccurredAt:      now,
+		Metadata: map[string]any{
+			"prompt":       task.Prompt,
+			"title":        task.Title,
+			"source":       "ppt_generation",
+			"module_code":  modulePPTGeneration,
+			"billing_type": "per_page",
+			"customer":     user.Name,
+			"referredBy":   user.ReferredBy,
+			"slideCount":   pptSlideQuantity(task),
+			"language":     task.Language,
+			"theme":        task.Theme,
+			"imageSource":  task.ImageSource,
+			"imageModel":   task.ImageModel,
+			"textModel":    model,
+		},
+	}
+}
+
+func billingMetricForModule(moduleCode string) string {
+	switch canonicalModuleCode(moduleCode) {
+	case moduleVideoGeneration:
+		return "video.generations"
+	case modulePPTGeneration:
+		return billingMetricPPTGenerate
+	default:
+		return billingMetricImageGenerate
+	}
+}
+
+func commissionOrderTypeForModule(moduleCode string) string {
+	switch canonicalModuleCode(moduleCode) {
+	case moduleVideoGeneration:
+		return "VIDEO_GENERATION"
+	case modulePPTGeneration:
+		return "PPT_GENERATION"
+	default:
+		return "IMAGE_GENERATION"
+	}
+}
+
+func pptPointCost(task pptapp.Task) int {
+	return pptPointCostWithRules(task, normalizeAICapabilityDefaults(seedAdminData()))
+}
+
+func pptPointCostWithRules(task pptapp.Task, data adminPlatformData) int {
+	model := strings.TrimSpace(task.TextModel)
+	if model == "" {
+		model = "ppt-text-model"
+	}
+	req := createGenerationTaskRequest{
+		Type:       "PPT_GENERATION",
+		ModuleCode: modulePPTGeneration,
+		Model:      model,
+		Params: map[string]any{
+			"page_count":         pptSlideQuantity(task),
+			"slideCount":         pptSlideQuantity(task),
+			"with_images":        strings.TrimSpace(task.ImageSource) != "",
+			"uploaded_file":      false,
+			"web_search_enabled": task.EnableWebSearch,
+			"theme_style":        task.Theme,
+			"language":           task.Language,
+		},
+	}
+	return generationPointCostForRequest(req, data)
+}
+
+func pptSlideQuantity(task pptapp.Task) int {
+	if task.SlideCount > 0 {
+		return task.SlideCount
+	}
+	if len(task.Slides) > 0 {
+		return len(task.Slides)
+	}
+	if task.Outline != nil && len(task.Outline.Slides) > 0 {
+		return len(task.Outline.Slides)
+	}
+	return 1
+}
+
+func isUsageBillingMetric(metric string) bool {
+	switch strings.TrimSpace(metric) {
+	case billingMetricImageGenerate, billingMetricPPTGenerate:
+		return true
+	default:
+		return false
+	}
+}
+
+func usageTypeForMetric(metric string) string {
+	if strings.EqualFold(strings.TrimSpace(metric), billingMetricPPTGenerate) {
+		return "PPT_GENERATION"
+	}
+	return "IMAGE_GENERATION"
+}
+
+func directActiveAgentForUser(users []adminUser, agents []adminChannelAgent, userID string) (adminChannelAgent, bool) {
+	usersByID := userMap(users)
+	user := usersByID[userID]
+	if strings.TrimSpace(user.ReferredBy) == "" {
+		return adminChannelAgent{}, false
+	}
+	agent, ok := agentByUserMap(agents)[user.ReferredBy]
+	if !ok || !strings.EqualFold(agent.Status, "ACTIVE") {
+		return adminChannelAgent{}, false
+	}
+	return agent, true
+}
+
+func commissionArtifactsForUser(data *adminPlatformData, userID string, orderID string, orderType string, source string, amountCents int, now string) []adminCommission {
+	if data == nil || amountCents <= 0 {
+		return nil
+	}
+	rules := activeCommissionRules(data.CommissionRules, orderType)
+	if len(rules) == 0 {
+		return nil
+	}
+	chain := activeAgentChainForUser(data.Users, data.ChannelAgents, userID)
+	if len(chain) == 0 {
+		return nil
+	}
+	ids := commissionIDs(data.Commissions)
+	type matchedCommissionRule struct {
+		rule  adminCommissionRule
+		agent adminChannelAgent
+	}
+	matchedRules := []matchedCommissionRule{}
+	maxTotalRate := 0.0
+	for _, rule := range rules {
+		if rule.RelationDepth <= 0 || rule.RelationDepth > len(chain) {
+			continue
+		}
+		agent := chain[rule.RelationDepth-1]
+		if !commissionRuleMatchesAgent(rule, agent) {
+			continue
+		}
+		matchedRules = append(matchedRules, matchedCommissionRule{rule: rule, agent: agent})
+		if rule.MaxTotalRate > maxTotalRate {
+			maxTotalRate = rule.MaxTotalRate
+		}
+	}
+	maxTotalCents := 0
+	if maxTotalRate > 0 {
+		maxTotalCents = int(math.Round(float64(amountCents) * maxTotalRate))
+	}
+	items := []adminCommission{}
+	totalCents := 0
+	for _, match := range matchedRules {
+		rule := match.rule
+		agent := match.agent
+		if commissionExistsForRule(data.Commissions, orderID, agent.ID, rule.ID) {
+			continue
+		}
+		commissionCents := rule.FixedAmountCents
+		if commissionCents <= 0 && rule.Rate > 0 {
+			commissionCents = int(math.Round(float64(amountCents) * rule.Rate))
+		}
+		if commissionCents <= 0 {
+			continue
+		}
+		if maxTotalCents > 0 && totalCents+commissionCents > maxTotalCents {
+			commissionCents = maxTotalCents - totalCents
+		}
+		if commissionCents <= 0 {
+			continue
+		}
+		id := uniqueAdminID("commission", ids)
+		ids[id] = true
+		totalCents += commissionCents
+		items = append(items, adminCommission{
+			ID:          id,
+			OrderID:     orderID,
+			AgentID:     agent.ID,
+			AmountCents: commissionCents,
+			Rate:        rule.Rate,
+			Status:      "PENDING",
+			RuleSnapshot: map[string]any{
+				"source":           source,
+				"orderType":        strings.ToUpper(strings.TrimSpace(orderType)),
+				"amountCents":      amountCents,
+				"rate":             rule.Rate,
+				"fixedAmountCents": rule.FixedAmountCents,
+				"maxTotalRate":     rule.MaxTotalRate,
+				"relationDepth":    rule.RelationDepth,
+				"ruleId":           rule.ID,
+				"ruleName":         rule.Name,
+				"settlementMode":   "RULE_ENGINE",
+			},
+			CreatedAt: now,
+		})
+	}
+	return items
+}
+
+func commissionRuleMatchesAgent(rule adminCommissionRule, agent adminChannelAgent) bool {
+	earnerRole := strings.ToUpper(strings.TrimSpace(rule.EarnerRole))
+	if earnerRole == "" || earnerRole == "AGENT" {
+		return true
+	}
+	return earnerRole == agentRoleForLevel(agent.Level)
+}
+
+func applyCommissionRuleMutation(rule adminCommissionRule, req adminCommissionRuleMutation) adminCommissionRule {
+	if req.Name != "" {
+		rule.Name = strings.TrimSpace(req.Name)
+	}
+	if req.OrderType != "" {
+		rule.OrderType = strings.ToUpper(strings.TrimSpace(req.OrderType))
+	}
+	if req.EarnerRole != "" {
+		rule.EarnerRole = strings.ToUpper(strings.TrimSpace(req.EarnerRole))
+	}
+	if req.RelationDepth > 0 {
+		rule.RelationDepth = req.RelationDepth
+	}
+	rule.FixedAmountCents = req.FixedAmountCents
+	rule.Rate = req.Rate
+	rule.MaxTotalRate = req.MaxTotalRate
+	if req.Status != "" {
+		rule.Status = strings.ToUpper(strings.TrimSpace(req.Status))
+	}
+	if rule.Metadata == nil {
+		rule.Metadata = map[string]any{}
+	}
+	rule.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return rule
+}
+
+func activeCommissionRules(rules []adminCommissionRule, orderType string) []adminCommissionRule {
+	if len(rules) == 0 {
+		rules = defaultCommissionRules()
+	}
+	orderType = strings.ToUpper(strings.TrimSpace(orderType))
+	items := []adminCommissionRule{}
+	for _, rule := range rules {
+		if !strings.EqualFold(rule.Status, "ACTIVE") {
+			continue
+		}
+		if !strings.EqualFold(rule.OrderType, orderType) {
+			continue
+		}
+		items = append(items, rule)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].RelationDepth < items[j].RelationDepth
+	})
+	return items
+}
+
+func activeAgentChainForUser(users []adminUser, agents []adminChannelAgent, userID string) []adminChannelAgent {
+	direct, ok := directActiveAgentForUser(users, agents, userID)
+	if !ok {
+		return nil
+	}
+	agentsByID := agentByIDMap(agents)
+	chain := []adminChannelAgent{direct}
+	current := direct
+	for len(chain) < 2 && strings.TrimSpace(current.ParentID) != "" {
+		parent := agentsByID[current.ParentID]
+		if parent.ID == "" || !strings.EqualFold(parent.Status, "ACTIVE") {
+			break
+		}
+		chain = append(chain, parent)
+		current = parent
+	}
+	return chain
+}
+
+func commissionExistsForRule(items []adminCommission, orderID string, agentID string, ruleID string) bool {
+	for _, item := range items {
+		if item.OrderID != orderID || item.AgentID != agentID {
+			continue
+		}
+		if ruleID == "" || stringMetadataValueFromMap(item.RuleSnapshot, "ruleId") == ruleID {
+			return true
+		}
+	}
+	return false
+}
+
+func billingEventExists(items []adminBillingEvent, taskID string, metricCode string) bool {
+	for _, item := range items {
+		if item.TaskID == taskID && strings.EqualFold(item.MetricCode, metricCode) {
+			return true
+		}
+	}
+	return false
 }
 
 func modelPointCost(model string) int {
@@ -1168,8 +2952,49 @@ func pointsAvailable(data platformData) int {
 	return *data.PointsAvailable
 }
 
+func pointsAvailableForUser(data platformData, userID string) int {
+	for _, item := range data.PointAccounts {
+		if item.UserID == userID {
+			return item.Available
+		}
+	}
+	if userID == "user_000002" {
+		return pointsAvailable(data)
+	}
+	return defaultPointsAvailable
+}
+
+func pointsAvailableForAdminUser(data adminPlatformData, userID string) int {
+	for _, item := range data.PointAccounts {
+		if item.UserID == userID {
+			return item.Available
+		}
+	}
+	if userID == "user_000002" && data.PointsAvailable != nil {
+		return *data.PointsAvailable
+	}
+	return defaultPointsAvailable
+}
+
+func totalPointsForUser(events []adminBillingEvent, userID string, available int, frozen int) int {
+	consumed := 0
+	for _, event := range events {
+		if event.UserID == userID && event.PointCost > 0 {
+			consumed += event.PointCost
+		}
+	}
+	total := available + frozen + consumed
+	if total < available+frozen {
+		return available + frozen
+	}
+	return total
+}
+
 func imageCount(params map[string]any) int {
 	value, ok := params["count"]
+	if !ok {
+		value, ok = params["n"]
+	}
 	if !ok {
 		return 1
 	}
@@ -1189,6 +3014,14 @@ func imageCount(params map[string]any) int {
 		return 8
 	}
 	return count
+}
+
+func generationAssetName(taskType string, taskID string, index int) string {
+	prefix := strings.ToUpper(strings.TrimSpace(taskType))
+	if prefix == "" {
+		prefix = "TEXT_TO_IMAGE"
+	}
+	return fmt.Sprintf("%s-%s-%02d", prefix, taskID, index+1)
 }
 
 func normalizeUserAIState(state userAIState, userID string) userAIState {

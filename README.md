@@ -8,7 +8,7 @@
 - 移动端：`frontend-vue`，uni-app、Vue 3、Pinia、TypeScript；请求层使用 `uni.request` 封装，以兼容 H5、小程序和 App。
 - 后端：`backend-go`，Go 1.25、Gin、PostgreSQL、Redis；入口为 `backend-go/cmd/api`。
 - 数据：Docker 环境使用 PostgreSQL、Redis、RabbitMQ、MinIO。当前业务状态优先写入 PostgreSQL `platform_state`，本地无数据库时 fallback 到 `data/store.json`，后续继续拆分到领域表。
-- Legacy：`frontend`、`backend`、`admin-web` 保留为历史实现参考，不再作为目标架构的默认开发入口。
+- Legacy：旧 `frontend`、`backend`、`admin-web` 目录已移除；当前开发入口统一为 `frontend-vue`、`admin-vue`、`backend-go`。
 
 ## 本地开发
 

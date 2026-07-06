@@ -30,7 +30,7 @@ export interface AiSettingsDraft {
 }
 
 const aiSettingsStorageKey = "xianzhi-ai-image-settings";
-const aiSettingsVersion = 1;
+const aiSettingsVersion = 2;
 
 export function createAiSettingsDefaults(model = "gpt-image-2"): AiSettingsDraft {
   return {
@@ -45,7 +45,7 @@ export function createAiSettingsDefaults(model = "gpt-image-2"): AiSettingsDraft
     timeout: 300,
     streamImages: true,
     submitMode: "ctrl-enter",
-    clearInputAfterSubmit: true,
+    clearInputAfterSubmit: false,
     persistInputOnRestart: true,
     reuseTaskApiProfile: true,
     showRetryButton: false,
@@ -123,7 +123,10 @@ function readPersistedSettings(fallbackModel: string): AiSettingsDraft {
     const parsed = JSON.parse(raw) as unknown;
     const record = asRecord(parsed);
     const payload = "settings" in record ? record.settings : parsed;
-    return normalizeAiSettings(payload, fallbackModel);
+    const normalized = normalizeAiSettings(payload, fallbackModel);
+    const version = Number(record.version || 0);
+    if (version < 2) normalized.clearInputAfterSubmit = false;
+    return normalized;
   } catch {
     return fallback;
   }

@@ -1,5 +1,5 @@
 const tokenKey = "token";
-const requestTimeout = 180000;
+const requestTimeout = 600000;
 const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
 const apiBaseURL = String(env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
 

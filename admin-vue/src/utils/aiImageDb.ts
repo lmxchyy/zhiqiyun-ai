@@ -1,7 +1,7 @@
 const DB_NAME = "xianzhi-ai-image-workspace";
 const DB_VERSION = 1;
 const STORE_NAME = "kv";
-const SNAPSHOT_KEY = "online-image-snapshot";
+const SNAPSHOT_KEY = "online-image-snapshot-v2";
 const DRAFT_KEY = "ai-image-draft";
 const ORIGINAL_IMAGE_INDEX_KEY = "ai-original-image-index";
 const ORIGINAL_IMAGE_KEY_PREFIX = "ai-original-image:";
@@ -46,6 +46,21 @@ export interface AiCachedOriginalImage {
 
 function canUseIndexedDB() {
   return typeof window !== "undefined" && "indexedDB" in window;
+}
+
+function currentCacheScope() {
+  if (typeof window === "undefined") return "anonymous";
+  const token = window.localStorage.getItem("token") || window.sessionStorage.getItem("token") || "";
+  if (!token) return "anonymous";
+  let hash = 0;
+  for (let index = 0; index < token.length; index += 1) {
+    hash = (hash * 31 + token.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function scopedKey(key: string) {
+  return `${key}:${currentCacheScope()}`;
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -123,33 +138,58 @@ function trimArray(value: unknown, limit: number) {
   return Array.isArray(value) ? value.slice(0, limit) : value;
 }
 
+function isVideoLikeRecord(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const record = value as AiImageCacheRecord;
+  const type = String(record.type || record.sourceType || "").toUpperCase();
+  const mediaType = String(record.mediaType || "").toLowerCase();
+  const model = String(record.model || "").toLowerCase();
+  const params = record.params && typeof record.params === "object" ? record.params as AiImageCacheRecord : {};
+  const inputMode = String(params.inputMode || record.mode || "").toLowerCase();
+  const url = String(record.outputUrl || record.resultUrl || record.imageUrl || record.url || "");
+  return type.includes("VIDEO")
+    || mediaType === "video"
+    || inputMode.includes("video")
+    || model.includes("video")
+    || /\.mp4(\?|$)/i.test(url);
+}
+
+function imageOnlyArray(value: unknown, limit: number) {
+  return Array.isArray(value) ? value.filter((item) => !isVideoLikeRecord(item)).slice(0, limit) : value;
+}
+
 export function normalizeAiImageSnapshotData(data: AiImageCacheRecord): AiImageCacheRecord {
   return {
     ...data,
-    recentTasks: trimArray(data.recentTasks, MAX_SNAPSHOT_TASKS),
-    assets: trimArray(data.assets, MAX_SNAPSHOT_ASSETS),
-    recentAssets: trimArray(data.recentAssets, MAX_SNAPSHOT_ASSETS)
+    recentTasks: imageOnlyArray(data.recentTasks, MAX_SNAPSHOT_TASKS),
+    assets: imageOnlyArray(data.assets, MAX_SNAPSHOT_ASSETS),
+    recentAssets: imageOnlyArray(data.recentAssets, MAX_SNAPSHOT_ASSETS)
   };
 }
 
 export async function readAiImageSnapshot(): Promise<AiImageSnapshot | null> {
-  return readValue<AiImageSnapshot>(SNAPSHOT_KEY);
+  const snapshot = await readValue<AiImageSnapshot>(scopedKey(SNAPSHOT_KEY));
+  if (!snapshot?.data) return snapshot;
+  return {
+    ...snapshot,
+    data: normalizeAiImageSnapshotData(snapshot.data)
+  };
 }
 
 export async function writeAiImageSnapshot(data: AiImageCacheRecord): Promise<void> {
   const plainData = JSON.parse(JSON.stringify(data)) as AiImageCacheRecord;
-  await writeValue<AiImageSnapshot>(SNAPSHOT_KEY, {
+  await writeValue<AiImageSnapshot>(scopedKey(SNAPSHOT_KEY), {
     data: normalizeAiImageSnapshotData(plainData),
     savedAt: Date.now()
   });
 }
 
 export async function readAiImageDraft(): Promise<AiImageDraft | null> {
-  return readValue<AiImageDraft>(DRAFT_KEY);
+  return readValue<AiImageDraft>(scopedKey(DRAFT_KEY));
 }
 
 export async function writeAiImageDraft(draft: AiImageDraft): Promise<void> {
-  await writeValue<AiImageDraft>(DRAFT_KEY, {
+  await writeValue<AiImageDraft>(scopedKey(DRAFT_KEY), {
     ...draft,
     referenceImages: draft.referenceImages
       .filter((item) => item.url.startsWith("data:") && item.url.length <= MAX_REFERENCE_DATA_URL_LENGTH)
@@ -160,17 +200,27 @@ export async function writeAiImageDraft(draft: AiImageDraft): Promise<void> {
 
 export async function readCachedOriginalImage(id: string): Promise<AiCachedOriginalImage | null> {
   if (!id) return null;
-  return readValue<AiCachedOriginalImage>(`${ORIGINAL_IMAGE_KEY_PREFIX}${id}`);
+  return readValue<AiCachedOriginalImage>(scopedKey(`${ORIGINAL_IMAGE_KEY_PREFIX}${id}`));
 }
 
 export async function writeCachedOriginalImage(image: Omit<AiCachedOriginalImage, "savedAt">): Promise<void> {
   if (!image.id || !image.dataUrl.startsWith("data:image/")) return;
   const savedImage: AiCachedOriginalImage = { ...image, savedAt: Date.now() };
-  await writeValue<AiCachedOriginalImage>(`${ORIGINAL_IMAGE_KEY_PREFIX}${image.id}`, savedImage);
-  const currentIndex = (await readValue<string[]>(ORIGINAL_IMAGE_INDEX_KEY)) || [];
+  await writeValue<AiCachedOriginalImage>(scopedKey(`${ORIGINAL_IMAGE_KEY_PREFIX}${image.id}`), savedImage);
+  const indexKey = scopedKey(ORIGINAL_IMAGE_INDEX_KEY);
+  const currentIndex = (await readValue<string[]>(indexKey)) || [];
   const nextIndex = [image.id, ...currentIndex.filter((item) => item !== image.id)];
-  await writeValue<string[]>(ORIGINAL_IMAGE_INDEX_KEY, nextIndex.slice(0, MAX_ORIGINAL_IMAGE_CACHE));
+  await writeValue<string[]>(indexKey, nextIndex.slice(0, MAX_ORIGINAL_IMAGE_CACHE));
   for (const staleId of nextIndex.slice(MAX_ORIGINAL_IMAGE_CACHE)) {
-    await deleteValue(`${ORIGINAL_IMAGE_KEY_PREFIX}${staleId}`);
+    await deleteValue(scopedKey(`${ORIGINAL_IMAGE_KEY_PREFIX}${staleId}`));
   }
+}
+
+export async function clearCurrentAiImageCache(): Promise<void> {
+  await Promise.all([
+    deleteValue(scopedKey(SNAPSHOT_KEY)),
+    deleteValue(scopedKey(DRAFT_KEY)),
+    deleteValue(SNAPSHOT_KEY),
+    deleteValue(DRAFT_KEY)
+  ]);
 }

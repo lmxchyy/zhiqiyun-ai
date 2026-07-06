@@ -54,10 +54,20 @@ func (p imageProvider) generate(ctx context.Context, req createGenerationTaskReq
 		editCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
 		images, err := p.edit(editCtx, req, references)
-		if err != nil && isTimeoutError(err) {
-			return nil, fmt.Errorf("当前图片上游未响应参考图生图接口，请切换支持 image edits 的上游或模型后重试: %w", err)
+		if err == nil {
+			return images, nil
 		}
-		return images, err
+		_, width, height := imageSize(req.Params)
+		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 90*time.Second)
+		defer fallbackCancel()
+		fallbackImages, fallbackErr := p.generateWithReferences(fallbackCtx, req, references, width, height)
+		if fallbackErr == nil {
+			return fallbackImages, nil
+		}
+		if isTimeoutError(err) {
+			return nil, fmt.Errorf("当前图片上游未响应参考图生图接口，且兼容参考图生成也失败: edits timeout: %w; generation fallback: %v", err, fallbackErr)
+		}
+		return nil, fmt.Errorf("参考图生图失败: edits error: %w; generation fallback: %v", err, fallbackErr)
 	}
 	count := imageCount(req.Params)
 	size, width, height := imageSize(req.Params)
@@ -109,21 +119,31 @@ func (p imageProvider) edit(ctx context.Context, req createGenerationTaskRequest
 		model = "gpt-image-2"
 	}
 	fields := map[string]string{
-		"model":           model,
-		"prompt":          req.Prompt,
-		"n":               strconv.Itoa(count),
-		"size":            size,
-		"response_format": "b64_json",
+		"model":  model,
+		"prompt": imageEditPrompt(req, references),
+		"size":   size,
 	}
-	images, err := p.editWithFields(ctx, fields, references, width, height)
+	addOptionalImageEditFields(fields, req.Params, count)
+	if !p.usesOfficialOpenAIEndpoint() {
+		if err := p.addCompatibleReferenceFields(ctx, fields, references); err != nil {
+			return nil, err
+		}
+	}
+	if !isGPTImage2Model(model) {
+		fields["response_format"] = "b64_json"
+	}
+	images, err := p.editWithCompatibleFields(ctx, fields, references, width, height)
 	if err == nil {
 		return images, nil
 	}
 	if isTimeoutError(err) {
 		return nil, err
 	}
+	if isGPTImage2Model(model) {
+		return nil, fmt.Errorf("GPT-Image-2 image edit failed: %w", err)
+	}
 	delete(fields, "response_format")
-	images, retryErr := p.editWithFields(ctx, fields, references, width, height)
+	images, retryErr := p.editWithCompatibleFields(ctx, fields, references, width, height)
 	if retryErr == nil {
 		return images, nil
 	}
@@ -131,7 +151,7 @@ func (p imageProvider) edit(ctx context.Context, req createGenerationTaskRequest
 		return nil, retryErr
 	}
 	fields["response_format"] = "url"
-	images, urlErr := p.editWithFields(ctx, fields, references, width, height)
+	images, urlErr := p.editWithCompatibleFields(ctx, fields, references, width, height)
 	if urlErr == nil {
 		return images, nil
 	}
@@ -158,7 +178,7 @@ func (p imageProvider) generateWithReferences(ctx context.Context, req createGen
 	}
 	body := map[string]any{
 		"model":            model,
-		"prompt":           req.Prompt,
+		"prompt":           imageEditPrompt(req, references),
 		"n":                count,
 		"size":             size,
 		"response_format":  "b64_json",
@@ -192,7 +212,99 @@ func (p imageProvider) generateWithReferences(ctx context.Context, req createGen
 	return nil, err
 }
 
-func (p imageProvider) editWithFields(ctx context.Context, fields map[string]string, references []referenceImage, width int, height int) ([]generatedImage, error) {
+func (p imageProvider) editWithCompatibleFields(ctx context.Context, fields map[string]string, references []referenceImage, width int, height int) ([]generatedImage, error) {
+	images, err := p.editWithFields(ctx, fields, references, width, height, "image[]")
+	if err == nil || isTimeoutError(err) {
+		return images, err
+	}
+	fallbackImages, fallbackErr := p.editWithFields(ctx, fields, references, width, height, "image")
+	if fallbackErr == nil {
+		return fallbackImages, nil
+	}
+	return nil, fmt.Errorf("image[] edit error: %w; image edit fallback error: %v", err, fallbackErr)
+}
+
+func addOptionalImageEditFields(fields map[string]string, params map[string]any, count int) {
+	if count > 1 {
+		fields["n"] = strconv.Itoa(count)
+	}
+	for _, item := range []struct {
+		field string
+		keys  []string
+	}{
+		{field: "quality", keys: []string{"quality", "imageQuality"}},
+		{field: "output_format", keys: []string{"output_format", "outputFormat"}},
+		{field: "moderation", keys: []string{"moderation"}},
+	} {
+		if value := firstStringParam(params, item.keys...); value != "" {
+			if item.field == "quality" {
+				value = normalizedLegacyImageQuality(value)
+				if value == "" {
+					continue
+				}
+			}
+			fields[item.field] = value
+		}
+	}
+	if value, ok := params["output_compression"]; ok && value != nil {
+		fields["output_compression"] = fmt.Sprint(value)
+	} else if value, ok := params["outputCompression"]; ok && value != nil {
+		fields["output_compression"] = fmt.Sprint(value)
+	}
+}
+
+func normalizedLegacyImageQuality(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "<nil>", "auto", "standard", "medium", "low", "draft":
+		return ""
+	case "high":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func firstStringParam(params map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value := strings.TrimSpace(fmt.Sprint(params[key]))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (p imageProvider) usesOfficialOpenAIEndpoint() bool {
+	parsed, err := url.Parse(strings.TrimSpace(p.baseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.com")
+}
+
+func (p imageProvider) addCompatibleReferenceFields(ctx context.Context, fields map[string]string, references []referenceImage) error {
+	referenceURLs, err := p.referenceDataURLs(ctx, references)
+	if err != nil {
+		return err
+	}
+	if len(referenceURLs) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(referenceURLs)
+	if err != nil {
+		return err
+	}
+	encoded := string(raw)
+	fields["image_url"] = referenceURLs[0]
+	fields["image_urls"] = encoded
+	fields["reference_images"] = encoded
+	fields["referenceImages"] = encoded
+	fields["images"] = encoded
+	return nil
+}
+
+func (p imageProvider) editWithFields(ctx context.Context, fields map[string]string, references []referenceImage, width int, height int, imageField string) ([]generatedImage, error) {
 	var payload bytes.Buffer
 	writer := multipart.NewWriter(&payload)
 	for key, value := range fields {
@@ -205,7 +317,7 @@ func (p imageProvider) editWithFields(ctx context.Context, fields map[string]str
 		if err != nil {
 			return nil, err
 		}
-		part, err := writer.CreateFormFile("image[]", filename)
+		part, err := writer.CreateFormFile(imageField, filename)
 		if err != nil {
 			return nil, err
 		}
@@ -244,9 +356,35 @@ func (p imageProvider) generateWithBody(ctx context.Context, body map[string]any
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.generationsEndpoint(), bytes.NewReader(payload))
+	raw, err := p.doJSONWithRetry(ctx, p.generationsEndpoint(), payload)
 	if err != nil {
 		return nil, err
+	}
+	return decodeGeneratedImages(raw, width, height)
+}
+
+func (p imageProvider) doJSONWithRetry(ctx context.Context, endpoint string, payload []byte) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt += 1 {
+		raw, status, err := p.doJSON(ctx, endpoint, payload)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if !isTransientProviderStatus(status) || attempt == 2 {
+			return nil, err
+		}
+		if !sleepWithContext(ctx, time.Duration(attempt+1)*700*time.Millisecond) {
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+func (p imageProvider) doJSON(ctx context.Context, endpoint string, payload []byte) ([]byte, int, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, 0, err
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -254,17 +392,17 @@ func (p imageProvider) generateWithBody(ctx context.Context, body map[string]any
 
 	res, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 10<<20))
 	if err != nil {
-		return nil, err
+		return nil, res.StatusCode, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("image provider returned %d: %s", res.StatusCode, string(raw))
+		return nil, res.StatusCode, fmt.Errorf("image provider returned %d: %s", res.StatusCode, providerErrorText(raw))
 	}
-	return decodeGeneratedImages(raw, width, height)
+	return raw, res.StatusCode, nil
 }
 
 func decodeGeneratedImages(raw []byte, width int, height int) ([]generatedImage, error) {
@@ -331,6 +469,14 @@ func referenceImages(params map[string]any) []referenceImage {
 		}
 	}
 	return items
+}
+
+func imageEditPrompt(req createGenerationTaskRequest, references []referenceImage) string {
+	prompt := strings.TrimSpace(firstStringParam(req.Params, "effectivePrompt", "promptForApi"))
+	if prompt == "" {
+		prompt = strings.TrimSpace(req.Prompt)
+	}
+	return prompt
 }
 
 func (p imageProvider) referenceBytes(ctx context.Context, ref referenceImage, index int) ([]byte, string, error) {
@@ -409,6 +555,56 @@ func imageFilename(name string, contentType string) string {
 	default:
 		return name + ".png"
 	}
+}
+
+func isGPTImage2Model(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	return strings.Contains(normalized, "gpt-image-2")
+}
+
+func isTransientProviderStatus(status int) bool {
+	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func providerErrorText(raw []byte) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "empty response"
+	}
+	var decoded struct {
+		Error any `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err == nil && decoded.Error != nil {
+		switch value := decoded.Error.(type) {
+		case string:
+			if message := strings.TrimSpace(value); message != "" {
+				return message
+			}
+		case map[string]any:
+			for _, key := range []string{"message", "msg", "detail", "code"} {
+				message := strings.TrimSpace(fmt.Sprint(value[key]))
+				if message != "" && message != "<nil>" {
+					return message
+				}
+			}
+		}
+	}
+	if len(trimmed) > 600 {
+		return trimmed[:600] + "...[truncated]"
+	}
+	return trimmed
 }
 
 func isTimeoutError(err error) bool {

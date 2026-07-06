@@ -17,26 +17,44 @@ import (
 )
 
 const (
-	thumbnailMaxWidth = 420
-	thumbnailMaxBytes = 12 << 20
+	thumbnailMaxWidth    = 420
+	thumbnailMaxBytes    = 12 << 20
+	thumbnailReadTimeout = 60 * time.Second
 )
 
 func thumbnailForImage(ctx context.Context, imageURL string) string {
-	img, ok := decodeImageForThumbnail(ctx, imageURL)
-	if !ok {
+	thumbnailURL, _, _, ok := thumbnailAndDimensionsForImage(ctx, imageURL)
+	if !ok || thumbnailURL == "" {
 		return imageURL
+	}
+	return thumbnailURL
+}
+
+func thumbnailAndDimensionsForImage(ctx context.Context, imageURL string) (string, int, int, bool) {
+	raw, ok := readImageBytes(ctx, imageURL)
+	if !ok {
+		return "", 0, 0, false
+	}
+	if strings.HasPrefix(imageURL, "data:image/svg+xml") {
+		width, height, ok := svgDimensions(string(raw))
+		return imageURL, width, height, ok
+	}
+	img, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		cfg, _, cfgErr := image.DecodeConfig(bytes.NewReader(raw))
+		if cfgErr == nil && cfg.Width > 0 && cfg.Height > 0 {
+			return imageURL, cfg.Width, cfg.Height, true
+		}
+		return "", 0, 0, false
 	}
 	bounds := img.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
 	if width <= 0 || height <= 0 {
-		return imageURL
+		return "", 0, 0, false
 	}
-	if width <= thumbnailMaxWidth {
-		return imageURL
-	}
-	scale := float64(thumbnailMaxWidth) / float64(width)
-	targetWidth := thumbnailMaxWidth
+	scale := math.Min(1, float64(thumbnailMaxWidth)/float64(width))
+	targetWidth := int(math.Max(1, math.Round(float64(width)*scale)))
 	targetHeight := int(math.Max(1, math.Round(float64(height)*scale)))
 	dst := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
 	for y := 0; y < targetHeight; y++ {
@@ -49,9 +67,9 @@ func thumbnailForImage(ctx context.Context, imageURL string) string {
 
 	var out bytes.Buffer
 	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 78}); err != nil {
-		return imageURL
+		return imageURL, width, height, true
 	}
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes())
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), width, height, true
 }
 
 func decodeImageForThumbnail(ctx context.Context, imageURL string) (image.Image, bool) {
@@ -93,7 +111,7 @@ func readImageBytes(ctx context.Context, imageURL string) ([]byte, bool) {
 	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
 		return nil, false
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, thumbnailReadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, imageURL, nil)
 	if err != nil {

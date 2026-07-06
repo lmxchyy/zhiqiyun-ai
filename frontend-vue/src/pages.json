@@ -3,14 +3,14 @@
     {
       "path": "pages/AiCreationPage",
       "style": {
-        "navigationBarTitleText": "先知 AI",
+        "navigationBarTitleText": "知启云 AI",
         "navigationStyle": "custom"
       }
     }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "先知 AI",
+    "navigationBarTitleText": "知启云 AI",
     "navigationBarBackgroundColor": "#ffffff",
     "backgroundColor": "#f8fafc"
   }

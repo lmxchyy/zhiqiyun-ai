@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	Addr                string
@@ -12,6 +15,11 @@ type Config struct {
 	ModelProviderURL    string
 	ModelProviderAPIKey string
 	ImageModel          string
+	TextModel           string
+	PPTProviderURL      string
+	PPTProviderAPIKey   string
+	PPTTextModel        string
+	PPTDisableThinking  bool
 	ModelTimeoutMS      string
 	ModelProvidersJSON  string
 }
@@ -51,6 +59,25 @@ func Load() Config {
 	if imageModel == "" {
 		imageModel = "gpt-image-2"
 	}
+	textModel := os.Getenv("MODEL_PROVIDER_TEXT_MODEL")
+	if textModel == "" {
+		textModel = os.Getenv("OPENAI_MODEL")
+	}
+	if textModel == "" {
+		textModel = "gpt-4o-mini"
+	}
+	pptProviderURL := os.Getenv("PPT_MODEL_PROVIDER_URL")
+	if pptProviderURL == "" {
+		pptProviderURL = modelProviderURL
+	}
+	pptProviderAPIKey := os.Getenv("PPT_MODEL_PROVIDER_API_KEY")
+	if pptProviderAPIKey == "" {
+		pptProviderAPIKey = modelProviderAPIKey
+	}
+	pptTextModel := os.Getenv("PPT_TEXT_MODEL")
+	if pptTextModel == "" {
+		pptTextModel = textModel
+	}
 	modelProvidersJSON := os.Getenv("MODEL_PROVIDERS_JSON")
 	modelTimeoutMS := os.Getenv("MODEL_PROVIDER_TIMEOUT_MS")
 	if modelTimeoutMS == "" {
@@ -66,7 +93,21 @@ func Load() Config {
 		ModelProviderURL:    modelProviderURL,
 		ModelProviderAPIKey: modelProviderAPIKey,
 		ImageModel:          imageModel,
+		TextModel:           textModel,
+		PPTProviderURL:      pptProviderURL,
+		PPTProviderAPIKey:   pptProviderAPIKey,
+		PPTTextModel:        pptTextModel,
+		PPTDisableThinking:  boolEnv(os.Getenv("PPT_MODEL_CHAT_DISABLE_THINKING")),
 		ModelTimeoutMS:      modelTimeoutMS,
 		ModelProvidersJSON:  modelProvidersJSON,
+	}
+}
+
+func boolEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
 	}
 }

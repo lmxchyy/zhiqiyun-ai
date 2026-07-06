@@ -76,15 +76,17 @@ type providersJSON struct {
 }
 
 type providerJSON struct {
-	Code       string   `json:"code"`
-	Kind       string   `json:"kind"`
-	BaseURL    string   `json:"baseUrl"`
-	APIKey     string   `json:"apiKey"`
-	ImageModel string   `json:"imageModel"`
-	Models     []string `json:"models"`
-	TimeoutMS  any      `json:"timeoutMs"`
-	Status     string   `json:"status"`
-	Enabled    *bool    `json:"enabled"`
+	Code                    string   `json:"code"`
+	Kind                    string   `json:"kind"`
+	BaseURL                 string   `json:"baseUrl"`
+	APIKey                  string   `json:"apiKey"`
+	ImageModel              string   `json:"imageModel"`
+	Models                  []string `json:"models"`
+	ImageGenerationEndpoint string   `json:"imageGenerationEndpoint"`
+	ImageEditEndpoint       string   `json:"imageEditEndpoint"`
+	TimeoutMS               any      `json:"timeoutMs"`
+	Status                  string   `json:"status"`
+	Enabled                 *bool    `json:"enabled"`
 }
 
 func providersFromJSON(raw string) []Provider {
@@ -99,12 +101,14 @@ func providersFromJSON(raw string) []Provider {
 			continue
 		}
 		providers = append(providers, NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
-			Code:       item.Code,
-			BaseURL:    item.BaseURL,
-			APIKey:     item.APIKey,
-			ImageModel: item.ImageModel,
-			Models:     item.Models,
-			TimeoutMS:  intValue(item.TimeoutMS),
+			Code:                    item.Code,
+			BaseURL:                 item.BaseURL,
+			APIKey:                  item.APIKey,
+			ImageModel:              item.ImageModel,
+			Models:                  item.Models,
+			ImageGenerationEndpoint: item.ImageGenerationEndpoint,
+			ImageEditEndpoint:       item.ImageEditEndpoint,
+			TimeoutMS:               intValue(item.TimeoutMS),
 		}))
 	}
 	return providers

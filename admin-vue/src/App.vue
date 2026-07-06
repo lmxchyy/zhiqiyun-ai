@@ -1,17 +1,19 @@
 ﻿<template>
   <el-config-provider :size="currentElementSize">
-  <el-container :class="['admin-shell', 'pure-admin-shell', { 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
+  <el-container v-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
     <div v-if="mobileDrawerOpen" class="mobile-drawer-mask" @click="mobileDrawerOpen = false"></div>
     <el-aside width="200px" class="admin-sidebar">
       <div class="brand">
-        <img class="brand-logo" :src="xianzhiLogo" alt="先知 AI" />
-        <div class="brand-copy">
-          <strong>先知 AI</strong>
-          <small>{{ isUserConsole ? "User Console" : isAgentConsole ? "Agent Console" : "Master SaaS Console" }}</small>
-        </div>
+        <button class="brand-home-button" type="button" :title="brandHomeTitle" :aria-label="brandHomeTitle" @click="goBrandHome">
+          <img class="brand-logo" :src="xianzhiLogo" alt="知启云 AI" />
+          <span class="brand-copy">
+            <strong>知启云 AI</strong>
+            <small>{{ isUserConsole ? "User Console" : isAgentConsole ? "Agent Console" : "Master SaaS Console" }}</small>
+          </span>
+        </button>
       </div>
       <div class="sidebar-section-label">{{ isUserConsole ? "用户导航" : isAgentConsole ? "代理导航" : "平台导航" }}</div>
-      <nav class="collapsed-icon-menu" aria-label="折叠模块导航">
+      <nav v-if="!isUserConsole" class="collapsed-icon-menu" aria-label="折叠模块导航">
         <div v-for="group in visibleModuleGroups" :key="group.id" :class="['collapsed-icon-group', { 'is-active': isGroupActive(group) }]">
           <button class="collapsed-icon-button" type="button" :aria-label="group.title" @click="selectAdminModule(group.items[0]?.id || store.activeModuleId)">
             <el-icon><component :is="group.icon" /></el-icon>
@@ -25,7 +27,17 @@
           </div>
         </div>
       </nav>
-      <el-menu class="sidebar-menu" :default-active="store.activeModuleId" @select="selectAdminModule">
+      <el-menu v-if="isUserConsole" class="sidebar-menu user-flat-sidebar-menu" :default-active="activeUserMenuId" @select="selectUserFlatMenu">
+        <el-menu-item v-for="item in userFlatMenuItems" :key="item.id" :index="item.id" :aria-label="item.title" :title="desktopSidebarCollapsed ? item.title : undefined">
+          <el-tooltip :content="item.title" placement="right" :disabled="!desktopSidebarCollapsed" :show-after="120" :hide-after="0" popper-class="user-sidebar-tooltip">
+            <span class="user-sidebar-tooltip-target">
+              <el-icon><component :is="item.icon" /></el-icon>
+            </span>
+          </el-tooltip>
+          <span class="user-sidebar-menu-title">{{ item.title }}</span>
+        </el-menu-item>
+      </el-menu>
+      <el-menu v-else class="sidebar-menu" :default-active="store.activeModuleId" @select="selectAdminModule">
         <el-sub-menu v-for="group in visibleModuleGroups" :key="group.id" :index="group.id">
           <template #title>
             <el-icon><component :is="group.icon" /></el-icon>
@@ -56,7 +68,7 @@
         <el-button class="mobile-collapse-button" :icon="Grid" aria-label="打开模块导航" @click="mobileDrawerOpen = true" />
         <div class="mobile-admin-title">
           <strong>{{ isUserConsole ? "用户后台" : isAgentConsole ? "代理商后台" : "主控 SaaS" }}</strong>
-          <small>{{ store.activeModule.title }}</small>
+          <small>{{ activeHeaderModuleTitle }}</small>
         </div>
         <div class="mobile-admin-actions">
           <el-tag :type="store.error ? 'danger' : 'success'" effect="light">{{ store.error ? "API ERROR" : "API ONLINE" }}</el-tag>
@@ -77,15 +89,16 @@
         <div class="header-title">
           <div class="header-path">
             <el-icon><component :is="activeGroupIcon" /></el-icon>
-            <el-breadcrumb separator="/">
+            <span v-if="isUserConsole" class="header-single-title">{{ activeHeaderModuleTitle }}</span>
+            <el-breadcrumb v-else separator="/">
               <el-breadcrumb-item>{{ activeGroupLabel }}</el-breadcrumb-item>
-              <el-breadcrumb-item>{{ store.activeModule.title }}</el-breadcrumb-item>
+              <el-breadcrumb-item>{{ activeHeaderModuleTitle }}</el-breadcrumb-item>
             </el-breadcrumb>
           </div>
         </div>
         <div class="header-actions">
           <el-input v-model="searchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="搜索当前模块" />
-          <el-button :icon="Refresh" circle :loading="store.loading" @click="store.loadActiveModule" />
+          <el-button :icon="Refresh" circle :loading="store.loading" @click="() => store.loadActiveModule()" />
           <el-dropdown trigger="click" @command="setElementSize">
             <el-button class="size-button">
               <span>{{ elementSizeLabel }}</span>
@@ -101,7 +114,10 @@
           <el-dropdown trigger="click" @command="handleAccountCommand">
             <el-button class="account-button">
               <el-icon><UserFilled /></el-icon>
-              <span>{{ currentAdmin?.name || "平台管理员" }}</span>
+              <span class="account-button-copy">
+                <strong>{{ currentAdmin?.name || "平台管理员" }}</strong>
+                <small v-if="currentAdmin?.email">{{ currentAdmin.email }}</small>
+              </span>
               <el-icon><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
@@ -114,7 +130,7 @@
           </el-dropdown>
         </div>
       </el-header>
-      <nav class="admin-page-tabs" aria-label="已打开页面标签">
+      <nav v-if="!isUserConsole" class="admin-page-tabs" aria-label="已打开页面标签">
         <button class="tabs-rail-button" type="button" aria-label="向左滚动标签" @click="scrollOpenTabs(-1)">«</button>
         <div ref="tabsScrollRef" class="tabs-scroll">
           <button v-for="tab in openTabs" :key="tab.id" :class="['page-tab', { 'is-active': tab.id === store.activeModuleId }]" type="button" @click="selectAdminModule(tab.id)">
@@ -123,7 +139,7 @@
           </button>
         </div>
         <button class="tabs-rail-button" type="button" aria-label="向右滚动标签" @click="scrollOpenTabs(1)">»</button>
-        <button class="tabs-tool-button" type="button" aria-label="刷新当前页" @click="store.loadActiveModule"><el-icon><Refresh /></el-icon></button>
+        <button class="tabs-tool-button" type="button" aria-label="刷新当前页" @click="() => store.loadActiveModule()"><el-icon><Refresh /></el-icon></button>
         <el-dropdown trigger="click" @command="handleTabsCommand">
           <button class="tabs-tool-button" type="button" aria-label="标签页更多操作"><el-icon><Setting /></el-icon></button>
           <template #dropdown>
@@ -159,7 +175,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'userAiImage', 'apiSettings'].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -167,17 +183,312 @@
             </div>
             <div class="module-hero-actions">
               <el-button v-for="action in toolbarActions" :key="action.action" type="primary" :icon="Plus" @click="runAction(action.action)">{{ action.label }}</el-button>
-              <el-button :icon="Refresh" @click="store.loadActiveModule">刷新数据</el-button>
+              <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'userAiImage', 'apiSettings'].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
               <small>{{ metricHint(metric.label) }}</small>
             </article>
           </div>
-          <section v-if="store.activeModuleId === 'userOnlineImage'" class="online-image-page online-image-studio">
+          <section v-if="aiCapabilityModuleIds.includes(store.activeModuleId)" class="ai-capability-page">
+            <section class="ai-capability-head">
+              <div>
+                <el-tag effect="dark" type="success">AI Capability Center</el-tag>
+                <h2>AI 能力中心</h2>
+                <p>统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。</p>
+              </div>
+              <div class="ai-capability-actions">
+                <el-button :icon="Refresh" :loading="store.loading" @click="() => store.loadActiveModule()">刷新配置</el-button>
+                <el-button :icon="Setting" @click="selectAdminModule('apiSettings')">上游 API</el-button>
+              </div>
+            </section>
+
+            <div class="ai-capability-kpis">
+              <article v-for="metric in aiCapabilityMetrics" :key="metric.label">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+                <small>{{ metric.hint }}</small>
+              </article>
+            </div>
+
+            <section v-if="store.activeModuleId === 'aiCapabilities'" class="ai-capability-section">
+                <div v-if="aiModules.length" class="ai-capability-module-grid">
+                  <article v-for="module in aiModules" :key="String(module.id || aiText(module, 'module_code', 'moduleCode'))" class="ai-capability-module-card">
+                    <header>
+                      <div>
+                        <el-tag :type="statusType(module.status)" size="small">{{ statusLabel(module.status) }}</el-tag>
+                        <h3>{{ module.name || module.id }}</h3>
+                      </div>
+                      <el-switch :model-value="isActiveStatus(module.status)" :loading="store.saving" active-text="启用" inactive-text="停用" @change="() => toggleAIModule(module)" />
+                    </header>
+                    <p>{{ module.description || '-' }}</p>
+                    <dl>
+                      <div><dt>module_code</dt><dd><code>{{ aiText(module, 'module_code', 'moduleCode') }}</code></dd></div>
+                      <div><dt>默认 Schema</dt><dd>{{ aiText(module, 'default_schema_id', 'defaultSchemaId') || '-' }}</dd></div>
+                      <div><dt>开放套餐</dt><dd>{{ aiList(module, 'open_package_ids', 'openPackageIds').join('、') || '-' }}</dd></div>
+                      <div><dt>开放对象</dt><dd>{{ aiAudienceLabel(module) }}</dd></div>
+                    </dl>
+                    <div class="ai-capability-chip-list">
+                      <el-tag v-for="model in aiList(module, 'bound_models', 'boundModels')" :key="model" size="small" effect="plain">{{ model }}</el-tag>
+                    </div>
+                    <footer>
+                      <el-button size="small" @click="editAIModulePackages(module)">编辑套餐</el-button>
+                      <el-button size="small" type="primary" plain @click="editAIModuleModels(module)">绑定模型</el-button>
+                    </footer>
+                  </article>
+                </div>
+                <el-empty v-else description="暂无 AI 能力模块" />
+            </section>
+
+            <section v-if="store.activeModuleId === 'aiCapabilityModels'" class="ai-capability-section">
+                <div class="ai-capability-section-head">
+                  <div>
+                    <h3>模型管理</h3>
+                    <p>新增或编辑 AI 生图、视频生成、PPT 文档生成可调用模型。</p>
+                  </div>
+                  <el-button type="primary" :icon="Plus" @click="createAIModel">新增模型</el-button>
+                </div>
+                <el-table v-if="aiModels.length" :data="aiModels" height="430" stripe>
+                  <el-table-column label="模型" min-width="180">
+                    <template #default="scope">
+                      <div class="ai-capability-main-cell">
+                        <strong>{{ aiText(scope.row, 'model_name', 'modelName') }}</strong>
+                        <small>{{ scope.row.id }}</small>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="模块" min-width="150">
+                    <template #default="scope"><el-tag effect="plain">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column prop="provider" label="上游" min-width="120" />
+                  <el-table-column label="类型" width="110">
+                    <template #default="scope">{{ aiText(scope.row, 'model_type', 'modelType') || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="能力" min-width="260">
+                    <template #default="scope">
+                      <div class="ai-capability-chip-list">
+                        <el-tag v-for="capability in aiList(scope.row, 'capability_code', 'capabilityCode')" :key="capability" size="small">{{ capability }}</el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="Fallback" min-width="140">
+                    <template #default="scope">{{ aiText(scope.row, 'fallback_model', 'fallbackModel') || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="110">
+                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="操作" fixed="right" width="210">
+                    <template #default="scope">
+                      <el-button link type="primary" @click="editAIModel(scope.row)">编辑</el-button>
+                      <el-button link type="primary" @click="editAIModelCapabilities(scope.row)">能力</el-button>
+                      <el-button link :type="isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="toggleAIModel(scope.row)">{{ isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else description="暂无模型配置" />
+            </section>
+
+            <section v-if="store.activeModuleId === 'aiCapabilitySchemas'" class="ai-capability-section">
+                <el-table v-if="aiSchemas.length" :data="aiSchemas" height="430" stripe>
+                  <el-table-column label="Schema" min-width="220">
+                    <template #default="scope">
+                      <div class="ai-capability-main-cell">
+                        <strong>{{ scope.row.id }}</strong>
+                        <small>{{ aiText(scope.row, 'model_name', 'modelName') || '默认模型' }}</small>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="模块" min-width="150">
+                    <template #default="scope">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</template>
+                  </el-table-column>
+                  <el-table-column label="字段与选项" min-width="520">
+                    <template #default="scope">
+                      <div class="ai-schema-field-list">
+                        <span v-for="field in aiSchemaFields(scope.row).slice(0, 8)" :key="String(field.key || field.label)" class="ai-schema-field-chip">
+                          <strong>{{ aiSchemaFieldLabel(field) }}</strong>
+                          <small v-if="aiSchemaFieldOptionsText(field)">{{ aiSchemaFieldOptionsText(field) }}</small>
+                        </span>
+                        <span v-if="aiSchemaFields(scope.row).length > 8" class="ai-capability-more">+{{ aiSchemaFields(scope.row).length - 8 }}</span>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="110">
+                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="操作" fixed="right" width="170">
+                    <template #default="scope">
+                      <el-button link type="primary" @click="editAIParameterSchema(scope.row)">编辑</el-button>
+                      <el-button link :type="isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="toggleAIParameterSchema(scope.row)">{{ isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else description="暂无参数 Schema" />
+            </section>
+
+            <section v-if="store.activeModuleId === 'aiCapabilityLimits'" class="ai-capability-section">
+                <el-table v-if="aiLimits.length" :data="aiLimits" height="430" stripe>
+                  <el-table-column label="适用范围" min-width="190">
+                    <template #default="scope">
+                      <div class="ai-capability-main-cell">
+                        <strong>{{ aiLimitScope(scope.row) }}</strong>
+                        <small>{{ scope.row.id }}</small>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="模块" min-width="150">
+                    <template #default="scope">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</template>
+                  </el-table-column>
+                  <el-table-column label="模型" min-width="150">
+                    <template #default="scope">{{ aiText(scope.row, 'model_name', 'modelName') || '模块默认' }}</template>
+                  </el-table-column>
+                  <el-table-column label="限制项" min-width="300">
+                    <template #default="scope">
+                      <code class="ai-capability-json-preview">{{ aiJsonPreview(aiObject(scope.row, 'limit_json', 'limitJson')) }}</code>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="110">
+                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="操作" fixed="right" width="170">
+                    <template #default="scope">
+                      <el-button link type="primary" @click="editAILimitJSON(scope.row)">JSON</el-button>
+                      <el-button link :type="isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="toggleAILimit(scope.row)">{{ isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else description="暂无租户限制" />
+            </section>
+
+            <section v-if="store.activeModuleId === 'aiCapabilityChannels'" class="ai-capability-section">
+                <el-table v-if="aiChannels.length" :data="aiChannels" height="380" stripe>
+                  <el-table-column prop="name" label="通道" min-width="170" />
+                  <el-table-column prop="protocol" label="协议" width="120" />
+                  <el-table-column prop="baseUrl" label="Base URL" min-width="260" show-overflow-tooltip />
+                  <el-table-column label="模型" min-width="260">
+                    <template #default="scope">
+                      <div class="ai-capability-chip-list">
+                        <el-tag v-for="model in aiList(scope.row, 'models')" :key="model" size="small" effect="plain">{{ model }}</el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="Key" width="110">
+                    <template #default="scope"><el-tag :type="scope.row.apiKeyConfigured ? 'success' : 'warning'">{{ scope.row.apiKeyConfigured ? '已配置' : '待配置' }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="110">
+                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column label="操作" fixed="right" width="110">
+                    <template #default><el-button link type="primary" @click="selectAdminModule('apiSettings')">配置</el-button></template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else description="暂无上游通道" />
+            </section>
+
+            <section v-if="store.activeModuleId === 'aiCapabilityLogs'" class="ai-capability-section">
+                <el-table v-if="aiLogs.length" :data="aiLogs" height="430" stripe>
+                  <el-table-column prop="id" label="任务" min-width="150" show-overflow-tooltip />
+                  <el-table-column label="模块" min-width="140">
+                    <template #default="scope">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</template>
+                  </el-table-column>
+                  <el-table-column prop="model_name" label="模型" min-width="150" />
+                  <el-table-column prop="user" label="用户" min-width="130" />
+                  <el-table-column label="扣费" width="110">
+                    <template #default="scope">{{ moneyYuan(scope.row.user_charge_amount || scope.row.amountCents || 0) }}</template>
+                  </el-table-column>
+                  <el-table-column label="成本" width="110">
+                    <template #default="scope">{{ moneyYuan(scope.row.upstream_cost || 0) }}</template>
+                  </el-table-column>
+                  <el-table-column label="利润" width="110">
+                    <template #default="scope">{{ moneyYuan(scope.row.platform_profit || 0) }}</template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="110">
+                    <template #default="scope"><el-tag :type="statusType(scope.row.task_status)">{{ statusLabel(scope.row.task_status) }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column prop="created_at" label="创建时间" min-width="190" show-overflow-tooltip />
+                </el-table>
+                <el-empty v-else description="暂无调用日志" />
+            </section>
+          </section>
+          <section v-else-if="store.activeModuleId === 'userDashboard'" class="user-home-page">
+            <section class="user-home-layout">
+              <main class="user-home-main">
+                <section class="user-home-hero">
+                  <span class="user-home-shard user-home-shard-left"></span>
+                  <span class="user-home-shard user-home-shard-right"></span>
+                  <div class="user-home-title-block">
+                    <h2>专属 AI 视觉设计师已待命，<em>即刻开启创作</em></h2>
+                    <p>输入想法、上传参考图，或从下面的 Agent 入口开始一段创作。</p>
+                  </div>
+
+                  <div class="user-home-composer">
+                    <div class="user-home-mode-tabs">
+                      <button v-for="mode in userHomeCreationModes" :key="mode.id" type="button" :class="{ active: userHomeCreationMode === mode.id }" @click="selectUserHomeCreationMode(mode.id)">
+                        <el-icon><component :is="mode.icon" /></el-icon>
+                        <span>{{ mode.title }}</span>
+                      </button>
+                    </div>
+                    <el-input v-model="onlineImageForm.prompt" type="textarea" :rows="4" maxlength="2000" resize="none" placeholder="描述你想生成的画面、视频或文档..." />
+                    <div class="user-home-toolbar">
+                      <button type="button" @click="selectAdminModule('userAiImage')"><el-icon><Plus /></el-icon>上传参考图</button>
+                      <button type="button" @click="applyUserHomePrompt('润色')"><el-icon><EditPen /></el-icon>润色</button>
+                      <button type="button" @click="applyUserHomePrompt('爆款复刻')"><el-icon><Star /></el-icon>爆款复刻</button>
+                      <el-select v-model="onlineImageForm.model" class="user-home-select" size="default">
+                        <el-option v-for="model in onlineModelOptions" :key="model.value" :label="model.label" :value="model.value" />
+                      </el-select>
+                      <el-select v-model="onlineImageForm.ratio" class="user-home-select is-compact" size="default">
+                        <el-option v-for="ratio in userHomeRatioOptions" :key="ratio.value" :label="ratio.label" :value="ratio.value" />
+                      </el-select>
+                      <el-select v-model="onlineImageForm.quality" class="user-home-select is-compact" size="default">
+                        <el-option label="标准" value="standard" />
+                        <el-option label="高清" value="hd" />
+                        <el-option label="高质量" value="high" />
+                      </el-select>
+                      <button type="button" class="user-home-generate" @click="launchUserHomeCreation">生成 <el-icon><Star /></el-icon></button>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="user-home-agent-row" aria-label="快捷 Agent">
+                  <button v-for="agent in userHomeAgentEntries" :key="agent.title" type="button" @click="openUserHomeEntry(agent)">
+                    <el-icon><component :is="agent.icon" /></el-icon>
+                    <span>{{ agent.title }}</span>
+                  </button>
+                </section>
+
+                <section class="user-home-template-section">
+                  <div class="user-home-section-head">
+                    <h3>模板广场</h3>
+                    <button type="button" @click="selectAdminModule('userAiImage')">查看全部</button>
+                  </div>
+                  <div class="user-home-template-grid">
+                    <button v-for="template in userHomeTemplates" :key="template.title" type="button" class="user-home-template-card" @click="openUserHomeEntry(template)">
+                      <span :class="['user-home-template-cover', template.coverClass]"><em>{{ template.coverText }}</em></span>
+                      <strong>{{ template.title }}</strong>
+                      <small>{{ template.desc }}</small>
+                    </button>
+                  </div>
+                </section>
+              </main>
+
+              <aside class="user-home-inspiration">
+                <div class="user-home-inspiration-head">
+                  <h3>灵感模板</h3>
+                  <button type="button" @click="selectAdminModule('userApiSettings')">模型/API</button>
+                </div>
+                <button v-for="item in userHomeInspirations" :key="item.title" type="button" class="user-home-inspiration-item" @click="openUserHomeEntry(item)">
+                  <span>
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.desc }}</small>
+                  </span>
+                  <i :class="['user-home-inspiration-thumb', item.coverClass]"></i>
+                </button>
+              </aside>
+            </section>
+          </section>
+          <section v-else-if="false" class="online-image-page online-image-studio">
             <section class="online-studio-shell">
               <div class="online-studio-compose">
                 <div class="online-studio-head">
@@ -281,22 +592,22 @@
             </section>
 
             <el-card shadow="never" class="data-panel online-task-panel">
-              <template #header><div class="panel-head"><div><span>生成队列</span><small>{{ onlineRecentTasks.length }} 条任务</small></div><el-segmented v-model="onlineStatusFilter" :options="onlineStatusOptions" /></div></template>
+              <template #header><div class="panel-head"><div><span>生成队列</span><small>{{ onlineImageTasks.length }} 条任务</small></div><el-segmented v-model="onlineStatusFilter" :options="onlineStatusOptions" /></div></template>
               <el-table v-if="filteredOnlineTasks.length" :data="filteredOnlineTasks" height="420" stripe>
                 <el-table-column prop="id" label="任务" min-width="130" />
                 <el-table-column prop="model" label="模型" min-width="150" />
                 <el-table-column prop="type" label="类型" width="130" />
                 <el-table-column prop="pointCost" label="消耗点数" width="110" />
-                <el-table-column prop="status" label="状态" width="120"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ scope.row.status }}</el-tag></template></el-table-column>
+                <el-table-column prop="status" label="状态" width="120"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
                 <el-table-column prop="createdAt" label="创建时间" min-width="210" show-overflow-tooltip />
               </el-table>
               <el-empty v-else description="暂无在线生图任务" />
             </el-card>
           </section>
-          <section v-else-if="store.activeModuleId === 'userAiImage'" class="ai-image-page">
+          <section v-else-if="imageWorkspaceModuleIds.includes(store.activeModuleId)" class="ai-image-page">
             <section class="ai-playground">
               <div class="ai-playground-header">
-                <h3>AI Image Playground</h3>
+                <h3>{{ imageWorkspaceTitle }}</h3>
                 <div class="ai-playground-actions">
                   <el-segmented v-model="aiPlaygroundMode" :options="aiPlaygroundModeOptions" />
                   <el-button class="ai-header-action" :icon="Download" aria-label="导出图片" @click="runAiPlaygroundAction('download')" />
@@ -418,7 +729,7 @@
                           <span class="ai-task-badge">{{ aiTaskResolutionLabel(task) }}</span>
                         </template>
                       </div>
-                      <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="AI 生图任务缩略图" />
+                      <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="AI 生图任务缩略图" loading="lazy" decoding="async" />
                       <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
                         <span class="ai-task-spinner"></span>
                         <strong>生成中...</strong>
@@ -438,18 +749,48 @@
                         <span class="ai-task-model-pill">&lt;/&gt; {{ aiTaskModelLabel(task) }}</span>
                       </div>
                       <div class="ai-task-actions">
-                        <button type="button" :class="{ 'is-favorite': isAiTaskFavorite(task) }" :aria-label="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'" @click.stop="openAiFavoritePicker([aiTaskId(task)])">
-                          <el-icon><component :is="isAiTaskFavorite(task) ? StarFilled : Star" /></el-icon>
-                        </button>
-                        <button type="button" aria-label="复用配置" @click.stop="reuseAiTask(task)">
-                          <el-icon><Refresh /></el-icon>
-                        </button>
-                        <button type="button" aria-label="编辑输出" @click.stop="editAiTaskOutput(task)">
-                          <el-icon><EditPen /></el-icon>
-                        </button>
-                        <button type="button" class="danger" aria-label="删除任务" title="删除任务" @click.stop="deleteAiTask(task)">
-                          <el-icon><Delete /></el-icon>
-                        </button>
+                        <el-tooltip :content="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'" placement="top" :show-after="180">
+                          <button
+                            type="button"
+                            :class="{ 'is-favorite': isAiTaskFavorite(task) }"
+                            :aria-label="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'"
+                            :title="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'"
+                            @click.stop="openAiFavoritePicker([aiTaskId(task)])"
+                          >
+                            <el-icon><component :is="isAiTaskFavorite(task) ? StarFilled : Star" /></el-icon>
+                          </button>
+                        </el-tooltip>
+                        <el-tooltip :content="isAiTaskFailed(task) ? '重试生成' : '复用配置'" placement="top" :show-after="180">
+                          <button
+                            type="button"
+                            :class="{ retry: isAiTaskFailed(task) }"
+                            :aria-label="isAiTaskFailed(task) ? '重试生成' : '复用配置'"
+                            :title="isAiTaskFailed(task) ? '重试生成' : '复用配置'"
+                            :disabled="onlineSubmitting && isAiTaskFailed(task)"
+                            @click.stop="isAiTaskFailed(task) ? retryAiTask(task) : reuseAiTask(task)"
+                          >
+                            <el-icon><Refresh /></el-icon>
+                            <span v-if="isAiTaskFailed(task)">重试</span>
+                          </button>
+                        </el-tooltip>
+                        <el-tooltip :content="aiTaskImageUrl(task) ? '编辑输出' : '图片生成完成后才能编辑输出'" placement="top" :show-after="180">
+                          <span class="ai-task-action-wrap">
+                            <button
+                              type="button"
+                              aria-label="编辑输出"
+                              :title="aiTaskImageUrl(task) ? '编辑输出' : '图片生成完成后才能编辑输出'"
+                              :disabled="!aiTaskImageUrl(task)"
+                              @click.stop="editAiTaskOutput(task)"
+                            >
+                              <el-icon><EditPen /></el-icon>
+                            </button>
+                          </span>
+                        </el-tooltip>
+                        <el-tooltip content="删除任务" placement="top" :show-after="180">
+                          <button type="button" class="danger" aria-label="删除任务" title="删除任务" @click.stop="deleteAiTask(task)">
+                            <el-icon><Delete /></el-icon>
+                          </button>
+                        </el-tooltip>
                       </div>
                     </div>
                   </article>
@@ -460,16 +801,28 @@
                 </div>
               </div>
 
-              <div class="ai-floating-composer">
+              <div v-if="!mobileDrawerOpen" ref="aiFloatingComposerRef" class="ai-floating-composer">
                 <div v-if="aiReferenceImages.length" class="ai-reference-strip">
                   <div v-for="(image, index) in aiReferenceImages" :key="image.id" class="ai-reference-thumb">
-                    <img :src="image.url" :alt="`参考图 ${index + 1}`" />
+                    <img v-if="aiReferencePreviewUrl(image)" :src="aiReferencePreviewUrl(image)" :alt="`参考图 ${index + 1}`" />
+                    <strong v-else>参考图</strong>
                     <span>{{ index + 1 }}</span>
+                    <em v-if="image.uploading">上传中</em>
+                    <em v-else-if="image.error" class="is-error">重试中</em>
                     <button type="button" aria-label="移除参考图" @click="confirmRemoveAiReferenceImage(index)">×</button>
                   </div>
                   <button type="button" class="ai-reference-clear" @click="confirmClearAiReferenceImages">清空</button>
                 </div>
-                <el-input v-model="onlineImageForm.prompt" class="ai-floating-prompt" maxlength="1000" clearable placeholder="描述你想生成的图片，可输入 @ 来指定参考图..." @keyup.ctrl.enter="submitAiImage" />
+                <PromptEditable
+                  ref="aiPromptInputRef"
+                  v-model="onlineImageForm.prompt"
+                  class="ai-floating-prompt"
+                  placeholder="描述你想生成的图片，可输入 @ 来指定参考图..."
+                  :min-height="48"
+                  :max-height="220"
+                  @paste-images="handleAiPromptPasteImages"
+                  @submit="submitAiImage"
+                />
                 <div class="ai-floating-controls">
                   <label>
                     <span>尺寸</span>
@@ -586,6 +939,17 @@
                       </div>
                       <p class="ai-detail-time">创建于 {{ formatAiTaskTime(aiDetailTask) }} · 耗时 {{ aiTaskDuration(aiDetailTask) }}</p>
                     </section>
+                    <section class="ai-detail-section">
+                      <h3>调试信息</h3>
+                      <div class="ai-detail-debug-actions">
+                        <button type="button" :disabled="!aiTaskRawImageUrls(aiDetailTask).length" @click="openAiRawUrlsModal(aiDetailTask)">
+                          <el-icon><Link /></el-icon><span>原始链接</span>
+                        </button>
+                        <button type="button" @click="openAiRawResponseModal(aiDetailTask)">
+                          <el-icon><Document /></el-icon><span>原始响应</span>
+                        </button>
+                      </div>
+                    </section>
                     <footer class="ai-detail-actions">
                       <button type="button" class="reuse" @click="reuseAiTask(aiDetailTask); closeAiDetailModal()"><el-icon><Refresh /></el-icon>复用配置</button>
                       <button type="button" class="edit" @click="editAiTaskOutput(aiDetailTask); closeAiDetailModal()"><el-icon><EditPen /></el-icon>编辑输出</button>
@@ -604,6 +968,7 @@
                   >
                     <button type="button" @click="copyAiContextImage"><el-icon><CopyDocument /></el-icon><span>复制</span></button>
                     <button type="button" @click="downloadAiContextImage"><el-icon><Download /></el-icon><span>下载</span></button>
+                    <button v-if="aiContextMenuTask && aiTaskOutputItems(aiContextMenuTask).length > 1" type="button" @click="downloadAllAiContextImages"><el-icon><Download /></el-icon><span>下载全部</span></button>
                     <button type="button" @click="editAiContextImage"><el-icon><EditPen /></el-icon><span>编辑</span></button>
                   </div>
                 </section>
@@ -660,8 +1025,43 @@
                 >
                   <button type="button" @click="copyAiContextImage"><el-icon><CopyDocument /></el-icon><span>复制</span></button>
                   <button type="button" @click="downloadAiContextImage"><el-icon><Download /></el-icon><span>下载</span></button>
+                  <button v-if="aiContextMenuTask && aiTaskOutputItems(aiContextMenuTask).length > 1" type="button" @click="downloadAllAiContextImages"><el-icon><Download /></el-icon><span>下载全部</span></button>
                   <button type="button" @click="editAiContextImage"><el-icon><EditPen /></el-icon><span>编辑</span></button>
                 </div>
+              </div>
+            </teleport>
+            <teleport to="body">
+              <div v-if="aiRawUrlsTask" class="ai-raw-modal-overlay" @click="closeAiRawModals">
+                <section class="ai-raw-modal" @click.stop>
+                  <header>
+                    <h3>原始图片链接</h3>
+                    <button type="button" aria-label="关闭" @click="closeAiRawModals">×</button>
+                  </header>
+                  <div class="ai-raw-list ai-raw-modal-body">
+                    <article v-for="(url, index) in aiTaskRawImageUrls(aiRawUrlsTask)" :key="`${index}-${url}`" class="ai-raw-list-row">
+                      <span>图片 {{ index + 1 }}</span>
+                      <code>{{ url }}</code>
+                      <button type="button" @click="copyToClipboard(url)">复制</button>
+                    </article>
+                  </div>
+                  <footer>
+                    <button type="button" @click="copyToClipboard(aiTaskRawImageUrls(aiRawUrlsTask).join('\n'))">全部复制</button>
+                  </footer>
+                </section>
+              </div>
+            </teleport>
+            <teleport to="body">
+              <div v-if="aiRawResponseTask" class="ai-raw-modal-overlay" @click="closeAiRawModals">
+                <section class="ai-raw-modal is-wide" @click.stop>
+                  <header>
+                    <h3>原始响应数据</h3>
+                    <button type="button" aria-label="关闭" @click="closeAiRawModals">×</button>
+                  </header>
+                  <pre>{{ aiTaskRawResponseText(aiRawResponseTask) }}</pre>
+                  <footer>
+                    <button type="button" @click="copyToClipboard(aiTaskRawResponseText(aiRawResponseTask))">全部复制</button>
+                  </footer>
+                </section>
               </div>
             </teleport>
             <teleport to="body">
@@ -783,6 +1183,21 @@
                     </button>
                   </div>
                   <div class="ai-size-picker-scroll">
+                    <section v-if="aiImageSizeSchemaOptions.length || aiImageModuleSchemaLoading" class="ai-size-picker-section">
+                      <p>Schema 尺寸<span v-if="aiImageModuleSchemaLoading">读取中...</span></p>
+                      <div v-if="aiImageSizeSchemaOptions.length" class="ai-size-picker-schema-grid">
+                        <button
+                          v-for="option in aiImageSizeSchemaOptions"
+                          :key="option"
+                          type="button"
+                          :class="{ active: isAiSchemaSizeOptionActive(option) }"
+                          @click="selectAiSchemaSizeOption(option)"
+                        >
+                          <strong>{{ option }}</strong>
+                          <small v-if="option === aiImageSizeSchemaDefault">默认</small>
+                        </button>
+                      </div>
+                    </section>
                     <div v-if="aiSizePickerMode === 'auto'" class="ai-size-picker-auto">
                       <div class="ai-size-picker-auto-icon">⚡</div>
                       <h4>自动尺寸</h4>
@@ -1018,6 +1433,26 @@
                 <small>{{ metric.hint }}</small>
               </article>
             </div>
+            <section class="partner-invite-card">
+              <div class="partner-invite-copy">
+                <el-tag type="success">推广链接</el-tag>
+                <h3>专属开户链接</h3>
+                <p>{{ partnerInviteLink() || '当前代理商还没有生成邀请码' }}</p>
+              </div>
+              <div class="partner-invite-code">
+                <span>邀请码</span>
+                <strong>{{ partnerInviteCode() || '-' }}</strong>
+              </div>
+              <div class="partner-invite-code">
+                <span>代理商等级</span>
+                <strong>{{ partnerAgentLevelLabel() }}</strong>
+              </div>
+              <div class="partner-invite-actions">
+                <el-button type="primary" :icon="CopyDocument" @click="copyToClipboard(partnerInviteLink())">复制链接</el-button>
+                <el-button :icon="CopyDocument" @click="copyToClipboard(partnerInviteCode())">复制邀请码</el-button>
+                <el-button :icon="Link" @click="openPartnerInviteLink">打开链接</el-button>
+              </div>
+            </section>
             <section class="partner-dashboard-grid">
               <el-card shadow="never" class="partner-chart-card">
                 <template #header><div class="panel-head"><span>推广转化趋势</span><el-tag type="success">实时</el-tag></div></template>
@@ -1044,7 +1479,7 @@
                 <el-table-column prop="customers" label="注册客户" width="120" />
                 <el-table-column prop="orders" label="成交订单" width="120" />
                 <el-table-column prop="commission" label="佣金贡献" min-width="140" />
-                <el-table-column prop="status" label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ scope.row.status }}</el-tag></template></el-table-column>
+                <el-table-column prop="status" label="状态" width="110"><template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
               </el-table>
             </el-card>
           </section>
@@ -1110,6 +1545,304 @@
                 <button v-for="item in quickTodos" :key="item.action" type="button" @click="selectAdminModule(item.module)"><span>{{ item.title }}</span><small>{{ item.desc }}</small></button>
               </div>
             </el-card>
+          </section>
+          <section v-else-if="store.activeModuleId === 'userMembership'" class="user-membership-page">
+            <div class="membership-plan-head">
+              <div>
+                <h2>选择身份、充值与订阅</h2>
+                <p>积分有效期为 2 年</p>
+              </div>
+              <article class="membership-current-card">
+                <div class="membership-current-copy">
+                  <div>
+                    <strong>当前订阅</strong>
+                    <span><el-icon><Tickets /></el-icon></span>
+                  </div>
+                  <small>{{ userMembershipCurrentPlan }}</small>
+                </div>
+                <div class="membership-balance">
+                  <i>◆</i>
+                  <strong>{{ sidebarPlan.availableText }}</strong>
+                  <small>总点数 {{ sidebarPlan.totalText }}</small>
+                </div>
+                <div class="membership-current-actions">
+                  <button type="button" @click="createUserRechargeOrder">充值</button>
+                  <button type="button" @click="selectAdminModule('userOrders')">明细</button>
+                </div>
+              </article>
+            </div>
+
+            <div class="membership-mode-tabs">
+              <button type="button" :class="{ active: selectedMembershipMode === 'identity' }" @click="selectedMembershipMode = 'identity'">身份</button>
+              <button type="button" :class="{ active: selectedMembershipMode === 'recharge' }" @click="selectedMembershipMode = 'recharge'">充值</button>
+              <button type="button" :class="{ active: selectedMembershipMode === 'subscribe' }" @click="selectedMembershipMode = 'subscribe'">订阅</button>
+            </div>
+
+            <section v-if="selectedMembershipMode === 'recharge'" class="membership-recharge-panel">
+              <article class="membership-account-card">
+                <span>充值账户</span>
+                <strong>当前余额: {{ sidebarPlan.availableText }}</strong>
+              </article>
+              <article class="membership-recharge-card">
+                <h3>快捷金额</h3>
+                <div class="membership-amount-grid">
+                  <button
+                    v-for="amount in quickRechargeAmounts"
+                    :key="amount"
+                    type="button"
+                    :class="{ active: selectedRechargeAmount === amount && !customRechargeAmount }"
+                    @click="selectRechargeAmount(amount)"
+                  >
+                    {{ amount }}
+                  </button>
+                </div>
+                <label class="membership-custom-amount">
+                  <span>自定义金额</span>
+                  <input v-model="customRechargeAmount" inputmode="decimal" placeholder="输入金额" />
+                </label>
+              </article>
+              <article class="membership-payment-card">
+                <h3>支付方式</h3>
+                <div class="membership-payment-grid">
+                  <button
+                    v-for="method in paymentMethodOptions"
+                    :key="method.id"
+                    type="button"
+                    :class="{ active: selectedPaymentMethod === method.id }"
+                    @click="selectedPaymentMethod = method.id"
+                  >
+                    <el-icon><component :is="method.icon" /></el-icon>
+                    <span>{{ method.label }}</span>
+                  </button>
+                </div>
+              </article>
+              <button class="membership-pay-submit" type="button" :disabled="!rechargeAmountYuan" @click="createUserRechargeOrder">
+                确认支付 ￥{{ rechargeAmountYuan.toFixed(2) }}
+              </button>
+            </section>
+
+            <template v-else-if="selectedMembershipMode === 'subscribe'">
+              <div class="membership-cycle-tabs">
+              <button
+                v-for="cycle in membershipBillingCycles"
+                :key="cycle.id"
+                type="button"
+                :class="{ active: selectedMembershipCycle === cycle.id }"
+                @click="selectedMembershipCycle = cycle.id"
+              >
+                <span>{{ cycle.label }}</span>
+                <em>{{ cycle.discount }}</em>
+              </button>
+              </div>
+
+              <div class="membership-pricing-grid standard-membership-pricing-grid">
+              <article
+                v-for="plan in standardMembershipPlanCards"
+                :key="plan.id"
+                :class="['membership-pricing-card', { featured: plan.recommended, selected: selectedMembershipPlanId === plan.id }]"
+                @click="selectMembershipPlan(plan)"
+              >
+                <header>
+                  <strong>{{ plan.name }}</strong>
+                  <span v-if="plan.recommended"><el-icon><Check /></el-icon>推荐方案</span>
+                </header>
+                <div class="membership-price-row">
+                  <span>￥</span>
+                  <strong>{{ plan.price }}</strong>
+                  <del>￥{{ plan.originalPrice }}/{{ plan.unit }}</del>
+                </div>
+                <p>{{ plan.note }}</p>
+                <div class="membership-credit-box">
+                  <div><strong>{{ formatNumber(plan.credits) }}</strong><span>积分/{{ plan.creditUnit }}</span></div>
+                  <small>最多生成{{ formatNumber(plan.images) }}张图片 或 {{ formatNumber(plan.videos) }}个视频 <i>?</i></small>
+                </div>
+                <button class="membership-subscribe-button" type="button" @click.stop="createUserSubscriptionOrder(plan)">{{ plan.custom ? "联系商务" : "立即开通" }}</button>
+                <ul>
+                  <li v-for="feature in plan.features" :key="feature"><span>✓</span>{{ feature }}</li>
+                </ul>
+              </article>
+              </div>
+
+              <div v-if="customMembershipPlanCards.length" class="membership-pricing-grid custom-membership-pricing-grid">
+              <article
+                v-for="plan in customMembershipPlanCards"
+                :key="plan.id"
+                :class="['membership-pricing-card custom-membership-pricing-card', { selected: selectedMembershipPlanId === plan.id }]"
+                @click="selectMembershipPlan(plan)"
+              >
+                <header>
+                  <strong>{{ plan.name }}</strong>
+                </header>
+                <div class="membership-price-row">
+                  <span>￥</span>
+                  <strong>{{ plan.price }}</strong>
+                  <del>￥{{ plan.originalPrice }}/{{ plan.unit }}</del>
+                </div>
+                <p>{{ plan.note }}</p>
+                <div class="membership-credit-box">
+                  <div><strong>{{ formatNumber(plan.credits) }}</strong><span>积分/{{ plan.creditUnit }}</span></div>
+                  <small>最多生成{{ formatNumber(plan.images) }}张图片 或 {{ formatNumber(plan.videos) }}个视频 <i>?</i></small>
+                </div>
+                <button class="membership-subscribe-button" type="button" @click.stop="createUserSubscriptionOrder(plan)">联系商务</button>
+                <ul>
+                  <li v-for="feature in plan.features" :key="feature"><span>✓</span>{{ feature }}</li>
+                </ul>
+              </article>
+              </div>
+            </template>
+
+            <section v-if="selectedMembershipMode === 'identity'" class="membership-identity-panel">
+              <article
+                v-for="pack in identityPackageCards"
+                :key="pack.id"
+                :class="['membership-pricing-card', 'identity-package-card', { featured: pack.featured }]"
+              >
+                <header>
+                  <strong>{{ pack.name }}</strong>
+                  <span v-if="pack.badge">{{ pack.badge }}</span>
+                </header>
+                <div class="membership-price-row">
+                  <span>￥</span>
+                  <strong>{{ pack.price }}</strong>
+                  <del>{{ pack.originalText }}</del>
+                </div>
+                <p>{{ pack.note }}</p>
+                <div class="membership-credit-box">
+                  <div><strong>{{ formatNumber(pack.tokenAmount) }}</strong><span>Token/点数权益</span></div>
+                  <small>{{ pack.ruleText }}</small>
+                </div>
+                <button class="membership-subscribe-button" type="button" @click="createUserIdentityOrder(pack)">
+                  {{ pack.actionText }}
+                </button>
+                <ul>
+                  <li v-for="feature in pack.features" :key="feature"><span>✓</span>{{ feature }}</li>
+                </ul>
+              </article>
+            </section>
+
+          </section>
+          <section v-else-if="store.activeModuleId === 'userOrders'" class="user-orders-page">
+            <section class="membership-order-panel">
+              <header>
+                <div>
+                  <strong>订单明细</strong>
+                  <span>只展示当前账号的历史交易、支付状态和到账点数，充值/订阅请进入左侧独立模块操作</span>
+                </div>
+                <em>{{ userMembershipOrders.length }} 条</em>
+              </header>
+              <el-table v-if="userMembershipOrders.length" class="user-order-table" :data="userMembershipOrders" stripe>
+                <el-table-column prop="id" label="订单号" min-width="130" show-overflow-tooltip />
+                <el-table-column prop="orderTypeText" label="类型" min-width="120" />
+                <el-table-column prop="plan" label="套餐/商品" min-width="140" show-overflow-tooltip />
+                <el-table-column prop="paymentMethodText" label="支付方式" min-width="110" />
+                <el-table-column prop="amountCents" label="金额" min-width="110">
+                  <template #default="scope">{{ formatCell(scope.row.amountCents, 'amountCents') }}</template>
+                </el-table-column>
+                <el-table-column prop="rechargePoints" label="到账点数" min-width="110">
+                  <template #default="scope">{{ scope.row.rechargePoints ? `${formatNumber(Number(scope.row.rechargePoints))} 点` : '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="tokenGrantAmount" label="Token权益" min-width="110">
+                  <template #default="scope">{{ scope.row.tokenGrantAmount ? `${formatNumber(Number(scope.row.tokenGrantAmount))} 点` : '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="status" label="状态" min-width="100">
+                  <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
+                </el-table-column>
+                <el-table-column prop="fulfillmentStatus" label="履约" min-width="110">
+                  <template #default="scope"><el-tag :type="scope.row.fulfillmentStatus === 'FULFILLED' ? 'success' : 'info'">{{ scope.row.fulfillmentStatus || '-' }}</el-tag></template>
+                </el-table-column>
+                <el-table-column prop="createdAt" label="创建时间" min-width="180" show-overflow-tooltip />
+                <el-table-column prop="paidAt" label="支付时间" min-width="180" show-overflow-tooltip />
+              </el-table>
+              <el-empty v-else description="暂无订单明细记录" />
+            </section>
+          </section>
+          <section v-else-if="billingModuleIds.includes(store.activeModuleId)" class="billing-page">
+            <div class="billing-toolbar">
+              <div>
+                <el-tag effect="dark" type="success">Lago-style Billing</el-tag>
+                <h2>{{ store.activeModule.title }}</h2>
+                <p>{{ activeModuleMeta.description }}</p>
+              </div>
+              <div class="billing-toolbar-actions">
+                <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新计费数据</el-button>
+                <el-button type="primary" :icon="Tickets" @click="selectAdminModule('billingInvoices')">运行账单</el-button>
+              </div>
+            </div>
+            <div class="billing-kpi-grid">
+              <article v-for="metric in billingMetrics" :key="metric.label" class="billing-kpi-card">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+                <small>{{ metric.hint }}</small>
+              </article>
+            </div>
+            <div class="billing-layout">
+              <section class="billing-main-column">
+                <div class="billing-workflow">
+                  <article v-for="stage in billingWorkflow" :key="String(stage.stage)" class="billing-stage-card">
+                    <span>{{ stage.stage }}</span>
+                    <strong>{{ stage.count }}</strong>
+                    <small>{{ stage.status }}</small>
+                  </article>
+                </div>
+                <el-card shadow="never" class="billing-panel">
+                  <template #header>
+                    <div class="panel-head">
+                      <div><span>{{ billingTableTitle }}</span><small>{{ filteredBillingRows.length }} 条记录</small></div>
+                      <div class="table-tools is-compact"><el-input v-model="searchKeyword" class="table-search" :prefix-icon="Search" clearable placeholder="搜索客户、套餐、状态" /></div>
+                    </div>
+                  </template>
+                  <el-table v-if="filteredBillingRows.length" :data="filteredBillingRows" height="430" stripe>
+                    <el-table-column v-for="column in billingColumns" :key="column" :prop="column" :label="columnLabels[column] || column" min-width="140" show-overflow-tooltip>
+                      <template #default="scope"><el-tag v-if="isStatusColumn(column)" :type="statusType(scope.row[column])">{{ statusLabel(scope.row[column]) }}</el-tag><span v-else>{{ formatCell(scope.row[column], column) }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="操作" fixed="right" width="110"><template #default="scope"><el-button link type="primary" size="small" @click="selectBillingCustomer(scope.row)">详情</el-button></template></el-table-column>
+                  </el-table>
+                  <el-empty v-else description="暂无计费记录" />
+                </el-card>
+                <div class="billing-bottom-grid">
+                  <el-card shadow="never" class="billing-panel">
+                    <template #header>用量计费聚合</template>
+                    <div class="billing-meter-list">
+                      <article v-for="row in billingUsageRows" :key="String(row.id || row.metricCode)">
+                        <div><strong>{{ row.metric }}</strong><span>{{ row.metricCode }}</span></div>
+                        <em>{{ formatCell(row.amountCents, 'amountCents') }}</em>
+                      </article>
+                    </div>
+                  </el-card>
+                  <el-card shadow="never" class="billing-panel">
+                    <template #header>账单运行状态</template>
+                    <div class="billing-meter-list">
+                      <article v-for="row in billingInvoiceRows.slice(0, 5)" :key="String(row.id)">
+                        <div><strong>{{ row.customer }}</strong><span>{{ row.invoiceNo }} / {{ row.invoiceStatus }}</span></div>
+                        <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+                      </article>
+                    </div>
+                  </el-card>
+                </div>
+              </section>
+              <aside class="billing-detail-drawer">
+                <span>客户计费档案</span>
+                <h3>{{ selectedBillingCustomer.customer || selectedBillingCustomer.name || '暂无客户' }}</h3>
+                <p>{{ selectedBillingCustomer.email || '选择左侧记录查看客户详情' }}</p>
+                <dl>
+                  <div><dt>当前订阅</dt><dd>{{ selectedBillingSubscription.plan || selectedBillingCustomer.plan || '-' }}</dd></div>
+                  <div><dt>订阅状态</dt><dd><el-tag :type="statusType(selectedBillingSubscription.status || selectedBillingCustomer.status)">{{ statusLabel(selectedBillingSubscription.status || selectedBillingCustomer.status) }}</el-tag></dd></div>
+                  <div><dt>预付余额</dt><dd>{{ formatCell(selectedBillingCustomer.prepaidBalanceCents || selectedBillingSubscription.prepaidBalanceCents, 'amountCents') }}</dd></div>
+                  <div><dt>钱包编码</dt><dd>{{ selectedBillingCustomer.walletCode || '-' }}</dd></div>
+                  <div><dt>账期/宽限</dt><dd>{{ selectedBillingCustomer.netPaymentTerm || 0 }} 天 / {{ selectedBillingCustomer.invoiceGracePeriod || 0 }} 天</dd></div>
+                  <div><dt>税务状态</dt><dd><el-tag :type="statusType(selectedBillingCustomer.taxStatus)">{{ statusLabel(selectedBillingCustomer.taxStatus) }}</el-tag></dd></div>
+                  <div><dt>优惠券</dt><dd>{{ selectedBillingCustomer.coupon || '-' }}</dd></div>
+                  <div><dt>客户分组</dt><dd>{{ selectedBillingCustomer.customerGroup || '-' }}</dd></div>
+                  <div><dt>付款方式</dt><dd>{{ selectedBillingCustomer.paymentMethod || '线下转账/人工确认' }}</dd></div>
+                  <div><dt>发票抬头</dt><dd>{{ selectedBillingCustomer.invoiceTitle || '-' }}</dd></div>
+                </dl>
+                <div class="billing-entitlement-box">
+                  <strong>权益快照</strong>
+                  <p>{{ selectedBillingSubscription.entitlementSnapshot || '点数、并发、模型白名单和超额规则会在订阅生效时固化。' }}</p>
+                </div>
+                <button type="button" @click="selectAdminModule('billingCustomers')">打开客户计费</button>
+              </aside>
+            </div>
           </section>
           <section v-else-if="store.activeModuleId === 'apiSettings'" class="api-settings-admin">
             <section class="api-settings-titlebar">
@@ -1182,6 +1915,16 @@
                       <div><input v-model="apiProviderDraft.baseUrl" placeholder="https://api.example.com/v1" /></div>
                       <small>国内默认请求地址：<code>https://api-inference.modelscope.cn/v1</code></small>
                       <small>方舟默认请求地址：<code>https://ark.cn-beijing.volces.com/api/v3</code></small>
+                    </label>
+                    <label class="api-source-field">
+                      <span>图片生成端点</span>
+                      <div><input v-model="apiProviderDraft.imageGenerationEndpoint" placeholder="/v1/images/generations" /></div>
+                      <small>以 / 开头表示从域名根路径请求。</small>
+                    </label>
+                    <label class="api-source-field">
+                      <span>视频生成端点</span>
+                      <div><input v-model="apiProviderDraft.videoGenerationEndpoint" placeholder="contents/generations/tasks" /></div>
+                      <small>移动云 Seedance 使用 <code>contents/generations/tasks</code>。</small>
                     </label>
                     <label class="api-source-field is-full">
                       <span>API Key</span>
@@ -1324,23 +2067,348 @@
               </main>
             </section>
           </section>
-          <el-card v-else-if="!['userOnlineImage', 'userAiImage', 'apiSettings'].includes(store.activeModuleId)" shadow="never" class="data-panel">
+          <section v-else-if="store.activeModuleId === 'userWirelessCanvas'" class="wireless-canvas-admin-page">
+            <iframe
+              class="wireless-canvas-admin-frame"
+              :src="wirelessCanvasSrc"
+              title="无线画布"
+              allow="clipboard-read; clipboard-write; fullscreen"
+            ></iframe>
+          </section>
+          <section v-else-if="store.activeModuleId === 'userVideoGeneration'" class="video-generation-page" @click="openVideoDropdown = ''">
+            <section class="video-studio-shell">
+              <div class="video-gallery-stage">
+                <div v-if="selectedVideoHistoryEntry" class="video-current-preview">
+                  <video class="video-preview-frame" :src="selectedVideoHistoryEntry.url" controls playsinline preload="metadata" />
+                  <div class="video-current-copy">
+                    <span>{{ videoModeLabel(selectedVideoHistoryEntry.mode) }}</span>
+                    <h2>{{ selectedVideoHistoryEntry.prompt || "未填写提示词" }}</h2>
+                    <p>{{ selectedVideoHistoryEntry.model }} · {{ selectedVideoHistoryEntry.duration || "-" }}s · {{ selectedVideoHistoryEntry.aspect_ratio || "-" }} · {{ selectedVideoHistoryEntry.resolution || "-" }}</p>
+                  </div>
+                </div>
+                <div v-else class="video-empty-hero">
+                  <div class="video-empty-icon">
+                    <el-icon><Monitor /></el-icon>
+                  </div>
+                  <h2><span>开始创作</span><strong>VIDEO STUDIO</strong></h2>
+                  <p>上传图片生成动态视频，或直接输入提示词生成镜头。</p>
+                </div>
+                <section v-if="videoHistory.length" class="video-history-panel">
+                  <header class="video-history-head">
+                    <div>
+                      <span>历史生成</span>
+                      <strong>{{ filteredVideoHistory.length }} / {{ videoHistory.length }}</strong>
+                    </div>
+                    <div class="video-history-tools">
+                      <label class="video-history-search">
+                        <el-icon><Search /></el-icon>
+                        <input
+                          v-model="videoHistorySearchQuery"
+                          type="search"
+                          placeholder="搜索提示词、模型、ID..."
+                          autocomplete="off"
+                          spellcheck="false"
+                          @click.stop
+                        />
+                        <button
+                          v-if="videoHistorySearchQuery"
+                          type="button"
+                          class="video-history-search-clear"
+                          aria-label="清空视频历史搜索"
+                          title="清空搜索"
+                          @click.stop="videoHistorySearchQuery = ''"
+                        >
+                          ×
+                        </button>
+                      </label>
+                      <select v-model="videoHistoryFilter" @click.stop>
+                        <option value="ALL">全部</option>
+                        <option value="text-to-video">文生视频</option>
+                        <option value="image-to-video">图生视频</option>
+                        <option value="video-to-video">视频编辑</option>
+                        <option value="success">生成成功</option>
+                        <option value="generating">生成中</option>
+                        <option value="failed">生成失败</option>
+                      </select>
+                      <select v-model="videoHistorySort" @click.stop>
+                        <option value="desc">最新优先</option>
+                        <option value="asc">最旧优先</option>
+                      </select>
+                    </div>
+                  </header>
+                  <div v-if="filteredVideoHistory.length" class="video-history-grid">
+                    <article
+                      v-for="entry in filteredVideoHistory"
+                      :key="entry.id"
+                      :class="['video-history-card', `is-${entry.status}`]"
+                      @click="openVideoFullscreen(entry)"
+                    >
+                      <div class="video-history-media" @mouseenter="playVideoCardPreview" @mouseleave="resetVideoCardPreview">
+                        <video v-if="entry.url" :src="entry.url" muted playsinline loop preload="metadata"></video>
+                        <div v-else class="video-history-placeholder">
+                          <el-icon><Monitor /></el-icon>
+                          <span>{{ entry.status === 'failed' ? '生成失败' : '生成中' }}</span>
+                        </div>
+                        <em>{{ videoStatusLabel(entry.status) }}</em>
+                      </div>
+                      <div class="video-history-body">
+                        <p :title="entry.prompt">{{ entry.prompt || "未填写提示词" }}</p>
+                        <div class="video-history-meta">
+                          <span>{{ entry.model }}</span>
+                          <span>{{ entry.duration || "-" }}s</span>
+                          <span>{{ entry.aspect_ratio || "-" }}</span>
+                          <span>{{ entry.resolution || "-" }}</span>
+                        </div>
+                        <small>{{ formatVideoHistoryTime(entry.createdAt) }} · {{ videoModeLabel(entry.mode) }}</small>
+                        <strong v-if="entry.status === 'failed'">{{ entry.errorMessage || "生成失败" }}</strong>
+                      </div>
+                      <footer class="video-history-actions" @click.stop>
+                        <el-tooltip content="下载视频" placement="top" :show-after="160" popper-class="video-history-tooltip">
+                          <span class="video-history-action-wrap">
+                            <button
+                              type="button"
+                              aria-label="下载视频"
+                              title="下载视频"
+                              :disabled="!entry.url || isVideoHistoryActionBusy(entry.id, 'download')"
+                              @click.stop="downloadVideoHistory(entry)"
+                            >
+                              <span v-if="isVideoHistoryActionBusy(entry.id, 'download')" class="video-action-spinner"></span>
+                              <el-icon v-else><Download /></el-icon>
+                            </button>
+                          </span>
+                        </el-tooltip>
+                        <el-tooltip content="复制视频链接" placement="top" :show-after="160" popper-class="video-history-tooltip">
+                          <span class="video-history-action-wrap">
+                            <button
+                              type="button"
+                              aria-label="复制视频链接"
+                              title="复制视频链接"
+                              :disabled="!entry.url || isVideoHistoryActionBusy(entry.id, 'copy')"
+                              @click.stop="copyVideoHistoryUrl(entry)"
+                            >
+                              <span v-if="isVideoHistoryActionBusy(entry.id, 'copy')" class="video-action-spinner"></span>
+                              <el-icon v-else><CopyDocument /></el-icon>
+                            </button>
+                          </span>
+                        </el-tooltip>
+                        <el-tooltip content="删除历史记录" placement="top" :show-after="160" popper-class="video-history-tooltip">
+                          <span class="video-history-action-wrap">
+                            <button
+                              type="button"
+                              class="danger"
+                              aria-label="删除历史记录"
+                              title="删除历史记录"
+                              :disabled="isVideoHistoryActionBusy(entry.id, 'delete')"
+                              @click.stop="deleteVideoHistoryEntry(entry)"
+                            >
+                              <span v-if="isVideoHistoryActionBusy(entry.id, 'delete')" class="video-action-spinner"></span>
+                              <el-icon v-else><Delete /></el-icon>
+                            </button>
+                          </span>
+                        </el-tooltip>
+                      </footer>
+                    </article>
+                  </div>
+                  <div v-else class="video-history-empty">
+                    <strong>未找到相关视频</strong>
+                    <span>换个关键词试试</span>
+                  </div>
+                </section>
+              </div>
+
+              <div class="video-bottom-composer">
+                <div class="video-composer-input-row">
+                  <div class="video-upload-actions">
+                    <div class="video-upload-native">
+                      <input type="file" accept="image/*" @change="handleVideoImageFile" />
+                      <button
+                        type="button"
+                        :class="['video-circle-tool', { active: videoStudioMode === 'image' || Boolean(videoImagePreview) }]"
+                        :title="videoImagePreview ? '清除图片' : '上传图片生成视频'"
+                        @click="videoImagePreview ? clearVideoImageUpload() : undefined"
+                      >
+                        <img v-if="videoImagePreview" :src="videoImagePreview" alt="" />
+                        <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                          <circle cx="8.5" cy="8.5" r="1.5" />
+                          <polyline points="21 15 16 10 5 21" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div class="video-upload-native">
+                      <input type="file" accept="video/*" @change="handleVideoSourceFile" />
+                      <button
+                        type="button"
+                        :class="['video-circle-tool', { active: videoStudioMode === 'video' || Boolean(videoSourcePreview) }]"
+                        :title="videoSourcePreview ? '清除视频' : '上传视频处理'"
+                        @click="videoSourcePreview ? clearVideoSourceUpload() : undefined"
+                      >
+                        <video v-if="videoSourcePreview" :src="videoSourcePreview" muted playsinline />
+                        <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polygon points="23 7 16 12 23 17 23 7" />
+                          <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    ref="videoPromptTextareaRef"
+                    v-model="videoPrompt"
+                    class="video-prompt-native"
+                    rows="2"
+                    wrap="soft"
+                    maxlength="1200"
+                    :placeholder="videoStudioMode === 'image' ? '描述图片如何动起来...' : videoStudioMode === 'video' ? '描述要如何处理这个视频...' : '描述你想生成的视频画面...'"
+                    @input="handleVideoPromptInput"
+                    @keydown.ctrl.enter.prevent="submitVideoGeneration"
+                    @keydown.meta.enter.prevent="submitVideoGeneration"
+                  ></textarea>
+                </div>
+
+                <div class="video-control-row">
+                  <div class="video-control-group">
+                    <div class="video-control-popover">
+                      <button type="button" class="video-control-button" @click.stop="toggleVideoDropdown('model')">
+                        <span class="video-model-mark">V</span>
+                        <span>{{ selectedVideoModel }}</span>
+                        <el-icon class="video-chevron"><ArrowDown /></el-icon>
+                      </button>
+                      <div v-if="openVideoDropdown === 'model'" class="video-dropdown-panel video-model-dropdown" @click.stop>
+                        <label class="video-dropdown-search">
+                          <el-icon><Search /></el-icon>
+                          <input v-model="videoModelSearch" type="text" placeholder="搜索模型..." @click.stop />
+                        </label>
+                        <small>视频模型</small>
+                        <button
+                          v-for="model in filteredVideoModelOptions"
+                          :key="model.name"
+                          type="button"
+                          :class="['video-model-option', `is-${model.family}`, { active: selectedVideoModel === model.name }]"
+                          @click="selectVideoOption('model', model.name)"
+                        >
+                          <i>{{ model.name.slice(0, 1) }}</i>
+                          <span><b>{{ model.name }}</b><em>{{ model.desc }}</em></span>
+                          <el-icon v-if="selectedVideoModel === model.name"><Check /></el-icon>
+                        </button>
+                        <small class="video-tools-title">视频工具</small>
+                        <button
+                          v-for="tool in filteredVideoToolOptions"
+                          :key="tool.name"
+                          type="button"
+                          :class="['video-model-option', 'is-tool', { active: selectedVideoModel === tool.name }]"
+                          @click="selectVideoOption('model', tool.name)"
+                        >
+                          <i>{{ tool.name.slice(0, 1) }}</i>
+                          <span><b>{{ tool.name }}</b><em>{{ tool.desc }}</em></span>
+                          <el-icon v-if="selectedVideoModel === tool.name"><Check /></el-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="video-control-popover">
+                      <button type="button" class="video-control-button" @click.stop="toggleVideoDropdown('ratio')">
+                        <svg class="video-control-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        </svg>
+                        <span>{{ videoRatio }}</span>
+                      </button>
+                      <div v-if="openVideoDropdown === 'ratio'" class="video-dropdown-panel video-ratio-dropdown" @click.stop>
+                        <small>画面比例</small>
+                        <button
+                          v-for="item in availableVideoRatioOptions"
+                          :key="item"
+                          type="button"
+                          :class="{ active: videoRatio === item }"
+                          @click="selectVideoOption('ratio', item)"
+                        >
+                          <span>{{ item }}</span>
+                          <el-icon v-if="videoRatio === item"><Check /></el-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="video-control-popover">
+                      <button type="button" class="video-control-button" @click.stop="toggleVideoDropdown('duration')">
+                        <el-icon><Clock /></el-icon>
+                        <span>{{ videoDuration }}s</span>
+                      </button>
+                      <div v-if="openVideoDropdown === 'duration'" class="video-dropdown-panel" @click.stop>
+                        <small>视频时长</small>
+                        <button
+                          v-for="item in availableVideoDurationOptions"
+                          :key="item"
+                          type="button"
+                          :class="{ active: videoDuration === item }"
+                          @click="selectVideoOption('duration', item)"
+                        >
+                          <span>{{ item }}s</span>
+                          <el-icon v-if="videoDuration === item"><Check /></el-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="video-control-popover">
+                      <button type="button" class="video-control-button" @click.stop="toggleVideoDropdown('resolution')">
+                        <svg class="video-control-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M6 2L3 6v15a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4H6z" />
+                        </svg>
+                        <span>{{ videoResolution }}</span>
+                      </button>
+                      <div v-if="openVideoDropdown === 'resolution'" class="video-dropdown-panel video-resolution-dropdown" @click.stop>
+                        <small>清晰度</small>
+                        <button
+                          v-for="item in availableVideoResolutionOptions"
+                          :key="item"
+                          type="button"
+                          :class="{ active: videoResolution === item }"
+                          @click="selectVideoOption('resolution', item)"
+                        >
+                          <span>{{ item }}</span>
+                          <el-icon v-if="videoResolution === item"><Check /></el-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      :class="['video-control-button', { active: videoGenerateAudio }]"
+                      :title="videoGenerateAudio ? '配音已开启' : '配音已关闭'"
+                      @click="videoGenerateAudio = !videoGenerateAudio"
+                    >
+                      <svg class="video-control-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" />
+                        <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                        <path d="M12 18v3" />
+                        <path d="M8 21h8" />
+                      </svg>
+                      <span>{{ videoGenerateAudio ? '配音' : '静音' }}</span>
+                    </button>
+                  </div>
+                  <div class="video-submit-group">
+                    <button type="button" class="video-generate-button" :disabled="videoSubmitting" @click="submitVideoGeneration">
+                      {{ videoSubmitting ? '生成中' : '生成' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
+          <section v-else-if="store.activeModuleId === 'userPptGeneration'" class="ppt-doc-shell">
+            <PptDocumentGeneration />
+          </section>
+          <el-card v-else-if="!['userDashboard', 'userAiImage', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" shadow="never" class="data-panel">
             <template #header>
               <div class="panel-head">
                 <div><span>{{ store.activeModule.title }}</span><small>{{ filteredRows.length }} 条记录</small></div>
                 <div class="toolbar"><el-button v-for="action in toolbarActions" :key="action.action" size="small" type="primary" :icon="Plus" @click="runAction(action.action)">{{ action.label }}</el-button></div>
               </div>
             </template>
-            <template>
+            <div class="data-panel-body">
               <div class="table-tools"><el-input v-model="searchKeyword" class="table-search" :prefix-icon="Search" clearable placeholder="按名称、邮箱、ID、状态搜索" /><el-segmented v-model="statusFilter" :options="statusFilterOptions" /></div>
               <el-table v-if="filteredRows.length" :data="filteredRows" height="560" v-loading="store.saving" stripe>
                 <el-table-column v-for="column in columns" :key="column" :prop="column" :label="columnLabels[column] || column" min-width="140" show-overflow-tooltip>
-                  <template #default="scope"><el-tag v-if="isStatusColumn(column)" :type="statusType(scope.row[column])">{{ scope.row[column] || '-' }}</el-tag><span v-else>{{ formatCell(scope.row[column], column) }}</span></template>
+                  <template #default="scope"><el-tag v-if="isStatusColumn(column)" :type="statusType(scope.row[column])">{{ statusLabel(scope.row[column]) }}</el-tag><span v-else>{{ formatCell(scope.row[column], column) }}</span></template>
                 </el-table-column>
                 <el-table-column v-if="rowActions.length" label="操作" fixed="right" width="190"><template #default="scope"><el-button v-for="action in visibleRowActions(scope.row)" :key="action.action" link type="primary" size="small" @click="runAction(action.action, scope.row)">{{ labelForRowAction(action, scope.row) }}</el-button></template></el-table-column>
               </el-table>
               <el-empty v-else description="暂无记录" />
-            </template>
+            </div>
           </el-card>
         </section>
       </el-main>
@@ -1397,21 +2465,72 @@
       </div>
     </section>
   </div>
+  <div v-if="videoFullscreenEntry" class="video-lightbox-overlay" @click.self="closeVideoFullscreen">
+    <button type="button" class="video-lightbox-close" @click="closeVideoFullscreen">×</button>
+    <section class="video-lightbox-card">
+      <video :src="videoFullscreenEntry.url" controls autoplay playsinline></video>
+      <div>
+        <strong>{{ videoFullscreenEntry.prompt || "未填写提示词" }}</strong>
+        <span>{{ videoFullscreenEntry.model }} · {{ formatVideoHistoryTime(videoFullscreenEntry.createdAt) }}</span>
+      </div>
+    </section>
+  </div>
   </el-config-provider>
 </template>
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
 import { ElMessage, ElMessageBox, type ComponentSize } from "element-plus";
-import { ArrowDown, Check, Collection, Connection, CopyDocument, Cpu, DataAnalysis, Delete, Download, EditPen, Goods, Grid, House, Key, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
+import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
 import { adminRequest } from "./api/client";
+import PromptEditable from "./components/PromptEditable.vue";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
-import { readAiImageDraft, readCachedOriginalImage, writeAiImageDraft, writeCachedOriginalImage, type CachedReferenceImage } from "./utils/aiImageDb";
+import { clearCurrentAiImageCache, readAiImageDraft, readCachedOriginalImage, writeAiImageDraft, writeCachedOriginalImage, type CachedReferenceImage } from "./utils/aiImageDb";
 import xianzhiLogo from "./assets/xianzhi-ai-logo.png";
+
+function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
+  ElMessage({
+    type,
+    message,
+    customClass: "ai-playground-message",
+    duration: 2400,
+    showClose: false,
+    grouping: true
+  });
+}
 
 const store = useAdminStore();
 const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
+const PptDocumentGeneration = defineAsyncComponent({
+  loader: () => import("./components/PptDocumentGeneration.vue"),
+  delay: 0,
+  suspensible: false
+});
+const billingModuleIds = [
+  "billingDashboard",
+  "billingCustomers",
+  "billingProducts",
+  "billingBillableMetrics",
+  "billingCharges",
+  "billingSubscriptions",
+  "billingEvents",
+  "billingFees",
+  "billingWallets",
+  "billingCoupons",
+  "billingInvoices",
+  "billingCreditNotes",
+  "billingPaymentRequests",
+  "billingPayments"
+];
+const aiCapabilityModuleIds = [
+  "aiCapabilities",
+  "aiCapabilityModels",
+  "aiCapabilitySchemas",
+  "aiCapabilityLimits",
+  "aiCapabilityChannels",
+  "aiCapabilityLogs"
+];
 const elementSizeStorageKey = "xianzhi-admin-element-size";
 const elementSizeOptions: Array<{ label: string; value: ComponentSize }> = [
   { label: "默认", value: "default" },
@@ -1429,53 +2548,873 @@ function setElementSize(command: string) {
 }
 const searchKeyword = ref("");
 const statusFilter = ref("ALL");
-const statusFilterOptions = [
-  { label: "全部", value: "ALL" },
-  { label: "启用", value: "ACTIVE" },
-  { label: "待处理", value: "PENDING" },
-  { label: "停用", value: "DISABLED" }
+const statusFilterOptions = computed(() => {
+  if (store.activeModuleId === "partnerCommissions") {
+    return [
+      { label: "全部", value: "ALL" },
+      { label: "待结算", value: "PENDING" },
+      { label: "已通过", value: "APPROVED" },
+      { label: "已驳回", value: "REJECTED" }
+    ];
+  }
+  if (["partnerUsage", "partnerOrders", "userUsage", "userAiImage"].includes(store.activeModuleId)) {
+    return [
+      { label: "全部", value: "ALL" },
+      { label: "成功", value: "SUCCEEDED" },
+      { label: "处理中", value: "PENDING" },
+      { label: "失败", value: "FAILED" }
+    ];
+  }
+  return [
+    { label: "全部", value: "ALL" },
+    { label: "启用", value: "ACTIVE" },
+    { label: "待处理", value: "PENDING" },
+    { label: "停用", value: "DISABLED" }
+  ];
+});
+
+const videoModelOptions = [
+  { name: "Mock Video", family: "tool", desc: "本地联调视频模型" },
+  { name: "Grok Image Video", family: "grok", desc: "Grok 文生/图生视频" },
+  { name: "Grok Video 1.5", family: "grok", desc: "Grok 单图生视频" },
+  { name: "Veo 3", family: "veo", desc: "Google 视频生成" },
+  { name: "Kling 2.1", family: "kling", desc: "可灵标准视频" },
+  { name: "Seedance 2.0", family: "seedance", desc: "Seedance 文生视频" },
+  { name: "Doubao Seedance 2.0", family: "seedance", desc: "豆包 Seedance 2.0 视频" },
+  { name: "Wan 2.2", family: "wan", desc: "Wan 系列视频" },
+  { name: "Sora 2", family: "sora", desc: "OpenAI 视频模型" }
 ];
+const videoToolOptions = [
+  { name: "去水印", family: "tool", desc: "上传视频处理" },
+  { name: "运动控制", family: "tool", desc: "视频 + 图片控制" }
+];
+const videoDurationOptions = [4, 5, 6, 8, 10, 12, 14, 15, 16, 18, 20, 25];
+const videoRatioOptions = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21"];
+const videoResolutionOptions = ["480p", "720p", "1080p"];
+const videoModelParameterOptions: Record<string, { durations: number[]; ratios?: string[]; resolutions?: string[] }> = {
+  "Mock Video": { durations: [4], ratios: ["16:9"], resolutions: ["480p"] },
+  "Grok Image Video": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"], resolutions: ["480p", "720p"] },
+  "Grok Video 1.5": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16"], resolutions: ["480p", "720p"] },
+  "Veo 3": { durations: [8], ratios: ["16:9", "9:16"], resolutions: ["720p", "1080p"] },
+  "Kling 2.1": { durations: [5, 10], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p", "1080p"] },
+  "Seedance 2.0": { durations: [5, 10, 15], ratios: ["16:9", "9:16", "4:3", "3:4"], resolutions: ["480p", "720p", "1080p"] },
+  "Doubao Seedance 2.0": { durations: [5, 8, 10, 12, 15], ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"], resolutions: ["480p", "720p", "1080p", "4k"] },
+  "Wan 2.2": { durations: [5, 8], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p"] },
+  "Sora 2": { durations: [10, 15, 25], ratios: ["16:9", "9:16"], resolutions: ["720p"] },
+  去水印: { durations: [] },
+  运动控制: { durations: [5, 10], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p", "1080p"] }
+};
+const videoStudioMode = ref("text");
+const videoPrompt = ref("");
+const selectedVideoModel = ref("Grok Image Video");
+const videoModelSearch = ref("");
+const videoDuration = ref(5);
+const videoRatio = ref("16:9");
+const videoResolution = ref("720p");
+const videoGenerateAudio = ref(true);
+const videoSubmitting = ref(false);
+const videoResultTask = ref<AdminRecord | null>(null);
+const openVideoDropdown = ref<"" | "model" | "ratio" | "duration" | "resolution">("");
+const videoImagePreview = ref("");
+const videoSourcePreview = ref("");
+const videoHistory = ref<VideoHistoryEntry[]>([]);
+const videoHiddenHistoryIds = ref<string[]>([]);
+const selectedVideoHistoryId = ref("");
+const videoHistorySearchQuery = ref("");
+const videoHistoryFilter = ref("ALL");
+const videoHistorySort = ref<"desc" | "asc">("desc");
+const videoFullscreenEntry = ref<VideoHistoryEntry | null>(null);
+const videoHistoryBusyActions = ref<Record<string, boolean>>({});
+const videoPromptTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const videoHistoryStorageBaseKey = "xianzhi_video_history";
+const videoPromptDraftBaseKey = "xianzhi_video_prompt_draft";
+const videoHistorySearchBaseKey = "xianzhi_video_history_search";
+const videoHistoryLimit = 50;
+let videoHistoryHydrated = false;
+let videoHistorySaveTimer: number | null = null;
+let videoInputDraftSaveTimer: number | null = null;
+let videoHistoryPollTimer: number | null = null;
+let videoImageObjectUrl = "";
+let videoSourceObjectUrl = "";
+let videoImageFile: File | null = null;
+const filteredVideoModelOptions = computed(() => {
+  const keyword = videoModelSearch.value.trim().toLowerCase();
+  if (!keyword) return videoModelOptions;
+  return videoModelOptions.filter((model) => `${model.name} ${model.desc}`.toLowerCase().includes(keyword));
+});
+const filteredVideoToolOptions = computed(() => {
+  const keyword = videoModelSearch.value.trim().toLowerCase();
+  if (!keyword) return videoToolOptions;
+  return videoToolOptions.filter((tool) => `${tool.name} ${tool.desc}`.toLowerCase().includes(keyword));
+});
+const availableVideoDurationOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.durations ?? videoDurationOptions);
+const availableVideoRatioOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.ratios ?? videoRatioOptions);
+const availableVideoResolutionOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.resolutions ?? videoResolutionOptions);
+
+function syncVideoModelParameters() {
+  const durations = availableVideoDurationOptions.value;
+  const ratios = availableVideoRatioOptions.value;
+  const resolutions = availableVideoResolutionOptions.value;
+  if (durations.length && !durations.includes(videoDuration.value)) videoDuration.value = durations[0];
+  if (ratios.length && !ratios.includes(videoRatio.value)) videoRatio.value = ratios[0];
+  if (resolutions.length && !resolutions.includes(videoResolution.value)) videoResolution.value = resolutions[0];
+}
+
+function selectedVideoModelId() {
+  const mapping: Record<string, string> = {
+    "Mock Video": "mock-video",
+    "Grok Image Video": "grok-image-video",
+    "Grok Video 1.5": "grok-video-1.5",
+    "Veo 3": "veo3",
+    "Kling 2.1": "kling-2.1",
+    "Seedance 2.0": "seedance-2.0",
+    "Doubao Seedance 2.0": "doubao-seedance-2.0",
+    "Wan 2.2": "wan-2.2",
+    "Sora 2": "sora-2"
+  };
+  return mapping[selectedVideoModel.value] || selectedVideoModel.value;
+}
+
+function videoTaskUrl(task: AdminRecord | null) {
+  if (!task) return "";
+  return String(task.outputUrl || task.resultUrl || task.imageUrl || "");
+}
+
+function videoTaskParams(task: AdminRecord | null): Record<string, unknown> {
+  if (!task) return {};
+  const raw = task.params || task.paramsJson || task.params_json || task.metadata;
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === "object" ? raw as Record<string, unknown> : {};
+}
+
+function videoStringValue(value: unknown, fallback = "") {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value);
+}
+
+function normalizeVideoErrorText(raw: string) {
+  const text = raw.trim();
+  if (!text) return "";
+  const subscriptionMatch = text.match(/当前账号处未订购[^"\\\r\n]*/);
+  if (subscriptionMatch?.[0]) return subscriptionMatch[0].trim();
+  const jsonMessageMatch = text.match(/"(?:message|error|detail|reason)"\s*:\s*"([^"]+)"/i);
+  if (jsonMessageMatch?.[1]) {
+    try {
+      return normalizeVideoErrorText(JSON.parse(`"${jsonMessageMatch[1]}"`));
+    } catch {
+      return normalizeVideoErrorText(jsonMessageMatch[1]);
+    }
+  }
+  const lower = text.toLowerCase();
+  if (lower.includes("create_video_generation_task returned empty task id") && lower.includes("seedance")) {
+    return "移动云 Seedance 创建任务失败，请检查模型资费包、API Key 和模型权限";
+  }
+  const compact = text.replace(/\s+/g, " ");
+  return compact.length > 180 ? `${compact.slice(0, 180)}...` : compact;
+}
+
+function videoErrorMessage(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return normalizeVideoErrorText(String(value));
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["message", "error", "detail", "reason", "failureReason", "failReason", "errorMessage"]) {
+      const nested = videoErrorMessage(record[key]);
+      if (nested) return nested;
+    }
+    try {
+      return normalizeVideoErrorText(JSON.stringify(value));
+    } catch {
+      return "生成失败";
+    }
+  }
+  return normalizeVideoErrorText(String(value));
+}
+
+function videoNumberOrString(value: unknown, fallback: number | string = "") {
+  if (value === undefined || value === null || value === "") return fallback;
+  const asNumber = Number(value);
+  return Number.isFinite(asNumber) ? asNumber : String(value);
+}
+
+function normalizeVideoTimestamp(value: unknown) {
+  const parsed = value ? Date.parse(String(value)) : NaN;
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function videoStatusFromTask(task: AdminRecord): VideoHistoryStatus {
+  const status = String(task.status || "").toUpperCase();
+  if (["SUCCEEDED", "SUCCESS", "COMPLETED", "DONE"].includes(status)) return "success";
+  if (["FAILED", "FAILURE", "ERROR", "CANCELED", "CANCELLED"].includes(status)) return "failed";
+  return "generating";
+}
+
+function videoModeFromTask(task: AdminRecord, params: Record<string, unknown>): VideoHistoryEntry["mode"] {
+  const inputMode = String(params.inputMode || params.mode || task.mode || "").toLowerCase();
+  const type = String(task.type || task.sourceType || "").toUpperCase();
+  if (inputMode.includes("video") || type.includes("VIDEO_TO_VIDEO")) return "video-to-video";
+  if (inputMode.includes("image") || type.includes("IMAGE_TO_VIDEO")) return "image-to-video";
+  return "text-to-video";
+}
+
+function videoInputImageUrlsFromTask(task: AdminRecord, params: Record<string, unknown>) {
+  const candidates = [params.image_urls, params.imageUrls, params.inputImageUrls, params.reference_images, task.inputImageUrls];
+  const urls = candidates.flatMap((value) => Array.isArray(value) ? value : value ? [value] : []);
+  return urls.map((item) => String(item)).filter(Boolean);
+}
+
+function normalizeVideoHistoryEntry(entry: Partial<VideoHistoryEntry> | null | undefined): VideoHistoryEntry | null {
+  if (!entry) return null;
+  const timestamp = normalizeVideoTimestamp(entry.createdAt || entry.timestamp);
+  const id = String(entry.id || entry.taskId || entry.backendTaskId || `video-${timestamp}`).trim();
+  if (!id) return null;
+  return {
+    id,
+    taskId: entry.taskId ? String(entry.taskId) : undefined,
+    backendTaskId: entry.backendTaskId ? String(entry.backendTaskId) : undefined,
+    url: String(entry.url || ""),
+    prompt: String(entry.prompt || ""),
+    model: String(entry.model || selectedVideoModelId()),
+    mode: entry.mode || "text-to-video",
+    aspect_ratio: String(entry.aspect_ratio || videoRatio.value || ""),
+    duration: entry.duration || videoDuration.value || "",
+    resolution: String(entry.resolution || videoResolution.value || ""),
+    inputImageUrls: Array.isArray(entry.inputImageUrls) ? entry.inputImageUrls.map(String).filter(Boolean) : [],
+    inputVideoUrl: String(entry.inputVideoUrl || ""),
+    createdAt: entry.createdAt || new Date(timestamp).toISOString(),
+    timestamp,
+    status: entry.status || (entry.url ? "success" : "generating"),
+    errorMessage: entry.errorMessage ? String(entry.errorMessage) : "",
+    userId: entry.userId ? String(entry.userId) : undefined
+  };
+}
+
+function taskToVideoHistoryEntry(task: AdminRecord): VideoHistoryEntry | null {
+  if (!isVideoGenerationTask(task)) return null;
+  const params = videoTaskParams(task);
+  const createdAt = String(task.createdAt || task.created_at || task.updatedAt || new Date().toISOString());
+  const status = videoStatusFromTask(task);
+  return normalizeVideoHistoryEntry({
+    id: String(task.id || task.taskId || `video-${Date.now()}`),
+    taskId: String(task.taskId || task.providerTaskId || task.id || ""),
+    backendTaskId: String(task.id || ""),
+    url: videoTaskUrl(task),
+    prompt: String(task.prompt || params.prompt || ""),
+    model: String(task.model || params.model || selectedVideoModelId()),
+    mode: videoModeFromTask(task, params),
+    aspect_ratio: videoStringValue(params.ratio ?? params.aspect_ratio ?? task.aspect_ratio, videoRatio.value),
+    duration: videoNumberOrString(params.duration ?? params.seconds ?? task.duration, videoDuration.value),
+    resolution: videoStringValue(params.resolution ?? task.resolution, videoResolution.value),
+    inputImageUrls: videoInputImageUrlsFromTask(task, params),
+    inputVideoUrl: videoStringValue(params.inputVideoUrl ?? params.video_url ?? params.videoUrl ?? task.inputVideoUrl),
+    createdAt,
+    status,
+    errorMessage: videoErrorMessage(task.failureReason ?? task.errorMessage ?? task.error ?? task.failReason),
+    userId: videoStringValue(task.userId)
+  });
+}
+
+function isVideoGenerationTask(task: AdminRecord) {
+  const type = String(task.type || task.sourceType || "").toUpperCase();
+  const mediaType = String(task.mediaType || "").toLowerCase();
+  const url = videoTaskUrl(task);
+  return type.includes("VIDEO") || mediaType === "video" || /\.mp4(\?|$)/i.test(url);
+}
+
+function sortVideoHistory(entries: VideoHistoryEntry[]) {
+  return [...entries].sort((left, right) => right.timestamp - left.timestamp).slice(0, videoHistoryLimit);
+}
+
+function commitVideoHistoryEntry(entry: Partial<VideoHistoryEntry>, replaceId = "") {
+  const normalized = normalizeVideoHistoryEntry(entry);
+  if (!normalized) return;
+  videoHistory.value = sortVideoHistory([
+    normalized,
+    ...videoHistory.value.filter((item) => item.id !== normalized.id && item.id !== replaceId && item.taskId !== normalized.taskId && item.backendTaskId !== normalized.backendTaskId)
+  ]);
+  selectedVideoHistoryId.value = normalized.id;
+}
+
+function mergeVideoHistoryEntries(entries: Array<VideoHistoryEntry | null>) {
+  const map = new Map<string, VideoHistoryEntry>();
+  videoHistory.value.forEach((entry) => {
+    if (!videoHiddenHistoryIds.value.includes(entry.id)) map.set(entry.id, entry);
+  });
+  entries.filter(Boolean).forEach((entry) => {
+    const normalized = normalizeVideoHistoryEntry(entry);
+    if (!normalized || videoHiddenHistoryIds.value.includes(normalized.id)) return;
+    map.set(normalized.id, { ...(map.get(normalized.id) || {}), ...normalized });
+  });
+  videoHistory.value = sortVideoHistory(Array.from(map.values()));
+  if (!selectedVideoHistoryId.value && videoHistory.value.length) selectedVideoHistoryId.value = videoHistory.value[0].id;
+}
+
+function videoScopedStorageKey(baseKey: string) {
+  const userKey = String(currentAdmin.value?.id || currentAdmin.value?.email || "anonymous").replace(/[^\w.@-]/g, "_");
+  return `${baseKey}:${userKey}`;
+}
+
+function videoHistoryStorageKey() {
+  return videoScopedStorageKey(videoHistoryStorageBaseKey);
+}
+
+function hydrateVideoInputDraftsFromStorage() {
+  if (typeof window === "undefined") return;
+  const promptDraft = window.localStorage.getItem(videoScopedStorageKey(videoPromptDraftBaseKey));
+  const searchDraft = window.localStorage.getItem(videoScopedStorageKey(videoHistorySearchBaseKey));
+  if (promptDraft !== null) videoPrompt.value = promptDraft;
+  if (searchDraft !== null) videoHistorySearchQuery.value = searchDraft;
+}
+
+function hydrateVideoHistoryFromStorage() {
+  if (typeof window === "undefined" || videoHistoryHydrated) return;
+  videoHistoryHydrated = true;
+  hydrateVideoInputDraftsFromStorage();
+  try {
+    const raw = window.localStorage.getItem(videoHistoryStorageKey()) || window.localStorage.getItem(videoHistoryStorageBaseKey);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.videoHistory) ? parsed.videoHistory : [];
+    videoHiddenHistoryIds.value = Array.isArray(parsed?.hiddenIds) ? parsed.hiddenIds.map(String).filter(Boolean) : [];
+    selectedVideoHistoryId.value = String(parsed?.selectedId || "");
+    videoHistory.value = sortVideoHistory(entries.map(normalizeVideoHistoryEntry).filter(Boolean) as VideoHistoryEntry[]);
+  } catch {
+    videoHistory.value = [];
+  }
+}
+
+function scheduleVideoHistorySave() {
+  if (!videoHistoryHydrated || typeof window === "undefined") return;
+  if (videoHistorySaveTimer) window.clearTimeout(videoHistorySaveTimer);
+  videoHistorySaveTimer = window.setTimeout(() => {
+    const payload = {
+      version: 1,
+      videoHistory: videoHistory.value,
+      hiddenIds: videoHiddenHistoryIds.value,
+      selectedId: selectedVideoHistoryId.value,
+      updatedAt: new Date().toISOString()
+    };
+    window.localStorage.setItem(videoHistoryStorageKey(), JSON.stringify(payload));
+  }, 400);
+}
+
+function scheduleVideoInputDraftSave() {
+  if (!videoHistoryHydrated || typeof window === "undefined") return;
+  if (videoInputDraftSaveTimer) window.clearTimeout(videoInputDraftSaveTimer);
+  videoInputDraftSaveTimer = window.setTimeout(() => {
+    window.localStorage.setItem(videoScopedStorageKey(videoPromptDraftBaseKey), videoPrompt.value);
+    window.localStorage.setItem(videoScopedStorageKey(videoHistorySearchBaseKey), videoHistorySearchQuery.value);
+  }, 400);
+}
+
+function adjustVideoPromptHeight() {
+  const textarea = videoPromptTextareaRef.value;
+  if (!textarea) return;
+  const viewportMax = typeof window === "undefined" ? 220 : Math.min(Math.max(Math.floor(window.innerHeight * 0.4), 160), 240);
+  textarea.style.height = "0px";
+  const targetHeight = Math.min(textarea.scrollHeight, viewportMax);
+  textarea.style.height = `${Math.max(targetHeight, 48)}px`;
+  textarea.style.overflowY = textarea.scrollHeight > viewportMax ? "auto" : "hidden";
+}
+
+function handleVideoPromptInput() {
+  void nextTick(adjustVideoPromptHeight);
+}
+
+const selectedVideoHistoryEntry = computed(() => {
+  const matched = videoHistory.value.find((entry) => entry.id === selectedVideoHistoryId.value);
+  return matched || videoHistory.value.find((entry) => entry.url && entry.status === "success") || videoHistory.value[0] || null;
+});
+
+const filteredVideoHistory = computed(() => {
+  const keyword = videoHistorySearchQuery.value.trim().toLowerCase();
+  const filter = videoHistoryFilter.value;
+  const filtered = videoHistory.value.filter((entry) => {
+    if (videoHiddenHistoryIds.value.includes(entry.id)) return false;
+    if (filter !== "ALL" && entry.status !== filter && entry.mode !== filter) return false;
+    if (!keyword) return true;
+    return [
+      entry.id,
+      entry.taskId || "",
+      entry.prompt,
+      entry.model,
+      entry.mode,
+      entry.createdAt,
+      entry.timestamp,
+      entry.duration,
+      entry.aspect_ratio,
+      entry.resolution,
+      entry.status
+    ].join(" ").toLowerCase().includes(keyword);
+  });
+  return [...filtered].sort((left, right) => videoHistorySort.value === "asc" ? left.timestamp - right.timestamp : right.timestamp - left.timestamp);
+});
+
+async function submitVideoGeneration() {
+  openVideoDropdown.value = "";
+  const prompt = videoPrompt.value.trim();
+  if (!prompt) {
+    ElMessage.error("请输入视频提示词");
+    return;
+  }
+  if (videoImageFile && videoImagePreview.value) videoStudioMode.value = "image";
+  if (selectedVideoModel.value === "Grok Video 1.5" && !videoImageFile) {
+    ElMessage.error("Grok Video 1.5 必须上传 1 张参考图");
+    return;
+  }
+  if (videoStudioMode.value === "image" && !videoImageFile) {
+    ElMessage.error("请先上传 1 张参考图");
+    return;
+  }
+  let videoReferenceImageUrl = "";
+  const snapshotId = `video-local-${Date.now()}`;
+  const snapshotCreatedAt = new Date().toISOString();
+  const snapshotMode: VideoHistoryEntry["mode"] = videoStudioMode.value === "image" ? "image-to-video" : videoStudioMode.value === "video" ? "video-to-video" : "text-to-video";
+  commitVideoHistoryEntry({
+    id: snapshotId,
+    url: "",
+    prompt,
+    model: selectedVideoModelId(),
+    mode: snapshotMode,
+    aspect_ratio: videoRatio.value,
+    duration: videoDuration.value,
+    resolution: videoResolution.value,
+    inputImageUrls: videoImagePreview.value ? [videoImagePreview.value] : [],
+    inputVideoUrl: videoSourcePreview.value,
+    createdAt: snapshotCreatedAt,
+    status: "generating",
+    userId: String(currentAdmin.value?.id || "")
+  });
+  videoSubmitting.value = true;
+  try {
+    const type = videoStudioMode.value === "image" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+    if (type === "IMAGE_TO_VIDEO") {
+      videoReferenceImageUrl = await blobToDataUrl(videoImageFile as File);
+    }
+    const createdTask = await adminRequest<AdminRecord>({
+      method: "POST",
+      url: "/generation-tasks",
+      timeout: 900000,
+      data: {
+        type,
+        prompt,
+        model: selectedVideoModelId(),
+        moduleCode: "video_generation",
+        params: {
+          module_code: "video_generation",
+          duration: videoDuration.value,
+          ratio: videoRatio.value,
+          resolution: videoResolution.value,
+          generate_audio: videoGenerateAudio.value,
+          generateAudio: videoGenerateAudio.value,
+          sourceModule: "video-generation",
+          inputMode: videoStudioMode.value,
+          hasInputImage: Boolean(videoImagePreview.value),
+          hasInputVideo: Boolean(videoSourcePreview.value),
+          ...(videoReferenceImageUrl ? {
+            image_urls: [videoReferenceImageUrl],
+            referenceImages: [{ name: videoImageFile?.name || "video-reference-image", url: videoReferenceImageUrl }]
+          } : {})
+        }
+      }
+    });
+    const taskId = String(createdTask.id || "");
+    const task = taskId
+      ? await adminRequest<AdminRecord>({ method: "GET", url: `/generation-tasks/${encodeURIComponent(taskId)}` })
+      : createdTask;
+    videoResultTask.value = task;
+    const historyEntry = taskToVideoHistoryEntry(task);
+    if (historyEntry) {
+      commitVideoHistoryEntry(historyEntry, snapshotId);
+    }
+    await store.loadActiveModule({ preferCache: false, silent: true });
+    ElMessage.success(historyEntry?.status === "success" ? "视频生成成功" : "视频任务已提交，正在生成中");
+  } catch (error) {
+    commitVideoHistoryEntry({
+      id: snapshotId,
+      url: "",
+      prompt,
+      model: selectedVideoModelId(),
+      mode: snapshotMode,
+      aspect_ratio: videoRatio.value,
+      duration: videoDuration.value,
+      resolution: videoResolution.value,
+      inputImageUrls: videoImagePreview.value ? [videoImagePreview.value] : [],
+      inputVideoUrl: videoSourcePreview.value,
+      createdAt: snapshotCreatedAt,
+      status: "failed",
+      errorMessage: error instanceof Error ? error.message : "视频生成失败",
+      userId: String(currentAdmin.value?.id || "")
+    }, snapshotId);
+    ElMessage.error(error instanceof Error ? error.message : "视频生成失败");
+  } finally {
+    videoSubmitting.value = false;
+  }
+}
+
+function videoModeLabel(mode: string) {
+  if (mode === "image-to-video") return "图生视频";
+  if (mode === "video-to-video") return "视频编辑";
+  return "文生视频";
+}
+
+function videoStatusLabel(status: VideoHistoryStatus) {
+  if (status === "success") return "已完成";
+  if (status === "failed") return "失败";
+  return "生成中";
+}
+
+function formatVideoHistoryTime(value: string) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function playVideoCardPreview(event: MouseEvent) {
+  const video = (event.currentTarget as HTMLElement | null)?.querySelector("video");
+  if (!video) return;
+  void video.play().catch(() => undefined);
+}
+
+function resetVideoCardPreview(event: MouseEvent) {
+  const video = (event.currentTarget as HTMLElement | null)?.querySelector("video");
+  if (!video) return;
+  video.pause();
+  try {
+    video.currentTime = 0;
+  } catch {
+    // Some remote streams do not allow seeking until metadata is ready.
+  }
+}
+
+function openVideoFullscreen(entry: VideoHistoryEntry) {
+  if (!entry.url || entry.status !== "success") {
+    selectedVideoHistoryId.value = entry.id;
+    return;
+  }
+  selectedVideoHistoryId.value = entry.id;
+  videoFullscreenEntry.value = entry;
+}
+
+function closeVideoFullscreen() {
+  videoFullscreenEntry.value = null;
+}
+
+type VideoHistoryAction = "download" | "copy" | "delete";
+
+function videoHistoryBusyKey(id: string, action: VideoHistoryAction) {
+  return `${id}:${action}`;
+}
+
+function isVideoHistoryActionBusy(id: string, action: VideoHistoryAction) {
+  return Boolean(videoHistoryBusyActions.value[videoHistoryBusyKey(id, action)]);
+}
+
+function setVideoHistoryActionBusy(id: string, action: VideoHistoryAction, busy: boolean) {
+  const key = videoHistoryBusyKey(id, action);
+  if (busy) {
+    videoHistoryBusyActions.value = { ...videoHistoryBusyActions.value, [key]: true };
+    return;
+  }
+  const next = { ...videoHistoryBusyActions.value };
+  delete next[key];
+  videoHistoryBusyActions.value = next;
+}
+
+function safeVideoFileName(entry: VideoHistoryEntry) {
+  const prompt = entry.prompt.trim().slice(0, 28).replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-");
+  const base = prompt || "video";
+  return `${base}-${entry.id || Date.now()}.mp4`;
+}
+
+async function downloadVideoFile(url: string, fileName: string) {
+  const proxyURL = `/api/v1/video/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(fileName)}`;
+  await downloadUrl(proxyURL, fileName);
+  return "downloaded" as const;
+}
+
+async function downloadVideoHistory(entry: VideoHistoryEntry) {
+  if (!entry.url) {
+    ElMessage.warning("视频地址不存在，无法下载");
+    return;
+  }
+  if (entry.status !== "success") {
+    ElMessage.warning("视频尚未生成成功，暂不能下载");
+    return;
+  }
+  if (isVideoHistoryActionBusy(entry.id, "download")) return;
+  setVideoHistoryActionBusy(entry.id, "download", true);
+  ElMessage.info("开始下载视频");
+  try {
+    const result = await downloadVideoFile(entry.url, safeVideoFileName(entry));
+    if (result === "downloaded") {
+      ElMessage.success("视频下载已开始");
+    } else {
+      ElMessage.warning("下载失败，已在新窗口打开视频");
+    }
+  } catch {
+    ElMessage.error("视频下载失败");
+  } finally {
+    setVideoHistoryActionBusy(entry.id, "download", false);
+  }
+}
+
+function copyTextWithFallback(text: string) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.top = "-1000px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    const ok = document.execCommand("copy");
+    if (!ok) throw new Error("execCommand copy failed");
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(error);
+  } finally {
+    textarea.remove();
+  }
+}
+
+async function copyVideoHistoryUrl(entry: VideoHistoryEntry) {
+  if (!entry.url) {
+    ElMessage.warning("视频链接不存在，无法复制");
+    return;
+  }
+  if (entry.status !== "success") {
+    ElMessage.warning("视频尚未生成成功，暂不能复制链接");
+    return;
+  }
+  if (isVideoHistoryActionBusy(entry.id, "copy")) return;
+  setVideoHistoryActionBusy(entry.id, "copy", true);
+  try {
+    await copyTextWithFallback(entry.url);
+    ElMessage.success("视频链接已复制");
+  } catch {
+    ElMessage.error("复制失败，请手动复制");
+  } finally {
+    setVideoHistoryActionBusy(entry.id, "copy", false);
+  }
+}
+
+async function deleteVideoHistoryEntry(entry: VideoHistoryEntry) {
+  if (isVideoHistoryActionBusy(entry.id, "delete")) return;
+  try {
+    await ElMessageBox.confirm("删除后将从历史列表移除，但不会影响已经下载到本地的视频。", "确认删除这个视频记录？", {
+      confirmButtonText: "确认删除",
+      cancelButtonText: "取消",
+      type: "warning",
+      customClass: "video-delete-confirm"
+    });
+  } catch {
+    return;
+  }
+  setVideoHistoryActionBusy(entry.id, "delete", true);
+  try {
+    videoHiddenHistoryIds.value = Array.from(new Set([...videoHiddenHistoryIds.value, entry.id]));
+    videoHistory.value = videoHistory.value.filter((item) => item.id !== entry.id);
+    if (selectedVideoHistoryId.value === entry.id) selectedVideoHistoryId.value = videoHistory.value[0]?.id || "";
+    if (videoFullscreenEntry.value?.id === entry.id) videoFullscreenEntry.value = null;
+    ElMessage.success("已删除视频记录");
+  } catch {
+    ElMessage.error("删除失败，请稍后重试");
+  } finally {
+    setVideoHistoryActionBusy(entry.id, "delete", false);
+  }
+}
+
+function handleVideoImageFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  clearVideoImageUpload();
+  videoStudioMode.value = "image";
+  videoImageFile = file;
+  videoImageObjectUrl = URL.createObjectURL(file);
+  videoImagePreview.value = videoImageObjectUrl;
+}
+
+function handleVideoSourceFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  clearVideoSourceUpload();
+  videoStudioMode.value = "video";
+  videoSourceObjectUrl = URL.createObjectURL(file);
+  videoSourcePreview.value = videoSourceObjectUrl;
+}
+
+function clearVideoImageUpload() {
+  if (videoImageObjectUrl) URL.revokeObjectURL(videoImageObjectUrl);
+  videoImageObjectUrl = "";
+  videoImageFile = null;
+  videoImagePreview.value = "";
+  if (videoStudioMode.value === "image") videoStudioMode.value = videoSourcePreview.value ? "video" : "text";
+}
+
+function clearVideoSourceUpload() {
+  if (videoSourceObjectUrl) URL.revokeObjectURL(videoSourceObjectUrl);
+  videoSourceObjectUrl = "";
+  videoSourcePreview.value = "";
+  if (videoStudioMode.value === "video") videoStudioMode.value = videoImagePreview.value ? "image" : "text";
+}
+
+function toggleVideoDropdown(type: "model" | "ratio" | "duration" | "resolution") {
+  openVideoDropdown.value = openVideoDropdown.value === type ? "" : type;
+}
+
+function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", value: string | number) {
+  if (type === "model") {
+    selectedVideoModel.value = String(value);
+    videoStudioMode.value = videoImagePreview.value ? "image" : videoToolOptions.some((tool) => tool.name === value) ? "video" : "text";
+    syncVideoModelParameters();
+    openVideoDropdown.value = "";
+    return;
+  }
+  if (type === "ratio") {
+    videoRatio.value = String(value);
+    openVideoDropdown.value = "";
+    return;
+  }
+  if (type === "duration") {
+    videoDuration.value = Number(value);
+    openVideoDropdown.value = "";
+    return;
+  }
+  videoResolution.value = String(value);
+  openVideoDropdown.value = "";
+}
 
 const adminModuleGroups = [
   { id: "home", title: "首页", icon: House, items: modules.filter((item) => ["analysis", "workbench", "dashboard"].includes(item.id)) },
-  { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "orders", "products", "plans"].includes(item.id)) },
-  { id: "growth", title: "渠道增长", icon: Connection, items: modules.filter((item) => ["channels", "commissions", "usage"].includes(item.id)) },
-  { id: "governance", title: "技术治理", icon: Cpu, items: modules.filter((item) => ["apiSettings", "system"].includes(item.id)) },
+  { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
+  { id: "aiCapability", title: "AI 能力中心", icon: Cpu, items: modules.filter((item) => aiCapabilityModuleIds.includes(item.id)) },
+  { id: "marketing", title: "营销端", icon: Connection, items: modules.filter((item) => ["marketingDashboard", "marketingAgentLevels", "marketingInvites", "marketingCommissionRules", "marketingUpgradePlans", "marketingWallets", "marketingWalletRecords", "marketingSettlementStatements"].includes(item.id)) },
+  { id: "billing", title: "计费中心", icon: Tickets, items: modules.filter((item) => billingModuleIds.includes(item.id)) },
+  { id: "growth", title: "渠道增长", icon: Connection, items: modules.filter((item) => ["channels", "operationCenters", "commissions", "commissionRecords", "usage"].includes(item.id)) },
+  { id: "governance", title: "技术治理", icon: Setting, items: modules.filter((item) => ["apiSettings", "system"].includes(item.id)) },
   { id: "permission", title: "权限管理", icon: Lock, items: modules.filter((item) => ["departments", "userManagement", "menuManagement"].includes(item.id)) }
 ];
 
 const agentModuleGroups = [
   { id: "agentHome", title: "代理商后台", icon: Wallet, items: modules.filter((item) => ["partnerDashboard"].includes(item.id)) },
-  { id: "agentBusiness", title: "业务管理", icon: Collection, items: modules.filter((item) => ["partnerCustomers", "partnerOrders", "partnerCommissions"].includes(item.id)) },
+  { id: "agentBusiness", title: "业务管理", icon: Collection, items: modules.filter((item) => ["partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions"].includes(item.id)) },
   { id: "agentGrowth", title: "推广增长", icon: Connection, items: modules.filter((item) => ["partnerChannels", "partnerMaterials"].includes(item.id)) },
   { id: "agentAccount", title: "账户中心", icon: Setting, items: modules.filter((item) => ["partnerAccount"].includes(item.id)) }
 ];
 const userModuleGroups = [
   { id: "userHome", title: "用户后台", icon: House, items: modules.filter((item) => ["userDashboard"].includes(item.id)) },
-  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userOnlineImage", "userAiImage", "userCanvas", "userWorks"].includes(item.id)) },
-  { id: "userConfig", title: "配置中心", icon: Setting, items: modules.filter((item) => ["userApiSettings", "userMembership"].includes(item.id)) },
-  { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage"].includes(item.id)) }
+  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"].includes(item.id)) },
+  { id: "userBilling", title: "身份/充值/订阅", icon: Wallet, items: modules.filter((item) => ["userMembership"].includes(item.id)) },
+  { id: "userConfig", title: "配置中心", icon: Setting, items: modules.filter((item) => ["userApiSettings"].includes(item.id)) },
+  { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders"].includes(item.id)) }
 ];
+
+const userFlatMenuDefs = [
+  { id: "userDashboard", targetId: "userDashboard", title: "平台首页", icon: House },
+  { id: "userAiImage", targetId: "userAiImage", title: "AI 生图", icon: Plus },
+  { id: "userVideoGeneration", targetId: "userVideoGeneration", title: "视频生成", icon: Monitor },
+  { id: "userWirelessCanvas", targetId: "userWirelessCanvas", title: "无限画布", icon: Collection },
+  { id: "userPptGeneration", targetId: "userPptGeneration", title: "PPT 文档生成", icon: Document },
+  { id: "userAiAgent", targetId: "userAiImage", title: "AI Agent", icon: Cpu },
+  { id: "userWorks", targetId: "userWorks", title: "作品中心", icon: Collection },
+  { id: "userMembership", targetId: "userMembership", title: "身份充值订阅", icon: Tickets },
+  { id: "userUsage", targetId: "userUsage", title: "使用记录", icon: DataAnalysis },
+  { id: "userOrders", targetId: "userOrders", title: "订单明细", icon: Document },
+  { id: "userApiSettings", targetId: "userApiSettings", title: "API 设置", icon: Setting }
+];
+
+const userAgentFlatMenuDefs = [
+  { id: "partnerDashboard", targetId: "partnerDashboard", title: "代理首页", icon: Wallet },
+  { id: "partnerCustomers", targetId: "partnerCustomers", title: "我的客户", icon: User },
+  { id: "partnerOrders", targetId: "partnerOrders", title: "推广订单", icon: Money },
+  { id: "partnerUsage", targetId: "partnerUsage", title: "客户消费", icon: DataAnalysis },
+  { id: "partnerCommissions", targetId: "partnerCommissions", title: "佣金明细", icon: Wallet },
+  { id: "partnerChannels", targetId: "partnerChannels", title: "推广渠道", icon: Connection },
+  { id: "partnerMaterials", targetId: "partnerMaterials", title: "推广素材", icon: Collection },
+  { id: "partnerAccount", targetId: "partnerAccount", title: "代理账户", icon: Setting }
+];
+
+const allUserFlatMenuDefs = [...userFlatMenuDefs, ...userAgentFlatMenuDefs];
+
+const userFlatMenuItems = computed(() => {
+  const source = hasAgentIdentity.value ? allUserFlatMenuDefs : userFlatMenuDefs;
+  return source.filter((item) => modules.some((module) => module.id === item.targetId));
+});
 
 const pageMeta: Record<string, { badge: string; description: string }> = {
   userDashboard: { badge: "用户工作台", description: "聚合点数、生成、作品、API 和使用记录，作为用户登录后的 PC 中后台首页。" },
-  userOnlineImage: { badge: "多平台生成", description: "统一接入 OpenAI 协议、Gemini、即梦 CLI、ComfyUI 本地等上游，按模型和数量扣减点数。" },
   userAiImage: { badge: "智能生成", description: "聚合 Prompt、参考图、模型参数和结果预览，快速生成商业素材。" },
-  userCanvas: { badge: "灵感画布", description: "管理用户生成任务、画布记录和创作入口，PC 端作为工作台入口，移动端继续由 Uni-app 承载。" },
+  userWirelessCanvas: { badge: "源码复刻", description: "直接承载 hero8152/Infinite-Canvas 智能画布源码，保留节点、资产库、工作流、快捷键、日志和底部生成器布局。" },
+  userVideoGeneration: { badge: "视频生成", description: "参考 Open-Generative-AI Video Studio，提供文生视频、图生视频和基础参数的轻量生成入口。" },
+  userPptGeneration: { badge: "PPT文档生成", description: "输入主题生成演示文稿，预留 Presenton 或自研 PPT 生成服务接入。" },
   userApiSettings: { badge: "API 设置", description: "用户侧查看 API 平台、模型计费、Key 和分组配置，复用 Element Plus 表格和表单密度。" },
   userWorks: { badge: "作品中心", description: "集中查看生成资产、缩略图、下载和编辑入口。" },
-  userUsage: { badge: "使用记录", description: "按模型、时间和点数查看生成消耗明细，支撑不同模型扣不同点数。" },
-  userMembership: { badge: "会员订单", description: "查看点数账户、套餐权益和交易状态。" },
+  userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
+  userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
+  userOrders: { badge: "交易记录", description: "查看历史订单、支付状态和点数到账结果；充值/订阅入口已拆分为独立模块。" },
   analysis: { badge: "数据分析", description: "按客户增长、交易收入、积分消耗和生成任务活跃度观察平台经营状态。" },
   workbench: { badge: "运营工作台", description: "聚合待办、快捷入口和平台健康状态，帮助主控团队快速处理日常运营动作。" },
   dashboard: { badge: "运营驾驶舱", description: "汇总客户、订单、渠道、用量和上游服务状态，帮助主控端快速判断平台健康度。" },
   customers: { badge: "客户资产", description: "管理客户账号、套餐、点数、状态和角色，支撑 SaaS 客户全生命周期运营。" },
-  channels: { badge: "渠道网络", description: "维护一级/二级代理商、邀请码和启停状态，承接代理分销体系。" },
+  channels: { badge: "渠道网络", description: "维护 L1-L5 代理商、邀请码和启停状态，承接代理分销体系。" },
+  operationCenters: { badge: "运营中心", description: "查看运营中心身份、代理归属、开通订单和区域分润汇总。" },
   products: { badge: "产品矩阵", description: "配置 AI 产品能力、权益和状态，让移动端与管理后台共享统一商品口径。" },
   plans: { badge: "商业套餐", description: "维护套餐价格、赠送点数、并发和有效期，作为订单与权益结算基础。" },
   orders: { badge: "交易履约", description: "跟踪订单、收款、续费和权益发放，关键动作由后端事务保证一致性。" },
+  tokenRecords: { badge: "Token 流水", description: "审计会员套餐、代理开通和充值产生的 Token/点数发放记录。" },
+  marketingDashboard: { badge: "营销闭环", description: "对照运营中心营销端 P0 范围，聚合邀请、升级、分佣、钱包和权限风险。" },
+  marketingAgentLevels: { badge: "代理等级", description: "维护 L0-L5 身份、开通方式、权限边界、返佣建议和升级保级条件。" },
+  marketingInvites: { badge: "邀请转化", description: "追踪邀请人、被邀请人、邀请码、注册、充值和升级状态，支撑扫码裂变。" },
+  marketingCommissionRules: { badge: "分佣规则", description: "沉淀直推、间推、运营中心奖励、算力充值分成等可审计规则。" },
+  marketingUpgradePlans: { badge: "升级路径", description: "维护普通用户、代理和运营中心之间的升级价格、条件和周期口径。" },
+  marketingWallets: { badge: "佣金钱包", description: "按代理汇总佣金收入、提现冻结、可提现余额和邀请入口。" },
+  marketingWalletRecords: { badge: "钱包流水", description: "按佣金入账和提现冻结展示每笔资金变化，帮助财务核对来源和状态。" },
+  marketingSettlementStatements: { badge: "月度结算", description: "按代理和月份聚合已结算佣金、提现和待结算金额，形成打款前核对口径。" },
   usage: { badge: "消耗分析", description: "查看模型、素材、生成任务等使用量，为成本和定价提供依据。" },
+  billingDashboard: { badge: "计费驾驶舱", description: "汇总 MRR、按量收入、待开票、逾期账单和计费流程状态，形成老板与财务共用视角。" },
+  billingCustomers: { badge: "客户计费", description: "聚合客户档案、当前订阅、预付余额、开票资料、付款方式和账单历史。" },
+  billingProducts: { badge: "套餐产品", description: "把文生图、AI API、Agent、GEO 和代运营拆成可收费产品、指标和权益。" },
+  billingBillableMetrics: { badge: "Billable Metrics", description: "参照 Lago 的 BillableMetric，定义用量事件如何按 count、sum、volume 等方式聚合。" },
+  billingCharges: { badge: "Charges", description: "参照 Lago 的 Charge，配置套餐上的 standard、package、graduated、volume 等计费模型和税费。" },
+  billingSubscriptions: { badge: "订阅管理", description: "管理试用、活跃、欠费、暂停、取消和续费周期，保留价格与权益快照。" },
+  billingEvents: { badge: "计量事件", description: "查看 API、图片、Agent、GEO 的幂等计量事件，为按量计费和审计提供来源。" },
+  billingFees: { badge: "Fees", description: "参照 Lago 的 Fee，把订阅费、按量费、固定费、抵扣费拆成可审计的费用明细。" },
+  billingWallets: { badge: "Wallets", description: "管理客户预付钱包、点数余额、充值下限、消费目标指标和支付方式要求。" },
+  billingCoupons: { badge: "Coupons", description: "维护固定金额、百分比、一次性和周期性优惠券，并绑定套餐、指标或客户分组。" },
+  billingInvoices: { badge: "账单发票", description: "跟踪账单运行批次、账单明细、支付状态、开票状态和待处理金额。" },
+  billingCreditNotes: { badge: "Credit Notes", description: "处理账单冲销、退款、抵扣和贷项余额，形成财务调整闭环。" },
+  billingPaymentRequests: { badge: "Payment Requests", description: "把多张待付账单聚合为付款请求，支持催收活动、到期日和支付状态跟踪。" },
+  billingPayments: { badge: "支付催收", description: "管理支付通道、线下收款确认、失败重试和逾期催收动作。" },
   commissions: { badge: "结算中心", description: "处理代理分润、提现审核和结算状态，形成渠道财务闭环。" },
+  commissionRecords: { badge: "分润明细", description: "按接收方拆解代理、运营中心与平台收入，核对固定分润规则结果。" },
+  aiCapabilities: { badge: "AI 能力", description: "配置生图、视频、PPT 等 AI 能力模块的启停、开放套餐、默认 Schema 和模型绑定。" },
+  aiCapabilityModels: { badge: "AI 模型", description: "维护模型类型、上游供应商、能力编码、所属模块、fallback 和启停状态。" },
+  aiCapabilitySchemas: { badge: "参数 Schema", description: "定义各模型支持的参数字段、类型、默认值、选项、可见性和用户可编辑边界。" },
+  aiCapabilityLimits: { badge: "租户限制", description: "按租户、套餐、代理限制可用模型和参数范围，形成最终用户可用能力边界。" },
+  aiCapabilityChannels: { badge: "上游通道", description: "查看 AI 能力关联的上游通道、协议、Base URL、模型列表和 Key 配置状态。" },
+  aiCapabilityLogs: { badge: "调用日志", description: "审计 AI 能力调用记录、参数快照、限制快照、上游成本、平台利润和任务状态。" },
   apiSettings: { badge: "模型网关", description: "管理上游模型渠道、API Key、客户分组和计费倍率。" },
   system: { badge: "系统治理", description: "沉淀品牌、密钥、模型、审计和运维配置，避免继续依赖临时聚合结构。" },
   departments: { badge: "组织权限", description: "维护主控后台部门结构，为账号权限和操作审计提供组织归属。" },
@@ -1484,6 +3423,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   partnerDashboard: { badge: "代理经营", description: "汇总代理商客户、订单、佣金、推广渠道和转化状态，形成经营驾驶舱。" },
   partnerCustomers: { badge: "客户资产", description: "查看通过邀请码绑定的客户、状态和来源，辅助跟进转化。" },
   partnerOrders: { badge: "订单跟进", description: "聚合代理商名下待支付、已成交和待续费订单，提升回款效率。" },
+  partnerUsage: { badge: "消费明细", description: "按客户、任务、模型和扣点查看生图消费，和主控计量事件保持同一笔任务 ID。" },
   partnerCommissions: { badge: "佣金结算", description: "查看分佣明细、结算状态、可提现金额和提现记录。" },
   partnerChannels: { badge: "推广渠道", description: "管理邀请码、下级代理和渠道转化表现。" },
   partnerMaterials: { badge: "素材中心", description: "沉淀推广海报、话术和专属链接，提升获客转化。" },
@@ -1491,6 +3431,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
 };
 
 const quickTodos = [
+  { action: "marketing", module: "marketingDashboard", title: "打开营销端", desc: "查看邀请、升级、分佣和钱包闭环" },
   { action: "customer", module: "customers", title: "检查客户余额", desc: "处理套餐、点数和账号状态" },
   { action: "channel", module: "channels", title: "维护代理网络", desc: "新增代理商或调整启停状态" },
   { action: "api", module: "apiSettings", title: "校验上游模型", desc: "确认 API Key、Base URL 和模型可用" },
@@ -1523,6 +3464,7 @@ const weeklyActivity = [
 ];
 
 const workbenchTasks = [
+  { module: "marketingDashboard", title: "打开营销端", desc: "查看邀请、升级、分佣和钱包闭环" },
   { module: "customers", title: "检查客户余额", desc: "处理套餐、点数和账号状态" },
   { module: "channels", title: "维护代理网络", desc: "新增代理商或调整启停状态" },
   { module: "apiSettings", title: "校验上游模型", desc: "确认 API Key、Base URL 和模型可用" },
@@ -1556,6 +3498,84 @@ const onlineImageForm = ref({
   width: 1024,
   height: 1024
 });
+type UserHomeCreationMode = "image" | "video" | "ppt" | "agent";
+type UserHomeEntry = {
+  title: string;
+  desc: string;
+  icon?: Component;
+  targetId: string;
+  mode?: UserHomeCreationMode;
+  prompt?: string;
+  coverClass?: string;
+  coverText?: string;
+};
+const userHomeCreationMode = ref<UserHomeCreationMode>("image");
+const userHomeCreationModes: Array<{ id: UserHomeCreationMode; title: string; icon: Component }> = [
+  { id: "image", title: "图片创作", icon: Collection },
+  { id: "video", title: "视频创作", icon: Monitor },
+  { id: "ppt", title: "PPT 文档", icon: Document },
+  { id: "agent", title: "Agent 对话", icon: Cpu }
+];
+const userHomeRatioOptions = [
+  { label: "1:1", value: "square" },
+  { label: "16:9", value: "16:9" },
+  { label: "9:16", value: "9:16" },
+  { label: "自定义", value: "custom" }
+];
+const userHomeAgentEntries: UserHomeEntry[] = [
+  { title: "品牌 Agent", desc: "品牌视觉、VI、海报", icon: Star, targetId: "userAiImage", mode: "agent", prompt: "为新品牌设计一组高级视觉方向，包含 Logo 延展、主视觉和社媒海报。" },
+  { title: "电商 Agent", desc: "主图、详情、促销图", icon: Goods, targetId: "userAiImage", mode: "agent", prompt: "生成一套电商营销素材，包含产品主图、详情长图和促销海报。" },
+  { title: "海报 Agent", desc: "活动、节日、招商", icon: Collection, targetId: "userAiImage", mode: "agent", prompt: "设计一张高转化活动海报，突出标题、卖点和橙色 CTA。" },
+  { title: "IP / 角色", desc: "角色设定、形象定制", icon: User, targetId: "userAiImage", mode: "image", prompt: "创建一个适合品牌传播的 IP 角色，风格年轻、干净、有记忆点。" },
+  { title: "视频 Agent", desc: "短片、封面、分镜", icon: Monitor, targetId: "userVideoGeneration", mode: "video", prompt: "策划一条 15 秒产品短视频，包含镜头节奏、画面风格和字幕建议。" },
+  { title: "PPT Agent", desc: "提纲、页面、配图", icon: Document, targetId: "userPptGeneration", mode: "ppt", prompt: "生成一份商业计划书 PPT，包含封面、目录、市场、产品和财务页。" },
+  { title: "商品图 Agent", desc: "白底图、场景图", icon: Goods, targetId: "userAiImage", mode: "image", prompt: "为产品生成一组干净白底主图和浅色高级场景图。" },
+  { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
+];
+const userHomeInspirations: UserHomeEntry[] = [
+  { title: "产品海报", desc: "一张科技产品发布海报，白色空间，青紫主光，中心产品清晰，适合官网首屏展示", targetId: "userAiImage", mode: "image", coverClass: "is-product", prompt: "一张科技感产品海报，干净白色背景，青绿色主光，中心是一台未来感 AI 设备，适合官网首屏展示。" },
+  { title: "电商主图", desc: "一张高级电商主图，干净浅灰背景，产品居中，柔和阴影，突出材质细节", targetId: "userAiImage", mode: "image", coverClass: "is-commerce", prompt: "生成一张高级电商主图，干净浅灰背景，产品居中，柔和阴影，突出材质细节。" },
+  { title: "小红书封面", desc: "明亮自然光，画面留白充足，真实生活方式场景，适合种草内容", targetId: "userAiImage", mode: "image", coverClass: "is-xhs", prompt: "设计一张小红书风格封面，明亮自然光，画面留白充足，真实生活方式场景。" },
+  { title: "无线画布", desc: "整理参考图和灵感节点，随意拖拽，自由创作", targetId: "userWirelessCanvas", mode: "image", coverClass: "is-canvas" },
+  { title: "PPT 文档", desc: "把图片创意变成方案，自动生成演示文稿", targetId: "userPptGeneration", mode: "ppt", coverClass: "is-ppt" },
+  { title: "作品中心", desc: "查看与管理你的全部创作", targetId: "userWorks", coverClass: "is-works" }
+];
+const userHomeTemplates: UserHomeEntry[] = [
+  { title: "品牌设计", desc: "LOGO、VI、品牌形象设计", targetId: "userAiImage", mode: "image", coverClass: "is-brand", coverText: "BRAND DESIGN", prompt: "设计一组高端品牌视觉，包含主视觉、色彩和海报方向。" },
+  { title: "电商营销", desc: "主图、海报、促销图", targetId: "userAiImage", mode: "image", coverClass: "is-sale", coverText: "SALE", prompt: "生成一张电商促销海报，浅色背景，橙色 CTA，突出产品卖点。" },
+  { title: "海报设计", desc: "活动、宣传、视觉海报", targetId: "userAiImage", mode: "image", coverClass: "is-poster", coverText: "FUTURE", prompt: "生成一张未来科技主题活动海报，蓝紫光感，空间干净。" },
+  { title: "IP 角色", desc: "角色设计、形象定制", targetId: "userAiImage", mode: "image", coverClass: "is-ip", coverText: "IP" },
+  { title: "商品主图", desc: "电商主图、白底图", targetId: "userAiImage", mode: "image", coverClass: "is-product-main", coverText: "PRODUCT" },
+  { title: "详情长图", desc: "产品详情、长图文案", targetId: "userAiImage", mode: "image", coverClass: "is-detail", coverText: "DETAIL" },
+  { title: "短视频封面", desc: "爆款封面、吸睛标题", targetId: "userVideoGeneration", mode: "video", coverClass: "is-video", coverText: "PLAY" },
+  { title: "PPT 文档", desc: "汇报、演示、课件", targetId: "userPptGeneration", mode: "ppt", coverClass: "is-doc", coverText: "BUSINESS PLAN" },
+  { title: "朋友圈海报", desc: "节日、日签、营销海报", targetId: "userAiImage", mode: "image", coverClass: "is-moments", coverText: "Good Morning" },
+  { title: "企业宣传图", desc: "企业介绍、宣传物料", targetId: "userAiImage", mode: "image", coverClass: "is-corporate", coverText: "COMPANY" }
+];
+function selectUserHomeCreationMode(mode: UserHomeCreationMode) {
+  userHomeCreationMode.value = mode;
+}
+function userHomeTargetForMode(mode = userHomeCreationMode.value) {
+  if (mode === "video") return "userVideoGeneration";
+  if (mode === "ppt") return "userPptGeneration";
+  return "userAiImage";
+}
+function launchUserHomeCreation() {
+  if (userHomeCreationMode.value === "agent") aiPlaygroundMode.value = "agent";
+  if (userHomeCreationMode.value === "image") aiPlaygroundMode.value = "gallery";
+  void selectAdminModule(userHomeTargetForMode());
+}
+function openUserHomeEntry(entry: UserHomeEntry) {
+  if (entry.prompt) onlineImageForm.value.prompt = entry.prompt;
+  if (entry.mode) userHomeCreationMode.value = entry.mode;
+  if (entry.mode === "agent") aiPlaygroundMode.value = "agent";
+  if (entry.mode === "image") aiPlaygroundMode.value = "gallery";
+  void selectAdminModule(entry.targetId);
+}
+function applyUserHomePrompt(action: string) {
+  const prompt = onlineImageForm.value.prompt.trim();
+  onlineImageForm.value.prompt = prompt ? `${action}：${prompt}` : `${action}：`;
+}
 const aiCountInput = ref(String(onlineImageForm.value.count));
 const aiOutputCompressionInput = ref(onlineImageForm.value.outputCompression == null ? "" : String(onlineImageForm.value.outputCompression));
 watch(
@@ -1573,7 +3593,6 @@ watch(
   }
 );
 const onlineSubmitting = ref(false);
-const aiDraftReferenceMaxBytes = 2_500_000;
 const onlineReferenceSlots = [1, 2, 3];
 const onlineCountOptions = [1, 2, 3, 4];
 const onlineStatusFilter = ref("ALL");
@@ -1582,10 +3601,41 @@ const aiPlaygroundModeOptions = [
   { label: "画廊", value: "gallery" },
   { label: "Agent", value: "agent" }
 ];
-type AiReferenceImage = { id: string; name: string; url: string; file?: File };
+type AiReferenceImage = { id: string; name: string; url: string; file?: File; remoteUrl?: string; previewUrl?: string; uploading?: boolean; error?: string };
+type AiGenerationReference = { id: string; name: string; url: string; order: number; source: "upload" | "task" | "draft" | "paste" | "local" };
+type AiGenerationTaskSnapshot = {
+  prompt: string;
+  inputImageIds: string[];
+  inputImagesSnapshot: AiGenerationReference[];
+  maskDraft: null;
+  maskTargetImageId: string;
+  maskImageId: string;
+  createdAt: string;
+};
 type AiFavoriteCollection = { id: string; name: string; taskIds: string[]; createdAt?: string; updatedAt?: string };
+type VideoHistoryStatus = "success" | "generating" | "failed";
+type VideoHistoryEntry = {
+  id: string;
+  taskId?: string;
+  backendTaskId?: string;
+  url: string;
+  prompt: string;
+  model: string;
+  mode: "text-to-video" | "image-to-video" | "video-to-video";
+  aspect_ratio: string;
+  duration: number | string;
+  resolution: string;
+  inputImageUrls: string[];
+  inputVideoUrl: string;
+  createdAt: string;
+  timestamp: number;
+  status: VideoHistoryStatus;
+  errorMessage?: string;
+  userId?: string;
+};
 type AiAgentMessage = { role: "user" | "assistant"; content: string; createdAt?: string };
 type AiAgentConversation = { id: string; title: string; messages: AiAgentMessage[]; createdAt: string; updatedAt?: string };
+type PromptEditableExpose = { focus: () => void; adjustHeight: () => void };
 type UserAIState = {
   userId?: string;
   favoriteTaskIds?: string[];
@@ -1623,8 +3673,12 @@ const aiReferenceImages = ref<AiReferenceImage[]>([]);
 const aiDetailTaskId = ref("");
 const aiDetailImageMeta = ref<Record<string, { width: number; height: number }>>({});
 const aiOriginalImageCache = ref<Record<string, string>>({});
+const aiRawUrlsTaskId = ref("");
+const aiRawResponseTaskId = ref("");
 const aiLightboxTaskId = ref("");
 const aiLightboxViewportRef = ref<HTMLElement | null>(null);
+const aiFloatingComposerRef = ref<HTMLElement | null>(null);
+const aiPromptInputRef = ref<PromptEditableExpose | null>(null);
 const aiLightboxScale = ref(1);
 const aiLightboxTx = ref(0);
 const aiLightboxTy = ref(0);
@@ -1637,6 +3691,12 @@ const aiImageContextMenu = ref({
 });
 const aiTaskClockNow = ref(Date.now());
 let aiTaskClockTimer: number | null = null;
+let aiGenerationPollTimer: number | null = null;
+const aiTrackedGenerationTaskIds = ref<string[]>([]);
+const aiGenerationPollAttempts = new Map<string, number>();
+const aiGenerationPollDelaysMs = [2000, 3000, 5000, 8000, 13000, 20000];
+const aiGenerationPollMaxAttempts = 90;
+let aiComposerResizeObserver: ResizeObserver | null = null;
 const aiAgentRunning = ref(false);
 const aiAgentActiveConversationId = ref("agent-default");
 const aiAgentConversations = ref<AiAgentConversation[]>([{
@@ -1665,6 +3725,9 @@ const aiSizeRatio = ref("1:1");
 const aiCustomRatio = ref("16:9");
 const aiCustomWidth = ref("1024");
 const aiCustomHeight = ref("1024");
+const aiImageModuleSchema = ref<AdminRecord | null>(null);
+const aiImageModuleSchemaLoading = ref(false);
+const aiImageModuleSchemaKey = ref("");
 const aiSizePickerModes = [
   { label: "自动", value: "auto" },
   { label: "按比例", value: "ratio" },
@@ -1710,10 +3773,13 @@ const apiProviderDraft = ref({
   apiKey: "",
   protocol: "openai",
   imageRequestMode: "openai",
+  imageGenerationEndpoint: "/v1/images/generations",
+  imageEditEndpoint: "/v1/images/edits",
+  videoGenerationEndpoint: "",
   priority: 50,
   imageModels: ["gpt-image-2"],
   chatModels: ["gpt-4o"],
-  videoModels: ["veo3-fast"],
+  videoModels: ["doubao-seedance-2.0", "veo3-fast"],
   loras: ["Tongyi-MAI/Z-Image-Turbo"],
   modelProtocols: {} as Record<string, string>
 });
@@ -1768,6 +3834,40 @@ const aiCommonSizePresets: Record<(typeof aiSizeTiers)[number], Record<string, s
     "21:9": "3840x1600"
   }
 };
+function aiSchemaFieldsFromResponse(response: AdminRecord | null) {
+  if (!response) return [];
+  if (Array.isArray(response.fields)) return response.fields as AdminRecord[];
+  const schema = response.schema;
+  if (schema && typeof schema === "object" && Array.isArray((schema as AdminRecord).fields)) return (schema as AdminRecord).fields as AdminRecord[];
+  const schemaJson = response.schema_json || response.schemaJson;
+  if (schemaJson && typeof schemaJson === "object" && Array.isArray((schemaJson as AdminRecord).fields)) return (schemaJson as AdminRecord).fields as AdminRecord[];
+  return [];
+}
+
+function aiSchemaStringValue(value: unknown) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+const aiImageSizeSchemaField = computed(() => aiSchemaFieldsFromResponse(aiImageModuleSchema.value).find((field) => String(field.key || "") === "size") || null);
+const aiImageSizeSchemaDefault = computed(() => {
+  const rawValue = aiSchemaStringValue(aiImageSizeSchemaField.value?.default);
+  if (!rawValue) return "";
+  return rawValue.toLowerCase() === "auto" ? "auto" : normalizeAiImageSize(rawValue);
+});
+const aiImageSizeSchemaOptions = computed(() => {
+  const field = aiImageSizeSchemaField.value;
+  if (!field) return [];
+  const sourceOptions = Array.isArray(field.options) ? field.options : [];
+  const values = [field.default, ...sourceOptions]
+    .map((item) => {
+      const value = aiSchemaStringValue(item);
+      if (!value) return "";
+      return value.toLowerCase() === "auto" ? "auto" : normalizeAiImageSize(value);
+    })
+    .filter((item) => item && (item === "auto" || /^\d+x\d+$/.test(item)));
+  return Array.from(new Set(values));
+});
 const aiSettingsVisible = ref(false);
 const aiSettingsTab = ref("api");
 const aiSettingsTabs = [
@@ -1817,13 +3917,74 @@ const onlineImageData = computed(() => store.data as AdminRecord & {
 
 const onlineProviders = computed<AdminRecord[]>(() => Array.isArray(onlineImageData.value.providers) ? onlineImageData.value.providers : []);
 const onlineModels = computed<AdminRecord[]>(() => Array.isArray(onlineImageData.value.models) ? onlineImageData.value.models : []);
+
+function isOptimisticAiTaskReconciled(optimisticTask: AdminRecord, serverTasks: AdminRecord[]) {
+  const id = String(optimisticTask.id || "");
+  if (id && serverTasks.some((task) => String(task.id || "") === id)) return true;
+  const prompt = String(optimisticTask.prompt || "").trim();
+  const model = String(optimisticTask.model || "").trim();
+  const userId = String(optimisticTask.userId || "").trim();
+  return serverTasks.some((task) => {
+    const taskPrompt = String(task.prompt || "").trim();
+    const taskModel = String(task.model || "").trim();
+    const taskUserId = String(task.userId || "").trim();
+    if (prompt && taskPrompt !== prompt) return false;
+    if (model && taskModel !== model) return false;
+    if (userId && taskUserId && taskUserId !== userId) return false;
+    return ["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "ERROR"].includes(String(task.status || "").toUpperCase());
+  });
+}
+
 const onlineRecentTasks = computed<AdminRecord[]>(() => {
   const serverTasks = Array.isArray(onlineImageData.value.recentTasks) ? onlineImageData.value.recentTasks : [];
   if (!aiOptimisticTasks.value.length) return serverTasks;
-  const serverIds = new Set(serverTasks.map((task) => String(task.id || "")));
-  const pendingTasks = aiOptimisticTasks.value.filter((task) => !serverIds.has(String(task.id || "")));
+  const pendingTasks = aiOptimisticTasks.value.filter((task) => !isOptimisticAiTaskReconciled(task, serverTasks));
   return [...pendingTasks, ...serverTasks];
 });
+const onlineImageTasks = computed<AdminRecord[]>(() => onlineRecentTasks.value.filter((task) => !isVideoGenerationTask(task)));
+watch(
+  onlineRecentTasks,
+  (tasks) => {
+    const entries = tasks.map(taskToVideoHistoryEntry).filter(Boolean) as VideoHistoryEntry[];
+    if (entries.length) mergeVideoHistoryEntries(entries);
+  },
+  { deep: true }
+);
+watch([videoHistory, videoHiddenHistoryIds, selectedVideoHistoryId], scheduleVideoHistorySave, { deep: true });
+watch([videoPrompt, videoHistorySearchQuery], scheduleVideoInputDraftSave);
+watch(videoPrompt, () => void nextTick(adjustVideoPromptHeight));
+
+async function pollVideoHistoryTasks() {
+  const running = videoHistory.value.filter((entry) => entry.status === "generating" && entry.backendTaskId);
+  if (!running.length) return;
+  await Promise.all(running.map(async (entry) => {
+    try {
+      const task = await adminRequest<AdminRecord>({ method: "GET", url: `/generation-tasks/${encodeURIComponent(entry.backendTaskId || "")}` });
+      const nextEntry = taskToVideoHistoryEntry(task);
+      if (nextEntry) commitVideoHistoryEntry(nextEntry, entry.id);
+    } catch {
+      // Polling is best-effort; persisted generating entries remain visible.
+    }
+  }));
+}
+
+function refreshVideoHistoryPolling() {
+  if (typeof window === "undefined") return;
+  if (videoHistoryPollTimer) {
+    window.clearInterval(videoHistoryPollTimer);
+    videoHistoryPollTimer = null;
+  }
+  const shouldPoll = store.activeModuleId === "userVideoGeneration" && videoHistory.value.some((entry) => entry.status === "generating" && entry.backendTaskId);
+  if (shouldPoll) videoHistoryPollTimer = window.setInterval(() => void pollVideoHistoryTasks(), 5000);
+}
+
+watch(
+  [videoHistory, () => store.activeModuleId],
+  refreshVideoHistoryPolling,
+  { deep: true }
+);
+const usesAiImageWorkspace = computed(() => ["userAiImage", "userWirelessCanvas", "userWorks"].includes(store.activeModuleId));
+const hasRunningAiGenerationTasks = computed(() => onlineImageTasks.value.some((task) => isAiTaskRunning(task)));
 const onlineAssets = computed<AdminRecord[]>(() => {
   if (Array.isArray(onlineImageData.value.assets)) return onlineImageData.value.assets;
   if (Array.isArray(onlineImageData.value.recentAssets)) return onlineImageData.value.recentAssets;
@@ -1928,14 +4089,19 @@ const onlineProviderOptions = computed(() => {
 const onlineProviderModels = computed<AdminRecord[]>(() => {
   const items: AdminRecord[] = [];
   const seen = new Set<string>();
-  onlineProviders.value.forEach((provider) => {
+  const providers = [...onlineProviders.value].sort((left, right) => {
+    if (Boolean(left.primary) !== Boolean(right.primary)) return Boolean(left.primary) ? -1 : 1;
+    return Number(left.priority || 1000) - Number(right.priority || 1000);
+  });
+  providers.forEach((provider) => {
     const providerId = String(provider.id || provider.name || "");
     const providerName = String(provider.name || provider.id || "API 平台");
     const models = Array.isArray(provider.models) ? provider.models : [];
     models.forEach((rawModel) => {
       const model = String(rawModel || "").trim();
-      if (!model || seen.has(model)) return;
-      seen.add(model);
+      const key = `${providerId}:${model}`;
+      if (!model || seen.has(key)) return;
+      seen.add(key);
       items.push({ id: model, model, name: model, providerId, providerName, fixedQuota: model === "mock-standard" ? 1 : 10 });
     });
   });
@@ -1956,7 +4122,12 @@ const onlineModelOptions = computed(() => {
   });
   return items.length ? items : [{ label: "当前图像模型", value: "gpt-image-2" }, { label: "本地演示模型", value: "mock-standard" }];
 });
-const activeOnlineModel = computed(() => [...onlineProviderModels.value, ...onlineModels.value].find((model) => String(model.model || model.id) === onlineImageForm.value.model));
+const activeOnlineModel = computed(() => {
+  const currentProvider = String(onlineImageForm.value.provider || "");
+  const currentModel = String(onlineImageForm.value.model || "");
+  return onlineProviderModels.value.find((model) => String(model.providerId || "") === currentProvider && String(model.model || model.id) === currentModel)
+    || [...onlineProviderModels.value, ...onlineModels.value].find((model) => String(model.model || model.id) === currentModel);
+});
 const onlineEstimatedCost = computed(() => Math.max(1, Number(activeOnlineModel.value?.fixedQuota || activeOnlineModel.value?.modelRatio || 1)) * Number(onlineImageForm.value.count || 1));
 const onlineProviderModeLabel = computed(() => {
   const item = onlineProviders.value.find((provider) => String(provider.id || provider.name) === onlineImageForm.value.provider);
@@ -1970,6 +4141,15 @@ function syncOnlineProviderForModel() {
     return;
   }
   const currentModel = String(onlineImageForm.value.model || "");
+  const currentProvider = String(onlineImageForm.value.provider || "");
+  const primaryMatch = providerModels.find((item) => String(item.model || item.id || "") === currentModel && onlineProviders.value.some((provider) => String(provider.id || provider.name || "") === String(item.providerId || "") && Boolean(provider.primary)));
+  if (primaryMatch) {
+    onlineImageForm.value.provider = String(primaryMatch.providerId || "");
+    return;
+  }
+  if (currentProvider && providerModels.some((item) => String(item.providerId || "") === currentProvider && String(item.model || item.id || "") === currentModel)) {
+    return;
+  }
   const matched = providerModels.find((item) => String(item.model || item.id || "") === currentModel) || providerModels[0];
   if (matched && String(matched.model || matched.id || "") !== currentModel) {
     onlineImageForm.value.model = String(matched.model || matched.id || currentModel);
@@ -1985,8 +4165,12 @@ watch(
   onlineProviderModels,
   () => syncOnlineProviderForModel()
 );
-const onlinePreviewTask = computed(() => onlineRecentTasks.value.find((task) => String(task.status || "").toUpperCase() === "SUCCEEDED") || onlineRecentTasks.value[0]);
+const onlinePreviewTask = computed(() => onlineImageTasks.value.find((task) => String(task.status || "").toUpperCase() === "SUCCEEDED") || onlineImageTasks.value[0]);
 const onlinePreviewImage = computed(() => onlinePreviewTask.value ? aiTaskImageUrl(onlinePreviewTask.value) : "");
+const imageWorkspaceTitle = computed(() => {
+  if (store.activeModuleId === "userWorks") return "作品中心";
+  return "AI Image Playground";
+});
 const onlinePreviewStatus = computed(() => {
   const status = String(onlinePreviewTask.value?.status || "PENDING").toUpperCase();
   if (status === "SUCCEEDED") return { label: "已完成", type: "success" as const };
@@ -1994,17 +4178,17 @@ const onlinePreviewStatus = computed(() => {
   if (status === "FAILED") return { label: "失败", type: "danger" as const };
   return { label: "队列中", type: "info" as const };
 });
-const onlineHistoryItems = computed(() => onlineRecentTasks.value.slice(0, 8));
+const onlineHistoryItems = computed(() => onlineImageTasks.value.slice(0, 8));
 const aiGalleryCards = computed(() => {
   const keyword = aiPromptSearch.value.trim().toLowerCase();
   const filter = aiGalleryFilter.value;
-  return onlineRecentTasks.value.filter((task) => {
+  return onlineImageTasks.value.filter((task) => {
     const taskId = String(task.id || task.name || task.prompt || "");
     if (aiHiddenTaskIds.value.includes(taskId)) return false;
     const status = String(task.status || "").toUpperCase();
     const searchable = [task.prompt, task.name, task.model, task.status, task.id].map((item) => String(item || "").toLowerCase()).join(" ");
     if (filter === "done" && status !== "SUCCEEDED") return false;
-    if (filter === "running" && !["PENDING", "RUNNING"].includes(status)) return false;
+    if (filter === "running" && !isAiTaskRunning(task)) return false;
     if (filter === "error" && !["FAILED", "ERROR"].includes(status)) return false;
     if (aiActiveFavoriteCollectionId.value) {
       const collectionTaskIds = aiActiveFavoriteCollectionId.value === "all-favorites"
@@ -2014,7 +4198,7 @@ const aiGalleryCards = computed(() => {
     }
     if (aiFavoriteOnly.value && !isAiTaskFavorite(task)) return false;
     return !keyword || searchable.includes(keyword);
-  }).slice(0, 12);
+  });
 });
 const aiFavoriteCollectionCards = computed(() => {
   const allFavoriteTaskIds = Array.from(new Set(aiFavoriteTaskIds.value));
@@ -2023,7 +4207,7 @@ const aiFavoriteCollectionCards = computed(() => {
     ...aiFavoriteCollections.value.map((collection) => ({ ...collection, virtual: false }))
   ].map((collection) => {
     const taskIds = collection.id === "all-favorites" ? allFavoriteTaskIds : collection.taskIds;
-    const tasks = onlineRecentTasks.value.filter((task) => taskIds.includes(aiTaskId(task)));
+    const tasks = onlineImageTasks.value.filter((task) => taskIds.includes(aiTaskId(task)));
     return {
       ...collection,
       taskIds,
@@ -2035,8 +4219,10 @@ const aiFavoriteCollectionCards = computed(() => {
 });
 const isAiFavoriteCollectionOverview = computed(() => aiPlaygroundMode.value === "gallery" && aiFavoriteOnly.value && !aiActiveFavoriteCollectionId.value);
 const aiFailedVisibleTasks = computed(() => aiGalleryCards.value.filter((task) => ["FAILED", "ERROR"].includes(String(task.status || "").toUpperCase())));
-const aiDetailTask = computed(() => onlineRecentTasks.value.find((task) => aiTaskId(task) === aiDetailTaskId.value));
-const aiLightboxTask = computed(() => onlineRecentTasks.value.find((task) => aiTaskId(task) === aiLightboxTaskId.value));
+const aiDetailTask = computed(() => onlineImageTasks.value.find((task) => aiTaskId(task) === aiDetailTaskId.value));
+const aiRawUrlsTask = computed(() => onlineImageTasks.value.find((task) => aiTaskId(task) === aiRawUrlsTaskId.value));
+const aiRawResponseTask = computed(() => onlineImageTasks.value.find((task) => aiTaskId(task) === aiRawResponseTaskId.value));
+const aiLightboxTask = computed(() => onlineImageTasks.value.find((task) => aiTaskId(task) === aiLightboxTaskId.value));
 const aiLightboxTasks = computed(() => aiGalleryCards.value.filter((task) => aiTaskImageUrl(task)));
 const aiLightboxIndex = computed(() => aiLightboxTasks.value.findIndex((task) => aiTaskId(task) === aiLightboxTaskId.value));
 const aiLightboxTotal = computed(() => aiLightboxTasks.value.length);
@@ -2066,8 +4252,8 @@ const onlineQueueCards = computed(() => {
 });
 const filteredOnlineTasks = computed(() => {
   const status = onlineStatusFilter.value;
-  if (status === "ALL") return onlineRecentTasks.value;
-  return onlineRecentTasks.value.filter((task) => String(task.status || "").toUpperCase() === status);
+  if (status === "ALL") return onlineImageTasks.value;
+  return onlineImageTasks.value.filter((task) => String(task.status || "").toUpperCase() === status);
 });
 
 function providerStatusClass(value: unknown) {
@@ -2199,6 +4385,17 @@ function normalizeAiImageSize(size: string) {
   return `${width}x${height}`;
 }
 
+function aiRequestSizeParam(size: string) {
+  const normalized = normalizeAiImageSize(size);
+  if (!normalized || normalized.toLowerCase() === "auto") return "";
+  return normalized;
+}
+
+function aiRequestQualityParam(value: string) {
+  const normalized = normalizeAiImageQuality(value);
+  return normalized === "high" ? "high" : "";
+}
+
 function parseAiRatio(ratio: string) {
   const match = ratio.trim().match(/^(\d+(?:\.\d+)?)\s*[:xX×]\s*(\d+(?:\.\d+)?)$/);
   if (!match) return null;
@@ -2278,6 +4475,53 @@ function ratioIconStyle(ratio: string) {
   return { width: `${width}px`, height: `${height}px` };
 }
 
+async function loadAiImageModuleSchema(force = false) {
+  const modelName = String(onlineImageForm.value.model || "").trim();
+  const schemaKey = modelName || "default";
+  if (!force && aiImageModuleSchemaKey.value === schemaKey && aiImageModuleSchema.value) return;
+  aiImageModuleSchemaLoading.value = true;
+  try {
+    const params = new URLSearchParams({ module_code: "image_generation" });
+    if (modelName) params.set("model_name", modelName);
+    aiImageModuleSchema.value = await adminRequest<AdminRecord>({ method: "GET", url: `/module-schema?${params.toString()}` });
+    aiImageModuleSchemaKey.value = schemaKey;
+  } catch (error) {
+    aiImageModuleSchema.value = null;
+    aiImageModuleSchemaKey.value = "";
+    if (aiSizePickerVisible.value) {
+      ElMessage.warning(error instanceof Error ? `图片尺寸 Schema 读取失败：${error.message}` : "图片尺寸 Schema 读取失败");
+    }
+  } finally {
+    aiImageModuleSchemaLoading.value = false;
+  }
+}
+
+function selectAiSchemaSizeOption(size: string) {
+  const normalized = normalizeAiImageSize(size);
+  if (!normalized || normalized.toLowerCase() === "auto") {
+    aiSizePickerMode.value = "auto";
+    return;
+  }
+  const preset = findAiSizePreset(normalized);
+  const parsed = normalized.match(/^(\d+)x(\d+)$/);
+  if (preset) {
+    aiSizePickerMode.value = "ratio";
+    aiSizeTier.value = preset.tier;
+    aiSizeRatio.value = preset.ratio;
+    return;
+  }
+  if (parsed) {
+    aiSizePickerMode.value = "resolution";
+    aiCustomWidth.value = parsed[1];
+    aiCustomHeight.value = parsed[2];
+  }
+}
+
+function isAiSchemaSizeOptionActive(size: string) {
+  const normalized = normalizeAiImageSize(size);
+  return normalized && normalized === aiSizePickerPreview.value;
+}
+
 function openAiSizePicker() {
   const currentSize = onlineImageForm.value.size;
   if (!currentSize || currentSize === "auto") {
@@ -2298,6 +4542,7 @@ function openAiSizePicker() {
     }
   }
   aiSizePickerVisible.value = true;
+  void loadAiImageModuleSchema(true);
 }
 
 function closeAiSizePicker() {
@@ -2330,7 +4575,7 @@ function applyAiSizePicker() {
 
 function runOnlineResultAction(action: "download" | "reuse" | "works" | "canvas") {
   if (action === "canvas") {
-    selectAdminModule("userCanvas");
+    selectAdminModule("userWorks");
     return;
   }
   if (action === "works") {
@@ -2360,6 +4605,33 @@ function aiTaskAsset(task: AdminRecord) {
   });
 }
 
+function aiTaskOutputItems(task: AdminRecord) {
+  const taskId = aiTaskId(task);
+  const resultIds = Array.isArray(task.resultIds) ? task.resultIds.map((item) => String(item)) : [];
+  const seen = new Set<string>();
+  const items: Array<{ id: string; url: string; name: string }> = [];
+  const addItem = (id: string, url: string, name: string) => {
+    const key = url || id;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    items.push({ id, url, name });
+  };
+
+  onlineAssets.value.forEach((asset) => {
+    const assetId = String(asset.id || "");
+    const assetTaskId = String(asset.taskId || "");
+    const matchesTask = taskId && assetTaskId === taskId;
+    const matchesResult = assetId && resultIds.includes(assetId);
+    if (!matchesTask && !matchesResult) return;
+    const url = String(asset.url || asset.imageUrl || asset.outputUrl || asset.resultUrl || asset.thumbnailUrl || "");
+    addItem(assetId || `${taskId}-${items.length + 1}`, url, String(asset.name || task.name || task.prompt || "AI 图片"));
+  });
+
+  const directUrl = String(task.outputUrl || task.resultUrl || task.imageUrl || task.thumbnailUrl || "");
+  addItem(taskId || `${Date.now()}`, directUrl, String(task.name || task.prompt || "AI 图片"));
+  return items.filter((item) => item.url);
+}
+
 function aiTaskOriginalCacheId(task: AdminRecord) {
   const asset = aiTaskAsset(task);
   return String(asset?.id || task.id || task.resultUrl || task.outputUrl || task.imageUrl || "");
@@ -2368,6 +4640,8 @@ function aiTaskOriginalCacheId(task: AdminRecord) {
 function aiTaskImageUrl(task: AdminRecord) {
   const directUrl = String(task.outputUrl || task.resultUrl || task.imageUrl || "");
   if (directUrl) return directUrl;
+  const firstOutput = aiTaskOutputItems(task)[0];
+  if (firstOutput?.url) return firstOutput.url;
   const asset = aiTaskAsset(task);
   return String(asset?.url || asset?.imageUrl || asset?.outputUrl || asset?.resultUrl || task.thumbnailUrl || asset?.thumbnailUrl || "");
 }
@@ -2382,6 +4656,59 @@ function aiTaskThumbnailUrl(task: AdminRecord) {
 function aiTaskDisplayImageUrl(task: AdminRecord) {
   const cacheId = aiTaskOriginalCacheId(task);
   return (cacheId && aiOriginalImageCache.value[cacheId]) || aiTaskImageUrl(task);
+}
+
+function aiTaskRawImageUrls(task: AdminRecord) {
+  const urls = new Set<string>();
+  const addUrl = (value: unknown) => {
+    const url = String(value || "").trim();
+    if (url) urls.add(url);
+  };
+  aiTaskOutputItems(task).forEach((item) => addUrl(item.url));
+  addUrl(task.outputUrl);
+  addUrl(task.resultUrl);
+  addUrl(task.imageUrl);
+  addUrl(task.thumbnailUrl);
+  const rawUrls = (task as Record<string, unknown>).rawImageUrls;
+  if (Array.isArray(rawUrls)) rawUrls.forEach(addUrl);
+  return Array.from(urls);
+}
+
+function sanitizedAiRawValue(value: unknown, depth = 0): unknown {
+  if (depth > 5) return "[Object]";
+  if (typeof value === "string") {
+    if (value.startsWith("data:image/")) return `[data image omitted, ${value.length} chars]`;
+    if (value.length > 1200) return `${value.slice(0, 1200)}... [truncated ${value.length - 1200} chars]`;
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizedAiRawValue(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, sanitizedAiRawValue(item, depth + 1)]));
+  }
+  return value;
+}
+
+function aiTaskRawResponseText(task: AdminRecord) {
+  const payload = {
+    task: sanitizedAiRawValue(task),
+    outputs: aiTaskOutputItems(task),
+    rawImageUrls: aiTaskRawImageUrls(task),
+    params: sanitizedAiRawValue(aiTaskParams(task))
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function openAiRawUrlsModal(task: AdminRecord) {
+  aiRawUrlsTaskId.value = aiTaskId(task);
+}
+
+function openAiRawResponseModal(task: AdminRecord) {
+  aiRawResponseTaskId.value = aiTaskId(task);
+}
+
+function closeAiRawModals() {
+  aiRawUrlsTaskId.value = "";
+  aiRawResponseTaskId.value = "";
 }
 
 function blobToDataUrl(blob: Blob) {
@@ -2449,8 +4776,15 @@ function aiTaskStatus(task: AdminRecord) {
   return String(task.status || "PENDING").toUpperCase();
 }
 
+function isAiTaskSucceeded(task: AdminRecord) {
+  return ["SUCCEEDED", "COMPLETED", "DONE"].includes(aiTaskStatus(task));
+}
+
 function isAiTaskRunning(task: AdminRecord) {
-  return ["PENDING", "RUNNING"].includes(aiTaskStatus(task));
+  const status = aiTaskStatus(task);
+  if (["PENDING", "RUNNING", "QUEUED", "PROCESSING"].includes(status)) return true;
+  if (["SUCCEEDED", "COMPLETED", "DONE", "FAILED", "ERROR", "CANCELED", "CANCELLED"].includes(status)) return false;
+  return !isAiTaskFailed(task) && !aiTaskImageUrl(task);
 }
 
 function isAiTaskFailed(task: AdminRecord) {
@@ -2460,11 +4794,125 @@ function isAiTaskFailed(task: AdminRecord) {
 function aiTaskStatusClass(task: AdminRecord) {
   const status = aiTaskStatus(task);
   return {
-    "is-running": ["PENDING", "RUNNING"].includes(status),
-    "is-done": status === "SUCCEEDED",
+    "is-running": isAiTaskRunning(task),
+    "is-done": isAiTaskSucceeded(task),
     "is-failed": ["FAILED", "ERROR"].includes(status),
     "is-favorite": isAiTaskFavorite(task)
   };
+}
+
+function clearAiGenerationPolling() {
+  if (aiGenerationPollTimer && typeof window !== "undefined") {
+    window.clearTimeout(aiGenerationPollTimer);
+  }
+  aiGenerationPollTimer = null;
+}
+
+function stopAiGenerationPolling() {
+  clearAiGenerationPolling();
+  aiTrackedGenerationTaskIds.value = [];
+  aiGenerationPollAttempts.clear();
+}
+
+function trackAiGenerationTask(taskId: string) {
+  const id = String(taskId || "").trim();
+  if (!id || id.startsWith("optimistic_")) return;
+  if (!aiTrackedGenerationTaskIds.value.includes(id)) {
+    aiTrackedGenerationTaskIds.value = [id, ...aiTrackedGenerationTaskIds.value];
+  }
+  if (!aiGenerationPollAttempts.has(id)) {
+    aiGenerationPollAttempts.set(id, 0);
+  }
+  scheduleAiGenerationPolling(0);
+}
+
+function scheduleAiGenerationPolling(delayMs?: number) {
+  if (typeof window === "undefined") return;
+  if (aiGenerationPollTimer) return;
+  if (!aiTrackedGenerationTaskIds.value.length) return;
+  const maxAttempt = Math.max(0, ...aiTrackedGenerationTaskIds.value.map((id) => aiGenerationPollAttempts.get(id) || 0));
+  const nextDelay = delayMs ?? aiGenerationPollDelaysMs[Math.min(maxAttempt, aiGenerationPollDelaysMs.length - 1)];
+  aiGenerationPollTimer = window.setTimeout(() => {
+    aiGenerationPollTimer = null;
+    void pollAiGenerationTasksOnce();
+  }, nextDelay);
+}
+
+async function pollAiGenerationTasksOnce() {
+  const taskIds = [...aiTrackedGenerationTaskIds.value];
+  if (!taskIds.length) {
+    clearAiGenerationPolling();
+    return;
+  }
+  let shouldRefreshWorkspace = false;
+  try {
+    const polledTasks = await Promise.all(taskIds.map(async (taskId) => {
+      aiGenerationPollAttempts.set(taskId, (aiGenerationPollAttempts.get(taskId) || 0) + 1);
+      try {
+        return await adminRequest<AdminRecord>({ method: "GET", url: `/generation-tasks/${encodeURIComponent(taskId)}` });
+      } catch (error) {
+        console.warn("AI generation task polling skipped", taskId, error);
+        return null;
+      }
+    }));
+    const completedTaskIds: string[] = [];
+    polledTasks.forEach((task) => {
+      if (!task) return;
+      mergeAiGenerationTask(task);
+      if (!isAiTaskRunning(task)) {
+        completedTaskIds.push(aiTaskId(task));
+        shouldRefreshWorkspace = true;
+      }
+    });
+    if (completedTaskIds.length) {
+      aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => !completedTaskIds.includes(id));
+      completedTaskIds.forEach((id) => aiGenerationPollAttempts.delete(id));
+    }
+    aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => (aiGenerationPollAttempts.get(id) || 0) < aiGenerationPollMaxAttempts);
+    const serverTasks = Array.isArray(onlineImageData.value.recentTasks) ? onlineImageData.value.recentTasks : [];
+    aiOptimisticTasks.value = aiOptimisticTasks.value.filter((task) => !isOptimisticAiTaskReconciled(task, serverTasks));
+  } catch (error) {
+    console.warn("AI generation polling skipped", error);
+  }
+  if (shouldRefreshWorkspace) {
+    void store.loadActiveModule({ preferCache: false, silent: true }).catch((error) => {
+      console.warn("AI generation completion refresh skipped", error);
+    });
+  }
+  if (!aiTrackedGenerationTaskIds.value.length) {
+    clearAiGenerationPolling();
+    return;
+  }
+  scheduleAiGenerationPolling();
+}
+
+function mergeAiGenerationTask(task: AdminRecord) {
+  const taskId = aiTaskId(task);
+  if (!taskId) return;
+  const currentData = store.data as AdminRecord;
+  const currentTasks = Array.isArray(currentData.recentTasks) ? currentData.recentTasks : [];
+  let found = false;
+  const nextTasks = currentTasks.map((item) => {
+    if (aiTaskId(item) !== taskId) return item;
+    found = true;
+    return { ...item, ...task };
+  });
+  if (!found) {
+    nextTasks.unshift(task);
+  }
+  store.data = { ...currentData, recentTasks: nextTasks };
+}
+
+function refreshAiGenerationTasksFromServer() {
+  if (!usesAiImageWorkspace.value || !hasAuthToken()) return;
+  if (!aiTrackedGenerationTaskIds.value.length) return;
+  clearAiGenerationPolling();
+  scheduleAiGenerationPolling(0);
+}
+
+function handleAiWorkspaceVisibilityRefresh() {
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+  refreshAiGenerationTasksFromServer();
 }
 
 function aiTaskModelLabel(task: AdminRecord) {
@@ -2765,7 +5213,7 @@ function confirmAiFavoritePicker() {
     return { ...collection, taskIds: nextTaskIds, updatedAt: now };
   });
   syncAiFavoriteTaskIdsFromCollections();
-  ElMessage.success(aiFavoritePickerCheckedIds.value.length ? "已保存到收藏夹" : "已从收藏夹移除");
+  aiPlaygroundMessage("success", aiFavoritePickerCheckedIds.value.length ? "已保存到收藏夹" : "已从收藏夹移除");
   closeAiFavoritePicker();
   void saveAiState();
 }
@@ -2862,6 +5310,56 @@ function invertAiVisibleTaskSelection() {
   aiSelectedTaskIds.value = next;
 }
 
+function normalizeAiReferenceUrl(url: string) {
+  const value = String(url || "").trim();
+  if (!value || value.startsWith("data:image/") || value.startsWith("blob:") || value.startsWith("http://") || value.startsWith("https://")) return value;
+  if (value.startsWith("/") && typeof window !== "undefined") return new URL(value, window.location.origin).href;
+  return value;
+}
+
+function isHeavyAiImageDataUrl(url: string) {
+  return url.startsWith("data:image/") && url.length > 180_000;
+}
+
+function aiReferencePreviewUrl(item: AiReferenceImage) {
+  const previewUrl = normalizeAiReferenceUrl(item.previewUrl || item.url);
+  if (isHeavyAiImageDataUrl(previewUrl)) return "";
+  return previewUrl;
+}
+
+function aiReferenceSource(item: AiReferenceImage): AiGenerationReference["source"] {
+  if (item.id.startsWith("task-output-") || item.id.startsWith("context-")) return "task";
+  if (item.id.startsWith("draft-")) return "draft";
+  if (item.name.includes("粘贴图片")) return "paste";
+  if (item.file) return "upload";
+  return "local";
+}
+
+function createAiTaskReferenceImage(task: AdminRecord, imageUrl: string, prefix = "task-output"): AiReferenceImage {
+  const normalizedUrl = normalizeAiReferenceUrl(imageUrl);
+  const remoteUrl = normalizedUrl && !normalizedUrl.startsWith("blob:") ? normalizedUrl : undefined;
+  const previewUrl = normalizeAiReferenceUrl(aiTaskThumbnailUrl(task) || normalizedUrl);
+  return {
+    id: `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    name: `${aiTaskId(task) || "output"}-输出图`,
+    url: isHeavyAiImageDataUrl(normalizedUrl) && previewUrl && !isHeavyAiImageDataUrl(previewUrl) ? previewUrl : normalizedUrl,
+    ...(previewUrl && previewUrl !== normalizedUrl ? { previewUrl } : {}),
+    ...(remoteUrl ? { remoteUrl } : {})
+  };
+}
+
+function replaceAiReferenceMentionsForApi(prompt: string, referenceCount: number) {
+  return prompt.replace(/@(?:图|image)\s*(\d+)/gi, (text, value) => {
+    const index = Number(value);
+    if (!Number.isFinite(index) || index < 1 || index > referenceCount) return text;
+    return `[image ${index}]`;
+  });
+}
+
+function effectiveAiPromptForReferences(prompt: string, references: AiGenerationReference[]) {
+  return replaceAiReferenceMentionsForApi(prompt.trim(), references.length);
+}
+
 function favoriteSelectedAiTasks() {
   const ids = aiSelectedTaskIds.value;
   if (!ids.length) return;
@@ -2874,7 +5372,7 @@ function areSelectedAiTasksFavorite() {
 }
 
 async function downloadSelectedAiTasks() {
-  const selectedTasks = onlineRecentTasks.value.filter((task) => aiSelectedTaskIds.value.includes(aiTaskId(task)) && aiTaskImageUrl(task));
+  const selectedTasks = onlineImageTasks.value.filter((task) => aiSelectedTaskIds.value.includes(aiTaskId(task)) && aiTaskImageUrl(task));
   if (!selectedTasks.length) {
     ElMessage.warning("选中任务没有可下载图片");
     return;
@@ -2963,7 +5461,7 @@ async function deleteAiTask(task: AdminRecord) {
   aiOptimisticTasks.value = aiOptimisticTasks.value.filter((item) => aiTaskId(item) !== id);
   if (aiDetailTaskId.value === id) closeAiDetailModal();
   if (aiLightboxTaskId.value === id) closeAiLightbox();
-  ElMessage.success("任务已删除");
+  aiPlaygroundMessage("success", "任务已删除");
   void saveAiState();
 }
 
@@ -3113,7 +5611,7 @@ async function downloadSelectedAiFavoriteCollections() {
       .filter((collection) => aiSelectedFavoriteCollectionIds.value.includes(collection.id))
       .flatMap((collection) => collection.taskIds)
   ));
-  const selectedTasks = onlineRecentTasks.value.filter((task) => selectedTaskIds.includes(aiTaskId(task)) && aiTaskImageUrl(task));
+  const selectedTasks = onlineImageTasks.value.filter((task) => selectedTaskIds.includes(aiTaskId(task)) && aiTaskImageUrl(task));
   if (!selectedTasks.length) {
     ElMessage.warning("选中收藏夹没有可下载图片");
     return;
@@ -3160,15 +5658,45 @@ function selectAiFavoriteCollection(id: string) {
   void saveAiState();
 }
 
-function reuseAiTask(task: AdminRecord) {
+function reuseAiTask(task: AdminRecord, options: { notify?: boolean } = {}) {
   const prompt = String(task.prompt || task.name || "");
   if (prompt) onlineImageForm.value.prompt = prompt;
   if (task.model) onlineImageForm.value.model = String(task.model);
   const params = (task.params || {}) as Record<string, unknown>;
+  if (typeof params.provider === "string") onlineImageForm.value.provider = params.provider;
+  const ratio = String(params.imageRatio || params.ratio || "").trim();
+  if (ratio) onlineImageForm.value.ratio = ratio;
   if (params.size) onlineImageForm.value.size = String(params.size);
-  if (params.quality || params.imageQuality) onlineImageForm.value.quality = String(params.quality || params.imageQuality);
-  if (params.output_format) onlineImageForm.value.outputFormat = String(params.output_format);
-  ElMessage.success("已复用任务参数");
+  const count = Number(params.count || params.n);
+  if (Number.isFinite(count) && count > 0) onlineImageForm.value.count = Math.min(4, Math.max(1, Math.round(count)));
+  const width = Number(params.width);
+  const height = Number(params.height);
+  if (Number.isFinite(width) && width > 0) onlineImageForm.value.width = Math.round(width);
+  if (Number.isFinite(height) && height > 0) onlineImageForm.value.height = Math.round(height);
+  if (typeof params.resolution === "string") onlineImageForm.value.resolution = params.resolution;
+  const quality = normalizeAiImageQuality(params.quality || params.imageQuality);
+  if (quality) onlineImageForm.value.quality = quality;
+  if (params.output_format || params.outputFormat) onlineImageForm.value.outputFormat = String(params.output_format || params.outputFormat);
+  if (typeof params.transparent_output === "boolean") onlineImageForm.value.transparentOutput = params.transparent_output;
+  if (typeof params.transparentOutput === "boolean") onlineImageForm.value.transparentOutput = params.transparentOutput;
+  if (typeof params.moderation === "string") onlineImageForm.value.moderation = params.moderation;
+  if (options.notify !== false) aiPlaygroundMessage("success", "已复用任务参数");
+  nextTick(() => aiPromptInputRef.value?.adjustHeight());
+}
+
+async function retryAiTask(task: AdminRecord) {
+  if (onlineSubmitting.value) return;
+  reuseAiTask(task, { notify: false });
+  aiPlaygroundMessage("info", "已复用失败任务，正在重新生成");
+  await nextTick();
+  await submitAiImage();
+}
+
+function normalizeAiImageQuality(value: unknown) {
+  const quality = String(value || "").trim().toLowerCase();
+  if (["auto", "standard", "high", "medium", "low"].includes(quality)) return quality;
+  if (quality === "draft") return "low";
+  return "";
 }
 
 function previewAiTask(task: AdminRecord) {
@@ -3358,23 +5886,19 @@ function handleAiLightboxPointerUp(event: PointerEvent) {
 function editAiTaskOutput(task: AdminRecord) {
   const imageUrl = aiTaskImageUrl(task);
   if (!imageUrl) {
-    ElMessage.warning("图片生成完成后才能编辑输出");
+    aiPlaygroundMessage("warning", "图片生成完成后才能编辑输出");
     return;
   }
   if (aiReferenceImages.value.length >= 10) {
-    ElMessage.warning("参考图最多上传 10 张");
+    aiPlaygroundMessage("warning", "参考图最多上传 10 张");
     return;
   }
   aiReferenceImages.value = [
     ...aiReferenceImages.value,
-    {
-      id: `task-output-${Date.now()}`,
-      name: `${aiTaskId(task) || "output"}-输出图`,
-      url: imageUrl
-    }
+    createAiTaskReferenceImage(task, imageUrl)
   ];
   reuseAiTask(task);
-  ElMessage.success("已加入参考图，可继续编辑生成");
+  notifyAiImageEditReady();
 }
 
 function closeAiLightbox() {
@@ -3432,7 +5956,7 @@ function closeAiImageContextMenu() {
 
 function openAiImageContextMenu(event: MouseEvent, task: AdminRecord) {
   const menuWidth = 148;
-  const menuHeight = 148;
+  const menuHeight = aiTaskOutputItems(task).length > 1 ? 188 : 148;
   const left = Math.min(event.clientX, Math.max(12, window.innerWidth - menuWidth - 12));
   const top = Math.min(event.clientY, Math.max(12, window.innerHeight - menuHeight - 12));
   aiImageContextMenu.value = {
@@ -3443,7 +5967,7 @@ function openAiImageContextMenu(event: MouseEvent, task: AdminRecord) {
   };
 }
 
-const aiContextMenuTask = computed(() => onlineRecentTasks.value.find((task) => aiTaskId(task) === aiImageContextMenu.value.taskId));
+const aiContextMenuTask = computed(() => onlineImageTasks.value.find((task) => aiTaskId(task) === aiImageContextMenu.value.taskId));
 
 function handleAiImageContextMenuDismiss(event?: Event) {
   if (!aiImageContextMenu.value.visible) return;
@@ -3462,17 +5986,17 @@ async function copyAiContextImage() {
   closeAiImageContextMenu();
   const imageUrl = task ? aiTaskImageUrl(task) : "";
   if (!imageUrl) {
-    ElMessage.warning("暂无可复制图片");
+    aiPlaygroundMessage("warning", "暂无可复制图片");
     return;
   }
   try {
     const blob = await imageUrlToBlob(imageUrl);
     if (!navigator.clipboard || typeof ClipboardItem === "undefined") throw new Error("当前浏览器不支持复制图片");
     await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
-    ElMessage.success("图片已复制");
+    aiPlaygroundMessage("success", "图片已复制");
   } catch (error) {
     console.error(error);
-    ElMessage.error(error instanceof Error ? error.message : "复制失败");
+    aiPlaygroundMessage("error", error instanceof Error ? error.message : "复制失败");
   }
 }
 
@@ -3482,29 +6006,47 @@ async function downloadAiContextImage() {
   await downloadAiTask(task);
 }
 
+async function downloadAllAiContextImages() {
+  const task = aiContextMenuTask.value;
+  closeAiImageContextMenu();
+  await downloadAllAiTaskOutputs(task);
+}
+
 async function editAiContextImage() {
   const task = aiContextMenuTask.value;
   closeAiImageContextMenu();
   const imageUrl = task ? aiTaskImageUrl(task) : "";
   if (!task || !imageUrl) {
-    ElMessage.warning("暂无可编辑图片");
+    aiPlaygroundMessage("warning", "暂无可编辑图片");
     return;
   }
   if (aiReferenceImages.value.length >= 10) {
-    ElMessage.warning("参考图最多上传 10 张");
+    aiPlaygroundMessage("warning", "参考图最多上传 10 张");
     return;
   }
   aiReferenceImages.value = [
     ...aiReferenceImages.value,
-    {
-      id: `context-${Date.now()}`,
-      name: `${aiTaskId(task) || "output"}-输出图`,
-      url: imageUrl
-    }
+    createAiTaskReferenceImage(task, imageUrl, "context")
   ];
   reuseAiTask(task);
   closeAiLightbox();
-  ElMessage.success("已加入参考图，可继续编辑生成");
+  notifyAiImageEditReady();
+}
+
+function notifyAiImageEditReady() {
+  aiPlaygroundMode.value = "gallery";
+  onlineImageForm.value.prompt = "";
+  void saveAiState();
+  aiPlaygroundMessage("success", "图片已放入参考图，请输入要怎么编辑后再点生成");
+  window.setTimeout(() => {
+    aiPromptInputRef.value?.focus();
+    aiPromptInputRef.value?.adjustHeight();
+  }, 80);
+  void ElMessageBox.alert(
+    "图片已加入底部参考图。请在输入框写清楚要保留什么、修改什么，例如：保留产品主体，换成白底电商主图，加上京东 logo。写完后你再点击生成。",
+    "请继续编辑照片",
+    { confirmButtonText: "我来填写" }
+  );
 }
 
 function createAiAgentConversation() {
@@ -3583,13 +6125,31 @@ async function downloadAiTask(task?: AdminRecord) {
   }
 }
 
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error || new Error("读取图片失败"));
-    reader.readAsDataURL(file);
-  });
+async function downloadAllAiTaskOutputs(task?: AdminRecord) {
+  if (!task) {
+    ElMessage.warning("暂无可下载任务");
+    return;
+  }
+  const outputs = aiTaskOutputItems(task);
+  if (!outputs.length) {
+    ElMessage.warning("当前任务还没有生成图片");
+    return;
+  }
+  let successCount = 0;
+  for (let index = 0; index < outputs.length; index += 1) {
+    const output = outputs[index];
+    try {
+      await downloadUrl(output.url, `ai-image-${aiTaskId(task) || Date.now()}-${index + 1}.png`);
+      successCount += 1;
+    } catch {
+      // 继续尝试剩余图片，最后统一提示成功数量。
+    }
+  }
+  if (successCount) {
+    ElMessage.success(`已开始下载 ${successCount} 张图片`);
+  } else {
+    ElMessage.error("下载失败，请稍后重试");
+  }
 }
 
 async function handleAiReferenceUpload(uploadFile: { raw?: File; name?: string }) {
@@ -3603,27 +6163,30 @@ async function handleAiReferenceUpload(uploadFile: { raw?: File; name?: string }
     ElMessage.warning("参考图最多上传 10 张");
     return;
   }
-  let url = "";
-  let cacheable = false;
-  if (file.size <= aiDraftReferenceMaxBytes) {
-    try {
-      url = await fileToDataUrl(file);
-      cacheable = true;
-    } catch {
-      // Keep the temporary preview URL when the browser cannot read the file.
-    }
-  }
-  if (!url) url = URL.createObjectURL(file);
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const url = URL.createObjectURL(file);
   aiReferenceImages.value = [
     ...aiReferenceImages.value,
     {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      id,
       name: uploadFile.name || file.name,
       url,
-      ...(cacheable ? {} : { file })
+      file,
+      uploading: true
     }
   ];
-  if (!cacheable) ElMessage.info("参考图较大，本次可用但不会写入本地草稿缓存");
+  void ensureAiReferenceRemoteUrl(id);
+}
+
+function handleAiPromptPasteImages(files: File[]) {
+  for (const file of files) {
+    if (aiReferenceImages.value.length >= 10) {
+      ElMessage.warning("参考图最多上传 10 张");
+      break;
+    }
+    void handleAiReferenceUpload({ raw: file, name: file.name || "粘贴图片.png" });
+  }
+  nextTick(() => aiPromptInputRef.value?.adjustHeight());
 }
 
 function clampNumberInput(value: string, min: number, max: number, fallback: number) {
@@ -3658,12 +6221,33 @@ function commitAiCompressionInput() {
 
 function revokeAiReferenceImage(item?: AiReferenceImage) {
   if (item?.url.startsWith("blob:")) URL.revokeObjectURL(item.url);
+  if (item?.previewUrl?.startsWith("blob:") && item.previewUrl !== item.url) URL.revokeObjectURL(item.previewUrl);
+}
+
+function aiRecordReferencesImage(record: unknown, item: AiReferenceImage) {
+  if (!record || typeof record !== "object") return false;
+  const json = JSON.stringify(record);
+  return json.includes(item.id) || (!!item.remoteUrl && json.includes(item.remoteUrl)) || (!!item.url && !item.url.startsWith("blob:") && json.includes(item.url));
+}
+
+function isAiReferenceImageReferencedByState(item?: AiReferenceImage) {
+  if (!item) return false;
+  if (aiReferenceImages.value.some((current) => current.id === item.id)) return true;
+  if (aiRecordReferencesImage(aiImageDraftPayload(), item)) return true;
+  if (onlineImageTasks.value.some((task) => aiRecordReferencesImage(aiTaskParams(task), item) || aiRecordReferencesImage(task, item))) return true;
+  if (onlineAssets.value.some((asset) => aiRecordReferencesImage(asset, item))) return true;
+  return false;
+}
+
+function deleteAiReferenceImageIfUnreferenced(item?: AiReferenceImage) {
+  if (!item || isAiReferenceImageReferencedByState(item)) return;
+  revokeAiReferenceImage(item);
 }
 
 function removeAiReferenceImage(index: number) {
   const item = aiReferenceImages.value[index];
-  revokeAiReferenceImage(item);
   aiReferenceImages.value = aiReferenceImages.value.filter((_, currentIndex) => currentIndex !== index);
+  deleteAiReferenceImageIfUnreferenced(item);
 }
 
 async function confirmRemoveAiReferenceImage(index: number) {
@@ -3683,8 +6267,89 @@ async function confirmRemoveAiReferenceImage(index: number) {
 }
 
 function clearAiReferenceImages() {
-  aiReferenceImages.value.forEach(revokeAiReferenceImage);
+  const removedItems = [...aiReferenceImages.value];
   aiReferenceImages.value = [];
+  removedItems.forEach(deleteAiReferenceImageIfUnreferenced);
+}
+
+async function uploadAiReferenceFile(file: File) {
+  const token = window.localStorage.getItem("token") || window.sessionStorage.getItem("token") || "";
+  const form = new FormData();
+  form.append("file", file, file.name || "reference-image.png");
+  const response = await fetch("/api/v1/reference-images", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form
+  });
+  if (!response.ok) throw new Error(`参考图上传失败：${response.status}`);
+  const data = await response.json();
+  const url = String(data?.item?.url || "");
+  if (!url) throw new Error("参考图上传结果缺少 URL");
+  return new URL(url, window.location.origin).href;
+}
+
+async function ensureAiReferenceRemoteUrl(id: string) {
+  const current = aiReferenceImages.value.find((item) => item.id === id);
+  if (!current?.file || current.remoteUrl) return current?.remoteUrl || "";
+  try {
+    const remoteUrl = await uploadAiReferenceFile(current.file);
+    aiReferenceImages.value = aiReferenceImages.value.map((item) => (
+      item.id === id ? { ...item, remoteUrl, uploading: false, error: "" } : item
+    ));
+    return remoteUrl;
+  } catch (error) {
+    aiReferenceImages.value = aiReferenceImages.value.map((item) => (
+      item.id === id ? { ...item, uploading: false, error: error instanceof Error ? error.message : "参考图上传失败" } : item
+    ));
+    throw error;
+  }
+}
+
+function readReferenceFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("参考图读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function aiGenerationReferences() {
+  const references: AiGenerationReference[] = [];
+  for (const item of aiReferenceImages.value) {
+    let url = normalizeAiReferenceUrl(item.remoteUrl || item.url);
+    if (item.file && (!url || url.startsWith("blob:"))) {
+      try {
+        url = await ensureAiReferenceRemoteUrl(item.id);
+      } catch {
+        url = await readReferenceFileAsDataUrl(item.file);
+        ElMessage.warning("参考图上传较慢，已临时使用本地图片数据提交");
+      }
+    }
+    url = normalizeAiReferenceUrl(url);
+    if (!url || url.startsWith("blob:")) continue;
+    references.push({
+      id: item.id,
+      name: item.name || `reference-${references.length + 1}`,
+      url,
+      order: references.length + 1,
+      source: aiReferenceSource(item)
+    });
+  }
+  return references;
+}
+
+async function createAiGenerationTaskSnapshot(prompt: string): Promise<AiGenerationTaskSnapshot> {
+  const inputImagesSnapshot = await aiGenerationReferences();
+  return {
+    prompt,
+    inputImageIds: inputImagesSnapshot.map((item) => item.id),
+    inputImagesSnapshot,
+    maskDraft: null,
+    maskTargetImageId: "",
+    maskImageId: "",
+    createdAt: new Date().toISOString()
+  };
 }
 
 async function confirmClearAiReferenceImages() {
@@ -3772,7 +6437,8 @@ async function submitOnlineImage() {
   }
   onlineSubmitting.value = true;
   try {
-    await adminRequest({
+    const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
+    const createdTask = await adminRequest<AdminRecord>({
       method: "POST",
       url: "/generation-tasks",
       data: {
@@ -3782,7 +6448,7 @@ async function submitOnlineImage() {
         params: {
           count: onlineImageForm.value.count,
           imageRatio: onlineImageForm.value.ratio,
-          imageQuality: onlineImageForm.value.quality,
+          ...(requestQuality ? { imageQuality: requestQuality } : {}),
           provider: onlineImageForm.value.provider,
           resolution: onlineImageForm.value.resolution,
           width: onlineImageForm.value.width,
@@ -3793,7 +6459,8 @@ async function submitOnlineImage() {
     });
     onlineImageForm.value.prompt = "";
     ElMessage.success("在线生图任务已提交");
-    await store.loadActiveModule();
+    mergeAiGenerationTask(createdTask);
+    trackAiGenerationTask(aiTaskId(createdTask));
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "提交失败");
   } finally {
@@ -3817,74 +6484,124 @@ async function submitAiImage() {
       conversation.updatedAt = now;
     }
     aiAgentRunning.value = true;
-    onlineImageForm.value.prompt = "";
+    if (aiSettingsDraft.value.clearInputAfterSubmit) {
+      onlineImageForm.value.prompt = "";
+      await nextTick();
+      aiPromptInputRef.value?.focus();
+    }
     ElMessage.success("Agent 已开始处理");
     void saveAiState();
     return;
   }
   onlineSubmitting.value = true;
-  const imageSize = resolveAiImageSize();
-  const requestParams = {
-    n: onlineImageForm.value.count,
-    count: onlineImageForm.value.count,
-    size: onlineImageForm.value.size,
-    imageRatio: onlineImageForm.value.ratio,
-    imageQuality: onlineImageForm.value.quality,
-    quality: onlineImageForm.value.quality,
-    output_format: onlineImageForm.value.outputFormat,
-    output_compression: onlineImageForm.value.outputFormat === "png" ? null : onlineImageForm.value.outputCompression,
-    transparent_output: onlineImageForm.value.outputFormat === "png" ? onlineImageForm.value.transparentOutput : false,
-    moderation: onlineImageForm.value.moderation,
-    provider: onlineImageForm.value.provider,
-    resolution: imageSize.resolution,
-    width: imageSize.width,
-    height: imageSize.height,
-    referenceImageCount: aiReferenceImages.value.length,
-    referenceImageNames: aiReferenceImages.value.map((item) => item.name),
-    sourceModule: "ai-image"
-  };
-  const optimisticTaskId = `optimistic_${Date.now()}`;
-  const optimisticCreatedAt = new Date().toISOString();
-  aiPlaygroundMode.value = "gallery";
-  aiGalleryFilter.value = "all";
-  aiFavoriteOnly.value = false;
-  aiActiveFavoriteCollectionId.value = "";
-  aiPromptSearch.value = "";
-  aiOptimisticTasks.value = [{
-    id: optimisticTaskId,
-    userId: "user_000002",
-    type: "TEXT_TO_IMAGE",
-    prompt,
-    params: requestParams,
-    model: onlineImageForm.value.model,
-    status: "RUNNING",
-    progress: 1,
-    pointCost: 0,
-    resultIds: [],
-    createdAt: optimisticCreatedAt,
-    updatedAt: optimisticCreatedAt
-  }, ...aiOptimisticTasks.value];
+  let optimisticTaskId = "";
   try {
-    await adminRequest({
+    syncOnlineProviderForModel();
+    const imageSize = resolveAiImageSize();
+    const hadInputImages = aiReferenceImages.value.length > 0;
+    const taskSnapshot = await createAiGenerationTaskSnapshot(prompt);
+    const referenceImages = taskSnapshot.inputImagesSnapshot;
+    if (hadInputImages && referenceImages.length === 0) {
+      ElMessage.error("参考图还没有准备好，请稍后重试");
+      return;
+    }
+    const taskType = referenceImages.length > 0 ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
+    const effectivePrompt = referenceImages.length ? effectiveAiPromptForReferences(prompt, referenceImages) : prompt;
+    const requestSize = aiRequestSizeParam(onlineImageForm.value.size);
+    const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
+    const requestParams = {
+      n: onlineImageForm.value.count,
+      count: onlineImageForm.value.count,
+      ...(requestSize ? { size: requestSize } : {}),
+      imageRatio: onlineImageForm.value.ratio,
+      ...(requestQuality ? { imageQuality: requestQuality, quality: requestQuality } : {}),
+      output_format: onlineImageForm.value.outputFormat,
+      output_compression: onlineImageForm.value.outputFormat === "png" ? null : onlineImageForm.value.outputCompression,
+      transparent_output: onlineImageForm.value.outputFormat === "png" ? onlineImageForm.value.transparentOutput : false,
+      moderation: onlineImageForm.value.moderation,
+      apiMode: aiSettingsDraft.value.apiMode,
+      provider: onlineImageForm.value.provider,
+      resolution: imageSize.resolution,
+      width: imageSize.width,
+      height: imageSize.height,
+      taskSnapshot,
+      inputImageIds: taskSnapshot.inputImageIds,
+      inputImagesSnapshot: taskSnapshot.inputImagesSnapshot,
+      maskDraft: taskSnapshot.maskDraft,
+      maskTargetImageId: taskSnapshot.maskTargetImageId,
+      maskImageId: taskSnapshot.maskImageId,
+      referenceImageCount: referenceImages.length,
+      referenceImageNames: referenceImages.map((item) => item.name),
+      referenceImageOrder: referenceImages.map((item, index) => ({
+        id: item.id,
+        name: item.name,
+        source: item.source,
+        order: item.order,
+        imageRef: `[image ${index + 1}]`,
+        primary: index === 0
+      })),
+      referenceImages,
+      userPrompt: prompt,
+      effectivePrompt,
+      sourceModule: "ai-image"
+    };
+    optimisticTaskId = `optimistic_${Date.now()}`;
+    const optimisticCreatedAt = new Date().toISOString();
+    aiPlaygroundMode.value = "gallery";
+    aiGalleryFilter.value = "all";
+    aiFavoriteOnly.value = false;
+    aiActiveFavoriteCollectionId.value = "";
+    aiPromptSearch.value = "";
+    aiOptimisticTasks.value = [{
+      id: optimisticTaskId,
+      userId: currentAdmin.value?.id || "",
+      type: taskType,
+      prompt,
+      params: requestParams,
+      model: onlineImageForm.value.model,
+      status: "RUNNING",
+      progress: 1,
+      pointCost: 0,
+      resultIds: [],
+      createdAt: optimisticCreatedAt,
+      updatedAt: optimisticCreatedAt
+    }, ...aiOptimisticTasks.value];
+    const createdTask = await adminRequest<AdminRecord>({
       method: "POST",
       url: "/generation-tasks",
       data: {
-        type: "TEXT_TO_IMAGE",
+        userId: currentAdmin.value?.id,
+        type: taskType,
         prompt,
         model: onlineImageForm.value.model,
         params: requestParams
       }
     });
-    onlineImageForm.value.prompt = "";
+    if (createdTask && typeof createdTask === "object" && createdTask.id) {
+      aiOptimisticTasks.value = aiOptimisticTasks.value.map((task) => String(task.id || "") === optimisticTaskId
+        ? { ...task, ...createdTask }
+        : task);
+      optimisticTaskId = String(createdTask.id);
+    }
+    if (aiSettingsDraft.value.clearInputAfterSubmit) {
+      onlineImageForm.value.prompt = "";
+      await nextTick();
+      aiPromptInputRef.value?.focus();
+    }
     if (aiSettingsDraft.value.clearInputAfterSubmit) clearAiReferenceImages();
     ElMessage.success("AI 生图任务已提交");
-    await store.loadActiveModule();
-    aiOptimisticTasks.value = aiOptimisticTasks.value.filter((task) => String(task.id || "") !== optimisticTaskId);
+    if (createdTask && typeof createdTask === "object") {
+      mergeAiGenerationTask(createdTask);
+      trackAiGenerationTask(aiTaskId(createdTask));
+    }
+    aiOptimisticTasks.value = aiOptimisticTasks.value.filter((task) => !isOptimisticAiTaskReconciled(task, onlineRecentTasks.value));
   } catch (error) {
     const message = error instanceof Error ? error.message : "提交失败";
-    aiOptimisticTasks.value = aiOptimisticTasks.value.map((task) => String(task.id || "") === optimisticTaskId
-      ? { ...task, status: "FAILED", error: { message }, progress: 100, updatedAt: new Date().toISOString() }
-      : task);
+    if (optimisticTaskId) {
+      aiOptimisticTasks.value = aiOptimisticTasks.value.map((task) => String(task.id || "") === optimisticTaskId
+        ? { ...task, status: "FAILED", error: { message }, progress: 100, updatedAt: new Date().toISOString() }
+        : task);
+    }
     ElMessage.error(message);
   } finally {
     onlineSubmitting.value = false;
@@ -3899,6 +6616,63 @@ interface AdminUser {
   planId?: string;
   subscriptionExpiresAt?: string;
 }
+interface AuthMeResponse {
+  user: AdminUser;
+  agent?: AdminRecord | null;
+  permissions?: string[];
+  workspace?: string;
+  defaultModule?: string;
+}
+type MembershipCycleId = "monthly" | "yearly" | "single";
+type MembershipMode = "recharge" | "subscribe" | "identity";
+type PaymentMethodId = "cash" | "wechat" | "alipay";
+type MembershipBillingCycle = {
+  id: MembershipCycleId;
+  label: string;
+  discount: string;
+};
+type UserMembershipPlan = {
+  id: string;
+  planIds: Record<MembershipCycleId, string>;
+  name: string;
+  prices: Record<MembershipCycleId, number>;
+  originalPrices: Record<MembershipCycleId, number>;
+  credits: number;
+  images: number;
+  videos: number;
+  concurrency: string;
+  audience: string;
+  custom?: boolean;
+  oneTime?: boolean;
+  recommended?: boolean;
+};
+type UserMembershipPlanCard = UserMembershipPlan & {
+  price: number;
+  originalPrice: number;
+  planId: string;
+  unit: string;
+  creditUnit: string;
+  credits: number;
+  images: number;
+  videos: number;
+  note: string;
+  features: string[];
+};
+type UserIdentityPackage = {
+  id: string;
+  planId: string;
+  endpoint: string;
+  name: string;
+  badge: string;
+  price: number;
+  originalText: string;
+  tokenAmount: number;
+  note: string;
+  ruleText: string;
+  actionText: string;
+  featured?: boolean;
+  features: string[];
+};
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US").format(Math.max(0, Math.round(value)));
@@ -3906,14 +6680,15 @@ function formatNumber(value: number) {
 
 const sidebarPlan = computed(() => {
   const summary = (store.data?.summary || {}) as Record<string, unknown>;
+  const account = (userAccountSnapshot.value || store.data?.account || {}) as Record<string, unknown>;
   const planId = String(currentAdmin.value?.planId || summary.planId || "plan_year");
-  const rawAvailable = Number(summary.availablePoints ?? summary.pointsAvailable ?? store.data?.availablePoints ?? store.data?.pointsAvailable ?? 28560);
-  const planTotalMap: Record<string, number> = { plan_free: 100, plan_month: 3000, plan_year: 50000 };
-  const planNameMap: Record<string, string> = { plan_free: "免费版", plan_month: "专业版（月付）", plan_year: "专业版（年付）" };
-  const total = Math.max(rawAvailable, planTotalMap[planId] || 50000);
+  const rawAvailable = Number(account.available ?? summary.availablePoints ?? summary.pointsAvailable ?? store.data?.availablePoints ?? store.data?.pointsAvailable ?? 0);
+  const rawTotal = Number(account.total ?? summary.totalPoints ?? summary.pointsTotal ?? 0);
+  const planNameMap: Record<string, string> = { plan_free: "体验版", plan_month: "Basic", plan_pro: "Pro", plan_year: "Ultimate", plan_enterprise: "企业版" };
+  const total = Math.max(rawAvailable + Number(account.frozen || 0), rawTotal || rawAvailable);
   const expiresAt = String(currentAdmin.value?.subscriptionExpiresAt || summary.subscriptionExpiresAt || "2026-07-19").slice(0, 10);
   return {
-    name: planNameMap[planId] || "专业版（年付）",
+    name: planNameMap[planId] || "Ultimate",
     status: "使用中",
     expiresAt,
     availableText: formatNumber(rawAvailable),
@@ -3922,19 +6697,448 @@ const sidebarPlan = computed(() => {
   };
 });
 const currentAdmin = ref<AdminUser | null>(null);
+const currentAgent = ref<AdminRecord | null>(null);
+const currentPermissions = ref<string[]>([]);
+const hasAgentIdentity = computed(() => {
+  const role = String(currentAdmin.value?.role || "").toUpperCase();
+  return Boolean(currentAgent.value?.id) || role.startsWith("AGENT") || currentPermissions.value.some((permission) => String(permission).startsWith("channel."));
+});
+const userAccountSnapshot = ref<AdminRecord | null>(null);
+watch(
+  () => store.data?.account,
+  (account) => {
+    if (account && typeof account === "object") {
+      userAccountSnapshot.value = account as AdminRecord;
+    }
+  },
+  { immediate: true }
+);
+const selectedMembershipCycle = ref<MembershipCycleId>("monthly");
+const selectedMembershipMode = ref<MembershipMode>("identity");
+const selectedMembershipPlanId = ref("pro");
+const rechargePackages = [
+  { id: "recharge_small", name: "小额包", amount: 19.9, points: 2500 },
+  { id: "recharge_standard", name: "标准包", amount: 99, points: 15000 },
+  { id: "recharge_business", name: "商业包", amount: 299, points: 50000 },
+  { id: "recharge_enterprise", name: "企业包", amount: 999, points: 200000 }
+];
+const quickRechargeAmounts = rechargePackages.map(item => item.amount);
+const selectedRechargeAmount = ref(99);
+const customRechargeAmount = ref("");
+const selectedPaymentMethod = ref<PaymentMethodId>("wechat");
+const paymentMethodOptions = [
+  { id: "wechat" as PaymentMethodId, label: "微信支付", icon: Wallet },
+  { id: "alipay" as PaymentMethodId, label: "支付宝", icon: Money },
+  { id: "cash" as PaymentMethodId, label: "现金", icon: Tickets }
+];
+const rechargeAmountYuan = computed(() => {
+  const custom = Number(String(customRechargeAmount.value).replace(/[^\d.]/g, ""));
+  if (custom > 0) return custom;
+  return Number(selectedRechargeAmount.value || 0);
+});
+const membershipBillingCycles: MembershipBillingCycle[] = [
+  { id: "monthly", label: "连续包月", discount: "7折" },
+  { id: "yearly", label: "连续包年", discount: "65折" },
+  { id: "single", label: "单月购买", discount: "8折" }
+];
+const userMembershipPlans: UserMembershipPlan[] = [
+  {
+    id: "trial",
+    planIds: { monthly: "plan_free", yearly: "plan_free", single: "plan_free" },
+    name: "体验版",
+    prices: { monthly: 0, yearly: 0, single: 0 },
+    originalPrices: { monthly: 0, yearly: 0, single: 0 },
+    credits: 100,
+    images: 10,
+    videos: 0,
+    concurrency: "1个",
+    audience: "新用户体验"
+  },
+  {
+    id: "basic",
+    planIds: { monthly: "plan_month", yearly: "plan_basic_year", single: "plan_basic_single" },
+    name: "Basic",
+    prices: { monthly: 29, yearly: 299, single: 39 },
+    originalPrices: { monthly: 39, yearly: 468, single: 49 },
+    credits: 4000,
+    images: 400,
+    videos: 0,
+    concurrency: "3个",
+    audience: "个人、小商家"
+  },
+  {
+    id: "pro",
+    planIds: { monthly: "plan_pro", yearly: "plan_pro_year", single: "plan_pro_single" },
+    name: "Pro",
+    prices: { monthly: 139, yearly: 1499, single: 169 },
+    originalPrices: { monthly: 169, yearly: 2028, single: 209 },
+    credits: 20000,
+    images: 2000,
+    videos: 0,
+    concurrency: "8个",
+    audience: "内容创作者、电商运营",
+    recommended: true
+  },
+  {
+    id: "ultimate",
+    planIds: { monthly: "plan_year", yearly: "plan_ultimate_year", single: "plan_ultimate_single" },
+    name: "Ultimate",
+    prices: { monthly: 699, yearly: 7999, single: 899 },
+    originalPrices: { monthly: 899, yearly: 10788, single: 1129 },
+    credits: 100000,
+    images: 10000,
+    videos: 0,
+    concurrency: "20个",
+    audience: "工作室、代运营团队"
+  },
+  {
+    id: "ai_creator_996",
+    planIds: { monthly: "plan_ai_creator_996", yearly: "plan_ai_creator_996", single: "plan_ai_creator_996" },
+    name: "996 AI 创作会员包",
+    prices: { monthly: 996, yearly: 996, single: 996 },
+    originalPrices: { monthly: 996, yearly: 996, single: 996 },
+    credits: 40000,
+    images: 4000,
+    videos: 0,
+    concurrency: "8个",
+    audience: "AI 创作者、代理首购客户",
+    recommended: true,
+    oneTime: true
+  },
+  {
+    id: "enterprise",
+    planIds: { monthly: "plan_enterprise", yearly: "plan_enterprise", single: "plan_enterprise" },
+    name: "企业版",
+    prices: { monthly: 0, yearly: 0, single: 0 },
+    originalPrices: { monthly: 0, yearly: 0, single: 0 },
+    credits: 0,
+    images: 0,
+    videos: 0,
+    concurrency: "定制",
+    audience: "企业客户、代理商",
+    custom: true
+  }
+];
+const identityPackageCards: UserIdentityPackage[] = [
+  {
+    id: "member_996",
+    planId: "plan_ai_creator_996",
+    endpoint: "/orders/create",
+    name: "996 AI 创作会员包",
+    badge: "会员身份",
+    price: 996,
+    originalText: "含 400 元 Token",
+    tokenAmount: 40000,
+    note: "开通 Pro 会员权益，获得 400 元 AI 点数 / Token。",
+    ruleText: "有推荐代理时按固定分润规则自动记账。",
+    actionText: "开通会员包",
+    featured: true,
+    features: ["会员身份升级", "Token 即时到账", "订单可追踪分润"]
+  },
+  {
+    id: "agent_996",
+    planId: "plan_agent_join_996",
+    endpoint: "/agent/join-order",
+    name: "996 代理商开通包",
+    badge: "代理商身份",
+    price: 996,
+    originalText: "含 200 元 Token",
+    tokenAmount: 20000,
+    note: "开通代理商身份，生成邀请码和代理中心入口。",
+    ruleText: "直属代理奖励 300 元，运营中心奖励 200 元，上级代理不奖励。",
+    actionText: "开通代理商",
+    features: ["代理身份激活", "专属邀请码", "佣金明细可查"]
+  },
+  {
+    id: "operation_center_5000",
+    planId: "plan_operation_center_5000",
+    endpoint: "/operation-center/join-order",
+    name: "5000 运营中心开通包",
+    badge: "运营中心身份",
+    price: 5000,
+    originalText: "平台运营权益",
+    tokenAmount: 0,
+    note: "开通运营中心身份，用于承接区域代理和订单分润。",
+    ruleText: "开通费默认计入平台收入，不产生代理奖励。",
+    actionText: "开通运营中心",
+    features: ["运营中心身份", "代理归属管理", "运营分润汇总"]
+  }
+];
+const userMembershipCurrentPlan = computed(() => {
+  const name = sidebarPlan.value.name;
+  return name === "体验版" ? "暂无订阅计划" : name;
+});
+const membershipPlanCards = computed<UserMembershipPlanCard[]>(() => userMembershipPlans.map((plan) => {
+  const cycle = selectedMembershipCycle.value;
+  const price = plan.prices[cycle];
+  const originalPrice = plan.originalPrices[cycle];
+  const planId = plan.planIds[cycle];
+  const unit = plan.oneTime ? "次" : cycle === "yearly" ? "年" : "月";
+  const creditUnit = plan.oneTime ? "一次性" : plan.id === "trial" ? "7天" : "月";
+  const credits = plan.credits;
+  const images = plan.images;
+  const videos = plan.videos;
+  const cycleNote = plan.oneTime
+    ? `一次性 ￥${price}，开通 Pro 会员并发放 ${formatNumber(credits)} 点。`
+    : cycle === "yearly"
+    ? `连续包年 ￥${price}，每月发放 ${formatNumber(credits)} 点。`
+    : cycle === "single"
+      ? `单月购买 ￥${price}，本月发放 ${formatNumber(credits)} 点。`
+      : `连续包月 ￥${price}，每月发放 ${formatNumber(credits)} 点。`;
+  const note = plan.custom ? "企业定制价格、点数和并发。" : plan.id === "trial" ? "免费体验，100 点，7 天有效。" : cycleNote;
+
+  return {
+    ...plan,
+    price,
+    originalPrice,
+    planId,
+    unit,
+    creditUnit,
+    credits,
+    images,
+    videos,
+    note,
+    features: [
+      `每${creditUnit}${formatNumber(credits)}积分`,
+      `适合：${plan.audience}`,
+      `并发任务：${plan.concurrency}`,
+      "下载权限：无水印下载",
+      plan.custom ? "专属模型路由与商务支持" : "生成内容可商用"
+    ]
+  };
+}));
+const standardMembershipPlanCards = computed(() => membershipPlanCards.value.filter((plan) => !plan.custom));
+const customMembershipPlanCards = computed(() => membershipPlanCards.value.filter((plan) => plan.custom));
+
+function selectMembershipPlan(plan: UserMembershipPlanCard) {
+  selectedMembershipPlanId.value = plan.id;
+}
+const userMembershipOrders = computed<AdminRecord[]>(() => {
+  const data = store.data as { orders?: unknown[] };
+  const orders = Array.isArray(data.orders) ? data.orders : [];
+  return orders.map((item) => {
+    const row = item as AdminRecord;
+    return {
+      ...row,
+      orderTypeText: membershipOrderType(row.orderType),
+      paymentMethodText: membershipPaymentMethod(row.paymentMethod),
+      plan: row.plan || row.planId || "-"
+    };
+  });
+});
+
+function membershipOrderType(value: unknown) {
+  const type = String(value || "").toUpperCase();
+  if (type === "COMPUTE_RECHARGE") return "点数充值";
+  if (type === "PLAN_ORDER") return "套餐订阅";
+  if (type === "USER_RECHARGE_DIRECT") return "会员/充值-直属";
+  if (type === "USER_RECHARGE_SECOND_LEVEL") return "会员/充值-二级";
+  if (type === "PLATFORM_DIRECT_USER_RECHARGE") return "平台直购";
+  if (type === "AGENT_JOIN") return "代理商开通";
+  if (type === "OPERATION_CENTER_JOIN") return "运营中心开通";
+  if (type === "RENEWAL") return "续费订单";
+  return type || "订单明细";
+}
+
+function membershipPaymentMethod(value: unknown) {
+  const method = String(value || "").toLowerCase();
+  if (method === "wechat") return "微信支付";
+  if (method === "alipay") return "支付宝";
+  if (method === "cash") return "现金";
+  return method || "-";
+}
+
+function selectRechargeAmount(amount: number) {
+  selectedRechargeAmount.value = amount;
+  customRechargeAmount.value = "";
+}
+
+function selectedRechargePackageId() {
+  if (customRechargeAmount.value.trim()) return "";
+  return rechargePackages.find(item => Math.abs(item.amount - selectedRechargeAmount.value) < 0.001)?.id || "";
+}
+
+async function createUserRechargeOrder() {
+  try {
+    const amount = rechargeAmountYuan.value;
+    if (!amount || amount <= 0) {
+      ElMessage.error("请选择或输入充值金额");
+      return;
+    }
+    await ElMessageBox.confirm(`确认创建 ￥${amount.toFixed(2)} 充值订单？订单创建后需要主控后台标记收款，点数才会到账。`, "确认支付", {
+      confirmButtonText: "创建订单",
+      cancelButtonText: "取消",
+      type: "warning"
+    });
+    const response = await adminRequest<{ item?: AdminRecord; rechargePoints?: number; message?: string }>({
+      method: "POST",
+      url: "/points/recharge-orders",
+      data: { amountCents: Math.round(amount * 100), rechargePackageId: selectedRechargePackageId(), paymentMethod: selectedPaymentMethod.value }
+    });
+    ElMessage.success(response.message || `充值订单已创建，预计到账 ${formatNumber(Number(response.rechargePoints || 10000))} 点`);
+    await store.loadActiveModule({ preferCache: false });
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error instanceof Error ? error.message : "创建充值订单失败");
+    }
+  }
+}
+
+async function createUserSubscriptionOrder(plan: UserMembershipPlanCard) {
+  try {
+    selectMembershipPlan(plan);
+    if (plan.custom) {
+      ElMessage.info("企业版为定制套餐，请由主控后台创建专属报价和模型分组。");
+      return;
+    }
+    await ElMessageBox.confirm(`确认创建 ${plan.name} ${plan.unit}卡订阅订单 ￥${plan.price}？订单创建后需要主控后台标记收款。`, "确认订阅", {
+      confirmButtonText: "创建订单",
+      cancelButtonText: "取消",
+      type: "success"
+    });
+    const response = await adminRequest<{ item?: AdminRecord; message?: string }>({
+      method: "POST",
+      url: "/points/subscription-orders",
+      data: {
+        planId: plan.planId,
+        amountCents: Math.round(plan.price * 100),
+        paymentMethod: selectedPaymentMethod.value
+      }
+    });
+    ElMessage.success(response.message || "订阅订单已创建");
+    selectedMembershipMode.value = "subscribe";
+    await store.loadActiveModule();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error instanceof Error ? error.message : "创建订阅订单失败");
+    }
+  }
+}
+
+async function createUserIdentityOrder(pack: UserIdentityPackage) {
+  try {
+    await ElMessageBox.confirm(`确认创建 ${pack.name} 订单 ￥${pack.price}？支付回调或主控确认收款后，身份和权益会自动生效。`, "确认开通", {
+      confirmButtonText: "创建订单",
+      cancelButtonText: "取消",
+      type: "success"
+    });
+    const response = await adminRequest<{ item?: AdminRecord; message?: string }>({
+      method: "POST",
+      url: pack.endpoint,
+      data: {
+        planId: pack.planId,
+        amountCents: Math.round(pack.price * 100),
+        paymentMethod: selectedPaymentMethod.value,
+        idempotencyKey: `${pack.id}-${Date.now()}`
+      }
+    });
+    const order = response.item || {};
+    ElMessage.success(`${pack.name}订单已创建：${String(order.id || "待支付")}`);
+    selectedMembershipMode.value = "identity";
+    await store.loadActiveModule({ preferCache: false });
+    await loadUserAccountSnapshot();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") {
+      ElMessage.error(error instanceof Error ? error.message : "创建身份订单失败");
+    }
+  }
+}
+
 const isAgentConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/agent"));
-const isUserConsole = ref(typeof window !== "undefined" && (window.location.pathname.startsWith("/user") || window.location.pathname.startsWith("/app")));
+const isUserConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/app"));
+const authReady = ref(false);
 const mobileDrawerOpen = ref(false);
 const desktopSidebarCollapsed = ref(false);
 const tabsScrollRef = ref<HTMLElement | null>(null);
 const openTabStorageKey = isUserConsole.value ? "xianzhi-user-open-tabs" : isAgentConsole.value ? "xianzhi-agent-open-tabs" : "xianzhi-admin-open-tabs";
 const activeTabStorageKey = isUserConsole.value ? "xianzhi-user-active-tab" : isAgentConsole.value ? "xianzhi-agent-active-tab" : "xianzhi-admin-active-tab";
-const agentModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
-const userModuleIds = ["userDashboard", "userOnlineImage", "userAiImage", "userCanvas", "userApiSettings", "userWorks", "userUsage", "userMembership"];
+const agentModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
+const userModuleIds = ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userApiSettings", "userWorks", "userMembership", "userUsage", "userOrders"];
+const imageWorkspaceModuleIds = ["userAiImage", "userWorks"];
 const adminModuleIds = modules.map((item) => item.id).filter((id) => !agentModuleIds.includes(id) && !userModuleIds.includes(id));
-const allowedModuleIds = isUserConsole.value ? userModuleIds : isAgentConsole.value ? agentModuleIds : adminModuleIds;
-const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userOnlineImage", "userAiImage", "userCanvas"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : ["analysis", "workbench"];
-store.activeModuleId = defaultOpenTabIds[0];
+const userConsoleModuleIds = [...userModuleIds, ...agentModuleIds];
+const allowedModuleIds = isUserConsole.value ? userConsoleModuleIds : isAgentConsole.value ? agentModuleIds : adminModuleIds;
+const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : ["analysis", "workbench"];
+const userModulePathMap: Record<string, string> = {
+  "/app": "userDashboard",
+  "/app/ai-image": "userAiImage",
+  "/app/image-generation": "userAiImage",
+  "/app/wireless-canvas": "userWirelessCanvas",
+  "/app/video-generation": "userVideoGeneration",
+  "/app/ppt-generation": "userPptGeneration",
+  "/app/ai-ppt": "userPptGeneration",
+  "/app/api-settings": "userApiSettings",
+  "/app/works": "userWorks",
+  "/app/membership": "userMembership",
+  "/app/usage": "userUsage",
+  "/app/orders": "userOrders",
+  "/app/agent": "partnerDashboard",
+  "/app/agent/customers": "partnerCustomers",
+  "/app/agent/orders": "partnerOrders",
+  "/app/agent/usage": "partnerUsage",
+  "/app/agent/commissions": "partnerCommissions",
+  "/app/agent/channels": "partnerChannels",
+  "/app/agent/materials": "partnerMaterials",
+  "/app/agent/account": "partnerAccount"
+};
+const userModuleRouteMap: Record<string, string> = {
+  userDashboard: "/app",
+  userAiImage: "/app/ai-image",
+  userWirelessCanvas: "/app/wireless-canvas",
+  userVideoGeneration: "/app/video-generation",
+  userPptGeneration: "/app/ppt-generation",
+  userApiSettings: "/app/api-settings",
+  userWorks: "/app/works",
+  userMembership: "/app/membership",
+  userUsage: "/app/usage",
+  userOrders: "/app/orders",
+  partnerDashboard: "/app/agent",
+  partnerCustomers: "/app/agent/customers",
+  partnerOrders: "/app/agent/orders",
+  partnerUsage: "/app/agent/usage",
+  partnerCommissions: "/app/agent/commissions",
+  partnerChannels: "/app/agent/channels",
+  partnerMaterials: "/app/agent/materials",
+  partnerAccount: "/app/agent/account"
+};
+
+function isPptGenerationPath(pathname: string) {
+  const normalizedPath = pathname.replace(/\/$/, "");
+  return (
+    normalizedPath === "/app/ppt-generation" ||
+    normalizedPath === "/app/ai-ppt" ||
+    normalizedPath.startsWith("/app/ppt-generation/generate/") ||
+    normalizedPath.startsWith("/app/ppt-generation/presentation/")
+  );
+}
+
+function moduleIdFromLocationPath() {
+  if (typeof window === "undefined" || !isUserConsole.value) return "";
+  const currentPath = window.location.pathname.replace(/\/$/, "");
+  if (isPptGenerationPath(currentPath)) return "userPptGeneration";
+  return userModulePathMap[currentPath] || "";
+}
+
+function syncUserModulePath(moduleId: string) {
+  if (typeof window === "undefined" || !isUserConsole.value) return;
+  const nextPath = userModuleRouteMap[moduleId] || "/app";
+  const currentPath = window.location.pathname.replace(/\/$/, "");
+  if (moduleId === "userPptGeneration" && isPptGenerationPath(currentPath)) return;
+  if (currentPath === nextPath) return;
+  window.history.pushState({}, "", nextPath);
+}
+
+function initialActiveModuleId() {
+  if (typeof window === "undefined") return defaultOpenTabIds[0];
+  const routeModuleId = moduleIdFromLocationPath();
+  if (routeModuleId && allowedModuleIds.includes(routeModuleId)) return routeModuleId;
+  const saved = window.localStorage.getItem(activeTabStorageKey) || "";
+  if (saved && allowedModuleIds.includes(saved) && modules.some((item) => item.id === saved)) return saved;
+  return defaultOpenTabIds[0];
+}
+
+store.activeModuleId = initialActiveModuleId();
+const wirelessCanvasSrc = "/static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi";
 
 function resolveOpenTabs() {
   if (typeof window === "undefined") return modules.filter((item) => defaultOpenTabIds.includes(item.id));
@@ -3957,11 +7161,35 @@ const iconMap = {
   dashboard: DataAnalysis,
   customers: User,
   channels: Operation,
+  operationCenters: Connection,
   products: Goods,
   plans: Tickets,
   orders: Money,
   usage: DataAnalysis,
+  tokenRecords: Tickets,
+  billingDashboard: DataAnalysis,
+  billingCustomers: User,
+  billingProducts: Goods,
+  billingBillableMetrics: DataAnalysis,
+  billingCharges: Tickets,
+  billingSubscriptions: Tickets,
+  billingEvents: DataAnalysis,
+  billingFees: Money,
+  billingWallets: Wallet,
+  billingCoupons: Tickets,
+  billingInvoices: Money,
+  billingCreditNotes: Refresh,
+  billingPaymentRequests: Money,
+  billingPayments: Wallet,
+  marketingAgentLevels: Connection,
   commissions: Wallet,
+  commissionRecords: Money,
+  aiCapabilities: Cpu,
+  aiCapabilityModels: Monitor,
+  aiCapabilitySchemas: Document,
+  aiCapabilityLimits: Lock,
+  aiCapabilityChannels: Link,
+  aiCapabilityLogs: DataAnalysis,
   apiSettings: Setting,
   system: Setting,
   departments: Collection,
@@ -3970,18 +7198,21 @@ const iconMap = {
   partnerDashboard: DataAnalysis,
   partnerCustomers: User,
   partnerOrders: Money,
+  partnerUsage: DataAnalysis,
   partnerCommissions: Wallet,
   partnerChannels: Connection,
   partnerMaterials: Collection,
   partnerAccount: Setting,
   userDashboard: House,
-  userOnlineImage: Monitor,
   userAiImage: Plus,
-  userCanvas: DataAnalysis,
+  userWirelessCanvas: Collection,
+  userVideoGeneration: Monitor,
+  userPptGeneration: Document,
   userApiSettings: Setting,
   userWorks: Collection,
   userUsage: DataAnalysis,
-  userMembership: Tickets
+  userMembership: Tickets,
+  userOrders: Document
 };
 
 const columnLabels: Record<string, string> = {
@@ -3993,9 +7224,167 @@ const columnLabels: Record<string, string> = {
   role: "角色",
   plan: "套餐",
   planId: "套餐 ID",
+  planCode: "套餐编码",
+  planVersion: "套餐版本",
+  planType: "套餐类型",
+  billingMode: "计费方式",
+  skuCode: "SKU 编码",
+  externalId: "外部订阅 ID",
+  subscription: "订阅",
+  subscriptionId: "订阅 ID",
+  subscriptionStatus: "订阅状态",
+  billingStatus: "计费状态",
+  billingCycle: "计费周期",
+  cyclePolicy: "结算/有效期",
+  billingTime: "计费时间",
+  interval: "周期",
+  onTerminationInvoice: "终止开票",
+  onTerminationCredit: "终止贷项",
+  startedAt: "开始时间",
+  currentPeriodStart: "周期开始",
+  currentPeriodEnd: "周期结束",
+  monthlyAmountCents: "月经常收入",
+  prepaidBalanceCents: "预付余额",
+  lifetimeUsageCents: "累计用量金额",
+  walletCode: "钱包编码",
+  netPaymentTerm: "账期天数",
+  invoiceGracePeriod: "开票宽限",
+  customer: "客户",
+  customerId: "客户 ID",
+  usageCount: "消费笔数",
+  orderCount: "订单数",
+  consumedCents: "消费金额",
+  latestTaskId: "最近任务",
+  latestUsageAt: "最近消费",
+  latestModel: "最近模型",
+  customerValue: "客户价值",
+  averagePointCost: "平均扣点",
+  modelRoute: "模型路由",
+  modelGroup: "模型分组",
+  modelChannel: "模型渠道",
+  modelKeyStatus: "Key 状态",
+  modelRouteId: "路由 ID",
+  modelApiKeyId: "API Key ID",
+  balanceBefore: "扣前点数",
+  balanceAfter: "扣后点数",
+  taskId: "任务 ID",
+    orderType: "订单类型",
+  agentName: "代理商",
+  bizType: "业务类型",
+  bizId: "业务 ID",
+  ruleId: "规则 ID",
+  source: "来源",
+  period: "结算月份",
+  commissionCount: "佣金笔数",
+  withdrawalCount: "提现笔数",
+  withdrawalCents: "提现金额",
+  pendingCents: "待结算金额",
+  frozenCents: "冻结金额",
+  totalIncomeCents: "累计入账",
+  totalWithdrawCents: "累计提现",
+  netPayableCents: "应打款金额",
+  paymentMethodText: "支付方式",
+  settlementSource: "来源",
+  relatedAmountCents: "关联金额",
+  commissionRate: "佣金比例",
+  reviewedAt: "审核时间",
+  customerGroup: "客户分组",
+  code: "编码",
+  product: "产品",
+  metric: "指标",
+  metricCode: "指标编码",
+  billableMetricCode: "计量指标编码",
+  aggregationType: "聚合方式",
+  fieldName: "计量字段",
+  expression: "表达式",
+  recurring: "周期计量",
+  rounding: "取整规则",
+  chargeModels: "计费模型",
+  quantity: "数量",
+  units: "计费单位",
+  eventsCount: "事件数",
+  costCents: "成本",
+  subtotalAmountCents: "小计",
+  couponsAmountCents: "优惠抵扣",
+  taxesAmountCents: "税费",
+  creditNotesAmountCents: "贷项抵扣",
+  prepaidCreditAmountCents: "预付抵扣",
+  totalDueAmountCents: "应付金额",
+  invoiceNo: "账单号",
+  invoiceId: "账单 ID",
+  invoiceType: "账单类型",
+  invoiceStatus: "开票状态",
+  paymentStatus: "支付状态",
+  taxStatus: "税务状态",
+  readyToFinalize: "可出账",
+  billingPeriod: "账单周期",
+  dueAt: "到期日",
+  paymentMethod: "付款方式",
+  invoiceTitle: "发票抬头",
+  taxNumber: "税号",
+  transactionId: "幂等交易 ID",
+  occurredAt: "发生时间",
+  unitAmountCents: "单价",
+  chargeModel: "计费模型",
+  freeQuota: "免费额度",
+  includedQuota: "内含额度",
+  freeUnits: "免费量",
+  unitPriceCents: "单价",
+  baseAmountCents: "固定费用",
+  overageUnitPriceCents: "超额单价",
+  minAmountCents: "最低金额",
+  payInAdvance: "预付",
+  invoiceable: "可开票",
+  prorated: "按比例计费",
+  pricingGroupKeys: "分组计价键",
+  taxes: "税种",
+  coupon: "优惠券",
+  couponTargets: "优惠目标",
+  entitlements: "权益",
+  entitlementSnapshot: "权益快照",
+  targetMetrics: "目标指标",
+  balanceCents: "钱包余额",
+  consumedAmountCents: "已消费",
+  ongoingUsageBalanceCents: "本期占用",
+  paidTopUpMinAmountCents: "最低充值",
+  paymentMethodType: "支付方式类型",
+  rateAmount: "兑换倍率",
+  couponType: "优惠类型",
+  percentageRate: "折扣比例",
+  frequency: "频率",
+  frequencyDuration: "周期次数",
+  reusable: "可复用",
+  targets: "适用范围",
+  creditStatus: "贷项状态",
+  refundStatus: "退款状态",
+  reason: "原因",
+  creditAmountCents: "贷项金额",
+  refundAmountCents: "退款金额",
+  offsetAmountCents: "抵扣金额",
+  balanceAmountCents: "剩余金额",
+  number: "编号",
+  invoices: "关联账单",
+  readyForPaymentProcessing: "可处理支付",
+  dunningCampaign: "催收策略",
+  paymentRequestId: "付款请求 ID",
+  payableType: "支付对象",
+  provider: "支付提供方",
   pointsAvailable: "余额",
   status: "状态",
   level: "等级",
+  identity: "身份",
+  openMethod: "开通方式",
+  audience: "适合对象",
+  permissions: "权益/权限",
+  limitations: "限制",
+  membershipCommission: "会员套餐返佣",
+  rechargeCommission: "点数充值返佣",
+  enterpriseCommission: "企业项目返佣",
+  regionalRebate: "区域团队返点",
+  openCondition: "开通条件",
+  keepCondition: "保级条件",
+  manualReview: "人工审核",
+  levelLabel: "代理商等级",
   inviteCode: "邀请码",
   referredBy: "来源代理用户 ID",
   sourceAgentName: "来源渠道",
@@ -4025,7 +7414,17 @@ const columnLabels: Record<string, string> = {
   pointCost: "消耗点数",
   model: "模型",
   mediaType: "类型",
-  thumbnailUrl: "缩略图"
+  thumbnailUrl: "缩略图",
+  module_code: "模块编码",
+  model_name: "模型",
+  billing_type: "计费类型",
+  tenant_id: "租户",
+  agent_id: "代理",
+  operation_center_id: "运营中心",
+  upstream_provider: "上游",
+  user_charge_amount: "用户扣费",
+  upstream_cost: "上游成本",
+  platform_profit: "平台利润"
 };
 
 const iconFor = (id: string) => iconMap[id as keyof typeof iconMap] || DataAnalysis;
@@ -4206,6 +7605,15 @@ function selectApiReferenceChannel(index: number) {
 
 function hydrateApiProviderDraft(channel: AdminRecord) {
   const models = Array.isArray(channel.models) ? channel.models.map((model) => String(model)) : [];
+  const imageModels: string[] = [];
+  const chatModels: string[] = [];
+  const videoModels: string[] = [];
+  models.forEach((model) => {
+    const category = inferApiModelCategory(model);
+    if (category === "video") videoModels.push(model);
+    else if (category === "image") imageModels.push(model);
+    else chatModels.push(model);
+  });
   apiProviderDraft.value = {
     id: String(channel.id || ""),
     name: String(channel.name || "API"),
@@ -4213,10 +7621,13 @@ function hydrateApiProviderDraft(channel: AdminRecord) {
     apiKey: "",
     protocol: String(channel.protocol || "openai"),
     imageRequestMode: String(channel.imageRequestMode || "openai"),
+    imageGenerationEndpoint: String(channel.imageGenerationEndpoint || "/v1/images/generations"),
+    imageEditEndpoint: String(channel.imageEditEndpoint || "/v1/images/edits"),
+    videoGenerationEndpoint: String(channel.videoGenerationEndpoint || ""),
     priority: apiProviderPriority(channel),
-    imageModels: models.filter((model) => /image|gpt|z-image|flux|banana/i.test(model)).slice(0, 6),
-    chatModels: models.filter((model) => /gpt|qwen|chat|llm|claude/i.test(model)).slice(0, 6),
-    videoModels: models.filter((model) => /veo|sora|video|seedance/i.test(model)).slice(0, 6),
+    imageModels,
+    chatModels,
+    videoModels,
     loras: ["Tongyi-MAI/Z-Image-Turbo"],
     modelProtocols: {}
   };
@@ -4245,6 +7656,7 @@ function addApiProviderDraft() {
     imageRequestMode: "openai",
     imageGenerationEndpoint: "",
     imageEditEndpoint: "",
+    videoGenerationEndpoint: "",
     enabled: true,
     primary: false,
     models: [],
@@ -4351,6 +7763,18 @@ function buildApiModelPickerItems(source: "fetched" | "configured" = "configured
 
 function arrayFromApiModels(value: unknown) {
   return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
+}
+
+function uniqueNonEmptyStrings(values: unknown[]) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  values.forEach((value) => {
+    const item = String(value || "").trim();
+    if (!item || seen.has(item)) return;
+    seen.add(item);
+    result.push(item);
+  });
+  return result;
 }
 
 async function fetchApiDraftModels() {
@@ -4565,13 +7989,13 @@ function formatApiProviderTestResult(item: AdminRecord) {
   return `${status} · ${baseUrl}${latencyText} · ${apiProtocolDisplayLabel(protocol)}${keyText}`;
 }
 
-async function ensureApiProviderDraftSaved() {
+async function ensureApiProviderDraftSaved(options: { refresh?: boolean } = {}) {
   const baseUrl = normalizeApiBaseUrl(apiProviderDraft.value.baseUrl || "");
   if (!baseUrl || !isValidApiBaseUrl(baseUrl)) {
     throw new Error("请先填写正确的平台地址，例如 https://api.example.com/v1");
   }
   apiProviderDraft.value.baseUrl = baseUrl;
-  const savedItem = await saveApiProviderDraft({ silent: true });
+  const savedItem = await saveApiProviderDraft({ silent: true, refresh: options.refresh });
   if (savedItem?.id) return savedItem;
   const matched = apiReferenceChannels.value.find((channel) => {
     return String(channel.id || "") === apiProviderDraft.value.id ||
@@ -4588,7 +8012,7 @@ async function testApiProviderDraft() {
   apiVerifyPanel.value = null;
   try {
     const apiKey = apiProviderDraft.value.apiKey.trim();
-    const savedItem = await ensureApiProviderDraftSaved();
+    const savedItem = await ensureApiProviderDraftSaved({ refresh: false });
     const result = await adminRequest<{ item?: AdminRecord }>({ method: "POST", url: `/admin/api/provider-channels/${savedItem.id}/test`, data: apiProviderDraftTestPayload(apiKey) });
     apiVerifyResult.value = "";
     buildApiVerifyPanel("test", result.item || savedItem);
@@ -4610,7 +8034,7 @@ async function probeApiProviderProtocol() {
   apiVerifyPanel.value = null;
   try {
     const apiKey = apiProviderDraft.value.apiKey.trim();
-    const savedItem = await ensureApiProviderDraftSaved();
+    const savedItem = await ensureApiProviderDraftSaved({ refresh: false });
     const result = await adminRequest<{ item?: AdminRecord }>({
       method: "POST",
       url: `/admin/api/provider-channels/${savedItem.id}/test`,
@@ -4623,7 +8047,7 @@ async function probeApiProviderProtocol() {
     };
     apiProviderDraft.value.protocol = detected.protocol;
     apiProviderDraft.value.imageRequestMode = detected.imageRequestMode;
-    await saveApiProviderDraft({ silent: true });
+    await saveApiProviderDraft({ silent: true, refresh: false });
     apiVerifyResult.value = "";
     buildApiVerifyPanel("probe", testedItem, detected);
     ElMessage.success(`已识别协议：${apiProtocolDisplayLabel(detected.protocol)}`);
@@ -4637,7 +8061,31 @@ async function probeApiProviderProtocol() {
   }
 }
 
-async function saveApiProviderDraft(options: { silent?: boolean } = {}) {
+function syncSavedApiProviderLocally(savedItem: AdminRecord | undefined, draft: AdminRecord, payload: AdminRecord, apiKey: string) {
+  const id = String(savedItem?.id || draft.id || "");
+  const localItem: AdminRecord = {
+    ...draft,
+    ...payload,
+    ...(savedItem || {}),
+    id,
+    pending: false
+  };
+  if (apiKey) {
+    localItem.apiKeyConfigured = true;
+    localItem.keyPreview = `${apiKey.slice(0, 7)}...${apiKey.slice(-4)}`;
+  }
+  apiPendingProviders.value = apiPendingProviders.value.filter((item) => String(item.id || "") !== id);
+  const currentData = store.data as AdminRecord;
+  const channels = Array.isArray(currentData.apiChannels) ? [...currentData.apiChannels] as AdminRecord[] : [];
+  const index = channels.findIndex((channel) => String(channel.id || "") === id);
+  if (index >= 0) channels[index] = { ...channels[index], ...localItem };
+  else if (id) channels.push(localItem);
+  store.data = { ...currentData, apiChannels: channels };
+  apiProviderDraft.value.id = id;
+  apiProviderDraft.value.apiKey = "";
+}
+
+async function saveApiProviderDraft(options: { silent?: boolean; refresh?: boolean } = {}) {
   if (apiSavingProviderDraft.value) return;
   apiSavingProviderDraft.value = true;
   const draft = {
@@ -4646,8 +8094,8 @@ async function saveApiProviderDraft(options: { silent?: boolean } = {}) {
     chatModels: [...apiProviderDraft.value.chatModels],
     videoModels: [...apiProviderDraft.value.videoModels]
   };
-  const selectedModels = [...draft.imageModels, ...draft.chatModels, ...draft.videoModels].filter(Boolean);
-  const models = selectedModels.length ? selectedModels : [...apiFetchedModelIds.value].filter(Boolean);
+  const selectedModels = uniqueNonEmptyStrings([...draft.imageModels, ...draft.chatModels, ...draft.videoModels]);
+  const models = selectedModels.length ? selectedModels : uniqueNonEmptyStrings([...apiFetchedModelIds.value]);
   const hasKey = Boolean(draft.apiKey.trim() || selectedApiReferenceChannel.value.apiKeyConfigured);
   const payload = apiChannelMutationPayload({
     id: draft.id,
@@ -4655,6 +8103,9 @@ async function saveApiProviderDraft(options: { silent?: boolean } = {}) {
     baseUrl: draft.baseUrl,
     protocol: draft.protocol,
     imageRequestMode: draft.imageRequestMode,
+    imageGenerationEndpoint: draft.imageGenerationEndpoint,
+    imageEditEndpoint: draft.imageEditEndpoint,
+    videoGenerationEndpoint: draft.videoGenerationEndpoint,
     status: hasKey ? "ACTIVE" : "CONFIGURABLE",
     priority: Number(draft.priority || 50),
     models
@@ -4677,13 +8128,16 @@ async function saveApiProviderDraft(options: { silent?: boolean } = {}) {
       savedItem = result.item;
     }
     if (apiKey) {
+      const keyCustomer = String(savedItem?.id || draft.id || draft.name);
       await adminRequest({
         method: "POST",
         url: "/admin/api/keys",
-        data: { customer: draft.name, status: "ACTIVE", quotaLimit: 100000, models, secret: apiKey, apiKey }
+        data: { customer: keyCustomer, status: "ACTIVE", quotaLimit: 100000, models, secret: apiKey, apiKey }
       });
     }
-    await store.loadActiveModule();
+    const shouldRefresh = options.refresh !== false;
+    if (shouldRefresh) await store.loadActiveModule();
+    else syncSavedApiProviderLocally(savedItem, draft, payload, apiKey);
     const savedId = String(savedItem?.id || "");
     const savedName = String(savedItem?.name || draft.name || "");
     const savedBaseUrl = String(savedItem?.baseUrl || payload.baseUrl || "");
@@ -4695,7 +8149,7 @@ async function saveApiProviderDraft(options: { silent?: boolean } = {}) {
     });
     if (nextIndex >= 0) {
       selectedApiReferenceIndex.value = nextIndex;
-      hydrateApiProviderDraft(apiReferenceChannels.value[nextIndex] || {});
+      if (shouldRefresh) hydrateApiProviderDraft(apiReferenceChannels.value[nextIndex] || {});
     }
     apiProviderDraft.value.apiKey = "";
     if (!options.silent) {
@@ -4739,6 +8193,7 @@ function apiRecommendedChannelPayload(platform: (typeof apiRecommendedPlatforms)
     imageRequestMode: "openai",
     imageGenerationEndpoint: "/v1/images/generations",
     imageEditEndpoint: "/v1/images/edits",
+    videoGenerationEndpoint: "contents/generations/tasks",
     fetchModelsPath: "/models",
     apiKeyEnv: `${platform.name.replace(/\s+/g, "_").replace(/[^\w]/g, "").toUpperCase()}_API_KEY`,
     status: "CONFIGURABLE",
@@ -4819,16 +8274,31 @@ function apiKeyMasked(channel: AdminRecord) {
   if (channel.apiKeyEnv) return `${channel.apiKeyEnv}=未配置`;
   return "No API key required";
 }
-const partnerModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
+const partnerModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
 const isPartnerModule = computed(() => partnerModuleIds.includes(store.activeModuleId));
 const partnerData = computed(() => store.data as AdminRecord & {
   user?: AdminRecord;
   agent?: AdminRecord;
+  promotion?: AdminRecord;
   summary?: Record<string, unknown>;
   customers?: AdminRecord[];
+  orders?: AdminRecord[];
+  usageEvents?: AdminRecord[];
   commissions?: AdminRecord[];
   withdrawals?: AdminRecord[];
   children?: AdminRecord[];
+});
+
+const partnerAgentRecord = computed<AdminRecord>(() => {
+  const agent = partnerData.value.agent;
+  if (agent && typeof agent === "object" && Object.keys(agent).length) return agent;
+  return currentAgent.value || {};
+});
+
+const partnerPromotionRecord = computed<AdminRecord>(() => {
+  const promotion = partnerData.value.promotion;
+  if (promotion && typeof promotion === "object" && Object.keys(promotion).length) return promotion;
+  return {};
 });
 
 function moneyYuan(value: unknown) {
@@ -4839,11 +8309,67 @@ function partnerSummaryValue(key: string) {
   return partnerData.value.summary?.[key] ?? 0;
 }
 
+function buildInviteLink(inviteCode: unknown) {
+  const code = String(inviteCode || "").trim();
+  if (!code) return "";
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  return `${origin || "http://localhost:3100"}/register?invite=${encodeURIComponent(code)}`;
+}
+
+function partnerInviteLink() {
+  const promotion = partnerPromotionRecord.value;
+  const agent = partnerAgentRecord.value;
+  const inviteLink = String(promotion.inviteLink || agent.inviteLink || "").trim();
+  if (inviteLink) return inviteLink;
+  return buildInviteLink(promotion.inviteCode || agent.inviteCode);
+}
+
+function partnerInviteCode() {
+  const promotion = partnerPromotionRecord.value;
+  const agent = partnerAgentRecord.value;
+  return String(promotion.inviteCode || agent.inviteCode || "").trim();
+}
+
+const agentLevelOptions = [
+  { value: "1", label: "L1 推广员" },
+  { value: "2", label: "L2 初级代理商" },
+  { value: "3", label: "L3 高级代理商" },
+  { value: "4", label: "L4 城市合伙人" },
+  { value: "5", label: "L5 联合运营商" }
+];
+
+const agentLevelLabelMap: Record<number, string> = {
+  0: "L0 普通用户",
+  1: "L1 推广员",
+  2: "L2 初级代理商",
+  3: "L3 高级代理商",
+  4: "L4 城市合伙人",
+  5: "L5 联合运营商"
+};
+
+function partnerAgentLevelLabel(levelValue?: unknown) {
+  const agent = partnerAgentRecord.value;
+  const level = Number(levelValue ?? agent.level ?? 0);
+  if (Number.isFinite(level) && level in agentLevelLabelMap) return agentLevelLabelMap[level];
+  if (level > 0) return `L${level} 代理`;
+  return "-";
+}
+
+function openPartnerInviteLink() {
+  const link = partnerInviteLink();
+  if (!link) {
+    ElMessage.warning("暂无可打开的推广链接");
+    return;
+  }
+  window.open(link, "_blank", "noopener,noreferrer");
+}
+
 const partnerDashboardMetrics = computed(() => {
   const directCustomers = Number(partnerSummaryValue("directCustomers"));
   const childAgents = Number(partnerSummaryValue("childAgents"));
   const totalCommission = Number(partnerSummaryValue("totalCommission"));
   const availableToWithdraw = Number(partnerSummaryValue("availableToWithdraw"));
+  const rawAvailableToWithdraw = Number(partnerSummaryValue("rawAvailableToWithdraw"));
   const pendingCommission = Number(partnerSummaryValue("pendingCommission"));
   const commissions = Array.isArray(partnerData.value.commissions) ? partnerData.value.commissions : [];
   return [
@@ -4851,7 +8377,7 @@ const partnerDashboardMetrics = computed(() => {
     { label: "有效客户", value: String(directCustomers), hint: "已绑定客户" },
     { label: "待支付订单", value: String(commissions.filter((item) => String(item.status || "").toUpperCase() === "PENDING").length), hint: "需要跟进" },
     { label: "累计佣金", value: moneyYuan(totalCommission), hint: "历史分佣" },
-    { label: "可提现金额", value: moneyYuan(availableToWithdraw), hint: "可申请提现" },
+    { label: "可提现金额", value: moneyYuan(Math.max(0, availableToWithdraw)), hint: rawAvailableToWithdraw < 0 ? "历史提现已超出已结算佣金" : "可申请提现" },
     { label: "推广转化率", value: `${Math.min(68, 18 + directCustomers * 6 + childAgents * 3)}%`, hint: "注册到成交" }
   ];
 });
@@ -4877,7 +8403,7 @@ const partnerTodos = [
 ];
 
 const partnerSourceRows = computed(() => {
-  const agent = partnerData.value.agent || {};
+  const agent = partnerAgentRecord.value;
   const customers = Array.isArray(partnerData.value.customers) ? partnerData.value.customers : [];
   const children = Array.isArray(partnerData.value.children) ? partnerData.value.children : [];
   const totalCommission = Number(partnerSummaryValue("totalCommission"));
@@ -4890,39 +8416,173 @@ const partnerSourceRows = computed(() => {
 
 function partnerRows(): AdminRecord[] {
   const data = partnerData.value;
-  const agent = data.agent || {};
-  const customers = Array.isArray(data.customers) ? data.customers : [];
-  const commissions = Array.isArray(data.commissions) ? data.commissions : [];
+  const agent = partnerAgentRecord.value;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const customers = Array.isArray(data.customers) ? data.customers : store.activeModuleId === "partnerCustomers" ? items : [];
+  const orders = Array.isArray(data.orders) ? data.orders : store.activeModuleId === "partnerOrders" ? items : [];
+  const usageEvents = partnerUsageEvents(Array.isArray(data.usageEvents) ? data.usageEvents : store.activeModuleId === "partnerUsage" ? items : []);
+  const commissions = Array.isArray(data.commissions) ? data.commissions : store.activeModuleId === "partnerCommissions" ? items : [];
   const withdrawals = Array.isArray(data.withdrawals) ? data.withdrawals : [];
   const children = Array.isArray(data.children) ? data.children : [];
-  if (store.activeModuleId === "partnerCustomers") return customers;
-  if (store.activeModuleId === "partnerOrders") return commissions.map((item) => ({ id: item.orderId || item.id, orderId: item.orderId, amountCents: item.amountCents, commissionCents: item.amountCents, status: item.status || "PENDING", createdAt: item.createdAt || "-" }));
+  if (store.activeModuleId === "partnerCustomers") return customers.map((customer) => {
+    const customerId = String(customer.id || "");
+    const customerUsage = usageEvents.filter((item) => String(item.userId || item.customerId || "") === customerId);
+    const customerOrders = orders.filter((item) => String(item.userId || item.customerId || "") === customerId);
+    const customerCommissions = commissions.filter((item) => customerUsage.some((event) => String(event.taskId || "") === String(item.orderId || "")));
+    const latestUsage = customerUsage[0] || {};
+    const totalPointCost = customerUsage.reduce((total, item) => total + Number(item.pointCost || 0), 0);
+    const totalConsumedCents = customerUsage.reduce((total, item) => total + Number(item.amountCents || 0), 0);
+    const totalCommissionCents = customerCommissions.reduce((total, item) => total + Number(item.amountCents || 0), 0);
+    return {
+      ...customer,
+      customerId,
+      usageCount: customerUsage.length,
+      pointCost: totalPointCost,
+      consumedCents: totalConsumedCents,
+      commissionCents: totalCommissionCents,
+      orderCount: customerOrders.length,
+      latestModel: latestUsage.model || "-",
+      latestTaskId: latestUsage.taskId || "-",
+      latestUsageAt: latestUsage.occurredAt || "-",
+      customerValue: totalConsumedCents >= 100 ? "高价值" : customerUsage.length ? "已消费" : "待激活",
+      averagePointCost: customerUsage.length ? Math.round(totalPointCost / customerUsage.length) : 0
+    };
+  });
+  if (store.activeModuleId === "partnerOrders") {
+    const usageOrderIds = new Set(usageEvents.map((item) => String(item.taskId || "")).filter(Boolean));
+    const usageOrders = usageEvents.map((item) => {
+      const metadata = (item.metadata && typeof item.metadata === "object" ? item.metadata : {}) as Record<string, unknown>;
+      const customerId = String(item.userId || item.customerId || "");
+      const commission = commissions.find((commissionItem) => String(commissionItem.orderId || "") === String(item.taskId || ""));
+      return {
+        id: item.taskId || item.id,
+        orderId: item.taskId || item.id,
+        orderType: "生图消费",
+        customerId,
+        customer: customers.find((customer) => String(customer.id || "") === customerId)?.name || metadata.customer || customerId || "-",
+        plan: customers.find((customer) => String(customer.id || "") === customerId)?.plan || "-",
+        model: item.model || "-",
+        pointCost: item.pointCost || 0,
+        amountCents: item.amountCents || 0,
+        commissionCents: commission?.amountCents || 0,
+        commissionRate: commission?.rate ?? "-",
+        status: item.status || commission?.status || "PENDING",
+        createdAt: item.occurredAt || commission?.createdAt || "-",
+        metricCode: item.metricCode,
+        balanceBefore: item.balanceBefore,
+        balanceAfter: item.balanceAfter,
+        prompt: metadata.prompt || "-"
+      };
+    });
+    const paymentOrders = orders.map((item) => ({
+      ...item,
+      orderType: "套餐订单",
+      orderId: item.id || item.orderId,
+      commissionCents: commissions.find((commissionItem) => String(commissionItem.orderId || "") === String(item.id || item.orderId || ""))?.amountCents || 0
+    }));
+    const manualOrders = commissions
+      .filter((item) => !usageOrderIds.has(String(item.orderId || "")) && !orders.some((order) => String(order.id || order.orderId || "") === String(item.orderId || "")))
+      .map((item) => ({
+        id: item.orderId || item.id,
+        orderId: item.orderId || item.id,
+        orderType: "手工分润",
+        customer: "-",
+        plan: "-",
+        model: "-",
+        pointCost: "-",
+        amountCents: item.ruleSnapshot && typeof item.ruleSnapshot === "object" && "amountCents" in item.ruleSnapshot ? (item.ruleSnapshot as Record<string, unknown>).amountCents : item.amountCents,
+        commissionCents: item.amountCents,
+        commissionRate: item.rate ?? "-",
+        status: item.status || "PENDING",
+        createdAt: item.createdAt || "-"
+      }));
+    return [...usageOrders, ...paymentOrders, ...manualOrders];
+  }
+  if (store.activeModuleId === "partnerUsage") return usageEvents.map((item) => {
+    const metadata = (item.metadata && typeof item.metadata === "object" ? item.metadata : {}) as Record<string, unknown>;
+    const commission = commissions.find((commissionItem) => String(commissionItem.orderId || "") === String(item.taskId || ""));
+    return {
+      ...item,
+      id: item.id || item.taskId,
+      customerId: item.userId || item.customerId,
+      customer: customers.find((customer) => String(customer.id || "") === String(item.userId || item.customerId || ""))?.name || metadata.customer || item.userId || item.customerId || "-",
+      consumedCents: item.amountCents,
+      commissionCents: commission?.amountCents || 0,
+      commissionRate: commission?.rate ?? "-",
+      prompt: metadata.prompt || "-",
+      createdAt: item.occurredAt
+    };
+  });
   if (store.activeModuleId === "partnerCommissions") return [
-    ...commissions.map((item) => ({ ...item, recordType: "佣金" })),
-    ...withdrawals.map((item) => ({ ...item, recordType: "提现", orderId: "-", rate: "-" }))
+    ...commissions.map((item) => {
+      const usage = usageEvents.find((usageItem) => String(usageItem.taskId || "") === String(item.orderId || ""));
+      const metadata = (usage?.metadata && typeof usage.metadata === "object" ? usage.metadata : {}) as Record<string, unknown>;
+      const ruleSnapshot = (item.ruleSnapshot && typeof item.ruleSnapshot === "object" ? item.ruleSnapshot : {}) as Record<string, unknown>;
+      const customerId = String(usage?.userId || usage?.customerId || "");
+      return {
+        ...item,
+        recordType: "佣金",
+        settlementSource: ruleSnapshot.source === "image_generation" ? "生图分佣" : "手工分润",
+        customerId,
+        customer: customers.find((customer) => String(customer.id || "") === customerId)?.name || metadata.customer || "-",
+        model: usage?.model || "-",
+        pointCost: usage?.pointCost || ruleSnapshot.pointCost || "-",
+        relatedAmountCents: ruleSnapshot.amountCents || usage?.amountCents || item.amountCents,
+        commissionCents: item.amountCents,
+        commissionRate: item.rate,
+        reviewedAt: "-"
+      };
+    }),
+    ...withdrawals.map((item) => ({
+      ...item,
+      recordType: "提现",
+      settlementSource: "提现申请",
+      orderId: "-",
+      customer: "-",
+      model: "-",
+      pointCost: "-",
+      relatedAmountCents: "-",
+      commissionCents: "-",
+      commissionRate: "-",
+      rate: "-"
+    }))
   ];
-  if (store.activeModuleId === "partnerChannels") return [{ ...agent, channel: "直属推广", customers: customers.length, children: children.length }, ...children];
+  if (store.activeModuleId === "partnerChannels") return [{ ...agent, levelLabel: partnerAgentLevelLabel(agent.level), channel: "直属推广", customers: customers.length, children: children.length }, ...children.map((child) => ({ ...child, levelLabel: partnerAgentLevelLabel(child.level) }))];
   if (store.activeModuleId === "partnerMaterials") return [
-    { id: "invite-link", name: "专属邀请链接", type: "链接", value: `/register?invite=${agent.inviteCode || ""}`, status: "ACTIVE" },
+    { id: "invite-link", name: "专属邀请链接", type: "链接", value: partnerInviteLink(), status: "ACTIVE" },
     { id: "poster", name: "朋友圈推广海报", type: "海报", value: "可复制邀请码与二维码", status: "ACTIVE" },
     { id: "script", name: "客户转化话术", type: "话术", value: "适合私域跟进和社群转化", status: "ACTIVE" }
   ];
   if (store.activeModuleId === "partnerAccount") return [
     { id: "profile", item: "代理商账号", value: `${data.user?.name || "-"} / ${data.user?.email || "-"}`, status: data.user?.status || "-" },
+    { id: "agentLevel", item: "代理商等级", value: partnerAgentLevelLabel(agent.level), status: agent.status || "-" },
     { id: "inviteCode", item: "邀请码", value: agent.inviteCode || "-", status: agent.status || "-" },
-    { id: "withdraw", item: "可提现金额", value: moneyYuan(partnerSummaryValue("availableToWithdraw")), status: "ACTIVE" }
+    { id: "withdraw", item: "可提现金额", value: moneyYuan(Math.max(0, Number(partnerSummaryValue("availableToWithdraw")))), status: "ACTIVE" }
   ];
   return partnerSourceRows.value;
 }
 const activeModuleMeta = computed(() => pageMeta[store.activeModuleId] || { badge: "主控模块", description: "管理当前业务域的数据和动作。" });
 const visibleModuleGroups = computed(() => isUserConsole.value ? userModuleGroups : isAgentConsole.value ? agentModuleGroups : adminModuleGroups);
 const activeGroup = computed(() => visibleModuleGroups.value.find((group) => group.items.some((item) => item.id === store.activeModuleId)));
-const activeGroupLabel = computed(() => activeGroup.value?.title || "工作台");
-const activeGroupIcon = computed(() => activeGroup.value?.icon || House);
+const activeUserMenuEntry = computed(() => {
+  if (!isUserConsole.value) return null;
+  if (store.activeModuleId === "userAiImage" && aiPlaygroundMode.value === "agent") return userFlatMenuDefs.find((item) => item.id === "userAiAgent") || null;
+  return allUserFlatMenuDefs.find((item) => item.targetId === store.activeModuleId) || null;
+});
+const activeGroupLabel = computed(() => isUserConsole.value ? "用户端" : activeGroup.value?.title || "工作台");
+const activeHeaderModuleTitle = computed(() => activeUserMenuEntry.value?.title || store.activeModule.title);
+const activeGroupIcon = computed(() => isUserConsole.value ? activeUserMenuEntry.value?.icon || House : activeGroup.value?.icon || House);
 const isGroupActive = (group: { items: Array<{ id: string }> }) => group.items.some((item) => item.id === store.activeModuleId);
+const brandHomeTitle = computed(() => isUserConsole.value ? "回到用户首页" : isAgentConsole.value ? "回到代理看板" : "回到主控工作台");
+const activeUserMenuId = computed(() => activeUserMenuEntry.value?.id || store.activeModuleId);
 
 function toggleDesktopSidebar() {
   desktopSidebarCollapsed.value = !desktopSidebarCollapsed.value;
+}
+
+async function goBrandHome() {
+  const moduleId = isUserConsole.value ? "userDashboard" : isAgentConsole.value ? "partnerDashboard" : "analysis";
+  await selectAdminModule(moduleId);
 }
 
 function scrollOpenTabs(direction: -1 | 1) {
@@ -4931,6 +8591,7 @@ function scrollOpenTabs(direction: -1 | 1) {
 
 function ensureOpenTab(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
+  if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) return;
   const module = modules.find((item) => item.id === moduleId);
   if (!module || openTabs.value.some((item) => item.id === moduleId)) return;
   openTabs.value.push(module);
@@ -4938,12 +8599,32 @@ function ensureOpenTab(moduleId: string) {
 
 async function selectAdminModule(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
+  if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) {
+    ElMessage.warning("当前账号还没有代理身份");
+    return;
+  }
   mobileDrawerOpen.value = false;
   ensureOpenTab(moduleId);
   if (typeof window !== "undefined") {
     window.localStorage.setItem(activeTabStorageKey, moduleId);
+    syncUserModulePath(moduleId);
   }
   await store.selectModule(moduleId);
+}
+
+async function selectUserFlatMenu(menuId: string) {
+  const target = allUserFlatMenuDefs.find((item) => item.id === menuId);
+  if (!target) return;
+  if (agentModuleIds.includes(target.targetId) && !hasAgentIdentity.value) {
+    ElMessage.warning("当前账号还没有代理身份");
+    return;
+  }
+  if (target.id === "userAiAgent") {
+    aiPlaygroundMode.value = "agent";
+  } else if (target.targetId === "userAiImage") {
+    aiPlaygroundMode.value = "gallery";
+  }
+  await selectAdminModule(target.targetId);
 }
 
 function isDefaultTab(moduleId: string) {
@@ -5028,10 +8709,56 @@ watch(
   }
 );
 
+function updateAiComposerClearance() {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  const composer = aiFloatingComposerRef.value;
+  if (!composer || !imageWorkspaceModuleIds.includes(store.activeModuleId)) {
+    document.documentElement.style.removeProperty("--ai-composer-clearance");
+    return;
+  }
+  const rect = composer.getBoundingClientRect();
+  const clearance = Math.max(184, Math.ceil(window.innerHeight - rect.top + 24));
+  document.documentElement.style.setProperty("--ai-composer-clearance", `${clearance}px`);
+}
+
+async function refreshAiComposerClearance() {
+  if (typeof window === "undefined") return;
+  await nextTick();
+  aiPromptInputRef.value?.adjustHeight();
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  aiComposerResizeObserver?.disconnect();
+  aiComposerResizeObserver = null;
+  const composer = aiFloatingComposerRef.value;
+  if (!composer || !imageWorkspaceModuleIds.includes(store.activeModuleId)) {
+    updateAiComposerClearance();
+    return;
+  }
+  updateAiComposerClearance();
+  aiComposerResizeObserver = new ResizeObserver(updateAiComposerClearance);
+  aiComposerResizeObserver.observe(composer);
+}
+
+watch(
+  () => store.activeModuleId,
+  () => {
+    void refreshAiComposerClearance();
+  },
+  { flush: "post", immediate: true }
+);
+
+watch(
+  () => aiReferenceImages.value.length,
+  () => {
+    void refreshAiComposerClearance();
+  },
+  { flush: "post" }
+);
+
 onMounted(() => {
   if (typeof window === "undefined") return;
-  if (isUserConsole.value) void hydrateAiImageDraft();
-  if (isUserConsole.value) hydrateAiSettingsFromStore();
+  if (isUserConsole.value && hasAuthToken()) void hydrateAiImageDraft();
+  if (isUserConsole.value && hasAuthToken()) hydrateAiSettingsFromStore();
+  void refreshAiComposerClearance();
   aiTaskClockTimer = window.setInterval(() => {
     aiTaskClockNow.value = Date.now();
   }, 1000);
@@ -5039,12 +8766,10 @@ onMounted(() => {
   window.addEventListener("wheel", handleAiImageContextMenuDismiss, true);
   window.addEventListener("scroll", handleAiImageContextMenuDismiss, true);
   window.addEventListener("resize", handleAiImageContextMenuDismiss);
+  window.addEventListener("resize", updateAiComposerClearance);
   window.addEventListener("keydown", handleAiLightboxKeydown);
-  const savedActiveTab = window.localStorage.getItem(activeTabStorageKey);
-  if (savedActiveTab && allowedModuleIds.includes(savedActiveTab) && modules.some((item) => item.id === savedActiveTab)) {
-    ensureOpenTab(savedActiveTab);
-    void store.selectModule(savedActiveTab);
-  }
+  window.addEventListener("focus", handleAiWorkspaceVisibilityRefresh);
+  document.addEventListener("visibilitychange", handleAiWorkspaceVisibilityRefresh);
 });
 
 onBeforeUnmount(() => {
@@ -5057,19 +8782,541 @@ onBeforeUnmount(() => {
     window.clearInterval(aiTaskClockTimer);
     aiTaskClockTimer = null;
   }
+  if (videoHistorySaveTimer) {
+    window.clearTimeout(videoHistorySaveTimer);
+    videoHistorySaveTimer = null;
+  }
+  if (videoInputDraftSaveTimer) {
+    window.clearTimeout(videoInputDraftSaveTimer);
+    videoInputDraftSaveTimer = null;
+  }
+  if (videoHistoryPollTimer) {
+    window.clearInterval(videoHistoryPollTimer);
+    videoHistoryPollTimer = null;
+  }
+  stopAiGenerationPolling();
   if (typeof window !== "undefined") {
     window.removeEventListener("mousedown", handleAiImageContextMenuDismiss, true);
     window.removeEventListener("wheel", handleAiImageContextMenuDismiss, true);
     window.removeEventListener("scroll", handleAiImageContextMenuDismiss, true);
     window.removeEventListener("resize", handleAiImageContextMenuDismiss);
+    window.removeEventListener("resize", updateAiComposerClearance);
+    window.removeEventListener("resize", adjustVideoPromptHeight);
     window.removeEventListener("keydown", handleAiLightboxKeydown);
+    window.removeEventListener("focus", handleAiWorkspaceVisibilityRefresh);
+    document.removeEventListener("visibilitychange", handleAiWorkspaceVisibilityRefresh);
     document.body.style.overflow = "";
+    document.documentElement.style.removeProperty("--ai-composer-clearance");
   }
+  aiComposerResizeObserver?.disconnect();
+  aiComposerResizeObserver = null;
+  clearVideoImageUpload();
+  clearVideoSourceUpload();
   if (aiImageDraftHydrated) void writeAiImageDraft(aiImageDraftPayload()).catch(() => undefined);
 });
 function settingsList(key: string): AdminRecord[] {
   const value = (store.data as Record<string, unknown>)[key];
   return Array.isArray(value) ? (value as AdminRecord[]) : [];
+}
+
+function aiDataList(key: string): AdminRecord[] {
+  const value = (store.data as Record<string, unknown>)[key];
+  return Array.isArray(value) ? (value as AdminRecord[]) : [];
+}
+
+const aiModules = computed(() => aiDataList("modules"));
+const aiModels = computed(() => aiDataList("models"));
+const aiSchemas = computed(() => aiDataList("schemas"));
+const aiLimits = computed(() => aiDataList("limits"));
+const aiChannels = computed(() => aiDataList("channels"));
+const aiLogs = computed(() => aiDataList("logs"));
+const aiCapabilitySummary = computed(() => {
+  const value = (store.data as AdminRecord).summary;
+  return value && typeof value === "object" && !Array.isArray(value) ? value as AdminRecord : {};
+});
+const aiCapabilityMetrics = computed(() => [
+  { label: "能力模块", value: String(aiModules.value.length || aiCapabilitySummary.value.modules || 0), hint: "生图 / 视频 / PPT" },
+  { label: "模型配置", value: String(aiModels.value.length || aiCapabilitySummary.value.models || 0), hint: "按 module_code 绑定" },
+  { label: "参数 Schema", value: String(aiSchemas.value.length || aiCapabilitySummary.value.schemas || 0), hint: "模型支持参数" },
+  { label: "租户限制", value: String(aiLimits.value.length || aiCapabilitySummary.value.limits || 0), hint: "套餐/租户可用范围" },
+  { label: "上游通道", value: String(aiChannels.value.length), hint: "从 API 设置读取" },
+  { label: "调用日志", value: String(aiLogs.value.length || aiCapabilitySummary.value.logs || 0), hint: "含扣费与成本快照" }
+]);
+
+function aiValue(row: AdminRecord, ...keys: string[]) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(row, key) && row[key] !== undefined && row[key] !== null) {
+      return row[key];
+    }
+  }
+  return undefined;
+}
+
+function aiText(row: AdminRecord, ...keys: string[]) {
+  const value = aiValue(row, ...keys);
+  if (Array.isArray(value)) return value.map((item) => String(item)).join("、");
+  if (value && typeof value === "object") return JSON.stringify(value);
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function aiList(row: AdminRecord, ...keys: string[]) {
+  const value = aiValue(row, ...keys);
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === "string") return uniqueNonEmptyStrings(value.split(/[,，]/));
+  return [];
+}
+
+function aiObject(row: AdminRecord, ...keys: string[]) {
+  const value = aiValue(row, ...keys);
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function aiSchemaFields(row: AdminRecord): AdminRecord[] {
+  const schema = aiObject(row, "schema_json", "schemaJson");
+  return Array.isArray(schema.fields) ? schema.fields as AdminRecord[] : [];
+}
+
+function aiSchemaFieldLabel(field: AdminRecord) {
+  const key = aiText(field, "key");
+  const label = aiText(field, "label") || key;
+  if (!key || key === label) return label || "-";
+  return `${label} / ${key}`;
+}
+
+function aiSchemaFieldOptionsText(field: AdminRecord) {
+  const options = aiValue(field, "options");
+  if (Array.isArray(options) && options.length) {
+    const text = options.map((item) => String(item)).join(" / ");
+    return text.length > 56 ? `${text.slice(0, 53)}...` : text;
+  }
+  const type = aiText(field, "type");
+  return type ? `类型: ${type}` : "";
+}
+
+function aiSchemaValueText(value: unknown) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function aiSchemaOptionsText(value: unknown) {
+  if (!Array.isArray(value)) return "";
+  return value.map((item) => aiSchemaValueText(item)).join(",");
+}
+
+function parseAISchemaScalar(text: string) {
+  const value = text.trim();
+  if (value === "") return "";
+  if (/^(true|false)$/i.test(value)) return value.toLowerCase() === "true";
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  try {
+    if ((value.startsWith("{") && value.endsWith("}")) || (value.startsWith("[") && value.endsWith("]"))) {
+      return JSON.parse(value);
+    }
+  } catch {
+    return value;
+  }
+  return value;
+}
+
+function parseAISchemaOptions(text: string) {
+  return text
+    .split(/[\n,，]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map(parseAISchemaScalar);
+}
+
+function aiSchemaEditableFields(schema: Record<string, unknown>) {
+  const fields = Array.isArray(schema.fields) ? schema.fields as AdminRecord[] : [];
+  return fields.map((field) => ({
+    ...field,
+    key: aiText(field, "key"),
+    label: aiText(field, "label"),
+    type: aiText(field, "type") || "text",
+    required: Boolean(field.required),
+    visible: field.visible !== false,
+    user_editable: field.user_editable !== false,
+    defaultText: aiSchemaValueText(field.default),
+    optionsText: aiSchemaOptionsText(field.options),
+    placeholderText: aiText(field, "placeholder"),
+    unitText: aiText(field, "unit")
+  }));
+}
+
+function normalizeAISchemaEditableField(field: AdminRecord) {
+  const next: AdminRecord = { ...field };
+  next.key = String(field.key || "").trim();
+  next.label = String(field.label || "").trim();
+  next.type = String(field.type || "text").trim();
+  next.required = Boolean(field.required);
+  next.visible = field.visible !== false;
+  next.user_editable = field.user_editable !== false;
+  const defaultText = String(field.defaultText || "").trim();
+  if (defaultText) next.default = parseAISchemaScalar(defaultText);
+  else delete next.default;
+  const options = parseAISchemaOptions(String(field.optionsText || ""));
+  if (options.length) next.options = options;
+  else delete next.options;
+  const placeholder = String(field.placeholderText || "").trim();
+  if (placeholder) next.placeholder = placeholder;
+  else delete next.placeholder;
+  const unit = String(field.unitText || "").trim();
+  if (unit) next.unit = unit;
+  else delete next.unit;
+  delete next.defaultText;
+  delete next.optionsText;
+  delete next.placeholderText;
+  delete next.unitText;
+  return next;
+}
+
+function assertAISchemaEditableFields(fields: AdminRecord[]) {
+  const seen = new Set<string>();
+  fields.forEach((field, index) => {
+    const key = String(field.key || "").trim();
+    if (!key) throw new Error(`第 ${index + 1} 行缺少 key`);
+    if (seen.has(key)) throw new Error(`参数 key 重复：${key}`);
+    seen.add(key);
+  });
+}
+
+const aiSchemaFieldTypes = ["text", "textarea", "select", "number", "switch", "image_upload", "file_upload", "template_select"];
+
+function aiJsonPreview(value: unknown) {
+  const text = JSON.stringify(value || {});
+  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+function isActiveStatus(value: unknown) {
+  return String(value || "").toUpperCase() === "ACTIVE" || value === true;
+}
+
+function nextAIStatus(row: AdminRecord) {
+  return isActiveStatus(row.status) ? "DISABLED" : "ACTIVE";
+}
+
+function aiModuleLabel(moduleCode: string) {
+  const code = moduleCode.trim();
+  const module = aiModules.value.find((item) => aiText(item, "module_code", "moduleCode") === code);
+  return module?.name ? `${module.name}` : code || "-";
+}
+
+function aiAudienceLabel(module: AdminRecord) {
+  const targets = [];
+  if (Boolean(aiValue(module, "allow_agents", "allowAgents"))) targets.push("代理商");
+  if (Boolean(aiValue(module, "allow_end_users", "allowEndUsers"))) targets.push("终端用户");
+  return targets.join("、") || "-";
+}
+
+function aiLimitScope(row: AdminRecord) {
+  const packageId = aiText(row, "package_id", "packageId");
+  const agentId = aiText(row, "agent_id", "agentId");
+  const tenantId = aiText(row, "tenant_id", "tenantId");
+  if (packageId) return `套餐：${packageId}`;
+  if (agentId) return `代理：${agentId}`;
+  return `租户：${tenantId || "default"}`;
+}
+
+async function askAIJson(title: string, value: unknown) {
+  const result = await ElMessageBox.prompt("JSON 配置", title, {
+    inputType: "textarea",
+    inputValue: JSON.stringify(value || {}, null, 2),
+    confirmButtonText: "保存",
+    cancelButtonText: "取消",
+    inputValidator: (text: string) => {
+      try {
+        JSON.parse(text || "{}");
+        return true;
+      } catch (error) {
+        return error instanceof Error ? error.message : "JSON 格式不正确";
+      }
+    }
+  });
+  return JSON.parse(String(result.value || "{}"));
+}
+
+async function toggleAIModule(row: AdminRecord) {
+  const code = aiText(row, "module_code", "moduleCode");
+  if (!code) throw new Error("缺少 module_code");
+  await store.mutate("PATCH", `/admin/ai/modules/${code}`, { status: nextAIStatus(row) });
+  ElMessage.success("AI 能力模块状态已更新");
+}
+
+async function editAIModulePackages(row: AdminRecord) {
+  const code = aiText(row, "module_code", "moduleCode");
+  const text = await ask("开放套餐 ID，逗号分隔", aiList(row, "open_package_ids", "openPackageIds").join(","));
+  await store.mutate("PATCH", `/admin/ai/modules/${code}`, { open_package_ids: uniqueNonEmptyStrings(text.split(/[,，]/)) });
+  ElMessage.success("开放套餐已更新");
+}
+
+async function editAIModuleModels(row: AdminRecord) {
+  const code = aiText(row, "module_code", "moduleCode");
+  const text = await ask("绑定模型，逗号分隔", aiList(row, "bound_models", "boundModels").join(","));
+  await store.mutate("PATCH", `/admin/ai/modules/${code}`, { bound_models: uniqueNonEmptyStrings(text.split(/[,，]/)) });
+  ElMessage.success("绑定模型已更新");
+}
+
+async function toggleAIModel(row: AdminRecord) {
+  await store.mutate("PATCH", `/admin/ai/models/${row.id}`, { status: nextAIStatus(row) });
+  ElMessage.success("AI 模型状态已更新");
+}
+
+async function createAIModel() {
+  await editAIModel({});
+}
+
+async function editAIModel(row: AdminRecord) {
+  const isCreate = !row.id;
+  const form = {
+    modelName: aiText(row, "model_name", "modelName"),
+    modelType: aiText(row, "model_type", "modelType") || "image",
+    provider: aiText(row, "provider") || "NewAPI",
+    moduleCode: aiText(row, "module_code", "moduleCode") || "image_generation",
+    capabilityCode: aiList(row, "capability_code", "capabilityCode").join(","),
+    fallbackModel: aiText(row, "fallback_model", "fallbackModel"),
+    sortWeight: String(Number(aiValue(row, "sort_weight", "sortWeight") || 10)),
+    allowFallbackSwitch: Boolean(aiValue(row, "allow_fallback_switch", "allowFallbackSwitch")),
+    status: String(row.status || "ACTIVE")
+  };
+  const field = (label: string, key: keyof typeof form, placeholder = "") => h("label", { class: "channel-dialog-field" }, [
+    h("span", null, label),
+    h("input", {
+      class: "channel-dialog-input",
+      value: String(form[key] ?? ""),
+      placeholder,
+      onInput: (event: Event) => {
+        (form[key] as string) = (event.target as HTMLInputElement).value;
+      }
+    })
+  ]);
+  const select = (label: string, key: keyof typeof form, options: Array<{ label: string; value: string }>) => h("label", { class: "channel-dialog-field" }, [
+    h("span", null, label),
+    h("select", {
+      class: "channel-dialog-input",
+      value: String(form[key] ?? ""),
+      onChange: (event: Event) => {
+        (form[key] as string) = (event.target as HTMLSelectElement).value;
+      }
+    }, options.map((option) => h("option", { value: option.value }, option.label)))
+  ]);
+  await ElMessageBox({
+    title: isCreate ? "新增模型" : "编辑模型",
+    message: h("div", { class: "channel-dialog-form" }, [
+      field("模型名称", "modelName", "例如 gpt-image-2"),
+      select("模型类型", "modelType", [
+        { label: "image", value: "image" },
+        { label: "video", value: "video" },
+        { label: "text", value: "text" },
+        { label: "multimodal", value: "multimodal" }
+      ]),
+      field("上游/供应商", "provider", "例如 NewAPI / OpenAI / Local"),
+      select("所属模块", "moduleCode", [
+        { label: "图片生成", value: "image_generation" },
+        { label: "视频生成", value: "video_generation" },
+        { label: "PPT 文档生成", value: "ppt_generation" }
+      ]),
+      field("能力编码", "capabilityCode", "例如 text_to_image,image_to_image"),
+      field("Fallback 模型", "fallbackModel", "例如 mock-standard，可留空"),
+      field("排序权重", "sortWeight", "数字越小越靠前"),
+      select("状态", "status", [
+        { label: "启用", value: "ACTIVE" },
+        { label: "停用", value: "DISABLED" }
+      ]),
+      h("label", { class: "channel-dialog-check" }, [
+        h("input", {
+          type: "checkbox",
+          checked: form.allowFallbackSwitch,
+          onChange: (event: Event) => {
+            form.allowFallbackSwitch = (event.target as HTMLInputElement).checked;
+          }
+        }),
+        h("span", null, "允许用户切换 Fallback")
+      ])
+    ]),
+    confirmButtonText: "保存模型",
+    cancelButtonText: "取消",
+    beforeClose: async (action, instance, done) => {
+      if (action !== "confirm") {
+        done();
+        return;
+      }
+      const modelName = form.modelName.trim();
+      const sortWeight = Number(form.sortWeight);
+      if (!modelName) {
+        ElMessage.error("模型名称不能为空");
+        return;
+      }
+      if (!Number.isFinite(sortWeight) || sortWeight <= 0) {
+        ElMessage.error("排序权重必须是大于 0 的数字");
+        return;
+      }
+      instance.confirmButtonLoading = true;
+      try {
+        const payload = {
+          model_name: modelName,
+          model_type: form.modelType.trim(),
+          provider: form.provider.trim(),
+          module_code: form.moduleCode.trim(),
+          capability_code: uniqueNonEmptyStrings(form.capabilityCode.split(/[,，]/)),
+          fallback_model: form.fallbackModel.trim(),
+          sort_weight: Math.round(sortWeight),
+          allow_fallback_switch: form.allowFallbackSwitch,
+          status: form.status.trim()
+        };
+        if (isCreate) {
+          await store.mutate("POST", "/admin/ai/models", payload);
+        } else {
+          await store.mutate("PATCH", `/admin/ai/models/${row.id}`, payload);
+        }
+        ElMessage.success(isCreate ? "AI 模型已新增" : "AI 模型已更新");
+        done();
+      } catch (error) {
+        ElMessage.error(error instanceof Error ? error.message : (isCreate ? "新增模型失败" : "保存模型失败"));
+      } finally {
+        instance.confirmButtonLoading = false;
+      }
+    },
+    customClass: "channel-create-dialog"
+  });
+}
+
+async function editAIModelCapabilities(row: AdminRecord) {
+  const text = await ask("模型能力编码，逗号分隔", aiList(row, "capability_code", "capabilityCode").join(","));
+  await store.mutate("PATCH", `/admin/ai/models/${row.id}`, { capability_code: uniqueNonEmptyStrings(text.split(/[,，]/)) });
+  ElMessage.success("模型能力已更新");
+}
+
+async function toggleAIParameterSchema(row: AdminRecord) {
+  await store.mutate("PATCH", `/admin/ai/parameter-schemas/${row.id}`, { status: nextAIStatus(row) });
+  ElMessage.success("参数 Schema 状态已更新");
+}
+
+async function editAIParameterSchema(row: AdminRecord) {
+  const schema = { ...aiObject(row, "schema_json", "schemaJson") };
+  const fields = ref<AdminRecord[]>(aiSchemaEditableFields(schema));
+  const title = `编辑参数 Schema：${row.id}`;
+  const SchemaEditor = {
+    name: "AISchemaEditorDialog",
+    setup() {
+      const addField = () => {
+        fields.value.push({
+          key: "",
+          label: "",
+          type: "text",
+          required: false,
+          visible: true,
+          user_editable: true,
+          defaultText: "",
+          optionsText: "",
+          placeholderText: "",
+          unitText: ""
+        });
+      };
+      const removeField = (index: number) => {
+        fields.value.splice(index, 1);
+      };
+      const updateField = (index: number, key: string, value: unknown) => {
+        fields.value[index] = { ...fields.value[index], [key]: value };
+      };
+      const input = (index: number, key: string, label: string, placeholder = "") => h("label", { class: "ai-schema-editor-cell" }, [
+        h("span", label),
+        h("input", {
+          value: String(fields.value[index][key] || ""),
+          placeholder,
+          onInput: (event: Event) => updateField(index, key, (event.target as HTMLInputElement).value)
+        })
+      ]);
+      const textarea = (index: number, key: string, label: string, placeholder = "") => h("label", { class: "ai-schema-editor-cell ai-schema-editor-cell-wide" }, [
+        h("span", label),
+        h("textarea", {
+          value: String(fields.value[index][key] || ""),
+          placeholder,
+          rows: 3,
+          onInput: (event: Event) => updateField(index, key, (event.target as HTMLTextAreaElement).value)
+        })
+      ]);
+      const checkbox = (index: number, key: string, label: string) => h("label", { class: "ai-schema-editor-check" }, [
+        h("input", {
+          type: "checkbox",
+          checked: Boolean(fields.value[index][key]),
+          onChange: (event: Event) => updateField(index, key, (event.target as HTMLInputElement).checked)
+        }),
+        h("span", label)
+      ]);
+      return () => h("div", { class: "ai-schema-editor" }, [
+        h("p", { class: "ai-schema-editor-hint" }, "可直接编辑字段、默认值和选项。选项支持逗号或换行分隔，例如：1024x1024,1024x1536,1536x1024。"),
+        h("div", { class: "ai-schema-editor-rows" }, fields.value.map((field, index) => h("section", { class: "ai-schema-editor-row", key: `${field.key || "field"}-${index}` }, [
+          h("div", { class: "ai-schema-editor-row-head" }, [
+            h("strong", field.key ? `${field.label || field.key}` : `新参数 ${index + 1}`),
+            h("button", { type: "button", onClick: () => removeField(index) }, "删除")
+          ]),
+          h("div", { class: "ai-schema-editor-grid" }, [
+            input(index, "key", "Key", "duration"),
+            input(index, "label", "名称", "视频时长"),
+            h("label", { class: "ai-schema-editor-cell" }, [
+              h("span", "类型"),
+              h("select", {
+                value: String(field.type || "text"),
+                onChange: (event: Event) => updateField(index, "type", (event.target as HTMLSelectElement).value)
+              }, aiSchemaFieldTypes.map((type) => h("option", { value: type }, type)))
+            ]),
+            input(index, "defaultText", "默认值", "5"),
+            textarea(index, "optionsText", "选项", "1024x1024,1024x1536,1536x1024"),
+            input(index, "unitText", "单位", "秒"),
+            input(index, "placeholderText", "占位提示", "描述视频画面、运动和风格"),
+            h("div", { class: "ai-schema-editor-switches" }, [
+              checkbox(index, "required", "必填"),
+              checkbox(index, "visible", "显示"),
+              checkbox(index, "user_editable", "用户可编辑")
+            ])
+          ])
+        ]))),
+        h("button", { type: "button", class: "ai-schema-editor-add", onClick: addField }, "+ 新增参数")
+      ]);
+    }
+  };
+
+  await ElMessageBox({
+    title,
+    message: h(SchemaEditor),
+    showCancelButton: true,
+    confirmButtonText: "保存",
+    cancelButtonText: "取消",
+    customClass: "ai-schema-editor-dialog",
+    beforeClose: async (action, instance, done) => {
+      if (action !== "confirm") {
+        done();
+        return;
+      }
+      instance.confirmButtonLoading = true;
+      try {
+        assertAISchemaEditableFields(fields.value);
+        const nextSchema = {
+          ...schema,
+          fields: fields.value.map(normalizeAISchemaEditableField)
+        };
+        await store.mutate("PATCH", `/admin/ai/parameter-schemas/${row.id}`, { schema_json: nextSchema, status: row.status || "ACTIVE" });
+        ElMessage.success("参数 Schema 已更新");
+        done();
+      } catch (error) {
+        ElMessage.error(error instanceof Error ? error.message : "保存参数 Schema 失败");
+      } finally {
+        instance.confirmButtonLoading = false;
+      }
+    }
+  });
+}
+
+async function toggleAILimit(row: AdminRecord) {
+  await store.mutate("PATCH", `/admin/ai/tenant-module-limits/${row.id}`, { status: nextAIStatus(row) });
+  ElMessage.success("租户限制状态已更新");
+}
+
+async function editAILimitJSON(row: AdminRecord) {
+  const limit = await askAIJson("编辑租户参数限制", aiObject(row, "limit_json", "limitJson"));
+  await store.mutate("PATCH", `/admin/ai/tenant-module-limits/${row.id}`, { limit_json: limit, status: row.status || "ACTIVE" });
+  ElMessage.success("租户限制已更新");
 }
 
 const rows = computed(() => {
@@ -5086,6 +9333,9 @@ const rows = computed(() => {
   if (store.activeModuleId === "userMembership") {
     return data.account ? [data.account] : [];
   }
+  if (store.activeModuleId === "userOrders") {
+    return userMembershipOrders.value;
+  }
   if (store.activeModuleId === "system") {
     return systemRows(data);
   }
@@ -5098,6 +9348,155 @@ const rows = computed(() => {
   const items = Array.isArray(data.items) ? data.items : Array.isArray(data.withdrawals) ? data.withdrawals : [];
   return flattenRows(items as AdminRecord[]);
 });
+
+const selectedBillingCustomerId = ref("");
+const billingData = computed(() => store.data as {
+  metrics?: Array<{ label: string; value: unknown; unit?: string }>;
+  workflow?: unknown[];
+  customers?: unknown[];
+  products?: unknown[];
+  plans?: unknown[];
+  subscriptions?: unknown[];
+  events?: unknown[];
+  usage?: unknown[];
+  billableMetrics?: unknown[];
+  charges?: unknown[];
+  fees?: unknown[];
+  wallets?: unknown[];
+  coupons?: unknown[];
+  invoices?: unknown[];
+  creditNotes?: unknown[];
+  paymentRequests?: unknown[];
+  payments?: unknown[];
+});
+
+function billingList(key: "customers" | "products" | "plans" | "subscriptions" | "events" | "usage" | "billableMetrics" | "charges" | "fees" | "wallets" | "coupons" | "invoices" | "creditNotes" | "paymentRequests" | "payments") {
+  const value = billingData.value[key];
+  return Array.isArray(value) ? flattenRows(value as AdminRecord[]) : [];
+}
+
+function partnerUsageEvents(events: unknown): AdminRecord[] {
+  if (!Array.isArray(events)) return [];
+  return events.filter((item) => {
+    const event = item as AdminRecord;
+    return String(event.metricCode || "") === "image.generations" && Number(event.pointCost || 0) > 0;
+  }) as AdminRecord[];
+}
+
+const billingCustomerRows = computed(() => billingList("customers"));
+const billingProductRows = computed(() => billingList("products"));
+const billingPlanRows = computed(() => billingList("plans"));
+const billingSubscriptionRows = computed(() => billingList("subscriptions"));
+const billingEventRows = computed(() => billingList("events"));
+const billingUsageRows = computed(() => billingList("usage"));
+const billingBillableMetricRows = computed(() => billingList("billableMetrics"));
+const billingChargeRows = computed(() => billingList("charges"));
+const billingFeeRows = computed(() => billingList("fees"));
+const billingWalletRows = computed(() => billingList("wallets"));
+const billingCouponRows = computed(() => billingList("coupons"));
+const billingInvoiceRows = computed(() => billingList("invoices"));
+const billingCreditNoteRows = computed(() => billingList("creditNotes"));
+const billingPaymentRequestRows = computed(() => billingList("paymentRequests"));
+const billingPaymentRows = computed(() => billingList("payments"));
+
+const billingRows = computed(() => {
+  const map: Record<string, AdminRecord[]> = {
+    billingDashboard: billingCustomerRows.value,
+    billingCustomers: billingCustomerRows.value,
+    billingProducts: billingProductRows.value,
+    billingBillableMetrics: billingBillableMetricRows.value,
+    billingCharges: billingChargeRows.value,
+    billingSubscriptions: billingSubscriptionRows.value,
+    billingEvents: billingEventRows.value,
+    billingFees: billingFeeRows.value,
+    billingWallets: billingWalletRows.value,
+    billingCoupons: billingCouponRows.value,
+    billingInvoices: billingInvoiceRows.value,
+    billingCreditNotes: billingCreditNoteRows.value,
+    billingPaymentRequests: billingPaymentRequestRows.value,
+    billingPayments: billingPaymentRows.value
+  };
+  return map[store.activeModuleId] || [];
+});
+
+const filteredBillingRows = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase();
+  if (!keyword) return billingRows.value;
+  return billingRows.value.filter((row) => Object.values(row).some((value) => String(Array.isArray(value) ? value.join(" ") : value ?? "").toLowerCase().includes(keyword)));
+});
+
+const billingColumns = computed(() => {
+  const preferred: Record<string, string[]> = {
+    billingDashboard: ["customer", "plan", "billingStatus", "prepaidBalanceCents", "paymentMethod"],
+    billingCustomers: ["customer", "email", "plan", "billingStatus", "prepaidBalanceCents", "walletCode", "coupon", "taxStatus"],
+    billingProducts: ["name", "skuCode", "planType", "billingMode", "plan", "product", "cyclePolicy", "monthlyAmountCents", "metricCode", "includedQuota", "overageUnitPriceCents", "chargeModel", "status"],
+    billingBillableMetrics: ["code", "name", "product", "aggregationType", "fieldName", "expression", "recurring", "chargeModels", "status"],
+    billingCharges: ["plan", "product", "billableMetricCode", "chargeModel", "amountCents", "freeUnits", "payInAdvance", "invoiceable", "taxes", "status"],
+    billingSubscriptions: ["id", "externalId", "customer", "plan", "status", "billingTime", "monthlyAmountCents", "lifetimeUsageCents", "currentPeriodEnd"],
+    billingEvents: ["transactionId", "customerId", "subscriptionId", "metricCode", "quantity", "unitAmountCents", "status", "occurredAt"],
+    billingFees: ["id", "invoiceId", "feeType", "invoiceableType", "amountCents", "taxesAmountCents", "totalAmountCents", "units", "paymentStatus"],
+    billingWallets: ["code", "customer", "status", "balanceCents", "consumedAmountCents", "paymentMethodType", "targetMetrics"],
+    billingCoupons: ["code", "name", "couponType", "amountCents", "percentageRate", "frequency", "frequencyDuration", "targets", "status"],
+    billingInvoices: ["invoiceNo", "customer", "invoiceType", "subtotalAmountCents", "taxesAmountCents", "totalDueAmountCents", "status", "paymentStatus", "taxStatus"],
+    billingCreditNotes: ["number", "invoiceNo", "customer", "reason", "creditAmountCents", "offsetAmountCents", "balanceAmountCents", "creditStatus", "refundStatus"],
+    billingPaymentRequests: ["id", "customer", "invoices", "totalDueAmountCents", "paymentStatus", "dunningCampaign", "dueAt", "readyForPaymentProcessing"],
+    billingPayments: ["id", "paymentRequestId", "provider", "paymentMethodType", "amountCents", "paymentStatus", "status", "createdAt"]
+  };
+  const first = billingRows.value[0];
+  const fields = preferred[store.activeModuleId] || (first ? Object.keys(first).slice(0, 8) : []);
+  return first ? fields.filter((field) => field in first) : fields;
+});
+
+const billingTableTitle = computed(() => {
+  const titleMap: Record<string, string> = {
+    billingDashboard: "客户计费总览",
+    billingCustomers: "客户计费档案",
+    billingProducts: "套餐产品与指标",
+    billingBillableMetrics: "计量指标",
+    billingCharges: "计费规则",
+    billingSubscriptions: "订阅生命周期",
+    billingEvents: "原始计量事件",
+    billingFees: "费用明细",
+    billingWallets: "钱包与预付额度",
+    billingCoupons: "优惠券",
+    billingInvoices: "账单与发票",
+    billingCreditNotes: "贷项与红冲",
+    billingPaymentRequests: "付款请求与催收",
+    billingPayments: "支付与催收"
+  };
+  return titleMap[store.activeModuleId] || "计费记录";
+});
+
+const billingWorkflow = computed(() => {
+  const value = billingData.value.workflow;
+  return Array.isArray(value) ? flattenRows(value as AdminRecord[]) : [];
+});
+
+const billingMetrics = computed(() => {
+  const items = Array.isArray(billingData.value.metrics) ? billingData.value.metrics : [];
+  return items.map((item) => ({
+    label: item.label,
+    value: item.unit === "cents" ? formatCell(item.value, "amountCents") : String(item.value ?? "-"),
+    hint: metricHint(item.label)
+  }));
+});
+
+const selectedBillingCustomer = computed<AdminRecord>(() => {
+  const customers = billingCustomerRows.value;
+  if (!customers.length) return {};
+  const selected = customers.find((item) => String(item.id || item.customerId || "") === selectedBillingCustomerId.value);
+  return selected || customers[0];
+});
+
+const selectedBillingSubscription = computed<AdminRecord>(() => {
+  const customerId = String(selectedBillingCustomer.value.id || selectedBillingCustomer.value.customerId || "");
+  return billingSubscriptionRows.value.find((item) => String(item.customerId || "") === customerId) || {};
+});
+
+function selectBillingCustomer(row: AdminRecord) {
+  const customerId = String(row.customerId || row.id || "");
+  if (customerId) selectedBillingCustomerId.value = customerId;
+}
 
 const filteredRows = computed(() => {
   const keyword = searchKeyword.value.trim().toLowerCase();
@@ -5147,29 +9546,38 @@ function metricHint(label: string) {
 
 const columns = computed(() => {
   const preferred: Record<string, string[]> = {
-    customers: ["name", "email", "sourceAgentName", "sourceInviteCode", "sourceChannelLevel", "sourceParentAgentName", "plan", "pointsAvailable", "status"],
+    customers: ["name", "email", "sourceAgentName", "sourceInviteCode", "sourceChannelLevel", "sourceParentAgentName", "plan", "pointsAvailable", "modelRoute", "modelKeyStatus", "status"],
     userManagement: ["name", "email", "role", "plan", "pointsAvailable", "status"],
-    partnerCustomers: ["name", "email", "role", "status"],
-    partnerOrders: ["orderId", "amountCents", "commissionCents", "status", "createdAt"],
-    partnerCommissions: ["recordType", "id", "orderId", "amountCents", "rate", "status"],
-    partnerChannels: ["name", "email", "level", "inviteCode", "customers", "children", "status"],
+    partnerCustomers: ["name", "email", "plan", "pointsAvailable", "customerValue", "usageCount", "pointCost", "averagePointCost", "consumedCents", "commissionCents", "latestModel", "latestTaskId", "latestUsageAt", "status"],
+    partnerOrders: ["orderId", "orderType", "customer", "model", "pointCost", "amountCents", "commissionCents", "commissionRate", "status", "createdAt"],
+    partnerUsage: ["taskId", "customer", "model", "pointCost", "consumedCents", "commissionCents", "balanceBefore", "balanceAfter", "status", "createdAt"],
+    partnerCommissions: ["recordType", "settlementSource", "id", "customer", "orderId", "relatedAmountCents", "amountCents", "commissionRate", "status", "createdAt", "reviewedAt"],
+    partnerChannels: ["name", "email", "levelLabel", "inviteCode", "customers", "children", "status"],
     partnerMaterials: ["name", "type", "value", "status"],
     partnerAccount: ["item", "value", "status"],
-    channels: ["name", "email", "level", "inviteCode", "status"],
+    channels: ["name", "email", "levelLabel", "identity", "openCondition", "keepCondition", "inviteCode", "operationCenterId", "status"],
+    operationCenters: ["name", "owner", "region", "inviteCode", "status", "joinOrderId", "joinFeeCents", "approvedAt"],
     products: ["name", "type", "status", "usage"],
     plans: ["name", "priceCents", "grantPoints", "durationDays", "concurrency", "active"],
-    orders: ["id", "customer", "plan", "amountCents", "status", "createdAt"],
+    orders: ["id", "customer", "orderType", "plan", "paymentMethod", "amountCents", "tokenGrantAmount", "platformIncomeCents", "fulfillmentStatus", "status", "createdAt"],
     usage: ["product", "metric", "usage", "costCents"],
+    tokenRecords: ["user", "orderId", "changeType", "amount", "balanceAfter", "remark", "createdAt"],
     commissions: ["recordType", "id", "agentId", "orderId", "amountCents", "rate", "status"],
+    commissionRecords: ["id", "receiverType", "receiverId", "commissionType", "orderId", "amountCents", "settleStatus", "status"],
+    marketingWallets: ["name", "role", "level", "balanceCents", "frozenCents", "totalIncomeCents", "pendingCommission", "totalWithdrawCents", "availableToWithdraw", "status"],
+    marketingAgentLevels: ["code", "name", "identity", "openMethod", "openCondition", "keepCondition", "membershipCommission", "rechargeCommission", "enterpriseCommission", "regionalRebate", "manualReview", "status"],
+    marketingWalletRecords: ["agentName", "bizType", "bizId", "orderId", "amountCents", "source", "ruleId", "status", "createdAt", "reviewedAt"],
+    marketingSettlementStatements: ["agentName", "period", "commissionCents", "withdrawalCents", "netPayableCents", "pendingCents", "commissionCount", "withdrawalCount", "status"],
     system: ["category", "item", "value", "secret", "status"],
     userDashboard: ["name", "model", "status", "pointCost", "createdAt"],
-    userOnlineImage: ["id", "model", "type", "pointCost", "status", "createdAt"],
     userAiImage: ["id", "model", "type", "pointCost", "status", "createdAt"],
-    userCanvas: ["id", "model", "status", "pointCost", "createdAt"],
+    userVideoGeneration: ["id", "model", "type", "pointCost", "status", "createdAt"],
+    userPptGeneration: ["title", "slideCount", "language", "theme", "status", "createdAt"],
     userWorks: ["name", "mediaType", "model", "pointCost", "createdAt"],
     userApiSettings: ["category", "item", "value", "secret", "status"],
-    userUsage: ["id", "model", "type", "status", "pointCost", "createdAt"],
-    userMembership: ["id", "userId", "available", "frozen"]
+    userUsage: ["taskId", "model", "metricCode", "quantity", "pointCost", "amountCents", "balanceBefore", "balanceAfter", "status", "occurredAt"],
+    userMembership: ["id", "userId", "available", "frozen"],
+    userOrders: ["id", "orderTypeText", "plan", "paymentMethodText", "amountCents", "rechargePoints", "status", "createdAt", "paidAt"]
   };
   const first = rows.value[0];
   const fields = preferred[store.activeModuleId] || (first ? Object.keys(first).slice(0, 8) : []);
@@ -5178,7 +9586,59 @@ const columns = computed(() => {
 
 const metrics = computed(() => {
   const data = store.data as { metrics?: Array<{ label: string; value: unknown }>; summary?: Record<string, unknown> };
-  if (["userDashboard", "userOnlineImage", "userAiImage"].includes(store.activeModuleId) && Array.isArray(data.metrics)) return data.metrics.map((item) => ({ label: item.label, value: String(item.value) }));
+  if (store.activeModuleId === "partnerCustomers") {
+    const customerRows = partnerRows();
+    const activeCustomers = customerRows.filter((item) => String(item.status || "").toUpperCase() === "ACTIVE").length;
+    const consumedCustomers = customerRows.filter((item) => Number(item.usageCount || 0) > 0).length;
+    const totalPoints = customerRows.reduce((total, item) => total + Number(item.pointCost || 0), 0);
+    const totalAmount = customerRows.reduce((total, item) => total + Number(item.consumedCents || 0), 0);
+    const totalCommission = customerRows.reduce((total, item) => total + Number(item.commissionCents || 0), 0);
+    return [
+      { label: "绑定客户", value: String(customerRows.length) },
+      { label: "活跃客户", value: String(activeCustomers) },
+      { label: "消费客户", value: String(consumedCustomers) },
+      { label: "累计消费", value: moneyYuan(totalAmount) },
+      { label: "累计扣点", value: `${totalPoints} 点` },
+      { label: "贡献佣金", value: moneyYuan(totalCommission) }
+    ];
+  }
+  if (store.activeModuleId === "partnerUsage") {
+    const usageRows = partnerRows();
+    const totalPoints = usageRows.reduce((total, item) => total + Number(item.pointCost || 0), 0);
+    const totalAmount = usageRows.reduce((total, item) => total + Number(item.consumedCents || item.amountCents || 0), 0);
+    const totalCommission = usageRows.reduce((total, item) => total + Number(item.commissionCents || 0), 0);
+    const succeededCount = usageRows.filter((item) => String(item.status || "").toUpperCase() === "SUCCEEDED").length;
+    return [
+      { label: "消费笔数", value: String(usageRows.length) },
+      { label: "累计扣点", value: `${totalPoints} 点` },
+      { label: "消费金额", value: moneyYuan(totalAmount) },
+      { label: "代理佣金", value: moneyYuan(totalCommission) },
+      { label: "成功率", value: usageRows.length ? `${Math.round((succeededCount / usageRows.length) * 100)}%` : "0%" }
+    ];
+  }
+  if (store.activeModuleId === "partnerCommissions") {
+    const summary = partnerData.value.summary || {};
+    const rawAvailable = Number(summary.rawAvailableToWithdraw ?? summary.availableToWithdraw ?? 0);
+    return [
+      { label: "累计佣金", value: moneyYuan(Number(summary.totalCommission || 0)) },
+      { label: "待结算佣金", value: moneyYuan(Number(summary.pendingCommission || 0)) },
+      { label: "已结算佣金", value: moneyYuan(Number(summary.settledCommission || 0)) },
+      { label: "审核中提现", value: moneyYuan(Number(summary.pendingWithdrawal || 0)) },
+      { label: "已提现金额", value: moneyYuan(Number(summary.withdrawn || 0)) },
+      { label: "可提现余额", value: moneyYuan(Math.max(0, Number(summary.availableToWithdraw || 0))) },
+      { label: "超提金额", value: moneyYuan(Math.max(0, -rawAvailable)) }
+    ];
+  }
+  if (["userDashboard", "userAiImage"].includes(store.activeModuleId) && Array.isArray(data.metrics)) return data.metrics.map((item) => ({ label: item.label, value: String(item.value) }));
+  if (store.activeModuleId === "userUsage") {
+    const summary = data.summary || {};
+    return [
+      { label: "消费笔数", value: String(summary.records || 0) },
+      { label: "累计扣点", value: `${Number(summary.totalPointCost || 0)} 点` },
+      { label: "消费金额", value: moneyYuan(Number(summary.totalAmountCents || 0)) },
+      { label: "成功笔数", value: String(summary.succeeded || 0) }
+    ];
+  }
   if (store.activeModuleId === "apiSettings" || store.activeModuleId === "userApiSettings") {
     return [
       { label: "上游渠道", value: String(apiChannels.value.length) },
@@ -5205,6 +9665,7 @@ const toolbarActions = computed(() => {
     apiSettings: [],
     system: [
       { action: "editSystem", label: "品牌域名" },
+      { action: "configureNewAPI", label: "NewAPI 管理" },
       { action: "importApiRecommendations", label: "导入推荐平台" },
       { action: "createApiChannel", label: "新增上游" },
       { action: "createApiKey", label: "新增 API Key" }
@@ -5215,15 +9676,23 @@ const toolbarActions = computed(() => {
 
 const rowActions = computed(() => {
   const actions: Record<string, Array<{ action: string; label: string }>> = {
-    customers: [{ action: "editCustomer", label: "编辑" }],
-    userManagement: [{ action: "editCustomer", label: "编辑" }],
-    channels: [{ action: "toggleChannel", label: "启停" }],
+    customers: [{ action: "editCustomer", label: "编辑" }, { action: "syncNewAPI", label: "同步 NewAPI" }],
+    userManagement: [{ action: "editCustomer", label: "编辑" }, { action: "syncNewAPI", label: "同步 NewAPI" }],
+    channels: [
+      { action: "editChannel", label: "编辑" },
+      { action: "toggleChannel", label: "启停" }
+    ],
     products: [{ action: "editProduct", label: "编辑" }],
     plans: [{ action: "editPlan", label: "保存价格" }],
     orders: [
       { action: "markPaid", label: "标记收款" },
       { action: "renewOrder", label: "续费" }
     ],
+    marketingCommissionRules: [{ action: "editCommissionRule", label: "编辑规则" }],
+    partnerCustomers: [{ action: "showPartnerCustomerDetail", label: "查看明细" }],
+    partnerOrders: [{ action: "showPartnerOrderDetail", label: "查看订单" }],
+    partnerUsage: [{ action: "showPartnerUsageDetail", label: "查看消费" }],
+    partnerCommissions: [{ action: "showPartnerSettlementDetail", label: "查看结算" }],
     commissions: [
       { action: "approveWithdrawal", label: "通过" },
       { action: "rejectWithdrawal", label: "驳回" }
@@ -5232,7 +9701,7 @@ const rowActions = computed(() => {
   return actions[store.activeModuleId] || [];
 });
 
-function systemRows(data: { apiChannels?: unknown[]; apiModels?: unknown[]; apiKeys?: unknown[]; brand?: Record<string, unknown> }): AdminRecord[] {
+function systemRows(data: { apiChannels?: unknown[]; apiModels?: unknown[]; apiKeys?: unknown[]; brand?: Record<string, unknown>; apiGateway?: Record<string, unknown> }): AdminRecord[] {
   const channels = (Array.isArray(data.apiChannels) ? data.apiChannels : []).map((item) => {
     const row = item as AdminRecord;
     return {
@@ -5270,7 +9739,16 @@ function systemRows(data: { apiChannels?: unknown[]; apiModels?: unknown[]; apiK
     };
   });
   const brandRows = data.brand ? [{ id: "brand", category: "品牌", item: "品牌域名", value: `${data.brand.name || "-"} / ${data.brand.domain || "-"}`, secret: "-", status: "ACTIVE" }] : [];
-  return [...brandRows, ...channels, ...models, ...keys];
+  const newapi = ((data.apiGateway || {}).newapi || {}) as AdminRecord;
+  const gatewayRows = [{
+    id: "newapi-management",
+    category: "NewAPI 管理",
+    item: "自动同步用户密钥",
+    value: `${newapi.baseUrl || "未配置"} / 分组 ${newapi.defaultGroup || "生图备份"}`,
+    secret: newapi.adminCookie || newapi.adminToken ? "已配置" : "未配置",
+    status: newapi.enabled ? "ACTIVE" : "DISABLED"
+  }];
+  return [...brandRows, ...gatewayRows, ...channels, ...models, ...keys];
 }
 function flattenRows(items: AdminRecord[]): AdminRecord[] {
   return items.flatMap((item) => [item, ...((item.children as AdminRecord[] | undefined) || []).map((child) => ({ ...child, name: `二级 - ${child.name || child.id}` }))]);
@@ -5279,7 +9757,9 @@ function flattenRows(items: AdminRecord[]): AdminRecord[] {
 function formatCell(value: unknown, column: string) {
   if (["sourceAgentName", "sourceInviteCode", "sourceParentAgentName", "referredBy"].includes(column) && !value) return "未归因";
   if (Array.isArray(value)) return value.join("、");
+  if (typeof value === "boolean") return value ? "是" : "否";
   if (column.toLowerCase().includes("cents")) return `￥${(Number(value || 0) / 100).toFixed(2)}`;
+  if (isStatusColumn(column)) return statusLabel(value);
   if (typeof value === "object" && value) return JSON.stringify(value);
   return value ?? "-";
 }
@@ -5290,21 +9770,295 @@ function isStatusColumn(column: string) {
 
 function statusType(value: unknown) {
   const text = String(value).toUpperCase();
-  if (["ACTIVE", "PAID", "APPROVED", "true"].includes(text)) return "success";
+  if (["ACTIVE", "PAID", "APPROVED", "SUCCEEDED", "SUCCESS", "DONE", "true"].includes(text)) return "success";
   if (["PENDING", "CONFIGURABLE"].includes(text)) return "warning";
   if (["DISABLED", "REJECTED", "FAILED", "false"].includes(text)) return "danger";
   return "info";
 }
 
+function statusLabel(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const text = raw.toUpperCase();
+  const labels: Record<string, string> = {
+    ACTIVE: "启用",
+    DISABLED: "停用",
+    CONFIGURABLE: "待配置",
+    PENDING: "待处理",
+    RUNNING: "处理中",
+    QUEUED: "排队中",
+    PAID: "已支付",
+    PAYMENT_PENDING: "待支付",
+    APPROVED: "已通过",
+    REJECTED: "已驳回",
+    SETTLED: "已结算",
+    SUCCEEDED: "成功",
+    SUCCESS: "成功",
+    DONE: "已完成",
+    FAILED: "失败",
+    OVERDUE: "已逾期",
+    DRAFT: "草稿",
+    FINALIZED: "已定稿",
+    TRUE: "是",
+    FALSE: "否"
+  };
+  return labels[text] || raw;
+}
+
 function visibleRowActions(row: AdminRecord) {
   if (store.activeModuleId !== "commissions") return rowActions.value;
-  if (row.recordType === "提现" && String(row.status).toUpperCase() === "PENDING") return rowActions.value;
+  if (["提现", "分润"].includes(String(row.recordType || "")) && String(row.status).toUpperCase() === "PENDING") return rowActions.value;
   return [];
 }
 
 function labelForRowAction(action: { action: string; label: string }, row: AdminRecord) {
   if (action.action === "toggleChannel") return String(row.status).toUpperCase() === "ACTIVE" ? "停用" : "启用";
   return action.label;
+}
+
+async function showPartnerCustomerDetail(row: AdminRecord) {
+  const data = partnerData.value;
+  const customerId = String(row.customerId || row.id || "");
+  const usageEvents = partnerUsageEvents(data.usageEvents).filter((item) => String(item.userId || item.customerId || "") === customerId);
+  const orders = (Array.isArray(data.orders) ? data.orders : []).filter((item) => String(item.userId || item.customerId || "") === customerId);
+  const taskIds = new Set(usageEvents.map((item) => String(item.taskId || "")).filter(Boolean));
+  const commissions = (Array.isArray(data.commissions) ? data.commissions : []).filter((item) => taskIds.has(String(item.orderId || "")));
+  const totalPoints = usageEvents.reduce((total, item) => total + Number(item.pointCost || 0), 0);
+  const totalConsumedCents = usageEvents.reduce((total, item) => total + Number(item.amountCents || 0), 0);
+  const totalCommissionCents = commissions.reduce((total, item) => total + Number(item.amountCents || 0), 0);
+  const latestUsage = usageEvents[0] || {};
+  const usedPointTotal = totalPoints + Number(row.pointsAvailable || 0);
+  const usedPercent = usedPointTotal > 0 ? Math.min(100, Math.round((totalPoints / usedPointTotal) * 100)) : 0;
+  const metrics = [
+    { label: "剩余点数", value: String(row.pointsAvailable ?? "-"), hint: "套餐可用余额" },
+    { label: "累计扣点", value: `${totalPoints} 点`, hint: `${usageEvents.length} 笔消费` },
+    { label: "累计消费", value: moneyYuan(totalConsumedCents), hint: "计费中心口径" },
+    { label: "产生佣金", value: moneyYuan(totalCommissionCents), hint: "代理商分润" },
+    { label: "客户价值", value: String(row.customerValue || "-"), hint: "按消费贡献判断" },
+    { label: "平均扣点", value: `${Number(row.averagePointCost || 0)} 点`, hint: "单次任务均值" }
+  ];
+  const profileItems = [
+    { label: "客户 ID", value: customerId || "-" },
+    { label: "登录邮箱", value: row.email || "-" },
+    { label: "来源代理", value: row.referredBy || "-" },
+    { label: "最近任务", value: latestUsage.taskId || "-" },
+    { label: "最近模型", value: latestUsage.model || "-" },
+    { label: "最近消费时间", value: latestUsage.occurredAt || "-" }
+  ];
+  const planItems = [
+    { label: "当前套餐", value: row.plan || "-" },
+    { label: "账号状态", value: statusLabel(row.status) },
+    { label: "可调用模型", value: latestUsage.model || "gpt-image-2" },
+    { label: "扣点规则", value: usageEvents.length ? `${Number(latestUsage.pointCost || 0)} 点 / 次` : "暂无消费" }
+  ];
+  await ElMessageBox({
+    title: "客户明细",
+    message: h("div", { class: "partner-customer-detail" }, [
+      h("header", { class: "partner-customer-detail-hero" }, [
+        h("div", { class: "partner-customer-detail-avatar" }, String(row.name || row.email || "客").slice(0, 1)),
+        h("div", { class: "partner-customer-detail-identity" }, [
+          h("strong", null, String(row.name || "-")),
+          h("span", null, String(row.email || "-")),
+          h("div", { class: "partner-customer-detail-tags" }, [
+            h("em", null, String(row.plan || "未配置套餐")),
+            h("em", { class: "is-success" }, statusLabel(row.status || "ACTIVE")),
+            h("em", null, `归属代理 ${row.referredBy || "-"}`)
+          ])
+        ]),
+        h("div", { class: "partner-customer-detail-actions" }, [
+          h("button", { type: "button" }, "复制客户ID"),
+          h("button", { type: "button", class: "is-primary" }, "查看消费明细")
+        ])
+      ]),
+      h("div", { class: "partner-customer-detail-metrics" }, metrics.map((item) => h("div", { class: "partner-customer-detail-metric" }, [
+        h("span", null, item.label),
+        h("strong", null, item.value),
+        h("small", null, item.hint)
+      ]))),
+      h("section", { class: "partner-customer-detail-split" }, [
+        h("article", { class: "partner-customer-detail-card" }, [
+          h("div", { class: "partner-customer-detail-card-title" }, "客户资料"),
+          h("div", { class: "partner-customer-detail-kv" }, profileItems.map((item) => h("div", null, [
+            h("span", null, item.label),
+            h("strong", null, String(item.value))
+          ])))
+        ]),
+        h("article", { class: "partner-customer-detail-card" }, [
+          h("div", { class: "partner-customer-detail-card-title" }, "套餐与权益"),
+          h("div", { class: "partner-customer-detail-progress" }, [
+            h("div", { class: "partner-customer-detail-progress-head" }, [
+              h("span", null, "点数使用进度"),
+              h("strong", null, `${usedPercent}%`)
+            ]),
+            h("i", null, h("b", { style: { width: `${usedPercent}%` } }))
+          ]),
+          h("div", { class: "partner-customer-detail-kv" }, planItems.map((item) => h("div", null, [
+            h("span", null, item.label),
+            h("strong", null, String(item.value))
+          ])))
+        ])
+      ]),
+      h("section", { class: "partner-customer-detail-records" }, [
+        h("nav", { class: "partner-customer-detail-tabs" }, [
+          h("span", { class: "active" }, `消费记录 ${usageEvents.length}`),
+          h("span", null, `佣金记录 ${commissions.length}`),
+          h("span", null, `订单记录 ${orders.length}`)
+        ]),
+        h("div", { class: "partner-customer-detail-table" }, [
+          h("div", { class: "partner-customer-detail-table-head" }, ["任务ID", "模型", "扣点", "消费金额", "状态", "时间"].map((item) => h("span", null, item))),
+          usageEvents.length
+            ? usageEvents.slice(0, 8).map((item) => h("div", { class: "partner-customer-detail-table-row" }, [
+                h("span", null, String(item.taskId || item.id || "-")),
+                h("span", null, String(item.model || "-")),
+                h("span", null, `${Number(item.pointCost || 0)} 点`),
+                h("span", null, moneyYuan(Number(item.amountCents || 0))),
+                h("span", { class: "is-success" }, statusLabel(item.status)),
+                h("span", null, String(item.occurredAt || "-"))
+              ]))
+            : h("p", { class: "partner-customer-detail-empty" }, "该客户暂无消费记录")
+        ])
+      ])
+    ]),
+    confirmButtonText: "知道了",
+    customClass: "partner-customer-detail-dialog"
+  });
+}
+
+async function showPartnerOrderDetail(row: AdminRecord) {
+  const detailItems = [
+    { label: "订单 ID", value: row.orderId || row.id || "-" },
+    { label: "订单类型", value: row.orderType || "-" },
+    { label: "客户", value: row.customer || row.customerId || "-" },
+    { label: "模型/套餐", value: row.model || row.plan || "-" },
+    { label: "消耗点数", value: row.pointCost === "-" ? "-" : `${Number(row.pointCost || 0)} 点` },
+    { label: "消费金额", value: moneyYuan(Number(row.amountCents || 0)) },
+    { label: "代理佣金", value: moneyYuan(Number(row.commissionCents || 0)) },
+    { label: "佣金比例", value: row.commissionRate === "-" ? "-" : `${Math.round(Number(row.commissionRate || 0) * 100)}%` },
+    { label: "状态", value: statusLabel(row.status) },
+    { label: "创建时间", value: row.createdAt || "-" },
+    { label: "扣前点数", value: row.balanceBefore ?? "-" },
+    { label: "扣后点数", value: row.balanceAfter ?? "-" }
+  ];
+  await ElMessageBox({
+    title: "订单详情",
+    message: h("div", { class: "partner-order-detail" }, [
+      h("header", { class: "partner-order-detail-hero" }, [
+        h("div", null, [
+          h("span", null, String(row.orderType || "订单")),
+          h("strong", null, String(row.orderId || row.id || "-"))
+        ]),
+        h("em", { class: String(row.status || "").toUpperCase() === "SUCCEEDED" ? "is-success" : "is-warning" }, statusLabel(row.status))
+      ]),
+      h("div", { class: "partner-order-detail-metrics" }, [
+        h("div", null, [h("span", null, "消费金额"), h("strong", null, moneyYuan(Number(row.amountCents || 0)))]),
+        h("div", null, [h("span", null, "代理佣金"), h("strong", null, moneyYuan(Number(row.commissionCents || 0)))]),
+        h("div", null, [h("span", null, "消耗点数"), h("strong", null, row.pointCost === "-" ? "-" : `${Number(row.pointCost || 0)} 点`)])
+      ]),
+      h("div", { class: "partner-order-detail-grid" }, detailItems.map((item) => h("div", null, [
+        h("span", null, item.label),
+        h("strong", null, String(item.value))
+      ]))),
+      row.prompt ? h("div", { class: "partner-order-detail-prompt" }, [
+        h("span", null, "生成提示词"),
+        h("p", null, String(row.prompt))
+      ]) : null
+    ]),
+    confirmButtonText: "知道了",
+    customClass: "partner-order-detail-dialog"
+  });
+}
+
+async function showPartnerUsageDetail(row: AdminRecord) {
+  const detailItems = [
+    { label: "任务 ID", value: row.taskId || row.id || "-" },
+    { label: "交易 ID", value: row.transactionId || "-" },
+    { label: "客户", value: row.customer || row.customerId || "-" },
+    { label: "客户 ID", value: row.customerId || row.userId || "-" },
+    { label: "模型", value: row.model || "-" },
+    { label: "计量指标", value: row.metricCode || "-" },
+    { label: "消耗点数", value: `${Number(row.pointCost || 0)} 点` },
+    { label: "消费金额", value: moneyYuan(Number(row.consumedCents || row.amountCents || 0)) },
+    { label: "代理佣金", value: moneyYuan(Number(row.commissionCents || 0)) },
+    { label: "扣前点数", value: row.balanceBefore ?? "-" },
+    { label: "扣后点数", value: row.balanceAfter ?? "-" },
+    { label: "发生时间", value: row.createdAt || row.occurredAt || "-" }
+  ];
+  await ElMessageBox({
+    title: "消费详情",
+    message: h("div", { class: "partner-order-detail" }, [
+      h("header", { class: "partner-order-detail-hero" }, [
+        h("div", null, [
+          h("span", null, "生图消费任务"),
+          h("strong", null, String(row.taskId || row.id || "-"))
+        ]),
+        h("em", { class: String(row.status || "").toUpperCase() === "SUCCEEDED" ? "is-success" : "is-warning" }, statusLabel(row.status))
+      ]),
+      h("div", { class: "partner-order-detail-metrics" }, [
+        h("div", null, [h("span", null, "消费金额"), h("strong", null, moneyYuan(Number(row.consumedCents || row.amountCents || 0)))]),
+        h("div", null, [h("span", null, "代理佣金"), h("strong", null, moneyYuan(Number(row.commissionCents || 0)))]),
+        h("div", null, [h("span", null, "消耗点数"), h("strong", null, `${Number(row.pointCost || 0)} 点`)])
+      ]),
+      h("div", { class: "partner-order-detail-grid" }, detailItems.map((item) => h("div", null, [
+        h("span", null, item.label),
+        h("strong", null, String(item.value))
+      ]))),
+      row.prompt ? h("div", { class: "partner-order-detail-prompt" }, [
+        h("span", null, "生成提示词"),
+        h("p", null, String(row.prompt))
+      ]) : null
+    ]),
+    confirmButtonText: "知道了",
+    customClass: "partner-order-detail-dialog"
+  });
+}
+
+async function showPartnerSettlementDetail(row: AdminRecord) {
+  const isWithdrawal = row.recordType === "提现";
+  const detailItems = isWithdrawal
+    ? [
+        { label: "提现单号", value: row.id || "-" },
+        { label: "代理 ID", value: row.agentId || "-" },
+        { label: "提现金额", value: moneyYuan(Number(row.amountCents || 0)) },
+        { label: "状态", value: statusLabel(row.status) },
+        { label: "申请时间", value: row.createdAt || "-" },
+        { label: "审核时间", value: row.reviewedAt || "-" }
+      ]
+    : [
+        { label: "佣金单号", value: row.id || "-" },
+        { label: "来源", value: row.settlementSource || "-" },
+        { label: "客户", value: row.customer || "-" },
+        { label: "关联订单", value: row.orderId || "-" },
+        { label: "模型", value: row.model || "-" },
+        { label: "消耗点数", value: row.pointCost === "-" ? "-" : `${Number(row.pointCost || 0)} 点` },
+        { label: "关联消费", value: moneyYuan(Number(row.relatedAmountCents || 0)) },
+        { label: "佣金金额", value: moneyYuan(Number(row.amountCents || 0)) },
+        { label: "佣金比例", value: row.commissionRate === "-" ? "-" : `${Math.round(Number(row.commissionRate || row.rate || 0) * 100)}%` },
+        { label: "状态", value: statusLabel(row.status) },
+        { label: "创建时间", value: row.createdAt || "-" }
+      ];
+  await ElMessageBox({
+    title: isWithdrawal ? "提现详情" : "佣金详情",
+    message: h("div", { class: "partner-order-detail" }, [
+      h("header", { class: "partner-order-detail-hero" }, [
+        h("div", null, [
+          h("span", null, String(row.recordType || "结算记录")),
+          h("strong", null, String(row.id || "-"))
+        ]),
+        h("em", { class: String(row.status || "").toUpperCase() === "APPROVED" ? "is-success" : String(row.status || "").toUpperCase() === "REJECTED" ? "is-danger" : "is-warning" }, statusLabel(row.status))
+      ]),
+      h("div", { class: "partner-order-detail-metrics" }, [
+        h("div", null, [h("span", null, isWithdrawal ? "提现金额" : "佣金金额"), h("strong", null, moneyYuan(Number(row.amountCents || 0)))]),
+        h("div", null, [h("span", null, isWithdrawal ? "关联状态" : "关联消费"), h("strong", null, isWithdrawal ? statusLabel(row.status) : moneyYuan(Number(row.relatedAmountCents || 0)))]),
+        h("div", null, [h("span", null, isWithdrawal ? "审核时间" : "佣金比例"), h("strong", null, isWithdrawal ? String(row.reviewedAt || "-") : row.commissionRate === "-" ? "-" : `${Math.round(Number(row.commissionRate || row.rate || 0) * 100)}%`)])
+      ]),
+      h("div", { class: "partner-order-detail-grid" }, detailItems.map((item) => h("div", null, [
+        h("span", null, item.label),
+        h("strong", null, String(item.value))
+      ])))
+    ]),
+    confirmButtonText: "知道了",
+    customClass: "partner-order-detail-dialog"
+  });
 }
 
 async function openCreateCustomerDialog() {
@@ -5451,7 +10205,51 @@ async function openCreateCustomerDialog() {
     }
   });
 }
+
+async function syncCustomerNewAPI(row: AdminRecord, overrides: AdminRecord = {}) {
+  if (!row.id) throw new Error("请选择客户");
+  const payload = {
+    channelId: String(overrides.channelId || row.modelChannelId || ""),
+    groupName: String(overrides.groupName || row.modelGroup || "生图备份"),
+    models: String(overrides.models || row.modelModels || "gpt-image-2"),
+    quotaLimit: Number(overrides.quotaLimit || row.modelQuotaLimit || row.pointsAvailable || 100000)
+  };
+  try {
+    const response = await adminRequest<{ item?: AdminRecord }>({
+      method: "POST",
+      url: `/admin/customers/${row.id}/sync-newapi`,
+      data: payload
+    });
+    const item = response.item || {};
+    await store.loadActiveModule();
+    ElMessage.success(`NewAPI 已同步：${item.channel || payload.channelId || "默认渠道"} / ${item.groupName || payload.groupName}`);
+    return item;
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "NewAPI 同步失败");
+    throw error;
+  }
+}
+
+async function fetchNewAPIGroupOptions() {
+  try {
+    const response = await adminRequest<{ items?: string[] }>({ method: "GET", url: "/admin/newapi/groups" });
+    return Array.from(new Set((response.items || []).map((item) => String(item).trim()).filter(Boolean)));
+  } catch {
+    return [];
+  }
+}
+
 async function openEditCustomerDialog(row: AdminRecord) {
+  let routeChannelSource = apiChannels.value as AdminRecord[];
+  if (routeChannelSource.length === 0) {
+    try {
+      const response = await adminRequest<{ items?: AdminRecord[] }>({ method: "GET", url: "/admin/api/provider-channels" });
+      routeChannelSource = Array.isArray(response.items) ? response.items : [];
+    } catch (error) {
+      ElMessage.warning(error instanceof Error ? `可用渠道加载失败：${error.message}` : "可用渠道加载失败");
+    }
+  }
+  const newapiGroups = await fetchNewAPIGroupOptions();
   const form = {
     name: String(row.name || ""),
     email: String(row.email || ""),
@@ -5459,98 +10257,128 @@ async function openEditCustomerDialog(row: AdminRecord) {
     status: String(row.status || "ACTIVE"),
     planId: String(row.planId || "plan_free"),
     referredBy: String(row.referredBy || ""),
-    available: String(row.pointsAvailable ?? 0)
+    available: String(row.pointsAvailable ?? 0),
+    modelChannelId: String(row.modelChannelId || ""),
+    modelChannel: String(row.modelChannel || ""),
+    modelGroup: String(row.modelGroup || "生图备份"),
+    modelModels: String(row.modelModels || "gpt-image-2"),
+    modelApiKey: "",
+    modelKeyStatus: String(row.modelKeyStatus || "ACTIVE"),
+    modelQuotaLimit: String(row.modelQuotaLimit || row.pointsAvailable || 100000)
   };
+  const channelOptions = routeChannelSource.map((channel) => ({
+    id: String(channel.id || ""),
+    name: String(channel.name || channel.provider || channel.id || ""),
+    status: String(channel.status || ""),
+    models: Array.isArray(channel.models) ? channel.models.map((item) => String(item)).filter(Boolean) : []
+  })).filter((channel) => channel.id || channel.name);
+  const matchedChannel = channelOptions.find((channel) => channel.id === form.modelChannelId)
+    || channelOptions.find((channel) => channel.name === form.modelChannel);
+  if (matchedChannel) {
+    form.modelChannelId = matchedChannel.id;
+    form.modelChannel = matchedChannel.name;
+    if (!form.modelModels.trim() && matchedChannel.models.length > 0) {
+      form.modelModels = matchedChannel.models.join(",");
+    }
+  }
+  const field = (label: string, inputNode: ReturnType<typeof h>, wide = false) => h("label", { class: ["channel-dialog-field", wide ? "channel-dialog-field-wide" : ""] }, [h("span", null, label), inputNode]);
+  const textInput = (value: string, onInput: (value: string) => void, placeholder = "", attrs: Record<string, unknown> = {}) => h("input", {
+    class: "channel-dialog-input",
+    value,
+    placeholder,
+    ...attrs,
+    onInput: (event: Event) => onInput((event.target as HTMLInputElement).value)
+  });
   await ElMessageBox({
     title: "编辑客户",
+    customClass: "channel-dialog-message-box",
     message: h("div", { class: "channel-dialog-form" }, [
-      h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
-        h("span", null, "客户名称"),
-        h("input", {
-          class: "channel-dialog-input",
-          value: form.name,
-          onInput: (event: Event) => {
-            form.name = (event.target as HTMLInputElement).value;
-          }
-        })
+      field("客户名称", textInput(form.name, (value) => { form.name = value; }), true),
+      field("登录邮箱", textInput(form.email, (value) => { form.email = value; }), true),
+      field("客户角色", h("select", {
+        class: "channel-dialog-input",
+        value: form.role,
+        onChange: (event: Event) => { form.role = (event.target as HTMLSelectElement).value; }
+      }, [
+        h("option", { value: "MEMBER" }, "普通会员"),
+        h("option", { value: "ADMIN" }, "管理员"),
+        h("option", { value: "FINANCE" }, "财务"),
+        h("option", { value: "CHANNEL_MANAGER" }, "渠道负责人"),
+        h("option", { value: "DELIVERY_MANAGER" }, "交付负责人"),
+        h("option", { value: "SUPER_ADMIN" }, "超级管理员")
+      ])),
+      field("账号状态", h("select", {
+        class: "channel-dialog-input",
+        value: form.status,
+        onChange: (event: Event) => { form.status = (event.target as HTMLSelectElement).value; }
+      }, [h("option", { value: "ACTIVE" }, "启用"), h("option", { value: "DISABLED" }, "停用")])),
+      field("套餐", h("select", {
+        class: "channel-dialog-input",
+        value: form.planId,
+        onChange: (event: Event) => { form.planId = (event.target as HTMLSelectElement).value; }
+      }, [
+        h("option", { value: "plan_free" }, "免费套餐"),
+        h("option", { value: "plan_month" }, "月度套餐"),
+        h("option", { value: "plan_year" }, "年度套餐")
+      ])),
+      field("来源代理用户 ID", textInput(form.referredBy, (value) => { form.referredBy = value; }, "例如：user_000003，可留空")),
+      field("可用点数", textInput(form.available, (value) => { form.available = value; }, "", { type: "number", min: "0" })),
+      h("div", { class: "channel-dialog-section channel-dialog-field-wide" }, [
+        h("strong", null, "模型路由配置"),
+        h("small", null, "用户端 AI 生图会优先走这里配置的渠道、分组和模型。")
       ]),
-      h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
-        h("span", null, "登录邮箱"),
-        h("input", {
-          class: "channel-dialog-input",
-          value: form.email,
-          onInput: (event: Event) => {
-            form.email = (event.target as HTMLInputElement).value;
+      h("div", { class: "channel-dialog-field channel-dialog-field-wide" }, [
+        h("button", {
+          class: "channel-dialog-action",
+          type: "button",
+          onClick: async () => {
+            try {
+              const result = await syncCustomerNewAPI(row, {
+                channelId: form.modelChannelId.trim(),
+                groupName: form.modelGroup.trim(),
+                models: form.modelModels.trim(),
+                quotaLimit: Number(form.modelQuotaLimit || 0)
+              });
+              if (result?.keyPrefix) form.modelApiKey = "";
+            } catch {
+              // syncCustomerNewAPI 已经展示错误提示。
+            }
           }
-        })
+        }, "同步 NewAPI 并自动写回 Key")
       ]),
-      h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "客户角色"),
-        h("select", {
-          class: "channel-dialog-input",
-          value: form.role,
-          onChange: (event: Event) => {
-            form.role = (event.target as HTMLSelectElement).value;
+      field("模型渠道", h("select", {
+        class: "channel-dialog-input",
+        value: form.modelChannelId,
+        onChange: (event: Event) => {
+          const selectedId = (event.target as HTMLSelectElement).value;
+          const selected = channelOptions.find((channel) => channel.id === selectedId);
+          form.modelChannelId = selected?.id || "";
+          form.modelChannel = selected?.name || "";
+          if (selected?.models?.length) {
+            form.modelModels = selected.models.join(",");
           }
-        }, [
-          h("option", { value: "MEMBER" }, "普通会员"),
-          h("option", { value: "ADMIN" }, "管理员"),
-          h("option", { value: "FINANCE" }, "财务"),
-          h("option", { value: "CHANNEL_MANAGER" }, "渠道负责人"),
-          h("option", { value: "DELIVERY_MANAGER" }, "交付负责人"),
-          h("option", { value: "SUPER_ADMIN" }, "超级管理员")
-        ])
-      ]),
-      h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "账号状态"),
-        h("select", {
-          class: "channel-dialog-input",
-          value: form.status,
-          onChange: (event: Event) => {
-            form.status = (event.target as HTMLSelectElement).value;
-          }
-        }, [
-          h("option", { value: "ACTIVE" }, "启用"),
-          h("option", { value: "DISABLED" }, "停用")
-        ])
-      ]),
-      h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "套餐"),
-        h("select", {
-          class: "channel-dialog-input",
-          value: form.planId,
-          onChange: (event: Event) => {
-            form.planId = (event.target as HTMLSelectElement).value;
-          }
-        }, [
-          h("option", { value: "plan_free" }, "免费套餐"),
-          h("option", { value: "plan_month" }, "月度套餐"),
-          h("option", { value: "plan_year" }, "年度套餐")
-        ])
-      ]),
-      h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "来源代理用户 ID"),
-        h("input", {
-          class: "channel-dialog-input",
-          value: form.referredBy,
-          placeholder: "例如：user_000003，可留空",
-          onInput: (event: Event) => {
-            form.referredBy = (event.target as HTMLInputElement).value;
-          }
-        })
-      ]),
-      h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "可用点数"),
-        h("input", {
-          class: "channel-dialog-input",
-          type: "number",
-          min: "0",
-          value: form.available,
-          onInput: (event: Event) => {
-            form.available = (event.target as HTMLInputElement).value;
-          }
-        })
-      ])
+        }
+      }, [
+        h("option", { value: "" }, "自动选择可用渠道"),
+        ...channelOptions.map((channel) => h("option", { value: channel.id }, `${channel.name}${channel.status ? `（${channel.status}）` : ""}`))
+      ]), true),
+      field("模型渠道 ID", textInput(form.modelChannelId, (value) => { form.modelChannelId = value; }, "选择渠道后自动带出", { readonly: true })),
+      field("NewAPI 用户密钥", textInput(form.modelApiKey, (value) => { form.modelApiKey = value; }, "粘贴 NewAPI 后台新增的用户 Key，不填则保留原密钥", { type: "password", autocomplete: "new-password" }), true),
+      field("模型分组", newapiGroups.length ? h("select", {
+        class: "channel-dialog-input",
+        value: form.modelGroup,
+        onChange: (event: Event) => { form.modelGroup = (event.target as HTMLSelectElement).value; }
+      }, [
+        ...(!newapiGroups.includes(form.modelGroup) && form.modelGroup ? [h("option", { value: form.modelGroup }, form.modelGroup)] : []),
+        ...newapiGroups.map((group) => h("option", { value: group }, group))
+      ]) : textInput(form.modelGroup, (value) => { form.modelGroup = value; }, "例如：生图备份")),
+      field("可用模型", textInput(form.modelModels, (value) => { form.modelModels = value; }, "多个模型用逗号分隔")),
+      field("Key 状态", h("select", {
+        class: "channel-dialog-input",
+        value: form.modelKeyStatus,
+        onChange: (event: Event) => { form.modelKeyStatus = (event.target as HTMLSelectElement).value; }
+      }, [h("option", { value: "ACTIVE" }, "启用"), h("option", { value: "DISABLED" }, "停用")])),
+      field("路由额度", textInput(form.modelQuotaLimit, (value) => { form.modelQuotaLimit = value; }, "", { type: "number", min: "0" }))
     ]),
     showCancelButton: true,
     confirmButtonText: "保存客户",
@@ -5563,6 +10391,7 @@ async function openEditCustomerDialog(row: AdminRecord) {
       const name = form.name.trim();
       const email = form.email.trim();
       const available = Number(form.available || 0);
+      const modelQuotaLimit = Number(form.modelQuotaLimit || 0);
       if (!name) {
         ElMessage.error("请填写客户名称");
         return;
@@ -5575,6 +10404,10 @@ async function openEditCustomerDialog(row: AdminRecord) {
         ElMessage.error("可用点数必须是大于等于 0 的数字");
         return;
       }
+      if (!Number.isFinite(modelQuotaLimit) || modelQuotaLimit < 0) {
+        ElMessage.error("路由额度必须是大于等于 0 的数字");
+        return;
+      }
       instance.confirmButtonLoading = true;
       try {
         await store.mutate("PATCH", `/admin/customers/${row.id}`, {
@@ -5584,7 +10417,14 @@ async function openEditCustomerDialog(row: AdminRecord) {
           status: form.status,
           planId: form.planId,
           referredBy: form.referredBy.trim(),
-          available
+          available,
+          modelChannelId: form.modelChannelId.trim(),
+          modelChannel: form.modelChannel.trim(),
+          modelGroup: form.modelGroup.trim(),
+          modelModels: form.modelModels.trim(),
+          modelApiKey: form.modelApiKey.trim(),
+          modelKeyStatus: form.modelKeyStatus,
+          modelQuotaLimit
         });
         done();
         ElMessage.success("客户已保存");
@@ -5613,7 +10453,7 @@ async function openCreateChannelDialog() {
         h("span", null, "代理商名称"),
         h("input", {
           class: "channel-dialog-input",
-          placeholder: "例如：华东一级代理",
+          placeholder: "例如：华东推广员 / 城市合伙人",
           onInput: (event: Event) => {
             form.name = (event.target as HTMLInputElement).value;
           }
@@ -5638,16 +10478,13 @@ async function openCreateChannelDialog() {
           onChange: (event: Event) => {
             form.level = (event.target as HTMLSelectElement).value;
           }
-        }, [
-          h("option", { value: "1" }, "一级代理"),
-          h("option", { value: "2" }, "二级代理")
-        ])
+        }, agentLevelOptions.map((option) => h("option", { value: option.value }, option.label)))
       ]),
       h("label", { class: "channel-dialog-field" }, [
         h("span", null, "上级代理 ID"),
         h("input", {
           class: "channel-dialog-input",
-          placeholder: "二级代理必填，如 channel_000001",
+          placeholder: "可选，如 channel_000001",
           onInput: (event: Event) => {
             form.parentId = (event.target as HTMLInputElement).value;
           }
@@ -5710,8 +10547,8 @@ async function openCreateChannelDialog() {
         ElMessage.error("请填写登录邮箱");
         return;
       }
-      if (level === 2 && !form.parentId.trim()) {
-        ElMessage.error("二级代理必须填写上级代理 ID");
+      if (!agentLevelOptions.some((option) => Number(option.value) === level)) {
+        ElMessage.error("请选择 L1-L5 代理等级");
         return;
       }
       if (!Number.isFinite(available) || available < 0) {
@@ -5739,6 +10576,155 @@ async function openCreateChannelDialog() {
     }
   });
 }
+
+async function openEditChannelDialog(row: AdminRecord) {
+  const form = {
+    name: String(row.name || ""),
+    email: String(row.email || ""),
+    level: String(row.level || "1"),
+    parentId: String(row.parentId || ""),
+    inviteCode: String(row.inviteCode || ""),
+    status: String(row.status || "ACTIVE").toUpperCase(),
+    available: row.available === undefined || row.available === null ? "" : String(row.available)
+  };
+  await ElMessageBox({
+    title: "编辑代理商",
+    message: h("div", { class: "channel-dialog-form" }, [
+      h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
+        h("span", null, "代理商名称"),
+        h("input", {
+          class: "channel-dialog-input",
+          value: form.name,
+          placeholder: "例如：华东推广员 / 城市合伙人",
+          onInput: (event: Event) => {
+            form.name = (event.target as HTMLInputElement).value;
+          }
+        })
+      ]),
+      h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
+        h("span", null, "登录邮箱"),
+        h("input", {
+          class: "channel-dialog-input",
+          value: form.email,
+          placeholder: "agent@example.com",
+          onInput: (event: Event) => {
+            form.email = (event.target as HTMLInputElement).value;
+          }
+        })
+      ]),
+      h("label", { class: "channel-dialog-field" }, [
+        h("span", null, "代理等级"),
+        h("select", {
+          class: "channel-dialog-input",
+          value: form.level,
+          onChange: (event: Event) => {
+            form.level = (event.target as HTMLSelectElement).value;
+          }
+        }, agentLevelOptions.map((option) => h("option", { value: option.value }, option.label)))
+      ]),
+      h("label", { class: "channel-dialog-field" }, [
+        h("span", null, "上级代理 ID"),
+        h("input", {
+          class: "channel-dialog-input",
+          value: form.parentId,
+          placeholder: "可选，如 channel_000001",
+          onInput: (event: Event) => {
+            form.parentId = (event.target as HTMLInputElement).value;
+          }
+        })
+      ]),
+      h("label", { class: "channel-dialog-field" }, [
+        h("span", null, "邀请码"),
+        h("input", {
+          class: "channel-dialog-input",
+          value: form.inviteCode,
+          placeholder: "不填则保留当前邀请码",
+          onInput: (event: Event) => {
+            form.inviteCode = (event.target as HTMLInputElement).value;
+          }
+        })
+      ]),
+      h("label", { class: "channel-dialog-field" }, [
+        h("span", null, "账号状态"),
+        h("select", {
+          class: "channel-dialog-input",
+          value: form.status,
+          onChange: (event: Event) => {
+            form.status = (event.target as HTMLSelectElement).value;
+          }
+        }, [
+          h("option", { value: "ACTIVE" }, "启用"),
+          h("option", { value: "DISABLED" }, "停用")
+        ])
+      ]),
+      h("label", { class: "channel-dialog-field" }, [
+        h("span", null, "可用点数"),
+        h("input", {
+          class: "channel-dialog-input",
+          type: "number",
+          min: "0",
+          value: form.available,
+          placeholder: "不填则不修改",
+          onInput: (event: Event) => {
+            form.available = (event.target as HTMLInputElement).value;
+          }
+        })
+      ])
+    ]),
+    showCancelButton: true,
+    confirmButtonText: "保存代理商",
+    cancelButtonText: "取消",
+    beforeClose: async (dialogAction, instance, done) => {
+      if (dialogAction !== "confirm") {
+        done();
+        return;
+      }
+      const name = form.name.trim();
+      const email = form.email.trim();
+      const level = Number(form.level);
+      const availableText = form.available.trim();
+      const payload: Record<string, unknown> = {
+        name,
+        email,
+        level,
+        parentId: form.parentId.trim(),
+        inviteCode: form.inviteCode.trim(),
+        status: form.status
+      };
+      if (!name) {
+        ElMessage.error("请填写代理商名称");
+        return;
+      }
+      if (!email) {
+        ElMessage.error("请填写登录邮箱");
+        return;
+      }
+      if (!agentLevelOptions.some((option) => Number(option.value) === level)) {
+        ElMessage.error("请选择 L1-L5 代理等级");
+        return;
+      }
+      if (availableText !== "") {
+        const available = Number(availableText);
+        if (!Number.isFinite(available) || available < 0) {
+          ElMessage.error("可用点数必须是大于等于 0 的数字");
+          return;
+        }
+        payload.available = available;
+      }
+      instance.confirmButtonLoading = true;
+      try {
+        await store.mutate("PATCH", `/admin/channel-agents/${row.id}`, payload);
+        done();
+        ElMessage.success("代理商已保存");
+      } catch (error) {
+        ElMessage.error(error instanceof Error ? error.message : "保存代理商失败");
+      } finally {
+        instance.confirmButtonLoading = false;
+      }
+    }
+  });
+}
+
 async function ask(label: string, value = "") {
   const result = await ElMessageBox.prompt(label, "编辑", {
     inputValue: value,
@@ -5755,6 +10741,105 @@ async function askNumber(label: string, value = 0) {
   return next;
 }
 
+async function configureNewAPIManagement() {
+  const current = (((store.data as AdminRecord)?.apiGateway as AdminRecord)?.newapi || {}) as AdminRecord;
+  const form = {
+    enabled: Boolean(current.enabled),
+    baseUrl: String(current.baseUrl || "https://code.lai1758.dpdns.org"),
+    adminCookie: String(current.adminCookie || current.adminToken || ""),
+    defaultGroup: String(current.defaultGroup || "生图备份"),
+    createUserPath: String(current.createUserPath || ""),
+    createTokenPath: String(current.createTokenPath || "/api/token/"),
+    rechargePath: String(current.rechargePath || ""),
+    timeoutSeconds: String(current.timeoutSeconds || 30)
+  };
+  const newapiGroups = await fetchNewAPIGroupOptions();
+  type NewAPITextField = Exclude<keyof typeof form, "enabled">;
+  const input = (label: string, key: NewAPITextField, placeholder = "", attrs: Record<string, unknown> = {}) => h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
+    h("span", null, label),
+    h("input", {
+      class: "channel-dialog-input",
+      value: String(form[key]),
+      placeholder,
+      ...attrs,
+      onInput: (event: Event) => {
+        (form[key] as string) = (event.target as HTMLInputElement).value;
+      }
+    })
+  ]);
+  await ElMessageBox({
+    title: "NewAPI 管理配置",
+    message: h("div", { class: "channel-dialog-form" }, [
+      h("label", { class: "channel-dialog-field channel-dialog-field-wide channel-dialog-check" }, [
+        h("input", {
+          type: "checkbox",
+          checked: form.enabled,
+          onChange: (event: Event) => { form.enabled = (event.target as HTMLInputElement).checked; }
+        }),
+        h("span", null, "启用主控 SaaS 自动同步 NewAPI 用户密钥")
+      ]),
+      input("NewAPI 管理地址", "baseUrl", "https://code.lai1758.dpdns.org"),
+      input("管理员凭证（Token/Cookie）", "adminCookie", "可填管理令牌，或 session=...; i18next=zh-CN", { type: "password", autocomplete: "new-password" }),
+      newapiGroups.length ? h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
+        h("span", null, "默认分组"),
+        h("select", {
+          class: "channel-dialog-input",
+          value: form.defaultGroup,
+          onChange: (event: Event) => { form.defaultGroup = (event.target as HTMLSelectElement).value; }
+        }, [
+          ...(!newapiGroups.includes(form.defaultGroup) && form.defaultGroup ? [h("option", { value: form.defaultGroup }, form.defaultGroup)] : []),
+          ...newapiGroups.map((group) => h("option", { value: group }, group))
+        ])
+      ]) : input("默认分组", "defaultGroup", "例如：生图备份"),
+      input("创建 Token 路径", "createTokenPath", "/api/token/"),
+      input("创建用户路径（可选）", "createUserPath", "不同 NewAPI 版本可留空"),
+      input("充值额度路径（可选）", "rechargePath", "不同 NewAPI 版本可留空"),
+      input("超时秒数", "timeoutSeconds", "30", { type: "number", min: "5" })
+    ]),
+    showCancelButton: true,
+    confirmButtonText: "保存配置",
+    cancelButtonText: "取消",
+    beforeClose: async (dialogAction, instance, done) => {
+      if (dialogAction !== "confirm") {
+        done();
+        return;
+      }
+      const timeoutSeconds = Number(form.timeoutSeconds || 30);
+      if (form.enabled && !form.baseUrl.trim()) {
+        ElMessage.error("请填写 NewAPI 管理地址");
+        return;
+      }
+      if (form.enabled && !form.adminCookie.trim()) {
+        ElMessage.error("请填写管理员凭证（Token/Cookie）");
+        return;
+      }
+      instance.confirmButtonLoading = true;
+      try {
+        await store.mutate("PATCH", "/admin/system/settings", {
+          apiGateway: {
+            newapi: {
+              enabled: form.enabled,
+              baseUrl: form.baseUrl.trim(),
+              adminCookie: form.adminCookie.trim(),
+              defaultGroup: form.defaultGroup.trim() || "生图备份",
+              createUserPath: form.createUserPath.trim(),
+              createTokenPath: form.createTokenPath.trim() || "/api/token/",
+              rechargePath: form.rechargePath.trim(),
+              timeoutSeconds: Number.isFinite(timeoutSeconds) ? timeoutSeconds : 30
+            }
+          }
+        });
+        done();
+        ElMessage.success("NewAPI 管理配置已保存");
+      } catch (error) {
+        ElMessage.error(error instanceof Error ? error.message : "保存 NewAPI 配置失败");
+      } finally {
+        instance.confirmButtonLoading = false;
+      }
+    }
+  });
+}
+
 const recommendedApiChannels: AdminRecord[] = [
   {
     name: "APIMart 生图聚合",
@@ -5763,12 +10848,28 @@ const recommendedApiChannels: AdminRecord[] = [
     imageRequestMode: "openai-json",
     imageGenerationEndpoint: "/v1/images/generations",
     imageEditEndpoint: "/v1/images/edits",
+    videoGenerationEndpoint: "/v1/videos/generations",
     fetchModelsPath: "/v1/models",
     apiKeyEnv: "APIMART_API_KEY",
     status: "CONFIGURABLE",
     priority: 10,
     models: ["gpt-image-2", "nano-banana-edit", "veo3.1-fast"],
     notes: "参考 Infinite-Canvas 推荐平台，适合聚合图片、视频和 LLM 模型。"
+  },
+  {
+    name: "移动云豆包视频",
+    baseUrl: "https://zhenze-huhehaote.cmecloud.cn/api/v3",
+    protocol: "openai",
+    imageRequestMode: "openai",
+    imageGenerationEndpoint: "/v1/images/generations",
+    imageEditEndpoint: "/v1/images/edits",
+    videoGenerationEndpoint: "contents/generations/tasks",
+    fetchModelsPath: "/models",
+    apiKeyEnv: "CME_CLOUD_API_KEY",
+    status: "CONFIGURABLE",
+    priority: 15,
+    models: ["doubao-seedance-2.0"],
+    notes: "用于豆包 Seedance 2.0 视频生成，API Key 通过后台 API Key 单独保存。"
   },
   {
     name: "ModelScope",
@@ -5806,6 +10907,7 @@ function apiChannelMutationPayload(channel: AdminRecord) {
     imageRequestMode: String(channel.imageRequestMode || "openai"),
     imageGenerationEndpoint: String(channel.imageGenerationEndpoint || "/v1/images/generations"),
     imageEditEndpoint: String(channel.imageEditEndpoint || "/v1/images/edits"),
+    videoGenerationEndpoint: String(channel.videoGenerationEndpoint || ""),
     fetchModelsPath: String(channel.fetchModelsPath || "/models"),
     apiKeyEnv: String(channel.apiKeyEnv || ""),
     comfyInstances: Array.isArray(channel.comfyInstances) ? channel.comfyInstances : [],
@@ -5813,7 +10915,7 @@ function apiChannelMutationPayload(channel: AdminRecord) {
     primary: Boolean(channel.primary),
     status: String(channel.status || "CONFIGURABLE"),
     priority: Number(channel.priority || 50),
-    models: Array.isArray(channel.models) ? channel.models.map((model) => String(model)) : ["gpt-image-2", "mock-standard"]
+    models: Array.isArray(channel.models) ? uniqueNonEmptyStrings(channel.models.map((model) => String(model))) : ["gpt-image-2", "mock-standard"]
   };
 }
 
@@ -5823,8 +10925,20 @@ async function runAction(action: string, row: AdminRecord = {}) {
       await openCreateCustomerDialog();
     } else if (action === "editCustomer") {
       await openEditCustomerDialog(row);
+    } else if (action === "syncNewAPI") {
+      await syncCustomerNewAPI(row);
+    } else if (action === "showPartnerCustomerDetail") {
+      await showPartnerCustomerDetail(row);
+    } else if (action === "showPartnerOrderDetail") {
+      await showPartnerOrderDetail(row);
+    } else if (action === "showPartnerUsageDetail") {
+      await showPartnerUsageDetail(row);
+    } else if (action === "showPartnerSettlementDetail") {
+      await showPartnerSettlementDetail(row);
     } else if (action === "createChannel") {
       await openCreateChannelDialog();
+    } else if (action === "editChannel") {
+      await openEditChannelDialog(row);
     } else if (action === "toggleChannel") {
       const status = String(row.status).toUpperCase() === "ACTIVE" ? "DISABLED" : "ACTIVE";
       await store.mutate("PATCH", `/admin/channel-agents/${row.id}`, { status });
@@ -5853,6 +10967,16 @@ async function runAction(action: string, row: AdminRecord = {}) {
       await store.mutate("POST", `/admin/orders/${row.id}/mark-paid`);
     } else if (action === "renewOrder") {
       await store.mutate("POST", `/admin/orders/${row.id}/renew`);
+    } else if (action === "editCommissionRule") {
+      const name = await ask("规则名称", String(row.name || ""));
+      const orderType = await ask("订单类型", String(row.orderType || "COMPUTE_RECHARGE"));
+      const earnerRole = await ask("获佣角色", String(row.earnerRole || "AGENT"));
+      const relationDepth = await askNumber("关系层级（1=直推，2=间推）", Number(row.relationDepth || 1));
+      const fixedAmountCents = await askNumber("固定金额（分，0 表示按比例）", Number(row.fixedAmountCents || 0));
+      const rate = await askNumber("分佣比例（0.2 表示 20%）", Number(row.rate || 0));
+      const maxTotalRate = await askNumber("总比例上限（0 表示不限）", Number(row.maxTotalRate || 0));
+      const status = await ask("状态（ACTIVE / DISABLED）", String(row.status || "ACTIVE"));
+      await store.mutate("PATCH", `/admin/marketing/commission-rules/${row.id}`, { name, orderType, earnerRole, relationDepth, fixedAmountCents, rate, maxTotalRate, status });
     } else if (action === "createCommission") {
       const orderId = await ask("订单 ID", "order_000001");
       const agentId = await ask("代理 ID", "channel_000001");
@@ -5864,11 +10988,13 @@ async function runAction(action: string, row: AdminRecord = {}) {
       const amountCents = await askNumber("提现金额（分）", 1000);
       await store.mutate("POST", "/admin/withdrawals", { agentId, amountCents });
     } else if (action === "approveWithdrawal" && String(row.status).toUpperCase() === "PENDING") {
-      await store.mutate("POST", `/admin/withdrawals/${row.id}/approve`);
+      const resource = row.recordType === "分润" ? "commissions" : "withdrawals";
+      await store.mutate("POST", `/admin/${resource}/${row.id}/approve`);
     } else if (action === "rejectWithdrawal" && String(row.status).toUpperCase() === "PENDING") {
-      await store.mutate("POST", `/admin/withdrawals/${row.id}/reject`);
+      const resource = row.recordType === "分润" ? "commissions" : "withdrawals";
+      await store.mutate("POST", `/admin/${resource}/${row.id}/reject`);
     } else if (action === "editSystem") {
-      const name = await ask("品牌名称", "先知 AI");
+      const name = await ask("品牌名称", "知启云 AI");
       const domain = await ask("绑定域名", "localhost:3100");
       await store.mutate("PATCH", "/admin/system/settings", {
         brand: { name, domain, logo: name.slice(0, 1) },
@@ -5879,6 +11005,8 @@ async function runAction(action: string, row: AdminRecord = {}) {
         ],
         permissions: ["SUPER_ADMIN", "ADMIN", "FINANCE", "CHANNEL_MANAGER", "DELIVERY_MANAGER"]
       });
+    } else if (action === "configureNewAPI") {
+      await configureNewAPIManagement();
     } else if (action === "testApiChannel") {
       if (!row.id) throw new Error("请先选择上游渠道");
       const result = await adminRequest<{ item?: AdminRecord }>({ method: "POST", url: `/admin/api/provider-channels/${row.id}/test`, data: {} });
@@ -5919,7 +11047,8 @@ function hasAuthToken() {
 function redirectToLogin() {
   localStorage.removeItem("token");
   sessionStorage.removeItem("token");
-  window.location.href = "/login";
+  authReady.value = false;
+  window.location.replace("/login");
 }
 
 async function loadCurrentAdmin() {
@@ -5928,11 +11057,23 @@ async function loadCurrentAdmin() {
     return false;
   }
   try {
-    const response = await adminRequest<{ user: AdminUser }>({ method: "GET", url: "/auth/me" });
+    const response = await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
     currentAdmin.value = response.user;
+    currentAgent.value = response.agent || null;
+    currentPermissions.value = Array.isArray(response.permissions) ? response.permissions : [];
     const role = String(response.user.role || "").toUpperCase();
-    if (isUserConsole.value) return true;
-    if (isAgentConsole.value && !role.startsWith("AGENT")) {
+    if (isUserConsole.value) {
+      if (!hasAgentIdentity.value && agentModuleIds.includes(store.activeModuleId)) {
+        store.activeModuleId = "userDashboard";
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(activeTabStorageKey, "userDashboard");
+          syncUserModulePath("userDashboard");
+        }
+      }
+      authReady.value = true;
+      return true;
+    }
+    if (isAgentConsole.value && !hasAgentIdentity.value) {
       ElMessage.error("当前账号不是代理商，请进入主控后台");
       window.location.href = "/admin/";
       return false;
@@ -5945,11 +11086,26 @@ async function loadCurrentAdmin() {
       window.location.href = "/agent/";
       return false;
     }
+    authReady.value = true;
     return true;
   } catch {
     currentAdmin.value = null;
+    currentAgent.value = null;
+    currentPermissions.value = [];
     redirectToLogin();
     return false;
+  }
+}
+
+async function loadUserAccountSnapshot() {
+  if (!isUserConsole.value || !hasAuthToken()) return;
+  try {
+    const response = await adminRequest<{ account?: AdminRecord }>({ method: "GET", url: "/points/account" });
+    if (response.account && typeof response.account === "object") {
+      userAccountSnapshot.value = response.account;
+    }
+  } catch {
+    // The active page can still render; the sidebar falls back to module data until the account endpoint is available.
   }
 }
 
@@ -6031,11 +11187,13 @@ async function changePassword() {
 }
 
 async function logout() {
+  authReady.value = false;
   try {
     await adminRequest({ method: "POST", url: "/auth/logout" });
   } catch {
     // 本地退出优先，服务端 token 失效失败不阻塞退出。
   }
+  await clearCurrentAiImageCache().catch(() => undefined);
   redirectToLogin();
 }
 
@@ -6054,17 +11212,417 @@ async function handleAccountCommand(command: string | number | object) {
 }
 
 onMounted(async () => {
+  if (typeof window !== "undefined") {
+    window.addEventListener("resize", adjustVideoPromptHeight);
+  }
   if (await loadCurrentAdmin()) {
+    hydrateVideoHistoryFromStorage();
+    void nextTick(adjustVideoPromptHeight);
+    if (typeof window !== "undefined") {
+      const routeModuleId = moduleIdFromLocationPath();
+      const savedActiveTab = window.localStorage.getItem(activeTabStorageKey);
+      const canUseModule = (moduleId: string) => allowedModuleIds.includes(moduleId) && (!agentModuleIds.includes(moduleId) || hasAgentIdentity.value);
+      const nextActiveTab = routeModuleId && canUseModule(routeModuleId)
+        ? routeModuleId
+        : savedActiveTab && canUseModule(savedActiveTab) && modules.some((item) => item.id === savedActiveTab)
+          ? savedActiveTab
+          : "";
+      if (nextActiveTab) {
+        ensureOpenTab(nextActiveTab);
+        store.activeModuleId = nextActiveTab;
+        window.localStorage.setItem(activeTabStorageKey, nextActiveTab);
+      }
+    }
+    await loadUserAccountSnapshot();
     await store.loadActiveModule();
+    void refreshAiComposerClearance();
   }
 });
 </script>
 
+<style scoped>
+.ai-reference-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+}
 
+.ai-task-action-wrap {
+  display: inline-flex;
+}
 
+.ai-task-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
 
+:global(.el-message.ai-playground-message) {
+  top: auto !important;
+  bottom: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(44rem, calc(100vw - 32px));
+  border-radius: 999px;
+  padding: 14px 20px;
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(16px);
+}
 
+:global(.el-message.ai-playground-message .el-message__content) {
+  line-height: 20px;
+  text-align: center;
+  white-space: pre-line;
+}
 
+.ai-reference-thumb {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.ai-reference-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ai-reference-thumb strong {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #eef2f7, #f8fafc);
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ai-reference-thumb > span,
+.ai-reference-thumb > button,
+.ai-reference-thumb > em {
+  position: absolute;
+}
+
+.ai-reference-thumb > span {
+  left: 4px;
+  top: 4px;
+}
+
+.ai-reference-thumb > button {
+  right: 2px;
+  top: 2px;
+}
+
+.ai-reference-thumb > em {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1px 3px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  font-style: normal;
+  text-align: center;
+}
+
+.ai-reference-thumb > em.is-error {
+  background: rgba(185, 28, 28, 0.78);
+}
+
+.ai-detail-debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-detail-debug-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #fff;
+  color: #303133;
+  cursor: pointer;
+}
+
+.ai-detail-debug-actions button:disabled {
+  color: #a8abb2;
+  cursor: not-allowed;
+}
+
+.ai-raw-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.ai-raw-modal {
+  width: min(760px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+.ai-raw-modal > header,
+.ai-raw-modal > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.ai-raw-modal > footer {
+  border-top: 1px solid #ebeef5;
+  border-bottom: 0;
+  justify-content: flex-end;
+}
+
+.ai-raw-modal h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.ai-raw-modal-close,
+.ai-raw-modal-copy,
+.ai-raw-modal > footer button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #fff;
+  color: #303133;
+  cursor: pointer;
+}
+
+.ai-raw-modal-body {
+  overflow: auto;
+  padding: 16px 18px;
+}
+
+.ai-raw-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.ai-raw-list-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.ai-raw-list-row > span {
+  color: #606266;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ai-raw-list-row > button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  background: #fff;
+  color: #303133;
+  cursor: pointer;
+}
+
+.ai-raw-list-row code {
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #1f2937;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-raw-modal pre {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+:global(.channel-dialog-form) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+:global(.channel-dialog-message-box) {
+  width: min(760px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px);
+}
+
+:global(.channel-dialog-message-box .el-message-box__content) {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 18px;
+}
+
+:global(.channel-dialog-message-box .el-message-box__message) {
+  width: 100%;
+}
+
+:global(.channel-dialog-message-box .el-message-box__btns) {
+  padding-top: 14px;
+}
+
+:global(.channel-dialog-field) {
+  display: grid;
+  gap: 6px;
+  color: #303133;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:global(.channel-dialog-field-wide),
+:global(.channel-dialog-section) {
+  grid-column: 1 / -1;
+}
+
+:global(.channel-dialog-input) {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  outline: 0;
+  color: #303133;
+  font-size: 14px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+:global(.channel-dialog-input:focus) {
+  border-color: #409eff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.12);
+}
+
+:global(.channel-dialog-check) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+:global(.channel-dialog-check input) {
+  width: 16px;
+  height: 16px;
+}
+
+:global(.channel-dialog-section) {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f5f7fa;
+  color: #606266;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+:global(.channel-dialog-action) {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: #409eff;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+:global(.channel-dialog-action:hover) {
+  background: #337ecc;
+}
+
+.membership-order-panel .user-order-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(255, 255, 255, 0.08);
+  --el-table-row-hover-bg-color: rgba(20, 184, 166, 0.18);
+  --el-table-border-color: rgba(255, 255, 255, 0.11);
+  --el-table-text-color: #e5eef7;
+  --el-table-header-text-color: #f8fafc;
+}
+
+.membership-order-panel :deep(.user-order-table.el-table) {
+  background: transparent;
+  color: #e5eef7;
+}
+
+.membership-order-panel :deep(.user-order-table .el-table__inner-wrapper::before) {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.membership-order-panel :deep(.user-order-table th.el-table__cell) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+}
+
+.membership-order-panel :deep(.user-order-table tr),
+.membership-order-panel :deep(.user-order-table td.el-table__cell) {
+  background: transparent;
+  color: #e5eef7;
+}
+
+.membership-order-panel :deep(.user-order-table .el-table__row--striped td.el-table__cell) {
+  background: rgba(255, 255, 255, 0.055);
+  color: #f8fafc;
+}
+
+.membership-order-panel :deep(.user-order-table .el-table__row:hover > td.el-table__cell) {
+  background: rgba(20, 184, 166, 0.18);
+  color: #ffffff;
+}
+
+@media (max-width: 720px) {
+  :global(.channel-dialog-form) {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
 
 
 

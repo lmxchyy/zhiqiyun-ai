@@ -47,11 +47,24 @@ CREATE TABLE IF NOT EXISTS xz_point_accounts (
 CREATE TABLE IF NOT EXISTS xz_orders (
   id TEXT PRIMARY KEY,
   user_id TEXT,
+  buyer_user_id TEXT,
   plan_id TEXT,
+  order_type TEXT,
+  business_order_type TEXT,
   amount_cents BIGINT NOT NULL DEFAULT 0,
+  token_amount BIGINT NOT NULL DEFAULT 0,
+  token_grant_amount BIGINT NOT NULL DEFAULT 0,
+  token_grant_value_cents BIGINT NOT NULL DEFAULT 0,
+  platform_income_cents BIGINT NOT NULL DEFAULT 0,
+  direct_agent_id TEXT,
+  parent_agent_id TEXT,
+  operation_center_id TEXT,
+  fulfillment_status TEXT,
+  fulfilled_at TEXT,
   status TEXT,
   paid_at TEXT,
   created_at TEXT,
+  reward_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   price_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
@@ -80,6 +93,29 @@ CREATE TABLE IF NOT EXISTS xz_commissions (
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS xz_billing_events (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT,
+  user_id TEXT,
+  agent_id TEXT,
+  tenant_id TEXT,
+  operation_center_id TEXT,
+  module_code TEXT,
+  task_id TEXT,
+  metric_code TEXT,
+  quantity BIGINT NOT NULL DEFAULT 0,
+  unit_amount_cents BIGINT NOT NULL DEFAULT 0,
+  amount_cents BIGINT NOT NULL DEFAULT 0,
+  point_cost BIGINT NOT NULL DEFAULT 0,
+  balance_before BIGINT NOT NULL DEFAULT 0,
+  balance_after BIGINT NOT NULL DEFAULT 0,
+  model TEXT,
+  status TEXT,
+  occurred_at TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE TABLE IF NOT EXISTS xz_withdrawals (
   id TEXT PRIMARY KEY,
   agent_id TEXT,
@@ -90,11 +126,41 @@ CREATE TABLE IF NOT EXISTS xz_withdrawals (
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS xz_token_records (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  order_id TEXT,
+  change_type TEXT NOT NULL,
+  amount BIGINT NOT NULL DEFAULT 0,
+  balance_after BIGINT NOT NULL DEFAULT 0,
+  remark TEXT,
+  created_at TEXT,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE(order_id, change_type)
+);
+
+CREATE TABLE IF NOT EXISTS xz_operation_centers (
+  id TEXT PRIMARY KEY,
+  user_id TEXT UNIQUE,
+  name TEXT,
+  region TEXT,
+  invite_code TEXT UNIQUE,
+  status TEXT,
+  join_order_id TEXT,
+  join_fee_cents BIGINT NOT NULL DEFAULT 0,
+  approved_at TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE TABLE IF NOT EXISTS xz_generation_tasks (
   id TEXT PRIMARY KEY,
   user_id TEXT,
+  module_code TEXT,
   type TEXT,
   model TEXT,
+  billing_type TEXT,
   status TEXT,
   progress INT NOT NULL DEFAULT 0,
   point_cost BIGINT NOT NULL DEFAULT 0,
@@ -135,6 +201,12 @@ CREATE TABLE IF NOT EXISTS xz_ai_state (
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS xz_system_settings (
+  id TEXT PRIMARY KEY,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS xz_api_channels (
   id TEXT PRIMARY KEY,
   name TEXT,
@@ -154,13 +226,36 @@ CREATE TABLE IF NOT EXISTS xz_api_keys (
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS xz_user_model_routes (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  provider TEXT,
+  channel_id TEXT,
+  channel TEXT,
+  api_key_id TEXT,
+  key_prefix TEXT,
+  group_name TEXT,
+  models JSONB NOT NULL DEFAULT '[]'::jsonb,
+  quota_limit BIGINT NOT NULL DEFAULT 0,
+  quota_used BIGINT NOT NULL DEFAULT 0,
+  status TEXT,
+  updated_at TEXT,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE INDEX IF NOT EXISTS idx_xz_users_role ON xz_users(role);
 CREATE INDEX IF NOT EXISTS idx_xz_orders_user_id ON xz_orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_orders_status ON xz_orders(status);
 CREATE INDEX IF NOT EXISTS idx_xz_channel_agents_user_id ON xz_channel_agents(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_operation_centers_user_id ON xz_operation_centers(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_token_records_user_id ON xz_token_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_id ON xz_generation_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_module_code ON xz_generation_tasks(module_code);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_id ON xz_assets(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_billing_events_module_code ON xz_billing_events(module_code);
 CREATE INDEX IF NOT EXISTS idx_xz_api_channels_status ON xz_api_channels(status);
+CREATE INDEX IF NOT EXISTS idx_xz_user_model_routes_user_id ON xz_user_model_routes(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_user_model_routes_status ON xz_user_model_routes(status);
 `
 
 func (b postgresStateBackend) syncRuntimeProjections(ctx context.Context, content []byte) error {
@@ -186,10 +281,16 @@ func (b postgresStateBackend) syncRuntimeProjections(ctx context.Context, conten
 	if err := upsertPointAccounts(ctx, tx, data.PointAccounts); err != nil {
 		return err
 	}
+	if err := upsertTokenRecords(ctx, tx, data.TokenRecords); err != nil {
+		return err
+	}
 	if err := upsertOrders(ctx, tx, data.Orders); err != nil {
 		return err
 	}
 	if err := upsertChannelAgents(ctx, tx, data.ChannelAgents); err != nil {
+		return err
+	}
+	if err := upsertOperationCenters(ctx, tx, data.OperationCenters); err != nil {
 		return err
 	}
 	if err := upsertCommissions(ctx, tx, data.Commissions); err != nil {
@@ -208,6 +309,9 @@ func (b postgresStateBackend) syncRuntimeProjections(ctx context.Context, conten
 		return err
 	}
 	if err := upsertAPIKeys(ctx, tx, data.APIKeys); err != nil {
+		return err
+	}
+	if err := upsertUserModelRoutesFromUsers(ctx, tx, data.Users); err != nil {
 		return err
 	}
 
@@ -276,6 +380,18 @@ func upsertPointAccounts(ctx context.Context, tx *sql.Tx, items []adminPointAcco
 		if err != nil {
 			return fmt.Errorf("upsert xz_point_accounts %s: %w", item.ID, err)
 		}
+		if err := upsertUserWalletFromPointAccount(ctx, tx, item); err != nil {
+			return fmt.Errorf("upsert xz_user_wallets %s: %w", item.UserID, err)
+		}
+	}
+	return nil
+}
+
+func upsertTokenRecords(ctx context.Context, tx *sql.Tx, items []adminTokenRecord) error {
+	for _, item := range items {
+		if err := insertTokenRecord(ctx, tx, item); err != nil {
+			return fmt.Errorf("upsert xz_token_records %s: %w", item.ID, err)
+		}
 	}
 	return nil
 }
@@ -283,18 +399,31 @@ func upsertPointAccounts(ctx context.Context, tx *sql.Tx, items []adminPointAcco
 func upsertOrders(ctx context.Context, tx *sql.Tx, items []adminOrder) error {
 	for _, item := range items {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO xz_orders (id, user_id, plan_id, amount_cents, status, paid_at, created_at, price_snapshot, raw)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+			INSERT INTO xz_orders (id, user_id, buyer_user_id, plan_id, order_type, business_order_type, amount_cents, token_amount, token_grant_amount, token_grant_value_cents, platform_income_cents, direct_agent_id, parent_agent_id, operation_center_id, fulfillment_status, fulfilled_at, status, paid_at, created_at, reward_snapshot, price_snapshot, raw)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22::jsonb)
 			ON CONFLICT (id) DO UPDATE SET
 				user_id = excluded.user_id,
+				buyer_user_id = excluded.buyer_user_id,
 				plan_id = excluded.plan_id,
+				order_type = excluded.order_type,
+				business_order_type = excluded.business_order_type,
 				amount_cents = excluded.amount_cents,
+				token_amount = excluded.token_amount,
+				token_grant_amount = excluded.token_grant_amount,
+				token_grant_value_cents = excluded.token_grant_value_cents,
+				platform_income_cents = excluded.platform_income_cents,
+				direct_agent_id = excluded.direct_agent_id,
+				parent_agent_id = excluded.parent_agent_id,
+				operation_center_id = excluded.operation_center_id,
+				fulfillment_status = excluded.fulfillment_status,
+				fulfilled_at = excluded.fulfilled_at,
 				status = excluded.status,
 				paid_at = excluded.paid_at,
 				created_at = excluded.created_at,
+				reward_snapshot = excluded.reward_snapshot,
 				price_snapshot = excluded.price_snapshot,
 				raw = excluded.raw
-		`, item.ID, item.UserID, item.PlanID, orderAmount(item), item.Status, item.PaidAt, item.CreatedAt, jsonProjection(item.PriceSnapshot), jsonProjection(item))
+		`, item.ID, item.UserID, firstNonEmptyString(item.BuyerUserID, item.UserID), item.PlanID, item.OrderType, businessOrderTypeFromOrder(item), orderAmount(item), firstNonEmptyInt(item.TokenAmount, item.TokenGrantAmount), item.TokenGrantAmount, intValue(item.PriceSnapshot["tokenGrantValueCents"]), item.PlatformIncomeCents, item.DirectAgentID, item.ParentAgentID, item.OperationCenterID, item.FulfillmentStatus, item.FulfilledAt, item.Status, item.PaidAt, item.CreatedAt, jsonProjection(item.RewardSnapshot), jsonProjection(item.PriceSnapshot), jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_orders %s: %w", item.ID, err)
 		}
@@ -320,6 +449,18 @@ func upsertChannelAgents(ctx context.Context, tx *sql.Tx, items []adminChannelAg
 		if err != nil {
 			return fmt.Errorf("upsert xz_channel_agents %s: %w", item.ID, err)
 		}
+		if err := upsertAgentProfileFromChannelAgent(ctx, tx, item); err != nil {
+			return fmt.Errorf("upsert xz_agent_profiles %s: %w", item.ID, err)
+		}
+	}
+	return nil
+}
+
+func upsertOperationCenters(ctx context.Context, tx *sql.Tx, items []adminOperationCenter) error {
+	for _, item := range items {
+		if err := insertOperationCenter(ctx, tx, item); err != nil {
+			return fmt.Errorf("upsert xz_operation_centers %s: %w", item.ID, err)
+		}
 	}
 	return nil
 }
@@ -342,6 +483,9 @@ func upsertCommissions(ctx context.Context, tx *sql.Tx, items []adminCommission)
 		if err != nil {
 			return fmt.Errorf("upsert xz_commissions %s: %w", item.ID, err)
 		}
+		if err := refreshAgentWallet(ctx, tx, item.AgentID); err != nil {
+			return fmt.Errorf("refresh xz_agent_wallets %s: %w", item.AgentID, err)
+		}
 	}
 	return nil
 }
@@ -361,6 +505,9 @@ func upsertWithdrawals(ctx context.Context, tx *sql.Tx, items []adminWithdrawal)
 		`, item.ID, item.AgentID, item.AmountCents, item.Status, item.CreatedAt, item.ReviewedAt, jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_withdrawals %s: %w", item.ID, err)
+		}
+		if err := refreshAgentWallet(ctx, tx, item.AgentID); err != nil {
+			return fmt.Errorf("refresh xz_agent_wallets %s: %w", item.AgentID, err)
 		}
 	}
 	return nil
@@ -453,6 +600,20 @@ func upsertAPIKeys(ctx context.Context, tx *sql.Tx, items []adminAPIKey) error {
 		`, item.ID, item.Customer, item.Prefix, item.Status, item.QuotaLimit, jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_api_keys %s: %w", item.ID, err)
+		}
+	}
+	return nil
+}
+
+func upsertUserModelRoutesFromUsers(ctx context.Context, tx *sql.Tx, users []adminUser) error {
+	for _, user := range users {
+		for _, route := range user.ModelRoutes {
+			if route.ID == "" {
+				continue
+			}
+			if err := insertUserModelRoute(ctx, tx, user.ID, route); err != nil {
+				return fmt.Errorf("upsert xz_user_model_routes %s: %w", route.ID, err)
+			}
 		}
 	}
 	return nil
