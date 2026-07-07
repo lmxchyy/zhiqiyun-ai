@@ -33,6 +33,28 @@ function hasRunningAiGenerationSnapshot(data: AdminRecord) {
   return recentTasks.some((task) => task && typeof task === "object" && !isVideoGenerationRecord(task as AdminRecord) && isAiGenerationTaskRunning(task as AdminRecord));
 }
 
+function usesAiImageSnapshot(moduleId: string) {
+  return ["userAiImage", "userWirelessCanvas", "userWorks"].includes(moduleId);
+}
+
+function usesInstantWorkspace(moduleId: string) {
+  return ["userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId);
+}
+
+function emptyOnlineWorkspaceData(): AdminRecord {
+  return {
+    summary: {},
+    metrics: [],
+    providers: [],
+    models: [],
+    recentTasks: [],
+    recentAssets: [],
+    assets: [],
+    aiState: {},
+    queue: {}
+  };
+}
+
 export const adminModules: AdminModule[] = [
   { id: "userDashboard", title: "用户首页", endpoint: "/user/dashboard" },
   { id: "userAiImage", title: "AI生图", endpoint: "/user/online-image" },
@@ -117,11 +139,14 @@ export const useAdminStore = defineStore("admin", {
       await this.loadActiveModule();
     },
     async loadActiveModule(options: { preferCache?: boolean; silent?: boolean } = {}) {
+      const moduleId = this.activeModuleId;
+      const endpoint = this.activeModule.endpoint;
       const preferCache = options.preferCache !== false;
       const silent = options.silent === true;
       let hasCachedAiImageData = false;
-      const usesAiImageWorkspace = ["userAiImage", "userWirelessCanvas", "userWorks"].includes(this.activeModuleId);
-      if (usesAiImageWorkspace && preferCache) {
+      const shouldUseAiImageSnapshot = usesAiImageSnapshot(moduleId);
+      const shouldRenderInstantly = usesInstantWorkspace(moduleId);
+      if (shouldUseAiImageSnapshot && preferCache) {
         try {
           const cached = await readAiImageSnapshot();
           if (cached?.data && !hasRunningAiGenerationSnapshot(cached.data)) {
@@ -132,11 +157,14 @@ export const useAdminStore = defineStore("admin", {
           // IndexedDB is an optional UI cache; ignore read failures.
         }
       }
+      if (shouldRenderInstantly && !hasCachedAiImageData) {
+        this.data = emptyOnlineWorkspaceData();
+      }
       if (!silent) {
-        this.loading = !hasCachedAiImageData;
+        this.loading = !shouldRenderInstantly && !hasCachedAiImageData;
       }
       this.error = "";
-      if (!this.activeModule.endpoint) {
+      if (!endpoint) {
         this.data = {};
         if (!silent) {
           this.loading = false;
@@ -144,14 +172,18 @@ export const useAdminStore = defineStore("admin", {
         return;
       }
       try {
-        this.data = await adminRequest<AdminRecord>({ method: "GET", url: this.activeModule.endpoint });
-        if (usesAiImageWorkspace) {
+        const data = await adminRequest<AdminRecord>({ method: "GET", url: endpoint });
+        if (this.activeModuleId !== moduleId) return;
+        this.data = data;
+        if (shouldUseAiImageSnapshot) {
           void writeAiImageSnapshot(this.data).catch(() => undefined);
         }
       } catch (error) {
-        this.error = error instanceof Error ? error.message : "加载失败";
+        if (this.activeModuleId === moduleId) {
+          this.error = error instanceof Error ? error.message : "加载失败";
+        }
       } finally {
-        if (!silent) {
+        if (this.activeModuleId === moduleId && !silent) {
           this.loading = false;
         }
       }

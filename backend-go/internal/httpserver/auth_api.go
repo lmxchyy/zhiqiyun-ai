@@ -208,6 +208,37 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
+	if store, ok := a.store.(activeIdentityStore); ok {
+		userID, err := authenticatedUserID(r, a.sessions)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, err)
+			return
+		}
+		user, found, err := store.GetActiveUser(userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !found {
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") && !strings.EqualFold(user.AgentStatus, "ACTIVE") {
+			writeJSON(w, authResponse(adminPlatformData{Users: []adminUser{user}}, user, false))
+			return
+		}
+		agent, hasAgent, err := store.GetChannelAgentForUser(user.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if hasAgent {
+			writeJSON(w, authResponse(adminPlatformData{Users: []adminUser{user}, ChannelAgents: []adminChannelAgent{agent}}, user, false))
+			return
+		}
+		writeJSON(w, authResponse(adminPlatformData{Users: []adminUser{user}}, user, false))
+		return
+	}
 	data, err := a.store.AdminData()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -269,23 +300,9 @@ func (a authAPI) changePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adminUser, error) {
-	token := bearerToken(r)
-	if token == "" {
-		return adminUser{}, errUnauthorized
-	}
-	userID := ""
-	if a.sessions != nil {
-		cachedUserID, ok, err := a.sessions.UserID(r.Context(), token)
-		if err != nil || !ok {
-			return adminUser{}, errUnauthorized
-		}
-		userID = cachedUserID
-	} else {
-		payload, err := decodeAuthToken(token)
-		if err != nil || payload.UserID == "" {
-			return adminUser{}, errUnauthorized
-		}
-		userID = payload.UserID
+	userID, err := authenticatedUserID(r, a.sessions)
+	if err != nil {
+		return adminUser{}, err
 	}
 	for _, user := range data.Users {
 		if user.ID == userID && strings.EqualFold(user.Status, "ACTIVE") {
@@ -293,6 +310,25 @@ func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adm
 		}
 	}
 	return adminUser{}, errUnauthorized
+}
+
+func authenticatedUserID(r *http.Request, sessions authSessionStore) (string, error) {
+	token := bearerToken(r)
+	if token == "" {
+		return "", errUnauthorized
+	}
+	if sessions != nil {
+		userID, ok, err := sessions.UserID(r.Context(), token)
+		if err != nil || !ok || userID == "" {
+			return "", errUnauthorized
+		}
+		return userID, nil
+	}
+	payload, err := decodeAuthToken(token)
+	if err != nil || payload.UserID == "" {
+		return "", errUnauthorized
+	}
+	return payload.UserID, nil
 }
 
 func bearerToken(r *http.Request) string {

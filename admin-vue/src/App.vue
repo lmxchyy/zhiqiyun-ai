@@ -584,7 +584,7 @@
               <div class="online-panel-head"><div><strong>最近生成</strong><small>按任务更新时间展示，可复用提示词和风格</small></div><el-button link type="primary" @click="selectAdminModule('userWorks')">作品中心</el-button></div>
               <div class="online-history-grid">
                 <article v-for="item in onlineHistoryItems" :key="String(item.id)" class="online-history-card">
-                  <div class="online-history-thumb"><img v-if="item.thumbnailUrl" :src="String(item.thumbnailUrl)" alt="作品缩略图" /><span v-else>{{ String(item.model || 'AI').slice(0, 2) }}</span></div>
+                  <div class="online-history-thumb"><img v-if="aiTaskThumbnailUrl(item)" :src="aiTaskThumbnailUrl(item)" alt="作品缩略图" /><span v-else>{{ String(item.model || 'AI').slice(0, 2) }}</span></div>
                   <strong>{{ item.name || item.prompt || item.id }}</strong>
                   <small>{{ item.model || '-' }} · {{ item.pointCost || 0 }} 点</small>
                 </article>
@@ -702,99 +702,105 @@
                     </div>
                   </article>
                 </div>
-                <div v-else-if="aiGalleryCards.length" class="ai-gallery-grid">
-                  <article
-                    v-for="task in aiGalleryCards"
-                    :key="String(task.id || task.name)"
-                    :class="['ai-task-card', aiTaskStatusClass(task), { 'is-selected': aiSelectedTaskIds.includes(aiTaskId(task)), 'is-selection-mode': aiMobileSelectionMode }]"
-                    @click="handleAiTaskCardClick(task, $event)"
-                    @mouseenter="prefetchAiOriginalImage(task)"
-                    @focusin="prefetchAiOriginalImage(task)"
-                    @touchstart.passive="handleAiTaskTouchStart(task, $event)"
-                    @touchmove.passive="handleAiTaskTouchMove"
-                    @touchend.passive="handleAiTaskTouchEnd"
-                    @touchcancel.passive="handleAiTaskTouchEnd"
-                  >
-                    <div v-if="aiSelectedTaskIds.includes(aiTaskId(task))" class="ai-task-selected-corner" aria-hidden="true">
-                      <el-icon><Check /></el-icon>
-                    </div>
-                    <div class="ai-task-thumb">
-                      <div class="ai-task-badges">
-                        <span v-if="isAiTaskRunning(task)" class="ai-task-badge is-time">
-                          <i></i>
-                          {{ aiTaskDuration(task) }}
-                        </span>
-                        <template v-else>
-                          <span class="ai-task-badge">{{ aiTaskRatioLabel(task) }}</span>
-                          <span class="ai-task-badge">{{ aiTaskResolutionLabel(task) }}</span>
-                        </template>
+                <template v-else-if="aiGalleryCards.length">
+                  <div class="ai-gallery-grid">
+                    <article
+                      v-for="task in visibleAiGalleryCards"
+                      :key="String(task.id || task.name)"
+                      :class="['ai-task-card', aiTaskStatusClass(task), { 'is-selected': aiSelectedTaskIds.includes(aiTaskId(task)), 'is-selection-mode': aiMobileSelectionMode }]"
+                      @click="handleAiTaskCardClick(task, $event)"
+                      @mouseenter="prefetchAiOriginalImage(task)"
+                      @focusin="prefetchAiOriginalImage(task)"
+                      @touchstart.passive="handleAiTaskTouchStart(task, $event)"
+                      @touchmove.passive="handleAiTaskTouchMove"
+                      @touchend.passive="handleAiTaskTouchEnd"
+                      @touchcancel.passive="handleAiTaskTouchEnd"
+                    >
+                      <div v-if="aiSelectedTaskIds.includes(aiTaskId(task))" class="ai-task-selected-corner" aria-hidden="true">
+                        <el-icon><Check /></el-icon>
                       </div>
-                      <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="AI 生图任务缩略图" loading="lazy" decoding="async" />
-                      <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
-                        <span class="ai-task-spinner"></span>
-                        <strong>生成中...</strong>
+                      <div class="ai-task-thumb">
+                        <div class="ai-task-badges">
+                          <span v-if="isAiTaskRunning(task)" class="ai-task-badge is-time">
+                            <i></i>
+                            {{ aiTaskDuration(task) }}
+                          </span>
+                          <template v-else>
+                            <span class="ai-task-badge">{{ aiTaskRatioLabel(task) }}</span>
+                            <span class="ai-task-badge">{{ aiTaskResolutionLabel(task) }}</span>
+                          </template>
+                        </div>
+                        <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="AI 生图任务缩略图" loading="lazy" decoding="async" />
+                        <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
+                          <span class="ai-task-spinner"></span>
+                          <strong>生成中...</strong>
+                        </div>
+                        <div v-else-if="isAiTaskFailed(task)" class="ai-task-failed">
+                          <el-icon><Monitor /></el-icon>
+                          <strong>生成失败</strong>
+                        </div>
+                        <el-icon v-else><Monitor /></el-icon>
                       </div>
-                      <div v-else-if="isAiTaskFailed(task)" class="ai-task-failed">
-                        <el-icon><Monitor /></el-icon>
-                        <strong>生成失败</strong>
-                      </div>
-                      <el-icon v-else><Monitor /></el-icon>
-                    </div>
-                    <div class="ai-task-info">
-                      <div class="ai-task-copy">
-                        <strong>{{ task.prompt || task.name || 'AI 生图任务' }}</strong>
-                        <span v-if="isAiTaskFailed(task)" class="ai-task-error">{{ aiTaskErrorMessage(task) }}</span>
-                      </div>
-                      <div class="ai-task-pills">
-                        <span class="ai-task-model-pill">&lt;/&gt; {{ aiTaskModelLabel(task) }}</span>
-                      </div>
-                      <div class="ai-task-actions">
-                        <el-tooltip :content="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'" placement="top" :show-after="180">
-                          <button
-                            type="button"
-                            :class="{ 'is-favorite': isAiTaskFavorite(task) }"
-                            :aria-label="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'"
-                            :title="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'"
-                            @click.stop="openAiFavoritePicker([aiTaskId(task)])"
-                          >
-                            <el-icon><component :is="isAiTaskFavorite(task) ? StarFilled : Star" /></el-icon>
-                          </button>
-                        </el-tooltip>
-                        <el-tooltip :content="isAiTaskFailed(task) ? '重试生成' : '复用配置'" placement="top" :show-after="180">
-                          <button
-                            type="button"
-                            :class="{ retry: isAiTaskFailed(task) }"
-                            :aria-label="isAiTaskFailed(task) ? '重试生成' : '复用配置'"
-                            :title="isAiTaskFailed(task) ? '重试生成' : '复用配置'"
-                            :disabled="onlineSubmitting && isAiTaskFailed(task)"
-                            @click.stop="isAiTaskFailed(task) ? retryAiTask(task) : reuseAiTask(task)"
-                          >
-                            <el-icon><Refresh /></el-icon>
-                            <span v-if="isAiTaskFailed(task)">重试</span>
-                          </button>
-                        </el-tooltip>
-                        <el-tooltip :content="aiTaskImageUrl(task) ? '编辑输出' : '图片生成完成后才能编辑输出'" placement="top" :show-after="180">
-                          <span class="ai-task-action-wrap">
+                      <div class="ai-task-info">
+                        <div class="ai-task-copy">
+                          <strong>{{ task.prompt || task.name || 'AI 生图任务' }}</strong>
+                          <span v-if="isAiTaskFailed(task)" class="ai-task-error">{{ aiTaskErrorMessage(task) }}</span>
+                        </div>
+                        <div class="ai-task-pills">
+                          <span class="ai-task-model-pill">&lt;/&gt; {{ aiTaskModelLabel(task) }}</span>
+                        </div>
+                        <div class="ai-task-actions">
+                          <el-tooltip :content="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'" placement="top" :show-after="180">
                             <button
                               type="button"
-                              aria-label="编辑输出"
-                              :title="aiTaskImageUrl(task) ? '编辑输出' : '图片生成完成后才能编辑输出'"
-                              :disabled="!aiTaskImageUrl(task)"
-                              @click.stop="editAiTaskOutput(task)"
+                              :class="{ 'is-favorite': isAiTaskFavorite(task) }"
+                              :aria-label="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'"
+                              :title="isAiTaskFavorite(task) ? '编辑收藏夹' : '收藏任务'"
+                              @click.stop="openAiFavoritePicker([aiTaskId(task)])"
                             >
-                              <el-icon><EditPen /></el-icon>
+                              <el-icon><component :is="isAiTaskFavorite(task) ? StarFilled : Star" /></el-icon>
                             </button>
-                          </span>
-                        </el-tooltip>
-                        <el-tooltip content="删除任务" placement="top" :show-after="180">
-                          <button type="button" class="danger" aria-label="删除任务" title="删除任务" @click.stop="deleteAiTask(task)">
-                            <el-icon><Delete /></el-icon>
-                          </button>
-                        </el-tooltip>
+                          </el-tooltip>
+                          <el-tooltip :content="isAiTaskFailed(task) ? '重试生成' : '复用配置'" placement="top" :show-after="180">
+                            <button
+                              type="button"
+                              :class="{ retry: isAiTaskFailed(task) }"
+                              :aria-label="isAiTaskFailed(task) ? '重试生成' : '复用配置'"
+                              :title="isAiTaskFailed(task) ? '重试生成' : '复用配置'"
+                              :disabled="onlineSubmitting && isAiTaskFailed(task)"
+                              @click.stop="isAiTaskFailed(task) ? retryAiTask(task) : reuseAiTask(task)"
+                            >
+                              <el-icon><Refresh /></el-icon>
+                              <span v-if="isAiTaskFailed(task)">重试</span>
+                            </button>
+                          </el-tooltip>
+                          <el-tooltip :content="aiTaskImageUrl(task) ? '编辑输出' : '图片生成完成后才能编辑输出'" placement="top" :show-after="180">
+                            <span class="ai-task-action-wrap">
+                              <button
+                                type="button"
+                                aria-label="编辑输出"
+                                :title="aiTaskImageUrl(task) ? '编辑输出' : '图片生成完成后才能编辑输出'"
+                                :disabled="!aiTaskImageUrl(task)"
+                                @click.stop="editAiTaskOutput(task)"
+                              >
+                                <el-icon><EditPen /></el-icon>
+                              </button>
+                            </span>
+                          </el-tooltip>
+                          <el-tooltip content="删除任务" placement="top" :show-after="180">
+                            <button type="button" class="danger" aria-label="删除任务" title="删除任务" @click.stop="deleteAiTask(task)">
+                              <el-icon><Delete /></el-icon>
+                            </button>
+                          </el-tooltip>
+                        </div>
                       </div>
+                    </article>
+                    <div v-if="hasMoreAiGalleryCards" class="ai-gallery-load-more">
+                      <span>已显示 {{ visibleAiGalleryCards.length }} / {{ aiGalleryCards.length }}</span>
+                      <button type="button" @click="loadMoreAiGalleryCards">加载更多</button>
                     </div>
-                  </article>
-                </div>
+                  </div>
+                </template>
                 <div v-else class="ai-empty-state">
                   <el-icon><Monitor /></el-icon>
                   <span>输入提示词开始生成图片</span>
@@ -2138,16 +2144,16 @@
                   </header>
                   <div v-if="filteredVideoHistory.length" class="video-history-grid">
                     <article
-                      v-for="entry in filteredVideoHistory"
+                      v-for="entry in visibleVideoHistory"
                       :key="entry.id"
                       :class="['video-history-card', `is-${entry.status}`]"
                       @click="openVideoFullscreen(entry)"
                     >
-                      <div class="video-history-media" @mouseenter="playVideoCardPreview" @mouseleave="resetVideoCardPreview">
-                        <video v-if="entry.url" :src="entry.url" muted playsinline loop preload="metadata"></video>
+                      <div class="video-history-media" @mouseenter="playVideoCardPreview($event, entry)" @mouseleave="resetVideoCardPreview">
+                        <video v-if="videoHistoryCardSrc(entry)" :src="videoHistoryCardSrc(entry)" muted playsinline loop preload="none"></video>
                         <div v-else class="video-history-placeholder">
                           <el-icon><Monitor /></el-icon>
-                          <span>{{ entry.status === 'failed' ? '生成失败' : '生成中' }}</span>
+                          <span>{{ entry.url ? '悬停预览' : entry.status === 'failed' ? '生成失败' : '生成中' }}</span>
                         </div>
                         <em>{{ videoStatusLabel(entry.status) }}</em>
                       </div>
@@ -2209,7 +2215,11 @@
                       </footer>
                     </article>
                   </div>
-                  <div v-else class="video-history-empty">
+                  <div v-if="hasMoreVideoHistory" class="video-history-load-more">
+                    <span>已显示 {{ visibleVideoHistory.length }} / {{ filteredVideoHistory.length }}</span>
+                    <button type="button" @click.stop="loadMoreVideoHistory">加载更多</button>
+                  </div>
+                  <div v-if="!filteredVideoHistory.length" class="video-history-empty">
                     <strong>未找到相关视频</strong>
                     <span>换个关键词试试</span>
                   </div>
@@ -2625,6 +2635,10 @@ const videoHistoryFilter = ref("ALL");
 const videoHistorySort = ref<"desc" | "asc">("desc");
 const videoFullscreenEntry = ref<VideoHistoryEntry | null>(null);
 const videoHistoryBusyActions = ref<Record<string, boolean>>({});
+const videoHistoryInitialVisibleCount = 12;
+const videoHistoryPageSize = 12;
+const videoHistoryVisibleCount = ref(videoHistoryInitialVisibleCount);
+const activeVideoHistoryPreviewIds = ref<string[]>([]);
 const videoPromptTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const videoHistoryStorageBaseKey = "xianzhi_video_history";
 const videoPromptDraftBaseKey = "xianzhi_video_prompt_draft";
@@ -2893,13 +2907,27 @@ function hydrateVideoHistoryFromStorage() {
   }
 }
 
+function slimVideoHistoryUrl(value: string) {
+  const url = String(value || "");
+  if (url.startsWith("data:") || url.startsWith("blob:")) return "";
+  return url;
+}
+
+function slimVideoHistoryEntry(entry: VideoHistoryEntry): VideoHistoryEntry {
+  return {
+    ...entry,
+    inputImageUrls: (entry.inputImageUrls || []).map(slimVideoHistoryUrl).filter(Boolean).slice(0, 4),
+    inputVideoUrl: slimVideoHistoryUrl(entry.inputVideoUrl)
+  };
+}
+
 function scheduleVideoHistorySave() {
   if (!videoHistoryHydrated || typeof window === "undefined") return;
   if (videoHistorySaveTimer) window.clearTimeout(videoHistorySaveTimer);
   videoHistorySaveTimer = window.setTimeout(() => {
     const payload = {
       version: 1,
-      videoHistory: videoHistory.value,
+      videoHistory: videoHistory.value.map(slimVideoHistoryEntry),
       hiddenIds: videoHiddenHistoryIds.value,
       selectedId: selectedVideoHistoryId.value,
       updatedAt: new Date().toISOString()
@@ -2959,6 +2987,12 @@ const filteredVideoHistory = computed(() => {
   });
   return [...filtered].sort((left, right) => videoHistorySort.value === "asc" ? left.timestamp - right.timestamp : right.timestamp - left.timestamp);
 });
+const visibleVideoHistory = computed(() => filteredVideoHistory.value.slice(0, videoHistoryVisibleCount.value));
+const hasMoreVideoHistory = computed(() => visibleVideoHistory.value.length < filteredVideoHistory.value.length);
+
+function loadMoreVideoHistory() {
+  videoHistoryVisibleCount.value = Math.min(filteredVideoHistory.value.length, videoHistoryVisibleCount.value + videoHistoryPageSize);
+}
 
 async function submitVideoGeneration() {
   openVideoDropdown.value = "";
@@ -3037,7 +3071,6 @@ async function submitVideoGeneration() {
     if (historyEntry) {
       commitVideoHistoryEntry(historyEntry, snapshotId);
     }
-    await store.loadActiveModule({ preferCache: false, silent: true });
     ElMessage.success(historyEntry?.status === "success" ? "视频生成成功" : "视频任务已提交，正在生成中");
   } catch (error) {
     commitVideoHistoryEntry({
@@ -3085,10 +3118,23 @@ function formatVideoHistoryTime(value: string) {
   });
 }
 
-function playVideoCardPreview(event: MouseEvent) {
-  const video = (event.currentTarget as HTMLElement | null)?.querySelector("video");
-  if (!video) return;
-  void video.play().catch(() => undefined);
+function activateVideoHistoryPreview(entry: VideoHistoryEntry) {
+  if (!entry.url || activeVideoHistoryPreviewIds.value.includes(entry.id)) return;
+  activeVideoHistoryPreviewIds.value = [...activeVideoHistoryPreviewIds.value, entry.id].slice(-videoHistoryLimit);
+}
+
+function videoHistoryCardSrc(entry: VideoHistoryEntry) {
+  if (!entry.url) return "";
+  return selectedVideoHistoryId.value === entry.id || activeVideoHistoryPreviewIds.value.includes(entry.id) ? entry.url : "";
+}
+
+function playVideoCardPreview(event: MouseEvent, entry: VideoHistoryEntry) {
+  activateVideoHistoryPreview(entry);
+  void nextTick(() => {
+    const video = (event.currentTarget as HTMLElement | null)?.querySelector("video");
+    if (!video) return;
+    void video.play().catch(() => undefined);
+  });
 }
 
 function resetVideoCardPreview(event: MouseEvent) {
@@ -3649,6 +3695,9 @@ type UserAIState = {
 const aiGalleryFilter = ref("all");
 const aiFavoriteOnly = ref(false);
 const aiPromptSearch = ref("");
+const aiGalleryInitialCount = 24;
+const aiGalleryPageSize = 24;
+const aiGalleryVisibleCount = ref(aiGalleryInitialCount);
 const aiFavoriteTaskIds = ref<string[]>([]);
 const aiSelectedTaskIds = ref<string[]>([]);
 const aiMobileSelectionMode = ref(false);
@@ -3692,6 +3741,7 @@ const aiImageContextMenu = ref({
 const aiTaskClockNow = ref(Date.now());
 let aiTaskClockTimer: number | null = null;
 let aiGenerationPollTimer: number | null = null;
+let aiOriginalImagePrefetchTimer: number | null = null;
 const aiTrackedGenerationTaskIds = ref<string[]>([]);
 const aiGenerationPollAttempts = new Map<string, number>();
 const aiGenerationPollDelaysMs = [2000, 3000, 5000, 8000, 13000, 20000];
@@ -3942,17 +3992,61 @@ const onlineRecentTasks = computed<AdminRecord[]>(() => {
   return [...pendingTasks, ...serverTasks];
 });
 const onlineImageTasks = computed<AdminRecord[]>(() => onlineRecentTasks.value.filter((task) => !isVideoGenerationTask(task)));
+const onlineRecentTasksVideoSignature = computed(() => onlineRecentTasks.value.map((task) => [
+  String(task.id || ""),
+  String(task.status || ""),
+  String(task.progress || ""),
+  String(task.updatedAt || ""),
+  videoTaskUrl(task)
+].join("\u001f")).join("\u001e"));
+const videoHistorySaveSignature = computed(() => [
+  videoHistory.value.map((entry) => {
+    const slim = slimVideoHistoryEntry(entry);
+    return [
+      slim.id,
+      slim.taskId,
+      slim.backendTaskId,
+      slim.status,
+      slim.url,
+      slim.prompt,
+      slim.model,
+      slim.createdAt,
+      String(slim.timestamp),
+      slim.errorMessage || ""
+    ].join("\u001f");
+  }).join("\u001e"),
+  videoHiddenHistoryIds.value.join("\u001e"),
+  selectedVideoHistoryId.value
+].join("\u001d"));
+const videoHistoryPollingSignature = computed(() => [
+  store.activeModuleId,
+  videoHistory.value
+    .filter((entry) => entry.status === "generating" && entry.backendTaskId)
+    .map((entry) => `${entry.id}:${entry.backendTaskId}:${entry.status}`)
+    .join("|")
+].join("::"));
 watch(
-  onlineRecentTasks,
-  (tasks) => {
-    const entries = tasks.map(taskToVideoHistoryEntry).filter(Boolean) as VideoHistoryEntry[];
+  onlineRecentTasksVideoSignature,
+  () => {
+    const entries = onlineRecentTasks.value.map(taskToVideoHistoryEntry).filter(Boolean) as VideoHistoryEntry[];
     if (entries.length) mergeVideoHistoryEntries(entries);
-  },
-  { deep: true }
+  }
 );
-watch([videoHistory, videoHiddenHistoryIds, selectedVideoHistoryId], scheduleVideoHistorySave, { deep: true });
+watch(videoHistorySaveSignature, scheduleVideoHistorySave);
 watch([videoPrompt, videoHistorySearchQuery], scheduleVideoInputDraftSave);
 watch(videoPrompt, () => void nextTick(adjustVideoPromptHeight));
+watch([videoHistorySearchQuery, videoHistoryFilter, videoHistorySort], () => {
+  videoHistoryVisibleCount.value = videoHistoryInitialVisibleCount;
+});
+watch(
+  () => store.activeModuleId,
+  (moduleId) => {
+    if (moduleId !== "userVideoGeneration") activeVideoHistoryPreviewIds.value = [];
+  }
+);
+watch([aiPromptSearch, aiGalleryFilter, aiFavoriteOnly, aiActiveFavoriteCollectionId], () => {
+  aiGalleryVisibleCount.value = aiGalleryInitialCount;
+});
 
 async function pollVideoHistoryTasks() {
   const running = videoHistory.value.filter((entry) => entry.status === "generating" && entry.backendTaskId);
@@ -3979,9 +4073,8 @@ function refreshVideoHistoryPolling() {
 }
 
 watch(
-  [videoHistory, () => store.activeModuleId],
+  videoHistoryPollingSignature,
   refreshVideoHistoryPolling,
-  { deep: true }
 );
 const usesAiImageWorkspace = computed(() => ["userAiImage", "userWirelessCanvas", "userWorks"].includes(store.activeModuleId));
 const hasRunningAiGenerationTasks = computed(() => onlineImageTasks.value.some((task) => isAiTaskRunning(task)));
@@ -4031,6 +4124,44 @@ function scheduleAiImageDraftSave() {
   }, 260);
 }
 
+function aiReferenceDraftSignature(item: AiReferenceImage) {
+  const url = String(item.url || "");
+  const previewUrl = String(item.previewUrl || "");
+  const remoteUrl = String(item.remoteUrl || "");
+  return [
+    item.id,
+    item.name,
+    url.startsWith("data:") ? `data:${url.length}` : url,
+    previewUrl.startsWith("data:") ? `preview:${previewUrl.length}` : previewUrl,
+    remoteUrl,
+    String(Boolean(item.uploading)),
+    item.error || ""
+  ].join("\u001f");
+}
+
+const aiImageDraftSaveSignature = computed(() => [
+  onlineImageForm.value.prompt,
+  onlineImageForm.value.model,
+  onlineImageForm.value.provider,
+  onlineImageForm.value.ratio,
+  onlineImageForm.value.size,
+  onlineImageForm.value.quality,
+  onlineImageForm.value.outputFormat,
+  String(onlineImageForm.value.transparentOutput),
+  String(onlineImageForm.value.outputCompression),
+  onlineImageForm.value.moderation,
+  String(onlineImageForm.value.count),
+  onlineImageForm.value.resolution,
+  String(onlineImageForm.value.width),
+  String(onlineImageForm.value.height),
+  aiPlaygroundMode.value,
+  aiGalleryFilter.value,
+  String(aiFavoriteOnly.value),
+  aiPromptSearch.value,
+  aiActiveFavoriteCollectionId.value,
+  aiReferenceImages.value.map(aiReferenceDraftSignature).join("\u001e")
+].join("\u001d"));
+
 async function hydrateAiImageDraft() {
   try {
     const draft = await readAiImageDraft();
@@ -4068,19 +4199,7 @@ async function hydrateAiImageDraft() {
   }
 }
 
-watch(
-  [
-    onlineImageForm,
-    aiReferenceImages,
-    aiPlaygroundMode,
-    aiGalleryFilter,
-    aiFavoriteOnly,
-    aiPromptSearch,
-    aiActiveFavoriteCollectionId
-  ],
-  scheduleAiImageDraftSave,
-  { deep: true }
-);
+watch(aiImageDraftSaveSignature, scheduleAiImageDraftSave);
 
 const onlineProviderOptions = computed(() => {
   const items = onlineProviders.value.map((provider) => ({ label: String(provider.name || provider.id || "API 平台"), value: String(provider.id || provider.name || "") })).filter((item) => item.value);
@@ -4200,6 +4319,13 @@ const aiGalleryCards = computed(() => {
     return !keyword || searchable.includes(keyword);
   });
 });
+const visibleAiGalleryCards = computed(() => aiGalleryCards.value.slice(0, aiGalleryVisibleCount.value));
+const hasMoreAiGalleryCards = computed(() => visibleAiGalleryCards.value.length < aiGalleryCards.value.length);
+
+function loadMoreAiGalleryCards() {
+  aiGalleryVisibleCount.value = Math.min(aiGalleryCards.value.length, aiGalleryVisibleCount.value + aiGalleryPageSize);
+}
+
 const aiFavoriteCollectionCards = computed(() => {
   const allFavoriteTaskIds = Array.from(new Set(aiFavoriteTaskIds.value));
   return [
@@ -4764,8 +4890,16 @@ async function ensureAiOriginalImageCached(task: AdminRecord) {
 }
 
 function prefetchAiOriginalImage(task: AdminRecord) {
-  if (!aiTaskImageUrl(task)) return;
-  void ensureAiOriginalImageCached(task);
+  if (typeof window === "undefined") return;
+  const imageUrl = aiTaskImageUrl(task);
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!imageUrl || imageUrl.startsWith("data:image/") || !cacheId || aiOriginalImageCache.value[cacheId] || aiOriginalImageCachePending.has(cacheId)) return;
+  if (aiOriginalImagePrefetchTimer) window.clearTimeout(aiOriginalImagePrefetchTimer);
+  aiOriginalImagePrefetchTimer = window.setTimeout(() => {
+    aiOriginalImagePrefetchTimer = null;
+    if (aiOriginalImageCachePending.size >= 2) return;
+    void ensureAiOriginalImageCached(task);
+  }, 360);
 }
 
 function aiTaskParams(task: AdminRecord) {
@@ -5298,11 +5432,11 @@ function handleAiTaskCardClick(task: AdminRecord, event: MouseEvent) {
 }
 
 function selectAllAiVisibleTasks() {
-  aiSelectedTaskIds.value = Array.from(new Set([...aiSelectedTaskIds.value, ...aiGalleryCards.value.map(aiTaskId).filter(Boolean)]));
+  aiSelectedTaskIds.value = Array.from(new Set([...aiSelectedTaskIds.value, ...visibleAiGalleryCards.value.map(aiTaskId).filter(Boolean)]));
 }
 
 function invertAiVisibleTaskSelection() {
-  const visibleIds = aiGalleryCards.value.map(aiTaskId).filter(Boolean);
+  const visibleIds = visibleAiGalleryCards.value.map(aiTaskId).filter(Boolean);
   const next = aiSelectedTaskIds.value.filter((id) => !visibleIds.includes(id));
   visibleIds.forEach((id) => {
     if (!aiSelectedTaskIds.value.includes(id)) next.push(id);
@@ -8781,6 +8915,10 @@ onBeforeUnmount(() => {
   if (aiTaskClockTimer) {
     window.clearInterval(aiTaskClockTimer);
     aiTaskClockTimer = null;
+  }
+  if (aiOriginalImagePrefetchTimer) {
+    window.clearTimeout(aiOriginalImagePrefetchTimer);
+    aiOriginalImagePrefetchTimer = null;
   }
   if (videoHistorySaveTimer) {
     window.clearTimeout(videoHistorySaveTimer);

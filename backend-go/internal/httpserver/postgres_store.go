@@ -9,6 +9,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
@@ -17,6 +18,8 @@ import (
 type postgresStore struct {
 	db           *sql.DB
 	fallbackPath string
+	readyMu      sync.Mutex
+	ready        bool
 }
 
 const aiCapabilitySettingsID = "ai_capability_config"
@@ -30,6 +33,11 @@ func (s *postgresStore) withTimeout() (context.Context, context.CancelFunc) {
 }
 
 func (s *postgresStore) ensureReady(ctx context.Context) error {
+	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
+	if s.ready {
+		return nil
+	}
 	backend := postgresStateBackend{db: s.db, fallbackPath: s.fallbackPath}
 	if err := backend.ensureSchema(ctx); err != nil {
 		return err
@@ -58,7 +66,11 @@ func (s *postgresStore) ensureReady(ctx context.Context) error {
 	if err := s.ensureCanonicalBillingPlans(ctx); err != nil {
 		return err
 	}
-	return s.ensureUserModelRouteProjection(ctx)
+	if err := s.ensureUserModelRouteProjection(ctx); err != nil {
+		return err
+	}
+	s.ready = true
+	return nil
 }
 
 func (s *postgresStore) seedPrimaryTables(ctx context.Context) error {
@@ -292,6 +304,69 @@ func (s *postgresStore) AdminData() (adminPlatformData, error) {
 	return data, nil
 }
 
+func (s *postgresStore) GetActiveUser(userID string) (adminUser, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminUser{}, false, err
+	}
+	var item adminUser
+	err := s.db.QueryRowContext(ctx, `
+		select raw
+		from xz_users
+		where id = $1 and upper(coalesce(status, '')) = 'ACTIVE'
+		limit 1
+	`, userID).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminUser{}, false, nil
+	}
+	if err != nil {
+		return adminUser{}, false, err
+	}
+	return item, true, nil
+}
+
+func (s *postgresStore) GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminChannelAgent{}, false, err
+	}
+	var item adminChannelAgent
+	err := s.db.QueryRowContext(ctx, `
+		select raw
+		from xz_channel_agents
+		where user_id = $1
+		order by created_at desc, id desc
+		limit 1
+	`, userID).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminChannelAgent{}, false, nil
+	}
+	if err != nil {
+		return adminChannelAgent{}, false, err
+	}
+	return item, true, nil
+}
+
+func (s *postgresStore) OnlineImageSettings() (adminPlatformData, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminPlatformData{}, err
+	}
+	data := seedAdminData()
+	var err error
+	if data.APIChannels, err = s.listAPIChannels(ctx); err != nil {
+		return data, err
+	}
+	if data.APIKeys, err = s.listAPIKeys(ctx); err != nil {
+		return data, err
+	}
+	data = withAdminDefaults(data)
+	return data, nil
+}
+
 func (s *postgresStore) ListGenerationTasks() ([]generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -334,6 +409,214 @@ func (s *postgresStore) ListAssets() ([]asset, error) {
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+const generationTaskSummarySelect = `
+	select
+		id,
+		user_id,
+		coalesce(module_code, ''),
+		coalesce(type, ''),
+		coalesce(model, ''),
+		coalesce(billing_type, ''),
+		coalesce(status, ''),
+		coalesce(progress, 0),
+		coalesce(point_cost, 0),
+		coalesce(prompt, ''),
+		coalesce((params - 'referenceImages' - 'reference_images' - 'image_urls' - 'imageUrls' - 'inputImageUrls' - 'inputImagesSnapshot' - 'maskDraft')::text, '{}'),
+		coalesce(result_ids::text, '[]'),
+		coalesce(error::text, 'null'),
+		coalesce(created_at, ''),
+		coalesce(updated_at, ''),
+		coalesce(worker_finished_at, '')
+	from xz_generation_tasks
+`
+
+const assetSummarySelect = `
+	select
+		id,
+		user_id,
+		coalesce(task_id, ''),
+		coalesce(name, ''),
+		coalesce(media_type, ''),
+		coalesce(url, ''),
+		coalesce(thumbnail_url, ''),
+		coalesce(favorite, false),
+		coalesce((metadata - 'thumbnailUrl' - 'referenceImages' - 'inputImagesSnapshot' - 'maskDraft')::text, '{}'),
+		coalesce(created_at, ''),
+		coalesce(updated_at, '')
+	from xz_assets
+`
+
+func (s *postgresStore) ListGenerationTasksForUser(userID string, limit int) ([]generationTask, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = defaultUserContentListLimit
+	}
+	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
+		where user_id = $1
+		order by created_at desc nulls last, id desc
+		limit $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanGenerationTaskSummaryRows(rows)
+}
+
+func (s *postgresStore) GetGenerationTaskForUser(userID string, id string) (generationTask, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return generationTask{}, false, err
+	}
+	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
+		where user_id = $1 and id = $2
+		limit 1
+	`, userID, id)
+	if err != nil {
+		return generationTask{}, false, err
+	}
+	defer rows.Close()
+	items, err := scanGenerationTaskSummaryRows(rows)
+	if err != nil {
+		return generationTask{}, false, err
+	}
+	if len(items) == 0 {
+		return generationTask{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *postgresStore) ListAssetsForUser(userID string, limit int) ([]asset, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = defaultUserContentListLimit
+	}
+	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+		where user_id = $1
+		order by created_at desc nulls last, id desc
+		limit $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAssetSummaryRows(rows)
+}
+
+func scanGenerationTaskSummaryRows(rows *sql.Rows) ([]generationTask, error) {
+	items := []generationTask{}
+	for rows.Next() {
+		var item generationTask
+		var paramsRaw string
+		var resultIDsRaw string
+		var errorRaw string
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ModuleCode,
+			&item.Type,
+			&item.Model,
+			&item.BillingType,
+			&item.Status,
+			&item.Progress,
+			&item.PointCost,
+			&item.Prompt,
+			&paramsRaw,
+			&resultIDsRaw,
+			&errorRaw,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&item.WorkerFinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Params = decodeObjectJSON(paramsRaw)
+		item.ResultIDs = decodeStringSliceJSON(resultIDsRaw)
+		item.Error = decodeAnyJSON(errorRaw)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanAssetSummaryRows(rows *sql.Rows) ([]asset, error) {
+	items := []asset{}
+	for rows.Next() {
+		var item asset
+		var metadataRaw string
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.TaskID,
+			&item.Name,
+			&item.MediaType,
+			&item.URL,
+			&item.ThumbnailURL,
+			&item.Favorite,
+			&metadataRaw,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Metadata = decodeObjectJSON(metadataRaw)
+		item.ThumbnailURL = compactListInlineMediaURL(item.ThumbnailURL)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func compactListInlineMediaURL(value string) string {
+	text := strings.TrimSpace(value)
+	if strings.HasPrefix(text, "data:") && len(text) > 2048 {
+		return ""
+	}
+	return value
+}
+
+func decodeObjectJSON(raw string) map[string]any {
+	var item map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &item); err != nil || item == nil {
+		return map[string]any{}
+	}
+	return item
+}
+
+func decodeStringSliceJSON(raw string) []string {
+	var items []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &items); err == nil {
+		return items
+	}
+	var values []any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &values); err != nil {
+		return nil
+	}
+	items = make([]string, 0, len(values))
+	for _, value := range values {
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text != "" {
+			items = append(items, text)
+		}
+	}
+	return items
+}
+
+func decodeAnyJSON(raw string) any {
+	var value any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &value); err != nil {
+		return nil
+	}
+	return value
 }
 
 func (s *postgresStore) UserAIState(userID string) (userAIState, error) {

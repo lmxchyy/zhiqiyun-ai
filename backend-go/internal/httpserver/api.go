@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
@@ -77,6 +78,26 @@ type platformStore interface {
 	ReviewAdminWithdrawal(string, string) (adminWithdrawal, error)
 }
 
+type optimizedUserContentStore interface {
+	ListGenerationTasksForUser(userID string, limit int) ([]generationTask, error)
+	ListAssetsForUser(userID string, limit int) ([]asset, error)
+	GetGenerationTaskForUser(userID string, id string) (generationTask, bool, error)
+}
+
+type activeIdentityStore interface {
+	GetActiveUser(userID string) (adminUser, bool, error)
+	GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error)
+}
+
+type onlineImageSettingsStore interface {
+	OnlineImageSettings() (adminPlatformData, error)
+}
+
+const (
+	defaultUserContentListLimit = 120
+	maxUserContentListLimit     = 300
+)
+
 type api struct {
 	store             platformStore
 	generationService generation.Service
@@ -124,34 +145,134 @@ func (a api) authenticatedUser(r *http.Request) (adminPlatformData, adminUser, e
 	return data, user, nil
 }
 
-func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
+func (a api) currentUser(r *http.Request) (adminUser, error) {
+	if store, ok := a.store.(activeIdentityStore); ok {
+		userID, err := authenticatedUserID(r, a.sessions)
+		if err != nil {
+			return adminUser{}, err
+		}
+		user, found, err := store.GetActiveUser(userID)
+		if err != nil {
+			return adminUser{}, err
+		}
+		if !found {
+			return adminUser{}, errUnauthorized
+		}
+		return user, nil
+	}
 	_, user, err := a.authenticatedUser(r)
+	return user, err
+}
+
+func listLimitFromRequest(r *http.Request, key string, fallback int) int {
+	limit := fallback
+	if value := strings.TrimSpace(r.URL.Query().Get(key)); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			limit = parsed
+		}
+	}
+	if limit <= 0 {
+		limit = fallback
+	}
+	if limit > maxUserContentListLimit {
+		return maxUserContentListLimit
+	}
+	return limit
+}
+
+func (a api) generationTasksForUser(r *http.Request, userID string, limit int) ([]generationTask, error) {
+	if optimized, ok := a.store.(optimizedUserContentStore); ok {
+		return optimized.ListGenerationTasksForUser(userID, limit)
+	}
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		return nil, err
+	}
+	tasks = filterGenerationTasksForUser(tasks, userID)
+	if limit > 0 && len(tasks) > limit {
+		return tasks[:limit], nil
+	}
+	return tasks, nil
+}
+
+func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, error) {
+	if optimized, ok := a.store.(optimizedUserContentStore); ok {
+		return optimized.ListAssetsForUser(userID, limit)
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		return nil, err
+	}
+	assets = filterAssetsForUser(assets, userID)
+	if limit > 0 && len(assets) > limit {
+		return assets[:limit], nil
+	}
+	return assets, nil
+}
+
+func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	tasks, err := a.store.ListGenerationTasks()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	limit := listLimitFromRequest(r, "limit", defaultUserContentListLimit)
+	var tasks []generationTask
+	var assets []asset
+	var tasksErr error
+	var assetsErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		tasks, tasksErr = a.generationTasksForUser(r, user.ID, limit)
+	}()
+	go func() {
+		defer wg.Done()
+		assets, assetsErr = a.assetsForUser(r, user.ID, limit)
+	}()
+	wg.Wait()
+	if tasksErr != nil {
+		writeError(w, http.StatusInternalServerError, tasksErr)
 		return
 	}
-	assets, err := a.store.ListAssets()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	if assetsErr != nil {
+		writeError(w, http.StatusInternalServerError, assetsErr)
 		return
 	}
-	tasks = filterGenerationTasksForUser(tasks, user.ID)
-	assets = filterAssetsForUser(assets, user.ID)
 	writeJSON(w, attachAssetImagesToTasks(tasks, assets))
 }
 
 func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
 	id := strings.TrimSpace(path.Base(r.URL.Path))
+	if optimized, ok := a.store.(optimizedUserContentStore); ok {
+		task, found, err := optimized.GetGenerationTaskForUser(user.ID, id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, errors.New("generation task not found"))
+			return
+		}
+		assets, err := optimized.ListAssetsForUser(user.ID, maxUserContentListLimit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		enriched := attachAssetImagesToTasks([]generationTask{task}, assets)
+		if len(enriched) > 0 {
+			writeJSON(w, enriched[0])
+			return
+		}
+		writeJSON(w, task)
+		return
+	}
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -837,17 +958,18 @@ func (a api) models(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, items)
 }
 func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	assets, err := a.store.ListAssets()
+	limit := listLimitFromRequest(r, "limit", defaultUserContentListLimit)
+	assets, err := a.assetsForUser(r, user.ID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, filterAssetsForUser(assets, user.ID))
+	writeJSON(w, assets)
 }
 
 func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
@@ -2108,39 +2230,89 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	tasks, err := a.store.ListGenerationTasks()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	taskLimit := listLimitFromRequest(r, "taskLimit", defaultUserContentListLimit)
+	assetLimit := listLimitFromRequest(r, "assetLimit", defaultUserContentListLimit)
+	var tasks []generationTask
+	var assets []asset
+	var points pointAccount
+	var settings adminPlatformData
+	var aiState userAIState
+	var firstErr error
+	var errMu sync.Mutex
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		items, err := a.generationTasksForUser(r, user.ID, taskLimit)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		tasks = items
+	}()
+	go func() {
+		defer wg.Done()
+		items, err := a.assetsForUser(r, user.ID, assetLimit)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		assets = items
+	}()
+	go func() {
+		defer wg.Done()
+		item, err := a.store.PointAccount(user.ID)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		points = item
+	}()
+	go func() {
+		defer wg.Done()
+		var item adminPlatformData
+		var err error
+		if store, ok := a.store.(onlineImageSettingsStore); ok {
+			item, err = store.OnlineImageSettings()
+		} else {
+			item, err = a.store.AdminData()
+		}
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		settings = item
+	}()
+	go func() {
+		defer wg.Done()
+		item, err := a.store.UserAIState(user.ID)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		aiState = item
+	}()
+	wg.Wait()
+	if firstErr != nil {
+		writeError(w, http.StatusInternalServerError, firstErr)
 		return
 	}
-	assets, err := a.store.ListAssets()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	tasks = filterGenerationTasksForUser(tasks, user.ID)
-	assets = filterAssetsForUser(assets, user.ID)
 	tasks = attachAssetImagesToTasks(tasks, assets)
-	points, err := a.store.PointAccount(user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	settings, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	aiState, err := a.store.UserAIState(user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	queued := 0
 	running := 0
 	completed := 0
@@ -2367,9 +2539,6 @@ func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generati
 			}
 			if task.ResultURL == "" {
 				task.ResultURL = item.URL
-			}
-			if task.ThumbnailURL == "" {
-				task.ThumbnailURL = firstNonEmptyString(item.ThumbnailURL, item.URL)
 			}
 		}
 		items = append(items, task)

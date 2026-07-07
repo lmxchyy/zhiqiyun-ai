@@ -9,6 +9,7 @@ const MAX_SNAPSHOT_TASKS = 30;
 const MAX_SNAPSHOT_ASSETS = 30;
 const MAX_REFERENCE_IMAGES = 10;
 const MAX_REFERENCE_DATA_URL_LENGTH = 2_500_000;
+const MAX_SNAPSHOT_DATA_URL_LENGTH = 180_000;
 const MAX_ORIGINAL_IMAGE_CACHE = 8;
 
 export type AiImageCacheRecord = Record<string, unknown>;
@@ -158,13 +159,40 @@ function imageOnlyArray(value: unknown, limit: number) {
   return Array.isArray(value) ? value.filter((item) => !isVideoLikeRecord(item)).slice(0, limit) : value;
 }
 
+function compactSnapshotString(value: string) {
+  if (/^data:(image|video)\//i.test(value) && value.length > MAX_SNAPSHOT_DATA_URL_LENGTH) return "";
+  return value;
+}
+
+function compactSnapshotValue(value: unknown, depth = 0, arrayLimit = 0): unknown {
+  if (typeof value === "string") return compactSnapshotString(value);
+  if (Array.isArray(value)) {
+    const items = arrayLimit > 0 ? value.slice(0, arrayLimit) : value;
+    return items.map((item) => compactSnapshotValue(item, depth + 1));
+  }
+  if (!value || typeof value !== "object") return value;
+  if (depth > 5) return undefined;
+  const record = value as AiImageCacheRecord;
+  return Object.entries(record).reduce<AiImageCacheRecord>((next, [key, item]) => {
+    if (["referenceImages", "reference_images", "image_urls", "imageUrls", "inputImageUrls", "inputImagesSnapshot"].includes(key)) {
+      const compacted = compactSnapshotValue(item, depth + 1, MAX_REFERENCE_IMAGES);
+      if (Array.isArray(compacted) && compacted.length === 0) return next;
+      next[key] = compacted;
+      return next;
+    }
+    const compacted = compactSnapshotValue(item, depth + 1);
+    if (compacted !== undefined) next[key] = compacted;
+    return next;
+  }, {});
+}
+
 export function normalizeAiImageSnapshotData(data: AiImageCacheRecord): AiImageCacheRecord {
-  return {
+  return compactSnapshotValue({
     ...data,
     recentTasks: imageOnlyArray(data.recentTasks, MAX_SNAPSHOT_TASKS),
     assets: imageOnlyArray(data.assets, MAX_SNAPSHOT_ASSETS),
     recentAssets: imageOnlyArray(data.recentAssets, MAX_SNAPSHOT_ASSETS)
-  };
+  }) as AiImageCacheRecord;
 }
 
 export async function readAiImageSnapshot(): Promise<AiImageSnapshot | null> {
@@ -177,9 +205,9 @@ export async function readAiImageSnapshot(): Promise<AiImageSnapshot | null> {
 }
 
 export async function writeAiImageSnapshot(data: AiImageCacheRecord): Promise<void> {
-  const plainData = JSON.parse(JSON.stringify(data)) as AiImageCacheRecord;
+  const plainData = JSON.parse(JSON.stringify(normalizeAiImageSnapshotData(data))) as AiImageCacheRecord;
   await writeValue<AiImageSnapshot>(scopedKey(SNAPSHOT_KEY), {
-    data: normalizeAiImageSnapshotData(plainData),
+    data: plainData,
     savedAt: Date.now()
   });
 }
