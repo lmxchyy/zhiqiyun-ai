@@ -10885,6 +10885,7 @@ async function configureNewAPIManagement() {
     enabled: Boolean(current.enabled),
     baseUrl: String(current.baseUrl || "https://code.lai1758.dpdns.org"),
     adminCookie: String(current.adminCookie || current.adminToken || ""),
+    adminUserId: String(current.adminUserId || current.adminUserID || "1"),
     defaultGroup: String(current.defaultGroup || "生图备份"),
     createUserPath: String(current.createUserPath || ""),
     createTokenPath: String(current.createTokenPath || "/api/token/"),
@@ -10918,6 +10919,7 @@ async function configureNewAPIManagement() {
       ]),
       input("NewAPI 管理地址", "baseUrl", "https://code.lai1758.dpdns.org"),
       input("管理员凭证（Token/Cookie）", "adminCookie", "可填管理令牌，或 session=...; i18next=zh-CN", { type: "password", autocomplete: "new-password" }),
+      input("管理用户 ID", "adminUserId", "主通道通常为 1"),
       newapiGroups.length ? h("label", { class: "channel-dialog-field channel-dialog-field-wide" }, [
         h("span", null, "默认分组"),
         h("select", {
@@ -10959,6 +10961,7 @@ async function configureNewAPIManagement() {
               enabled: form.enabled,
               baseUrl: form.baseUrl.trim(),
               adminCookie: form.adminCookie.trim(),
+              adminUserId: form.adminUserId.trim() || "1",
               defaultGroup: form.defaultGroup.trim() || "生图备份",
               createUserPath: form.createUserPath.trim(),
               createTokenPath: form.createTokenPath.trim() || "/api/token/",

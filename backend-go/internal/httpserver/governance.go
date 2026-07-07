@@ -31,14 +31,18 @@ func (s *postgresStore) auditMiddleware() gin.HandlerFunc {
 
 func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		data, err := s.AdminData()
+		userID, err := authenticatedUserID(c.Request, auth.sessions)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		user, found, err := s.GetActiveUser(userID)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		user, err := auth.authenticatedUser(c.Request, data)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		if !found {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": errUnauthorized.Error()})
 			return
 		}
 		if !rbacEnforced() {

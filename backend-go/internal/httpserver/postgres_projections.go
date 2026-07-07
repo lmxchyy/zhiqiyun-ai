@@ -245,14 +245,22 @@ CREATE TABLE IF NOT EXISTS xz_user_model_routes (
 
 CREATE INDEX IF NOT EXISTS idx_xz_users_role ON xz_users(role);
 CREATE INDEX IF NOT EXISTS idx_xz_orders_user_id ON xz_orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_orders_user_created ON xz_orders(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_orders_status ON xz_orders(status);
 CREATE INDEX IF NOT EXISTS idx_xz_channel_agents_user_id ON xz_channel_agents(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_channel_agents_parent_id ON xz_channel_agents(parent_id);
 CREATE INDEX IF NOT EXISTS idx_xz_operation_centers_user_id ON xz_operation_centers(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_token_records_user_id ON xz_token_records(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_token_records_user_created ON xz_token_records(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_id ON xz_generation_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_created ON xz_generation_tasks(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_module_code ON xz_generation_tasks(module_code);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_id ON xz_assets(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_assets_user_created ON xz_assets(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_billing_events_module_code ON xz_billing_events(module_code);
+CREATE INDEX IF NOT EXISTS idx_xz_billing_events_user_occurred ON xz_billing_events(user_id, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_commissions_agent_created ON xz_commissions(agent_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_withdrawals_agent_created ON xz_withdrawals(agent_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_api_channels_status ON xz_api_channels(status);
 CREATE INDEX IF NOT EXISTS idx_xz_user_model_routes_user_id ON xz_user_model_routes(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_user_model_routes_status ON xz_user_model_routes(status);

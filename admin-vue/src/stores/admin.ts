@@ -128,7 +128,9 @@ export const useAdminStore = defineStore("admin", {
     loading: false,
     saving: false,
     error: "",
-    data: {} as AdminRecord
+    data: {} as AdminRecord,
+    dataByModule: {} as Record<string, AdminRecord>,
+    dataByEndpoint: {} as Record<string, AdminRecord>
   }),
   getters: {
     activeModule: (state) => adminModules.find((item) => item.id === state.activeModuleId) || adminModules[0]
@@ -144,6 +146,7 @@ export const useAdminStore = defineStore("admin", {
       const preferCache = options.preferCache !== false;
       const silent = options.silent === true;
       let hasCachedAiImageData = false;
+      let hasCachedModuleData = false;
       const shouldUseAiImageSnapshot = usesAiImageSnapshot(moduleId);
       const shouldRenderInstantly = usesInstantWorkspace(moduleId);
       if (shouldUseAiImageSnapshot && preferCache) {
@@ -157,11 +160,17 @@ export const useAdminStore = defineStore("admin", {
           // IndexedDB is an optional UI cache; ignore read failures.
         }
       }
-      if (shouldRenderInstantly && !hasCachedAiImageData) {
+      const cachedModuleData = this.dataByModule[moduleId];
+      const cachedEndpointData = endpoint ? this.dataByEndpoint[endpoint] : undefined;
+      if (!hasCachedAiImageData && preferCache && (cachedModuleData || cachedEndpointData)) {
+        this.data = cachedModuleData || cachedEndpointData || {};
+        hasCachedModuleData = true;
+      }
+      if (shouldRenderInstantly && !hasCachedAiImageData && !hasCachedModuleData) {
         this.data = emptyOnlineWorkspaceData();
       }
       if (!silent) {
-        this.loading = !shouldRenderInstantly && !hasCachedAiImageData;
+        this.loading = !shouldRenderInstantly && !hasCachedAiImageData && !hasCachedModuleData;
       }
       this.error = "";
       if (!endpoint) {
@@ -175,6 +184,10 @@ export const useAdminStore = defineStore("admin", {
         const data = await adminRequest<AdminRecord>({ method: "GET", url: endpoint });
         if (this.activeModuleId !== moduleId) return;
         this.data = data;
+        this.dataByModule[moduleId] = data;
+        if (endpoint) {
+          this.dataByEndpoint[endpoint] = data;
+        }
         if (shouldUseAiImageSnapshot) {
           void writeAiImageSnapshot(this.data).catch(() => undefined);
         }
@@ -193,7 +206,9 @@ export const useAdminStore = defineStore("admin", {
       this.error = "";
       try {
         await adminRequest<AdminRecord>({ method, url, data });
-        await this.loadActiveModule();
+        this.dataByModule = {};
+        this.dataByEndpoint = {};
+        await this.loadActiveModule({ preferCache: false });
       } catch (error) {
         this.error = error instanceof Error ? error.message : "保存失败";
         throw error;

@@ -19,6 +19,7 @@ type newAPISyncConfig struct {
 	Enabled         bool
 	BaseURL         string
 	AdminCookie     string
+	AdminUserID     string
 	DefaultGroup    string
 	CreateUserPath  string
 	CreateTokenPath string
@@ -529,8 +530,7 @@ func sendNewAPI(ctx context.Context, client *http.Client, cfg newAPISyncConfig, 
 	if err != nil {
 		return nil, err
 	}
-	applyNewAPIAdminAuth(req, cfg.AdminCookie)
-	req.Header.Set("New-Api-User", "1")
+	applyNewAPIAdminAuth(req, cfg.AdminCookie, cfg.AdminUserID)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	res, err := client.Do(req)
@@ -577,8 +577,7 @@ func getNewAPI(ctx context.Context, client *http.Client, cfg newAPISyncConfig, p
 	if err != nil {
 		return nil, err
 	}
-	applyNewAPIAdminAuth(req, cfg.AdminCookie)
-	req.Header.Set("New-Api-User", "1")
+	applyNewAPIAdminAuth(req, cfg.AdminCookie, cfg.AdminUserID)
 	req.Header.Set("Accept", "application/json")
 	res, err := client.Do(req)
 	if err != nil {
@@ -636,7 +635,10 @@ func extractNewAPIGroupNames(raw map[string]any) []string {
 	return groups
 }
 
-func applyNewAPIAdminAuth(req *http.Request, credential string) {
+func applyNewAPIAdminAuth(req *http.Request, credential string, userID string) {
+	if userID = strings.TrimSpace(userID); userID != "" {
+		req.Header.Set("New-Api-User", userID)
+	}
 	credential = strings.TrimSpace(credential)
 	lower := strings.ToLower(credential)
 	if strings.HasPrefix(lower, "bearer ") {
@@ -685,6 +687,7 @@ func newAPISyncConfigFromSettings(settings adminSystemSettings) newAPISyncConfig
 		Enabled:         boolValue(raw["enabled"]),
 		BaseURL:         stringValue(raw["baseUrl"]),
 		AdminCookie:     firstNonEmptyString(stringValue(raw["adminCookie"]), stringValue(raw["adminToken"])),
+		AdminUserID:     firstNonEmptyString(stringValue(raw["adminUserId"]), stringValue(raw["adminUserID"])),
 		DefaultGroup:    firstNonEmptyString(stringValue(raw["defaultGroup"]), "生图备份"),
 		CreateUserPath:  stringValue(raw["createUserPath"]),
 		CreateTokenPath: firstNonEmptyString(stringValue(raw["createTokenPath"]), "/api/token/"),
@@ -696,6 +699,9 @@ func newAPISyncConfigFromSettings(settings adminSystemSettings) newAPISyncConfig
 	}
 	if cfg.AdminCookie == "" {
 		cfg.AdminCookie = firstNonEmptyString(stringValue(settings.APIGateway["newapiAdminCookie"]), stringValue(settings.APIGateway["newapiAdminToken"]))
+	}
+	if cfg.AdminUserID == "" {
+		cfg.AdminUserID = firstNonEmptyString(stringValue(settings.APIGateway["newapiAdminUserId"]), stringValue(settings.APIGateway["newapiAdminUserID"]), "1")
 	}
 	return cfg
 }

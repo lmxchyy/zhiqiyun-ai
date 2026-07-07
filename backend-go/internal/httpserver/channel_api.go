@@ -13,17 +13,20 @@ type channelAPI struct {
 	sessions authSessionStore
 }
 
+type optimizedChannelDataStore interface {
+	ChannelDataForAgent(agentUserID string, agentID string, includeContent bool, billingEventLimit int) (adminPlatformData, error)
+}
+
+type optimizedChannelStatsStore interface {
+	ChannelContentCountsForUsers(userIDs []string) (int, int, error)
+}
+
 func newChannelAPI(store platformStore, sessions authSessionStore) channelAPI {
 	return channelAPI{store: store, sessions: sessions}
 }
 
 func (a channelAPI) me(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	user, agent, err := a.authenticatedAgent(r, data)
+	data, user, agent, err := a.authenticatedAgentData(r, false, 50)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
@@ -55,30 +58,20 @@ func (a channelAPI) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a channelAPI) customers(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	user, agent, err := a.authenticatedAgent(r, data)
+	data, user, agent, err := a.authenticatedAgentData(r, false, 0)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
 	}
 	visibleCustomerIDs := channelVisibleCustomerIDs(data.Users, data.ChannelAgents, user.ID, agent.ID)
 	writeJSON(w, map[string]any{
-		"summary": channelCustomerSummary(data, visibleCustomerIDs),
+		"summary": a.channelCustomerSummary(data, visibleCustomerIDs),
 		"items":   channelCustomers(data.Users, data.Plans, data.PointAccounts, visibleCustomerIDs),
 	})
 }
 
 func (a channelAPI) customerDetail(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	user, agent, err := a.authenticatedAgent(r, data)
+	data, user, agent, err := a.authenticatedAgentData(r, false, 0)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
@@ -95,21 +88,21 @@ func (a channelAPI) customerDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("customer not found"))
 		return
 	}
-	writeJSON(w, map[string]any{
-		"item":            channelCustomerView(customer, planMap(data.Plans), pointMap(data.PointAccounts)),
-		"orders":          channelOrdersForUsers(data.Orders, data.Users, data.Plans, map[string]bool{customerID: true}),
-		"generationTasks": channelGenerationTasksForUsers(data.GenerationTasks, map[string]bool{customerID: true}),
-		"assets":          channelAssetsForUsers(data.Assets, map[string]bool{customerID: true}),
-	})
-}
-
-func (a channelAPI) orders(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
+	tasks, assets, err := a.channelCustomerContent(customerID, data)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	user, agent, err := a.authenticatedAgent(r, data)
+	writeJSON(w, map[string]any{
+		"item":            channelCustomerView(customer, planMap(data.Plans), pointMap(data.PointAccounts)),
+		"orders":          channelOrdersForUsers(data.Orders, data.Users, data.Plans, map[string]bool{customerID: true}),
+		"generationTasks": tasks,
+		"assets":          assets,
+	})
+}
+
+func (a channelAPI) orders(w http.ResponseWriter, r *http.Request) {
+	data, user, agent, err := a.authenticatedAgentData(r, false, 0)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
@@ -120,12 +113,7 @@ func (a channelAPI) orders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a channelAPI) usage(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	user, agent, err := a.authenticatedAgent(r, data)
+	data, user, agent, err := a.authenticatedAgentData(r, false, -1)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
@@ -144,12 +132,7 @@ func (a channelAPI) usage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a channelAPI) commissions(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	_, agent, err := a.authenticatedAgent(r, data)
+	data, _, agent, err := a.authenticatedAgentData(r, false, 0)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
@@ -159,12 +142,7 @@ func (a channelAPI) commissions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a channelAPI) withdrawals(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	_, agent, err := a.authenticatedAgent(r, data)
+	data, _, agent, err := a.authenticatedAgentData(r, false, 0)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
@@ -272,6 +250,80 @@ func (a channelAPI) authenticatedAgent(r *http.Request, data adminPlatformData) 
 		return adminUser{}, adminChannelAgent{}, errForbidden
 	}
 	return user, agent, nil
+}
+
+func (a channelAPI) authenticatedAgentData(r *http.Request, includeContent bool, billingEventLimit int) (adminPlatformData, adminUser, adminChannelAgent, error) {
+	if optimized, ok := a.store.(optimizedChannelDataStore); ok {
+		user, agent, err := a.currentAgent(r)
+		if err != nil {
+			return adminPlatformData{}, adminUser{}, adminChannelAgent{}, err
+		}
+		data, err := optimized.ChannelDataForAgent(user.ID, agent.ID, includeContent, billingEventLimit)
+		if err != nil {
+			return adminPlatformData{}, adminUser{}, adminChannelAgent{}, err
+		}
+		return data, user, agent, nil
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		return adminPlatformData{}, adminUser{}, adminChannelAgent{}, err
+	}
+	user, agent, err := a.authenticatedAgent(r, data)
+	return data, user, agent, err
+}
+
+func (a channelAPI) currentAgent(r *http.Request) (adminUser, adminChannelAgent, error) {
+	store, ok := a.store.(activeIdentityStore)
+	if !ok {
+		return adminUser{}, adminChannelAgent{}, errUnauthorized
+	}
+	userID, err := authenticatedUserID(r, a.sessions)
+	if err != nil {
+		return adminUser{}, adminChannelAgent{}, err
+	}
+	user, found, err := store.GetActiveUser(userID)
+	if err != nil {
+		return adminUser{}, adminChannelAgent{}, err
+	}
+	if !found {
+		return adminUser{}, adminChannelAgent{}, errUnauthorized
+	}
+	agent, found, err := store.GetChannelAgentForUser(user.ID)
+	if err != nil {
+		return adminUser{}, adminChannelAgent{}, err
+	}
+	if !found || !strings.HasPrefix(user.Role, "AGENT") {
+		return adminUser{}, adminChannelAgent{}, errForbidden
+	}
+	return user, agent, nil
+}
+
+func (a channelAPI) channelCustomerSummary(data adminPlatformData, visibleCustomerIDs map[string]bool) map[string]any {
+	summary := channelCustomerSummary(data, visibleCustomerIDs)
+	if optimized, ok := a.store.(optimizedChannelStatsStore); ok {
+		taskCount, assetCount, err := optimized.ChannelContentCountsForUsers(stringBoolMapKeys(visibleCustomerIDs))
+		if err == nil {
+			summary["generationTasks"] = taskCount
+			summary["assets"] = assetCount
+		}
+	}
+	return summary
+}
+
+func (a channelAPI) channelCustomerContent(customerID string, data adminPlatformData) ([]generationTask, []asset, error) {
+	visible := map[string]bool{customerID: true}
+	if optimized, ok := a.store.(optimizedUserContentStore); ok {
+		tasks, err := optimized.ListGenerationTasksForUser(customerID, maxUserContentListLimit)
+		if err != nil {
+			return nil, nil, err
+		}
+		assets, err := optimized.ListAssetsForUser(customerID, maxUserContentListLimit)
+		if err != nil {
+			return nil, nil, err
+		}
+		return tasks, assets, nil
+	}
+	return channelGenerationTasksForUsers(data.GenerationTasks, visible), channelAssetsForUsers(data.Assets, visible), nil
 }
 
 func channelPromotion(agent adminChannelAgent, r *http.Request, data adminPlatformData) map[string]any {

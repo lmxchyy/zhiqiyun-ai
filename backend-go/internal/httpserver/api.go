@@ -93,6 +93,10 @@ type onlineImageSettingsStore interface {
 	OnlineImageSettings() (adminPlatformData, error)
 }
 
+type optimizedUserAccountStore interface {
+	UserAccountData(userID string) (adminPlatformData, error)
+}
+
 const (
 	defaultUserContentListLimit = 120
 	maxUserContentListLimit     = 300
@@ -208,6 +212,13 @@ func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, 
 		return assets[:limit], nil
 	}
 	return assets, nil
+}
+
+func (a api) userAccountData(userID string) (adminPlatformData, error) {
+	if optimized, ok := a.store.(optimizedUserAccountStore); ok {
+		return optimized.UserAccountData(userID)
+	}
+	return a.store.AdminData()
 }
 
 func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
@@ -446,17 +457,108 @@ func cloneAnyValue(value any) any {
 	}
 }
 
+type generationServiceCandidate struct {
+	service generation.Service
+	channel adminAPIChannel
+}
+
 func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	prepared, err := service.PrepareImageTask(ctx, req)
 	if err != nil {
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
-		return
+		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
+		if err != nil {
+			_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+			return
+		}
 	}
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 	}
+}
+
+func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.CreateRequest, firstErr error) (generation.CreateRequest, error) {
+	if !shouldFallbackImageGeneration(firstErr) {
+		return generation.CreateRequest{}, firstErr
+	}
+	candidates, err := a.fallbackImageGenerationServices(req.Model)
+	if err != nil || len(candidates) == 0 {
+		return generation.CreateRequest{}, firstErr
+	}
+	lastErr := firstErr
+	for _, candidate := range candidates {
+		fallbackReq := cloneGenerationCreateRequest(req)
+		if fallbackReq.Params == nil {
+			fallbackReq.Params = map[string]any{}
+		}
+		fallbackReq.Params["provider"] = candidate.channel.ID
+		fallbackReq.Params["fallbackProvider"] = candidate.channel.ID
+		fallbackReq.Params["fallbackReason"] = generationErrorMessage(firstErr)
+		prepared, err := candidate.service.PrepareImageTask(ctx, fallbackReq)
+		if err == nil {
+			if prepared.Params == nil {
+				prepared.Params = map[string]any{}
+			}
+			prepared.Params["provider"] = candidate.channel.ID
+			prepared.Params["fallbackProvider"] = candidate.channel.ID
+			prepared.Params["fallbackReason"] = generationErrorMessage(firstErr)
+			return prepared, nil
+		}
+		lastErr = err
+		if !shouldFallbackImageGeneration(err) {
+			break
+		}
+	}
+	return generation.CreateRequest{}, lastErr
+}
+
+func (a api) fallbackImageGenerationServices(model string) ([]generationServiceCandidate, error) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		return nil, err
+	}
+	candidates := []generationServiceCandidate{}
+	seenEndpoints := map[string]bool{}
+	preferredOrigin := fallbackPreferredImageOrigin(data)
+	channels := configuredGenerationChannels(data)
+	sort.SliceStable(channels, func(i, j int) bool {
+		leftPreferred := preferredOrigin != "" && normalizedURLOrigin(channels[i].BaseURL) == preferredOrigin
+		rightPreferred := preferredOrigin != "" && normalizedURLOrigin(channels[j].BaseURL) == preferredOrigin
+		if leftPreferred != rightPreferred {
+			return leftPreferred
+		}
+		return priorityLess(channels[i], channels[j])
+	})
+	for _, channel := range channels {
+		if strings.TrimSpace(model) != "" && !apiChannelSupportsModel(channel, model) {
+			continue
+		}
+		endpointKey := normalizedURLOrigin(channel.BaseURL) + "|" + strings.TrimSpace(channel.ImageGenerationEndpoint)
+		isPreferredOrigin := preferredOrigin != "" && normalizedURLOrigin(channel.BaseURL) == preferredOrigin
+		if endpointKey != "|" && seenEndpoints[endpointKey] && !isPreferredOrigin {
+			continue
+		}
+		service, err := a.generationServiceForChannel(data, channel)
+		if err != nil {
+			continue
+		}
+		if endpointKey != "|" {
+			seenEndpoints[endpointKey] = true
+		}
+		candidates = append(candidates, generationServiceCandidate{service: service, channel: channel})
+	}
+	return candidates, nil
+}
+
+func fallbackPreferredImageOrigin(data adminPlatformData) string {
+	if origin := normalizedURLOrigin(newAPISyncConfigFromSettings(data.SystemSettings).BaseURL); origin != "" {
+		return origin
+	}
+	if origin := normalizedURLOrigin(os.Getenv("MODEL_PROVIDER_URL")); origin != "" {
+		return origin
+	}
+	return normalizedURLOrigin(os.Getenv("OPENAI_BASE_URL"))
 }
 
 func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
@@ -482,6 +584,24 @@ func generationErrorMessage(err error) string {
 	return compactGenerationErrorMessage(err.Error())
 }
 
+func shouldFallbackImageGeneration(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "returned 502") ||
+		strings.Contains(lower, "returned 503") ||
+		strings.Contains(lower, "returned 504") ||
+		strings.Contains(lower, "gateway time-out") ||
+		strings.Contains(lower, "gateway timeout") ||
+		strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client.timeout") ||
+		strings.Contains(lower, "timeout awaiting response")
+}
+
 func compactGenerationErrorMessage(message string) string {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -496,6 +616,15 @@ func compactGenerationErrorMessage(message string) string {
 		}
 	}
 	lower := strings.ToLower(message)
+	if strings.Contains(lower, "returned 504") || strings.Contains(lower, "gateway time-out") || strings.Contains(lower, "gateway timeout") {
+		return "图像上游网关超时，请稍后重试或切换上游通道"
+	}
+	if strings.Contains(lower, "returned 502") || strings.Contains(lower, "returned 503") {
+		return "图像上游服务暂不可用，请稍后重试或切换上游通道"
+	}
+	if strings.Contains(lower, "<html") && strings.Contains(lower, "</html>") {
+		return "图像上游返回了网关错误页，请稍后重试或切换上游通道"
+	}
 	if strings.Contains(lower, "create_video_generation_task returned empty task id") && strings.Contains(lower, "seedance") {
 		return "移动云 Seedance 创建任务失败，请检查模型资费包、API Key 和模型权限"
 	}
@@ -973,7 +1102,7 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
-	_, _, err := a.authenticatedUser(r)
+	_, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -1437,7 +1566,7 @@ func (a api) backfillAssetThumbnails(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -1447,7 +1576,7 @@ func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	data, err := a.store.AdminData()
+	data, err := a.userAccountData(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1667,7 +1796,7 @@ func (a api) memberProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) memberWallet(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -1677,7 +1806,7 @@ func (a api) memberWallet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	data, err := a.store.AdminData()
+	data, err := a.userAccountData(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1691,9 +1820,14 @@ func (a api) memberWallet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) memberTokenRecords(w http.ResponseWriter, r *http.Request) {
-	data, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	data, err := a.userAccountData(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, map[string]any{"items": userTokenRecords(data.TokenRecords, user.ID)})
@@ -2179,23 +2313,21 @@ func adminOrderView(order adminOrder, users map[string]adminUser, plans map[stri
 }
 
 func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	tasks, err := a.store.ListGenerationTasks()
+	tasks, err := a.generationTasksForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	assets, err := a.store.ListAssets()
+	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	tasks = filterGenerationTasksForUser(tasks, user.ID)
-	assets = filterAssetsForUser(assets, user.ID)
 	tasks = attachAssetImagesToTasks(tasks, assets)
 	points, err := a.store.PointAccount(user.ID)
 	if err != nil {
@@ -2224,8 +2356,8 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 			{"label": "作品数量", "value": len(assets)},
 			{"label": "点数消耗", "value": totalPointCost},
 		},
-		"recentTasks":  tasks,
-		"recentAssets": assets,
+		"recentTasks":  limitGenerationTasks(tasks, 30),
+		"recentAssets": limitAssets(assets, 30),
 	})
 }
 
@@ -2372,7 +2504,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) updateUserAIState(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -2391,7 +2523,13 @@ func (a api) updateUserAIState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) userAPISettings(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
+	var data adminPlatformData
+	var err error
+	if store, ok := a.store.(onlineImageSettingsStore); ok {
+		data, err = store.OnlineImageSettings()
+	} else {
+		data, err = a.store.AdminData()
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2411,12 +2549,12 @@ func (a api) userAPISettings(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a api) userUsage(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	data, err := a.store.AdminData()
+	data, err := a.userAccountData(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2460,7 +2598,7 @@ func (a api) userUsage(w http.ResponseWriter, r *http.Request) {
 
 func (a api) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_, user, err := a.authenticatedUser(r)
+	user, err := a.currentUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -2510,6 +2648,20 @@ func filterAssetsForUser(assets []asset, userID string) []asset {
 		}
 	}
 	return items
+}
+
+func limitGenerationTasks(tasks []generationTask, limit int) []generationTask {
+	if limit <= 0 || len(tasks) <= limit {
+		return tasks
+	}
+	return tasks[:limit]
+}
+
+func limitAssets(assets []asset, limit int) []asset {
+	if limit <= 0 || len(assets) <= limit {
+		return assets
+	}
+	return assets[:limit]
 }
 
 func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generationTask {

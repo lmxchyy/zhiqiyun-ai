@@ -367,26 +367,115 @@ func (s *postgresStore) OnlineImageSettings() (adminPlatformData, error) {
 	return data, nil
 }
 
+func (s *postgresStore) UserAccountData(userID string) (adminPlatformData, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminPlatformData{}, err
+	}
+	data := adminPlatformData{}
+	var err error
+	if data.Plans, err = s.listPlans(ctx); err != nil {
+		return data, err
+	}
+	data.Plans = withPlanDefaults(data.Plans)
+	if data.TokenRecords, err = s.listTokenRecordsForUser(ctx, userID); err != nil {
+		return data, err
+	}
+	if data.Orders, err = s.listOrdersForUser(ctx, userID); err != nil {
+		return data, err
+	}
+	if data.BillingEvents, err = s.listBillingEventsForUser(ctx, userID); err != nil {
+		return data, err
+	}
+	return data, nil
+}
+
+func (s *postgresStore) ChannelDataForAgent(agentUserID string, agentID string, includeContent bool, billingEventLimit int) (adminPlatformData, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminPlatformData{}, err
+	}
+	data := adminPlatformData{}
+	var err error
+	if data.Users, err = s.listUsersBasic(ctx); err != nil {
+		return data, err
+	}
+	if data.Plans, err = s.listPlans(ctx); err != nil {
+		return data, err
+	}
+	data.Plans = withPlanDefaults(data.Plans)
+	if data.ChannelAgents, err = s.listChannelAgents(ctx); err != nil {
+		return data, err
+	}
+	visibleCustomerIDs := channelVisibleCustomerIDs(data.Users, data.ChannelAgents, agentUserID, agentID)
+	visibleUserIDs := stringBoolMapKeys(visibleCustomerIDs)
+	if data.PointAccounts, err = s.listPointAccountsForUsers(ctx, visibleUserIDs); err != nil {
+		return data, err
+	}
+	if data.Orders, err = s.listOrdersForUsers(ctx, visibleUserIDs); err != nil {
+		return data, err
+	}
+	if data.Commissions, err = s.listCommissionsForAgent(ctx, agentID); err != nil {
+		return data, err
+	}
+	if billingEventLimit != 0 {
+		if data.BillingEvents, err = s.listBillingEventsForUsers(ctx, visibleUserIDs, billingEventLimit); err != nil {
+			return data, err
+		}
+	}
+	if data.Withdrawals, err = s.listWithdrawalsForAgent(ctx, agentID); err != nil {
+		return data, err
+	}
+	if data.SystemSettings, err = s.getSystemSettings(ctx); err != nil {
+		return data, err
+	}
+	if data.SystemSettings.Brand.Name == "" {
+		data.SystemSettings = defaultSystemSettings()
+	}
+	if includeContent {
+		if data.GenerationTasks, err = s.listGenerationTasksForUsers(ctx, visibleUserIDs, 0); err != nil {
+			return data, err
+		}
+		if data.Assets, err = s.listAssetsForUsers(ctx, visibleUserIDs, 0); err != nil {
+			return data, err
+		}
+	}
+	return data, nil
+}
+
+func (s *postgresStore) ChannelContentCountsForUsers(userIDs []string) (int, int, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return 0, 0, err
+	}
+	taskCount, err := s.countRowsForUsers(ctx, "xz_generation_tasks", userIDs)
+	if err != nil {
+		return 0, 0, err
+	}
+	assetCount, err := s.countRowsForUsers(ctx, "xz_assets", userIDs)
+	if err != nil {
+		return 0, 0, err
+	}
+	return taskCount, assetCount, nil
+}
+
 func (s *postgresStore) ListGenerationTasks() ([]generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `select raw from xz_generation_tasks order by created_at desc, id desc`)
+	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
+		order by created_at desc nulls last, id desc
+	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []generationTask{}
-	for rows.Next() {
-		var item generationTask
-		if err := scanRawJSON(rows, &item); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return scanGenerationTaskSummaryRows(rows)
 }
 
 func (s *postgresStore) ListAssets() ([]asset, error) {
@@ -395,20 +484,14 @@ func (s *postgresStore) ListAssets() ([]asset, error) {
 	if err := s.ensureReady(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `select raw from xz_assets order by created_at desc, id desc`)
+	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+		order by created_at desc nulls last, id desc
+	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []asset{}
-	for rows.Next() {
-		var item asset
-		if err := scanRawJSON(rows, &item); err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return scanAssetSummaryRows(rows)
 }
 
 const generationTaskSummarySelect = `
@@ -440,9 +523,9 @@ const assetSummarySelect = `
 		coalesce(name, ''),
 		coalesce(media_type, ''),
 		coalesce(url, ''),
-		coalesce(thumbnail_url, ''),
+		'',
 		coalesce(favorite, false),
-		coalesce((metadata - 'thumbnailUrl' - 'referenceImages' - 'inputImagesSnapshot' - 'maskDraft')::text, '{}'),
+		'{}',
 		coalesce(created_at, ''),
 		coalesce(updated_at, '')
 	from xz_assets
@@ -462,6 +545,24 @@ func (s *postgresStore) ListGenerationTasksForUser(userID string, limit int) ([]
 		order by created_at desc nulls last, id desc
 		limit $2
 	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanGenerationTaskSummaryRows(rows)
+}
+
+func (s *postgresStore) listGenerationTasksForUsers(ctx context.Context, userIDs []string, limit int) ([]generationTask, error) {
+	where, args := postgresTextInCondition("user_id", userIDs)
+	query := generationTaskSummarySelect + `
+		where ` + where + `
+		order by created_at desc nulls last, id desc
+	`
+	if limit > 0 {
+		args = append(args, limit)
+		query += ` limit $` + strconv.Itoa(len(args))
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -507,6 +608,24 @@ func (s *postgresStore) ListAssetsForUser(userID string, limit int) ([]asset, er
 		order by created_at desc nulls last, id desc
 		limit $2
 	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAssetSummaryRows(rows)
+}
+
+func (s *postgresStore) listAssetsForUsers(ctx context.Context, userIDs []string, limit int) ([]asset, error) {
+	where, args := postgresTextInCondition("user_id", userIDs)
+	query := assetSummarySelect + `
+		where ` + where + `
+		order by created_at desc nulls last, id desc
+	`
+	if limit > 0 {
+		args = append(args, limit)
+		query += ` limit $` + strconv.Itoa(len(args))
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2900,6 +3019,75 @@ func scanRawJSON(rows *sql.Rows, target any) error {
 	return rows.Scan(rawScanner(target))
 }
 
+func withPlanDefaults(plans []adminPlan) []adminPlan {
+	if len(plans) == 0 {
+		return canonicalBillingPlans()
+	}
+	return mergeCanonicalPlans(plans)
+}
+
+func stringBoolMapKeys(items map[string]bool) []string {
+	keys := make([]string, 0, len(items))
+	for key, ok := range items {
+		key = strings.TrimSpace(key)
+		if ok && key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func postgresTextInCondition(column string, values []string) (string, []any) {
+	args := make([]any, 0, len(values))
+	placeholders := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		args = append(args, value)
+		placeholders = append(placeholders, "$"+strconv.Itoa(len(args)))
+	}
+	if len(args) == 0 {
+		return "false", nil
+	}
+	return column + " in (" + strings.Join(placeholders, ",") + ")", args
+}
+
+func (s *postgresStore) countRowsForUsers(ctx context.Context, table string, userIDs []string) (int, error) {
+	switch table {
+	case "xz_generation_tasks", "xz_assets":
+	default:
+		return 0, fmt.Errorf("unsupported user count table: %s", table)
+	}
+	where, args := postgresTextInCondition("user_id", userIDs)
+	query := `select count(*) from ` + table + ` where ` + where
+	var count int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *postgresStore) listUsersBasic(ctx context.Context) ([]adminUser, error) {
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_users order by created_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminUser{}
+	for rows.Next() {
+		var item adminUser
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *postgresStore) listUsers(ctx context.Context) ([]adminUser, error) {
 	rows, err := s.db.QueryContext(ctx, `select raw from xz_users order by created_at, id`)
 	if err != nil {
@@ -3012,6 +3200,24 @@ func (s *postgresStore) listPointAccounts(ctx context.Context) ([]adminPointAcco
 	return items, rows.Err()
 }
 
+func (s *postgresStore) listPointAccountsForUsers(ctx context.Context, userIDs []string) ([]adminPointAccount, error) {
+	where, args := postgresTextInCondition("user_id", userIDs)
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_point_accounts where `+where+` order by id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminPointAccount{}
+	for rows.Next() {
+		var item adminPointAccount
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *postgresStore) listTokenRecords(ctx context.Context) ([]adminTokenRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `select raw from xz_token_records order by created_at desc, id desc`)
 	if err != nil {
@@ -3029,8 +3235,60 @@ func (s *postgresStore) listTokenRecords(ctx context.Context) ([]adminTokenRecor
 	return items, rows.Err()
 }
 
+func (s *postgresStore) listTokenRecordsForUser(ctx context.Context, userID string) ([]adminTokenRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_token_records where user_id = $1 order by created_at desc, id desc`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminTokenRecord{}
+	for rows.Next() {
+		var item adminTokenRecord
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *postgresStore) listOrders(ctx context.Context) ([]adminOrder, error) {
 	rows, err := s.db.QueryContext(ctx, `select raw from xz_orders order by created_at desc, id desc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminOrder{}
+	for rows.Next() {
+		var item adminOrder
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *postgresStore) listOrdersForUser(ctx context.Context, userID string) ([]adminOrder, error) {
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_orders where user_id = $1 order by created_at desc, id desc`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminOrder{}
+	for rows.Next() {
+		var item adminOrder
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *postgresStore) listOrdersForUsers(ctx context.Context, userIDs []string) ([]adminOrder, error) {
+	where, args := postgresTextInCondition("user_id", userIDs)
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_orders where `+where+` order by created_at desc, id desc`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3097,6 +3355,23 @@ func (s *postgresStore) listCommissions(ctx context.Context) ([]adminCommission,
 	return items, rows.Err()
 }
 
+func (s *postgresStore) listCommissionsForAgent(ctx context.Context, agentID string) ([]adminCommission, error) {
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_commissions where agent_id = $1 order by created_at desc, id desc`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminCommission{}
+	for rows.Next() {
+		var item adminCommission
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *postgresStore) listMarketingCommissionRules(ctx context.Context) ([]adminCommissionRule, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		select id, name, order_type, earner_role, relation_depth, fixed_amount_cents, rate, max_total_rate, status, metadata, created_at, updated_at
@@ -3135,8 +3410,65 @@ func (s *postgresStore) listBillingEvents(ctx context.Context) ([]adminBillingEv
 	return items, rows.Err()
 }
 
+func (s *postgresStore) listBillingEventsForUser(ctx context.Context, userID string) ([]adminBillingEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_billing_events where user_id = $1 order by occurred_at desc, id desc`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminBillingEvent{}
+	for rows.Next() {
+		var item adminBillingEvent
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *postgresStore) listBillingEventsForUsers(ctx context.Context, userIDs []string, limit int) ([]adminBillingEvent, error) {
+	where, args := postgresTextInCondition("user_id", userIDs)
+	query := `select raw from xz_billing_events where ` + where + ` order by occurred_at desc, id desc`
+	if limit > 0 {
+		args = append(args, limit)
+		query += ` limit $` + strconv.Itoa(len(args))
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminBillingEvent{}
+	for rows.Next() {
+		var item adminBillingEvent
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *postgresStore) listWithdrawals(ctx context.Context) ([]adminWithdrawal, error) {
 	rows, err := s.db.QueryContext(ctx, `select raw from xz_withdrawals order by created_at desc, id desc`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminWithdrawal{}
+	for rows.Next() {
+		var item adminWithdrawal
+		if err := scanRawJSON(rows, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *postgresStore) listWithdrawalsForAgent(ctx context.Context, agentID string) ([]adminWithdrawal, error) {
+	rows, err := s.db.QueryContext(ctx, `select raw from xz_withdrawals where agent_id = $1 order by created_at desc, id desc`, agentID)
 	if err != nil {
 		return nil, err
 	}
