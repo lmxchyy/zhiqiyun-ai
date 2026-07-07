@@ -3738,13 +3738,15 @@ function bindDynamicParams(){
 }
 async function loadConfig(){
     try {
-        const cfg = await fetch('/api/config').then(r => r.json());
+        const [cfg, wf] = await Promise.all([
+            fetch('/api/config').then(r => r.json()),
+            fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}))
+        ]);
         apiProviders = Array.isArray(cfg.api_providers) ? cfg.api_providers : [];
         comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
         updateProviderModels();
-        const wf = await fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}));
         comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
         runningHubWorkflowCache = {};
         const rhProvider = apiProviders.find(p => p.id === 'runninghub');
@@ -16140,18 +16142,22 @@ window.addEventListener('studio-lang-change', () => {
     if(promptTemplatePanel?.classList?.contains('open')) renderPromptTemplatePanel();
     render();
 });
+function runCanvasIdle(task){
+    const run = () => Promise.resolve().then(task).catch(() => {});
+    if(window.requestIdleCallback) window.requestIdleCallback(run, {timeout:1600});
+    else setTimeout(run, 80);
+}
 window.onload = async () => {
     applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light');
     loadPromptPresets();
     loadPromptTemplateGroups();
     loadPromptTemplateOverrides();
-    await loadPromptTemplates();
     if(window.StudioI18n) window.StudioI18n.apply();
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();
-    await loadConfig();
-    await loadAssetLibrary();
-    await loadCanvas();
+    await Promise.all([loadConfig(), loadCanvas()]);
     syncApiKindToggleVisibility();
     render();
+    runCanvasIdle(loadAssetLibrary);
+    runCanvasIdle(loadPromptTemplates);
 };

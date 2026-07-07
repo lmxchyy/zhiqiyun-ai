@@ -317,11 +317,20 @@
         </view>
       </scroll-view>
       <view v-else-if="activeModule === 'wirelessCanvas'" class="wireless-canvas-page">
+        <view v-if="!wirelessCanvasFrameLoaded" class="wireless-canvas-loading" role="status" aria-live="polite">
+          <text>无线画布加载中</text>
+          <text>正在准备节点、资产库与工作流工具</text>
+        </view>
         <iframe
+          v-if="wirelessCanvasFrameSrc"
           class="wireless-canvas-frame"
-          :src="wirelessCanvasSrc"
+          :class="{ 'is-loading': !wirelessCanvasFrameLoaded }"
+          :src="wirelessCanvasFrameSrc"
           title="无线画布"
+          loading="lazy"
+          referrerpolicy="same-origin"
           allow="clipboard-read; clipboard-write; fullscreen"
+          @load="handleWirelessCanvasFrameLoad"
         ></iframe>
       </view>
 
@@ -933,7 +942,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api } from "../api/client";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
 import PptDocumentGeneration from "../components/PptDocumentGeneration.vue";
@@ -1324,6 +1333,50 @@ const apiSettingsMode = ref<"edit" | "add" | "recommend">("edit");
 const newApiProviderDraft = ref<ApiProviderForm>(createApiProviderForm(apiProviderTemplates[0].provider));
 const selectedBillingCycle = ref<BillingCycleId>("monthly");
 const wirelessCanvasSrc = "/static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi";
+const wirelessCanvasFrameSrc = ref("");
+const wirelessCanvasFrameLoaded = ref(false);
+let wirelessCanvasLoadTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearWirelessCanvasLoadTimer() {
+  if (!wirelessCanvasLoadTimer) return;
+  clearTimeout(wirelessCanvasLoadTimer);
+  wirelessCanvasLoadTimer = null;
+}
+
+function scheduleWirelessCanvasFrameLoad() {
+  if (activeModule.value !== "wirelessCanvas") return;
+  wirelessCanvasFrameLoaded.value = false;
+  clearWirelessCanvasLoadTimer();
+  if (wirelessCanvasFrameSrc.value) return;
+
+  const loadFrame = () => {
+    if (activeModule.value === "wirelessCanvas") {
+      wirelessCanvasFrameSrc.value = wirelessCanvasSrc;
+    }
+  };
+
+  if (typeof window === "undefined") {
+    loadFrame();
+    return;
+  }
+
+  wirelessCanvasLoadTimer = window.setTimeout(() => {
+    wirelessCanvasLoadTimer = null;
+    window.requestAnimationFrame(loadFrame);
+  }, 80);
+}
+
+function handleWirelessCanvasFrameLoad() {
+  wirelessCanvasFrameLoaded.value = true;
+}
+
+watch(activeModule, (moduleId) => {
+  if (moduleId === "wirelessCanvas") {
+    scheduleWirelessCanvasFrameLoad();
+    return;
+  }
+  clearWirelessCanvasLoadTimer();
+}, { immediate: true });
 
 const billingCycles: BillingCycle[] = [
   { id: "monthly", label: "连续包月", discount: "7折" },
@@ -1666,6 +1719,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearWirelessCanvasLoadTimer();
   window.removeEventListener("popstate", syncModuleFromLocation);
 });
 
@@ -2296,6 +2350,7 @@ async function login() {
 }
 
 .wireless-canvas-page {
+  position: relative;
   width: 100%;
   height: 100%;
   min-height: 100vh;
@@ -2309,6 +2364,40 @@ async function login() {
   height: 100vh;
   border: 0;
   background: #f8fafc;
+  opacity: 1;
+  transition: opacity .18s ease;
+}
+
+.wireless-canvas-frame.is-loading {
+  opacity: 0;
+}
+
+.wireless-canvas-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, .08), transparent 34%),
+    linear-gradient(315deg, rgba(37, 99, 235, .08), transparent 36%),
+    #f8fafc;
+  color: #334155;
+  pointer-events: none;
+}
+
+.wireless-canvas-loading text:first-child {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.wireless-canvas-loading text:last-child {
+  color: #64748b;
+  font-size: 13px;
 }
 
 .video-generation-page {

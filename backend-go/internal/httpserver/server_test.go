@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -341,6 +342,12 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(adminStaticDir, "index.html"), []byte("ADMIN_BUNDLE"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(adminStaticDir, "static", "js"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(adminStaticDir, "static", "js", "smart-canvas.js"), []byte("SMART_CANVAS_BUNDLE"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	server := New(config.Config{
 		Addr:           ":0",
@@ -379,6 +386,40 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 	}
 	if got := strings.TrimSpace(assetRes.Body.String()); got != "USER_ASSET" {
 		t.Fatalf("/assets/login.js body = %q, want USER_ASSET", got)
+	}
+
+	canvasBundleRes := request(t, server.Handler, http.MethodGet, "/static/js/smart-canvas.js", nil)
+	if canvasBundleRes.Code != http.StatusOK {
+		t.Fatalf("/static/js/smart-canvas.js status = %d, body = %s", canvasBundleRes.Code, canvasBundleRes.Body.String())
+	}
+	if got := strings.TrimSpace(canvasBundleRes.Body.String()); got != "SMART_CANVAS_BUNDLE" {
+		t.Fatalf("/static/js/smart-canvas.js body = %q, want SMART_CANVAS_BUNDLE", got)
+	}
+	if cacheControl := canvasBundleRes.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "public") {
+		t.Fatalf("/static/js/smart-canvas.js Cache-Control = %q, want public cache", cacheControl)
+	}
+	if htmlCache := request(t, server.Handler, http.MethodGet, "/app", nil).Header().Get("Cache-Control"); !strings.Contains(htmlCache, "no-store") {
+		t.Fatalf("/app Cache-Control = %q, want no-store", htmlCache)
+	}
+
+	gzipReq := httptest.NewRequest(http.MethodGet, "/static/js/smart-canvas.js", nil)
+	gzipReq.Header.Set("Accept-Encoding", "gzip")
+	gzipRes := httptest.NewRecorder()
+	server.Handler.ServeHTTP(gzipRes, gzipReq)
+	if got := gzipRes.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", got)
+	}
+	reader, err := gzip.NewReader(gzipRes.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var uncompressed bytes.Buffer
+	if _, err := uncompressed.ReadFrom(reader); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(uncompressed.String()); got != "SMART_CANVAS_BUNDLE" {
+		t.Fatalf("gzip body = %q, want SMART_CANVAS_BUNDLE", got)
 	}
 
 	res := request(t, server.Handler, http.MethodGet, "/user", nil)

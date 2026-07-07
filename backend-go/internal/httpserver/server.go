@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -44,6 +45,7 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(gzipMiddleware())
 	if pgStore, ok := store.(*postgresStore); ok {
 		router.Use(pgStore.auditMiddleware())
 	}
@@ -284,22 +286,22 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func staticIndex(root string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		w.Header().Set("Pragma", "no-cache")
+		setStaticCacheHeaders(w, filepath.Join(root, "index.html"), true)
 		http.ServeFile(w, r, filepath.Join(root, "index.html"))
 	}
 }
+
 func staticFiles(root string) http.HandlerFunc {
 	fileServer := http.FileServer(http.Dir(root))
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		w.Header().Set("Pragma", "no-cache")
 		cleanURLPath := path.Clean("/" + r.URL.Path)
 		localPath := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(cleanURLPath, "/")))
 		if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+			setStaticCacheHeaders(w, localPath, false)
 			fileServer.ServeHTTP(w, r)
 			return
 		}
+		setStaticCacheHeaders(w, filepath.Join(root, "index.html"), true)
 		http.ServeFile(w, r, filepath.Join(root, "index.html"))
 	}
 }
@@ -307,14 +309,78 @@ func staticFiles(root string) http.HandlerFunc {
 func staticPrefixFiles(prefix string, root string) http.Handler {
 	fileServer := http.StripPrefix(strings.TrimSuffix(prefix, "/"), http.FileServer(http.Dir(root)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		w.Header().Set("Pragma", "no-cache")
 		cleanURLPath := path.Clean("/" + strings.TrimPrefix(r.URL.Path, prefix))
 		localPath := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(cleanURLPath, "/")))
 		if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+			setStaticCacheHeaders(w, localPath, false)
 			fileServer.ServeHTTP(w, r)
 			return
 		}
+		setStaticCacheHeaders(w, filepath.Join(root, "index.html"), true)
 		http.ServeFile(w, r, filepath.Join(root, "index.html"))
 	})
+}
+
+func setStaticCacheHeaders(w http.ResponseWriter, localPath string, index bool) {
+	if index || strings.EqualFold(filepath.Ext(localPath), ".html") {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		w.Header().Set("Pragma", "no-cache")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	w.Header().Del("Pragma")
+}
+
+func gzipMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !gzipEligibleRequest(c.Request) {
+			c.Next()
+			return
+		}
+		writer := gzip.NewWriter(c.Writer)
+		defer writer.Close()
+		c.Header("Content-Encoding", "gzip")
+		c.Header("Vary", "Accept-Encoding")
+		c.Writer.Header().Del("Content-Length")
+		c.Writer = &gzipResponseWriter{ResponseWriter: c.Writer, writer: writer}
+		c.Next()
+	}
+}
+
+func gzipEligibleRequest(r *http.Request) bool {
+	if r == nil || r.Method == http.MethodHead || r.Header.Get("Range") != "" {
+		return false
+	}
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		return false
+	}
+	if strings.HasSuffix(r.URL.Path, ".json") {
+		return true
+	}
+	switch strings.ToLower(path.Ext(r.URL.Path)) {
+	case ".css", ".js", ".html", ".svg", ".txt", ".md", ".map":
+		return true
+	default:
+		return false
+	}
+}
+
+type gzipResponseWriter struct {
+	gin.ResponseWriter
+	writer *gzip.Writer
+}
+
+func (w *gzipResponseWriter) Write(data []byte) (int, error) {
+	w.Header().Del("Content-Length")
+	return w.writer.Write(data)
+}
+
+func (w *gzipResponseWriter) WriteString(data string) (int, error) {
+	w.Header().Del("Content-Length")
+	return w.writer.Write([]byte(data))
+}
+
+func (w *gzipResponseWriter) WriteHeader(statusCode int) {
+	w.Header().Del("Content-Length")
+	w.ResponseWriter.WriteHeader(statusCode)
 }

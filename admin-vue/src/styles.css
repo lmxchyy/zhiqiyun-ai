@@ -13889,6 +13889,7 @@ body {
 }
 
 .wireless-canvas-admin-page {
+  position: relative;
   min-height: calc(100vh - 132px);
   margin: -18px -20px -20px;
   overflow: hidden;
@@ -13902,6 +13903,40 @@ body {
   min-height: 720px;
   border: 0;
   background: #f8fafc;
+  opacity: 1;
+  transition: opacity .18s ease;
+}
+
+.wireless-canvas-admin-frame.is-loading {
+  opacity: 0;
+}
+
+.wireless-canvas-admin-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, .08), transparent 34%),
+    linear-gradient(315deg, rgba(37, 99, 235, .08), transparent 36%),
+    #f8fafc;
+  color: #334155;
+  pointer-events: none;
+}
+
+.wireless-canvas-admin-loading strong {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.wireless-canvas-admin-loading span {
+  color: #64748b;
+  font-size: 13px;
 }
 
 .user-console-shell .collapsed-icon-menu {

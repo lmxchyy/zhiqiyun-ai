@@ -2074,11 +2074,20 @@
             </section>
           </section>
           <section v-else-if="store.activeModuleId === 'userWirelessCanvas'" class="wireless-canvas-admin-page">
+            <div v-if="!wirelessCanvasFrameLoaded" class="wireless-canvas-admin-loading" role="status" aria-live="polite">
+              <strong>无线画布加载中</strong>
+              <span>正在准备节点、资产库与工作流工具</span>
+            </div>
             <iframe
+              v-if="wirelessCanvasFrameSrc"
               class="wireless-canvas-admin-frame"
-              :src="wirelessCanvasSrc"
+              :class="{ 'is-loading': !wirelessCanvasFrameLoaded }"
+              :src="wirelessCanvasFrameSrc"
               title="无线画布"
+              loading="lazy"
+              referrerpolicy="same-origin"
               allow="clipboard-read; clipboard-write; fullscreen"
+              @load="handleWirelessCanvasFrameLoad"
             ></iframe>
           </section>
           <section v-else-if="store.activeModuleId === 'userVideoGeneration'" class="video-generation-page" @click="openVideoDropdown = ''">
@@ -7273,6 +7282,50 @@ function initialActiveModuleId() {
 
 store.activeModuleId = initialActiveModuleId();
 const wirelessCanvasSrc = "/static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi";
+const wirelessCanvasFrameSrc = ref("");
+const wirelessCanvasFrameLoaded = ref(false);
+let wirelessCanvasLoadTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearWirelessCanvasLoadTimer() {
+  if (!wirelessCanvasLoadTimer) return;
+  clearTimeout(wirelessCanvasLoadTimer);
+  wirelessCanvasLoadTimer = null;
+}
+
+function scheduleWirelessCanvasFrameLoad() {
+  if (store.activeModuleId !== "userWirelessCanvas") return;
+  wirelessCanvasFrameLoaded.value = false;
+  clearWirelessCanvasLoadTimer();
+  if (wirelessCanvasFrameSrc.value) return;
+
+  const loadFrame = () => {
+    if (store.activeModuleId === "userWirelessCanvas") {
+      wirelessCanvasFrameSrc.value = wirelessCanvasSrc;
+    }
+  };
+
+  if (typeof window === "undefined") {
+    loadFrame();
+    return;
+  }
+
+  wirelessCanvasLoadTimer = window.setTimeout(() => {
+    wirelessCanvasLoadTimer = null;
+    window.requestAnimationFrame(loadFrame);
+  }, 80);
+}
+
+function handleWirelessCanvasFrameLoad() {
+  wirelessCanvasFrameLoaded.value = true;
+}
+
+watch(() => store.activeModuleId, (moduleId) => {
+  if (moduleId === "userWirelessCanvas") {
+    scheduleWirelessCanvasFrameLoad();
+    return;
+  }
+  clearWirelessCanvasLoadTimer();
+}, { immediate: true });
 
 function resolveOpenTabs() {
   if (typeof window === "undefined") return modules.filter((item) => defaultOpenTabIds.includes(item.id));
@@ -8908,6 +8961,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearAiTaskLongPressTimer();
+  clearWirelessCanvasLoadTimer();
   if (aiImageDraftSaveTimer) {
     window.clearTimeout(aiImageDraftSaveTimer);
     aiImageDraftSaveTimer = null;

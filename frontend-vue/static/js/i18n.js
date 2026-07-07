@@ -1,6 +1,7 @@
 (function(){
     const VERSION = '2026.06.24.2';
-    const scripts = [
+    const currentScript = document.currentScript;
+    const defaultScripts = [
         '/static/js/i18n-core.js',
         '/static/js/i18n/common.js',
         '/static/js/i18n/studio.js',
@@ -9,8 +10,19 @@
         '/static/js/i18n/smart-canvas.js',
         '/static/js/i18n/comfyui-settings.js',
     ];
+    const pageScripts = {
+        'smart-canvas': [
+            '/static/js/i18n-core.js',
+            '/static/js/i18n/common.js',
+            '/static/js/i18n/studio.js',
+            '/static/js/i18n/canvas.js',
+            '/static/js/i18n/smart-canvas.js',
+        ],
+    };
+    const page = currentScript?.dataset?.i18nPage || '';
+    const scripts = pageScripts[page] || defaultScripts;
     const tags = scripts.map(src => '<script src="' + src + '?v=' + VERSION + '"></script>').join('');
-    if(document.readyState === 'loading' && document.currentScript){
+    if(document.readyState === 'loading' && currentScript){
         document.write(tags);
         return;
     }

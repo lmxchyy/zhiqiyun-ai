@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 COMPOSE_FILE="${COMPOSE_FILE:-compose.prod.yml}"
-ENV_FILE="${ENV_FILE:-.env}"
+ENV_FILE="${ENV_FILE:-.env.production}"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 
 printf '[deploy] Project directory: %s\n' "$SCRIPT_DIR"
