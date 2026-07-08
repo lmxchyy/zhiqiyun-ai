@@ -1,6 +1,6 @@
 ﻿<template>
   <el-config-provider :size="currentElementSize">
-  <el-container v-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
+  <el-container v-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'user-agent-figma-shell': isUserConsole && store.activeModuleId === 'userAgentCenter', 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
     <div v-if="mobileDrawerOpen" class="mobile-drawer-mask" @click="mobileDrawerOpen = false"></div>
     <el-aside width="200px" class="admin-sidebar">
       <div class="brand">
@@ -97,7 +97,7 @@
           </div>
         </div>
         <div class="header-actions">
-          <el-input v-model="searchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="搜索当前模块" />
+          <el-input v-model="searchKeyword" class="header-search" :prefix-icon="Search" clearable :placeholder="store.activeModuleId === 'userAgentCenter' ? '搜索智能体名称或描述...' : '搜索当前模块'" />
           <el-button :icon="Refresh" circle :loading="store.loading" @click="() => store.loadActiveModule()" />
           <el-dropdown trigger="click" @command="setElementSize">
             <el-button class="size-button">
@@ -603,105 +603,170 @@
             </el-card>
           </section>
           <section v-else-if="store.activeModuleId === 'userAgentCenter'" class="user-agent-center-page">
-            <section class="user-agent-center-hero">
-              <div>
-                <span>Agent Center</span>
-                <h2>智能体中心</h2>
-                <p>创建专属 AI 智能体，集中管理模板、知识库、调用数据和发布入口。</p>
-              </div>
-              <div class="user-agent-hero-robot" aria-hidden="true">
-                <i></i>
-                <b></b>
-                <em>API</em>
-                <strong>KB</strong>
-              </div>
-            </section>
+            <div class="user-agent-desktop-view">
+              <section class="user-agent-center-layout">
+                <main class="user-agent-main-column">
+                  <section class="user-agent-center-hero">
+                    <div>
+                      <h2>智能体中心</h2>
+                      <p>创建专属 AI 智能体，连接知识库、工具与业务流程</p>
+                    </div>
+                    <div class="user-agent-hero-robot" aria-hidden="true">
+                      <i></i>
+                      <b></b>
+                      <em>AI</em>
+                    </div>
+                  </section>
 
-            <section class="user-agent-template-panel">
-              <header>
+                  <section class="user-agent-template-panel">
+                    <header>
+                      <strong>智能体模板</strong>
+                      <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
+                    </header>
+                    <div class="user-agent-template-grid">
+                      <article v-for="template in agentCenterTemplates" :key="template.name" class="user-agent-template-card">
+                        <div :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</div>
+                        <strong>{{ template.name }}</strong>
+                        <p>{{ template.desc }}</p>
+                        <button type="button" @click="selectAdminModule('userAgentCenter')">创建</button>
+                      </article>
+                    </div>
+                  </section>
+
+                  <main class="user-agent-list-panel">
+                    <header class="user-agent-list-head">
+                      <div class="user-agent-tabs">
+                        <button type="button" class="active">我的智能体</button>
+                        <button type="button">最近使用</button>
+                        <button type="button">收藏</button>
+                      </div>
+                      <div class="user-agent-list-tools">
+                        <label><el-icon><Search /></el-icon><input placeholder="搜索智能体..." /></label>
+                        <select aria-label="筛选智能体类型"><option>全部类型</option></select>
+                        <button type="button" @click="selectAdminModule('userAgentCenter')">+ 创建智能体</button>
+                      </div>
+                    </header>
+                    <div class="user-agent-table">
+                      <div class="user-agent-table-head">
+                        <span>智能体名称</span><span>类型</span><span>状态</span><span>模型</span><span>知识库</span><span>调用次数</span><span>更新时间</span><span>操作</span>
+                      </div>
+                      <div v-for="agent in agentCenterRows" :key="agent.name" class="user-agent-table-row">
+                        <div class="user-agent-name-cell">
+                          <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
+                          <div><strong>{{ agent.name }}</strong><small>{{ agent.desc }}</small></div>
+                        </div>
+                        <span :class="['user-agent-pill', agent.tone]">{{ agent.type }}</span>
+                        <span :class="['user-agent-status', { disabled: agent.status === '已停用', draft: agent.status === '草稿' }]">{{ agent.status }}</span>
+                        <span>{{ agent.model }}</span>
+                        <span>{{ agent.knowledge }}</span>
+                        <span>{{ agent.calls }}</span>
+                        <span>{{ agent.updated }}</span>
+                        <div class="user-agent-row-actions">
+                          <button type="button" @click="selectAdminModule('userAgentCenter')">□</button>
+                          <button type="button">□</button>
+                          <button type="button">□</button>
+                          <button type="button">...</button>
+                        </div>
+                      </div>
+                    </div>
+                  </main>
+                </main>
+
+                <aside class="user-agent-side-panel">
+                  <article class="user-agent-side-card is-metrics">
+                    <header><strong>智能体数据概览</strong><button type="button">近 7 天⌄</button></header>
+                    <div class="user-agent-metric-grid">
+                      <div v-for="metric in agentCenterMetrics" :key="metric.label">
+                        <span>{{ metric.label }}</span>
+                        <strong>{{ metric.value }}</strong>
+                        <small>↑ {{ metric.trend }}</small>
+                      </div>
+                    </div>
+                  </article>
+                  <article class="user-agent-side-card is-trend">
+                    <header><strong>使用趋势</strong><button type="button">近 7 天⌄</button></header>
+                    <div class="user-agent-trend">
+                      <span v-for="bar in agentCenterTrend" :key="bar.label"><i :style="{ height: bar.height }"></i><em>{{ bar.label }}</em></span>
+                    </div>
+                  </article>
+                  <article class="user-agent-side-card is-ranking">
+                    <strong>使用最多的智能体</strong>
+                    <ol class="user-agent-ranking">
+                      <li v-for="(item, index) in agentCenterRanking" :key="item.name"><span>{{ index + 1 }}</span><b>{{ item.name }}</b><em>{{ item.calls }}</em></li>
+                    </ol>
+                  </article>
+                  <article class="user-agent-side-card is-shortcuts">
+                    <strong>快速入口</strong>
+                    <div class="user-agent-shortcuts">
+                      <button v-for="item in agentCenterShortcuts" :key="item.label" type="button"><span>{{ item.icon }}</span>{{ item.label }}</button>
+                    </div>
+                  </article>
+                </aside>
+              </section>
+            </div>
+
+            <div class="user-agent-mobile-view">
+              <div class="user-agent-mobile-status">
+                <span>9:41</span>
+                <span>5G ▰</span>
+              </div>
+              <header class="user-agent-mobile-top">
+                <div>
+                  <h2>智能体中心</h2>
+                  <p>创建、调试与发布你的 AI 智能体</p>
+                </div>
+                <button type="button" @click="selectAdminModule('userAgentCenter')">+</button>
+              </header>
+              <label class="user-agent-mobile-search"><i></i><input placeholder="搜索智能体名称或描述..." /></label>
+
+              <section class="user-agent-mobile-overview">
+                <div>
+                  <strong>本周智能体运行概览</strong>
+                  <p>7 个智能体正在服务业务流程</p>
+                </div>
+                <div class="user-agent-mobile-bot" aria-hidden="true">AI</div>
+                <div class="user-agent-mobile-metrics">
+                  <span>调用<strong>5,689</strong></span>
+                  <span>对话<strong>12,458</strong></span>
+                  <span>Token<strong>2.45M</strong></span>
+                </div>
+              </section>
+
+              <section class="user-agent-mobile-section-head">
                 <strong>智能体模板</strong>
                 <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
-              </header>
-              <div class="user-agent-template-grid">
-                <article v-for="template in agentCenterTemplates" :key="template.name" class="user-agent-template-card">
-                  <div :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</div>
-                  <strong>{{ template.name }}</strong>
-                  <p>{{ template.desc }}</p>
-                  <button type="button" @click="selectAdminModule('userAgentCenter')">创建</button>
+              </section>
+              <div class="user-agent-mobile-template-scroll">
+                <article v-for="template in agentCenterTemplates.slice(0, 4)" :key="template.name" class="user-agent-mobile-template-card">
+                  <span :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</span>
+                  <strong>{{ template.name.replace('智能体', '').replace('企业知识库', '知识库问答') }}</strong>
+                  <small>{{ template.desc.split('，')[0] }}</small>
                 </article>
               </div>
-            </section>
 
-            <section class="user-agent-center-layout">
-              <main class="user-agent-list-panel">
-                <header class="user-agent-list-head">
-                  <div class="user-agent-tabs">
-                    <button type="button" class="active">我的智能体</button>
-                    <button type="button">最近使用</button>
-                    <button type="button">收藏</button>
+              <section class="user-agent-mobile-section-head">
+                <strong>我的智能体</strong>
+                <button type="button">全部类型⌄</button>
+              </section>
+              <div class="user-agent-mobile-list">
+                <article v-for="agent in agentCenterMobileRows" :key="agent.name" class="user-agent-mobile-agent-card">
+                  <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
+                  <div>
+                    <strong>{{ agent.name }}</strong>
+                    <small>{{ agent.type }} · {{ agent.model }}</small>
                   </div>
-                  <div class="user-agent-list-tools">
-                    <label><el-icon><Search /></el-icon><input placeholder="搜索智能体..." /></label>
-                    <select aria-label="筛选智能体类型"><option>全部类型</option></select>
-                    <button type="button" @click="selectAdminModule('userAgentCenter')">+ 创建智能体</button>
-                  </div>
-                </header>
-                <div class="user-agent-table">
-                  <div class="user-agent-table-head">
-                    <span>智能体名称</span><span>类型</span><span>状态</span><span>模型</span><span>知识库</span><span>调用次数</span><span>更新时间</span><span>操作</span>
-                  </div>
-                  <div v-for="agent in agentCenterRows" :key="agent.name" class="user-agent-table-row">
-                    <div class="user-agent-name-cell">
-                      <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
-                      <div><strong>{{ agent.name }}</strong><small>{{ agent.desc }}</small></div>
-                    </div>
-                    <span :class="['user-agent-pill', agent.tone]">{{ agent.type }}</span>
-                    <span class="user-agent-status">{{ agent.status }}</span>
-                    <span>{{ agent.model }}</span>
-                    <span>{{ agent.knowledge }}</span>
-                    <span>{{ agent.calls }}</span>
-                    <span>{{ agent.updated }}</span>
-                    <div class="user-agent-row-actions">
-                      <button type="button" @click="selectAdminModule('userAgentCenter')">对</button>
-                      <button type="button">改</button>
-                      <button type="button">数</button>
-                      <button type="button">...</button>
-                    </div>
-                  </div>
-                </div>
-              </main>
-
-              <aside class="user-agent-side-panel">
-                <article class="user-agent-side-card">
-                  <header><strong>智能体数据概览</strong><button type="button">近 7 天⌄</button></header>
-                  <div class="user-agent-metric-grid">
-                    <div v-for="metric in agentCenterMetrics" :key="metric.label">
-                      <span>{{ metric.label }}</span>
-                      <strong>{{ metric.value }}</strong>
-                      <small>{{ metric.trend }}</small>
-                    </div>
-                  </div>
+                  <em>{{ agent.status }}</em>
+                  <b>{{ agent.calls }} 次</b>
                 </article>
-                <article class="user-agent-side-card">
-                  <header><strong>使用趋势</strong><button type="button">近 7 天⌄</button></header>
-                  <div class="user-agent-trend">
-                    <span v-for="bar in agentCenterTrend" :key="bar.label"><i :style="{ height: bar.height }"></i><em>{{ bar.label }}</em></span>
-                  </div>
-                </article>
-                <article class="user-agent-side-card">
-                  <strong>使用最多的智能体</strong>
-                  <ol class="user-agent-ranking">
-                    <li v-for="(item, index) in agentCenterRanking" :key="item.name"><span>{{ index + 1 }}</span><b>{{ item.name }}</b><em>{{ item.calls }}</em></li>
-                  </ol>
-                </article>
-                <article class="user-agent-side-card">
-                  <strong>快速入口</strong>
-                  <div class="user-agent-shortcuts">
-                    <button v-for="item in agentCenterShortcuts" :key="item.label" type="button"><span>{{ item.icon }}</span>{{ item.label }}</button>
-                  </div>
-                </article>
-              </aside>
-            </section>
+              </div>
+              <button class="user-agent-mobile-all" type="button" @click="selectAdminModule('userAgentCenter')">查看全部智能体 ></button>
+              <nav class="user-agent-mobile-bottom" aria-label="移动端导航">
+                <button v-for="item in agentMobileBottomNav" :key="item.label" type="button" :class="{ active: item.targetId === store.activeModuleId }" @click="selectAdminModule(item.targetId)">
+                  <span>{{ item.letter }}</span>
+                  <small>{{ item.label }}</small>
+                </button>
+              </nav>
+            </div>
           </section>
 
           <section v-else-if="store.activeModuleId === 'userWorks'" class="user-works-page">
@@ -3792,37 +3857,40 @@ const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
 ];
 const agentCenterTemplates = [
-  { name: "基础对话智能体", desc: "通用问答，适合各类场景", icon: "AI", tone: "purple" },
-  { name: "企业知识库智能体", desc: "基于知识库，精准问答", icon: "KB", tone: "green" },
+  { name: "基础对话智能体", desc: "通用问答，适合各类场景", icon: "Q", tone: "purple" },
+  { name: "企业知识库智能体", desc: "基于知识库，精准问答", icon: "K", tone: "green" },
   { name: "销售助手", desc: "销售话术、客户跟进助力", icon: "S", tone: "orange" },
-  { name: "客服助手", desc: "7x24 智能客服，解答问题", icon: "CS", tone: "purple" },
-  { name: "招商助手", desc: "招商政策解答与线索收集", icon: "IN", tone: "blue" },
-  { name: "内部 SOP 助手", desc: "制度、流程、审批查询", icon: "SOP", tone: "purple" },
-  { name: "表单收集助手", desc: "表单收集、线索采集", icon: "FM", tone: "green" },
-  { name: "API 工作流助手", desc: "调用 API 接口，自动执行", icon: "</>", tone: "blue" }
+  { name: "客服助手", desc: "7x24 智能客服，解答问题", icon: "C", tone: "purple" },
+  { name: "招商助手", desc: "招商政策解答与线索收集", icon: "B", tone: "blue" },
+  { name: "内部 SOP 助手", desc: "制度、流程、审批查询", icon: "P", tone: "purple" },
+  { name: "表单收集助手", desc: "表单收集、结果采集", icon: "F", tone: "green" },
+  { name: "API 工作流助手", desc: "调用 API 接口，自动执行", icon: "API", tone: "blue" }
 ];
 const agentCenterRows = [
-  { name: "产品知识助手", desc: "解答产品功能、参数、使用方法等问题", type: "知识库", status: "已发布", model: "gpt-4o-mini", knowledge: "产品知识库", calls: "1,298", updated: "2024-06-12 14:30", avatar: "知", tone: "green" },
-  { name: "销售跟进助手", desc: "协助销售跟进客户，提供话术建议", type: "销售助手", status: "已发布", model: "gpt-4o", knowledge: "销售资料库", calls: "856", updated: "2024-06-12 10:15", avatar: "销", tone: "orange" },
-  { name: "智能客服助手", desc: "解决常见问题，提升客户满意度", type: "客服助手", status: "已发布", model: "moonshot-v1", knowledge: "客服知识库", calls: "2,350", updated: "2024-06-11 16:45", avatar: "客", tone: "blue" },
-  { name: "招商政策助手", desc: "解答代理政策，收集潜在客户信息", type: "招商助手", status: "草稿", model: "gpt-4o-mini", knowledge: "招商资料库", calls: "128", updated: "2024-06-11 09:20", avatar: "招", tone: "orange" },
-  { name: "内部制度助手", desc: "查询公司制度、流程、审批规范", type: "SOP 助手", status: "已停用", model: "qwen-max", knowledge: "内部制度库", calls: "312", updated: "2024-06-10 18:30", avatar: "SOP", tone: "purple" },
-  { name: "活动报名助手", desc: "收集用户报名信息并导出表格", type: "表单助手", status: "已发布", model: "gpt-4o-mini", knowledge: "-", calls: "689", updated: "2024-06-10 14:12", avatar: "表", tone: "green" }
+  { name: "产品知识助手", desc: "解答业务问题，提升协作效率", type: "知识库", status: "已发布", model: "gpt-4o-mini", knowledge: "产品知识库", calls: "1,298", updated: "2024-06-12 14:30", avatar: "P", tone: "purple" },
+  { name: "销售跟进助手", desc: "解答业务问题，提升协作效率", type: "销售助手", status: "已发布", model: "gpt-4o", knowledge: "销售资料库", calls: "856", updated: "2024-06-12 10:15", avatar: "S", tone: "orange" },
+  { name: "智能客服助手", desc: "解答业务问题，提升协作效率", type: "客服助手", status: "已发布", model: "moonshot-v1", knowledge: "客服知识库", calls: "2,350", updated: "2024-06-11 16:45", avatar: "C", tone: "blue" },
+  { name: "招商政策助手", desc: "解答业务问题，提升协作效率", type: "招商助手", status: "草稿", model: "gpt-4o-mini", knowledge: "招商资料库", calls: "128", updated: "2024-06-11 09:20", avatar: "B", tone: "orange" },
+  { name: "内部制度助手", desc: "解答业务问题，提升协作效率", type: "SOP 助手", status: "已停用", model: "qwen-max", knowledge: "内部制度库", calls: "312", updated: "2024-06-10 18:30", avatar: "P", tone: "purple" },
+  { name: "活动报名助手", desc: "解答业务问题，提升协作效率", type: "表单助手", status: "已发布", model: "gpt-4o-mini", knowledge: "-", calls: "689", updated: "2024-06-10 14:12", avatar: "F", tone: "green" },
+  { name: "订单查询助手", desc: "解答业务问题，提升协作效率", type: "API 助手", status: "草稿", model: "gpt-4o-mini", knowledge: "-", calls: "56", updated: "2024-06-09 11:05", avatar: "API", tone: "blue" }
 ];
+const agentCenterMobileRows = [agentCenterRows[2], agentCenterRows[0]];
 const agentCenterMetrics = [
   { label: "总调用次数", value: "5,689", trend: "+12.5%" },
-  { label: "总对话轮数", value: "12,459", trend: "+8.3%" },
+  { label: "总对话轮数", value: "12,458", trend: "+8.3%" },
   { label: "消耗 Token", value: "2.45M", trend: "+15.2%" },
   { label: "创建智能体", value: "7", trend: "+16.7%" }
 ];
 const agentCenterTrend = [
-  { label: "06-06", height: "38%" },
-  { label: "06-07", height: "58%" },
-  { label: "06-08", height: "48%" },
-  { label: "06-09", height: "74%" },
-  { label: "06-10", height: "58%" },
-  { label: "06-11", height: "52%" },
-  { label: "06-12", height: "86%" }
+  { label: "06-06", height: "58%" },
+  { label: "06-07", height: "38%" },
+  { label: "06-08", height: "50%" },
+  { label: "06-09", height: "30%" },
+  { label: "06-10", height: "20%" },
+  { label: "06-11", height: "34%" },
+  { label: "06-12", height: "48%" },
+  { label: "", height: "78%" }
 ];
 const agentCenterRanking = [
   { name: "智能客服助手", calls: "2,350" },
@@ -3832,10 +3900,17 @@ const agentCenterRanking = [
   { name: "内部制度助手", calls: "312" }
 ];
 const agentCenterShortcuts = [
-  { label: "知识库", icon: "KB" },
-  { label: "API", icon: "API" },
-  { label: "发布", icon: "UP" },
-  { label: "日志", icon: "LOG" }
+  { label: "知识库管理", icon: "KB" },
+  { label: "API 工具", icon: "API" },
+  { label: "应用发布", icon: "PUB" },
+  { label: "调用日志", icon: "LOG" }
+];
+const agentMobileBottomNav = [
+  { label: "首页", letter: "H", targetId: "userDashboard" },
+  { label: "创作", letter: "+", targetId: "userAiImage" },
+  { label: "智能体", letter: "A", targetId: "userAgentCenter" },
+  { label: "作品", letter: "W", targetId: "userWorks" },
+  { label: "我的", letter: "M", targetId: "userMembership" }
 ];
 const userHomeInspirations: UserHomeEntry[] = [
   { title: "产品海报", desc: "一张科技产品发布海报，白色空间，青紫主光，中心产品清晰，适合官网首屏展示", targetId: "userAiImage", mode: "image", coverClass: "is-product", prompt: "一张科技感产品海报，干净白色背景，青绿色主光，中心是一台未来感 AI 设备，适合官网首屏展示。" },
@@ -13087,6 +13162,1064 @@ onMounted(async () => {
 
   :global(.channel-dialog-form) {
     grid-template-columns: 1fr;
+  }
+}
+
+.user-agent-center-page {
+  min-height: calc(100vh - 56px);
+  padding: 16px;
+  background: #f7f8fc;
+  color: #111827;
+}
+
+.user-agent-center-page,
+.user-agent-center-page * {
+  box-sizing: border-box;
+}
+
+.user-agent-desktop-view {
+  display: block;
+}
+
+.user-agent-mobile-view {
+  display: none;
+}
+
+.user-agent-center-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 884px) 292px;
+  gap: 16px;
+  align-items: start;
+  width: min(1192px, 100%);
+  margin: 0 auto;
+}
+
+.user-agent-main-column {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.user-agent-center-hero,
+.user-agent-template-panel,
+.user-agent-list-panel,
+.user-agent-side-card {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #e6e9f2;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(32, 47, 86, 0.05);
+}
+
+.user-agent-center-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  align-items: center;
+  height: 116px;
+  min-height: 0;
+  padding: 0 32px;
+  overflow: hidden;
+}
+
+.user-agent-center-hero h2 {
+  margin: 0 0 8px;
+  color: #4d42d8;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 38px;
+}
+
+.user-agent-center-hero p {
+  margin: 0;
+  color: #69738a;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.user-agent-hero-robot {
+  position: relative;
+  height: 116px;
+}
+
+.user-agent-hero-robot i,
+.user-agent-hero-robot b {
+  position: absolute;
+  border-radius: 999px;
+}
+
+.user-agent-hero-robot i {
+  left: 124px;
+  top: 14px;
+  width: 120px;
+  height: 88px;
+  background: #eeecff;
+}
+
+.user-agent-hero-robot b {
+  left: 274px;
+  top: 64px;
+  width: 28px;
+  height: 28px;
+  background: #7466ff;
+}
+
+.user-agent-hero-robot::before {
+  content: "";
+  position: absolute;
+  left: 274px;
+  top: 28px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c9d6ff;
+}
+
+.user-agent-hero-robot::after {
+  display: none;
+}
+
+.user-agent-hero-robot em {
+  position: absolute;
+  left: 162px;
+  top: 30px;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 36px;
+  border-radius: 12px;
+  background: #5649dc;
+  color: #ffffff;
+  font-size: 14px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.user-agent-template-panel {
+  height: 218px;
+  padding: 18px;
+}
+
+.user-agent-template-panel header,
+.user-agent-list-head,
+.user-agent-side-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-agent-template-panel header strong,
+.user-agent-side-card > strong,
+.user-agent-side-card header strong {
+  color: #111827;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 22px;
+}
+
+.user-agent-template-panel header button,
+.user-agent-side-card header button {
+  border: 0;
+  background: transparent;
+  color: #5b4bff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.user-agent-template-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 99px);
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.user-agent-template-card {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 7px;
+  width: 99px;
+  height: 146px;
+  min-height: 0;
+  max-height: 146px;
+  padding: 18px 8px 10px;
+  border: 1px solid #e6e9f2;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.user-agent-template-icon,
+.user-agent-avatar {
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.user-agent-template-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.user-agent-template-card strong {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 16px;
+}
+
+.user-agent-template-card p {
+  display: -webkit-box;
+  min-height: 30px;
+  margin: 0;
+  overflow: hidden;
+  color: #7a849b;
+  font-size: 10px;
+  line-height: 15px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.user-agent-template-card button {
+  width: 58px;
+  height: 22px;
+  margin-top: auto;
+  border: 0;
+  border-radius: 7px;
+  background: #f0edff;
+  color: #5b4bff;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-agent-template-icon.purple,
+.user-agent-avatar.purple {
+  background: #7466ff;
+}
+
+.user-agent-template-icon.green,
+.user-agent-avatar.green {
+  background: #29b978;
+}
+
+.user-agent-template-icon.orange,
+.user-agent-avatar.orange {
+  background: #ff8438;
+}
+
+.user-agent-template-icon.blue,
+.user-agent-avatar.blue {
+  background: #3478f6;
+}
+
+.user-agent-list-panel {
+  height: 486px;
+  margin-top: 2px;
+  padding: 14px 18px 0;
+  overflow: hidden;
+}
+
+.user-agent-list-head {
+  height: 40px;
+}
+
+.user-agent-tabs {
+  display: flex;
+  gap: 28px;
+  height: 100%;
+}
+
+.user-agent-tabs button {
+  position: relative;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.user-agent-tabs button.active {
+  color: #5b4bff;
+}
+
+.user-agent-tabs button.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -6px;
+  width: 62px;
+  height: 2px;
+  border-radius: 1px;
+  background: #5b4bff;
+}
+
+.user-agent-list-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-agent-list-tools label,
+.user-agent-list-tools select {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  border: 1px solid #e6e9f2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #8a94a8;
+  padding: 0 10px;
+}
+
+.user-agent-list-tools input {
+  width: 130px;
+  border: 0;
+  outline: 0;
+  color: #334155;
+  font-size: 12px;
+}
+
+.user-agent-list-tools select {
+  width: 112px;
+  font-size: 12px;
+}
+
+.user-agent-list-tools > button {
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #6658ff;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-agent-table {
+  margin-top: 12px;
+}
+
+.user-agent-table-head,
+.user-agent-table-row {
+  display: grid;
+  grid-template-columns: 250px 68px 70px 110px 110px 76px 112px 58px;
+  gap: 8px;
+  align-items: center;
+}
+
+.user-agent-table-head {
+  height: 34px;
+  color: #65708a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.user-agent-table-row {
+  height: 52px;
+  min-height: 52px;
+  max-height: 52px;
+  border-top: 1px solid #eef0f6;
+  color: #111827;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.user-agent-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-agent-avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.user-agent-name-cell div,
+.user-agent-name-cell strong,
+.user-agent-name-cell small,
+.user-agent-table-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-agent-name-cell strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-agent-name-cell small {
+  display: block;
+  margin-top: 2px;
+  color: #7a849b;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.user-agent-pill,
+.user-agent-status {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.user-agent-pill.purple {
+  background: #eef2ff;
+  color: #5b4bff;
+}
+
+.user-agent-pill.green,
+.user-agent-status {
+  background: #e7f8ed;
+  color: #15a060;
+}
+
+.user-agent-pill.orange {
+  background: #fff0e4;
+  color: #ff6b1a;
+}
+
+.user-agent-pill.blue {
+  background: #eaf2ff;
+  color: #3478f6;
+}
+
+.user-agent-status.draft {
+  background: #eaf2ff;
+  color: #3478f6;
+}
+
+.user-agent-status.disabled {
+  background: #fff0e4;
+  color: #ff6b1a;
+}
+
+.user-agent-row-actions {
+  display: flex;
+  gap: 5px;
+  color: #56617a;
+}
+
+.user-agent-row-actions button {
+  width: 10px;
+  min-width: 0;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #56617a;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.user-agent-side-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.user-agent-side-card {
+  width: 100%;
+  min-width: 0;
+  max-width: 292px;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.user-agent-side-card.is-metrics {
+  height: 248px;
+}
+
+.user-agent-side-card.is-trend {
+  height: 204px;
+}
+
+.user-agent-side-card.is-ranking {
+  height: 194px;
+}
+
+.user-agent-side-card.is-shortcuts {
+  height: 160px;
+}
+
+.user-agent-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 28px;
+}
+
+.user-agent-metric-grid div {
+  display: grid;
+  gap: 8px;
+  min-height: 74px;
+  padding: 0 0 10px;
+}
+
+.user-agent-metric-grid div:nth-child(odd) {
+  border-right: 1px solid #eef0f6;
+}
+
+.user-agent-metric-grid div:nth-child(even) {
+  padding-left: 18px;
+}
+
+.user-agent-metric-grid span {
+  color: #65708a;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.user-agent-metric-grid strong {
+  color: #111827;
+  font-size: 23px;
+  font-weight: 850;
+  line-height: 28px;
+}
+
+.user-agent-metric-grid small {
+  color: #059669;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.user-agent-trend {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  align-items: end;
+  gap: 14px;
+  height: 140px;
+  margin-top: 10px;
+  padding: 20px 8px 0;
+}
+
+.user-agent-trend span {
+  display: grid;
+  align-items: end;
+  gap: 8px;
+  height: 100%;
+}
+
+.user-agent-trend i {
+  display: block;
+  width: 14px;
+  border-radius: 999px;
+  background: #d9d3ff;
+}
+
+.user-agent-trend span:last-child i {
+  background: #6a55ff;
+}
+
+.user-agent-trend em {
+  width: 34px;
+  margin-left: -10px;
+  color: #7b849a;
+  font-size: 10px;
+  font-style: normal;
+  text-align: center;
+}
+
+.user-agent-ranking {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.user-agent-ranking li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: center;
+  height: 16px;
+  color: #334155;
+  font-size: 11px;
+}
+
+.user-agent-ranking li span {
+  color: #ff6b18;
+  font-weight: 900;
+}
+
+.user-agent-ranking li:nth-child(n + 4) span {
+  color: #8a94a8;
+}
+
+.user-agent-ranking li b {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-agent-ranking li em {
+  color: #334155;
+  font-style: normal;
+  text-align: right;
+}
+
+.user-agent-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.user-agent-shortcuts button {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  color: #344054;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.user-agent-shortcuts span {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: #f2f4ff;
+  color: #5b4bff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.user-agent-shortcuts button:nth-child(3) span {
+  color: #21b868;
+}
+
+.user-agent-mobile-status,
+.user-agent-mobile-top,
+.user-agent-mobile-overview,
+.user-agent-mobile-template-card,
+.user-agent-mobile-agent-card,
+.user-agent-mobile-all,
+.user-agent-mobile-bottom {
+  background: #ffffff;
+}
+
+@media (min-width: 761px) {
+  .user-agent-center-page {
+    padding: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .user-agent-center-page {
+    min-height: 100vh;
+    padding: 0;
+    overflow: hidden;
+    background: #f7f8fc;
+  }
+
+  .user-agent-desktop-view {
+    display: none;
+  }
+
+  .user-agent-mobile-view {
+    position: relative;
+    display: block;
+    width: min(100vw, 390px);
+    min-height: 844px;
+    margin: 0 auto;
+    padding: 0 0 76px;
+    overflow: hidden;
+    background: #f7f8fc;
+  }
+
+  .user-agent-mobile-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 42px;
+    padding: 0 24px;
+    color: #111827;
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .user-agent-mobile-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    height: 74px;
+    padding: 13px 20px 0;
+    border-bottom: 1px solid #eef0f6;
+  }
+
+  .user-agent-mobile-top h2 {
+    margin: 0;
+    color: #111827;
+    font-size: 24px;
+    font-weight: 900;
+    line-height: 30px;
+  }
+
+  .user-agent-mobile-top p {
+    margin: 3px 0 0;
+    color: #69738a;
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .user-agent-mobile-top button {
+    width: 44px;
+    height: 36px;
+    border: 0;
+    border-radius: 12px;
+    background: #6658ff;
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .user-agent-mobile-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: calc(100% - 40px);
+    height: 42px;
+    margin: 16px 20px 0;
+    border: 1px solid #e1e6f1;
+    border-radius: 12px;
+    padding: 0 15px;
+    background: #ffffff;
+  }
+
+  .user-agent-mobile-search i {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #c8d0e0;
+  }
+
+  .user-agent-mobile-search input {
+    min-width: 0;
+    flex: 1;
+    border: 0;
+    outline: 0;
+    color: #334155;
+    font-size: 13px;
+  }
+
+  .user-agent-mobile-overview {
+    position: relative;
+    width: calc(100% - 40px);
+    height: 126px;
+    margin: 16px 20px 0;
+    border: 1px solid #e1e6f1;
+    border-radius: 14px;
+    padding: 16px 18px;
+    overflow: hidden;
+    box-shadow: 0 16px 36px rgba(32, 47, 86, 0.06);
+  }
+
+  .user-agent-mobile-overview strong {
+    display: block;
+    color: #111827;
+    font-size: 16px;
+    font-weight: 900;
+    line-height: 22px;
+  }
+
+  .user-agent-mobile-overview p {
+    margin: 4px 0 0;
+    color: #69738a;
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .user-agent-mobile-bot {
+    position: absolute;
+    right: 30px;
+    top: 16px;
+    display: grid;
+    place-items: center;
+    width: 78px;
+    height: 70px;
+    border-radius: 28px;
+    background: #eeecff;
+    color: transparent;
+    font-size: 0;
+    font-weight: 900;
+  }
+
+  .user-agent-mobile-bot::before {
+    content: "AI";
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 36px;
+    border-radius: 12px;
+    background: #5649dc;
+    color: #ffffff;
+    font-size: 13px;
+  }
+
+  .user-agent-mobile-metrics {
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    bottom: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  .user-agent-mobile-metrics span {
+    display: grid;
+    gap: 1px;
+    color: #7a849b;
+    font-size: 11px;
+    line-height: 14px;
+  }
+
+  .user-agent-mobile-metrics strong {
+    color: #111827;
+    font-size: 19px;
+    line-height: 22px;
+  }
+
+  .user-agent-mobile-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: calc(100% - 40px);
+    margin: 20px 20px 0;
+  }
+
+  .user-agent-mobile-section-head strong {
+    color: #111827;
+    font-size: 17px;
+    font-weight: 900;
+    line-height: 22px;
+  }
+
+  .user-agent-mobile-section-head button {
+    height: 30px;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 11px;
+    background: #ffffff;
+    color: #5b4bff;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .user-agent-mobile-template-scroll {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    margin-top: 12px;
+    padding: 0 20px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .user-agent-mobile-template-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .user-agent-mobile-template-card {
+    display: grid;
+    flex: 0 0 106px;
+    justify-items: center;
+    align-content: start;
+    width: 106px;
+    height: 118px;
+    border: 1px solid #e1e6f1;
+    border-radius: 12px;
+    padding: 14px 8px;
+    text-align: center;
+    box-shadow: 0 12px 30px rgba(32, 47, 86, 0.05);
+  }
+
+  .user-agent-mobile-template-card .user-agent-template-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+  }
+
+  .user-agent-mobile-template-card strong {
+    width: 90px;
+    margin-top: 8px;
+    overflow: hidden;
+    color: #111827;
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .user-agent-mobile-template-card small {
+    width: 90px;
+    margin-top: 2px;
+    overflow: hidden;
+    color: #7a849b;
+    font-size: 12px;
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .user-agent-mobile-list {
+    display: grid;
+    gap: 12px;
+    width: calc(100% - 40px);
+    margin: 12px 20px 0;
+  }
+
+  .user-agent-mobile-agent-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) 74px;
+    align-items: center;
+    gap: 12px;
+    height: 74px;
+    border: 1px solid #e1e6f1;
+    border-radius: 14px;
+    padding: 0 14px;
+    box-shadow: 0 12px 30px rgba(32, 47, 86, 0.05);
+  }
+
+  .user-agent-mobile-agent-card .user-agent-avatar {
+    width: 38px;
+    height: 38px;
+    flex-basis: 38px;
+  }
+
+  .user-agent-mobile-agent-card div {
+    min-width: 0;
+  }
+
+  .user-agent-mobile-agent-card strong,
+  .user-agent-mobile-agent-card small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .user-agent-mobile-agent-card strong {
+    color: #111827;
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 20px;
+  }
+
+  .user-agent-mobile-agent-card small {
+    margin-top: 4px;
+    color: #69738a;
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .user-agent-mobile-agent-card em {
+    position: absolute;
+    top: 14px;
+    right: 76px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: #e7f8ed;
+    color: #15a060;
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 800;
+  }
+
+  .user-agent-mobile-agent-card b {
+    justify-self: end;
+    align-self: end;
+    margin-bottom: 13px;
+    color: #111827;
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  .user-agent-mobile-all {
+    width: calc(100% - 40px);
+    height: 38px;
+    margin: 12px 20px 0;
+    border: 1px solid #e1e6f1;
+    border-radius: 12px;
+    color: #5b4bff;
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  .user-agent-mobile-bottom {
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    z-index: 80;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    width: min(100vw, 390px);
+    height: 60px;
+    border-top: 1px solid #eef0f6;
+    transform: translateX(-50%);
+  }
+
+  .user-agent-mobile-bottom button {
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 4px;
+    border: 0;
+    background: transparent;
+    color: #8a94a8;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .user-agent-mobile-bottom span {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #d5ddec;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 900;
+  }
+
+  .user-agent-mobile-bottom button.active {
+    color: #5b4bff;
+  }
+
+  .user-agent-mobile-bottom button.active span {
+    background: #6658ff;
   }
 }
 </style>

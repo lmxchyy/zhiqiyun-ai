@@ -14795,3 +14795,205 @@ body {
     transform: none !important;
   }
 }
+
+.user-agent-figma-shell.user-console-shell {
+  --agent-figma-sidebar: 216px;
+  --agent-figma-topbar: 56px;
+}
+
+.user-agent-figma-shell.user-console-shell.admin-shell,
+.user-agent-figma-shell.user-console-shell .admin-workspace,
+.user-agent-figma-shell.user-console-shell .admin-main {
+  background: #f7f8fc !important;
+}
+
+.user-agent-figma-shell.user-console-shell .admin-sidebar,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .admin-sidebar {
+  flex: 0 0 var(--agent-figma-sidebar) !important;
+  width: var(--agent-figma-sidebar) !important;
+  min-width: var(--agent-figma-sidebar) !important;
+  border-right: 1px solid #eef0f6 !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.user-agent-figma-shell.user-console-shell .brand {
+  min-height: 74px;
+  padding: 0 20px;
+  border-bottom-color: transparent;
+}
+
+.user-agent-figma-shell.user-console-shell .brand-logo {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  box-shadow: none;
+}
+
+.user-agent-figma-shell.user-console-shell .brand-copy strong {
+  color: #1f4fd8;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.user-agent-figma-shell.user-console-shell .brand-copy small,
+.user-agent-figma-shell.user-console-shell .sidebar-section-label,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .brand-copy,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .sidebar-section-label,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .sidebar-plan-card {
+  display: none !important;
+}
+
+.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu {
+  padding: 0 16px;
+}
+
+.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item {
+  justify-content: flex-start;
+  width: 184px;
+  height: 34px;
+  margin: 6px 0;
+  border-radius: 8px;
+  padding: 0 12px !important;
+  color: #111827 !important;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: none !important;
+}
+
+.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item .el-icon,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item .el-icon {
+  margin-right: 10px;
+  color: #536079;
+  font-size: 16px;
+}
+
+.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item.is-active {
+  background: #f0edff !important;
+  color: #5b4bff !important;
+}
+
+.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item.is-active::before {
+  display: none;
+}
+
+.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item.is-active .el-icon {
+  color: #6658ff;
+}
+
+.user-agent-figma-shell.user-console-shell .sidebar-plan-card,
+.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .sidebar-plan-card {
+  display: grid !important;
+  left: 16px;
+  right: 16px;
+  bottom: 108px;
+  width: 184px;
+  min-height: 128px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.user-agent-figma-shell.user-console-shell .admin-header {
+  --el-header-height: var(--agent-figma-topbar);
+  height: var(--agent-figma-topbar) !important;
+  min-height: var(--agent-figma-topbar) !important;
+  max-height: var(--agent-figma-topbar) !important;
+  flex: 0 0 var(--agent-figma-topbar) !important;
+  padding: 0 28px;
+  border-bottom: 1px solid #eef0f6;
+  background: #ffffff !important;
+  box-shadow: none;
+}
+
+.user-agent-figma-shell.user-console-shell .admin-collapse-button {
+  display: none !important;
+}
+
+.user-agent-figma-shell.user-console-shell .header-single-title {
+  color: #111827;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.user-agent-figma-shell.user-console-shell .header-path .el-icon {
+  display: none;
+}
+
+.user-agent-figma-shell.user-console-shell .header-actions {
+  gap: 12px;
+}
+
+.user-agent-figma-shell.user-console-shell .header-search {
+  width: 320px;
+}
+
+.user-agent-figma-shell.user-console-shell .header-actions > .el-button,
+.user-agent-figma-shell.user-console-shell .header-actions > .el-dropdown:has(.size-button),
+.user-agent-figma-shell.user-console-shell .header-actions > .el-tag {
+  display: none !important;
+}
+
+.user-agent-figma-shell.user-console-shell .account-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.user-agent-figma-shell.user-console-shell .account-button .el-icon,
+.user-agent-figma-shell.user-console-shell .account-button-copy small {
+  display: none;
+}
+
+.user-agent-figma-shell.user-console-shell .account-button-copy strong {
+  max-width: 140px;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.user-agent-figma-shell.user-console-shell .admin-main {
+  height: calc(100vh - var(--agent-figma-topbar));
+  padding: 16px !important;
+  overflow: auto;
+}
+
+.user-agent-figma-shell.user-console-shell .page-stack {
+  gap: 0;
+}
+
+@media (max-width: 760px) {
+  .user-agent-figma-shell.user-console-shell.admin-shell,
+  .user-agent-figma-shell.user-console-shell .admin-workspace,
+  .user-agent-figma-shell.user-console-shell .admin-main {
+    display: block;
+    min-height: 100vh;
+    height: auto;
+    overflow: visible;
+    background: #f7f8fc !important;
+  }
+
+  .user-agent-figma-shell.user-console-shell.admin-shell {
+    padding-top: 0 !important;
+  }
+
+  .user-agent-figma-shell.user-console-shell .admin-workspace {
+    min-height: 100vh !important;
+  }
+
+  .user-agent-figma-shell.user-console-shell .admin-sidebar,
+  .desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .admin-sidebar,
+  .desktop-sidebar-collapsed.mobile-drawer-open.user-agent-figma-shell.user-console-shell .admin-sidebar,
+  .user-agent-figma-shell.user-console-shell .admin-header,
+  .user-agent-figma-shell.user-console-shell .mobile-admin-bar {
+    display: none !important;
+  }
+
+  .user-agent-figma-shell.user-console-shell .admin-main {
+    padding: 0 !important;
+  }
+
+  .user-agent-figma-shell.user-console-shell .page-stack {
+    display: block;
+  }
+}

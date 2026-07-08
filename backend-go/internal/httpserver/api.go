@@ -134,7 +134,37 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore) a
 		},
 	})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
-	return api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions}
+	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions}
+	go api.repairStaleGenerationTasks(15 * time.Minute)
+	return api
+}
+
+func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	for _, task := range tasks {
+		if !isRunningGenerationTaskStatus(task.Status) {
+			continue
+		}
+		updatedAt := firstNonEmptyString(task.UpdatedAt, task.CreatedAt)
+		updatedTime, err := time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil || now.Sub(updatedTime.UTC()) < maxAge {
+			continue
+		}
+		_, _ = a.store.FailGenerationTask(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(maxAge.Minutes())))
+	}
+}
+
+func isRunningGenerationTaskStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "PENDING", "PROCESSING", "RUNNING", "QUEUED":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a api) authenticatedUser(r *http.Request) (adminPlatformData, adminUser, error) {
