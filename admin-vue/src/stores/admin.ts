@@ -58,10 +58,10 @@ function emptyOnlineWorkspaceData(): AdminRecord {
 export const adminModules: AdminModule[] = [
   { id: "userDashboard", title: "用户首页", endpoint: "/user/dashboard" },
   { id: "userAiImage", title: "AI生图", endpoint: "/user/online-image" },
+  { id: "userAgentCenter", title: "智能体中心", endpoint: "" },
   { id: "userWirelessCanvas", title: "无线画布", endpoint: "/user/online-image" },
   { id: "userVideoGeneration", title: "视频生成", endpoint: "/user/online-image" },
   { id: "userPptGeneration", title: "PPT文档生成", endpoint: "" },
-  { id: "userApiSettings", title: "API 设置", endpoint: "/user/api-settings" },
   { id: "userWorks", title: "作品中心", endpoint: "/user/online-image" },
   { id: "userUsage", title: "使用记录", endpoint: "/user/usage" },
   { id: "userMembership", title: "身份/充值/订阅", endpoint: "/member/wallet" },

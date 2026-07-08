@@ -175,7 +175,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -186,7 +186,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -476,7 +476,6 @@
               <aside class="user-home-inspiration">
                 <div class="user-home-inspiration-head">
                   <h3>灵感模板</h3>
-                  <button type="button" @click="selectAdminModule('userApiSettings')">模型/API</button>
                 </div>
                 <button v-for="item in userHomeInspirations" :key="item.title" type="button" class="user-home-inspiration-item" @click="openUserHomeEntry(item)">
                   <span>
@@ -542,7 +541,6 @@
                 </div>
 
                 <div class="online-compose-actions">
-                  <el-button @click="selectAdminModule('userApiSettings')">API 设置</el-button>
                   <el-button type="primary" :icon="Plus" :loading="onlineSubmitting" @click="submitOnlineImage">生成图片</el-button>
                 </div>
               </div>
@@ -604,6 +602,214 @@
               <el-empty v-else description="暂无在线生图任务" />
             </el-card>
           </section>
+          <section v-else-if="store.activeModuleId === 'userAgentCenter'" class="user-agent-center-page">
+            <section class="user-agent-center-hero">
+              <div>
+                <span>Agent Center</span>
+                <h2>智能体中心</h2>
+                <p>创建专属 AI 智能体，集中管理模板、知识库、调用数据和发布入口。</p>
+              </div>
+              <div class="user-agent-hero-robot" aria-hidden="true">
+                <i></i>
+                <b></b>
+                <em>API</em>
+                <strong>KB</strong>
+              </div>
+            </section>
+
+            <section class="user-agent-template-panel">
+              <header>
+                <strong>智能体模板</strong>
+                <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
+              </header>
+              <div class="user-agent-template-grid">
+                <article v-for="template in agentCenterTemplates" :key="template.name" class="user-agent-template-card">
+                  <div :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</div>
+                  <strong>{{ template.name }}</strong>
+                  <p>{{ template.desc }}</p>
+                  <button type="button" @click="selectAdminModule('userAgentCenter')">创建</button>
+                </article>
+              </div>
+            </section>
+
+            <section class="user-agent-center-layout">
+              <main class="user-agent-list-panel">
+                <header class="user-agent-list-head">
+                  <div class="user-agent-tabs">
+                    <button type="button" class="active">我的智能体</button>
+                    <button type="button">最近使用</button>
+                    <button type="button">收藏</button>
+                  </div>
+                  <div class="user-agent-list-tools">
+                    <label><el-icon><Search /></el-icon><input placeholder="搜索智能体..." /></label>
+                    <select aria-label="筛选智能体类型"><option>全部类型</option></select>
+                    <button type="button" @click="selectAdminModule('userAgentCenter')">+ 创建智能体</button>
+                  </div>
+                </header>
+                <div class="user-agent-table">
+                  <div class="user-agent-table-head">
+                    <span>智能体名称</span><span>类型</span><span>状态</span><span>模型</span><span>知识库</span><span>调用次数</span><span>更新时间</span><span>操作</span>
+                  </div>
+                  <div v-for="agent in agentCenterRows" :key="agent.name" class="user-agent-table-row">
+                    <div class="user-agent-name-cell">
+                      <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
+                      <div><strong>{{ agent.name }}</strong><small>{{ agent.desc }}</small></div>
+                    </div>
+                    <span :class="['user-agent-pill', agent.tone]">{{ agent.type }}</span>
+                    <span class="user-agent-status">{{ agent.status }}</span>
+                    <span>{{ agent.model }}</span>
+                    <span>{{ agent.knowledge }}</span>
+                    <span>{{ agent.calls }}</span>
+                    <span>{{ agent.updated }}</span>
+                    <div class="user-agent-row-actions">
+                      <button type="button" @click="selectAdminModule('userAgentCenter')">对</button>
+                      <button type="button">改</button>
+                      <button type="button">数</button>
+                      <button type="button">...</button>
+                    </div>
+                  </div>
+                </div>
+              </main>
+
+              <aside class="user-agent-side-panel">
+                <article class="user-agent-side-card">
+                  <header><strong>智能体数据概览</strong><button type="button">近 7 天⌄</button></header>
+                  <div class="user-agent-metric-grid">
+                    <div v-for="metric in agentCenterMetrics" :key="metric.label">
+                      <span>{{ metric.label }}</span>
+                      <strong>{{ metric.value }}</strong>
+                      <small>{{ metric.trend }}</small>
+                    </div>
+                  </div>
+                </article>
+                <article class="user-agent-side-card">
+                  <header><strong>使用趋势</strong><button type="button">近 7 天⌄</button></header>
+                  <div class="user-agent-trend">
+                    <span v-for="bar in agentCenterTrend" :key="bar.label"><i :style="{ height: bar.height }"></i><em>{{ bar.label }}</em></span>
+                  </div>
+                </article>
+                <article class="user-agent-side-card">
+                  <strong>使用最多的智能体</strong>
+                  <ol class="user-agent-ranking">
+                    <li v-for="(item, index) in agentCenterRanking" :key="item.name"><span>{{ index + 1 }}</span><b>{{ item.name }}</b><em>{{ item.calls }}</em></li>
+                  </ol>
+                </article>
+                <article class="user-agent-side-card">
+                  <strong>快速入口</strong>
+                  <div class="user-agent-shortcuts">
+                    <button v-for="item in agentCenterShortcuts" :key="item.label" type="button"><span>{{ item.icon }}</span>{{ item.label }}</button>
+                  </div>
+                </article>
+              </aside>
+            </section>
+          </section>
+
+          <section v-else-if="store.activeModuleId === 'userWorks'" class="user-works-page">
+            <header class="user-works-hero">
+              <div>
+                <span>Works Center</span>
+                <h2>作品中心</h2>
+                <p>集中管理 AI 生图、参考资产、收藏作品和可交付文件，不再混入创作输入区。</p>
+              </div>
+              <div class="user-works-hero-actions">
+                <button type="button" @click="selectAdminModule('userAiImage')">继续创作</button>
+                <button type="button" @click="() => store.loadActiveModule({ preferCache: false })">刷新作品</button>
+              </div>
+            </header>
+
+            <section class="user-works-summary">
+              <article v-for="item in userWorkSummaryCards" :key="item.label">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+                <small>{{ item.hint }}</small>
+              </article>
+            </section>
+
+            <section class="user-works-panel">
+              <header class="user-works-toolbar">
+                <div class="user-works-tabs">
+                  <button
+                    v-for="item in userWorkStatusOptions"
+                    :key="item.value"
+                    type="button"
+                    :class="{ active: worksStatusFilter === item.value }"
+                    @click="worksStatusFilter = item.value"
+                  >
+                    {{ item.label }}
+                  </button>
+                </div>
+                <div class="user-works-tools">
+                  <label><el-icon><Search /></el-icon><input v-model.trim="worksSearchKeyword" placeholder="搜索作品、提示词、模型..." /></label>
+                  <div class="user-works-view-switch">
+                    <button type="button" :class="{ active: worksViewMode === 'grid' }" @click="worksViewMode = 'grid'">宫格</button>
+                    <button type="button" :class="{ active: worksViewMode === 'table' }" @click="worksViewMode = 'table'">列表</button>
+                  </div>
+                </div>
+              </header>
+
+              <div v-if="worksViewMode === 'grid' && userWorkCards.length" class="user-works-grid">
+                <article
+                  v-for="task in userWorkCards"
+                  :key="aiTaskId(task)"
+                  :class="['user-work-card', aiTaskStatusClass(task)]"
+                  @click="previewAiTask(task)"
+                  @mouseenter="prefetchAiOriginalImage(task)"
+                >
+                  <div class="user-work-thumb">
+                    <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="作品缩略图" loading="lazy" decoding="async" />
+                    <div v-else-if="isAiTaskRunning(task)" class="user-work-placeholder">生成中</div>
+                    <div v-else class="user-work-placeholder">AI</div>
+                    <span>{{ statusLabel(task.status) }}</span>
+                  </div>
+                  <div class="user-work-body">
+                    <strong>{{ task.name || task.prompt || 'AI 生图作品' }}</strong>
+                    <p>{{ task.prompt || '暂无提示词' }}</p>
+                    <div>
+                      <span>{{ aiTaskModelLabel(task) }}</span>
+                      <span>{{ aiTaskDisplayResolutionLabel(task) }}</span>
+                      <span>{{ task.pointCost || 0 }} 点</span>
+                    </div>
+                  </div>
+                  <footer class="user-work-actions">
+                    <button type="button" @click.stop="previewAiTask(task)">预览</button>
+                    <button type="button" @click.stop="reuseUserWorkTask(task)">复用</button>
+                    <button type="button" :disabled="!aiTaskImageUrl(task)" @click.stop="downloadAiTask(task)">下载</button>
+                    <button type="button" @click.stop="openAiFavoritePicker([aiTaskId(task)])">收藏</button>
+                  </footer>
+                </article>
+              </div>
+
+              <div v-else-if="worksViewMode === 'table' && userWorkCards.length" class="user-works-table">
+                <div class="user-works-table-head">
+                  <span>作品</span><span>状态</span><span>模型</span><span>尺寸</span><span>消耗</span><span>创建时间</span><span>操作</span>
+                </div>
+                <div v-for="task in userWorkCards" :key="aiTaskId(task)" class="user-works-table-row">
+                  <div class="user-works-name-cell">
+                    <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="作品缩略图" />
+                    <span v-else>AI</span>
+                    <div><strong>{{ task.name || task.prompt || 'AI 生图作品' }}</strong><small>{{ task.prompt || aiTaskId(task) }}</small></div>
+                  </div>
+                  <span>{{ statusLabel(task.status) }}</span>
+                  <span>{{ aiTaskModelLabel(task) }}</span>
+                  <span>{{ aiTaskDisplayResolutionLabel(task) }}</span>
+                  <span>{{ task.pointCost || 0 }} 点</span>
+                  <span>{{ formatAiTaskTime(task) }}</span>
+                  <div class="user-works-row-actions">
+                    <button type="button" @click="previewAiTask(task)">预览</button>
+                    <button type="button" @click="reuseUserWorkTask(task)">复用</button>
+                    <button type="button" :disabled="!aiTaskImageUrl(task)" @click="downloadAiTask(task)">下载</button>
+                  </div>
+                </div>
+              </div>
+
+              <div v-else class="user-works-empty">
+                <strong>暂无匹配作品</strong>
+                <span>调整筛选条件，或先去 AI 生图创建新作品。</span>
+                <button type="button" @click="selectAdminModule('userAiImage')">去创作</button>
+              </div>
+            </section>
+          </section>
+
           <section v-else-if="imageWorkspaceModuleIds.includes(store.activeModuleId)" class="ai-image-page">
             <section class="ai-playground">
               <div class="ai-playground-header">
@@ -2411,7 +2617,7 @@
           <section v-else-if="store.activeModuleId === 'userPptGeneration'" class="ppt-doc-shell">
             <PptDocumentGeneration />
           </section>
-          <el-card v-else-if="!['userDashboard', 'userAiImage', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" shadow="never" class="data-panel">
+          <el-card v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" shadow="never" class="data-panel">
             <template #header>
               <div class="panel-head">
                 <div><span>{{ store.activeModule.title }}</span><small>{{ filteredRows.length }} 条记录</small></div>
@@ -3380,9 +3586,8 @@ const agentModuleGroups = [
 ];
 const userModuleGroups = [
   { id: "userHome", title: "用户后台", icon: House, items: modules.filter((item) => ["userDashboard"].includes(item.id)) },
-  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"].includes(item.id)) },
+  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"].includes(item.id)) },
   { id: "userBilling", title: "身份/充值/订阅", icon: Wallet, items: modules.filter((item) => ["userMembership"].includes(item.id)) },
-  { id: "userConfig", title: "配置中心", icon: Setting, items: modules.filter((item) => ["userApiSettings"].includes(item.id)) },
   { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders"].includes(item.id)) }
 ];
 
@@ -3392,12 +3597,11 @@ const userFlatMenuDefs = [
   { id: "userVideoGeneration", targetId: "userVideoGeneration", title: "视频生成", icon: Monitor },
   { id: "userWirelessCanvas", targetId: "userWirelessCanvas", title: "无限画布", icon: Collection },
   { id: "userPptGeneration", targetId: "userPptGeneration", title: "PPT 文档生成", icon: Document },
-  { id: "userAiAgent", targetId: "userAiImage", title: "AI Agent", icon: Cpu },
+  { id: "userAgentCenter", targetId: "userAgentCenter", title: "智能体中心", icon: Cpu },
   { id: "userWorks", targetId: "userWorks", title: "作品中心", icon: Collection },
   { id: "userMembership", targetId: "userMembership", title: "身份充值订阅", icon: Tickets },
   { id: "userUsage", targetId: "userUsage", title: "使用记录", icon: DataAnalysis },
-  { id: "userOrders", targetId: "userOrders", title: "订单明细", icon: Document },
-  { id: "userApiSettings", targetId: "userApiSettings", title: "API 设置", icon: Setting }
+  { id: "userOrders", targetId: "userOrders", title: "订单明细", icon: Document }
 ];
 
 const userAgentFlatMenuDefs = [
@@ -3421,10 +3625,10 @@ const userFlatMenuItems = computed(() => {
 const pageMeta: Record<string, { badge: string; description: string }> = {
   userDashboard: { badge: "用户工作台", description: "聚合点数、生成、作品、API 和使用记录，作为用户登录后的 PC 中后台首页。" },
   userAiImage: { badge: "智能生成", description: "聚合 Prompt、参考图、模型参数和结果预览，快速生成商业素材。" },
+  userAgentCenter: { badge: "智能体中心", description: "统一管理智能体模板、实例、调用数据、知识库绑定和发布入口。" },
   userWirelessCanvas: { badge: "源码复刻", description: "直接承载 hero8152/Infinite-Canvas 智能画布源码，保留节点、资产库、工作流、快捷键、日志和底部生成器布局。" },
   userVideoGeneration: { badge: "视频生成", description: "参考 Open-Generative-AI Video Studio，提供文生视频、图生视频和基础参数的轻量生成入口。" },
   userPptGeneration: { badge: "PPT文档生成", description: "输入主题生成演示文稿，预留 Presenton 或自研 PPT 生成服务接入。" },
-  userApiSettings: { badge: "API 设置", description: "用户侧查看 API 平台、模型计费、Key 和分组配置，复用 Element Plus 表格和表单密度。" },
   userWorks: { badge: "作品中心", description: "集中查看生成资产、缩略图、下载和编辑入口。" },
   userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
@@ -3586,6 +3790,52 @@ const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "PPT Agent", desc: "提纲、页面、配图", icon: Document, targetId: "userPptGeneration", mode: "ppt", prompt: "生成一份商业计划书 PPT，包含封面、目录、市场、产品和财务页。" },
   { title: "商品图 Agent", desc: "白底图、场景图", icon: Goods, targetId: "userAiImage", mode: "image", prompt: "为产品生成一组干净白底主图和浅色高级场景图。" },
   { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
+];
+const agentCenterTemplates = [
+  { name: "基础对话智能体", desc: "通用问答，适合各类场景", icon: "AI", tone: "purple" },
+  { name: "企业知识库智能体", desc: "基于知识库，精准问答", icon: "KB", tone: "green" },
+  { name: "销售助手", desc: "销售话术、客户跟进助力", icon: "S", tone: "orange" },
+  { name: "客服助手", desc: "7x24 智能客服，解答问题", icon: "CS", tone: "purple" },
+  { name: "招商助手", desc: "招商政策解答与线索收集", icon: "IN", tone: "blue" },
+  { name: "内部 SOP 助手", desc: "制度、流程、审批查询", icon: "SOP", tone: "purple" },
+  { name: "表单收集助手", desc: "表单收集、线索采集", icon: "FM", tone: "green" },
+  { name: "API 工作流助手", desc: "调用 API 接口，自动执行", icon: "</>", tone: "blue" }
+];
+const agentCenterRows = [
+  { name: "产品知识助手", desc: "解答产品功能、参数、使用方法等问题", type: "知识库", status: "已发布", model: "gpt-4o-mini", knowledge: "产品知识库", calls: "1,298", updated: "2024-06-12 14:30", avatar: "知", tone: "green" },
+  { name: "销售跟进助手", desc: "协助销售跟进客户，提供话术建议", type: "销售助手", status: "已发布", model: "gpt-4o", knowledge: "销售资料库", calls: "856", updated: "2024-06-12 10:15", avatar: "销", tone: "orange" },
+  { name: "智能客服助手", desc: "解决常见问题，提升客户满意度", type: "客服助手", status: "已发布", model: "moonshot-v1", knowledge: "客服知识库", calls: "2,350", updated: "2024-06-11 16:45", avatar: "客", tone: "blue" },
+  { name: "招商政策助手", desc: "解答代理政策，收集潜在客户信息", type: "招商助手", status: "草稿", model: "gpt-4o-mini", knowledge: "招商资料库", calls: "128", updated: "2024-06-11 09:20", avatar: "招", tone: "orange" },
+  { name: "内部制度助手", desc: "查询公司制度、流程、审批规范", type: "SOP 助手", status: "已停用", model: "qwen-max", knowledge: "内部制度库", calls: "312", updated: "2024-06-10 18:30", avatar: "SOP", tone: "purple" },
+  { name: "活动报名助手", desc: "收集用户报名信息并导出表格", type: "表单助手", status: "已发布", model: "gpt-4o-mini", knowledge: "-", calls: "689", updated: "2024-06-10 14:12", avatar: "表", tone: "green" }
+];
+const agentCenterMetrics = [
+  { label: "总调用次数", value: "5,689", trend: "+12.5%" },
+  { label: "总对话轮数", value: "12,459", trend: "+8.3%" },
+  { label: "消耗 Token", value: "2.45M", trend: "+15.2%" },
+  { label: "创建智能体", value: "7", trend: "+16.7%" }
+];
+const agentCenterTrend = [
+  { label: "06-06", height: "38%" },
+  { label: "06-07", height: "58%" },
+  { label: "06-08", height: "48%" },
+  { label: "06-09", height: "74%" },
+  { label: "06-10", height: "58%" },
+  { label: "06-11", height: "52%" },
+  { label: "06-12", height: "86%" }
+];
+const agentCenterRanking = [
+  { name: "智能客服助手", calls: "2,350" },
+  { name: "产品知识助手", calls: "1,298" },
+  { name: "销售跟进助手", calls: "856" },
+  { name: "活动报名助手", calls: "689" },
+  { name: "内部制度助手", calls: "312" }
+];
+const agentCenterShortcuts = [
+  { label: "知识库", icon: "KB" },
+  { label: "API", icon: "API" },
+  { label: "发布", icon: "UP" },
+  { label: "日志", icon: "LOG" }
 ];
 const userHomeInspirations: UserHomeEntry[] = [
   { title: "产品海报", desc: "一张科技产品发布海报，白色空间，青紫主光，中心产品清晰，适合官网首屏展示", targetId: "userAiImage", mode: "image", coverClass: "is-product", prompt: "一张科技感产品海报，干净白色背景，青绿色主光，中心是一台未来感 AI 设备，适合官网首屏展示。" },
@@ -3963,6 +4213,16 @@ const onlineStatusOptions = [
   { label: "已完成", value: "SUCCEEDED" },
   { label: "失败", value: "FAILED" }
 ];
+const userWorkStatusOptions = [
+  { label: "全部作品", value: "all" },
+  { label: "已完成", value: "done" },
+  { label: "生成中", value: "running" },
+  { label: "失败", value: "failed" },
+  { label: "收藏", value: "favorite" }
+];
+const worksSearchKeyword = ref("");
+const worksStatusFilter = ref("all");
+const worksViewMode = ref<"grid" | "table">("grid");
 
 const onlineImageData = computed(() => store.data as AdminRecord & {
   providers?: AdminRecord[];
@@ -4085,7 +4345,7 @@ watch(
   videoHistoryPollingSignature,
   refreshVideoHistoryPolling,
 );
-const usesAiImageWorkspace = computed(() => ["userAiImage", "userWirelessCanvas", "userWorks"].includes(store.activeModuleId));
+const usesAiImageWorkspace = computed(() => ["userAiImage", "userWirelessCanvas"].includes(store.activeModuleId));
 const hasRunningAiGenerationTasks = computed(() => onlineImageTasks.value.some((task) => isAiTaskRunning(task)));
 const onlineAssets = computed<AdminRecord[]>(() => {
   if (Array.isArray(onlineImageData.value.assets)) return onlineImageData.value.assets;
@@ -4296,7 +4556,6 @@ watch(
 const onlinePreviewTask = computed(() => onlineImageTasks.value.find((task) => String(task.status || "").toUpperCase() === "SUCCEEDED") || onlineImageTasks.value[0]);
 const onlinePreviewImage = computed(() => onlinePreviewTask.value ? aiTaskImageUrl(onlinePreviewTask.value) : "");
 const imageWorkspaceTitle = computed(() => {
-  if (store.activeModuleId === "userWorks") return "作品中心";
   return "AI Image Playground";
 });
 const onlinePreviewStatus = computed(() => {
@@ -4307,6 +4566,37 @@ const onlinePreviewStatus = computed(() => {
   return { label: "队列中", type: "info" as const };
 });
 const onlineHistoryItems = computed(() => onlineImageTasks.value.slice(0, 8));
+const userWorkCards = computed(() => {
+  const keyword = worksSearchKeyword.value.trim().toLowerCase();
+  const statusFilter = worksStatusFilter.value;
+  return onlineImageTasks.value
+    .filter((task) => {
+      const taskId = aiTaskId(task);
+      if (taskId && aiHiddenTaskIds.value.includes(taskId)) return false;
+      if (statusFilter === "done" && !isAiTaskSucceeded(task)) return false;
+      if (statusFilter === "running" && !isAiTaskRunning(task)) return false;
+      if (statusFilter === "failed" && !isAiTaskFailed(task)) return false;
+      if (statusFilter === "favorite" && !isAiTaskFavorite(task)) return false;
+      if (!keyword) return true;
+      return [task.name, task.prompt, task.model, task.status, task.id]
+        .map((item) => String(item || "").toLowerCase())
+        .join(" ")
+        .includes(keyword);
+    })
+    .sort((left, right) => (aiTaskDateMs(right, "updatedAt") || aiTaskDateMs(right, "createdAt")) - (aiTaskDateMs(left, "updatedAt") || aiTaskDateMs(left, "createdAt")));
+});
+const userWorkSummaryCards = computed(() => {
+  const total = onlineImageTasks.value.filter((task) => !aiHiddenTaskIds.value.includes(aiTaskId(task))).length;
+  const done = onlineImageTasks.value.filter(isAiTaskSucceeded).length;
+  const favorites = onlineImageTasks.value.filter(isAiTaskFavorite).length;
+  const points = onlineImageTasks.value.reduce((sum, task) => sum + Number(task.pointCost || 0), 0);
+  return [
+    { label: "全部作品", value: String(total), hint: "含图片任务与收藏记录" },
+    { label: "已完成", value: String(done), hint: "可预览、下载、复用" },
+    { label: "收藏作品", value: String(favorites), hint: "已加入收藏夹" },
+    { label: "消耗点数", value: formatNumber(points), hint: "按当前任务汇总" }
+  ];
+});
 const aiGalleryCards = computed(() => {
   const keyword = aiPromptSearch.value.trim().toLowerCase();
   const filter = aiGalleryFilter.value;
@@ -5827,6 +6117,11 @@ function reuseAiTask(task: AdminRecord, options: { notify?: boolean } = {}) {
   nextTick(() => aiPromptInputRef.value?.adjustHeight());
 }
 
+function reuseUserWorkTask(task: AdminRecord) {
+  reuseAiTask(task);
+  void selectAdminModule("userAiImage");
+}
+
 async function retryAiTask(task: AdminRecord) {
   if (onlineSubmitting.value) return;
   reuseAiTask(task, { notify: false });
@@ -7196,8 +7491,8 @@ const tabsScrollRef = ref<HTMLElement | null>(null);
 const openTabStorageKey = isUserConsole.value ? "xianzhi-user-open-tabs" : isAgentConsole.value ? "xianzhi-agent-open-tabs" : "xianzhi-admin-open-tabs";
 const activeTabStorageKey = isUserConsole.value ? "xianzhi-user-active-tab" : isAgentConsole.value ? "xianzhi-agent-active-tab" : "xianzhi-admin-active-tab";
 const agentModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
-const userModuleIds = ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userApiSettings", "userWorks", "userMembership", "userUsage", "userOrders"];
-const imageWorkspaceModuleIds = ["userAiImage", "userWorks"];
+const userModuleIds = ["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks", "userMembership", "userUsage", "userOrders"];
+const imageWorkspaceModuleIds = ["userAiImage"];
 const adminModuleIds = modules.map((item) => item.id).filter((id) => !agentModuleIds.includes(id) && !userModuleIds.includes(id));
 const userConsoleModuleIds = [...userModuleIds, ...agentModuleIds];
 const allowedModuleIds = isUserConsole.value ? userConsoleModuleIds : isAgentConsole.value ? agentModuleIds : adminModuleIds;
@@ -7206,11 +7501,12 @@ const userModulePathMap: Record<string, string> = {
   "/app": "userDashboard",
   "/app/ai-image": "userAiImage",
   "/app/image-generation": "userAiImage",
+  "/app/agents": "userAgentCenter",
+  "/app/agent-center": "userAgentCenter",
   "/app/wireless-canvas": "userWirelessCanvas",
   "/app/video-generation": "userVideoGeneration",
   "/app/ppt-generation": "userPptGeneration",
   "/app/ai-ppt": "userPptGeneration",
-  "/app/api-settings": "userApiSettings",
   "/app/works": "userWorks",
   "/app/membership": "userMembership",
   "/app/usage": "userUsage",
@@ -7227,10 +7523,10 @@ const userModulePathMap: Record<string, string> = {
 const userModuleRouteMap: Record<string, string> = {
   userDashboard: "/app",
   userAiImage: "/app/ai-image",
+  userAgentCenter: "/app/agents",
   userWirelessCanvas: "/app/wireless-canvas",
   userVideoGeneration: "/app/video-generation",
   userPptGeneration: "/app/ppt-generation",
-  userApiSettings: "/app/api-settings",
   userWorks: "/app/works",
   userMembership: "/app/membership",
   userUsage: "/app/usage",
@@ -7275,6 +7571,11 @@ function initialActiveModuleId() {
   if (typeof window === "undefined") return defaultOpenTabIds[0];
   const routeModuleId = moduleIdFromLocationPath();
   if (routeModuleId && allowedModuleIds.includes(routeModuleId)) return routeModuleId;
+  const currentPath = window.location.pathname.replace(/\/$/, "");
+  if (isUserConsole.value && currentPath && currentPath !== "/app") {
+    window.history.replaceState({}, "", "/app");
+    return defaultOpenTabIds[0];
+  }
   const saved = window.localStorage.getItem(activeTabStorageKey) || "";
   if (saved && allowedModuleIds.includes(saved) && modules.some((item) => item.id === saved)) return saved;
   return defaultOpenTabIds[0];
@@ -7392,10 +7693,10 @@ const iconMap = {
   partnerAccount: Setting,
   userDashboard: House,
   userAiImage: Plus,
+  userAgentCenter: Cpu,
   userWirelessCanvas: Collection,
   userVideoGeneration: Monitor,
   userPptGeneration: Document,
-  userApiSettings: Setting,
   userWorks: Collection,
   userUsage: DataAnalysis,
   userMembership: Tickets,
@@ -8753,7 +9054,6 @@ const visibleModuleGroups = computed(() => isUserConsole.value ? userModuleGroup
 const activeGroup = computed(() => visibleModuleGroups.value.find((group) => group.items.some((item) => item.id === store.activeModuleId)));
 const activeUserMenuEntry = computed(() => {
   if (!isUserConsole.value) return null;
-  if (store.activeModuleId === "userAiImage" && aiPlaygroundMode.value === "agent") return userFlatMenuDefs.find((item) => item.id === "userAiAgent") || null;
   return allUserFlatMenuDefs.find((item) => item.targetId === store.activeModuleId) || null;
 });
 const activeGroupLabel = computed(() => isUserConsole.value ? "用户端" : activeGroup.value?.title || "工作台");
@@ -8806,9 +9106,7 @@ async function selectUserFlatMenu(menuId: string) {
     ElMessage.warning("当前账号还没有代理身份");
     return;
   }
-  if (target.id === "userAiAgent") {
-    aiPlaygroundMode.value = "agent";
-  } else if (target.targetId === "userAiImage") {
+  if (target.targetId === "userAiImage") {
     aiPlaygroundMode.value = "gallery";
   }
   await selectAdminModule(target.targetId);
@@ -9519,9 +9817,6 @@ const rows = computed(() => {
     const tasks = Array.isArray(data.recentTasks) ? data.recentTasks : [];
     return flattenRows([...assets, ...tasks].slice(0, 10) as AdminRecord[]);
   }
-  if (store.activeModuleId === "userApiSettings") {
-    return systemRows(data);
-  }
   if (store.activeModuleId === "userMembership") {
     return data.account ? [data.account] : [];
   }
@@ -9766,7 +10061,6 @@ const columns = computed(() => {
     userVideoGeneration: ["id", "model", "type", "pointCost", "status", "createdAt"],
     userPptGeneration: ["title", "slideCount", "language", "theme", "status", "createdAt"],
     userWorks: ["name", "mediaType", "model", "pointCost", "createdAt"],
-    userApiSettings: ["category", "item", "value", "secret", "status"],
     userUsage: ["taskId", "model", "metricCode", "quantity", "pointCost", "amountCents", "balanceBefore", "balanceAfter", "status", "occurredAt"],
     userMembership: ["id", "userId", "available", "frozen"],
     userOrders: ["id", "orderTypeText", "plan", "paymentMethodText", "amountCents", "rechargePoints", "status", "createdAt", "paidAt"]
@@ -9831,7 +10125,7 @@ const metrics = computed(() => {
       { label: "成功笔数", value: String(summary.succeeded || 0) }
     ];
   }
-  if (store.activeModuleId === "apiSettings" || store.activeModuleId === "userApiSettings") {
+  if (store.activeModuleId === "apiSettings") {
     return [
       { label: "上游渠道", value: String(apiChannels.value.length) },
       { label: "模型计费", value: String(apiModels.value.length) },
@@ -11812,7 +12106,985 @@ onMounted(async () => {
   color: #ffffff;
 }
 
+.user-works-page,
+.user-agent-center-page {
+  display: grid;
+  gap: 16px;
+  min-height: calc(100vh - 88px);
+  padding: 18px;
+  background: #f6f8ff;
+}
+
+.user-works-hero,
+.user-works-summary article,
+.user-works-panel,
+.user-agent-center-hero,
+.user-agent-template-panel,
+.user-agent-list-panel,
+.user-agent-side-card {
+  border: 1px solid #e1e7f2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(56, 72, 112, 0.07);
+}
+
+.user-works-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 132px;
+  padding: 26px 34px;
+  background:
+    radial-gradient(circle at 86% 28%, rgba(105, 92, 244, 0.16), transparent 20%),
+    linear-gradient(135deg, #fff, #f5f7ff);
+}
+
+.user-works-hero span {
+  color: #695cf4;
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.user-works-hero h2 {
+  margin: 8px 0 10px;
+  color: #172033;
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.user-works-hero p {
+  margin: 0;
+  color: #5d6b82;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.user-works-hero-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.user-works-hero-actions button,
+.user-works-empty button {
+  height: 38px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 16px;
+  background: #ebe7ff;
+  color: #5b49e8;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.user-works-hero-actions button:first-child,
+.user-works-empty button {
+  background: linear-gradient(135deg, #7464f2, #5b49e8);
+  color: #fff;
+}
+
+.user-works-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.user-works-summary article {
+  display: grid;
+  gap: 7px;
+  padding: 18px;
+}
+
+.user-works-summary span,
+.user-works-summary small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-works-summary strong {
+  color: #111827;
+  font-size: 26px;
+  line-height: 1.1;
+}
+
+.user-works-panel {
+  padding: 18px;
+  overflow: hidden;
+}
+
+.user-works-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.user-works-tabs,
+.user-works-tools,
+.user-works-view-switch,
+.user-work-actions,
+.user-works-row-actions {
+  display: flex;
+  align-items: center;
+}
+
+.user-works-tabs {
+  gap: 24px;
+}
+
+.user-works-tabs button {
+  height: 34px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #667085;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.user-works-tabs button.active {
+  border-color: #6c5cf4;
+  color: #5b49e8;
+}
+
+.user-works-tools {
+  gap: 10px;
+}
+
+.user-works-tools label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  border: 1px solid #dde5f0;
+  border-radius: 9px;
+  padding: 0 12px;
+  background: #fff;
+  color: #64748b;
+}
+
+.user-works-tools input {
+  width: 220px;
+  border: 0;
+  outline: 0;
+  color: #344054;
+}
+
+.user-works-view-switch {
+  overflow: hidden;
+  border: 1px solid #dde5f0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.user-works-view-switch button {
+  height: 34px;
+  border: 0;
+  padding: 0 12px;
+  background: transparent;
+  color: #64748b;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-works-view-switch button.active {
+  background: #eeeaff;
+  color: #5b49e8;
+}
+
+.user-works-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.user-work-card {
+  overflow: hidden;
+  border: 1px solid #e4e9f3;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.user-work-card:hover {
+  border-color: #bcb4ff;
+  box-shadow: 0 16px 34px rgba(66, 80, 124, 0.12);
+  transform: translateY(-2px);
+}
+
+.user-work-thumb {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: linear-gradient(135deg, #eef3ff, #f8fafc);
+}
+
+.user-work-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-work-thumb > span {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: rgba(15, 23, 42, 0.64);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.user-work-placeholder {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #5b49e8;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.user-work-body {
+  display: grid;
+  gap: 8px;
+  padding: 12px 12px 10px;
+}
+
+.user-work-body strong,
+.user-work-body p,
+.user-work-body span,
+.user-works-name-cell strong,
+.user-works-name-cell small,
+.user-works-table-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-work-body strong {
+  color: #111827;
+  font-size: 13px;
+}
+
+.user-work-body p {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.user-work-body div {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.user-work-body span {
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: #f2f4f8;
+  color: #58677f;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.user-work-actions {
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.user-work-actions button,
+.user-works-row-actions button {
+  height: 28px;
+  border: 1px solid #dfe6f2;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-work-actions button:disabled,
+.user-works-row-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.user-works-table {
+  display: grid;
+}
+
+.user-works-table-head,
+.user-works-table-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.4fr) 90px 140px 116px 86px 150px 172px;
+  gap: 10px;
+  align-items: center;
+}
+
+.user-works-table-head {
+  min-height: 38px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.user-works-table-row {
+  min-height: 68px;
+  border-top: 1px solid #edf1f7;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.user-works-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-works-name-cell img,
+.user-works-name-cell > span {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 10px;
+}
+
+.user-works-name-cell img {
+  object-fit: cover;
+}
+
+.user-works-name-cell > span {
+  display: grid;
+  place-items: center;
+  background: #eeeaff;
+  color: #5b49e8;
+  font-weight: 900;
+}
+
+.user-works-name-cell div {
+  min-width: 0;
+}
+
+.user-works-name-cell small {
+  display: block;
+  margin-top: 4px;
+  color: #667085;
+}
+
+.user-works-row-actions {
+  gap: 6px;
+}
+
+.user-works-empty {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 260px;
+  color: #667085;
+  text-align: center;
+}
+
+.user-works-empty strong {
+  color: #111827;
+  font-size: 18px;
+}
+
+.user-agent-center-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: center;
+  min-height: 150px;
+  overflow: hidden;
+  padding: 28px 36px;
+  background: linear-gradient(135deg, #fff, #f5f7ff);
+}
+
+.user-agent-center-hero span {
+  color: #695cf4;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.user-agent-center-hero h2 {
+  margin: 8px 0 10px;
+  color: #5b49e8;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.user-agent-center-hero p {
+  margin: 0;
+  color: #58677f;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.user-agent-hero-robot {
+  position: relative;
+  height: 112px;
+}
+
+.user-agent-hero-robot i,
+.user-agent-hero-robot b {
+  position: absolute;
+  left: 88px;
+  top: 20px;
+  width: 132px;
+  height: 54px;
+  border: 1px solid rgba(105, 92, 244, 0.42);
+  border-radius: 50%;
+  transform: rotate(-12deg);
+}
+
+.user-agent-hero-robot b {
+  transform: rotate(16deg);
+}
+
+.user-agent-hero-robot::before {
+  content: "";
+  position: absolute;
+  left: 126px;
+  top: 28px;
+  width: 78px;
+  height: 78px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, #b5a8ff, #6f5cf0);
+  box-shadow: 0 18px 38px rgba(95, 76, 222, 0.24);
+}
+
+.user-agent-hero-robot::after {
+  content: "";
+  position: absolute;
+  left: 150px;
+  top: 50px;
+  width: 32px;
+  height: 26px;
+  border-radius: 9px;
+  background: #27245d;
+  box-shadow: 10px 9px 0 -7px #dbe3ff, 22px 9px 0 -7px #dbe3ff;
+}
+
+.user-agent-hero-robot em,
+.user-agent-hero-robot strong {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #6650e8;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.user-agent-hero-robot em {
+  right: 56px;
+  bottom: 22px;
+  width: 36px;
+  height: 36px;
+  background: #7664f0;
+  color: #fff;
+}
+
+.user-agent-hero-robot strong {
+  right: 14px;
+  top: 22px;
+  width: 44px;
+  height: 44px;
+  background: #ded9ff;
+}
+
+.user-agent-template-panel {
+  padding: 18px;
+}
+
+.user-agent-template-panel header,
+.user-agent-list-head,
+.user-agent-side-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-agent-template-panel header strong,
+.user-agent-side-card > strong,
+.user-agent-side-card header strong {
+  color: #111827;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.user-agent-template-panel header button,
+.user-agent-side-card header button {
+  border: 0;
+  background: transparent;
+  color: #5f4ee7;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.user-agent-template-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(92px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.user-agent-template-card {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  min-height: 168px;
+  padding: 16px 10px 12px;
+  border: 1px solid #e4e9f3;
+  border-radius: 10px;
+  text-align: center;
+}
+
+.user-agent-template-icon,
+.user-agent-avatar {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 900;
+}
+
+.user-agent-template-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  font-size: 12px;
+}
+
+.user-agent-template-card strong {
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.user-agent-template-card p {
+  margin: 0;
+  min-height: 34px;
+  color: #6b778d;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.user-agent-template-card button,
+.user-agent-list-tools > button {
+  border: 0;
+  border-radius: 8px;
+  background: #eeeaff;
+  color: #5f4ee7;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-agent-template-card button {
+  width: 66px;
+  height: 28px;
+}
+
+.user-agent-template-icon.purple,
+.user-agent-avatar.purple {
+  background: linear-gradient(135deg, #a994ff, #695cf4);
+}
+
+.user-agent-template-icon.green,
+.user-agent-avatar.green {
+  background: linear-gradient(135deg, #60d394, #1fa463);
+}
+
+.user-agent-template-icon.orange,
+.user-agent-avatar.orange {
+  background: linear-gradient(135deg, #ffb36f, #ff7a1a);
+}
+
+.user-agent-template-icon.blue,
+.user-agent-avatar.blue {
+  background: linear-gradient(135deg, #79b8ff, #3978f4);
+}
+
+.user-agent-center-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 292px;
+  gap: 16px;
+  align-items: start;
+}
+
+.user-agent-list-panel {
+  min-width: 0;
+  padding: 14px 18px;
+  overflow: hidden;
+}
+
+.user-agent-tabs {
+  display: flex;
+  gap: 28px;
+}
+
+.user-agent-tabs button {
+  height: 34px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #667085;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-agent-tabs button.active {
+  border-color: #6c5cf4;
+  color: #5f4ee7;
+}
+
+.user-agent-list-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-agent-list-tools label,
+.user-agent-list-tools select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  border: 1px solid #dde5f0;
+  border-radius: 9px;
+  background: #fff;
+  color: #64748b;
+  padding: 0 11px;
+}
+
+.user-agent-list-tools input {
+  width: 170px;
+  border: 0;
+  outline: 0;
+  color: #344054;
+}
+
+.user-agent-list-tools select {
+  min-width: 118px;
+}
+
+.user-agent-list-tools > button {
+  height: 36px;
+  padding: 0 16px;
+  background: linear-gradient(135deg, #7464f2, #5b49e8);
+  color: #fff;
+}
+
+.user-agent-table {
+  margin-top: 10px;
+}
+
+.user-agent-table-head,
+.user-agent-table-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) 76px 70px 104px 104px 82px 126px 100px;
+  gap: 8px;
+  align-items: center;
+}
+
+.user-agent-table-head {
+  height: 38px;
+  color: #6b778d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-agent-table-row {
+  min-height: 58px;
+  border-top: 1px solid #edf1f7;
+  color: #101828;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-agent-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-agent-avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 11px;
+  font-size: 11px;
+}
+
+.user-agent-name-cell div,
+.user-agent-name-cell strong,
+.user-agent-name-cell small,
+.user-agent-table-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-agent-name-cell small {
+  display: block;
+  margin-top: 3px;
+  color: #7a879b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.user-agent-pill,
+.user-agent-status {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.user-agent-pill.purple {
+  background: #ede9ff;
+  color: #5f4ee7;
+}
+
+.user-agent-pill.green,
+.user-agent-status {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.user-agent-pill.orange {
+  background: #ffead7;
+  color: #e05718;
+}
+
+.user-agent-pill.blue {
+  background: #e1efff;
+  color: #2563eb;
+}
+
+.user-agent-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.user-agent-row-actions button {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #e1e7f2;
+  border-radius: 7px;
+  background: #fff;
+  color: #344054;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.user-agent-side-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.user-agent-side-card {
+  padding: 18px;
+}
+
+.user-agent-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 16px;
+  border-top: 1px solid #edf1f7;
+  border-left: 1px solid #edf1f7;
+}
+
+.user-agent-metric-grid div {
+  display: grid;
+  gap: 6px;
+  min-height: 82px;
+  padding: 13px 12px;
+  border-right: 1px solid #edf1f7;
+  border-bottom: 1px solid #edf1f7;
+}
+
+.user-agent-metric-grid span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.user-agent-metric-grid strong {
+  color: #111827;
+  font-size: 23px;
+}
+
+.user-agent-metric-grid small {
+  color: #059669;
+  font-weight: 800;
+}
+
+.user-agent-trend {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  align-items: end;
+  gap: 8px;
+  height: 148px;
+  margin-top: 14px;
+}
+
+.user-agent-trend span {
+  display: grid;
+  align-items: end;
+  gap: 8px;
+  height: 100%;
+}
+
+.user-agent-trend i {
+  display: block;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, #7060f2, #8fb2ff);
+}
+
+.user-agent-trend em {
+  color: #667085;
+  font-size: 10px;
+  font-style: normal;
+  text-align: center;
+}
+
+.user-agent-ranking {
+  display: grid;
+  gap: 13px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.user-agent-ranking li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  color: #334155;
+  font-size: 12px;
+}
+
+.user-agent-ranking li span {
+  color: #ff6b18;
+  font-weight: 900;
+}
+
+.user-agent-ranking li b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-agent-ranking li em {
+  font-style: normal;
+}
+
+.user-agent-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.user-agent-shortcuts button {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-agent-shortcuts span {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: #eaf2ff;
+  color: #3478f6;
+  font-size: 11px;
+}
+
+@media (max-width: 1360px) {
+  .user-agent-center-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .user-agent-side-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .user-agent-template-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 960px) {
+  .user-agent-center-hero,
+  .user-agent-list-head {
+    grid-template-columns: 1fr;
+  }
+
+  .user-agent-center-hero {
+    display: block;
+  }
+
+  .user-agent-hero-robot {
+    margin-top: 16px;
+  }
+
+  .user-agent-list-head,
+  .user-agent-list-tools {
+    flex-wrap: wrap;
+  }
+
+  .user-agent-table-head {
+    display: none;
+  }
+
+  .user-agent-table-row {
+    grid-template-columns: 1fr 1fr;
+    padding: 12px 0;
+  }
+
+  .user-agent-name-cell,
+  .user-agent-row-actions {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 720px) {
+  .user-agent-center-page {
+    padding: 12px;
+  }
+
+  .user-agent-template-grid,
+  .user-agent-side-panel,
+  .user-agent-metric-grid {
+    grid-template-columns: 1fr;
+  }
+
   :global(.channel-dialog-form) {
     grid-template-columns: 1fr;
   }
