@@ -70,6 +70,28 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 	}
 }
 
+func superAdminMiddleware(auth authAPI) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		data, err := auth.store.AdminData()
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		user, err := auth.authenticatedUser(c.Request, data)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if user.Role != "SUPER_ADMIN" {
+			c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{"error": errForbidden.Error()})
+			return
+		}
+		c.Set("actorID", user.ID)
+		c.Set("actorRole", user.Role)
+		c.Next()
+	}
+}
+
 func rbacEnforced() bool {
 	return strings.EqualFold(os.Getenv("XIANZHI_ENFORCE_RBAC"), "true")
 }

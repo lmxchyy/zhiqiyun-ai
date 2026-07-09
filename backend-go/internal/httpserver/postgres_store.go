@@ -508,6 +508,7 @@ func (s *postgresStore) ListAssets() ([]asset, error) {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+		where deleted_at is null
 		order by created_at desc nulls last, id desc
 	`)
 	if err != nil {
@@ -549,6 +550,7 @@ const assetSummarySelect = `
 		'',
 		coalesce(favorite, false),
 		'{}',
+		coalesce(deleted_at::text, ''),
 		coalesce(created_at, ''),
 		coalesce(updated_at, '')
 	from xz_assets
@@ -627,7 +629,7 @@ func (s *postgresStore) ListAssetsForUser(userID string, limit int) ([]asset, er
 		limit = defaultUserContentListLimit
 	}
 	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
-		where user_id = $1
+		where user_id = $1 and deleted_at is null
 		order by created_at desc nulls last, id desc
 		limit $2
 	`, userID, limit)
@@ -641,7 +643,7 @@ func (s *postgresStore) ListAssetsForUser(userID string, limit int) ([]asset, er
 func (s *postgresStore) listAssetsForUsers(ctx context.Context, userIDs []string, limit int) ([]asset, error) {
 	where, args := postgresTextInCondition("user_id", userIDs)
 	query := assetSummarySelect + `
-		where ` + where + `
+		where ` + where + ` and deleted_at is null
 		order by created_at desc nulls last, id desc
 	`
 	if limit > 0 {
@@ -706,6 +708,7 @@ func scanAssetSummaryRows(rows *sql.Rows) ([]asset, error) {
 			&item.ThumbnailURL,
 			&item.Favorite,
 			&metadataRaw,
+			&item.DeletedAt,
 			&item.CreatedAt,
 			&item.UpdatedAt,
 		); err != nil {
@@ -951,6 +954,9 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	nextAvailable := account.Available - pointCost
+	params := generationBillingReservationParams(req.Params, now, pointCost, account.Available, nextAvailable)
+	req.Params = params
 	taskID, err := nextTableID(ctx, tx, "xz_generation_tasks", "task")
 	if err != nil {
 		return generationTask{}, err
@@ -960,7 +966,7 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		UserID:    userID,
 		Type:      req.Type,
 		Prompt:    req.Prompt,
-		Params:    req.Params,
+		Params:    params,
 		Model:     req.Model,
 		Status:    "PROCESSING",
 		Progress:  5,
@@ -973,7 +979,15 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
 	}
-	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.enqueue", "generation_task", task.ID, "", "", 202, map[string]any{"pointCost": pointCost}); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		update xz_point_accounts
+		set available = available - $1,
+			raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
+		where id = $2
+	`, pointCost, account.ID); err != nil {
+		return generationTask{}, err
+	}
+	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.enqueue", "generation_task", task.ID, "", "", 202, map[string]any{"pointCost": pointCost, "billingReserved": true}); err != nil {
 		return generationTask{}, err
 	}
 	return task, tx.Commit()
@@ -1022,7 +1036,9 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if pointCost <= 0 {
 		pointCost = generationPointCostForRequest(req, capabilityData)
 	}
-	if account.Available < pointCost {
+	pointCost = generationTaskReservedPointCost(task, pointCost)
+	reserved := generationTaskReservedAndActive(task)
+	if !reserved && account.Available < pointCost {
 		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 	}
 	task.Status = "SUCCEEDED"
@@ -1048,16 +1064,21 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		update xz_point_accounts
-		set available = available - $1,
-			raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-		where id = $2
-	`, pointCost, account.ID); err != nil {
-		return generationTask{}, err
+	balanceBefore := account.Available
+	balanceAfter := account.Available - pointCost
+	if reserved {
+		balanceBefore, balanceAfter = generationTaskReservationBalances(task, account.Available, pointCost)
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			update xz_point_accounts
+			set available = available - $1,
+				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
+			where id = $2
+		`, pointCost, account.ID); err != nil {
+			return generationTask{}, err
+		}
 	}
-	nextAvailable := account.Available - pointCost
-	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, account.Available, nextAvailable, now)
+	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, balanceBefore, balanceAfter, now)
 	if err != nil {
 		return generationTask{}, err
 	}
@@ -1069,7 +1090,7 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			return generationTask{}, err
 		}
 	}
-	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.complete", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": pointCost}); err != nil {
+	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.complete", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": pointCost, "billingReserved": reserved}); err != nil {
 		return generationTask{}, err
 	}
 	return task, tx.Commit()
@@ -1168,10 +1189,37 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 	if err != nil {
 		return generationTask{}, err
 	}
-	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+	if task.Status == "SUCCEEDED" {
 		return task, tx.Commit()
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	pointCost := generationTaskReservedPointCost(task, task.PointCost)
+	refunded := false
+	if generationTaskReservedAndActive(task) && pointCost > 0 {
+		account, err := pointAccountForUpdate(ctx, tx, task.UserID)
+		if err != nil {
+			return generationTask{}, err
+		}
+		nextAvailable := account.Available + pointCost
+		if _, err := tx.ExecContext(ctx, `
+			update xz_point_accounts
+			set available = available + $1,
+				raw = jsonb_set(raw, '{available}', to_jsonb((available + $1)::int), true)
+			where id = $2
+		`, pointCost, account.ID); err != nil {
+			return generationTask{}, err
+		}
+		task.Params = generationBillingRefundParams(task.Params, now, account.Available, nextAvailable)
+		refunded = true
+	}
+	if task.Status == "FAILED" || task.Status == "CANCELLED" {
+		if refunded {
+			if err := insertGenerationTask(ctx, tx, task); err != nil {
+				return generationTask{}, err
+			}
+		}
+		return task, tx.Commit()
+	}
 	task.Status = "FAILED"
 	task.Progress = 100
 	task.Error = map[string]any{"message": message}
@@ -1181,7 +1229,7 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
 	}
-	if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.fail", "generation_task", task.ID, "", "", 502, map[string]any{"error": message, "pointCost": task.PointCost}); err != nil {
+	if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.fail", "generation_task", task.ID, "", "", 502, map[string]any{"error": message, "pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
 		return generationTask{}, err
 	}
 	return task, tx.Commit()
@@ -1296,7 +1344,47 @@ func (s *postgresStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, er
 	return item, tx.Commit()
 }
 
-func (s *postgresStore) MarkAdminOrderPaid(id string) (adminOrder, error) {
+func (s *postgresStore) RegisterPaymentCallbackEvent(event adminPaymentEvent) (bool, error) {
+	event = normalizePaymentCallbackEvent(event)
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	existing, found, err := paymentCallbackEventByEventIDForTx(ctx, tx, event.Provider, event.EventID)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		if samePaymentCallbackEventTarget(existing, event) {
+			return true, tx.Commit()
+		}
+		return false, fmt.Errorf("payment event already belongs to another order: %s", event.EventID)
+	}
+	if event.TransactionID != "" {
+		existing, found, err = paymentCallbackEventByTransactionIDForTx(ctx, tx, event.Provider, event.TransactionID)
+		if err != nil {
+			return false, err
+		}
+		if found {
+			if samePaymentCallbackEventTarget(existing, event) {
+				return true, tx.Commit()
+			}
+			return false, fmt.Errorf("payment transaction already belongs to another order: %s", event.TransactionID)
+		}
+	}
+	if err := insertPaymentCallbackEvent(ctx, tx, event); err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
+}
+
+func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any) (adminOrder, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1308,6 +1396,7 @@ func (s *postgresStore) MarkAdminOrderPaid(id string) (adminOrder, error) {
 	if err != nil {
 		return adminOrder{}, err
 	}
+	mergeOrderPaymentMetadata(&item, metadata...)
 	if strings.EqualFold(item.Status, "PAID") {
 		if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &item); err != nil {
 			return adminOrder{}, err
@@ -1989,7 +2078,8 @@ func (s *postgresStore) ReviewAdminWithdrawal(id string, status string) (adminWi
 	return item, tx.Commit()
 }
 
-func (s *postgresStore) DeleteAsset(id string) error {
+func (s *postgresStore) DeleteAssetForUser(userID string, id string) error {
+	userID = strings.TrimSpace(userID)
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1999,7 +2089,7 @@ func (s *postgresStore) DeleteAsset(id string) error {
 	defer func() { _ = tx.Rollback() }()
 	var taskID string
 	var resultIDsRaw string
-	err = tx.QueryRowContext(ctx, `select task_id from xz_assets where id = $1 for update`, id).Scan(&taskID)
+	err = tx.QueryRowContext(ctx, `select coalesce(task_id, '') from xz_assets where id = $1 and user_id = $2 and deleted_at is null for update`, id, userID).Scan(&taskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: %s", errAssetNotFound, id)
 	}
@@ -2019,7 +2109,21 @@ func (s *postgresStore) DeleteAsset(id string) error {
 			return err
 		}
 	}
-	res, err := tx.ExecContext(ctx, `delete from xz_assets where id = $1`, id)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := tx.ExecContext(ctx, `
+		update xz_assets
+		set deleted_at = $3::timestamptz,
+			updated_at = $3,
+			metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{deletedAt}', to_jsonb($3::text), true),
+			raw = jsonb_set(
+				jsonb_set(
+					jsonb_set(coalesce(raw, '{}'::jsonb), '{deletedAt}', to_jsonb($3::text), true),
+					'{updatedAt}', to_jsonb($3::text), true
+				),
+				'{metadata,deletedAt}', to_jsonb($3::text), true
+			)
+		where id = $1 and user_id = $2 and deleted_at is null
+	`, id, userID, now)
 	if err != nil {
 		return err
 	}
@@ -2027,7 +2131,7 @@ func (s *postgresStore) DeleteAsset(id string) error {
 	if affected == 0 {
 		return fmt.Errorf("%w: %s", errAssetNotFound, id)
 	}
-	if err := insertAuditLog(ctx, tx, "", "", "assets.delete", "asset", id, "", "", 200, map[string]any{"taskId": taskID}); err != nil {
+	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "assets.delete", "asset", id, "", "", 200, map[string]any{"taskId": taskID}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -2047,6 +2151,7 @@ func (s *postgresStore) UpdateAssetThumbnails(updates map[string]string) (int, e
 				updated_at = $3,
 				raw = jsonb_set(jsonb_set(raw, '{thumbnailUrl}', to_jsonb($2::text), true), '{metadata,thumbnailUrl}', to_jsonb($2::text), true)
 			where id = $1 and coalesce(thumbnail_url, '') = ''
+			  and deleted_at is null
 		`, id, thumbnailURL, time.Now().UTC().Format(time.RFC3339Nano))
 		if err != nil {
 			return updated, err
@@ -2066,7 +2171,7 @@ func (s *postgresStore) UpdateAssetImageInfo(updates map[string]assetImageInfo) 
 	updated := 0
 	for id, info := range updates {
 		var item asset
-		err := s.db.QueryRowContext(ctx, `select raw from xz_assets where id = $1`, id).Scan(rawScanner(&item))
+		err := s.db.QueryRowContext(ctx, `select raw from xz_assets where id = $1 and deleted_at is null`, id).Scan(rawScanner(&item))
 		if err != nil {
 			continue
 		}
@@ -2096,6 +2201,7 @@ func (s *postgresStore) UpdateAssetImageInfo(updates map[string]assetImageInfo) 
 				updated_at = $4,
 				raw = $5::jsonb
 			where id = $1
+			  and deleted_at is null
 		`, item.ID, item.ThumbnailURL, jsonProjection(item.Metadata), item.UpdatedAt, jsonProjection(item)); err != nil {
 			return updated, err
 		}
@@ -3087,6 +3193,9 @@ func (s *postgresStore) countRowsForUsers(ctx context.Context, table string, use
 	}
 	where, args := postgresTextInCondition("user_id", userIDs)
 	query := `select count(*) from ` + table + ` where ` + where
+	if table == "xz_assets" {
+		query += ` and deleted_at is null`
+	}
 	var count int
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return 0, err
@@ -3805,6 +3914,43 @@ func upsertMarketingUpgradePlan(ctx context.Context, tx *sql.Tx, item map[string
 	return err
 }
 
+func paymentCallbackEventByEventIDForTx(ctx context.Context, tx *sql.Tx, provider string, eventID string) (adminPaymentEvent, bool, error) {
+	var item adminPaymentEvent
+	err := tx.QueryRowContext(ctx, `
+		select raw
+		from xz_payment_events
+		where provider = $1 and event_id = $2
+		for update
+	`, normalizePaymentMethod(provider), strings.TrimSpace(eventID)).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminPaymentEvent{}, false, nil
+	}
+	return item, err == nil, err
+}
+
+func paymentCallbackEventByTransactionIDForTx(ctx context.Context, tx *sql.Tx, provider string, transactionID string) (adminPaymentEvent, bool, error) {
+	var item adminPaymentEvent
+	err := tx.QueryRowContext(ctx, `
+		select raw
+		from xz_payment_events
+		where provider = $1 and transaction_id = $2
+		for update
+	`, normalizePaymentMethod(provider), strings.TrimSpace(transactionID)).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminPaymentEvent{}, false, nil
+	}
+	return item, err == nil, err
+}
+
+func insertPaymentCallbackEvent(ctx context.Context, tx *sql.Tx, item adminPaymentEvent) error {
+	item = normalizePaymentCallbackEvent(item)
+	_, err := tx.ExecContext(ctx, `
+		insert into xz_payment_events (id, provider, event_id, order_id, transaction_id, amount_cents, raw, verified, created_at)
+		values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::timestamptz)
+	`, item.ID, item.Provider, item.EventID, item.OrderID, nullableSQLString(item.TransactionID), item.AmountCents, jsonProjection(item), item.Verified, item.CreatedAt)
+	return err
+}
+
 func insertBillingEvent(ctx context.Context, tx *sql.Tx, item adminBillingEvent) error {
 	_, err := tx.ExecContext(ctx, `
 		insert into xz_billing_events (id, transaction_id, user_id, agent_id, tenant_id, operation_center_id, module_code, task_id, metric_code, quantity, unit_amount_cents, amount_cents, point_cost, balance_before, balance_after, model, status, occurred_at, metadata, raw)
@@ -4066,10 +4212,10 @@ func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (genera
 
 func insertAsset(ctx context.Context, tx *sql.Tx, item asset) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_assets (id, user_id, task_id, name, media_type, url, thumbnail_url, favorite, metadata, created_at, updated_at, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb)
-		on conflict (id) do update set user_id=excluded.user_id, task_id=excluded.task_id, name=excluded.name, media_type=excluded.media_type, url=excluded.url, thumbnail_url=excluded.thumbnail_url, favorite=excluded.favorite, metadata=excluded.metadata, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
-	`, item.ID, item.UserID, item.TaskID, item.Name, item.MediaType, item.URL, item.ThumbnailURL, item.Favorite, jsonProjection(item.Metadata), item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		insert into xz_assets (id, user_id, task_id, name, media_type, url, thumbnail_url, favorite, metadata, deleted_at, created_at, updated_at, raw)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13::jsonb)
+		on conflict (id) do update set user_id=excluded.user_id, task_id=excluded.task_id, name=excluded.name, media_type=excluded.media_type, url=excluded.url, thumbnail_url=excluded.thumbnail_url, favorite=excluded.favorite, metadata=excluded.metadata, deleted_at=excluded.deleted_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
+	`, item.ID, item.UserID, item.TaskID, item.Name, item.MediaType, item.URL, item.ThumbnailURL, item.Favorite, jsonProjection(item.Metadata), nullableSQLString(item.DeletedAt), item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 	return err
 }
 

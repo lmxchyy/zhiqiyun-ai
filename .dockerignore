@@ -1,41 +1,120 @@
+# =========================
+# Git / IDE / OS
+# =========================
 .git
+.github
 .gitignore
-
-.env
-.env.*
-!.env.production.example
-!.env.example
-
-.codex-preview
-.codex-reference
-.codex-edge-profile
-.codex-edge-profile-live
-design-previews
-
-tmp
-data
-aicc_log
-jsc_log
-backups
-
-node_modules
-frontend-vue/node_modules
-admin-vue/node_modules
-
-*.log
-logs
-
-dist
-build
-.next
-.nuxt
-.vite
-
+.dockerignore
 .vscode
 .idea
 .DS_Store
 Thumbs.db
+desktop.ini
 
-项目说明.md
-先知AI平台开发文档.md
-实施进度.md
+# =========================
+# Secrets and local env files
+# Docker build does not need env files. Compose reads them outside build context.
+# =========================
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.asc
+id_rsa
+id_rsa.*
+*.private.*
+
+# =========================
+# Dependencies
+# =========================
+node_modules
+**/node_modules
+.pnpm-store
+.yarn
+.yarn-cache
+
+# =========================
+# Runtime data / logs / backups
+# =========================
+tmp
+data
+uploads
+storage
+backups
+aicc_log
+jsc_log
+logs
+*.log
+*.pid
+*.tmp
+*.bak
+*.dump
+
+# =========================
+# Build outputs and caches
+# =========================
+dist
+**/dist
+build
+**/build
+out
+.output
+.next
+.nuxt
+.vite
+.cache
+.turbo
+coverage
+storybook-static
+unpackage
+**/unpackage
+
+# =========================
+# Test / automation artifacts
+# =========================
+.codex*
+.codex*/
+design-previews
+playwright-report
+test-results
+coverage
+
+# =========================
+# Large local media / generated previews
+# Do not send root preview images/videos into Docker build context.
+# =========================
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.svg
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# =========================
+# Files not needed by current Dockerfile
+# Current Dockerfile only builds: apps/user-uni, admin-vue, backend-go, packages.
+# Remove these ignore rules if a future Dockerfile needs them.
+# =========================
+docs
+tests
+tools
+frontend-vue
+miniapp
+apps/desktop-electron
+apps/desktop-tauri
+*.md

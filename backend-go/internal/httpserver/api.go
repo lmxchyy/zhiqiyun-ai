@@ -2,12 +2,20 @@ package httpserver
 
 import (
 	"context"
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,7 +50,7 @@ type platformStore interface {
 	UpdateUserAIState(string, userAIState) (userAIState, error)
 	UpdateAssetThumbnails(map[string]string) (int, error)
 	UpdateAssetImageInfo(map[string]assetImageInfo) (int, error)
-	DeleteAsset(id string) error
+	DeleteAssetForUser(userID string, id string) error
 	PointAccount(string) (pointAccount, error)
 	AdminData() (adminPlatformData, error)
 	UpdateUserPassword(string, string) (adminUser, error)
@@ -53,7 +61,8 @@ type platformStore interface {
 	UpdateAdminProduct(string, adminProductMutation) (adminProduct, error)
 	UpdateAdminPlan(string, adminPlanMutation) (adminPlan, error)
 	CreateAdminOrder(adminOrderMutation) (adminOrder, error)
-	MarkAdminOrderPaid(string) (adminOrder, error)
+	RegisterPaymentCallbackEvent(adminPaymentEvent) (bool, error)
+	MarkAdminOrderPaid(string, ...map[string]any) (adminOrder, error)
 	RenewAdminOrder(string) (adminOrder, error)
 	UpdateAdminDeliveryProject(string, adminDeliveryMutation) (map[string]any, error)
 	UpdateAdminSystemSettings(adminSystemMutation) (adminSystemSettings, error)
@@ -378,7 +387,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	} else if ok {
 		service = routeService
 	} else if providerID := selectedGenerationProvider(req.Params); providerID != "" {
-		dynamicService, err := a.generationServiceForProvider(providerID)
+		dynamicService, err := a.generationServiceForProvider(providerID, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -777,13 +786,13 @@ func (a api) generationServiceForConfiguredModel(model string) (generation.Servi
 	return service, true, nil
 }
 
-func (a api) generationServiceForProvider(providerID string) (generation.Service, error) {
+func (a api) generationServiceForProvider(providerID string, req generation.CreateRequest) (generation.Service, error) {
 	data, err := a.store.AdminData()
 	if err != nil {
 		return generation.Service{}, err
 	}
 	var channel adminAPIChannel
-	for _, item := range data.APIChannels {
+	for _, item := range configuredGenerationChannels(data) {
 		if item.ID == providerID {
 			channel = item
 			break
@@ -791,6 +800,9 @@ func (a api) generationServiceForProvider(providerID string) (generation.Service
 	}
 	if channel.ID == "" {
 		return generation.Service{}, fmt.Errorf("api provider not found: %s", providerID)
+	}
+	if model := strings.TrimSpace(req.Model); model != "" && !apiChannelSupportsModel(channel, model) {
+		return generation.Service{}, fmt.Errorf("api provider %s does not support model %s", channel.Name, model)
 	}
 	return a.generationServiceForChannel(data, channel)
 }
@@ -1397,12 +1409,17 @@ func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, rawURL string, f
 }
 
 func (a api) writeRemoteDownload(w http.ResponseWriter, r *http.Request, rawURL string, contentType string, filename string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
+	remoteURL, err := validateRemoteDownloadURL(rawURL)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	res, err := http.DefaultClient.Do(req)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res, err := remoteDownloadHTTPClient().Do(req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -1417,6 +1434,84 @@ func (a api) writeRemoteDownload(w http.ResponseWriter, r *http.Request, rawURL 
 	}
 	writeAttachmentHeaders(w, contentType, filename)
 	_, _ = io.Copy(w, io.LimitReader(res.Body, 512<<20))
+}
+
+func validateRemoteDownloadURL(rawURL string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, errors.New("invalid remote download url")
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+	default:
+		return nil, errors.New("unsupported remote download url scheme")
+	}
+	if parsed.User != nil {
+		return nil, errors.New("remote download url userinfo is not allowed")
+	}
+	if err := validateRemoteDownloadHost(parsed.Hostname()); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func validateRemoteDownloadHost(host string) error {
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "" {
+		return errors.New("remote download host is required")
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return errors.New("remote download host is not public")
+	}
+	if ip := net.ParseIP(host); ip != nil && !isPublicRemoteDownloadIP(ip) {
+		return errors.New("remote download address is not public")
+	}
+	return nil
+}
+
+func remoteDownloadHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	transport.DialContext = func(ctx context.Context, network string, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range ips {
+			if !isPublicRemoteDownloadIP(item.IP) {
+				return nil, fmt.Errorf("remote download host resolves to non-public address: %s", host)
+			}
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(host, port))
+	}
+	return &http.Client{
+		Timeout:   60 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return errors.New("too many remote download redirects")
+			}
+			_, err := validateRemoteDownloadURL(req.URL.String())
+			return err
+		},
+	}
+}
+
+func isPublicRemoteDownloadIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return !ip.IsLoopback() &&
+		!ip.IsPrivate() &&
+		!ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast() &&
+		!ip.IsUnspecified() &&
+		!ip.IsMulticast()
 }
 
 func (a api) referenceImageDir() string {
@@ -1765,22 +1860,20 @@ func (a api) createOperationCenterJoinOrder(w http.ResponseWriter, r *http.Reque
 }
 
 func (a api) payCallback(w http.ResponseWriter, r *http.Request) {
-	if secret := strings.TrimSpace(os.Getenv("PAYMENT_CALLBACK_SECRET")); secret != "" {
+	if secret := strings.TrimSpace(a.cfg.PaymentCallbackSecret); secret != "" {
 		headerSecret := strings.TrimSpace(firstNonEmptyString(r.Header.Get("X-Xianzhi-Payment-Secret"), r.Header.Get("X-Payment-Secret")))
 		if headerSecret != secret {
 			writeError(w, http.StatusUnauthorized, errors.New("invalid payment callback secret"))
 			return
 		}
 	}
-	var req struct {
-		OrderID       string `json:"orderId"`
-		OrderNo       string `json:"orderNo"`
-		Status        string `json:"status"`
-		PaymentStatus string `json:"paymentStatus"`
-		EventType     string `json:"eventType"`
-		Paid          bool   `json:"paid"`
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, signature, err := parsePaymentCallbackRequest(r, rawBody, a.cfg)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -1794,12 +1887,458 @@ func (a api) payCallback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": true, "ignored": true, "status": status})
 		return
 	}
-	order, err := a.store.MarkAdminOrderPaid(orderID)
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	order, ok := findPaymentCallbackOrder(data.Orders, req.OrderID, req.OrderNo)
+	if !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("order not found: %s", orderID))
+		return
+	}
+	if err := validatePaymentCallbackProvider(req, order); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	provider := paymentCallbackProvider(req, order)
+	if err := a.requirePaymentCallbackSignature(provider, signature); err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	amount := paymentCallbackAmountCents(req.AmountCents, req.TotalCents, req.Amount)
+	if amount <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("payment amountCents is required"))
+		return
+	}
+	if amount != orderAmount(order) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("payment amount mismatch: got %d, want %d", amount, orderAmount(order)))
+		return
+	}
+	eventID := strings.TrimSpace(req.EventID)
+	if eventID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("payment eventId is required"))
+		return
+	}
+	providerTransactionID := strings.TrimSpace(firstNonEmptyString(req.ProviderTxnID, req.TransactionID))
+	if providerTransactionID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("payment providerTransactionId is required"))
+		return
+	}
+	duplicateEvent, err := a.store.RegisterPaymentCallbackEvent(adminPaymentEvent{
+		Provider:      provider,
+		EventID:       eventID,
+		OrderID:       order.ID,
+		TransactionID: providerTransactionID,
+		AmountCents:   amount,
+		Verified:      signature.Verified,
+		Raw:           paymentCallbackEventRaw(req, signature),
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "item": order})
+	callbackMetadata := paymentCallbackMetadata(eventID, providerTransactionID, status, amount)
+	order, err = a.store.MarkAdminOrderPaid(order.ID, callbackMetadata)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"ok":                    true,
+		"item":                  order,
+		"duplicateEvent":        duplicateEvent,
+		"eventId":               eventID,
+		"providerTransactionId": providerTransactionID,
+	})
+}
+
+type paymentCallbackRequest struct {
+	OrderID       string `json:"orderId"`
+	OrderNo       string `json:"orderNo"`
+	Provider      string `json:"provider"`
+	Channel       string `json:"channel"`
+	Status        string `json:"status"`
+	PaymentStatus string `json:"paymentStatus"`
+	EventType     string `json:"eventType"`
+	Paid          bool   `json:"paid"`
+	AmountCents   int    `json:"amountCents"`
+	Amount        int    `json:"amount"`
+	TotalCents    int    `json:"totalCents"`
+	TransactionID string `json:"transactionId"`
+	ProviderTxnID string `json:"providerTransactionId"`
+	EventID       string `json:"eventId"`
+}
+
+type paymentCallbackSignature struct {
+	Provider string
+	Verified bool
+	Source   string
+}
+
+func parsePaymentCallbackRequest(r *http.Request, rawBody []byte, cfg config.Config) (paymentCallbackRequest, paymentCallbackSignature, error) {
+	if hasWeChatPaySignatureHeaders(r.Header) {
+		return parseWeChatPayCallback(r, rawBody, cfg)
+	}
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		return parseAlipayCallback(rawBody, cfg)
+	}
+	var req paymentCallbackRequest
+	if err := json.Unmarshal(rawBody, &req); err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	return req, paymentCallbackSignature{}, nil
+}
+
+func paymentCallbackProvider(req paymentCallbackRequest, order adminOrder) string {
+	provider := normalizePaymentMethod(firstNonEmptyString(req.Provider, req.Channel, stringValue(order.PriceSnapshot["paymentMethod"])))
+	if provider == "" {
+		return "manual"
+	}
+	return provider
+}
+
+func validatePaymentCallbackProvider(req paymentCallbackRequest, order adminOrder) error {
+	reqProvider := normalizePaymentMethod(firstNonEmptyString(req.Provider, req.Channel))
+	orderProvider := normalizePaymentMethod(stringValue(order.PriceSnapshot["paymentMethod"]))
+	if reqProvider == "" || orderProvider == "" || reqProvider == orderProvider {
+		return nil
+	}
+	return fmt.Errorf("payment callback provider mismatch: got %s, want %s", reqProvider, orderProvider)
+}
+
+func (a api) requirePaymentCallbackSignature(provider string, signature paymentCallbackSignature) error {
+	if !a.cfg.IsProduction() {
+		return nil
+	}
+	provider = normalizePaymentMethod(provider)
+	if provider != "wechat" && provider != "alipay" {
+		return nil
+	}
+	if signature.Verified && signature.Provider == provider {
+		return nil
+	}
+	return fmt.Errorf("%s payment callback requires official signature verification in production", provider)
+}
+
+func hasWeChatPaySignatureHeaders(header http.Header) bool {
+	return strings.TrimSpace(header.Get("Wechatpay-Signature")) != "" ||
+		strings.TrimSpace(header.Get("Wechatpay-Timestamp")) != "" ||
+		strings.TrimSpace(header.Get("Wechatpay-Nonce")) != ""
+}
+
+func parseWeChatPayCallback(r *http.Request, rawBody []byte, cfg config.Config) (paymentCallbackRequest, paymentCallbackSignature, error) {
+	if err := verifyWeChatPaySignature(r.Header, rawBody, cfg); err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	var envelope struct {
+		ID           string `json:"id"`
+		EventType    string `json:"event_type"`
+		ResourceType string `json:"resource_type"`
+		Summary      string `json:"summary"`
+		Resource     struct {
+			Algorithm      string `json:"algorithm"`
+			Ciphertext     string `json:"ciphertext"`
+			AssociatedData string `json:"associated_data"`
+			Nonce          string `json:"nonce"`
+			OriginalType   string `json:"original_type"`
+		} `json:"resource"`
+	}
+	if err := json.Unmarshal(rawBody, &envelope); err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	plain, err := decryptWeChatPayResource(envelope.Resource.Ciphertext, envelope.Resource.Nonce, envelope.Resource.AssociatedData, cfg.WeChatPayAPIv3Key)
+	if err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	var payload struct {
+		OutTradeNo    string `json:"out_trade_no"`
+		TransactionID string `json:"transaction_id"`
+		TradeState    string `json:"trade_state"`
+		Amount        struct {
+			Total int `json:"total"`
+		} `json:"amount"`
+	}
+	if err := json.Unmarshal(plain, &payload); err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	status := firstNonEmptyString(payload.TradeState, envelope.EventType)
+	req := paymentCallbackRequest{
+		OrderNo:       strings.TrimSpace(payload.OutTradeNo),
+		Provider:      "wechat",
+		Status:        status,
+		PaymentStatus: status,
+		EventType:     envelope.EventType,
+		Paid:          isPaidStatus(status),
+		TotalCents:    payload.Amount.Total,
+		TransactionID: strings.TrimSpace(payload.TransactionID),
+		ProviderTxnID: strings.TrimSpace(payload.TransactionID),
+		EventID:       strings.TrimSpace(envelope.ID),
+	}
+	return req, paymentCallbackSignature{Provider: "wechat", Verified: true, Source: "wechatpay-v3"}, nil
+}
+
+func verifyWeChatPaySignature(header http.Header, rawBody []byte, cfg config.Config) error {
+	timestamp := strings.TrimSpace(header.Get("Wechatpay-Timestamp"))
+	nonce := strings.TrimSpace(header.Get("Wechatpay-Nonce"))
+	signature := strings.TrimSpace(header.Get("Wechatpay-Signature"))
+	if timestamp == "" || nonce == "" || signature == "" {
+		return errors.New("wechat pay callback missing signature headers")
+	}
+	publicKey, err := rsaPublicKeyFromConfig(cfg.WeChatPayPlatformKey, cfg.WeChatPayPlatformPath)
+	if err != nil {
+		return fmt.Errorf("wechat pay platform public key: %w", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		return fmt.Errorf("wechat pay signature decode: %w", err)
+	}
+	message := timestamp + "\n" + nonce + "\n" + string(rawBody) + "\n"
+	hash := sha256.Sum256([]byte(message))
+	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hash[:], decoded); err != nil {
+		return fmt.Errorf("wechat pay signature verification failed: %w", err)
+	}
+	return nil
+}
+
+func decryptWeChatPayResource(ciphertext string, nonce string, associatedData string, apiV3Key string) ([]byte, error) {
+	apiV3Key = strings.TrimSpace(apiV3Key)
+	if len(apiV3Key) != 32 {
+		return nil, errors.New("wechat pay api v3 key must be 32 bytes")
+	}
+	rawCiphertext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(ciphertext))
+	if err != nil {
+		return nil, fmt.Errorf("wechat pay resource ciphertext decode: %w", err)
+	}
+	block, err := aes.NewCipher([]byte(apiV3Key))
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, []byte(nonce), rawCiphertext, []byte(associatedData))
+}
+
+func parseAlipayCallback(rawBody []byte, cfg config.Config) (paymentCallbackRequest, paymentCallbackSignature, error) {
+	values, err := url.ParseQuery(string(rawBody))
+	if err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	if err := verifyAlipaySignature(values, cfg); err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	amountCents, err := decimalAmountCents(values.Get("total_amount"))
+	if err != nil {
+		return paymentCallbackRequest{}, paymentCallbackSignature{}, err
+	}
+	status := strings.TrimSpace(values.Get("trade_status"))
+	req := paymentCallbackRequest{
+		OrderNo:       strings.TrimSpace(values.Get("out_trade_no")),
+		Provider:      "alipay",
+		Status:        status,
+		PaymentStatus: status,
+		EventType:     strings.TrimSpace(values.Get("notify_type")),
+		Paid:          isPaidStatus(status) || status == "TRADE_SUCCESS" || status == "TRADE_FINISHED",
+		TotalCents:    amountCents,
+		TransactionID: strings.TrimSpace(values.Get("trade_no")),
+		ProviderTxnID: strings.TrimSpace(values.Get("trade_no")),
+		EventID:       strings.TrimSpace(values.Get("notify_id")),
+	}
+	return req, paymentCallbackSignature{Provider: "alipay", Verified: true, Source: "alipay-rsa2"}, nil
+}
+
+func verifyAlipaySignature(values url.Values, cfg config.Config) error {
+	signature := strings.TrimSpace(values.Get("sign"))
+	if signature == "" {
+		return errors.New("alipay callback missing sign")
+	}
+	signType := strings.ToUpper(strings.TrimSpace(values.Get("sign_type")))
+	if signType != "" && signType != "RSA2" {
+		return fmt.Errorf("unsupported alipay sign_type: %s", signType)
+	}
+	publicKey, err := rsaPublicKeyFromConfig(cfg.AlipayPublicKey, cfg.AlipayPublicKeyPath)
+	if err != nil {
+		return fmt.Errorf("alipay public key: %w", err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		return fmt.Errorf("alipay signature decode: %w", err)
+	}
+	content := alipaySignContent(values)
+	hash := sha256.Sum256([]byte(content))
+	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hash[:], decoded); err != nil {
+		return fmt.Errorf("alipay signature verification failed: %w", err)
+	}
+	return nil
+}
+
+func alipaySignContent(values url.Values) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if key == "sign" || key == "sign_type" {
+			continue
+		}
+		if strings.TrimSpace(values.Get(key)) == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+values.Get(key))
+	}
+	return strings.Join(parts, "&")
+}
+
+func rsaPublicKeyFromConfig(inline string, filePath string) (*rsa.PublicKey, error) {
+	material, err := keyMaterialFromConfig(inline, filePath)
+	if err != nil {
+		return nil, err
+	}
+	return parseRSAPublicKey(material)
+}
+
+func keyMaterialFromConfig(inline string, filePath string) (string, error) {
+	inline = strings.TrimSpace(strings.ReplaceAll(inline, `\n`, "\n"))
+	if inline != "" {
+		return inline, nil
+	}
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return "", errors.New("key material is not configured")
+	}
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
+func parseRSAPublicKey(material string) (*rsa.PublicKey, error) {
+	material = strings.TrimSpace(strings.ReplaceAll(material, `\n`, "\n"))
+	if block, _ := pem.Decode([]byte(material)); block != nil {
+		switch block.Type {
+		case "CERTIFICATE":
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, err
+			}
+			key, ok := cert.PublicKey.(*rsa.PublicKey)
+			if !ok {
+				return nil, errors.New("certificate public key is not RSA")
+			}
+			return key, nil
+		case "PUBLIC KEY":
+			key, err := x509.ParsePKIXPublicKey(block.Bytes)
+			if err != nil {
+				return nil, err
+			}
+			rsaKey, ok := key.(*rsa.PublicKey)
+			if !ok {
+				return nil, errors.New("public key is not RSA")
+			}
+			return rsaKey, nil
+		case "RSA PUBLIC KEY":
+			return x509.ParsePKCS1PublicKey(block.Bytes)
+		default:
+			return nil, fmt.Errorf("unsupported public key PEM type: %s", block.Type)
+		}
+	}
+	der, err := base64.StdEncoding.DecodeString(material)
+	if err != nil {
+		return nil, errors.New("public key must be PEM or base64 DER")
+	}
+	key, err := x509.ParsePKIXPublicKey(der)
+	if err == nil {
+		if rsaKey, ok := key.(*rsa.PublicKey); ok {
+			return rsaKey, nil
+		}
+		return nil, errors.New("public key is not RSA")
+	}
+	return x509.ParsePKCS1PublicKey(der)
+}
+
+func decimalAmountCents(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	negative := strings.HasPrefix(value, "-")
+	if negative {
+		value = strings.TrimPrefix(value, "-")
+	}
+	parts := strings.SplitN(value, ".", 3)
+	if len(parts) > 2 {
+		return 0, fmt.Errorf("invalid amount: %s", value)
+	}
+	yuan, err := strconv.Atoi(firstNonEmptyString(parts[0], "0"))
+	if err != nil {
+		return 0, err
+	}
+	cents := 0
+	if len(parts) == 2 {
+		fraction := parts[1]
+		if len(fraction) > 2 {
+			fraction = fraction[:2]
+		}
+		for len(fraction) < 2 {
+			fraction += "0"
+		}
+		cents, err = strconv.Atoi(fraction)
+		if err != nil {
+			return 0, err
+		}
+	}
+	total := yuan*100 + cents
+	if negative {
+		return -total, nil
+	}
+	return total, nil
+}
+
+func findPaymentCallbackOrder(orders []adminOrder, orderID string, orderNo string) (adminOrder, bool) {
+	orderID = strings.TrimSpace(orderID)
+	orderNo = strings.TrimSpace(orderNo)
+	for _, order := range orders {
+		idMatches := orderID == "" || order.ID == orderID || order.OrderNo == orderID
+		noMatches := orderNo == "" || order.ID == orderNo || order.OrderNo == orderNo
+		if idMatches && noMatches {
+			return order, true
+		}
+	}
+	return adminOrder{}, false
+}
+
+func paymentCallbackAmountCents(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func paymentCallbackMetadata(eventID string, providerTransactionID string, status string, amountCents int) map[string]any {
+	metadata := map[string]any{
+		"callbackReceivedAt": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if eventID = strings.TrimSpace(eventID); eventID != "" {
+		metadata["eventId"] = eventID
+	}
+	if providerTransactionID = strings.TrimSpace(providerTransactionID); providerTransactionID != "" {
+		metadata["providerTransactionId"] = providerTransactionID
+	}
+	if status = strings.TrimSpace(status); status != "" {
+		metadata["paymentCallbackStatus"] = status
+	}
+	if amountCents > 0 {
+		metadata["paidAmountCents"] = amountCents
+	}
+	return metadata
 }
 
 func (a api) memberProfile(w http.ResponseWriter, r *http.Request) {
@@ -2556,9 +3095,13 @@ func (a api) updateUserAIState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, state)
 }
 
-func (a api) userAPISettings(w http.ResponseWriter, _ *http.Request) {
+func (a api) userAPISettings(w http.ResponseWriter, r *http.Request) {
+	user, err := a.currentUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 	var data adminPlatformData
-	var err error
 	if store, ok := a.store.(onlineImageSettingsStore); ok {
 		data, err = store.OnlineImageSettings()
 	} else {
@@ -2568,18 +3111,85 @@ func (a api) userAPISettings(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	models := userVisibleAPIModels(data, user)
+	capabilities := apiModelCapabilities(models)
+	defaultModel := ""
+	if len(models) > 0 {
+		defaultModel = models[0].Model
+	}
+	account, accountErr := a.store.PointAccount(user.ID)
+	quota := map[string]any{}
+	if accountErr == nil {
+		quota = map[string]any{
+			"available": account.Available,
+			"frozen":    account.Frozen,
+			"total":     account.Total,
+		}
+	}
 	writeJSON(w, map[string]any{
 		"summary": map[string]any{
-			"apiChannels":    len(data.APIChannels),
-			"apiModels":      len(data.APIModels),
-			"apiKeys":        len(data.APIKeys),
-			"customerGroups": len(data.CustomerGroups),
+			"models":       len(models),
+			"capabilities": len(capabilities),
+			"apiKeyCount":  len(data.APIKeys),
 		},
-		"apiChannels":    data.APIChannels,
-		"apiModels":      data.APIModels,
-		"apiKeys":        data.APIKeys,
-		"customerGroups": data.CustomerGroups,
+		"models":       models,
+		"apiModels":    models,
+		"capabilities": capabilities,
+		"defaultModel": defaultModel,
+		"userGroup":    billingCustomerGroupName(data, user),
+		"quota":        quota,
 	})
+}
+
+func userVisibleAPIModels(data adminPlatformData, user adminUser) []adminAPIModel {
+	groupName := billingCustomerGroupName(data, user)
+	groupModels := map[string]bool{}
+	for _, group := range data.CustomerGroups {
+		if strings.EqualFold(strings.TrimSpace(group.Name), strings.TrimSpace(groupName)) || strings.EqualFold(strings.TrimSpace(group.ID), strings.TrimSpace(groupName)) {
+			for _, model := range group.Models {
+				model = strings.ToLower(strings.TrimSpace(model))
+				if model != "" {
+					groupModels[model] = true
+				}
+			}
+			break
+		}
+	}
+	items := make([]adminAPIModel, 0, len(data.APIModels))
+	for _, item := range data.APIModels {
+		if !strings.EqualFold(strings.TrimSpace(item.Status), "ACTIVE") {
+			continue
+		}
+		if len(groupModels) > 0 && !apiModelAllowedForGroup(item, groupModels) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func apiModelAllowedForGroup(item adminAPIModel, groupModels map[string]bool) bool {
+	for _, value := range []string{item.ID, item.Model, item.Name} {
+		if groupModels[strings.ToLower(strings.TrimSpace(value))] {
+			return true
+		}
+	}
+	return false
+}
+
+func apiModelCapabilities(models []adminAPIModel) []string {
+	seen := map[string]bool{}
+	items := []string{}
+	for _, model := range models {
+		capability := strings.TrimSpace(model.Capability)
+		if capability == "" || seen[capability] {
+			continue
+		}
+		seen[capability] = true
+		items = append(items, capability)
+	}
+	sort.Strings(items)
+	return items
 }
 
 func (a api) userUsage(w http.ResponseWriter, r *http.Request) {
@@ -2653,7 +3263,7 @@ func (a api) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errAssetNotFound)
 		return
 	}
-	if err := a.store.DeleteAsset(id); err != nil {
+	if err := a.store.DeleteAssetForUser(user.ID, id); err != nil {
 		if errors.Is(err, errAssetNotFound) {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -2677,7 +3287,7 @@ func filterGenerationTasksForUser(tasks []generationTask, userID string) []gener
 func filterAssetsForUser(assets []asset, userID string) []asset {
 	items := make([]asset, 0, len(assets))
 	for _, item := range assets {
-		if item.UserID == userID {
+		if item.UserID == userID && !assetDeleted(item) {
 			items = append(items, item)
 		}
 	}

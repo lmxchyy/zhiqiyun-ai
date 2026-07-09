@@ -13,7 +13,11 @@
     "build:h5": "uni build",
     "build:mp": "uni build -p mp-weixin",
     "build:mp-weixin": "uni build -p mp-weixin",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "dev:app-plus": "uni -p app-plus",
+    "build:app-plus": "uni build -p app-plus",
+    "build:app-harmony": "uni build -p app-harmony",
+    "build:mp-harmony": "uni build -p mp-harmony"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4070620250821001",

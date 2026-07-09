@@ -4,7 +4,7 @@
 **Date**: 2026-07-01
 **Author**: Workflow Architect
 **Status**: Draft
-**Implements**: Current Go runtime behavior for authenticated image generation, task polling, asset creation, point deduction, billing and audit.
+**Implements**: Current Go runtime behavior for authenticated image generation, task polling, asset creation, point reservation, billing and audit.
 
 ## Overview
 
@@ -51,10 +51,10 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 - Prompt is non-empty after trimming.
 - Request type is `TEXT_TO_IMAGE` or `IMAGE_TO_IMAGE` for this workflow.
 - For non-mock image generation, a usable API channel or runtime provider must exist with a configured API key.
-- User has enough available points at enqueue time and still has enough at completion time.
+- User has enough available points at enqueue time; current Go runtime reserves the task point cost during enqueue and releases the reservation on task failure.
 - PostgreSQL projection schema exists or can be ensured by `postgresStore.ensureReady`.
 - For image-to-image, `params.referenceImages` contains at least one accessible data URL or HTTP(S) image URL.
-- Current process stays alive until the goroutine completes; in-flight image tasks are not recovered from a durable queue in the current Go path.
+- Current process stays alive until the goroutine completes. If the process exits, the next API startup runs stale-task repair after the task exceeds the configured age threshold, but the current Go path still does not resume provider work from a durable queue.
 
 ## Trigger
 
@@ -176,7 +176,7 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 ### STEP 4: Enqueue Current Go Image Task
 
 **Actor**: PostgreSQL store
-**Action**: `CreatePendingGenerationTask` opens a transaction, locks point account, checks available points, creates `xz_generation_tasks` row, writes audit log `generation.enqueue`, commits.
+**Action**: `CreatePendingGenerationTask` opens a transaction, locks point account, checks available points, reserves the task point cost, creates `xz_generation_tasks` row with `billingReserved` reservation metadata, writes audit log `generation.enqueue`, commits.
 **Timeout**: 5 second store timeout.
 **Input**: image generation request.
 **Output on SUCCESS**:
@@ -208,7 +208,7 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 
 - Customer sees: newly created running task with 5% progress.
 - Operator sees: `xz_generation_tasks.status = PROCESSING`, `progress = 5`.
-- Database: one task row in `xz_generation_tasks`; audit log `generation.enqueue`; no assets, no point deduction, no billing event yet.
+- Database: one task row in `xz_generation_tasks`; point account available balance reduced by the reserved point cost; task params record reservation amount and before/after balances; audit log `generation.enqueue`; no assets or billing event yet.
 - Logs/metrics/traces: API returns task object; audit middleware may also log request.
 
 ### STEP 5: Run Provider Generation in Goroutine
@@ -235,25 +235,25 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 - `FAILURE(provider_timeout)`: provider or outer context times out -> `FailGenerationTask` with `生成超时，请稍后重试`.
 - `FAILURE(transient_provider_error)`: 502/503/504 or network timeout persists after retries -> `FailGenerationTask`.
 - `FAILURE(permanent_provider_error)`: provider returns non-retryable HTTP error, empty payload or invalid JSON -> `FailGenerationTask`.
-- `FAILURE(process_exit)`: Go process exits after STEP 4 but before completion/failure write -> task can remain `PROCESSING`; current code has no recovery sweeper.
+- `FAILURE(process_exit)`: Go process exits after STEP 4 but before completion/failure write -> task can remain `PROCESSING` until the next API startup stale-task repair marks it `FAILED` and refunds any active point reservation.
 
 **Recovery**:
 
-- User can resubmit manually; current Go route does not expose retry by task id.
+- User can resubmit manually after stale-task repair marks the old task failed; current Go route does not expose retry by task id.
 - Operator fixes provider config/key/quota/model support.
-- Operator can manually inspect or repair stuck `PROCESSING` rows until a recovery job exists.
+- Operator can restart the API to trigger startup stale-task repair, or manually inspect stuck `PROCESSING` rows if failure settlement also fails.
 
 **Observable states during this step**:
 
 - Customer sees: running task during polling.
 - Operator sees: task stuck in `PROCESSING` until provider returns or failure is written.
-- Database: no asset/billing changes during provider call.
+- Database: no asset or billing event changes during provider call; the point reservation remains held until success or failure settlement.
 - Logs/metrics/traces: provider error only appears in task error after failure; in-code goroutine ignores returned failure-update errors.
 
 ### STEP 6: Complete Task, Create Assets and Settle Points
 
 **Actor**: PostgreSQL store
-**Action**: `CompleteGenerationTask` locks the task and point account, verifies the task is not terminal, verifies points again, creates asset rows, updates task to `SUCCEEDED`, deducts points, writes billing event, optional commissions and audit log `generation.complete`.
+**Action**: `CompleteGenerationTask` locks the task and point account, verifies the task is not terminal, creates asset rows, updates task to `SUCCEEDED`, settles the existing point reservation into a billing event, writes optional commissions and audit log `generation.complete`. Legacy unreserved tasks still use the success-time deduction fallback.
 **Timeout**: 5 second store timeout.
 **Input**: task id and prepared request containing provider-generated images.
 **Output on SUCCESS**:
@@ -273,23 +273,22 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 
 - `FAILURE(task_not_found)`: task row cannot be locked -> goroutine calls `FailGenerationTask`, which may also fail if row is missing.
 - `FAILURE(terminal_race)`: task already `SUCCEEDED`, `FAILED` or `CANCELLED` -> no-op commit; current Go flow has no cancel route, but guard exists.
-- `FAILURE(points_consumed_after_enqueue)`: available points are insufficient at completion -> completion rolls back; goroutine marks task `FAILED`.
 - `FAILURE(asset_insert_error)`: generated asset cannot be inserted -> transaction rolls back; goroutine marks task `FAILED`.
-- `FAILURE(point_update_error)`: point deduction update fails -> transaction rolls back; goroutine marks task `FAILED`.
+- `FAILURE(point_update_error)`: point account update fails for a legacy unreserved task -> transaction rolls back; goroutine marks task `FAILED`.
 - `FAILURE(billing_or_commission_error)`: billing event or commission write fails -> transaction rolls back; goroutine marks task `FAILED`.
 - `FAILURE(audit_error)`: complete audit write fails -> transaction rolls back; goroutine marks task `FAILED`.
 - `FAILURE(fail_write_error)`: if the fallback `FailGenerationTask` also fails, task may remain `PROCESSING`; current code discards that error.
 
 **Recovery**:
 
-- User can resubmit after ensuring points are still available.
+- User can resubmit after the failed task refunds its active reservation or after adding points.
 - Operator checks asset/billing/commission/audit table health.
 - Operator repairs stuck `PROCESSING` rows if completion and failure writes both failed.
 
 **Observable states during this step**:
 
 - Customer sees: completed task and asset after next poll or module refresh.
-- Operator sees: task `SUCCEEDED`, asset row(s), point balance lower, billing event `SUCCEEDED`, possible commission rows.
+- Operator sees: task `SUCCEEDED`, asset row(s), point balance already reduced by the enqueue reservation, billing event `SUCCEEDED`, possible commission rows.
 - Database: `xz_generation_tasks`, `xz_assets`, `xz_point_accounts`, `xz_billing_events`, `xz_commissions`, `xz_audit_logs`.
 - Logs/metrics/traces: audit log `generation.complete`.
 
@@ -361,7 +360,7 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 **Observable states during this step**:
 
 - Customer sees: works list, downloaded file or deleted item disappearing from list.
-- Operator sees: `xz_assets` row physically removed on delete; task raw `resultIds` updated.
+- Operator sees: `xz_assets.deleted_at` set on delete; task raw `resultIds` updated.
 - Database: `xz_assets`, `xz_generation_tasks.raw.resultIds`, audit `assets.delete`.
 - Logs/metrics/traces: HTTP download/delete response and audit log for delete.
 
@@ -382,11 +381,13 @@ Current Go image path:
 
 [PROCESSING]
   -> Go process exits before completion/failure write
-  -> [PROCESSING stuck]  (no current recovery job)
+  -> [PROCESSING stale]
+  -> next API startup repair after max age
+  -> [FAILED]
 
 [SUCCEEDED resultIds=[asset_1]]
   -> DELETE /api/v1/assets/asset_1
-  -> [SUCCEEDED resultIds=[]] + asset row removed
+  -> [SUCCEEDED resultIds=[]] + asset deleted_at set
 ```
 
 ```text
@@ -623,12 +624,12 @@ Documented but not current Go path:
 
 | Resource | Created at step | Destroyed/closed by | Method | Failure if cleanup fails |
 |---|---|---|---|---|
-| `xz_generation_tasks` pending row | STEP 4 | No automatic cleanup | Terminal update to `SUCCEEDED` or `FAILED`; stuck `PROCESSING` requires manual repair | Task remains visible/running forever |
-| Provider HTTP request | STEP 5 | Context cancellation | 10 minute outer context, provider client timeout, edit/fallback timeouts | Provider call can hang until timeout; task remains `PROCESSING` until failure write |
+| `xz_generation_tasks` pending row | STEP 4 | Completion/failure path or startup stale-task repair | Terminal update to `SUCCEEDED` or `FAILED`; stale `PROCESSING` is failed on API startup after max age | Task can remain visible/running until next startup repair or manual repair if failure settlement fails |
+| Provider HTTP request | STEP 5 | Context cancellation | 10 minute outer context, provider client timeout, edit/fallback timeouts | Provider call can hang until timeout; task remains `PROCESSING` until failure write or startup stale repair |
 | Reference image local file | Reference image upload workflow, out of this spec | Not covered in current generation path | Missing cleanup spec | Uploaded reference files can accumulate |
-| Provider-generated image URL/data URL | STEP 5/6 | Asset delete only removes DB row | `DELETE /api/v1/assets/{id}` removes `xz_assets`; remote provider URL is not deleted | External content may expire or remain remote |
-| `xz_assets` row | STEP 6 | STEP 8 asset delete | Physical delete from `xz_assets`, task `resultIds` filtered | Asset stays in works list or task still points at missing asset |
-| Point deduction | STEP 6 | No current refund path for Go image failures | Deduct only on success; no automatic refund needed for provider failure because no points are deducted before success | Completion can fail if points are insufficient by the second check |
+| Provider-generated image URL/data URL | STEP 5/6 | Asset delete only hides the active asset row | `DELETE /api/v1/assets/{id}` writes `deleted_at`; remote provider URL is not deleted | External content may expire or remain remote |
+| `xz_assets` row | STEP 6 | STEP 8 asset delete | Logical delete with `deleted_at`; task `resultIds` filtered; active asset queries exclude deleted rows | Asset stays in works list or task still points at missing asset |
+| Point reservation | STEP 4 | `FailGenerationTask` on provider or completion failure | Reserve available points at enqueue, keep the reservation on success, refund the active reservation on failure with `billingRefunded` metadata | If failure settlement cannot be written, points can remain reserved and task may stay `PROCESSING` |
 | Billing event | STEP 6 | No current cleanup | Inserted only inside success transaction | Usage ledger missing if transaction fails; task becomes `FAILED` |
 | Commission records | STEP 6 | No current cleanup | Inserted only inside success transaction | Commission ledger missing if transaction fails; task becomes `FAILED` |
 | Audit logs | STEP 4/6/8 | Append-only | Insert audit row | If complete audit fails, completion transaction fails and task becomes `FAILED` |
@@ -638,10 +639,10 @@ Documented but not current Go path:
 | # | Finding | Severity | Spec section affected | Resolution |
 |---|---|---|---|---|
 | RC-1 | Current Go runtime does not expose `POST /api/v1/generation-tasks/{id}/cancel`, `retry`, `assets/{id}/favorite`, or `assets/{id}/regenerate`, although product docs describe them. | High | Registry; State Transitions | Keep those workflows `Missing`; add separate specs before implementation. |
-| RC-2 | Current Go runtime does not freeze points on enqueue. It checks points at enqueue, then deducts only after provider success. | Medium | STEP 4, STEP 6 | If freeze/compensation is required, implement a point reservation workflow. |
-| RC-3 | In-flight tasks are held by an in-process goroutine, not a durable worker queue. Process exit can leave tasks stuck in `PROCESSING`. | High | STEP 5 | Add timeout sweeper or durable queue worker spec. |
-| RC-4 | `FailGenerationTask` does not write refund/billing-compensation records because no points have been deducted yet. | Medium | STEP 5, Cleanup Inventory | This is internally consistent now, but conflicts with docs that promise refund after failure. |
-| RC-5 | Asset delete physically deletes rows, while older docs describe logical deletion. | Medium | STEP 8 | Decide whether to preserve current behavior or add `deleted_at`/active filter to Go projection. |
+| RC-2 | Current Go runtime now reserves points on enqueue and settles/refunds later. The reservation is stored in task params and point-account balance, not a separate hold ledger. | Low | STEP 4, STEP 6 | Add explicit hold/refund ledger events if accounting needs a full reservation subledger. |
+| RC-3 | In-flight tasks are held by an in-process goroutine, not a durable worker queue. Startup stale-task repair fails old running tasks, but it does not resume provider work or run as a continuous worker. | Medium | STEP 5 | Add durable queue worker spec if task resume/retry is required. |
+| RC-4 | `FailGenerationTask` refunds active point reservations idempotently, but does not write a separate refund billing-compensation event. | Low | STEP 5, Cleanup Inventory | Add failed-generation ledger events if finance reporting requires explicit refund rows. |
+| RC-5 | Asset delete now uses `deleted_at` and active filters in Go runtime projection; restore/permanent purge policy remains unspecified. | Low | STEP 8 | Add an asset lifecycle spec if restore or retention windows are required. |
 | RC-6 | Completion failure falls back to `FailGenerationTask`, but that fallback error is ignored. | Medium | STEP 6 | Add logging and repair workflow for failure-write failures. |
 | RC-7 | Duplicate submit/idempotency is implemented in legacy Node code, not in current Go `POST /generation-tasks`. | Medium | STEP 1, STEP 4 | Add idempotency key contract if duplicate prevention is required. |
 
@@ -649,23 +650,23 @@ Documented but not current Go path:
 
 | Test | Trigger | Expected behavior |
 |---|---|---|
-| TC-01: Happy path text-to-image | Authenticated user posts non-empty prompt, valid model/provider and sufficient points | API returns `PROCESSING`; later polling returns `SUCCEEDED`; asset row exists; points deducted; billing event and audit records written |
+| TC-01: Happy path text-to-image | Authenticated user posts non-empty prompt, valid model/provider and sufficient points | API returns `PROCESSING`; points are reserved immediately; later polling returns `SUCCEEDED`; asset row exists; billing event and audit records written without a second point deduction |
 | TC-02: Empty prompt | Post whitespace prompt | HTTP 400 `prompt is required`; no task row |
 | TC-03: Unauthorized submit | Post without valid auth | HTTP 401; no task row |
 | TC-04: Provider missing key | Post real model with API channel lacking env/saved key | HTTP 400 provider key error; no task row |
 | TC-05: Insufficient points at enqueue | User point account available below computed point cost | HTTP 400 insufficient points; no task row |
 | TC-06: Image-to-image without references | Post `IMAGE_TO_IMAGE` without `params.referenceImages` | Task may be created as `PROCESSING`, then becomes `FAILED` with reference image error |
 | TC-07: Provider transient failure then success | Provider returns 502/503/504 once, then valid image | Provider retry succeeds; task becomes `SUCCEEDED` |
-| TC-08: Provider permanent failure | Provider returns non-retryable 4xx or invalid payload | Task becomes `FAILED`; no asset/billing/point deduction |
-| TC-09: Provider timeout | Provider exceeds configured/outer timeout | Task becomes `FAILED` with timeout message |
-| TC-10: Points consumed during generation | User has enough points at enqueue, but balance falls below task cost before completion | Completion fails; task becomes `FAILED`; no asset/billing event |
+| TC-08: Provider permanent failure | Provider returns non-retryable 4xx or invalid payload | Task becomes `FAILED`; no asset/billing event; active point reservation is refunded |
+| TC-09: Provider timeout | Provider exceeds configured/outer timeout | Task becomes `FAILED` with timeout message; active point reservation is refunded |
+| TC-10: Second submit while points are reserved | User has enough points for one task, submits a second equal-cost task before the first settles | Second enqueue fails with insufficient points until the first task succeeds or refunds |
 | TC-11: UI polling success | Submit through admin AI workspace and poll task id | Polling stops on terminal task and refreshes workspace |
-| TC-12: UI polling max attempts | Task remains `PROCESSING` beyond 90 polls | UI stops tracking; database task still requires operator attention |
+| TC-12: UI polling max attempts | Task remains `PROCESSING` beyond 90 polls | UI stops tracking; task later completes, fails, or is failed by startup stale-task repair after max age |
 | TC-13: Asset download data URL | Completed asset has data URL | Download returns attachment with detected content type |
 | TC-14: Asset download remote URL failure | Asset URL returns non-2xx | HTTP 502 download error |
-| TC-15: Delete own asset | User deletes asset that belongs to them | Asset row removed; task `resultIds` no longer contains asset id; audit `assets.delete` written |
+| TC-15: Delete own asset | User deletes asset that belongs to them | Asset row remains with `deleted_at`; active lists/download no longer expose it; task `resultIds` no longer contains asset id; audit `assets.delete` written |
 | TC-16: Delete another user's asset | User deletes asset owned by someone else | HTTP 404; asset unchanged |
-| TC-17: Process exit after enqueue | Kill app after `PROCESSING` commit and before provider completion | Task remains `PROCESSING`; no automatic recovery in current code |
+| TC-17: Process exit after enqueue | Kill app after `PROCESSING` commit and before provider completion, then restart after stale threshold | Startup repair marks task `FAILED` and refunds active point reservation; provider work is not resumed |
 | TC-18: Duplicate submit | Send two identical POSTs quickly | Current Go runtime can create two tasks; use this as regression guard if idempotency is added |
 
 ## Assumptions
@@ -676,13 +677,13 @@ Documented but not current Go path:
 | A2 | `backend-go` is the current production-like runtime for this checkout. | `Dockerfile` starts `/app/xianzhi-api`; `compose.yml` service uses the same image | If Node backend is started separately in another deployment, retry/cancel behavior differs |
 | A3 | `MODEL_PROVIDER_TIMEOUT_MS=600000` from compose is the local default when using Docker. | `compose.yml` | Non-Docker runtime may use 30000 ms default |
 | A4 | The admin AI workspace is the primary current submitter for image generation. | `admin-vue/src/App.vue` submit and poll functions | Another UI may submit different params |
-| A5 | Current Go failure path intentionally avoids refunds because points are not deducted before success. | `CreatePendingGenerationTask`, `CompleteGenerationTask`, `FailGenerationTask` | Business may still require explicit failed-generation ledger events |
+| A5 | Current Go failure path refunds active point reservations and marks `billingRefunded` in task params. | `CreatePendingGenerationTask`, `CompleteGenerationTask`, `FailGenerationTask` | Business may still require explicit failed-generation ledger events |
 
 ## Open Questions
 
 - Should the Go runtime implement durable queue semantics using RabbitMQ/Redis, or should legacy Node worker behavior be retired completely?
-- Should generation points be frozen at enqueue and settled/refunded later, matching product docs, or should success-only deduction remain the contract?
-- Should `PROCESSING` tasks have a timeout sweeper and operator repair UI?
+- Should generation point reservations be promoted from task-param metadata to an explicit hold/refund ledger for finance reporting?
+- Should `PROCESSING` tasks have a continuous timeout sweeper and operator repair UI in addition to startup stale-task repair?
 - Should asset deletion become logical deletion to preserve auditability and match older docs?
 - Should duplicate prevention be implemented with an idempotency key in the Go `POST /api/v1/generation-tasks` path?
 - Should missing retry/cancel/favorite/regenerate endpoints be ported from legacy Node to Go?
@@ -695,3 +696,5 @@ Documented but not current Go path:
 | 2026-07-01 | Initial discovery found active Go goroutine workflow plus legacy Node RabbitMQ workflow. | Wrote current Go workflow as Draft and marked legacy/retry/cancel gaps in registry. |
 | 2026-07-01 | Product docs claim freeze/refund/cancel/retry paths not present in active Go routes. | Added RC-1, RC-2, RC-4 and Missing workflow rows. |
 | 2026-07-01 | Current Go task can remain `PROCESSING` after process exit or failure-write failure. | Added RC-3, RC-6 and tests TC-12/TC-17. |
+| 2026-07-10 | Current Go task creation now reserves points and failure refunds active reservations. | Updated STEP 4/5/6, cleanup inventory, risk findings and test cases to match runtime behavior. |
+| 2026-07-10 | Current Go API starts `repairStaleGenerationTasks(15 * time.Minute)` on startup. | Updated process-exit, cleanup and RC-3 wording to distinguish startup repair from durable queue resume. |

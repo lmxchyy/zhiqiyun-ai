@@ -1,50 +1,126 @@
+# =========================
 # Dependencies
+# =========================
 node_modules/
-frontend-vue/node_modules/
-admin-vue/node_modules/
+**/node_modules/
+.pnpm-store/
+.yarn/
+.yarn-cache/
 
-# Runtime data and temporary files
-tmp/
-data/
-aicc_log/
-jsc_log/
-backups/
-
-# Codex temporary directories
-.codex-preview/
-.codex-reference/
-.codex-edge-profile/
-.codex-edge-profile-live/
-
+# =========================
 # Environment files and secrets
+# Keep examples, ignore real secrets
+# =========================
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
-!.env.production.example
+!.env.*.example
+!**/.env.example
+!**/.env.*.example
+
 *.pem
 *.key
 *.crt
+*.p12
+*.pfx
+*.asc
+id_rsa
+id_rsa.*
+*.private.*
 
-# Logs
-*.log
+# =========================
+# Runtime data / local storage / backups
+# =========================
+tmp/
+data/
+uploads/
+storage/
+backups/
+aicc_log/
+jsc_log/
 logs/
+*.log
+*.pid
+*.tmp
+*.bak
 
-# Build outputs
+# Database backup files, but keep database/schema.sql and migrations
+backups/**/*.sql
+dumps/**/*.sql
+*.dump
+
+# =========================
+# Codex / browser automation temporary files
+# =========================
+.codex*/
+.codex-*/
+design-previews/
+playwright-report/
+test-results/
+
+# =========================
+# Build outputs and caches
+# =========================
 dist/
+**/dist/
 build/
+**/build/
+out/
+.output/
 .next/
 .nuxt/
 .vite/
+.cache/
+.turbo/
+coverage/
+storybook-static/
 
-# Large archives and temporary media
+# uni-app / HBuilderX generated
+unpackage/
+**/unpackage/
+.hbuilderx/
+
+# Tauri / Electron generated
+apps/desktop-tauri/src-tauri/target/
+apps/desktop-tauri/src-tauri/gen/
+apps/desktop-electron/dist/
+apps/desktop-electron/out/
+
+# Go build/test artifacts
+backend-go/bin/
+backend-go/tmp/
+*.test
+*.out
+
+# =========================
+# Generated preview media and archives
+# Do not ignore all images globally, otherwise source assets may be missed.
+# =========================
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.svg
 *.mp4
 *.mov
+*.avi
+*.mkv
+
 *.zip
 *.tar
 *.tar.gz
+*.tgz
+*.rar
+*.7z
 
+# =========================
 # OS / IDE
+# =========================
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini

@@ -1,0 +1,35 @@
+{
+  "pages": [
+    // #ifdef MP-WEIXIN
+    {
+      "path": "pages/WechatLoginPage",
+      "style": {
+        "navigationBarTitleText": "知启云 AI",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/MiniProgramHomePage",
+      "style": {
+        "navigationBarTitleText": "知启云 AI",
+        "navigationStyle": "custom"
+      }
+    }
+    // #endif
+    // #ifndef MP-WEIXIN
+    {
+      "path": "pages/AiCreationPage",
+      "style": {
+        "navigationBarTitleText": "知启云 AI",
+        "navigationStyle": "custom"
+      }
+    }
+    // #endif
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "知启云 AI",
+    "navigationBarBackgroundColor": "#ffffff",
+    "backgroundColor": "#f8fafc"
+  }
+}

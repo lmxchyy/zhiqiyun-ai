@@ -2,7 +2,12 @@ name: ${COMPOSE_PROJECT_NAME:-xianzhi-ai-prod}
 
 services:
   xianzhi-ai:
-    build: .
+    build:
+      context: .
+      args:
+        INSTALL_OFFICECLI: "${INSTALL_OFFICECLI:-false}"
+        OFFICECLI_INSTALL_URL: "${OFFICECLI_INSTALL_URL:-https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh}"
+        OFFICECLI_INSTALL_SHA256: "${OFFICECLI_INSTALL_SHA256:-}"
     image: ${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3100}:3100"
@@ -11,16 +16,22 @@ services:
     restart: unless-stopped
     environment:
       PORT: "3100"
+      XIANZHI_ENV: "production"
       XIANZHI_DATA_PATH: "/app/data/store.json"
-      XIANZHI_STATIC_DIR: "/app/frontend-vue/dist"
+      XIANZHI_STATIC_DIR: "/app/user-uni/dist"
       XIANZHI_ADMIN_STATIC_DIR: "/app/admin-vue/dist"
       XIANZHI_ENFORCE_RBAC: "${XIANZHI_ENFORCE_RBAC:-true}"
+      XIANZHI_ENABLE_MOCK_LOGIN: "false"
+      XIANZHI_ALLOW_WECHAT_MOCK_LOGIN: "false"
+      XIANZHI_DEV_AUTH_FALLBACK: "false"
+      XIANZHI_ALLOW_INSECURE_AUTH_TOKEN: "false"
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       REDIS_URL: "${REDIS_URL:?REDIS_URL is required}"
       RABBITMQ_URL: "${RABBITMQ_URL:?RABBITMQ_URL is required}"
       S3_ENDPOINT: "${S3_ENDPOINT:?S3_ENDPOINT is required}"
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:?S3_SECRET_KEY is required}"
+      S3_BUCKET: "${S3_BUCKET:?S3_BUCKET is required}"
       MODEL_PROVIDER_URL: "${MODEL_PROVIDER_URL:-}"
       MODEL_PROVIDER_API_KEY: "${MODEL_PROVIDER_API_KEY:-}"
       MODEL_PROVIDER_KIND: "${MODEL_PROVIDER_KIND:-}"
@@ -38,7 +49,12 @@ services:
       PAYMENT_CALLBACK_SECRET: "${PAYMENT_CALLBACK_SECRET:?PAYMENT_CALLBACK_SECRET is required}"
       WECHAT_MINI_PROGRAM_APPID: "${WECHAT_MINI_PROGRAM_APPID:-}"
       WECHAT_MINI_PROGRAM_SECRET: "${WECHAT_MINI_PROGRAM_SECRET:-}"
+      WECHAT_PAY_API_V3_KEY: "${WECHAT_PAY_API_V3_KEY:-}"
+      WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM: "${WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM:-}"
+      WECHAT_PAY_PLATFORM_CERT_PATH: "${WECHAT_PAY_PLATFORM_CERT_PATH:-}"
       WECHAT_PAY_CALLBACK_SECRET: "${WECHAT_PAY_CALLBACK_SECRET:-}"
+      ALIPAY_PUBLIC_KEY_PEM: "${ALIPAY_PUBLIC_KEY_PEM:-}"
+      ALIPAY_PUBLIC_KEY_PATH: "${ALIPAY_PUBLIC_KEY_PATH:-}"
       ALIPAY_CALLBACK_SECRET: "${ALIPAY_CALLBACK_SECRET:-}"
       METRICS_TOKEN: "${METRICS_TOKEN:?METRICS_TOKEN is required}"
     depends_on:
@@ -149,7 +165,7 @@ services:
       retries: 12
 
   minio:
-    image: minio/minio:latest
+    image: "${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}"
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:

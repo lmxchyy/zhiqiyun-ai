@@ -37,6 +37,12 @@ const apiBaseFromFile =
   readEnvValue(path.resolve(repoRoot, ".env.local"), "VITE_API_BASE_URL") ||
   readEnvValue(path.resolve(repoRoot, ".env"), "VITE_API_BASE_URL");
 const apiBase = String(process.env.VITE_API_BASE_URL || apiBaseFromFile || "http://127.0.0.1:3100").replace(/\/+$/, "");
+const enableMockLogin = String(
+  process.env.VITE_ENABLE_MOCK_LOGIN ||
+    readEnvValue(path.resolve(root, ".env.local"), "VITE_ENABLE_MOCK_LOGIN") ||
+    readEnvValue(path.resolve(root, ".env"), "VITE_ENABLE_MOCK_LOGIN") ||
+    ""
+).toLowerCase() === "true";
 
 const wxml = `<view class="page">
   <view class="brand">
@@ -69,9 +75,9 @@ const wxml = `<view class="page">
     <button class="button wechat" loading="{{wechatLoading}}" disabled="{{busy}}" bindtap="realWxLogin">
       {{wechatText}}
     </button>
-    <button class="button mock" loading="{{mockLoading}}" disabled="{{busy}}" bindtap="mockLogin">
+${enableMockLogin ? `    <button class="button mock" loading="{{mockLoading}}" disabled="{{busy}}" bindtap="mockLogin">
       {{mockText}}
-    </button>
+    </button>` : ""}
 
     <view class="status {{tone}}">
       <text>{{status}}</text>
@@ -87,6 +93,7 @@ const wxml = `<view class="page">
 
 const js = `"use strict";
 const API_BASE = ${JSON.stringify(apiBase)};
+const MOCK_LOGIN_ENABLED = ${JSON.stringify(enableMockLogin)};
 
 function messageOf(error, fallback) {
   if (error instanceof Error && error.message) return error.message;
@@ -213,7 +220,7 @@ Page({
     }
   },
 
-  async mockLogin() {
+${enableMockLogin ? `  async mockLogin() {
     if (this.data.busy) return;
     this.setBusy("mockLoading", true);
     this.setStatus("正在使用 mock-devtools-code 调用后端...", "loading");
@@ -228,7 +235,9 @@ Page({
     } finally {
       this.setBusy("mockLoading", false);
     }
-  },
+  },` : `  mockLogin() {
+    this.setStatus("模拟登录未启用", "error");
+  },`}
 
   realWxLogin() {
     if (this.data.busy) return;

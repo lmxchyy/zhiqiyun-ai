@@ -8,6 +8,7 @@ interface ImportMetaEnv {
   readonly VITE_APP_PROXY_PREFIX: string
   readonly VITE_APP_PUBLIC_BASE: string
   readonly VITE_USE_MOCK: string
+  readonly VITE_ENABLE_MOCK_LOGIN: string
   readonly VITE_WX_APPID: string
 }
 

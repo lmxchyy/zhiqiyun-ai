@@ -250,7 +250,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index";
 import type { PptImageOption, PptImageSource, PptModelOption, PptSlide } from "../../types/ppt";
 
 type ImageMode = "generate" | "upload" | "generated" | "search" | "gif" | "embed";

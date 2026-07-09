@@ -1,27 +1,41 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
 
 type Config struct {
-	Addr                string
-	DataPath            string
-	StaticDir           string
-	AdminStaticDir      string
-	DatabaseURL         string
-	RedisURL            string
-	ModelProviderURL    string
-	ModelProviderAPIKey string
-	ImageModel          string
-	TextModel           string
-	PPTProviderURL      string
-	PPTProviderAPIKey   string
-	PPTTextModel        string
-	PPTDisableThinking  bool
-	ModelTimeoutMS      string
-	ModelProvidersJSON  string
+	Environment           string
+	Addr                  string
+	DataPath              string
+	StaticDir             string
+	AdminStaticDir        string
+	DatabaseURL           string
+	RedisURL              string
+	RabbitMQURL           string
+	S3Endpoint            string
+	S3AccessKey           string
+	S3SecretKey           string
+	S3Bucket              string
+	PaymentCallbackSecret string
+	WeChatPayAPIv3Key     string
+	WeChatPayPlatformKey  string
+	WeChatPayPlatformPath string
+	AlipayPublicKey       string
+	AlipayPublicKeyPath   string
+	ModelProviderURL      string
+	ModelProviderAPIKey   string
+	ImageModel            string
+	TextModel             string
+	PPTProviderURL        string
+	PPTProviderAPIKey     string
+	PPTTextModel          string
+	PPTDisableThinking    bool
+	ModelTimeoutMS        string
+	ModelProvidersJSON    string
+	CORSAllowedOrigins    string
 }
 
 func Load() Config {
@@ -84,23 +98,90 @@ func Load() Config {
 		modelTimeoutMS = "30000"
 	}
 	return Config{
-		Addr:                addr,
-		DataPath:            dataPath,
-		StaticDir:           staticDir,
-		AdminStaticDir:      adminStaticDir,
-		DatabaseURL:         os.Getenv("DATABASE_URL"),
-		RedisURL:            os.Getenv("REDIS_URL"),
-		ModelProviderURL:    modelProviderURL,
-		ModelProviderAPIKey: modelProviderAPIKey,
-		ImageModel:          imageModel,
-		TextModel:           textModel,
-		PPTProviderURL:      pptProviderURL,
-		PPTProviderAPIKey:   pptProviderAPIKey,
-		PPTTextModel:        pptTextModel,
-		PPTDisableThinking:  boolEnv(os.Getenv("PPT_MODEL_CHAT_DISABLE_THINKING")),
-		ModelTimeoutMS:      modelTimeoutMS,
-		ModelProvidersJSON:  modelProvidersJSON,
+		Environment:           os.Getenv("XIANZHI_ENV"),
+		Addr:                  addr,
+		DataPath:              dataPath,
+		StaticDir:             staticDir,
+		AdminStaticDir:        adminStaticDir,
+		DatabaseURL:           os.Getenv("DATABASE_URL"),
+		RedisURL:              os.Getenv("REDIS_URL"),
+		RabbitMQURL:           os.Getenv("RABBITMQ_URL"),
+		S3Endpoint:            os.Getenv("S3_ENDPOINT"),
+		S3AccessKey:           os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:           os.Getenv("S3_SECRET_KEY"),
+		S3Bucket:              os.Getenv("S3_BUCKET"),
+		PaymentCallbackSecret: os.Getenv("PAYMENT_CALLBACK_SECRET"),
+		WeChatPayAPIv3Key:     firstNonEmptyEnv("WECHAT_PAY_API_V3_KEY", "WECHAT_PAY_CALLBACK_SECRET"),
+		WeChatPayPlatformKey:  os.Getenv("WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM"),
+		WeChatPayPlatformPath: firstNonEmptyEnv("WECHAT_PAY_PLATFORM_CERT_PATH", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH"),
+		AlipayPublicKey:       firstNonEmptyEnv("ALIPAY_PUBLIC_KEY_PEM", "ALIPAY_CALLBACK_SECRET"),
+		AlipayPublicKeyPath:   os.Getenv("ALIPAY_PUBLIC_KEY_PATH"),
+		ModelProviderURL:      modelProviderURL,
+		ModelProviderAPIKey:   modelProviderAPIKey,
+		ImageModel:            imageModel,
+		TextModel:             textModel,
+		PPTProviderURL:        pptProviderURL,
+		PPTProviderAPIKey:     pptProviderAPIKey,
+		PPTTextModel:          pptTextModel,
+		PPTDisableThinking:    boolEnv(os.Getenv("PPT_MODEL_CHAT_DISABLE_THINKING")),
+		ModelTimeoutMS:        modelTimeoutMS,
+		ModelProvidersJSON:    modelProvidersJSON,
+		CORSAllowedOrigins:    os.Getenv("XIANZHI_CORS_ALLOWED_ORIGINS"),
 	}
+}
+
+func (c Config) IsProduction() bool {
+	value := strings.ToLower(strings.TrimSpace(c.Environment))
+	return value == "production" || value == "prod"
+}
+
+func (c Config) ValidateProduction() error {
+	if !c.IsProduction() {
+		return nil
+	}
+	missing := []string{}
+	if strings.TrimSpace(c.DatabaseURL) == "" {
+		missing = append(missing, "DATABASE_URL")
+	}
+	if strings.TrimSpace(c.RedisURL) == "" {
+		missing = append(missing, "REDIS_URL")
+	}
+	if strings.TrimSpace(c.RabbitMQURL) == "" {
+		missing = append(missing, "RABBITMQ_URL")
+	}
+	if strings.TrimSpace(c.S3Endpoint) == "" {
+		missing = append(missing, "S3_ENDPOINT")
+	}
+	if strings.TrimSpace(c.S3AccessKey) == "" {
+		missing = append(missing, "S3_ACCESS_KEY")
+	}
+	if strings.TrimSpace(c.S3SecretKey) == "" {
+		missing = append(missing, "S3_SECRET_KEY")
+	}
+	if strings.TrimSpace(c.S3Bucket) == "" {
+		missing = append(missing, "S3_BUCKET")
+	}
+	if strings.TrimSpace(c.PaymentCallbackSecret) == "" {
+		missing = append(missing, "PAYMENT_CALLBACK_SECRET")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("production config missing required env vars: %s", strings.Join(missing, ", "))
+	}
+	for _, key := range []string{"XIANZHI_DEV_AUTH_FALLBACK", "XIANZHI_ALLOW_INSECURE_AUTH_TOKEN", "XIANZHI_ENABLE_MOCK_LOGIN", "XIANZHI_ALLOW_WECHAT_MOCK_LOGIN"} {
+		if boolEnv(os.Getenv(key)) {
+			return fmt.Errorf("production config forbids %s=true", key)
+		}
+	}
+	return nil
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func boolEnv(value string) bool {

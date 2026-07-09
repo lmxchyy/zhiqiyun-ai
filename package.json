@@ -1,37 +1,56 @@
 {
-    "name":  "xianzhi-ai-platform",
-    "version":  "0.2.0",
-    "private":  true,
-    "type":  "module",
-    "description":  "先知 AI 一站式内容生产与代理商运营平台",
-    "scripts":  {
-                    "start":  "cd backend-go \u0026\u0026 go run ./cmd/api",
-                    "dev:api":  "cd backend-go \u0026\u0026 go run ./cmd/api",
-                    "dev:web":  "npm --prefix frontend-vue run dev",
-                    "dev:uni":  "npm --prefix frontend-vue run dev",
-                    "build:api":  "cd backend-go \u0026\u0026 go build ./cmd/api",
-                    "build:admin":  "cd admin-vue \u0026\u0026 npm run build",
-                    "build:web":  "npm --prefix frontend-vue run build",
-                    "build:uni":  "npm --prefix frontend-vue run build",
-                    "test":  "cd backend-go \u0026\u0026 go test ./...",
-                    "docker:up":  "docker compose -f compose.yml up -d --build",
-                    "docker:ps":  "docker compose -f compose.yml ps",
-                    "docker:logs":  "docker compose -f compose.yml logs -f xianzhi-ai",
-                    "docker:down":  "docker compose -f compose.yml down",
-                    "dev:admin":  "cd admin-vue \u0026\u0026 npm run dev",
-                    "dev:miniapp":  "npm --prefix miniapp run dev",
-                    "dev:miniapp:h5":  "npm --prefix miniapp run dev:h5",
-                    "build:miniapp":  "npm --prefix miniapp run build",
-                    "build:miniapp:h5":  "npm --prefix miniapp run build:h5",
-                    "typecheck:miniapp":  "npm --prefix miniapp run typecheck",
-                    "build:mp-weixin":  "npm --prefix frontend-vue run build:mp-weixin",
-                    "build:app-plus":  "npm --prefix frontend-vue run build:app-plus"
-                },
-    "engines":  {
-                    "node":  "\u003e=22",
-                    "go":  "\u003e=1.25"
-                },
-    "dependencies":  {
-
-                     }
+  "name": "xianzhi-ai-platform",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "description": "先知 AI 一站式内容生产与代理商运营平台",
+  "scripts": {
+    "start": "cd backend-go && go run ./cmd/api",
+    "dev:api": "cd backend-go && go run ./cmd/api",
+    "dev:web": "npm --prefix apps/user-uni run dev",
+    "dev:uni": "npm --prefix apps/user-uni run dev",
+    "build:api": "cd backend-go && go build ./cmd/api",
+    "build:admin": "cd admin-vue && npm run build",
+    "build:web": "npm --prefix apps/user-uni run build",
+    "build:uni": "npm --prefix apps/user-uni run build",
+    "test": "cd backend-go && go test ./...",
+    "docker:up": "docker compose -f compose.yml up -d --build",
+    "docker:ps": "docker compose -f compose.yml ps",
+    "docker:logs": "docker compose -f compose.yml logs -f xianzhi-ai",
+    "docker:down": "docker compose -f compose.yml down",
+    "dev:admin": "cd admin-vue && npm run dev",
+    "dev:miniapp": "npm --prefix miniapp run dev",
+    "dev:miniapp:h5": "npm --prefix miniapp run dev:h5",
+    "build:miniapp": "npm --prefix miniapp run build",
+    "build:miniapp:h5": "npm --prefix miniapp run build:h5",
+    "typecheck:miniapp": "npm --prefix miniapp run typecheck",
+    "build:mp-weixin": "npm --prefix apps/user-uni run build:mp-weixin",
+    "build:app-plus": "npm --prefix apps/user-uni run build:app-plus",
+    "build:packages": "tsc -b tsconfig.packages.json",
+    "typecheck:packages": "tsc -b tsconfig.packages.json --pretty false",
+    "typecheck:user-core": "npm run typecheck:packages && npm --prefix apps/user-uni run typecheck && npm --prefix miniapp run typecheck",
+    "build:user-h5": "npm --prefix apps/user-uni run build",
+    "build:user-mp-weixin": "npm --prefix apps/user-uni run build:mp-weixin",
+    "build:user-app-plus": "npm --prefix apps/user-uni run build:app-plus",
+    "build:user-app-harmony": "npm --prefix apps/user-uni run build:app-harmony",
+    "build:user-mp-harmony": "npm --prefix apps/user-uni run build:mp-harmony",
+    "dev:desktop-electron": "npm --prefix apps/desktop-electron run dev",
+    "build:desktop-electron": "npm --prefix apps/desktop-electron run build",
+    "dev:desktop-tauri": "npm --prefix apps/desktop-tauri run dev",
+    "build:desktop-tauri": "npm --prefix apps/desktop-tauri run build",
+    "test:user-h5:smoke": "playwright test -c tests/user-h5/playwright.config.ts",
+    "generate:api-types": "node tools/generate-api-types.mjs"
+  },
+  "engines": {
+    "node": ">=22",
+    "go": ">=1.25"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.8.3"
+  }
 }

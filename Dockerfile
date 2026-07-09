@@ -1,14 +1,17 @@
 FROM node:24-alpine AS web-build
-WORKDIR /src/frontend-vue
-COPY frontend-vue/package.json frontend-vue/package-lock.json ./
+WORKDIR /src/apps/user-uni
+COPY apps/user-uni/package.json apps/user-uni/package-lock.json ./
 RUN npm ci
-COPY frontend-vue ./
+COPY tsconfig.package.base.json /src/tsconfig.package.base.json
+COPY packages /src/packages
+COPY apps/user-uni ./
 RUN npm run build
 
 FROM node:24-alpine AS admin-build
 WORKDIR /src/admin-vue
 COPY admin-vue/package.json admin-vue/package-lock.json ./
 RUN npm ci
+COPY packages /src/packages
 COPY admin-vue ./
 RUN npm run build
 
@@ -23,7 +26,9 @@ RUN go build -o /out/xianzhi-api ./cmd/api
 FROM alpine:3.20
 WORKDIR /app
 ARG INSTALL_SEEDANCE_SDK=false
-ARG INSTALL_OFFICECLI=true
+ARG INSTALL_OFFICECLI=false
+ARG OFFICECLI_INSTALL_URL=https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh
+ARG OFFICECLI_INSTALL_SHA256=
 RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
   && mkdir -p /app/seedance-python \
   && if [ "$INSTALL_SEEDANCE_SDK" = "true" ]; then \
@@ -34,7 +39,10 @@ RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
     echo "Skipping optional Seedance SDK install"; \
   fi \
   && if [ "$INSTALL_OFFICECLI" = "true" ]; then \
-    curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash \
+    if [ -z "$OFFICECLI_INSTALL_SHA256" ]; then echo "INSTALL_OFFICECLI=true requires OFFICECLI_INSTALL_SHA256"; exit 1; fi \
+    && curl -fsSL "$OFFICECLI_INSTALL_URL" -o /tmp/officecli-install.sh \
+    && echo "$OFFICECLI_INSTALL_SHA256  /tmp/officecli-install.sh" | sha256sum -c - \
+    && bash /tmp/officecli-install.sh \
     && cp /root/.local/bin/officecli /usr/local/bin/officecli \
     && chmod +x /usr/local/bin/officecli \
     && officecli --version; \
@@ -42,12 +50,12 @@ RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
     echo "Skipping OfficeCLI install"; \
   fi
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
-COPY --from=web-build /src/frontend-vue/dist/build/h5 /app/frontend-vue/dist
+COPY --from=web-build /src/apps/user-uni/dist/build/h5 /app/user-uni/dist
 COPY --from=admin-build /src/admin-vue/dist /app/admin-vue/dist
 COPY backend-go/internal/provider/video/seedance_bridge.py /app/seedance_bridge.py
 ENV PORT=3100
 ENV XIANZHI_DATA_PATH=/app/data/store.json
-ENV XIANZHI_STATIC_DIR=/app/frontend-vue/dist
+ENV XIANZHI_STATIC_DIR=/app/user-uni/dist
 ENV XIANZHI_ADMIN_STATIC_DIR=/app/admin-vue/dist
 ENV CME_SEEDANCE_BRIDGE=/app/seedance_bridge.py
 ENV CME_SEEDANCE_DEPS_PATH=/app/seedance-python

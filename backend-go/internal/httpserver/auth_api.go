@@ -13,9 +13,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -27,12 +29,57 @@ var (
 )
 
 const authSessionTTL = 24 * time.Hour
+const authRefreshSessionTTL = 30 * 24 * time.Hour
 const wechatMiniProgramMockCode = "mock-devtools-code"
+const passwordHashBcryptPrefix = "bcrypt:"
 
 type authSessionStore interface {
 	Put(context.Context, string, string, time.Duration) error
 	UserID(context.Context, string) (string, bool, error)
 	Delete(context.Context, string) error
+}
+
+type localAuthSession struct {
+	userID    string
+	expiresAt time.Time
+}
+
+type localAuthSessions struct {
+	mu       sync.Mutex
+	sessions map[string]localAuthSession
+}
+
+func newLocalAuthSessions() authSessionStore {
+	return &localAuthSessions{sessions: map[string]localAuthSession{}}
+}
+
+func (s *localAuthSessions) Put(_ context.Context, token string, userID string, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[authSessionKey(token)] = localAuthSession{userID: userID, expiresAt: time.Now().Add(ttl)}
+	return nil
+}
+
+func (s *localAuthSessions) UserID(_ context.Context, token string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := authSessionKey(token)
+	session, ok := s.sessions[key]
+	if !ok {
+		return "", false, nil
+	}
+	if !session.expiresAt.IsZero() && time.Now().After(session.expiresAt) {
+		delete(s.sessions, key)
+		return "", false, nil
+	}
+	return session.userID, true, nil
+}
+
+func (s *localAuthSessions) Delete(_ context.Context, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, authSessionKey(token))
+	return nil
 }
 
 type redisAuthSessions struct {
@@ -69,6 +116,10 @@ func authSessionKey(token string) string {
 	return "auth:session:" + token
 }
 
+func refreshSessionToken(token string) string {
+	return "refresh:" + token
+}
+
 type authAPI struct {
 	store    platformStore
 	sessions authSessionStore
@@ -81,6 +132,10 @@ type loginRequest struct {
 
 type wechatMiniProgramLoginRequest struct {
 	Code string `json:"code"`
+}
+
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken"`
 }
 
 type registerRequest struct {
@@ -122,10 +177,19 @@ func (a authAPI) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	user, ok := findLoginUser(data.Users, req.Email, req.Password)
+	user, ok, needsPasswordUpgrade := findLoginUser(data.Users, req.Email, req.Password)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
+	}
+	if needsPasswordUpgrade {
+		updated, err := a.updatePasswordHash(user.ID, req.Password)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		user = updated
+		data = dataWithUpdatedUser(data, updated)
 	}
 	response, err := a.authResponseWithToken(r.Context(), data, user)
 	if err != nil {
@@ -144,6 +208,10 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 	code := strings.TrimSpace(req.Code)
 	if code == "" {
 		writeError(w, http.StatusBadRequest, errors.New("wechat mini program code is required"))
+		return
+	}
+	if isWeChatMiniProgramMockCodeValue(code) && !wechatMiniProgramMockLoginEnabled() {
+		writeError(w, http.StatusForbidden, errors.New("wechat mini program mock login is disabled"))
 		return
 	}
 	mockLogin := isWeChatMiniProgramMockCode(code)
@@ -251,7 +319,12 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	created, err = a.store.UpdateUserPassword(created.ID, hashPassword(req.Password))
+	passwordHash, err := hashPassword(req.Password)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	created, err = a.store.UpdateUserPassword(created.ID, passwordHash)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -315,6 +388,53 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, authResponse(data, user, false))
 }
 
+func (a authAPI) refresh(w http.ResponseWriter, r *http.Request) {
+	var req refreshTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	refreshToken := strings.TrimSpace(req.RefreshToken)
+	if refreshToken == "" {
+		writeError(w, http.StatusBadRequest, errors.New("refresh token is required"))
+		return
+	}
+	if a.sessions == nil {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	userID, ok, err := a.sessions.UserID(r.Context(), refreshSessionToken(refreshToken))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if !ok || userID == "" {
+		writeError(w, http.StatusUnauthorized, errUnauthorized)
+		return
+	}
+	if err := a.sessions.Delete(r.Context(), refreshSessionToken(refreshToken)); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, user := range data.Users {
+		if user.ID == userID && strings.EqualFold(user.Status, "ACTIVE") {
+			response, err := a.authResponseWithToken(r.Context(), data, user)
+			if err != nil {
+				writeAuthTokenError(w, err)
+				return
+			}
+			writeJSON(w, response)
+			return
+		}
+	}
+	writeError(w, http.StatusUnauthorized, errUnauthorized)
+}
+
 func (a authAPI) logout(w http.ResponseWriter, r *http.Request) {
 	if a.sessions != nil {
 		token := bearerToken(r)
@@ -350,11 +470,12 @@ func (a authAPI) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	if !passwordMatches(user, req.CurrentPassword) {
+	matches, _ := passwordMatches(user, req.CurrentPassword)
+	if !matches {
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
-	updated, err := a.store.UpdateUserPassword(user.ID, hashPassword(req.NewPassword))
+	updated, err := a.updatePasswordHash(user.ID, req.NewPassword)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -377,19 +498,38 @@ func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adm
 
 func (a authAPI) authResponseWithToken(ctx context.Context, data adminPlatformData, user adminUser) (map[string]any, error) {
 	response := authResponse(data, user, false)
-	token := encodeAuthToken(user.ID)
-	if a.sessions != nil {
-		var err error
-		token, err = randomAuthToken()
-		if err != nil {
-			return nil, err
+	if a.sessions == nil {
+		if !devAuthFallbackEnabled() {
+			return nil, errAuthSessionUnavailable
 		}
-		if err := a.sessions.Put(ctx, token, user.ID, authSessionTTL); err != nil {
-			return nil, fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)
-		}
+		response["accessToken"] = encodeAuthToken(user.ID)
+		return response, nil
 	}
+	token, err := randomAuthToken()
+	if err != nil {
+		return nil, err
+	}
+	refreshToken, err := randomAuthToken()
+	if err != nil {
+		return nil, err
+	}
+	if err := a.sessions.Put(ctx, token, user.ID, authSessionTTL); err != nil {
+		return nil, fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)
+	}
+	if err := a.sessions.Put(ctx, refreshSessionToken(refreshToken), user.ID, authRefreshSessionTTL); err != nil {
+		return nil, fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)
+	}
+	response["refreshToken"] = refreshToken
 	response["accessToken"] = token
 	return response, nil
+}
+
+func (a authAPI) updatePasswordHash(userID string, password string) (adminUser, error) {
+	passwordHash, err := hashPassword(password)
+	if err != nil {
+		return adminUser{}, err
+	}
+	return a.store.UpdateUserPassword(userID, passwordHash)
 }
 
 func writeAuthTokenError(w http.ResponseWriter, err error) {
@@ -420,7 +560,11 @@ func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session
 	if err != nil {
 		return data, adminUser{}, err
 	}
-	created, err = a.store.UpdateUserPassword(created.ID, hashPassword("wechat-mini-program:"+session.OpenID))
+	passwordHash, err := hashPassword("wechat-mini-program:" + session.OpenID)
+	if err != nil {
+		return data, adminUser{}, err
+	}
+	created, err = a.store.UpdateUserPassword(created.ID, passwordHash)
 	if err != nil {
 		return data, adminUser{}, err
 	}
@@ -438,6 +582,9 @@ func authenticatedUserID(r *http.Request, sessions authSessionStore) (string, er
 			return "", errUnauthorized
 		}
 		return userID, nil
+	}
+	if !devAuthFallbackEnabled() {
+		return "", errUnauthorized
 	}
 	payload, err := decodeAuthToken(token)
 	if err != nil || payload.UserID == "" {
@@ -501,6 +648,10 @@ func exchangeWeChatMiniProgramCode(ctx context.Context, code string) (wechatMini
 }
 
 func isWeChatMiniProgramMockCode(code string) bool {
+	return isWeChatMiniProgramMockCodeValue(code) && wechatMiniProgramMockLoginEnabled()
+}
+
+func isWeChatMiniProgramMockCodeValue(code string) bool {
 	code = strings.TrimSpace(strings.ToLower(code))
 	return code == wechatMiniProgramMockCode || strings.HasPrefix(code, "mock-")
 }
@@ -528,18 +679,19 @@ func wechatMiniProgramSyntheticEmail(openID string) string {
 	return fmt.Sprintf("wx_%x@wechat.local", sum[:12])
 }
 
-func findLoginUser(users []adminUser, email string, password string) (adminUser, bool) {
+func findLoginUser(users []adminUser, email string, password string) (adminUser, bool, bool) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	password = strings.TrimSpace(password)
 	for _, user := range users {
 		if strings.ToLower(user.Email) != email || !strings.EqualFold(user.Status, "ACTIVE") {
 			continue
 		}
-		if passwordMatches(user, password) {
-			return user, true
+		matches, needsUpgrade := passwordMatches(user, password)
+		if matches {
+			return user, true, needsUpgrade
 		}
 	}
-	return adminUser{}, false
+	return adminUser{}, false, false
 }
 
 func channelAgentForInviteCode(agents []adminChannelAgent, inviteCode string) (adminChannelAgent, bool) {
@@ -557,16 +709,72 @@ func dataWithRegisteredUser(data adminPlatformData, user adminUser) adminPlatfor
 	return data
 }
 
-func passwordMatches(user adminUser, password string) bool {
-	if user.PasswordHash != "" {
-		return user.PasswordHash == hashPassword(password)
+func dataWithUpdatedUser(data adminPlatformData, user adminUser) adminPlatformData {
+	for i := range data.Users {
+		if data.Users[i].ID == user.ID {
+			data.Users[i] = user
+			return data
+		}
 	}
-	return demoPasswordForRole(user.Role, user.Email) == password
+	return dataWithRegisteredUser(data, user)
 }
 
-func hashPassword(password string) string {
+func passwordMatches(user adminUser, password string) (bool, bool) {
+	if user.PasswordHash != "" {
+		return verifyPasswordHash(user.PasswordHash, password)
+	}
+	return demoPasswordForRole(user.Role, user.Email) == password, true
+}
+
+func hashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return passwordHashBcryptPrefix + string(hash), nil
+}
+
+func legacySHA256PasswordHash(password string) string {
 	sum := sha256.Sum256([]byte(password))
 	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func verifyPasswordHash(storedHash string, password string) (bool, bool) {
+	storedHash = strings.TrimSpace(storedHash)
+	switch {
+	case strings.HasPrefix(storedHash, passwordHashBcryptPrefix):
+		err := bcrypt.CompareHashAndPassword([]byte(strings.TrimPrefix(storedHash, passwordHashBcryptPrefix)), []byte(password))
+		return err == nil, false
+	case strings.HasPrefix(storedHash, "$2a$"), strings.HasPrefix(storedHash, "$2b$"), strings.HasPrefix(storedHash, "$2y$"):
+		err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(password))
+		return err == nil, false
+	case strings.HasPrefix(storedHash, "sha256:"):
+		return storedHash == legacySHA256PasswordHash(password), true
+	default:
+		return false, false
+	}
+}
+
+func devAuthFallbackEnabled() bool {
+	return (boolEnvAuth(os.Getenv("XIANZHI_DEV_AUTH_FALLBACK")) || boolEnvAuth(os.Getenv("XIANZHI_ALLOW_INSECURE_AUTH_TOKEN"))) && !authProductionEnvironment()
+}
+
+func wechatMiniProgramMockLoginEnabled() bool {
+	return (boolEnvAuth(os.Getenv("XIANZHI_ENABLE_MOCK_LOGIN")) || boolEnvAuth(os.Getenv("XIANZHI_ALLOW_WECHAT_MOCK_LOGIN"))) && !authProductionEnvironment()
+}
+
+func authProductionEnvironment() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("XIANZHI_ENV")))
+	return value == "production" || value == "prod"
+}
+
+func boolEnvAuth(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func demoPasswordForRole(role string, email string) string {
@@ -591,7 +799,9 @@ func authResponse(data adminPlatformData, user adminUser, includeToken bool) map
 		"defaultRoute":  defaultRouteForIdentity(user.Role, hasOperationCenter),
 	}
 	if includeToken {
-		response["accessToken"] = encodeAuthToken(user.ID)
+		if devAuthFallbackEnabled() {
+			response["accessToken"] = encodeAuthToken(user.ID)
+		}
 	}
 	if hasAgent {
 		response["agent"] = channelAgentView(agent, user)

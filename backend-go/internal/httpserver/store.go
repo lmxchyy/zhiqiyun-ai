@@ -26,6 +26,18 @@ const (
 	billingMetricPPTGenerate   = "ppt.generations"
 )
 
+const (
+	generationBillingReservedKey                 = "billingReserved"
+	generationBillingReservedAtKey               = "billingReservedAt"
+	generationBillingReservationPointCostKey     = "billingReservationPointCost"
+	generationBillingReservationBalanceBeforeKey = "billingReservationBalanceBefore"
+	generationBillingReservationBalanceAfterKey  = "billingReservationBalanceAfter"
+	generationBillingRefundedKey                 = "billingRefunded"
+	generationBillingRefundedAtKey               = "billingRefundedAt"
+	generationBillingRefundBalanceBeforeKey      = "billingRefundBalanceBefore"
+	generationBillingRefundBalanceAfterKey       = "billingRefundBalanceAfter"
+)
+
 func isVideoGenerationType(taskType string) bool {
 	switch strings.ToUpper(strings.TrimSpace(taskType)) {
 	case "TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_TO_VIDEO":
@@ -56,6 +68,76 @@ func providerTaskPayload(req createGenerationTaskRequest) map[string]any {
 		return nil
 	}
 	return item
+}
+
+func generationBillingReservationParams(params map[string]any, now string, pointCost int, before int, after int) map[string]any {
+	next := cloneAnyMap(params)
+	if next == nil {
+		next = map[string]any{}
+	}
+	next[generationBillingReservedKey] = true
+	next[generationBillingReservedAtKey] = now
+	next[generationBillingReservationPointCostKey] = pointCost
+	next[generationBillingReservationBalanceBeforeKey] = before
+	next[generationBillingReservationBalanceAfterKey] = after
+	return next
+}
+
+func generationTaskBillingReserved(task generationTask) bool {
+	if task.Params == nil {
+		return false
+	}
+	return boolValue(task.Params[generationBillingReservedKey])
+}
+
+func generationTaskBillingRefunded(task generationTask) bool {
+	if task.Params == nil {
+		return false
+	}
+	return boolValue(task.Params[generationBillingRefundedKey])
+}
+
+func generationTaskReservedAndActive(task generationTask) bool {
+	return generationTaskBillingReserved(task) && !generationTaskBillingRefunded(task)
+}
+
+func generationTaskReservedPointCost(task generationTask, fallback int) int {
+	if value, ok := generationTaskParamInt(task.Params, generationBillingReservationPointCostKey); ok && value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func generationTaskReservationBalances(task generationTask, currentAfter int, pointCost int) (int, int) {
+	before, hasBefore := generationTaskParamInt(task.Params, generationBillingReservationBalanceBeforeKey)
+	after, hasAfter := generationTaskParamInt(task.Params, generationBillingReservationBalanceAfterKey)
+	if hasBefore && hasAfter {
+		return before, after
+	}
+	return currentAfter + pointCost, currentAfter
+}
+
+func generationBillingRefundParams(params map[string]any, now string, before int, after int) map[string]any {
+	next := cloneAnyMap(params)
+	if next == nil {
+		next = map[string]any{}
+	}
+	next[generationBillingRefundedKey] = true
+	next[generationBillingRefundedAtKey] = now
+	next[generationBillingRefundBalanceBeforeKey] = before
+	next[generationBillingRefundBalanceAfterKey] = after
+	return next
+}
+
+func generationTaskParamInt(params map[string]any, key string) (int, bool) {
+	if params == nil {
+		return 0, false
+	}
+	value, ok := params[key]
+	if !ok {
+		return 0, false
+	}
+	return intValue(value), true
 }
 
 func providerTaskString(req createGenerationTaskRequest, key string) string {
@@ -190,7 +272,7 @@ func (s *jsonStore) ListAssets() ([]asset, error) {
 	if err != nil {
 		return nil, err
 	}
-	return data.Assets, nil
+	return activeAssets(data.Assets), nil
 }
 
 func (s *jsonStore) UserAIState(userID string) (userAIState, error) {
@@ -221,6 +303,9 @@ func (s *jsonStore) UpdateAssetThumbnails(updates map[string]string) (int, error
 	err := s.update(func(data *platformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		for i := range data.Assets {
+			if assetDeleted(data.Assets[i]) {
+				continue
+			}
 			thumbnailURL := updates[data.Assets[i].ID]
 			if thumbnailURL == "" || data.Assets[i].ThumbnailURL != "" {
 				continue
@@ -250,6 +335,9 @@ func (s *jsonStore) UpdateAssetImageInfo(updates map[string]assetImageInfo) (int
 	err := s.update(func(data *platformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		for i := range data.Assets {
+			if assetDeleted(data.Assets[i]) {
+				continue
+			}
 			info, ok := updates[data.Assets[i].ID]
 			if !ok {
 				continue
@@ -306,7 +394,12 @@ func (s *jsonStore) PointAccount(userID string) (pointAccount, error) {
 func (s *jsonStore) AdminData() (adminPlatformData, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loadAdminLocked()
+	data, err := s.loadAdminLocked()
+	if err != nil {
+		return data, err
+	}
+	data.Assets = activeAssets(data.Assets)
+	return data, nil
 }
 
 func (s *jsonStore) UpdateUserPassword(userID string, passwordHash string) (adminUser, error) {
@@ -785,13 +878,43 @@ func normalizePaymentMethod(value string) string {
 	}
 }
 
-func (s *jsonStore) MarkAdminOrderPaid(id string) (adminOrder, error) {
+func (s *jsonStore) RegisterPaymentCallbackEvent(event adminPaymentEvent) (bool, error) {
+	event = normalizePaymentCallbackEvent(event)
+	duplicate := false
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for _, existing := range data.PaymentEvents {
+			if !samePaymentCallbackProvider(existing, event) {
+				continue
+			}
+			if strings.EqualFold(existing.EventID, event.EventID) {
+				if samePaymentCallbackEventTarget(existing, event) {
+					duplicate = true
+					return nil
+				}
+				return fmt.Errorf("payment event already belongs to another order: %s", event.EventID)
+			}
+			if event.TransactionID != "" && strings.EqualFold(existing.TransactionID, event.TransactionID) {
+				if samePaymentCallbackEventTarget(existing, event) {
+					duplicate = true
+					return nil
+				}
+				return fmt.Errorf("payment transaction already belongs to another order: %s", event.TransactionID)
+			}
+		}
+		data.PaymentEvents = append(data.PaymentEvents, event)
+		return nil
+	})
+	return duplicate, err
+}
+
+func (s *jsonStore) MarkAdminOrderPaid(id string, metadata ...map[string]any) (adminOrder, error) {
 	var updated adminOrder
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		for i := range data.Orders {
 			if data.Orders[i].ID != id {
 				continue
 			}
+			mergeOrderPaymentMetadata(&data.Orders[i], metadata...)
 			if strings.EqualFold(data.Orders[i].Status, "PAID") {
 				now := data.Orders[i].PaidAt
 				if now == "" {
@@ -815,6 +938,75 @@ func (s *jsonStore) MarkAdminOrderPaid(id string) (adminOrder, error) {
 		return fmt.Errorf("order not found: %s", id)
 	})
 	return updated, err
+}
+
+func mergeOrderPaymentMetadata(order *adminOrder, metadata ...map[string]any) {
+	if order == nil || len(metadata) == 0 {
+		return
+	}
+	if order.PriceSnapshot == nil {
+		order.PriceSnapshot = map[string]any{}
+	}
+	for _, item := range metadata {
+		for key, value := range item {
+			key = strings.TrimSpace(key)
+			if key == "" || value == nil {
+				continue
+			}
+			order.PriceSnapshot[key] = value
+		}
+	}
+}
+
+func normalizePaymentCallbackEvent(event adminPaymentEvent) adminPaymentEvent {
+	event.Provider = normalizePaymentMethod(event.Provider)
+	event.EventID = strings.TrimSpace(event.EventID)
+	event.OrderID = strings.TrimSpace(event.OrderID)
+	event.TransactionID = strings.TrimSpace(event.TransactionID)
+	if event.ID == "" {
+		event.ID = "payevt_" + shortID(event.Provider+":"+event.EventID)
+	}
+	if event.CreatedAt == "" {
+		event.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	if event.Raw == nil {
+		event.Raw = map[string]any{}
+	}
+	return event
+}
+
+func samePaymentCallbackProvider(left adminPaymentEvent, right adminPaymentEvent) bool {
+	return normalizePaymentMethod(left.Provider) == normalizePaymentMethod(right.Provider)
+}
+
+func samePaymentCallbackEventTarget(left adminPaymentEvent, right adminPaymentEvent) bool {
+	if strings.TrimSpace(left.OrderID) != strings.TrimSpace(right.OrderID) {
+		return false
+	}
+	if strings.TrimSpace(left.TransactionID) == "" || strings.TrimSpace(right.TransactionID) == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(left.TransactionID), strings.TrimSpace(right.TransactionID))
+}
+
+func paymentCallbackEventRaw(req paymentCallbackRequest, signature paymentCallbackSignature) map[string]any {
+	return map[string]any{
+		"orderId":               req.OrderID,
+		"orderNo":               req.OrderNo,
+		"provider":              req.Provider,
+		"channel":               req.Channel,
+		"status":                req.Status,
+		"paymentStatus":         req.PaymentStatus,
+		"eventType":             req.EventType,
+		"paid":                  req.Paid,
+		"amountCents":           paymentCallbackAmountCents(req.AmountCents, req.TotalCents, req.Amount),
+		"transactionId":         req.TransactionID,
+		"providerTransactionId": req.ProviderTxnID,
+		"eventId":               req.EventID,
+		"signatureVerified":     signature.Verified,
+		"signatureProvider":     signature.Provider,
+		"signatureSource":       signature.Source,
+	}
 }
 
 func applyCommerceOrderFulfillment(data *adminPlatformData, order *adminOrder, now string) error {
@@ -2230,12 +2422,15 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
+		nextAvailable := available - pointCost
+		params := generationBillingReservationParams(req.Params, now, pointCost, available, nextAvailable)
+		req.Params = params
 		task = generationTask{
 			ID:        nextID(data.Counters, "task"),
 			UserID:    userID,
 			Type:      req.Type,
 			Prompt:    req.Prompt,
-			Params:    req.Params,
+			Params:    params,
 			Model:     req.Model,
 			Status:    "PROCESSING",
 			Progress:  5,
@@ -2246,6 +2441,8 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 		}
 		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 		data.GenerationTasks = append(data.GenerationTasks, task)
+		data.PointsAvailable = &nextAvailable
+		setPlatformPointAccount(data, task.UserID, nextAvailable)
 		return nil
 	}); err != nil {
 		return generationTask{}, err
@@ -2274,8 +2471,10 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		if pointCost <= 0 {
 			pointCost = generationPointCostForRequest(req, adminDataFromPlatformData(*data))
 		}
+		pointCost = generationTaskReservedPointCost(task, pointCost)
+		reserved := generationTaskReservedAndActive(task)
 		available := pointsAvailableForUser(*data, task.UserID)
-		if available < pointCost {
+		if !reserved && available < pointCost {
 			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -2304,16 +2503,21 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 			task.ResultIDs = append(task.ResultIDs, assetID)
 		}
 		data.GenerationTasks[index] = task
-		nextAvailable := available - pointCost
-		data.PointsAvailable = &nextAvailable
-		setPlatformPointAccount(data, task.UserID, nextAvailable)
+		balanceBefore := available
+		balanceAfter := available - pointCost
+		if reserved {
+			balanceBefore, balanceAfter = generationTaskReservationBalances(task, available, pointCost)
+		} else {
+			data.PointsAvailable = &balanceAfter
+			setPlatformPointAccount(data, task.UserID, balanceAfter)
+		}
 		adminDefaults := withAdminDefaults(adminPlatformData{
 			Users:         data.Users,
 			ChannelAgents: data.ChannelAgents,
 		})
 		user := userMap(adminDefaults.Users)[task.UserID]
 		directAgent, hasDirectAgent := directActiveAgentForUser(adminDefaults.Users, adminDefaults.ChannelAgents, task.UserID)
-		event := generationBillingEvent(task, available, nextAvailable, now, user, directAgent, hasDirectAgent)
+		event := generationBillingEvent(task, balanceBefore, balanceAfter, now, user, directAgent, hasDirectAgent)
 		data.BillingEvents = append(data.BillingEvents, event)
 		commissionData := withAdminDefaults(adminPlatformData{
 			Users:           data.Users,
@@ -2371,10 +2575,22 @@ func (s *jsonStore) FailGenerationTask(id string, message string) (generationTas
 				continue
 			}
 			task = data.GenerationTasks[i]
-			if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+			if task.Status == "SUCCEEDED" {
 				return nil
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
+			pointCost := generationTaskReservedPointCost(task, task.PointCost)
+			if generationTaskReservedAndActive(task) && pointCost > 0 {
+				available := pointsAvailableForUser(*data, task.UserID)
+				nextAvailable := available + pointCost
+				data.PointsAvailable = &nextAvailable
+				setPlatformPointAccount(data, task.UserID, nextAvailable)
+				task.Params = generationBillingRefundParams(task.Params, now, available, nextAvailable)
+			}
+			if task.Status == "FAILED" || task.Status == "CANCELLED" {
+				data.GenerationTasks[i] = task
+				return nil
+			}
 			task.Status = "FAILED"
 			task.Progress = 100
 			task.Error = map[string]any{"message": message}
@@ -2775,22 +2991,30 @@ func setPlatformPointAccount(data *platformData, userID string, available int) {
 	})
 }
 
-func (s *jsonStore) DeleteAsset(id string) error {
+func (s *jsonStore) DeleteAssetForUser(userID string, id string) error {
+	userID = strings.TrimSpace(userID)
 	return s.update(func(data *platformData) error {
-		next := data.Assets[:0]
 		deleted := false
-		for _, item := range data.Assets {
-			if item.ID == id {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for i := range data.Assets {
+			if data.Assets[i].ID == id && data.Assets[i].UserID == userID && !assetDeleted(data.Assets[i]) {
+				data.Assets[i].DeletedAt = now
+				data.Assets[i].UpdatedAt = now
+				if data.Assets[i].Metadata == nil {
+					data.Assets[i].Metadata = map[string]any{}
+				}
+				data.Assets[i].Metadata["deletedAt"] = now
 				deleted = true
-				continue
+				break
 			}
-			next = append(next, item)
 		}
 		if !deleted {
 			return fmt.Errorf("%w: %s", errAssetNotFound, id)
 		}
-		data.Assets = next
 		for i := range data.GenerationTasks {
+			if data.GenerationTasks[i].UserID != userID {
+				continue
+			}
 			resultIDs := data.GenerationTasks[i].ResultIDs[:0]
 			for _, resultID := range data.GenerationTasks[i].ResultIDs {
 				if resultID != id {
@@ -2801,6 +3025,27 @@ func (s *jsonStore) DeleteAsset(id string) error {
 		}
 		return nil
 	})
+}
+
+func activeAssets(assets []asset) []asset {
+	items := make([]asset, 0, len(assets))
+	for _, item := range assets {
+		if assetDeleted(item) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func assetDeleted(item asset) bool {
+	if strings.TrimSpace(item.DeletedAt) != "" {
+		return true
+	}
+	if item.Metadata == nil {
+		return false
+	}
+	return strings.TrimSpace(stringValue(item.Metadata["deletedAt"])) != ""
 }
 
 func (s *jsonStore) load() (platformData, error) {

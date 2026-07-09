@@ -1,22 +1,16 @@
+import { designTokens, wotThemeVars } from '@xianzhi/design-token'
+
 export const themeColors = {
-  grayBlue: '#D2D4D6',
-  primary: '#7D8DF6',
-  primaryDark: '#5A4DB2',
-  accent: '#FF771B',
-  bgPage: '#F7F8FC',
-  bgCard: '#FFFFFF',
-  textPrimary: '#111827',
-  textSecondary: '#6B7280',
-  textMuted: '#9CA3AF',
-  border: '#E5E7EB',
+  grayBlue: designTokens.color.grayBlue,
+  primary: designTokens.color.primary,
+  primaryDark: designTokens.color.primaryDark,
+  accent: designTokens.color.accent,
+  bgPage: designTokens.color.bgPage,
+  bgCard: designTokens.color.bgCard,
+  textPrimary: designTokens.color.textPrimary,
+  textSecondary: designTokens.color.textSecondary,
+  textMuted: designTokens.color.textMuted,
+  border: designTokens.color.border,
 }
 
-export const wotThemeVars = {
-  colorTheme: themeColors.primary,
-  buttonPrimaryBgColor: themeColors.primary,
-  buttonPrimaryBorderColor: themeColors.primary,
-  tabsNavColor: themeColors.primary,
-  inputBorderColor: themeColors.border,
-  textareaBorderColor: themeColors.border,
-  searchBg: themeColors.bgCard,
-}
+export { wotThemeVars }

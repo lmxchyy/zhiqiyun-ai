@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { loginByPassword, loginByWechatMiniProgram, type MiniAuthResponse } from '@/services/auth'
+import { authService, authStorage, MINI_AUTH_STORAGE_KEY, MINI_REFRESH_TOKEN_STORAGE_KEY, MINI_TOKEN_STORAGE_KEY } from '@/services/core'
+import type { AuthResponse } from '@xianzhi/shared-types'
 
-export const MINI_AUTH_STORAGE_KEY = 'zq_mini_auth'
-export const MINI_TOKEN_STORAGE_KEY = 'zq_mini_token'
+export { MINI_AUTH_STORAGE_KEY, MINI_REFRESH_TOKEN_STORAGE_KEY, MINI_TOKEN_STORAGE_KEY }
+export type MiniAuthResponse = AuthResponse
 
 export const useAppStore = defineStore('app', {
   state: () => ({
@@ -18,21 +19,31 @@ export const useAppStore = defineStore('app', {
     bootstrap() {
       this.bootstrapped = true
       this.syncSession()
+      void this.restoreSession()
     },
     syncSession() {
-      this.token = uni.getStorageSync(MINI_TOKEN_STORAGE_KEY) || ''
-      this.auth = uni.getStorageSync(MINI_AUTH_STORAGE_KEY) || null
+      this.token = authStorage.getToken()
+      this.auth = authStorage.getAuth()
     },
     setSession(auth: MiniAuthResponse) {
       this.auth = auth
-      this.token = auth.accessToken
-      uni.setStorageSync(MINI_TOKEN_STORAGE_KEY, auth.accessToken)
-      uni.setStorageSync(MINI_AUTH_STORAGE_KEY, auth)
+      this.token = auth.accessToken || ''
+      authStorage.setToken(this.token)
+      if (Object.prototype.hasOwnProperty.call(auth, 'refreshToken')) {
+        authStorage.setRefreshToken(auth.refreshToken || '')
+      }
+      authStorage.setAuth(auth)
+    },
+    async restoreSession() {
+      const auth = await authService.restore()
+      if (auth) this.setSession(auth)
+      else this.syncSession()
+      return auth
     },
     async loginWithWechatMiniProgram() {
       this.loginLoading = true
       try {
-        const auth = await loginByWechatMiniProgram()
+        const auth = await authService.loginByWechatMiniProgram()
         this.setSession(auth)
         return auth
       }
@@ -43,7 +54,7 @@ export const useAppStore = defineStore('app', {
     async loginWithPassword(email: string, password: string) {
       this.loginLoading = true
       try {
-        const auth = await loginByPassword(email, password)
+        const auth = await authService.loginByPassword(email, password)
         this.setSession(auth)
         return auth
       }
@@ -65,8 +76,7 @@ export const useAppStore = defineStore('app', {
     logout() {
       this.token = ''
       this.auth = null
-      uni.removeStorageSync(MINI_TOKEN_STORAGE_KEY)
-      uni.removeStorageSync(MINI_AUTH_STORAGE_KEY)
+      authStorage.clear()
     },
   },
 })

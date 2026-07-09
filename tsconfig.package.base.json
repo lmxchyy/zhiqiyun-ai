@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM"],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "baseUrl": ".",
+    "paths": {
+      "@xianzhi/api-client": ["packages/api-client/src/index.ts"],
+      "@xianzhi/business-sdk": ["packages/business-sdk/src/index.ts"],
+      "@xianzhi/design-token": ["packages/design-token/src/index.ts"],
+      "@xianzhi/platform-adapter": ["packages/platform-adapter/src/index.ts"],
+      "@xianzhi/shared-auth": ["packages/shared-auth/src/index.ts"],
+      "@xianzhi/shared-types": ["packages/shared-types/src/index.ts"]
+    }
+  }
+}

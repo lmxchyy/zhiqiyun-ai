@@ -3410,7 +3410,8 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index";
+import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import { pptThemes, pptThemeLabel } from "../../config/pptThemes";
 import { usePptStore } from "../../stores/ppt";
 import type {

@@ -542,7 +542,7 @@ func channelGenerationTasksForUsers(tasks []generationTask, visibleCustomerIDs m
 func channelAssetsForUsers(assets []asset, visibleCustomerIDs map[string]bool) []asset {
 	items := []asset{}
 	for _, item := range assets {
-		if visibleCustomerIDs[item.UserID] {
+		if visibleCustomerIDs[item.UserID] && !assetDeleted(item) {
 			items = append(items, item)
 		}
 	}

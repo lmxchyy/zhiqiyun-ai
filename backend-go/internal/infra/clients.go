@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/redis/go-redis/v9"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/redis/go-redis/v9"
 
 	"xianzhi-ai/backend-go/internal/config"
 )
@@ -22,15 +22,23 @@ func Open(ctx context.Context, cfg config.Config) (*Clients, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := db.PingContext(ctx); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 		clients.DB = db
 	}
 	if cfg.RedisURL != "" {
 		options, err := redis.ParseURL(cfg.RedisURL)
 		if err != nil {
+			_ = clients.Close()
 			return nil, err
 		}
 		clients.Redis = redis.NewClient(options)
-		_ = clients.Redis.Ping(ctx).Err()
+		if err := clients.Redis.Ping(ctx).Err(); err != nil {
+			_ = clients.Close()
+			return nil, err
+		}
 	}
 	return clients, nil
 }

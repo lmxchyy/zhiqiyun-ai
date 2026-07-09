@@ -80,6 +80,20 @@ CREATE TABLE IF NOT EXISTS xz_withdrawals (
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS xz_payment_events (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  transaction_id TEXT,
+  amount_cents BIGINT NOT NULL DEFAULT 0,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+  verified BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, event_id),
+  UNIQUE(provider, transaction_id)
+);
+
 CREATE TABLE IF NOT EXISTS xz_generation_tasks (
   id TEXT PRIMARY KEY,
   user_id TEXT,
@@ -108,10 +122,14 @@ CREATE TABLE IF NOT EXISTS xz_assets (
   thumbnail_url TEXT,
   favorite BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  deleted_at TIMESTAMPTZ,
   created_at TEXT,
   updated_at TEXT,
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+
+ALTER TABLE xz_assets
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_xz_users_role ON xz_users(role);
 CREATE INDEX IF NOT EXISTS idx_xz_orders_user_id ON xz_orders(user_id);
@@ -119,3 +137,5 @@ CREATE INDEX IF NOT EXISTS idx_xz_orders_status ON xz_orders(status);
 CREATE INDEX IF NOT EXISTS idx_xz_channel_agents_user_id ON xz_channel_agents(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_id ON xz_generation_tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_id ON xz_assets(user_id);
+CREATE INDEX IF NOT EXISTS idx_xz_assets_user_active_created ON xz_assets(user_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_xz_payment_events_order ON xz_payment_events(order_id, created_at DESC);

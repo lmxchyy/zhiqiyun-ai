@@ -8,6 +8,7 @@ export {}
 declare global {
   const EffectScope: typeof import('vue').EffectScope
   const MINI_AUTH_STORAGE_KEY: typeof import('../stores/app').MINI_AUTH_STORAGE_KEY
+  const MINI_REFRESH_TOKEN_STORAGE_KEY: typeof import('../stores/app').MINI_REFRESH_TOKEN_STORAGE_KEY
   const MINI_TOKEN_STORAGE_KEY: typeof import('../stores/app').MINI_TOKEN_STORAGE_KEY
   const computed: typeof import('vue').computed
   const createApp: typeof import('vue').createApp
@@ -99,6 +100,9 @@ declare global {
   // @ts-ignore
   export type { Component, Slot, Slots, ComponentPublicInstance, ComputedRef, DirectiveBinding, ExtractDefaultPropTypes, ExtractPropTypes, ExtractPublicPropTypes, InjectionKey, PropType, Ref, ShallowRef, MaybeRef, MaybeRefOrGetter, VNode, WritableComputedRef } from 'vue'
   import('vue')
+  // @ts-ignore
+  export type { MiniAuthResponse } from '../stores/app'
+  import('../stores/app')
 }
 
 // for vue template auto import
@@ -108,6 +112,7 @@ declare module 'vue' {
   interface ComponentCustomProperties {
     readonly EffectScope: UnwrapRef<typeof import('vue')['EffectScope']>
     readonly MINI_AUTH_STORAGE_KEY: UnwrapRef<typeof import('../stores/app')['MINI_AUTH_STORAGE_KEY']>
+    readonly MINI_REFRESH_TOKEN_STORAGE_KEY: UnwrapRef<typeof import('../stores/app')['MINI_REFRESH_TOKEN_STORAGE_KEY']>
     readonly MINI_TOKEN_STORAGE_KEY: UnwrapRef<typeof import('../stores/app')['MINI_TOKEN_STORAGE_KEY']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly createApp: UnwrapRef<typeof import('vue')['createApp']>

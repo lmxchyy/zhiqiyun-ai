@@ -1,0 +1,1343 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Xianzhi AI User Core API",
+    "version": "0.1.0",
+    "description": "Initial OpenAPI contract for the shared user clients and business SDK."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "loginByPassword",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/wechat-mini-program/login": {
+      "post": {
+        "operationId": "loginByWechatMiniProgram",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WechatLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "registerByInvite",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterByInviteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshAuthSession",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OkResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/user/dashboard": {
+      "get": {
+        "operationId": "getUserDashboard",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/UserDashboardResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/generation-tasks": {
+      "get": {
+        "operationId": "listGenerationTasks",
+        "responses": {
+          "200": {
+            "description": "Generation task list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/GenerationTask"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createGenerationTask",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGenerationTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationTaskResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/ppt/generate": {
+      "post": {
+        "operationId": "createPptGeneration",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/GenerationTaskResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/assets": {
+      "get": {
+        "operationId": "listAssets",
+        "responses": {
+          "200": {
+            "description": "Asset list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Asset"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "Model list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/plans": {
+      "get": {
+        "operationId": "listPlans",
+        "responses": {
+          "200": {
+            "description": "Commerce plan list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CommercePlan"
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/CommercePlanItems"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/member/profile": {
+      "get": {
+        "operationId": "getMemberProfile",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/MemberProfileResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/member/wallet": {
+      "get": {
+        "operationId": "getMemberWallet",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/RoleWalletResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/points/account": {
+      "get": {
+        "operationId": "getPointsAccount",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PointAccountResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/channel/me": {
+      "get": {
+        "operationId": "getChannelCenter",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ChannelCenterResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/operation-center/profile": {
+      "get": {
+        "operationId": "getOperationProfile",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationProfileResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/operation-center/agents": {
+      "get": {
+        "operationId": "listOperationAgents",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ItemsResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/operation-center/orders": {
+      "get": {
+        "operationId": "listOperationOrders",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ItemsResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/operation-center/commissions": {
+      "get": {
+        "operationId": "listOperationCommissions",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ItemsResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque"
+      }
+    },
+    "responses": {
+      "AuthResponse": {
+        "description": "Authenticated user session.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AuthResponse"
+            }
+          }
+        }
+      },
+      "GenerationTaskResponse": {
+        "description": "Generation task.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/GenerationTask"
+            }
+          }
+        }
+      },
+      "UserDashboardResponse": {
+        "description": "User dashboard data.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UserDashboardResponse"
+            }
+          }
+        }
+      },
+      "PointAccountResponse": {
+        "description": "Point account data.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PointAccountResponse"
+            }
+          }
+        }
+      },
+      "RoleWalletResponse": {
+        "description": "Role wallet data.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RoleWalletResponse"
+            }
+          }
+        }
+      },
+      "MemberProfileResponse": {
+        "description": "Member profile data.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/MemberProfileResponse"
+            }
+          }
+        }
+      },
+      "ChannelCenterResponse": {
+        "description": "Channel center data.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ChannelCenterResponse"
+            }
+          }
+        }
+      },
+      "OperationProfileResponse": {
+        "description": "Operation center profile data.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationProfileResponse"
+            }
+          }
+        }
+      },
+      "ItemsResponse": {
+        "description": "Generic item collection.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ItemsResponse"
+            }
+          }
+        }
+      },
+      "OkResponse": {
+        "description": "Operation result.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OkResponse"
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "description": "API error.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AnyRecord": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "WechatLoginRequest": {
+        "type": "object",
+        "required": ["code"],
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "RefreshTokenRequest": {
+        "type": "object",
+        "required": ["refreshToken"],
+        "properties": {
+          "refreshToken": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterByInviteRequest": {
+        "type": "object",
+        "required": ["username", "email", "password", "confirmPassword", "inviteCode"],
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          },
+          "confirmPassword": {
+            "type": "string"
+          },
+          "inviteCode": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkspaceRole": {
+        "type": "string",
+        "enum": ["user", "agent", "admin"]
+      },
+      "AuthUser": {
+        "type": "object",
+        "required": ["id", "email", "name", "role", "status"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "planId": {
+            "type": "string"
+          },
+          "memberLevel": {
+            "type": "string"
+          },
+          "agentStatus": {
+            "type": "string"
+          },
+          "operationCenterStatus": {
+            "type": "string"
+          },
+          "referredBy": {
+            "type": "string"
+          },
+          "subscriptionExpiresAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ChannelAgent": {
+        "type": "object",
+        "required": ["id", "userId", "level", "status", "inviteCode"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": "string"
+          },
+          "operationCenterId": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "inviteCode": {
+            "type": "string"
+          },
+          "inviteLink": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "required": ["user"],
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/ChannelAgent"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defaultModule": {
+            "type": "string"
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/WorkspaceRole"
+          },
+          "defaultRoute": {
+            "type": "string"
+          }
+        }
+      },
+      "GenerationTaskType": {
+        "type": "string"
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": ["PENDING", "QUEUED", "RUNNING", "PROCESSING", "RETRYING", "SUCCEEDED", "COMPLETED", "FAILED", "ERROR", "CANCELLED"]
+      },
+      "GenerationTask": {
+        "type": "object",
+        "required": ["id", "type", "status", "prompt", "model", "pointCost"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/GenerationTaskType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "pointCost": {
+            "type": "integer"
+          },
+          "resultIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "params": {
+            "$ref": "#/components/schemas/AnyRecord"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "workerFinishedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateGenerationTaskRequest": {
+        "type": "object",
+        "required": ["type", "prompt", "model"],
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/GenerationTaskType"
+          },
+          "module_code": {
+            "type": "string"
+          },
+          "moduleCode": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/components/schemas/AnyRecord"
+          }
+        }
+      },
+      "Asset": {
+        "type": "object",
+        "required": ["id", "name", "url", "mediaType"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "thumbnailUrl": {
+            "type": "string"
+          },
+          "mediaType": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AnyRecord"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ModelInfo": {
+        "type": "object",
+        "required": ["code", "name"],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pointCost": {
+            "type": "integer"
+          },
+          "fixedQuota": {
+            "type": "integer"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "providerName": {
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PointAccount": {
+        "type": "object",
+        "required": ["id", "userId", "available", "frozen"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "available": {
+            "type": "integer"
+          },
+          "frozen": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "PointAccountResponse": {
+        "type": "object",
+        "required": ["account"],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/PointAccount"
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          }
+        }
+      },
+      "UserDashboardSummary": {
+        "type": "object",
+        "required": ["availablePoints", "todayGenerations", "assets", "totalPointCost"],
+        "properties": {
+          "availablePoints": {
+            "type": "integer"
+          },
+          "todayGenerations": {
+            "type": "integer"
+          },
+          "succeededGenerations": {
+            "type": "integer"
+          },
+          "queueTasks": {
+            "type": "integer"
+          },
+          "apiPlatforms": {
+            "type": "integer"
+          },
+          "assets": {
+            "type": "integer"
+          },
+          "totalPointCost": {
+            "type": "integer"
+          }
+        }
+      },
+      "UserDashboardResponse": {
+        "type": "object",
+        "required": ["summary"],
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/UserDashboardSummary"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "recentTasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationTask"
+            }
+          },
+          "recentAssets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Asset"
+            }
+          }
+        }
+      },
+      "CommercePlan": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceCents": {
+            "type": "integer"
+          },
+          "amountCents": {
+            "type": "integer"
+          },
+          "pointAmount": {
+            "type": "integer"
+          },
+          "tokenAmount": {
+            "type": "integer"
+          },
+          "rechargePoints": {
+            "type": "integer"
+          },
+          "benefits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AnyRecord"
+          }
+        }
+      },
+      "CommercePlanItems": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommercePlan"
+            }
+          }
+        }
+      },
+      "RoleWalletResponse": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/PointAccount"
+          },
+          "tokenRecords": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          }
+        }
+      },
+      "MemberProfileResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          },
+          "account": {
+            "$ref": "#/components/schemas/PointAccount"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/AnyRecord"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/ChannelAgent"
+          },
+          "operationCenter": {
+            "$ref": "#/components/schemas/AnyRecord"
+          }
+        }
+      },
+      "ChannelCommission": {
+        "type": "object",
+        "required": ["id", "orderId", "agentId", "amountCents", "rate", "status"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "integer"
+          },
+          "rate": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ChannelWithdrawal": {
+        "type": "object",
+        "required": ["id", "agentId", "amountCents", "status"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "reviewedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ChannelOrder": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "customer": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string"
+          },
+          "amountCents": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        }
+      },
+      "ChannelUsageEvent": {
+        "type": "object",
+        "required": ["id", "transactionId", "userId", "taskId", "metricCode", "quantity", "unitAmountCents", "amountCents", "pointCost", "balanceBefore", "balanceAfter", "model", "status", "occurredAt"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "transactionId": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "assetIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metricCode": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "unitAmountCents": {
+            "type": "integer"
+          },
+          "amountCents": {
+            "type": "integer"
+          },
+          "pointCost": {
+            "type": "integer"
+          },
+          "balanceBefore": {
+            "type": "integer"
+          },
+          "balanceAfter": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/AnyRecord"
+          }
+        }
+      },
+      "ChannelCenterSummary": {
+        "type": "object",
+        "required": ["directCustomers", "childAgents", "totalCommission", "settledCommission", "pendingCommission", "withdrawn", "pendingWithdrawal", "availableToWithdraw"],
+        "properties": {
+          "directCustomers": {
+            "type": "integer"
+          },
+          "childAgents": {
+            "type": "integer"
+          },
+          "totalCommission": {
+            "type": "integer"
+          },
+          "settledCommission": {
+            "type": "integer"
+          },
+          "pendingCommission": {
+            "type": "integer"
+          },
+          "withdrawn": {
+            "type": "integer"
+          },
+          "pendingWithdrawal": {
+            "type": "integer"
+          },
+          "availableToWithdraw": {
+            "type": "integer"
+          }
+        }
+      },
+      "ChannelCenterResponse": {
+        "type": "object",
+        "required": ["user", "agent", "summary", "customers", "commissions", "withdrawals", "children"],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/ChannelAgent"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ChannelCenterSummary"
+          },
+          "customers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthUser"
+            }
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelOrder"
+            }
+          },
+          "usageEvents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelUsageEvent"
+            }
+          },
+          "commissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelCommission"
+            }
+          },
+          "withdrawals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelWithdrawal"
+            }
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelAgent"
+            }
+          }
+        }
+      },
+      "OperationProfileResponse": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/AuthUser"
+          },
+          "operationCenter": {
+            "$ref": "#/components/schemas/AnyRecord"
+          },
+          "joinPlan": {
+            "$ref": "#/components/schemas/AnyRecord"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AnyRecord"
+          }
+        }
+      },
+      "ItemsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnyRecord"
+            }
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AnyRecord"
+          }
+        }
+      },
+      "OkResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

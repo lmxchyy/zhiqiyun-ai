@@ -9,6 +9,7 @@ type platformData struct {
 	TokenRecords       []adminTokenRecord       `json:"tokenRecords,omitempty"`
 	Orders             []adminOrder             `json:"orders,omitempty"`
 	Payments           []adminPayment           `json:"payments,omitempty"`
+	PaymentEvents      []adminPaymentEvent      `json:"paymentEvents,omitempty"`
 	ChannelAgents      []adminChannelAgent      `json:"channelAgents,omitempty"`
 	OperationCenters   []adminOperationCenter   `json:"operationCenters,omitempty"`
 	CustomerRelations  []adminCustomerRelation  `json:"customerRelations,omitempty"`
@@ -80,6 +81,7 @@ type asset struct {
 	ThumbnailURL string         `json:"thumbnailUrl,omitempty"`
 	Favorite     bool           `json:"favorite"`
 	Metadata     map[string]any `json:"metadata"`
+	DeletedAt    string         `json:"deletedAt,omitempty"`
 	CreatedAt    string         `json:"createdAt"`
 	UpdatedAt    string         `json:"updatedAt"`
 }

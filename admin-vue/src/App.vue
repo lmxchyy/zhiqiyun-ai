@@ -3035,13 +3035,52 @@
 </template>
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
-import { ElMessage, ElMessageBox, type ComponentSize } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index";
+import { ElMessageBox } from "element-plus/es/components/message-box/index";
+import type { ComponentSize } from "element-plus";
 import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
 import { adminRequest } from "./api/client";
+import { useOfficeCLI } from "./composables/useOfficeCLI";
 import PromptEditable from "./components/PromptEditable.vue";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
+import {
+  agentCenterMetrics,
+  agentCenterMobileRows,
+  agentCenterRanking,
+  agentCenterRows,
+  agentCenterShortcuts,
+  agentCenterTemplates,
+  agentCenterTrend,
+  buildAgentCenterWorkspace,
+  findAgentCenterOpenable,
+  isOfficeCLIItem,
+  type AgentCenterOpenable,
+  type AgentCenterWorkspace,
+  type AgentWorkspaceMessage
+} from "./utils/agentCenter";
 import { clearCurrentAiImageCache, readAiImageDraft, readCachedOriginalImage, writeAiImageDraft, writeCachedOriginalImage, type CachedReferenceImage } from "./utils/aiImageDb";
+import {
+  isVideoGenerationTask,
+  normalizeVideoTimestamp,
+  videoDurationOptions,
+  videoErrorMessage,
+  videoInputImageUrlsFromTask,
+  videoModeFromTask,
+  videoModelId,
+  videoModelOptions,
+  videoModelParameterOptions,
+  videoNumberOrString,
+  videoRatioOptions,
+  videoResolutionOptions,
+  videoStatusFromTask,
+  videoStringValue,
+  videoTaskParams,
+  videoTaskUrl,
+  videoToolOptions,
+  type VideoHistoryEntry,
+  type VideoHistoryStatus
+} from "./utils/videoGeneration";
 import xianzhiLogo from "./assets/xianzhi-ai-logo.png";
 
 function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
@@ -3129,37 +3168,6 @@ const statusFilterOptions = computed(() => {
   ];
 });
 
-const videoModelOptions = [
-  { name: "Mock Video", family: "tool", desc: "本地联调视频模型" },
-  { name: "Grok Image Video", family: "grok", desc: "Grok 文生/图生视频" },
-  { name: "Grok Video 1.5", family: "grok", desc: "Grok 单图生视频" },
-  { name: "Veo 3", family: "veo", desc: "Google 视频生成" },
-  { name: "Kling 2.1", family: "kling", desc: "可灵标准视频" },
-  { name: "Seedance 2.0", family: "seedance", desc: "Seedance 文生视频" },
-  { name: "Doubao Seedance 2.0", family: "seedance", desc: "豆包 Seedance 2.0 视频" },
-  { name: "Wan 2.2", family: "wan", desc: "Wan 系列视频" },
-  { name: "Sora 2", family: "sora", desc: "OpenAI 视频模型" }
-];
-const videoToolOptions = [
-  { name: "去水印", family: "tool", desc: "上传视频处理" },
-  { name: "运动控制", family: "tool", desc: "视频 + 图片控制" }
-];
-const videoDurationOptions = [4, 5, 6, 8, 10, 12, 14, 15, 16, 18, 20, 25];
-const videoRatioOptions = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21"];
-const videoResolutionOptions = ["480p", "720p", "1080p"];
-const videoModelParameterOptions: Record<string, { durations: number[]; ratios?: string[]; resolutions?: string[] }> = {
-  "Mock Video": { durations: [4], ratios: ["16:9"], resolutions: ["480p"] },
-  "Grok Image Video": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"], resolutions: ["480p", "720p"] },
-  "Grok Video 1.5": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16"], resolutions: ["480p", "720p"] },
-  "Veo 3": { durations: [8], ratios: ["16:9", "9:16"], resolutions: ["720p", "1080p"] },
-  "Kling 2.1": { durations: [5, 10], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p", "1080p"] },
-  "Seedance 2.0": { durations: [5, 10, 15], ratios: ["16:9", "9:16", "4:3", "3:4"], resolutions: ["480p", "720p", "1080p"] },
-  "Doubao Seedance 2.0": { durations: [5, 8, 10, 12, 15], ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"], resolutions: ["480p", "720p", "1080p", "4k"] },
-  "Wan 2.2": { durations: [5, 8], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p"] },
-  "Sora 2": { durations: [10, 15, 25], ratios: ["16:9", "9:16"], resolutions: ["720p"] },
-  去水印: { durations: [] },
-  运动控制: { durations: [5, 10], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p", "1080p"] }
-};
 const videoStudioMode = ref("text");
 const videoPrompt = ref("");
 const selectedVideoModel = ref("Grok Image Video");
@@ -3221,116 +3229,7 @@ function syncVideoModelParameters() {
 }
 
 function selectedVideoModelId() {
-  const mapping: Record<string, string> = {
-    "Mock Video": "mock-video",
-    "Grok Image Video": "grok-image-video",
-    "Grok Video 1.5": "grok-video-1.5",
-    "Veo 3": "veo3",
-    "Kling 2.1": "kling-2.1",
-    "Seedance 2.0": "seedance-2.0",
-    "Doubao Seedance 2.0": "doubao-seedance-2.0",
-    "Wan 2.2": "wan-2.2",
-    "Sora 2": "sora-2"
-  };
-  return mapping[selectedVideoModel.value] || selectedVideoModel.value;
-}
-
-function videoTaskUrl(task: AdminRecord | null) {
-  if (!task) return "";
-  return String(task.outputUrl || task.resultUrl || task.imageUrl || "");
-}
-
-function videoTaskParams(task: AdminRecord | null): Record<string, unknown> {
-  if (!task) return {};
-  const raw = task.params || task.paramsJson || task.params_json || task.metadata;
-  if (!raw) return {};
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
-    } catch {
-      return {};
-    }
-  }
-  return typeof raw === "object" ? raw as Record<string, unknown> : {};
-}
-
-function videoStringValue(value: unknown, fallback = "") {
-  if (value === undefined || value === null || value === "") return fallback;
-  return String(value);
-}
-
-function normalizeVideoErrorText(raw: string) {
-  const text = raw.trim();
-  if (!text) return "";
-  const subscriptionMatch = text.match(/当前账号处未订购[^"\\\r\n]*/);
-  if (subscriptionMatch?.[0]) return subscriptionMatch[0].trim();
-  const jsonMessageMatch = text.match(/"(?:message|error|detail|reason)"\s*:\s*"([^"]+)"/i);
-  if (jsonMessageMatch?.[1]) {
-    try {
-      return normalizeVideoErrorText(JSON.parse(`"${jsonMessageMatch[1]}"`));
-    } catch {
-      return normalizeVideoErrorText(jsonMessageMatch[1]);
-    }
-  }
-  const lower = text.toLowerCase();
-  if (lower.includes("create_video_generation_task returned empty task id") && lower.includes("seedance")) {
-    return "移动云 Seedance 创建任务失败，请检查模型资费包、API Key 和模型权限";
-  }
-  const compact = text.replace(/\s+/g, " ");
-  return compact.length > 180 ? `${compact.slice(0, 180)}...` : compact;
-}
-
-function videoErrorMessage(value: unknown): string {
-  if (value === undefined || value === null || value === "") return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return normalizeVideoErrorText(String(value));
-  }
-  if (typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    for (const key of ["message", "error", "detail", "reason", "failureReason", "failReason", "errorMessage"]) {
-      const nested = videoErrorMessage(record[key]);
-      if (nested) return nested;
-    }
-    try {
-      return normalizeVideoErrorText(JSON.stringify(value));
-    } catch {
-      return "生成失败";
-    }
-  }
-  return normalizeVideoErrorText(String(value));
-}
-
-function videoNumberOrString(value: unknown, fallback: number | string = "") {
-  if (value === undefined || value === null || value === "") return fallback;
-  const asNumber = Number(value);
-  return Number.isFinite(asNumber) ? asNumber : String(value);
-}
-
-function normalizeVideoTimestamp(value: unknown) {
-  const parsed = value ? Date.parse(String(value)) : NaN;
-  return Number.isFinite(parsed) ? parsed : Date.now();
-}
-
-function videoStatusFromTask(task: AdminRecord): VideoHistoryStatus {
-  const status = String(task.status || "").toUpperCase();
-  if (["SUCCEEDED", "SUCCESS", "COMPLETED", "DONE"].includes(status)) return "success";
-  if (["FAILED", "FAILURE", "ERROR", "CANCELED", "CANCELLED"].includes(status)) return "failed";
-  return "generating";
-}
-
-function videoModeFromTask(task: AdminRecord, params: Record<string, unknown>): VideoHistoryEntry["mode"] {
-  const inputMode = String(params.inputMode || params.mode || task.mode || "").toLowerCase();
-  const type = String(task.type || task.sourceType || "").toUpperCase();
-  if (inputMode.includes("video") || type.includes("VIDEO_TO_VIDEO")) return "video-to-video";
-  if (inputMode.includes("image") || type.includes("IMAGE_TO_VIDEO")) return "image-to-video";
-  return "text-to-video";
-}
-
-function videoInputImageUrlsFromTask(task: AdminRecord, params: Record<string, unknown>) {
-  const candidates = [params.image_urls, params.imageUrls, params.inputImageUrls, params.reference_images, task.inputImageUrls];
-  const urls = candidates.flatMap((value) => Array.isArray(value) ? value : value ? [value] : []);
-  return urls.map((item) => String(item)).filter(Boolean);
+  return videoModelId(selectedVideoModel.value);
 }
 
 function normalizeVideoHistoryEntry(entry: Partial<VideoHistoryEntry> | null | undefined): VideoHistoryEntry | null {
@@ -3382,13 +3281,6 @@ function taskToVideoHistoryEntry(task: AdminRecord): VideoHistoryEntry | null {
     errorMessage: videoErrorMessage(task.failureReason ?? task.errorMessage ?? task.error ?? task.failReason),
     userId: videoStringValue(task.userId)
   });
-}
-
-function isVideoGenerationTask(task: AdminRecord) {
-  const type = String(task.type || task.sourceType || "").toUpperCase();
-  const mediaType = String(task.mediaType || "").toLowerCase();
-  const url = videoTaskUrl(task);
-  return type.includes("VIDEO") || mediaType === "video" || /\.mp4(\?|$)/i.test(url);
 }
 
 function sortVideoHistory(entries: VideoHistoryEntry[]) {
@@ -4140,254 +4032,25 @@ const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "商品图 Agent", desc: "白底图、场景图", icon: Goods, targetId: "userAiImage", mode: "image", prompt: "为产品生成一组干净白底主图和浅色高级场景图。" },
   { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
 ];
-type AgentWorkspaceMessage = { role: "assistant" | "user"; text: string };
-type AgentCenterOpenable = {
-  name: string;
-  desc?: string;
-  type?: string;
-  status?: string;
-  model?: string;
-  knowledge?: string;
-  calls?: string;
-  updated?: string;
-  avatar?: string;
-  icon?: string;
-  tone?: string;
-  agentKey?: string;
-  officecli?: boolean;
-};
-type AgentCenterWorkspace = Required<Pick<AgentCenterOpenable, "name" | "desc" | "type" | "status" | "model" | "knowledge" | "calls" | "updated" | "avatar" | "tone">> & {
-  agentKey: string;
-  modeLabel: string;
-  headline: string;
-  prompt: string;
-  toolTags: string[];
-  quickActions: string[];
-  sampleMessages: AgentWorkspaceMessage[];
-};
-const agentCenterTemplates = [
-  { name: "OfficeCLI 文档智能体", desc: "Word / Excel / PPT 创建、读取、渲染与导出", icon: "DOC", tone: "orange", featured: true, action: "进入", agentKey: "officecli", officecli: true },
-  { name: "基础对话智能体", desc: "通用问答，适合各类场景", icon: "Q", tone: "purple", action: "进入", agentKey: "chat" },
-  { name: "企业知识库智能体", desc: "基于知识库，精准问答", icon: "K", tone: "green", action: "进入", agentKey: "knowledge" },
-  { name: "销售助手", desc: "销售话术、客户跟进助力", icon: "S", tone: "orange", action: "进入", agentKey: "sales" },
-  { name: "客服助手", desc: "7x24 智能客服，解答问题", icon: "C", tone: "purple", action: "进入", agentKey: "service" },
-  { name: "招商助手", desc: "招商政策解答与线索收集", icon: "B", tone: "blue", action: "进入", agentKey: "investment" },
-  { name: "内部 SOP 助手", desc: "制度、流程、审批查询", icon: "P", tone: "purple", action: "进入", agentKey: "sop" },
-  { name: "表单收集助手", desc: "表单收集、结果采集", icon: "F", tone: "green", action: "进入", agentKey: "form" }
-];
-const agentCenterRows = [
-  { name: "OfficeCLI 文档智能体", desc: "管理 Word/Excel/PPT 任务", type: "文档工具", status: "已接入", model: "gpt-4o-mini", knowledge: "Office 模板库", calls: "326", updated: "07-09 10:20", avatar: "DOC", tone: "orange", agentKey: "officecli", officecli: true },
-  { name: "产品知识助手", desc: "解答业务问题，提升协作效率", type: "知识库", status: "已发布", model: "gpt-4o-mini", knowledge: "产品知识库", calls: "1,298", updated: "2024-06-12 14:30", avatar: "P", tone: "purple", agentKey: "knowledge" },
-  { name: "销售跟进助手", desc: "解答业务问题，提升协作效率", type: "销售助手", status: "已发布", model: "gpt-4o", knowledge: "销售资料库", calls: "856", updated: "2024-06-12 10:15", avatar: "S", tone: "orange", agentKey: "sales" },
-  { name: "智能客服助手", desc: "解答业务问题，提升协作效率", type: "客服助手", status: "已发布", model: "moonshot-v1", knowledge: "客服知识库", calls: "2,350", updated: "2024-06-11 16:45", avatar: "C", tone: "blue", agentKey: "service" },
-  { name: "招商政策助手", desc: "解答业务问题，提升协作效率", type: "招商助手", status: "草稿", model: "gpt-4o-mini", knowledge: "招商资料库", calls: "128", updated: "2024-06-11 09:20", avatar: "B", tone: "orange", agentKey: "investment" },
-  { name: "内部制度助手", desc: "解答业务问题，提升协作效率", type: "SOP 助手", status: "已停用", model: "qwen-max", knowledge: "内部制度库", calls: "312", updated: "2024-06-10 18:30", avatar: "P", tone: "purple", agentKey: "sop" },
-  { name: "活动报名助手", desc: "解答业务问题，提升协作效率", type: "表单助手", status: "已发布", model: "gpt-4o-mini", knowledge: "-", calls: "689", updated: "2024-06-10 14:12", avatar: "F", tone: "green", agentKey: "form" },
-  { name: "订单查询助手", desc: "解答业务问题，提升协作效率", type: "API 助手", status: "草稿", model: "gpt-4o-mini", knowledge: "-", calls: "56", updated: "2024-06-09 11:05", avatar: "API", tone: "blue", agentKey: "api" }
-];
-const agentCenterMobileRows = [agentCenterRows[0], agentCenterRows[3]];
-const agentCenterWorkspaceProfiles: Record<string, Pick<AgentCenterWorkspace, "modeLabel" | "headline" | "prompt" | "toolTags" | "quickActions" | "sampleMessages">> = {
-  chat: {
-    modeLabel: "通用对话智能体",
-    headline: "多轮问答、任务拆解与内容生成",
-    prompt: "帮我把今天的产品需求整理成三条优先级，并给出下一步行动。",
-    toolTags: ["多轮对话", "内容生成", "任务拆解", "上下文记忆"],
-    quickActions: ["整理会议纪要", "生成运营文案", "拆解待办事项"],
-    sampleMessages: [
-      { role: "assistant", text: "你好，我可以帮你做通用问答、文案生成和任务拆解。把目标发给我，我会先梳理结构再给出结果。" }
-    ]
-  },
-  knowledge: {
-    modeLabel: "知识库智能体",
-    headline: "基于企业资料进行可追溯问答",
-    prompt: "查询产品知识库，说明当前会员套餐的权益差异和适用客户。",
-    toolTags: ["知识库检索", "引用来源", "权限过滤", "答案复核"],
-    quickActions: ["查询产品资料", "生成 FAQ", "比对政策差异"],
-    sampleMessages: [
-      { role: "assistant", text: "我会优先检索已绑定知识库，并在回答里标注来源，适合产品资料、制度文档和客户问题。" }
-    ]
-  },
-  sales: {
-    modeLabel: "销售助手",
-    headline: "线索跟进、异议处理与话术生成",
-    prompt: "客户觉得价格偏高，请生成一段顾问式跟进话术，语气专业但不强推。",
-    toolTags: ["销售话术", "客户画像", "异议处理", "跟进计划"],
-    quickActions: ["生成跟进话术", "分析客户意向", "制定成交路径"],
-    sampleMessages: [
-      { role: "assistant", text: "我可以根据客户阶段生成跟进话术，并把下一次触达目标、风险点和成交信号拆开。" }
-    ]
-  },
-  service: {
-    modeLabel: "客服助手",
-    headline: "7x24 问题解答与工单分流",
-    prompt: "用户反馈生成失败但点数已扣，请给出客服回复和后续处理步骤。",
-    toolTags: ["客服问答", "工单分流", "情绪安抚", "售后流程"],
-    quickActions: ["回复售后问题", "创建工单摘要", "识别高优先级问题"],
-    sampleMessages: [
-      { role: "assistant", text: "我会先安抚用户，再收集订单号、任务 ID 和错误截图，必要时转人工或补偿点数。" }
-    ]
-  },
-  investment: {
-    modeLabel: "招商助手",
-    headline: "招商政策解读与线索收集",
-    prompt: "为一个咨询加盟政策的客户生成首轮回复，并收集预算、区域和资源情况。",
-    toolTags: ["招商政策", "线索收集", "资格判断", "合作方案"],
-    quickActions: ["生成招商回复", "整理客户画像", "输出合作建议"],
-    sampleMessages: [
-      { role: "assistant", text: "我可以解释招商政策，并引导客户补充区域、预算、资源和预期合作模式。" }
-    ]
-  },
-  sop: {
-    modeLabel: "SOP 助手",
-    headline: "制度流程查询与执行检查",
-    prompt: "查询客户退款流程，并列出需要运营、财务分别确认的事项。",
-    toolTags: ["流程查询", "制度问答", "审批检查", "操作清单"],
-    quickActions: ["查询制度流程", "生成执行清单", "检查审批材料"],
-    sampleMessages: [
-      { role: "assistant", text: "我会按制度步骤拆成操作清单，并提醒你哪些节点需要审批或留痕。" }
-    ]
-  },
-  form: {
-    modeLabel: "表单助手",
-    headline: "表单收集、字段校验与结果归档",
-    prompt: "设计一个活动报名表，包含姓名、手机号、公司、意向服务和备注字段。",
-    toolTags: ["表单生成", "字段校验", "结果归档", "数据汇总"],
-    quickActions: ["创建报名表", "汇总表单结果", "检查缺失字段"],
-    sampleMessages: [
-      { role: "assistant", text: "我可以根据业务目标生成表单字段，并帮助你检查必填项、选项和结果归档规则。" }
-    ]
-  },
-  api: {
-    modeLabel: "API 助手",
-    headline: "外部接口查询、字段映射与调用排障",
-    prompt: "帮我检查订单查询接口需要哪些入参，并输出一份前端调用说明。",
-    toolTags: ["接口查询", "字段映射", "调用日志", "错误排查"],
-    quickActions: ["生成接口说明", "排查调用失败", "整理字段映射"],
-    sampleMessages: [
-      { role: "assistant", text: "我会围绕接口入参、鉴权、返回字段和错误码生成说明，便于前端或运营排查。" }
-    ]
-  }
-};
-const agentCenterMetrics = [
-  { label: "已发布智能体", value: "7", trend: "+18.5%" },
-  { label: "本周对话", value: "12.5K", trend: "+22.1%" },
-  { label: "知识库命中", value: "894", trend: "+9.8%" },
-  { label: "工具调用", value: "1.8K", trend: "+31.4%" }
-];
-const agentCenterTrend = [
-  { label: "06-06", height: "58%" },
-  { label: "06-07", height: "38%" },
-  { label: "06-08", height: "50%" },
-  { label: "06-09", height: "30%" },
-  { label: "06-10", height: "20%" },
-  { label: "06-11", height: "34%" },
-  { label: "06-12", height: "48%" },
-  { label: "", height: "78%" }
-];
-const agentCenterRanking = [
-  { name: "智能客服助手", calls: "2,350" },
-  { name: "产品知识助手", calls: "1,298" },
-  { name: "销售跟进助手", calls: "856" },
-  { name: "活动报名助手", calls: "689" },
-  { name: "OfficeCLI 文档智能体", calls: "326" }
-];
-const agentCenterShortcuts = [
-  { label: "模板库", icon: "TPL" },
-  { label: "工具配置", icon: "API" },
-  { label: "知识库", icon: "KB" },
-  { label: "调用日志", icon: "LOG" }
-];
-
-type OfficeCLICommand = { label: string; command: string };
-type OfficeCLIStatusResponse = {
-  available?: boolean;
-  binaryPath?: string;
-  version?: string;
-  error?: string;
-  runnerMode?: string;
-  installCommands?: OfficeCLICommand[];
-  mcpCommands?: OfficeCLICommand[];
-  capabilities?: Array<{ code: string; label: string }>;
-  formats?: string[];
-};
-type OfficeCLIFormat = "docx" | "xlsx" | "pptx";
-type OfficeCLIDocumentResponse = {
-  id: string;
-  fileName: string;
-  format: OfficeCLIFormat;
-  title: string;
-  downloadUrl: string;
-  size: number;
-  commands?: OfficeCLICommand[];
-};
-const officeCLIFormatOptions: Array<{ label: string; value: OfficeCLIFormat; desc: string }> = [
-  { label: "Word", value: "docx", desc: "报告 / 方案" },
-  { label: "Excel", value: "xlsx", desc: "表格 / 清单" },
-  { label: "PPT", value: "pptx", desc: "演示 / 汇报" }
-];
-const officeCLIStatus = ref<OfficeCLIStatusResponse | null>(null);
-const officeCLIStatusLoading = ref(false);
-const officeCLIForm = ref<{ format: OfficeCLIFormat; title: string; prompt: string }>({
-  format: "pptx",
-  title: "OfficeCLI 文档智能体演示",
-  prompt: "生成一份面向客户的 OfficeCLI 能力介绍，包含产品价值、适用场景和下一步计划。"
-});
-const officeCLIWorkspaceOpen = ref(false);
 const agentCenterWorkspace = ref<AgentCenterWorkspace | null>(null);
 const agentWorkspaceDraft = ref("");
 const agentWorkspaceMessages = ref<AgentWorkspaceMessage[]>([]);
 const agentCenterSubviewHistoryKey = "__xianzhiAgentSubview";
-const officeCLIDocumentGenerating = ref(false);
-const officeCLIDocumentResult = ref<OfficeCLIDocumentResponse | null>(null);
-const officeCLIStatusLabel = computed(() => {
-  if (officeCLIStatusLoading.value) return "检测中";
-  if (officeCLIStatus.value?.available) return "已安装";
-  if (officeCLIStatus.value) return "待安装";
-  return "未检测";
-});
-const officeCLIStatusTone = computed(() => officeCLIStatus.value?.available ? "ready" : officeCLIStatus.value ? "pending" : "idle");
-const officeCLIDocumentSizeText = computed(() => {
-  const size = officeCLIDocumentResult.value?.size || 0;
-  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
-  if (size >= 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-  return `${size} B`;
-});
-
-function agentKeyForItem(item: AgentCenterOpenable) {
-  if (item.officecli || item.name === "OfficeCLI 文档智能体") return "officecli";
-  return item.agentKey || item.name;
-}
-
-function isOfficeCLIItem(item: AgentCenterOpenable) {
-  return agentKeyForItem(item) === "officecli";
-}
-
-function buildAgentCenterWorkspace(item: AgentCenterOpenable): AgentCenterWorkspace {
-  const agentKey = agentKeyForItem(item);
-  const row = agentCenterRows.find((candidate) => candidate.agentKey === agentKey || candidate.name === item.name);
-  const profile = agentCenterWorkspaceProfiles[agentKey] || agentCenterWorkspaceProfiles.chat;
-  const name = item.name || row?.name || profile.modeLabel;
-  const desc = item.desc || row?.desc || "进入智能体工作台，进行测试、配置和运行状态查看。";
-  return {
-    agentKey,
-    name,
-    desc,
-    type: item.type || row?.type || profile.modeLabel,
-    status: item.status || row?.status || "待配置",
-    model: item.model || row?.model || "gpt-4o-mini",
-    knowledge: item.knowledge || row?.knowledge || "未绑定",
-    calls: item.calls || row?.calls || "0",
-    updated: item.updated || row?.updated || "刚刚",
-    avatar: item.avatar || item.icon || row?.avatar || name.slice(0, 1),
-    tone: item.tone || row?.tone || "purple",
-    modeLabel: profile.modeLabel,
-    headline: profile.headline,
-    prompt: profile.prompt,
-    toolTags: profile.toolTags,
-    quickActions: profile.quickActions,
-    sampleMessages: profile.sampleMessages
-  };
-}
+const {
+  officeCLIFormatOptions,
+  officeCLIStatus,
+  officeCLIStatusLoading,
+  officeCLIForm,
+  officeCLIWorkspaceOpen,
+  officeCLIDocumentGenerating,
+  officeCLIDocumentResult,
+  officeCLIStatusLabel,
+  officeCLIStatusTone,
+  officeCLIDocumentSizeText,
+  loadOfficeCLIStatus,
+  submitOfficeCLIDocument,
+  downloadOfficeCLIDocument
+} = useOfficeCLI({ hasAuthToken, downloadUrl });
 
 function scrollAgentCenterTop() {
   if (typeof window !== "undefined") {
@@ -4469,8 +4132,7 @@ function restoreAgentCenterSubviewFromHistory(agentKey: string) {
     openOfficeCLIWorkspace(false);
     return;
   }
-  const item = agentCenterRows.find((agent) => agent.agentKey === agentKey)
-    || agentCenterTemplates.find((template) => template.agentKey === agentKey);
+  const item = findAgentCenterOpenable(agentKey);
   if (item) {
     openAgentWorkspace(item, false);
     return;
@@ -4511,54 +4173,6 @@ function sendAgentWorkspaceMessage() {
   agentWorkspaceDraft.value = "";
 }
 
-async function loadOfficeCLIStatus() {
-  if (!hasAuthToken()) return;
-  officeCLIStatusLoading.value = true;
-  try {
-    officeCLIStatus.value = await adminRequest<OfficeCLIStatusResponse>({ method: "GET", url: "/officecli/status" });
-  } catch (error) {
-    officeCLIStatus.value = { available: false, error: error instanceof Error ? error.message : "OfficeCLI 状态检测失败" };
-  } finally {
-    officeCLIStatusLoading.value = false;
-  }
-}
-
-async function submitOfficeCLIDocument() {
-  const prompt = officeCLIForm.value.prompt.trim();
-  if (!prompt) {
-    ElMessage.warning("请先填写生成需求");
-    return;
-  }
-  officeCLIDocumentGenerating.value = true;
-  try {
-    if (!officeCLIStatus.value?.available) await loadOfficeCLIStatus();
-    if (!officeCLIStatus.value?.available) throw new Error("OfficeCLI 尚未可用，请先确认服务端安装状态");
-    officeCLIDocumentResult.value = await adminRequest<OfficeCLIDocumentResponse>({
-      method: "POST",
-      url: "/officecli/documents",
-      data: {
-        format: officeCLIForm.value.format,
-        title: officeCLIForm.value.title.trim() || "OfficeCLI 文档",
-        prompt
-      }
-    });
-    ElMessage.success("Office 文档已生成");
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "文档生成失败");
-  } finally {
-    officeCLIDocumentGenerating.value = false;
-  }
-}
-
-async function downloadOfficeCLIDocument() {
-  const result = officeCLIDocumentResult.value;
-  if (!result) return;
-  try {
-    await downloadUrl(result.downloadUrl, result.fileName);
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "文件下载失败");
-  }
-}
 const agentMobileBottomNav = [
   { label: "首页", letter: "H", targetId: "userDashboard" },
   { label: "创作", letter: "+", targetId: "userAiImage" },
@@ -4647,26 +4261,6 @@ type AiGenerationTaskSnapshot = {
   createdAt: string;
 };
 type AiFavoriteCollection = { id: string; name: string; taskIds: string[]; createdAt?: string; updatedAt?: string };
-type VideoHistoryStatus = "success" | "generating" | "failed";
-type VideoHistoryEntry = {
-  id: string;
-  taskId?: string;
-  backendTaskId?: string;
-  url: string;
-  prompt: string;
-  model: string;
-  mode: "text-to-video" | "image-to-video" | "video-to-video";
-  aspect_ratio: string;
-  duration: number | string;
-  resolution: string;
-  inputImageUrls: string[];
-  inputVideoUrl: string;
-  createdAt: string;
-  timestamp: number;
-  status: VideoHistoryStatus;
-  errorMessage?: string;
-  userId?: string;
-};
 type AiAgentMessage = { role: "user" | "assistant"; content: string; createdAt?: string };
 type AiAgentConversation = { id: string; title: string; messages: AiAgentMessage[]; createdAt: string; updatedAt?: string };
 type PromptEditableExpose = { focus: () => void; adjustHeight: () => void };

@@ -1,0 +1,78 @@
+name: user-core
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  user-core:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm.cmd ci --ignore-scripts
+
+      - name: Install miniapp dependencies
+        run: npm.cmd --prefix miniapp ci --ignore-scripts
+
+      - name: Install user-uni dependencies
+        run: npm.cmd --prefix apps/user-uni ci --ignore-scripts
+
+      - name: Install admin dependencies
+        run: npm.cmd --prefix admin-vue ci --ignore-scripts
+
+      - name: Build shared packages
+        run: npm.cmd run build:packages
+
+      - name: Typecheck user core
+        run: npm.cmd run typecheck:user-core
+
+      - name: Build H5 user clients
+        run: npm.cmd run build:user-h5
+
+      - name: Build admin client
+        run: npm.cmd run build:admin
+
+      - name: Smoke test H5 user client
+        run: npm.cmd run test:user-h5:smoke
+
+      - name: Build WeChat mini program
+        run: npm.cmd run build:user-mp-weixin
+
+      - name: Build App Plus
+        run: npm.cmd run build:user-app-plus
+
+      - name: Build Harmony App
+        run: npm.cmd run build:user-app-harmony
+
+      - name: Build Harmony mini program
+        run: npm.cmd run build:user-mp-harmony
+
+  backend-go:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend-go/go.mod
+          cache-dependency-path: backend-go/go.sum
+
+      - name: Test backend
+        working-directory: backend-go
+        run: go test ./...

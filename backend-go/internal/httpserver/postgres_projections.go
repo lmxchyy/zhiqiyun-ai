@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const runtimeProjectionSchema = `
@@ -116,6 +117,20 @@ CREATE TABLE IF NOT EXISTS xz_billing_events (
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS xz_payment_events (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  transaction_id TEXT,
+  amount_cents BIGINT NOT NULL DEFAULT 0,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+  verified BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(provider, event_id),
+  UNIQUE(provider, transaction_id)
+);
+
 CREATE TABLE IF NOT EXISTS xz_withdrawals (
   id TEXT PRIMARY KEY,
   agent_id TEXT,
@@ -184,10 +199,14 @@ CREATE TABLE IF NOT EXISTS xz_assets (
   thumbnail_url TEXT,
   favorite BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  deleted_at TIMESTAMPTZ,
   created_at TEXT,
   updated_at TEXT,
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+
+ALTER TABLE xz_assets
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS xz_ai_state (
   user_id TEXT PRIMARY KEY,
@@ -257,8 +276,10 @@ CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_created ON xz_generation
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_module_code ON xz_generation_tasks(module_code);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_id ON xz_assets(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_created ON xz_assets(user_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_assets_user_active_created ON xz_assets(user_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_xz_billing_events_module_code ON xz_billing_events(module_code);
 CREATE INDEX IF NOT EXISTS idx_xz_billing_events_user_occurred ON xz_billing_events(user_id, occurred_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_payment_events_order ON xz_payment_events(order_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_commissions_agent_created ON xz_commissions(agent_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_withdrawals_agent_created ON xz_withdrawals(agent_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_api_channels_status ON xz_api_channels(status);
@@ -293,6 +314,9 @@ func (b postgresStateBackend) syncRuntimeProjections(ctx context.Context, conten
 		return err
 	}
 	if err := upsertOrders(ctx, tx, data.Orders); err != nil {
+		return err
+	}
+	if err := upsertPaymentEvents(ctx, tx, data.PaymentEvents); err != nil {
 		return err
 	}
 	if err := upsertChannelAgents(ctx, tx, data.ChannelAgents); err != nil {
@@ -521,6 +545,29 @@ func upsertWithdrawals(ctx context.Context, tx *sql.Tx, items []adminWithdrawal)
 	return nil
 }
 
+func upsertPaymentEvents(ctx context.Context, tx *sql.Tx, items []adminPaymentEvent) error {
+	for _, item := range items {
+		item = normalizePaymentCallbackEvent(item)
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO xz_payment_events (id, provider, event_id, order_id, transaction_id, amount_cents, raw, verified, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::timestamptz)
+			ON CONFLICT (id) DO UPDATE SET
+				provider = excluded.provider,
+				event_id = excluded.event_id,
+				order_id = excluded.order_id,
+				transaction_id = excluded.transaction_id,
+				amount_cents = excluded.amount_cents,
+				raw = excluded.raw,
+				verified = excluded.verified,
+				created_at = excluded.created_at
+		`, item.ID, item.Provider, item.EventID, item.OrderID, nullableSQLString(item.TransactionID), item.AmountCents, jsonProjection(item), item.Verified, item.CreatedAt)
+		if err != nil {
+			return fmt.Errorf("upsert xz_payment_events %s: %w", item.ID, err)
+		}
+	}
+	return nil
+}
+
 func upsertGenerationTasks(ctx context.Context, tx *sql.Tx, items []generationTask) error {
 	for _, item := range items {
 		_, err := tx.ExecContext(ctx, `
@@ -552,8 +599,8 @@ func upsertGenerationTasks(ctx context.Context, tx *sql.Tx, items []generationTa
 func upsertAssets(ctx context.Context, tx *sql.Tx, items []asset) error {
 	for _, item := range items {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO xz_assets (id, user_id, task_id, name, media_type, url, thumbnail_url, favorite, metadata, created_at, updated_at, raw)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12::jsonb)
+			INSERT INTO xz_assets (id, user_id, task_id, name, media_type, url, thumbnail_url, favorite, metadata, deleted_at, created_at, updated_at, raw)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13::jsonb)
 			ON CONFLICT (id) DO UPDATE SET
 				user_id = excluded.user_id,
 				task_id = excluded.task_id,
@@ -563,10 +610,11 @@ func upsertAssets(ctx context.Context, tx *sql.Tx, items []asset) error {
 				thumbnail_url = excluded.thumbnail_url,
 				favorite = excluded.favorite,
 				metadata = excluded.metadata,
+				deleted_at = excluded.deleted_at,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at,
 				raw = excluded.raw
-		`, item.ID, item.UserID, item.TaskID, item.Name, item.MediaType, item.URL, item.ThumbnailURL, item.Favorite, jsonProjection(item.Metadata), item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		`, item.ID, item.UserID, item.TaskID, item.Name, item.MediaType, item.URL, item.ThumbnailURL, item.Favorite, jsonProjection(item.Metadata), nullableSQLString(item.DeletedAt), item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_assets %s: %w", item.ID, err)
 		}
@@ -636,6 +684,11 @@ func jsonProjection(value any) string {
 		return "null"
 	}
 	return string(raw)
+}
+
+func nullableSQLString(value string) sql.NullString {
+	value = strings.TrimSpace(value)
+	return sql.NullString{String: value, Valid: value != ""}
 }
 
 func planPriceCents(plan adminPlan) int {

@@ -119,6 +119,7 @@
 | `S3_ENDPOINT` | MinIO 或云对象存储地址。 |
 | `S3_ACCESS_KEY` | 对象存储访问 Key。 |
 | `S3_SECRET_KEY` | 对象存储密钥。 |
+| `S3_BUCKET` | 生成作品、附件和导出文件使用的对象存储桶名。 |
 | `OPENAI_API_KEY` / `MODEL_PROVIDER_API_KEY` | 默认模型供应商密钥。 |
 | `OPENAI_BASE_URL` / `MODEL_PROVIDER_URL` | OpenAI 或兼容模型服务地址。 |
 | `MODEL_PROVIDER_KIND` | 模型供应商类型。 |
@@ -131,6 +132,8 @@
 | `ALIPAY_CALLBACK_SECRET` | 支付宝回调密钥。 |
 | `METRICS_TOKEN` | 指标或内部运维接口 Token。 |
 | `XIANZHI_ENFORCE_RBAC` | 是否强制启用后台 RBAC，生产建议为 `true`。 |
+| `XIANZHI_DEV_AUTH_FALLBACK` / `XIANZHI_ALLOW_INSECURE_AUTH_TOKEN` | 是否允许无 Redis 的开发 token 降级，生产必须为 `false`。 |
+| `XIANZHI_ENABLE_MOCK_LOGIN` / `XIANZHI_ALLOW_WECHAT_MOCK_LOGIN` | 是否允许小程序 mock 登录，生产必须为 `false`。 |
 | `XIANZHI_DATA_PATH` | JSON fallback 文件路径，生产仅用于兼容或降级。 |
 | `XIANZHI_STATIC_DIR` | 产品端 H5 静态资源目录。 |
 | `XIANZHI_ADMIN_STATIC_DIR` | 管理后台静态资源目录。 |
@@ -229,6 +232,10 @@ Get-ChildItem database\migrations\*.sql | Sort-Object Name
 
 ```text
 XIANZHI_ENFORCE_RBAC=true
+XIANZHI_DEV_AUTH_FALLBACK=false
+XIANZHI_ALLOW_INSECURE_AUTH_TOKEN=false
+XIANZHI_ENABLE_MOCK_LOGIN=false
+XIANZHI_ALLOW_WECHAT_MOCK_LOGIN=false
 MODEL_PROVIDER_TIMEOUT_MS=30000
 ```
 

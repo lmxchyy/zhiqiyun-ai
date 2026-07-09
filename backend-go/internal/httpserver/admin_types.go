@@ -7,6 +7,7 @@ type adminPlatformData struct {
 	TokenRecords       []adminTokenRecord       `json:"tokenRecords,omitempty"`
 	Orders             []adminOrder             `json:"orders"`
 	Payments           []adminPayment           `json:"payments"`
+	PaymentEvents      []adminPaymentEvent      `json:"paymentEvents,omitempty"`
 	ChannelAgents      []adminChannelAgent      `json:"channelAgents"`
 	OperationCenters   []adminOperationCenter   `json:"operationCenters,omitempty"`
 	CustomerRelations  []adminCustomerRelation  `json:"customerRelations,omitempty"`
@@ -141,6 +142,18 @@ type adminPayment struct {
 	Amount    int    `json:"amount"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"createdAt"`
+}
+
+type adminPaymentEvent struct {
+	ID            string         `json:"id"`
+	Provider      string         `json:"provider"`
+	EventID       string         `json:"eventId"`
+	OrderID       string         `json:"orderId"`
+	TransactionID string         `json:"transactionId,omitempty"`
+	AmountCents   int            `json:"amountCents"`
+	Verified      bool           `json:"verified"`
+	Raw           map[string]any `json:"raw,omitempty"`
+	CreatedAt     string         `json:"createdAt"`
 }
 
 type adminChannelAgent struct {

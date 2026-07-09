@@ -2,12 +2,15 @@ package httpserver
 
 import (
 	"compress/gzip"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +21,7 @@ import (
 )
 
 func New(cfg config.Config) *http.Server {
-	return newWithStore(cfg, newJSONStore(cfg.DataPath))
+	return newWithStoreAndSessions(cfg, newJSONStore(cfg.DataPath), defaultAuthSessions(cfg, nil))
 }
 
 func NewWithDatabase(cfg config.Config, db *sql.DB) *http.Server {
@@ -30,11 +33,21 @@ func NewWithInfrastructure(cfg config.Config, db *sql.DB, redisClient *redis.Cli
 	if db != nil {
 		store = newPostgresPrimaryStore(db, cfg.DataPath)
 	}
-	return newWithStoreAndSessions(cfg, store, newRedisAuthSessions(redisClient))
+	return newWithStoreAndSessions(cfg, store, defaultAuthSessions(cfg, redisClient))
 }
 
 func newWithStore(cfg config.Config, store platformStore) *http.Server {
-	return newWithStoreAndSessions(cfg, store, nil)
+	return newWithStoreAndSessions(cfg, store, defaultAuthSessions(cfg, nil))
+}
+
+func defaultAuthSessions(cfg config.Config, redisClient *redis.Client) authSessionStore {
+	if sessions := newRedisAuthSessions(redisClient); sessions != nil {
+		return sessions
+	}
+	if cfg.IsProduction() {
+		return nil
+	}
+	return newLocalAuthSessions()
 }
 
 func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions authSessionStore) *http.Server {
@@ -45,6 +58,8 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	router.Use(requestContextMiddleware())
+	router.Use(corsMiddleware(cfg.CORSAllowedOrigins))
 	router.Use(gzipMiddleware())
 	if pgStore, ok := store.(*postgresStore); ok {
 		router.Use(pgStore.auditMiddleware())
@@ -57,6 +72,7 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 	v1.POST("/auth/wechat-mini-program/login", wrapF(auth.wechatMiniProgramLogin))
 	v1.POST("/auth/register", wrapF(auth.register))
 	v1.GET("/auth/me", wrapF(auth.me))
+	v1.POST("/auth/refresh", wrapF(auth.refresh))
 	v1.POST("/auth/logout", wrapF(auth.logout))
 	v1.POST("/auth/change-password", wrapF(auth.changePassword))
 	v1.GET("/channel/me", wrapF(channel.me))
@@ -145,6 +161,8 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 			}
 			pgStore.rbacMiddleware(auth, permission)(c)
 		})
+	} else {
+		adminGroup.Use(superAdminMiddleware(auth))
 	}
 	adminGroup.GET("/overview", wrapF(admin.overview))
 	adminGroup.GET("/customers", wrapF(admin.customers))
@@ -250,6 +268,90 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
+}
+
+const requestIDHeader = "X-Request-Id"
+const corsAllowedHeaders = "Authorization, Content-Type, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language"
+const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+
+func requestContextMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		requestID := sanitizeRequestID(c.GetHeader(requestIDHeader))
+		if requestID == "" {
+			requestID = newRequestID()
+		}
+		c.Set("request_id", requestID)
+		c.Header(requestIDHeader, requestID)
+		c.Header("Access-Control-Expose-Headers", requestIDHeader)
+		c.Next()
+	}
+}
+
+func corsMiddleware(allowedOrigins string) gin.HandlerFunc {
+	allowed, allowAll := parseAllowedOrigins(allowedOrigins)
+	return func(c *gin.Context) {
+		origin := strings.TrimSpace(c.GetHeader("Origin"))
+		if origin == "" {
+			c.Next()
+			return
+		}
+		if !allowAll {
+			if _, ok := allowed[origin]; !ok {
+				c.Next()
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+			c.Header("Vary", "Origin")
+		} else {
+			c.Header("Access-Control-Allow-Origin", "*")
+		}
+		c.Header("Access-Control-Allow-Methods", corsAllowedMethods)
+		c.Header("Access-Control-Allow-Headers", corsAllowedHeaders)
+		c.Header("Access-Control-Expose-Headers", requestIDHeader)
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	}
+}
+
+func parseAllowedOrigins(value string) (map[string]struct{}, bool) {
+	allowed := make(map[string]struct{})
+	for _, item := range strings.Split(value, ",") {
+		origin := strings.TrimSpace(item)
+		if origin == "" {
+			continue
+		}
+		if origin == "*" {
+			return allowed, true
+		}
+		allowed[origin] = struct{}{}
+	}
+	return allowed, false
+}
+
+func sanitizeRequestID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 0 || len(value) > 128 {
+		return ""
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == ':' {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func newRequestID() string {
+	var randomBytes [8]byte
+	if _, err := rand.Read(randomBytes[:]); err != nil {
+		return "req_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "req_" + strconv.FormatInt(time.Now().UnixNano(), 36) + "_" + hex.EncodeToString(randomBytes[:])
 }
 
 func wrapF(handler http.HandlerFunc) gin.HandlerFunc {

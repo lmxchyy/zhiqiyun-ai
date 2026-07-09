@@ -86,6 +86,17 @@ docker compose -f compose.prod.yml --env-file .env logs -f --tail=100
 
 Fill `.env` with real production values before starting services. Never commit `.env`.
 
+Required production infrastructure values are validated both by Compose and by the Go API startup path:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `RABBITMQ_URL`
+- `S3_ENDPOINT`
+- `S3_ACCESS_KEY`
+- `S3_SECRET_KEY`
+- `S3_BUCKET`
+- `PAYMENT_CALLBACK_SECRET`
+
 If the server does not preserve executable bits from Git, run:
 
 ```bash
@@ -166,7 +177,9 @@ This is intended for Nginx, Nginx Proxy Manager, Caddy, or another reverse proxy
 
 PostgreSQL, Redis, RabbitMQ, and MinIO should not be exposed directly to the public internet. Redis must use a password. PostgreSQL, RabbitMQ, and MinIO must use strong non-default passwords in `.env`.
 
-The current production file uses fixed versions for PostgreSQL, Redis, and RabbitMQ, but MinIO still uses `minio/minio:latest`. For stricter production reproducibility, pin MinIO to a tested release tag.
+The current production file uses fixed versions for PostgreSQL, Redis, and RabbitMQ. MinIO is pinned by default through `MINIO_IMAGE`; update that value only after testing a new MinIO release.
+
+The Docker image does not install OfficeCLI by default. If you explicitly build with `INSTALL_OFFICECLI=true`, set `OFFICECLI_INSTALL_SHA256` to the reviewed installer script checksum; the build fails before execution when the checksum is missing or mismatched.
 
 The migration service currently runs every SQL file in `database/migrations` during Compose startup. Before releases with schema changes, review whether migrations are idempotent. A later improvement is to add a migration history table or a dedicated migration tool.
 

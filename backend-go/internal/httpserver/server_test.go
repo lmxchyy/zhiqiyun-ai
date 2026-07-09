@@ -4,11 +4,21 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -269,7 +279,8 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("task missing ai capability snapshot: %+v", task)
 	}
 
-	overview := request(t, handler, http.MethodGet, "/api/v1/admin/ai/overview", nil)
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	overview := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/ai/overview", nil, adminToken)
 	body := overview.Body.String()
 	if overview.Code != http.StatusOK || !strings.Contains(body, `"modules"`) || !strings.Contains(body, `"billingRules"`) || !strings.Contains(body, task.ID) {
 		t.Fatalf("admin ai overview missing capability data: %d %s", overview.Code, body)
@@ -465,6 +476,89 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 	}
 }
 
+func TestRequestIDHeaderIsMirroredOrGenerated(t *testing.T) {
+	server := New(config.Config{
+		Addr:      ":0",
+		DataPath:  filepath.Join(t.TempDir(), "store.json"),
+		StaticDir: t.TempDir(),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set(requestIDHeader, "client-trace-123")
+	res := httptest.NewRecorder()
+	server.Handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("health status = %d, body = %s", res.Code, res.Body.String())
+	}
+	if got := res.Header().Get(requestIDHeader); got != "client-trace-123" {
+		t.Fatalf("%s = %q, want client-trace-123", requestIDHeader, got)
+	}
+	if expose := res.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(expose, requestIDHeader) {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want %s", expose, requestIDHeader)
+	}
+
+	generatedReq := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	generatedRes := httptest.NewRecorder()
+	server.Handler.ServeHTTP(generatedRes, generatedReq)
+	if got := generatedRes.Header().Get(requestIDHeader); !strings.HasPrefix(got, "req_") {
+		t.Fatalf("generated %s = %q, want req_ prefix", requestIDHeader, got)
+	}
+}
+
+func TestCORSMiddlewareHandlesConfiguredOrigins(t *testing.T) {
+	server := New(config.Config{
+		Addr:               ":0",
+		DataPath:           filepath.Join(t.TempDir(), "store.json"),
+		StaticDir:          t.TempDir(),
+		CORSAllowedOrigins: "https://app.example.com, https://desktop.example.com",
+	})
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	preflight.Header.Set("Origin", "https://desktop.example.com")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	preflight.Header.Set("Access-Control-Request-Headers", "Authorization, X-Request-Id, X-Client-Platform")
+	preflightRes := httptest.NewRecorder()
+	server.Handler.ServeHTTP(preflightRes, preflight)
+	if preflightRes.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, body = %s", preflightRes.Code, preflightRes.Body.String())
+	}
+	if got := preflightRes.Header().Get("Access-Control-Allow-Origin"); got != "https://desktop.example.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := preflightRes.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q", got)
+	}
+	if got := preflightRes.Header().Get("Vary"); !strings.Contains(got, "Origin") {
+		t.Fatalf("Vary = %q, want Origin", got)
+	}
+	allowHeaders := preflightRes.Header().Get("Access-Control-Allow-Headers")
+	for _, want := range []string{requestIDHeader, "X-Client-Platform", "X-Client-Version"} {
+		if !strings.Contains(allowHeaders, want) {
+			t.Fatalf("Access-Control-Allow-Headers missing %q: %q", want, allowHeaders)
+		}
+	}
+	allowMethods := preflightRes.Header().Get("Access-Control-Allow-Methods")
+	for _, want := range []string{http.MethodPost, http.MethodOptions} {
+		if !strings.Contains(allowMethods, want) {
+			t.Fatalf("Access-Control-Allow-Methods missing %q: %q", want, allowMethods)
+		}
+	}
+	if expose := preflightRes.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(expose, requestIDHeader) {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want %s", expose, requestIDHeader)
+	}
+
+	blocked := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	blocked.Header.Set("Origin", "https://evil.example.com")
+	blockedRes := httptest.NewRecorder()
+	server.Handler.ServeHTTP(blockedRes, blocked)
+	if blockedRes.Code != http.StatusOK {
+		t.Fatalf("blocked-origin health status = %d, body = %s", blockedRes.Code, blockedRes.Body.String())
+	}
+	if got := blockedRes.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unconfigured origin should not receive CORS allow-origin, got %q", got)
+	}
+}
+
 func TestGenerationAssetNameUsesTaskType(t *testing.T) {
 	got := generationAssetName("IMAGE_TO_IMAGE", "task_000123", 0)
 	if got != "IMAGE_TO_IMAGE-task_000123-01" {
@@ -481,6 +575,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	})
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
 	pointsBefore := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
 	if pointsBefore.Code != http.StatusOK || !strings.Contains(pointsBefore.Body.String(), `"available":959`) {
@@ -510,28 +605,28 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 		t.Fatalf("assets not visible after generation: %d %s", assets.Code, assets.Body.String())
 	}
 
-	customers := request(t, handler, http.MethodGet, "/api/v1/admin/customers", nil)
+	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	if customers.Code != http.StatusOK || !strings.Contains(customers.Body.String(), `"pointsAvailable":957`) || !strings.Contains(customers.Body.String(), "演示用户") {
 		t.Fatalf("admin customers did not reflect deducted points: %d %s", customers.Code, customers.Body.String())
 	}
 
-	adminTasks := request(t, handler, http.MethodGet, "/api/v1/admin/generation-tasks", nil)
+	adminTasks := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/generation-tasks", nil, adminToken)
 	adminTaskBody := adminTasks.Body.String()
 	if adminTasks.Code != http.StatusOK || !strings.Contains(adminTaskBody, task.ID) || !strings.Contains(adminTaskBody, `"pointCost":2`) || !strings.Contains(adminTaskBody, task.ResultIDs[0]) {
 		t.Fatalf("admin generation tasks missing closed-loop data: %d %s", adminTasks.Code, adminTaskBody)
 	}
 
-	overview := request(t, handler, http.MethodGet, "/api/v1/admin/overview", nil)
+	overview := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/overview", nil, adminToken)
 	if overview.Code != http.StatusOK || !strings.Contains(overview.Body.String(), `"generatedAssets":2`) {
 		t.Fatalf("admin overview missing generated assets: %d %s", overview.Code, overview.Body.String())
 	}
 
-	usage := request(t, handler, http.MethodGet, "/api/v1/admin/usage", nil)
+	usage := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/usage", nil, adminToken)
 	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `"apiCalls":1`) || !strings.Contains(usage.Body.String(), `"assets":2`) {
 		t.Fatalf("admin usage missing generation counters: %d %s", usage.Code, usage.Body.String())
 	}
 
-	billing := request(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil)
+	billing := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil, adminToken)
 	billingBody := billing.Body.String()
 	if billing.Code != http.StatusOK || !strings.Contains(billingBody, task.ID) || !strings.Contains(billingBody, `"balanceBefore":959`) || !strings.Contains(billingBody, `"balanceAfter":957`) {
 		t.Fatalf("billing events missing generation task: %d %s", billing.Code, billingBody)
@@ -660,7 +755,8 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 		t.Fatalf("ppt usage event for %s not found: %+v", createResp.TaskID, usage.Items)
 	}
 
-	billing := request(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil)
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	billing := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil, adminToken)
 	if billing.Code != http.StatusOK || !strings.Contains(billing.Body.String(), createResp.TaskID) || !strings.Contains(billing.Body.String(), billingMetricPPTGenerate) {
 		t.Fatalf("admin billing events missing ppt usage: %d %s", billing.Code, billing.Body.String())
 	}
@@ -787,6 +883,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	raw := `{
 		"users":[
+			{"id":"user_000001","email":"admin@xianzhi.ai","name":"平台管理员","role":"SUPER_ADMIN","status":"ACTIVE","planId":"plan_free"},
 			{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month","referredBy":"user_000003"},
 			{"id":"user_000003","email":"agent1@xianzhi.ai","name":"华东推广员","role":"AGENT_L1","status":"ACTIVE","planId":"plan_free"},
 			{"id":"user_000004","email":"agent2@xianzhi.ai","name":"华东初级代理商","role":"AGENT_L2","status":"ACTIVE","planId":"plan_free"}
@@ -808,6 +905,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
 	login := request(t, handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"agent1@xianzhi.ai","password":"Agent123!"}`))
 	if login.Code != http.StatusOK {
@@ -853,7 +951,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	if resAfterRegister.Code != http.StatusOK || !strings.Contains(resAfterRegister.Body.String(), "邀请注册用户") || !strings.Contains(resAfterRegister.Body.String(), `"directCustomers":2`) {
 		t.Fatalf("channel center after register = %d %s", resAfterRegister.Code, resAfterRegister.Body.String())
 	}
-	adminCustomers := request(t, handler, http.MethodGet, "/api/v1/admin/customers", nil)
+	adminCustomers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	adminCustomerBody := adminCustomers.Body.String()
 	if adminCustomers.Code != http.StatusOK || !strings.Contains(adminCustomerBody, "邀请注册用户") || !strings.Contains(adminCustomerBody, `"sourceInviteCode":"EAST001"`) || !strings.Contains(adminCustomerBody, `"sourceAgentName":"华东推广员"`) {
 		t.Fatalf("admin customers after invite register = %d %s", adminCustomers.Code, adminCustomerBody)
@@ -974,6 +1072,7 @@ func TestWeChatMiniProgramMockLogin(t *testing.T) {
 		t.Fatalf("unconfigured wechat login status = %d, body = %s", unconfigured.Code, unconfigured.Body.String())
 	}
 
+	t.Setenv("XIANZHI_ENABLE_MOCK_LOGIN", "true")
 	login := request(t, handler, http.MethodPost, "/api/v1/auth/wechat-mini-program/login", bytes.NewBufferString(`{"code":"mock-devtools-code"}`))
 	if login.Code != http.StatusOK {
 		t.Fatalf("mock wechat login status = %d, body = %s", login.Code, login.Body.String())
@@ -1102,8 +1201,9 @@ func TestCreateChannelAgentPersistsUserAndTree(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	createL1 := request(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试推广员","email":"agent-new@example.com","level":1,"inviteCode":"NEW001","status":"ACTIVE","available":88}`))
+	createL1 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试推广员","email":"agent-new@example.com","level":1,"inviteCode":"NEW001","status":"ACTIVE","available":88}`), adminToken)
 	if createL1.Code != http.StatusOK {
 		t.Fatalf("create level 1 channel agent status = %d, body = %s", createL1.Code, createL1.Body.String())
 	}
@@ -1119,11 +1219,11 @@ func TestCreateChannelAgentPersistsUserAndTree(t *testing.T) {
 	}
 
 	parentID, _ := l1Body.Item["id"].(string)
-	createL2 := request(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试初级代理商","email":"agent-child@example.com","level":2,"parentId":"`+parentID+`","status":"ACTIVE"}`))
+	createL2 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试初级代理商","email":"agent-child@example.com","level":2,"parentId":"`+parentID+`","status":"ACTIVE"}`), adminToken)
 	if createL2.Code != http.StatusOK {
 		t.Fatalf("create level 2 channel agent status = %d, body = %s", createL2.Code, createL2.Body.String())
 	}
-	createL3 := request(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试高级代理商","email":"agent-senior@example.com","level":3,"status":"ACTIVE"}`))
+	createL3 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试高级代理商","email":"agent-senior@example.com","level":3,"status":"ACTIVE"}`), adminToken)
 	if createL3.Code != http.StatusOK || !strings.Contains(createL3.Body.String(), `"role":"AGENT_L3"`) {
 		t.Fatalf("create level 3 channel agent status = %d, body = %s", createL3.Code, createL3.Body.String())
 	}
@@ -1133,7 +1233,7 @@ func TestCreateChannelAgentPersistsUserAndTree(t *testing.T) {
 		t.Fatalf("created agent login failed: %d %s", login.Code, login.Body.String())
 	}
 
-	tree := request(t, handler, http.MethodGet, "/api/v1/admin/channel-agents/tree", nil)
+	tree := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/channel-agents/tree", nil, adminToken)
 	body := tree.Body.String()
 	for _, want := range []string{"测试推广员", "测试初级代理商", "测试高级代理商", "NEW001"} {
 		if !strings.Contains(body+createL1.Body.String(), want) {
@@ -1171,7 +1271,8 @@ func TestUserAssetAndTaskListsAreIsolatedByLoginUser(t *testing.T) {
 		],
 		"assets":[
 			{"id":"asset_demo","userId":"user_000002","taskId":"task_demo","name":"demo asset","mediaType":"image","url":"data:image/svg+xml;base64,PHN2Zy8+","favorite":false,"metadata":{}},
-			{"id":"asset_demo2","userId":"user_000010","taskId":"task_demo2","name":"demo2 asset","mediaType":"image","url":"data:image/svg+xml;base64,PHN2Zy8+","favorite":false,"metadata":{}}
+			{"id":"asset_demo2","userId":"user_000010","taskId":"task_demo2","name":"demo2 asset","mediaType":"image","url":"data:image/svg+xml;base64,PHN2Zy8+","favorite":false,"metadata":{}},
+			{"id":"asset_private","userId":"user_000010","taskId":"task_demo2","name":"private asset","mediaType":"image","url":"http://127.0.0.1/private.png","favorite":false,"metadata":{}}
 		],
 		"counters":{}
 	}`
@@ -1194,6 +1295,23 @@ func TestUserAssetAndTaskListsAreIsolatedByLoginUser(t *testing.T) {
 	if download.Code != http.StatusNotFound {
 		t.Fatalf("demo2 could download demo asset: %d %s", download.Code, download.Body.String())
 	}
+	privateDownload := authedRequest(t, handler, http.MethodGet, "/api/v1/assets/asset_private/download", nil, demo2Token)
+	if privateDownload.Code != http.StatusBadRequest || !strings.Contains(privateDownload.Body.String(), "not public") {
+		t.Fatalf("private asset download was not blocked: %d %s", privateDownload.Code, privateDownload.Body.String())
+	}
+	deleteOther := authedRequest(t, handler, http.MethodDelete, "/api/v1/assets/asset_demo", nil, demo2Token)
+	if deleteOther.Code != http.StatusNotFound {
+		t.Fatalf("demo2 could delete demo asset: %d %s", deleteOther.Code, deleteOther.Body.String())
+	}
+	demoToken := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+	demoAssets := authedRequest(t, handler, http.MethodGet, "/api/v1/assets", nil, demoToken)
+	if demoAssets.Code != http.StatusOK || !strings.Contains(demoAssets.Body.String(), "asset_demo") {
+		t.Fatalf("demo asset was removed by other user delete attempt: %d %s", demoAssets.Code, demoAssets.Body.String())
+	}
+	deleteOwn := authedRequest(t, handler, http.MethodDelete, "/api/v1/assets/asset_demo2", nil, demo2Token)
+	if deleteOwn.Code != http.StatusOK {
+		t.Fatalf("demo2 could not delete own asset: %d %s", deleteOwn.Code, deleteOwn.Body.String())
+	}
 
 	create := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"type":"TEXT_TO_IMAGE","prompt":"demo2 create","model":"mock-standard","params":{"count":1}}`), demo2Token)
 	if create.Code != http.StatusOK {
@@ -1209,6 +1327,33 @@ func TestUserAssetAndTaskListsAreIsolatedByLoginUser(t *testing.T) {
 	createdTasks := authedRequest(t, handler, http.MethodGet, "/api/v1/generation-tasks", nil, demo2Token)
 	if createdTasks.Code != http.StatusOK || !strings.Contains(createdTasks.Body.String(), created.ID) || strings.Contains(createdTasks.Body.String(), `"userId":"user_000002"`) {
 		t.Fatalf("demo2 created task not isolated: %d %s", createdTasks.Code, createdTasks.Body.String())
+	}
+}
+
+func TestSelectedProviderMustSupportRequestedModel(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	raw := `{
+		"users":[{"id":"user_000002","email":"demo@xianzhi.ai","name":"demo","role":"MEMBER","status":"ACTIVE","planId":"plan_month"}],
+		"pointAccounts":[{"id":"points_000002","userId":"user_000002","available":3000,"frozen":0}],
+		"apiChannels":[
+			{"id":"channel_video_only","name":"video-only","baseUrl":"https://provider.example.com/v1","status":"ACTIVE","priority":10,"models":["doubao-seedance-2.0"]}
+		],
+		"apiKeys":[{"id":"key_video_only","customer":"channel_video_only","secret":"sk-video-only","status":"ACTIVE","models":["doubao-seedance-2.0"]}],
+		"counters":{}
+	}`
+	if err := os.WriteFile(dataPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	token := loginToken(t, server.Handler, "demo@xianzhi.ai", "Demo123!")
+	body := `{"type":"TEXT_TO_IMAGE","prompt":"should not route","model":"gpt-image-2","params":{"provider":"channel_video_only","count":1}}`
+	res := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(body), token)
+	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "does not support model gpt-image-2") {
+		t.Fatalf("unsupported provider/model was not rejected: %d %s", res.Code, res.Body.String())
+	}
+	tasks := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/generation-tasks", nil, token)
+	if tasks.Code != http.StatusOK || strings.Contains(tasks.Body.String(), "should not route") {
+		t.Fatalf("task was created despite unsupported provider/model: %d %s", tasks.Code, tasks.Body.String())
 	}
 }
 
@@ -1234,6 +1379,7 @@ func TestAdminAPIsReadMasterControlData(t *testing.T) {
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
 	})
+	adminToken := loginToken(t, server.Handler, "admin@xianzhi.ai", "Admin123!")
 
 	for _, path := range []string{
 		"/api/v1/admin/overview",
@@ -1253,10 +1399,10 @@ func TestAdminAPIsReadMasterControlData(t *testing.T) {
 		"/v1/dashboard/billing/subscription",
 		"/v1/dashboard/billing/usage",
 	} {
-		assertStatus(t, server.Handler, http.MethodGet, path, nil, http.StatusOK)
+		assertAuthedStatus(t, server.Handler, http.MethodGet, path, nil, adminToken, http.StatusOK)
 	}
 
-	overviewRes := request(t, server.Handler, http.MethodGet, "/api/v1/admin/overview", nil)
+	overviewRes := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/admin/overview", nil, adminToken)
 	var overview map[string]any
 	if err := json.NewDecoder(overviewRes.Body).Decode(&overview); err != nil {
 		t.Fatal(err)
@@ -1274,8 +1420,9 @@ func TestAdminMutationAPIsPersistMasterControlData(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	createCustomer := request(t, handler, http.MethodPost, "/api/v1/admin/customers", bytes.NewBufferString(`{"name":"测试客户","email":"customer@example.com","planId":"plan_month","available":6000}`))
+	createCustomer := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers", bytes.NewBufferString(`{"name":"测试客户","email":"customer@example.com","planId":"plan_month","available":6000}`), adminToken)
 	if createCustomer.Code != http.StatusOK {
 		t.Fatalf("create customer status = %d, body = %s", createCustomer.Code, createCustomer.Body.String())
 	}
@@ -1290,9 +1437,9 @@ func TestAdminMutationAPIsPersistMasterControlData(t *testing.T) {
 	}
 
 	updateCustomerPath := "/api/v1/admin/customers/" + customerBody.Item.ID
-	assertStatus(t, handler, http.MethodPatch, updateCustomerPath, bytes.NewBufferString(`{"status":"DISABLED","planId":"plan_year","available":7000}`), http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPatch, updateCustomerPath, bytes.NewBufferString(`{"status":"DISABLED","planId":"plan_year","available":7000}`), adminToken, http.StatusOK)
 
-	createOrder := request(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"`+customerBody.Item.ID+`","planId":"plan_year","amountCents":89900}`))
+	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"`+customerBody.Item.ID+`","planId":"plan_year","amountCents":89900}`), adminToken)
 	if createOrder.Code != http.StatusOK {
 		t.Fatalf("create order status = %d, body = %s", createOrder.Code, createOrder.Body.String())
 	}
@@ -1302,14 +1449,14 @@ func TestAdminMutationAPIsPersistMasterControlData(t *testing.T) {
 	if err := json.NewDecoder(createOrder.Body).Decode(&orderBody); err != nil {
 		t.Fatal(err)
 	}
-	assertStatus(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), http.StatusOK)
-	assertStatus(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/renew", bytes.NewBuffer(nil), http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), adminToken, http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/renew", bytes.NewBuffer(nil), adminToken, http.StatusOK)
 
-	customers := request(t, handler, http.MethodGet, "/api/v1/admin/customers", nil)
+	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	if !strings.Contains(customers.Body.String(), `"status":"DISABLED"`) || !strings.Contains(customers.Body.String(), `"pointsAvailable":107000`) {
 		t.Fatalf("customer update was not persisted: %s", customers.Body.String())
 	}
-	orders := request(t, handler, http.MethodGet, "/api/v1/admin/orders", nil)
+	orders := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/orders", nil, adminToken)
 	if !strings.Contains(orders.Body.String(), `"status":"PAID"`) || !strings.Contains(orders.Body.String(), `"status":"PENDING"`) {
 		t.Fatalf("order mutations were not persisted: %s", orders.Body.String())
 	}
@@ -1323,8 +1470,9 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	createOrder := request(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000}`))
+	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000}`), adminToken)
 	if createOrder.Code != http.StatusOK {
 		t.Fatalf("create recharge order status = %d, body = %s", createOrder.Code, createOrder.Body.String())
 	}
@@ -1334,7 +1482,7 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 	if err := json.NewDecoder(createOrder.Body).Decode(&orderBody); err != nil {
 		t.Fatal(err)
 	}
-	markPaid := request(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil))
+	markPaid := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), adminToken)
 	if markPaid.Code != http.StatusOK {
 		t.Fatalf("mark recharge paid status = %d, body = %s", markPaid.Code, markPaid.Body.String())
 	}
@@ -1344,36 +1492,361 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 			t.Fatalf("paid recharge response missing %q: %s", want, body)
 		}
 	}
-	customers := request(t, handler, http.MethodGet, "/api/v1/admin/customers", nil)
+	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	customerBody := customers.Body.String()
 	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":1959`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
 		t.Fatalf("recharge points not reflected: %d %s", customers.Code, customers.Body.String())
 	}
-	commissions := request(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil)
+	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
 	commissionBody := commissions.Body.String()
 	if commissions.Code != http.StatusOK || !strings.Contains(commissionBody, orderBody.Item.ID) || !strings.Contains(commissionBody, `"amountCents":800`) || !strings.Contains(commissionBody, `"source":"compute_recharge"`) || !strings.Contains(commissionBody, `"ruleId":"rule_recharge_l1_direct"`) {
 		t.Fatalf("recharge commission missing: %d %s", commissions.Code, commissionBody)
 	}
-	markPaidAgain := request(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil))
+	markPaidAgain := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), adminToken)
 	if markPaidAgain.Code != http.StatusOK {
 		t.Fatalf("repeat mark paid status = %d, body = %s", markPaidAgain.Code, markPaidAgain.Body.String())
 	}
-	customersAfterRepeat := request(t, handler, http.MethodGet, "/api/v1/admin/customers", nil)
+	customersAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":1959`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":2959`) {
 		t.Fatalf("repeat mark paid was not idempotent: %s", customersAfterRepeat.Body.String())
 	}
-	commissionsAfterRepeat := request(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil)
+	commissionsAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
 	if strings.Count(commissionsAfterRepeat.Body.String(), `"ruleId":"rule_recharge_l1_direct"`) != 1 {
 		t.Fatalf("repeat mark paid duplicated commissions: %s", commissionsAfterRepeat.Body.String())
 	}
-	walletRecords := request(t, handler, http.MethodGet, "/api/v1/admin/marketing/wallet-records", nil)
+	walletRecords := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/marketing/wallet-records", nil, adminToken)
 	if walletRecords.Code != http.StatusOK || !strings.Contains(walletRecords.Body.String(), `"bizType":"COMMISSION_INCOME"`) || !strings.Contains(walletRecords.Body.String(), `"rule_recharge_l1_direct"`) {
 		t.Fatalf("wallet records missing recharge commission: %d %s", walletRecords.Code, walletRecords.Body.String())
 	}
-	statements := request(t, handler, http.MethodGet, "/api/v1/admin/marketing/settlement-statements", nil)
+	statements := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/marketing/settlement-statements", nil, adminToken)
 	if statements.Code != http.StatusOK || !strings.Contains(statements.Body.String(), `"pendingCents":800`) {
 		t.Fatalf("settlement statements missing pending commission: %d %s", statements.Code, statements.Body.String())
 	}
+}
+
+func TestPaymentCallbackRequiresSecretAndValidatesAmount(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{
+		Addr:                  ":0",
+		DataPath:              dataPath,
+		StaticDir:             t.TempDir(),
+		PaymentCallbackSecret: "callback-secret",
+	})
+	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+
+	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000}`), adminToken)
+	if createOrder.Code != http.StatusOK {
+		t.Fatalf("create recharge order status = %d, body = %s", createOrder.Code, createOrder.Body.String())
+	}
+	var orderBody struct {
+		Item adminOrder `json:"item"`
+	}
+	if err := json.NewDecoder(createOrder.Body).Decode(&orderBody); err != nil {
+		t.Fatal(err)
+	}
+	callbackBody := `{"orderId":"` + orderBody.Item.ID + `","paid":true,"amountCents":10000,"eventId":"evt_1","providerTransactionId":"wx_txn_1"}`
+
+	missingSecret := request(t, handler, http.MethodPost, "/api/v1/pay/callback", bytes.NewBufferString(callbackBody))
+	if missingSecret.Code != http.StatusUnauthorized {
+		t.Fatalf("missing callback secret status = %d, body = %s", missingSecret.Code, missingSecret.Body.String())
+	}
+
+	wrongAmountReq := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", bytes.NewBufferString(`{"orderId":"`+orderBody.Item.ID+`","paid":true,"amountCents":9999}`))
+	wrongAmountReq.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	wrongAmount := httptest.NewRecorder()
+	handler.ServeHTTP(wrongAmount, wrongAmountReq)
+	if wrongAmount.Code != http.StatusBadRequest || !strings.Contains(wrongAmount.Body.String(), "payment amount mismatch") {
+		t.Fatalf("wrong amount status = %d, body = %s", wrongAmount.Code, wrongAmount.Body.String())
+	}
+
+	callbackReq := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", bytes.NewBufferString(callbackBody))
+	callbackReq.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	callback := httptest.NewRecorder()
+	handler.ServeHTTP(callback, callbackReq)
+	if callback.Code != http.StatusOK || !strings.Contains(callback.Body.String(), `"status":"PAID"`) || !strings.Contains(callback.Body.String(), `"providerTransactionId":"wx_txn_1"`) {
+		t.Fatalf("valid callback status = %d, body = %s", callback.Code, callback.Body.String())
+	}
+	data, err := newJSONStore(dataPath).AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paidOrder adminOrder
+	for _, item := range data.Orders {
+		if item.ID == orderBody.Item.ID {
+			paidOrder = item
+			break
+		}
+	}
+	if paidOrder.ID == "" {
+		t.Fatalf("paid order not found in store")
+	}
+	if got := stringValue(paidOrder.PriceSnapshot["eventId"]); got != "evt_1" {
+		t.Fatalf("callback eventId not persisted: %q", got)
+	}
+	if got := stringValue(paidOrder.PriceSnapshot["providerTransactionId"]); got != "wx_txn_1" {
+		t.Fatalf("callback providerTransactionId not persisted: %q", got)
+	}
+	if got := intValue(paidOrder.PriceSnapshot["paidAmountCents"]); got != 10000 {
+		t.Fatalf("callback paidAmountCents not persisted: %d", got)
+	}
+	if len(data.PaymentEvents) != 1 {
+		t.Fatalf("payment events after callback = %d, want 1: %+v", len(data.PaymentEvents), data.PaymentEvents)
+	}
+	if data.PaymentEvents[0].EventID != "evt_1" || data.PaymentEvents[0].TransactionID != "wx_txn_1" || data.PaymentEvents[0].OrderID != orderBody.Item.ID {
+		t.Fatalf("payment event was not persisted with callback identity: %+v", data.PaymentEvents[0])
+	}
+
+	repeatReq := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", bytes.NewBufferString(callbackBody))
+	repeatReq.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	repeat := httptest.NewRecorder()
+	handler.ServeHTTP(repeat, repeatReq)
+	if repeat.Code != http.StatusOK {
+		t.Fatalf("repeat callback status = %d, body = %s", repeat.Code, repeat.Body.String())
+	}
+	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
+	if strings.Contains(customers.Body.String(), `"pointsAvailable":2959`) {
+		t.Fatalf("repeat callback duplicated point grant: %s", customers.Body.String())
+	}
+	data, err = newJSONStore(dataPath).AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.PaymentEvents) != 1 {
+		t.Fatalf("repeat callback duplicated payment events: %+v", data.PaymentEvents)
+	}
+
+	createSecondOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000}`), adminToken)
+	if createSecondOrder.Code != http.StatusOK {
+		t.Fatalf("create second recharge order status = %d, body = %s", createSecondOrder.Code, createSecondOrder.Body.String())
+	}
+	var secondOrderBody struct {
+		Item adminOrder `json:"item"`
+	}
+	if err := json.NewDecoder(createSecondOrder.Body).Decode(&secondOrderBody); err != nil {
+		t.Fatal(err)
+	}
+	reusedTxnReq := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", bytes.NewBufferString(`{"orderId":"`+secondOrderBody.Item.ID+`","paid":true,"amountCents":10000,"eventId":"evt_2","providerTransactionId":"wx_txn_1"}`))
+	reusedTxnReq.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	reusedTxn := httptest.NewRecorder()
+	handler.ServeHTTP(reusedTxn, reusedTxnReq)
+	if reusedTxn.Code != http.StatusBadRequest || !strings.Contains(reusedTxn.Body.String(), "payment transaction already belongs") {
+		t.Fatalf("reused transaction status = %d, body = %s", reusedTxn.Code, reusedTxn.Body.String())
+	}
+}
+
+func TestProductionPaymentCallbackRequiresOfficialWechatSignature(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	devServer := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	order := createAdminPaymentOrder(t, devServer.Handler, "wechat")
+
+	prodServer := New(config.Config{
+		Environment:           "production",
+		Addr:                  ":0",
+		DataPath:              dataPath,
+		StaticDir:             t.TempDir(),
+		PaymentCallbackSecret: "callback-secret",
+	})
+	callbackBody := `{"orderId":"` + order.ID + `","provider":"wechat","paid":true,"amountCents":10000,"eventId":"evt_unsigned"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", bytes.NewBufferString(callbackBody))
+	req.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	rec := httptest.NewRecorder()
+	prodServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "requires official signature") {
+		t.Fatalf("unsigned production wechat callback status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWeChatPayV3CallbackVerifiesSignatureAndDecryptsResource(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	devServer := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	order := createAdminPaymentOrder(t, devServer.Handler, "wechat")
+
+	privateKey := testRSAPrivateKey(t)
+	publicKeyPEM := testRSAPublicKeyPEM(t, privateKey)
+	apiV3Key := "0123456789abcdef0123456789abcdef"
+	resourceNonce := "resource1234"
+	associatedData := "transaction"
+	resource := map[string]any{
+		"out_trade_no":   order.ID,
+		"transaction_id": "wx_txn_verified",
+		"trade_state":    "SUCCESS",
+		"amount": map[string]any{
+			"total": 10000,
+		},
+	}
+	resourcePlain, err := json.Marshal(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyBytes, err := json.Marshal(map[string]any{
+		"id":            "evt_wx_verified",
+		"event_type":    "TRANSACTION.SUCCESS",
+		"resource_type": "encrypt-resource",
+		"resource": map[string]any{
+			"algorithm":       "AEAD_AES_256_GCM",
+			"ciphertext":      testEncryptWeChatPayResource(t, apiV3Key, resourceNonce, associatedData, resourcePlain),
+			"associated_data": associatedData,
+			"nonce":           resourceNonce,
+			"original_type":   "transaction",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := "1700000000"
+	nonce := "notify123456"
+	message := timestamp + "\n" + nonce + "\n" + string(bodyBytes) + "\n"
+
+	prodServer := New(config.Config{
+		Environment:           "production",
+		Addr:                  ":0",
+		DataPath:              dataPath,
+		StaticDir:             t.TempDir(),
+		PaymentCallbackSecret: "callback-secret",
+		WeChatPayAPIv3Key:     apiV3Key,
+		WeChatPayPlatformKey:  publicKeyPEM,
+		WeChatPayPlatformPath: "",
+		AlipayPublicKey:       "",
+		AlipayPublicKeyPath:   "",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	req.Header.Set("Wechatpay-Timestamp", timestamp)
+	req.Header.Set("Wechatpay-Nonce", nonce)
+	req.Header.Set("Wechatpay-Signature", testRSASignature(t, privateKey, message))
+	rec := httptest.NewRecorder()
+	prodServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"PAID"`) {
+		t.Fatalf("wechat callback status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	data, err := newJSONStore(dataPath).AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paidOrder := findTestOrder(t, data.Orders, order.ID)
+	if got := stringValue(paidOrder.PriceSnapshot["eventId"]); got != "evt_wx_verified" {
+		t.Fatalf("wechat event id not persisted: %q", got)
+	}
+	if got := stringValue(paidOrder.PriceSnapshot["providerTransactionId"]); got != "wx_txn_verified" {
+		t.Fatalf("wechat provider transaction id not persisted: %q", got)
+	}
+}
+
+func TestAlipayCallbackVerifiesRSA2Signature(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	devServer := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	order := createAdminPaymentOrder(t, devServer.Handler, "alipay")
+
+	privateKey := testRSAPrivateKey(t)
+	publicKeyPEM := testRSAPublicKeyPEM(t, privateKey)
+	values := url.Values{}
+	values.Set("app_id", "2026000000000000")
+	values.Set("notify_id", "evt_alipay_verified")
+	values.Set("notify_type", "trade_status_sync")
+	values.Set("out_trade_no", order.ID)
+	values.Set("total_amount", "100.00")
+	values.Set("trade_no", "ali_txn_verified")
+	values.Set("trade_status", "TRADE_SUCCESS")
+	values.Set("sign_type", "RSA2")
+	values.Set("sign", testRSASignature(t, privateKey, alipaySignContent(values)))
+
+	prodServer := New(config.Config{
+		Environment:           "production",
+		Addr:                  ":0",
+		DataPath:              dataPath,
+		StaticDir:             t.TempDir(),
+		PaymentCallbackSecret: "callback-secret",
+		AlipayPublicKey:       publicKeyPEM,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pay/callback", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Xianzhi-Payment-Secret", "callback-secret")
+	rec := httptest.NewRecorder()
+	prodServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"PAID"`) {
+		t.Fatalf("alipay callback status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	data, err := newJSONStore(dataPath).AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paidOrder := findTestOrder(t, data.Orders, order.ID)
+	if got := stringValue(paidOrder.PriceSnapshot["eventId"]); got != "evt_alipay_verified" {
+		t.Fatalf("alipay event id not persisted: %q", got)
+	}
+	if got := stringValue(paidOrder.PriceSnapshot["providerTransactionId"]); got != "ali_txn_verified" {
+		t.Fatalf("alipay provider transaction id not persisted: %q", got)
+	}
+}
+
+func createAdminPaymentOrder(t *testing.T, handler http.Handler, paymentMethod string) adminOrder {
+	t.Helper()
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000,"paymentMethod":"`+paymentMethod+`"}`), adminToken)
+	if createOrder.Code != http.StatusOK {
+		t.Fatalf("create payment order status = %d, body = %s", createOrder.Code, createOrder.Body.String())
+	}
+	var body struct {
+		Item adminOrder `json:"item"`
+	}
+	if err := json.NewDecoder(createOrder.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Item
+}
+
+func findTestOrder(t *testing.T, orders []adminOrder, id string) adminOrder {
+	t.Helper()
+	for _, item := range orders {
+		if item.ID == id {
+			return item
+		}
+	}
+	t.Fatalf("order not found: %s", id)
+	return adminOrder{}
+}
+
+func testRSAPrivateKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func testRSAPublicKeyPEM(t *testing.T, key *rsa.PrivateKey) string {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+}
+
+func testRSASignature(t *testing.T, key *rsa.PrivateKey, message string) string {
+	t.Helper()
+	hash := sha256.Sum256([]byte(message))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hash[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(signature)
+}
+
+func testEncryptWeChatPayResource(t *testing.T, key string, nonce string, associatedData string, plaintext []byte) string {
+	t.Helper()
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(gcm.Seal(nil, []byte(nonce), plaintext, []byte(associatedData)))
 }
 
 func TestRechargeCommissionUsesUpdatedRuleRate(t *testing.T) {
@@ -1384,17 +1857,18 @@ func TestRechargeCommissionUsesUpdatedRuleRate(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	updateRule := request(t, handler, http.MethodPatch, "/api/v1/admin/marketing/commission-rules/rule_recharge_l1_direct", bytes.NewBufferString(`{"name":"L1 推广员点数包返佣","orderType":"COMPUTE_RECHARGE","earnerRole":"AGENT_L1","relationDepth":1,"fixedAmountCents":0,"rate":0.15,"maxTotalRate":0.2,"status":"ACTIVE"}`))
+	updateRule := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/marketing/commission-rules/rule_recharge_l1_direct", bytes.NewBufferString(`{"name":"L1 推广员点数包返佣","orderType":"COMPUTE_RECHARGE","earnerRole":"AGENT_L1","relationDepth":1,"fixedAmountCents":0,"rate":0.15,"maxTotalRate":0.2,"status":"ACTIVE"}`), adminToken)
 	if updateRule.Code != http.StatusOK || !strings.Contains(updateRule.Body.String(), `"rate":0.15`) {
 		t.Fatalf("update commission rule status = %d, body = %s", updateRule.Code, updateRule.Body.String())
 	}
-	rules := request(t, handler, http.MethodGet, "/api/v1/admin/marketing/commission-rules", nil)
+	rules := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/marketing/commission-rules", nil, adminToken)
 	if rules.Code != http.StatusOK || !strings.Contains(rules.Body.String(), `"rate":0.15`) {
 		t.Fatalf("updated commission rule not visible: %d %s", rules.Code, rules.Body.String())
 	}
 
-	createOrder := request(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000}`))
+	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_000002","planId":"recharge_100","amountCents":10000}`), adminToken)
 	if createOrder.Code != http.StatusOK {
 		t.Fatalf("create recharge order status = %d, body = %s", createOrder.Code, createOrder.Body.String())
 	}
@@ -1404,11 +1878,11 @@ func TestRechargeCommissionUsesUpdatedRuleRate(t *testing.T) {
 	if err := json.NewDecoder(createOrder.Body).Decode(&orderBody); err != nil {
 		t.Fatal(err)
 	}
-	markPaid := request(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil))
+	markPaid := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), adminToken)
 	if markPaid.Code != http.StatusOK {
 		t.Fatalf("mark recharge paid status = %d, body = %s", markPaid.Code, markPaid.Body.String())
 	}
-	commissions := request(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil)
+	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
 	body := commissions.Body.String()
 	for _, want := range []string{`"amountCents":1500`, `"rate":0.15`, `"maxTotalRate":0.2`, `"ruleId":"rule_recharge_l1_direct"`} {
 		if !strings.Contains(body, want) {
@@ -1424,6 +1898,7 @@ func TestRechargeCommissionUsesL3DifferentialRuleForL2Child(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	raw := `{
 		"users":[
+			{"id":"user_admin","email":"admin@xianzhi.ai","name":"平台管理员","role":"SUPER_ADMIN","status":"ACTIVE","planId":"plan_free"},
 			{"id":"user_customer","email":"customer@xianzhi.ai","name":"客户","role":"MEMBER","status":"ACTIVE","planId":"plan_free","referredBy":"user_child_agent"},
 			{"id":"user_parent_agent","email":"parent@xianzhi.ai","name":"上级代理","role":"AGENT_L3","status":"ACTIVE","planId":"plan_free"},
 			{"id":"user_child_agent","email":"child@xianzhi.ai","name":"直推代理","role":"AGENT_L2","status":"ACTIVE","planId":"plan_free"}
@@ -1443,8 +1918,9 @@ func TestRechargeCommissionUsesL3DifferentialRuleForL2Child(t *testing.T) {
 	}
 	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	createOrder := request(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_customer","planId":"recharge_100","amountCents":10000}`))
+	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"user_customer","planId":"recharge_100","amountCents":10000}`), adminToken)
 	if createOrder.Code != http.StatusOK {
 		t.Fatalf("create recharge order status = %d, body = %s", createOrder.Code, createOrder.Body.String())
 	}
@@ -1454,11 +1930,11 @@ func TestRechargeCommissionUsesL3DifferentialRuleForL2Child(t *testing.T) {
 	if err := json.NewDecoder(createOrder.Body).Decode(&orderBody); err != nil {
 		t.Fatal(err)
 	}
-	markPaid := request(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil))
+	markPaid := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders/"+orderBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), adminToken)
 	if markPaid.Code != http.StatusOK {
 		t.Fatalf("mark recharge paid status = %d, body = %s", markPaid.Code, markPaid.Body.String())
 	}
-	commissions := request(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil)
+	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
 	body := commissions.Body.String()
 	for _, want := range []string{`"agentId":"channel_child"`, `"amountCents":1200`, `"ruleId":"rule_recharge_l2_direct"`, `"agentId":"channel_parent"`, `"amountCents":800`, `"ruleId":"rule_recharge_l3_diff_from_l2"`} {
 		if !strings.Contains(body, want) {
@@ -1478,14 +1954,15 @@ func TestAdminSystemAndAPIGatewayMutationsPersist(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	assertStatus(t, handler, http.MethodPatch, "/api/v1/admin/system/settings", bytes.NewBufferString(`{"brand":{"name":"先知主控","domain":"admin.example.com","logo":"控"},"payments":[{"channel":"manual","status":"ACTIVE"}],"permissions":["SUPER_ADMIN","FINANCE"]}`), http.StatusOK)
-	assertStatus(t, handler, http.MethodPost, "/api/v1/admin/api/provider-channels", bytes.NewBufferString(`{"name":"测试上游","baseUrl":"https://provider.example.com/v1","status":"ACTIVE","priority":30,"models":["gpt-image-2"]}`), http.StatusOK)
-	assertStatus(t, handler, http.MethodPatch, "/api/v1/admin/api/models/model_gpt_image_2", bytes.NewBufferString(`{"name":"OpenAI 图像模型","capability":"IMAGE","billingMode":"PER_REQUEST","fixedQuota":12,"modelRatio":1,"completionRatio":1,"status":"ACTIVE"}`), http.StatusOK)
-	assertStatus(t, handler, http.MethodPost, "/api/v1/admin/api/keys", bytes.NewBufferString(`{"customer":"测试客户","status":"ACTIVE","models":["gpt-image-2"],"quotaLimit":50000}`), http.StatusOK)
-	assertStatus(t, handler, http.MethodPatch, "/api/v1/admin/customer-groups/group_vip", bytes.NewBufferString(`{"name":"vip","ratio":0.7,"models":["gpt-image-2"],"description":"测试倍率"}`), http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPatch, "/api/v1/admin/system/settings", bytes.NewBufferString(`{"brand":{"name":"先知主控","domain":"admin.example.com","logo":"控"},"payments":[{"channel":"manual","status":"ACTIVE"}],"permissions":["SUPER_ADMIN","FINANCE"]}`), adminToken, http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPost, "/api/v1/admin/api/provider-channels", bytes.NewBufferString(`{"name":"测试上游","baseUrl":"https://provider.example.com/v1","status":"ACTIVE","priority":30,"models":["gpt-image-2"]}`), adminToken, http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPatch, "/api/v1/admin/api/models/model_gpt_image_2", bytes.NewBufferString(`{"name":"OpenAI 图像模型","capability":"IMAGE","billingMode":"PER_REQUEST","fixedQuota":12,"modelRatio":1,"completionRatio":1,"status":"ACTIVE"}`), adminToken, http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPost, "/api/v1/admin/api/keys", bytes.NewBufferString(`{"customer":"测试客户","status":"ACTIVE","models":["gpt-image-2"],"quotaLimit":50000}`), adminToken, http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPatch, "/api/v1/admin/customer-groups/group_vip", bytes.NewBufferString(`{"name":"vip","ratio":0.7,"models":["gpt-image-2"],"description":"测试倍率"}`), adminToken, http.StatusOK)
 
-	system := request(t, handler, http.MethodGet, "/api/v1/admin/system/settings", nil)
+	system := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/system/settings", nil, adminToken)
 	body := system.Body.String()
 	for _, want := range []string{"先知主控", "admin.example.com", "测试上游", `"fixedQuota":12`, "测试客户", `"ratio":0.7`} {
 		if !strings.Contains(body, want) {
@@ -1502,8 +1979,9 @@ func TestAdminAICapabilityModelsCanBeCreated(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	assertStatus(t, handler, http.MethodPost, "/api/v1/admin/ai/models", bytes.NewBufferString(`{
+	assertAuthedStatus(t, handler, http.MethodPost, "/api/v1/admin/ai/models", bytes.NewBufferString(`{
 		"model_name":"ppt-maker-pro",
 		"model_type":"text",
 		"provider":"NewAPI",
@@ -1513,9 +1991,9 @@ func TestAdminAICapabilityModelsCanBeCreated(t *testing.T) {
 		"sort_weight":12,
 		"allow_fallback_switch":true,
 		"status":"ACTIVE"
-	}`), http.StatusOK)
+	}`), adminToken, http.StatusOK)
 
-	overview := request(t, handler, http.MethodGet, "/api/v1/admin/ai/overview", nil)
+	overview := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/ai/overview", nil, adminToken)
 	body := overview.Body.String()
 	for _, want := range []string{"ppt-maker-pro", `"module_code":"ppt_generation"`, `"ppt_export"`} {
 		if !strings.Contains(body, want) {
@@ -1538,10 +2016,47 @@ func TestSavedAPIKeyForChannelPrefersExactChannelBinding(t *testing.T) {
 	}
 }
 
+func TestUserAPISettingsRequiresAuthAndDoesNotExposeSecrets(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	raw := fmt.Sprintf(`{
+		"users":[{"id":"user_000001","email":"admin@xianzhi.ai","name":"Admin","role":"SUPER_ADMIN","status":"ACTIVE","passwordHash":%q,"planId":"plan_free"},{"id":"user_000002","email":"demo@xianzhi.ai","name":"Demo","role":"MEMBER","status":"ACTIVE","passwordHash":%q,"planId":"plan_free"}],
+		"apiModels":[{"id":"model_mock","model":"mock-standard","name":"Mock","capability":"TEXT_TO_IMAGE","status":"ACTIVE"},{"id":"model_hidden","model":"hidden-model","name":"Hidden","capability":"TEXT","status":"INACTIVE"}],
+		"apiKeys":[{"id":"key_secret","customer":"Demo","prefix":"sk-real","secret":"sk-real-provider-secret","status":"ACTIVE","models":["mock-standard"],"quotaLimit":1000}],
+		"customerGroups":[{"id":"group_default","name":"default","ratio":1,"models":["mock-standard"],"description":"Default"}],
+		"pointAccounts":[{"id":"points_demo","userId":"user_000002","available":123,"frozen":0}],
+		"counters":{}
+	}`, legacySHA256PasswordHash("Admin123!"), legacySHA256PasswordHash("Demo123!"))
+	if err := os.WriteFile(dataPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir(), AdminStaticDir: t.TempDir()})
+
+	anonymous := request(t, server.Handler, http.MethodGet, "/api/v1/user/api-settings", nil)
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous api settings status = %d, body = %s", anonymous.Code, anonymous.Body.String())
+	}
+	token := loginToken(t, server.Handler, "demo@xianzhi.ai", "Demo123!")
+	res := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/user/api-settings", nil, token)
+	body := res.Body.String()
+	if res.Code != http.StatusOK {
+		t.Fatalf("authed api settings status = %d, body = %s", res.Code, body)
+	}
+	for _, forbidden := range []string{"sk-real-provider-secret", `"apiKeys"`, `"apiChannels"`, `"customerGroups"`, "hidden-model"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("user api settings leaked %q: %s", forbidden, body)
+		}
+	}
+	for _, want := range []string{`"models"`, "mock-standard", `"capabilities"`, `"quota"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("user api settings missing %q: %s", want, body)
+		}
+	}
+}
+
 func TestAdminUsageAndCommissionOperations(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	raw := `{
-		"users":[{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month"},{"id":"user_000003","email":"agent1@xianzhi.ai","name":"华东推广员","role":"AGENT_L1","status":"ACTIVE","planId":"plan_free"}],
+		"users":[{"id":"user_000001","email":"admin@xianzhi.ai","name":"平台管理员","role":"SUPER_ADMIN","status":"ACTIVE","planId":"plan_free"},{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month"},{"id":"user_000003","email":"agent1@xianzhi.ai","name":"华东推广员","role":"AGENT_L1","status":"ACTIVE","planId":"plan_free"}],
 		"plans":[{"id":"plan_month","name":"月度会员","price":9900,"points":3000,"durationDays":30,"concurrency":3}],
 		"orders":[{"id":"order_000001","userId":"user_000002","planId":"plan_month","amount":9900,"status":"PAID"}],
 		"channelAgents":[{"id":"channel_000001","userId":"user_000003","level":1,"status":"ACTIVE","inviteCode":"EAST001"}],
@@ -1560,21 +2075,22 @@ func TestAdminUsageAndCommissionOperations(t *testing.T) {
 		StaticDir: t.TempDir(),
 	})
 	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
-	usage := request(t, handler, http.MethodGet, "/api/v1/admin/usage?product=Agent", nil)
+	usage := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/usage?product=Agent", nil, adminToken)
 	if usage.Code != http.StatusOK || !strings.Contains(usage.Body.String(), `"product":"Agent"`) || strings.Contains(usage.Body.String(), "GEO 任务") {
 		t.Fatalf("usage filter failed: status = %d, body = %s", usage.Code, usage.Body.String())
 	}
-	export := request(t, handler, http.MethodGet, "/api/v1/admin/usage/export?product=Agent", nil)
+	export := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/usage/export?product=Agent", nil, adminToken)
 	if export.Code != http.StatusOK || !strings.Contains(export.Body.String(), "Agent") || !strings.Contains(export.Header().Get("Content-Type"), "text/csv") {
 		t.Fatalf("usage export failed: status = %d, type = %s, body = %s", export.Code, export.Header().Get("Content-Type"), export.Body.String())
 	}
 
-	createCommission := request(t, handler, http.MethodPost, "/api/v1/admin/commissions", bytes.NewBufferString(`{"orderId":"order_000001","agentId":"channel_000001","amountCents":990,"rate":0.1}`))
+	createCommission := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/commissions", bytes.NewBufferString(`{"orderId":"order_000001","agentId":"channel_000001","amountCents":990,"rate":0.1}`), adminToken)
 	if createCommission.Code != http.StatusOK {
 		t.Fatalf("create commission status = %d, body = %s", createCommission.Code, createCommission.Body.String())
 	}
-	createWithdrawal := request(t, handler, http.MethodPost, "/api/v1/admin/withdrawals", bytes.NewBufferString(`{"agentId":"channel_000001","amountCents":500}`))
+	createWithdrawal := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/withdrawals", bytes.NewBufferString(`{"agentId":"channel_000001","amountCents":500}`), adminToken)
 	if createWithdrawal.Code != http.StatusOK {
 		t.Fatalf("create withdrawal status = %d, body = %s", createWithdrawal.Code, createWithdrawal.Body.String())
 	}
@@ -1584,9 +2100,9 @@ func TestAdminUsageAndCommissionOperations(t *testing.T) {
 	if err := json.NewDecoder(createWithdrawal.Body).Decode(&withdrawalBody); err != nil {
 		t.Fatal(err)
 	}
-	assertStatus(t, handler, http.MethodPost, "/api/v1/admin/withdrawals/"+withdrawalBody.Item.ID+"/approve", bytes.NewBuffer(nil), http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPost, "/api/v1/admin/withdrawals/"+withdrawalBody.Item.ID+"/approve", bytes.NewBuffer(nil), adminToken, http.StatusOK)
 
-	commissions := request(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil)
+	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
 	body := commissions.Body.String()
 	for _, want := range []string{`"amountCents":990`, `"amountCents":500`, `"status":"APPROVED"`} {
 		if !strings.Contains(body, want) {
@@ -1687,6 +2203,141 @@ func TestWriteFileAtomicallyReplacesTarget(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary files were not cleaned up: %v", matches)
+	}
+}
+
+func TestUnsignedAuthFallbackRequiresExplicitDevFlag(t *testing.T) {
+	t.Setenv("XIANZHI_DEV_AUTH_FALLBACK", "")
+	t.Setenv("XIANZHI_ENV", "")
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := newWithStoreAndSessions(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	}, newJSONStore(dataPath), nil)
+
+	login := request(t, server.Handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"admin@xianzhi.ai","password":"Admin123!"}`))
+	if login.Code != http.StatusServiceUnavailable {
+		t.Fatalf("login without sessions status = %d, body = %s", login.Code, login.Body.String())
+	}
+}
+
+func TestExplicitDevAuthFallbackStillWorksOutsideProduction(t *testing.T) {
+	t.Setenv("XIANZHI_DEV_AUTH_FALLBACK", "true")
+	t.Setenv("XIANZHI_ENV", "")
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := newWithStoreAndSessions(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	}, newJSONStore(dataPath), nil)
+
+	token := loginToken(t, server.Handler, "admin@xianzhi.ai", "Admin123!")
+	me := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/auth/me", nil, token)
+	if me.Code != http.StatusOK {
+		t.Fatalf("dev fallback token auth/me = %d, body = %s", me.Code, me.Body.String())
+	}
+}
+
+func TestLoginUpgradesLegacySHA256PasswordHash(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	raw := fmt.Sprintf(`{"users":[{"id":"user_legacy","email":"legacy@example.com","name":"Legacy","role":"MEMBER","status":"ACTIVE","passwordHash":%q,"planId":"plan_free"}],"counters":{}}`, legacySHA256PasswordHash("Legacy123!"))
+	if err := os.WriteFile(dataPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := New(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	})
+
+	login := request(t, server.Handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"legacy@example.com","password":"Legacy123!"}`))
+	if login.Code != http.StatusOK {
+		t.Fatalf("legacy login status = %d, body = %s", login.Code, login.Body.String())
+	}
+	data, err := os.ReadFile(dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), legacySHA256PasswordHash("Legacy123!")) || !strings.Contains(string(data), `bcrypt:$2`) {
+		t.Fatalf("legacy password hash was not upgraded: %s", string(data))
+	}
+}
+
+func TestJSONAdminAPIsRequireSuperAdmin(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	})
+	handler := server.Handler
+
+	anonymous := request(t, handler, http.MethodGet, "/api/v1/admin/overview", nil)
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous admin status = %d, body = %s", anonymous.Code, anonymous.Body.String())
+	}
+	memberToken := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+	member := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/overview", nil, memberToken)
+	if member.Code != http.StatusForbidden {
+		t.Fatalf("member admin status = %d, body = %s", member.Code, member.Body.String())
+	}
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	admin := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/overview", nil, adminToken)
+	if admin.Code != http.StatusOK {
+		t.Fatalf("super admin status = %d, body = %s", admin.Code, admin.Body.String())
+	}
+}
+
+func TestProductionConfigValidationRequiresSecurityEnv(t *testing.T) {
+	t.Setenv("XIANZHI_DEV_AUTH_FALLBACK", "false")
+	t.Setenv("XIANZHI_ALLOW_INSECURE_AUTH_TOKEN", "false")
+	t.Setenv("XIANZHI_ENABLE_MOCK_LOGIN", "false")
+	t.Setenv("XIANZHI_ALLOW_WECHAT_MOCK_LOGIN", "false")
+	err := (config.Config{Environment: "production"}).ValidateProduction()
+	if err == nil ||
+		!strings.Contains(err.Error(), "DATABASE_URL") ||
+		!strings.Contains(err.Error(), "REDIS_URL") ||
+		!strings.Contains(err.Error(), "RABBITMQ_URL") ||
+		!strings.Contains(err.Error(), "S3_ENDPOINT") ||
+		!strings.Contains(err.Error(), "S3_ACCESS_KEY") ||
+		!strings.Contains(err.Error(), "S3_SECRET_KEY") ||
+		!strings.Contains(err.Error(), "S3_BUCKET") ||
+		!strings.Contains(err.Error(), "PAYMENT_CALLBACK_SECRET") {
+		t.Fatalf("unexpected production validation error: %v", err)
+	}
+	err = (config.Config{
+		Environment:           "production",
+		DatabaseURL:           "postgresql://example",
+		RedisURL:              "redis://example",
+		RabbitMQURL:           "amqp://example",
+		S3Endpoint:            "http://s3.example",
+		S3AccessKey:           "access",
+		S3SecretKey:           "secret",
+		S3Bucket:              "xianzhi-assets",
+		PaymentCallbackSecret: "secret",
+	}).ValidateProduction()
+	if err != nil {
+		t.Fatalf("complete production config failed validation: %v", err)
+	}
+	t.Setenv("XIANZHI_ALLOW_INSECURE_AUTH_TOKEN", "true")
+	err = (config.Config{
+		Environment:           "production",
+		DatabaseURL:           "postgresql://example",
+		RedisURL:              "redis://example",
+		RabbitMQURL:           "amqp://example",
+		S3Endpoint:            "http://s3.example",
+		S3AccessKey:           "access",
+		S3SecretKey:           "secret",
+		S3Bucket:              "xianzhi-assets",
+		PaymentCallbackSecret: "secret",
+	}).ValidateProduction()
+	if err == nil || !strings.Contains(err.Error(), "XIANZHI_ALLOW_INSECURE_AUTH_TOKEN") {
+		t.Fatalf("production insecure auth flag validation error = %v", err)
 	}
 }
 
@@ -1811,6 +2462,65 @@ func TestAuthSessionStoreLogoutRevokesToken(t *testing.T) {
 		t.Fatalf("revoked token status = %d, body = %s", revokedRes.Code, revokedRes.Body.String())
 	}
 }
+
+func TestAuthRefreshTokenRotatesSession(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	sessions := newMemoryAuthSessions()
+	server := newWithStoreAndSessions(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	}, newJSONStore(dataPath), sessions)
+	handler := server.Handler
+
+	login := request(t, handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"agent1@xianzhi.ai","password":"Agent123!"}`))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", login.Code, login.Body.String())
+	}
+	var loginBody struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&loginBody); err != nil {
+		t.Fatal(err)
+	}
+	if loginBody.AccessToken == "" || loginBody.RefreshToken == "" {
+		t.Fatalf("login response missing tokens: %+v", loginBody)
+	}
+
+	refresh := request(t, handler, http.MethodPost, "/api/v1/auth/refresh", bytes.NewBufferString(`{"refreshToken":"`+loginBody.RefreshToken+`"}`))
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, body = %s", refresh.Code, refresh.Body.String())
+	}
+	var refreshBody struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.NewDecoder(refresh.Body).Decode(&refreshBody); err != nil {
+		t.Fatal(err)
+	}
+	if refreshBody.AccessToken == "" || refreshBody.RefreshToken == "" {
+		t.Fatalf("refresh response missing tokens: %+v", refreshBody)
+	}
+	if refreshBody.RefreshToken == loginBody.RefreshToken {
+		t.Fatal("refresh token was not rotated")
+	}
+
+	reuse := request(t, handler, http.MethodPost, "/api/v1/auth/refresh", bytes.NewBufferString(`{"refreshToken":"`+loginBody.RefreshToken+`"}`))
+	if reuse.Code != http.StatusUnauthorized {
+		t.Fatalf("old refresh token status = %d, body = %s", reuse.Code, reuse.Body.String())
+	}
+
+	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+refreshBody.AccessToken)
+	meRes := httptest.NewRecorder()
+	handler.ServeHTTP(meRes, meReq)
+	if meRes.Code != http.StatusOK {
+		t.Fatalf("me with refreshed token status = %d, body = %s", meRes.Code, meRes.Body.String())
+	}
+}
+
 func assertStatus(t *testing.T, handler http.Handler, method string, path string, body *bytes.Buffer, want int) {
 	t.Helper()
 	res := request(t, handler, method, path, body)

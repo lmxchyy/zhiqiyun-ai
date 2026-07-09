@@ -17,14 +17,14 @@ Confirmed current runtime:
 Important reality gaps:
 
 - Product docs describe `QUEUED`, `RETRYING`, `CANCELLED`, retry, cancel and refund flows. Current Go runtime exposes `PROCESSING -> SUCCEEDED/FAILED` for image generation and does not expose retry/cancel endpoints.
-- Current Go runtime checks available points at enqueue and again at completion, but deducts points only on success. It does not freeze points on enqueue.
-- Asset delete in current Go runtime physically deletes the `xz_assets` row and removes the asset id from the task's `resultIds`; the older product doc says logical deletion.
+- Current Go runtime reserves available points at enqueue, settles the reservation on success, and refunds the active reservation on failure. It does not yet expose a separate hold/refund ledger.
+- Asset delete in current Go runtime now writes `xz_assets.deleted_at`, removes the asset id from the task's `resultIds`, and filters deleted assets from user/channel/admin active views.
 
 ## Workflows
 
 | Workflow | Spec file | Status | Trigger | Primary actor | Last reviewed |
 |---|---|---|---|---|---|
-| AI image generation task and artifact loop | [WORKFLOW-generation-task-artifact-loop.md](WORKFLOW-generation-task-artifact-loop.md) | Draft | `POST /api/v1/generation-tasks` | Go API + image provider | 2026-07-01 |
+| AI image generation task and artifact loop | [WORKFLOW-generation-task-artifact-loop.md](WORKFLOW-generation-task-artifact-loop.md) | Draft | `POST /api/v1/generation-tasks` | Go API + image provider | 2026-07-10 |
 | Reference image upload | Missing | Missing | `POST /api/v1/reference-images` | Go API | 2026-07-01 |
 | Asset list, download and delete | Covered by generation spec; split recommended | Review | `GET /api/v1/assets`, `GET /api/v1/assets/{id}/download`, `DELETE /api/v1/assets/{id}` | Go API | 2026-07-01 |
 | User AI workspace state sync | Missing | Missing | `PATCH /api/v1/user/ai-state` | Go API | 2026-07-01 |
@@ -70,13 +70,13 @@ Status values: `Approved`, `Review`, `Draft`, `Missing`, `Deprecated`.
 
 | State | Entered by | Exited by | Workflows that can trigger exit |
 |---|---|---|---|
-| `PROCESSING` | `CreatePendingGenerationTask` after authenticated image request passes validation and point availability check | `CompleteGenerationTask` or `FailGenerationTask` | AI image generation task and artifact loop |
-| `SUCCEEDED` | `CompleteGenerationTask` after provider output is prepared, assets are inserted, points are deducted, billing and commissions are written | Terminal in current Go runtime | AI image generation task and artifact loop |
-| `FAILED` | `FailGenerationTask` after provider timeout/error, completion transaction failure, or second point availability check failure | Terminal in current Go runtime | AI image generation task and artifact loop |
+| `PROCESSING` | `CreatePendingGenerationTask` after authenticated image request passes validation, point availability check and point reservation | `CompleteGenerationTask` or `FailGenerationTask` | AI image generation task and artifact loop |
+| `SUCCEEDED` | `CompleteGenerationTask` after provider output is prepared, assets are inserted, the point reservation is settled, billing and commissions are written | Terminal in current Go runtime | AI image generation task and artifact loop |
+| `FAILED` | `FailGenerationTask` after provider timeout/error or completion transaction failure; active point reservation is refunded | Terminal in current Go runtime | AI image generation task and artifact loop |
 | `CANCELLED` | Present in Go terminal guard but no current Go route sets it | Terminal if implemented later | Generation task cancellation and compensation |
 | `QUEUED` | Legacy Node workflow only | Legacy Node worker sets `PROCESSING`, retry/cancel may exit | Legacy Node RabbitMQ generation worker |
 | `RETRYING` | Legacy Node workflow only | Legacy Node worker sets `PROCESSING`, final failure, success or cancel | Legacy Node RabbitMQ generation worker; Failed generation retry |
-| Asset row exists in `xz_assets` | `CompleteGenerationTask` inserts asset rows | `DeleteAsset` physically deletes row | AI image generation task and artifact loop; Asset list, download and delete |
+| Active asset row exists in `xz_assets` | `CompleteGenerationTask` inserts asset rows with `deleted_at` empty | `DeleteAsset` writes `deleted_at` and active queries filter the row | AI image generation task and artifact loop; Asset list, download and delete |
 | Asset id appears in task `resultIds` | `CompleteGenerationTask` updates task result ids | `DeleteAsset` filters deleted id from `resultIds` | AI image generation task and artifact loop; Asset list, download and delete |
 | Billing event `SUCCEEDED` | `generationBillingArtifactsForTx` + `insertBillingEvent` during successful completion | Terminal ledger event | AI image generation task and artifact loop |
 | Audit log `generation.enqueue` | `CreatePendingGenerationTask` | Terminal audit record | AI image generation task and artifact loop |
@@ -88,7 +88,7 @@ Status values: `Approved`, `Review`, `Draft`, `Missing`, `Deprecated`.
 | Finding | Severity | Workflow | Recommended next spec |
 |---|---|---|---|
 | Product docs promise cancel/retry/refund/favorite/regenerate routes that current Go runtime does not expose. | High | Generation task cancellation and compensation; Failed generation retry; Asset favorite and regenerate | `WORKFLOW-generation-task-cancel-compensation.md` |
-| Go runtime does not have a persistent queue or resumable worker for in-flight image generation; goroutine work is lost if the process exits after `PROCESSING` is committed. | High | AI image generation task and artifact loop | Add recovery/timeout sweeper spec |
-| Point deduction happens only on success, not freeze-on-enqueue. This is safer for failures but can reject a task at completion if points are consumed elsewhere while provider work is running. | Medium | AI image generation task and artifact loop | Add point reservation spec |
-| Asset delete physically removes `xz_assets` rows, while older docs describe logical deletion. | Medium | Asset list, download and delete | Add asset lifecycle spec |
+| Go runtime does not have a persistent queue or resumable worker for in-flight image generation; startup repair fails stale `PROCESSING` tasks after max age, but provider work is not resumed. | Medium | AI image generation task and artifact loop | Add durable queue/resume spec if retry continuity is required |
+| Point reservation is implemented in task params and point-account balance, but there is no separate hold/refund ledger event for finance reporting. | Low | AI image generation task and artifact loop | Add explicit point hold/refund ledger spec if required |
+| Asset delete now preserves `xz_assets` rows with `deleted_at`; a dedicated asset lifecycle spec is still useful for restore/permanent-purge policy. | Low | Asset list, download and delete | Add asset lifecycle spec |
 | Legacy Node worker contains richer retry/cancel/queue behavior but is not started by the current Docker image. | Medium | Legacy Node RabbitMQ generation worker | Decide deprecate vs port behavior to Go |

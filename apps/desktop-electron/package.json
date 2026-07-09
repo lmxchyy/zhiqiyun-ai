@@ -1,0 +1,25 @@
+{
+  "name": "xianzhi-ai-desktop-electron",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "build": "npm --prefix ../user-uni run build:h5 && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "ai.xianzhi.desktop",
+    "productName": "先知 AI",
+    "files": [
+      "main.cjs",
+      "../user-uni/dist/build/h5/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
