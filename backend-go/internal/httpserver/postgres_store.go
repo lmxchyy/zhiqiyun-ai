@@ -349,6 +349,29 @@ func (s *postgresStore) GetChannelAgentForUser(userID string) (adminChannelAgent
 	return item, true, nil
 }
 
+func (s *postgresStore) GetOperationCenterForUser(userID string) (adminOperationCenter, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminOperationCenter{}, false, err
+	}
+	var item adminOperationCenter
+	err := s.db.QueryRowContext(ctx, `
+		select raw
+		from xz_operation_centers
+		where user_id = $1 and upper(coalesce(status, '')) = 'ACTIVE'
+		order by created_at desc, id desc
+		limit 1
+	`, userID).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminOperationCenter{}, false, nil
+	}
+	if err != nil {
+		return adminOperationCenter{}, false, err
+	}
+	return item, true, nil
+}
+
 func (s *postgresStore) OnlineImageSettings() (adminPlatformData, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()

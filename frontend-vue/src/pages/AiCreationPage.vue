@@ -1,7 +1,7 @@
 ﻿<template>
   <view v-if="!isLoggedIn && isRegisterRoute" class="login-shell register-shell">
     <view class="login-card">
-      <image class="login-logo" :src="xianzhiLogo" mode="aspectFit" />
+      <image class="login-logo" :src="loginLogo" mode="aspectFit" />
       <text class="eyebrow">INVITE REGISTER</text>
       <text class="login-title">注册知启云 AI</text>
       <text class="login-copy">通过代理商邀请注册后，账号会自动绑定来源渠道，后续消费和佣金可在代理商后台追踪。</text>
@@ -30,21 +30,59 @@
   </view>
 
   <view v-else-if="!isLoggedIn" class="login-shell">
-    <view class="login-card">
-      <image class="login-logo" :src="xianzhiLogo" mode="aspectFit" />
-      <text class="eyebrow">WELCOME</text>
-      <text class="login-title">登录知启云 AI</text>
-      <text class="login-copy">代理商可查看客户绑定、佣金、提现和下级渠道，平台账号仍可进入统一工作台。</text>
-      <view class="login-form">
-        <label>
-          <text>邮箱</text>
-          <input v-model="loginEmail" type="text" placeholder="demo@xianzhi.ai" />
-        </label>
-        <label>
-          <text>密码</text>
-          <input v-model="loginPassword" type="password" placeholder="Demo123!" />
-        </label>
-        <button type="button" class="login-submit" @click="login">登录</button>
+    <view class="login-screen">
+      <view class="login-bg-accent login-bg-accent-blue"></view>
+      <view class="login-bg-accent login-bg-accent-warm"></view>
+
+      <view class="login-statusbar">
+        <text>9:41</text>
+        <view class="mini-capsule" aria-label="微信小程序菜单">
+          <view class="mini-dot"></view>
+          <view class="mini-dot"></view>
+          <view class="mini-dot"></view>
+        </view>
+      </view>
+
+      <view class="login-brand">
+        <image class="login-logo" :src="loginLogo" mode="aspectFit" />
+        <text class="eyebrow">微信小程序入口</text>
+      </view>
+
+      <view class="login-heading">
+        <text class="login-title">登录知启云 AI</text>
+        <text class="login-copy">延续前端工作台的浅色系统风格，账号密码与微信授权都可进入。</text>
+      </view>
+
+      <view class="login-card">
+        <view class="login-form">
+          <label>
+            <text>邮箱</text>
+            <input v-model="loginEmail" type="text" placeholder="demo@xianzhi.ai" />
+          </label>
+          <label>
+            <text>密码</text>
+            <input v-model="loginPassword" type="password" placeholder="输入登录密码" />
+          </label>
+          <button type="button" class="login-submit" @click="login">登录</button>
+          <view class="login-divider">
+            <view></view>
+            <text>或</text>
+            <view></view>
+          </view>
+          <button type="button" class="wechat-login-button" :disabled="wechatLoginLoading" @click="loginWithWechatMiniProgram">
+            <view class="wechat-login-icon" aria-hidden="true"></view>
+            <text>{{ wechatLoginLoading ? "微信授权中..." : "微信小程序登录" }}</text>
+          </button>
+          <text class="login-agreement">登录即表示同意《用户协议》和《隐私政策》</text>
+        </view>
+      </view>
+
+      <view class="login-helper">
+        <view class="login-helper-accent"></view>
+        <view>
+          <text>统一账号入口</text>
+          <text>登录后按账号权限进入当前可用的创作、管理或服务工作台。</text>
+        </view>
       </view>
     </view>
   </view>
@@ -56,7 +94,7 @@
       `workspace-${currentWorkspace}`,
       `module-${activeModule}`,
       {
-        'canvas-mode': currentWorkspace === 'user' && (activeModule === 'wirelessCanvas' || activeModule === 'assets'),
+        'canvas-mode': currentWorkspace === 'user' && activeModule === 'wirelessCanvas',
         'module-open': isModuleDrawerOpen
       }
     ]"
@@ -76,7 +114,7 @@
       <view class="brand-block">
         <image class="brand-logo" :src="xianzhiLogo" mode="aspectFit" />
         <text class="brand-title">{{ currentWorkspace === 'user' ? '知启云 AI' : workspaceTitle }}</text>
-        <text class="brand-subtitle">AI Operating System</text>
+        <text class="brand-subtitle">{{ currentWorkspace === 'user' ? 'User Console' : currentWorkspace === 'agent' ? 'Agent Console' : 'Master SaaS Console' }}</text>
       </view>
       <view class="mobile-module-bar">
         <view class="current-module-card">
@@ -376,36 +414,143 @@
         </scroll-view>
       </view>
 
-      <view v-else-if="activeModule === 'assets'" class="creation-page">
-        <view class="topbar">
-          <view class="topbar-brand">
-            <image class="topbar-logo" :src="xianzhiLogo" mode="aspectFit" />
-            <text class="brand-title">知启云 AI</text>
+      <view v-else-if="activeModule === 'assets'" class="creation-page works-center-page">
+        <view class="topbar works-admin-topbar">
+          <view class="works-admin-titlebar">
+            <button type="button" class="works-header-icon" aria-label="展开模块导航" @click="isModuleDrawerOpen = true">▦</button>
+            <view class="works-header-title">
+              <text>▣</text>
+              <text>作品中心</text>
+            </view>
           </view>
-          <view class="tabs">
-            <button :class="{ active: activeModule === 'assets' }" @click="selectModule('assets')">我的作品</button>
-            <button>画廊</button>
-          </view>
-          <view class="topbar-status">
+          <view class="works-admin-actions">
+            <label class="works-header-search">
+              <text>⌕</text>
+              <input v-model.trim="worksSearchKeyword" placeholder="搜索当前模块" />
+            </label>
+            <button type="button" class="works-header-button" aria-label="刷新作品" @click="refresh">↻</button>
+            <button type="button" class="works-size-button">默认⌄</button>
             <text :class="['online-pill', models.length ? 'online' : 'offline']">
-              {{ models.length ? "ONLINE" : "OFFLINE" }}
+              API {{ models.length ? "ONLINE" : "OFFLINE" }}
             </text>
             <text class="user-pill"><text class="user-badge">知</text>知启云 · 普通用户</text>
-            <button type="button" class="logout-button" @click.stop="logout">退出</button>
           </view>
         </view>
-        <scroll-view class="creation-assets workspace-scroll" scroll-y>
-          <view class="section-head">
-            <text class="section-title">我的作品</text>
-            <text>生成资产、参考图和可交付内容统一归档。</text>
-          </view>
-          <view class="asset-grid">
-            <view v-for="asset in assets" :key="asset.id" class="asset-card">
-              <image v-if="asset.mediaType === 'image'" :src="asset.url" mode="aspectFit" />
-              <view v-else class="asset-placeholder">{{ asset.mediaType }}</view>
-              <text class="asset-name">{{ asset.name }}</text>
+        <scroll-view class="works-center-scroll workspace-scroll" scroll-y>
+          <view class="works-hero">
+            <view class="works-hero-copy">
+              <text class="works-eyebrow">WORKS CENTER</text>
+              <text class="works-title">作品中心</text>
+              <text class="works-subtitle">集中管理 AI 生图、参考资产、收藏作品和可交付文件，不再混入创作输入区。</text>
             </view>
-            <view v-if="!assets.length" class="empty-card">暂无作品。</view>
+            <view class="works-hero-actions">
+              <button type="button" class="works-primary-action" @click="selectModule('dashboard')">继续创作</button>
+              <button type="button" @click="refresh">刷新作品</button>
+            </view>
+          </view>
+
+          <view class="works-summary-grid">
+            <view v-for="item in worksSummaryCards" :key="item.label" class="works-summary-card">
+              <text>{{ item.label }}</text>
+              <text>{{ item.value }}</text>
+              <text>{{ item.hint }}</text>
+            </view>
+          </view>
+
+          <view class="works-panel">
+            <view class="works-panel-head">
+              <view class="works-filter-tabs">
+                <button
+                  v-for="item in workStatusOptions"
+                  :key="item.value"
+                  type="button"
+                  :class="{ active: worksStatusFilter === item.value }"
+                  @click="worksStatusFilter = item.value"
+                >
+                  {{ item.label }}
+                </button>
+              </view>
+              <view class="works-toolbar">
+                <label class="works-search">
+                  <text>⌕</text>
+                  <input v-model.trim="worksSearchKeyword" type="text" placeholder="搜索作品、提示词、模型..." />
+                </label>
+                <view class="works-view-toggle">
+                  <button type="button" :class="{ active: worksViewMode === 'grid' }" @click="worksViewMode = 'grid'">宫格</button>
+                  <button type="button" :class="{ active: worksViewMode === 'table' }" @click="worksViewMode = 'table'">列表</button>
+                </view>
+              </view>
+            </view>
+
+            <view v-if="worksViewMode === 'grid' && userWorkCards.length" class="works-grid">
+              <view
+                v-for="entry in userWorkCards"
+                :key="entry.id"
+                :class="['works-card', workStatusClass(entry)]"
+                @click="previewWorkEntry(entry)"
+              >
+                <view class="works-card-preview">
+                  <image v-if="workThumbnail(entry)" :src="workThumbnail(entry)" mode="aspectFill" />
+                  <view v-else :class="['works-card-placeholder', { 'is-running': isWorkRunning(entry) }]">
+                    <text>{{ isWorkRunning(entry) ? '生成中' : 'AI' }}</text>
+                  </view>
+                  <text class="works-card-badge">{{ workStatusLabel(entry) }}</text>
+                </view>
+                <view class="works-card-body">
+                  <text class="works-card-title">{{ entry.title }}</text>
+                  <text class="works-card-desc">{{ entry.prompt || '暂无提示词' }}</text>
+                  <view class="works-card-meta">
+                    <text>{{ entry.model }}</text>
+                    <text>{{ entry.resolution }}</text>
+                    <text>{{ entry.pointCost }} 点</text>
+                  </view>
+                </view>
+                <view class="works-card-actions">
+                  <button type="button" @click.stop="previewWorkEntry(entry)">预览</button>
+                  <button type="button" @click.stop="reuseWorkEntry(entry)">复用</button>
+                  <button type="button" :disabled="!entry.assetUrl" @click.stop="downloadWorkEntry(entry)">下载</button>
+                  <button type="button" @click.stop="toggleWorkFavorite(entry)">{{ isWorkFavorite(entry) ? '已收藏' : '收藏' }}</button>
+                </view>
+              </view>
+            </view>
+
+            <view v-else-if="worksViewMode === 'table' && userWorkCards.length" class="works-table">
+              <view class="works-table-head">
+                <text>作品</text>
+                <text>状态</text>
+                <text>模型</text>
+                <text>尺寸</text>
+                <text>消耗</text>
+                <text>创建时间</text>
+                <text>操作</text>
+              </view>
+              <view v-for="entry in userWorkCards" :key="entry.id" class="works-table-row">
+                <view class="works-table-name">
+                  <image v-if="workThumbnail(entry)" :src="workThumbnail(entry)" mode="aspectFill" />
+                  <view v-else class="works-table-file">AI</view>
+                  <view>
+                    <text>{{ entry.title }}</text>
+                    <text>{{ entry.prompt || entry.id }}</text>
+                  </view>
+                </view>
+                <text>{{ workStatusLabel(entry) }}</text>
+                <text>{{ entry.model }}</text>
+                <text>{{ entry.resolution }}</text>
+                <text>{{ entry.pointCost }} 点</text>
+                <text>{{ formatShortDate(entry.createdAt || entry.updatedAt) }}</text>
+                <view class="works-table-actions">
+                  <button type="button" @click="previewWorkEntry(entry)">预览</button>
+                  <button type="button" @click="reuseWorkEntry(entry)">复用</button>
+                  <button type="button" :disabled="!entry.assetUrl" @click="downloadWorkEntry(entry)">下载</button>
+                </view>
+              </view>
+            </view>
+
+            <view v-else class="works-empty">
+              <text>暂无匹配作品</text>
+              <text>调整筛选条件，或先去 AI 生图创建新作品。</text>
+              <button type="button" @click="selectModule('dashboard')">去创作</button>
+            </view>
           </view>
         </scroll-view>
       </view>
@@ -866,9 +1011,9 @@
                   </label>
                   <label>
                     <text>开通等级</text>
-                    <select v-model.number="childAgentForm.level">
-                      <option v-for="option in childAgentLevelOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-                    </select>
+                    <picker :range="childAgentLevelOptions" range-key="label" :value="childAgentLevelIndex" @change="changeChildAgentLevel">
+                      <view class="channel-picker">{{ childAgentLevelLabel }}</view>
+                    </picker>
                   </label>
                   <label>
                     <text>邀请码</text>
@@ -945,6 +1090,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api } from "../api/client";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
+import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
+
+declare const wx: { getSystemInfoSync?: () => { platform?: string; brand?: string } } | undefined;
 import PptDocumentGeneration from "../components/PptDocumentGeneration.vue";
 import type { Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask, ModelInfo, PointAccount } from "../types";
 
@@ -976,6 +1124,24 @@ type ModuleConfig = {
   description: string;
   status: string;
   capabilities: string[];
+};
+
+type WorkStatusFilter = "all" | "done" | "running" | "failed" | "favorite";
+type WorkViewMode = "grid" | "table";
+type UserWorkEntry = {
+  id: string;
+  task?: GenerationTask;
+  asset?: Asset;
+  title: string;
+  prompt: string;
+  status: GenerationTask["status"];
+  model: string;
+  resolution: string;
+  pointCost: number;
+  assetUrl: string;
+  thumbnailUrl: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 type ApiProviderSettings = {
   id: string;
@@ -1262,6 +1428,22 @@ const routeModules = Object.entries(moduleRoutes).reduce<Record<string, ModuleId
   return routes;
 }, { ...legacyRoutes });
 
+function hasBrowserWindow() {
+  return typeof window !== "undefined" && typeof window.location !== "undefined";
+}
+
+function currentPathname() {
+  return hasBrowserWindow() ? window.location.pathname : loginRoute;
+}
+
+function currentPath() {
+  return currentPathname().replace(/\/$/, "") || "/";
+}
+
+function currentSearchParams() {
+  return hasBrowserWindow() ? new URLSearchParams(window.location.search) : new URLSearchParams();
+}
+
 const userModules: ModuleConfig[] = [
   { id: "dashboard", label: "用户首页", description: "创作任务、积分、作品和常用能力入口。", status: "用户工作台", capabilities: ["创作概览", "积分状态", "作品入口"] },
   { id: "wirelessCanvas", label: "无线画布", description: "复刻 Infinite-Canvas 智能画布，支持节点、资产库、工作流和画布编排。", status: "源码复刻", capabilities: ["无限画布", "智能节点", "资产库", "工作流"] },
@@ -1307,6 +1489,10 @@ const assets = ref<Asset[]>([]);
 const models = ref<ModelInfo[]>([]);
 const pointAccount = ref<PointAccount | null>(null);
 const model = ref("gpt-image-2");
+const worksSearchKeyword = ref("");
+const worksStatusFilter = ref<WorkStatusFilter>("all");
+const worksViewMode = ref<WorkViewMode>("grid");
+const favoriteWorkIds = ref<string[]>([]);
 const isLoggedIn = ref(false);
 const currentUser = ref<AuthUser | null>(null);
 const currentAgent = ref<ChannelAgent | null>(null);
@@ -1316,6 +1502,7 @@ const childAgentCreating = ref(false);
 const childAgentForm = ref({ name: "", email: "", level: 1, inviteCode: "", available: 0 });
 const loginEmail = ref("demo@xianzhi.ai");
 const loginPassword = ref("Demo123!");
+const wechatLoginLoading = ref(false);
 const registerUsername = ref("");
 const registerEmail = ref("");
 const registerPassword = ref("");
@@ -1528,6 +1715,8 @@ const childAgentLevelOptions = computed(() => {
   if (level >= 5) return [{ value: 1, label: "L1 推广员/业务员" }, { value: 2, label: "L2 初级代理商" }, { value: 3, label: "L3 高级代理商" }, { value: 4, label: "L4 城市合伙人" }];
   return [];
 });
+const childAgentLevelIndex = computed(() => Math.max(0, childAgentLevelOptions.value.findIndex(option => option.value === childAgentForm.value.level)));
+const childAgentLevelLabel = computed(() => childAgentLevelOptions.value[childAgentLevelIndex.value]?.label || "请选择等级");
 const apiProtocolIndex = computed(() => Math.max(0, apiProtocolOptions.indexOf(apiProviderForm.value.protocol)));
 const apiAuthTypeIndex = computed(() => Math.max(0, apiAuthTypeOptions.indexOf(apiProviderForm.value.authType)));
 const apiProxyModeIndex = computed(() => Math.max(0, apiProxyModeOptions.indexOf(apiProviderForm.value.proxyMode)));
@@ -1540,6 +1729,69 @@ const apiModelPreview = computed(() => parseApiModels(apiProviderForm.value.mode
 const recentDashboardAssets = computed(() => [...assets.value]
   .sort((a, b) => new Date(b.createdAt || b.updatedAt || 0).getTime() - new Date(a.createdAt || a.updatedAt || 0).getTime())
   .slice(0, 5));
+const workStatusOptions: Array<{ label: string; value: WorkStatusFilter }> = [
+  { label: "全部作品", value: "all" },
+  { label: "已完成", value: "done" },
+  { label: "生成中", value: "running" },
+  { label: "失败", value: "failed" },
+  { label: "收藏", value: "favorite" }
+];
+const generationTaskMap = computed(() => {
+  const map = new Map<string, GenerationTask>();
+  tasks.value.forEach(task => {
+    if (task.id) map.set(task.id, task);
+  });
+  return map;
+});
+const assetById = computed(() => {
+  const map = new Map<string, Asset>();
+  assets.value.forEach(asset => {
+    if (asset.id) map.set(asset.id, asset);
+  });
+  return map;
+});
+const firstAssetByTaskId = computed(() => {
+  const map = new Map<string, Asset>();
+  assets.value.forEach(asset => {
+    if (asset.taskId && !map.has(asset.taskId)) map.set(asset.taskId, asset);
+  });
+  return map;
+});
+const userWorkEntries = computed<UserWorkEntry[]>(() => {
+  const taskEntries = tasks.value.map(task => createWorkEntryFromTask(task));
+  const taskIds = new Set(taskEntries.map(item => item.asset?.id).filter(Boolean));
+  const assetOnlyEntries = assets.value
+    .filter(asset => !asset.taskId && !taskIds.has(asset.id))
+    .map(asset => createWorkEntryFromAsset(asset));
+  return [...taskEntries, ...assetOnlyEntries].sort((a, b) => workDateMs(b) - workDateMs(a));
+});
+const userWorkCards = computed(() => {
+  const keyword = worksSearchKeyword.value.trim().toLowerCase();
+  const statusFilter = worksStatusFilter.value;
+  return userWorkEntries.value.filter(entry => {
+    if (statusFilter === "done" && !isWorkSucceeded(entry)) return false;
+    if (statusFilter === "running" && !isWorkRunning(entry)) return false;
+    if (statusFilter === "failed" && !isWorkFailed(entry)) return false;
+    if (statusFilter === "favorite" && !isWorkFavorite(entry)) return false;
+    if (!keyword) return true;
+    return [entry.title, entry.prompt, entry.model, entry.status, entry.id]
+      .map(item => String(item || "").toLowerCase())
+      .join(" ")
+      .includes(keyword);
+  });
+});
+const worksSummaryCards = computed(() => {
+  const total = userWorkEntries.value.length;
+  const done = userWorkEntries.value.filter(isWorkSucceeded).length;
+  const favorites = userWorkEntries.value.filter(isWorkFavorite).length;
+  const points = userWorkEntries.value.reduce((sum, entry) => sum + Number(entry.pointCost || 0), 0);
+  return [
+    { label: "全部作品", value: total.toLocaleString("zh-CN"), hint: "含图片任务与收藏记录" },
+    { label: "已完成", value: done.toLocaleString("zh-CN"), hint: "可预览、下载、复用" },
+    { label: "收藏作品", value: favorites.toLocaleString("zh-CN"), hint: "已加入收藏夹" },
+    { label: "消耗点数", value: points.toLocaleString("zh-CN"), hint: "按当前任务汇总" }
+  ];
+});
 const selectedDashboardModel = computed(() => models.value.find(item => item.code === model.value) || models.value[0]);
 const selectedDashboardModelName = computed(() => selectedDashboardModel.value?.name || selectedDashboardModel.value?.code || "默认模型");
 const selectedDashboardModelCost = computed(() => {
@@ -1683,7 +1935,7 @@ const dashboardUsageDays = computed(() => {
   });
 });
 const workspaceTitle = computed(() => ({ user: "用户工作台", agent: "代理商中心", admin: "运营后台" })[currentWorkspace.value]);
-const isRegisterRoute = computed(() => window.location.pathname.replace(/\/$/, "") === "/register");
+const isRegisterRoute = computed(() => currentPath() === "/register");
 const workspaceEyebrow = computed(() => ({ user: "USER WORKSPACE", agent: "AGENT WORKSPACE", admin: "ADMIN WORKSPACE" })[currentWorkspace.value]);
 const workspaceHeroTitle = computed(() => {
   if (currentWorkspace.value === "agent") return "专注客户、佣金和提现";
@@ -1713,35 +1965,50 @@ const metrics = computed(() => {
 });
 onMounted(() => {
   restoreApiSettings();
+  restoreFavoriteWorks();
   syncModuleFromLocation();
-  window.addEventListener("popstate", syncModuleFromLocation);
+  if (hasBrowserWindow()) {
+    window.addEventListener("popstate", syncModuleFromLocation);
+  }
   void restoreAuthenticatedSession();
 });
 
 onBeforeUnmount(() => {
   clearWirelessCanvasLoadTimer();
-  window.removeEventListener("popstate", syncModuleFromLocation);
+  if (hasBrowserWindow()) {
+    window.removeEventListener("popstate", syncModuleFromLocation);
+  }
 });
 
+function restoreFavoriteWorks() {
+  try {
+    const stored = uni.getStorageSync("favoriteWorkIds");
+    favoriteWorkIds.value = Array.isArray(stored) ? stored.map(item => String(item)) : [];
+  } catch (error) {
+    favoriteWorkIds.value = [];
+  }
+}
 
 async function restoreAuthenticatedSession() {
-  if (isAdminPath(window.location.pathname)) {
+  const path = currentPath();
+  const pathname = currentPathname();
+  if (hasBrowserWindow() && isAdminPath(pathname)) {
     window.location.replace("/admin/");
     return;
   }
   const token = uni.getStorageSync("token");
-  if (!token || window.location.pathname === loginRoute || isRegisterRoute.value) {
+  if (!token || path === loginRoute || isRegisterRoute.value) {
     isLoggedIn.value = false;
     return;
   }
   try {
     const auth = await api<AuthResponse>("/api/v1/auth/me");
     const workspace = workspaceFromAuth(auth);
-    if (workspace === "admin") {
+    if (workspace === "admin" && hasBrowserWindow()) {
       window.location.replace("/admin/");
       return;
     }
-    if (workspace === "agent") {
+    if (workspace === "agent" && hasBrowserWindow()) {
       window.location.replace("/agent/");
       return;
     }
@@ -1972,6 +2239,12 @@ function changeNewApiAuthType(event: { detail: { value: number | string } }) {
   newApiProviderDraft.value.authType = apiAuthTypeOptions[index] || apiAuthTypeOptions[0];
 }
 
+function changeChildAgentLevel(event: { detail: { value: number | string } }) {
+  const index = Number(event.detail.value);
+  const option = childAgentLevelOptions.value[index];
+  if (option) childAgentForm.value.level = option.value;
+}
+
 function useRecommendedApi(id: string) {
   const item = recommendedApis.find(option => option.id === id) || recommendedApis[0];
   const template = apiProviderTemplates.find(option => option.id === item.templateId) || apiProviderTemplates[0];
@@ -2068,9 +2341,14 @@ function isAgentPath(pathname: string) {
 }
 
 function syncModuleFromLocation() {
-  const path = window.location.pathname.replace(/\/$/, "") || "/";
-  registerInviteCode.value = new URLSearchParams(window.location.search).get("invite") || "";
-  if (isAdminPath(window.location.pathname)) {
+  if (!hasBrowserWindow()) {
+    registerInviteCode.value = "";
+    return;
+  }
+
+  const path = currentPath();
+  registerInviteCode.value = currentSearchParams().get("invite") || "";
+  if (isAdminPath(currentPathname())) {
     window.location.replace("/admin/");
     return;
   }
@@ -2090,6 +2368,8 @@ function syncModuleFromLocation() {
   }
 }
 function pushModuleRoute(id: ModuleId) {
+  if (!hasBrowserWindow()) return;
+
   if (id === "admin") {
     window.location.assign("/admin/");
     return;
@@ -2108,7 +2388,7 @@ function applyAuth(auth: AuthResponse) {
 
 function workspaceFromAuth(auth: AuthResponse): Workspace {
   if (auth.workspace === "admin") return "admin";
-  if (auth.workspace === "agent" && auth.agent && isAgentPath(window.location.pathname)) return "agent";
+  if (auth.workspace === "agent" && auth.agent && isAgentPath(currentPathname())) return "agent";
   if (auth.user.role === "SUPER_ADMIN") return "admin";
   return "user";
 }
@@ -2116,10 +2396,82 @@ function workspaceFromAuth(auth: AuthResponse): Workspace {
 function moduleFromAuth(auth: AuthResponse): ModuleId {
   const module = auth.defaultModule as ModuleId;
   if (moduleRoutes[module]) {
-    if (moduleWorkspace[module] !== "agent" || (auth.agent && isAgentPath(window.location.pathname))) return module;
+    if (moduleWorkspace[module] !== "agent" || (auth.agent && isAgentPath(currentPathname()))) return module;
   }
   const workspace = workspaceFromAuth(auth);
   return workspace === "agent" ? "agentHome" : workspace === "admin" ? "admin" : "dashboard";
+}
+
+function defaultRouteFromAuth(auth: AuthResponse) {
+  const route = String(auth.defaultRoute || "").trim();
+  if (!route.startsWith("/") || route.startsWith("//")) return "";
+  if (route.startsWith("/admin") || route.startsWith("/app") || route.startsWith("/agent")) return route;
+  return "";
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "errMsg" in error) {
+    const errMsg = (error as { errMsg?: unknown }).errMsg;
+    if (typeof errMsg === "string" && errMsg.trim()) return errMsg;
+  }
+  return fallback;
+}
+
+function redirectAfterAuth(auth: AuthResponse) {
+  if (auth.accessToken) uni.setStorageSync("token", auth.accessToken);
+  if (!hasBrowserWindow()) {
+    const nextModule = moduleFromAuth(auth);
+    applyAuth(auth);
+    activeModule.value = nextModule;
+    currentWorkspace.value = moduleWorkspace[nextModule] || workspaceFromAuth(auth);
+    void refresh();
+    if (auth.agent) void refreshChannelCenter();
+    return;
+  }
+
+  const defaultRoute = defaultRouteFromAuth(auth);
+  if (defaultRoute) {
+    window.location.replace(defaultRoute);
+    return;
+  }
+  const workspace = workspaceFromAuth(auth);
+  if (workspace === "admin") {
+    window.location.replace("/admin/");
+    return;
+  }
+  if (workspace === "agent") {
+    window.location.replace("/agent/");
+    return;
+  }
+  window.location.replace("/app");
+}
+
+function isWeChatDevtoolsRuntime() {
+  try {
+    const systemInfo = typeof wx !== "undefined" && wx.getSystemInfoSync
+      ? wx.getSystemInfoSync()
+      : (uni.getSystemInfoSync() as { platform?: string; brand?: string });
+    return systemInfo.platform === "devtools" || systemInfo.brand === "devtools";
+  } catch (error) {
+    return false;
+  }
+}
+
+function requestWechatMiniProgramCode() {
+  return new Promise<string>((resolve, reject) => {
+    uni.login({
+      provider: "weixin",
+      success: result => {
+        if (result.code) {
+          resolve(result.code);
+          return;
+        }
+        reject(new Error("微信授权未返回 code"));
+      },
+      fail: error => reject(new Error(errorMessage(error, "微信授权失败")))
+    });
+  });
 }
 
 function isAgentModule(id: ModuleId) {
@@ -2129,6 +2481,278 @@ function isAgentModule(id: ModuleId) {
 function isAgentDataModule(id: ModuleId) {
   return id === "agentCustomers" || id === "agentUsage" || id === "agentCommissions" || id === "agentWithdrawals" || id === "agentChildren";
 }
+
+function taskForAsset(asset: Asset) {
+  return asset.taskId ? generationTaskMap.value.get(asset.taskId) : undefined;
+}
+
+function assetMetadataText(asset: Asset, keys: string[]) {
+  for (const key of keys) {
+    const value = asset.metadata?.[key];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function formatAssetName(asset: Asset) {
+  const rawName = String(asset.name || "").trim();
+  const fallback = asset.mediaType === "video" ? "AI 视频作品" : asset.mediaType === "document" ? "PPT 文档作品" : "AI 生图作品";
+  return (rawName || fallback)
+    .replace(/^TEXT_TO_IMAGE[-_]?/i, "AI 生图 ")
+    .replace(/^IMAGE_TO_IMAGE[-_]?/i, "图生图 ")
+    .replace(/^TEXT_TO_VIDEO[-_]?/i, "AI 视频 ")
+    .replace(/^IMAGE_TO_VIDEO[-_]?/i, "图生视频 ");
+}
+
+function assetDescription(asset: Asset) {
+  const task = taskForAsset(asset);
+  const prompt = assetMetadataText(asset, ["prompt", "description", "title"]) || task?.prompt;
+  if (prompt) return String(prompt);
+  if (asset.taskId) return `任务 ${asset.taskId}`;
+  return "已归档到作品中心";
+}
+
+function assetThumbnail(asset: Asset) {
+  return asset.thumbnailUrl || asset.url;
+}
+
+function assetMediaLabel(asset: Asset) {
+  if (asset.mediaType === "video") return "视频";
+  if (asset.mediaType === "document") return "文档";
+  return "图片";
+}
+
+function assetMediaIcon(asset: Asset) {
+  if (asset.mediaType === "video") return "影";
+  if (asset.mediaType === "document") return "文";
+  return "图";
+}
+
+function assetModelLabel(asset: Asset) {
+  return assetMetadataText(asset, ["model", "modelName", "provider"]) || taskForAsset(asset)?.model || "默认模型";
+}
+
+function assetResolutionLabel(asset: Asset) {
+  return assetMetadataText(asset, ["resolution", "size", "dimensions", "aspectRatio"]) || "自适应";
+}
+
+function taskParamText(task: GenerationTask | undefined, keys: string[]) {
+  if (!task?.params) return "";
+  for (const key of keys) {
+    const value = task.params[key];
+    if (value !== undefined && value !== null && String(value).trim()) return String(value).trim();
+  }
+  return "";
+}
+
+function taskTitle(task: GenerationTask, asset?: Asset) {
+  const namedTask = task as GenerationTask & { name?: string };
+  const rawName = String(namedTask.name || asset?.name || task.prompt || "").trim();
+  if (rawName) {
+    return rawName
+      .replace(/^TEXT_TO_IMAGE[-_]?/i, "AI 生图 ")
+      .replace(/^IMAGE_TO_IMAGE[-_]?/i, "图生图 ")
+      .replace(/^TEXT_TO_VIDEO[-_]?/i, "AI 视频 ")
+      .replace(/^IMAGE_TO_VIDEO[-_]?/i, "图生视频 ");
+  }
+  if (task.type === "TEXT_TO_VIDEO" || task.type === "IMAGE_TO_VIDEO") return "AI 视频作品";
+  return "AI 生图作品";
+}
+
+function taskLinkedAsset(task: GenerationTask) {
+  const fromResult = (task.resultIds || [])
+    .map(id => assetById.value.get(String(id)))
+    .find(Boolean);
+  return fromResult || firstAssetByTaskId.value.get(task.id);
+}
+
+function createWorkEntryFromTask(task: GenerationTask): UserWorkEntry {
+  const asset = taskLinkedAsset(task);
+  return {
+    id: task.id,
+    task,
+    asset,
+    title: taskTitle(task, asset),
+    prompt: task.prompt || assetDescription(asset || createEmptyAsset(task.id)),
+    status: task.status || "PROCESSING",
+    model: task.model || assetModelLabel(asset || createEmptyAsset(task.id)),
+    resolution: taskParamText(task, ["resolution", "size", "dimensions", "aspectRatio"]) || (asset ? assetResolutionLabel(asset) : "自适应"),
+    pointCost: Number(task.pointCost || 0),
+    assetUrl: asset ? resolveAssetUrl(asset) : "",
+    thumbnailUrl: asset ? assetThumbnail(asset) : "",
+    createdAt: task.createdAt || asset?.createdAt,
+    updatedAt: task.updatedAt || task.workerFinishedAt || asset?.updatedAt
+  };
+}
+
+function createWorkEntryFromAsset(asset: Asset): UserWorkEntry {
+  return {
+    id: asset.id,
+    asset,
+    title: formatAssetName(asset),
+    prompt: assetDescription(asset),
+    status: "SUCCEEDED",
+    model: assetModelLabel(asset),
+    resolution: assetResolutionLabel(asset),
+    pointCost: Number(asset.metadata?.pointCost || 0),
+    assetUrl: resolveAssetUrl(asset),
+    thumbnailUrl: assetThumbnail(asset),
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt
+  };
+}
+
+function createEmptyAsset(id: string): Asset {
+  return { id, name: "", url: "", mediaType: "image" };
+}
+
+function workDateMs(entry: UserWorkEntry) {
+  const value = entry.updatedAt || entry.createdAt;
+  if (!value) return 0;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function isWorkSucceeded(entry: UserWorkEntry) {
+  return entry.status === "SUCCEEDED";
+}
+
+function isWorkRunning(entry: UserWorkEntry) {
+  return ["QUEUED", "PROCESSING", "RETRYING"].includes(entry.status);
+}
+
+function isWorkFailed(entry: UserWorkEntry) {
+  return ["FAILED", "CANCELLED"].includes(entry.status);
+}
+
+function isWorkFavorite(entry: UserWorkEntry) {
+  return favoriteWorkIds.value.includes(entry.id);
+}
+
+function workStatusLabel(entry: UserWorkEntry) {
+  if (isWorkSucceeded(entry)) return "已完成";
+  if (isWorkRunning(entry)) return "生成中";
+  if (entry.status === "CANCELLED") return "已取消";
+  if (isWorkFailed(entry)) return "失败";
+  return "排队中";
+}
+
+function workStatusClass(entry: UserWorkEntry) {
+  if (isWorkSucceeded(entry)) return "is-success";
+  if (isWorkRunning(entry)) return "is-running";
+  if (isWorkFailed(entry)) return "is-failed";
+  return "is-pending";
+}
+
+function workThumbnail(entry: UserWorkEntry) {
+  if (entry.asset?.mediaType === "image") return entry.thumbnailUrl || entry.assetUrl;
+  return "";
+}
+
+function previewWorkEntry(entry: UserWorkEntry) {
+  if (!entry.assetUrl || !hasBrowserWindow()) {
+    uni.showToast({ title: isWorkRunning(entry) ? "作品仍在生成中" : "暂无可预览文件", icon: "none" });
+    return;
+  }
+  window.open(entry.assetUrl, "_blank", "noopener,noreferrer");
+}
+
+function downloadWorkEntry(entry: UserWorkEntry) {
+  if (!entry.assetUrl || !hasBrowserWindow()) {
+    uni.showToast({ title: "暂无可下载文件", icon: "none" });
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = entry.assetUrl;
+  link.download = entry.title || entry.id;
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function reuseWorkEntry(entry: UserWorkEntry) {
+  if (entry.prompt) {
+    uni.setClipboardData({
+      data: entry.prompt,
+      success: () => uni.showToast({ title: "提示词已复制，可继续创作", icon: "success" }),
+      fail: () => uni.showToast({ title: "已复用当前配置", icon: "success" })
+    });
+    return;
+  }
+  uni.showToast({ title: "暂无可复用提示词", icon: "none" });
+}
+
+function toggleWorkFavorite(entry: UserWorkEntry) {
+  const next = new Set(favoriteWorkIds.value);
+  if (next.has(entry.id)) {
+    next.delete(entry.id);
+    uni.showToast({ title: "已取消收藏", icon: "none" });
+  } else {
+    next.add(entry.id);
+    uni.showToast({ title: "已加入收藏", icon: "success" });
+  }
+  favoriteWorkIds.value = Array.from(next);
+  try {
+    uni.setStorageSync("favoriteWorkIds", favoriteWorkIds.value);
+  } catch (error) {
+    // 收藏失败不影响作品列表浏览。
+  }
+}
+
+function resolveAssetUrl(asset: Asset) {
+  const rawUrl = String(asset.url || "").trim();
+  if (!rawUrl) return "";
+  if (/^(https?:|data:|blob:)/i.test(rawUrl)) return rawUrl;
+  if (!hasBrowserWindow()) return rawUrl;
+  return new URL(rawUrl, window.location.origin).toString();
+}
+
+function previewAsset(asset: Asset) {
+  const url = resolveAssetUrl(asset);
+  if (!url || !hasBrowserWindow()) {
+    uni.showToast({ title: "暂无可预览文件", icon: "none" });
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function downloadAsset(asset: Asset) {
+  const url = resolveAssetUrl(asset);
+  if (!url || !hasBrowserWindow()) {
+    uni.showToast({ title: "暂无可下载文件", icon: "none" });
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = formatAssetName(asset);
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function copyAssetLink(asset: Asset) {
+  const url = resolveAssetUrl(asset);
+  if (!url) {
+    uni.showToast({ title: "暂无可复制链接", icon: "none" });
+    return;
+  }
+  uni.setClipboardData({
+    data: url,
+    success: () => uni.showToast({ title: "链接已复制", icon: "success" }),
+    fail: () => uni.showToast({ title: "复制失败", icon: "none" })
+  });
+}
+
+function isToday(value?: string) {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+}
+
 function formatShortDate(value?: string) {
   if (!value) return "06/19 20:21";
   const date = new Date(value);
@@ -2155,11 +2779,18 @@ function performLogout(showMessage = true) {
   channelCenter.value = null;
   isLoggedIn.value = false;
   isModuleDrawerOpen.value = false;
-  window.history.pushState({ loggedOut: true }, "", loginRoute);
+  if (hasBrowserWindow()) {
+    window.history.pushState({ loggedOut: true }, "", loginRoute);
+  }
   if (showMessage) uni.showToast({ title: "已退出", icon: "success" });
 }
 
 function goLogin() {
+  if (!hasBrowserWindow()) {
+    isLoggedIn.value = false;
+    return;
+  }
+
   window.history.pushState({ module: "login" }, "", loginRoute);
   syncModuleFromLocation();
 }
@@ -2188,8 +2819,7 @@ async function registerByInvite() {
         inviteCode: registerInviteCode.value.trim()
       })
     });
-    if (auth.accessToken) uni.setStorageSync("token", auth.accessToken);
-    window.location.replace("/app");
+    redirectAfterAuth(auth);
   } catch (error) {
     uni.showToast({ title: error instanceof Error ? error.message : "注册失败", icon: "none" });
   }
@@ -2205,20 +2835,29 @@ async function login() {
       method: "POST",
       body: JSON.stringify({ email: loginEmail.value.trim(), password: loginPassword.value.trim() })
     });
-    if (auth.accessToken) uni.setStorageSync("token", auth.accessToken);
-    const workspace = workspaceFromAuth(auth);
-    if (workspace === "admin") {
-      window.location.replace("/admin/");
-      return;
-    }
-    if (workspace === "agent") {
-      window.location.replace("/agent/");
-      return;
-    }
-    window.location.replace("/app");
-    return;
+    redirectAfterAuth(auth);
   } catch (error) {
     uni.showToast({ title: error instanceof Error ? error.message : "登录失败", icon: "none" });
+  }
+}
+
+async function loginWithWechatMiniProgram() {
+  if (wechatLoginLoading.value) return;
+  wechatLoginLoading.value = true;
+  try {
+    const code = isWeChatDevtoolsRuntime() ? "mock-devtools-code" : await requestWechatMiniProgramCode();
+    if (code === "mock-devtools-code") {
+      console.info("微信开发者工具模拟登录 code", code);
+    }
+    const auth = await api<AuthResponse>("/api/v1/auth/wechat-mini-program/login", {
+      method: "POST",
+      body: JSON.stringify({ code })
+    });
+    redirectAfterAuth(auth);
+  } catch (error) {
+    uni.showToast({ title: errorMessage(error, "微信登录暂未开通"), icon: "none" });
+  } finally {
+    wechatLoginLoading.value = false;
   }
 }
 </script>
@@ -2228,41 +2867,144 @@ async function login() {
   min-height: 100vh;
   display: grid;
   place-items: center;
+  overflow-x: hidden;
   padding: 24px;
-  background: #0b1220;
+  background: #eef0f4;
+  box-sizing: border-box;
 }
 
-.login-card {
-  width: min(440px, 100%);
+.login-screen {
+  position: relative;
+  isolation: isolate;
   display: grid;
-  gap: 14px;
-  padding: 28px;
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: 14px;
-  background: #111827;
-  color: #eef2ff;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
+  justify-items: center;
+  align-content: start;
+  gap: 18px;
+  width: min(390px, 100%);
+  min-height: min(844px, calc(100vh - 48px));
+  max-width: 100vw;
+  overflow: hidden;
+  padding: 20px 24px 24px;
+  border-radius: 28px;
+  background: #f8fafc;
+  box-shadow: 0 24px 70px rgba(16, 24, 40, .16);
+  box-sizing: border-box;
 }
 
-.login-logo {
-  width: 58px;
-  height: 58px;
+.login-bg-accent {
+  position: absolute;
+  z-index: -1;
+  border-radius: 999px;
+  pointer-events: none;
 }
 
-.eyebrow {
-  color: #60a5fa;
-  font-size: 12px;
+.login-bg-accent-blue {
+  top: -116px;
+  left: -144px;
+  width: 252px;
+  height: 252px;
+  background: rgba(226, 244, 255, .62);
+}
+
+.login-bg-accent-warm {
+  right: -104px;
+  bottom: -100px;
+  width: 224px;
+  height: 224px;
+  background: rgba(255, 244, 235, .64);
+}
+
+.login-statusbar {
+  width: 100%;
+  max-width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #101828;
+  font-size: 13px;
   font-weight: 800;
 }
 
-.login-title {
-  color: #fff;
-  font-size: 28px;
+.mini-capsule {
+  width: 74px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #e7ebf2;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 8px 18px rgba(16, 24, 40, .08);
+}
+
+.mini-dot {
+  width: 4px;
+  height: 4px;
+  display: block;
+  border-radius: 999px;
+  background: rgba(52, 64, 84, .82);
+}
+
+.login-brand {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+}
+
+.login-heading {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 100%;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(231, 235, 242, .94);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .94);
+  color: #101828;
+  box-shadow: 0 24px 70px rgba(16, 24, 40, .12);
+  box-sizing: border-box;
+}
+
+.login-logo {
+  width: 142px;
+  height: 118px;
+}
+
+.eyebrow {
+  width: fit-content;
+  display: block;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #ecfdf3;
+  color: #047857;
+  font-size: 11px;
   font-weight: 900;
+  line-height: 1.2;
+}
+
+.login-title {
+  display: block;
+  color: #101828;
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1.18;
 }
 
 .login-copy {
-  color: rgba(238, 242, 255, .72);
+  max-width: 318px;
+  display: block;
+  color: #667085;
   font-size: 14px;
   line-height: 1.65;
 }
@@ -2271,8 +3013,8 @@ async function login() {
   width: fit-content;
   padding: 8px 12px;
   border-radius: 999px;
-  background: rgba(45, 212, 191, .12);
-  color: #5eead4;
+  background: #ecfdf3;
+  color: #047857;
   font-size: 13px;
   font-weight: 800;
 }
@@ -2285,38 +3027,184 @@ async function login() {
 .login-form label {
   display: grid;
   gap: 7px;
-  color: rgba(238, 242, 255, .8);
+  color: #344054;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .login-form input {
-  height: 44px;
-  padding: 0 12px;
-  border: 1px solid rgba(255, 255, 255, .14);
-  border-radius: 8px;
-  background: rgba(15, 23, 42, .94);
-  color: #fff;
+  width: 100%;
+  height: 46px;
+  padding: 0 13px;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #fff;
+  color: #101828;
   font-size: 15px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.login-form input:focus {
+  border-color: #101828;
+  box-shadow: 0 0 0 3px rgba(16, 24, 40, .1);
 }
 
 .login-submit,
-.login-link-button {
-  height: 44px;
+.login-link-button,
+.wechat-login-button {
+  width: 100%;
+  min-height: 46px;
+  margin: 0;
+  padding: 0 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 15px;
   font-weight: 900;
+  line-height: 46px;
+  box-sizing: border-box;
 }
 
 .login-submit {
-  background: #2563eb;
+  background: #101828;
   color: #fff;
 }
 
 .login-link-button {
   background: transparent;
-  color: #93c5fd;
+  color: #2563eb;
+}
+
+.login-submit::after,
+.login-link-button::after,
+.wechat-login-button::after {
+  border: 0;
+}
+
+.login-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.login-divider view {
+  height: 1px;
+  background: #e7ebf2;
+}
+
+.wechat-login-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #d0d5dd;
+  background: #fff;
+  color: #047857;
+}
+
+.wechat-login-button[disabled] {
+  opacity: .68;
+}
+
+.wechat-login-icon {
+  position: relative;
+  width: 20px;
+  height: 16px;
+  display: inline-block;
+}
+
+.wechat-login-icon::before,
+.wechat-login-icon::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: #07c160;
+}
+
+.wechat-login-icon::before {
+  left: 0;
+  top: 2px;
+  width: 13px;
+  height: 9px;
+}
+
+.wechat-login-icon::after {
+  right: 0;
+  bottom: 1px;
+  width: 12px;
+  height: 8px;
+  opacity: .72;
+}
+
+.login-agreement {
+  display: block;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.login-helper {
+  width: 100%;
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e7ebf2;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .72);
+}
+
+.login-helper-accent {
+  width: 4px;
+  height: 44px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #2563eb, #06b6d4);
+}
+
+.login-helper view:last-child {
+  display: grid;
+  gap: 4px;
+}
+
+.login-helper text:first-child {
+  color: #101828;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.login-helper text:last-child {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.register-shell .login-card {
+  width: min(440px, 100%);
+  padding: 28px;
+}
+
+.register-shell .login-logo {
+  justify-self: center;
+}
+
+@media (max-width: 520px) {
+  .login-shell {
+    padding: 0;
+    background: #f8fafc;
+  }
+
+  .login-screen {
+    width: 100vw;
+    min-height: 100vh;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 .module-wirelessCanvas {
@@ -2430,11 +3318,6 @@ async function login() {
   color: rgba(255, 255, 255, .86);
   font-family: Inter, "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
   letter-spacing: 0;
-}
-
-.membership-page :deep(*) {
-  font-family: inherit;
-  letter-spacing: inherit;
 }
 
 .membership-shell {
@@ -2927,7 +3810,7 @@ async function login() {
 }
 
 .channel-form-grid input,
-.channel-form-grid select {
+.channel-picker {
   width: 100%;
   min-height: 38px;
   box-sizing: border-box;
@@ -2937,6 +3820,7 @@ async function login() {
   color: #0f172a;
   padding: 0 10px;
   font-size: 14px;
+  line-height: 38px;
 }
 
 .channel-submit-button {
@@ -2950,6 +3834,891 @@ async function login() {
 @media (max-width: 760px) {
   .channel-form-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+.app-shell.module-assets {
+  grid-template-columns: 248px minmax(0, 1fr);
+  background: #f6f8ff;
+}
+
+.app-shell.module-assets .sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 0 10px 12px;
+  border-right: 1px solid #dfe5ee;
+  background: #fff;
+  color: #101828;
+}
+
+.app-shell.module-assets .brand-block {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-items: start;
+  gap: 2px 10px;
+  min-height: 52px;
+  padding: 8px 4px 10px;
+  border-bottom: 1px solid #e5eaf2;
+}
+
+.app-shell.module-assets .brand-logo {
+  grid-row: 1 / 3;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  padding: 2px;
+  background: #fff;
+}
+
+.app-shell.module-assets .brand-title {
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.app-shell.module-assets .brand-title::after {
+  display: none;
+}
+
+.app-shell.module-assets .brand-subtitle {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.app-shell.module-assets .nav-list {
+  flex: 1 1 auto;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.app-shell.module-assets .nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  padding: 0 12px 0 42px;
+  background: transparent;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1;
+  text-align: left;
+  box-shadow: none;
+}
+
+.app-shell.module-assets .nav-item::before {
+  position: absolute;
+  left: 16px;
+  width: 16px;
+  height: 16px;
+  color: #111827;
+  font-size: 15px;
+}
+
+.app-shell.module-assets .nav-item::after {
+  border: 0;
+}
+
+.app-shell.module-assets .nav-dashboard::before {
+  content: "⌂";
+}
+
+.app-shell.module-assets .nav-wirelessCanvas::before {
+  content: "▣";
+}
+
+.app-shell.module-assets .nav-videoGeneration::before {
+  content: "▭";
+}
+
+.app-shell.module-assets .nav-ppt::before {
+  content: "▤";
+}
+
+.app-shell.module-assets .nav-assets::before {
+  content: "▣";
+}
+
+.app-shell.module-assets .nav-apiSettings::before {
+  content: "◇";
+}
+
+.app-shell.module-assets .nav-agents::before {
+  content: "◈";
+}
+
+.app-shell.module-assets .nav-geo::before {
+  content: "G";
+}
+
+.app-shell.module-assets .nav-membership::before {
+  content: "□";
+}
+
+.app-shell.module-assets .nav-usage::before {
+  content: "≡";
+}
+
+.app-shell.module-assets .nav-item.active {
+  background: #f1efff;
+  color: #5b49e8;
+  box-shadow: inset 4px 0 0 #6c5cf4;
+}
+
+.app-shell.module-assets .nav-item.active::before {
+  color: #5b49e8;
+}
+
+.app-shell.module-assets .more-nav-button {
+  margin-top: 0;
+  border: 0;
+  background: transparent;
+  color: #111827;
+  box-shadow: none;
+}
+
+.app-shell.module-assets .logout-nav-button {
+  margin-top: 0;
+  border: 0;
+  background: transparent;
+  color: #111827;
+}
+
+.app-shell.module-assets .sidebar-plan-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 12px;
+  border: 1px solid #e1e7f2;
+  border-radius: 14px;
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 10px 26px rgba(56, 72, 112, .08);
+}
+
+.app-shell.module-assets .sidebar-version {
+  display: none;
+}
+
+.works-center-page {
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+  min-height: 100%;
+  background: #f6f8ff;
+  color: #101828;
+}
+
+.works-center-page .topbar {
+  min-height: 52px;
+  border-bottom: 1px solid #dfe5ee;
+  background: rgba(255, 255, 255, .96);
+  color: #101828;
+  box-shadow: none;
+}
+
+.works-admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 16px 0 20px;
+}
+
+.works-admin-titlebar,
+.works-header-title,
+.works-admin-actions,
+.works-header-search,
+.works-size-button,
+.works-header-button {
+  display: flex;
+  align-items: center;
+}
+
+.works-admin-titlebar {
+  gap: 18px;
+  min-width: 0;
+}
+
+.works-header-icon,
+.works-header-button,
+.works-size-button {
+  margin: 0;
+  border: 1px solid #dfe5ee;
+  background: #fff;
+  color: #111827;
+  box-sizing: border-box;
+}
+
+.works-header-icon::after,
+.works-header-button::after,
+.works-size-button::after {
+  border: 0;
+}
+
+.works-header-icon,
+.works-header-button {
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  padding: 0;
+  color: #5b49e8;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 36px;
+}
+
+.works-header-title {
+  gap: 10px;
+  min-width: 0;
+  color: #111827;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.works-header-title text:first-child {
+  color: #5b49e8;
+  font-size: 16px;
+}
+
+.works-admin-actions {
+  gap: 10px;
+  min-width: 0;
+}
+
+.works-header-search {
+  gap: 8px;
+  width: min(320px, 26vw);
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #dfe5ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #9aa4b2;
+  box-sizing: border-box;
+}
+
+.works-header-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #344054;
+  font-size: 13px;
+}
+
+.works-size-button {
+  justify-content: center;
+  min-width: 72px;
+  height: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 36px;
+}
+
+.works-center-page .online-pill.online {
+  border-color: #bbf7d0;
+  background: #ecfdf3;
+  color: #047857;
+}
+
+.works-center-page .user-pill {
+  border-color: #dfe5ee;
+  background: #fff;
+  color: #334155;
+}
+
+.app-shell.module-assets .works-center-scroll,
+.works-center-scroll {
+  height: 100%;
+  padding: 18px 20px 30px;
+  background: #f6f8ff;
+  color: #101828;
+}
+
+.works-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 132px;
+  padding: 26px 34px;
+  border: 1px solid #e1e7f2;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 86% 28%, rgba(105, 92, 244, .16), transparent 20%),
+    linear-gradient(135deg, #fff, #f5f7ff);
+  box-shadow: 0 14px 34px rgba(56, 72, 112, .07);
+}
+
+.works-hero-copy {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.works-eyebrow {
+  width: fit-content;
+  padding: 0;
+  background: transparent;
+  color: #695cf4;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.works-title {
+  color: #172033;
+  font-size: 30px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.works-subtitle {
+  max-width: 680px;
+  color: #5d6b82;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.55;
+}
+
+.works-hero-actions,
+.works-toolbar,
+.works-filter-tabs,
+.works-view-toggle,
+.works-card-actions,
+.works-table-actions {
+  display: flex;
+  align-items: center;
+}
+
+.works-hero-actions {
+  gap: 10px;
+}
+
+.works-hero-actions button,
+.works-card-actions button,
+.works-table-actions button,
+.works-filter-tabs button,
+.works-view-toggle button,
+.works-empty button {
+  margin: 0;
+  border: 1px solid #dbe4ef;
+  background: #fff;
+  color: #334155;
+  font-weight: 900;
+  box-sizing: border-box;
+}
+
+.works-hero-actions button::after,
+.works-card-actions button::after,
+.works-table-actions button::after,
+.works-filter-tabs button::after,
+.works-view-toggle button::after,
+.works-empty button::after {
+  border: 0;
+}
+
+.works-hero-actions button,
+.works-empty button {
+  min-height: 38px;
+  border-radius: 10px;
+  padding: 0 16px;
+  font-size: 14px;
+  line-height: 38px;
+  border-color: transparent;
+  background: #ebe7ff;
+  color: #5b49e8;
+}
+
+.works-primary-action,
+.works-empty button {
+  border-color: transparent !important;
+  background: linear-gradient(135deg, #7464f2, #5b49e8) !important;
+  color: #fff !important;
+  box-shadow: none;
+}
+
+.works-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.works-summary-card {
+  display: grid;
+  gap: 7px;
+  padding: 18px;
+  border: 1px solid #e1e7f2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(56, 72, 112, .07);
+}
+
+.works-summary-card text:first-child {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.works-summary-card text:nth-child(2) {
+  color: #111827;
+  font-size: 26px;
+  font-weight: 950;
+  line-height: 1.1;
+}
+
+.works-summary-card text:last-child {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.works-panel {
+  margin-top: 16px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid #e1e7f2;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(56, 72, 112, .07);
+}
+
+.works-panel-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.works-filter-tabs {
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.works-filter-tabs button {
+  min-height: 34px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 34px;
+}
+
+.works-filter-tabs button.active {
+  border-color: #6c5cf4;
+  background: transparent;
+  color: #5b49e8;
+}
+
+.works-toolbar {
+  gap: 10px;
+}
+
+.works-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(300px, 28vw);
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #dde5f0;
+  border-radius: 9px;
+  background: #fff;
+  color: #64748b;
+  box-sizing: border-box;
+}
+
+.works-search:focus-within {
+  border-color: #bcb4ff;
+  box-shadow: 0 0 0 3px rgba(108, 92, 244, .14);
+}
+
+.works-search text {
+  color: #64748b;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.works-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font-size: 14px;
+  outline: none;
+}
+
+.works-search input::placeholder {
+  color: #94a3b8;
+}
+
+.works-view-toggle {
+  overflow: hidden;
+  border: 1px solid #dde5f0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.works-view-toggle button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 12px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 34px;
+}
+
+.works-view-toggle button.active {
+  background: #eeeaff;
+  color: #5b49e8;
+}
+
+.works-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.works-card {
+  overflow: hidden;
+  border: 1px solid #e4e9f3;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: none;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+
+.works-card:hover {
+  border-color: #bcb4ff;
+  box-shadow: 0 16px 34px rgba(66, 80, 124, .12);
+  transform: translateY(-2px);
+}
+
+.works-card-preview {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: linear-gradient(135deg, #eef3ff, #f8fafc);
+}
+
+.works-card-preview image {
+  width: 100%;
+  height: 100%;
+}
+
+.works-card-badge {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: rgba(15, 23, 42, .64);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.works-card.is-success .works-card-badge {
+  background: rgba(4, 120, 87, .82);
+}
+
+.works-card.is-running .works-card-badge {
+  background: rgba(37, 99, 235, .82);
+}
+
+.works-card.is-failed .works-card-badge {
+  background: rgba(185, 28, 28, .86);
+}
+
+.works-card-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: #5b49e8;
+  background: transparent;
+}
+
+.works-card-placeholder text:first-child {
+  display: block;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+  color: #5b49e8;
+  font-size: 18px;
+  font-weight: 900;
+  box-shadow: none;
+}
+
+.works-card-placeholder text:last-child {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.works-card-body {
+  display: grid;
+  gap: 8px;
+  padding: 12px 12px 10px;
+}
+
+.works-card-title,
+.works-card-desc,
+.works-card-meta text,
+.works-table-name text,
+.works-table-row > text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.works-card-title {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.works-card-desc {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.works-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.works-card-meta text {
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: #f2f4f8;
+  color: #58677f;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.works-card-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.works-card-actions button,
+.works-table-actions button {
+  min-height: 28px;
+  border-radius: 8px;
+  padding: 0 9px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 28px;
+}
+
+.works-card-actions button[disabled],
+.works-table-actions button[disabled] {
+  cursor: not-allowed;
+  opacity: .42;
+}
+
+.works-card-actions button:first-child,
+.works-table-actions button:first-child {
+  border-color: #dfe6f2;
+  background: #fff;
+  color: #334155;
+}
+
+.works-table {
+  overflow-x: auto;
+  border: 1px solid #e6edf6;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.works-table-head,
+.works-table-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.5fr) 88px 140px 116px 76px 130px 176px;
+  gap: 12px;
+  align-items: center;
+  min-width: 1030px;
+  padding: 12px 14px;
+}
+
+.works-table-head {
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.works-table-row {
+  border-top: 1px solid #edf2f7;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.works-table-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.works-table-name image,
+.works-table-file {
+  width: 52px;
+  height: 42px;
+  flex: 0 0 52px;
+  border-radius: 10px;
+}
+
+.works-table-file {
+  display: grid;
+  place-items: center;
+  background: #eef2ff;
+  color: #2563eb;
+  font-weight: 950;
+}
+
+.works-table-name > view {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.works-table-name text:first-child {
+  color: #0f172a;
+  font-weight: 950;
+}
+
+.works-table-name text:last-child {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.works-table-actions {
+  gap: 7px;
+}
+
+.works-empty {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 320px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+  text-align: center;
+}
+
+.works-empty text:first-child {
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.works-empty text:nth-child(2) {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@media (max-width: 1180px) {
+  .works-panel-head,
+  .works-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .works-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .works-search {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .works-center-scroll {
+    padding: 14px 12px 28px;
+  }
+
+  .works-hero {
+    padding: 20px;
+    border-radius: 14px;
+  }
+
+  .works-title {
+    font-size: 26px;
+  }
+
+  .works-hero-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .works-summary-grid,
+  .works-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .works-panel {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .works-view-toggle {
+    width: 100%;
+  }
+
+  .works-view-toggle button {
+    flex: 1 1 0;
+  }
+
+  .works-card-preview {
+    aspect-ratio: 4 / 3;
   }
 }
 </style>

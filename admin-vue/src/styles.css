@@ -4136,6 +4136,285 @@ body,
     justify-content: flex-start;
   }
 }
+
+/* Operation center console dashboard */
+.operation-center-page {
+  display: grid;
+  gap: 16px;
+}
+
+.operation-center-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(140px, 1fr));
+  gap: 14px;
+}
+
+.operation-center-stat-card {
+  min-height: 116px;
+  padding: 18px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+.operation-center-stat-card span,
+.operation-center-stat-card small {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.operation-center-stat-card strong {
+  display: block;
+  margin: 10px 0 8px;
+  color: var(--admin-text);
+  font-size: 28px;
+  line-height: 1;
+}
+
+.operation-center-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto) minmax(150px, auto) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid rgba(22, 163, 74, 0.28);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #ffffff 0%, #f2fbf7 58%, #eef6ff 100%);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
+}
+
+.operation-center-hero-copy h3 {
+  margin: 10px 0 8px;
+  color: var(--admin-text);
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.operation-center-hero-copy p {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.operation-center-code-card {
+  min-width: 150px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(22, 163, 74, 0.42);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.operation-center-code-card span,
+.operation-center-code-card strong {
+  display: block;
+}
+
+.operation-center-code-card span {
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.operation-center-code-card strong {
+  max-width: 210px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #15803d;
+  font-size: 18px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-center-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.operation-center-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.operation-center-tabs button {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 70px;
+  padding: 14px 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--admin-text);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+}
+
+.operation-center-tabs button:hover {
+  border-color: #16a34a;
+  color: #15803d;
+}
+
+.operation-center-tabs .el-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #ecfdf5;
+  color: #16a34a;
+  font-size: 18px;
+}
+
+.operation-center-tabs span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.operation-center-tabs strong {
+  color: #0f172a;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.operation-center-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(300px, 0.6fr);
+  gap: 16px;
+}
+
+.operation-center-chart-card,
+.operation-center-todo-card,
+.operation-center-summary-card {
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+}
+
+.operation-center-chart-bars {
+  height: 260px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(42px, 1fr));
+  align-items: end;
+  gap: 18px;
+  padding: 22px 16px 6px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fcfa 100%);
+}
+
+.operation-center-chart-bar {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  align-items: end;
+  justify-items: center;
+  gap: 10px;
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.operation-center-chart-bar i {
+  width: 100%;
+  min-height: 24px;
+  border-radius: 8px 8px 3px 3px;
+  background: linear-gradient(180deg, #16a34a 0%, #20c997 100%);
+  box-shadow: 0 8px 16px rgba(22, 163, 74, 0.18);
+}
+
+.operation-center-todo-card button {
+  width: 100%;
+  min-height: 68px;
+  margin: 0 0 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--admin-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.operation-center-todo-card button:hover {
+  border-color: #16a34a;
+  color: #15803d;
+}
+
+.operation-center-todo-card button strong,
+.operation-center-todo-card button small {
+  display: block;
+}
+
+.operation-center-todo-card button small {
+  margin-top: 6px;
+  color: var(--admin-muted);
+}
+
+.operation-center-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.operation-center-kpi-grid article {
+  min-height: 92px;
+  padding: 14px 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.operation-center-kpi-grid span,
+.operation-center-kpi-grid small {
+  display: block;
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.operation-center-kpi-grid strong {
+  display: block;
+  margin: 8px 0 6px;
+  overflow: hidden;
+  color: var(--admin-text);
+  font-size: 18px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1280px) {
+  .operation-center-stat-grid,
+  .operation-center-kpi-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .operation-center-stat-grid,
+  .operation-center-hero,
+  .operation-center-tabs,
+  .operation-center-dashboard-grid,
+  .operation-center-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .operation-center-actions {
+    justify-content: flex-start;
+  }
+}
 .online-image-page {
   display: grid;
   gap: 16px;
@@ -8280,11 +8559,11 @@ body {
 
 .user-console-shell .user-home-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
   gap: 24px;
   width: 100%;
-  max-width: min(100%, 1500px);
-  margin: 0 auto;
+  max-width: 100%;
+  margin: 0;
   box-sizing: border-box;
   min-width: 0;
 }
@@ -8497,7 +8776,7 @@ body {
 
 .user-console-shell .user-home-agent-row {
   display: grid;
-  grid-template-columns: repeat(8, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 12px;
 }
 
@@ -8571,13 +8850,14 @@ body {
 
 .user-console-shell .user-home-template-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
   gap: 14px;
 }
 
 .user-console-shell .user-home-template-card {
   display: grid;
   gap: 8px;
+  min-width: 0;
   overflow: hidden;
   padding: 0 0 12px;
   border: 1px solid var(--color-border);
@@ -8733,14 +9013,14 @@ body {
   background: linear-gradient(135deg, #cfe2ff, #7d8df6 52%, #f8fafc);
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1500px) {
   .user-console-shell .user-home-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .user-console-shell .user-home-inspiration {
     position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   }
 
   .user-console-shell .user-home-inspiration-head {
@@ -8748,7 +9028,7 @@ body {
   }
 
   .user-console-shell .user-home-agent-row {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   }
 }
 
@@ -13674,6 +13954,11 @@ body {
   cursor: pointer;
 }
 
+.identity-package-card.selected .membership-subscribe-button {
+  background: linear-gradient(90deg, #16a34a, #20c997);
+  color: #ffffff;
+}
+
 .membership-pricing-card ul {
   display: grid;
   gap: 14px;
@@ -14579,6 +14864,827 @@ body {
   border-color: var(--color-cta);
 }
 
+/* User membership final polish: keep commerce logic intact, make the page
+   scan like the rest of the user console instead of a heavy dark pricing wall. */
+.user-console-shell .user-membership-page {
+  gap: 18px;
+  align-content: start;
+  min-height: calc(100vh - 56px);
+  margin: -18px -20px -20px;
+  padding: 20px 24px 32px;
+  overflow: auto;
+  background: #f6f8ff;
+  color: #111827;
+}
+
+.user-console-shell .membership-plan-head {
+  grid-template-columns: minmax(0, 0.9fr) minmax(430px, 1.1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.user-console-shell .membership-plan-head > div:first-child,
+.user-console-shell .membership-current-card,
+.user-console-shell .membership-account-card,
+.user-console-shell .membership-recharge-card,
+.user-console-shell .membership-payment-card,
+.user-console-shell .membership-pricing-card,
+.user-console-shell .membership-order-panel {
+  border: 1px solid #e1e7f2;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(56, 72, 112, 0.07);
+}
+
+.user-console-shell .membership-plan-head > div:first-child {
+  display: grid;
+  align-content: center;
+  min-height: 128px;
+  border-radius: 14px;
+  padding: 22px 24px;
+  border-left: 4px solid var(--color-primary);
+}
+
+.user-console-shell .membership-plan-head h2 {
+  color: #172033;
+  font-size: 28px;
+  line-height: 1.18;
+}
+
+.user-console-shell .membership-plan-head p {
+  margin-top: 10px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.user-console-shell .membership-current-card {
+  grid-template-columns: minmax(0, 1fr) minmax(210px, auto) auto;
+  gap: 18px;
+  min-height: 128px;
+  border-radius: 14px;
+  padding: 22px 24px;
+  color: #111827;
+}
+
+.user-console-shell .membership-current-copy strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.user-console-shell .membership-current-copy small {
+  color: #667085;
+}
+
+.user-console-shell .membership-current-copy span,
+.user-console-shell .membership-pricing-card header > span {
+  background: #eef2ff;
+  color: var(--color-primary);
+}
+
+.user-console-shell .membership-balance {
+  gap: 10px;
+  color: #172033;
+  font-size: 24px;
+}
+
+.user-console-shell .membership-balance small {
+  color: #667085;
+  font-size: 13px;
+}
+
+.user-console-shell .membership-balance i {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.user-console-shell .membership-current-actions {
+  gap: 10px;
+}
+
+.user-console-shell .membership-current-actions button {
+  min-width: 84px;
+  min-height: 40px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.user-console-shell .membership-current-actions button:last-child {
+  border: 1px solid #e1e7f2;
+  background: #f8fafc;
+  color: #344054;
+}
+
+.user-console-shell .membership-mode-tabs,
+.user-console-shell .membership-cycle-tabs {
+  gap: 4px;
+  width: fit-content;
+  margin: 0;
+  border: 1px solid #e1e7f2;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 4px;
+  box-shadow: 0 10px 24px rgba(56, 72, 112, 0.06);
+}
+
+.user-console-shell .membership-mode-tabs {
+  grid-template-columns: repeat(3, 104px);
+}
+
+.user-console-shell .membership-mode-tabs button,
+.user-console-shell .membership-cycle-tabs button {
+  min-width: 0;
+  min-height: 38px;
+  border-radius: 9px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.user-console-shell .membership-mode-tabs button.active,
+.user-console-shell .membership-cycle-tabs button.active {
+  background: #6658ff;
+  color: #ffffff;
+  box-shadow: 0 10px 20px rgba(102, 88, 255, 0.22);
+}
+
+.user-console-shell .membership-cycle-tabs em {
+  color: #ff771b;
+  font-size: 12px;
+}
+
+.user-console-shell .membership-identity-panel,
+.user-console-shell .membership-pricing-grid {
+  gap: 16px;
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+.user-console-shell .membership-identity-panel {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.user-console-shell .membership-pricing-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.user-console-shell .custom-membership-pricing-grid {
+  grid-template-columns: 1fr;
+  margin-top: 0;
+}
+
+.user-console-shell .membership-pricing-card,
+.user-console-shell .membership-pricing-card.selected {
+  gap: 14px;
+  min-height: 0;
+  border-radius: 14px;
+  padding: 20px;
+  color: #172033;
+  background: #ffffff;
+}
+
+.user-console-shell .membership-pricing-card.featured {
+  border-color: rgba(255, 119, 27, 0.42);
+}
+
+.user-console-shell .membership-pricing-card.selected {
+  border-color: var(--color-cta);
+  box-shadow: 0 18px 44px rgba(255, 119, 27, 0.13);
+}
+
+.user-console-shell .membership-pricing-card:hover {
+  background: #ffffff;
+  border-color: var(--color-cta);
+  box-shadow: 0 18px 44px rgba(90, 77, 178, 0.1);
+}
+
+.user-console-shell .membership-pricing-card header {
+  min-height: 32px;
+}
+
+.user-console-shell .membership-pricing-card header > strong,
+.user-console-shell .membership-pricing-card .membership-credit-box strong {
+  color: #172033;
+}
+
+.user-console-shell .membership-pricing-card header > strong {
+  font-size: 16px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.user-console-shell .membership-pricing-card header > span {
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.user-console-shell .membership-price-row {
+  gap: 9px;
+}
+
+.user-console-shell .membership-pricing-card .membership-price-row span,
+.user-console-shell .membership-pricing-card .membership-price-row strong {
+  color: #172033;
+}
+
+.user-console-shell .membership-price-row strong {
+  font-size: 32px;
+}
+
+.user-console-shell .membership-pricing-card .membership-price-row del,
+.user-console-shell .membership-pricing-card > p,
+.user-console-shell .membership-pricing-card li,
+.user-console-shell .membership-credit-box span,
+.user-console-shell .membership-credit-box small {
+  color: #667085;
+}
+
+.user-console-shell .membership-pricing-card > p {
+  margin: -6px 0 0;
+  min-height: 38px;
+  line-height: 1.55;
+}
+
+.user-console-shell .membership-credit-box {
+  gap: 8px;
+  border: 1px solid #edf1f7;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.user-console-shell .membership-credit-box div {
+  gap: 10px;
+}
+
+.user-console-shell .membership-credit-box strong {
+  color: var(--color-primary);
+  font-size: 24px;
+}
+
+.user-console-shell .membership-credit-box i {
+  border-color: #d7dfea;
+  color: #667085;
+}
+
+.user-console-shell .membership-subscribe-button {
+  min-height: 42px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.user-console-shell .identity-package-card.selected .membership-subscribe-button {
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(34, 197, 94, 0.2);
+}
+
+.user-console-shell .membership-pricing-card ul {
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.user-console-shell .membership-pricing-card li {
+  gap: 10px;
+  color: #344054;
+  font-size: 12px;
+}
+
+.user-console-shell .membership-pricing-card li span {
+  color: #16a34a;
+  font-weight: 900;
+}
+
+.user-console-shell .membership-recharge-panel {
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.user-console-shell .membership-account-card,
+.user-console-shell .membership-recharge-card,
+.user-console-shell .membership-payment-card {
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.user-console-shell .membership-account-card span,
+.user-console-shell .membership-custom-amount span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.user-console-shell .membership-account-card strong {
+  color: #172033;
+  font-size: 22px;
+}
+
+.user-console-shell .membership-recharge-card h3,
+.user-console-shell .membership-payment-card h3 {
+  color: #172033;
+  font-size: 16px;
+}
+
+.user-console-shell .membership-amount-grid,
+.user-console-shell .membership-payment-grid {
+  gap: 10px;
+}
+
+.user-console-shell .membership-amount-grid button,
+.user-console-shell .membership-payment-grid button,
+.user-console-shell .membership-custom-amount input {
+  box-sizing: border-box;
+  min-height: 46px;
+  border: 1px solid #e1e7f2;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #344054;
+  font-size: 15px;
+}
+
+.user-console-shell .membership-amount-grid button.active,
+.user-console-shell .membership-amount-grid button:hover,
+.user-console-shell .membership-payment-grid button.active {
+  background: #fff7ed;
+}
+
+.user-console-shell .membership-pay-submit {
+  grid-column: 1 / -1;
+  min-height: 46px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.user-console-shell .membership-order-panel {
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.user-console-shell .membership-order-panel > header strong {
+  color: #172033;
+}
+
+.user-console-shell .membership-order-panel > header span {
+  color: #667085;
+}
+
+.user-console-shell .membership-order-panel > header em {
+  background: #eef2ff;
+  color: var(--color-primary);
+}
+
+.user-console-shell .membership-order-panel .el-table,
+.user-console-shell .membership-order-panel .user-order-table {
+  --el-table-bg-color: #ffffff;
+  --el-table-tr-bg-color: #ffffff;
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-row-hover-bg-color: #f6f8ff;
+  --el-table-border-color: #edf1f7;
+  --el-table-text-color: #344054;
+  --el-table-header-text-color: #667085;
+}
+
+@media (max-width: 1360px) {
+  .user-console-shell .membership-plan-head,
+  .user-console-shell .membership-recharge-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .user-console-shell .membership-identity-panel {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .user-console-shell .user-membership-page {
+    margin: -14px;
+    padding: 14px 12px 24px;
+  }
+
+  .user-console-shell .membership-plan-head h2 {
+    font-size: 24px;
+  }
+
+  .user-console-shell .membership-current-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .user-console-shell .membership-current-actions,
+  .user-console-shell .membership-mode-tabs,
+  .user-console-shell .membership-cycle-tabs {
+    width: 100%;
+  }
+
+  .user-console-shell .membership-mode-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .user-console-shell .membership-current-actions button {
+    flex: 1 1 0;
+  }
+}
+
+/* Figma Make membership content refinement: keep the global user-console shell
+   consistent with other modules; apply the new visual language only inside the page. */
+.user-console-shell .user-membership-page {
+  --membership-primary: #7c3aed;
+  --membership-primary-strong: #6d28d9;
+  --membership-primary-soft: #f2edff;
+  --membership-orange: #ff6b18;
+  --membership-orange-soft: #fff3e8;
+  --membership-blue: #2563eb;
+  --membership-blue-soft: #eaf2ff;
+  --membership-success: #16a34a;
+  --membership-success-soft: #eafaf0;
+  --membership-page: #f7f7f9;
+  --membership-text: #111827;
+  --membership-muted: #667085;
+  --membership-border: #e5e7ef;
+  background: var(--membership-page);
+}
+
+.user-console-shell .user-membership-page {
+  gap: 26px;
+  margin: -18px -20px -20px;
+  padding: 26px 26px 42px;
+}
+
+.user-console-shell .membership-plan-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: stretch;
+  border: 1px solid #dfe5ef;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 22px 24px;
+  box-shadow: 0 14px 34px rgba(17, 24, 39, 0.04);
+}
+
+.user-console-shell .membership-plan-head > div:first-child {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.user-console-shell .membership-plan-head h2 {
+  color: var(--membership-text);
+  font-size: 26px;
+  line-height: 1.24;
+}
+
+.user-console-shell .membership-plan-head p {
+  margin-top: 6px;
+  color: var(--membership-muted);
+  font-size: 14px;
+}
+
+.user-console-shell .membership-current-card {
+  grid-template-columns: minmax(140px, 0.85fr) minmax(150px, 0.9fr) minmax(260px, 1.6fr) auto;
+  gap: 26px;
+  min-height: 86px;
+  border-radius: 12px;
+  padding: 22px;
+  border-color: #edf1f7;
+  background: #f8faff;
+  box-shadow: none;
+}
+
+.user-console-shell .membership-current-copy {
+  gap: 6px;
+}
+
+.user-console-shell .membership-current-copy div {
+  gap: 10px;
+}
+
+.user-console-shell .membership-current-copy span {
+  order: -1;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--membership-primary), #a855f7);
+  color: #ffffff;
+}
+
+.user-console-shell .membership-current-copy strong,
+.user-console-shell .membership-current-copy small {
+  color: var(--membership-text);
+}
+
+.user-console-shell .membership-current-copy small {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.user-console-shell .membership-balance {
+  display: grid;
+  gap: 2px;
+  color: var(--membership-text);
+  font-size: 0;
+}
+
+.user-console-shell .membership-balance i {
+  display: none;
+}
+
+.user-console-shell .membership-balance::before {
+  content: "当前可用点数";
+  color: var(--membership-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-console-shell .membership-balance strong {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.user-console-shell .membership-balance small {
+  color: var(--membership-muted);
+  font-size: 12px;
+}
+
+.user-console-shell .membership-usage-meter {
+  display: grid;
+  gap: 8px;
+  min-width: 260px;
+}
+
+.user-console-shell .membership-usage-meter div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.user-console-shell .membership-usage-meter span,
+.user-console-shell .membership-usage-meter strong {
+  color: var(--membership-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-console-shell .membership-usage-meter p {
+  height: 7px;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #ece7ff;
+}
+
+.user-console-shell .membership-usage-meter p i {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8b5cf6, #a855f7);
+}
+
+.user-console-shell .membership-current-actions button {
+  min-width: 86px;
+  min-height: 40px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+.user-console-shell .membership-current-actions button:first-child {
+  background: var(--membership-orange);
+  box-shadow: 0 10px 20px rgba(255, 107, 24, 0.18);
+}
+
+.user-console-shell .membership-current-actions button:last-child {
+  background: #f4f5f8;
+  color: #344054;
+}
+
+.user-console-shell .membership-mode-tabs,
+.user-console-shell .membership-cycle-tabs {
+  border-color: var(--membership-border);
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+.user-console-shell .membership-mode-tabs {
+  grid-template-columns: repeat(3, 96px);
+}
+
+.user-console-shell .membership-mode-tabs button,
+.user-console-shell .membership-cycle-tabs button {
+  min-height: 40px;
+  border-radius: 10px;
+}
+
+.user-console-shell .membership-mode-tabs button.active,
+.user-console-shell .membership-cycle-tabs button.active {
+  background: var(--membership-primary);
+  box-shadow: 0 12px 22px rgba(124, 58, 237, 0.22);
+}
+
+.user-console-shell .membership-identity-panel {
+  gap: 20px;
+}
+
+.user-console-shell .identity-package-card {
+  gap: 16px;
+  min-height: 426px;
+  padding: 24px;
+  border-radius: 16px;
+  border-color: var(--membership-border);
+  box-shadow: 0 14px 34px rgba(17, 24, 39, 0.05);
+}
+
+.user-console-shell .identity-package-card.featured {
+  border-color: var(--membership-border);
+}
+
+.user-console-shell .identity-package-card.selected,
+.user-console-shell .identity-package-card:hover {
+  border-color: rgba(124, 58, 237, 0.32);
+  box-shadow: 0 18px 42px rgba(124, 58, 237, 0.1);
+}
+
+.user-console-shell .identity-package-card header {
+  min-height: 44px;
+}
+
+.user-console-shell .identity-package-card header > strong {
+  font-size: 18px;
+}
+
+.user-console-shell .identity-package-card header > span {
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.user-console-shell .identity-package-card--member_996 header > span {
+  background: var(--membership-primary-soft);
+  color: var(--membership-primary);
+}
+
+.user-console-shell .identity-package-card--agent_996 header > span {
+  background: var(--membership-orange-soft);
+  color: var(--membership-orange);
+}
+
+.user-console-shell .identity-package-card--operation_center_5000 header > span {
+  background: var(--membership-blue-soft);
+  color: var(--membership-blue);
+}
+
+.user-console-shell .identity-package-card .membership-price-row strong {
+  font-size: 36px;
+}
+
+.user-console-shell .identity-package-card .membership-credit-box {
+  min-height: 62px;
+  border: 0;
+  padding: 13px 16px;
+}
+
+.user-console-shell .identity-package-card--member_996 .membership-credit-box {
+  background: var(--membership-primary-soft);
+}
+
+.user-console-shell .identity-package-card--agent_996 .membership-credit-box {
+  background: var(--membership-orange-soft);
+}
+
+.user-console-shell .identity-package-card--operation_center_5000 .membership-credit-box {
+  background: var(--membership-blue-soft);
+}
+
+.user-console-shell .identity-package-card--member_996 .membership-credit-box strong {
+  color: var(--membership-primary);
+}
+
+.user-console-shell .identity-package-card--agent_996 .membership-credit-box strong {
+  color: var(--membership-orange);
+}
+
+.user-console-shell .identity-package-card--operation_center_5000 .membership-credit-box strong {
+  color: var(--membership-blue);
+}
+
+.user-console-shell .identity-package-card .membership-subscribe-button {
+  margin-top: auto;
+  min-height: 44px;
+  border-radius: 12px;
+}
+
+.user-console-shell .identity-package-card--member_996.selected .membership-subscribe-button {
+  background: var(--membership-success);
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.user-console-shell .identity-package-card--agent_996 .membership-subscribe-button {
+  background: var(--membership-orange);
+  color: #ffffff;
+  box-shadow: 0 12px 22px rgba(255, 107, 24, 0.2);
+}
+
+.user-console-shell .identity-package-card--operation_center_5000 .membership-subscribe-button {
+  background: var(--membership-blue);
+  color: #ffffff;
+  box-shadow: 0 12px 22px rgba(37, 99, 235, 0.18);
+}
+
+.user-console-shell .identity-package-card li {
+  font-size: 13px;
+}
+
+.user-console-shell .identity-package-card li span {
+  color: var(--membership-success);
+}
+
+.user-console-shell .membership-recharge-panel {
+  grid-template-columns: minmax(250px, 0.8fr) minmax(340px, 1.1fr) minmax(300px, 0.95fr);
+  gap: 18px;
+}
+
+.user-console-shell .membership-account-card,
+.user-console-shell .membership-recharge-card,
+.user-console-shell .membership-payment-card,
+.user-console-shell .membership-order-panel {
+  border-color: var(--membership-border);
+  border-radius: 16px;
+  box-shadow: 0 14px 34px rgba(17, 24, 39, 0.05);
+}
+
+.user-console-shell .membership-account-card strong {
+  color: var(--membership-orange);
+  font-size: 30px;
+}
+
+.user-console-shell .membership-account-card::after {
+  content: "充值订单创建后，主控后台确认收款即自动发放点数。";
+  margin-top: auto;
+  color: var(--membership-muted);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.6;
+}
+
+.user-console-shell .membership-amount-grid button.active,
+.user-console-shell .membership-amount-grid button:hover,
+.user-console-shell .membership-payment-grid button.active {
+  border-color: rgba(255, 107, 24, 0.42);
+  background: var(--membership-orange-soft);
+  color: var(--membership-orange);
+}
+
+.user-console-shell .membership-pay-submit,
+.user-console-shell .membership-subscribe-button {
+  background: var(--membership-orange);
+  box-shadow: 0 12px 24px rgba(255, 107, 24, 0.18);
+}
+
+.user-console-shell .membership-cycle-tabs em {
+  color: var(--membership-orange);
+}
+
+.user-console-shell .membership-pricing-card.selected {
+  border-color: rgba(255, 107, 24, 0.42);
+  background: #fffaf5;
+  box-shadow: 0 18px 42px rgba(255, 107, 24, 0.1);
+}
+
+.user-console-shell .membership-order-panel {
+  box-shadow: none;
+}
+
+@media (max-width: 1360px) {
+  .user-console-shell .membership-current-card {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .user-console-shell .membership-usage-meter {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .user-console-shell .user-membership-page {
+    padding: 18px 14px 28px;
+  }
+
+  .user-console-shell .membership-current-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .user-console-shell .membership-usage-meter {
+    min-width: 0;
+  }
+
+  .user-console-shell .identity-package-card {
+    min-height: 0;
+  }
+}
+
 /* Video input final override. This block intentionally lives at EOF so the
    video search/model search/prompt inputs stay visible after all page styles. */
 .video-generation-page .video-history-search {
@@ -14758,6 +15864,70 @@ body {
   z-index: 120 !important;
 }
 
+@media (min-width: 761px) {
+  .user-console-shell .video-generation-page,
+  .user-console-shell .video-generation-page .video-studio-shell,
+  .user-console-shell .video-generation-page .video-gallery-stage,
+  .user-console-shell .video-generation-page .video-history-panel,
+  .user-console-shell .video-generation-page .video-current-preview,
+  .user-console-shell .video-generation-page .video-empty-hero {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .user-console-shell .video-generation-page .video-gallery-stage {
+    margin: 0 !important;
+    overflow-x: hidden !important;
+    padding-right: clamp(16px, 2vw, 28px) !important;
+    padding-left: clamp(16px, 2vw, 28px) !important;
+  }
+
+  .user-console-shell .video-generation-page .video-history-head,
+  .user-console-shell .video-generation-page .video-control-row {
+    flex-wrap: wrap;
+  }
+
+  .user-console-shell .video-generation-page .video-history-tools {
+    flex: 1 1 420px;
+    min-width: 0;
+  }
+
+  .user-console-shell .video-generation-page .video-history-search {
+    flex: 1 1 260px;
+    min-width: 220px !important;
+  }
+
+  .user-console-shell .video-generation-page .video-history-grid {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+
+  .user-console-shell .video-generation-page .video-history-card,
+  .user-console-shell .video-generation-page .video-history-body,
+  .user-console-shell .video-generation-page .video-control-group,
+  .user-console-shell .video-generation-page .video-submit-group {
+    min-width: 0;
+  }
+
+  .user-console-shell .video-generation-page .video-bottom-composer {
+    width: min(1280px, calc(100% - 48px)) !important;
+    max-width: calc(100% - 48px) !important;
+    box-sizing: border-box;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1500px) {
+  .user-console-shell .video-generation-page .video-history-grid {
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+
+  .user-console-shell .video-generation-page .video-bottom-composer {
+    width: calc(100% - 36px) !important;
+    max-width: calc(100% - 36px) !important;
+  }
+}
+
 @media (max-width: 760px) {
   .user-console-shell .admin-main:has(.video-generation-page) {
     overflow: auto !important;
@@ -14793,207 +15963,5 @@ body {
     max-height: none !important;
     margin: 0 auto 12px !important;
     transform: none !important;
-  }
-}
-
-.user-agent-figma-shell.user-console-shell {
-  --agent-figma-sidebar: 216px;
-  --agent-figma-topbar: 56px;
-}
-
-.user-agent-figma-shell.user-console-shell.admin-shell,
-.user-agent-figma-shell.user-console-shell .admin-workspace,
-.user-agent-figma-shell.user-console-shell .admin-main {
-  background: #f7f8fc !important;
-}
-
-.user-agent-figma-shell.user-console-shell .admin-sidebar,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .admin-sidebar {
-  flex: 0 0 var(--agent-figma-sidebar) !important;
-  width: var(--agent-figma-sidebar) !important;
-  min-width: var(--agent-figma-sidebar) !important;
-  border-right: 1px solid #eef0f6 !important;
-  background: #ffffff !important;
-  box-shadow: none !important;
-}
-
-.user-agent-figma-shell.user-console-shell .brand {
-  min-height: 74px;
-  padding: 0 20px;
-  border-bottom-color: transparent;
-}
-
-.user-agent-figma-shell.user-console-shell .brand-logo {
-  width: 36px;
-  height: 36px;
-  border: 0;
-  box-shadow: none;
-}
-
-.user-agent-figma-shell.user-console-shell .brand-copy strong {
-  color: #1f4fd8;
-  font-size: 22px;
-  font-weight: 900;
-}
-
-.user-agent-figma-shell.user-console-shell .brand-copy small,
-.user-agent-figma-shell.user-console-shell .sidebar-section-label,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .brand-copy,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .sidebar-section-label,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .sidebar-plan-card {
-  display: none !important;
-}
-
-.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu {
-  padding: 0 16px;
-}
-
-.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item {
-  justify-content: flex-start;
-  width: 184px;
-  height: 34px;
-  margin: 6px 0;
-  border-radius: 8px;
-  padding: 0 12px !important;
-  color: #111827 !important;
-  font-size: 13px;
-  font-weight: 700;
-  box-shadow: none !important;
-}
-
-.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item .el-icon,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item .el-icon {
-  margin-right: 10px;
-  color: #536079;
-  font-size: 16px;
-}
-
-.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item.is-active {
-  background: #f0edff !important;
-  color: #5b4bff !important;
-}
-
-.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item.is-active::before {
-  display: none;
-}
-
-.user-agent-figma-shell.user-console-shell .user-flat-sidebar-menu .el-menu-item.is-active .el-icon {
-  color: #6658ff;
-}
-
-.user-agent-figma-shell.user-console-shell .sidebar-plan-card,
-.desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .sidebar-plan-card {
-  display: grid !important;
-  left: 16px;
-  right: 16px;
-  bottom: 108px;
-  width: 184px;
-  min-height: 128px;
-  border-radius: 10px;
-  box-shadow: none;
-}
-
-.user-agent-figma-shell.user-console-shell .admin-header {
-  --el-header-height: var(--agent-figma-topbar);
-  height: var(--agent-figma-topbar) !important;
-  min-height: var(--agent-figma-topbar) !important;
-  max-height: var(--agent-figma-topbar) !important;
-  flex: 0 0 var(--agent-figma-topbar) !important;
-  padding: 0 28px;
-  border-bottom: 1px solid #eef0f6;
-  background: #ffffff !important;
-  box-shadow: none;
-}
-
-.user-agent-figma-shell.user-console-shell .admin-collapse-button {
-  display: none !important;
-}
-
-.user-agent-figma-shell.user-console-shell .header-single-title {
-  color: #111827;
-  font-size: 18px;
-  font-weight: 850;
-}
-
-.user-agent-figma-shell.user-console-shell .header-path .el-icon {
-  display: none;
-}
-
-.user-agent-figma-shell.user-console-shell .header-actions {
-  gap: 12px;
-}
-
-.user-agent-figma-shell.user-console-shell .header-search {
-  width: 320px;
-}
-
-.user-agent-figma-shell.user-console-shell .header-actions > .el-button,
-.user-agent-figma-shell.user-console-shell .header-actions > .el-dropdown:has(.size-button),
-.user-agent-figma-shell.user-console-shell .header-actions > .el-tag {
-  display: none !important;
-}
-
-.user-agent-figma-shell.user-console-shell .account-button {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.user-agent-figma-shell.user-console-shell .account-button .el-icon,
-.user-agent-figma-shell.user-console-shell .account-button-copy small {
-  display: none;
-}
-
-.user-agent-figma-shell.user-console-shell .account-button-copy strong {
-  max-width: 140px;
-  color: #111827;
-  font-size: 13px;
-  font-weight: 850;
-}
-
-.user-agent-figma-shell.user-console-shell .admin-main {
-  height: calc(100vh - var(--agent-figma-topbar));
-  padding: 16px !important;
-  overflow: auto;
-}
-
-.user-agent-figma-shell.user-console-shell .page-stack {
-  gap: 0;
-}
-
-@media (max-width: 760px) {
-  .user-agent-figma-shell.user-console-shell.admin-shell,
-  .user-agent-figma-shell.user-console-shell .admin-workspace,
-  .user-agent-figma-shell.user-console-shell .admin-main {
-    display: block;
-    min-height: 100vh;
-    height: auto;
-    overflow: visible;
-    background: #f7f8fc !important;
-  }
-
-  .user-agent-figma-shell.user-console-shell.admin-shell {
-    padding-top: 0 !important;
-  }
-
-  .user-agent-figma-shell.user-console-shell .admin-workspace {
-    min-height: 100vh !important;
-  }
-
-  .user-agent-figma-shell.user-console-shell .admin-sidebar,
-  .desktop-sidebar-collapsed.user-agent-figma-shell.user-console-shell .admin-sidebar,
-  .desktop-sidebar-collapsed.mobile-drawer-open.user-agent-figma-shell.user-console-shell .admin-sidebar,
-  .user-agent-figma-shell.user-console-shell .admin-header,
-  .user-agent-figma-shell.user-console-shell .mobile-admin-bar {
-    display: none !important;
-  }
-
-  .user-agent-figma-shell.user-console-shell .admin-main {
-    padding: 0 !important;
-  }
-
-  .user-agent-figma-shell.user-console-shell .page-stack {
-    display: block;
   }
 }

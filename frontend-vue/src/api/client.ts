@@ -1,11 +1,27 @@
 const tokenKey = "token";
 const requestTimeout = 600000;
 const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env || {};
-const apiBaseURL = String(env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+let defaultApiBaseURL = "";
+// #ifdef MP-WEIXIN
+defaultApiBaseURL = "http://127.0.0.1:3100";
+// #endif
+const apiBaseURL = String(env.VITE_API_BASE_URL || defaultApiBaseURL).replace(/\/+$/, "");
+
+export function getApiBaseURL(): string {
+  return apiBaseURL;
+}
 
 function resolveURL(path: string) {
   if (/^https?:\/\//i.test(path)) return path;
   return apiBaseURL ? `${apiBaseURL}${path.startsWith("/") ? path : `/${path}`}` : path;
+}
+
+function requestFailureMessage(error: unknown): string {
+  if (error && typeof error === "object" && "errMsg" in error) {
+    const errMsg = (error as { errMsg?: unknown }).errMsg;
+    if (typeof errMsg === "string" && errMsg.trim()) return errMsg;
+  }
+  return "请求失败";
 }
 
 export function getAuthToken(): string {
@@ -36,7 +52,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       data: init.body ? JSON.parse(String(init.body)) : undefined,
       timeout: requestTimeout,
       success: resolve,
-      fail: (error) => reject(new Error(error.errMsg || "请求失败"))
+      fail: (error) => reject(new Error(requestFailureMessage(error)))
     });
   });
 

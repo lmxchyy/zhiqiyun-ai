@@ -23,7 +23,8 @@ RUN go build -o /out/xianzhi-api ./cmd/api
 FROM alpine:3.20
 WORKDIR /app
 ARG INSTALL_SEEDANCE_SDK=false
-RUN apk add --no-cache ca-certificates curl python3 py3-pip \
+ARG INSTALL_OFFICECLI=true
+RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
   && mkdir -p /app/seedance-python \
   && if [ "$INSTALL_SEEDANCE_SDK" = "true" ]; then \
     curl -fL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 180 "https://ecloud.10086.cn/api/query/maas/public/backend/model/link/aicc-sdk/python/download" -o /tmp/maas-seedance-sdk.zip \
@@ -31,6 +32,14 @@ RUN apk add --no-cache ca-certificates curl python3 py3-pip \
     && python3 -m pip install --break-system-packages --no-cache-dir --target /app/seedance-python /tmp/pythonSDK-0515/maas_seedance_sdk-1.0.0-py3-none-any.whl; \
   else \
     echo "Skipping optional Seedance SDK install"; \
+  fi \
+  && if [ "$INSTALL_OFFICECLI" = "true" ]; then \
+    curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash \
+    && cp /root/.local/bin/officecli /usr/local/bin/officecli \
+    && chmod +x /usr/local/bin/officecli \
+    && officecli --version; \
+  else \
+    echo "Skipping OfficeCLI install"; \
   fi
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
 COPY --from=web-build /src/frontend-vue/dist/build/h5 /app/frontend-vue/dist

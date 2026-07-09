@@ -9,7 +9,7 @@
                     "typecheck":  "vue-tsc --noEmit",
                     "preview":  "vite preview --host 0.0.0.0 dist/build/h5",
                     "build:h5":  "uni build -p h5",
-                    "build:mp-weixin":  "uni build -p mp-weixin",
+                    "build:mp-weixin":  "uni build -p mp-weixin && node scripts/patch-mp-native-login.cjs",
                     "build:app-plus":  "uni build -p app-plus"
                 },
     "dependencies":  {

@@ -89,6 +89,10 @@ type activeIdentityStore interface {
 	GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error)
 }
 
+type operationCenterIdentityStore interface {
+	GetOperationCenterForUser(userID string) (adminOperationCenter, bool, error)
+}
+
 type onlineImageSettingsStore interface {
 	OnlineImageSettings() (adminPlatformData, error)
 }

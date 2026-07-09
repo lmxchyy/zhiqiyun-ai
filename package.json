@@ -19,6 +19,11 @@
                     "docker:logs":  "docker compose -f compose.yml logs -f xianzhi-ai",
                     "docker:down":  "docker compose -f compose.yml down",
                     "dev:admin":  "cd admin-vue \u0026\u0026 npm run dev",
+                    "dev:miniapp":  "npm --prefix miniapp run dev",
+                    "dev:miniapp:h5":  "npm --prefix miniapp run dev:h5",
+                    "build:miniapp":  "npm --prefix miniapp run build",
+                    "build:miniapp:h5":  "npm --prefix miniapp run build:h5",
+                    "typecheck:miniapp":  "npm --prefix miniapp run typecheck",
                     "build:mp-weixin":  "npm --prefix frontend-vue run build:mp-weixin",
                     "build:app-plus":  "npm --prefix frontend-vue run build:app-plus"
                 },

@@ -132,6 +132,43 @@ func TestVideoGenerationReturnsPendingAndCompletesAsync(t *testing.T) {
 	}
 }
 
+func TestOfficeCLIStatusRequiresAuthAndReturnsGuidance(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{
+		Addr:      ":0",
+		DataPath:  dataPath,
+		StaticDir: t.TempDir(),
+	})
+	handler := server.Handler
+
+	assertStatus(t, handler, http.MethodGet, "/api/v1/officecli/status", nil, http.StatusUnauthorized)
+	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+
+	res := authedRequest(t, handler, http.MethodGet, "/api/v1/officecli/status", nil, token)
+	if res.Code != http.StatusOK {
+		t.Fatalf("officecli status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var status officeCLIStatusResponse
+	if err := json.NewDecoder(res.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.RunnerMode != "server-side-binary" {
+		t.Fatalf("runner mode = %q", status.RunnerMode)
+	}
+	if len(status.InstallCommands) == 0 || len(status.MCPCommands) == 0 || len(status.Capabilities) == 0 {
+		t.Fatalf("officecli guidance is incomplete: %+v", status)
+	}
+	if !strings.Contains(strings.Join(status.Formats, ","), "pptx") {
+		t.Fatalf("officecli formats missing pptx: %+v", status.Formats)
+	}
+
+	assertStatus(t, handler, http.MethodPost, "/api/v1/officecli/documents", bytes.NewBufferString(`{"format":"docx","prompt":"demo"}`), http.StatusUnauthorized)
+	invalid := authedRequest(t, handler, http.MethodPost, "/api/v1/officecli/documents", bytes.NewBufferString(`{"format":"pdf","prompt":"demo"}`), token)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid officecli format status = %d, body = %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestGenerationErrorMessageExtractsProviderMessage(t *testing.T) {
 	raw := `CMECloud Seedance bridge failed: exit status 1: response: {"error":{"message":"当前账号处未订购seedance2.0模型资费包，或资费包已到期，请先订购后才能使用","type":"invalid_authentication_error"}}`
 	want := "当前账号处未订购seedance2.0模型资费包，或资费包已到期，请先订购后才能使用"
@@ -374,8 +411,8 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 			if res.Code != http.StatusOK {
 				t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
 			}
-			if got := strings.TrimSpace(res.Body.String()); got != "USER_BUNDLE" {
-				t.Fatalf("body = %q, want USER_BUNDLE", got)
+			if got := strings.TrimSpace(res.Body.String()); got != "ADMIN_BUNDLE" {
+				t.Fatalf("body = %q, want ADMIN_BUNDLE", got)
 			}
 		})
 	}
@@ -838,6 +875,127 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	handler.ServeHTTP(memberRes, memberReq)
 	if memberRes.Code != http.StatusForbidden {
 		t.Fatalf("member channel center status = %d, body = %s", memberRes.Code, memberRes.Body.String())
+	}
+}
+
+func TestOperationCenterLoginAndScopedAPIs(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	raw := `{
+		"users":[
+			{"id":"user_member","email":"member@example.com","name":"Member","role":"MEMBER","status":"ACTIVE","planId":"plan_free"},
+			{"id":"user_agent","email":"agent@example.com","name":"East Agent","role":"AGENT_L1","status":"ACTIVE","agentStatus":"ACTIVE","planId":"plan_free"},
+			{"id":"user_operation","email":"operation@example.com","name":"East Operation Center","role":"OPERATION_CENTER","status":"ACTIVE","operationCenterStatus":"ACTIVE","planId":"plan_free"}
+		],
+		"operationCenters":[
+			{"id":"operation_center_1","userId":"user_operation","name":"East Operation Center","region":"East","inviteCode":"OC-EAST","status":"ACTIVE","createdAt":"2026-07-01T00:00:00Z"}
+		],
+		"channelAgents":[
+			{"id":"channel_1","userId":"user_agent","operationCenterId":"operation_center_1","level":1,"status":"ACTIVE","inviteCode":"EAST001","createdAt":"2026-07-01T00:00:00Z"}
+		],
+		"orders":[
+			{"id":"order_1","userId":"user_member","planId":"plan_agent_join_996","orderType":"AGENT_JOIN","amountCents":99600,"status":"PAID","operationCenterId":"operation_center_1","paidAt":"2026-07-02T00:00:00Z","createdAt":"2026-07-02T00:00:00Z","priceSnapshot":{}}
+		],
+		"commissions":[
+			{"id":"commission_oc_1","orderId":"order_1","receiverType":"OPERATION_CENTER","receiverId":"operation_center_1","amountCents":20000,"commissionType":"OPERATION_CENTER_REWARD","rate":0,"status":"PENDING","settleStatus":"PENDING","ruleSnapshot":{},"createdAt":"2026-07-02T00:00:00Z"}
+		],
+		"counters":{}
+	}`
+	if err := os.WriteFile(dataPath, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := New(config.Config{
+		Addr:      ":0",
+		DataPath:  dataPath,
+		StaticDir: t.TempDir(),
+	})
+	handler := server.Handler
+
+	login := request(t, handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"operation@example.com","password":"Demo123!"}`))
+	if login.Code != http.StatusOK {
+		t.Fatalf("operation center login status = %d, body = %s", login.Code, login.Body.String())
+	}
+	var loginBody struct {
+		AccessToken     string         `json:"accessToken"`
+		DefaultModule   string         `json:"defaultModule"`
+		DefaultRoute    string         `json:"defaultRoute"`
+		Workspace       string         `json:"workspace"`
+		Permissions     []string       `json:"permissions"`
+		OperationCenter map[string]any `json:"operationCenter"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&loginBody); err != nil {
+		t.Fatal(err)
+	}
+	if loginBody.AccessToken == "" || loginBody.DefaultModule != "operationCenterDashboard" || loginBody.DefaultRoute != "/app/operation-center" || loginBody.Workspace != "user" || loginBody.OperationCenter["inviteCode"] != "OC-EAST" || !stringSliceContains(loginBody.Permissions, "operation_center.dashboard") {
+		t.Fatalf("unexpected operation center login body: %+v", loginBody)
+	}
+
+	profile := authedRequest(t, handler, http.MethodGet, "/api/v1/operation-center/profile", nil, loginBody.AccessToken)
+	if profile.Code != http.StatusOK || !strings.Contains(profile.Body.String(), `"agents":1`) || !strings.Contains(profile.Body.String(), `"orders":1`) || !strings.Contains(profile.Body.String(), `"totalCents":20000`) {
+		t.Fatalf("operation center profile = %d %s", profile.Code, profile.Body.String())
+	}
+	agents := authedRequest(t, handler, http.MethodGet, "/api/v1/operation-center/agents", nil, loginBody.AccessToken)
+	if agents.Code != http.StatusOK || !strings.Contains(agents.Body.String(), "EAST001") {
+		t.Fatalf("operation center agents = %d %s", agents.Code, agents.Body.String())
+	}
+	orders := authedRequest(t, handler, http.MethodGet, "/api/v1/operation-center/orders", nil, loginBody.AccessToken)
+	if orders.Code != http.StatusOK || !strings.Contains(orders.Body.String(), "order_1") || !strings.Contains(orders.Body.String(), `"operationCenterId":"operation_center_1"`) {
+		t.Fatalf("operation center orders = %d %s", orders.Code, orders.Body.String())
+	}
+	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/operation-center/commissions", nil, loginBody.AccessToken)
+	if commissions.Code != http.StatusOK || !strings.Contains(commissions.Body.String(), "commission_oc_1") || !strings.Contains(commissions.Body.String(), `"pendingCents":20000`) {
+		t.Fatalf("operation center commissions = %d %s", commissions.Code, commissions.Body.String())
+	}
+
+	memberToken := loginToken(t, handler, "member@example.com", "Demo123!")
+	memberAgents := authedRequest(t, handler, http.MethodGet, "/api/v1/operation-center/agents", nil, memberToken)
+	if memberAgents.Code != http.StatusForbidden {
+		t.Fatalf("member operation center agents status = %d, body = %s", memberAgents.Code, memberAgents.Body.String())
+	}
+}
+
+func TestWeChatMiniProgramMockLogin(t *testing.T) {
+	t.Setenv("WECHAT_MINI_PROGRAM_APPID", "")
+	t.Setenv("WECHAT_MINI_PROGRAM_SECRET", "")
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{
+		Addr:      ":0",
+		DataPath:  dataPath,
+		StaticDir: t.TempDir(),
+	})
+	handler := server.Handler
+
+	missing := request(t, handler, http.MethodPost, "/api/v1/auth/wechat-mini-program/login", bytes.NewBufferString(`{"code":""}`))
+	if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), "wechat mini program code is required") {
+		t.Fatalf("missing wechat code status = %d, body = %s", missing.Code, missing.Body.String())
+	}
+
+	unconfigured := request(t, handler, http.MethodPost, "/api/v1/auth/wechat-mini-program/login", bytes.NewBufferString(`{"code":"real-devtools-code"}`))
+	if unconfigured.Code != http.StatusNotImplemented || !strings.Contains(unconfigured.Body.String(), "wechat mini program login is not configured") {
+		t.Fatalf("unconfigured wechat login status = %d, body = %s", unconfigured.Code, unconfigured.Body.String())
+	}
+
+	login := request(t, handler, http.MethodPost, "/api/v1/auth/wechat-mini-program/login", bytes.NewBufferString(`{"code":"mock-devtools-code"}`))
+	if login.Code != http.StatusOK {
+		t.Fatalf("mock wechat login status = %d, body = %s", login.Code, login.Body.String())
+	}
+	var body struct {
+		AccessToken   string `json:"accessToken"`
+		DefaultModule string `json:"defaultModule"`
+		User          struct {
+			Email string `json:"email"`
+			Role  string `json:"role"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AccessToken == "" || body.DefaultModule != "dashboard" || body.User.Email != "demo@xianzhi.ai" || body.User.Role != "MEMBER" {
+		t.Fatalf("unexpected mock wechat login body: %+v", body)
+	}
+
+	me := authedRequest(t, handler, http.MethodGet, "/api/v1/auth/me", nil, body.AccessToken)
+	if me.Code != http.StatusOK || !strings.Contains(me.Body.String(), `"email":"demo@xianzhi.ai"`) {
+		t.Fatalf("wechat login token auth/me = %d, body = %s", me.Code, me.Body.String())
 	}
 }
 

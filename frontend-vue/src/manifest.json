@@ -18,5 +18,8 @@
         }
       }
     }
+  },
+  "mp-weixin": {
+    "appid": "wxf02d04d39afb7c6d"
   }
 }

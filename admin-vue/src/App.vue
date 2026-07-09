@@ -1,6 +1,67 @@
 ﻿<template>
   <el-config-provider :size="currentElementSize">
-  <el-container v-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'user-agent-figma-shell': isUserConsole && store.activeModuleId === 'userAgentCenter', 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
+  <section v-if="isAuthRoute" class="admin-auth-shell">
+    <div class="admin-auth-card">
+      <div class="admin-auth-brand">
+        <img :src="xianzhiLogo" alt="知启云 AI" />
+        <div>
+          <strong>知启云 AI</strong>
+          <span>{{ isRegisterRoute ? "Invite Register" : "Unified Login" }}</span>
+        </div>
+      </div>
+      <div class="admin-auth-head">
+        <el-tag effect="dark" type="primary">{{ isRegisterRoute ? "邀请注册" : "统一入口" }}</el-tag>
+        <h1>{{ isRegisterRoute ? "注册知启云 AI" : "登录知启云 AI" }}</h1>
+        <p>{{ isRegisterRoute ? "通过代理商邀请注册后，账号会自动绑定来源渠道。" : "一个入口进入用户端、代理端和主控后台。" }}</p>
+      </div>
+
+      <form v-if="isRegisterRoute" class="admin-auth-form" @submit.prevent="submitRegister">
+        <label>
+          <span>用户名</span>
+          <input v-model.trim="registerForm.username" autocomplete="name" placeholder="请输入用户名" />
+        </label>
+        <label>
+          <span>邮箱</span>
+          <input v-model.trim="registerForm.email" autocomplete="email" placeholder="your@email.com" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input v-model="registerForm.password" autocomplete="new-password" type="password" placeholder="至少 8 位" />
+        </label>
+        <label>
+          <span>确认密码</span>
+          <input v-model="registerForm.confirmPassword" autocomplete="new-password" type="password" placeholder="再次输入密码" />
+        </label>
+        <label>
+          <span>邀请码</span>
+          <input v-model.trim="registerForm.inviteCode" autocomplete="off" placeholder="可选，代理邀请链接会自动带入" />
+        </label>
+        <button class="admin-auth-submit" type="submit" :disabled="authSubmitting">{{ authSubmitting ? "注册中..." : "注册并进入工作台" }}</button>
+        <a class="admin-auth-link" href="/login">已有账号，去登录</a>
+      </form>
+
+      <form v-else class="admin-auth-form" @submit.prevent="submitLogin">
+        <label>
+          <span>邮箱</span>
+          <input v-model.trim="loginForm.email" autocomplete="email" placeholder="demo@xianzhi.ai" />
+        </label>
+        <label>
+          <span>密码</span>
+          <input v-model="loginForm.password" autocomplete="current-password" type="password" placeholder="请输入密码" />
+        </label>
+        <label class="admin-auth-check">
+          <input v-model="loginForm.remember" type="checkbox" />
+          <span>保持登录</span>
+        </label>
+        <button class="admin-auth-submit" type="submit" :disabled="authSubmitting">{{ authSubmitting ? "登录中..." : "登录" }}</button>
+        <button class="admin-auth-wechat" type="button" :disabled="wechatAuthSubmitting" @click="loginWithWeChatMiniProgram">
+          {{ wechatAuthSubmitting ? "微信授权中..." : "微信小程序登录" }}
+        </button>
+        <a class="admin-auth-link" href="/register">没有账号，通过邀请码注册</a>
+      </form>
+    </div>
+  </section>
+  <el-container v-else-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'user-agent-figma-shell': isUserConsole && store.activeModuleId === 'userAgentCenter', 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
     <div v-if="mobileDrawerOpen" class="mobile-drawer-mask" @click="mobileDrawerOpen = false"></div>
     <el-aside width="200px" class="admin-sidebar">
       <div class="brand">
@@ -175,7 +236,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -186,7 +247,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -602,19 +663,134 @@
               <el-empty v-else description="暂无在线生图任务" />
             </el-card>
           </section>
-          <section v-else-if="store.activeModuleId === 'userAgentCenter'" class="user-agent-center-page">
+          <section v-else-if="store.activeModuleId === 'userAgentCenter'" :class="['user-agent-center-page', { 'has-officecli-workspace': officeCLIWorkspaceOpen || agentCenterWorkspace, 'has-agent-workspace': officeCLIWorkspaceOpen || agentCenterWorkspace }]">
             <div class="user-agent-desktop-view">
-              <section class="user-agent-center-layout">
+              <section v-if="officeCLIWorkspaceOpen" class="user-agent-officecli-workspace">
+                <header class="officecli-workspace-head">
+                  <button type="button" @click="closeOfficeCLIWorkspace">返回智能体中心</button>
+                  <div>
+                    <span>OfficeCLI 文档智能体</span>
+                    <h2>文档生成工作台</h2>
+                    <p>选择 Word、Excel 或 PPT，输入需求后由后端 OfficeCLI 运行层生成可下载文件。</p>
+                  </div>
+                  <em :class="['officecli-status-badge', officeCLIStatusTone]">{{ officeCLIStatusLabel }}</em>
+                </header>
+
+                <section class="user-agent-officecli-workbench is-workspace">
+                  <header>
+                    <div>
+                      <span>文档生成控制台</span>
+                      <strong>输入需求，一键生成 Office 文件</strong>
+                    </div>
+                    <button type="button" :disabled="officeCLIDocumentGenerating" @click="submitOfficeCLIDocument">
+                      {{ officeCLIDocumentGenerating ? "生成中..." : "生成文档" }}
+                    </button>
+                  </header>
+                  <div class="officecli-workbench-body">
+                    <div class="officecli-form-column">
+                      <div class="officecli-format-switch" role="radiogroup" aria-label="选择文档格式">
+                        <button v-for="format in officeCLIFormatOptions" :key="format.value" type="button" :class="{ active: officeCLIForm.format === format.value }" @click="officeCLIForm.format = format.value">
+                          <b>{{ format.label }}</b>
+                          <span>{{ format.desc }}</span>
+                        </button>
+                      </div>
+                      <label class="officecli-field">
+                        <span>文档标题</span>
+                        <input v-model.trim="officeCLIForm.title" placeholder="例如：AI 产品周报" />
+                      </label>
+                      <label class="officecli-field">
+                        <span>生成需求</span>
+                        <textarea v-model.trim="officeCLIForm.prompt" rows="5" placeholder="描述你要生成的内容，例如：生成一份面向客户的 OfficeCLI 能力介绍，包含产品价值、适用场景和下一步计划。" />
+                      </label>
+                    </div>
+                    <aside class="officecli-result-card">
+                      <span>生成结果</span>
+                      <template v-if="officeCLIDocumentResult">
+                        <strong>{{ officeCLIDocumentResult.fileName }}</strong>
+                        <small>{{ officeCLIDocumentResult.format.toUpperCase() }} · {{ officeCLIDocumentSizeText }}</small>
+                        <button type="button" @click="downloadOfficeCLIDocument()">下载文件</button>
+                      </template>
+                      <template v-else>
+                        <strong>等待生成</strong>
+                        <small>生成后会在这里出现下载入口，并保存在后端容器数据目录。</small>
+                      </template>
+                    </aside>
+                  </div>
+                </section>
+              </section>
+
+              <section v-else-if="agentCenterWorkspace" class="user-agent-workspace">
+                <header class="agent-workspace-head">
+                  <button type="button" @click="closeAgentWorkspace">返回智能体中心</button>
+                  <span :class="['agent-workspace-avatar', agentCenterWorkspace.tone]">{{ agentCenterWorkspace.avatar }}</span>
+                  <div>
+                    <span>{{ agentCenterWorkspace.modeLabel }}</span>
+                    <h2>{{ agentCenterWorkspace.name }}</h2>
+                    <p>{{ agentCenterWorkspace.desc }}</p>
+                  </div>
+                  <em :class="['agent-workspace-status', { draft: agentCenterWorkspace.status === '草稿', disabled: agentCenterWorkspace.status === '已停用' }]">{{ agentCenterWorkspace.status }}</em>
+                </header>
+
+                <section class="agent-workspace-grid">
+                  <main class="agent-workspace-chat">
+                    <header>
+                      <div>
+                        <span>交互控制台</span>
+                        <strong>{{ agentCenterWorkspace.headline }}</strong>
+                      </div>
+                      <button type="button" @click="sendAgentWorkspaceMessage">发送测试</button>
+                    </header>
+                    <div class="agent-workspace-dialog">
+                      <article v-for="(message, index) in agentWorkspaceMessages" :key="`${message.role}-${index}`" :class="['agent-message', message.role]">
+                        <span>{{ message.role === 'user' ? '我' : agentCenterWorkspace.avatar }}</span>
+                        <p>{{ message.text }}</p>
+                      </article>
+                    </div>
+                    <label class="agent-workspace-input">
+                      <span>测试指令</span>
+                      <textarea v-model.trim="agentWorkspaceDraft" rows="5" placeholder="输入一条测试指令，检查这个智能体的回复风格与业务边界。" />
+                    </label>
+                  </main>
+
+                  <aside class="agent-workspace-config">
+                    <section class="agent-workspace-card">
+                      <strong>运行信息</strong>
+                      <div class="agent-workspace-meta-grid">
+                        <div><span>类型</span><b>{{ agentCenterWorkspace.type }}</b></div>
+                        <div><span>模型</span><b>{{ agentCenterWorkspace.model }}</b></div>
+                        <div><span>知识库</span><b>{{ agentCenterWorkspace.knowledge }}</b></div>
+                        <div><span>调用次数</span><b>{{ agentCenterWorkspace.calls }}</b></div>
+                      </div>
+                    </section>
+                    <section class="agent-workspace-card">
+                      <strong>能力配置</strong>
+                      <div class="agent-tool-tags">
+                        <span v-for="tag in agentCenterWorkspace.toolTags" :key="tag">{{ tag }}</span>
+                      </div>
+                    </section>
+                    <section class="agent-workspace-card">
+                      <strong>快捷动作</strong>
+                      <div class="agent-quick-actions">
+                        <button v-for="action in agentCenterWorkspace.quickActions" :key="action" type="button" @click="agentWorkspaceDraft = action">{{ action }}</button>
+                      </div>
+                    </section>
+                  </aside>
+                </section>
+              </section>
+
+              <section v-else class="user-agent-center-layout">
                 <main class="user-agent-main-column">
                   <section class="user-agent-center-hero">
                     <div>
+                      <span>AGENT CENTER</span>
                       <h2>智能体中心</h2>
-                      <p>创建专属 AI 智能体，连接知识库、工具与业务流程</p>
+                      <p>创建、调试与运行你的 AI 智能体，连接知识库、工具与业务流程。</p>
                     </div>
                     <div class="user-agent-hero-robot" aria-hidden="true">
                       <i></i>
                       <b></b>
                       <em>AI</em>
+                      <strong>BOT</strong>
                     </div>
                   </section>
 
@@ -624,11 +800,18 @@
                       <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
                     </header>
                     <div class="user-agent-template-grid">
-                      <article v-for="template in agentCenterTemplates" :key="template.name" class="user-agent-template-card">
+                      <article
+                        v-for="template in agentCenterTemplates"
+                        :key="template.name"
+                        :class="['user-agent-template-card', { 'is-featured': template.featured, 'is-clickable': true }]"
+                        tabindex="0"
+                        @click="handleAgentTemplateCardClick(template)"
+                        @keydown.enter.prevent="handleAgentTemplateCardClick(template)"
+                      >
                         <div :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</div>
                         <strong>{{ template.name }}</strong>
                         <p>{{ template.desc }}</p>
-                        <button type="button" @click="selectAdminModule('userAgentCenter')">创建</button>
+                        <button type="button" @click.stop="handleAgentTemplateAction(template)">{{ template.action || "进入" }}</button>
                       </article>
                     </div>
                   </section>
@@ -650,7 +833,14 @@
                       <div class="user-agent-table-head">
                         <span>智能体名称</span><span>类型</span><span>状态</span><span>模型</span><span>知识库</span><span>调用次数</span><span>更新时间</span><span>操作</span>
                       </div>
-                      <div v-for="agent in agentCenterRows" :key="agent.name" class="user-agent-table-row">
+                      <div
+                        v-for="agent in agentCenterRows"
+                        :key="agent.name"
+                        :class="['user-agent-table-row', { 'is-officecli': agent.officecli, 'is-clickable': true }]"
+                        tabindex="0"
+                        @click="handleAgentRowAction(agent)"
+                        @keydown.enter.prevent="handleAgentRowAction(agent)"
+                      >
                         <div class="user-agent-name-cell">
                           <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
                           <div><strong>{{ agent.name }}</strong><small>{{ agent.desc }}</small></div>
@@ -662,14 +852,15 @@
                         <span>{{ agent.calls }}</span>
                         <span>{{ agent.updated }}</span>
                         <div class="user-agent-row-actions">
-                          <button type="button" @click="selectAdminModule('userAgentCenter')">□</button>
-                          <button type="button">□</button>
-                          <button type="button">□</button>
-                          <button type="button">...</button>
+                          <button type="button" class="is-wide" @click.stop="handleAgentRowAction(agent)">进入</button>
+                          <button type="button" title="编辑" aria-label="编辑智能体" @click.stop><el-icon><EditPen /></el-icon></button>
+                          <button type="button" title="复制" aria-label="复制智能体" @click.stop><el-icon><CopyDocument /></el-icon></button>
+                          <button type="button" title="更多" aria-label="更多操作" @click.stop><el-icon><Operation /></el-icon></button>
                         </div>
                       </div>
                     </div>
                   </main>
+
                 </main>
 
                 <aside class="user-agent-side-panel">
@@ -737,7 +928,12 @@
                 <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
               </section>
               <div class="user-agent-mobile-template-scroll">
-                <article v-for="template in agentCenterTemplates.slice(0, 4)" :key="template.name" class="user-agent-mobile-template-card">
+                <article
+                  v-for="template in agentCenterTemplates.slice(0, 4)"
+                  :key="template.name"
+                  class="user-agent-mobile-template-card is-clickable"
+                  @click="handleAgentTemplateCardClick(template)"
+                >
                   <span :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</span>
                   <strong>{{ template.name.replace('智能体', '').replace('企业知识库', '知识库问答') }}</strong>
                   <small>{{ template.desc.split('，')[0] }}</small>
@@ -749,7 +945,7 @@
                 <button type="button">全部类型⌄</button>
               </section>
               <div class="user-agent-mobile-list">
-                <article v-for="agent in agentCenterMobileRows" :key="agent.name" class="user-agent-mobile-agent-card">
+                <article v-for="agent in agentCenterMobileRows" :key="agent.name" class="user-agent-mobile-agent-card is-clickable" @click="handleAgentRowAction(agent)">
                   <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
                   <div>
                     <strong>{{ agent.name }}</strong>
@@ -1760,6 +1956,69 @@
               </el-table>
             </el-card>
           </section>
+          <section v-else-if="store.activeModuleId === 'operationCenterDashboard'" class="operation-center-page">
+            <div class="operation-center-stat-grid">
+              <article v-for="metric in operationCenterDashboardMetrics" :key="metric.label" class="operation-center-stat-card">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+                <small>{{ metric.hint }}</small>
+              </article>
+            </div>
+            <section class="operation-center-hero">
+              <div class="operation-center-hero-copy">
+                <el-tag type="success">运营中心</el-tag>
+                <h3>{{ operationCenterRecord.name || '运营中心' }}</h3>
+                <p>{{ operationCenterRecord.region || '未设置区域' }} · {{ statusLabel(operationCenterRecord.status) }}</p>
+              </div>
+              <div class="operation-center-code-card">
+                <span>运营邀请码</span>
+                <strong>{{ operationCenterInviteCode() || '-' }}</strong>
+              </div>
+              <div class="operation-center-code-card">
+                <span>中心 ID</span>
+                <strong>{{ operationCenterRecord.id || '-' }}</strong>
+              </div>
+              <div class="operation-center-actions">
+                <el-button type="primary" :icon="CopyDocument" @click="copyToClipboard(operationCenterInviteCode())">复制邀请码</el-button>
+                <el-button :icon="Refresh" :loading="store.loading" @click="() => store.loadActiveModule({ preferCache: false })">刷新</el-button>
+              </div>
+            </section>
+            <section class="operation-center-tabs">
+              <button v-for="tab in operationCenterTabs" :key="tab.module" type="button" @click="selectAdminModule(tab.module)">
+                <el-icon><component :is="tab.icon" /></el-icon>
+                <span>{{ tab.title }}</span>
+                <strong>{{ tab.value }}</strong>
+              </button>
+            </section>
+            <section class="operation-center-dashboard-grid">
+              <el-card shadow="never" class="operation-center-chart-card">
+                <template #header><div class="panel-head"><span>区域经营趋势</span><el-tag type="success">实时</el-tag></div></template>
+                <div class="operation-center-chart-bars">
+                  <div v-for="item in operationCenterTrend" :key="item.day" class="operation-center-chart-bar">
+                    <i :style="{ height: item.height + '%' }"></i>
+                    <span>{{ item.day }}</span>
+                  </div>
+                </div>
+              </el-card>
+              <el-card shadow="never" class="operation-center-todo-card">
+                <template #header><div class="panel-head"><span>运营动作</span><el-tag>中心</el-tag></div></template>
+                <button v-for="todo in operationCenterTodos" :key="todo.title" type="button" @click="selectAdminModule(todo.module)">
+                  <strong>{{ todo.title }}</strong>
+                  <small>{{ todo.desc }}</small>
+                </button>
+              </el-card>
+            </section>
+            <el-card shadow="never" class="data-panel operation-center-summary-card">
+              <template #header><div class="panel-head"><span>中心结算概览</span><small>{{ operationCenterKpis.length }} 项核心指标</small></div></template>
+              <div class="operation-center-kpi-grid">
+                <article v-for="item in operationCenterKpis" :key="item.label">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                  <small>{{ item.desc }}</small>
+                </article>
+              </div>
+            </el-card>
+          </section>
           <section v-else-if="store.activeModuleId === 'analysis'" class="analysis-page">
             <div class="analysis-stat-grid">
               <article v-for="stat in analysisStats" :key="stat.label" class="analysis-stat-card">
@@ -1841,6 +2100,13 @@
                   <i>◆</i>
                   <strong>{{ sidebarPlan.availableText }}</strong>
                   <small>总点数 {{ sidebarPlan.totalText }}</small>
+                </div>
+                <div class="membership-usage-meter">
+                  <div>
+                    <span>点数使用</span>
+                    <strong>{{ sidebarPlan.percent }}%</strong>
+                  </div>
+                  <p><i :style="{ width: sidebarPlan.percent + '%' }"></i></p>
                 </div>
                 <div class="membership-current-actions">
                   <button type="button" @click="createUserRechargeOrder">充值</button>
@@ -1972,7 +2238,7 @@
               <article
                 v-for="pack in identityPackageCards"
                 :key="pack.id"
-                :class="['membership-pricing-card', 'identity-package-card', { featured: pack.featured }]"
+                :class="['membership-pricing-card', 'identity-package-card', 'identity-package-card--' + pack.id, { featured: pack.featured, selected: identityPackageIsActive(pack) }]"
               >
                 <header>
                   <strong>{{ pack.name }}</strong>
@@ -1988,8 +2254,8 @@
                   <div><strong>{{ formatNumber(pack.tokenAmount) }}</strong><span>Token/点数权益</span></div>
                   <small>{{ pack.ruleText }}</small>
                 </div>
-                <button class="membership-subscribe-button" type="button" @click="createUserIdentityOrder(pack)">
-                  {{ pack.actionText }}
+                <button class="membership-subscribe-button" type="button" @click="handleIdentityPackageAction(pack)">
+                  {{ identityPackageActionText(pack) }}
                 </button>
                 <ul>
                   <li v-for="feature in pack.features" :key="feature"><span>✓</span>{{ feature }}</li>
@@ -3632,6 +3898,8 @@ function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", 
   openVideoDropdown.value = "";
 }
 
+const operationCenterModuleIds = ["operationCenterDashboard", "operationCenterAgents", "operationCenterOrders", "operationCenterCommissions"];
+
 const adminModuleGroups = [
   { id: "home", title: "首页", icon: House, items: modules.filter((item) => ["analysis", "workbench", "dashboard"].includes(item.id)) },
   { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
@@ -3652,6 +3920,7 @@ const agentModuleGroups = [
 const userModuleGroups = [
   { id: "userHome", title: "用户后台", icon: House, items: modules.filter((item) => ["userDashboard"].includes(item.id)) },
   { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"].includes(item.id)) },
+  { id: "userOperationCenter", title: "运营中心", icon: Connection, items: modules.filter((item) => operationCenterModuleIds.includes(item.id)) },
   { id: "userBilling", title: "身份/充值/订阅", icon: Wallet, items: modules.filter((item) => ["userMembership"].includes(item.id)) },
   { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders"].includes(item.id)) }
 ];
@@ -3680,10 +3949,21 @@ const userAgentFlatMenuDefs = [
   { id: "partnerAccount", targetId: "partnerAccount", title: "代理账户", icon: Setting }
 ];
 
-const allUserFlatMenuDefs = [...userFlatMenuDefs, ...userAgentFlatMenuDefs];
+const userOperationCenterFlatMenuDefs = [
+  { id: "operationCenterDashboard", targetId: "operationCenterDashboard", title: "运营首页", icon: DataAnalysis },
+  { id: "operationCenterAgents", targetId: "operationCenterAgents", title: "中心代理", icon: Connection },
+  { id: "operationCenterOrders", targetId: "operationCenterOrders", title: "中心订单", icon: Money },
+  { id: "operationCenterCommissions", targetId: "operationCenterCommissions", title: "中心分润", icon: Wallet }
+];
+
+const allUserFlatMenuDefs = [...userFlatMenuDefs, ...userAgentFlatMenuDefs, ...userOperationCenterFlatMenuDefs];
 
 const userFlatMenuItems = computed(() => {
-  const source = hasAgentIdentity.value ? allUserFlatMenuDefs : userFlatMenuDefs;
+  const source = [
+    ...userFlatMenuDefs,
+    ...(hasAgentIdentity.value ? userAgentFlatMenuDefs : []),
+    ...(hasOperationCenterIdentity.value ? userOperationCenterFlatMenuDefs : [])
+  ];
   return source.filter((item) => modules.some((module) => module.id === item.targetId));
 });
 
@@ -3698,6 +3978,10 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
   userOrders: { badge: "交易记录", description: "查看历史订单、支付状态和点数到账结果；充值/订阅入口已拆分为独立模块。" },
+  operationCenterDashboard: { badge: "运营中心", description: "汇总运营中心代理、订单、分润和邀请码，作为中心账号登录后的经营首页。" },
+  operationCenterAgents: { badge: "中心代理", description: "查看归属本运营中心的代理商、等级、邀请码和启停状态。" },
+  operationCenterOrders: { badge: "中心订单", description: "查看归属本运营中心的代理开通、会员充值和套餐订单。" },
+  operationCenterCommissions: { badge: "中心分润", description: "核对运营中心奖励、待结算金额、已结算金额和分润记录。" },
   analysis: { badge: "数据分析", description: "按客户增长、交易收入、积分消耗和生成任务活跃度观察平台经营状态。" },
   workbench: { badge: "运营工作台", description: "聚合待办、快捷入口和平台健康状态，帮助主控团队快速处理日常运营动作。" },
   dashboard: { badge: "运营驾驶舱", description: "汇总客户、订单、渠道、用量和上游服务状态，帮助主控端快速判断平台健康度。" },
@@ -3856,31 +4140,139 @@ const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "商品图 Agent", desc: "白底图、场景图", icon: Goods, targetId: "userAiImage", mode: "image", prompt: "为产品生成一组干净白底主图和浅色高级场景图。" },
   { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
 ];
+type AgentWorkspaceMessage = { role: "assistant" | "user"; text: string };
+type AgentCenterOpenable = {
+  name: string;
+  desc?: string;
+  type?: string;
+  status?: string;
+  model?: string;
+  knowledge?: string;
+  calls?: string;
+  updated?: string;
+  avatar?: string;
+  icon?: string;
+  tone?: string;
+  agentKey?: string;
+  officecli?: boolean;
+};
+type AgentCenterWorkspace = Required<Pick<AgentCenterOpenable, "name" | "desc" | "type" | "status" | "model" | "knowledge" | "calls" | "updated" | "avatar" | "tone">> & {
+  agentKey: string;
+  modeLabel: string;
+  headline: string;
+  prompt: string;
+  toolTags: string[];
+  quickActions: string[];
+  sampleMessages: AgentWorkspaceMessage[];
+};
 const agentCenterTemplates = [
-  { name: "基础对话智能体", desc: "通用问答，适合各类场景", icon: "Q", tone: "purple" },
-  { name: "企业知识库智能体", desc: "基于知识库，精准问答", icon: "K", tone: "green" },
-  { name: "销售助手", desc: "销售话术、客户跟进助力", icon: "S", tone: "orange" },
-  { name: "客服助手", desc: "7x24 智能客服，解答问题", icon: "C", tone: "purple" },
-  { name: "招商助手", desc: "招商政策解答与线索收集", icon: "B", tone: "blue" },
-  { name: "内部 SOP 助手", desc: "制度、流程、审批查询", icon: "P", tone: "purple" },
-  { name: "表单收集助手", desc: "表单收集、结果采集", icon: "F", tone: "green" },
-  { name: "API 工作流助手", desc: "调用 API 接口，自动执行", icon: "API", tone: "blue" }
+  { name: "OfficeCLI 文档智能体", desc: "Word / Excel / PPT 创建、读取、渲染与导出", icon: "DOC", tone: "orange", featured: true, action: "进入", agentKey: "officecli", officecli: true },
+  { name: "基础对话智能体", desc: "通用问答，适合各类场景", icon: "Q", tone: "purple", action: "进入", agentKey: "chat" },
+  { name: "企业知识库智能体", desc: "基于知识库，精准问答", icon: "K", tone: "green", action: "进入", agentKey: "knowledge" },
+  { name: "销售助手", desc: "销售话术、客户跟进助力", icon: "S", tone: "orange", action: "进入", agentKey: "sales" },
+  { name: "客服助手", desc: "7x24 智能客服，解答问题", icon: "C", tone: "purple", action: "进入", agentKey: "service" },
+  { name: "招商助手", desc: "招商政策解答与线索收集", icon: "B", tone: "blue", action: "进入", agentKey: "investment" },
+  { name: "内部 SOP 助手", desc: "制度、流程、审批查询", icon: "P", tone: "purple", action: "进入", agentKey: "sop" },
+  { name: "表单收集助手", desc: "表单收集、结果采集", icon: "F", tone: "green", action: "进入", agentKey: "form" }
 ];
 const agentCenterRows = [
-  { name: "产品知识助手", desc: "解答业务问题，提升协作效率", type: "知识库", status: "已发布", model: "gpt-4o-mini", knowledge: "产品知识库", calls: "1,298", updated: "2024-06-12 14:30", avatar: "P", tone: "purple" },
-  { name: "销售跟进助手", desc: "解答业务问题，提升协作效率", type: "销售助手", status: "已发布", model: "gpt-4o", knowledge: "销售资料库", calls: "856", updated: "2024-06-12 10:15", avatar: "S", tone: "orange" },
-  { name: "智能客服助手", desc: "解答业务问题，提升协作效率", type: "客服助手", status: "已发布", model: "moonshot-v1", knowledge: "客服知识库", calls: "2,350", updated: "2024-06-11 16:45", avatar: "C", tone: "blue" },
-  { name: "招商政策助手", desc: "解答业务问题，提升协作效率", type: "招商助手", status: "草稿", model: "gpt-4o-mini", knowledge: "招商资料库", calls: "128", updated: "2024-06-11 09:20", avatar: "B", tone: "orange" },
-  { name: "内部制度助手", desc: "解答业务问题，提升协作效率", type: "SOP 助手", status: "已停用", model: "qwen-max", knowledge: "内部制度库", calls: "312", updated: "2024-06-10 18:30", avatar: "P", tone: "purple" },
-  { name: "活动报名助手", desc: "解答业务问题，提升协作效率", type: "表单助手", status: "已发布", model: "gpt-4o-mini", knowledge: "-", calls: "689", updated: "2024-06-10 14:12", avatar: "F", tone: "green" },
-  { name: "订单查询助手", desc: "解答业务问题，提升协作效率", type: "API 助手", status: "草稿", model: "gpt-4o-mini", knowledge: "-", calls: "56", updated: "2024-06-09 11:05", avatar: "API", tone: "blue" }
+  { name: "OfficeCLI 文档智能体", desc: "管理 Word/Excel/PPT 任务", type: "文档工具", status: "已接入", model: "gpt-4o-mini", knowledge: "Office 模板库", calls: "326", updated: "07-09 10:20", avatar: "DOC", tone: "orange", agentKey: "officecli", officecli: true },
+  { name: "产品知识助手", desc: "解答业务问题，提升协作效率", type: "知识库", status: "已发布", model: "gpt-4o-mini", knowledge: "产品知识库", calls: "1,298", updated: "2024-06-12 14:30", avatar: "P", tone: "purple", agentKey: "knowledge" },
+  { name: "销售跟进助手", desc: "解答业务问题，提升协作效率", type: "销售助手", status: "已发布", model: "gpt-4o", knowledge: "销售资料库", calls: "856", updated: "2024-06-12 10:15", avatar: "S", tone: "orange", agentKey: "sales" },
+  { name: "智能客服助手", desc: "解答业务问题，提升协作效率", type: "客服助手", status: "已发布", model: "moonshot-v1", knowledge: "客服知识库", calls: "2,350", updated: "2024-06-11 16:45", avatar: "C", tone: "blue", agentKey: "service" },
+  { name: "招商政策助手", desc: "解答业务问题，提升协作效率", type: "招商助手", status: "草稿", model: "gpt-4o-mini", knowledge: "招商资料库", calls: "128", updated: "2024-06-11 09:20", avatar: "B", tone: "orange", agentKey: "investment" },
+  { name: "内部制度助手", desc: "解答业务问题，提升协作效率", type: "SOP 助手", status: "已停用", model: "qwen-max", knowledge: "内部制度库", calls: "312", updated: "2024-06-10 18:30", avatar: "P", tone: "purple", agentKey: "sop" },
+  { name: "活动报名助手", desc: "解答业务问题，提升协作效率", type: "表单助手", status: "已发布", model: "gpt-4o-mini", knowledge: "-", calls: "689", updated: "2024-06-10 14:12", avatar: "F", tone: "green", agentKey: "form" },
+  { name: "订单查询助手", desc: "解答业务问题，提升协作效率", type: "API 助手", status: "草稿", model: "gpt-4o-mini", knowledge: "-", calls: "56", updated: "2024-06-09 11:05", avatar: "API", tone: "blue", agentKey: "api" }
 ];
-const agentCenterMobileRows = [agentCenterRows[2], agentCenterRows[0]];
+const agentCenterMobileRows = [agentCenterRows[0], agentCenterRows[3]];
+const agentCenterWorkspaceProfiles: Record<string, Pick<AgentCenterWorkspace, "modeLabel" | "headline" | "prompt" | "toolTags" | "quickActions" | "sampleMessages">> = {
+  chat: {
+    modeLabel: "通用对话智能体",
+    headline: "多轮问答、任务拆解与内容生成",
+    prompt: "帮我把今天的产品需求整理成三条优先级，并给出下一步行动。",
+    toolTags: ["多轮对话", "内容生成", "任务拆解", "上下文记忆"],
+    quickActions: ["整理会议纪要", "生成运营文案", "拆解待办事项"],
+    sampleMessages: [
+      { role: "assistant", text: "你好，我可以帮你做通用问答、文案生成和任务拆解。把目标发给我，我会先梳理结构再给出结果。" }
+    ]
+  },
+  knowledge: {
+    modeLabel: "知识库智能体",
+    headline: "基于企业资料进行可追溯问答",
+    prompt: "查询产品知识库，说明当前会员套餐的权益差异和适用客户。",
+    toolTags: ["知识库检索", "引用来源", "权限过滤", "答案复核"],
+    quickActions: ["查询产品资料", "生成 FAQ", "比对政策差异"],
+    sampleMessages: [
+      { role: "assistant", text: "我会优先检索已绑定知识库，并在回答里标注来源，适合产品资料、制度文档和客户问题。" }
+    ]
+  },
+  sales: {
+    modeLabel: "销售助手",
+    headline: "线索跟进、异议处理与话术生成",
+    prompt: "客户觉得价格偏高，请生成一段顾问式跟进话术，语气专业但不强推。",
+    toolTags: ["销售话术", "客户画像", "异议处理", "跟进计划"],
+    quickActions: ["生成跟进话术", "分析客户意向", "制定成交路径"],
+    sampleMessages: [
+      { role: "assistant", text: "我可以根据客户阶段生成跟进话术，并把下一次触达目标、风险点和成交信号拆开。" }
+    ]
+  },
+  service: {
+    modeLabel: "客服助手",
+    headline: "7x24 问题解答与工单分流",
+    prompt: "用户反馈生成失败但点数已扣，请给出客服回复和后续处理步骤。",
+    toolTags: ["客服问答", "工单分流", "情绪安抚", "售后流程"],
+    quickActions: ["回复售后问题", "创建工单摘要", "识别高优先级问题"],
+    sampleMessages: [
+      { role: "assistant", text: "我会先安抚用户，再收集订单号、任务 ID 和错误截图，必要时转人工或补偿点数。" }
+    ]
+  },
+  investment: {
+    modeLabel: "招商助手",
+    headline: "招商政策解读与线索收集",
+    prompt: "为一个咨询加盟政策的客户生成首轮回复，并收集预算、区域和资源情况。",
+    toolTags: ["招商政策", "线索收集", "资格判断", "合作方案"],
+    quickActions: ["生成招商回复", "整理客户画像", "输出合作建议"],
+    sampleMessages: [
+      { role: "assistant", text: "我可以解释招商政策，并引导客户补充区域、预算、资源和预期合作模式。" }
+    ]
+  },
+  sop: {
+    modeLabel: "SOP 助手",
+    headline: "制度流程查询与执行检查",
+    prompt: "查询客户退款流程，并列出需要运营、财务分别确认的事项。",
+    toolTags: ["流程查询", "制度问答", "审批检查", "操作清单"],
+    quickActions: ["查询制度流程", "生成执行清单", "检查审批材料"],
+    sampleMessages: [
+      { role: "assistant", text: "我会按制度步骤拆成操作清单，并提醒你哪些节点需要审批或留痕。" }
+    ]
+  },
+  form: {
+    modeLabel: "表单助手",
+    headline: "表单收集、字段校验与结果归档",
+    prompt: "设计一个活动报名表，包含姓名、手机号、公司、意向服务和备注字段。",
+    toolTags: ["表单生成", "字段校验", "结果归档", "数据汇总"],
+    quickActions: ["创建报名表", "汇总表单结果", "检查缺失字段"],
+    sampleMessages: [
+      { role: "assistant", text: "我可以根据业务目标生成表单字段，并帮助你检查必填项、选项和结果归档规则。" }
+    ]
+  },
+  api: {
+    modeLabel: "API 助手",
+    headline: "外部接口查询、字段映射与调用排障",
+    prompt: "帮我检查订单查询接口需要哪些入参，并输出一份前端调用说明。",
+    toolTags: ["接口查询", "字段映射", "调用日志", "错误排查"],
+    quickActions: ["生成接口说明", "排查调用失败", "整理字段映射"],
+    sampleMessages: [
+      { role: "assistant", text: "我会围绕接口入参、鉴权、返回字段和错误码生成说明，便于前端或运营排查。" }
+    ]
+  }
+};
 const agentCenterMetrics = [
-  { label: "总调用次数", value: "5,689", trend: "+12.5%" },
-  { label: "总对话轮数", value: "12,458", trend: "+8.3%" },
-  { label: "消耗 Token", value: "2.45M", trend: "+15.2%" },
-  { label: "创建智能体", value: "7", trend: "+16.7%" }
+  { label: "已发布智能体", value: "7", trend: "+18.5%" },
+  { label: "本周对话", value: "12.5K", trend: "+22.1%" },
+  { label: "知识库命中", value: "894", trend: "+9.8%" },
+  { label: "工具调用", value: "1.8K", trend: "+31.4%" }
 ];
 const agentCenterTrend = [
   { label: "06-06", height: "58%" },
@@ -3897,14 +4289,276 @@ const agentCenterRanking = [
   { name: "产品知识助手", calls: "1,298" },
   { name: "销售跟进助手", calls: "856" },
   { name: "活动报名助手", calls: "689" },
-  { name: "内部制度助手", calls: "312" }
+  { name: "OfficeCLI 文档智能体", calls: "326" }
 ];
 const agentCenterShortcuts = [
-  { label: "知识库管理", icon: "KB" },
-  { label: "API 工具", icon: "API" },
-  { label: "应用发布", icon: "PUB" },
+  { label: "模板库", icon: "TPL" },
+  { label: "工具配置", icon: "API" },
+  { label: "知识库", icon: "KB" },
   { label: "调用日志", icon: "LOG" }
 ];
+
+type OfficeCLICommand = { label: string; command: string };
+type OfficeCLIStatusResponse = {
+  available?: boolean;
+  binaryPath?: string;
+  version?: string;
+  error?: string;
+  runnerMode?: string;
+  installCommands?: OfficeCLICommand[];
+  mcpCommands?: OfficeCLICommand[];
+  capabilities?: Array<{ code: string; label: string }>;
+  formats?: string[];
+};
+type OfficeCLIFormat = "docx" | "xlsx" | "pptx";
+type OfficeCLIDocumentResponse = {
+  id: string;
+  fileName: string;
+  format: OfficeCLIFormat;
+  title: string;
+  downloadUrl: string;
+  size: number;
+  commands?: OfficeCLICommand[];
+};
+const officeCLIFormatOptions: Array<{ label: string; value: OfficeCLIFormat; desc: string }> = [
+  { label: "Word", value: "docx", desc: "报告 / 方案" },
+  { label: "Excel", value: "xlsx", desc: "表格 / 清单" },
+  { label: "PPT", value: "pptx", desc: "演示 / 汇报" }
+];
+const officeCLIStatus = ref<OfficeCLIStatusResponse | null>(null);
+const officeCLIStatusLoading = ref(false);
+const officeCLIForm = ref<{ format: OfficeCLIFormat; title: string; prompt: string }>({
+  format: "pptx",
+  title: "OfficeCLI 文档智能体演示",
+  prompt: "生成一份面向客户的 OfficeCLI 能力介绍，包含产品价值、适用场景和下一步计划。"
+});
+const officeCLIWorkspaceOpen = ref(false);
+const agentCenterWorkspace = ref<AgentCenterWorkspace | null>(null);
+const agentWorkspaceDraft = ref("");
+const agentWorkspaceMessages = ref<AgentWorkspaceMessage[]>([]);
+const agentCenterSubviewHistoryKey = "__xianzhiAgentSubview";
+const officeCLIDocumentGenerating = ref(false);
+const officeCLIDocumentResult = ref<OfficeCLIDocumentResponse | null>(null);
+const officeCLIStatusLabel = computed(() => {
+  if (officeCLIStatusLoading.value) return "检测中";
+  if (officeCLIStatus.value?.available) return "已安装";
+  if (officeCLIStatus.value) return "待安装";
+  return "未检测";
+});
+const officeCLIStatusTone = computed(() => officeCLIStatus.value?.available ? "ready" : officeCLIStatus.value ? "pending" : "idle");
+const officeCLIDocumentSizeText = computed(() => {
+  const size = officeCLIDocumentResult.value?.size || 0;
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  if (size >= 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${size} B`;
+});
+
+function agentKeyForItem(item: AgentCenterOpenable) {
+  if (item.officecli || item.name === "OfficeCLI 文档智能体") return "officecli";
+  return item.agentKey || item.name;
+}
+
+function isOfficeCLIItem(item: AgentCenterOpenable) {
+  return agentKeyForItem(item) === "officecli";
+}
+
+function buildAgentCenterWorkspace(item: AgentCenterOpenable): AgentCenterWorkspace {
+  const agentKey = agentKeyForItem(item);
+  const row = agentCenterRows.find((candidate) => candidate.agentKey === agentKey || candidate.name === item.name);
+  const profile = agentCenterWorkspaceProfiles[agentKey] || agentCenterWorkspaceProfiles.chat;
+  const name = item.name || row?.name || profile.modeLabel;
+  const desc = item.desc || row?.desc || "进入智能体工作台，进行测试、配置和运行状态查看。";
+  return {
+    agentKey,
+    name,
+    desc,
+    type: item.type || row?.type || profile.modeLabel,
+    status: item.status || row?.status || "待配置",
+    model: item.model || row?.model || "gpt-4o-mini",
+    knowledge: item.knowledge || row?.knowledge || "未绑定",
+    calls: item.calls || row?.calls || "0",
+    updated: item.updated || row?.updated || "刚刚",
+    avatar: item.avatar || item.icon || row?.avatar || name.slice(0, 1),
+    tone: item.tone || row?.tone || "purple",
+    modeLabel: profile.modeLabel,
+    headline: profile.headline,
+    prompt: profile.prompt,
+    toolTags: profile.toolTags,
+    quickActions: profile.quickActions,
+    sampleMessages: profile.sampleMessages
+  };
+}
+
+function scrollAgentCenterTop() {
+  if (typeof window !== "undefined") {
+    void nextTick(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }
+}
+
+function agentCenterSubviewHistoryState() {
+  if (typeof window === "undefined") return "";
+  const state = window.history.state as Record<string, unknown> | null;
+  return typeof state?.[agentCenterSubviewHistoryKey] === "string" ? String(state[agentCenterSubviewHistoryKey]) : "";
+}
+
+function pushAgentCenterSubviewHistory(agentKey: string) {
+  if (typeof window === "undefined" || store.activeModuleId !== "userAgentCenter") return;
+  if (agentCenterSubviewHistoryState() === agentKey) return;
+  const baseState = { ...(window.history.state || {}) };
+  delete baseState[agentCenterSubviewHistoryKey];
+  window.history.replaceState(baseState, "", window.location.href);
+  window.history.pushState({ ...baseState, [agentCenterSubviewHistoryKey]: agentKey }, "", window.location.href);
+}
+
+function replaceAgentCenterSubviewHistoryWithOverview() {
+  if (typeof window === "undefined") return;
+  const nextState = { ...(window.history.state || {}) };
+  delete nextState[agentCenterSubviewHistoryKey];
+  window.history.replaceState(nextState, "", window.location.href);
+}
+
+function clearAgentCenterSubview(updateHistory = true) {
+  if (updateHistory) replaceAgentCenterSubviewHistoryWithOverview();
+  officeCLIWorkspaceOpen.value = false;
+  agentCenterWorkspace.value = null;
+  agentWorkspaceDraft.value = "";
+  agentWorkspaceMessages.value = [];
+  scrollAgentCenterTop();
+}
+
+function closeAgentCenterSubview() {
+  clearAgentCenterSubview();
+}
+
+function openOfficeCLIWorkspace(pushHistory = true) {
+  agentCenterWorkspace.value = null;
+  officeCLIWorkspaceOpen.value = true;
+  if (!officeCLIStatus.value && !officeCLIStatusLoading.value) void loadOfficeCLIStatus();
+  if (pushHistory) pushAgentCenterSubviewHistory("officecli");
+  scrollAgentCenterTop();
+}
+
+function closeOfficeCLIWorkspace() {
+  closeAgentCenterSubview();
+}
+
+function openAgentWorkspace(item: AgentCenterOpenable, pushHistory = true) {
+  if (isOfficeCLIItem(item)) {
+    openOfficeCLIWorkspace(pushHistory);
+    return;
+  }
+  officeCLIWorkspaceOpen.value = false;
+  const workspace = buildAgentCenterWorkspace(item);
+  agentCenterWorkspace.value = workspace;
+  agentWorkspaceDraft.value = workspace.prompt;
+  agentWorkspaceMessages.value = workspace.sampleMessages.map((message) => ({ ...message }));
+  if (pushHistory) pushAgentCenterSubviewHistory(workspace.agentKey);
+  scrollAgentCenterTop();
+}
+
+function closeAgentWorkspace() {
+  closeAgentCenterSubview();
+}
+
+function restoreAgentCenterSubviewFromHistory(agentKey: string) {
+  if (!agentKey) {
+    clearAgentCenterSubview(false);
+    return;
+  }
+  if (agentKey === "officecli") {
+    openOfficeCLIWorkspace(false);
+    return;
+  }
+  const item = agentCenterRows.find((agent) => agent.agentKey === agentKey)
+    || agentCenterTemplates.find((template) => template.agentKey === agentKey);
+  if (item) {
+    openAgentWorkspace(item, false);
+    return;
+  }
+  clearAgentCenterSubview(false);
+}
+
+function handleAgentCenterHistoryPopState() {
+  if (store.activeModuleId !== "userAgentCenter") return;
+  restoreAgentCenterSubviewFromHistory(agentCenterSubviewHistoryState());
+}
+
+function handleAgentTemplateCardClick(item: AgentCenterOpenable) {
+  openAgentWorkspace(item);
+}
+
+function handleAgentTemplateAction(item: AgentCenterOpenable) {
+  openAgentWorkspace(item);
+}
+
+function handleAgentRowAction(item: AgentCenterOpenable) {
+  openAgentWorkspace(item);
+}
+
+function sendAgentWorkspaceMessage() {
+  const workspace = agentCenterWorkspace.value;
+  const prompt = agentWorkspaceDraft.value.trim();
+  if (!workspace) return;
+  if (!prompt) {
+    ElMessage.warning("请先输入测试指令");
+    return;
+  }
+  agentWorkspaceMessages.value.push({ role: "user", text: prompt });
+  agentWorkspaceMessages.value.push({
+    role: "assistant",
+    text: `${workspace.name} 已接收测试指令。我会围绕「${workspace.type}」场景处理，并结合 ${workspace.knowledge} 输出可执行回复。`
+  });
+  agentWorkspaceDraft.value = "";
+}
+
+async function loadOfficeCLIStatus() {
+  if (!hasAuthToken()) return;
+  officeCLIStatusLoading.value = true;
+  try {
+    officeCLIStatus.value = await adminRequest<OfficeCLIStatusResponse>({ method: "GET", url: "/officecli/status" });
+  } catch (error) {
+    officeCLIStatus.value = { available: false, error: error instanceof Error ? error.message : "OfficeCLI 状态检测失败" };
+  } finally {
+    officeCLIStatusLoading.value = false;
+  }
+}
+
+async function submitOfficeCLIDocument() {
+  const prompt = officeCLIForm.value.prompt.trim();
+  if (!prompt) {
+    ElMessage.warning("请先填写生成需求");
+    return;
+  }
+  officeCLIDocumentGenerating.value = true;
+  try {
+    if (!officeCLIStatus.value?.available) await loadOfficeCLIStatus();
+    if (!officeCLIStatus.value?.available) throw new Error("OfficeCLI 尚未可用，请先确认服务端安装状态");
+    officeCLIDocumentResult.value = await adminRequest<OfficeCLIDocumentResponse>({
+      method: "POST",
+      url: "/officecli/documents",
+      data: {
+        format: officeCLIForm.value.format,
+        title: officeCLIForm.value.title.trim() || "OfficeCLI 文档",
+        prompt
+      }
+    });
+    ElMessage.success("Office 文档已生成");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "文档生成失败");
+  } finally {
+    officeCLIDocumentGenerating.value = false;
+  }
+}
+
+async function downloadOfficeCLIDocument() {
+  const result = officeCLIDocumentResult.value;
+  if (!result) return;
+  try {
+    await downloadUrl(result.downloadUrl, result.fileName);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "文件下载失败");
+  }
+}
 const agentMobileBottomNav = [
   { label: "首页", letter: "H", targetId: "userDashboard" },
   { label: "创作", letter: "+", targetId: "userAiImage" },
@@ -7127,15 +7781,28 @@ interface AdminUser {
   role: string;
   status: string;
   planId?: string;
+  memberLevel?: string;
+  agentStatus?: string;
+  operationCenterStatus?: string;
   subscriptionExpiresAt?: string;
 }
 interface AuthMeResponse {
   user: AdminUser;
   agent?: AdminRecord | null;
+  operationCenter?: AdminRecord | null;
   permissions?: string[];
   workspace?: string;
   defaultModule?: string;
+  defaultRoute?: string;
+  accessToken?: string;
 }
+type WeChatMiniProgramRuntime = {
+  login?: (options: {
+    provider?: string;
+    success?: (result: { code?: string }) => void;
+    fail?: (error: unknown) => void;
+  }) => void;
+};
 type MembershipCycleId = "monthly" | "yearly" | "single";
 type MembershipMode = "recharge" | "subscribe" | "identity";
 type PaymentMethodId = "cash" | "wechat" | "alipay";
@@ -7211,10 +7878,19 @@ const sidebarPlan = computed(() => {
 });
 const currentAdmin = ref<AdminUser | null>(null);
 const currentAgent = ref<AdminRecord | null>(null);
+const currentOperationCenter = ref<AdminRecord | null>(null);
 const currentPermissions = ref<string[]>([]);
 const hasAgentIdentity = computed(() => {
   const role = String(currentAdmin.value?.role || "").toUpperCase();
   return Boolean(currentAgent.value?.id) || role.startsWith("AGENT") || currentPermissions.value.some((permission) => String(permission).startsWith("channel."));
+});
+const hasOperationCenterIdentity = computed(() => {
+  const role = String(currentAdmin.value?.role || "").toUpperCase();
+  const status = String(currentAdmin.value?.operationCenterStatus || "").toUpperCase();
+  return Boolean(currentOperationCenter.value?.id)
+    || role === "OPERATION_CENTER"
+    || status === "ACTIVE"
+    || currentPermissions.value.some((permission) => String(permission).startsWith("operation_center."));
 });
 const userAccountSnapshot = ref<AdminRecord | null>(null);
 watch(
@@ -7528,6 +8204,37 @@ async function createUserSubscriptionOrder(plan: UserMembershipPlanCard) {
   }
 }
 
+function identityPackageIsActive(pack: UserIdentityPackage) {
+  if (pack.id.startsWith("agent_")) return hasAgentIdentity.value;
+  if (pack.id.startsWith("operation_center")) return hasOperationCenterIdentity.value;
+  const level = String(currentAdmin.value?.memberLevel || "").toUpperCase();
+  const planId = String(currentAdmin.value?.planId || "");
+  return level !== "" && level !== "FREE" || planId === pack.planId || planId === "plan_pro";
+}
+
+function identityPackageActionText(pack: UserIdentityPackage) {
+  if (!identityPackageIsActive(pack)) return pack.actionText;
+  if (pack.id.startsWith("agent_")) return "进入代理后台";
+  if (pack.id.startsWith("operation_center")) return "进入运营中心";
+  return "已开通会员";
+}
+
+async function handleIdentityPackageAction(pack: UserIdentityPackage) {
+  if (!identityPackageIsActive(pack)) {
+    await createUserIdentityOrder(pack);
+    return;
+  }
+  if (pack.id.startsWith("agent_")) {
+    await selectAdminModule("partnerDashboard");
+    return;
+  }
+  if (pack.id.startsWith("operation_center")) {
+    await selectAdminModule("operationCenterDashboard");
+    return;
+  }
+  ElMessage.success("当前账号已具备会员身份");
+}
+
 async function createUserIdentityOrder(pack: UserIdentityPackage) {
   try {
     await ElMessageBox.confirm(`确认创建 ${pack.name} 订单 ￥${pack.price}？支付回调或主控确认收款后，身份和权益会自动生效。`, "确认开通", {
@@ -7560,6 +8267,25 @@ async function createUserIdentityOrder(pack: UserIdentityPackage) {
 const isAgentConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/agent"));
 const isUserConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/app"));
 const authReady = ref(false);
+const authPath = ref(typeof window !== "undefined" ? window.location.pathname.replace(/\/$/, "") || "/" : "");
+const isLoginRoute = computed(() => authPath.value === "/login");
+const isRegisterRoute = computed(() => authPath.value === "/register");
+const isAuthRoute = computed(() => isLoginRoute.value || isRegisterRoute.value);
+const initialInviteCode = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") || "" : "";
+const loginForm = ref({
+  email: "demo@xianzhi.ai",
+  password: "",
+  remember: true
+});
+const registerForm = ref({
+  username: "",
+  email: "",
+  password: "",
+  confirmPassword: "",
+  inviteCode: initialInviteCode
+});
+const authSubmitting = ref(false);
+const wechatAuthSubmitting = ref(false);
 const mobileDrawerOpen = ref(false);
 const desktopSidebarCollapsed = ref(false);
 const tabsScrollRef = ref<HTMLElement | null>(null);
@@ -7568,8 +8294,8 @@ const activeTabStorageKey = isUserConsole.value ? "xianzhi-user-active-tab" : is
 const agentModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
 const userModuleIds = ["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks", "userMembership", "userUsage", "userOrders"];
 const imageWorkspaceModuleIds = ["userAiImage"];
-const adminModuleIds = modules.map((item) => item.id).filter((id) => !agentModuleIds.includes(id) && !userModuleIds.includes(id));
-const userConsoleModuleIds = [...userModuleIds, ...agentModuleIds];
+const adminModuleIds = modules.map((item) => item.id).filter((id) => !agentModuleIds.includes(id) && !operationCenterModuleIds.includes(id) && !userModuleIds.includes(id));
+const userConsoleModuleIds = [...userModuleIds, ...agentModuleIds, ...operationCenterModuleIds];
 const allowedModuleIds = isUserConsole.value ? userConsoleModuleIds : isAgentConsole.value ? agentModuleIds : adminModuleIds;
 const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : ["analysis", "workbench"];
 const userModulePathMap: Record<string, string> = {
@@ -7593,7 +8319,11 @@ const userModulePathMap: Record<string, string> = {
   "/app/agent/commissions": "partnerCommissions",
   "/app/agent/channels": "partnerChannels",
   "/app/agent/materials": "partnerMaterials",
-  "/app/agent/account": "partnerAccount"
+  "/app/agent/account": "partnerAccount",
+  "/app/operation-center": "operationCenterDashboard",
+  "/app/operation-center/agents": "operationCenterAgents",
+  "/app/operation-center/orders": "operationCenterOrders",
+  "/app/operation-center/commissions": "operationCenterCommissions"
 };
 const userModuleRouteMap: Record<string, string> = {
   userDashboard: "/app",
@@ -7613,7 +8343,11 @@ const userModuleRouteMap: Record<string, string> = {
   partnerCommissions: "/app/agent/commissions",
   partnerChannels: "/app/agent/channels",
   partnerMaterials: "/app/agent/materials",
-  partnerAccount: "/app/agent/account"
+  partnerAccount: "/app/agent/account",
+  operationCenterDashboard: "/app/operation-center",
+  operationCenterAgents: "/app/operation-center/agents",
+  operationCenterOrders: "/app/operation-center/orders",
+  operationCenterCommissions: "/app/operation-center/commissions"
 };
 
 function isPptGenerationPath(pathname: string) {
@@ -7766,6 +8500,10 @@ const iconMap = {
   partnerChannels: Connection,
   partnerMaterials: Collection,
   partnerAccount: Setting,
+  operationCenterDashboard: DataAnalysis,
+  operationCenterAgents: Connection,
+  operationCenterOrders: Money,
+  operationCenterCommissions: Wallet,
   userDashboard: House,
   userAiImage: Plus,
   userAgentCenter: Cpu,
@@ -8839,6 +9577,7 @@ function apiKeyMasked(channel: AdminRecord) {
 }
 const partnerModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
 const isPartnerModule = computed(() => partnerModuleIds.includes(store.activeModuleId));
+const isOperationCenterModule = computed(() => operationCenterModuleIds.includes(store.activeModuleId));
 const partnerData = computed(() => store.data as AdminRecord & {
   user?: AdminRecord;
   agent?: AdminRecord;
@@ -9124,6 +9863,106 @@ function partnerRows(): AdminRecord[] {
   ];
   return partnerSourceRows.value;
 }
+
+const operationCenterData = computed(() => store.data as AdminRecord & {
+  user?: AdminRecord;
+  operationCenter?: AdminRecord | null;
+  summary?: Record<string, unknown>;
+  joinPlan?: AdminRecord;
+  items?: AdminRecord[];
+});
+
+const operationCenterRecord = computed<AdminRecord>(() => {
+  const center = operationCenterData.value.operationCenter;
+  if (center && typeof center === "object" && Object.keys(center).length) return center;
+  return currentOperationCenter.value || {};
+});
+
+function operationCenterSummaryValue(key: string) {
+  return operationCenterData.value.summary?.[key] ?? 0;
+}
+
+function operationCenterInviteCode() {
+  return String(operationCenterRecord.value.inviteCode || "").trim();
+}
+
+const operationCenterDashboardMetrics = computed(() => {
+  const agents = Number(operationCenterSummaryValue("agents"));
+  const orders = Number(operationCenterSummaryValue("orders"));
+  const paidOrderAmount = Number(operationCenterSummaryValue("paidOrderAmountCents"));
+  const totalCents = Number(operationCenterSummaryValue("totalCents"));
+  const pendingCents = Number(operationCenterSummaryValue("pendingCents"));
+  const settledCents = Number(operationCenterSummaryValue("settledCents"));
+  return [
+    { label: "中心代理", value: String(agents), hint: "归属代理商" },
+    { label: "成交订单", value: String(orders), hint: "已支付订单" },
+    { label: "归属成交额", value: moneyYuan(paidOrderAmount), hint: "订单金额口径" },
+    { label: "累计分润", value: moneyYuan(totalCents), hint: "中心奖励" },
+    { label: "待结算", value: moneyYuan(pendingCents), hint: "待审核/结算" },
+    { label: "已结算", value: moneyYuan(settledCents), hint: "可归档收入" }
+  ];
+});
+
+const operationCenterTrend = computed(() => {
+  const base = Math.max(18, Number(operationCenterSummaryValue("orders")) * 10 + Number(operationCenterSummaryValue("agents")) * 8);
+  return [
+    { day: "周一", height: Math.min(92, base + 6) },
+    { day: "周二", height: Math.min(92, base + 18) },
+    { day: "周三", height: Math.min(92, base + 12) },
+    { day: "周四", height: Math.min(92, base + 28) },
+    { day: "周五", height: Math.min(92, base + 36) },
+    { day: "周六", height: Math.min(92, base + 10) },
+    { day: "周日", height: Math.min(92, base + 20) }
+  ];
+});
+
+const operationCenterTodos = [
+  { module: "operationCenterAgents", title: "查看中心代理", desc: "核对等级、邀请码和归属关系" },
+  { module: "operationCenterOrders", title: "跟进归属订单", desc: "确认中心名下成交与待支付订单" },
+  { module: "operationCenterCommissions", title: "核对分润", desc: "检查待结算与已结算金额" },
+  { module: "userMembership", title: "管理身份套餐", desc: "查看身份、充值和订阅入口" }
+];
+
+const operationCenterTabs = computed(() => [
+  { module: "operationCenterAgents", title: "代理商", icon: Connection, value: String(operationCenterSummaryValue("agents")) },
+  { module: "operationCenterOrders", title: "订单", icon: Money, value: String(operationCenterSummaryValue("orders")) },
+  { module: "operationCenterCommissions", title: "分润", icon: Wallet, value: moneyYuan(operationCenterSummaryValue("totalCents")) }
+]);
+
+const operationCenterKpis = computed(() => [
+  { label: "运营中心状态", value: statusLabel(operationCenterRecord.value.status), desc: String(operationCenterRecord.value.region || "区域未配置") },
+  { label: "开通订单", value: String(operationCenterRecord.value.joinOrderId || "-"), desc: operationCenterRecord.value.joinFeeCents ? moneyYuan(operationCenterRecord.value.joinFeeCents) : "暂无开通费记录" },
+  { label: "分润记录", value: String(operationCenterSummaryValue("records")), desc: "运营中心奖励条数" },
+  { label: "邀请代码", value: operationCenterInviteCode() || "-", desc: "用于中心归属识别" }
+]);
+
+function operationCenterRows(): AdminRecord[] {
+  const data = operationCenterData.value;
+  const items = Array.isArray(data.items) ? data.items : [];
+  if (store.activeModuleId === "operationCenterAgents") {
+    return items.map((item) => ({ ...item, levelLabel: item.levelLabel || partnerAgentLevelLabel(item.level), recordType: "代理商" }));
+  }
+  if (store.activeModuleId === "operationCenterOrders") {
+    return items.map((item) => ({
+      ...item,
+      orderId: item.orderId || item.orderNo || item.id,
+      orderTypeText: membershipOrderType(item.orderType),
+      plan: item.plan || item.planId || "-",
+      customer: item.customer || item.userId || "-"
+    }));
+  }
+  if (store.activeModuleId === "operationCenterCommissions") {
+    return items.map((item) => ({
+      ...item,
+      recordType: "运营中心奖励",
+      settlementSource: item.commissionType || "OPERATION_CENTER_REWARD",
+      commissionCents: item.amountCents,
+      reviewedAt: item.updatedAt || "-"
+    }));
+  }
+  return [];
+}
+
 const activeModuleMeta = computed(() => pageMeta[store.activeModuleId] || { badge: "主控模块", description: "管理当前业务域的数据和动作。" });
 const visibleModuleGroups = computed(() => isUserConsole.value ? userModuleGroups : isAgentConsole.value ? agentModuleGroups : adminModuleGroups);
 const activeGroup = computed(() => visibleModuleGroups.value.find((group) => group.items.some((item) => item.id === store.activeModuleId)));
@@ -9154,6 +9993,7 @@ function scrollOpenTabs(direction: -1 | 1) {
 function ensureOpenTab(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
   if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) return;
+  if (operationCenterModuleIds.includes(moduleId) && !hasOperationCenterIdentity.value) return;
   const module = modules.find((item) => item.id === moduleId);
   if (!module || openTabs.value.some((item) => item.id === moduleId)) return;
   openTabs.value.push(module);
@@ -9164,6 +10004,18 @@ async function selectAdminModule(moduleId: string) {
   if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) {
     ElMessage.warning("当前账号还没有代理身份");
     return;
+  }
+  if (operationCenterModuleIds.includes(moduleId) && !hasOperationCenterIdentity.value) {
+    ElMessage.warning("当前账号还没有运营中心身份");
+    return;
+  }
+  if (moduleId === "userAgentCenter" && (officeCLIWorkspaceOpen.value || agentCenterWorkspace.value)) {
+    closeAgentCenterSubview();
+    return;
+  }
+  if (moduleId !== "userAgentCenter") {
+    officeCLIWorkspaceOpen.value = false;
+    agentCenterWorkspace.value = null;
   }
   mobileDrawerOpen.value = false;
   ensureOpenTab(moduleId);
@@ -9179,6 +10031,10 @@ async function selectUserFlatMenu(menuId: string) {
   if (!target) return;
   if (agentModuleIds.includes(target.targetId) && !hasAgentIdentity.value) {
     ElMessage.warning("当前账号还没有代理身份");
+    return;
+  }
+  if (operationCenterModuleIds.includes(target.targetId) && !hasOperationCenterIdentity.value) {
+    ElMessage.warning("当前账号还没有运营中心身份");
     return;
   }
   if (target.targetId === "userAiImage") {
@@ -9329,6 +10185,7 @@ onMounted(() => {
   window.addEventListener("resize", updateAiComposerClearance);
   window.addEventListener("keydown", handleAiLightboxKeydown);
   window.addEventListener("focus", handleAiWorkspaceVisibilityRefresh);
+  window.addEventListener("popstate", handleAgentCenterHistoryPopState);
   document.addEventListener("visibilitychange", handleAiWorkspaceVisibilityRefresh);
 });
 
@@ -9369,6 +10226,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("resize", adjustVideoPromptHeight);
     window.removeEventListener("keydown", handleAiLightboxKeydown);
     window.removeEventListener("focus", handleAiWorkspaceVisibilityRefresh);
+    window.removeEventListener("popstate", handleAgentCenterHistoryPopState);
     document.removeEventListener("visibilitychange", handleAiWorkspaceVisibilityRefresh);
     document.body.style.overflow = "";
     document.documentElement.style.removeProperty("--ai-composer-clearance");
@@ -9907,6 +10765,7 @@ const rows = computed(() => {
     return [...commissions, ...withdrawals];
   }
   if (isPartnerModule.value) return partnerRows();
+  if (isOperationCenterModule.value) return operationCenterRows();
   const items = Array.isArray(data.items) ? data.items : Array.isArray(data.withdrawals) ? data.withdrawals : [];
   return flattenRows(items as AdminRecord[]);
 });
@@ -10117,6 +10976,9 @@ const columns = computed(() => {
     partnerChannels: ["name", "email", "levelLabel", "inviteCode", "customers", "children", "status"],
     partnerMaterials: ["name", "type", "value", "status"],
     partnerAccount: ["item", "value", "status"],
+    operationCenterAgents: ["name", "email", "levelLabel", "inviteCode", "operationCenterId", "status", "createdAt"],
+    operationCenterOrders: ["orderId", "orderTypeText", "customer", "plan", "amountCents", "platformIncomeCents", "operationCenterId", "fulfillmentStatus", "status", "createdAt"],
+    operationCenterCommissions: ["recordType", "settlementSource", "id", "orderId", "amountCents", "settleStatus", "status", "createdAt", "reviewedAt"],
     channels: ["name", "email", "levelLabel", "identity", "openCondition", "keepCondition", "inviteCode", "operationCenterId", "status"],
     operationCenters: ["name", "owner", "region", "inviteCode", "status", "joinOrderId", "joinFeeCents", "approvedAt"],
     products: ["name", "type", "status", "usage"],
@@ -10188,6 +11050,38 @@ const metrics = computed(() => {
       { label: "已提现金额", value: moneyYuan(Number(summary.withdrawn || 0)) },
       { label: "可提现余额", value: moneyYuan(Math.max(0, Number(summary.availableToWithdraw || 0))) },
       { label: "超提金额", value: moneyYuan(Math.max(0, -rawAvailable)) }
+    ];
+  }
+  if (store.activeModuleId === "operationCenterAgents") {
+    const agentRows = operationCenterRows();
+    const activeAgents = agentRows.filter((item) => String(item.status || "").toUpperCase() === "ACTIVE").length;
+    return [
+      { label: "中心代理", value: String(agentRows.length) },
+      { label: "启用代理", value: String(activeAgents) },
+      { label: "待处理", value: String(Math.max(0, agentRows.length - activeAgents)) }
+    ];
+  }
+  if (store.activeModuleId === "operationCenterOrders") {
+    const orderRows = operationCenterRows();
+    const paidOrders = orderRows.filter((item) => ["PAID", "SUCCEEDED", "SUCCESS"].includes(String(item.status || "").toUpperCase()));
+    const totalAmount = paidOrders.reduce((total, item) => total + Number(item.amountCents || 0), 0);
+    return [
+      { label: "归属订单", value: String(orderRows.length) },
+      { label: "已支付订单", value: String(paidOrders.length) },
+      { label: "成交金额", value: moneyYuan(totalAmount) }
+    ];
+  }
+  if (store.activeModuleId === "operationCenterCommissions") {
+    const commissionRows = operationCenterRows();
+    const total = commissionRows.reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+    const settled = commissionRows
+      .filter((item) => ["SETTLED", "APPROVED"].includes(String(item.settleStatus || item.status || "").toUpperCase()))
+      .reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+    return [
+      { label: "分润记录", value: String(commissionRows.length) },
+      { label: "累计分润", value: moneyYuan(total) },
+      { label: "已结算", value: moneyYuan(settled) },
+      { label: "待结算", value: moneyYuan(Math.max(0, total - settled)) }
     ];
   }
   if (["userDashboard", "userAiImage"].includes(store.activeModuleId) && Array.isArray(data.metrics)) return data.metrics.map((item) => ({ label: item.label, value: String(item.value) }));
@@ -11608,6 +12502,147 @@ function hasAuthToken() {
   return Boolean(localStorage.getItem("token") || sessionStorage.getItem("token"));
 }
 
+function authRedirectPath(response: AuthMeResponse) {
+  const route = String(response.defaultRoute || "").trim();
+  if (route) return route;
+  const role = String(response.user?.role || "").toUpperCase();
+  if (role === "SUPER_ADMIN") return "/admin/";
+  return "/app";
+}
+
+function storeAuthToken(token: string, remember: boolean) {
+  if (remember) {
+    localStorage.setItem("token", token);
+    sessionStorage.removeItem("token");
+  } else {
+    sessionStorage.setItem("token", token);
+    localStorage.removeItem("token");
+  }
+}
+
+function completeAuth(response: AuthMeResponse, remember = true) {
+  const token = String(response.accessToken || "").trim();
+  if (!token) {
+    ElMessage.error("登录成功但没有返回访问令牌");
+    return;
+  }
+  storeAuthToken(token, remember);
+  window.location.replace(authRedirectPath(response));
+}
+
+async function redirectAuthenticatedUserFromAuthRoute() {
+  if (!hasAuthToken()) return;
+  try {
+    const response = await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
+    window.location.replace(authRedirectPath(response));
+  } catch {
+    localStorage.removeItem("token");
+    sessionStorage.removeItem("token");
+  }
+}
+
+async function submitLogin() {
+  if (authSubmitting.value) return;
+  if (!loginForm.value.email.trim() || !loginForm.value.password.trim()) {
+    ElMessage.warning("请输入邮箱和密码");
+    return;
+  }
+  authSubmitting.value = true;
+  try {
+    const response = await adminRequest<AuthMeResponse>({
+      method: "POST",
+      url: "/auth/login",
+      data: {
+        email: loginForm.value.email.trim(),
+        password: loginForm.value.password
+      }
+    });
+    completeAuth(response, loginForm.value.remember);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "登录失败");
+  } finally {
+    authSubmitting.value = false;
+  }
+}
+
+async function submitRegister() {
+  if (authSubmitting.value) return;
+  if (!registerForm.value.username.trim() || !registerForm.value.email.trim() || !registerForm.value.password.trim() || !registerForm.value.confirmPassword.trim()) {
+    ElMessage.warning("请填写用户名、邮箱、密码和确认密码");
+    return;
+  }
+  if (registerForm.value.password.length < 8) {
+    ElMessage.warning("密码至少 8 位");
+    return;
+  }
+  if (registerForm.value.confirmPassword !== registerForm.value.password) {
+    ElMessage.warning("两次输入的密码不一致");
+    return;
+  }
+  authSubmitting.value = true;
+  try {
+    const response = await adminRequest<AuthMeResponse>({
+      method: "POST",
+      url: "/auth/register",
+      data: {
+        username: registerForm.value.username.trim(),
+        email: registerForm.value.email.trim(),
+        password: registerForm.value.password,
+        confirmPassword: registerForm.value.confirmPassword,
+        inviteCode: registerForm.value.inviteCode.trim()
+      }
+    });
+    completeAuth(response, true);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "注册失败");
+  } finally {
+    authSubmitting.value = false;
+  }
+}
+
+function getWeChatMiniProgramRuntime() {
+  return (globalThis as typeof globalThis & { wx?: WeChatMiniProgramRuntime }).wx;
+}
+
+function requestWeChatMiniProgramCode() {
+  return new Promise<string>((resolve, reject) => {
+    const wxRuntime = getWeChatMiniProgramRuntime();
+    if (!wxRuntime?.login) {
+      reject(new Error("请在微信小程序环境使用微信登录，浏览器请使用账号密码登录"));
+      return;
+    }
+    wxRuntime.login({
+      provider: "weixin",
+      success: (result) => {
+        if (result.code) {
+          resolve(result.code);
+          return;
+        }
+        reject(new Error("微信授权未返回 code"));
+      },
+      fail: (error) => reject(error instanceof Error ? error : new Error("微信授权失败"))
+    });
+  });
+}
+
+async function loginWithWeChatMiniProgram() {
+  if (wechatAuthSubmitting.value) return;
+  wechatAuthSubmitting.value = true;
+  try {
+    const code = await requestWeChatMiniProgramCode();
+    const response = await adminRequest<AuthMeResponse>({
+      method: "POST",
+      url: "/auth/wechat-mini-program/login",
+      data: { code }
+    });
+    completeAuth(response, true);
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "微信登录失败");
+  } finally {
+    wechatAuthSubmitting.value = false;
+  }
+}
+
 function redirectToLogin() {
   localStorage.removeItem("token");
   sessionStorage.removeItem("token");
@@ -11624,10 +12659,18 @@ async function loadCurrentAdmin() {
     const response = await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
     currentAdmin.value = response.user;
     currentAgent.value = response.agent || null;
+    currentOperationCenter.value = response.operationCenter || null;
     currentPermissions.value = Array.isArray(response.permissions) ? response.permissions : [];
     const role = String(response.user.role || "").toUpperCase();
     if (isUserConsole.value) {
       if (!hasAgentIdentity.value && agentModuleIds.includes(store.activeModuleId)) {
+        store.activeModuleId = "userDashboard";
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(activeTabStorageKey, "userDashboard");
+          syncUserModulePath("userDashboard");
+        }
+      }
+      if (!hasOperationCenterIdentity.value && operationCenterModuleIds.includes(store.activeModuleId)) {
         store.activeModuleId = "userDashboard";
         if (typeof window !== "undefined") {
           window.localStorage.setItem(activeTabStorageKey, "userDashboard");
@@ -11655,6 +12698,7 @@ async function loadCurrentAdmin() {
   } catch {
     currentAdmin.value = null;
     currentAgent.value = null;
+    currentOperationCenter.value = null;
     currentPermissions.value = [];
     redirectToLogin();
     return false;
@@ -11779,13 +12823,19 @@ onMounted(async () => {
   if (typeof window !== "undefined") {
     window.addEventListener("resize", adjustVideoPromptHeight);
   }
+  if (isAuthRoute.value) {
+    await redirectAuthenticatedUserFromAuthRoute();
+    return;
+  }
   if (await loadCurrentAdmin()) {
     hydrateVideoHistoryFromStorage();
     void nextTick(adjustVideoPromptHeight);
     if (typeof window !== "undefined") {
       const routeModuleId = moduleIdFromLocationPath();
       const savedActiveTab = window.localStorage.getItem(activeTabStorageKey);
-      const canUseModule = (moduleId: string) => allowedModuleIds.includes(moduleId) && (!agentModuleIds.includes(moduleId) || hasAgentIdentity.value);
+      const canUseModule = (moduleId: string) => allowedModuleIds.includes(moduleId)
+        && (!agentModuleIds.includes(moduleId) || hasAgentIdentity.value)
+        && (!operationCenterModuleIds.includes(moduleId) || hasOperationCenterIdentity.value);
       const nextActiveTab = routeModuleId && canUseModule(routeModuleId)
         ? routeModuleId
         : savedActiveTab && canUseModule(savedActiveTab) && modules.some((item) => item.id === savedActiveTab)
@@ -11798,6 +12848,7 @@ onMounted(async () => {
       }
     }
     await loadUserAccountSnapshot();
+    if (isUserConsole.value) void loadOfficeCLIStatus();
     await store.loadActiveModule();
     void refreshAiComposerClearance();
   }
@@ -11805,6 +12856,164 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.admin-auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  overflow-x: hidden;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 20% 10%, rgba(105, 92, 244, 0.16), transparent 28%),
+    radial-gradient(circle at 82% 80%, rgba(255, 126, 36, 0.12), transparent 30%),
+    #f6f8ff;
+  color: #101828;
+  box-sizing: border-box;
+}
+
+.admin-auth-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 20px;
+  padding: 28px;
+  border: 1px solid #e1e7f2;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 70px rgba(16, 24, 40, 0.14);
+  box-sizing: border-box;
+}
+
+.admin-auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-auth-brand img {
+  width: 52px;
+  height: 52px;
+  border: 1px solid #e1e7f2;
+  border-radius: 12px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.admin-auth-brand div,
+.admin-auth-head,
+.admin-auth-form,
+.admin-auth-form label {
+  display: grid;
+}
+
+.admin-auth-brand div {
+  gap: 3px;
+}
+
+.admin-auth-brand strong {
+  color: #111827;
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.admin-auth-brand span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.admin-auth-head {
+  gap: 8px;
+}
+
+.admin-auth-head h1 {
+  margin: 0;
+  color: #111827;
+  font-size: 30px;
+  line-height: 1.16;
+}
+
+.admin-auth-head p {
+  margin: 0;
+  color: #667085;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.65;
+}
+
+.admin-auth-form {
+  gap: 14px;
+}
+
+.admin-auth-form label {
+  gap: 7px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.admin-auth-form input {
+  width: 100%;
+  height: 44px;
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  background: #fff;
+  color: #101828;
+  padding: 0 12px;
+  font: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.admin-auth-form input:focus {
+  border-color: #6c5cf4;
+  box-shadow: 0 0 0 3px rgba(108, 92, 244, 0.14);
+}
+
+.admin-auth-check {
+  display: flex !important;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.admin-auth-check input {
+  width: 16px;
+  height: 16px;
+}
+
+.admin-auth-submit,
+.admin-auth-wechat {
+  height: 44px;
+  border: 0;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.admin-auth-submit {
+  background: linear-gradient(135deg, #7464f2, #5b49e8);
+  color: #fff;
+}
+
+.admin-auth-wechat {
+  border: 1px solid #d0d5dd;
+  background: #fff;
+  color: #047857;
+}
+
+.admin-auth-submit:disabled,
+.admin-auth-wechat:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.admin-auth-link {
+  justify-self: center;
+  color: #5b49e8;
+  font-size: 13px;
+  font-weight: 850;
+  text-decoration: none;
+}
+
 .ai-reference-strip {
   display: flex;
   align-items: center;
@@ -12585,6 +13794,12 @@ onMounted(async () => {
   background: linear-gradient(135deg, #fff, #f5f7ff);
 }
 
+.user-agent-center-hero.is-officecli {
+  background:
+    radial-gradient(circle at 82% 24%, rgba(255, 122, 26, 0.12), transparent 24%),
+    linear-gradient(135deg, #fff, #f6f7ff);
+}
+
 .user-agent-center-hero span {
   color: #695cf4;
   font-size: 12px;
@@ -12726,6 +13941,11 @@ onMounted(async () => {
   border: 1px solid #e4e9f3;
   border-radius: 10px;
   text-align: center;
+}
+
+.user-agent-template-card.is-featured {
+  border-color: #ffb06a;
+  background: linear-gradient(180deg, #fff, #fff8f1);
 }
 
 .user-agent-template-icon,
@@ -12889,6 +14109,10 @@ onMounted(async () => {
   font-weight: 700;
 }
 
+.user-agent-table-row.is-officecli {
+  background: #fff7ed;
+}
+
 .user-agent-name-cell {
   display: flex;
   align-items: center;
@@ -12967,6 +14191,198 @@ onMounted(async () => {
   color: #344054;
   font-size: 10px;
   cursor: pointer;
+}
+
+.officecli-status-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.officecli-status-badge.ready {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.officecli-status-badge.pending {
+  background: #fff4df;
+  color: #c2410c;
+}
+
+.officecli-status-badge.idle {
+  background: #edf2f7;
+  color: #475569;
+}
+
+.user-agent-officecli-workbench {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid #e4e9f3;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.user-agent-officecli-workbench header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.user-agent-officecli-workbench header div {
+  display: grid;
+  gap: 4px;
+}
+
+.user-agent-officecli-workbench header span {
+  color: #5b49e8;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.user-agent-officecli-workbench header strong {
+  color: #111827;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.user-agent-officecli-workbench header > button,
+.officecli-result-card button {
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #7464f2, #5b49e8);
+  color: #ffffff;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.user-agent-officecli-workbench header > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.officecli-workbench-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.officecli-form-column {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.officecli-format-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.officecli-format-switch button {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  border: 1px solid #e1e7f2;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.officecli-format-switch button.active {
+  border-color: #ff9a4a;
+  background: #fff7ed;
+}
+
+.officecli-format-switch b {
+  color: #111827;
+  font-size: 13px;
+}
+
+.officecli-format-switch span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.officecli-field {
+  display: grid;
+  gap: 7px;
+}
+
+.officecli-field span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.officecli-field input,
+.officecli-field textarea {
+  width: 100%;
+  border: 1px solid #dbe3ef;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #111827;
+  padding: 10px 12px;
+  font: inherit;
+  outline: 0;
+}
+
+.officecli-field textarea {
+  min-height: 128px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.officecli-field input:focus,
+.officecli-field textarea:focus {
+  border-color: #8273f4;
+  box-shadow: 0 0 0 3px rgba(105, 92, 244, 0.12);
+}
+
+.officecli-result-card {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 16px;
+}
+
+.officecli-result-card > span {
+  color: #ff7a1a;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.officecli-result-card strong {
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.officecli-result-card small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.officecli-result-card button {
+  width: fit-content;
+  background: #ff7a1a;
 }
 
 .user-agent-side-panel {
@@ -13113,6 +14529,10 @@ onMounted(async () => {
   .user-agent-template-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+
+  .officecli-workbench-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 960px) {
@@ -13123,6 +14543,15 @@ onMounted(async () => {
 
   .user-agent-center-hero {
     display: block;
+  }
+
+  .user-agent-officecli-workbench header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .officecli-format-switch {
+    grid-template-columns: 1fr;
   }
 
   .user-agent-hero-robot {
@@ -13192,6 +14621,373 @@ onMounted(async () => {
   align-items: start;
   width: min(1192px, 100%);
   margin: 0 auto;
+}
+
+.user-agent-officecli-workspace {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+}
+
+.user-agent-workspace {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.officecli-workspace-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  min-height: 116px;
+  padding: 22px 24px;
+  border: 1px solid #e6e9f2;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #fff7ed 100%);
+  box-shadow: 0 18px 42px rgba(32, 47, 86, 0.05);
+}
+
+.officecli-workspace-head > button {
+  height: 34px;
+  border: 1px solid #e6e9f2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344054;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.officecli-workspace-head div {
+  min-width: 0;
+}
+
+.officecli-workspace-head span {
+  display: block;
+  margin-bottom: 6px;
+  color: #ff6b1a;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.officecli-workspace-head h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 34px;
+}
+
+.officecli-workspace-head p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.user-agent-officecli-workbench.is-workspace {
+  margin-top: 0;
+}
+
+.user-agent-officecli-workbench.is-workspace .officecli-workbench-body {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.agent-workspace-head,
+.agent-workspace-chat,
+.agent-workspace-card {
+  border: 1px solid #e6e9f2;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(32, 47, 86, 0.05);
+}
+
+.agent-workspace-head {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  min-height: 116px;
+  padding: 22px 24px;
+}
+
+.agent-workspace-head > button {
+  height: 34px;
+  border: 1px solid #e6e9f2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #344054;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.agent-workspace-avatar {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.agent-workspace-avatar.purple {
+  background: #7466ff;
+}
+
+.agent-workspace-avatar.green {
+  background: #29b978;
+}
+
+.agent-workspace-avatar.orange {
+  background: #ff8438;
+}
+
+.agent-workspace-avatar.blue {
+  background: #3478f6;
+}
+
+.agent-workspace-head div {
+  min-width: 0;
+}
+
+.agent-workspace-head div > span {
+  display: block;
+  margin-bottom: 6px;
+  color: #5b4bff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.agent-workspace-head h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 34px;
+}
+
+.agent-workspace-head p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.agent-workspace-status {
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #15803d;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.agent-workspace-status.draft {
+  background: #eaf2ff;
+  color: #3478f6;
+}
+
+.agent-workspace-status.disabled {
+  background: #fff0e4;
+  color: #ff6b1a;
+}
+
+.agent-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.agent-workspace-chat {
+  padding: 18px;
+}
+
+.agent-workspace-chat > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-workspace-chat > header div {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-workspace-chat > header span,
+.agent-workspace-card > strong {
+  color: #5b4bff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.agent-workspace-chat > header strong {
+  color: #111827;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.agent-workspace-chat > header button {
+  height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: #6658ff;
+  color: #ffffff;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.agent-workspace-dialog {
+  display: grid;
+  gap: 12px;
+  min-height: 224px;
+  margin-top: 16px;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 16px;
+}
+
+.agent-message {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.agent-message span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #6658ff;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.agent-message.user span {
+  background: #ff8438;
+}
+
+.agent-message p {
+  margin: 0;
+  border: 1px solid #e7ebf3;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #223047;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.agent-workspace-input {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.agent-workspace-input span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.agent-workspace-input textarea {
+  width: 100%;
+  min-height: 124px;
+  border: 1px solid #dbe3ef;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #111827;
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.6;
+  outline: 0;
+  resize: vertical;
+}
+
+.agent-workspace-input textarea:focus {
+  border-color: #8273f4;
+  box-shadow: 0 0 0 3px rgba(105, 92, 244, 0.12);
+}
+
+.agent-workspace-config {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-workspace-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.agent-workspace-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-workspace-meta-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 12px;
+}
+
+.agent-workspace-meta-grid span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.agent-workspace-meta-grid b {
+  overflow: hidden;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-tool-tags,
+.agent-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-tool-tags span,
+.agent-quick-actions button {
+  border-radius: 999px;
+  background: #f0edff;
+  color: #5b4bff;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agent-quick-actions button {
+  border: 0;
+  cursor: pointer;
 }
 
 .user-agent-main-column {
@@ -13343,13 +15139,28 @@ onMounted(async () => {
   align-content: start;
   gap: 7px;
   width: 99px;
-  height: 146px;
-  min-height: 0;
-  max-height: 146px;
+  min-height: 168px;
+  height: auto;
+  max-height: none;
   padding: 18px 8px 10px;
   border: 1px solid #e6e9f2;
   border-radius: 8px;
   text-align: center;
+}
+
+.user-agent-template-card.is-clickable {
+  cursor: pointer;
+}
+
+.user-agent-template-card.is-clickable:focus-visible,
+.user-agent-table-row.is-clickable:focus-visible {
+  outline: 2px solid #ff9a4a;
+  outline-offset: 2px;
+}
+
+.user-agent-template-card.is-clickable:hover {
+  border-color: #ffb06a;
+  box-shadow: 0 12px 30px rgba(255, 122, 26, 0.14);
 }
 
 .user-agent-template-icon,
@@ -13513,7 +15324,7 @@ onMounted(async () => {
 .user-agent-table-head,
 .user-agent-table-row {
   display: grid;
-  grid-template-columns: 250px 68px 70px 110px 110px 76px 112px 58px;
+  grid-template-columns: minmax(216px, 1.6fr) minmax(68px, 0.55fr) minmax(68px, 0.5fr) minmax(92px, 0.68fr) minmax(102px, 0.72fr) minmax(68px, 0.5fr) minmax(122px, 0.8fr) minmax(132px, 0.8fr);
   gap: 8px;
   align-items: center;
 }
@@ -13526,13 +15337,28 @@ onMounted(async () => {
 }
 
 .user-agent-table-row {
-  height: 52px;
-  min-height: 52px;
-  max-height: 52px;
+  min-height: 64px;
   border-top: 1px solid #eef0f6;
   color: #111827;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-agent-table-row.is-clickable {
+  cursor: pointer;
+}
+
+.user-agent-table-row.is-clickable:hover {
+  background: #f8fafc;
+}
+
+.user-agent-table-row.is-officecli {
+  background: #fff8f1;
+  cursor: pointer;
+}
+
+.user-agent-table-row.is-officecli:hover {
+  background: #fff3e7;
 }
 
 .user-agent-name-cell {
@@ -13617,20 +15443,47 @@ onMounted(async () => {
 
 .user-agent-row-actions {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
   color: #56617a;
+  white-space: nowrap;
 }
 
 .user-agent-row-actions button {
-  width: 10px;
-  min-width: 0;
-  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
   padding: 0;
-  border: 0;
-  background: transparent;
+  border: 1px solid #e6e9f2;
+  border-radius: 999px;
+  background: #ffffff;
   color: #56617a;
   font-size: 11px;
+  line-height: 1;
   cursor: pointer;
+}
+
+.user-agent-row-actions button .el-icon {
+  font-size: 13px;
+}
+
+.user-agent-row-actions button.is-wide {
+  width: auto;
+  min-width: 50px;
+  height: 26px;
+  border: 1px solid #ffcfaa;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #ff6b1a;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .user-agent-side-panel {
@@ -13829,6 +15682,143 @@ onMounted(async () => {
 @media (min-width: 761px) {
   .user-agent-center-page {
     padding: 0;
+    overflow-x: hidden;
+  }
+
+  .user-agent-desktop-view,
+  .user-agent-center-layout,
+  .user-agent-officecli-workspace,
+  .user-agent-workspace,
+  .user-agent-main-column {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .user-agent-center-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(286px, 340px);
+    margin: 0;
+  }
+
+  .user-agent-center-hero {
+    grid-template-columns: minmax(0, 1fr) minmax(210px, 28%);
+  }
+
+  .user-agent-hero-robot {
+    justify-self: end;
+    width: min(330px, 100%);
+  }
+
+  .user-agent-template-panel {
+    height: auto;
+    min-height: 218px;
+  }
+
+  .user-agent-template-grid {
+    grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+    gap: 10px;
+  }
+
+  .user-agent-template-card {
+    width: auto;
+    min-width: 0;
+    min-height: 168px;
+    height: auto;
+  }
+
+  .user-agent-list-panel {
+    height: auto;
+    min-height: 486px;
+    padding-bottom: 16px;
+  }
+
+  .user-agent-list-head {
+    height: auto;
+    min-height: 40px;
+    flex-wrap: wrap;
+  }
+
+  .user-agent-list-tools {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .user-agent-list-tools label {
+    flex: 1 1 190px;
+    max-width: 280px;
+  }
+
+  .user-agent-list-tools input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .user-agent-table {
+    overflow-x: auto;
+    padding-bottom: 6px;
+    scrollbar-width: thin;
+  }
+
+  .user-agent-table-head,
+  .user-agent-table-row {
+    min-width: 0;
+    grid-template-columns:
+      minmax(216px, 1.6fr)
+      minmax(68px, 0.55fr)
+      minmax(68px, 0.5fr)
+      minmax(92px, 0.68fr)
+      minmax(102px, 0.72fr)
+      minmax(68px, 0.5fr)
+      minmax(122px, 0.8fr)
+      minmax(132px, 0.8fr);
+  }
+
+  .user-agent-side-card {
+    max-width: none;
+  }
+}
+
+@media (min-width: 1501px) {
+  .user-agent-table-head,
+  .user-agent-table-row {
+    min-width: 0;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1500px) {
+  .user-agent-center-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .user-agent-side-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .user-agent-side-card {
+    height: auto;
+    min-height: 160px;
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1080px) {
+  .user-agent-center-hero {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    min-height: 116px;
+    padding: 24px;
+  }
+
+  .user-agent-hero-robot {
+    display: none;
+  }
+
+  .user-agent-list-head,
+  .user-agent-list-tools {
+    justify-content: flex-start;
+  }
+
+  .user-agent-side-panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -13853,6 +15843,53 @@ onMounted(async () => {
     padding: 0 0 76px;
     overflow: hidden;
     background: #f7f8fc;
+  }
+
+  .user-agent-center-page.has-officecli-workspace,
+  .user-agent-center-page.has-agent-workspace {
+    overflow: auto;
+  }
+
+  .user-agent-center-page.has-officecli-workspace .user-agent-desktop-view,
+  .user-agent-center-page.has-agent-workspace .user-agent-desktop-view {
+    display: block;
+    padding: 12px;
+  }
+
+  .user-agent-center-page.has-officecli-workspace .user-agent-mobile-view,
+  .user-agent-center-page.has-agent-workspace .user-agent-mobile-view {
+    display: none;
+  }
+
+  .user-agent-officecli-workspace,
+  .user-agent-workspace {
+    width: 100%;
+  }
+
+  .officecli-workspace-head,
+  .agent-workspace-head {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    min-height: 0;
+    padding: 18px;
+  }
+
+  .officecli-workspace-head > button,
+  .agent-workspace-head > button {
+    width: fit-content;
+  }
+
+  .user-agent-officecli-workbench.is-workspace .officecli-workbench-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-workspace-chat > header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .user-agent-mobile-status {
@@ -14220,6 +16257,725 @@ onMounted(async () => {
 
   .user-agent-mobile-bottom button.active span {
     background: #6658ff;
+  }
+}
+/* DESIGN.md agent center console refinement. Scoped to the active module shell only. */
+@media (min-width: 99999px) {
+  .user-agent-figma-shell.admin-shell,
+  .user-agent-figma-shell .admin-workspace,
+  .user-agent-figma-shell .admin-main {
+    background: #ffffff;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) {
+    --agent-design-ink: #181d26;
+    --agent-design-active: #0d1218;
+    --agent-design-body: #333840;
+    --agent-design-muted: #41454d;
+    --agent-design-hairline: #dddddd;
+    --agent-design-soft: #f8fafc;
+    --agent-design-strong: #e0e2e6;
+    --agent-design-coral: #aa2d00;
+    --agent-design-forest: #0a2e0e;
+    --agent-design-cream: #f5e9d4;
+    --agent-design-peach: #fcab79;
+    --agent-design-mint: #a8d8c4;
+    display: block;
+    min-height: calc(100vh - 56px);
+    padding: 24px 32px 36px;
+    overflow: auto;
+    background: #ffffff;
+    color: var(--agent-design-body);
+    font-family: Inter, "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+    letter-spacing: 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) * {
+    letter-spacing: 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 24px;
+    align-items: start;
+    width: min(1280px, 100%);
+    margin: 0 auto;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-main-column {
+    gap: 24px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-hero,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-panel,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-panel,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card {
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-hero {
+    grid-template-columns: minmax(0, 1fr) 220px;
+    min-height: 132px;
+    height: auto;
+    padding: 28px 32px;
+    overflow: hidden;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-hero span {
+    color: var(--agent-design-muted);
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-hero h2 {
+    margin: 8px 0 10px;
+    color: var(--agent-design-ink);
+    font-size: 32px;
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-hero p {
+    max-width: 620px;
+    color: var(--agent-design-body);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.55;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot {
+    justify-self: end;
+    width: 210px;
+    height: 96px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot i {
+    left: 26px;
+    top: 14px;
+    width: 120px;
+    height: 66px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 12px;
+    background: var(--agent-design-cream);
+    transform: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot b {
+    left: 132px;
+    top: 28px;
+    width: 56px;
+    height: 42px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: var(--agent-design-mint);
+    transform: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot::before,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot::after {
+    display: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot em,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot strong {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    font-style: normal;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot em {
+    left: 48px;
+    top: 34px;
+    width: 52px;
+    height: 28px;
+    background: var(--agent-design-ink);
+    color: #ffffff;
+    font-size: 13px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot strong {
+    left: 116px;
+    top: 36px;
+    width: 46px;
+    height: 24px;
+    background: #ffffff;
+    color: var(--agent-design-ink);
+    font-size: 12px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-panel,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-panel,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card {
+    padding: 24px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-panel {
+    height: auto;
+    min-height: 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-panel header,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-head,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card header {
+    align-items: center;
+    gap: 16px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-panel header strong,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card > strong,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card header strong {
+    color: var(--agent-design-ink);
+    font-size: 18px;
+    font-weight: 500;
+    line-height: 1.4;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-panel header button,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card header button {
+    min-height: 34px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: #ffffff;
+    color: var(--agent-design-ink);
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-grid {
+    grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-card {
+    width: auto;
+    min-height: 170px;
+    gap: 10px;
+    align-content: start;
+    justify-items: start;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: #ffffff;
+    padding: 16px;
+    text-align: left;
+    box-shadow: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-card.is-featured {
+    border-color: var(--agent-design-hairline);
+    background: var(--agent-design-cream);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-card.is-clickable:hover {
+    border-color: #9297a0;
+    box-shadow: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-card strong {
+    color: var(--agent-design-ink);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.35;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-card p {
+    min-height: 36px;
+    color: var(--agent-design-muted);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-card button {
+    width: auto;
+    min-width: 62px;
+    height: 32px;
+    margin-top: auto;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: #ffffff;
+    color: var(--agent-design-ink);
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-icon.purple,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-avatar.purple {
+    background: var(--agent-design-ink);
+    color: #ffffff;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-icon.green,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-avatar.green {
+    background: var(--agent-design-forest);
+    color: #ffffff;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-icon.orange,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-avatar.orange {
+    background: var(--agent-design-coral);
+    color: #ffffff;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-template-icon.blue,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-avatar.blue {
+    background: var(--agent-design-mint);
+    color: var(--agent-design-ink);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-panel {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-head {
+    min-height: 44px;
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-tabs {
+    gap: 22px;
+    height: auto;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-tabs button {
+    height: 40px;
+    color: var(--agent-design-muted);
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-tabs button.active {
+    color: var(--agent-design-ink);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-tabs button.active::after {
+    bottom: -1px;
+    width: 100%;
+    height: 2px;
+    background: var(--agent-design-ink);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools {
+    flex: 1 1 420px;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: var(--agent-design-soft);
+    padding: 6px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools label,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools select {
+    flex: 0 1 auto;
+    height: 44px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 6px;
+    background: #ffffff;
+    color: var(--agent-design-body);
+    padding: 0 14px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools label {
+    min-width: 220px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools input {
+    width: 100%;
+    min-width: 0;
+    color: var(--agent-design-ink);
+    font-size: 14px;
+    font-weight: 400;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools input::placeholder {
+    color: var(--agent-design-muted);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools select {
+    min-width: 118px;
+    font-size: 14px;
+    font-weight: 400;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools > button {
+    height: 44px;
+    border: 1px solid var(--agent-design-ink);
+    border-radius: 12px;
+    background: var(--agent-design-ink);
+    color: #ffffff;
+    padding: 0 18px;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    box-shadow: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools > button:active {
+    background: var(--agent-design-active);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table {
+    min-width: 0;
+    margin-top: 20px;
+    overflow-x: auto;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: #ffffff;
+    scrollbar-width: thin;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-head,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-row {
+    min-width: 860px;
+    grid-template-columns:
+      minmax(190px, 1.42fr)
+      minmax(64px, 0.46fr)
+      minmax(62px, 0.44fr)
+      minmax(78px, 0.58fr)
+      minmax(86px, 0.64fr)
+      minmax(58px, 0.42fr)
+      minmax(104px, 0.72fr)
+      minmax(144px, 0.92fr);
+    gap: 10px;
+    padding: 0 14px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-head {
+    min-height: 44px;
+    height: 44px;
+    border-bottom: 1px solid var(--agent-design-hairline);
+    background: var(--agent-design-soft);
+    color: var(--agent-design-muted);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-row {
+    min-height: 72px;
+    border-top: 0;
+    border-bottom: 1px solid var(--agent-design-hairline);
+    background: #ffffff;
+    color: var(--agent-design-body);
+    font-size: 13px;
+    font-weight: 400;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-row:last-child {
+    border-bottom: 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-row.is-clickable:hover {
+    background: var(--agent-design-soft);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-row.is-officecli {
+    background: #fffaf5;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-table-row.is-officecli:hover {
+    background: var(--agent-design-cream);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-name-cell {
+    gap: 12px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-avatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-name-cell strong {
+    color: var(--agent-design-ink);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.35;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-name-cell small {
+    margin-top: 4px;
+    color: var(--agent-design-muted);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-pill,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-status {
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-pill.purple {
+    background: var(--agent-design-soft);
+    color: var(--agent-design-ink);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-pill.green,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-status {
+    background: #eaf6ea;
+    color: #006400;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-pill.orange {
+    background: var(--agent-design-cream);
+    color: var(--agent-design-coral);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-pill.blue,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-status.draft {
+    background: #edf4ff;
+    color: #254fad;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-status.disabled {
+    background: var(--agent-design-strong);
+    color: var(--agent-design-muted);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-row-actions {
+    justify-content: flex-start;
+    gap: 4px;
+    min-width: 144px;
+    white-space: nowrap;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-row-actions button {
+    width: 26px;
+    min-width: 26px;
+    height: 28px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 999px;
+    background: #ffffff;
+    color: var(--agent-design-ink);
+    font-size: 12px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-row-actions button.is-wide {
+    width: auto;
+    min-width: 54px;
+    height: 28px;
+    border-color: var(--agent-design-ink);
+    border-radius: 10px;
+    background: var(--agent-design-ink);
+    color: #ffffff;
+    padding: 0 12px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-panel {
+    gap: 16px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card {
+    max-width: none;
+    height: auto;
+    min-height: 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card.is-metrics,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card.is-trend,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card.is-ranking,
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-card.is-shortcuts {
+    height: auto;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-metric-grid {
+    gap: 8px;
+    margin-top: 18px;
+    border: 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-metric-grid div {
+    min-height: 86px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: var(--agent-design-soft);
+    padding: 12px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-metric-grid div:nth-child(even) {
+    padding-left: 12px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-metric-grid span {
+    color: var(--agent-design-muted);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-metric-grid strong {
+    color: var(--agent-design-ink);
+    font-size: 26px;
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-metric-grid small {
+    color: #006400;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-trend {
+    height: 156px;
+    gap: 10px;
+    margin-top: 14px;
+    padding: 18px 2px 0;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-trend i {
+    width: 16px;
+    border-radius: 6px 6px 0 0;
+    background: var(--agent-design-strong);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-trend span:nth-child(3n) i {
+    background: var(--agent-design-mint);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-trend span:last-child i {
+    background: var(--agent-design-ink);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-trend em {
+    color: var(--agent-design-muted);
+    font-size: 11px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-ranking {
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-ranking li {
+    min-height: 32px;
+    grid-template-columns: 22px minmax(0, 1fr) 54px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 8px;
+    background: var(--agent-design-soft);
+    padding: 0 10px;
+    color: var(--agent-design-body);
+    font-size: 12px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-ranking li span {
+    color: var(--agent-design-coral);
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-ranking li:nth-child(n + 4) span {
+    color: var(--agent-design-muted);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-ranking li b {
+    color: var(--agent-design-ink);
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-ranking li em {
+    color: var(--agent-design-muted);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-shortcuts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-shortcuts button {
+    min-height: 68px;
+    border: 1px solid var(--agent-design-hairline);
+    border-radius: 10px;
+    background: #ffffff;
+    color: var(--agent-design-ink);
+    padding: 10px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-shortcuts span {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: var(--agent-design-cream);
+    color: var(--agent-design-ink);
+    font-weight: 500;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-shortcuts button:nth-child(2) span {
+    background: var(--agent-design-mint);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-shortcuts button:nth-child(3) span {
+    background: var(--agent-design-peach);
+    color: var(--agent-design-ink);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-shortcuts button:nth-child(4) span {
+    background: var(--agent-design-ink);
+    color: #ffffff;
+  }
+}
+
+@media (min-width: 99999px) and (max-width: 1280px) {
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) {
+    padding: 20px;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 99999px) and (max-width: 980px) {
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-center-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-hero-robot {
+    display: none;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-list-tools {
+    justify-content: flex-start;
+  }
+
+  .user-agent-figma-shell .user-agent-center-page:not(.has-officecli-workspace):not(.has-agent-workspace) .user-agent-side-panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

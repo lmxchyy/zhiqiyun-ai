@@ -1098,7 +1098,15 @@ function errorMessage(error: unknown) {
   letter-spacing: 0;
 }
 
-.ppt-page * {
+.ppt-page,
+.ppt-page view,
+.ppt-page text,
+.ppt-page button,
+.ppt-page input,
+.ppt-page textarea,
+.ppt-page image,
+.ppt-page picker,
+.ppt-page scroll-view {
   box-sizing: border-box;
   letter-spacing: 0;
 }
