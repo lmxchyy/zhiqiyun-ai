@@ -1,14 +1,12 @@
 # User multiplatform architecture
 
-This repository now keeps the PC admin and Go backend stable while moving the user client toward one reusable multiplatform core.
+This repository keeps the PC admin and Go backend stable while serving the user client from one reusable multiplatform core.
 
 ## Stable surfaces
 
 - `admin-vue`: PC admin, Vue 3 + Element Plus + Pinia + Axios.
 - `backend-go`: Go + Gin + Gorm-compatible data layer + Redis + PostgreSQL/MySQL deployment path.
-- `apps/user-uni`: canonical user uni-app entry for H5, WeChat mini program, App Plus, and Harmony build targets. Docker serves its H5 output through the Go service.
-- `frontend-vue`: legacy H5 source retained during migration; new user-client build scripts should not point here.
-- `miniapp`: legacy mobile-first uni-app entry retained as a compatibility/typecheck surface while remaining flows are folded into `apps/user-uni`.
+- `apps/user-uni`: the only user uni-app entry for H5, WeChat mini program, App Plus, and Harmony build targets. Docker serves its H5 output through the Go service.
 
 Deployment stays Docker-first. The optimized user-client core is compiled from `apps/user-uni` into H5 static artifacts and served by the existing Go container; desktop wrappers consume the same H5 output instead of introducing another business-code deployment path.
 
@@ -42,24 +40,20 @@ pages / Pinia stores
 
 Pages should not directly encode platform-specific login, storage, request, or download behavior. Add those differences in `platform-adapter` first, then expose business methods through `business-sdk`.
 
-For the existing H5 surface, the migration rule is:
+For the H5 surface, the rule is:
 
 ```text
 auth / token / session      -> shared-auth via apps/user-uni/src/api/client.ts
 list tasks/assets/models    -> business-sdk
 points and channel reads    -> business-sdk
-temporary mutations         -> keep old api(path, init) wrapper until a domain SDK method exists
+temporary mutations         -> keep api(path, init) wrapper until a domain SDK method exists
 ```
 
 ## Current integration state
 
-- `miniapp/src/services/core.ts` configures one adapter, API client, auth service, and business SDK.
-- `miniapp/src/services/miniapp.ts` keeps its old public functions, but now tries the real `business-sdk` before falling back to local mock data.
-- `miniapp/src/stores/app.ts` now stores sessions through `shared-auth` storage and can restore a session through refresh token recovery.
-- `miniapp/src/types/domain.ts` re-exports `shared-types` so page imports remain stable.
 - `apps/user-uni/src/api/client.ts` keeps the old `api(path, init)` signature while using shared `api-client` and `platform-adapter` underneath.
 - `apps/user-uni/src/api/client.ts` also exports `authStorage`, `authService`, and `businessSdk`; H5 pages should use those for auth and common user-domain reads before adding new page-local API calls.
-- `apps/user-uni/src/types.ts` re-exports `shared-types` so the current production H5 module can migrate without page-level type churn.
+- `apps/user-uni/src/types.ts` re-exports `shared-types` so page-level imports stay stable.
 
 ## Target app layout
 
@@ -75,7 +69,7 @@ apps/
 
 Do not rewrite desktop business logic. Tauri/Electron should only package the H5 build and expose optional desktop bridge APIs through `platform-adapter`.
 
-`apps/user-uni` has been created from the previous Docker-served H5 entry so the current H5 feature surface stays intact while mini program/App/Harmony build commands converge on the same app directory.
+`apps/user-uni` is the canonical user-client app directory. Mini program, App, Harmony, and H5 build commands all converge on this directory.
 
 ## Platform policy
 
@@ -157,6 +151,9 @@ npm.cmd --prefix admin-vue run build
 npm.cmd run build:user-h5
 npm.cmd run test:user-h5:smoke
 npm.cmd run build:user-mp-weixin
+npm.cmd run build:user-app-plus
+npm.cmd run build:user-app-harmony
+npm.cmd run build:user-mp-harmony
 docker compose -f compose.yml config --quiet
 docker compose --env-file .env.production.example -f compose.prod.yml config --quiet
 ```

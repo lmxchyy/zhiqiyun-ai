@@ -113,8 +113,6 @@ coverage
 docs
 tests
 tools
-frontend-vue
-miniapp
 apps/desktop-electron
 apps/desktop-tauri
 *.md

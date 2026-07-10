@@ -1,14 +1,14 @@
 # Workflows Registry
 
 **Date**: 2026-07-01
-**Scope**: current `backend-go + admin-vue + frontend-vue` checkout.
+**Scope**: current `backend-go + admin-vue + apps/user-uni` checkout.
 **Discovery commands used**: route scan, worker/job scan, status/state scan, migration/config scan.
 
 ## Discovery Summary
 
 Confirmed current runtime:
 
-- `Dockerfile` builds `frontend-vue`, `admin-vue`, then `backend-go/cmd/api`, and starts `/app/xianzhi-api`.
+- `Dockerfile` builds `apps/user-uni`, `admin-vue`, then `backend-go/cmd/api`, and starts `/app/xianzhi-api`.
 - `compose.yml` runs the Go app as `xianzhi-ai` on `PORT=3100`, with PostgreSQL, Redis, RabbitMQ and MinIO services available.
 - Current generation entrypoints live in `backend-go/internal/httpserver/server.go`.
 - The active image generation path uses Go goroutines, PostgreSQL projection tables and OpenAI-compatible providers.
@@ -49,7 +49,7 @@ Status values: `Approved`, `Review`, `Draft`, `Missing`, `Deprecated`.
 | Runtime projection migration | `database/migrations/021-runtime-projections.sql` | AI image generation task and artifact loop; Asset list, download and delete |
 | Legacy base schema | `database/schema.sql`, `database/migrations/006-generation-billing.sql`, `database/migrations/012-generation-asset-lifecycle.sql` | Deprecated or planned generation cancellation/retry/favorite workflows |
 | Admin AI workspace | `admin-vue/src/App.vue` | AI image generation task and artifact loop; Reference image upload; User AI workspace state sync |
-| User H5 workspace | `frontend-vue/src/pages/AiCreationPage.vue` | AI image generation task and artifact loop; Asset list/read; Points read |
+| User H5 workspace | `apps/user-uni/src/pages/AiCreationPage.vue` | AI image generation task and artifact loop; Asset list/read; Points read |
 | Legacy Node worker | Removed from current worktree | Legacy Node RabbitMQ generation worker; Generation task cancellation and compensation; Failed generation retry; Asset favorite and regenerate |
 | Runtime config | `backend-go/internal/config/config.go`, `compose.yml`, `Dockerfile` | AI image generation task and artifact loop |
 

@@ -92,10 +92,15 @@ alter table generation_tasks add column if not exists failure_reason text;
 alter table xz_generation_tasks add column if not exists module_code text;
 alter table xz_generation_tasks add column if not exists billing_type text;
 
-alter table xz_billing_events add column if not exists tenant_id text;
-alter table xz_billing_events add column if not exists operation_center_id text;
-alter table xz_billing_events add column if not exists module_code text;
+alter table if exists xz_billing_events add column if not exists tenant_id text;
+alter table if exists xz_billing_events add column if not exists operation_center_id text;
+alter table if exists xz_billing_events add column if not exists module_code text;
 
 create index if not exists idx_generation_tasks_module_code on generation_tasks(module_code);
 create index if not exists idx_xz_generation_tasks_module_code on xz_generation_tasks(module_code);
-create index if not exists idx_xz_billing_events_module_code on xz_billing_events(module_code);
+do $$
+begin
+  if to_regclass('public.xz_billing_events') is not null then
+    create index if not exists idx_xz_billing_events_module_code on xz_billing_events(module_code);
+  end if;
+end $$;

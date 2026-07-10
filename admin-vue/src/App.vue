@@ -236,7 +236,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -247,7 +247,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -719,6 +719,7 @@
                 </section>
               </section>
 
+              <KnowledgeAgentCenter v-else-if="agentCenterWorkspace?.agentKey === 'knowledge'" @close="closeAgentWorkspace" />
               <section v-else-if="agentCenterWorkspace" class="user-agent-workspace">
                 <header class="agent-workspace-head">
                   <button type="button" @click="closeAgentWorkspace">返回智能体中心</button>
@@ -1197,7 +1198,14 @@
                             <span class="ai-task-badge">{{ aiTaskResolutionLabel(task) }}</span>
                           </template>
                         </div>
-                        <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="AI 生图任务缩略图" loading="lazy" decoding="async" />
+                        <img
+                          v-if="aiTaskThumbnailUrl(task) && !isAiTaskThumbnailBroken(task)"
+                          :src="aiTaskThumbnailUrl(task)"
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          @error="markAiTaskThumbnailFailed(task)"
+                        />
                         <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
                           <span class="ai-task-spinner"></span>
                           <strong>生成中...</strong>
@@ -1206,7 +1214,10 @@
                           <el-icon><Monitor /></el-icon>
                           <strong>生成失败</strong>
                         </div>
-                        <el-icon v-else><Monitor /></el-icon>
+                        <div v-else class="ai-task-empty-thumb">
+                          <el-icon><Monitor /></el-icon>
+                          <strong>暂无预览</strong>
+                        </div>
                       </div>
                       <div class="ai-task-info">
                         <div class="ai-task-copy">
@@ -2019,6 +2030,7 @@
               </div>
             </el-card>
           </section>
+          <KnowledgeAdminCenter v-else-if="store.activeModuleId === 'knowledgeAdmin'" />
           <section v-else-if="store.activeModuleId === 'analysis'" class="analysis-page">
             <div class="analysis-stat-grid">
               <article v-for="stat in analysisStats" :key="stat.label" class="analysis-stat-card">
@@ -3042,6 +3054,8 @@ import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Cro
 import { adminRequest } from "./api/client";
 import { useOfficeCLI } from "./composables/useOfficeCLI";
 import PromptEditable from "./components/PromptEditable.vue";
+import KnowledgeAdminCenter from "./components/knowledge/KnowledgeAdminCenter.vue";
+import KnowledgeAgentCenter from "./components/knowledge/KnowledgeAgentCenter.vue";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
 import {
@@ -3796,6 +3810,7 @@ const adminModuleGroups = [
   { id: "home", title: "首页", icon: House, items: modules.filter((item) => ["analysis", "workbench", "dashboard"].includes(item.id)) },
   { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
   { id: "aiCapability", title: "AI 能力中心", icon: Cpu, items: modules.filter((item) => aiCapabilityModuleIds.includes(item.id)) },
+  { id: "knowledge", title: "知识库中心", icon: Collection, items: modules.filter((item) => ["knowledgeAdmin"].includes(item.id)) },
   { id: "marketing", title: "营销端", icon: Connection, items: modules.filter((item) => ["marketingDashboard", "marketingAgentLevels", "marketingInvites", "marketingCommissionRules", "marketingUpgradePlans", "marketingWallets", "marketingWalletRecords", "marketingSettlementStatements"].includes(item.id)) },
   { id: "billing", title: "计费中心", icon: Tickets, items: modules.filter((item) => billingModuleIds.includes(item.id)) },
   { id: "growth", title: "渠道增长", icon: Connection, items: modules.filter((item) => ["channels", "operationCenters", "commissions", "commissionRecords", "usage"].includes(item.id)) },
@@ -3870,6 +3885,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
   userOrders: { badge: "交易记录", description: "查看历史订单、支付状态和点数到账结果；充值/订阅入口已拆分为独立模块。" },
+  knowledgeAdmin: { badge: "知识库治理", description: "跨租户管理知识库、文档解析、Chunk、Embedding、向量索引、检索日志与问答统计。" },
   operationCenterDashboard: { badge: "运营中心", description: "汇总运营中心代理、订单、分润和邀请码，作为中心账号登录后的经营首页。" },
   operationCenterAgents: { badge: "中心代理", description: "查看归属本运营中心的代理商、等级、邀请码和启停状态。" },
   operationCenterOrders: { badge: "中心订单", description: "查看归属本运营中心的代理开通、会员充值和套餐订单。" },
@@ -4314,6 +4330,7 @@ const aiLightboxScale = ref(1);
 const aiLightboxTx = ref(0);
 const aiLightboxTy = ref(0);
 const aiLightboxDragging = ref(false);
+const aiBrokenThumbnailKeys = ref<string[]>([]);
 const aiImageContextMenu = ref({
   visible: false,
   x: 0,
@@ -5399,6 +5416,23 @@ function aiTaskThumbnailUrl(task: AdminRecord) {
   if (directUrl) return directUrl;
   const asset = aiTaskAsset(task);
   return String(asset?.thumbnailUrl || asset?.url || task.imageUrl || task.outputUrl || task.resultUrl || "");
+}
+
+function aiTaskThumbnailKey(task: AdminRecord) {
+  const url = aiTaskThumbnailUrl(task);
+  if (!url) return "";
+  return `${aiTaskId(task) || task.id || task.name || "task"}::${url}`;
+}
+
+function isAiTaskThumbnailBroken(task: AdminRecord) {
+  const key = aiTaskThumbnailKey(task);
+  return Boolean(key && aiBrokenThumbnailKeys.value.includes(key));
+}
+
+function markAiTaskThumbnailFailed(task: AdminRecord) {
+  const key = aiTaskThumbnailKey(task);
+  if (!key || aiBrokenThumbnailKeys.value.includes(key)) return;
+  aiBrokenThumbnailKeys.value = [...aiBrokenThumbnailKeys.value, key];
 }
 
 function aiTaskDisplayImageUrl(task: AdminRecord) {

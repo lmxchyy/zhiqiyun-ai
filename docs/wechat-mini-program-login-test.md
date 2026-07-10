@@ -32,13 +32,13 @@ Invoke-WebRequest -UseBasicParsing `
 4. Build the WeChat mini-program:
 
 ```powershell
-npm.cmd --prefix frontend-vue run build:mp-weixin
+npm.cmd run build:user-mp-weixin
 ```
 
 5. Open the build output in WeChat DevTools:
 
 ```powershell
-& "C:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat" open --project "$PWD\frontend-vue\dist\build\mp-weixin"
+& "C:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat" open --project "$PWD\apps\user-uni\dist\build\mp-weixin"
 ```
 
 6. In WeChat DevTools, open `pages/WechatLoginPage`, then click `微信小程序登录`.
@@ -69,7 +69,7 @@ docker compose up -d --build xianzhi-ai
 
 ```powershell
 $env:VITE_API_BASE_URL="https://api.example.com"
-npm.cmd --prefix frontend-vue run build:mp-weixin
+npm.cmd run build:user-mp-weixin
 ```
 
 4. In WeChat Mini Program Admin and WeChat DevTools, make sure the request domain allows that HTTPS API domain.

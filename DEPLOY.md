@@ -63,8 +63,8 @@ Recommended commit groups:
 1. Deployment files: `.gitignore`, `.dockerignore`, `.env.example`, `compose.prod.yml`, `deploy.sh`, `backup.sh`, `rollback.sh`, `DEPLOY.md`.
 2. Database migrations: `database/migrations`, `database/schema.sql`.
 3. Backend code: `backend-go`.
-4. Frontend business source: `admin-vue/src`, `frontend-vue/src`, package files.
-5. Static assets, reviewed separately: `admin-vue/public/static`, `frontend-vue/public/static`, `frontend-vue/static`, `vendor/fonts`, `mock-video.mp4`, `dist`.
+4. Frontend business source: `admin-vue/src`, `apps/user-uni/src`, `packages/*/src`, package files.
+5. Static assets, reviewed separately: `admin-vue/public/static`, `apps/user-uni/public`, `apps/user-uni/static`, `vendor/fonts`, `mock-video.mp4`, `dist`.
 
 Do not blindly commit `dist`, large media files, copied demo pages, or vendor fonts without a business review.
 

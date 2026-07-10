@@ -58,6 +58,14 @@ func canonicalSubscriptionPlans() []adminPlan {
 func canonicalRechargePackages() []adminPlan {
 	return []adminPlan{
 		{
+			ID: "recharge_100", Code: "recharge_100", Name: "100 元点数包", PlanType: planTypeTokenRecharge, PriceCents: 10000, Points: 10000, GrantPoints: 10000, TokenAmount: 10000, DurationDays: 730, Concurrency: 0, Active: true,
+			Entitlements: map[string]any{"planType": "recharge", "displayPrice": "100 元", "validityText": "充值 10,000 点", "sort": 101},
+		},
+		{
+			ID: "recharge_400", Code: "recharge_400", Name: "400 元点数包", PlanType: planTypeTokenRecharge, PriceCents: 40000, Points: 40000, GrantPoints: 40000, TokenAmount: 40000, DurationDays: 730, Concurrency: 0, Active: true,
+			Entitlements: map[string]any{"planType": "recharge", "displayPrice": "400 元", "validityText": "充值 40,000 点", "recommended": true, "sort": 102},
+		},
+		{
 			ID: "recharge_small", Code: "small_pack", Name: "小额包", PlanType: planTypeTokenRecharge, PriceCents: 1990, Points: 2500, GrantPoints: 2500, TokenAmount: 2500, DurationDays: 730, Concurrency: 0, Active: true,
 			Entitlements: map[string]any{"planType": "recharge", "displayPrice": "19.9 元", "validityText": "充值点数", "sort": 110},
 		},

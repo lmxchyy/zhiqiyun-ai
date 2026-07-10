@@ -25,6 +25,7 @@ type Response struct {
 type Chunk struct {
 	Delta    string
 	Done     bool
+	Usage    map[string]any
 	Metadata map[string]any
 }
 

@@ -9444,15 +9444,15 @@ body {
   position: relative;
   min-width: 0;
   border: 1px solid var(--admin-border);
-  border-radius: 16px;
+  border-radius: 14px;
   background: #ffffff;
   cursor: pointer;
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  min-height: 160px;
+  grid-template-columns: 128px minmax(0, 1fr);
+  min-height: 128px;
   overflow: hidden;
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
@@ -9529,19 +9529,21 @@ body {
 
 .ai-task-thumb {
   position: relative;
-  min-height: 160px;
+  min-height: 128px;
   background: #f8fafc;
   display: grid;
   place-items: center;
   color: #98a2b3;
-  font-size: 28px;
+  font-size: 18px;
   overflow: hidden;
 }
 
 .ai-task-thumb img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  font-size: 0;
 }
 
 .ai-task-badges {
@@ -9558,15 +9560,15 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-height: 22px;
+  min-height: 20px;
   border-radius: 6px;
   background: rgba(39, 39, 42, 0.58);
   color: #ffffff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   line-height: 1;
-  padding: 0 8px;
+  padding: 0 7px;
   backdrop-filter: blur(8px);
 }
 
@@ -9601,17 +9603,29 @@ body {
 }
 
 .ai-task-running,
-.ai-task-failed {
+.ai-task-failed,
+.ai-task-empty-thumb {
   display: grid;
   justify-items: center;
-  gap: 10px;
+  gap: 7px;
   color: #9ca3af;
   font-size: 12px;
   font-weight: 800;
+  text-align: center;
 }
 
 .ai-task-failed {
   color: #ef4444;
+}
+
+.ai-task-empty-thumb .el-icon {
+  font-size: 24px;
+}
+
+.ai-task-empty-thumb strong {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .ai-task-spinner {
@@ -9633,12 +9647,12 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   padding: 12px;
 }
 
 .ai-task-copy {
-  min-height: 64px;
+  min-height: 42px;
   display: grid;
   align-content: start;
   gap: 4px;
@@ -9646,13 +9660,13 @@ body {
 
 .ai-task-copy strong {
   color: #3f3f46;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  line-height: 1.625;
+  line-height: 1.45;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
 }
 
 .ai-task-error {
@@ -9672,7 +9686,7 @@ body {
 }
 
 .ai-task-model-pill {
-  min-height: 24px;
+  min-height: 22px;
   display: inline-flex;
   align-items: center;
   border-radius: 7px;
@@ -9693,8 +9707,8 @@ body {
 }
 
 .ai-task-actions button {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -9702,7 +9716,7 @@ body {
   cursor: pointer;
   display: grid;
   place-items: center;
-  font-size: 16px;
+  font-size: 15px;
   padding: 0;
   transition: background-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
 }

@@ -36,6 +36,9 @@ type Config struct {
 	ModelTimeoutMS        string
 	ModelProvidersJSON    string
 	CORSAllowedOrigins    string
+	KnowledgeOCREndpoint  string
+	KnowledgeOCRAPIKey    string
+	KnowledgeOCRProvider  string
 }
 
 func Load() Config {
@@ -55,7 +58,7 @@ func Load() Config {
 	}
 	staticDir := os.Getenv("XIANZHI_STATIC_DIR")
 	if staticDir == "" {
-		staticDir = "frontend-vue/dist"
+		staticDir = "apps/user-uni/dist/build/h5"
 	}
 	adminStaticDir := os.Getenv("XIANZHI_ADMIN_STATIC_DIR")
 	if adminStaticDir == "" {
@@ -127,6 +130,9 @@ func Load() Config {
 		ModelTimeoutMS:        modelTimeoutMS,
 		ModelProvidersJSON:    modelProvidersJSON,
 		CORSAllowedOrigins:    os.Getenv("XIANZHI_CORS_ALLOWED_ORIGINS"),
+		KnowledgeOCREndpoint:  os.Getenv("KNOWLEDGE_OCR_ENDPOINT"),
+		KnowledgeOCRAPIKey:    os.Getenv("KNOWLEDGE_OCR_API_KEY"),
+		KnowledgeOCRProvider:  firstNonEmptyEnv("KNOWLEDGE_OCR_PROVIDER", "OCR_PROVIDER"),
 	}
 }
 

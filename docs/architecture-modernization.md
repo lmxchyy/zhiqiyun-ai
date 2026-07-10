@@ -4,7 +4,7 @@
 
 - 前端统一采用 uni-app + Vue 3 组件体系，H5、小程序和 App 端都按 uni-app 工程约束组织。
 - 后端统一采用 Go HTTP 服务，默认入口为 `backend-go/cmd/api`。
-- 默认本地前端目录为 `frontend-vue`，现阶段是 uni-app Vue 3 工程，H5 输出目录为 `frontend-vue/dist/build/h5`。
+- 默认用户端目录为 `apps/user-uni`，现阶段是 uni-app Vue 3 工程，H5 输出目录为 `apps/user-uni/dist/build/h5`。
 - 旧 `frontend` 和 `backend` 目录保留为 legacy 参考，不再作为默认启动、构建或 Docker 服务入口。
 
 ## 运行入口
@@ -12,7 +12,7 @@
 | 场景 | 命令 | 说明 |
 | --- | --- | --- |
 | Go API | `npm.cmd start` 或 `npm.cmd run dev:api` | 启动 `backend-go/cmd/api`，默认监听 `3100` |
-| uni-app Vue 3 前端 | `npm.cmd run dev:web` 或 `npm.cmd run dev:uni` | 启动 `frontend-vue`，开发代理指向 Go API |
+| uni-app Vue 3 用户端 | `npm.cmd run dev:web` 或 `npm.cmd run dev:uni` | 启动 `apps/user-uni`，开发代理指向 Go API |
 | Go 测试 | `npm.cmd test` | 执行 `go test ./...` |
 | 前端构建 | `npm.cmd run build:web` 或 `npm.cmd run build:uni` | 执行 uni-app H5 构建 |
 | Docker | `npm.cmd run docker:up` | 构建 uni-app H5 静态资源，编译 Go API，并由 Go 服务托管前端 |

@@ -30,10 +30,12 @@ func NewWithDatabase(cfg config.Config, db *sql.DB) *http.Server {
 
 func NewWithInfrastructure(cfg config.Config, db *sql.DB, redisClient *redis.Client) *http.Server {
 	store := platformStore(newJSONStore(cfg.DataPath))
+	knowledge := newMemoryKnowledgeModule(cfg)
 	if db != nil {
 		store = newPostgresPrimaryStore(db, cfg.DataPath)
+		knowledge = newPostgresKnowledgeModule(cfg, db)
 	}
-	return newWithStoreAndSessions(cfg, store, defaultAuthSessions(cfg, redisClient))
+	return newWithStoreSessionsAndKnowledge(cfg, store, defaultAuthSessions(cfg, redisClient), knowledge)
 }
 
 func newWithStore(cfg config.Config, store platformStore) *http.Server {
@@ -51,10 +53,18 @@ func defaultAuthSessions(cfg config.Config, redisClient *redis.Client) authSessi
 }
 
 func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions authSessionStore) *http.Server {
+	return newWithStoreSessionsAndKnowledge(cfg, store, sessions, newMemoryKnowledgeModule(cfg))
+}
+
+func newWithStoreSessionsAndKnowledge(cfg config.Config, store platformStore, sessions authSessionStore, knowledge *knowledgeModule) *http.Server {
+	if knowledge != nil && knowledge.rag != nil {
+		knowledge.rag.SetBillingRecorder(store)
+	}
 	api := newAPI(store, cfg, sessions)
 	admin := newAdminAPI(store)
 	auth := newAuthAPI(store, sessions)
 	channel := newChannelAPI(store, sessions)
+	knowledgeAPI := newKnowledgeAPI(knowledge, sessions)
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -135,6 +145,39 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 	v1.POST("/reference-images", wrapF(api.uploadReferenceImage))
 	v1.GET("/reference-images/:name", wrapF(api.serveReferenceImage))
 	v1.GET("/generated-media/:name", wrapF(api.serveGeneratedMedia))
+	v1.GET("/knowledge/context", wrapF(knowledgeAPI.context))
+	v1.GET("/knowledge/tags", wrapF(knowledgeAPI.listTags))
+	v1.POST("/knowledge/tags", wrapF(knowledgeAPI.createTag))
+	v1.GET("/knowledge/categories", wrapF(knowledgeAPI.listCategories))
+	v1.POST("/knowledge/categories", wrapF(knowledgeAPI.createCategory))
+	v1.GET("/knowledge/profiles/:resource", wrapF(knowledgeAPI.listProfiles))
+	v1.GET("/knowledge-bases", wrapF(knowledgeAPI.listKnowledgeBases))
+	v1.POST("/knowledge-bases", wrapF(knowledgeAPI.createKnowledgeBase))
+	v1.GET("/knowledge-bases/:id", wrapF(knowledgeAPI.getKnowledgeBase))
+	v1.PATCH("/knowledge-bases/:id", wrapF(knowledgeAPI.updateKnowledgeBase))
+	v1.DELETE("/knowledge-bases/:id", wrapF(knowledgeAPI.deleteKnowledgeBase))
+	v1.GET("/knowledge-bases/:id/acl", wrapF(knowledgeAPI.listKnowledgeBaseACL))
+	v1.PUT("/knowledge-bases/:id/acl", wrapF(knowledgeAPI.replaceKnowledgeBaseACL))
+	v1.GET("/knowledge-bases/:id/documents", wrapF(knowledgeAPI.listDocuments))
+	v1.POST("/knowledge-bases/:id/documents:ingest", wrapF(knowledgeAPI.ingestDocument))
+	v1.DELETE("/knowledge-documents/:id", wrapF(knowledgeAPI.deleteDocument))
+	v1.GET("/knowledge-documents/:id", wrapF(knowledgeAPI.getDocument))
+	v1.GET("/knowledge-chunks", wrapF(knowledgeAPI.listChunks))
+	v1.POST("/knowledge-search", wrapF(knowledgeAPI.search))
+	v1.GET("/knowledge-agents", wrapF(knowledgeAPI.listAgents))
+	v1.POST("/knowledge-agents", wrapF(knowledgeAPI.createAgent))
+	v1.GET("/knowledge-agents/:id", wrapF(knowledgeAPI.getAgent))
+	v1.PUT("/knowledge-agents/:id/knowledge-bindings", wrapF(knowledgeAPI.replaceAgentBindings))
+	v1.GET("/knowledge-conversations", wrapF(knowledgeAPI.listConversations))
+	v1.POST("/knowledge-conversations", wrapF(knowledgeAPI.createConversation))
+	v1.GET("/knowledge-conversations/:id/messages", wrapF(knowledgeAPI.listMessages))
+	v1.POST("/knowledge-conversations/:id/runs", wrapF(knowledgeAPI.runRAG))
+	v1.POST("/knowledge-conversations/:id/runs:stream", wrapF(knowledgeAPI.streamRAG))
+	v1.GET("/knowledge-runs/:id", wrapF(knowledgeAPI.getRun))
+	v1.POST("/knowledge-runs/:id/cancel", wrapF(knowledgeAPI.cancelRun))
+	v1.POST("/knowledge-runs/:id/retry", wrapF(knowledgeAPI.retryRun))
+	v1.GET("/knowledge-runs/:id/events", wrapF(knowledgeAPI.listRunEvents))
+	v1.GET("/knowledge-runs/:id/citations", wrapF(knowledgeAPI.listRunCitations))
 	router.GET("/api/module-schema", wrapF(api.moduleSchema))
 
 	pptGroup := router.Group("/api/ppt")
@@ -165,6 +208,10 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 		adminGroup.Use(superAdminMiddleware(auth))
 	}
 	adminGroup.GET("/overview", wrapF(admin.overview))
+	adminGroup.GET("/knowledge/overview", wrapF(knowledgeAPI.adminOverview))
+	adminGroup.GET("/knowledge/:resource", wrapF(knowledgeAPI.adminRecords))
+	adminGroup.POST("/knowledge/:resource", wrapF(knowledgeAPI.saveAdminProfile))
+	adminGroup.PATCH("/knowledge/:resource/:id", wrapF(knowledgeAPI.saveAdminProfile))
 	adminGroup.GET("/customers", wrapF(admin.customers))
 	adminGroup.POST("/customers", wrapF(admin.createCustomer))
 	adminGroup.PATCH("/customers/:id", wrapF(admin.updateCustomer))
@@ -271,7 +318,7 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 }
 
 const requestIDHeader = "X-Request-Id"
-const corsAllowedHeaders = "Authorization, Content-Type, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language"
+const corsAllowedHeaders = "Authorization, Content-Type, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Tenant-Id, X-Organization-Id"
 const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 func requestContextMiddleware() gin.HandlerFunc {

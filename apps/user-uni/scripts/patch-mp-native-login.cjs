@@ -1085,4 +1085,54 @@ const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
 appJson.pages = appJson.pages.filter((page) => page !== "pages/NativeDebugLogin");
 fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2));
 
-console.log("Patched mp-weixin login page with native bindtap handlers.");
+function preserveGeneratedComponents(configPath) {
+  if (!fs.existsSync(configPath)) return;
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.setting = Object.assign({}, config.setting, {
+    ignoreDevUnusedFiles: false,
+    ignoreUploadUnusedFiles: false
+  });
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+preserveGeneratedComponents(path.resolve(outputRoot, "project.config.json"));
+preserveGeneratedComponents(path.resolve(outputRoot, "project.private.config.json"));
+
+const workbenchWxmlPath = path.resolve(outputRoot, "components", "MiniProgramRoleWorkbench.wxml");
+if (!fs.existsSync(workbenchWxmlPath)) {
+  throw new Error("MiniProgramRoleWorkbench.wxml not found after mp-weixin build");
+}
+let workbenchWxml = fs.readFileSync(workbenchWxmlPath, "utf8");
+let nativeGenerateBindingCount = 0;
+workbenchWxml = workbenchWxml.replace(
+  /(<view class="\{\{\[[^\]]*'v31-(?:ppt-submit|generate-button)'[^\]]*\]\}\}"[^>]*?)bind(?:tap|touchend)="\{\{[^}]+\}\}"/g,
+  (match, prefix) => {
+    nativeGenerateBindingCount += 1;
+    return `${prefix}bindtap="nativeGenerate"`;
+  }
+);
+if (nativeGenerateBindingCount !== 2) {
+  throw new Error(`Expected 2 native generate bindings, patched ${nativeGenerateBindingCount}`);
+}
+fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
+
+const nativeBackPattern = /(<button class="v31-back-button[^>]*?)bindtap="\{\{[^}]+\}\}"/;
+if (!nativeBackPattern.test(workbenchWxml)) {
+  throw new Error("PPT back button binding not found after mp-weixin build");
+}
+workbenchWxml = workbenchWxml.replace(nativeBackPattern, `$1bindtap="nativeBackToCreation"`);
+fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
+
+const workbenchJsPath = path.resolve(outputRoot, "components", "MiniProgramRoleWorkbench.js");
+let workbenchJs = fs.readFileSync(workbenchJsPath, "utf8");
+const createComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
+if (!createComponentPattern.test(workbenchJs)) {
+  throw new Error("MiniProgramRoleWorkbench component registration not found");
+}
+workbenchJs = workbenchJs.replace(
+  createComponentPattern,
+  `$1.methods=Object.assign({},$1.methods,{nativeGenerate(){const handler=globalThis.__xianzhiMiniProgramGenerate;if(typeof handler==="function"){handler();return}wx.showToast({title:"生成入口初始化中，请稍后重试",icon:"none"})},nativeBackToCreation(){const handler=globalThis.__xianzhiMiniProgramBackToCreation;if(typeof handler==="function"){handler();return}wx.showToast({title:"返回入口初始化中，请稍后重试",icon:"none"})}});wx.createComponent($1);`
+);
+fs.writeFileSync(workbenchJsPath, workbenchJs);
+
+console.log("Patched mp-weixin login and generation controls with native bindtap handlers.");

@@ -8,13 +8,13 @@
 
 | 层级 | 当前主入口 | 说明 |
 | --- | --- | --- |
-| 员工/客户产品端 | `frontend-vue` | uni-app + Vue 3，H5/小程序/App 同源工程，H5 构建后由 Go 服务托管。 |
+| 员工/客户产品端 | `apps/user-uni` | uni-app + Vue 3，H5/小程序/App/Harmony 同源工程，H5 构建后由 Go 服务托管。 |
 | PC 管理后台 | `admin-vue` | Vue 3 + Vite + Element Plus，构建产物由 Go 服务托管在 `/admin/`。 |
 | 后端 API | `backend-go` | Go 1.25 + Gin，统一提供 `/api/v1/*`、`/api/v1/admin/*` 和客户侧兼容接口。 |
 | 数据库 | `database/schema.sql` + `database/migrations/*` | PostgreSQL 作为生产主数据源，Redis/RabbitMQ/MinIO 作为基础设施。 |
 | Legacy 参考 | 已移除 | 旧 `frontend`、`backend`、`admin-web` 不再保留在当前工作树。 |
 
-生产迁移应以 `frontend-vue + admin-vue + backend-go + PostgreSQL` 为准。
+生产迁移应以 `apps/user-uni + admin-vue + backend-go + PostgreSQL` 为准。
 
 ## 2. 当前已有板块
 
@@ -22,7 +22,7 @@
 
 - 登录认证与会话：`/api/v1/auth/login`、`/api/v1/auth/me`、`/api/v1/auth/logout`、`/api/v1/auth/change-password`。
 - AI 创作工作台：生成任务、模型选择、提示词、参考图、素材历史。
-- 灵感画布：`frontend-vue/src/components/InspirationCanvas.vue` 和相关 API 封装。
+- AI 创作页：`apps/user-uni/src/pages/AiCreationPage.vue` 和共享 `business-sdk` API 封装。
 - 用户仪表盘：积分账户、用量、在线图片、AI 状态保存。
 - API 设置：员工端可配置/查看推荐 API、平台供应商和使用设置。
 - 素材资产：资产列表、下载、缩略图补全、删除。
@@ -185,8 +185,8 @@ MinIO 或云对象存储
 ### 阶段 0：冻结与盘点
 
 1. 确认当前 Git 分支、未提交改动和需要上线的版本范围。
-2. 确认 `frontend-vue`、`admin-vue`、`backend-go` 是本次生产迁移的目标入口。
-3. 确认当前生产入口只包含 `frontend-vue`、`admin-vue`、`backend-go`。
+2. 确认 `apps/user-uni`、`admin-vue`、`backend-go` 是本次生产迁移的目标入口。
+3. 确认当前生产入口只包含 `apps/user-uni`、`admin-vue`、`backend-go`。
 4. 列出生产必需的第三方账号：模型供应商、对象存储、短信/邮件、支付、域名、证书。
 5. 明确上线窗口、回滚窗口、负责人和验收人。
 
@@ -196,8 +196,8 @@ MinIO 或云对象存储
 
 ```powershell
 npm.cmd --prefix admin-vue run build
-npm.cmd --prefix frontend-vue run typecheck
-npm.cmd --prefix frontend-vue run build
+npm.cmd run typecheck:user-core
+npm.cmd run build:user-h5
 npm.cmd test
 docker compose -f compose.yml build --progress plain
 ```
@@ -358,8 +358,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\restore-postgres.ps1 -InputFi
 - [ ] Git 版本已确认，当前上线 commit/tag 已记录。
 - [ ] 未提交改动已确认是否纳入上线。
 - [ ] `admin-vue` 构建通过。
-- [ ] `frontend-vue` 类型检查通过。
-- [ ] `frontend-vue` H5 构建通过。
+- [ ] `apps/user-uni` 类型检查通过。
+- [ ] `apps/user-uni` H5 构建通过。
 - [ ] `backend-go` 测试通过。
 - [ ] Docker 镜像构建通过。
 - [ ] PostgreSQL schema 与 migrations 已执行。

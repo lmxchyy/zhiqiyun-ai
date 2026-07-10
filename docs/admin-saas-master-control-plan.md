@@ -16,7 +16,7 @@
 
 当前仓库已经具备主控 SaaS 的基础设施和部分业务域：
 
-- 前端基线：`frontend-vue`，Vue 3 / uni-app。
+- 用户端基线：`apps/user-uni`，Vue 3 / uni-app。
 - 后端基线：`backend-go`，Go HTTP 服务，默认端口 `3100`。
 - Docker 基线：应用容器、PostgreSQL、Redis、RabbitMQ、MinIO。
 - 数据库基线：`database/schema.sql` 已包含用户、企业、套餐、订单、支付、代理、佣金、模型、生成任务、Agent、GEO、审计等核心表。
@@ -620,7 +620,7 @@ package.json
 
 目标：
 
-- 构建产品端 `frontend-vue`。
+- 构建产品端 `apps/user-uni`。
 - 构建主控端 `admin-web`。
 - Go 服务托管 `/` 和 `/admin`。
 - Docker 仍通过 `http://localhost:3100` 对外提供服务。
@@ -642,7 +642,7 @@ package.json
 
 确认开发前建议只确认 3 件事：
 
-1. 主控端是否接受独立 `admin-web` 目录，而不是放进现有 `frontend-vue`。
+1. 主控端是否继续由独立 `admin-vue` 承载，而不是并入用户端 `apps/user-uni`。
 2. 第一版是否按“先读数据和看板，第二轮再做写操作”推进。
 3. 交付中心和分润中心第一版是否先做基础列表和详情，第二轮再增强流程。
 

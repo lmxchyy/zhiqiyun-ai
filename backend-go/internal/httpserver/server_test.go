@@ -1487,14 +1487,14 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 		t.Fatalf("mark recharge paid status = %d, body = %s", markPaid.Code, markPaid.Body.String())
 	}
 	body := markPaid.Body.String()
-	for _, want := range []string{`"status":"PAID"`, `"orderType":"COMPUTE_RECHARGE"`, `"rechargePoints":1000`, `"newapiSyncStatus":"READY"`, `"newapiGroup":"生图备份"`, `"newapiKeyId":"key_user_000002"`} {
+	for _, want := range []string{`"status":"PAID"`, `"orderType":"COMPUTE_RECHARGE"`, `"rechargePoints":10000`, `"newapiSyncStatus":"READY"`, `"newapiGroup":"生图备份"`, `"newapiKeyId":"key_user_000002"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("paid recharge response missing %q: %s", want, body)
 		}
 	}
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	customerBody := customers.Body.String()
-	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":1959`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
+	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":10959`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
 		t.Fatalf("recharge points not reflected: %d %s", customers.Code, customers.Body.String())
 	}
 	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
@@ -1507,7 +1507,7 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 		t.Fatalf("repeat mark paid status = %d, body = %s", markPaidAgain.Code, markPaidAgain.Body.String())
 	}
 	customersAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":1959`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":2959`) {
+	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":10959`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":20959`) {
 		t.Fatalf("repeat mark paid was not idempotent: %s", customersAfterRepeat.Body.String())
 	}
 	commissionsAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)

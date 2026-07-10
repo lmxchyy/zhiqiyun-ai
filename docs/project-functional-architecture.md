@@ -7,17 +7,17 @@
 先知 AI 是一站式内容生产与代理商运营平台，当前按三层主线演进：
 
 - PC 管理与控制台：`admin-vue`
-- 移动端 / H5 / 小程序 / App：`frontend-vue`
+- 移动端 / H5 / 小程序 / App：`apps/user-uni`
 - 后端 API 与静态托管：`backend-go`
 
-旧 `frontend`、`backend`、`admin-web` 目录已移除；当前开发入口统一为 `frontend-vue`、`admin-vue`、`backend-go`。
+旧 `frontend`、`backend`、`admin-web` 目录已移除；当前开发入口统一为 `apps/user-uni`、`admin-vue`、`backend-go`。
 
 ## 2. 代码目录与运行入口
 
 | 目录 | 当前角色 | 主要技术 | 运行入口 | 说明 |
 | --- | --- | --- | --- | --- |
 | `admin-vue` | PC 主控后台、PC 用户控制台、代理商后台 | Vue 3、Vite、Element Plus、Pinia、Axios | `/admin/`、`/app`、`/agent` | Docker 构建为 `/app/admin-vue/dist`，由 Go 服务托管 |
-| `frontend-vue` | 移动端 / H5 / 小程序 / App 用户端 | uni-app、Vue 3、Pinia、TypeScript | H5 静态站、小程序、App Plus | Docker H5 构建产物为 `/app/frontend-vue/dist` |
+| `apps/user-uni` | 移动端 / H5 / 小程序 / App 用户端 | uni-app、Vue 3、Pinia、TypeScript | H5 静态站、小程序、App Plus、Harmony | Docker H5 构建产物为 `/app/user-uni/dist` |
 | `backend-go` | 业务 API、鉴权、计费、生成任务、静态托管 | Go 1.25、Gin、PostgreSQL、Redis | `backend-go/cmd/api` | 当前真实后端 |
 | `database` | schema 与迁移 | SQL | `database/schema.sql`、`database/migrations/*.sql` | Docker `migrate` 服务启动时执行 |
 | `docs` | 产品、架构、迁移、计费等文档 | Markdown | - | 项目知识沉淀 |
@@ -35,7 +35,7 @@ flowchart TB
 
   subgraph Frontend["前端工程"]
     AdminVue["admin-vue<br/>Vue + Element Plus"]
-    FrontendVue["frontend-vue<br/>uni-app"]
+    UserUni["apps/user-uni<br/>uni-app"]
   end
 
   subgraph Backend["后端服务"]
@@ -59,10 +59,10 @@ flowchart TB
   Admin --> AdminVue
   UserPC --> AdminVue
   AgentPC --> AdminVue
-  Mobile --> FrontendVue
+  Mobile --> UserUni
 
   AdminVue --> GoAPI
-  FrontendVue --> GoAPI
+  UserUni --> GoAPI
 
   GoAPI --> Auth
   GoAPI --> AICapability
@@ -142,7 +142,7 @@ flowchart TB
 - 素材中心：推广海报、话术、专属链接。
 - 账户设置：代理资料、收款信息、通知偏好。
 
-### 4.4 移动端用户端：`frontend-vue`
+### 4.4 移动端用户端：`apps/user-uni`
 
 面向 H5、小程序和 App Plus，多端共用 uni-app。
 
@@ -154,9 +154,11 @@ flowchart TB
 
 构建目标：
 
-- H5：`frontend-vue/dist/build/h5`
-- 微信小程序：`frontend-vue/dist/build/mp-weixin`
-- App Plus：`frontend-vue/dist/build/app-plus`
+- H5：`apps/user-uni/dist/build/h5`
+- 微信小程序：`apps/user-uni/dist/build/mp-weixin`
+- App Plus：`apps/user-uni/dist/build/app-plus`
+- Harmony App：`apps/user-uni/dist/build/app-harmony`
+- Harmony 小程序：`apps/user-uni/dist/build/mp-harmony`
 
 ## 5. 后端板块：`backend-go`
 
@@ -176,7 +178,7 @@ Go 服务同时托管前端产物：
 - `/admin/` -> `admin-vue/dist`
 - `/app`、`/app/*` -> `admin-vue/dist`
 - `/agent`、`/agent/*` -> `admin-vue/dist`
-- 移动端 H5 静态资源 -> `frontend-vue/dist/build/h5`
+- 移动端 H5 静态资源 -> `apps/user-uni/dist/build/h5`
 - `/api/v1/*` -> 业务 API
 
 ### 5.3 AI 能力配置
@@ -280,7 +282,7 @@ Docker 环境包含：
 ```mermaid
 sequenceDiagram
   participant Browser as 浏览器
-  participant FE as admin-vue / frontend-vue
+  participant FE as admin-vue / apps/user-uni
   participant API as backend-go
   participant DB as PostgreSQL
 
@@ -343,14 +345,14 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph Build["Docker 多阶段构建"]
-    A["frontend-vue<br/>npm run build"] --> AOut["dist/build/h5"]
+    A["apps/user-uni<br/>npm run build"] --> AOut["dist/build/h5"]
     B["admin-vue<br/>npm run build"] --> BOut["dist"]
     C["backend-go<br/>go build ./cmd/api"] --> COut["xianzhi-api"]
   end
 
   subgraph Runtime["运行镜像"]
     App["/app/xianzhi-api"]
-    Static["/app/frontend-vue/dist"]
+    Static["/app/user-uni/dist"]
     AdminStatic["/app/admin-vue/dist"]
     Data["/app/data/store.json"]
   end
@@ -397,7 +399,7 @@ npm.cmd run docker:logs
 | `/admin/` 主控后台页面、菜单、表格、弹窗、布局 | `admin-vue` |
 | `/app` PC 用户控制台页面、AI 生图、视频、PPT、订阅页面 | `admin-vue` |
 | `/agent` 代理商后台页面 | `admin-vue` |
-| 移动端 H5、小程序、App 页面 | `frontend-vue` |
+| 移动端 H5、小程序、App 页面 | `apps/user-uni` |
 | 登录、权限、接口、扣点、计费、生成任务、数据库 | `backend-go` |
 | 数据表、迁移、索引、初始化数据 | `database` |
 | 旧逻辑参考 | 已移除；如需恢复可从 Git 历史或备份分支找回 |
@@ -408,6 +410,6 @@ npm.cmd run docker:logs
 - AI 能力中心是主控 SaaS 后台一级目录，不挂在 API 设置或技术治理下面；其二级模块是能力模块、模型管理、参数 Schema、租户限制、上游通道、调用日志。
 - AI 能力中心只负责模块、模型、参数 Schema、租户参数限制和调用日志。
 - PC 用户控制台 `/app` 与主控后台 `/admin/` 共用 `admin-vue`，但根据路径和角色展示不同模块。
-- 移动端多端能力由 `frontend-vue` 承载。
+- 移动端多端能力由 `apps/user-uni` 承载。
 - 所有前端都以 `/api/v1` 为稳定后端契约。
-- Docker 当前只构建 `admin-vue`、`frontend-vue`、`backend-go`；旧 legacy 目录已移除。
+- Docker 当前只构建 `admin-vue`、`apps/user-uni`、`backend-go`；旧 legacy 目录已移除。

@@ -24,9 +24,6 @@ jobs:
       - name: Install root dependencies
         run: npm.cmd ci --ignore-scripts
 
-      - name: Install miniapp dependencies
-        run: npm.cmd --prefix miniapp ci --ignore-scripts
-
       - name: Install user-uni dependencies
         run: npm.cmd --prefix apps/user-uni ci --ignore-scripts
 

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	knowledgeapp "xianzhi-ai/backend-go/internal/app/knowledge"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 
 	"xianzhi-ai/backend-go/internal/config"
@@ -45,6 +46,7 @@ type platformStore interface {
 	CompleteGenerationTask(string, createGenerationTaskRequest) (generationTask, error)
 	FailGenerationTask(string, string) (generationTask, error)
 	RecordPPTGenerationUsage(pptapp.Task) (adminBillingEvent, error)
+	RecordRAGUsage(context.Context, knowledgeapp.RAGBillingUsage) error
 	ListAssets() ([]asset, error)
 	UserAIState(string) (userAIState, error)
 	UpdateUserAIState(string, userAIState) (userAIState, error)

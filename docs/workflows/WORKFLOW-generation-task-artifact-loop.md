@@ -25,7 +25,7 @@ The user did not specify a concrete `[功能名]`, so this spec selects the most
 | PostgreSQL task, asset, billing, commission and audit writes | `backend-go/internal/httpserver/postgres_store.go` |
 | Runtime projection tables | `database/migrations/021-runtime-projections.sql` |
 | Admin UI submit, optimistic task and polling | `admin-vue/src/App.vue` |
-| User H5 task/asset/points reads | `frontend-vue/src/pages/AiCreationPage.vue` |
+| User H5 task/asset/points reads | `apps/user-uni/src/pages/AiCreationPage.vue` |
 | Older product expectations and legacy gaps | `生成任务与作品闭环实施说明.md`, `生成任务取消与补偿实施说明.md`, `先知AI平台开发文档.md` |
 
 ## Actors

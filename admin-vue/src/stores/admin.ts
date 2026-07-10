@@ -119,6 +119,7 @@ export const adminModules: AdminModule[] = [
   { id: "aiCapabilityLimits", title: "租户限制", endpoint: "/admin/ai/overview" },
   { id: "aiCapabilityChannels", title: "上游通道", endpoint: "/admin/ai/overview" },
   { id: "aiCapabilityLogs", title: "调用日志", endpoint: "/admin/ai/overview" },
+  { id: "knowledgeAdmin", title: "知识库中心", endpoint: "" },
   { id: "apiSettings", title: "API 设置", endpoint: "/admin/system/settings" },
   { id: "system", title: "系统中心", endpoint: "/admin/system/settings" },
   { id: "departments", title: "部门管理", endpoint: "/admin/system/settings" },

@@ -1,41 +1,27 @@
 <template>
   <view class="mini-workbench">
-    <view class="status-bar-spacer"></view>
+    <view class="native-safe-note"></view>
 
-    <view class="hero-panel">
-      <view class="brand-row">
-        <image class="brand-logo" :src="loginLogo" mode="aspectFit" />
-        <view class="brand-copy">
-          <text class="brand-eyebrow">{{ roleLabel }}</text>
-          <text class="brand-title">{{ greetingText }}</text>
-        </view>
-        <button class="icon-button" type="button" @click="refreshAll">
-          <text>刷</text>
-        </button>
+    <view v-if="!isUserMineDetail" class="business-header">
+      <image class="business-logo" :src="loginLogo" mode="aspectFit" />
+      <view class="business-copy">
+        <text class="business-title">{{ currentPageTitle }}</text>
+        <text class="business-subtitle">{{ currentPageSubtitle }}</text>
       </view>
+      <button v-if="availableRoles.length === 1" class="role-badge" type="button">{{ roleLabel }}</button>
+      <button v-else class="role-badge switchable" type="button" @click="cycleRole">{{ roleLabel }}⌄</button>
+    </view>
 
-      <view class="role-switcher" v-if="availableRoles.length > 1">
-        <button
-          v-for="role in availableRoles"
-          :key="role.id"
-          type="button"
-          :class="['role-pill', { active: activeRole === role.id }]"
-          @click="switchRole(role.id)"
-        >
-          <text>{{ role.label }}</text>
-        </button>
-      </view>
-
-      <view class="hero-metrics">
-        <view class="metric-card primary">
-          <text class="metric-label">{{ activeRole === "user" ? "可用点数" : "可提现收益" }}</text>
-          <text class="metric-value">{{ activeRole === "user" ? formatNumber(pointBalance) : formatCurrency(roleWithdrawable) }}</text>
-        </view>
-        <view class="metric-card">
-          <text class="metric-label">{{ secondaryMetricLabel }}</text>
-          <text class="metric-value">{{ secondaryMetricValue }}</text>
-        </view>
-      </view>
+    <view class="role-switcher" v-if="availableRoles.length > 1 && !isUserMineDetail">
+      <button
+        v-for="role in availableRoles"
+        :key="role.id"
+        type="button"
+        :class="['role-pill', { active: activeRole === role.id }]"
+        @click="switchRole(role.id)"
+      >
+        <text>{{ role.label }}</text>
+      </button>
     </view>
 
     <view v-if="pageLoading" class="state-card">
@@ -49,133 +35,151 @@
     <view v-else class="role-content">
       <template v-if="activeRole === 'user'">
         <view v-if="activeTab === 'home'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header">
-              <view>
-                <text class="section-kicker">用户首页</text>
-                <text class="section-title">创作资产与账户状态</text>
+          <view class="v31-home-hero">
+            <text class="v31-kicker">一句话开始</text>
+            <text class="v31-hero-title">用 AI 完成设计、视频与 PPT</text>
+            <text class="v31-hero-copy">从创作到判断，一站式解决。</text>
+            <view class="v31-hero-row">
+              <view class="v31-mini-metric purple">
+                <text class="v31-metric-value">{{ formatNumber(pointBalance) }}</text>
+                <text class="v31-metric-label">点数余额</text>
               </view>
-              <text class="soft-tag">{{ planName }}</text>
-            </view>
-            <view class="quick-grid">
-              <view class="quick-item">
-                <text class="quick-value">{{ formatNumber(pointBalance) }}</text>
-                <text class="quick-label">剩余点数</text>
+              <view class="v31-mini-metric orange">
+                <text class="v31-metric-value">{{ recentAssets.length }}</text>
+                <text class="v31-metric-label">近期作品</text>
               </view>
-              <view class="quick-item">
-                <text class="quick-value">{{ formatNumber(monthlyPointCost) }}</text>
-                <text class="quick-label">本月消耗</text>
-              </view>
-              <view class="quick-item">
-                <text class="quick-value">{{ recentAssets.length }}</text>
-                <text class="quick-label">近期作品</text>
-              </view>
+              <button type="button" class="v31-orange-button" @click="selectUserTab('create')">去创作</button>
             </view>
           </view>
 
-          <view class="upgrade-strip">
-            <view>
-              <text class="strip-title">升级代理商</text>
-              <text class="strip-copy">充值 996 元开通代理商，获得推广码、客户管理和分润入口。</text>
-            </view>
-            <button v-if="!isAgentActive" type="button" class="strip-button" @click="createAgentOrder">立即升级</button>
-            <button v-else type="button" class="strip-button" @click="switchRole('agent')">进入代理</button>
+          <text class="v31-section-title">常用工具</text>
+          <view class="v31-tool-grid">
+            <button v-for="module in creationModules" :key="`home-${module.id}`" class="v31-tool-card" @click="openCreation(module.id)">
+              <text :class="['v31-tool-icon', module.tone]">{{ module.icon }}</text>
+              <view class="v31-tool-copy">
+                <text class="v31-tool-name">{{ module.homeName || module.name }}</text>
+                <text class="v31-tool-desc">{{ module.description }}</text>
+              </view>
+            </button>
           </view>
 
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">最近订单</text>
-              <button type="button" class="text-button" @click="selectUserTab('wallet')">查看钱包</button>
-            </view>
-            <view v-if="userOrders.length" class="list-stack">
-              <view v-for="order in userOrders.slice(0, 3)" :key="rowKey(order)" class="list-item">
-                <view>
-                  <text class="list-title">{{ orderTitle(order) }}</text>
-                  <text class="list-meta">{{ formatDate(rowDate(order)) }}</text>
-                </view>
-                <view class="list-side">
-                  <text class="price-text">{{ formatCurrency(rowAmount(order)) }}</text>
-                  <text :class="['status-tag', statusTone(rowStatus(order))]">{{ rowStatus(order) }}</text>
-                </view>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无订单，完成套餐或点数充值后会在这里展示。</text>
+          <text class="v31-section-title">灵感推荐</text>
+          <view class="v31-inspiration-grid">
+            <button class="v31-inspiration-card" @click="openCreation('image')">
+              <view class="v31-preview orange">图</view>
+              <text class="v31-inspiration-title">水果电商主图</text>
+              <view class="v31-card-footer"><text class="v31-chip orange">图片</text><text class="v31-link">继续改</text></view>
+            </button>
+            <button class="v31-inspiration-card" @click="openCreation('ppt')">
+              <view class="v31-preview purple">P</view>
+              <text class="v31-inspiration-title">招商路演PPT</text>
+              <view class="v31-card-footer"><text class="v31-chip purple">PPT</text><text class="v31-link">继续改</text></view>
+            </button>
           </view>
         </view>
 
         <view v-else-if="activeTab === 'create'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header">
+          <template v-if="creationMode === 'agent'">
+            <KnowledgeMiniChat embedded @close="returnToCreationHub" />
+          </template>
+          <template v-else-if="creationMode === 'ppt'">
+            <view class="v31-subpage-nav">
+              <button class="v31-back-button" aria-label="返回创作" @click="returnToCreationHub">‹</button>
               <view>
-                <text class="section-kicker">AI 创作</text>
-                <text class="section-title">选择能力并填写提示词</text>
+                <text class="v31-subpage-title">PPT文档生成</text>
+                <text class="v31-subpage-copy">返回创作不会丢失当前草稿</text>
               </view>
-              <text class="soft-tag">余额 {{ formatNumber(pointBalance) }}</text>
             </view>
-            <view class="creation-grid">
-              <button
-                v-for="module in creationModules"
-                :key="module.id"
-                type="button"
-                :class="['creation-card', { active: creationMode === module.id }]"
-                @click="creationMode = module.id"
-              >
-                <text class="creation-icon">{{ module.icon }}</text>
-                <text class="creation-name">{{ module.name }}</text>
-                <text class="creation-cost">{{ module.cost }}</text>
+            <view class="v31-ppt-panel">
+              <text class="v31-ppt-title">您今天想制作什么样的演示文稿？</text>
+              <textarea v-model="creationPrompt" class="v31-ppt-input" maxlength="500" placeholder="请输入主题，例如：AI赋能企业营销增长方案" @input="creationError = ''" />
+              <view class="v31-ppt-options">
+                <button @click="cyclePptSlides">{{ pptSlideCount }}张幻灯片</button>
+                <button :class="{ active: pptDynamic }" @click="pptDynamic = !pptDynamic">{{ pptDynamic ? "动态的" : "静态的" }}</button>
+                <button class="active" @click="togglePptLanguage">{{ pptLanguage === "zh" ? "中文" : "英文" }}</button>
+                <button @click="cyclePptModel">{{ pptModel }}</button>
+                <view
+                  :class="['v31-ppt-submit', { disabled: generationSubmitting }]"
+                  role="button"
+                  hover-class="v31-action-pressed"
+                  @touchend.stop="handleGenerateTap"
+                >{{ generationSubmitting ? "…" : "→" }}</view>
+              </view>
+              <text v-if="creationError" class="v31-generation-error">{{ creationError }}</text>
+            </view>
+            <text class="v31-section-title">示例主题</text>
+            <view class="v31-example-grid">
+              <button v-for="topic in pptTopics" :key="topic" @click="creationPrompt = topic; creationError = ''">{{ topic }}</button>
+            </view>
+            <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone]">
+              <view><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ latestGenerationTask.status }}</text></view>
+              <button @click="selectUserTab('assets')">查看作品</button>
+            </view>
+            <view class="v31-draft-card">
+              <text class="v31-draft-title">未完成项目会保留在最近浏览</text>
+              <text class="v31-draft-copy">选择文本内容、自定义主题后，即使返回首页，也能继续从草稿进入。</text>
+              <view class="v31-draft-actions"><button>草稿</button><button class="dark">生成大纲</button><button>主题预览</button></view>
+            </view>
+          </template>
+
+          <template v-else>
+            <view class="v31-prompt-panel">
+              <text class="v31-prompt-title">今天想做什么？</text>
+              <textarea v-model="creationPrompt" class="v31-one-line-input" maxlength="500" placeholder="例如：生成一张水果店开业促销海报，橙色系，高级感" @input="creationError = ''" />
+              <view class="v31-prompt-actions">
+                <text class="v31-chip purple">自动匹配工具</text>
+                <text class="v31-chip green">多模型对比</text>
+                <view
+                  :class="['v31-generate-button', { disabled: generationSubmitting }]"
+                  role="button"
+                  hover-class="v31-action-pressed"
+                  @touchend.stop="handleGenerateTap"
+                >{{ generationSubmitting ? "提交中..." : "生成" }}</view>
+              </view>
+              <text v-if="creationError" class="v31-generation-error">{{ creationError }}</text>
+            </view>
+
+            <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone]">
+              <view><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ latestGenerationTask.status }}</text></view>
+              <button @click="selectUserTab('assets')">查看作品</button>
+            </view>
+
+            <text class="v31-section-title">选择创作能力</text>
+            <view class="v31-mode-grid">
+              <button v-for="module in creationModules" :key="module.id" :class="['v31-mode-card', { active: creationMode === module.id }]" @click="selectCreationMode(module.id)">
+                <text :class="['v31-tool-icon', module.tone]">{{ module.icon }}</text>
+                <view class="v31-tool-copy"><text class="v31-tool-name">{{ module.name }}</text><text class="v31-tool-desc">{{ module.description }}</text></view>
               </button>
             </view>
-            <textarea
-              v-model="creationPrompt"
-              class="prompt-input"
-              maxlength="500"
-              placeholder="请输入创作需求，例如：生成一张科技感产品海报，蓝紫配色，突出云端 AI 能力"
-            />
-            <button type="button" class="primary-button" @click="showComingSoon(activeCreationName)">开始生成</button>
-          </view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">生成配置</text>
-              <text class="soft-tag">小程序轻量版</text>
+            <view class="v31-workflow-card">
+              <text class="v31-workflow-title">不满意？在结果上继续改</text>
+              <text class="v31-workflow-copy">生成、对比、再创作在一个地方完成。</text>
+              <view class="v31-workflow-tags"><text>复用参数</text><text>一键导出</text><text>继续编辑</text></view>
             </view>
-            <view class="config-row">
-              <text>模型</text>
-              <text>{{ activeCreationModel }}</text>
-            </view>
-            <view class="config-row">
-              <text>比例</text>
-              <text>{{ creationMode === "video" ? "9:16 / 16:9" : "1:1 / 4:3" }}</text>
-            </view>
-            <view class="config-row">
-              <text>扣点预估</text>
-              <text>{{ activeCreationCost }}</text>
-            </view>
-          </view>
+          </template>
         </view>
 
         <view v-else-if="activeTab === 'assets'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">作品中心</text>
-              <button type="button" class="text-button" @click="() => loadAssets()">刷新</button>
+          <view class="v31-filter-card">
+            <view class="v31-filter-row">
+              <button v-for="filter in assetFilters" :key="filter.id" :class="{ active: assetFilter === filter.id }" @click="assetFilter = filter.id">{{ filter.label }}</button>
             </view>
+            <input v-model="assetSearch" class="v31-search-strip" placeholder="搜索作品名称" />
+          </view>
+          <view class="v31-works-card">
             <text v-if="assetsLoading" class="empty-text">正在加载作品...</text>
             <text v-else-if="assetsError" class="empty-text">{{ assetsError }}</text>
-            <view v-else-if="recentAssets.length" class="work-list">
-              <view v-for="asset in recentAssets" :key="asset.id" class="work-item">
-                <image v-if="asset.mediaType === 'image' && asset.thumbnailUrl" class="work-thumb" :src="asset.thumbnailUrl" mode="aspectFill" />
-                <view v-else class="work-thumb fallback">
-                  <text>{{ asset.mediaType === "video" ? "视" : asset.mediaType === "document" ? "文" : "图" }}</text>
-                </view>
-                <view class="work-main">
-                  <text class="work-title">{{ asset.name || asset.id }}</text>
-                  <text class="work-meta">{{ asset.mediaType }} · {{ formatDate(asset.createdAt) }}</text>
-                </view>
-                <text class="status-tag success">可用</text>
-              </view>
+            <view v-else-if="filteredAssets.length" class="v31-work-grid">
+              <button v-for="asset in filteredAssets" :key="asset.id" class="v31-work-card">
+                <image v-if="asset.mediaType === 'image' && asset.thumbnailUrl" class="v31-work-preview" :src="asset.thumbnailUrl" mode="aspectFill" />
+                <view v-else :class="['v31-work-preview', asset.mediaType === 'video' ? 'green' : 'purple']">{{ asset.mediaType === "video" ? "视" : asset.mediaType === "document" ? "P" : "图" }}</view>
+                <text class="v31-work-title">{{ asset.name || asset.id }}</text>
+                <view class="v31-card-footer"><text :class="['v31-chip', asset.mediaType === 'video' ? 'green' : asset.mediaType === 'image' ? 'orange' : 'purple']">{{ asset.mediaType === "video" ? "视频" : asset.mediaType === "image" ? "图片" : "PPT" }}</text><text class="v31-link">继续改</text></view>
+              </button>
             </view>
-            <text v-else class="empty-text">暂无作品，可先在创作页生成图片、视频或 PPT。</text>
+            <view v-else class="v31-empty-state"><text>没有找到符合条件的作品</text><button @click="assetFilter = 'all'; assetSearch = ''">查看全部</button></view>
+            <text class="v31-works-note">每个作品保留生成参数、消耗点数、导出记录。</text>
+            <view class="v31-batch-actions"><button>批量导出</button><button class="active">继续编辑</button></view>
           </view>
         </view>
 
@@ -223,52 +227,36 @@
           </view>
         </view>
 
-        <view v-else class="section-stack">
-          <view class="profile-card">
-            <image class="profile-logo" :src="loginLogo" mode="aspectFit" />
-            <view>
-              <text class="profile-name">{{ displayName }}</text>
-              <text class="profile-meta">{{ userEmail }}</text>
-            </view>
-          </view>
-
-          <view class="section-card">
-            <view class="section-header">
-              <view>
-                <text class="section-kicker">身份升级</text>
-                <text class="section-title">996 代理商开通包</text>
-              </view>
-              <text class="price-badge">996 元</text>
-            </view>
-            <text class="body-copy">开通后生成代理商邀请码，可查看推广客户、代理商分润、推广链接与拓展客户数据。</text>
-            <button v-if="!isAgentActive" type="button" class="primary-button" @click="createAgentOrder">充值 996 升级代理商</button>
-            <button v-else type="button" class="primary-button" @click="switchRole('agent')">进入代理商工作台</button>
-          </view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">996 AI 创作会员包</text>
-              <text class="price-badge">400 元 Token</text>
-            </view>
-            <text class="body-copy">与桌面端一致，开通 Pro 会员权益并获得 AI 点数。</text>
-            <button type="button" class="outline-button" @click="createMemberPackageOrder">开通会员包</button>
-          </view>
-
-          <view class="menu-list">
-            <view class="menu-row">
-              <text>订单记录</text>
-              <text>{{ userOrders.length }} 笔</text>
-            </view>
-            <view class="menu-row">
-              <text>积分消耗</text>
-              <text>{{ walletRecords.length }} 条</text>
-            </view>
-            <view class="menu-row danger" @click="logout">
-              <text>退出登录</text>
-              <text>重新登录</text>
-            </view>
-          </view>
-        </view>
+        <MiniProgramMineExperience
+          v-else
+          :view="mineView"
+          :logo="loginLogo"
+          :display-name="displayName"
+          :point-balance="pointBalance"
+          :monthly-point-cost="monthlyPointCost"
+          :is-agent-active="isAgentActive"
+          :agent-level-label="agentLevelLabel"
+          :orders="userOrders"
+          :usage-records="walletRecords"
+          :invite-code="inviteCode"
+          :invite-link="inviteLink"
+          :channel-summary="channelSummary"
+          :purchase="selectedMinePurchase"
+          :purchase-submitting="minePurchaseSubmitting"
+          :logout-confirm="mineLogoutConfirm"
+          @navigate="openMineView"
+          @select-purchase="selectMinePurchase"
+          @close-purchase="selectedMinePurchase = null"
+          @confirm-purchase="confirmMinePurchase"
+          @request-logout="mineLogoutConfirm = true"
+          @close-logout="mineLogoutConfirm = false"
+          @confirm-logout="logout"
+          @switch-agent="switchRole('agent')"
+          @copy-invite="copyInviteLink"
+          @invoice="showInvoiceNotice"
+          @export-usage="showUsageExportNotice"
+          @poster="showPosterNotice"
+        />
       </template>
 
       <template v-else-if="activeRole === 'agent'">
@@ -537,13 +525,13 @@
       </template>
     </view>
 
-    <view class="bottom-tabs">
+    <view v-if="!isUserMineDetail" class="bottom-tabs" :style="{ gridTemplateColumns: `repeat(${currentTabs.length}, minmax(0, 1fr))` }">
       <button
         v-for="tab in currentTabs"
         :key="tab.id"
         type="button"
         :class="['tab-button', { active: activeTab === tab.id }]"
-        @click="activeTab = tab.id"
+        @click="selectTab(tab.id)"
       >
         <text class="tab-icon">{{ tab.icon }}</text>
         <text>{{ tab.label }}</text>
@@ -554,16 +542,38 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { onShareAppMessage } from "@dcloudio/uni-app";
+import { onBackPress, onShareAppMessage } from "@dcloudio/uni-app";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
+import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
+import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
+import type { MinePurchaseOption, MineView } from "../types";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 import type { ItemsResponse, MemberProfileResponse, OperationProfileResponse, RoleWalletResponse } from "@xianzhi/business-sdk";
 import type { Asset, AuthResponse, ChannelAgent, ChannelCenterResponse } from "../types";
 
+type NativeGenerateBridge = typeof globalThis & {
+  __xianzhiMiniProgramGenerate?: () => void;
+  __xianzhiMiniProgramBackToCreation?: () => void;
+};
+
+defineOptions({
+  methods: {
+    nativeGenerate() {
+      const handler = (globalThis as NativeGenerateBridge).__xianzhiMiniProgramGenerate;
+      if (typeof handler === "function") handler();
+    },
+    nativeBackToCreation() {
+      const handler = (globalThis as NativeGenerateBridge).__xianzhiMiniProgramBackToCreation;
+      if (typeof handler === "function") handler();
+    }
+  }
+});
+
 type AnyRecord = Record<string, unknown>;
 type RoleId = "user" | "agent" | "operation";
 type TabId = "home" | "create" | "assets" | "wallet" | "mine" | "overview" | "promotion" | "customers" | "commission" | "agents" | "orders";
-type CreationMode = "image" | "video" | "ppt";
+type CreationMode = "image" | "video" | "ppt" | "infographic" | "review" | "agent";
+type AssetFilter = "all" | "image" | "video" | "document" | "favorite";
 
 interface PromotionInfo {
   inviteCode?: string;
@@ -571,13 +581,19 @@ interface PromotionInfo {
   landingURL?: string;
 }
 
+interface GenerationNotice {
+  id: string;
+  title: string;
+  status: string;
+  tone: "pending" | "success" | "danger";
+}
+
 const roleTabs: Record<RoleId, Array<{ id: TabId; label: string; icon: string }>> = {
   user: [
-    { id: "home", label: "首页", icon: "首" },
-    { id: "create", label: "创作", icon: "创" },
-    { id: "assets", label: "作品", icon: "作" },
-    { id: "wallet", label: "钱包", icon: "钱" },
-    { id: "mine", label: "我的", icon: "我" }
+    { id: "home", label: "首页", icon: "⌂" },
+    { id: "create", label: "创作", icon: "＋" },
+    { id: "assets", label: "作品", icon: "▣" },
+    { id: "mine", label: "我的", icon: "○" }
   ],
   agent: [
     { id: "overview", label: "概览", icon: "总" },
@@ -602,9 +618,28 @@ const roleNames: Record<RoleId, string> = {
 };
 
 const creationModules = [
-  { id: "image" as CreationMode, icon: "图", name: "AI 生图", model: "gpt-image-2", cost: "约 10 点/张" },
-  { id: "video" as CreationMode, icon: "视", name: "视频生成", model: "doubao-seedance-2.0", cost: "约 80 点/条" },
-  { id: "ppt" as CreationMode, icon: "P", name: "PPT 文档", model: "ppt-generator", cost: "约 30 点/份" }
+  { id: "image" as CreationMode, icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "约 10 点/张", tone: "orange" },
+  { id: "ppt" as CreationMode, icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
+  { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "doubao-seedance-2.0", cost: "约 80 点/条", tone: "green" },
+  { id: "agent" as CreationMode, icon: "星", name: "AI Agent", homeName: "LOGO", description: "经营助手与知识库", model: "agent-workflow", cost: "按任务计费", tone: "blue" },
+  { id: "infographic" as CreationMode, icon: "表", name: "信息图", homeName: "信息图", description: "复杂信息一图讲清", model: "infographic", cost: "约 20 点/份", tone: "orange" },
+  { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
+];
+
+const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"];
+const assetFilters: Array<{ id: AssetFilter; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "image", label: "图片" },
+  { id: "video", label: "视频" },
+  { id: "document", label: "PPT" },
+  { id: "favorite", label: "收藏" }
+];
+
+const mockAssets: Asset[] = [
+  { id: "mock-image", name: "水果电商主图", url: "", mediaType: "image" },
+  { id: "mock-ppt-1", name: "营销拓展PPT", url: "", mediaType: "document" },
+  { id: "mock-video", name: "门店开业短视频", url: "", mediaType: "video" },
+  { id: "mock-ppt-2", name: "品牌升级方案", url: "", mediaType: "document" }
 ];
 
 const rechargePackages = [
@@ -622,7 +657,28 @@ const activeRole = ref<RoleId>("user");
 const activeTab = ref<TabId>("home");
 const creationMode = ref<CreationMode>("image");
 const creationPrompt = ref("");
+const creationPromptDrafts = ref<Record<CreationMode, string>>({
+  image: "",
+  video: "",
+  ppt: "",
+  infographic: "",
+  review: "",
+  agent: ""
+});
+const creationError = ref("");
+const generationSubmitting = ref(false);
+const latestGenerationTask = ref<GenerationNotice | null>(null);
+const pptSlideCount = ref(5);
+const pptDynamic = ref(true);
+const pptLanguage = ref<"zh" | "en">("zh");
+const pptModel = ref("GPT-4o-mini");
+const assetFilter = ref<AssetFilter>("all");
+const assetSearch = ref("");
 const roleInitialized = ref(false);
+const mineView = ref<MineView>("overview");
+const selectedMinePurchase = ref<MinePurchaseOption | null>(null);
+const minePurchaseSubmitting = ref(false);
+const mineLogoutConfirm = ref(false);
 
 const profile = ref<MemberProfileResponse | null>(null);
 const wallet = ref<RoleWalletResponse | null>(null);
@@ -639,6 +695,15 @@ const operationCommissionsResponse = ref<ItemsResponse | null>(null);
 
 const currentTabs = computed(() => roleTabs[activeRole.value]);
 const roleLabel = computed(() => roleNames[activeRole.value]);
+const isUserMineDetail = computed(() => activeRole.value === "user" && activeTab.value === "mine" && mineView.value !== "overview");
+const displayedAssets = computed(() => recentAssets.value.length ? recentAssets.value.slice(0, 4) : mockAssets);
+const filteredAssets = computed(() => displayedAssets.value.filter(asset => {
+  const matchesType = assetFilter.value === "all"
+    || (assetFilter.value === "favorite" && Boolean(asset.metadata?.favorite))
+    || asset.mediaType === assetFilter.value;
+  const matchesSearch = !assetSearch.value.trim() || asset.name.toLowerCase().includes(assetSearch.value.trim().toLowerCase());
+  return matchesType && matchesSearch;
+}));
 const displayName = computed(() => profile.value?.user?.name || auth.value?.user?.name || profile.value?.user?.email || auth.value?.user?.email || "当前用户");
 const userEmail = computed(() => profile.value?.user?.email || auth.value?.user?.email || "-");
 const greetingText = computed(() => `${displayName.value}，欢迎回来`);
@@ -666,6 +731,24 @@ const activeCreation = computed(() => creationModules.find(item => item.id === c
 const activeCreationName = computed(() => activeCreation.value.name);
 const activeCreationModel = computed(() => activeCreation.value.model);
 const activeCreationCost = computed(() => activeCreation.value.cost);
+
+const currentPageTitle = computed(() => {
+  if (activeRole.value === "agent") return "代理工作台";
+  if (activeRole.value === "operation") return "运营中心";
+  if (activeTab.value === "create") return creationMode.value === "ppt" ? "PPT文档生成" : "创作中心";
+  if (activeTab.value === "assets") return "我的作品";
+  if (activeTab.value === "mine") return "我的";
+  return "知启云 AI";
+});
+
+const currentPageSubtitle = computed(() => {
+  if (activeRole.value === "agent") return "用户身份与代理身份可切换";
+  if (activeRole.value === "operation") return "区域经营、代理与订单";
+  if (activeTab.value === "create") return creationMode.value === "ppt" ? "Gamma式输入，移动端轻量化" : "轻易设计 + 多模型工作流";
+  if (activeTab.value === "assets") return "统一查看图片、视频、PPT";
+  if (activeTab.value === "mine") return "账户、钱包、订单与身份";
+  return "用 AI 完成创作和经营增长";
+});
 
 const channelSummary = computed(() => (channelCenter.value?.summary || {}) as AnyRecord);
 const channelCustomers = computed(() => listOf(channelCenter.value?.customers));
@@ -703,6 +786,9 @@ const secondaryMetricValue = computed(() => {
 });
 
 watch(activeRole, (role) => {
+  mineView.value = "overview";
+  selectedMinePurchase.value = null;
+  mineLogoutConfirm.value = false;
   const nextTab = roleTabs[role][0]?.id || "home";
   if (!roleTabs[role].some(item => item.id === activeTab.value)) {
     activeTab.value = nextTab;
@@ -838,9 +924,96 @@ function switchRole(role: RoleId) {
   activeRole.value = role;
 }
 
+function cycleRole() {
+  const index = availableRoles.value.findIndex(role => role.id === activeRole.value);
+  const next = availableRoles.value[(index + 1) % availableRoles.value.length];
+  if (next) switchRole(next.id);
+}
+
+function cyclePptSlides() {
+  const counts = [5, 8, 10, 15, 20];
+  const index = counts.indexOf(pptSlideCount.value);
+  pptSlideCount.value = counts[(index + 1) % counts.length] || 5;
+}
+
+function togglePptLanguage() {
+  pptLanguage.value = pptLanguage.value === "zh" ? "en" : "zh";
+}
+
+function cyclePptModel() {
+  const models = ["GPT-4o-mini", "Kimi K2.6", "DeepSeek V3"];
+  const index = models.indexOf(pptModel.value);
+  pptModel.value = models[(index + 1) % models.length] || models[0];
+}
+
 function selectUserTab(tab: TabId) {
   activeRole.value = "user";
   activeTab.value = tab;
+  if (tab !== "mine") mineView.value = "overview";
+}
+
+function selectTab(tab: TabId) {
+  activeTab.value = tab;
+  if (tab !== "mine") mineView.value = "overview";
+}
+
+async function openMineView(view: MineView) {
+  mineView.value = view;
+  selectedMinePurchase.value = null;
+  mineLogoutConfirm.value = false;
+  if (view === "invite-promotion" && isAgentActive.value && !channelCenter.value) {
+    await loadRoleData("agent");
+  }
+}
+
+function selectMinePurchase(purchase: MinePurchaseOption) {
+  selectedMinePurchase.value = purchase;
+  mineLogoutConfirm.value = false;
+}
+
+async function confirmMinePurchase() {
+  const purchase = selectedMinePurchase.value;
+  if (!purchase || minePurchaseSubmitting.value) return;
+  minePurchaseSubmitting.value = true;
+  try {
+    const created = purchase.kind === "agent"
+      ? await createAgentOrder()
+      : await createRechargeOrder({ id: purchase.id, amountCents: purchase.amountCents, points: purchase.points });
+    if (created) selectedMinePurchase.value = null;
+  } finally {
+    minePurchaseSubmitting.value = false;
+  }
+}
+
+function showInvoiceNotice() {
+  uni.showToast({ title: "电子发票申请入口已预留", icon: "none" });
+}
+
+function showUsageExportNotice() {
+  uni.showToast({ title: "消耗明细导出接口已预留", icon: "none" });
+}
+
+function showPosterNotice() {
+  uni.showToast({ title: isAgentActive.value ? "推广海报生成功能接入中" : "请先升级代理商", icon: "none" });
+}
+
+function openCreation(mode: CreationMode) {
+  selectCreationMode(mode);
+  selectUserTab("create");
+}
+
+function selectCreationMode(mode: CreationMode) {
+  if (mode === creationMode.value) return;
+  creationPromptDrafts.value[creationMode.value] = creationPrompt.value;
+  creationMode.value = mode;
+  creationPrompt.value = creationPromptDrafts.value[mode] || "";
+  creationError.value = "";
+}
+
+function returnToCreationHub() {
+  creationPromptDrafts.value.ppt = creationPrompt.value;
+  selectCreationMode("image");
+  activeTab.value = "create";
 }
 
 function selectAgentTab(tab: TabId) {
@@ -930,21 +1103,23 @@ async function createOrder(endpoint: string, planId: string, amountCents: number
     });
     uni.showToast({ title: successTitle, icon: "success" });
     await refreshAll();
+    return true;
   } catch (error) {
     uni.showToast({ title: error instanceof Error ? error.message : "创建订单失败", icon: "none" });
+    return false;
   }
 }
 
 async function createAgentOrder() {
-  await createOrder("/api/v1/agent/join-order", "plan_agent_join_996", 99600, "代理商订单已创建");
+  return createOrder("/api/v1/agent/join-order", "plan_agent_join_996", 99600, "代理商订单已创建");
 }
 
 async function createMemberPackageOrder() {
-  await createOrder("/api/v1/orders/create", "plan_ai_creator_996", 99600, "会员订单已创建");
+  return createOrder("/api/v1/orders/create", "plan_ai_creator_996", 99600, "会员订单已创建");
 }
 
 async function createOperationOrder() {
-  await createOrder("/api/v1/operation-center/join-order", "plan_operation_center_5000", 500000, "运营中心订单已创建");
+  return createOrder("/api/v1/operation-center/join-order", "plan_operation_center_5000", 500000, "运营中心订单已创建");
 }
 
 async function createRechargeOrder(pack: { id: string; amountCents: number; points: number }) {
@@ -960,8 +1135,10 @@ async function createRechargeOrder(pack: { id: string; amountCents: number; poin
     });
     uni.showToast({ title: "充值订单已创建", icon: "success" });
     await loadWallet();
+    return true;
   } catch (error) {
     uni.showToast({ title: error instanceof Error ? error.message : "创建充值订单失败", icon: "none" });
+    return false;
   }
 }
 
@@ -1001,18 +1178,163 @@ function showChildAgentHint() {
   uni.showToast({ title: "下级代理表单保留在桌面端，小程序展示团队入口", icon: "none" });
 }
 
+function handleGenerateTap() {
+  if (generationSubmitting.value) return;
+  const prompt = String(creationPrompt.value || "").trim();
+  creationError.value = "";
+  if (!prompt) {
+    creationError.value = creationMode.value === "ppt" ? "请先输入演示文稿主题" : "请先输入创作需求";
+    uni.showToast({ title: creationError.value, icon: "none" });
+    return;
+  }
+  if (!(["image", "video", "ppt"] as CreationMode[]).includes(creationMode.value)) {
+    creationError.value = `${activeCreationName.value}暂未开放小程序生成`;
+    uni.showToast({ title: creationError.value, icon: "none" });
+    return;
+  }
+
+  void submitCreation(prompt);
+}
+
+async function submitCreation(prompt: string) {
+  generationSubmitting.value = true;
+  latestGenerationTask.value = {
+    id: "正在创建",
+    title: `${activeCreationName.value}任务提交中`,
+    status: "提交中",
+    tone: "pending"
+  };
+  try {
+    let taskId = "";
+    let taskStatus = "PENDING";
+    if (creationMode.value === "ppt") {
+      const result = await api<{ taskId?: string; id?: string; status?: string }>("/api/v1/ppt/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          slideCount: pptSlideCount.value,
+          language: pptLanguage.value,
+          tone: pptDynamic.value ? "dynamic" : "concise",
+          theme: "business",
+          autoThemeEnabled: true,
+          enableWebSearch: false,
+          textModel: pptModel.value.toLowerCase(),
+          imageSource: "ai",
+          imageModel: "gpt-image-2"
+        })
+      });
+      taskId = String(result.taskId || result.id || "ppt-task");
+      taskStatus = String(result.status || "PENDING").toUpperCase();
+    } else {
+      const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
+      const result = await businessSdk.generation.createTask({
+        mode,
+        prompt,
+        model: activeCreationModel.value,
+        style: mode === "video" ? "cinematic" : "commercial",
+        size: mode === "video" ? "16:9" : "1024x1024",
+        quality: mode === "video" ? "720p" : "standard",
+        count: 1,
+        referenceImages: []
+      });
+      taskId = String(result.id || "generation-task");
+      taskStatus = String(result.status || "PENDING").toUpperCase();
+    }
+
+    latestGenerationTask.value = {
+      id: taskId,
+      title: `${activeCreationName.value}任务已创建`,
+      status: taskStatus,
+      tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending"
+    };
+    uni.showToast({ title: "生成任务已创建", icon: "success" });
+    void pollGenerationTask(taskId, creationMode.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "生成任务创建失败";
+    creationError.value = message;
+    latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
+    uni.showToast({ title: "生成失败，请重试", icon: "none" });
+  } finally {
+    generationSubmitting.value = false;
+  }
+}
+
+async function pollGenerationTask(taskId: string, mode: CreationMode) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    try {
+      if (mode === "ppt") {
+        const task = await api<AnyRecord>(`/api/v1/ppt/tasks/${encodeURIComponent(taskId)}`);
+        const status = rowStatus(task).toUpperCase();
+        latestGenerationTask.value = {
+          id: taskId,
+          title: status === "SUCCESS" ? "PPT 文档生成成功" : "PPT 文档生成中",
+          status,
+          tone: status === "FAILED" ? "danger" : status === "SUCCESS" ? "success" : "pending"
+        };
+        if (["SUCCESS", "FAILED"].includes(status)) {
+          if (status === "SUCCESS") await loadAssets(false);
+          return;
+        }
+      } else {
+        const tasks = await businessSdk.generation.listTasks();
+        const task = tasks.find(item => item.id === taskId);
+        if (!task) continue;
+        const status = String(task.status || "PENDING").toUpperCase();
+        latestGenerationTask.value = {
+          id: taskId,
+          title: ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status) ? `${activeCreationName.value}生成成功` : `${activeCreationName.value}生成中`,
+          status,
+          tone: ["FAILED", "ERROR"].includes(status) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status) ? "success" : "pending"
+        };
+        if (["FAILED", "ERROR", "SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status)) {
+          if (!["FAILED", "ERROR"].includes(status)) await loadAssets(false);
+          return;
+        }
+      }
+    } catch {
+      return;
+    }
+  }
+}
+
 function showComingSoon(moduleName: string) {
   uni.showToast({ title: `${moduleName}入口已就绪，真实生成任务沿用桌面端接口接入`, icon: "none" });
 }
 
 function logout() {
+  mineLogoutConfirm.value = false;
   authStorage.clear();
   uni.removeStorageSync("xianzhiMiniProgramAuth");
   uni.reLaunch({ url: "/pages/WechatLoginPage" });
 }
 
 onMounted(() => {
+  (globalThis as NativeGenerateBridge).__xianzhiMiniProgramGenerate = handleGenerateTap;
+  (globalThis as NativeGenerateBridge).__xianzhiMiniProgramBackToCreation = returnToCreationHub;
   void refreshAll();
+});
+
+onBackPress(() => {
+  if (activeRole.value === "user" && activeTab.value === "mine") {
+    if (selectedMinePurchase.value) {
+      selectedMinePurchase.value = null;
+      return true;
+    }
+    if (mineLogoutConfirm.value) {
+      mineLogoutConfirm.value = false;
+      return true;
+    }
+    if (mineView.value !== "overview") {
+      mineView.value = "overview";
+      return true;
+    }
+  }
+  if (activeRole.value === "user" && activeTab.value === "create" && creationMode.value === "ppt") {
+    returnToCreationHub();
+    return true;
+  }
+  return false;
 });
 </script>
 
@@ -1190,6 +1512,116 @@ onMounted(() => {
 
 .role-content {
   margin-top: 16px;
+}
+
+.home-command-card {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid #dfe4ff;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 92% 12%, rgba(255, 119, 27, 0.18), transparent 36%),
+    linear-gradient(145deg, #ffffff 0%, #f1f3ff 100%);
+  box-shadow: 0 14px 34px rgba(90, 77, 178, 0.1);
+}
+
+.home-command-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.home-command-kicker,
+.home-command-title,
+.home-command-desc,
+.home-capability-icon,
+.home-capability-name,
+.home-capability-cost {
+  display: block;
+}
+
+.home-command-kicker {
+  color: #5a4db2;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.home-command-title {
+  margin-top: 7px;
+  color: #111827;
+  font-size: 23px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.home-command-desc {
+  margin-top: 7px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.home-command-button {
+  width: 88px;
+  height: 42px;
+  margin: 0;
+  flex: 0 0 88px;
+  border-radius: 13px;
+  background: #ff771b;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 10px 22px rgba(255, 119, 27, 0.22);
+}
+
+.home-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.home-capability-card {
+  min-width: 0;
+  min-height: 105px;
+  margin: 0;
+  padding: 13px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.home-capability-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #eef1ff;
+  color: #5a4db2;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.home-capability-name {
+  margin-top: 11px;
+  overflow: hidden;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-capability-cost {
+  margin-top: 4px;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-stack {
@@ -1473,17 +1905,6 @@ onMounted(() => {
   font-size: 13px;
 }
 
-.config-row:first-child,
-.menu-row:first-child {
-  border-top: 0;
-}
-
-.config-row text:last-child,
-.menu-row text:last-child {
-  color: #6b7280;
-  text-align: right;
-}
-
 .wallet-card {
   color: #ffffff;
   background: #111827;
@@ -1493,6 +1914,24 @@ onMounted(() => {
 .wallet-card.agent {
   background: #0f766e;
   border-color: #0f766e;
+}
+
+.profile-wallet-card {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  background: linear-gradient(135deg, #17152b 0%, #5a4db2 100%);
+  border-color: transparent;
+  box-shadow: 0 16px 36px rgba(90, 77, 178, 0.2);
+}
+
+.wallet-unit {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .wallet-label,
@@ -1573,7 +2012,7 @@ onMounted(() => {
   border: 1px solid #e5e7eb;
 }
 
-.menu-row.danger text:first-child {
+.danger-label {
   color: #dc2626;
 }
 
@@ -1638,7 +2077,6 @@ onMounted(() => {
   bottom: 12px;
   z-index: 20;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 8px;
   border-radius: 20px;
@@ -1667,5 +2105,614 @@ onMounted(() => {
   margin-bottom: 4px;
   font-size: 15px;
   font-weight: 800;
+}
+
+/* V3.1 mobile workbench */
+.mini-workbench {
+  padding: 8px 15px calc(110px + env(safe-area-inset-bottom));
+  background: #f8faff;
+}
+
+.native-safe-note {
+  height: env(safe-area-inset-top);
+  min-height: 4px;
+}
+
+.business-header {
+  display: flex;
+  height: 46px;
+  margin-top: 5px;
+  align-items: center;
+  gap: 10px;
+}
+
+.business-logo {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border: 1px solid #dde5ff;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.business-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.business-title {
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 24px;
+}
+
+.business-subtitle {
+  overflow: hidden;
+  color: #697386;
+  font-size: 10px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-badge {
+  width: auto;
+  min-width: 70px;
+  height: 26px;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid #c9d2ff;
+  border-radius: 8px;
+  color: #5b55d6;
+  background: #eef2ff;
+  font-size: 11px;
+  line-height: 24px;
+}
+
+.role-badge.switchable {
+  padding-right: 8px;
+  border-color: #bfcaff;
+  box-shadow: 0 4px 12px rgba(91, 85, 214, 0.1);
+}
+
+.role-switcher {
+  display: none;
+}
+
+.role-content {
+  margin-top: 16px;
+}
+
+.section-stack {
+  gap: 14px;
+}
+
+.mini-workbench button {
+  letter-spacing: 0;
+}
+
+.v31-kicker,
+.v31-hero-title,
+.v31-hero-copy,
+.v31-metric-value,
+.v31-metric-label,
+.v31-section-title,
+.v31-tool-name,
+.v31-tool-desc,
+.v31-inspiration-title,
+.v31-profile-name,
+.v31-profile-meta,
+.v31-work-title,
+.v31-works-note,
+.v31-ppt-title,
+.v31-draft-title,
+.v31-draft-copy,
+.v31-prompt-title,
+.v31-workflow-title,
+.v31-workflow-copy {
+  display: block;
+}
+
+.v31-home-hero {
+  min-height: 156px;
+  padding: 17px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  color: #ffffff;
+  background: #15192d;
+  box-shadow: 0 14px 30px rgba(23, 28, 56, 0.16);
+}
+
+.v31-kicker {
+  color: #aeb8ff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.v31-hero-title {
+  margin-top: 6px;
+  font-size: 19px;
+  font-weight: 900;
+  line-height: 28px;
+}
+
+.v31-hero-copy {
+  margin-top: 1px;
+  color: #cdd5f5;
+  font-size: 12px;
+}
+
+.v31-hero-row {
+  display: grid;
+  grid-template-columns: 104px 88px minmax(90px, 1fr);
+  gap: 10px;
+  margin-top: 11px;
+  align-items: center;
+}
+
+.v31-mini-metric {
+  height: 58px;
+  padding: 7px 9px;
+  box-sizing: border-box;
+  border-radius: 8px;
+}
+
+.v31-mini-metric.purple { background: #f4f3ff; }
+.v31-mini-metric.orange { background: #fff7ed; }
+.v31-mini-metric.purple .v31-metric-value { color: #5b55d6; }
+.v31-mini-metric.orange .v31-metric-value { color: #ff6b1a; }
+
+.v31-metric-value {
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 21px;
+}
+
+.v31-metric-label {
+  margin-top: 2px;
+  color: #667085;
+  font-size: 10px;
+}
+
+.v31-orange-button,
+.v31-generate-button {
+  display: grid;
+  height: 38px;
+  margin: 0;
+  padding: 0 16px;
+  place-items: center;
+  border-radius: 10px;
+  color: #ffffff;
+  background: #ff7a1a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.v31-section-title {
+  color: #111827;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 20px;
+}
+
+.v31-section-title.inside { margin-bottom: 12px; }
+
+.v31-tool-grid,
+.v31-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #e4e9f7;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.v31-tool-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.v31-tool-card,
+.v31-mode-card {
+  display: flex;
+  min-width: 0;
+  height: 64px;
+  margin: 0;
+  padding: 8px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e5eaf6;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: left;
+  box-shadow: 0 3px 10px rgba(23, 28, 56, 0.025);
+}
+
+.v31-tool-card {
+  height: 58px;
+  padding: 6px;
+  gap: 6px;
+}
+
+.v31-mode-card.active { border-color: #c9d2ff; background: #f8f8ff; }
+
+.v31-tool-icon,
+.v31-menu-icon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8d5ff;
+  border-radius: 8px;
+  color: #5b55d6;
+  background: #f4f3ff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.v31-tool-icon.orange, .v31-menu-icon.orange { color: #ff6b1a; border-color: #ffe2cc; background: #fff7ed; }
+.v31-tool-icon.green, .v31-menu-icon.green { color: #079455; border-color: #cbf5df; background: #ecfdf5; }
+.v31-tool-icon.blue { color: #2563eb; border-color: #cfe1ff; background: #eff6ff; }
+
+.v31-tool-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.v31-tool-name {
+  overflow: hidden;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v31-tool-desc {
+  display: -webkit-box;
+  margin-top: 3px;
+  overflow: hidden;
+  color: #697386;
+  font-size: 9px;
+  line-height: 13px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.v31-inspiration-grid,
+.v31-work-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid #e4e9f7;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.v31-inspiration-card,
+.v31-work-card {
+  min-width: 0;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid #e5eaf6;
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: left;
+  box-shadow: 0 4px 12px rgba(23, 28, 56, 0.035);
+}
+
+.v31-preview,
+.v31-work-preview {
+  display: flex;
+  width: 100%;
+  height: 86px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #5b55d6;
+  background: #eef2ff;
+  font-size: 25px;
+  font-weight: 900;
+}
+
+.v31-preview.orange, .v31-work-preview.orange { color: #ff6b1a; background: #fff2e8; }
+.v31-work-preview.green { color: #079455; background: #eafbf2; }
+
+.v31-inspiration-title,
+.v31-work-title {
+  margin-top: 9px;
+  overflow: hidden;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v31-card-footer {
+  display: flex;
+  margin-top: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.v31-chip {
+  display: inline-flex;
+  min-height: 24px;
+  padding: 0 12px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c9d2ff;
+  border-radius: 8px;
+  color: #5b55d6;
+  background: #eef2ff;
+  font-size: 11px;
+}
+
+.v31-chip.orange { color: #ff6b1a; border-color: #ffd0b3; background: #fff2e8; }
+.v31-chip.green { color: #168a54; border-color: #bdeecd; background: #eafbf2; }
+.v31-link { color: #5b55d6; font-size: 10px; }
+
+.v31-prompt-panel,
+.v31-ppt-panel,
+.v31-draft-card,
+.v31-filter-card,
+.v31-works-card,
+.v31-wallet-panel,
+.v31-menu-panel {
+  padding: 15px;
+  border: 1px solid #dde5ff;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(23, 28, 56, 0.06);
+}
+
+.v31-subpage-nav {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 10px;
+}
+
+.v31-back-button {
+  display: grid;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #dfe5f2;
+  border-radius: 10px;
+  color: #344054;
+  background: #ffffff;
+  font-size: 27px;
+  line-height: 1;
+}
+
+.v31-back-button::after { display: none; }
+.v31-subpage-title { display: block; color: #111827; font-size: 15px; font-weight: 900; }
+.v31-subpage-copy { display: block; margin-top: 2px; color: #697386; font-size: 10px; }
+
+.v31-prompt-title,
+.v31-ppt-title {
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 26px;
+}
+
+.v31-one-line-input,
+.v31-ppt-input {
+  width: 100%;
+  height: 78px;
+  margin-top: 10px;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 1px solid #e3e8f2;
+  border-radius: 8px;
+  color: #111827;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.v31-ppt-input { height: 96px; }
+
+.v31-prompt-actions,
+.v31-ppt-options,
+.v31-draft-actions,
+.v31-recharge-row,
+.v31-batch-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.v31-prompt-actions .v31-generate-button {
+  min-width: 90px;
+  height: 30px;
+  margin-left: auto;
+}
+
+.v31-generate-button.disabled,
+.v31-ppt-submit.disabled {
+  opacity: 0.58;
+  pointer-events: none;
+}
+
+.v31-action-pressed { opacity: 0.76; transform: scale(0.98); }
+
+.v31-generation-error {
+  display: block;
+  margin-top: 9px;
+  color: #dc2626;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.v31-generation-state {
+  display: flex;
+  min-height: 62px;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #c9d2ff;
+  border-radius: 12px;
+  background: #f4f3ff;
+}
+
+.v31-generation-state.success { border-color: #bdeecd; background: #ecfdf5; }
+.v31-generation-state.danger { border-color: #fecaca; background: #fff1f2; }
+.v31-generation-title { display: block; color: #111827; font-size: 13px; font-weight: 800; }
+.v31-generation-meta { display: block; max-width: 230px; margin-top: 4px; overflow: hidden; color: #697386; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.v31-generation-state button { width: auto; min-width: 72px; height: 32px; margin: 0; padding: 0 10px; border-radius: 8px; color: #5b55d6; background: #ffffff; font-size: 11px; }
+
+.v31-workflow-card,
+.v31-profile-hero {
+  padding: 15px;
+  border-radius: 12px;
+  color: #ffffff;
+  background: #15192d;
+}
+
+.v31-workflow-title { font-size: 15px; font-weight: 900; }
+.v31-workflow-copy { margin-top: 4px; color: #cdd5f5; font-size: 12px; }
+.v31-workflow-tags { display: flex; gap: 10px; margin-top: 9px; }
+.v31-workflow-tags text { min-width: 76px; padding: 5px 8px; border-radius: 8px; background: #111827; font-size: 10px; text-align: center; }
+
+.v31-ppt-options button,
+.v31-example-grid button,
+.v31-draft-actions button,
+.v31-filter-card button,
+.v31-recharge-row button,
+.v31-batch-actions button {
+  width: auto;
+  min-width: 92px;
+  height: 32px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid #e3e8f2;
+  border-radius: 8px;
+  color: #475467;
+  background: #f5f7fb;
+  font-size: 11px;
+  line-height: 30px;
+}
+
+.v31-ppt-options button.active,
+.v31-filter-card button.active,
+.v31-batch-actions button.active { color: #5b55d6; border-color: #c9d2ff; background: #eef2ff; }
+.v31-ppt-options .v31-ppt-submit { display: grid; min-width: 50px; height: 50px; margin-left: auto; place-items: center; border: 0; border-radius: 14px; color: #ffffff; background: #ffb47d; font-size: 24px; line-height: 1; }
+
+.v31-example-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  padding: 13px 11px;
+  border: 1px solid #dde5ff;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.v31-example-grid button { width: 100%; color: #5b55d6; border-color: #c9d2ff; background: #eef2ff; }
+.v31-draft-title { color: #111827; font-size: 15px; font-weight: 900; }
+.v31-draft-copy { margin-top: 5px; color: #697386; font-size: 11px; line-height: 18px; }
+.v31-draft-actions button { color: #ff6b1a; border-color: #ffd0b3; background: #fff7ed; }
+.v31-draft-actions button.dark { color: #ffffff; border-color: #15192d; background: #15192d; }
+
+.v31-filter-card { padding: 12px; }
+.v31-filter-row { display: flex; gap: 8px; overflow-x: auto; }
+.v31-filter-card button { min-width: 54px; flex: 0 0 auto; }
+.v31-search-strip { width: 100%; height: 34px; margin-top: 10px; padding: 0 12px; box-sizing: border-box; border: 1px solid #e5eaf6; border-radius: 8px; color: #111827; background: #f8fafc; font-size: 11px; }
+.v31-works-card { padding: 11px; }
+.v31-works-card .v31-work-grid { padding: 0; border: 0; }
+.v31-works-note { margin-top: 14px; color: #697386; font-size: 11px; }
+.v31-empty-state { display: flex; min-height: 150px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #77829a; font-size: 12px; }
+.v31-empty-state button { width: auto; height: 32px; margin: 0; padding: 0 16px; border-radius: 8px; color: #5b55d6; background: #eef2ff; font-size: 11px; }
+
+.v31-profile-hero {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.v31-avatar { width: 54px; height: 54px; border-radius: 14px; background: #eef2ff; }
+.v31-profile-name { font-size: 16px; font-weight: 900; }
+.v31-profile-meta { margin-top: 4px; color: #cdd5f5; font-size: 11px; }
+.v31-upgrade-button { grid-column: 2; width: 96px; height: 28px; margin: 0; color: #ff6b1a; border-radius: 8px; background: #fff2e8; font-size: 11px; line-height: 28px; }
+.v31-wallet-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.v31-wallet-metric { padding: 12px; border: 1px solid #d8d5ff; border-radius: 8px; background: #f4f3ff; }
+.v31-wallet-metric.orange { border-color: #ffe2cc; background: #fff7ed; }
+.v31-wallet-metric text { display: block; color: #5b55d6; font-size: 16px; font-weight: 900; }
+.v31-wallet-metric.orange text { color: #ff6b1a; }
+.v31-wallet-metric text + text { margin-top: 4px; color: #697386; font-size: 10px; font-weight: 500; }
+.v31-recharge-row button { min-width: 0; flex: 1; }
+.v31-recharge-row button.primary { color: #5b55d6; border-color: #c9d2ff; background: #eef2ff; }
+.v31-recharge-row button.orange { color: #ff6b1a; border-color: #ffd0b3; background: #fff7ed; }
+
+.v31-menu-panel { display: flex; flex-direction: column; gap: 10px; padding: 11px; }
+.v31-menu-panel > button { display: flex; width: 100%; min-height: 54px; margin: 0; padding: 10px; align-items: center; gap: 10px; border: 1px solid #e5eaf6; border-radius: 8px; background: #ffffff; text-align: left; }
+.v31-menu-panel > button view { min-width: 0; flex: 1; }
+.v31-menu-panel > button view text { display: block; color: #111827; font-size: 12px; font-weight: 800; }
+.v31-menu-panel > button view text + text { margin-top: 3px; color: #697386; font-size: 9px; font-weight: 500; }
+.v31-menu-panel > button.danger view text { color: #dc2626; }
+
+.bottom-tabs {
+  left: 10px;
+  right: 10px;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  gap: 6px;
+  padding: 7px;
+  border-color: #e4e9f7;
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgba(23, 28, 56, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.tab-button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 56px;
+  min-height: 56px;
+  margin: 0;
+  padding: 6px 2px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  border-radius: 10px;
+  color: #697386;
+  line-height: 1.15;
+}
+
+.tab-button::after { display: none; }
+
+.tab-button.active {
+  color: #5b55d6;
+  background: #f1f0ff;
+}
+
+.tab-button .tab-icon {
+  margin-bottom: 3px;
+  font-size: 17px;
+  line-height: 1;
+}
+
+@media (max-width: 340px) {
+  .v31-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .v31-hero-row { grid-template-columns: 1fr 1fr; }
+  .v31-orange-button { grid-column: 1 / -1; }
 }
 </style>

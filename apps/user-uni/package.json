@@ -7,7 +7,7 @@
                     "dev":  "uni -p h5 --host 0.0.0.0",
                     "build":  "uni build -p h5 && node scripts/copy-static.cjs",
                     "typecheck":  "vue-tsc --noEmit",
-                    "preview":  "vite preview --host 0.0.0.0 dist/build/h5",
+                    "preview":  "vite preview --host 0.0.0.0 --outDir dist/build/h5",
                     "build:h5":  "uni build -p h5",
                     "build:mp-weixin":  "uni build -p mp-weixin && node scripts/patch-mp-native-login.cjs",
                     "build:app-plus":  "uni build -p app-plus",

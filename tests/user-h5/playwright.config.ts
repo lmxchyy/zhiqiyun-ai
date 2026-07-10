@@ -1,8 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const baseURL = process.env.USER_H5_BASE_URL || "http://127.0.0.1:4173";
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const browserChannel = process.platform === "win32" ? { channel: "msedge" as const } : {};
+const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const userUniRoot = path.join(repoRoot, "apps/user-uni");
 
 export default defineConfig({
   testDir: ".",
@@ -16,7 +20,8 @@ export default defineConfig({
     trace: "retain-on-failure"
   },
   webServer: {
-    command: `${npmCommand} --prefix apps/user-uni run preview -- --host 127.0.0.1 --port 4173`,
+    command: `${npmCommand} run preview -- --host 127.0.0.1 --port 4173`,
+    cwd: userUniRoot,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000

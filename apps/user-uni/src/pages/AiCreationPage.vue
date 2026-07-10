@@ -354,6 +354,7 @@
           </view>
         </view>
       </scroll-view>
+      <KnowledgeMiniChat v-else-if="activeModule === 'agents'" />
       <view v-else-if="activeModule === 'wirelessCanvas'" class="wireless-canvas-page">
         <view v-if="!wirelessCanvasFrameLoaded" class="wireless-canvas-loading" role="status" aria-live="polite">
           <text>无线画布加载中</text>
@@ -1094,6 +1095,7 @@ import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 
 declare const wx: { getSystemInfoSync?: () => { platform?: string; brand?: string } } | undefined;
 import PptDocumentGeneration from "../components/PptDocumentGeneration.vue";
+import KnowledgeMiniChat from "../components/KnowledgeMiniChat.vue";
 import type { Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask, ModelInfo, PointAccount } from "../types";
 
 const rawEnv = (import.meta as unknown as { env?: Record<string, string | boolean | undefined> }).env || {};

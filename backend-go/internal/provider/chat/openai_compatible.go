@@ -182,7 +182,7 @@ func (p OpenAICompatible) StreamChat(ctx context.Context, req generation.CreateR
 			ch <- Chunk{Done: true, Metadata: map[string]any{"error": err.Error()}}
 			return
 		}
-		ch <- Chunk{Delta: response.Message.Content, Done: true, Metadata: response.Metadata}
+		ch <- Chunk{Delta: response.Message.Content, Done: true, Usage: response.Usage, Metadata: response.Metadata}
 	}()
 	return ch, nil
 }
