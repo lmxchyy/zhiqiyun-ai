@@ -11,7 +11,294 @@
     {
       "path": "pages/MiniProgramHomePage",
       "style": {
+        "navigationBarTitleText": "正在进入工作台",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserHomePage",
+      "style": {
         "navigationBarTitleText": "知启云 AI",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserCreationPage",
+      "style": {
+        "navigationBarTitleText": "创作中心",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserImageCreationPage",
+      "style": {
+        "navigationBarTitleText": "AI 生图",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserVideoCreationPage",
+      "style": {
+        "navigationBarTitleText": "视频生成",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserPptCreationPage",
+      "style": {
+        "navigationBarTitleText": "PPT 文档生成",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserInfographicCreationPage",
+      "style": {
+        "navigationBarTitleText": "信息图",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserReviewCreationPage",
+      "style": {
+        "navigationBarTitleText": "易共识",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserAgentCreationPage",
+      "style": {
+        "navigationBarTitleText": "AI Agent",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserAssetsPage",
+      "style": {
+        "navigationBarTitleText": "我的作品",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserWalletPage",
+      "style": {
+        "navigationBarTitleText": "钱包与点数",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserMinePage",
+      "style": {
+        "navigationBarTitleText": "我的",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserAgentUpgradePage",
+      "style": {
+        "navigationBarTitleText": "升级代理商",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserRechargeHistoryPage",
+      "style": {
+        "navigationBarTitleText": "充值记录",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserUsageDetailsPage",
+      "style": {
+        "navigationBarTitleText": "消耗明细",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserIdentityPermissionsPage",
+      "style": {
+        "navigationBarTitleText": "身份与权限",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserInvitePromotionPage",
+      "style": {
+        "navigationBarTitleText": "邀请与推广",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserProfileEditPage",
+      "style": {
+        "navigationBarTitleText": "编辑资料",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserSettingsPage",
+      "style": {
+        "navigationBarTitleText": "账户设置",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserRechargePlansPage",
+      "style": {
+        "navigationBarTitleText": "充值方案",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserOrdersPage",
+      "style": {
+        "navigationBarTitleText": "我的订单",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserOrderDetailPage",
+      "style": {
+        "navigationBarTitleText": "订单详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserOrderConfirmPage",
+      "style": {
+        "navigationBarTitleText": "确认订单",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserOrderResultPage",
+      "style": {
+        "navigationBarTitleText": "订单结果",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserRefundRequestPage",
+      "style": {
+        "navigationBarTitleText": "退款申请",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentOverviewPage",
+      "style": {
+        "navigationBarTitleText": "代理商概览",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentPromotionPage",
+      "style": {
+        "navigationBarTitleText": "代理推广",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentCustomersPage",
+      "style": {
+        "navigationBarTitleText": "拓展客户",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentCommissionPage",
+      "style": {
+        "navigationBarTitleText": "代理分润",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentMinePage",
+      "style": {
+        "navigationBarTitleText": "代理商资料",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentTeamPage",
+      "style": {
+        "navigationBarTitleText": "代理团队",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentTeamMemberPage",
+      "style": {
+        "navigationBarTitleText": "团队成员",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentCustomerDetailPage",
+      "style": {
+        "navigationBarTitleText": "客户详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentOrdersPage",
+      "style": {
+        "navigationBarTitleText": "客户订单",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentWithdrawalsPage",
+      "style": {
+        "navigationBarTitleText": "提现记录",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentWithdrawalApplyPage",
+      "style": {
+        "navigationBarTitleText": "申请提现",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentInviteRecordsPage",
+      "style": {
+        "navigationBarTitleText": "邀请记录",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operation/OperationOverviewPage",
+      "style": {
+        "navigationBarTitleText": "运营中心概览",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operation/OperationAgentsPage",
+      "style": {
+        "navigationBarTitleText": "代理商团队",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operation/OperationOrdersPage",
+      "style": {
+        "navigationBarTitleText": "区域订单",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operation/OperationCommissionPage",
+      "style": {
+        "navigationBarTitleText": "中心分润",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operation/OperationMinePage",
+      "style": {
+        "navigationBarTitleText": "运营中心资料",
         "navigationStyle": "custom"
       }
     }

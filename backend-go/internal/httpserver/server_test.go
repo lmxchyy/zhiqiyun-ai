@@ -2383,6 +2383,56 @@ func TestChangePasswordPersistsForLogin(t *testing.T) {
 	}
 }
 
+func TestMemberCanUpdateOwnProfileWithoutChangingPoints(t *testing.T) {
+	server := New(config.Config{
+		Addr:           ":0",
+		DataPath:       filepath.Join(t.TempDir(), "store.json"),
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	})
+	token := loginToken(t, server.Handler, "agent1@xianzhi.ai", "Agent123!")
+
+	before := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/points/account", nil, token)
+	if before.Code != http.StatusOK {
+		t.Fatalf("points before profile update status = %d, body = %s", before.Code, before.Body.String())
+	}
+	var beforeBody struct {
+		Account pointAccount `json:"account"`
+	}
+	if err := json.NewDecoder(before.Body).Decode(&beforeBody); err != nil {
+		t.Fatal(err)
+	}
+
+	updated := authedRequest(t, server.Handler, http.MethodPatch, "/api/v1/member/profile", bytes.NewBufferString(`{"name":"代理一号更新","email":"agent1.updated@xianzhi.ai"}`), token)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("profile update status = %d, body = %s", updated.Code, updated.Body.String())
+	}
+	profile := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/member/profile", nil, token)
+	if profile.Code != http.StatusOK {
+		t.Fatalf("profile after update status = %d, body = %s", profile.Code, profile.Body.String())
+	}
+	var profileBody struct {
+		User adminUser `json:"user"`
+	}
+	if err := json.NewDecoder(profile.Body).Decode(&profileBody); err != nil {
+		t.Fatal(err)
+	}
+	if profileBody.User.Name != "代理一号更新" || profileBody.User.Email != "agent1.updated@xianzhi.ai" {
+		t.Fatalf("updated profile = %+v", profileBody.User)
+	}
+
+	after := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/points/account", nil, token)
+	var afterBody struct {
+		Account pointAccount `json:"account"`
+	}
+	if err := json.NewDecoder(after.Body).Decode(&afterBody); err != nil {
+		t.Fatal(err)
+	}
+	if afterBody.Account.Available != beforeBody.Account.Available {
+		t.Fatalf("points changed after profile update: before=%d after=%d", beforeBody.Account.Available, afterBody.Account.Available)
+	}
+}
+
 type memoryAuthSessions struct {
 	mu     sync.Mutex
 	userID map[string]string

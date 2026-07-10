@@ -189,6 +189,7 @@
             <text class="wallet-value">{{ formatNumber(pointBalance) }}</text>
             <text class="wallet-copy">冻结 {{ formatNumber(pointFrozen) }} 点 · 订单 {{ userOrders.length }} 笔</text>
           </view>
+          <view class="v31-batch-actions"><button class="active" @click="openFeaturePage(miniProgramFeaturePages.userRechargePlans)">全部充值方案</button><button @click="openFeaturePage(miniProgramFeaturePages.userOrders)">我的订单</button></view>
 
           <view class="section-card">
             <view class="section-header compact">
@@ -261,48 +262,20 @@
 
       <template v-else-if="activeRole === 'agent'">
         <view v-if="activeTab === 'overview'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header">
-              <view>
-                <text class="section-kicker">代理商概览</text>
-                <text class="section-title">{{ agentName }}</text>
-              </view>
-              <text class="soft-tag">{{ agentLevelLabel }}</text>
-            </view>
-            <view class="quick-grid">
-              <view class="quick-item">
-                <text class="quick-value">{{ formatNumber(summaryNumber(channelSummary, "directCustomers")) }}</text>
-                <text class="quick-label">拓展客户</text>
-              </view>
-              <view class="quick-item">
-                <text class="quick-value">{{ formatNumber(summaryNumber(channelSummary, "childAgents")) }}</text>
-                <text class="quick-label">下级代理</text>
-              </view>
-              <view class="quick-item">
-                <text class="quick-value">{{ formatCurrency(summaryNumber(channelSummary, "totalCommission")) }}</text>
-                <text class="quick-label">累计分润</text>
-              </view>
-            </view>
+          <view class="agent-v4-hero">
+            <view class="agent-v4-hero-top"><view><text>本月预估分润</text><text>{{ formatCurrency(summaryNumber(channelSummary, "totalCommission")) }}</text></view><text>{{ agentLevelLabel }}</text></view>
+            <text class="agent-v4-copy">登录后优先查看推广增长、客户、订单与结算结果。</text>
+            <view class="agent-v4-metrics"><view><text>{{ formatNumber(summaryNumber(channelSummary, "directCustomers")) }}</text><text>客户</text></view><view><text>{{ formatNumber(summaryNumber(channelSummary, "childAgents")) }}</text><text>团队</text></view><view><text>{{ formatCurrency(summaryNumber(channelSummary, "availableToWithdraw")) }}</text><text>可提现</text></view></view>
           </view>
 
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">待处理</text>
-              <button type="button" class="text-button" @click="selectAgentTab('commission')">查看分润</button>
-            </view>
-            <view class="config-row">
-              <text>待结算佣金</text>
-              <text>{{ formatCurrency(summaryNumber(channelSummary, "pendingCommission")) }}</text>
-            </view>
-            <view class="config-row">
-              <text>可提现金额</text>
-              <text>{{ formatCurrency(summaryNumber(channelSummary, "availableToWithdraw")) }}</text>
-            </view>
-            <view class="config-row">
-              <text>提现审核中</text>
-              <text>{{ formatCurrency(summaryNumber(channelSummary, "pendingWithdrawal")) }}</text>
-            </view>
+          <view class="agent-v4-entry-card">
+            <view class="section-header compact"><text class="section-title">经营入口</text><text class="soft-tag">{{ agentName }}</text></view>
+            <button @click="selectAgentTab('promotion')"><text class="agent-v4-icon green">推</text><view><text>推广中心</text><text>专属链接、小程序分享与邀请记录</text></view><text>{{ conversionRate }}% 转化</text></button>
+            <button @click="selectAgentTab('customers')"><text class="agent-v4-icon purple">客</text><view><text>客户管理</text><text>绑定客户与客户订单</text></view><text>{{ channelCustomers.length }} 人</text></button>
+            <button @click="selectAgentTab('commission')"><text class="agent-v4-icon green">润</text><view><text>分润中心</text><text>订单分润与提现记录</text></view><text>{{ formatCurrency(summaryNumber(channelSummary, "availableToWithdraw")) }}</text></button>
+            <button @click="openFeaturePage(miniProgramFeaturePages.agentTeam)"><text class="agent-v4-icon orange">队</text><view><text>团队管理</text><text>直属代理与成员业绩</text></view><text>{{ formatNumber(summaryNumber(channelSummary, "childAgents")) }} 人</text></button>
           </view>
+          <button class="agent-v4-cta" @click="selectAgentTab('promotion')">查看推广数据</button>
         </view>
 
         <view v-else-if="activeTab === 'promotion'" class="section-stack">
@@ -319,6 +292,7 @@
             </view>
             <button type="button" class="primary-button" open-type="share">微信分享</button>
             <button type="button" class="outline-button" @click="copyInviteLink">复制推广链接</button>
+            <button type="button" class="outline-button" @click="openFeaturePage(miniProgramFeaturePages.agentInviteRecords)">查看邀请记录</button>
           </view>
 
           <view class="section-card">
@@ -344,7 +318,7 @@
               <text class="soft-tag">{{ channelCustomers.length }} 人</text>
             </view>
             <view v-if="channelCustomers.length" class="list-stack">
-              <view v-for="customer in channelCustomers" :key="rowKey(customer)" class="list-item">
+              <view v-for="customer in channelCustomers" :key="rowKey(customer)" class="list-item" @click="openCustomerDetail(customer)">
                 <view>
                   <text class="list-title">{{ customerName(customer) }}</text>
                   <text class="list-meta">{{ customerEmail(customer) }}</text>
@@ -366,6 +340,7 @@
             <text class="wallet-copy">累计 {{ formatCurrency(summaryNumber(channelSummary, "totalCommission")) }} · 已提现 {{ formatCurrency(summaryNumber(channelSummary, "withdrawn")) }}</text>
             <button type="button" class="wallet-button" @click="requestWithdrawal">申请提现</button>
           </view>
+          <button type="button" class="outline-button" @click="openFeaturePage(miniProgramFeaturePages.agentWithdrawals)">查看提现记录</button>
 
           <view class="section-card">
             <view class="section-header compact">
@@ -414,6 +389,7 @@
               <text>{{ agentCondition("keepCondition") }}</text>
             </view>
             <button type="button" class="outline-button" @click="showChildAgentHint">拓展下级代理</button>
+            <view class="v31-batch-actions"><button class="active" @click="openFeaturePage(miniProgramFeaturePages.agentTeam)">团队成员</button><button @click="openFeaturePage(miniProgramFeaturePages.agentOrders)">客户订单</button></view>
           </view>
         </view>
       </template>
@@ -550,6 +526,17 @@ import type { MinePurchaseOption, MineView } from "../types";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 import type { ItemsResponse, MemberProfileResponse, OperationProfileResponse, RoleWalletResponse } from "@xianzhi/business-sdk";
 import type { Asset, AuthResponse, ChannelAgent, ChannelCenterResponse } from "../types";
+import {
+  miniProgramCreationPages,
+  miniProgramFeaturePages,
+  miniProgramMinePages,
+  rolePage
+} from "../config/miniProgramPages";
+import type {
+  MiniProgramCreationMode,
+  MiniProgramRoleId,
+  MiniProgramTabId
+} from "../config/miniProgramPages";
 
 type NativeGenerateBridge = typeof globalThis & {
   __xianzhiMiniProgramGenerate?: () => void;
@@ -570,10 +557,21 @@ defineOptions({
 });
 
 type AnyRecord = Record<string, unknown>;
-type RoleId = "user" | "agent" | "operation";
-type TabId = "home" | "create" | "assets" | "wallet" | "mine" | "overview" | "promotion" | "customers" | "commission" | "agents" | "orders";
-type CreationMode = "image" | "video" | "ppt" | "infographic" | "review" | "agent";
+type RoleId = MiniProgramRoleId;
+type TabId = MiniProgramTabId;
+type CreationMode = MiniProgramCreationMode;
 type AssetFilter = "all" | "image" | "video" | "document" | "favorite";
+
+const props = withDefaults(defineProps<{
+  initialRole?: RoleId;
+  initialTab?: TabId;
+  initialCreationMode?: CreationMode;
+  initialMineView?: MineView;
+}>(), {
+  initialRole: "user",
+  initialTab: "home",
+  initialMineView: "overview"
+});
 
 interface PromotionInfo {
   inviteCode?: string;
@@ -593,6 +591,7 @@ const roleTabs: Record<RoleId, Array<{ id: TabId; label: string; icon: string }>
     { id: "home", label: "首页", icon: "⌂" },
     { id: "create", label: "创作", icon: "＋" },
     { id: "assets", label: "作品", icon: "▣" },
+    { id: "wallet", label: "钱包", icon: "点" },
     { id: "mine", label: "我的", icon: "○" }
   ],
   agent: [
@@ -653,9 +652,9 @@ const auth = ref<AuthResponse | null>(null);
 const token = ref("");
 const pageLoading = ref(false);
 const pageError = ref("");
-const activeRole = ref<RoleId>("user");
-const activeTab = ref<TabId>("home");
-const creationMode = ref<CreationMode>("image");
+const activeRole = ref<RoleId>(props.initialRole);
+const activeTab = ref<TabId>(props.initialTab);
+const creationMode = ref<CreationMode>(props.initialCreationMode || "image");
 const creationPrompt = ref("");
 const creationPromptDrafts = ref<Record<CreationMode, string>>({
   image: "",
@@ -674,8 +673,7 @@ const pptLanguage = ref<"zh" | "en">("zh");
 const pptModel = ref("GPT-4o-mini");
 const assetFilter = ref<AssetFilter>("all");
 const assetSearch = ref("");
-const roleInitialized = ref(false);
-const mineView = ref<MineView>("overview");
+const mineView = ref<MineView>(props.initialMineView);
 const selectedMinePurchase = ref<MinePurchaseOption | null>(null);
 const minePurchaseSubmitting = ref(false);
 const mineLogoutConfirm = ref(false);
@@ -737,6 +735,7 @@ const currentPageTitle = computed(() => {
   if (activeRole.value === "operation") return "运营中心";
   if (activeTab.value === "create") return creationMode.value === "ppt" ? "PPT文档生成" : "创作中心";
   if (activeTab.value === "assets") return "我的作品";
+  if (activeTab.value === "wallet") return "钱包与点数";
   if (activeTab.value === "mine") return "我的";
   return "知启云 AI";
 });
@@ -746,6 +745,7 @@ const currentPageSubtitle = computed(() => {
   if (activeRole.value === "operation") return "区域经营、代理与订单";
   if (activeTab.value === "create") return creationMode.value === "ppt" ? "Gamma式输入，移动端轻量化" : "轻易设计 + 多模型工作流";
   if (activeTab.value === "assets") return "统一查看图片、视频、PPT";
+  if (activeTab.value === "wallet") return "充值、点数余额与消耗记录";
   if (activeTab.value === "mine") return "账户、钱包、订单与身份";
   return "用 AI 完成创作和经营增长";
 });
@@ -762,6 +762,11 @@ const promotionInfo = computed<PromotionInfo>(() => (channelCenter.value as unkn
 const inviteCode = computed(() => promotionInfo.value.inviteCode || currentAgent.value?.inviteCode || rowString(currentAgent.value || {}, "inviteCode") || "ZQAI996");
 const inviteLink = computed(() => promotionInfo.value.inviteLink || promotionInfo.value.landingURL || rowString(currentAgent.value || {}, "inviteLink") || `https://xianzhi.ai/app?invite=${inviteCode.value}`);
 const sharePath = computed(() => `/pages/WechatLoginPage?invite=${encodeURIComponent(inviteCode.value)}`);
+const conversionRate = computed(() => {
+  const visits = summaryNumber(channelSummary.value, "visits");
+  const orders = summaryNumber(channelSummary.value, "orders");
+  return visits > 0 ? Math.round(orders / visits * 100) : 0;
+});
 
 const operationName = computed(() => rowString(operationProfile.value?.operationCenter || {}, "name") || "知启云运营中心");
 const operationStatus = computed(() => rowString(operationProfile.value?.operationCenter || {}, "status") || "ACTIVE");
@@ -785,18 +790,12 @@ const secondaryMetricValue = computed(() => {
   return `${summaryNumber(channelSummary.value, "directCustomers")}`;
 });
 
-watch(activeRole, (role) => {
-  mineView.value = "overview";
-  selectedMinePurchase.value = null;
-  mineLogoutConfirm.value = false;
-  const nextTab = roleTabs[role][0]?.id || "home";
-  if (!roleTabs[role].some(item => item.id === activeTab.value)) {
-    activeTab.value = nextTab;
-  } else {
-    activeTab.value = nextTab;
-  }
-  void loadRoleData(role);
+watch(() => props.initialRole, role => { activeRole.value = role; });
+watch(() => props.initialTab, tab => { activeTab.value = tab; });
+watch(() => props.initialCreationMode, mode => {
+  if (mode) creationMode.value = mode;
 });
+watch(() => props.initialMineView, view => { mineView.value = view; });
 
 onShareAppMessage(() => ({
   title: "知启云 AI 邀请你一起创作",
@@ -912,16 +911,19 @@ function readAuth() {
   }
 }
 
-function inferInitialRole() {
-  if (hasOperationHint()) return "operation";
-  const workspace = String(auth.value?.workspace || "").toLowerCase();
-  const role = String(auth.value?.user?.role || "").toLowerCase();
-  if (workspace === "agent" || role.includes("agent") || auth.value?.agent || profile.value?.agent) return "agent";
-  return "user";
+function replacePage(url: string) {
+  const pages = getCurrentPages();
+  const currentPage = pages[pages.length - 1] as { route?: string } | undefined;
+  const targetRoute = url.replace(/^\//, "").split("?")[0];
+  if (currentPage?.route === targetRoute) return;
+  uni.redirectTo({
+    url,
+    fail: () => uni.reLaunch({ url })
+  });
 }
 
 function switchRole(role: RoleId) {
-  activeRole.value = role;
+  replacePage(rolePage(role, role === "user" ? "home" : "overview"));
 }
 
 function cycleRole() {
@@ -947,23 +949,15 @@ function cyclePptModel() {
 }
 
 function selectUserTab(tab: TabId) {
-  activeRole.value = "user";
-  activeTab.value = tab;
-  if (tab !== "mine") mineView.value = "overview";
+  replacePage(rolePage("user", tab));
 }
 
 function selectTab(tab: TabId) {
-  activeTab.value = tab;
-  if (tab !== "mine") mineView.value = "overview";
+  replacePage(rolePage(activeRole.value, tab));
 }
 
-async function openMineView(view: MineView) {
-  mineView.value = view;
-  selectedMinePurchase.value = null;
-  mineLogoutConfirm.value = false;
-  if (view === "invite-promotion" && isAgentActive.value && !channelCenter.value) {
-    await loadRoleData("agent");
-  }
+function openMineView(view: MineView) {
+  replacePage(miniProgramMinePages[view]);
 }
 
 function selectMinePurchase(purchase: MinePurchaseOption) {
@@ -998,27 +992,21 @@ function showPosterNotice() {
 }
 
 function openCreation(mode: CreationMode) {
-  selectCreationMode(mode);
-  selectUserTab("create");
+  replacePage(miniProgramCreationPages[mode]);
 }
 
 function selectCreationMode(mode: CreationMode) {
-  if (mode === creationMode.value) return;
   creationPromptDrafts.value[creationMode.value] = creationPrompt.value;
-  creationMode.value = mode;
-  creationPrompt.value = creationPromptDrafts.value[mode] || "";
-  creationError.value = "";
+  replacePage(miniProgramCreationPages[mode]);
 }
 
 function returnToCreationHub() {
   creationPromptDrafts.value.ppt = creationPrompt.value;
-  selectCreationMode("image");
-  activeTab.value = "create";
+  replacePage(rolePage("user", "create"));
 }
 
 function selectAgentTab(tab: TabId) {
-  activeRole.value = "agent";
-  activeTab.value = tab;
+  replacePage(rolePage("agent", tab));
 }
 
 async function refreshAll() {
@@ -1028,12 +1016,20 @@ async function refreshAll() {
   pageError.value = "";
   try {
     await Promise.all([loadMemberProfile(), loadWallet(), loadAssets(false)]);
-    const inferredRole = inferInitialRole();
-    if (!roleInitialized.value && inferredRole !== "user") {
-      activeRole.value = inferredRole;
+    if (activeRole.value === "agent" && !isAgentActive.value) {
+      uni.showToast({ title: "当前账号尚未开通代理商", icon: "none" });
+      replacePage(rolePage("user", "home"));
+      return;
     }
-    roleInitialized.value = true;
+    if (activeRole.value === "operation" && !isOperationActive.value) {
+      uni.showToast({ title: "当前账号尚未开通运营中心", icon: "none" });
+      replacePage(rolePage("user", "home"));
+      return;
+    }
     await loadRoleData(activeRole.value);
+    if (props.initialMineView === "invite-promotion" && isAgentActive.value && !channelCenter.value) {
+      await loadRoleData("agent");
+    }
   } catch (error) {
     pageError.value = error instanceof Error ? error.message : "工作台加载失败";
   } finally {
@@ -1142,22 +1138,8 @@ async function createRechargeOrder(pack: { id: string; amountCents: number; poin
   }
 }
 
-async function requestWithdrawal() {
-  const amountCents = summaryNumber(channelSummary.value, "availableToWithdraw");
-  if (amountCents <= 0) {
-    uni.showToast({ title: "暂无可提现收益", icon: "none" });
-    return;
-  }
-  try {
-    await api("/api/v1/channel/withdrawals", {
-      method: "POST",
-      body: JSON.stringify({ amountCents })
-    });
-    uni.showToast({ title: "提现申请已提交", icon: "success" });
-    await loadRoleData("agent");
-  } catch (error) {
-    uni.showToast({ title: error instanceof Error ? error.message : "提现申请失败", icon: "none" });
-  }
+function requestWithdrawal() {
+  openFeaturePage(miniProgramFeaturePages.agentWithdrawalApply);
 }
 
 function copyInviteLink() {
@@ -1175,7 +1157,16 @@ function agentCondition(key: "openCondition" | "keepCondition") {
 }
 
 function showChildAgentHint() {
-  uni.showToast({ title: "下级代理表单保留在桌面端，小程序展示团队入口", icon: "none" });
+  openFeaturePage(miniProgramFeaturePages.agentTeam);
+}
+
+function openFeaturePage(url: string) {
+  uni.navigateTo({ url });
+}
+
+function openCustomerDetail(customer: AnyRecord) {
+  const id = rowString(customer, "id") || rowString(customer, "userId");
+  if (id) openFeaturePage(`${miniProgramFeaturePages.agentCustomerDetail}?id=${encodeURIComponent(id)}`);
 }
 
 function handleGenerateTap() {
@@ -1326,7 +1317,7 @@ onBackPress(() => {
       return true;
     }
     if (mineView.value !== "overview") {
-      mineView.value = "overview";
+      replacePage(miniProgramMinePages.overview);
       return true;
     }
   }
@@ -2668,6 +2659,32 @@ onBackPress(() => {
 .v31-menu-panel > button view text { display: block; color: #111827; font-size: 12px; font-weight: 800; }
 .v31-menu-panel > button view text + text { margin-top: 3px; color: #697386; font-size: 9px; font-weight: 500; }
 .v31-menu-panel > button.danger view text { color: #dc2626; }
+
+.agent-v4-hero { padding: 15px; border: 1px solid #15192d; border-radius: 8px; color: #ffffff; background: #15192d; }
+.agent-v4-hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.agent-v4-hero-top > view text { display: block; }
+.agent-v4-hero-top > view text:first-child { color: #cdd5f5; font-size: 10px; }
+.agent-v4-hero-top > view text:last-child { margin-top: 6px; font-size: 24px; font-weight: 900; }
+.agent-v4-hero-top > text { padding: 5px 10px; border-radius: 999px; color: #ff6b1a; background: #fff2e8; font-size: 9px; font-weight: 900; }
+.agent-v4-copy { display: block; margin-top: 8px; color: #b9c2db; font-size: 10px; line-height: 16px; }
+.agent-v4-metrics { display: grid; margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.agent-v4-metrics view { min-width: 0; padding: 7px 8px; border-radius: 8px; background: #23283d; }
+.agent-v4-metrics text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-v4-metrics text:first-child { font-size: 12px; font-weight: 900; }
+.agent-v4-metrics text:last-child { margin-top: 2px; color: #9fa8c2; font-size: 8px; }
+.agent-v4-entry-card { display: flex; padding: 12px; flex-direction: column; gap: 9px; border: 1px solid #e5eaf6; border-radius: 8px; background: #ffffff; }
+.agent-v4-entry-card > button { display: flex; width: 100%; min-height: 62px; margin: 0; padding: 10px; box-sizing: border-box; align-items: center; gap: 10px; border: 1px solid #e5eaf6; border-radius: 8px; background: #ffffff; text-align: left; }
+.agent-v4-entry-card > button::after { display: none; }
+.agent-v4-entry-card > button > view { min-width: 0; flex: 1; }
+.agent-v4-entry-card > button > view text { display: block; color: #111827; font-size: 12px; font-weight: 800; }
+.agent-v4-entry-card > button > view text + text { margin-top: 4px; overflow: hidden; color: #697386; font-size: 9px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.agent-v4-entry-card > button > text:last-child { color: #ff6b1a; font-size: 10px; font-weight: 900; }
+.agent-v4-icon { display: grid; width: 34px; min-width: 34px; height: 34px; place-items: center; border-radius: 8px; font-size: 11px; font-weight: 900; }
+.agent-v4-icon.purple { color: #5b55d6; background: #f1f0ff; }
+.agent-v4-icon.green { color: #079455; background: #ecfdf3; }
+.agent-v4-icon.orange { color: #ff6b1a; background: #fff2e8; }
+.agent-v4-cta { width: 100%; height: 44px; margin: 0; border-radius: 8px; color: #ffffff; background: #ff6b1a; font-size: 13px; font-weight: 900; }
+.agent-v4-cta::after { display: none; }
 
 .bottom-tabs {
   left: 10px;

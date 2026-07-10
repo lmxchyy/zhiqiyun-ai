@@ -186,7 +186,7 @@ Page({
     wx.setStorageSync("xianzhiMiniProgramAuth", auth || {});
     setTimeout(() => {
       wx.reLaunch({
-        url: "/pages/MiniProgramHomePage",
+        url: "/pages/user/UserHomePage",
         fail: (error) => {
           this.setStatus("登录成功，但跳转工作台失败：" + messageOf(error, "跳转失败"), "error");
         }

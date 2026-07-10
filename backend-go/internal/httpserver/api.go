@@ -2370,6 +2370,57 @@ func (a api) memberProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+func (a api) updateMemberProfile(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if req.Name == "" || req.Email == "" {
+		writeError(w, http.StatusBadRequest, errors.New("name and email are required"))
+		return
+	}
+	if !regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`).MatchString(req.Email) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid email"))
+		return
+	}
+	for _, item := range data.Users {
+		if item.ID != user.ID && strings.EqualFold(item.Email, req.Email) {
+			writeError(w, http.StatusConflict, errors.New("email already exists"))
+			return
+		}
+	}
+	account, err := a.store.PointAccount(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	updated, err := a.store.UpdateAdminCustomer(user.ID, adminCustomerMutation{
+		Name:       req.Name,
+		Email:      req.Email,
+		Role:       user.Role,
+		Status:     user.Status,
+		PlanID:     user.PlanID,
+		ReferredBy: user.ReferredBy,
+		Available:  account.Available,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"user": memberUserView(updated)})
+}
+
 func (a api) memberWallet(w http.ResponseWriter, r *http.Request) {
 	user, err := a.currentUser(r)
 	if err != nil {

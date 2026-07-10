@@ -154,7 +154,7 @@ function completeLogin(auth: AuthResponse, source: string) {
   uni.showToast({ title: "Login OK", icon: "success" });
   setTimeout(() => {
     uni.reLaunch({
-      url: "/pages/MiniProgramHomePage",
+      url: "/pages/user/UserHomePage",
       fail: error => {
         setStatus(`Login succeeded, but workspace redirect failed: ${errorMessage(error, "redirect failed")}`, "error");
       }

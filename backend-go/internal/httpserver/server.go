@@ -101,6 +101,7 @@ func newWithStoreSessionsAndKnowledge(cfg config.Config, store platformStore, se
 	v1.POST("/orders/create", wrapF(api.createCommerceOrder))
 	v1.POST("/pay/callback", wrapF(api.payCallback))
 	v1.GET("/member/profile", wrapF(api.memberProfile))
+	v1.PATCH("/member/profile", wrapF(api.updateMemberProfile))
 	v1.GET("/member/wallet", wrapF(api.memberWallet))
 	v1.GET("/member/token-records", wrapF(api.memberTokenRecords))
 	v1.GET("/agent/profile", wrapF(api.agentProfile))

@@ -26,10 +26,13 @@
       </view>
 
       <view class="mine-menu-panel">
+        <button @click="openFeaturePage(miniProgramFeaturePages.userProfileEdit)"><text class="mine-menu-icon green">编</text><view><text>编辑资料</text><text>修改显示名称和登录邮箱</text></view><text class="mine-chevron">›</text></button>
         <button @click="$emit('navigate', 'recharge-history')"><text class="mine-menu-icon purple">包</text><view><text>充值记录</text><text>到账、发票、订单</text></view><text class="mine-chevron">›</text></button>
+        <button @click="openFeaturePage(miniProgramFeaturePages.userOrders)"><text class="mine-menu-icon purple">单</text><view><text>我的订单</text><text>充值、订阅与身份升级</text></view><text class="mine-chevron">›</text></button>
         <button @click="$emit('navigate', 'usage-details')"><text class="mine-menu-icon orange">耗</text><view><text>消耗明细</text><text>按模型与任务查看</text></view><text class="mine-chevron">›</text></button>
         <button @click="$emit('navigate', 'identity-permissions')"><text class="mine-menu-icon green">权</text><view><text>身份与权限</text><text>用户与代理双重身份</text></view><text class="mine-chevron">›</text></button>
         <button @click="$emit('navigate', 'invite-promotion')"><text class="mine-menu-icon purple">链</text><view><text>邀请与推广</text><text>绑定客户与分润</text></view><text class="mine-chevron">›</text></button>
+        <button @click="openFeaturePage(miniProgramFeaturePages.userSettings)"><text class="mine-menu-icon">设</text><view><text>账户设置</text><text>密码、安全、协议与缓存</text></view><text class="mine-chevron">›</text></button>
       </view>
 
       <button class="mine-logout-row" @click="$emit('request-logout')">
@@ -141,6 +144,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { MinePurchaseOption, MineView } from "../types";
+import { miniProgramFeaturePages } from "../config/miniProgramPages";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -260,6 +264,7 @@ function isWithinDays(value: string, days: number) { if (!days || !value) return
 function isCurrentMonth(value: string) { if (!value) return true; const date = new Date(value); const now = new Date(); return !Number.isNaN(date.getTime()) && date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth(); }
 function cycleHistoryRange() { historyRange.value = historyRange.value === 90 ? 30 : historyRange.value === 30 ? 0 : 90; }
 function cycleUsageType() { const types: Array<typeof usageType.value> = ["all", "image", "video", "ppt"]; usageType.value = types[(types.indexOf(usageType.value) + 1) % types.length] || "all"; }
+function openFeaturePage(url: string) { uni.navigateTo({ url }); }
 function isPaidOrder(row: unknown) { return ["PAID", "SUCCESS", "SUCCEEDED", "SETTLED", "ACTIVE"].includes(rowString(row, "status").toUpperCase()); }
 function isRechargeOrder(row: unknown) { const type = `${rowString(row, "orderType")} ${rowString(row, "businessOrderType")} ${rowString(row, "planId")}`.toUpperCase(); return type.includes("RECHARGE"); }
 function orderPoints(row: unknown) { const snapshot = asRecord(asRecord(row).priceSnapshot); return rowNumber(snapshot, "rechargePoints") || rowNumber(row, "tokenGrantAmount") || rowNumber(row, "tokenAmount"); }
