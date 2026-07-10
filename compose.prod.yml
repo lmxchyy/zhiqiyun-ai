@@ -2,6 +2,8 @@ name: ${COMPOSE_PROJECT_NAME:-xianzhi-ai-prod}
 
 services:
   xianzhi-ai:
+    # 由 deploy-auto.sh 根据服务器 CPU 架构自动设置：linux/amd64 或 linux/arm64
+    platform: "${TARGET_PLATFORM:?请使用 ./deploy-auto.sh 启动，自动设置 TARGET_PLATFORM}"
     build:
       context: .
       args:
