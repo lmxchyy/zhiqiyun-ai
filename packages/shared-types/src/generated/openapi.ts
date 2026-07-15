@@ -36,6 +36,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/wechat/phone-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["loginByWechatPhone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sms/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["sendLoginSmsCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/sms/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["loginBySmsCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/invite/agent/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["resolveAgentInvite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/register": {
         parameters: {
             query?: never;
@@ -371,6 +435,41 @@ export interface components {
         WechatLoginRequest: {
             code: string;
         };
+        WechatPhoneLoginRequest: {
+            wxLoginCode: string;
+            phoneCode: string;
+            inviteCode?: string;
+            scene?: string;
+            promoterCode?: string;
+            campaignCode?: string;
+            redirectSource?: string;
+            idempotencyKey?: string;
+        };
+        SmsSendRequest: {
+            mobile: string;
+            /** @enum {string} */
+            purpose?: "login";
+        };
+        SmsSendResponse: {
+            sent: boolean;
+            retryAfterSeconds: number;
+            expiresInSeconds: number;
+        };
+        SmsLoginRequest: {
+            mobile: string;
+            smsCode: string;
+            inviteCode?: string;
+            scene?: string;
+            promoterCode?: string;
+            campaignCode?: string;
+            redirectSource?: string;
+            idempotencyKey?: string;
+        };
+        InviteValidationResponse: {
+            valid: boolean;
+            status: string;
+            message?: string;
+        };
         RefreshTokenRequest: {
             refreshToken: string;
         };
@@ -385,7 +484,7 @@ export interface components {
         /** @enum {string} */
         WorkspaceRole: "user" | "agent" | "admin";
         /** @enum {string} */
-        AppRole: "USER" | "AGENT" | "OPERATION" | "ENTERPRISE_ADMIN" | "AI_ADMIN" | "FINANCE" | "CUSTOMER_SERVICE" | "ENTERPRISE_MEMBER";
+        AppRole: "USER" | "AGENT" | "OPERATION" | "ENTERPRISE_ADMIN" | "AI_ADMIN" | "FINANCE" | "CUSTOMER_SERVICE";
         CurrentRoleRequest: {
             role: components["schemas"]["AppRole"];
         };
@@ -783,6 +882,91 @@ export interface operations {
             200: components["responses"]["AuthResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["ErrorResponse"];
+        };
+    };
+    loginByWechatPhone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WechatPhoneLoginRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["AuthResponse"];
+            400: components["responses"]["ErrorResponse"];
+            502: components["responses"]["ErrorResponse"];
+        };
+    };
+    sendLoginSmsCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmsSendRequest"];
+            };
+        };
+        responses: {
+            /** @description SMS code sent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SmsSendResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            429: components["responses"]["ErrorResponse"];
+        };
+    };
+    loginBySmsCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmsLoginRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["AuthResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["ErrorResponse"];
+        };
+    };
+    resolveAgentInvite: {
+        parameters: {
+            query: {
+                inviteCode: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invite validation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteValidationResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
         };
     };
     registerByInvite: {

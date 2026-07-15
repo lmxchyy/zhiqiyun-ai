@@ -1222,6 +1222,15 @@ func TestWeChatMiniProgramMockLogin(t *testing.T) {
 	})
 	handler := server.Handler
 
+	phoneMissing := request(t, handler, http.MethodPost, "/api/v1/auth/wechat/phone-login", bytes.NewBufferString(`{"wxLoginCode":""}`))
+	if phoneMissing.Code != http.StatusBadRequest || !strings.Contains(phoneMissing.Body.String(), "wechat mini program code is required") {
+		t.Fatalf("anonymous phone login status = %d, body = %s", phoneMissing.Code, phoneMissing.Body.String())
+	}
+	phoneWithStaleToken := authedRequest(t, handler, http.MethodPost, "/api/v1/auth/wechat/phone-login", bytes.NewBufferString(`{"wxLoginCode":""}`), "stale-login-token")
+	if phoneWithStaleToken.Code != http.StatusBadRequest || !strings.Contains(phoneWithStaleToken.Body.String(), "wechat mini program code is required") {
+		t.Fatalf("phone login must ignore stale bearer token, status = %d, body = %s", phoneWithStaleToken.Code, phoneWithStaleToken.Body.String())
+	}
+
 	missing := request(t, handler, http.MethodPost, "/api/v1/auth/wechat-mini-program/login", bytes.NewBufferString(`{"code":""}`))
 	if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), "wechat mini program code is required") {
 		t.Fatalf("missing wechat code status = %d, body = %s", missing.Code, missing.Body.String())

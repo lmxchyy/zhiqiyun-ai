@@ -83,14 +83,16 @@ export function createAuthService(options: AuthServiceOptions) {
     async loginByPassword(email: string, password: string) {
       const auth = await options.api.request<AuthResponse, { email: string; password: string }>("/api/v1/auth/login", {
         method: "POST",
-        body: { email, password }
+        body: { email, password },
+        auth: false
       });
       return persistAuth(storage, auth);
     },
     async loginByWechatMiniProgramCode(code: string) {
       const auth = await options.api.request<AuthResponse, { code: string }>("/api/v1/auth/wechat-mini-program/login", {
         method: "POST",
-        body: { code }
+        body: { code },
+        auth: false
       });
       return persistAuth(storage, auth);
     },
@@ -102,14 +104,16 @@ export function createAuthService(options: AuthServiceOptions) {
       }
       const auth = await options.api.request<AuthResponse, { code: string }>("/api/v1/auth/wechat-mini-program/login", {
         method: "POST",
-        body: { code }
+        body: { code },
+        auth: false
       });
       return persistAuth(storage, auth);
     },
     async registerByInvite(input: RegisterByInviteInput) {
       const auth = await options.api.request<AuthResponse, RegisterByInviteInput>("/api/v1/auth/register", {
         method: "POST",
-        body: input
+        body: input,
+        auth: false
       });
       return persistAuth(storage, auth);
     },
@@ -125,7 +129,8 @@ export function createAuthService(options: AuthServiceOptions) {
       if (!refreshToken) throw new Error("refresh token is missing");
       refreshPromise = options.api.request<AuthResponse, { refreshToken: string }>("/api/v1/auth/refresh", {
         method: "POST",
-        body: { refreshToken }
+        body: { refreshToken },
+        auth: false
       }).then(auth => persistAuth(storage, auth)).finally(() => { refreshPromise = null; });
       return refreshPromise;
     },

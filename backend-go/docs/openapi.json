@@ -70,6 +70,125 @@
         }
       }
     },
+    "/api/v1/auth/wechat/phone-login": {
+      "post": {
+        "operationId": "loginByWechatPhone",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WechatPhoneLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "502": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/send": {
+      "post": {
+        "operationId": "sendLoginSmsCode",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmsSendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SMS code sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmsSendResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "429": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/sms/login": {
+      "post": {
+        "operationId": "loginBySmsCode",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmsLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/invite/agent/resolve": {
+      "get": {
+        "operationId": "resolveAgentInvite",
+        "security": [],
+        "parameters": [
+          {
+            "name": "inviteCode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invite validation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteValidationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
     "/api/v1/auth/register": {
       "post": {
         "operationId": "registerByInvite",
@@ -609,6 +728,60 @@
           "code": {
             "type": "string"
           }
+        }
+      },
+      "WechatPhoneLoginRequest": {
+        "type": "object",
+        "required": ["wxLoginCode", "phoneCode"],
+        "properties": {
+          "wxLoginCode": { "type": "string" },
+          "phoneCode": { "type": "string" },
+          "inviteCode": { "type": "string" },
+          "scene": { "type": "string" },
+          "promoterCode": { "type": "string" },
+          "campaignCode": { "type": "string" },
+          "redirectSource": { "type": "string" },
+          "idempotencyKey": { "type": "string" }
+        }
+      },
+      "SmsSendRequest": {
+        "type": "object",
+        "required": ["mobile"],
+        "properties": {
+          "mobile": { "type": "string" },
+          "purpose": { "type": "string", "enum": ["login"] }
+        }
+      },
+      "SmsSendResponse": {
+        "type": "object",
+        "required": ["sent", "retryAfterSeconds", "expiresInSeconds"],
+        "properties": {
+          "sent": { "type": "boolean" },
+          "retryAfterSeconds": { "type": "integer" },
+          "expiresInSeconds": { "type": "integer" }
+        }
+      },
+      "SmsLoginRequest": {
+        "type": "object",
+        "required": ["mobile", "smsCode"],
+        "properties": {
+          "mobile": { "type": "string" },
+          "smsCode": { "type": "string" },
+          "inviteCode": { "type": "string" },
+          "scene": { "type": "string" },
+          "promoterCode": { "type": "string" },
+          "campaignCode": { "type": "string" },
+          "redirectSource": { "type": "string" },
+          "idempotencyKey": { "type": "string" }
+        }
+      },
+      "InviteValidationResponse": {
+        "type": "object",
+        "required": ["valid", "status"],
+        "properties": {
+          "valid": { "type": "boolean" },
+          "status": { "type": "string" },
+          "message": { "type": "string" }
         }
       },
       "RefreshTokenRequest": {

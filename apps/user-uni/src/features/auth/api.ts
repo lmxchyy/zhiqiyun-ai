@@ -13,6 +13,7 @@ export const loginAPI = {
       method: "POST",
       body: input,
       timeout: 20000,
+      auth: false,
     });
   },
 
@@ -21,6 +22,7 @@ export const loginAPI = {
       method: "POST",
       body: { mobile, purpose: "login" },
       timeout: 15000,
+      auth: false,
     });
   },
 
@@ -29,6 +31,7 @@ export const loginAPI = {
       method: "POST",
       body: input,
       timeout: 20000,
+      auth: false,
     });
   },
 
@@ -37,13 +40,14 @@ export const loginAPI = {
       method: "POST",
       body: { account, email: account, username: account, mobile: account, password, idempotencyKey },
       timeout: 15000,
+      auth: false,
     });
   },
 
   validateInvite(inviteCode: string) {
     return apiClient.request<InviteValidationResponse>(
       `/api/v1/invite/agent/resolve?inviteCode=${encodeURIComponent(inviteCode)}`,
-      { timeout: 10000 },
+      { timeout: 10000, auth: false },
     );
   },
 

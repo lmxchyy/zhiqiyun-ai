@@ -63,6 +63,8 @@ export interface ApiRequestOptions<TBody = unknown> {
   data?: TBody;
   timeout?: number;
   requestId?: string;
+  /** Set to false for endpoints called before a user session exists. */
+  auth?: boolean;
 }
 
 export interface ApiClient {
@@ -137,6 +139,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     async request<T = unknown, TBody = unknown>(path: string, requestOptions: ApiRequestOptions<TBody> = {}) {
       const token = options.getToken?.() || "";
+      const usesSession = requestOptions.auth !== false;
       const body = requestOptions.body ?? requestOptions.data;
       const method = requestOptions.method || "GET";
       const requestId = requestOptions.requestId || requestIdFactory();
@@ -158,7 +161,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       addHeader(headers, "X-Client-Version", options.clientVersion || clientInfo.appVersion);
       addHeader(headers, "X-Client-Language", clientInfo.language);
       Object.assign(headers, defaultHeaders, requestOptions.headers || {});
-      if (token) headers.Authorization = `Bearer ${token}`;
+      if (usesSession && token) headers.Authorization = `Bearer ${token}`;
 
       let response;
       try {
@@ -180,7 +183,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       }
 
       const payload = response.data;
-      if (response.statusCode === 401) {
+      if (usesSession && response.statusCode === 401) {
         options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload });
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -206,7 +209,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       if (isApiEnvelope<T>(payload)) {
         const code = payload.code;
         if (code !== undefined && code !== 0 && code !== "0") {
-          if (isUnauthorizedApiCode(code)) {
+          if (usesSession && isUnauthorizedApiCode(code)) {
             options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload });
           }
           throw new ApiClientError(payload.message || payload.error || `API code ${code}`, {
