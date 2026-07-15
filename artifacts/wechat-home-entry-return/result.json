@@ -1,0 +1,14 @@
+{
+  "startedAt": "2026-07-14T10:56:12.699Z",
+  "filter": "prompt-submit",
+  "rows": [],
+  "failures": [
+    {
+      "id": "prompt-submit",
+      "message": "expected pages/user/UserHomePage, current pages/user/UserImageCreationPage"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T10:57:28.401Z",
+  "passed": false
+}

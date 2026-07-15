@@ -1,0 +1,14 @@
+{
+  "startedAt": "2026-07-14T10:40:31.548Z",
+  "filter": "quick.knowledge",
+  "rows": [],
+  "failures": [
+    {
+      "id": "quick.knowledge",
+      "message": "tap return .native-page-back timed out after 10000ms"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T10:41:43.195Z",
+  "passed": false
+}

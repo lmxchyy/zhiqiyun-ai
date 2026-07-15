@@ -36,7 +36,7 @@ id_rsa.*
 tmp/
 data/
 uploads/
-storage/
+/storage/
 backups/
 aicc_log/
 jsc_log/

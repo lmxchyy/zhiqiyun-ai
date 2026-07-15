@@ -1,11 +1,15 @@
 package image
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,12 +28,71 @@ func (timeoutProviderError) Timeout() bool {
 	return true
 }
 
+func TestReferenceBytesReadsUploadedImageFromLocalStorage(t *testing.T) {
+	dir := t.TempDir()
+	storedName := "local-reference.png"
+	raw := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03}
+	if err := os.WriteFile(filepath.Join(dir, storedName), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := OpenAICompatible{referenceImageDir: dir}
+	got, filename, err := provider.referenceBytes(context.Background(), referenceImage{
+		Name: "logo.png",
+		URL:  "https://192.168.1.12:3100/api/v1/reference-images/" + storedName,
+	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(raw) {
+		t.Fatalf("local reference bytes = %v, want %v", got, raw)
+	}
+	if filename != "logo.png" {
+		t.Fatalf("filename = %q, want logo.png", filename)
+	}
+	if _, ok := provider.localReferenceImagePath("https://192.168.1.12:3100/api/v1/reference-images/../secret.png"); ok {
+		t.Fatal("path traversal URL must not resolve to local storage")
+	}
+}
+
 func TestRetryableProviderErrorIncludesNetworkTimeout(t *testing.T) {
 	if !isRetryableProviderError(0, timeoutProviderError{}) {
 		t.Fatal("network timeout with no HTTP status should be retryable")
 	}
+	if !isRetryableProviderError(http.StatusTooManyRequests, errors.New("rate limited")) {
+		t.Fatal("HTTP 429 should be retried briefly before provider fallback")
+	}
+	if !isFallbackEligible(errors.New("image provider returned 429: Upstream rate limit")) {
+		t.Fatal("HTTP 429 should be eligible for router fallback")
+	}
+	if !isFallbackEligible(errors.New("image provider returned 403: forbidden")) {
+		t.Fatal("HTTP 403 should be eligible for router fallback")
+	}
+	if !isFallbackEligible(errors.New("dial tcp [::1]:8001: connect: connection refused")) {
+		t.Fatal("connection refused should be eligible for router fallback")
+	}
 	if isRetryableProviderError(http.StatusBadRequest, timeoutProviderError{}) {
 		t.Fatal("HTTP 400 should not be retried even if error text is timeout-like")
+	}
+}
+
+func TestCompatibleReferenceFieldsSkipOversizedDataURLParts(t *testing.T) {
+	provider := OpenAICompatible{}
+	fields := map[string]string{}
+	largeReference := "data:image/png;base64," + strings.Repeat("A", 500<<10)
+	err := provider.addCompatibleReferenceFields(context.Background(), fields, []referenceImage{
+		{Name: "first.png", URL: largeReference},
+		{Name: "second.png", URL: largeReference},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields["image_url"] == "" {
+		t.Fatal("single compatible image_url should remain when it fits the upstream part limit")
+	}
+	for _, key := range []string{"image_urls", "reference_images", "referenceImages", "images"} {
+		if _, exists := fields[key]; exists {
+			t.Fatalf("oversized compatible field %s must be omitted", key)
+		}
 	}
 }
 

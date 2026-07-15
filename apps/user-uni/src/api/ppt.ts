@@ -1,4 +1,4 @@
-import { api } from "./client";
+import { api, getApiBaseURL, getAuthToken } from "./client";
 
 export type PptTaskStatus = "pending" | "processing" | "success" | "failed";
 export type PptLanguage = "zh" | "en";
@@ -16,6 +16,15 @@ export interface PptGenerateRequest {
   language: PptLanguage;
   theme: PptTheme;
   enableWebSearch: boolean;
+  tone?: string;
+  textContent?: string;
+  audience?: string;
+  scenario?: string;
+  generationAspectRatio?: string;
+  autoThemeEnabled?: boolean;
+  imageSource?: "ai" | "stock" | "none";
+  textModel?: string;
+  imageModel?: string;
 }
 
 export interface PptGenerateResponse {
@@ -41,196 +50,100 @@ export interface PptTaskResponse {
 
 export type PptHistoryItem = PptTaskResponse;
 
-const mockHistoryStorageKey = "xianzhi_ppt_generation_history";
 const pptEndpoints = {
-  create: "/api/ppt/generate",
-  task: (taskId: string) => `/api/ppt/tasks/${encodeURIComponent(taskId)}`,
-  history: "/api/ppt/history"
+  create: "/api/v1/ppt/generate",
+  task: (taskId: string) => `/api/v1/ppt/tasks/${encodeURIComponent(taskId)}`,
+  history: "/api/v1/ppt/history",
+  exportPptx: "/api/v1/ppt/export/pptx"
 };
 
 export async function createPptGenerationTask(request: PptGenerateRequest): Promise<PptGenerateResponse> {
-  try {
-    return await api<PptGenerateResponse>(pptEndpoints.create, {
-      method: "POST",
-      body: JSON.stringify(request)
-    });
-  } catch {
-    return createMockPptTask(request);
-  }
+  const response = await api<PptGenerateResponse>(pptEndpoints.create, {
+    method: "POST",
+    body: JSON.stringify({
+      prompt: request.prompt,
+      slideCount: request.slideCount,
+      language: request.language,
+      theme: request.theme,
+      enableWebSearch: request.enableWebSearch,
+      tone: request.tone || "professional",
+      textContent: request.textContent || "concise",
+      audience: request.audience || "auto",
+      scenario: request.scenario || "auto",
+      generationAspectRatio: request.generationAspectRatio || "dynamic",
+      autoThemeEnabled: request.autoThemeEnabled ?? true,
+      imageSource: request.imageSource || "ai",
+      textModel: request.textModel,
+      imageModel: request.imageModel || "default-image"
+    })
+  });
+  return { taskId: response.taskId, status: normalizeStatus(response.status) };
 }
 
 export async function getPptGenerationTask(taskId: string): Promise<PptTaskResponse> {
-  try {
-    return await api<PptTaskResponse>(pptEndpoints.task(taskId));
-  } catch {
-    return getMockPptTask(taskId);
-  }
+  return normalizePptTask(await api<PptTaskResponse>(pptEndpoints.task(taskId)));
 }
 
 export async function listPptHistory(): Promise<PptHistoryItem[]> {
-  try {
-    return await api<PptHistoryItem[]>(pptEndpoints.history);
-  } catch {
-    return listMockPptHistory();
-  }
+  const response = await api<PptHistoryItem[] | { items?: PptHistoryItem[]; rows?: PptHistoryItem[]; data?: PptHistoryItem[] }>(pptEndpoints.history);
+  const items = Array.isArray(response) ? response : response.items || response.rows || response.data || [];
+  return items.map(normalizePptTask);
 }
 
 export async function deletePptTask(taskId: string): Promise<void> {
-  try {
-    await api<{ ok: boolean }>(pptEndpoints.task(taskId), { method: "DELETE" });
-  } catch {
-    deleteMockPptTask(taskId);
-  }
+  await api<{ ok: boolean }>(pptEndpoints.task(taskId), { method: "DELETE" });
 }
 
 export async function requestPptDownload(taskId: string): Promise<{ url: string }> {
   const task = await getPptGenerationTask(taskId);
   if (!task.pptUrl) {
-    throw new Error("PPT 下载接口已预留，当前任务暂无下载地址");
+    return { url: await exportPptxTask(taskId) };
   }
   return { url: task.pptUrl };
 }
 
-function createMockPptTask(request: PptGenerateRequest): PptGenerateResponse {
-  const now = new Date().toISOString();
-  const taskId = `ppt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const item: PptHistoryItem = {
-    taskId,
-    status: "pending",
-    title: normalizeTitle(request.prompt),
-    prompt: request.prompt,
-    slideCount: request.slideCount,
-    language: request.language,
-    theme: request.theme,
-    enableWebSearch: request.enableWebSearch,
-    pptUrl: "",
-    pdfUrl: "",
-    errorMessage: "",
-    createdAt: now,
-    updatedAt: now
-  };
-  writeMockHistory([item, ...readMockHistory().filter(record => record.taskId !== taskId)]);
-  return { taskId, status: "pending" };
+function normalizeStatus(value: unknown): PptTaskStatus {
+  const status = String(value || "pending").toLowerCase();
+  if (status === "processing" || status === "success" || status === "failed") return status;
+  return "pending";
 }
 
-function getMockPptTask(taskId: string): PptTaskResponse {
-  const history = readMockHistory();
-  const index = history.findIndex(record => record.taskId === taskId);
-  if (index < 0) {
-    return {
-      taskId,
-      status: "failed",
-      title: "未找到生成任务",
-      pptUrl: "",
-      pdfUrl: "",
-      errorMessage: "任务不存在或已删除"
-    };
-  }
-  const item = progressMockTask(history[index]);
-  history[index] = item;
-  writeMockHistory(history);
-  return item;
-}
-
-function listMockPptHistory(): PptHistoryItem[] {
-  const history = readMockHistory();
-  const updated = history.map(progressMockTask);
-  writeMockHistory(updated);
-  return updated;
-}
-
-function deleteMockPptTask(taskId: string) {
-  writeMockHistory(readMockHistory().filter(item => item.taskId !== taskId));
-}
-
-function progressMockTask(item: PptHistoryItem): PptHistoryItem {
-  if (item.status === "success" || item.status === "failed") return item;
-  const createdAt = item.createdAt ? Date.parse(item.createdAt) : Date.now();
-  const elapsed = Date.now() - createdAt;
-  const status: PptTaskStatus = elapsed > 2200 ? "success" : elapsed > 800 ? "processing" : "pending";
+function normalizePptTask(task: PptHistoryItem): PptHistoryItem {
   return {
-    ...item,
-    status,
-    updatedAt: new Date().toISOString()
+    ...task,
+    taskId: String(task.taskId || ""),
+    status: normalizeStatus(task.status),
+    title: task.title || task.prompt || "未命名PPT",
+    pptUrl: task.pptUrl || "",
+    pdfUrl: task.pdfUrl || "",
+    errorMessage: task.errorMessage || ""
   };
 }
 
-function readMockHistory(): PptHistoryItem[] {
-  const raw = uni.getStorageSync(mockHistoryStorageKey);
-  if (typeof raw !== "string" || !raw.trim()) {
-    return seedMockHistory();
+async function exportPptxTask(taskId: string) {
+  if (typeof fetch !== "function" || typeof URL === "undefined") {
+    throw new Error("当前运行环境不支持直接导出 PPT，请在 H5 工作台下载。");
   }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return seedMockHistory();
-    return parsed.filter(isPptHistoryItem);
-  } catch {
-    return seedMockHistory();
-  }
-}
-
-function writeMockHistory(items: PptHistoryItem[]) {
-  uni.setStorageSync(mockHistoryStorageKey, JSON.stringify(items.slice(0, 12)));
-}
-
-function seedMockHistory(): PptHistoryItem[] {
-  const now = Date.now();
-  return [
-    {
-      taskId: "mock_ppt_001",
-      status: "success",
-      title: "AI赋能企业营销增长方案",
-      prompt: "AI赋能企业营销增长方案",
-      slideCount: 10,
-      language: "zh",
-      theme: "business",
-      enableWebSearch: false,
-      pptUrl: "",
-      pdfUrl: "",
-      errorMessage: "",
-      createdAt: new Date(now - 1000 * 60 * 46).toISOString(),
-      updatedAt: new Date(now - 1000 * 60 * 43).toISOString()
+  const base = getApiBaseURL();
+  const response = await fetch(`${base}${pptEndpoints.exportPptx}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${getAuthToken()}`
     },
-    {
-      taskId: "mock_ppt_002",
-      status: "processing",
-      title: "短视频矩阵运营方案",
-      prompt: "短视频矩阵运营方案",
-      slideCount: 8,
-      language: "zh",
-      theme: "marketing",
-      enableWebSearch: true,
-      pptUrl: "",
-      pdfUrl: "",
-      errorMessage: "",
-      createdAt: new Date(now - 1000 * 12).toISOString(),
-      updatedAt: new Date(now - 1000 * 8).toISOString()
-    },
-    {
-      taskId: "mock_ppt_003",
-      status: "failed",
-      title: "海外市场渠道复盘",
-      prompt: "海外市场渠道复盘",
-      slideCount: 15,
-      language: "zh",
-      theme: "pitch",
-      enableWebSearch: false,
-      pptUrl: "",
-      pdfUrl: "",
-      errorMessage: "mock 任务：等待后续接入真实生成服务",
-      createdAt: new Date(now - 1000 * 60 * 120).toISOString(),
-      updatedAt: new Date(now - 1000 * 60 * 118).toISOString()
+    body: JSON.stringify({ taskId })
+  });
+  if (!response.ok) {
+    let message = "PPT 导出失败";
+    try {
+      const payload = await response.json() as { error?: string; message?: string };
+      message = payload.error || payload.message || message;
+    } catch {
+      const text = await response.text().catch(() => "");
+      if (text) message = text;
     }
-  ];
-}
-
-function normalizeTitle(prompt: string) {
-  const title = prompt.trim().replace(/\s+/g, " ");
-  return title ? title.slice(0, 60) : "未命名PPT";
-}
-
-function isPptHistoryItem(item: unknown): item is PptHistoryItem {
-  if (!item || typeof item !== "object") return false;
-  const record = item as Record<string, unknown>;
-  return typeof record.taskId === "string" && typeof record.status === "string" && typeof record.title === "string";
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
 }

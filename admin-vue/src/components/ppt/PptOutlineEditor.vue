@@ -89,11 +89,11 @@
 
     <div class="ppt-outline-list">
       <article v-for="(slide, index) in outline.slides" :key="slide.page" class="ppt-outline-card">
-        <button type="button" class="ppt-outline-grip" :disabled="isBusy" title="使用右侧按钮调整顺序" aria-label="排序手柄">
+        <span class="ppt-outline-grip" title="使用右侧按钮调整顺序" aria-hidden="true">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" />
           </svg>
-        </button>
+        </span>
         <span class="ppt-outline-index">{{ index + 1 }}</span>
 
         <main class="ppt-outline-card-main">
@@ -402,7 +402,6 @@ function applyGlobalLayout(layout: PptSlideLayout | null) {
 .ppt-outline-layouts-button:focus-visible,
 .ppt-outline-card-actions button:focus-visible,
 .ppt-outline-layout-trigger:focus-visible,
-.ppt-outline-grip:focus-visible,
 .ppt-add-slide:focus-visible {
   outline: 2px solid rgba(34, 211, 238, 0.72);
   outline-offset: 2px;
@@ -487,7 +486,7 @@ function applyGlobalLayout(layout: PptSlideLayout | null) {
   border: 0;
   color: #71717a;
   background: transparent;
-  cursor: grab;
+  cursor: default;
 }
 
 .ppt-outline-index {
@@ -690,7 +689,6 @@ function applyGlobalLayout(layout: PptSlideLayout | null) {
 .ppt-outline-layouts-button:disabled,
 .ppt-outline-layout-trigger:disabled,
 .ppt-outline-card-actions button:disabled,
-.ppt-outline-grip:disabled,
 .ppt-add-slide:disabled {
   opacity: 0.45;
   cursor: not-allowed;

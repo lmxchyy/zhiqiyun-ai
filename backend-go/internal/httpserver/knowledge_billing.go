@@ -53,34 +53,59 @@ func (s *postgresStore) RecordRAGUsage(ctx context.Context, usage knowledgeapp.R
 		}
 		return tx.Commit()
 	}
-	account, err := pointAccountForUpdate(ctx, tx, usage.UserID)
+	pointCost := int(usage.PointCost)
+	authorization, err := s.authorizeModelCallContext(ctx, tx, usage.UserID, "knowledge_agent")
 	if err != nil {
 		return err
 	}
-	pointCost := int(usage.PointCost)
-	if account.Available < pointCost {
-		return fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+	if authorization.ContextType == contextEnterprise && usage.TenantID != "" && usage.TenantID != authorization.TenantID {
+		return errForbidden
 	}
-	after := account.Available - pointCost
-	if _, err := tx.ExecContext(ctx, `
-		update xz_point_accounts
-		set available=available-$1, raw=jsonb_set(raw, '{available}', to_jsonb((available-$1)::int), true)
-		where id=$2
-	`, pointCost, account.ID); err != nil {
-		return err
+	var account adminPointAccount
+	before, after := 0, 0
+	if authorization.ContextType == contextEnterprise {
+		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "RAG_RUN", usage.RunID)
+		if err != nil {
+			return err
+		}
+		before, after = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
+		usage.TenantID = authorization.TenantID
+	} else {
+		account, err = pointAccountForUpdate(ctx, tx, usage.UserID)
+		if err != nil {
+			return err
+		}
+		if account.Available < pointCost {
+			return fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+		}
+		before, after = account.Available, account.Available-pointCost
+		if _, err := tx.ExecContext(ctx, `
+			update xz_point_accounts
+			set available=available-$1, raw=jsonb_set(raw, '{available}', to_jsonb((available-$1)::int), true)
+			where id=$2
+		`, pointCost, account.ID); err != nil {
+			return err
+		}
+		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: usage.UserID, Available: after, Frozen: account.Frozen}); err != nil {
+			return err
+		}
 	}
 	eventID, err := nextTableID(ctx, tx, "xz_billing_events", "evt")
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	event := ragBillingEvent(usage, account.Available, after, now, eventID)
+	event := ragBillingEvent(usage, before, after, now, eventID)
 	if err := insertBillingEvent(ctx, tx, event); err != nil {
 		return err
 	}
 	if err := insertAuditLog(ctx, tx, usage.UserID, "MEMBER", "knowledge.rag.complete", "rag_run", usage.RunID, "", "", 200, map[string]any{
 		"inputTokens": usage.InputTokens, "outputTokens": usage.OutputTokens, "pointCost": usage.PointCost,
 	}); err != nil {
+		return err
+	}
+	usageTask := generationTask{ID: usage.RunID, UserID: usage.UserID, TenantID: authorization.TenantID, OrganizationID: authorization.OrganizationID, BillingAccountType: authorization.BillingScope, BillingAccountID: authorization.BillingAccountID, ModuleCode: "knowledge_agent", Model: usage.Model, PointCost: pointCost}
+	if err := s.recordModelUsageTx(ctx, tx, authorization, usageTask, map[string]any{"inputTokens": usage.InputTokens, "outputTokens": usage.OutputTokens}); err != nil {
 		return err
 	}
 	return tx.Commit()

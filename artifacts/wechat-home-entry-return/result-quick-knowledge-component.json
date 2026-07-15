@@ -1,0 +1,14 @@
+{
+  "startedAt": "2026-07-14T09:52:40.003Z",
+  "filter": "quick.knowledge",
+  "rows": [],
+  "failures": [
+    {
+      "id": "quick.knowledge",
+      "message": "return button not found on pages/user/UserAgentCreationPage"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T09:55:54.425Z",
+  "passed": false
+}

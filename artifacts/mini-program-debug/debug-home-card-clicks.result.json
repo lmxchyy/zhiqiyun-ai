@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "partial": false,
+  "rows": [
+    {
+      "component": "home.employee-card",
+      "selector": ".employee-card",
+      "index": 0,
+      "expected": "pages/user/UserAgentCreationPage",
+      "before": {
+        "currentPath": "pages/user/UserHomePage",
+        "stack": [
+          "pages/user/UserHomePage"
+        ]
+      },
+      "after": {
+        "currentPath": "pages/user/UserAgentCreationPage",
+        "stack": [
+          "pages/user/UserHomePage",
+          "pages/user/UserAgentCreationPage"
+        ]
+      },
+      "ok": true
+    }
+  ]
+}

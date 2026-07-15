@@ -1,0 +1,14 @@
+{
+  "startedAt": "2026-07-14T10:38:59.827Z",
+  "filter": "quick.knowledge",
+  "rows": [],
+  "failures": [
+    {
+      "id": "quick.knowledge",
+      "message": "page \"pages/user/pages/user/UserHomePage\" is not found"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T10:40:00.700Z",
+  "passed": false
+}

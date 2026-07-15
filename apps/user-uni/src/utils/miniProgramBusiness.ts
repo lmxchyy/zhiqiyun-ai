@@ -1,4 +1,4 @@
-import { api, businessSdk } from "../api/client";
+import { api } from "../api/client";
 
 export type AnyRecord = Record<string, unknown>;
 
@@ -79,6 +79,13 @@ export function orderAmount(row: unknown) {
   return rowNumber(row, "amountCents", "amount", "priceCents", "payAmount");
 }
 
+export function hasCompletedPurchase(orders: unknown) {
+  return listOf(orders).some((order) => {
+    if (rowString(order, "paidAt", "fulfilledAt")) return true;
+    return ["PAID", "SUCCESS", "SUCCEEDED", "COMPLETED", "SETTLED", "ACTIVE", "REFUNDED"].includes(orderStatus(order));
+  });
+}
+
 export function statusTone(status: string) {
   const normalized = status.toUpperCase();
   if (["PAID", "SUCCESS", "SUCCEEDED", "COMPLETED", "SETTLED", "ACTIVE", "APPROVED"].includes(normalized)) return "success";
@@ -100,6 +107,7 @@ export function statusText(status: string) {
     FAILED: "失败",
     REJECTED: "已拒绝",
     REFUNDED: "已退款",
+    REFUND_REQUESTED: "退款审核中",
     APPROVED: "已通过"
   };
   return map[status.toUpperCase()] || status || "未知";
@@ -112,8 +120,7 @@ export function backOrHome(home = "/pages/user/UserHomePage") {
 }
 
 export async function loadUserOrders() {
-  const wallet = await businessSdk.roleWorkbench.wallet();
-  return listOf(wallet.orders);
+  return rowItems(await api("/api/v1/member/orders"));
 }
 
 export async function loadPlans(planType = "") {

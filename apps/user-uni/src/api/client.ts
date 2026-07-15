@@ -17,6 +17,7 @@ defaultApiBaseURL = 'http://127.0.0.1:3100'
 const apiBaseURL = String(env.VITE_API_BASE_URL || defaultApiBaseURL).replace(/\/+$/, '')
 const isDevBuild = rawEnv.DEV === true || env.MODE === 'development'
 const enableMockLogin = isDevBuild && String(env.VITE_ENABLE_MOCK_LOGIN || '').toLowerCase() === 'true'
+let unauthorizedRedirecting = false
 
 export const authStorage = createAuthStorage({
   adapter,
@@ -56,6 +57,33 @@ function normalizeBody(body: RequestInit['body']) {
   }
 }
 
+function handleUnauthorized() {
+  authStorage.clearSession()
+  if (unauthorizedRedirecting) return
+  unauthorizedRedirecting = true
+  // #ifdef MP-WEIXIN
+  const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
+  const current = pages.length ? pages[pages.length - 1] as unknown as { route?: string; options?: Record<string, unknown> } : null
+  const currentPath = current?.route ? `/${String(current.route).replace(/^\/+/, '')}` : ''
+  const query = current?.options
+    ? Object.entries(current.options).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value ?? ''))}`).join('&')
+    : ''
+  const loginQuery = currentPath && currentPath !== '/pages/WechatLoginPage'
+    ? `?redirectPath=${encodeURIComponent(currentPath)}&redirectQuery=${encodeURIComponent(query)}&sourcePage=${encodeURIComponent(currentPath)}`
+    : ''
+  uni.reLaunch({
+    url: `/pages/WechatLoginPage${loginQuery}`,
+    complete: () => { unauthorizedRedirecting = false },
+  })
+  // #endif
+  // #ifndef MP-WEIXIN
+  if (typeof window !== 'undefined' && !['/login', '/register'].includes(window.location.pathname)) {
+    window.location.assign('/login')
+  }
+  unauthorizedRedirecting = false
+  // #endif
+}
+
 const sharedApiClient = configureApiClient({
   adapter,
   baseURL: apiBaseURL,
@@ -63,7 +91,14 @@ const sharedApiClient = configureApiClient({
   clientName: 'xianzhi-user-web',
   clientVersion: env.VITE_APP_VERSION || env.VITE_APP_BUILD_VERSION || '0.1.0',
   getToken: getAuthToken,
-  onUnauthorized: () => authStorage.clearSession(),
+  defaultHeaders: () => {
+    const auth = authStorage.getAuth()
+    const headers: Record<string, string> = {}
+    if (auth?.tenantId) headers['X-Tenant-Id'] = auth.tenantId
+    if (auth?.organizationId) headers['X-Organization-Id'] = auth.organizationId
+    return headers
+  },
+  onUnauthorized: handleUnauthorized,
 })
 
 export const apiClient = sharedApiClient

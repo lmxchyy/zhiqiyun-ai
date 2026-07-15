@@ -12,6 +12,8 @@ const runtimeProjectionSchema = `
 CREATE TABLE IF NOT EXISTS xz_users (
   id TEXT PRIMARY KEY,
   email TEXT UNIQUE,
+  mobile TEXT,
+  wechat_union_id TEXT,
   name TEXT,
   role TEXT,
   status TEXT,
@@ -23,6 +25,15 @@ CREATE TABLE IF NOT EXISTS xz_users (
   updated_at TEXT,
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+
+ALTER TABLE xz_users ADD COLUMN IF NOT EXISTS mobile TEXT;
+ALTER TABLE xz_users ADD COLUMN IF NOT EXISTS wechat_union_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS xz_users_mobile_unique
+  ON xz_users (mobile)
+  WHERE NULLIF(BTRIM(mobile), '') IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS xz_users_wechat_union_id_unique
+  ON xz_users (wechat_union_id)
+  WHERE NULLIF(BTRIM(wechat_union_id), '') IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS xz_plans (
   id TEXT PRIMARY KEY,
@@ -353,10 +364,12 @@ func (b postgresStateBackend) syncRuntimeProjections(ctx context.Context, conten
 func upsertUsers(ctx context.Context, tx *sql.Tx, items []adminUser) error {
 	for _, item := range items {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO xz_users (id, email, name, role, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+			INSERT INTO xz_users (id, email, mobile, wechat_union_id, name, role, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
 			ON CONFLICT (id) DO UPDATE SET
 				email = excluded.email,
+				mobile = excluded.mobile,
+				wechat_union_id = excluded.wechat_union_id,
 				name = excluded.name,
 				role = excluded.role,
 				status = excluded.status,
@@ -367,7 +380,7 @@ func upsertUsers(ctx context.Context, tx *sql.Tx, items []adminUser) error {
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at,
 				raw = excluded.raw
-		`, item.ID, item.Email, item.Name, item.Role, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		`, item.ID, item.Email, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatUnionID), item.Name, item.Role, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_users %s: %w", item.ID, err)
 		}

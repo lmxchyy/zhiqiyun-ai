@@ -15,6 +15,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +28,11 @@ import (
 	_ "image/gif"
 )
 
-const maxCompatibleReferencePartBytes = 900 << 10
+const (
+	maxCompatibleReferencePartBytes  = 900 << 10
+	maxCompatibleReferenceFieldBytes = 800 << 10
+	maxReferenceImageBytes           = 10 << 20
+)
 
 type OpenAICompatible struct {
 	code               string
@@ -37,6 +43,7 @@ type OpenAICompatible struct {
 	generationEndpoint string
 	editEndpoint       string
 	responseEndpoint   string
+	referenceImageDir  string
 	client             *http.Client
 }
 
@@ -47,12 +54,13 @@ func NewOpenAICompatible(cfg config.Config) OpenAICompatible {
 	}
 	model := strings.TrimSpace(cfg.ImageModel)
 	return OpenAICompatible{
-		code:    "openai-compatible",
-		baseURL: strings.TrimSpace(cfg.ModelProviderURL),
-		apiKey:  strings.TrimSpace(cfg.ModelProviderAPIKey),
-		model:   model,
-		models:  nonEmptyStrings(model),
-		client:  &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
+		code:              "openai-compatible",
+		baseURL:           strings.TrimSpace(cfg.ModelProviderURL),
+		apiKey:            strings.TrimSpace(cfg.ModelProviderAPIKey),
+		model:             model,
+		models:            nonEmptyStrings(model),
+		referenceImageDir: referenceImageDirFromDataPath(cfg.DataPath),
+		client:            &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
 	}
 }
 func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatible {
@@ -74,6 +82,7 @@ func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatib
 		generationEndpoint: strings.TrimSpace(opts.ImageGenerationEndpoint),
 		editEndpoint:       strings.TrimSpace(opts.ImageEditEndpoint),
 		responseEndpoint:   strings.TrimSpace(opts.ResponseEndpoint),
+		referenceImageDir:  strings.TrimSpace(opts.ReferenceImageDir),
 		client:             &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
 	}
 }
@@ -87,7 +96,16 @@ type OpenAICompatibleOptions struct {
 	ImageGenerationEndpoint string
 	ImageEditEndpoint       string
 	ResponseEndpoint        string
+	ReferenceImageDir       string
 	TimeoutMS               int
+}
+
+func referenceImageDirFromDataPath(dataPath string) string {
+	base := filepath.Dir(strings.TrimSpace(dataPath))
+	if base == "." || base == "" {
+		base = "data"
+	}
+	return filepath.Join(base, "reference-images")
 }
 
 func (p OpenAICompatible) enabled() bool {
@@ -477,11 +495,15 @@ func (p OpenAICompatible) addCompatibleReferenceFields(ctx context.Context, fiel
 		return err
 	}
 	encoded := string(raw)
-	fields["image_url"] = referenceURLs[0]
-	fields["image_urls"] = encoded
-	fields["reference_images"] = encoded
-	fields["referenceImages"] = encoded
-	fields["images"] = encoded
+	if len(referenceURLs[0]) <= maxCompatibleReferenceFieldBytes {
+		fields["image_url"] = referenceURLs[0]
+	}
+	if len(encoded) <= maxCompatibleReferenceFieldBytes {
+		fields["image_urls"] = encoded
+		fields["reference_images"] = encoded
+		fields["referenceImages"] = encoded
+		fields["images"] = encoded
+	}
 	return nil
 }
 
@@ -871,6 +893,13 @@ func (p OpenAICompatible) referenceBytes(ctx context.Context, ref referenceImage
 	if name == "" {
 		name = fmt.Sprintf("reference-%d.png", index+1)
 	}
+	if localPath, ok := p.localReferenceImagePath(ref.URL); ok {
+		raw, contentType, err := readLocalReferenceImage(localPath)
+		if err != nil {
+			return nil, "", err
+		}
+		return raw, imageFilename(name, contentType), nil
+	}
 	if strings.HasPrefix(ref.URL, "data:image/") {
 		comma := strings.Index(ref.URL, ",")
 		if comma < 0 || !strings.Contains(ref.URL[:comma], ";base64") {
@@ -925,11 +954,49 @@ func (p OpenAICompatible) fetchReferenceImage(ctx context.Context, imageURL stri
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return nil, "", referenceStatusError{status: res.StatusCode}
 	}
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 10<<20))
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxReferenceImageBytes))
 	if err != nil {
 		return nil, "", err
 	}
 	return raw, res.Header.Get("Content-Type"), nil
+}
+
+func (p OpenAICompatible) localReferenceImagePath(rawURL string) (string, bool) {
+	if strings.TrimSpace(p.referenceImageDir) == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", false
+	}
+	const prefix = "/api/v1/reference-images/"
+	if !strings.HasPrefix(parsed.Path, prefix) {
+		return "", false
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(parsed.Path, prefix))
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return "", false
+	}
+	return filepath.Join(p.referenceImageDir, name), true
+}
+
+func readLocalReferenceImage(path string) ([]byte, string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("open local reference image: %w", err)
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, maxReferenceImageBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read local reference image: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, "", errors.New("local reference image is empty")
+	}
+	if len(raw) > maxReferenceImageBytes {
+		return nil, "", errors.New("local reference image is too large")
+	}
+	return raw, http.DetectContentType(raw), nil
 }
 
 type referenceStatusError struct {
@@ -1118,7 +1185,10 @@ func isGPTImage2Model(model string) bool {
 }
 
 func isTransientProviderStatus(status int) bool {
-	return status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+	return status == http.StatusTooManyRequests ||
+		status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout
 }
 
 func isRetryableProviderError(status int, err error) bool {

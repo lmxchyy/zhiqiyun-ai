@@ -116,6 +116,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/user/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getUserAccessProfile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/current-role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["switchUserCurrentRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/generation-tasks": {
         parameters: {
             query?: never;
@@ -352,8 +384,23 @@ export interface components {
         };
         /** @enum {string} */
         WorkspaceRole: "user" | "agent" | "admin";
+        /** @enum {string} */
+        AppRole: "USER" | "AGENT" | "OPERATION" | "ENTERPRISE_ADMIN" | "AI_ADMIN" | "FINANCE" | "CUSTOMER_SERVICE" | "ENTERPRISE_MEMBER";
+        CurrentRoleRequest: {
+            role: components["schemas"]["AppRole"];
+        };
+        UserAccessProfile: {
+            userId: string;
+            tenantId: string;
+            organizationId: string;
+            roles: components["schemas"]["AppRole"][];
+            currentRole: components["schemas"]["AppRole"];
+            permissions: string[];
+        };
         AuthUser: {
             id: string;
+            tenantId?: string;
+            organizationId?: string;
             email: string;
             name: string;
             role: string;
@@ -384,6 +431,10 @@ export interface components {
             user: components["schemas"]["AuthUser"];
             agent?: components["schemas"]["ChannelAgent"];
             permissions?: string[];
+            tenantId?: string;
+            organizationId?: string;
+            roles?: components["schemas"]["AppRole"][];
+            currentRole?: components["schemas"]["AppRole"];
             defaultModule?: string;
             workspace?: components["schemas"]["WorkspaceRole"];
             defaultRoute?: string;
@@ -589,6 +640,15 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["AuthResponse"];
+            };
+        };
+        /** @description Current tenant, organization, roles and permissions for the authenticated user. */
+        UserAccessProfileResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["UserAccessProfile"];
             };
         };
         /** @description Generation task. */
@@ -797,6 +857,37 @@ export interface operations {
         responses: {
             200: components["responses"]["UserDashboardResponse"];
             401: components["responses"]["ErrorResponse"];
+        };
+    };
+    getUserAccessProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["UserAccessProfileResponse"];
+            401: components["responses"]["ErrorResponse"];
+        };
+    };
+    switchUserCurrentRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurrentRoleRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["UserAccessProfileResponse"];
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
         };
     };
     listGenerationTasks: {

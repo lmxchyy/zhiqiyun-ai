@@ -2922,14 +2922,12 @@
                 <p id="ppt-export-description">导出为标准 PowerPoint 文件。系统会根据当前页面内容生成 .pptx 文件并触发浏览器下载。</p>
               </header>
               <div class="ppt-export-options" role="radiogroup" aria-label="导出格式">
-                <button
-                  type="button"
-                  class="active"
+                <div
+                  class="ppt-export-option active"
                   role="radio"
                   aria-checked="true"
                   aria-label="PowerPoint pptx"
                   title="PowerPoint (.pptx)"
-                  :disabled="exportBusy"
                 >
                   <svg class="ppt-toolbar-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -2941,7 +2939,7 @@
                     <b>PowerPoint (.pptx)</b>
                     <small>标准 PowerPoint 文件</small>
                   </span>
-                </button>
+                </div>
               </div>
               <div v-if="exportBusy || presentationExportPhase !== 'idle'" class="ppt-export-progress" role="status" aria-live="polite">
                 <div
@@ -10706,7 +10704,7 @@ async function handleDeleteHistory(item: PptHistoryItem) {
   gap: 10px;
 }
 
-.ppt-export-options button {
+.ppt-export-option {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr);
   align-items: center;
@@ -10717,21 +10715,15 @@ async function handleDeleteHistory(item: PptHistoryItem) {
   border-radius: 10px;
   color: #f4f4f5;
   background: #0b0b0b;
-  cursor: pointer;
+  cursor: default;
   text-align: left;
 }
 
-.ppt-export-options button.active {
+.ppt-export-option.active {
   border-color: #f4f4f5;
   background: #181818;
 }
 
-.ppt-export-options button:hover:not(:disabled) {
-  border-color: #555;
-  background: #161616;
-}
-
-.ppt-export-options button:focus-visible,
 .ppt-dialog-secondary:focus-visible,
 .ppt-dialog-primary:focus-visible,
 .ppt-export-download-link:focus-visible {
@@ -10739,12 +10731,7 @@ async function handleDeleteHistory(item: PptHistoryItem) {
   outline-offset: 2px;
 }
 
-.ppt-export-options button:disabled {
-  cursor: not-allowed;
-  opacity: 0.72;
-}
-
-.ppt-export-options button > .ppt-toolbar-icon {
+.ppt-export-option > .ppt-toolbar-icon {
   width: 28px;
   height: 28px;
 }

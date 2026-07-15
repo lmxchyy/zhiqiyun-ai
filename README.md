@@ -22,3 +22,12 @@ Web 端作为完整工作台，小程序端作为移动轻量入口。
 ## 标准开发流程
 
 需求 → PRD → 架构 → 数据库 → API → UI → 小程序页面 → 组件清单 → Codex开发 → Review → 测试 → 上线
+
+## 素材中心与页面装修
+
+主控后台「运营中心」已提供素材中心、素材分类、页面装修及首页/创作/作品/我的四页配置。小程序只保留基础错误图，运营图片通过 `Asset Slot` 和 `/api/v1/app/pages/:pageCode` 获取，更换并发布后不需要重新发布小程序。
+
+- 数据迁移：`database/migrations/037-media-page-decoration.sql`
+- 演示素材初始化：在 `backend-go` 目录执行 `go run ./cmd/seed-media`，可重复运行并按 SHA-256 去重。
+- 默认本地存储：`MEDIA_STORAGE_PROVIDER=local`，文件落在 `MEDIA_STORAGE_ROOT`，Docker 中持久化到 `app-data`。
+- 完整运维、API、版权和联调说明见 [docs/media-center-page-decoration.md](docs/media-center-page-decoration.md)。

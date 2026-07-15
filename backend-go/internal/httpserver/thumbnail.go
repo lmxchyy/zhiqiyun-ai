@@ -39,11 +39,19 @@ func thumbnailAndDimensionsForImage(ctx context.Context, imageURL string) (strin
 		width, height, ok := svgDimensions(string(raw))
 		return imageURL, width, height, ok
 	}
+	thumbnailURL, width, height, ok := thumbnailAndDimensionsFromBytes(raw)
+	if ok && thumbnailURL == "" {
+		thumbnailURL = imageURL
+	}
+	return thumbnailURL, width, height, ok
+}
+
+func thumbnailAndDimensionsFromBytes(raw []byte) (string, int, int, bool) {
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		cfg, _, cfgErr := image.DecodeConfig(bytes.NewReader(raw))
 		if cfgErr == nil && cfg.Width > 0 && cfg.Height > 0 {
-			return imageURL, cfg.Width, cfg.Height, true
+			return "", cfg.Width, cfg.Height, true
 		}
 		return "", 0, 0, false
 	}
@@ -67,7 +75,7 @@ func thumbnailAndDimensionsForImage(ctx context.Context, imageURL string) (strin
 
 	var out bytes.Buffer
 	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: 78}); err != nil {
-		return imageURL, width, height, true
+		return "", width, height, true
 	}
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), width, height, true
 }

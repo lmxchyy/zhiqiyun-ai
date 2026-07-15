@@ -1,0 +1,1776 @@
+openapi: 3.0.3
+info:
+  title: Xianzhi AI 主控 SaaS 企业管理 API（草案）
+  version: 0.2.0-draft
+  description: |
+    主控 SaaS 企业管理、配置化商品套餐和企业成员只读接口契约。
+    这是待评审草案，不代表当前所有路径均已实现。
+    平台接口使用 PLATFORM 权限域，企业成员接口使用 TENANT 权限域。
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+tags:
+  - name: PlatformEnterprises
+    description: 平台后台企业管理
+  - name: PlatformBillingCatalog
+    description: 平台后台商品、套餐和模型计费策略
+  - name: TenantEnterprise
+    description: 当前企业上下文的成员端接口
+
+paths:
+  /api/v1/admin/enterprises:
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterprises
+      summary: 企业分页查询
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:list
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: keyword
+          in: query
+          schema: { type: string, maxLength: 200 }
+        - name: certificationStatus
+          in: query
+          schema: { $ref: '#/components/schemas/CertificationState' }
+        - name: subscriptionStatus
+          in: query
+          schema: { $ref: '#/components/schemas/SubscriptionState' }
+        - name: serviceStatus
+          in: query
+          schema: { $ref: '#/components/schemas/ServiceState' }
+        - name: riskStatus
+          in: query
+          schema: { $ref: '#/components/schemas/RiskState' }
+        - name: sourceAgentId
+          in: query
+          schema: { type: string }
+        - name: operationCenterId
+          in: query
+          schema: { type: string }
+        - name: createdFrom
+          in: query
+          schema: { type: string, format: date-time }
+        - name: createdTo
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: 企业分页结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnterprisePage'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [PlatformEnterprises]
+      operationId: createAdminEnterprise
+      summary: 创建企业
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:create
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEnterpriseRequest'
+      responses:
+        '201':
+          description: 创建成功
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Enterprise' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/enterprises/certifications:
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseCertifications
+      summary: 企业认证待审列表
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:certification:review
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/CertificationState' }
+      responses:
+        '200':
+          description: 认证申请分页结果
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, pageSize, total]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CertificationApplication' }
+                  page: { type: integer, minimum: 1 }
+                  pageSize: { type: integer, minimum: 1 }
+                  total: { type: integer, format: int64, minimum: 0 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/enterprises/{enterpriseId}:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterprise
+      summary: 企业详情
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:detail
+      responses:
+        '200':
+          description: 企业详情
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnterpriseDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [PlatformEnterprises]
+      operationId: updateAdminEnterpriseProfile
+      summary: 修改企业非状态资料
+      description: 不接受认证、套餐、服务或风险状态字段。
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:update
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateEnterpriseProfileRequest' }
+      responses:
+        '200':
+          description: 更新成功
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Enterprise' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/state:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterpriseState
+      summary: 查询四套状态与有效服务结果
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:detail
+      responses:
+        '200':
+          description: 状态聚合
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnterpriseStateView' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/certification-transitions:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: transitionAdminEnterpriseCertification
+      summary: 审核或撤销企业认证
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:certification:review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CertificationTransitionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TransitionSucceeded' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/subscription-transitions:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: transitionAdminEnterpriseSubscription
+      summary: 转换企业套餐状态或变更套餐版本
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:subscription:transition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionTransitionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TransitionSucceeded' }
+        '202': { $ref: '#/components/responses/TransitionAccepted' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/service-transitions:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: transitionAdminEnterpriseService
+      summary: 转换企业服务状态
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:service:transition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceTransitionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TransitionSucceeded' }
+        '202': { $ref: '#/components/responses/TransitionAccepted' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/risk-transitions:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: transitionAdminEnterpriseRisk
+      summary: 转换企业风控状态
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:risk:transition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RiskTransitionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TransitionSucceeded' }
+        '202': { $ref: '#/components/responses/TransitionAccepted' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/members:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseMembers
+      summary: 查看企业成员
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:member:view
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 成员分页结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenericPage' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/package:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterprisePackage
+      summary: 查看企业套餐与席位
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:package:view
+      responses:
+        '200':
+          description: 套餐视图
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionView' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/compute:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterpriseCompute
+      summary: 查看企业算力账户
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:compute:view
+      responses:
+        '200':
+          description: 算力账户
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputeAccount' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/compute-adjustments:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: adjustAdminEnterpriseCompute
+      summary: 人工调整企业算力
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:compute:adjust
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComputeAdjustmentRequest' }
+      responses:
+        '200':
+          description: 调整成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComputeAdjustmentResult' }
+        '202':
+          description: 超过权限阈值，已进入审批
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/transactions:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseTransactions
+      summary: 企业充值和消费明细
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:transaction:view
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 流水分页结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenericPage' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/orders:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseOrders
+      summary: 企业订单
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:order:view
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 订单分页结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenericPage' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/ai-capabilities:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseAiCapabilities
+      summary: 企业模型与 AI 能力开通情况
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:ai:view
+      responses:
+        '200':
+          description: AI 能力列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+
+  /api/v1/admin/enterprises/{enterpriseId}/audit-logs:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseAuditLogs
+      summary: 企业审计日志
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:audit:view
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 审计分页结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenericPage' }
+
+  /api/v1/admin/enterprises/exports:
+    post:
+      tags: [PlatformEnterprises]
+      operationId: createAdminEnterpriseExport
+      summary: 创建企业数据导出任务
+      description: 导出结果不包含知识库正文、原始文件、用户作品、对话、提示词或 AI 员工任务输入输出。
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:export
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, filters]
+              additionalProperties: false
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+                filters: { type: object, additionalProperties: true }
+                columns:
+                  type: array
+                  items: { type: string }
+      responses:
+        '202':
+          description: 导出任务已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/organizations:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseOrganizations
+      summary: 查看企业组织架构
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:member:view
+      responses:
+        '200':
+          description: 组织树或扁平列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/seat-adjustments:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: adjustAdminEnterpriseSeats
+      summary: 调整企业成员席位
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:seat:adjust
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SeatAdjustmentRequest' }
+      responses:
+        '200':
+          description: 调整成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatAdjustmentResult' }
+        '202':
+          description: 已进入审批
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/recharges:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: createAdminEnterpriseRecharge
+      summary: 创建企业充值
+      description: 到账算力只按已发布充值商品版本由后端计算，客户端不能提交兑换倍率或到账算力。
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:compute:adjust
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RechargeRequest' }
+      responses:
+        '201':
+          description: 充值订单已创建或已结算
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RechargeResult' }
+        '202':
+          description: 待支付或待审批
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/ai-capabilities/{capabilityCode}/configuration:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - name: capabilityCode
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 120 }
+      - $ref: '#/components/parameters/IdempotencyKey'
+    put:
+      tags: [PlatformEnterprises]
+      operationId: configureAdminEnterpriseAiCapability
+      summary: 配置企业 AI 能力
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:ai:configure
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AiCapabilityConfigurationRequest' }
+      responses:
+        '200':
+          description: 配置成功
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/ai-employees:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterpriseAiEmployeeStats
+      summary: 企业 AI 员工统计
+      description: 只返回数量和运行状态，不返回任务输入输出内容。
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:employee:view
+      responses:
+        '200':
+          description: AI 员工统计
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/v1/admin/enterprises/{enterpriseId}/knowledge-bases:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterpriseKnowledgeBaseStats
+      summary: 企业知识库概览
+      description: 只返回数量、容量和使用统计，不返回正文或原始文件内容。
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:knowledge:view
+      responses:
+        '200':
+          description: 知识库统计
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/v1/admin/enterprises/{enterpriseId}/attribution:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterpriseAttribution
+      summary: 查看客户归属
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:attribution:view
+      responses:
+        '200':
+          description: 当前归属
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttributionView' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/attribution-changes:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformEnterprises]
+      operationId: createAdminEnterpriseAttributionChange
+      summary: 发起企业归属变更
+      description: 必须展示前后值、填写原因，并根据权限进入审批；不得静默修改。
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:attribution:change
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AttributionChangeRequest' }
+      responses:
+        '200':
+          description: 超级管理员直接应用
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttributionChangeResult' }
+        '202':
+          description: 已进入审批
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/enterprises/{enterpriseId}/relationships:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: getAdminEnterpriseRelationships
+      summary: 查看代理商与运营中心关系
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:attribution:view
+      responses:
+        '200':
+          description: 关系视图
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/v1/admin/enterprises/{enterpriseId}/risk-records:
+    parameters:
+      - $ref: '#/components/parameters/EnterpriseId'
+    get:
+      tags: [PlatformEnterprises]
+      operationId: listAdminEnterpriseRiskRecords
+      summary: 查看企业风险记录
+      x-permission-domain: PLATFORM
+      x-permission-code: enterprise:risk:view
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 风险记录分页结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenericPage' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/billing/products:
+    get:
+      tags: [PlatformBillingCatalog]
+      operationId: listAdminBillingProducts
+      summary: 商品目录
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:product:view
+      responses:
+        '200':
+          description: 商品列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Product' }
+    post:
+      tags: [PlatformBillingCatalog]
+      operationId: createAdminBillingProduct
+      summary: 创建商品草稿
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:product:manage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProductRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/billing/products/{productId}:
+    parameters:
+      - name: productId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      tags: [PlatformBillingCatalog]
+      operationId: updateAdminBillingProduct
+      summary: 更新商品草稿
+      description: 已发布商品需创建新版本，不能原地修改结算语义。
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:product:manage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProductRequest' }
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/billing/plans:
+    get:
+      tags: [PlatformBillingCatalog]
+      operationId: listAdminBillingPlans
+      summary: 套餐及版本列表
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:plan:view
+      responses:
+        '200':
+          description: 套餐列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PlanVersion' }
+    post:
+      tags: [PlatformBillingCatalog]
+      operationId: createAdminBillingPlanDraft
+      summary: 创建套餐草稿版本
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:plan:manage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePlanVersionRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanVersion' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/billing/plans/{planId}/versions/{version}/publish:
+    parameters:
+      - name: planId
+        in: path
+        required: true
+        schema: { type: string }
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformBillingCatalog]
+      operationId: publishAdminBillingPlanVersion
+      summary: 发布套餐版本
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:plan:publish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PublishRequest' }
+      responses:
+        '200':
+          description: 发布成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanVersion' }
+        '202':
+          description: 进入审批
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+  /api/v1/admin/billing/model-policies:
+    get:
+      tags: [PlatformBillingCatalog]
+      operationId: listAdminModelBillingPolicies
+      summary: 模型计费策略
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:model-policy:view
+      parameters:
+        - name: modelCode
+          in: query
+          schema: { type: string }
+        - name: capability
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: [DRAFT, PUBLISHED, RETIRED] }
+      responses:
+        '200':
+          description: 策略列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ModelBillingPolicy' }
+    post:
+      tags: [PlatformBillingCatalog]
+      operationId: createAdminModelBillingPolicyDraft
+      summary: 创建模型计费策略草稿
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:model-policy:manage
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateModelBillingPolicyRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelBillingPolicy' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/admin/billing/model-policies/{policyId}/publish:
+    parameters:
+      - name: policyId
+        in: path
+        required: true
+        schema: { type: string }
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [PlatformBillingCatalog]
+      operationId: publishAdminModelBillingPolicy
+      summary: 发布模型计费策略
+      x-permission-domain: PLATFORM
+      x-permission-code: billing:model-policy:publish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PublishRequest' }
+      responses:
+        '200':
+          description: 发布成功
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelBillingPolicy' }
+        '202':
+          description: 进入审批
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/enterprise/overview:
+    get:
+      tags: [TenantEnterprise]
+      operationId: getTenantEnterpriseOverview
+      summary: 当前企业概览
+      description: tenantId 只从已认证企业上下文解析，客户端不能指定其他企业。
+      x-permission-domain: TENANT
+      x-permission-code: enterprise.overview.read
+      responses:
+        '200':
+          description: 企业概览
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnterpriseDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/enterprise/package:
+    get:
+      tags: [TenantEnterprise]
+      operationId: getTenantEnterprisePackage
+      summary: 当前企业套餐
+      x-permission-domain: TENANT
+      x-permission-code: enterprise.package.read
+      responses:
+        '200':
+          description: 套餐视图
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionView' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/enterprise/usage:
+    get:
+      tags: [TenantEnterprise]
+      operationId: listTenantEnterpriseUsage
+      summary: 当前企业模型原始用量与算力汇总
+      description: 不返回对话、提示词、任务输入输出、知识库正文或原始文件内容。
+      x-permission-domain: TENANT
+      x-permission-code: enterprise.usage.read
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: 用量汇总
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageSummary' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/enterprise/certifications:
+    get:
+      tags: [TenantEnterprise]
+      operationId: getTenantEnterpriseCertification
+      summary: 当前企业认证状态
+      x-permission-domain: TENANT
+      x-permission-code: enterprise.certification.read
+      responses:
+        '200':
+          description: 最新认证申请
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertificationApplication' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/enterprise/certification-submissions:
+    post:
+      tags: [TenantEnterprise]
+      operationId: submitTenantEnterpriseCertification
+      summary: 提交或重新提交当前企业认证
+      x-permission-domain: TENANT
+      x-permission-code: enterprise.certification.submit
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CertificationSubmissionRequest' }
+      responses:
+        '201':
+          description: 提交成功
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CertificationApplication' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/BusinessRuleViolation' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    EnterpriseId:
+      name: enterpriseId
+      in: path
+      required: true
+      description: xz_tenants.id，且服务端必须校验 tenant_type=ENTERPRISE。
+      schema: { type: string, minLength: 1, maxLength: 128 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 同一作用域内唯一。相同键和相同请求摘要回放首次结果；相同键不同摘要返回 409。
+      schema: { type: string, minLength: 8, maxLength: 128 }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+
+  headers:
+    IdempotentReplayed:
+      description: true 表示响应来自已完成幂等记录回放。
+      schema: { type: boolean }
+
+  responses:
+    BadRequest:
+      description: 请求格式或业务单位错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: 未认证
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: 权限域、权限码或数据范围不允许
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: 企业或资源不存在；跨租户资源也返回此响应
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: 幂等键、状态版本或状态转换冲突
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    BusinessRuleViolation:
+      description: 业务守卫失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    TransitionSucceeded:
+      description: 状态转换成功
+      headers:
+        Idempotent-Replayed:
+          $ref: '#/components/headers/IdempotentReplayed'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TransitionResult' }
+    TransitionAccepted:
+      description: 已进入审批或异步处理
+      headers:
+        Idempotent-Replayed:
+          $ref: '#/components/headers/IdempotentReplayed'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/OperationAccepted' }
+
+  schemas:
+    CertificationState:
+      type: string
+      enum: [UNVERIFIED, PENDING, APPROVED, REJECTED, REVOKED]
+    SubscriptionState:
+      type: string
+      enum: [NONE, TRIALING, ACTIVE, GRACE, SUSPENDED, EXPIRED, CANCELED]
+    ServiceState:
+      type: string
+      enum: [PROVISIONING, ACTIVE, PAUSED, DISABLED, TERMINATED]
+    RiskState:
+      type: string
+      enum: [NORMAL, MONITORING, RESTRICTED, BLOCKED]
+    RiskLevel:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+
+    Enterprise:
+      type: object
+      required:
+        - id
+        - enterpriseCode
+        - name
+        - profileStatus
+        - certificationStatus
+        - subscriptionStatus
+        - serviceStatus
+        - riskStatus
+        - createdAt
+      properties:
+        id: { type: string }
+        enterpriseCode: { type: string }
+        name: { type: string }
+        profileStatus: { type: string, description: 仅企业档案生命周期，不代表服务是否可用。 }
+        certificationStatus: { $ref: '#/components/schemas/CertificationState' }
+        subscriptionStatus: { $ref: '#/components/schemas/SubscriptionState' }
+        serviceStatus: { $ref: '#/components/schemas/ServiceState' }
+        riskStatus: { $ref: '#/components/schemas/RiskState' }
+        effectiveServiceAvailable: { type: boolean }
+        effectiveServiceReason: { type: string }
+        planCode: { type: string }
+        planVersion: { type: integer, format: int64 }
+        planExpiresAt: { type: string, format: date-time, nullable: true }
+        memberCount: { type: integer, format: int64, minimum: 0 }
+        seatLimit: { type: integer, format: int64, minimum: 0 }
+        computeUnitBalance: { type: integer, format: int64, minimum: 0 }
+        sourceAgentId: { type: string, nullable: true }
+        operationCenterId: { type: string, nullable: true }
+        industry: { type: string }
+        companySize: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    EnterpriseDetail:
+      allOf:
+        - $ref: '#/components/schemas/Enterprise'
+        - type: object
+          properties:
+            state:
+              $ref: '#/components/schemas/EnterpriseStateView'
+            sensitiveDataNotice:
+              type: string
+              example: 平台默认不可查看知识库正文、原始文件、用户作品、对话、提示词及 AI 员工任务输入输出。
+
+    EnterprisePage:
+      type: object
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Enterprise' }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1 }
+        total: { type: integer, format: int64, minimum: 0 }
+
+    GenericPage:
+      type: object
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          items: { type: object, additionalProperties: true }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1 }
+        total: { type: integer, format: int64, minimum: 0 }
+
+    CreateEnterpriseRequest:
+      type: object
+      required: [name, ownerUserId, reason]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        ownerUserId: { type: string }
+        industry: { type: string, maxLength: 100 }
+        companySize: { type: string, maxLength: 100 }
+        sourceAgentId: { type: string, nullable: true }
+        operationCenterId: { type: string, nullable: true }
+        initialPlanVersionId: { type: string, nullable: true }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    UpdateEnterpriseProfileRequest:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        industry: { type: string, maxLength: 100 }
+        companySize: { type: string, maxLength: 100 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    StateSlot:
+      type: object
+      required: [state, version, changedAt]
+      properties:
+        state: { type: string }
+        version: { type: integer, format: int64, minimum: 0 }
+        changedAt: { type: string, format: date-time }
+        reason: { type: string }
+
+    EnterpriseStateView:
+      type: object
+      required: [certification, subscription, service, risk, effectiveService]
+      properties:
+        certification: { $ref: '#/components/schemas/StateSlot' }
+        subscription: { $ref: '#/components/schemas/StateSlot' }
+        service: { $ref: '#/components/schemas/StateSlot' }
+        risk: { $ref: '#/components/schemas/StateSlot' }
+        effectiveService:
+          type: object
+          required: [available, reasonCode]
+          properties:
+            available: { type: boolean }
+            reasonCode: { type: string }
+
+    TransitionBase:
+      type: object
+      required: [command, expectedVersion, reason]
+      properties:
+        command: { type: string }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        approvalRequestId: { type: string, nullable: true }
+        metadata: { type: object, additionalProperties: true }
+
+    CertificationTransitionRequest:
+      allOf:
+        - $ref: '#/components/schemas/TransitionBase'
+        - type: object
+          properties:
+            command: { type: string, enum: [APPROVE, REJECT, REVOKE] }
+            applicationId: { type: string }
+
+    SubscriptionTransitionRequest:
+      allOf:
+        - $ref: '#/components/schemas/TransitionBase'
+        - type: object
+          properties:
+            command:
+              type: string
+              enum: [START_TRIAL, ACTIVATE, CHANGE_PLAN, ENTER_GRACE, RENEW, SUSPEND, RESUME, EXPIRE, CANCEL]
+            planVersionId: { type: string, nullable: true }
+            effectiveAt: { type: string, format: date-time, nullable: true }
+            cancelAtPeriodEnd: { type: boolean, default: false }
+
+    ServiceTransitionRequest:
+      allOf:
+        - $ref: '#/components/schemas/TransitionBase'
+        - type: object
+          properties:
+            command: { type: string, enum: [PROVISION, ACTIVATE, PAUSE, RESUME, DISABLE, RESTORE, TERMINATE] }
+            pausedUntil: { type: string, format: date-time, nullable: true }
+
+    RiskTransitionRequest:
+      allOf:
+        - $ref: '#/components/schemas/TransitionBase'
+        - type: object
+          required: [riskLevel, evidenceRefs]
+          properties:
+            command: { type: string, enum: [START_MONITORING, RESTRICT, BLOCK, RELAX, CLEAR, UNBLOCK] }
+            riskLevel: { $ref: '#/components/schemas/RiskLevel' }
+            restrictionConfig: { type: object, additionalProperties: true }
+            evidenceRefs:
+              type: array
+              minItems: 1
+              items: { type: string }
+
+    TransitionResult:
+      type: object
+      required:
+        - operationId
+        - enterpriseId
+        - aggregateType
+        - command
+        - fromState
+        - toState
+        - stateVersion
+        - status
+        - auditId
+        - processedAt
+      properties:
+        operationId: { type: string }
+        enterpriseId: { type: string }
+        aggregateType: { type: string, enum: [CERTIFICATION, SUBSCRIPTION, SERVICE, RISK] }
+        command: { type: string }
+        fromState: { type: string }
+        toState: { type: string }
+        stateVersion: { type: integer, format: int64, minimum: 1 }
+        status: { type: string, enum: [SUCCEEDED] }
+        auditId: { type: string }
+        processedAt: { type: string, format: date-time }
+
+    OperationAccepted:
+      type: object
+      required: [operationId, status]
+      properties:
+        operationId: { type: string }
+        status: { type: string, enum: [PROCESSING, PENDING_APPROVAL] }
+        approvalRequestId: { type: string, nullable: true }
+
+    CertificationApplication:
+      type: object
+      required: [id, enterpriseId, legalName, unifiedSocialCreditCode, status, stateVersion, createdAt]
+      properties:
+        id: { type: string }
+        enterpriseId: { type: string }
+        legalName: { type: string }
+        unifiedSocialCreditCode: { type: string }
+        legalRepresentativeName: { type: string }
+        documentRefs:
+          type: array
+          description: 只返回受控对象引用，不返回文件正文或永久公开 URL。
+          items: { type: string }
+        status: { $ref: '#/components/schemas/CertificationState' }
+        stateVersion: { type: integer, format: int64, minimum: 0 }
+        reviewComment: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CertificationSubmissionRequest:
+      type: object
+      required: [legalName, unifiedSocialCreditCode, legalRepresentativeName, documentRefs, reason]
+      additionalProperties: false
+      properties:
+        legalName: { type: string, minLength: 1, maxLength: 200 }
+        unifiedSocialCreditCode: { type: string, minLength: 1, maxLength: 50 }
+        legalRepresentativeName: { type: string, minLength: 1, maxLength: 100 }
+        documentRefs:
+          type: array
+          minItems: 1
+          items: { type: string }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    SubscriptionView:
+      type: object
+      required: [state, stateVersion, planId, planVersionId, priceCents, currencyCode, entitlements, grants]
+      properties:
+        state: { $ref: '#/components/schemas/SubscriptionState' }
+        displayState: { type: string, enum: [TRIALING, ACTIVE, EXPIRING_SOON, GRACE, SUSPENDED, EXPIRED, CANCELED] }
+        stateVersion: { type: integer, format: int64, minimum: 0 }
+        planId: { type: string }
+        planVersionId: { type: string }
+        planVersion: { type: integer, format: int64, minimum: 1 }
+        priceCents: { type: integer, format: int64, minimum: 0 }
+        currencyCode: { type: string, example: CNY }
+        currentPeriodStart: { type: string, format: date-time, nullable: true }
+        currentPeriodEnd: { type: string, format: date-time, nullable: true }
+        entitlements:
+          type: array
+          items: { $ref: '#/components/schemas/EntitlementValue' }
+        grants:
+          type: array
+          items: { $ref: '#/components/schemas/GrantRule' }
+
+    ComputeAccount:
+      type: object
+      required: [availableComputeUnits, frozenComputeUnits, unit]
+      properties:
+        availableComputeUnits: { type: integer, format: int64, minimum: 0 }
+        frozenComputeUnits: { type: integer, format: int64, minimum: 0 }
+        unit: { type: string, enum: [COMPUTE_UNIT] }
+        updatedAt: { type: string, format: date-time }
+
+    ComputeAdjustmentRequest:
+      type: object
+      required: [deltaComputeUnits, reason, expectedBalance]
+      additionalProperties: false
+      properties:
+        deltaComputeUnits:
+          type: integer
+          format: int64
+          description: 正数增加、负数扣减；单位为整数最小算力单位。
+          not: { enum: [0] }
+        expectedBalance: { type: integer, format: int64, minimum: 0 }
+        referenceType: { type: string, maxLength: 100 }
+        referenceId: { type: string, maxLength: 128 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        approvalRequestId: { type: string, nullable: true }
+
+    ComputeAdjustmentResult:
+      type: object
+      required: [transactionId, beforeComputeUnits, deltaComputeUnits, afterComputeUnits, unit, auditId]
+      properties:
+        transactionId: { type: string }
+        beforeComputeUnits: { type: integer, format: int64, minimum: 0 }
+        deltaComputeUnits: { type: integer, format: int64 }
+        afterComputeUnits: { type: integer, format: int64, minimum: 0 }
+        unit: { type: string, enum: [COMPUTE_UNIT] }
+        auditId: { type: string }
+
+    SeatAdjustmentRequest:
+      type: object
+      required: [seatLimit, expectedVersion, reason]
+      additionalProperties: false
+      properties:
+        seatLimit: { type: integer, format: int64, minimum: 1, maximum: 100000 }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        approvalRequestId: { type: string, nullable: true }
+
+    SeatAdjustmentResult:
+      type: object
+      required: [beforeSeatLimit, afterSeatLimit, activeMemberCount, stateVersion, auditId]
+      properties:
+        beforeSeatLimit: { type: integer, format: int64, minimum: 0 }
+        afterSeatLimit: { type: integer, format: int64, minimum: 1 }
+        activeMemberCount: { type: integer, format: int64, minimum: 0 }
+        stateVersion: { type: integer, format: int64, minimum: 1 }
+        auditId: { type: string }
+
+    RechargeRequest:
+      type: object
+      required: [rechargeProductVersionId, amountCents, currencyCode, paymentReference, reason]
+      additionalProperties: false
+      properties:
+        rechargeProductVersionId:
+          type: string
+          description: 已发布充值商品/套餐版本；后端从版本快照计算赠送算力。
+        amountCents: { type: integer, format: int64, minimum: 1 }
+        currencyCode: { type: string, enum: [CNY] }
+        paymentReference: { type: string, minLength: 1, maxLength: 200 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        approvalRequestId: { type: string, nullable: true }
+
+    RechargeResult:
+      type: object
+      required: [orderId, amountCents, currencyCode, computeUnitsGranted, settlementStatus, auditId]
+      properties:
+        orderId: { type: string }
+        amountCents: { type: integer, format: int64, minimum: 1 }
+        currencyCode: { type: string, enum: [CNY] }
+        computeUnitsGranted: { type: integer, format: int64, minimum: 0 }
+        settlementStatus: { type: string, enum: [PENDING, SETTLED, FAILED] }
+        auditId: { type: string }
+
+    AiCapabilityConfigurationRequest:
+      type: object
+      required: [enabled, expectedVersion, reason]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        allowedModelCodes:
+          type: array
+          items: { type: string }
+        limits: { type: object, additionalProperties: true }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+
+    AttributionView:
+      type: object
+      required: [version]
+      properties:
+        sourceAgentId: { type: string, nullable: true }
+        operationCenterId: { type: string, nullable: true }
+        customerOwnerId: { type: string, nullable: true }
+        version: { type: integer, format: int64, minimum: 0 }
+        updatedAt: { type: string, format: date-time }
+
+    AttributionChangeRequest:
+      type: object
+      required: [before, after, expectedVersion, reason]
+      additionalProperties: false
+      properties:
+        before: { $ref: '#/components/schemas/AttributionView' }
+        after: { $ref: '#/components/schemas/AttributionView' }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        approvalRequestId: { type: string, nullable: true }
+
+    AttributionChangeResult:
+      type: object
+      required: [changeRequestId, status, before, after, auditId]
+      properties:
+        changeRequestId: { type: string }
+        status: { type: string, enum: [APPLIED, PENDING_APPROVAL, REJECTED] }
+        before: { $ref: '#/components/schemas/AttributionView' }
+        after: { $ref: '#/components/schemas/AttributionView' }
+        auditId: { type: string }
+
+    Product:
+      type: object
+      required: [id, code, name, type, status, version, saleScope, entitlements]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        type: { type: string }
+        status: { type: string, enum: [DRAFT, ACTIVE, RETIRED, DISABLED] }
+        version: { type: integer, format: int64, minimum: 1 }
+        saleScope: { type: string, enum: [ALL, PERSONAL, ENTERPRISE, CHANNEL, INTERNAL] }
+        description: { type: string }
+        entitlements:
+          type: array
+          items: { $ref: '#/components/schemas/EntitlementDefinition' }
+
+    CreateProductRequest:
+      type: object
+      required: [code, name, type, saleScope, reason]
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_\-]{2,80}$' }
+        name: { type: string, minLength: 1, maxLength: 150 }
+        type: { type: string, maxLength: 40 }
+        saleScope: { type: string, enum: [ALL, PERSONAL, ENTERPRISE, CHANNEL, INTERNAL] }
+        description: { type: string, maxLength: 2000 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+
+    UpdateProductRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateProductRequest'
+        - type: object
+          required: [expectedVersion]
+          properties:
+            expectedVersion: { type: integer, format: int64, minimum: 1 }
+
+    EntitlementDefinition:
+      type: object
+      required: [id, code, name, unit, valueType, aggregation]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        unit: { type: string }
+        valueType: { type: string, enum: [QUANTITY, BOOLEAN, TEXT, JSON, UNLIMITED] }
+        aggregation: { type: string, enum: [NONE, SUM, MAX, LATEST] }
+
+    EntitlementValue:
+      type: object
+      required: [entitlementId, code, valueType, resetPolicy]
+      properties:
+        entitlementId: { type: string, format: uuid }
+        code: { type: string }
+        valueType: { type: string, enum: [QUANTITY, BOOLEAN, TEXT, JSON, UNLIMITED] }
+        quantity: { type: integer, format: int64, minimum: 0, nullable: true }
+        valueBoolean: { type: boolean, nullable: true }
+        valueText: { type: string, nullable: true }
+        valueJson: { type: object, additionalProperties: true, nullable: true }
+        resetPolicy: { type: string, enum: [NEVER, DAILY, WEEKLY, MONTHLY, BILLING_PERIOD, CUSTOM] }
+        thresholdConfig:
+          type: array
+          items: { type: object, additionalProperties: true }
+        validityConfig: { type: object, additionalProperties: true }
+
+    GrantRule:
+      type: object
+      required: [resourceCode, baseAmount, bonusAmount, triggerType, recurrence]
+      properties:
+        resourceCode: { type: string, enum: [COMPUTE_UNIT] }
+        baseAmount: { type: integer, format: int64, minimum: 0 }
+        bonusAmount: { type: integer, format: int64, minimum: 0 }
+        triggerType: { type: string, enum: [ON_ACTIVATION, ON_RENEWAL, SCHEDULED, MANUAL_APPROVED] }
+        recurrence: { type: string, enum: [ONCE, DAILY, MONTHLY, BILLING_PERIOD, CUSTOM] }
+        validitySeconds: { type: integer, format: int64, minimum: 1, nullable: true }
+        validFrom: { type: string, format: date-time, nullable: true }
+        validTo: { type: string, format: date-time, nullable: true }
+
+    PlanVersion:
+      type: object
+      required:
+        - id
+        - planId
+        - version
+        - status
+        - name
+        - priceCents
+        - currencyCode
+        - billingCycle
+        - validity
+        - products
+        - entitlements
+        - grants
+      properties:
+        id: { type: string }
+        planId: { type: string }
+        version: { type: integer, format: int64, minimum: 1 }
+        status: { type: string, enum: [DRAFT, PUBLISHED, RETIRED] }
+        name: { type: string }
+        priceCents: { type: integer, format: int64, minimum: 0 }
+        currencyCode: { type: string, example: CNY }
+        billingCycle: { type: string, enum: [ONE_TIME, MONTHLY, QUARTERLY, YEARLY, CUSTOM] }
+        validity:
+          $ref: '#/components/schemas/ValidityPolicy'
+        products:
+          type: array
+          items: { type: string, format: uuid }
+        entitlements:
+          type: array
+          items: { $ref: '#/components/schemas/EntitlementValue' }
+        grants:
+          type: array
+          items: { $ref: '#/components/schemas/GrantRule' }
+        changeReason: { type: string }
+        publishedAt: { type: string, format: date-time, nullable: true }
+
+    CreatePlanVersionRequest:
+      type: object
+      required:
+        - planId
+        - name
+        - priceCents
+        - currencyCode
+        - billingCycle
+        - validity
+        - products
+        - entitlements
+        - grants
+        - reason
+      additionalProperties: false
+      properties:
+        planId: { type: string }
+        basedOnVersion: { type: integer, format: int64, minimum: 1, nullable: true }
+        name: { type: string, minLength: 1, maxLength: 150 }
+        priceCents: { type: integer, format: int64, minimum: 0 }
+        currencyCode: { type: string, enum: [CNY] }
+        billingCycle: { type: string, enum: [ONE_TIME, MONTHLY, QUARTERLY, YEARLY, CUSTOM] }
+        validity: { $ref: '#/components/schemas/ValidityPolicy' }
+        products:
+          type: array
+          items: { type: string, format: uuid }
+        entitlements:
+          type: array
+          items: { $ref: '#/components/schemas/EntitlementValue' }
+        grants:
+          type: array
+          items: { $ref: '#/components/schemas/GrantRule' }
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+
+    ValidityPolicy:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [FIXED_DAYS, FIXED_WINDOW, SUBSCRIPTION_PERIOD, UNLIMITED, CUSTOM] }
+        value: { type: integer, format: int64, minimum: 1, nullable: true }
+        validFrom: { type: string, format: date-time, nullable: true }
+        validTo: { type: string, format: date-time, nullable: true }
+
+    ModelBillingPolicy:
+      type: object
+      required:
+        - id
+        - modelCode
+        - capability
+        - billingUnit
+        - version
+        - status
+        - unitSize
+        - computeUnitRatio
+        - priceCentsPerUnit
+        - costCentsPerUnit
+        - roundingMode
+        - tiers
+        - multipliers
+      properties:
+        id: { type: string }
+        modelCode: { type: string }
+        capability: { type: string }
+        billingUnit:
+          type: string
+          enum: [REQUEST, INPUT_TOKEN, OUTPUT_TOKEN, CACHED_INPUT_TOKEN, REASONING_TOKEN, IMAGE, SECOND, CHARACTER]
+        version: { type: integer, format: int64, minimum: 1 }
+        status: { type: string, enum: [DRAFT, PUBLISHED, RETIRED] }
+        unitSize: { type: integer, format: int64, minimum: 1 }
+        computeUnitRatio: { $ref: '#/components/schemas/IntegerRatio' }
+        priceCentsPerUnit: { type: integer, format: int64, minimum: 0 }
+        costCentsPerUnit: { type: integer, format: int64, minimum: 0 }
+        roundingMode: { type: string, enum: [CEILING, FLOOR, HALF_UP] }
+        tiers:
+          type: array
+          items: { $ref: '#/components/schemas/BillingTier' }
+        multipliers:
+          type: array
+          items: { $ref: '#/components/schemas/BillingMultiplier' }
+        validFrom: { type: string, format: date-time, nullable: true }
+        validTo: { type: string, format: date-time, nullable: true }
+        changeReason: { type: string }
+
+    CreateModelBillingPolicyRequest:
+      allOf:
+        - $ref: '#/components/schemas/ModelBillingPolicy'
+        - type: object
+          required: [reason]
+          properties:
+            id: { readOnly: true }
+            version: { readOnly: true }
+            status: { readOnly: true }
+            reason: { type: string, minLength: 1, maxLength: 2000 }
+
+    IntegerRatio:
+      type: object
+      required: [numerator, denominator]
+      properties:
+        numerator: { type: integer, format: int64, minimum: 0 }
+        denominator: { type: integer, format: int64, minimum: 1 }
+
+    BillingTier:
+      type: object
+      required: [fromQuantity, computeUnitRatio, priceCentsPerUnit, costCentsPerUnit]
+      properties:
+        fromQuantity: { type: integer, format: int64, minimum: 0 }
+        toQuantity: { type: integer, format: int64, minimum: 1, nullable: true }
+        computeUnitRatio: { $ref: '#/components/schemas/IntegerRatio' }
+        priceCentsPerUnit: { type: integer, format: int64, minimum: 0 }
+        costCentsPerUnit: { type: integer, format: int64, minimum: 0 }
+
+    BillingMultiplier:
+      type: object
+      required: [dimension, operator, operand, ratio, priority, stackingMode]
+      properties:
+        dimension: { type: string }
+        operator: { type: string, enum: [EQ, IN, GTE, GT, LTE, LT, BETWEEN] }
+        operand: {}
+        ratio: { $ref: '#/components/schemas/IntegerRatio' }
+        priority: { type: integer }
+        stackingMode: { type: string, enum: [MULTIPLY, MAX, FIRST_MATCH] }
+
+    PublishRequest:
+      type: object
+      required: [reason, expectedVersion]
+      additionalProperties: false
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 2000 }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        approvalRequestId: { type: string, nullable: true }
+        effectiveAt: { type: string, format: date-time, nullable: true }
+
+    UsageSummary:
+      type: object
+      required: [from, to, computeUnitsConsumed, amountCents, rawModelUsage, sensitiveDataNotice]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        computeUnitsConsumed: { type: integer, format: int64, minimum: 0 }
+        amountCents: { type: integer, format: int64, minimum: 0 }
+        rawModelUsage:
+          type: array
+          items:
+            $ref: '#/components/schemas/RawModelUsage'
+        sensitiveDataNotice: { type: string }
+
+    RawModelUsage:
+      type: object
+      required:
+        - modelCode
+        - capability
+        - requestCount
+        - inputTokens
+        - outputTokens
+        - cachedInputTokens
+        - reasoningTokens
+        - totalTokens
+      properties:
+        modelCode: { type: string }
+        capability: { type: string }
+        requestCount: { type: integer, format: int64, minimum: 0 }
+        inputTokens: { type: integer, format: int64, minimum: 0 }
+        outputTokens: { type: integer, format: int64, minimum: 0 }
+        cachedInputTokens: { type: integer, format: int64, minimum: 0 }
+        reasoningTokens: { type: integer, format: int64, minimum: 0 }
+        totalTokens: { type: integer, format: int64, minimum: 0 }
+
+    ErrorResponse:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_ARGUMENT
+            - UNAUTHENTICATED
+            - PERMISSION_DENIED
+            - ENTERPRISE_NOT_FOUND
+            - STATE_VERSION_CONFLICT
+            - INVALID_STATE_TRANSITION
+            - IDEMPOTENCY_KEY_REUSED
+            - IDEMPOTENCY_IN_PROGRESS
+            - BUSINESS_RULE_VIOLATION
+            - RATE_LIMITED
+            - INTERNAL_ERROR
+        message: { type: string }
+        requestId: { type: string }
+        details: { type: object, additionalProperties: true }

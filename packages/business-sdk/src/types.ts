@@ -5,6 +5,11 @@ import type {
   AuthUser,
   ChannelAgent,
   ChannelCenterResponse,
+  CurrentContextRequest,
+  EnterpriseContext,
+  EnterpriseContextsResponse,
+  EnterpriseCertification,
+  EnterpriseCertificationSubmitRequest,
   CreateDraft,
   FeatureEntry,
   GenerationTask,
@@ -54,6 +59,29 @@ export interface ItemsResponse<T = AnyRecord> {
   summary?: AnyRecord;
 }
 
+export interface PageOptions {
+  limit?: number;
+  offset?: number;
+}
+
+export interface TaskPageOptions extends PageOptions {
+  prioritizeActive?: boolean;
+}
+
+export interface PagedItems<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  summary?: {
+    total?: number;
+    monthTotal?: number;
+    favoriteTotal?: number;
+    storageBytes?: number;
+  };
+}
+
 export interface BillingOrderInput {
   planId?: string;
   amountCents?: number;
@@ -91,9 +119,11 @@ export interface BusinessSdk {
   generation: {
     createTask(draft: CreateDraft): Promise<GenerationTask>;
     listTasks(): Promise<GenerationTask[]>;
+    listTaskPage(options?: TaskPageOptions): Promise<PagedItems<GenerationTask>>;
   };
   assets: {
     list(): Promise<Asset[]>;
+    listPage(options?: PageOptions): Promise<PagedItems<Asset>>;
     getWorks(): Promise<WorkItem[]>;
   };
   models: {
@@ -118,6 +148,15 @@ export interface BusinessSdk {
   agents: {
     list(): Promise<AgentEntry[]>;
     center(): Promise<ChannelCenterResponse>;
+  };
+  enterprise: {
+    contexts(): Promise<EnterpriseContextsResponse>;
+    switchContext(input: CurrentContextRequest): Promise<EnterpriseContext>;
+    create(name: string): Promise<AnyRecord>;
+    overview(): Promise<AnyRecord>;
+    members(): Promise<AnyRecord>;
+    organizationTree(): Promise<AnyRecord>;
+    submitCertification(input: EnterpriseCertificationSubmitRequest): Promise<EnterpriseCertification>;
   };
   roleWorkbench: {
     memberProfile(): Promise<MemberProfileResponse>;

@@ -116,7 +116,7 @@ function api(path, options) {
       method: options && options.method ? options.method : "GET",
       header: headers,
       data: options && Object.prototype.hasOwnProperty.call(options, "body") ? JSON.parse(String(options.body)) : undefined,
-      timeout: 600000,
+      timeout: 15000,
       success: (response) => {
         const body = response && response.data && typeof response.data === "object" ? response.data : {};
         if (response.statusCode < 200 || response.statusCode >= 300 || (body.code && body.code !== "0")) {
@@ -179,20 +179,63 @@ Page({
     });
   },
 
-  completeLogin(auth, source) {
+  async completeLogin(auth, source) {
     const token = auth && auth.accessToken ? auth.accessToken : "";
     if (!token) throw new Error("missing accessToken");
     wx.setStorageSync("token", token);
+    wx.setStorageSync("auth", auth || {});
     wx.setStorageSync("xianzhiMiniProgramAuth", auth || {});
+    if (auth && auth.refreshToken) wx.setStorageSync("refreshToken", auth.refreshToken);
+    const roles = Array.isArray(auth && auth.roles) ? auth.roles : ["USER"];
+    const targetRole = roles.includes("OPERATION") ? "OPERATION" : roles.includes("AGENT") ? "AGENT" : "USER";
+    let roleAccess;
+    try {
+      roleAccess = await api("/api/v1/user/current-role", {
+        method: "POST",
+        body: JSON.stringify({ role: targetRole })
+      });
+    } catch (error) {
+      wx.removeStorageSync("token");
+      wx.removeStorageSync("refreshToken");
+      wx.removeStorageSync("auth");
+      wx.removeStorageSync("xianzhiMiniProgramAuth");
+      throw error;
+    }
+    const storedAuth = Object.assign({}, auth || {}, roleAccess || {}, { currentRole: targetRole });
+    wx.setStorageSync("auth", storedAuth);
+    wx.setStorageSync("xianzhiMiniProgramAuth", storedAuth);
+    const landingPages = {
+      USER: "/pages/user/UserHomePage",
+      AGENT: "/pages/agent/AgentOverviewPage",
+      OPERATION: "/pages/operation/OperationOverviewPage"
+    };
+    const landingPage = landingPages[targetRole] || landingPages.USER;
     setTimeout(() => {
+      if (targetRole === "USER") {
+        wx.switchTab({
+          url: landingPage,
+          fail: (error) => {
+            wx.reLaunch({
+              url: landingPage,
+              fail: (relaunchError) => {
+                this.setStatus(
+                  "登录成功，但跳转工作台失败：" + messageOf(relaunchError || error, "跳转失败"),
+                  "error"
+                );
+              }
+            });
+          }
+        });
+        return;
+      }
       wx.reLaunch({
-        url: "/pages/user/UserHomePage",
+        url: landingPage,
         fail: (error) => {
           this.setStatus("登录成功，但跳转工作台失败：" + messageOf(error, "跳转失败"), "error");
         }
       });
     }, 300);
-    this.setStatus(source + "成功，工作区=" + (auth.workspace || "-"), "success");
+    this.setStatus(source + "成功，当前角色=" + targetRole, "success");
     wx.showToast({ title: "登录成功", icon: "success" });
   },
 
@@ -212,7 +255,7 @@ Page({
           password: this.data.password.trim()
         })
       });
-      this.completeLogin(auth, "账号密码登录");
+      await this.completeLogin(auth, "账号密码登录");
     } catch (error) {
       this.setStatus("账号密码登录失败：" + messageOf(error, "登录失败"), "error");
     } finally {
@@ -229,7 +272,7 @@ ${enableMockLogin ? `  async mockLogin() {
         method: "POST",
         body: JSON.stringify({ code: "mock-devtools-code" })
       });
-      this.completeLogin(auth, "模拟登录");
+      await this.completeLogin(auth, "模拟登录");
     } catch (error) {
       this.setStatus("模拟登录失败：" + messageOf(error, "模拟登录失败"), "error");
     } finally {
@@ -256,7 +299,7 @@ ${enableMockLogin ? `  async mockLogin() {
             method: "POST",
             body: JSON.stringify({ code: result.code })
           });
-          this.completeLogin(auth, "微信登录");
+          await this.completeLogin(auth, "微信登录");
         } catch (error) {
           this.setStatus("微信登录失败：" + messageOf(error, "微信登录失败"), "error");
         } finally {
@@ -311,14 +354,14 @@ const wxss = `page {
 .eyebrow {
   color: #2563eb;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .title {
   margin-top: 5px;
   color: #111827;
   font-size: 22px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .heading {
@@ -330,7 +373,7 @@ const wxss = `page {
   color: #101c35;
   font-size: 30px;
   line-height: 1.15;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .copy {
@@ -376,7 +419,7 @@ const wxss = `page {
   padding: 0 14px;
   border-radius: 8px;
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -614,7 +657,7 @@ function api(path, options) {
       method: options && options.method ? options.method : "GET",
       header: headers,
       data: options && Object.prototype.hasOwnProperty.call(options, "body") ? JSON.parse(String(options.body)) : undefined,
-      timeout: 600000,
+      timeout: 15000,
       success: (response) => {
         const body = response && response.data && typeof response.data === "object" ? response.data : {};
         if (response.statusCode < 200 || response.statusCode >= 300 || (body.code && body.code !== "0")) {
@@ -751,6 +794,8 @@ Page({
 
   logout() {
     wx.removeStorageSync("token");
+    wx.removeStorageSync("refreshToken");
+    wx.removeStorageSync("auth");
     wx.removeStorageSync("xianzhiMiniProgramAuth");
     wx.reLaunch({ url: "/pages/WechatLoginPage" });
   }
@@ -806,13 +851,13 @@ const homeWxss = `page {
 .home-eyebrow {
   color: #2563eb;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .home-title {
   color: #111827;
   font-size: 22px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .home-card,
@@ -838,13 +883,13 @@ const homeWxss = `page {
   background: #ecfdf3;
   border: 1px solid #bbf7d0;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .home-name {
   color: #101c35;
   font-size: 24px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .home-meta,
@@ -891,14 +936,14 @@ const homeWxss = `page {
   color: #fff;
   background: linear-gradient(135deg, #2563eb, #ff7a1a);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .module-title {
   margin-top: 12px;
   color: #111827;
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .module-copy {
@@ -912,13 +957,13 @@ const homeWxss = `page {
 .section-kicker {
   color: #2563eb;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .section-title {
   color: #101c35;
   font-size: 20px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1.25;
 }
 
@@ -939,7 +984,7 @@ const homeWxss = `page {
 .stat-card text:first-child {
   color: #111827;
   font-size: 18px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .module-input {
@@ -966,7 +1011,7 @@ const homeWxss = `page {
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .chip.active {
@@ -983,7 +1028,7 @@ const homeWxss = `page {
   color: #fff;
   background: linear-gradient(135deg, #2563eb, #ff7a1a);
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 46px;
 }
 
@@ -1040,7 +1085,7 @@ const homeWxss = `page {
   justify-content: center;
   color: #2563eb;
   font-size: 18px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .work-main {
@@ -1052,16 +1097,21 @@ const homeWxss = `page {
 .work-title {
   color: #111827;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 `;
 
-fs.writeFileSync(path.resolve(pageRoot, "WechatLoginPage.wxml"), wxml);
-fs.writeFileSync(path.resolve(pageRoot, "WechatLoginPage.js"), js);
-fs.writeFileSync(path.resolve(pageRoot, "WechatLoginPage.wxss"), wxss);
+const forceLegacyNativeLogin = String(process.env.XIANZHI_FORCE_LEGACY_NATIVE_LOGIN || "").toLowerCase() === "true";
+if (forceLegacyNativeLogin) {
+  fs.writeFileSync(path.resolve(pageRoot, "WechatLoginPage.wxml"), wxml);
+  fs.writeFileSync(path.resolve(pageRoot, "WechatLoginPage.js"), js);
+  fs.writeFileSync(path.resolve(pageRoot, "WechatLoginPage.wxss"), wxss);
+} else {
+  console.log("Preserved uni-app generated WechatLoginPage (set XIANZHI_FORCE_LEGACY_NATIVE_LOGIN=true only for legacy diagnostics).");
+}
 const homeWxssPath = path.resolve(pageRoot, "MiniProgramHomePage.wxss");
 if (!fs.existsSync(homeWxssPath)) {
   fs.writeFileSync(homeWxssPath, "");
@@ -1083,27 +1133,90 @@ fs.writeFileSync(path.resolve(pageRoot, "NativeDebugLogin.wxss"), wxss); */
 const appJsonPath = path.resolve(outputRoot, "app.json");
 const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
 appJson.pages = appJson.pages.filter((page) => page !== "pages/NativeDebugLogin");
+const defaultHomePage = "pages/WechatLoginPage";
+appJson.pages = [
+  defaultHomePage,
+  ...appJson.pages.filter((page) => page !== defaultHomePage)
+];
 fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2));
 
 function preserveGeneratedComponents(configPath) {
   if (!fs.existsSync(configPath)) return;
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  config.setting = Object.assign({}, config.setting, {
-    ignoreDevUnusedFiles: false,
-    ignoreUploadUnusedFiles: false
+  const existingIgnore = Array.isArray(config.packOptions?.ignore) ? config.packOptions.ignore : [];
+  const optimizedPackageIgnores = [
+    { type: "suffix", value: ".webp" },
+    { type: "file", value: "static/fallbacks/profile-member-background.png" },
+    { type: "file", value: "static/fallbacks/profile-header-background.png" }
+  ];
+  const optimizedIgnoreKeys = new Set(optimizedPackageIgnores.map((item) => `${item.type}:${item.value}`));
+  config.packOptions = Object.assign({}, config.packOptions, {
+    ignore: [
+      ...existingIgnore.filter((item) => !optimizedIgnoreKeys.has(`${item?.type}:${item?.value}`)),
+      ...optimizedPackageIgnores
+    ]
   });
+  config.setting = Object.assign({}, config.setting, {
+    minified: true,
+    minifyWXML: true,
+    minifyWXSS: true,
+    ignoreDevUnusedFiles: false,
+    ignoreUploadUnusedFiles: false,
+    useLanDebug: true
+  });
+  if (config.condition && config.condition.miniprogram) {
+    const miniprogram = config.condition.miniprogram;
+    miniprogram.current = -1;
+    miniprogram.list = Array.isArray(miniprogram.list)
+      ? miniprogram.list.filter((item) => item && item.pathName !== "pages/user/UserMinePage")
+      : [];
+  }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 
 preserveGeneratedComponents(path.resolve(outputRoot, "project.config.json"));
 preserveGeneratedComponents(path.resolve(outputRoot, "project.private.config.json"));
 
+const homeComponentWxmlPath = path.resolve(outputRoot, "components", "v531", "V531HomePage.wxml");
+const homeComponentJsPath = path.resolve(outputRoot, "components", "v531", "V531HomePage.js");
+if (!fs.existsSync(homeComponentWxmlPath) || !fs.existsSync(homeComponentJsPath)) {
+  throw new Error("V531HomePage component output not found after mp-weixin build");
+}
+let homeComponentWxml = fs.readFileSync(homeComponentWxmlPath, "utf8");
+homeComponentWxml = homeComponentWxml.replace(
+  /(<input class="hero-text-input[^"]*"[^>]*?)bindconfirm="\{\{[^}]+\}\}"/,
+  `$1bindconfirm="nativeHomePromptSubmit"`
+);
+homeComponentWxml = homeComponentWxml.replace(
+  /(<input class="hero-text-input[^"]*"[^>]*?)bindinput="\{\{[^}]+\}\}"/,
+  `$1bindinput="nativeHomePromptInput"`
+);
+homeComponentWxml = homeComponentWxml.replace(
+  /(<button class="hero-input-action submit[^"]*"[^>]*?)bindtouchend="\{\{[^}]+\}\}"\s+bindtap="\{\{[^}]+\}\}"/,
+  `$1bindtap="nativeHomePromptSubmit"`
+);
+if (!homeComponentWxml.includes('bindinput="nativeHomePromptInput"') || !homeComponentWxml.includes('bindtap="nativeHomePromptSubmit"')) {
+  throw new Error("V531HomePage native prompt bindings were not patched");
+}
+fs.writeFileSync(homeComponentWxmlPath, homeComponentWxml);
+
+let homeComponentJs = fs.readFileSync(homeComponentJsPath, "utf8");
+const homeComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
+if (!homeComponentPattern.test(homeComponentJs)) {
+  throw new Error("V531HomePage component registration not found");
+}
+const homePromptNativeBridge = String.raw`$1.methods=Object.assign({},$1.methods,{nativeHomePromptInput(event){this.__xianzhiHomePrompt=event&&event.detail?String(event.detail.value||""):""},nativeHomePromptSubmit(){const value=String(this.__xianzhiHomePrompt||"").trim();if(!value){wx.showToast({title:"\u8bf7\u8f93\u5165\u4f60\u7684\u9700\u6c42",icon:"none"});return}wx.setStorageSync("v531-creation-prompt",value);const mode=/\u89c6\u9891|\u77ed\u7247|\u53e3\u64ad|\u5206\u955c/.test(value)?"video":/ppt|\u6f14\u793a|\u6c47\u62a5|\u8def\u6f14|\u65b9\u6848/i.test(value)?"ppt":/\u667a\u80fd\u4f53|agent|\u5ba2\u670d|\u9500\u552e\u52a9\u624b|\u77e5\u8bc6\u5e93/i.test(value)?"agent":/\u4fe1\u606f\u56fe|\u6d41\u7a0b\u56fe|\u6570\u636e\u56fe|\u53ef\u89c6\u5316/.test(value)?"infographic":"image";const routes={image:"/pages/user/UserImageCreationPage",video:"/pages/user/UserVideoCreationPage",ppt:"/pages/user/UserPptCreationPage",infographic:"/pages/user/UserInfographicCreationPage",review:"/pages/user/UserReviewCreationPage",agent:"/pages/user/UserAgentCreationPage"};const url=routes[mode]||routes.image;wx.showToast({title:"\u6b63\u5728\u8fdb\u5165\u521b\u4f5c",icon:"none",duration:700});wx.navigateTo({url,fail(){wx.redirectTo({url,fail(){wx.reLaunch({url,fail(){wx.showToast({title:"\u9875\u9762\u6253\u5f00\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5",icon:"none"})}})}})}})}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeHomePromptInput","nativeHomePromptSubmit"]));wx.createComponent($1);`;
+if (!homeComponentJs.includes("nativeHomePromptSubmit(){")) {
+  homeComponentJs = homeComponentJs.replace(homeComponentPattern, homePromptNativeBridge);
+}
+fs.writeFileSync(homeComponentJsPath, homeComponentJs);
+
 const workbenchWxmlPath = path.resolve(outputRoot, "components", "MiniProgramRoleWorkbench.wxml");
 if (!fs.existsSync(workbenchWxmlPath)) {
   throw new Error("MiniProgramRoleWorkbench.wxml not found after mp-weixin build");
 }
 let workbenchWxml = fs.readFileSync(workbenchWxmlPath, "utf8");
-let nativeGenerateBindingCount = 0;
+let nativeGenerateBindingCount = (workbenchWxml.match(/bindtap="nativeGenerate"/g) || []).length;
 workbenchWxml = workbenchWxml.replace(
   /(<view class="\{\{\[[^\]]*'v31-(?:ppt-submit|generate-button)'[^\]]*\]\}\}"[^>]*?)bind(?:tap|touchend)="\{\{[^}]+\}\}"/g,
   (match, prefix) => {
@@ -1114,13 +1227,30 @@ workbenchWxml = workbenchWxml.replace(
 if (nativeGenerateBindingCount !== 2) {
   throw new Error(`Expected 2 native generate bindings, patched ${nativeGenerateBindingCount}`);
 }
-fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
 
-const nativeBackPattern = /(<button class="v31-back-button[^>]*?)bindtap="\{\{[^}]+\}\}"/;
-if (!nativeBackPattern.test(workbenchWxml)) {
-  throw new Error("PPT back button binding not found after mp-weixin build");
+let nativeReferenceBindingCount = (workbenchWxml.match(/bindtap="nativeChooseReferenceImages"/g) || []).length;
+workbenchWxml = workbenchWxml.replace(
+  /(<button[^>]*class="v31-reference-(?:add|empty)[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  (match, prefix) => {
+    nativeReferenceBindingCount += 1;
+    return `${prefix}bindtap="nativeChooseReferenceImages"`;
+  }
+);
+if (nativeReferenceBindingCount !== 2) {
+  throw new Error(`Expected 2 native reference image bindings, patched ${nativeReferenceBindingCount}`);
 }
-workbenchWxml = workbenchWxml.replace(nativeBackPattern, `$1bindtap="nativeBackToCreation"`);
+
+let nativeBackBindingCount = (workbenchWxml.match(/bindtap="nativeBackToCreation"/g) || []).length;
+workbenchWxml = workbenchWxml.replace(
+  /(<button class="v31-back-button[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  (match, prefix) => {
+    nativeBackBindingCount += 1;
+    return `${prefix}bindtap="nativeBackToCreation"`;
+  }
+);
+if (nativeBackBindingCount !== 2) {
+  throw new Error(`Expected 2 native back bindings, patched ${nativeBackBindingCount}`);
+}
 fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
 
 const workbenchJsPath = path.resolve(outputRoot, "components", "MiniProgramRoleWorkbench.js");
@@ -1129,10 +1259,344 @@ const createComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
 if (!createComponentPattern.test(workbenchJs)) {
   throw new Error("MiniProgramRoleWorkbench component registration not found");
 }
-workbenchJs = workbenchJs.replace(
-  createComponentPattern,
-  `$1.methods=Object.assign({},$1.methods,{nativeGenerate(){const handler=globalThis.__xianzhiMiniProgramGenerate;if(typeof handler==="function"){handler();return}wx.showToast({title:"生成入口初始化中，请稍后重试",icon:"none"})},nativeBackToCreation(){const handler=globalThis.__xianzhiMiniProgramBackToCreation;if(typeof handler==="function"){handler();return}wx.showToast({title:"返回入口初始化中，请稍后重试",icon:"none"})}});wx.createComponent($1);`
-);
+if (!workbenchJs.includes("nativeGenerate(){const handler=")) {
+  workbenchJs = workbenchJs.replace(
+    createComponentPattern,
+    `$1.methods=Object.assign({},$1.methods,{nativeGenerate(){const handler=globalThis.__xianzhiMiniProgramGenerate;if(typeof handler==="function"){handler();return}wx.showToast({title:"生成入口初始化中，请稍后重试",icon:"none"})},nativeBackToCreation(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const fallback=String(dataset.returnFallback||"/pages/user/UserCreationPage");const returnToFallback=()=>{const tabPages=new Set(["/pages/user/UserHomePage","/pages/user/UserCreationPage","/pages/user/UserAssetsPage","/pages/user/UserMinePage"]);if(tabPages.has(fallback)){wx.switchTab({url:fallback,fail(){wx.reLaunch({url:fallback})}});return}wx.redirectTo({url:fallback,fail(){wx.reLaunch({url:fallback})}})};const pages=getCurrentPages();if(pages.length>1){wx.navigateBack({delta:1,fail:returnToFallback});return}returnToFallback()}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeGenerate","nativeBackToCreation"]));wx.createComponent($1);`
+  );
+}
+if (!workbenchJs.includes("nativeChooseReferenceImages(event){const append=")) {
+  workbenchJs = workbenchJs.replace(
+    createComponentPattern,
+    `$1.methods=Object.assign({},$1.methods,{nativeChooseReferenceImages(event){const append=globalThis.__xianzhiMiniProgramAppendReferences;const setSelecting=globalThis.__xianzhiMiniProgramSetReferenceSelecting;if(typeof append!=="function"){wx.showToast({title:"\u56fe\u7247\u9009\u62e9\u5165\u53e3\u521d\u59cb\u5316\u4e2d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5",icon:"none"});return}const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const count=Math.max(1,Math.min(3,Number(dataset.referenceRemaining)||1));const success=result=>{const files=Array.isArray(result&&result.tempFiles)?result.tempFiles:[];const paths=files.map(file=>typeof file==="string"?file:String(file&&file.tempFilePath||file&&file.path||"")).filter(Boolean);if(paths.length){append(paths);wx.showToast({title:"\u5df2\u6dfb\u52a0 "+paths.length+" \u5f20\u53c2\u8003\u56fe",icon:"success"})}};const fail=error=>{const message=String(error&&error.errMsg||"");if(!/cancel/i.test(message))wx.showToast({title:"\u53c2\u8003\u56fe\u9009\u62e9\u5931\u8d25",icon:"none"})};const complete=()=>{if(typeof setSelecting==="function")setSelecting(false)};if(typeof setSelecting==="function")setSelecting(true);if(typeof wx.chooseMedia==="function"){wx.chooseMedia({count,mediaType:["image"],sourceType:["album","camera"],sizeType:["compressed"],success,fail,complete});return}wx.chooseImage({count,sourceType:["album","camera"],sizeType:["compressed"],success:result=>success({tempFiles:(result.tempFilePaths||[]).map(path=>({tempFilePath:path}))}),fail,complete})}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeChooseReferenceImages"]));wx.createComponent($1);`
+  );
+}
 fs.writeFileSync(workbenchJsPath, workbenchJs);
 
-console.log("Patched mp-weixin login and generation controls with native bindtap handlers.");
+const studioWxmlPath = path.resolve(outputRoot, "components", "v531", "V531StudioPage.wxml");
+const studioJsPath = path.resolve(outputRoot, "components", "v531", "V531StudioPage.js");
+if (!fs.existsSync(studioWxmlPath) || !fs.existsSync(studioJsPath)) {
+  throw new Error("V531StudioPage build output not found");
+}
+
+let studioWxml = fs.readFileSync(studioWxmlPath, "utf8");
+const studioBindings = [
+  {
+    label: "reference image",
+    pattern: /(<button(?=[^>]*class="tool-button)(?=[^>]*data-studio-action="reference")[^>]*?)bindtap="\{\{[^}]+\}\}"/,
+    replacement: '$1bindtap="nativeStudioChooseReference"'
+  },
+  {
+    label: "file upload",
+    pattern: /(<button(?=[^>]*class="tool-button)(?=[^>]*data-studio-action="file")[^>]*?)bindtap="\{\{[^}]+\}\}"/,
+    replacement: '$1bindtap="nativeStudioChooseFile"'
+  },
+  {
+    label: "generate",
+    pattern: /(<button class="generate-button[^>]*?)bindtap="\{\{[^}]+\}\}"/,
+    replacement: '$1bindtap="nativeStudioGenerate"'
+  },
+  {
+    label: "capability",
+    pattern: /(<button wx:for="\{\{[^}]+\}\}"[^>]*class="capability-button[^>]*?)bindtap="\{\{item\.[^}]+\}\}"/,
+    replacement: '$1bindtap="nativeStudioOpenMode"'
+  },
+  {
+    label: "scene center",
+    pattern: /(<button class="section-more section-more-button[^>]*?)bindtap="\{\{[^}]+\}\}"/,
+    replacement: '$1bindtap="nativeStudioOpenSceneCenter"'
+  },
+  {
+    label: "scene",
+    pattern: /(<button wx:for="\{\{[^}]+\}\}"[^>]*class="\{\{\[[^>]*'scene-button'[^>]*?)bindtap="\{\{item\.[^}]+\}\}"/,
+    replacement: '$1bindtap="nativeStudioOpenScene"'
+  }
+];
+for (const binding of studioBindings) {
+  const nativeHandler = binding.replacement.match(/bindtap="([^"]+)"/)?.[1];
+  if (nativeHandler && studioWxml.includes(`bindtap="${nativeHandler}"`)) continue;
+  if (!binding.pattern.test(studioWxml)) {
+    throw new Error(`V531StudioPage ${binding.label} binding not found after mp-weixin build`);
+  }
+  studioWxml = studioWxml.replace(binding.pattern, binding.replacement);
+}
+fs.writeFileSync(studioWxmlPath, studioWxml);
+
+let studioJs = fs.readFileSync(studioJsPath, "utf8");
+if (!createComponentPattern.test(studioJs)) {
+  throw new Error("V531StudioPage component registration not found");
+}
+if (!studioJs.includes("nativeStudioGenerate(event){")) {
+  studioJs = studioJs.replace(
+    createComponentPattern,
+    `$1.methods=Object.assign({},$1.methods,{nativeStudioGenerate(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const mode=String(dataset.mode||"image");const prompt=String(dataset.prompt||"").trim();if(!prompt){wx.showToast({title:"请先输入你的创作需求",icon:"none"});return}const previous=wx.getStorageSync("v532-studio-draft")||{};wx.setStorageSync("v531-creation-prompt",prompt);wx.setStorageSync("v532-studio-draft",Object.assign({},previous,{mode,prompt}));const pages={image:"/pages/user/UserImageCreationPage",video:"/pages/user/UserVideoCreationPage",ppt:"/pages/user/UserPptCreationPage",infographic:"/pages/user/UserInfographicCreationPage",review:"/pages/user/UserReviewCreationPage",agent:"/pages/user/UserAgentCreationPage"};wx.navigateTo({url:pages[mode]||pages.image})},nativeStudioOpenMode(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const mode=String(dataset.mode||"image");const prompt=String(dataset.prompt||"").trim();if(prompt){const previous=wx.getStorageSync("v532-studio-draft")||{};wx.setStorageSync("v531-creation-prompt",prompt);wx.setStorageSync("v532-studio-draft",Object.assign({},previous,{mode,prompt}))}const pages={image:"/pages/user/UserImageCreationPage",video:"/pages/user/UserVideoCreationPage",ppt:"/pages/user/UserPptCreationPage",infographic:"/pages/user/UserInfographicCreationPage",review:"/pages/user/UserReviewCreationPage",agent:"/pages/user/UserAgentCreationPage"};wx.navigateTo({url:pages[mode]||pages.image})},nativeStudioOpenScene(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const mode=String(dataset.mode||"image");const prompt=String(dataset.prompt||"").trim();if(prompt){const previous=wx.getStorageSync("v532-studio-draft")||{};wx.setStorageSync("v531-creation-prompt",prompt);wx.setStorageSync("v532-studio-draft",Object.assign({},previous,{mode,prompt}))}const pages={image:"/pages/user/UserImageCreationPage",video:"/pages/user/UserVideoCreationPage",ppt:"/pages/user/UserPptCreationPage",infographic:"/pages/user/UserInfographicCreationPage",review:"/pages/user/UserReviewCreationPage",agent:"/pages/user/UserAgentCreationPage"};wx.navigateTo({url:pages[mode]||pages.image})},nativeStudioOpenSceneCenter(){const handler=globalThis.__xianzhiV531StudioOpenSceneCenter;if(typeof handler==="function"){handler();return}wx.showToast({title:"场景中心初始化中，请稍后重试",icon:"none"})}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeStudioGenerate","nativeStudioOpenMode","nativeStudioOpenScene","nativeStudioOpenSceneCenter"]));wx.createComponent($1);`
+  );
+}
+if (!studioJs.includes("nativeStudioChooseReference(){")) {
+  studioJs = studioJs.replace(
+    createComponentPattern,
+    `$1.methods=Object.assign({},$1.methods,{nativeStudioChooseReference(){const handler=globalThis.__xianzhiV531StudioChooseReference;if(typeof handler==="function"){handler();return}wx.showToast({title:"图片选择入口初始化中，请稍后重试",icon:"none"})},nativeStudioChooseFile(){const handler=globalThis.__xianzhiV531StudioChooseFile;if(typeof handler==="function"){handler();return}wx.showToast({title:"文件选择入口初始化中，请稍后重试",icon:"none"})}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeStudioChooseReference","nativeStudioChooseFile"]));wx.createComponent($1);`
+  );
+}
+fs.writeFileSync(studioJsPath, studioJs);
+
+function replaceNativeAssetBindings(content, pattern, replacement, expectedCount, label) {
+  const nativeHandler = typeof replacement === "string" ? replacement.match(/(?:bind|catch)tap="([^"]+)"/)?.[1] : "";
+  let count = nativeHandler ? (content.match(new RegExp(`(?:bind|catch)tap="${nativeHandler}"`, "g")) || []).length : 0;
+  const output = content.replace(pattern, (...args) => {
+    count += 1;
+    if (typeof replacement === "function") return replacement(...args);
+    return replacement.replace(/\$(\d+)/g, (token, index) => String(args[Number(index)] ?? token));
+  });
+  if (count !== expectedCount) {
+    throw new Error(`${label}: expected ${expectedCount} binding(s), patched ${count}`);
+  }
+  return output;
+}
+
+function injectNativeAssetMethods(jsPath, label, methodsSource, methodNames) {
+  let content = fs.readFileSync(jsPath, "utf8");
+  if (methodNames.every((name) => content.includes(`${name}(`) && content.includes(JSON.stringify(name)))) return;
+  const match = content.match(createComponentPattern);
+  if (!match) throw new Error(`${label} component registration not found`);
+  const componentName = match[1];
+  const registration = `${componentName}.methods=Object.assign({},${componentName}.methods,{${methodsSource}});${componentName}.wxsCallMethods=Array.from(new Set([...(Array.isArray(${componentName}.wxsCallMethods)?${componentName}.wxsCallMethods:[]),${methodNames.map((name) => JSON.stringify(name)).join(",")} ]));wx.createComponent(${componentName});`;
+  content = content.replace(createComponentPattern, registration);
+  try {
+    new Function(content);
+  } catch (error) {
+    throw new Error(`${label} native method injection produced invalid JavaScript: ${error.message}`);
+  }
+  fs.writeFileSync(jsPath, content);
+}
+
+const assetCenterWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetCenterPage.wxml");
+const assetCenterJsPath = path.resolve(outputRoot, "components", "assets", "AssetCenterPage.js");
+if (!fs.existsSync(assetCenterWxmlPath) || !fs.existsSync(assetCenterJsPath)) {
+  throw new Error("AssetCenterPage build output not found");
+}
+let assetCenterWxml = fs.readFileSync(assetCenterWxmlPath, "utf8");
+let assetHeaderIconIndex = 0;
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<button class="icon-action[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  (match, prefix) => `${prefix}bindtap="${["nativeAssetOpenManage", "nativeAssetOpenMore"][assetHeaderIconIndex++]}"`,
+  2,
+  "AssetCenterPage header actions"
+);
+let assetHeaderButtonIndex = 0;
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<button class="toolbar-action data-v-[^"]+"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  (match, prefix) => `${prefix}bindtap="${["nativeAssetOpenFilter", "nativeAssetOpenSort"][assetHeaderButtonIndex++]}"`,
+  2,
+  "AssetCenterPage filter and sort"
+);
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<button[^>]*class="search-submit[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  "$1bindtap=\"nativeAssetSubmitSearch\"",
+  1,
+  "AssetCenterPage search submit"
+);
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<button[^>]*class="search-clear[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  "$1bindtap=\"nativeAssetClearSearch\"",
+  1,
+  "AssetCenterPage search clear"
+);
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<input[^>]*class="asset-search-input[^"]*"[^>]*?)bindinput="\{\{[^}]+\}\}"/g,
+  "$1bindinput=\"nativeAssetSearchInput\"",
+  1,
+  "AssetCenterPage search input"
+);
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<view class="section-head asset-section[^"]*"><text[^>]*>[^<]*<\/text><button[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  "$1bindtap=\"nativeAssetOpenAll\"",
+  1,
+  "AssetCenterPage asset view all"
+);
+assetCenterWxml = replaceNativeAssetBindings(
+  assetCenterWxml,
+  /(<view class="section-head task-section[^"]*"><text[^>]*>[^<]*<\/text><button[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  "$1bindtap=\"nativeAssetOpenTasks\"",
+  1,
+  "AssetCenterPage task view all"
+);
+fs.writeFileSync(assetCenterWxmlPath, assetCenterWxml);
+
+const assetCenterNativeMethods = String.raw`nativeAssetToggleSearch(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.toggleSearch==="function"){bridge.toggleSearch();return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})},nativeAssetSearchInput(event){const bridge=globalThis.__xianzhiAssetNativeBridge;const value=event&&event.detail?String(event.detail.value||""):"";if(bridge&&typeof bridge.updateSearch==="function"){bridge.updateSearch(value);return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})},nativeAssetSubmitSearch(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.submitSearch==="function"){bridge.submitSearch();return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})},nativeAssetClearSearch(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.clearSearch==="function"){bridge.clearSearch();return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})},nativeAssetOpenFilter(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.openFilter==="function"){bridge.openFilter();return}wx.showToast({title:"筛选入口初始化中，请稍后重试",icon:"none"})},nativeAssetOpenSort(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.openSort==="function"){bridge.openSort();return}wx.showToast({title:"排序入口初始化中，请稍后重试",icon:"none"})},nativeAssetOpenManage(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.openManage==="function"){bridge.openManage();return}wx.navigateTo({url:"/pages/user/UserAssetsListPage?manage=1"})},nativeAssetOpenMore(){const bridge=globalThis.__xianzhiAssetNativeBridge;wx.showActionSheet({itemList:["批量管理","查看全部作品","查看全部任务"],success(result){if(result.tapIndex===0){if(bridge&&typeof bridge.openManage==="function")bridge.openManage();else wx.navigateTo({url:"/pages/user/UserAssetsListPage?manage=1"});return}if(result.tapIndex===1){if(bridge&&typeof bridge.openAllAssets==="function")bridge.openAllAssets();else wx.navigateTo({url:"/pages/user/UserAssetsListPage"});return}if(bridge&&typeof bridge.openAllTasks==="function")bridge.openAllTasks();else wx.navigateTo({url:"/pages/user/UserTasksPage"})}})},nativeAssetOpenAll(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.openAllAssets==="function"){bridge.openAllAssets();return}wx.navigateTo({url:"/pages/user/UserAssetsListPage"})},nativeAssetOpenTasks(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.openAllTasks==="function"){bridge.openAllTasks();return}wx.navigateTo({url:"/pages/user/UserTasksPage"})}`;
+injectNativeAssetMethods(assetCenterJsPath, "AssetCenterPage", assetCenterNativeMethods, ["nativeAssetToggleSearch", "nativeAssetSearchInput", "nativeAssetSubmitSearch", "nativeAssetClearSearch", "nativeAssetOpenFilter", "nativeAssetOpenSort", "nativeAssetOpenManage", "nativeAssetOpenMore", "nativeAssetOpenAll", "nativeAssetOpenTasks"]);
+
+const assetLibraryWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetLibraryPage.wxml");
+const assetLibraryJsPath = path.resolve(outputRoot, "components", "assets", "AssetLibraryPage.js");
+if (!fs.existsSync(assetLibraryWxmlPath) || !fs.existsSync(assetLibraryJsPath)) {
+  throw new Error("AssetLibraryPage build output not found");
+}
+let assetLibraryWxml = fs.readFileSync(assetLibraryWxmlPath, "utf8");
+assetLibraryWxml = replaceNativeAssetBindings(
+  assetLibraryWxml,
+  /(<button[^>]*class="search-button[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  "$1bindtap=\"nativeAssetSubmitSearch\"",
+  1,
+  "AssetLibraryPage search submit"
+);
+assetLibraryWxml = replaceNativeAssetBindings(
+  assetLibraryWxml,
+  /(<button[^>]*class="search-clear[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  "$1bindtap=\"nativeAssetClearSearch\"",
+  1,
+  "AssetLibraryPage search clear"
+);
+assetLibraryWxml = replaceNativeAssetBindings(
+  assetLibraryWxml,
+  /(<input[^>]*class="asset-search-input[^"]*"[^>]*?)bindinput="\{\{[^}]+\}\}"/g,
+  "$1bindinput=\"nativeAssetSearchInput\"",
+  1,
+  "AssetLibraryPage search input"
+);
+fs.writeFileSync(assetLibraryWxmlPath, assetLibraryWxml);
+const assetLibraryNativeMethods = String.raw`nativeAssetSearchInput(event){const bridge=globalThis.__xianzhiAssetNativeBridge;const value=event&&event.detail?String(event.detail.value||""):"";if(bridge&&typeof bridge.updateSearch==="function"){bridge.updateSearch(value);return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})},nativeAssetSubmitSearch(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.submitSearch==="function"){bridge.submitSearch();return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})},nativeAssetClearSearch(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.clearSearch==="function"){bridge.clearSearch();return}wx.showToast({title:"搜索入口初始化中，请稍后重试",icon:"none"})}`;
+injectNativeAssetMethods(assetLibraryJsPath, "AssetLibraryPage", assetLibraryNativeMethods, ["nativeAssetSearchInput", "nativeAssetSubmitSearch", "nativeAssetClearSearch"]);
+
+const assetTypeTabsWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetTypeTabs.wxml");
+const assetTypeTabsJsPath = path.resolve(outputRoot, "components", "assets", "AssetTypeTabs.js");
+let assetTypeTabsWxml = fs.readFileSync(assetTypeTabsWxmlPath, "utf8");
+if (!assetTypeTabsWxml.includes("data-asset-value=")) throw new Error("AssetTypeTabs data-asset-value not found");
+assetTypeTabsWxml = replaceNativeAssetBindings(assetTypeTabsWxml, /bindtap="\{\{item\.[^}]+\}\}"/g, 'bindtap="nativeAssetTypeSelect"', 1, "AssetTypeTabs");
+fs.writeFileSync(assetTypeTabsWxmlPath, assetTypeTabsWxml);
+const assetTypeNativeMethods = String.raw`nativeAssetTypeSelect(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const value=String(dataset.assetValue||"all");const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.setType==="function"){bridge.setType(value);return}wx.navigateTo({url:"/pages/user/UserAssetsListPage?type="+encodeURIComponent(value)})}`;
+injectNativeAssetMethods(assetTypeTabsJsPath, "AssetTypeTabs", assetTypeNativeMethods, ["nativeAssetTypeSelect"]);
+
+const assetStatusTabsWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetStatusTabs.wxml");
+const assetStatusTabsJsPath = path.resolve(outputRoot, "components", "assets", "AssetStatusTabs.js");
+let assetStatusTabsWxml = fs.readFileSync(assetStatusTabsWxmlPath, "utf8");
+if (!assetStatusTabsWxml.includes("data-asset-value=")) throw new Error("AssetStatusTabs data-asset-value not found");
+assetStatusTabsWxml = replaceNativeAssetBindings(assetStatusTabsWxml, /bindtap="\{\{item\.[^}]+\}\}"/g, 'bindtap="nativeAssetStatusSelect"', 1, "AssetStatusTabs");
+fs.writeFileSync(assetStatusTabsWxmlPath, assetStatusTabsWxml);
+const assetStatusNativeMethods = String.raw`nativeAssetStatusSelect(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const value=String(dataset.assetValue||"recent");const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.setStatus==="function"){bridge.setStatus(value);return}wx.navigateTo({url:"/pages/user/UserAssetsListPage?status="+encodeURIComponent(value)})}`;
+injectNativeAssetMethods(assetStatusTabsJsPath, "AssetStatusTabs", assetStatusNativeMethods, ["nativeAssetStatusSelect"]);
+
+const generationTaskItemWxmlPath = path.resolve(outputRoot, "components", "assets", "GenerationTaskItem.wxml");
+const generationTaskItemJsPath = path.resolve(outputRoot, "components", "assets", "GenerationTaskItem.js");
+if (!fs.existsSync(generationTaskItemWxmlPath) || !fs.existsSync(generationTaskItemJsPath)) {
+  throw new Error("GenerationTaskItem build output not found");
+}
+let generationTaskItemWxml = fs.readFileSync(generationTaskItemWxmlPath, "utf8");
+if (!generationTaskItemWxml.includes("data-task-id=")) throw new Error("GenerationTaskItem data-task-id not found");
+generationTaskItemWxml = replaceNativeAssetBindings(
+  generationTaskItemWxml,
+  /(<view class="task-item[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeGenerationTaskOpen"',
+  1,
+  "GenerationTaskItem open"
+);
+for (const binding of [
+  ["取消", "nativeGenerationTaskCancel"],
+  ["重试", "nativeGenerationTaskRetry"],
+  ["结果", "nativeGenerationTaskResult"],
+]) {
+  generationTaskItemWxml = replaceNativeAssetBindings(
+    generationTaskItemWxml,
+    new RegExp(`(<button[^>]*data-task-id="\\{\\{[^}]+\\}\\}"[^>]*?)bindtap="\\{\\{[^}]+\\}\\}"([^>]*>${binding[0]}<\\/button>)`, "g"),
+    `$1catchtap="${binding[1]}"$2`,
+    1,
+    `GenerationTaskItem ${binding[0]}`
+  );
+}
+fs.writeFileSync(generationTaskItemWxmlPath, generationTaskItemWxml);
+const generationTaskNativeMethods = String.raw`nativeGenerationTaskOpen(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.taskId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.openTask==="function"){bridge.openTask(id);return}wx.showToast({title:"任务入口初始化中，请稍后重试",icon:"none"})},nativeGenerationTaskCancel(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.taskId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.cancelTask==="function"){bridge.cancelTask(id);return}wx.showToast({title:"取消入口初始化中，请稍后重试",icon:"none"})},nativeGenerationTaskRetry(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.taskId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.retryTask==="function"){bridge.retryTask(id);return}wx.showToast({title:"重试入口初始化中，请稍后重试",icon:"none"})},nativeGenerationTaskResult(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.taskId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.openTaskResult==="function"){bridge.openTaskResult(id);return}wx.showToast({title:"结果入口初始化中，请稍后重试",icon:"none"})}`;
+injectNativeAssetMethods(generationTaskItemJsPath, "GenerationTaskItem", generationTaskNativeMethods, ["nativeGenerationTaskOpen", "nativeGenerationTaskCancel", "nativeGenerationTaskRetry", "nativeGenerationTaskResult"]);
+
+const assetCardWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetCard.wxml");
+const assetCardJsPath = path.resolve(outputRoot, "components", "assets", "AssetCard.js");
+if (!fs.existsSync(assetCardWxmlPath) || !fs.existsSync(assetCardJsPath)) throw new Error("AssetCard build output not found");
+let assetCardWxml = fs.readFileSync(assetCardWxmlPath, "utf8");
+if (!assetCardWxml.includes("data-asset-id=")) throw new Error("AssetCard data-asset-id not found");
+assetCardWxml = replaceNativeAssetBindings(
+  assetCardWxml,
+  /(<view class="\{\{\[[^\]]*'asset-card'[^\]]*\]\}\}"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetCardOpen"',
+  1,
+  "AssetCard open"
+);
+assetCardWxml = replaceNativeAssetBindings(
+  assetCardWxml,
+  /(<button[^>]*class="favorite-button[^"]*"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1catchtap="nativeAssetCardFavorite"',
+  1,
+  "AssetCard favorite"
+);
+assetCardWxml = replaceNativeAssetBindings(
+  assetCardWxml,
+  /(<button[^>]*class="more-button[^"]*"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1catchtap="nativeAssetCardActions"',
+  1,
+  "AssetCard actions"
+);
+fs.writeFileSync(assetCardWxmlPath, assetCardWxml);
+const assetCardNativeMethods = String.raw`nativeAssetCardOpen(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.assetId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.openAsset==="function"){bridge.openAsset(id);return}wx.showToast({title:"作品入口初始化中，请稍后重试",icon:"none"})},nativeAssetCardFavorite(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.assetId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.favoriteAsset==="function"){bridge.favoriteAsset(id);return}wx.showToast({title:"收藏入口初始化中，请稍后重试",icon:"none"})},nativeAssetCardActions(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const id=String(dataset.assetId||"");const bridge=globalThis.__xianzhiAssetNativeBridge;if(id&&bridge&&typeof bridge.openAssetActions==="function"){bridge.openAssetActions(id);return}wx.showToast({title:"操作入口初始化中，请稍后重试",icon:"none"})}`;
+injectNativeAssetMethods(assetCardJsPath, "AssetCard", assetCardNativeMethods, ["nativeAssetCardOpen", "nativeAssetCardFavorite", "nativeAssetCardActions"]);
+
+const assetDetailWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetDetailCenterPage.wxml");
+const assetDetailJsPath = path.resolve(outputRoot, "components", "assets", "AssetDetailCenterPage.js");
+if (!fs.existsSync(assetDetailWxmlPath) || !fs.existsSync(assetDetailJsPath)) throw new Error("AssetDetailCenterPage build output not found");
+let assetDetailWxml = fs.readFileSync(assetDetailWxmlPath, "utf8");
+assetDetailWxml = replaceNativeAssetBindings(
+  assetDetailWxml,
+  /(<view[^>]*class="(?:cover-preview[^"]*|\{\{\[[^"]*'cover-preview'[^"]*\]\}\})"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetDetailPreview"',
+  1,
+  "AssetDetail preview"
+);
+assetDetailWxml = replaceNativeAssetBindings(
+  assetDetailWxml,
+  /(<button[^>]*class="download-button[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetDetailDownload"',
+  1,
+  "AssetDetail download"
+);
+assetDetailWxml = replaceNativeAssetBindings(
+  assetDetailWxml,
+  /(<button[^>]*class="primary-button[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetDetailEdit"',
+  1,
+  "AssetDetail edit"
+);
+assetDetailWxml = replaceNativeAssetBindings(
+  assetDetailWxml,
+  /(<button[^>]*class="regenerate-button[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetDetailRegenerate"',
+  1,
+  "AssetDetail regenerate"
+);
+assetDetailWxml = replaceNativeAssetBindings(
+  assetDetailWxml,
+  /(<button[^>]*class="copy-button[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetDetailCopyPrompt"',
+  1,
+  "AssetDetail copy prompt"
+);
+assetDetailWxml = replaceNativeAssetBindings(
+  assetDetailWxml,
+  /(<button[^>]*class="back-button[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  '$1bindtap="nativeAssetDetailBack"',
+  1,
+  "AssetDetail back"
+);
+fs.writeFileSync(assetDetailWxmlPath, assetDetailWxml);
+const assetDetailNativeMethods = String.raw`nativeAssetDetailOpenCreation(intent){const base=wx.getStorageSync("zhiqiyun:asset-detail:creation-draft")||{};const draft=Object.assign({},base,{intent});if(!draft.prompt){wx.showToast({title:"作品缺少原提示词",icon:"none"});return}wx.setStorageSync("v531-creation-prompt",String(draft.prompt||""));wx.setStorageSync("v532-studio-draft",draft);const routes={image:"/pages/user/UserImageCreationPage",video:"/pages/user/UserVideoCreationPage",ppt:"/pages/user/UserPptCreationPage",agent:"/pages/user/UserAgentCreationPage",infographic:"/pages/user/UserInfographicCreationPage"};wx.navigateTo({url:routes[String(draft.mode||"image")]||routes.image,fail(){wx.showToast({title:"创作页面打开失败",icon:"none"})}})},nativeAssetDetailPreview(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.previewCurrentAsset==="function"){bridge.previewCurrentAsset();return}wx.showToast({title:"预览入口初始化中，请稍后重试",icon:"none"})},nativeAssetDetailDownload(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.downloadCurrentAsset==="function"){bridge.downloadCurrentAsset();return}wx.showToast({title:"下载入口初始化中，请稍后重试",icon:"none"})},nativeAssetDetailEdit(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.editCurrentAsset==="function"){bridge.editCurrentAsset();return}this.nativeAssetDetailOpenCreation("edit")},nativeAssetDetailRegenerate(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.regenerateCurrentAsset==="function"){bridge.regenerateCurrentAsset();return}this.nativeAssetDetailOpenCreation("regenerate")},nativeAssetDetailCopyPrompt(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.copyCurrentPrompt==="function"){bridge.copyCurrentPrompt();return}const draft=wx.getStorageSync("zhiqiyun:asset-detail:creation-draft")||{};if(draft.prompt)wx.setClipboardData({data:String(draft.prompt),success(){wx.showToast({title:"提示词已复制",icon:"success"})}})},nativeAssetDetailBack(){const pages=getCurrentPages();if(pages.length>1){wx.navigateBack();return}wx.switchTab({url:"/pages/user/UserAssetsPage",fail(){wx.reLaunch({url:"/pages/user/UserAssetsPage"})}})}`;
+injectNativeAssetMethods(assetDetailJsPath, "AssetDetailCenterPage", assetDetailNativeMethods, ["nativeAssetDetailPreview", "nativeAssetDetailDownload", "nativeAssetDetailEdit", "nativeAssetDetailRegenerate", "nativeAssetDetailCopyPrompt", "nativeAssetDetailBack"]);
+
+const assetEmptyStateWxmlPath = path.resolve(outputRoot, "components", "assets", "AssetEmptyState.wxml");
+const assetEmptyStateJsPath = path.resolve(outputRoot, "components", "assets", "AssetEmptyState.js");
+let assetEmptyStateWxml = fs.readFileSync(assetEmptyStateWxmlPath, "utf8");
+assetEmptyStateWxml = replaceNativeAssetBindings(assetEmptyStateWxml, /(<button[^>]*class="empty-action[^"]*"[^>]*?)bindtap="\{\{[^}]+\}\}"/g, "$1bindtap=\"nativeAssetEmptyAction\"", 1, "AssetEmptyState");
+fs.writeFileSync(assetEmptyStateWxmlPath, assetEmptyStateWxml);
+const assetEmptyNativeMethods = String.raw`nativeAssetEmptyAction(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.emptyAction==="function"){bridge.emptyAction();return}wx.switchTab({url:"/pages/user/UserCreationPage",fail(){wx.reLaunch({url:"/pages/user/UserCreationPage"})}})}`;
+injectNativeAssetMethods(assetEmptyStateJsPath, "AssetEmptyState", assetEmptyNativeMethods, ["nativeAssetEmptyAction"]);
+console.log("Preserved the generated login page and patched mp-weixin generation controls.");

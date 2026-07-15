@@ -1,0 +1,69 @@
+{
+  "ok": true,
+  "successReason": "navigatedToExpectedCreationPageWithPrompt",
+  "expectedMode": "image",
+  "expectedRoute": "pages/user/UserImageCreationPage",
+  "connectionMode": "connect",
+  "wsEndpoint": "ws://127.0.0.1:9441",
+  "autoPort": 9421,
+  "projectPath": "E:\\code\\work\\先知AI\\apps\\user-uni\\dist\\build\\mp-weixin",
+  "apiBase": "https://ai.zs-kjhn.cn",
+  "user": {
+    "id": "user_000002",
+    "name": "演示用户",
+    "currentRole": ""
+  },
+  "inputSelector": ".hero-text-input",
+  "inputValue": "生成一张水果店开业促销海报",
+  "before": {
+    "currentPath": "pages/user/UserHomePage",
+    "stack": [
+      "pages/user/UserHomePage"
+    ],
+    "storedPrompt": ""
+  },
+  "attempts": [
+    {
+      "selector": ".hero-input-action.submit",
+      "size": {
+        "width": 42,
+        "height": 42
+      },
+      "offset": {
+        "left": 304,
+        "top": 293
+      },
+      "before": {
+        "currentPath": "pages/user/UserHomePage",
+        "stack": [
+          "pages/user/UserHomePage"
+        ],
+        "storedPrompt": ""
+      },
+      "after": {
+        "currentPath": "pages/user/UserImageCreationPage",
+        "stack": [
+          "pages/user/UserHomePage",
+          "pages/user/UserImageCreationPage"
+        ],
+        "storedPrompt": ""
+      }
+    }
+  ],
+  "after": {
+    "currentPath": "pages/user/UserImageCreationPage",
+    "stack": [
+      "pages/user/UserHomePage",
+      "pages/user/UserImageCreationPage"
+    ],
+    "storedPrompt": ""
+  },
+  "targetPrompt": {
+    "selector": ".v31-one-line-input",
+    "value": "生成一张水果店开业促销海报"
+  },
+  "screenshots": {
+    "before": "",
+    "after": ""
+  }
+}

@@ -1,5 +1,89 @@
 export type WorkspaceRole = "user" | "agent" | "admin";
 
+export type AppRole =
+  | "USER"
+  | "AGENT"
+  | "OPERATION"
+  | "ENTERPRISE_ADMIN"
+  | "AI_ADMIN"
+  | "FINANCE"
+  | "CUSTOMER_SERVICE"
+  | "ENTERPRISE_MEMBER";
+
+export interface UserAccessProfile {
+  userId: string;
+  tenantId: string;
+  organizationId: string;
+  roles: AppRole[];
+  currentRole: AppRole;
+  permissions: string[];
+}
+
+export type UserContextType = "PERSONAL" | "ENTERPRISE" | "AGENT" | "OPERATION";
+
+export type EnterpriseDataScope = "TENANT_ALL" | "ORG_AND_CHILDREN" | "ORG_SELF" | "OWNER" | "SELF";
+
+export interface EnterpriseWalletSummary {
+  pointBalance: number;
+  frozenPoints: number;
+  cashBalanceCents: number;
+  status: string;
+}
+
+export interface EnterpriseContext {
+  type: UserContextType;
+  tenantId: string;
+  tenantName: string;
+  organizationId: string;
+  organizationName: string;
+  memberStatus: string;
+  certificationStatus: string;
+  roles: AppRole[];
+  currentRole: AppRole;
+  permissions: string[];
+  dataScope: EnterpriseDataScope;
+  entitlements: Record<string, unknown>;
+  wallet: EnterpriseWalletSummary;
+  current: boolean;
+}
+
+export interface EnterpriseContextsResponse {
+  contexts: EnterpriseContext[];
+  current: EnterpriseContext;
+}
+
+export interface CurrentContextRequest {
+  type: UserContextType;
+  tenantId?: string;
+  organizationId?: string;
+  role?: AppRole;
+}
+
+export interface EnterpriseCertificationSubmitRequest {
+  legalName: string;
+  unifiedSocialCreditCode: string;
+  legalRepresentativeName?: string;
+  documentUrls: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface EnterpriseCertification {
+  id: string;
+  tenantId: string;
+  legalName: string;
+  unifiedSocialCreditCode: string;
+  legalRepresentativeName: string;
+  documentUrls: string[];
+  status: string;
+  submittedBy: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewComment?: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type TaskStatus =
   | "PENDING"
   | "QUEUED"
@@ -31,7 +115,12 @@ export type { components as OpenApiComponents, operations as OpenApiOperations, 
 
 export interface AuthUser {
   id: string;
+  tenantId?: string;
+  organizationId?: string;
   email: string;
+  mobileMasked?: string;
+  passwordSet?: boolean;
+  wechatLinked?: boolean;
   name: string;
   role: string;
   status: string;
@@ -63,15 +152,26 @@ export interface AuthResponse {
   user: AuthUser;
   agent?: ChannelAgent;
   permissions?: string[];
+  tenantId?: string;
+  organizationId?: string;
+  roles?: AppRole[];
+  currentRole?: AppRole;
   defaultModule?: string;
   workspace?: WorkspaceRole;
   defaultRoute?: string;
+  isNewUser?: boolean;
+  registrationStatus?: string;
+  inviteBindStatus?: string;
+  newcomerBenefits?: Array<{ title?: string; description?: string; status?: string }>;
+  nextAction?: string;
+  expiresIn?: number;
 }
 
 export interface GenerationTask {
   id: string;
   type: GenerationTaskType;
   status: TaskStatus;
+  progress?: number;
   prompt: string;
   model: string;
   pointCost: number;

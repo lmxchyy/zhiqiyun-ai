@@ -87,6 +87,71 @@ func TestGenerationTaskLifecycle(t *testing.T) {
 	assertAuthedStatus(t, handler, http.MethodDelete, "/api/v1/assets/"+task.ResultIDs[0], nil, token, http.StatusOK)
 }
 
+func TestUserContentPagedResponses(t *testing.T) {
+	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	handler := server.Handler
+	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+
+	for index := 1; index <= 3; index++ {
+		body := bytes.NewBufferString(fmt.Sprintf(`{"type":"TEXT_TO_IMAGE","prompt":"paged work %d","model":"mock-standard","params":{"count":1}}`, index))
+		response := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", body, token)
+		if response.Code != http.StatusOK {
+			t.Fatalf("create paged task %d status = %d, body = %s", index, response.Code, response.Body.String())
+		}
+	}
+
+	assetResponse := authedRequest(t, handler, http.MethodGet, "/api/v1/assets?paged=true&limit=2&offset=0", nil, token)
+	if assetResponse.Code != http.StatusOK {
+		t.Fatalf("paged assets status = %d, body = %s", assetResponse.Code, assetResponse.Body.String())
+	}
+	var assetPage struct {
+		Items   []asset `json:"items"`
+		Total   int     `json:"total"`
+		HasMore bool    `json:"hasMore"`
+	}
+	if err := json.NewDecoder(assetResponse.Body).Decode(&assetPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(assetPage.Items) != 2 || assetPage.Total < 3 || !assetPage.HasMore {
+		t.Fatalf("unexpected asset page: %+v", assetPage)
+	}
+	if assetPage.Items[0].CreatedAt < assetPage.Items[1].CreatedAt {
+		t.Fatalf("assets are not newest-first: %+v", assetPage.Items)
+	}
+
+	taskResponse := authedRequest(t, handler, http.MethodGet, "/api/v1/generation-tasks?paged=true&limit=2&offset=0&priority=active", nil, token)
+	if taskResponse.Code != http.StatusOK {
+		t.Fatalf("paged tasks status = %d, body = %s", taskResponse.Code, taskResponse.Body.String())
+	}
+	var taskPage struct {
+		Items   []generationTask `json:"items"`
+		Total   int              `json:"total"`
+		HasMore bool             `json:"hasMore"`
+	}
+	if err := json.NewDecoder(taskResponse.Body).Decode(&taskPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(taskPage.Items) != 2 || taskPage.Total < 3 || !taskPage.HasMore {
+		t.Fatalf("unexpected task page: %+v", taskPage)
+	}
+}
+
+func TestGenerationTaskPrioritySort(t *testing.T) {
+	tasks := []generationTask{
+		{ID: "completed-new", Status: "SUCCEEDED", CreatedAt: "2026-07-13T12:00:00Z"},
+		{ID: "failed-old", Status: "FAILED", CreatedAt: "2026-07-12T12:00:00Z"},
+		{ID: "queued-new", Status: "QUEUED", CreatedAt: "2026-07-13T11:00:00Z"},
+		{ID: "completed-old", Status: "COMPLETED", CreatedAt: "2026-07-11T12:00:00Z"},
+	}
+	sortGenerationTasksForUserList(tasks, true)
+	want := []string{"queued-new", "failed-old", "completed-new", "completed-old"}
+	for index, id := range want {
+		if tasks[index].ID != id {
+			t.Fatalf("task order[%d] = %s, want %s; tasks=%+v", index, tasks[index].ID, id, tasks)
+		}
+	}
+}
+
 func TestVideoGenerationReturnsPendingAndCompletesAsync(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	server := New(config.Config{
@@ -184,6 +249,35 @@ func TestGenerationErrorMessageExtractsProviderMessage(t *testing.T) {
 	want := "当前账号处未订购seedance2.0模型资费包，或资费包已到期，请先订购后才能使用"
 	if got := generationErrorMessage(errors.New(raw)); got != want {
 		t.Fatalf("generationErrorMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
+	err := errors.New("image provider returned 429: Upstream rate limit exceeded")
+	if !shouldFallbackImageGeneration(err) {
+		t.Fatal("HTTP 429 image provider errors should trigger fallback")
+	}
+	want := "图像上游频率或额度受限，已尝试备用通道，请稍后重试或更换上游 API Key"
+	if got := generationErrorMessage(err); got != want {
+		t.Fatalf("generationErrorMessage() = %q, want %q", got, want)
+	}
+
+	permissionErr := errors.New("image provider returned 403: 无权访问 生图备用 分组")
+	if !shouldFallbackImageGeneration(permissionErr) {
+		t.Fatal("HTTP 403 upstream permission errors should trigger fallback")
+	}
+	wantPermission := "图像上游权限或分组不可用，已尝试备用通道，请检查上游 API Key、分组和模型权限"
+	if got := generationErrorMessage(permissionErr); got != wantPermission {
+		t.Fatalf("generationErrorMessage() = %q, want %q", got, wantPermission)
+	}
+
+	networkErr := errors.New(`Post "http://localhost:8001/v1/images/generations": dial tcp [::1]:8001: connect: connection refused`)
+	if !shouldFallbackImageGeneration(networkErr) {
+		t.Fatal("connection refused errors should trigger fallback")
+	}
+	wantNetwork := "图像上游网络不可达，已尝试备用通道，请检查上游地址或本地代理服务"
+	if got := generationErrorMessage(networkErr); got != wantNetwork {
+		t.Fatalf("generationErrorMessage() = %q, want %q", got, wantNetwork)
 	}
 }
 
@@ -428,6 +522,14 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 		})
 	}
 
+	missingAPIRes := request(t, server.Handler, http.MethodGet, "/api/v1/missing-route", nil)
+	if missingAPIRes.Code != http.StatusNotFound {
+		t.Fatalf("missing API status = %d, body = %s", missingAPIRes.Code, missingAPIRes.Body.String())
+	}
+	if contentType := missingAPIRes.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("missing API content type = %q, want application/json", contentType)
+	}
+
 	assetRes := request(t, server.Handler, http.MethodGet, "/assets/login.js", nil)
 	if assetRes.Code != http.StatusOK {
 		t.Fatalf("/assets/login.js status = %d, body = %s", assetRes.Code, assetRes.Body.String())
@@ -649,6 +751,64 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	channelBody := channelRes.Body.String()
 	if channelRes.Code != http.StatusOK || !strings.Contains(channelBody, task.ID) || !strings.Contains(channelBody, `"usageEvents"`) {
 		t.Fatalf("channel center missing generation usage event: %d %s", channelRes.Code, channelBody)
+	}
+}
+
+func TestFirstRechargeRequires996AgentPackage(t *testing.T) {
+	server := New(config.Config{
+		Addr:      ":0",
+		DataPath:  filepath.Join(t.TempDir(), "store.json"),
+		StaticDir: t.TempDir(),
+	})
+	handler := server.Handler
+
+	register := request(t, handler, http.MethodPost, "/api/v1/auth/register", bytes.NewBufferString(`{"username":"首次充值用户","email":"first-recharge@example.com","password":"First123!","confirmPassword":"First123!"}`))
+	if register.Code != http.StatusOK {
+		t.Fatalf("register status = %d, body = %s", register.Code, register.Body.String())
+	}
+	var registerBody struct {
+		AccessToken string `json:"accessToken"`
+	}
+	if err := json.NewDecoder(register.Body).Decode(&registerBody); err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := authedRequest(t, handler, http.MethodPost, "/api/v1/points/recharge-orders", bytes.NewBufferString(`{"rechargePackageId":"recharge_standard","amountCents":9900,"paymentMethod":"wechat_mini_program"}`), registerBody.AccessToken)
+	if blocked.Code != http.StatusConflict || !strings.Contains(blocked.Body.String(), "996") {
+		t.Fatalf("first regular recharge should be blocked: %d %s", blocked.Code, blocked.Body.String())
+	}
+
+	join := authedRequest(t, handler, http.MethodPost, "/api/v1/agent/join-order", bytes.NewBufferString(`{"planId":"plan_agent_join_996","paymentMethod":"wechat_mini_program"}`), registerBody.AccessToken)
+	if join.Code != http.StatusOK {
+		t.Fatalf("996 agent order status = %d, body = %s", join.Code, join.Body.String())
+	}
+	var joinBody struct {
+		Item adminOrder `json:"item"`
+	}
+	if err := json.NewDecoder(join.Body).Decode(&joinBody); err != nil {
+		t.Fatal(err)
+	}
+	if joinBody.Item.ID == "" || joinBody.Item.PlanID != "plan_agent_join_996" {
+		t.Fatalf("unexpected 996 agent order: %+v", joinBody.Item)
+	}
+
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	paid := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders/"+joinBody.Item.ID+"/mark-paid", bytes.NewBuffer(nil), adminToken)
+	if paid.Code != http.StatusOK {
+		t.Fatalf("mark 996 order paid status = %d, body = %s", paid.Code, paid.Body.String())
+	}
+	invoices := authedRequest(t, handler, http.MethodGet, "/api/v1/member/invoices", nil, registerBody.AccessToken)
+	if invoices.Code != http.StatusOK || !strings.Contains(invoices.Body.String(), joinBody.Item.ID) || !strings.Contains(invoices.Body.String(), `"status":"AVAILABLE"`) {
+		t.Fatalf("member invoices status = %d, body = %s", invoices.Code, invoices.Body.String())
+	}
+	refund := authedRequest(t, handler, http.MethodPost, "/api/v1/member/refund-requests", bytes.NewBufferString(`{"orderId":"`+joinBody.Item.ID+`","reason":"重复购买","remark":"自动化测试申请"}`), registerBody.AccessToken)
+	if refund.Code != http.StatusOK || !strings.Contains(refund.Body.String(), `"status":"REFUND_REQUESTED"`) {
+		t.Fatalf("member refund request status = %d, body = %s", refund.Code, refund.Body.String())
+	}
+
+	allowed := authedRequest(t, handler, http.MethodPost, "/api/v1/points/recharge-orders", bytes.NewBufferString(`{"rechargePackageId":"recharge_standard","amountCents":9900,"paymentMethod":"wechat_mini_program"}`), registerBody.AccessToken)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("regular recharge after first paid order status = %d, body = %s", allowed.Code, allowed.Body.String())
 	}
 }
 
@@ -1971,6 +2131,47 @@ func TestAdminSystemAndAPIGatewayMutationsPersist(t *testing.T) {
 	}
 }
 
+func TestAdminNewAPIGroupsReturnsEmptyWhenGatewayIsNotConfigured(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	adminToken := loginToken(t, server.Handler, "admin@xianzhi.ai", "Admin123!")
+
+	response := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/admin/newapi/groups", nil, adminToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("newapi groups status = %d, body = %s", response.Code, response.Body.String())
+	}
+	for _, want := range []string{`"items":[]`, `"configured":false`, `"available":false`} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("newapi groups response missing %q: %s", want, response.Body.String())
+		}
+	}
+}
+
+func TestAdminNewAPIGroupsDegradesWhenGatewayCredentialIsRejected(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"success":false,"message":"unauthorized"}`))
+	}))
+	defer upstream.Close()
+
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	adminToken := loginToken(t, server.Handler, "admin@xianzhi.ai", "Admin123!")
+	settings := fmt.Sprintf(`{"apiGateway":{"newapi":{"enabled":true,"baseUrl":%q,"adminToken":"expired-test-token","adminUserId":"1","timeoutSeconds":2}}}`, upstream.URL)
+	assertAuthedStatus(t, server.Handler, http.MethodPatch, "/api/v1/admin/system/settings", bytes.NewBufferString(settings), adminToken, http.StatusOK)
+
+	response := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/admin/newapi/groups", nil, adminToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("newapi groups degraded status = %d, body = %s", response.Code, response.Body.String())
+	}
+	for _, want := range []string{`"items":[]`, `"configured":true`, `"available":false`, `"warning":`, "NewAPI"} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("newapi groups degraded response missing %q: %s", want, response.Body.String())
+		}
+	}
+}
+
 func TestAdminAICapabilityModelsCanBeCreated(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	server := New(config.Config{
@@ -2304,9 +2505,11 @@ func TestProductionConfigValidationRequiresSecurityEnv(t *testing.T) {
 		!strings.Contains(err.Error(), "REDIS_URL") ||
 		!strings.Contains(err.Error(), "RABBITMQ_URL") ||
 		!strings.Contains(err.Error(), "S3_ENDPOINT") ||
+		!strings.Contains(err.Error(), "STORAGE_PUBLIC_ENDPOINT") ||
 		!strings.Contains(err.Error(), "S3_ACCESS_KEY") ||
 		!strings.Contains(err.Error(), "S3_SECRET_KEY") ||
 		!strings.Contains(err.Error(), "S3_BUCKET") ||
+		!strings.Contains(err.Error(), "STORAGE_MASTER_KEY") ||
 		!strings.Contains(err.Error(), "PAYMENT_CALLBACK_SECRET") {
 		t.Fatalf("unexpected production validation error: %v", err)
 	}
@@ -2316,9 +2519,11 @@ func TestProductionConfigValidationRequiresSecurityEnv(t *testing.T) {
 		RedisURL:              "redis://example",
 		RabbitMQURL:           "amqp://example",
 		S3Endpoint:            "http://s3.example",
+		StoragePublicEndpoint: "https://storage.example",
 		S3AccessKey:           "access",
 		S3SecretKey:           "secret",
 		S3Bucket:              "xianzhi-assets",
+		StorageMasterKey:      "0123456789abcdef0123456789abcdef",
 		PaymentCallbackSecret: "secret",
 	}).ValidateProduction()
 	if err != nil {
@@ -2331,9 +2536,11 @@ func TestProductionConfigValidationRequiresSecurityEnv(t *testing.T) {
 		RedisURL:              "redis://example",
 		RabbitMQURL:           "amqp://example",
 		S3Endpoint:            "http://s3.example",
+		StoragePublicEndpoint: "https://storage.example",
 		S3AccessKey:           "access",
 		S3SecretKey:           "secret",
 		S3Bucket:              "xianzhi-assets",
+		StorageMasterKey:      "0123456789abcdef0123456789abcdef",
 		PaymentCallbackSecret: "secret",
 	}).ValidateProduction()
 	if err == nil || !strings.Contains(err.Error(), "XIANZHI_ALLOW_INSECURE_AUTH_TOKEN") {

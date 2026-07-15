@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-07-14T09:40:08.615Z",
+  "filter": "quick.knowledge,hero-tool.knowledge,hero-tool.employee,compact.,employees.view-all,employee.",
+  "rows": [],
+  "failures": [
+    {
+      "id": "quick.knowledge",
+      "message": "expected pages/user/UserHomePage, current pages/user/UserAgentCreationPage"
+    },
+    {
+      "id": "hero-tool.knowledge",
+      "message": "timeout"
+    },
+    {
+      "id": "hero-tool.employee",
+      "message": "timeout"
+    },
+    {
+      "id": "compact.knowledge",
+      "message": "Connection closed, check if wechat web devTools is still running"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T09:42:04.774Z",
+  "passed": false
+}

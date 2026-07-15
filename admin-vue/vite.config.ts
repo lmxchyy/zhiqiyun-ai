@@ -9,7 +9,7 @@ function appHistoryFallback() {
     configureServer(server: ViteDevServer) {
       server.middlewares.use((req, _res, next) => {
         const url = req.url || "";
-        if (url === "/app" || url.startsWith("/app/") || url === "/agent" || url.startsWith("/agent/")) {
+        if (url === "/app" || url.startsWith("/app/") || url === "/agent" || url.startsWith("/agent/") || url.startsWith("/admin/enterprises")) {
           req.url = "/admin/";
         }
         next();

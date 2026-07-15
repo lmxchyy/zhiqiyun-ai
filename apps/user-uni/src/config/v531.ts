@@ -1,0 +1,555 @@
+export type V531PageCode = "home" | "studio" | "assets" | "profile";
+export type V531Fit = "cover" | "contain";
+
+export interface V531AssetSlot {
+  slotKey: string;
+  pageCode: V531PageCode;
+  aspectRatio: string;
+  fit: V531Fit;
+  fallbackUrl: string;
+  altText: string;
+}
+
+const fallbackRoot = "/static/fallbacks";
+
+function slot(
+  pageCode: V531PageCode,
+  slotKey: string,
+  aspectRatio: string,
+  fit: V531Fit,
+  fallback: string,
+  altText: string,
+): V531AssetSlot {
+  return {
+    pageCode,
+    slotKey,
+    aspectRatio,
+    fit,
+    fallbackUrl: `${fallbackRoot}/${fallback}.jpg`,
+    altText,
+  };
+}
+
+export const v531AssetSlots: V531AssetSlot[] = [
+  slot(
+    "home",
+    "home.hero.background",
+    "335:500",
+    "cover",
+    "brand-gradient",
+    "首页 AI 主视觉背景",
+  ),
+  slot(
+    "home",
+    "home.hero.illustration",
+    "1:1",
+    "cover",
+    "hero-orb",
+    "首页 AI 插画",
+  ),
+  slot(
+    "home",
+    "home.capability.ai_design",
+    "4:3",
+    "cover",
+    "capability-ai-design",
+    "AI 设计",
+  ),
+  slot(
+    "home",
+    "home.capability.ai_video",
+    "4:3",
+    "cover",
+    "capability-ai-video",
+    "AI 视频",
+  ),
+  slot(
+    "home",
+    "home.capability.ppt",
+    "16:9",
+    "cover",
+    "capability-ppt",
+    "PPT 方案",
+  ),
+  slot(
+    "home",
+    "home.capability.office",
+    "16:9",
+    "cover",
+    "capability-office",
+    "AI 办公",
+  ),
+  slot(
+    "home",
+    "home.capability.knowledge",
+    "16:9",
+    "cover",
+    "capability-knowledge",
+    "知识库",
+  ),
+  slot(
+    "home",
+    "home.capability.employee",
+    "16:9",
+    "cover",
+    "capability-employee",
+    "AI 员工",
+  ),
+  slot(
+    "home",
+    "home.project.new_product",
+    "1:1",
+    "cover",
+    "project-new-product",
+    "新品上市项目",
+  ),
+  slot(
+    "home",
+    "home.project.website",
+    "1:1",
+    "cover",
+    "project-website",
+    "企业官网项目",
+  ),
+  slot(
+    "home",
+    "home.employee.designer",
+    "1:1",
+    "cover",
+    "employee-designer",
+    "AI 设计师",
+  ),
+  slot(
+    "home",
+    "home.employee.sales",
+    "1:1",
+    "cover",
+    "employee-sales",
+    "AI 销售",
+  ),
+  slot(
+    "home",
+    "home.employee.operation",
+    "1:1",
+    "cover",
+    "employee-operation",
+    "AI 运营",
+  ),
+  slot(
+    "home",
+    "home.employee.service",
+    "1:1",
+    "cover",
+    "employee-service",
+    "AI 客服",
+  ),
+  slot(
+    "home",
+    "home.employee.boss",
+    "1:1",
+    "cover",
+    "employee-boss",
+    "老板助手",
+  ),
+  slot(
+    "home",
+    "home.inspiration.poster",
+    "4:5",
+    "cover",
+    "inspiration-poster",
+    "企业宣传海报",
+  ),
+  slot(
+    "home",
+    "home.inspiration.video",
+    "9:16",
+    "cover",
+    "inspiration-video",
+    "短视频模板",
+  ),
+  slot(
+    "home",
+    "home.inspiration.ppt",
+    "16:9",
+    "cover",
+    "inspiration-ppt",
+    "招商 PPT",
+  ),
+  slot(
+    "home",
+    "home.inspiration.store",
+    "3:4",
+    "cover",
+    "inspiration-store",
+    "门店营销",
+  ),
+  slot(
+    "home",
+    "home.inspiration.ecommerce",
+    "1:1",
+    "cover",
+    "inspiration-ecommerce",
+    "电商主图",
+  ),
+  slot(
+    "studio",
+    "studio.hero.illustration",
+    "1:1",
+    "cover",
+    "default-studio-hero",
+    "创作中心插画",
+  ),
+  slot(
+    "studio",
+    "studio.template.new_product",
+    "1:1",
+    "cover",
+    "template-new-product",
+    "新品发布模板",
+  ),
+  slot(
+    "studio",
+    "studio.template.investment",
+    "1:1",
+    "cover",
+    "template-investment",
+    "招商方案模板",
+  ),
+  slot(
+    "studio",
+    "studio.scene.xiaohongshu",
+    "148:54",
+    "cover",
+    "inspiration-poster",
+    "小红书爆款场景",
+  ),
+  slot(
+    "studio",
+    "studio.scene.friend_poster",
+    "148:54",
+    "cover",
+    "inspiration-poster",
+    "朋友圈海报场景",
+  ),
+  slot(
+    "studio",
+    "studio.scene.product_promo",
+    "148:54",
+    "cover",
+    "capability-ai-design",
+    "产品宣传场景",
+  ),
+  slot(
+    "studio",
+    "studio.scene.ecommerce_main",
+    "148:54",
+    "cover",
+    "inspiration-ecommerce",
+    "商品主图场景",
+  ),
+  slot(
+    "studio",
+    "studio.scene.investment",
+    "148:54",
+    "cover",
+    "template-investment",
+    "招商加盟场景",
+  ),
+  slot(
+    "studio",
+    "studio.scene.store_event",
+    "148:54",
+    "cover",
+    "inspiration-store",
+    "门店活动场景",
+  ),
+  slot(
+    "assets",
+    "assets.cover.image",
+    "4:3",
+    "cover",
+    "default-cover",
+    "图片作品封面",
+  ),
+  slot(
+    "assets",
+    "assets.cover.video",
+    "16:9",
+    "cover",
+    "default-video-cover",
+    "视频作品封面",
+  ),
+  slot(
+    "assets",
+    "assets.cover.ppt",
+    "16:9",
+    "cover",
+    "default-ppt-cover",
+    "PPT 作品封面",
+  ),
+  slot(
+    "assets",
+    "assets.cover.long_image",
+    "4:3",
+    "cover",
+    "default-long-image",
+    "长图作品封面",
+  ),
+  slot(
+    "profile",
+    "profile.avatar",
+    "1:1",
+    "cover",
+    "default-avatar",
+    "用户头像",
+  ),
+];
+
+export const v531SlotsByPage = v531AssetSlots.reduce<
+  Record<V531PageCode, Record<string, V531AssetSlot>>
+>(
+  (result, item) => {
+    result[item.pageCode][item.slotKey] = item;
+    return result;
+  },
+  { home: {}, studio: {}, assets: {}, profile: {} },
+);
+
+export const v531Capabilities = [
+  {
+    id: "image",
+    title: "AI设计",
+    description: "Logo · 海报",
+    slotKey: "home.capability.ai_design",
+    routeMode: "image",
+  },
+  {
+    id: "video",
+    title: "AI视频",
+    description: "宣传片 · 口播",
+    slotKey: "home.capability.ai_video",
+    routeMode: "video",
+  },
+  {
+    id: "ppt",
+    title: "PPT方案",
+    description: "汇报 · 招商",
+    slotKey: "home.capability.ppt",
+    routeMode: "ppt",
+  },
+  {
+    id: "office",
+    title: "AI办公",
+    description: "文案 · 分析",
+    slotKey: "home.capability.office",
+    routeMode: "infographic",
+  },
+  {
+    id: "knowledge",
+    title: "知识库",
+    description: "知识 · 产品",
+    slotKey: "home.capability.knowledge",
+    routeMode: "agent",
+  },
+  {
+    id: "employee",
+    title: "AI员工",
+    description: "销售 · 客服",
+    slotKey: "home.capability.employee",
+    routeMode: "agent",
+  },
+] as const;
+
+export const v531Projects = [
+  {
+    id: "new-product",
+    title: "新品上市",
+    progress: 80,
+    slotKey: "home.project.new_product",
+    mode: "image",
+  },
+  {
+    id: "website",
+    title: "企业官网",
+    progress: 60,
+    slotKey: "home.project.website",
+    mode: "infographic",
+  },
+] as const;
+
+export const v531Employees = [
+  {
+    id: "designer",
+    name: "AI设计师",
+    role: "品牌与视觉",
+    status: "立即协作",
+    slotKey: "home.employee.designer",
+  },
+  {
+    id: "sales",
+    name: "AI销售",
+    role: "跟进与转化",
+    status: "立即沟通",
+    slotKey: "home.employee.sales",
+  },
+  {
+    id: "operation",
+    name: "AI运营",
+    role: "内容与增长",
+    status: "开始工作",
+    slotKey: "home.employee.operation",
+  },
+  {
+    id: "service",
+    name: "AI客服",
+    role: "服务与支持",
+    status: "立即咨询",
+    slotKey: "home.employee.service",
+  },
+  {
+    id: "boss",
+    name: "老板助手",
+    role: "经营与决策",
+    status: "经营分析",
+    slotKey: "home.employee.boss",
+  },
+] as const;
+
+export const v531Inspirations = [
+  {
+    id: "poster",
+    title: "企业宣传海报",
+    tag: "海报",
+    slotKey: "home.inspiration.poster",
+    mode: "image",
+  },
+  {
+    id: "video",
+    title: "短视频模板",
+    tag: "视频",
+    slotKey: "home.inspiration.video",
+    mode: "video",
+  },
+  {
+    id: "ppt",
+    title: "招商演示方案",
+    tag: "PPT",
+    slotKey: "home.inspiration.ppt",
+    mode: "ppt",
+  },
+  {
+    id: "store",
+    title: "门店营销物料",
+    tag: "门店",
+    slotKey: "home.inspiration.store",
+    mode: "image",
+  },
+  {
+    id: "ecommerce",
+    title: "电商商品主图",
+    tag: "电商",
+    slotKey: "home.inspiration.ecommerce",
+    mode: "image",
+  },
+] as const;
+
+export const v531StudioCategories = [
+  "全部",
+  "营销",
+  "办公",
+  "企业AI",
+  "最近使用",
+] as const;
+export const v531StudioCapabilities = [
+  {
+    id: "image",
+    routeMode: "image",
+    icon: "设",
+    title: "AI设计",
+    summary: "海报/Logo/物料",
+    description: "海报、商品图、招商物料一次完成",
+    tone: "blue",
+    groups: ["营销", "办公", "最近使用"],
+  },
+  {
+    id: "video",
+    routeMode: "video",
+    icon: "视",
+    title: "AI视频",
+    summary: "短片/口播/剪辑",
+    description: "宣传片、口播、短视频快速触达客户",
+    tone: "blue",
+    groups: ["营销", "最近使用"],
+  },
+  {
+    id: "ppt",
+    routeMode: "ppt",
+    icon: "P",
+    title: "PPT生成",
+    summary: "汇报/方案/路演",
+    description: "方案、汇报和招商材料自动生成",
+    tone: "orange",
+    groups: ["营销", "办公", "最近使用"],
+  },
+  {
+    id: "copywriting",
+    routeMode: "review",
+    icon: "文",
+    title: "文案创作",
+    summary: "营销/文案/脚本",
+    description: "用知识智能体生成营销文案和短脚本",
+    tone: "green",
+    groups: ["营销", "办公"],
+  },
+  {
+    id: "chart",
+    routeMode: "infographic",
+    icon: "图",
+    title: "智能图表",
+    summary: "数据/可视化图表",
+    description: "把复杂数据、流程和对比浓缩成一张长图",
+    tone: "blue",
+    groups: ["办公", "企业AI"],
+  },
+  {
+    id: "voice",
+    routeMode: "video",
+    icon: "音",
+    title: "AI配音",
+    summary: "多语言/情绪配音",
+    description: "复用视频生成链路制作口播和配音素材",
+    tone: "orange",
+    groups: ["营销", "办公"],
+  },
+  {
+    id: "agent",
+    routeMode: "agent",
+    icon: "员",
+    title: "数字员工",
+    summary: "销售/客服/运营",
+    description: "创建懂产品、客户与流程的 AI 员工",
+    tone: "purple",
+    groups: ["企业AI", "最近使用"],
+  },
+  {
+    id: "knowledge",
+    routeMode: "agent",
+    icon: "知",
+    title: "知识库",
+    summary: "企业知识管理",
+    description: "创建知识智能体并绑定企业知识库",
+    tone: "green",
+    groups: ["办公", "企业AI"],
+  },
+] as const;
+
+export const v531ProfileServices = [
+  { id: "recharge", label: "充值中心", icon: "充", tone: "blue" },
+  { id: "tasks", label: "任务记录", icon: "任", tone: "purple" },
+  { id: "points", label: "点数明细", icon: "点", tone: "orange" },
+  { id: "orders", label: "我的订单", icon: "单", tone: "blue" },
+  { id: "invite", label: "邀请推广", icon: "邀", tone: "purple" },
+  { id: "roles", label: "角色与权限", icon: "权", tone: "orange" },
+  { id: "settings", label: "账户设置", icon: "设", tone: "blue" },
+  { id: "help", label: "帮助客服", icon: "助", tone: "purple" },
+] as const;

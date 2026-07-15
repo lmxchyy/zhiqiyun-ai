@@ -35,6 +35,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 const maxReferenceImageUploadBytes = 20 << 20
@@ -65,6 +66,7 @@ type platformStore interface {
 	CreateAdminOrder(adminOrderMutation) (adminOrder, error)
 	RegisterPaymentCallbackEvent(adminPaymentEvent) (bool, error)
 	MarkAdminOrderPaid(string, ...map[string]any) (adminOrder, error)
+	RequestOrderRefund(userID string, orderID string, reason string, remark string) (adminOrder, error)
 	RenewAdminOrder(string) (adminOrder, error)
 	UpdateAdminDeliveryProject(string, adminDeliveryMutation) (map[string]any, error)
 	UpdateAdminSystemSettings(adminSystemMutation) (adminSystemSettings, error)
@@ -95,6 +97,22 @@ type optimizedUserContentStore interface {
 	GetGenerationTaskForUser(userID string, id string) (generationTask, bool, error)
 }
 
+type optimizedUserContentPageStore interface {
+	ListGenerationTasksPageForUser(userID string, limit int, offset int, prioritize bool) ([]generationTask, int, error)
+	ListAssetsPageForUser(userID string, limit int, offset int) ([]asset, int, error)
+}
+
+type assetListSummary struct {
+	Total         int   `json:"total"`
+	MonthTotal    int   `json:"monthTotal"`
+	FavoriteTotal int   `json:"favoriteTotal"`
+	StorageBytes  int64 `json:"storageBytes"`
+}
+
+type optimizedUserContentSummaryStore interface {
+	AssetListSummaryForUser(userID string, monthPrefix string) (assetListSummary, error)
+}
+
 type activeIdentityStore interface {
 	GetActiveUser(userID string) (adminUser, bool, error)
 	GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error)
@@ -115,6 +133,9 @@ type optimizedUserAccountStore interface {
 const (
 	defaultUserContentListLimit = 120
 	maxUserContentListLimit     = 300
+	imageGenerationTimeout      = 3 * time.Minute
+	videoGenerationTimeout      = 20 * time.Minute
+	otherGenerationStaleTimeout = 15 * time.Minute
 )
 
 type api struct {
@@ -123,12 +144,15 @@ type api struct {
 	pptService        *pptapp.Service
 	cfg               config.Config
 	sessions          authSessionStore
+	taskCancels       *sync.Map
+	fileService       *storagecenter.Service
 }
 
 type generatedImageDecorator struct{}
 
 func (generatedImageDecorator) Decorate(ctx context.Context, images []generation.GeneratedImage) []generation.GeneratedImage {
 	for i := range images {
+		images[i].URL = securePublicMediaURL(images[i].URL)
 		images[i].ThumbnailURL = thumbnailForImage(ctx, images[i].URL)
 		if width, height, ok := imageDimensionsForImage(ctx, images[i].URL); ok {
 			images[i].Width = width
@@ -138,7 +162,7 @@ func (generatedImageDecorator) Decorate(ctx context.Context, images []generation
 	return images
 }
 
-func newAPI(store platformStore, cfg config.Config, sessions authSessionStore) api {
+func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, fileService *storagecenter.Service) api {
 	provider := imageprovider.NewDefaultRouter(cfg)
 	service := generation.NewServiceWithOptions(generation.ServiceOptions{
 		ImageProvider:  provider,
@@ -149,8 +173,8 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore) a
 		},
 	})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions}
-	go api.repairStaleGenerationTasks(15 * time.Minute)
+	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, fileService: fileService}
+	go api.repairStaleGenerationTasks(imageGenerationTimeout)
 	return api
 }
 
@@ -164,12 +188,18 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 		if !isRunningGenerationTaskStatus(task.Status) {
 			continue
 		}
+		taskMaxAge := maxAge
+		if isVideoGenerationRequest(task.Type) {
+			taskMaxAge = videoGenerationTimeout
+		} else if !isImageGenerationRequest(task.Type) {
+			taskMaxAge = otherGenerationStaleTimeout
+		}
 		updatedAt := firstNonEmptyString(task.UpdatedAt, task.CreatedAt)
 		updatedTime, err := time.Parse(time.RFC3339Nano, updatedAt)
-		if err != nil || now.Sub(updatedTime.UTC()) < maxAge {
+		if err != nil || now.Sub(updatedTime.UTC()) < taskMaxAge {
 			continue
 		}
-		_, _ = a.store.FailGenerationTask(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(maxAge.Minutes())))
+		_, _ = a.store.FailGenerationTask(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
 	}
 }
 
@@ -229,6 +259,84 @@ func listLimitFromRequest(r *http.Request, key string, fallback int) int {
 	return limit
 }
 
+func listOffsetFromRequest(r *http.Request) int {
+	offset := 0
+	if value := strings.TrimSpace(r.URL.Query().Get("offset")); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
+	return offset
+}
+
+func pagedListRequested(r *http.Request) bool {
+	value := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("paged")))
+	return value == "1" || value == "true" || strings.TrimSpace(r.URL.Query().Get("offset")) != ""
+}
+
+func prioritizedTaskListRequested(r *http.Request) bool {
+	value := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("priority")))
+	return value == "active" || value == "1" || value == "true"
+}
+
+func (a api) generationTasksPageForUser(userID string, limit int, offset int, prioritize bool) ([]generationTask, int, error) {
+	if optimized, ok := a.store.(optimizedUserContentPageStore); ok {
+		return optimized.ListGenerationTasksPageForUser(userID, limit, offset, prioritize)
+	}
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		return nil, 0, err
+	}
+	tasks = filterGenerationTasksForUser(tasks, userID)
+	sortGenerationTasksForUserList(tasks, prioritize)
+	total := len(tasks)
+	return pageGenerationTasks(tasks, limit, offset), total, nil
+}
+
+func (a api) assetsPageForUser(userID string, limit int, offset int) ([]asset, int, error) {
+	if optimized, ok := a.store.(optimizedUserContentPageStore); ok {
+		return optimized.ListAssetsPageForUser(userID, limit, offset)
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		return nil, 0, err
+	}
+	assets = filterAssetsForUser(assets, userID)
+	sortAssetsForUserList(assets)
+	total := len(assets)
+	return pageAssets(assets, limit, offset), total, nil
+}
+
+func (a api) assetListSummaryForUser(userID string) (assetListSummary, error) {
+	monthPrefix := time.Now().UTC().Format("2006-01")
+	if optimized, ok := a.store.(optimizedUserContentSummaryStore); ok {
+		return optimized.AssetListSummaryForUser(userID, monthPrefix)
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		return assetListSummary{}, err
+	}
+	assets = filterAssetsForUser(assets, userID)
+	summary := assetListSummary{Total: len(assets)}
+	for _, item := range assets {
+		if strings.HasPrefix(item.CreatedAt, monthPrefix) {
+			summary.MonthTotal++
+		}
+		if item.Favorite {
+			summary.FavoriteTotal++
+		}
+		fileSize := int64Value(item.Metadata["fileSize"])
+		if fileSize == 0 {
+			fileSize = int64Value(item.Metadata["fileSizeBytes"])
+		}
+		if fileSize == 0 {
+			fileSize = int64Value(item.Metadata["sizeBytes"])
+		}
+		summary.StorageBytes += fileSize
+	}
+	return summary, nil
+}
+
 func (a api) generationTasksForUser(r *http.Request, userID string, limit int) ([]generationTask, error) {
 	if optimized, ok := a.store.(optimizedUserContentStore); ok {
 		return optimized.ListGenerationTasksForUser(userID, limit)
@@ -245,8 +353,16 @@ func (a api) generationTasksForUser(r *http.Request, userID string, limit int) (
 }
 
 func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, error) {
+	ctx := context.Background()
+	if r != nil {
+		ctx = r.Context()
+	}
 	if optimized, ok := a.store.(optimizedUserContentStore); ok {
-		return optimized.ListAssetsForUser(userID, limit)
+		assets, err := optimized.ListAssetsForUser(userID, limit)
+		if err != nil {
+			return nil, err
+		}
+		return a.signStoredAssetURLs(ctx, userID, assets), nil
 	}
 	assets, err := a.store.ListAssets()
 	if err != nil {
@@ -254,9 +370,9 @@ func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, 
 	}
 	assets = filterAssetsForUser(assets, userID)
 	if limit > 0 && len(assets) > limit {
-		return assets[:limit], nil
+		assets = assets[:limit]
 	}
-	return assets, nil
+	return a.signStoredAssetURLs(ctx, userID, assets), nil
 }
 
 func (a api) userAccountData(userID string) (adminPlatformData, error) {
@@ -273,15 +389,18 @@ func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := listLimitFromRequest(r, "limit", defaultUserContentListLimit)
+	offset := listOffsetFromRequest(r)
+	prioritize := prioritizedTaskListRequested(r)
 	var tasks []generationTask
 	var assets []asset
+	var total int
 	var tasksErr error
 	var assetsErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		tasks, tasksErr = a.generationTasksForUser(r, user.ID, limit)
+		tasks, total, tasksErr = a.generationTasksPageForUser(user.ID, limit, offset, prioritize)
 	}()
 	go func() {
 		defer wg.Done()
@@ -296,7 +415,18 @@ func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, assetsErr)
 		return
 	}
-	writeJSON(w, attachAssetImagesToTasks(tasks, assets))
+	tasks = attachAssetImagesToTasks(tasks, assets)
+	if pagedListRequested(r) {
+		writeJSON(w, map[string]any{
+			"items":   tasks,
+			"total":   total,
+			"limit":   limit,
+			"offset":  offset,
+			"hasMore": offset+len(tasks) < total,
+		})
+		return
+	}
+	writeJSON(w, tasks)
 }
 
 func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +446,7 @@ func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, errors.New("generation task not found"))
 			return
 		}
-		assets, err := optimized.ListAssetsForUser(user.ID, maxUserContentListLimit)
+		assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -334,7 +464,7 @@ func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	assets, err := a.store.ListAssets()
+	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -508,8 +638,12 @@ type generationServiceCandidate struct {
 }
 
 func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), imageGenerationTimeout)
+	a.registerGenerationTaskCancel(taskID, cancel)
+	defer func() {
+		a.unregisterGenerationTaskCancel(taskID)
+		cancel()
+	}()
 	prepared, err := service.PrepareImageTask(ctx, req)
 	if err != nil {
 		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
@@ -518,8 +652,19 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 			return
 		}
 	}
-	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+	prepared, storedFiles, err := a.persistGeneratedImages(ctx, taskID, prepared)
+	if err != nil {
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
+	}
+	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
+	if err != nil {
+		a.cleanupGeneratedFiles(storedFiles)
+		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
+	}
+	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
+		a.cleanupGeneratedFiles(storedFiles)
 	}
 }
 
@@ -607,8 +752,12 @@ func fallbackPreferredImageOrigin(data adminPlatformData) string {
 }
 
 func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), videoGenerationTimeout)
+	a.registerGenerationTaskCancel(taskID, cancel)
+	defer func() {
+		a.unregisterGenerationTaskCancel(taskID)
+		cancel()
+	}()
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
@@ -640,8 +789,23 @@ func shouldFallbackImageGeneration(err error) bool {
 	return strings.Contains(lower, "returned 502") ||
 		strings.Contains(lower, "returned 503") ||
 		strings.Contains(lower, "returned 504") ||
+		strings.Contains(lower, "returned 429") ||
+		strings.Contains(lower, "returned 403") ||
 		strings.Contains(lower, "gateway time-out") ||
 		strings.Contains(lower, "gateway timeout") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "insufficient_quota") ||
+		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "no available image quota") ||
+		strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "permission denied") ||
+		strings.Contains(lower, "无权访问") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "network is unreachable") ||
+		strings.Contains(lower, "connection reset") ||
 		strings.Contains(lower, "context deadline exceeded") ||
 		strings.Contains(lower, "client.timeout") ||
 		strings.Contains(lower, "timeout awaiting response")
@@ -666,6 +830,27 @@ func compactGenerationErrorMessage(message string) string {
 	}
 	if strings.Contains(lower, "returned 502") || strings.Contains(lower, "returned 503") {
 		return "图像上游服务暂不可用，请稍后重试或切换上游通道"
+	}
+	if strings.Contains(lower, "returned 429") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "insufficient_quota") ||
+		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "no available image quota") {
+		return "图像上游频率或额度受限，已尝试备用通道，请稍后重试或更换上游 API Key"
+	}
+	if strings.Contains(lower, "returned 403") ||
+		strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "permission denied") ||
+		strings.Contains(lower, "无权访问") {
+		return "图像上游权限或分组不可用，已尝试备用通道，请检查上游 API Key、分组和模型权限"
+	}
+	if strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "network is unreachable") ||
+		strings.Contains(lower, "connection reset") {
+		return "图像上游网络不可达，已尝试备用通道，请检查上游地址或本地代理服务"
 	}
 	if strings.Contains(lower, "<html") && strings.Contains(lower, "</html>") {
 		return "图像上游返回了网关错误页，请稍后重试或切换上游通道"
@@ -840,6 +1025,7 @@ func (a api) generationServiceForChannelWithAPIKey(channel adminAPIChannel, apiK
 		Models:                  channel.Models,
 		ImageGenerationEndpoint: channel.ImageGenerationEndpoint,
 		ImageEditEndpoint:       channel.ImageEditEndpoint,
+		ReferenceImageDir:       a.referenceImageDir(),
 		TimeoutMS:               intConfigValue(a.cfg.ModelTimeoutMS),
 	})
 	videoProvider := videoprovider.NewOpenAICompatibleWithOptions(videoprovider.OpenAICompatibleOptions{
@@ -1140,10 +1326,42 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	limit := listLimitFromRequest(r, "limit", defaultUserContentListLimit)
-	assets, err := a.assetsForUser(r, user.ID, limit)
+	query := assetCenterQueryFromRequest(r)
+	limit := query.Limit
+	offset := query.Offset
+	assets, total, err := a.assetsForCenter(user.ID, query)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	lightweight := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("lightweight")), "true") || strings.TrimSpace(r.URL.Query().Get("lightweight")) == "1"
+	if lightweight {
+		// Asset grids only need compact covers. The full original is signed by
+		// the detail/download endpoint after the user opens a work.
+		for index := range assets {
+			assets[index].URL = ""
+		}
+	} else {
+		assets = a.signStoredAssetURLs(r.Context(), user.ID, assets)
+	}
+	assets = secureAssetsForClient(assets)
+	if pagedListRequested(r) {
+		summary, summaryErr := a.assetListSummaryForUser(user.ID)
+		if summaryErr != nil {
+			writeError(w, http.StatusInternalServerError, summaryErr)
+			return
+		}
+		summary.Total = total
+		writeJSON(w, map[string]any{
+			"items":    assets,
+			"total":    total,
+			"limit":    limit,
+			"offset":   offset,
+			"page":     offset/limit + 1,
+			"pageSize": limit,
+			"hasMore":  offset+len(assets) < total,
+			"summary":  summary,
+		})
 		return
 	}
 	writeJSON(w, assets)
@@ -1236,7 +1454,7 @@ func (a api) downloadAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	assets, err := a.store.ListAssets()
+	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1270,12 +1488,12 @@ func (a api) downloadVideoByURL(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("video url is required"))
 		return
 	}
-	tasks, err := a.store.ListGenerationTasks()
+	tasks, err := a.generationTasksForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	assets, err := a.store.ListAssets()
+	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1646,7 +1864,7 @@ func (a api) backfillAssetThumbnails(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	assets, err := a.store.ListAssets()
+	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2445,6 +2663,82 @@ func (a api) memberWallet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a api) memberInvoices(w http.ResponseWriter, r *http.Request) {
+	user, err := a.currentUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	data, err := a.userAccountData(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	plans := planMap(data.Plans)
+	items := []map[string]any{}
+	for _, order := range data.Orders {
+		if order.UserID != user.ID && order.BuyerUserID != user.ID {
+			continue
+		}
+		status := "PENDING_PAYMENT"
+		invoiceNo := ""
+		if isPaidStatus(order.Status) || strings.TrimSpace(order.PaidAt) != "" {
+			status = "AVAILABLE"
+			invoiceNo = "XZ-" + strings.ToUpper(shortID(order.ID))
+		}
+		items = append(items, map[string]any{
+			"id":          "invoice_" + shortID(order.ID),
+			"invoiceNo":   invoiceNo,
+			"orderId":     order.ID,
+			"planId":      order.PlanID,
+			"planName":    planName(plans[order.PlanID]),
+			"amountCents": orderAmount(order),
+			"status":      status,
+			"paymentStatus": map[bool]string{
+				true:  "PAID",
+				false: strings.ToUpper(strings.TrimSpace(order.Status)),
+			}[isPaidStatus(order.Status)],
+			"paidAt":    order.PaidAt,
+			"createdAt": order.CreatedAt,
+		})
+	}
+	writeJSON(w, map[string]any{"items": items})
+}
+
+func (a api) createMemberRefundRequest(w http.ResponseWriter, r *http.Request) {
+	user, err := a.currentUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req struct {
+		OrderID string `json:"orderId"`
+		Reason  string `json:"reason"`
+		Remark  string `json:"remark"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.OrderID = strings.TrimSpace(req.OrderID)
+	req.Reason = strings.TrimSpace(req.Reason)
+	req.Remark = strings.TrimSpace(req.Remark)
+	if req.OrderID == "" || req.Reason == "" {
+		writeError(w, http.StatusBadRequest, errors.New("orderId and reason are required"))
+		return
+	}
+	if len([]rune(req.Remark)) > 200 {
+		writeError(w, http.StatusBadRequest, errors.New("remark must not exceed 200 characters"))
+		return
+	}
+	order, err := a.store.RequestOrderRefund(user.ID, req.OrderID, req.Reason, req.Remark)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"item": order, "message": "退款申请已提交，等待人工审核"})
+}
+
 func (a api) memberTokenRecords(w http.ResponseWriter, r *http.Request) {
 	user, err := a.currentUser(r)
 	if err != nil {
@@ -2551,9 +2845,13 @@ func (a api) operationCenterCommissions(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a api) createRechargeOrder(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	data, user, err := a.authenticatedUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if !userHasCompletedPurchase(data.Orders, user.ID) {
+		writeError(w, http.StatusConflict, errors.New("首次充值仅可选择 996 元代理商开通包"))
 		return
 	}
 	var req struct {
@@ -2602,6 +2900,22 @@ func (a api) createRechargeOrder(w http.ResponseWriter, r *http.Request) {
 		"rechargePoints": rechargePointsForOrder(order),
 		"message":        "充值订单已创建，请等待主控确认收款",
 	})
+}
+
+func userHasCompletedPurchase(orders []adminOrder, userID string) bool {
+	for _, order := range orders {
+		if order.UserID != userID && order.BuyerUserID != userID {
+			continue
+		}
+		if strings.TrimSpace(order.PaidAt) != "" || strings.TrimSpace(order.FulfilledAt) != "" {
+			return true
+		}
+		switch strings.ToUpper(strings.TrimSpace(order.Status)) {
+		case "PAID", "SUCCESS", "SUCCEEDED", "COMPLETED", "SETTLED", "ACTIVE", "REFUNDED":
+			return true
+		}
+	}
+	return false
 }
 
 func (a api) createSubscriptionOrder(w http.ResponseWriter, r *http.Request) {
@@ -2665,15 +2979,23 @@ func userPointTransactions(events []adminBillingEvent, userID string) []map[stri
 			continue
 		}
 		items = append(items, map[string]any{
-			"id":            event.ID,
-			"taskId":        event.TaskID,
-			"metricCode":    event.MetricCode,
-			"pointCost":     event.PointCost,
-			"amountCents":   event.AmountCents,
-			"balanceBefore": event.BalanceBefore,
-			"balanceAfter":  event.BalanceAfter,
-			"status":        event.Status,
-			"occurredAt":    event.OccurredAt,
+			"id":              event.ID,
+			"transactionId":   event.TransactionID,
+			"taskId":          event.TaskID,
+			"metricCode":      event.MetricCode,
+			"modelName":       usageDisplayNameForMetric(event.MetricCode),
+			"title":           usageDisplayNameForMetric(event.MetricCode),
+			"model":           event.Model,
+			"type":            usageTypeForMetric(event.MetricCode),
+			"quantity":        event.Quantity,
+			"unitAmountCents": event.UnitAmountCents,
+			"pointCost":       event.PointCost,
+			"amountCents":     event.AmountCents,
+			"balanceBefore":   event.BalanceBefore,
+			"balanceAfter":    event.BalanceAfter,
+			"status":          event.Status,
+			"occurredAt":      event.OccurredAt,
+			"createdAt":       event.OccurredAt,
 		})
 	}
 	return items
@@ -3274,6 +3596,8 @@ func (a api) userUsage(w http.ResponseWriter, r *http.Request) {
 			"transactionId":   event.TransactionID,
 			"taskId":          event.TaskID,
 			"metricCode":      event.MetricCode,
+			"modelName":       usageDisplayNameForMetric(event.MetricCode),
+			"title":           usageDisplayNameForMetric(event.MetricCode),
 			"model":           event.Model,
 			"type":            usageTypeForMetric(event.MetricCode),
 			"quantity":        event.Quantity,
@@ -3300,7 +3624,7 @@ func (a api) deleteAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	assets, err := a.store.ListAssets()
+	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -3361,6 +3685,62 @@ func limitAssets(assets []asset, limit int) []asset {
 	return assets[:limit]
 }
 
+func sortGenerationTasksForUserList(tasks []generationTask, prioritize bool) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		if prioritize {
+			leftPriority := generationTaskListPriority(tasks[i].Status)
+			rightPriority := generationTaskListPriority(tasks[j].Status)
+			if leftPriority != rightPriority {
+				return leftPriority < rightPriority
+			}
+		}
+		if tasks[i].CreatedAt != tasks[j].CreatedAt {
+			return tasks[i].CreatedAt > tasks[j].CreatedAt
+		}
+		return tasks[i].ID > tasks[j].ID
+	})
+}
+
+func generationTaskListPriority(status string) int {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "PENDING", "QUEUED", "RUNNING", "PROCESSING", "RETRYING", "FAILED", "ERROR":
+		return 0
+	default:
+		return 1
+	}
+}
+
+func sortAssetsForUserList(assets []asset) {
+	sort.SliceStable(assets, func(i, j int) bool {
+		if assets[i].CreatedAt != assets[j].CreatedAt {
+			return assets[i].CreatedAt > assets[j].CreatedAt
+		}
+		return assets[i].ID > assets[j].ID
+	})
+}
+
+func pageGenerationTasks(tasks []generationTask, limit int, offset int) []generationTask {
+	if offset >= len(tasks) {
+		return []generationTask{}
+	}
+	end := len(tasks)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return tasks[offset:end]
+}
+
+func pageAssets(assets []asset, limit int, offset int) []asset {
+	if offset >= len(assets) {
+		return []asset{}
+	}
+	end := len(assets)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return assets[offset:end]
+}
+
 func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generationTask {
 	if len(tasks) == 0 || len(assets) == 0 {
 		return tasks
@@ -3368,6 +3748,7 @@ func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generati
 	assetByID := make(map[string]asset, len(assets))
 	assetByTaskID := make(map[string]asset, len(assets))
 	for _, item := range assets {
+		item = secureAssetForClient(item)
 		if item.ID != "" {
 			assetByID[item.ID] = item
 		}
@@ -3390,9 +3771,54 @@ func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generati
 				task.ResultURL = item.URL
 			}
 		}
+		task.ImageURL = securePublicMediaURL(task.ImageURL)
+		task.OutputURL = securePublicMediaURL(task.OutputURL)
+		task.ResultURL = securePublicMediaURL(task.ResultURL)
+		task.ThumbnailURL = securePublicMediaURL(task.ThumbnailURL)
 		items = append(items, task)
 	}
 	return items
+}
+
+func secureAssetsForClient(items []asset) []asset {
+	secured := make([]asset, len(items))
+	for i, item := range items {
+		secured[i] = secureAssetForClient(item)
+	}
+	return secured
+}
+
+func secureAssetForClient(item asset) asset {
+	item.URL = securePublicMediaURL(item.URL)
+	item.ThumbnailURL = securePublicMediaURL(item.ThumbnailURL)
+	if item.Metadata != nil {
+		metadata := make(map[string]any, len(item.Metadata))
+		for key, value := range item.Metadata {
+			if key == "thumbnailUrl" {
+				continue
+			}
+			metadata[key] = value
+		}
+		item.Metadata = metadata
+	}
+	return item
+}
+
+func securePublicMediaURL(rawURL string) string {
+	value := strings.TrimSpace(rawURL)
+	parsed, err := url.Parse(value)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "http") || parsed.Hostname() == "" {
+		return rawURL
+	}
+	host := strings.ToLower(strings.Trim(parsed.Hostname(), "[]"))
+	if host == "localhost" {
+		return rawURL
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+		return rawURL
+	}
+	parsed.Scheme = "https"
+	return parsed.String()
 }
 
 func firstAssetForTask(task generationTask, assetByID map[string]asset, assetByTaskID map[string]asset) (asset, bool) {

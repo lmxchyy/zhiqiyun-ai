@@ -1,0 +1,18 @@
+<view class="v531-tabbar">
+  <view
+    wx:for="{{list}}"
+    wx:key="pagePath"
+    class="v531-tab {{selected === index ? 'active' : ''}}"
+    data-index="{{index}}"
+    role="button"
+    aria-label="{{item.text}}"
+    bindtap="switchTab"
+  >
+    <image
+      class="v531-tab-icon"
+      src="{{selected === index ? item.selectedIconPath : item.iconPath}}"
+      mode="aspectFit"
+    />
+    <text class="v531-tab-label">{{item.text}}</text>
+  </view>
+</view>

@@ -20,6 +20,7 @@
     }
   },
   "mp-weixin": {
-    "appid": "wxf02d04d39afb7c6d"
+    "appid": "wxf02d04d39afb7c6d",
+    "libVersion": "3.15.2"
   }
 }

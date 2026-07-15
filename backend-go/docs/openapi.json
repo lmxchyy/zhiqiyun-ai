@@ -160,6 +160,45 @@
         }
       }
     },
+    "/api/v1/user/profile": {
+      "get": {
+        "operationId": "getUserAccessProfile",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/UserAccessProfileResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/api/v1/user/current-role": {
+      "post": {
+        "operationId": "switchUserCurrentRole",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurrentRoleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/UserAccessProfileResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ErrorResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ErrorResponse"
+          }
+        }
+      }
+    },
     "/api/v1/generation-tasks": {
       "get": {
         "operationId": "listGenerationTasks",
@@ -434,6 +473,16 @@
           }
         }
       },
+      "UserAccessProfileResponse": {
+        "description": "Current tenant, organization, roles and permissions for the authenticated user.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/UserAccessProfile"
+            }
+          }
+        }
+      },
       "GenerationTaskResponse": {
         "description": "Generation task.",
         "content": {
@@ -597,11 +646,48 @@
         "type": "string",
         "enum": ["user", "agent", "admin"]
       },
+      "AppRole": {
+        "type": "string",
+        "enum": ["USER", "AGENT", "OPERATION", "ENTERPRISE_ADMIN", "AI_ADMIN", "FINANCE", "CUSTOMER_SERVICE"]
+      },
+      "CurrentRoleRequest": {
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/AppRole"
+          }
+        }
+      },
+      "UserAccessProfile": {
+        "type": "object",
+        "required": ["userId", "tenantId", "organizationId", "roles", "currentRole", "permissions"],
+        "properties": {
+          "userId": { "type": "string" },
+          "tenantId": { "type": "string" },
+          "organizationId": { "type": "string" },
+          "roles": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/AppRole" }
+          },
+          "currentRole": { "$ref": "#/components/schemas/AppRole" },
+          "permissions": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
       "AuthUser": {
         "type": "object",
         "required": ["id", "email", "name", "role", "status"],
         "properties": {
           "id": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "organizationId": {
             "type": "string"
           },
           "email": {
@@ -696,6 +782,21 @@
             "items": {
               "type": "string"
             }
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "organizationId": {
+            "type": "string"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AppRole"
+            }
+          },
+          "currentRole": {
+            "$ref": "#/components/schemas/AppRole"
           },
           "defaultModule": {
             "type": "string"

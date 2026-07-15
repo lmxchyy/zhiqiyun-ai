@@ -123,15 +123,27 @@ func refreshSessionToken(token string) string {
 type authAPI struct {
 	store    platformStore
 	sessions authSessionStore
+	flow     *authFlowCoordinator
 }
 
 type loginRequest struct {
+	Account  string `json:"account"`
 	Email    string `json:"email"`
+	Username string `json:"username"`
+	Mobile   string `json:"mobile"`
 	Password string `json:"password"`
 }
 
 type wechatMiniProgramLoginRequest struct {
-	Code string `json:"code"`
+	Code           string `json:"code"`
+	WxLoginCode    string `json:"wxLoginCode"`
+	PhoneCode      string `json:"phoneCode"`
+	InviteCode     string `json:"inviteCode"`
+	Scene          string `json:"scene"`
+	PromoterCode   string `json:"promoterCode"`
+	CampaignCode   string `json:"campaignCode"`
+	RedirectSource string `json:"redirectSource"`
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 type refreshTokenRequest struct {
@@ -163,7 +175,7 @@ type wechatMiniProgramSession struct {
 }
 
 func newAuthAPI(store platformStore, sessions authSessionStore) authAPI {
-	return authAPI{store: store, sessions: sessions}
+	return authAPI{store: store, sessions: sessions, flow: newAuthFlowCoordinator()}
 }
 
 func (a authAPI) login(w http.ResponseWriter, r *http.Request) {
@@ -177,8 +189,17 @@ func (a authAPI) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	user, ok, needsPasswordUpgrade := findLoginUser(data.Users, req.Email, req.Password)
+	account := firstNonEmptyString(req.Account, req.Mobile, req.Username, req.Email)
+	user, ok, needsPasswordUpgrade, accountStatus := findLoginUserByAccount(data.Users, account, req.Password)
 	if !ok {
+		if strings.EqualFold(accountStatus, "FROZEN") || strings.EqualFold(accountStatus, "DISABLED") {
+			writeAuthFlowError(w, http.StatusLocked, "ACCOUNT_FROZEN", "账号暂时无法使用")
+			return
+		}
+		if strings.EqualFold(accountStatus, "DEACTIVATED") || strings.EqualFold(accountStatus, "DELETED") {
+			writeAuthFlowError(w, http.StatusGone, "ACCOUNT_DEACTIVATED", "账号已注销")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -205,7 +226,7 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	code := strings.TrimSpace(req.Code)
+	code := strings.TrimSpace(firstNonEmptyString(req.WxLoginCode, req.Code))
 	if code == "" {
 		writeError(w, http.StatusBadRequest, errors.New("wechat mini program code is required"))
 		return
@@ -223,6 +244,8 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var user adminUser
+	isNewUser := false
+	inviteBindStatus := "not_applicable"
 	if mockLogin {
 		var ok bool
 		user, ok = findActiveUserByEmail(data.Users, "demo@xianzhi.ai")
@@ -242,13 +265,21 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		data, user, err = a.userForWeChatMiniProgramSession(data, session)
+		if strings.TrimSpace(req.PhoneCode) == "" {
+			writeAuthFlowError(w, http.StatusBadRequest, "WECHAT_PHONE_CODE_REQUIRED", "wechat phone authorization code is required")
+			return
+		}
+		mobile, err := exchangeWeChatPhoneCode(r.Context(), req.PhoneCode)
 		if err != nil {
-			if errors.Is(err, errUnauthorized) {
-				writeError(w, http.StatusUnauthorized, err)
-				return
-			}
-			writeError(w, http.StatusInternalServerError, err)
+			writeAuthFlowError(w, http.StatusBadGateway, "WECHAT_PHONE_AUTH_FAILED", "未能验证微信手机号授权")
+			return
+		}
+		data, user, isNewUser, inviteBindStatus, err = a.userForPhoneIdentity(mobile, session, authRegistrationInput{
+			InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
+			CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
+		})
+		if err != nil {
+			writeMappedAuthFlowError(w, err)
 			return
 		}
 	}
@@ -258,6 +289,13 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 		log.Printf("wechat mini program login token issue failed: %v", err)
 		writeAuthTokenError(w, err)
 		return
+	}
+	response["isNewUser"] = isNewUser
+	response["registrationStatus"] = map[bool]string{true: "created", false: "existing"}[isNewUser]
+	response["inviteBindStatus"] = inviteBindStatus
+	response["expiresIn"] = int(authSessionTTL.Seconds())
+	if isNewUser {
+		response["newcomerBenefits"] = []map[string]string{{"title": "新人体验权益已到账", "status": "granted"}}
 	}
 	log.Printf("wechat mini program login succeeded user=%s mock=%t", user.ID, mockLogin)
 	writeJSON(w, response)
@@ -300,11 +338,9 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 	referredBy := ""
 	if req.InviteCode != "" {
 		agent, ok := channelAgentForInviteCode(data.ChannelAgents, req.InviteCode)
-		if !ok {
-			writeError(w, http.StatusBadRequest, errors.New("invite code not found"))
-			return
+		if ok {
+			referredBy = agent.UserID
 		}
-		referredBy = agent.UserID
 	}
 	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
 		Name:       req.Username,
@@ -470,7 +506,10 @@ func (a authAPI) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	matches, _ := passwordMatches(user, req.CurrentPassword)
+	matches := user.PasswordHash == ""
+	if !matches {
+		matches, _ = passwordMatches(user, req.CurrentPassword)
+	}
 	if !matches {
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
@@ -480,7 +519,7 @@ func (a authAPI) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "user": userView(updated)})
+	writeJSON(w, map[string]any{"ok": true, "passwordSet": true, "user": userView(updated)})
 }
 
 func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adminUser, error) {
@@ -723,6 +762,9 @@ func passwordMatches(user adminUser, password string) (bool, bool) {
 	if user.PasswordHash != "" {
 		return verifyPasswordHash(user.PasswordHash, password)
 	}
+	if strings.TrimSpace(user.Mobile) != "" {
+		return false, false
+	}
 	return demoPasswordForRole(user.Role, user.Email) == password, true
 }
 
@@ -791,12 +833,19 @@ func demoPasswordForRole(role string, email string) string {
 func authResponse(data adminPlatformData, user adminUser, includeToken bool) map[string]any {
 	agent, hasAgent := channelAgentForUser(data.ChannelAgents, user.ID)
 	operationCenter, hasOperationCenter := activeOperationCenterForUser(data.OperationCenters, user.ID)
+	roles := rolesForUser(data, user)
+	loginPermissions := append([]string{}, permissionsForIdentity(user.Role, hasAgent, hasOperationCenter)...)
+	loginPermissions = appendUnique(loginPermissions, permissionsForCurrentRole(roleUser)...)
 	response := map[string]any{
-		"user":          userView(user),
-		"permissions":   permissionsForIdentity(user.Role, hasAgent, hasOperationCenter),
-		"defaultModule": defaultModuleForIdentity(user.Role, hasOperationCenter),
-		"workspace":     workspaceForRole(user.Role),
-		"defaultRoute":  defaultRouteForIdentity(user.Role, hasOperationCenter),
+		"user":           userView(user),
+		"tenantId":       firstNonEmptyString(user.TenantID, "tenant_default"),
+		"organizationId": firstNonEmptyString(user.OrganizationID, "organization_default"),
+		"roles":          roles,
+		"currentRole":    roleUser,
+		"permissions":    loginPermissions,
+		"defaultModule":  defaultModuleForIdentity(user.Role, hasOperationCenter),
+		"workspace":      workspaceForRole(user.Role),
+		"defaultRoute":   defaultRouteForIdentity(user.Role, hasOperationCenter),
 	}
 	if includeToken {
 		if devAuthFallbackEnabled() {
@@ -840,7 +889,12 @@ func decodeAuthToken(token string) (authTokenPayload, error) {
 func userView(user adminUser) map[string]any {
 	return map[string]any{
 		"id":                    user.ID,
+		"tenantId":              firstNonEmptyString(user.TenantID, "tenant_default"),
+		"organizationId":        firstNonEmptyString(user.OrganizationID, "organization_default"),
 		"email":                 user.Email,
+		"mobileMasked":          maskedMobile(user.Mobile),
+		"passwordSet":           user.PasswordHash != "",
+		"wechatLinked":          len(user.WeChatOpenIDs) > 0 || user.WeChatUnionID != "",
 		"name":                  user.Name,
 		"role":                  user.Role,
 		"memberLevel":           user.MemberLevel,
@@ -873,7 +927,9 @@ func activeOperationCenterForUser(centers []adminOperationCenter, userID string)
 func permissionsForRole(role string) []string {
 	switch {
 	case role == "SUPER_ADMIN":
-		return []string{"admin.full", "channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create", "operation_center.dashboard", "operation_center.agents.read", "operation_center.orders.read", "operation_center.commissions.read"}
+		return append([]string{"admin.full", "channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create", "operation_center.dashboard", "operation_center.agents.read", "operation_center.orders.read", "operation_center.commissions.read"}, adminEnterprisePermissions...)
+	case role == "ENTERPRISE_OPERATOR" || role == "CERTIFICATION_REVIEWER" || role == "FINANCE" || role == "RISK_MANAGER" || role == "CUSTOMER_SERVICE":
+		return append([]string{}, adminEnterpriseRolePermissionMatrix[role]...)
 	case strings.HasPrefix(role, "AGENT"):
 		return []string{"workspace.use", "generation.create", "assets.read", "channel.dashboard", "channel.customers.read", "channel.commissions.read", "channel.withdrawals.create"}
 	default:
@@ -902,14 +958,14 @@ func stringSliceContains(items []string, value string) bool {
 }
 
 func defaultModuleForRole(role string) string {
-	if role == "SUPER_ADMIN" {
+	if isPlatformAdminRole(role) {
 		return "admin"
 	}
 	return "dashboard"
 }
 
 func defaultModuleForIdentity(role string, hasOperationCenter bool) string {
-	if role == "SUPER_ADMIN" {
+	if isPlatformAdminRole(role) {
 		return "admin"
 	}
 	if hasOperationCenter {
@@ -919,20 +975,25 @@ func defaultModuleForIdentity(role string, hasOperationCenter bool) string {
 }
 
 func workspaceForRole(role string) string {
-	if role == "SUPER_ADMIN" {
+	if isPlatformAdminRole(role) {
 		return "admin"
 	}
 	return "user"
 }
 
 func defaultRouteForIdentity(role string, hasOperationCenter bool) string {
-	if role == "SUPER_ADMIN" {
+	if isPlatformAdminRole(role) {
 		return "/admin/"
 	}
 	if hasOperationCenter {
 		return "/app/operation-center"
 	}
 	return defaultRouteForRole(role)
+}
+
+func isPlatformAdminRole(role string) bool {
+	role = strings.ToUpper(strings.TrimSpace(role))
+	return role == "SUPER_ADMIN" || role == "ENTERPRISE_OPERATOR" || role == "CERTIFICATION_REVIEWER" || role == "FINANCE" || role == "RISK_MANAGER" || role == "CUSTOMER_SERVICE"
 }
 
 func defaultRouteForRole(role string) string {

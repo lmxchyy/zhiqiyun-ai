@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-07-14T10:05:47.452Z",
+  "filter": "quick.knowledge",
+  "rows": [
+    {
+      "id": "quick.knowledge",
+      "target": "pages/user/UserAgentCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 0,
+      "homeScrollAfter": 0
+    }
+  ],
+  "failures": [],
+  "local": null,
+  "finishedAt": "2026-07-14T10:06:26.662Z",
+  "passed": true
+}

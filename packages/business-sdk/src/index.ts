@@ -4,12 +4,15 @@ import { createAssetsSdk } from "./assets";
 import { createAuthSdk } from "./auth";
 import { createBillingSdk } from "./billing";
 import { createDashboardSdk } from "./dashboard";
+import { createEnterpriseSdk } from "./enterprise";
 import { createGenerationSdk } from "./generation";
 import { createMembershipSdk } from "./membership";
 import { createModelsSdk } from "./models";
 import { createPointsSdk } from "./points";
 import { createRoleWorkbenchSdk } from "./role-workbench";
 import type { BusinessSdk } from "./types";
+
+export * from "./files";
 
 export type {
   BillingOrderInput,
@@ -19,9 +22,12 @@ export type {
   ItemsResponse,
   MemberProfileResponse,
   OperationProfileResponse,
+  PagedItems,
+  PageOptions,
   RechargeOrderInput,
   RoleWalletResponse,
-  SubscriptionOrderInput
+  SubscriptionOrderInput,
+  TaskPageOptions
 } from "./types";
 
 export function createBusinessSdk(api: ApiClient): BusinessSdk {
@@ -35,6 +41,7 @@ export function createBusinessSdk(api: ApiClient): BusinessSdk {
     membership: createMembershipSdk(api),
     billing: createBillingSdk(api),
     agents: createAgentsSdk(api),
+    enterprise: createEnterpriseSdk(api),
     roleWorkbench: createRoleWorkbenchSdk(api)
   };
 }

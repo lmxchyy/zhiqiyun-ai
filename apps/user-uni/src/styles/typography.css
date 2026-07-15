@@ -1,0 +1,41 @@
+page {
+  --font-family-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-family-number: Inter, "SF Pro Display", "Segoe UI", Arial, sans-serif;
+  --font-display-size: 27px;
+  --font-display-line: 34px;
+  --font-brand-size: 24px;
+  --font-brand-line: 32px;
+  --font-section-size: 18px;
+  --font-section-line: 25px;
+  --font-card-size: 14px;
+  --font-card-line: 20px;
+  --font-body-size: 12px;
+  --font-body-line: 18px;
+  --font-meta-size: 10px;
+  --font-meta-line: 15px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  min-height: 100%;
+  font-family: var(--font-family-sans);
+  letter-spacing: 0;
+}
+
+view,
+text,
+button,
+input,
+textarea,
+picker,
+scroll-view {
+  box-sizing: border-box;
+  font-family: var(--font-family-sans);
+  letter-spacing: 0;
+}
+
+input,
+textarea {
+  font-size: var(--font-body-size);
+  line-height: var(--font-body-line);
+}

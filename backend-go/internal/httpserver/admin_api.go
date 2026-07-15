@@ -196,15 +196,20 @@ func (a adminAPI) newAPIGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := newAPISyncConfigFromSettings(data.SystemSettings)
 	if !cfg.Enabled || strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.AdminCookie) == "" {
-		writeError(w, http.StatusBadRequest, errors.New("请先在系统治理中配置 NewAPI 管理地址和管理员凭证"))
+		writeJSON(w, map[string]any{"items": []string{}, "configured": false, "available": false})
 		return
 	}
 	groups, err := fetchNewAPIGroups(r.Context(), cfg)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeJSON(w, map[string]any{
+			"items":      []string{},
+			"configured": true,
+			"available":  false,
+			"warning":    err.Error(),
+		})
 		return
 	}
-	writeJSON(w, map[string]any{"items": groups})
+	writeJSON(w, map[string]any{"items": groups, "configured": true, "available": true})
 }
 
 func (a adminAPI) channelAgents(w http.ResponseWriter, _ *http.Request) {

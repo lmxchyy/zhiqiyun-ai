@@ -1,0 +1,31 @@
+{
+  "startedAt": "2026-07-14T09:10:00.289Z",
+  "projectPath": "E:\\code\\work\\先知AI\\apps\\user-uni\\dist\\build\\mp-weixin",
+  "consoleErrors": [],
+  "authUser": "user_000002",
+  "switcher": {
+    "workspaceCards": 3,
+    "selected": "企\n????V1??A-20260714-014013\n企业管理员 · 未认证\n○"
+  },
+  "overview": {
+    "metrics": 4,
+    "managementRows": 6
+  },
+  "members": {
+    "memberCards": 2,
+    "buttonOffset": {
+      "left": 0,
+      "top": 475
+    },
+    "buttonSize": {
+      "width": 390,
+      "height": 52
+    },
+    "windowHeight": 844
+  },
+  "states": {
+    "usageEmpty": true,
+    "forbidden": true
+  },
+  "finishedAt": "2026-07-14T09:10:53.348Z"
+}

@@ -77,6 +77,7 @@ export function createAuthStorage(options: AuthStorageOptions) {
 
 export function createAuthService(options: AuthServiceOptions) {
   const storage = createAuthStorage(options);
+  let refreshPromise: Promise<AuthResponse> | null = null;
   const service = {
     storage,
     async loginByPassword(email: string, password: string) {
@@ -119,13 +120,14 @@ export function createAuthService(options: AuthServiceOptions) {
       return auth;
     },
     async refresh() {
+      if (refreshPromise) return refreshPromise;
       const refreshToken = storage.getRefreshToken();
       if (!refreshToken) throw new Error("refresh token is missing");
-      const auth = await options.api.request<AuthResponse, { refreshToken: string }>("/api/v1/auth/refresh", {
+      refreshPromise = options.api.request<AuthResponse, { refreshToken: string }>("/api/v1/auth/refresh", {
         method: "POST",
         body: { refreshToken }
-      });
-      return persistAuth(storage, auth);
+      }).then(auth => persistAuth(storage, auth)).finally(() => { refreshPromise = null; });
+      return refreshPromise;
     },
     async restore() {
       if (storage.getToken()) {

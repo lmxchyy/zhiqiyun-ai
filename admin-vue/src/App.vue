@@ -231,12 +231,12 @@
               </article>
               <article class="global-search-card">
                 <span>当前模块数据</span>
-                <button v-for="item in currentRecordResults" :key="item.key" type="button"><strong>{{ item.title }}</strong><small>{{ item.desc }}</small></button>
+                <button v-for="item in currentRecordResults" :key="item.key" type="button" @click="openCurrentRecordResult(item)"><strong>{{ item.title }}</strong><small>{{ item.desc }}</small></button>
                 <el-empty v-if="!currentRecordResults.length" description="当前模块没有匹配记录" :image-size="56" />
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -247,7 +247,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -573,11 +573,14 @@
                 <div class="online-reference-section">
                   <div class="online-section-title"><span>Reference Images</span><small>最多 3 张参考图，支持文生图 / 图生图 / 风格复用</small></div>
                   <div class="online-reference-grid">
-                    <el-upload v-for="slot in onlineReferenceSlots" :key="slot" :auto-upload="false" :show-file-list="false" class="online-upload-slot">
+                    <el-upload v-for="slot in onlineReferenceSlots" :key="slot" :auto-upload="false" :show-file-list="false" :on-change="handleOnlineReferenceUpload" accept="image/*" :disabled="onlineReferenceImages.length >= onlineReferenceSlots.length" class="online-upload-slot">
                       <button type="button" class="online-upload-card">
-                        <el-icon><Plus /></el-icon>
-                        <strong>参考图 {{ slot }}</strong>
-                        <small>点击上传</small>
+                        <img v-if="onlineReferenceImages[slot - 1]" :src="aiReferencePreviewUrl(onlineReferenceImages[slot - 1])" :alt="onlineReferenceImages[slot - 1].name" />
+                        <template v-else>
+                          <el-icon><Plus /></el-icon>
+                          <strong>参考图 {{ slot }}</strong>
+                          <small>点击上传</small>
+                        </template>
                       </button>
                     </el-upload>
                   </div>
@@ -820,13 +823,11 @@
                   <main class="user-agent-list-panel">
                     <header class="user-agent-list-head">
                       <div class="user-agent-tabs">
-                        <button type="button" class="active">我的智能体</button>
-                        <button type="button">最近使用</button>
-                        <button type="button">收藏</button>
+                        <button v-for="tab in agentCenterTabs" :key="tab.value" type="button" :class="{ active: agentCenterListTab === tab.value }" @click="agentCenterListTab = tab.value">{{ tab.label }}</button>
                       </div>
                       <div class="user-agent-list-tools">
-                        <label><el-icon><Search /></el-icon><input placeholder="搜索智能体..." /></label>
-                        <select aria-label="筛选智能体类型"><option>全部类型</option></select>
+                        <label><el-icon><Search /></el-icon><input v-model.trim="agentCenterSearch" placeholder="搜索智能体..." /></label>
+                        <select v-model="agentCenterTypeFilter" aria-label="筛选智能体类型"><option value="all">全部类型</option><option v-for="type in agentCenterTypeOptions" :key="type" :value="type">{{ type }}</option></select>
                         <button type="button" @click="selectAdminModule('userAgentCenter')">+ 创建智能体</button>
                       </div>
                     </header>
@@ -835,7 +836,7 @@
                         <span>智能体名称</span><span>类型</span><span>状态</span><span>模型</span><span>知识库</span><span>调用次数</span><span>更新时间</span><span>操作</span>
                       </div>
                       <div
-                        v-for="agent in agentCenterRows"
+                        v-for="agent in visibleAgentCenterRows"
                         :key="agent.name"
                         :class="['user-agent-table-row', { 'is-officecli': agent.officecli, 'is-clickable': true }]"
                         tabindex="0"
@@ -854,9 +855,9 @@
                         <span>{{ agent.updated }}</span>
                         <div class="user-agent-row-actions">
                           <button type="button" class="is-wide" @click.stop="handleAgentRowAction(agent)">进入</button>
-                          <button type="button" title="编辑" aria-label="编辑智能体" @click.stop><el-icon><EditPen /></el-icon></button>
-                          <button type="button" title="复制" aria-label="复制智能体" @click.stop><el-icon><CopyDocument /></el-icon></button>
-                          <button type="button" title="更多" aria-label="更多操作" @click.stop><el-icon><Operation /></el-icon></button>
+                          <button type="button" title="编辑" aria-label="编辑智能体" @click.stop="openAgentWorkspace(agent)"><el-icon><EditPen /></el-icon></button>
+                          <button type="button" title="复制" aria-label="复制智能体配置" @click.stop="copyAgentCenterConfig(agent)"><el-icon><CopyDocument /></el-icon></button>
+                          <button type="button" :title="isAgentCenterFavorite(agent) ? '取消收藏' : '收藏'" :aria-label="isAgentCenterFavorite(agent) ? '取消收藏智能体' : '收藏智能体'" @click.stop="toggleAgentCenterFavorite(agent)"><el-icon><component :is="isAgentCenterFavorite(agent) ? StarFilled : Star" /></el-icon></button>
                         </div>
                       </div>
                     </div>
@@ -866,7 +867,7 @@
 
                 <aside class="user-agent-side-panel">
                   <article class="user-agent-side-card is-metrics">
-                    <header><strong>智能体数据概览</strong><button type="button">近 7 天⌄</button></header>
+                    <header><strong>智能体数据概览</strong><select v-model="agentCenterRange" aria-label="智能体数据时间范围"><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option></select></header>
                     <div class="user-agent-metric-grid">
                       <div v-for="metric in agentCenterMetrics" :key="metric.label">
                         <span>{{ metric.label }}</span>
@@ -876,7 +877,7 @@
                     </div>
                   </article>
                   <article class="user-agent-side-card is-trend">
-                    <header><strong>使用趋势</strong><button type="button">近 7 天⌄</button></header>
+                    <header><strong>使用趋势</strong><select v-model="agentCenterRange" aria-label="使用趋势时间范围"><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option></select></header>
                     <div class="user-agent-trend">
                       <span v-for="bar in agentCenterTrend" :key="bar.label"><i :style="{ height: bar.height }"></i><em>{{ bar.label }}</em></span>
                     </div>
@@ -890,7 +891,7 @@
                   <article class="user-agent-side-card is-shortcuts">
                     <strong>快速入口</strong>
                     <div class="user-agent-shortcuts">
-                      <button v-for="item in agentCenterShortcuts" :key="item.label" type="button"><span>{{ item.icon }}</span>{{ item.label }}</button>
+                      <button v-for="item in agentCenterShortcuts" :key="item.label" type="button" @click="handleAgentCenterShortcut(item.label)"><span>{{ item.icon }}</span>{{ item.label }}</button>
                     </div>
                   </article>
                 </aside>
@@ -943,7 +944,7 @@
 
               <section class="user-agent-mobile-section-head">
                 <strong>我的智能体</strong>
-                <button type="button">全部类型⌄</button>
+                <button type="button" @click="agentCenterTypeFilter = agentCenterTypeFilter === 'all' ? (agentCenterTypeOptions[0] || 'all') : 'all'">{{ agentCenterTypeFilter === 'all' ? '全部类型⌄' : `${agentCenterTypeFilter}⌄` }}</button>
               </section>
               <div class="user-agent-mobile-list">
                 <article v-for="agent in agentCenterMobileRows" :key="agent.name" class="user-agent-mobile-agent-card is-clickable" @click="handleAgentRowAction(agent)">
@@ -2030,7 +2031,18 @@
               </div>
             </el-card>
           </section>
+          <StorageCenter v-else-if="store.activeModuleId === 'storageCenter'" />
+          <MediaCenter v-else-if="['mediaAssets', 'mediaCategories'].includes(store.activeModuleId)" />
+          <PageDecoration v-else-if="mediaDecorationModuleIds.includes(store.activeModuleId)" :key="store.activeModuleId" :initial-page-code="decorationInitialPage" />
           <KnowledgeAdminCenter v-else-if="store.activeModuleId === 'knowledgeAdmin'" />
+          <EnterpriseManagement
+            v-else-if="enterpriseModuleIds.includes(store.activeModuleId)"
+            :module-id="store.activeModuleId"
+            :route-path="enterpriseRoutePath"
+            :permissions="currentPermissions"
+            :current-role="currentAdmin?.role || ''"
+            @navigate="navigateEnterpriseRoute"
+          />
           <section v-else-if="store.activeModuleId === 'analysis'" class="analysis-page">
             <div class="analysis-stat-grid">
               <article v-for="stat in analysisStats" :key="stat.label" class="analysis-stat-card">
@@ -3054,8 +3066,12 @@ import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Cro
 import { adminRequest } from "./api/client";
 import { useOfficeCLI } from "./composables/useOfficeCLI";
 import PromptEditable from "./components/PromptEditable.vue";
+import EnterpriseManagement from "./components/enterprise/EnterpriseManagement.vue";
 import KnowledgeAdminCenter from "./components/knowledge/KnowledgeAdminCenter.vue";
 import KnowledgeAgentCenter from "./components/knowledge/KnowledgeAgentCenter.vue";
+import MediaCenter from "./components/media/MediaCenter.vue";
+import PageDecoration from "./components/media/PageDecoration.vue";
+import StorageCenter from "./components/storage/StorageCenter.vue";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
 import {
@@ -3111,6 +3127,11 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 const store = useAdminStore();
 const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
+const enterpriseModuleIds = [
+  "enterpriseList", "enterpriseDetail", "enterpriseCertifications", "enterpriseMembers", "enterprisePackage",
+  "enterpriseCompute", "enterpriseTransactions", "enterpriseOrders", "enterpriseAiCapabilities", "enterpriseAiEmployees",
+  "enterpriseKnowledgeBases", "enterpriseAttribution", "enterpriseRelationships", "enterpriseRisk", "enterpriseAuditLogs"
+];
 const PptDocumentGeneration = defineAsyncComponent({
   loader: () => import("./components/PptDocumentGeneration.vue"),
   delay: 0,
@@ -3140,6 +3161,9 @@ const aiCapabilityModuleIds = [
   "aiCapabilityChannels",
   "aiCapabilityLogs"
 ];
+const mediaDecorationModuleIds = ["pageDecoration", "pageHomeConfig", "pageStudioConfig", "pageAssetsConfig", "pageProfileConfig"];
+const mediaOperationModuleIds = ["mediaAssets", "mediaCategories", ...mediaDecorationModuleIds];
+const decorationInitialPage = computed(() => ({ pageHomeConfig: "home", pageStudioConfig: "studio", pageAssetsConfig: "assets", pageProfileConfig: "profile" } as Record<string, string>)[store.activeModuleId] || "home");
 const elementSizeStorageKey = "xianzhi-admin-element-size";
 const elementSizeOptions: Array<{ label: string; value: ComponentSize }> = [
   { label: "默认", value: "default" },
@@ -3808,13 +3832,15 @@ const operationCenterModuleIds = ["operationCenterDashboard", "operationCenterAg
 
 const adminModuleGroups = [
   { id: "home", title: "首页", icon: House, items: modules.filter((item) => ["analysis", "workbench", "dashboard"].includes(item.id)) },
+  { id: "enterprise", title: "企业管理", icon: Goods, items: modules.filter((item) => ["enterpriseList", "enterpriseCertifications"].includes(item.id)) },
   { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
   { id: "aiCapability", title: "AI 能力中心", icon: Cpu, items: modules.filter((item) => aiCapabilityModuleIds.includes(item.id)) },
   { id: "knowledge", title: "知识库中心", icon: Collection, items: modules.filter((item) => ["knowledgeAdmin"].includes(item.id)) },
+  { id: "mediaOperation", title: "运营中心", icon: Operation, items: modules.filter((item) => mediaOperationModuleIds.includes(item.id)) },
   { id: "marketing", title: "营销端", icon: Connection, items: modules.filter((item) => ["marketingDashboard", "marketingAgentLevels", "marketingInvites", "marketingCommissionRules", "marketingUpgradePlans", "marketingWallets", "marketingWalletRecords", "marketingSettlementStatements"].includes(item.id)) },
   { id: "billing", title: "计费中心", icon: Tickets, items: modules.filter((item) => billingModuleIds.includes(item.id)) },
   { id: "growth", title: "渠道增长", icon: Connection, items: modules.filter((item) => ["channels", "operationCenters", "commissions", "commissionRecords", "usage"].includes(item.id)) },
-  { id: "governance", title: "技术治理", icon: Setting, items: modules.filter((item) => ["apiSettings", "system"].includes(item.id)) },
+  { id: "governance", title: "技术治理", icon: Setting, items: modules.filter((item) => ["storageCenter", "apiSettings", "system"].includes(item.id)) },
   { id: "permission", title: "权限管理", icon: Lock, items: modules.filter((item) => ["departments", "userManagement", "menuManagement"].includes(item.id)) }
 ];
 
@@ -3886,10 +3912,32 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
   userOrders: { badge: "交易记录", description: "查看历史订单、支付状态和点数到账结果；充值/订阅入口已拆分为独立模块。" },
   knowledgeAdmin: { badge: "知识库治理", description: "跨租户管理知识库、文档解析、Chunk、Embedding、向量索引、检索日志与问答统计。" },
+  mediaAssets: { badge: "素材中心", description: "统一上传、分类、预览、启停并追踪运营素材的页面引用。" },
+  mediaCategories: { badge: "素材分类", description: "维护平台默认与租户专属的运营素材分类。" },
+  pageDecoration: { badge: "页面装修", description: "可视化配置首页、创作、作品和我的页面素材位并发布版本。" },
+  pageHomeConfig: { badge: "首页配置", description: "配置首页 Hero、快捷入口、能力卡和灵感推荐素材。" },
+  pageStudioConfig: { badge: "创作页配置", description: "配置创作页 Banner 与模板封面。" },
+  pageAssetsConfig: { badge: "作品页配置", description: "配置作品类型默认封面和失败回退。" },
+  pageProfileConfig: { badge: "我的页配置", description: "配置用户头像、会员背景与个人中心头图。" },
   operationCenterDashboard: { badge: "运营中心", description: "汇总运营中心代理、订单、分润和邀请码，作为中心账号登录后的经营首页。" },
   operationCenterAgents: { badge: "中心代理", description: "查看归属本运营中心的代理商、等级、邀请码和启停状态。" },
   operationCenterOrders: { badge: "中心订单", description: "查看归属本运营中心的代理开通、会员充值和套餐订单。" },
   operationCenterCommissions: { badge: "中心分润", description: "核对运营中心奖励、待结算金额、已结算金额和分润记录。" },
+  enterpriseList: { badge: "企业管理", description: "平台企业客户、认证、套餐、席位、算力与归属的统一管理入口。" },
+  enterpriseDetail: { badge: "企业详情", description: "查看企业治理、计费和使用摘要，不返回企业敏感内容正文。" },
+  enterpriseCertifications: { badge: "认证审核", description: "审核企业主体资质，并保留通过、驳回及审批审计记录。" },
+  enterpriseMembers: { badge: "成员组织", description: "查看企业成员、席位与组织架构统计。" },
+  enterprisePackage: { badge: "套餐席位", description: "查看和调整企业套餐、有效期与成员席位。" },
+  enterpriseCompute: { badge: "算力账户", description: "按服务端 POINT 单位查看和调整企业算力。" },
+  enterpriseTransactions: { badge: "资金流水", description: "查看企业充值、消费和余额变化明细。" },
+  enterpriseOrders: { badge: "企业订单", description: "查看企业套餐、算力与服务订单。" },
+  enterpriseAiCapabilities: { badge: "AI 能力", description: "查看和配置企业已开通模型与 AI 能力。" },
+  enterpriseAiEmployees: { badge: "AI 员工", description: "仅查看企业 AI 员工数量和运行状态统计。" },
+  enterpriseKnowledgeBases: { badge: "知识库概览", description: "仅查看知识库数量、容量和使用统计，不返回正文。" },
+  enterpriseAttribution: { badge: "客户归属", description: "查看并通过审批流程变更客户归属。" },
+  enterpriseRelationships: { badge: "渠道关系", description: "查看企业来源代理商与所属运营中心关系。" },
+  enterpriseRisk: { badge: "企业风控", description: "查看风险记录并暂停或恢复企业服务。" },
+  enterpriseAuditLogs: { badge: "审计日志", description: "查看主控管理员对企业数据执行的全部写操作。" },
   analysis: { badge: "数据分析", description: "按客户增长、交易收入、积分消耗和生成任务活跃度观察平台经营状态。" },
   workbench: { badge: "运营工作台", description: "聚合待办、快捷入口和平台健康状态，帮助主控团队快速处理日常运营动作。" },
   dashboard: { badge: "运营驾驶舱", description: "汇总客户、订单、渠道、用量和上游服务状态，帮助主控端快速判断平台健康度。" },
@@ -4051,6 +4099,29 @@ const userHomeAgentEntries: UserHomeEntry[] = [
 const agentCenterWorkspace = ref<AgentCenterWorkspace | null>(null);
 const agentWorkspaceDraft = ref("");
 const agentWorkspaceMessages = ref<AgentWorkspaceMessage[]>([]);
+type AgentCenterListTab = "mine" | "recent" | "favorite";
+const agentCenterTabs: Array<{ label: string; value: AgentCenterListTab }> = [
+  { label: "我的智能体", value: "mine" },
+  { label: "最近使用", value: "recent" },
+  { label: "收藏", value: "favorite" }
+];
+const agentCenterListTab = ref<AgentCenterListTab>("mine");
+const agentCenterSearch = ref("");
+const agentCenterTypeFilter = ref("all");
+const agentCenterRange = ref("7");
+const agentCenterFavoriteKeys = ref<string[]>([]);
+const agentCenterTypeOptions = computed(() => [...new Set(agentCenterRows.map((item) => String(item.type || "")).filter(Boolean))]);
+const visibleAgentCenterRows = computed(() => {
+  const keyword = agentCenterSearch.value.trim().toLowerCase();
+  let items = agentCenterRows.filter((item) => {
+    const matchesType = agentCenterTypeFilter.value === "all" || item.type === agentCenterTypeFilter.value;
+    const matchesKeyword = !keyword || [item.name, item.desc, item.type, item.model, item.knowledge].some((value) => String(value || "").toLowerCase().includes(keyword));
+    return matchesType && matchesKeyword;
+  });
+  if (agentCenterListTab.value === "favorite") items = items.filter(isAgentCenterFavorite);
+  if (agentCenterListTab.value === "recent") items = items.slice(0, 5);
+  return items;
+});
 const agentCenterSubviewHistoryKey = "__xianzhiAgentSubview";
 const {
   officeCLIFormatOptions,
@@ -4173,6 +4244,51 @@ function handleAgentRowAction(item: AgentCenterOpenable) {
   openAgentWorkspace(item);
 }
 
+function agentCenterFavoriteKey(item: AgentCenterOpenable) {
+  return item.agentKey || item.name;
+}
+
+function isAgentCenterFavorite(item: AgentCenterOpenable) {
+  return agentCenterFavoriteKeys.value.includes(agentCenterFavoriteKey(item));
+}
+
+function toggleAgentCenterFavorite(item: AgentCenterOpenable) {
+  const key = agentCenterFavoriteKey(item);
+  const active = agentCenterFavoriteKeys.value.includes(key);
+  agentCenterFavoriteKeys.value = active
+    ? agentCenterFavoriteKeys.value.filter((itemKey) => itemKey !== key)
+    : [...agentCenterFavoriteKeys.value, key];
+  ElMessage.success(active ? "已取消收藏" : "已收藏智能体");
+}
+
+async function copyAgentCenterConfig(item: AgentCenterOpenable) {
+  const workspace = buildAgentCenterWorkspace(item);
+  await copyToClipboard(JSON.stringify({
+    name: workspace.name,
+    type: workspace.type,
+    model: workspace.model,
+    knowledge: workspace.knowledge,
+    prompt: workspace.prompt,
+    tools: workspace.toolTags
+  }, null, 2));
+}
+
+function handleAgentCenterShortcut(label: string) {
+  if (label.includes("模板")) {
+    document.querySelector(".user-agent-template-grid")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  if (label.includes("工具")) {
+    selectAdminModule("apiSettings");
+    return;
+  }
+  if (label.includes("知识")) {
+    selectAdminModule("knowledgeAdmin");
+    return;
+  }
+  ElMessage.info("调用日志暂未开放独立模块，当前可在数据概览查看调用量");
+}
+
 function sendAgentWorkspaceMessage() {
   const workspace = agentCenterWorkspace.value;
   const prompt = agentWorkspaceDraft.value.trim();
@@ -4258,6 +4374,7 @@ watch(
 );
 const onlineSubmitting = ref(false);
 const onlineReferenceSlots = [1, 2, 3];
+const onlineReferenceImages = computed(() => aiReferenceImages.value.slice(0, onlineReferenceSlots.length));
 const onlineCountOptions = [1, 2, 3, 4];
 const onlineStatusFilter = ref("ALL");
 const aiPlaygroundMode = ref("gallery");
@@ -5508,6 +5625,8 @@ async function fetchAiOriginalImageDataUrl(task: AdminRecord) {
   const directUrl = aiTaskImageUrl(task);
   if (!directUrl) return "";
   if (directUrl.startsWith("data:image/")) return directUrl;
+  const embeddedThumbnail = String(asset?.thumbnailUrl || task.thumbnailUrl || "");
+  if (embeddedThumbnail.startsWith("data:image/")) return embeddedThumbnail;
   const token = window.localStorage.getItem("token") || window.sessionStorage.getItem("token") || "";
   let response: Response;
   try {
@@ -6973,6 +7092,14 @@ async function handleAiReferenceUpload(uploadFile: { raw?: File; name?: string }
   void ensureAiReferenceRemoteUrl(id);
 }
 
+async function handleOnlineReferenceUpload(uploadFile: { raw?: File; name?: string }) {
+  if (onlineReferenceImages.value.length >= onlineReferenceSlots.length) {
+    ElMessage.warning(`在线生图最多上传 ${onlineReferenceSlots.length} 张参考图`);
+    return;
+  }
+  await handleAiReferenceUpload(uploadFile);
+}
+
 function handleAiPromptPasteImages(files: File[]) {
   for (const file of files) {
     if (aiReferenceImages.value.length >= 10) {
@@ -7233,11 +7360,17 @@ async function submitOnlineImage() {
   onlineSubmitting.value = true;
   try {
     const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
+    const taskSnapshot = await createAiGenerationTaskSnapshot(prompt);
+    const referenceImages = taskSnapshot.inputImagesSnapshot.slice(0, onlineReferenceSlots.length);
+    if (onlineReferenceImages.value.length && !referenceImages.length) {
+      ElMessage.error("参考图还没有准备好，请稍后重试");
+      return;
+    }
     const createdTask = await adminRequest<AdminRecord>({
       method: "POST",
       url: "/generation-tasks",
       data: {
-        type: "TEXT_TO_IMAGE",
+        type: referenceImages.length ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
         prompt,
         model: onlineImageForm.value.model,
         params: {
@@ -7248,6 +7381,11 @@ async function submitOnlineImage() {
           resolution: onlineImageForm.value.resolution,
           width: onlineImageForm.value.width,
           height: onlineImageForm.value.height,
+          taskSnapshot,
+          inputImageIds: taskSnapshot.inputImageIds.slice(0, onlineReferenceSlots.length),
+          inputImagesSnapshot: referenceImages,
+          referenceImages,
+          referenceImageCount: referenceImages.length,
           sourceModule: "online-image"
         }
       }
@@ -7508,6 +7646,10 @@ const currentAdmin = ref<AdminUser | null>(null);
 const currentAgent = ref<AdminRecord | null>(null);
 const currentOperationCenter = ref<AdminRecord | null>(null);
 const currentPermissions = ref<string[]>([]);
+const canViewEnterpriseManagement = computed(() => {
+  const role = String(currentAdmin.value?.role || "").toUpperCase();
+  return role === "SUPER_ADMIN" || currentPermissions.value.includes("admin.full") || currentPermissions.value.includes("enterprise:list");
+});
 const hasAgentIdentity = computed(() => {
   const role = String(currentAdmin.value?.role || "").toUpperCase();
   return Boolean(currentAgent.value?.id) || role.startsWith("AGENT") || currentPermissions.value.some((permission) => String(permission).startsWith("channel."));
@@ -7977,6 +8119,31 @@ const userModuleRouteMap: Record<string, string> = {
   operationCenterOrders: "/app/operation-center/orders",
   operationCenterCommissions: "/app/operation-center/commissions"
 };
+const enterpriseRoutePath = ref(typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : "/admin/enterprises");
+const enterpriseDetailSuffixMap: Record<string, string> = {
+  "": "enterpriseDetail",
+  "/certifications": "enterpriseCertifications",
+  "/members": "enterpriseMembers",
+  "/package": "enterprisePackage",
+  "/compute": "enterpriseCompute",
+  "/transactions": "enterpriseTransactions",
+  "/orders": "enterpriseOrders",
+  "/ai-capabilities": "enterpriseAiCapabilities",
+  "/ai-employees": "enterpriseAiEmployees",
+  "/knowledge-bases": "enterpriseKnowledgeBases",
+  "/attribution": "enterpriseAttribution",
+  "/relationships": "enterpriseRelationships",
+  "/risk": "enterpriseRisk",
+  "/audit-logs": "enterpriseAuditLogs"
+};
+
+function enterpriseModuleIdFromPath(pathname: string) {
+  const normalizedPath = pathname.replace(/\/$/, "");
+  if (normalizedPath === "/admin/enterprises") return "enterpriseList";
+  if (normalizedPath === "/admin/enterprises/certifications") return "enterpriseCertifications";
+  const match = normalizedPath.match(/^\/admin\/enterprises\/[^/]+(\/[^/]+)?$/);
+  return match ? enterpriseDetailSuffixMap[match[1] || ""] || "" : "";
+}
 
 function isPptGenerationPath(pathname: string) {
   const normalizedPath = pathname.replace(/\/$/, "");
@@ -7989,10 +8156,14 @@ function isPptGenerationPath(pathname: string) {
 }
 
 function moduleIdFromLocationPath() {
-  if (typeof window === "undefined" || !isUserConsole.value) return "";
+  if (typeof window === "undefined") return "";
   const currentPath = window.location.pathname.replace(/\/$/, "");
-  if (isPptGenerationPath(currentPath)) return "userPptGeneration";
-  return userModulePathMap[currentPath] || "";
+  if (isUserConsole.value) {
+    if (isPptGenerationPath(currentPath)) return "userPptGeneration";
+    return userModulePathMap[currentPath] || "";
+  }
+  if (!isAgentConsole.value) return enterpriseModuleIdFromPath(currentPath);
+  return "";
 }
 
 function syncUserModulePath(moduleId: string) {
@@ -8002,6 +8173,36 @@ function syncUserModulePath(moduleId: string) {
   if (moduleId === "userPptGeneration" && isPptGenerationPath(currentPath)) return;
   if (currentPath === nextPath) return;
   window.history.pushState({}, "", nextPath);
+}
+
+function syncAdminEnterpriseModulePath(moduleId: string) {
+  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value || !enterpriseModuleIds.includes(moduleId)) return;
+  const currentPath = window.location.pathname.replace(/\/$/, "");
+  if (enterpriseModuleIdFromPath(currentPath) === moduleId) {
+    enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
+    return;
+  }
+  const nextPath = moduleId === "enterpriseCertifications" ? "/admin/enterprises/certifications" : "/admin/enterprises";
+  window.history.pushState({}, "", nextPath);
+  enterpriseRoutePath.value = nextPath;
+}
+
+async function navigateEnterpriseRoute(payload: { path: string; moduleId: string }) {
+  if (typeof window !== "undefined") {
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (current !== payload.path) window.history.pushState({}, "", payload.path);
+    enterpriseRoutePath.value = payload.path;
+  }
+  await selectAdminModule(payload.moduleId);
+}
+
+function handleAdminEnterpriseHistoryPopState() {
+  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value) return;
+  const moduleId = enterpriseModuleIdFromPath(window.location.pathname);
+  if (!moduleId) return;
+  enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
+  ensureOpenTab(moduleId);
+  void store.selectModule(moduleId);
 }
 
 function initialActiveModuleId() {
@@ -8081,6 +8282,21 @@ function resolveOpenTabs() {
 const openTabs = ref(resolveOpenTabs());
 
 const iconMap = {
+  enterpriseList: Goods,
+  enterpriseDetail: Goods,
+  enterpriseCertifications: Check,
+  enterpriseMembers: UserFilled,
+  enterprisePackage: Tickets,
+  enterpriseCompute: Cpu,
+  enterpriseTransactions: Money,
+  enterpriseOrders: Document,
+  enterpriseAiCapabilities: Monitor,
+  enterpriseAiEmployees: Cpu,
+  enterpriseKnowledgeBases: Collection,
+  enterpriseAttribution: Connection,
+  enterpriseRelationships: Link,
+  enterpriseRisk: Lock,
+  enterpriseAuditLogs: DataAnalysis,
   analysis: DataAnalysis,
   workbench: House,
   dashboard: DataAnalysis,
@@ -9592,7 +9808,11 @@ function operationCenterRows(): AdminRecord[] {
 }
 
 const activeModuleMeta = computed(() => pageMeta[store.activeModuleId] || { badge: "主控模块", description: "管理当前业务域的数据和动作。" });
-const visibleModuleGroups = computed(() => isUserConsole.value ? userModuleGroups : isAgentConsole.value ? agentModuleGroups : adminModuleGroups);
+const visibleModuleGroups = computed(() => {
+  if (isUserConsole.value) return userModuleGroups;
+  if (isAgentConsole.value) return agentModuleGroups;
+  return adminModuleGroups.filter((group) => group.id !== "enterprise" || canViewEnterpriseManagement.value);
+});
 const activeGroup = computed(() => visibleModuleGroups.value.find((group) => group.items.some((item) => item.id === store.activeModuleId)));
 const activeUserMenuEntry = computed(() => {
   if (!isUserConsole.value) return null;
@@ -9650,6 +9870,7 @@ async function selectAdminModule(moduleId: string) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(activeTabStorageKey, moduleId);
     syncUserModulePath(moduleId);
+    syncAdminEnterpriseModulePath(moduleId);
   }
   await store.selectModule(moduleId);
 }
@@ -9814,6 +10035,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleAiLightboxKeydown);
   window.addEventListener("focus", handleAiWorkspaceVisibilityRefresh);
   window.addEventListener("popstate", handleAgentCenterHistoryPopState);
+  window.addEventListener("popstate", handleAdminEnterpriseHistoryPopState);
   document.addEventListener("visibilitychange", handleAiWorkspaceVisibilityRefresh);
 });
 
@@ -9855,6 +10077,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("keydown", handleAiLightboxKeydown);
     window.removeEventListener("focus", handleAiWorkspaceVisibilityRefresh);
     window.removeEventListener("popstate", handleAgentCenterHistoryPopState);
+    window.removeEventListener("popstate", handleAdminEnterpriseHistoryPopState);
     document.removeEventListener("visibilitychange", handleAiWorkspaceVisibilityRefresh);
     document.body.style.overflow = "";
     document.documentElement.style.removeProperty("--ai-composer-clearance");
@@ -10576,9 +10799,19 @@ const currentRecordResults = computed(() => {
       const record = row as AdminRecord;
       const title = String(record["name"] || record["customer"] || record["email"] || record["id"] || record["item"] || `${store.activeModule.title}记录 ${index + 1}`);
       const desc = Object.entries(record).slice(0, 4).map(([key, value]) => `${columnLabels[key] || key}: ${formatCell(value, key)}`).join(" / ");
-      return { key: `${store.activeModuleId}-${index}-${title}`, title, desc };
+      return { key: `${store.activeModuleId}-${index}-${title}`, title, desc, row: record };
     });
 });
+
+function openCurrentRecordResult(item: { title: string; row: AdminRecord }) {
+  searchKeyword.value = "";
+  const action = visibleRowActions(item.row)[0];
+  if (action) {
+    void runAction(action.action, item.row);
+    return;
+  }
+  ElMessage.info(`已定位到「${item.title}」，当前模块没有独立详情操作`);
+}
 
 function metricValue(keyword: string, fallback: string) {
   const hit = metrics.value.find((metric) => metric.label.includes(keyword));
@@ -11315,9 +11548,13 @@ async function syncCustomerNewAPI(row: AdminRecord, overrides: AdminRecord = {})
 
 async function fetchNewAPIGroupOptions() {
   try {
-    const response = await adminRequest<{ items?: string[] }>({ method: "GET", url: "/admin/newapi/groups" });
+    const response = await adminRequest<{ items?: string[]; warning?: string }>({ method: "GET", url: "/admin/newapi/groups" });
+    if (response.warning) {
+      ElMessage.warning(`NewAPI 分组暂不可用：${response.warning}`);
+    }
     return Array.from(new Set((response.items || []).map((item) => String(item).trim()).filter(Boolean)));
-  } catch {
+  } catch (error) {
+    ElMessage.warning(error instanceof Error ? `NewAPI 分组加载失败：${error.message}` : "NewAPI 分组加载失败");
     return [];
   }
 }
@@ -12313,7 +12550,9 @@ async function loadCurrentAdmin() {
       window.location.href = "/admin/";
       return false;
     }
-    if (!isAgentConsole.value && !isUserConsole.value && !role.includes("ADMIN") && !role.startsWith("AGENT")) {
+    const platformAdminRoles = ["SUPER_ADMIN", "ENTERPRISE_OPERATOR", "CERTIFICATION_REVIEWER", "FINANCE", "RISK_MANAGER", "CUSTOMER_SERVICE"];
+    const isPlatformAdmin = role.includes("ADMIN") || platformAdminRoles.includes(role) || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:"));
+    if (!isAgentConsole.value && !isUserConsole.value && !isPlatformAdmin && !role.startsWith("AGENT")) {
       window.location.href = "/app";
       return false;
     }

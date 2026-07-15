@@ -1,0 +1,42 @@
+{
+  "startedAt": "2026-07-14T09:16:52.509Z",
+  "filter": "quick.",
+  "rows": [
+    {
+      "id": "quick.poster",
+      "target": "pages/user/UserImageCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 0,
+      "homeScrollAfter": 0
+    },
+    {
+      "id": "quick.ppt",
+      "target": "pages/user/UserPptCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 0,
+      "homeScrollAfter": 0
+    },
+    {
+      "id": "quick.video",
+      "target": "pages/user/UserVideoCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 0,
+      "homeScrollAfter": 0
+    },
+    {
+      "id": "quick.knowledge",
+      "target": "pages/user/UserAgentCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 0,
+      "homeScrollAfter": 0
+    }
+  ],
+  "failures": [],
+  "local": null,
+  "finishedAt": "2026-07-14T09:17:43.012Z",
+  "passed": true
+}

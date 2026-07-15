@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,7 @@ const (
 	defaultPointsAvailable     = 959
 	pointUnitAmountCents       = 10
 	billingMetricImageGenerate = "image.generations"
+	billingMetricVideoGenerate = "video.generations"
 	billingMetricPPTGenerate   = "ppt.generations"
 )
 
@@ -423,15 +425,19 @@ func (s *jsonStore) CreateAdminCustomer(req adminCustomerMutation) (adminUser, e
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		created = adminUser{
-			ID:         uniqueAdminID("user", userIDs(data.Users)),
-			Email:      req.Email,
-			Name:       req.Name,
-			Role:       fallback(req.Role, "MEMBER"),
-			Status:     fallback(req.Status, "ACTIVE"),
-			PlanID:     fallback(req.PlanID, "plan_free"),
-			ReferredBy: strings.TrimSpace(req.ReferredBy),
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			ID:                 uniqueAdminID("user", userIDs(data.Users)),
+			Email:              req.Email,
+			Mobile:             strings.TrimSpace(req.Mobile),
+			WeChatOpenIDs:      appendUniqueString(nil, req.WeChatOpenID),
+			WeChatUnionID:      strings.TrimSpace(req.WeChatUnionID),
+			RegistrationSource: cloneStringMap(req.RegistrationSource),
+			Name:               req.Name,
+			Role:               fallback(req.Role, "MEMBER"),
+			Status:             fallback(req.Status, "ACTIVE"),
+			PlanID:             fallback(req.PlanID, "plan_free"),
+			ReferredBy:         strings.TrimSpace(req.ReferredBy),
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		data.Users = append(data.Users, created)
 		data.PointAccounts = append(data.PointAccounts, adminPointAccount{
@@ -456,6 +462,15 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 			}
 			if req.Email != "" {
 				data.Users[i].Email = req.Email
+			}
+			if req.Mobile != "" {
+				data.Users[i].Mobile = strings.TrimSpace(req.Mobile)
+			}
+			if req.WeChatOpenID != "" {
+				data.Users[i].WeChatOpenIDs = appendUniqueString(data.Users[i].WeChatOpenIDs, req.WeChatOpenID)
+			}
+			if req.WeChatUnionID != "" {
+				data.Users[i].WeChatUnionID = strings.TrimSpace(req.WeChatUnionID)
 			}
 			if req.Role != "" {
 				data.Users[i].Role = req.Role
@@ -791,8 +806,14 @@ func (s *jsonStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, error)
 	var created adminOrder
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
+		tenantID := memoryOrderTenantForUser(*data, req.UserID)
+		priceSnapshot := orderPriceSnapshot(req)
+		if tenantID != "" {
+			priceSnapshot["tenantId"] = tenantID
+		}
 		created = adminOrder{
 			ID:                uniqueAdminID("order", orderIDs(data.Orders)),
+			TenantID:          tenantID,
 			UserID:            req.UserID,
 			BuyerUserID:       req.UserID,
 			PlanID:            req.PlanID,
@@ -800,13 +821,29 @@ func (s *jsonStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, error)
 			Amount:            req.AmountCents,
 			AmountCents:       req.AmountCents,
 			Status:            fallback(req.Status, "PENDING"),
-			PriceSnapshot:     orderPriceSnapshot(req),
+			PriceSnapshot:     priceSnapshot,
 			CreatedAt:         now,
 		}
 		data.Orders = append(data.Orders, created)
 		return nil
 	})
 	return created, err
+}
+
+func memoryOrderTenantForUser(data adminPlatformData, userID string) string {
+	current, found := data.Enterprise.CurrentContexts[userID]
+	if !found || !strings.EqualFold(current.Type, contextEnterprise) {
+		return ""
+	}
+	if _, found := memoryTenant(data.Enterprise, current.TenantID); !found {
+		return ""
+	}
+	for _, member := range data.Enterprise.Members {
+		if member.TenantID == current.TenantID && member.UserID == userID && strings.EqualFold(member.MemberStatus, "ACTIVE") {
+			return current.TenantID
+		}
+	}
+	return ""
 }
 
 func orderPriceSnapshot(req adminOrderMutation) map[string]any {
@@ -940,6 +977,39 @@ func (s *jsonStore) MarkAdminOrderPaid(id string, metadata ...map[string]any) (a
 	return updated, err
 }
 
+func (s *jsonStore) RequestOrderRefund(userID string, orderID string, reason string, remark string) (adminOrder, error) {
+	var updated adminOrder
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.Orders {
+			order := &data.Orders[i]
+			if order.ID != orderID {
+				continue
+			}
+			if order.UserID != userID && order.BuyerUserID != userID {
+				return errors.New("order does not belong to current user")
+			}
+			if strings.EqualFold(order.Status, "REFUND_REQUESTED") {
+				updated = *order
+				return nil
+			}
+			if !isPaidStatus(order.Status) && strings.TrimSpace(order.PaidAt) == "" {
+				return errors.New("only paid orders can request a refund")
+			}
+			if order.PriceSnapshot == nil {
+				order.PriceSnapshot = map[string]any{}
+			}
+			order.PriceSnapshot["refundReason"] = strings.TrimSpace(reason)
+			order.PriceSnapshot["refundRemark"] = strings.TrimSpace(remark)
+			order.PriceSnapshot["refundRequestedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+			order.Status = "REFUND_REQUESTED"
+			updated = *order
+			return nil
+		}
+		return fmt.Errorf("order not found: %s", orderID)
+	})
+	return updated, err
+}
+
 func mergeOrderPaymentMetadata(order *adminOrder, metadata ...map[string]any) {
 	if order == nil || len(metadata) == 0 {
 		return
@@ -963,8 +1033,16 @@ func normalizePaymentCallbackEvent(event adminPaymentEvent) adminPaymentEvent {
 	event.EventID = strings.TrimSpace(event.EventID)
 	event.OrderID = strings.TrimSpace(event.OrderID)
 	event.TransactionID = strings.TrimSpace(event.TransactionID)
+	event.TenantID = strings.TrimSpace(event.TenantID)
+	if event.IdempotencyKey == "" {
+		event.IdempotencyKey = event.Provider + ":" + event.EventID
+	}
+	if event.Status == "" {
+		event.Status = "RECEIVED"
+	}
 	if event.ID == "" {
-		event.ID = "payevt_" + shortID(event.Provider+":"+event.EventID)
+		digest := sha256.Sum256([]byte(event.Provider + ":" + event.EventID))
+		event.ID = fmt.Sprintf("payevt_%x", digest[:12])
 	}
 	if event.CreatedAt == "" {
 		event.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -1574,16 +1652,15 @@ func (s *jsonStore) RenewAdminOrder(id string) (adminOrder, error) {
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			created = adminOrder{
-				ID:          uniqueAdminID("order", orderIDs(data.Orders)),
-				UserID:      order.UserID,
-				PlanID:      order.PlanID,
-				Amount:      orderAmount(order),
-				AmountCents: orderAmount(order),
-				Status:      "PENDING",
-				CreatedAt:   now,
-				PriceSnapshot: map[string]any{
-					"renewOf": order.ID,
-				},
+				ID:            uniqueAdminID("order", orderIDs(data.Orders)),
+				TenantID:      order.TenantID,
+				UserID:        order.UserID,
+				PlanID:        order.PlanID,
+				Amount:        orderAmount(order),
+				AmountCents:   orderAmount(order),
+				Status:        "PENDING",
+				CreatedAt:     now,
+				PriceSnapshot: map[string]any{"renewOf": order.ID, "tenantId": order.TenantID},
 			}
 			data.Orders = append(data.Orders, created)
 			return nil
@@ -2760,7 +2837,7 @@ func pptSlideQuantity(task pptapp.Task) int {
 
 func isUsageBillingMetric(metric string) bool {
 	switch strings.TrimSpace(metric) {
-	case billingMetricImageGenerate, billingMetricPPTGenerate:
+	case billingMetricImageGenerate, billingMetricVideoGenerate, billingMetricPPTGenerate:
 		return true
 	default:
 		return false
@@ -2768,10 +2845,25 @@ func isUsageBillingMetric(metric string) bool {
 }
 
 func usageTypeForMetric(metric string) string {
-	if strings.EqualFold(strings.TrimSpace(metric), billingMetricPPTGenerate) {
+	switch strings.TrimSpace(metric) {
+	case billingMetricPPTGenerate:
 		return "PPT_GENERATION"
+	case billingMetricVideoGenerate:
+		return "TEXT_TO_VIDEO"
+	default:
+		return "IMAGE_GENERATION"
 	}
-	return "IMAGE_GENERATION"
+}
+
+func usageDisplayNameForMetric(metric string) string {
+	switch strings.TrimSpace(metric) {
+	case billingMetricPPTGenerate:
+		return "PPT 文档生成"
+	case billingMetricVideoGenerate:
+		return "视频生成"
+	default:
+		return "AI 生图"
+	}
 }
 
 func directActiveAgentForUser(users []adminUser, agents []adminChannelAgent, userID string) (adminChannelAgent, bool) {

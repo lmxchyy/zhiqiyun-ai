@@ -1,0 +1,77 @@
+{
+  "route": "pages/user/UserAssetsPage",
+  "card": {
+    "size": {
+      "width": 354,
+      "height": 141
+    },
+    "background": "rgb(255, 255, 255)",
+    "borderRadius": "16px",
+    "borderColor": "rgb(226, 230, 240)",
+    "boxShadow": "rgba(41, 51, 82, 0.024) 0px 3px 12px 0px"
+  },
+  "labels": [
+    {
+      "text": "全部作品",
+      "fontSize": "10px",
+      "lineHeight": "15px",
+      "color": "rgb(105, 115, 134)"
+    },
+    {
+      "text": "本月新增",
+      "fontSize": "10px",
+      "lineHeight": "15px",
+      "color": "rgb(105, 115, 134)"
+    },
+    {
+      "text": "收藏数量",
+      "fontSize": "10px",
+      "lineHeight": "15px",
+      "color": "rgb(105, 115, 134)"
+    },
+    {
+      "text": "存储空间",
+      "fontSize": "10px",
+      "lineHeight": "15px",
+      "color": "rgb(105, 115, 134)"
+    }
+  ],
+  "values": [
+    {
+      "text": "102",
+      "fontSize": "18px",
+      "fontWeight": "700",
+      "color": "rgb(24, 32, 51)"
+    },
+    {
+      "text": "48",
+      "fontSize": "18px",
+      "fontWeight": "700",
+      "color": "rgb(24, 32, 51)"
+    },
+    {
+      "text": "0",
+      "fontSize": "18px",
+      "fontWeight": "700",
+      "color": "rgb(24, 32, 51)"
+    }
+  ],
+  "iconSizes": [
+    {
+      "width": 30,
+      "height": 30
+    },
+    {
+      "width": 30,
+      "height": 30
+    },
+    {
+      "width": 30,
+      "height": 30
+    },
+    {
+      "width": 30,
+      "height": 30
+    }
+  ]
+}

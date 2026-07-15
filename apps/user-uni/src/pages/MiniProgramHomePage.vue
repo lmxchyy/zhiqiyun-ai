@@ -7,7 +7,10 @@ import { onLoad } from "@dcloudio/uni-app";
 import { miniProgramDefaultPage } from "../config/miniProgramPages";
 
 onLoad(() => {
-  uni.reLaunch({ url: miniProgramDefaultPage });
+  uni.switchTab({
+    url: miniProgramDefaultPage,
+    fail: () => uni.reLaunch({ url: miniProgramDefaultPage })
+  });
 });
 </script>
 

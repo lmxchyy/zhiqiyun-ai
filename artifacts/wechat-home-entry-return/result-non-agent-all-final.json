@@ -1,0 +1,90 @@
+{
+  "startedAt": "2026-07-14T10:48:18.729Z",
+  "filter": "profile,prompt-submit,quick.poster,quick.ppt,quick.video,workspace.view-all,metric.wallet,metric.membership,metric.calls,metric.assets,today-suggestion,creation.view-all,featured.image,featured.video,secondary.ppt,secondary.office,projects.view-all,inspiration.poster,inspiration.video,inspiration.ppt,inspiration.store,inspiration.ecommerce,project-cards,inspiration-local",
+  "rows": [
+    {
+      "id": "profile",
+      "target": "pages/user/UserMinePage",
+      "returnType": "tab",
+      "returnVerification": "home-tab",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 0,
+      "homeScrollAfter": 0
+    }
+  ],
+  "failures": [
+    {
+      "id": "prompt-submit",
+      "message": "expected pages/user/UserHomePage, current pages/user/UserImageCreationPage"
+    },
+    {
+      "id": "quick.poster",
+      "message": "timeout"
+    },
+    {
+      "id": "quick.ppt",
+      "message": "timeout"
+    },
+    {
+      "id": "quick.video",
+      "message": "timeout"
+    },
+    {
+      "id": "workspace.view-all",
+      "message": "timeout"
+    },
+    {
+      "id": "metric.wallet",
+      "message": "timeout"
+    },
+    {
+      "id": "metric.membership",
+      "message": "timeout"
+    },
+    {
+      "id": "metric.calls",
+      "message": "timeout"
+    },
+    {
+      "id": "metric.assets",
+      "message": "timeout"
+    },
+    {
+      "id": "today-suggestion",
+      "message": "timeout"
+    },
+    {
+      "id": "creation.view-all",
+      "message": "timeout"
+    },
+    {
+      "id": "featured.image",
+      "message": "timeout"
+    },
+    {
+      "id": "featured.video",
+      "message": "timeout"
+    },
+    {
+      "id": "secondary.ppt",
+      "message": "timeout"
+    },
+    {
+      "id": "secondary.office",
+      "message": "timeout"
+    },
+    {
+      "id": "projects.view-all",
+      "message": "timeout"
+    },
+    {
+      "id": "inspiration.poster",
+      "message": "timeout"
+    },
+    {
+      "id": "inspiration.video",
+      "message": "timeout"
+    }
+  ],
+  "local": null
+}

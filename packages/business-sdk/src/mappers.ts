@@ -37,19 +37,38 @@ export function normalizeWorkType(asset: Asset | GenerationTask): WorkType {
 }
 
 export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRequest {
-  const type = draft.mode === "video" ? "TEXT_TO_VIDEO" : draft.mode === "ppt" ? "PPT_GENERATION" : "TEXT_TO_IMAGE";
+  const referenceImages = draft.referenceImages.filter(Boolean);
+  const referenceImage = referenceImages[0];
+  const type = draft.mode === "video"
+    ? referenceImage ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO"
+    : draft.mode === "ppt"
+      ? "PPT_GENERATION"
+      : referenceImage ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
+  const referencePayload = referenceImages.map((url, index) => ({
+    url,
+    name: `reference-${index + 1}`,
+  }));
+  const params = draft.mode === "video"
+    ? {
+        duration: 5,
+        resolution: draft.quality || "720p",
+        aspect_ratio: draft.size || "16:9",
+        generate_audio: true,
+        ...(referenceImage ? { reference_image: referenceImage } : {}),
+      }
+    : {
+        size: draft.size || "1024x1024",
+        quality: draft.quality || "standard",
+        n: draft.count || 1,
+        ...(referenceImage ? { reference_image: referenceImage } : {}),
+        ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
+      };
   return {
     type,
-    moduleCode: draft.mode,
+    moduleCode: draft.mode === "video" ? "video_generation" : "image_generation",
     prompt: draft.prompt,
     model: draft.model,
-    params: {
-      style: draft.style,
-      size: draft.size,
-      quality: draft.quality,
-      count: draft.count,
-      referenceImages: draft.referenceImages
-    }
+    params,
   };
 }
 

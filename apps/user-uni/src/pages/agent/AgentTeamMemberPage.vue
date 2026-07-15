@@ -14,11 +14,11 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { onLoad } from "@dcloudio/uni-app";
-import { businessSdk } from "../../api/client";
-import { backOrHome, formatCurrency, formatDate, listOf, rowNumber, rowString, statusText, type AnyRecord } from "../../utils/miniProgramBusiness";
+import { api } from "../../api/client";
+import { asRecord, backOrHome, formatCurrency, formatDate, rowNumber, rowString, statusText, type AnyRecord } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 const id = ref(""); const loading = ref(false); const member = ref<AnyRecord | null>(null);
-async function load() { loading.value = true; try { const center = await businessSdk.roleWorkbench.channelCenter(); member.value = listOf(center.children).find(item => rowString(item, "id") === id.value) || null; } catch (error) { uni.showToast({ title: error instanceof Error ? error.message : "成员加载失败", icon: "none" }); } finally { loading.value = false; } }
+async function load() { loading.value = true; try { const payload = asRecord(await api(`/api/v1/channel/children/${encodeURIComponent(id.value)}`)); const item = asRecord(payload.item); member.value = rowString(item, "id") ? item : null; } catch (error) { uni.showToast({ title: error instanceof Error ? error.message : "成员加载失败", icon: "none" }); } finally { loading.value = false; } }
 function openCustomers() { uni.navigateTo({ url: "/pages/agent/AgentCustomersPage" }); }
 onLoad(options => { id.value = String(options?.id || ""); void load(); });
 </script>

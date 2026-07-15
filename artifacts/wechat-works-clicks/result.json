@@ -1,0 +1,48 @@
+{
+  "startedAt": "2026-07-15T03:26:17.643Z",
+  "projectPath": "E:\\code\\work\\先知AI\\apps\\user-uni\\dist\\build\\mp-weixin",
+  "checks": {
+    "typeImage": {
+      "text": "图片",
+      "beforeClass": "data-v-7c943bd6 AssetTypeTabs--data-v-7c943bd6 tab-button AssetTypeTabs--tab-button",
+      "afterClass": "data-v-7c943bd6 AssetTypeTabs--data-v-7c943bd6 tab-button AssetTypeTabs--tab-button active AssetTypeTabs--active",
+      "active": true
+    },
+    "statusGenerating": {
+      "text": "生成中",
+      "beforeClass": "data-v-ebf78259 AssetStatusTabs--data-v-ebf78259 status-button AssetStatusTabs--status-button",
+      "afterClass": "data-v-ebf78259 AssetStatusTabs--data-v-ebf78259 status-button AssetStatusTabs--status-button active AssetStatusTabs--active",
+      "active": true
+    },
+    "typeAll": {
+      "text": "全部",
+      "beforeClass": "data-v-7c943bd6 AssetTypeTabs--data-v-7c943bd6 tab-button AssetTypeTabs--tab-button",
+      "afterClass": "data-v-7c943bd6 AssetTypeTabs--data-v-7c943bd6 tab-button AssetTypeTabs--tab-button active AssetTypeTabs--active",
+      "active": true
+    },
+    "statusRecent": {
+      "text": "最近",
+      "beforeClass": "data-v-ebf78259 AssetStatusTabs--data-v-ebf78259 status-button AssetStatusTabs--status-button",
+      "afterClass": "data-v-ebf78259 AssetStatusTabs--data-v-ebf78259 status-button AssetStatusTabs--status-button active AssetStatusTabs--active",
+      "active": true
+    },
+    "search": {
+      "button": true,
+      "automatic": true,
+      "clear": true,
+      "matched": "AI 图片\nIMAGE_TO_IMAGE-task_000208-01\n图片 · 2.2MB\n今天 10:53\n未归属项目"
+    },
+    "assetsViewAll": {
+      "text": "查看全部 ›",
+      "path": "pages/user/UserAssetsListPage"
+    },
+    "assetsLoaded": {
+      "rendered": true,
+      "search": true,
+      "clear": true
+    }
+  },
+  "consoleErrors": [],
+  "finishedAt": "2026-07-15T03:27:07.561Z",
+  "ok": true
+}

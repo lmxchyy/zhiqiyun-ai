@@ -39,6 +39,9 @@ type generationTask struct {
 	ID                        string         `json:"id"`
 	UserID                    string         `json:"userId"`
 	TenantID                  string         `json:"tenantId,omitempty"`
+	OrganizationID            string         `json:"organizationId,omitempty"`
+	BillingAccountType        string         `json:"billingAccountType,omitempty"`
+	BillingAccountID          string         `json:"billingAccountId,omitempty"`
 	AgentID                   string         `json:"agentId,omitempty"`
 	OperationCenterID         string         `json:"operationCenterId,omitempty"`
 	ModuleCode                string         `json:"moduleCode,omitempty"`
@@ -72,18 +75,20 @@ type generationTask struct {
 }
 
 type asset struct {
-	ID           string         `json:"id"`
-	UserID       string         `json:"userId"`
-	TaskID       string         `json:"taskId"`
-	Name         string         `json:"name"`
-	MediaType    string         `json:"mediaType"`
-	URL          string         `json:"url"`
-	ThumbnailURL string         `json:"thumbnailUrl,omitempty"`
-	Favorite     bool           `json:"favorite"`
-	Metadata     map[string]any `json:"metadata"`
-	DeletedAt    string         `json:"deletedAt,omitempty"`
-	CreatedAt    string         `json:"createdAt"`
-	UpdatedAt    string         `json:"updatedAt"`
+	ID             string         `json:"id"`
+	UserID         string         `json:"userId"`
+	TenantID       string         `json:"tenantId,omitempty"`
+	OrganizationID string         `json:"organizationId,omitempty"`
+	TaskID         string         `json:"taskId"`
+	Name           string         `json:"name"`
+	MediaType      string         `json:"mediaType"`
+	URL            string         `json:"url"`
+	ThumbnailURL   string         `json:"thumbnailUrl,omitempty"`
+	Favorite       bool           `json:"favorite"`
+	Metadata       map[string]any `json:"metadata"`
+	DeletedAt      string         `json:"deletedAt,omitempty"`
+	CreatedAt      string         `json:"createdAt"`
+	UpdatedAt      string         `json:"updatedAt"`
 }
 
 type createGenerationTaskRequest = generation.CreateRequest

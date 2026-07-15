@@ -122,12 +122,30 @@ func buildKnowledgeModule(cfg config.Config, tenants knowledgeapp.TenantReposito
 }
 
 type knowledgeAPI struct {
-	module   *knowledgeModule
-	sessions authSessionStore
+	module     *knowledgeModule
+	sessions   authSessionStore
+	authorizer modelCallAuthorizer
 }
 
-func newKnowledgeAPI(module *knowledgeModule, sessions authSessionStore) knowledgeAPI {
-	return knowledgeAPI{module: module, sessions: sessions}
+func newKnowledgeAPI(module *knowledgeModule, sessions authSessionStore, store platformStore) knowledgeAPI {
+	authorizer, _ := store.(modelCallAuthorizer)
+	return knowledgeAPI{module: module, sessions: sessions, authorizer: authorizer}
+}
+
+func (a knowledgeAPI) requireModelCall(w http.ResponseWriter, access knowledgeapp.AccessContext) bool {
+	if a.authorizer == nil {
+		return true
+	}
+	authorization, err := a.authorizer.AuthorizeModelCall(access.UserID, "knowledge_agent")
+	if err != nil {
+		writeModelAuthorizationError(w, err)
+		return false
+	}
+	if authorization.ContextType == contextEnterprise && authorization.TenantID != access.TenantID {
+		writeModelAuthorizationError(w, errForbidden)
+		return false
+	}
+	return true
 }
 
 func (a knowledgeAPI) access(r *http.Request) (knowledgeapp.AccessContext, error) {
@@ -766,6 +784,9 @@ func (a knowledgeAPI) runRAG(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !a.requireModelCall(w, access) {
+		return
+	}
 	input, ok := decodeRunInput(w, r)
 	if !ok {
 		return
@@ -782,6 +803,9 @@ func (a knowledgeAPI) runRAG(w http.ResponseWriter, r *http.Request) {
 func (a knowledgeAPI) streamRAG(w http.ResponseWriter, r *http.Request) {
 	access, ok := a.requireAccess(w, r)
 	if !ok {
+		return
+	}
+	if !a.requireModelCall(w, access) {
 		return
 	}
 	input, ok := decodeRunInput(w, r)
@@ -837,6 +861,9 @@ func (a knowledgeAPI) cancelRun(w http.ResponseWriter, r *http.Request) {
 func (a knowledgeAPI) retryRun(w http.ResponseWriter, r *http.Request) {
 	access, ok := a.requireAccess(w, r)
 	if !ok {
+		return
+	}
+	if !a.requireModelCall(w, access) {
 		return
 	}
 	previous, err := a.module.rag.GetRun(r.Context(), access, r.PathValue("id"))
@@ -969,6 +996,8 @@ func writeKnowledgeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, knowledgeapp.ErrValidation):
 		status = http.StatusBadRequest
 	case errors.Is(err, knowledgeapp.ErrForbidden), errors.Is(err, errForbidden):
+		status = http.StatusForbidden
+	case errors.Is(err, errEnterpriseServiceUnavailable):
 		status = http.StatusForbidden
 	case errors.Is(err, knowledgeapp.ErrNotFound):
 		status = http.StatusNotFound

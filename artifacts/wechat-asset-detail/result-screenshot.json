@@ -1,0 +1,32 @@
+{
+  "startedAt": "2026-07-14T16:08:11.273Z",
+  "projectPath": "E:\\code\\work\\先知AI\\apps\\user-uni\\dist\\build\\mp-weixin",
+  "action": "screenshot",
+  "token": "[redacted]",
+  "consoleErrors": [],
+  "consoleWarnings": [],
+  "checks": {
+    "path": "pages/user/UserAssetDetailPage",
+    "destinationPath": "pages/user/UserAssetDetailPage",
+    "assetId": "asset_000175",
+    "title": "水果电商详情图",
+    "subtitle": "AI 图片 · 未归属项目",
+    "previewSize": {
+      "width": 340,
+      "height": 340
+    },
+    "imageMode": "aspectFit",
+    "utilityTexts": [
+      "↓\n保存到相册",
+      "↗\n分享",
+      "•••\n更多"
+    ],
+    "managementActions": [],
+    "parameterRows": 0,
+    "totalExpandedRows": 0,
+    "actionDraft": null,
+    "downloadBytes": 2362155
+  },
+  "finishedAt": "2026-07-14T16:08:47.635Z",
+  "ok": true
+}

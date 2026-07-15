@@ -37,6 +37,8 @@
     "dev:desktop-tauri": "npm --prefix apps/desktop-tauri run dev",
     "build:desktop-tauri": "npm --prefix apps/desktop-tauri run build",
     "test:user-h5:smoke": "playwright test -c tests/user-h5/playwright.config.ts",
+    "verify:user-mini-clicks": "node tools/verify-user-mini-click-api.mjs",
+    "verify:user-mini-clicks:e2e": "node tools/verify-user-mini-click-e2e.mjs",
     "generate:api-types": "node tools/generate-api-types.mjs"
   },
   "engines": {

@@ -107,6 +107,10 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	if _, err := authorizeUserModelCall(a.store, user.ID, modulePPTGeneration); err != nil {
+		writeModelAuthorizationError(w, err)
+		return
+	}
 	var req pptapp.GenerateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -199,8 +203,13 @@ func (a api) deletePPTTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) generatePPTOutline(w http.ResponseWriter, r *http.Request) {
-	if _, _, err := a.authenticatedUser(r); err != nil {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if _, err := authorizeUserModelCall(a.store, user.ID, modulePPTGeneration); err != nil {
+		writeModelAuthorizationError(w, err)
 		return
 	}
 	var req pptOutlineGenerateRequest

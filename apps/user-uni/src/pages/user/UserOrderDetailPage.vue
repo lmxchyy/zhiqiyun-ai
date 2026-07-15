@@ -24,14 +24,15 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { onLoad } from "@dcloudio/uni-app";
-import { backOrHome, formatCurrency, formatDate, formatNumber, loadUserOrders, orderAmount, orderId, orderStatus, orderTitle, rowNumber, rowString, statusText, type AnyRecord } from "../../utils/miniProgramBusiness";
+import { api } from "../../api/client";
+import { asRecord, backOrHome, formatCurrency, formatDate, formatNumber, orderAmount, orderId, orderStatus, orderTitle, rowNumber, rowString, statusText, type AnyRecord } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 const id = ref(""); const order = ref<AnyRecord | null>(null); const loading = ref(false);
-const statusDescription = computed(() => { const value = orderStatus(order.value); if (value === "PENDING") return "订单已创建，正在等待支付或运营确认。"; if (["PAID", "SUCCESS", "COMPLETED"].includes(value)) return "订单已经完成，相关点数或身份权益以账户数据为准。"; return "当前订单已关闭，如有疑问请联系平台客服。"; });
+const statusDescription = computed(() => { const value = orderStatus(order.value); if (value === "PENDING") return "订单已创建，正在等待支付或运营确认。"; if (value === "REFUND_REQUESTED") return "退款申请已提交，正在等待运营人员审核。"; if (["PAID", "SUCCESS", "COMPLETED"].includes(value)) return "订单已经完成，相关点数或身份权益以账户数据为准。"; return "当前订单已关闭，如有疑问请联系平台客服。"; });
 const canRequestRefund = computed(() => ["PAID", "SUCCESS", "SUCCEEDED", "COMPLETED"].includes(orderStatus(order.value)));
 const isCompleted = computed(() => ["PAID", "SUCCESS", "SUCCEEDED", "COMPLETED"].includes(orderStatus(order.value)));
 const orderPoints = computed(() => rowNumber(order.value, "grantPoints", "points", "tokenAmount"));
-async function load() { loading.value = true; try { order.value = (await loadUserOrders()).find(item => orderId(item) === id.value) || null; } catch (error) { uni.showToast({ title: error instanceof Error ? error.message : "订单加载失败", icon: "none" }); } finally { loading.value = false; } }
+async function load() { loading.value = true; try { const payload = asRecord(await api(`/api/v1/member/orders/${encodeURIComponent(id.value)}`)); const item = asRecord(payload.item); order.value = orderId(item) ? item : null; } catch (error) { uni.showToast({ title: error instanceof Error ? error.message : "订单加载失败", icon: "none" }); } finally { loading.value = false; } }
 function rebuy() { const planId = rowString(order.value, "planId"); if (planId) uni.navigateTo({ url: `/pages/user/UserOrderConfirmPage?planId=${encodeURIComponent(planId)}` }); else uni.navigateTo({ url: "/pages/user/UserRechargePlansPage" }); }
 function goOrders() { uni.navigateTo({ url: "/pages/user/UserOrdersPage" }); }
 function openRefund() { uni.navigateTo({ url: `/pages/user/UserRefundRequestPage?id=${encodeURIComponent(id.value)}` }); }

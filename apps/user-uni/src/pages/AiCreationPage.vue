@@ -172,7 +172,7 @@
           </view>
           <view class="dashboard-user-actions">
             <button type="button" @click="refresh">↻</button>
-            <button type="button" class="notification-button">
+            <button type="button" class="notification-button" @click="showDashboardNotifications">
               <text>铃</text>
               <text>12</text>
             </button>
@@ -380,7 +380,7 @@
             <text class="brand-title">知启云 AI</text>
           </view>
           <view class="tabs">
-            <button class="active">视频生成</button>
+            <text class="active tab-status-label">视频生成</text>
           </view>
           <view class="topbar-status">
             <text :class="['online-pill', models.length ? 'online' : 'offline']">
@@ -400,7 +400,7 @@
             <text class="brand-title">知启云 AI</text>
           </view>
           <view class="tabs">
-            <button class="active">PPT文档生成</button>
+            <text class="active tab-status-label">PPT文档生成</text>
           </view>
           <view class="topbar-status">
             <text :class="['online-pill', models.length ? 'online' : 'offline']">
@@ -430,14 +430,14 @@
               <input v-model.trim="worksSearchKeyword" placeholder="搜索当前模块" />
             </label>
             <button type="button" class="works-header-button" aria-label="刷新作品" @click="refresh">↻</button>
-            <button type="button" class="works-size-button">默认⌄</button>
+            <button type="button" class="works-size-button" @click="showWorksDensityMenu">{{ worksDensity === 'compact' ? '紧凑' : '默认' }}⌄</button>
             <text :class="['online-pill', models.length ? 'online' : 'offline']">
               API {{ models.length ? "ONLINE" : "OFFLINE" }}
             </text>
             <text class="user-pill"><text class="user-badge">知</text>知启云 · 普通用户</text>
           </view>
         </view>
-        <scroll-view class="works-center-scroll workspace-scroll" scroll-y>
+        <scroll-view :class="['works-center-scroll', 'workspace-scroll', `density-${worksDensity}`]" scroll-y>
           <view class="works-hero">
             <view class="works-hero-copy">
               <text class="works-eyebrow">WORKS CENTER</text>
@@ -773,7 +773,7 @@
           </view>
         </view>
       </scroll-view>
-      <scroll-view v-else-if="activeModule === 'membership'" class="workspace-scroll membership-page" scroll-y>
+      <scroll-view v-else-if="activeModule === 'membership'" class="workspace-scroll membership-page" scroll-y :scroll-into-view="membershipScrollTarget">
         <view class="membership-shell">
           <view class="membership-head">
             <view>
@@ -793,8 +793,8 @@
                 <text>{{ quota.toLocaleString("zh-CN") }}</text>
               </view>
               <view class="subscription-actions">
-                <button type="button" class="recharge-button">充值</button>
-                <button type="button" class="detail-button">明细</button>
+                <button type="button" class="recharge-button" @click="showMembershipPlans">充值</button>
+                <button type="button" class="detail-button" @click="selectModule('usage')">明细</button>
               </view>
             </view>
           </view>
@@ -835,7 +835,7 @@
             </button>
           </view>
 
-          <view class="pricing-grid standard-pricing-grid">
+          <view id="membership-plans" class="pricing-grid standard-pricing-grid">
             <view
               v-for="plan in standardMembershipPlanCards"
               :key="plan.id"
@@ -1088,7 +1088,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, authService, businessSdk } from "../api/client";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
@@ -1097,6 +1097,7 @@ declare const wx: { getSystemInfoSync?: () => { platform?: string; brand?: strin
 import PptDocumentGeneration from "../components/PptDocumentGeneration.vue";
 import KnowledgeMiniChat from "../components/KnowledgeMiniChat.vue";
 import type { Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask, ModelInfo, PointAccount } from "../types";
+import type { UserDashboardResponse } from "@xianzhi/shared-types";
 
 const rawEnv = (import.meta as unknown as { env?: Record<string, string | boolean | undefined> }).env || {};
 const enableMockLogin = Boolean(rawEnv.DEV === true && String(rawEnv.VITE_ENABLE_MOCK_LOGIN || "").toLowerCase() === "true");
@@ -1497,6 +1498,8 @@ const model = ref("gpt-image-2");
 const worksSearchKeyword = ref("");
 const worksStatusFilter = ref<WorkStatusFilter>("all");
 const worksViewMode = ref<WorkViewMode>("grid");
+const worksDensity = ref<"default" | "compact">("default");
+const membershipScrollTarget = ref("");
 const favoriteWorkIds = ref<string[]>([]);
 const isLoggedIn = ref(false);
 const currentUser = ref<AuthUser | null>(null);
@@ -2041,6 +2044,33 @@ async function refresh() {
   models.value = modelItems;
   pointAccount.value = points.account;
   model.value = models.value.find(item => item.code === "gpt-image-2")?.code || models.value[0]?.code || model.value;
+}
+
+async function showDashboardNotifications() {
+  try {
+    const dashboard = await api<UserDashboardResponse>("/api/v1/user/dashboard");
+    const taskCount = dashboard.recentTasks?.length || 0;
+    const assetCount = dashboard.recentAssets?.length || 0;
+    uni.showModal({ title: "通知中心", content: `近期任务 ${taskCount} 条，近期作品 ${assetCount} 项。`, showCancel: false });
+  } catch (error) {
+    uni.showToast({ title: errorMessage(error, "通知加载失败"), icon: "none" });
+  }
+}
+
+function showWorksDensityMenu() {
+  uni.showActionSheet({
+    itemList: ["默认视图", "紧凑视图"],
+    success: result => { worksDensity.value = result.tapIndex === 1 ? "compact" : "default"; },
+    fail: error => {
+      if (!String(error.errMsg || "").toLowerCase().includes("cancel")) uni.showToast({ title: "视图切换失败", icon: "none" });
+    },
+  });
+}
+
+async function showMembershipPlans() {
+  membershipScrollTarget.value = "";
+  await nextTick();
+  membershipScrollTarget.value = "membership-plans";
 }
 
 async function createMembershipOrder(plan: MembershipPlanCard) {
@@ -4407,6 +4437,9 @@ async function loginWithWechatMiniProgram() {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 14px;
 }
+.works-center-scroll.density-compact .works-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.works-center-scroll.density-compact .works-card-desc { display: none; }
+.works-center-scroll.density-compact .works-card-preview { min-height: 120px; }
 
 .works-card {
   overflow: hidden;

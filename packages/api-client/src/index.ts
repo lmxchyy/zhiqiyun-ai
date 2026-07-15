@@ -109,6 +109,19 @@ function isUnauthorizedApiCode(code: unknown) {
   return code === 401 || code === "401" || code === "UNAUTHORIZED" || code === "AUTH_REQUIRED";
 }
 
+function responseHeader(headers: Record<string, string> | undefined, name: string) {
+  if (!headers) return "";
+  const target = name.toLowerCase();
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === target);
+  return String(entry?.[1] || "");
+}
+
+function isUnexpectedHTMLResponse(payload: unknown, headers?: Record<string, string>) {
+  const contentType = responseHeader(headers, "content-type").toLowerCase();
+  if (contentType.includes("text/html")) return true;
+  return typeof payload === "string" && /^\s*(?:<!doctype\s+html|<html\b)/i.test(payload);
+}
+
 export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   let baseURL = trimTrailingSlash(options.baseURL || "");
   const timeout = options.timeout || 600000;
@@ -177,6 +190,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           statusCode: response.statusCode,
           requestId,
           payload
+        });
+      }
+
+      if (isUnexpectedHTMLResponse(payload, response.header)) {
+        throw new ApiClientError("服务端接口版本不匹配，请更新服务后重试", {
+          path,
+          statusCode: response.statusCode,
+          requestId,
+          payload,
+          apiCode: "INVALID_API_RESPONSE"
         });
       }
 

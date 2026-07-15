@@ -14,6 +14,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type actorContextKey string
+
+const (
+	actorIDContextKey   actorContextKey = "admin-actor-id"
+	actorRoleContextKey actorContextKey = "admin-actor-role"
+)
+
 func (s *postgresStore) auditMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
@@ -45,13 +52,14 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": errUnauthorized.Error()})
 			return
 		}
-		if !rbacEnforced() {
+		if !rbacEnforced() && !strings.HasPrefix(permission, "enterprise:") {
 			if user.Role != "SUPER_ADMIN" {
 				c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{"error": errForbidden.Error()})
 				return
 			}
 			c.Set("actorID", user.ID)
 			c.Set("actorRole", user.Role)
+			c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
 			c.Next()
 			return
 		}
@@ -66,6 +74,7 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 		}
 		c.Set("actorID", user.ID)
 		c.Set("actorRole", user.Role)
+		c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
 		c.Next()
 	}
 }
@@ -88,8 +97,123 @@ func superAdminMiddleware(auth authAPI) gin.HandlerFunc {
 		}
 		c.Set("actorID", user.ID)
 		c.Set("actorRole", user.Role)
+		c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
 		c.Next()
 	}
+}
+
+func actorFromRequest(r *http.Request) (string, string) {
+	actorID, _ := r.Context().Value(actorIDContextKey).(string)
+	actorRole, _ := r.Context().Value(actorRoleContextKey).(string)
+	return strings.TrimSpace(actorID), strings.TrimSpace(actorRole)
+}
+
+func adminPermissionForRequest(r *http.Request) string {
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if strings.HasPrefix(path, "/storage/") {
+		switch {
+		case strings.HasPrefix(path, "/storage/configs") && strings.HasSuffix(path, "/test"):
+			return "storage:config:test"
+		case path == "/storage/configs" && r.Method == http.MethodGet:
+			return "storage:config:view"
+		case path == "/storage/configs" && r.Method == http.MethodPost:
+			return "storage:config:create"
+		case strings.HasPrefix(path, "/storage/configs/") && r.Method == http.MethodPut:
+			return "storage:config:update"
+		case strings.HasPrefix(path, "/storage/configs/") && r.Method == http.MethodDelete:
+			return "storage:config:delete"
+		case strings.HasPrefix(path, "/storage/files/") && strings.HasSuffix(path, "/download-url"):
+			return "storage:file:download"
+		case strings.HasPrefix(path, "/storage/files/") && strings.HasSuffix(path, "/restore"):
+			return "storage:file:restore"
+		case strings.HasPrefix(path, "/storage/files") && r.Method == http.MethodDelete:
+			return "storage:file:delete"
+		case strings.HasPrefix(path, "/storage/files"):
+			return "storage:file:view"
+		case strings.HasPrefix(path, "/storage/quotas") && r.Method == http.MethodPut:
+			return "storage:quota:update"
+		case strings.HasPrefix(path, "/storage/quotas"):
+			return "storage:quota:view"
+		case strings.HasPrefix(path, "/storage/jobs") && r.Method != http.MethodGet:
+			return "storage:job:retry"
+		default:
+			return "storage:view"
+		}
+	}
+	if path == "/enterprises/export" && r.Method == http.MethodGet {
+		return permissionEnterpriseExport
+	}
+	if path == "/enterprises/certifications" && r.Method == http.MethodGet {
+		return permissionEnterpriseCertificationReview
+	}
+	if path == "/enterprises" {
+		if r.Method == http.MethodGet {
+			return permissionEnterpriseList
+		}
+		if r.Method == http.MethodPost {
+			return permissionEnterpriseCreate
+		}
+	}
+	if strings.HasPrefix(path, "/enterprises/") {
+		if r.Method != http.MethodGet {
+			switch {
+			case r.Method == http.MethodPatch && strings.Count(strings.Trim(path, "/"), "/") == 1:
+				return permissionEnterpriseUpdate
+			case strings.HasSuffix(path, "/certifications/review"):
+				return permissionEnterpriseCertificationReview
+			case strings.HasSuffix(path, "/package/adjust"):
+				return permissionEnterprisePackageAdjust
+			case strings.HasSuffix(path, "/seats/adjust"):
+				return permissionEnterpriseSeatAdjust
+			case strings.HasSuffix(path, "/compute/adjust"), strings.HasSuffix(path, "/recharge"):
+				return permissionEnterpriseComputeAdjust
+			case strings.HasSuffix(path, "/ai-capabilities/configure"):
+				return permissionEnterpriseAIConfigure
+			case strings.HasSuffix(path, "/attribution/change"):
+				return permissionEnterpriseAttributionChange
+			case strings.HasSuffix(path, "/risk/disable"):
+				return permissionEnterpriseRiskDisable
+			case strings.HasSuffix(path, "/risk/restore"):
+				return permissionEnterpriseRiskRestore
+			case strings.HasSuffix(path, "/service-state"):
+				return permissionEnterpriseServiceTransition
+			default:
+				return permissionEnterpriseUpdate
+			}
+		}
+		switch {
+		case strings.HasSuffix(path, "/certifications"):
+			return permissionEnterpriseCertificationReview
+		case strings.HasSuffix(path, "/members"):
+			return permissionEnterpriseMemberView
+		case strings.HasSuffix(path, "/package"):
+			return permissionEnterprisePackageView
+		case strings.HasSuffix(path, "/compute"):
+			return permissionEnterpriseComputeView
+		case strings.HasSuffix(path, "/transactions"):
+			return permissionEnterpriseTransactionView
+		case strings.HasSuffix(path, "/orders"):
+			return permissionEnterpriseOrderView
+		case strings.HasSuffix(path, "/ai-capabilities"):
+			return permissionEnterpriseAIView
+		case strings.HasSuffix(path, "/ai-employees"):
+			return permissionEnterpriseEmployeeView
+		case strings.HasSuffix(path, "/knowledge-bases"):
+			return permissionEnterpriseKnowledgeView
+		case strings.HasSuffix(path, "/attribution"), strings.HasSuffix(path, "/relationships"):
+			return permissionEnterpriseAttributionView
+		case strings.HasSuffix(path, "/risk"):
+			return permissionEnterpriseRiskView
+		case strings.HasSuffix(path, "/audit-logs"):
+			return permissionEnterpriseAuditView
+		default:
+			return permissionEnterpriseDetail
+		}
+	}
+	if r.Method == http.MethodGet {
+		return "admin.read"
+	}
+	return "admin.write"
 }
 
 func rbacEnforced() bool {

@@ -1,10 +1,20 @@
 import type { ApiClient } from "@xianzhi/api-client";
 import type { CreateDraft, CreateGenerationTaskRequest, GenerationTask } from "@xianzhi/shared-types";
 import { taskRequestFromDraft } from "./mappers";
-import type { BusinessSdk } from "./types";
+import type { BusinessSdk, PagedItems, TaskPageOptions } from "./types";
 
 export function listTasks(api: ApiClient) {
   return api.request<GenerationTask[]>("/api/v1/generation-tasks");
+}
+
+export function listTaskPage(api: ApiClient, options: TaskPageOptions = {}) {
+  const params = [
+    "paged=true",
+    `limit=${encodeURIComponent(String(options.limit || 20))}`,
+    `offset=${encodeURIComponent(String(options.offset || 0))}`,
+  ];
+  if (options.prioritizeActive) params.push("priority=active");
+  return api.request<PagedItems<GenerationTask>>(`/api/v1/generation-tasks?${params.join("&")}`);
 }
 
 export function createGenerationSdk(api: ApiClient): BusinessSdk["generation"] {
@@ -27,6 +37,7 @@ export function createGenerationSdk(api: ApiClient): BusinessSdk["generation"] {
         body: taskRequestFromDraft(draft)
       });
     },
-    listTasks: () => listTasks(api)
+    listTasks: () => listTasks(api),
+    listTaskPage: options => listTaskPage(api, options)
   };
 }

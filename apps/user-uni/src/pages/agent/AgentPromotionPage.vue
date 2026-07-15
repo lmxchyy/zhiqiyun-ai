@@ -1,3 +1,3 @@
-<template><MiniProgramRoleWorkbench initial-role="agent" initial-tab="promotion" /></template>
-<script setup lang="ts">import MiniProgramRoleWorkbench from "../../components/MiniProgramRoleWorkbench.vue";</script>
+<template><PromotionCenterPage /></template>
+<script setup lang="ts">import PromotionCenterPage from "../promotion/PromotionCenterPage.vue";</script>
 <style>page { background: #f7f8fc; }</style>

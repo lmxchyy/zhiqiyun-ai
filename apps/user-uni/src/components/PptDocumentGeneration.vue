@@ -236,8 +236,8 @@
                   </view>
                   <button type="button" title="打开帮助菜单" aria-label="打开帮助菜单" @click="showHelpMenu = !showHelpMenu">?</button>
                   <view v-if="showHelpMenu" class="ppt-help-menu" role="menu" aria-label="帮助菜单">
-                    <button type="button" role="menuitem" title="打开键盘快捷键" aria-label="打开键盘快捷键">键盘快捷键</button>
-                    <button type="button" role="menuitem" title="打开帮助中心" aria-label="打开帮助中心">帮助中心</button>
+                    <button type="button" role="menuitem" title="打开键盘快捷键" aria-label="打开键盘快捷键" @click="showKeyboardShortcuts">键盘快捷键</button>
+                    <button type="button" role="menuitem" title="打开帮助中心" aria-label="打开帮助中心" @click="showPptHelpCenter">帮助中心</button>
                   </view>
                 </view>
               </view>
@@ -630,6 +630,10 @@ async function loadHistory() {
   historyLoading.value = true;
   try {
     history.value = await listPptHistory();
+  } catch (error) {
+    const message = errorMessage(error, "PPT历史记录加载失败");
+    operationMessage.value = message;
+    uni.showToast({ title: message, icon: "none" });
   } finally {
     historyLoading.value = false;
   }
@@ -700,7 +704,7 @@ async function downloadTask(item: PptHistoryItem) {
   operationMessage.value = "";
   try {
     const result = await requestPptDownload(item.taskId);
-    window.open(result.url, "_blank", "noopener");
+    openDownloadUrl(result.url);
   } catch (error) {
     const message = errorMessage(error);
     operationMessage.value = message;
@@ -718,7 +722,16 @@ function regenerateTask(item: PptHistoryItem) {
 }
 
 async function removeTask(item: PptHistoryItem) {
-  await deletePptTask(item.taskId);
+  const confirmed = await confirmAction("删除生成记录", "删除后该 PPT 任务记录将从后台移除，是否继续？");
+  if (!confirmed) return;
+  try {
+    await deletePptTask(item.taskId);
+  } catch (error) {
+    const message = errorMessage(error, "删除失败，请稍后重试");
+    operationMessage.value = message;
+    uni.showToast({ title: message, icon: "none" });
+    return;
+  }
   history.value = history.value.filter(record => record.taskId !== item.taskId);
   if (activeTask.value?.taskId === item.taskId) activeTask.value = null;
   if (previewRecord.value?.taskId === item.taskId) previewRecord.value = null;
@@ -1016,11 +1029,27 @@ function handleEditorTool(panel: EditorTool) {
 
 function openShareSettings() {
   showEditorMenu.value = false;
-  operationMessage.value = "分享设置接口已预留";
+  const task = currentResult.value;
+  const shareText = task
+    ? `${task.title || "知启云 PPT"}\n任务：${task.taskId}\n状态：${statusLabel(task.status)}`
+    : `${editorTitle.value}\n共 ${editorSlides.value.length} 张幻灯片`;
+  uni.setClipboardData({
+    data: shareText,
+    success: () => {
+      operationMessage.value = "分享信息已复制";
+      uni.showToast({ title: "已复制分享信息", icon: "success" });
+    }
+  });
 }
 
-function exportEditorDeck() {
-  operationMessage.value = "导出接口已预留，后续接入真实 PPT 下载";
+async function exportEditorDeck() {
+  const task = currentResult.value;
+  if (!task?.taskId) {
+    operationMessage.value = "当前演示文稿还没有后端任务，无法导出";
+    uni.showToast({ title: operationMessage.value, icon: "none" });
+    return;
+  }
+  await downloadTask(task);
 }
 
 function enterPresentationMode(wantsRecord: boolean) {
@@ -1080,11 +1109,59 @@ function formatDate(value?: string) {
 }
 
 function wait(ms: number) {
-  return new Promise(resolve => window.setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "PPT生成失败，请稍后重试";
+function errorMessage(error: unknown, fallback = "PPT生成失败，请稍后重试") {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function confirmAction(title: string, content: string) {
+  return new Promise<boolean>(resolve => {
+    uni.showModal({
+      title,
+      content,
+      confirmColor: "#ef4444",
+      success: result => resolve(Boolean(result.confirm)),
+      fail: () => resolve(false)
+    });
+  });
+}
+
+function showKeyboardShortcuts() {
+  showHelpMenu.value = false;
+  uni.showModal({
+    title: "键盘快捷键",
+    content: "撤销 Ctrl+Z · 重做 Ctrl+Shift+Z · 保存 Ctrl+S · 演示 Esc 退出",
+    showCancel: false,
+  });
+}
+
+function showPptHelpCenter() {
+  showHelpMenu.value = false;
+  uni.showModal({
+    title: "PPT 帮助中心",
+    content: "先生成大纲，再逐页编辑内容与配图，完成后使用导出按钮生成 PPTX 文件。",
+    showCancel: false,
+  });
+}
+
+function openDownloadUrl(url: string) {
+  if (typeof window !== "undefined" && typeof window.open === "function") {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  uni.downloadFile({
+    url,
+    success: result => {
+      if (result.statusCode >= 200 && result.statusCode < 300) {
+        uni.openDocument({ filePath: result.tempFilePath });
+      } else {
+        uni.showToast({ title: "下载失败，请稍后重试", icon: "none" });
+      }
+    },
+    fail: () => uni.showToast({ title: "下载失败，请稍后重试", icon: "none" })
+  });
 }
 </script>
 
@@ -1094,7 +1171,7 @@ function errorMessage(error: unknown) {
   padding: 26px;
   color: #0f172a;
   background: #f8fafc;
-  font-family: Inter, "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
   letter-spacing: 0;
 }
 
@@ -1133,7 +1210,7 @@ function errorMessage(error: unknown) {
 .ppt-panel-head text:last-child {
   color: #64748b;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-page-title {
@@ -1141,7 +1218,7 @@ function errorMessage(error: unknown) {
   margin-top: 4px;
   color: #0f172a;
   font-size: 28px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-head-meta {
@@ -1297,7 +1374,7 @@ function errorMessage(error: unknown) {
 .ppt-progress-head text:first-child {
   color: #0f172a;
   font-size: 15px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-prompt-textarea {
@@ -1345,7 +1422,7 @@ function errorMessage(error: unknown) {
   background: #fff;
   color: #334155;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-chip {
@@ -1396,13 +1473,13 @@ function errorMessage(error: unknown) {
 .ppt-search-control text:first-child {
   color: #0f172a;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-search-control text:last-child {
   color: #64748b;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-switch {
@@ -1451,7 +1528,7 @@ function errorMessage(error: unknown) {
 .ppt-theme-card text:first-child {
   color: inherit;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-theme-card text:last-child {
@@ -1491,7 +1568,7 @@ function errorMessage(error: unknown) {
   background: #fef2f2;
   color: #b91c1c;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-side-panel {
@@ -1522,7 +1599,7 @@ function errorMessage(error: unknown) {
 .ppt-progress-head text:last-child {
   color: #2563eb;
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-progress-track {
@@ -1545,7 +1622,7 @@ function errorMessage(error: unknown) {
   margin-top: 10px;
   color: #475569;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-result-layout {
@@ -1599,7 +1676,7 @@ function errorMessage(error: unknown) {
 .ppt-result-slide > text:nth-child(2) {
   color: #2563eb;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-result-slide view {
@@ -1653,7 +1730,7 @@ function errorMessage(error: unknown) {
   background: #f1f5f9;
   color: #475569;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-status.pending,
@@ -1681,7 +1758,7 @@ function errorMessage(error: unknown) {
 
 .ppt-operation-message {
   color: #1d4ed8;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-action-row button,
@@ -1722,7 +1799,7 @@ function errorMessage(error: unknown) {
   display: block;
   color: #0f172a;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1.4;
 }
 
@@ -1754,7 +1831,7 @@ function errorMessage(error: unknown) {
   background: #f8fafc;
   color: #64748b;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 @media (max-width: 1080px) {
@@ -1866,7 +1943,7 @@ function errorMessage(error: unknown) {
   border-radius: 8px;
   color: #f8fafc;
   background: #101010;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1923,7 +2000,7 @@ function errorMessage(error: unknown) {
 .ppt-save-state {
   color: #86efac;
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -1976,7 +2053,7 @@ function errorMessage(error: unknown) {
   margin-top: 8px;
   color: #a1a1aa;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-editor-menu button,
@@ -2088,7 +2165,7 @@ function errorMessage(error: unknown) {
 .ppt-slide-thumb view text:first-child {
   color: #f8fafc;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-slide-thumb view text:last-child {
@@ -2201,7 +2278,7 @@ function errorMessage(error: unknown) {
 .ppt-palette-menu text,
 .ppt-magic-head text:first-child {
   color: #f8fafc;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .ppt-palette-layouts,
@@ -2571,7 +2648,7 @@ function errorMessage(error: unknown) {
   border-radius: 8px;
   color: #f8fafc;
   background: #101010;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .ppt-editor-actions uni-button.primary {

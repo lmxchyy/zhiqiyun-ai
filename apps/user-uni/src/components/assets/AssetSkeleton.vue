@@ -1,0 +1,3 @@
+<template><view class="skeleton-grid"><view v-for="index in count" :key="index" class="skeleton-card"><view class="skeleton-cover"/><view class="skeleton-line wide"/><view class="skeleton-line"/></view></view></template>
+<script setup lang="ts">withDefaults(defineProps<{count?:number}>(),{count:4});</script>
+<style scoped>.skeleton-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.skeleton-card{padding:9px;border:1px solid #eceef3;border-radius:18px;background:#fff}.skeleton-cover,.skeleton-line{border-radius:10px;background:#eef0f5;animation:pulse 1.2s ease-in-out infinite}.skeleton-cover{height:112px}.skeleton-line{width:58%;height:10px;margin-top:8px}.skeleton-line.wide{width:82%;height:13px}@keyframes pulse{50%{opacity:.5}}</style>

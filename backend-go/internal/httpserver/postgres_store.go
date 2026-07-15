@@ -51,10 +51,22 @@ func (s *postgresStore) ensureReady(ctx context.Context) error {
 	if err := ensureGovernanceSchema(ctx, s.db); err != nil {
 		return err
 	}
+	if err := ensureUserRBACSchema(ctx, s.db); err != nil {
+		return err
+	}
+	if err := ensureEnterpriseCenterSchema(ctx, s.db); err != nil {
+		return err
+	}
+	if err := ensureAdminEnterpriseSchema(ctx, s.db); err != nil {
+		return err
+	}
 	if err := ensureMarketingSchema(ctx, s.db); err != nil {
 		return err
 	}
 	if err := s.seedPrimaryTables(ctx); err != nil {
+		return err
+	}
+	if err := syncUserRBACProjection(ctx, s.db); err != nil {
 		return err
 	}
 	if err := s.seedAPITables(ctx); err != nil {
@@ -522,6 +534,10 @@ const generationTaskSummarySelect = `
 	select
 		id,
 		user_id,
+		coalesce(tenant_id, ''),
+		coalesce(organization_id, ''),
+		coalesce(billing_account_type, 'PERSONAL'),
+		coalesce(billing_account_id, ''),
 		coalesce(module_code, ''),
 		coalesce(type, ''),
 		coalesce(model, ''),
@@ -543,13 +559,15 @@ const assetSummarySelect = `
 	select
 		id,
 		user_id,
+		coalesce(tenant_id, ''),
+		coalesce(organization_id, ''),
 		coalesce(task_id, ''),
 		coalesce(name, ''),
 		coalesce(media_type, ''),
 		coalesce(url, ''),
-		'',
+		coalesce(thumbnail_url, ''),
 		coalesce(favorite, false),
-		'{}',
+		coalesce(metadata::text, '{}'),
 		coalesce(deleted_at::text, ''),
 		coalesce(created_at, ''),
 		coalesce(updated_at, '')
@@ -557,24 +575,48 @@ const assetSummarySelect = `
 `
 
 func (s *postgresStore) ListGenerationTasksForUser(userID string, limit int) ([]generationTask, error) {
+	items, _, err := s.ListGenerationTasksPageForUser(userID, limit, 0, false)
+	return items, err
+}
+
+func (s *postgresStore) ListGenerationTasksPageForUser(userID string, limit int, offset int, prioritize bool) ([]generationTask, int, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if limit <= 0 {
 		limit = defaultUserContentListLimit
 	}
-	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
-		where user_id = $1
-		order by created_at desc nulls last, id desc
-		limit $2
-	`, userID, limit)
+	if offset < 0 {
+		offset = 0
+	}
+	contextType, tenantID, _, err := s.currentTenantScopeForUser(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		select count(*) from xz_generation_tasks
+		where user_id=$1 and (($2='ENTERPRISE' and tenant_id=$3) or ($2<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+	`, userID, contextType, tenantID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	orderBy := ` order by created_at desc nulls last, id desc`
+	if prioritize {
+		orderBy = ` order by case when upper(coalesce(status, '')) in ('PENDING','QUEUED','RUNNING','PROCESSING','RETRYING','FAILED','ERROR') then 0 else 1 end, created_at desc nulls last, id desc`
+	}
+	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
+		where user_id=$1 and (($4='ENTERPRISE' and tenant_id=$5) or ($4<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+	`+orderBy+`
+		limit $2 offset $3
+	`, userID, limit, offset, contextType, tenantID)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanGenerationTaskSummaryRows(rows)
+	items, err := scanGenerationTaskSummaryRows(rows)
+	return items, total, err
 }
 
 func (s *postgresStore) listGenerationTasksForUsers(ctx context.Context, userIDs []string, limit int) ([]generationTask, error) {
@@ -601,10 +643,14 @@ func (s *postgresStore) GetGenerationTaskForUser(userID string, id string) (gene
 	if err := s.ensureReady(ctx); err != nil {
 		return generationTask{}, false, err
 	}
+	contextType, tenantID, _, err := s.currentTenantScopeForUser(ctx, userID)
+	if err != nil {
+		return generationTask{}, false, err
+	}
 	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
-		where user_id = $1 and id = $2
+		where user_id=$1 and id=$2 and (($3='ENTERPRISE' and tenant_id=$4) or ($3<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
 		limit 1
-	`, userID, id)
+	`, userID, id, contextType, tenantID)
 	if err != nil {
 		return generationTask{}, false, err
 	}
@@ -620,24 +666,75 @@ func (s *postgresStore) GetGenerationTaskForUser(userID string, id string) (gene
 }
 
 func (s *postgresStore) ListAssetsForUser(userID string, limit int) ([]asset, error) {
+	items, _, err := s.ListAssetsPageForUser(userID, limit, 0)
+	return items, err
+}
+
+func (s *postgresStore) ListAssetsPageForUser(userID string, limit int, offset int) ([]asset, int, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if limit <= 0 {
 		limit = defaultUserContentListLimit
 	}
-	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
-		where user_id = $1 and deleted_at is null
-		order by created_at desc nulls last, id desc
-		limit $2
-	`, userID, limit)
+	if offset < 0 {
+		offset = 0
+	}
+	contextType, tenantID, _, err := s.currentTenantScopeForUser(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		select count(*) from xz_assets
+		where user_id=$1 and deleted_at is null and (($2='ENTERPRISE' and tenant_id=$3) or ($2<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+	`, userID, contextType, tenantID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+		where user_id=$1 and deleted_at is null and (($4='ENTERPRISE' and tenant_id=$5) or ($4<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+		order by created_at desc nulls last, id desc
+		limit $2 offset $3
+	`, userID, limit, offset, contextType, tenantID)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer rows.Close()
-	return scanAssetSummaryRows(rows)
+	items, err := scanAssetSummaryRows(rows)
+	return items, total, err
+}
+
+func (s *postgresStore) AssetListSummaryForUser(userID string, monthPrefix string) (assetListSummary, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return assetListSummary{}, err
+	}
+	contextType, tenantID, _, err := s.currentTenantScopeForUser(ctx, userID)
+	if err != nil {
+		return assetListSummary{}, err
+	}
+	var summary assetListSummary
+	err = s.db.QueryRowContext(ctx, `
+		select
+			count(*),
+			count(*) filter (where coalesce(favorite, false)),
+			count(*) filter (where coalesce(created_at, '') like $2 || '%'),
+			coalesce(sum(
+				case
+					when jsonb_typeof(metadata->'fileSize') = 'number' then (metadata->>'fileSize')::bigint
+					when jsonb_typeof(metadata->'fileSizeBytes') = 'number' then (metadata->>'fileSizeBytes')::bigint
+					when jsonb_typeof(metadata->'sizeBytes') = 'number' then (metadata->>'sizeBytes')::bigint
+					else 0
+				end
+			), 0)
+		from xz_assets
+		where user_id = $1 and deleted_at is null
+		  and (($3='ENTERPRISE' and tenant_id=$4) or ($3<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+	`, userID, monthPrefix, contextType, tenantID).Scan(&summary.Total, &summary.FavoriteTotal, &summary.MonthTotal, &summary.StorageBytes)
+	return summary, err
 }
 
 func (s *postgresStore) listAssetsForUsers(ctx context.Context, userIDs []string, limit int) ([]asset, error) {
@@ -668,6 +765,10 @@ func scanGenerationTaskSummaryRows(rows *sql.Rows) ([]generationTask, error) {
 		if err := rows.Scan(
 			&item.ID,
 			&item.UserID,
+			&item.TenantID,
+			&item.OrganizationID,
+			&item.BillingAccountType,
+			&item.BillingAccountID,
 			&item.ModuleCode,
 			&item.Type,
 			&item.Model,
@@ -701,6 +802,8 @@ func scanAssetSummaryRows(rows *sql.Rows) ([]asset, error) {
 		if err := rows.Scan(
 			&item.ID,
 			&item.UserID,
+			&item.TenantID,
+			&item.OrganizationID,
 			&item.TaskID,
 			&item.Name,
 			&item.MediaType,
@@ -723,7 +826,10 @@ func scanAssetSummaryRows(rows *sql.Rows) ([]asset, error) {
 
 func compactListInlineMediaURL(value string) string {
 	text := strings.TrimSpace(value)
-	if strings.HasPrefix(text, "data:") && len(text) > 2048 {
+	// Compact thumbnails are intentionally returned inline so the first asset
+	// grid does not wait for several multi-megabyte object-storage downloads.
+	// Only discard unexpectedly large inline media that is likely an original.
+	if strings.HasPrefix(text, "data:") && len(text) > 128<<10 {
 		return ""
 	}
 	return value
@@ -852,12 +958,23 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	}
 	rule := billingRuleForRequest(req, capabilityData)
 	pointCost := generationPointCostForRequest(req, capabilityData)
-	account, err := pointAccountForUpdate(ctx, tx, userID)
+	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
 		return generationTask{}, err
 	}
-	if account.Available < pointCost {
-		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+	req.Params["tenant_id"] = authorization.TenantID
+	req.Params["organization_id"] = authorization.OrganizationID
+	req.Params["billing_scope"] = authorization.BillingScope
+	req.Params["billing_account_id"] = authorization.BillingAccountID
+	var account adminPointAccount
+	if authorization.ContextType != contextEnterprise {
+		account, err = pointAccountForUpdate(ctx, tx, userID)
+		if err != nil {
+			return generationTask{}, err
+		}
+		if account.Available < pointCost {
+			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	taskID, err := nextTableID(ctx, tx, "xz_generation_tasks", "task")
@@ -880,6 +997,16 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		WorkerFinishedAt: now,
 	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
+	if authorization.ContextType == contextEnterprise {
+		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
+		if err != nil {
+			return generationTask{}, err
+		}
+		balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
+		task.Params["billing_ledger_id"] = reservation.LedgerID
+		task.Params["billing_reserved"] = true
+	}
 	count := imageCount(req.Params)
 	for i := 0; i < count; i++ {
 		assetID, err := nextTableID(ctx, tx, "xz_assets", "asset")
@@ -895,16 +1022,20 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		update xz_point_accounts
-		set available = available - $1,
-			raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-		where id = $2
-	`, pointCost, account.ID); err != nil {
-		return generationTask{}, err
+	if authorization.ContextType != contextEnterprise {
+		if _, err := tx.ExecContext(ctx, `
+			update xz_point_accounts
+			set available = available - $1,
+				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
+			where id = $2
+		`, pointCost, account.ID); err != nil {
+			return generationTask{}, err
+		}
+		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+			return generationTask{}, err
+		}
 	}
-	nextAvailable := account.Available - pointCost
-	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, account.Available, nextAvailable, now)
+	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, balanceBefore, balanceAfter, now)
 	if err != nil {
 		return generationTask{}, err
 	}
@@ -915,6 +1046,9 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		if err := insertCommission(ctx, tx, commission); err != nil {
 			return generationTask{}, err
 		}
+	}
+	if err := s.recordModelUsageTx(ctx, tx, authorization, task, req.Params); err != nil {
+		return generationTask{}, err
 	}
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.create", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": pointCost}); err != nil {
 		return generationTask{}, err
@@ -946,21 +1080,40 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	}
 	rule := billingRuleForRequest(req, capabilityData)
 	pointCost := generationPointCostForRequest(req, capabilityData)
-	account, err := pointAccountForUpdate(ctx, tx, userID)
+	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
 		return generationTask{}, err
 	}
-	if account.Available < pointCost {
-		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+	req.Params["tenant_id"] = authorization.TenantID
+	req.Params["organization_id"] = authorization.OrganizationID
+	req.Params["billing_scope"] = authorization.BillingScope
+	req.Params["billing_account_id"] = authorization.BillingAccountID
+	var account adminPointAccount
+	if authorization.ContextType != contextEnterprise {
+		account, err = pointAccountForUpdate(ctx, tx, userID)
+		if err != nil {
+			return generationTask{}, err
+		}
+		if account.Available < pointCost {
+			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	nextAvailable := account.Available - pointCost
-	params := generationBillingReservationParams(req.Params, now, pointCost, account.Available, nextAvailable)
-	req.Params = params
 	taskID, err := nextTableID(ctx, tx, "xz_generation_tasks", "task")
 	if err != nil {
 		return generationTask{}, err
 	}
+	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
+	if authorization.ContextType == contextEnterprise {
+		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", taskID)
+		if err != nil {
+			return generationTask{}, err
+		}
+		balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
+		req.Params["billing_ledger_id"] = reservation.LedgerID
+	}
+	params := generationBillingReservationParams(req.Params, now, pointCost, balanceBefore, balanceAfter)
+	req.Params = params
 	task := generationTask{
 		ID:        taskID,
 		UserID:    userID,
@@ -979,13 +1132,18 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		update xz_point_accounts
-		set available = available - $1,
-			raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-		where id = $2
-	`, pointCost, account.ID); err != nil {
-		return generationTask{}, err
+	if authorization.ContextType != contextEnterprise {
+		if _, err := tx.ExecContext(ctx, `
+			update xz_point_accounts
+			set available = available - $1,
+				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
+			where id = $2
+		`, pointCost, account.ID); err != nil {
+			return generationTask{}, err
+		}
+		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+			return generationTask{}, err
+		}
 	}
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.enqueue", "generation_task", task.ID, "", "", 202, map[string]any{"pointCost": pointCost, "billingReserved": true}); err != nil {
 		return generationTask{}, err
@@ -1015,9 +1173,16 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if userID == "" {
 		userID = strings.TrimSpace(req.UserID)
 	}
-	account, err := pointAccountForUpdate(ctx, tx, userID)
+	authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, true)
 	if err != nil {
 		return generationTask{}, err
+	}
+	var account adminPointAccount
+	if authorization.ContextType != contextEnterprise {
+		account, err = pointAccountForUpdate(ctx, tx, userID)
+		if err != nil {
+			return generationTask{}, err
+		}
 	}
 	pointCost := task.PointCost
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1028,6 +1193,10 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if req.Params == nil {
 		req.Params = task.Params
 	}
+	req.Params["tenant_id"] = authorization.TenantID
+	req.Params["organization_id"] = authorization.OrganizationID
+	req.Params["billing_scope"] = authorization.BillingScope
+	req.Params["billing_account_id"] = authorization.BillingAccountID
 	capabilityData, err := s.aiCapabilityAdminData(ctx)
 	if err != nil {
 		return generationTask{}, err
@@ -1038,7 +1207,7 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	}
 	pointCost = generationTaskReservedPointCost(task, pointCost)
 	reserved := generationTaskReservedAndActive(task)
-	if !reserved && account.Available < pointCost {
+	if authorization.ContextType != contextEnterprise && !reserved && account.Available < pointCost {
 		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 	}
 	task.Status = "SUCCEEDED"
@@ -1067,15 +1236,30 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	balanceBefore := account.Available
 	balanceAfter := account.Available - pointCost
 	if reserved {
-		balanceBefore, balanceAfter = generationTaskReservationBalances(task, account.Available, pointCost)
+		fallbackBalance := account.Available
+		if authorization.ContextType == contextEnterprise {
+			fallbackBalance = intValue(task.Params[generationBillingReservationBalanceAfterKey])
+		}
+		balanceBefore, balanceAfter = generationTaskReservationBalances(task, fallbackBalance, pointCost)
 	} else {
-		if _, err := tx.ExecContext(ctx, `
-			update xz_point_accounts
-			set available = available - $1,
-				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-			where id = $2
-		`, pointCost, account.ID); err != nil {
-			return generationTask{}, err
+		if authorization.ContextType == contextEnterprise {
+			reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
+			if err != nil {
+				return generationTask{}, err
+			}
+			balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
+		} else {
+			if _, err := tx.ExecContext(ctx, `
+				update xz_point_accounts
+				set available = available - $1,
+					raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
+				where id = $2
+			`, pointCost, account.ID); err != nil {
+				return generationTask{}, err
+			}
+			if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+				return generationTask{}, err
+			}
 		}
 	}
 	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, balanceBefore, balanceAfter, now)
@@ -1089,6 +1273,9 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 		if err := insertCommission(ctx, tx, commission); err != nil {
 			return generationTask{}, err
 		}
+	}
+	if err := s.recordModelUsageTx(ctx, tx, authorization, task, req.Params); err != nil {
+		return generationTask{}, err
 	}
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.complete", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": pointCost, "billingReserved": reserved}); err != nil {
 		return generationTask{}, err
@@ -1125,20 +1312,38 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 		return adminBillingEvent{}, err
 	}
 	pointCost := pptPointCostWithRules(task, capabilityData)
-	account, err := pointAccountForUpdate(ctx, tx, userID)
+	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, modulePPTGeneration)
 	if err != nil {
 		return adminBillingEvent{}, err
 	}
-	if account.Available < pointCost {
-		return adminBillingEvent{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		update xz_point_accounts
-		set available = available - $1,
-			raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-		where id = $2
-	`, pointCost, account.ID); err != nil {
-		return adminBillingEvent{}, err
+	var account adminPointAccount
+	balanceBefore, balanceAfter := 0, 0
+	if authorization.ContextType == contextEnterprise {
+		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "PPT_TASK", task.TaskID)
+		if err != nil {
+			return adminBillingEvent{}, err
+		}
+		balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
+	} else {
+		account, err = pointAccountForUpdate(ctx, tx, userID)
+		if err != nil {
+			return adminBillingEvent{}, err
+		}
+		if account.Available < pointCost {
+			return adminBillingEvent{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+		}
+		balanceBefore, balanceAfter = account.Available, account.Available-pointCost
+		if _, err := tx.ExecContext(ctx, `
+			update xz_point_accounts
+			set available = available - $1,
+				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
+			where id = $2
+		`, pointCost, account.ID); err != nil {
+			return adminBillingEvent{}, err
+		}
+		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+			return adminBillingEvent{}, err
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1154,8 +1359,8 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 			return adminBillingEvent{}, err
 		}
 	}
-	nextAvailable := account.Available - pointCost
-	event := pptBillingEvent(task, pointCost, account.Available, nextAvailable, now, user, agent, hasAgent)
+	event := pptBillingEvent(task, pointCost, balanceBefore, balanceAfter, now, user, agent, hasAgent)
+	event.TenantID = authorization.TenantID
 	if err := insertBillingEvent(ctx, tx, event); err != nil {
 		return adminBillingEvent{}, err
 	}
@@ -1167,6 +1372,10 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 		if err := insertCommission(ctx, tx, commission); err != nil {
 			return adminBillingEvent{}, err
 		}
+	}
+	usageTask := generationTask{ID: task.TaskID, UserID: userID, TenantID: authorization.TenantID, OrganizationID: authorization.OrganizationID, BillingAccountType: authorization.BillingScope, BillingAccountID: authorization.BillingAccountID, ModuleCode: modulePPTGeneration, Model: event.Model, PointCost: pointCost}
+	if err := s.recordModelUsageTx(ctx, tx, authorization, usageTask, map[string]any{}); err != nil {
+		return adminBillingEvent{}, err
 	}
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "ppt.generate", "ppt_task", task.TaskID, "", "", 200, map[string]any{"pointCost": pointCost, "slideCount": pptSlideQuantity(task)}); err != nil {
 		return adminBillingEvent{}, err
@@ -1196,20 +1405,35 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 	pointCost := generationTaskReservedPointCost(task, task.PointCost)
 	refunded := false
 	if generationTaskReservedAndActive(task) && pointCost > 0 {
-		account, err := pointAccountForUpdate(ctx, tx, task.UserID)
+		authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, false)
 		if err != nil {
 			return generationTask{}, err
 		}
-		nextAvailable := account.Available + pointCost
-		if _, err := tx.ExecContext(ctx, `
-			update xz_point_accounts
-			set available = available + $1,
-				raw = jsonb_set(raw, '{available}', to_jsonb((available + $1)::int), true)
-			where id = $2
-		`, pointCost, account.ID); err != nil {
-			return generationTask{}, err
+		if authorization.ContextType == contextEnterprise {
+			before := int64(intValue(task.Params[generationBillingReservationBalanceAfterKey]))
+			if err := s.reverseEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, int(before), int(before)+pointCost)
+		} else {
+			account, err := pointAccountForUpdate(ctx, tx, task.UserID)
+			if err != nil {
+				return generationTask{}, err
+			}
+			nextAvailable := account.Available + pointCost
+			if _, err := tx.ExecContext(ctx, `
+				update xz_point_accounts
+				set available = available + $1,
+					raw = jsonb_set(raw, '{available}', to_jsonb((available + $1)::int), true)
+				where id = $2
+			`, pointCost, account.ID); err != nil {
+				return generationTask{}, err
+			}
+			if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: task.UserID, Available: nextAvailable, Frozen: account.Frozen}); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, account.Available, nextAvailable)
 		}
-		task.Params = generationBillingRefundParams(task.Params, now, account.Available, nextAvailable)
 		refunded = true
 	}
 	if task.Status == "FAILED" || task.Status == "CANCELLED" {
@@ -1283,15 +1507,17 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 			thumbnailURL = firstNonEmptyString(providerTaskString(req, "thumbnailUrl"), thumbnailURL)
 		}
 	}
-	return asset{
-		ID:           assetID,
-		UserID:       userID,
-		TaskID:       taskID,
-		Name:         generationAssetName(req.Type, taskID, index),
-		MediaType:    mediaType,
-		URL:          imageURL,
-		ThumbnailURL: thumbnailURL,
-		Favorite:     false,
+	item := asset{
+		ID:             assetID,
+		UserID:         userID,
+		TenantID:       stringValue(req.Params["tenant_id"]),
+		OrganizationID: stringValue(req.Params["organization_id"]),
+		TaskID:         taskID,
+		Name:           generationAssetName(req.Type, taskID, index),
+		MediaType:      mediaType,
+		URL:            imageURL,
+		ThumbnailURL:   thumbnailURL,
+		Favorite:       false,
 		Metadata: map[string]any{
 			"prompt":              req.Prompt,
 			"model":               req.Model,
@@ -1317,6 +1543,22 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	if stored, ok := generatedStorageRecord(req.Params, index); ok {
+		item.Metadata["fileId"] = stringValue(stored["fileId"])
+		item.Metadata["storageFileId"] = stringValue(stored["fileId"])
+		item.Metadata["storageTenantId"] = stringValue(stored["tenantId"])
+		item.Metadata["storageProvider"] = stringValue(stored["provider"])
+		item.Metadata["storageBucket"] = stringValue(stored["bucket"])
+		item.Metadata["storageObjectKey"] = stringValue(stored["objectKey"])
+		item.Metadata["fileSize"] = int64Value(stored["fileSize"])
+		item.Metadata["fileSizeBytes"] = int64Value(stored["fileSize"])
+		item.Metadata["sourceUrl"] = stringValue(stored["sourceUrl"])
+		item.Metadata["storageManaged"] = true
+		if storedContentType := stringValue(stored["contentType"]); storedContentType != "" {
+			item.Metadata["contentType"] = storedContentType
+		}
+	}
+	return item
 }
 
 func (s *postgresStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, error) {
@@ -1334,7 +1576,15 @@ func (s *postgresStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, er
 	if err != nil {
 		return adminOrder{}, err
 	}
-	item := adminOrder{ID: id, UserID: req.UserID, BuyerUserID: req.UserID, PlanID: req.PlanID, BusinessOrderType: businessOrderTypeForPlanID(req.PlanID), Amount: req.AmountCents, AmountCents: req.AmountCents, Status: fallback(req.Status, "PENDING"), PriceSnapshot: orderPriceSnapshot(req), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	tenantID, err := currentEnterpriseTenantForOrderTx(ctx, tx, req.UserID)
+	if err != nil {
+		return adminOrder{}, err
+	}
+	priceSnapshot := orderPriceSnapshot(req)
+	if tenantID != "" {
+		priceSnapshot["tenantId"] = tenantID
+	}
+	item := adminOrder{ID: id, TenantID: tenantID, UserID: req.UserID, BuyerUserID: req.UserID, PlanID: req.PlanID, BusinessOrderType: businessOrderTypeForPlanID(req.PlanID), Amount: req.AmountCents, AmountCents: req.AmountCents, Status: fallback(req.Status, "PENDING"), PriceSnapshot: priceSnapshot, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	if err := insertOrder(ctx, tx, item); err != nil {
 		return adminOrder{}, err
 	}
@@ -1356,6 +1606,7 @@ func (s *postgresStore) RegisterPaymentCallbackEvent(event adminPaymentEvent) (b
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	_ = tx.QueryRowContext(ctx, `SELECT coalesce(tenant_id,'') FROM xz_orders WHERE id=$1`, event.OrderID).Scan(&event.TenantID)
 	existing, found, err := paymentCallbackEventByEventIDForTx(ctx, tx, event.Provider, event.EventID)
 	if err != nil {
 		return false, err
@@ -1378,8 +1629,28 @@ func (s *postgresStore) RegisterPaymentCallbackEvent(event adminPaymentEvent) (b
 			return false, fmt.Errorf("payment transaction already belongs to another order: %s", event.TransactionID)
 		}
 	}
-	if err := insertPaymentCallbackEvent(ctx, tx, event); err != nil {
+	inserted, err := insertPaymentCallbackEvent(ctx, tx, event)
+	if err != nil {
 		return false, err
+	}
+	if !inserted {
+		existing, found, err = paymentCallbackEventByEventIDForTx(ctx, tx, event.Provider, event.EventID)
+		if err != nil {
+			return false, err
+		}
+		if found && samePaymentCallbackEventTarget(existing, event) {
+			return true, tx.Commit()
+		}
+		if event.TransactionID != "" {
+			existing, found, err = paymentCallbackEventByTransactionIDForTx(ctx, tx, event.Provider, event.TransactionID)
+			if err != nil {
+				return false, err
+			}
+			if found && samePaymentCallbackEventTarget(existing, event) {
+				return true, tx.Commit()
+			}
+		}
+		return false, errors.New("payment callback idempotency key already belongs to another event")
 	}
 	return false, tx.Commit()
 }
@@ -1404,6 +1675,9 @@ func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any
 		if err := insertOrder(ctx, tx, item); err != nil {
 			return adminOrder{}, err
 		}
+		if err := markPaymentEventsProcessedTx(ctx, tx, item.ID, metadata...); err != nil {
+			return adminOrder{}, err
+		}
 		return item, tx.Commit()
 	}
 	item.Status = "PAID"
@@ -1419,7 +1693,66 @@ func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any
 	if err := insertOrder(ctx, tx, item); err != nil {
 		return adminOrder{}, err
 	}
+	if err := markPaymentEventsProcessedTx(ctx, tx, item.ID, metadata...); err != nil {
+		return adminOrder{}, err
+	}
 	if err := insertAuditLog(ctx, tx, "", "", "orders.mark_paid", "order", item.ID, "", "", 200, nil); err != nil {
+		return adminOrder{}, err
+	}
+	return item, tx.Commit()
+}
+
+func markPaymentEventsProcessedTx(ctx context.Context, tx *sql.Tx, orderID string, metadata ...map[string]any) error {
+	eventID := ""
+	for _, item := range metadata {
+		if value := strings.TrimSpace(stringValue(item["eventId"])); value != "" {
+			eventID = value
+			break
+		}
+	}
+	if eventID == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE xz_payment_events
+		SET status='PROCESSED',processed_at=coalesce(processed_at,now())
+		WHERE order_id=$1 AND event_id=$2
+	`, orderID, eventID)
+	return err
+}
+
+func (s *postgresStore) RequestOrderRefund(userID string, orderID string, reason string, remark string) (adminOrder, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminOrder{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	item, err := getOrderForUpdate(ctx, tx, orderID)
+	if err != nil {
+		return adminOrder{}, err
+	}
+	if item.UserID != userID && item.BuyerUserID != userID {
+		return adminOrder{}, errors.New("order does not belong to current user")
+	}
+	if strings.EqualFold(item.Status, "REFUND_REQUESTED") {
+		return item, tx.Commit()
+	}
+	if !isPaidStatus(item.Status) && strings.TrimSpace(item.PaidAt) == "" {
+		return adminOrder{}, errors.New("only paid orders can request a refund")
+	}
+	if item.PriceSnapshot == nil {
+		item.PriceSnapshot = map[string]any{}
+	}
+	item.PriceSnapshot["refundReason"] = strings.TrimSpace(reason)
+	item.PriceSnapshot["refundRemark"] = strings.TrimSpace(remark)
+	item.PriceSnapshot["refundRequestedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+	item.Status = "REFUND_REQUESTED"
+	if err := insertOrder(ctx, tx, item); err != nil {
+		return adminOrder{}, err
+	}
+	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "orders.refund_requested", "order", item.ID, "", "", 200, map[string]any{"reason": reason}); err != nil {
 		return adminOrder{}, err
 	}
 	return item, tx.Commit()
@@ -1911,7 +2244,7 @@ func (s *postgresStore) RenewAdminOrder(id string) (adminOrder, error) {
 	if err != nil {
 		return adminOrder{}, err
 	}
-	item := adminOrder{ID: nextID, UserID: source.UserID, PlanID: source.PlanID, Amount: orderAmount(source), AmountCents: orderAmount(source), Status: "PENDING", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), PriceSnapshot: map[string]any{"renewOf": source.ID}}
+	item := adminOrder{ID: nextID, TenantID: source.TenantID, UserID: source.UserID, PlanID: source.PlanID, Amount: orderAmount(source), AmountCents: orderAmount(source), Status: "PENDING", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), PriceSnapshot: map[string]any{"renewOf": source.ID, "tenantId": source.TenantID}}
 	if err := insertOrder(ctx, tx, item); err != nil {
 		return adminOrder{}, err
 	}
@@ -2082,6 +2415,10 @@ func (s *postgresStore) DeleteAssetForUser(userID string, id string) error {
 	userID = strings.TrimSpace(userID)
 	ctx, cancel := s.withTimeout()
 	defer cancel()
+	contextType, tenantID, _, err := s.currentTenantScopeForUser(ctx, userID)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -2089,7 +2426,12 @@ func (s *postgresStore) DeleteAssetForUser(userID string, id string) error {
 	defer func() { _ = tx.Rollback() }()
 	var taskID string
 	var resultIDsRaw string
-	err = tx.QueryRowContext(ctx, `select coalesce(task_id, '') from xz_assets where id = $1 and user_id = $2 and deleted_at is null for update`, id, userID).Scan(&taskID)
+	err = tx.QueryRowContext(ctx, `
+		select coalesce(task_id, '') from xz_assets
+		where id=$1 and user_id=$2 and deleted_at is null
+		  and (($3='ENTERPRISE' and tenant_id=$4) or ($3<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+		for update
+	`, id, userID, contextType, tenantID).Scan(&taskID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("%w: %s", errAssetNotFound, id)
 	}
@@ -2123,7 +2465,8 @@ func (s *postgresStore) DeleteAssetForUser(userID string, id string) error {
 				'{metadata,deletedAt}', to_jsonb($3::text), true
 			)
 		where id = $1 and user_id = $2 and deleted_at is null
-	`, id, userID, now)
+		  and (($4='ENTERPRISE' and tenant_id=$5) or ($4<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+	`, id, userID, now, contextType, tenantID)
 	if err != nil {
 		return err
 	}
@@ -2244,15 +2587,19 @@ func (s *postgresStore) CreateAdminCustomer(req adminCustomerMutation) (adminUse
 		return adminUser{}, err
 	}
 	item := adminUser{
-		ID:         userID,
-		Email:      req.Email,
-		Name:       req.Name,
-		Role:       fallback(req.Role, "MEMBER"),
-		Status:     fallback(req.Status, "ACTIVE"),
-		PlanID:     fallback(req.PlanID, "plan_free"),
-		ReferredBy: strings.TrimSpace(req.ReferredBy),
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:                 userID,
+		Email:              req.Email,
+		Mobile:             strings.TrimSpace(req.Mobile),
+		WeChatOpenIDs:      appendUniqueString(nil, req.WeChatOpenID),
+		WeChatUnionID:      strings.TrimSpace(req.WeChatUnionID),
+		RegistrationSource: cloneStringMap(req.RegistrationSource),
+		Name:               req.Name,
+		Role:               fallback(req.Role, "MEMBER"),
+		Status:             fallback(req.Status, "ACTIVE"),
+		PlanID:             fallback(req.PlanID, "plan_free"),
+		ReferredBy:         strings.TrimSpace(req.ReferredBy),
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	if err := insertUser(ctx, tx, item); err != nil {
 		return adminUser{}, err
@@ -2287,6 +2634,15 @@ func (s *postgresStore) UpdateAdminCustomer(id string, req adminCustomerMutation
 	}
 	if req.Email != "" {
 		item.Email = req.Email
+	}
+	if req.Mobile != "" {
+		item.Mobile = strings.TrimSpace(req.Mobile)
+	}
+	if req.WeChatOpenID != "" {
+		item.WeChatOpenIDs = appendUniqueString(item.WeChatOpenIDs, req.WeChatOpenID)
+	}
+	if req.WeChatUnionID != "" {
+		item.WeChatUnionID = strings.TrimSpace(req.WeChatUnionID)
 	}
 	if req.Role != "" {
 		item.Role = req.Role
@@ -3652,10 +4008,10 @@ func (s *postgresStore) listAPIKeys(ctx context.Context) ([]adminAPIKey, error) 
 
 func insertUser(ctx context.Context, tx *sql.Tx, item adminUser) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_users (id, email, name, role, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
-		on conflict (id) do update set email=excluded.email, name=excluded.name, role=excluded.role, status=excluded.status, password_hash=excluded.password_hash, plan_id=excluded.plan_id, referred_by=excluded.referred_by, subscription_expires_at=excluded.subscription_expires_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
-	`, item.ID, item.Email, item.Name, item.Role, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		insert into xz_users (id, email, mobile, wechat_union_id, name, role, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
+		on conflict (id) do update set email=excluded.email, mobile=excluded.mobile, wechat_union_id=excluded.wechat_union_id, name=excluded.name, role=excluded.role, status=excluded.status, password_hash=excluded.password_hash, plan_id=excluded.plan_id, referred_by=excluded.referred_by, subscription_expires_at=excluded.subscription_expires_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
+	`, item.ID, item.Email, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatUnionID), item.Name, item.Role, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 	if err != nil {
 		return err
 	}
@@ -3748,11 +4104,18 @@ func insertOperationCenter(ctx context.Context, tx *sql.Tx, item adminOperationC
 }
 
 func insertOrder(ctx context.Context, tx *sql.Tx, item adminOrder) error {
+	item.TenantID = firstNonEmptyString(item.TenantID, stringValue(item.PriceSnapshot["tenantId"]))
+	if item.PriceSnapshot == nil {
+		item.PriceSnapshot = map[string]any{}
+	}
+	if item.TenantID != "" {
+		item.PriceSnapshot["tenantId"] = item.TenantID
+	}
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_orders (id, user_id, buyer_user_id, plan_id, order_type, business_order_type, amount_cents, token_amount, token_grant_amount, token_grant_value_cents, platform_income_cents, direct_agent_id, parent_agent_id, operation_center_id, fulfillment_status, fulfilled_at, status, paid_at, created_at, reward_snapshot, price_snapshot, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb,$22::jsonb)
-		on conflict (id) do update set user_id=excluded.user_id, buyer_user_id=excluded.buyer_user_id, plan_id=excluded.plan_id, order_type=excluded.order_type, business_order_type=excluded.business_order_type, amount_cents=excluded.amount_cents, token_amount=excluded.token_amount, token_grant_amount=excluded.token_grant_amount, token_grant_value_cents=excluded.token_grant_value_cents, platform_income_cents=excluded.platform_income_cents, direct_agent_id=excluded.direct_agent_id, parent_agent_id=excluded.parent_agent_id, operation_center_id=excluded.operation_center_id, fulfillment_status=excluded.fulfillment_status, fulfilled_at=excluded.fulfilled_at, status=excluded.status, paid_at=excluded.paid_at, created_at=excluded.created_at, reward_snapshot=excluded.reward_snapshot, price_snapshot=excluded.price_snapshot, raw=excluded.raw
-	`, item.ID, item.UserID, firstNonEmptyString(item.BuyerUserID, item.UserID), item.PlanID, item.OrderType, businessOrderTypeFromOrder(item), orderAmount(item), firstNonEmptyInt(item.TokenAmount, item.TokenGrantAmount), item.TokenGrantAmount, intValue(item.PriceSnapshot["tokenGrantValueCents"]), item.PlatformIncomeCents, item.DirectAgentID, item.ParentAgentID, item.OperationCenterID, item.FulfillmentStatus, item.FulfilledAt, item.Status, item.PaidAt, item.CreatedAt, jsonProjection(item.RewardSnapshot), jsonProjection(item.PriceSnapshot), jsonProjection(item))
+		insert into xz_orders (id, tenant_id, user_id, buyer_user_id, plan_id, order_type, business_order_type, amount_cents, token_amount, token_grant_amount, token_grant_value_cents, platform_income_cents, direct_agent_id, parent_agent_id, operation_center_id, fulfillment_status, fulfilled_at, status, paid_at, created_at, reward_snapshot, price_snapshot, raw)
+		values ($1,nullif($2,''),$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22::jsonb,$23::jsonb)
+		on conflict (id) do update set tenant_id=coalesce(excluded.tenant_id,xz_orders.tenant_id), user_id=excluded.user_id, buyer_user_id=excluded.buyer_user_id, plan_id=excluded.plan_id, order_type=excluded.order_type, business_order_type=excluded.business_order_type, amount_cents=excluded.amount_cents, token_amount=excluded.token_amount, token_grant_amount=excluded.token_grant_amount, token_grant_value_cents=excluded.token_grant_value_cents, platform_income_cents=excluded.platform_income_cents, direct_agent_id=excluded.direct_agent_id, parent_agent_id=excluded.parent_agent_id, operation_center_id=excluded.operation_center_id, fulfillment_status=excluded.fulfillment_status, fulfilled_at=excluded.fulfilled_at, status=excluded.status, paid_at=excluded.paid_at, created_at=excluded.created_at, reward_snapshot=excluded.reward_snapshot, price_snapshot=excluded.price_snapshot, raw=excluded.raw
+	`, item.ID, item.TenantID, item.UserID, firstNonEmptyString(item.BuyerUserID, item.UserID), item.PlanID, item.OrderType, businessOrderTypeFromOrder(item), orderAmount(item), firstNonEmptyInt(item.TokenAmount, item.TokenGrantAmount), item.TokenGrantAmount, intValue(item.PriceSnapshot["tokenGrantValueCents"]), item.PlatformIncomeCents, item.DirectAgentID, item.ParentAgentID, item.OperationCenterID, item.FulfillmentStatus, item.FulfilledAt, item.Status, item.PaidAt, item.CreatedAt, jsonProjection(item.RewardSnapshot), jsonProjection(item.PriceSnapshot), jsonProjection(item))
 	return err
 }
 
@@ -3942,13 +4305,18 @@ func paymentCallbackEventByTransactionIDForTx(ctx context.Context, tx *sql.Tx, p
 	return item, err == nil, err
 }
 
-func insertPaymentCallbackEvent(ctx context.Context, tx *sql.Tx, item adminPaymentEvent) error {
+func insertPaymentCallbackEvent(ctx context.Context, tx *sql.Tx, item adminPaymentEvent) (bool, error) {
 	item = normalizePaymentCallbackEvent(item)
-	_, err := tx.ExecContext(ctx, `
-		insert into xz_payment_events (id, provider, event_id, order_id, transaction_id, amount_cents, raw, verified, created_at)
-		values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::timestamptz)
-	`, item.ID, item.Provider, item.EventID, item.OrderID, nullableSQLString(item.TransactionID), item.AmountCents, jsonProjection(item), item.Verified, item.CreatedAt)
-	return err
+	result, err := tx.ExecContext(ctx, `
+		insert into xz_payment_events (id, tenant_id, provider, event_id, idempotency_key, order_id, transaction_id, amount_cents, raw, verified, status, processed_at, created_at)
+		values ($1,nullif($2,''),$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,nullif($12,'')::timestamptz,$13::timestamptz)
+		on conflict do nothing
+	`, item.ID, item.TenantID, item.Provider, item.EventID, item.IdempotencyKey, item.OrderID, nullableSQLString(item.TransactionID), item.AmountCents, jsonProjection(item), item.Verified, item.Status, item.ProcessedAt, item.CreatedAt)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
 }
 
 func insertBillingEvent(ctx context.Context, tx *sql.Tx, item adminBillingEvent) error {
@@ -4197,10 +4565,10 @@ func listAPIKeysForTx(ctx context.Context, tx *sql.Tx) ([]adminAPIKey, error) {
 
 func insertGenerationTask(ctx context.Context, tx *sql.Tx, item generationTask) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_generation_tasks (id, user_id, module_code, type, model, billing_type, status, progress, point_cost, prompt, params, result_ids, error, created_at, updated_at, worker_finished_at, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17::jsonb)
-		on conflict (id) do update set user_id=excluded.user_id, module_code=excluded.module_code, type=excluded.type, model=excluded.model, billing_type=excluded.billing_type, status=excluded.status, progress=excluded.progress, point_cost=excluded.point_cost, prompt=excluded.prompt, params=excluded.params, result_ids=excluded.result_ids, error=excluded.error, created_at=excluded.created_at, updated_at=excluded.updated_at, worker_finished_at=excluded.worker_finished_at, raw=excluded.raw
-	`, item.ID, item.UserID, item.ModuleCode, item.Type, item.Model, item.BillingType, item.Status, item.Progress, item.PointCost, item.Prompt, jsonProjection(item.Params), jsonProjection(item.ResultIDs), jsonProjection(item.Error), item.CreatedAt, item.UpdatedAt, item.WorkerFinishedAt, jsonProjection(item))
+		insert into xz_generation_tasks (id, user_id, tenant_id, organization_id, billing_account_type, billing_account_id, module_code, type, model, billing_type, status, progress, point_cost, prompt, params, result_ids, error, created_at, updated_at, worker_finished_at, raw)
+		values ($1,$2,nullif($3,''),nullif($4,''),$5,nullif($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,$18,$19,$20,$21::jsonb)
+		on conflict (id) do update set user_id=excluded.user_id, tenant_id=excluded.tenant_id, organization_id=excluded.organization_id, billing_account_type=excluded.billing_account_type, billing_account_id=excluded.billing_account_id, module_code=excluded.module_code, type=excluded.type, model=excluded.model, billing_type=excluded.billing_type, status=excluded.status, progress=excluded.progress, point_cost=excluded.point_cost, prompt=excluded.prompt, params=excluded.params, result_ids=excluded.result_ids, error=excluded.error, created_at=excluded.created_at, updated_at=excluded.updated_at, worker_finished_at=excluded.worker_finished_at, raw=excluded.raw
+	`, item.ID, item.UserID, item.TenantID, item.OrganizationID, firstNonEmptyString(item.BillingAccountType, contextPersonal), item.BillingAccountID, item.ModuleCode, item.Type, item.Model, item.BillingType, item.Status, item.Progress, item.PointCost, item.Prompt, jsonProjection(item.Params), jsonProjection(item.ResultIDs), jsonProjection(item.Error), item.CreatedAt, item.UpdatedAt, item.WorkerFinishedAt, jsonProjection(item))
 	return err
 }
 
@@ -4212,10 +4580,10 @@ func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (genera
 
 func insertAsset(ctx context.Context, tx *sql.Tx, item asset) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_assets (id, user_id, task_id, name, media_type, url, thumbnail_url, favorite, metadata, deleted_at, created_at, updated_at, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13::jsonb)
-		on conflict (id) do update set user_id=excluded.user_id, task_id=excluded.task_id, name=excluded.name, media_type=excluded.media_type, url=excluded.url, thumbnail_url=excluded.thumbnail_url, favorite=excluded.favorite, metadata=excluded.metadata, deleted_at=excluded.deleted_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
-	`, item.ID, item.UserID, item.TaskID, item.Name, item.MediaType, item.URL, item.ThumbnailURL, item.Favorite, jsonProjection(item.Metadata), nullableSQLString(item.DeletedAt), item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		insert into xz_assets (id, user_id, tenant_id, organization_id, task_id, name, media_type, url, thumbnail_url, favorite, metadata, deleted_at, created_at, updated_at, raw)
+		values ($1,$2,nullif($3,''),nullif($4,''),$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15::jsonb)
+		on conflict (id) do update set user_id=excluded.user_id, tenant_id=excluded.tenant_id, organization_id=excluded.organization_id, task_id=excluded.task_id, name=excluded.name, media_type=excluded.media_type, url=excluded.url, thumbnail_url=excluded.thumbnail_url, favorite=excluded.favorite, metadata=excluded.metadata, deleted_at=excluded.deleted_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
+	`, item.ID, item.UserID, item.TenantID, item.OrganizationID, item.TaskID, item.Name, item.MediaType, item.URL, item.ThumbnailURL, item.Favorite, jsonProjection(item.Metadata), nullableSQLString(item.DeletedAt), item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 	return err
 }
 
@@ -4612,8 +4980,25 @@ func billingEventForTaskMetricTx(ctx context.Context, tx *sql.Tx, taskID string,
 
 func getOrderForUpdate(ctx context.Context, tx *sql.Tx, id string) (adminOrder, error) {
 	var item adminOrder
-	err := tx.QueryRowContext(ctx, `select raw from xz_orders where id = $1 for update`, id).Scan(rawScanner(&item))
+	err := tx.QueryRowContext(ctx, `select raw,coalesce(tenant_id,'') from xz_orders where id = $1 for update`, id).Scan(rawScanner(&item), &item.TenantID)
 	return item, err
+}
+
+func currentEnterpriseTenantForOrderTx(ctx context.Context, tx *sql.Tx, userID string) (string, error) {
+	var tenantID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT role_context.tenant_id
+		FROM xz_user_role_context role_context
+		JOIN xz_tenants tenant ON tenant.id=role_context.tenant_id AND tenant.tenant_type='ENTERPRISE'
+		JOIN xz_tenant_members member ON member.tenant_id=role_context.tenant_id AND member.user_id=role_context.user_id
+		WHERE role_context.user_id=$1 AND upper(role_context.context_type)='ENTERPRISE'
+		  AND upper(coalesce(nullif(member.member_status,''),member.status,'ACTIVE'))='ACTIVE'
+		LIMIT 1
+	`, userID).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return tenantID, err
 }
 
 func getWithdrawalForUpdate(ctx context.Context, tx *sql.Tx, id string) (adminWithdrawal, error) {
@@ -4684,8 +5069,23 @@ func ensureMarketingSchema(ctx context.Context, db *sql.DB) error {
 		create table if not exists xz_marketing_upgrade_plans (id text primary key, from_role text not null, to_role text not null, price_cents bigint not null default 0, condition_type text not null default 'PAID', status text not null default 'ACTIVE', metadata jsonb not null default '{}'::jsonb, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
 		create table if not exists xz_marketing_upgrade_records (id text primary key, user_id text not null, from_role text not null, to_role text not null, order_id text, amount_cents bigint not null default 0, status text not null default 'PENDING', metadata jsonb not null default '{}'::jsonb, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
 		create table if not exists xz_marketing_commission_rules (id text primary key, name text not null, order_type text not null default 'UPGRADE', earner_role text not null, relation_depth int not null default 1, fixed_amount_cents bigint not null default 0, rate numeric not null default 0, max_total_rate numeric not null default 0, status text not null default 'ACTIVE', metadata jsonb not null default '{}'::jsonb, created_at timestamptz not null default now(), updated_at timestamptz not null default now());
+		alter table if exists xz_marketing_invite_records
+			add column if not exists tenant_id text not null default 'tenant_default',
+			add column if not exists visitor_id text,
+			add column if not exists visitor_name text,
+			add column if not exists masked_mobile text,
+			add column if not exists status text not null default 'visited',
+			add column if not exists template_id text not null default 'poster.brand.simple',
+			add column if not exists activity_id text,
+			add column if not exists visit_time timestamptz,
+			add column if not exists register_time timestamptz,
+			add column if not exists paid_time timestamptz,
+			add column if not exists reward_amount_cents bigint not null default 0,
+			add column if not exists reward_status text not null default 'PENDING';
 		create index if not exists idx_xz_marketing_org_descendant on xz_marketing_org_relations(descendant_user_id, depth);
 		create index if not exists idx_xz_marketing_invite_records_inviter on xz_marketing_invite_records(inviter_user_id, created_at desc);
+		create index if not exists idx_xz_marketing_invite_records_tenant_inviter on xz_marketing_invite_records(tenant_id, inviter_user_id, created_at desc);
+		create unique index if not exists idx_xz_marketing_invite_records_visit_id on xz_marketing_invite_records(id);
 		create index if not exists idx_xz_marketing_wallet_records_user on xz_marketing_wallet_records(user_id, created_at desc);
 	`)
 	return err

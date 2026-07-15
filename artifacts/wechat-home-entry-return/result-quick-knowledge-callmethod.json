@@ -1,0 +1,14 @@
+{
+  "startedAt": "2026-07-14T10:02:06.997Z",
+  "filter": "quick.knowledge",
+  "rows": [],
+  "failures": [
+    {
+      "id": "quick.knowledge",
+      "message": "expected pages/user/UserHomePage, current pages/user/UserAgentCreationPage"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T10:03:22.012Z",
+  "passed": false
+}

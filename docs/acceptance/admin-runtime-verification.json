@@ -1,0 +1,1625 @@
+{
+  "generatedAt": "2026-07-13T11:09:36.935Z",
+  "baseURL": "http://127.0.0.1:3100",
+  "admin": {
+    "modules": [
+      {
+        "title": "分析页",
+        "active": true,
+        "contentLength": 143,
+        "contentPreview": "新增客户 13 待处理任务 326 成交金额 344700 生成总量 196 用户访问来源 客户、渠道与推广来源 直接访问 套餐营销 代理推广 视频投放 搜索引擎 来源 每周生成任务活跃量 任务提交与完成趋势 周一 周二 周三 周四 周五 周六 周日 每月销售额 / 积分消耗趋势 实时",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "工作台",
+        "active": true,
+        "contentLength": 323,
+        "contentPreview": "API ONLINE 欢迎回来，平台管理员 今日重点关注客户余额、上游模型连通性、待支付订单和渠道启停状态。 平台健康度 98.6% 数据同步正常 快捷入口 高频运营动作 打开营销端 查看邀请、升级、分佣和钱包闭环 检查客户余额 处理套餐、点数和账号状态 维护代理网络 新增代理商或调整启停状态 校验上游模型 确认 API Key、Base URL 和模型可用",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "数据中心",
+        "active": true,
+        "contentLength": 339,
+        "contentPreview": "运营驾驶舱 数据中心 汇总客户、订单、渠道、用量和上游服务状态，帮助主控端快速判断平台健康度。 刷新数据 收入 344700 交易与收款口径 成本 68868 当前模块统计 利润 275832 当前模块统计 客户 13 客户运营口径 订单 23 交易与收款口径 已收款订单 9 交易与收款口径 渠道 2 渠道增长口径 总用量 196 当前模块统计 经营概览 实",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "客户中心",
+        "active": true,
+        "contentLength": 1270,
+        "contentPreview": "客户资产 客户中心 管理客户账号、套餐、点数、状态和角色，支撑 SaaS 客户全生命周期运营。 新建客户 刷新数据 记录数 13 当前模块统计 客户中心 13 条记录 新建客户 全部 启用 待处理 停用 名称 邮箱 来源渠道 来源邀请码 渠道等级 上级代理 套餐 余额 模型路由 Key 状态 状态 操作 平台管理员 admin@xianzhi.ai 未归因 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "产品中心",
+        "active": true,
+        "contentLength": 216,
+        "contentPreview": "产品矩阵 产品中心 配置 AI 产品能力、权益和状态，让移动端与管理后台共享统一商品口径。 刷新数据 记录数 5 当前模块统计 产品中心 5 条记录 全部 启用 待处理 停用 名称 类型 状态 用量 操作 文生图 TEXT_TO_IMAGE 启用 196 编辑 API 中转 API 启用 196 编辑 Agent AGENT 启用 0 编辑 GEO GEO ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "套餐中心",
+        "active": true,
+        "contentLength": 817,
+        "contentPreview": "商业套餐 套餐中心 维护套餐价格、赠送点数、并发和有效期，作为订单与权益结算基础。 刷新数据 记录数 20 当前模块统计 套餐中心 20 条记录 全部 启用 待处理 停用 名称 价格 权益点数 durationDays concurrency active 操作 企业版 ￥0.00 0 365 0 是 保存价格 体验版 ￥0.00 100 7 1 是 保存价",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "订单中心",
+        "active": true,
+        "contentLength": 2848,
+        "contentPreview": "交易履约 订单中心 跟踪订单、收款、续费和权益发放，关键动作由后端事务保证一致性。 新建订单 刷新数据 记录数 23 当前模块统计 订单中心 23 条记录 新建订单 全部 启用 待处理 停用 ID 客户 订单类型 套餐 付款方式 金额 tokenGrantAmount platformIncomeCents fulfillmentStatus 状态 创建时间",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "Token 流水",
+        "active": true,
+        "contentLength": 258,
+        "contentPreview": "Token 流水 Token 流水 审计会员套餐、代理开通和充值产生的 Token/点数发放记录。 刷新数据 记录数 2 当前模块统计 Token 流水 2 条记录 全部 启用 待处理 停用 user 订单 ID changeType amount 扣后点数 remark 创建时间 演示用户 order_000014 MEMBER_PACKAGE_GRANT",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "能力模块",
+        "active": true,
+        "contentLength": 936,
+        "contentPreview": "AI Capability Center AI 能力中心 统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。 刷新配置 上游 API 能力模块 3 生图 / 视频 / PPT 模型配置 8 按 module_code 绑定 参数 Schem",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "模型管理",
+        "active": true,
+        "contentLength": 1166,
+        "contentPreview": "AI Capability Center AI 能力中心 统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。 刷新配置 上游 API 能力模块 3 生图 / 视频 / PPT 模型配置 8 按 module_code 绑定 参数 Schem",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "参数 Schema",
+        "active": true,
+        "contentLength": 1328,
+        "contentPreview": "AI Capability Center AI 能力中心 统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。 刷新配置 上游 API 能力模块 3 生图 / 视频 / PPT 模型配置 8 按 module_code 绑定 参数 Schem",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "租户限制",
+        "active": true,
+        "contentLength": 950,
+        "contentPreview": "AI Capability Center AI 能力中心 统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。 刷新配置 上游 API 能力模块 3 生图 / 视频 / PPT 模型配置 8 按 module_code 绑定 参数 Schem",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "上游通道",
+        "active": true,
+        "contentLength": 1526,
+        "contentPreview": "AI Capability Center AI 能力中心 统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。 刷新配置 上游 API 能力模块 3 生图 / 视频 / PPT 模型配置 8 按 module_code 绑定 参数 Schem",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "调用日志",
+        "active": true,
+        "contentLength": 17359,
+        "contentPreview": "AI Capability Center AI 能力中心 统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。 刷新配置 上游 API 能力模块 3 生图 / 视频 / PPT 模型配置 8 按 module_code 绑定 参数 Schem",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "知识库中心",
+        "active": true,
+        "contentLength": 531,
+        "contentPreview": "Knowledge Operations 知识库管理中心 统一观察多租户知识库、解析索引、检索问答、模型配置与 Token 消耗。 租户 ID 刷新数据 租户 2 已纳入知识治理 知识库 1 0 份文档 Chunk 0 0 份已就绪 RAG 问答 0 0 次完成 Token 0 0 点消耗 KB 知识库管理 空间、类型与状态 DOC 文档管理 文件与解析状态",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "素材中心",
+        "active": true,
+        "contentLength": 1292,
+        "contentPreview": "运营素材 素材中心 运营图片独立存储，通过素材位发布到小程序，无需重新发版。 新建分类 批量上传 素材分类 全部素材 27 首页 Hero 平台 首页快捷入口 平台 AI 创作能力 平台 AI 员工头像 平台 创作模板 平台 作品封面 平台 用户头像 平台 Banner 平台 Logo 平台 默认占位图 平台 系统图标 平台 节日活动 平台 宣传素材 平台 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "页面装修",
+        "active": true,
+        "contentLength": 1219,
+        "contentPreview": "可视化装修 页面装修 租户配置覆盖平台默认素材位，发布后自动刷新小程序页面缓存。 版本记录 保存草稿 发布页面 首页 创作 作品 我的 页面模块 拖动素材位调整顺序 主视觉 首页主视觉背景 home.hero.background 首页主视觉插画 home.hero.illustration 快捷入口 快捷入口-海报 home.quick.poster 快捷",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "首页配置",
+        "active": true,
+        "contentLength": 1219,
+        "contentPreview": "可视化装修 页面装修 租户配置覆盖平台默认素材位，发布后自动刷新小程序页面缓存。 版本记录 保存草稿 发布页面 首页 创作 作品 我的 页面模块 拖动素材位调整顺序 主视觉 首页主视觉背景 home.hero.background 首页主视觉插画 home.hero.illustration 快捷入口 快捷入口-海报 home.quick.poster 快捷",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "创作页配置",
+        "active": true,
+        "contentLength": 627,
+        "contentPreview": "可视化装修 页面装修 租户配置覆盖平台默认素材位，发布后自动刷新小程序页面缓存。 版本记录 保存草稿 发布页面 首页 创作 作品 我的 页面模块 拖动素材位调整顺序 Banner 创作页 Hero 插画 studio.hero.illustration 创作模板 模板-新品发布 studio.template.new_product 模板-招商方案 stud",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "作品页配置",
+        "active": true,
+        "contentLength": 395,
+        "contentPreview": "可视化装修 页面装修 租户配置覆盖平台默认素材位，发布后自动刷新小程序页面缓存。 版本记录 保存草稿 发布页面 首页 创作 作品 我的 页面模块 拖动素材位调整顺序 默认封面 默认图片封面 assets.cover.image 默认视频封面 assets.cover.video 默认PPT封面 assets.cover.ppt 默认长图封面 assets.c",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "我的页配置",
+        "active": true,
+        "contentLength": 289,
+        "contentPreview": "可视化装修 页面装修 租户配置覆盖平台默认素材位，发布后自动刷新小程序页面缓存。 版本记录 保存草稿 发布页面 首页 创作 作品 我的 页面模块 拖动素材位调整顺序 头部 默认用户头像 profile.avatar 我的页头图 profile.header_background 会员区 会员卡背景 profile.member_background 我的 •",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "素材分类",
+        "active": true,
+        "contentLength": 1292,
+        "contentPreview": "运营素材 素材中心 运营图片独立存储，通过素材位发布到小程序，无需重新发版。 新建分类 批量上传 素材分类 全部素材 27 首页 Hero 平台 首页快捷入口 平台 AI 创作能力 平台 AI 员工头像 平台 创作模板 平台 作品封面 平台 用户头像 平台 Banner 平台 Logo 平台 默认占位图 平台 系统图标 平台 节日活动 平台 宣传素材 平台 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "营销端总览",
+        "active": true,
+        "contentLength": 579,
+        "contentPreview": "营销闭环 营销端总览 对照运营中心营销端 P0 范围，聚合邀请、升级、分佣、钱包和权限风险。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 营销端总览 8 条记录 全部 启用 待处理 停用 module p0 ready ri",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "代理等级",
+        "active": true,
+        "contentLength": 611,
+        "contentPreview": "代理等级 代理等级 维护 L0-L5 身份、开通方式、权限边界、返佣建议和升级保级条件。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 代理等级 6 条记录 全部 启用 待处理 停用 编码 名称 身份 开通方式 开通条件 保级",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "邀请记录",
+        "active": true,
+        "contentLength": 679,
+        "contentPreview": "邀请转化 邀请记录 追踪邀请人、被邀请人、邀请码、注册、充值和升级状态，支撑扫码裂变。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 邀请记录 5 条记录 全部 启用 待处理 停用 创建时间 ID 邀请码 invitee in",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "分佣规则",
+        "active": true,
+        "contentLength": 3012,
+        "contentPreview": "分佣规则 分佣规则 沉淀直推、间推、运营中心奖励、算力充值分成等可审计规则。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 分佣规则 23 条记录 全部 启用 待处理 停用 earnerRole fixedAmountCent",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "升级方案",
+        "active": true,
+        "contentLength": 1073,
+        "contentPreview": "升级路径 升级方案 维护普通用户、代理和运营中心之间的升级价格、条件和周期口径。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 升级方案 5 条记录 全部 启用 待处理 停用 conditionType 结算/有效期 from",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "营销钱包",
+        "active": true,
+        "contentLength": 323,
+        "contentPreview": "佣金钱包 营销钱包 按代理汇总佣金收入、提现冻结、可提现余额和邀请入口。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 营销钱包 2 条记录 全部 启用 待处理 停用 名称 角色 等级 钱包余额 冻结金额 累计入账 pendi",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "钱包流水",
+        "active": true,
+        "contentLength": 7037,
+        "contentPreview": "钱包流水 钱包流水 按佣金入账和提现冻结展示每笔资金变化，帮助财务核对来源和状态。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 钱包流水 60 条记录 全部 启用 待处理 停用 代理商 业务类型 业务 ID 订单 ID 金额",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "月度结算单",
+        "active": true,
+        "contentLength": 389,
+        "contentPreview": "月度结算 月度结算单 按代理和月份聚合已结算佣金、提现和待结算金额，形成打款前核对口径。 刷新数据 代理账号 2 渠道增长口径 代理等级 6 渠道增长口径 邀请记录 5 当前模块统计 升级方案 5 当前模块统计 分佣规则 23 当前模块统计 钱包账户 2 当前模块统计 月度结算单 3 条记录 全部 启用 待处理 停用 代理商 结算月份 佣金 提现金额 应打款",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "计费驾驶舱",
+        "active": true,
+        "contentLength": 1270,
+        "contentPreview": "Lago-style Billing 计费驾驶舱 汇总 MRR、按量收入、待开票、逾期账单和计费流程状态，形成老板与财务共用视角。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "客户计费",
+        "active": true,
+        "contentLength": 1734,
+        "contentPreview": "Lago-style Billing 客户计费 聚合客户档案、当前订阅、预付余额、开票资料、付款方式和账单历史。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "套餐产品",
+        "active": true,
+        "contentLength": 14641,
+        "contentPreview": "Lago-style Billing 套餐产品 把文生图、AI API、Agent、GEO 和代运营拆成可收费产品、指标和权益。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 1",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "订阅管理",
+        "active": true,
+        "contentLength": 1793,
+        "contentPreview": "Lago-style Billing 订阅管理 管理试用、活跃、欠费、暂停、取消和续费周期，保留价格与权益快照。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "计量事件",
+        "active": true,
+        "contentLength": 2881,
+        "contentPreview": "Lago-style Billing 计量事件 查看 API、图片、Agent、GEO 的幂等计量事件，为按量计费和审计提供来源。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "计量指标",
+        "active": true,
+        "contentLength": 2048,
+        "contentPreview": "Lago-style Billing 计量指标 参照 Lago 的 BillableMetric，定义用量事件如何按 count、sum、volume 等方式聚合。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥585",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "计费规则",
+        "active": true,
+        "contentLength": 8231,
+        "contentPreview": "Lago-style Billing 计费规则 参照 Lago 的 Charge，配置套餐上的 standard、package、graduated、volume 等计费模型和税费。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "费用明细",
+        "active": true,
+        "contentLength": 2022,
+        "contentPreview": "Lago-style Billing 费用明细 参照 Lago 的 Fee，把订阅费、按量费、固定费、抵扣费拆成可审计的费用明细。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "钱包预付",
+        "active": true,
+        "contentLength": 2031,
+        "contentPreview": "Lago-style Billing 钱包预付 管理客户预付钱包、点数余额、充值下限、消费目标指标和支付方式要求。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "优惠券",
+        "active": true,
+        "contentLength": 1037,
+        "contentPreview": "Lago-style Billing 优惠券 维护固定金额、百分比、一次性和周期性优惠券，并绑定套餐、指标或客户分组。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 REA",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "账单发票",
+        "active": true,
+        "contentLength": 2558,
+        "contentPreview": "Lago-style Billing 账单发票 跟踪账单运行批次、账单明细、支付状态、开票状态和待处理金额。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY 订阅",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "贷项红冲",
+        "active": true,
+        "contentLength": 1615,
+        "contentPreview": "Lago-style Billing 贷项红冲 处理账单冲销、退款、抵扣和贷项余额，形成财务调整闭环。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY 订阅生效 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "付款请求",
+        "active": true,
+        "contentLength": 1909,
+        "contentPreview": "Lago-style Billing 付款请求 把多张待付账单聚合为付款请求，支持催收活动、到期日和支付状态跟踪。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "支付催收",
+        "active": true,
+        "contentLength": 1628,
+        "contentPreview": "Lago-style Billing 支付催收 管理支付通道、线下收款确认、失败重试和逾期催收动作。 刷新计费数据 运行账单 MRR ￥112.00 当前模块统计 本月用量收入 ￥289.80 交易与收款口径 待开票 ￥5527.00 当前模块统计 逾期账单 5 当前模块统计 钱包余额 ￥5853.30 当前模块统计 客户档案 12 READY 订阅生效 1",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "代理商中心",
+        "active": true,
+        "contentLength": 286,
+        "contentPreview": "渠道网络 代理商中心 维护 L1-L5 代理商、邀请码和启停状态，承接代理分销体系。 新增代理商 刷新数据 记录数 2 当前模块统计 代理商中心 2 条记录 新增代理商 全部 启用 待处理 停用 名称 邮箱 代理商等级 身份 开通条件 保级条件 邀请码 operationCenterId 状态 操作 华东一级代理 agent1@xianzhi.ai L1 推",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "运营中心",
+        "active": true,
+        "contentLength": 201,
+        "contentPreview": "运营中心 运营中心 查看运营中心身份、代理归属、开通订单和区域分润汇总。 刷新数据 记录数 1 当前模块统计 运营中心 1 条记录 全部 启用 待处理 停用 名称 owner region 邀请码 状态 joinOrderId joinFeeCents approvedAt 华东运营中心 华东运营中心 华东 OC-EAST 启用 ￥0.00 2026-07-",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "用量中心",
+        "active": true,
+        "contentLength": 216,
+        "contentPreview": "消耗分析 用量中心 查看模型、素材、生成任务等使用量，为成本和定价提供依据。 刷新数据 agentChats 0 当前模块统计 apiCalls 196 当前模块统计 assets 155 当前模块统计 geoTasks 0 当前模块统计 用量中心 3 条记录 全部 启用 待处理 停用 产品 指标 用量 成本 API/文生图 生成任务 118 ￥96.60 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "分润中心",
+        "active": true,
+        "contentLength": 4349,
+        "contentPreview": "结算中心 分润中心 处理代理分润、提现审核和结算状态，形成渠道财务闭环。 登记分润 申请提现 刷新数据 agents 2 当前模块统计 pendingWithdrawalCents 0 当前模块统计 totalCents 66516 当前模块统计 withdrawals 3 当前模块统计 分润中心 60 条记录 登记分润 申请提现 全部 启用 待处理 停用 ",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "分润明细",
+        "active": true,
+        "contentLength": 2638,
+        "contentPreview": "分润明细 分润明细 按接收方拆解代理、运营中心与平台收入，核对固定分润规则结果。 刷新数据 agentCents 36916 当前模块统计 operationCenterCents 0 当前模块统计 pendingCents 36916 当前模块统计 platformCents 29600 当前模块统计 records 57 当前模块统计 totalCent",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "API 设置",
+        "active": true,
+        "contentLength": 1321,
+        "contentPreview": "API 设置 管理平台地址、模型列表和 Key。 Key 写入后端 env，页面不会回显完整内容。 已拉取 11 个模型 · 点「选择模型」勾选要导入的 · 已识别方舟协议，火山聊天建议改填 EP-... 接入点 平台列表 ModelScope RunningHub 火山引擎 :: grok-video https://sub.xlcsh.top OPENA",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "系统中心",
+        "active": true,
+        "contentLength": 4426,
+        "contentPreview": "系统治理 系统中心 沉淀品牌、密钥、模型、审计和运维配置，避免继续依赖临时聚合结构。 品牌域名 NewAPI 管理 导入推荐平台 新增上游 新增 API Key 刷新数据 记录数 40 当前模块统计 系统中心 40 条记录 品牌域名 NewAPI 管理 导入推荐平台 新增上游 新增 API Key 全部 启用 待处理 停用 类型 项目 内容 密钥 状态 品牌",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "部门管理",
+        "active": true,
+        "contentLength": 85,
+        "contentPreview": "组织权限 部门管理 维护主控后台部门结构，为账号权限和操作审计提供组织归属。 刷新数据 记录数 0 当前模块统计 部门管理 0 条记录 全部 启用 待处理 停用 暂无记录",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "用户管理",
+        "active": true,
+        "contentLength": 983,
+        "contentPreview": "账号权限 用户管理 管理平台账号、角色、状态和联系方式，对齐 RBAC 权限治理入口。 新增用户 刷新数据 记录数 13 当前模块统计 用户管理 13 条记录 新增用户 全部 启用 待处理 停用 名称 邮箱 角色 套餐 余额 状态 操作 平台管理员 admin@xianzhi.ai SUPER_ADMIN 体验版 100000 启用 编辑 同步 NewAPI",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      },
+      {
+        "title": "菜单管理",
+        "active": true,
+        "contentLength": 91,
+        "contentPreview": "菜单权限 菜单管理 维护后台菜单入口、模块可见性和权限点，支撑主控 SaaS 权限配置。 刷新数据 记录数 0 当前模块统计 菜单管理 0 条记录 全部 启用 待处理 停用 暂无记录",
+        "alert": "",
+        "passed": true,
+        "apiErrors": [],
+        "pageErrors": []
+      }
+    ],
+    "checks": [
+      {
+        "name": "全局搜索模块并跳转",
+        "passed": true
+      },
+      {
+        "name": "搜索当前模块记录并打开",
+        "passed": true,
+        "keyword": "平台管理员"
+      }
+    ]
+  },
+  "user": {
+    "modules": [
+      {
+        "title": "平台首页",
+        "path": "/app",
+        "active": true,
+        "contentLength": 632,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "AI 生图",
+        "path": "/app/ai-image",
+        "active": true,
+        "contentLength": 91,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "视频生成",
+        "path": "/app/video-generation",
+        "active": true,
+        "contentLength": 394,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "无限画布",
+        "path": "/app/wireless-canvas",
+        "active": true,
+        "contentLength": 200,
+        "embeddedReady": true,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "PPT 文档生成",
+        "path": "/app/ppt-generation",
+        "active": true,
+        "contentLength": 349,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "智能体中心",
+        "path": "/app/agents",
+        "active": true,
+        "contentLength": 1289,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "作品中心",
+        "path": "/app/works",
+        "active": true,
+        "contentLength": 224,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "身份充值订阅",
+        "path": "/app/membership",
+        "active": true,
+        "contentLength": 496,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "使用记录",
+        "path": "/app/usage",
+        "active": true,
+        "contentLength": 9298,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      },
+      {
+        "title": "订单明细",
+        "path": "/app/orders",
+        "active": true,
+        "contentLength": 1037,
+        "embeddedReady": false,
+        "apiErrors": [],
+        "pageErrors": [],
+        "passed": true
+      }
+    ],
+    "checks": [
+      {
+        "name": "智能体中心标签切换",
+        "passed": true,
+        "count": 3
+      },
+      {
+        "name": "智能体搜索",
+        "passed": true,
+        "beforeRows": 8,
+        "afterRows": 1
+      },
+      {
+        "name": "智能体类型筛选",
+        "passed": true,
+        "options": [
+          "全部类型",
+          "文档工具",
+          "知识库",
+          "销售助手",
+          "客服助手",
+          "招商助手",
+          "SOP 助手",
+          "表单助手",
+          "API 助手"
+        ]
+      },
+      {
+        "name": "智能体收藏",
+        "passed": true
+      },
+      {
+        "name": "复制智能体配置",
+        "passed": true
+      },
+      {
+        "name": "编辑智能体进入工作台",
+        "passed": true
+      },
+      {
+        "name": "AI 生图参考图上传",
+        "passed": true,
+        "errorText": "",
+        "apiErrors": []
+      },
+      {
+        "name": "PPT 页数选择器",
+        "passed": true
+      },
+      {
+        "name": "PPT 固定导出格式非伪按钮",
+        "passed": true,
+        "runtimeStage": "首页未生成演示文稿时导出区不渲染"
+      },
+      {
+        "name": "PPT 排序手柄非伪按钮",
+        "passed": true,
+        "runtimeStage": "首页未生成大纲时排序区不渲染"
+      }
+    ]
+  },
+  "apiResponses": [
+    {
+      "surface": "admin",
+      "scope": "login:/admin/",
+      "method": "POST",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/auth/login"
+    },
+    {
+      "surface": "admin",
+      "scope": "login:/admin/",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/auth/me"
+    },
+    {
+      "surface": "admin",
+      "scope": "login:/admin/",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:客户中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:客户中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/customers"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:客户中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:产品中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:产品中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/products"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:套餐中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/plans"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:订单中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/orders"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:Token 流水",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/token-records"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:能力模块",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/ai/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:调用日志",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/ai/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:知识库中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/ai/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:知识库中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/knowledge/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:知识库中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/knowledge/bases?limit=200"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=24&q=&categoryId=&status="
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/c84c67a65f1bd01b5f31829fe19ee7ca.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/83f84214917dd08afaeb4b1f8ac03925.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/2332f54691789aaee2ef47637895df33.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/bcd52cae714d7e0fc4cb755bd7361433.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/4141156237c8dad5f5f3fc41db4a4b90.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/b17bad4f0e37c5d5285c993f60d91f5f.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/b2bec0479cfb6bdf7ae7ca047734eab5.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/5b68c8ef204d0a4155aad60bf9df3ade.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/8cfe8e53e7168d48fad5a247f1169931.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_logo/2026/07/a051abf12e18d2c45de77bb3b662d8d8.jpg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/media_cat_banner/2026/07/5cdf18ecb2201e65ff86da706cb5cab9.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/fa5290610ed2d762666692ce92722c9f.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/ai/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/page-configs/home"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=60&q=&categoryId=&status=ACTIVE"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/ab7116ca6ca983044ca54795a7db1d3d.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/d5e2accc314177b5bd530256968ea4a4.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/0e665a6accd15c8b4cf18d04a1c573bf.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/a30a5231ec5cd2e5d3625cb4daeab88e.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/b22db2ef6f43777c02daa4063c7addb3.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/1f7ed9aed73221fd29a36552ffcc4c96.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/8c308de00fc5f8399df24be5cab3270d.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/cd8bd65504ab3f7e1a603b106053ec6a.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/dad3d786ade258e85ebab85260590213.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/7866f1116dcc7393d1aa30fcf3fad519.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/f2f0a02228d61218148c460d04ef57e8.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/bea991e62bcc86d005638c875325858c.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/b56e5445ad5fd01e81d98dd2f9b00e13.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/5aadc459ae592db840969997ad9cfa81.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:页面装修",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/media/files/tenant/default/demo/d1a268f6303c87de7db2b8535564e9d0.svg"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:首页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:首页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/page-configs/home"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:首页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=60&q=&categoryId=&status=ACTIVE"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:创作页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:创作页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=60&q=&categoryId=&status=ACTIVE"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:创作页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/page-configs/studio"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:作品页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:作品页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/page-configs/assets"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:作品页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=60&q=&categoryId=&status=ACTIVE"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:我的页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:我的页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=60&q=&categoryId=&status=ACTIVE"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:我的页配置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/page-configs/profile"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材分类",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/categories"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材分类",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/media/assets?page=1&pageSize=24&q=&categoryId=&status="
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:素材分类",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/ai/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:营销端总览",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/ai/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:营销端总览",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:代理等级",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/agent-levels"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:邀请记录",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/invite-records"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:分佣规则",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/commission-rules"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:升级方案",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/upgrade-plans"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:营销钱包",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/wallets"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:钱包流水",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/wallet-records"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:月度结算单",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/marketing/settlement-statements"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:计费驾驶舱",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/overview"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:客户计费",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/customers"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:套餐产品",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/products"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:订阅管理",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/subscriptions"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:计量事件",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/events"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:计量指标",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/billable-metrics"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:计费规则",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/charges"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:费用明细",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/fees"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:钱包预付",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/wallets"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:优惠券",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/coupons"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:账单发票",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/invoices"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:贷项红冲",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/credit-notes"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:付款请求",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/payment-requests"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:支付催收",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/billing/payments"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:代理商中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/channel-agents/tree"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:运营中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/operation-centers"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:用量中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/usage"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:分润中心",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/commissions"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:分润明细",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/commission-records"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-module:API 设置",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/system/settings"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/system/settings"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/customers"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/system/settings"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/customers"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/api/provider-channels"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/system/settings"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/customers"
+    },
+    {
+      "surface": "admin",
+      "scope": "admin-check:global-search",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/admin/newapi/groups"
+    },
+    {
+      "surface": "user",
+      "scope": "login:/app",
+      "method": "POST",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/auth/login"
+    },
+    {
+      "surface": "user",
+      "scope": "login:/app",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/auth/me"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:平台首页",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/points/account"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:平台首页",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/officecli/status"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:平台首页",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/dashboard"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:平台首页",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/dashboard"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:视频生成",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/online-image"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:无限画布",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/online-image"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:无限画布",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/canvases/xianzhi-wireless-canvas"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:无限画布",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/config"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:无限画布",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/workflows"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:PPT 文档生成",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/asset-library"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:PPT 文档生成",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/online-image"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:身份充值订阅",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/online-image"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:身份充值订阅",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/member/wallet"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:身份充值订阅",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/ppt/history"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:身份充值订阅",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/ppt/models/text"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:身份充值订阅",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/ppt/models/image"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:使用记录",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/usage"
+    },
+    {
+      "surface": "user",
+      "scope": "user-check:agent-center",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/member/wallet"
+    },
+    {
+      "surface": "user",
+      "scope": "user-check:image-reference-upload",
+      "method": "POST",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/reference-images"
+    },
+    {
+      "surface": "user",
+      "scope": "user-check:image-reference-upload",
+      "method": "GET",
+      "status": 200,
+      "url": "http://127.0.0.1:3100/api/v1/user/online-image"
+    }
+  ],
+  "badResponses": [],
+  "expectedAborts": [
+    {
+      "surface": "user",
+      "scope": "user-module:PPT 文档生成",
+      "method": "GET",
+      "url": "http://127.0.0.1:3100/api/prompt-libraries",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "surface": "user",
+      "scope": "user-module:PPT 文档生成",
+      "method": "GET",
+      "url": "http://127.0.0.1:3100/api/local-assets",
+      "error": "net::ERR_ABORTED"
+    }
+  ],
+  "requestFailures": [],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "screenshots": [
+    "artifacts/admin-runtime/admin-all-modules.png",
+    "artifacts/admin-runtime/user-ppt-runtime.png"
+  ],
+  "summary": {
+    "adminModules": 54,
+    "failedAdminModules": 0,
+    "userModules": 10,
+    "failedUserModules": 0,
+    "checks": 12,
+    "failedChecks": 0,
+    "apiResponses": 123,
+    "badResponses": 0,
+    "expectedAborts": 2,
+    "requestFailures": 0,
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "passed": true
+  }
+}

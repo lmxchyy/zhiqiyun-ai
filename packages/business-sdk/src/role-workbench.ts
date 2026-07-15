@@ -12,8 +12,8 @@ export function createRoleWorkbenchSdk(api: ApiClient): BusinessSdk["roleWorkben
     wallet: () => api.request<RoleWalletResponse>("/api/v1/member/wallet"),
     pointsAccount: () => api.request<RoleWalletResponse>("/api/v1/points/account"),
     async recentAssets(limit = 8) {
-      const payload = await api.request<Asset[] | { items?: Asset[] }>("/api/v1/assets");
-      return normalizeAssets(payload).slice(0, limit);
+      const payload = await api.request<Asset[] | { items?: Asset[] }>(`/api/v1/assets?limit=${encodeURIComponent(String(limit))}`);
+      return normalizeAssets(payload);
     },
     channelCenter: () => api.request<ChannelCenterResponse>("/api/v1/channel/me"),
     operationProfile: () => api.request<OperationProfileResponse>("/api/v1/operation-center/profile"),

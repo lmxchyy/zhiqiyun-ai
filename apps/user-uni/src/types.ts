@@ -1,5 +1,6 @@
 export type {
   Asset,
+  AppRole,
   AuthResponse,
   AuthUser,
   ChannelAgent,
@@ -9,16 +10,23 @@ export type {
   ChannelOrder,
   ChannelUsageEvent,
   ChannelWithdrawal,
+  CurrentContextRequest,
+  EnterpriseContext,
+  EnterpriseContextsResponse,
+  EnterpriseDataScope,
+  EnterpriseWalletSummary,
   GenerationTask,
   ModelInfo,
   PointAccount,
   PointAccountResponse,
   ReferenceImage,
   TaskStatus,
+  UserAccessProfile,
   WorkspaceRole,
+  UserContextType,
 } from '@xianzhi/shared-types'
 
-export type MineView = 'overview' | 'agent-upgrade' | 'recharge-history' | 'usage-details' | 'identity-permissions' | 'invite-promotion'
+export type MineView = 'overview' | 'agent-upgrade' | 'recharge-history' | 'usage-details' | 'role-permissions' | 'invite-promotion'
 
 export interface MinePurchaseOption {
   kind: 'recharge' | 'agent'

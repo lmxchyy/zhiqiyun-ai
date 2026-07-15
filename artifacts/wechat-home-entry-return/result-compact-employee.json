@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-07-14T09:34:45.379Z",
+  "filter": "compact.employee",
+  "rows": [
+    {
+      "id": "compact.employee",
+      "target": "pages/user/UserAgentCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 850,
+      "homeScrollAfter": 850
+    }
+  ],
+  "failures": [],
+  "local": null,
+  "finishedAt": "2026-07-14T09:35:21.932Z",
+  "passed": true
+}

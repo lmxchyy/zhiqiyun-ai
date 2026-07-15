@@ -1,0 +1,20 @@
+[
+  {"id":"demo_ai_design","name":"AI设计封面","slotKey":"home.capability.ai_design","categoryId":"media_cat_ai_capability","from":"#6D5DFB","to":"#B76CFD"},
+  {"id":"demo_ai_video","name":"AI视频封面","slotKey":"home.capability.ai_video","categoryId":"media_cat_ai_capability","from":"#0F766E","to":"#2DD4BF"},
+  {"id":"demo_ppt","name":"PPT方案封面","slotKey":"home.capability.ppt","categoryId":"media_cat_ai_capability","from":"#7C3AED","to":"#F97316"},
+  {"id":"demo_office","name":"AI办公封面","slotKey":"home.capability.office","categoryId":"media_cat_ai_capability","from":"#2563EB","to":"#38BDF8"},
+  {"id":"demo_knowledge","name":"知识库封面","slotKey":"home.capability.knowledge","categoryId":"media_cat_ai_capability","from":"#334155","to":"#64748B"},
+  {"id":"demo_employee","name":"AI员工封面","slotKey":"home.capability.employee","categoryId":"media_cat_ai_employee","from":"#DB2777","to":"#FB7185"},
+  {"id":"demo_designer","name":"AI设计师头像","slotKey":"home.employee.designer","categoryId":"media_cat_ai_employee","from":"#7C3AED","to":"#C084FC"},
+  {"id":"demo_sales","name":"AI销售头像","slotKey":"home.employee.sales","categoryId":"media_cat_ai_employee","from":"#EA580C","to":"#FDBA74"},
+  {"id":"demo_operation","name":"AI运营头像","slotKey":"home.employee.operation","categoryId":"media_cat_ai_employee","from":"#0284C7","to":"#7DD3FC"},
+  {"id":"demo_service","name":"AI客服头像","slotKey":"home.employee.service","categoryId":"media_cat_ai_employee","from":"#059669","to":"#6EE7B7"},
+  {"id":"demo_boss","name":"老板助手头像","slotKey":"home.employee.boss","categoryId":"media_cat_ai_employee","from":"#1E293B","to":"#64748B"},
+  {"id":"demo_poster","name":"企业宣传海报","slotKey":"home.inspiration.poster","categoryId":"media_cat_promotion","from":"#DC2626","to":"#FB923C"},
+  {"id":"demo_short_video","name":"短视频模板","slotKey":"home.inspiration.video","categoryId":"media_cat_template","from":"#111827","to":"#7C3AED"},
+  {"id":"demo_pitch_ppt","name":"招商PPT","slotKey":"home.inspiration.ppt","categoryId":"media_cat_template","from":"#4F46E5","to":"#F59E0B"},
+  {"id":"demo_store","name":"门店营销","slotKey":"home.inspiration.store","categoryId":"media_cat_promotion","from":"#C2410C","to":"#FACC15"},
+  {"id":"demo_ecommerce","name":"电商主图","slotKey":"home.inspiration.ecommerce","categoryId":"media_cat_template","from":"#E11D48","to":"#FB7185"},
+  {"id":"demo_work_cover","name":"默认作品封面","slotKey":"assets.cover.image","categoryId":"media_cat_work_cover","from":"#4338CA","to":"#818CF8"},
+  {"id":"demo_avatar","name":"默认用户头像","slotKey":"profile.avatar","categoryId":"media_cat_avatar","from":"#5B21B6","to":"#C084FC"}
+]

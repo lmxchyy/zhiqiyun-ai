@@ -1,0 +1,63 @@
+{
+  "startedAt": "2026-07-14T09:26:29.760Z",
+  "filter": "featured.,secondary.,compact.",
+  "rows": [
+    {
+      "id": "featured.image",
+      "target": "pages/user/UserImageCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 618,
+      "homeScrollAfter": 618
+    },
+    {
+      "id": "featured.video",
+      "target": "pages/user/UserVideoCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 618,
+      "homeScrollAfter": 618
+    },
+    {
+      "id": "secondary.ppt",
+      "target": "pages/user/UserPptCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 778,
+      "homeScrollAfter": 778
+    },
+    {
+      "id": "secondary.office",
+      "target": "pages/user/UserInfographicCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 778,
+      "homeScrollAfter": 778
+    },
+    {
+      "id": "compact.knowledge",
+      "target": "pages/user/UserAgentCreationPage",
+      "returnType": "back",
+      "returned": "pages/user/UserHomePage",
+      "homeScrollBefore": 850,
+      "homeScrollAfter": 850
+    }
+  ],
+  "failures": [
+    {
+      "id": "compact.employee",
+      "message": "expected pages/user/UserHomePage, current pages/user/UserAgentCreationPage"
+    },
+    {
+      "id": "compact.workflow",
+      "message": "timeout"
+    },
+    {
+      "id": "compact.more",
+      "message": "timeout"
+    }
+  ],
+  "local": null,
+  "finishedAt": "2026-07-14T09:28:57.536Z",
+  "passed": false
+}

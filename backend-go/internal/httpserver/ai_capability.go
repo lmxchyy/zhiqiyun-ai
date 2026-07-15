@@ -227,6 +227,15 @@ func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
 		moduleCode = canonicalModuleCode(r.URL.Query().Get("moduleCode"))
 	}
 	modelName := strings.TrimSpace(firstNonEmptyString(r.URL.Query().Get("model_name"), r.URL.Query().Get("modelName")))
+	if authorizer, ok := a.store.(modelCallAuthorizer); ok {
+		authorization, authErr := authorizer.AuthorizeModelCall(user.ID, moduleCode)
+		if authErr != nil {
+			writeError(w, http.StatusForbidden, authErr)
+			return
+		}
+		user.TenantID = authorization.TenantID
+		user.OrganizationID = authorization.OrganizationID
+	}
 	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -390,6 +399,19 @@ func (a api) prepareGenerationRequest(data adminPlatformData, user adminUser, re
 	if req.Model == "" {
 		req.Model = defaultModelNameForModule(data, moduleCode)
 	}
+	authorization := modelCallAuthorization{
+		ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
+		UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
+	}
+	if authorizer, ok := a.store.(modelCallAuthorizer); ok {
+		resolvedAuthorization, authErr := authorizer.AuthorizeModelCall(user.ID, moduleCode)
+		if authErr != nil {
+			return req, authErr
+		}
+		authorization = resolvedAuthorization
+	}
+	user.TenantID = authorization.TenantID
+	user.OrganizationID = authorization.OrganizationID
 	normalizeRequestParamAliases(&req)
 	resolved, err := resolveModuleSchema(data, user, moduleCode, req.Model)
 	if err != nil {
@@ -404,7 +426,11 @@ func (a api) prepareGenerationRequest(data adminPlatformData, user adminUser, re
 	req.Params["billing_type"] = resolved.BillingRule.BillingType
 	req.Params["final_schema_snapshot"] = map[string]any{"fields": resolved.FinalSchema.Fields}
 	req.Params["limit_snapshot"] = resolved.Limit.LimitJSON
-	req.Params["tenant_id"] = effectiveTenantID(user)
+	req.Params["tenant_id"] = authorization.TenantID
+	req.Params["organization_id"] = authorization.OrganizationID
+	req.Params["billing_scope"] = authorization.BillingScope
+	req.Params["billing_account_id"] = authorization.BillingAccountID
+	req.Params["authorized_role"] = authorization.Role
 	req.Params["agent_id"] = effectiveAgentID(data, user)
 	req.Params["package_id"] = user.PlanID
 	return req, nil
@@ -698,6 +724,9 @@ func applyGenerationTaskCapabilitySnapshot(task *generationTask, req createGener
 	task.ModuleCode = moduleCode
 	task.BillingType = firstNonEmptyString(stringValue(req.Params["billing_type"]), rule.BillingType)
 	task.TenantID = stringValue(req.Params["tenant_id"])
+	task.OrganizationID = stringValue(req.Params["organization_id"])
+	task.BillingAccountType = firstNonEmptyString(stringValue(req.Params["billing_scope"]), contextPersonal)
+	task.BillingAccountID = firstNonEmptyString(stringValue(req.Params["billing_account_id"]), task.UserID)
 	task.AgentID = stringValue(req.Params["agent_id"])
 	task.OperationCenterID = stringValue(req.Params["operation_center_id"])
 	task.FinalSchemaSnapshot, _ = mapValue(req.Params["final_schema_snapshot"])
@@ -1049,7 +1078,7 @@ func normalizeBillingRuleAliases(rule adminBillingRule) adminBillingRule {
 func allowedGenerationInternalParam(key string) bool {
 	switch key {
 	case "module_code", "moduleCode", "model_name", "modelName", "count", "provider", "providerName", "providerTask",
-		"modelRouteId", "modelGroup", "modelApiKeyId", "billing_type", "tenant_id", "agent_id", "package_id", "operation_center_id",
+		"modelRouteId", "modelGroup", "modelApiKeyId", "billing_type", "tenant_id", "organization_id", "billing_scope", "billing_account_id", "authorized_role", "billing_ledger_id", "billing_reserved", "agent_id", "package_id", "operation_center_id",
 		"final_schema_snapshot", "limit_snapshot", "sourceModule", "apiMode", "taskSnapshot", "referenceImages",
 		"referenceImageCount", "referenceImageNames", "referenceImageOrder", "inputImageIds", "inputImagesSnapshot",
 		"maskDraft", "maskTargetImageId", "maskImageId", "imageQuality", "imageRatio", "output_format", "outputFormat",
@@ -1223,7 +1252,7 @@ func isActiveLike(status string) bool {
 }
 
 func effectiveTenantID(user adminUser) string {
-	return firstNonEmptyString(user.ReferredBy, user.ID)
+	return firstNonEmptyString(user.TenantID, "tenant_default")
 }
 
 func effectiveAgentID(data adminPlatformData, user adminUser) string {

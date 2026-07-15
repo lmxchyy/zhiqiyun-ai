@@ -9,6 +9,98 @@
       }
     },
     {
+      "path": "pages/user/UserHomePage",
+      "style": {
+        "navigationBarTitleText": "知启云 AI",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 80,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/ForbiddenPage",
+      "style": {
+        "navigationBarTitleText": "暂无权限",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseEntryPage",
+      "style": { "navigationBarTitleText": "企业中心", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseOnboardingPage",
+      "style": { "navigationBarTitleText": "企业中心", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseCreatePage",
+      "style": { "navigationBarTitleText": "创建企业", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseJoinPage",
+      "style": { "navigationBarTitleText": "加入企业", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseSwitcherPage",
+      "style": { "navigationBarTitleText": "切换工作空间", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseOverviewPage",
+      "style": { "navigationBarTitleText": "企业中心", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseOrganizationsPage",
+      "style": { "navigationBarTitleText": "组织架构", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseMembersPage",
+      "style": { "navigationBarTitleText": "成员管理", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseMemberDetailPage",
+      "style": { "navigationBarTitleText": "成员详情", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseInvitationsPage",
+      "style": { "navigationBarTitleText": "邀请与审核", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseRolesPage",
+      "style": { "navigationBarTitleText": "角色权限", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseAIEmployeesPage",
+      "style": { "navigationBarTitleText": "AI员工", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseAIEmployeeCreatePage",
+      "style": { "navigationBarTitleText": "创建AI员工", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseAIEmployeeDetailPage",
+      "style": { "navigationBarTitleText": "AI员工详情", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseBillingPage",
+      "style": { "navigationBarTitleText": "企业算力", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseUsagePage",
+      "style": { "navigationBarTitleText": "消费明细", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseSettingsPage",
+      "style": { "navigationBarTitleText": "企业设置", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseCertificationPage",
+      "style": { "navigationBarTitleText": "企业认证", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseStatusPage",
+      "style": { "navigationBarTitleText": "企业中心状态", "navigationStyle": "custom" }
+    },
+    {
       "path": "pages/MiniProgramHomePage",
       "style": {
         "navigationBarTitleText": "正在进入工作台",
@@ -16,16 +108,11 @@
       }
     },
     {
-      "path": "pages/user/UserHomePage",
-      "style": {
-        "navigationBarTitleText": "知启云 AI",
-        "navigationStyle": "custom"
-      }
-    },
-    {
       "path": "pages/user/UserCreationPage",
       "style": {
         "navigationBarTitleText": "创作中心",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 80,
         "navigationStyle": "custom"
       }
     },
@@ -65,6 +152,13 @@
       }
     },
     {
+      "path": "pages/user/UserReviewConversationPage",
+      "style": {
+        "navigationBarTitleText": "共识记录",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserAgentCreationPage",
       "style": {
         "navigationBarTitleText": "AI Agent",
@@ -72,9 +166,43 @@
       }
     },
     {
+      "path": "pages/user/UserKnowledgeAgentDetailPage",
+      "style": {
+        "navigationBarTitleText": "智能体详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserAssetsPage",
       "style": {
         "navigationBarTitleText": "我的作品",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 80,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserAssetsListPage",
+      "style": {
+        "navigationBarTitleText": "全部作品",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 120,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserAssetDetailPage",
+      "style": {
+        "navigationBarTitleText": "作品详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserTasksPage",
+      "style": {
+        "navigationBarTitleText": "全部任务",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 120,
         "navigationStyle": "custom"
       }
     },
@@ -89,6 +217,54 @@
       "path": "pages/user/UserMinePage",
       "style": {
         "navigationBarTitleText": "我的",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 80,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/promotion/PromotionCenterPage",
+      "style": {
+        "navigationBarTitleText": "我的推广码",
+        "enablePullDownRefresh": true,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/promotion/PromotionTemplateCenterPage",
+      "style": {
+        "navigationBarTitleText": "推广模板",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/promotion/PromotionPosterPreviewPage",
+      "style": {
+        "navigationBarTitleText": "海报预览",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/promotion/PromotionRecordsPage",
+      "style": {
+        "navigationBarTitleText": "推广记录",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 100,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/promotion/PromotionStatsPage",
+      "style": {
+        "navigationBarTitleText": "推广数据",
+        "enablePullDownRefresh": true,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/promotion/PromotionLandingPage",
+      "style": {
+        "navigationBarTitleText": "知启云AI",
         "navigationStyle": "custom"
       }
     },
@@ -114,9 +290,23 @@
       }
     },
     {
+      "path": "pages/user/UserUsageRecordDetailPage",
+      "style": {
+        "navigationBarTitleText": "消耗详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserIdentityPermissionsPage",
       "style": {
-        "navigationBarTitleText": "身份与权限",
+        "navigationBarTitleText": "角色与权限",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserRolePermissionsPage",
+      "style": {
+        "navigationBarTitleText": "角色与权限",
         "navigationStyle": "custom"
       }
     },
@@ -184,6 +374,13 @@
       }
     },
     {
+      "path": "pages/user/UserInvoicesPage",
+      "style": {
+        "navigationBarTitleText": "电子凭证",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/agent/AgentOverviewPage",
       "style": {
         "navigationBarTitleText": "代理商概览",
@@ -208,6 +405,13 @@
       "path": "pages/agent/AgentCommissionPage",
       "style": {
         "navigationBarTitleText": "代理分润",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentCommissionDetailPage",
+      "style": {
+        "navigationBarTitleText": "分润详情",
         "navigationStyle": "custom"
       }
     },
@@ -247,6 +451,13 @@
       }
     },
     {
+      "path": "pages/agent/AgentOrderDetailPage",
+      "style": {
+        "navigationBarTitleText": "客户订单详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/agent/AgentWithdrawalsPage",
       "style": {
         "navigationBarTitleText": "提现记录",
@@ -257,6 +468,13 @@
       "path": "pages/agent/AgentWithdrawalApplyPage",
       "style": {
         "navigationBarTitleText": "申请提现",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/agent/AgentWithdrawalDetailPage",
+      "style": {
+        "navigationBarTitleText": "提现详情",
         "navigationStyle": "custom"
       }
     },
@@ -282,6 +500,13 @@
       }
     },
     {
+      "path": "pages/operation/OperationAgentDetailPage",
+      "style": {
+        "navigationBarTitleText": "代理商详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/operation/OperationOrdersPage",
       "style": {
         "navigationBarTitleText": "区域订单",
@@ -289,9 +514,23 @@
       }
     },
     {
+      "path": "pages/operation/OperationOrderDetailPage",
+      "style": {
+        "navigationBarTitleText": "区域订单详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/operation/OperationCommissionPage",
       "style": {
         "navigationBarTitleText": "中心分润",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/operation/OperationCommissionDetailPage",
+      "style": {
+        "navigationBarTitleText": "中心分润详情",
         "navigationStyle": "custom"
       }
     },
@@ -318,5 +557,37 @@
     "navigationBarTitleText": "知启云 AI",
     "navigationBarBackgroundColor": "#ffffff",
     "backgroundColor": "#f8fafc"
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#7b8498",
+    "selectedColor": "#4a6cff",
+    "backgroundColor": "#ffffff",
+    "list": [
+      {
+        "pagePath": "pages/user/UserHomePage",
+        "text": "首页",
+        "iconPath": "static/icons/home.png",
+        "selectedIconPath": "static/icons/home-active.png"
+      },
+      {
+        "pagePath": "pages/user/UserCreationPage",
+        "text": "创作",
+        "iconPath": "static/icons/create.png",
+        "selectedIconPath": "static/icons/create-active.png"
+      },
+      {
+        "pagePath": "pages/user/UserAssetsPage",
+        "text": "作品",
+        "iconPath": "static/icons/assets.png",
+        "selectedIconPath": "static/icons/assets-active.png"
+      },
+      {
+        "pagePath": "pages/user/UserMinePage",
+        "text": "我的",
+        "iconPath": "static/icons/profile.png",
+        "selectedIconPath": "static/icons/profile-active.png"
+      }
+    ]
   }
 }

@@ -68,7 +68,25 @@ func isFallbackEligible(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err)
+	if errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "returned 429") ||
+		strings.Contains(lower, "returned 403") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "insufficient_quota") ||
+		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "no available image quota") ||
+		strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "permission denied") ||
+		strings.Contains(lower, "无权访问") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "no such host") ||
+		strings.Contains(lower, "network is unreachable") ||
+		strings.Contains(lower, "connection reset")
 }
 
 type providersJSON struct {

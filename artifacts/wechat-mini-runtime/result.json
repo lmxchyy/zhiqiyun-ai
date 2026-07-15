@@ -1,0 +1,44 @@
+{
+  "startedAt": "2026-07-13T12:48:48.931Z",
+  "projectPath": "E:\\code\\work\\先知AI\\apps\\user-uni\\dist\\build\\mp-weixin",
+  "consoleErrors": [],
+  "login": {
+    "path": "pages/user/UserHomePage",
+    "tapStatus": "本轮跳过登录 UI；原生点击测试已在独立运行中通过",
+    "loginStatus": "3100 账号登录成功，微信运行时已写入登录态"
+  },
+  "home": {
+    "path": "pages/user/UserHomePage",
+    "screenshot": "未启用（当前开发者工具截图接口会阻塞自动化连接）"
+  },
+  "creation": {
+    "path": "pages/user/UserImageCreationPage",
+    "prompt": "生成一张 iPhone 17 电商主图，白色背景，突出产品质感与核心卖点",
+    "generateGeometry": {
+      "generateOffset": {
+        "left": 213,
+        "top": 357
+      },
+      "generateSize": {
+        "width": 146,
+        "height": 38
+      },
+      "windowHeight": 844
+    },
+    "screenshot": "未启用（当前开发者工具截图接口会阻塞自动化连接）"
+  },
+  "assets": {
+    "path": "pages/user/UserAssetsPage",
+    "cards": 0,
+    "detailPath": "",
+    "screenshot": "未启用（当前开发者工具截图接口会阻塞自动化连接）"
+  },
+  "mine": {
+    "path": "pages/user/UserMinePage",
+    "identityText": "演示用户",
+    "upgradeVisible": true,
+    "upgradePath": "pages/user/UserAgentUpgradePage",
+    "screenshot": "未启用（当前开发者工具截图接口会阻塞自动化连接）"
+  },
+  "finishedAt": "2026-07-13T12:49:53.247Z"
+}

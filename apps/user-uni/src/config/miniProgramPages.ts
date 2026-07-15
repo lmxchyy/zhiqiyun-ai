@@ -25,7 +25,7 @@ export const miniProgramRolePages: Record<MiniProgramRoleId, Partial<Record<Mini
   },
   agent: {
     overview: "/pages/agent/AgentOverviewPage",
-    promotion: "/pages/agent/AgentPromotionPage",
+    promotion: "/pages/promotion/PromotionCenterPage",
     customers: "/pages/agent/AgentCustomersPage",
     commission: "/pages/agent/AgentCommissionPage",
     mine: "/pages/agent/AgentMinePage"
@@ -53,13 +53,18 @@ export const miniProgramMinePages: Record<MineView, string> = {
   "agent-upgrade": "/pages/user/UserAgentUpgradePage",
   "recharge-history": "/pages/user/UserRechargeHistoryPage",
   "usage-details": "/pages/user/UserUsageDetailsPage",
-  "identity-permissions": "/pages/user/UserIdentityPermissionsPage",
-  "invite-promotion": "/pages/user/UserInvitePromotionPage"
+  "role-permissions": "/pages/user/UserRolePermissionsPage",
+  "invite-promotion": "/pages/promotion/PromotionCenterPage"
 };
 
 export const miniProgramDefaultPage = miniProgramRolePages.user.home as string;
 
 export const miniProgramFeaturePages = {
+  promotionCenter: "/pages/promotion/PromotionCenterPage",
+  promotionTemplates: "/pages/promotion/PromotionTemplateCenterPage",
+  promotionPosterPreview: "/pages/promotion/PromotionPosterPreviewPage",
+  promotionRecords: "/pages/promotion/PromotionRecordsPage",
+  promotionStats: "/pages/promotion/PromotionStatsPage",
   userProfileEdit: "/pages/user/UserProfileEditPage",
   userSettings: "/pages/user/UserSettingsPage",
   userRechargePlans: "/pages/user/UserRechargePlansPage",
@@ -68,13 +73,48 @@ export const miniProgramFeaturePages = {
   userOrderConfirm: "/pages/user/UserOrderConfirmPage",
   userOrderResult: "/pages/user/UserOrderResultPage",
   userRefundRequest: "/pages/user/UserRefundRequestPage",
+  userInvoices: "/pages/user/UserInvoicesPage",
+  userAssetsList: "/pages/user/UserAssetsListPage",
+  userAssetDetail: "/pages/user/UserAssetDetailPage",
+  userTasksList: "/pages/user/UserTasksPage",
+  userUsageRecordDetail: "/pages/user/UserUsageRecordDetailPage",
+  userKnowledgeAgentDetail: "/pages/user/UserKnowledgeAgentDetailPage",
+  userReviewConversation: "/pages/user/UserReviewConversationPage",
   agentTeam: "/pages/agent/AgentTeamPage",
   agentTeamMember: "/pages/agent/AgentTeamMemberPage",
   agentCustomerDetail: "/pages/agent/AgentCustomerDetailPage",
   agentOrders: "/pages/agent/AgentOrdersPage",
+  agentOrderDetail: "/pages/agent/AgentOrderDetailPage",
   agentWithdrawals: "/pages/agent/AgentWithdrawalsPage",
   agentWithdrawalApply: "/pages/agent/AgentWithdrawalApplyPage",
-  agentInviteRecords: "/pages/agent/AgentInviteRecordsPage"
+  agentWithdrawalDetail: "/pages/agent/AgentWithdrawalDetailPage",
+  agentInviteRecords: "/pages/agent/AgentInviteRecordsPage",
+  agentCommissionDetail: "/pages/agent/AgentCommissionDetailPage",
+  operationAgentDetail: "/pages/operation/OperationAgentDetailPage",
+  operationOrderDetail: "/pages/operation/OperationOrderDetailPage",
+  operationCommissionDetail: "/pages/operation/OperationCommissionDetailPage"
+} as const;
+
+export const miniProgramEnterprisePages = {
+  entry: "/pages/enterprise/EnterpriseEntryPage",
+  onboarding: "/pages/enterprise/EnterpriseOnboardingPage",
+  create: "/pages/enterprise/EnterpriseCreatePage",
+  join: "/pages/enterprise/EnterpriseJoinPage",
+  switcher: "/pages/enterprise/EnterpriseSwitcherPage",
+  overview: "/pages/enterprise/EnterpriseOverviewPage",
+  organizations: "/pages/enterprise/EnterpriseOrganizationsPage",
+  members: "/pages/enterprise/EnterpriseMembersPage",
+  memberDetail: "/pages/enterprise/EnterpriseMemberDetailPage",
+  invitations: "/pages/enterprise/EnterpriseInvitationsPage",
+  roles: "/pages/enterprise/EnterpriseRolesPage",
+  aiEmployees: "/pages/enterprise/EnterpriseAIEmployeesPage",
+  aiEmployeeCreate: "/pages/enterprise/EnterpriseAIEmployeeCreatePage",
+  aiEmployeeDetail: "/pages/enterprise/EnterpriseAIEmployeeDetailPage",
+  billing: "/pages/enterprise/EnterpriseBillingPage",
+  usage: "/pages/enterprise/EnterpriseUsagePage",
+  settings: "/pages/enterprise/EnterpriseSettingsPage",
+  certification: "/pages/enterprise/EnterpriseCertificationPage",
+  status: "/pages/enterprise/EnterpriseStatusPage",
 } as const;
 
 export function rolePage(role: MiniProgramRoleId, tab: MiniProgramTabId) {
