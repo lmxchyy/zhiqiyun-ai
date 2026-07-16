@@ -27,6 +27,7 @@ export type LoginErrorState =
   | "frozen"
   | "deactivated"
   | "maintenance"
+  | "service"
   | "timeout"
   | "token"
   | "profile";

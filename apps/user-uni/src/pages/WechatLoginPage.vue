@@ -7,6 +7,7 @@
     <ErrorState
       v-else-if="viewState === 'error'"
       :kind="errorState"
+      :detail="errorDetail"
       @primary="handleErrorPrimary()"
       @secondary="returnToAvailableLogin()"
     />
@@ -259,6 +260,7 @@ mode.value = "sms";
 // #endif
 const viewState = ref<ViewState>("form");
 const errorState = ref<LoginErrorState>("network");
+const errorDetail = ref("");
 const loadingStep = ref<LoadingStep>("authorizing");
 const busy = ref(false);
 const agreementAccepted = ref(false);
@@ -448,9 +450,19 @@ function handleLoginError(error: unknown, method: LoginMode) {
   }
   if (code.includes("ACCOUNT_FROZEN") || status === 423) return showErrorState("frozen");
   if (code.includes("ACCOUNT_DEACTIVATED")) return showErrorState("deactivated");
-  if (code.includes("SYSTEM_MAINTENANCE") || status === 503) return showErrorState("maintenance");
+  if (code.includes("SYSTEM_MAINTENANCE")) return showErrorState("maintenance");
+  if (status === 503 || code.includes("AUTH_SESSION_UNAVAILABLE")) return showErrorState("service");
+  if (method === "wechat" && status === 502 && (code.includes("WECHAT") || code.includes("CODE2SESSION"))) {
+    showToast("微信授权凭证无效或已过期，请重新授权登录", "error");
+    return;
+  }
   if (code.includes("TOKEN_SAVE_FAILED")) return showErrorState("token");
-  if (status === 0 || code.includes("NETWORK")) return showErrorState("network");
+  if (
+    (error instanceof ApiClientError && status === 0)
+    || code.includes("NETWORK")
+    || code.includes("REQUEST:FAIL")
+    || code.includes("CONNECTION")
+  ) return showErrorState("network", error instanceof Error ? error.message : "请求未能到达服务器");
   if (code.includes("TIMEOUT")) return showErrorState("timeout");
   if (method === "password") {
     password.value = "";
@@ -461,8 +473,9 @@ function handleLoginError(error: unknown, method: LoginMode) {
   showToast(error instanceof Error ? error.message : "登录失败，请重试", "error");
 }
 
-function showErrorState(kind: LoginErrorState) {
+function showErrorState(kind: LoginErrorState, detail = "") {
   errorState.value = kind;
+  errorDetail.value = detail.slice(0, 180);
   viewState.value = "error";
 }
 
@@ -487,8 +500,8 @@ function requestWechatLoginCode() {
   return new Promise<string>((resolve, reject) => {
     uni.login({
       provider: "weixin",
-      success: result => result.code ? resolve(result.code) : reject(new Error("微信登录凭证获取失败")),
-      fail: () => reject(new Error("微信登录凭证获取失败")),
+      success: result => result.code ? resolve(result.code) : reject(new Error(`微信登录凭证获取失败：${result.errMsg || "未返回 code"}`)),
+      fail: result => reject(new Error(`微信登录凭证获取失败：${result.errMsg || "未知错误"}`)),
     });
   });
 }

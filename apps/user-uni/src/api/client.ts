@@ -12,7 +12,7 @@ const env = rawEnv as Record<string, string | undefined>
 const adapter = createUniPlatformAdapter()
 let defaultApiBaseURL = ''
 // #ifdef MP-WEIXIN
-defaultApiBaseURL = 'http://127.0.0.1:3100'
+defaultApiBaseURL = 'https://ai.zs-kjhn.cn'
 // #endif
 const apiBaseURL = String(env.VITE_API_BASE_URL || defaultApiBaseURL).replace(/\/+$/, '')
 let unauthorizedRedirecting = false

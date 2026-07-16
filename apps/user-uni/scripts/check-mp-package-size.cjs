@@ -3,6 +3,7 @@ const path = require("node:path");
 
 const outputRoot = path.resolve(__dirname, "..", "dist", "build", "mp-weixin");
 const maxPackageBytes = 2 * 1024 * 1024;
+const maxMainQualityBytes = 1_500_000;
 const maxTotalBytes = 30 * 1024 * 1024;
 
 function readJson(fileName) {
@@ -49,6 +50,22 @@ function formatMB(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function verifyRelativeRequires(files) {
+  for (const filePath of files.filter((item) => path.extname(item) === ".js")) {
+    const source = fs.readFileSync(filePath, "utf8");
+    for (const match of source.matchAll(/require\(["'](\.[^"']+)["']\)/g)) {
+      const request = match[1];
+      const resolved = path.resolve(path.dirname(filePath), request);
+      const candidates = [resolved, `${resolved}.js`, path.resolve(resolved, "index.js")];
+      if (!candidates.some((candidate) => fs.existsSync(candidate))) {
+        throw new Error(
+          `Broken generated require in ${normalizedRelative(filePath)}: ${request}`
+        );
+      }
+    }
+  }
+}
+
 const appJson = readJson("app.json");
 const projectConfig = readJson("project.config.json");
 const ignoreRules = Array.isArray(projectConfig.packOptions?.ignore)
@@ -58,6 +75,7 @@ const includedFiles = listFiles(outputRoot).filter((filePath) => {
   const relativePath = normalizedRelative(filePath);
   return !ignoreRules.some((rule) => ignoredByRule(relativePath, rule));
 });
+verifyRelativeRequires(includedFiles);
 const subPackages = Array.isArray(appJson.subPackages) ? appJson.subPackages : [];
 const subPackageRoots = subPackages.map((item) => String(item.root || "")).filter(Boolean);
 const packageRows = [
@@ -86,6 +104,7 @@ for (const item of packageRows) {
 }
 
 const oversized = packageRows.filter((item) => item.bytes > maxPackageBytes);
+const mainPackage = packageRows.find((item) => item.name === "MAIN");
 const totalBytes = includedFiles.reduce((sum, filePath) => sum + fs.statSync(filePath).size, 0);
 console.log(`TOTAL: ${formatMB(totalBytes)}`);
 if (oversized.length > 0) {
@@ -95,7 +114,11 @@ if (oversized.length > 0) {
       .join(", ")}`
   );
 }
+if (mainPackage && mainPackage.bytes > maxMainQualityBytes) {
+  throw new Error(
+    `WeChat main package exceeds the 1.5 MB code-quality target: ${formatMB(mainPackage.bytes)}`
+  );
+}
 if (totalBytes > maxTotalBytes) {
   throw new Error(`WeChat total package size exceeds 30 MB: ${formatMB(totalBytes)}`);
 }
-

@@ -76,7 +76,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.capability.office",
     "16:9",
     "cover",
-    "capability-office",
+    "default-capability",
     "AI 办公",
   ),
   slot(
@@ -84,7 +84,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.capability.knowledge",
     "16:9",
     "cover",
-    "capability-knowledge",
+    "default-capability",
     "知识库",
   ),
   slot(
@@ -92,7 +92,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.capability.employee",
     "16:9",
     "cover",
-    "capability-employee",
+    "default-capability",
     "AI 员工",
   ),
   slot(
@@ -100,7 +100,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.project.new_product",
     "1:1",
     "cover",
-    "project-new-product",
+    "default-project",
     "新品上市项目",
   ),
   slot(
@@ -108,7 +108,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.project.website",
     "1:1",
     "cover",
-    "project-website",
+    "default-project",
     "企业官网项目",
   ),
   slot(
@@ -116,7 +116,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.employee.designer",
     "1:1",
     "cover",
-    "employee-designer",
+    "default-ai-avatar",
     "AI 设计师",
   ),
   slot(
@@ -124,7 +124,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.employee.sales",
     "1:1",
     "cover",
-    "employee-sales",
+    "default-ai-avatar",
     "AI 销售",
   ),
   slot(
@@ -132,7 +132,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.employee.operation",
     "1:1",
     "cover",
-    "employee-operation",
+    "default-ai-avatar",
     "AI 运营",
   ),
   slot(
@@ -140,7 +140,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.employee.service",
     "1:1",
     "cover",
-    "employee-service",
+    "default-ai-avatar",
     "AI 客服",
   ),
   slot(
@@ -148,7 +148,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.employee.boss",
     "1:1",
     "cover",
-    "employee-boss",
+    "default-ai-avatar",
     "老板助手",
   ),
   slot(
@@ -156,7 +156,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.inspiration.poster",
     "4:5",
     "cover",
-    "inspiration-poster",
+    "default-inspiration",
     "企业宣传海报",
   ),
   slot(
@@ -180,7 +180,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.inspiration.store",
     "3:4",
     "cover",
-    "inspiration-store",
+    "default-inspiration",
     "门店营销",
   ),
   slot(
@@ -188,7 +188,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "home.inspiration.ecommerce",
     "1:1",
     "cover",
-    "inspiration-ecommerce",
+    "default-inspiration",
     "电商主图",
   ),
   slot(
@@ -204,7 +204,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.template.new_product",
     "1:1",
     "cover",
-    "template-new-product",
+    "default-template",
     "新品发布模板",
   ),
   slot(
@@ -212,7 +212,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.template.investment",
     "1:1",
     "cover",
-    "template-investment",
+    "default-template",
     "招商方案模板",
   ),
   slot(
@@ -220,7 +220,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.scene.xiaohongshu",
     "148:54",
     "cover",
-    "inspiration-poster",
+    "default-inspiration",
     "小红书爆款场景",
   ),
   slot(
@@ -228,7 +228,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.scene.friend_poster",
     "148:54",
     "cover",
-    "inspiration-poster",
+    "default-inspiration",
     "朋友圈海报场景",
   ),
   slot(
@@ -236,7 +236,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.scene.product_promo",
     "148:54",
     "cover",
-    "capability-ai-design",
+    "default-inspiration",
     "产品宣传场景",
   ),
   slot(
@@ -244,7 +244,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.scene.ecommerce_main",
     "148:54",
     "cover",
-    "inspiration-ecommerce",
+    "default-inspiration",
     "商品主图场景",
   ),
   slot(
@@ -252,7 +252,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.scene.investment",
     "148:54",
     "cover",
-    "template-investment",
+    "default-inspiration",
     "招商加盟场景",
   ),
   slot(
@@ -260,7 +260,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "studio.scene.store_event",
     "148:54",
     "cover",
-    "inspiration-store",
+    "default-inspiration",
     "门店活动场景",
   ),
   slot(

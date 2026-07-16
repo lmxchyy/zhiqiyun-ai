@@ -15,7 +15,7 @@ if (!fs.existsSync(pageRoot)) {
 const logoFile = fs.existsSync(assetRoot)
   ? fs.readdirSync(assetRoot).find((name) => /^zhiqiyun-logo-transparent\..+\.png$/.test(name))
   : "";
-const logoPath = logoFile ? `/assets/${logoFile}` : "";
+const logoPath = "/static/brand/zhiqiyun-ai-logo.jpg";
 
 function readEnvValue(filePath, key) {
   if (!fs.existsSync(filePath)) return "";
@@ -1119,10 +1119,191 @@ if (forceLegacyNativeLogin) {
 } else {
   console.log("Preserved uni-app generated WechatLoginPage (set XIANZHI_FORCE_LEGACY_NATIVE_LOGIN=true only for legacy diagnostics).");
 }
+
+const loginEntryPageName = "WechatLoginPage";
+const loginFormPageName = "WechatLoginFormPage";
+if (!forceLegacyNativeLogin) {
+  for (const extension of [".js", ".json", ".wxml", ".wxss"]) {
+    const sourcePath = path.resolve(pageRoot, `${loginEntryPageName}${extension}`);
+    const targetPath = path.resolve(pageRoot, `${loginFormPageName}${extension}`);
+    if (!fs.existsSync(sourcePath)) {
+      throw new Error(`Generated login page file was not found: ${sourcePath}`);
+    }
+    if (fs.existsSync(targetPath)) {
+      throw new Error(`Generated login form target already exists: ${targetPath}`);
+    }
+    fs.renameSync(sourcePath, targetPath);
+  }
+  fs.writeFileSync(
+    path.resolve(pageRoot, `${loginEntryPageName}.json`),
+    JSON.stringify({ navigationBarTitleText: "知启云 AI", navigationStyle: "custom", usingComponents: {} }, null, 2)
+  );
+  fs.writeFileSync(
+    path.resolve(pageRoot, `${loginEntryPageName}.wxml`),
+    `<view class="login-gate">
+  <image class="login-gate-logo" src="${logoPath}" mode="aspectFit" />
+  <text class="login-gate-title">知启云 AI</text>
+  <view wx:if="{{!failed}}" class="login-gate-status"><view class="login-gate-spinner" /><text>正在打开登录页面</text></view>
+  <button wx:else class="login-gate-retry" bindtap="enterLogin">重新进入</button>
+</view>
+`
+  );
+  fs.writeFileSync(
+    path.resolve(pageRoot, `${loginEntryPageName}.js`),
+    `"use strict";
+Page({
+  data: { failed: false },
+  onLoad(options) {
+    this.loginOptions = options || {};
+    this.enterTimer = setTimeout(() => this.enterLogin(), 80);
+  },
+  onUnload() {
+    if (this.enterTimer) clearTimeout(this.enterTimer);
+  },
+  enterLogin() {
+    if (this.entering) return;
+    this.entering = true;
+    this.setData({ failed: false });
+    const query = Object.entries(this.loginOptions || {})
+      .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
+      .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(String(value)))
+      .join("&");
+    wx.reLaunch({
+      url: "/pages/${loginFormPageName}" + (query ? "?" + query : ""),
+      fail: () => {
+        this.entering = false;
+        this.setData({ failed: true });
+      }
+    });
+  }
+});
+`
+  );
+  fs.writeFileSync(
+    path.resolve(pageRoot, `${loginEntryPageName}.wxss`),
+    `page { min-height: 100%; background: #f5f7fb; }
+.login-gate { min-height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24rpx; padding: 64rpx; color: #101828; background: linear-gradient(155deg, #eef3ff 0%, #f8f9fd 54%, #f2edff 100%); }
+.login-gate-logo { width: 300rpx; height: 108rpx; border-radius: 24rpx; background: #fff; }
+.login-gate-title { font-size: 38rpx; line-height: 1.3; font-weight: 800; }
+.login-gate-status { display: flex; align-items: center; gap: 16rpx; color: #667085; font-size: 26rpx; }
+.login-gate-spinner { width: 28rpx; height: 28rpx; border: 4rpx solid #d0d5dd; border-top-color: #4f46e5; border-radius: 50%; animation: login-gate-spin .8s linear infinite; }
+.login-gate-retry { min-width: 240rpx; border: 0; border-radius: 999rpx; background: #4f46e5; color: #fff; font-size: 28rpx; font-weight: 700; }
+.login-gate-retry::after { display: none; }
+@keyframes login-gate-spin { to { transform: rotate(360deg); } }
+`
+  );
+}
+
+const legacyExperienceEntry = "pages/index/index";
+const legacyExperienceRoot = path.resolve(outputRoot, "pages", "index");
+fs.mkdirSync(legacyExperienceRoot, { recursive: true });
+fs.writeFileSync(
+  path.resolve(legacyExperienceRoot, "index.json"),
+  JSON.stringify({ navigationBarTitleText: "知启云 AI", navigationStyle: "custom", usingComponents: {} }, null, 2)
+);
+fs.writeFileSync(
+  path.resolve(legacyExperienceRoot, "index.wxml"),
+  `<view class="legacy-entry"><image class="legacy-entry-logo" src="${logoPath}" mode="aspectFit" /><text>正在打开知启云 AI</text></view>\n`
+);
+fs.writeFileSync(
+  path.resolve(legacyExperienceRoot, "index.js"),
+  `"use strict";
+Page({
+  onLoad(options) {
+    const query = Object.entries(options || {})
+      .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
+      .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(String(value)))
+      .join("&");
+    setTimeout(() => wx.reLaunch({ url: "/pages/${loginEntryPageName}" + (query ? "?" + query : "") }), 50);
+  }
+});
+`
+);
+fs.writeFileSync(
+  path.resolve(legacyExperienceRoot, "index.wxss"),
+  `page { min-height: 100%; background: #f5f7fb; }
+.legacy-entry { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24rpx; color: #667085; font-size: 26rpx; background: linear-gradient(155deg, #eef3ff 0%, #f8f9fd 54%, #f2edff 100%); }
+.legacy-entry-logo { width: 300rpx; height: 108rpx; border-radius: 24rpx; background: #fff; }
+`
+);
 const homeWxssPath = path.resolve(pageRoot, "MiniProgramHomePage.wxss");
 if (!fs.existsSync(homeWxssPath)) {
   fs.writeFileSync(homeWxssPath, "");
 }
+
+const startupPageName = "StartupPage";
+const startupPagePath = path.resolve(pageRoot, startupPageName);
+fs.writeFileSync(
+  `${startupPagePath}.json`,
+  JSON.stringify(
+    {
+      navigationBarTitleText: "知启云 AI",
+      navigationStyle: "custom",
+      usingComponents: {}
+    },
+    null,
+    2
+  )
+);
+fs.writeFileSync(
+  `${startupPagePath}.wxml`,
+  `<view class="startup-page">
+  <view class="startup-brand">
+    <image wx:if="{{logo}}" class="startup-logo" src="{{logo}}" mode="aspectFit" />
+    <text class="startup-title">知启云 AI</text>
+  </view>
+  <view wx:if="{{!failed}}" class="startup-loading">
+    <view class="startup-spinner" />
+    <text>正在进入</text>
+  </view>
+  <button wx:else class="startup-retry" bindtap="enterLogin">重新进入</button>
+</view>
+`
+);
+fs.writeFileSync(
+  `${startupPagePath}.js`,
+  `"use strict";
+Page({
+  data: {
+    logo: ${JSON.stringify(logoPath)},
+    failed: false
+  },
+  onLoad() {
+    this.entering = false;
+    this.enterTimer = setTimeout(() => this.enterLogin(), 120);
+  },
+  onUnload() {
+    if (this.enterTimer) clearTimeout(this.enterTimer);
+  },
+  enterLogin() {
+    if (this.entering) return;
+    this.entering = true;
+    this.setData({ failed: false });
+    wx.reLaunch({
+      url: "/pages/WechatLoginPage",
+      fail: () => {
+        this.entering = false;
+        this.setData({ failed: true });
+      }
+    });
+  }
+});
+`
+);
+fs.writeFileSync(
+  `${startupPagePath}.wxss`,
+  `page { min-height: 100%; background: #f5f7fb; }
+.startup-page { min-height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28rpx; padding: 64rpx; color: #101828; }
+.startup-brand { display: flex; flex-direction: column; align-items: center; gap: 20rpx; }
+.startup-logo { width: 152rpx; height: 152rpx; border-radius: 28rpx; background: #fff; }
+.startup-title { font-size: 40rpx; line-height: 1.3; font-weight: 800; }
+.startup-loading { display: flex; align-items: center; gap: 16rpx; color: #667085; font-size: 26rpx; }
+.startup-spinner { width: 28rpx; height: 28rpx; border: 4rpx solid #d0d5dd; border-top-color: #4f46e5; border-radius: 50%; animation: startup-spin .8s linear infinite; }
+.startup-retry { min-width: 240rpx; border: 0; border-radius: 999rpx; background: #4f46e5; color: #fff; font-size: 28rpx; font-weight: 700; }
+.startup-retry::after { display: none; }
+@keyframes startup-spin { to { transform: rotate(360deg); } }
+`
+);
 /* fs.writeFileSync(
   path.resolve(pageRoot, "NativeDebugLogin.json"),
   JSON.stringify(
@@ -1139,11 +1320,18 @@ fs.writeFileSync(path.resolve(pageRoot, "NativeDebugLogin.wxss"), wxss); */
 
 const appJsonPath = path.resolve(outputRoot, "app.json");
 const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
-appJson.pages = appJson.pages.filter((page) => page !== "pages/NativeDebugLogin");
-const defaultHomePage = "pages/WechatLoginPage";
+const startupPage = `pages/${startupPageName}`;
+const defaultHomePage = `pages/${loginEntryPageName}`;
+const loginFormPage = `pages/${loginFormPageName}`;
+appJson.pages = appJson.pages.filter(
+  (page) => page !== "pages/NativeDebugLogin" && page !== startupPage && page !== defaultHomePage && page !== loginFormPage && page !== legacyExperienceEntry
+);
 const orderedPages = [
   defaultHomePage,
-  ...appJson.pages.filter((page) => page !== defaultHomePage)
+  loginFormPage,
+  legacyExperienceEntry,
+  startupPage,
+  ...appJson.pages
 ];
 const mainUserPages = new Set([
   "pages/user/UserHomePage",
@@ -1198,6 +1386,22 @@ function relocateGeneratedPage(sourceRoot, targetRoot, pageName) {
     }
     fs.renameSync(sourcePath, targetPath);
   }
+}
+
+function relocateGeneratedModule(sourceRelativePath, targetRelativePath, transform) {
+  const sourcePath = assertGeneratedPath(path.resolve(outputRoot, sourceRelativePath));
+  const targetPath = assertGeneratedPath(path.resolve(outputRoot, targetRelativePath));
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`Generated module to relocate was not found: ${sourceRelativePath}`);
+  }
+  if (fs.existsSync(targetPath)) {
+    throw new Error(`Generated module target already exists: ${targetRelativePath}`);
+  }
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const original = fs.readFileSync(sourcePath, "utf8");
+  const updated = typeof transform === "function" ? transform(original) : original;
+  fs.writeFileSync(targetPath, updated);
+  fs.rmSync(sourcePath);
 }
 
 const relocatedUserRoutes = new Map();
@@ -1260,16 +1464,47 @@ function preserveGeneratedComponents(configPath) {
   if (!fs.existsSync(configPath)) return;
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const existingIgnore = Array.isArray(config.packOptions?.ignore) ? config.packOptions.ignore : [];
+  const retainedFallbackJpegs = new Set([
+    "brand-gradient.jpg",
+    "hero-orb.jpg",
+    "capability-ai-design.jpg",
+    "capability-ai-video.jpg",
+    "capability-ppt.jpg",
+    "default-capability.jpg",
+    "default-project.jpg",
+    "default-ai-avatar.jpg",
+    "default-inspiration.jpg",
+    "inspiration-video.jpg",
+    "inspiration-ppt.jpg",
+    "default-studio-hero.jpg",
+    "default-template.jpg",
+    "default-cover.jpg",
+    "default-video-cover.jpg",
+    "default-ppt-cover.jpg",
+    "default-long-image.jpg",
+    "default-avatar.jpg"
+  ]);
+  const generatedFallbackDirectory = path.resolve(outputRoot, "static", "fallbacks");
+  const unusedFallbackIgnores = fs.existsSync(generatedFallbackDirectory)
+    ? fs.readdirSync(generatedFallbackDirectory)
+      .filter((name) => name.endsWith(".jpg") && !retainedFallbackJpegs.has(name))
+      .map((name) => ({ type: "file", value: `static/fallbacks/${name}` }))
+    : [];
   const optimizedPackageIgnores = [
     { type: "suffix", value: ".webp" },
     { type: "folder", value: "static/app-icons" },
     { type: "file", value: "static/fallbacks/profile-member-background.png" },
-    { type: "file", value: "static/fallbacks/profile-header-background.png" }
+    { type: "file", value: "static/fallbacks/profile-header-background.png" },
+    ...(logoFile ? [{ type: "file", value: `assets/${logoFile}` }] : []),
+    ...unusedFallbackIgnores
   ];
   const optimizedIgnoreKeys = new Set(optimizedPackageIgnores.map((item) => `${item.type}:${item.value}`));
   config.packOptions = Object.assign({}, config.packOptions, {
     ignore: [
-      ...existingIgnore.filter((item) => !optimizedIgnoreKeys.has(`${item?.type}:${item?.value}`)),
+      ...existingIgnore.filter((item) =>
+        !optimizedIgnoreKeys.has(`${item?.type}:${item?.value}`) &&
+        !(item?.type === "file" && /^static\/fallbacks\/.+\.jpg$/.test(String(item?.value || "")))
+      ),
       ...optimizedPackageIgnores
     ]
   });
@@ -1277,8 +1512,8 @@ function preserveGeneratedComponents(configPath) {
     minified: true,
     minifyWXML: true,
     minifyWXSS: true,
-    ignoreDevUnusedFiles: false,
-    ignoreUploadUnusedFiles: false,
+    ignoreDevUnusedFiles: true,
+    ignoreUploadUnusedFiles: true,
     useLanDebug: true
   });
   if (config.condition && config.condition.miniprogram) {
@@ -1718,5 +1953,55 @@ assetEmptyStateWxml = replaceNativeAssetBindings(assetEmptyStateWxml, /(<button[
 fs.writeFileSync(assetEmptyStateWxmlPath, assetEmptyStateWxml);
 const assetEmptyNativeMethods = String.raw`nativeAssetEmptyAction(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.emptyAction==="function"){bridge.emptyAction();return}wx.switchTab({url:"/pages/user/UserCreationPage",fail(){wx.reLaunch({url:"/pages/user/UserCreationPage"})}})}`;
 injectNativeAssetMethods(assetEmptyStateJsPath, "AssetEmptyState", assetEmptyNativeMethods, ["nativeAssetEmptyAction"]);
+
+const commonAssetsPath = assertGeneratedPath(path.resolve(outputRoot, "common", "assets.js"));
+if (!fs.existsSync(commonAssetsPath)) {
+  throw new Error("Generated common/assets.js was not found");
+}
+const commonAssetsOriginal = fs.readFileSync(commonAssetsPath, "utf8");
+const commonAssetsUpdated = logoFile
+  ? commonAssetsOriginal.split(`/assets/${logoFile}`).join(logoPath)
+  : commonAssetsOriginal;
+if (logoFile && commonAssetsUpdated === commonAssetsOriginal) {
+  throw new Error("Generated transparent logo reference was not found in common/assets.js");
+}
+fs.writeFileSync(commonAssetsPath, commonAssetsUpdated);
+
+relocateGeneratedModule(
+  "PromotionCenterPage.vue_vue_type_style_index_0_lang.js",
+  "pages/promotion/PromotionCenterPage.vue_vue_type_style_index_0_lang.js",
+  (source) => source.replace(/(["'])\.\//g, "$1../../")
+);
+for (const pageName of ["PromotionCenterPage.js", "PromotionCenterPage2.js"]) {
+  const pagePath = assertGeneratedPath(path.resolve(outputRoot, "pages", "promotion", pageName));
+  const original = fs.readFileSync(pagePath, "utf8");
+  const updated = original
+    .split('require("../../PromotionCenterPage.vue_vue_type_style_index_0_lang.js")')
+    .join('require("./PromotionCenterPage.vue_vue_type_style_index_0_lang.js")');
+  if (updated === original) {
+    throw new Error(`Promotion subpackage module reference was not rewritten: ${pageName}`);
+  }
+  fs.writeFileSync(pagePath, updated);
+}
+
+for (const moduleName of ["api.js", "availability.js", "platform.js"]) {
+  relocateGeneratedModule(
+    `features/payment/${moduleName}`,
+    `pages/user-account/features/payment/${moduleName}`,
+    (source) => source.replace(/require\("\.\.\/\.\.\//g, 'require("../../../../')
+  );
+}
+for (const pageName of ["UserOrderConfirmPage.js", "UserRechargePlansPage.js", "UserVirtualPaymentPage.js"]) {
+  const pagePath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-account", pageName));
+  const original = fs.readFileSync(pagePath, "utf8");
+  const updated = original
+    .split('require("../../features/payment/')
+    .join('require("./features/payment/');
+  if (updated === original) {
+    throw new Error(`Payment subpackage module reference was not rewritten: ${pageName}`);
+  }
+  fs.writeFileSync(pagePath, updated);
+}
+
 rewriteGeneratedUserRoutes(outputRoot);
 console.log("Preserved the generated login page and patched mp-weixin generation controls.");

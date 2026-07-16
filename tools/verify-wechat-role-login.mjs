@@ -121,8 +121,10 @@ async function waitForRoute(miniProgram, expectedRoute, timeoutMs = 12000) {
 }
 
 async function verifyCase(miniProgram, testCase) {
-  let page = await miniProgram.reLaunch("/pages/WechatLoginPage");
-  await page.waitFor(900);
+  await miniProgram.reLaunch("/pages/WechatLoginPage");
+  await wait(900);
+  let page = await currentPage(miniProgram);
+  assert(page.path === "pages/WechatLoginFormPage", `${testCase.name}: 冷启动登录门页未进入正式登录表单，当前为 ${page.path}`);
 
   const passwordEntryButton = await page.$(".auth-login-mode-password");
   assert(passwordEntryButton, `${testCase.name}: 未找到账号密码登录原生按钮`);
@@ -251,6 +253,24 @@ async function main() {
   let miniProgram = await connect();
   const results = [];
   try {
+    if (process.env.XIANZHI_VERIFY_COLD_START === "true") {
+      await miniProgram.reLaunch("/pages/index/index");
+      await wait(1500);
+      const legacyEntryPage = await currentPage(miniProgram);
+      assert(
+        legacyEntryPage.path === "pages/WechatLoginFormPage",
+        `体验版旧入口未进入正式登录表单，当前为 ${legacyEntryPage.path}`,
+      );
+      console.log(JSON.stringify({ stage: "legacy-experience-entry", landingPage: legacyEntryPage.path }));
+      await miniProgram.reLaunch("/pages/WechatLoginPage");
+      await wait(1500);
+      const coldStartPage = await currentPage(miniProgram);
+      assert(
+        coldStartPage.path === "pages/WechatLoginFormPage",
+        `冷启动页未进入正式登录页，当前为 ${coldStartPage.path}`,
+      );
+      console.log(JSON.stringify({ stage: "cold-start", landingPage: coldStartPage.path }));
+    }
     for (const testCase of cases) {
       const verified = await verifyCase(miniProgram, testCase);
       miniProgram = verified.miniProgram;

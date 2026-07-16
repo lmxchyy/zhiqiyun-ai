@@ -2,7 +2,7 @@
   <LoginCard :title="content.title" :subtitle="content.subtitle" mode="state" compact>
     <view class="auth-error-state">
       <view :class="['auth-state-icon', kind]">{{ content.icon }}</view>
-      <view v-if="content.note" class="auth-state-note"><text>{{ content.note }}</text></view>
+      <view v-if="displayNote" class="auth-state-note"><text>{{ displayNote }}</text></view>
       <PrimaryLoginButton :label="content.primary" @activate="$emit('primary')" />
       <SecondaryLoginEntry :label="content.secondary" @activate="$emit('secondary')" />
     </view>
@@ -16,7 +16,7 @@ import LoginCard from "./LoginCard.vue";
 import PrimaryLoginButton from "./PrimaryLoginButton.vue";
 import SecondaryLoginEntry from "./SecondaryLoginEntry.vue";
 
-const props = defineProps<{ kind: LoginErrorState }>();
+const props = defineProps<{ kind: LoginErrorState; detail?: string }>();
 defineEmits<{ primary: []; secondary: [] }>();
 const content = computed(() => {
   const values: Record<LoginErrorState, { icon: string; title: string; subtitle: string; note: string; primary: string; secondary: string }> = {
@@ -24,12 +24,14 @@ const content = computed(() => {
     frozen: { icon: "锁", title: "账号暂时无法使用", subtitle: "该账号已被冻结，请联系平台客服确认原因", note: "账号中的作品、余额和企业数据将继续保留", primary: "联系客服", secondary: "返回其他登录方式" },
     deactivated: { icon: "!", title: "账号已注销", subtitle: "当前账号已注销，如有疑问请联系平台客服", note: "", primary: "联系客服", secondary: "返回其他登录方式" },
     maintenance: { icon: "⚙", title: "系统维护中", subtitle: "服务暂时不可用，请稍后再试", note: "", primary: "重新加载", secondary: "返回验证码登录" },
+    service: { icon: "!", title: "登录服务暂时不可用", subtitle: "账号数据未受影响，请稍后重试", note: "如果持续出现，请联系平台客服并说明登录时间", primary: "重新登录", secondary: "返回其他登录方式" },
     timeout: { icon: "!", title: "登录请求超时", subtitle: "网络响应较慢，已填写的信息会保留", note: "", primary: "重新登录", secondary: "返回验证码登录" },
     token: { icon: "!", title: "登录信息保存失败", subtitle: "账号已验证，但本地会话未能安全保存", note: "", primary: "重新登录", secondary: "返回其他登录方式" },
     profile: { icon: "!", title: "用户信息获取失败", subtitle: "请重新登录以同步账号信息", note: "", primary: "重新登录", secondary: "返回其他登录方式" },
   };
   return values[props.kind];
 });
+const displayNote = computed(() => props.detail || content.value.note);
 </script>
 
 <style scoped>
