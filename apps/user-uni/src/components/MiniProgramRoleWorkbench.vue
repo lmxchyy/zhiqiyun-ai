@@ -679,7 +679,16 @@
       @change="selectTab"
     />
     <!-- #endif -->
+    <!-- #ifdef APP-PLUS -->
+    <V531TabBar
+      v-if="activeRole !== 'user' && isPrimaryRoleTab && !isCreationDetail && !isUserMineDetail"
+      :role="activeRole"
+      :active="activeTab"
+      @change="selectTab"
+    />
+    <!-- #endif -->
     <!-- #ifndef MP-WEIXIN -->
+    <!-- #ifndef APP-PLUS -->
     <V531TabBar
       v-if="isPrimaryRoleTab && !isCreationDetail && !isUserMineDetail"
       :role="activeRole"
@@ -687,13 +696,15 @@
       @change="selectTab"
     />
     <!-- #endif -->
+    <!-- #endif -->
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
-import { api, authStorage, businessSdk, getApiBaseURL, getAuthToken, setAuthToken } from "../api/client";
+import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
+import { uploadReferenceImage } from "../api/files";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
 import PromotionQrCode from "./PromotionQrCode.vue";
@@ -2156,13 +2167,23 @@ async function resolveBackendGenerationModel(
   fallback: string,
 ) {
   const moduleCode = mode === "video" ? "video_generation" : "image_generation";
+  const loadSchema = (modelName = "") => api<AnyRecord>(
+    `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
+  );
   try {
-    const schema = await api<AnyRecord>(
-      `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}&model_name=${encodeURIComponent(fallback)}`,
-    );
+    const schema = await loadSchema(fallback);
     return rowString(schema, "model_name", "modelName") || fallback;
-  } catch (error) {
-    console.warn("[创作模型预检降级]", { moduleCode, fallback, error });
+  } catch (preferredModelError) {
+    try {
+      const schema = await loadSchema();
+      const availableModel = rowString(schema, "model_name", "modelName");
+      if (availableModel) {
+        console.warn("[创作模型自动回退]", { moduleCode, fallback, availableModel, preferredModelError });
+        return availableModel;
+      }
+    } catch (defaultModelError) {
+      console.warn("[创作模型预检降级]", { moduleCode, fallback, preferredModelError, defaultModelError });
+    }
     return fallback;
   }
 }
@@ -2274,37 +2295,13 @@ async function submitCreation(prompt: string) {
   }
 }
 
-function absoluteApiURL(value: string) {
-  if (/^https?:\/\//i.test(value)) return value;
-  const base = getApiBaseURL().replace(/\/+$/, "");
-  return `${base}${value.startsWith("/") ? value : `/${value}`}`;
-}
-
-function uploadCreationReferenceImage(filePath: string, index: number) {
-  return new Promise<string>((resolve, reject) => {
-    uni.uploadFile({
-      url: absoluteApiURL("/api/v1/reference-images"),
-      filePath,
-      name: "file",
-      header: { Authorization: `Bearer ${getAuthToken()}` },
-      success: response => {
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(`第 ${index + 1} 张参考图上传失败（${response.statusCode}）`));
-          return;
-        }
-        try {
-          const payload = JSON.parse(response.data || "{}") as AnyRecord;
-          const item = payload.item && typeof payload.item === "object" ? payload.item as AnyRecord : {};
-          const url = rowString(item, "url");
-          if (!url) throw new Error("上传接口未返回参考图地址");
-          resolve(absoluteApiURL(url));
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error("参考图响应解析失败"));
-        }
-      },
-      fail: error => reject(new Error(error.errMsg || `第 ${index + 1} 张参考图上传失败`)),
-    });
-  });
+async function uploadCreationReferenceImage(filePath: string, index: number) {
+  try {
+    return await uploadReferenceImage(filePath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "参考图上传失败";
+    throw new Error(`第 ${index + 1} 张参考图上传失败：${message}`);
+  }
 }
 
 async function uploadCreationReferenceImages(paths: string[]) {

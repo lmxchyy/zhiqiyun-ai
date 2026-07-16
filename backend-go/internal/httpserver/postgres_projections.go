@@ -35,6 +35,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS xz_users_wechat_union_id_unique
   ON xz_users (wechat_union_id)
   WHERE NULLIF(BTRIM(wechat_union_id), '') IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS xz_auth_account_merge_requests (
+  id TEXT PRIMARY KEY,
+  primary_user_id TEXT NOT NULL,
+  secondary_user_id TEXT NOT NULL,
+  mobile TEXT,
+  wechat_open_id TEXT,
+  wechat_union_id TEXT,
+  conflict_code TEXT NOT NULL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  reason TEXT,
+  review_comment TEXT,
+  resolved_by TEXT,
+  resolved_at TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  raw JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_xz_auth_merge_primary ON xz_auth_account_merge_requests(primary_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_auth_merge_secondary ON xz_auth_account_merge_requests(secondary_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_auth_merge_status ON xz_auth_account_merge_requests(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS xz_plans (
   id TEXT PRIMARY KEY,
   code TEXT,
@@ -364,14 +386,17 @@ func (b postgresStateBackend) syncRuntimeProjections(ctx context.Context, conten
 func upsertUsers(ctx context.Context, tx *sql.Tx, items []adminUser) error {
 	for _, item := range items {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO xz_users (id, email, mobile, wechat_union_id, name, role, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)
+			INSERT INTO xz_users (id, email, mobile, wechat_union_id, name, role, member_level, agent_status, operation_center_status, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb)
 			ON CONFLICT (id) DO UPDATE SET
 				email = excluded.email,
 				mobile = excluded.mobile,
 				wechat_union_id = excluded.wechat_union_id,
 				name = excluded.name,
 				role = excluded.role,
+				member_level = excluded.member_level,
+				agent_status = excluded.agent_status,
+				operation_center_status = excluded.operation_center_status,
 				status = excluded.status,
 				password_hash = excluded.password_hash,
 				plan_id = excluded.plan_id,
@@ -380,7 +405,7 @@ func upsertUsers(ctx context.Context, tx *sql.Tx, items []adminUser) error {
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at,
 				raw = excluded.raw
-		`, item.ID, item.Email, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatUnionID), item.Name, item.Role, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		`, item.ID, item.Email, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatUnionID), item.Name, item.Role, item.MemberLevel, item.AgentStatus, item.OperationCenterStatus, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_users %s: %w", item.ID, err)
 		}
@@ -406,6 +431,20 @@ func upsertPlans(ctx context.Context, tx *sql.Tx, items []adminPlan) error {
 		`, item.ID, item.Code, item.Name, planPriceCents(item), planGrantPoints(item), item.DurationDays, item.Concurrency, item.Active, jsonProjection(item.Entitlements), jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_plans %s: %w", item.ID, err)
+		}
+	}
+	return nil
+}
+
+func insertMissingPlans(ctx context.Context, tx *sql.Tx, items []adminPlan) error {
+	for _, item := range items {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO xz_plans (id, code, name, price_cents, grant_points, duration_days, concurrency, active, entitlements, raw)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
+			ON CONFLICT (id) DO NOTHING
+		`, item.ID, item.Code, item.Name, planPriceCents(item), planGrantPoints(item), item.DurationDays, item.Concurrency, item.Active, jsonProjection(item.Entitlements), jsonProjection(item))
+		if err != nil {
+			return fmt.Errorf("seed xz_plans %s: %w", item.ID, err)
 		}
 	}
 	return nil
@@ -479,18 +518,22 @@ func upsertOrders(ctx context.Context, tx *sql.Tx, items []adminOrder) error {
 func upsertChannelAgents(ctx context.Context, tx *sql.Tx, items []adminChannelAgent) error {
 	for _, item := range items {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO xz_channel_agents (id, user_id, parent_id, level, status, invite_code, created_at, updated_at, raw)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+			INSERT INTO xz_channel_agents (id, user_id, parent_id, operation_center_id, level, status, invite_code, join_order_id, join_fee_cents, token_rights_amount, created_at, updated_at, raw)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
 			ON CONFLICT (id) DO UPDATE SET
 				user_id = excluded.user_id,
 				parent_id = excluded.parent_id,
+				operation_center_id = excluded.operation_center_id,
 				level = excluded.level,
 				status = excluded.status,
 				invite_code = excluded.invite_code,
+				join_order_id = excluded.join_order_id,
+				join_fee_cents = excluded.join_fee_cents,
+				token_rights_amount = excluded.token_rights_amount,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at,
 				raw = excluded.raw
-		`, item.ID, item.UserID, item.ParentID, item.Level, item.Status, item.InviteCode, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		`, item.ID, item.UserID, item.ParentID, item.OperationCenterID, item.Level, item.Status, item.InviteCode, item.JoinOrderID, item.JoinFeeCents, item.TokenRightsAmount, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 		if err != nil {
 			return fmt.Errorf("upsert xz_channel_agents %s: %w", item.ID, err)
 		}

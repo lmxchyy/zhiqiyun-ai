@@ -13,8 +13,16 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	knowledgeapp "xianzhi-ai/backend-go/internal/app/knowledge"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
+	"xianzhi-ai/backend-go/internal/config"
 	chatprovider "xianzhi-ai/backend-go/internal/provider/chat"
+	ocrprovider "xianzhi-ai/backend-go/internal/provider/ocr"
+)
+
+var (
+	errPPTImageContainsText               = errors.New("generated ppt image contains readable text")
+	errPPTVisualTextValidationUnavailable = errors.New("ppt visual text validation unavailable")
 )
 
 type pptOutlineGenerateRequest struct {
@@ -38,20 +46,48 @@ type pptOutlineSlide = pptapp.OutlineSlide
 type pptSlide = pptapp.Slide
 
 type pptImageSearchResponse struct {
-	ID     string `json:"id"`
-	URL    string `json:"url"`
-	Title  string `json:"title"`
-	Source string `json:"source"`
+	ID         string `json:"id"`
+	TaskID     string `json:"taskId,omitempty"`
+	URL        string `json:"url"`
+	StorageRef string `json:"storageRef,omitempty"`
+	Title      string `json:"title"`
+	Source     string `json:"source"`
 }
 
 type pptImageGenerateRequest struct {
-	Slide       pptSlide `json:"slide"`
-	Prompt      string   `json:"prompt"`
-	DeckTitle   string   `json:"deckTitle"`
-	Theme       string   `json:"theme"`
-	Language    string   `json:"language"`
-	ImageSource string   `json:"imageSource"`
-	ImageModel  string   `json:"imageModel"`
+	Slide            pptSlide           `json:"slide"`
+	Prompt           string             `json:"prompt"`
+	DeckTitle        string             `json:"deckTitle"`
+	Theme            string             `json:"theme"`
+	Language         string             `json:"language"`
+	ImageSource      string             `json:"imageSource"`
+	ImageModel       string             `json:"imageModel"`
+	VisualPlan       *pptapp.VisualPlan `json:"visualPlan,omitempty"`
+	ImageStyle       string             `json:"imageStyle,omitempty"`
+	PeopleStyle      string             `json:"peopleStyle,omitempty"`
+	ImageLighting    string             `json:"imageLighting,omitempty"`
+	ImageComposition string             `json:"imageComposition,omitempty"`
+	RetryAttempt     int                `json:"-"`
+}
+
+type pptRegenerateVisualRequest struct {
+	VisualType         string `json:"visualType"`
+	Style              string `json:"style"`
+	Composition        string `json:"composition"`
+	CustomInstruction  string `json:"customInstruction"`
+	KeepCurrentContent bool   `json:"keepCurrentContent"`
+}
+
+type pptRegenerateVisualResponse struct {
+	TaskID string       `json:"taskId,omitempty"`
+	Status string       `json:"status"`
+	Slide  pptapp.Slide `json:"slide"`
+}
+
+type pptRestoreVisualRequest struct {
+	CreatedAt  string `json:"createdAt"`
+	URL        string `json:"url"`
+	StorageRef string `json:"storageRef"`
 }
 
 type pptModelOption struct {
@@ -101,14 +137,12 @@ var pptImageModels = []pptModelOption{
 	{Label: "ComfyUI 工作流", Value: "comfyui-ppt", Provider: "ComfyUI", ProviderType: "comfyui"},
 }
 
+var pptVisualTaskLocks sync.Map
+
 func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	data, user, err := a.authenticatedUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
-		return
-	}
-	if _, err := authorizeUserModelCall(a.store, user.ID, modulePPTGeneration); err != nil {
-		writeModelAuthorizationError(w, err)
 		return
 	}
 	var req pptapp.GenerateRequest
@@ -117,6 +151,17 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.UserID = user.ID
+	pageCount := req.SlideCount
+	if req.Outline != nil && len(req.Outline.Slides) > 0 {
+		pageCount = len(req.Outline.Slides)
+	}
+	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, pageCount, strings.TrimSpace(req.ImageSource) != "", false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.TextModel = capability.Model
+	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], 5))
 	if req.Outline == nil {
 		outline, err := a.generatePPTOutlineWithModel(r.Context(), outlineRequestFromGenerate(req))
 		if err != nil {
@@ -126,8 +171,23 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		req.Outline = &outline
 		req.SlideCount = len(outline.Slides)
 	}
-	resp, err := a.pptService.Generate(req)
+	externalActive := 0
+	concurrencyLimit := 0
+	if !strings.EqualFold(stringValue(capability.Params["billing_scope"]), contextEnterprise) {
+		concurrencyLimit = adminPlanConcurrencyLimit(data, user)
+		var listErr error
+		externalActive, listErr = activeGenerationTaskCountForStore(a.store, user.ID)
+		if listErr != nil {
+			writeError(w, http.StatusInternalServerError, listErr)
+			return
+		}
+	}
+	resp, err := a.pptService.GenerateWithConcurrency(req, externalActive, concurrencyLimit)
 	if err != nil {
+		if errors.Is(err, pptapp.ErrConcurrency) {
+			writeError(w, http.StatusTooManyRequests, err)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -143,7 +203,11 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if shouldAutoGeneratePPTImages(req) {
-		go a.runPPTTaskImageGeneration(user, task)
+		if pptAutoImageEnabled(a.cfg) {
+			go a.runPPTTaskImageGeneration(user, task)
+		} else {
+			log.Printf("ppt automatic image generation disabled presentationId=%s userId=%s mode=%s", task.TaskID, user.ID, firstNonEmptyString(a.cfg.PPTAutoImageMode, "enabled"))
+		}
 	}
 	writeJSON(w, resp)
 }
@@ -176,6 +240,7 @@ func (a api) getPPTTask(w http.ResponseWriter, r *http.Request) {
 		writePPTError(w, err)
 		return
 	}
+	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
 	writeJSON(w, task)
 }
 
@@ -185,7 +250,15 @@ func (a api) listPPTHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	writeJSON(w, a.pptService.History(user.ID))
+	items, err := a.pptService.HistoryWithError(user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for index := range items {
+		items[index] = a.materializePPTTaskVisualURLs(r.Context(), user, items[index])
+	}
+	writeJSON(w, items)
 }
 
 func (a api) deletePPTTask(w http.ResponseWriter, r *http.Request) {
@@ -203,13 +276,9 @@ func (a api) deletePPTTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) generatePPTOutline(w http.ResponseWriter, r *http.Request) {
-	_, user, err := a.authenticatedUser(r)
+	data, user, err := a.authenticatedUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
-		return
-	}
-	if _, err := authorizeUserModelCall(a.store, user.ID, modulePPTGeneration); err != nil {
-		writeModelAuthorizationError(w, err)
 		return
 	}
 	var req pptOutlineGenerateRequest
@@ -222,6 +291,13 @@ func (a api) generatePPTOutline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, pptapp.ErrInvalidPrompt)
 		return
 	}
+	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, req.SlideCount, strings.TrimSpace(req.ImageSource) != "", false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.TextModel = capability.Model
+	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], 5))
 	outline, err := a.generatePPTOutlineWithModel(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -267,6 +343,250 @@ func (a api) regeneratePPTSlide(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, slide)
 }
 
+func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	presentationID := strings.TrimSpace(r.PathValue("id"))
+	slideID := strings.TrimSpace(r.PathValue("slideId"))
+	task, slide, err := a.pptService.GetSlide(user.ID, presentationID, slideID)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	var req pptRegenerateVisualRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	lockKey := user.ID + ":" + presentationID + ":" + slideID
+	releaseVisual, acquired, lockErr := a.tryAcquirePPTVisualOperation(r.Context(), lockKey)
+	if lockErr != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("acquire visual generation lock: %w", lockErr))
+		return
+	}
+	if !acquired {
+		writeError(w, http.StatusConflict, errors.New("a visual generation task is already active for this slide"))
+		return
+	}
+	defer releaseVisual()
+
+	plan, planErr := a.generatePPTVisualPlan(r.Context(), task, slide)
+	if planErr != nil && slide.VisualPlan != nil {
+		plan = *slide.VisualPlan
+	}
+	if value := strings.TrimSpace(req.VisualType); value != "" {
+		plan.VisualType = value
+	}
+	if value := strings.TrimSpace(req.Style); value != "" {
+		plan.Style = value
+	}
+	if value := strings.TrimSpace(req.CustomInstruction); value != "" {
+		plan.Action = concisePPTVisualIdea(value)
+	}
+	plan = pptapp.NormalizeVisualPlan(plan, pptapp.VisualPlannerInput{
+		DeckTheme: task.Theme, SlideType: slide.SlideType, SlideTitle: slide.Title,
+		CoreIdea: concisePPTVisualIdea(slide.Content), Layout: slide.Layout,
+		ImagePosition: req.Composition, ImageStyle: firstNonEmptyString(plan.Style, task.ImageStyle),
+		PeopleStyle: task.PeopleStyle, ImageLighting: task.ImageLighting,
+		ImageComposition: firstNonEmptyString(req.Composition, task.ImageComposition),
+	})
+	if _, err := a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "processing", ""); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !plan.ImageRequired {
+		updated, err := a.pptService.DisableSlideVisual(user.ID, presentationID, slideID, plan)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		updated = a.materializePPTTaskVisualURLs(r.Context(), user, updated)
+		for _, item := range updated.Slides {
+			if item.ID == slideID {
+				writeJSON(w, pptRegenerateVisualResponse{Status: "success", Slide: item})
+				return
+			}
+		}
+		writePPTError(w, pptapp.ErrTaskNotFound)
+		return
+	}
+
+	imageReq := pptImageGenerateRequest{
+		Slide: slide, Prompt: task.Prompt, DeckTitle: task.Title, Theme: task.Theme,
+		Language: task.Language, ImageSource: "ai", ImageModel: task.ImageModel,
+		VisualPlan: &plan, ImageStyle: task.ImageStyle, PeopleStyle: task.PeopleStyle,
+		ImageLighting: task.ImageLighting, ImageComposition: firstNonEmptyString(req.Composition, task.ImageComposition),
+	}
+	model := pptImageProviderModel(imageReq.ImageModel, a.cfg.ImageModel)
+	service, err := a.generationServiceForPPTImage(user, model)
+	if err != nil {
+		_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var image pptImageSearchResponse
+	var generationErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		imageReq.RetryAttempt = attempt
+		ctx, cancel := context.WithTimeout(r.Context(), 115*time.Second)
+		image, generationErr = a.generateBillablePPTImage(ctx, user, service, imageReq, model, presentationID)
+		cancel()
+		if generationErr == nil && strings.TrimSpace(image.URL) != "" {
+			break
+		}
+		if r.Context().Err() != nil {
+			break
+		}
+		if attempt < 2 {
+			time.Sleep(time.Second)
+		}
+	}
+	if generationErr != nil {
+		_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "failed", generationErrorMessage(generationErr))
+		writeError(w, http.StatusBadGateway, generationErr)
+		return
+	}
+	updated, err := a.pptService.CompleteSlideVisual(user.ID, presentationID, slideID, plan, pptapp.VisualAsset{
+		URL: firstNonEmptyString(image.StorageRef, image.URL), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	updated = a.materializePPTTaskVisualURLs(r.Context(), user, updated)
+	for _, item := range updated.Slides {
+		if item.ID == slideID {
+			writeJSON(w, pptRegenerateVisualResponse{TaskID: image.TaskID, Status: "success", Slide: item})
+			return
+		}
+	}
+	writePPTError(w, pptapp.ErrTaskNotFound)
+}
+
+func acquirePPTVisualTask(lockMap *sync.Map, key string) bool {
+	if lockMap == nil {
+		return false
+	}
+	_, loaded := lockMap.LoadOrStore(key, struct{}{})
+	return !loaded
+}
+
+func (a api) tryAcquirePPTVisualOperation(ctx context.Context, key string) (func(), bool, error) {
+	lockMap := a.pptVisualTasks
+	if lockMap == nil {
+		lockMap = &pptVisualTaskLocks
+	}
+	if !acquirePPTVisualTask(lockMap, key) {
+		return func() {}, false, nil
+	}
+	releaseLocal := func() { lockMap.Delete(key) }
+	if a.pptVisualLocker == nil {
+		return releaseLocal, true, nil
+	}
+	releaseDistributed, acquired, err := a.pptVisualLocker.TryAcquire(ctx, key, pptVisualLockTTL)
+	if err != nil || !acquired {
+		releaseLocal()
+		return func() {}, acquired, err
+	}
+	return func() {
+		releaseDistributed()
+		releaseLocal()
+	}, true, nil
+}
+
+func (a api) deletePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	presentationID := strings.TrimSpace(r.PathValue("id"))
+	slideID := strings.TrimSpace(r.PathValue("slideId"))
+	lockKey := user.ID + ":" + presentationID + ":" + slideID
+	releaseVisual, acquired, lockErr := a.tryAcquirePPTVisualOperation(r.Context(), lockKey)
+	if lockErr != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("acquire visual operation lock: %w", lockErr))
+		return
+	}
+	if !acquired {
+		writeError(w, http.StatusConflict, errors.New("a visual operation is already active for this slide"))
+		return
+	}
+	defer releaseVisual()
+	_, slide, err := a.pptService.GetSlide(user.ID, presentationID, slideID)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	plan := pptapp.VisualPlan{VisualType: "none", ImageRequired: false}
+	if slide.VisualPlan != nil {
+		plan = *slide.VisualPlan
+		plan.VisualType = "none"
+		plan.ImageRequired = false
+	}
+	updated, err := a.pptService.DisableSlideVisual(user.ID, presentationID, slideID, plan)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	updated = a.materializePPTTaskVisualURLs(r.Context(), user, updated)
+	for _, item := range updated.Slides {
+		if item.ID == slideID {
+			writeJSON(w, pptRegenerateVisualResponse{Status: "success", Slide: item})
+			return
+		}
+	}
+}
+
+func (a api) restorePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	presentationID := strings.TrimSpace(r.PathValue("id"))
+	slideID := strings.TrimSpace(r.PathValue("slideId"))
+	var req pptRestoreVisualRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	visualReference := firstNonEmptyString(req.StorageRef, req.URL)
+	if strings.TrimSpace(req.CreatedAt) == "" || strings.TrimSpace(visualReference) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("visual history createdAt and url are required"))
+		return
+	}
+	lockKey := user.ID + ":" + presentationID + ":" + slideID
+	releaseVisual, acquired, lockErr := a.tryAcquirePPTVisualOperation(r.Context(), lockKey)
+	if lockErr != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("acquire visual operation lock: %w", lockErr))
+		return
+	}
+	if !acquired {
+		writeError(w, http.StatusConflict, errors.New("a visual operation is already active for this slide"))
+		return
+	}
+	defer releaseVisual()
+	updated, err := a.pptService.RestoreSlideVisual(user.ID, presentationID, slideID, req.CreatedAt, visualReference)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	updated = a.materializePPTTaskVisualURLs(r.Context(), user, updated)
+	for _, slide := range updated.Slides {
+		if slide.ID == slideID {
+			log.Printf("ppt visual restored presentationId=%s slideId=%s visualCreatedAt=%s", presentationID, slideID, req.CreatedAt)
+			writeJSON(w, pptRegenerateVisualResponse{Status: "success", Slide: slide})
+			return
+		}
+	}
+	writePPTError(w, pptapp.ErrTaskNotFound)
+}
+
 func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 	_, user, err := a.authenticatedUser(r)
 	if err != nil {
@@ -288,6 +608,7 @@ func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 		writePPTError(w, err)
 		return
 	}
+	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
 	payload, err := buildPPTX(task)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -354,6 +675,33 @@ func shouldAutoGeneratePPTImages(req pptapp.GenerateRequest) bool {
 	return req.Outline != nil && len(req.Outline.Slides) > 0
 }
 
+func pptVisualPlannerModelEnabled(cfg config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.PPTVisualPlannerMode)) {
+	case "local", "disabled", "off", "false", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+func pptAutoImageEnabled(cfg config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.PPTAutoImageMode)) {
+	case "disabled", "off", "false", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+func pptVisualOCRStrict(cfg config.Config) bool {
+	switch strings.ToLower(strings.TrimSpace(cfg.PPTVisualOCRFailureMode)) {
+	case "fail_open", "fail-open", "open":
+		return false
+	default:
+		return true
+	}
+}
+
 func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 	if task.TaskID == "" || len(task.Slides) == 0 {
 		return
@@ -368,28 +716,64 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 		if hasRealPPTImageURL(slide.ImageURL) {
 			continue
 		}
+		if !pptapp.ShouldGenerateImageForSlide(slide) {
+			continue
+		}
 		slide := slide
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			lockKey := user.ID + ":" + task.TaskID + ":" + slide.ID
+			lockCtx, lockCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			releaseVisual, acquired, lockErr := a.tryAcquirePPTVisualOperation(lockCtx, lockKey)
+			lockCancel()
+			if lockErr != nil {
+				log.Printf("ppt image lock failed presentationId=%s slideId=%s modelName=%s err=%v", task.TaskID, slide.ID, task.ImageModel, lockErr)
+				return
+			}
+			if !acquired {
+				log.Printf("ppt image generation skipped because visual task is active presentationId=%s slideId=%s modelName=%s", task.TaskID, slide.ID, task.ImageModel)
+				return
+			}
+			defer releaseVisual()
+			planCtx, planCancel := context.WithTimeout(context.Background(), 35*time.Second)
+			if plan, planErr := a.generatePPTVisualPlan(planCtx, task, slide); planErr == nil {
+				slide.VisualPlan = &plan
+				_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, task.TaskID, slide.ID, plan, "", "planned", "")
+			}
+			planCancel()
 			req := pptImageGenerateRequest{
-				Slide:       slide,
-				Prompt:      task.Prompt,
-				DeckTitle:   task.Title,
-				Theme:       task.Theme,
-				Language:    task.Language,
-				ImageSource: task.ImageSource,
-				ImageModel:  task.ImageModel,
+				Slide:            slide,
+				Prompt:           task.Prompt,
+				DeckTitle:        task.Title,
+				Theme:            task.Theme,
+				Language:         task.Language,
+				ImageSource:      task.ImageSource,
+				ImageModel:       task.ImageModel,
+				VisualPlan:       slide.VisualPlan,
+				ImageStyle:       task.ImageStyle,
+				PeopleStyle:      task.PeopleStyle,
+				ImageLighting:    task.ImageLighting,
+				ImageComposition: task.ImageComposition,
 			}
 			var lastErr error
 			for attempt := 1; attempt <= 2; attempt++ {
+				req.RetryAttempt = attempt
 				ctx, cancel := context.WithTimeout(context.Background(), 115*time.Second)
 				image, err := a.generatePPTTaskSlideImage(ctx, user, task.TaskID, req)
 				cancel()
 				if err == nil && strings.TrimSpace(image.URL) != "" {
-					if _, updateErr := a.pptService.UpdateSlideImage(user.ID, task.TaskID, slide.ID, image.URL); updateErr != nil {
+					plan := pptapp.NormalizeVisualPlan(pptapp.VisualPlan{}, pptapp.VisualPlannerInput{SlideType: slide.SlideType, SlideTitle: slide.Title, CoreIdea: concisePPTVisualIdea(slide.Content)})
+					if slide.VisualPlan != nil {
+						plan = *slide.VisualPlan
+					}
+					model := pptImageProviderModel(req.ImageModel, a.cfg.ImageModel)
+					if _, updateErr := a.pptService.CompleteSlideVisual(user.ID, task.TaskID, slide.ID, plan, pptapp.VisualAsset{
+						URL: firstNonEmptyString(image.StorageRef, image.URL), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+					}); updateErr != nil {
+						_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, task.TaskID, slide.ID, plan, "", "failed", generationErrorMessage(updateErr))
 						log.Printf("ppt image update failed task=%s slide=%s: %v", task.TaskID, slide.ID, updateErr)
 					}
 					return
@@ -401,10 +785,54 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 				}
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
-			log.Printf("ppt image generation failed task=%s slide=%s page=%d: %v", task.TaskID, slide.ID, slide.Page, lastErr)
+			if slide.VisualPlan != nil {
+				_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, task.TaskID, slide.ID, *slide.VisualPlan, "", "failed", generationErrorMessage(lastErr))
+			}
+			log.Printf("ppt image generation failed presentationId=%s slideId=%s page=%d modelName=%s err=%v", task.TaskID, slide.ID, slide.Page, task.ImageModel, lastErr)
 		}()
 	}
 	wg.Wait()
+}
+
+func (a api) generatePPTVisualPlan(ctx context.Context, task pptapp.Task, slide pptapp.Slide) (pptapp.VisualPlan, error) {
+	input := pptapp.VisualPlannerInput{
+		DeckTheme: task.Theme, SlideType: slide.SlideType, SlideTitle: slide.Title,
+		CoreIdea: concisePPTVisualIdea(slide.Content), ContentSummary: concisePPTVisualIdea(slide.Content),
+		Layout: slide.Layout, ImagePosition: task.ImageComposition, ImageStyle: task.ImageStyle,
+		PeopleStyle: task.PeopleStyle, ImageLighting: task.ImageLighting, ImageComposition: task.ImageComposition,
+	}
+	var modelPlanner pptapp.VisualPlanModelFunc
+	if pptVisualPlannerModelEnabled(a.cfg) && a.pptProviderConfigured() {
+		modelPlanner = func(ctx context.Context, plannerInput pptapp.VisualPlannerInput) (pptapp.VisualPlan, error) {
+			provider := chatprovider.NewOpenAICompatible(a.cfg)
+			model := firstNonEmptyString(task.TextModel, a.cfg.PPTTextModel)
+			response, err := provider.Chat(ctx, generation.CreateRequest{
+				Type: "CHAT_COMPLETION", Model: model,
+				Params: map[string]any{
+					"temperature": 0.1, "max_tokens": 1200,
+					"messages": []any{
+						map[string]any{"role": "system", "content": "Create a visual plan for one presentation slide. Return JSON only with fields visualType,imageRequired,chartRequired,diagramRequired,textInImage,subject,scene,action,objects,mood,composition,style,prompt,negativePrompt. Never copy slide prose or bullet lists into prompt. textInImage must be false for ordinary visuals."},
+						map[string]any{"role": "user", "content": fmt.Sprintf("Deck theme: %s\nSlide type: %s\nSlide title: %s\nCore visual idea: %s\nLayout: %s\nImage position: %s\nDeck image style: %s\nExtract subject, scene, action, objects, mood, composition and style. Do not reproduce the slide copy.", plannerInput.DeckTheme, plannerInput.SlideType, plannerInput.SlideTitle, plannerInput.CoreIdea, plannerInput.Layout, plannerInput.ImagePosition, plannerInput.ImageStyle)},
+					},
+				},
+			})
+			if err != nil {
+				return pptapp.VisualPlan{}, err
+			}
+			content := extractJSONObject(response.Message.Content)
+			if content == "" {
+				content = strings.TrimSpace(response.Message.Content)
+			}
+			var plan pptapp.VisualPlan
+			if err := json.Unmarshal([]byte(content), &plan); err != nil {
+				return pptapp.VisualPlan{}, err
+			}
+			return plan, nil
+		}
+	} else if !pptVisualPlannerModelEnabled(a.cfg) {
+		log.Printf("ppt visual planner using local mode presentationId=%s slideId=%s mode=%s", task.TaskID, slide.ID, firstNonEmptyString(a.cfg.PPTVisualPlannerMode, "model"))
+	}
+	return pptapp.NewVisualPlannerService(modelPlanner).Plan(ctx, input)
 }
 
 func (a api) generatePPTTaskSlideImage(ctx context.Context, user adminUser, pptTaskID string, req pptImageGenerateRequest) (pptImageSearchResponse, error) {
@@ -418,33 +846,120 @@ func (a api) generatePPTTaskSlideImage(ctx context.Context, user adminUser, pptT
 
 func (a api) generateBillablePPTImage(ctx context.Context, user adminUser, service generation.Service, req pptImageGenerateRequest, model string, pptTaskID string) (pptImageSearchResponse, error) {
 	createReq := pptImageGenerationCreateRequest(user, req, model, pptTaskID)
+	retryAttempt, retrySeed := createReq.Params["retryAttempt"], createReq.Params["seed"]
+	delete(createReq.Params, "retryAttempt")
+	delete(createReq.Params, "seed")
+	data, err := a.store.AdminData()
+	if err != nil {
+		return pptImageSearchResponse{}, err
+	}
+	createReq, err = a.prepareGenerationRequest(data, user, createReq)
+	if err != nil {
+		return pptImageSearchResponse{}, fmt.Errorf("authorize ppt image generation: %w", err)
+	}
+	createReq.Params["retryAttempt"] = retryAttempt
+	createReq.Params["seed"] = retrySeed
 	task, err := a.store.CreatePendingGenerationTask(createReq)
 	if err != nil {
 		return pptImageSearchResponse{}, err
 	}
+	log.Printf("ppt visual generation started presentationId=%s slideId=%s taskId=%s modelName=%s", pptTaskID, req.Slide.ID, task.ID, model)
 	prepared, err := service.PrepareImageTask(ctx, createReq)
 	if err != nil {
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		log.Printf("ppt visual generation failed presentationId=%s slideId=%s taskId=%s modelName=%s err=%v", pptTaskID, req.Slide.ID, task.ID, model, err)
 		return pptImageSearchResponse{}, fmt.Errorf("ppt image generation failed: %w", err)
+	}
+	if err := a.validatePPTImageHasNoText(ctx, task.ID, prepared); err != nil {
+		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		log.Printf("ppt visual text validation failed presentationId=%s slideId=%s taskId=%s modelName=%s retryAttempt=%d err=%v", pptTaskID, req.Slide.ID, task.ID, model, req.RetryAttempt, err)
+		return pptImageSearchResponse{}, err
+	}
+	prepared, storedFiles, err := a.persistGeneratedImages(ctx, task.ID, prepared)
+	if err != nil {
+		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		log.Printf("ppt visual storage failed presentationId=%s slideId=%s taskId=%s modelName=%s err=%v", pptTaskID, req.Slide.ID, task.ID, model, err)
+		return pptImageSearchResponse{}, fmt.Errorf("persist ppt image: %w", err)
 	}
 	imageURL := pptGeneratedImageURL(prepared)
 	if imageURL == "" {
+		a.cleanupGeneratedFiles(storedFiles)
 		_, _ = a.store.FailGenerationTask(task.ID, "ppt image provider returned no image")
+		log.Printf("ppt visual generation empty presentationId=%s slideId=%s taskId=%s modelName=%s", pptTaskID, req.Slide.ID, task.ID, model)
 		return pptImageSearchResponse{}, errors.New("ppt image provider returned no image")
 	}
 	if _, err := a.store.CompleteGenerationTask(task.ID, prepared); err != nil {
+		a.cleanupGeneratedFiles(storedFiles)
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		log.Printf("ppt visual database update failed presentationId=%s slideId=%s taskId=%s modelName=%s err=%v", pptTaskID, req.Slide.ID, task.ID, model, err)
 		return pptImageSearchResponse{}, err
 	}
+	storageRef := ""
+	if len(storedFiles) > 0 {
+		storageRef = pptStorageReference(storedFiles[0])
+	}
+	displayURL := imageURL
+	if signed, ok := a.resolvePPTStorageReference(ctx, user, storageRef); ok {
+		displayURL = signed
+	}
 	return pptImageSearchResponse{
-		ID:     fmt.Sprintf("ppt_ai_%d", time.Now().UnixNano()),
-		URL:    imageURL,
-		Title:  firstNonEmpty([]string{req.Slide.Title, req.DeckTitle, "PPT"}) + " image",
-		Source: "ai",
+		ID: fmt.Sprintf("ppt_ai_%d", time.Now().UnixNano()), TaskID: task.ID,
+		URL: displayURL, StorageRef: storageRef,
+		Title: firstNonEmpty([]string{req.Slide.Title, req.DeckTitle, "PPT"}) + " image", Source: "ai",
 	}, nil
 }
 
+func (a api) validatePPTImageHasNoText(ctx context.Context, taskID string, req generation.CreateRequest) error {
+	if strings.TrimSpace(a.cfg.KnowledgeOCREndpoint) == "" || len(req.GeneratedImages) == 0 {
+		return nil
+	}
+	provider := ocrprovider.NewHTTP(a.cfg.KnowledgeOCRProvider, a.cfg.KnowledgeOCREndpoint, a.cfg.KnowledgeOCRAPIKey, 20*time.Second)
+	for index, image := range req.GeneratedImages {
+		raw, contentType, extension, err := readGeneratedArtifact(ctx, image.URL, image.ContentType)
+		if err != nil {
+			if !pptVisualOCRStrict(a.cfg) {
+				return nil
+			}
+			return fmt.Errorf("%w: read generated artifact: %v", errPPTVisualTextValidationUnavailable, err)
+		}
+		units, err := provider.Recognize(ctx, knowledgeapp.SourceDocument{
+			Name: fmt.Sprintf("ppt-visual-%02d.%s", index+1, extension), MIMEType: contentType, Content: raw,
+		})
+		if err != nil {
+			log.Printf("ppt visual text validation unavailable presentationId=%s slideId=%s taskId=%s modelName=%s provider=%s failureMode=%s err=%v", stringValue(req.Params["pptTaskId"]), stringValue(req.Params["slideId"]), taskID, req.Model, provider.Code(), firstNonEmptyString(a.cfg.PPTVisualOCRFailureMode, "strict"), err)
+			if !pptVisualOCRStrict(a.cfg) {
+				return nil
+			}
+			return fmt.Errorf("%w: %v", errPPTVisualTextValidationUnavailable, err)
+		}
+		if pptOCRContainsReadableText(units) {
+			return errPPTImageContainsText
+		}
+	}
+	return nil
+}
+
+func pptOCRContainsReadableText(units []knowledgeapp.DocumentUnit) bool {
+	readable := 0
+	for _, unit := range units {
+		for _, r := range unit.Title + " " + unit.Content {
+			if r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '\u4e00' && r <= '\u9fff' {
+				readable++
+				if readable >= 2 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func pptImageGenerationCreateRequest(user adminUser, req pptImageGenerateRequest, model string, pptTaskID string) generation.CreateRequest {
+	negativePrompt := pptapp.DefaultNegativePrompt
+	visualPlan := normalizePPTImageVisualPlan(req)
+	if visualPlan != nil {
+		negativePrompt = visualPlan.NegativePrompt
+	}
 	return generation.CreateRequest{
 		Type:       "TEXT_TO_IMAGE",
 		ModuleCode: moduleImageGeneration,
@@ -452,20 +967,24 @@ func pptImageGenerationCreateRequest(user adminUser, req pptImageGenerateRequest
 		Prompt:     pptImagePrompt(req),
 		Model:      model,
 		Params: map[string]any{
-			"module_code":  moduleImageGeneration,
-			"count":        1,
-			"n":            1,
-			"imageRatio":   "16:9",
-			"size":         "1536x1024",
-			"quality":      "standard",
-			"purpose":      "ppt_slide_illustration",
-			"sourceModule": "ppt-generation",
-			"pptTaskId":    strings.TrimSpace(pptTaskID),
-			"theme":        strings.TrimSpace(req.Theme),
-			"language":     strings.TrimSpace(req.Language),
-			"deckTitle":    strings.TrimSpace(req.DeckTitle),
-			"slideId":      strings.TrimSpace(req.Slide.ID),
-			"slidePage":    req.Slide.Page,
+			"module_code":    moduleImageGeneration,
+			"count":          1,
+			"n":              1,
+			"imageRatio":     "16:9",
+			"size":           "1536x1024",
+			"quality":        "standard",
+			"purpose":        "ppt_slide_illustration",
+			"sourceModule":   "ppt-generation",
+			"pptTaskId":      strings.TrimSpace(pptTaskID),
+			"theme":          strings.TrimSpace(req.Theme),
+			"language":       strings.TrimSpace(req.Language),
+			"deckTitle":      strings.TrimSpace(req.DeckTitle),
+			"slideId":        strings.TrimSpace(req.Slide.ID),
+			"slidePage":      req.Slide.Page,
+			"negativePrompt": negativePrompt,
+			"visualPlan":     visualPlan,
+			"seed":           time.Now().UnixNano(),
+			"retryAttempt":   req.RetryAttempt,
 		},
 	}
 }
@@ -486,6 +1005,9 @@ func hasRealPPTImageURL(value string) bool {
 		return false
 	}
 	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return true
+	}
+	if strings.HasPrefix(value, pptStorageReferenceScheme+"://") {
 		return true
 	}
 	return strings.HasPrefix(value, "data:image/png") || strings.HasPrefix(value, "data:image/jpeg") || strings.HasPrefix(value, "data:image/jpg") || strings.HasPrefix(value, "data:image/webp")
@@ -573,32 +1095,45 @@ func pptImageProviderModel(selected string, fallback string) string {
 }
 
 func pptImagePrompt(req pptImageGenerateRequest) string {
-	title := firstNonEmpty([]string{req.Slide.Title, req.DeckTitle, req.Prompt})
-	content := strings.TrimSpace(req.Slide.Content)
-	bullets := make([]string, 0, len(req.Slide.BulletPoints))
-	for _, point := range req.Slide.BulletPoints {
-		if text := strings.TrimSpace(point); text != "" {
-			bullets = append(bullets, text)
-		}
+	if plan := normalizePPTImageVisualPlan(req); plan != nil {
+		return pptImagePromptVariation(plan.Prompt, req.RetryAttempt)
 	}
-	details := strings.Join(nonEmptyStringItems(content, strings.Join(bullets, "; ")), "; ")
-	topic := strings.TrimSpace(title)
-	if prompt := strings.TrimSpace(req.Prompt); prompt != "" && prompt != topic {
-		topic = strings.TrimSpace(topic + " - " + prompt)
+	plan := pptapp.NormalizeVisualPlan(pptapp.VisualPlan{}, pptapp.VisualPlannerInput{
+		DeckTheme: req.Theme, SlideType: req.Slide.SlideType, SlideTitle: req.Slide.Title,
+		CoreIdea: concisePPTVisualIdea(req.Slide.Content), Layout: req.Slide.Layout,
+		ImagePosition: req.ImageComposition, ImageStyle: req.ImageStyle,
+		PeopleStyle: req.PeopleStyle, ImageLighting: req.ImageLighting,
+	})
+	return pptImagePromptVariation(plan.Prompt, req.RetryAttempt)
+}
+
+func normalizePPTImageVisualPlan(req pptImageGenerateRequest) *pptapp.VisualPlan {
+	if req.VisualPlan == nil {
+		return nil
 	}
-	if topic == "" {
-		topic = "business presentation"
+	plan := pptapp.NormalizeVisualPlan(*req.VisualPlan, pptapp.VisualPlannerInput{
+		DeckTheme: req.Theme, SlideType: req.Slide.SlideType, SlideTitle: req.Slide.Title,
+		CoreIdea: concisePPTVisualIdea(req.Slide.Content), ContentSummary: concisePPTVisualIdea(req.Slide.Content), Layout: req.Slide.Layout,
+		ImagePosition: req.ImageComposition, ImageStyle: req.ImageStyle,
+		PeopleStyle: req.PeopleStyle, ImageLighting: req.ImageLighting,
+	})
+	return &plan
+}
+
+func pptImagePromptVariation(prompt string, retryAttempt int) string {
+	if retryAttempt <= 1 {
+		return prompt
 	}
-	style := strings.TrimSpace(req.Theme)
-	if style == "" {
-		style = "modern business"
+	return strings.TrimSpace(prompt) + " Use a distinctly different camera angle and alternate object arrangement while preserving the same deck style and clean copy-safe negative space."
+}
+
+func concisePPTVisualIdea(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	runes := []rune(value)
+	if len(runes) > 36 {
+		return string(runes[:36])
 	}
-	return strings.TrimSpace(fmt.Sprintf(
-		"Professional 16:9 presentation illustration, %s style, clean SaaS deck visual, no readable text, no logo, no watermark. Topic: %s. Visual cues: %s.",
-		truncatePPTImagePromptText(style, 40),
-		truncatePPTImagePromptText(topic, 80),
-		truncatePPTImagePromptText(details, 120),
-	))
+	return value
 }
 
 func truncatePPTImagePromptText(value string, maxRunes int) string {
@@ -657,6 +1192,7 @@ func buildPPTOutline(req pptOutlineGenerateRequest) pptOutline {
 			Summary:      summary,
 			BulletPoints: points,
 			Layout:       normalizedPPTLayout("", i-1, slideCount, req.ImageSource),
+			SlideType:    defaultPPTSlideType(i, slideCount),
 		})
 	}
 	return pptOutline{
@@ -664,6 +1200,16 @@ func buildPPTOutline(req pptOutlineGenerateRequest) pptOutline {
 		Slides:    slides,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
+}
+
+func defaultPPTSlideType(page, total int) string {
+	if page == 1 {
+		return "cover"
+	}
+	if page == total {
+		return "statement"
+	}
+	return "text_image"
 }
 
 func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGenerateRequest) (pptOutline, error) {
@@ -674,9 +1220,9 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 	if !a.pptProviderConfigured() {
 		return buildPPTOutline(req), nil
 	}
-	model := strings.TrimSpace(a.cfg.PPTTextModel)
+	model := strings.TrimSpace(req.TextModel)
 	if model == "" {
-		model = strings.TrimSpace(req.TextModel)
+		model = strings.TrimSpace(a.cfg.PPTTextModel)
 	}
 	if model == "" {
 		return buildPPTOutline(req), nil
@@ -700,6 +1246,60 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 		return pptOutline{}, fmt.Errorf("parse ppt outline model output: %w", err)
 	}
 	return outline, nil
+}
+
+func (a api) preparePPTCapabilityRequest(data adminPlatformData, user adminUser, prompt string, model string, pageCount int, withImages bool, uploadedFile bool) (generation.CreateRequest, error) {
+	if pageCount <= 0 {
+		pageCount = 5
+	}
+	authorization := modelCallAuthorization{
+		ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
+		UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
+	}
+	if authorizer, ok := a.store.(modelCallAuthorizer); ok {
+		resolvedAuthorization, err := authorizer.AuthorizeModelCall(user.ID, modulePPTGeneration)
+		if err != nil {
+			return generation.CreateRequest{}, err
+		}
+		authorization = resolvedAuthorization
+	}
+	user.TenantID = authorization.TenantID
+	user.OrganizationID = authorization.OrganizationID
+	request := generation.CreateRequest{
+		Type:       "PPT_GENERATION",
+		ModuleCode: modulePPTGeneration,
+		UserID:     user.ID,
+		Prompt:     strings.TrimSpace(prompt),
+		Model:      strings.TrimSpace(model),
+		Params: map[string]any{
+			"topic": prompt, "page_count": pageCount, "with_images": withImages, "uploaded_file": uploadedFile,
+		},
+	}
+	resolved, err := resolveModuleSchema(data, user, modulePPTGeneration, request.Model)
+	if err != nil {
+		return generation.CreateRequest{}, err
+	}
+	request.Model = resolved.Model.ModelName
+	if err := validateGenerationParams(request, resolved); err != nil {
+		return generation.CreateRequest{}, err
+	}
+	request.Params["module_code"] = modulePPTGeneration
+	request.Params["model_name"] = request.Model
+	request.Params["package_id"] = user.PlanID
+	request.Params["tenant_id"] = authorization.TenantID
+	request.Params["organization_id"] = authorization.OrganizationID
+	request.Params["billing_scope"] = authorization.BillingScope
+	request.Params["billing_account_id"] = authorization.BillingAccountID
+	request.Params["final_schema_snapshot"] = map[string]any{"fields": resolved.FinalSchema.Fields}
+	request.Params["limit_snapshot"] = resolved.Limit.LimitJSON
+	return request, nil
+}
+
+func anyFloatOrDefault(value any, fallback float64) float64 {
+	if parsed, ok := anyToFloat(value); ok {
+		return parsed
+	}
+	return fallback
 }
 
 func (a api) pptProviderConfigured() bool {
@@ -756,7 +1356,7 @@ func pptOutlineMessages(req pptOutlineGenerateRequest) []any {
 			"content": strings.Join([]string{
 				"You generate presentation outlines for a PPT document generation product.",
 				"Return only valid JSON. Do not wrap it in Markdown.",
-				"The JSON shape is: {\"title\":\"...\",\"slides\":[{\"page\":1,\"title\":\"...\",\"summary\":\"...\",\"bulletPoints\":[\"...\"],\"layout\":\"cover|section|content|imageText|summary\"}]}",
+				"The JSON shape is: {\"title\":\"...\",\"slides\":[{\"page\":1,\"title\":\"...\",\"summary\":\"...\",\"bulletPoints\":[\"...\"],\"layout\":\"cover|section|content|imageText|summary\",\"slideType\":\"cover|section|statement|text_image|case_study|product_showcase|industry_scene|agenda|feature_grid|process|timeline|comparison|data_chart|swot|matrix|organization|table\"}]}",
 				"Use the exact field names title, slides, page, summary, bulletPoints, and layout.",
 				"Use Simplified Chinese when language is zh. Use English when language is en.",
 				"Every slide must have 2 to 4 concise bulletPoints.",
@@ -861,6 +1461,7 @@ type pptOutlineSlideModel struct {
 	KeyPointsSnake    pptStringItems `json:"key_points"`
 	Takeaways         pptStringItems `json:"takeaways"`
 	Layout            string         `json:"layout"`
+	SlideType         string         `json:"slideType"`
 }
 
 type pptStringItems []string
@@ -926,6 +1527,7 @@ func (payload pptOutlineModelPayload) toOutline() pptOutline {
 			Summary:      firstNonEmptyString(item.Summary, item.Description, item.Content),
 			BulletPoints: firstPPTStringItems(item.BulletPoints, item.BulletPointsSnake, item.Bullets, item.Points, item.KeyPoints, item.KeyPointsSnake, item.Takeaways),
 			Layout:       item.Layout,
+			SlideType:    item.SlideType,
 		})
 	}
 	return pptOutline{
@@ -993,6 +1595,16 @@ func normalizeModelOutline(outline pptOutline, req pptOutlineGenerateRequest) pp
 		}
 		slide.BulletPoints = points
 		slide.Layout = normalizedPPTLayout(slide.Layout, i, len(outline.Slides), req.ImageSource)
+		if strings.TrimSpace(slide.SlideType) == "" {
+			if i == 0 {
+				slide.SlideType = "cover"
+			} else if slide.Layout == "section" {
+				slide.SlideType = "section"
+			} else {
+				slide.SlideType = "text_image"
+			}
+		}
+		slide.SlideType = pptapp.NormalizeSlideType(slide.SlideType)
 		slides = append(slides, slide)
 	}
 	outline.Slides = slides
@@ -1025,7 +1637,7 @@ func titleFromPromptForOutline(prompt string) string {
 }
 
 func writePPTError(w http.ResponseWriter, err error) {
-	if errors.Is(err, pptapp.ErrTaskNotFound) {
+	if errors.Is(err, pptapp.ErrTaskNotFound) || errors.Is(err, pptapp.ErrVisualNotFound) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}

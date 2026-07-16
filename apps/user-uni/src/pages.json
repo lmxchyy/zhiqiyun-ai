@@ -1,6 +1,6 @@
 {
   "pages": [
-    // #ifdef MP-WEIXIN
+    // #ifdef MP-WEIXIN || APP-PLUS
     {
       "path": "pages/WechatLoginPage",
       "style": {
@@ -91,6 +91,10 @@
     {
       "path": "pages/enterprise/EnterpriseSettingsPage",
       "style": { "navigationBarTitleText": "企业设置", "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
+      "path": "pages/enterprise/EnterpriseFeishuConnectorPage",
+      "style": { "navigationBarTitleText": "飞书企业连接", "navigationStyle": "custom" }
     },
     {
       "path": "pages/enterprise/EnterpriseCertificationPage",
@@ -339,6 +343,13 @@
       }
     },
     {
+      "path": "pages/user/UserVirtualPaymentPage",
+      "style": {
+        "navigationBarTitleText": "微信虚拟支付",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserOrdersPage",
       "style": {
         "navigationBarTitleText": "我的订单",
@@ -543,13 +554,15 @@
     }
     // #endif
     // #ifndef MP-WEIXIN
-    {
+    // #ifndef APP-PLUS
+    , {
       "path": "pages/AiCreationPage",
       "style": {
         "navigationBarTitleText": "知启云 AI",
         "navigationStyle": "custom"
       }
     }
+    // #endif
     // #endif
   ],
   "globalStyle": {

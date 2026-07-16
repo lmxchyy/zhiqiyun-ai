@@ -3,6 +3,7 @@ import type {
   AccountSecurityResponse,
   AuthAttributionInput,
   AuthFlowResponse,
+  BindMobileResponse,
   InviteValidationResponse,
   SmsSendResponse,
 } from "./types";
@@ -17,10 +18,10 @@ export const loginAPI = {
     });
   },
 
-  sendSms(mobile: string) {
+  sendSms(mobile: string, purpose = "login") {
     return apiClient.request<SmsSendResponse>("/api/v1/auth/sms/send", {
       method: "POST",
-      body: { mobile, purpose: "login" },
+      body: { mobile, purpose },
       timeout: 15000,
       auth: false,
     });
@@ -55,10 +56,38 @@ export const loginAPI = {
     return apiClient.request<AccountSecurityResponse>("/api/v1/auth/security");
   },
 
+  bindMobile(mobile: string, smsCode: string) {
+    return apiClient.request<BindMobileResponse>("/api/v1/auth/mobile/bind", {
+      method: "POST",
+      body: { mobile, smsCode },
+      timeout: 15000,
+    });
+  },
+
+  linkWechat(wxLoginCode: string) {
+    return apiClient.request<{ linked: boolean; userId: string }>("/api/v1/auth/wechat-mini-program/link", {
+      method: "POST",
+      body: { wxLoginCode },
+      timeout: 15000,
+    });
+  },
+
   changePassword(currentPassword: string, newPassword: string) {
     return apiClient.request<{ ok: boolean; passwordSet: boolean }>("/api/v1/auth/change-password", {
       method: "POST",
       body: { currentPassword, newPassword },
+    });
+  },
+
+  logout() {
+    return apiClient.request<{ ok: boolean }>("/api/v1/auth/logout", {
+      method: "POST",
+    });
+  },
+
+  logoutAll() {
+    return apiClient.request<{ ok: boolean; userId?: string; revokedSessions?: number }>("/api/v1/auth/logout-all", {
+      method: "POST",
     });
   },
 };

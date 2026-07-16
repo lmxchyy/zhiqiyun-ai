@@ -58,6 +58,34 @@ export type PptWorkflowStatus =
   | "failed";
 export type PptTaskStatus = Exclude<PptWorkflowStatus, "idle" | "outline_ready" | "outlining"> | "processing" | "draft";
 export type PptSlideLayout = "cover" | "section" | "content" | "imageText" | "summary";
+export type PptSlideType = "cover" | "section" | "statement" | "text_image" | "case_study" | "product_showcase" | "industry_scene" | "agenda" | "feature_grid" | "process" | "timeline" | "comparison" | "data_chart" | "swot" | "matrix" | "organization" | "table";
+export type PptVisualType = "scene" | "illustration" | "product" | "office" | "icon" | "chart" | "diagram" | "none";
+export type PptVisualComposition = "image_left" | "image_right" | "full_width" | "background" | "card";
+
+export interface PptVisualPlan {
+  visualType: PptVisualType | string;
+  imageRequired: boolean;
+  chartRequired: boolean;
+  diagramRequired: boolean;
+  textInImage: false;
+  subject: string;
+  scene: string;
+  action: string;
+  objects: string[];
+  mood: string;
+  composition: string;
+  style: string;
+  prompt: string;
+  negativePrompt: string;
+}
+
+export interface PptVisualAsset {
+  url: string;
+  storageRef?: string;
+  taskId?: string;
+  modelName?: string;
+  createdAt: string;
+}
 
 export interface PptModelOption {
   label: string;
@@ -83,6 +111,7 @@ export interface PptOutlineSlide {
   summary: string;
   bulletPoints: string[];
   layout?: PptSlideLayout;
+  slideType?: PptSlideType;
 }
 
 export interface PptOutline {
@@ -98,8 +127,17 @@ export interface PptSlide {
   content: string;
   bulletPoints: string[];
   imageUrl?: string;
+  visualStorageRef?: string;
   layout: PptSlideLayout;
   speakerNotes?: string;
+  slideType?: PptSlideType;
+  visualPlan?: PptVisualPlan;
+  visualHistory?: PptVisualAsset[];
+  visualTaskId?: string;
+  visualModelName?: string;
+  visualCreatedAt?: string;
+  visualStatus?: "planned" | "processing" | "success" | "failed" | string;
+  visualError?: string;
 }
 
 export interface PptGenerateOutlineRequest {
@@ -121,6 +159,11 @@ export interface PptGenerateOutlineRequest {
 export interface PptGenerateRequest extends PptGenerateOutlineRequest {
   theme: PptTheme;
   outline?: PptOutline;
+  imageStyle?: string;
+  peopleStyle?: string;
+  imageLighting?: string;
+  imageComposition?: PptVisualComposition;
+  textInImage?: false;
 }
 
 export interface PptGenerateImageRequest {
@@ -131,6 +174,25 @@ export interface PptGenerateImageRequest {
   language: PptLanguage;
   imageSource: PptImageSource;
   imageModel: string;
+  visualPlan?: PptVisualPlan;
+  imageStyle?: string;
+  peopleStyle?: string;
+  imageLighting?: string;
+  imageComposition?: PptVisualComposition;
+}
+
+export interface PptRegenerateVisualRequest {
+  visualType: PptVisualType | string;
+  style: string;
+  composition: PptVisualComposition;
+  customInstruction: string;
+  keepCurrentContent: true;
+}
+
+export interface PptRegenerateVisualResponse {
+  taskId?: string;
+  status: string;
+  slide: PptSlide;
 }
 
 export interface PptGenerateResponse {
@@ -157,6 +219,11 @@ export interface PptTaskResponse {
   imageSource?: PptImageSource;
   textModel?: string;
   imageModel?: string;
+  imageStyle?: string;
+  peopleStyle?: string;
+  imageLighting?: string;
+  imageComposition?: PptVisualComposition;
+  textInImage?: false;
   enableWebSearch?: boolean;
   progress?: number;
   currentPage?: number;

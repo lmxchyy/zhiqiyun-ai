@@ -45,13 +45,14 @@ var rolePermissionMatrix = map[string][]string{
 		"enterprise.member.remove", "enterprise.role.read", "enterprise.role.assign",
 		"enterprise.billing.read", "enterprise.audit.read", "enterprise.settings.read",
 		"enterprise.settings.update", "enterprise.certification.submit",
+		"enterprise.connector.read", "enterprise.connector.manage",
 	},
 	roleAIAdmin: {
 		"ai:admin", "enterprise.ai.use", "enterprise.overview.read", "enterprise.organization.read", "enterprise.member.read",
-		"enterprise.role.read", "enterprise.settings.read",
+		"enterprise.role.read", "enterprise.settings.read", "enterprise.connector.read", "enterprise.connector.manage",
 	},
 	roleFinance: {
-		"finance:view", "finance:approve", "enterprise.compute.ledger.read", "enterprise.overview.read", "enterprise.member.read",
+		"finance:view", "finance:approve", "finance:commission-rule:view", "finance:commission-rule:manage", "enterprise.compute.ledger.read", "enterprise.overview.read", "enterprise.member.read",
 		"enterprise.billing.read", "enterprise.audit.read",
 	},
 	roleCustomerService: {

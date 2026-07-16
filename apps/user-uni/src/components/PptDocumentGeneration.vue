@@ -122,6 +122,7 @@
                 <view class="ppt-slide-points">
                   <text v-for="point in slide.points" :key="point">• {{ point }}</text>
                 </view>
+                <image v-if="slide.imageUrl" class="ppt-slide-visual" :src="slide.imageUrl" mode="aspectFill" />
 
                 <view class="ppt-slide-floating-tools">
                   <view class="ppt-floating-menu-wrap">
@@ -220,6 +221,43 @@
                 <view v-else-if="editorPanel === 'diagrams'" class="ppt-panel-cards">
                   <button type="button" title="插入流程图" aria-label="插入流程图" @click="appendPointToActiveSlide('流程图占位')">◇ 流程图</button>
                   <button type="button" title="插入时间线" aria-label="插入时间线" @click="appendPointToActiveSlide('时间线占位')">↦ 时间线</button>
+                </view>
+                <view v-else-if="editorPanel === 'images'" class="ppt-visual-settings">
+                  <text class="ppt-visual-label">视觉类型</text>
+                  <view class="ppt-visual-options">
+                    <button v-for="item in visualTypeOptions" :key="item.value" type="button" :class="{ active: visualType === item.value }" @click="visualType = item.value">{{ item.label }}</button>
+                  </view>
+                  <text class="ppt-visual-label">构图</text>
+                  <view class="ppt-visual-options">
+                    <button v-for="item in visualCompositionOptions" :key="item.value" type="button" :class="{ active: visualComposition === item.value }" @click="visualComposition = item.value">{{ item.label }}</button>
+                  </view>
+                  <label class="ppt-visual-instruction">
+                    <text>补充要求（不会修改正文）</text>
+                    <input v-model="visualInstruction" placeholder="例如：更简洁、更具科技感" />
+                  </label>
+                  <view class="ppt-visual-rules">
+                    <text>✓ 图片内禁止文字</text>
+                    <text>✓ 保留正文留白</text>
+                    <text>✓ 继承整套 PPT 风格</text>
+                  </view>
+                  <button type="button" class="ppt-visual-primary" :disabled="visualBusy" @click="regenerateActiveSlideVisual">{{ visualBusy ? "正在生成…" : "重新生成本页配图" }}</button>
+                  <button type="button" :disabled="visualBusy || !activeEditorSlide.imageUrl" @click="deleteActiveSlideVisual">删除配图</button>
+                  <view v-if="activeEditorSlide.visualHistory?.length" class="ppt-visual-history">
+                    <text class="ppt-visual-label">历史配图</text>
+                    <scroll-view scroll-x class="ppt-visual-history-list">
+                      <button
+                        v-for="asset in [...activeEditorSlide.visualHistory].reverse()"
+                        :key="`${asset.createdAt}-${asset.url}`"
+                        type="button"
+                        :disabled="visualBusy"
+                        @click="restoreActiveSlideVisual(asset.createdAt, asset.url, asset.storageRef)"
+                      >
+                        <image :src="asset.url" mode="aspectFill" />
+                        <text>{{ formatVisualTime(asset.createdAt) }}</text>
+                      </button>
+                    </scroll-view>
+                  </view>
+                  <text v-if="visualMessage" class="ppt-visual-message">{{ visualMessage }}</text>
                 </view>
                 <view v-else-if="editorPanel === 'embed'" class="ppt-panel-cards">
                   <input v-model="embedUrl" title="嵌入链接" aria-label="嵌入链接" placeholder="粘贴网页、视频或看板链接" />
@@ -485,15 +523,20 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
+import { downloadTemporaryFile } from "../api/files";
 import {
   createPptGenerationTask,
+  deletePptSlideVisual,
   deletePptTask,
   getPptGenerationTask,
   listPptHistory,
+  regeneratePptSlideVisual,
+  restorePptSlideVisual,
   requestPptDownload,
   type PptGenerateRequest,
   type PptHistoryItem,
   type PptLanguage,
+  type PptSlide,
   type PptTaskStatus,
   type PptTheme
 } from "../api/ppt";
@@ -535,6 +578,12 @@ interface EditorSlide {
   background: string;
   align: EditorAlign;
   width: EditorWidth;
+  imageUrl: string;
+  slideType: string;
+  visualPlan?: PptSlide["visualPlan"];
+  visualHistory?: PptSlide["visualHistory"];
+  visualStatus?: string;
+  visualError?: string;
 }
 interface EditorSnapshot {
   title: string;
@@ -570,10 +619,28 @@ const editorTools: Array<{ label: string; value: EditorTool; icon: string }> = [
   { label: "元素", value: "elements", icon: "▦" },
   { label: "图表", value: "charts", icon: "▥" },
   { label: "图示", value: "diagrams", icon: "◇" },
+  { label: "视觉", value: "images", icon: "▧" },
   { label: "嵌入", value: "embed", icon: "⌁" },
   { label: "录制", value: "record", icon: "▣" }
 ];
 const editorZoomLevels = [1.8, 1.5, 1.2, 1, 0.9, 0.8, 0.6];
+const visualTypeOptions = [
+  { label: "场景图", value: "scene" },
+  { label: "概念插画", value: "illustration" },
+  { label: "产品展示", value: "product" },
+  { label: "企业办公", value: "office" },
+  { label: "图标", value: "icon" },
+  { label: "图表", value: "chart" },
+  { label: "流程图", value: "diagram" },
+  { label: "不需要视觉素材", value: "none" }
+];
+const visualCompositionOptions = [
+  { label: "图片在左", value: "image_left" },
+  { label: "图片在右", value: "image_right" },
+  { label: "通栏图片", value: "full_width" },
+  { label: "背景图片", value: "background" },
+  { label: "卡片图片", value: "card" }
+];
 
 const prompt = ref("");
 const slideCount = ref(5);
@@ -606,6 +673,11 @@ const embedUrl = ref("");
 const editorUndoStack = ref<EditorSnapshot[]>([]);
 const editorRedoStack = ref<EditorSnapshot[]>([]);
 const editorTitleInputRef = ref<HTMLInputElement | null>(null);
+const visualType = ref("illustration");
+const visualComposition = ref("image_right");
+const visualInstruction = ref("");
+const visualBusy = ref(false);
+const visualMessage = ref("");
 
 const promptLength = computed(() => prompt.value.length);
 const isGenerateDisabled = computed(() => generating.value || !prompt.value.trim());
@@ -704,7 +776,7 @@ async function downloadTask(item: PptHistoryItem) {
   operationMessage.value = "";
   try {
     const result = await requestPptDownload(item.taskId);
-    openDownloadUrl(result.url);
+    await openDownloadUrl(result.url);
   } catch (error) {
     const message = errorMessage(error);
     operationMessage.value = message;
@@ -786,14 +858,18 @@ function createEditorSlide(title: string, index: number, total: number): EditorS
     layout,
     background: "#eaf3ff",
     align: "left",
-    width: "standard"
+    width: "standard",
+    imageUrl: "",
+    slideType: index === 0 ? "cover" : "text_image"
   };
 }
 
 function openEditorFromTask(item: PptHistoryItem) {
   const total = Math.max(1, Math.min(item.slideCount || slideCount.value || 5, 20));
   editorTitle.value = item.title || item.prompt || "无标题演示文稿";
-  editorSlides.value = Array.from({ length: total }, (_, index) => createEditorSlide(editorTitle.value, index, total));
+  editorSlides.value = item.slides?.length
+    ? item.slides.map((slide, index) => editorSlideFromTask(slide, index))
+    : Array.from({ length: total }, (_, index) => createEditorSlide(editorTitle.value, index, total));
   activeSlideIndex.value = 0;
   editorUndoStack.value = [];
   editorRedoStack.value = [];
@@ -801,10 +877,30 @@ function openEditorFromTask(item: PptHistoryItem) {
   recordingMode.value = false;
   currentMode.value = "editor";
   closeEditorFloatingMenus();
+  syncActiveVisualSettings();
+}
+
+function editorSlideFromTask(slide: PptSlide, index: number): EditorSlide {
+  const fallback = createEditorSlide(slide.title || editorTitle.value, index, Math.max(1, activeTask.value?.slideCount || 1));
+  const layout = editorLayoutOptions.some(item => item.value === slide.layout) ? slide.layout as EditorLayout : fallback.layout;
+  return {
+    ...fallback,
+    id: slide.id,
+    title: slide.title,
+    content: slide.content,
+    points: Array.isArray(slide.bulletPoints) ? [...slide.bulletPoints] : [],
+    layout,
+    imageUrl: slide.imageUrl || "",
+    slideType: slide.slideType || "text_image",
+    visualPlan: slide.visualPlan,
+    visualHistory: Array.isArray(slide.visualHistory) ? [...slide.visualHistory] : [],
+    visualStatus: slide.visualStatus,
+    visualError: slide.visualError
+  };
 }
 
 function cloneEditorSlides(slides: EditorSlide[]) {
-  return slides.map(slide => ({ ...slide, points: [...slide.points] }));
+  return slides.map(slide => ({ ...slide, points: [...slide.points], visualHistory: slide.visualHistory ? [...slide.visualHistory] : [] }));
 }
 
 function createEditorSnapshot(): EditorSnapshot {
@@ -884,6 +980,7 @@ function duplicateEditorDeck() {
 function selectEditorSlide(index: number) {
   if (!editorSlides.value.length) return;
   activeSlideIndex.value = Math.min(Math.max(index, 0), editorSlides.value.length - 1);
+  syncActiveVisualSettings();
   closeEditorFloatingMenus();
 }
 
@@ -1015,8 +1112,108 @@ function appendPointToActiveSlide(point: string) {
 
 function openEditorPanel(panel: EditorTool) {
   editorPanel.value = panel;
+  if (panel === "images") syncActiveVisualSettings();
   showEditorMenu.value = false;
   closeEditorFloatingMenus();
+}
+
+function syncActiveVisualSettings() {
+  const plan = activeEditorSlide.value.visualPlan;
+  visualType.value = plan?.visualType || (activeEditorSlide.value.imageUrl ? "illustration" : "none");
+  const composition = plan?.composition || "";
+  if (composition.includes("left") && composition.includes("right")) {
+    visualComposition.value = composition.indexOf("subject on the left") >= 0 ? "image_left" : "image_right";
+  }
+  visualInstruction.value = "";
+  visualMessage.value = activeEditorSlide.value.visualError || "";
+}
+
+async function regenerateActiveSlideVisual() {
+  if (visualBusy.value) return;
+  const taskId = currentResult.value?.taskId;
+  const slide = activeEditorSlide.value;
+  if (!taskId || !slide?.id) {
+    visualMessage.value = "当前页面尚未关联后端 PPT 任务";
+    return;
+  }
+  visualBusy.value = true;
+  visualMessage.value = "正在规划并生成本页视觉素材…";
+  const original = { title: slide.title, content: slide.content, points: [...slide.points] };
+  try {
+    const response = await regeneratePptSlideVisual(taskId, slide.id, {
+      visualType: visualType.value,
+      style: "corporate_3d",
+      composition: visualComposition.value,
+      customInstruction: visualInstruction.value.trim(),
+      keepCurrentContent: true
+    });
+    slide.imageUrl = response.slide.imageUrl || "";
+    slide.slideType = response.slide.slideType || slide.slideType;
+    slide.visualPlan = response.slide.visualPlan;
+    slide.visualHistory = Array.isArray(response.slide.visualHistory) ? [...response.slide.visualHistory] : [];
+    slide.visualStatus = response.slide.visualStatus || response.status;
+    slide.visualError = response.slide.visualError || "";
+    slide.title = original.title;
+    slide.content = original.content;
+    slide.points = original.points;
+    visualMessage.value = response.slide.visualPlan?.imageRequired === false ? "已切换为非图片视觉方式" : "本页配图已更新";
+  } catch (error) {
+    visualMessage.value = errorMessage(error, "本页配图生成失败，已保留原图片");
+  } finally {
+    visualBusy.value = false;
+  }
+}
+
+async function deleteActiveSlideVisual() {
+  if (visualBusy.value) return;
+  const taskId = currentResult.value?.taskId;
+  const slide = activeEditorSlide.value;
+  if (!taskId || !slide?.id) return;
+  visualBusy.value = true;
+  visualMessage.value = "正在删除本页配图…";
+  try {
+    const response = await deletePptSlideVisual(taskId, slide.id);
+    slide.imageUrl = "";
+    slide.visualPlan = response.slide.visualPlan;
+    slide.visualHistory = Array.isArray(response.slide.visualHistory) ? [...response.slide.visualHistory] : [];
+    slide.visualStatus = response.slide.visualStatus || response.status;
+    slide.visualError = "";
+    visualType.value = "none";
+    visualMessage.value = "本页配图已删除";
+  } catch (error) {
+    visualMessage.value = errorMessage(error, "删除配图失败");
+  } finally {
+    visualBusy.value = false;
+  }
+}
+
+async function restoreActiveSlideVisual(createdAt: string, url: string, storageRef?: string) {
+  if (visualBusy.value || !createdAt || !url) return;
+  const taskId = currentResult.value?.taskId;
+  const slide = activeEditorSlide.value;
+  if (!taskId || !slide?.id) return;
+  visualBusy.value = true;
+  visualMessage.value = "正在恢复历史配图…";
+  try {
+    const response = await restorePptSlideVisual(taskId, slide.id, createdAt, url, storageRef);
+    const restored = response.slide;
+    slide.imageUrl = restored.imageUrl || "";
+    slide.visualPlan = restored.visualPlan;
+    slide.visualHistory = Array.isArray(restored.visualHistory) ? [...restored.visualHistory] : [];
+    slide.visualStatus = restored.visualStatus || response.status;
+    slide.visualError = "";
+    visualType.value = restored.visualPlan?.visualType || "illustration";
+    visualMessage.value = "历史配图已恢复，正文保持不变";
+  } catch (error) {
+    visualMessage.value = errorMessage(error, "恢复历史配图失败");
+  } finally {
+    visualBusy.value = false;
+  }
+}
+
+function formatVisualTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "历史版本" : `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 function handleEditorTool(panel: EditorTool) {
@@ -1146,22 +1343,13 @@ function showPptHelpCenter() {
   });
 }
 
-function openDownloadUrl(url: string) {
+async function openDownloadUrl(url: string) {
   if (typeof window !== "undefined" && typeof window.open === "function") {
     window.open(url, "_blank", "noopener");
     return;
   }
-  uni.downloadFile({
-    url,
-    success: result => {
-      if (result.statusCode >= 200 && result.statusCode < 300) {
-        uni.openDocument({ filePath: result.tempFilePath });
-      } else {
-        uni.showToast({ title: "下载失败，请稍后重试", icon: "none" });
-      }
-    },
-    fail: () => uni.showToast({ title: "下载失败，请稍后重试", icon: "none" })
-  });
+  const filePath = await downloadTemporaryFile(url);
+  uni.openDocument({ filePath });
 }
 </script>
 
@@ -2741,5 +2929,117 @@ function openDownloadUrl(url: string) {
   border-radius: 999px;
   color: #050505;
   background: #f8fafc;
+}
+
+.ppt-slide-visual {
+  position: absolute;
+  z-index: 0;
+  right: 5%;
+  bottom: 9%;
+  width: 38%;
+  height: 42%;
+  border-radius: 14px;
+  background: #e2e8f0;
+}
+
+.ppt-slide-title,
+.ppt-slide-copy,
+.ppt-slide-points,
+.ppt-slide-count {
+  position: relative;
+  z-index: 1;
+}
+
+.ppt-visual-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ppt-visual-label,
+.ppt-visual-instruction > uni-text {
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ppt-visual-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ppt-visual-options uni-button,
+.ppt-visual-settings > uni-button {
+  min-height: 38px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #111827;
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.ppt-visual-options uni-button.active,
+.ppt-visual-primary {
+  border-color: #38bdf8 !important;
+  background: #075985 !important;
+  color: #fff !important;
+}
+
+.ppt-visual-instruction {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.ppt-visual-instruction uni-input {
+  min-height: 40px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #fff;
+  padding: 0 10px;
+}
+
+.ppt-visual-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.ppt-visual-message {
+  color: #7dd3fc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ppt-visual-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ppt-visual-history-list {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.ppt-visual-history-list uni-button {
+  display: inline-flex;
+  width: 112px;
+  min-height: 92px;
+  margin: 0 8px 0 0;
+  padding: 6px;
+  flex-direction: column;
+  gap: 5px;
+  vertical-align: top;
+}
+
+.ppt-visual-history-list uni-image {
+  width: 96px;
+  height: 58px;
+  border-radius: 6px;
 }
 </style>

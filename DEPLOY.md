@@ -198,3 +198,6 @@ GitHub Actions
 -> push to Aliyun ACR
 -> domestic server runs `docker compose pull`
 -> domestic server runs `docker compose up -d`
+# 飞书企业 Connector
+
+启用飞书机器人前，生产环境还必须注入 `CONNECTOR_SECRET_ENCRYPTION_KEY`（至少 32 字节），并把 `CONNECTOR_CALLBACK_BASE_URL` 设置为飞书可访问的 HTTPS API 根地址。完整检查清单见 [docs/feishu-enterprise-connector.md](docs/feishu-enterprise-connector.md)。

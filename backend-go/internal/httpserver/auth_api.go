@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,18 +40,48 @@ type authSessionStore interface {
 	Delete(context.Context, string) error
 }
 
+type authUserSessionStore interface {
+	DeleteUserSessions(context.Context, string) (int, error)
+}
+
+type wechatMiniProgramSessionStore interface {
+	PutWeChatSession(context.Context, string, wechatMiniProgramSession, time.Duration) error
+	WeChatSession(context.Context, string) (wechatMiniProgramSession, bool, error)
+}
+
+type smsChallengeStore interface {
+	PutSMSChallenge(context.Context, string, smsChallenge, time.Duration) error
+	SMSChallenge(context.Context, string) (smsChallenge, bool, error)
+	DeleteSMSChallenge(context.Context, string) error
+	PutSMSNextSend(context.Context, string, time.Time, time.Duration) error
+	SMSNextSend(context.Context, string) (time.Time, bool, error)
+}
+
 type localAuthSession struct {
 	userID    string
 	expiresAt time.Time
 }
 
 type localAuthSessions struct {
-	mu       sync.Mutex
-	sessions map[string]localAuthSession
+	mu             sync.Mutex
+	sessions       map[string]localAuthSession
+	wechatSessions map[string]localWeChatSession
+	smsChallenges  map[string]smsChallenge
+	smsNextSend    map[string]time.Time
+}
+
+type localWeChatSession struct {
+	session   wechatMiniProgramSession
+	expiresAt time.Time
 }
 
 func newLocalAuthSessions() authSessionStore {
-	return &localAuthSessions{sessions: map[string]localAuthSession{}}
+	return &localAuthSessions{
+		sessions:       map[string]localAuthSession{},
+		wechatSessions: map[string]localWeChatSession{},
+		smsChallenges:  map[string]smsChallenge{},
+		smsNextSend:    map[string]time.Time{},
+	}
 }
 
 func (s *localAuthSessions) Put(_ context.Context, token string, userID string, ttl time.Duration) error {
@@ -82,6 +113,92 @@ func (s *localAuthSessions) Delete(_ context.Context, token string) error {
 	return nil
 }
 
+func (s *localAuthSessions) DeleteUserSessions(_ context.Context, userID string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	revoked := 0
+	for key, session := range s.sessions {
+		if session.userID == userID {
+			delete(s.sessions, key)
+			revoked++
+		}
+	}
+	delete(s.wechatSessions, userID)
+	return revoked, nil
+}
+
+func (s *localAuthSessions) PutWeChatSession(_ context.Context, userID string, session wechatMiniProgramSession, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wechatSessions[userID] = localWeChatSession{session: session, expiresAt: time.Now().Add(ttl)}
+	return nil
+}
+
+func (s *localAuthSessions) WeChatSession(_ context.Context, userID string) (wechatMiniProgramSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.wechatSessions[userID]
+	if !ok {
+		return wechatMiniProgramSession{}, false, nil
+	}
+	if !item.expiresAt.IsZero() && time.Now().After(item.expiresAt) {
+		delete(s.wechatSessions, userID)
+		return wechatMiniProgramSession{}, false, nil
+	}
+	return item.session, true, nil
+}
+
+func (s *localAuthSessions) PutSMSChallenge(_ context.Context, mobile string, challenge smsChallenge, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.smsChallenges[normalizeMainlandMobile(mobile)] = challenge
+	return nil
+}
+
+func (s *localAuthSessions) SMSChallenge(_ context.Context, mobile string) (smsChallenge, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mobile = normalizeMainlandMobile(mobile)
+	challenge, ok := s.smsChallenges[mobile]
+	if !ok {
+		return smsChallenge{}, false, nil
+	}
+	if !challenge.expiresAt.IsZero() && time.Now().After(challenge.expiresAt) {
+		delete(s.smsChallenges, mobile)
+		return smsChallenge{}, false, nil
+	}
+	return challenge, true, nil
+}
+
+func (s *localAuthSessions) DeleteSMSChallenge(_ context.Context, mobile string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.smsChallenges, normalizeMainlandMobile(mobile))
+	return nil
+}
+
+func (s *localAuthSessions) PutSMSNextSend(_ context.Context, mobile string, nextSendAt time.Time, _ time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.smsNextSend[normalizeMainlandMobile(mobile)] = nextSendAt
+	return nil
+}
+
+func (s *localAuthSessions) SMSNextSend(_ context.Context, mobile string) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mobile = normalizeMainlandMobile(mobile)
+	nextSendAt, ok := s.smsNextSend[mobile]
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	if !nextSendAt.IsZero() && time.Now().After(nextSendAt) {
+		delete(s.smsNextSend, mobile)
+		return time.Time{}, false, nil
+	}
+	return nextSendAt, true, nil
+}
+
 type redisAuthSessions struct {
 	client *redis.Client
 }
@@ -94,7 +211,14 @@ func newRedisAuthSessions(client *redis.Client) authSessionStore {
 }
 
 func (s redisAuthSessions) Put(ctx context.Context, token string, userID string, ttl time.Duration) error {
-	return s.client.Set(ctx, authSessionKey(token), userID, ttl).Err()
+	key := authSessionKey(token)
+	indexKey := userSessionIndexKey(userID)
+	pipe := s.client.TxPipeline()
+	pipe.Set(ctx, key, userID, ttl)
+	pipe.SAdd(ctx, indexKey, key)
+	pipe.Expire(ctx, indexKey, authRefreshSessionTTL)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (s redisAuthSessions) UserID(ctx context.Context, token string) (string, bool, error) {
@@ -109,15 +233,174 @@ func (s redisAuthSessions) UserID(ctx context.Context, token string) (string, bo
 }
 
 func (s redisAuthSessions) Delete(ctx context.Context, token string) error {
-	return s.client.Del(ctx, authSessionKey(token)).Err()
+	key := authSessionKey(token)
+	userID, err := s.client.Get(ctx, key).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return err
+	}
+	pipe := s.client.TxPipeline()
+	pipe.Del(ctx, key)
+	if userID != "" {
+		pipe.SRem(ctx, userSessionIndexKey(userID), key)
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (s redisAuthSessions) DeleteUserSessions(ctx context.Context, userID string) (int, error) {
+	indexKey := userSessionIndexKey(userID)
+	keys, err := s.client.SMembers(ctx, indexKey).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		seen[key] = struct{}{}
+	}
+	iter := s.client.Scan(ctx, 0, "auth:session:*", 100).Iterator()
+	for iter.Next(ctx) {
+		key := iter.Val()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		value, getErr := s.client.Get(ctx, key).Result()
+		if errors.Is(getErr, redis.Nil) {
+			continue
+		}
+		if getErr != nil {
+			return 0, getErr
+		}
+		if value == userID {
+			keys = append(keys, key)
+			seen[key] = struct{}{}
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return 0, err
+	}
+	deleteKeys := append([]string{}, keys...)
+	deleteKeys = append(deleteKeys, indexKey, wechatSessionKey(userID))
+	if len(deleteKeys) == 0 {
+		return 0, nil
+	}
+	if err := s.client.Del(ctx, deleteKeys...).Err(); err != nil {
+		return 0, err
+	}
+	return len(keys), nil
+}
+
+func (s redisAuthSessions) PutWeChatSession(ctx context.Context, userID string, session wechatMiniProgramSession, ttl time.Duration) error {
+	payload, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, wechatSessionKey(userID), payload, ttl).Err()
+}
+
+func (s redisAuthSessions) WeChatSession(ctx context.Context, userID string) (wechatMiniProgramSession, bool, error) {
+	payload, err := s.client.Get(ctx, wechatSessionKey(userID)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return wechatMiniProgramSession{}, false, nil
+	}
+	if err != nil {
+		return wechatMiniProgramSession{}, false, err
+	}
+	var session wechatMiniProgramSession
+	if err := json.Unmarshal(payload, &session); err != nil {
+		return wechatMiniProgramSession{}, false, err
+	}
+	return session, true, nil
+}
+
+type smsChallengePayload struct {
+	CodeHash   string    `json:"codeHash"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	NextSendAt time.Time `json:"nextSendAt"`
+	Attempts   int       `json:"attempts"`
+}
+
+func (s redisAuthSessions) PutSMSChallenge(ctx context.Context, mobile string, challenge smsChallenge, ttl time.Duration) error {
+	payload, err := json.Marshal(smsChallengePayload{
+		CodeHash:   hex.EncodeToString(challenge.codeHash[:]),
+		ExpiresAt:  challenge.expiresAt,
+		NextSendAt: challenge.nextSendAt,
+		Attempts:   challenge.attempts,
+	})
+	if err != nil {
+		return err
+	}
+	return s.client.Set(ctx, smsChallengeKey(mobile), payload, ttl).Err()
+}
+
+func (s redisAuthSessions) SMSChallenge(ctx context.Context, mobile string) (smsChallenge, bool, error) {
+	payload, err := s.client.Get(ctx, smsChallengeKey(mobile)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return smsChallenge{}, false, nil
+	}
+	if err != nil {
+		return smsChallenge{}, false, err
+	}
+	var stored smsChallengePayload
+	if err := json.Unmarshal(payload, &stored); err != nil {
+		return smsChallenge{}, false, err
+	}
+	hash, err := hex.DecodeString(stored.CodeHash)
+	if err != nil || len(hash) != sha256.Size {
+		return smsChallenge{}, false, errors.New("invalid sms challenge hash")
+	}
+	var challenge smsChallenge
+	copy(challenge.codeHash[:], hash)
+	challenge.expiresAt = stored.ExpiresAt
+	challenge.nextSendAt = stored.NextSendAt
+	challenge.attempts = stored.Attempts
+	return challenge, true, nil
+}
+
+func (s redisAuthSessions) DeleteSMSChallenge(ctx context.Context, mobile string) error {
+	return s.client.Del(ctx, smsChallengeKey(mobile)).Err()
+}
+
+func (s redisAuthSessions) PutSMSNextSend(ctx context.Context, mobile string, nextSendAt time.Time, ttl time.Duration) error {
+	return s.client.Set(ctx, smsNextSendKey(mobile), nextSendAt.UTC().Format(time.RFC3339Nano), ttl).Err()
+}
+
+func (s redisAuthSessions) SMSNextSend(ctx context.Context, mobile string) (time.Time, bool, error) {
+	value, err := s.client.Get(ctx, smsNextSendKey(mobile)).Result()
+	if errors.Is(err, redis.Nil) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	nextSendAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return nextSendAt, true, nil
 }
 
 func authSessionKey(token string) string {
 	return "auth:session:" + token
 }
 
+func userSessionIndexKey(userID string) string {
+	return "auth:user-sessions:" + strings.TrimSpace(userID)
+}
+
+func wechatSessionKey(userID string) string {
+	return "auth:wechat-session:" + strings.TrimSpace(userID)
+}
+
 func refreshSessionToken(token string) string {
 	return "refresh:" + token
+}
+
+func smsChallengeKey(mobile string) string {
+	return "auth:sms:challenge:" + normalizeMainlandMobile(mobile)
+}
+
+func smsNextSendKey(mobile string) string {
+	return "auth:sms:next-send:" + normalizeMainlandMobile(mobile)
 }
 
 type authAPI struct {
@@ -170,8 +453,9 @@ type authTokenPayload struct {
 }
 
 type wechatMiniProgramSession struct {
-	OpenID  string
-	UnionID string
+	OpenID     string `json:"openid"`
+	UnionID    string `json:"unionid,omitempty"`
+	SessionKey string `json:"sessionKey"`
 }
 
 func newAuthAPI(store platformStore, sessions authSessionStore) authAPI {
@@ -244,8 +528,10 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var user adminUser
+	var wechatSession wechatMiniProgramSession
 	isNewUser := false
 	inviteBindStatus := "not_applicable"
+	phoneAuthorizationRequired := strings.HasSuffix(strings.TrimSpace(r.URL.Path), "/auth/wechat/phone-login")
 	if mockLogin {
 		var ok bool
 		user, ok = findActiveUserByEmail(data.Users, "demo@xianzhi.ai")
@@ -265,22 +551,33 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadGateway, err)
 			return
 		}
-		if strings.TrimSpace(req.PhoneCode) == "" {
-			writeAuthFlowError(w, http.StatusBadRequest, "WECHAT_PHONE_CODE_REQUIRED", "wechat phone authorization code is required")
-			return
-		}
-		mobile, err := exchangeWeChatPhoneCode(r.Context(), req.PhoneCode)
-		if err != nil {
-			writeAuthFlowError(w, http.StatusBadGateway, "WECHAT_PHONE_AUTH_FAILED", "未能验证微信手机号授权")
-			return
-		}
-		data, user, isNewUser, inviteBindStatus, err = a.userForPhoneIdentity(mobile, session, authRegistrationInput{
-			InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
-			CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
-		})
-		if err != nil {
-			writeMappedAuthFlowError(w, err)
-			return
+		wechatSession = session
+		if phoneAuthorizationRequired {
+			if strings.TrimSpace(req.PhoneCode) == "" {
+				writeAuthFlowError(w, http.StatusBadRequest, "WECHAT_PHONE_CODE_REQUIRED", "wechat phone authorization code is required")
+				return
+			}
+			mobile, err := exchangeWeChatPhoneCode(r.Context(), req.PhoneCode)
+			if err != nil {
+				writeAuthFlowError(w, http.StatusBadGateway, "WECHAT_PHONE_AUTH_FAILED", "未能验证微信手机号授权")
+				return
+			}
+			data, user, isNewUser, inviteBindStatus, err = a.userForPhoneIdentity(mobile, session, authRegistrationInput{
+				InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
+				CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
+			})
+			if err != nil {
+				writeMappedAuthFlowError(w, err)
+				return
+			}
+		} else {
+			_, existed := findUserByEmail(data.Users, wechatMiniProgramSyntheticEmail(session.OpenID))
+			data, user, err = a.userForWeChatMiniProgramSession(data, session)
+			if err != nil {
+				writeMappedAuthFlowError(w, err)
+				return
+			}
+			isNewUser = !existed
 		}
 	}
 
@@ -290,15 +587,78 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 		writeAuthTokenError(w, err)
 		return
 	}
+	if wechatSession.SessionKey != "" {
+		if sessions, ok := a.sessions.(wechatMiniProgramSessionStore); ok {
+			if err := sessions.PutWeChatSession(r.Context(), user.ID, wechatSession, authSessionTTL); err != nil {
+				log.Printf("wechat mini program session persistence failed")
+				writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+				return
+			}
+		}
+	}
 	response["isNewUser"] = isNewUser
 	response["registrationStatus"] = map[bool]string{true: "created", false: "existing"}[isNewUser]
 	response["inviteBindStatus"] = inviteBindStatus
 	response["expiresIn"] = int(authSessionTTL.Seconds())
 	if isNewUser {
-		response["newcomerBenefits"] = []map[string]string{{"title": "新人体验权益已到账", "status": "granted"}}
+		response["newcomerBenefits"] = newcomerBenefitsForPlan(configuredNewcomerPlan(data.Plans))
 	}
 	log.Printf("wechat mini program login succeeded user=%s mock=%t", user.ID, mockLogin)
 	writeJSON(w, response)
+}
+
+func (a authAPI) linkWeChatMiniProgram(w http.ResponseWriter, r *http.Request) {
+	var req wechatMiniProgramLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	code := strings.TrimSpace(firstNonEmptyString(req.WxLoginCode, req.Code))
+	if code == "" {
+		writeError(w, http.StatusBadRequest, errors.New("wechat mini program code is required"))
+		return
+	}
+	if isWeChatMiniProgramMockCodeValue(code) {
+		writeAuthFlowError(w, http.StatusBadRequest, "WECHAT_REAL_CODE_REQUIRED", "real wechat login code is required")
+		return
+	}
+
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	target, err := a.authenticatedUser(r, data)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	session, err := exchangeWeChatMiniProgramCode(r.Context(), code)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if existing, ok := findUserByWechatIdentity(data.Users, session); ok && existing.ID != target.ID {
+		writeAuthFlowError(w, http.StatusConflict, "AUTH_WECHAT_ALREADY_BOUND", "该微信身份已绑定其他账号")
+		return
+	}
+	updated, err := a.store.UpdateAdminCustomer(target.ID, adminCustomerMutation{
+		WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	wechatSessions, ok := a.sessions.(wechatMiniProgramSessionStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	if err := wechatSessions.PutWeChatSession(r.Context(), updated.ID, session, authSessionTTL); err != nil {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	writeJSON(w, map[string]any{"linked": true, "userId": updated.ID})
 }
 
 func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
@@ -342,14 +702,16 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 			referredBy = agent.UserID
 		}
 	}
+	newcomerPlan := configuredNewcomerPlan(data.Plans)
 	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
-		Name:       req.Username,
-		Email:      req.Email,
-		Role:       "MEMBER",
-		Status:     "ACTIVE",
-		PlanID:     "plan_free",
-		ReferredBy: referredBy,
-		Available:  100,
+		Name:                  req.Username,
+		Email:                 req.Email,
+		Role:                  "MEMBER",
+		Status:                "ACTIVE",
+		PlanID:                newcomerPlan.ID,
+		ReferredBy:            referredBy,
+		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
+		Available:             pointBalancePointer(planPoints(newcomerPlan)),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -370,6 +732,9 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 		writeAuthTokenError(w, err)
 		return
 	}
+	response["isNewUser"] = true
+	response["registrationStatus"] = "created"
+	response["newcomerBenefits"] = newcomerBenefitsForPlan(newcomerPlan)
 	writeJSON(w, response)
 }
 
@@ -484,6 +849,29 @@ func (a authAPI) logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+func (a authAPI) logoutAll(w http.ResponseWriter, r *http.Request) {
+	if a.sessions == nil {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	userID, err := authenticatedUserID(r, a.sessions)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	revoker, ok := a.sessions.(authUserSessionStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	revoked, err := revoker.DeleteUserSessions(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "userId": userID, "revokedSessions": revoked})
+}
+
 func (a authAPI) changePassword(w http.ResponseWriter, r *http.Request) {
 	var req changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -580,6 +968,12 @@ func writeAuthTokenError(w http.ResponseWriter, err error) {
 }
 
 func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session wechatMiniProgramSession) (adminPlatformData, adminUser, error) {
+	if user, ok := findUserByWechatIdentity(data.Users, session); ok {
+		if !strings.EqualFold(user.Status, "ACTIVE") {
+			return data, adminUser{}, errUnauthorized
+		}
+		return data, user, nil
+	}
 	email := wechatMiniProgramSyntheticEmail(session.OpenID)
 	if user, ok := findUserByEmail(data.Users, email); ok {
 		if !strings.EqualFold(user.Status, "ACTIVE") {
@@ -588,13 +982,15 @@ func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session
 		return data, user, nil
 	}
 
+	newcomerPlan := configuredNewcomerPlan(data.Plans)
 	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
-		Name:      "WeChat User",
-		Email:     email,
-		Role:      "MEMBER",
-		Status:    "ACTIVE",
-		PlanID:    "plan_free",
-		Available: 100,
+		Name:                  "WeChat User",
+		Email:                 email,
+		Role:                  "MEMBER",
+		Status:                "ACTIVE",
+		PlanID:                newcomerPlan.ID,
+		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
+		Available:             pointBalancePointer(planPoints(newcomerPlan)),
 	})
 	if err != nil {
 		return data, adminUser{}, err
@@ -683,7 +1079,14 @@ func exchangeWeChatMiniProgramCode(ctx context.Context, code string) (wechatMini
 	if strings.TrimSpace(payload.OpenID) == "" {
 		return wechatMiniProgramSession{}, errors.New("wechat code2session did not return openid")
 	}
-	return wechatMiniProgramSession{OpenID: strings.TrimSpace(payload.OpenID), UnionID: strings.TrimSpace(payload.UnionID)}, nil
+	if strings.TrimSpace(payload.SessionKey) == "" {
+		return wechatMiniProgramSession{}, errors.New("wechat code2session did not return session_key")
+	}
+	return wechatMiniProgramSession{
+		OpenID:     strings.TrimSpace(payload.OpenID),
+		UnionID:    strings.TrimSpace(payload.UnionID),
+		SessionKey: strings.TrimSpace(payload.SessionKey),
+	}, nil
 }
 
 func isWeChatMiniProgramMockCode(code string) bool {

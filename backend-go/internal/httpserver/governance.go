@@ -110,6 +110,15 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if path == "/commission-rules" && r.Method == http.MethodGet {
+		return "finance:commission-rule:view"
+	}
+	if path == "/commission-rules" && r.Method == http.MethodPost {
+		return "finance:commission-rule:manage"
+	}
+	if strings.HasPrefix(path, "/commission-rules/") && r.Method == http.MethodPut {
+		return "finance:commission-rule:manage"
+	}
 	if strings.HasPrefix(path, "/storage/") {
 		switch {
 		case strings.HasPrefix(path, "/storage/configs") && strings.HasSuffix(path, "/test"):

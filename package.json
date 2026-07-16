@@ -30,6 +30,8 @@
     "build:user-h5": "npm --prefix apps/user-uni run build",
     "build:user-mp-weixin": "npm --prefix apps/user-uni run build:mp-weixin",
     "build:user-app-plus": "npm --prefix apps/user-uni run build:app-plus",
+    "check:user-app-release": "npm --prefix apps/user-uni run check:app-release",
+    "build:user-app-plus:release": "npm --prefix apps/user-uni run build:app-plus:release",
     "build:user-app-harmony": "npm --prefix apps/user-uni run build:app-harmony",
     "build:user-mp-harmony": "npm --prefix apps/user-uni run build:mp-harmony",
     "dev:desktop-electron": "npm --prefix apps/desktop-electron run dev",
@@ -37,6 +39,7 @@
     "dev:desktop-tauri": "npm --prefix apps/desktop-tauri run dev",
     "build:desktop-tauri": "npm --prefix apps/desktop-tauri run build",
     "test:user-h5:smoke": "playwright test -c tests/user-h5/playwright.config.ts",
+    "verify:api-boundaries": "node tools/verify-api-client-boundaries.mjs",
     "verify:user-mini-clicks": "node tools/verify-user-mini-click-api.mjs",
     "verify:user-mini-clicks:e2e": "node tools/verify-user-mini-click-e2e.mjs",
     "generate:api-types": "node tools/generate-api-types.mjs"

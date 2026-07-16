@@ -6,6 +6,7 @@ export interface ApiUnauthorizedContext {
   statusCode: number;
   requestId: string;
   payload: unknown;
+  retryAttempt: number;
 }
 
 export interface ApiClientErrorOptions {
@@ -52,7 +53,7 @@ export interface ApiClientOptions {
   defaultHeaders?: Record<string, string> | ((context: ApiRequestContext) => Record<string, string>);
   createRequestId?: () => string;
   getToken?: () => string;
-  onUnauthorized?: (context: ApiUnauthorizedContext) => void;
+  onUnauthorized?: (context: ApiUnauthorizedContext) => void | boolean | Promise<void | boolean>;
   adapter?: PlatformAdapter;
 }
 
@@ -138,91 +139,98 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       baseURL = trimTrailingSlash(nextBaseURL || "");
     },
     async request<T = unknown, TBody = unknown>(path: string, requestOptions: ApiRequestOptions<TBody> = {}) {
-      const token = options.getToken?.() || "";
       const usesSession = requestOptions.auth !== false;
       const body = requestOptions.body ?? requestOptions.data;
       const method = requestOptions.method || "GET";
-      const requestId = requestOptions.requestId || requestIdFactory();
       const clientInfo = adapter.getClientInfo();
-      const context: ApiRequestContext = {
-        path,
-        method,
-        requestId,
-        clientInfo
-      };
-      const defaultHeaders = typeof options.defaultHeaders === "function" ? options.defaultHeaders(context) : options.defaultHeaders || {};
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "X-Request-Id": requestId,
-        "X-Client-Platform": clientInfo.platform,
-        ...(requestOptions.headers || {})
-      };
-      addHeader(headers, "X-Client-Name", options.clientName || clientInfo.appName);
-      addHeader(headers, "X-Client-Version", options.clientVersion || clientInfo.appVersion);
-      addHeader(headers, "X-Client-Language", clientInfo.language);
-      Object.assign(headers, defaultHeaders, requestOptions.headers || {});
-      if (usesSession && token) headers.Authorization = `Bearer ${token}`;
 
-      let response;
-      try {
-        response = await adapter.request<ApiEnvelope<T> | T, TBody>({
-          url: resolveURL(baseURL, path),
+      const send = async (retryAttempt: number): Promise<T> => {
+        const token = options.getToken?.() || "";
+        const requestId = requestOptions.requestId || requestIdFactory();
+        const context: ApiRequestContext = {
+          path,
           method,
-          header: headers,
-          data: body,
-          timeout: requestOptions.timeout || timeout
-        });
-      } catch (error) {
-        const normalized = normalizeApiError(error);
-        throw new ApiClientError(normalized.message, {
-          path,
-          statusCode: 0,
           requestId,
-          cause: error
-        });
-      }
+          clientInfo
+        };
+        const defaultHeaders = typeof options.defaultHeaders === "function" ? options.defaultHeaders(context) : options.defaultHeaders || {};
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "X-Request-Id": requestId,
+          "X-Client-Platform": clientInfo.platform,
+          ...(requestOptions.headers || {})
+        };
+        addHeader(headers, "X-Client-Name", options.clientName || clientInfo.appName);
+        addHeader(headers, "X-Client-Version", options.clientVersion || clientInfo.appVersion);
+        addHeader(headers, "X-Client-Language", clientInfo.language);
+        Object.assign(headers, defaultHeaders, requestOptions.headers || {});
+        if (usesSession && token) headers.Authorization = `Bearer ${token}`;
 
-      const payload = response.data;
-      if (usesSession && response.statusCode === 401) {
-        options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload });
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        const message = isApiEnvelope<T>(payload) ? payload.message || payload.error : "";
-        throw new ApiClientError(message || `HTTP ${response.statusCode}`, {
-          path,
-          statusCode: response.statusCode,
-          requestId,
-          payload
-        });
-      }
+        let response;
+        try {
+          response = await adapter.request<ApiEnvelope<T> | T, TBody>({
+            url: resolveURL(baseURL, path),
+            method,
+            header: headers,
+            data: body,
+            timeout: requestOptions.timeout || timeout
+          });
+        } catch (error) {
+          const normalized = normalizeApiError(error);
+          throw new ApiClientError(normalized.message, {
+            path,
+            statusCode: 0,
+            requestId,
+            cause: error
+          });
+        }
 
-      if (isUnexpectedHTMLResponse(payload, response.header)) {
-        throw new ApiClientError("服务端接口版本不匹配，请更新服务后重试", {
-          path,
-          statusCode: response.statusCode,
-          requestId,
-          payload,
-          apiCode: "INVALID_API_RESPONSE"
-        });
-      }
+        const payload = response.data;
+        if (usesSession && response.statusCode === 401) {
+          const recovered = await options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload, retryAttempt });
+          if (recovered === true && retryAttempt === 0) return send(1);
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          const message = isApiEnvelope<T>(payload) ? payload.message || payload.error : "";
+          throw new ApiClientError(message || `HTTP ${response.statusCode}`, {
+            path,
+            statusCode: response.statusCode,
+            requestId,
+            payload
+          });
+        }
 
-      if (isApiEnvelope<T>(payload)) {
-        const code = payload.code;
-        if (code !== undefined && code !== 0 && code !== "0") {
-          if (usesSession && isUnauthorizedApiCode(code)) {
-            options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload });
-          }
-          throw new ApiClientError(payload.message || payload.error || `API code ${code}`, {
+        if (isUnexpectedHTMLResponse(payload, response.header)) {
+          throw new ApiClientError("服务端接口版本不匹配，请更新服务后重试", {
             path,
             statusCode: response.statusCode,
             requestId,
             payload,
-            apiCode: code
+            apiCode: "INVALID_API_RESPONSE"
           });
         }
-        return (Object.prototype.hasOwnProperty.call(payload, "data") ? payload.data : payload) as T;
-      }
-      return payload as T;
+
+        if (isApiEnvelope<T>(payload)) {
+          const code = payload.code;
+          if (code !== undefined && code !== 0 && code !== "0") {
+            if (usesSession && isUnauthorizedApiCode(code)) {
+              const recovered = await options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload, retryAttempt });
+              if (recovered === true && retryAttempt === 0) return send(1);
+            }
+            throw new ApiClientError(payload.message || payload.error || `API code ${code}`, {
+              path,
+              statusCode: response.statusCode,
+              requestId,
+              payload,
+              apiCode: code
+            });
+          }
+          return (Object.prototype.hasOwnProperty.call(payload, "data") ? payload.data : payload) as T;
+        }
+        return payload as T;
+      };
+
+      return send(0);
     }
   };
 }

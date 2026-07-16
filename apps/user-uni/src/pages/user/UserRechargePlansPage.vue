@@ -3,7 +3,8 @@
     <view class="mpb-safe" />
     <view class="mpb-header"><button class="mpb-back" aria-label="返回" @click="backOrHome('/pages/user/UserWalletPage')">‹</button><image class="mpb-logo" :src="loginLogo" mode="aspectFit" /><view class="mpb-header-copy"><text class="mpb-title">充值方案</text><text class="mpb-subtitle">点数充值与代理套餐</text></view><text class="mpb-role">普通用户</text></view>
     <view class="mpb-stack">
-      <view class="mpb-hero"><view class="mpb-hero-top"><view><text class="mpb-hero-label">可用点数</text><text class="mpb-hero-value">{{ formatNumber(pointBalance) }} 点</text></view><text class="mpb-hero-badge">微信支付</text></view><text class="mpb-hero-copy">充值到账后不可提现，可用于全部 AI 创作服务；代理套餐将开通推广与分润权益。</text><view class="mpb-hero-metrics"><view class="mpb-hero-metric"><text class="mpb-hero-metric-value">{{ selectablePlanCount }}</text><text class="mpb-hero-metric-label">可选方案</text></view><view class="mpb-hero-metric"><text class="mpb-hero-metric-value">{{ recommendedPlan ? formatCurrency(recommendedPlan.priceCents) : '-' }}</text><text class="mpb-hero-metric-label">推荐档</text></view><view class="mpb-hero-metric"><text class="mpb-hero-metric-value">即时</text><text class="mpb-hero-metric-label">到账方式</text></view></view></view>
+      <view v-if="wechatMiniProgramPaymentAvailable" class="mpb-card virtual-payment-entry"><view class="mpb-section-head"><view><text class="mpb-card-title">微信虚拟支付专区</text><text class="mpb-card-copy">Token充值、会员升级与代理商开通，支付后由服务端原子发放权益</text></view></view><button class="mpb-button green" @click="openVirtualPayment">进入虚拟支付专区</button></view>
+      <view class="mpb-hero"><view class="mpb-hero-top"><view><text class="mpb-hero-label">可用点数</text><text class="mpb-hero-value">{{ formatNumber(pointBalance) }} 点</text></view><text class="mpb-hero-badge">{{ paymentChannelLabel }}</text></view><text class="mpb-hero-copy">{{ paymentChannelDescription }}</text><view class="mpb-hero-metrics"><view class="mpb-hero-metric"><text class="mpb-hero-metric-value">{{ selectablePlanCount }}</text><text class="mpb-hero-metric-label">可选方案</text></view><view class="mpb-hero-metric"><text class="mpb-hero-metric-value">{{ recommendedPlan ? formatCurrency(recommendedPlan.priceCents) : '-' }}</text><text class="mpb-hero-metric-label">推荐档</text></view><view class="mpb-hero-metric"><text class="mpb-hero-metric-value">{{ wechatMiniProgramPaymentAvailable ? '即时' : '待开放' }}</text><text class="mpb-hero-metric-label">到账方式</text></view></view></view>
       <view v-if="isFirstPurchase" class="mpb-note first-recharge-note">首次充值仅可选择 996 元代理商开通包，支付成功后将开放其他点数套餐。</view>
       <view v-if="loading" class="mpb-card mpb-empty"><text class="mpb-empty-title">正在加载充值方案...</text></view>
       <view v-else-if="plans.length" class="mpb-card mpb-list">
@@ -11,8 +12,8 @@
         <button v-for="plan in plans" :key="plan.id" :class="['mpb-row-button', { active: selectedId === plan.id, locked: isPlanLocked(plan) }]" :disabled="isPlanLocked(plan)" @click="selectPlan(plan)"><text :class="['mpb-row-icon', isAgentPlan(plan) ? 'orange' : plan.recommended ? 'green' : '']">{{ isAgentPlan(plan) ? '代' : '充' }}</text><view class="mpb-row-main"><text class="mpb-row-title">{{ plan.name }}</text><text class="mpb-row-meta">到账 {{ formatNumber(plan.grantPoints || plan.points || plan.tokenAmount) }} 点{{ isAgentPlan(plan) ? ' · 开通代理商' : plan.recommended ? ' · 推荐' : '' }}</text></view><view class="mpb-row-side"><text class="mpb-amount">{{ formatCurrency(plan.priceCents) }}</text><text v-if="selectedId === plan.id" class="mpb-status success">已选择</text><text v-else-if="isPlanLocked(plan)" class="mpb-status">首次不可选</text></view></button>
       </view>
       <view v-else class="mpb-card mpb-empty"><text class="mpb-empty-title">暂无可用充值方案</text><text class="mpb-empty-copy">请稍后刷新，或联系运营人员检查套餐配置。</text></view>
-      <button class="mpb-button" :disabled="!selectedId" @click="confirm">选择套餐并继续</button>
-      <text class="mpb-footer-note">支付成功后生成订单并更新到账点数</text>
+      <button class="mpb-button" :disabled="!selectedId" @click="confirm">{{ wechatMiniProgramPaymentAvailable ? '选择套餐并继续' : '查看支付开放说明' }}</button>
+      <text class="mpb-footer-note">{{ wechatMiniProgramPaymentAvailable ? '支付成功后生成订单并更新到账点数' : 'App 端不会创建微信小程序支付订单' }}</text>
     </view>
   </view>
 </template>
@@ -20,6 +21,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { onLoad } from "@dcloudio/uni-app";
+import { ensureWechatMiniProgramPaymentAvailable, paymentChannelDescription, paymentChannelLabel, wechatMiniProgramPaymentAvailable } from "../../features/payment/availability";
 import { businessSdk } from "../../api/client";
 import { asRecord, backOrHome, formatCurrency, formatNumber, hasCompletedPurchase, listOf, loadPlans, rowNumber, type CommercePlanRecord } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
@@ -55,7 +57,12 @@ async function load() {
 function confirm() {
   const selected = plans.value.find(item => item.id === selectedId.value);
   if (!selected || isPlanLocked(selected)) return;
+  if (!ensureWechatMiniProgramPaymentAvailable()) return;
   uni.navigateTo({ url: `/pages/user/UserOrderConfirmPage?planId=${encodeURIComponent(selected.id)}&kind=${isAgentPlan(selected) ? "agent" : "recharge"}` });
+}
+function openVirtualPayment() {
+  if (!ensureWechatMiniProgramPaymentAvailable()) return;
+  uni.navigateTo({ url: "/pages/user/UserVirtualPaymentPage" });
 }
 onLoad(load);
 </script>
@@ -64,4 +71,5 @@ onLoad(load);
 @import "../../styles/mini-program-business.css";
 .first-recharge-note { color: #b54708; border: 1px solid #fed7aa; background: #fff7ed; }
 .mpb-row-button.locked { opacity: .48; border-style: dashed; background: #f8fafc; }
+.virtual-payment-entry { border-color: #a7e6c4; background: #f4fff8; }
 </style>

@@ -1,10 +1,13 @@
 import type { AppRole, CurrentContextRequest, EnterpriseContext, EnterpriseContextsResponse } from "../../types";
-import { api, getApiBaseURL, getAuthToken } from "../../api/client";
+import { api } from "../../api/client";
+import { uploadReferenceImage } from "../../api/files";
 import type {
   EnterpriseAIEmployee,
   EnterpriseAuditLog,
   EnterpriseBillingSummary,
   EnterpriseCertification,
+  EnterpriseConnector,
+  EnterpriseConnectorConfig,
   EnterpriseCreateResult,
   EnterpriseInvitation,
   EnterpriseJoinRequest,
@@ -13,6 +16,9 @@ import type {
   EnterpriseOrganization,
   EnterpriseOverview,
   EnterpriseRoleDefinition,
+  ConnectorAITask,
+  ConnectorMessageLog,
+  ConnectorUserBinding,
   ItemsResponse,
 } from "./types";
 
@@ -84,33 +90,26 @@ export const enterpriseAPI = {
     method: "PUT",
     body: JSON.stringify({ items: knowledgeBaseIds.map((knowledgeBaseId, index) => ({ knowledgeBaseId, priority: 100 - index, weight: 1, enabled: true, retrievalOverrides: {} })) }),
   }),
+  feishuConnector: () => api<EnterpriseConnector | { configured: false; config: EnterpriseConnectorConfig }>("/api/v1/enterprise/connectors/feishu"),
+  saveFeishuConnector: (configured: boolean, input: { connectorName: string; appId: string; appSecret?: string; verificationToken?: string; encryptKey?: string; config: EnterpriseConnectorConfig }) => api<EnterpriseConnector>("/api/v1/enterprise/connectors/feishu", {
+    method: configured ? "PUT" : "POST",
+    body: JSON.stringify(input),
+  }),
+  testFeishuConnector: () => api<{ ok: boolean; connector: EnterpriseConnector }>("/api/v1/enterprise/connectors/feishu/test", { method: "POST" }),
+  setFeishuConnectorEnabled: (enabled: boolean) => api<{ ok: boolean; connector: EnterpriseConnector }>(`/api/v1/enterprise/connectors/feishu/${enabled ? "enable" : "disable"}`, { method: "POST" }),
+  feishuUsers: () => api<ItemsResponse<ConnectorUserBinding>>("/api/v1/enterprise/connectors/feishu/users?limit=200"),
+  updateFeishuUser: (id: string, input: { internalUserId?: string; permission: Record<string, unknown>; status: "active" | "disabled" }) => api<ConnectorUserBinding>(`/api/v1/enterprise/connectors/feishu/users/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  }),
+  feishuTasks: () => api<ItemsResponse<ConnectorAITask>>("/api/v1/enterprise/connectors/feishu/tasks?limit=200"),
+  feishuLogs: () => api<ItemsResponse<ConnectorMessageLog>>("/api/v1/enterprise/connectors/feishu/logs?limit=100"),
 };
 
-export function uploadEnterpriseDocument(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    uni.uploadFile({
-      url: `${getApiBaseURL().replace(/\/+$/, "")}/api/v1/reference-images`,
-      filePath,
-      name: "file",
-      header: { Authorization: `Bearer ${getAuthToken()}` },
-      success(response) {
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(`营业执照上传失败（${response.statusCode}）`));
-          return;
-        }
-        try {
-          const payload = JSON.parse(response.data || "{}") as Record<string, unknown>;
-          const item = payload.item && typeof payload.item === "object" ? payload.item as Record<string, unknown> : payload;
-          const value = String(item.url || item.path || "").trim();
-          if (!value) throw new Error("上传接口未返回文件地址");
-          resolve(value);
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error("营业执照上传响应无效"));
-        }
-      },
-      fail(error) {
-        reject(new Error(error.errMsg || "营业执照上传失败"));
-      },
-    });
-  });
+export async function uploadEnterpriseDocument(filePath: string): Promise<string> {
+  try {
+    return await uploadReferenceImage(filePath);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : "营业执照上传失败");
+  }
 }

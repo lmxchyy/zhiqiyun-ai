@@ -1,4 +1,4 @@
-import { adminRequest } from "./client";
+import { adminFetchResponse, adminRequest } from "./client";
 
 export type KnowledgeBase = {
   id: string;
@@ -137,27 +137,16 @@ export async function streamKnowledgeRun(
   onEvent: (eventName: string, value: KnowledgeStreamEvent | KnowledgeRunResult) => void,
   signal?: AbortSignal
 ) {
-  const token = localStorage.getItem("token") || sessionStorage.getItem("token");
-  const response = await fetch(`/api/v1/knowledge-conversations/${conversationId}/runs:stream`, {
+  const response = await adminFetchResponse(`/api/v1/knowledge-conversations/${conversationId}/runs:stream`, {
     method: "POST",
     headers: {
       Accept: "text/event-stream",
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(payload),
     signal
   });
-  if (!response.ok || !response.body) {
-    let message = `请求失败 (${response.status})`;
-    try {
-      const body = await response.json();
-      message = body.error || body.message || message;
-    } catch {
-      // Keep the status-based message when the body is not JSON.
-    }
-    throw new Error(message);
-  }
+  if (!response.body) throw new Error("知识问答未返回流式响应");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

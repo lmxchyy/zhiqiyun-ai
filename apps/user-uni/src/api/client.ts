@@ -1,6 +1,6 @@
 import { configureApiClient } from '@xianzhi/api-client'
 import { createBusinessSdk } from '@xianzhi/business-sdk'
-import { createUniPlatformAdapter } from '@xianzhi/platform-adapter'
+import { createUniPlatformAdapter, type AdapterDownloadFileResponse } from '@xianzhi/platform-adapter'
 import { createAuthService, createAuthStorage } from '@xianzhi/shared-auth'
 
 const tokenKey = 'token'
@@ -15,9 +15,8 @@ let defaultApiBaseURL = ''
 defaultApiBaseURL = 'http://127.0.0.1:3100'
 // #endif
 const apiBaseURL = String(env.VITE_API_BASE_URL || defaultApiBaseURL).replace(/\/+$/, '')
-const isDevBuild = rawEnv.DEV === true || env.MODE === 'development'
-const enableMockLogin = isDevBuild && String(env.VITE_ENABLE_MOCK_LOGIN || '').toLowerCase() === 'true'
 let unauthorizedRedirecting = false
+let unauthorizedRefreshPromise: Promise<boolean> | null = null
 
 export const authStorage = createAuthStorage({
   adapter,
@@ -36,6 +35,83 @@ export function getAuthToken(): string {
 
 export function setAuthToken(token: string) {
   authStorage.setToken(token)
+}
+
+function createRequestId() {
+  const cryptoRuntime = globalThis.crypto
+  if (cryptoRuntime?.randomUUID) return cryptoRuntime.randomUUID()
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function currentContextHeaders() {
+  const auth = authStorage.getAuth()
+  const headers: Record<string, string> = {}
+  if (auth?.tenantId) headers['X-Tenant-Id'] = auth.tenantId
+  if (auth?.organizationId) headers['X-Organization-Id'] = auth.organizationId
+  return headers
+}
+
+function clientTransportHeaders(headers: Record<string, string> = {}, auth = true) {
+  const clientInfo = adapter.getClientInfo()
+  const result: Record<string, string> = {
+    Accept: 'application/json',
+    'X-Request-Id': createRequestId(),
+    'X-Client-Platform': clientInfo.platform,
+    ...currentContextHeaders(),
+    ...headers,
+  }
+  if (clientInfo.appName) result['X-Client-Name'] = clientInfo.appName
+  if (env.VITE_APP_VERSION || env.VITE_APP_BUILD_VERSION) result['X-Client-Version'] = env.VITE_APP_VERSION || env.VITE_APP_BUILD_VERSION || ''
+  if (clientInfo.language) result['X-Client-Language'] = clientInfo.language
+  const token = auth ? getAuthToken() : ''
+  if (token && !result.Authorization) result.Authorization = `Bearer ${token}`
+  return result
+}
+
+function resolveApiURL(path: string) {
+  if (/^https?:\/\//i.test(path)) return path
+  const baseURL = getApiBaseURL().replace(/\/+$/, '')
+  return `${baseURL}${path.startsWith('/') ? path : `/${path}`}`
+}
+
+function trustedApiURL(path: string) {
+  if (!/^https?:\/\//i.test(path)) return true
+  const targetOrigin = path.match(/^https?:\/\/[^/]+/i)?.[0].toLowerCase() || ''
+  const baseOrigin = getApiBaseURL().match(/^https?:\/\/[^/]+/i)?.[0].toLowerCase() || ''
+  if (baseOrigin) return targetOrigin === baseOrigin
+  if (typeof window !== 'undefined') return targetOrigin === window.location.origin.toLowerCase()
+  return false
+}
+
+function responsePayloadMessage(payload: unknown, fallback: string) {
+  if (payload && typeof payload === 'object') {
+    const record = payload as { error?: unknown; message?: unknown }
+    return String(record.error || record.message || fallback)
+  }
+  return typeof payload === 'string' && payload.trim() ? payload.trim() : fallback
+}
+
+function unwrapTransportPayload<T>(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return payload as T
+  const record = payload as { code?: unknown; data?: T; error?: unknown; message?: unknown }
+  const hasEnvelopeShape = 'code' in record || 'message' in record || 'error' in record
+  if (hasEnvelopeShape && record.code !== undefined && record.code !== 0 && record.code !== '0') {
+    throw new Error(responsePayloadMessage(record, `API code ${String(record.code)}`))
+  }
+  if (hasEnvelopeShape && Object.prototype.hasOwnProperty.call(record, 'data')) return record.data as T
+  return payload as T
+}
+
+async function fetchErrorMessage(response: Response) {
+  const fallback = `请求失败 (${response.status})`
+  const raw = await response.text().catch(() => '')
+  if (!raw) return fallback
+  try {
+    return responsePayloadMessage(JSON.parse(raw), fallback)
+  }
+  catch {
+    return raw.trim() || fallback
+  }
 }
 
 function normalizeHeaders(headers: RequestInit['headers']): Record<string, string> {
@@ -57,11 +133,10 @@ function normalizeBody(body: RequestInit['body']) {
   }
 }
 
-function handleUnauthorized() {
-  authStorage.clearSession()
+function redirectToLogin() {
   if (unauthorizedRedirecting) return
   unauthorizedRedirecting = true
-  // #ifdef MP-WEIXIN
+  // #ifdef MP-WEIXIN || APP-PLUS
   const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
   const current = pages.length ? pages[pages.length - 1] as unknown as { route?: string; options?: Record<string, unknown> } : null
   const currentPath = current?.route ? `/${String(current.route).replace(/^\/+/, '')}` : ''
@@ -76,7 +151,7 @@ function handleUnauthorized() {
     complete: () => { unauthorizedRedirecting = false },
   })
   // #endif
-  // #ifndef MP-WEIXIN
+  // #ifdef H5
   if (typeof window !== 'undefined' && !['/login', '/register'].includes(window.location.pathname)) {
     window.location.assign('/login')
   }
@@ -84,20 +159,47 @@ function handleUnauthorized() {
   // #endif
 }
 
+async function handleUnauthorized(context: { path?: string; statusCode?: number; requestId?: string; payload?: unknown; retryAttempt?: number } = {}) {
+  if ((context.retryAttempt || 0) > 0) {
+    authStorage.clear()
+    redirectToLogin()
+    return false
+  }
+  if (!authStorage.getRefreshToken()) {
+    authStorage.clear()
+    redirectToLogin()
+    return false
+  }
+  if (!unauthorizedRefreshPromise) {
+    unauthorizedRefreshPromise = authService.refresh()
+      .then(() => true)
+      .catch(() => {
+        authStorage.clear()
+        redirectToLogin()
+        return false
+      })
+      .finally(() => {
+        unauthorizedRefreshPromise = null
+      })
+  }
+  return unauthorizedRefreshPromise
+}
+
+const detectedClientPlatform = adapter.getClientInfo().platform
+const clientName = detectedClientPlatform === 'app-android' || detectedClientPlatform === 'app-ios'
+  ? 'xianzhi-user-app'
+  : detectedClientPlatform === 'mp-weixin'
+    ? 'xianzhi-mini-program'
+  : 'xianzhi-user-web'
+
 const sharedApiClient = configureApiClient({
   adapter,
   baseURL: apiBaseURL,
   timeout: requestTimeout,
-  clientName: 'xianzhi-user-web',
+  clientName,
   clientVersion: env.VITE_APP_VERSION || env.VITE_APP_BUILD_VERSION || '0.1.0',
   getToken: getAuthToken,
-  defaultHeaders: () => {
-    const auth = authStorage.getAuth()
-    const headers: Record<string, string> = {}
-    if (auth?.tenantId) headers['X-Tenant-Id'] = auth.tenantId
-    if (auth?.organizationId) headers['X-Organization-Id'] = auth.organizationId
-    return headers
-  },
+  defaultHeaders: currentContextHeaders,
   onUnauthorized: handleUnauthorized,
 })
 
@@ -109,10 +211,123 @@ export const authService = createAuthService({
   tokenKey,
   refreshTokenKey,
   authKey,
-  wechatMockCode: enableMockLogin ? 'mock-devtools-code' : undefined,
 })
 
 export const businessSdk = createBusinessSdk(apiClient)
+
+export async function apiFetchResponse(
+  path: string,
+  init: RequestInit = {},
+  options: { auth?: boolean; retriedAfterRefresh?: boolean } = {},
+) {
+  if (typeof fetch !== 'function') throw new Error('当前运行环境不支持该请求方式')
+  const usesSession = options.auth ?? trustedApiURL(path)
+  const headers = clientTransportHeaders(normalizeHeaders(init.headers), usesSession)
+  const response = await fetch(resolveApiURL(path), { ...init, headers })
+  if (usesSession && response.status === 401) {
+    const retryAttempt = options.retriedAfterRefresh ? 1 : 0
+    const recovered = await handleUnauthorized({ path, statusCode: response.status, payload: null, retryAttempt })
+    if (recovered && retryAttempt === 0) return apiFetchResponse(path, init, { ...options, retriedAfterRefresh: true })
+  }
+  if (!response.ok) throw new Error(await fetchErrorMessage(response))
+  return response
+}
+
+export interface ApiRequestTaskHandle<T> {
+  promise: Promise<T>
+  abort: () => void
+}
+
+export interface ApiRequestTaskOptions<TBody = unknown> {
+  method?: string
+  headers?: Record<string, string>
+  data?: TBody
+  timeout?: number
+  auth?: boolean
+}
+
+export function apiRequestTask<T = unknown, TBody = unknown>(
+  path: string,
+  options: ApiRequestTaskOptions<TBody> = {},
+): ApiRequestTaskHandle<T> {
+  let requestTask: UniApp.RequestTask | null = null
+  const usesSession = options.auth ?? trustedApiURL(path)
+  const promise = new Promise<T>((resolve, reject) => {
+    requestTask = uni.request({
+      url: resolveApiURL(path),
+      method: (options.method || 'GET') as UniApp.RequestOptions['method'],
+      header: clientTransportHeaders(options.headers, usesSession),
+      data: options.data as UniApp.RequestOptions['data'],
+      timeout: options.timeout || requestTimeout,
+      success(response) {
+        if (usesSession && response.statusCode === 401) {
+          void handleUnauthorized({ path, statusCode: response.statusCode, payload: response.data, retryAttempt: 0 })
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(new Error(responsePayloadMessage(response.data, `请求失败 (${response.statusCode})`)))
+          return
+        }
+        try {
+          resolve(unwrapTransportPayload<T>(response.data))
+        }
+        catch (error) {
+          reject(error)
+        }
+      },
+      fail(error) {
+        reject(new Error(error.errMsg || '请求失败，请检查网络'))
+      },
+    }) as UniApp.RequestTask
+  })
+  return { promise, abort: () => requestTask?.abort() }
+}
+
+export async function uploadApiFile<T = unknown>(
+  path: string,
+  options: { filePath: string; name?: string; formData?: Record<string, unknown>; headers?: Record<string, string>; timeout?: number; auth?: boolean; retriedAfterRefresh?: boolean },
+) {
+  if (!adapter.uploadFile) throw new Error('当前运行环境不支持文件上传')
+  const usesSession = options.auth ?? trustedApiURL(path)
+  const response = await adapter.uploadFile<T>({
+    url: resolveApiURL(path),
+    filePath: options.filePath,
+    name: options.name || 'file',
+    formData: options.formData,
+    header: clientTransportHeaders(options.headers, usesSession),
+    timeout: options.timeout || requestTimeout,
+  })
+  if (usesSession && response.statusCode === 401) {
+    const retryAttempt = options.retriedAfterRefresh ? 1 : 0
+    const recovered = await handleUnauthorized({ path, statusCode: response.statusCode, payload: response.data, retryAttempt })
+    if (recovered && retryAttempt === 0) return uploadApiFile(path, { ...options, retriedAfterRefresh: true })
+  }
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(responsePayloadMessage(response.data, `文件上传失败 (${response.statusCode})`))
+  }
+  return unwrapTransportPayload<T>(response.data)
+}
+
+export async function downloadApiFile<T = unknown>(
+  path: string,
+  options: { headers?: Record<string, string>; timeout?: number; auth?: boolean; retriedAfterRefresh?: boolean } = {},
+): Promise<AdapterDownloadFileResponse<T>> {
+  if (!adapter.downloadFile) throw new Error('当前运行环境不支持文件下载')
+  const usesSession = options.auth ?? trustedApiURL(path)
+  const response = await adapter.downloadFile<T>({
+    url: resolveApiURL(path),
+    header: clientTransportHeaders({ Accept: '*/*', ...options.headers }, usesSession),
+    timeout: options.timeout || requestTimeout,
+  })
+  if (usesSession && response.statusCode === 401) {
+    const retryAttempt = options.retriedAfterRefresh ? 1 : 0
+    const recovered = await handleUnauthorized({ path, statusCode: response.statusCode, payload: response.data, retryAttempt })
+    if (recovered && retryAttempt === 0) return downloadApiFile(path, { ...options, retriedAfterRefresh: true })
+  }
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(responsePayloadMessage(response.data, `文件下载失败 (${response.statusCode})`))
+  }
+  return response
+}
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return sharedApiClient.request<T>(path, {

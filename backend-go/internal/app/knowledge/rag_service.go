@@ -258,10 +258,14 @@ func (s *RAGService) run(ctx context.Context, access AccessContext, input RunInp
 	if outputTokens <= 0 {
 		outputTokens = estimateRAGTextTokens(answer.String())
 	}
+	assistantCreatedAt := s.now()
+	if !assistantCreatedAt.After(userMessage.CreatedAt) {
+		assistantCreatedAt = userMessage.CreatedAt.Add(time.Nanosecond)
+	}
 	assistantMessage, err := s.agents.CreateMessage(runCtx, access, Message{
 		ID: s.newID("message"), TenantID: access.TenantID, ConversationID: conversation.ID, ParentMessageID: userMessage.ID,
 		Role: "assistant", Content: answer.String(), Status: "COMPLETED", InputTokens: inputTokens,
-		OutputTokens: outputTokens, Metadata: map[string]any{"ragRunId": run.ID}, CreatedAt: s.now(),
+		OutputTokens: outputTokens, Metadata: map[string]any{"ragRunId": run.ID}, CreatedAt: assistantCreatedAt,
 	})
 	if err != nil {
 		return result, err

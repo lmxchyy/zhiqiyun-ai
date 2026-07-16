@@ -1,42 +1,48 @@
 package httpserver
 
 type adminPlatformData struct {
-	Users              []adminUser              `json:"users"`
-	Plans              []adminPlan              `json:"plans"`
-	PointAccounts      []adminPointAccount      `json:"pointAccounts"`
-	TokenRecords       []adminTokenRecord       `json:"tokenRecords,omitempty"`
-	Orders             []adminOrder             `json:"orders"`
-	Payments           []adminPayment           `json:"payments"`
-	PaymentEvents      []adminPaymentEvent      `json:"paymentEvents,omitempty"`
-	ChannelAgents      []adminChannelAgent      `json:"channelAgents"`
-	OperationCenters   []adminOperationCenter   `json:"operationCenters,omitempty"`
-	CustomerRelations  []adminCustomerRelation  `json:"customerRelations,omitempty"`
-	Commissions        []adminCommission        `json:"commissions"`
-	CommissionRules    []adminCommissionRule    `json:"commissionRules"`
-	BillingRules       []adminBillingRule       `json:"billingRules"`
-	BillingEvents      []adminBillingEvent      `json:"billingEvents"`
-	Withdrawals        []adminWithdrawal        `json:"withdrawals"`
-	Presentations      []adminPresentation      `json:"presentations"`
-	Agents             []adminAgent             `json:"agents"`
-	AgentCalls         []adminAgentCall         `json:"agentCalls"`
-	GeoBrands          []adminGeoBrand          `json:"geoBrands"`
-	GeoTasks           []adminGeoTask           `json:"geoTasks"`
-	AdminProducts      []adminProduct           `json:"adminProducts"`
-	SystemSettings     adminSystemSettings      `json:"systemSettings"`
-	APIChannels        []adminAPIChannel        `json:"apiChannels"`
-	APIModels          []adminAPIModel          `json:"apiModels"`
-	APIKeys            []adminAPIKey            `json:"apiKeys"`
-	CustomerGroups     []adminCustomerGroup     `json:"customerGroups"`
-	AIModules          []adminAIModule          `json:"aiModules"`
-	AIModels           []adminAIModel           `json:"aiModels"`
-	AIParameterSchemas []adminAIParameterSchema `json:"aiParameterSchemas"`
-	TenantModuleLimits []adminTenantModuleLimit `json:"tenantModuleLimits"`
-	Enterprise         enterpriseMemoryState    `json:"enterprise,omitempty"`
-	PromotionRecords   []promotionRecord        `json:"promotionRecords,omitempty"`
-	GenerationTasks    []generationTask         `json:"generationTasks"`
-	Assets             []asset                  `json:"assets"`
-	Counters           map[string]int           `json:"counters"`
-	PointsAvailable    *int                     `json:"pointsAvailable,omitempty"`
+	Users                  []adminUser              `json:"users"`
+	Plans                  []adminPlan              `json:"plans"`
+	PointAccounts          []adminPointAccount      `json:"pointAccounts"`
+	TokenRecords           []adminTokenRecord       `json:"tokenRecords,omitempty"`
+	Orders                 []adminOrder             `json:"orders"`
+	Payments               []adminPayment           `json:"payments"`
+	PaymentEvents          []adminPaymentEvent      `json:"paymentEvents,omitempty"`
+	ChannelAgents          []adminChannelAgent      `json:"channelAgents"`
+	OperationCenters       []adminOperationCenter   `json:"operationCenters,omitempty"`
+	CustomerRelations      []adminCustomerRelation  `json:"customerRelations,omitempty"`
+	Commissions            []adminCommission        `json:"commissions"`
+	CommissionRules        []adminCommissionRule    `json:"commissionRules"`
+	BillingRules           []adminBillingRule       `json:"billingRules"`
+	BillingEvents          []adminBillingEvent      `json:"billingEvents"`
+	BillingRuleVersions    []billingRuleVersion     `json:"billingRuleVersions,omitempty"`
+	ProviderCosts          []providerCost           `json:"providerCosts,omitempty"`
+	BillingLifecycleEvents []billingLifecycleEvent  `json:"billingLifecycleEvents,omitempty"`
+	WalletLedger           []walletLedgerEntry      `json:"walletLedger,omitempty"`
+	Withdrawals            []adminWithdrawal        `json:"withdrawals"`
+	Presentations          []adminPresentation      `json:"presentations"`
+	Agents                 []adminAgent             `json:"agents"`
+	AgentCalls             []adminAgentCall         `json:"agentCalls"`
+	GeoBrands              []adminGeoBrand          `json:"geoBrands"`
+	GeoTasks               []adminGeoTask           `json:"geoTasks"`
+	AdminProducts          []adminProduct           `json:"adminProducts"`
+	SystemSettings         adminSystemSettings      `json:"systemSettings"`
+	APIChannels            []adminAPIChannel        `json:"apiChannels"`
+	APIModels              []adminAPIModel          `json:"apiModels"`
+	APIKeys                []adminAPIKey            `json:"apiKeys"`
+	CustomerGroups         []adminCustomerGroup     `json:"customerGroups"`
+	AIModules              []adminAIModule          `json:"aiModules"`
+	AIModels               []adminAIModel           `json:"aiModels"`
+	AIParameterSchemas     []adminAIParameterSchema `json:"aiParameterSchemas"`
+	TenantModuleLimits     []adminTenantModuleLimit `json:"tenantModuleLimits"`
+	Enterprise             enterpriseMemoryState    `json:"enterprise,omitempty"`
+	PromotionRecords       []promotionRecord        `json:"promotionRecords,omitempty"`
+	AuthMergeRequests      []adminAuthMergeRequest  `json:"authMergeRequests,omitempty"`
+	GenerationTasks        []generationTask         `json:"generationTasks"`
+	Assets                 []asset                  `json:"assets"`
+	AIState                userAIState              `json:"aiState,omitempty"`
+	Counters               map[string]int           `json:"counters"`
+	PointsAvailable        *int                     `json:"pointsAvailable,omitempty"`
 }
 
 type adminUser struct {
@@ -78,6 +84,65 @@ type adminUserModelRoute struct {
 	UpdatedAt    string   `json:"updatedAt"`
 	ExternalKey  string   `json:"externalKey,omitempty"`
 	ExternalUser string   `json:"externalUser,omitempty"`
+}
+
+type adminAuthMergeRequest struct {
+	ID              string         `json:"id"`
+	PrimaryUserID   string         `json:"primaryUserId"`
+	SecondaryUserID string         `json:"secondaryUserId"`
+	Mobile          string         `json:"mobile,omitempty"`
+	WeChatOpenID    string         `json:"wechatOpenId,omitempty"`
+	WeChatUnionID   string         `json:"wechatUnionId,omitempty"`
+	ConflictCode    string         `json:"conflictCode"`
+	Source          string         `json:"source"`
+	Reason          string         `json:"reason,omitempty"`
+	Status          string         `json:"status"`
+	ReviewComment   string         `json:"reviewComment,omitempty"`
+	ResolvedBy      string         `json:"resolvedBy,omitempty"`
+	ResolvedAt      string         `json:"resolvedAt,omitempty"`
+	CreatedAt       string         `json:"createdAt"`
+	UpdatedAt       string         `json:"updatedAt"`
+	Raw             map[string]any `json:"raw,omitempty"`
+}
+
+type adminAuthMergeRequestMutation struct {
+	PrimaryUserID   string         `json:"primaryUserId"`
+	SecondaryUserID string         `json:"secondaryUserId"`
+	Mobile          string         `json:"mobile"`
+	WeChatOpenID    string         `json:"wechatOpenId"`
+	WeChatUnionID   string         `json:"wechatUnionId"`
+	ConflictCode    string         `json:"conflictCode"`
+	Source          string         `json:"source"`
+	Reason          string         `json:"reason"`
+	Status          string         `json:"status"`
+	ReviewComment   string         `json:"reviewComment"`
+	ResolvedBy      string         `json:"resolvedBy"`
+	Raw             map[string]any `json:"raw"`
+}
+
+type adminAuthMergeExecuteRequest struct {
+	TargetUserID  string `json:"targetUserId"`
+	Confirm       bool   `json:"confirm"`
+	ReviewComment string `json:"reviewComment"`
+	ResolvedBy    string `json:"resolvedBy"`
+}
+
+type adminAuthMergeExecuteResult struct {
+	RequestID    string         `json:"requestId"`
+	TargetUserID string         `json:"targetUserId"`
+	SourceUserID string         `json:"sourceUserId"`
+	Moved        map[string]int `json:"moved"`
+	Warnings     []string       `json:"warnings,omitempty"`
+}
+
+type adminAuthMergePreviewResult struct {
+	RequestID    string         `json:"requestId"`
+	TargetUserID string         `json:"targetUserId"`
+	SourceUserID string         `json:"sourceUserId"`
+	Executable   bool           `json:"executable"`
+	Moved        map[string]int `json:"moved"`
+	Warnings     []string       `json:"warnings,omitempty"`
+	Blockers     []string       `json:"blockers,omitempty"`
 }
 
 type adminPlan struct {
@@ -205,6 +270,7 @@ type adminCustomerRelation struct {
 	ParentAgentID     string `json:"parentAgentId,omitempty"`
 	OperationCenterID string `json:"operationCenterId,omitempty"`
 	BindType          string `json:"bindType"`
+	BindStartAt       string `json:"bindStartAt,omitempty"`
 	Status            string `json:"status"`
 	CreatedAt         string `json:"createdAt"`
 	UpdatedAt         string `json:"updatedAt,omitempty"`
@@ -270,10 +336,13 @@ type adminBillingRule struct {
 	ModuleCodeCamel          string         `json:"moduleCode,omitempty"`
 	ModelName                string         `json:"model_name"`
 	ModelNameCamel           string         `json:"modelName,omitempty"`
+	ModelCode                string         `json:"model_code,omitempty"`
+	BillingUnit              string         `json:"billing_unit,omitempty"`
 	BillingType              string         `json:"billing_type"`
 	BillingTypeCamel         string         `json:"billingType,omitempty"`
 	BasePrice                float64        `json:"base_price"`
 	BasePriceCamel           float64        `json:"basePrice,omitempty"`
+	MinimumCharge            float64        `json:"minimum_charge,omitempty"`
 	CostPrice                float64        `json:"cost_price"`
 	CostPriceCamel           float64        `json:"costPrice,omitempty"`
 	CurrencyType             string         `json:"currency_type"`
@@ -281,6 +350,8 @@ type adminBillingRule struct {
 	ParameterMultiplier      map[string]any `json:"parameter_multiplier"`
 	ParameterMultiplierCamel map[string]any `json:"parameterMultiplier,omitempty"`
 	Status                   string         `json:"status"`
+	RuleSource               string         `json:"rule_source,omitempty"`
+	Version                  int            `json:"version,omitempty"`
 	CreatedAt                string         `json:"created_at,omitempty"`
 	UpdatedAt                string         `json:"updated_at,omitempty"`
 }
@@ -359,25 +430,37 @@ type adminProduct struct {
 }
 
 type adminCustomerMutation struct {
-	Name               string            `json:"name"`
-	Email              string            `json:"email"`
-	Mobile             string            `json:"mobile"`
-	WeChatOpenID       string            `json:"wechatOpenId"`
-	WeChatUnionID      string            `json:"wechatUnionId"`
-	RegistrationSource map[string]string `json:"registrationSource"`
-	Role               string            `json:"role"`
-	Status             string            `json:"status"`
-	PlanID             string            `json:"planId"`
-	ReferredBy         string            `json:"referredBy"`
-	Available          int               `json:"available"`
-	ModelChannelID     string            `json:"modelChannelId"`
-	ModelChannel       string            `json:"modelChannel"`
-	ModelGroup         string            `json:"modelGroup"`
-	ModelModels        string            `json:"modelModels"`
-	ModelAPIKey        string            `json:"modelApiKey"`
-	ModelKeyStatus     string            `json:"modelKeyStatus"`
-	ModelQuotaLimit    int               `json:"modelQuotaLimit"`
-	ModelRouteEnabled  *bool             `json:"modelRouteEnabled"`
+	Name                  string            `json:"name"`
+	Email                 string            `json:"email"`
+	Mobile                string            `json:"mobile"`
+	WeChatOpenID          string            `json:"wechatOpenId"`
+	WeChatUnionID         string            `json:"wechatUnionId"`
+	RegistrationSource    map[string]string `json:"registrationSource"`
+	Role                  string            `json:"role"`
+	Status                string            `json:"status"`
+	PlanID                string            `json:"planId"`
+	ReferredBy            string            `json:"referredBy"`
+	SubscriptionExpiresAt string            `json:"subscriptionExpiresAt"`
+	Available             *int              `json:"available"`
+	ModelChannelID        string            `json:"modelChannelId"`
+	ModelChannel          string            `json:"modelChannel"`
+	ModelGroup            string            `json:"modelGroup"`
+	ModelModels           string            `json:"modelModels"`
+	ModelAPIKey           string            `json:"modelApiKey"`
+	ModelKeyStatus        string            `json:"modelKeyStatus"`
+	ModelQuotaLimit       int               `json:"modelQuotaLimit"`
+	ModelRouteEnabled     *bool             `json:"modelRouteEnabled"`
+}
+
+type adminCustomerIdentityMutation struct {
+	ClearMobile bool   `json:"clearMobile"`
+	ClearWeChat bool   `json:"clearWechat"`
+	Status      string `json:"status"`
+	Reason      string `json:"reason"`
+}
+
+func pointBalancePointer(value int) *int {
+	return &value
 }
 
 type adminChannelMutation struct {
@@ -409,11 +492,11 @@ type adminProductMutation struct {
 
 type adminPlanMutation struct {
 	Name         string         `json:"name"`
-	PriceCents   int            `json:"priceCents"`
-	GrantPoints  int            `json:"grantPoints"`
-	DurationDays int            `json:"durationDays"`
-	Concurrency  int            `json:"concurrency"`
-	Active       bool           `json:"active"`
+	PriceCents   *int           `json:"priceCents"`
+	GrantPoints  *int           `json:"grantPoints"`
+	DurationDays *int           `json:"durationDays"`
+	Concurrency  *int           `json:"concurrency"`
+	Active       *bool          `json:"active"`
 	Entitlements map[string]any `json:"entitlements"`
 }
 
@@ -630,9 +713,24 @@ type adminTenantModuleLimitMutation struct {
 	Status    string         `json:"status"`
 }
 
+type adminPlanCapabilityModule struct {
+	ModuleCode      string         `json:"moduleCode"`
+	Name            string         `json:"name"`
+	Description     string         `json:"description"`
+	Enabled         bool           `json:"enabled"`
+	AllowedModels   []string       `json:"allowedModels"`
+	AvailableModels []string       `json:"availableModels"`
+	Limits          map[string]any `json:"limits"`
+}
+
+type adminPlanCapabilitiesMutation struct {
+	Modules []adminPlanCapabilityModule `json:"modules"`
+}
+
 type adminBillingRuleMutation struct {
 	BillingType         string         `json:"billing_type"`
 	BasePrice           float64        `json:"base_price"`
+	MinimumCharge       float64        `json:"minimum_charge"`
 	CostPrice           float64        `json:"cost_price"`
 	CurrencyType        string         `json:"currency_type"`
 	ParameterMultiplier map[string]any `json:"parameter_multiplier"`

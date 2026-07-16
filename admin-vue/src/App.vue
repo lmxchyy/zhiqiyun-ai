@@ -1,6 +1,8 @@
 ﻿<template>
   <el-config-provider :size="currentElementSize">
-  <section v-if="isAuthRoute" class="admin-auth-shell">
+  <ConnectorAuthorizationCenter v-if="isConnectorAuthorizationRoute" />
+  <FeishuConnectorSetup v-else-if="isFeishuConnectorSetupRoute" />
+  <section v-else-if="isAuthRoute" class="admin-auth-shell">
     <div class="admin-auth-card">
       <div class="admin-auth-brand">
         <img :src="xianzhiLogo" alt="知启云 AI" />
@@ -236,7 +238,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -247,7 +249,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -2035,6 +2037,7 @@
           <MediaCenter v-else-if="['mediaAssets', 'mediaCategories'].includes(store.activeModuleId)" />
           <PageDecoration v-else-if="mediaDecorationModuleIds.includes(store.activeModuleId)" :key="store.activeModuleId" :initial-page-code="decorationInitialPage" />
           <KnowledgeAdminCenter v-else-if="store.activeModuleId === 'knowledgeAdmin'" />
+          <CustomerAttributionOverview v-else-if="customerAttributionModuleIds.includes(store.activeModuleId)" />
           <EnterpriseManagement
             v-else-if="enterpriseModuleIds.includes(store.activeModuleId)"
             :module-id="store.activeModuleId"
@@ -2323,94 +2326,8 @@
               <el-empty v-else description="暂无订单明细记录" />
             </section>
           </section>
-          <section v-else-if="billingModuleIds.includes(store.activeModuleId)" class="billing-page">
-            <div class="billing-toolbar">
-              <div>
-                <el-tag effect="dark" type="success">Lago-style Billing</el-tag>
-                <h2>{{ store.activeModule.title }}</h2>
-                <p>{{ activeModuleMeta.description }}</p>
-              </div>
-              <div class="billing-toolbar-actions">
-                <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新计费数据</el-button>
-                <el-button type="primary" :icon="Tickets" @click="selectAdminModule('billingInvoices')">运行账单</el-button>
-              </div>
-            </div>
-            <div class="billing-kpi-grid">
-              <article v-for="metric in billingMetrics" :key="metric.label" class="billing-kpi-card">
-                <span>{{ metric.label }}</span>
-                <strong>{{ metric.value }}</strong>
-                <small>{{ metric.hint }}</small>
-              </article>
-            </div>
-            <div class="billing-layout">
-              <section class="billing-main-column">
-                <div class="billing-workflow">
-                  <article v-for="stage in billingWorkflow" :key="String(stage.stage)" class="billing-stage-card">
-                    <span>{{ stage.stage }}</span>
-                    <strong>{{ stage.count }}</strong>
-                    <small>{{ stage.status }}</small>
-                  </article>
-                </div>
-                <el-card shadow="never" class="billing-panel">
-                  <template #header>
-                    <div class="panel-head">
-                      <div><span>{{ billingTableTitle }}</span><small>{{ filteredBillingRows.length }} 条记录</small></div>
-                      <div class="table-tools is-compact"><el-input v-model="searchKeyword" class="table-search" :prefix-icon="Search" clearable placeholder="搜索客户、套餐、状态" /></div>
-                    </div>
-                  </template>
-                  <el-table v-if="filteredBillingRows.length" :data="filteredBillingRows" height="430" stripe>
-                    <el-table-column v-for="column in billingColumns" :key="column" :prop="column" :label="columnLabels[column] || column" min-width="140" show-overflow-tooltip>
-                      <template #default="scope"><el-tag v-if="isStatusColumn(column)" :type="statusType(scope.row[column])">{{ statusLabel(scope.row[column]) }}</el-tag><span v-else>{{ formatCell(scope.row[column], column) }}</span></template>
-                    </el-table-column>
-                    <el-table-column label="操作" fixed="right" width="110"><template #default="scope"><el-button link type="primary" size="small" @click="selectBillingCustomer(scope.row)">详情</el-button></template></el-table-column>
-                  </el-table>
-                  <el-empty v-else description="暂无计费记录" />
-                </el-card>
-                <div class="billing-bottom-grid">
-                  <el-card shadow="never" class="billing-panel">
-                    <template #header>用量计费聚合</template>
-                    <div class="billing-meter-list">
-                      <article v-for="row in billingUsageRows" :key="String(row.id || row.metricCode)">
-                        <div><strong>{{ row.metric }}</strong><span>{{ row.metricCode }}</span></div>
-                        <em>{{ formatCell(row.amountCents, 'amountCents') }}</em>
-                      </article>
-                    </div>
-                  </el-card>
-                  <el-card shadow="never" class="billing-panel">
-                    <template #header>账单运行状态</template>
-                    <div class="billing-meter-list">
-                      <article v-for="row in billingInvoiceRows.slice(0, 5)" :key="String(row.id)">
-                        <div><strong>{{ row.customer }}</strong><span>{{ row.invoiceNo }} / {{ row.invoiceStatus }}</span></div>
-                        <el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
-                      </article>
-                    </div>
-                  </el-card>
-                </div>
-              </section>
-              <aside class="billing-detail-drawer">
-                <span>客户计费档案</span>
-                <h3>{{ selectedBillingCustomer.customer || selectedBillingCustomer.name || '暂无客户' }}</h3>
-                <p>{{ selectedBillingCustomer.email || '选择左侧记录查看客户详情' }}</p>
-                <dl>
-                  <div><dt>当前订阅</dt><dd>{{ selectedBillingSubscription.plan || selectedBillingCustomer.plan || '-' }}</dd></div>
-                  <div><dt>订阅状态</dt><dd><el-tag :type="statusType(selectedBillingSubscription.status || selectedBillingCustomer.status)">{{ statusLabel(selectedBillingSubscription.status || selectedBillingCustomer.status) }}</el-tag></dd></div>
-                  <div><dt>预付余额</dt><dd>{{ formatCell(selectedBillingCustomer.prepaidBalanceCents || selectedBillingSubscription.prepaidBalanceCents, 'amountCents') }}</dd></div>
-                  <div><dt>钱包编码</dt><dd>{{ selectedBillingCustomer.walletCode || '-' }}</dd></div>
-                  <div><dt>账期/宽限</dt><dd>{{ selectedBillingCustomer.netPaymentTerm || 0 }} 天 / {{ selectedBillingCustomer.invoiceGracePeriod || 0 }} 天</dd></div>
-                  <div><dt>税务状态</dt><dd><el-tag :type="statusType(selectedBillingCustomer.taxStatus)">{{ statusLabel(selectedBillingCustomer.taxStatus) }}</el-tag></dd></div>
-                  <div><dt>优惠券</dt><dd>{{ selectedBillingCustomer.coupon || '-' }}</dd></div>
-                  <div><dt>客户分组</dt><dd>{{ selectedBillingCustomer.customerGroup || '-' }}</dd></div>
-                  <div><dt>付款方式</dt><dd>{{ selectedBillingCustomer.paymentMethod || '线下转账/人工确认' }}</dd></div>
-                  <div><dt>发票抬头</dt><dd>{{ selectedBillingCustomer.invoiceTitle || '-' }}</dd></div>
-                </dl>
-                <div class="billing-entitlement-box">
-                  <strong>权益快照</strong>
-                  <p>{{ selectedBillingSubscription.entitlementSnapshot || '点数、并发、模型白名单和超额规则会在订阅生效时固化。' }}</p>
-                </div>
-                <button type="button" @click="selectAdminModule('billingCustomers')">打开客户计费</button>
-              </aside>
-            </div>
-          </section>
+          <BillingCenterV1 v-else-if="billingV1ModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
+          <CommercialBillingCenter v-else-if="commercialBillingModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
           <section v-else-if="store.activeModuleId === 'apiSettings'" class="api-settings-admin">
             <section class="api-settings-titlebar">
               <div>
@@ -2994,6 +2911,12 @@
       </el-main>
     </el-container>
   </el-container>
+  <PlanEditorDialog
+    v-model="planEditorOpen"
+    :plan="editingPlan"
+    :saving="store.saving"
+    @save="savePlanConfiguration"
+  />
   <div v-if="apiModelPickerOpen" class="api-model-picker-overlay" @click.self="closeApiModelPicker">
     <section class="api-model-picker-modal">
       <header class="api-model-picker-head">
@@ -3064,13 +2987,20 @@ import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import type { ComponentSize } from "element-plus";
 import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
 import { adminRequest } from "./api/client";
+import { downloadAssetBlob, fetchResourceBlob, uploadReferenceImage } from "./api/resources";
 import { useOfficeCLI } from "./composables/useOfficeCLI";
 import PromptEditable from "./components/PromptEditable.vue";
+import BillingCenterV1 from "./components/billing/BillingCenterV1.vue";
+import CommercialBillingCenter from "./components/billing/CommercialBillingCenter.vue";
+import CustomerAttributionOverview from "./components/attribution/CustomerAttributionOverview.vue";
 import EnterpriseManagement from "./components/enterprise/EnterpriseManagement.vue";
+import ConnectorAuthorizationCenter from "./components/enterprise/ConnectorAuthorizationCenter.vue";
+import FeishuConnectorSetup from "./components/enterprise/FeishuConnectorSetup.vue";
 import KnowledgeAdminCenter from "./components/knowledge/KnowledgeAdminCenter.vue";
 import KnowledgeAgentCenter from "./components/knowledge/KnowledgeAgentCenter.vue";
 import MediaCenter from "./components/media/MediaCenter.vue";
 import PageDecoration from "./components/media/PageDecoration.vue";
+import PlanEditorDialog from "./components/billing/PlanEditorDialog.vue";
 import StorageCenter from "./components/storage/StorageCenter.vue";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
@@ -3125,6 +3055,8 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 }
 
 const store = useAdminStore();
+const planEditorOpen = ref(false);
+const editingPlan = ref<AdminRecord | null>(null);
 const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
 const enterpriseModuleIds = [
@@ -3132,27 +3064,31 @@ const enterpriseModuleIds = [
   "enterpriseCompute", "enterpriseTransactions", "enterpriseOrders", "enterpriseAiCapabilities", "enterpriseAiEmployees",
   "enterpriseKnowledgeBases", "enterpriseAttribution", "enterpriseRelationships", "enterpriseRisk", "enterpriseAuditLogs"
 ];
+const customerAttributionModuleIds = ["customerAttributions"];
 const PptDocumentGeneration = defineAsyncComponent({
   loader: () => import("./components/PptDocumentGeneration.vue"),
   delay: 0,
   suspensible: false
 });
-const billingModuleIds = [
-  "billingDashboard",
+const billingV1ModuleIds = [
+  "billingOverview",
+  "billingRules",
+  "billingProviderCosts",
+  "billingEvents",
+  "billingReconciliation",
+  "billingWalletLedger"
+];
+const commercialBillingModuleIds = [
   "billingCustomers",
   "billingProducts",
-  "billingBillableMetrics",
-  "billingCharges",
   "billingSubscriptions",
-  "billingEvents",
-  "billingFees",
-  "billingWallets",
   "billingCoupons",
   "billingInvoices",
   "billingCreditNotes",
   "billingPaymentRequests",
   "billingPayments"
 ];
+const billingModuleIds = [...billingV1ModuleIds, ...commercialBillingModuleIds];
 const aiCapabilityModuleIds = [
   "aiCapabilities",
   "aiCapabilityModels",
@@ -3833,7 +3769,7 @@ const operationCenterModuleIds = ["operationCenterDashboard", "operationCenterAg
 const adminModuleGroups = [
   { id: "home", title: "首页", icon: House, items: modules.filter((item) => ["analysis", "workbench", "dashboard"].includes(item.id)) },
   { id: "enterprise", title: "企业管理", icon: Goods, items: modules.filter((item) => ["enterpriseList", "enterpriseCertifications"].includes(item.id)) },
-  { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
+  { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "customerAttributions", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
   { id: "aiCapability", title: "AI 能力中心", icon: Cpu, items: modules.filter((item) => aiCapabilityModuleIds.includes(item.id)) },
   { id: "knowledge", title: "知识库中心", icon: Collection, items: modules.filter((item) => ["knowledgeAdmin"].includes(item.id)) },
   { id: "mediaOperation", title: "运营中心", icon: Operation, items: modules.filter((item) => mediaOperationModuleIds.includes(item.id)) },
@@ -3942,6 +3878,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   workbench: { badge: "运营工作台", description: "聚合待办、快捷入口和平台健康状态，帮助主控团队快速处理日常运营动作。" },
   dashboard: { badge: "运营驾驶舱", description: "汇总客户、订单、渠道、用量和上游服务状态，帮助主控端快速判断平台健康度。" },
   customers: { badge: "客户资产", description: "管理客户账号、套餐、点数、状态和角色，支撑 SaaS 客户全生命周期运营。" },
+  customerAttributions: { badge: "归属治理", description: "统一核对普通客户和企业客户对应的直接代理、上级代理与运营中心关系。" },
   channels: { badge: "渠道网络", description: "维护 L1-L5 代理商、邀请码和启停状态，承接代理分销体系。" },
   operationCenters: { badge: "运营中心", description: "查看运营中心身份、代理归属、开通订单和区域分润汇总。" },
   products: { badge: "产品矩阵", description: "配置 AI 产品能力、权益和状态，让移动端与管理后台共享统一商品口径。" },
@@ -3957,20 +3894,20 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   marketingWalletRecords: { badge: "钱包流水", description: "按佣金入账和提现冻结展示每笔资金变化，帮助财务核对来源和状态。" },
   marketingSettlementStatements: { badge: "月度结算", description: "按代理和月份聚合已结算佣金、提现和待结算金额，形成打款前核对口径。" },
   usage: { badge: "消耗分析", description: "查看模型、素材、生成任务等使用量，为成本和定价提供依据。" },
-  billingDashboard: { badge: "计费驾驶舱", description: "汇总 MRR、按量收入、待开票、逾期账单和计费流程状态，形成老板与财务共用视角。" },
-  billingCustomers: { badge: "客户计费", description: "聚合客户档案、当前订阅、预付余额、开票资料、付款方式和账单历史。" },
-  billingProducts: { badge: "套餐产品", description: "把文生图、AI API、Agent、GEO 和代运营拆成可收费产品、指标和权益。" },
-  billingBillableMetrics: { badge: "Billable Metrics", description: "参照 Lago 的 BillableMetric，定义用量事件如何按 count、sum、volume 等方式聚合。" },
-  billingCharges: { badge: "Charges", description: "参照 Lago 的 Charge，配置套餐上的 standard、package、graduated、volume 等计费模型和税费。" },
-  billingSubscriptions: { badge: "订阅管理", description: "管理试用、活跃、欠费、暂停、取消和续费周期，保留价格与权益快照。" },
-  billingEvents: { badge: "计量事件", description: "查看 API、图片、Agent、GEO 的幂等计量事件，为按量计费和审计提供来源。" },
-  billingFees: { badge: "Fees", description: "参照 Lago 的 Fee，把订阅费、按量费、固定费、抵扣费拆成可审计的费用明细。" },
-  billingWallets: { badge: "Wallets", description: "管理客户预付钱包、点数余额、充值下限、消费目标指标和支付方式要求。" },
-  billingCoupons: { badge: "Coupons", description: "维护固定金额、百分比、一次性和周期性优惠券，并绑定套餐、指标或客户分组。" },
-  billingInvoices: { badge: "账单发票", description: "跟踪账单运行批次、账单明细、支付状态、开票状态和待处理金额。" },
-  billingCreditNotes: { badge: "Credit Notes", description: "处理账单冲销、退款、抵扣和贷项余额，形成财务调整闭环。" },
-  billingPaymentRequests: { badge: "Payment Requests", description: "把多张待付账单聚合为付款请求，支持催收活动、到期日和支付状态跟踪。" },
-  billingPayments: { badge: "支付催收", description: "管理支付通道、线下收款确认、失败重试和逾期催收动作。" },
+  billingOverview: { badge: "计费总览", description: "统一查看正式价格、供应商成本、任务对账异常和钱包流水。" },
+  billingRules: { badge: "价格版本", description: "查看模型计费规则；修改时创建草稿，校验后发布，不覆盖正式版本。" },
+  billingProviderCosts: { badge: "成本口径", description: "独立维护供应商和通道成本，与用户售价分开存储和计算。" },
+  billingEvents: { badge: "计费事件", description: "查看报价、冻结、确认、解冻和退款事件与幂等键。" },
+  billingReconciliation: { badge: "任务对账", description: "按任务核对报价、钱包、计费事件和供应商成本，识别八类异常。" },
+  billingWalletLedger: { badge: "钱包流水", description: "追踪充值、赠送、冻结、确认、解冻、退款、调整与过期流水。" },
+  billingCustomers: { badge: "客户计费", description: "聚合真实订单、订阅、付款和钱包余额，形成客户商业账务档案。" },
+  billingProducts: { badge: "套餐产品", description: "统一查看服务端套餐价格、权益配置和微信虚拟商品映射。" },
+  billingSubscriptions: { badge: "订阅管理", description: "由真实支付订单和会员权益生成订阅，保留来源订单与有效期。" },
+  billingCoupons: { badge: "权益优惠券", description: "优惠券只加赠服务端权益，不改变微信虚拟支付商品金额。" },
+  billingInvoices: { badge: "发票与账单", description: "真实订单自动形成交易账单，税票采用人工申请、开具和驳回状态。" },
+  billingCreditNotes: { badge: "贷项红冲", description: "退款通知自动生成贷项，人工贷项需审核且不直接触发退款。" },
+  billingPaymentRequests: { badge: "付款与催收", description: "付款请求跟随订单状态，催收仅记录人工动作，不自动外发消息。" },
+  billingPayments: { badge: "支付记录", description: "追踪微信签单、回调、交易号、失败原因以及账单关联。" },
   commissions: { badge: "结算中心", description: "处理代理分润、提现审核和结算状态，形成渠道财务闭环。" },
   commissionRecords: { badge: "分润明细", description: "按接收方拆解代理、运营中心与平台收入，核对固定分润规则结果。" },
   aiCapabilities: { badge: "AI 能力", description: "配置生图、视频、PPT 等 AI 能力模块的启停、开放套餐、默认 Schema 和模型绑定。" },
@@ -5627,19 +5564,13 @@ async function fetchAiOriginalImageDataUrl(task: AdminRecord) {
   if (directUrl.startsWith("data:image/")) return directUrl;
   const embeddedThumbnail = String(asset?.thumbnailUrl || task.thumbnailUrl || "");
   if (embeddedThumbnail.startsWith("data:image/")) return embeddedThumbnail;
-  const token = window.localStorage.getItem("token") || window.sessionStorage.getItem("token") || "";
-  let response: Response;
+  let blob: Blob;
   try {
-    response = await fetch(directUrl);
-    if (!response.ok) throw new Error(`direct image fetch returned ${response.status}`);
+    blob = await fetchResourceBlob(directUrl, { auth: false });
   } catch {
     if (!assetId) throw new Error("原图缓存失败");
-    response = await fetch(`/api/v1/assets/${encodeURIComponent(assetId)}/download`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
-    });
+    blob = await downloadAssetBlob(assetId);
   }
-  if (!response.ok) throw new Error("原图缓存失败");
-  const blob = await response.blob();
   return blobToDataUrl(blob);
 }
 
@@ -6890,9 +6821,7 @@ function handleAiImageContextMenuDismiss(event?: Event) {
 }
 
 async function imageUrlToBlob(url: string) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error("读取图片失败");
-  return response.blob();
+  return fetchResourceBlob(url, { auth: false });
 }
 
 async function copyAiContextImage() {
@@ -6998,12 +6927,7 @@ async function downloadUrl(url: string, fileName: string) {
   let objectUrl = "";
   const anchor = document.createElement("a");
   try {
-    const token = window.localStorage.getItem("token") || window.sessionStorage.getItem("token") || "";
-    const response = await fetch(url, {
-      headers: token && url.startsWith("/") ? { Authorization: `Bearer ${token}` } : undefined
-    });
-    if (!response.ok) throw new Error(`download failed: ${response.status}`);
-    const blob = await response.blob();
+    const blob = await fetchResourceBlob(url, { auth: url.startsWith("/") });
     objectUrl = URL.createObjectURL(blob);
     anchor.href = objectUrl;
     anchor.download = fileName;
@@ -7195,18 +7119,7 @@ function clearAiReferenceImages() {
 }
 
 async function uploadAiReferenceFile(file: File) {
-  const token = window.localStorage.getItem("token") || window.sessionStorage.getItem("token") || "";
-  const form = new FormData();
-  form.append("file", file, file.name || "reference-image.png");
-  const response = await fetch("/api/v1/reference-images", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: form
-  });
-  if (!response.ok) throw new Error(`参考图上传失败：${response.status}`);
-  const data = await response.json();
-  const url = String(data?.item?.url || "");
-  if (!url) throw new Error("参考图上传结果缺少 URL");
+  const url = await uploadReferenceImage(file);
   return new URL(url, window.location.origin).href;
 }
 
@@ -8036,6 +7949,8 @@ async function createUserIdentityOrder(pack: UserIdentityPackage) {
 
 const isAgentConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/agent"));
 const isUserConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/app"));
+const isFeishuConnectorSetupRoute = typeof window !== "undefined" && window.location.pathname === "/app/enterprise/feishu";
+const isConnectorAuthorizationRoute = typeof window !== "undefined" && window.location.pathname === "/app/enterprise/connectors";
 const authReady = ref(false);
 const authPath = ref(typeof window !== "undefined" ? window.location.pathname.replace(/\/$/, "") || "/" : "");
 const isLoginRoute = computed(() => authPath.value === "/login");
@@ -8119,6 +8034,39 @@ const userModuleRouteMap: Record<string, string> = {
   operationCenterOrders: "/app/operation-center/orders",
   operationCenterCommissions: "/app/operation-center/commissions"
 };
+const billingModulePathMap: Record<string, string> = {
+  "/admin/billing": "billingOverview",
+  "/admin/billing/overview": "billingOverview",
+  "/admin/billing/rules": "billingRules",
+  "/admin/billing/provider-costs": "billingProviderCosts",
+  "/admin/billing/events": "billingEvents",
+  "/admin/billing/reconciliation": "billingReconciliation",
+  "/admin/billing/wallet-ledger": "billingWalletLedger",
+  "/admin/billing/customers": "billingCustomers",
+  "/admin/billing/products": "billingProducts",
+  "/admin/billing/subscriptions": "billingSubscriptions",
+  "/admin/billing/coupons": "billingCoupons",
+  "/admin/billing/invoices": "billingInvoices",
+  "/admin/billing/credit-notes": "billingCreditNotes",
+  "/admin/billing/payment-requests": "billingPaymentRequests",
+  "/admin/billing/payments": "billingPayments"
+};
+const billingModuleRouteMap: Record<string, string> = {
+  billingOverview: "/admin/billing/overview",
+  billingRules: "/admin/billing/rules",
+  billingProviderCosts: "/admin/billing/provider-costs",
+  billingEvents: "/admin/billing/events",
+  billingReconciliation: "/admin/billing/reconciliation",
+  billingWalletLedger: "/admin/billing/wallet-ledger",
+  billingCustomers: "/admin/billing/customers",
+  billingProducts: "/admin/billing/products",
+  billingSubscriptions: "/admin/billing/subscriptions",
+  billingCoupons: "/admin/billing/coupons",
+  billingInvoices: "/admin/billing/invoices",
+  billingCreditNotes: "/admin/billing/credit-notes",
+  billingPaymentRequests: "/admin/billing/payment-requests",
+  billingPayments: "/admin/billing/payments"
+};
 const enterpriseRoutePath = ref(typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : "/admin/enterprises");
 const enterpriseDetailSuffixMap: Record<string, string> = {
   "": "enterpriseDetail",
@@ -8162,7 +8110,7 @@ function moduleIdFromLocationPath() {
     if (isPptGenerationPath(currentPath)) return "userPptGeneration";
     return userModulePathMap[currentPath] || "";
   }
-  if (!isAgentConsole.value) return enterpriseModuleIdFromPath(currentPath);
+  if (!isAgentConsole.value) return billingModulePathMap[currentPath] || enterpriseModuleIdFromPath(currentPath);
   return "";
 }
 
@@ -8187,6 +8135,13 @@ function syncAdminEnterpriseModulePath(moduleId: string) {
   enterpriseRoutePath.value = nextPath;
 }
 
+function syncAdminBillingModulePath(moduleId: string) {
+  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value || !billingModuleIds.includes(moduleId)) return;
+  const nextPath = billingModuleRouteMap[moduleId];
+  if (!nextPath || window.location.pathname.replace(/\/$/, "") === nextPath) return;
+  window.history.pushState({}, "", nextPath);
+}
+
 async function navigateEnterpriseRoute(payload: { path: string; moduleId: string }) {
   if (typeof window !== "undefined") {
     const current = `${window.location.pathname}${window.location.search}`;
@@ -8198,6 +8153,12 @@ async function navigateEnterpriseRoute(payload: { path: string; moduleId: string
 
 function handleAdminEnterpriseHistoryPopState() {
   if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value) return;
+  const billingModuleId = billingModulePathMap[window.location.pathname.replace(/\/$/, "")];
+  if (billingModuleId) {
+    ensureOpenTab(billingModuleId);
+    void store.selectModule(billingModuleId);
+    return;
+  }
   const moduleId = enterpriseModuleIdFromPath(window.location.pathname);
   if (!moduleId) return;
   enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
@@ -8301,6 +8262,7 @@ const iconMap = {
   workbench: House,
   dashboard: DataAnalysis,
   customers: User,
+  customerAttributions: Connection,
   channels: Operation,
   operationCenters: Connection,
   products: Goods,
@@ -8308,19 +8270,19 @@ const iconMap = {
   orders: Money,
   usage: DataAnalysis,
   tokenRecords: Tickets,
-  billingDashboard: DataAnalysis,
+  billingOverview: DataAnalysis,
+  billingRules: Tickets,
+  billingProviderCosts: Money,
+  billingEvents: DataAnalysis,
+  billingReconciliation: Check,
+  billingWalletLedger: Wallet,
   billingCustomers: User,
   billingProducts: Goods,
-  billingBillableMetrics: DataAnalysis,
-  billingCharges: Tickets,
   billingSubscriptions: Tickets,
-  billingEvents: DataAnalysis,
-  billingFees: Money,
-  billingWallets: Wallet,
   billingCoupons: Tickets,
-  billingInvoices: Money,
-  billingCreditNotes: Refresh,
-  billingPaymentRequests: Money,
+  billingInvoices: Document,
+  billingCreditNotes: Money,
+  billingPaymentRequests: Clock,
   billingPayments: Wallet,
   marketingAgentLevels: Connection,
   commissions: Wallet,
@@ -8366,6 +8328,10 @@ const columnLabels: Record<string, string> = {
   secret: "密钥",
   name: "名称",
   email: "邮箱",
+  mobileMasked: "手机号",
+  loginMethods: "登录方式",
+  wechatBinding: "微信状态",
+  wechatOpenIdMasked: "OpenID",
   role: "角色",
   plan: "套餐",
   planId: "套餐 ID",
@@ -9870,6 +9836,7 @@ async function selectAdminModule(moduleId: string) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(activeTabStorageKey, moduleId);
     syncUserModulePath(moduleId);
+    syncAdminBillingModulePath(moduleId);
     syncAdminEnterpriseModulePath(moduleId);
   }
   await store.selectModule(moduleId);
@@ -10618,6 +10585,7 @@ const rows = computed(() => {
   if (isPartnerModule.value) return partnerRows();
   if (isOperationCenterModule.value) return operationCenterRows();
   const items = Array.isArray(data.items) ? data.items : Array.isArray(data.withdrawals) ? data.withdrawals : [];
+  if (["customers", "userManagement"].includes(store.activeModuleId)) return flattenRows((items as AdminRecord[]).map(enrichUserIdentityRow));
   return flattenRows(items as AdminRecord[]);
 });
 
@@ -10828,8 +10796,8 @@ function metricHint(label: string) {
 
 const columns = computed(() => {
   const preferred: Record<string, string[]> = {
-    customers: ["name", "email", "sourceAgentName", "sourceInviteCode", "sourceChannelLevel", "sourceParentAgentName", "plan", "pointsAvailable", "modelRoute", "modelKeyStatus", "status"],
-    userManagement: ["name", "email", "role", "plan", "pointsAvailable", "status"],
+    customers: ["name", "mobileMasked", "loginMethods", "wechatBinding", "sourceAgentName", "sourceInviteCode", "plan", "pointsAvailable", "modelRoute", "modelKeyStatus", "status"],
+    userManagement: ["id", "name", "email", "mobileMasked", "loginMethods", "wechatBinding", "wechatOpenIdMasked", "role", "plan", "pointsAvailable", "status"],
     partnerCustomers: ["name", "email", "plan", "pointsAvailable", "customerValue", "usageCount", "pointCost", "averagePointCost", "consumedCents", "commissionCents", "latestModel", "latestTaskId", "latestUsageAt", "status"],
     partnerOrders: ["orderId", "orderType", "customer", "model", "pointCost", "amountCents", "commissionCents", "commissionRate", "status", "createdAt"],
     partnerUsage: ["taskId", "customer", "model", "pointCost", "consumedCents", "commissionCents", "balanceBefore", "balanceAfter", "status", "createdAt"],
@@ -10992,14 +10960,34 @@ const toolbarActions = computed(() => {
 
 const rowActions = computed(() => {
   const actions: Record<string, Array<{ action: string; label: string }>> = {
-    customers: [{ action: "editCustomer", label: "编辑" }, { action: "syncNewAPI", label: "同步 NewAPI" }],
-    userManagement: [{ action: "editCustomer", label: "编辑" }, { action: "syncNewAPI", label: "同步 NewAPI" }],
+    customers: [
+      { action: "editCustomer", label: "编辑" },
+      { action: "showCustomerIdentity", label: "身份" },
+      { action: "showCustomerMergeRequests", label: "合并工单" },
+      { action: "executeCustomerMergeRequest", label: "执行合并" },
+      { action: "toggleCustomerLoginFreeze", label: "冻结/启用" },
+      { action: "unlinkCustomerMobile", label: "解绑手机" },
+      { action: "unlinkCustomerWechat", label: "解绑微信" },
+      { action: "forceLogoutCustomer", label: "强制退出" },
+      { action: "syncNewAPI", label: "同步 NewAPI" }
+    ],
+    userManagement: [
+      { action: "editCustomer", label: "编辑" },
+      { action: "showCustomerIdentity", label: "身份" },
+      { action: "showCustomerMergeRequests", label: "合并工单" },
+      { action: "executeCustomerMergeRequest", label: "执行合并" },
+      { action: "toggleCustomerLoginFreeze", label: "冻结/启用" },
+      { action: "unlinkCustomerMobile", label: "解绑手机" },
+      { action: "unlinkCustomerWechat", label: "解绑微信" },
+      { action: "forceLogoutCustomer", label: "强制退出" },
+      { action: "syncNewAPI", label: "同步 NewAPI" }
+    ],
     channels: [
       { action: "editChannel", label: "编辑" },
       { action: "toggleChannel", label: "启停" }
     ],
     products: [{ action: "editProduct", label: "编辑" }],
-    plans: [{ action: "editPlan", label: "保存价格" }],
+    plans: [{ action: "editPlan", label: "编辑套餐" }],
     orders: [
       { action: "markPaid", label: "标记收款" },
       { action: "renewOrder", label: "续费" }
@@ -11070,6 +11058,35 @@ function flattenRows(items: AdminRecord[]): AdminRecord[] {
   return items.flatMap((item) => [item, ...((item.children as AdminRecord[] | undefined) || []).map((child) => ({ ...child, name: `二级 - ${child.name || child.id}` }))]);
 }
 
+function maskAdminMobile(value: unknown) {
+  const mobile = String(value || "").replace(/\D/g, "").replace(/^86(?=\d{11}$)/, "");
+  return /^1[3-9]\d{9}$/.test(mobile) ? `${mobile.slice(0, 3)}****${mobile.slice(7)}` : "";
+}
+
+function maskSensitiveId(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.length <= 10) return `${text.slice(0, 2)}***`;
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+function enrichUserIdentityRow(row: AdminRecord): AdminRecord {
+  const wechatOpenIds = Array.isArray(row.wechatOpenIds) ? row.wechatOpenIds.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  const wechatLinked = wechatOpenIds.length > 0 || Boolean(String(row.wechatUnionId || "").trim());
+  const methods = [
+    maskAdminMobile(row.mobile) ? "短信" : "",
+    wechatLinked ? "微信" : "",
+    row.passwordHash ? "密码" : ""
+  ].filter(Boolean);
+  return {
+    ...row,
+    mobileMasked: maskAdminMobile(row.mobile) || "未绑定",
+    loginMethods: methods.length ? methods.join("、") : "未绑定",
+    wechatBinding: wechatLinked ? "已绑定" : "未绑定",
+    wechatOpenIdMasked: maskSensitiveId(wechatOpenIds[0] || row.wechatUnionId) || "未绑定"
+  };
+}
+
 function formatCell(value: unknown, column: string) {
   if (["sourceAgentName", "sourceInviteCode", "sourceParentAgentName", "referredBy"].includes(column) && !value) return "未归因";
   if (Array.isArray(value)) return value.join("、");
@@ -11078,6 +11095,44 @@ function formatCell(value: unknown, column: string) {
   if (isStatusColumn(column)) return statusLabel(value);
   if (typeof value === "object" && value) return JSON.stringify(value);
   return value ?? "-";
+}
+
+const accountMergeMovedLabels: Record<string, string> = {
+  pointAccounts: "点数账户",
+  tokenRecords: "Token 记录",
+  orders: "订单",
+  channelAgents: "代理身份",
+  operationCenters: "运营中心身份",
+  generationTasks: "生成任务",
+  assets: "作品素材",
+  billingEvents: "计费流水",
+  presentations: "PPT 演示文稿",
+  agents: "AI 员工",
+  agentCalls: "智能体调用",
+  geoBrands: "GEO 品牌",
+  geoTasks: "GEO 任务",
+  aiState: "AI 创作状态",
+  tenantOwners: "企业 Owner",
+  tenantMembers: "企业成员",
+  tenantMemberConflictsDisabled: "冲突企业成员已禁用",
+  userRoles: "角色权限",
+  userRoleContext: "当前角色上下文",
+  tenantJoinRequests: "企业加入申请",
+  knowledgeBases: "知识库",
+  knowledgeDocuments: "知识文档",
+  knowledgeDocumentVersions: "知识文档版本",
+  knowledgeAgents: "知识库智能体",
+  knowledgeAgentConversations: "知识库对话"
+};
+
+function formatAccountMergeMovedItems(moved: Record<string, unknown>) {
+  return Object.entries(moved)
+    .map(([key, value]) => ({ key, label: accountMergeMovedLabels[key] || key, count: Number(value || 0) }))
+    .filter((item) => Number.isFinite(item.count) && item.count > 0);
+}
+
+function normalizeAccountMergeWarnings(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean) : [];
 }
 
 function isStatusColumn(column: string) {
@@ -11520,6 +11575,200 @@ async function openCreateCustomerDialog() {
       }
     }
   });
+}
+
+async function forceLogoutCustomer(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  const name = String(row.name || row.email || userId);
+  await ElMessageBox.confirm(`确认强制 ${name} 退出全部设备？该操作不会删除用户资料、作品或订单。`, "强制退出全部设备", {
+    type: "warning",
+    confirmButtonText: "强制退出",
+    cancelButtonText: "取消"
+  });
+  await store.mutate("POST", `/admin/customers/${encodeURIComponent(userId)}/logout-all`, {});
+  ElMessage.success("已强制退出全部设备");
+}
+
+function customerActionName(row: AdminRecord) {
+  return String(row.name || row.email || row.id || "该用户");
+}
+
+async function showCustomerIdentity(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  const response = await adminRequest<{ item?: AdminRecord }>({ method: "GET", url: `/admin/customers/${encodeURIComponent(userId)}/identities` });
+  const item = response.item || {};
+  const methods = Array.isArray(item.loginMethods) ? item.loginMethods.join("、") : String(item.loginMethods || "未绑定");
+  await ElMessageBox.alert(
+    h("div", { class: "channel-dialog-form" }, [
+      h("p", null, `用户ID：${String(item.userId || userId)}`),
+      h("p", null, `账号状态：${statusLabel(item.status || row.status)}`),
+      h("p", null, `手机号：${String(item.mobileMasked || "未绑定")}`),
+      h("p", null, `微信：${String(item.wechatLinked ? "已绑定" : "未绑定")}`),
+      h("p", null, `OpenID：${String(item.wechatOpenIdMasked || "未绑定")}`),
+      h("p", null, `密码登录：${item.passwordLoginEnabled ? "可用" : "不可用"}`),
+      h("p", null, `登录方式：${methods}`),
+      h("p", null, "敏感身份仅脱敏展示，解绑或冻结操作会写入后台审计并强制会话失效。")
+    ]),
+    `${customerActionName(row)} 的登录身份`,
+    { confirmButtonText: "知道了" }
+  );
+}
+
+async function showCustomerMergeRequests(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  const response = await adminRequest<{ items?: AdminRecord[]; total?: number }>({
+    method: "GET",
+    url: `/admin/customers/${encodeURIComponent(userId)}/account-merge-requests`
+  });
+  const items = Array.isArray(response.items) ? response.items : [];
+  const content = items.length
+    ? items.map((item) => h("div", { class: "channel-dialog-form", style: "padding:8px 0;border-bottom:1px solid #edf0f5;" }, [
+        h("p", null, `工单：${String(item.id || "-")} / ${statusLabel(item.status || "PENDING")}`),
+        h("p", null, `账号：${String(item.primaryUserId || "-")} ↔ ${String(item.secondaryUserId || "-")}`),
+        h("p", null, `手机号：${String(item.mobileMasked || "未提供")}，OpenID：${String(item.wechatOpenIdMasked || "未提供")}`),
+        h("p", null, `来源：${String(item.source || "-")}，原因：${String(item.reason || "-")}`),
+        h("p", null, `处理意见：${String(item.reviewComment || "暂无")}`)
+      ]))
+    : [h("p", null, "暂无账号冲突合并工单。")];
+  await ElMessageBox.alert(
+    h("div", { class: "channel-dialog-form" }, content),
+    `${customerActionName(row)} 的合并工单`,
+    { confirmButtonText: "知道了" }
+  );
+}
+
+async function executeCustomerMergeRequest(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  const response = await adminRequest<{ items?: AdminRecord[] }>({
+    method: "GET",
+    url: `/admin/customers/${encodeURIComponent(userId)}/account-merge-requests`
+  });
+  const request = (Array.isArray(response.items) ? response.items : []).find((item) => ["PENDING", "IN_REVIEW"].includes(String(item.status || "").toUpperCase()));
+  if (!request?.id) {
+    ElMessage.warning("当前用户暂无待处理合并工单");
+    return;
+  }
+  const preview = await adminRequest<{ result?: AdminRecord }>({
+    method: "GET",
+    url: `/admin/account-merge-requests/${encodeURIComponent(String(request.id))}/preview?targetUserId=${encodeURIComponent(userId)}`
+  });
+  const previewMoved = preview.result?.moved && typeof preview.result.moved === "object" ? preview.result.moved as Record<string, unknown> : {};
+  const previewMovedItems = formatAccountMergeMovedItems(previewMoved);
+  const previewMovedCount = previewMovedItems.reduce<number>((sum, item) => sum + item.count, 0);
+  const previewWarnings = normalizeAccountMergeWarnings(preview.result?.warnings);
+  const previewBlockers = normalizeAccountMergeWarnings(preview.result?.blockers);
+  if (previewBlockers.length || preview.result?.executable === false) {
+    await ElMessageBox.alert(
+      h("div", { class: "channel-dialog-form" }, [
+        h("p", null, `工单：${String(request.id)}`),
+        h("p", null, `目标账号：${String(preview.result?.targetUserId || userId)}`),
+        h("p", null, `来源账号：${String(preview.result?.sourceUserId || request.secondaryUserId || "-")}`),
+        h("strong", { style: "color:#b91c1c;" }, "当前不能自动执行合并："),
+        ...previewBlockers.map((item) => h("p", null, item || "存在需要人工专项处理的冲突"))
+      ]),
+      "合并预检未通过",
+      { confirmButtonText: "知道了", type: "warning" }
+    );
+    return;
+  }
+  await ElMessageBox.confirm(
+    h("div", { class: "channel-dialog-form" }, [
+      h("p", null, `确认将工单 ${String(request.id)} 合并到 ${customerActionName(row)}？`),
+      h("p", null, `预计迁移资源：${previewMovedCount} 项`),
+      previewMovedItems.length
+        ? h("div", null, previewMovedItems.map((item) => h("p", null, `${item.label}：${item.count}`)))
+        : h("p", null, "预检未发现可迁移资源。"),
+      previewWarnings.length
+        ? h("div", { style: "margin-top:8px;color:#b45309;" }, [
+            h("strong", null, "预检提示："),
+            ...previewWarnings.map((item) => h("p", null, item))
+          ])
+        : h("p", null, "执行后来源账号会被标记为已合并，并强制退出来源和目标账号全部设备。")
+    ]),
+    "执行账号合并",
+    {
+      type: "warning",
+      confirmButtonText: "确认合并",
+      cancelButtonText: "取消"
+    }
+  );
+  const result = await adminRequest<{ result?: AdminRecord }>({
+    method: "POST",
+    url: `/admin/account-merge-requests/${encodeURIComponent(String(request.id))}/execute`,
+    data: { targetUserId: userId, confirm: true, reviewComment: "后台人工确认合并" }
+  });
+  const moved = result.result?.moved && typeof result.result.moved === "object" ? result.result.moved as Record<string, unknown> : {};
+  const movedItems = formatAccountMergeMovedItems(moved);
+  const movedCount = movedItems.reduce<number>((sum, item) => sum + item.count, 0);
+  const warnings = normalizeAccountMergeWarnings(result.result?.warnings);
+  await store.loadActiveModule();
+  await ElMessageBox.alert(
+    h("div", { class: "channel-dialog-form" }, [
+      h("p", null, `目标账号：${String(result.result?.targetUserId || userId)}`),
+      h("p", null, `来源账号：${String(result.result?.sourceUserId || request.secondaryUserId || "-")}`),
+      h("p", null, `迁移资源总数：${movedCount}`),
+      movedItems.length
+        ? h("div", null, movedItems.map((item) => h("p", null, `${item.label}：${item.count}`)))
+        : h("p", null, "本次没有需要迁移的资源。"),
+      warnings.length
+        ? h("div", { style: "margin-top:8px;color:#b45309;" }, [
+            h("strong", null, "需要人工关注："),
+            ...warnings.map((item) => h("p", null, item))
+          ])
+        : h("p", { style: "margin-top:8px;color:#16a34a;" }, "未返回额外风险提示。")
+    ]),
+    "账号合并完成",
+    { confirmButtonText: "知道了", type: warnings.length ? "warning" : "success" }
+  );
+  ElMessage.success(`账号合并完成，迁移资源 ${movedCount} 项`);
+}
+
+async function unlinkCustomerMobile(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  await ElMessageBox.confirm(`确认解绑 ${customerActionName(row)} 的手机号？解绑后会强制退出该账号全部设备。`, "解绑手机号", {
+    type: "warning",
+    confirmButtonText: "解绑手机号",
+    cancelButtonText: "取消"
+  });
+  await store.mutate("POST", `/admin/customers/${encodeURIComponent(userId)}/identities/mobile/unlink`, { reason: "admin_unlink_mobile" });
+  ElMessage.success("手机号已解绑");
+}
+
+async function unlinkCustomerWechat(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  await ElMessageBox.confirm(`确认解绑 ${customerActionName(row)} 的微信小程序身份？解绑后会强制退出该账号全部设备。`, "解绑微信", {
+    type: "warning",
+    confirmButtonText: "解绑微信",
+    cancelButtonText: "取消"
+  });
+  await store.mutate("POST", `/admin/customers/${encodeURIComponent(userId)}/identities/wechat-mini-program/unlink`, { reason: "admin_unlink_wechat" });
+  ElMessage.success("微信身份已解绑");
+}
+
+async function toggleCustomerLoginFreeze(row: AdminRecord) {
+  const userId = String(row.id || "").trim();
+  if (!userId) throw new Error("请选择用户");
+  const active = String(row.status || "").toUpperCase() === "ACTIVE";
+  const action = active ? "freeze-login" : "unfreeze-login";
+  await ElMessageBox.confirm(
+    active
+      ? `确认冻结 ${customerActionName(row)} 的登录？冻结后会强制退出全部设备。`
+      : `确认恢复 ${customerActionName(row)} 的登录？`,
+    active ? "冻结登录" : "恢复登录",
+    {
+      type: active ? "warning" : "info",
+      confirmButtonText: active ? "冻结登录" : "恢复登录",
+      cancelButtonText: "取消"
+    }
+  );
+  await store.mutate("POST", `/admin/customers/${encodeURIComponent(userId)}/${action}`, { reason: active ? "admin_freeze_login" : "admin_unfreeze_login" });
+  ElMessage.success(active ? "登录已冻结" : "登录已恢复");
 }
 
 async function syncCustomerNewAPI(row: AdminRecord, overrides: AdminRecord = {}) {
@@ -12242,14 +12491,61 @@ function apiChannelMutationPayload(channel: AdminRecord) {
   };
 }
 
+function openPlanEditor(row: AdminRecord) {
+  editingPlan.value = { ...row };
+  planEditorOpen.value = true;
+}
+
+async function savePlanConfiguration(payload: AdminRecord) {
+  const planId = String(editingPlan.value?.id || "");
+  if (!planId) {
+    ElMessage.error("套餐 ID 不存在");
+    return;
+  }
+  try {
+    const planPayload = payload.plan && typeof payload.plan === "object" ? payload.plan as AdminRecord : payload;
+    const capabilitiesPayload = payload.capabilities && typeof payload.capabilities === "object"
+      ? payload.capabilities as AdminRecord
+      : { modules: [] };
+    await adminRequest({ method: "PUT", url: `/admin/plans/${planId}/capabilities`, data: capabilitiesPayload });
+    await store.mutate("PATCH", `/admin/plans/${planId}`, planPayload);
+    planEditorOpen.value = false;
+    editingPlan.value = null;
+    ElMessage.success("套餐配置已保存并立即生效");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "套餐保存失败");
+  }
+}
+
 async function runAction(action: string, row: AdminRecord = {}) {
   try {
     if (action === "createCustomer") {
       await openCreateCustomerDialog();
     } else if (action === "editCustomer") {
       await openEditCustomerDialog(row);
+    } else if (action === "showCustomerIdentity") {
+      await showCustomerIdentity(row);
+      return;
+    } else if (action === "showCustomerMergeRequests") {
+      await showCustomerMergeRequests(row);
+      return;
+    } else if (action === "executeCustomerMergeRequest") {
+      await executeCustomerMergeRequest(row);
+      return;
+    } else if (action === "toggleCustomerLoginFreeze") {
+      await toggleCustomerLoginFreeze(row);
+      return;
+    } else if (action === "unlinkCustomerMobile") {
+      await unlinkCustomerMobile(row);
+      return;
+    } else if (action === "unlinkCustomerWechat") {
+      await unlinkCustomerWechat(row);
+      return;
     } else if (action === "syncNewAPI") {
       await syncCustomerNewAPI(row);
+    } else if (action === "forceLogoutCustomer") {
+      await forceLogoutCustomer(row);
+      return;
     } else if (action === "showPartnerCustomerDetail") {
       await showPartnerCustomerDetail(row);
     } else if (action === "showPartnerOrderDetail") {
@@ -12270,17 +12566,8 @@ async function runAction(action: string, row: AdminRecord = {}) {
       const name = await ask("产品名称", String(row.name || ""));
       await store.mutate("PATCH", `/admin/products/${row.id}`, { name, type: row.type, status, entitlements: Array.isArray(row.entitlements) ? row.entitlements : [] });
     } else if (action === "editPlan") {
-      const priceCents = await askNumber("价格（分）", Number(row.priceCents || 0));
-      const grantPoints = await askNumber("权益点数", Number(row.grantPoints || 0));
-      await store.mutate("PATCH", `/admin/plans/${row.id}`, {
-        name: row.name,
-        priceCents,
-        grantPoints,
-        durationDays: Number(row.durationDays || 30),
-        concurrency: Number(row.concurrency || 1),
-        active: Boolean(row.active),
-        entitlements: typeof row.entitlements === "object" && row.entitlements ? row.entitlements : {}
-      });
+      openPlanEditor(row);
+      return;
     } else if (action === "createOrder") {
       const userId = await ask("客户 userId", "user_000002");
       const planId = await ask("套餐 ID", "plan_month");

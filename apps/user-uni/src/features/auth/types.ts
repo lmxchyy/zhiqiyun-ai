@@ -78,8 +78,17 @@ export interface SmsSendResponse {
 export interface AccountSecurityResponse {
   passwordSet: boolean;
   mobileMasked: string;
+  mobileBound?: boolean;
   wechatLinked: boolean;
+  loginMethods?: string[];
   status: string;
+}
+
+export interface BindMobileResponse {
+  bound: boolean;
+  user?: Record<string, unknown>;
+  auth?: AuthResponse;
+  security?: AccountSecurityResponse;
 }
 
 export interface AuthAttributionInput {

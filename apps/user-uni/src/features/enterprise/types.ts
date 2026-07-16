@@ -178,3 +178,82 @@ export interface ItemsResponse<T> {
   total?: number;
   nextCursor?: string;
 }
+
+export interface EnterpriseConnectorConfig {
+  aiImageEnabled: boolean;
+  defaultImageModel: string;
+  defaultSize: string;
+  defaultImageCount: number;
+  memberDailyQuota: number;
+  allowGroupChat: boolean;
+  groupRequireMention: boolean;
+}
+
+export interface EnterpriseConnector {
+  id: string;
+  enterpriseId: string;
+  connectorType: "feishu";
+  connectorName: string;
+  connectorKey: string;
+  appId: string;
+  externalTenantKey?: string;
+  botOpenId?: string;
+  status: "disabled" | "active" | "error";
+  config: EnterpriseConnectorConfig;
+  secretsConfigured: { appSecret: boolean; verificationToken: boolean; encryptKey: boolean };
+  callbackUrl: string;
+  lastConnectedAt?: string;
+  lastErrorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectorUserBinding {
+  id: string;
+  enterpriseId: string;
+  connectorId: string;
+  platform: "feishu";
+  externalUserId: string;
+  externalUnionId?: string;
+  externalName: string;
+  internalUserId?: string;
+  internalUserName?: string;
+  organizationName?: string;
+  permission: { imageGenerate?: boolean; dailyQuota?: number };
+  status: "active" | "disabled";
+  dailyUsage: number;
+  dailyQuota: number;
+  lastActiveAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectorMessageLog {
+  id: string;
+  externalMessageId: string;
+  externalUserId: string;
+  direction: "inbound" | "outbound";
+  messageType: string;
+  processingStatus: string;
+  errorMessage?: string;
+  content: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ConnectorAITask {
+  id: string;
+  bindingId?: string;
+  externalUserId?: string;
+  externalUserName?: string;
+  externalMessageId: string;
+  originalText: string;
+  intent: string;
+  modelId: string;
+  platformTaskId?: string;
+  status: string;
+  progress: number;
+  pointsCost: number;
+  errorCode?: string;
+  errorMessage?: string;
+  createdAt: string;
+}

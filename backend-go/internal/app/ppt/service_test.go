@@ -1,6 +1,7 @@
 package ppt
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
@@ -51,5 +52,22 @@ func TestPersistentServiceKeepsTasksAcrossInstances(t *testing.T) {
 	history := reloaded.History("user_001")
 	if len(history) != 1 || history[0].TaskID != created.TaskID {
 		t.Fatalf("History() = %+v, want generated task", history)
+	}
+}
+
+func TestGenerateWithConcurrencyRejectsActiveTask(t *testing.T) {
+	service := NewService()
+	request := GenerateRequest{UserID: "limited_user", Prompt: "first deck", SlideCount: 5}
+	if _, err := service.GenerateWithConcurrency(request, 0, 1); err != nil {
+		t.Fatalf("first generation: %v", err)
+	}
+	if _, err := service.GenerateWithConcurrency(request, 0, 1); !errors.Is(err, ErrConcurrency) {
+		t.Fatalf("second generation error = %v, want ErrConcurrency", err)
+	}
+	if _, err := service.GenerateWithConcurrency(GenerateRequest{UserID: "another_user", Prompt: "other deck", SlideCount: 5}, 0, 1); err != nil {
+		t.Fatalf("other user should have a separate slot: %v", err)
+	}
+	if _, err := NewService().GenerateWithConcurrency(request, 1, 1); !errors.Is(err, ErrConcurrency) {
+		t.Fatalf("external active task should exhaust PPT slot: %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-import { api, getApiBaseURL, getAuthToken } from "./client";
+import { api, apiFetchResponse, apiRequestTask } from "./client";
 
 export type MiniKnowledgeAgent = { id: string; name: string; description: string; status: string; modelName: string };
 export type MiniKnowledgeConversation = { id: string; agentId: string; title: string; status: string; updatedAt: string };
@@ -39,16 +39,14 @@ function startH5KnowledgeRun(
   onEvent: (name: string, value: MiniKnowledgeStreamEvent | MiniKnowledgeRunResult) => void
 ): KnowledgeRunHandle {
   const controller = new AbortController();
-  const baseURL = getApiBaseURL().replace(/\/+$/, "");
   const promise = (async () => {
-    const token = getAuthToken();
-    const response = await fetch(`${baseURL}/api/v1/knowledge-conversations/${conversationId}/runs:stream`, {
+    const response = await apiFetchResponse(`/api/v1/knowledge-conversations/${conversationId}/runs:stream`, {
       method: "POST",
-      headers: { Accept: "text/event-stream", "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
       body: JSON.stringify({ question, mode: "HYBRID", topK: 8, threshold: 0.2 }),
       signal: controller.signal
     });
-    if (!response.ok || !response.body) throw new Error(`知识问答请求失败 (${response.status})`);
+    if (!response.body) throw new Error("知识问答未返回流式响应");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -83,27 +81,18 @@ function startUniKnowledgeRun(
   question: string,
   onEvent: (name: string, value: MiniKnowledgeStreamEvent | MiniKnowledgeRunResult) => void
 ): KnowledgeRunHandle {
-  let requestTask: UniApp.RequestTask | null = null;
-  const baseURL = getApiBaseURL().replace(/\/+$/, "");
-  const promise = new Promise<MiniKnowledgeRunResult>((resolve, reject) => {
-    requestTask = uni.request({
-      url: `${baseURL}/api/v1/knowledge-conversations/${conversationId}/runs`,
+  const request = apiRequestTask<MiniKnowledgeRunResult, { question: string; mode: string; topK: number; threshold: number }>(
+    `/api/v1/knowledge-conversations/${conversationId}/runs`,
+    {
       method: "POST",
-      header: { Accept: "application/json", Authorization: `Bearer ${getAuthToken()}` },
+      headers: { Accept: "application/json" },
       data: { question, mode: "HYBRID", topK: 8, threshold: 0.2 },
       timeout: 600000,
-      success(response) {
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          const body = response.data as { error?: string; message?: string } | undefined;
-          reject(new Error(body?.error || body?.message || `知识问答请求失败 (${response.statusCode})`));
-          return;
-        }
-        const result = response.data as MiniKnowledgeRunResult;
-        onEvent("result", result);
-        resolve(result);
-      },
-      fail(error) { reject(new Error(error.errMsg || "知识问答请求失败")); }
-    });
+    },
+  );
+  const promise = request.promise.then(result => {
+    onEvent("result", result);
+    return result;
   });
-  return { promise, abort: () => requestTask?.abort() };
+  return { promise, abort: request.abort };
 }

@@ -1,26 +1,88 @@
 {
-  "name": "知启云 AI",
-  "appid": "__UNI__XIANZHI_AI",
-  "description": "知启云 AI 一站式内容生产与代理商运营平台",
-  "versionName": "0.2.0",
-  "versionCode": "20",
-  "transformPx": false,
-  "h5": {
-    "router": {
-      "mode": "hash"
-    },
-    "devServer": {
-      "port": 5173,
-      "proxy": {
-        "/api": {
-          "target": "http://localhost:3100",
-          "changeOrigin": true
+    "name" : "知启云 AI",
+    "appid" : "__UNI__F1BEA6A",
+    "description" : "知启云 AI 一站式内容生产与代理商运营平台",
+    "versionName" : "0.2.0",
+    "versionCode" : "20",
+    "transformPx" : false,
+    "app-plus" : {
+        "screenOrientation" : [ "portrait-primary" ],
+        "allowsInlineMediaPlayback" : true,
+        "nvueStyleCompiler" : "uni-app",
+        "renderer" : "auto",
+        "checkPermissionDenied" : true,
+        "splashscreen" : {
+            "alwaysShowBeforeRender" : true,
+            "autoclose" : true,
+            "waiting" : true
+        },
+        "safearea" : {
+            "background" : "#ffffff",
+            "bottom" : {
+                "offset" : "auto"
+            }
+        },
+        "distribute" : {
+            "android" : {
+                "packagename" : "com.zhiqiyun.xianzhiai",
+                "abiFilters" : [ "arm64-v8a", "armeabi-v7a" ],
+                "hasTaskAffinity" : true,
+                "permissions" : [
+                    "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+                    "<uses-permission android:name=\"android.permission.CAMERA\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_MEDIA_IMAGES\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_MEDIA_VIDEO\"/>",
+                    "<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\" android:maxSdkVersion=\"32\"/>"
+                ]
+            },
+            "splashscreen" : {
+                "androidStyle" : "common",
+                "androidNavigationBarColor" : "#ffffff"
+            },
+            "ios" : {
+                "appid" : "com.zhiqiyun.xianzhiai",
+                "devices" : "iphone",
+                "deploymentTarget" : "13.0",
+                "dSYMs" : true,
+                "privacyDescription" : {
+                    "NSPhotoLibraryUsageDescription" : "用于选择参考图、头像及营业执照等图片，以完成 AI 创作和企业认证。",
+                    "NSPhotoLibraryAddUsageDescription" : "用于将您主动保存的 AI 图片、海报和视频写入系统相册。",
+                    "NSCameraUsageDescription" : "用于拍摄参考图、头像或营业执照，以完成 AI 创作和企业认证。"
+                }
+            },
+            "icons" : {
+                "ios" : {
+                    "appstore" : "static/app-icons/ios/appstore.png",
+                    "iphone" : {
+                        "app@2x" : "static/app-icons/ios/icon-120.png",
+                        "app@3x" : "static/app-icons/ios/icon-180.png",
+                        "spotlight@2x" : "static/app-icons/ios/icon-80.png",
+                        "spotlight@3x" : "static/app-icons/ios/icon-120.png",
+                        "settings@2x" : "static/app-icons/ios/icon-58.png",
+                        "settings@3x" : "static/app-icons/ios/icon-87.png",
+                        "notification@2x" : "static/app-icons/ios/icon-40.png",
+                        "notification@3x" : "static/app-icons/ios/icon-60.png"
+                    }
+                }
+            }
         }
-      }
+    },
+    "h5" : {
+        "router" : {
+            "mode" : "hash"
+        },
+        "devServer" : {
+            "port" : 5173,
+            "proxy" : {
+                "/api" : {
+                    "target" : "http://localhost:3100",
+                    "changeOrigin" : true
+                }
+            }
+        }
+    },
+    "mp-weixin" : {
+        "appid" : "wx42428e761551a7fb",
+        "libVersion" : "3.15.2"
     }
-  },
-  "mp-weixin": {
-    "appid": "wxf02d04d39afb7c6d",
-    "libVersion": "3.15.2"
-  }
 }

@@ -26,7 +26,7 @@ func TestCalculateCommissionSettlementFixedRules(t *testing.T) {
 			wantDirect:     30000,
 			wantOperation:  20000,
 			wantTokenValue: 40000,
-			wantPlatform:   9600,
+			wantPlatform:   49600,
 		},
 		{
 			name: "second level member package",
@@ -44,7 +44,7 @@ func TestCalculateCommissionSettlementFixedRules(t *testing.T) {
 			wantParent:     5000,
 			wantOperation:  20000,
 			wantTokenValue: 40000,
-			wantPlatform:   4600,
+			wantPlatform:   44600,
 		},
 		{
 			name: "agent join does not pay parent agent",
@@ -62,7 +62,7 @@ func TestCalculateCommissionSettlementFixedRules(t *testing.T) {
 			wantParent:     0,
 			wantOperation:  20000,
 			wantTokenValue: 20000,
-			wantPlatform:   29600,
+			wantPlatform:   49600,
 		},
 		{
 			name: "operation center join is platform income",
@@ -224,7 +224,7 @@ func TestCommerceAgentJoinFulfillmentIsIdempotentAndSkipsParentReward(t *testing
 	assertCommissionAmount(t, data.Commissions, receiverTypeAgent, "channel_b", commissionTypeDirectAgentReward, 30000)
 	assertNoCommission(t, data.Commissions, receiverTypeAgent, "channel_a", commissionTypeParentAgentReward)
 	assertCommissionAmount(t, data.Commissions, receiverTypeOperationCenter, "operation_center_1", commissionTypeOperationCenterReward, 20000)
-	assertCommissionAmount(t, data.Commissions, receiverTypePlatform, "platform", commissionTypePlatformIncome, 29600)
+	assertCommissionAmount(t, data.Commissions, receiverTypePlatform, "platform", commissionTypePlatformIncome, 49600)
 
 	if len(data.TokenRecords) != 1 || data.TokenRecords[0].Amount != 20000 || data.TokenRecords[0].BalanceAfter != 20010 {
 		t.Fatalf("unexpected token records: %+v", data.TokenRecords)
@@ -281,7 +281,7 @@ func TestCommerceMemberPackageFulfillmentDoesNotOpenAgentIdentity(t *testing.T) 
 		t.Fatalf("second applyCommerceOrderFulfillment() error = %v", err)
 	}
 
-	if data.Orders[0].OrderType != orderTypeUserRechargeDirect || data.Orders[0].PlatformIncomeCents != 9600 || data.Orders[0].TokenGrantAmount != 40000 {
+	if data.Orders[0].OrderType != orderTypeUserRechargeDirect || data.Orders[0].PlatformIncomeCents != 49600 || data.Orders[0].TokenGrantAmount != 40000 {
 		t.Fatalf("unexpected order fulfillment: %+v", data.Orders[0])
 	}
 	if data.Orders[0].BuyerUserID != "user_u" || data.Orders[0].TokenAmount != 40000 || stringValue(data.Orders[0].RewardSnapshot["businessOrderType"]) != "USER_PACKAGE" {
@@ -289,7 +289,7 @@ func TestCommerceMemberPackageFulfillmentDoesNotOpenAgentIdentity(t *testing.T) 
 	}
 	assertCommissionAmount(t, data.Commissions, receiverTypeAgent, "channel_a", commissionTypeDirectAgentReward, 30000)
 	assertCommissionAmount(t, data.Commissions, receiverTypeOperationCenter, "operation_center_1", commissionTypeOperationCenterReward, 20000)
-	assertCommissionAmount(t, data.Commissions, receiverTypePlatform, "platform", commissionTypePlatformIncome, 9600)
+	assertCommissionAmount(t, data.Commissions, receiverTypePlatform, "platform", commissionTypePlatformIncome, 49600)
 	assertNoCommission(t, data.Commissions, receiverTypeAgent, "channel_a", commissionTypeParentAgentReward)
 	if len(data.Commissions) != 3 {
 		t.Fatalf("commissions should be idempotent, got %d: %+v", len(data.Commissions), data.Commissions)
@@ -348,7 +348,7 @@ func TestCommerceSecondLevelMemberPackageUsesTwoLevelRewards(t *testing.T) {
 	assertCommissionAmount(t, data.Commissions, receiverTypeAgent, "channel_direct", commissionTypeDirectAgentReward, 30000)
 	assertCommissionAmount(t, data.Commissions, receiverTypeAgent, "channel_parent", commissionTypeParentAgentReward, 5000)
 	assertCommissionAmount(t, data.Commissions, receiverTypeOperationCenter, "operation_center_1", commissionTypeOperationCenterReward, 20000)
-	assertCommissionAmount(t, data.Commissions, receiverTypePlatform, "platform", commissionTypePlatformIncome, 4600)
+	assertCommissionAmount(t, data.Commissions, receiverTypePlatform, "platform", commissionTypePlatformIncome, 44600)
 	if stringValue(data.Orders[0].RewardSnapshot["agentSelfAIUsageBillingScope"]) != "USER_IDENTITY" {
 		t.Fatalf("reward snapshot must declare user-wallet AI usage scope: %+v", data.Orders[0].RewardSnapshot)
 	}

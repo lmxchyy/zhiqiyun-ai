@@ -1,8 +1,14 @@
 package httpserver
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
+
+	commissionapp "xianzhi-ai/backend-go/internal/app/commission"
 )
 
 const (
@@ -60,77 +66,84 @@ type commissionSettlementResult struct {
 	PlatformIncomeCents        int
 }
 
+//go:embed commission_compat_rules.json
+var commissionCompatibilityRulesJSON []byte
+
+var (
+	commissionCompatibilityRulesOnce sync.Once
+	commissionCompatibilityRulesData []commissionapp.CommissionRule
+	commissionCompatibilityRulesErr  error
+)
+
 func calculateCommissionSettlement(ctx commissionOrderContext) (commissionSettlementResult, error) {
 	ctx.OrderType = normalizeCommerceCode(ctx.OrderType)
 	ctx.PlanType = normalizePlanTypeString(ctx.PlanType)
-	result := commissionSettlementResult{
-		OrderType:            ctx.OrderType,
-		TokenGrantAmount:     ctx.TokenGrantAmount,
-		TokenGrantValueCents: ctx.TokenGrantValueCents,
-		PlatformIncomeCents:  ctx.AmountCents,
-	}
 	if ctx.AmountCents <= 0 {
-		return result, fmt.Errorf("order amount must be positive")
+		return commissionSettlementResult{}, fmt.Errorf("order amount must be positive")
 	}
 	switch ctx.OrderType {
-	case orderTypeUserRechargeDirect:
-		if ctx.DirectAgentID != "" {
-			result.DirectAgentRewardCents = 30000
-		}
-		if ctx.OperationCenterID != "" {
-			result.OperationCenterRewardCents = 20000
-		}
-	case orderTypeUserRechargeSecondLevel:
-		if ctx.DirectAgentID != "" {
-			result.DirectAgentRewardCents = 30000
-		}
-		if ctx.ParentAgentID != "" {
-			result.ParentAgentRewardCents = 5000
-		}
-		if ctx.OperationCenterID != "" {
-			result.OperationCenterRewardCents = 20000
-		}
-	case orderTypeAgentJoin:
-		if ctx.DirectAgentID != "" {
-			result.DirectAgentRewardCents = 30000
-		}
-		result.ParentAgentRewardCents = 0
-		if ctx.OperationCenterID != "" {
-			result.OperationCenterRewardCents = 20000
-		}
-	case orderTypeOperationCenterJoin:
-		result.DirectAgentRewardCents = 0
-		result.ParentAgentRewardCents = 0
-		result.OperationCenterRewardCents = 0
-		if result.TokenGrantValueCents == 0 {
-			result.TokenGrantAmount = 0
-		}
-	case orderTypePlatformDirectRecharge:
-		result.DirectAgentRewardCents = 0
-		result.ParentAgentRewardCents = 0
-		result.OperationCenterRewardCents = 0
+	case orderTypeUserRechargeDirect, orderTypeUserRechargeSecondLevel, orderTypeAgentJoin,
+		orderTypeOperationCenterJoin, orderTypePlatformDirectRecharge:
 	default:
-		return result, fmt.Errorf("unsupported commerce order type: %s", ctx.OrderType)
+		return commissionSettlementResult{}, fmt.Errorf("unsupported commerce order type: %s", ctx.OrderType)
 	}
-	result.PlatformIncomeCents = ctx.AmountCents -
-		result.DirectAgentRewardCents -
-		result.ParentAgentRewardCents -
-		result.OperationCenterRewardCents -
-		result.TokenGrantValueCents
-	if result.PlatformIncomeCents < 0 {
-		return result, fmt.Errorf("commission settlement is negative: order=%d platform=%d", ctx.AmountCents, result.PlatformIncomeCents)
+	if ctx.PlanType == "" {
+		switch ctx.OrderType {
+		case orderTypeAgentJoin:
+			ctx.PlanType = planTypeAgentJoinPackage
+		case orderTypeOperationCenterJoin:
+			ctx.PlanType = planTypeOperationCenterPackage
+		case orderTypePlatformDirectRecharge:
+			ctx.PlanType = planTypeTokenRecharge
+		default:
+			ctx.PlanType = planTypeMemberPackage
+		}
 	}
-	if err := validateSettlementAmount(ctx.AmountCents, result); err != nil {
-		return result, err
+	rules, err := loadCommissionCompatibilityRules()
+	if err != nil {
+		return commissionSettlementResult{}, err
 	}
-	return result, nil
+	agentIDs := map[int]string{}
+	if ctx.DirectAgentID != "" {
+		agentIDs[1] = ctx.DirectAgentID
+	}
+	if ctx.ParentAgentID != "" {
+		agentIDs[2] = ctx.ParentAgentID
+	}
+	orderID := firstNonEmptyString(ctx.OrderID, "compat:"+ctx.OrderType)
+	sourceUserID := firstNonEmptyString(ctx.BuyerUserID, "compat-user")
+	engineResult, err := commissionapp.NewEngine().Calculate(commissionapp.CalculationInput{
+		TenantID: "tenant_default", OrderID: orderID, OrderNo: orderID,
+		ProductType: ctx.PlanType, ProductID: ctx.PlanType, SourceUserID: sourceUserID,
+		OrderAmountCents: commissionapp.AmountCents(ctx.AmountCents),
+		PaidAmountCents:  commissionapp.AmountCents(ctx.AmountCents),
+		Quantity:         1,
+		PaidAt:           time.Now().UTC(),
+		Rules:            rules,
+		Relationships: commissionapp.RelationshipSnapshot{
+			AgentIDsByLevel: agentIDs, OperationCenterID: ctx.OperationCenterID, PlatformID: "platform",
+		},
+	})
+	if err != nil {
+		return commissionSettlementResult{}, err
+	}
+	return compatibilitySettlementResult(ctx, engineResult)
+}
+
+func loadCommissionCompatibilityRules() ([]commissionapp.CommissionRule, error) {
+	commissionCompatibilityRulesOnce.Do(func() {
+		commissionCompatibilityRulesErr = json.Unmarshal(commissionCompatibilityRulesJSON, &commissionCompatibilityRulesData)
+	})
+	if commissionCompatibilityRulesErr != nil {
+		return nil, fmt.Errorf("decode compatibility commission rules: %w", commissionCompatibilityRulesErr)
+	}
+	return append([]commissionapp.CommissionRule(nil), commissionCompatibilityRulesData...), nil
 }
 
 func validateSettlementAmount(amountCents int, result commissionSettlementResult) error {
 	total := result.DirectAgentRewardCents +
 		result.ParentAgentRewardCents +
 		result.OperationCenterRewardCents +
-		result.TokenGrantValueCents +
 		result.PlatformIncomeCents
 	if total != amountCents {
 		return fmt.Errorf("settlement amount mismatch: order=%d settlement=%d", amountCents, total)

@@ -36,6 +36,9 @@ jobs:
       - name: Typecheck user core
         run: npm.cmd run typecheck:user-core
 
+      - name: Verify API client boundaries
+        run: npm.cmd run verify:api-boundaries
+
       - name: Build H5 user clients
         run: npm.cmd run build:user-h5
 

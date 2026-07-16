@@ -98,4 +98,7 @@ func TestAgentRAGRunPersistsMessagesEventsAndCitations(t *testing.T) {
 	if len(messages) != 2 || messages[0].Role != "user" || messages[1].Role != "assistant" {
 		t.Fatalf("unexpected messages: %#v", messages)
 	}
+	if !messages[1].CreatedAt.After(messages[0].CreatedAt) {
+		t.Fatalf("assistant message timestamp must follow its parent: %#v", messages)
+	}
 }

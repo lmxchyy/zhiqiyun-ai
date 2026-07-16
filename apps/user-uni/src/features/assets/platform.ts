@@ -1,4 +1,5 @@
-import { getApiBaseURL, getAuthToken } from "../../api/client";
+import { getApiBaseURL } from "../../api/client";
+import { downloadTemporaryFile } from "../../api/files";
 import type { AssetItem } from "./types";
 
 function downloadUrl(asset: AssetItem) {
@@ -65,15 +66,8 @@ export function previewAsset(asset: AssetItem) {
 export function downloadAssetFile(asset: AssetItem): Promise<string> {
   return new Promise((resolve, reject) => {
     uni.showLoading({ title: "正在下载" });
-    uni.downloadFile({
-      url: downloadUrl(asset),
-      header: { Authorization: `Bearer ${getAuthToken()}` },
-      success: async result => {
-        if (result.statusCode < 200 || result.statusCode >= 300) {
-          reject(new Error("下载失败，请稍后重试"));
-          return;
-        }
-        const filePath = result.tempFilePath;
+    void downloadTemporaryFile(downloadUrl(asset))
+      .then(async filePath => {
         if (asset.type === "image" || asset.type === "infographic") {
           try {
             await ensureAlbumPermission();
@@ -118,10 +112,9 @@ export function downloadAssetFile(asset: AssetItem): Promise<string> {
           });
           return;
         }
-      },
-      fail: reason => reject(new Error(reason.errMsg || "下载失败，请检查网络")),
-      complete: () => uni.hideLoading(),
-    });
+      })
+      .catch(reason => reject(reason instanceof Error ? reason : new Error("下载失败，请检查网络")))
+      .finally(() => uni.hideLoading());
   });
 }
 

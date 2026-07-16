@@ -57,7 +57,53 @@ func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
 	} else {
 		data.BillingRules = mergeDefaultBillingRules(data.BillingRules, defaultBillingRules(now))
 	}
+	data.AIModules = migrateLegacyPackageCapabilities(data.AIModules)
 	return data
+}
+
+// Older capability records only listed the original monthly SKUs. Expand those
+// legacy defaults once so enforcing package access does not unexpectedly block
+// the newer single-month and yearly variants. Once a module has been edited in
+// the plan editor, the version marker preserves the administrator's exact list.
+func migrateLegacyPackageCapabilities(modules []adminAIModule) []adminAIModule {
+	paidPlans := []string{
+		"plan_month", "plan_basic_single", "plan_basic_year",
+		"plan_pro", "plan_pro_single", "plan_pro_year",
+		"plan_year", "plan_ultimate_single", "plan_ultimate_year",
+		"plan_enterprise", "plan_ai_creator_996",
+	}
+	for index := range modules {
+		if configVersion(modules[index].Config, "packageCapabilityVersion") >= packageCapabilityConfigVersion {
+			continue
+		}
+		moduleCode := canonicalModuleCode(modules[index].ModuleCode)
+		if moduleCode == moduleImageGeneration {
+			modules[index].OpenPackageIDs = uniqueStringList(append(modules[index].OpenPackageIDs, "plan_free"))
+		}
+		if moduleCode == moduleImageGeneration || moduleCode == moduleVideoGeneration || moduleCode == modulePPTGeneration {
+			modules[index].OpenPackageIDs = uniqueStringList(append(modules[index].OpenPackageIDs, paidPlans...))
+		}
+	}
+	return modules
+}
+
+func configVersion(config map[string]any, key string) int {
+	if config == nil {
+		return 0
+	}
+	switch value := config[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return int(parsed)
+	default:
+		return 0
+	}
 }
 
 func mergeDefaultBillingRules(current []adminBillingRule, defaults []adminBillingRule) []adminBillingRule {
@@ -181,7 +227,7 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			ID: "schema_ppt_generation_default", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6",
 			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
 				{Key: "topic", Label: "PPT主题", Type: "textarea", Required: true, Placeholder: "输入演示文稿主题和要求", UserEditable: true, Visible: true},
-				{Key: "page_count", Label: "页数", Type: "select", Required: true, Default: float64(10), Options: anyOptions(float64(6), float64(8), float64(10), float64(15), float64(20)), UserEditable: true, Visible: true},
+				{Key: "page_count", Label: "页数", Type: "number", Required: true, Default: float64(5), Min: floatPtr(1), Max: floatPtr(20), UserEditable: true, Visible: true},
 				{Key: "template_id", Label: "模板ID", Type: "template_select", UserEditable: true, Visible: true},
 				{Key: "theme_style", Label: "主题风格", Type: "select", Default: "business", Options: anyOptions("business", "minimal", "technology", "education"), UserEditable: true, Visible: true},
 				{Key: "language", Label: "语言", Type: "select", Default: "zh-CN", Options: anyOptions("zh-CN", "en-US"), UserEditable: true, Visible: true},
@@ -236,12 +282,29 @@ func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
 		user.TenantID = authorization.TenantID
 		user.OrganizationID = authorization.OrganizationID
 	}
-	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
+	resolved, err := resolveClientModuleSchema(data, user, moduleCode, modelName)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, moduleSchemaResponse(resolved, user))
+}
+
+func resolveClientModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {
+	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
+	if err == nil || strings.TrimSpace(modelName) == "" {
+		return resolved, err
+	}
+	requestedModel := findAIModel(data.AIModels, moduleCode, modelName)
+	fallbackName := strings.TrimSpace(requestedModel.FallbackModel)
+	if requestedModel.ID == "" || !requestedModel.AllowFallbackSwitch || fallbackName == "" {
+		return resolvedModuleSchema{}, err
+	}
+	fallback, fallbackErr := resolveModuleSchema(data, user, moduleCode, fallbackName)
+	if fallbackErr != nil {
+		return resolvedModuleSchema{}, err
+	}
+	return fallback, nil
 }
 
 func (a api) aiOverview(w http.ResponseWriter, _ *http.Request) {
@@ -448,6 +511,18 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if !isActiveLike(module.Status) {
 		return resolvedModuleSchema{}, fmt.Errorf("ai module is disabled: %s", moduleCode)
 	}
+	enterpriseContext := isEnterpriseCapabilityContext(user)
+	if !enterpriseContext {
+		if err := validatePersonalPackagePeriod(user, time.Now().UTC()); err != nil {
+			return resolvedModuleSchema{}, err
+		}
+	}
+	if !enterpriseContext && !stringListContains(module.OpenPackageIDs, user.PlanID) {
+		return resolvedModuleSchema{}, fmt.Errorf("module %s is not included in package %s", moduleCode, user.PlanID)
+	}
+	if enterpriseContext && len(module.OpenTenantIDs) > 0 && !stringListContains(module.OpenTenantIDs, effectiveTenantID(user)) {
+		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to tenant %s", moduleCode, effectiveTenantID(user))
+	}
 	if strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") && !module.AllowAgents {
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to agents", moduleCode)
 	}
@@ -455,7 +530,7 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to end users", moduleCode)
 	}
 	if modelName == "" {
-		modelName = defaultModelNameForModule(data, moduleCode)
+		modelName = defaultAllowedModelNameForModule(data, user, moduleCode)
 	}
 	model := findAIModel(data.AIModels, moduleCode, modelName)
 	if model.ID == "" {
@@ -560,8 +635,13 @@ func validateLimitValue(key string, value any, limit map[string]any) error {
 	if enabled, ok := optionalBoolValue(rule["enabled"]); ok && !enabled && hasNonEmptyValue(value) {
 		return fmt.Errorf("parameter %s is disabled by tenant/package limit", key)
 	}
-	if allowed, ok := anySlice(rule["allowed"]); ok && len(allowed) > 0 && !anyListContains(allowed, value) {
-		return fmt.Errorf("parameter %s value %v exceeds tenant/package allowed list", key, value)
+	if allowed, ok := anySlice(rule["allowed"]); ok {
+		if len(allowed) == 0 {
+			return fmt.Errorf("parameter %s is disabled by an empty tenant/package allowed list", key)
+		}
+		if !anyListContains(allowed, value) {
+			return fmt.Errorf("parameter %s value %v exceeds tenant/package allowed list", key, value)
+		}
 	}
 	if max, ok := anyToFloat(rule["max"]); ok {
 		if number, numberOK := anyToFloat(value); numberOK && number > max {
@@ -584,7 +664,7 @@ func applyLimitToSchema(schema adminAIParameterSchemaJSON, limit map[string]any)
 				field.Visible = false
 				field.UserEditable = false
 			}
-			if allowed, ok := anySlice(rule["allowed"]); ok && len(allowed) > 0 {
+			if allowed, ok := anySlice(rule["allowed"]); ok {
 				field.Options = allowed
 			}
 			if max, ok := anyToFloat(rule["max"]); ok {
@@ -614,6 +694,10 @@ func generationPointCostForRequest(req createGenerationTaskRequest, data adminPl
 	quantity := billingQuantity(rule.BillingType, req)
 	multiplier := billingMultiplier(rule.ParameterMultiplier, req.Params)
 	total := int(math.Ceil(rule.BasePrice * quantity * multiplier))
+	minimumCharge := int(math.Ceil(rule.MinimumCharge))
+	if total < minimumCharge {
+		total = minimumCharge
+	}
 	if total < 1 {
 		return 1
 	}
@@ -634,26 +718,30 @@ func billingRuleForRequest(req createGenerationTaskRequest, data adminPlatformDa
 }
 
 func adminDataFromPlatformData(data platformData) adminPlatformData {
-	return normalizeAICapabilityDefaults(adminPlatformData{
-		Users:              data.Users,
-		Plans:              data.Plans,
-		PointAccounts:      data.PointAccounts,
-		ChannelAgents:      data.ChannelAgents,
-		Commissions:        data.Commissions,
-		CommissionRules:    data.CommissionRules,
-		BillingRules:       data.BillingRules,
-		BillingEvents:      data.BillingEvents,
-		Withdrawals:        data.Withdrawals,
-		AdminProducts:      data.AdminProducts,
-		AIModules:          data.AIModules,
-		AIModels:           data.AIModels,
-		AIParameterSchemas: data.AIParameterSchemas,
-		TenantModuleLimits: data.TenantModuleLimits,
-		GenerationTasks:    data.GenerationTasks,
-		Assets:             data.Assets,
-		Counters:           data.Counters,
-		PointsAvailable:    data.PointsAvailable,
-	})
+	return applyPublishedBillingRulesV1(normalizeAICapabilityDefaults(adminPlatformData{
+		Users:                  data.Users,
+		Plans:                  data.Plans,
+		PointAccounts:          data.PointAccounts,
+		ChannelAgents:          data.ChannelAgents,
+		Commissions:            data.Commissions,
+		CommissionRules:        data.CommissionRules,
+		BillingRules:           data.BillingRules,
+		BillingEvents:          data.BillingEvents,
+		BillingRuleVersions:    data.BillingRuleVersions,
+		ProviderCosts:          data.ProviderCosts,
+		BillingLifecycleEvents: data.BillingLifecycleEvents,
+		WalletLedger:           data.WalletLedger,
+		Withdrawals:            data.Withdrawals,
+		AdminProducts:          data.AdminProducts,
+		AIModules:              data.AIModules,
+		AIModels:               data.AIModels,
+		AIParameterSchemas:     data.AIParameterSchemas,
+		TenantModuleLimits:     data.TenantModuleLimits,
+		GenerationTasks:        data.GenerationTasks,
+		Assets:                 data.Assets,
+		Counters:               data.Counters,
+		PointsAvailable:        data.PointsAvailable,
+	}))
 }
 
 func billingQuantity(billingType string, req createGenerationTaskRequest) float64 {
@@ -723,6 +811,9 @@ func applyGenerationTaskCapabilitySnapshot(task *generationTask, req createGener
 	}
 	task.ModuleCode = moduleCode
 	task.BillingType = firstNonEmptyString(stringValue(req.Params["billing_type"]), rule.BillingType)
+	if task.BillingRuleVersionID == "" && rule.Version > 0 {
+		task.BillingRuleVersionID = rule.ID
+	}
 	task.TenantID = stringValue(req.Params["tenant_id"])
 	task.OrganizationID = stringValue(req.Params["organization_id"])
 	task.BillingAccountType = firstNonEmptyString(stringValue(req.Params["billing_scope"]), contextPersonal)
@@ -956,6 +1047,53 @@ func defaultModelNameForModule(data adminPlatformData, moduleCode string) string
 	return ""
 }
 
+func defaultAllowedModelNameForModule(data adminPlatformData, user adminUser, moduleCode string) string {
+	defaultModel := defaultModelNameForModule(data, moduleCode)
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, "")
+	models, ok := mapValue(limit.LimitJSON["models"])
+	if !ok {
+		return defaultModel
+	}
+	allowed, ok := anySlice(models["allowed"])
+	if !ok {
+		return defaultModel
+	}
+	if len(allowed) == 0 {
+		return ""
+	}
+	if anyListContains(allowed, defaultModel) {
+		return defaultModel
+	}
+	for _, value := range allowed {
+		modelName := strings.TrimSpace(fmt.Sprint(value))
+		model := findAIModel(data.AIModels, moduleCode, modelName)
+		if model.ID != "" && isActiveLike(model.Status) {
+			return model.ModelName
+		}
+	}
+	return defaultModel
+}
+
+func validatePersonalPackagePeriod(user adminUser, now time.Time) error {
+	expiresAt := strings.TrimSpace(user.SubscriptionExpiresAt)
+	if expiresAt == "" {
+		// Legacy and system-created users may not have a period snapshot yet.
+		// Keep them compatible until the data backfill assigns an explicit date.
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, expiresAt)
+	}
+	if err != nil {
+		return fmt.Errorf("package expiry is invalid for user %s", user.ID)
+	}
+	if !parsed.After(now) {
+		return fmt.Errorf("package %s expired at %s", user.PlanID, parsed.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
 func effectiveTenantModuleLimit(items []adminTenantModuleLimit, user adminUser, moduleCode string, modelName string) adminTenantModuleLimit {
 	base := adminTenantModuleLimit{ID: "limit_system_default", TenantID: "default", ModuleCode: moduleCode, ModelName: modelName, Status: "ACTIVE", LimitJSON: map[string]any{}}
 	candidates := []adminTenantModuleLimit{}
@@ -994,10 +1132,17 @@ func limitMatchesUser(item adminTenantModuleLimit, user adminUser) bool {
 	if agentID != "" && agentID != user.ReferredBy {
 		return false
 	}
-	if packageID != "" && packageID != user.PlanID {
-		return false
+	if packageID != "" {
+		if isEnterpriseCapabilityContext(user) || packageID != user.PlanID {
+			return false
+		}
 	}
 	return true
+}
+
+func isEnterpriseCapabilityContext(user adminUser) bool {
+	tenantID := strings.TrimSpace(effectiveTenantID(user))
+	return tenantID != "" && !strings.EqualFold(tenantID, "default") && !strings.EqualFold(tenantID, "tenant_default")
 }
 
 func limitSpecificity(item adminTenantModuleLimit, user adminUser) int {
@@ -1020,8 +1165,13 @@ func validateModelAllowedByLimit(modelName string, limit map[string]any) error {
 		return nil
 	}
 	allowed, ok := anySlice(models["allowed"])
-	if ok && len(allowed) > 0 && !anyListContains(allowed, modelName) {
-		return fmt.Errorf("model %s is not allowed by tenant/package limit", modelName)
+	if ok {
+		if len(allowed) == 0 {
+			return fmt.Errorf("no models are allowed by tenant/package limit")
+		}
+		if !anyListContains(allowed, modelName) {
+			return fmt.Errorf("model %s is not allowed by tenant/package limit", modelName)
+		}
 	}
 	return nil
 }
@@ -1086,7 +1236,8 @@ func allowedGenerationInternalParam(key string) bool {
 		"resolution", "width", "height", "inputMode", "hasInputImage", "hasInputVideo", "userPrompt", "effectivePrompt", "promptForApi",
 		"generate_audio", "generateAudio",
 		"image_url", "imageUrl", "image_urls", "imageUrls", "inputImageUrl", "input_image_url", "inputImageUrls",
-		"reference_images", "input_reference", "inputVideoUrl", "video_url", "videoUrl":
+		"reference_images", "input_reference", "inputVideoUrl", "video_url", "videoUrl",
+		"purpose", "pptTaskId", "deckTitle", "slideId", "slidePage", "theme", "language", "visualPlan", "negativePrompt":
 		return true
 	default:
 		return false
@@ -1095,6 +1246,9 @@ func allowedGenerationInternalParam(key string) bool {
 
 func valueForField(req generation.CreateRequest, key string) (any, bool) {
 	if key == "prompt" && strings.TrimSpace(req.Prompt) != "" {
+		return req.Prompt, true
+	}
+	if key == "topic" && strings.TrimSpace(req.Prompt) != "" {
 		return req.Prompt, true
 	}
 	if value, ok := req.Params[key]; ok {

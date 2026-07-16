@@ -68,7 +68,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { onLoad, onShareAppMessage } from "@dcloudio/uni-app";
-import { api, getApiBaseURL, getAuthToken } from "../../api/client";
+import { api, getApiBaseURL } from "../../api/client";
+import { downloadTemporaryFile } from "../../api/files";
 import { asRecord, backOrHome, formatDate, formatNumber, rowNumber, rowString, type AnyRecord } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 import AssetDetailCenterPage from "../../components/assets/AssetDetailCenterPage.vue";
@@ -134,22 +135,16 @@ function copyAssetLink() {
   });
 }
 
-function downloadAsset() {
+async function downloadAsset() {
   if (!downloadURL.value || downloading.value) return;
   downloading.value = true;
-  uni.downloadFile({
-    url: downloadURL.value,
-    header: { Authorization: `Bearer ${getAuthToken()}` },
-    success: result => {
-      if (result.statusCode < 200 || result.statusCode >= 300) {
-        uni.showToast({ title: "下载失败，请稍后重试", icon: "none" });
-        return;
-      }
-      openDownloadedFile(result.tempFilePath);
-    },
-    fail: () => uni.showToast({ title: "下载失败，请检查网络", icon: "none" }),
-    complete: () => { downloading.value = false; }
-  });
+  try {
+    openDownloadedFile(await downloadTemporaryFile(downloadURL.value));
+  } catch (error) {
+    uni.showToast({ title: error instanceof Error ? error.message : "下载失败，请检查网络", icon: "none" });
+  } finally {
+    downloading.value = false;
+  }
 }
 
 function openDownloadedFile(filePath: string) {

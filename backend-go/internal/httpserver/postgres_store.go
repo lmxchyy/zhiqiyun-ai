@@ -166,7 +166,7 @@ func (s *postgresStore) ensureCanonicalBillingPlans(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertPlans(ctx, tx, canonicalBillingPlans()); err != nil {
+	if err := insertMissingPlans(ctx, tx, canonicalBillingPlans()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -264,6 +264,9 @@ func (s *postgresStore) AdminData() (adminPlatformData, error) {
 	if data.Users, err = s.listUsers(ctx); err != nil {
 		return data, err
 	}
+	if data.AuthMergeRequests, err = s.listAuthMergeRequests(ctx, ""); err != nil {
+		return data, err
+	}
 	if data.Plans, err = s.listPlans(ctx); err != nil {
 		return data, err
 	}
@@ -283,6 +286,9 @@ func (s *postgresStore) AdminData() (adminPlatformData, error) {
 		return data, err
 	}
 	if data.OperationCenters, err = s.listOperationCenters(ctx); err != nil {
+		return data, err
+	}
+	if data.CustomerRelations, err = s.listCustomerRelations(ctx); err != nil {
 		return data, err
 	}
 	if data.Commissions, err = s.listCommissions(ctx); err != nil {
@@ -551,7 +557,19 @@ const generationTaskSummarySelect = `
 		coalesce(error::text, 'null'),
 		coalesce(created_at, ''),
 		coalesce(updated_at, ''),
-		coalesce(worker_finished_at, '')
+		coalesce(worker_finished_at, ''),
+		coalesce(client_request_id, ''),
+		coalesce(task_status, 'CREATED'),
+		coalesce(billing_status, 'UNQUOTED'),
+		coalesce(billing_rule_version_id, ''),
+		coalesce(quoted_points, 0),
+		coalesce(reserved_points, 0),
+		coalesce(captured_points, 0),
+		coalesce(released_points, 0),
+		coalesce(refunded_points, 0),
+		supplier_cost,
+		estimated_margin,
+		coalesce(provider_channel, '')
 	from xz_generation_tasks
 `
 
@@ -783,6 +801,18 @@ func scanGenerationTaskSummaryRows(rows *sql.Rows) ([]generationTask, error) {
 			&item.CreatedAt,
 			&item.UpdatedAt,
 			&item.WorkerFinishedAt,
+			&item.ClientRequestID,
+			&item.TaskStatus,
+			&item.BillingStatus,
+			&item.BillingRuleVersionID,
+			&item.QuotedPoints,
+			&item.ReservedPoints,
+			&item.CapturedPoints,
+			&item.ReleasedPoints,
+			&item.RefundedPoints,
+			&item.SupplierCost,
+			&item.EstimatedMargin,
+			&item.ProviderChannel,
 		); err != nil {
 			return nil, err
 		}
@@ -952,6 +982,14 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	if userID == "" {
 		userID = "user_000002"
 	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	if existing, ok, err := generationTaskByClientRequestTx(ctx, tx, userID, req.ClientRequestID); err != nil {
+		return generationTask{}, err
+	} else if ok {
+		return existing, tx.Commit()
+	}
 	capabilityData, err := s.aiCapabilityAdminData(ctx)
 	if err != nil {
 		return generationTask{}, err
@@ -960,6 +998,9 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	pointCost := generationPointCostForRequest(req, capabilityData)
 	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
+		return generationTask{}, err
+	}
+	if err := enforcePostgresGenerationConcurrencyTx(ctx, tx, userID, authorization); err != nil {
 		return generationTask{}, err
 	}
 	req.Params["tenant_id"] = authorization.TenantID
@@ -983,20 +1024,28 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	}
 	task := generationTask{
 		ID:               taskID,
+		ClientRequestID:  strings.TrimSpace(req.ClientRequestID),
 		UserID:           userID,
 		Type:             req.Type,
 		Prompt:           req.Prompt,
 		Params:           req.Params,
 		Model:            req.Model,
 		Status:           "SUCCEEDED",
+		TaskStatus:       taskStatusSucceeded,
+		BillingStatus:    billingStatusCaptured,
 		Progress:         100,
 		PointCost:        pointCost,
+		QuotedPoints:     float64(pointCost),
+		ReservedPoints:   float64(pointCost),
+		CapturedPoints:   float64(pointCost),
 		ResultIDs:        []string{},
 		CreatedAt:        now,
 		UpdatedAt:        now,
 		WorkerFinishedAt: now,
 	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
 	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
@@ -1019,21 +1068,33 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 			return generationTask{}, err
 		}
 	}
-	if err := insertGenerationTask(ctx, tx, task); err != nil {
+	if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model}); err != nil {
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		if _, err := tx.ExecContext(ctx, `
-			update xz_point_accounts
-			set available = available - $1,
-				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-			where id = $2
-		`, pointCost, account.ID); err != nil {
+		reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结")
+		if err != nil {
 			return generationTask{}, err
 		}
-		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+		if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, reservedAccount, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
 			return generationTask{}, err
 		}
+	} else {
+		if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RESERVE", pointCost, balanceBefore, balanceAfter, 0, pointCost, "生成任务冻结"); err != nil {
+			return generationTask{}, err
+		}
+		if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "CAPTURE", pointCost, balanceAfter, balanceAfter, pointCost, 0, "生成任务确认扣费"); err != nil {
+			return generationTask{}, err
+		}
+	}
+	if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RESERVE", float64(pointCost), nil); err != nil {
+		return generationTask{}, err
+	}
+	if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "CAPTURE", float64(pointCost), nil); err != nil {
+		return generationTask{}, err
+	}
+	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
 	}
 	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, balanceBefore, balanceAfter, now)
 	if err != nil {
@@ -1074,6 +1135,14 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if userID == "" {
 		userID = "user_000002"
 	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	if existing, ok, err := generationTaskByClientRequestTx(ctx, tx, userID, req.ClientRequestID); err != nil {
+		return generationTask{}, err
+	} else if ok {
+		return existing, tx.Commit()
+	}
 	capabilityData, err := s.aiCapabilityAdminData(ctx)
 	if err != nil {
 		return generationTask{}, err
@@ -1082,6 +1151,9 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	pointCost := generationPointCostForRequest(req, capabilityData)
 	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
+		return generationTask{}, err
+	}
+	if err := enforcePostgresGenerationConcurrencyTx(ctx, tx, userID, authorization); err != nil {
 		return generationTask{}, err
 	}
 	req.Params["tenant_id"] = authorization.TenantID
@@ -1115,35 +1187,44 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	params := generationBillingReservationParams(req.Params, now, pointCost, balanceBefore, balanceAfter)
 	req.Params = params
 	task := generationTask{
-		ID:        taskID,
-		UserID:    userID,
-		Type:      req.Type,
-		Prompt:    req.Prompt,
-		Params:    params,
-		Model:     req.Model,
-		Status:    "PROCESSING",
-		Progress:  5,
-		PointCost: pointCost,
-		ResultIDs: []string{},
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              taskID,
+		ClientRequestID: strings.TrimSpace(req.ClientRequestID),
+		UserID:          userID,
+		Type:            req.Type,
+		Prompt:          req.Prompt,
+		Params:          params,
+		Model:           req.Model,
+		Status:          "PROCESSING",
+		TaskStatus:      taskStatusQueued,
+		BillingStatus:   billingStatusReserved,
+		Progress:        5,
+		PointCost:       pointCost,
+		QuotedPoints:    float64(pointCost),
+		ReservedPoints:  float64(pointCost),
+		ResultIDs:       []string{},
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
-	if err := insertGenerationTask(ctx, tx, task); err != nil {
+	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
+	if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model}); err != nil {
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		if _, err := tx.ExecContext(ctx, `
-			update xz_point_accounts
-			set available = available - $1,
-				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-			where id = $2
-		`, pointCost, account.ID); err != nil {
+		if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结"); err != nil {
 			return generationTask{}, err
 		}
-		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+	} else {
+		if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RESERVE", pointCost, balanceBefore, balanceAfter, 0, pointCost, "生成任务冻结"); err != nil {
 			return generationTask{}, err
 		}
+	}
+	if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RESERVE", float64(pointCost), nil); err != nil {
+		return generationTask{}, err
+	}
+	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
 	}
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.enqueue", "generation_task", task.ID, "", "", 202, map[string]any{"pointCost": pointCost, "billingReserved": true}); err != nil {
 		return generationTask{}, err
@@ -1211,13 +1292,18 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 	}
 	task.Status = "SUCCEEDED"
+	task.TaskStatus = taskStatusSucceeded
+	task.BillingStatus = billingStatusCaptured
 	task.Progress = 100
 	task.PointCost = pointCost
+	task.CapturedPoints = float64(pointCost)
 	task.Error = nil
 	task.UpdatedAt = now
 	task.WorkerFinishedAt = now
 	task.ResultIDs = []string{}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+	task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
 	count := imageCount(req.Params)
 	for i := 0; i < count; i++ {
 		assetID, err := nextTableID(ctx, tx, "xz_assets", "asset")
@@ -1230,9 +1316,6 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			return generationTask{}, err
 		}
 	}
-	if err := insertGenerationTask(ctx, tx, task); err != nil {
-		return generationTask{}, err
-	}
 	balanceBefore := account.Available
 	balanceAfter := account.Available - pointCost
 	if reserved {
@@ -1241,26 +1324,51 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			fallbackBalance = intValue(task.Params[generationBillingReservationBalanceAfterKey])
 		}
 		balanceBefore, balanceAfter = generationTaskReservationBalances(task, fallbackBalance, pointCost)
+		if authorization.ContextType == contextEnterprise {
+			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "CAPTURE", pointCost, balanceAfter, balanceAfter, pointCost, 0, "生成任务确认扣费"); err != nil {
+				return generationTask{}, err
+			}
+		} else {
+			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+				return generationTask{}, err
+			}
+		}
 	} else {
+		task.QuotedPoints = float64(pointCost)
+		task.ReservedPoints = float64(pointCost)
+		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model}); err != nil {
+			return generationTask{}, err
+		}
 		if authorization.ContextType == contextEnterprise {
 			reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
 			if err != nil {
 				return generationTask{}, err
 			}
 			balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
-		} else {
-			if _, err := tx.ExecContext(ctx, `
-				update xz_point_accounts
-				set available = available - $1,
-					raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-				where id = $2
-			`, pointCost, account.ID); err != nil {
+			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RESERVE", pointCost, balanceBefore, balanceAfter, 0, pointCost, "生成任务冻结"); err != nil {
 				return generationTask{}, err
 			}
-			if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "CAPTURE", pointCost, balanceAfter, balanceAfter, pointCost, 0, "生成任务确认扣费"); err != nil {
+				return generationTask{}, err
+			}
+		} else {
+			reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结")
+			if err != nil {
+				return generationTask{}, err
+			}
+			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, reservedAccount, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
 				return generationTask{}, err
 			}
 		}
+		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RESERVE", float64(pointCost), nil); err != nil {
+			return generationTask{}, err
+		}
+	}
+	if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "CAPTURE", float64(pointCost), nil); err != nil {
+		return generationTask{}, err
+	}
+	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
 	}
 	event, commissions, err := generationBillingArtifactsForTx(ctx, tx, task, balanceBefore, balanceAfter, now)
 	if err != nil {
@@ -1332,18 +1440,17 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 		if account.Available < pointCost {
 			return adminBillingEvent{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 		}
-		balanceBefore, balanceAfter = account.Available, account.Available-pointCost
-		if _, err := tx.ExecContext(ctx, `
-			update xz_point_accounts
-			set available = available - $1,
-				raw = jsonb_set(raw, '{available}', to_jsonb((available - $1)::int), true)
-			where id = $2
-		`, pointCost, account.ID); err != nil {
+		balanceBefore = account.Available
+		walletTask := generationTask{ID: task.TaskID, UserID: userID, TenantID: authorization.TenantID, ModuleCode: modulePPTGeneration, Model: firstNonEmptyString(task.TextModel, "ppt-text-model")}
+		reserved, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, account, "RESERVE", pointCost, "PPT generation reserve")
+		if err != nil {
 			return adminBillingEvent{}, err
 		}
-		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: userID, Available: balanceAfter, Frozen: account.Frozen}); err != nil {
+		captured, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, reserved, "CAPTURE", pointCost, "PPT generation capture")
+		if err != nil {
 			return adminBillingEvent{}, err
 		}
+		balanceAfter = captured.Available
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1415,24 +1522,24 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 				return generationTask{}, err
 			}
 			task.Params = generationBillingRefundParams(task.Params, now, int(before), int(before)+pointCost)
+			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RELEASE", pointCost, int(before), int(before)+pointCost, pointCost, 0, "生成失败解冻"); err != nil {
+				return generationTask{}, err
+			}
 		} else {
 			account, err := pointAccountForUpdate(ctx, tx, task.UserID)
 			if err != nil {
 				return generationTask{}, err
 			}
 			nextAvailable := account.Available + pointCost
-			if _, err := tx.ExecContext(ctx, `
-				update xz_point_accounts
-				set available = available + $1,
-					raw = jsonb_set(raw, '{available}', to_jsonb((available + $1)::int), true)
-				where id = $2
-			`, pointCost, account.ID); err != nil {
-				return generationTask{}, err
-			}
-			if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: task.UserID, Available: nextAvailable, Frozen: account.Frozen}); err != nil {
+			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RELEASE", pointCost, "生成失败解冻"); err != nil {
 				return generationTask{}, err
 			}
 			task.Params = generationBillingRefundParams(task.Params, now, account.Available, nextAvailable)
+		}
+		task.BillingStatus = billingStatusReleased
+		task.ReleasedPoints = float64(pointCost)
+		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RELEASE", float64(pointCost), nil); err != nil {
+			return generationTask{}, err
 		}
 		refunded = true
 	}
@@ -1445,6 +1552,10 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 		return task, tx.Commit()
 	}
 	task.Status = "FAILED"
+	task.TaskStatus = taskStatusFailed
+	if task.BillingStatus == "" {
+		task.BillingStatus = billingStatusBillingFailed
+	}
 	task.Progress = 100
 	task.Error = map[string]any{"message": message}
 	task.FailureReason = message
@@ -1836,6 +1947,9 @@ func applyRechargeSettlementForTx(ctx context.Context, tx *sql.Tx, order *adminO
 	if err := insertPointAccount(ctx, tx, account); err != nil {
 		return err
 	}
+	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "RECHARGE", points, before, account.Available, "RECHARGE_ORDER", order.ID, "订单充值入账"); err != nil {
+		return err
+	}
 	if route.ID != "" && account.Available > route.QuotaLimit {
 		route, err = ensureRechargeImageBackupRouteTx(ctx, tx, order.UserID, account.Available, now)
 		if err != nil {
@@ -1928,7 +2042,11 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	if err != nil {
 		return err
 	}
-	result, err := calculateCommissionSettlement(commerceCtx)
+	engineResult, err := generateCommissionRecordsForCommerceOrderTx(ctx, tx, *order, plan, commerceCtx)
+	if err != nil {
+		return err
+	}
+	result, err := compatibilitySettlementResult(commerceCtx, engineResult)
 	if err != nil {
 		return err
 	}
@@ -1968,12 +2086,6 @@ func commerceContextForOrderTx(ctx context.Context, tx *sql.Tx, order adminOrder
 			if ok {
 				operationCenterID = parent.OperationCenterID
 			}
-		}
-	}
-	if operationCenterID == "" {
-		operationCenterID, err = firstActiveOperationCenterIDTx(ctx, tx)
-		if err != nil {
-			return commissionOrderContext{}, err
 		}
 	}
 	directID := ""
@@ -2060,6 +2172,9 @@ func grantTokensToUserTx(ctx context.Context, tx *sql.Tx, userID string, orderID
 	if err := insertPointAccount(ctx, tx, account); err != nil {
 		return err
 	}
+	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "GRANT", amount, before, account.Available, "COMMERCE_ORDER", orderID+":"+changeType, "商业订单权益发放"); err != nil {
+		return err
+	}
 	record := adminTokenRecord{
 		ID:           "token_" + shortID(orderID+"_"+changeType),
 		UserID:       userID,
@@ -2117,7 +2232,12 @@ func fulfillIdentityForOrderTx(ctx context.Context, tx *sql.Tx, order *adminOrde
 			user.OperationCenterStatus = operationStatusNone
 		}
 		if plan.DurationDays > 0 {
-			user.SubscriptionExpiresAt = time.Now().UTC().Add(time.Duration(plan.DurationDays) * 24 * time.Hour).Format(time.RFC3339Nano)
+			paidAt := time.Now().UTC()
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, now); parseErr == nil {
+				paidAt = parsed.UTC()
+			}
+			_, expiresAt := membershipExtensionWindow(user.SubscriptionExpiresAt, paidAt, int64(plan.DurationDays))
+			user.SubscriptionExpiresAt = expiresAt.Format(time.RFC3339Nano)
 		}
 	case planTypeAgentJoinPackage:
 		user.AgentStatus = agentStatusActive
@@ -2587,28 +2707,29 @@ func (s *postgresStore) CreateAdminCustomer(req adminCustomerMutation) (adminUse
 		return adminUser{}, err
 	}
 	item := adminUser{
-		ID:                 userID,
-		Email:              req.Email,
-		Mobile:             strings.TrimSpace(req.Mobile),
-		WeChatOpenIDs:      appendUniqueString(nil, req.WeChatOpenID),
-		WeChatUnionID:      strings.TrimSpace(req.WeChatUnionID),
-		RegistrationSource: cloneStringMap(req.RegistrationSource),
-		Name:               req.Name,
-		Role:               fallback(req.Role, "MEMBER"),
-		Status:             fallback(req.Status, "ACTIVE"),
-		PlanID:             fallback(req.PlanID, "plan_free"),
-		ReferredBy:         strings.TrimSpace(req.ReferredBy),
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:                    userID,
+		Email:                 req.Email,
+		Mobile:                strings.TrimSpace(req.Mobile),
+		WeChatOpenIDs:         appendUniqueString(nil, req.WeChatOpenID),
+		WeChatUnionID:         strings.TrimSpace(req.WeChatUnionID),
+		RegistrationSource:    cloneStringMap(req.RegistrationSource),
+		Name:                  req.Name,
+		Role:                  fallback(req.Role, "MEMBER"),
+		Status:                fallback(req.Status, "ACTIVE"),
+		PlanID:                fallback(req.PlanID, "plan_free"),
+		ReferredBy:            strings.TrimSpace(req.ReferredBy),
+		SubscriptionExpiresAt: strings.TrimSpace(req.SubscriptionExpiresAt),
+		CreatedAt:             now,
+		UpdatedAt:             now,
 	}
 	if err := insertUser(ctx, tx, item); err != nil {
 		return adminUser{}, err
 	}
-	pointID, err := nextTableID(ctx, tx, "xz_point_accounts", "points")
-	if err != nil {
-		return adminUser{}, err
+	available := 0
+	if req.Available != nil {
+		available = *req.Available
 	}
-	if err := insertPointAccount(ctx, tx, adminPointAccount{ID: pointID, UserID: item.ID, Available: req.Available}); err != nil {
+	if err := upsertPointAccountByUser(ctx, tx, item.ID, available); err != nil {
 		return adminUser{}, err
 	}
 	if err := insertAuditLog(ctx, tx, "", "", "customers.create", "user", item.ID, "", "", 200, map[string]any{"email": item.Email}); err != nil {
@@ -2671,8 +2792,8 @@ func (s *postgresStore) UpdateAdminCustomer(id string, req adminCustomerMutation
 	if err := insertUser(ctx, tx, item); err != nil {
 		return adminUser{}, err
 	}
-	if req.Available >= 0 {
-		if err := upsertPointAccountByUser(ctx, tx, item.ID, req.Available); err != nil {
+	if req.Available != nil {
+		if err := upsertPointAccountByUser(ctx, tx, item.ID, *req.Available); err != nil {
 			return adminUser{}, err
 		}
 	}
@@ -2680,6 +2801,751 @@ func (s *postgresStore) UpdateAdminCustomer(id string, req adminCustomerMutation
 		return adminUser{}, err
 	}
 	return item, tx.Commit()
+}
+
+func (s *postgresStore) UpdateAdminCustomerIdentity(id string, req adminCustomerIdentityMutation) (adminUser, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminUser{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var item adminUser
+	if err := tx.QueryRowContext(ctx, `select raw from xz_users where id = $1 for update`, id).Scan(rawScanner(&item)); err != nil {
+		return adminUser{}, err
+	}
+	if req.ClearMobile {
+		item.Mobile = ""
+	}
+	if req.ClearWeChat {
+		item.WeChatOpenIDs = nil
+		item.WeChatUnionID = ""
+	}
+	if req.Status != "" {
+		item.Status = strings.ToUpper(strings.TrimSpace(req.Status))
+	}
+	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := insertUser(ctx, tx, item); err != nil {
+		return adminUser{}, err
+	}
+	if err := insertAuditLog(ctx, tx, "", "", "customers.identity.update", "user", item.ID, "", "", 200, map[string]any{
+		"clearMobile": req.ClearMobile,
+		"clearWechat": req.ClearWeChat,
+		"status":      req.Status,
+		"reason":      req.Reason,
+	}); err != nil {
+		return adminUser{}, err
+	}
+	return item, tx.Commit()
+}
+
+func (s *postgresStore) CreateAdminAuthMergeRequest(req adminAuthMergeRequestMutation) (adminAuthMergeRequest, error) {
+	req = normalizeAuthMergeRequestMutation(req)
+	if req.PrimaryUserID == "" || req.SecondaryUserID == "" {
+		return adminAuthMergeRequest{}, errors.New("primaryUserId and secondaryUserId are required")
+	}
+	if strings.EqualFold(req.PrimaryUserID, req.SecondaryUserID) {
+		return adminAuthMergeRequest{}, errors.New("merge request requires two different users")
+	}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := tx.QueryContext(ctx, `
+		select raw
+		from xz_auth_account_merge_requests
+		where status in ('PENDING','IN_REVIEW')
+		  and ((primary_user_id=$1 and secondary_user_id=$2) or (primary_user_id=$2 and secondary_user_id=$1))
+		order by created_at desc, id desc
+	`, req.PrimaryUserID, req.SecondaryUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	for rows.Next() {
+		var item adminAuthMergeRequest
+		if err := rows.Scan(rawScanner(&item)); err != nil {
+			_ = rows.Close()
+			return adminAuthMergeRequest{}, err
+		}
+		if sameOpenAuthMergeRequest(item, req) {
+			_ = rows.Close()
+			return item, nil
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id, err := nextTableID(ctx, tx, "xz_auth_account_merge_requests", "auth_merge")
+	if err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	item := adminAuthMergeRequest{
+		ID:              id,
+		PrimaryUserID:   req.PrimaryUserID,
+		SecondaryUserID: req.SecondaryUserID,
+		Mobile:          req.Mobile,
+		WeChatOpenID:    req.WeChatOpenID,
+		WeChatUnionID:   req.WeChatUnionID,
+		ConflictCode:    fallback(req.ConflictCode, "AUTH_ACCOUNT_MERGE_REQUIRED"),
+		Source:          fallback(req.Source, "auth_conflict"),
+		Reason:          req.Reason,
+		Status:          fallback(req.Status, "PENDING"),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Raw:             cloneAnyMap(req.Raw),
+	}
+	if err := insertAuthMergeRequest(ctx, tx, item); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	if err := insertAuditLog(ctx, tx, "", "", "auth.merge_request.create", "auth_merge_request", item.ID, "", "", 200, map[string]any{
+		"primaryUserId":   item.PrimaryUserID,
+		"secondaryUserId": item.SecondaryUserID,
+		"source":          item.Source,
+		"conflictCode":    item.ConflictCode,
+	}); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	return item, tx.Commit()
+}
+
+func (s *postgresStore) ListAdminAuthMergeRequests(userID string) ([]adminAuthMergeRequest, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return nil, err
+	}
+	return s.listAuthMergeRequests(ctx, userID)
+}
+
+func (s *postgresStore) listAuthMergeRequests(ctx context.Context, userID string) ([]adminAuthMergeRequest, error) {
+	userID = strings.TrimSpace(userID)
+	var rows *sql.Rows
+	var err error
+	if userID == "" {
+		rows, err = s.db.QueryContext(ctx, `select raw from xz_auth_account_merge_requests order by created_at desc, id desc`)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `select raw from xz_auth_account_merge_requests where primary_user_id=$1 or secondary_user_id=$1 order by created_at desc, id desc`, userID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminAuthMergeRequest{}
+	for rows.Next() {
+		var item adminAuthMergeRequest
+		if err := rows.Scan(rawScanner(&item)); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *postgresStore) UpdateAdminAuthMergeRequest(id string, req adminAuthMergeRequestMutation) (adminAuthMergeRequest, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var item adminAuthMergeRequest
+	if err := tx.QueryRowContext(ctx, `select raw from xz_auth_account_merge_requests where id=$1 for update`, strings.TrimSpace(id)).Scan(rawScanner(&item)); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	status := normalizeAuthMergeStatus(req.Status, item.Status)
+	if status == "" {
+		return adminAuthMergeRequest{}, errors.New("status is required")
+	}
+	if !validAuthMergeStatus(status) {
+		return adminAuthMergeRequest{}, errors.New("invalid merge request status")
+	}
+	item.Status = status
+	if strings.TrimSpace(req.ReviewComment) != "" {
+		item.ReviewComment = strings.TrimSpace(req.ReviewComment)
+	}
+	if strings.TrimSpace(req.ResolvedBy) != "" {
+		item.ResolvedBy = strings.TrimSpace(req.ResolvedBy)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if authMergeClosedStatus(status) && item.ResolvedAt == "" {
+		item.ResolvedAt = now
+	}
+	item.UpdatedAt = now
+	if err := insertAuthMergeRequest(ctx, tx, item); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	if err := insertAuditLog(ctx, tx, "", "", "auth.merge_request.update", "auth_merge_request", item.ID, "", "", 200, map[string]any{
+		"status":        item.Status,
+		"reviewComment": item.ReviewComment,
+		"resolvedBy":    item.ResolvedBy,
+	}); err != nil {
+		return adminAuthMergeRequest{}, err
+	}
+	return item, tx.Commit()
+}
+
+func (s *postgresStore) PreviewAdminAuthMergeRequest(id string, targetUserID string) (adminAuthMergeRequest, adminAuthMergePreviewResult, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	}
+	data, err := s.AdminData()
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	}
+	item, result, err := previewAdminAuthMergeRequestOnData(&data, id, targetUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if moved, warnings, err := previewPostgresUserOwnershipForAdminAuthMerge(ctx, tx, result.TargetUserID, result.SourceUserID); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	} else {
+		for key, value := range moved {
+			result.Moved[key] += value
+		}
+		result.Moved = compactPositiveCounts(result.Moved)
+		result.Warnings = append(result.Warnings, warnings...)
+	}
+	return item, result, nil
+}
+
+func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMergeExecuteRequest) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	data, err := s.AdminData()
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	updated, result, err := executeAdminAuthMergeRequestOnData(&data, id, req)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	target, source, err := usersForMergeResult(data.Users, result)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	// Persist the source first so its unique login identities (mobile and
+	// WeChat identifiers) are released before they are assigned to the target.
+	// Updating the target first violates the partial unique indexes while the
+	// source row still owns those values.
+	if err := insertUser(ctx, tx, source); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	if err := insertUser(ctx, tx, target); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `delete from xz_user_model_routes where user_id = $1`, result.SourceUserID); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `delete from xz_point_accounts where user_id = $1`, result.SourceUserID); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	var walletTableExists bool
+	if err := tx.QueryRowContext(ctx, `select to_regclass('public.xz_user_wallets') is not null`).Scan(&walletTableExists); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	if walletTableExists {
+		if _, err := tx.ExecContext(ctx, `delete from xz_user_wallets where user_id = $1`, result.SourceUserID); err != nil {
+			return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+		}
+	}
+	for _, item := range data.PointAccounts {
+		if item.UserID == result.TargetUserID {
+			if err := insertPointAccount(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.TokenRecords {
+		if item.UserID == result.TargetUserID {
+			if err := insertTokenRecord(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.Orders {
+		if item.UserID == result.TargetUserID || item.BuyerUserID == result.TargetUserID {
+			if err := insertOrder(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.ChannelAgents {
+		if item.UserID == result.TargetUserID {
+			if err := insertChannelAgent(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.OperationCenters {
+		if item.UserID == result.TargetUserID {
+			if err := insertOperationCenter(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.GenerationTasks {
+		if item.UserID == result.TargetUserID {
+			if err := insertGenerationTask(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.Assets {
+		if item.UserID == result.TargetUserID {
+			if err := insertAsset(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	for _, item := range data.BillingEvents {
+		if item.UserID == result.TargetUserID {
+			if err := insertBillingEvent(ctx, tx, item); err != nil {
+				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+			}
+		}
+	}
+	if moved, err := mergeUserAIStateForAdminAuthMerge(ctx, tx, result.TargetUserID, result.SourceUserID); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	} else if moved > 0 {
+		result.Moved["aiState"] = moved
+	}
+	if moved, warnings, err := migratePostgresUserOwnershipForAdminAuthMerge(ctx, tx, result.TargetUserID, result.SourceUserID); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	} else {
+		for key, value := range moved {
+			result.Moved[key] += value
+		}
+		result.Warnings = append(result.Warnings, warnings...)
+	}
+	if updated.Raw == nil {
+		updated.Raw = map[string]any{}
+	}
+	updated.Raw["executeResult"] = map[string]any{
+		"targetUserId": result.TargetUserID,
+		"sourceUserId": result.SourceUserID,
+		"moved":        result.Moved,
+		"warnings":     result.Warnings,
+	}
+	if err := insertAuthMergeRequest(ctx, tx, updated); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	if err := insertAuditLog(ctx, tx, "", "", "auth.merge_request.execute", "auth_merge_request", updated.ID, "", "", 200, map[string]any{
+		"targetUserId": result.TargetUserID,
+		"sourceUserId": result.SourceUserID,
+		"moved":        result.Moved,
+	}); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	return updated, result, tx.Commit()
+}
+
+func mergeUserAIStateForAdminAuthMerge(ctx context.Context, tx *sql.Tx, targetID string, sourceID string) (int, error) {
+	exists, err := txTableExists(ctx, tx, "xz_ai_state")
+	if err != nil || !exists {
+		return 0, err
+	}
+	target, targetExists, err := selectUserAIStateForMerge(ctx, tx, targetID)
+	if err != nil {
+		return 0, err
+	}
+	source, sourceExists, err := selectUserAIStateForMerge(ctx, tx, sourceID)
+	if err != nil || !sourceExists {
+		return 0, err
+	}
+	if !targetExists {
+		target = userAIState{UserID: targetID}
+	}
+	merged, moved := mergeUserAIStateValues(target, source, targetID)
+	if moved == 0 {
+		return 0, nil
+	}
+	if err := upsertUserAIStateTx(ctx, tx, merged); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `delete from xz_ai_state where user_id = $1`, sourceID); err != nil {
+		return 0, err
+	}
+	return moved, nil
+}
+
+func selectUserAIStateForMerge(ctx context.Context, tx *sql.Tx, userID string) (userAIState, bool, error) {
+	var item userAIState
+	err := tx.QueryRowContext(ctx, `select raw from xz_ai_state where user_id = $1 for update`, userID).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return userAIState{}, false, nil
+	}
+	if err != nil {
+		return userAIState{}, false, err
+	}
+	item.UserID = userID
+	return item, true, nil
+}
+
+func upsertUserAIStateTx(ctx context.Context, tx *sql.Tx, item userAIState) error {
+	_, err := tx.ExecContext(ctx, `
+		insert into xz_ai_state (user_id, favorite_task_ids, hidden_task_ids, favorite_collections, agent_conversations, active_conversation_id, active_collection_id, updated_at, raw)
+		values ($1,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7,$8,$9::jsonb)
+		on conflict (user_id) do update set
+			favorite_task_ids = excluded.favorite_task_ids,
+			hidden_task_ids = excluded.hidden_task_ids,
+			favorite_collections = excluded.favorite_collections,
+			agent_conversations = excluded.agent_conversations,
+			active_conversation_id = excluded.active_conversation_id,
+			active_collection_id = excluded.active_collection_id,
+			updated_at = excluded.updated_at,
+			raw = excluded.raw
+	`, item.UserID, jsonProjection(item.FavoriteTaskIDs), jsonProjection(item.HiddenTaskIDs), jsonProjection(item.FavoriteCollections), jsonProjection(item.AgentConversations), item.ActiveConversationID, item.ActiveCollectionID, item.UpdatedAt, jsonProjection(item))
+	return err
+}
+
+func previewPostgresUserOwnershipForAdminAuthMerge(ctx context.Context, tx *sql.Tx, targetID string, sourceID string) (map[string]int, []string, error) {
+	moved := map[string]int{}
+	warnings := []string{}
+	counts := []struct {
+		key     string
+		table   string
+		columns []string
+		sql     string
+		args    []any
+	}{
+		{key: "aiState", table: "xz_ai_state", columns: []string{"user_id"}, sql: `select count(*) from xz_ai_state where user_id = $1`, args: []any{sourceID}},
+		{key: "tenantOwners", table: "xz_tenants", columns: []string{"owner_user_id"}, sql: `select count(*) from xz_tenants where owner_user_id = $1`, args: []any{sourceID}},
+		{key: "knowledgeBases", table: "xz_knowledge_bases", columns: []string{"owner_user_id", "deleted_at"}, sql: `select count(*) from xz_knowledge_bases where owner_user_id = $1 and deleted_at is null`, args: []any{sourceID}},
+		{key: "knowledgeDocuments", table: "xz_knowledge_documents", columns: []string{"owner_user_id", "deleted_at"}, sql: `select count(*) from xz_knowledge_documents where owner_user_id = $1 and deleted_at is null`, args: []any{sourceID}},
+		{key: "knowledgeDocumentVersions", table: "xz_knowledge_document_versions", columns: []string{"created_by"}, sql: `select count(*) from xz_knowledge_document_versions where created_by = $1`, args: []any{sourceID}},
+		{key: "knowledgeAgents", table: "xz_ai_agents", columns: []string{"owner_user_id", "deleted_at"}, sql: `select count(*) from xz_ai_agents where owner_user_id = $1 and deleted_at is null`, args: []any{sourceID}},
+		{key: "knowledgeAgentConversations", table: "xz_ai_agent_conversations", columns: []string{"user_id", "deleted_at"}, sql: `select count(*) from xz_ai_agent_conversations where user_id = $1 and deleted_at is null`, args: []any{sourceID}},
+		{key: "tenantJoinRequests", table: "xz_tenant_join_requests", columns: []string{"applicant_user_id"}, sql: `select count(*) from xz_tenant_join_requests where applicant_user_id = $1`, args: []any{sourceID}},
+		{key: "userRoles", table: "xz_user_roles", columns: []string{"user_id"}, sql: `select count(*) from xz_user_roles where user_id = $1`, args: []any{sourceID}},
+		{key: "userRoleContext", table: "xz_user_role_context", columns: []string{"user_id"}, sql: `select count(*) from xz_user_role_context where user_id = $1`, args: []any{sourceID}},
+	}
+	for _, item := range counts {
+		count, skipped, err := countIfTableColumnsExist(ctx, tx, item.table, item.columns, item.sql, item.args...)
+		if err != nil {
+			return nil, nil, err
+		}
+		if skipped {
+			warnings = append(warnings, fmt.Sprintf("%s preview skipped because table or columns are not available", item.key))
+			continue
+		}
+		if count > 0 {
+			moved[item.key] = count
+		}
+	}
+	if exists, err := txTableExists(ctx, tx, "xz_tenant_members"); err != nil {
+		return nil, nil, err
+	} else if exists {
+		count, err := countRows(ctx, tx, `
+			select count(*)
+			from xz_tenant_members member
+			where member.user_id = $2
+			  and not exists (
+			    select 1 from xz_tenant_members target_member
+			    where target_member.tenant_id = member.tenant_id and target_member.user_id = $1
+			  )
+		`, targetID, sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if count > 0 {
+			moved["tenantMembers"] = count
+		}
+		conflicts, err := countRows(ctx, tx, `
+			select count(*)
+			from xz_tenant_members member
+			where member.user_id = $2
+			  and exists (
+			    select 1 from xz_tenant_members target_member
+			    where target_member.tenant_id = member.tenant_id and target_member.user_id = $1
+			  )
+		`, targetID, sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if conflicts > 0 {
+			moved["tenantMemberConflictsDisabled"] = conflicts
+			warnings = append(warnings, "source tenant memberships with existing target memberships will be disabled instead of overwritten")
+		}
+	}
+	return moved, warnings, nil
+}
+
+func migratePostgresUserOwnershipForAdminAuthMerge(ctx context.Context, tx *sql.Tx, targetID string, sourceID string) (map[string]int, []string, error) {
+	moved := map[string]int{}
+	warnings := []string{}
+	updates := []struct {
+		key     string
+		table   string
+		columns []string
+		sql     string
+		args    []any
+	}{
+		{key: "tenantOwners", table: "xz_tenants", columns: []string{"owner_user_id", "updated_at"}, sql: `update xz_tenants set owner_user_id = $1, updated_at = now() where owner_user_id = $2`, args: []any{targetID, sourceID}},
+		{key: "knowledgeBases", table: "xz_knowledge_bases", columns: []string{"owner_user_id", "updated_at", "deleted_at"}, sql: `update xz_knowledge_bases set owner_user_id = $1, updated_at = now() where owner_user_id = $2 and deleted_at is null`, args: []any{targetID, sourceID}},
+		{key: "knowledgeDocuments", table: "xz_knowledge_documents", columns: []string{"owner_user_id", "updated_at", "deleted_at"}, sql: `update xz_knowledge_documents set owner_user_id = $1, updated_at = now() where owner_user_id = $2 and deleted_at is null`, args: []any{targetID, sourceID}},
+		{key: "knowledgeDocumentVersions", table: "xz_knowledge_document_versions", columns: []string{"created_by"}, sql: `update xz_knowledge_document_versions set created_by = $1 where created_by = $2`, args: []any{targetID, sourceID}},
+		{key: "knowledgeAgents", table: "xz_ai_agents", columns: []string{"owner_user_id", "updated_at", "deleted_at"}, sql: `update xz_ai_agents set owner_user_id = $1, updated_at = now() where owner_user_id = $2 and deleted_at is null`, args: []any{targetID, sourceID}},
+		{key: "knowledgeAgentConversations", table: "xz_ai_agent_conversations", columns: []string{"user_id", "updated_at", "deleted_at"}, sql: `update xz_ai_agent_conversations set user_id = $1, updated_at = now() where user_id = $2 and deleted_at is null`, args: []any{targetID, sourceID}},
+		{key: "tenantJoinRequests", table: "xz_tenant_join_requests", columns: []string{"applicant_user_id", "updated_at"}, sql: `update xz_tenant_join_requests set applicant_user_id = $1, updated_at = now() where applicant_user_id = $2`, args: []any{targetID, sourceID}},
+	}
+	for _, update := range updates {
+		count, skipped, err := execIfTableColumnsExist(ctx, tx, update.table, update.columns, update.sql, update.args...)
+		if err != nil {
+			return nil, nil, err
+		}
+		if skipped {
+			warnings = append(warnings, fmt.Sprintf("%s migration skipped because table or columns are not available", update.key))
+			continue
+		}
+		if count > 0 {
+			moved[update.key] = count
+		}
+	}
+
+	if exists, err := txTableExists(ctx, tx, "xz_tenant_members"); err != nil {
+		return nil, nil, err
+	} else if exists {
+		hasMemberStatus, err := txColumnExists(ctx, tx, "xz_tenant_members", "member_status")
+		if err != nil {
+			return nil, nil, err
+		}
+		count, err := execRowsAffected(ctx, tx, `
+			update xz_tenant_members member
+			set user_id = $1, updated_at = now()
+			where member.user_id = $2
+			  and not exists (
+			    select 1 from xz_tenant_members target_member
+			    where target_member.tenant_id = member.tenant_id and target_member.user_id = $1
+			  )
+		`, targetID, sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if count > 0 {
+			moved["tenantMembers"] = count
+		}
+		disableSQL := `
+			update xz_tenant_members member
+			set status = 'DISABLED', updated_at = now()
+			where member.user_id = $2
+			  and exists (
+			    select 1 from xz_tenant_members target_member
+			    where target_member.tenant_id = member.tenant_id and target_member.user_id = $1
+			  )
+		`
+		if hasMemberStatus {
+			disableSQL = `
+				update xz_tenant_members member
+				set status = 'DISABLED', member_status = 'MERGED', disabled_at = now(), disabled_by = $1, updated_at = now()
+				where member.user_id = $2
+				  and exists (
+				    select 1 from xz_tenant_members target_member
+				    where target_member.tenant_id = member.tenant_id and target_member.user_id = $1
+				  )
+			`
+		}
+		disabled, err := execRowsAffected(ctx, tx, disableSQL, targetID, sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if disabled > 0 {
+			moved["tenantMemberConflictsDisabled"] = disabled
+			warnings = append(warnings, "source tenant memberships with existing target memberships were disabled instead of overwritten")
+		}
+	}
+
+	if exists, err := txTableExists(ctx, tx, "xz_user_roles"); err != nil {
+		return nil, nil, err
+	} else if exists {
+		count, err := execRowsAffected(ctx, tx, `
+			insert into xz_user_roles (user_id, tenant_id, organization_id, role, status, assigned_at, updated_at)
+			select $1, tenant_id, organization_id, role, status, assigned_at, now()
+			from xz_user_roles
+			where user_id = $2
+			on conflict (user_id, tenant_id, organization_id, role)
+			do update set status = excluded.status, updated_at = excluded.updated_at
+		`, targetID, sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if count > 0 {
+			moved["userRoles"] = count
+		}
+		if _, err := tx.ExecContext(ctx, `update xz_user_roles set status = 'DISABLED', updated_at = now() where user_id = $1`, sourceID); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	if exists, err := txTableExists(ctx, tx, "xz_user_role_context"); err != nil {
+		return nil, nil, err
+	} else if exists {
+		hasContextType, err := txColumnExists(ctx, tx, "xz_user_role_context", "context_type")
+		if err != nil {
+			return nil, nil, err
+		}
+		contextSQL := `
+			insert into xz_user_role_context (user_id, tenant_id, organization_id, current_role_code, updated_at)
+			select $1, tenant_id, organization_id, current_role_code, now()
+			from xz_user_role_context
+			where user_id = $2
+			on conflict (user_id) do nothing
+		`
+		if hasContextType {
+			contextSQL = `
+				insert into xz_user_role_context (user_id, tenant_id, organization_id, current_role_code, updated_at, context_type)
+				select $1, tenant_id, organization_id, current_role_code, now(), context_type
+				from xz_user_role_context
+				where user_id = $2
+				on conflict (user_id) do nothing
+			`
+		}
+		count, err := execRowsAffected(ctx, tx, contextSQL, targetID, sourceID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if count > 0 {
+			moved["userRoleContext"] = count
+		}
+		if _, err := tx.ExecContext(ctx, `delete from xz_user_role_context where user_id = $1`, sourceID); err != nil {
+			return nil, nil, err
+		}
+	}
+	return moved, warnings, nil
+}
+
+func execIfTableExists(ctx context.Context, tx *sql.Tx, table string, query string, args ...any) (int, error) {
+	exists, err := txTableExists(ctx, tx, table)
+	if err != nil || !exists {
+		return 0, err
+	}
+	return execRowsAffected(ctx, tx, query, args...)
+}
+
+func execIfTableColumnsExist(ctx context.Context, tx *sql.Tx, table string, columns []string, query string, args ...any) (int, bool, error) {
+	ready, err := txTableColumnsExist(ctx, tx, table, columns)
+	if err != nil || !ready {
+		return 0, !ready, err
+	}
+	count, err := execRowsAffected(ctx, tx, query, args...)
+	return count, false, err
+}
+
+func countIfTableExists(ctx context.Context, tx *sql.Tx, table string, query string, args ...any) (int, error) {
+	exists, err := txTableExists(ctx, tx, table)
+	if err != nil || !exists {
+		return 0, err
+	}
+	return countRows(ctx, tx, query, args...)
+}
+
+func countIfTableColumnsExist(ctx context.Context, tx *sql.Tx, table string, columns []string, query string, args ...any) (int, bool, error) {
+	ready, err := txTableColumnsExist(ctx, tx, table, columns)
+	if err != nil || !ready {
+		return 0, !ready, err
+	}
+	count, err := countRows(ctx, tx, query, args...)
+	return count, false, err
+}
+
+func txTableExists(ctx context.Context, tx *sql.Tx, table string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `select to_regclass($1) is not null`, "public."+table).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func txTableColumnsExist(ctx context.Context, tx *sql.Tx, table string, columns []string) (bool, error) {
+	exists, err := txTableExists(ctx, tx, table)
+	if err != nil || !exists {
+		return false, err
+	}
+	for _, column := range columns {
+		column = strings.TrimSpace(column)
+		if column == "" {
+			continue
+		}
+		exists, err := txColumnExists(ctx, tx, table, column)
+		if err != nil || !exists {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func txColumnExists(ctx context.Context, tx *sql.Tx, table string, column string) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `
+		select exists(
+			select 1
+			from information_schema.columns
+			where table_schema = 'public' and table_name = $1 and column_name = $2
+		)
+	`, table, column).Scan(&exists)
+	return exists, err
+}
+
+func countRows(ctx context.Context, tx *sql.Tx, query string, args ...any) (int, error) {
+	var count int
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func execRowsAffected(ctx context.Context, tx *sql.Tx, query string, args ...any) (int, error) {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+func usersForMergeResult(users []adminUser, result adminAuthMergeExecuteResult) (adminUser, adminUser, error) {
+	var target, source adminUser
+	for _, user := range users {
+		if user.ID == result.TargetUserID {
+			target = user
+		}
+		if user.ID == result.SourceUserID {
+			source = user
+		}
+	}
+	if target.ID == "" || source.ID == "" {
+		return adminUser{}, adminUser{}, errors.New("merged users not found")
+	}
+	return target, source, nil
 }
 
 func (s *postgresStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adminChannelAgent, adminUser, error) {
@@ -2826,25 +3692,33 @@ func (s *postgresStore) UpdateAdminPlan(id string, req adminPlanMutation) (admin
 	if req.Name != "" {
 		item.Name = req.Name
 	}
-	if req.PriceCents >= 0 {
-		item.Price = req.PriceCents
-		item.PriceCents = req.PriceCents
+	if req.PriceCents != nil {
+		item.Price = *req.PriceCents
+		item.PriceCents = *req.PriceCents
 	}
-	if req.GrantPoints >= 0 {
-		item.Points = req.GrantPoints
-		item.GrantPoints = req.GrantPoints
+	if req.GrantPoints != nil {
+		item.Points = *req.GrantPoints
+		item.GrantPoints = *req.GrantPoints
 	}
-	if req.DurationDays > 0 {
-		item.DurationDays = req.DurationDays
+	if req.DurationDays != nil {
+		item.DurationDays = *req.DurationDays
 	}
-	if req.Concurrency > 0 {
-		item.Concurrency = req.Concurrency
+	if req.Concurrency != nil {
+		item.Concurrency = *req.Concurrency
 	}
-	item.Active = req.Active
+	if req.Active != nil {
+		item.Active = *req.Active
+	}
 	if req.Entitlements != nil {
 		item.Entitlements = req.Entitlements
 	}
 	if err := insertPlan(ctx, tx, item); err != nil {
+		return adminPlan{}, err
+	}
+	if err := insertAuditLog(ctx, tx, "", "", "plans.update", "plan", item.ID, "", "", 200, map[string]any{
+		"priceCents": item.PriceCents, "grantPoints": item.GrantPoints, "durationDays": item.DurationDays,
+		"concurrency": item.Concurrency, "active": item.Active,
+	}); err != nil {
 		return adminPlan{}, err
 	}
 	return item, tx.Commit()
@@ -2920,7 +3794,19 @@ func (s *postgresStore) applyAICapabilityConfig(ctx context.Context, data adminP
 }
 
 func (s *postgresStore) aiCapabilityAdminData(ctx context.Context) (adminPlatformData, error) {
-	return s.applyAICapabilityConfig(ctx, seedAdminData())
+	data, err := s.applyAICapabilityConfig(ctx, seedAdminData())
+	if err != nil {
+		return data, err
+	}
+	data.BillingRuleVersions, err = s.listBillingRuleVersionsContext(ctx)
+	if err != nil {
+		return data, err
+	}
+	data.ProviderCosts, err = s.listProviderCostsContext(ctx)
+	if err != nil {
+		return data, err
+	}
+	return applyPublishedBillingRulesV1(data), nil
 }
 
 func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data adminPlatformData) error {
@@ -3396,38 +4282,18 @@ func (s *postgresStore) UpdateAdminTenantModuleLimit(id string, req adminTenantM
 	return updated, err
 }
 
-func (s *postgresStore) UpdateAdminBillingRule(id string, req adminBillingRuleMutation) (adminBillingRule, error) {
-	var updated adminBillingRule
-	err := s.updateAICapabilityAdminData(func(data *adminPlatformData) error {
-		for i := range data.BillingRules {
-			if data.BillingRules[i].ID != id {
-				continue
-			}
-			if req.BillingType != "" {
-				data.BillingRules[i].BillingType = req.BillingType
-			}
-			if req.BasePrice >= 0 {
-				data.BillingRules[i].BasePrice = req.BasePrice
-			}
-			if req.CostPrice >= 0 {
-				data.BillingRules[i].CostPrice = req.CostPrice
-			}
-			if req.CurrencyType != "" {
-				data.BillingRules[i].CurrencyType = req.CurrencyType
-			}
-			if req.ParameterMultiplier != nil {
-				data.BillingRules[i].ParameterMultiplier = req.ParameterMultiplier
-			}
-			if req.Status != "" {
-				data.BillingRules[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
-			}
-			data.BillingRules[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			updated = normalizeBillingRuleAliases(data.BillingRules[i])
-			return nil
-		}
-		return fmt.Errorf("billing rule not found: %s", id)
+func (s *postgresStore) UpdateAdminPlanCapabilities(planID string, req adminPlanCapabilitiesMutation) error {
+	return s.updateAICapabilityAdminData(func(data *adminPlatformData) error {
+		return applyAdminPlanCapabilities(data, planID, req)
 	})
-	return updated, err
+}
+
+func (s *postgresStore) UpdateAdminBillingRule(id string, req adminBillingRuleMutation) (adminBillingRule, error) {
+	draft, err := s.createBillingRuleDraft(id, req)
+	if err != nil {
+		return adminBillingRule{}, err
+	}
+	return billingRuleVersionProjection(draft), nil
 }
 
 func (s *postgresStore) UpdateMarketingCommissionRule(id string, req adminCommissionRuleMutation) (adminCommissionRule, error) {
@@ -3826,6 +4692,37 @@ func (s *postgresStore) listOperationCenters(ctx context.Context) ([]adminOperat
 	return items, rows.Err()
 }
 
+func (s *postgresStore) listCustomerRelations(ctx context.Context) ([]adminCustomerRelation, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		select id, customer_user_id, coalesce(direct_agent_id, ''),
+		       coalesce(parent_agent_id, ''), coalesce(operation_center_id, ''),
+		       bind_type, bind_start_at, status, created_at, updated_at
+		from xz_customer_relations
+		where upper(coalesce(status, 'ACTIVE')) <> 'DELETED'
+		order by bind_start_at desc, created_at desc, id desc
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []adminCustomerRelation{}
+	for rows.Next() {
+		var item adminCustomerRelation
+		var bindStartAt, createdAt, updatedAt time.Time
+		if err := rows.Scan(
+			&item.ID, &item.CustomerUserID, &item.DirectAgentID, &item.ParentAgentID,
+			&item.OperationCenterID, &item.BindType, &bindStartAt, &item.Status, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.BindStartAt = bindStartAt.UTC().Format(time.RFC3339Nano)
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339Nano)
+		item.UpdatedAt = updatedAt.UTC().Format(time.RFC3339Nano)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *postgresStore) listCommissions(ctx context.Context) ([]adminCommission, error) {
 	rows, err := s.db.QueryContext(ctx, `select raw from xz_commissions order by created_at desc, id desc`)
 	if err != nil {
@@ -4008,10 +4905,10 @@ func (s *postgresStore) listAPIKeys(ctx context.Context) ([]adminAPIKey, error) 
 
 func insertUser(ctx context.Context, tx *sql.Tx, item adminUser) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_users (id, email, mobile, wechat_union_id, name, role, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)
-		on conflict (id) do update set email=excluded.email, mobile=excluded.mobile, wechat_union_id=excluded.wechat_union_id, name=excluded.name, role=excluded.role, status=excluded.status, password_hash=excluded.password_hash, plan_id=excluded.plan_id, referred_by=excluded.referred_by, subscription_expires_at=excluded.subscription_expires_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
-	`, item.ID, item.Email, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatUnionID), item.Name, item.Role, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		insert into xz_users (id, email, mobile, wechat_union_id, name, role, member_level, agent_status, operation_center_status, status, password_hash, plan_id, referred_by, subscription_expires_at, created_at, updated_at, raw)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb)
+		on conflict (id) do update set email=excluded.email, mobile=excluded.mobile, wechat_union_id=excluded.wechat_union_id, name=excluded.name, role=excluded.role, member_level=excluded.member_level, agent_status=excluded.agent_status, operation_center_status=excluded.operation_center_status, status=excluded.status, password_hash=excluded.password_hash, plan_id=excluded.plan_id, referred_by=excluded.referred_by, subscription_expires_at=excluded.subscription_expires_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
+	`, item.ID, item.Email, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatUnionID), item.Name, item.Role, item.MemberLevel, item.AgentStatus, item.OperationCenterStatus, item.Status, item.PasswordHash, item.PlanID, item.ReferredBy, item.SubscriptionExpiresAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 	if err != nil {
 		return err
 	}
@@ -4032,6 +4929,15 @@ func insertUserModelRoute(ctx context.Context, tx *sql.Tx, userID string, route 
 		values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14::jsonb)
 		on conflict (id) do update set user_id=excluded.user_id, provider=excluded.provider, channel_id=excluded.channel_id, channel=excluded.channel, api_key_id=excluded.api_key_id, key_prefix=excluded.key_prefix, group_name=excluded.group_name, models=excluded.models, quota_limit=excluded.quota_limit, quota_used=excluded.quota_used, status=excluded.status, updated_at=excluded.updated_at, raw=excluded.raw
 	`, route.ID, userID, route.Provider, route.ChannelID, route.Channel, route.APIKeyID, route.KeyPrefix, route.GroupName, jsonProjection(route.Models), route.QuotaLimit, route.QuotaUsed, route.Status, route.UpdatedAt, jsonProjection(route))
+	return err
+}
+
+func insertAuthMergeRequest(ctx context.Context, tx *sql.Tx, item adminAuthMergeRequest) error {
+	_, err := tx.ExecContext(ctx, `
+		insert into xz_auth_account_merge_requests (id, primary_user_id, secondary_user_id, mobile, wechat_open_id, wechat_union_id, conflict_code, source, status, reason, review_comment, resolved_by, resolved_at, created_at, updated_at, raw)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
+		on conflict (id) do update set primary_user_id=excluded.primary_user_id, secondary_user_id=excluded.secondary_user_id, mobile=excluded.mobile, wechat_open_id=excluded.wechat_open_id, wechat_union_id=excluded.wechat_union_id, conflict_code=excluded.conflict_code, source=excluded.source, status=excluded.status, reason=excluded.reason, review_comment=excluded.review_comment, resolved_by=excluded.resolved_by, resolved_at=excluded.resolved_at, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
+	`, item.ID, item.PrimaryUserID, item.SecondaryUserID, strings.TrimSpace(item.Mobile), strings.TrimSpace(item.WeChatOpenID), strings.TrimSpace(item.WeChatUnionID), item.ConflictCode, item.Source, item.Status, item.Reason, item.ReviewComment, item.ResolvedBy, item.ResolvedAt, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 	return err
 }
 
@@ -4064,13 +4970,25 @@ func upsertPointAccountByUser(ctx context.Context, tx *sql.Tx, userID string, av
 		if idErr != nil {
 			return idErr
 		}
-		return insertPointAccount(ctx, tx, adminPointAccount{ID: id, UserID: userID, Available: available})
+		item = adminPointAccount{ID: id, UserID: userID, Available: available}
+		if err := insertPointAccount(ctx, tx, item); err != nil {
+			return err
+		}
+		return insertAccountBalanceLedgerV1(ctx, tx, item, "ADJUSTMENT", available, 0, available, "ADMIN_BALANCE", userID+":"+time.Now().UTC().Format(time.RFC3339Nano), "后台初始余额设置")
 	}
 	if err != nil {
 		return err
 	}
+	before := item.Available
+	delta := available - before
+	if delta < 0 {
+		delta = -delta
+	}
 	item.Available = available
-	return insertPointAccount(ctx, tx, item)
+	if err := insertPointAccount(ctx, tx, item); err != nil {
+		return err
+	}
+	return insertAccountBalanceLedgerV1(ctx, tx, item, "ADJUSTMENT", delta, before, available, "ADMIN_BALANCE", userID+":"+time.Now().UTC().Format(time.RFC3339Nano), "后台余额调整")
 }
 
 func insertTokenRecord(ctx context.Context, tx *sql.Tx, item adminTokenRecord) error {
@@ -4084,10 +5002,10 @@ func insertTokenRecord(ctx context.Context, tx *sql.Tx, item adminTokenRecord) e
 
 func insertChannelAgent(ctx context.Context, tx *sql.Tx, item adminChannelAgent) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_channel_agents (id, user_id, parent_id, level, status, invite_code, created_at, updated_at, raw)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
-		on conflict (id) do update set user_id=excluded.user_id, parent_id=excluded.parent_id, level=excluded.level, status=excluded.status, invite_code=excluded.invite_code, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
-	`, item.ID, item.UserID, item.ParentID, item.Level, item.Status, item.InviteCode, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
+		insert into xz_channel_agents (id, user_id, parent_id, operation_center_id, level, status, invite_code, join_order_id, join_fee_cents, token_rights_amount, created_at, updated_at, raw)
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+		on conflict (id) do update set user_id=excluded.user_id, parent_id=excluded.parent_id, operation_center_id=excluded.operation_center_id, level=excluded.level, status=excluded.status, invite_code=excluded.invite_code, join_order_id=excluded.join_order_id, join_fee_cents=excluded.join_fee_cents, token_rights_amount=excluded.token_rights_amount, created_at=excluded.created_at, updated_at=excluded.updated_at, raw=excluded.raw
+	`, item.ID, item.UserID, item.ParentID, item.OperationCenterID, item.Level, item.Status, item.InviteCode, item.JoinOrderID, item.JoinFeeCents, item.TokenRightsAmount, item.CreatedAt, item.UpdatedAt, jsonProjection(item))
 	if err != nil {
 		return err
 	}
@@ -4565,16 +5483,35 @@ func listAPIKeysForTx(ctx context.Context, tx *sql.Tx) ([]adminAPIKey, error) {
 
 func insertGenerationTask(ctx context.Context, tx *sql.Tx, item generationTask) error {
 	_, err := tx.ExecContext(ctx, `
-		insert into xz_generation_tasks (id, user_id, tenant_id, organization_id, billing_account_type, billing_account_id, module_code, type, model, billing_type, status, progress, point_cost, prompt, params, result_ids, error, created_at, updated_at, worker_finished_at, raw)
-		values ($1,$2,nullif($3,''),nullif($4,''),$5,nullif($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,$18,$19,$20,$21::jsonb)
-		on conflict (id) do update set user_id=excluded.user_id, tenant_id=excluded.tenant_id, organization_id=excluded.organization_id, billing_account_type=excluded.billing_account_type, billing_account_id=excluded.billing_account_id, module_code=excluded.module_code, type=excluded.type, model=excluded.model, billing_type=excluded.billing_type, status=excluded.status, progress=excluded.progress, point_cost=excluded.point_cost, prompt=excluded.prompt, params=excluded.params, result_ids=excluded.result_ids, error=excluded.error, created_at=excluded.created_at, updated_at=excluded.updated_at, worker_finished_at=excluded.worker_finished_at, raw=excluded.raw
-	`, item.ID, item.UserID, item.TenantID, item.OrganizationID, firstNonEmptyString(item.BillingAccountType, contextPersonal), item.BillingAccountID, item.ModuleCode, item.Type, item.Model, item.BillingType, item.Status, item.Progress, item.PointCost, item.Prompt, jsonProjection(item.Params), jsonProjection(item.ResultIDs), jsonProjection(item.Error), item.CreatedAt, item.UpdatedAt, item.WorkerFinishedAt, jsonProjection(item))
+		insert into xz_generation_tasks (
+			id,user_id,tenant_id,organization_id,billing_account_type,billing_account_id,module_code,type,model,billing_type,
+			status,progress,point_cost,prompt,params,result_ids,error,created_at,updated_at,worker_finished_at,
+			client_request_id,task_status,billing_status,billing_rule_version_id,quoted_points,reserved_points,captured_points,
+			released_points,refunded_points,supplier_cost,estimated_margin,provider_channel,raw
+		) values (
+			$1,$2,nullif($3,''),nullif($4,''),$5,nullif($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,$18,$19,$20,
+			nullif($21,''),$22,$23,nullif($24,''),$25,$26,$27,$28,$29,$30,$31,nullif($32,''),$33::jsonb
+		)
+		on conflict (id) do update set
+			user_id=excluded.user_id,tenant_id=excluded.tenant_id,organization_id=excluded.organization_id,billing_account_type=excluded.billing_account_type,
+			billing_account_id=excluded.billing_account_id,module_code=excluded.module_code,type=excluded.type,model=excluded.model,billing_type=excluded.billing_type,
+			status=excluded.status,progress=excluded.progress,point_cost=excluded.point_cost,prompt=excluded.prompt,params=excluded.params,result_ids=excluded.result_ids,
+			error=excluded.error,created_at=excluded.created_at,updated_at=excluded.updated_at,worker_finished_at=excluded.worker_finished_at,
+			client_request_id=coalesce(excluded.client_request_id,xz_generation_tasks.client_request_id),task_status=excluded.task_status,billing_status=excluded.billing_status,
+			billing_rule_version_id=coalesce(excluded.billing_rule_version_id,xz_generation_tasks.billing_rule_version_id),quoted_points=excluded.quoted_points,
+			reserved_points=excluded.reserved_points,captured_points=excluded.captured_points,released_points=excluded.released_points,refunded_points=excluded.refunded_points,
+			supplier_cost=coalesce(excluded.supplier_cost,xz_generation_tasks.supplier_cost),estimated_margin=coalesce(excluded.estimated_margin,xz_generation_tasks.estimated_margin),
+			provider_channel=excluded.provider_channel,raw=excluded.raw
+	`, item.ID, item.UserID, item.TenantID, item.OrganizationID, firstNonEmptyString(item.BillingAccountType, contextPersonal), item.BillingAccountID, item.ModuleCode, item.Type, item.Model, item.BillingType,
+		item.Status, item.Progress, item.PointCost, item.Prompt, jsonProjection(item.Params), jsonProjection(item.ResultIDs), jsonProjection(item.Error), item.CreatedAt, item.UpdatedAt, item.WorkerFinishedAt,
+		item.ClientRequestID, firstNonEmptyString(item.TaskStatus, canonicalTaskStatus(item.Status)), firstNonEmptyString(item.BillingStatus, billingStatusUnquoted), item.BillingRuleVersionID,
+		item.QuotedPoints, item.ReservedPoints, item.CapturedPoints, item.ReleasedPoints, item.RefundedPoints, item.SupplierCost, item.EstimatedMargin, item.ProviderChannel, jsonProjection(item))
 	return err
 }
 
 func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (generationTask, error) {
 	var item generationTask
-	err := tx.QueryRowContext(ctx, `select raw from xz_generation_tasks where id = $1 for update`, id).Scan(rawScanner(&item))
+	err := tx.QueryRowContext(ctx, `select raw,coalesce(client_request_id,''),task_status,billing_status,coalesce(billing_rule_version_id,''),quoted_points,reserved_points,captured_points,released_points,refunded_points,supplier_cost,estimated_margin,coalesce(provider_channel,'') from xz_generation_tasks where id = $1 for update`, id).Scan(rawScanner(&item), &item.ClientRequestID, &item.TaskStatus, &item.BillingStatus, &item.BillingRuleVersionID, &item.QuotedPoints, &item.ReservedPoints, &item.CapturedPoints, &item.ReleasedPoints, &item.RefundedPoints, &item.SupplierCost, &item.EstimatedMargin, &item.ProviderChannel)
 	return item, err
 }
 
@@ -4596,7 +5533,13 @@ func pointAccountForUpdate(ctx context.Context, tx *sql.Tx, userID string) (admi
 			return adminPointAccount{}, idErr
 		}
 		item = adminPointAccount{ID: id, UserID: userID, Available: defaultPointsAvailable}
-		return item, insertPointAccount(ctx, tx, item)
+		if err := insertPointAccount(ctx, tx, item); err != nil {
+			return adminPointAccount{}, err
+		}
+		if err := insertAccountBalanceLedgerV1(ctx, tx, item, "GRANT", defaultPointsAvailable, 0, defaultPointsAvailable, "SYSTEM_DEFAULT", userID, "系统默认点数赠送"); err != nil {
+			return adminPointAccount{}, err
+		}
+		return item, nil
 	}
 	return item, err
 }
@@ -5008,7 +5951,7 @@ func getWithdrawalForUpdate(ctx context.Context, tx *sql.Tx, id string) (adminWi
 }
 
 func nextTableID(ctx context.Context, tx *sql.Tx, table string, prefix string) (string, error) {
-	allowed := map[string]bool{"xz_users": true, "xz_point_accounts": true, "xz_orders": true, "xz_channel_agents": true, "xz_operation_centers": true, "xz_commissions": true, "xz_token_records": true, "xz_billing_events": true, "xz_withdrawals": true, "xz_generation_tasks": true, "xz_assets": true, "xz_audit_logs": true, "xz_operation_logs": true, "xz_backup_runs": true}
+	allowed := map[string]bool{"xz_users": true, "xz_auth_account_merge_requests": true, "xz_point_accounts": true, "xz_orders": true, "xz_channel_agents": true, "xz_operation_centers": true, "xz_commissions": true, "xz_token_records": true, "xz_billing_events": true, "xz_withdrawals": true, "xz_generation_tasks": true, "xz_assets": true, "xz_audit_logs": true, "xz_operation_logs": true, "xz_backup_runs": true}
 	if !allowed[table] {
 		return "", fmt.Errorf("unsupported id table: %s", table)
 	}

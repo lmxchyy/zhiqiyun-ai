@@ -72,7 +72,7 @@ const wxml = `<view class="page">
     <button class="button primary" loading="{{passwordLoading}}" disabled="{{busy}}" bindtap="passwordLogin">
       {{passwordText}}
     </button>
-    <button class="button wechat" loading="{{wechatLoading}}" disabled="{{busy}}" bindtap="realWxLogin">
+    <button class="button wechat" loading="{{wechatLoading}}" disabled="{{busy}}" open-type="getPhoneNumber" bindgetphonenumber="realWxPhoneLogin">
       {{wechatText}}
     </button>
 ${enableMockLogin ? `    <button class="button mock" loading="{{mockLoading}}" disabled="{{busy}}" bindtap="mockLogin">
@@ -268,9 +268,9 @@ ${enableMockLogin ? `  async mockLogin() {
     this.setBusy("mockLoading", true);
     this.setStatus("正在使用 mock-devtools-code 调用后端...", "loading");
     try {
-      const auth = await api("/api/v1/auth/wechat-mini-program/login", {
+      const auth = await api("/api/v1/auth/wechat/phone-login", {
         method: "POST",
-        body: JSON.stringify({ code: "mock-devtools-code" })
+        body: JSON.stringify({ wxLoginCode: "mock-devtools-code", phoneCode: "mock-phone-code" })
       });
       await this.completeLogin(auth, "模拟登录");
     } catch (error) {
@@ -282,8 +282,15 @@ ${enableMockLogin ? `  async mockLogin() {
     this.setStatus("模拟登录未启用", "error");
   },`}
 
-  realWxLogin() {
+  realWxPhoneLogin(event) {
     if (this.data.busy) return;
+    const detail = event && event.detail ? event.detail : {};
+    const phoneCode = String(detail.code || "").trim();
+    const errMsg = String(detail.errMsg || "");
+    if (!phoneCode || !errMsg.toLowerCase().includes("ok")) {
+      this.setStatus("需要授权手机号后才能微信登录", "error");
+      return;
+    }
     this.setBusy("wechatLoading", true);
     this.setStatus("正在调用 wx.login...", "loading");
     wx.login({
@@ -295,9 +302,9 @@ ${enableMockLogin ? `  async mockLogin() {
         }
         this.setStatus("已获取微信 code，正在调用后端...", "loading");
         try {
-          const auth = await api("/api/v1/auth/wechat-mini-program/login", {
+          const auth = await api("/api/v1/auth/wechat/phone-login", {
             method: "POST",
-            body: JSON.stringify({ code: result.code })
+            body: JSON.stringify({ wxLoginCode: result.code, phoneCode })
           });
           await this.completeLogin(auth, "微信登录");
         } catch (error) {
@@ -1192,8 +1199,10 @@ homeComponentWxml = homeComponentWxml.replace(
   `$1bindinput="nativeHomePromptInput"`
 );
 homeComponentWxml = homeComponentWxml.replace(
-  /(<button class="hero-input-action submit[^"]*"[^>]*?)bindtouchend="\{\{[^}]+\}\}"\s+bindtap="\{\{[^}]+\}\}"/,
-  `$1bindtap="nativeHomePromptSubmit"`
+  /<button class="hero-input-action submit[^"]*"[^>]*>/,
+  (tag) => tag
+    .replace(/\s+(?:bind|catch)touchend="\{\{[^}]+\}\}"/g, "")
+    .replace(/(?:bind|catch)tap="\{\{[^}]+\}\}"/, 'bindtap="nativeHomePromptSubmit"')
 );
 if (!homeComponentWxml.includes('bindinput="nativeHomePromptInput"') || !homeComponentWxml.includes('bindtap="nativeHomePromptSubmit"')) {
   throw new Error("V531HomePage native prompt bindings were not patched");
@@ -1218,7 +1227,7 @@ if (!fs.existsSync(workbenchWxmlPath)) {
 let workbenchWxml = fs.readFileSync(workbenchWxmlPath, "utf8");
 let nativeGenerateBindingCount = (workbenchWxml.match(/bindtap="nativeGenerate"/g) || []).length;
 workbenchWxml = workbenchWxml.replace(
-  /(<view class="\{\{\[[^\]]*'v31-(?:ppt-submit|generate-button)'[^\]]*\]\}\}"[^>]*?)bind(?:tap|touchend)="\{\{[^}]+\}\}"/g,
+  /(<view class="\{\{\[[^\]]*'v31-(?:ppt-submit|generate-button)'[^\]]*\]\}\}"[^>]*?)(?:bind|catch)(?:tap|touchend)="\{\{[^}]+\}\}"/g,
   (match, prefix) => {
     nativeGenerateBindingCount += 1;
     return `${prefix}bindtap="nativeGenerate"`;
@@ -1502,7 +1511,7 @@ for (const binding of [
 ]) {
   generationTaskItemWxml = replaceNativeAssetBindings(
     generationTaskItemWxml,
-    new RegExp(`(<button[^>]*data-task-id="\\{\\{[^}]+\\}\\}"[^>]*?)bindtap="\\{\\{[^}]+\\}\\}"([^>]*>${binding[0]}<\\/button>)`, "g"),
+    new RegExp(`(<button[^>]*data-task-id="\\{\\{[^}]+\\}\\}"[^>]*?)(?:bind|catch)tap="\\{\\{[^}]+\\}\\}"([^>]*>${binding[0]}<\\/button>)`, "g"),
     `$1catchtap="${binding[1]}"$2`,
     1,
     `GenerationTaskItem ${binding[0]}`
@@ -1526,14 +1535,14 @@ assetCardWxml = replaceNativeAssetBindings(
 );
 assetCardWxml = replaceNativeAssetBindings(
   assetCardWxml,
-  /(<button[^>]*class="favorite-button[^"]*"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  /(<button[^>]*class="favorite-button[^"]*"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)(?:bind|catch)tap="\{\{[^}]+\}\}"/g,
   '$1catchtap="nativeAssetCardFavorite"',
   1,
   "AssetCard favorite"
 );
 assetCardWxml = replaceNativeAssetBindings(
   assetCardWxml,
-  /(<button[^>]*class="more-button[^"]*"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)bindtap="\{\{[^}]+\}\}"/g,
+  /(<button[^>]*class="more-button[^"]*"[^>]*data-asset-id="\{\{[^}]+\}\}"[^>]*?)(?:bind|catch)tap="\{\{[^}]+\}\}"/g,
   '$1catchtap="nativeAssetCardActions"',
   1,
   "AssetCard actions"

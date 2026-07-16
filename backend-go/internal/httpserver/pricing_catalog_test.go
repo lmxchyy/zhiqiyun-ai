@@ -28,3 +28,38 @@ func TestMineRechargePackagesMatchProductContract(t *testing.T) {
 		}
 	}
 }
+
+func TestOneCentVirtualPaymentPlanIsGrantable(t *testing.T) {
+	plan, ok := planCatalogByID("recharge_test_1fen")
+	if !ok {
+		t.Fatal("one-cent virtual payment plan not found")
+	}
+	if got := planPrice(plan); got != 1 {
+		t.Fatalf("one-cent plan price = %d, want 1", got)
+	}
+	if got := planTokenGrantAmount(plan); got != 1 {
+		t.Fatalf("one-cent plan token grant = %d, want 1", got)
+	}
+	if got := planBusinessType(plan); got != planTypeTokenRecharge {
+		t.Fatalf("one-cent plan type = %s, want %s", got, planTypeTokenRecharge)
+	}
+	if productType := stringValue(plan.Entitlements["productType"]); productType != "TOKEN_ONLY" {
+		t.Fatalf("one-cent product type = %s, want TOKEN_ONLY", productType)
+	}
+}
+
+func TestMergeCanonicalPlansPreservesConfiguredValues(t *testing.T) {
+	existing := []adminPlan{{
+		ID: "plan_free", Code: "trial", Name: "自定义新人体验", PriceCents: 0,
+		GrantPoints: 588, DurationDays: 21, Concurrency: 3, Active: true,
+	}}
+
+	merged := mergeCanonicalPlans(existing)
+	plan := configuredNewcomerPlan(merged)
+	if plan.Name != existing[0].Name || planPoints(plan) != 588 || plan.DurationDays != 21 || plan.Concurrency != 3 {
+		t.Fatalf("configured plan was overwritten: %+v", plan)
+	}
+	if len(merged) <= len(existing) {
+		t.Fatalf("missing canonical plans were not appended: got %d plans", len(merged))
+	}
+}

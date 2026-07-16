@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -16,11 +17,12 @@ import (
 )
 
 type adminAPI struct {
-	store platformStore
+	store    platformStore
+	sessions authSessionStore
 }
 
-func newAdminAPI(store platformStore) adminAPI {
-	return adminAPI{store: store}
+func newAdminAPI(store platformStore, sessions authSessionStore) adminAPI {
+	return adminAPI{store: store, sessions: sessions}
 }
 
 func (a adminAPI) overview(w http.ResponseWriter, _ *http.Request) {
@@ -89,8 +91,10 @@ func (a adminAPI) customers(w http.ResponseWriter, _ *http.Request) {
 		parentUser := users[parentAgent.UserID]
 		modelRoute := primaryUserModelRoute(user)
 		items = append(items, map[string]any{
-			"id": user.ID, "name": user.Name, "email": user.Email, "role": user.Role,
-			"status": user.Status, "plan": planName(plan), "planId": user.PlanID,
+			"id": user.ID, "name": user.Name, "email": user.Email, "mobile": user.Mobile, "role": user.Role,
+			"wechatOpenIds": user.WeChatOpenIDs, "wechatUnionId": user.WeChatUnionID,
+			"registrationSource": user.RegistrationSource,
+			"status":             user.Status, "plan": planName(plan), "planId": user.PlanID,
 			"pointsAvailable": points[user.ID].Available, "subscriptionExpiresAt": user.SubscriptionExpiresAt,
 			"referredBy": user.ReferredBy, "ownChannelAgentId": ownChannel.ID,
 			"sourceAgentId": sourceAgent.ID, "sourceAgentName": sourceUser.Name,
@@ -152,6 +156,10 @@ func (a adminAPI) createCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("name and email are required"))
 		return
 	}
+	if req.Available != nil && *req.Available < 0 {
+		writeError(w, http.StatusBadRequest, errors.New("available points cannot be negative"))
+		return
+	}
 	user, err := a.store.CreateAdminCustomer(req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -166,12 +174,362 @@ func (a adminAPI) updateCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if req.Available != nil && *req.Available < 0 {
+		writeError(w, http.StatusBadRequest, errors.New("available points cannot be negative"))
+		return
+	}
 	user, err := a.store.UpdateAdminCustomer(r.PathValue("id"), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": user})
+}
+
+func (a adminAPI) forceLogoutCustomer(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(r.PathValue("id"))
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("user id is required"))
+		return
+	}
+	if a.sessions == nil {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	found := false
+	for _, user := range data.Users {
+		if user.ID == userID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("user not found"))
+		return
+	}
+	revoker, ok := a.sessions.(authUserSessionStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	revoked, err := revoker.DeleteUserSessions(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "userId": userID, "revokedSessions": revoked})
+}
+
+func (a adminAPI) customerIdentities(w http.ResponseWriter, r *http.Request) {
+	user, ok, err := a.adminCustomerByID(strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("user not found"))
+		return
+	}
+	writeJSON(w, map[string]any{"item": adminCustomerIdentityPayload(user)})
+}
+
+func (a adminAPI) unlinkCustomerMobile(w http.ResponseWriter, r *http.Request) {
+	a.updateCustomerIdentity(w, r, adminCustomerIdentityMutation{ClearMobile: true}, "mobile")
+}
+
+func (a adminAPI) unlinkCustomerWeChat(w http.ResponseWriter, r *http.Request) {
+	a.updateCustomerIdentity(w, r, adminCustomerIdentityMutation{ClearWeChat: true}, "wechat")
+}
+
+func (a adminAPI) freezeCustomerLogin(w http.ResponseWriter, r *http.Request) {
+	a.updateCustomerIdentity(w, r, adminCustomerIdentityMutation{Status: "DISABLED"}, "freeze")
+}
+
+func (a adminAPI) unfreezeCustomerLogin(w http.ResponseWriter, r *http.Request) {
+	a.updateCustomerIdentity(w, r, adminCustomerIdentityMutation{Status: "ACTIVE"}, "unfreeze")
+}
+
+func (a adminAPI) customerAuthMergeRequests(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(r.PathValue("id"))
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("user id is required"))
+		return
+	}
+	items, err := a.store.ListAdminAuthMergeRequests(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": adminAuthMergeRequestPayloads(items), "total": len(items)})
+}
+
+func (a adminAPI) authMergeRequests(w http.ResponseWriter, r *http.Request) {
+	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
+	items, err := a.store.ListAdminAuthMergeRequests(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": adminAuthMergeRequestPayloads(items), "total": len(items)})
+}
+
+func (a adminAPI) updateAuthMergeRequest(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("merge request id is required"))
+		return
+	}
+	var req adminAuthMergeRequestMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.ResolvedBy) == "" {
+		req.ResolvedBy = "admin"
+	}
+	item, err := a.store.UpdateAdminAuthMergeRequest(id, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "item": adminAuthMergeRequestPayload(item)})
+}
+
+func (a adminAPI) previewAuthMergeRequest(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("merge request id is required"))
+		return
+	}
+	item, result, err := a.store.PreviewAdminAuthMergeRequest(id, strings.TrimSpace(r.URL.Query().Get("targetUserId")))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "item": adminAuthMergeRequestPayload(item), "result": result})
+}
+
+func (a adminAPI) executeAuthMergeRequest(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("merge request id is required"))
+		return
+	}
+	var req adminAuthMergeExecuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.ResolvedBy) == "" {
+		req.ResolvedBy = "admin"
+	}
+	item, result, err := a.store.ExecuteAdminAuthMergeRequest(id, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := a.revokeCustomerSessions(r.Context(), result.SourceUserID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	if _, err := a.revokeCustomerSessions(r.Context(), result.TargetUserID); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "item": adminAuthMergeRequestPayload(item), "result": result})
+}
+
+func (a adminAPI) updateCustomerIdentity(w http.ResponseWriter, r *http.Request, mutation adminCustomerIdentityMutation, action string) {
+	userID := strings.TrimSpace(r.PathValue("id"))
+	if userID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("user id is required"))
+		return
+	}
+	var req adminCustomerIdentityMutation
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	mutation.Reason = strings.TrimSpace(req.Reason)
+	current, ok, err := a.adminCustomerByID(userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("user not found"))
+		return
+	}
+	if err := validateAdminIdentityMutation(current, mutation); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	updated, err := a.store.UpdateAdminCustomerIdentity(userID, mutation)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	revoked := 0
+	if action == "mobile" || action == "wechat" || action == "freeze" {
+		revoked, err = a.revokeCustomerSessions(r.Context(), userID)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
+	writeJSON(w, map[string]any{"ok": true, "action": action, "revokedSessions": revoked, "item": adminCustomerIdentityPayload(updated)})
+}
+
+func (a adminAPI) adminCustomerByID(userID string) (adminUser, bool, error) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		return adminUser{}, false, err
+	}
+	for _, user := range data.Users {
+		if user.ID == userID {
+			return user, true, nil
+		}
+	}
+	return adminUser{}, false, nil
+}
+
+func (a adminAPI) revokeCustomerSessions(ctx context.Context, userID string) (int, error) {
+	if a.sessions == nil {
+		return 0, errAuthSessionUnavailable
+	}
+	revoker, ok := a.sessions.(authUserSessionStore)
+	if !ok {
+		return 0, errAuthSessionUnavailable
+	}
+	return revoker.DeleteUserSessions(ctx, userID)
+}
+
+func validateAdminIdentityMutation(user adminUser, mutation adminCustomerIdentityMutation) error {
+	if mutation.Status != "" {
+		status := strings.ToUpper(strings.TrimSpace(mutation.Status))
+		if status != "ACTIVE" && status != "DISABLED" {
+			return errors.New("status must be ACTIVE or DISABLED")
+		}
+	}
+	passwordLogin := adminUserPasswordLoginAvailable(user)
+	wechatLinked := adminUserWeChatLinked(user)
+	mobileBound := strings.TrimSpace(user.Mobile) != ""
+	if mutation.ClearMobile && mobileBound && !wechatLinked && !passwordLogin {
+		return errors.New("cannot unlink the last usable login identity")
+	}
+	if mutation.ClearWeChat && wechatLinked && !mobileBound && !passwordLogin {
+		return errors.New("cannot unlink the last usable login identity")
+	}
+	return nil
+}
+
+func adminCustomerIdentityPayload(user adminUser) map[string]any {
+	wechatIDs := append([]string{}, user.WeChatOpenIDs...)
+	loginMethods := []string{}
+	if strings.TrimSpace(user.Mobile) != "" {
+		loginMethods = append(loginMethods, "mobile_sms")
+	}
+	if adminUserWeChatLinked(user) {
+		loginMethods = append(loginMethods, "wechat_mini_program")
+	}
+	if adminUserPasswordLoginAvailable(user) {
+		loginMethods = append(loginMethods, "password")
+	}
+	return map[string]any{
+		"userId":               user.ID,
+		"status":               user.Status,
+		"mobileMasked":         maskedMobile(user.Mobile),
+		"mobileBound":          strings.TrimSpace(user.Mobile) != "",
+		"wechatLinked":         adminUserWeChatLinked(user),
+		"wechatOpenIdMasked":   maskAdminAuthIdentifier(firstNonEmptyString(firstString(wechatIDs), user.WeChatUnionID)),
+		"wechatOpenIdsMasked":  maskAdminAuthIdentifiers(wechatIDs),
+		"wechatUnionIdMasked":  maskAdminAuthIdentifier(user.WeChatUnionID),
+		"passwordLoginEnabled": adminUserPasswordLoginAvailable(user),
+		"loginMethods":         loginMethods,
+		"canUnlinkMobile":      strings.TrimSpace(user.Mobile) == "" || adminUserWeChatLinked(user) || adminUserPasswordLoginAvailable(user),
+		"canUnlinkWechat":      !adminUserWeChatLinked(user) || strings.TrimSpace(user.Mobile) != "" || adminUserPasswordLoginAvailable(user),
+		"registrationSource":   user.RegistrationSource,
+		"updatedAt":            user.UpdatedAt,
+	}
+}
+
+func adminAuthMergeRequestPayloads(items []adminAuthMergeRequest) []map[string]any {
+	payloads := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		payloads = append(payloads, adminAuthMergeRequestPayload(item))
+	}
+	return payloads
+}
+
+func adminAuthMergeRequestPayload(item adminAuthMergeRequest) map[string]any {
+	return map[string]any{
+		"id":                  item.ID,
+		"primaryUserId":       item.PrimaryUserID,
+		"secondaryUserId":     item.SecondaryUserID,
+		"mobileMasked":        maskedMobile(item.Mobile),
+		"wechatOpenIdMasked":  maskAdminAuthIdentifier(item.WeChatOpenID),
+		"wechatUnionIdMasked": maskAdminAuthIdentifier(item.WeChatUnionID),
+		"conflictCode":        item.ConflictCode,
+		"source":              item.Source,
+		"reason":              item.Reason,
+		"status":              item.Status,
+		"reviewComment":       item.ReviewComment,
+		"resolvedBy":          item.ResolvedBy,
+		"resolvedAt":          item.ResolvedAt,
+		"createdAt":           item.CreatedAt,
+		"updatedAt":           item.UpdatedAt,
+	}
+}
+
+func adminUserWeChatLinked(user adminUser) bool {
+	return len(user.WeChatOpenIDs) > 0 || strings.TrimSpace(user.WeChatUnionID) != ""
+}
+
+func adminUserPasswordLoginAvailable(user adminUser) bool {
+	email := strings.ToLower(strings.TrimSpace(user.Email))
+	if email == "" || strings.HasSuffix(email, "@wechat.local") || strings.HasSuffix(email, "@mobile.local") {
+		return false
+	}
+	return user.PasswordHash != "" || strings.Contains(email, "@")
+}
+
+func firstString(items []string) string {
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			return strings.TrimSpace(item)
+		}
+	}
+	return ""
+}
+
+func maskAdminAuthIdentifiers(items []string) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if masked := maskAdminAuthIdentifier(item); masked != "" {
+			result = append(result, masked)
+		}
+	}
+	return result
+}
+
+func maskAdminAuthIdentifier(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	if len(text) <= 10 {
+		prefixLen := 2
+		if len(text) < prefixLen {
+			prefixLen = len(text)
+		}
+		return text[:prefixLen] + "***"
+	}
+	return text[:6] + "..." + text[len(text)-4:]
 }
 
 func (a adminAPI) syncCustomerNewAPI(w http.ResponseWriter, r *http.Request) {
@@ -387,7 +745,7 @@ func (a adminAPI) plans(w http.ResponseWriter, _ *http.Request) {
 			"id": plan.ID, "code": fallback(plan.Code, plan.ID), "name": plan.Name,
 			"priceCents": planPrice(plan), "grantPoints": planPoints(plan),
 			"durationDays": plan.DurationDays, "concurrency": plan.Concurrency,
-			"active":       plan.Active || plan.ID != "",
+			"active":       plan.Active,
 			"entitlements": planEntitlements(plan),
 		})
 	}
@@ -398,6 +756,13 @@ func (a adminAPI) updatePlan(w http.ResponseWriter, r *http.Request) {
 	var req adminPlanMutation
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if (req.PriceCents != nil && *req.PriceCents < 0) ||
+		(req.GrantPoints != nil && *req.GrantPoints < 0) ||
+		(req.DurationDays != nil && *req.DurationDays < 0) ||
+		(req.Concurrency != nil && *req.Concurrency < 0) {
+		writeError(w, http.StatusBadRequest, errors.New("plan values cannot be negative"))
 		return
 	}
 	plan, err := a.store.UpdateAdminPlan(r.PathValue("id"), req)
@@ -984,52 +1349,41 @@ func (a adminAPI) billingOverview(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, billingPayload(data, "overview"))
-}
-
-func (a adminAPI) billingCustomers(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
+	payload := billingPayload(data, "overview")
+	v1, err := a.billingOverviewV1Payload()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, billingPayload(data, "customers"))
+	for key, value := range v1 {
+		payload[key] = value
+	}
+	writeJSON(w, payload)
 }
 
-func (a adminAPI) billingProducts(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "products"))
+func (a adminAPI) billingCustomers(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "customers")
 }
 
-func (a adminAPI) billingPlans(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "plans"))
+func (a adminAPI) billingProducts(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "products")
 }
 
-func (a adminAPI) billingSubscriptions(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "subscriptions"))
+func (a adminAPI) billingPlans(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "plans")
+}
+
+func (a adminAPI) billingSubscriptions(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "subscriptions")
 }
 
 func (a adminAPI) billingEvents(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
+	payload, err := a.billingEventsV1Payload()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, billingPayload(data, "events"))
+	writeJSON(w, payload)
 }
 
 func (a adminAPI) billingUsageSummaries(w http.ResponseWriter, _ *http.Request) {
@@ -1077,49 +1431,24 @@ func (a adminAPI) billingWallets(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, billingPayload(data, "wallets"))
 }
 
-func (a adminAPI) billingCoupons(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "coupons"))
+func (a adminAPI) billingCoupons(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "coupons")
 }
 
-func (a adminAPI) billingInvoices(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "invoices"))
+func (a adminAPI) billingInvoices(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "invoices")
 }
 
-func (a adminAPI) billingCreditNotes(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "creditNotes"))
+func (a adminAPI) billingCreditNotes(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "creditNotes")
 }
 
-func (a adminAPI) billingPaymentRequests(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "paymentRequests"))
+func (a adminAPI) billingPaymentRequests(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "paymentRequests")
 }
 
-func (a adminAPI) billingPayments(w http.ResponseWriter, _ *http.Request) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, billingPayload(data, "payments"))
+func (a adminAPI) billingPayments(w http.ResponseWriter, r *http.Request) {
+	a.commercialBillingList(w, r, "payments")
 }
 
 func (a adminAPI) billingSubscription(w http.ResponseWriter, _ *http.Request) {
@@ -2466,7 +2795,7 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.CustomerGroups) == 0 {
 		data.CustomerGroups = defaultCustomerGroups()
 	}
-	data = normalizeAICapabilityDefaults(data)
+	data = applyPublishedBillingRulesV1(normalizeAICapabilityDefaults(data))
 	return data
 }
 
@@ -2915,20 +3244,6 @@ func withdrawalIDs(items []adminWithdrawal) map[string]bool {
 		ids[item.ID] = true
 	}
 	return ids
-}
-
-func setPointAccount(data *adminPlatformData, userID string, available int) {
-	for i := range data.PointAccounts {
-		if data.PointAccounts[i].UserID == userID {
-			data.PointAccounts[i].Available = available
-			return
-		}
-	}
-	data.PointAccounts = append(data.PointAccounts, adminPointAccount{
-		ID:        uniqueAdminID("points", pointIDs(data.PointAccounts)),
-		UserID:    userID,
-		Available: available,
-	})
 }
 
 func stringValue(value any) string {

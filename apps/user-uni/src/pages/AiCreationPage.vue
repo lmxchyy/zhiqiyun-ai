@@ -69,9 +69,15 @@
             <text>或</text>
             <view></view>
           </view>
-          <button type="button" class="wechat-login-button" :disabled="wechatLoginLoading" @click="loginWithWechatMiniProgram">
+          <button
+            type="button"
+            class="wechat-login-button"
+            :disabled="wechatLoginLoading"
+            open-type="getPhoneNumber"
+            @getphonenumber="loginWithWechatPhoneNumber"
+          >
             <view class="wechat-login-icon" aria-hidden="true"></view>
-            <text>{{ wechatLoginLoading ? "微信授权中..." : "微信小程序登录" }}</text>
+            <text>{{ wechatLoginLoading ? "微信授权中..." : "微信手机号授权登录" }}</text>
           </button>
           <text class="login-agreement">登录即表示同意《用户协议》和《隐私政策》</text>
         </view>
@@ -1093,14 +1099,10 @@ import { api, authService, businessSdk } from "../api/client";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 
-declare const wx: { getSystemInfoSync?: () => { platform?: string; brand?: string } } | undefined;
 import PptDocumentGeneration from "../components/PptDocumentGeneration.vue";
 import KnowledgeMiniChat from "../components/KnowledgeMiniChat.vue";
 import type { Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask, ModelInfo, PointAccount } from "../types";
 import type { UserDashboardResponse } from "@xianzhi/shared-types";
-
-const rawEnv = (import.meta as unknown as { env?: Record<string, string | boolean | undefined> }).env || {};
-const enableMockLogin = Boolean(rawEnv.DEV === true && String(rawEnv.VITE_ENABLE_MOCK_LOGIN || "").toLowerCase() === "true");
 
 type Workspace = "user" | "agent" | "admin";
 type ModuleId =
@@ -2482,17 +2484,6 @@ function redirectAfterAuth(auth: AuthResponse) {
   window.location.replace("/app");
 }
 
-function isWeChatDevtoolsRuntime() {
-  try {
-    const systemInfo = typeof wx !== "undefined" && wx.getSystemInfoSync
-      ? wx.getSystemInfoSync()
-      : (uni.getSystemInfoSync() as { platform?: string; brand?: string });
-    return systemInfo.platform === "devtools" || systemInfo.brand === "devtools";
-  } catch (error) {
-    return false;
-  }
-}
-
 function requestWechatMiniProgramCode() {
   return new Promise<string>((resolve, reject) => {
     uni.login({
@@ -2870,18 +2861,22 @@ async function login() {
   }
 }
 
-async function loginWithWechatMiniProgram() {
+async function loginWithWechatPhoneNumber(event: unknown) {
   if (wechatLoginLoading.value) return;
+  const detail = (event && typeof event === "object" && "detail" in event ? (event as { detail?: Record<string, unknown> }).detail : {}) || {};
+  const phoneCode = String(detail.code || "").trim();
+  const errMsg = String(detail.errMsg || "");
+  if (!phoneCode || !errMsg.toLowerCase().includes("ok")) {
+    uni.showToast({ title: "需要授权手机号后才能微信登录", icon: "none" });
+    return;
+  }
   wechatLoginLoading.value = true;
   try {
-    const code = enableMockLogin && isWeChatDevtoolsRuntime() ? "mock-devtools-code" : await requestWechatMiniProgramCode();
-    if (code === "mock-devtools-code") {
-      console.info("微信开发者工具模拟登录 code", code);
-    }
-    const auth = await authService.loginByWechatMiniProgramCode(code);
+    const wxLoginCode = await requestWechatMiniProgramCode();
+    const auth = await authService.loginByWechatMiniProgramPhone({ wxLoginCode, phoneCode });
     redirectAfterAuth(auth);
   } catch (error) {
-    uni.showToast({ title: errorMessage(error, "微信登录暂未开通"), icon: "none" });
+    uni.showToast({ title: errorMessage(error, "微信手机号登录暂未开通"), icon: "none" });
   } finally {
     wechatLoginLoading.value = false;
   }

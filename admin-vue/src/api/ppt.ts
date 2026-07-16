@@ -24,6 +24,8 @@ import type {
   PptImageOption,
   PptModelOption,
   PptOutline,
+  PptRegenerateVisualRequest,
+  PptRegenerateVisualResponse,
   PptSlide,
   PptTaskResponse
 } from "../types/ppt";
@@ -41,6 +43,8 @@ export type {
   PptModelOption,
   PptOutline,
   PptOutlineSlide,
+  PptRegenerateVisualRequest,
+  PptRegenerateVisualResponse,
   PptSlide,
   PptTaskResponse,
   PptTaskStatus,
@@ -146,6 +150,29 @@ export async function regeneratePptSlide(slide: PptSlide): Promise<PptSlide> {
     console.warn("[ppt] regenerate slide API fallback to mock", error);
     return mockRegeneratePptSlide(slide);
   }
+}
+
+export async function regeneratePptSlideVisual(presentationId: string, slideId: string, request: PptRegenerateVisualRequest): Promise<PptRegenerateVisualResponse> {
+  return adminRequest<PptRegenerateVisualResponse>({
+    method: "POST",
+    url: `/presentations/${encodeURIComponent(presentationId)}/slides/${encodeURIComponent(slideId)}/regenerate-visual`,
+    data: request
+  });
+}
+
+export async function deletePptSlideVisual(presentationId: string, slideId: string): Promise<PptRegenerateVisualResponse> {
+  return adminRequest<PptRegenerateVisualResponse>({
+    method: "DELETE",
+    url: `/presentations/${encodeURIComponent(presentationId)}/slides/${encodeURIComponent(slideId)}/visual`
+  });
+}
+
+export async function restorePptSlideVisual(presentationId: string, slideId: string, createdAt: string, url: string, storageRef?: string): Promise<PptRegenerateVisualResponse> {
+  return adminRequest<PptRegenerateVisualResponse>({
+    method: "POST",
+    url: `/presentations/${encodeURIComponent(presentationId)}/slides/${encodeURIComponent(slideId)}/visual/restore`,
+    data: { createdAt, url, storageRef }
+  });
 }
 
 export async function exportPpt(taskId: string): Promise<{ url: string; filename: string }> {

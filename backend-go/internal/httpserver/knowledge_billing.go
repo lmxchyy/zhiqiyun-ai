@@ -26,9 +26,14 @@ func (s *jsonStore) RecordRAGUsage(_ context.Context, usage knowledgeapp.RAGBill
 		if available < pointCost {
 			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
 		}
+		walletTask := generationTask{ID: usage.RunID, UserID: usage.UserID, TenantID: usage.TenantID, ModuleCode: "knowledge_agent", Model: usage.Model}
+		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "RESERVE", pointCost, "RAG usage reserve"); err != nil {
+			return err
+		}
+		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "CAPTURE", pointCost, "RAG usage capture"); err != nil {
+			return err
+		}
 		after := available - pointCost
-		data.PointsAvailable = &after
-		setPointAccount(data, usage.UserID, after)
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		data.BillingEvents = append(data.BillingEvents, ragBillingEvent(usage, available, after, now, uniqueAdminID("evt", billingEventIDs(data.BillingEvents))))
 		return nil
@@ -78,17 +83,17 @@ func (s *postgresStore) RecordRAGUsage(ctx context.Context, usage knowledgeapp.R
 		if account.Available < pointCost {
 			return fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 		}
-		before, after = account.Available, account.Available-pointCost
-		if _, err := tx.ExecContext(ctx, `
-			update xz_point_accounts
-			set available=available-$1, raw=jsonb_set(raw, '{available}', to_jsonb((available-$1)::int), true)
-			where id=$2
-		`, pointCost, account.ID); err != nil {
+		before = account.Available
+		walletTask := generationTask{ID: usage.RunID, UserID: usage.UserID, TenantID: usage.TenantID, ModuleCode: "knowledge_agent", Model: usage.Model}
+		reserved, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, account, "RESERVE", pointCost, "RAG usage reserve")
+		if err != nil {
 			return err
 		}
-		if err := upsertUserWalletFromPointAccount(ctx, tx, adminPointAccount{ID: account.ID, UserID: usage.UserID, Available: after, Frozen: account.Frozen}); err != nil {
+		captured, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, reserved, "CAPTURE", pointCost, "RAG usage capture")
+		if err != nil {
 			return err
 		}
+		after = captured.Available
 	}
 	eventID, err := nextTableID(ctx, tx, "xz_billing_events", "evt")
 	if err != nil {

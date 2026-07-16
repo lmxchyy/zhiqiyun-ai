@@ -42,6 +42,7 @@ type authFlowError struct {
 	status  int
 	code    string
 	message string
+	details map[string]any
 }
 
 func (e *authFlowError) Error() string { return e.message }
@@ -69,6 +70,11 @@ type smsLoginRequest struct {
 	CampaignCode   string `json:"campaignCode"`
 	RedirectSource string `json:"redirectSource"`
 	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+type mobileBindRequest struct {
+	Mobile  string `json:"mobile"`
+	SMSCode string `json:"smsCode"`
 }
 
 func newAuthFlowCoordinator() *authFlowCoordinator {
@@ -105,15 +111,23 @@ func cloneStringMap(values map[string]string) map[string]string {
 }
 
 func writeAuthFlowError(w http.ResponseWriter, status int, code, message string) {
+	writeAuthFlowErrorDetails(w, status, code, message, nil)
+}
+
+func writeAuthFlowErrorDetails(w http.ResponseWriter, status int, code, message string, details map[string]any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"code": code, "errorCode": code, "error": message, "message": message})
+	payload := map[string]any{"code": code, "errorCode": code, "error": message, "message": message}
+	for key, value := range details {
+		payload[key] = value
+	}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func writeMappedAuthFlowError(w http.ResponseWriter, err error) {
 	var flowErr *authFlowError
 	if errors.As(err, &flowErr) {
-		writeAuthFlowError(w, flowErr.status, flowErr.code, flowErr.message)
+		writeAuthFlowErrorDetails(w, flowErr.status, flowErr.code, flowErr.message, flowErr.details)
 		return
 	}
 	writeAuthFlowError(w, http.StatusInternalServerError, "AUTH_INTERNAL_ERROR", "登录服务暂时不可用")
@@ -196,6 +210,96 @@ func sendSMSProvider(ctx context.Context, mobile, code string) error {
 	return nil
 }
 
+func (a authAPI) smsStore() (smsChallengeStore, bool) {
+	if a.sessions == nil {
+		return nil, false
+	}
+	store, ok := a.sessions.(smsChallengeStore)
+	return store, ok
+}
+
+func (a authAPI) smsNextSendAt(ctx context.Context, mobile string) (time.Time, bool, error) {
+	if store, ok := a.smsStore(); ok {
+		return store.SMSNextSend(ctx, mobile)
+	}
+	flow := a.flow
+	if flow == nil {
+		return time.Time{}, false, nil
+	}
+	flow.smsMu.Lock()
+	defer flow.smsMu.Unlock()
+	nextSendAt, ok := flow.smsNextSend[mobile]
+	if ok && time.Now().After(nextSendAt) {
+		delete(flow.smsNextSend, mobile)
+		return time.Time{}, false, nil
+	}
+	return nextSendAt, ok, nil
+}
+
+func (a authAPI) putSMSChallenge(ctx context.Context, mobile string, challenge smsChallenge) error {
+	if store, ok := a.smsStore(); ok {
+		ttl := time.Until(challenge.expiresAt)
+		if ttl <= 0 {
+			ttl = smsCodeTTL
+		}
+		return store.PutSMSChallenge(ctx, mobile, challenge, ttl)
+	}
+	flow := a.flow
+	if flow == nil {
+		return errAuthSessionUnavailable
+	}
+	flow.smsMu.Lock()
+	defer flow.smsMu.Unlock()
+	flow.smsChallenges[mobile] = challenge
+	return nil
+}
+
+func (a authAPI) putSMSNextSend(ctx context.Context, mobile string, nextSendAt time.Time) error {
+	if store, ok := a.smsStore(); ok {
+		ttl := time.Until(nextSendAt)
+		if ttl <= 0 {
+			ttl = smsSendInterval
+		}
+		return store.PutSMSNextSend(ctx, mobile, nextSendAt, ttl)
+	}
+	flow := a.flow
+	if flow == nil {
+		return errAuthSessionUnavailable
+	}
+	flow.smsMu.Lock()
+	defer flow.smsMu.Unlock()
+	flow.smsNextSend[mobile] = nextSendAt
+	return nil
+}
+
+func (a authAPI) getSMSChallenge(ctx context.Context, mobile string) (smsChallenge, bool, error) {
+	if store, ok := a.smsStore(); ok {
+		return store.SMSChallenge(ctx, mobile)
+	}
+	flow := a.flow
+	if flow == nil {
+		return smsChallenge{}, false, nil
+	}
+	flow.smsMu.Lock()
+	defer flow.smsMu.Unlock()
+	challenge, ok := flow.smsChallenges[mobile]
+	return challenge, ok, nil
+}
+
+func (a authAPI) deleteSMSChallenge(ctx context.Context, mobile string) error {
+	if store, ok := a.smsStore(); ok {
+		return store.DeleteSMSChallenge(ctx, mobile)
+	}
+	flow := a.flow
+	if flow == nil {
+		return nil
+	}
+	flow.smsMu.Lock()
+	defer flow.smsMu.Unlock()
+	delete(flow.smsChallenges, mobile)
+	return nil
+}
+
 func (a authAPI) smsSend(w http.ResponseWriter, r *http.Request) {
 	var req smsSendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -207,14 +311,13 @@ func (a authAPI) smsSend(w http.ResponseWriter, r *http.Request) {
 		writeAuthFlowError(w, http.StatusBadRequest, "MOBILE_INVALID", "请输入正确的11位手机号")
 		return
 	}
-	flow := a.flow
-	if flow == nil {
-		flow = newAuthFlowCoordinator()
-	}
-	flow.smsMu.Lock()
-	defer flow.smsMu.Unlock()
 	now := time.Now()
-	if nextSendAt := flow.smsNextSend[mobile]; nextSendAt.After(now) {
+	nextSendAt, hasNextSend, err := a.smsNextSendAt(r.Context(), mobile)
+	if err != nil {
+		writeAuthFlowError(w, http.StatusServiceUnavailable, "SMS_STATE_UNAVAILABLE", "验证码服务暂时不可用")
+		return
+	}
+	if hasNextSend && nextSendAt.After(now) {
 		retry := int(time.Until(nextSendAt).Seconds()) + 1
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
 		writeAuthFlowError(w, http.StatusTooManyRequests, "SMS_TOO_FREQUENT", "发送过于频繁，请稍后再试")
@@ -233,37 +336,43 @@ func (a authAPI) smsSend(w http.ResponseWriter, r *http.Request) {
 		writeMappedAuthFlowError(w, err)
 		return
 	}
-	flow.smsChallenges[mobile] = smsChallenge{
+	challenge := smsChallenge{
 		codeHash: authCodeHash(mobile, code), expiresAt: now.Add(smsCodeTTL), nextSendAt: now.Add(smsSendInterval),
 	}
-	flow.smsNextSend[mobile] = now.Add(smsSendInterval)
+	if err := a.putSMSChallenge(r.Context(), mobile, challenge); err != nil {
+		writeAuthFlowError(w, http.StatusServiceUnavailable, "SMS_STATE_UNAVAILABLE", "验证码服务暂时不可用")
+		return
+	}
+	if err := a.putSMSNextSend(r.Context(), mobile, challenge.nextSendAt); err != nil {
+		writeAuthFlowError(w, http.StatusServiceUnavailable, "SMS_STATE_UNAVAILABLE", "验证码服务暂时不可用")
+		return
+	}
 	writeJSON(w, map[string]any{"sent": true, "retryAfterSeconds": int(smsSendInterval.Seconds()), "expiresInSeconds": int(smsCodeTTL.Seconds())})
 }
 
-func (a authAPI) verifySMSCode(mobile, code string) error {
-	flow := a.flow
-	if flow == nil {
-		return &authFlowError{status: http.StatusUnauthorized, code: "SMS_CODE_EXPIRED", message: "验证码已过期，请重新获取"}
+func (a authAPI) verifySMSCode(ctx context.Context, mobile, code string) error {
+	challenge, ok, err := a.getSMSChallenge(ctx, mobile)
+	if err != nil {
+		return &authFlowError{status: http.StatusServiceUnavailable, code: "SMS_STATE_UNAVAILABLE", message: "验证码服务暂时不可用"}
 	}
-	flow.smsMu.Lock()
-	defer flow.smsMu.Unlock()
-	challenge, ok := flow.smsChallenges[mobile]
 	if !ok || time.Now().After(challenge.expiresAt) {
-		delete(flow.smsChallenges, mobile)
+		_ = a.deleteSMSChallenge(ctx, mobile)
 		return &authFlowError{status: http.StatusUnauthorized, code: "SMS_CODE_EXPIRED", message: "验证码已过期，请重新获取"}
 	}
 	if challenge.attempts >= smsMaxAttempts {
-		delete(flow.smsChallenges, mobile)
+		_ = a.deleteSMSChallenge(ctx, mobile)
 		return &authFlowError{status: http.StatusTooManyRequests, code: "SMS_CODE_LOCKED", message: "验证码错误次数过多，请重新获取"}
 	}
 	wanted := challenge.codeHash
 	got := authCodeHash(mobile, code)
 	if subtle.ConstantTimeCompare(wanted[:], got[:]) != 1 {
 		challenge.attempts++
-		flow.smsChallenges[mobile] = challenge
+		if err := a.putSMSChallenge(ctx, mobile, challenge); err != nil {
+			return &authFlowError{status: http.StatusServiceUnavailable, code: "SMS_STATE_UNAVAILABLE", message: "验证码服务暂时不可用"}
+		}
 		return &authFlowError{status: http.StatusUnauthorized, code: "SMS_CODE_INVALID", message: "验证码错误，请重新输入"}
 	}
-	delete(flow.smsChallenges, mobile)
+	_ = a.deleteSMSChallenge(ctx, mobile)
 	return nil
 }
 
@@ -278,7 +387,7 @@ func (a authAPI) smsLogin(w http.ResponseWriter, r *http.Request) {
 		writeAuthFlowError(w, http.StatusBadRequest, "MOBILE_INVALID", "请输入正确的11位手机号")
 		return
 	}
-	if err := a.verifySMSCode(mobile, req.SMSCode); err != nil {
+	if err := a.verifySMSCode(r.Context(), mobile, req.SMSCode); err != nil {
 		writeMappedAuthFlowError(w, err)
 		return
 	}
@@ -301,9 +410,52 @@ func (a authAPI) smsLogin(w http.ResponseWriter, r *http.Request) {
 	response["inviteBindStatus"] = inviteStatus
 	response["expiresIn"] = int(authSessionTTL.Seconds())
 	if isNewUser {
-		response["newcomerBenefits"] = []map[string]string{{"title": "新人体验权益已到账", "status": "granted"}}
+		response["newcomerBenefits"] = newcomerBenefitsForPlan(configuredNewcomerPlan(data.Plans))
 	}
 	writeJSON(w, response)
+}
+
+func (a authAPI) bindMobile(w http.ResponseWriter, r *http.Request) {
+	var req mobileBindRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAuthFlowError(w, http.StatusBadRequest, "INVALID_REQUEST", "请求参数不正确")
+		return
+	}
+	mobile := normalizeMainlandMobile(req.Mobile)
+	if !validMainlandMobile(mobile) {
+		writeAuthFlowError(w, http.StatusBadRequest, "MOBILE_INVALID", "请输入正确的11位手机号")
+		return
+	}
+	if err := a.verifySMSCode(r.Context(), mobile, req.SMSCode); err != nil {
+		writeMappedAuthFlowError(w, err)
+		return
+	}
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeMappedAuthFlowError(w, err)
+		return
+	}
+	current, err := a.authenticatedUser(r, data)
+	if err != nil {
+		writeAuthFlowError(w, http.StatusUnauthorized, "UNAUTHORIZED", "登录状态已失效")
+		return
+	}
+	if existing, ok := findUserByMobile(data.Users, mobile); ok && existing.ID != current.ID {
+		writeAuthFlowError(w, http.StatusConflict, "AUTH_MOBILE_ALREADY_BOUND", "该手机号已绑定其他账号")
+		return
+	}
+	updated, err := a.store.UpdateAdminCustomer(current.ID, adminCustomerMutation{Mobile: mobile})
+	if err != nil {
+		writeMappedAuthFlowError(w, err)
+		return
+	}
+	updatedData := dataWithUpdatedUser(data, updated)
+	writeJSON(w, map[string]any{
+		"bound":    true,
+		"user":     userView(updated),
+		"auth":     authResponse(updatedData, updated, false),
+		"security": securityPayload(updated),
+	})
 }
 
 func registrationSource(input authRegistrationInput) map[string]string {
@@ -380,7 +532,32 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 	phoneUser, hasPhoneUser := findUserByMobile(data.Users, mobile)
 	wechatUser, hasWechatUser := findUserByWechatIdentity(data.Users, session)
 	if hasPhoneUser && hasWechatUser && phoneUser.ID != wechatUser.ID {
-		return data, adminUser{}, false, "", &authFlowError{status: http.StatusConflict, code: "IDENTITY_CONFLICT", message: "手机号与微信身份已关联不同账号，请联系客服"}
+		mergeRequest, mergeErr := a.store.CreateAdminAuthMergeRequest(adminAuthMergeRequestMutation{
+			PrimaryUserID:   phoneUser.ID,
+			SecondaryUserID: wechatUser.ID,
+			Mobile:          mobile,
+			WeChatOpenID:    session.OpenID,
+			WeChatUnionID:   session.UnionID,
+			ConflictCode:    "AUTH_ACCOUNT_MERGE_REQUIRED",
+			Source:          "wechat_phone_login",
+			Reason:          "手机号与微信小程序身份命中不同用户，需要人工确认后合并",
+			Raw: map[string]any{
+				"mobileMasked": maskedMobile(mobile),
+				"scene":        input.Scene,
+			},
+		})
+		if mergeErr != nil {
+			return data, adminUser{}, false, "", mergeErr
+		}
+		return data, adminUser{}, false, "", &authFlowError{
+			status:  http.StatusConflict,
+			code:    "AUTH_ACCOUNT_MERGE_REQUIRED",
+			message: "手机号与微信身份已关联不同账号，需要人工确认后合并",
+			details: map[string]any{
+				"accountConflict": true,
+				"mergeRequestId":  mergeRequest.ID,
+			},
+		}
 	}
 	user := phoneUser
 	found := hasPhoneUser
@@ -404,10 +581,12 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 		return dataWithUpdatedUser(data, updated), updated, false, status, nil
 	}
 	referredBy, inviteStatus := inviteBinding(data, input.InviteCode)
+	newcomerPlan := configuredNewcomerPlan(data.Plans)
 	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
 		Name: "用户 " + maskedMobile(mobile), Email: phoneSyntheticEmail(mobile), Mobile: mobile,
 		WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID, RegistrationSource: registrationSource(input),
-		Role: "MEMBER", Status: "ACTIVE", PlanID: "plan_free", ReferredBy: referredBy, Available: 100,
+		Role: "MEMBER", Status: "ACTIVE", PlanID: newcomerPlan.ID, ReferredBy: referredBy,
+		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()), Available: pointBalancePointer(planPoints(newcomerPlan)),
 	})
 	if err != nil {
 		// A database-level mobile/UnionID unique constraint is the final guard when
@@ -502,10 +681,28 @@ func (a authAPI) security(w http.ResponseWriter, r *http.Request) {
 		writeAuthFlowError(w, http.StatusUnauthorized, "UNAUTHORIZED", "登录状态已失效")
 		return
 	}
-	writeJSON(w, map[string]any{
-		"passwordSet": user.PasswordHash != "", "mobileMasked": maskedMobile(user.Mobile),
-		"wechatLinked": len(user.WeChatOpenIDs) > 0 || user.WeChatUnionID != "", "status": user.Status,
-	})
+	writeJSON(w, securityPayload(user))
+}
+
+func securityPayload(user adminUser) map[string]any {
+	loginMethods := []string{}
+	if strings.TrimSpace(user.Mobile) != "" {
+		loginMethods = append(loginMethods, "mobile_sms")
+	}
+	if len(user.WeChatOpenIDs) > 0 || user.WeChatUnionID != "" {
+		loginMethods = append(loginMethods, "wechat_mini_program")
+	}
+	if user.PasswordHash != "" {
+		loginMethods = append(loginMethods, "password")
+	}
+	return map[string]any{
+		"passwordSet":  user.PasswordHash != "",
+		"mobileMasked": maskedMobile(user.Mobile),
+		"mobileBound":  strings.TrimSpace(user.Mobile) != "",
+		"wechatLinked": len(user.WeChatOpenIDs) > 0 || user.WeChatUnionID != "",
+		"loginMethods": loginMethods,
+		"status":       user.Status,
+	}
 }
 
 func exchangeWeChatPhoneCode(ctx context.Context, phoneCode string) (string, error) {

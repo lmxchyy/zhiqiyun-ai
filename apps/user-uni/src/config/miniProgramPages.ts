@@ -68,6 +68,7 @@ export const miniProgramFeaturePages = {
   userProfileEdit: "/pages/user/UserProfileEditPage",
   userSettings: "/pages/user/UserSettingsPage",
   userRechargePlans: "/pages/user/UserRechargePlansPage",
+  userVirtualPayment: "/pages/user/UserVirtualPaymentPage",
   userOrders: "/pages/user/UserOrdersPage",
   userOrderDetail: "/pages/user/UserOrderDetailPage",
   userOrderConfirm: "/pages/user/UserOrderConfirmPage",
@@ -113,6 +114,7 @@ export const miniProgramEnterprisePages = {
   billing: "/pages/enterprise/EnterpriseBillingPage",
   usage: "/pages/enterprise/EnterpriseUsagePage",
   settings: "/pages/enterprise/EnterpriseSettingsPage",
+  feishu: "/pages/enterprise/EnterpriseFeishuConnectorPage",
   certification: "/pages/enterprise/EnterpriseCertificationPage",
   status: "/pages/enterprise/EnterpriseStatusPage",
 } as const;

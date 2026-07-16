@@ -1,4 +1,4 @@
-import { api, getApiBaseURL, getAuthToken } from "./client";
+import { api, apiFetchResponse } from "./client";
 
 export type PptTaskStatus = "pending" | "processing" | "success" | "failed";
 export type PptLanguage = "zh" | "en";
@@ -32,6 +32,64 @@ export interface PptGenerateResponse {
   status: PptTaskStatus;
 }
 
+export interface PptVisualPlan {
+  visualType: string;
+  imageRequired: boolean;
+  chartRequired: boolean;
+  diagramRequired: boolean;
+  textInImage: false;
+  subject: string;
+  scene: string;
+  action: string;
+  objects: string[];
+  mood: string;
+  composition: string;
+  style: string;
+  prompt: string;
+  negativePrompt: string;
+}
+
+export interface PptVisualAsset {
+  url: string;
+  storageRef?: string;
+  taskId?: string;
+  modelName?: string;
+  createdAt: string;
+}
+
+export interface PptSlide {
+  id: string;
+  page: number;
+  title: string;
+  content: string;
+  bulletPoints: string[];
+  imageUrl?: string;
+  visualStorageRef?: string;
+  layout: string;
+  slideType?: string;
+  visualPlan?: PptVisualPlan;
+  visualHistory?: PptVisualAsset[];
+  visualTaskId?: string;
+  visualModelName?: string;
+  visualCreatedAt?: string;
+  visualStatus?: string;
+  visualError?: string;
+}
+
+export interface PptRegenerateVisualRequest {
+  visualType: string;
+  style: string;
+  composition: string;
+  customInstruction: string;
+  keepCurrentContent: true;
+}
+
+export interface PptRegenerateVisualResponse {
+  taskId?: string;
+  status: string;
+  slide: PptSlide;
+}
+
 export interface PptTaskResponse {
   taskId: string;
   status: PptTaskStatus;
@@ -41,6 +99,7 @@ export interface PptTaskResponse {
   language?: PptLanguage;
   theme?: PptTheme;
   enableWebSearch?: boolean;
+  slides?: PptSlide[];
   pptUrl: string;
   pdfUrl: string;
   errorMessage: string;
@@ -54,7 +113,10 @@ const pptEndpoints = {
   create: "/api/v1/ppt/generate",
   task: (taskId: string) => `/api/v1/ppt/tasks/${encodeURIComponent(taskId)}`,
   history: "/api/v1/ppt/history",
-  exportPptx: "/api/v1/ppt/export/pptx"
+  exportPptx: "/api/v1/ppt/export/pptx",
+  regenerateVisual: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/regenerate-visual`,
+  deleteVisual: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/visual`,
+  restoreVisual: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/visual/restore`
 };
 
 export async function createPptGenerationTask(request: PptGenerateRequest): Promise<PptGenerateResponse> {
@@ -94,6 +156,24 @@ export async function deletePptTask(taskId: string): Promise<void> {
   await api<{ ok: boolean }>(pptEndpoints.task(taskId), { method: "DELETE" });
 }
 
+export async function regeneratePptSlideVisual(taskId: string, slideId: string, request: PptRegenerateVisualRequest): Promise<PptRegenerateVisualResponse> {
+  return api<PptRegenerateVisualResponse>(pptEndpoints.regenerateVisual(taskId, slideId), {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export async function deletePptSlideVisual(taskId: string, slideId: string): Promise<PptRegenerateVisualResponse> {
+  return api<PptRegenerateVisualResponse>(pptEndpoints.deleteVisual(taskId, slideId), { method: "DELETE" });
+}
+
+export async function restorePptSlideVisual(taskId: string, slideId: string, createdAt: string, url: string, storageRef?: string): Promise<PptRegenerateVisualResponse> {
+  return api<PptRegenerateVisualResponse>(pptEndpoints.restoreVisual(taskId, slideId), {
+    method: "POST",
+    body: JSON.stringify({ createdAt, url, storageRef })
+  });
+}
+
 export async function requestPptDownload(taskId: string): Promise<{ url: string }> {
   const task = await getPptGenerationTask(taskId);
   if (!task.pptUrl) {
@@ -114,6 +194,7 @@ function normalizePptTask(task: PptHistoryItem): PptHistoryItem {
     taskId: String(task.taskId || ""),
     status: normalizeStatus(task.status),
     title: task.title || task.prompt || "未命名PPT",
+    slides: Array.isArray(task.slides) ? task.slides : [],
     pptUrl: task.pptUrl || "",
     pdfUrl: task.pdfUrl || "",
     errorMessage: task.errorMessage || ""
@@ -124,26 +205,13 @@ async function exportPptxTask(taskId: string) {
   if (typeof fetch !== "function" || typeof URL === "undefined") {
     throw new Error("当前运行环境不支持直接导出 PPT，请在 H5 工作台下载。");
   }
-  const base = getApiBaseURL();
-  const response = await fetch(`${base}${pptEndpoints.exportPptx}`, {
+  const response = await apiFetchResponse(pptEndpoints.exportPptx, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getAuthToken()}`
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({ taskId })
   });
-  if (!response.ok) {
-    let message = "PPT 导出失败";
-    try {
-      const payload = await response.json() as { error?: string; message?: string };
-      message = payload.error || payload.message || message;
-    } catch {
-      const text = await response.text().catch(() => "");
-      if (text) message = text;
-    }
-    throw new Error(message);
-  }
   const blob = await response.blob();
   return URL.createObjectURL(blob);
 }

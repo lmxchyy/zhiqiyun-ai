@@ -395,6 +395,10 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 	req.Params["retryOf"] = original.ID
 	task, err := a.startRetriedGenerationTask(r.Context(), user, req)
 	if err != nil {
+		if errors.Is(err, errGenerationConcurrencyLimit) {
+			writeError(w, http.StatusTooManyRequests, err)
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}

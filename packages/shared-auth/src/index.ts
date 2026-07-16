@@ -11,7 +11,6 @@ export interface AuthStorageOptions {
 
 export interface AuthServiceOptions extends AuthStorageOptions {
   api: ApiClient;
-  wechatMockCode?: string;
 }
 
 export interface RegisterByInviteInput {
@@ -20,6 +19,17 @@ export interface RegisterByInviteInput {
   password: string;
   confirmPassword: string;
   inviteCode: string;
+}
+
+export interface WechatMiniProgramPhoneLoginInput {
+  wxLoginCode: string;
+  phoneCode: string;
+  inviteCode?: string;
+  scene?: string;
+  promoterCode?: string;
+  campaignCode?: string;
+  redirectSource?: string;
+  idempotencyKey?: string;
 }
 
 function persistAuth(storage: ReturnType<typeof createAuthStorage>, auth: AuthResponse) {
@@ -88,23 +98,10 @@ export function createAuthService(options: AuthServiceOptions) {
       });
       return persistAuth(storage, auth);
     },
-    async loginByWechatMiniProgramCode(code: string) {
-      const auth = await options.api.request<AuthResponse, { code: string }>("/api/v1/auth/wechat-mini-program/login", {
+    async loginByWechatMiniProgramPhone(input: WechatMiniProgramPhoneLoginInput) {
+      const auth = await options.api.request<AuthResponse, WechatMiniProgramPhoneLoginInput>("/api/v1/auth/wechat/phone-login", {
         method: "POST",
-        body: { code },
-        auth: false
-      });
-      return persistAuth(storage, auth);
-    },
-    async loginByWechatMiniProgram() {
-      const loginResult = await options.adapter.login?.("weixin").catch(() => null);
-      const code = String(loginResult?.code || options.wechatMockCode || "").trim();
-      if (!code) {
-        throw new Error("wechat login did not return a code");
-      }
-      const auth = await options.api.request<AuthResponse, { code: string }>("/api/v1/auth/wechat-mini-program/login", {
-        method: "POST",
-        body: { code },
+        body: input,
         auth: false
       });
       return persistAuth(storage, auth);

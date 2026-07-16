@@ -3,61 +3,86 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	Environment                string
-	Addr                       string
-	DataPath                   string
-	StaticDir                  string
-	AdminStaticDir             string
-	DatabaseURL                string
-	RedisURL                   string
-	RabbitMQURL                string
-	S3Endpoint                 string
-	StoragePublicEndpoint      string
-	S3Region                   string
-	S3AccessKey                string
-	S3SecretKey                string
-	S3Bucket                   string
-	StorageMasterKey           string
-	StorageDefaultProvider     string
-	StorageDefaultQuotaBytes   string
-	StorageMaxUploadBytes      string
-	StorageUploadURLTTLSeconds string
-	StorageAccessURLTTLSeconds string
-	StorageRecycleDays         string
-	StorageAutoCreateBucket    bool
-	StorageForcePathStyle      bool
-	StoragePublicDomain        string
-	StorageCDNDomain           string
-	PaymentCallbackSecret      string
-	WeChatPayAPIv3Key          string
-	WeChatPayPlatformKey       string
-	WeChatPayPlatformPath      string
-	AlipayPublicKey            string
-	AlipayPublicKeyPath        string
-	ModelProviderURL           string
-	ModelProviderAPIKey        string
-	ImageModel                 string
-	TextModel                  string
-	PPTProviderURL             string
-	PPTProviderAPIKey          string
-	PPTTextModel               string
-	PPTDisableThinking         bool
-	ModelTimeoutMS             string
-	ModelProvidersJSON         string
-	CORSAllowedOrigins         string
-	KnowledgeOCREndpoint       string
-	KnowledgeOCRAPIKey         string
-	KnowledgeOCRProvider       string
-	MediaStorageProvider       string
-	MediaStorageRoot           string
-	MediaPublicBaseURL         string
-	MediaCDNBaseURL            string
-	MediaMaxUploadBytes        string
-	MediaKeepOriginal          bool
+	Environment                  string
+	Addr                         string
+	DataPath                     string
+	StaticDir                    string
+	AdminStaticDir               string
+	DatabaseURL                  string
+	RedisURL                     string
+	RabbitMQURL                  string
+	FeishuHTTPTimeoutSeconds     string
+	FeishuTokenCachePrefix       string
+	FeishuAPIBaseURL             string
+	FeishuAccountsBaseURL        string
+	ConnectorCallbackBaseURL     string
+	ConnectorSecretEncryptionKey string
+	ConnectorQueuePrefix         string
+	S3Endpoint                   string
+	StoragePublicEndpoint        string
+	S3Region                     string
+	S3AccessKey                  string
+	S3SecretKey                  string
+	S3Bucket                     string
+	StorageMasterKey             string
+	StorageDefaultProvider       string
+	StorageDefaultQuotaBytes     string
+	StorageMaxUploadBytes        string
+	StorageUploadURLTTLSeconds   string
+	StorageAccessURLTTLSeconds   string
+	StorageRecycleDays           string
+	StorageAutoCreateBucket      bool
+	StorageForcePathStyle        bool
+	StoragePublicDomain          string
+	StorageCDNDomain             string
+	PaymentCallbackSecret        string
+	WeChatMiniProgramAppID       string
+	WeChatMiniProgramSecret      string
+	WeChatOpenAppID              string
+	WeChatOpenAppSecret          string
+	WeChatOpenAPIBaseURL         string
+	WeChatOpenAuthorizeBaseURL   string
+	WeChatPayAPIv3Key            string
+	WeChatPayPlatformKey         string
+	WeChatPayPlatformPath        string
+	AlipayPublicKey              string
+	AlipayPublicKeyPath          string
+	WeChatVirtualPayEnabled      bool
+	WeChatVirtualPayEnv          string
+	WeChatVirtualPayOfferID      string
+	WeChatVirtualPayAppKey       string
+	WeChatVirtualPaySandboxKey   string
+	WeChatVirtualPayNotifyToken  string
+	WeChatVirtualPayMode         string
+	ModelProviderURL             string
+	ModelProviderAPIKey          string
+	ImageModel                   string
+	TextModel                    string
+	PPTProviderURL               string
+	PPTProviderAPIKey            string
+	PPTTextModel                 string
+	PPTDisableThinking           bool
+	PPTVisualPlannerMode         string
+	PPTAutoImageMode             string
+	PPTVisualOCRFailureMode      string
+	ModelTimeoutMS               string
+	ModelProvidersJSON           string
+	CORSAllowedOrigins           string
+	KnowledgeOCREndpoint         string
+	KnowledgeOCRAPIKey           string
+	KnowledgeOCRProvider         string
+	MediaStorageProvider         string
+	MediaStorageRoot             string
+	MediaPublicBaseURL           string
+	MediaCDNBaseURL              string
+	MediaMaxUploadBytes          string
+	MediaKeepOriginal            bool
 }
 
 func Load() Config {
@@ -120,58 +145,89 @@ func Load() Config {
 		modelTimeoutMS = "30000"
 	}
 	return Config{
-		Environment:                os.Getenv("XIANZHI_ENV"),
-		Addr:                       addr,
-		DataPath:                   dataPath,
-		StaticDir:                  staticDir,
-		AdminStaticDir:             adminStaticDir,
-		DatabaseURL:                os.Getenv("DATABASE_URL"),
-		RedisURL:                   os.Getenv("REDIS_URL"),
-		RabbitMQURL:                os.Getenv("RABBITMQ_URL"),
-		S3Endpoint:                 os.Getenv("S3_ENDPOINT"),
-		StoragePublicEndpoint:      os.Getenv("STORAGE_PUBLIC_ENDPOINT"),
-		S3Region:                   os.Getenv("S3_REGION"),
-		S3AccessKey:                os.Getenv("S3_ACCESS_KEY"),
-		S3SecretKey:                os.Getenv("S3_SECRET_KEY"),
-		S3Bucket:                   os.Getenv("S3_BUCKET"),
-		StorageMasterKey:           os.Getenv("STORAGE_MASTER_KEY"),
-		StorageDefaultProvider:     firstNonEmptyEnv("STORAGE_DEFAULT_PROVIDER", "MEDIA_STORAGE_PROVIDER"),
-		StorageDefaultQuotaBytes:   os.Getenv("STORAGE_DEFAULT_QUOTA_BYTES"),
-		StorageMaxUploadBytes:      os.Getenv("STORAGE_MAX_UPLOAD_BYTES"),
-		StorageUploadURLTTLSeconds: os.Getenv("STORAGE_UPLOAD_URL_TTL_SECONDS"),
-		StorageAccessURLTTLSeconds: os.Getenv("STORAGE_ACCESS_URL_TTL_SECONDS"),
-		StorageRecycleDays:         os.Getenv("STORAGE_RECYCLE_DAYS"),
-		StorageAutoCreateBucket:    boolEnv(firstNonEmptyEnv("STORAGE_AUTO_CREATE_BUCKET")),
-		StorageForcePathStyle:      boolEnv(firstNonEmptyEnv("STORAGE_FORCE_PATH_STYLE")),
-		StoragePublicDomain:        os.Getenv("STORAGE_PUBLIC_DOMAIN"),
-		StorageCDNDomain:           os.Getenv("STORAGE_CDN_DOMAIN"),
-		PaymentCallbackSecret:      os.Getenv("PAYMENT_CALLBACK_SECRET"),
-		WeChatPayAPIv3Key:          firstNonEmptyEnv("WECHAT_PAY_API_V3_KEY", "WECHAT_PAY_CALLBACK_SECRET"),
-		WeChatPayPlatformKey:       os.Getenv("WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM"),
-		WeChatPayPlatformPath:      firstNonEmptyEnv("WECHAT_PAY_PLATFORM_CERT_PATH", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH"),
-		AlipayPublicKey:            firstNonEmptyEnv("ALIPAY_PUBLIC_KEY_PEM", "ALIPAY_CALLBACK_SECRET"),
-		AlipayPublicKeyPath:        os.Getenv("ALIPAY_PUBLIC_KEY_PATH"),
-		ModelProviderURL:           modelProviderURL,
-		ModelProviderAPIKey:        modelProviderAPIKey,
-		ImageModel:                 imageModel,
-		TextModel:                  textModel,
-		PPTProviderURL:             pptProviderURL,
-		PPTProviderAPIKey:          pptProviderAPIKey,
-		PPTTextModel:               pptTextModel,
-		PPTDisableThinking:         boolEnv(os.Getenv("PPT_MODEL_CHAT_DISABLE_THINKING")),
-		ModelTimeoutMS:             modelTimeoutMS,
-		ModelProvidersJSON:         modelProvidersJSON,
-		CORSAllowedOrigins:         os.Getenv("XIANZHI_CORS_ALLOWED_ORIGINS"),
-		KnowledgeOCREndpoint:       os.Getenv("KNOWLEDGE_OCR_ENDPOINT"),
-		KnowledgeOCRAPIKey:         os.Getenv("KNOWLEDGE_OCR_API_KEY"),
-		KnowledgeOCRProvider:       firstNonEmptyEnv("KNOWLEDGE_OCR_PROVIDER", "OCR_PROVIDER"),
-		MediaStorageProvider:       firstNonEmptyEnv("MEDIA_STORAGE_PROVIDER", "STORAGE_PROVIDER"),
-		MediaStorageRoot:           os.Getenv("MEDIA_STORAGE_ROOT"),
-		MediaPublicBaseURL:         os.Getenv("MEDIA_PUBLIC_BASE_URL"),
-		MediaCDNBaseURL:            os.Getenv("MEDIA_CDN_BASE_URL"),
-		MediaMaxUploadBytes:        firstNonEmptyEnv("MEDIA_MAX_UPLOAD_BYTES"),
-		MediaKeepOriginal:          boolEnv(firstNonEmptyEnv("MEDIA_KEEP_ORIGINAL")),
+		Environment:                  os.Getenv("XIANZHI_ENV"),
+		Addr:                         addr,
+		DataPath:                     dataPath,
+		StaticDir:                    staticDir,
+		AdminStaticDir:               adminStaticDir,
+		DatabaseURL:                  os.Getenv("DATABASE_URL"),
+		RedisURL:                     os.Getenv("REDIS_URL"),
+		RabbitMQURL:                  os.Getenv("RABBITMQ_URL"),
+		FeishuHTTPTimeoutSeconds:     os.Getenv("FEISHU_HTTP_TIMEOUT_SECONDS"),
+		FeishuTokenCachePrefix:       os.Getenv("FEISHU_TOKEN_CACHE_PREFIX"),
+		FeishuAPIBaseURL:             os.Getenv("FEISHU_API_BASE_URL"),
+		FeishuAccountsBaseURL:        os.Getenv("FEISHU_ACCOUNTS_BASE_URL"),
+		ConnectorCallbackBaseURL:     os.Getenv("CONNECTOR_CALLBACK_BASE_URL"),
+		ConnectorSecretEncryptionKey: os.Getenv("CONNECTOR_SECRET_ENCRYPTION_KEY"),
+		ConnectorQueuePrefix:         os.Getenv("CONNECTOR_QUEUE_PREFIX"),
+		S3Endpoint:                   os.Getenv("S3_ENDPOINT"),
+		StoragePublicEndpoint:        os.Getenv("STORAGE_PUBLIC_ENDPOINT"),
+		S3Region:                     os.Getenv("S3_REGION"),
+		S3AccessKey:                  os.Getenv("S3_ACCESS_KEY"),
+		S3SecretKey:                  os.Getenv("S3_SECRET_KEY"),
+		S3Bucket:                     os.Getenv("S3_BUCKET"),
+		StorageMasterKey:             os.Getenv("STORAGE_MASTER_KEY"),
+		StorageDefaultProvider:       firstNonEmptyEnv("STORAGE_DEFAULT_PROVIDER", "MEDIA_STORAGE_PROVIDER"),
+		StorageDefaultQuotaBytes:     os.Getenv("STORAGE_DEFAULT_QUOTA_BYTES"),
+		StorageMaxUploadBytes:        os.Getenv("STORAGE_MAX_UPLOAD_BYTES"),
+		StorageUploadURLTTLSeconds:   os.Getenv("STORAGE_UPLOAD_URL_TTL_SECONDS"),
+		StorageAccessURLTTLSeconds:   os.Getenv("STORAGE_ACCESS_URL_TTL_SECONDS"),
+		StorageRecycleDays:           os.Getenv("STORAGE_RECYCLE_DAYS"),
+		StorageAutoCreateBucket:      boolEnv(firstNonEmptyEnv("STORAGE_AUTO_CREATE_BUCKET")),
+		StorageForcePathStyle:        boolEnv(firstNonEmptyEnv("STORAGE_FORCE_PATH_STYLE")),
+		StoragePublicDomain:          os.Getenv("STORAGE_PUBLIC_DOMAIN"),
+		StorageCDNDomain:             os.Getenv("STORAGE_CDN_DOMAIN"),
+		PaymentCallbackSecret:        os.Getenv("PAYMENT_CALLBACK_SECRET"),
+		WeChatMiniProgramAppID:       os.Getenv("WECHAT_MINI_PROGRAM_APPID"),
+		WeChatMiniProgramSecret:      os.Getenv("WECHAT_MINI_PROGRAM_SECRET"),
+		WeChatOpenAppID:              os.Getenv("WECHAT_OPEN_APP_ID"),
+		WeChatOpenAppSecret:          os.Getenv("WECHAT_OPEN_APP_SECRET"),
+		WeChatOpenAPIBaseURL:         os.Getenv("WECHAT_OPEN_API_BASE_URL"),
+		WeChatOpenAuthorizeBaseURL:   os.Getenv("WECHAT_OPEN_AUTHORIZE_BASE_URL"),
+		WeChatPayAPIv3Key:            firstNonEmptyEnv("WECHAT_PAY_API_V3_KEY", "WECHAT_PAY_CALLBACK_SECRET"),
+		WeChatPayPlatformKey:         os.Getenv("WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM"),
+		WeChatPayPlatformPath:        firstNonEmptyEnv("WECHAT_PAY_PLATFORM_CERT_PATH", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH"),
+		AlipayPublicKey:              firstNonEmptyEnv("ALIPAY_PUBLIC_KEY_PEM", "ALIPAY_CALLBACK_SECRET"),
+		AlipayPublicKeyPath:          os.Getenv("ALIPAY_PUBLIC_KEY_PATH"),
+		WeChatVirtualPayEnabled:      boolEnv(os.Getenv("WECHAT_VIRTUAL_PAY_ENABLED")),
+		WeChatVirtualPayEnv:          os.Getenv("WECHAT_VIRTUAL_PAY_ENV"),
+		WeChatVirtualPayOfferID:      os.Getenv("WECHAT_VIRTUAL_PAY_OFFER_ID"),
+		WeChatVirtualPayAppKey:       os.Getenv("WECHAT_VIRTUAL_PAY_APP_KEY"),
+		WeChatVirtualPaySandboxKey:   os.Getenv("WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY"),
+		WeChatVirtualPayNotifyToken:  os.Getenv("WECHAT_VIRTUAL_PAY_NOTIFY_TOKEN"),
+		WeChatVirtualPayMode:         os.Getenv("WECHAT_VIRTUAL_PAY_MODE"),
+		ModelProviderURL:             modelProviderURL,
+		ModelProviderAPIKey:          modelProviderAPIKey,
+		ImageModel:                   imageModel,
+		TextModel:                    textModel,
+		PPTProviderURL:               pptProviderURL,
+		PPTProviderAPIKey:            pptProviderAPIKey,
+		PPTTextModel:                 pptTextModel,
+		PPTDisableThinking:           boolEnv(os.Getenv("PPT_MODEL_CHAT_DISABLE_THINKING")),
+		PPTVisualPlannerMode:         firstNonEmptyEnv("PPT_VISUAL_PLANNER_MODE"),
+		PPTAutoImageMode:             firstNonEmptyEnv("PPT_AUTO_IMAGE_MODE"),
+		PPTVisualOCRFailureMode:      firstNonEmptyEnv("PPT_VISUAL_OCR_FAILURE_MODE"),
+		ModelTimeoutMS:               modelTimeoutMS,
+		ModelProvidersJSON:           modelProvidersJSON,
+		CORSAllowedOrigins:           os.Getenv("XIANZHI_CORS_ALLOWED_ORIGINS"),
+		KnowledgeOCREndpoint:         os.Getenv("KNOWLEDGE_OCR_ENDPOINT"),
+		KnowledgeOCRAPIKey:           os.Getenv("KNOWLEDGE_OCR_API_KEY"),
+		KnowledgeOCRProvider:         firstNonEmptyEnv("KNOWLEDGE_OCR_PROVIDER", "OCR_PROVIDER"),
+		MediaStorageProvider:         firstNonEmptyEnv("MEDIA_STORAGE_PROVIDER", "STORAGE_PROVIDER"),
+		MediaStorageRoot:             os.Getenv("MEDIA_STORAGE_ROOT"),
+		MediaPublicBaseURL:           os.Getenv("MEDIA_PUBLIC_BASE_URL"),
+		MediaCDNBaseURL:              os.Getenv("MEDIA_CDN_BASE_URL"),
+		MediaMaxUploadBytes:          firstNonEmptyEnv("MEDIA_MAX_UPLOAD_BYTES"),
+		MediaKeepOriginal:            boolEnv(firstNonEmptyEnv("MEDIA_KEEP_ORIGINAL")),
 	}
+}
+
+func (c Config) FeishuHTTPTimeout() time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(c.FeishuHTTPTimeoutSeconds))
+	if err != nil || seconds <= 0 || seconds > 120 {
+		seconds = 10
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (c Config) IsProduction() bool {
@@ -180,6 +236,26 @@ func (c Config) IsProduction() bool {
 }
 
 func (c Config) ValidateProduction() error {
+	if c.WeChatVirtualPayEnabled {
+		required := map[string]string{
+			"WECHAT_MINI_PROGRAM_APPID":       c.WeChatMiniProgramAppID,
+			"WECHAT_MINI_PROGRAM_SECRET":      c.WeChatMiniProgramSecret,
+			"WECHAT_VIRTUAL_PAY_OFFER_ID":     c.WeChatVirtualPayOfferID,
+			"WECHAT_VIRTUAL_PAY_NOTIFY_TOKEN": c.WeChatVirtualPayNotifyToken,
+		}
+		for key, value := range required {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("wechat virtual payment enabled but %s is missing", key)
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(c.WeChatVirtualPayEnv), "sandbox") || strings.TrimSpace(c.WeChatVirtualPayEnv) == "1" {
+			if strings.TrimSpace(c.WeChatVirtualPaySandboxKey) == "" {
+				return fmt.Errorf("wechat virtual payment sandbox enabled but WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY is missing")
+			}
+		} else if strings.TrimSpace(c.WeChatVirtualPayAppKey) == "" {
+			return fmt.Errorf("wechat virtual payment enabled but WECHAT_VIRTUAL_PAY_APP_KEY is missing")
+		}
+	}
 	if !c.IsProduction() {
 		return nil
 	}

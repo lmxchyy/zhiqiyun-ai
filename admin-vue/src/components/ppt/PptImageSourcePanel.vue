@@ -91,6 +91,25 @@
     </div>
 
     <section v-if="activeMode === 'generate'" class="ppt-image-mode-panel">
+      <div class="ppt-visual-settings-grid">
+        <label>
+          <span>视觉类型</span>
+          <select ref="visualTypeSelectRef" :value="currentVisualType" @change="updateVisualType(($event.target as HTMLSelectElement).value)">
+            <option v-for="item in visualTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+        </label>
+        <label>
+          <span>构图</span>
+          <select :value="currentComposition" @change="updateComposition(($event.target as HTMLSelectElement).value)">
+            <option v-for="item in compositionOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+          </select>
+        </label>
+      </div>
+      <div class="ppt-visual-safety-options">
+        <label><input type="checkbox" checked disabled /> 图片内禁止文字</label>
+        <label><input type="checkbox" checked disabled /> 保留正文留白</label>
+        <label><input type="checkbox" checked disabled /> 继承整套 PPT 风格</label>
+      </div>
       <label>
         <span>生成提示词</span>
         <textarea
@@ -118,13 +137,41 @@
         type="button"
         :disabled="generating || !currentSlide"
         :aria-busy="generating ? 'true' : undefined"
-        :title="generating ? '图片正在生成' : currentSlide ? '生成当前页图片' : '请先选择幻灯片'"
-        :aria-label="generating ? '图片正在生成' : currentSlide ? '生成当前页图片' : '请先选择幻灯片'"
+        :title="currentSlide ? visualGenerateButtonLabel : '请先选择幻灯片'"
+        :aria-label="currentSlide ? visualGenerateButtonLabel : '请先选择幻灯片'"
         @click="generateCurrentImage"
       >
         <span v-if="generating" class="ppt-image-spinner"></span>
-        <span>{{ generating ? "图片生成中..." : "生成当前页图片" }}</span>
+        <span>{{ visualGenerateButtonLabel }}</span>
       </button>
+      <button
+        type="button"
+        :disabled="generating || !currentSlide"
+        title="更换当前页视觉类型"
+        aria-label="更换当前页视觉类型"
+        @click="openVisualTypePicker"
+      >
+        更换视觉类型
+      </button>
+      <button type="button" :disabled="generating || !currentSlide?.imageUrl" @click="$emit('delete-visual')">删除配图</button>
+      <div v-if="currentSlide?.visualHistory?.length" class="ppt-visual-history">
+        <strong>历史配图</strong>
+        <div class="ppt-image-grid" role="listbox" aria-label="历史配图">
+          <button
+            v-for="asset in [...currentSlide.visualHistory].reverse()"
+            :key="`${asset.createdAt}-${asset.url}`"
+            type="button"
+            :disabled="generating"
+            :title="`恢复 ${formatVisualTime(asset.createdAt)} 的配图`"
+            @click="$emit('restore-visual', asset)"
+          >
+            <img :src="asset.url" alt="历史配图预览" />
+            <span>{{ formatVisualTime(asset.createdAt) }}</span>
+          </button>
+        </div>
+      </div>
+      <p v-if="visualOperationStatus === 'success'" class="ppt-visual-status is-success">本页视觉素材已更新，标题和正文保持不变。</p>
+      <p v-else-if="visualOperationStatus === 'failed'" class="ppt-visual-status is-failed">视觉素材更新失败，页面继续保留旧图片。</p>
     </section>
 
     <section v-else-if="activeMode === 'upload'" class="ppt-image-mode-panel">
@@ -251,7 +298,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index";
-import type { PptImageOption, PptImageSource, PptModelOption, PptSlide } from "../../types/ppt";
+import type { PptImageOption, PptImageSource, PptModelOption, PptSlide, PptVisualAsset, PptVisualPlan } from "../../types/ppt";
 
 type ImageMode = "generate" | "upload" | "generated" | "search" | "gif" | "embed";
 
@@ -262,6 +309,7 @@ const props = defineProps<{
   currentSlide: PptSlide | null;
   results: PptImageOption[];
   generating: boolean;
+  visualOperationStatus?: "idle" | "loading" | "success" | "failed";
 }>();
 
 const emit = defineEmits<{
@@ -270,8 +318,16 @@ const emit = defineEmits<{
   "generate-image": [];
   "search-images": [keyword: string];
   "apply-image": [image: PptImageOption];
+  "update-visual-plan": [patch: Partial<PptVisualPlan>];
+  "delete-visual": [];
+  "restore-visual": [asset: PptVisualAsset];
   close: [];
 }>();
+
+function formatVisualTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "历史版本" : date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
 
 const imageSourceOptions = [
   { label: "AI生成", value: "ai" },
@@ -288,10 +344,23 @@ const modeTabs = [
   { label: "嵌入", value: "embed", icon: "embed" }
 ] satisfies Array<{ label: string; value: ImageMode; icon: string }>;
 
+const visualTypeOptions = [
+  { label: "场景图", value: "scene" }, { label: "概念插画", value: "illustration" },
+  { label: "产品展示", value: "product" }, { label: "企业办公", value: "office" },
+  { label: "图标", value: "icon" }, { label: "图表", value: "chart" },
+  { label: "流程图", value: "diagram" }, { label: "不需要视觉素材", value: "none" }
+];
+const compositionOptions = [
+  { label: "图片在左", value: "image_left" }, { label: "图片在右", value: "image_right" },
+  { label: "通栏图片", value: "full_width" }, { label: "背景图片", value: "background" },
+  { label: "卡片图片", value: "card" }
+];
+
 const activeMode = ref<ImageMode>(props.imageSource === "stock" ? "search" : "generate");
 const keyword = ref("");
 const embedUrl = ref("");
 const fileInputRef = ref<HTMLInputElement | null>(null);
+const visualTypeSelectRef = ref<HTMLSelectElement | null>(null);
 const uploadedImages = ref<PptImageOption[]>([]);
 const generatedImageCache = ref<PptImageOption[]>([]);
 
@@ -299,8 +368,39 @@ const generatePrompt = ref("");
 
 const defaultPrompt = computed(() => {
   if (!props.currentSlide) return "";
-  return `${props.currentSlide.title}，${props.currentSlide.content}`.slice(0, 140);
+  const plan = props.currentSlide.visualPlan;
+  return [plan?.subject, plan?.scene, plan?.action].filter(Boolean).join("，").slice(0, 140);
 });
+
+const currentVisualType = computed(() => props.currentSlide?.visualPlan?.visualType || "illustration");
+const visualGenerateButtonLabel = computed(() => {
+  if (props.generating) return "图片生成中...";
+  return props.currentSlide?.imageUrl ? "重新生成本页配图" : "生成本页配图";
+});
+const currentComposition = computed(() => {
+  const value = props.currentSlide?.visualPlan?.composition || "image_right";
+  return compositionOptions.some(item => item.value === value) ? value : "image_right";
+});
+
+function updateVisualType(value: string) {
+  emit("update-visual-plan", { visualType: value, imageRequired: !["icon", "chart", "diagram", "none"].includes(value), chartRequired: value === "chart", diagramRequired: value === "diagram", textInImage: false });
+  if (value === "none") emit("update:image-source", "none");
+}
+
+function openVisualTypePicker() {
+  const select = visualTypeSelectRef.value;
+  if (!select) return;
+  select.focus();
+  try {
+    (select as HTMLSelectElement & { showPicker?: () => void }).showPicker?.();
+  } catch {
+    select.focus();
+  }
+}
+
+function updateComposition(value: string) {
+  emit("update-visual-plan", { composition: value, textInImage: false });
+}
 
 watch(
   () => props.currentSlide?.id,
@@ -361,8 +461,7 @@ function isImageApplied(image: PptImageOption) {
 }
 
 function clearCurrentImage() {
-  emit("apply-image", { id: "clear_image", title: "清除图片", source: "stock", url: "" });
-  ElMessage.success("已清除当前页图片");
+  emit("delete-visual");
 }
 
 function applyEmbedUrl() {
@@ -544,6 +643,33 @@ function escapeSvg(value: string) {
 .ppt-image-mode-panel {
   display: grid;
   gap: 11px;
+}
+
+.ppt-visual-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ppt-visual-safety-options {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #2b2b2b;
+  border-radius: 8px;
+  color: #d4d4d8;
+  background: #101010;
+  font-size: 12px;
+}
+
+.ppt-visual-safety-options label { display: flex; align-items: center; gap: 8px; }
+.ppt-visual-status.is-success { color: #86efac; }
+.ppt-visual-status.is-failed { color: #fca5a5; }
+
+.ppt-visual-history {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
 }
 
 .ppt-image-mode-panel label {

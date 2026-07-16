@@ -11,8 +11,9 @@
       @secondary="returnToAvailableLogin()"
     />
 
+    <!-- #ifdef MP-WEIXIN -->
     <LoginCard
-      v-else-if="mode === 'wechat'"
+      v-if="viewState === 'form' && mode === 'wechat'"
       title="欢迎使用知启云AI"
       subtitle="登录后即可继续创作与管理作品"
       mode="wechat"
@@ -46,9 +47,10 @@
       />
       <SecondaryLoginEntry class="auth-help-spacing" label="登录遇到问题？" muted @activate="showLoginHelp()" />
     </LoginCard>
+    <!-- #endif -->
 
     <LoginCard
-      v-else-if="mode === 'sms'"
+      v-if="viewState === 'form' && mode === 'sms'"
       title="手机号验证码登录"
       subtitle="登录与注册合并，系统自动识别账号"
       mode="sms"
@@ -63,7 +65,10 @@
         @confirm="loginWithSms()"
       />
       <PrimaryLoginButton label="登录 / 注册" :disabled="busy" @activate="loginWithSms()" />
+      <SecondaryLoginEntry class="auth-mode-back" label="账号密码登录" @activate="switchMode('password')" />
+      <!-- #ifdef MP-WEIXIN -->
       <SecondaryLoginEntry class="auth-mode-back" label="返回微信快捷登录" @activate="switchMode('wechat')" />
+      <!-- #endif -->
       <InviteCodeEntry :status="inviteStatus" @click="openInviteSheet()" />
       <AgreementCheckbox
         v-model="agreementAccepted"
@@ -75,7 +80,7 @@
     </LoginCard>
 
     <LoginCard
-      v-else
+      v-if="viewState === 'form' && mode === 'password'"
       title="账号密码登录"
       subtitle="适用于企业员工及已设置密码的账号"
       mode="password"
@@ -130,7 +135,9 @@
         <text>{{ busy ? "正在登录…" : agreementAccepted ? "登录" : "同意协议并登录" }}</text>
       </view>
       <SecondaryLoginEntry label="使用手机号验证码登录" @activate="switchMode('sms')" />
+      <!-- #ifdef MP-WEIXIN -->
       <SecondaryLoginEntry label="返回微信快捷登录" muted @activate="switchMode('wechat')" />
+      <!-- #endif -->
       <view class="auth-password-note"><text>首次微信或验证码登录后，可在账号与安全中设置密码</text></view>
       <view :class="['auth-password-agreement', { highlight: agreementHighlight }]">
         <view :class="['auth-password-agreement-toggle', { checked: agreementAccepted }]" @tap.stop="togglePasswordAgreement()">
@@ -174,6 +181,7 @@
       <SecondaryLoginEntry v-if="pendingInviteCode" label="删除邀请码" muted @activate="removeInvite()" />
     </BottomSheet>
 
+    <!-- #ifdef MP-WEIXIN -->
     <BottomSheet :visible="authorizationSheetVisible" :closable="false" :close-on-overlay="false">
       <view class="auth-permission-sheet">
         <view class="auth-permission-icon">!</view>
@@ -188,6 +196,7 @@
         />
       </view>
     </BottomSheet>
+    <!-- #endif -->
 
     <BottomSheet :visible="agreementSheetVisible" :title="agreementSheetTitle" @close="agreementSheetVisible = false">
       <scroll-view class="auth-agreement-document" scroll-y>
@@ -243,6 +252,11 @@ type ToastTone = "info" | "error" | "success";
 const authStore = useAuthStore();
 const userStore = useUserStore();
 const mode = ref<LoginMode>("wechat");
+// App MVP uses backend-supported SMS/password login. WeChat App OAuth is enabled only after
+// the dedicated Open Platform backend exchange is configured; the mini-program code path is not reused.
+// #ifdef APP-PLUS
+mode.value = "sms";
+// #endif
 const viewState = ref<ViewState>("form");
 const errorState = ref<LoginErrorState>("network");
 const loadingStep = ref<LoadingStep>("authorizing");
@@ -401,6 +415,12 @@ function errorPayloadCode(error: unknown): string {
   return "";
 }
 
+function errorPayloadValue(error: unknown, key: string): string {
+  if (!(error instanceof ApiClientError) || !error.payload || typeof error.payload !== "object") return "";
+  const payload = error.payload as Record<string, unknown>;
+  return String(payload[key] || "").trim();
+}
+
 function errorStatusCode(error: unknown): number {
   return error instanceof ApiClientError ? error.statusCode : 0;
 }
@@ -419,6 +439,11 @@ function handleLoginError(error: unknown, method: LoginMode) {
     smsCode.value = "";
     smsError.value = "验证码已过期，请重新获取";
     showToast(smsError.value, "error");
+    return;
+  }
+  if (code.includes("AUTH_ACCOUNT_MERGE_REQUIRED")) {
+    const mergeRequestId = errorPayloadValue(error, "mergeRequestId");
+    showToast(mergeRequestId ? `账号需要人工合并，工单号：${mergeRequestId}` : "账号需要人工合并，请联系客服处理", "error");
     return;
   }
   if (code.includes("ACCOUNT_FROZEN") || status === 423) return showErrorState("frozen");

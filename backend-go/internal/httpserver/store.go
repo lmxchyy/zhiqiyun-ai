@@ -425,27 +425,27 @@ func (s *jsonStore) CreateAdminCustomer(req adminCustomerMutation) (adminUser, e
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		created = adminUser{
-			ID:                 uniqueAdminID("user", userIDs(data.Users)),
-			Email:              req.Email,
-			Mobile:             strings.TrimSpace(req.Mobile),
-			WeChatOpenIDs:      appendUniqueString(nil, req.WeChatOpenID),
-			WeChatUnionID:      strings.TrimSpace(req.WeChatUnionID),
-			RegistrationSource: cloneStringMap(req.RegistrationSource),
-			Name:               req.Name,
-			Role:               fallback(req.Role, "MEMBER"),
-			Status:             fallback(req.Status, "ACTIVE"),
-			PlanID:             fallback(req.PlanID, "plan_free"),
-			ReferredBy:         strings.TrimSpace(req.ReferredBy),
-			CreatedAt:          now,
-			UpdatedAt:          now,
+			ID:                    uniqueAdminID("user", userIDs(data.Users)),
+			Email:                 req.Email,
+			Mobile:                strings.TrimSpace(req.Mobile),
+			WeChatOpenIDs:         appendUniqueString(nil, req.WeChatOpenID),
+			WeChatUnionID:         strings.TrimSpace(req.WeChatUnionID),
+			RegistrationSource:    cloneStringMap(req.RegistrationSource),
+			Name:                  req.Name,
+			Role:                  fallback(req.Role, "MEMBER"),
+			Status:                fallback(req.Status, "ACTIVE"),
+			PlanID:                fallback(req.PlanID, "plan_free"),
+			ReferredBy:            strings.TrimSpace(req.ReferredBy),
+			SubscriptionExpiresAt: strings.TrimSpace(req.SubscriptionExpiresAt),
+			CreatedAt:             now,
+			UpdatedAt:             now,
 		}
 		data.Users = append(data.Users, created)
-		data.PointAccounts = append(data.PointAccounts, adminPointAccount{
-			ID:        uniqueAdminID("points", pointIDs(data.PointAccounts)),
-			UserID:    created.ID,
-			Available: req.Available,
-		})
-		return nil
+		available := 0
+		if req.Available != nil {
+			available = *req.Available
+		}
+		return setAdminPointAccountWithLedgerV1(data, created.ID, available, "ADJUSTMENT", "ADMIN_CUSTOMER_CREATE", created.ID, "admin customer initial balance")
 	})
 	return created, err
 }
@@ -490,14 +490,945 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 			data.Users[i].ReferredBy = strings.TrimSpace(req.ReferredBy)
 			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			updated = data.Users[i]
-			if req.Available >= 0 {
-				setPointAccount(data, id, req.Available)
+			if req.Available != nil {
+				if err := setAdminPointAccountWithLedgerV1(data, id, *req.Available, "ADJUSTMENT", "ADMIN_CUSTOMER_UPDATE", id+":"+data.Users[i].UpdatedAt, "admin customer balance adjustment"); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
 		return fmt.Errorf("customer not found: %s", id)
 	})
 	return updated, err
+}
+
+func (s *jsonStore) UpdateAdminCustomerIdentity(id string, req adminCustomerIdentityMutation) (adminUser, error) {
+	var updated adminUser
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.Users {
+			if data.Users[i].ID != id {
+				continue
+			}
+			if req.ClearMobile {
+				data.Users[i].Mobile = ""
+			}
+			if req.ClearWeChat {
+				data.Users[i].WeChatOpenIDs = nil
+				data.Users[i].WeChatUnionID = ""
+			}
+			if req.Status != "" {
+				data.Users[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
+			}
+			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			updated = data.Users[i]
+			return nil
+		}
+		return fmt.Errorf("user not found: %s", id)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) CreateAdminAuthMergeRequest(req adminAuthMergeRequestMutation) (adminAuthMergeRequest, error) {
+	req = normalizeAuthMergeRequestMutation(req)
+	if req.PrimaryUserID == "" || req.SecondaryUserID == "" {
+		return adminAuthMergeRequest{}, errors.New("primaryUserId and secondaryUserId are required")
+	}
+	if strings.EqualFold(req.PrimaryUserID, req.SecondaryUserID) {
+		return adminAuthMergeRequest{}, errors.New("merge request requires two different users")
+	}
+	var created adminAuthMergeRequest
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for _, item := range data.AuthMergeRequests {
+			if sameOpenAuthMergeRequest(item, req) {
+				created = item
+				return nil
+			}
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		created = adminAuthMergeRequest{
+			ID:              nextID(data.Counters, "auth_merge"),
+			PrimaryUserID:   req.PrimaryUserID,
+			SecondaryUserID: req.SecondaryUserID,
+			Mobile:          req.Mobile,
+			WeChatOpenID:    req.WeChatOpenID,
+			WeChatUnionID:   req.WeChatUnionID,
+			ConflictCode:    fallback(req.ConflictCode, "AUTH_ACCOUNT_MERGE_REQUIRED"),
+			Source:          fallback(req.Source, "auth_conflict"),
+			Reason:          req.Reason,
+			Status:          fallback(req.Status, "PENDING"),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			Raw:             cloneAnyMap(req.Raw),
+		}
+		data.AuthMergeRequests = append(data.AuthMergeRequests, created)
+		return nil
+	})
+	return created, err
+}
+
+func (s *jsonStore) ListAdminAuthMergeRequests(userID string) ([]adminAuthMergeRequest, error) {
+	data, err := s.AdminData()
+	if err != nil {
+		return nil, err
+	}
+	return filterAdminAuthMergeRequests(data.AuthMergeRequests, userID), nil
+}
+
+func (s *jsonStore) UpdateAdminAuthMergeRequest(id string, req adminAuthMergeRequestMutation) (adminAuthMergeRequest, error) {
+	var updated adminAuthMergeRequest
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.AuthMergeRequests {
+			if data.AuthMergeRequests[i].ID != id {
+				continue
+			}
+			status := normalizeAuthMergeStatus(req.Status, data.AuthMergeRequests[i].Status)
+			if status == "" {
+				return errors.New("status is required")
+			}
+			if !validAuthMergeStatus(status) {
+				return errors.New("invalid merge request status")
+			}
+			data.AuthMergeRequests[i].Status = status
+			if req.ReviewComment != "" {
+				data.AuthMergeRequests[i].ReviewComment = strings.TrimSpace(req.ReviewComment)
+			}
+			if req.ResolvedBy != "" {
+				data.AuthMergeRequests[i].ResolvedBy = strings.TrimSpace(req.ResolvedBy)
+			}
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if authMergeClosedStatus(status) && data.AuthMergeRequests[i].ResolvedAt == "" {
+				data.AuthMergeRequests[i].ResolvedAt = now
+			}
+			data.AuthMergeRequests[i].UpdatedAt = now
+			updated = data.AuthMergeRequests[i]
+			return nil
+		}
+		return fmt.Errorf("auth merge request not found: %s", id)
+	})
+	return updated, err
+}
+
+func (s *jsonStore) PreviewAdminAuthMergeRequest(id string, targetUserID string) (adminAuthMergeRequest, adminAuthMergePreviewResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := s.loadAdminLocked()
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	}
+	return previewAdminAuthMergeRequestOnData(&data, id, targetUserID)
+}
+
+func (s *jsonStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMergeExecuteRequest) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error) {
+	var updated adminAuthMergeRequest
+	var result adminAuthMergeExecuteResult
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		var err error
+		updated, result, err = executeAdminAuthMergeRequestOnData(data, id, req)
+		return err
+	})
+	return updated, result, err
+}
+
+func previewAdminAuthMergeRequestOnData(data *adminPlatformData, id string, targetUserID string) (adminAuthMergeRequest, adminAuthMergePreviewResult, error) {
+	request, target, source, targetID, sourceID, err := resolveAdminAuthMergeUsers(data, id, targetUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergePreviewResult{}, err
+	}
+	result := adminAuthMergePreviewResult{
+		RequestID:    request.ID,
+		TargetUserID: targetID,
+		SourceUserID: sourceID,
+		Executable:   true,
+		Moved:        previewAdminAuthMergeMoved(data, sourceID),
+	}
+	if authMergeClosedStatus(request.Status) {
+		result.Executable = false
+		result.Blockers = append(result.Blockers, "merge request is already closed")
+	}
+	if err := validateUsersForAdminAuthMerge(data, target, source); err != nil {
+		result.Executable = false
+		result.Blockers = append(result.Blockers, err.Error())
+	}
+	if countUserCustomerRelations(data.CustomerRelations, sourceID) > 0 {
+		result.Warnings = append(result.Warnings, "memory customer relations will be reassigned; PostgreSQL customer relation projection may require a dedicated follow-up if enabled")
+	}
+	return request, result, nil
+}
+
+func executeAdminAuthMergeRequestOnData(data *adminPlatformData, id string, req adminAuthMergeExecuteRequest) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error) {
+	if data == nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("admin data is required")
+	}
+	if !req.Confirm {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("confirm must be true before executing account merge")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("merge request id is required")
+	}
+	requestIndex := -1
+	for i := range data.AuthMergeRequests {
+		if data.AuthMergeRequests[i].ID == id {
+			requestIndex = i
+			break
+		}
+	}
+	if requestIndex < 0 {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, fmt.Errorf("auth merge request not found: %s", id)
+	}
+	request := data.AuthMergeRequests[requestIndex]
+	if authMergeClosedStatus(request.Status) {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("merge request is already closed")
+	}
+	targetID := strings.TrimSpace(req.TargetUserID)
+	if targetID == "" {
+		targetID = request.PrimaryUserID
+	}
+	sourceID := request.SecondaryUserID
+	if targetID == request.SecondaryUserID {
+		sourceID = request.PrimaryUserID
+	}
+	if targetID == "" || sourceID == "" || targetID == sourceID {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("merge request requires two different users")
+	}
+	targetIndex, sourceIndex := -1, -1
+	for i := range data.Users {
+		if data.Users[i].ID == targetID {
+			targetIndex = i
+		}
+		if data.Users[i].ID == sourceID {
+			sourceIndex = i
+		}
+	}
+	if targetIndex < 0 || sourceIndex < 0 {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("target or source user not found")
+	}
+	target, source := data.Users[targetIndex], data.Users[sourceIndex]
+	if err := validateUsersForAdminAuthMerge(data, target, source); err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	moved := map[string]int{}
+	warnings := []string{}
+	mergeAdminUserIdentity(&target, source, request)
+	target.UpdatedAt = now
+	source.Mobile = ""
+	source.WeChatOpenIDs = nil
+	source.WeChatUnionID = ""
+	source.ModelRoutes = nil
+	source.Status = "MERGED"
+	source.UpdatedAt = now
+	data.Users[targetIndex], data.Users[sourceIndex] = target, source
+
+	moved["pointAccounts"] = mergePointAccountsForUsers(data, targetID, sourceID)
+	moved["tokenRecords"] = replaceUserIDInTokenRecords(data.TokenRecords, sourceID, targetID)
+	moved["orders"] = replaceUserIDInOrders(data.Orders, sourceID, targetID)
+	moved["channelAgents"] = replaceUserIDInChannelAgents(data.ChannelAgents, sourceID, targetID)
+	moved["operationCenters"] = replaceUserIDInOperationCenters(data.OperationCenters, sourceID, targetID)
+	moved["generationTasks"] = replaceUserIDInGenerationTasks(data.GenerationTasks, sourceID, targetID)
+	moved["assets"] = replaceUserIDInAssets(data.Assets, sourceID, targetID)
+	moved["billingEvents"] = replaceUserIDInBillingEvents(data.BillingEvents, sourceID, targetID)
+	moved["presentations"] = replaceUserIDInPresentations(data.Presentations, sourceID, targetID)
+	moved["agents"] = replaceOwnerIDInAgents(data.Agents, sourceID, targetID)
+	moved["agentCalls"] = replaceUserIDInAgentCalls(data.AgentCalls, sourceID, targetID)
+	moved["geoBrands"] = replaceOwnerIDInGeoBrands(data.GeoBrands, sourceID, targetID)
+	moved["geoTasks"] = replaceOwnerIDInGeoTasks(data.GeoTasks, sourceID, targetID)
+	if replaceUserIDInCustomerRelations(data.CustomerRelations, sourceID, targetID) > 0 {
+		warnings = append(warnings, "memory customer relations were reassigned; PostgreSQL customer relation projection may require a dedicated follow-up if enabled")
+	}
+	request.Status = "RESOLVED"
+	request.ResolvedBy = fallback(strings.TrimSpace(req.ResolvedBy), "admin")
+	request.ReviewComment = fallback(strings.TrimSpace(req.ReviewComment), "人工确认账号合并完成")
+	request.ResolvedAt = now
+	request.UpdatedAt = now
+	if request.Raw == nil {
+		request.Raw = map[string]any{}
+	}
+	request.Raw["executeResult"] = map[string]any{"targetUserId": targetID, "sourceUserId": sourceID, "moved": moved}
+	data.AuthMergeRequests[requestIndex] = request
+	return request, adminAuthMergeExecuteResult{RequestID: request.ID, TargetUserID: targetID, SourceUserID: sourceID, Moved: moved, Warnings: warnings}, nil
+}
+
+func adminAuthMergeRequestIndex(items []adminAuthMergeRequest, id string) int {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return -1
+	}
+	for i := range items {
+		if items[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func resolveAdminAuthMergeUsers(data *adminPlatformData, id string, targetUserID string) (adminAuthMergeRequest, adminUser, adminUser, string, string, error) {
+	if data == nil {
+		return adminAuthMergeRequest{}, adminUser{}, adminUser{}, "", "", errors.New("admin data is required")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return adminAuthMergeRequest{}, adminUser{}, adminUser{}, "", "", errors.New("merge request id is required")
+	}
+	requestIndex := adminAuthMergeRequestIndex(data.AuthMergeRequests, id)
+	if requestIndex < 0 {
+		return adminAuthMergeRequest{}, adminUser{}, adminUser{}, "", "", fmt.Errorf("auth merge request not found: %s", id)
+	}
+	request := data.AuthMergeRequests[requestIndex]
+	targetID := strings.TrimSpace(targetUserID)
+	if targetID == "" {
+		targetID = request.PrimaryUserID
+	}
+	sourceID := request.SecondaryUserID
+	if targetID == request.SecondaryUserID {
+		sourceID = request.PrimaryUserID
+	}
+	if targetID == "" || sourceID == "" || targetID == sourceID {
+		return adminAuthMergeRequest{}, adminUser{}, adminUser{}, "", "", errors.New("merge request requires two different users")
+	}
+	targetIndex, sourceIndex := -1, -1
+	for i := range data.Users {
+		if data.Users[i].ID == targetID {
+			targetIndex = i
+		}
+		if data.Users[i].ID == sourceID {
+			sourceIndex = i
+		}
+	}
+	if targetIndex < 0 || sourceIndex < 0 {
+		return adminAuthMergeRequest{}, adminUser{}, adminUser{}, "", "", errors.New("target or source user not found")
+	}
+	return request, data.Users[targetIndex], data.Users[sourceIndex], targetID, sourceID, nil
+}
+
+func previewAdminAuthMergeMoved(data *adminPlatformData, sourceID string) map[string]int {
+	moved := map[string]int{}
+	moved["pointAccounts"] = countPointAccountsForUser(data.PointAccounts, sourceID)
+	moved["tokenRecords"] = countTokenRecordsForUser(data.TokenRecords, sourceID)
+	moved["orders"] = countOrdersForUser(data.Orders, sourceID)
+	moved["channelAgents"] = countUserChannelAgents(data.ChannelAgents, sourceID)
+	moved["operationCenters"] = countUserOperationCenters(data.OperationCenters, sourceID)
+	moved["generationTasks"] = countGenerationTasksForUser(data.GenerationTasks, sourceID)
+	moved["assets"] = countAssetsForUser(data.Assets, sourceID)
+	moved["billingEvents"] = countBillingEventsForUser(data.BillingEvents, sourceID)
+	moved["presentations"] = countPresentationsForUser(data.Presentations, sourceID)
+	moved["agents"] = countAgentsForOwner(data.Agents, sourceID)
+	moved["agentCalls"] = countAgentCallsForUser(data.AgentCalls, sourceID)
+	moved["geoBrands"] = countGeoBrandsForOwner(data.GeoBrands, sourceID)
+	moved["geoTasks"] = countGeoTasksForOwner(data.GeoTasks, sourceID)
+	return compactPositiveCounts(moved)
+}
+
+func compactPositiveCounts(items map[string]int) map[string]int {
+	result := map[string]int{}
+	for key, value := range items {
+		if value > 0 {
+			result[key] = value
+		}
+	}
+	return result
+}
+
+func validateUsersForAdminAuthMerge(data *adminPlatformData, target adminUser, source adminUser) error {
+	if strings.EqualFold(strings.TrimSpace(target.ID), strings.TrimSpace(source.ID)) {
+		return errors.New("cannot merge the same user")
+	}
+	targetMobile := normalizeMainlandMobile(target.Mobile)
+	sourceMobile := normalizeMainlandMobile(source.Mobile)
+	if targetMobile != "" && sourceMobile != "" && targetMobile != sourceMobile {
+		return errors.New("cannot merge users with different bound mobiles")
+	}
+	if target.WeChatUnionID != "" && source.WeChatUnionID != "" && !strings.EqualFold(strings.TrimSpace(target.WeChatUnionID), strings.TrimSpace(source.WeChatUnionID)) {
+		return errors.New("cannot merge users with different wechat union ids")
+	}
+	if countUserChannelAgents(data.ChannelAgents, target.ID) > 0 && countUserChannelAgents(data.ChannelAgents, source.ID) > 0 {
+		return errors.New("both users have channel agent identities; manual asset merge is required")
+	}
+	if countUserOperationCenters(data.OperationCenters, target.ID) > 0 && countUserOperationCenters(data.OperationCenters, source.ID) > 0 {
+		return errors.New("both users have operation center identities; manual asset merge is required")
+	}
+	return nil
+}
+
+func mergeAdminUserIdentity(target *adminUser, source adminUser, request adminAuthMergeRequest) {
+	if normalizeMainlandMobile(target.Mobile) == "" {
+		target.Mobile = firstNonEmptyString(normalizeMainlandMobile(source.Mobile), normalizeMainlandMobile(request.Mobile))
+	}
+	for _, openID := range source.WeChatOpenIDs {
+		target.WeChatOpenIDs = appendUniqueString(target.WeChatOpenIDs, openID)
+	}
+	target.WeChatOpenIDs = appendUniqueString(target.WeChatOpenIDs, request.WeChatOpenID)
+	if strings.TrimSpace(target.WeChatUnionID) == "" {
+		target.WeChatUnionID = firstNonEmptyString(source.WeChatUnionID, request.WeChatUnionID)
+	}
+	if (target.MemberLevel == "" || strings.EqualFold(target.MemberLevel, "FREE")) && source.MemberLevel != "" {
+		target.MemberLevel = source.MemberLevel
+	}
+	if (target.PlanID == "" || strings.EqualFold(target.PlanID, "plan_free")) && source.PlanID != "" {
+		target.PlanID = source.PlanID
+	}
+	if later := laterTimeString(target.SubscriptionExpiresAt, source.SubscriptionExpiresAt); later != "" {
+		target.SubscriptionExpiresAt = later
+	}
+	target.ModelRoutes = mergeAdminUserModelRoutes(target.ModelRoutes, source.ModelRoutes)
+}
+
+func laterTimeString(a string, b string) string {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	if errA == nil && errB == nil {
+		if tb.After(ta) {
+			return b
+		}
+		return a
+	}
+	if b > a {
+		return b
+	}
+	return a
+}
+
+func mergeAdminUserModelRoutes(target []adminUserModelRoute, source []adminUserModelRoute) []adminUserModelRoute {
+	seen := map[string]bool{}
+	merged := make([]adminUserModelRoute, 0, len(target)+len(source))
+	for _, route := range append(append([]adminUserModelRoute{}, target...), source...) {
+		key := strings.TrimSpace(route.ID)
+		if key == "" {
+			key = strings.Join([]string{route.Provider, route.ChannelID, route.APIKeyID, route.GroupName, strings.Join(route.Models, ",")}, "|")
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, route)
+	}
+	return merged
+}
+
+func countUserChannelAgents(items []adminChannelAgent, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countUserOperationCenters(items []adminOperationCenter, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countUserCustomerRelations(items []adminCustomerRelation, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.CustomerUserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countPointAccountsForUser(items []adminPointAccount, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countTokenRecordsForUser(items []adminTokenRecord, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countOrdersForUser(items []adminOrder, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID || item.BuyerUserID == userID || (item.PriceSnapshot != nil && stringValue(item.PriceSnapshot["buyerUserId"]) == userID) {
+			count++
+		}
+	}
+	return count
+}
+
+func countGenerationTasksForUser(items []generationTask, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countAssetsForUser(items []asset, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countBillingEventsForUser(items []adminBillingEvent, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countPresentationsForUser(items []adminPresentation, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countAgentsForOwner(items []adminAgent, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.OwnerID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countAgentCallsForUser(items []adminAgentCall, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.UserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countGeoBrandsForOwner(items []adminGeoBrand, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.OwnerID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func countGeoTasksForOwner(items []adminGeoTask, userID string) int {
+	count := 0
+	for _, item := range items {
+		if item.OwnerID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+func mergePointAccountsForUsers(data *adminPlatformData, targetID string, sourceID string) int {
+	if data.Counters == nil {
+		data.Counters = map[string]int{}
+	}
+	targetIndex := -1
+	for i := range data.PointAccounts {
+		if data.PointAccounts[i].UserID == targetID {
+			targetIndex = i
+			break
+		}
+	}
+	if targetIndex < 0 {
+		targetIndex = len(data.PointAccounts)
+		data.PointAccounts = append(data.PointAccounts, adminPointAccount{ID: nextID(data.Counters, "points"), UserID: targetID})
+	}
+	moved := 0
+	kept := data.PointAccounts[:0]
+	for i := range data.PointAccounts {
+		item := data.PointAccounts[i]
+		if item.UserID == sourceID {
+			data.PointAccounts[targetIndex].Available += item.Available
+			data.PointAccounts[targetIndex].Frozen += item.Frozen
+			data.PointAccounts[targetIndex].TotalGranted += item.TotalGranted
+			data.PointAccounts[targetIndex].TotalUsed += item.TotalUsed
+			moved++
+			continue
+		}
+		kept = append(kept, item)
+	}
+	data.PointAccounts = kept
+	return moved
+}
+
+func replaceUserIDInTokenRecords(items []adminTokenRecord, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInOrders(items []adminOrder, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		changed := false
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			changed = true
+		}
+		if items[i].BuyerUserID == sourceID {
+			items[i].BuyerUserID = targetID
+			changed = true
+		}
+		if items[i].PriceSnapshot != nil && stringValue(items[i].PriceSnapshot["buyerUserId"]) == sourceID {
+			items[i].PriceSnapshot["buyerUserId"] = targetID
+			changed = true
+		}
+		if changed {
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInChannelAgents(items []adminChannelAgent, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			items[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInOperationCenters(items []adminOperationCenter, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			items[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInCustomerRelations(items []adminCustomerRelation, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].CustomerUserID == sourceID {
+			items[i].CustomerUserID = targetID
+			items[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInGenerationTasks(items []generationTask, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			if items[i].TenantID == sourceID {
+				items[i].TenantID = targetID
+			}
+			if strings.EqualFold(items[i].BillingAccountType, "USER") && items[i].BillingAccountID == sourceID {
+				items[i].BillingAccountID = targetID
+			}
+			items[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInAssets(items []asset, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			if items[i].TenantID == sourceID {
+				items[i].TenantID = targetID
+			}
+			items[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInBillingEvents(items []adminBillingEvent, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInPresentations(items []adminPresentation, sourceID string, targetID string) int {
+	moved := 0
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			items[i].UpdatedAt = now
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceOwnerIDInAgents(items []adminAgent, sourceID string, targetID string) int {
+	moved := 0
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := range items {
+		if items[i].OwnerID == sourceID {
+			items[i].OwnerID = targetID
+			items[i].UpdatedAt = now
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceUserIDInAgentCalls(items []adminAgentCall, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].UserID == sourceID {
+			items[i].UserID = targetID
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceOwnerIDInGeoBrands(items []adminGeoBrand, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].OwnerID == sourceID {
+			items[i].OwnerID = targetID
+			moved++
+		}
+	}
+	return moved
+}
+
+func replaceOwnerIDInGeoTasks(items []adminGeoTask, sourceID string, targetID string) int {
+	moved := 0
+	for i := range items {
+		if items[i].OwnerID == sourceID {
+			items[i].OwnerID = targetID
+			moved++
+		}
+	}
+	return moved
+}
+
+func mergeUserAIStateValues(target userAIState, source userAIState, targetID string) (userAIState, int) {
+	moved := 0
+	if len(source.FavoriteTaskIDs) > 0 {
+		moved += len(source.FavoriteTaskIDs)
+	}
+	if len(source.HiddenTaskIDs) > 0 {
+		moved += len(source.HiddenTaskIDs)
+	}
+	target.FavoriteTaskIDs = uniqueNonEmptyStrings(append(target.FavoriteTaskIDs, source.FavoriteTaskIDs...))
+	target.HiddenTaskIDs = uniqueNonEmptyStrings(append(target.HiddenTaskIDs, source.HiddenTaskIDs...))
+
+	collectionIndex := map[string]int{}
+	for i := range target.FavoriteCollections {
+		collectionIndex[target.FavoriteCollections[i].ID] = i
+	}
+	for _, collection := range source.FavoriteCollections {
+		collection.ID = strings.TrimSpace(collection.ID)
+		if collection.ID == "" {
+			continue
+		}
+		if index, ok := collectionIndex[collection.ID]; ok {
+			target.FavoriteCollections[index].TaskIDs = uniqueNonEmptyStrings(append(target.FavoriteCollections[index].TaskIDs, collection.TaskIDs...))
+			if target.FavoriteCollections[index].Name == "" {
+				target.FavoriteCollections[index].Name = collection.Name
+			}
+			moved++
+			continue
+		}
+		target.FavoriteCollections = append(target.FavoriteCollections, collection)
+		collectionIndex[collection.ID] = len(target.FavoriteCollections) - 1
+		moved++
+	}
+	if target.DefaultCollectionID == "" {
+		target.DefaultCollectionID = source.DefaultCollectionID
+	}
+	if target.ActiveCollectionID == "" {
+		target.ActiveCollectionID = source.ActiveCollectionID
+	}
+
+	conversationIDs := map[string]bool{}
+	for _, conversation := range target.AgentConversations {
+		if conversation.ID != "" {
+			conversationIDs[conversation.ID] = true
+		}
+	}
+	conversationIDMap := map[string]string{}
+	for _, conversation := range source.AgentConversations {
+		conversation.ID = strings.TrimSpace(conversation.ID)
+		if conversation.ID == "" {
+			continue
+		}
+		sourceConversationID := conversation.ID
+		if conversationIDs[conversation.ID] {
+			conversation.ID = uniqueMergedAIConversationID(conversationIDs, targetID, conversation.ID)
+		}
+		target.AgentConversations = append(target.AgentConversations, conversation)
+		conversationIDs[conversation.ID] = true
+		conversationIDMap[sourceConversationID] = conversation.ID
+		moved++
+	}
+	if target.ActiveConversationID == "" {
+		if mappedID := conversationIDMap[source.ActiveConversationID]; mappedID != "" {
+			target.ActiveConversationID = mappedID
+		} else {
+			target.ActiveConversationID = source.ActiveConversationID
+		}
+	}
+	target.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return normalizeUserAIState(target, targetID), moved
+}
+
+func uniqueMergedAIConversationID(existing map[string]bool, targetID string, sourceID string) string {
+	prefix := strings.TrimSpace(targetID)
+	if prefix == "" {
+		prefix = "merged"
+	}
+	base := prefix + "-" + sourceID
+	next := base
+	for i := 2; existing[next]; i++ {
+		next = fmt.Sprintf("%s-%d", base, i)
+	}
+	return next
+}
+
+func normalizeAuthMergeRequestMutation(req adminAuthMergeRequestMutation) adminAuthMergeRequestMutation {
+	req.PrimaryUserID = strings.TrimSpace(req.PrimaryUserID)
+	req.SecondaryUserID = strings.TrimSpace(req.SecondaryUserID)
+	req.Mobile = normalizeMainlandMobile(req.Mobile)
+	req.WeChatOpenID = strings.TrimSpace(req.WeChatOpenID)
+	req.WeChatUnionID = strings.TrimSpace(req.WeChatUnionID)
+	req.ConflictCode = strings.ToUpper(strings.TrimSpace(req.ConflictCode))
+	req.Source = strings.TrimSpace(req.Source)
+	req.Reason = strings.TrimSpace(req.Reason)
+	req.Status = normalizeAuthMergeStatus(req.Status, "PENDING")
+	req.ReviewComment = strings.TrimSpace(req.ReviewComment)
+	req.ResolvedBy = strings.TrimSpace(req.ResolvedBy)
+	req.Raw = cloneAnyMap(req.Raw)
+	return req
+}
+
+func normalizeAuthMergeStatus(status string, fallbackValue string) string {
+	status = strings.ToUpper(strings.TrimSpace(status))
+	if status == "" {
+		status = strings.ToUpper(strings.TrimSpace(fallbackValue))
+	}
+	return status
+}
+
+func validAuthMergeStatus(status string) bool {
+	switch normalizeAuthMergeStatus(status, "") {
+	case "PENDING", "IN_REVIEW", "RESOLVED", "CANCELLED", "REJECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func authMergeClosedStatus(status string) bool {
+	switch normalizeAuthMergeStatus(status, "") {
+	case "RESOLVED", "CANCELLED", "REJECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func authMergeOpenStatus(status string) bool {
+	switch normalizeAuthMergeStatus(status, "") {
+	case "PENDING", "IN_REVIEW":
+		return true
+	default:
+		return false
+	}
+}
+
+func sameOpenAuthMergeRequest(item adminAuthMergeRequest, req adminAuthMergeRequestMutation) bool {
+	if !authMergeOpenStatus(item.Status) {
+		return false
+	}
+	if !sameUserPair(item.PrimaryUserID, item.SecondaryUserID, req.PrimaryUserID, req.SecondaryUserID) {
+		return false
+	}
+	if req.Mobile != "" && normalizeMainlandMobile(item.Mobile) != req.Mobile {
+		return false
+	}
+	if req.WeChatOpenID != "" && !strings.EqualFold(strings.TrimSpace(item.WeChatOpenID), req.WeChatOpenID) {
+		return false
+	}
+	if req.WeChatUnionID != "" && !strings.EqualFold(strings.TrimSpace(item.WeChatUnionID), req.WeChatUnionID) {
+		return false
+	}
+	return true
+}
+
+func sameUserPair(a1, b1, a2, b2 string) bool {
+	a1, b1, a2, b2 = strings.TrimSpace(a1), strings.TrimSpace(b1), strings.TrimSpace(a2), strings.TrimSpace(b2)
+	return (a1 == a2 && b1 == b2) || (a1 == b2 && b1 == a2)
+}
+
+func filterAdminAuthMergeRequests(items []adminAuthMergeRequest, userID string) []adminAuthMergeRequest {
+	userID = strings.TrimSpace(userID)
+	filtered := make([]adminAuthMergeRequest, 0, len(items))
+	for _, item := range items {
+		if userID == "" || item.PrimaryUserID == userID || item.SecondaryUserID == userID {
+			filtered = append(filtered, item)
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return filtered[i].CreatedAt > filtered[j].CreatedAt
+	})
+	return filtered
 }
 
 func customerModelRouteRequested(req adminCustomerMutation) bool {
@@ -658,12 +1589,7 @@ func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adm
 		}
 		data.Users = append(data.Users, createdUser)
 		data.ChannelAgents = append(data.ChannelAgents, createdAgent)
-		data.PointAccounts = append(data.PointAccounts, adminPointAccount{
-			ID:        uniqueAdminID("points", pointIDs(data.PointAccounts)),
-			UserID:    createdUser.ID,
-			Available: req.Available,
-		})
-		return nil
+		return setAdminPointAccountWithLedgerV1(data, createdUser.ID, req.Available, "ADJUSTMENT", "ADMIN_CHANNEL_CREATE", createdAgent.ID, "admin channel account initial balance")
 	})
 	return createdAgent, createdUser, err
 }
@@ -727,7 +1653,9 @@ func (s *jsonStore) UpdateAdminChannelAgent(id string, req adminChannelMutation)
 				break
 			}
 			if req.Available != nil {
-				setPointAccount(data, item.UserID, *req.Available)
+				if err := setAdminPointAccountWithLedgerV1(data, item.UserID, *req.Available, "ADJUSTMENT", "ADMIN_CHANNEL_UPDATE", item.ID+":"+item.UpdatedAt, "admin channel account balance adjustment"); err != nil {
+					return err
+				}
 			}
 			data.ChannelAgents[i] = item
 			updated = item
@@ -776,21 +1704,23 @@ func (s *jsonStore) UpdateAdminPlan(id string, req adminPlanMutation) (adminPlan
 			if req.Name != "" {
 				data.Plans[i].Name = req.Name
 			}
-			if req.PriceCents >= 0 {
-				data.Plans[i].Price = req.PriceCents
-				data.Plans[i].PriceCents = req.PriceCents
+			if req.PriceCents != nil {
+				data.Plans[i].Price = *req.PriceCents
+				data.Plans[i].PriceCents = *req.PriceCents
 			}
-			if req.GrantPoints >= 0 {
-				data.Plans[i].Points = req.GrantPoints
-				data.Plans[i].GrantPoints = req.GrantPoints
+			if req.GrantPoints != nil {
+				data.Plans[i].Points = *req.GrantPoints
+				data.Plans[i].GrantPoints = *req.GrantPoints
 			}
-			if req.DurationDays > 0 {
-				data.Plans[i].DurationDays = req.DurationDays
+			if req.DurationDays != nil {
+				data.Plans[i].DurationDays = *req.DurationDays
 			}
-			if req.Concurrency > 0 {
-				data.Plans[i].Concurrency = req.Concurrency
+			if req.Concurrency != nil {
+				data.Plans[i].Concurrency = *req.Concurrency
 			}
-			data.Plans[i].Active = req.Active
+			if req.Active != nil {
+				data.Plans[i].Active = *req.Active
+			}
 			if req.Entitlements != nil {
 				data.Plans[i].Entitlements = req.Entitlements
 			}
@@ -1118,7 +2048,9 @@ func applyCommerceOrderFulfillment(data *adminPlatformData, order *adminOrder, n
 	}
 	applySettlementToOrder(order, ctx, result, planType)
 	if result.TokenGrantAmount > 0 && !tokenRecordExists(data.TokenRecords, order.ID, tokenChangeTypeForPlan(planType)) {
-		grantTokensToUser(data, order.UserID, order.ID, tokenChangeTypeForPlan(planType), result.TokenGrantAmount, now)
+		if err := grantTokensToUser(data, order.UserID, order.ID, tokenChangeTypeForPlan(planType), result.TokenGrantAmount, now); err != nil {
+			return err
+		}
 	}
 	for _, commission := range settlementCommissionRecords(ctx, result, now) {
 		if !commissionRecordExists(data.Commissions, commission.ID) {
@@ -1145,9 +2077,6 @@ func commerceContextForOrder(data *adminPlatformData, order adminOrder, plan adm
 				operationCenterID = parent.OperationCenterID
 			}
 		}
-	}
-	if operationCenterID == "" {
-		operationCenterID = firstActiveOperationCenterID(data.OperationCenters)
 	}
 	orderType := orderTypeForCommerceOrder(planBusinessType(plan), hasDirect, parentID)
 	directID := ""
@@ -1187,36 +2116,18 @@ func orderTypeForCommerceOrder(planType string, hasDirectAgent bool, parentAgent
 	}
 }
 
-func grantTokensToUser(data *adminPlatformData, userID string, orderID string, changeType string, amount int, now string) {
-	before := 0
-	after := amount
-	for i := range data.PointAccounts {
-		if data.PointAccounts[i].UserID != userID {
-			continue
-		}
-		before = data.PointAccounts[i].Available
-		after = before + amount
-		data.PointAccounts[i].Available = after
-		data.PointAccounts[i].TotalGranted += amount
-		data.TokenRecords = append(data.TokenRecords, adminTokenRecord{
-			ID:           "token_" + shortID(orderID+"_"+changeType),
-			UserID:       userID,
-			OrderID:      orderID,
-			ChangeType:   changeType,
-			Amount:       amount,
-			BalanceAfter: after,
-			Remark:       "commerce_order_grant",
-			CreatedAt:    now,
-		})
-		return
+func grantTokensToUser(data *adminPlatformData, userID string, orderID string, changeType string, amount int, now string) error {
+	account, _ := adminPointAccountV1(data, userID)
+	after := account.Available + amount
+	if err := setAdminPointAccountWithLedgerV1(data, userID, after, "GRANT", "COMMERCE_ORDER", orderID+":"+changeType, "commerce order grant"); err != nil {
+		return err
 	}
-	after = before + amount
-	data.PointAccounts = append(data.PointAccounts, adminPointAccount{
-		ID:           uniqueAdminID("points", pointIDs(data.PointAccounts)),
-		UserID:       userID,
-		Available:    after,
-		TotalGranted: amount,
-	})
+	for i := range data.PointAccounts {
+		if data.PointAccounts[i].UserID == userID {
+			data.PointAccounts[i].TotalGranted += amount
+			break
+		}
+	}
 	data.TokenRecords = append(data.TokenRecords, adminTokenRecord{
 		ID:           "token_" + shortID(orderID+"_"+changeType),
 		UserID:       userID,
@@ -1227,6 +2138,7 @@ func grantTokensToUser(data *adminPlatformData, userID string, orderID string, c
 		Remark:       "commerce_order_grant",
 		CreatedAt:    now,
 	})
+	return nil
 }
 
 func fulfillIdentityForOrder(data *adminPlatformData, order *adminOrder, plan adminPlan, result commissionSettlementResult, now string) {
@@ -1246,7 +2158,12 @@ func fulfillIdentityForOrder(data *adminPlatformData, order *adminOrder, plan ad
 				data.Users[i].OperationCenterStatus = operationStatusNone
 			}
 			if plan.DurationDays > 0 {
-				data.Users[i].SubscriptionExpiresAt = time.Now().UTC().Add(time.Duration(plan.DurationDays) * 24 * time.Hour).Format(time.RFC3339Nano)
+				paidAt := time.Now().UTC()
+				if parsed, parseErr := time.Parse(time.RFC3339Nano, now); parseErr == nil {
+					paidAt = parsed.UTC()
+				}
+				_, expiresAt := membershipExtensionWindow(data.Users[i].SubscriptionExpiresAt, paidAt, int64(plan.DurationDays))
+				data.Users[i].SubscriptionExpiresAt = expiresAt.Format(time.RFC3339Nano)
 			}
 		case planTypeAgentJoinPackage:
 			data.Users[i].AgentStatus = agentStatusActive
@@ -1431,7 +2348,9 @@ func applyRechargeSettlement(data *adminPlatformData, order *adminOrder, now str
 	pointsByUser := pointMap(data.PointAccounts)
 	before := pointsByUser[order.UserID].Available
 	after := before + points
-	setPointAccount(data, order.UserID, after)
+	if err := setAdminPointAccountWithLedgerV1(data, order.UserID, after, "RECHARGE", "RECHARGE_ORDER", order.ID, "recharge order credited"); err != nil {
+		return
+	}
 	directAgent, hasDirectAgent := directActiveAgentForUser(data.Users, data.ChannelAgents, order.UserID)
 	event := adminBillingEvent{
 		ID:              uniqueAdminID("evt", billingEventIDs(data.BillingEvents)),
@@ -2157,37 +3076,21 @@ func (s *jsonStore) UpdateAdminTenantModuleLimit(id string, req adminTenantModul
 	return updated, err
 }
 
+func (s *jsonStore) UpdateAdminPlanCapabilities(planID string, req adminPlanCapabilitiesMutation) error {
+	return s.updateAdmin(func(data *adminPlatformData) error {
+		return applyAdminPlanCapabilities(data, planID, req)
+	})
+}
+
 func (s *jsonStore) UpdateAdminBillingRule(id string, req adminBillingRuleMutation) (adminBillingRule, error) {
 	var updated adminBillingRule
 	err := s.updateAdmin(func(data *adminPlatformData) error {
-		*data = normalizeAICapabilityDefaults(*data)
-		for i := range data.BillingRules {
-			if data.BillingRules[i].ID != id {
-				continue
-			}
-			if req.BillingType != "" {
-				data.BillingRules[i].BillingType = req.BillingType
-			}
-			if req.BasePrice >= 0 {
-				data.BillingRules[i].BasePrice = req.BasePrice
-			}
-			if req.CostPrice >= 0 {
-				data.BillingRules[i].CostPrice = req.CostPrice
-			}
-			if req.CurrencyType != "" {
-				data.BillingRules[i].CurrencyType = req.CurrencyType
-			}
-			if req.ParameterMultiplier != nil {
-				data.BillingRules[i].ParameterMultiplier = req.ParameterMultiplier
-			}
-			if req.Status != "" {
-				data.BillingRules[i].Status = strings.ToUpper(strings.TrimSpace(req.Status))
-			}
-			data.BillingRules[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			updated = normalizeBillingRuleAliases(data.BillingRules[i])
-			return nil
+		draft, err := createBillingRuleDraftInData(data, id, req)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("billing rule not found: %s", id)
+		updated = billingRuleVersionProjection(draft)
+		return nil
 	})
 	return updated, err
 }
@@ -2346,6 +3249,13 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		if userID == "" {
 			userID = "user_000002"
 		}
+		if existing, ok := findGenerationTaskByClientRequest(data.GenerationTasks, userID, req.ClientRequestID); ok {
+			task = existing
+			return nil
+		}
+		if err := enforceJSONGenerationConcurrency(*data, userID); err != nil {
+			return err
+		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
 		count := imageCount(req.Params)
@@ -2359,20 +3269,28 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		resultIDs := make([]string, 0, count)
 		task = generationTask{
 			ID:               taskID,
+			ClientRequestID:  strings.TrimSpace(req.ClientRequestID),
 			UserID:           userID,
 			Type:             req.Type,
 			Prompt:           req.Prompt,
 			Params:           req.Params,
 			Model:            req.Model,
 			Status:           "SUCCEEDED",
+			TaskStatus:       taskStatusSucceeded,
+			BillingStatus:    billingStatusCaptured,
 			Progress:         100,
 			PointCost:        pointCost,
+			QuotedPoints:     float64(pointCost),
+			ReservedPoints:   float64(pointCost),
+			CapturedPoints:   float64(pointCost),
 			ResultIDs:        resultIDs,
 			CreatedAt:        now,
 			UpdatedAt:        now,
 			WorkerFinishedAt: now,
 		}
 		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+		task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+		applyTaskSupplierCost(&task, adminData.ProviderCosts)
 		for i := 0; i < count; i++ {
 			assetID := nextID(data.Counters, "asset")
 			referenceCount := 0
@@ -2458,10 +3376,17 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 				UpdatedAt: now,
 			})
 		}
+		appendBillingLifecycleEventJSON(data, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model})
+		if _, err := applyJSONWalletEntry(data, task, "RESERVE", pointCost, "生成任务冻结"); err != nil {
+			return err
+		}
+		appendBillingLifecycleEventJSON(data, task, "RESERVE", float64(pointCost), nil)
+		if _, err := applyJSONWalletEntry(data, task, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+			return err
+		}
+		appendBillingLifecycleEventJSON(data, task, "CAPTURE", float64(pointCost), nil)
 		data.GenerationTasks = append(data.GenerationTasks, task)
 		nextAvailable := available - pointCost
-		data.PointsAvailable = &nextAvailable
-		setPlatformPointAccount(data, task.UserID, nextAvailable)
 		adminDefaults := withAdminDefaults(adminPlatformData{
 			Users:         data.Users,
 			ChannelAgents: data.ChannelAgents,
@@ -2491,6 +3416,13 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 		if userID == "" {
 			userID = "user_000002"
 		}
+		if existing, ok := findGenerationTaskByClientRequest(data.GenerationTasks, userID, req.ClientRequestID); ok {
+			task = existing
+			return nil
+		}
+		if err := enforceJSONGenerationConcurrency(*data, userID); err != nil {
+			return err
+		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
 		pointCost := generationPointCostForRequest(req, adminData)
@@ -2503,23 +3435,32 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 		params := generationBillingReservationParams(req.Params, now, pointCost, available, nextAvailable)
 		req.Params = params
 		task = generationTask{
-			ID:        nextID(data.Counters, "task"),
-			UserID:    userID,
-			Type:      req.Type,
-			Prompt:    req.Prompt,
-			Params:    params,
-			Model:     req.Model,
-			Status:    "PROCESSING",
-			Progress:  5,
-			PointCost: pointCost,
-			ResultIDs: []string{},
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:              nextID(data.Counters, "task"),
+			ClientRequestID: strings.TrimSpace(req.ClientRequestID),
+			UserID:          userID,
+			Type:            req.Type,
+			Prompt:          req.Prompt,
+			Params:          params,
+			Model:           req.Model,
+			Status:          "PROCESSING",
+			TaskStatus:      taskStatusQueued,
+			BillingStatus:   billingStatusReserved,
+			Progress:        5,
+			PointCost:       pointCost,
+			QuotedPoints:    float64(pointCost),
+			ReservedPoints:  float64(pointCost),
+			ResultIDs:       []string{},
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		}
 		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+		task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+		appendBillingLifecycleEventJSON(data, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model})
+		if _, err := applyJSONWalletEntry(data, task, "RESERVE", pointCost, "生成任务冻结"); err != nil {
+			return err
+		}
+		appendBillingLifecycleEventJSON(data, task, "RESERVE", float64(pointCost), nil)
 		data.GenerationTasks = append(data.GenerationTasks, task)
-		data.PointsAvailable = &nextAvailable
-		setPlatformPointAccount(data, task.UserID, nextAvailable)
 		return nil
 	}); err != nil {
 		return generationTask{}, err
@@ -2565,13 +3506,18 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
 		task.Status = "SUCCEEDED"
+		task.TaskStatus = taskStatusSucceeded
+		task.BillingStatus = billingStatusCaptured
 		task.Progress = 100
 		task.PointCost = pointCost
+		task.CapturedPoints = float64(pointCost)
 		task.Error = nil
 		task.UpdatedAt = now
 		task.WorkerFinishedAt = now
 		task.ResultIDs = []string{}
 		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
+		task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+		applyTaskSupplierCost(&task, adminData.ProviderCosts)
 		count := imageCount(req.Params)
 		for i := 0; i < count; i++ {
 			assetID := nextID(data.Counters, "asset")
@@ -2579,15 +3525,27 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 			data.Assets = append(data.Assets, item)
 			task.ResultIDs = append(task.ResultIDs, assetID)
 		}
-		data.GenerationTasks[index] = task
 		balanceBefore := available
 		balanceAfter := available - pointCost
 		if reserved {
 			balanceBefore, balanceAfter = generationTaskReservationBalances(task, available, pointCost)
+			if _, err := applyJSONWalletEntry(data, task, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+				return err
+			}
 		} else {
-			data.PointsAvailable = &balanceAfter
-			setPlatformPointAccount(data, task.UserID, balanceAfter)
+			task.QuotedPoints = float64(pointCost)
+			task.ReservedPoints = float64(pointCost)
+			appendBillingLifecycleEventJSON(data, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model})
+			if _, err := applyJSONWalletEntry(data, task, "RESERVE", pointCost, "生成任务冻结"); err != nil {
+				return err
+			}
+			appendBillingLifecycleEventJSON(data, task, "RESERVE", float64(pointCost), nil)
+			if _, err := applyJSONWalletEntry(data, task, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+				return err
+			}
 		}
+		appendBillingLifecycleEventJSON(data, task, "CAPTURE", float64(pointCost), nil)
+		data.GenerationTasks[index] = task
 		adminDefaults := withAdminDefaults(adminPlatformData{
 			Users:         data.Users,
 			ChannelAgents: data.ChannelAgents,
@@ -2630,9 +3588,14 @@ func (s *jsonStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBillingEven
 			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
+		walletTask := generationTask{ID: task.TaskID, UserID: userID, ModuleCode: modulePPTGeneration, Model: firstNonEmptyString(task.TextModel, "ppt-text-model")}
+		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "RESERVE", pointCost, "PPT generation reserve"); err != nil {
+			return err
+		}
+		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "CAPTURE", pointCost, "PPT generation capture"); err != nil {
+			return err
+		}
 		nextAvailable := available - pointCost
-		data.PointsAvailable = &nextAvailable
-		setPointAccount(data, userID, nextAvailable)
 
 		user := userMap(data.Users)[userID]
 		directAgent, hasDirectAgent := directActiveAgentForUser(data.Users, data.ChannelAgents, userID)
@@ -2660,15 +3623,23 @@ func (s *jsonStore) FailGenerationTask(id string, message string) (generationTas
 			if generationTaskReservedAndActive(task) && pointCost > 0 {
 				available := pointsAvailableForUser(*data, task.UserID)
 				nextAvailable := available + pointCost
-				data.PointsAvailable = &nextAvailable
-				setPlatformPointAccount(data, task.UserID, nextAvailable)
+				if _, err := applyJSONWalletEntry(data, task, "RELEASE", pointCost, "生成失败解冻"); err != nil {
+					return err
+				}
 				task.Params = generationBillingRefundParams(task.Params, now, available, nextAvailable)
+				task.BillingStatus = billingStatusReleased
+				task.ReleasedPoints = float64(pointCost)
+				appendBillingLifecycleEventJSON(data, task, "RELEASE", float64(pointCost), nil)
 			}
 			if task.Status == "FAILED" || task.Status == "CANCELLED" {
 				data.GenerationTasks[i] = task
 				return nil
 			}
 			task.Status = "FAILED"
+			task.TaskStatus = taskStatusFailed
+			if task.BillingStatus == "" {
+				task.BillingStatus = billingStatusBillingFailed
+			}
 			task.Progress = 100
 			task.Error = map[string]any{"message": message}
 			task.FailureReason = message
@@ -3069,20 +4040,6 @@ func modelPointCost(model string) int {
 		return 1
 	}
 }
-func setPlatformPointAccount(data *platformData, userID string, available int) {
-	for i := range data.PointAccounts {
-		if data.PointAccounts[i].UserID == userID {
-			data.PointAccounts[i].Available = available
-			return
-		}
-	}
-	data.PointAccounts = append(data.PointAccounts, adminPointAccount{
-		ID:        uniqueAdminID("points", pointIDs(data.PointAccounts)),
-		UserID:    userID,
-		Available: available,
-	})
-}
-
 func (s *jsonStore) DeleteAssetForUser(userID string, id string) error {
 	userID = strings.TrimSpace(userID)
 	return s.update(func(data *platformData) error {

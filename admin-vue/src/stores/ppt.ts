@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import {
   createPptTask,
+  deletePptSlideVisual,
   deletePptTask,
   exportPdf,
   exportPpt,
@@ -11,6 +12,8 @@ import {
   getPptTaskStatus,
   getPptTextModels,
   regeneratePptSlide,
+  regeneratePptSlideVisual,
+  restorePptSlideVisual,
   searchPptImages,
   updatePptOutline,
   upsertPptDraft
@@ -32,6 +35,8 @@ import type {
   PptTextContent,
   PptTheme,
   PptTone,
+  PptVisualComposition,
+  PptVisualPlan,
   PptWorkflowStatus
 } from "../types/ppt";
 
@@ -51,6 +56,10 @@ interface PptState {
   imageSource: PptImageSource;
   textModel: string;
   imageModel: string;
+  imageStyle: string;
+  peopleStyle: string;
+  imageLighting: string;
+  imageComposition: PptVisualComposition;
   outline: PptOutline | null;
   slides: PptSlide[];
   currentSlideIndex: number;
@@ -66,6 +75,7 @@ interface PptState {
   imageSearchKeyword: string;
   imageSearchResults: PptImageOption[];
   imageGenerating: boolean;
+  visualOperationStatus: "idle" | "loading" | "success" | "failed";
   error: PptErrorInfo | null;
   initialized: boolean;
   historyLoadedAt: number;
@@ -90,6 +100,10 @@ export const usePptStore = defineStore("ppt", {
     imageSource: "ai",
     textModel: "kimi-k2.6",
     imageModel: "default-image",
+    imageStyle: "modern enterprise illustration",
+    peopleStyle: "professional natural people",
+    imageLighting: "soft cinematic corporate lighting",
+    imageComposition: "image_right",
     outline: null,
     slides: [],
     currentSlideIndex: 0,
@@ -105,6 +119,7 @@ export const usePptStore = defineStore("ppt", {
     imageSearchKeyword: "",
     imageSearchResults: [],
     imageGenerating: false,
+    visualOperationStatus: "idle",
     error: null,
     initialized: false,
     historyLoadedAt: 0
@@ -349,6 +364,11 @@ export const usePptStore = defineStore("ppt", {
           theme: this.theme,
           imageSource: this.imageSource,
           imageModel: this.imageModel,
+          imageStyle: this.imageStyle,
+          peopleStyle: this.peopleStyle,
+          imageLighting: this.imageLighting,
+          imageComposition: this.imageComposition,
+          textInImage: false,
           outline: this.outline
         });
         this.taskId = created.taskId;
@@ -451,22 +471,87 @@ export const usePptStore = defineStore("ppt", {
       if (!slide) return;
       this.imageSource = "ai";
       this.imageGenerating = true;
+      this.visualOperationStatus = "loading";
       this.error = null;
       try {
-        const image = await generatePptImage({
-          slide,
-          prompt: this.prompt.trim() || this.outline?.title || slide.title,
-          deckTitle: this.outline?.title || this.prompt.trim() || slide.title,
-          theme: this.theme,
-          language: this.language,
-          imageSource: "ai",
-          imageModel: this.imageModel
-        });
-        this.updateSlide(this.currentSlideIndex, { imageUrl: image.url || "" });
+        if (this.taskId && !this.taskId.startsWith("draft_")) {
+          const response = await regeneratePptSlideVisual(this.taskId, slide.id, {
+            visualType: slide.visualPlan?.visualType || "illustration",
+            style: slide.visualPlan?.style || this.imageStyle,
+            composition: this.imageComposition,
+            customInstruction: "",
+            keepCurrentContent: true
+          });
+          this.updateSlide(this.currentSlideIndex, response.slide);
+        } else {
+          const image = await generatePptImage({
+            slide,
+            prompt: "",
+            deckTitle: this.outline?.title || this.prompt.trim() || slide.title,
+            theme: this.theme,
+            language: this.language,
+            imageSource: "ai",
+            imageModel: this.imageModel,
+            visualPlan: slide.visualPlan,
+            imageStyle: this.imageStyle,
+            peopleStyle: this.peopleStyle,
+            imageLighting: this.imageLighting,
+            imageComposition: this.imageComposition
+          });
+          this.updateSlide(this.currentSlideIndex, { imageUrl: image.url || "" });
+        }
+        this.visualOperationStatus = "success";
         await this.saveDraft(this.taskId).catch(() => undefined);
       } catch (error) {
         console.error("[ppt] generate slide image failed", error);
+		this.visualOperationStatus = "failed";
         this.error = { title: "配图生成失败", message: error instanceof Error ? error.message : "请稍后重试" };
+      } finally {
+        this.imageGenerating = false;
+      }
+    },
+    updateCurrentSlideVisualPlan(patch: Partial<PptVisualPlan>) {
+      const slide = this.currentSlide;
+      if (!slide) return;
+      const current = slide.visualPlan || defaultVisualPlan(slide, this.imageComposition, this.imageStyle);
+      this.updateSlide(this.currentSlideIndex, { visualPlan: { ...current, ...patch, textInImage: false } });
+    },
+    async deleteCurrentSlideVisual() {
+      const slide = this.currentSlide;
+      if (!slide) return;
+      this.imageGenerating = true;
+      this.visualOperationStatus = "loading";
+      try {
+        if (this.taskId && !this.taskId.startsWith("draft_")) {
+          const response = await deletePptSlideVisual(this.taskId, slide.id);
+          this.updateSlide(this.currentSlideIndex, response.slide);
+        } else {
+          this.updateSlide(this.currentSlideIndex, {
+            imageUrl: "",
+            visualPlan: { ...defaultVisualPlan(slide, this.imageComposition, this.imageStyle), visualType: "none", imageRequired: false }
+          });
+        }
+        this.visualOperationStatus = "success";
+      } catch (error) {
+        this.visualOperationStatus = "failed";
+        this.error = { title: "删除配图失败", message: error instanceof Error ? error.message : "请稍后重试" };
+      } finally {
+        this.imageGenerating = false;
+      }
+    },
+    async restoreCurrentSlideVisual(asset: { createdAt: string; url: string; storageRef?: string }) {
+      const slide = this.currentSlide;
+      if (!slide || !this.taskId || this.taskId.startsWith("draft_") || !asset.createdAt || !asset.url || this.imageGenerating) return;
+      this.imageGenerating = true;
+      this.visualOperationStatus = "loading";
+      try {
+        const response = await restorePptSlideVisual(this.taskId, slide.id, asset.createdAt, asset.url, asset.storageRef);
+        this.updateSlide(this.currentSlideIndex, response.slide);
+        this.visualOperationStatus = "success";
+        await this.saveDraft(this.taskId).catch(() => undefined);
+      } catch (error) {
+        this.visualOperationStatus = "failed";
+        this.error = { title: "恢复历史配图失败", message: error instanceof Error ? error.message : "请稍后重试" };
       } finally {
         this.imageGenerating = false;
       }
@@ -503,6 +588,10 @@ export const usePptStore = defineStore("ppt", {
       this.imageSource = item.imageSource || "ai";
       this.textModel = item.textModel || this.textModel;
       this.imageModel = item.imageModel || this.imageModel;
+      this.imageStyle = item.imageStyle || this.imageStyle;
+      this.peopleStyle = item.peopleStyle || this.peopleStyle;
+      this.imageLighting = item.imageLighting || this.imageLighting;
+      this.imageComposition = item.imageComposition || this.imageComposition;
       this.enableWebSearch = Boolean(item.enableWebSearch);
       this.outline = item.outline || null;
       this.slides = item.slides?.length ? item.slides : this.outlineToSlides(this.outline);
@@ -529,6 +618,8 @@ export const usePptStore = defineStore("ppt", {
         bulletPoints: [...slide.bulletPoints],
         imageUrl: "",
         layout: slide.layout || (index === 0 ? "cover" : index === outline.slides.length - 1 ? "summary" : this.imageSource === "none" ? "content" : "imageText"),
+        slideType: slide.slideType || (index === 0 ? "cover" : index === outline.slides.length - 1 ? "statement" : "text_image"),
+        visualPlan: defaultVisualPlan({ id: `slide_${index + 1}`, page: index + 1, title: slide.title, content: slide.summary, bulletPoints: [...slide.bulletPoints], layout: slide.layout || "imageText", slideType: slide.slideType || (index === 0 ? "cover" : "text_image") }, this.imageComposition, this.imageStyle),
         speakerNotes: `第 ${index + 1} 页讲稿可在后续接入模型后自动生成。`
       }));
     }
@@ -565,4 +656,25 @@ function isRealSlideImage(url = "") {
   if (!normalized) return false;
   if (normalized.startsWith("http://") || normalized.startsWith("https://")) return true;
   return normalized.startsWith("data:image/png") || normalized.startsWith("data:image/jpeg") || normalized.startsWith("data:image/jpg") || normalized.startsWith("data:image/webp");
+}
+
+function defaultVisualPlan(slide: PptSlide, composition: PptVisualComposition, style: string): PptVisualPlan {
+  const noImageTypes = new Set(["agenda", "feature_grid", "process", "timeline", "comparison", "data_chart", "swot", "matrix", "organization", "table"]);
+  const imageRequired = !noImageTypes.has(slide.slideType || "text_image");
+  return {
+    visualType: imageRequired ? "illustration" : slide.slideType === "data_chart" ? "chart" : slide.slideType === "process" ? "diagram" : "icon",
+    imageRequired,
+    chartRequired: slide.slideType === "data_chart",
+    diagramRequired: ["process", "timeline", "organization"].includes(slide.slideType || ""),
+    textInImage: false,
+    subject: slide.title,
+    scene: "modern enterprise environment",
+    action: "people and intelligent systems collaborate",
+    objects: ["workspace", "abstract data connections"],
+    mood: "professional, efficient, trustworthy",
+    composition,
+    style,
+    prompt: "",
+    negativePrompt: "text, letters, words, typography, numbers, logo, watermark, captions, subtitles, garbled text"
+  };
 }

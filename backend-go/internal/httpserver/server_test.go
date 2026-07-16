@@ -290,6 +290,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	})
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
 	schemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation", nil, token)
 	if schemaRes.Code != http.StatusOK {
@@ -311,6 +312,28 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	}
 	if schemaPayload.ModuleCode != moduleImageGeneration || schemaPayload.ModelName != "mock-standard" || !fieldKeys["prompt"] || !fieldKeys["n"] || fieldKeys["duration"] {
 		t.Fatalf("unexpected image schema payload: %+v", schemaPayload)
+	}
+
+	planUpdate := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/customers/user_000002", bytes.NewBufferString(`{"planId":"plan_free"}`), adminToken)
+	if planUpdate.Code != http.StatusOK {
+		t.Fatalf("set demo plan status = %d, body = %s", planUpdate.Code, planUpdate.Body.String())
+	}
+	fallbackSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
+	if fallbackSchemaRes.Code != http.StatusOK {
+		t.Fatalf("fallback module schema status = %d, body = %s", fallbackSchemaRes.Code, fallbackSchemaRes.Body.String())
+	}
+	var fallbackSchemaPayload struct {
+		ModelName string `json:"model_name"`
+	}
+	if err := json.NewDecoder(fallbackSchemaRes.Body).Decode(&fallbackSchemaPayload); err != nil {
+		t.Fatal(err)
+	}
+	if fallbackSchemaPayload.ModelName != "mock-standard" {
+		t.Fatalf("fallback model = %s, want mock-standard", fallbackSchemaPayload.ModelName)
+	}
+	planRestore := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/customers/user_000002", bytes.NewBufferString(`{"planId":"plan_month"}`), adminToken)
+	if planRestore.Code != http.StatusOK {
+		t.Fatalf("restore demo plan status = %d, body = %s", planRestore.Code, planRestore.Body.String())
 	}
 
 	invalid := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"duration":5}}`), token)
@@ -373,7 +396,6 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("task missing ai capability snapshot: %+v", task)
 	}
 
-	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 	overview := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/ai/overview", nil, adminToken)
 	body := overview.Body.String()
 	if overview.Code != http.StatusOK || !strings.Contains(body, `"modules"`) || !strings.Contains(body, `"billingRules"`) || !strings.Contains(body, task.ID) {
@@ -1631,6 +1653,244 @@ func TestAdminMutationAPIsPersistMasterControlData(t *testing.T) {
 	}
 }
 
+func TestAdminCustomerIdentityOperations(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	phoneOnly, err := store.CreateAdminCustomer(adminCustomerMutation{
+		Name: "Phone Only", Email: phoneSyntheticEmail("13500009999"), Mobile: "13500009999", Role: "MEMBER", Status: "ACTIVE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityUser, err := store.CreateAdminCustomer(adminCustomerMutation{
+		Name: "Identity User", Email: "identity@example.test", Mobile: "13600008888", WeChatOpenID: "openid-admin-identity", Role: "MEMBER", Status: "ACTIVE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordHash, err := hashPassword("Identity123!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateUserPassword(identityUser.ID, passwordHash); err != nil {
+		t.Fatal(err)
+	}
+	sessions := newLocalAuthSessions()
+	server := newWithStoreAndSessions(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	}, store, sessions)
+	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+
+	identity := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers/"+identityUser.ID+"/identities", nil, adminToken)
+	if identity.Code != http.StatusOK || !strings.Contains(identity.Body.String(), "wechat_mini_program") || !strings.Contains(identity.Body.String(), "mobile_sms") {
+		t.Fatalf("identity detail status = %d, body = %s", identity.Code, identity.Body.String())
+	}
+	mergeRequest, err := store.CreateAdminAuthMergeRequest(adminAuthMergeRequestMutation{
+		PrimaryUserID:   identityUser.ID,
+		SecondaryUserID: phoneOnly.ID,
+		Mobile:          "13500009999",
+		WeChatOpenID:    "openid-admin-identity",
+		ConflictCode:    "AUTH_ACCOUNT_MERGE_REQUIRED",
+		Source:          "test",
+		Reason:          "test merge conflict",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeRequests := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers/"+identityUser.ID+"/account-merge-requests", nil, adminToken)
+	if mergeRequests.Code != http.StatusOK || !strings.Contains(mergeRequests.Body.String(), mergeRequest.ID) || !strings.Contains(mergeRequests.Body.String(), "135****9999") || strings.Contains(mergeRequests.Body.String(), "13500009999") {
+		t.Fatalf("merge requests status = %d, body = %s", mergeRequests.Code, mergeRequests.Body.String())
+	}
+	updateMerge := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/account-merge-requests/"+mergeRequest.ID+"/status", bytes.NewBufferString(`{"status":"IN_REVIEW","reviewComment":"人工核验中"}`), adminToken)
+	if updateMerge.Code != http.StatusOK || !strings.Contains(updateMerge.Body.String(), `"status":"IN_REVIEW"`) {
+		t.Fatalf("update merge request status = %d, body = %s", updateMerge.Code, updateMerge.Body.String())
+	}
+	sourceForMerge, err := store.CreateAdminCustomer(adminCustomerMutation{
+		Name: "Merge Source", Email: "merge-source@example.test", WeChatOpenID: "openid-merge-source", Role: "MEMBER", Status: "ACTIVE", Available: pointBalancePointer(77),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.updateAdmin(func(data *adminPlatformData) error {
+		data.Presentations = append(data.Presentations, adminPresentation{ID: "presentation_merge_source", UserID: sourceForMerge.ID, Topic: "Merge PPT", Status: "READY", CreatedAt: now, UpdatedAt: now})
+		data.Agents = append(data.Agents, adminAgent{ID: "agent_merge_source", OwnerID: sourceForMerge.ID, Name: "Merge Agent", Status: "ACTIVE", CreatedAt: now, UpdatedAt: now})
+		data.AgentCalls = append(data.AgentCalls, adminAgentCall{ID: "agent_call_merge_source", AgentID: "agent_merge_source", UserID: sourceForMerge.ID, TokenUsage: 12, CreatedAt: now})
+		data.GeoBrands = append(data.GeoBrands, adminGeoBrand{ID: "geo_brand_merge_source", OwnerID: sourceForMerge.ID, Name: "Merge Brand", CreatedAt: now})
+		data.GeoTasks = append(data.GeoTasks, adminGeoTask{ID: "geo_task_merge_source", OwnerID: sourceForMerge.ID, BrandID: "geo_brand_merge_source", Status: "READY", CreatedAt: now})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	executableMerge, err := store.CreateAdminAuthMergeRequest(adminAuthMergeRequestMutation{
+		PrimaryUserID:   identityUser.ID,
+		SecondaryUserID: sourceForMerge.ID,
+		WeChatOpenID:    "openid-merge-source",
+		ConflictCode:    "AUTH_ACCOUNT_MERGE_REQUIRED",
+		Source:          "test_execute",
+		Reason:          "execute merge conflict",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewMerge := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/account-merge-requests/"+executableMerge.ID+"/preview?targetUserId="+identityUser.ID, nil, adminToken)
+	if previewMerge.Code != http.StatusOK || !strings.Contains(previewMerge.Body.String(), `"executable":true`) || !strings.Contains(previewMerge.Body.String(), `"presentations":1`) || !strings.Contains(previewMerge.Body.String(), `"agentCalls":1`) {
+		t.Fatalf("preview merge request status = %d, body = %s", previewMerge.Code, previewMerge.Body.String())
+	}
+	executeMerge := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/account-merge-requests/"+executableMerge.ID+"/execute", bytes.NewBufferString(`{"targetUserId":"`+identityUser.ID+`","confirm":true,"reviewComment":"确认合并"}`), adminToken)
+	if executeMerge.Code != http.StatusOK || !strings.Contains(executeMerge.Body.String(), `"status":"RESOLVED"`) || !strings.Contains(executeMerge.Body.String(), `"sourceUserId":"`+sourceForMerge.ID+`"`) || !strings.Contains(executeMerge.Body.String(), `"presentations":1`) || !strings.Contains(executeMerge.Body.String(), `"agentCalls":1`) {
+		t.Fatalf("execute merge request status = %d, body = %s", executeMerge.Code, executeMerge.Body.String())
+	}
+	mergedData, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergedUsers := userMap(mergedData.Users)
+	if mergedUsers[sourceForMerge.ID].Status != "MERGED" || len(mergedUsers[sourceForMerge.ID].WeChatOpenIDs) != 0 {
+		t.Fatalf("source user not merged: %+v", mergedUsers[sourceForMerge.ID])
+	}
+	if !containsFold(mergedUsers[identityUser.ID].WeChatOpenIDs, "openid-merge-source") {
+		t.Fatalf("target user missing merged wechat openid: %+v", mergedUsers[identityUser.ID].WeChatOpenIDs)
+	}
+	if mergedData.Presentations[len(mergedData.Presentations)-1].UserID != identityUser.ID {
+		t.Fatalf("presentation owner not merged: %+v", mergedData.Presentations[len(mergedData.Presentations)-1])
+	}
+	if mergedData.Agents[len(mergedData.Agents)-1].OwnerID != identityUser.ID || mergedData.AgentCalls[len(mergedData.AgentCalls)-1].UserID != identityUser.ID {
+		t.Fatalf("agent owner/call user not merged: %+v %+v", mergedData.Agents[len(mergedData.Agents)-1], mergedData.AgentCalls[len(mergedData.AgentCalls)-1])
+	}
+	if mergedData.GeoBrands[len(mergedData.GeoBrands)-1].OwnerID != identityUser.ID || mergedData.GeoTasks[len(mergedData.GeoTasks)-1].OwnerID != identityUser.ID {
+		t.Fatalf("geo owner not merged: %+v %+v", mergedData.GeoBrands[len(mergedData.GeoBrands)-1], mergedData.GeoTasks[len(mergedData.GeoTasks)-1])
+	}
+
+	blocked := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers/"+phoneOnly.ID+"/identities/mobile/unlink", bytes.NewBufferString(`{"reason":"test"}`), adminToken)
+	if blocked.Code != http.StatusBadRequest || !strings.Contains(blocked.Body.String(), "last usable login identity") {
+		t.Fatalf("last identity unlink status = %d, body = %s", blocked.Code, blocked.Body.String())
+	}
+
+	userToken := loginToken(t, handler, "identity@example.test", "Identity123!")
+	unlinkWeChat := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers/"+identityUser.ID+"/identities/wechat-mini-program/unlink", bytes.NewBufferString(`{"reason":"test"}`), adminToken)
+	if unlinkWeChat.Code != http.StatusOK || !strings.Contains(unlinkWeChat.Body.String(), `"wechatLinked":false`) {
+		t.Fatalf("unlink wechat status = %d, body = %s", unlinkWeChat.Code, unlinkWeChat.Body.String())
+	}
+	revokedAfterUnlink := authedRequest(t, handler, http.MethodGet, "/api/v1/auth/me", nil, userToken)
+	if revokedAfterUnlink.Code != http.StatusUnauthorized {
+		t.Fatalf("token after unlink status = %d, body = %s", revokedAfterUnlink.Code, revokedAfterUnlink.Body.String())
+	}
+
+	userToken = loginToken(t, handler, "identity@example.test", "Identity123!")
+	freeze := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers/"+identityUser.ID+"/freeze-login", bytes.NewBufferString(`{"reason":"test"}`), adminToken)
+	if freeze.Code != http.StatusOK || !strings.Contains(freeze.Body.String(), `"status":"DISABLED"`) {
+		t.Fatalf("freeze status = %d, body = %s", freeze.Code, freeze.Body.String())
+	}
+	revokedAfterFreeze := authedRequest(t, handler, http.MethodGet, "/api/v1/auth/me", nil, userToken)
+	if revokedAfterFreeze.Code != http.StatusUnauthorized {
+		t.Fatalf("token after freeze status = %d, body = %s", revokedAfterFreeze.Code, revokedAfterFreeze.Body.String())
+	}
+	unfreeze := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers/"+identityUser.ID+"/unfreeze-login", bytes.NewBufferString(`{"reason":"test"}`), adminToken)
+	if unfreeze.Code != http.StatusOK || !strings.Contains(unfreeze.Body.String(), `"status":"ACTIVE"`) {
+		t.Fatalf("unfreeze status = %d, body = %s", unfreeze.Code, unfreeze.Body.String())
+	}
+}
+
+func TestMergeUserAIStateValues(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	target := userAIState{
+		UserID:          "user_target",
+		FavoriteTaskIDs: []string{"task_a"},
+		HiddenTaskIDs:   []string{"task_hidden_a"},
+		FavoriteCollections: []aiFavoriteCollection{{
+			ID: "collection_default", Name: "Default", TaskIDs: []string{"task_a"}, CreatedAt: now,
+		}},
+		AgentConversations: []aiAgentConversation{{ID: "conversation_same", Title: "Target", CreatedAt: now}},
+	}
+	source := userAIState{
+		UserID:          "user_source",
+		FavoriteTaskIDs: []string{"task_a", "task_b"},
+		HiddenTaskIDs:   []string{"task_hidden_b"},
+		FavoriteCollections: []aiFavoriteCollection{
+			{ID: "collection_default", Name: "Default", TaskIDs: []string{"task_b"}, CreatedAt: now},
+			{ID: "collection_source", Name: "Source", TaskIDs: []string{"task_c"}, CreatedAt: now},
+		},
+		AgentConversations: []aiAgentConversation{
+			{ID: "conversation_same", Title: "Source Same", CreatedAt: now},
+			{ID: "conversation_source", Title: "Source", CreatedAt: now},
+		},
+		ActiveConversationID: "conversation_same",
+	}
+	merged, moved := mergeUserAIStateValues(target, source, "user_target")
+	if moved == 0 || merged.UserID != "user_target" {
+		t.Fatalf("unexpected merge result moved=%d state=%+v", moved, merged)
+	}
+	if !containsFold(merged.FavoriteTaskIDs, "task_b") || !containsFold(merged.HiddenTaskIDs, "task_hidden_b") {
+		t.Fatalf("tasks were not merged: %+v %+v", merged.FavoriteTaskIDs, merged.HiddenTaskIDs)
+	}
+	if len(merged.FavoriteCollections) != 2 || !containsFold(merged.FavoriteCollections[0].TaskIDs, "task_b") {
+		t.Fatalf("collections were not merged: %+v", merged.FavoriteCollections)
+	}
+	conversationIDs := []string{}
+	for _, conversation := range merged.AgentConversations {
+		conversationIDs = append(conversationIDs, conversation.ID)
+	}
+	if len(merged.AgentConversations) != 3 || !containsFold(conversationIDs, "user_target-conversation_same") {
+		t.Fatalf("conversation conflict was not renamed: %+v", merged.AgentConversations)
+	}
+	if merged.ActiveConversationID != "user_target-conversation_same" {
+		t.Fatalf("active conversation did not follow renamed source conversation: %+v", merged.ActiveConversationID)
+	}
+}
+
+func TestAdminAuthMergePreviewBlocksChannelAgentConflict(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	target, err := store.CreateAdminCustomer(adminCustomerMutation{Name: "Merge Target Agent", Email: "merge-target-agent@example.test", Role: "MEMBER", Status: "ACTIVE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.CreateAdminCustomer(adminCustomerMutation{Name: "Merge Source Agent", Email: "merge-source-agent@example.test", Role: "MEMBER", Status: "ACTIVE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.updateAdmin(func(data *adminPlatformData) error {
+		data.ChannelAgents = append(data.ChannelAgents,
+			adminChannelAgent{ID: "channel_target_merge", UserID: target.ID, Level: 1, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+			adminChannelAgent{ID: "channel_source_merge", UserID: source.ID, Level: 1, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mergeRequest, err := store.CreateAdminAuthMergeRequest(adminAuthMergeRequestMutation{
+		PrimaryUserID:   target.ID,
+		SecondaryUserID: source.ID,
+		ConflictCode:    "AUTH_ACCOUNT_MERGE_REQUIRED",
+		Source:          "test_preview_blocker",
+		Reason:          "agent identity conflict",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newWithStoreAndSessions(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	}, store, newLocalAuthSessions())
+	adminToken := loginToken(t, server.Handler, "admin@xianzhi.ai", "Admin123!")
+	preview := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/admin/account-merge-requests/"+mergeRequest.ID+"/preview?targetUserId="+target.ID, nil, adminToken)
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), `"executable":false`) || !strings.Contains(preview.Body.String(), "both users have channel agent identities") {
+		t.Fatalf("blocked preview status = %d, body = %s", preview.Code, preview.Body.String())
+	}
+	execute := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/admin/account-merge-requests/"+mergeRequest.ID+"/execute", bytes.NewBufferString(`{"targetUserId":"`+target.ID+`","confirm":true}`), adminToken)
+	if execute.Code != http.StatusBadRequest || !strings.Contains(execute.Body.String(), "both users have channel agent identities") {
+		t.Fatalf("blocked execute status = %d, body = %s", execute.Code, execute.Body.String())
+	}
+}
+
 func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	server := New(config.Config{
@@ -2784,6 +3044,56 @@ func TestAuthRefreshTokenRotatesSession(t *testing.T) {
 	handler.ServeHTTP(meRes, meReq)
 	if meRes.Code != http.StatusOK {
 		t.Fatalf("me with refreshed token status = %d, body = %s", meRes.Code, meRes.Body.String())
+	}
+}
+
+func TestAuthLogoutAllRevokesAccessAndRefreshTokens(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	sessions := newLocalAuthSessions()
+	server := newWithStoreAndSessions(config.Config{
+		Addr:           ":0",
+		DataPath:       dataPath,
+		StaticDir:      t.TempDir(),
+		AdminStaticDir: t.TempDir(),
+	}, newJSONStore(dataPath), sessions)
+	handler := server.Handler
+
+	login := func() struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	} {
+		t.Helper()
+		res := request(t, handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"agent1@xianzhi.ai","password":"Agent123!"}`))
+		if res.Code != http.StatusOK {
+			t.Fatalf("login status = %d, body = %s", res.Code, res.Body.String())
+		}
+		var body struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.AccessToken == "" || body.RefreshToken == "" {
+			t.Fatalf("login response missing tokens: %+v", body)
+		}
+		return body
+	}
+
+	first := login()
+	second := login()
+	logoutAll := authedRequest(t, handler, http.MethodPost, "/api/v1/auth/logout-all", nil, first.AccessToken)
+	if logoutAll.Code != http.StatusOK {
+		t.Fatalf("logout all status = %d, body = %s", logoutAll.Code, logoutAll.Body.String())
+	}
+
+	me := authedRequest(t, handler, http.MethodGet, "/api/v1/auth/me", nil, second.AccessToken)
+	if me.Code != http.StatusUnauthorized {
+		t.Fatalf("second access token after logout all status = %d, body = %s", me.Code, me.Body.String())
+	}
+	refresh := request(t, handler, http.MethodPost, "/api/v1/auth/refresh", bytes.NewBufferString(`{"refreshToken":"`+second.RefreshToken+`"}`))
+	if refresh.Code != http.StatusUnauthorized {
+		t.Fatalf("second refresh token after logout all status = %d, body = %s", refresh.Code, refresh.Body.String())
 	}
 }
 

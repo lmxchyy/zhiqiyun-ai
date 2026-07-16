@@ -59,6 +59,12 @@ type platformStore interface {
 	UpdateUserPassword(string, string) (adminUser, error)
 	CreateAdminCustomer(adminCustomerMutation) (adminUser, error)
 	UpdateAdminCustomer(string, adminCustomerMutation) (adminUser, error)
+	UpdateAdminCustomerIdentity(string, adminCustomerIdentityMutation) (adminUser, error)
+	CreateAdminAuthMergeRequest(adminAuthMergeRequestMutation) (adminAuthMergeRequest, error)
+	ListAdminAuthMergeRequests(string) ([]adminAuthMergeRequest, error)
+	UpdateAdminAuthMergeRequest(string, adminAuthMergeRequestMutation) (adminAuthMergeRequest, error)
+	PreviewAdminAuthMergeRequest(string, string) (adminAuthMergeRequest, adminAuthMergePreviewResult, error)
+	ExecuteAdminAuthMergeRequest(string, adminAuthMergeExecuteRequest) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error)
 	CreateAdminChannelAgent(adminChannelCreateMutation) (adminChannelAgent, adminUser, error)
 	UpdateAdminChannelAgent(string, adminChannelMutation) (adminChannelAgent, error)
 	UpdateAdminProduct(string, adminProductMutation) (adminProduct, error)
@@ -83,12 +89,14 @@ type platformStore interface {
 	UpdateAdminAIModel(string, adminAIModelMutation) (adminAIModel, error)
 	UpdateAdminAIParameterSchema(string, adminAIParameterSchemaMutation) (adminAIParameterSchema, error)
 	UpdateAdminTenantModuleLimit(string, adminTenantModuleLimitMutation) (adminTenantModuleLimit, error)
+	UpdateAdminPlanCapabilities(string, adminPlanCapabilitiesMutation) error
 	UpdateAdminBillingRule(string, adminBillingRuleMutation) (adminBillingRule, error)
 	CreateAdminCommission(adminCommissionMutation) (adminCommission, error)
 	ReviewAdminCommission(string, string) (adminCommission, error)
 	UpdateMarketingCommissionRule(string, adminCommissionRuleMutation) (adminCommissionRule, error)
 	CreateAdminWithdrawal(adminWithdrawalMutation) (adminWithdrawal, error)
 	ReviewAdminWithdrawal(string, string) (adminWithdrawal, error)
+	billingV1Store
 }
 
 type optimizedUserContentStore interface {
@@ -141,11 +149,16 @@ const (
 type api struct {
 	store             platformStore
 	generationService generation.Service
-	pptService        *pptapp.Service
-	cfg               config.Config
-	sessions          authSessionStore
-	taskCancels       *sync.Map
-	fileService       *storagecenter.Service
+	// connectorGenerationService is an injectable seam for connector workers.
+	// Production leaves it nil and uses the same configured model routing as all users.
+	connectorGenerationService *generation.Service
+	pptService                 *pptapp.Service
+	cfg                        config.Config
+	sessions                   authSessionStore
+	taskCancels                *sync.Map
+	pptVisualTasks             *sync.Map
+	pptVisualLocker            pptVisualDistributedLocker
+	fileService                *storagecenter.Service
 }
 
 type generatedImageDecorator struct{}
@@ -173,7 +186,10 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 		},
 	})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, fileService: fileService}
+	if pgStore, ok := store.(*postgresStore); ok {
+		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+	}
+	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService}
 	go api.repairStaleGenerationTasks(imageGenerationTimeout)
 	return api
 }
@@ -495,6 +511,9 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if strings.TrimSpace(req.ClientRequestID) == "" {
+		req.ClientRequestID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
 	req.UserID = user.ID
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
@@ -534,6 +553,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	if isVideoGenerationRequest(req.Type) {
 		task, err := a.store.CreatePendingGenerationTask(req)
 		if err != nil {
+			if errors.Is(err, errGenerationConcurrencyLimit) {
+				writeError(w, http.StatusTooManyRequests, err)
+				return
+			}
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -544,6 +567,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	if !isImageGenerationRequest(req.Type) || strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
 		task, err := service.Create(r.Context(), req)
 		if err != nil {
+			if errors.Is(err, errGenerationConcurrencyLimit) {
+				writeError(w, http.StatusTooManyRequests, err)
+				return
+			}
 			if errors.Is(err, generation.ErrInvalidPrompt) {
 				writeError(w, http.StatusBadRequest, err)
 				return
@@ -556,6 +583,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	}
 	task, err := a.store.CreatePendingGenerationTask(req)
 	if err != nil {
+		if errors.Is(err, errGenerationConcurrencyLimit) {
+			writeError(w, http.StatusTooManyRequests, err)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -897,7 +928,7 @@ func (a api) generationServiceForUserRoute(user adminUser, model string) (genera
 	if strings.TrimSpace(model) != "" && len(route.Models) > 0 && !stringListContains(route.Models, model) {
 		return generation.Service{}, false, nil
 	}
-	data, err := a.store.AdminData()
+	data, err := a.onlineGenerationSettings()
 	if err != nil {
 		return generation.Service{}, false, err
 	}
@@ -958,7 +989,7 @@ func (a api) generationServiceForConfiguredModel(model string) (generation.Servi
 	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") || strings.EqualFold(strings.TrimSpace(model), "mock-video") {
 		return generation.Service{}, false, nil
 	}
-	data, err := a.store.AdminData()
+	data, err := a.onlineGenerationSettings()
 	if err != nil {
 		return generation.Service{}, false, err
 	}
@@ -974,7 +1005,7 @@ func (a api) generationServiceForConfiguredModel(model string) (generation.Servi
 }
 
 func (a api) generationServiceForProvider(providerID string, req generation.CreateRequest) (generation.Service, error) {
-	data, err := a.store.AdminData()
+	data, err := a.onlineGenerationSettings()
 	if err != nil {
 		return generation.Service{}, err
 	}
@@ -992,6 +1023,13 @@ func (a api) generationServiceForProvider(providerID string, req generation.Crea
 		return generation.Service{}, fmt.Errorf("api provider %s does not support model %s", channel.Name, model)
 	}
 	return a.generationServiceForChannel(data, channel)
+}
+
+func (a api) onlineGenerationSettings() (adminPlatformData, error) {
+	if optimized, ok := a.store.(onlineImageSettingsStore); ok {
+		return optimized.OnlineImageSettings()
+	}
+	return a.store.AdminData()
 }
 
 func (a api) generationServiceForChannel(data adminPlatformData, channel adminAPIChannel) (generation.Service, error) {
@@ -2630,7 +2668,7 @@ func (a api) updateMemberProfile(w http.ResponseWriter, r *http.Request) {
 		Status:     user.Status,
 		PlanID:     user.PlanID,
 		ReferredBy: user.ReferredBy,
-		Available:  account.Available,
+		Available:  pointBalancePointer(account.Available),
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

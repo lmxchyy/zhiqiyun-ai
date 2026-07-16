@@ -13,6 +13,7 @@ type CreateRequest struct {
 	Type            string           `json:"type"`
 	ModuleCode      string           `json:"module_code,omitempty"`
 	ModuleCodeCamel string           `json:"moduleCode,omitempty"`
+	ClientRequestID string           `json:"clientRequestId,omitempty"`
 	UserID          string           `json:"-"`
 	Prompt          string           `json:"prompt"`
 	Model           string           `json:"model"`
