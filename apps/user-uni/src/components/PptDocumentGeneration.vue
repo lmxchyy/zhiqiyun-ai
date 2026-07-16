@@ -241,6 +241,7 @@
                     <text>✓ 继承整套 PPT 风格</text>
                   </view>
                   <button type="button" class="ppt-visual-primary" :disabled="visualBusy" @click="regenerateActiveSlideVisual">{{ visualBusy ? "正在生成…" : "重新生成本页配图" }}</button>
+                  <button type="button" :disabled="visualBusy" @click="regenerateActiveSlideVisual">更换视觉类型</button>
                   <button type="button" :disabled="visualBusy || !activeEditorSlide.imageUrl" @click="deleteActiveSlideVisual">删除配图</button>
                   <view v-if="activeEditorSlide.visualHistory?.length" class="ppt-visual-history">
                     <text class="ppt-visual-label">历史配图</text>
@@ -541,6 +542,12 @@ import {
   type PptTheme
 } from "../api/ppt";
 
+const props = withDefaults(defineProps<{
+  initialTaskId?: string;
+}>(), {
+  initialTaskId: ""
+});
+
 const slideCountOptions = [5, 8, 10, 15, 20];
 const languageOptions: Array<{ label: string; value: PptLanguage }> = [
   { label: "中文", value: "zh" },
@@ -695,8 +702,30 @@ const progressPercent = computed(() => {
 });
 
 onMounted(() => {
-  void loadHistory();
+  void initializePptWorkspace();
 });
+
+async function initializePptWorkspace() {
+  await loadHistory();
+  const taskId = props.initialTaskId.trim();
+  if (!taskId) return;
+  try {
+    const task = await getPptGenerationTask(taskId);
+    previewRecord.value = task;
+    activeTask.value = task;
+    upsertHistory(task);
+    if (task.status === "success") {
+      openEditorFromTask(task);
+      operationMessage.value = "已打开 PPT 移动编辑页";
+    } else {
+      operationMessage.value = task.status === "failed" ? task.errorMessage || "PPT 生成失败" : "PPT 仍在生成中";
+    }
+  } catch (error) {
+    const message = errorMessage(error, "PPT 任务加载失败");
+    operationMessage.value = message;
+    uni.showToast({ title: message, icon: "none" });
+  }
+}
 
 async function loadHistory() {
   historyLoading.value = true;
@@ -2782,9 +2811,38 @@ async function openDownloadUrl(url: string) {
 }
 
 @media (max-width: 760px) {
+  .ppt-page.is-editor {
+    min-height: 100vh;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  .ppt-editor-shell {
+    min-height: 100vh;
+    border-radius: 0;
+  }
+
   .ppt-editor-header {
     align-items: stretch;
     flex-direction: column;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    padding: 10px;
+  }
+
+  .ppt-editor-titlebar {
+    min-width: 0;
+  }
+
+  .ppt-editor-title-input {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .ppt-save-state,
+  .ppt-editor-history {
+    display: none;
   }
 
   .ppt-editor-actions {
@@ -2793,9 +2851,39 @@ async function openDownloadUrl(url: string) {
 
   .ppt-editor-actions button {
     flex: 1;
+    min-width: 0;
+    padding: 0 6px;
+    font-size: 11px;
+  }
+
+  .ppt-editor-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ppt-slide-sidebar {
+    order: 2;
+    padding: 10px;
+  }
+
+  .ppt-slide-thumbs {
+    width: 100%;
+    height: auto;
+    max-height: 150px;
+    white-space: nowrap;
+  }
+
+  .ppt-slide-thumb {
+    display: inline-flex;
+    width: 156px;
+    min-height: 74px;
+    margin-right: 8px;
+    vertical-align: top;
   }
 
   .ppt-slide-canvas {
+    order: 1;
+    width: 100%;
     padding: 24px 14px 80px;
   }
 
@@ -2804,8 +2892,31 @@ async function openDownloadUrl(url: string) {
     padding: 48px 28px;
   }
 
+  .ppt-edit-slide:not(.active) {
+    display: none;
+  }
+
   .ppt-slide-title {
     font-size: 32px;
+  }
+
+  .ppt-editor-panel {
+    order: 3;
+    min-height: 0;
+  }
+
+  .ppt-tool-rail {
+    width: 64px;
+    flex: 0 0 64px;
+  }
+
+  .ppt-panel-content {
+    min-width: 0;
+    padding: 14px;
+  }
+
+  .ppt-visual-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .ppt-palette-menu,

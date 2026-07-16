@@ -194,6 +194,7 @@
               <text class="v31-draft-title">未完成项目会保留在最近浏览</text>
               <text class="v31-draft-copy">选择文本内容、自定义主题后，即使返回首页，也能继续从草稿进入。</text>
               <view class="v31-workflow-tags"><text>自动保存草稿</text><text>生成大纲</text><text>主题预览</text></view>
+              <button class="v31-ppt-editor-entry" type="button" @click="openPptEditor()">管理已有 PPT 与单页视觉</button>
             </view>
           </template>
 
@@ -2434,12 +2435,21 @@ async function pollGenerationTask(
 }
 
 function openLatestGenerationResult() {
+  if (latestGenerationTask.value?.resultType === "ppt") {
+    openPptEditor(latestGenerationTask.value.id);
+    return;
+  }
   const resultId = latestGenerationTask.value?.resultId;
   if (resultId) {
     openFeaturePage(`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(resultId)}`);
     return;
   }
   selectUserTab("assets");
+}
+
+function openPptEditor(taskId = "") {
+  const query = taskId && taskId !== "-" ? `?taskId=${encodeURIComponent(taskId)}` : "";
+  uni.navigateTo({ url: `/pages/user/UserPptEditorPage${query}` });
 }
 
 function previewLatestGenerationResult() {
@@ -3985,7 +3995,8 @@ onBackPress(() => {
 .v31-workflow-title { font-size: 15px; font-weight: 700; }
 .v31-workflow-copy { margin-top: 4px; color: #cdd5f5; font-size: 12px; }
 .v31-workflow-tags { display: flex; gap: 10px; margin-top: 9px; }
-.v31-workflow-tags text { min-width: 76px; padding: 5px 8px; border-radius: 8px; background: #111827; font-size: 10px; text-align: center; }
+.v31-workflow-tags text { min-width: 76px; padding: 5px 8px; border-radius: 8px; background: #111827; color: #f8fafc; font-size: 10px; text-align: center; }
+.v31-ppt-editor-entry { width: 100%; min-height: 40px; margin-top: 12px; border: 1px solid #dbe4f0; border-radius: 12px; background: #fff; color: #334155; font-size: 12px; font-weight: 700; }
 
 .v31-ppt-options button,
 .v31-example-grid button,

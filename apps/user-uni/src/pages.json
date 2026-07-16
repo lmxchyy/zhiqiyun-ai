@@ -142,6 +142,13 @@
       }
     },
     {
+      "path": "pages/user/UserPptEditorPage",
+      "style": {
+        "navigationBarTitleText": "PPT 编辑器",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserInfographicCreationPage",
       "style": {
         "navigationBarTitleText": "信息图",

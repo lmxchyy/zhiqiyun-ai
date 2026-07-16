@@ -1141,9 +1141,118 @@ const appJsonPath = path.resolve(outputRoot, "app.json");
 const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
 appJson.pages = appJson.pages.filter((page) => page !== "pages/NativeDebugLogin");
 const defaultHomePage = "pages/WechatLoginPage";
-appJson.pages = [
+const orderedPages = [
   defaultHomePage,
   ...appJson.pages.filter((page) => page !== defaultHomePage)
+];
+const mainUserPages = new Set([
+  "pages/user/UserHomePage",
+  "pages/user/UserCreationPage",
+  "pages/user/UserAssetsPage",
+  "pages/user/UserMinePage"
+]);
+const userCreationPageNames = new Set([
+  "UserImageCreationPage",
+  "UserVideoCreationPage",
+  "UserPptCreationPage",
+  "UserPptEditorPage",
+  "UserInfographicCreationPage",
+  "UserReviewCreationPage",
+  "UserReviewConversationPage",
+  "UserAgentCreationPage",
+  "UserKnowledgeAgentDetailPage"
+]);
+const userSecondaryPageNames = orderedPages
+  .filter((page) => page.startsWith("pages/user/") && !mainUserPages.has(page))
+  .map((page) => page.slice("pages/user/".length));
+const relocatedUserSubPackages = [
+  {
+    root: "pages/user-creation",
+    pages: userSecondaryPageNames.filter((page) => userCreationPageNames.has(page))
+  },
+  {
+    root: "pages/user-account",
+    pages: userSecondaryPageNames.filter((page) => !userCreationPageNames.has(page))
+  }
+].filter((item) => item.pages.length > 0);
+
+function assertGeneratedPath(filePath) {
+  const resolved = path.resolve(filePath);
+  const relative = path.relative(outputRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Refusing to move generated page outside mp-weixin output: ${resolved}`);
+  }
+  return resolved;
+}
+
+function relocateGeneratedPage(sourceRoot, targetRoot, pageName) {
+  const sourceDir = assertGeneratedPath(path.resolve(outputRoot, sourceRoot));
+  const targetDir = assertGeneratedPath(path.resolve(outputRoot, targetRoot));
+  fs.mkdirSync(targetDir, { recursive: true });
+  for (const extension of [".js", ".json", ".wxml", ".wxss"]) {
+    const sourcePath = assertGeneratedPath(path.resolve(sourceDir, `${pageName}${extension}`));
+    const targetPath = assertGeneratedPath(path.resolve(targetDir, `${pageName}${extension}`));
+    if (!fs.existsSync(sourcePath)) continue;
+    if (fs.existsSync(targetPath)) {
+      throw new Error(`Generated subpackage target already exists: ${targetPath}`);
+    }
+    fs.renameSync(sourcePath, targetPath);
+  }
+}
+
+const relocatedUserRoutes = new Map();
+for (const subPackage of relocatedUserSubPackages) {
+  for (const pageName of subPackage.pages) {
+    const oldRoute = `/pages/user/${pageName}`;
+    const newRoute = `/${subPackage.root}/${pageName}`;
+    relocateGeneratedPage("pages/user", subPackage.root, pageName);
+    relocatedUserRoutes.set(oldRoute, newRoute);
+  }
+}
+
+function rewriteGeneratedUserRoutes(directory) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const filePath = assertGeneratedPath(path.resolve(directory, entry.name));
+    if (entry.isDirectory()) {
+      rewriteGeneratedUserRoutes(filePath);
+      continue;
+    }
+    if (!entry.isFile() || path.extname(entry.name) !== ".js") continue;
+    const original = fs.readFileSync(filePath, "utf8");
+    let updated = original;
+    for (const [oldRoute, newRoute] of relocatedUserRoutes) {
+      updated = updated.split(oldRoute).join(newRoute);
+    }
+    if (updated !== original) fs.writeFileSync(filePath, updated);
+  }
+}
+
+const splitPackageRoots = [
+  "pages/enterprise",
+  "pages/promotion",
+  "pages/agent",
+  "pages/operation"
+];
+const generatedSubPackages = splitPackageRoots
+  .map((root) => ({
+    root,
+    pages: orderedPages
+      .filter((page) => page.startsWith(`${root}/`))
+      .map((page) => page.slice(root.length + 1))
+  }))
+  .filter((item) => item.pages.length > 0);
+generatedSubPackages.push(...relocatedUserSubPackages);
+const generatedSubPackageRoots = new Set(generatedSubPackages.map((item) => item.root));
+appJson.pages = orderedPages.filter(
+  (page) =>
+    !splitPackageRoots.some((root) => page.startsWith(`${root}/`)) &&
+    !relocatedUserRoutes.has(`/${page}`)
+);
+appJson.subPackages = [
+  ...(Array.isArray(appJson.subPackages)
+    ? appJson.subPackages.filter((item) => !generatedSubPackageRoots.has(item?.root))
+    : []),
+  ...generatedSubPackages
 ];
 fs.writeFileSync(appJsonPath, JSON.stringify(appJson, null, 2));
 
@@ -1153,6 +1262,7 @@ function preserveGeneratedComponents(configPath) {
   const existingIgnore = Array.isArray(config.packOptions?.ignore) ? config.packOptions.ignore : [];
   const optimizedPackageIgnores = [
     { type: "suffix", value: ".webp" },
+    { type: "folder", value: "static/app-icons" },
     { type: "file", value: "static/fallbacks/profile-member-background.png" },
     { type: "file", value: "static/fallbacks/profile-header-background.png" }
   ];
@@ -1608,4 +1718,5 @@ assetEmptyStateWxml = replaceNativeAssetBindings(assetEmptyStateWxml, /(<button[
 fs.writeFileSync(assetEmptyStateWxmlPath, assetEmptyStateWxml);
 const assetEmptyNativeMethods = String.raw`nativeAssetEmptyAction(){const bridge=globalThis.__xianzhiAssetNativeBridge;if(bridge&&typeof bridge.emptyAction==="function"){bridge.emptyAction();return}wx.switchTab({url:"/pages/user/UserCreationPage",fail(){wx.reLaunch({url:"/pages/user/UserCreationPage"})}})}`;
 injectNativeAssetMethods(assetEmptyStateJsPath, "AssetEmptyState", assetEmptyNativeMethods, ["nativeAssetEmptyAction"]);
+rewriteGeneratedUserRoutes(outputRoot);
 console.log("Preserved the generated login page and patched mp-weixin generation controls.");
