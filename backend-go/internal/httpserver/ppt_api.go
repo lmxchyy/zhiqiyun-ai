@@ -41,6 +41,13 @@ type pptOutlineGenerateRequest struct {
 	ImageModel            string `json:"imageModel"`
 }
 
+type pptEstimateRequest struct {
+	Prompt      string `json:"prompt"`
+	SlideCount  int    `json:"slideCount"`
+	TextModel   string `json:"textModel"`
+	ImageSource string `json:"imageSource"`
+}
+
 type pptOutline = pptapp.Outline
 type pptOutlineSlide = pptapp.OutlineSlide
 type pptSlide = pptapp.Slide
@@ -151,11 +158,15 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.UserID = user.ID
+	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
+		writeContentSecurityError(w, err)
+		return
+	}
 	pageCount := req.SlideCount
 	if req.Outline != nil && len(req.Outline.Slides) > 0 {
 		pageCount = len(req.Outline.Slides)
 	}
-	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, pageCount, strings.TrimSpace(req.ImageSource) != "", false)
+	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, pageCount, pptImagesEnabled(req.ImageSource), false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -202,7 +213,7 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if shouldAutoGeneratePPTImages(req) {
+	if shouldAutoGeneratePPTImages(req, a.cfg) {
 		if pptAutoImageEnabled(a.cfg) {
 			go a.runPPTTaskImageGeneration(user, task)
 		} else {
@@ -210,6 +221,43 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, resp)
+}
+
+func (a api) estimatePPTGenerationCost(w http.ResponseWriter, r *http.Request) {
+	data, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req pptEstimateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, req.SlideCount, pptImagesEnabled(req.ImageSource), false)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	slideCount := int(anyFloatOrDefault(capability.Params["page_count"], 5))
+	task := pptapp.Task{
+		UserID:      user.ID,
+		Prompt:      strings.TrimSpace(req.Prompt),
+		SlideCount:  slideCount,
+		TextModel:   capability.Model,
+		ImageSource: normalizedPPTImageSource(req.ImageSource),
+	}
+	pointCost := pptPointCostWithRules(task, data)
+	response := map[string]any{
+		"pointCost":  pointCost,
+		"slideCount": slideCount,
+		"model":      capability.Model,
+	}
+	if account, accountErr := a.store.PointAccount(user.ID); accountErr == nil {
+		response["availablePoints"] = account.Available
+		response["sufficient"] = account.Available >= pointCost
+	}
+	writeJSON(w, response)
 }
 
 func (a api) listPPTTextModels(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +339,11 @@ func (a api) generatePPTOutline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, pptapp.ErrInvalidPrompt)
 		return
 	}
-	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, req.SlideCount, strings.TrimSpace(req.ImageSource) != "", false)
+	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
+		writeContentSecurityError(w, err)
+		return
+	}
+	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, req.SlideCount, pptImagesEnabled(req.ImageSource), false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -341,6 +393,67 @@ func (a api) regeneratePPTSlide(w http.ResponseWriter, r *http.Request) {
 	}
 	slide.SpeakerNotes = "当前页已重新生成，后续可接入真实 PPT 页面生成服务。"
 	writeJSON(w, slide)
+}
+
+func (a api) updatePPTSlide(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var slide pptSlide
+	if err := json.NewDecoder(r.Body).Decode(&slide); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("id"))
+	slideID := strings.TrimSpace(r.PathValue("slideId"))
+	task, err := a.pptService.UpdateSlideContent(user.ID, taskID, slideID, slide)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	for _, updated := range task.Slides {
+		if updated.ID == slideID {
+			writeJSON(w, updated)
+			return
+		}
+	}
+	writePPTError(w, pptapp.ErrTaskNotFound)
+}
+
+func (a api) updatePPTSlideImage(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	var req struct {
+		ImageURL string `json:"imageUrl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.ImageURL) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("ppt slide image url is required"))
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("id"))
+	slideID := strings.TrimSpace(r.PathValue("slideId"))
+	updated, err := a.pptService.UpdateSlideImage(user.ID, taskID, slideID, req.ImageURL)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	updated = a.materializePPTTaskVisualURLs(r.Context(), user, updated)
+	for _, slide := range updated.Slides {
+		if slide.ID == slideID {
+			writeJSON(w, slide)
+			return
+		}
+	}
+	writePPTError(w, pptapp.ErrTaskNotFound)
 }
 
 func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
@@ -624,12 +737,40 @@ func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a api) downloadPPTExport(w http.ResponseWriter, r *http.Request) {
+	_, user, err := a.authenticatedUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("taskId"))
+	task, err := a.pptService.GetTask(user.ID, taskID)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
+	payload, err := buildPPTX(task)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	fileName := pptxDownloadFileName(task)
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+	w.Header().Set("Content-Disposition", pptxContentDisposition(fileName))
+	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(payload); err != nil {
+		log.Printf("ppt direct export write failed task=%s err=%v", task.TaskID, err)
+	}
+}
+
 func (a api) exportPDF(w http.ResponseWriter, r *http.Request) {
 	if _, _, err := a.authenticatedUser(r); err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	writeJSON(w, map[string]string{"url": ""})
+	writeError(w, http.StatusNotImplemented, errors.New("ppt pdf export is not available yet"))
 }
 
 func (a api) generatePPTImage(w http.ResponseWriter, r *http.Request) {
@@ -664,15 +805,19 @@ func (a api) generatePPTImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-func shouldAutoGeneratePPTImages(req pptapp.GenerateRequest) bool {
+func shouldAutoGeneratePPTImages(req pptapp.GenerateRequest, cfg config.Config) bool {
 	if strings.TrimSpace(req.ImageSource) != "ai" {
 		return false
 	}
-	model := normalizedPPTImageModel(req.ImageModel)
-	if model == "" || strings.EqualFold(model, "default-image") {
+	model := pptImageProviderModel(req.ImageModel, cfg.ImageModel)
+	if strings.TrimSpace(model) == "" {
 		return false
 	}
 	return req.Outline != nil && len(req.Outline.Slides) > 0
+}
+
+func pptImagesEnabled(imageSource string) bool {
+	return normalizedPPTImageSource(imageSource) != "none"
 }
 
 func pptVisualPlannerModelEnabled(cfg config.Config) bool {

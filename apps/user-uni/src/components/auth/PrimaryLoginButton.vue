@@ -1,6 +1,6 @@
 <template>
   <button
-    :class="['auth-primary-button', state, { 'with-icon': icon === 'wechat' }]"
+    :class="['auth-primary-button', state]"
     :disabled="disabled || loading"
     :open-type="openType || undefined"
     hover-class="auth-primary-button-pressed"
@@ -8,10 +8,6 @@
     @getphonenumber="$emit('getphonenumber', $event)"
   >
     <view v-if="loading" class="auth-button-spinner" />
-    <view v-else-if="icon === 'wechat'" class="auth-wechat-icon" aria-hidden="true">
-      <view class="auth-wechat-dot auth-wechat-dot-a" />
-      <view class="auth-wechat-dot auth-wechat-dot-b" />
-    </view>
     <text>{{ loading ? loadingText : label }}</text>
   </button>
 </template>
@@ -23,14 +19,12 @@ withDefaults(defineProps<{
   loadingText?: string;
   disabled?: boolean;
   state?: "default" | "success" | "error";
-  icon?: "wechat" | "none";
   openType?: string;
 }>(), {
   loading: false,
   loadingText: "正在处理…",
   disabled: false,
   state: "default",
-  icon: "none",
   openType: "",
 });
 
@@ -50,10 +44,6 @@ defineEmits<{ activate: [event: unknown]; getphonenumber: [event: unknown] }>();
 .auth-primary-button.error { background: #eb404f; }
 .auth-primary-button-pressed { background: #3f5be0; opacity: 0.96; }
 .auth-button-spinner { width: 16px; height: 16px; box-sizing: border-box; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
-.auth-wechat-icon { position: relative; width: 30px; height: 24px; border-radius: 52% 52% 48% 48%; background: #fff; }
-.auth-wechat-icon::after { content: ""; position: absolute; right: 1px; bottom: -2px; width: 8px; height: 8px; background: #fff; transform: rotate(35deg); border-radius: 2px; }
-.auth-wechat-dot { position: absolute; z-index: 1; top: 8px; width: 3px; height: 3px; border-radius: 50%; background: #4a6bff; }
-.auth-wechat-dot-a { left: 9px; } .auth-wechat-dot-b { right: 9px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 340px) { .auth-primary-button { height: 46px; border-radius: 14px; font-size: 14px; } }
 </style>

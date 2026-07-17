@@ -834,6 +834,52 @@ func TestFirstRechargeRequires996AgentPackage(t *testing.T) {
 	}
 }
 
+func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	handler := server.Handler
+	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+
+	beforeResponse := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
+	if beforeResponse.Code != http.StatusOK {
+		t.Fatalf("points before estimate status = %d, body = %s", beforeResponse.Code, beforeResponse.Body.String())
+	}
+	var before struct {
+		Account pointAccount `json:"account"`
+	}
+	if err := json.NewDecoder(beforeResponse.Body).Decode(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	estimateResponse := authedRequest(t, handler, http.MethodPost, "/api/v1/ppt/estimate", bytes.NewBufferString(`{"prompt":"门店增长计划","slideCount":3,"textModel":"kimi-k2.6","imageSource":"none"}`), token)
+	if estimateResponse.Code != http.StatusOK {
+		t.Fatalf("ppt estimate status = %d, body = %s", estimateResponse.Code, estimateResponse.Body.String())
+	}
+	var estimate struct {
+		PointCost       int  `json:"pointCost"`
+		SlideCount      int  `json:"slideCount"`
+		AvailablePoints int  `json:"availablePoints"`
+		Sufficient      bool `json:"sufficient"`
+	}
+	if err := json.NewDecoder(estimateResponse.Body).Decode(&estimate); err != nil {
+		t.Fatal(err)
+	}
+	if estimate.PointCost <= 0 || estimate.SlideCount != 3 || estimate.AvailablePoints != before.Account.Available || !estimate.Sufficient {
+		t.Fatalf("unexpected ppt estimate: %+v", estimate)
+	}
+
+	afterResponse := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
+	var after struct {
+		Account pointAccount `json:"account"`
+	}
+	if err := json.NewDecoder(afterResponse.Body).Decode(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Account.Available != before.Account.Available {
+		t.Fatalf("estimate deducted points: before=%d after=%d", before.Account.Available, after.Account.Available)
+	}
+}
+
 func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	server := New(config.Config{

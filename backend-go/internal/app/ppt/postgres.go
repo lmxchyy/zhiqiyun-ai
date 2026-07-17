@@ -231,6 +231,12 @@ func (s *Service) updateSlideImagePostgres(userID, taskID, slideID, imageURL str
 	})
 }
 
+func (s *Service) updateSlideContentPostgres(userID, taskID, slideID string, update Slide) (Task, error) {
+	return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+		return applySlideContentUpdate(task, slideID, update)
+	})
+}
+
 func (s *Service) updateSlideVisualPlanPostgres(userID, taskID, slideID string, plan VisualPlan, visualTaskID, status, errorMessage string) (Task, error) {
 	return s.updatePostgresTask(userID, taskID, func(task *Task) error {
 		for i := range task.Slides {

@@ -23,6 +23,7 @@
       />
 
       <template v-else-if="asset">
+        <AiGeneratedContentNotice />
         <view class="preview-card">
           <video
             v-if="asset.type === 'video' && asset.remoteUrl"
@@ -186,6 +187,7 @@ import AssetCover from "./AssetCover.vue";
 import AssetErrorState from "./AssetErrorState.vue";
 import AssetSkeleton from "./AssetSkeleton.vue";
 import AssetStatusBadge from "./AssetStatusBadge.vue";
+import AiGeneratedContentNotice from "../compliance/AiGeneratedContentNotice.vue";
 import { backOrHome } from "../../utils/miniProgramBusiness";
 
 type DetailAction = "" | "preview" | "edit" | "regenerate" | "download" | "favorite" | "move" | "rename" | "archive" | "delete";

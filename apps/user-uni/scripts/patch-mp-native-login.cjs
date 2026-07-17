@@ -1214,7 +1214,7 @@ Page({
       .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
       .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(String(value)))
       .join("&");
-    setTimeout(() => wx.reLaunch({ url: "/pages/${loginEntryPageName}" + (query ? "?" + query : "") }), 50);
+    setTimeout(() => wx.reLaunch({ url: "/pages/user/UserHomePage" }), 50);
   }
 });
 `
@@ -1280,7 +1280,7 @@ Page({
     this.entering = true;
     this.setData({ failed: false });
     wx.reLaunch({
-      url: "/pages/WechatLoginPage",
+      url: "/pages/user/UserHomePage",
       fail: () => {
         this.entering = false;
         this.setData({ failed: true });
@@ -1321,13 +1321,15 @@ fs.writeFileSync(path.resolve(pageRoot, "NativeDebugLogin.wxss"), wxss); */
 const appJsonPath = path.resolve(outputRoot, "app.json");
 const appJson = JSON.parse(fs.readFileSync(appJsonPath, "utf8"));
 const startupPage = `pages/${startupPageName}`;
-const defaultHomePage = `pages/${loginEntryPageName}`;
+const defaultHomePage = "pages/user/UserHomePage";
+const loginEntryPage = `pages/${loginEntryPageName}`;
 const loginFormPage = `pages/${loginFormPageName}`;
 appJson.pages = appJson.pages.filter(
-  (page) => page !== "pages/NativeDebugLogin" && page !== startupPage && page !== defaultHomePage && page !== loginFormPage && page !== legacyExperienceEntry
+  (page) => page !== "pages/NativeDebugLogin" && page !== startupPage && page !== defaultHomePage && page !== loginEntryPage && page !== loginFormPage && page !== legacyExperienceEntry
 );
 const orderedPages = [
   defaultHomePage,
+  loginEntryPage,
   loginFormPage,
   legacyExperienceEntry,
   startupPage,
@@ -1613,10 +1615,10 @@ const createComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
 if (!createComponentPattern.test(workbenchJs)) {
   throw new Error("MiniProgramRoleWorkbench component registration not found");
 }
-if (!workbenchJs.includes("nativeGenerate(){const handler=")) {
+if (!workbenchJs.includes("nativeGenerate(){const invoke=")) {
   workbenchJs = workbenchJs.replace(
     createComponentPattern,
-    `$1.methods=Object.assign({},$1.methods,{nativeGenerate(){const handler=globalThis.__xianzhiMiniProgramGenerate;if(typeof handler==="function"){handler();return}wx.showToast({title:"生成入口初始化中，请稍后重试",icon:"none"})},nativeBackToCreation(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const fallback=String(dataset.returnFallback||"/pages/user/UserCreationPage");const returnToFallback=()=>{const tabPages=new Set(["/pages/user/UserHomePage","/pages/user/UserCreationPage","/pages/user/UserAssetsPage","/pages/user/UserMinePage"]);if(tabPages.has(fallback)){wx.switchTab({url:fallback,fail(){wx.reLaunch({url:fallback})}});return}wx.redirectTo({url:fallback,fail(){wx.reLaunch({url:fallback})}})};const pages=getCurrentPages();if(pages.length>1){wx.navigateBack({delta:1,fail:returnToFallback});return}returnToFallback()}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeGenerate","nativeBackToCreation"]));wx.createComponent($1);`
+    `$1.methods=Object.assign({},$1.methods,{nativeGenerate(){const invoke=attempt=>{const handler=globalThis.__xianzhiMiniProgramGenerate;if(typeof handler==="function"){handler();return}if(attempt<8){setTimeout(()=>invoke(attempt+1),50);return}wx.showToast({title:"页面尚未准备好，请返回后重试",icon:"none"})};invoke(0)},nativeBackToCreation(event){const dataset=event&&event.currentTarget&&event.currentTarget.dataset?event.currentTarget.dataset:{};const fallback=String(dataset.returnFallback||"/pages/user/UserCreationPage");const returnToFallback=()=>{const tabPages=new Set(["/pages/user/UserHomePage","/pages/user/UserCreationPage","/pages/user/UserAssetsPage","/pages/user/UserMinePage"]);if(tabPages.has(fallback)){wx.switchTab({url:fallback,fail(){wx.reLaunch({url:fallback})}});return}wx.redirectTo({url:fallback,fail(){wx.reLaunch({url:fallback})}})};const pages=getCurrentPages();if(pages.length>1){wx.navigateBack({delta:1,fail:returnToFallback});return}returnToFallback()}});$1.wxsCallMethods=Array.from(new Set([...(Array.isArray($1.wxsCallMethods)?$1.wxsCallMethods:[]),"nativeGenerate","nativeBackToCreation"]));wx.createComponent($1);`
   );
 }
 if (!workbenchJs.includes("nativeChooseReferenceImages(event){const append=")) {

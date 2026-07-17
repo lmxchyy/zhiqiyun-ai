@@ -3783,7 +3783,7 @@ func pptPointCostWithRules(task pptapp.Task, data adminPlatformData) int {
 		Params: map[string]any{
 			"page_count":         pptSlideQuantity(task),
 			"slideCount":         pptSlideQuantity(task),
-			"with_images":        strings.TrimSpace(task.ImageSource) != "",
+			"with_images":        pptImagesEnabled(task.ImageSource),
 			"uploaded_file":      false,
 			"web_search_enabled": task.EnableWebSearch,
 			"theme_style":        task.Theme,

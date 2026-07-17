@@ -159,6 +159,7 @@ type api struct {
 	pptVisualTasks             *sync.Map
 	pptVisualLocker            pptVisualDistributedLocker
 	fileService                *storagecenter.Service
+	contentSecurity            wechatContentSecurityChecker
 }
 
 type generatedImageDecorator struct{}
@@ -189,7 +190,7 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 	if pgStore, ok := store.(*postgresStore); ok {
 		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
 	}
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService}
+	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg)}
 	go api.repairStaleGenerationTasks(imageGenerationTimeout)
 	return api
 }
@@ -518,6 +519,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
 		writeError(w, http.StatusBadRequest, generation.ErrInvalidPrompt)
+		return
+	}
+	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
+		writeContentSecurityError(w, err)
 		return
 	}
 	if req.Type == "" {
@@ -1406,7 +1411,7 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
-	_, err := a.currentUser(r)
+	_, _, err := a.authenticatedUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -1443,6 +1448,15 @@ func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
 	contentType := detectReferenceImageContentType(raw, header.Header.Get("Content-Type"))
 	if !strings.HasPrefix(contentType, "image/") {
 		writeError(w, http.StatusBadRequest, errors.New("unsupported image file"))
+		return
+	}
+	if a.contentSecurity != nil {
+		if err := a.contentSecurity.CheckImage(r.Context(), raw, header.Filename, contentType); err != nil {
+			writeContentSecurityError(w, err)
+			return
+		}
+	} else if isWeChatMiniProgramRequest(r) {
+		writeContentSecurityError(w, errContentSecurityUnavailable)
 		return
 	}
 	dir := a.referenceImageDir()

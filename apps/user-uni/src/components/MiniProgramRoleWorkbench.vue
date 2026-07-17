@@ -26,18 +26,26 @@
     <view v-if="pageLoading && activeRole !== 'user'" class="state-card">
       <text>正在同步小程序工作台...</text>
     </view>
-    <view v-if="pageError && !(activeRole === 'user' && userStore.currentRole !== 'USER')" class="state-card error runtime-error-banner">
+    <view v-if="pageError && !(activeRole === 'user' && !isGuest && userStore.currentRole !== 'USER')" class="state-card error runtime-error-banner">
       <text>{{ pageError }}</text>
       <button type="button" class="small-button" @click="refreshAll">重新加载</button>
     </view>
 
-    <view v-if="activeRole === 'user' && userStore.currentRole !== 'USER'" class="state-card user-role-switch-state">
+    <view v-if="activeRole === 'user' && !isGuest && userStore.currentRole !== 'USER'" class="state-card user-role-switch-state">
       <text>{{ pageError || '正在切换到普通用户视图...' }}</text>
       <button v-if="pageError" type="button" class="small-button" @click="refreshAll">重新加载</button>
     </view>
 
     <view v-else class="role-content">
       <template v-if="activeRole === 'user'">
+        <view v-if="isGuest && (activeTab === 'home' || activeTab === 'create')" class="guest-browse-banner">
+          <view class="guest-browse-copy">
+            <text class="guest-browse-title">欢迎先体验知启云 AI</text>
+            <text class="guest-browse-detail">无需登录即可浏览功能；生成、上传或保存作品时再登录。</text>
+          </view>
+          <button type="button" class="guest-browse-button" @click="requestLogin('登录后可开始生成并保存作品')">登录 / 注册</button>
+        </view>
+        <AiGeneratedContentNotice v-if="activeTab === 'home' || activeTab === 'create'" />
         <V531HomePage
           v-if="activeTab === 'home'"
           :display-name="displayName"
@@ -707,6 +715,7 @@ import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 import { uploadReferenceImage } from "../api/files";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
+import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
 import PromotionQrCode from "./PromotionQrCode.vue";
 import AppImage from "./AppImage.vue";
@@ -869,6 +878,7 @@ const assetFilters: Array<{ id: AssetFilter; label: string }> = [
 
 const auth = ref<AuthResponse | null>(null);
 const token = ref("");
+const isGuest = computed(() => !token.value);
 const pageLoading = ref(false);
 const pageError = ref("");
 const activeRole = ref<RoleId>(props.initialRole);
@@ -953,7 +963,7 @@ const filteredAssets = computed(() => displayedAssets.value.filter(asset => {
   const matchesSearch = !assetSearch.value.trim() || asset.name.toLowerCase().includes(assetSearch.value.trim().toLowerCase());
   return matchesType && matchesSearch;
 }));
-const displayName = computed(() => profile.value?.user?.name || auth.value?.user?.name || profile.value?.user?.email || auth.value?.user?.email || "当前用户");
+const displayName = computed(() => profile.value?.user?.name || auth.value?.user?.name || profile.value?.user?.email || auth.value?.user?.email || "访客");
 const displayUserId = computed(() => rowString(profile.value?.user || {}, "id", "userId") || rowString(auth.value?.user || {}, "id", "userId") || "--");
 const userAvatarUrl = computed(() => rowString(profile.value?.user || {}, "avatarUrl", "avatar", "headImage") || rowString(auth.value?.user || {}, "avatarUrl", "avatar", "headImage"));
 const userEmail = computed(() => profile.value?.user?.email || auth.value?.user?.email || "-");
@@ -1319,6 +1329,7 @@ async function initializeCreationFromAsset(assetId: string, intent: "edit" | "re
 }
 
 function chooseCreationReferenceImages() {
+  if (!requestLogin("登录后可上传参考图片")) return;
   if (creationReferenceSelecting.value) return;
   const remaining = Math.max(0, 3 - creationReferencePaths.value.length);
   if (!remaining) {
@@ -1347,6 +1358,7 @@ function chooseCreationReferenceImages() {
 }
 
 function appendCreationReferencePaths(paths: string[]) {
+  if (!requestLogin("登录后可上传参考图片")) return;
   creationReferencePaths.value = [...creationReferencePaths.value, ...paths]
     .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
     .slice(0, 3);
@@ -1468,9 +1480,29 @@ function readAuth() {
     authStorage.setAuth(storedAuth);
     if (rowString(storedAuth, "refreshToken")) authStorage.setRefreshToken(rowString(storedAuth, "refreshToken"));
   }
-  if (!token.value) {
-    uni.reLaunch({ url: "/pages/WechatLoginPage" });
-  }
+}
+
+function requestLogin(reason = "登录后可继续使用此功能") {
+  if (!isGuest.value) return true;
+  uni.showModal({
+    title: "登录后使用",
+    content: `${reason}。你也可以取消并继续浏览。`,
+    confirmText: "去登录",
+    cancelText: "继续浏览",
+    confirmColor: "#4A6BFF",
+    success: result => {
+      if (!result.confirm) return;
+      const pages = getCurrentPages();
+      const current = pages[pages.length - 1] as { route?: string } | undefined;
+      const redirectPath = current?.route ? `/${String(current.route).replace(/^\/+/, "")}` : "/pages/user/UserHomePage";
+      const query = `?redirectPath=${encodeURIComponent(redirectPath)}&sourcePage=${encodeURIComponent(redirectPath)}`;
+      uni.navigateTo({
+        url: `/pages/WechatLoginPage${query}`,
+        fail: () => uni.reLaunch({ url: `/pages/WechatLoginPage${query}` }),
+      });
+    },
+  });
+  return false;
 }
 
 function replacePage(url: string) {
@@ -1533,6 +1565,7 @@ function openStandalonePage(url: string) {
 }
 
 async function switchRole(role: RoleId) {
+  if (!requestLogin("登录后可切换工作台身份")) return;
   const appRole = roleToAppRole[role];
   try {
     await userStore.switchRole(appRole);
@@ -1589,6 +1622,7 @@ function studioModuleSlot(mode: CreationMode) { return ({ image: "studio.templat
 function assetDefaultSlot(mediaType: string) { if (mediaType === "image") return "assets.default.image"; if (mediaType === "video") return "assets.default.video"; if (mediaType === "document") return "assets.default.document"; return "assets.default.other"; }
 
 function selectUserTab(tab: TabId) {
+  if (!["home", "create"].includes(tab) && !requestLogin("登录后可查看作品、账户与权益")) return;
   replacePage(rolePage("user", tab));
 }
 
@@ -1644,6 +1678,7 @@ function handlePromotionQrError(message: string) {
 }
 
 async function showNotifications() {
+  if (!requestLogin("登录后可查看通知")) return;
   try {
     const dashboard = await api<AnyRecord>("/api/v1/user/dashboard");
     const recentTasks = listOf(dashboard.recentTasks);
@@ -1862,6 +1897,7 @@ function handleV531Benefit(payload: unknown) {
 }
 
 async function preloadCreationBackend(mode: CreationMode) {
+  if (isGuest.value) return;
   try {
     if (mode === "ppt") {
       await resolvePptGenerationModels();
@@ -1881,7 +1917,7 @@ async function preloadCreationBackend(mode: CreationMode) {
     const moduleCode = mode === "video" ? "video_generation" : "image_generation";
     await api(`/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}`);
   } catch (error) {
-    uni.showToast({ title: error instanceof Error ? error.message : "创作接口预检失败", icon: "none" });
+    console.warn("[创作接口预检失败]", mode, error);
   }
 }
 
@@ -1919,7 +1955,16 @@ function selectAgentTab(tab: TabId) {
 
 async function refreshAll() {
   readAuth();
-  if (!token.value) return;
+  if (!token.value) {
+    pageLoading.value = false;
+    pageError.value = "";
+    profile.value = null;
+    wallet.value = null;
+    pointAccountResponse.value = null;
+    recentAssets.value = [];
+    generationTasks.value = [];
+    return;
+  }
   pageLoading.value = true;
   pageError.value = "";
   try {
@@ -2104,6 +2149,7 @@ function showChildAgentHint() {
 }
 
 function openFeaturePage(url: string) {
+  if (!requestLogin("登录后可查看个人数据与账户功能")) return;
   openStandalonePage(url);
 }
 
@@ -2113,6 +2159,7 @@ function openCustomerDetail(customer: AnyRecord) {
 }
 
 function openAssetDetail(asset: unknown) {
+  if (!requestLogin("登录后可查看作品详情")) return;
   const id = rowString(asset, "id", "assetId");
   if (id) openFeaturePage(`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(id)}`);
 }
@@ -2143,6 +2190,7 @@ function openOperationCommissionDetail(commission: AnyRecord) {
 }
 
 function handleGenerateTap() {
+  if (!requestLogin("登录后可提交生成任务")) return;
   if (generationBusy.value) {
     uni.showToast({ title: "当前任务正在生成，请勿重复提交", icon: "none" });
     return;
@@ -2287,10 +2335,11 @@ async function submitCreation(prompt: string) {
     generationPollRun += 1;
     stopGenerationFeedback();
     generationProgress.value = 0;
-    const message = error instanceof Error ? error.message : "生成任务创建失败";
+    const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
+    const message = rawMessage.includes("所发布内容含违规信息") ? "所发布内容含违规信息" : rawMessage;
     creationError.value = message;
     latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
-    uni.showToast({ title: "生成失败，请重试", icon: "none" });
+    uni.showToast({ title: message === "所发布内容含违规信息" ? message : "生成失败，请重试", icon: "none" });
   } finally {
     generationSubmitting.value = false;
   }
@@ -2301,6 +2350,7 @@ async function uploadCreationReferenceImage(filePath: string, index: number) {
     return await uploadReferenceImage(filePath);
   } catch (error) {
     const message = error instanceof Error ? error.message : "参考图上传失败";
+    if (message.includes("所发布内容含违规信息")) throw new Error("所发布内容含违规信息");
     throw new Error(`第 ${index + 1} 张参考图上传失败：${message}`);
   }
 }
@@ -4143,6 +4193,22 @@ onBackPress(() => {
   font-size: 17px;
   line-height: 1;
 }
+
+.guest-browse-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 16px 12px;
+  padding: 13px 14px;
+  border: 1px solid #cfd9ff;
+  border-radius: 14px;
+  background: #f5f7ff;
+}
+.guest-browse-copy { min-width: 0; flex: 1; }
+.guest-browse-title { display: block; color: #1d2b56; font-size: 14px; font-weight: 700; }
+.guest-browse-detail { display: block; margin-top: 4px; color: #697085; font-size: 11px; line-height: 1.5; }
+.guest-browse-button { flex: 0 0 auto; min-width: 92px; margin: 0; padding: 0 12px; border: 0; border-radius: 10px; color: #fff; background: #4a6bff; font-size: 12px; line-height: 36px; }
+.guest-browse-button::after { display: none; }
 
 @media (max-width: 340px) {
   .v31-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

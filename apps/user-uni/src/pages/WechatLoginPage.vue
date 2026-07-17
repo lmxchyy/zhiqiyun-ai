@@ -20,8 +20,7 @@
       mode="wechat"
     >
       <PrimaryLoginButton
-        label="微信手机号快捷登录"
-        icon="wechat"
+        label="手机号快捷登录"
         :disabled="busy"
         :open-type="agreementAccepted ? 'getPhoneNumber' : ''"
         @activate="onWechatButtonClick()"
@@ -47,6 +46,7 @@
         @open="openAgreement($event)"
       />
       <SecondaryLoginEntry class="auth-help-spacing" label="登录遇到问题？" muted @activate="showLoginHelp()" />
+      <SecondaryLoginEntry class="auth-browse-entry" label="暂不登录，先浏览功能" muted @activate="enterGuestBrowse()" />
     </LoginCard>
     <!-- #endif -->
 
@@ -68,7 +68,7 @@
       <PrimaryLoginButton label="登录 / 注册" :disabled="busy" @activate="loginWithSms()" />
       <SecondaryLoginEntry class="auth-mode-back" label="账号密码登录" @activate="switchMode('password')" />
       <!-- #ifdef MP-WEIXIN -->
-      <SecondaryLoginEntry class="auth-mode-back" label="返回微信快捷登录" @activate="switchMode('wechat')" />
+      <SecondaryLoginEntry class="auth-mode-back" label="返回手机号快捷登录" @activate="switchMode('wechat')" />
       <!-- #endif -->
       <InviteCodeEntry :status="inviteStatus" @click="openInviteSheet()" />
       <AgreementCheckbox
@@ -78,6 +78,7 @@
         @open="openAgreement($event)"
       />
       <SecondaryLoginEntry class="auth-help-spacing sms" label="登录遇到问题？" muted @activate="showLoginHelp()" />
+      <SecondaryLoginEntry class="auth-browse-entry" label="暂不登录，先浏览功能" muted @activate="enterGuestBrowse()" />
     </LoginCard>
 
     <LoginCard
@@ -137,9 +138,9 @@
       </view>
       <SecondaryLoginEntry label="使用手机号验证码登录" @activate="switchMode('sms')" />
       <!-- #ifdef MP-WEIXIN -->
-      <SecondaryLoginEntry label="返回微信快捷登录" muted @activate="switchMode('wechat')" />
+      <SecondaryLoginEntry label="返回手机号快捷登录" muted @activate="switchMode('wechat')" />
       <!-- #endif -->
-      <view class="auth-password-note"><text>首次微信或验证码登录后，可在账号与安全中设置密码</text></view>
+      <view class="auth-password-note"><text>首次快捷登录或验证码登录后，可在账号与安全中设置密码</text></view>
       <view :class="['auth-password-agreement', { highlight: agreementHighlight }]">
         <view :class="['auth-password-agreement-toggle', { checked: agreementAccepted }]" @tap.stop="togglePasswordAgreement()">
           <view :class="['auth-password-agreement-box', { checked: agreementAccepted }]">
@@ -153,6 +154,7 @@
           <text class="auth-password-agreement-link" @click.stop="openAgreement('privacy')">《隐私政策》</text>
         </view>
       </view>
+      <SecondaryLoginEntry class="auth-browse-entry" label="暂不登录，先浏览功能" muted @activate="enterGuestBrowse()" />
     </LoginCard>
 
     <BottomSheet
@@ -453,7 +455,7 @@ function handleLoginError(error: unknown, method: LoginMode) {
   if (code.includes("SYSTEM_MAINTENANCE")) return showErrorState("maintenance");
   if (status === 503 || code.includes("AUTH_SESSION_UNAVAILABLE")) return showErrorState("service");
   if (method === "wechat" && status === 502 && (code.includes("WECHAT") || code.includes("CODE2SESSION"))) {
-    showToast("微信授权凭证无效或已过期，请重新授权登录", "error");
+    showToast("快捷登录凭证无效或已过期，请重新进行手机号快捷登录", "error");
     return;
   }
   if (code.includes("TOKEN_SAVE_FAILED")) return showErrorState("token");
@@ -500,8 +502,8 @@ function requestWechatLoginCode() {
   return new Promise<string>((resolve, reject) => {
     uni.login({
       provider: "weixin",
-      success: result => result.code ? resolve(result.code) : reject(new Error(`微信登录凭证获取失败：${result.errMsg || "未返回 code"}`)),
-      fail: result => reject(new Error(`微信登录凭证获取失败：${result.errMsg || "未知错误"}`)),
+      success: result => result.code ? resolve(result.code) : reject(new Error(`小程序登录凭证获取失败：${result.errMsg || "未返回 code"}`)),
+      fail: result => reject(new Error(`小程序登录凭证获取失败：${result.errMsg || "未知错误"}`)),
     });
   });
 }
@@ -727,6 +729,13 @@ function returnToAvailableLogin() {
   switchMode(errorState.value === "network" || errorState.value === "timeout" ? "sms" : "password");
 }
 
+function enterGuestBrowse() {
+  uni.switchTab({
+    url: "/pages/user/UserHomePage",
+    fail: () => uni.reLaunch({ url: "/pages/user/UserHomePage" }),
+  });
+}
+
 const keyboardHandler = (result: { height?: number }) => {
   keyboardHeight.value = Math.max(0, Number(result.height || 0));
   if (keyboardHeight.value > 0) {
@@ -771,6 +780,7 @@ onUnload(() => {
 .auth-agreement-spacing.sms { margin-top: 16px; }
 .auth-agreement-spacing.password { margin-top: 11px; }
 .auth-help-spacing { margin-top: 22px; }
+.auth-browse-entry { margin-top: 8px; color: #4a6bff; }
 .auth-help-spacing.sms { margin-top: 7px; }
 .auth-mode-back { margin: 7px 0 5px; }
 .auth-field-block { margin-bottom: 12px; }

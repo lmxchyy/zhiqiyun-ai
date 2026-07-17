@@ -298,6 +298,48 @@ func (s *Service) UpdateSlideImage(userID string, taskID string, slideID string,
 	return task, nil
 }
 
+func (s *Service) UpdateSlideContent(userID, taskID, slideID string, update Slide) (Task, error) {
+	if s.db != nil {
+		return s.updateSlideContentPostgres(userID, taskID, slideID, update)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	if err := applySlideContentUpdate(&task, slideID, update); err != nil {
+		return Task{}, err
+	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func applySlideContentUpdate(task *Task, slideID string, update Slide) error {
+	slideID = strings.TrimSpace(slideID)
+	for i := range task.Slides {
+		if task.Slides[i].ID != slideID {
+			continue
+		}
+		task.Slides[i].Title = strings.TrimSpace(update.Title)
+		task.Slides[i].Content = strings.TrimSpace(update.Content)
+		task.Slides[i].BulletPoints = append([]string(nil), update.BulletPoints...)
+		task.Slides[i].SpeakerNotes = strings.TrimSpace(update.SpeakerNotes)
+		if layout := strings.TrimSpace(update.Layout); layout != "" {
+			task.Slides[i].Layout = layout
+		}
+		return nil
+	}
+	return ErrTaskNotFound
+}
+
 func (s *Service) UpdateSlideVisualPlan(userID, taskID, slideID string, plan VisualPlan, visualTaskID, status, errorMessage string) (Task, error) {
 	if s.db != nil {
 		return s.updateSlideVisualPlanPostgres(userID, taskID, slideID, plan, visualTaskID, status, errorMessage)

@@ -1,5 +1,6 @@
 <template>
   <view :class="['ppt-page', { 'is-editor': currentMode === 'editor' }]">
+    <AiGeneratedContentNotice v-if="currentMode !== 'editor'" />
     <template v-if="currentMode === 'editor'">
       <view class="ppt-editor-shell" :class="{ presenting: presentationMode === 'present' }">
         <view v-if="presentationMode === 'present'" class="ppt-present-stage">
@@ -525,6 +526,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
 import { downloadTemporaryFile } from "../api/files";
+import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import {
   createPptGenerationTask,
   deletePptSlideVisual,

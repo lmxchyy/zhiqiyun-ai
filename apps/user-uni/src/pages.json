@@ -2,18 +2,18 @@
   "pages": [
     // #ifdef MP-WEIXIN || APP-PLUS
     {
-      "path": "pages/WechatLoginPage",
-      "style": {
-        "navigationBarTitleText": "知启云 AI",
-        "navigationStyle": "custom"
-      }
-    },
-    {
       "path": "pages/user/UserHomePage",
       "style": {
         "navigationBarTitleText": "知启云 AI",
         "enablePullDownRefresh": true,
         "onReachBottomDistance": 80,
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/WechatLoginPage",
+      "style": {
+        "navigationBarTitleText": "知启云 AI",
         "navigationStyle": "custom"
       }
     },
@@ -571,6 +571,25 @@
     }
     // #endif
     // #endif
+  ],
+  "subPackages": [
+    {
+      "root": "packagePpt",
+      "pages": [
+        { "path": "pages/index", "style": { "navigationBarTitleText": "PPT 助手", "navigationStyle": "custom" } },
+        { "path": "pages/create", "style": { "navigationBarTitleText": "创建演示文稿", "navigationStyle": "custom" } },
+        { "path": "pages/outline", "style": { "navigationBarTitleText": "编辑大纲", "navigationStyle": "custom" } },
+        { "path": "pages/progress", "style": { "navigationBarTitleText": "正在生成", "navigationStyle": "custom" } },
+        { "path": "pages/detail", "style": { "navigationBarTitleText": "演示文稿详情", "navigationStyle": "custom" } },
+        { "path": "pages/preview", "style": { "navigationBarTitleText": "预览", "navigationStyle": "custom" } },
+        { "path": "pages/edit-text", "style": { "navigationBarTitleText": "编辑文字", "navigationStyle": "custom" } },
+        { "path": "pages/edit-visual", "style": { "navigationBarTitleText": "编辑配图", "navigationStyle": "custom" } },
+        { "path": "pages/layout", "style": { "navigationBarTitleText": "选择版式", "navigationStyle": "custom" } },
+        { "path": "pages/export", "style": { "navigationBarTitleText": "导出演示文稿", "navigationStyle": "custom" } },
+        { "path": "pages/desktop", "style": { "navigationBarTitleText": "在电脑继续", "navigationStyle": "custom" } },
+        { "path": "pages/error", "style": { "navigationBarTitleText": "操作失败", "navigationStyle": "custom" } }
+      ]
+    }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",

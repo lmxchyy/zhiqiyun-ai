@@ -2,15 +2,56 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	knowledgeapp "xianzhi-ai/backend-go/internal/app/knowledge"
 	"xianzhi-ai/backend-go/internal/config"
 )
+
+type staleTenantKnowledgeRepository struct {
+	requestedTenantIDs []string
+}
+
+func (r *staleTenantKnowledgeRepository) ResolveAccessContext(_ context.Context, userID string, tenantID string, organizationID string) (knowledgeapp.AccessContext, error) {
+	r.requestedTenantIDs = append(r.requestedTenantIDs, tenantID)
+	if tenantID != "" {
+		return knowledgeapp.AccessContext{}, knowledgeapp.ErrForbidden
+	}
+	return knowledgeapp.AccessContext{TenantID: "tenant_personal", UserID: userID, Roles: []string{"MEMBER"}}, nil
+}
+
+func TestKnowledgeAccessFallsBackFromStaleTenantHeader(t *testing.T) {
+	repository := &staleTenantKnowledgeRepository{}
+	sessions := newLocalAuthSessions()
+	if err := sessions.Put(context.Background(), "member-token", "user-member", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	a := knowledgeAPI{
+		module:   &knowledgeModule{core: knowledgeapp.NewService(repository, nil)},
+		sessions: sessions,
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/knowledge-agents", nil)
+	request.Header.Set("Authorization", "Bearer member-token")
+	request.Header.Set("X-Tenant-Id", "tenant-stale")
+	request.Header.Set("X-Organization-Id", "organization-stale")
+	access, err := a.access(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.TenantID != "tenant_personal" || access.UserID != "user-member" {
+		t.Fatalf("unexpected fallback access: %#v", access)
+	}
+	if strings.Join(repository.requestedTenantIDs, ",") != "tenant-stale," {
+		t.Fatalf("tenant resolution attempts = %#v", repository.requestedTenantIDs)
+	}
+}
 
 func TestKnowledgeAgentHTTPVerticalFlow(t *testing.T) {
 	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})

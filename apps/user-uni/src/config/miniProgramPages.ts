@@ -42,11 +42,26 @@ export const miniProgramRolePages: Record<MiniProgramRoleId, Partial<Record<Mini
 export const miniProgramCreationPages: Record<MiniProgramCreationMode, string> = {
   image: "/pages/user/UserImageCreationPage",
   video: "/pages/user/UserVideoCreationPage",
-  ppt: "/pages/user/UserPptCreationPage",
+  ppt: "/packagePpt/pages/index",
   infographic: "/pages/user/UserInfographicCreationPage",
   review: "/pages/user/UserReviewCreationPage",
   agent: "/pages/user/UserAgentCreationPage"
 };
+
+export const miniProgramPptPages = {
+  index: "/packagePpt/pages/index",
+  create: "/packagePpt/pages/create",
+  outline: "/packagePpt/pages/outline",
+  progress: "/packagePpt/pages/progress",
+  detail: "/packagePpt/pages/detail",
+  preview: "/packagePpt/pages/preview",
+  editText: "/packagePpt/pages/edit-text",
+  editVisual: "/packagePpt/pages/edit-visual",
+  layout: "/packagePpt/pages/layout",
+  export: "/packagePpt/pages/export",
+  desktop: "/packagePpt/pages/desktop",
+  error: "/packagePpt/pages/error"
+} as const;
 
 export const miniProgramMinePages: Record<MineView, string> = {
   overview: "/pages/user/UserMinePage",

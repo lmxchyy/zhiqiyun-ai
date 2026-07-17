@@ -1,6 +1,8 @@
 import { api, apiFetchResponse } from "./client";
+import { downloadTemporaryFile } from "./files";
 
 export type PptTaskStatus = "pending" | "processing" | "success" | "failed";
+export type PptGenerationStage = "analyzing" | "outline" | "content" | "visual" | "layout" | "preview" | "export" | "completed" | "failed" | "cancelled";
 export type PptLanguage = "zh" | "en";
 export type PptTheme =
   | "business"
@@ -25,6 +27,53 @@ export interface PptGenerateRequest {
   imageSource?: "ai" | "stock" | "none";
   textModel?: string;
   imageModel?: string;
+  outline?: PptOutline;
+}
+
+export interface PptCreateForm {
+  topic: string;
+  description?: string;
+  pageCount: number;
+  language: PptLanguage;
+  scenario: string;
+  style: string;
+  templateId?: string;
+  referenceFileIds: string[];
+  knowledgeBaseIds: string[];
+  generateSpeakerNotes: boolean;
+  generateVisuals: boolean;
+}
+
+export interface PptOutlineItem {
+  id: string;
+  slideIndex: number;
+  slideType: string;
+  title: string;
+  description?: string;
+  keyMessage?: string;
+  bulletPoints: string[];
+  layout: string;
+}
+
+export interface PptOutline {
+  title: string;
+  slides: Array<{
+    page: number;
+    title: string;
+    summary: string;
+    bulletPoints: string[];
+    layout?: string;
+    slideType?: string;
+  }>;
+  updatedAt?: string;
+}
+
+export interface PptCostEstimate {
+  pointCost: number;
+  slideCount: number;
+  model: string;
+  sufficient?: boolean;
+  availablePoints?: number;
 }
 
 export interface PptGenerateResponse {
@@ -74,6 +123,8 @@ export interface PptSlide {
   visualCreatedAt?: string;
   visualStatus?: string;
   visualError?: string;
+  speakerNotes?: string;
+  version?: number;
 }
 
 export interface PptRegenerateVisualRequest {
@@ -105,15 +156,27 @@ export interface PptTaskResponse {
   errorMessage: string;
   createdAt?: string;
   updatedAt?: string;
+  progress?: number;
+  currentPage?: number;
+  stage?: PptGenerationStage;
+  outline?: PptOutline;
+  version?: number;
 }
 
 export type PptHistoryItem = PptTaskResponse;
 
 const pptEndpoints = {
   create: "/api/v1/ppt/generate",
+  estimate: "/api/v1/ppt/estimate",
+  outlineGenerate: "/api/v1/ppt/outline/generate",
+  outlineSave: "/api/v1/ppt/outline/save",
   task: (taskId: string) => `/api/v1/ppt/tasks/${encodeURIComponent(taskId)}`,
   history: "/api/v1/ppt/history",
   exportPptx: "/api/v1/ppt/export/pptx",
+  downloadPptx: (taskId: string) => `/api/v1/ppt/tasks/${encodeURIComponent(taskId)}/export/pptx`,
+  exportPdf: "/api/v1/ppt/export/pdf",
+  updateSlide: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}`,
+  updateSlideImage: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/visual`,
   regenerateVisual: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/regenerate-visual`,
   deleteVisual: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/visual`,
   restoreVisual: (taskId: string, slideId: string) => `/api/v1/presentations/${encodeURIComponent(taskId)}/slides/${encodeURIComponent(slideId)}/visual/restore`
@@ -136,10 +199,51 @@ export async function createPptGenerationTask(request: PptGenerateRequest): Prom
       autoThemeEnabled: request.autoThemeEnabled ?? true,
       imageSource: request.imageSource || "ai",
       textModel: request.textModel,
-      imageModel: request.imageModel || "default-image"
+      imageModel: request.imageModel || "default-image",
+      outline: request.outline
     })
   });
   return { taskId: response.taskId, status: normalizeStatus(response.status) };
+}
+
+export async function estimatePptCost(request: Pick<PptGenerateRequest, "prompt" | "slideCount" | "textModel" | "imageSource">): Promise<PptCostEstimate> {
+  return api<PptCostEstimate>(pptEndpoints.estimate, {
+    method: "POST",
+    body: JSON.stringify(request)
+  });
+}
+
+export async function generatePptOutline(request: PptGenerateRequest): Promise<PptOutline> {
+  return api<PptOutline>(pptEndpoints.outlineGenerate, {
+    method: "POST",
+    body: JSON.stringify({
+      prompt: request.prompt,
+      slideCount: request.slideCount,
+      language: request.language,
+      tone: request.tone || "professional",
+      textContent: request.textContent || "concise",
+      audience: request.audience || "auto",
+      scenario: request.scenario || "auto",
+      generationAspectRatio: request.generationAspectRatio || "dynamic",
+      autoThemeEnabled: request.autoThemeEnabled ?? true,
+      enableWebSearch: request.enableWebSearch,
+      imageSource: request.imageSource || "ai",
+      textModel: request.textModel,
+      imageModel: request.imageModel || "default-image"
+    })
+  });
+}
+
+export async function savePptOutline(outline: PptOutline): Promise<PptOutline> {
+  return api<PptOutline>(pptEndpoints.outlineSave, { method: "POST", body: JSON.stringify(outline) });
+}
+
+export async function updatePptSlide(taskId: string, slideId: string, slide: PptSlide): Promise<PptSlide> {
+  return api<PptSlide>(pptEndpoints.updateSlide(taskId, slideId), { method: "PATCH", body: JSON.stringify(slide) });
+}
+
+export async function updatePptSlideImage(taskId: string, slideId: string, imageUrl: string): Promise<PptSlide> {
+  return api<PptSlide>(pptEndpoints.updateSlideImage(taskId, slideId), { method: "PATCH", body: JSON.stringify({ imageUrl }) });
 }
 
 export async function getPptGenerationTask(taskId: string): Promise<PptTaskResponse> {
@@ -180,6 +284,23 @@ export async function requestPptDownload(taskId: string): Promise<{ url: string 
     return { url: await exportPptxTask(taskId) };
   }
   return { url: task.pptUrl };
+}
+
+export async function downloadPptExport(taskId: string, format: "pptx" | "pdf") {
+  const endpoint = format === "pdf" ? pptEndpoints.exportPdf : pptEndpoints.exportPptx;
+  // MP-WEIXIN cannot consume browser Blob URLs; the backend should return a temporary URL there.
+  // #ifdef MP-WEIXIN || APP-PLUS
+  if (format === "pptx") return downloadTemporaryFile(pptEndpoints.downloadPptx(taskId));
+  const payload = await api<{ url?: string; downloadUrl?: string }>(endpoint, { method: "POST", body: JSON.stringify({ taskId, responseMode: "url" }) });
+  const url = String(payload.url || payload.downloadUrl || "");
+  if (!url) throw new Error("导出服务尚未返回小程序临时下载链接");
+  return downloadTemporaryFile(url);
+  // #endif
+  // #ifndef MP-WEIXIN
+  const response = await apiFetchResponse(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taskId }) });
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+  // #endif
 }
 
 function normalizeStatus(value: unknown): PptTaskStatus {

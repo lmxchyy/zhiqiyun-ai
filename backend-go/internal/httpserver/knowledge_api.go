@@ -156,7 +156,16 @@ func (a knowledgeAPI) access(r *http.Request) (knowledgeapp.AccessContext, error
 	if err != nil {
 		return knowledgeapp.AccessContext{}, err
 	}
-	return a.module.core.ResolveAccessContext(r.Context(), userID, r.Header.Get("X-Tenant-Id"), r.Header.Get("X-Organization-Id"))
+	requestedTenantID := strings.TrimSpace(r.Header.Get("X-Tenant-Id"))
+	requestedOrganizationID := strings.TrimSpace(r.Header.Get("X-Organization-Id"))
+	access, err := a.module.core.ResolveAccessContext(r.Context(), userID, requestedTenantID, requestedOrganizationID)
+	if err == nil || requestedTenantID == "" || !errors.Is(err, knowledgeapp.ErrForbidden) {
+		return access, err
+	}
+	// A cached tenant header can outlive a role/context switch in the mini program.
+	// Falling back to the user's own resolved tenant never grants access to the
+	// rejected tenant, but keeps personal Agent creation usable after that switch.
+	return a.module.core.ResolveAccessContext(r.Context(), userID, "", "")
 }
 
 func (a knowledgeAPI) context(w http.ResponseWriter, r *http.Request) {

@@ -55,6 +55,34 @@ func TestPersistentServiceKeepsTasksAcrossInstances(t *testing.T) {
 	}
 }
 
+func TestUpdateSlideContentPersistsWithoutReplacingVisualState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ppt-tasks.json")
+	service := NewPersistentService(path)
+	created, err := service.Generate(GenerateRequest{
+		UserID: "user_edit", Prompt: "编辑验证", SlideCount: 1,
+		Outline: &Outline{Title: "编辑验证", Slides: []OutlineSlide{{Page: 1, Title: "旧标题", Summary: "旧内容", BulletPoints: []string{"旧要点"}, Layout: "content"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateSlideImage("user_edit", created.TaskID, "slide_1", "https://example.test/visual.png"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.UpdateSlideContent("user_edit", created.TaskID, "slide_1", Slide{Title: "新标题", Content: "新内容", BulletPoints: []string{"要点一", "要点二"}, SpeakerNotes: "演讲备注", Layout: "imageText"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slide := updated.Slides[0]
+	if slide.Title != "新标题" || slide.Layout != "imageText" || slide.ImageURL != "https://example.test/visual.png" {
+		t.Fatalf("unexpected updated slide: %#v", slide)
+	}
+	reloaded := NewPersistentService(path)
+	persisted, err := reloaded.GetTask("user_edit", created.TaskID)
+	if err != nil || persisted.Slides[0].SpeakerNotes != "演讲备注" || len(persisted.Slides[0].BulletPoints) != 2 {
+		t.Fatalf("slide content was not persisted: task=%#v err=%v", persisted, err)
+	}
+}
+
 func TestGenerateWithConcurrencyRejectsActiveTask(t *testing.T) {
 	service := NewService()
 	request := GenerateRequest{UserID: "limited_user", Prompt: "first deck", SlideCount: 5}
