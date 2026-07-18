@@ -48,6 +48,7 @@ type Config struct {
 	WeChatOpenAppSecret          string
 	WeChatOpenAPIBaseURL         string
 	WeChatOpenAuthorizeBaseURL   string
+	WeChatOpenRedirectURL        string
 	WeChatPayAPIv3Key            string
 	WeChatPayPlatformKey         string
 	WeChatPayPlatformPath        string
@@ -102,7 +103,7 @@ func Load() Config {
 	}
 	staticDir := os.Getenv("XIANZHI_STATIC_DIR")
 	if staticDir == "" {
-		staticDir = "apps/user-uni/dist/build/h5"
+		staticDir = "admin-vue/dist"
 	}
 	adminStaticDir := os.Getenv("XIANZHI_ADMIN_STATIC_DIR")
 	if adminStaticDir == "" {
@@ -184,6 +185,7 @@ func Load() Config {
 		WeChatOpenAppSecret:          os.Getenv("WECHAT_OPEN_APP_SECRET"),
 		WeChatOpenAPIBaseURL:         os.Getenv("WECHAT_OPEN_API_BASE_URL"),
 		WeChatOpenAuthorizeBaseURL:   os.Getenv("WECHAT_OPEN_AUTHORIZE_BASE_URL"),
+		WeChatOpenRedirectURL:        os.Getenv("WECHAT_OPEN_REDIRECT_URL"),
 		WeChatPayAPIv3Key:            firstNonEmptyEnv("WECHAT_PAY_API_V3_KEY", "WECHAT_PAY_CALLBACK_SECRET"),
 		WeChatPayPlatformKey:         os.Getenv("WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM"),
 		WeChatPayPlatformPath:        firstNonEmptyEnv("WECHAT_PAY_PLATFORM_CERT_PATH", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH"),

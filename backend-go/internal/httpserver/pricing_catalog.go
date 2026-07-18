@@ -8,7 +8,7 @@ import (
 func canonicalSubscriptionPlans() []adminPlan {
 	return []adminPlan{
 		{
-			ID: "plan_free", Code: "trial", Name: "体验版", PlanType: planTypeMemberPackage, PriceCents: 0, Points: 100, GrantPoints: 100, TokenAmount: 0, MemberLevel: memberLevelFree, DurationDays: 7, Concurrency: 1, Active: true,
+			ID: "plan_free", Code: "trial", Name: "体验版", PlanType: planTypeMemberPackage, PriceCents: 0, Points: 10, GrantPoints: 10, TokenAmount: 0, MemberLevel: memberLevelFree, DurationDays: 7, Concurrency: 1, Active: true,
 			Entitlements: map[string]any{"planType": "subscription", "audience": "新用户体验", "validityText": "7 天有效", "displayPrice": "免费", "sort": 10},
 		},
 		{

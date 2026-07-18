@@ -213,6 +213,32 @@ func TestSMSLoginUsesConfiguredNewcomerPlan(t *testing.T) {
 	}
 }
 
+func TestSMSLoginGrantsDefaultTrialPoints(t *testing.T) {
+	t.Setenv("XIANZHI_ENV", "development")
+	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	handler := newAuthFlowTestServer(t, dataPath)
+
+	sendTestSMS(t, handler, "13600005555")
+	created := loginTestSMS(t, handler, "13600005555", "")
+	if !created.IsNewUser {
+		t.Fatalf("expected new user response: %+v", created)
+	}
+
+	data, err := newJSONStore(dataPath).AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, ok := findUserByMobile(data.Users, "13600005555")
+	if !ok {
+		t.Fatal("default trial user was not persisted")
+	}
+	account := pointMap(data.PointAccounts)[user.ID]
+	if account.Available != 10 {
+		t.Fatalf("default trial points = %d, want 10", account.Available)
+	}
+}
+
 func TestSMSCodeErrorsAndRateLimitUseStableCodes(t *testing.T) {
 	t.Setenv("XIANZHI_ENV", "development")
 	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")

@@ -7,7 +7,10 @@ export interface ApiUnauthorizedContext {
   requestId: string;
   payload: unknown;
   retryAttempt: number;
+  authMode: ApiAuthMode;
 }
+
+export type ApiAuthMode = "none" | "optional" | "required";
 
 export interface ApiClientErrorOptions {
   path: string;
@@ -64,8 +67,9 @@ export interface ApiRequestOptions<TBody = unknown> {
   data?: TBody;
   timeout?: number;
   requestId?: string;
-  /** Set to false for endpoints called before a user session exists. */
-  auth?: boolean;
+  /** Boolean compatibility: false=none, true=required. */
+  auth?: boolean | ApiAuthMode;
+  retryOnUnauthorized?: boolean;
 }
 
 export interface ApiClient {
@@ -139,7 +143,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       baseURL = trimTrailingSlash(nextBaseURL || "");
     },
     async request<T = unknown, TBody = unknown>(path: string, requestOptions: ApiRequestOptions<TBody> = {}) {
-      const usesSession = requestOptions.auth !== false;
+      const authMode: ApiAuthMode = requestOptions.auth === false || requestOptions.auth === "none"
+        ? "none"
+        : requestOptions.auth === true || requestOptions.auth === "required"
+          ? "required"
+          : "optional";
+      const usesSession = authMode !== "none";
       const body = requestOptions.body ?? requestOptions.data;
       const method = requestOptions.method || "GET";
       const clientInfo = adapter.getClientInfo();
@@ -187,8 +196,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
         const payload = response.data;
         if (usesSession && response.statusCode === 401) {
-          const recovered = await options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload, retryAttempt });
-          if (recovered === true && retryAttempt === 0) return send(1);
+          const recovered = await options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload, retryAttempt, authMode });
+          const retryAllowed = requestOptions.retryOnUnauthorized !== false && (method.toUpperCase() === "GET" || requestOptions.retryOnUnauthorized === true);
+          if (recovered === true && retryAttempt === 0 && retryAllowed) return send(1);
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
           const message = isApiEnvelope<T>(payload) ? payload.message || payload.error : "";
@@ -214,8 +224,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           const code = payload.code;
           if (code !== undefined && code !== 0 && code !== "0") {
             if (usesSession && isUnauthorizedApiCode(code)) {
-              const recovered = await options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload, retryAttempt });
-              if (recovered === true && retryAttempt === 0) return send(1);
+              const recovered = await options.onUnauthorized?.({ path, statusCode: response.statusCode, requestId, payload, retryAttempt, authMode });
+              const retryAllowed = requestOptions.retryOnUnauthorized !== false && (method.toUpperCase() === "GET" || requestOptions.retryOnUnauthorized === true);
+              if (recovered === true && retryAttempt === 0 && retryAllowed) return send(1);
             }
             throw new ApiClientError(payload.message || payload.error || `API code ${code}`, {
               path,

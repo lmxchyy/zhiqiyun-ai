@@ -3,6 +3,7 @@ const DB_VERSION = 1;
 const STORE_NAME = "kv";
 const SNAPSHOT_KEY = "online-image-snapshot-v2";
 const DRAFT_KEY = "ai-image-draft";
+const PENDING_REFERENCE_KEY_PREFIX = "pending-reference-images:";
 const ORIGINAL_IMAGE_INDEX_KEY = "ai-original-image-index";
 const ORIGINAL_IMAGE_KEY_PREFIX = "ai-original-image:";
 const MAX_SNAPSHOT_TASKS = 30;
@@ -23,6 +24,14 @@ export interface CachedReferenceImage {
   id: string;
   name: string;
   url: string;
+  file?: File;
+  remoteUrl?: string;
+}
+
+export interface PendingReferenceImage {
+  id: string;
+  name: string;
+  file: File;
 }
 
 export interface AiImageDraft {
@@ -220,10 +229,42 @@ export async function writeAiImageDraft(draft: AiImageDraft): Promise<void> {
   await writeValue<AiImageDraft>(scopedKey(DRAFT_KEY), {
     ...draft,
     referenceImages: draft.referenceImages
-      .filter((item) => item.url.startsWith("data:") && item.url.length <= MAX_REFERENCE_DATA_URL_LENGTH)
+      .filter((item) => (
+        (item.url.startsWith("data:") && item.url.length <= MAX_REFERENCE_DATA_URL_LENGTH)
+        || item.file instanceof File
+        || Boolean(item.remoteUrl)
+      ))
       .slice(0, MAX_REFERENCE_IMAGES),
     savedAt: Date.now()
   });
+}
+
+export async function writePendingReferenceImages(
+  pendingId: string,
+  images: PendingReferenceImage[],
+  expiresAt: number,
+): Promise<void> {
+  if (!pendingId || !images.length) return;
+  await writeValue(`${PENDING_REFERENCE_KEY_PREFIX}${pendingId}`, {
+    images: images.filter((item) => item.file instanceof File).slice(0, MAX_REFERENCE_IMAGES),
+    expiresAt,
+  });
+}
+
+export async function readPendingReferenceImages(pendingId: string): Promise<PendingReferenceImage[]> {
+  if (!pendingId) return [];
+  const key = `${PENDING_REFERENCE_KEY_PREFIX}${pendingId}`;
+  const record = await readValue<{ images?: PendingReferenceImage[]; expiresAt?: number }>(key);
+  if (!record?.expiresAt || record.expiresAt <= Date.now()) {
+    await deleteValue(key).catch(() => undefined);
+    return [];
+  }
+  return Array.isArray(record.images) ? record.images.filter((item) => item?.file instanceof File).slice(0, MAX_REFERENCE_IMAGES) : [];
+}
+
+export async function clearPendingReferenceImages(pendingId: string): Promise<void> {
+  if (!pendingId) return;
+  await deleteValue(`${PENDING_REFERENCE_KEY_PREFIX}${pendingId}`);
 }
 
 export async function readCachedOriginalImage(id: string): Promise<AiCachedOriginalImage | null> {

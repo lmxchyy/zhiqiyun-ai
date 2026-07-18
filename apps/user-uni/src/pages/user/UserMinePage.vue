@@ -64,11 +64,12 @@ const recentAssets = ref<Asset[]>([]);
 const generationTasks = ref<GenerationTask[]>([]);
 const loading = ref(false);
 const loadError = ref("");
+const isGuest = computed(() => !authStorage.getToken());
 
 const userPermissions = computed(() => userStore.currentRole === "USER"
   ? userStore.permissions
   : permissionsForRole("USER"));
-const displayName = computed(() => profile.value?.user?.name
+const displayName = computed(() => isGuest.value ? "\u6e38\u5ba2" : profile.value?.user?.name
   || auth.value?.user?.name
   || profile.value?.user?.email
   || auth.value?.user?.email
@@ -256,7 +257,7 @@ function confirmLogout() {
       authStorage.clear();
       userStore.reset();
       uni.removeStorageSync("xianzhiMiniProgramAuth");
-      uni.reLaunch({ url: "/pages/WechatLoginPage" });
+      uni.switchTab({ url: "/pages/user/UserHomePage" });
     },
   });
 }
@@ -323,7 +324,12 @@ async function refreshProfile() {
   if (loading.value) return;
   const token = authStorage.getToken() || String(uni.getStorageSync("token") || "");
   if (!token) {
-    uni.reLaunch({ url: "/pages/WechatLoginPage" });
+    auth.value = null;
+    profile.value = null;
+    wallet.value = null;
+    points.value = null;
+    recentAssets.value = [];
+    generationTasks.value = [];
     return;
   }
 

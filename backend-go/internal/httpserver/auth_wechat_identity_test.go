@@ -47,3 +47,34 @@ func TestCodeOnlyWeChatLoginReusesLinkedAccount(t *testing.T) {
 		t.Fatalf("linked login created a duplicate user: before=%d after=%d", len(data.Users), len(updatedData.Users))
 	}
 }
+
+func TestCodeOnlyWeChatLoginPersistsIdentityOnNewAccount(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	data, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := newAuthAPI(store, newLocalAuthSessions())
+	const openID = "wechat-openid-new-account"
+	const unionID = "wechat-unionid-new-account"
+	_, created, err := auth.userForWeChatMiniProgramSession(data, wechatMiniProgramSession{
+		OpenID: openID, UnionID: unionID, SessionKey: "session-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.WeChatUnionID != unionID {
+		t.Fatalf("created union id = %q, want %q", created.WeChatUnionID, unionID)
+	}
+	if len(created.WeChatOpenIDs) != 1 || created.WeChatOpenIDs[0] != openID {
+		t.Fatalf("created open ids = %#v, want %q", created.WeChatOpenIDs, openID)
+	}
+	updatedData, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, ok := findUserByWechatIdentity(updatedData.Users, wechatMiniProgramSession{OpenID: openID, UnionID: unionID})
+	if !ok || found.ID != created.ID {
+		t.Fatalf("persisted WeChat identity did not resolve created user: found=%t id=%q created=%q", ok, found.ID, created.ID)
+	}
+}

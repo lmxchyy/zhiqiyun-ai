@@ -1,11 +1,12 @@
 import { defineStore } from "pinia";
 import { authService, authStorage, getAuthToken, setAuthToken } from "../api/client";
-import { workspaceFromAuth } from "@xianzhi/shared-auth";
+import { workspaceFromAuth, type AuthStatus, type PendingActionInput } from "@xianzhi/shared-auth";
 import type { AuthResponse, WorkspaceRole } from "../types";
 import { useUserStore } from "./user";
+import { requireAuth as requireProtectedAction, resumePendingAction } from "../features/auth/gate";
 
 interface AuthState {
-  authStatus: "idle" | "loading" | "authenticated" | "error";
+  status: AuthStatus;
   token: string;
   refreshToken: string;
   user: AuthResponse["user"] | null;
@@ -19,7 +20,7 @@ interface AuthState {
 
 export const useAuthStore = defineStore("auth", {
   state: (): AuthState => ({
-    authStatus: getAuthToken() ? "authenticated" : "idle",
+    status: getAuthToken() ? "authenticated" : "guest",
     token: getAuthToken() || "",
     refreshToken: authStorage.getRefreshToken(),
     user: null,
@@ -29,11 +30,13 @@ export const useAuthStore = defineStore("auth", {
     loginMethod: "",
   }),
   getters: {
-    isLoggedIn: (state) => Boolean(state.token)
+    isLoggedIn: (state) => state.status === "authenticated" && Boolean(state.token),
+    isGuest: (state) => state.status === "guest",
+    isAuthenticated: (state) => state.status === "authenticated" && Boolean(state.token)
   },
   actions: {
     applyAuth(auth: AuthResponse & { isNewUser?: boolean }, loginMethod: AuthState["loginMethod"] = "") {
-      this.authStatus = "authenticated";
+      this.status = "authenticated";
       this.token = auth.accessToken || "";
       this.refreshToken = auth.refreshToken || "";
       this.user = auth.user;
@@ -52,14 +55,31 @@ export const useAuthStore = defineStore("auth", {
       return auth;
     },
     async restore() {
-      this.authStatus = "loading";
       const auth = await authService.restore();
       if (auth) this.applyAuth(auth);
-      else this.authStatus = "idle";
+      else this.status = "guest";
       return auth;
     },
+    initializeAuth() {
+      return this.restore();
+    },
+    hasValidToken() {
+      return this.status === "authenticated" && Boolean(this.token);
+    },
+    requireAuth(input: PendingActionInput) {
+      return requireProtectedAction(input);
+    },
+    resumePendingAction() {
+      return resumePendingAction();
+    },
+    handleTokenExpired() {
+      this.status = "expired";
+      this.token = "";
+      this.refreshToken = "";
+      authService.storage.clearSession();
+    },
     logout() {
-      this.authStatus = "idle";
+      this.status = "guest";
       this.token = "";
       this.refreshToken = "";
       this.user = null;

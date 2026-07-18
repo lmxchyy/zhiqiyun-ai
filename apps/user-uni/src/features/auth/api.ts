@@ -1,4 +1,4 @@
-import { apiClient } from "../../api/client";
+import { apiClient, authService } from "../../api/client";
 import type {
   AccountSecurityResponse,
   AuthAttributionInput,
@@ -82,6 +82,8 @@ export const loginAPI = {
   logout() {
     return apiClient.request<{ ok: boolean }>("/api/v1/auth/logout", {
       method: "POST",
+      body: { refreshToken: authService.storage.getRefreshToken() },
+      retryOnUnauthorized: false,
     });
   },
 

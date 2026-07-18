@@ -1,6 +1,10 @@
 import type { Pinia } from "pinia";
 import { useUserStore } from "../stores/user";
 import type { AppRole } from "../types";
+import type { ProtectedAction } from "@xianzhi/shared-auth";
+import { getAuthToken } from "../api/client";
+import { requireAuth } from "../features/auth/gate";
+import { pageAccessFor } from "../features/auth/accessPolicy";
 
 interface RouteRequirement {
   role?: AppRole;
@@ -50,11 +54,30 @@ export function permissionForRoute(url: string): RouteRequirement | null {
   return null;
 }
 
+function actionForRoute(route: string): ProtectedAction {
+  if (route.includes("Wallet")) return "open_wallet";
+  if (route.includes("Order")) return "open_order";
+  if (route.includes("Recharge") || route.includes("Membership")) return "open_member_center";
+  if (route.includes("AgentCreation")) return "create_agent";
+  return "save_work";
+}
+
 export function installPermissionRouterGuard(pinia: Pinia) {
   const userStore = useUserStore(pinia);
   let redirecting = false;
   const guard = {
     invoke(args: { url?: string }) {
+      const route = normalizeRoute(args?.url);
+      const access = pageAccessFor(route);
+      if (access === "authenticated" && !getAuthToken()) {
+        void requireAuth({
+          action: actionForRoute(route),
+          route,
+          payload: {},
+          resume: () => new Promise<void>(resolve => uni.navigateTo({ url: String(args?.url || route), complete: () => resolve() })),
+        });
+        return false;
+      }
       const requirement = permissionForRoute(String(args?.url || ""));
       if (!requirement) return true;
       const roleAllowed = !requirement.role || (userStore.hasRole(requirement.role) && userStore.currentRole === requirement.role);

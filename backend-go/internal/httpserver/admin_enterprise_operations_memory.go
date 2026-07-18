@@ -130,6 +130,9 @@ func (s *jsonStore) GetAdminEnterpriseSection(id string, section string) (adminE
 		item := memoryAdminEnterpriseListItem(data, tenant)
 		result.Items = []map[string]any{{"sourceAgent": item.SourceAgent, "operationCenter": item.OperationCenter, "status": tenant.Status, "updatedAt": tenant.UpdatedAt}}
 		result.Summary = map[string]any{"sourceAgent": item.SourceAgent, "operationCenter": item.OperationCenter}
+	case "integrations":
+		result.Items = enterpriseIntegrationCatalog(map[string]map[string]any{})
+		result.Summary = map[string]any{"supported": len(result.Items), "configured": 0, "active": 0, "errors": 0, "summaryOnly": true}
 	case "risk":
 		for _, audit := range data.Enterprise.AuditLogs {
 			if audit.TenantID == tenant.ID && strings.HasPrefix(audit.Action, "admin.enterprise.risk") {

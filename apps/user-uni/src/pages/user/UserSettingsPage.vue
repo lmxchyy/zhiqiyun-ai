@@ -294,7 +294,7 @@ async function loadSecurity() {
 function clearLocalAuthAndReturnLogin() {
   authStorage.clear();
   uni.removeStorageSync("xianzhiMiniProgramAuth");
-  uni.reLaunch({ url: "/pages/WechatLoginPage" });
+  uni.switchTab({ url: "/pages/user/UserHomePage" });
 }
 
 function logout() {

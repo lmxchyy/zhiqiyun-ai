@@ -135,7 +135,7 @@ async function enable() {
 
 function secretPlaceholder(key: keyof ConnectorView["secretsConfigured"]) { return connector.value?.secretsConfigured[key] ? "已配置，留空不修改" : key === "encryptKey" ? "未配置（可选）" : "请输入"; }
 function message(error: unknown, fallback: string) { return error instanceof Error && error.message ? error.message : fallback; }
-function back() { window.location.assign("/app"); }
+function back() { window.location.assign(window.location.pathname.startsWith("/workspace") ? "/workspace" : "/app"); }
 </script>
 
 <style scoped>

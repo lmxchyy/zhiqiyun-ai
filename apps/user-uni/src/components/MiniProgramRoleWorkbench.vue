@@ -72,11 +72,14 @@
         />
         <AssetCenterPage
           v-else-if="activeTab === 'assets'"
+          :is-guest="isGuest"
           @create="selectUserTab('create')"
+          @login="requestLogin('\u767b\u5f55\u540e\u53ef\u67e5\u770b\u5e76\u7ba1\u7406\u6211\u7684\u4f5c\u54c1')"
         />
         <V531ProfilePage
           v-else-if="activeTab === 'mine' && mineView === 'overview'"
           :display-name="displayName"
+          :is-guest="isGuest"
           :user-id="displayUserId"
           :roles="userStore.roles"
           :current-role="userStore.currentRole"
@@ -176,7 +179,7 @@
                   :class="['v31-ppt-submit', { disabled: generationBusy }]"
                   role="button"
                   hover-class="v31-action-pressed"
-                  @click.stop="handleGenerateTap"
+                  @click.stop="guestAwareGenerateTap"
                 >{{ generationBusy ? "…" : "→" }}</view>
               </view>
               <text v-if="creationError" class="v31-generation-error">{{ creationError }}</text>
@@ -267,7 +270,7 @@
                   :class="['v31-generate-button', { disabled: generationBusy }]"
                   role="button"
                   hover-class="v31-action-pressed"
-                  @click.stop="handleGenerateTap"
+                  @click.stop="guestAwareGenerateTap"
                 ><text v-if="generationBusy" class="v31-button-spinner" /><text>{{ generationButtonLabel }}</text></view>
               </view>
               <text v-if="creationError" class="v31-generation-error">{{ creationError }}</text>
@@ -728,6 +731,9 @@ import V531TabBar from "./v531/V531TabBar.vue";
 import { fetchAssetDetail } from "../features/assets/api";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
 import { useUserStore } from "../stores/user";
+import { requireAuth as requireProtectedAction } from "../features/auth/gate";
+import { trackLogin } from "../features/auth/analytics";
+import { reviewModeHides } from "../features/reviewMode";
 import { RoleMenuConfig, roleLabels } from "../config/permissions";
 import type { MinePurchaseOption, MineView } from "../types";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
@@ -745,6 +751,27 @@ import type {
   MiniProgramRoleId,
   MiniProgramTabId
 } from "../config/miniProgramPages";
+
+function guestAwareGenerateTap() {
+  if (!isGuest.value) return handleGenerateTap();
+  const prompt = String(creationPrompt.value || "").trim();
+  if (!prompt) {
+    creationError.value = "\u8bf7\u5148\u8f93\u5165\u521b\u4f5c\u9700\u6c42";
+    uni.showToast({ title: creationError.value, icon: "none" });
+    return;
+  }
+  trackLogin("guest_click_generate", { mode: creationMode.value });
+  const payload = {
+    prompt, mode: creationMode.value, model: activeCreationModel.value,
+    referencePaths: creationReferencePaths.value, restoredParams: restoredCreationParams.value,
+    slideCount: pptSlideCount.value, language: pptLanguage.value, dynamic: pptDynamic.value,
+  };
+  uni.setStorageSync("v532-studio-draft", payload);
+  void requireProtectedAction({
+    action: creationMode.value === "video" ? "generate_video" : creationMode.value === "ppt" ? "generate_ppt" : "generate_image",
+    route: miniProgramCreationPages[creationMode.value], payload, resume: () => submitCreation(prompt),
+  });
+}
 
 type NativeGenerateBridge = typeof globalThis & {
   __xianzhiMiniProgramGenerate?: () => void;
@@ -1038,9 +1065,14 @@ const hasAgentRole = computed(() => userStore.hasRole("AGENT"));
 const hasOperationRole = computed(() => userStore.hasRole("OPERATION"));
 const availableRoles = computed(() => userStore.roles
   .map(role => ({ appRole: role, id: appRoleToRole[role], label: roleLabels[role] }))
+  .filter(role => !(role.id === "agent" && reviewModeHides("hideAgentCenter")))
+  .filter(role => !(role.id === "operation" && reviewModeHides("hideOperatorCenter")))
   .filter((role): role is { appRole: AppRole; id: RoleId; label: string } => Boolean(role.id)));
 const currentRoleMenuItems = computed(() => RoleMenuConfig[userStore.currentRole]
-  .filter(item => !item.permission || userStore.hasPermission(item.permission)));
+  .filter(item => !item.permission || userStore.hasPermission(item.permission))
+  .filter(item => !(item.id === "wallet" && reviewModeHides("hideWallet")))
+  .filter(item => !(item.id === "upgrade-agent" && reviewModeHides("hideAgentCenter")))
+  .filter(item => !(item.id.includes("commission") && reviewModeHides("hideCommission"))));
 
 const activeCreation = computed(() => creationModules.find(item => item.id === creationMode.value) || creationModules[0]);
 const activeCreationName = computed(() => activeCreation.value.name);
@@ -1820,6 +1852,21 @@ function v531ActionId(payload: unknown): string {
 
 function handleV531ProfileService(payload: unknown) {
   const id = v531ActionId(payload);
+  const protectedActions = new Map<string, "open_wallet" | "open_order" | "open_member_center" | "recharge" | "create_knowledge_base">([
+    ["wallet", "open_wallet"], ["orders", "open_order"], ["membership", "open_member_center"],
+    ["recharge", "recharge"], ["points", "open_wallet"], ["usage", "open_wallet"],
+    ["projects", "open_member_center"], ["tasks", "open_member_center"], ["favorites", "open_member_center"],
+    ["downloads", "open_member_center"], ["invite", "open_member_center"], ["company", "open_member_center"],
+    ["knowledge", "create_knowledge_base"], ["ai-knowledge", "create_knowledge_base"], ["login", "open_member_center"],
+  ]);
+  const protectedAction = protectedActions.get(id);
+  if (isGuest.value && protectedAction) {
+    const pages = getCurrentPages();
+    const page = pages[pages.length - 1] as { route?: string } | undefined;
+    const route = page?.route ? `/${String(page.route).replace(/^\/+/, "")}` : rolePage("user", activeTab.value);
+    void requireProtectedAction({ action: protectedAction, route, payload: { service: id }, resume: () => handleV531ProfileService(id) });
+    return;
+  }
   const actions: Record<string, () => void | Promise<void>> = {
     ai: () => selectUserTab("create"),
     recharge: () => openFeaturePage(miniProgramFeaturePages.userRechargePlans),
@@ -2512,7 +2559,7 @@ function logout() {
   mineLogoutConfirm.value = false;
   authStorage.clear();
   uni.removeStorageSync("xianzhiMiniProgramAuth");
-  uni.reLaunch({ url: "/pages/WechatLoginPage" });
+  uni.switchTab({ url: "/pages/user/UserHomePage" });
 }
 
 function confirmV531Logout() {
@@ -2528,7 +2575,7 @@ function confirmV531Logout() {
 }
 
 onMounted(() => {
-  (globalThis as NativeGenerateBridge).__xianzhiMiniProgramGenerate = handleGenerateTap;
+  (globalThis as NativeGenerateBridge).__xianzhiMiniProgramGenerate = guestAwareGenerateTap;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramBackToCreation = returnToCreationHub;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramChooseReference = chooseCreationReferenceImages;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramAppendReferences = appendCreationReferencePaths;
@@ -2558,7 +2605,7 @@ onBeforeUnmount(() => {
   generationPollRun += 1;
   stopGenerationFeedback(false);
   const bridge = globalThis as NativeGenerateBridge;
-  if (bridge.__xianzhiMiniProgramGenerate === handleGenerateTap) delete bridge.__xianzhiMiniProgramGenerate;
+  if (bridge.__xianzhiMiniProgramGenerate === guestAwareGenerateTap) delete bridge.__xianzhiMiniProgramGenerate;
   if (bridge.__xianzhiMiniProgramBackToCreation === returnToCreationHub) delete bridge.__xianzhiMiniProgramBackToCreation;
   if (bridge.__xianzhiMiniProgramChooseReference === chooseCreationReferenceImages) delete bridge.__xianzhiMiniProgramChooseReference;
   if (bridge.__xianzhiMiniProgramAppendReferences === appendCreationReferencePaths) delete bridge.__xianzhiMiniProgramAppendReferences;

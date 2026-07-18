@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { onHide, onPullDownRefresh, onShow, onUnload } from "@dcloudio/uni-app";
 import MiniProgramRoleWorkbench from "../../components/MiniProgramRoleWorkbench.vue";
+import { authStorage } from "../../api/client";
 import { useAssetStore } from "../../stores/assets";
 import { syncCustomTabBar } from "../../utils/customTabBar";
 
@@ -13,11 +14,21 @@ function refreshAssets(silent = false) {
 
 onShow(() => {
   syncCustomTabBar(2);
+  if (!authStorage.getToken()) {
+    assetStore.stopTaskPolling();
+    return;
+  }
   void refreshAssets(assetStore.assets.length > 0);
   assetStore.startTaskPolling();
 });
 onHide(() => assetStore.stopTaskPolling());
 onUnload(() => assetStore.stopTaskPolling());
-onPullDownRefresh(() => refreshAssets(false).finally(() => uni.stopPullDownRefresh()));
+onPullDownRefresh(() => {
+  if (!authStorage.getToken()) {
+    uni.stopPullDownRefresh();
+    return;
+  }
+  void refreshAssets(false).finally(() => uni.stopPullDownRefresh());
+});
 </script>
 <style>page { background: #f7f8fc; }</style>

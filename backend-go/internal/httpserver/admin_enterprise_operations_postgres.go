@@ -81,6 +81,8 @@ func (s *postgresStore) GetAdminEnterpriseSection(id string, section string) (ad
 		result.Summary, err = s.postgresEnterpriseKnowledgeSummary(ctx, id)
 	case "attribution", "relationships":
 		result.Items, result.Summary, err = s.postgresEnterpriseAttribution(ctx, id)
+	case "integrations":
+		result.Items, result.Summary, err = s.postgresEnterpriseIntegrations(ctx, id)
 	case "risk":
 		result.Items, result.Summary, err = s.postgresEnterpriseRisk(ctx, id)
 	case "audit-logs":
@@ -93,6 +95,77 @@ func (s *postgresStore) GetAdminEnterpriseSection(id string, section string) (ad
 	}
 	result.Total = len(result.Items)
 	return result, nil
+}
+
+func (s *postgresStore) postgresEnterpriseIntegrations(ctx context.Context, tenantID string) ([]map[string]any, map[string]any, error) {
+	configured := map[string]map[string]any{}
+	var tableExists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT to_regclass('public.enterprise_connectors') IS NOT NULL`).Scan(&tableExists); err != nil {
+		return nil, nil, err
+	}
+	if tableExists {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT connector_type,connector_name,status,
+			       app_secret_encrypted<>'',verification_token_encrypted<>'',encrypt_key_encrypted<>'',
+			       last_connected_at,last_error_message<>'',updated_at
+			FROM enterprise_connectors
+			WHERE enterprise_id=$1
+			ORDER BY connector_type,id
+		`, tenantID)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var connectorType, connectorName, status string
+			var appSecret, verificationToken, encryptKey, hasError bool
+			var lastConnectedAt *time.Time
+			var updatedAt time.Time
+			if err := rows.Scan(&connectorType, &connectorName, &status, &appSecret, &verificationToken, &encryptKey, &lastConnectedAt, &hasError, &updatedAt); err != nil {
+				return nil, nil, err
+			}
+			configured[connectorType] = map[string]any{
+				"id": connectorType, "connectorType": connectorType, "connectorName": connectorName,
+				"status": status, "configured": true, "adapterBoundary": "PlatformConnector",
+				"secretsConfigured": map[string]bool{"appSecret": appSecret, "verificationToken": verificationToken, "encryptKey": encryptKey},
+				"lastConnectedAt":   formatOptionalEnterpriseTime(lastConnectedAt), "hasError": hasError,
+				"updatedAt": updatedAt.UTC().Format(time.RFC3339Nano),
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, nil, err
+		}
+	}
+	items := enterpriseIntegrationCatalog(configured)
+	active, errors := 0, 0
+	for _, item := range items {
+		if strings.EqualFold(stringValue(item["status"]), "active") {
+			active++
+		}
+		if boolValue(item["hasError"]) {
+			errors++
+		}
+	}
+	return items, map[string]any{"supported": len(items), "configured": len(configured), "active": active, "errors": errors, "summaryOnly": true}, nil
+}
+
+func enterpriseIntegrationCatalog(configured map[string]map[string]any) []map[string]any {
+	platforms := []struct{ key, name string }{{"feishu", "飞书"}, {"dingtalk", "钉钉"}, {"wecom", "企业微信"}, {"wechat", "微信开放平台"}}
+	items := make([]map[string]any, 0, len(platforms))
+	for _, platform := range platforms {
+		if item, ok := configured[platform.key]; ok {
+			item["platformName"] = platform.name
+			items = append(items, item)
+			continue
+		}
+		items = append(items, map[string]any{
+			"id": platform.key, "connectorType": platform.key, "platformName": platform.name,
+			"connectorName": platform.name + " Connector", "status": "unconfigured", "configured": false,
+			"adapterBoundary": "PlatformConnector", "secretsConfigured": map[string]bool{"appSecret": false, "verificationToken": false, "encryptKey": false},
+			"lastConnectedAt": "", "hasError": false, "updatedAt": "",
+		})
+	}
+	return items
 }
 
 func (s *postgresStore) postgresEnterpriseCertifications(ctx context.Context, tenantID string) ([]map[string]any, error) {

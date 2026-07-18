@@ -64,6 +64,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { miniKnowledgeAPI, startMiniKnowledgeRun, type KnowledgeRunHandle, type MiniKnowledgeAgent, type MiniKnowledgeCitation, type MiniKnowledgeConversation, type MiniKnowledgeMessage, type MiniKnowledgeRunResult, type MiniKnowledgeStreamEvent } from "../api/knowledge";
+import { authStorage } from "../api/client";
+import { requireAuth } from "../features/auth/gate";
 
 defineProps<{ embedded?: boolean }>();
 defineEmits<{ close: [] }>();
@@ -86,9 +88,12 @@ let runHandle: KnowledgeRunHandle | null = null;
 const suggestions = ["请总结核心产品能力", "售后处理流程是什么？", "有哪些必须遵守的制度？"];
 const selectedAgent = computed(() => agents.value.find(item => item.id === selectedAgentId.value));
 const agentInitial = computed(() => selectedAgent.value?.name.slice(0, 1) || "AI");
-const canSend = computed(() => Boolean(selectedAgentId.value && draft.value.trim()));
+const canSend = computed(() => Boolean(draft.value.trim() && (selectedAgentId.value || !authStorage.getToken())));
 
-onMounted(load);
+onMounted(() => {
+  try { draft.value = String(uni.getStorageSync("zhiqiyun:web:chat-draft") || draft.value); } catch { /* optional draft */ }
+  if (authStorage.getToken()) void load();
+});
 
 async function load() {
   loading.value = true; error.value = "";
@@ -123,6 +128,21 @@ async function ensureConversation(question: string) {
 }
 async function send() {
   const question = draft.value.trim(); if (!canSend.value || generating.value) return;
+  if (!authStorage.getToken()) {
+    try { uni.setStorageSync("zhiqiyun:web:chat-draft", question); } catch { /* best effort */ }
+    await requireAuth({
+      action: "generate_chat",
+      route: typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}${window.location.hash}` : "/app/agents",
+      payload: { draft: question },
+      resume: async () => {
+        draft.value = question;
+        await load();
+        if (selectedAgentId.value) await send();
+      },
+    });
+    return;
+  }
+  try { uni.removeStorageSync("zhiqiyun:web:chat-draft"); } catch { /* optional draft */ }
   draft.value = ""; lastQuestion.value = question; error.value = "";
   messages.value.push({ id: `local-user-${Date.now()}`, role: "user", content: question, createdAt: new Date().toISOString() });
   const assistant: ChatMessage = { id: `local-assistant-${Date.now()}`, role: "assistant", content: "", createdAt: new Date().toISOString(), citations: [] };

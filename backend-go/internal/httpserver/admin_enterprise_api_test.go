@@ -62,10 +62,21 @@ func TestAdminEnterprisePhaseOneFlowAndPrivacyBoundary(t *testing.T) {
 		t.Fatalf("export enterprises = %d %s", export.Code, export.Body.String())
 	}
 
-	for _, section := range []string{"members", "package", "compute", "transactions", "orders", "ai-capabilities", "ai-employees", "knowledge-bases", "attribution", "relationships", "risk", "audit-logs"} {
+	for _, section := range []string{"members", "package", "compute", "transactions", "orders", "ai-capabilities", "ai-employees", "knowledge-bases", "integrations", "attribution", "relationships", "risk", "audit-logs"} {
 		response := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/enterprises/"+created.Enterprise.ID+"/"+section, nil, adminToken)
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"summary"`) || !strings.Contains(response.Body.String(), `"privacy"`) {
 			t.Fatalf("enterprise section %s = %d %s", section, response.Code, response.Body.String())
+		}
+	}
+
+	integrations := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/enterprises/"+created.Enterprise.ID+"/integrations", nil, adminToken)
+	integrationBody := integrations.Body.String()
+	if integrations.Code != http.StatusOK || !strings.Contains(integrationBody, `"adapterBoundary":"PlatformConnector"`) || !strings.Contains(integrationBody, `"secretsConfigured"`) {
+		t.Fatalf("enterprise integrations = %d %s", integrations.Code, integrationBody)
+	}
+	for _, forbiddenField := range []string{`"connectorKey":`, `"appId":`, `"externalMessageId":`, `"lastErrorMessage":`, `"verificationTokenCiphertext":`, `"encryptKeyCiphertext":`, `"appSecretCiphertext":`} {
+		if strings.Contains(integrationBody, forbiddenField) {
+			t.Fatalf("enterprise integrations leaked %s: %s", forbiddenField, integrationBody)
 		}
 	}
 
@@ -124,6 +135,7 @@ func TestAdminEnterprisePermissionMapping(t *testing.T) {
 		{http.MethodGet, "/api/v1/admin/enterprises/tenant_demo/transactions", permissionEnterpriseTransactionView},
 		{http.MethodGet, "/api/v1/admin/enterprises/tenant_demo/orders", permissionEnterpriseOrderView},
 		{http.MethodGet, "/api/v1/admin/enterprises/tenant_demo/knowledge-bases", permissionEnterpriseKnowledgeView},
+		{http.MethodGet, "/api/v1/admin/enterprises/tenant_demo/integrations", permissionEnterpriseConnectorView},
 		{http.MethodPost, "/api/v1/admin/enterprises/tenant_demo/ai-capabilities/configure", permissionEnterpriseAIConfigure},
 		{http.MethodPost, "/api/v1/admin/enterprises/tenant_demo/attribution/change", permissionEnterpriseAttributionChange},
 		{http.MethodPost, "/api/v1/admin/enterprises/tenant_demo/risk/disable", permissionEnterpriseRiskDisable},

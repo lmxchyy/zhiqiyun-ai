@@ -233,7 +233,7 @@ const titles: Record<string, [string, string]> = {
   billingProviderCosts: ["供应商成本", "独立维护上游成本口径，不与用户售价混存。"],
   billingEvents: ["计费事件", "按任务追踪报价、冻结、确认、解冻与退款事件。"],
   billingReconciliation: ["任务对账", "分离任务状态与计费状态，自动识别八类计费异常。"],
-  billingWalletLedger: ["钱包流水", "追踪每次余额与冻结额变化，禁止无流水改余额。"]
+  billingWalletLedger: ["用户积分钱包流水", "追踪每次用户积分余额与冻结额变化，禁止无流水改余额。"]
 };
 const pageTitle = computed(() => titles[props.moduleId]?.[0] || "计费中心");
 const pageDescription = computed(() => titles[props.moduleId]?.[1] || "");

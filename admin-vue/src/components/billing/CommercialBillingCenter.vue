@@ -57,7 +57,7 @@
       </el-table>
 
       <el-table v-else-if="moduleId === 'billingProducts'" :data="filteredRows" height="650" stripe empty-text="暂无微信虚拟支付商品">
-        <el-table-column prop="name" label="套餐产品" min-width="170" fixed />
+        <el-table-column prop="name" label="支付商品" min-width="170" fixed />
         <el-table-column prop="productCode" label="服务端商品编码" min-width="180" show-overflow-tooltip />
         <el-table-column prop="planType" label="套餐类型" min-width="160" />
         <el-table-column prop="productType" label="权益类型" min-width="160" />
@@ -188,8 +188,8 @@ const errorMessage = ref("");
 
 const titles: Record<string, [string, string]> = {
   billingCustomers: ["客户计费", "按真实订单、订阅与钱包余额聚合客户账务，不生成演示客户。"],
-  billingProducts: ["套餐产品", "统一查看服务端套餐价格、权益和微信虚拟商品映射。"],
-  billingSubscriptions: ["订阅管理", "订阅由已支付订单和会员权益记录生成，可追溯来源订单。"],
+  billingProducts: ["支付商品", "统一查看权益套餐与微信虚拟支付商品映射。"],
+  billingSubscriptions: ["订阅实例", "订阅实例由已支付订单和会员权益记录生成，可追溯来源订单。"],
   billingCoupons: ["优惠券", "创建不改变微信实付金额的权益加赠券，并追踪占用与核销。"],
   billingInvoices: ["发票与交易账单", "每笔微信虚拟支付订单自动形成账单，税票采用人工申请与开具状态。"],
   billingCreditNotes: ["贷项红冲", "退款通知自动生成贷项，人工贷项需审核且不会直接发起退款。"],

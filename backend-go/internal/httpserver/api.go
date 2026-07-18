@@ -1361,6 +1361,17 @@ func (a api) models(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 	}
+	for _, item := range items {
+		item["id"] = item["code"]
+		item["displayName"] = item["name"]
+		item["description"] = ""
+		item["supportedRatios"] = []string{"1:1", "4:3", "3:4", "16:9", "9:16"}
+		item["enabled"] = item["online"]
+		// Public model discovery must not reveal upstream routing or vendor identity.
+		delete(item, "providerId")
+		delete(item, "providerName")
+		delete(item, "provider")
+	}
 	writeJSON(w, items)
 }
 func (a api) listAssets(w http.ResponseWriter, r *http.Request) {

@@ -5,7 +5,7 @@ import { listTasks } from "./generation";
 import type { BusinessSdk, PageOptions, PagedItems } from "./types";
 
 export function listAssets(api: ApiClient) {
-  return api.request<Asset[]>("/api/v1/assets");
+  return api.request<Asset[]>("/api/v1/assets", { auth: "required" });
 }
 
 export function listAssetPage(api: ApiClient, options: PageOptions = {}) {
@@ -14,7 +14,7 @@ export function listAssetPage(api: ApiClient, options: PageOptions = {}) {
     `limit=${encodeURIComponent(String(options.limit || 20))}`,
     `offset=${encodeURIComponent(String(options.offset || 0))}`,
   ];
-  return api.request<PagedItems<Asset>>(`/api/v1/assets?${params.join("&")}`);
+  return api.request<PagedItems<Asset>>(`/api/v1/assets?${params.join("&")}`, { auth: "required" });
 }
 
 export function createAssetsSdk(api: ApiClient): BusinessSdk["assets"] {

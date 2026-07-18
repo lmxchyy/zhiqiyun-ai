@@ -1,4 +1,6 @@
-import type { ApiClient } from "@xianzhi/api-client";
+export * from "./core.js";
+
+import type { ApiAuthMode, ApiClient } from "@xianzhi/api-client";
 import type { AuthResponse, WorkspaceRole } from "@xianzhi/shared-types";
 import type { PlatformAdapter } from "@xianzhi/platform-adapter";
 
@@ -114,8 +116,8 @@ export function createAuthService(options: AuthServiceOptions) {
       });
       return persistAuth(storage, auth);
     },
-    async me() {
-      const auth = await options.api.request<AuthResponse>("/api/v1/auth/me");
+    async me(authMode: ApiAuthMode = "required") {
+      const auth = await options.api.request<AuthResponse>("/api/v1/auth/me", { auth: authMode });
       storage.setAuth(auth);
       if (auth.accessToken) storage.setToken(auth.accessToken);
       return auth;
@@ -134,7 +136,7 @@ export function createAuthService(options: AuthServiceOptions) {
     async restore() {
       if (storage.getToken()) {
         try {
-          return await service.me();
+          return await service.me("optional");
         } catch {
           // Fall through to refresh token recovery.
         }
@@ -149,7 +151,13 @@ export function createAuthService(options: AuthServiceOptions) {
       return null;
     },
     async logout() {
-      await options.api.request<{ ok?: boolean }>("/api/v1/auth/logout", { method: "POST" }).catch(() => null);
+      const refreshToken = storage.getRefreshToken();
+      await options.api.request<{ ok?: boolean }, { refreshToken?: string }>("/api/v1/auth/logout", {
+        method: "POST",
+        body: refreshToken ? { refreshToken } : {},
+        auth: "required",
+        retryOnUnauthorized: false
+      }).catch(() => null);
       storage.clear();
     }
   };

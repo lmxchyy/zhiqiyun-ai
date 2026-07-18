@@ -2,6 +2,19 @@ package httpserver
 
 import "testing"
 
+func TestTrialPlanGrantsTenPoints(t *testing.T) {
+	plan, ok := planCatalogByID("plan_free")
+	if !ok {
+		t.Fatal("trial plan not found")
+	}
+	if got := planPoints(plan); got != 10 {
+		t.Fatalf("trial plan points = %d, want 10", got)
+	}
+	if got := planGrantPoints(plan); got != 10 {
+		t.Fatalf("trial plan grant points = %d, want 10", got)
+	}
+}
+
 func TestMineRechargePackagesMatchProductContract(t *testing.T) {
 	tests := []struct {
 		id          string

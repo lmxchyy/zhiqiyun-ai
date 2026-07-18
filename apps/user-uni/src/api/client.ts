@@ -146,28 +146,31 @@ function redirectToLogin() {
   const loginQuery = currentPath && currentPath !== '/pages/WechatLoginPage'
     ? `?redirectPath=${encodeURIComponent(currentPath)}&redirectQuery=${encodeURIComponent(query)}&sourcePage=${encodeURIComponent(currentPath)}`
     : ''
-  uni.reLaunch({
+  uni.navigateTo({
     url: `/pages/WechatLoginPage${loginQuery}`,
     complete: () => { unauthorizedRedirecting = false },
+    fail: () => uni.redirectTo({ url: `/pages/WechatLoginPage${loginQuery}` }),
   })
   // #endif
   // #ifdef H5
   if (typeof window !== 'undefined' && !['/login', '/register'].includes(window.location.pathname)) {
-    window.location.assign('/login')
+    window.history.pushState({ authRequired: true }, '', `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`)
+    window.dispatchEvent(new PopStateEvent('popstate'))
   }
   unauthorizedRedirecting = false
   // #endif
 }
 
-async function handleUnauthorized(context: { path?: string; statusCode?: number; requestId?: string; payload?: unknown; retryAttempt?: number } = {}) {
+async function handleUnauthorized(context: { path?: string; statusCode?: number; requestId?: string; payload?: unknown; retryAttempt?: number; authMode?: "none" | "optional" | "required" } = {}) {
+  const shouldOpenLogin = context.authMode === "required"
   if ((context.retryAttempt || 0) > 0) {
     authStorage.clear()
-    redirectToLogin()
+    if (shouldOpenLogin) redirectToLogin()
     return false
   }
   if (!authStorage.getRefreshToken()) {
     authStorage.clear()
-    redirectToLogin()
+    if (shouldOpenLogin) redirectToLogin()
     return false
   }
   if (!unauthorizedRefreshPromise) {
@@ -175,14 +178,15 @@ async function handleUnauthorized(context: { path?: string; statusCode?: number;
       .then(() => true)
       .catch(() => {
         authStorage.clear()
-        redirectToLogin()
         return false
       })
       .finally(() => {
         unauthorizedRefreshPromise = null
       })
   }
-  return unauthorizedRefreshPromise
+  const recovered = await unauthorizedRefreshPromise
+  if (!recovered && shouldOpenLogin) redirectToLogin()
+  return recovered
 }
 
 const detectedClientPlatform = adapter.getClientInfo().platform

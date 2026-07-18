@@ -1,16 +1,8 @@
-FROM node:24-alpine AS web-build
-WORKDIR /src/apps/user-uni
-COPY apps/user-uni/package.json apps/user-uni/package-lock.json ./
-RUN npm ci
-COPY tsconfig.package.base.json /src/tsconfig.package.base.json
-COPY packages /src/packages
-COPY apps/user-uni ./
-RUN npm run build
-
 FROM node:24-alpine AS admin-build
 WORKDIR /src/admin-vue
 COPY admin-vue/package.json admin-vue/package-lock.json ./
 RUN npm ci
+COPY tsconfig.package.base.json /src/tsconfig.package.base.json
 COPY packages /src/packages
 COPY admin-vue ./
 RUN npm run build
@@ -50,12 +42,11 @@ RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
     echo "Skipping OfficeCLI install"; \
   fi
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
-COPY --from=web-build /src/apps/user-uni/dist/build/h5 /app/user-uni/dist
 COPY --from=admin-build /src/admin-vue/dist /app/admin-vue/dist
 COPY backend-go/internal/provider/video/seedance_bridge.py /app/seedance_bridge.py
 ENV PORT=3100
 ENV XIANZHI_DATA_PATH=/app/data/store.json
-ENV XIANZHI_STATIC_DIR=/app/user-uni/dist
+ENV XIANZHI_STATIC_DIR=/app/admin-vue/dist
 ENV XIANZHI_ADMIN_STATIC_DIR=/app/admin-vue/dist
 ENV CME_SEEDANCE_BRIDGE=/app/seedance_bridge.py
 ENV CME_SEEDANCE_DEPS_PATH=/app/seedance-python

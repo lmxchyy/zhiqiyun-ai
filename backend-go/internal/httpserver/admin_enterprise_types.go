@@ -31,6 +31,7 @@ const (
 	permissionEnterpriseRiskRestore         = "enterprise:risk:restore"
 	permissionEnterpriseServiceTransition   = "enterprise:service:transition"
 	permissionEnterpriseAuditView           = "enterprise:audit:view"
+	permissionEnterpriseConnectorView       = "enterprise:connector:view"
 	permissionEnterpriseExport              = "enterprise:export"
 )
 
@@ -59,6 +60,7 @@ var adminEnterprisePermissions = []string{
 	permissionEnterpriseRiskRestore,
 	permissionEnterpriseServiceTransition,
 	permissionEnterpriseAuditView,
+	permissionEnterpriseConnectorView,
 	permissionEnterpriseExport,
 }
 

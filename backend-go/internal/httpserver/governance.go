@@ -211,6 +211,8 @@ func adminPermissionForRequest(r *http.Request) string {
 			return permissionEnterpriseKnowledgeView
 		case strings.HasSuffix(path, "/attribution"), strings.HasSuffix(path, "/relationships"):
 			return permissionEnterpriseAttributionView
+		case strings.HasSuffix(path, "/integrations"):
+			return permissionEnterpriseConnectorView
 		case strings.HasSuffix(path, "/risk"):
 			return permissionEnterpriseRiskView
 		case strings.HasSuffix(path, "/audit-logs"):

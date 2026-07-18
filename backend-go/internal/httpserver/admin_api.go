@@ -44,6 +44,13 @@ func (a adminAPI) overview(w http.ResponseWriter, _ *http.Request) {
 	for _, item := range data.Commissions {
 		commissionCost += item.AmountCents
 	}
+	tasks, exceptions := buildAdminOverviewWorkItems(data)
+	exceptionPayload := any(exceptions)
+	if experienceStore, ok := a.store.(adminExperienceStore); ok {
+		if cases, syncErr := experienceStore.SyncAdminExceptionCases(exceptions); syncErr == nil {
+			exceptionPayload = cases
+		}
+	}
 	writeJSON(w, map[string]any{
 		"metrics": []map[string]any{
 			{"key": "revenue", "label": "收入", "value": revenue, "unit": "cents"},
@@ -67,6 +74,8 @@ func (a adminAPI) overview(w http.ResponseWriter, _ *http.Request) {
 			"commissionCents":      commissionCost,
 			"estimatedProfitCents": revenue - modelCost - commissionCost,
 		},
+		"tasks":      tasks,
+		"exceptions": exceptionPayload,
 	})
 }
 

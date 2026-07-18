@@ -12,6 +12,8 @@ import AiCreationPage from "./pages/AiCreationPage.vue";
 import EnterpriseFeishuConnectorPage from "./pages/enterprise/EnterpriseFeishuConnectorPage.vue";
 // #endif
 import { capturePromotionReferral, syncPendingPromotionReferral } from "./features/promotion/referral";
+import { initializeAuth } from "./features/auth/gate";
+import { initializeReviewMode } from "./features/reviewMode";
 
 const isFeishuConnectorRoute = typeof window !== "undefined" && [
   "/mobile/enterprise/feishu",
@@ -25,7 +27,11 @@ function captureLaunch(options?: PromotionLaunchOptions) {
   capturePromotionReferral(query);
 }
 
-onLaunch(options => captureLaunch(options));
+onLaunch(options => {
+  initializeAuth();
+  void initializeReviewMode();
+  captureLaunch(options);
+});
 onShow(options => {
   captureLaunch(options);
   void syncPendingPromotionReferral();

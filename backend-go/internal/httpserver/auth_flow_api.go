@@ -412,7 +412,7 @@ func (a authAPI) smsLogin(w http.ResponseWriter, r *http.Request) {
 	if isNewUser {
 		response["newcomerBenefits"] = newcomerBenefitsForPlan(configuredNewcomerPlan(data.Plans))
 	}
-	writeJSON(w, response)
+	writeAuthTokenResponse(w, r, response)
 }
 
 func (a authAPI) bindMobile(w http.ResponseWriter, r *http.Request) {

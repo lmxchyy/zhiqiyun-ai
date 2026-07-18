@@ -326,6 +326,7 @@
             <text>{{ promptLength }}/500</text>
           </view>
           <textarea
+            :key="promptHydrationKey"
             v-model="prompt"
             class="ppt-prompt-textarea"
             maxlength="500"
@@ -524,8 +525,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { downloadTemporaryFile } from "../api/files";
+import { authStorage } from "../api/client";
+import { requireAuth } from "../features/auth/gate";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import {
   createPptGenerationTask,
@@ -651,11 +654,23 @@ const visualCompositionOptions = [
   { label: "卡片图片", value: "card" }
 ];
 
-const prompt = ref("");
-const slideCount = ref(5);
-const language = ref<PptLanguage>("zh");
-const enableWebSearch = ref(false);
-const theme = ref<PptTheme>("business");
+const pptGuestDraftKey = "zhiqiyun:web:ppt-guest-draft";
+function readInitialPptDraft(): Partial<PptGenerateRequest> {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(pptGuestDraftKey) : "";
+    const value = raw ? JSON.parse(raw) : uni.getStorageSync(pptGuestDraftKey);
+    return value && typeof value === "object" ? value as Partial<PptGenerateRequest> : {};
+  } catch {
+    return {};
+  }
+}
+const initialPptDraft = readInitialPptDraft();
+const prompt = ref(String(initialPptDraft.prompt || ""));
+const promptHydrationKey = ref(0);
+const slideCount = ref(slideCountOptions.includes(Number(initialPptDraft.slideCount)) ? Number(initialPptDraft.slideCount) : 5);
+const language = ref<PptLanguage>(initialPptDraft.language === "en" ? "en" : "zh");
+const enableWebSearch = ref(Boolean(initialPptDraft.enableWebSearch));
+const theme = ref<PptTheme>(themeOptions.some(item => item.value === initialPptDraft.theme) ? initialPptDraft.theme as PptTheme : "business");
 const generating = ref(false);
 const generationError = ref("");
 const operationMessage = ref("");
@@ -704,10 +719,57 @@ const progressPercent = computed(() => {
 });
 
 onMounted(() => {
+  restoreGuestDraft();
+  setTimeout(restoreGuestDraft, 0);
   void initializePptWorkspace();
 });
 
+watch([prompt, slideCount, language, theme, enableWebSearch], persistGuestDraft);
+
+function currentPptRoute() {
+  return typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}${window.location.hash}` : "/app/ppt";
+}
+
+function currentPptRequest(): PptGenerateRequest {
+  return {
+    prompt: prompt.value.trim(),
+    slideCount: slideCount.value,
+    language: language.value,
+    theme: theme.value,
+    enableWebSearch: enableWebSearch.value,
+  };
+}
+
+function persistGuestDraft() {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(pptGuestDraftKey, JSON.stringify(currentPptRequest()));
+      return;
+    }
+    uni.setStorageSync(pptGuestDraftKey, currentPptRequest());
+  } catch {
+    /* local draft is best effort */
+  }
+}
+
+function restoreGuestDraft() {
+  try {
+    const webDraft = typeof window !== "undefined" ? window.localStorage.getItem(pptGuestDraftKey) : "";
+    const draft = (webDraft ? JSON.parse(webDraft) : uni.getStorageSync(pptGuestDraftKey)) as Partial<PptGenerateRequest> | "";
+    if (!draft || typeof draft !== "object") return;
+    prompt.value = String(draft.prompt || "");
+    promptHydrationKey.value += 1;
+    slideCount.value = slideCountOptions.includes(Number(draft.slideCount)) ? Number(draft.slideCount) : slideCount.value;
+    if (draft.language === "zh" || draft.language === "en") language.value = draft.language;
+    if (themeOptions.some(item => item.value === draft.theme)) theme.value = draft.theme as PptTheme;
+    enableWebSearch.value = Boolean(draft.enableWebSearch);
+  } catch {
+    /* an invalid draft must not block the public editor */
+  }
+}
+
 async function initializePptWorkspace() {
+  if (!authStorage.getToken()) return;
   await loadHistory();
   const taskId = props.initialTaskId.trim();
   if (!taskId) return;
@@ -749,18 +811,24 @@ function applyExample(example: string) {
 
 async function generatePpt() {
   if (isGenerateDisabled.value) return;
-  const request: PptGenerateRequest = {
-    prompt: prompt.value.trim(),
-    slideCount: slideCount.value,
-    language: language.value,
-    theme: theme.value,
-    enableWebSearch: enableWebSearch.value
-  };
+  const request = currentPptRequest();
+  persistGuestDraft();
+  if (!authStorage.getToken()) {
+    await requireAuth({
+      action: "generate_ppt",
+      route: currentPptRoute(),
+      payload: request as unknown as Record<string, unknown>,
+      resume: () => generatePpt(),
+    });
+    return;
+  }
   generating.value = true;
   generationError.value = "";
   operationMessage.value = "";
   try {
     const created = await createPptGenerationTask(request);
+    if (typeof window !== "undefined") window.localStorage.removeItem(pptGuestDraftKey);
+    else uni.removeStorageSync(pptGuestDraftKey);
     const pending = taskFromRequest(created.taskId, created.status, request);
     activeTask.value = pending;
     previewRecord.value = pending;
@@ -804,6 +872,15 @@ function previewTask(item: PptHistoryItem) {
 }
 
 async function downloadTask(item: PptHistoryItem) {
+  if (!authStorage.getToken()) {
+    await requireAuth({
+      action: "download_work",
+      route: currentPptRoute(),
+      payload: { taskId: item.taskId },
+      resume: () => downloadTask(item),
+    });
+    return;
+  }
   operationMessage.value = "";
   try {
     const result = await requestPptDownload(item.taskId);

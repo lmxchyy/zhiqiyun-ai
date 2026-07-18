@@ -58,6 +58,7 @@ import { backOrHome, formatCurrency } from '../../utils/miniProgramBusiness'
 import { createVirtualPaymentOrder, getVirtualPaymentOrderStatus, listVirtualPaymentCoupons, listVirtualPaymentProducts, syncVirtualPaymentOrder } from '../../features/payment/api'
 import { ensureWechatMiniProgramPaymentAvailable } from '../../features/payment/availability'
 import { requestWeChatVirtualPayment, virtualPaymentError } from '../../features/payment/platform'
+import { requireAuth } from '../../features/auth/gate'
 import type { VirtualPaymentCoupon, VirtualPaymentOrderStatus, VirtualPaymentProduct } from '../../features/payment/types'
 import loginLogo from '../../assets/zhiqiyun-logo-transparent.png'
 
@@ -131,7 +132,12 @@ async function pay() {
     resultMessage.value = result.message
     resultTone.value = result.kind === 'cancelled' ? '' : 'danger'
     if (result.kind === 'session') {
-      setTimeout(() => uni.reLaunch({ url: '/pages/WechatLoginPage' }), 500)
+      void requireAuth({
+        action: 'recharge',
+        route: '/pages/user/UserVirtualPaymentPage',
+        payload: { productCode: product.productCode },
+        autoResume: false,
+      })
     }
   }
   finally {

@@ -3443,7 +3443,7 @@ import PptExamplePrompts from "./PptExamplePrompts.vue";
 import PptGenerationProgress from "./PptGenerationProgress.vue";
 import PptHistoryList from "./PptHistoryList.vue";
 import PptPromptInput from "./PptPromptInput.vue";
-import xianzhiLogo from "../../assets/xianzhi-ai-logo.png";
+import xianzhiLogo from "../../assets/xianzhi-ai-logo.webp";
 
 const PptAgentActivityInline = defineAsyncComponent(() => import("./PptAgentActivityInline.vue"));
 const PptCreateModeSelector = defineAsyncComponent(() => import("./PptCreateModeSelector.vue"));
@@ -4512,9 +4512,20 @@ const historyEmptyDescription = computed(() => {
   return "生成完成后会出现在全部记录中。";
 });
 const workspaceTitle = computed(() => store.outline?.title || store.prompt.trim() || "无标题演示文稿");
+function activePptPath(path: string) {
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/workspace") && (path === "/app" || path.startsWith("/app/"))) {
+    return `/workspace${path.slice(4)}`;
+  }
+  return path;
+}
+
+function canonicalPptPath(path: string) {
+  return path === "/workspace" || path.startsWith("/workspace/") ? `/app${path.slice("/workspace".length)}` : path;
+}
+
 const presentationShareUrl = computed(() => {
   const id = activePresentationId.value || store.taskId || activeGenerationId.value || "draft";
-  const path = `/app/ppt-generation/presentation/${encodeURIComponent(id)}`;
+  const path = activePptPath(`/app/ppt-generation/presentation/${encodeURIComponent(id)}`);
   if (typeof window === "undefined") return path;
   return `${window.location.origin}${path}`;
 });
@@ -4904,13 +4915,13 @@ watch(
 
 function generationIdFromPath() {
   if (typeof window === "undefined") return "";
-  const match = window.location.pathname.replace(/\/$/, "").match(/\/app\/ppt-generation\/generate\/([^/]+)$/);
+  const match = canonicalPptPath(window.location.pathname).replace(/\/$/, "").match(/\/app\/ppt-generation\/generate\/([^/]+)$/);
   return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 
 function presentationIdFromPath() {
   if (typeof window === "undefined") return "";
-  const match = window.location.pathname.replace(/\/$/, "").match(/\/app\/ppt-generation\/presentation\/([^/]+)$/);
+  const match = canonicalPptPath(window.location.pathname).replace(/\/$/, "").match(/\/app\/ppt-generation\/presentation\/([^/]+)$/);
   return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 
@@ -4977,7 +4988,7 @@ async function openGenerationWorkspace(
   showModelMenu.value = false;
   showHistoryFilterMenu.value = false;
   if (typeof window !== "undefined") {
-    const nextPath = `/app/ppt-generation/generate/${encodeURIComponent(nextId)}`;
+    const nextPath = activePptPath(`/app/ppt-generation/generate/${encodeURIComponent(nextId)}`);
     const currentPath = window.location.pathname.replace(/\/$/, "");
     if (currentPath !== nextPath) {
       if (options.replace) window.history.replaceState({}, "", nextPath);
@@ -5012,7 +5023,7 @@ async function openPresentationWorkspace(
   showModelMenu.value = false;
   showHistoryFilterMenu.value = false;
   if (typeof window !== "undefined") {
-    const nextPath = `/app/ppt-generation/presentation/${encodeURIComponent(nextId)}`;
+    const nextPath = activePptPath(`/app/ppt-generation/presentation/${encodeURIComponent(nextId)}`);
     const currentPath = window.location.pathname.replace(/\/$/, "");
     if (currentPath !== nextPath) {
       if (options.replace) window.history.replaceState({}, "", nextPath);
@@ -5028,8 +5039,9 @@ async function openPresentationWorkspace(
 function pushPptHomePath() {
   if (typeof window === "undefined") return;
   const currentPath = window.location.pathname.replace(/\/$/, "");
-  if (currentPath !== "/app/ppt-generation") {
-    window.history.pushState({}, "", "/app/ppt-generation");
+  const homePath = activePptPath("/app/ppt-generation");
+  if (currentPath !== homePath) {
+    window.history.pushState({}, "", homePath);
   }
 }
 

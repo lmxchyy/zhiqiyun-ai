@@ -4,6 +4,6 @@ import type { BusinessSdk } from "./types";
 
 export function createModelsSdk(api: ApiClient): BusinessSdk["models"] {
   return {
-    list: () => api.request<ModelInfo[]>("/api/v1/models")
+    list: () => api.request<ModelInfo[]>("/api/v1/models", { auth: "none" })
   };
 }

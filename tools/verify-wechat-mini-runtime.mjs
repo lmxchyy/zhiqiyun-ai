@@ -218,12 +218,12 @@ async function verifyCreation(miniProgram, result) {
       await wait(1500);
       page = await currentPage(activeMiniProgram);
     }
-    if (page.path === "pages/user/UserImageCreationPage") break;
+    if (["pages/user/UserImageCreationPage", "pages/user-creation/UserImageCreationPage"].includes(page.path)) break;
     if (!storedDraft) storedDraft = await activeMiniProgram.callWxMethod("getStorageSync", "v532-studio-draft");
     const errorElement = await studio.$(".prompt-error");
     if (errorElement) creationError = await errorElement.text();
   }
-  assert(page.path === "pages/user/UserImageCreationPage", `创作提示词未进入独立生图页，当前为 ${page.path}；按钮禁用=${String(disabled)}；草稿=${JSON.stringify(storedDraft)}；错误=${creationError || "无"}`);
+  assert(["pages/user/UserImageCreationPage", "pages/user-creation/UserImageCreationPage"].includes(page.path), `创作提示词未进入独立生图页，当前为 ${page.path}；按钮禁用=${String(disabled)}；草稿=${JSON.stringify(storedDraft)}；错误=${creationError || "无"}`);
   result.creation = {
     path: page.path,
     prompt: targetPrompt,
@@ -235,21 +235,32 @@ async function verifyCreation(miniProgram, result) {
 
 async function verifyAssets(miniProgram, result) {
   progress("assets: switch-tab");
-  let page = await miniProgram.switchTab("/pages/user/UserAssetsPage");
+  let activeMiniProgram = miniProgram;
+  let page;
+  try {
+    page = await activeMiniProgram.switchTab("/pages/user/UserAssetsPage");
+  } catch (error) {
+    if (!/timeout|Connection closed/i.test(String(error instanceof Error ? error.message : error))) throw error;
+    progress("assets: reconnect-after-navigation");
+    activeMiniProgram = await reconnectMiniProgram();
+    attachDiagnostics(activeMiniProgram, result);
+    page = await activeMiniProgram.switchTab("/pages/user/UserAssetsPage");
+  }
   await page.waitFor(1800);
   const assets = await rolePageComponent(page, "asset-center-page");
   progress("assets: component-ready");
   const cards = await assets.$$(".asset-card");
-  const screenshotPath = await screenshot(miniProgram, "03-assets");
+  const screenshotPath = await screenshot(activeMiniProgram, "03-assets");
   let detailPath = "";
   if (cards.length) {
     await cards[0].tap();
     await wait(900);
-    page = await currentPage(miniProgram);
+    page = await currentPage(activeMiniProgram);
     detailPath = page.path;
     assert(detailPath === "pages/user/UserAssetDetailPage", `作品卡片未进入独立详情页，当前为 ${detailPath}`);
   }
   result.assets = { path: "pages/user/UserAssetsPage", cards: cards.length, detailPath, screenshot: screenshotPath };
+  return activeMiniProgram;
 }
 
 async function verifyMine(miniProgram, result) {
@@ -289,7 +300,7 @@ async function main() {
     progress("creation");
     miniProgram = await verifyCreation(miniProgram, result);
     progress("assets");
-    await verifyAssets(miniProgram, result);
+    miniProgram = await verifyAssets(miniProgram, result);
     progress("mine");
     await verifyMine(miniProgram, result);
     result.finishedAt = new Date().toISOString();

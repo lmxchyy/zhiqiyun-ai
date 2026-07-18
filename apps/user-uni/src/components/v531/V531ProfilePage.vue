@@ -4,7 +4,7 @@
       <text class="profile-v55-title">我的</text>
     </view>
 
-    <view v-if="selectableRoles.length > 1" class="profile-v55-role-switcher" aria-label="角色切换">
+    <view v-if="!isGuest && selectableRoles.length > 1" class="profile-v55-role-switcher" aria-label="角色切换">
       <button
         v-for="role in selectableRoles"
         :key="role.id"
@@ -19,7 +19,7 @@
     </view>
 
     <view class="profile-v55-role-card">
-      <button class="profile-v55-role-main" type="button" hover-class="profile-v55-pressed" @click="$emit('edit')">
+      <button class="profile-v55-role-main" type="button" hover-class="profile-v55-pressed" @click="isGuest ? $emit('service', 'login') : $emit('edit')">
         <RemoteCover
           class="profile-v55-avatar"
           page-code="profile"
@@ -36,10 +36,10 @@
         <view class="profile-v55-role-copy">
           <text class="profile-v55-name">{{ displayName }}</text>
           <text class="profile-v55-meta">{{ roleMeta }}</text>
-          <text class="profile-v55-points">{{ formatNumber(pointBalance) }} 点</text>
+          <text class="profile-v55-points">{{ isGuest ? '--' : formatNumber(pointBalance) }} 点</text>
         </view>
       </button>
-      <button
+      <button v-if="!hideAgentCenter"
         class="profile-v55-primary-cta"
         type="button"
         hover-class="profile-v55-pressed"
@@ -49,11 +49,11 @@
       </button>
     </view>
 
-    <view class="profile-v55-section-head">
+    <view v-if="!hideRecharge" class="profile-v55-section-head">
       <text class="profile-v55-section-title">我的 AI</text>
       <button type="button" class="profile-v55-section-link" @click="$emit('service', 'membership')">升级套餐 ›</button>
     </view>
-    <view class="profile-v55-capability-grid">
+    <view v-if="!hideRecharge" class="profile-v55-capability-grid">
       <button
         v-for="item in aiCapabilities"
         :key="item.id"
@@ -67,14 +67,14 @@
       </button>
     </view>
 
-    <view class="profile-v55-section-head">
+    <view v-if="!hideWallet" class="profile-v55-section-head">
       <text class="profile-v55-section-title">钱包摘要</text>
       <button type="button" class="profile-v55-section-link" @click="$emit('service', 'wallet')">钱包中心 ›</button>
     </view>
-    <view class="profile-v55-wallet-card">
+    <view v-if="!hideWallet" class="profile-v55-wallet-card">
       <button class="profile-v55-wallet-main" type="button" hover-class="profile-v55-pressed" @click="$emit('service', 'wallet')">
         <text class="profile-v55-wallet-label">点数余额</text>
-        <text class="profile-v55-wallet-value">{{ formatNumber(pointBalance) }}</text>
+        <text class="profile-v55-wallet-value">{{ isGuest ? '--' : formatNumber(pointBalance) }}</text>
         <text class="profile-v55-wallet-note">本月消耗 {{ formatNumber(monthlyPointCost) }} 点</text>
       </button>
       <button class="profile-v55-wallet-cta" type="button" hover-class="profile-v55-pressed" @click="$emit('recharge')">充值</button>
@@ -174,7 +174,7 @@
       hover-class="profile-v55-pressed"
       @tap.stop="handleLogout()"
     >
-      <text>退出登录</text>
+      <text>{{ isGuest ? guestLoginLabel : logoutLabel }}</text>
     </view>
   </view>
 </template>
@@ -186,6 +186,7 @@ import { RoleMenuConfig, roleLabels } from "../../config/permissions";
 import type { AppRole } from "../../types";
 import { useUserStore } from "../../stores/user";
 import { authStorage } from "../../api/client";
+import { reviewModeHides } from "../../features/reviewMode";
 
 const props = withDefaults(
   defineProps<{
@@ -206,6 +207,7 @@ const props = withDefaults(
     pptCount?: number;
     avatarUrl?: string;
     avatarFallback?: string;
+    isGuest?: boolean;
   }>(),
   {
     displayName: "当前用户",
@@ -215,6 +217,7 @@ const props = withDefaults(
     permissions: () => [],
     avatarUrl: "",
     avatarFallback: "",
+    isGuest: false,
     companyName: "企业信息待完善",
     planName: "",
     subscriptionExpiresAt: "",
@@ -269,6 +272,10 @@ function handleAgentCta() {
 }
 
 function handleLogout() {
+  if (props.isGuest) {
+    emit("service", "login");
+    return;
+  }
   uni.showModal({
     title: "退出登录",
     content: "退出后需要重新登录才能继续使用知启云 AI。",
@@ -279,13 +286,15 @@ function handleLogout() {
       authStorage.clear();
       userStore.reset();
       uni.removeStorageSync("xianzhiMiniProgramAuth");
-      uni.reLaunch({ url: "/pages/WechatLoginPage" });
+      uni.switchTab({ url: "/pages/user/UserHomePage" });
     },
   });
 }
 
 const supportedPageRoles: AppRole[] = ["USER", "AGENT", "OPERATION"];
 const selectableRoles = computed(() => props.roles
+  .filter(role => !(role === "AGENT" && reviewModeHides("hideAgentCenter")))
+  .filter(role => !(role === "OPERATION" && reviewModeHides("hideOperatorCenter")))
   .filter((role, index, roles) => supportedPageRoles.includes(role) && roles.indexOf(role) === index)
   .map(role => ({ id: role, label: roleLabels[role] })));
 const hasAgentRole = computed(() => props.roles.includes("AGENT"));
@@ -321,6 +330,9 @@ const commonServices = [
 
 const roleFunctions = computed(() => RoleMenuConfig[props.currentRole]
   .filter(item => hasPermission(item.permission))
+  .filter(item => !(item.id === "wallet" && reviewModeHides("hideWallet")))
+  .filter(item => !(item.id === "upgrade-agent" && reviewModeHides("hideAgentCenter")))
+  .filter(item => !(item.id.includes("commission") && reviewModeHides("hideCommission")))
   .map(item => item.id === "upgrade-agent" && hasAgentRole.value
     ? { ...item, label: "代理商工作台" }
     : item));
@@ -356,6 +368,11 @@ function formatNumber(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? Math.max(0, numberValue).toLocaleString("zh-CN") : "0";
 }
+const hideRecharge = computed(() => reviewModeHides("hideRecharge"));
+const hideWallet = computed(() => reviewModeHides("hideWallet"));
+const hideAgentCenter = computed(() => reviewModeHides("hideAgentCenter"));
+const guestLoginLabel = "\u7acb\u5373\u767b\u5f55";
+const logoutLabel = "\u9000\u51fa\u767b\u5f55";
 </script>
 
 <style scoped>

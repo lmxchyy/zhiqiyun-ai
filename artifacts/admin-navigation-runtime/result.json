@@ -1,0 +1,117 @@
+{
+  "generatedAt": "2026-07-18T05:51:47.010Z",
+  "baseURL": "http://127.0.0.1:3100",
+  "passed": true,
+  "checks": [
+    {
+      "name": "六个一级业务域",
+      "passed": true,
+      "groupTitles": [
+        "管理总览",
+        "客户与企业",
+        "商品与计费",
+        "AI 与内容",
+        "渠道与增长",
+        "系统管理"
+      ]
+    },
+    {
+      "name": "侧栏入口收敛",
+      "passed": true,
+      "count": 22,
+      "menuTitles": [
+        "管理总览",
+        "客户中心",
+        "企业中心",
+        "归属关系",
+        "商品与权益",
+        "订单与支付",
+        "定价与成本",
+        "账务与对账",
+        "营销优惠",
+        "AI 能力配置",
+        "接入与调用治理",
+        "知识库",
+        "素材库",
+        "页面运营",
+        "渠道总览",
+        "伙伴与运营中心",
+        "邀新与升级",
+        "分佣与结算",
+        "系统设置",
+        "组织与后台账号",
+        "权限与菜单",
+        "存储资源"
+      ]
+    },
+    {
+      "name": "PPT 资源退出后台首屏加载",
+      "passed": true
+    },
+    {
+      "name": "后台 Logo WebP 资源预算",
+      "passed": true
+    },
+    {
+      "name": "管理总览页内导航",
+      "passed": true
+    },
+    {
+      "name": "计费页内导航",
+      "passed": true
+    },
+    {
+      "name": "AI 治理页内导航",
+      "passed": true
+    },
+    {
+      "name": "页面运营页内导航",
+      "passed": true
+    },
+    {
+      "name": "Canonical URL 与浏览器返回",
+      "passed": true
+    },
+    {
+      "name": "模块搜索与父级高亮",
+      "passed": true
+    },
+    {
+      "name": "跨域业务搜索与客户 360°",
+      "passed": true
+    },
+    {
+      "name": "列表保存视图、批量选择与 CSV 导出",
+      "passed": true
+    },
+    {
+      "name": "企业、生成任务、支付与发票实时搜索",
+      "passed": true
+    },
+    {
+      "name": "订单履约时间轴",
+      "passed": true
+    },
+    {
+      "name": "企业集成中心与敏感字段边界",
+      "passed": true
+    },
+    {
+      "name": "旧地址与 Connector 专用入口兼容",
+      "passed": true
+    },
+    {
+      "name": "异常负责人、SLA、状态与关闭记录",
+      "passed": true
+    },
+    {
+      "name": "体验事件、自动化隔离与低频入口分析",
+      "passed": true
+    },
+    {
+      "name": "768px 响应式布局与导航抽屉",
+      "passed": true
+    }
+  ],
+  "pageErrors": []
+}

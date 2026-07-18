@@ -13,6 +13,17 @@ const allowedEvents = new Set([
   "register_success",
   "login_success",
   "login_failed",
+  "guest_open_app",
+  "guest_view_home",
+  "guest_open_creator",
+  "guest_input_prompt",
+  "guest_click_generate",
+  "login_modal_show",
+  "login_start",
+  "login_cancel",
+  "pending_action_resume_success",
+  "pending_action_resume_failed",
+  "generation_success_after_login",
 ]);
 
 export function trackLogin(event: string, properties: Record<string, string | number | boolean> = {}) {

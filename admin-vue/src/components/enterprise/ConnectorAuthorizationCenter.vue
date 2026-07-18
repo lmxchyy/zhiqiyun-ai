@@ -211,8 +211,9 @@ function statusType(platform: PlatformView) { return platform.connected ? "succe
 function modeText(mode: string) { return mode === "oauth_user_binding" ? "企业应用 OAuth" : mode === "website_oauth" ? "微信开放平台 OAuth" : "第三方应用套件"; }
 function platformMark(key: string) { return ({ feishu: "飞", wecom: "企", dingtalk: "钉", wechat: "微" } as Record<string, string>)[key] || "连"; }
 function platformName(key: string) { return platforms.value.find((item) => item.key === key)?.name || ({ universal: "统一", feishu: "飞书", wecom: "企业微信", dingtalk: "钉钉", wechat: "微信" } as Record<string, string>)[key] || "平台"; }
-function configureFeishu() { window.location.assign("/app/enterprise/feishu"); }
-function goBack() { window.location.assign("/app"); }
+function userConsolePath(path: string) { return window.location.pathname.startsWith("/workspace") ? `/workspace${path.slice(4)}` : path; }
+function configureFeishu() { window.location.assign(userConsolePath("/app/enterprise/feishu")); }
+function goBack() { window.location.assign(userConsolePath("/app")); }
 function message(error: unknown, fallback: string) { return error instanceof Error && error.message ? error.message : fallback; }
 </script>
 

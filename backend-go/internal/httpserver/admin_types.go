@@ -38,6 +38,8 @@ type adminPlatformData struct {
 	Enterprise             enterpriseMemoryState    `json:"enterprise,omitempty"`
 	PromotionRecords       []promotionRecord        `json:"promotionRecords,omitempty"`
 	AuthMergeRequests      []adminAuthMergeRequest  `json:"authMergeRequests,omitempty"`
+	AdminExceptionCases    []adminExceptionCase     `json:"adminExceptionCases,omitempty"`
+	AdminExperienceEvents  []adminExperienceEvent   `json:"adminExperienceEvents,omitempty"`
 	GenerationTasks        []generationTask         `json:"generationTasks"`
 	Assets                 []asset                  `json:"assets"`
 	AIState                userAIState              `json:"aiState,omitempty"`

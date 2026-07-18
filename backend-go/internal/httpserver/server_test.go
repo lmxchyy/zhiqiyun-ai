@@ -29,6 +29,87 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 )
 
+func TestPublicModelsDoNotLeakProviderRouting(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	handler := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}).Handler
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("models status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var items []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) == 0 {
+		t.Fatal("public model list is empty")
+	}
+	for _, item := range items {
+		for _, forbidden := range []string{"providerId", "providerName", "provider", "apiKey", "cost", "internalMultiplier"} {
+			if _, exists := item[forbidden]; exists {
+				t.Fatalf("public model leaked %s: %#v", forbidden, item)
+			}
+		}
+		if item["id"] == nil || item["displayName"] == nil || item["capabilities"] == nil {
+			t.Fatalf("public model is missing display fields: %#v", item)
+		}
+	}
+}
+
+func TestPublicCatalogIsAnonymousAndPresentationOnly(t *testing.T) {
+	handler := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()}).Handler
+	for _, route := range []string{"/api/v1/public/home", "/api/v1/public/cases", "/api/v1/public/templates", "/api/v1/public/agents", "/api/v1/public/models", "/api/v1/public/pricing"} {
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, route, nil))
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body = %s", route, res.Code, res.Body.String())
+		}
+		body := res.Body.String()
+		for _, forbidden := range []string{"apiKey", "providerId", "providerName", "tenantId", "userId", "internalMultiplier", "upstream"} {
+			if strings.Contains(body, `"`+forbidden+`"`) {
+				t.Fatalf("%s leaked forbidden field %s: %s", route, forbidden, body)
+			}
+		}
+	}
+}
+
+func TestPublicGuestExperienceEventsAreWhitelistedAndSanitized(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	handler := newWithStore(config.Config{Addr: ":0", StaticDir: t.TempDir()}, store).Handler
+	res := httptest.NewRecorder()
+	body := bytes.NewBufferString(`{"eventType":"guest_click_generate","moduleId":"userAiImage","metadata":{"action":"generate_image","platform":"web","prompt":"private prompt","token":"secret","mobile":"13800000000"}}`)
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/public/experience-events", body))
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("guest experience status = %d, body = %s", res.Code, res.Body.String())
+	}
+	events, err := store.ListAdminExperienceEvents(time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("experience event count = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.EventType != "GUEST_CLICK_GENERATE" || event.ActorRole != "GUEST" || event.ModuleID != "userAiImage" {
+		t.Fatalf("unexpected guest experience event: %+v", event)
+	}
+	if event.Metadata["action"] != "generate_image" || event.Metadata["platform"] != "web" {
+		t.Fatalf("safe metadata was not retained: %#v", event.Metadata)
+	}
+	for _, forbidden := range []string{"prompt", "token", "mobile"} {
+		if _, exists := event.Metadata[forbidden]; exists {
+			t.Fatalf("guest experience event retained forbidden metadata %s: %#v", forbidden, event.Metadata)
+		}
+	}
+
+	rejected := httptest.NewRecorder()
+	handler.ServeHTTP(rejected, httptest.NewRequest(http.MethodPost, "/api/v1/public/experience-events", bytes.NewBufferString(`{"eventType":"arbitrary_event"}`)))
+	if rejected.Code != http.StatusBadRequest {
+		t.Fatalf("invalid guest experience status = %d, want %d", rejected.Code, http.StatusBadRequest)
+	}
+}
+
 func TestGenerationTaskLifecycle(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	server := New(config.Config{
@@ -491,7 +572,7 @@ func TestNormalizeAICapabilityDefaultsMergesMissingBillingRules(t *testing.T) {
 	}
 }
 
-func TestWebRoutesUseAdminBundle(t *testing.T) {
+func TestWebRoutesSeparatePublicUserAndProtectedAdminBundles(t *testing.T) {
 	userStaticDir := t.TempDir()
 	adminStaticDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(userStaticDir, "index.html"), []byte("USER_BUNDLE"), 0o644); err != nil {
@@ -506,10 +587,10 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(adminStaticDir, "index.html"), []byte("ADMIN_BUNDLE"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(adminStaticDir, "static", "js"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(userStaticDir, "static", "js"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(adminStaticDir, "static", "js", "smart-canvas.js"), []byte("SMART_CANVAS_BUNDLE"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(userStaticDir, "static", "js", "smart-canvas.js"), []byte("SMART_CANVAS_BUNDLE"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -520,19 +601,41 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 		AdminStaticDir: adminStaticDir,
 	})
 
-	for _, path := range []string{"/", "/foo", "/app", "/app/workspace", "/agent", "/admin/"} {
-		t.Run(path, func(t *testing.T) {
+	desktopRoot := request(t, server.Handler, http.MethodGet, "/", nil)
+	if desktopRoot.Code != http.StatusOK || strings.TrimSpace(desktopRoot.Body.String()) != "ADMIN_BUNDLE" {
+		t.Fatalf("desktop / status = %d, body = %q, want ADMIN_BUNDLE", desktopRoot.Code, desktopRoot.Body.String())
+	}
+
+	mobileRoot := mobileRequest(t, server.Handler, http.MethodGet, "/")
+	if mobileRoot.Code != http.StatusOK || strings.TrimSpace(mobileRoot.Body.String()) != "ADMIN_BUNDLE" {
+		t.Fatalf("mobile / status = %d, body = %q, want ADMIN_BUNDLE", mobileRoot.Code, mobileRoot.Body.String())
+	}
+
+	for _, path := range []string{"/foo", "/app", "/app/workspace", "/workspace", "/workspace/video-generation"} {
+		t.Run("desktop-redirect-"+path, func(t *testing.T) {
 			res := request(t, server.Handler, http.MethodGet, path, nil)
-			if res.Code != http.StatusOK {
-				t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+			if res.Code != http.StatusTemporaryRedirect || res.Header().Get("Location") != "/" {
+				t.Fatalf("status = %d, location = %q, want 307 /", res.Code, res.Header().Get("Location"))
 			}
-			if got := strings.TrimSpace(res.Body.String()); got != "ADMIN_BUNDLE" {
-				t.Fatalf("body = %q, want ADMIN_BUNDLE", got)
+		})
+	}
+	for _, path := range []string{"/login", "/register"} {
+		res := request(t, server.Handler, http.MethodGet, path, nil)
+		if res.Code != http.StatusOK || strings.TrimSpace(res.Body.String()) != "ADMIN_BUNDLE" {
+			t.Fatalf("auth page %s status = %d, body = %q, want ADMIN_BUNDLE", path, res.Code, res.Body.String())
+		}
+	}
+
+	for _, path := range []string{"/mobile", "/mobile/workspace"} {
+		t.Run("removed-"+path, func(t *testing.T) {
+			res := request(t, server.Handler, http.MethodGet, path, nil)
+			if res.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, body = %s, want 404", res.Code, res.Body.String())
 			}
 		})
 	}
 
-	for _, path := range []string{"/login", "/register"} {
+	for _, path := range []string{"/agent", "/agent/login", "/admin/", "/admin/login"} {
 		t.Run(path, func(t *testing.T) {
 			res := request(t, server.Handler, http.MethodGet, path, nil)
 			if res.Code != http.StatusOK {
@@ -570,10 +673,6 @@ func TestWebRoutesUseAdminBundle(t *testing.T) {
 	if cacheControl := canvasBundleRes.Header().Get("Cache-Control"); !strings.Contains(cacheControl, "public") {
 		t.Fatalf("/static/js/smart-canvas.js Cache-Control = %q, want public cache", cacheControl)
 	}
-	if htmlCache := request(t, server.Handler, http.MethodGet, "/app", nil).Header().Get("Cache-Control"); !strings.Contains(htmlCache, "no-store") {
-		t.Fatalf("/app Cache-Control = %q, want no-store", htmlCache)
-	}
-
 	gzipReq := httptest.NewRequest(http.MethodGet, "/static/js/smart-canvas.js", nil)
 	gzipReq.Header.Set("Accept-Encoding", "gzip")
 	gzipRes := httptest.NewRecorder()
@@ -1696,6 +1795,90 @@ func TestAdminMutationAPIsPersistMasterControlData(t *testing.T) {
 	orders := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/orders", nil, adminToken)
 	if !strings.Contains(orders.Body.String(), `"status":"PAID"`) || !strings.Contains(orders.Body.String(), `"status":"PENDING"`) {
 		t.Fatalf("order mutations were not persisted: %s", orders.Body.String())
+	}
+
+	customer360 := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers/"+customerBody.Item.ID+"/360", nil, adminToken)
+	if customer360.Code != http.StatusOK || !strings.Contains(customer360.Body.String(), `"profile"`) || !strings.Contains(customer360.Body.String(), `"wallet"`) || !strings.Contains(customer360.Body.String(), `"orders"`) {
+		t.Fatalf("customer 360 response = %d %s", customer360.Code, customer360.Body.String())
+	}
+	if strings.Contains(customer360.Body.String(), "passwordHash") || strings.Contains(customer360.Body.String(), "externalKey") {
+		t.Fatalf("customer 360 leaked secret fields: %s", customer360.Body.String())
+	}
+
+	timeline := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/orders/"+orderBody.Item.ID+"/timeline", nil, adminToken)
+	if timeline.Code != http.StatusOK || !strings.Contains(timeline.Body.String(), `"timeline"`) || !strings.Contains(timeline.Body.String(), `"支付确认"`) || !strings.Contains(timeline.Body.String(), `"权益发放"`) {
+		t.Fatalf("order timeline response = %d %s", timeline.Code, timeline.Body.String())
+	}
+
+	overview := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/overview", nil, adminToken)
+	if overview.Code != http.StatusOK || !strings.Contains(overview.Body.String(), `"tasks"`) || !strings.Contains(overview.Body.String(), `"exceptions"`) {
+		t.Fatalf("overview work center response = %d %s", overview.Code, overview.Body.String())
+	}
+
+	search := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/search?q=customer%40example.com", nil, adminToken)
+	if search.Code != http.StatusOK || !strings.Contains(search.Body.String(), customerBody.Item.ID) || !strings.Contains(search.Body.String(), `"module":"customers"`) {
+		t.Fatalf("admin global search response = %d %s", search.Code, search.Body.String())
+	}
+	if strings.Contains(search.Body.String(), "passwordHash") || strings.Contains(search.Body.String(), "externalKey") {
+		t.Fatalf("admin global search leaked secret fields: %s", search.Body.String())
+	}
+	orderSearch := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/search?q="+url.QueryEscape(orderBody.Item.ID), nil, adminToken)
+	if orderSearch.Code != http.StatusOK || !strings.Contains(orderSearch.Body.String(), orderBody.Item.ID) || !strings.Contains(orderSearch.Body.String(), `"module":"orders"`) {
+		t.Fatalf("admin order search response = %d %s", orderSearch.Code, orderSearch.Body.String())
+	}
+	searchData, err := newJSONStore(dataPath).AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(searchData.Enterprise.Tenants) > 0 {
+		enterpriseSearch := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/search?q="+url.QueryEscape(searchData.Enterprise.Tenants[0].ID), nil, adminToken)
+		if enterpriseSearch.Code != http.StatusOK || !strings.Contains(enterpriseSearch.Body.String(), `"type":"enterprise"`) {
+			t.Fatalf("enterprise search response = %d %s", enterpriseSearch.Code, enterpriseSearch.Body.String())
+		}
+	}
+	if len(searchData.GenerationTasks) > 0 {
+		taskSearch := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/search?q="+url.QueryEscape(searchData.GenerationTasks[0].ID), nil, adminToken)
+		if taskSearch.Code != http.StatusOK || !strings.Contains(taskSearch.Body.String(), `"type":"generation_task"`) {
+			t.Fatalf("generation task search response = %d %s", taskSearch.Code, taskSearch.Body.String())
+		}
+	}
+	invoiceSearch := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/search?q=XZ-BILL", nil, adminToken)
+	if invoiceSearch.Code != http.StatusOK || !strings.Contains(invoiceSearch.Body.String(), `"type":"invoice"`) {
+		t.Fatalf("invoice search response = %d %s", invoiceSearch.Code, invoiceSearch.Body.String())
+	}
+	if len(searchData.Payments) > 0 {
+		paymentSearch := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/search?q="+url.QueryEscape(searchData.Payments[0].ID), nil, adminToken)
+		if paymentSearch.Code != http.StatusOK || !strings.Contains(paymentSearch.Body.String(), `"type":"payment"`) {
+			t.Fatalf("payment search response = %d %s", paymentSearch.Code, paymentSearch.Body.String())
+		}
+	}
+
+	started := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/experience-events", bytes.NewBufferString(`{"eventType":"TASK_STARTED","moduleId":"orders","targetId":"`+orderBody.Item.ID+`","metadata":{"sessionId":"human-session-1"}}`), adminToken)
+	if started.Code != http.StatusNoContent {
+		t.Fatalf("record experience event = %d %s", started.Code, started.Body.String())
+	}
+	completed := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/experience-events", bytes.NewBufferString(`{"eventType":"TASK_COMPLETED","moduleId":"orders","targetId":"`+orderBody.Item.ID+`","metadata":{"sessionId":"human-session-1"}}`), adminToken)
+	if completed.Code != http.StatusNoContent {
+		t.Fatalf("record completed experience event = %d %s", completed.Code, completed.Body.String())
+	}
+	synthetic := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/experience-events", bytes.NewBufferString(`{"eventType":"MODULE_VIEW","moduleId":"orders","metadata":{"sessionId":"e2e-session","synthetic":true}}`), adminToken)
+	if synthetic.Code != http.StatusNoContent {
+		t.Fatalf("record synthetic experience event = %d %s", synthetic.Code, synthetic.Body.String())
+	}
+	analytics := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/experience-analytics?days=30", nil, adminToken)
+	if analytics.Code != http.StatusOK || !strings.Contains(analytics.Body.String(), `"TASK_STARTED":1`) || !strings.Contains(analytics.Body.String(), `"taskCompletionRate":1`) || !strings.Contains(analytics.Body.String(), `"syntheticEvents":1`) || !strings.Contains(analytics.Body.String(), `"totalEvents":2`) || !strings.Contains(analytics.Body.String(), `"uniqueSessions":1`) || !strings.Contains(analytics.Body.String(), `"sampleReady":false`) {
+		t.Fatalf("experience analytics = %d %s", analytics.Code, analytics.Body.String())
+	}
+
+	if strings.Contains(overview.Body.String(), `"id":"generation-failures"`) {
+		assign := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/exceptions/generation-failures", bytes.NewBufferString(`{"assigneeName":"值班运营","status":"IN_PROGRESS","note":"开始排查"}`), adminToken)
+		if assign.Code != http.StatusOK || !strings.Contains(assign.Body.String(), `"assigneeName":"值班运营"`) || !strings.Contains(assign.Body.String(), `"status":"IN_PROGRESS"`) {
+			t.Fatalf("assign exception case = %d %s", assign.Code, assign.Body.String())
+		}
+		closeCase := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/exceptions/generation-failures", bytes.NewBufferString(`{"assigneeName":"值班运营","status":"CLOSED","closeReason":"已完成失败任务复核"}`), adminToken)
+		if closeCase.Code != http.StatusOK || !strings.Contains(closeCase.Body.String(), `"status":"CLOSED"`) || !strings.Contains(closeCase.Body.String(), `"closeReason":"已完成失败任务复核"`) || !strings.Contains(closeCase.Body.String(), `"history"`) {
+			t.Fatalf("close exception case = %d %s", closeCase.Code, closeCase.Body.String())
+		}
 	}
 }
 
@@ -3001,13 +3184,14 @@ func TestAuthSessionStoreLogoutRevokesToken(t *testing.T) {
 		t.Fatalf("login status = %d, body = %s", login.Code, login.Body.String())
 	}
 	var loginBody struct {
-		AccessToken string `json:"accessToken"`
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
 	}
 	if err := json.NewDecoder(login.Body).Decode(&loginBody); err != nil {
 		t.Fatal(err)
 	}
-	if loginBody.AccessToken == "" {
-		t.Fatal("login response missing access token")
+	if loginBody.AccessToken == "" || loginBody.RefreshToken == "" {
+		t.Fatal("login response missing access or refresh token")
 	}
 
 	meReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
@@ -3018,7 +3202,8 @@ func TestAuthSessionStoreLogoutRevokesToken(t *testing.T) {
 		t.Fatalf("me status = %d, body = %s", meRes.Code, meRes.Body.String())
 	}
 
-	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	logoutReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", bytes.NewBufferString(`{"refreshToken":"`+loginBody.RefreshToken+`"}`))
+	logoutReq.Header.Set("Content-Type", "application/json")
 	logoutReq.Header.Set("Authorization", "Bearer "+loginBody.AccessToken)
 	logoutRes := httptest.NewRecorder()
 	handler.ServeHTTP(logoutRes, logoutReq)
@@ -3032,6 +3217,10 @@ func TestAuthSessionStoreLogoutRevokesToken(t *testing.T) {
 	handler.ServeHTTP(revokedRes, revokedReq)
 	if revokedRes.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked token status = %d, body = %s", revokedRes.Code, revokedRes.Body.String())
+	}
+	refreshAfterLogout := request(t, handler, http.MethodPost, "/api/v1/auth/refresh", bytes.NewBufferString(`{"refreshToken":"`+loginBody.RefreshToken+`"}`))
+	if refreshAfterLogout.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh token after logout status = %d, body = %s", refreshAfterLogout.Code, refreshAfterLogout.Body.String())
 	}
 }
 
@@ -3061,7 +3250,20 @@ func TestAuthRefreshTokenRotatesSession(t *testing.T) {
 		t.Fatalf("login response missing tokens: %+v", loginBody)
 	}
 
-	refresh := request(t, handler, http.MethodPost, "/api/v1/auth/refresh", bytes.NewBufferString(`{"refreshToken":"`+loginBody.RefreshToken+`"}`))
+	var refreshCookie *http.Cookie
+	for _, cookie := range login.Result().Cookies() {
+		if cookie.Name == authRefreshCookieName {
+			refreshCookie = cookie
+			break
+		}
+	}
+	if refreshCookie == nil || !refreshCookie.HttpOnly || refreshCookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("login refresh cookie missing security attributes: %+v", refreshCookie)
+	}
+	refreshReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
+	refreshReq.AddCookie(refreshCookie)
+	refresh := httptest.NewRecorder()
+	handler.ServeHTTP(refresh, refreshReq)
 	if refresh.Code != http.StatusOK {
 		t.Fatalf("refresh status = %d, body = %s", refresh.Code, refresh.Body.String())
 	}
@@ -3165,6 +3367,15 @@ func request(t *testing.T, handler http.Handler, method string, path string, bod
 		body = bytes.NewBuffer(nil)
 	}
 	req := httptest.NewRequest(method, path, body)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	return res
+}
+
+func mobileRequest(t *testing.T, handler http.Handler, method string, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	return res

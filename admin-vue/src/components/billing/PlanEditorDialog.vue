@@ -204,7 +204,7 @@ async function loadCapabilities(planId: string) {
         ...item,
         allowedModels: Array.isArray(item.allowedModels) ? [...item.allowedModels] : [],
         availableModels: Array.isArray(item.availableModels) ? [...item.availableModels] : [],
-        limits: item.limits && typeof item.limits === "object" ? structuredClone(item.limits) : {}
+        limits: cloneJSONRecord(item.limits)
       }))
       : [];
   } catch (error) {
@@ -253,6 +253,14 @@ function setLimitBoolean(module: CapabilityModule, key: string, field: string, v
   limitRule(module, key)[field] = value;
 }
 
+function cloneJSONRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const cloned = JSON.parse(JSON.stringify(value)) as unknown;
+  return cloned && typeof cloned === "object" && !Array.isArray(cloned)
+    ? cloned as Record<string, unknown>
+    : {};
+}
+
 function close() {
   if (!props.saving && !capabilitiesLoading.value) emit("update:modelValue", false);
 }
@@ -294,6 +302,18 @@ function submit() {
   entitlements.displayPrice = displayPrice.value.trim();
   entitlements.validityText = validityText.value.trim();
   entitlements.audience = audience.value.trim();
+  let modules: CapabilityModule[];
+  try {
+    modules = capabilityModules.value.map((module) => ({
+      ...module,
+      allowedModels: [...module.allowedModels],
+      availableModels: [...module.availableModels],
+      limits: cloneJSONRecord(module.limits)
+    }));
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? `产品能力配置读取失败：${error.message}` : "产品能力配置读取失败");
+    return;
+  }
   emit("save", {
     plan: {
       name: name.value.trim(),
@@ -305,12 +325,7 @@ function submit() {
       entitlements
     },
     capabilities: {
-      modules: capabilityModules.value.map((module) => ({
-        ...module,
-        allowedModels: [...module.allowedModels],
-        availableModels: [...module.availableModels],
-        limits: structuredClone(module.limits)
-      }))
+      modules
     }
   });
 }

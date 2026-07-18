@@ -29,7 +29,7 @@
     </view>
   </view>
 
-  <view v-else-if="!isLoggedIn" class="login-shell">
+  <view v-else-if="!isLoggedIn && isLoginRoute" class="login-shell">
     <view class="login-screen">
       <view class="login-bg-accent login-bg-accent-blue"></view>
       <view class="login-bg-accent login-bg-accent-warm"></view>
@@ -92,6 +92,13 @@
       </view>
     </view>
   </view>
+
+  <GuestWebLandingPage
+    v-else-if="!isLoggedIn && isGuestLandingRoute"
+    :logo="xianzhiLogo"
+    @login="goLogin"
+    @open="openGuestLandingModule"
+  />
 
   <view
     v-else
@@ -177,7 +184,7 @@
             <text>⌘K</text>
           </view>
           <view class="dashboard-user-actions">
-            <button type="button" @click="refresh">↻</button>
+            <button type="button" @click="guestAwareRefresh">↻</button>
             <button type="button" class="notification-button" @click="showDashboardNotifications">
               <text>铃</text>
               <text>12</text>
@@ -368,6 +375,7 @@
         </view>
         <iframe
           v-if="wirelessCanvasFrameSrc"
+          ref="wirelessCanvasFrame"
           class="wireless-canvas-frame"
           :class="{ 'is-loading': !wirelessCanvasFrameLoaded }"
           :src="wirelessCanvasFrameSrc"
@@ -392,11 +400,28 @@
             <text :class="['online-pill', models.length ? 'online' : 'offline']">
               {{ models.length ? "ONLINE" : "OFFLINE" }}
             </text>
-            <text class="user-pill"><text class="user-badge">知</text>知启云 · 普通用户</text>
-            <button type="button" class="logout-button" @click.stop="logout">退出</button>
+            <text class="user-pill"><text class="user-badge">知</text>知启云 · {{ isLoggedIn ? (currentUser?.name || '普通用户') : '游客' }}</text>
+            <button v-if="isLoggedIn" type="button" class="logout-button" @click.stop="logout">退出</button>
+            <button v-else type="button" class="logout-button" @click.stop="goLogin">登录</button>
           </view>
         </view>
-        <view class="video-generation-blank"></view>
+        <scroll-view class="workspace-scroll video-generation-scroll" scroll-y>
+          <view class="web-video-workbench">
+            <view class="web-video-hero"><text>AI 视频创作</text><text>游客可先填写完整参数，提交生成时再登录。</text></view>
+            <view class="web-video-form">
+              <label><text>视频描述</text><textarea v-model="videoPrompt" maxlength="1000" placeholder="描述画面主体、动作、镜头运动、光线与风格" /></label>
+              <label><text>首帧图片 URL（可选）</text><input v-model.trim="videoFirstFrame" placeholder="https://..." /></label>
+              <label><text>尾帧图片 URL（可选）</text><input v-model.trim="videoLastFrame" placeholder="https://..." /></label>
+              <view><text>模型</text><view class="web-video-options"><button v-for="item in webVideoModels" :key="item" :class="['web-video-option', { active: videoModel === item }]" @click="videoModel = item">{{ item }}</button></view></view>
+              <view><text>画面比例</text><view class="web-video-options"><button v-for="item in ['16:9','9:16','1:1']" :key="item" :class="['web-video-option', { active: videoRatio === item }]" @click="videoRatio = item">{{ item }}</button></view></view>
+              <view><text>分辨率</text><view class="web-video-options"><button v-for="item in ['480p','720p','1080p']" :key="item" :class="['web-video-option', { active: videoResolution === item }]" @click="videoResolution = item">{{ item }}</button></view></view>
+              <view><text>时长</text><view class="web-video-options"><button v-for="item in [5,10,15]" :key="item" :class="['web-video-option', { active: videoDuration === item }]" @click="videoDuration = item">{{ item }} 秒</button></view></view>
+              <button class="web-video-submit" :disabled="videoSubmitting || !videoPrompt.trim()" @click="submitWebVideoGeneration">{{ videoSubmitting ? '正在提交…' : '生成视频' }}</button>
+              <text v-if="videoError" class="web-video-error">{{ videoError }}</text>
+            </view>
+            <view v-if="videoTask" class="web-video-result"><text>{{ videoTask.status }}</text><text>任务 {{ videoTask.id }}</text><text>进度 {{ videoTask.progress || 0 }}%</text><button @click="selectModule('assets')">前往作品中心</button></view>
+          </view>
+        </scroll-view>
       </view>
 
       <view v-else-if="activeModule === 'ppt'" class="creation-page ppt-generation-page">
@@ -435,7 +460,7 @@
               <text>⌕</text>
               <input v-model.trim="worksSearchKeyword" placeholder="搜索当前模块" />
             </label>
-            <button type="button" class="works-header-button" aria-label="刷新作品" @click="refresh">↻</button>
+            <button type="button" class="works-header-button" aria-label="刷新作品" @click="guestAwareRefresh">↻</button>
             <button type="button" class="works-size-button" @click="showWorksDensityMenu">{{ worksDensity === 'compact' ? '紧凑' : '默认' }}⌄</button>
             <text :class="['online-pill', models.length ? 'online' : 'offline']">
               API {{ models.length ? "ONLINE" : "OFFLINE" }}
@@ -452,10 +477,25 @@
             </view>
             <view class="works-hero-actions">
               <button type="button" class="works-primary-action" @click="selectModule('dashboard')">继续创作</button>
-              <button type="button" @click="refresh">刷新作品</button>
+              <button type="button" @click="guestAwareRefresh">刷新作品</button>
             </view>
           </view>
 
+          <template v-if="!isLoggedIn">
+            <view class="works-panel guest-web-works">
+              <view class="works-panel-head">
+                <view class="works-filter-tabs"><button class="active">官方精选</button><button @click="openWebWorksLogin">我的作品 🔒</button></view>
+              </view>
+              <view class="works-grid">
+                <view v-for="item in guestOfficialCases" :key="item.title" class="works-card">
+                  <view class="works-card-preview"><image :src="item.image" mode="aspectFill" /><text class="works-card-badge">官方案例</text></view>
+                  <view class="works-card-body"><text class="works-card-title">{{ item.title }}</text><text class="works-card-desc">{{ item.description }}</text></view>
+                </view>
+              </view>
+              <view class="works-empty"><text>登录后查看我的作品</text><text>同步创作记录、生成进度和可下载文件。</text><button type="button" @click="openWebWorksLogin">登录后继续</button></view>
+            </view>
+          </template>
+          <template v-else>
           <view class="works-summary-grid">
             <view v-for="item in worksSummaryCards" :key="item.label" class="works-summary-card">
               <text>{{ item.label }}</text>
@@ -559,6 +599,7 @@
               <button type="button" @click="selectModule('dashboard')">去创作</button>
             </view>
           </view>
+          </template>
         </scroll-view>
       </view>
 
@@ -1095,12 +1136,15 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { api, authService, businessSdk } from "../api/client";
+import { api, apiClient, authService, businessSdk } from "../api/client";
+import { pendingActions, requireAuth, resumePendingAction } from "../features/auth/gate";
+import { trackLogin } from "../features/auth/analytics";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 
 import PptDocumentGeneration from "../components/PptDocumentGeneration.vue";
 import KnowledgeMiniChat from "../components/KnowledgeMiniChat.vue";
+import GuestWebLandingPage from "../components/GuestWebLandingPage.vue";
 import type { Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask, ModelInfo, PointAccount } from "../types";
 import type { UserDashboardResponse } from "@xianzhi/shared-types";
 
@@ -1455,7 +1499,7 @@ function currentSearchParams() {
 const userModules: ModuleConfig[] = [
   { id: "dashboard", label: "用户首页", description: "创作任务、积分、作品和常用能力入口。", status: "用户工作台", capabilities: ["创作概览", "积分状态", "作品入口"] },
   { id: "wirelessCanvas", label: "无线画布", description: "复刻 Infinite-Canvas 智能画布，支持节点、资产库、工作流和画布编排。", status: "源码复刻", capabilities: ["无限画布", "智能节点", "资产库", "工作流"] },
-  { id: "videoGeneration", label: "视频生成", description: "视频生成入口，右侧工作区预留。", status: "待接入", capabilities: ["文生视频", "图生视频", "视频资产"] },
+  { id: "videoGeneration", label: "视频生成", description: "支持游客配置文生视频、图生视频参数，生成时按需登录。", status: "已接入", capabilities: ["文生视频", "图生视频", "视频资产"] },
   { id: "ppt", label: "PPT文档生成", description: "输入主题生成 PPT 文档，预留任务、状态、历史和下载接口。", status: "Mock 可用", capabilities: ["主题输入", "页数语言", "联网搜索", "历史记录"] },
   { id: "assets", label: "作品中心", description: "管理生成资产、参考文件和可下载交付物。", status: "已接入 Go API", capabilities: ["资产列表", "图片预览", "作品归档"] },
   { id: "apiSettings", label: "API 设置", description: "管理生图平台、请求地址、API Key 和可用模型。", status: "本地配置", capabilities: ["平台列表", "请求地址", "Key 管理", "模型列表"] },
@@ -1492,11 +1536,110 @@ const moduleWorkspace = [...userModules.map(item => [item.id, "user"] as const),
 }, {});
 const currentWorkspace = ref<Workspace>("user");
 const activeModule = ref<ModuleId>("dashboard");
+const browserRoutePath = ref(currentPath());
 const tasks = ref<GenerationTask[]>([]);
 const assets = ref<Asset[]>([]);
+const guestOfficialCases = [
+  { title: "品牌宣传海报", description: "AI 商业视觉与品牌内容案例", image: "/static/fallbacks/inspiration-poster.jpg" },
+  { title: "短视频创意", description: "产品展示与运营短视频案例", image: "/static/fallbacks/inspiration-video.jpg" },
+  { title: "商业 PPT", description: "招商、路演与方案汇报案例", image: "/static/fallbacks/inspiration-ppt.jpg" },
+  { title: "电商视觉", description: "商品主图与活动营销素材", image: "/static/fallbacks/inspiration-ecommerce.jpg" },
+];
 const models = ref<ModelInfo[]>([]);
 const pointAccount = ref<PointAccount | null>(null);
 const model = ref("gpt-image-2");
+const webVideoDraftKey = "zhiqiyun:web:video-guest-draft";
+const webVideoDraftLifetime = 30 * 60 * 1000;
+
+interface WebVideoDraft {
+  prompt: string;
+  firstFrame: string;
+  lastFrame: string;
+  model: string;
+  ratio: string;
+  resolution: string;
+  duration: number;
+  clientRequestId: string;
+  expiresAt: number;
+}
+
+function createVideoClientRequestId() {
+  const cryptoRuntime = globalThis.crypto;
+  if (cryptoRuntime?.randomUUID) return `video_${cryptoRuntime.randomUUID()}`;
+  return `video_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function readWebVideoDraft(): Partial<WebVideoDraft> {
+  try {
+    const stored = uni.getStorageSync(webVideoDraftKey) as Partial<WebVideoDraft> | string | null;
+    const draft = typeof stored === "string" ? JSON.parse(stored) as Partial<WebVideoDraft> : stored;
+    if (!draft || Number(draft.expiresAt || 0) <= Date.now()) {
+      uni.removeStorageSync(webVideoDraftKey);
+      return {};
+    }
+    return draft;
+  } catch {
+    return {};
+  }
+}
+
+const initialWebVideoDraft = readWebVideoDraft();
+const videoPrompt = ref(String(initialWebVideoDraft.prompt || ""));
+const videoFirstFrame = ref(String(initialWebVideoDraft.firstFrame || ""));
+const videoLastFrame = ref(String(initialWebVideoDraft.lastFrame || ""));
+const videoModel = ref(String(initialWebVideoDraft.model || "mock-video"));
+const videoRatio = ref(String(initialWebVideoDraft.ratio || "16:9"));
+const videoResolution = ref(String(initialWebVideoDraft.resolution || "720p"));
+const videoDuration = ref(Number(initialWebVideoDraft.duration || 5));
+const videoClientRequestId = ref(String(initialWebVideoDraft.clientRequestId || createVideoClientRequestId()));
+const videoTask = ref<GenerationTask | null>(null);
+const videoSubmitting = ref(false);
+const videoError = ref("");
+let videoPromptTracked = false;
+let videoGenerationResumedAfterLogin = false;
+const webVideoModels = computed(() => {
+  const available = models.value
+    .map(item => item.code)
+    .filter(code => /video|seedance|veo|sora|wan/i.test(code));
+  return available.length ? available : ["mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"];
+});
+
+function persistWebVideoDraft() {
+  const draft: WebVideoDraft = {
+    prompt: videoPrompt.value,
+    firstFrame: videoFirstFrame.value,
+    lastFrame: videoLastFrame.value,
+    model: videoModel.value,
+    ratio: videoRatio.value,
+    resolution: videoResolution.value,
+    duration: videoDuration.value,
+    clientRequestId: videoClientRequestId.value,
+    expiresAt: Date.now() + webVideoDraftLifetime,
+  };
+  try {
+    uni.setStorageSync(webVideoDraftKey, draft);
+  } catch {
+    // The in-memory refs still preserve the current editing session when storage is unavailable.
+  }
+}
+
+function clearWebVideoDraft() {
+  try {
+    uni.removeStorageSync(webVideoDraftKey);
+  } catch {
+    // Ignore storage failures after the server accepted the task.
+  }
+}
+
+watch(
+  [videoPrompt, videoFirstFrame, videoLastFrame, videoModel, videoRatio, videoResolution, videoDuration],
+  persistWebVideoDraft,
+);
+watch(videoPrompt, value => {
+  if (videoPromptTracked || isLoggedIn.value || !value.trim()) return;
+  videoPromptTracked = true;
+  trackLogin("guest_input_prompt", { module: "video_generation" });
+});
 const worksSearchKeyword = ref("");
 const worksStatusFilter = ref<WorkStatusFilter>("all");
 const worksViewMode = ref<WorkViewMode>("grid");
@@ -1531,8 +1674,43 @@ const newApiProviderDraft = ref<ApiProviderForm>(createApiProviderForm(apiProvid
 const selectedBillingCycle = ref<BillingCycleId>("monthly");
 const wirelessCanvasSrc = "/static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi";
 const wirelessCanvasFrameSrc = ref("");
+const wirelessCanvasFrame = ref<HTMLIFrameElement | null>(null);
 const wirelessCanvasFrameLoaded = ref(false);
 let wirelessCanvasLoadTimer: ReturnType<typeof setTimeout> | null = null;
+const canvasAuthRequestIds = new Set<string>();
+let canvasAuthFlowOpen = false;
+let canvasAuthSource: Window | null = null;
+
+function postCanvasAuth(type: "zhiqiyun:canvas-auth-ready" | "zhiqiyun:canvas-auth-cancelled") {
+  const requestIds = [...canvasAuthRequestIds];
+  if (requestIds.length || type === "zhiqiyun:canvas-auth-cancelled") {
+    (canvasAuthSource || wirelessCanvasFrame.value?.contentWindow)?.postMessage({ type, requestIds, cancelAll: type === "zhiqiyun:canvas-auth-cancelled" }, window.location.origin);
+  }
+  canvasAuthRequestIds.clear();
+  canvasAuthFlowOpen = false;
+}
+
+function handleCanvasAuthMessage(event: MessageEvent) {
+  if (typeof window === "undefined" || event.origin !== window.location.origin || !event.source) return;
+  const expectedSource = wirelessCanvasFrame.value?.contentWindow;
+  if (expectedSource && event.source !== expectedSource) return;
+  canvasAuthSource = event.source as Window;
+  const data = event.data as { type?: string; requestId?: string; action?: "generate_image" | "generate_video" | "upload_image" | "save_work"; canvasId?: string };
+  if (data.type !== "zhiqiyun:canvas-auth-required" || !data.requestId) return;
+  canvasAuthRequestIds.add(data.requestId);
+  if (canvasAuthFlowOpen) return;
+  canvasAuthFlowOpen = true;
+  void requireAuth({
+    action: data.action || "generate_image",
+    route: "/app/wireless-canvas",
+    payload: { canvasId: data.canvasId || "", source: "wireless_canvas" },
+    resume: () => postCanvasAuth("zhiqiyun:canvas-auth-ready"),
+  });
+}
+
+function handleWebAuthCancelled() {
+  postCanvasAuth("zhiqiyun:canvas-auth-cancelled");
+}
 
 function clearWirelessCanvasLoadTimer() {
   if (!wirelessCanvasLoadTimer) return;
@@ -1945,7 +2123,9 @@ const dashboardUsageDays = computed(() => {
   });
 });
 const workspaceTitle = computed(() => ({ user: "用户工作台", agent: "代理商中心", admin: "运营后台" })[currentWorkspace.value]);
-const isRegisterRoute = computed(() => currentPath() === "/register");
+const isRegisterRoute = computed(() => browserRoutePath.value === "/register");
+const isLoginRoute = computed(() => browserRoutePath.value === loginRoute);
+const isGuestLandingRoute = computed(() => browserRoutePath.value === "/");
 const workspaceEyebrow = computed(() => ({ user: "USER WORKSPACE", agent: "AGENT WORKSPACE", admin: "ADMIN WORKSPACE" })[currentWorkspace.value]);
 const workspaceHeroTitle = computed(() => {
   if (currentWorkspace.value === "agent") return "专注客户、佣金和提现";
@@ -1973,12 +2153,32 @@ const metrics = computed(() => {
     { label: "可用积分", value: quota.value }
   ];
 });
+function redirectDesktopBrowserToWorkspace() {
+  if (!hasBrowserWindow() || typeof navigator === "undefined") return false;
+  const userAgent = navigator.userAgent || "";
+  if (/(Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|MicroMessenger)/i.test(userAgent)) return false;
+  const pathname = currentPathname();
+  if (pathname === "/app" || pathname.startsWith("/app/")) {
+    window.location.replace("/");
+    return true;
+  }
+  if (["/", "/login", "/register"].includes(pathname)) {
+    if (pathname !== "/") window.location.replace("/");
+    else return false;
+    return true;
+  }
+  return false;
+}
+
 onMounted(() => {
+  if (redirectDesktopBrowserToWorkspace()) return;
   restoreApiSettings();
   restoreFavoriteWorks();
   syncModuleFromLocation();
   if (hasBrowserWindow()) {
     window.addEventListener("popstate", syncModuleFromLocation);
+    window.addEventListener("message", handleCanvasAuthMessage);
+    window.addEventListener("zhiqiyun:auth-cancelled", handleWebAuthCancelled);
   }
   void restoreAuthenticatedSession();
 });
@@ -1987,6 +2187,8 @@ onBeforeUnmount(() => {
   clearWirelessCanvasLoadTimer();
   if (hasBrowserWindow()) {
     window.removeEventListener("popstate", syncModuleFromLocation);
+    window.removeEventListener("message", handleCanvasAuthMessage);
+    window.removeEventListener("zhiqiyun:auth-cancelled", handleWebAuthCancelled);
   }
 });
 
@@ -2001,6 +2203,7 @@ function restoreFavoriteWorks() {
 
 async function restoreAuthenticatedSession() {
   const path = currentPath();
+  browserRoutePath.value = path;
   const pathname = currentPathname();
   if (hasBrowserWindow() && isAdminPath(pathname)) {
     window.location.replace("/admin/");
@@ -2009,6 +2212,15 @@ async function restoreAuthenticatedSession() {
   const token = authService.storage.getToken();
   if (!token || path === loginRoute || isRegisterRoute.value) {
     isLoggedIn.value = false;
+    if (!token && path !== loginRoute && !isRegisterRoute.value) {
+      if (path === "/") trackLogin("guest_view_home");
+      try {
+        models.value = await businessSdk.models.list();
+        model.value = models.value.find(item => item.code === "gpt-image-2")?.code || models.value[0]?.code || model.value;
+      } catch {
+        models.value = [];
+      }
+    }
     return;
   }
   try {
@@ -2048,6 +2260,142 @@ async function refresh() {
   model.value = models.value.find(item => item.code === "gpt-image-2")?.code || models.value[0]?.code || model.value;
 }
 
+function openGuestLandingModule(payload: { module: "videoGeneration" | "wirelessCanvas" | "ppt" | "agents"; prompt?: string }) {
+  if (payload.prompt && payload.module === "videoGeneration") videoPrompt.value = payload.prompt;
+  trackLogin("guest_open_creator", { module: payload.module });
+  selectModule(payload.module);
+}
+
+async function guestAwareRefresh() {
+  if (isLoggedIn.value) {
+    await refresh();
+    return;
+  }
+  try {
+    models.value = await businessSdk.models.list();
+  } catch {
+    models.value = [];
+  }
+}
+
+function waitForVideoPoll(delay = 2000) {
+  return new Promise<void>(resolve => setTimeout(resolve, delay));
+}
+
+async function pollWebVideoTask(taskId: string) {
+  const terminal = new Set(["SUCCEEDED", "COMPLETED", "FAILED", "ERROR", "CANCELLED"]);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    await waitForVideoPoll();
+    try {
+      const task = await apiClient.request<GenerationTask>(`/api/v1/generation-tasks/${encodeURIComponent(taskId)}`, {
+        auth: "required",
+      });
+      videoTask.value = task;
+      if (terminal.has(String(task.status).toUpperCase())) {
+        if (["FAILED", "ERROR", "CANCELLED"].includes(String(task.status).toUpperCase())) {
+          videoError.value = `视频任务${task.status === "CANCELLED" ? "已取消" : "生成失败"}`;
+        } else {
+          await guestAwareRefresh();
+        }
+        return;
+      }
+    } catch (error) {
+      videoError.value = errorMessage(error, "任务状态更新失败，请稍后到作品中心查看");
+      return;
+    }
+  }
+  videoError.value = "任务仍在处理中，可稍后到作品中心查看进度";
+}
+
+async function submitWebVideoGeneration() {
+  if (videoSubmitting.value) return;
+  const prompt = videoPrompt.value.trim();
+  if (!prompt) {
+    videoError.value = "请先填写视频描述";
+    return;
+  }
+  persistWebVideoDraft();
+  if (!isLoggedIn.value) {
+    trackLogin("guest_click_generate", { mode: "video" });
+    void requireAuth({
+      action: "generate_video",
+      route: "/app/video-generation",
+      payload: {
+        model: videoModel.value,
+        ratio: videoRatio.value,
+        resolution: videoResolution.value,
+        duration: videoDuration.value,
+        hasFirstFrame: Boolean(videoFirstFrame.value),
+        hasLastFrame: Boolean(videoLastFrame.value),
+        clientRequestId: videoClientRequestId.value,
+      },
+      resume: () => {
+        videoGenerationResumedAfterLogin = true;
+        return submitWebVideoGeneration();
+      },
+    });
+    return;
+  }
+
+  videoSubmitting.value = true;
+  videoError.value = "";
+  const clientRequestId = videoClientRequestId.value;
+  try {
+    const firstFrame = videoFirstFrame.value.trim();
+    const lastFrame = videoLastFrame.value.trim();
+    const task = await apiClient.request<GenerationTask, Record<string, unknown>>("/api/v1/generation-tasks", {
+      method: "POST",
+      auth: "required",
+      retryOnUnauthorized: false,
+      headers: { "Idempotency-Key": clientRequestId },
+      body: {
+        clientRequestId,
+        module_code: "video_generation",
+        type: firstFrame ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO",
+        prompt,
+        model: videoModel.value || "mock-video",
+        params: {
+          duration: videoDuration.value,
+          resolution: videoResolution.value,
+          ratio: videoRatio.value,
+          aspect_ratio: videoRatio.value,
+          ...(firstFrame ? {
+            image_url: firstFrame,
+            image_urls: [firstFrame],
+            first_frame: firstFrame,
+            referenceImages: [{ name: "first-frame", url: firstFrame }],
+          } : {}),
+          ...(lastFrame ? { last_frame: lastFrame } : {}),
+        },
+      },
+    });
+    videoTask.value = task;
+    if (videoGenerationResumedAfterLogin) {
+      trackLogin("generation_success_after_login", { module: "video_generation" });
+      videoGenerationResumedAfterLogin = false;
+    }
+    clearWebVideoDraft();
+    videoClientRequestId.value = createVideoClientRequestId();
+    void pollWebVideoTask(task.id);
+  } catch (error) {
+    videoError.value = errorMessage(error, "视频生成任务提交失败");
+  } finally {
+    videoSubmitting.value = false;
+  }
+}
+
+function openWebWorksLogin() {
+  void requireAuth({
+    action: "open_member_center",
+    route: currentPath() || "/app/works",
+    payload: { module: "assets" },
+    resume: async () => {
+      await refresh();
+      selectModule("assets");
+    },
+  });
+}
+
 async function showDashboardNotifications() {
   try {
     const dashboard = await api<UserDashboardResponse>("/api/v1/user/dashboard");
@@ -2076,6 +2424,10 @@ async function showMembershipPlans() {
 }
 
 async function createMembershipOrder(plan: MembershipPlanCard) {
+  if (!isLoggedIn.value) {
+    await requireAuth({ action: "open_member_center", route: currentPath(), payload: { planId: plan.id }, resume: () => createMembershipOrder(plan) });
+    return;
+  }
   if (plan.custom) {
     uni.showToast({ title: "企业版请联系商务创建专属报价", icon: "none" });
     return;
@@ -2098,6 +2450,10 @@ async function createMembershipOrder(plan: MembershipPlanCard) {
 }
 
 async function createIdentityOrder(pack: IdentityPackage) {
+  if (!isLoggedIn.value) {
+    await requireAuth({ action: "recharge", route: currentPath(), payload: { packageId: pack.id }, resume: () => createIdentityOrder(pack) });
+    return;
+  }
   try {
     await api(pack.endpoint, {
       method: "POST",
@@ -2361,6 +2717,11 @@ function testApiConnection() {
     : "请求地址和模型已填写，但还缺少 API Key";
 }
 function selectModule(id: ModuleId) {
+  if (!isLoggedIn.value && ["apiSettings", "usage", "geo", "agentHome"].includes(id)) {
+    const action = id === "usage" ? "open_wallet" : id === "geo" ? "create_agent" : "open_member_center";
+    void requireAuth({ action, route: currentPath(), payload: { module: id }, resume: () => selectModule(id) });
+    return;
+  }
   activeModule.value = id;
   currentWorkspace.value = moduleWorkspace[id] || currentWorkspace.value;
   isModuleDrawerOpen.value = false;
@@ -2384,6 +2745,7 @@ function syncModuleFromLocation() {
   }
 
   const path = currentPath();
+  browserRoutePath.value = path;
   registerInviteCode.value = currentSearchParams().get("invite") || "";
   if (isAdminPath(currentPathname())) {
     window.location.replace("/admin/");
@@ -2400,8 +2762,9 @@ function syncModuleFromLocation() {
   const nextModule = routeModules[path] || "dashboard";
   activeModule.value = nextModule;
   currentWorkspace.value = moduleWorkspace[nextModule] || currentWorkspace.value;
-  if (!routeModules[path] && path !== moduleRoutes.dashboard) {
+  if (!routeModules[path] && path !== moduleRoutes.dashboard && path !== "/") {
     window.history.replaceState({ module: "dashboard" }, "", moduleRoutes.dashboard);
+    browserRoutePath.value = moduleRoutes.dashboard;
   }
 }
 function pushModuleRoute(id: ModuleId) {
@@ -2414,6 +2777,7 @@ function pushModuleRoute(id: ModuleId) {
   const path = moduleRoutes[id];
   if (!path || window.location.pathname === path) return;
   window.history.pushState({ module: id }, "", path);
+  browserRoutePath.value = path;
 }
 
 function applyAuth(auth: AuthResponse) {
@@ -2442,6 +2806,7 @@ function moduleFromAuth(auth: AuthResponse): ModuleId {
 function defaultRouteFromAuth(auth: AuthResponse) {
   const route = String(auth.defaultRoute || "").trim();
   if (!route.startsWith("/") || route.startsWith("//")) return "";
+  if (route === "/app" || route.startsWith("/app/")) return `/workspace${route.slice(4)}`;
   if (route.startsWith("/admin") || route.startsWith("/app") || route.startsWith("/agent")) return route;
   return "";
 }
@@ -2467,6 +2832,14 @@ function redirectAfterAuth(auth: AuthResponse) {
     return;
   }
 
+  if (pendingActions.get()) {
+    applyAuth(auth);
+    const pending = pendingActions.get();
+    window.history.replaceState({ auth: "resumed" }, "", pending?.route.startsWith("/app") ? pending.route : "/app");
+    void refresh();
+    void resumePendingAction();
+    return;
+  }
   const defaultRoute = defaultRouteFromAuth(auth);
   if (defaultRoute) {
     window.location.replace(defaultRoute);
@@ -2481,7 +2854,7 @@ function redirectAfterAuth(auth: AuthResponse) {
     window.location.replace("/agent/");
     return;
   }
-  window.location.replace("/app");
+  window.location.replace("/workspace");
 }
 
 function requestWechatMiniProgramCode() {
@@ -2807,6 +3180,7 @@ function performLogout(showMessage = true) {
   isModuleDrawerOpen.value = false;
   if (hasBrowserWindow()) {
     window.history.pushState({ loggedOut: true }, "", loginRoute);
+    browserRoutePath.value = loginRoute;
   }
   if (showMessage) uni.showToast({ title: "已退出", icon: "success" });
 }
@@ -3314,9 +3688,144 @@ async function loginWithWechatPhoneNumber(event: unknown) {
   background: #f8fafc;
 }
 
-.video-generation-blank {
-  min-height: calc(100vh - 72px);
+.video-generation-scroll {
+  height: calc(100vh - 72px);
   background: #f8fafc;
+}
+
+.web-video-workbench {
+  width: min(920px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 36px 0 64px;
+  color: #0f172a;
+}
+
+.web-video-hero {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.web-video-hero text:first-child {
+  font-size: 30px;
+  font-weight: 900;
+}
+
+.web-video-hero text:last-child {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.web-video-form,
+.web-video-result {
+  display: grid;
+  gap: 18px;
+  padding: 26px;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, .07);
+}
+
+.web-video-form label,
+.web-video-form > view {
+  display: grid;
+  gap: 9px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.web-video-form textarea,
+.web-video-form input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.web-video-form textarea {
+  min-height: 130px;
+  padding: 14px;
+}
+
+.web-video-form input {
+  height: 44px;
+  padding: 0 14px;
+}
+
+.web-video-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.web-video-option {
+  min-width: 74px;
+  margin: 0;
+  padding: 8px 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.web-video-option::after,
+.web-video-submit::after {
+  border: 0;
+}
+
+.web-video-option.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.web-video-submit {
+  width: 100%;
+  margin: 4px 0 0;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.web-video-submit[disabled] {
+  opacity: .5;
+}
+
+.web-video-error {
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.web-video-result {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: center;
+  margin-top: 18px;
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .web-video-workbench {
+    width: min(100% - 24px, 920px);
+    padding-top: 22px;
+  }
+
+  .web-video-form {
+    padding: 18px;
+  }
+
+  .web-video-result {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ppt-generation-page {

@@ -1,4 +1,63 @@
 const params = new URLSearchParams(location.search);
+const nativeCanvasFetch = window.fetch.bind(window);
+const canvasAuthWaiters = new Map();
+const canvasProtectedRequest = /^(?:\/api\/(?:canvas-(?:image-tasks|video|llm|comfy-tasks)|ai\/upload|upload|cloud-video\/upload|runninghub\/|angle\/generate|ms\/generate|canvases(?:\/|$))|\/generate(?:\?|$))/;
+
+function canvasProtectedAction(path, method){
+    if (/upload/i.test(path)) return 'upload_image';
+    if (/video/i.test(path)) return 'generate_video';
+    if (/canvases/i.test(path) && method !== 'GET') return 'save_work';
+    return 'generate_image';
+}
+
+function waitForCanvasAuth(path, method){
+    const requestId = `canvas_auth_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+    return new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+            canvasAuthWaiters.delete(requestId);
+            reject(new Error('LOGIN_TIMEOUT'));
+        }, 30 * 60 * 1000);
+        canvasAuthWaiters.set(requestId, {resolve, reject, timeout});
+        window.parent.postMessage({
+            type: 'zhiqiyun:canvas-auth-required',
+            requestId,
+            action: canvasProtectedAction(path, method),
+            canvasId: params.get('id') || '',
+        }, window.location.origin);
+    });
+}
+
+window.addEventListener('message', event => {
+    if (event.origin !== window.location.origin || event.source !== window.parent) return;
+    const data = event.data || {};
+    if (data.type !== 'zhiqiyun:canvas-auth-ready' && data.type !== 'zhiqiyun:canvas-auth-cancelled') return;
+    const ids = data.cancelAll ? [...canvasAuthWaiters.keys()] : Array.isArray(data.requestIds) ? data.requestIds : [data.requestId];
+    ids.filter(Boolean).forEach(requestId => {
+        const waiter = canvasAuthWaiters.get(requestId);
+        if (!waiter) return;
+        window.clearTimeout(waiter.timeout);
+        canvasAuthWaiters.delete(requestId);
+        if (data.type === 'zhiqiyun:canvas-auth-ready') waiter.resolve();
+        else waiter.reject(new Error('LOGIN_CANCELLED'));
+    });
+});
+
+window.fetch = async function canvasAuthenticatedFetch(input, init = {}) {
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input && input.url || '';
+    const target = new URL(rawUrl, window.location.origin);
+    const method = String(init.method || (input && input.method) || 'GET').toUpperCase();
+    const publicCanvasRead = /^\/api\/canvases(?:\/|$)/.test(target.pathname) && method === 'GET';
+    if (target.origin !== window.location.origin || !canvasProtectedRequest.test(target.pathname) || publicCanvasRead) return nativeCanvasFetch(input, init);
+    let token = String(window.localStorage.getItem('token') || '').replace(/^"|"$/g, '');
+    if (!token) {
+        await waitForCanvasAuth(`${target.pathname}${target.search}`, method);
+        token = String(window.localStorage.getItem('token') || '').replace(/^"|"$/g, '');
+    }
+    if (!token) throw new Error('LOGIN_REQUIRED');
+    const headers = new Headers(init.headers || (input && input.headers) || {});
+    if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+    return nativeCanvasFetch(input, {...init, headers});
+};
 const canvasId = params.get('id') || '';
 const sourceProjectId = params.get('project') || '';
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';

@@ -202,6 +202,8 @@
       <el-skeleton v-if="loading" :rows="9" animated />
       <el-result v-else-if="loadError" icon="error" title="页面加载失败" :sub-title="loadError"><template #extra><el-button type="primary" @click="loadSection">重新加载</el-button></template></el-result>
       <template v-else>
+        <EnterpriseIntegrationCenter v-if="moduleId === 'enterpriseIntegrations'" :items="sectionItems" :summary="sectionSummary" />
+        <template v-else>
         <div class="enterprise-section-summary">
           <article v-for="item in sectionSummaryCards" :key="item.key"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>{{ item.hint }}</small></article>
         </div>
@@ -223,6 +225,7 @@
           </el-table>
           <el-empty v-else description="暂无数据" :image-size="96" />
         </section>
+        </template>
       </template>
     </template>
 
@@ -289,8 +292,10 @@ import { computed, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowDown, ArrowLeft, Download, Plus, Refresh, Search } from "@element-plus/icons-vue";
 import { createAdminEnterprise, exportAdminEnterprises, getAdminEnterprise, getAdminEnterpriseSection, listAdminEnterpriseCertifications, listAdminEnterprises, mutateAdminEnterprise, updateAdminEnterprise } from "../../api/adminEnterprise";
+import { modulePermission } from "../../config/moduleRegistry";
 import type { AdminEnterpriseCreateRequest, AdminEnterpriseDetail, AdminEnterpriseFilters, AdminEnterpriseListItem, AdminEnterpriseListQuery, AdminEnterpriseListResult, AdminEnterpriseMutationRequest, AdminEnterpriseSectionResult } from "../../types/adminEnterprise";
 import EnterprisePrivacyBanner from "./EnterprisePrivacyBanner.vue";
+import EnterpriseIntegrationCenter from "./EnterpriseIntegrationCenter.vue";
 import EnterpriseStatusTag from "./EnterpriseStatusTag.vue";
 
 const props = defineProps<{ moduleId: string; routePath: string; permissions: string[]; currentRole?: string }>();
@@ -321,38 +326,33 @@ const createForm = reactive<AdminEnterpriseCreateRequest>({ name: "", enterprise
 type EnterpriseOperationForm = AdminEnterpriseMutationRequest & { limitsText: string };
 const operationForm = reactive<EnterpriseOperationForm>({ requestId: "", reason: "", status: "APPROVED", reviewComment: "", planCode: "", expiresAt: "", seatLimit: 20, pointDelta: 0, sourceAgentId: "", operationCenterId: "", name: "", industry: "", companySize: "", moduleCode: "", modelName: "", limits: {}, limitsText: "{}" });
 
-const modulePermissions: Record<string, string> = {
-  enterpriseList: "enterprise:list", enterpriseDetail: "enterprise:detail", enterpriseCertifications: "enterprise:certification:review",
-  enterpriseMembers: "enterprise:member:view", enterprisePackage: "enterprise:package:view", enterpriseCompute: "enterprise:compute:view",
-  enterpriseTransactions: "enterprise:transaction:view", enterpriseOrders: "enterprise:order:view", enterpriseAiCapabilities: "enterprise:ai:view",
-  enterpriseAiEmployees: "enterprise:employee:view", enterpriseKnowledgeBases: "enterprise:knowledge:view", enterpriseAttribution: "enterprise:attribution:view",
-  enterpriseRelationships: "enterprise:attribution:view", enterpriseRisk: "enterprise:risk:view", enterpriseAuditLogs: "enterprise:audit:view"
+const pageMeta: Record<string, { title: string; description: string; phase: string; sensitive?: boolean }> = {
+  enterpriseCertifications: { title: "企业认证审核", description: "审核企业主体资质，支持通过、驳回和审计追溯", phase: "第二阶段" },
+  enterpriseMembers: { title: "企业成员与组织", description: "查看成员、席位占用和组织架构统计", phase: "第二阶段", sensitive: true },
+  enterprisePackage: { title: "企业套餐配置", description: "管理套餐、到期时间和成员席位", phase: "第二阶段" },
+  enterpriseCompute: { title: "企业算力账户", description: "查看并审计企业算力余额及调整记录", phase: "第二阶段" },
+  enterpriseTransactions: { title: "充值与消费明细", description: "按服务端单位查看企业充值、消费与余额变化", phase: "第二阶段" },
+  enterpriseOrders: { title: "企业订单", description: "查看企业套餐、算力与服务订单", phase: "第二阶段" },
+  enterpriseAiCapabilities: { title: "模型与 AI 能力", description: "查看企业已开通模型和能力范围", phase: "第三阶段" },
+  enterpriseAiEmployees: { title: "企业 AI 员工", description: "仅展示 AI 员工数量和运行状态统计", phase: "第三阶段", sensitive: true },
+  enterpriseKnowledgeBases: { title: "知识库概览", description: "仅展示知识库数量、容量与使用统计", phase: "第三阶段", sensitive: true },
+  enterpriseAttribution: { title: "客户归属", description: "查看和发起企业客户归属变更", phase: "第三阶段" },
+  enterpriseRelationships: { title: "代理商与运营中心关系", description: "查看企业来源代理商和运营中心关系", phase: "第三阶段" },
+  enterpriseIntegrations: { title: "企业集成中心", description: "查看企业 Connector、授权方式与运行状态，不返回密钥明文", phase: "第三阶段", sensitive: true },
+  enterpriseRisk: { title: "企业风控与禁用", description: "查看风险记录，暂停或恢复企业服务", phase: "第四阶段" },
+  enterpriseAuditLogs: { title: "企业审计日志", description: "追踪平台管理员对企业数据的全部写操作", phase: "第四阶段" }
 };
 
-const pageMeta: Record<string, { title: string; description: string; phase: string; permission: string; sensitive?: boolean }> = {
-  enterpriseCertifications: { title: "企业认证审核", description: "审核企业主体资质，支持通过、驳回和审计追溯", phase: "第二阶段", permission: "enterprise:certification:review" },
-  enterpriseMembers: { title: "企业成员与组织", description: "查看成员、席位占用和组织架构统计", phase: "第二阶段", permission: "enterprise:member:view", sensitive: true },
-  enterprisePackage: { title: "企业套餐配置", description: "管理套餐、到期时间和成员席位", phase: "第二阶段", permission: "enterprise:package:view" },
-  enterpriseCompute: { title: "企业算力账户", description: "查看并审计企业算力余额及调整记录", phase: "第二阶段", permission: "enterprise:compute:view" },
-  enterpriseTransactions: { title: "充值与消费明细", description: "按服务端单位查看企业充值、消费与余额变化", phase: "第二阶段", permission: "enterprise:transaction:view" },
-  enterpriseOrders: { title: "企业订单", description: "查看企业套餐、算力与服务订单", phase: "第二阶段", permission: "enterprise:order:view" },
-  enterpriseAiCapabilities: { title: "模型与 AI 能力", description: "查看企业已开通模型和能力范围", phase: "第三阶段", permission: "enterprise:ai:view" },
-  enterpriseAiEmployees: { title: "企业 AI 员工", description: "仅展示 AI 员工数量和运行状态统计", phase: "第三阶段", permission: "enterprise:employee:view", sensitive: true },
-  enterpriseKnowledgeBases: { title: "知识库概览", description: "仅展示知识库数量、容量与使用统计", phase: "第三阶段", permission: "enterprise:knowledge:view", sensitive: true },
-  enterpriseAttribution: { title: "客户归属", description: "查看和发起企业客户归属变更", phase: "第三阶段", permission: "enterprise:attribution:view" },
-  enterpriseRelationships: { title: "代理商与运营中心关系", description: "查看企业来源代理商和运营中心关系", phase: "第三阶段", permission: "enterprise:attribution:view" },
-  enterpriseRisk: { title: "企业风控与禁用", description: "查看风险记录，暂停或恢复企业服务", phase: "第四阶段", permission: "enterprise:risk:view" },
-  enterpriseAuditLogs: { title: "企业审计日志", description: "追踪平台管理员对企业数据的全部写操作", phase: "第四阶段", permission: "enterprise:audit:view" }
-};
-
-const detailTabs = [
+const allDetailTabs = [
   { label: "基本资料", moduleId: "enterpriseDetail", suffix: "" }, { label: "认证资料", moduleId: "enterpriseCertifications", suffix: "/certifications" },
   { label: "成员", moduleId: "enterpriseMembers", suffix: "/members" }, { label: "组织架构", moduleId: "enterpriseMembers", suffix: "/members?view=organizations" }, { label: "套餐", moduleId: "enterprisePackage", suffix: "/package" },
   { label: "算力", moduleId: "enterpriseCompute", suffix: "/compute" }, { label: "订单", moduleId: "enterpriseOrders", suffix: "/orders" },
   { label: "AI 能力", moduleId: "enterpriseAiCapabilities", suffix: "/ai-capabilities" }, { label: "AI 员工", moduleId: "enterpriseAiEmployees", suffix: "/ai-employees" },
   { label: "知识库概览", moduleId: "enterpriseKnowledgeBases", suffix: "/knowledge-bases" }, { label: "客户归属", moduleId: "enterpriseAttribution", suffix: "/attribution" },
-  { label: "风控", moduleId: "enterpriseRisk", suffix: "/risk" }, { label: "审计日志", moduleId: "enterpriseAuditLogs", suffix: "/audit-logs" }
+  { label: "集成", moduleId: "enterpriseIntegrations", suffix: "/integrations" }, { label: "风控", moduleId: "enterpriseRisk", suffix: "/risk" }, { label: "审计日志", moduleId: "enterpriseAuditLogs", suffix: "/audit-logs" }
 ];
+
+const detailTabs = computed(() => allDetailTabs.filter((tab) => can(modulePermission(tab.moduleId) || "enterprise:detail")));
 
 const enterpriseId = computed(() => {
   const match = props.routePath.match(/^\/admin\/enterprises\/([^/?]+)/)?.[1] || "";
@@ -361,8 +361,8 @@ const enterpriseId = computed(() => {
 const isOrganizationView = computed(() => props.moduleId === "enterpriseMembers" && new URLSearchParams(props.routePath.split("?")[1] || "").get("view") === "organizations");
 const isListPage = computed(() => props.moduleId === "enterpriseList");
 const isDetailPage = computed(() => props.moduleId === "enterpriseDetail");
-const currentPageMeta = computed(() => isOrganizationView.value ? { title: "组织架构", description: "查看企业组织节点、上下级关系与成员分布", phase: "第二阶段", permission: "enterprise:member:view" } : pageMeta[props.moduleId] || { title: "企业管理", description: "企业业务管理", phase: "第一阶段", permission: modulePermissions[props.moduleId] || "enterprise:detail" });
-const canAccessCurrentPage = computed(() => can(modulePermissions[props.moduleId] || "enterprise:detail"));
+const currentPageMeta = computed(() => isOrganizationView.value ? { title: "组织架构", description: "查看企业组织节点、上下级关系与成员分布", phase: "第二阶段" } : pageMeta[props.moduleId] || { title: "企业管理", description: "企业业务管理", phase: "第一阶段" });
+const canAccessCurrentPage = computed(() => can(modulePermission(props.moduleId) || "enterprise:detail"));
 const statCards = computed(() => [
   { label: "企业总数", value: listResult.value.stats.total, hint: "平台企业客户", tone: "blue" },
   { label: "已认证企业", value: listResult.value.stats.certified, hint: "完成主体认证", tone: "green" },
@@ -380,7 +380,7 @@ const sectionEnterpriseStatus = computed(() => String(sectionResult.value.summar
 const sectionNameMap: Record<string, string> = {
   enterpriseCertifications: "certifications", enterpriseMembers: "members", enterprisePackage: "package", enterpriseCompute: "compute",
   enterpriseTransactions: "transactions", enterpriseOrders: "orders", enterpriseAiCapabilities: "ai-capabilities", enterpriseAiEmployees: "ai-employees",
-  enterpriseKnowledgeBases: "knowledge-bases", enterpriseAttribution: "attribution", enterpriseRelationships: "relationships", enterpriseRisk: "risk", enterpriseAuditLogs: "audit-logs"
+  enterpriseKnowledgeBases: "knowledge-bases", enterpriseAttribution: "attribution", enterpriseRelationships: "relationships", enterpriseIntegrations: "integrations", enterpriseRisk: "risk", enterpriseAuditLogs: "audit-logs"
 };
 const sectionColumnMap: Record<string, Array<{ key: string; label: string; width?: number }>> = {
   enterpriseCertifications: [{ key: "enterpriseName", label: "企业", width: 180 }, { key: "legalName", label: "认证主体", width: 180 }, { key: "unifiedSocialCreditCode", label: "统一社会信用代码", width: 180 }, { key: "legalRepresentativeName", label: "法定代表人" }, { key: "status", label: "审核状态" }, { key: "createdAt", label: "提交时间", width: 170 }, { key: "reviewComment", label: "审核意见", width: 180 }],
@@ -403,6 +403,7 @@ const sectionItems = computed<Record<string, unknown>[]>(() => {
   const organizations = sectionResult.value.summary.organizations;
   return Array.isArray(organizations) ? organizations.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
 });
+const sectionSummary = computed<Record<string, unknown>>(() => sectionResult.value.summary);
 const summaryLabelMap: Record<string, string> = { total: "总数", pending: "待审核", approved: "已通过", rejected: "已驳回", memberCount: "成员数", activeMembers: "活跃成员", seatLimit: "成员席位", organizationCount: "组织节点", seatUsed: "已用席位", balance: "算力余额", frozen: "冻结算力", cashBalanceCents: "现金余额（分）", orderCount: "订单数", amountCents: "订单金额（分）", enabledCount: "已开通能力", configuredCount: "已配置能力", active: "运行中", knowledgeBaseCount: "知识库数", documentCount: "文档数", chunkCount: "切片数", storageBytes: "存储字节", changeRequestCount: "归属变更记录", riskRecordCount: "风险记录", enterpriseStatus: "企业状态" };
 const sectionSummaryCards = computed(() => Object.entries(sectionResult.value.summary).filter(([, value]) => typeof value !== "object" && typeof value !== "boolean").slice(0, 4).map(([key, value]) => ({ key, label: summaryLabelMap[key] || key, value: formatSectionCell(value, key), hint: sectionResult.value.unit ? `单位：${sectionResult.value.unit}` : "企业范围汇总" })));
 const operationTitle = computed(() => ({ "profile/update": "编辑企业资料", "certifications/review": "审核企业认证", "package/adjust": "调整企业套餐", "seats/adjust": "调整成员席位", "compute/adjust": "调整企业算力", recharge: "企业充值", "ai-capabilities/configure": "配置企业 AI 能力", "attribution/change": "变更企业归属", "risk/disable": "暂停企业服务", "risk/restore": "恢复企业服务" }[operationAction.value] || "企业操作"));

@@ -2,7 +2,8 @@
   <el-config-provider :size="currentElementSize">
   <ConnectorAuthorizationCenter v-if="isConnectorAuthorizationRoute" />
   <FeishuConnectorSetup v-else-if="isFeishuConnectorSetupRoute" />
-  <section v-else-if="isAuthRoute" class="admin-auth-shell">
+  <WebLoginPage v-else-if="isLoginRoute" :register-href="authRegisterHref" @authenticated="handleWebLoginAuthenticated" />
+  <section v-else-if="isRegisterRoute" class="admin-auth-shell">
     <div class="admin-auth-card">
       <div class="admin-auth-brand">
         <img :src="xianzhiLogo" alt="知启云 AI" />
@@ -38,29 +39,14 @@
           <span>邀请码</span>
           <input v-model.trim="registerForm.inviteCode" autocomplete="off" placeholder="可选，代理邀请链接会自动带入" />
         </label>
+        <label class="admin-auth-check">
+          <input v-model="registerAgreementAccepted" type="checkbox" />
+          <span>我已阅读并同意《用户协议》和《隐私政策》</span>
+        </label>
         <button class="admin-auth-submit" type="submit" :disabled="authSubmitting">{{ authSubmitting ? "注册中..." : "注册并进入工作台" }}</button>
-        <a class="admin-auth-link" href="/login">已有账号，去登录</a>
+        <a class="admin-auth-link" :href="authLoginHref">已有账号，去登录</a>
       </form>
 
-      <form v-else class="admin-auth-form" @submit.prevent="submitLogin">
-        <label>
-          <span>邮箱</span>
-          <input v-model.trim="loginForm.email" autocomplete="email" placeholder="demo@xianzhi.ai" />
-        </label>
-        <label>
-          <span>密码</span>
-          <input v-model="loginForm.password" autocomplete="current-password" type="password" placeholder="请输入密码" />
-        </label>
-        <label class="admin-auth-check">
-          <input v-model="loginForm.remember" type="checkbox" />
-          <span>保持登录</span>
-        </label>
-        <button class="admin-auth-submit" type="submit" :disabled="authSubmitting">{{ authSubmitting ? "登录中..." : "登录" }}</button>
-        <button class="admin-auth-wechat" type="button" :disabled="wechatAuthSubmitting" @click="loginWithWeChatMiniProgram">
-          {{ wechatAuthSubmitting ? "微信授权中..." : "微信小程序登录" }}
-        </button>
-        <a class="admin-auth-link" href="/register">没有账号，通过邀请码注册</a>
-      </form>
     </div>
   </section>
   <el-container v-else-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'user-agent-figma-shell': isUserConsole && store.activeModuleId === 'userAgentCenter', 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
@@ -83,7 +69,7 @@
           </button>
           <div class="collapsed-flyout" role="menu">
             <strong>{{ group.title }}</strong>
-            <button v-for="item in group.items" :key="item.id" :class="{ 'is-active': item.id === store.activeModuleId }" type="button" role="menuitem" @click.stop="selectAdminModule(item.id)">
+            <button v-for="item in group.items" :key="item.id" :class="{ 'is-active': item.id === activeSidebarModuleId }" type="button" role="menuitem" @click.stop="selectAdminModule(item.id)">
               <el-icon><component :is="iconFor(item.id)" /></el-icon>
               <span>{{ item.title }}</span>
             </button>
@@ -100,7 +86,7 @@
           <span class="user-sidebar-menu-title">{{ item.title }}</span>
         </el-menu-item>
       </el-menu>
-      <el-menu v-else class="sidebar-menu" :default-active="store.activeModuleId" @select="selectAdminModule">
+      <el-menu v-else class="sidebar-menu" :default-active="activeSidebarModuleId" @select="selectAdminModule">
         <el-sub-menu v-for="group in visibleModuleGroups" :key="group.id" :index="group.id">
           <template #title>
             <el-icon><component :is="group.icon" /></el-icon>
@@ -114,6 +100,13 @@
       </el-menu>
 
       <aside v-if="isUserConsole" class="sidebar-plan-card">
+        <template v-if="isGuestUser">
+          <span>当前身份</span>
+          <div class="sidebar-plan-title"><strong>游客</strong><em>体验中</em></div>
+          <small>登录后查看会员、额度和创作记录</small>
+          <button type="button" @click="openWorkspaceLogin">登录后继续</button>
+        </template>
+        <template v-else>
         <span>当前套餐</span>
         <div class="sidebar-plan-title">
           <strong>{{ sidebarPlan.name }}</strong>
@@ -124,6 +117,7 @@
         <span>可用点数</span>
         <strong class="sidebar-plan-points">{{ sidebarPlan.availableText }} <small>/ {{ sidebarPlan.totalText }}</small></strong>
         <button type="button" @click="selectAdminModule('userMembership')">去充值</button>
+        </template>
       </aside>
     </el-aside>
     <el-container class="admin-workspace">
@@ -135,7 +129,8 @@
         </div>
         <div class="mobile-admin-actions">
           <el-tag :type="store.error ? 'danger' : 'success'" effect="light">{{ store.error ? "API ERROR" : "API ONLINE" }}</el-tag>
-          <el-dropdown trigger="click" @command="handleAccountCommand">
+          <el-button v-if="isGuestUser" class="mobile-account-button" :icon="UserFilled" circle aria-label="登录" @click="openWorkspaceLogin" />
+          <el-dropdown v-else trigger="click" @command="handleAccountCommand">
             <el-button class="mobile-account-button" :icon="UserFilled" circle aria-label="账号操作" />
             <template #dropdown>
               <el-dropdown-menu>
@@ -160,7 +155,7 @@
           </div>
         </div>
         <div class="header-actions">
-          <el-input v-model="searchKeyword" class="header-search" :prefix-icon="Search" clearable :placeholder="store.activeModuleId === 'userAgentCenter' ? '搜索智能体名称或描述...' : '搜索当前模块'" />
+          <el-input v-model="globalSearchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="全局搜索菜单与业务记录（Ctrl K）" @focus="commandPaletteOpen = true" @keydown.enter="commandPaletteOpen = true" />
           <el-button :icon="Refresh" circle :loading="store.loading" @click="() => store.loadActiveModule()" />
           <el-dropdown trigger="click" @command="setElementSize">
             <el-button class="size-button">
@@ -174,7 +169,10 @@
             </template>
           </el-dropdown>
           <el-tag :type="store.error ? 'danger' : 'success'" effect="light">{{ store.error ? "API ERROR" : "API ONLINE" }}</el-tag>
-          <el-dropdown trigger="click" @command="handleAccountCommand">
+          <el-button v-if="isGuestUser" class="account-button" @click="openWorkspaceLogin">
+            <el-icon><UserFilled /></el-icon><span class="account-button-copy"><strong>游客</strong><small>点击登录</small></span>
+          </el-button>
+          <el-dropdown v-else trigger="click" @command="handleAccountCommand">
             <el-button class="account-button">
               <el-icon><UserFilled /></el-icon>
               <span class="account-button-copy">
@@ -220,24 +218,14 @@
         <el-alert v-if="store.error" :title="store.error" type="error" show-icon class="admin-alert" />
         <el-skeleton v-if="store.loading" :rows="10" animated />
         <section v-else class="page-stack">
-          <section v-if="searchKeyword.trim()" class="global-search-panel">
-            <div class="global-search-head">
-              <div><strong>搜索结果</strong><small>关键词：{{ searchKeyword.trim() }}</small></div>
-              <el-button size="small" @click="searchKeyword = ''">清空</el-button>
-            </div>
-            <div class="global-search-grid">
-              <article class="global-search-card">
-                <span>模块入口</span>
-                <button v-for="item in globalModuleResults" :key="item.id" type="button" @click="selectAdminModule(item.id)"><strong>{{ item.title }}</strong><small>{{ pageMeta[item.id]?.description || '进入模块查看详情' }}</small></button>
-                <el-empty v-if="!globalModuleResults.length" description="没有匹配模块" :image-size="56" />
-              </article>
-              <article class="global-search-card">
-                <span>当前模块数据</span>
-                <button v-for="item in currentRecordResults" :key="item.key" type="button" @click="openCurrentRecordResult(item)"><strong>{{ item.title }}</strong><small>{{ item.desc }}</small></button>
-                <el-empty v-if="!currentRecordResults.length" description="当前模块没有匹配记录" :image-size="56" />
-              </article>
-            </div>
-          </section>
+          <AdminSectionTabs
+            v-if="activeAdminNavigation && activeAdminSectionTabs.length > 1"
+            :group-title="activeAdminNavigation.group.title"
+            :section-title="activeAdminNavigation.section.title"
+            :active-module-id="store.activeModuleId"
+            :tabs="activeAdminSectionTabs"
+            @select="selectAdminModule"
+          />
           <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
@@ -256,225 +244,8 @@
               <small>{{ metricHint(metric.label) }}</small>
             </article>
           </div>
-          <section v-if="aiCapabilityModuleIds.includes(store.activeModuleId)" class="ai-capability-page">
-            <section class="ai-capability-head">
-              <div>
-                <el-tag effect="dark" type="success">AI Capability Center</el-tag>
-                <h2>AI 能力中心</h2>
-                <p>统一配置 image_generation、video_generation、ppt_generation 的模块开关、模型绑定、参数 Schema、租户限制和调用链路。</p>
-              </div>
-              <div class="ai-capability-actions">
-                <el-button :icon="Refresh" :loading="store.loading" @click="() => store.loadActiveModule()">刷新配置</el-button>
-                <el-button :icon="Setting" @click="selectAdminModule('apiSettings')">上游 API</el-button>
-              </div>
-            </section>
-
-            <div class="ai-capability-kpis">
-              <article v-for="metric in aiCapabilityMetrics" :key="metric.label">
-                <span>{{ metric.label }}</span>
-                <strong>{{ metric.value }}</strong>
-                <small>{{ metric.hint }}</small>
-              </article>
-            </div>
-
-            <section v-if="store.activeModuleId === 'aiCapabilities'" class="ai-capability-section">
-                <div v-if="aiModules.length" class="ai-capability-module-grid">
-                  <article v-for="module in aiModules" :key="String(module.id || aiText(module, 'module_code', 'moduleCode'))" class="ai-capability-module-card">
-                    <header>
-                      <div>
-                        <el-tag :type="statusType(module.status)" size="small">{{ statusLabel(module.status) }}</el-tag>
-                        <h3>{{ module.name || module.id }}</h3>
-                      </div>
-                      <el-switch :model-value="isActiveStatus(module.status)" :loading="store.saving" active-text="启用" inactive-text="停用" @change="() => toggleAIModule(module)" />
-                    </header>
-                    <p>{{ module.description || '-' }}</p>
-                    <dl>
-                      <div><dt>module_code</dt><dd><code>{{ aiText(module, 'module_code', 'moduleCode') }}</code></dd></div>
-                      <div><dt>默认 Schema</dt><dd>{{ aiText(module, 'default_schema_id', 'defaultSchemaId') || '-' }}</dd></div>
-                      <div><dt>开放套餐</dt><dd>{{ aiList(module, 'open_package_ids', 'openPackageIds').join('、') || '-' }}</dd></div>
-                      <div><dt>开放对象</dt><dd>{{ aiAudienceLabel(module) }}</dd></div>
-                    </dl>
-                    <div class="ai-capability-chip-list">
-                      <el-tag v-for="model in aiList(module, 'bound_models', 'boundModels')" :key="model" size="small" effect="plain">{{ model }}</el-tag>
-                    </div>
-                    <footer>
-                      <el-button size="small" @click="editAIModulePackages(module)">编辑套餐</el-button>
-                      <el-button size="small" type="primary" plain @click="editAIModuleModels(module)">绑定模型</el-button>
-                    </footer>
-                  </article>
-                </div>
-                <el-empty v-else description="暂无 AI 能力模块" />
-            </section>
-
-            <section v-if="store.activeModuleId === 'aiCapabilityModels'" class="ai-capability-section">
-                <div class="ai-capability-section-head">
-                  <div>
-                    <h3>模型管理</h3>
-                    <p>新增或编辑 AI 生图、视频生成、PPT 文档生成可调用模型。</p>
-                  </div>
-                  <el-button type="primary" :icon="Plus" @click="createAIModel">新增模型</el-button>
-                </div>
-                <el-table v-if="aiModels.length" :data="aiModels" height="430" stripe>
-                  <el-table-column label="模型" min-width="180">
-                    <template #default="scope">
-                      <div class="ai-capability-main-cell">
-                        <strong>{{ aiText(scope.row, 'model_name', 'modelName') }}</strong>
-                        <small>{{ scope.row.id }}</small>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="模块" min-width="150">
-                    <template #default="scope"><el-tag effect="plain">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column prop="provider" label="上游" min-width="120" />
-                  <el-table-column label="类型" width="110">
-                    <template #default="scope">{{ aiText(scope.row, 'model_type', 'modelType') || '-' }}</template>
-                  </el-table-column>
-                  <el-table-column label="能力" min-width="260">
-                    <template #default="scope">
-                      <div class="ai-capability-chip-list">
-                        <el-tag v-for="capability in aiList(scope.row, 'capability_code', 'capabilityCode')" :key="capability" size="small">{{ capability }}</el-tag>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="Fallback" min-width="140">
-                    <template #default="scope">{{ aiText(scope.row, 'fallback_model', 'fallbackModel') || '-' }}</template>
-                  </el-table-column>
-                  <el-table-column label="状态" width="110">
-                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column label="操作" fixed="right" width="210">
-                    <template #default="scope">
-                      <el-button link type="primary" @click="editAIModel(scope.row)">编辑</el-button>
-                      <el-button link type="primary" @click="editAIModelCapabilities(scope.row)">能力</el-button>
-                      <el-button link :type="isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="toggleAIModel(scope.row)">{{ isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <el-empty v-else description="暂无模型配置" />
-            </section>
-
-            <section v-if="store.activeModuleId === 'aiCapabilitySchemas'" class="ai-capability-section">
-                <el-table v-if="aiSchemas.length" :data="aiSchemas" height="430" stripe>
-                  <el-table-column label="Schema" min-width="220">
-                    <template #default="scope">
-                      <div class="ai-capability-main-cell">
-                        <strong>{{ scope.row.id }}</strong>
-                        <small>{{ aiText(scope.row, 'model_name', 'modelName') || '默认模型' }}</small>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="模块" min-width="150">
-                    <template #default="scope">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</template>
-                  </el-table-column>
-                  <el-table-column label="字段与选项" min-width="520">
-                    <template #default="scope">
-                      <div class="ai-schema-field-list">
-                        <span v-for="field in aiSchemaFields(scope.row).slice(0, 8)" :key="String(field.key || field.label)" class="ai-schema-field-chip">
-                          <strong>{{ aiSchemaFieldLabel(field) }}</strong>
-                          <small v-if="aiSchemaFieldOptionsText(field)">{{ aiSchemaFieldOptionsText(field) }}</small>
-                        </span>
-                        <span v-if="aiSchemaFields(scope.row).length > 8" class="ai-capability-more">+{{ aiSchemaFields(scope.row).length - 8 }}</span>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="状态" width="110">
-                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column label="操作" fixed="right" width="170">
-                    <template #default="scope">
-                      <el-button link type="primary" @click="editAIParameterSchema(scope.row)">编辑</el-button>
-                      <el-button link :type="isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="toggleAIParameterSchema(scope.row)">{{ isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <el-empty v-else description="暂无参数 Schema" />
-            </section>
-
-            <section v-if="store.activeModuleId === 'aiCapabilityLimits'" class="ai-capability-section">
-                <el-table v-if="aiLimits.length" :data="aiLimits" height="430" stripe>
-                  <el-table-column label="适用范围" min-width="190">
-                    <template #default="scope">
-                      <div class="ai-capability-main-cell">
-                        <strong>{{ aiLimitScope(scope.row) }}</strong>
-                        <small>{{ scope.row.id }}</small>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="模块" min-width="150">
-                    <template #default="scope">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</template>
-                  </el-table-column>
-                  <el-table-column label="模型" min-width="150">
-                    <template #default="scope">{{ aiText(scope.row, 'model_name', 'modelName') || '模块默认' }}</template>
-                  </el-table-column>
-                  <el-table-column label="限制项" min-width="300">
-                    <template #default="scope">
-                      <code class="ai-capability-json-preview">{{ aiJsonPreview(aiObject(scope.row, 'limit_json', 'limitJson')) }}</code>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="状态" width="110">
-                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column label="操作" fixed="right" width="170">
-                    <template #default="scope">
-                      <el-button link type="primary" @click="editAILimitJSON(scope.row)">JSON</el-button>
-                      <el-button link :type="isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="toggleAILimit(scope.row)">{{ isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <el-empty v-else description="暂无租户限制" />
-            </section>
-
-            <section v-if="store.activeModuleId === 'aiCapabilityChannels'" class="ai-capability-section">
-                <el-table v-if="aiChannels.length" :data="aiChannels" height="380" stripe>
-                  <el-table-column prop="name" label="通道" min-width="170" />
-                  <el-table-column prop="protocol" label="协议" width="120" />
-                  <el-table-column prop="baseUrl" label="Base URL" min-width="260" show-overflow-tooltip />
-                  <el-table-column label="模型" min-width="260">
-                    <template #default="scope">
-                      <div class="ai-capability-chip-list">
-                        <el-tag v-for="model in aiList(scope.row, 'models')" :key="model" size="small" effect="plain">{{ model }}</el-tag>
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="Key" width="110">
-                    <template #default="scope"><el-tag :type="scope.row.apiKeyConfigured ? 'success' : 'warning'">{{ scope.row.apiKeyConfigured ? '已配置' : '待配置' }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column label="状态" width="110">
-                    <template #default="scope"><el-tag :type="statusType(scope.row.status)">{{ statusLabel(scope.row.status) }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column label="操作" fixed="right" width="110">
-                    <template #default><el-button link type="primary" @click="selectAdminModule('apiSettings')">配置</el-button></template>
-                  </el-table-column>
-                </el-table>
-                <el-empty v-else description="暂无上游通道" />
-            </section>
-
-            <section v-if="store.activeModuleId === 'aiCapabilityLogs'" class="ai-capability-section">
-                <el-table v-if="aiLogs.length" :data="aiLogs" height="430" stripe>
-                  <el-table-column prop="id" label="任务" min-width="150" show-overflow-tooltip />
-                  <el-table-column label="模块" min-width="140">
-                    <template #default="scope">{{ aiModuleLabel(aiText(scope.row, 'module_code', 'moduleCode')) }}</template>
-                  </el-table-column>
-                  <el-table-column prop="model_name" label="模型" min-width="150" />
-                  <el-table-column prop="user" label="用户" min-width="130" />
-                  <el-table-column label="扣费" width="110">
-                    <template #default="scope">{{ moneyYuan(scope.row.user_charge_amount || scope.row.amountCents || 0) }}</template>
-                  </el-table-column>
-                  <el-table-column label="成本" width="110">
-                    <template #default="scope">{{ moneyYuan(scope.row.upstream_cost || 0) }}</template>
-                  </el-table-column>
-                  <el-table-column label="利润" width="110">
-                    <template #default="scope">{{ moneyYuan(scope.row.platform_profit || 0) }}</template>
-                  </el-table-column>
-                  <el-table-column label="状态" width="110">
-                    <template #default="scope"><el-tag :type="statusType(scope.row.task_status)">{{ statusLabel(scope.row.task_status) }}</el-tag></template>
-                  </el-table-column>
-                  <el-table-column prop="created_at" label="创建时间" min-width="190" show-overflow-tooltip />
-                </el-table>
-                <el-empty v-else description="暂无调用日志" />
-            </section>
-          </section>
+          <AiCapabilityDomain v-if="aiCapabilityModuleIds.includes(store.activeModuleId)" :model="aiCapabilityViewModel" />
+          <!-- AI capability presentation moved to components/ai/AiCapabilityDomain.vue. -->
           <section v-else-if="store.activeModuleId === 'userDashboard'" class="user-home-page">
             <section class="user-home-layout">
               <main class="user-home-main">
@@ -978,9 +749,21 @@
               </div>
               <div class="user-works-hero-actions">
                 <button type="button" @click="selectAdminModule('userAiImage')">继续创作</button>
-                <button type="button" @click="() => store.loadActiveModule({ preferCache: false })">刷新作品</button>
+                <button type="button" @click="refreshWorksCenter">刷新作品</button>
               </div>
             </header>
+
+            <nav class="user-works-source-tabs" aria-label="作品来源">
+              <button type="button" :class="{ active: worksSourceTab === 'official' }" @click="worksSourceTab = 'official'">官方精选</button>
+              <button type="button" :class="{ active: worksSourceTab === 'mine' }" @click="openMyWorks">
+                我的作品 <span v-if="isGuestUser">登录后查看</span>
+              </button>
+            </nav>
+
+            <div v-if="isGuestUser && worksSourceTab === 'official'" class="user-works-guest-tip">
+              <div><strong>先浏览官方精选案例</strong><span>登录后可查看、保存和同步你的私有作品。</span></div>
+              <button type="button" @click="openMyWorks">登录后查看我的作品</button>
+            </div>
 
             <section class="user-works-summary">
               <article v-for="item in userWorkSummaryCards" :key="item.label">
@@ -2046,69 +1829,23 @@
             :current-role="currentAdmin?.role || ''"
             @navigate="navigateEnterpriseRoute"
           />
-          <section v-else-if="store.activeModuleId === 'analysis'" class="analysis-page">
-            <div class="analysis-stat-grid">
-              <article v-for="stat in analysisStats" :key="stat.label" class="analysis-stat-card">
-                <el-icon><component :is="stat.icon" /></el-icon>
-                <div><span>{{ stat.label }}</span><strong>{{ stat.value }}</strong></div>
-              </article>
-            </div>
-            <section class="analysis-chart-grid">
-              <el-card shadow="never" class="analysis-card">
-                <template #header><div class="panel-head"><span>用户访问来源</span><small>客户、渠道与推广来源</small></div></template>
-                <div class="traffic-layout">
-                  <div class="traffic-legend">
-                    <div v-for="source in trafficSources" :key="source.label"><i :style="{ backgroundColor: source.color }"></i><span>{{ source.label }}</span></div>
-                  </div>
-                  <div class="donut-chart" :style="trafficDonutStyle"><span>来源</span></div>
-                </div>
-              </el-card>
-              <el-card shadow="never" class="analysis-card">
-                <template #header><div class="panel-head"><span>每周生成任务活跃量</span><small>任务提交与完成趋势</small></div></template>
-                <div class="bar-chart">
-                  <div v-for="item in weeklyActivity" :key="item.day" class="bar-item"><span class="bar" :style="{ height: item.height + '%' }"></span><small>{{ item.day }}</small></div>
-                </div>
-              </el-card>
-            </section>
-            <el-card shadow="never" class="analysis-card analysis-line-card">
-              <template #header><div class="panel-head"><span>每月销售额 / 积分消耗趋势</span><el-tag type="success">实时</el-tag></div></template>
-              <svg class="trend-chart" viewBox="0 0 960 220" role="img" aria-label="每月销售额和积分消耗趋势">
-                <g class="trend-grid"><line v-for="y in [40, 80, 120, 160, 200]" :key="y" x1="32" :y1="y" x2="928" :y2="y" /></g>
-                <polyline class="trend-line trend-line-primary" points="32,154 112,136 192,94 272,108 352,150 432,124 512,86 592,112 672,70 752,92 832,58 928,116" />
-                <polyline class="trend-line trend-line-success" points="32,112 112,150 192,142 272,78 352,70 432,92 512,84 592,36 672,108 752,174 832,132 928,118" />
-              </svg>
-            </el-card>
-          </section>
-          <section v-else-if="store.activeModuleId === 'workbench'" class="workbench-page">
-            <section class="workbench-hero">
-              <div><el-tag type="success">API ONLINE</el-tag><h3>欢迎回来，{{ currentAdmin?.name || '平台管理员' }}</h3><p>今日重点关注客户余额、上游模型连通性、待支付订单和渠道启停状态。</p></div>
-              <div class="workbench-health"><span>平台健康度</span><strong>98.6%</strong><small>数据同步正常</small></div>
-            </section>
-            <section class="workbench-grid">
-              <el-card shadow="never" class="analysis-card">
-                <template #header><div class="panel-head"><span>快捷入口</span><small>高频运营动作</small></div></template>
-                <div class="shortcut-grid"><button v-for="item in quickTodos" :key="item.action" type="button" @click="selectAdminModule(item.module)"><span>{{ item.title }}</span><small>{{ item.desc }}</small></button></div>
-              </el-card>
-              <el-card shadow="never" class="analysis-card">
-                <template #header><div class="panel-head"><span>待办队列</span><el-tag type="warning">运营</el-tag></div></template>
-                <div class="todo-list workbench-todos"><button v-for="task in workbenchTasks" :key="task.title" type="button" @click="selectAdminModule(task.module)"><span>{{ task.title }}</span><small>{{ task.desc }}</small></button></div>
-              </el-card>
-            </section>
-          </section>
-          <section v-else-if="store.activeModuleId === 'dashboard'" class="dashboard-grid">
-            <el-card shadow="never" class="dashboard-card dashboard-card-large">
-              <template #header><div class="panel-head"><span>经营概览</span><el-tag type="success">实时</el-tag></div></template>
-              <div class="overview-board">
-                <div v-for="metric in metrics.slice(0, 4)" :key="metric.label" class="overview-item"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
-              </div>
-            </el-card>
-            <el-card shadow="never" class="dashboard-card">
-              <template #header><div class="panel-head"><span>待办动作</span><el-tag type="warning">运营</el-tag></div></template>
-              <div class="todo-list">
-                <button v-for="item in quickTodos" :key="item.action" type="button" @click="selectAdminModule(item.module)"><span>{{ item.title }}</span><small>{{ item.desc }}</small></button>
-              </div>
-            </el-card>
-          </section>
+          <AdminOverviewDomain
+            v-else-if="['analysis', 'workbench', 'dashboard'].includes(store.activeModuleId)"
+            :active-module-id="store.activeModuleId"
+            :current-admin-name="currentAdmin?.name"
+            :current-admin-role="currentAdmin?.role"
+            :analysis-stats="analysisStats"
+            :traffic-sources="trafficSources"
+            :traffic-donut-style="trafficDonutStyle"
+            :weekly-activity="weeklyActivity"
+            :metrics="metrics"
+            :quick-todos="quickTodos"
+            :workbench-tasks="workbenchTasks"
+            :tasks="overviewTasks"
+            :exceptions="overviewExceptions"
+            :module-labels="adminModuleLabels"
+            @navigate="selectAdminModule"
+          />
           <section v-else-if="store.activeModuleId === 'userMembership'" class="user-membership-page">
             <div class="membership-plan-head">
               <div>
@@ -2326,8 +2063,7 @@
               <el-empty v-else description="暂无订单明细记录" />
             </section>
           </section>
-          <BillingCenterV1 v-else-if="billingV1ModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
-          <CommercialBillingCenter v-else-if="commercialBillingModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
+          <BillingDomain v-else-if="billingModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
           <section v-else-if="store.activeModuleId === 'apiSettings'" class="api-settings-admin">
             <section class="api-settings-titlebar">
               <div>
@@ -2889,24 +2625,31 @@
           <section v-else-if="store.activeModuleId === 'userPptGeneration'" class="ppt-doc-shell">
             <PptDocumentGeneration />
           </section>
-          <el-card v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" shadow="never" class="data-panel">
-            <template #header>
-              <div class="panel-head">
-                <div><span>{{ store.activeModule.title }}</span><small>{{ filteredRows.length }} 条记录</small></div>
-                <div class="toolbar"><el-button v-for="action in toolbarActions" :key="action.action" size="small" type="primary" :icon="Plus" @click="runAction(action.action)">{{ action.label }}</el-button></div>
-              </div>
-            </template>
-            <div class="data-panel-body">
-              <div class="table-tools"><el-input v-model="searchKeyword" class="table-search" :prefix-icon="Search" clearable placeholder="按名称、邮箱、ID、状态搜索" /><el-segmented v-model="statusFilter" :options="statusFilterOptions" /></div>
-              <el-table v-if="filteredRows.length" :data="filteredRows" height="560" v-loading="store.saving" stripe>
-                <el-table-column v-for="column in columns" :key="column" :prop="column" :label="columnLabels[column] || column" min-width="140" show-overflow-tooltip>
-                  <template #default="scope"><el-tag v-if="isStatusColumn(column)" :type="statusType(scope.row[column])">{{ statusLabel(scope.row[column]) }}</el-tag><span v-else>{{ formatCell(scope.row[column], column) }}</span></template>
-                </el-table-column>
-                <el-table-column v-if="rowActions.length" label="操作" fixed="right" width="190"><template #default="scope"><el-button v-for="action in visibleRowActions(scope.row)" :key="action.action" link type="primary" size="small" @click="runAction(action.action, scope.row)">{{ labelForRowAction(action, scope.row) }}</el-button></template></el-table-column>
-              </el-table>
-              <el-empty v-else description="暂无记录" />
-            </div>
-          </el-card>
+          <ChannelGrowthDomain
+            v-else-if="channelGrowthModuleIds.includes(store.activeModuleId)"
+            :module-title="store.activeModule.title"
+            :persistence-key="store.activeModuleId"
+            :rows="rows"
+            :saving="store.saving"
+            :toolbar-actions="toolbarActions"
+            :columns="columns"
+            :column-labels="columnLabels"
+            :row-actions="rowActions"
+            v-model:search-keyword="searchKeyword"
+            v-model:status-filter="statusFilter"
+            :status-filter-options="statusFilterOptions"
+            :is-status-column="isStatusColumn"
+            :status-type="statusType"
+            :status-label="statusLabel"
+            :format-cell="formatCell"
+            :visible-row-actions="visibleRowActions"
+            :label-for-row-action="labelForRowAction"
+            @run-action="runAction"
+            @batch-action="runBatchAction"
+          />
+          <Customer360Center v-else-if="store.activeModuleId === 'customers'" :rows="rows" :saving="store.saving" :toolbar-actions="toolbarActions" :row-actions="rowActions" :column-labels="columnLabels" :status-filter-options="statusFilterOptions" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
+          <OrderFulfillmentCenter v-else-if="store.activeModuleId === 'orders'" :rows="rows" :saving="store.saving" :toolbar-actions="toolbarActions" :row-actions="rowActions" :column-labels="columnLabels" :status-filter-options="statusFilterOptions" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
+          <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
         </section>
       </el-main>
     </el-container>
@@ -2917,6 +2660,7 @@
     :saving="store.saving"
     @save="savePlanConfiguration"
   />
+  <GlobalCommandPalette v-model:open="commandPaletteOpen" v-model:query="globalSearchKeyword" :module-results="globalModuleResults" :record-results="currentRecordResults" :business-results="globalBusinessResults" @select-module="openGlobalModuleResult" @select-record="openCurrentRecordResult" @select-business="openGlobalBusinessResult" />
   <div v-if="apiModelPickerOpen" class="api-model-picker-overlay" @click.self="closeApiModelPicker">
     <section class="api-model-picker-modal">
       <header class="api-model-picker-head">
@@ -2978,31 +2722,47 @@
       </div>
     </section>
   </div>
+  <AuthModal v-model="workspaceLoginOpen" @authenticated="handleWebLoginAuthenticated" @cancelled="handleWorkspaceLoginCancelled" />
   </el-config-provider>
 </template>
 <script setup lang="ts">
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
+import { safeInternalRedirect, type ProtectedAction } from "@xianzhi/shared-auth";
 import { ElMessage } from "element-plus/es/components/message/index";
 import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import type { ComponentSize } from "element-plus";
 import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
 import { adminRequest } from "./api/client";
+import type { GlobalSearchItem } from "./api/adminWorkspaces";
 import { downloadAssetBlob, fetchResourceBlob, uploadReferenceImage } from "./api/resources";
+import { useAdminGlobalSearch } from "./composables/useAdminGlobalSearch";
+import { trackAdminExperience } from "./composables/useAdminExperienceTracking";
+import { trackWebGuestExperience } from "./utils/webGuestAnalytics";
 import { useOfficeCLI } from "./composables/useOfficeCLI";
 import PromptEditable from "./components/PromptEditable.vue";
-import BillingCenterV1 from "./components/billing/BillingCenterV1.vue";
-import CommercialBillingCenter from "./components/billing/CommercialBillingCenter.vue";
-import CustomerAttributionOverview from "./components/attribution/CustomerAttributionOverview.vue";
-import EnterpriseManagement from "./components/enterprise/EnterpriseManagement.vue";
-import ConnectorAuthorizationCenter from "./components/enterprise/ConnectorAuthorizationCenter.vue";
-import FeishuConnectorSetup from "./components/enterprise/FeishuConnectorSetup.vue";
-import KnowledgeAdminCenter from "./components/knowledge/KnowledgeAdminCenter.vue";
-import KnowledgeAgentCenter from "./components/knowledge/KnowledgeAgentCenter.vue";
-import MediaCenter from "./components/media/MediaCenter.vue";
-import PageDecoration from "./components/media/PageDecoration.vue";
-import PlanEditorDialog from "./components/billing/PlanEditorDialog.vue";
-import StorageCenter from "./components/storage/StorageCenter.vue";
+import AuthModal from "./components/auth/AuthModal.vue";
+import WebLoginPage from "./components/auth/WebLoginPage.vue";
+import AdminSectionTabs from "./components/navigation/AdminSectionTabs.vue";
+import GlobalCommandPalette from "./components/navigation/GlobalCommandPalette.vue";
+import {
+  adminModuleById,
+  adminNavigationGroups,
+  adminNavigationSectionForModule,
+  agentModuleIds,
+  aiCapabilityModuleIds,
+  billingModuleIds,
+  channelGrowthModuleIds,
+  customerAttributionModuleIds,
+  enterpriseModuleIds,
+  mediaDecorationModuleIds,
+  mediaOperationModuleIds,
+  operationCenterModuleIds,
+  userModuleIds,
+  type AdminNavigationIconKey
+} from "./config/adminNavigation";
+import { modulePermission, resolveModuleIdFromPath, resolveModulePath } from "./config/moduleRegistry";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
+import { useWebAuthStore, type WebAuthResponse } from "./stores/auth";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
 import {
   agentCenterMetrics,
@@ -3019,7 +2779,17 @@ import {
   type AgentCenterWorkspace,
   type AgentWorkspaceMessage
 } from "./utils/agentCenter";
-import { clearCurrentAiImageCache, readAiImageDraft, readCachedOriginalImage, writeAiImageDraft, writeCachedOriginalImage, type CachedReferenceImage } from "./utils/aiImageDb";
+import {
+  clearCurrentAiImageCache,
+  clearPendingReferenceImages,
+  readAiImageDraft,
+  readCachedOriginalImage,
+  readPendingReferenceImages,
+  writeAiImageDraft,
+  writeCachedOriginalImage,
+  writePendingReferenceImages,
+  type CachedReferenceImage,
+} from "./utils/aiImageDb";
 import {
   isVideoGenerationTask,
   normalizeVideoTimestamp,
@@ -3041,7 +2811,8 @@ import {
   type VideoHistoryEntry,
   type VideoHistoryStatus
 } from "./utils/videoGeneration";
-import xianzhiLogo from "./assets/xianzhi-ai-logo.png";
+import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
+import { isPersistentWebSession } from "./utils/webAuthSession";
 
 function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
   ElMessage({
@@ -3055,50 +2826,33 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 }
 
 const store = useAdminStore();
+const authStore = useWebAuthStore();
+const AdminOverviewDomain = defineAsyncComponent(() => import("./components/admin/AdminOverviewDomain.vue"));
+const AdminDataTable = defineAsyncComponent(() => import("./components/admin/AdminDataTable.vue"));
+const Customer360Center = defineAsyncComponent(() => import("./components/admin/Customer360Center.vue"));
+const OrderFulfillmentCenter = defineAsyncComponent(() => import("./components/admin/OrderFulfillmentCenter.vue"));
+const BillingDomain = defineAsyncComponent(() => import("./components/billing/BillingDomain.vue"));
+const CustomerAttributionOverview = defineAsyncComponent(() => import("./components/attribution/CustomerAttributionOverview.vue"));
+const AiCapabilityDomain = defineAsyncComponent(() => import("./components/ai/AiCapabilityDomain.vue"));
+const EnterpriseManagement = defineAsyncComponent(() => import("./components/enterprise/EnterpriseManagement.vue"));
+const ConnectorAuthorizationCenter = defineAsyncComponent(() => import("./components/enterprise/ConnectorAuthorizationCenter.vue"));
+const FeishuConnectorSetup = defineAsyncComponent(() => import("./components/enterprise/FeishuConnectorSetup.vue"));
+const ChannelGrowthDomain = defineAsyncComponent(() => import("./components/growth/ChannelGrowthDomain.vue"));
+const KnowledgeAdminCenter = defineAsyncComponent(() => import("./components/knowledge/KnowledgeAdminCenter.vue"));
+const KnowledgeAgentCenter = defineAsyncComponent(() => import("./components/knowledge/KnowledgeAgentCenter.vue"));
+const MediaCenter = defineAsyncComponent(() => import("./components/media/MediaCenter.vue"));
+const PageDecoration = defineAsyncComponent(() => import("./components/media/PageDecoration.vue"));
+const PlanEditorDialog = defineAsyncComponent(() => import("./components/billing/PlanEditorDialog.vue"));
+const StorageCenter = defineAsyncComponent(() => import("./components/storage/StorageCenter.vue"));
 const planEditorOpen = ref(false);
 const editingPlan = ref<AdminRecord | null>(null);
 const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
-const enterpriseModuleIds = [
-  "enterpriseList", "enterpriseDetail", "enterpriseCertifications", "enterpriseMembers", "enterprisePackage",
-  "enterpriseCompute", "enterpriseTransactions", "enterpriseOrders", "enterpriseAiCapabilities", "enterpriseAiEmployees",
-  "enterpriseKnowledgeBases", "enterpriseAttribution", "enterpriseRelationships", "enterpriseRisk", "enterpriseAuditLogs"
-];
-const customerAttributionModuleIds = ["customerAttributions"];
 const PptDocumentGeneration = defineAsyncComponent({
   loader: () => import("./components/PptDocumentGeneration.vue"),
   delay: 0,
   suspensible: false
 });
-const billingV1ModuleIds = [
-  "billingOverview",
-  "billingRules",
-  "billingProviderCosts",
-  "billingEvents",
-  "billingReconciliation",
-  "billingWalletLedger"
-];
-const commercialBillingModuleIds = [
-  "billingCustomers",
-  "billingProducts",
-  "billingSubscriptions",
-  "billingCoupons",
-  "billingInvoices",
-  "billingCreditNotes",
-  "billingPaymentRequests",
-  "billingPayments"
-];
-const billingModuleIds = [...billingV1ModuleIds, ...commercialBillingModuleIds];
-const aiCapabilityModuleIds = [
-  "aiCapabilities",
-  "aiCapabilityModels",
-  "aiCapabilitySchemas",
-  "aiCapabilityLimits",
-  "aiCapabilityChannels",
-  "aiCapabilityLogs"
-];
-const mediaDecorationModuleIds = ["pageDecoration", "pageHomeConfig", "pageStudioConfig", "pageAssetsConfig", "pageProfileConfig"];
-const mediaOperationModuleIds = ["mediaAssets", "mediaCategories", ...mediaDecorationModuleIds];
 const decorationInitialPage = computed(() => ({ pageHomeConfig: "home", pageStudioConfig: "studio", pageAssetsConfig: "assets", pageProfileConfig: "profile" } as Record<string, string>)[store.activeModuleId] || "home");
 const elementSizeStorageKey = "xianzhi-admin-element-size";
 const elementSizeOptions: Array<{ label: string; value: ComponentSize }> = [
@@ -3116,6 +2870,15 @@ function setElementSize(command: string) {
   if (typeof window !== "undefined") window.localStorage.setItem(elementSizeStorageKey, nextSize);
 }
 const searchKeyword = ref("");
+const globalSearchKeyword = ref("");
+const commandPaletteOpen = ref(false);
+const { results: globalBusinessResults } = useAdminGlobalSearch(globalSearchKeyword);
+function handleGlobalCommandShortcut(event: KeyboardEvent) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    commandPaletteOpen.value = true;
+  }
+}
 const statusFilter = ref("ALL");
 const statusFilterOptions = computed(() => {
   if (store.activeModuleId === "partnerCommissions") {
@@ -3411,17 +3174,19 @@ async function submitVideoGeneration() {
   const prompt = videoPrompt.value.trim();
   if (!prompt) {
     ElMessage.error("请输入视频提示词");
-    return;
+    return false;
   }
   if (videoImageFile && videoImagePreview.value) videoStudioMode.value = "image";
   if (selectedVideoModel.value === "Grok Video 1.5" && !videoImageFile) {
     ElMessage.error("Grok Video 1.5 必须上传 1 张参考图");
-    return;
+    return false;
   }
   if (videoStudioMode.value === "image" && !videoImageFile) {
     ElMessage.error("请先上传 1 张参考图");
-    return;
+    return false;
   }
+  if (!ensureWorkspaceAuth("generate_video", "userVideoGeneration")) return false;
+  const clientRequestId = createGenerationClientRequestId("video");
   let videoReferenceImageUrl = "";
   const snapshotId = `video-local-${Date.now()}`;
   const snapshotCreatedAt = new Date().toISOString();
@@ -3452,6 +3217,7 @@ async function submitVideoGeneration() {
       url: "/generation-tasks",
       timeout: 900000,
       data: {
+        clientRequestId,
         type,
         prompt,
         model: selectedVideoModelId(),
@@ -3484,6 +3250,7 @@ async function submitVideoGeneration() {
       commitVideoHistoryEntry(historyEntry, snapshotId);
     }
     ElMessage.success(historyEntry?.status === "success" ? "视频生成成功" : "视频任务已提交，正在生成中");
+    return true;
   } catch (error) {
     commitVideoHistoryEntry({
       id: snapshotId,
@@ -3502,6 +3269,7 @@ async function submitVideoGeneration() {
       userId: String(currentAdmin.value?.id || "")
     }, snapshotId);
     ElMessage.error(error instanceof Error ? error.message : "视频生成失败");
+    return false;
   } finally {
     videoSubmitting.value = false;
   }
@@ -3615,6 +3383,7 @@ async function downloadVideoHistory(entry: VideoHistoryEntry) {
     ElMessage.warning("视频尚未生成成功，暂不能下载");
     return;
   }
+  if (!ensureWorkspaceAuth("download_work", "userVideoGeneration", { mediaKind: "video", taskId: entry.id })) return;
   if (isVideoHistoryActionBusy(entry.id, "download")) return;
   setVideoHistoryActionBusy(entry.id, "download", true);
   ElMessage.info("开始下载视频");
@@ -3764,21 +3533,24 @@ function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", 
   openVideoDropdown.value = "";
 }
 
-const operationCenterModuleIds = ["operationCenterDashboard", "operationCenterAgents", "operationCenterOrders", "operationCenterCommissions"];
+const adminNavigationIcons: Record<AdminNavigationIconKey, Component> = {
+  overview: House,
+  customers: User,
+  commercial: Tickets,
+  ai: Cpu,
+  growth: Connection,
+  platform: Setting
+};
 
-const adminModuleGroups = [
-  { id: "home", title: "首页", icon: House, items: modules.filter((item) => ["analysis", "workbench", "dashboard"].includes(item.id)) },
-  { id: "enterprise", title: "企业管理", icon: Goods, items: modules.filter((item) => ["enterpriseList", "enterpriseCertifications"].includes(item.id)) },
-  { id: "business", title: "业务运营", icon: Collection, items: modules.filter((item) => ["customers", "customerAttributions", "orders", "products", "plans", "tokenRecords"].includes(item.id)) },
-  { id: "aiCapability", title: "AI 能力中心", icon: Cpu, items: modules.filter((item) => aiCapabilityModuleIds.includes(item.id)) },
-  { id: "knowledge", title: "知识库中心", icon: Collection, items: modules.filter((item) => ["knowledgeAdmin"].includes(item.id)) },
-  { id: "mediaOperation", title: "运营中心", icon: Operation, items: modules.filter((item) => mediaOperationModuleIds.includes(item.id)) },
-  { id: "marketing", title: "营销端", icon: Connection, items: modules.filter((item) => ["marketingDashboard", "marketingAgentLevels", "marketingInvites", "marketingCommissionRules", "marketingUpgradePlans", "marketingWallets", "marketingWalletRecords", "marketingSettlementStatements"].includes(item.id)) },
-  { id: "billing", title: "计费中心", icon: Tickets, items: modules.filter((item) => billingModuleIds.includes(item.id)) },
-  { id: "growth", title: "渠道增长", icon: Connection, items: modules.filter((item) => ["channels", "operationCenters", "commissions", "commissionRecords", "usage"].includes(item.id)) },
-  { id: "governance", title: "技术治理", icon: Setting, items: modules.filter((item) => ["storageCenter", "apiSettings", "system"].includes(item.id)) },
-  { id: "permission", title: "权限管理", icon: Lock, items: modules.filter((item) => ["departments", "userManagement", "menuManagement"].includes(item.id)) }
-];
+const adminModuleGroups = adminNavigationGroups.map((group) => ({
+  id: group.id,
+  title: group.title,
+  icon: adminNavigationIcons[group.icon],
+  items: group.sections.flatMap((section) => {
+    const module = adminModuleById(section.primaryModuleId);
+    return module ? [{ ...module, title: section.title, requiresEnterpriseManagement: section.requiresEnterpriseManagement === true }] : [];
+  })
+}));
 
 const agentModuleGroups = [
   { id: "agentHome", title: "代理商后台", icon: Wallet, items: modules.filter((item) => ["partnerDashboard"].includes(item.id)) },
@@ -3891,7 +3663,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   marketingCommissionRules: { badge: "分佣规则", description: "沉淀直推、间推、运营中心奖励、算力充值分成等可审计规则。" },
   marketingUpgradePlans: { badge: "升级路径", description: "维护普通用户、代理和运营中心之间的升级价格、条件和周期口径。" },
   marketingWallets: { badge: "佣金钱包", description: "按代理汇总佣金收入、提现冻结、可提现余额和邀请入口。" },
-  marketingWalletRecords: { badge: "钱包流水", description: "按佣金入账和提现冻结展示每笔资金变化，帮助财务核对来源和状态。" },
+  marketingWalletRecords: { badge: "渠道佣金钱包流水", description: "按佣金入账和提现冻结展示每笔资金变化，帮助财务核对来源和状态。" },
   marketingSettlementStatements: { badge: "月度结算", description: "按代理和月份聚合已结算佣金、提现和待结算金额，形成打款前核对口径。" },
   usage: { badge: "消耗分析", description: "查看模型、素材、生成任务等使用量，为成本和定价提供依据。" },
   billingOverview: { badge: "计费总览", description: "统一查看正式价格、供应商成本、任务对账异常和钱包流水。" },
@@ -3899,10 +3671,10 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   billingProviderCosts: { badge: "成本口径", description: "独立维护供应商和通道成本，与用户售价分开存储和计算。" },
   billingEvents: { badge: "计费事件", description: "查看报价、冻结、确认、解冻和退款事件与幂等键。" },
   billingReconciliation: { badge: "任务对账", description: "按任务核对报价、钱包、计费事件和供应商成本，识别八类异常。" },
-  billingWalletLedger: { badge: "钱包流水", description: "追踪充值、赠送、冻结、确认、解冻、退款、调整与过期流水。" },
+  billingWalletLedger: { badge: "用户积分钱包流水", description: "追踪充值、赠送、冻结、确认、解冻、退款、调整与过期流水。" },
   billingCustomers: { badge: "客户计费", description: "聚合真实订单、订阅、付款和钱包余额，形成客户商业账务档案。" },
-  billingProducts: { badge: "套餐产品", description: "统一查看服务端套餐价格、权益配置和微信虚拟商品映射。" },
-  billingSubscriptions: { badge: "订阅管理", description: "由真实支付订单和会员权益生成订阅，保留来源订单与有效期。" },
+  billingProducts: { badge: "支付商品", description: "统一查看服务端权益套餐与微信虚拟支付商品的映射关系。" },
+  billingSubscriptions: { badge: "订阅实例", description: "由真实支付订单和会员权益生成订阅实例，保留来源订单与有效期。" },
   billingCoupons: { badge: "权益优惠券", description: "优惠券只加赠服务端权益，不改变微信虚拟支付商品金额。" },
   billingInvoices: { badge: "发票与账单", description: "真实订单自动形成交易账单，税票采用人工申请、开具和驳回状态。" },
   billingCreditNotes: { badge: "贷项红冲", description: "退款通知自动生成贷项，人工贷项需审核且不直接触发退款。" },
@@ -4017,6 +3789,16 @@ const userHomeCreationModes: Array<{ id: UserHomeCreationMode; title: string; ic
   { id: "ppt", title: "PPT 文档", icon: Document },
   { id: "agent", title: "Agent 对话", icon: Cpu }
 ];
+type OverviewWorkItem = { id: string; title: string; description: string; count: number; severity: string; module: string; roles?: string[] };
+const adminModuleLabels = Object.fromEntries(adminModules.filter((item) => adminNavigationSectionForModule(item.id)).map((item) => [item.id, item.title]));
+const overviewTasks = computed<OverviewWorkItem[]>(() => {
+  const items = (store.data as { tasks?: AdminRecord[] }).tasks;
+  return Array.isArray(items) ? items as OverviewWorkItem[] : [];
+});
+const overviewExceptions = computed<OverviewWorkItem[]>(() => {
+  const items = (store.data as { exceptions?: AdminRecord[] }).exceptions;
+  return Array.isArray(items) ? items as OverviewWorkItem[] : [];
+});
 const userHomeRatioOptions = [
   { label: "1:1", value: "square" },
   { label: "16:9", value: "16:9" },
@@ -4617,6 +4399,9 @@ const userWorkStatusOptions = [
 const worksSearchKeyword = ref("");
 const worksStatusFilter = ref("all");
 const worksViewMode = ref<"grid" | "table">("grid");
+const worksSourceTab = ref<"official" | "mine">("official");
+const publicOfficialCases = ref<AdminRecord[]>([]);
+const publicOfficialCasesLoading = ref(false);
 
 const onlineImageData = computed(() => store.data as AdminRecord & {
   providers?: AdminRecord[];
@@ -4698,6 +4483,20 @@ watch(
 watch(videoHistorySaveSignature, scheduleVideoHistorySave);
 watch([videoPrompt, videoHistorySearchQuery], scheduleVideoInputDraftSave);
 watch(videoPrompt, () => void nextTick(adjustVideoPromptHeight));
+let guestImagePromptTracked = false;
+let guestVideoPromptTracked = false;
+watch(() => onlineImageForm.value.prompt, (value) => {
+  if (!guestImagePromptTracked && isGuestUser.value && String(value || "").trim()) {
+    guestImagePromptTracked = true;
+    trackWebGuestExperience("guest_input_prompt", "userAiImage", { module: "userAiImage" });
+  }
+});
+watch(videoPrompt, (value) => {
+  if (!guestVideoPromptTracked && isGuestUser.value && value.trim()) {
+    guestVideoPromptTracked = true;
+    trackWebGuestExperience("guest_input_prompt", "userVideoGeneration", { module: "userVideoGeneration" });
+  }
+});
 watch([videoHistorySearchQuery, videoHistoryFilter, videoHistorySort], () => {
   videoHistoryVisibleCount.value = videoHistoryInitialVisibleCount;
 });
@@ -4773,8 +4572,14 @@ function aiImageDraftPayload() {
       activeCollectionId: aiActiveFavoriteCollectionId.value
     },
     referenceImages: aiReferenceImages.value
-      .filter((item) => item.url.startsWith("data:"))
-      .map<CachedReferenceImage>((item) => ({ id: item.id, name: item.name, url: item.url })),
+      .filter((item) => item.url.startsWith("data:") || Boolean(item.file) || Boolean(item.remoteUrl))
+      .map<CachedReferenceImage>((item) => ({
+        id: item.id,
+        name: item.name,
+        url: item.url.startsWith("blob:") ? "" : item.url,
+        file: item.file,
+        remoteUrl: item.remoteUrl,
+      })),
     savedAt: Date.now()
   };
 }
@@ -4850,11 +4655,11 @@ async function hydrateAiImageDraft() {
     aiPromptSearch.value = draft.ui?.promptSearch || "";
     aiActiveFavoriteCollectionId.value = draft.ui?.activeCollectionId || "";
     aiReferenceImages.value.forEach(revokeAiReferenceImage);
-    aiReferenceImages.value = (draft.referenceImages || []).map((item) => ({
-      id: item.id,
-      name: item.name,
-      url: item.url
-    }));
+    aiReferenceImages.value = (draft.referenceImages || []).flatMap((item) => {
+      const url = item.file instanceof File ? URL.createObjectURL(item.file) : item.remoteUrl || item.url;
+      if (!url) return [];
+      return [{ id: item.id, name: item.name, url, file: item.file, remoteUrl: item.remoteUrl }];
+    });
   } catch {
     // IndexedDB is optional; the page should still work without it.
   } finally {
@@ -4963,7 +4768,8 @@ const onlineHistoryItems = computed(() => onlineImageTasks.value.slice(0, 8));
 const userWorkCards = computed(() => {
   const keyword = worksSearchKeyword.value.trim().toLowerCase();
   const statusFilter = worksStatusFilter.value;
-  return onlineImageTasks.value
+  const source = worksSourceTab.value === "official" ? publicOfficialCases.value : onlineImageTasks.value;
+  return source
     .filter((task) => {
       const taskId = aiTaskId(task);
       if (taskId && aiHiddenTaskIds.value.includes(taskId)) return false;
@@ -4980,6 +4786,14 @@ const userWorkCards = computed(() => {
     .sort((left, right) => (aiTaskDateMs(right, "updatedAt") || aiTaskDateMs(right, "createdAt")) - (aiTaskDateMs(left, "updatedAt") || aiTaskDateMs(left, "createdAt")));
 });
 const userWorkSummaryCards = computed(() => {
+  if (worksSourceTab.value === "official") {
+    return [
+      { label: "官方精选", value: String(publicOfficialCases.value.length), hint: "仅包含公开展示案例" },
+      { label: "可复用提示", value: String(publicOfficialCases.value.length), hint: "可带入创作区继续编辑" },
+      { label: "私有作品", value: isGuestUser.value ? "--" : String(onlineImageTasks.value.length), hint: isGuestUser.value ? "登录后查看" : "切换到我的作品查看" },
+      { label: "作品同步", value: isGuestUser.value ? "未登录" : "已开启", hint: "不会公开你的私人作品" }
+    ];
+  }
   const total = onlineImageTasks.value.filter((task) => !aiHiddenTaskIds.value.includes(aiTaskId(task))).length;
   const done = onlineImageTasks.value.filter(isAiTaskSucceeded).length;
   const favorites = onlineImageTasks.value.filter(isAiTaskFavorite).length;
@@ -5961,6 +5775,7 @@ function initialAiFavoritePickerCheckedIds(taskIds: string[]) {
 function openAiFavoritePicker(taskIds: string[]) {
   const ids = Array.from(new Set(taskIds.filter(Boolean)));
   if (!ids.length) return;
+  if (!ensureWorkspaceAuth("save_work", "userAiImage", { taskIds: ids })) return;
   aiFavoritePickerTaskIds.value = ids;
   aiFavoritePickerCheckedIds.value = initialAiFavoritePickerCheckedIds(ids);
   aiNewCollectionName.value = "";
@@ -6954,6 +6769,7 @@ async function downloadAiTask(task?: AdminRecord) {
     ElMessage.warning("当前任务还没有生成图片");
     return;
   }
+  if (!ensureWorkspaceAuth("download_work", "userAiImage", { mediaKind: "image", taskId: aiTaskId(target) })) return;
   const fileName = `ai-image-${aiTaskId(target) || Date.now()}.png`;
   try {
     await downloadUrl(imageUrl, fileName);
@@ -6973,6 +6789,7 @@ async function downloadAllAiTaskOutputs(task?: AdminRecord) {
     ElMessage.warning("当前任务还没有生成图片");
     return;
   }
+  if (!ensureWorkspaceAuth("download_work", "userAiImage", { mediaKind: "image-all", taskId: aiTaskId(task) })) return;
   let successCount = 0;
   for (let index = 0; index < outputs.length; index += 1) {
     const output = outputs[index];
@@ -7010,10 +6827,10 @@ async function handleAiReferenceUpload(uploadFile: { raw?: File; name?: string }
       name: uploadFile.name || file.name,
       url,
       file,
-      uploading: true
+      uploading: hasAuthToken()
     }
   ];
-  void ensureAiReferenceRemoteUrl(id);
+  if (hasAuthToken()) void ensureAiReferenceRemoteUrl(id);
 }
 
 async function handleOnlineReferenceUpload(uploadFile: { raw?: File; name?: string }) {
@@ -7270,6 +7087,8 @@ async function submitOnlineImage() {
     ElMessage.error("请输入生图提示词");
     return;
   }
+  if (!ensureWorkspaceAuth("generate_image", "userAiImage")) return;
+  const clientRequestId = createGenerationClientRequestId("online-image");
   onlineSubmitting.value = true;
   try {
     const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
@@ -7283,6 +7102,7 @@ async function submitOnlineImage() {
       method: "POST",
       url: "/generation-tasks",
       data: {
+        clientRequestId,
         type: referenceImages.length ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
         prompt,
         model: onlineImageForm.value.model,
@@ -7318,8 +7138,9 @@ async function submitAiImage() {
   const prompt = onlineImageForm.value.prompt.trim();
   if (!prompt) {
     ElMessage.error("请输入 AI 生图提示词");
-    return;
+    return false;
   }
+  if (!ensureWorkspaceAuth("generate_image", "userAiImage")) return false;
   if (aiPlaygroundMode.value === "agent") {
     const conversation = activeAiAgentConversation.value;
     if (conversation) {
@@ -7337,9 +7158,10 @@ async function submitAiImage() {
     }
     ElMessage.success("Agent 已开始处理");
     void saveAiState();
-    return;
+    return true;
   }
   onlineSubmitting.value = true;
+  const clientRequestId = createGenerationClientRequestId("ai-image");
   let optimisticTaskId = "";
   try {
     syncOnlineProviderForModel();
@@ -7349,7 +7171,7 @@ async function submitAiImage() {
     const referenceImages = taskSnapshot.inputImagesSnapshot;
     if (hadInputImages && referenceImages.length === 0) {
       ElMessage.error("参考图还没有准备好，请稍后重试");
-      return;
+      return false;
     }
     const taskType = referenceImages.length > 0 ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
     const effectivePrompt = referenceImages.length ? effectiveAiPromptForReferences(prompt, referenceImages) : prompt;
@@ -7416,6 +7238,7 @@ async function submitAiImage() {
       method: "POST",
       url: "/generation-tasks",
       data: {
+        clientRequestId,
         userId: currentAdmin.value?.id,
         type: taskType,
         prompt,
@@ -7441,6 +7264,7 @@ async function submitAiImage() {
       trackAiGenerationTask(aiTaskId(createdTask));
     }
     aiOptimisticTasks.value = aiOptimisticTasks.value.filter((task) => !isOptimisticAiTaskReconciled(task, onlineRecentTasks.value));
+    return true;
   } catch (error) {
     const message = error instanceof Error ? error.message : "提交失败";
     if (optimisticTaskId) {
@@ -7449,9 +7273,17 @@ async function submitAiImage() {
         : task);
     }
     ElMessage.error(message);
+    return false;
   } finally {
     onlineSubmitting.value = false;
   }
+}
+
+function createGenerationClientRequestId(kind: string) {
+  const suffix = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `web-${kind}-${suffix}`;
 }
 interface AdminUser {
   id: string;
@@ -7475,13 +7307,6 @@ interface AuthMeResponse {
   defaultRoute?: string;
   accessToken?: string;
 }
-type WeChatMiniProgramRuntime = {
-  login?: (options: {
-    provider?: string;
-    success?: (result: { code?: string }) => void;
-    fail?: (error: unknown) => void;
-  }) => void;
-};
 type MembershipCycleId = "monthly" | "yearly" | "single";
 type MembershipMode = "recharge" | "subscribe" | "identity";
 type PaymentMethodId = "cash" | "wechat" | "alipay";
@@ -7563,6 +7388,12 @@ const canViewEnterpriseManagement = computed(() => {
   const role = String(currentAdmin.value?.role || "").toUpperCase();
   return role === "SUPER_ADMIN" || currentPermissions.value.includes("admin.full") || currentPermissions.value.includes("enterprise:list");
 });
+function canNavigateToModule(moduleId: string) {
+  const permission = modulePermission(moduleId);
+  if (!permission) return true;
+  const role = String(currentAdmin.value?.role || "").toUpperCase();
+  return role === "SUPER_ADMIN" || currentPermissions.value.includes("admin.full") || currentPermissions.value.includes(permission);
+}
 const hasAgentIdentity = computed(() => {
   const role = String(currentAdmin.value?.role || "").toUpperCase();
   return Boolean(currentAgent.value?.id) || role.startsWith("AGENT") || currentPermissions.value.some((permission) => String(permission).startsWith("channel."));
@@ -7831,6 +7662,7 @@ function selectedRechargePackageId() {
 }
 
 async function createUserRechargeOrder() {
+  if (!ensureWorkspaceAuth("recharge", "userMembership")) return;
   try {
     const amount = rechargeAmountYuan.value;
     if (!amount || amount <= 0) {
@@ -7857,6 +7689,7 @@ async function createUserRechargeOrder() {
 }
 
 async function createUserSubscriptionOrder(plan: UserMembershipPlanCard) {
+  if (!ensureWorkspaceAuth("open_member_center", "userMembership")) return;
   try {
     selectMembershipPlan(plan);
     if (plan.custom) {
@@ -7948,20 +7781,157 @@ async function createUserIdentityOrder(pack: UserIdentityPackage) {
 }
 
 const isAgentConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/agent"));
-const isUserConsole = ref(typeof window !== "undefined" && window.location.pathname.startsWith("/app"));
-const isFeishuConnectorSetupRoute = typeof window !== "undefined" && window.location.pathname === "/app/enterprise/feishu";
-const isConnectorAuthorizationRoute = typeof window !== "undefined" && window.location.pathname === "/app/enterprise/connectors";
+const initialBrowserPath = typeof window !== "undefined" ? window.location.pathname : "";
+const userConsoleBasePath = initialBrowserPath === "/" ? "/" : initialBrowserPath.startsWith("/workspace") ? "/workspace" : "/app";
+const isUserConsole = ref(initialBrowserPath === "/" || initialBrowserPath.startsWith("/app") || initialBrowserPath.startsWith("/workspace"));
+const isFeishuConnectorSetupRoute = typeof window !== "undefined" && ["/app/enterprise/feishu", "/workspace/enterprise/feishu"].includes(window.location.pathname);
+const isConnectorAuthorizationRoute = typeof window !== "undefined" && ["/app/enterprise/connectors", "/workspace/enterprise/connectors"].includes(window.location.pathname);
 const authReady = ref(false);
+const workspaceLoginOpen = computed({
+  get: () => authStore.loginModalVisible,
+  set: (visible: boolean) => visible ? authStore.openLogin() : authStore.closeLogin()
+});
+const authSessionVersion = ref(0);
+const isGuestUser = computed(() => {
+  void authSessionVersion.value;
+  return isUserConsole.value && !hasAuthToken();
+});
+const guestVisibleModuleIds = new Set(["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"]);
+const workspaceGuestDraftKey = "zhiqiyun.pc.workspace.pending-draft.v1";
+function openWorkspaceLogin() {
+  authStore.openLogin({ redirectUrl: currentWorkspaceRoute() });
+}
+function currentWorkspaceRoute() {
+  if (typeof window === "undefined") return "/";
+  return safeInternalRedirect(`${window.location.pathname}${window.location.search}${window.location.hash}`, "/");
+}
+function workspaceDraftPayload(moduleId = store.activeModuleId) {
+  return {
+    moduleId,
+    imageForm: { ...onlineImageForm.value },
+    imageMode: aiPlaygroundMode.value,
+    referenceImages: aiReferenceImages.value.map((item) => ({
+      id: item.id,
+      name: item.name,
+      remoteUrl: item.remoteUrl && !item.remoteUrl.startsWith("blob:") && !item.remoteUrl.startsWith("data:") ? item.remoteUrl : ""
+    })),
+    videoPrompt: videoPrompt.value,
+    videoModel: selectedVideoModel.value,
+    videoMode: videoStudioMode.value,
+    videoDuration: videoDuration.value,
+    videoRatio: videoRatio.value,
+    videoResolution: videoResolution.value,
+    videoGenerateAudio: videoGenerateAudio.value,
+    rechargeAmount: selectedRechargeAmount.value,
+    customRechargeAmount: customRechargeAmount.value,
+    paymentMethod: selectedPaymentMethod.value
+  };
+}
+function saveWorkspaceGuestDraft(moduleId = store.activeModuleId) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(workspaceGuestDraftKey, JSON.stringify({
+    ...workspaceDraftPayload(moduleId),
+    createdAt: Date.now(),
+  }));
+}
+function applyWorkspaceDraft(draft: Record<string, unknown>) {
+  if (draft.imageForm && typeof draft.imageForm === "object") onlineImageForm.value = { ...onlineImageForm.value, ...draft.imageForm } as typeof onlineImageForm.value;
+  if (typeof draft.imageMode === "string" && ["gallery", "agent"].includes(draft.imageMode)) aiPlaygroundMode.value = draft.imageMode;
+  if (typeof draft.videoPrompt === "string") videoPrompt.value = draft.videoPrompt;
+  if (typeof draft.videoModel === "string") selectedVideoModel.value = draft.videoModel;
+  if (typeof draft.videoMode === "string") videoStudioMode.value = draft.videoMode;
+  if (typeof draft.videoDuration === "number") videoDuration.value = draft.videoDuration;
+  if (typeof draft.videoRatio === "string") videoRatio.value = draft.videoRatio;
+  if (typeof draft.videoResolution === "string") videoResolution.value = draft.videoResolution;
+  if (typeof draft.videoGenerateAudio === "boolean") videoGenerateAudio.value = draft.videoGenerateAudio;
+  if (typeof draft.rechargeAmount === "number") selectedRechargeAmount.value = draft.rechargeAmount;
+  if (typeof draft.customRechargeAmount === "string") customRechargeAmount.value = draft.customRechargeAmount;
+  if (draft.paymentMethod === "cash" || draft.paymentMethod === "wechat" || draft.paymentMethod === "alipay") selectedPaymentMethod.value = draft.paymentMethod;
+  const storedReferences = Array.isArray(draft.referenceImages) ? draft.referenceImages : [];
+  if (storedReferences.length && !aiReferenceImages.value.length) {
+    aiReferenceImages.value = storedReferences.flatMap((raw) => {
+      if (!raw || typeof raw !== "object") return [];
+      const item = raw as Record<string, unknown>;
+      const remoteUrl = String(item.remoteUrl || "");
+      if (!remoteUrl) return [];
+      return [{ id: String(item.id || `restored-${Date.now()}`), name: String(item.name || "参考图"), url: remoteUrl, remoteUrl, uploading: false }];
+    });
+  }
+}
+function restoreWorkspaceGuestDraft() {
+  if (typeof window === "undefined" || !hasAuthToken()) return "";
+  try {
+    const draft = JSON.parse(window.localStorage.getItem(workspaceGuestDraftKey) || "null") as ({ moduleId?: string; createdAt?: number } & Record<string, unknown>) | null;
+    if (!draft || !draft.createdAt || Date.now() - draft.createdAt > 30 * 60 * 1000) return "";
+    applyWorkspaceDraft(draft);
+    window.localStorage.removeItem(workspaceGuestDraftKey);
+    return draft.moduleId && guestVisibleModuleIds.has(draft.moduleId) ? draft.moduleId : "";
+  } catch {
+    window.localStorage.removeItem(workspaceGuestDraftKey);
+    return "";
+  }
+}
+function ensureWorkspaceAuth(action: ProtectedAction, moduleId = store.activeModuleId, extraPayload: Record<string, unknown> = {}) {
+  if (hasAuthToken()) return true;
+  if (action === "generate_image" || action === "generate_video") {
+    trackWebGuestExperience("guest_click_generate", moduleId, { action });
+  }
+  saveWorkspaceGuestDraft(moduleId);
+  const loginAlreadyOpen = workspaceLoginOpen.value;
+  authStore.requireAuth({
+    action,
+    route: currentWorkspaceRoute(),
+    payload: { ...workspaceDraftPayload(moduleId), ...extraPayload, moduleId },
+    autoResume: false
+  });
+  if (!loginAlreadyOpen) trackWebGuestExperience("login_modal_show", moduleId, { action });
+  const pending = authStore.pendingAction;
+  if (pending) {
+    const localReferences = aiReferenceImages.value.flatMap((item) => item.file instanceof File
+      ? [{ id: item.id, name: item.name, file: item.file }]
+      : []);
+    if (localReferences.length) {
+      void writePendingReferenceImages(pending.id, localReferences, pending.expiresAt).catch(() => undefined);
+    }
+  }
+  return false;
+}
+
+async function loadGuestPublicCases() {
+  if (publicOfficialCasesLoading.value || publicOfficialCases.value.length) return;
+  publicOfficialCasesLoading.value = true;
+  try {
+    const response = await adminRequest<{ items?: AdminRecord[] }>({ method: "GET", url: "/public/cases", authMode: "none" });
+    publicOfficialCases.value = Array.isArray(response.items) ? response.items : [];
+  } catch {
+    publicOfficialCases.value = [];
+  } finally {
+    publicOfficialCasesLoading.value = false;
+  }
+}
+
+async function openMyWorks() {
+  if (!ensureWorkspaceAuth("save_work", "userWorks", { openMine: true })) return;
+  worksSourceTab.value = "mine";
+  await store.loadActiveModule({ preferCache: false });
+}
+
+async function refreshWorksCenter() {
+  if (worksSourceTab.value === "official" || isGuestUser.value) {
+    publicOfficialCases.value = [];
+    await loadGuestPublicCases();
+    return;
+  }
+  await store.loadActiveModule({ preferCache: false });
+}
 const authPath = ref(typeof window !== "undefined" ? window.location.pathname.replace(/\/$/, "") || "/" : "");
-const isLoginRoute = computed(() => authPath.value === "/login");
-const isRegisterRoute = computed(() => authPath.value === "/register");
+const authConsolePrefix = computed(() => authPath.value.startsWith("/agent") ? "/agent" : authPath.value.startsWith("/admin") ? "/admin" : "");
+const authLoginHref = computed(() => `${authConsolePrefix.value}/login` || "/login");
+const authRegisterHref = computed(() => `${authConsolePrefix.value}/register` || "/register");
+const isLoginRoute = computed(() => authPath.value === authLoginHref.value);
+const isRegisterRoute = computed(() => authPath.value === authRegisterHref.value);
 const isAuthRoute = computed(() => isLoginRoute.value || isRegisterRoute.value);
 const initialInviteCode = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("invite") || "" : "";
-const loginForm = ref({
-  email: "demo@xianzhi.ai",
-  password: "",
-  remember: true
-});
 const registerForm = ref({
   username: "",
   email: "",
@@ -7969,132 +7939,21 @@ const registerForm = ref({
   confirmPassword: "",
   inviteCode: initialInviteCode
 });
+const registerAgreementAccepted = ref(false);
 const authSubmitting = ref(false);
-const wechatAuthSubmitting = ref(false);
 const mobileDrawerOpen = ref(false);
 const desktopSidebarCollapsed = ref(false);
 const tabsScrollRef = ref<HTMLElement | null>(null);
 const openTabStorageKey = isUserConsole.value ? "xianzhi-user-open-tabs" : isAgentConsole.value ? "xianzhi-agent-open-tabs" : "xianzhi-admin-open-tabs";
 const activeTabStorageKey = isUserConsole.value ? "xianzhi-user-active-tab" : isAgentConsole.value ? "xianzhi-agent-active-tab" : "xianzhi-admin-active-tab";
-const agentModuleIds = ["partnerDashboard", "partnerCustomers", "partnerOrders", "partnerUsage", "partnerCommissions", "partnerChannels", "partnerMaterials", "partnerAccount"];
-const userModuleIds = ["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks", "userMembership", "userUsage", "userOrders"];
 const imageWorkspaceModuleIds = ["userAiImage"];
 const adminModuleIds = modules.map((item) => item.id).filter((id) => !agentModuleIds.includes(id) && !operationCenterModuleIds.includes(id) && !userModuleIds.includes(id));
 const userConsoleModuleIds = [...userModuleIds, ...agentModuleIds, ...operationCenterModuleIds];
 const allowedModuleIds = isUserConsole.value ? userConsoleModuleIds : isAgentConsole.value ? agentModuleIds : adminModuleIds;
-const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : ["analysis", "workbench"];
-const userModulePathMap: Record<string, string> = {
-  "/app": "userDashboard",
-  "/app/ai-image": "userAiImage",
-  "/app/image-generation": "userAiImage",
-  "/app/agents": "userAgentCenter",
-  "/app/agent-center": "userAgentCenter",
-  "/app/wireless-canvas": "userWirelessCanvas",
-  "/app/video-generation": "userVideoGeneration",
-  "/app/ppt-generation": "userPptGeneration",
-  "/app/ai-ppt": "userPptGeneration",
-  "/app/works": "userWorks",
-  "/app/membership": "userMembership",
-  "/app/usage": "userUsage",
-  "/app/orders": "userOrders",
-  "/app/agent": "partnerDashboard",
-  "/app/agent/customers": "partnerCustomers",
-  "/app/agent/orders": "partnerOrders",
-  "/app/agent/usage": "partnerUsage",
-  "/app/agent/commissions": "partnerCommissions",
-  "/app/agent/channels": "partnerChannels",
-  "/app/agent/materials": "partnerMaterials",
-  "/app/agent/account": "partnerAccount",
-  "/app/operation-center": "operationCenterDashboard",
-  "/app/operation-center/agents": "operationCenterAgents",
-  "/app/operation-center/orders": "operationCenterOrders",
-  "/app/operation-center/commissions": "operationCenterCommissions"
-};
-const userModuleRouteMap: Record<string, string> = {
-  userDashboard: "/app",
-  userAiImage: "/app/ai-image",
-  userAgentCenter: "/app/agents",
-  userWirelessCanvas: "/app/wireless-canvas",
-  userVideoGeneration: "/app/video-generation",
-  userPptGeneration: "/app/ppt-generation",
-  userWorks: "/app/works",
-  userMembership: "/app/membership",
-  userUsage: "/app/usage",
-  userOrders: "/app/orders",
-  partnerDashboard: "/app/agent",
-  partnerCustomers: "/app/agent/customers",
-  partnerOrders: "/app/agent/orders",
-  partnerUsage: "/app/agent/usage",
-  partnerCommissions: "/app/agent/commissions",
-  partnerChannels: "/app/agent/channels",
-  partnerMaterials: "/app/agent/materials",
-  partnerAccount: "/app/agent/account",
-  operationCenterDashboard: "/app/operation-center",
-  operationCenterAgents: "/app/operation-center/agents",
-  operationCenterOrders: "/app/operation-center/orders",
-  operationCenterCommissions: "/app/operation-center/commissions"
-};
-const billingModulePathMap: Record<string, string> = {
-  "/admin/billing": "billingOverview",
-  "/admin/billing/overview": "billingOverview",
-  "/admin/billing/rules": "billingRules",
-  "/admin/billing/provider-costs": "billingProviderCosts",
-  "/admin/billing/events": "billingEvents",
-  "/admin/billing/reconciliation": "billingReconciliation",
-  "/admin/billing/wallet-ledger": "billingWalletLedger",
-  "/admin/billing/customers": "billingCustomers",
-  "/admin/billing/products": "billingProducts",
-  "/admin/billing/subscriptions": "billingSubscriptions",
-  "/admin/billing/coupons": "billingCoupons",
-  "/admin/billing/invoices": "billingInvoices",
-  "/admin/billing/credit-notes": "billingCreditNotes",
-  "/admin/billing/payment-requests": "billingPaymentRequests",
-  "/admin/billing/payments": "billingPayments"
-};
-const billingModuleRouteMap: Record<string, string> = {
-  billingOverview: "/admin/billing/overview",
-  billingRules: "/admin/billing/rules",
-  billingProviderCosts: "/admin/billing/provider-costs",
-  billingEvents: "/admin/billing/events",
-  billingReconciliation: "/admin/billing/reconciliation",
-  billingWalletLedger: "/admin/billing/wallet-ledger",
-  billingCustomers: "/admin/billing/customers",
-  billingProducts: "/admin/billing/products",
-  billingSubscriptions: "/admin/billing/subscriptions",
-  billingCoupons: "/admin/billing/coupons",
-  billingInvoices: "/admin/billing/invoices",
-  billingCreditNotes: "/admin/billing/credit-notes",
-  billingPaymentRequests: "/admin/billing/payment-requests",
-  billingPayments: "/admin/billing/payments"
-};
+const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : ["analysis"];
 const enterpriseRoutePath = ref(typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : "/admin/enterprises");
-const enterpriseDetailSuffixMap: Record<string, string> = {
-  "": "enterpriseDetail",
-  "/certifications": "enterpriseCertifications",
-  "/members": "enterpriseMembers",
-  "/package": "enterprisePackage",
-  "/compute": "enterpriseCompute",
-  "/transactions": "enterpriseTransactions",
-  "/orders": "enterpriseOrders",
-  "/ai-capabilities": "enterpriseAiCapabilities",
-  "/ai-employees": "enterpriseAiEmployees",
-  "/knowledge-bases": "enterpriseKnowledgeBases",
-  "/attribution": "enterpriseAttribution",
-  "/relationships": "enterpriseRelationships",
-  "/risk": "enterpriseRisk",
-  "/audit-logs": "enterpriseAuditLogs"
-};
-
-function enterpriseModuleIdFromPath(pathname: string) {
-  const normalizedPath = pathname.replace(/\/$/, "");
-  if (normalizedPath === "/admin/enterprises") return "enterpriseList";
-  if (normalizedPath === "/admin/enterprises/certifications") return "enterpriseCertifications";
-  const match = normalizedPath.match(/^\/admin\/enterprises\/[^/]+(\/[^/]+)?$/);
-  return match ? enterpriseDetailSuffixMap[match[1] || ""] || "" : "";
-}
-
 function isPptGenerationPath(pathname: string) {
-  const normalizedPath = pathname.replace(/\/$/, "");
+  const normalizedPath = canonicalUserConsolePath(pathname).replace(/\/$/, "");
   return (
     normalizedPath === "/app/ppt-generation" ||
     normalizedPath === "/app/ai-ppt" ||
@@ -8103,43 +7962,43 @@ function isPptGenerationPath(pathname: string) {
   );
 }
 
+function canonicalUserConsolePath(pathname: string) {
+  return pathname === "/workspace" || pathname.startsWith("/workspace/")
+    ? `/app${pathname.slice("/workspace".length)}`
+    : pathname;
+}
+
+function activeUserConsolePath(pathname: string) {
+  if (userConsoleBasePath === "/") return "/";
+  return userConsoleBasePath === "/workspace" && (pathname === "/app" || pathname.startsWith("/app/"))
+    ? `/workspace${pathname.slice(4)}`
+    : pathname;
+}
+
 function moduleIdFromLocationPath() {
   if (typeof window === "undefined") return "";
-  const currentPath = window.location.pathname.replace(/\/$/, "");
-  if (isUserConsole.value) {
-    if (isPptGenerationPath(currentPath)) return "userPptGeneration";
-    return userModulePathMap[currentPath] || "";
-  }
-  if (!isAgentConsole.value) return billingModulePathMap[currentPath] || enterpriseModuleIdFromPath(currentPath);
-  return "";
+  return resolveModuleIdFromPath(canonicalUserConsolePath(window.location.pathname));
 }
 
 function syncUserModulePath(moduleId: string) {
   if (typeof window === "undefined" || !isUserConsole.value) return;
-  const nextPath = userModuleRouteMap[moduleId] || "/app";
+  const nextPath = activeUserConsolePath(resolveModulePath(moduleId) || "/app");
   const currentPath = window.location.pathname.replace(/\/$/, "");
   if (moduleId === "userPptGeneration" && isPptGenerationPath(currentPath)) return;
   if (currentPath === nextPath) return;
   window.history.pushState({}, "", nextPath);
 }
 
-function syncAdminEnterpriseModulePath(moduleId: string) {
-  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value || !enterpriseModuleIds.includes(moduleId)) return;
-  const currentPath = window.location.pathname.replace(/\/$/, "");
-  if (enterpriseModuleIdFromPath(currentPath) === moduleId) {
-    enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
+function syncAdminModulePath(moduleId: string) {
+  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value) return;
+  const enterpriseId = window.location.pathname.match(/^\/admin\/enterprises\/([^/]+)/)?.[1];
+  const nextPath = resolveModulePath(moduleId, { enterpriseId });
+  if (!nextPath || window.location.pathname.replace(/\/$/, "") === nextPath) {
+    if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
     return;
   }
-  const nextPath = moduleId === "enterpriseCertifications" ? "/admin/enterprises/certifications" : "/admin/enterprises";
   window.history.pushState({}, "", nextPath);
-  enterpriseRoutePath.value = nextPath;
-}
-
-function syncAdminBillingModulePath(moduleId: string) {
-  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value || !billingModuleIds.includes(moduleId)) return;
-  const nextPath = billingModuleRouteMap[moduleId];
-  if (!nextPath || window.location.pathname.replace(/\/$/, "") === nextPath) return;
-  window.history.pushState({}, "", nextPath);
+  if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = nextPath;
 }
 
 async function navigateEnterpriseRoute(payload: { path: string; moduleId: string }) {
@@ -8152,16 +8011,11 @@ async function navigateEnterpriseRoute(payload: { path: string; moduleId: string
 }
 
 function handleAdminEnterpriseHistoryPopState() {
-  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value) return;
-  const billingModuleId = billingModulePathMap[window.location.pathname.replace(/\/$/, "")];
-  if (billingModuleId) {
-    ensureOpenTab(billingModuleId);
-    void store.selectModule(billingModuleId);
-    return;
-  }
-  const moduleId = enterpriseModuleIdFromPath(window.location.pathname);
+  if (typeof window === "undefined") return;
+  const moduleId = resolveModuleIdFromPath(canonicalUserConsolePath(window.location.pathname));
   if (!moduleId) return;
-  enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
+  if (!allowedModuleIds.includes(moduleId)) return;
+  if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
   ensureOpenTab(moduleId);
   void store.selectModule(moduleId);
 }
@@ -8171,12 +8025,14 @@ function initialActiveModuleId() {
   const routeModuleId = moduleIdFromLocationPath();
   if (routeModuleId && allowedModuleIds.includes(routeModuleId)) return routeModuleId;
   const currentPath = window.location.pathname.replace(/\/$/, "");
-  if (isUserConsole.value && currentPath && currentPath !== "/app") {
-    window.history.replaceState({}, "", "/app");
+  if (isUserConsole.value && currentPath && currentPath !== userConsoleBasePath) {
+    window.history.replaceState({}, "", userConsoleBasePath);
     return defaultOpenTabIds[0];
   }
   const saved = window.localStorage.getItem(activeTabStorageKey) || "";
-  if (saved && allowedModuleIds.includes(saved) && modules.some((item) => item.id === saved)) return saved;
+  const savedModule = adminModuleById(saved);
+  const savedNeedsEnterpriseContext = savedModule?.path?.includes(":enterpriseId") === true;
+  if (saved && allowedModuleIds.includes(saved) && savedModule && !savedNeedsEnterpriseContext) return saved;
   return defaultOpenTabIds[0];
 }
 
@@ -9774,12 +9630,34 @@ function operationCenterRows(): AdminRecord[] {
 }
 
 const activeModuleMeta = computed(() => pageMeta[store.activeModuleId] || { badge: "主控模块", description: "管理当前业务域的数据和动作。" });
+const activeAdminNavigation = computed(() => {
+  if (isUserConsole.value || isAgentConsole.value) return null;
+  return adminNavigationSectionForModule(store.activeModuleId);
+});
+const activeAdminSectionTabs = computed(() => {
+  const navigation = activeAdminNavigation.value;
+  if (!navigation) return [];
+  const { section } = navigation;
+  if (section.tabModuleIds && !section.tabModuleIds.includes(store.activeModuleId)) return [];
+  return (section.tabModuleIds || section.moduleIds)
+    .map((moduleId) => adminModuleById(moduleId))
+    .filter((module): module is NonNullable<typeof module> => Boolean(module) && canNavigateToModule(module!.id));
+});
+const activeSidebarModuleId = computed(() => activeAdminNavigation.value?.section.primaryModuleId || store.activeModuleId);
 const visibleModuleGroups = computed(() => {
   if (isUserConsole.value) return userModuleGroups;
   if (isAgentConsole.value) return agentModuleGroups;
-  return adminModuleGroups.filter((group) => group.id !== "enterprise" || canViewEnterpriseManagement.value);
+  return adminModuleGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !item.requiresEnterpriseManagement || canViewEnterpriseManagement.value)
+    }))
+    .filter((group) => group.items.length > 0);
 });
-const activeGroup = computed(() => visibleModuleGroups.value.find((group) => group.items.some((item) => item.id === store.activeModuleId)));
+const activeGroup = computed(() => {
+  const navigationGroupId = activeAdminNavigation.value?.group.id;
+  return visibleModuleGroups.value.find((group) => navigationGroupId ? group.id === navigationGroupId : group.items.some((item) => item.id === store.activeModuleId));
+});
 const activeUserMenuEntry = computed(() => {
   if (!isUserConsole.value) return null;
   return allUserFlatMenuDefs.find((item) => item.targetId === store.activeModuleId) || null;
@@ -9787,7 +9665,7 @@ const activeUserMenuEntry = computed(() => {
 const activeGroupLabel = computed(() => isUserConsole.value ? "用户端" : activeGroup.value?.title || "工作台");
 const activeHeaderModuleTitle = computed(() => activeUserMenuEntry.value?.title || store.activeModule.title);
 const activeGroupIcon = computed(() => isUserConsole.value ? activeUserMenuEntry.value?.icon || House : activeGroup.value?.icon || House);
-const isGroupActive = (group: { items: Array<{ id: string }> }) => group.items.some((item) => item.id === store.activeModuleId);
+const isGroupActive = (group: { id: string; items: Array<{ id: string }> }) => activeAdminNavigation.value ? group.id === activeAdminNavigation.value.group.id : group.items.some((item) => item.id === store.activeModuleId);
 const brandHomeTitle = computed(() => isUserConsole.value ? "回到用户首页" : isAgentConsole.value ? "回到代理看板" : "回到主控工作台");
 const activeUserMenuId = computed(() => activeUserMenuEntry.value?.id || store.activeModuleId);
 
@@ -9813,8 +9691,34 @@ function ensureOpenTab(moduleId: string) {
   openTabs.value.push(module);
 }
 
+function protectedActionForModule(moduleId: string): ProtectedAction {
+  if (moduleId === "userOrders") return "open_order";
+  if (moduleId === "userUsage") return "open_wallet";
+  if (moduleId === "userMembership") return "open_member_center";
+  if (moduleId === "userWorks") return "save_work";
+  if (moduleId.toLowerCase().includes("knowledge")) return "create_knowledge_base";
+  if (moduleId.toLowerCase().includes("agent")) return "create_agent";
+  return "open_member_center";
+}
+
 async function selectAdminModule(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
+  if (isGuestUser.value && !guestVisibleModuleIds.has(moduleId)) {
+    saveWorkspaceGuestDraft(moduleId);
+    const loginAlreadyOpen = workspaceLoginOpen.value;
+    authStore.requireAuth({
+      action: protectedActionForModule(moduleId),
+      route: currentWorkspaceRoute(),
+      payload: workspaceDraftPayload(moduleId),
+      autoResume: true
+    });
+    if (!loginAlreadyOpen) trackWebGuestExperience("login_modal_show", moduleId, { action: protectedActionForModule(moduleId) });
+    return;
+  }
+  if (!canNavigateToModule(moduleId)) {
+    ElMessage.warning("当前角色没有访问该模块的权限");
+    return;
+  }
   if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) {
     ElMessage.warning("当前账号还没有代理身份");
     return;
@@ -9836,10 +9740,20 @@ async function selectAdminModule(moduleId: string) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(activeTabStorageKey, moduleId);
     syncUserModulePath(moduleId);
-    syncAdminBillingModulePath(moduleId);
-    syncAdminEnterpriseModulePath(moduleId);
+    syncAdminModulePath(moduleId);
   }
-  await store.selectModule(moduleId);
+  const previousModuleId = store.activeModuleId;
+  if (isGuestUser.value) {
+    store.activeModuleId = moduleId;
+    store.data = {};
+    store.error = "";
+    if (["userAiImage", "userVideoGeneration", "userPptGeneration", "userAgentCenter", "userWirelessCanvas"].includes(moduleId)) {
+      trackWebGuestExperience("guest_open_creator", moduleId, { module: moduleId });
+    }
+  } else {
+    await store.selectModule(moduleId);
+  }
+  trackAdminExperience("MODULE_VIEW", moduleId, "", { fromModuleId: previousModuleId });
 }
 
 async function selectUserFlatMenu(menuId: string) {
@@ -9988,7 +9902,7 @@ watch(
 
 onMounted(() => {
   if (typeof window === "undefined") return;
-  if (isUserConsole.value && hasAuthToken()) void hydrateAiImageDraft();
+  if (isUserConsole.value) void hydrateAiImageDraft();
   if (isUserConsole.value && hasAuthToken()) hydrateAiSettingsFromStore();
   void refreshAiComposerClearance();
   aiTaskClockTimer = window.setInterval(() => {
@@ -10000,6 +9914,7 @@ onMounted(() => {
   window.addEventListener("resize", handleAiImageContextMenuDismiss);
   window.addEventListener("resize", updateAiComposerClearance);
   window.addEventListener("keydown", handleAiLightboxKeydown);
+  window.addEventListener("keydown", handleGlobalCommandShortcut);
   window.addEventListener("focus", handleAiWorkspaceVisibilityRefresh);
   window.addEventListener("popstate", handleAgentCenterHistoryPopState);
   window.addEventListener("popstate", handleAdminEnterpriseHistoryPopState);
@@ -10042,6 +9957,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("resize", updateAiComposerClearance);
     window.removeEventListener("resize", adjustVideoPromptHeight);
     window.removeEventListener("keydown", handleAiLightboxKeydown);
+    window.removeEventListener("keydown", handleGlobalCommandShortcut);
     window.removeEventListener("focus", handleAiWorkspaceVisibilityRefresh);
     window.removeEventListener("popstate", handleAgentCenterHistoryPopState);
     window.removeEventListener("popstate", handleAdminEnterpriseHistoryPopState);
@@ -10083,6 +9999,45 @@ const aiCapabilityMetrics = computed(() => [
   { label: "上游通道", value: String(aiChannels.value.length), hint: "从 API 设置读取" },
   { label: "调用日志", value: String(aiLogs.value.length || aiCapabilitySummary.value.logs || 0), hint: "含扣费与成本快照" }
 ]);
+const aiCapabilityViewModel = computed(() => ({
+  activeModuleId: store.activeModuleId,
+  loading: store.loading,
+  saving: store.saving,
+  metrics: aiCapabilityMetrics.value,
+  modules: aiModules.value,
+  models: aiModels.value,
+  schemas: aiSchemas.value,
+  limits: aiLimits.value,
+  channels: aiChannels.value,
+  logs: aiLogs.value,
+  refresh: () => store.loadActiveModule(),
+  navigate: selectAdminModule,
+  text: aiText,
+  list: aiList,
+  object: aiObject,
+  audienceLabel: aiAudienceLabel,
+  moduleLabel: aiModuleLabel,
+  limitScope: aiLimitScope,
+  jsonPreview: aiJsonPreview,
+  schemaFields: aiSchemaFields,
+  schemaFieldLabel: aiSchemaFieldLabel,
+  schemaFieldOptionsText: aiSchemaFieldOptionsText,
+  statusType,
+  statusLabel,
+  isActiveStatus,
+  moneyYuan,
+  toggleModule: toggleAIModule,
+  editModulePackages: editAIModulePackages,
+  editModuleModels: editAIModuleModels,
+  createModel: createAIModel,
+  editModel: editAIModel,
+  editModelCapabilities: editAIModelCapabilities,
+  toggleModel: toggleAIModel,
+  editSchema: editAIParameterSchema,
+  toggleSchema: toggleAIParameterSchema,
+  editLimit: editAILimitJSON,
+  toggleLimit: toggleAILimit
+}));
 
 function aiValue(row: AdminRecord, ...keys: string[]) {
   for (const key of keys) {
@@ -10691,7 +10646,7 @@ const billingTableTitle = computed(() => {
   const titleMap: Record<string, string> = {
     billingDashboard: "客户计费总览",
     billingCustomers: "客户计费档案",
-    billingProducts: "套餐产品与指标",
+    billingProducts: "支付商品与权益映射",
     billingBillableMetrics: "计量指标",
     billingCharges: "计费规则",
     billingSubscriptions: "订阅生命周期",
@@ -10749,16 +10704,26 @@ const filteredRows = computed(() => {
   });
 });
 const globalModuleResults = computed(() => {
-  const keyword = searchKeyword.value.trim().toLowerCase();
+	const keyword = globalSearchKeyword.value.trim().toLowerCase();
   if (!keyword) return [];
-  return modules.filter((item) => allowedModuleIds.includes(item.id)).filter((item) => {
-    const meta = pageMeta[item.id];
-    return [item.id, item.title, meta?.badge, meta?.description].some((value) => String(value || "").toLowerCase().includes(keyword));
-  }).slice(0, 6);
+  return modules
+    .filter((item) => allowedModuleIds.includes(item.id) && canNavigateToModule(item.id))
+    .map((item, index) => {
+      const meta = pageMeta[item.id];
+      const navigation = adminNavigationSectionForModule(item.id);
+      const moduleMatch = [item.id, item.title, meta?.badge, meta?.description].some((value) => String(value || "").toLowerCase().includes(keyword));
+      const sectionMatch = String(navigation?.section.title || "").toLowerCase().includes(keyword);
+      const groupMatch = String(navigation?.group.title || "").toLowerCase().includes(keyword);
+		return { item: { ...item, groupTitle: navigation?.group.title || "", sectionTitle: navigation?.section.title || "" }, index, score: moduleMatch ? 3 : sectionMatch ? 2 : groupMatch ? 1 : 0 };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, 6)
+    .map((entry) => entry.item);
 });
 
 const currentRecordResults = computed(() => {
-  const keyword = searchKeyword.value.trim().toLowerCase();
+	const keyword = globalSearchKeyword.value.trim().toLowerCase();
   if (!keyword) return [];
   return rows.value
     .filter((row) => Object.values(row).some((value) => String(Array.isArray(value) ? value.join(" ") : value ?? "").toLowerCase().includes(keyword)))
@@ -10772,13 +10737,33 @@ const currentRecordResults = computed(() => {
 });
 
 function openCurrentRecordResult(item: { title: string; row: AdminRecord }) {
-  searchKeyword.value = "";
+	globalSearchKeyword.value = "";
+	commandPaletteOpen.value = false;
   const action = visibleRowActions(item.row)[0];
   if (action) {
     void runAction(action.action, item.row);
     return;
   }
   ElMessage.info(`已定位到「${item.title}」，当前模块没有独立详情操作`);
+}
+
+async function openGlobalModuleResult(moduleId: string) {
+	const query = globalSearchKeyword.value.trim();
+	globalSearchKeyword.value = "";
+	commandPaletteOpen.value = false;
+	trackAdminExperience("SEARCH_RESULT_CLICK", moduleId, moduleId, { resultType: "module", queryLength: query.length });
+	await selectAdminModule(moduleId);
+}
+
+async function openGlobalBusinessResult(item: GlobalSearchItem) {
+	const query = globalSearchKeyword.value.trim();
+	globalSearchKeyword.value = "";
+	commandPaletteOpen.value = false;
+	trackAdminExperience("SEARCH_RESULT_CLICK", item.module, item.recordId, { resultType: item.type, queryLength: query.length });
+	await selectAdminModule(item.module);
+	searchKeyword.value = item.recordId;
+	const typeLabel = ({ customer: "客户", order: "订单", enterprise: "企业", generation_task: "生成任务", payment: "支付流水", invoice: "发票" } as Record<string, string>)[item.type] || "业务记录";
+	ElMessage.success(`已定位到${typeLabel}「${item.title}」`);
 }
 
 function metricValue(keyword: string, fallback: string) {
@@ -12651,25 +12636,113 @@ async function runAction(action: string, row: AdminRecord = {}) {
 }
 
 function hasAuthToken() {
-  return Boolean(localStorage.getItem("token") || sessionStorage.getItem("token"));
+  return authStore.isAuthenticated || Boolean(authStore.accessToken);
+}
+
+async function restoreAndResumeWorkspacePendingAction() {
+  const pending = authStore.refreshPendingAction();
+  if (!pending || !hasAuthToken()) return false;
+  applyWorkspaceDraft(pending.payload || {});
+  try {
+    const localReferences = await readPendingReferenceImages(pending.id);
+    const existingIds = new Set(aiReferenceImages.value.map((item) => item.id));
+    const restoredReferences = localReferences
+      .filter((item) => !existingIds.has(item.id))
+      .map<AiReferenceImage>((item) => ({
+        id: item.id,
+        name: item.name,
+        file: item.file,
+        url: URL.createObjectURL(item.file),
+        uploading: false,
+      }));
+    if (restoredReferences.length) aiReferenceImages.value = [...aiReferenceImages.value, ...restoredReferences];
+    await clearPendingReferenceImages(pending.id);
+  } catch {
+    // IndexedDB is best-effort. The remaining form fields still restore from localStorage.
+  }
+  const moduleId = String(pending.payload?.moduleId || "");
+  if (moduleId && allowedModuleIds.includes(moduleId)) await selectAdminModule(moduleId);
+  authStore.consumePendingAction();
+
+  try {
+    if (pending.action === "generate_image" || pending.action === "generate_video") {
+      const label = pending.action === "generate_video" ? "视频" : "图片";
+      await ElMessageBox.confirm(
+        `登录前填写的${label}创作参数已恢复。是否确认继续生成？正式生成可能消耗账户额度。`,
+        "继续刚才的创作",
+        { confirmButtonText: "确认生成", cancelButtonText: "保留参数，暂不生成", type: "warning" }
+      );
+      const generated = pending.action === "generate_video"
+        ? await submitVideoGeneration()
+        : await submitAiImage();
+      if (generated) {
+        trackWebGuestExperience("generation_success_after_login", moduleId || store.activeModuleId, { action: pending.action });
+      }
+      return generated;
+    }
+    if (pending.action === "recharge") {
+      await createUserRechargeOrder();
+      return true;
+    }
+    if (pending.action === "save_work") {
+      if (pending.payload?.openMine === true) {
+        worksSourceTab.value = "mine";
+        await store.loadActiveModule({ preferCache: false });
+        return true;
+      }
+      const taskIds = Array.isArray(pending.payload?.taskIds) ? pending.payload.taskIds.map(String).filter(Boolean) : [];
+      if (taskIds.length) openAiFavoritePicker(taskIds);
+      else ElMessage.info("登录成功，请重新选择要收藏的作品");
+      return true;
+    }
+    if (pending.action === "download_work") {
+      const taskId = String(pending.payload?.taskId || "");
+      const mediaKind = String(pending.payload?.mediaKind || "");
+      if (mediaKind === "video") {
+        const entry = videoHistory.value.find((item) => item.id === taskId);
+        if (entry) await downloadVideoHistory(entry);
+        else ElMessage.info("登录成功，请重新选择要下载的视频");
+      } else {
+        const task = onlineImageTasks.value.find((item) => aiTaskId(item) === taskId);
+        if (task && mediaKind === "image-all") await downloadAllAiTaskOutputs(task);
+        else if (task) await downloadAiTask(task);
+        else ElMessage.info("登录成功，请重新选择要下载的作品");
+      }
+      return true;
+    }
+    ElMessage.success("登录成功，已返回刚才的位置");
+    return true;
+  } catch (error) {
+    if (error === "cancel" || error === "close") {
+      ElMessage.info("已保留登录前填写的内容，未执行生成或扣费");
+      return false;
+    }
+    ElMessage.error(error instanceof Error ? error.message : "恢复刚才的操作失败，已保留页面内容");
+    return false;
+  }
+}
+
+async function runBatchAction(action: string, batchRows: AdminRecord[]) {
+  for (const row of batchRows) await runAction(action, row);
+  ElMessage.success(`批量操作完成：${batchRows.length} 条记录`);
 }
 
 function authRedirectPath(response: AuthMeResponse) {
-  const route = String(response.defaultRoute || "").trim();
-  if (route) return route;
+  const requested = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("redirect_url") || authStore.redirectUrl;
+  let route = safeInternalRedirect(requested || response.defaultRoute || "", "");
   const role = String(response.user?.role || "").toUpperCase();
-  if (role === "SUPER_ADMIN") return "/admin/";
-  return "/app";
-}
-
-function storeAuthToken(token: string, remember: boolean) {
-  if (remember) {
-    localStorage.setItem("token", token);
-    sessionStorage.removeItem("token");
-  } else {
-    sessionStorage.setItem("token", token);
-    localStorage.removeItem("token");
+  const workspace = String(response.workspace || "").toLowerCase();
+  if (route.startsWith("/admin") && role !== "SUPER_ADMIN") route = "";
+  if (route.startsWith("/agent") && workspace !== "agent" && !role.startsWith("AGENT")) route = "";
+  // The authenticated PC user console has one canonical entry. The backend
+  // still returns legacy /app routes for compatibility with H5/uni-app, so
+  // translate only those user-console routes at the desktop boundary.
+  if (route === "/app" || route.startsWith("/app/")) {
+    return "/";
   }
+  if (route) return route;
+  if (role === "SUPER_ADMIN") return "/admin/";
+  return "/";
 }
 
 function completeAuth(response: AuthMeResponse, remember = true) {
@@ -12678,42 +12751,66 @@ function completeAuth(response: AuthMeResponse, remember = true) {
     ElMessage.error("登录成功但没有返回访问令牌");
     return;
   }
-  storeAuthToken(token, remember);
+  authStore.applyAuth(response as unknown as WebAuthResponse, remember);
   window.location.replace(authRedirectPath(response));
+}
+
+async function handleWebLoginAuthenticated(response: unknown, remember: boolean) {
+  const authResponse = response as AuthMeResponse;
+  const token = String(authResponse.accessToken || "").trim();
+  if (!token) {
+    ElMessage.error("登录成功但没有返回访问令牌");
+    return;
+  }
+  const loginMetadata = authResponse as unknown as Record<string, unknown>;
+  trackWebGuestExperience("login_success", "webLogin", { authMethod: String(loginMetadata.authMethod || loginMetadata.loginMethod || "web") });
+  const shouldResumeWorkspace = isUserConsole.value && workspaceLoginOpen.value && !isAuthRoute.value;
+  if (!shouldResumeWorkspace) {
+    completeAuth(authResponse, remember);
+    return;
+  }
+
+  authStore.applyAuth(authResponse as unknown as WebAuthResponse, remember);
+  workspaceLoginOpen.value = false;
+  authSessionVersion.value += 1;
+  authReady.value = false;
+  try {
+    await loadCurrentAdmin();
+    const restoredModuleId = restoreWorkspaceGuestDraft();
+    if (restoredModuleId) store.activeModuleId = restoredModuleId;
+    await store.loadActiveModule({ preferCache: false });
+    await loadUserAccountSnapshot();
+    const pendingAction = authStore.pendingAction?.action || "";
+    const resumed = await restoreAndResumeWorkspacePendingAction();
+    if (pendingAction) {
+      trackWebGuestExperience(resumed ? "pending_action_resume_success" : "pending_action_resume_failed", store.activeModuleId, {
+        action: pendingAction,
+        reason: resumed ? "completed" : "not_executed"
+      });
+    }
+    if (!resumed) ElMessage.success("登录成功，已恢复当前工作区");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "登录成功，但恢复工作区失败");
+  } finally {
+    authReady.value = true;
+  }
+}
+
+function handleWorkspaceLoginCancelled() {
+  trackWebGuestExperience("login_cancel", store.activeModuleId, {
+    action: authStore.pendingAction?.action || "browse"
+  });
 }
 
 async function redirectAuthenticatedUserFromAuthRoute() {
   if (!hasAuthToken()) return;
   try {
-    const response = await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
+    const response = authStore.authResponse
+      ? authStore.authResponse as unknown as AuthMeResponse
+      : await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
     window.location.replace(authRedirectPath(response));
   } catch {
-    localStorage.removeItem("token");
-    sessionStorage.removeItem("token");
-  }
-}
-
-async function submitLogin() {
-  if (authSubmitting.value) return;
-  if (!loginForm.value.email.trim() || !loginForm.value.password.trim()) {
-    ElMessage.warning("请输入邮箱和密码");
-    return;
-  }
-  authSubmitting.value = true;
-  try {
-    const response = await adminRequest<AuthMeResponse>({
-      method: "POST",
-      url: "/auth/login",
-      data: {
-        email: loginForm.value.email.trim(),
-        password: loginForm.value.password
-      }
-    });
-    completeAuth(response, loginForm.value.remember);
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "登录失败");
-  } finally {
-    authSubmitting.value = false;
+    authStore.clear("guest");
   }
 }
 
@@ -12731,11 +12828,17 @@ async function submitRegister() {
     ElMessage.warning("两次输入的密码不一致");
     return;
   }
+  if (!registerAgreementAccepted.value) {
+    ElMessage.warning("请先阅读并同意用户协议和隐私政策");
+    return;
+  }
   authSubmitting.value = true;
   try {
     const response = await adminRequest<AuthMeResponse>({
       method: "POST",
       url: "/auth/register",
+      authMode: "none",
+      retryOnUnauthorized: false,
       data: {
         username: registerForm.value.username.trim(),
         email: registerForm.value.email.trim(),
@@ -12752,63 +12855,54 @@ async function submitRegister() {
   }
 }
 
-function getWeChatMiniProgramRuntime() {
-  return (globalThis as typeof globalThis & { wx?: WeChatMiniProgramRuntime }).wx;
-}
-
-function requestWeChatMiniProgramCode() {
-  return new Promise<string>((resolve, reject) => {
-    const wxRuntime = getWeChatMiniProgramRuntime();
-    if (!wxRuntime?.login) {
-      reject(new Error("请在微信小程序环境使用微信登录，浏览器请使用账号密码登录"));
-      return;
-    }
-    wxRuntime.login({
-      provider: "weixin",
-      success: (result) => {
-        if (result.code) {
-          resolve(result.code);
-          return;
-        }
-        reject(new Error("微信授权未返回 code"));
-      },
-      fail: (error) => reject(error instanceof Error ? error : new Error("微信授权失败"))
-    });
-  });
-}
-
-async function loginWithWeChatMiniProgram() {
-  if (wechatAuthSubmitting.value) return;
-  wechatAuthSubmitting.value = true;
-  try {
-    const code = await requestWeChatMiniProgramCode();
-    const response = await adminRequest<AuthMeResponse>({
-      method: "POST",
-      url: "/auth/wechat-mini-program/login",
-      data: { code }
-    });
-    completeAuth(response, true);
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "微信登录失败");
-  } finally {
-    wechatAuthSubmitting.value = false;
-  }
-}
-
 function redirectToLogin() {
-  localStorage.removeItem("token");
-  sessionStorage.removeItem("token");
+  authStore.clear("guest");
+  authSessionVersion.value += 1;
   authReady.value = false;
-  window.location.replace("/login");
+  if (isUserConsole.value) {
+    workspaceLoginOpen.value = false;
+    currentAdmin.value = null;
+    currentAgent.value = null;
+    currentOperationCenter.value = null;
+    currentPermissions.value = [];
+    store.activeModuleId = "userDashboard";
+    store.data = {};
+    store.dataByModule = {};
+    store.dataByEndpoint = {};
+    store.error = "";
+    store.loading = false;
+    openTabs.value = modules.filter(item => defaultOpenTabIds.includes(item.id));
+    window.localStorage.setItem(activeTabStorageKey, "userDashboard");
+    window.history.replaceState({ auth: "guest" }, "", "/");
+    authPath.value = "/";
+    authReady.value = true;
+    return;
+  }
+  const prefix = isAgentConsole.value ? "/agent" : isUserConsole.value ? "" : "/admin";
+  window.location.replace(`${prefix}/login`);
 }
 
 async function loadCurrentAdmin() {
   if (!hasAuthToken()) {
+    if (isUserConsole.value) {
+      currentAdmin.value = null;
+      currentAgent.value = null;
+      currentOperationCenter.value = null;
+      currentPermissions.value = [];
+      if (!guestVisibleModuleIds.has(store.activeModuleId)) store.activeModuleId = "userDashboard";
+      store.data = {};
+      store.error = "";
+      authReady.value = true;
+      return true;
+    }
     redirectToLogin();
     return false;
   }
   try {
-    const response = await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
+    const response = authStore.authResponse
+      ? authStore.authResponse as unknown as AuthMeResponse
+      : await adminRequest<AuthMeResponse>({ method: "GET", url: "/auth/me" });
+    authStore.applyAuth(response as unknown as WebAuthResponse, isPersistentWebSession());
     currentAdmin.value = response.user;
     currentAgent.value = response.agent || null;
     currentOperationCenter.value = response.operationCenter || null;
@@ -12840,7 +12934,7 @@ async function loadCurrentAdmin() {
     const platformAdminRoles = ["SUPER_ADMIN", "ENTERPRISE_OPERATOR", "CERTIFICATION_REVIEWER", "FINANCE", "RISK_MANAGER", "CUSTOMER_SERVICE"];
     const isPlatformAdmin = role.includes("ADMIN") || platformAdminRoles.includes(role) || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:"));
     if (!isAgentConsole.value && !isUserConsole.value && !isPlatformAdmin && !role.startsWith("AGENT")) {
-      window.location.href = "/app";
+      window.location.href = "/";
       return false;
     }
     if (!isAgentConsole.value && !isUserConsole.value && role.startsWith("AGENT")) {
@@ -12950,11 +13044,7 @@ async function changePassword() {
 
 async function logout() {
   authReady.value = false;
-  try {
-    await adminRequest({ method: "POST", url: "/auth/logout" });
-  } catch {
-    // 本地退出优先，服务端 token 失效失败不阻塞退出。
-  }
+  await authStore.logout();
   await clearCurrentAiImageCache().catch(() => undefined);
   redirectToLogin();
 }
@@ -12977,20 +13067,31 @@ onMounted(async () => {
   if (typeof window !== "undefined") {
     window.addEventListener("resize", adjustVideoPromptHeight);
   }
+  await authStore.initializeAuth();
+  if (!authStore.isAuthenticated && isUserConsole.value) {
+    trackWebGuestExperience("guest_open_app", store.activeModuleId || "userDashboard", { route: currentWorkspaceRoute() });
+    trackWebGuestExperience("guest_view_home", "userDashboard", { route: currentWorkspaceRoute() });
+  }
+  worksSourceTab.value = authStore.isAuthenticated ? "mine" : "official";
+  if (!authStore.isAuthenticated) void loadGuestPublicCases();
   if (isAuthRoute.value) {
     await redirectAuthenticatedUserFromAuthRoute();
     return;
   }
   if (await loadCurrentAdmin()) {
     hydrateVideoHistoryFromStorage();
+    const restoredGuestModuleId = restoreWorkspaceGuestDraft();
     void nextTick(adjustVideoPromptHeight);
     if (typeof window !== "undefined") {
       const routeModuleId = moduleIdFromLocationPath();
       const savedActiveTab = window.localStorage.getItem(activeTabStorageKey);
       const canUseModule = (moduleId: string) => allowedModuleIds.includes(moduleId)
+        && (!isGuestUser.value || guestVisibleModuleIds.has(moduleId))
         && (!agentModuleIds.includes(moduleId) || hasAgentIdentity.value)
         && (!operationCenterModuleIds.includes(moduleId) || hasOperationCenterIdentity.value);
-      const nextActiveTab = routeModuleId && canUseModule(routeModuleId)
+      const nextActiveTab = restoredGuestModuleId && canUseModule(restoredGuestModuleId)
+        ? restoredGuestModuleId
+        : routeModuleId && canUseModule(routeModuleId)
         ? routeModuleId
         : savedActiveTab && canUseModule(savedActiveTab) && modules.some((item) => item.id === savedActiveTab)
           ? savedActiveTab
@@ -13003,13 +13104,59 @@ onMounted(async () => {
     }
     await loadUserAccountSnapshot();
     if (isUserConsole.value) void loadOfficeCLIStatus();
-    await store.loadActiveModule();
-    void refreshAiComposerClearance();
+    if (!isGuestUser.value) {
+      await store.loadActiveModule();
+      void refreshAiComposerClearance();
+      await restoreAndResumeWorkspacePendingAction();
+    }
   }
 });
 </script>
 
 <style scoped>
+.workspace-guest-shell {
+  min-height: 100vh;
+  color: #172033;
+  background: radial-gradient(circle at 12% 8%, #e9efff 0, transparent 34%), radial-gradient(circle at 88% 18%, #fff1e8 0, transparent 30%), #f7f9fc;
+}
+.workspace-guest-nav { height: 76px; padding: 0 max(28px, 5vw); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(79, 95, 130, .12); background: rgba(255, 255, 255, .78); backdrop-filter: blur(18px); }
+.workspace-guest-brand { display: flex; align-items: center; gap: 12px; }
+.workspace-guest-brand img { width: 46px; height: 46px; object-fit: contain; }
+.workspace-guest-brand div { display: grid; gap: 2px; }
+.workspace-guest-brand strong { font-size: 20px; }
+.workspace-guest-brand span { color: #7b8499; font-size: 12px; }
+.workspace-guest-nav > button, .workspace-guest-prompt button { border: 0; border-radius: 12px; padding: 11px 24px; color: #fff; background: linear-gradient(135deg, #6457f5, #4a79f8); cursor: pointer; font-weight: 700; }
+.workspace-guest-main { width: min(1200px, calc(100% - 48px)); margin: 0 auto; padding: 64px 0 80px; }
+.workspace-guest-hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); gap: 58px; align-items: center; }
+.workspace-guest-kicker { display: inline-flex; padding: 7px 12px; border-radius: 999px; color: #584de7; background: #eceaff; font-size: 13px; font-weight: 700; }
+.workspace-guest-hero h1 { margin: 22px 0 18px; font-size: clamp(42px, 5vw, 68px); line-height: 1.08; letter-spacing: -.045em; }
+.workspace-guest-hero h1 em { color: #5e55ed; font-style: normal; }
+.workspace-guest-hero > div > p { max-width: 680px; color: #667087; font-size: 17px; line-height: 1.8; }
+.workspace-guest-prompt { margin-top: 28px; padding: 16px; border: 1px solid #dfe4f0; border-radius: 20px; background: #fff; box-shadow: 0 22px 60px rgba(48, 61, 102, .1); }
+.workspace-guest-prompt textarea { width: 100%; min-height: 105px; padding: 4px; border: 0; outline: 0; resize: vertical; color: #232c42; font: inherit; line-height: 1.6; }
+.workspace-guest-prompt > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.workspace-guest-prompt small { color: #8a93a8; }
+.workspace-guest-preview { min-height: 390px; padding: 38px; display: flex; flex-direction: column; justify-content: center; border: 1px solid rgba(101, 87, 245, .18); border-radius: 30px; background: linear-gradient(145deg, #1d2440, #3c356d); color: #fff; box-shadow: 0 30px 80px rgba(39, 44, 88, .22); }
+.workspace-guest-preview > span { color: #b9c4ff; font-size: 13px; letter-spacing: .15em; text-transform: uppercase; }
+.workspace-guest-preview > strong { margin: 14px 0 30px; font-size: 32px; }
+.workspace-guest-preview > div { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.workspace-guest-preview i { padding: 15px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; background: rgba(255,255,255,.07); font-style: normal; }
+.workspace-guest-capabilities { margin-top: 60px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.workspace-guest-capabilities article { padding: 24px; border: 1px solid #e2e6ef; border-radius: 20px; background: rgba(255,255,255,.85); }
+.workspace-guest-capabilities article > span { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: #fff; background: #6258ed; font-weight: 800; }
+.workspace-guest-capabilities strong { margin-top: 18px; display: block; font-size: 18px; }
+.workspace-guest-capabilities p { min-height: 66px; color: #717b91; line-height: 1.6; }
+.workspace-guest-capabilities button { padding: 0; border: 0; color: #5d53e7; background: transparent; cursor: pointer; font-weight: 700; }
+.workspace-login-overlay { position: fixed; z-index: 3000; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(19, 25, 45, .52); backdrop-filter: blur(8px); }
+.workspace-auth-modal { position: relative; min-height: auto; width: min(560px, 100%); border-radius: 26px; box-shadow: 0 30px 90px rgba(18, 24, 48, .32); }
+.workspace-auth-close { position: absolute; z-index: 2; top: 16px; right: 18px; width: 36px; height: 36px; border: 0; border-radius: 50%; color: #6f778b; background: #eef1f6; cursor: pointer; font-size: 24px; }
+.workspace-auth-modal .admin-auth-card { width: 100%; }
+.workspace-stay-guest { border: 0; background: transparent; cursor: pointer; }
+@media (max-width: 900px) {
+  .workspace-guest-hero { grid-template-columns: 1fr; }
+  .workspace-guest-capabilities { grid-template-columns: repeat(2, 1fr); }
+}
+
 .admin-auth-shell {
   min-height: 100vh;
   display: grid;
@@ -13620,6 +13767,63 @@ onMounted(async () => {
 .user-works-empty button {
   background: linear-gradient(135deg, #7464f2, #5b49e8);
   color: #fff;
+}
+
+.user-works-source-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 5px;
+  width: fit-content;
+  border: 1px solid #e1e7f2;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.user-works-source-tabs button {
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 9px;
+  color: #667085;
+  background: transparent;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.user-works-source-tabs button.active {
+  color: #5b49e8;
+  background: #eeebff;
+}
+
+.user-works-source-tabs span {
+  margin-left: 5px;
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.user-works-guest-tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 22px;
+  border: 1px solid #dcd7ff;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8f7ff, #fff);
+}
+
+.user-works-guest-tip div { display: grid; gap: 5px; }
+.user-works-guest-tip strong { color: #26213f; }
+.user-works-guest-tip span { color: #667085; font-size: 13px; }
+.user-works-guest-tip button {
+  min-height: 38px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: #6554e8;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .user-works-summary {

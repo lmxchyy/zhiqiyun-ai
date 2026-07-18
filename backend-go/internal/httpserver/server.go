@@ -86,6 +86,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	}
 	fileService := storagecenter.NewService(fileRepository, storagecenter.S3ProviderFactory{AutoCreateBucket: cfg.StorageAutoCreateBucket}, fileCenterOptions(cfg))
 	api := newAPI(store, cfg, sessions, fileService)
+	publicCatalog := publicCatalogAPI{store: store}
 	api.pptVisualLocker = newRedisPPTVisualLocker(redisClient)
 	virtualPayment := newVirtualPaymentAPI(cfg, store, sessions, redisClient)
 	connectors := newConnectorAPI(cfg, store, enterprise, api, redisClient)
@@ -112,6 +113,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/auth/wechat-mini-program/login", wrapF(auth.wechatMiniProgramLogin))
 	v1.POST("/auth/wechat-mini-program/link", wrapF(auth.linkWeChatMiniProgram))
 	v1.POST("/auth/wechat/phone-login", wrapF(auth.wechatMiniProgramLogin))
+	v1.GET("/auth/wechat/qrcode", wrapF(auth.wechatWebQRCode))
+	v1.GET("/auth/wechat/status", wrapF(auth.wechatWebStatus))
+	v1.GET("/auth/wechat/callback", wrapF(auth.wechatWebCallback))
+	v1.POST("/auth/wechat/bind-mobile", wrapF(auth.wechatWebBindMobile))
 	v1.POST("/auth/sms/send", wrapF(auth.smsSend))
 	v1.POST("/auth/sms/login", wrapF(auth.smsLogin))
 	v1.POST("/auth/mobile/bind", wrapF(auth.bindMobile))
@@ -193,6 +198,14 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/channel/children", wrapF(channel.createChildAgent))
 	v1.GET("/channel/invite-records", wrapF(channel.inviteRecords))
 	v1.GET("/models", wrapF(api.models))
+	v1.GET("/public/home", wrapF(publicCatalog.home))
+	v1.GET("/public/cases", wrapF(publicCatalog.cases))
+	v1.GET("/public/templates", wrapF(publicCatalog.templates))
+	v1.GET("/public/agents", wrapF(publicCatalog.agents))
+	v1.GET("/public/models", wrapF(api.models))
+	v1.GET("/public/pricing", wrapF(api.plans))
+	v1.POST("/public/experience-events", wrapF(publicCatalog.recordGuestExperienceEvent))
+	v1.GET("/app/review-mode", wrapF(api.reviewMode))
 	v1.GET("/module-schema", wrapF(api.moduleSchema))
 	v1.GET("/plans", wrapF(api.plans))
 	v1.GET("/plans/:id", wrapF(api.planDetail))
@@ -352,6 +365,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		adminGroup.Use(superAdminMiddleware(auth))
 	}
 	adminGroup.GET("/overview", wrapF(admin.overview))
+	adminGroup.GET("/search", wrapF(admin.globalSearch))
+	adminGroup.PATCH("/exceptions/:id", wrapF(admin.updateExceptionCase))
+	adminGroup.POST("/experience-events", wrapF(admin.recordExperienceEvent))
+	adminGroup.GET("/experience-analytics", wrapF(admin.experienceAnalytics))
 	adminGroup.GET("/enterprises", wrapF(adminEnterprise.list))
 	adminGroup.POST("/enterprises", wrapF(adminEnterprise.create))
 	adminGroup.GET("/enterprises/export", wrapF(adminEnterprise.export))
@@ -369,6 +386,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/enterprises/:enterpriseId/knowledge-bases", wrapF(adminEnterprise.section("knowledge-bases")))
 	adminGroup.GET("/enterprises/:enterpriseId/attribution", wrapF(adminEnterprise.section("attribution")))
 	adminGroup.GET("/enterprises/:enterpriseId/relationships", wrapF(adminEnterprise.section("relationships")))
+	adminGroup.GET("/enterprises/:enterpriseId/integrations", wrapF(adminEnterprise.section("integrations")))
 	adminGroup.GET("/enterprises/:enterpriseId/risk", wrapF(adminEnterprise.section("risk")))
 	adminGroup.GET("/enterprises/:enterpriseId/audit-logs", wrapF(adminEnterprise.section("audit-logs")))
 	adminGroup.POST("/enterprises/:enterpriseId/certifications/review", wrapF(adminEnterprise.mutate("certification-review")))
@@ -421,6 +439,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.PATCH("/knowledge/:resource/:id", wrapF(knowledgeAPI.saveAdminProfile))
 	adminGroup.GET("/customer-attributions", wrapF(admin.customerAttributions))
 	adminGroup.GET("/customers", wrapF(admin.customers))
+	adminGroup.GET("/customers/:id/360", wrapF(admin.customer360))
 	adminGroup.POST("/customers", wrapF(admin.createCustomer))
 	adminGroup.PATCH("/customers/:id", wrapF(admin.updateCustomer))
 	adminGroup.GET("/customers/:id/identities", wrapF(admin.customerIdentities))
@@ -448,6 +467,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/plans/:id/capabilities", wrapF(admin.planCapabilities))
 	adminGroup.PUT("/plans/:id/capabilities", wrapF(admin.updatePlanCapabilities))
 	adminGroup.GET("/orders", wrapF(admin.orders))
+	adminGroup.GET("/orders/:id/timeline", wrapF(admin.orderTimeline))
 	adminGroup.POST("/orders", wrapF(admin.createOrder))
 	adminGroup.POST("/orders/:id/mark-paid", wrapF(admin.markOrderPaid))
 	adminGroup.POST("/orders/:id/renew", wrapF(admin.renewOrder))
@@ -544,21 +564,25 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router.GET("/v1/dashboard/billing/subscription", wrapF(admin.billingSubscription))
 	router.GET("/v1/dashboard/billing/usage", wrapF(admin.billingUsage))
 	registerWirelessCanvasCompatibilityRoutes(router, cfg)
+	router.GET("/", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/login", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/register", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/assets/*filepath", gin.WrapH(staticPrefixFiles("/assets/", filepath.Join(cfg.StaticDir, "assets"))))
-	router.GET("/mobile", gin.WrapF(staticIndex(cfg.StaticDir)))
-	router.GET("/mobile/*filepath", gin.WrapH(staticPrefixFiles("/mobile/", cfg.StaticDir)))
+	router.GET("/static/*filepath", gin.WrapH(staticPrefixFiles("/static/", filepath.Join(cfg.StaticDir, "static"))))
+	router.GET("/mobile", wrapF(notFound))
+	router.GET("/mobile/*filepath", wrapF(notFound))
 	router.GET("/pages/*filepath", gin.WrapH(staticPrefixFiles("/pages/", cfg.StaticDir)))
 	router.GET("/admin", wrapF(redirectToAdminSlash))
 	router.GET("/admin/*filepath", gin.WrapH(staticPrefixFiles("/admin/", cfg.AdminStaticDir)))
-	router.GET("/app", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
-	router.GET("/app/*filepath", gin.WrapH(staticPrefixFiles("/app/", cfg.AdminStaticDir)))
+	router.GET("/app", wrapF(redirectToRoot))
+	router.GET("/app/*filepath", wrapF(redirectToRoot))
+	router.GET("/workspace", wrapF(redirectToRoot))
+	router.GET("/workspace/*filepath", wrapF(redirectToRoot))
 	router.GET("/agent", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/agent/*filepath", gin.WrapH(staticPrefixFiles("/agent/", cfg.AdminStaticDir)))
 	router.GET("/user", wrapF(notFound))
 	router.GET("/user/*filepath", wrapF(notFound))
-	router.NoRoute(staticOrAPINotFound(cfg.AdminStaticDir))
+	router.NoRoute(redirectUnknownWebToRoot)
 
 	return &http.Server{
 		Addr:              cfg.Addr,
@@ -667,6 +691,10 @@ func redirectToAdminSlash(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
 }
 
+func redirectToRoot(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+}
+
 func health(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -697,6 +725,45 @@ func staticIndex(root string) http.HandlerFunc {
 	}
 }
 
+func platformIndex(mobileRoot string, desktopRoot string) http.HandlerFunc {
+	mobileIndex := staticIndex(mobileRoot)
+	desktopIndex := staticIndex(desktopRoot)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if isMobileWebRequest(r) {
+			mobileIndex(w, r)
+			return
+		}
+		desktopIndex(w, r)
+	}
+}
+
+func isMobileWebRequest(r *http.Request) bool {
+	userAgent := strings.ToLower(r.UserAgent())
+	return strings.Contains(userAgent, "android") || strings.Contains(userAgent, "iphone") || strings.Contains(userAgent, "ipad") || strings.Contains(userAgent, "ipod") || strings.Contains(userAgent, "mobile")
+}
+
+func mobileIndexOrDesktopRedirect(root string) http.HandlerFunc {
+	mobileIndex := staticIndex(root)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if isMobileWebRequest(r) {
+			mobileIndex(w, r)
+			return
+		}
+		redirectToRoot(w, r)
+	}
+}
+
+func mobilePrefixOrDesktopRedirect(prefix string, root string) http.Handler {
+	mobileFiles := staticPrefixFiles(prefix, root)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isMobileWebRequest(r) {
+			mobileFiles.ServeHTTP(w, r)
+			return
+		}
+		redirectToRoot(w, r)
+	})
+}
+
 func staticFiles(root string) http.HandlerFunc {
 	fileServer := http.FileServer(http.Dir(root))
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -722,6 +789,31 @@ func staticOrAPINotFound(root string) gin.HandlerFunc {
 		}
 		staticHandler(c.Writer, c.Request)
 	}
+}
+
+func platformOrAPINotFound(mobileRoot string) gin.HandlerFunc {
+	mobileHandler := staticFiles(mobileRoot)
+	return func(c *gin.Context) {
+		requestPath := path.Clean("/" + c.Request.URL.Path)
+		if strings.HasPrefix(requestPath, "/api/") || strings.HasPrefix(requestPath, "/v1/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		if isMobileWebRequest(c.Request) {
+			mobileHandler(c.Writer, c.Request)
+			return
+		}
+		redirectToRoot(c.Writer, c.Request)
+	}
+}
+
+func redirectUnknownWebToRoot(c *gin.Context) {
+	requestPath := path.Clean("/" + c.Request.URL.Path)
+	if strings.HasPrefix(requestPath, "/api/") || strings.HasPrefix(requestPath, "/v1/") {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	redirectToRoot(c.Writer, c.Request)
 }
 
 func staticPrefixFiles(prefix string, root string) http.Handler {

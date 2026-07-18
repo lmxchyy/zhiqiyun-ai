@@ -8,6 +8,7 @@ import {
 } from "../../config/miniProgramPages";
 import type { AppRole } from "../../types";
 import type { LoginRedirectInfo } from "./types";
+import { pendingActions, resumePendingAction } from "./gate";
 
 const tabPages = new Set([
   "/pages/user/UserHomePage",
@@ -36,6 +37,14 @@ export function safeRedirectPath(path: string): string {
 }
 
 export function redirectAfterAuth(info: LoginRedirectInfo, role: AppRole, onFailure?: (error: unknown) => void) {
+  if (pendingActions.get()) {
+    uni.navigateBack({
+      delta: 1,
+      success: () => { setTimeout(() => { void resumePendingAction(); }, 0); },
+      fail: onFailure,
+    });
+    return;
+  }
   const requested = safeRedirectPath(info.path);
   const path = requested || roleLanding(role);
   const query = requested
