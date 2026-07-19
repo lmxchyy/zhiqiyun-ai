@@ -483,6 +483,8 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 		taskIntent = connector.IntentImageEdit
 	} else if intent.Name == connector.IntentModelInfo {
 		taskType = connector.IntentModelInfo
+	} else if intent.Name == connector.IntentCapabilityInfo {
+		taskType = connector.IntentCapabilityInfo
 	}
 	task, created, err := a.repo.createConnectorTask(ctx, connectorTaskRecord{
 		EnterpriseID: item.EnterpriseID, ConnectorID: item.ID, BindingID: binding.ID,
@@ -506,6 +508,17 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 		}
 		_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": responseText})
 		_ = a.repo.updateConnectorTask(ctx, task.ID, "ignored", 100, "", 0, map[string]any{"reason": "model_info_query", "model": strings.TrimSpace(item.Config.DefaultImageModel)}, "", "")
+		_ = a.repo.markMessage(ctx, message.ID, "completed", "")
+		return nil
+	}
+	if intent.Name == connector.IntentCapabilityInfo {
+		responseText := connectorCapabilityInfoText()
+		result, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: responseText})
+		if sendErr != nil {
+			return a.failMessage(ctx, message, item, task, "FEISHU_SEND_FAILED", sendErr)
+		}
+		_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": responseText})
+		_ = a.repo.updateConnectorTask(ctx, task.ID, "ignored", 100, "", 0, map[string]any{"reason": "capability_info_query"}, "", "")
 		_ = a.repo.markMessage(ctx, message.ID, "completed", "")
 		return nil
 	}
@@ -621,6 +634,15 @@ func connectorModelInfoText(model string) string {
 		return "当前飞书机器人尚未配置默认生图模型，请联系企业管理员完成配置。"
 	}
 	return fmt.Sprintf("当前飞书机器人用于图片生成的模型是：%s。", model)
+}
+
+func connectorCapabilityInfoText() string {
+	return "目前我支持以下功能：\n" +
+		"1. 文本生成图片：直接描述画面、商品、人物、风格、构图等要求。\n" +
+		"2. 修改上一张图片：基于当前会话中上一张成功生成的图片继续调整，例如添加 Logo、修改背景或颜色。\n" +
+		"3. 查询生图模型：发送“使用的是什么模型”。\n" +
+		"4. 自动保存作品：生成结果会保存到知启云 AI 作品中心。\n" +
+		"说明：生图和改图会按企业配置扣除积分；查询功能和模型不扣积分。"
 }
 
 func (a *connectorAPI) failMessage(ctx context.Context, message connectorMessageRecord, item enterpriseConnector, task connectorTaskRecord, code string, cause error) error {

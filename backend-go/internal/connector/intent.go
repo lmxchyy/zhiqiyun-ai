@@ -6,9 +6,10 @@ import (
 )
 
 const (
-	IntentImageGenerate = "image.generate"
-	IntentImageEdit     = "image.edit"
-	IntentModelInfo     = "model.info"
+	IntentImageGenerate  = "image.generate"
+	IntentImageEdit      = "image.edit"
+	IntentModelInfo      = "model.info"
+	IntentCapabilityInfo = "capability.info"
 )
 
 type Intent struct {
@@ -49,6 +50,11 @@ var modelInfoQueryKeywords = []string{
 	"生图使用什么模型", "生图用什么模型", "生图模型是什么", "模型名称是什么", "你是什么模型", "你用什么模型",
 }
 
+var capabilityInfoQueryKeywords = []string{
+	"你都有什么功能", "你有什么功能", "都有什么功能", "有什么功能", "你会什么", "你能做什么", "能做什么",
+	"支持哪些功能", "支持什么功能", "怎么使用", "如何使用", "使用帮助", "功能介绍",
+}
+
 var intentNoise = regexp.MustCompile(`(?i)(请|帮我|帮忙|给我|生成图片|生成图|生成|画一张|画|做一张图|做一张|生图|一张|的电商图|电商图|商品图|主图|海报|配图)[，,。.!！?？\s]*`)
 
 func (RuleIntentRouter) Route(text string, defaults IntentDefaults) Intent {
@@ -62,6 +68,10 @@ func (RuleIntentRouter) Route(text string, defaults IntentDefaults) Intent {
 	}
 	if isModelInfoQuery(trimmed) {
 		result.Name = IntentModelInfo
+		return result
+	}
+	if isCapabilityInfoQuery(trimmed) {
+		result.Name = IntentCapabilityInfo
 		return result
 	}
 	for _, keyword := range imageIntentKeywords {
@@ -88,6 +98,11 @@ func (RuleIntentRouter) Route(text string, defaults IntentDefaults) Intent {
 func isModelInfoQuery(text string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	return len([]rune(normalized)) <= 40 && containsAny(normalized, modelInfoQueryKeywords)
+}
+
+func isCapabilityInfoQuery(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return len([]rune(normalized)) <= 40 && containsAny(normalized, capabilityInfoQueryKeywords)
 }
 
 func looksLikeStandaloneVisualPrompt(text string) bool {

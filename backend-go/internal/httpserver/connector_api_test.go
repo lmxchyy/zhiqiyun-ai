@@ -453,6 +453,15 @@ func TestConnectorModelInfoText(t *testing.T) {
 	}
 }
 
+func TestConnectorCapabilityInfoText(t *testing.T) {
+	text := connectorCapabilityInfoText()
+	for _, expected := range []string{"文本生成图片", "修改上一张图片", "查询生图模型", "自动保存作品", "不扣积分"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("capability info missing %q: %s", expected, text)
+		}
+	}
+}
+
 func connectorGenerationTestSubject(t *testing.T, balance int64, provider generation.ImageProvider) (api, *sql.DB, enterpriseP0Fixture, string) {
 	t.Helper()
 	store, db := enterpriseP0TestStore(t)

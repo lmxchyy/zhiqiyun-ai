@@ -11,7 +11,7 @@ func TestRuleIntentRouter(t *testing.T) {
 	if intent.Name != IntentImageGenerate || intent.Subject != "iPhone 17" || intent.Scene != "电商图" || intent.Count != 1 {
 		t.Fatalf("unexpected intent: %#v", intent)
 	}
-	if got := router.Route("你好，你能做什么？", IntentDefaults{}); got.Name != "unknown" {
+	if got := router.Route("你好，今天天气怎么样？", IntentDefaults{}); got.Name != "unknown" {
 		t.Fatalf("non-image intent = %#v", got)
 	}
 }
@@ -25,6 +25,15 @@ func TestRuleIntentRouterRecognizesModelInfoQuery(t *testing.T) {
 	}
 	if got := router.Route("生成图片：一个桌面上的汽车模型", IntentDefaults{}); got.Name != IntentImageGenerate {
 		t.Fatalf("image prompt containing model = %#v", got)
+	}
+}
+
+func TestRuleIntentRouterRecognizesCapabilityInfoQuery(t *testing.T) {
+	router := RuleIntentRouter{}
+	for _, query := range []string{"你都有什么功能", "你能做什么？", "如何使用"} {
+		if got := router.Route(query, IntentDefaults{}); got.Name != IntentCapabilityInfo {
+			t.Fatalf("capability query %q intent = %#v", query, got)
+		}
 	}
 }
 
