@@ -16,6 +16,18 @@ func TestRuleIntentRouter(t *testing.T) {
 	}
 }
 
+func TestRuleIntentRouterRecognizesModelInfoQuery(t *testing.T) {
+	router := RuleIntentRouter{}
+	for _, query := range []string{"使用的是什么模型", "你用什么模型？", "生图模型是什么"} {
+		if got := router.Route(query, IntentDefaults{}); got.Name != IntentModelInfo {
+			t.Fatalf("model query %q intent = %#v", query, got)
+		}
+	}
+	if got := router.Route("生成图片：一个桌面上的汽车模型", IntentDefaults{}); got.Name != IntentImageGenerate {
+		t.Fatalf("image prompt containing model = %#v", got)
+	}
+}
+
 func TestRuleIntentRouterRecognizesStandaloneVisualPrompt(t *testing.T) {
 	router := RuleIntentRouter{}
 	prompt := "天蓝色连衣裙背影的少女，在沿海公路疾驰，裙角系着七彩风车。背影正对着镜头，背景渐变珊瑚粉晚霞，近景柏油路面反光呈液态金属质感。采用孟菲斯风格配色，强调霓虹紫晚霞和近景视角。"

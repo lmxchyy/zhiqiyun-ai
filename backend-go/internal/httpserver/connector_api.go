@@ -481,6 +481,8 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 	if editRequested {
 		taskType = connector.IntentImageEdit
 		taskIntent = connector.IntentImageEdit
+	} else if intent.Name == connector.IntentModelInfo {
+		taskType = connector.IntentModelInfo
 	}
 	task, created, err := a.repo.createConnectorTask(ctx, connectorTaskRecord{
 		EnterpriseID: item.EnterpriseID, ConnectorID: item.ID, BindingID: binding.ID,
@@ -496,6 +498,17 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 		return nil
 	}
 	target := connector.MessageTarget{ChatID: message.ExternalChatID}
+	if intent.Name == connector.IntentModelInfo {
+		responseText := connectorModelInfoText(item.Config.DefaultImageModel)
+		result, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: responseText})
+		if sendErr != nil {
+			return a.failMessage(ctx, message, item, task, "FEISHU_SEND_FAILED", sendErr)
+		}
+		_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": responseText})
+		_ = a.repo.updateConnectorTask(ctx, task.ID, "ignored", 100, "", 0, map[string]any{"reason": "model_info_query", "model": strings.TrimSpace(item.Config.DefaultImageModel)}, "", "")
+		_ = a.repo.markMessage(ctx, message.ID, "completed", "")
+		return nil
+	}
 	if intent.Name != connector.IntentImageGenerate {
 		result, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: "目前我支持单轮 AI 生图。你可以发送：生成 iPhone 17 的电商图。"})
 		if sendErr == nil {
@@ -600,6 +613,14 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 	_ = a.repo.markMessage(ctx, message.ID, "completed", "")
 	log.Printf("connector=feishu operation=generate connector_id=%s task_id=%s generation_task_id=%s result=succeeded", item.ID, task.ID, generatedTask.ID)
 	return nil
+}
+
+func connectorModelInfoText(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "当前飞书机器人尚未配置默认生图模型，请联系企业管理员完成配置。"
+	}
+	return fmt.Sprintf("当前飞书机器人用于图片生成的模型是：%s。", model)
 }
 
 func (a *connectorAPI) failMessage(ctx context.Context, message connectorMessageRecord, item enterpriseConnector, task connectorTaskRecord, code string, cause error) error {

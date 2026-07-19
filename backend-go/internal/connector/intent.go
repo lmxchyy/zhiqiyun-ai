@@ -8,6 +8,7 @@ import (
 const (
 	IntentImageGenerate = "image.generate"
 	IntentImageEdit     = "image.edit"
+	IntentModelInfo     = "model.info"
 )
 
 type Intent struct {
@@ -43,6 +44,11 @@ var nonGenerationRequestKeywords = []string{
 	"分析", "解释", "总结", "翻译", "是什么", "为什么", "怎么", "如何", "能否", "可以吗", "介绍",
 }
 
+var modelInfoQueryKeywords = []string{
+	"使用的是什么模型", "用的是什么模型", "当前使用什么模型", "当前是什么模型", "现在使用什么模型", "现在是什么模型",
+	"生图使用什么模型", "生图用什么模型", "生图模型是什么", "模型名称是什么", "你是什么模型", "你用什么模型",
+}
+
 var intentNoise = regexp.MustCompile(`(?i)(请|帮我|帮忙|给我|生成图片|生成图|生成|画一张|画|做一张图|做一张|生图|一张|的电商图|电商图|商品图|主图|海报|配图)[，,。.!！?？\s]*`)
 
 func (RuleIntentRouter) Route(text string, defaults IntentDefaults) Intent {
@@ -53,6 +59,10 @@ func (RuleIntentRouter) Route(text string, defaults IntentDefaults) Intent {
 	}
 	if result.Size == "" {
 		result.Size = "1024x1024"
+	}
+	if isModelInfoQuery(trimmed) {
+		result.Name = IntentModelInfo
+		return result
 	}
 	for _, keyword := range imageIntentKeywords {
 		if !strings.Contains(trimmed, keyword) {
@@ -73,6 +83,11 @@ func (RuleIntentRouter) Route(text string, defaults IntentDefaults) Intent {
 		return result
 	}
 	return result
+}
+
+func isModelInfoQuery(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return len([]rune(normalized)) <= 40 && containsAny(normalized, modelInfoQueryKeywords)
 }
 
 func looksLikeStandaloneVisualPrompt(text string) bool {

@@ -444,6 +444,15 @@ func TestConnectorGenerationInsufficientBalanceAndFailureRelease(t *testing.T) {
 	})
 }
 
+func TestConnectorModelInfoText(t *testing.T) {
+	if got := connectorModelInfoText(" gpt-image-2 "); got != "当前飞书机器人用于图片生成的模型是：gpt-image-2。" {
+		t.Fatalf("model info text = %q", got)
+	}
+	if got := connectorModelInfoText(" "); !strings.Contains(got, "尚未配置") {
+		t.Fatalf("empty model info text = %q", got)
+	}
+}
+
 func connectorGenerationTestSubject(t *testing.T, balance int64, provider generation.ImageProvider) (api, *sql.DB, enterpriseP0Fixture, string) {
 	t.Helper()
 	store, db := enterpriseP0TestStore(t)
