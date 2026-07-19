@@ -25,7 +25,10 @@ import (
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
-const maxConnectorEventBytes = 1 << 20
+const (
+	maxConnectorEventBytes          = 1 << 20
+	connectorFailureHandlingTimeout = 30 * time.Second
+)
 
 type connectorAPI struct {
 	cfg        config.Config
@@ -602,18 +605,37 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 func (a *connectorAPI) failMessage(ctx context.Context, message connectorMessageRecord, item enterpriseConnector, task connectorTaskRecord, code string, cause error) error {
 	friendly := friendlyConnectorError(cause)
 	log.Printf("connector=feishu operation=process connector_id=%s external_message_id=%s task_id=%s result=failed code=%s error=%v", item.ID, message.ExternalMessageID, task.ID, code, cause)
+	failureCtx, cancel := connectorFailureContext(ctx)
+	defer cancel()
 	if task.ID != "" {
-		_ = a.repo.updateConnectorTask(ctx, task.ID, "failed", 100, task.PlatformTaskID, task.PointsCost, task.Result, code, friendly)
+		if err := a.repo.updateConnectorTask(failureCtx, task.ID, "failed", 100, task.PlatformTaskID, task.PointsCost, task.Result, code, friendly); err != nil {
+			log.Printf("connector=feishu operation=mark_task_failed task_id=%s result=failed error=%v", task.ID, err)
+		}
 	}
-	_ = a.repo.markMessage(ctx, message.ID, "failed", friendly)
+	if err := a.repo.markMessage(failureCtx, message.ID, "failed", friendly); err != nil {
+		log.Printf("connector=feishu operation=mark_message_failed external_message_id=%s result=failed error=%v", message.ExternalMessageID, err)
+	}
 	if item.ID != "" && message.ExternalChatID != "" {
 		if client, err := a.feishuClient(item); err == nil {
-			if result, sendErr := client.SendText(ctx, connector.MessageTarget{ChatID: message.ExternalChatID}, connector.OutgoingMessage{Text: friendly}); sendErr == nil {
-				_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": friendly, "errorCode": code})
+			if result, sendErr := client.SendText(failureCtx, connector.MessageTarget{ChatID: message.ExternalChatID}, connector.OutgoingMessage{Text: friendly}); sendErr == nil {
+				if err := a.repo.insertOutboundMessage(failureCtx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": friendly, "errorCode": code}); err != nil {
+					log.Printf("connector=feishu operation=record_failure_message external_message_id=%s result=failed error=%v", message.ExternalMessageID, err)
+				}
+			} else {
+				log.Printf("connector=feishu operation=send_failure_message external_message_id=%s result=failed error=%v", message.ExternalMessageID, sendErr)
 			}
+		} else {
+			log.Printf("connector=feishu operation=create_failure_client connector_id=%s result=failed error=%v", item.ID, err)
 		}
 	}
 	return cause
+}
+
+func connectorFailureContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), connectorFailureHandlingTimeout)
 }
 
 func validateConnectorPermission(item enterpriseConnector, binding connectorUserBinding, message connectorMessageRecord) error {

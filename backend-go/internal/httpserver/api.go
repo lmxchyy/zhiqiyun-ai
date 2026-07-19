@@ -1202,12 +1202,12 @@ func selectAPIChannelForModel(channels []adminAPIChannel, model string) (adminAP
 		if !apiChannelUsableForGeneration(channel) {
 			continue
 		}
-		if !hasFallback || channel.Primary || priorityLess(channel, fallback) {
+		if !hasFallback || priorityLess(channel, fallback) {
 			fallback = channel
 			hasFallback = true
 		}
 		if model != "" && apiChannelSupportsModel(channel, model) {
-			if !hasMatched || channel.Primary || priorityLess(channel, matched) {
+			if !hasMatched || priorityLess(channel, matched) {
 				matched = channel
 				hasMatched = true
 			}
