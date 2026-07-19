@@ -1,12 +1,14 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 type connectorCapabilityStore interface {
@@ -17,31 +19,9 @@ type connectorCapabilityStore interface {
 // storage, asset and billing pipeline, but waits inside the connector worker
 // instead of inside the Feishu HTTP callback.
 func (a api) executeConnectorImageGeneration(ctx context.Context, userID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, error) {
-	identityStore, ok := a.store.(activeIdentityStore)
-	if !ok {
-		return generationTask{}, req, errors.New("active identity store is unavailable")
-	}
-	user, found, err := identityStore.GetActiveUser(userID)
+	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
-		return generationTask{}, req, fmt.Errorf("load connector user: %w", err)
-	}
-	if !found {
-		return generationTask{}, req, errUnauthorized
-	}
-	// Shadow users created before package capability enforcement may not have a
-	// personal plan snapshot. Enterprise authorization and tenant limits still
-	// apply; plan_free supplies the platform's baseline module allowlist.
-	if strings.TrimSpace(user.PlanID) == "" {
-		user.PlanID = "plan_free"
-	}
-	var data adminPlatformData
-	if capabilityStore, ok := a.store.(connectorCapabilityStore); ok {
-		data, err = capabilityStore.aiCapabilityAdminData(ctx)
-	} else {
-		data, err = a.store.AdminData()
-	}
-	if err != nil {
-		return generationTask{}, req, fmt.Errorf("load AI capability data: %w", err)
+		return generationTask{}, req, err
 	}
 	req.UserID = user.ID
 	if strings.TrimSpace(req.Type) == "" {
@@ -51,13 +31,7 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
-	connectorMetadata := map[string]any{}
-	for _, key := range []string{"source_type", "source_id", "operator_external_id"} {
-		if value, ok := req.Params[key]; ok {
-			connectorMetadata[key] = value
-			delete(req.Params, key)
-		}
-	}
+	connectorMetadata := takeConnectorMetadata(req.Params)
 	req, err = a.prepareGenerationRequest(data, user, req)
 	if err != nil {
 		return generationTask{}, req, fmt.Errorf("authorize connector generation: %w", err)
@@ -65,22 +39,9 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	for key, value := range connectorMetadata {
 		req.Params[key] = value
 	}
-	service := a.generationService
-	if a.connectorGenerationService != nil {
-		service = *a.connectorGenerationService
-	} else if routeService, routeOK, routeErr := a.generationServiceForUserRoute(user, req.Model); routeErr != nil {
-		return generationTask{}, req, routeErr
-	} else if routeOK {
-		service = routeService
-	} else if providerID := selectedGenerationProvider(req.Params); providerID != "" {
-		service, err = a.generationServiceForProvider(providerID, req)
-		if err != nil {
-			return generationTask{}, req, err
-		}
-	} else if configuredService, configured, configuredErr := a.generationServiceForConfiguredModel(req.Model); configuredErr != nil {
-		return generationTask{}, req, configuredErr
-	} else if configured {
-		service = configuredService
+	service, err := a.connectorGenerationServiceForRequest(user, req)
+	if err != nil {
+		return generationTask{}, req, err
 	}
 	task, err := a.store.CreatePendingGenerationTask(req)
 	if err != nil {
@@ -112,4 +73,173 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		return task, prepared, fmt.Errorf("complete connector generation: %w", err)
 	}
 	return completed, prepared, nil
+}
+
+func (a api) estimateConnectorGeneration(ctx context.Context, userID string, req generation.CreateRequest) (generation.CreateRequest, int64, error) {
+	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
+	if err != nil {
+		return req, 0, err
+	}
+	req.UserID = user.ID
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	connectorMetadata := takeConnectorMetadata(req.Params)
+	req, err = a.prepareGenerationRequest(data, user, req)
+	if err != nil {
+		return req, 0, err
+	}
+	for key, value := range connectorMetadata {
+		req.Params[key] = value
+	}
+	return req, int64(generationPointCostForRequest(req, data)), nil
+}
+
+func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
+	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
+	if err != nil {
+		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
+	}
+	req.UserID = user.ID
+	req.ModuleCode = moduleVideoGeneration
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	connectorMetadata := takeConnectorMetadata(req.Params)
+	req, err = a.prepareGenerationRequest(data, user, req)
+	if err != nil {
+		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("authorize connector video generation: %w", err)
+	}
+	for key, value := range connectorMetadata {
+		req.Params[key] = value
+	}
+	service, err := a.connectorGenerationServiceForRequest(user, req)
+	if err != nil {
+		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
+	}
+	task, err := a.store.CreatePendingGenerationTask(req)
+	if err != nil {
+		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("reserve connector video generation: %w", err)
+	}
+	if strings.EqualFold(task.Status, "SUCCEEDED") {
+		return task, req, storagecenter.FileObject{}, nil, "", nil
+	}
+	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
+	if err != nil {
+		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("generate connector video: %w", err)
+	}
+	prepared, stored, raw, contentType, err := a.persistConnectorVideo(ctx, task.ID, prepared)
+	if err != nil {
+		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("persist connector video: %w", err)
+	}
+	completed, err := a.store.CompleteGenerationTask(task.ID, prepared)
+	if err != nil {
+		if stored.FileID != "" {
+			a.cleanupGeneratedFiles([]storagecenter.FileObject{stored})
+		}
+		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("complete connector video: %w", err)
+	}
+	return completed, prepared, stored, raw, contentType, nil
+}
+
+func takeConnectorMetadata(params map[string]any) map[string]any {
+	metadata := map[string]any{}
+	for _, key := range []string{"source_type", "source_id", "source_task_id", "operator_external_id", "connector_id", "connector_task_id", "external_user_id", "external_message_id", "capability"} {
+		if value, ok := params[key]; ok {
+			metadata[key] = value
+			delete(params, key)
+		}
+	}
+	return metadata
+}
+
+func (a api) persistConnectorVideo(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
+	videoURL := providerTaskString(req, "videoUrl")
+	if videoURL == "" {
+		return req, storagecenter.FileObject{}, nil, "", errors.New("video provider returned no video")
+	}
+	raw, contentType, extension, err := readGeneratedVideoArtifact(ctx, videoURL)
+	if err != nil {
+		return req, storagecenter.FileObject{}, nil, "", err
+	}
+	if contentType == "" {
+		contentType = "video/mp4"
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	if a.fileService == nil {
+		return req, storagecenter.FileObject{}, raw, contentType, nil
+	}
+	tenantID := firstNonEmptyString(stringValue(req.Params["tenant_id"]), "tenant_default")
+	available, err := a.fileService.StorageAvailable(ctx, tenantID)
+	if err != nil {
+		return req, storagecenter.FileObject{}, nil, "", err
+	}
+	if !available {
+		return req, storagecenter.FileObject{}, raw, contentType, nil
+	}
+	file, err := a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
+		TenantID: tenantID, UserID: req.UserID, FileName: fmt.Sprintf("%s.%s", taskID, extension),
+		FileSize: int64(len(raw)), MIMEType: contentType, BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE",
+	}, bytes.NewReader(raw))
+	if err != nil {
+		return req, storagecenter.FileObject{}, nil, "", err
+	}
+	req.Params[generatedStorageFilesParam] = []map[string]any{{
+		"fileId": file.FileID, "tenantId": file.TenantID, "provider": file.Provider, "bucket": file.Bucket,
+		"objectKey": file.ObjectKey, "fileSize": file.FileSize, "contentType": file.MIMEType, "sourceUrl": videoURL,
+	}}
+	return req, file, raw, contentType, nil
+}
+
+func (a api) connectorUserAndCapabilityData(ctx context.Context, userID string) (adminUser, adminPlatformData, error) {
+	identityStore, ok := a.store.(activeIdentityStore)
+	if !ok {
+		return adminUser{}, adminPlatformData{}, errors.New("active identity store is unavailable")
+	}
+	user, found, err := identityStore.GetActiveUser(userID)
+	if err != nil {
+		return adminUser{}, adminPlatformData{}, fmt.Errorf("load connector user: %w", err)
+	}
+	if !found {
+		return adminUser{}, adminPlatformData{}, errUnauthorized
+	}
+	if strings.TrimSpace(user.PlanID) == "" {
+		user.PlanID = "plan_free"
+	}
+	var data adminPlatformData
+	if capabilityStore, ok := a.store.(connectorCapabilityStore); ok {
+		data, err = capabilityStore.aiCapabilityAdminData(ctx)
+	} else {
+		data, err = a.store.AdminData()
+	}
+	if err != nil {
+		return adminUser{}, adminPlatformData{}, fmt.Errorf("load AI capability data: %w", err)
+	}
+	return user, data, nil
+}
+
+func (a api) connectorGenerationServiceForRequest(user adminUser, req generation.CreateRequest) (generation.Service, error) {
+	service := a.generationService
+	if a.connectorGenerationService != nil {
+		return *a.connectorGenerationService, nil
+	}
+	if routeService, ok, err := a.generationServiceForUserRoute(user, req.Model); err != nil {
+		return service, err
+	} else if ok {
+		return routeService, nil
+	}
+	if providerID := selectedGenerationProvider(req.Params); providerID != "" {
+		return a.generationServiceForProvider(providerID, req)
+	}
+	if configured, ok, err := a.generationServiceForConfiguredModel(req.Model); err != nil {
+		return service, err
+	} else if ok {
+		return configured, nil
+	}
+	return service, nil
 }

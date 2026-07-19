@@ -159,3 +159,46 @@ func TestTokenCacheAndRetry(t *testing.T) {
 		t.Fatalf("token calls=%d message calls=%d", tokenCalls.Load(), messageCalls.Load())
 	}
 }
+
+func TestSendFileUploadsPPTAndSendsMessage(t *testing.T) {
+	var uploaded, sent bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth/v3/tenant_access_token/internal":
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"token","expire":3600}`))
+		case "/im/v1/files":
+			if err := r.ParseMultipartForm(2 << 20); err != nil {
+				t.Fatal(err)
+			}
+			if r.FormValue("file_type") != "ppt" || r.FormValue("file_name") != "deck.pptx" {
+				t.Fatalf("file form type=%q name=%q", r.FormValue("file_type"), r.FormValue("file_name"))
+			}
+			uploaded = true
+			_, _ = w.Write([]byte(`{"code":0,"data":{"file_key":"file-key"}}`))
+		case "/im/v1/messages":
+			if r.URL.Query().Get("receive_id_type") != "chat_id" {
+				t.Fatalf("receive id type=%q", r.URL.Query().Get("receive_id_type"))
+			}
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["msg_type"] != "file" || !strings.Contains(payload["content"], "file-key") {
+				t.Fatalf("message payload=%v", payload)
+			}
+			sent = true
+			_, _ = w.Write([]byte(`{"code":0,"data":{"message_id":"om-file"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := New(Config{AppID: "app", AppSecret: "secret", BaseURL: server.URL, HTTPClient: server.Client()})
+	result, err := client.SendFile(context.Background(), connector.MessageTarget{ChatID: "chat"}, connector.OutgoingMessage{
+		File: bytes.NewReader([]byte("pptx")), FileName: "deck.pptx", MIMEType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	})
+	if err != nil || result.ExternalMessageID != "om-file" || !uploaded || !sent {
+		t.Fatalf("result=%#v uploaded=%v sent=%v err=%v", result, uploaded, sent, err)
+	}
+}

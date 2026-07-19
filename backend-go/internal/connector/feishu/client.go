@@ -22,6 +22,8 @@ import (
 
 const defaultBaseURL = "https://open.feishu.cn/open-apis"
 
+const maxMessageFileBytes = 100 << 20
+
 type Config struct {
 	AppID             string
 	AppSecret         string
@@ -146,6 +148,29 @@ func (c *Client) SendImage(ctx context.Context, target connector.MessageTarget, 
 	return c.sendMessage(ctx, target, "image", string(content))
 }
 
+// SendFile uploads a generated artifact to Feishu IM and then sends the file
+// key. Video is intentionally sent as a file message as well: this works for
+// MP4 without requiring a separate public cover URL and keeps delivery inside
+// the enterprise conversation.
+func (c *Client) SendFile(ctx context.Context, target connector.MessageTarget, message connector.OutgoingMessage) (connector.SendResult, error) {
+	if message.File == nil {
+		return connector.SendResult{}, errors.New("Feishu file is required")
+	}
+	raw, err := io.ReadAll(io.LimitReader(message.File, maxMessageFileBytes+1))
+	if err != nil {
+		return connector.SendResult{}, err
+	}
+	if len(raw) == 0 || len(raw) > maxMessageFileBytes {
+		return connector.SendResult{}, errors.New("Feishu file size is invalid")
+	}
+	fileKey, err := c.uploadFile(ctx, raw, message.FileName, message.MIMEType)
+	if err != nil {
+		return connector.SendResult{}, err
+	}
+	content, _ := json.Marshal(map[string]string{"file_key": fileKey})
+	return c.sendMessage(ctx, target, "file", string(content))
+}
+
 func (c *Client) sendMessage(ctx context.Context, target connector.MessageTarget, messageType string, content string) (connector.SendResult, error) {
 	if strings.TrimSpace(target.ChatID) == "" {
 		return connector.SendResult{}, errors.New("Feishu chat id is required")
@@ -208,6 +233,66 @@ func (c *Client) uploadImage(ctx context.Context, raw []byte, fileName string) (
 		return "", mapError(response.Code, response.Msg, http.StatusOK)
 	}
 	return response.Data.ImageKey, nil
+}
+
+func (c *Client) uploadFile(ctx context.Context, raw []byte, fileName string, mimeType string) (string, error) {
+	fileName = path.Base(strings.TrimSpace(fileName))
+	if fileName == "" || fileName == "." {
+		fileName = "generated.bin"
+	}
+	fileType := feishuFileType(fileName, mimeType)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("file_type", fileType); err != nil {
+		return "", err
+	}
+	if err := writer.WriteField("file_name", fileName); err != nil {
+		return "", err
+	}
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return "", err
+	}
+	if _, err = part.Write(raw); err != nil {
+		return "", err
+	}
+	if err = writer.Close(); err != nil {
+		return "", err
+	}
+	var response struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			FileKey string `json:"file_key"`
+		} `json:"data"`
+	}
+	if err := c.doAuthorized(ctx, http.MethodPost, c.baseURL+"/im/v1/files", body.Bytes(), writer.FormDataContentType(), &response); err != nil {
+		return "", err
+	}
+	if response.Code != 0 || strings.TrimSpace(response.Data.FileKey) == "" {
+		return "", mapError(response.Code, response.Msg, http.StatusOK)
+	}
+	return response.Data.FileKey, nil
+}
+
+func feishuFileType(fileName string, mimeType string) string {
+	ext := strings.ToLower(path.Ext(fileName))
+	switch ext {
+	case ".mp4", ".mov", ".m4v":
+		return "mp4"
+	case ".ppt", ".pptx":
+		return "ppt"
+	case ".pdf":
+		return "pdf"
+	case ".doc", ".docx":
+		return "doc"
+	case ".xls", ".xlsx":
+		return "xls"
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "video/") {
+		return "mp4"
+	}
+	return "stream"
 }
 
 func (c *Client) tenantAccessToken(ctx context.Context, force bool) (string, error) {

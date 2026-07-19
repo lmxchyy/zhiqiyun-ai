@@ -31,7 +31,9 @@ type OutgoingMessage struct {
 	Text     string
 	Card     map[string]any
 	Image    io.Reader
+	File     io.Reader
 	FileName string
+	MIMEType string
 }
 
 type EventRequest struct {
@@ -56,5 +58,6 @@ type PlatformConnector interface {
 	ParseEvent(context.Context, []byte) (ParsedEvent, error)
 	SendText(context.Context, MessageTarget, OutgoingMessage) (SendResult, error)
 	SendImage(context.Context, MessageTarget, OutgoingMessage) (SendResult, error)
+	SendFile(context.Context, MessageTarget, OutgoingMessage) (SendResult, error)
 	SendCard(context.Context, MessageTarget, OutgoingMessage) (SendResult, error)
 }

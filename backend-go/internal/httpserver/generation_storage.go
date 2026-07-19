@@ -19,6 +19,7 @@ import (
 const (
 	generatedStorageFilesParam = "generated_storage_files"
 	maxGeneratedArtifactBytes  = 64 << 20
+	maxGeneratedVideoBytes     = 100 << 20
 )
 
 func (a api) persistGeneratedImages(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
@@ -210,6 +211,49 @@ func readGeneratedArtifact(ctx context.Context, rawURL string, preferredContentT
 	contentType, extension, err := generatedImageType(firstNonEmptyString(res.Header.Get("Content-Type"), preferredContentType), raw)
 	if err != nil {
 		return nil, "", "", err
+	}
+	return raw, contentType, extension, nil
+}
+
+func readGeneratedVideoArtifact(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+	value := strings.TrimSpace(rawURL)
+	remoteURL, err := validateRemoteDownloadURL(value)
+	if err != nil {
+		return nil, "", "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL.String(), nil)
+	if err != nil {
+		return nil, "", "", err
+	}
+	res, err := remoteDownloadHTTPClient().Do(req)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, "", "", fmt.Errorf("upstream returned %d", res.StatusCode)
+	}
+	if res.ContentLength > maxGeneratedVideoBytes {
+		return nil, "", "", fmt.Errorf("generated video exceeds %d bytes", maxGeneratedVideoBytes)
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxGeneratedVideoBytes+1))
+	if err != nil {
+		return nil, "", "", err
+	}
+	if len(raw) == 0 || len(raw) > maxGeneratedVideoBytes {
+		return nil, "", "", fmt.Errorf("generated video has invalid size %d", len(raw))
+	}
+	contentType := strings.ToLower(strings.TrimSpace(res.Header.Get("Content-Type")))
+	if parsed, _, parseErr := mime.ParseMediaType(contentType); parseErr == nil {
+		contentType = strings.ToLower(parsed)
+	}
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = strings.ToLower(http.DetectContentType(raw))
+	}
+	extensions := map[string]string{"video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm"}
+	extension, ok := extensions[contentType]
+	if !ok {
+		return nil, "", "", fmt.Errorf("unsupported generated video content type %q", contentType)
 	}
 	return raw, contentType, extension, nil
 }

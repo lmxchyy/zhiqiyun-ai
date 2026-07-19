@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/connector"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 type connectorRepository struct {
@@ -251,7 +252,7 @@ func (r connectorRepository) loadOrCreateBinding(ctx context.Context, connectorI
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO connector_user_bindings(id,enterprise_id,connector_id,platform,external_user_id,
 			external_union_id,external_name,internal_user_id,permission_json,status,last_active_at)
-		VALUES($1,$2,$3,'feishu',$4,$5,$6,$7,'{"imageGenerate":true}'::jsonb,'active',now())
+		VALUES($1,$2,$3,'feishu',$4,$5,$6,$7,'{"imageGenerate":true,"videoGenerate":true,"pptGenerate":true}'::jsonb,'active',now())
 	`, bindingID, connectorItem.EnterpriseID, connectorItem.ID, message.ExternalUserID,
 		stringValue(message.Content["externalUnionId"]), externalName, internalUserID); err != nil {
 		return connectorUserBinding{}, err
@@ -307,13 +308,25 @@ func (r connectorRepository) dailyBindingUsage(ctx context.Context, enterpriseID
 	return count, err
 }
 
+func (r connectorRepository) bindingPointUsage(ctx context.Context, enterpriseID, bindingID, capability string, since time.Time) (int64, error) {
+	var total int64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT coalesce(sum(greatest(points_cost,estimated_points)),0)
+		FROM connector_ai_tasks
+		WHERE enterprise_id=$1 AND binding_id=$2 AND task_type=$3 AND created_at >= $4
+		  AND unified_status NOT IN ('failed','cancelled','refunded')
+	`, enterpriseID, bindingID, capability, since.UTC()).Scan(&total)
+	return total, err
+}
+
 func (r connectorRepository) latestSuccessfulReferenceImage(ctx context.Context, enterpriseID, connectorID, bindingID, externalChatID string) (connectorReferenceImage, bool, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT asset.id,task.platform_task_id,asset.name,asset.url,task.task_type,task.original_text,task.result_json
 		FROM connector_ai_tasks task
 		JOIN xz_assets asset ON asset.task_id=task.platform_task_id AND asset.deleted_at IS NULL
 		WHERE task.enterprise_id=$1 AND task.connector_id=$2 AND task.binding_id=$3
-		  AND task.external_chat_id=$4 AND task.status='succeeded'
+		  AND task.external_chat_id=$4 AND task.status IN ('succeeded','delivery_failed')
+		  AND task.unified_status IN ('completed','delivery_failed')
 		  AND asset.media_type='image' AND coalesce(asset.url,'')<>''
 		  AND asset.url NOT LIKE 'data:image/svg+xml%'
 		ORDER BY task.completed_at DESC NULLS LAST,task.created_at DESC,asset.created_at DESC
@@ -350,11 +363,13 @@ func (r connectorRepository) createConnectorTask(ctx context.Context, task conne
 	}
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO connector_ai_tasks(id,enterprise_id,connector_id,binding_id,platform,external_chat_id,
-			external_message_id,task_type,intent,original_text,optimized_prompt,model_id,status,progress,started_at)
-		VALUES($1,$2,$3,nullif($4,''),'feishu',$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
+			external_message_id,task_type,intent,original_text,optimized_prompt,model_id,status,unified_status,
+			progress,estimated_points,started_at)
+		VALUES($1,$2,$3,nullif($4,''),'feishu',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now())
 		ON CONFLICT(platform,external_message_id) DO NOTHING
 	`, task.ID, task.EnterpriseID, task.ConnectorID, task.BindingID, task.ExternalChatID, task.ExternalMessageID,
-		task.TaskType, task.Intent, task.OriginalText, task.OptimizedPrompt, task.ModelID, task.Status, task.Progress)
+		task.TaskType, task.Intent, task.OriginalText, task.OptimizedPrompt, task.ModelID, task.Status,
+		firstNonEmptyString(task.UnifiedStatus, "created"), task.Progress, task.EstimatedPoints)
 	if err != nil {
 		return connectorTaskRecord{}, false, err
 	}
@@ -367,14 +382,182 @@ func (r connectorRepository) taskByExternalMessage(ctx context.Context, platform
 	return scanConnectorTask(r.db.QueryRowContext(ctx, connectorTaskSelect+` WHERE task.platform=$1 AND task.external_message_id=$2`, platform, externalMessageID))
 }
 
+func (r connectorRepository) taskByIDForBinding(ctx context.Context, enterpriseID, connectorID, bindingID, taskID string) (connectorTaskRecord, error) {
+	return scanConnectorTask(r.db.QueryRowContext(ctx, connectorTaskSelect+`
+		WHERE task.enterprise_id=$1 AND task.connector_id=$2 AND task.binding_id=$3 AND task.id=$4`, enterpriseID, connectorID, bindingID, taskID))
+}
+
+func (r connectorRepository) taskByIDForEnterprise(ctx context.Context, enterpriseID, connectorID, taskID string) (connectorTaskRecord, error) {
+	return scanConnectorTask(r.db.QueryRowContext(ctx, connectorTaskSelect+`
+		WHERE task.enterprise_id=$1 AND task.connector_id=$2 AND task.id=$3`, enterpriseID, connectorID, taskID))
+}
+
+func (r connectorRepository) assetForInternalTask(ctx context.Context, userID, taskID string) (asset, bool, error) {
+	var item asset
+	var metadataRaw []byte
+	var deletedAt sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id,user_id,coalesce(tenant_id,''),coalesce(organization_id,''),task_id,name,media_type,url,
+			coalesce(thumbnail_url,''),favorite,metadata,deleted_at::text,created_at::text,updated_at::text
+		FROM xz_assets WHERE user_id=$1 AND task_id=$2 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1
+	`, userID, taskID).Scan(&item.ID, &item.UserID, &item.TenantID, &item.OrganizationID, &item.TaskID, &item.Name, &item.MediaType,
+		&item.URL, &item.ThumbnailURL, &item.Favorite, &metadataRaw, &deletedAt, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return asset{}, false, nil
+	}
+	if err != nil {
+		return asset{}, false, err
+	}
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	return item, true, nil
+}
+
+func (r connectorRepository) deleteConnectorAsset(ctx context.Context, assetID, userID string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM xz_assets WHERE id=$1 AND user_id=$2`, assetID, userID)
+	return err
+}
+
 func (r connectorRepository) updateConnectorTask(ctx context.Context, id, status string, progress int, platformTaskID string, pointsCost int64, result map[string]any, errorCode, errorMessage string) error {
+	return r.updateConnectorTaskState(ctx, id, status, connectorUnifiedStatus(status), "", progress, platformTaskID, pointsCost, result, errorCode, errorMessage)
+}
+
+func (r connectorRepository) updateConnectorTaskState(ctx context.Context, id, status, unifiedStatus, internalStage string, progress int, platformTaskID string, pointsCost int64, result map[string]any, errorCode, errorMessage string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE connector_ai_tasks SET status=$2,progress=$3,platform_task_id=coalesce(nullif($4,''),platform_task_id),
 			points_cost=$5,result_json=$6::jsonb,error_code=$7,error_message=$8,
-			completed_at=CASE WHEN $2 IN ('succeeded','failed','ignored') THEN now() ELSE completed_at END,updated_at=now()
+			unified_status=coalesce(nullif($9,''),unified_status),internal_stage=coalesce(nullif($10,''),internal_stage),
+			completed_at=CASE WHEN $9 IN ('completed','delivery_failed','failed','cancelled','refunded') THEN now() ELSE completed_at END,updated_at=now()
 		WHERE id=$1
-	`, id, status, progress, platformTaskID, pointsCost, connectorJSON(result), errorCode, truncateConnectorError(errorMessage))
+	`, id, status, progress, platformTaskID, pointsCost, connectorJSON(result), errorCode, truncateConnectorError(errorMessage), unifiedStatus, internalStage)
 	return err
+}
+
+func (r connectorRepository) setConnectorTaskEstimate(ctx context.Context, id string, points int64, modelID string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE connector_ai_tasks SET estimated_points=$2,model_id=coalesce(nullif($3,''),model_id),updated_at=now() WHERE id=$1`, id, points, modelID)
+	return err
+}
+
+func connectorUnifiedStatus(status string) string {
+	switch status {
+	case "pending":
+		return "created"
+	case "processing":
+		return "processing"
+	case "succeeded", "completed", "ignored":
+		return "completed"
+	case "delivery_failed":
+		return "delivery_failed"
+	case "cancelled":
+		return "cancelled"
+	case "refunded":
+		return "refunded"
+	default:
+		return "failed"
+	}
+}
+
+func (r connectorRepository) markConnectorDelivery(ctx context.Context, id, status string, delivered bool, errorMessage string) error {
+	unified := "completed"
+	legacy := "succeeded"
+	if !delivered {
+		unified, legacy = "delivery_failed", "delivery_failed"
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE connector_ai_tasks SET delivery_status=$2,delivery_attempts=delivery_attempts+1,
+			unified_status=$3,status=$4,error_code=CASE WHEN $2='failed' THEN 'DELIVERY_FAILED' ELSE '' END,
+			error_message=$5,delivered_at=CASE WHEN $2='delivered' THEN now() ELSE delivered_at END,
+			completed_at=coalesce(completed_at,now()),updated_at=now() WHERE id=$1
+	`, id, status, unified, legacy, truncateConnectorError(errorMessage))
+	return err
+}
+
+func (r connectorRepository) upsertSessionContext(ctx context.Context, item connectorSessionContext) error {
+	if item.ExpiresAt.IsZero() {
+		item.ExpiresAt = time.Now().UTC().Add(24 * time.Hour)
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO connector_session_contexts(enterprise_id,connector_id,external_chat_id,external_user_id,
+			last_intent,last_task_type,last_task_id,last_asset_ids,last_topic,last_parameters,last_prompt,expires_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,$12)
+		ON CONFLICT(connector_id,external_chat_id,external_user_id) DO UPDATE SET
+			enterprise_id=excluded.enterprise_id,last_intent=excluded.last_intent,last_task_type=excluded.last_task_type,
+			last_task_id=excluded.last_task_id,last_asset_ids=excluded.last_asset_ids,last_topic=excluded.last_topic,
+			last_parameters=excluded.last_parameters,last_prompt=excluded.last_prompt,expires_at=excluded.expires_at,updated_at=now()
+	`, item.EnterpriseID, item.ConnectorID, item.ExternalChatID, item.ExternalUserID, item.LastIntent, item.LastTaskType,
+		item.LastTaskID, connectorJSON(item.LastAssetIDs), item.LastTopic, connectorJSON(item.LastParameters), item.LastPrompt, item.ExpiresAt.UTC())
+	return err
+}
+
+func (r connectorRepository) sessionContext(ctx context.Context, enterpriseID, connectorID, chatID, externalUserID string) (connectorSessionContext, bool, error) {
+	var item connectorSessionContext
+	var assetRaw, parameterRaw []byte
+	err := r.db.QueryRowContext(ctx, `
+		SELECT enterprise_id,connector_id,external_chat_id,external_user_id,last_intent,last_task_type,last_task_id,
+			last_asset_ids,last_topic,last_parameters,last_prompt,expires_at
+		FROM connector_session_contexts
+		WHERE enterprise_id=$1 AND connector_id=$2 AND external_chat_id=$3 AND external_user_id=$4 AND expires_at>now()
+	`, enterpriseID, connectorID, chatID, externalUserID).Scan(&item.EnterpriseID, &item.ConnectorID, &item.ExternalChatID,
+		&item.ExternalUserID, &item.LastIntent, &item.LastTaskType, &item.LastTaskID, &assetRaw, &item.LastTopic,
+		&parameterRaw, &item.LastPrompt, &item.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, false, nil
+	}
+	if err != nil {
+		return item, false, err
+	}
+	_ = json.Unmarshal(assetRaw, &item.LastAssetIDs)
+	_ = json.Unmarshal(parameterRaw, &item.LastParameters)
+	return item, true, nil
+}
+
+func (r connectorRepository) latestTaskForContext(ctx context.Context, enterpriseID, connectorID, bindingID, chatID string) (connectorTaskRecord, bool, error) {
+	item, err := scanConnectorTask(r.db.QueryRowContext(ctx, connectorTaskSelect+`
+		WHERE task.enterprise_id=$1 AND task.connector_id=$2 AND task.binding_id=$3 AND task.external_chat_id=$4
+		ORDER BY task.created_at DESC LIMIT 1`, enterpriseID, connectorID, bindingID, chatID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return connectorTaskRecord{}, false, nil
+	}
+	return item, err == nil, err
+}
+
+func (r connectorRepository) ensureConnectorPPTAsset(ctx context.Context, userID, tenantID, organizationID, taskID, title string, file storagecenter.FileObject) (asset, error) {
+	var existing asset
+	var metadataRaw []byte
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id,user_id,coalesce(tenant_id,''),coalesce(organization_id,''),task_id,name,media_type,url,
+			coalesce(thumbnail_url,''),favorite,metadata,coalesce(deleted_at::text,''),created_at::text,updated_at::text
+		FROM xz_assets WHERE task_id=$1 AND user_id=$2 AND media_type='ppt' AND deleted_at IS NULL
+		ORDER BY created_at DESC LIMIT 1
+	`, taskID, userID).Scan(&existing.ID, &existing.UserID, &existing.TenantID, &existing.OrganizationID, &existing.TaskID,
+		&existing.Name, &existing.MediaType, &existing.URL, &existing.ThumbnailURL, &existing.Favorite, &metadataRaw,
+		&existing.DeletedAt, &existing.CreatedAt, &existing.UpdatedAt)
+	if err == nil {
+		_ = json.Unmarshal(metadataRaw, &existing.Metadata)
+		return existing, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return asset{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	item := asset{ID: newConnectorID("asset"), UserID: userID, TenantID: tenantID, OrganizationID: organizationID,
+		TaskID: taskID, Name: firstNonEmptyString(strings.TrimSpace(title), "AI演示文稿") + ".pptx", MediaType: "ppt",
+		URL: pptStorageReference(file), Metadata: map[string]any{
+			"fileId": file.FileID, "storageFileId": file.FileID, "storageTenantId": file.TenantID,
+			"storageProvider": file.Provider, "storageBucket": file.Bucket, "storageObjectKey": file.ObjectKey,
+			"fileSize": file.FileSize, "contentType": file.MIMEType, "source": "feishu", "type": "PPT_GENERATION",
+		}, CreatedAt: now, UpdatedAt: now}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return asset{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := insertAsset(ctx, tx, item); err != nil {
+		return asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return asset{}, err
+	}
+	return item, nil
 }
 
 func (r connectorRepository) listBindings(ctx context.Context, enterpriseID, connectorID string, limit int) ([]connectorUserBinding, error) {
@@ -482,8 +665,20 @@ func (r connectorRepository) listMessages(ctx context.Context, enterpriseID, con
 	return items, rows.Err()
 }
 
-func (r connectorRepository) listTasks(ctx context.Context, enterpriseID, connectorID string, limit int) ([]connectorTaskRecord, error) {
-	rows, err := r.db.QueryContext(ctx, connectorTaskSelect+` WHERE task.enterprise_id=$1 AND task.connector_id=$2 ORDER BY task.created_at DESC LIMIT $3`, enterpriseID, connectorID, limit)
+func (r connectorRepository) listTasks(ctx context.Context, enterpriseID, connectorID, capability, status string, limit int) ([]connectorTaskRecord, error) {
+	query := connectorTaskSelect + ` WHERE task.enterprise_id=$1 AND task.connector_id=$2`
+	args := []any{enterpriseID, connectorID}
+	if capability = strings.TrimSpace(capability); capability != "" {
+		args = append(args, capability)
+		query += fmt.Sprintf(" AND task.task_type=$%d", len(args))
+	}
+	if status = strings.TrimSpace(status); status != "" {
+		args = append(args, status)
+		query += fmt.Sprintf(" AND (task.unified_status=$%d OR task.status=$%d)", len(args), len(args))
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY task.created_at DESC LIMIT $%d", len(args))
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -524,7 +719,8 @@ func scanConnector(scanner connectorScanner) (enterpriseConnector, error) {
 const connectorTaskSelect = `SELECT task.id,task.enterprise_id,task.connector_id,coalesce(task.binding_id,''),
 	coalesce(binding.external_user_id,''),coalesce(binding.external_name,''),task.external_chat_id,
 	task.external_message_id,task.task_type,task.intent,task.original_text,task.optimized_prompt,task.model_id,
-	coalesce(task.platform_task_id,''),task.status,task.progress,task.result_json,task.token_cost,task.points_cost,
+	coalesce(task.platform_task_id,''),task.status,task.unified_status,task.internal_stage,task.delivery_status,
+	task.delivery_attempts,task.progress,task.result_json,task.token_cost,task.points_cost,task.estimated_points,
 	task.error_code,task.error_message,task.started_at,task.completed_at,task.created_at,task.updated_at
 	FROM connector_ai_tasks task
 	LEFT JOIN connector_user_bindings binding ON binding.id=task.binding_id AND binding.enterprise_id=task.enterprise_id`
@@ -537,7 +733,8 @@ func scanConnectorTask(scanner connectorScanner) (connectorTaskRecord, error) {
 	err := scanner.Scan(&item.ID, &item.EnterpriseID, &item.ConnectorID, &item.BindingID, &item.ExternalUserID,
 		&item.ExternalUserName, &item.ExternalChatID,
 		&item.ExternalMessageID, &item.TaskType, &item.Intent, &item.OriginalText, &item.OptimizedPrompt, &item.ModelID,
-		&item.PlatformTaskID, &item.Status, &item.Progress, &resultRaw, &item.TokenCost, &item.PointsCost,
+		&item.PlatformTaskID, &item.Status, &item.UnifiedStatus, &item.InternalStage, &item.DeliveryStatus,
+		&item.DeliveryAttempts, &item.Progress, &resultRaw, &item.TokenCost, &item.PointsCost, &item.EstimatedPoints,
 		&item.ErrorCode, &item.ErrorMessage, &startedAt, &completedAt, &createdAt, &updatedAt)
 	if err != nil {
 		return item, err

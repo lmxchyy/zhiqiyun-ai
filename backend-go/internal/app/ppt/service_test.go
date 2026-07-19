@@ -99,3 +99,22 @@ func TestGenerateWithConcurrencyRejectsActiveTask(t *testing.T) {
 		t.Fatalf("external active task should exhaust PPT slot: %v", err)
 	}
 }
+
+func TestGenerateWithConcurrencyReusesClientRequestID(t *testing.T) {
+	service := NewService()
+	request := GenerateRequest{UserID: "connector_user", ClientRequestID: "feishu:message-1", Prompt: "招商方案", SlideCount: 8}
+	first, err := service.GenerateWithConcurrency(request, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.GenerateWithConcurrency(request, 0, 1)
+	if err != nil {
+		t.Fatalf("idempotent request was rejected: %v", err)
+	}
+	if first.TaskID != second.TaskID {
+		t.Fatalf("idempotent task ids differ: %s != %s", first.TaskID, second.TaskID)
+	}
+	if history := service.History("connector_user"); len(history) != 1 {
+		t.Fatalf("idempotent request created %d tasks", len(history))
+	}
+}

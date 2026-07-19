@@ -30,6 +30,7 @@ var (
 
 type GenerateRequest struct {
 	UserID                string   `json:"-"`
+	ClientRequestID       string   `json:"-"`
 	Prompt                string   `json:"prompt"`
 	SlideCount            int      `json:"slideCount"`
 	Language              string   `json:"language"`
@@ -60,6 +61,7 @@ type GenerateResponse struct {
 type Task struct {
 	TaskID                string   `json:"taskId"`
 	UserID                string   `json:"-"`
+	ClientRequestID       string   `json:"clientRequestId,omitempty"`
 	Type                  string   `json:"type,omitempty"`
 	MediaType             string   `json:"mediaType,omitempty"`
 	Status                string   `json:"status"`
@@ -178,6 +180,13 @@ func (s *Service) GenerateWithConcurrency(req GenerateRequest, externalActive in
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if req.ClientRequestID != "" {
+		for _, existing := range s.tasks {
+			if existing.UserID == req.UserID && existing.ClientRequestID == req.ClientRequestID {
+				return GenerateResponse{TaskID: existing.TaskID, Status: existing.Status}, nil
+			}
+		}
+	}
 	if limit > 0 {
 		active := externalActive
 		for _, existing := range s.tasks {

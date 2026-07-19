@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/connector"
 	feishuconnector "xianzhi-ai/backend-go/internal/connector/feishu"
@@ -294,12 +292,96 @@ func (a *connectorAPI) tasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := a.repo.listTasks(r.Context(), access.TenantID, item.ID, connectorLimit(r, 100))
+	items, err := a.repo.listTasks(r.Context(), access.TenantID, item.ID, r.URL.Query().Get("capability"), r.URL.Query().Get("status"), connectorLimit(r, 100))
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"items": items, "total": len(items)})
+}
+
+func (a *connectorAPI) retryDelivery(w http.ResponseWriter, r *http.Request) {
+	access, item, ok := a.requireFeishu(w, r, "enterprise.connector.manage")
+	if !ok {
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("taskId"))
+	task, err := a.repo.taskByIDForEnterprise(r.Context(), access.TenantID, item.ID, taskID)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	if task.PlatformTaskID == "" || (task.UnifiedStatus != "completed" && task.UnifiedStatus != "delivery_failed") {
+		writeError(w, http.StatusConflict, errors.New("only successfully generated tasks can be delivered again"))
+		return
+	}
+	binding, found, err := a.repo.bindingByExternalUser(r.Context(), item.ID, task.ExternalUserID)
+	if err != nil || !found || binding.InternalUserID == "" {
+		if err == nil {
+			err = errors.New("connector user binding not found")
+		}
+		writeConnectorError(w, err)
+		return
+	}
+	stored, found, err := a.repo.assetForInternalTask(r.Context(), binding.InternalUserID, task.PlatformTaskID)
+	if err != nil || !found {
+		if err == nil {
+			err = errors.New("generated asset not found")
+		}
+		writeConnectorError(w, err)
+		return
+	}
+	signed := a.generator.signStoredAssetURLs(r.Context(), binding.InternalUserID, []asset{stored})
+	if len(signed) == 0 || strings.TrimSpace(signed[0].URL) == "" {
+		writeConnectorError(w, errors.New("generated asset access URL is unavailable"))
+		return
+	}
+	client, err := a.feishuClient(item)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	result := connector.CapabilityResult{
+		InternalTaskID: task.PlatformTaskID,
+		Status:         "completed",
+		Progress:       100,
+		ActualCost:     task.PointsCost,
+		AssetIDs:       []string{stored.ID},
+		Data: map[string]any{
+			"downloadURL":     signed[0].URL,
+			"connectorTaskId": task.ID,
+			"redelivery":      true,
+		},
+	}
+	title := connectorTaskCompletionTitle(task.TaskType)
+	message := connectorResultMessage(title, connector.AICommand{Intent: task.TaskType}, result)
+	sent, sendErr := client.SendCard(r.Context(), connector.MessageTarget{ChatID: task.ExternalChatID}, message)
+	if sendErr != nil {
+		_ = a.repo.markConnectorDelivery(r.Context(), task.ID, "failed", false, sendErr.Error())
+		writeConnectorError(w, sendErr)
+		return
+	}
+	_ = a.repo.insertOutboundMessage(r.Context(), item, task.ExternalChatID, task.ExternalUserID, sent.ExternalMessageID, "card", map[string]any{"taskId": task.ID, "redelivery": true})
+	_ = a.repo.markConnectorDelivery(r.Context(), task.ID, "delivered", true, "")
+	_ = insertTenantAuditDirect(r.Context(), a.repo.db, access, "enterprise.connector.task.retry_delivery", "connector_ai_task", task.ID, binding.InternalUserID, map[string]any{"platformTaskId": task.PlatformTaskID})
+	writeJSON(w, map[string]any{"ok": true, "taskId": task.ID, "deliveryStatus": "delivered"})
+}
+
+func connectorTaskCompletionTitle(taskType string) string {
+	switch taskType {
+	case connector.IntentImageGenerate:
+		return "图片生成完成"
+	case connector.IntentImageEdit:
+		return "图片修改完成"
+	case connector.IntentVideoGenerate:
+		return "视频生成完成"
+	case connector.IntentVideoImageToVideo:
+		return "图生视频完成"
+	case connector.IntentPPTGenerate:
+		return "PPT 生成完成"
+	default:
+		return "AI 任务完成"
+	}
 }
 
 func (a *connectorAPI) requireFeishu(w http.ResponseWriter, r *http.Request, permission string) (enterpriseAccess, enterpriseConnector, bool) {
@@ -440,7 +522,7 @@ func connectorImageEditPrompt(text string) string {
 }
 
 func (a *connectorAPI) processJob(parent context.Context, job connectorJob) error {
-	ctx, cancel := context.WithTimeout(parent, imageGenerationTimeout+2*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, videoGenerationTimeout+5*time.Minute)
 	defer cancel()
 	message, err := a.repo.messageByExternalID(ctx, "feishu", job.MessageID)
 	if err != nil {
@@ -467,35 +549,35 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 	}
 	a.repo.touchBinding(ctx, binding.ID)
 	text := stringValue(message.Content["text"])
-	editRequested := isConnectorImageEditRequest(text)
-	intent := (connector.RuleIntentRouter{}).Route(text, connector.IntentDefaults{Size: item.Config.DefaultSize, Count: item.Config.DefaultImageCount})
-	prompt := ""
-	if editRequested {
-		intent.Name = connector.IntentImageGenerate
-		prompt = connectorImageEditPrompt(text)
-	} else if intent.Name == connector.IntentImageGenerate {
+	intent := (connector.RuleIntentRouter{}).Route(text, connector.IntentDefaults{
+		Size: item.Config.DefaultSize, Count: item.Config.DefaultImageCount, VideoDuration: item.Config.DefaultVideoDuration,
+		VideoAspectRatio: item.Config.DefaultVideoAspectRatio, VideoResolution: item.Config.DefaultVideoResolution,
+		VideoModelID: item.Config.DefaultVideoModel, PPTPageCount: item.Config.DefaultPPTPageCount,
+		PPTTemplateID: item.Config.DefaultPPTTemplate, PPTTheme: item.Config.DefaultPPTTemplate, PPTLanguage: "zh",
+		UseEnterpriseLogo: item.Config.PPTUseEnterpriseLogo, UseEnterpriseKnowledge: item.Config.PPTUseEnterpriseKnowledge,
+	})
+	prompt := strings.TrimSpace(intent.Topic)
+	if intent.Name == connector.IntentImageGenerate {
 		prompt = (connector.EcommerceImagePromptBuilder{}).Build(intent)
+	} else if intent.Name == connector.IntentImageEdit {
+		prompt = connectorImageEditPrompt(text)
 	}
-	taskType := connector.IntentImageGenerate
-	taskIntent := intent.Name
-	if editRequested {
-		taskType = connector.IntentImageEdit
-		taskIntent = connector.IntentImageEdit
-	} else if intent.Name == connector.IntentModelInfo {
-		taskType = connector.IntentModelInfo
-	} else if intent.Name == connector.IntentCapabilityInfo {
-		taskType = connector.IntentCapabilityInfo
+	modelID := item.Config.DefaultImageModel
+	if intent.Name == connector.IntentVideoGenerate || intent.Name == connector.IntentVideoImageToVideo {
+		modelID = item.Config.DefaultVideoModel
+	} else if intent.Name == connector.IntentPPTGenerate {
+		modelID = item.Config.DefaultPPTTemplate
 	}
 	task, created, err := a.repo.createConnectorTask(ctx, connectorTaskRecord{
 		EnterpriseID: item.EnterpriseID, ConnectorID: item.ID, BindingID: binding.ID,
 		ExternalChatID: message.ExternalChatID, ExternalMessageID: message.ExternalMessageID,
-		TaskType: taskType, Intent: taskIntent, OriginalText: text,
-		OptimizedPrompt: prompt, ModelID: item.Config.DefaultImageModel, Status: "pending", Progress: 0,
+		TaskType: intent.Name, Intent: intent.Name, OriginalText: text,
+		OptimizedPrompt: prompt, ModelID: modelID, Status: "pending", UnifiedStatus: "created", Progress: 0,
 	})
 	if err != nil {
 		return a.failMessage(ctx, message, item, task, "TASK_CREATE_FAILED", err)
 	}
-	if !created && (task.Status == "succeeded" || task.Status == "ignored") {
+	if !created && (task.UnifiedStatus == "completed" || task.UnifiedStatus == "delivery_failed" || task.UnifiedStatus == "failed" || task.Status == "ignored") {
 		_ = a.repo.markMessage(ctx, message.ID, "completed", "")
 		return nil
 	}
@@ -522,8 +604,8 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 		_ = a.repo.markMessage(ctx, message.ID, "completed", "")
 		return nil
 	}
-	if intent.Name != connector.IntentImageGenerate {
-		result, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: "目前我支持单轮 AI 生图。你可以发送：生成 iPhone 17 的电商图。"})
+	if intent.Name == connector.IntentUnknown || intent.Name == connector.IntentHelp {
+		result, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: connectorCapabilityInfoText()})
 		if sendErr == nil {
 			_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": "help"})
 		}
@@ -531,118 +613,100 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 		_ = a.repo.markMessage(ctx, message.ID, "ignored", "")
 		return sendErr
 	}
-	if err := validateConnectorPermission(item, binding, message); err != nil {
+	command := connectorCommandFromIntent(item, binding, message, intent, prompt)
+	if intent.ReferenceAssetRequested {
+		ref, found, lookupErr := a.repo.latestSuccessfulReferenceImage(ctx, item.EnterpriseID, item.ID, binding.ID, message.ExternalChatID)
+		if lookupErr != nil {
+			return a.failMessage(ctx, message, item, task, "REFERENCE_LOOKUP_FAILED", lookupErr)
+		}
+		if found {
+			command.ReferenceAssets = []connector.ReferenceAsset{{ID: ref.AssetID, TaskID: ref.GenerationTaskID, Name: ref.Name, MediaType: "image", URL: ref.URL}}
+		}
+	}
+	if session, found, sessionErr := a.repo.sessionContext(ctx, item.EnterpriseID, item.ID, message.ExternalChatID, message.ExternalUserID); sessionErr == nil && found {
+		command.Context = map[string]any{"last_intent": session.LastIntent, "last_task_type": session.LastTaskType, "last_task_id": session.LastTaskID, "last_asset_ids": session.LastAssetIDs, "last_topic": session.LastTopic, "last_parameters": session.LastParameters, "last_prompt": session.LastPrompt}
+	}
+	runtime := &connectorCapabilityRuntime{api: a, item: item, binding: binding, message: message, task: task, client: client}
+	var handler connector.CapabilityHandler
+	for _, candidate := range connectorHandlers(runtime) {
+		if candidate.CanHandle(command) {
+			handler = candidate
+			break
+		}
+	}
+	if handler == nil {
+		return a.failMessage(ctx, message, item, task, "UNSUPPORTED_INTENT", errors.New("unsupported connector capability"))
+	}
+	if err := handler.Validate(ctx, command); err != nil {
 		return a.failMessage(ctx, message, item, task, "PERMISSION_DENIED", err)
 	}
-	usage, err := a.repo.dailyBindingUsage(ctx, item.EnterpriseID, binding.ID)
+	estimated, err := handler.EstimateCost(ctx, command)
 	if err != nil {
-		return a.failMessage(ctx, message, item, task, "USAGE_CHECK_FAILED", err)
+		return a.failMessage(ctx, message, item, task, "ESTIMATE_FAILED", err)
 	}
-	dailyQuota := item.Config.MemberDailyQuota
-	if memberQuota := intValue(binding.Permission["dailyQuota"]); memberQuota > 0 {
-		dailyQuota = memberQuota
+	if err := a.validateConnectorQuota(ctx, item, binding, intent.Name, estimated); err != nil {
+		return a.failMessage(ctx, message, item, task, "QUOTA_EXCEEDED", err)
 	}
-	if usage > dailyQuota {
-		return a.failMessage(ctx, message, item, task, "DAILY_QUOTA_EXCEEDED", errors.New("member daily quota exceeded"))
-	}
-	var reference connectorReferenceImage
-	if editRequested {
-		var found bool
-		reference, found, err = a.repo.latestSuccessfulReferenceImage(ctx, item.EnterpriseID, item.ID, binding.ID, message.ExternalChatID)
-		if err != nil {
-			return a.failMessage(ctx, message, item, task, "REFERENCE_LOOKUP_FAILED", err)
-		}
-		if !found {
-			missingText := "我没有在当前飞书会话中找到可编辑的上一张图片。请先让我生成一张图片，再发送“在刚才图片上……”的修改要求。"
-			result, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: missingText})
-			if sendErr == nil {
-				_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, result.ExternalMessageID, "text", map[string]any{"text": missingText})
+	_ = a.repo.setConnectorTaskEstimate(ctx, task.ID, estimated, modelID)
+	if intent.Name != connector.IntentTaskQuery {
+		progress := connectorTaskCreatedMessage(intent, task.ID, estimated)
+		sent, sendErr := client.SendCard(ctx, target, progress)
+		if sendErr != nil {
+			fallback := fmt.Sprintf("任务已创建，正在处理。任务编号：%s，预计消耗：%d 积分。", task.ID, estimated)
+			sent, sendErr = client.SendText(ctx, target, connector.OutgoingMessage{Text: fallback})
+			if sendErr != nil {
+				return a.failMessage(ctx, message, item, task, "FEISHU_SEND_FAILED", sendErr)
 			}
-			_ = a.repo.updateConnectorTask(ctx, task.ID, "ignored", 100, "", 0, map[string]any{"reason": "reference_image_not_found"}, "REFERENCE_IMAGE_NOT_FOUND", missingText)
-			_ = a.repo.markMessage(ctx, message.ID, "ignored", "")
-			return sendErr
 		}
+		_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, sent.ExternalMessageID, "card", map[string]any{"taskId": task.ID, "status": "created"})
 	}
-	_ = a.repo.updateConnectorTask(ctx, task.ID, "processing", 10, "", 0, map[string]any{}, "", "")
-	progressText := "任务已创建，正在生成，请稍候…"
-	if editRequested {
-		progressText = "已找到上一张图片，正在按你的要求修改，请稍候…"
-	}
-	progressResult, err := client.SendText(ctx, target, connector.OutgoingMessage{Text: progressText})
-	if err != nil {
-		return a.failMessage(ctx, message, item, task, "FEISHU_SEND_FAILED", err)
-	}
-	_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, progressResult.ExternalMessageID, "text", map[string]any{"text": progressText})
-	requestType := "TEXT_TO_IMAGE"
-	params := map[string]any{"size": intent.Size, "count": intent.Count, "n": intent.Count, "source_type": "feishu", "source_id": task.ID, "operator_external_id": message.ExternalUserID}
-	if editRequested {
-		requestType = "IMAGE_TO_IMAGE"
-		params["referenceImages"] = []any{map[string]any{"assetId": reference.AssetID, "name": reference.Name, "url": reference.URL}}
-		params["sourceReferenceAssetId"] = reference.AssetID
-		params["sourceReferenceTaskId"] = reference.GenerationTaskID
-	}
-	req := generation.CreateRequest{
-		Type: requestType, ClientRequestID: "feishu:" + message.ExternalMessageID, Prompt: prompt, Model: item.Config.DefaultImageModel,
-		Params: params,
-	}
-	generatedTask, prepared, err := a.generator.executeConnectorImageGeneration(ctx, binding.InternalUserID, req)
+	_ = a.repo.updateConnectorTaskState(ctx, task.ID, "processing", "processing", "processing", 15, "", 0, map[string]any{"estimatedPoints": estimated}, "", "")
+	capabilityResult, err := handler.Execute(ctx, command)
 	if err != nil {
 		return a.failMessage(ctx, message, item, task, "GENERATION_FAILED", err)
 	}
-	resultPayload := map[string]any{"generationTaskId": generatedTask.ID, "assetIds": generatedTask.ResultIDs, "conceptImage": !editRequested, "editMode": editRequested}
-	if editRequested {
-		resultPayload["sourceReferenceAssetId"] = reference.AssetID
-		resultPayload["sourceReferenceTaskId"] = reference.GenerationTaskID
+	resultPayload := connectorCapabilityResultPayload(capabilityResult, command)
+	_ = a.repo.updateConnectorTaskState(ctx, task.ID, "succeeded", "uploading", "uploading", 95, capabilityResult.InternalTaskID, capabilityResult.ActualCost, resultPayload, "", "")
+	if err := a.deliverCapabilityResult(ctx, runtime, handler, command, capabilityResult); err != nil {
+		_ = a.repo.markConnectorDelivery(ctx, task.ID, "failed", false, err.Error())
+		_ = a.repo.markMessage(ctx, message.ID, "completed", "")
+		log.Printf("connector=feishu operation=deliver task_id=%s result=failed error=%v", task.ID, err)
+		return nil
 	}
-	if err := a.repo.updateConnectorTask(ctx, task.ID, "processing", 90, generatedTask.ID, int64(generatedTask.PointCost), resultPayload, "", ""); err != nil {
-		return a.failMessage(ctx, message, item, task, "TASK_UPDATE_FAILED", err)
+	switch intent.Name {
+	case connector.IntentImageGenerate, connector.IntentImageEdit:
+		resultPayload["imagesSent"] = len(capabilityResult.AssetIDs)
+	case connector.IntentVideoGenerate, connector.IntentVideoImageToVideo, connector.IntentPPTGenerate:
+		resultPayload["filesSent"] = 1
 	}
-	imageSent := 0
-	for index, image := range prepared.GeneratedImages {
-		raw, _, extension, readErr := readGeneratedArtifact(ctx, image.URL, image.ContentType)
-		if readErr != nil {
-			log.Printf("connector=feishu operation=read_generated_image task_id=%s index=%d result=failed error=%v", task.ID, index, readErr)
-			continue
-		}
-		sendResult, sendErr := client.SendImage(ctx, target, connector.OutgoingMessage{Image: bytes.NewReader(raw), FileName: fmt.Sprintf("%s-%d.%s", generatedTask.ID, index+1, extension)})
-		if sendErr != nil {
-			log.Printf("connector=feishu operation=send_image task_id=%s index=%d result=failed error=%v", task.ID, index, sendErr)
-			continue
-		}
-		imageSent++
-		_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, sendResult.ExternalMessageID, "image", map[string]any{"generationTaskId": generatedTask.ID, "index": index + 1})
+	_ = a.repo.updateConnectorTaskState(ctx, task.ID, "succeeded", "completed", "completed", 100, capabilityResult.InternalTaskID, capabilityResult.ActualCost, resultPayload, "", "")
+	_ = a.repo.markConnectorDelivery(ctx, task.ID, "delivered", true, "")
+	if intent.Name != connector.IntentTaskQuery {
+		_ = a.repo.upsertSessionContext(ctx, connectorSessionContext{EnterpriseID: item.EnterpriseID, ConnectorID: item.ID, ExternalChatID: message.ExternalChatID, ExternalUserID: message.ExternalUserID, LastIntent: intent.Name, LastTaskType: intent.Name, LastTaskID: task.ID, LastAssetIDs: capabilityResult.AssetIDs, LastTopic: intent.Topic, LastParameters: command.Parameters, LastPrompt: prompt, ExpiresAt: time.Now().UTC().Add(24 * time.Hour)})
 	}
-	finalText := fmt.Sprintf("生成完成，已保存到作品中心。本次消耗 %d 点。", generatedTask.PointCost)
-	if imageSent == 0 {
-		finalText = fmt.Sprintf("生成完成，作品已保存到作品中心（当前通道未能直接发送图片）。本次消耗 %d 点。", generatedTask.PointCost)
-	}
-	finalResult, sendErr := client.SendText(ctx, target, connector.OutgoingMessage{Text: finalText})
-	if sendErr != nil {
-		return a.failMessage(ctx, message, item, task, "FEISHU_SEND_FAILED", sendErr)
-	}
-	_ = a.repo.insertOutboundMessage(ctx, item, message.ExternalChatID, message.ExternalUserID, finalResult.ExternalMessageID, "text", map[string]any{"text": finalText})
-	resultPayload["imagesSent"] = imageSent
-	_ = a.repo.updateConnectorTask(ctx, task.ID, "succeeded", 100, generatedTask.ID, int64(generatedTask.PointCost), resultPayload, "", "")
 	_ = a.repo.markMessage(ctx, message.ID, "completed", "")
-	log.Printf("connector=feishu operation=generate connector_id=%s task_id=%s generation_task_id=%s result=succeeded", item.ID, task.ID, generatedTask.ID)
+	log.Printf("connector=feishu operation=capability connector_id=%s task_id=%s internal_task_id=%s capability=%s result=succeeded", item.ID, task.ID, capabilityResult.InternalTaskID, intent.Name)
 	return nil
 }
 
 func connectorModelInfoText(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return "当前飞书机器人尚未配置默认生图模型，请联系企业管理员完成配置。"
+		return "当前飞书机器人尚未配置默认生图模型，请联系企业管理员完成配置。视频和 PPT 会分别使用企业后台配置的模型或模板。"
 	}
-	return fmt.Sprintf("当前飞书机器人用于图片生成的模型是：%s。", model)
+	return fmt.Sprintf("当前飞书机器人用于图片生成的模型是：%s。视频和 PPT 会分别使用企业后台配置的模型或模板。", model)
 }
 
 func connectorCapabilityInfoText() string {
 	return "目前我支持以下功能：\n" +
-		"1. 文本生成图片：直接描述画面、商品、人物、风格、构图等要求。\n" +
-		"2. 修改上一张图片：基于当前会话中上一张成功生成的图片继续调整，例如添加 Logo、修改背景或颜色。\n" +
-		"3. 查询生图模型：发送“使用的是什么模型”。\n" +
-		"4. 自动保存作品：生成结果会保存到知启云 AI 作品中心。\n" +
-		"说明：生图和改图会按企业配置扣除积分；查询功能和模型不扣积分。"
+		"1. 生图：例如“生成 iPhone 17 的电商主图”。\n" +
+		"2. 改图：例如“把刚才的图片加上京东 Logo”。\n" +
+		"3. 生视频：例如“生成 10 秒、16:9、1080p 的产品宣传视频”。\n" +
+		"4. 图生视频：例如“用刚才的图片生成 5 秒视频”。\n" +
+		"5. 生 PPT：例如“生成一份 10 页的新能源汽车发布会 PPT”。\n" +
+		"6. 查任务：发送“查询最近任务”或带任务编号查询。\n" +
+		"7. 查模型：发送“使用的是什么模型”。\n" +
+		"生成结果会保存到知启云 AI 作品中心；可用能力和额度以企业后台配置为准。"
 }
 
 func (a *connectorAPI) failMessage(ctx context.Context, message connectorMessageRecord, item enterpriseConnector, task connectorTaskRecord, code string, cause error) error {
@@ -788,10 +852,22 @@ func friendlyConnectorError(err error) string {
 	switch {
 	case strings.Contains(value, "insufficient") || strings.Contains(value, "余额") || strings.Contains(value, "算力"):
 		return "企业算力余额不足，请联系企业管理员充值后重试。"
+	case strings.Contains(value, "reference image") || strings.Contains(value, "reference asset"):
+		return "没有找到当前会话中可用的上一张图片。请先发送或生成一张图片，再使用“用刚才的图片生成视频/修改图片”。"
+	case strings.Contains(value, "approval"):
+		return "该能力需要企业审批，当前自动审批流程尚未通过，请联系企业管理员。"
 	case errors.Is(err, errForbidden) || strings.Contains(value, "permission") || strings.Contains(value, "disabled"):
-		return "当前企业或成员没有 AI 生图权限，请联系企业管理员。"
-	case strings.Contains(value, "daily quota"):
-		return "你今天的 AI 生图额度已用完，请明天再试或联系企业管理员调整额度。"
+		return "当前企业或成员没有使用该 AI 能力的权限，请联系企业管理员在“企业管理中心 → 飞书连接器”中启用。"
+	case strings.Contains(value, "daily quota") || strings.Contains(value, "daily point"):
+		return "你今天的该项 AI 额度已用完，请明天再试或联系企业管理员调整额度。"
+	case strings.Contains(value, "monthly"):
+		return "你本月的该项 AI 积分额度已用完，请联系企业管理员调整额度。"
+	case strings.Contains(value, "duration"):
+		return "请求的视频时长超过企业允许的上限，请缩短时长后重试。"
+	case strings.Contains(value, "page"):
+		return "请求的 PPT 页数超过企业允许的上限，请减少页数后重试。"
+	case strings.Contains(value, "resolution"):
+		return "请求的视频分辨率超过企业允许的上限，请降低分辨率后重试。"
 	case strings.Contains(value, "mention"):
 		return "群聊中请先 @机器人，再发送生图指令。"
 	default:

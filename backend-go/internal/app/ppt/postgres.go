@@ -29,13 +29,16 @@ func (s *Service) ensurePostgresReady(ctx context.Context) error {
 create table if not exists xz_ppt_tasks (
   task_id varchar(128) primary key,
   user_id varchar(128) not null,
+	client_request_id varchar(256) not null default '',
   status varchar(32) not null,
   created_at timestamptz not null,
   updated_at timestamptz not null,
   raw jsonb not null
 );
+alter table xz_ppt_tasks add column if not exists client_request_id varchar(256) not null default '';
 create index if not exists idx_xz_ppt_tasks_user_created on xz_ppt_tasks(user_id, created_at desc);
 create index if not exists idx_xz_ppt_tasks_user_status on xz_ppt_tasks(user_id, status);
+create unique index if not exists uk_xz_ppt_tasks_user_client_request on xz_ppt_tasks(user_id,client_request_id) where client_request_id<>'';
 `); err != nil {
 		return err
 	}
@@ -127,6 +130,16 @@ func (s *Service) generatePostgres(req GenerateRequest, externalActive, limit in
 	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtext($1))`, "ppt:user:"+req.UserID); err != nil {
 		return GenerateResponse{}, err
 	}
+	if req.ClientRequestID != "" {
+		var existingID, existingStatus string
+		err := tx.QueryRowContext(ctx, `select task_id,status from xz_ppt_tasks where user_id=$1 and client_request_id=$2`, req.UserID, req.ClientRequestID).Scan(&existingID, &existingStatus)
+		if err == nil {
+			return GenerateResponse{TaskID: existingID, Status: existingStatus}, tx.Commit()
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return GenerateResponse{}, err
+		}
+	}
 	if limit > 0 {
 		var active int
 		if err := tx.QueryRowContext(ctx, `select count(*) from xz_ppt_tasks where user_id=$1 and status in ('pending','processing') and created_at > now() - interval '3 seconds'`, req.UserID).Scan(&active); err != nil {
@@ -151,7 +164,7 @@ func (s *Service) generatePostgres(req GenerateRequest, externalActive, limit in
 func taskFromGenerateRequest(req GenerateRequest) Task {
 	now := time.Now().UTC()
 	return Task{
-		TaskID: fmt.Sprintf("ppt_%d", now.UnixNano()), UserID: req.UserID, Type: "ppt", MediaType: "ppt",
+		TaskID: fmt.Sprintf("ppt_%d", now.UnixNano()), UserID: req.UserID, ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
 		Status: StatusPending, Title: titleFromPrompt(req.Prompt), Prompt: req.Prompt, SlideCount: req.SlideCount,
 		Language: req.Language, Tone: req.Tone, TextContent: req.TextContent, Audience: req.Audience, Scenario: req.Scenario,
 		GenerationAspectRatio: req.GenerationAspectRatio, Theme: req.Theme, AutoThemeEnabled: req.AutoThemeEnabled,
@@ -382,10 +395,10 @@ func persistPostgresTask(ctx context.Context, tx *sql.Tx, task Task) error {
 	createdAt := parseTaskTime(task.CreatedAt)
 	updatedAt := parseTaskTime(task.UpdatedAt)
 	_, err = tx.ExecContext(ctx, `
-insert into xz_ppt_tasks(task_id,user_id,status,created_at,updated_at,raw)
-values($1,$2,$3,$4,$5,$6::jsonb)
-on conflict(task_id) do update set user_id=excluded.user_id,status=excluded.status,updated_at=excluded.updated_at,raw=excluded.raw
-`, task.TaskID, task.UserID, task.Status, createdAt, updatedAt, string(raw))
+insert into xz_ppt_tasks(task_id,user_id,client_request_id,status,created_at,updated_at,raw)
+values($1,$2,$3,$4,$5,$6,$7::jsonb)
+on conflict(task_id) do update set user_id=excluded.user_id,client_request_id=excluded.client_request_id,status=excluded.status,updated_at=excluded.updated_at,raw=excluded.raw
+`, task.TaskID, task.UserID, task.ClientRequestID, task.Status, createdAt, updatedAt, string(raw))
 	return err
 }
 

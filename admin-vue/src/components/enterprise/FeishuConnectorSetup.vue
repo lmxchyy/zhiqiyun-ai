@@ -1,41 +1,40 @@
 <template>
   <main class="connector-page">
     <el-card class="connector-card" shadow="never">
-      <template #header>
-        <div class="connector-head">
-          <div>
-            <el-tag type="primary" effect="dark">企业连接器</el-tag>
-            <h1>飞书自建应用机器人</h1>
-            <p>凭据仅发送到当前知启云服务并加密保存，页面不会回显密钥原文。</p>
-          </div>
-          <el-tag :type="statusType">{{ statusLabel }}</el-tag>
-        </div>
-      </template>
-
+      <template #header><div class="connector-head"><div><el-tag type="primary" effect="dark">企业连接器</el-tag><h1>飞书自建应用机器人</h1><p>统一接入 AI 生图、改图、视频和 PPT；凭据加密保存且不会回显。</p></div><el-tag :type="statusType">{{ statusLabel }}</el-tag></div></template>
       <el-alert v-if="errorMessage" :title="errorMessage" type="error" show-icon :closable="false" />
-      <el-form label-position="top" :model="draft" class="connector-form">
-        <el-form-item label="连接名称"><el-input v-model.trim="draft.connectorName" placeholder="知启云 AI 飞书机器人" /></el-form-item>
-        <el-form-item label="App ID"><el-input v-model.trim="draft.appId" placeholder="cli_xxxxxxxxx" /></el-form-item>
-        <el-form-item label="默认生图模型">
-          <el-select v-model="draft.defaultImageModel" style="width: 100%">
-            <el-option label="GPT Image 2（真实生图）" value="gpt-image-2" />
-            <el-option label="本地演示模型（仅生成记录）" value="mock-standard" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="App Secret"><el-input v-model="draft.appSecret" type="password" show-password autocomplete="new-password" :placeholder="secretPlaceholder('appSecret')" /></el-form-item>
-        <el-form-item label="Verification Token"><el-input v-model="draft.verificationToken" type="password" show-password autocomplete="new-password" :placeholder="secretPlaceholder('verificationToken')" /></el-form-item>
-        <el-form-item label="Encrypt Key（可选）"><el-input v-model="draft.encryptKey" type="password" show-password autocomplete="new-password" :placeholder="secretPlaceholder('encryptKey')" /></el-form-item>
-        <el-form-item v-if="connector" label="事件回调地址"><el-input :model-value="connector.callbackUrl" readonly /></el-form-item>
-        <el-form-item v-if="connector" label="Connector Key"><el-input :model-value="connector.connectorKey" readonly /></el-form-item>
-      </el-form>
 
-      <div class="connector-actions">
-        <el-button v-if="errorMessage === 'forbidden'" type="warning" :loading="submitting" @click="initializeEnterprise">初始化企业接入空间</el-button>
-        <el-button type="primary" :loading="submitting" @click="save">保存配置</el-button>
-        <el-button :disabled="!connector" :loading="submitting" @click="testConnection">测试连接</el-button>
-        <el-button v-if="connector?.status !== 'active'" type="success" :disabled="!connector" :loading="submitting" @click="enable">启用机器人</el-button>
-        <el-button @click="back">返回用户工作台</el-button>
-      </div>
+      <el-tabs v-model="activeTab">
+        <el-tab-pane label="连接与能力" name="config">
+          <el-form label-position="top" :model="draft" class="connector-form">
+            <div class="form-grid"><el-form-item label="连接名称"><el-input v-model.trim="draft.connectorName" /></el-form-item><el-form-item label="App ID"><el-input v-model.trim="draft.appId" placeholder="cli_xxxxxxxxx" /></el-form-item></div>
+            <div class="form-grid"><el-form-item label="App Secret"><el-input v-model="draft.appSecret" type="password" show-password autocomplete="new-password" :placeholder="secretPlaceholder('appSecret')" /></el-form-item><el-form-item label="Verification Token"><el-input v-model="draft.verificationToken" type="password" show-password autocomplete="new-password" :placeholder="secretPlaceholder('verificationToken')" /></el-form-item></div>
+            <el-form-item label="Encrypt Key（可选）"><el-input v-model="draft.encryptKey" type="password" show-password autocomplete="new-password" :placeholder="secretPlaceholder('encryptKey')" /></el-form-item>
+            <div v-if="connector" class="form-grid"><el-form-item label="事件回调地址"><el-input :model-value="connector.callbackUrl" readonly /></el-form-item><el-form-item label="Connector Key"><el-input :model-value="connector.connectorKey" readonly /></el-form-item></div>
+
+            <h3>AI 能力</h3><div class="switch-grid"><el-switch v-model="draft.config.aiImageEnabled" active-text="AI 生图" /><el-switch v-model="draft.config.aiImageEditEnabled" active-text="AI 改图" /><el-switch v-model="draft.config.aiVideoEnabled" active-text="AI 视频" /><el-switch v-model="draft.config.pptEnabled" active-text="PPT 生成" /></div>
+            <div class="form-grid"><el-form-item label="默认生图模型"><el-select v-model="draft.config.defaultImageModel" style="width:100%"><el-option label="GPT Image 2" value="gpt-image-2" /><el-option label="本地演示模型" value="mock-standard" /></el-select></el-form-item><el-form-item label="每日生图次数"><el-input-number v-model="draft.config.memberDailyQuota" :min="1" :max="10000" /></el-form-item></div>
+
+            <h3>视频配置</h3><div class="form-grid three"><el-form-item label="默认模型"><el-input v-model.trim="draft.config.defaultVideoModel" placeholder="留空使用模型中心默认值" /></el-form-item><el-form-item label="默认时长（秒）"><el-input-number v-model="draft.config.defaultVideoDuration" :min="1" :max="draft.config.videoMaxDuration" /></el-form-item><el-form-item label="默认比例"><el-select v-model="draft.config.defaultVideoAspectRatio"><el-option v-for="v in ratios" :key="v" :label="v" :value="v" /></el-select></el-form-item><el-form-item label="默认分辨率"><el-select v-model="draft.config.defaultVideoResolution"><el-option v-for="v in resolutions" :key="v" :label="v" :value="v" /></el-select></el-form-item><el-form-item label="最大时长"><el-input-number v-model="draft.config.videoMaxDuration" :min="1" :max="120" /></el-form-item><el-form-item label="最大分辨率"><el-select v-model="draft.config.videoMaxResolution"><el-option v-for="v in resolutions" :key="v" :label="v" :value="v" /></el-select></el-form-item></div>
+            <div class="form-grid three"><el-form-item label="单次积分上限"><el-input-number v-model="draft.config.videoPerRequestPointLimit" :min="1" /></el-form-item><el-form-item label="每日积分上限"><el-input-number v-model="draft.config.videoDailyPointLimit" :min="1" /></el-form-item><el-form-item label="每月积分上限"><el-input-number v-model="draft.config.videoMonthlyPointLimit" :min="1" /></el-form-item></div>
+            <div class="form-grid"><el-form-item label="权限模式"><el-select v-model="draft.config.videoPermissionMode"><el-option label="允许" value="allow" /><el-option label="禁止" value="deny" /><el-option label="需要审批" value="approval" /></el-select></el-form-item><el-form-item label="图生视频"><el-switch v-model="draft.config.allowImageToVideo" /></el-form-item></div>
+
+            <h3>PPT 配置</h3><div class="form-grid three"><el-form-item label="默认模板"><el-input v-model.trim="draft.config.defaultPptTemplate" /></el-form-item><el-form-item label="默认页数"><el-input-number v-model="draft.config.defaultPptPageCount" :min="1" :max="draft.config.pptMaxPageCount" /></el-form-item><el-form-item label="最大页数"><el-input-number v-model="draft.config.pptMaxPageCount" :min="1" :max="100" /></el-form-item><el-form-item label="单次积分上限"><el-input-number v-model="draft.config.pptPerRequestPointLimit" :min="1" /></el-form-item><el-form-item label="每日积分上限"><el-input-number v-model="draft.config.pptDailyPointLimit" :min="1" /></el-form-item><el-form-item label="每月积分上限"><el-input-number v-model="draft.config.pptMonthlyPointLimit" :min="1" /></el-form-item></div>
+            <div class="switch-grid"><el-switch v-model="draft.config.pptUseEnterpriseLogo" active-text="使用企业 Logo" /><el-switch v-model="draft.config.pptUseEnterpriseKnowledge" active-text="使用企业知识库" /></div><el-form-item label="权限模式"><el-select v-model="draft.config.pptPermissionMode"><el-option label="允许" value="allow" /><el-option label="禁止" value="deny" /><el-option label="需要审批" value="approval" /></el-select></el-form-item>
+          </el-form>
+        </el-tab-pane>
+
+        <el-tab-pane label="成员权限" name="members" :disabled="!connector">
+          <el-table :data="members" v-loading="relatedLoading" stripe><el-table-column prop="externalName" label="飞书用户" min-width="130" /><el-table-column prop="internalUserName" label="系统账号" min-width="140" /><el-table-column label="视频" width="90"><template #default="s"><el-switch v-model="s.row.permission.videoGenerate" /></template></el-table-column><el-table-column label="PPT" width="90"><template #default="s"><el-switch v-model="s.row.permission.pptGenerate" /></template></el-table-column><el-table-column label="视频日/月积分" min-width="210"><template #default="s"><el-input-number v-model="s.row.permission.videoDailyLimit" :min="0" size="small" /> / <el-input-number v-model="s.row.permission.videoMonthlyLimit" :min="0" size="small" /></template></el-table-column><el-table-column label="PPT日/月积分" min-width="210"><template #default="s"><el-input-number v-model="s.row.permission.pptDailyLimit" :min="0" size="small" /> / <el-input-number v-model="s.row.permission.pptMonthlyLimit" :min="0" size="small" /></template></el-table-column><el-table-column label="视频最长秒数" width="145"><template #default="s"><el-input-number v-model="s.row.permission.maxVideoDuration" :min="0" size="small" /></template></el-table-column><el-table-column label="PPT最多页数" width="145"><template #default="s"><el-input-number v-model="s.row.permission.maxPptPages" :min="0" size="small" /></template></el-table-column><el-table-column label="操作" width="90" fixed="right"><template #default="s"><el-button link type="primary" @click="saveMember(s.row)">保存</el-button></template></el-table-column></el-table>
+        </el-tab-pane>
+
+        <el-tab-pane label="任务记录" name="tasks" :disabled="!connector">
+          <div class="task-filters"><el-select v-model="taskCapability" clearable placeholder="能力" @change="loadTasks"><el-option label="图片" value="image.generate" /><el-option label="改图" value="image.edit" /><el-option label="视频" value="video.generate" /><el-option label="图生视频" value="video.image_to_video" /><el-option label="PPT" value="ppt.generate" /></el-select><el-select v-model="taskStatus" clearable placeholder="状态" @change="loadTasks"><el-option label="成功" value="completed" /><el-option label="失败" value="failed" /><el-option label="投递失败" value="delivery_failed" /></el-select><el-button @click="loadTasks">刷新</el-button></div>
+          <el-table :data="tasks" v-loading="relatedLoading" stripe><el-table-column prop="externalUserName" label="飞书用户" width="120" /><el-table-column prop="originalText" label="原始指令" min-width="220" show-overflow-tooltip /><el-table-column prop="taskType" label="能力" width="145" /><el-table-column prop="platformTaskId" label="内部任务" width="180" show-overflow-tooltip /><el-table-column prop="modelId" label="模型/模板" width="140" /><el-table-column prop="unifiedStatus" label="状态" width="110" /><el-table-column label="进度" width="90"><template #default="s">{{ s.row.progress }}%</template></el-table-column><el-table-column prop="estimatedPoints" label="预计积分" width="90" /><el-table-column prop="pointsCost" label="实际积分" width="90" /><el-table-column label="作品" width="150" show-overflow-tooltip><template #default="s">{{ s.row.result?.assetIds?.join(', ') || '-' }}</template></el-table-column><el-table-column prop="deliveryStatus" label="投递" width="90" /><el-table-column prop="createdAt" label="创建时间" width="180" /><el-table-column prop="completedAt" label="完成时间" width="180" /><el-table-column prop="errorMessage" label="错误原因" min-width="180" show-overflow-tooltip /><el-table-column label="操作" width="100" fixed="right"><template #default="s"><el-button v-if="s.row.unifiedStatus==='delivery_failed'" link type="primary" @click="retryDelivery(s.row)">重发作品</el-button></template></el-table-column></el-table>
+        </el-tab-pane>
+      </el-tabs>
+
+      <div class="connector-actions"><el-button v-if="errorMessage==='forbidden'" type="warning" :loading="submitting" @click="initializeEnterprise">初始化企业接入空间</el-button><el-button type="primary" :loading="submitting" @click="save">保存配置</el-button><el-button :disabled="!connector" :loading="submitting" @click="testConnection">测试连接</el-button><el-button v-if="connector?.status!=='active'" type="success" :disabled="!connector" :loading="submitting" @click="enable">启用机器人</el-button><el-button @click="back">返回用户工作台</el-button></div>
     </el-card>
   </main>
 </template>
@@ -45,99 +44,33 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { adminRequest } from "../../api/client";
 
-interface ConnectorView {
-  status: string;
-  connectorName: string;
-  connectorKey: string;
-  appId: string;
-  callbackUrl: string;
-  lastErrorMessage?: string;
-  config: { defaultImageModel?: string };
-  secretsConfigured: { appSecret: boolean; verificationToken: boolean; encryptKey: boolean };
-}
+interface ConnectorConfig { aiImageEnabled:boolean;aiImageEditEnabled:boolean;aiVideoEnabled:boolean;pptEnabled:boolean;defaultImageModel:string;defaultSize:string;defaultImageCount:number;memberDailyQuota:number;defaultVideoModel:string;defaultVideoDuration:number;defaultVideoAspectRatio:string;defaultVideoResolution:string;allowImageToVideo:boolean;videoMaxDuration:number;videoMaxResolution:string;videoPerRequestPointLimit:number;videoDailyPointLimit:number;videoMonthlyPointLimit:number;videoPermissionMode:string;defaultPptTemplate:string;defaultPptPageCount:number;pptMaxPageCount:number;pptUseEnterpriseLogo:boolean;pptUseEnterpriseKnowledge:boolean;pptPerRequestPointLimit:number;pptDailyPointLimit:number;pptMonthlyPointLimit:number;pptPermissionMode:string;allowGroupChat:boolean;groupRequireMention:boolean }
+interface ConnectorView { status:string;connectorName:string;connectorKey:string;appId:string;callbackUrl:string;config:ConnectorConfig;secretsConfigured:{appSecret:boolean;verificationToken:boolean;encryptKey:boolean} }
+interface Member { id:string;externalName:string;internalUserName:string;internalUserId:string;status:string;permission:Record<string,boolean|number> }
+interface Task { id:string;externalUserName:string;originalText:string;taskType:string;platformTaskId:string;modelId:string;unifiedStatus:string;progress:number;estimatedPoints:number;pointsCost:number;result?:{assetIds?:string[]};deliveryStatus:string;createdAt:string;completedAt:string;errorMessage:string }
 
-const connector = ref<ConnectorView | null>(null);
-const submitting = ref(false);
-const errorMessage = ref("");
-const draft = reactive({ connectorName: "知启云 AI 飞书机器人", appId: "", appSecret: "", verificationToken: "", encryptKey: "", defaultImageModel: "gpt-image-2" });
-const statusLabel = computed(() => connector.value?.status === "active" ? "已启用" : connector.value?.status === "error" ? "连接异常" : "未启用");
-const statusType = computed(() => connector.value?.status === "active" ? "success" : connector.value?.status === "error" ? "danger" : "info");
-
+const defaultConfig:ConnectorConfig={aiImageEnabled:true,aiImageEditEnabled:true,aiVideoEnabled:false,pptEnabled:false,defaultImageModel:"gpt-image-2",defaultSize:"1024x1024",defaultImageCount:1,memberDailyQuota:20,defaultVideoModel:"",defaultVideoDuration:5,defaultVideoAspectRatio:"16:9",defaultVideoResolution:"720p",allowImageToVideo:true,videoMaxDuration:15,videoMaxResolution:"1080p",videoPerRequestPointLimit:1000,videoDailyPointLimit:3000,videoMonthlyPointLimit:30000,videoPermissionMode:"allow",defaultPptTemplate:"business",defaultPptPageCount:8,pptMaxPageCount:30,pptUseEnterpriseLogo:false,pptUseEnterpriseKnowledge:false,pptPerRequestPointLimit:1000,pptDailyPointLimit:3000,pptMonthlyPointLimit:30000,pptPermissionMode:"allow",allowGroupChat:true,groupRequireMention:true};
+const connector=ref<ConnectorView|null>(null),submitting=ref(false),relatedLoading=ref(false),errorMessage=ref(""),activeTab=ref("config"),members=ref<Member[]>([]),tasks=ref<Task[]>([]),taskCapability=ref(""),taskStatus=ref("");
+const draft=reactive({connectorName:"知启云 AI 飞书机器人",appId:"",appSecret:"",verificationToken:"",encryptKey:"",config:{...defaultConfig}});
+const ratios=["16:9","9:16","1:1","4:3","3:4"],resolutions=["480p","720p","1080p","4k"];
+const statusLabel=computed(()=>connector.value?.status==="active"?"已启用":connector.value?.status==="error"?"连接异常":"未启用");
+const statusType=computed(()=>connector.value?.status==="active"?"success":connector.value?.status==="error"?"danger":"info");
 onMounted(load);
 
-async function load() {
-  errorMessage.value = "";
-  try {
-    const result = await adminRequest<ConnectorView | { configured: false }>({ method: "GET", url: "/enterprise/connectors/feishu" });
-    if ("configured" in result) return;
-    connector.value = result;
-    draft.connectorName = result.connectorName;
-    draft.appId = result.appId;
-    draft.defaultImageModel = result.config?.defaultImageModel || "gpt-image-2";
-  } catch (error) {
-    errorMessage.value = message(error, "飞书连接配置加载失败");
-  }
-}
-
-async function initializeEnterprise() {
-  submitting.value = true;
-  try {
-    await adminRequest({ method: "POST", url: "/enterprises", data: { name: "知启云 AI 飞书机器人企业" } });
-    errorMessage.value = "";
-    ElMessage.success("企业接入空间已创建，并已切换为企业管理员");
-    await load();
-  } catch (error) { ElMessage.error(message(error, "企业接入空间初始化失败")); }
-  finally { submitting.value = false; }
-}
-
-async function save() {
-  if (!draft.appId || (!connector.value && (!draft.appSecret || !draft.verificationToken))) {
-    ElMessage.warning("请填写 App ID、App Secret 和 Verification Token");
-    return;
-  }
-  submitting.value = true;
-  try {
-    connector.value = await adminRequest<ConnectorView>({
-      method: connector.value ? "PUT" : "POST",
-      url: "/enterprise/connectors/feishu",
-      data: {
-        connectorName: draft.connectorName,
-        appId: draft.appId,
-        appSecret: draft.appSecret || undefined,
-        verificationToken: draft.verificationToken || undefined,
-        encryptKey: draft.encryptKey || undefined,
-        config: { aiImageEnabled: true, defaultImageModel: draft.defaultImageModel, defaultSize: "1024x1024", defaultImageCount: 1, memberDailyQuota: 20, allowGroupChat: true, groupRequireMention: true },
-      },
-    });
-    draft.appSecret = ""; draft.verificationToken = ""; draft.encryptKey = "";
-    ElMessage.success("飞书连接配置已加密保存");
-  } catch (error) { ElMessage.error(message(error, "保存失败")); }
-  finally { submitting.value = false; }
-}
-
-async function testConnection() {
-  submitting.value = true;
-  try {
-    const result = await adminRequest<{ connector: ConnectorView }>({ method: "POST", url: "/enterprise/connectors/feishu/test", data: {} });
-    connector.value = result.connector; ElMessage.success("飞书连接测试通过");
-  } catch (error) { ElMessage.error(message(error, "连接测试失败")); await load(); }
-  finally { submitting.value = false; }
-}
-
-async function enable() {
-  submitting.value = true;
-  try {
-    const result = await adminRequest<{ connector: ConnectorView }>({ method: "POST", url: "/enterprise/connectors/feishu/enable", data: {} });
-    connector.value = result.connector; ElMessage.success("飞书机器人已启用");
-  } catch (error) { ElMessage.error(message(error, "启用失败")); }
-  finally { submitting.value = false; }
-}
-
-function secretPlaceholder(key: keyof ConnectorView["secretsConfigured"]) { return connector.value?.secretsConfigured[key] ? "已配置，留空不修改" : key === "encryptKey" ? "未配置（可选）" : "请输入"; }
-function message(error: unknown, fallback: string) { return error instanceof Error && error.message ? error.message : fallback; }
-function back() { window.location.assign(window.location.pathname.startsWith("/workspace") ? "/workspace" : "/app"); }
+async function load(){errorMessage.value="";try{const result=await adminRequest<ConnectorView|{configured:false;config?:ConnectorConfig}>({method:"GET",url:"/enterprise/connectors/feishu"});if("configured" in result){Object.assign(draft.config,defaultConfig,result.config||{});return}connector.value=result;draft.connectorName=result.connectorName;draft.appId=result.appId;Object.assign(draft.config,defaultConfig,result.config||{});await Promise.all([loadMembers(),loadTasks()])}catch(error){errorMessage.value=message(error,"飞书连接配置加载失败")}}
+async function initializeEnterprise(){submitting.value=true;try{await adminRequest({method:"POST",url:"/enterprises",data:{name:"知启云 AI 飞书机器人企业"}});errorMessage.value="";ElMessage.success("企业接入空间已创建");await load()}catch(error){ElMessage.error(message(error,"企业接入空间初始化失败"))}finally{submitting.value=false}}
+async function save(){if(!draft.appId||(!connector.value&&(!draft.appSecret||!draft.verificationToken))){ElMessage.warning("请填写 App ID、App Secret 和 Verification Token");return}submitting.value=true;try{connector.value=await adminRequest<ConnectorView>({method:connector.value?"PUT":"POST",url:"/enterprise/connectors/feishu",data:{connectorName:draft.connectorName,appId:draft.appId,appSecret:draft.appSecret||undefined,verificationToken:draft.verificationToken||undefined,encryptKey:draft.encryptKey||undefined,config:{...draft.config}}});draft.appSecret="";draft.verificationToken="";draft.encryptKey="";ElMessage.success("飞书能力配置已加密保存")}catch(error){ElMessage.error(message(error,"保存失败"))}finally{submitting.value=false}}
+async function loadMembers(){if(!connector.value)return;relatedLoading.value=true;try{const result=await adminRequest<{items:Member[]}>({method:"GET",url:"/enterprise/connectors/feishu/users?limit=200"});members.value=result.items.map(item=>({...item,permission:{videoGenerate:true,pptGenerate:true,videoDailyLimit:0,videoMonthlyLimit:0,pptDailyLimit:0,pptMonthlyLimit:0,maxVideoDuration:0,maxPptPages:0,...item.permission}}))}finally{relatedLoading.value=false}}
+async function saveMember(item:Member){try{await adminRequest({method:"PUT",url:`/enterprise/connectors/feishu/users/${item.id}`,data:{internalUserId:item.internalUserId,permission:item.permission,status:item.status}});ElMessage.success("成员权限已保存")}catch(error){ElMessage.error(message(error,"成员权限保存失败"))}}
+async function loadTasks(){if(!connector.value)return;relatedLoading.value=true;try{const params=new URLSearchParams({limit:"200"});if(taskCapability.value)params.set("capability",taskCapability.value);if(taskStatus.value)params.set("status",taskStatus.value);const result=await adminRequest<{items:Task[]}>({method:"GET",url:`/enterprise/connectors/feishu/tasks?${params}`});tasks.value=result.items}finally{relatedLoading.value=false}}
+async function retryDelivery(item:Task){try{await adminRequest({method:"POST",url:`/enterprise/connectors/feishu/tasks/${item.id}/retry-delivery`,data:{}});ElMessage.success("作品已重新投递，未重新生成或扣费");await loadTasks()}catch(error){ElMessage.error(message(error,"重新投递失败"))}}
+async function testConnection(){submitting.value=true;try{const result=await adminRequest<{connector:ConnectorView}>({method:"POST",url:"/enterprise/connectors/feishu/test",data:{}});connector.value=result.connector;ElMessage.success("飞书连接测试通过")}catch(error){ElMessage.error(message(error,"连接测试失败"));await load()}finally{submitting.value=false}}
+async function enable(){submitting.value=true;try{const result=await adminRequest<{connector:ConnectorView}>({method:"POST",url:"/enterprise/connectors/feishu/enable",data:{}});connector.value=result.connector;ElMessage.success("飞书机器人已启用")}catch(error){ElMessage.error(message(error,"启用失败"))}finally{submitting.value=false}}
+function secretPlaceholder(key:keyof ConnectorView["secretsConfigured"]){return connector.value?.secretsConfigured[key]?"已配置，留空不修改":key==="encryptKey"?"未配置（可选）":"请输入"}
+function message(error:unknown,fallback:string){return error instanceof Error&&error.message?error.message:fallback}
+function back(){window.location.assign(window.location.pathname.startsWith("/workspace")?"/workspace":"/app")}
 </script>
 
 <style scoped>
-.connector-page{min-height:100vh;padding:36px;background:#f4f7fb}.connector-card{max-width:860px;margin:0 auto}.connector-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.connector-head h1{margin:12px 0 8px;font-size:28px;color:#182230}.connector-head p{margin:0;color:#667085}.connector-form{margin-top:20px}.connector-actions{display:flex;flex-wrap:wrap;gap:10px}@media(max-width:640px){.connector-page{padding:12px}.connector-head{flex-direction:column}.connector-actions .el-button{width:100%;margin-left:0}}
+.connector-page{min-height:100vh;padding:36px;background:#f4f7fb}.connector-card{max-width:1180px;margin:0 auto}.connector-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}.connector-head h1{margin:12px 0 8px;font-size:28px;color:#182230}.connector-head p{margin:0;color:#667085}.connector-form{margin-top:20px}.connector-form h3{margin:28px 0 16px;border-left:4px solid #409eff;padding-left:10px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px}.form-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.switch-grid{display:flex;flex-wrap:wrap;gap:24px;margin-bottom:18px}.connector-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}.task-filters{display:flex;gap:10px;margin-bottom:16px}.task-filters .el-select{width:180px}:deep(.el-input-number){width:100%}@media(max-width:760px){.connector-page{padding:12px}.connector-head{flex-direction:column}.form-grid,.form-grid.three{grid-template-columns:1fr}.connector-actions .el-button{width:100%;margin-left:0}}
 </style>

@@ -185,6 +185,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.PUT("/enterprise/connectors/feishu/users/:id", wrapF(connectors.updateUser))
 	v1.GET("/enterprise/connectors/feishu/logs", wrapF(connectors.logs))
 	v1.GET("/enterprise/connectors/feishu/tasks", wrapF(connectors.tasks))
+	v1.POST("/enterprise/connectors/feishu/tasks/:taskId/retry-delivery", wrapF(connectors.retryDelivery))
 	v1.GET("/channel/me", wrapF(channel.me))
 	v1.GET("/channel/customers", wrapF(channel.customers))
 	v1.GET("/channel/customers/:id", wrapF(channel.customerDetail))

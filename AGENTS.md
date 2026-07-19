@@ -6,10 +6,13 @@
 后续开发和代码评审默认按此执行，除非你明确调整。
 
 企业 Connector 约束：
-• 飞书、后续钉钉和企业微信必须通过统一 Connector 抽象接入，禁止把平台 SDK 类型写入 AI 生图核心业务。
+• 飞书、后续钉钉和企业微信必须通过统一 Connector 抽象接入，禁止把平台 SDK 类型写入生图、视频或 PPT 核心业务。
 • 外部消息只能通过 connector_key 解析企业，禁止接受消息体传入的 tenant_id 或 enterprise_id 作为租户依据。
 • 外部消息 ID、Connector 任务 ID 和既有生成任务 client_request_id 必须形成幂等链，禁止重复生成和重复扣费。
 • AppSecret、VerificationToken、EncryptKey 只能加密入库，日志与前端响应不得输出明文。
+• 生图、改图、视频、PPT 必须统一经过 AICommand、CapabilityHandler、Connector 任务、既有业务服务、作品中心和账单链路；禁止在平台适配器里另写模型调用。
+• 生成成功但飞书投递失败必须标记 delivery_failed；重投只能重发已有私有作品或短期签名链接，不得再次调用模型或扣费。
+• 会话上下文至少按 connector_id + chat_id + external_user_id 隔离，上一张图片、上一任务和作品链接不得跨成员或跨企业读取。
 
 微信虚拟支付约束：
 • 虚拟商品统一使用微信虚拟支付。

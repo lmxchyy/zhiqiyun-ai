@@ -70,3 +70,57 @@ func TestPromptBuilderPreservesDetailedGeneralPrompt(t *testing.T) {
 		t.Fatalf("general visual prompt was not preserved: %s", prompt)
 	}
 }
+
+func TestRuleIntentRouterRecognizesVideoParameters(t *testing.T) {
+	router := RuleIntentRouter{}
+	defaults := IntentDefaults{VideoDuration: 5, VideoAspectRatio: "16:9", VideoResolution: "720p", VideoModelID: "mock-video"}
+	tests := []struct {
+		text       string
+		intent     string
+		duration   int
+		ratio      string
+		resolution string
+	}{
+		{"生成一条15秒的产品宣传视频", IntentVideoGenerate, 15, "16:9", "720p"},
+		{"做一个9:16竖屏宣传片", IntentVideoGenerate, 5, "9:16", "720p"},
+		{"生成一个720P横屏视频", IntentVideoGenerate, 5, "16:9", "720p"},
+		{"用刚才的图片生成10秒视频", IntentVideoImageToVideo, 10, "16:9", "720p"},
+	}
+	for _, test := range tests {
+		got := router.Route(test.text, defaults)
+		if got.Name != test.intent || got.Duration != test.duration || got.AspectRatio != test.ratio || got.Resolution != test.resolution {
+			t.Fatalf("video intent %q = %#v", test.text, got)
+		}
+	}
+}
+
+func TestRuleIntentRouterRecognizesPPTParameters(t *testing.T) {
+	router := RuleIntentRouter{}
+	defaults := IntentDefaults{PPTPageCount: 8, PPTTemplateID: "business", PPTTheme: "business", PPTLanguage: "zh"}
+	for _, test := range []struct {
+		text     string
+		pages    int
+		audience string
+		purpose  string
+	}{
+		{"生成一份知启云AI招商PPT", 8, "auto", "招商"},
+		{"做一个10页的产品介绍PPT", 10, "auto", "产品介绍"},
+		{"帮我做8页老板汇报PPT", 8, "老板", "汇报"},
+		{"生成一份面向代理商的招商方案", 8, "代理商", "招商"},
+	} {
+		got := router.Route(test.text, defaults)
+		if got.Name != IntentPPTGenerate || got.PageCount != test.pages || got.Audience != test.audience || got.Purpose != test.purpose {
+			t.Fatalf("ppt intent %q = %#v", test.text, got)
+		}
+	}
+}
+
+func TestRuleIntentRouterRecognizesImageEditAndTaskQuery(t *testing.T) {
+	router := RuleIntentRouter{}
+	if got := router.Route("在刚才图片上加上京东logo", IntentDefaults{}); got.Name != IntentImageEdit || !got.ReferenceAssetRequested {
+		t.Fatalf("image edit = %#v", got)
+	}
+	if got := router.Route("查询刚才的任务进度", IntentDefaults{}); got.Name != IntentTaskQuery {
+		t.Fatalf("task query = %#v", got)
+	}
+}

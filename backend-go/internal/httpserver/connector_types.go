@@ -26,17 +26,49 @@ type enterpriseConnector struct {
 }
 
 type connectorConfig struct {
-	AIImageEnabled      bool   `json:"aiImageEnabled"`
-	DefaultImageModel   string `json:"defaultImageModel"`
-	DefaultSize         string `json:"defaultSize"`
-	DefaultImageCount   int    `json:"defaultImageCount"`
-	MemberDailyQuota    int    `json:"memberDailyQuota"`
-	AllowGroupChat      bool   `json:"allowGroupChat"`
-	GroupRequireMention bool   `json:"groupRequireMention"`
+	AIImageEnabled            bool   `json:"aiImageEnabled"`
+	AIImageEditEnabled        bool   `json:"aiImageEditEnabled"`
+	AIVideoEnabled            bool   `json:"aiVideoEnabled"`
+	PPTEnabled                bool   `json:"pptEnabled"`
+	DefaultImageModel         string `json:"defaultImageModel"`
+	DefaultSize               string `json:"defaultSize"`
+	DefaultImageCount         int    `json:"defaultImageCount"`
+	MemberDailyQuota          int    `json:"memberDailyQuota"`
+	DefaultVideoModel         string `json:"defaultVideoModel"`
+	DefaultVideoDuration      int    `json:"defaultVideoDuration"`
+	DefaultVideoAspectRatio   string `json:"defaultVideoAspectRatio"`
+	DefaultVideoResolution    string `json:"defaultVideoResolution"`
+	AllowImageToVideo         bool   `json:"allowImageToVideo"`
+	VideoMaxDuration          int    `json:"videoMaxDuration"`
+	VideoMaxResolution        string `json:"videoMaxResolution"`
+	VideoPerRequestPointLimit int    `json:"videoPerRequestPointLimit"`
+	VideoDailyPointLimit      int    `json:"videoDailyPointLimit"`
+	VideoMonthlyPointLimit    int    `json:"videoMonthlyPointLimit"`
+	VideoPermissionMode       string `json:"videoPermissionMode"`
+	DefaultPPTTemplate        string `json:"defaultPptTemplate"`
+	DefaultPPTPageCount       int    `json:"defaultPptPageCount"`
+	PPTMaxPageCount           int    `json:"pptMaxPageCount"`
+	PPTUseEnterpriseLogo      bool   `json:"pptUseEnterpriseLogo"`
+	PPTUseEnterpriseKnowledge bool   `json:"pptUseEnterpriseKnowledge"`
+	PPTPerRequestPointLimit   int    `json:"pptPerRequestPointLimit"`
+	PPTDailyPointLimit        int    `json:"pptDailyPointLimit"`
+	PPTMonthlyPointLimit      int    `json:"pptMonthlyPointLimit"`
+	PPTPermissionMode         string `json:"pptPermissionMode"`
+	AllowGroupChat            bool   `json:"allowGroupChat"`
+	GroupRequireMention       bool   `json:"groupRequireMention"`
 }
 
 func defaultConnectorConfig() connectorConfig {
-	return connectorConfig{AIImageEnabled: true, DefaultSize: "1024x1024", DefaultImageCount: 1, MemberDailyQuota: 20, AllowGroupChat: true, GroupRequireMention: true}
+	return connectorConfig{
+		AIImageEnabled: true, AIImageEditEnabled: true, AIVideoEnabled: false, PPTEnabled: false,
+		DefaultSize: "1024x1024", DefaultImageCount: 1, MemberDailyQuota: 20,
+		DefaultVideoDuration: 5, DefaultVideoAspectRatio: "16:9", DefaultVideoResolution: "720p",
+		AllowImageToVideo: true, VideoMaxDuration: 15, VideoMaxResolution: "1080p",
+		VideoPerRequestPointLimit: 1000, VideoDailyPointLimit: 3000, VideoMonthlyPointLimit: 30000, VideoPermissionMode: "allow",
+		DefaultPPTTemplate: "business", DefaultPPTPageCount: 8, PPTMaxPageCount: 30,
+		PPTPerRequestPointLimit: 1000, PPTDailyPointLimit: 3000, PPTMonthlyPointLimit: 30000, PPTPermissionMode: "allow",
+		AllowGroupChat: true, GroupRequireMention: true,
+	}
 }
 
 func normalizeConnectorConfig(value connectorConfig) connectorConfig {
@@ -50,7 +82,63 @@ func normalizeConnectorConfig(value connectorConfig) connectorConfig {
 	if value.MemberDailyQuota <= 0 || value.MemberDailyQuota > 10000 {
 		value.MemberDailyQuota = defaults.MemberDailyQuota
 	}
+	if value.DefaultVideoDuration <= 0 {
+		value.DefaultVideoDuration = defaults.DefaultVideoDuration
+	}
+	if value.DefaultVideoAspectRatio == "" {
+		value.DefaultVideoAspectRatio = defaults.DefaultVideoAspectRatio
+	}
+	if value.DefaultVideoResolution == "" {
+		value.DefaultVideoResolution = defaults.DefaultVideoResolution
+	}
+	if value.VideoMaxDuration <= 0 {
+		value.VideoMaxDuration = defaults.VideoMaxDuration
+	}
+	if value.VideoMaxResolution == "" {
+		value.VideoMaxResolution = defaults.VideoMaxResolution
+	}
+	if value.VideoPerRequestPointLimit <= 0 {
+		value.VideoPerRequestPointLimit = defaults.VideoPerRequestPointLimit
+	}
+	if value.VideoDailyPointLimit <= 0 {
+		value.VideoDailyPointLimit = defaults.VideoDailyPointLimit
+	}
+	if value.VideoMonthlyPointLimit <= 0 {
+		value.VideoMonthlyPointLimit = defaults.VideoMonthlyPointLimit
+	}
+	value.VideoPermissionMode = normalizeConnectorPermissionMode(value.VideoPermissionMode, defaults.VideoPermissionMode)
+	if value.DefaultPPTTemplate == "" {
+		value.DefaultPPTTemplate = defaults.DefaultPPTTemplate
+	}
+	if value.DefaultPPTPageCount <= 0 {
+		value.DefaultPPTPageCount = defaults.DefaultPPTPageCount
+	}
+	if value.PPTMaxPageCount <= 0 {
+		value.PPTMaxPageCount = defaults.PPTMaxPageCount
+	}
+	if value.DefaultPPTPageCount > value.PPTMaxPageCount {
+		value.DefaultPPTPageCount = value.PPTMaxPageCount
+	}
+	if value.PPTPerRequestPointLimit <= 0 {
+		value.PPTPerRequestPointLimit = defaults.PPTPerRequestPointLimit
+	}
+	if value.PPTDailyPointLimit <= 0 {
+		value.PPTDailyPointLimit = defaults.PPTDailyPointLimit
+	}
+	if value.PPTMonthlyPointLimit <= 0 {
+		value.PPTMonthlyPointLimit = defaults.PPTMonthlyPointLimit
+	}
+	value.PPTPermissionMode = normalizeConnectorPermissionMode(value.PPTPermissionMode, defaults.PPTPermissionMode)
 	return value
+}
+
+func normalizeConnectorPermissionMode(value, fallback string) string {
+	switch value {
+	case "deny", "allow", "approval":
+		return value
+	default:
+		return fallback
+	}
 }
 
 type connectorSecretState struct {
@@ -158,16 +246,36 @@ type connectorTaskRecord struct {
 	ModelID           string         `json:"modelId"`
 	PlatformTaskID    string         `json:"platformTaskId,omitempty"`
 	Status            string         `json:"status"`
+	UnifiedStatus     string         `json:"unifiedStatus,omitempty"`
+	InternalStage     string         `json:"internalStage,omitempty"`
+	DeliveryStatus    string         `json:"deliveryStatus,omitempty"`
+	DeliveryAttempts  int            `json:"deliveryAttempts,omitempty"`
 	Progress          int            `json:"progress"`
 	Result            map[string]any `json:"result"`
 	TokenCost         int64          `json:"tokenCost"`
 	PointsCost        int64          `json:"pointsCost"`
+	EstimatedPoints   int64          `json:"estimatedPoints,omitempty"`
 	ErrorCode         string         `json:"errorCode,omitempty"`
 	ErrorMessage      string         `json:"errorMessage,omitempty"`
 	StartedAt         string         `json:"startedAt,omitempty"`
 	CompletedAt       string         `json:"completedAt,omitempty"`
 	CreatedAt         string         `json:"createdAt"`
 	UpdatedAt         string         `json:"updatedAt"`
+}
+
+type connectorSessionContext struct {
+	EnterpriseID   string
+	ConnectorID    string
+	ExternalChatID string
+	ExternalUserID string
+	LastIntent     string
+	LastTaskType   string
+	LastTaskID     string
+	LastAssetIDs   []string
+	LastTopic      string
+	LastParameters map[string]any
+	LastPrompt     string
+	ExpiresAt      time.Time
 }
 
 type connectorReferenceImage struct {

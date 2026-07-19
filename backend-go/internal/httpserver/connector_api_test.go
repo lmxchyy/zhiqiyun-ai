@@ -445,7 +445,7 @@ func TestConnectorGenerationInsufficientBalanceAndFailureRelease(t *testing.T) {
 }
 
 func TestConnectorModelInfoText(t *testing.T) {
-	if got := connectorModelInfoText(" gpt-image-2 "); got != "当前飞书机器人用于图片生成的模型是：gpt-image-2。" {
+	if got := connectorModelInfoText(" gpt-image-2 "); !strings.Contains(got, "gpt-image-2") || !strings.Contains(got, "视频和 PPT") {
 		t.Fatalf("model info text = %q", got)
 	}
 	if got := connectorModelInfoText(" "); !strings.Contains(got, "尚未配置") {
@@ -455,7 +455,7 @@ func TestConnectorModelInfoText(t *testing.T) {
 
 func TestConnectorCapabilityInfoText(t *testing.T) {
 	text := connectorCapabilityInfoText()
-	for _, expected := range []string{"文本生成图片", "修改上一张图片", "查询生图模型", "自动保存作品", "不扣积分"} {
+	for _, expected := range []string{"生图", "改图", "生视频", "图生视频", "生 PPT", "查任务", "作品中心"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("capability info missing %q: %s", expected, text)
 		}

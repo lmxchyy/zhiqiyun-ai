@@ -1,12 +1,12 @@
-# 飞书企业自建应用 Connector（第一阶段）
+# 飞书企业自建应用 Connector
 
 ## 能力边界
 
-本阶段支持飞书文本消息、规则型 `image.generate` 意图、单轮 AI 生图、文本/图片回发、企业成员映射、权限与日额度、企业算力结算、作品中心保存、消息/任务日志和消息幂等。暂不支持钉钉、企业微信、AI 视频、PPT、知识库、多轮改图、通讯录全量同步和应用商店版飞书应用。
+当前支持飞书文本消息触发生图、上一张图片改图、文生视频、图生视频、一句话生成 PPT、最近任务查询、文本/图片/文件/卡片回发、企业成员映射、分能力权限与额度、企业积分结算、作品中心保存、消息/任务幂等和投递失败后后台重发。钉钉、企业微信、通讯录全量同步和应用商店版飞书应用仍不在本阶段范围内。视频/PPT 的完整链路见 [飞书视频/PPT 接入交付说明](feishu-video-ppt-connector.md)。
 
 ## 架构与复用关系
 
-飞书适配器实现统一 `PlatformConnector`：`VerifyEvent`、`ParseEvent`、`SendText`、`SendImage` 和 `SendCard`。适配器只输出平台无关的 `IncomingMessage`、`MessageTarget` 与 `OutgoingMessage`。
+飞书适配器实现统一 `PlatformConnector`：`VerifyEvent`、`ParseEvent`、`SendText`、`SendImage`、`SendFile` 和 `SendCard`。适配器只输出平台无关的 `IncomingMessage`、`MessageTarget` 与 `OutgoingMessage`。
 
 完整链路：
 
@@ -16,10 +16,11 @@
 4. 投递 Redis 可靠列表队列后立即返回 200；开发环境没有 Redis 时使用有界本地队列。
 5. Worker 加载或创建 `connector_user_bindings`。首次出现的飞书用户会创建隔离在当前企业和默认组织下的内部影子用户/企业成员，并授予 `ENTERPRISE_MEMBER` 角色。
 6. 检查连接器状态、企业/订阅/组织/成员状态、`enterprise.ai.use`、成员开关、日额度和群聊规则。
-7. `RuleIntentRouter` 识别生图意图，`EcommerceImagePromptBuilder` 构建通用电商图提示词。
-8. 以 `feishu:<external_message_id>` 作为现有生成任务的 `client_request_id`，调用原有生图链路。
-9. 原链路负责模型路由、费用估算、企业算力 Reserve、Provider 调用、文件中心持久化、`xz_assets` 作品创建、Capture、模型用量和审计；失败由原链路 Release。
-10. Worker 上传生成图片到飞书并发送到原 `chat_id`，更新 Connector 任务与消息状态。
+7. `RuleIntentRouter` 识别 `image.generate`、`image.edit`、`video.generate`、`video.image_to_video`、`ppt.generate`、`task.query`、`help` 和 `unknown`。
+8. `CapabilityRouter` 选择统一 `CapabilityHandler`，执行权限、参数、单次/每日/每月额度和费用预估校验。
+9. 以 `feishu:<external_message_id>` 作为既有业务任务的 `client_request_id`，复用现有生图、视频和 PPT 服务。
+10. 原链路负责模型路由、Reserve、Provider/PPT 引擎、私有文件中心、`xz_assets`、Capture/Release、模型用量和审计。
+11. Worker 直接上传小文件；大文件或上传失败时使用现有短期签名地址发送完成卡片。生成成功但投递失败只标记 `delivery_failed`。
 
 ## 数据库迁移
 
@@ -49,6 +50,7 @@ docker compose run --rm migrate
 - `PUT /api/v1/enterprise/connectors/feishu/users/:id`
 - `GET /api/v1/enterprise/connectors/feishu/logs`
 - `GET /api/v1/enterprise/connectors/feishu/tasks`
+- `POST /api/v1/enterprise/connectors/feishu/tasks/:taskId/retry-delivery`
 
 密钥字段从不回显。响应只返回 `secretsConfigured.appSecret`、`verificationToken`、`encryptKey`；更新时密钥留空表示保持原值。
 
@@ -57,12 +59,12 @@ docker compose run --rm migrate
 1. 打开飞书开放平台，创建「企业自建应用」。
 2. 在应用能力中添加「机器人」。
 3. 复制 App ID、App Secret；在事件与回调安全配置中获取 Verification Token，可选配置 Encrypt Key。
-4. 申请并由企业管理员批准机器人接收消息和发送消息/上传图片所需权限，至少包含接收消息事件、以应用身份发送消息和上传图片。
+4. 申请并由企业管理员批准机器人接收消息、以应用身份发送消息、上传图片和上传文件所需权限。
 5. 在知启云「我的 → 企业中心 → 企业设置 → 企业连接 · 飞书」保存 App ID、App Secret、Verification Token、Encrypt Key。
 6. 复制页面生成的 HTTPS 事件回调地址到飞书事件订阅。
 7. 订阅 `im.message.receive_v1`（接收消息）事件。URL 校验成功后，在知启云点击「测试连接」和「启用」。测试成功会读取并保存当前机器人的 `open_id`，用于精确判断群聊是否真正 @ 了本机器人。
 8. 创建并发布飞书应用版本，把应用可用范围设置为需要使用机器人的成员。
-9. 在单聊发送「生成 iPhone 17 的电商图」；群聊按企业设置先 @机器人。
+9. 在单聊发送「生成 iPhone 17 的电商图」「生成 10 秒产品视频」「用刚才的图片生成 5 秒视频」或「生成一份 10 页招商 PPT」；群聊按企业设置先 @机器人。
 
 常见错误：URL 验证失败时检查公网 HTTPS、Verification Token 和 Encrypt Key；测试连接失败时检查 App ID/Secret；收不到消息时检查应用版本、可用范围和事件订阅；提示算力不足时在企业算力账户充值。
 
@@ -105,15 +107,15 @@ docker run --rm `
 ## 生产部署检查
 
 1. `TARGET_PLATFORM` 已设置，且 `docker compose --env-file .env.production -f compose.prod.yml config --quiet` 通过。
-2. PostgreSQL 已执行 `053`，Redis 可用，队列前缀在同一环境唯一。
+2. PostgreSQL 已执行 `053`、`062`，Redis 可用，队列前缀在同一环境唯一。
 3. `CONNECTOR_SECRET_ENCRYPTION_KEY` 已安全注入且有备份；更换密钥前必须做密文轮换。
 4. `CONNECTOR_CALLBACK_BASE_URL` 是公网 HTTPS，反向代理允许 1 MiB 事件体并保留飞书签名头。
 5. 模型 Provider 和对象存储可从 API 容器访问；飞书开放接口可从生产网络访问。
-6. 使用测试企业完成 URL 验证、重复 message_id、余额不足、成员禁用、群聊 @、成功生图和失败释放验收。
+6. 使用测试企业完成 URL 验证、重复 message_id、余额不足、成员禁用、群聊 @、生图/改图/视频/PPT、失败释放和 delivery_failed 后重投验收。
 
 ## 已知限制与下一阶段
 
 - 当前成员自动映射使用影子内部用户；下一阶段可在获得通讯录权限后按手机号/邮箱受控合并，禁止猜测合并。
-- 当前队列是 Redis 可靠列表，不包含管理面板和延迟重试；下一阶段可抽象成通用 Connector job runner 与死信队列。
-- 图片发送发生在现有文件中心持久化之后，但真实对象存储/飞书网络可达性仍需生产联调。
-- 下一阶段建议增加飞书通讯录增量同步、卡片进度、人工重试/死信处理，再复用同一 Connector 接入钉钉和企业微信。
+- 当前队列是 Redis 可靠列表，任务列表与人工重投已可用，但尚未提供通用死信队列管理页。
+- 卡片 action 数据已为 `task.view`、`task.retry_delivery`、`video.generate_similar`、`ppt.regenerate`、`asset.download` 等预留；当前仅后台受 RBAC 保护的重新投递接口可执行，未开放不安全的飞书卡片回调入口。
+- 下一阶段建议增加飞书通讯录增量同步、任务取消、进度主动更新和通用死信队列，再复用同一 Connector 接入钉钉和企业微信。
