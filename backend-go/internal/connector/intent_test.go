@@ -16,11 +16,36 @@ func TestRuleIntentRouter(t *testing.T) {
 	}
 }
 
+func TestRuleIntentRouterRecognizesStandaloneVisualPrompt(t *testing.T) {
+	router := RuleIntentRouter{}
+	prompt := "天蓝色连衣裙背影的少女，在沿海公路疾驰，裙角系着七彩风车。背影正对着镜头，背景渐变珊瑚粉晚霞，近景柏油路面反光呈液态金属质感。采用孟菲斯风格配色，强调霓虹紫晚霞和近景视角。"
+	intent := router.Route(prompt, IntentDefaults{})
+	if intent.Name != IntentImageGenerate || intent.Subject != prompt || intent.Scene != "通用图片" {
+		t.Fatalf("standalone visual prompt = %#v", intent)
+	}
+}
+
+func TestRuleIntentRouterRejectsLongVisualQuestion(t *testing.T) {
+	router := RuleIntentRouter{}
+	question := "请分析这个画面的构图、镜头、背景、光影、配色和人物质感，为什么近景视角会让少女和自行车显得更有动感？"
+	if got := router.Route(question, IntentDefaults{}); got.Name != "unknown" {
+		t.Fatalf("visual question intent = %#v", got)
+	}
+}
+
 func TestEcommerceImagePromptBuilder(t *testing.T) {
 	prompt := (EcommerceImagePromptBuilder{}).Build(Intent{Subject: "咖啡机", Scene: "商品图"})
 	for _, expected := range []string{"咖啡机", "商业摄影布光", "1:1", "不虚构具体促销价格", "概念效果图"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q: %s", expected, prompt)
 		}
+	}
+}
+
+func TestPromptBuilderPreservesDetailedGeneralPrompt(t *testing.T) {
+	subject := "天蓝色连衣裙背影的少女，在沿海公路疾驰，背景渐变珊瑚粉晚霞，近景柏油路面反光呈液态金属质感，采用孟菲斯风格配色和霓虹紫光影。"
+	prompt := (EcommerceImagePromptBuilder{}).Build(Intent{Subject: subject, Scene: "通用图片"})
+	if !strings.Contains(prompt, subject) || strings.Contains(prompt, "电商主图构图") || !strings.Contains(prompt, "不要擅自改成电商主图") {
+		t.Fatalf("general visual prompt was not preserved: %s", prompt)
 	}
 }

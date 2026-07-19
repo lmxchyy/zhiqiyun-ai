@@ -20,5 +20,8 @@ func (EcommerceImagePromptBuilder) Build(intent Intent) string {
 	if scene == "" {
 		scene = "电商主图"
 	}
+	if scene == "通用图片" && len([]rune(subject)) >= 40 {
+		return fmt.Sprintf("%s 保持用户指定的主体、场景、动作、构图、视角、光影、配色和材质细节，生成高质量图片；不要擅自改成电商主图，不添加未要求的文字、品牌、水印或促销信息。", subject)
+	}
 	return fmt.Sprintf("为%s制作一张%s概念效果图。产品主体突出，采用专业商业摄影布光和电商主图构图，呈现高清、真实、精致的材质与细节；使用与产品定位匹配的简洁背景并预留卖点文案区域。画面比例1:1，避免乱码、变形、品牌误用和水印，不虚构具体促销价格。未提供真实商品参考图，因此仅作为概念效果图。", subject, scene)
 }
