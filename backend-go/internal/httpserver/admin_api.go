@@ -13,7 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
 	"time"
+	paymentapp "xianzhi-ai/backend-go/internal/app/payment"
 )
 
 type adminAPI struct {
@@ -816,6 +818,23 @@ func (a adminAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a adminAPI) markOrderPaid(w http.ResponseWriter, r *http.Request) {
+	if store, ok := a.store.(*postgresStore); ok {
+		var unified bool
+		err := store.db.QueryRowContext(r.Context(), `
+			SELECT EXISTS(
+			  SELECT 1 FROM xz_orders
+			  WHERE (id=$1 OR order_no=$1) AND product_id IS NOT NULL
+			)
+		`, r.PathValue("id")).Scan(&unified)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if unified {
+			writePaymentErrorWithCode(w, http.StatusConflict, paymentapp.ErrorCode("PAYMENT_ADMIN_MARK_PAID_FORBIDDEN"), "unified payment orders cannot be marked paid by administrators")
+			return
+		}
+	}
 	order, err := a.store.MarkAdminOrderPaid(r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)

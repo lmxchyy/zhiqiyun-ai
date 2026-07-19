@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	paymentapp "xianzhi-ai/backend-go/internal/app/payment"
 	"xianzhi-ai/backend-go/internal/config"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
@@ -89,6 +90,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	publicCatalog := publicCatalogAPI{store: store}
 	api.pptVisualLocker = newRedisPPTVisualLocker(redisClient)
 	virtualPayment := newVirtualPaymentAPI(cfg, store, sessions, redisClient)
+	paymentCenter := newPaymentCenterAPI(cfg, store, sessions, virtualPayment)
 	connectors := newConnectorAPI(cfg, store, enterprise, api, redisClient)
 	files := newFileCenterAPI(fileService, store, sessions)
 	gin.SetMode(gin.ReleaseMode)
@@ -236,10 +238,18 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/points/account", wrapF(api.pointAccount))
 	v1.POST("/points/recharge-orders", wrapF(api.createRechargeOrder))
 	v1.POST("/points/subscription-orders", wrapF(api.createSubscriptionOrder))
+	v1.POST("/payment/orders", wrapF(paymentCenter.createOrder))
 	v1.GET("/payment/products", wrapF(virtualPayment.products))
 	v1.GET("/payment/coupons", wrapF(virtualPayment.coupons))
 	v1.POST("/payment/wechat-virtual/orders", wrapF(virtualPayment.createOrder))
-	v1.GET("/payment/orders/:orderNo", wrapF(virtualPayment.order))
+	v1.GET("/payment/orders/:orderNo", wrapF(paymentCenter.order))
+	if !cfg.IsProduction() {
+		v1.POST("/payment/mock/:orderNo/success", wrapF(paymentCenter.mockAction(paymentapp.MockSuccess, false)))
+		v1.POST("/payment/mock/:orderNo/fail", wrapF(paymentCenter.mockAction(paymentapp.MockFailure, false)))
+		v1.POST("/payment/mock/:orderNo/duplicate-notify", wrapF(paymentCenter.mockAction(paymentapp.MockSuccess, true)))
+		v1.POST("/payment/mock/:orderNo/amount-mismatch", wrapF(paymentCenter.mockAction(paymentapp.MockAmountMismatch, false)))
+		v1.POST("/payment/mock/:orderNo/delayed-success", wrapF(paymentCenter.mockDelayedSuccess))
+	}
 	v1.GET("/payment/orders/:orderNo/status", wrapF(virtualPayment.orderStatus))
 	v1.POST("/payment/orders/:orderNo/sync", wrapF(virtualPayment.syncOrder))
 	v1.GET("/payment/wechat-virtual/notify", wrapF(virtualPayment.verifyNotify))
@@ -368,6 +378,15 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	} else {
 		adminGroup.Use(superAdminMiddleware(auth))
 	}
+	adminPaymentGroup := router.Group("/api/admin")
+	if pgStore, ok := store.(*postgresStore); ok {
+		adminPaymentGroup.Use(func(c *gin.Context) {
+			permission := adminPermissionForRequest(c.Request)
+			pgStore.rbacMiddleware(auth, permission)(c)
+		})
+	} else {
+		adminPaymentGroup.Use(superAdminMiddleware(auth))
+	}
 	adminGroup.GET("/overview", wrapF(admin.overview))
 	adminGroup.GET("/search", wrapF(admin.globalSearch))
 	adminGroup.PATCH("/exceptions/:id", wrapF(admin.updateExceptionCase))
@@ -476,6 +495,16 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/orders/:id/mark-paid", wrapF(admin.markOrderPaid))
 	adminGroup.POST("/orders/:id/renew", wrapF(admin.renewOrder))
 	adminGroup.GET("/payment/virtual/overview", wrapF(virtualPayment.adminOverview))
+	adminGroup.GET("/payment/orders", wrapF(paymentCenter.adminOrders))
+	adminGroup.GET("/payment/orders/:orderNo", wrapF(paymentCenter.adminOrder))
+	adminGroup.GET("/payment/transactions", wrapF(paymentCenter.adminTransactions))
+	adminGroup.GET("/payment/fulfillments", wrapF(paymentCenter.adminFulfillments))
+	adminGroup.POST("/payment/fulfillments/:id/retry", wrapF(paymentCenter.adminRetryFulfillment))
+	adminPaymentGroup.GET("/payment/orders", wrapF(paymentCenter.adminOrders))
+	adminPaymentGroup.GET("/payment/orders/:orderNo", wrapF(paymentCenter.adminOrder))
+	adminPaymentGroup.GET("/payment/transactions", wrapF(paymentCenter.adminTransactions))
+	adminPaymentGroup.GET("/payment/fulfillments", wrapF(paymentCenter.adminFulfillments))
+	adminPaymentGroup.POST("/payment/fulfillments/:id/retry", wrapF(paymentCenter.adminRetryFulfillment))
 	adminGroup.GET("/payment/virtual/products", wrapF(virtualPayment.adminProducts))
 	adminGroup.PATCH("/payment/virtual/mappings/:id", wrapF(virtualPayment.adminUpdateMapping))
 	adminGroup.GET("/payment/virtual/orders", wrapF(virtualPayment.adminList("orders")))
@@ -604,7 +633,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 }
 
 const requestIDHeader = "X-Request-Id"
-const corsAllowedHeaders = "Authorization, Content-Type, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Tenant-Id, X-Organization-Id"
+const corsAllowedHeaders = "Authorization, Content-Type, Idempotency-Key, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Tenant-Id, X-Organization-Id"
 const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 func requestContextMiddleware() gin.HandlerFunc {
