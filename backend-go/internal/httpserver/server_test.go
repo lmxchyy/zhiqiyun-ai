@@ -362,6 +362,25 @@ func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
 	}
 }
 
+func TestGenerationErrorMessagePreservesPrimaryRateLimitAfterFallbackFailure(t *testing.T) {
+	primaryErr := errors.New(`image provider returned 429: {"error":{"message":"Upstream rate limit exceeded, please retry later"}}`)
+	fallbackErr := errors.New(`fallback image provider failed: image provider returned 403: {"error":{"message":"permission denied"}}`)
+	combinedErr := errors.Join(primaryErr, fallbackErr)
+
+	want := generationErrorMessage(primaryErr)
+	if got := generationErrorMessage(combinedErr); got != want {
+		t.Fatalf("generationErrorMessage() = %q, want primary error message %q", got, want)
+	}
+}
+
+func TestImageEditLineageParametersAreAllowedInternalParameters(t *testing.T) {
+	for _, key := range []string{"sourceReferenceAssetId", "sourceReferenceTaskId"} {
+		if !allowedGenerationInternalParam(key) {
+			t.Fatalf("%s should be allowed for connector image-edit lineage", key)
+		}
+	}
+}
+
 func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	server := New(config.Config{

@@ -343,6 +343,13 @@
       }
     },
     {
+      "path": "pages/user/ComplianceCenterPage",
+      "style": {
+        "navigationBarTitleText": "协议与安全",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserRechargePlansPage",
       "style": {
         "navigationBarTitleText": "充值方案",

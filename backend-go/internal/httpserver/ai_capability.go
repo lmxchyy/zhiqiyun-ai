@@ -1228,8 +1228,11 @@ func normalizeBillingRuleAliases(rule adminBillingRule) adminBillingRule {
 func allowedGenerationInternalParam(key string) bool {
 	switch key {
 	case "module_code", "moduleCode", "model_name", "modelName", "count", "provider", "providerName", "providerTask",
+		"terminal", "provider_name", "provider_company", "algorithm_name", "algorithm_filing_no", "algorithm_type", "model_version", "compliance_snapshot_at",
+		"input_audit_status", "input_audit_service", "input_audit_request_id", "output_audit_status", "output_audit_service", "output_audit_request_id", "output_audit_reason",
+		"ai_generated", "ai_label_status", "ai_label_text", "generated_at", "download_derivative_required",
 		"modelRouteId", "modelGroup", "modelApiKeyId", "billing_type", "tenant_id", "organization_id", "billing_scope", "billing_account_id", "authorized_role", "billing_ledger_id", "billing_reserved", "agent_id", "package_id", "operation_center_id",
-		"final_schema_snapshot", "limit_snapshot", "sourceModule", "apiMode", "taskSnapshot", "referenceImages",
+		"final_schema_snapshot", "limit_snapshot", "sourceModule", "apiMode", "taskSnapshot", "referenceImages", "sourceReferenceAssetId", "sourceReferenceTaskId",
 		"referenceImageCount", "referenceImageNames", "referenceImageOrder", "inputImageIds", "inputImagesSnapshot",
 		"maskDraft", "maskTargetImageId", "maskImageId", "imageQuality", "imageRatio", "output_format", "outputFormat",
 		"output_compression", "outputCompression", "transparent_output", "transparentOutput", "moderation", "ratio",

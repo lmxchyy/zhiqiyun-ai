@@ -1,0 +1,156 @@
+package httpserver
+
+import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"xianzhi-ai/backend-go/internal/app/generation"
+)
+
+func compliantMiniProgramModel(expiry string) adminAIModel {
+	return adminAIModel{
+		ID: "model_approved", ModelName: "qualified-image", ModelType: "image",
+		Provider:     "CloudBase",
+		ProviderName: "qualified-provider", ProviderCompany: "Qualified Technology Co., Ltd.",
+		AlgorithmName: "Qualified Image Algorithm", AlgorithmFilingNo: "ALG-TEST-001",
+		ContractStatus: "valid", ContractExpireAt: expiry, ComplianceStatus: "approved",
+		AllowedTerminals: []string{"pc", "web", "miniprogram"}, AllowedCapabilities: []string{"image"},
+		MiniProgramEnabled: true, ModelVersion: "v1",
+	}
+}
+
+func TestMiniProgramRejectsGatewayAsFilingSubjectAndClosedCreationMode(t *testing.T) {
+	now := time.Now().UTC()
+	model := compliantMiniProgramModel(now.Add(24 * time.Hour).Format(time.RFC3339))
+	model.ProviderCompany = "new-api"
+	if ok, reason := modelAllowedForMiniProgram(model, now); ok || reason != "gateway_cannot_be_filing_subject" {
+		t.Fatalf("gateway filing subject gate = %v %s", ok, reason)
+	}
+
+	request := generation.CreateRequest{
+		Type: "TEXT_TO_VIDEO", Model: "qualified-image", Params: map[string]any{"terminal": terminalMiniProgram},
+	}
+	data := adminPlatformData{AIModels: []adminAIModel{compliantMiniProgramModel(now.Add(24 * time.Hour).Format(time.RFC3339))}}
+	if err := enforceMiniProgramModelCompliance(data, &request); err == nil {
+		t.Fatal("closed mini-program video mode was accepted")
+	}
+}
+
+func TestRasterDownloadLabelIsRendered(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 320, 200))
+	for y := 0; y < 200; y++ {
+		for x := 0; x < 320; x++ {
+			source.Set(x, y, color.RGBA{R: 230, G: 240, B: 250, A: 255})
+		}
+	}
+	var raw bytes.Buffer
+	if err := png.Encode(&raw, source); err != nil {
+		t.Fatal(err)
+	}
+	marked, err := renderRasterAILabel(raw.Bytes(), "image/png", aiLabelSetting{Position: "bottom-right", Opacity: .65, Size: .035})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(raw.Bytes(), marked) {
+		t.Fatal("marked PNG is identical to the original")
+	}
+	if _, _, err := image.Decode(bytes.NewReader(marked)); err != nil {
+		t.Fatalf("marked PNG cannot be decoded: %v", err)
+	}
+}
+
+func TestFormalOutputAuditFlagCannotPretendProviderIsConnected(t *testing.T) {
+	t.Setenv("CONTENT_AUDIT_OUTPUT_MODE", "formal")
+	request := generation.CreateRequest{Prompt: "safe prompt", Params: map[string]any{"terminal": terminalMiniProgram}}
+	if err := auditGeneratedOutput(&request); err == nil {
+		t.Fatal("unconfigured formal output audit was allowed to approve content")
+	}
+	if request.Params["output_audit_status"] != auditManualReview || request.Params["output_audit_service"] != "formal-unconfigured" {
+		t.Fatalf("unexpected fail-closed audit metadata: %#v", request.Params)
+	}
+}
+
+func TestMiniProgramGenerationRequiresPublishedAcceptedAgreements(t *testing.T) {
+	if err := (api{}).enforceRequiredLegalAcceptances("user", terminalMiniProgram); err == nil {
+		t.Fatal("mini-program generation bypassed unavailable agreement records")
+	}
+	if err := (api{}).enforceRequiredLegalAcceptances("user", "web"); err != nil {
+		t.Fatalf("web terminal was incorrectly gated: %v", err)
+	}
+}
+
+func TestMiniProgramModelComplianceGates(t *testing.T) {
+	now := time.Now().UTC()
+	model := compliantMiniProgramModel(now.Add(24 * time.Hour).Format(time.RFC3339))
+	if ok, reason := modelAllowedForMiniProgram(model, now); !ok {
+		t.Fatalf("approved model rejected: %s", reason)
+	}
+	model.ContractExpireAt = now.Add(-time.Minute).Format(time.RFC3339)
+	if ok, reason := modelAllowedForMiniProgram(model, now); ok || reason != "contract_expired" {
+		t.Fatalf("expired model gate = %v %s", ok, reason)
+	}
+	model = compliantMiniProgramModel(now.Add(24 * time.Hour).Format(time.RFC3339))
+	model.AlgorithmFilingNo = ""
+	if err := validateAIModelMiniProgramEnable(model); err == nil {
+		t.Fatal("model with missing filing number was enabled")
+	}
+}
+
+func TestForgedMiniProgramModelIDCannotBypassCompliance(t *testing.T) {
+	data := adminPlatformData{AIModels: []adminAIModel{
+		compliantMiniProgramModel(time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)),
+		{ID: "model_unqualified", ModelName: "unqualified-image", ModelType: "image", Status: "ACTIVE"},
+	}}
+	request := generation.CreateRequest{Model: "unqualified-image", Params: map[string]any{"terminal": terminalMiniProgram}}
+	if err := enforceMiniProgramModelCompliance(data, &request); err == nil {
+		t.Fatal("forged unqualified model was accepted")
+	}
+	request.Model = "qualified-image"
+	if err := enforceMiniProgramModelCompliance(data, &request); err != nil {
+		t.Fatalf("qualified model rejected: %v", err)
+	}
+	if request.Params["algorithm_filing_no"] != "ALG-TEST-001" || request.Params["provider_company"] == "" {
+		t.Fatalf("compliance snapshot missing: %#v", request.Params)
+	}
+}
+
+func TestOutputAuditAndMarkedDownload(t *testing.T) {
+	request := generation.CreateRequest{Prompt: "safe prompt", Params: map[string]any{"terminal": terminalMiniProgram}}
+	if err := auditGeneratedOutput(&request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Params["output_audit_status"] != auditApproved || !boolValue(request.Params["ai_generated"]) {
+		t.Fatalf("unexpected output audit metadata: %#v", request.Params)
+	}
+	asset := asset{ID: "asset_1", Name: "result", URL: promptPreviewImage("safe"), Metadata: map[string]any{"ai_generated": true, "output_audit_status": auditApproved, "contentType": "image/svg+xml"}}
+	response := httptest.NewRecorder()
+	if handled := (api{}).writeCompliantAssetDownload(response, httptest.NewRequest("GET", "/download", nil), asset); !handled {
+		t.Fatal("AI-generated download bypassed compliance writer")
+	}
+	if response.Code != 200 || !containsAll(response.Body.String(), "AI生成", "ai-generated-label") {
+		t.Fatalf("marked download status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func containsAll(value string, items ...string) bool {
+	for _, item := range items {
+		if !stringContains(value, item) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringContains(value string, item string) bool {
+	for index := 0; index+len(item) <= len(value); index++ {
+		if value[index:index+len(item)] == item {
+			return true
+		}
+	}
+	return false
+}

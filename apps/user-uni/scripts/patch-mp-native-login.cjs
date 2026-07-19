@@ -1659,7 +1659,7 @@ const studioBindings = [
   },
   {
     label: "scene center",
-    pattern: /(<button class="section-more section-more-button[^>]*?)bindtap="\{\{[^}]+\}\}"/,
+    pattern: /(<button(?=[^>]*class="section-more section-more-button)[^>]*?)bindtap="\{\{[^}]+\}\}"/,
     replacement: '$1bindtap="nativeStudioOpenSceneCenter"'
   },
   {

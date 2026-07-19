@@ -141,6 +141,7 @@
       <view class="mpb-inline-actions">
         <button class="mpb-button secondary" @click="showInfo('隐私政策', '隐私政策正文将由运营后台配置并在正式发布前完成审核。')">隐私政策</button>
         <button class="mpb-button secondary" @click="showInfo('用户协议', '用户协议正文将由运营后台配置并在正式发布前完成审核。')">用户协议</button>
+        <button class="mpb-button secondary" @click="openComplianceCenter">协议、AI规范与投诉</button>
       </view>
       <view class="mpb-inline-actions">
         <button class="mpb-button secondary" :disabled="loggingOutAll || loggingOut" @click="logoutAllDevices">{{ loggingOutAll ? "正在退出..." : "退出全部设备" }}</button>
@@ -176,6 +177,10 @@ const loginMethodCount = computed(() => Math.max(1, security.loginMethods?.lengt
 
 function showInfo(title: string, content: string) {
   uni.showModal({ title, content, showCancel: false });
+}
+
+function openComplianceCenter() {
+  uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" });
 }
 
 function normalizeMobile(value: string) {

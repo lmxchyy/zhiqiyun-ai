@@ -45,6 +45,9 @@ func testAPIChannelConnection(item adminAPIChannel, req adminAPIChannelTestReque
 		"videoModels":      []string{},
 		"raw":              map[string]any{},
 	}
+	if strings.EqualFold(protocol, "cloudbase-function") {
+		return validateCloudBaseFunctionChannel(result, item, baseURL, apiKey, start)
+	}
 	if req.ProbeProtocol {
 		probeAPIChannelProtocol(result, baseURL, apiKey, imageRequestMode, fetchModelsPath)
 		return result
@@ -101,6 +104,35 @@ func testAPIChannelConnection(item adminAPIChannel, req adminAPIChannelTestReque
 	if strings.EqualFold(protocol, "openai") {
 		probeAPIChannelProtocol(result, baseURL, apiKey, imageRequestMode, fetchModelsPath)
 	}
+	return result
+}
+
+func validateCloudBaseFunctionChannel(result map[string]any, item adminAPIChannel, baseURL, apiKey string, started time.Time) map[string]any {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	officialHost := err == nil && strings.EqualFold(parsed.Scheme, "https") && strings.HasSuffix(strings.ToLower(parsed.Hostname()), ".api.tcloudbasegateway.com")
+	models := []string{}
+	for _, model := range item.Models {
+		if model == "HY-Image-3.0-Plus-4090-Tob-v1.0" || model == "HY-Image-v3.0-I2I-ToB-v1.0.1" {
+			models = append(models, model)
+		}
+	}
+	result["latencyMs"] = time.Since(started).Milliseconds()
+	result["all"], result["imageModels"], result["modelCount"] = models, models, len(models)
+	result["raw"] = map[string]any{"liveModelCall": false, "officialGateway": officialHost, "credentialConfigured": apiKey != "", "allowedModels": models}
+	if !officialHost {
+		result["message"] = "CloudBase 云函数地址必须使用官方 tcloudbasegateway.com HTTPS 域名"
+		return result
+	}
+	if apiKey == "" {
+		result["message"] = "CloudBase 服务端 API Key 尚未配置"
+		return result
+	}
+	if len(models) == 0 {
+		result["message"] = "CloudBase 渠道未配置当前官方生图模型"
+		return result
+	}
+	result["status"], result["ok"] = "CONFIGURED", true
+	result["message"] = "CloudBase 配置校验通过（未调用生图模型、未验证资质材料）"
 	return result
 }
 

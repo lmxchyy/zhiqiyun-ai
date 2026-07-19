@@ -521,23 +521,38 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, generation.ErrInvalidPrompt)
 		return
 	}
-	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
-		writeContentSecurityError(w, err)
-		return
-	}
 	if req.Type == "" {
 		req.Type = "TEXT_TO_IMAGE"
 	}
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	req.Params["terminal"] = requestTerminal(r)
+	if err := a.enforceRequiredLegalAcceptances(user.ID, stringValue(req.Params["terminal"])); err != nil {
+		writeError(w, http.StatusPreconditionRequired, err)
+		return
+	}
+	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
+		writeContentSecurityError(w, err)
+		return
+	}
 	req, err = a.prepareGenerationRequest(data, user, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := enforceMiniProgramModelCompliance(data, &req); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	markInputAudit(&req, isWeChatMiniProgramRequest(r) && a.contentSecurity != nil)
 	service := a.generationService
-	if routeService, ok, err := a.generationServiceForUserRoute(user, req.Model); err != nil {
+	if compliantService, ok, err := a.generationServiceForCompliantMiniProgram(req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	} else if ok {
+		service = compliantService
+	} else if routeService, ok, err := a.generationServiceForUserRoute(user, req.Model); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	} else if ok {
@@ -565,11 +580,18 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 		go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 		writeJSON(w, task)
 		return
 	}
 	if !isImageGenerationRequest(req.Type) || strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
+		if isImageGenerationRequest(req.Type) {
+			if err := auditGeneratedOutput(&req); err != nil {
+				writeError(w, http.StatusUnprocessableEntity, err)
+				return
+			}
+		}
 		task, err := service.Create(r.Context(), req)
 		if err != nil {
 			if errors.Is(err, errGenerationConcurrencyLimit) {
@@ -595,6 +617,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 	go a.runGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 	writeJSON(w, task)
 }
@@ -688,6 +711,12 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 			return
 		}
 	}
+	if err := auditGeneratedOutput(&prepared); err != nil {
+		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
+		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
+	}
+	a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 	prepared, storedFiles, err := a.persistGeneratedImages(ctx, taskID, prepared)
 	if err != nil {
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
@@ -712,7 +741,7 @@ func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.Cr
 	if err != nil || len(candidates) == 0 {
 		return generation.CreateRequest{}, firstErr
 	}
-	lastErr := firstErr
+	providerErrs := []error{firstErr}
 	for _, candidate := range candidates {
 		fallbackReq := cloneGenerationCreateRequest(req)
 		if fallbackReq.Params == nil {
@@ -731,12 +760,12 @@ func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.Cr
 			prepared.Params["fallbackReason"] = generationErrorMessage(firstErr)
 			return prepared, nil
 		}
-		lastErr = err
+		providerErrs = append(providerErrs, fmt.Errorf("fallback provider %s failed: %w", candidate.channel.ID, err))
 		if !shouldFallbackImageGeneration(err) {
 			break
 		}
 	}
-	return generation.CreateRequest{}, lastErr
+	return generation.CreateRequest{}, errors.Join(providerErrs...)
 }
 
 func (a api) fallbackImageGenerationServices(model string) ([]generationServiceCandidate, error) {
@@ -855,12 +884,20 @@ func compactGenerationErrorMessage(message string) string {
 	if item := regexp.MustCompile(`当前账号处未订购[^"\\\r\n]*`).FindString(message); item != "" {
 		return strings.TrimSpace(item)
 	}
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "returned 429") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "insufficient_quota") ||
+		strings.Contains(lower, "quota exceeded") ||
+		strings.Contains(lower, "no available image quota") {
+		return "图像上游频率或额度受限，已尝试备用通道，请稍后重试或更换上游 API Key"
+	}
 	if item := regexp.MustCompile(`"(?:message|error|detail|reason)"\s*:\s*"([^"]+)"`).FindStringSubmatch(message); len(item) > 1 {
 		if decoded, err := strconv.Unquote(`"` + item[1] + `"`); err == nil && strings.TrimSpace(decoded) != "" {
 			return compactGenerationErrorMessage(decoded)
 		}
 	}
-	lower := strings.ToLower(message)
 	if strings.Contains(lower, "returned 504") || strings.Contains(lower, "gateway time-out") || strings.Contains(lower, "gateway timeout") {
 		return "图像上游网关超时，请稍后重试或切换上游通道"
 	}
@@ -1060,28 +1097,37 @@ func (a api) generationServiceForChannel(data adminPlatformData, channel adminAP
 
 func (a api) generationServiceForChannelWithAPIKey(channel adminAPIChannel, apiKey string, route adminUserModelRoute) (generation.Service, error) {
 	model := firstNonEmpty(channel.Models)
-	imageProvider := imageprovider.NewOpenAICompatibleWithOptions(imageprovider.OpenAICompatibleOptions{
-		Code:                    channel.ID,
-		BaseURL:                 channel.BaseURL,
-		APIKey:                  apiKey,
-		ImageModel:              model,
-		Models:                  channel.Models,
-		ImageGenerationEndpoint: channel.ImageGenerationEndpoint,
-		ImageEditEndpoint:       channel.ImageEditEndpoint,
-		ReferenceImageDir:       a.referenceImageDir(),
-		TimeoutMS:               intConfigValue(a.cfg.ModelTimeoutMS),
-	})
-	videoProvider := videoprovider.NewOpenAICompatibleWithOptions(videoprovider.OpenAICompatibleOptions{
-		Code:          channel.ID,
-		BaseURL:       channel.BaseURL,
-		APIKey:        apiKey,
-		Model:         model,
-		Models:        channel.Models,
-		Endpoint:      channel.VideoGenerationEndpoint,
-		TimeoutMS:     intConfigValue(a.cfg.ModelTimeoutMS),
-		OutputDir:     a.generatedMediaDir(),
-		PublicURLBase: "/api/v1/generated-media/",
-	})
+	var imageProvider generation.ImageProvider
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "cloudbase-function") {
+		timeoutMS := intConfigValue(os.Getenv("CLOUDBASE_IMAGE_TIMEOUT_MS"))
+		if timeoutMS <= 0 {
+			timeoutMS = 150000
+		}
+		imageProvider = imageprovider.NewCloudBaseFunction(imageprovider.CloudBaseFunctionOptions{
+			Code: channel.ID, FunctionURL: channel.BaseURL, APIKey: apiKey, DefaultModel: model, Models: channel.Models,
+			WatermarkText: firstNonEmptyString(strings.TrimSpace(os.Getenv("CLOUDBASE_AI_WATERMARK_TEXT")), "AI生成"), TimeoutMS: timeoutMS,
+		})
+	} else {
+		imageProvider = imageprovider.NewOpenAICompatibleWithOptions(imageprovider.OpenAICompatibleOptions{
+			Code:                    channel.ID,
+			BaseURL:                 channel.BaseURL,
+			APIKey:                  apiKey,
+			ImageModel:              model,
+			Models:                  channel.Models,
+			ImageGenerationEndpoint: channel.ImageGenerationEndpoint,
+			ImageEditEndpoint:       channel.ImageEditEndpoint,
+			ReferenceImageDir:       a.referenceImageDir(),
+			TimeoutMS:               intConfigValue(a.cfg.ModelTimeoutMS),
+		})
+	}
+	var videoProvider generation.VideoProvider
+	if !strings.EqualFold(strings.TrimSpace(channel.Protocol), "cloudbase-function") {
+		videoProvider = videoprovider.NewOpenAICompatibleWithOptions(videoprovider.OpenAICompatibleOptions{
+			Code: channel.ID, BaseURL: channel.BaseURL, APIKey: apiKey, Model: model, Models: channel.Models,
+			Endpoint: channel.VideoGenerationEndpoint, TimeoutMS: intConfigValue(a.cfg.ModelTimeoutMS),
+			OutputDir: a.generatedMediaDir(), PublicURLBase: "/api/v1/generated-media/",
+		})
+	}
 	return generation.NewServiceWithOptions(generation.ServiceOptions{
 		ImageProvider:  imageProvider,
 		VideoProvider:  videoProvider,
@@ -1178,6 +1224,17 @@ func selectAPIChannelForModel(channels []adminAPIChannel, model string) (adminAP
 
 func configuredGenerationChannels(data adminPlatformData) []adminAPIChannel {
 	channels := annotateAPIChannelsWithKeys(data.APIChannels, data.APIKeys)
+	if cloudBaseChannel, ok := runtimeCloudBaseChannelFromEnv(); ok {
+		filtered := make([]adminAPIChannel, 0, len(channels)+1)
+		filtered = append(filtered, cloudBaseChannel)
+		for _, channel := range channels {
+			if strings.EqualFold(channel.ID, cloudBaseChannel.ID) {
+				continue
+			}
+			filtered = append(filtered, channel)
+		}
+		channels = filtered
+	}
 	if runtimeChannel, ok := runtimeGenerationChannelFromEnv(); ok {
 		filtered := make([]adminAPIChannel, 0, len(channels)+1)
 		filtered = append(filtered, runtimeChannel)
@@ -1204,6 +1261,52 @@ func configuredGenerationChannels(data adminPlatformData) []adminAPIChannel {
 		return priorityLess(result[i], result[j])
 	})
 	return result
+}
+
+func runtimeCloudBaseChannelFromEnv() (adminAPIChannel, bool) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("CLOUDBASE_ENABLED")), "true") {
+		return adminAPIChannel{}, false
+	}
+	apiKey := strings.TrimSpace(os.Getenv("CLOUDBASE_API_KEY"))
+	functionURL := strings.TrimSpace(os.Getenv("CLOUDBASE_IMAGE_FUNCTION_URL"))
+	if functionURL == "" {
+		envID := strings.TrimSpace(os.Getenv("CLOUDBASE_ENV_ID"))
+		functionName := strings.TrimSpace(os.Getenv("CLOUDBASE_IMAGE_FUNCTION_NAME"))
+		if envID != "" && functionName != "" {
+			functionURL = fmt.Sprintf("https://%s.api.tcloudbasegateway.com/v1/functions/%s", envID, url.PathEscape(functionName))
+		}
+	}
+	if apiKey == "" || functionURL == "" {
+		return adminAPIChannel{}, false
+	}
+	return adminAPIChannel{
+		ID: "channel_cloudbase_miniprogram", Name: "CloudBase 小程序合规生图", BaseURL: functionURL,
+		Protocol: "cloudbase-function", ImageRequestMode: "cloudbase-function", APIKeyEnv: "CLOUDBASE_API_KEY",
+		Primary: true, Status: "ACTIVE", Priority: 1,
+		Models: []string{"HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"}, APIKeyConfigured: true,
+	}, true
+}
+
+func (a api) generationServiceForCompliantMiniProgram(req generation.CreateRequest) (generation.Service, bool, error) {
+	if !strings.EqualFold(stringValue(req.Params["terminal"]), terminalMiniProgram) {
+		return generation.Service{}, false, nil
+	}
+	requiredProvider := stringValue(req.Params["required_provider_kind"])
+	if !isCloudBaseProviderName(requiredProvider) {
+		return generation.Service{}, false, fmt.Errorf("小程序合规模型未绑定 CloudBase 技术通道")
+	}
+	data, err := a.onlineGenerationSettings()
+	if err != nil {
+		return generation.Service{}, false, err
+	}
+	for _, channel := range configuredGenerationChannels(data) {
+		if !strings.EqualFold(channel.Protocol, "cloudbase-function") || !apiChannelSupportsModel(channel, req.Model) {
+			continue
+		}
+		service, serviceErr := a.generationServiceForChannel(data, channel)
+		return service, serviceErr == nil, serviceErr
+	}
+	return generation.Service{}, false, errors.New("CloudBase 合规生图通道未配置或不可用")
 }
 
 func runtimeGenerationChannelFromEnv() (adminAPIChannel, bool) {
@@ -1335,16 +1438,44 @@ func intConfigValue(value string) int {
 	return n
 }
 
-func (a api) models(w http.ResponseWriter, _ *http.Request) {
+func (a api) models(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{
 		{"code": "mock-standard", "name": "本地演示模型", "capabilities": []string{"TEXT_TO_IMAGE"}, "online": true, "pointCost": 1},
 	}
 	seen := map[string]bool{"mock-standard": true}
 	data, err := a.store.AdminData()
 	if err == nil {
+		miniProgram := isWeChatMiniProgramRequest(r)
+		approvedModels := map[string]adminAIModel{}
+		for _, model := range data.AIModels {
+			if !miniProgram {
+				approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
+				continue
+			}
+			if allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC()); allowed && isCloudBaseProviderName(model.Provider) {
+				approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
+			}
+		}
+		if miniProgram {
+			items = items[:0]
+			seen = map[string]bool{}
+			for _, model := range approvedModels {
+				code := strings.TrimSpace(model.ModelName)
+				seen[code] = true
+				items = append(items, map[string]any{
+					"code": code, "name": code, "capabilities": []string{"TEXT_TO_IMAGE", "IMAGE_TO_IMAGE"},
+					"online": true, "pointCost": modelPointCost(code),
+				})
+			}
+		}
 		for _, channel := range configuredGenerationChannels(data) {
 			for _, model := range channel.Models {
 				code := strings.TrimSpace(model)
+				if miniProgram {
+					if _, ok := approvedModels[strings.ToLower(code)]; !ok {
+						continue
+					}
+				}
 				if code == "" || seen[code] {
 					continue
 				}
@@ -1623,6 +1754,9 @@ func sanitizeVideoDownloadFilename(filename string) string {
 }
 
 func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item asset) {
+	if a.writeCompliantAssetDownload(w, r, item) {
+		return
+	}
 	contentType := stringMetadataValue(item, "contentType")
 	if contentType == "" {
 		contentType = "application/octet-stream"

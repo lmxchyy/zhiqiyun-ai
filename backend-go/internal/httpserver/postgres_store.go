@@ -1630,26 +1630,28 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 		ThumbnailURL:   thumbnailURL,
 		Favorite:       false,
 		Metadata: map[string]any{
-			"prompt":              req.Prompt,
-			"model":               req.Model,
-			"type":                req.Type,
-			"module_code":         requestModuleCode(req),
-			"billing_type":        stringValue(req.Params["billing_type"]),
-			"sourceType":          req.Type,
-			"contentType":         contentType,
-			"source":              source,
-			"thumbnailUrl":        thumbnailURL,
-			"width":               width,
-			"height":              height,
-			"resolution":          fmt.Sprintf("%dx%d", width, height),
-			"index":               index + 1,
-			"referenceCount":      referenceCount,
-			"referenceImages":     referenceImages,
-			"inputImageIds":       inputImageIds,
-			"inputImagesSnapshot": inputImagesSnapshot,
-			"maskDraft":           maskDraft,
-			"maskTargetImageId":   maskTargetImageId,
-			"maskImageId":         maskImageId,
+			"prompt":                req.Prompt,
+			"model":                 req.Model,
+			"type":                  req.Type,
+			"module_code":           requestModuleCode(req),
+			"billing_type":          stringValue(req.Params["billing_type"]),
+			"sourceType":            req.Type,
+			"contentType":           contentType,
+			"source":                source,
+			"providerTaskId":        stringValue(req.Params["provider_task_id"]),
+			"providerRevisedPrompt": stringValue(req.Params["provider_revised_prompt"]),
+			"thumbnailUrl":          thumbnailURL,
+			"width":                 width,
+			"height":                height,
+			"resolution":            fmt.Sprintf("%dx%d", width, height),
+			"index":                 index + 1,
+			"referenceCount":        referenceCount,
+			"referenceImages":       referenceImages,
+			"inputImageIds":         inputImageIds,
+			"inputImagesSnapshot":   inputImagesSnapshot,
+			"maskDraft":             maskDraft,
+			"maskTargetImageId":     maskTargetImageId,
+			"maskImageId":           maskImageId,
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -1669,6 +1671,7 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 			item.Metadata["contentType"] = storedContentType
 		}
 	}
+	copyGenerationComplianceMetadata(item.Metadata, req.Params, assetID, now)
 	return item
 }
 
@@ -4164,6 +4167,10 @@ func (s *postgresStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIMod
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		}
+		applyAIModelComplianceMutation(&created, req)
+		if err := validateAIModelMiniProgramEnable(created); err != nil {
+			return err
+		}
 		if len(created.CapabilityCode) == 0 {
 			created.CapabilityCode = defaultAICapabilitiesForModule(moduleCode)
 		}
@@ -4216,6 +4223,10 @@ func (s *postgresStore) UpdateAdminAIModel(id string, req adminAIModelMutation) 
 			}
 			if req.AllowFallbackSwitch != nil {
 				data.AIModels[i].AllowFallbackSwitch = *req.AllowFallbackSwitch
+			}
+			applyAIModelComplianceMutation(&data.AIModels[i], req)
+			if err := validateAIModelMiniProgramEnable(data.AIModels[i]); err != nil {
+				return err
 			}
 			data.AIModels[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			updated = data.AIModels[i]

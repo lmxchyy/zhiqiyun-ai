@@ -413,6 +413,7 @@ const props = defineProps<{
   todayCalls: number;
   assets?: AssetLike[];
   tasks?: TaskLike[];
+  allowedCreationModes?: CreationMode[];
 }>();
 type CreationMode =
   "image" | "video" | "ppt" | "infographic" | "review" | "agent";
@@ -449,13 +450,18 @@ const greeting = computed(() => {
         ? "下午好"
         : "晚上好";
 });
-const quickActions = [
+const isModeAllowed = (mode: CreationMode) =>
+  (props.allowedCreationModes || ["image", "infographic"]).includes(mode);
+const quickActionsSource = [
   { label: "宣传海报", mode: "image" },
   { label: "招商PPT", mode: "ppt" },
   { label: "短视频", mode: "video" },
   { label: "知识库", mode: "agent" },
 ];
-const heroTools: Array<{
+const quickActions = computed(() =>
+  quickActionsSource.filter((item) => isModeAllowed(item.mode as CreationMode)),
+);
+const heroToolsSource: Array<{
   label: string;
   icon: string;
   mode: CreationMode;
@@ -467,15 +473,21 @@ const heroTools: Array<{
   { label: "知识库", icon: "库", mode: "agent", tone: "green" },
   { label: "AI 员工", icon: "员", mode: "agent", tone: "purple" },
 ];
-const featuredCapabilities = v531Capabilities.slice(0, 2);
-const secondaryCapabilities = v531Capabilities.slice(2, 4);
+const heroTools = computed(() =>
+  heroToolsSource.filter((item) => isModeAllowed(item.mode)),
+);
+const availableCapabilities = computed(() =>
+  v531Capabilities.filter((item) => isModeAllowed(item.routeMode as CreationMode)),
+);
+const featuredCapabilities = computed(() => availableCapabilities.value.slice(0, 2));
+const secondaryCapabilities = computed(() => availableCapabilities.value.slice(2, 4));
 const knowledgeCapability = v531Capabilities.find(
   (item) => item.id === "knowledge",
 );
 const employeeCapability = v531Capabilities.find(
   (item) => item.id === "employee",
 );
-const compactCapabilities: CompactCapability[] = [
+const compactCapabilitiesSource: CompactCapability[] = [
   {
     id: knowledgeCapability?.id || "knowledge",
     title: knowledgeCapability?.title || "知识库",
@@ -509,6 +521,9 @@ const compactCapabilities: CompactCapability[] = [
     tone: "dark",
   },
 ];
+const compactCapabilities = computed(() =>
+  compactCapabilitiesSource.filter((item) => isModeAllowed(item.routeMode)),
+);
 const modeForMedia = (value: string): CreationMode => value.toLowerCase().includes("video") ? "video" : value.toLowerCase().includes("ppt") || value.toLowerCase().includes("document") ? "ppt" : "image";
 const projectItems = computed(() => (props.assets || []).slice(0, 3).map((asset) => {
   const mode = modeForMedia(String(asset.mediaType || asset.metadata?.type || "image"));
@@ -533,7 +548,7 @@ const employeeStatusMeta: Record<
   boss: { label: "可使用", tone: "online" },
 };
 const employeeItems = computed(() =>
-  v531Employees.map((item) => {
+  isModeAllowed("agent") ? v531Employees.map((item) => {
     const status = employeeStatusMeta[item.id] || {
       label: item.status,
       tone: "standby" as const,
@@ -543,7 +558,7 @@ const employeeItems = computed(() =>
       statusLabel: status.label,
       statusTone: status.tone,
     };
-  }),
+  }) : [],
 );
 const inspirationTabs = [
   "全部",
@@ -573,7 +588,7 @@ const inspirationItems = computed(() => {
       views: "520",
       likes: "36",
     }),
-  }));
+  })).filter((item) => isModeAllowed(item.mode as CreationMode));
   const filtered =
     activeInspirationTab.value === "全部"
       ? baseItems
@@ -660,6 +675,10 @@ function openUserTab(tab: UserTab) {
 }
 
 function openCreationMode(mode: CreationMode) {
+  if (!isModeAllowed(mode)) {
+    uni.showToast({ title: "当前小程序审核版本暂未开放该能力", icon: "none" });
+    return;
+  }
   navigateStandalone(miniProgramCreationPages[mode] || miniProgramCreationPages.image);
 }
 

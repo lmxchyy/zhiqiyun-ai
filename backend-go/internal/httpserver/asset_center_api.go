@@ -387,9 +387,14 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 	params := cloneAnyMap(original.Params)
 	deleteGenerationBillingParams(params)
 	req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: params, ModuleCode: original.ModuleCode}
+	req.Params["terminal"] = requestTerminal(r)
 	req, err = a.prepareGenerationRequest(data, user, req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := enforceMiniProgramModelCompliance(data, &req); err != nil {
+		writeError(w, http.StatusForbidden, err)
 		return
 	}
 	req.Params["retryOf"] = original.ID

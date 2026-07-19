@@ -24,12 +24,15 @@ type CreateRequest struct {
 }
 
 type GeneratedImage struct {
-	URL          string
-	ThumbnailURL string
-	ContentType  string
-	Width        int
-	Height       int
-	Source       string
+	URL              string
+	ThumbnailURL     string
+	ContentType      string
+	Width            int
+	Height           int
+	Source           string
+	ProviderTaskID   string
+	RevisedPrompt    string
+	ProviderMetadata map[string]any
 }
 
 type ImageProvider interface {

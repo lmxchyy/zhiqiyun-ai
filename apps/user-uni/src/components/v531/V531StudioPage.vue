@@ -11,7 +11,7 @@
       <view class="studio-brand-mark">Z</view>
       <view class="studio-header-copy">
         <text class="studio-title">创作</text>
-        <text class="studio-subtitle">一句话生成图片、视频、PPT 和智能内容</text>
+        <text class="studio-subtitle">{{ studioSubtitle }}</text>
       </view>
       <text class="identity-pill">{{ identityLabel }}</text>
     </view>
@@ -42,7 +42,7 @@
           <text class="tool-glyph">▣</text>
           <text>{{ referencePaths.length ? `参考图 ${referencePaths.length}` : "参考图" }}</text>
         </button>
-        <button class="tool-button" type="button" data-studio-action="file" @click="chooseFile">
+        <button v-if="supportsDocumentUpload" class="tool-button" type="button" data-studio-action="file" @click="chooseFile">
           <text class="tool-glyph">⇧</text>
           <text>{{ selectedFiles.length ? `文件 ${selectedFiles.length}` : "上传文件" }}</text>
         </button>
@@ -94,7 +94,7 @@
 
     <view class="section-heading scene-heading">
       <text class="section-title">AI 场景</text>
-      <button class="section-more section-more-button" type="button" @click="activeView = 'scenes'">全部场景 ›</button>
+      <button v-if="hasExtendedSceneCenter" class="section-more section-more-button" type="button" @click="activeView = 'scenes'">全部场景 ›</button>
     </view>
     <scroll-view scroll-x class="scene-scroll" :show-scrollbar="false">
       <view class="scene-row">
@@ -135,10 +135,12 @@ const props = withDefaults(defineProps<{
   pointBalance?: number;
   planName?: string;
   recentModel?: string;
+  allowedCreationModes?: CreationMode[];
 }>(), {
   pointBalance: 0,
   planName: "普通用户",
   recentModel: "豆包·通用 Pro",
+  allowedCreationModes: () => ["image", "infographic"],
 });
 
 const emit = defineEmits<{
@@ -158,18 +160,30 @@ const identityLabel = computed(() => {
   return label.length <= 6 ? label : "普通用户";
 });
 const formattedPointBalance = computed(() => Math.max(0, Number(props.pointBalance || 0)).toLocaleString("zh-CN"));
+const isModeAllowed = (mode: CreationMode) => props.allowedCreationModes.includes(mode);
+const supportsDocumentUpload = computed(() =>
+  ["ppt", "agent", "review"].some((mode) => isModeAllowed(mode as CreationMode)),
+);
+const studioSubtitle = computed(() =>
+  isModeAllowed("video") || isModeAllowed("ppt") || isModeAllowed("agent")
+    ? "一句话生成图片、视频、PPT 和智能内容"
+    : "一句话生成合规图片内容",
+);
+const hasExtendedSceneCenter = computed(() =>
+  ["video", "ppt", "agent", "review"].some((mode) => isModeAllowed(mode as CreationMode)),
+);
 
 const recommendation = computed(() => {
   const value = prompt.value.toLowerCase();
-  if (/视频|短片|口播|分镜|video/.test(value)) return { mode: "video" as const, label: "AI 视频", model: "即梦视频 Pro", cost: "40～80 点" };
-  if (/ppt|演示|汇报|路演|方案/.test(value)) return { mode: "ppt" as const, label: "PPT 文档", model: "Kimi K2.6", cost: "60～100 点" };
+  if (isModeAllowed("video") && /视频|短片|口播|分镜|video/.test(value)) return { mode: "video" as const, label: "AI 视频", model: "即梦视频 Pro", cost: "40～80 点" };
+  if (isModeAllowed("ppt") && /ppt|演示|汇报|路演|方案/.test(value)) return { mode: "ppt" as const, label: "PPT 文档", model: "Kimi K2.6", cost: "60～100 点" };
   if (/信息图|流程图|数据图|可视化/.test(value)) return { mode: "infographic" as const, label: "信息图", model: "豆包·通用 Pro", cost: "20～40 点" };
-  if (/质检|审稿|校对|合规|审核/.test(value)) return { mode: "review" as const, label: "AI 质检", model: "豆包·通用 Pro", cost: "10～30 点" };
-  if (/agent|智能体|销售助手|客服|数字员工/.test(value)) return { mode: "agent" as const, label: "AI Agent", model: "平台智能体", cost: "免费试用" };
+  if (isModeAllowed("review") && /质检|审稿|校对|合规|审核/.test(value)) return { mode: "review" as const, label: "AI 质检", model: "豆包·通用 Pro", cost: "10～30 点" };
+  if (isModeAllowed("agent") && /agent|智能体|销售助手|客服|数字员工/.test(value)) return { mode: "agent" as const, label: "AI Agent", model: "平台智能体", cost: "免费试用" };
   return { mode: "image" as const, label: "AI 生图", model: props.recentModel, cost: "20～40 点" };
 });
 
-const coreCapabilities = [
+const coreCapabilitiesSource = [
   { id: "image", icon: "图", title: "AI 生图", summary: "海报·商品图", tone: "blue", mode: "image", free: false },
   { id: "video", icon: "视", title: "AI 视频", summary: "宣传片·短视频", tone: "blue", mode: "video", free: false },
   { id: "ppt", icon: "P", title: "PPT 文档", summary: "方案·路演", tone: "blue", mode: "ppt", free: false },
@@ -185,8 +199,11 @@ const coreCapabilities = [
   mode: CreationMode;
   free?: boolean;
 }>;
+const coreCapabilities = computed(() =>
+  coreCapabilitiesSource.filter((item) => isModeAllowed(item.mode)),
+);
 
-const scenes = [
+const scenesSource = [
   { id: "xhs", title: "小红书爆款", summary: "封面 + 文案", tone: "pink", mode: "image", prompt: "帮我创作一套小红书爆款封面和配套文案" },
   { id: "moments", title: "朋友圈海报", summary: "自动匹配", tone: "white", mode: "image", prompt: "帮我生成一张适合朋友圈推广的企业宣传海报" },
   { id: "company", title: "企业宣传", summary: "自动匹配", tone: "white", mode: "ppt", prompt: "帮我制作一份企业品牌宣传与业务介绍方案" },
@@ -198,6 +215,9 @@ const scenes = [
   mode: CreationMode;
   prompt: string;
 }>;
+const scenes = computed(() =>
+  scenesSource.filter((item) => isModeAllowed(item.mode)),
+);
 
 function persistDraft(mode: CreationMode) {
   uni.setStorageSync("v531-creation-prompt", prompt.value.trim());
@@ -215,22 +235,26 @@ function startCreation() {
     return;
   }
   const mode = recommendation.value.mode;
+  if (!isModeAllowed(mode)) return showModeUnavailable();
   persistDraft(mode);
   emit("open-mode", mode);
 }
 
 function openMode(mode: CreationMode) {
+  if (!isModeAllowed(mode)) return showModeUnavailable();
   if (prompt.value.trim()) persistDraft(mode);
   emit("open-mode", mode);
 }
 
-function applyScene(scene: (typeof scenes)[number]) {
+function applyScene(scene: (typeof scenesSource)[number]) {
+  if (!isModeAllowed(scene.mode)) return showModeUnavailable();
   prompt.value = scene.prompt;
   persistDraft(scene.mode);
   emit("open-mode", scene.mode);
 }
 
 function applyScenePreset(mode: CreationMode, scenePrompt: string) {
+  if (!isModeAllowed(mode)) return showModeUnavailable();
   prompt.value = scenePrompt;
   persistDraft(mode);
   emit("open-mode", mode);
@@ -245,7 +269,7 @@ onMounted(() => {
     }
   };
   bridge.__xianzhiV531StudioOpenScene = (sceneId) => {
-    const scene = scenes.find(item => item.id === sceneId);
+    const scene = scenes.value.find(item => item.id === sceneId);
     if (scene) applyScene(scene);
   };
   bridge.__xianzhiV531StudioOpenSceneCenter = () => {
@@ -254,6 +278,10 @@ onMounted(() => {
   bridge.__xianzhiV531StudioChooseReference = chooseReferenceImage;
   bridge.__xianzhiV531StudioChooseFile = chooseFile;
 });
+
+function showModeUnavailable() {
+  uni.showToast({ title: "当前小程序审核版本暂未开放该能力", icon: "none" });
+}
 
 onBeforeUnmount(() => {
   const bridge = globalThis as NativeStudioBridge;

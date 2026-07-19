@@ -22,6 +22,7 @@ const (
 )
 
 func (a api) persistGeneratedImages(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
+	req = applyGeneratedImageProviderMetadata(req)
 	if a.fileService == nil || len(req.GeneratedImages) == 0 {
 		return req, nil, nil
 	}
@@ -75,18 +76,40 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 		}
 		stored = append(stored, file)
 		records = append(records, map[string]any{
-			"fileId":      file.FileID,
-			"tenantId":    file.TenantID,
-			"provider":    file.Provider,
-			"bucket":      file.Bucket,
-			"objectKey":   file.ObjectKey,
-			"fileSize":    file.FileSize,
-			"contentType": file.MIMEType,
-			"sourceUrl":   image.URL,
+			"fileId":         file.FileID,
+			"tenantId":       file.TenantID,
+			"provider":       file.Provider,
+			"bucket":         file.Bucket,
+			"objectKey":      file.ObjectKey,
+			"fileSize":       file.FileSize,
+			"contentType":    file.MIMEType,
+			"sourceUrl":      image.URL,
+			"source":         image.Source,
+			"providerTaskId": image.ProviderTaskID,
 		})
 	}
 	req.Params[generatedStorageFilesParam] = records
 	return req, stored, nil
+}
+
+func applyGeneratedImageProviderMetadata(req generation.CreateRequest) generation.CreateRequest {
+	if len(req.GeneratedImages) == 0 {
+		return req
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	image := req.GeneratedImages[0]
+	if value := strings.TrimSpace(image.ProviderTaskID); value != "" {
+		req.Params["provider_task_id"] = value
+	}
+	if value := strings.TrimSpace(image.RevisedPrompt); value != "" {
+		req.Params["provider_revised_prompt"] = value
+	}
+	if len(image.ProviderMetadata) > 0 {
+		req.Params["provider_metadata"] = cloneAnyMap(image.ProviderMetadata)
+	}
+	return req
 }
 
 func (a api) cleanupGeneratedFiles(files []storagecenter.FileObject) {

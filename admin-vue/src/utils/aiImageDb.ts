@@ -51,6 +51,7 @@ export interface AiCachedOriginalImage {
   id: string;
   dataUrl: string;
   sourceUrl?: string;
+  version?: number;
   savedAt: number;
 }
 

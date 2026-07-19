@@ -2955,6 +2955,10 @@ func (s *jsonStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIModel, 
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		}
+		applyAIModelComplianceMutation(&created, req)
+		if err := validateAIModelMiniProgramEnable(created); err != nil {
+			return err
+		}
 		if len(created.CapabilityCode) == 0 {
 			created.CapabilityCode = defaultAICapabilitiesForModule(moduleCode)
 		}
@@ -3008,6 +3012,10 @@ func (s *jsonStore) UpdateAdminAIModel(id string, req adminAIModelMutation) (adm
 			}
 			if req.AllowFallbackSwitch != nil {
 				data.AIModels[i].AllowFallbackSwitch = *req.AllowFallbackSwitch
+			}
+			applyAIModelComplianceMutation(&data.AIModels[i], req)
+			if err := validateAIModelMiniProgramEnable(data.AIModels[i]); err != nil {
+				return err
 			}
 			data.AIModels[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			updated = data.AIModels[i]
@@ -3351,30 +3359,33 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 				ThumbnailURL: thumbnailURL,
 				Favorite:     false,
 				Metadata: map[string]any{
-					"prompt":              req.Prompt,
-					"model":               req.Model,
-					"type":                req.Type,
-					"module_code":         task.ModuleCode,
-					"billing_type":        task.BillingType,
-					"sourceType":          req.Type,
-					"contentType":         contentType,
-					"source":              source,
-					"thumbnailUrl":        thumbnailURL,
-					"width":               width,
-					"height":              height,
-					"resolution":          fmt.Sprintf("%dx%d", width, height),
-					"index":               i + 1,
-					"referenceCount":      referenceCount,
-					"referenceImages":     referenceImages,
-					"inputImageIds":       inputImageIds,
-					"inputImagesSnapshot": inputImagesSnapshot,
-					"maskDraft":           maskDraft,
-					"maskTargetImageId":   maskTargetImageId,
-					"maskImageId":         maskImageId,
+					"prompt":                req.Prompt,
+					"model":                 req.Model,
+					"type":                  req.Type,
+					"module_code":           task.ModuleCode,
+					"billing_type":          task.BillingType,
+					"sourceType":            req.Type,
+					"contentType":           contentType,
+					"source":                source,
+					"providerTaskId":        stringValue(req.Params["provider_task_id"]),
+					"providerRevisedPrompt": stringValue(req.Params["provider_revised_prompt"]),
+					"thumbnailUrl":          thumbnailURL,
+					"width":                 width,
+					"height":                height,
+					"resolution":            fmt.Sprintf("%dx%d", width, height),
+					"index":                 i + 1,
+					"referenceCount":        referenceCount,
+					"referenceImages":       referenceImages,
+					"inputImageIds":         inputImageIds,
+					"inputImagesSnapshot":   inputImagesSnapshot,
+					"maskDraft":             maskDraft,
+					"maskTargetImageId":     maskTargetImageId,
+					"maskImageId":           maskImageId,
 				},
 				CreatedAt: now,
 				UpdatedAt: now,
 			})
+			copyGenerationComplianceMetadata(data.Assets[len(data.Assets)-1].Metadata, req.Params, assetID, now)
 		}
 		appendBillingLifecycleEventJSON(data, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model})
 		if _, err := applyJSONWalletEntry(data, task, "RESERVE", pointCost, "生成任务冻结"); err != nil {

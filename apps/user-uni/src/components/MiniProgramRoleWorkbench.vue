@@ -57,6 +57,7 @@
           :today-calls="todayCallCount"
           :assets="recentAssets"
           :tasks="generationTasks"
+          :allowed-creation-modes="allowedCreationModes"
           @tab="selectUserTab"
           @open-mode="openCreation"
           @open-asset="openAssetDetail"
@@ -67,6 +68,7 @@
           v-else-if="activeTab === 'create' && !isCreationDetail"
           :point-balance="pointBalance"
           :plan-name="planName"
+          :allowed-creation-modes="allowedCreationModes"
           @open-mode="openCreation"
           @recharge="openFeaturePage(miniProgramFeaturePages.userRechargePlans)"
         />
@@ -753,6 +755,10 @@ import type {
 } from "../config/miniProgramPages";
 
 function guestAwareGenerateTap() {
+  if (!allowedCreationModes.value.includes(creationMode.value)) {
+    uni.showToast({ title: "该能力暂未向小程序开放", icon: "none" });
+    return;
+  }
   if (!isGuest.value) return handleGenerateTap();
   const prompt = String(creationPrompt.value || "").trim();
   if (!prompt) {
@@ -885,7 +891,7 @@ const roleNames: Record<RoleId, string> = {
   operation: "运营中心"
 };
 
-const creationModules = [
+const allCreationModules = [
   { id: "image" as CreationMode, icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "约 10 点/张", tone: "orange" },
   { id: "ppt" as CreationMode, icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
   { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "doubao-seedance-2.0", cost: "约 80 点/条", tone: "green" },
@@ -893,6 +899,9 @@ const creationModules = [
   { id: "infographic" as CreationMode, icon: "表", name: "信息图", homeName: "信息图", description: "复杂信息一图讲清", model: "infographic", cost: "约 20 点/份", tone: "orange" },
   { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
 ];
+
+const allowedCreationModes = ref<CreationMode[]>(["image", "infographic"]);
+const creationModules = computed(() => allCreationModules.filter(item => allowedCreationModes.value.includes(item.id)));
 
 const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"];
 const assetFilters: Array<{ id: AssetFilter; label: string }> = [
@@ -1074,7 +1083,7 @@ const currentRoleMenuItems = computed(() => RoleMenuConfig[userStore.currentRole
   .filter(item => !(item.id === "upgrade-agent" && reviewModeHides("hideAgentCenter")))
   .filter(item => !(item.id.includes("commission") && reviewModeHides("hideCommission"))));
 
-const activeCreation = computed(() => creationModules.find(item => item.id === creationMode.value) || creationModules[0]);
+const activeCreation = computed(() => creationModules.value.find(item => item.id === creationMode.value) || creationModules.value[0] || allCreationModules[0]);
 const activeCreationName = computed(() => activeCreation.value.name);
 const activeCreationModel = computed(() => rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model);
 const activeCreationCost = computed(() => activeCreation.value.cost);
@@ -1106,7 +1115,7 @@ function generationStatusText(status: string) {
 }
 
 function creationNameForMode(mode: CreationMode) {
-  return creationModules.find(item => item.id === mode)?.name || "AI 创作";
+  return allCreationModules.find(item => item.id === mode)?.name || "AI 创作";
 }
 
 function restoredCreationString(...keys: string[]) {
@@ -1128,7 +1137,7 @@ const currentPageTitle = computed(() => {
   return "知启云 AI";
 });
 const creationDetailTitle = computed(
-  () => creationModules.find(module => module.id === creationMode.value)?.name || "AI 创作",
+  () => allCreationModules.find(module => module.id === creationMode.value)?.name || "AI 创作",
 );
 
 const currentPageSubtitle = computed(() => {
@@ -1969,11 +1978,19 @@ async function preloadCreationBackend(mode: CreationMode) {
 }
 
 function openCreation(mode: CreationMode) {
+	if (!allowedCreationModes.value.includes(mode)) {
+		uni.showToast({ title: "该能力暂未向小程序开放", icon: "none" });
+		return;
+	}
   openStandalonePage(miniProgramCreationPages[mode]);
   void preloadCreationBackend(mode);
 }
 
 function selectCreationMode(mode: CreationMode) {
+	if (!allowedCreationModes.value.includes(mode)) {
+		uni.showToast({ title: "该能力暂未向小程序开放", icon: "none" });
+		return;
+	}
   creationPromptDrafts.value[creationMode.value] = creationPrompt.value;
   openStandalonePage(miniProgramCreationPages[mode]);
   void preloadCreationBackend(mode);
@@ -2383,6 +2400,12 @@ async function submitCreation(prompt: string) {
     stopGenerationFeedback();
     generationProgress.value = 0;
     const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
+    if (rawMessage.includes("请先确认最新版本")) {
+      creationError.value = rawMessage;
+      uni.showToast({ title: "请先确认必要协议，返回后将保留当前创作内容", icon: "none" });
+      setTimeout(() => uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" }), 300);
+      return;
+    }
     const message = rawMessage.includes("所发布内容含违规信息") ? "所发布内容含违规信息" : rawMessage;
     creationError.value = message;
     latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
@@ -2598,8 +2621,22 @@ onMounted(() => {
     restoredCreationParams.value = studioDraft;
     restoreActiveGeneration();
   }
+  void loadTerminalCapabilities();
   void refreshAll();
 });
+
+async function loadTerminalCapabilities() {
+  try {
+    const result = await api<{ creationModes?: string[] }>("/api/v1/public/terminal-capabilities");
+    const allowed = (result.creationModes || []).filter((item): item is CreationMode =>
+      (["image", "video", "ppt", "agent", "infographic", "review"] as string[]).includes(item),
+    );
+    allowedCreationModes.value = allowed.length ? allowed : ["image"];
+    if (!allowedCreationModes.value.includes(creationMode.value)) creationMode.value = "image";
+  } catch {
+    allowedCreationModes.value = ["image", "infographic"];
+  }
+}
 
 onBeforeUnmount(() => {
   generationPollRun += 1;

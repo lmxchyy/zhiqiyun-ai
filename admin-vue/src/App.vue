@@ -155,7 +155,8 @@
           </div>
         </div>
         <div class="header-actions">
-          <el-input v-model="globalSearchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="全局搜索菜单与业务记录（Ctrl K）" @focus="commandPaletteOpen = true" @keydown.enter="commandPaletteOpen = true" />
+          <el-input v-if="!isUserConsole && !isAgentConsole" v-model="searchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="搜索当前模块" />
+          <el-input v-else v-model="globalSearchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="全局搜索菜单与业务记录（Ctrl K）" @focus="commandPaletteOpen = true" @keydown.enter="commandPaletteOpen = true" />
           <el-button :icon="Refresh" circle :loading="store.loading" @click="() => store.loadActiveModule()" />
           <el-dropdown trigger="click" @command="setElementSize">
             <el-button class="size-button">
@@ -226,6 +227,24 @@
             :tabs="activeAdminSectionTabs"
             @select="selectAdminModule"
           />
+          <section v-if="!isUserConsole && !isAgentConsole && searchKeyword.trim()" class="global-search-panel">
+            <div class="global-search-head">
+              <div><strong>搜索结果</strong><small>关键词：{{ searchKeyword.trim() }}</small></div>
+              <el-button size="small" @click="searchKeyword = ''">清空</el-button>
+            </div>
+            <div class="global-search-grid">
+              <article class="global-search-card">
+                <span>模块入口</span>
+                <button v-for="item in globalModuleResults" :key="item.id" type="button" @click="selectAdminModule(item.id)"><strong>{{ item.title }}</strong><small>{{ pageMeta[item.id]?.description || '进入模块查看详情' }}</small></button>
+                <el-empty v-if="!globalModuleResults.length" description="没有匹配模块" :image-size="56" />
+              </article>
+              <article class="global-search-card">
+                <span>当前模块数据</span>
+                <button v-for="item in currentRecordResults" :key="item.key" type="button" @click="openCurrentRecordResult(item)"><strong>{{ item.title }}</strong><small>{{ item.desc }}</small></button>
+                <el-empty v-if="!currentRecordResults.length" description="当前模块没有匹配记录" :image-size="56" />
+              </article>
+            </div>
+          </section>
           <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
@@ -1829,23 +1848,61 @@
             :current-role="currentAdmin?.role || ''"
             @navigate="navigateEnterpriseRoute"
           />
-          <AdminOverviewDomain
-            v-else-if="['analysis', 'workbench', 'dashboard'].includes(store.activeModuleId)"
-            :active-module-id="store.activeModuleId"
-            :current-admin-name="currentAdmin?.name"
-            :current-admin-role="currentAdmin?.role"
-            :analysis-stats="analysisStats"
-            :traffic-sources="trafficSources"
-            :traffic-donut-style="trafficDonutStyle"
-            :weekly-activity="weeklyActivity"
-            :metrics="metrics"
-            :quick-todos="quickTodos"
-            :workbench-tasks="workbenchTasks"
-            :tasks="overviewTasks"
-            :exceptions="overviewExceptions"
-            :module-labels="adminModuleLabels"
-            @navigate="selectAdminModule"
-          />
+          <section v-else-if="store.activeModuleId === 'analysis'" class="analysis-page">
+            <div class="analysis-stat-grid">
+              <article v-for="stat in analysisStats" :key="stat.label" class="analysis-stat-card">
+                <el-icon><component :is="stat.icon" /></el-icon>
+                <div><span>{{ stat.label }}</span><strong>{{ stat.value }}</strong></div>
+              </article>
+            </div>
+            <section class="analysis-chart-grid">
+              <el-card shadow="never" class="analysis-card">
+                <template #header><div class="panel-head"><span>用户访问来源</span><small>客户、渠道与推广来源</small></div></template>
+                <div class="traffic-layout">
+                  <div class="traffic-legend"><div v-for="source in trafficSources" :key="source.label"><i :style="{ backgroundColor: source.color }"></i><span>{{ source.label }}</span></div></div>
+                  <div class="donut-chart" :style="trafficDonutStyle"><span>来源</span></div>
+                </div>
+              </el-card>
+              <el-card shadow="never" class="analysis-card">
+                <template #header><div class="panel-head"><span>每周生成任务活跃量</span><small>任务提交与完成趋势</small></div></template>
+                <div class="bar-chart"><div v-for="item in weeklyActivity" :key="item.day" class="bar-item"><span class="bar" :style="{ height: item.height + '%' }"></span><small>{{ item.day }}</small></div></div>
+              </el-card>
+            </section>
+            <el-card shadow="never" class="analysis-card analysis-line-card">
+              <template #header><div class="panel-head"><span>每月销售额 / 积分消耗趋势</span><el-tag type="success">实时</el-tag></div></template>
+              <svg class="trend-chart" viewBox="0 0 960 220" role="img" aria-label="每月销售额和积分消耗趋势">
+                <g class="trend-grid"><line v-for="y in [40, 80, 120, 160, 200]" :key="y" x1="32" :y1="y" x2="928" :y2="y" /></g>
+                <polyline class="trend-line trend-line-primary" points="32,154 112,136 192,94 272,108 352,150 432,124 512,86 592,112 672,70 752,92 832,58 928,116" />
+                <polyline class="trend-line trend-line-success" points="32,112 112,150 192,142 272,78 352,70 432,92 512,84 592,36 672,108 752,174 832,132 928,118" />
+              </svg>
+            </el-card>
+          </section>
+          <section v-else-if="store.activeModuleId === 'workbench'" class="workbench-page">
+            <section class="workbench-hero">
+              <div><el-tag type="success">API ONLINE</el-tag><h3>欢迎回来，{{ currentAdmin?.name || '平台管理员' }}</h3><p>今日重点关注客户余额、上游模型连通性、待支付订单和渠道启停状态。</p></div>
+              <div class="workbench-health"><span>平台健康度</span><strong>98.6%</strong><small>数据同步正常</small></div>
+            </section>
+            <section class="workbench-grid">
+              <el-card shadow="never" class="analysis-card">
+                <template #header><div class="panel-head"><span>快捷入口</span><small>高频运营动作</small></div></template>
+                <div class="shortcut-grid"><button v-for="item in quickTodos" :key="item.action" type="button" @click="selectAdminModule(item.module)"><span>{{ item.title }}</span><small>{{ item.desc }}</small></button></div>
+              </el-card>
+              <el-card shadow="never" class="analysis-card">
+                <template #header><div class="panel-head"><span>待办队列</span><el-tag type="warning">运营</el-tag></div></template>
+                <div class="todo-list workbench-todos"><button v-for="task in workbenchTasks" :key="task.title" type="button" @click="selectAdminModule(task.module)"><span>{{ task.title }}</span><small>{{ task.desc }}</small></button></div>
+              </el-card>
+            </section>
+          </section>
+          <section v-else-if="store.activeModuleId === 'dashboard'" class="dashboard-grid">
+            <el-card shadow="never" class="dashboard-card dashboard-card-large">
+              <template #header><div class="panel-head"><span>经营概览</span><el-tag type="success">实时</el-tag></div></template>
+              <div class="overview-board"><div v-for="metric in metrics.slice(0, 4)" :key="metric.label" class="overview-item"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div></div>
+            </el-card>
+            <el-card shadow="never" class="dashboard-card">
+              <template #header><div class="panel-head"><span>待办动作</span><el-tag type="warning">运营</el-tag></div></template>
+              <div class="todo-list"><button v-for="item in quickTodos" :key="item.action" type="button" @click="selectAdminModule(item.module)"><span>{{ item.title }}</span><small>{{ item.desc }}</small></button></div>
+            </el-card>
+          </section>
           <section v-else-if="store.activeModuleId === 'userMembership'" class="user-membership-page">
             <div class="membership-plan-head">
               <div>
@@ -2165,10 +2222,12 @@
                         <option value="volcengine">方舟/Ark 任务协议</option>
                         <option value="runninghub">RunningHub OpenAPI</option>
                         <option value="jimeng">即梦 CLI</option>
+                        <option value="cloudbase-function">CloudBase 云函数</option>
                       </select>
                       <select v-model="apiProviderDraft.imageRequestMode">
                         <option value="openai">图片：OpenAI 标准</option>
                         <option value="openai-json">图片：OpenAI JSON</option>
+                        <option value="cloudbase-function">图片：CloudBase 云函数</option>
                       </select>
                     </div>
                     <div v-if="apiVerifyPanel || apiVerifyResult" class="api-source-result" :class="apiVerifyPanel ? `is-${apiVerifyPanel.tone}` : ''">
@@ -2647,8 +2706,6 @@
             @run-action="runAction"
             @batch-action="runBatchAction"
           />
-          <Customer360Center v-else-if="store.activeModuleId === 'customers'" :rows="rows" :saving="store.saving" :toolbar-actions="toolbarActions" :row-actions="rowActions" :column-labels="columnLabels" :status-filter-options="statusFilterOptions" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
-          <OrderFulfillmentCenter v-else-if="store.activeModuleId === 'orders'" :rows="rows" :saving="store.saving" :toolbar-actions="toolbarActions" :row-actions="rowActions" :column-labels="columnLabels" :status-filter-options="statusFilterOptions" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
           <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
         </section>
       </el-main>
@@ -2660,7 +2717,7 @@
     :saving="store.saving"
     @save="savePlanConfiguration"
   />
-  <GlobalCommandPalette v-model:open="commandPaletteOpen" v-model:query="globalSearchKeyword" :module-results="globalModuleResults" :record-results="currentRecordResults" :business-results="globalBusinessResults" @select-module="openGlobalModuleResult" @select-record="openCurrentRecordResult" @select-business="openGlobalBusinessResult" />
+  <GlobalCommandPalette v-if="isUserConsole || isAgentConsole" v-model:open="commandPaletteOpen" v-model:query="globalSearchKeyword" :module-results="globalModuleResults" :record-results="currentRecordResults" :business-results="globalBusinessResults" @select-module="openGlobalModuleResult" @select-record="openCurrentRecordResult" @select-business="openGlobalBusinessResult" />
   <div v-if="apiModelPickerOpen" class="api-model-picker-overlay" @click.self="closeApiModelPicker">
     <section class="api-model-picker-modal">
       <header class="api-model-picker-head">
@@ -2827,10 +2884,7 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 
 const store = useAdminStore();
 const authStore = useWebAuthStore();
-const AdminOverviewDomain = defineAsyncComponent(() => import("./components/admin/AdminOverviewDomain.vue"));
 const AdminDataTable = defineAsyncComponent(() => import("./components/admin/AdminDataTable.vue"));
-const Customer360Center = defineAsyncComponent(() => import("./components/admin/Customer360Center.vue"));
-const OrderFulfillmentCenter = defineAsyncComponent(() => import("./components/admin/OrderFulfillmentCenter.vue"));
 const BillingDomain = defineAsyncComponent(() => import("./components/billing/BillingDomain.vue"));
 const CustomerAttributionOverview = defineAsyncComponent(() => import("./components/attribution/CustomerAttributionOverview.vue"));
 const AiCapabilityDomain = defineAsyncComponent(() => import("./components/ai/AiCapabilityDomain.vue"));
@@ -2874,6 +2928,7 @@ const globalSearchKeyword = ref("");
 const commandPaletteOpen = ref(false);
 const { results: globalBusinessResults } = useAdminGlobalSearch(globalSearchKeyword);
 function handleGlobalCommandShortcut(event: KeyboardEvent) {
+  if (!isUserConsole.value && !isAgentConsole.value) return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     commandPaletteOpen.value = true;
@@ -3789,16 +3844,6 @@ const userHomeCreationModes: Array<{ id: UserHomeCreationMode; title: string; ic
   { id: "ppt", title: "PPT 文档", icon: Document },
   { id: "agent", title: "Agent 对话", icon: Cpu }
 ];
-type OverviewWorkItem = { id: string; title: string; description: string; count: number; severity: string; module: string; roles?: string[] };
-const adminModuleLabels = Object.fromEntries(adminModules.filter((item) => adminNavigationSectionForModule(item.id)).map((item) => [item.id, item.title]));
-const overviewTasks = computed<OverviewWorkItem[]>(() => {
-  const items = (store.data as { tasks?: AdminRecord[] }).tasks;
-  return Array.isArray(items) ? items as OverviewWorkItem[] : [];
-});
-const overviewExceptions = computed<OverviewWorkItem[]>(() => {
-  const items = (store.data as { exceptions?: AdminRecord[] }).exceptions;
-  return Array.isArray(items) ? items as OverviewWorkItem[] : [];
-});
 const userHomeRatioOptions = [
   { label: "1:1", value: "square" },
   { label: "16:9", value: "16:9" },
@@ -5376,8 +5421,6 @@ async function fetchAiOriginalImageDataUrl(task: AdminRecord) {
   const directUrl = aiTaskImageUrl(task);
   if (!directUrl) return "";
   if (directUrl.startsWith("data:image/")) return directUrl;
-  const embeddedThumbnail = String(asset?.thumbnailUrl || task.thumbnailUrl || "");
-  if (embeddedThumbnail.startsWith("data:image/")) return embeddedThumbnail;
   let blob: Blob;
   try {
     blob = await fetchResourceBlob(directUrl, { auth: false });
@@ -5393,15 +5436,16 @@ async function ensureAiOriginalImageCached(task: AdminRecord) {
   if (!cacheId || aiOriginalImageCache.value[cacheId] || aiOriginalImageCachePending.has(cacheId)) return;
   aiOriginalImageCachePending.add(cacheId);
   try {
+    const sourceUrl = aiTaskImageUrl(task);
     const cached = await readCachedOriginalImage(cacheId);
-    if (cached?.dataUrl) {
+    if (cached?.dataUrl && cached.version === 2 && cached.sourceUrl === sourceUrl) {
       aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: cached.dataUrl };
       return;
     }
     const dataUrl = await fetchAiOriginalImageDataUrl(task);
     if (!dataUrl) return;
     aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: dataUrl };
-    await writeCachedOriginalImage({ id: cacheId, dataUrl, sourceUrl: aiTaskImageUrl(task) });
+    await writeCachedOriginalImage({ id: cacheId, dataUrl, sourceUrl, version: 2 });
   } catch (error) {
     console.warn("AI original image cache skipped", error);
   } finally {
@@ -5575,6 +5619,8 @@ function aiTaskModelLabel(task: AdminRecord) {
 }
 
 function aiTaskErrorMessage(task: AdminRecord) {
+  const failureReason = String(task.failureReason || task.failure_reason || "").trim();
+  if (failureReason) return failureReason;
   const error = task.error;
   if (typeof error === "string") return error;
   if (error && typeof error === "object" && "message" in error) return String((error as { message?: unknown }).message || "生成失败");
@@ -8848,18 +8894,20 @@ function apiProtocolDisplayLabel(protocol: string) {
     gemini: "Gemini 协议",
     volcengine: "方舟/Ark 任务协议",
     runninghub: "RunningHub OpenAPI",
-    jimeng: "即梦 CLI"
+    jimeng: "即梦 CLI",
+    "cloudbase-function": "CloudBase 云函数"
   };
   return labels[protocol] || protocol || "OpenAI 直连";
 }
 
 function apiImageRequestModeDisplayLabel(mode: string) {
+  if (mode === "cloudbase-function") return "CloudBase 云函数";
   return mode === "openai-json" ? "OpenAI JSON" : "OpenAI 标准";
 }
 
 function inferApiProviderProtocol(baseUrl: string, currentProtocol: string, currentMode: string) {
   const value = baseUrl.toLowerCase();
-  const manuallyPinned = ["gemini", "volcengine", "runninghub", "jimeng"].includes(currentProtocol);
+  const manuallyPinned = ["gemini", "volcengine", "runninghub", "jimeng", "cloudbase-function"].includes(currentProtocol);
   if (manuallyPinned) {
     return { protocol: currentProtocol, imageRequestMode: currentMode || "openai" };
   }
@@ -8868,6 +8916,7 @@ function inferApiProviderProtocol(baseUrl: string, currentProtocol: string, curr
   if (/runninghub/.test(value)) return { protocol: "runninghub", imageRequestMode: "openai-json" };
   if (/generativelanguage|googleapis|gemini/.test(value)) return { protocol: "gemini", imageRequestMode: "openai-json" };
   if (/jimeng|jianying|capcut/.test(value)) return { protocol: "jimeng", imageRequestMode: "openai-json" };
+  if (/\.api\.tcloudbasegateway\.com/.test(value)) return { protocol: "cloudbase-function", imageRequestMode: "cloudbase-function" };
   return { protocol: currentProtocol || "openai", imageRequestMode: currentMode || "openai" };
 }
 
@@ -9202,7 +9251,8 @@ function apiProtocolLabel(channel: AdminRecord) {
     comfyui: "ComfyUI",
     runninghub: "RunningHub",
     gemini: "Gemini",
-    volcengine: "火山方舟"
+    volcengine: "火山方舟",
+    "cloudbase-function": "CloudBase 云函数"
   };
   return labels[protocol] || protocol.toUpperCase();
 }
@@ -10273,6 +10323,19 @@ async function editAIModel(row: AdminRecord) {
     fallbackModel: aiText(row, "fallback_model", "fallbackModel"),
     sortWeight: String(Number(aiValue(row, "sort_weight", "sortWeight") || 10)),
     allowFallbackSwitch: Boolean(aiValue(row, "allow_fallback_switch", "allowFallbackSwitch")),
+    providerName: aiText(row, "provider_name"),
+    providerCompany: aiText(row, "provider_company"),
+    algorithmName: aiText(row, "algorithm_name"),
+    algorithmFilingNo: aiText(row, "algorithm_filing_no"),
+    algorithmType: aiText(row, "algorithm_type"),
+    contractStatus: aiText(row, "contract_status") || "draft",
+    contractExpireAt: aiText(row, "contract_expire_at"),
+    complianceStatus: aiText(row, "compliance_status") || "draft",
+    allowedTerminals: aiList(row, "allowed_terminals").join(","),
+    allowedCapabilities: aiList(row, "allowed_capabilities").join(","),
+    miniprogramEnabled: Boolean(aiValue(row, "miniprogram_enabled")),
+    complianceRemark: aiText(row, "compliance_remark"),
+    modelVersion: aiText(row, "model_version"),
     status: String(row.status || "ACTIVE")
   };
   const field = (label: string, key: keyof typeof form, placeholder = "") => h("label", { class: "channel-dialog-field" }, [
@@ -10315,6 +10378,18 @@ async function editAIModel(row: AdminRecord) {
       field("能力编码", "capabilityCode", "例如 text_to_image,image_to_image"),
       field("Fallback 模型", "fallbackModel", "例如 mock-standard，可留空"),
       field("排序权重", "sortWeight", "数字越小越靠前"),
+      field("技术提供方", "providerName", "实际技术提供方，不能填写 new-api"),
+      field("技术主体公司全称", "providerCompany", "按合作协议和备案材料填写"),
+      field("算法名称", "algorithmName"),
+      field("算法备案编号", "algorithmFilingNo"),
+      field("算法类型", "algorithmType", "例如 image"),
+      select("合作协议状态", "contractStatus", [{ label: "草稿", value: "draft" }, { label: "有效", value: "valid" }, { label: "已过期", value: "expired" }]),
+      field("合作协议到期时间", "contractExpireAt", "YYYY-MM-DD"),
+      select("合规状态", "complianceStatus", [{ label: "草稿", value: "draft" }, { label: "待审核", value: "pending" }, { label: "已通过", value: "approved" }, { label: "已驳回", value: "rejected" }, { label: "已过期", value: "expired" }]),
+      field("允许终端", "allowedTerminals", "pc,web,h5,miniprogram"),
+      field("允许能力", "allowedCapabilities", "text,image,video"),
+      field("模型版本", "modelVersion"),
+      field("合规备注", "complianceRemark"),
       select("状态", "status", [
         { label: "启用", value: "ACTIVE" },
         { label: "停用", value: "DISABLED" }
@@ -10328,6 +10403,10 @@ async function editAIModel(row: AdminRecord) {
           }
         }),
         h("span", null, "允许用户切换 Fallback")
+      ]),
+      h("label", { class: "channel-dialog-check" }, [
+        h("input", { type: "checkbox", checked: form.miniprogramEnabled, onChange: (event: Event) => { form.miniprogramEnabled = (event.target as HTMLInputElement).checked; } }),
+        h("span", null, "允许小程序使用（后端强制检查备案、终端和协议有效期）")
       ])
     ]),
     confirmButtonText: "保存模型",
@@ -10358,7 +10437,20 @@ async function editAIModel(row: AdminRecord) {
           fallback_model: form.fallbackModel.trim(),
           sort_weight: Math.round(sortWeight),
           allow_fallback_switch: form.allowFallbackSwitch,
-          status: form.status.trim()
+          status: form.status.trim(),
+          provider_name: form.providerName.trim(),
+          provider_company: form.providerCompany.trim(),
+          algorithm_name: form.algorithmName.trim(),
+          algorithm_filing_no: form.algorithmFilingNo.trim(),
+          algorithm_type: form.algorithmType.trim(),
+          contract_status: form.contractStatus.trim(),
+          contract_expire_at: form.contractExpireAt.trim(),
+          compliance_status: form.complianceStatus.trim(),
+          allowed_terminals: uniqueNonEmptyStrings(form.allowedTerminals.split(/[,，]/)),
+          allowed_capabilities: uniqueNonEmptyStrings(form.allowedCapabilities.split(/[,，]/)),
+          miniprogram_enabled: form.miniprogramEnabled,
+          compliance_remark: form.complianceRemark.trim(),
+          model_version: form.modelVersion.trim()
         };
         if (isCreate) {
           await store.mutate("POST", "/admin/ai/models", payload);
@@ -10704,7 +10796,7 @@ const filteredRows = computed(() => {
   });
 });
 const globalModuleResults = computed(() => {
-	const keyword = globalSearchKeyword.value.trim().toLowerCase();
+	const keyword = (isUserConsole.value || isAgentConsole.value ? globalSearchKeyword.value : searchKeyword.value).trim().toLowerCase();
   if (!keyword) return [];
   return modules
     .filter((item) => allowedModuleIds.includes(item.id) && canNavigateToModule(item.id))
@@ -10723,7 +10815,7 @@ const globalModuleResults = computed(() => {
 });
 
 const currentRecordResults = computed(() => {
-	const keyword = globalSearchKeyword.value.trim().toLowerCase();
+	const keyword = (isUserConsole.value || isAgentConsole.value ? globalSearchKeyword.value : searchKeyword.value).trim().toLowerCase();
   if (!keyword) return [];
   return rows.value
     .filter((row) => Object.values(row).some((value) => String(Array.isArray(value) ? value.join(" ") : value ?? "").toLowerCase().includes(keyword)))
@@ -10737,8 +10829,12 @@ const currentRecordResults = computed(() => {
 });
 
 function openCurrentRecordResult(item: { title: string; row: AdminRecord }) {
-	globalSearchKeyword.value = "";
-	commandPaletteOpen.value = false;
+  if (isUserConsole.value || isAgentConsole.value) {
+    globalSearchKeyword.value = "";
+    commandPaletteOpen.value = false;
+  } else {
+    searchKeyword.value = "";
+  }
   const action = visibleRowActions(item.row)[0];
   if (action) {
     void runAction(action.action, item.row);
@@ -12732,6 +12828,9 @@ function authRedirectPath(response: AuthMeResponse) {
   let route = safeInternalRedirect(requested || response.defaultRoute || "", "");
   const role = String(response.user?.role || "").toUpperCase();
   const workspace = String(response.workspace || "").toLowerCase();
+  if (workspace === "admin" || role === "SUPER_ADMIN") {
+    return route.startsWith("/admin") ? route : "/admin/";
+  }
   if (route.startsWith("/admin") && role !== "SUPER_ADMIN") route = "";
   if (route.startsWith("/agent") && workspace !== "agent" && !role.startsWith("AGENT")) route = "";
   // The authenticated PC user console has one canonical entry. The backend
@@ -12764,7 +12863,10 @@ async function handleWebLoginAuthenticated(response: unknown, remember: boolean)
   }
   const loginMetadata = authResponse as unknown as Record<string, unknown>;
   trackWebGuestExperience("login_success", "webLogin", { authMethod: String(loginMetadata.authMethod || loginMetadata.loginMethod || "web") });
-  const shouldResumeWorkspace = isUserConsole.value && workspaceLoginOpen.value && !isAuthRoute.value;
+  const authenticatedRole = String(authResponse.user?.role || "").toUpperCase();
+  const authenticatedWorkspace = String(authResponse.workspace || "").toLowerCase();
+  const isPlatformAdmin = authenticatedWorkspace === "admin" || authenticatedRole === "SUPER_ADMIN";
+  const shouldResumeWorkspace = !isPlatformAdmin && isUserConsole.value && workspaceLoginOpen.value && !isAuthRoute.value;
   if (!shouldResumeWorkspace) {
     completeAuth(authResponse, remember);
     return;

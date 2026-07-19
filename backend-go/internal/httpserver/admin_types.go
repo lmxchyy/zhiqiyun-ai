@@ -623,6 +623,19 @@ type adminAIModel struct {
 	AllowFallbackSwitchCamel bool     `json:"allowFallbackSwitch,omitempty"`
 	CreatedAt                string   `json:"created_at,omitempty"`
 	UpdatedAt                string   `json:"updated_at,omitempty"`
+	ProviderName             string   `json:"provider_name,omitempty"`
+	ProviderCompany          string   `json:"provider_company,omitempty"`
+	AlgorithmName            string   `json:"algorithm_name,omitempty"`
+	AlgorithmFilingNo        string   `json:"algorithm_filing_no,omitempty"`
+	AlgorithmType            string   `json:"algorithm_type,omitempty"`
+	ContractStatus           string   `json:"contract_status,omitempty"`
+	ContractExpireAt         string   `json:"contract_expire_at,omitempty"`
+	ComplianceStatus         string   `json:"compliance_status,omitempty"`
+	AllowedTerminals         []string `json:"allowed_terminals,omitempty"`
+	AllowedCapabilities      []string `json:"allowed_capabilities,omitempty"`
+	MiniProgramEnabled       bool     `json:"miniprogram_enabled"`
+	ComplianceRemark         string   `json:"compliance_remark,omitempty"`
+	ModelVersion             string   `json:"model_version,omitempty"`
 }
 
 type adminAIParameterField struct {
@@ -699,6 +712,19 @@ type adminAIModelMutation struct {
 	FallbackModel       *string  `json:"fallback_model"`
 	SortWeight          int      `json:"sort_weight"`
 	AllowFallbackSwitch *bool    `json:"allow_fallback_switch"`
+	ProviderName        string   `json:"provider_name"`
+	ProviderCompany     string   `json:"provider_company"`
+	AlgorithmName       string   `json:"algorithm_name"`
+	AlgorithmFilingNo   string   `json:"algorithm_filing_no"`
+	AlgorithmType       string   `json:"algorithm_type"`
+	ContractStatus      string   `json:"contract_status"`
+	ContractExpireAt    string   `json:"contract_expire_at"`
+	ComplianceStatus    string   `json:"compliance_status"`
+	AllowedTerminals    []string `json:"allowed_terminals"`
+	AllowedCapabilities []string `json:"allowed_capabilities"`
+	MiniProgramEnabled  *bool    `json:"miniprogram_enabled"`
+	ComplianceRemark    string   `json:"compliance_remark"`
+	ModelVersion        string   `json:"model_version"`
 }
 
 type adminAIParameterSchemaMutation struct {
