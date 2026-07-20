@@ -47,8 +47,18 @@ CREATE TABLE IF NOT EXISTS connector_session_contexts (
 CREATE INDEX IF NOT EXISTS idx_connector_session_context_expiry
   ON connector_session_contexts(expires_at);
 
-ALTER TABLE IF EXISTS xz_ppt_tasks
-  ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(256) NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS xz_ppt_tasks (
+  task_id VARCHAR(128) PRIMARY KEY,
+  user_id VARCHAR(128) NOT NULL,
+  client_request_id VARCHAR(256) NOT NULL DEFAULT '',
+  status VARCHAR(32) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  raw JSONB NOT NULL
+);
+ALTER TABLE xz_ppt_tasks ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(256) NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_xz_ppt_tasks_user_created ON xz_ppt_tasks(user_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_xz_ppt_tasks_user_status ON xz_ppt_tasks(user_id,status);
 DO $$
 BEGIN
   IF to_regclass('public.xz_ppt_tasks') IS NOT NULL THEN
