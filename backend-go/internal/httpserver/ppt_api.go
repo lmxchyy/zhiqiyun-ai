@@ -1384,6 +1384,10 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 		},
 	})
 	if err != nil {
+		if shouldFallbackPPTOutline(err) {
+			log.Printf("ppt outline provider unavailable model=%s fallback=local error=%v", model, err)
+			return buildPPTOutline(req), nil
+		}
 		return pptOutline{}, fmt.Errorf("ppt outline model call failed: %w", err)
 	}
 	outline, err := parsePPTOutlineModelOutput(response.Message.Content, req)
@@ -1391,6 +1395,24 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 		return pptOutline{}, fmt.Errorf("parse ppt outline model output: %w", err)
 	}
 	return outline, nil
+}
+
+func shouldFallbackPPTOutline(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"http 429", "http 502", "http 503", "http 504",
+		"system_memory_overloaded", "system memory overloaded",
+		"context deadline exceeded", "client.timeout", "connection reset",
+		"connection refused", "temporary failure", "no such host",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a api) preparePPTCapabilityRequest(data adminPlatformData, user adminUser, prompt string, model string, pageCount int, withImages bool, uploadedFile bool) (generation.CreateRequest, error) {
