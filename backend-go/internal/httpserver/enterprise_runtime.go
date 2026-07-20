@@ -31,6 +31,10 @@ type modelCallAuthorizer interface {
 	AuthorizeModelCall(userID string, capability string) (modelCallAuthorization, error)
 }
 
+type connectorModelCallAuthorizer interface {
+	AuthorizeConnectorModelCall(userID string, tenantID string, capability string) (modelCallAuthorization, error)
+}
+
 func authorizeUserModelCall(store platformStore, userID string, capability string) (modelCallAuthorization, error) {
 	if authorizer, ok := store.(modelCallAuthorizer); ok {
 		return authorizer.AuthorizeModelCall(userID, capability)
@@ -86,6 +90,48 @@ func (s *postgresStore) AuthorizeModelCall(userID string, capability string) (mo
 	return s.authorizeModelCallContext(ctx, s.db, userID, capability)
 }
 
+func (s *postgresStore) AuthorizeConnectorModelCall(userID string, tenantID string, capability string) (modelCallAuthorization, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return modelCallAuthorization{}, err
+	}
+	return s.authorizeConnectorModelCallContext(ctx, s.db, userID, tenantID, capability)
+}
+
+func (s *postgresStore) authorizeConnectorModelCallContext(ctx context.Context, db sqlQueryRower, userID string, tenantID string, capability string) (modelCallAuthorization, error) {
+	userID = strings.TrimSpace(userID)
+	tenantID = strings.TrimSpace(tenantID)
+	if userID == "" || tenantID == "" || strings.EqualFold(tenantID, "tenant_default") {
+		return modelCallAuthorization{}, errUnauthorized
+	}
+	var organizationID, currentRole string
+	err := db.QueryRowContext(ctx, `
+		SELECT role.organization_id, role.role
+		FROM xz_user_roles role
+		JOIN xz_tenant_members member
+		  ON member.tenant_id=role.tenant_id AND member.user_id=role.user_id
+		JOIN xz_organizations organization
+		  ON organization.tenant_id=role.tenant_id AND organization.id=role.organization_id
+		JOIN xz_role_permissions permission
+		  ON permission.role=role.role AND permission.permission=$3
+		WHERE role.user_id=$1 AND role.tenant_id=$2
+		  AND upper(role.status)='ACTIVE'
+		  AND upper(member.status)='ACTIVE' AND upper(member.member_status)='ACTIVE'
+		  AND upper(organization.status)='ACTIVE'
+		ORDER BY CASE WHEN member.primary_organization_id=role.organization_id THEN 0 ELSE 1 END,
+		         role.organization_id, role.role
+		LIMIT 1
+	`, userID, tenantID, permissionEnterpriseAIUse).Scan(&organizationID, &currentRole)
+	if errors.Is(err, sql.ErrNoRows) {
+		return modelCallAuthorization{}, errForbidden
+	}
+	if err != nil {
+		return modelCallAuthorization{}, err
+	}
+	return s.authorizeEnterpriseModelCallContext(ctx, db, userID, tenantID, organizationID, currentRole, capability)
+}
+
 func (s *postgresStore) authorizeModelCallContext(ctx context.Context, db sqlQueryRower, userID string, capability string) (modelCallAuthorization, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -107,9 +153,13 @@ func (s *postgresStore) authorizeModelCallContext(ctx context.Context, db sqlQue
 		return modelCallAuthorization{}, err
 	}
 
+	return s.authorizeEnterpriseModelCallContext(ctx, db, userID, tenantID, organizationID, currentRole, capability)
+}
+
+func (s *postgresStore) authorizeEnterpriseModelCallContext(ctx context.Context, db sqlQueryRower, userID string, tenantID string, organizationID string, currentRole string, capability string) (modelCallAuthorization, error) {
 	var tenantStatus, memberID, memberStatus, organizationStatus, serviceState, serviceRecordStatus, subscriptionStatus string
 	var trialExpiresAt sql.NullTime
-	err = db.QueryRowContext(ctx, `
+	err := db.QueryRowContext(ctx, `
 		SELECT tenant.status, member.id, member.member_status, organization.status,
 		       coalesce(service.lifecycle_state, CASE WHEN upper(tenant.status)='ACTIVE' THEN 'ACTIVE' ELSE 'PAUSED' END),
 		       coalesce(service.status, 'ACTIVE'),

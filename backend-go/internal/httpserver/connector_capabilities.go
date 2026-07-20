@@ -104,12 +104,12 @@ func (h *imageEditHandler) Validate(_ context.Context, c connector.AICommand) er
 	return h.connectorHandlerBase.validate(c, true)
 }
 func (h *imageGenerateHandler) EstimateCost(ctx context.Context, c connector.AICommand) (int64, error) {
-	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, connectorImageRequest(h.runtime, c, false))
+	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, c.EnterpriseID, connectorImageRequest(h.runtime, c, false))
 	h.prepared = prepared
 	return cost, err
 }
 func (h *imageEditHandler) EstimateCost(ctx context.Context, c connector.AICommand) (int64, error) {
-	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, connectorImageRequest(h.runtime, c, true))
+	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, c.EnterpriseID, connectorImageRequest(h.runtime, c, true))
 	h.prepared = prepared
 	return cost, err
 }
@@ -130,7 +130,7 @@ func executeConnectorImageHandler(ctx context.Context, runtime *connectorCapabil
 	if prepared.Type == "" {
 		prepared = connectorImageRequest(runtime, c, edit)
 	}
-	task, output, err := runtime.api.generator.executeConnectorImageGeneration(ctx, c.InternalUserID, prepared)
+	task, output, err := runtime.api.generator.executeConnectorImageGeneration(ctx, c.InternalUserID, c.EnterpriseID, prepared)
 	if err != nil {
 		return connector.CapabilityResult{}, err
 	}
@@ -197,12 +197,12 @@ func (h connectorHandlerBase) validateVideo(c connector.AICommand, imageToVideo 
 }
 
 func (h *videoGenerateHandler) EstimateCost(ctx context.Context, c connector.AICommand) (int64, error) {
-	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, connectorVideoRequest(h.runtime, c, false))
+	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, c.EnterpriseID, connectorVideoRequest(h.runtime, c, false))
 	h.prepared = prepared
 	return cost, err
 }
 func (h *imageToVideoHandler) EstimateCost(ctx context.Context, c connector.AICommand) (int64, error) {
-	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, connectorVideoRequest(h.runtime, c, true))
+	prepared, cost, err := h.runtime.api.generator.estimateConnectorGeneration(ctx, c.InternalUserID, c.EnterpriseID, connectorVideoRequest(h.runtime, c, true))
 	h.prepared = prepared
 	return cost, err
 }
@@ -230,7 +230,7 @@ func executeConnectorVideoHandler(ctx context.Context, runtime *connectorCapabil
 	if prepared.Type == "" {
 		prepared = connectorVideoRequest(runtime, c, imageToVideo)
 	}
-	task, output, file, raw, contentType, err := runtime.api.generator.executeConnectorVideoGeneration(ctx, c.InternalUserID, prepared)
+	task, output, file, raw, contentType, err := runtime.api.generator.executeConnectorVideoGeneration(ctx, c.InternalUserID, c.EnterpriseID, prepared)
 	if err != nil {
 		return connector.CapabilityResult{}, err
 	}
@@ -264,7 +264,7 @@ func (h *pptGenerateHandler) Validate(_ context.Context, c connector.AICommand) 
 }
 func (h *pptGenerateHandler) EstimateCost(ctx context.Context, c connector.AICommand) (int64, error) {
 	req := connectorPPTRequest(h.runtime, c)
-	prepared, cost, err := h.runtime.api.generator.estimateConnectorPPT(ctx, c.InternalUserID, req)
+	prepared, cost, err := h.runtime.api.generator.estimateConnectorPPT(ctx, c.InternalUserID, c.EnterpriseID, req)
 	h.prepared = prepared
 	return cost, err
 }
@@ -273,7 +273,7 @@ func (h *pptGenerateHandler) Execute(ctx context.Context, c connector.AICommand)
 	if req.Prompt == "" {
 		req = connectorPPTRequest(h.runtime, c)
 	}
-	execution, err := h.runtime.api.generator.executeConnectorPPT(ctx, c.InternalUserID, "feishu:"+c.ExternalMessageID, req, map[string]any{
+	execution, err := h.runtime.api.generator.executeConnectorPPT(ctx, c.InternalUserID, c.EnterpriseID, "feishu:"+c.ExternalMessageID, req, map[string]any{
 		"connector_id": c.ConnectorID, "external_user_id": c.ExternalUserID, "external_message_id": c.ExternalMessageID,
 		"capability": c.Intent, "connector_task_id": h.runtime.task.ID,
 	})

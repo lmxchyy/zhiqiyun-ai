@@ -24,13 +24,17 @@ type connectorPPTExecution struct {
 	BillingRequest generation.CreateRequest
 }
 
-func (a api) estimateConnectorPPT(ctx context.Context, userID string, req pptapp.GenerateRequest) (pptapp.GenerateRequest, int64, error) {
+func (a api) estimateConnectorPPT(ctx context.Context, userID string, enterpriseID string, req pptapp.GenerateRequest) (pptapp.GenerateRequest, int64, error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
 		return req, 0, err
 	}
 	req.UserID = user.ID
-	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, req.SlideCount, pptImagesEnabled(req.ImageSource), false)
+	authorization, err := a.authorizeConnectorCapability(user.ID, enterpriseID, modulePPTGeneration)
+	if err != nil {
+		return req, 0, err
+	}
+	capability, err := a.preparePPTCapabilityRequestWithAuthorization(data, user, req.Prompt, req.TextModel, req.SlideCount, pptImagesEnabled(req.ImageSource), false, &authorization)
 	if err != nil {
 		return req, 0, err
 	}
@@ -40,13 +44,17 @@ func (a api) estimateConnectorPPT(ctx context.Context, userID string, req pptapp
 	return req, int64(pptPointCostWithRules(task, data)), nil
 }
 
-func (a api) executeConnectorPPT(ctx context.Context, userID, clientRequestID string, req pptapp.GenerateRequest, billingMetadata map[string]any) (connectorPPTExecution, error) {
+func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clientRequestID string, req pptapp.GenerateRequest, billingMetadata map[string]any) (connectorPPTExecution, error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
 		return connectorPPTExecution{}, err
 	}
 	req.UserID, req.ClientRequestID = user.ID, clientRequestID
-	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, req.SlideCount, pptImagesEnabled(req.ImageSource), false)
+	authorization, err := a.authorizeConnectorCapability(user.ID, enterpriseID, modulePPTGeneration)
+	if err != nil {
+		return connectorPPTExecution{}, err
+	}
+	capability, err := a.preparePPTCapabilityRequestWithAuthorization(data, user, req.Prompt, req.TextModel, req.SlideCount, pptImagesEnabled(req.ImageSource), false, &authorization)
 	if err != nil {
 		return connectorPPTExecution{}, err
 	}
@@ -66,7 +74,7 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, clientRequestID st
 		Prompt: req.Prompt, Model: req.TextModel, Params: billingParams,
 	}
 	connectorMetadata := takeConnectorMetadata(billingReq.Params)
-	billingReq, err = a.prepareGenerationRequest(data, user, billingReq)
+	billingReq, err = a.prepareGenerationRequestWithAuthorization(data, user, billingReq, &authorization)
 	if err != nil {
 		return connectorPPTExecution{}, fmt.Errorf("authorize connector ppt billing: %w", err)
 	}

@@ -18,7 +18,7 @@ type connectorCapabilityStore interface {
 // executeConnectorImageGeneration reuses the exact user-facing generation,
 // storage, asset and billing pipeline, but waits inside the connector worker
 // instead of inside the Feishu HTTP callback.
-func (a api) executeConnectorImageGeneration(ctx context.Context, userID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, error) {
+func (a api) executeConnectorImageGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
 		return generationTask{}, req, err
@@ -32,7 +32,7 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		req.Params = map[string]any{}
 	}
 	connectorMetadata := takeConnectorMetadata(req.Params)
-	req, err = a.prepareGenerationRequest(data, user, req)
+	req, err = a.prepareConnectorGenerationRequest(data, user, enterpriseID, req)
 	if err != nil {
 		return generationTask{}, req, fmt.Errorf("authorize connector generation: %w", err)
 	}
@@ -75,7 +75,7 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	return completed, prepared, nil
 }
 
-func (a api) estimateConnectorGeneration(ctx context.Context, userID string, req generation.CreateRequest) (generation.CreateRequest, int64, error) {
+func (a api) estimateConnectorGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generation.CreateRequest, int64, error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
 		return req, 0, err
@@ -85,7 +85,7 @@ func (a api) estimateConnectorGeneration(ctx context.Context, userID string, req
 		req.Params = map[string]any{}
 	}
 	connectorMetadata := takeConnectorMetadata(req.Params)
-	req, err = a.prepareGenerationRequest(data, user, req)
+	req, err = a.prepareConnectorGenerationRequest(data, user, enterpriseID, req)
 	if err != nil {
 		return req, 0, err
 	}
@@ -95,7 +95,7 @@ func (a api) estimateConnectorGeneration(ctx context.Context, userID string, req
 	return req, int64(generationPointCostForRequest(req, data)), nil
 }
 
-func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
+func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
@@ -106,7 +106,7 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 		req.Params = map[string]any{}
 	}
 	connectorMetadata := takeConnectorMetadata(req.Params)
-	req, err = a.prepareGenerationRequest(data, user, req)
+	req, err = a.prepareConnectorGenerationRequest(data, user, enterpriseID, req)
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("authorize connector video generation: %w", err)
 	}
@@ -221,6 +221,26 @@ func (a api) connectorUserAndCapabilityData(ctx context.Context, userID string) 
 		return adminUser{}, adminPlatformData{}, fmt.Errorf("load AI capability data: %w", err)
 	}
 	return user, data, nil
+}
+
+func (a api) prepareConnectorGenerationRequest(data adminPlatformData, user adminUser, enterpriseID string, req generation.CreateRequest) (generation.CreateRequest, error) {
+	moduleCode := canonicalModuleCode(requestModuleCode(req))
+	if moduleCode == "" {
+		moduleCode = canonicalModuleCode(moduleCodeForType(req.Type))
+	}
+	authorization, err := a.authorizeConnectorCapability(user.ID, enterpriseID, moduleCode)
+	if err != nil {
+		return req, err
+	}
+	return a.prepareGenerationRequestWithAuthorization(data, user, req, &authorization)
+}
+
+func (a api) authorizeConnectorCapability(userID string, enterpriseID string, moduleCode string) (modelCallAuthorization, error) {
+	authorizer, ok := a.store.(connectorModelCallAuthorizer)
+	if !ok {
+		return modelCallAuthorization{}, errEnterpriseServiceUnavailable
+	}
+	return authorizer.AuthorizeConnectorModelCall(userID, enterpriseID, moduleCode)
 }
 
 func (a api) connectorGenerationServiceForRequest(user adminUser, req generation.CreateRequest) (generation.Service, error) {

@@ -1394,19 +1394,28 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 }
 
 func (a api) preparePPTCapabilityRequest(data adminPlatformData, user adminUser, prompt string, model string, pageCount int, withImages bool, uploadedFile bool) (generation.CreateRequest, error) {
+	return a.preparePPTCapabilityRequestWithAuthorization(data, user, prompt, model, pageCount, withImages, uploadedFile, nil)
+}
+
+func (a api) preparePPTCapabilityRequestWithAuthorization(data adminPlatformData, user adminUser, prompt string, model string, pageCount int, withImages bool, uploadedFile bool, authorizationOverride *modelCallAuthorization) (generation.CreateRequest, error) {
 	if pageCount <= 0 {
 		pageCount = 5
 	}
-	authorization := modelCallAuthorization{
-		ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
-		UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
-	}
-	if authorizer, ok := a.store.(modelCallAuthorizer); ok {
-		resolvedAuthorization, err := authorizer.AuthorizeModelCall(user.ID, modulePPTGeneration)
-		if err != nil {
-			return generation.CreateRequest{}, err
+	authorization := modelCallAuthorization{}
+	if authorizationOverride != nil {
+		authorization = *authorizationOverride
+	} else {
+		authorization = modelCallAuthorization{
+			ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
+			UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
 		}
-		authorization = resolvedAuthorization
+		if authorizer, ok := a.store.(modelCallAuthorizer); ok {
+			resolvedAuthorization, err := authorizer.AuthorizeModelCall(user.ID, modulePPTGeneration)
+			if err != nil {
+				return generation.CreateRequest{}, err
+			}
+			authorization = resolvedAuthorization
+		}
 	}
 	user.TenantID = authorization.TenantID
 	user.OrganizationID = authorization.OrganizationID

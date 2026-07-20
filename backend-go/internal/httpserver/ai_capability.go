@@ -434,6 +434,10 @@ func (a adminAPI) updateBillingRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) prepareGenerationRequest(data adminPlatformData, user adminUser, req generation.CreateRequest) (generation.CreateRequest, error) {
+	return a.prepareGenerationRequestWithAuthorization(data, user, req, nil)
+}
+
+func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, user adminUser, req generation.CreateRequest, authorizationOverride *modelCallAuthorization) (generation.CreateRequest, error) {
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
@@ -462,16 +466,21 @@ func (a api) prepareGenerationRequest(data adminPlatformData, user adminUser, re
 	if req.Model == "" {
 		req.Model = defaultModelNameForModule(data, moduleCode)
 	}
-	authorization := modelCallAuthorization{
-		ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
-		UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
-	}
-	if authorizer, ok := a.store.(modelCallAuthorizer); ok {
-		resolvedAuthorization, authErr := authorizer.AuthorizeModelCall(user.ID, moduleCode)
-		if authErr != nil {
-			return req, authErr
+	authorization := modelCallAuthorization{}
+	if authorizationOverride != nil {
+		authorization = *authorizationOverride
+	} else {
+		authorization = modelCallAuthorization{
+			ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
+			UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
 		}
-		authorization = resolvedAuthorization
+		if authorizer, ok := a.store.(modelCallAuthorizer); ok {
+			resolvedAuthorization, authErr := authorizer.AuthorizeModelCall(user.ID, moduleCode)
+			if authErr != nil {
+				return req, authErr
+			}
+			authorization = resolvedAuthorization
+		}
 	}
 	user.TenantID = authorization.TenantID
 	user.OrganizationID = authorization.OrganizationID

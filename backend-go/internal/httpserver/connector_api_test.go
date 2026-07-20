@@ -247,6 +247,67 @@ func TestConnectorRepositoryIdempotencyAndTenantIsolation(t *testing.T) {
 	}
 }
 
+func TestConnectorExistingBindingRepairsTenantMembershipAndUsesConnectorTenant(t *testing.T) {
+	store, db := enterpriseP0TestStore(t)
+	fixture := seedEnterpriseP0Fixture(t, db, 1, 100)
+	repo := connectorRepository{db: db}
+	ctx := context.Background()
+	personalUserID := fixture.prefix + "_personal_user"
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	mustEnterpriseP0Exec(t, db, `
+		INSERT INTO xz_users(id,email,name,role,status,plan_id,created_at,updated_at,raw)
+		VALUES($1,$2,'Bound Personal User','MEMBER','ACTIVE','plan_free',$3,$3,'{}'::jsonb)
+	`, personalUserID, personalUserID+"@example.test", now)
+	item, err := repo.createConnector(ctx, enterpriseConnector{
+		ID: newConnectorID("connector_repair"), EnterpriseID: fixture.tenantIDs[0], ConnectorType: "feishu",
+		ConnectorName: "repair test", ConnectorKey: newConnectorID("connector_key"), AppID: "app",
+		AppSecretEncrypted: "enc", VerificationTokenEncrypted: "enc", Config: defaultConnectorConfig(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incoming := connector.IncomingMessage{Platform: "feishu", ExternalMessageID: fixture.prefix + "_repair_message", ExternalChatID: "chat", ExternalUserID: "repair-external-user", ChatType: "p2p", MessageType: "text", Text: "生成一份PPT"}
+	message, inserted, err := repo.insertIncomingMessage(ctx, item, incoming, map[string]any{"event": "safe"})
+	if err != nil || !inserted {
+		t.Fatalf("insert message: inserted=%v err=%v", inserted, err)
+	}
+	binding, err := repo.loadOrCreateBinding(ctx, item, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE connector_user_bindings SET internal_user_id=$1 WHERE id=$2`, personalUserID, binding.ID); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := repo.loadOrCreateBinding(ctx, item, message)
+	if err != nil {
+		t.Fatalf("repair binding membership: %v", err)
+	}
+	if repaired.InternalUserID != personalUserID {
+		t.Fatalf("repaired user=%s", repaired.InternalUserID)
+	}
+	var memberCount, roleCount int
+	if err := db.QueryRow(`SELECT count(*) FROM xz_tenant_members WHERE tenant_id=$1 AND user_id=$2 AND upper(status)='ACTIVE' AND upper(member_status)='ACTIVE'`, fixture.tenantIDs[0], personalUserID).Scan(&memberCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM xz_user_roles WHERE tenant_id=$1 AND user_id=$2 AND role='ENTERPRISE_MEMBER' AND upper(status)='ACTIVE'`, fixture.tenantIDs[0], personalUserID).Scan(&roleCount); err != nil {
+		t.Fatal(err)
+	}
+	if memberCount != 1 || roleCount != 1 {
+		t.Fatalf("member=%d role=%d", memberCount, roleCount)
+	}
+	personalAuthorization, err := store.AuthorizeModelCall(personalUserID, modulePPTGeneration)
+	if err != nil || personalAuthorization.TenantID != "tenant_default" {
+		t.Fatalf("personal authorization=%+v err=%v", personalAuthorization, err)
+	}
+	connectorAuthorization, err := store.AuthorizeConnectorModelCall(personalUserID, fixture.tenantIDs[0], modulePPTGeneration)
+	if err != nil {
+		t.Fatalf("connector authorization: %v", err)
+	}
+	if connectorAuthorization.TenantID != fixture.tenantIDs[0] || connectorAuthorization.BillingScope != contextEnterprise || connectorAuthorization.BillingAccountID != fixture.tenantIDs[0] {
+		t.Fatalf("connector authorization=%+v", connectorAuthorization)
+	}
+}
+
 func TestConnectorEndToEndGenerationAndDuplicateDelivery(t *testing.T) {
 	store, db := enterpriseP0TestStore(t)
 	fixture := seedEnterpriseP0Fixture(t, db, 1, 100)
@@ -397,7 +458,7 @@ func TestConnectorGenerationInsufficientBalanceAndFailureRelease(t *testing.T) {
 		provider := &connectorIntegrationImageProvider{}
 		generator, db, fixture, userID := connectorGenerationTestSubject(t, 0, provider)
 		clientRequestID := "feishu:" + fixture.prefix + "_insufficient"
-		_, _, err := generator.executeConnectorImageGeneration(context.Background(), userID, connectorGenerationTestRequest(clientRequestID))
+		_, _, err := generator.executeConnectorImageGeneration(context.Background(), userID, fixture.tenantIDs[0], connectorGenerationTestRequest(clientRequestID))
 		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "insufficient") {
 			t.Fatalf("error=%v", err)
 		}
@@ -420,7 +481,7 @@ func TestConnectorGenerationInsufficientBalanceAndFailureRelease(t *testing.T) {
 		provider := &connectorFailingImageProvider{}
 		generator, db, fixture, userID := connectorGenerationTestSubject(t, 100, provider)
 		clientRequestID := "feishu:" + fixture.prefix + "_provider_failure"
-		_, _, err := generator.executeConnectorImageGeneration(context.Background(), userID, connectorGenerationTestRequest(clientRequestID))
+		_, _, err := generator.executeConnectorImageGeneration(context.Background(), userID, fixture.tenantIDs[0], connectorGenerationTestRequest(clientRequestID))
 		if err == nil || !strings.Contains(err.Error(), "simulated upstream failure") {
 			t.Fatalf("error=%v", err)
 		}

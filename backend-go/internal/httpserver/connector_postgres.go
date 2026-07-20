@@ -190,8 +190,13 @@ func (r connectorRepository) insertOutboundMessage(ctx context.Context, item ent
 }
 
 func (r connectorRepository) loadOrCreateBinding(ctx context.Context, connectorItem enterpriseConnector, message connectorMessageRecord) (connectorUserBinding, error) {
-	if item, found, err := r.bindingByExternalUser(ctx, connectorItem.ID, message.ExternalUserID); err != nil || found {
-		return item, err
+	if item, found, err := r.bindingByExternalUser(ctx, connectorItem.ID, message.ExternalUserID); err != nil {
+		return connectorUserBinding{}, err
+	} else if found {
+		if err := r.ensureBindingTenantMembership(ctx, item); err != nil {
+			return connectorUserBinding{}, err
+		}
+		return item, nil
 	}
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
@@ -204,7 +209,13 @@ func (r connectorRepository) loadOrCreateBinding(ctx context.Context, connectorI
 			return connectorUserBinding{}, err
 		}
 		item, _, err := r.bindingByExternalUser(ctx, connectorItem.ID, message.ExternalUserID)
-		return item, err
+		if err != nil {
+			return connectorUserBinding{}, err
+		}
+		if err := r.ensureBindingTenantMembership(ctx, item); err != nil {
+			return connectorUserBinding{}, err
+		}
+		return item, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return connectorUserBinding{}, err
 	}
@@ -262,6 +273,90 @@ func (r connectorRepository) loadOrCreateBinding(ctx context.Context, connectorI
 	}
 	item, _, err := r.bindingByExternalUser(ctx, connectorItem.ID, message.ExternalUserID)
 	return item, err
+}
+
+func (r connectorRepository) ensureBindingTenantMembership(ctx context.Context, binding connectorUserBinding) error {
+	if strings.TrimSpace(binding.EnterpriseID) == "" || strings.TrimSpace(binding.InternalUserID) == "" {
+		return errEnterpriseInvalid
+	}
+	var ready bool
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT exists(
+			SELECT 1
+			FROM xz_tenant_members member
+			JOIN xz_user_roles role ON role.tenant_id=member.tenant_id AND role.user_id=member.user_id
+			JOIN xz_organizations organization ON organization.tenant_id=role.tenant_id AND organization.id=role.organization_id
+			JOIN xz_role_permissions permission ON permission.role=role.role AND permission.permission=$3
+			WHERE member.tenant_id=$1 AND member.user_id=$2
+			  AND upper(member.status)='ACTIVE' AND upper(member.member_status)='ACTIVE'
+			  AND upper(role.status)='ACTIVE' AND upper(organization.status)='ACTIVE'
+		)
+	`, binding.EnterpriseID, binding.InternalUserID, permissionEnterpriseAIUse).Scan(&ready); err != nil {
+		return err
+	}
+	if ready {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var userActive bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT exists(SELECT 1 FROM xz_users WHERE id=$1 AND upper(status)='ACTIVE')
+	`, binding.InternalUserID).Scan(&userActive); err != nil {
+		return err
+	}
+	if !userActive {
+		return errForbidden
+	}
+	var organizationID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id FROM xz_organizations
+		WHERE tenant_id=$1 AND upper(status)='ACTIVE'
+		ORDER BY parent_id NULLS FIRST,created_at,id LIMIT 1
+	`, binding.EnterpriseID).Scan(&organizationID); err != nil {
+		return fmt.Errorf("resolve connector binding organization: %w", err)
+	}
+	memberID := newConnectorID("tenant_member")
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO xz_tenant_members(id,tenant_id,user_id,role,status,primary_organization_id,member_status,
+			certification_status,data_scope,joined_at,created_at,updated_at)
+		VALUES($1,$2,$3,'MEMBER','ACTIVE',$4,'ACTIVE','UNVERIFIED','SELF',now(),now(),now())
+		ON CONFLICT(tenant_id,user_id) DO NOTHING
+	`, memberID, binding.EnterpriseID, binding.InternalUserID, organizationID); err != nil {
+		return err
+	}
+	var memberStatus, memberLifecycle string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status,member_status FROM xz_tenant_members WHERE tenant_id=$1 AND user_id=$2
+	`, binding.EnterpriseID, binding.InternalUserID).Scan(&memberLifecycle, &memberStatus); err != nil {
+		return err
+	}
+	if !strings.EqualFold(memberLifecycle, "ACTIVE") || !strings.EqualFold(memberStatus, "ACTIVE") {
+		return errForbidden
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO xz_user_roles(user_id,tenant_id,organization_id,role,status,assigned_at,updated_at)
+		VALUES($1,$2,$3,'ENTERPRISE_MEMBER','ACTIVE',now(),now())
+		ON CONFLICT(user_id,tenant_id,organization_id,role) DO NOTHING
+	`, binding.InternalUserID, binding.EnterpriseID, organizationID); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, `
+		SELECT exists(
+			SELECT 1 FROM xz_user_roles role
+			JOIN xz_role_permissions permission ON permission.role=role.role AND permission.permission=$4
+			WHERE role.user_id=$1 AND role.tenant_id=$2 AND role.organization_id=$3 AND upper(role.status)='ACTIVE'
+		)
+	`, binding.InternalUserID, binding.EnterpriseID, organizationID, permissionEnterpriseAIUse).Scan(&ready); err != nil {
+		return err
+	}
+	if !ready {
+		return errForbidden
+	}
+	return tx.Commit()
 }
 
 func (r connectorRepository) bindingByExternalUser(ctx context.Context, connectorID, externalUserID string) (connectorUserBinding, bool, error) {
