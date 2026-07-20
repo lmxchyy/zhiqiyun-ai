@@ -60,26 +60,9 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	}
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], float64(req.SlideCount)))
-	billingParams := map[string]any{
-		"page_count":     req.SlideCount,
-		"with_images":    pptImagesEnabled(req.ImageSource),
-		"source_type":    "feishu",
-		"source_task_id": clientRequestID,
-	}
-	for key, value := range billingMetadata {
-		billingParams[key] = value
-	}
-	billingReq := generation.CreateRequest{
-		UserID: user.ID, ClientRequestID: clientRequestID, Type: "PPT_GENERATION", ModuleCode: modulePPTGeneration,
-		Prompt: req.Prompt, Model: req.TextModel, Params: billingParams,
-	}
-	connectorMetadata := takeConnectorMetadata(billingReq.Params)
-	billingReq, err = a.prepareGenerationRequestWithAuthorization(data, user, billingReq, &authorization)
+	billingReq, err := connectorPPTBillingRequest(data, user, authorization, capability, req, clientRequestID, billingMetadata)
 	if err != nil {
-		return connectorPPTExecution{}, fmt.Errorf("authorize connector ppt billing: %w", err)
-	}
-	for key, value := range connectorMetadata {
-		billingReq.Params[key] = value
+		return connectorPPTExecution{}, err
 	}
 	billingTask, err := a.store.CreatePendingGenerationTask(billingReq)
 	if err != nil {
@@ -155,6 +138,35 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	}
 	return connectorPPTExecution{Task: task, Payload: payload, File: file, PointCost: int64(billingTask.PointCost),
 		TenantID: tenantID, OrganizationID: stringValue(capability.Params["organization_id"]), BillingTask: billingTask, BillingRequest: billingReq}, nil
+}
+
+func connectorPPTBillingRequest(data adminPlatformData, user adminUser, authorization modelCallAuthorization, capability generation.CreateRequest, req pptapp.GenerateRequest, clientRequestID string, billingMetadata map[string]any) (generation.CreateRequest, error) {
+	scopedUser := user
+	scopedUser.TenantID = authorization.TenantID
+	scopedUser.OrganizationID = authorization.OrganizationID
+	resolved, err := resolveModuleSchema(data, scopedUser, modulePPTGeneration, capability.Model)
+	if err != nil {
+		return generation.CreateRequest{}, err
+	}
+	billingParams := map[string]any{
+		"page_count":     req.SlideCount,
+		"with_images":    pptImagesEnabled(req.ImageSource),
+		"source_type":    "feishu",
+		"source_task_id": clientRequestID,
+	}
+	for key, value := range billingMetadata {
+		billingParams[key] = value
+	}
+	for key, value := range capability.Params {
+		billingParams[key] = value
+	}
+	billingParams["billing_type"] = resolved.BillingRule.BillingType
+	billingParams["authorized_role"] = authorization.Role
+	billingParams["agent_id"] = effectiveAgentID(data, scopedUser)
+	return generation.CreateRequest{
+		UserID: user.ID, ClientRequestID: clientRequestID, Type: "PPT_GENERATION", ModuleCode: modulePPTGeneration,
+		Prompt: req.Prompt, Model: capability.Model, Params: billingParams,
+	}, nil
 }
 
 func (a api) connectorStoredFileURL(ctx context.Context, userID string, file storagecenter.FileObject) (string, int64, error) {
