@@ -49,6 +49,26 @@ func NewOpenAICompatible(cfg config.Config) OpenAICompatible {
 	})
 }
 
+// NewOpenAICompatibleForModel creates the PPT chat provider for a model that
+// has already been selected and authorized by the capability layer. Keeping
+// the selected model in the provider allow-list prevents the environment
+// default from incorrectly rejecting a tenant-configured model.
+func NewOpenAICompatibleForModel(cfg config.Config, model string) OpenAICompatible {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return NewOpenAICompatible(cfg)
+	}
+	return NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		Code:            "openai-compatible-chat",
+		BaseURL:         cfg.PPTProviderURL,
+		APIKey:          cfg.PPTProviderAPIKey,
+		Model:           model,
+		Models:          []string{model},
+		DisableThinking: cfg.PPTDisableThinking,
+		TimeoutMS:       intValue(cfg.ModelTimeoutMS),
+	})
+}
+
 func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatible {
 	timeoutMS := opts.TimeoutMS
 	if timeoutMS <= 0 {

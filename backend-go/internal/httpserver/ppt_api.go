@@ -949,8 +949,8 @@ func (a api) generatePPTVisualPlan(ctx context.Context, task pptapp.Task, slide 
 	var modelPlanner pptapp.VisualPlanModelFunc
 	if pptVisualPlannerModelEnabled(a.cfg) && a.pptProviderConfigured() {
 		modelPlanner = func(ctx context.Context, plannerInput pptapp.VisualPlannerInput) (pptapp.VisualPlan, error) {
-			provider := chatprovider.NewOpenAICompatible(a.cfg)
 			model := firstNonEmptyString(task.TextModel, a.cfg.PPTTextModel)
+			provider := chatprovider.NewOpenAICompatibleForModel(a.cfg, model)
 			response, err := provider.Chat(ctx, generation.CreateRequest{
 				Type: "CHAT_COMPLETION", Model: model,
 				Params: map[string]any{
@@ -1372,7 +1372,7 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 	if model == "" {
 		return buildPPTOutline(req), nil
 	}
-	provider := chatprovider.NewOpenAICompatible(a.cfg)
+	provider := chatprovider.NewOpenAICompatibleForModel(a.cfg, model)
 	response, err := provider.Chat(ctx, generation.CreateRequest{
 		Type:   "CHAT_COMPLETION",
 		Prompt: req.Prompt,
