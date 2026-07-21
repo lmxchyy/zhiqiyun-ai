@@ -563,6 +563,13 @@ select {
   grid-column: 1 / -1;
 }
 
+.channel-dialog-help {
+  color: var(--admin-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
 .password-dialog-input,
 .channel-dialog-input {
   width: 100%;

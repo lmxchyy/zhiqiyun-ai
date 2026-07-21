@@ -4166,6 +4166,7 @@ func (s *postgresStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIMod
 			ModelName:           modelName,
 			ModelType:           modelType,
 			Provider:            provider,
+			ChannelID:           strings.TrimSpace(stringPointerValue(req.ChannelID)),
 			CapabilityCode:      uniqueNonEmptyStrings(req.CapabilityCode),
 			ModuleCode:          moduleCode,
 			Status:              status,
@@ -4213,6 +4214,9 @@ func (s *postgresStore) UpdateAdminAIModel(id string, req adminAIModelMutation) 
 			}
 			if req.Provider != "" {
 				data.AIModels[i].Provider = req.Provider
+			}
+			if req.ChannelID != nil {
+				data.AIModels[i].ChannelID = strings.TrimSpace(*req.ChannelID)
 			}
 			if req.CapabilityCode != nil {
 				data.AIModels[i].CapabilityCode = req.CapabilityCode

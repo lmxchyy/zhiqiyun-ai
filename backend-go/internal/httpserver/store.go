@@ -1541,6 +1541,13 @@ func parseRouteModels(value string) []string {
 	return models
 }
 
+func stringPointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adminChannelAgent, adminUser, error) {
 	var createdAgent adminChannelAgent
 	var createdUser adminUser
@@ -2944,6 +2951,7 @@ func (s *jsonStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIModel, 
 			ModelName:           modelName,
 			ModelType:           modelType,
 			Provider:            provider,
+			ChannelID:           strings.TrimSpace(stringPointerValue(req.ChannelID)),
 			CapabilityCode:      uniqueNonEmptyStrings(req.CapabilityCode),
 			ModuleCode:          moduleCode,
 			Status:              status,
@@ -2992,6 +3000,9 @@ func (s *jsonStore) UpdateAdminAIModel(id string, req adminAIModelMutation) (adm
 			}
 			if req.Provider != "" {
 				data.AIModels[i].Provider = req.Provider
+			}
+			if req.ChannelID != nil {
+				data.AIModels[i].ChannelID = strings.TrimSpace(*req.ChannelID)
 			}
 			if req.CapabilityCode != nil {
 				data.AIModels[i].CapabilityCode = req.CapabilityCode

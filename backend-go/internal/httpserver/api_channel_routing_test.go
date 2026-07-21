@@ -36,6 +36,42 @@ func TestSelectAPIChannelForModelPrefersPrimaryOverNonPrimary(t *testing.T) {
 	}
 }
 
+func TestSelectAPIChannelForConfiguredModelUsesExplicitBinding(t *testing.T) {
+	data := adminPlatformData{
+		AIModels: []adminAIModel{{ModelName: "doubao-seedance-2.0", ChannelID: "channel_secondary"}},
+		APIKeys: []adminAPIKey{
+			{Customer: "channel_primary", Secret: "sk-primary", Status: "ACTIVE"},
+			{Customer: "channel_secondary", Secret: "sk-secondary", Status: "ACTIVE"},
+		},
+		APIChannels: []adminAPIChannel{
+			{ID: "channel_primary", Primary: true, Priority: 1, Status: "ACTIVE", Models: []string{"doubao-seedance-2.0"}},
+			{ID: "channel_secondary", Priority: 20, Status: "ACTIVE", Models: []string{"doubao-seedance-2.0"}},
+		},
+	}
+
+	selected, ok, err := selectAPIChannelForConfiguredModel(data, "doubao-seedance-2.0")
+	if err != nil {
+		t.Fatalf("select configured channel: %v", err)
+	}
+	if !ok || selected.ID != "channel_secondary" {
+		t.Fatalf("selected channel=%s ok=%v, want channel_secondary", selected.ID, ok)
+	}
+}
+
+func TestSelectAPIChannelForConfiguredModelRejectsUnsupportedBinding(t *testing.T) {
+	data := adminPlatformData{
+		AIModels: []adminAIModel{{ModelName: "doubao-seedance-2.0", ChannelID: "channel_wrong"}},
+		APIKeys:  []adminAPIKey{{Customer: "channel_wrong", Secret: "sk-wrong", Status: "ACTIVE"}},
+		APIChannels: []adminAPIChannel{
+			{ID: "channel_wrong", Status: "ACTIVE", Models: []string{"grok-video-1.5"}},
+		},
+	}
+
+	if _, _, err := selectAPIChannelForConfiguredModel(data, "doubao-seedance-2.0"); err == nil {
+		t.Fatal("expected unsupported explicit binding to fail")
+	}
+}
+
 func TestConnectorFailureContextDetachesExpiredParent(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.Background())
 	cancelParent()

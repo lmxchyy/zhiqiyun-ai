@@ -614,6 +614,8 @@ type adminAIModel struct {
 	ModelType                string   `json:"model_type"`
 	ModelTypeCamel           string   `json:"modelType,omitempty"`
 	Provider                 string   `json:"provider"`
+	ChannelID                string   `json:"channel_id,omitempty"`
+	ChannelIDCamel           string   `json:"channelId,omitempty"`
 	CapabilityCode           []string `json:"capability_code"`
 	CapabilityCodeCamel      []string `json:"capabilityCode,omitempty"`
 	ModuleCode               string   `json:"module_code"`
@@ -710,6 +712,7 @@ type adminAIModelMutation struct {
 	ModelName           string   `json:"model_name"`
 	ModelType           string   `json:"model_type"`
 	Provider            string   `json:"provider"`
+	ChannelID           *string  `json:"channel_id"`
 	CapabilityCode      []string `json:"capability_code"`
 	ModuleCode          string   `json:"module_code"`
 	Status              string   `json:"status"`

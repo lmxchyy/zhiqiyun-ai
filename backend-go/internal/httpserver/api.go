@@ -1035,7 +1035,10 @@ func (a api) generationServiceForConfiguredModel(model string) (generation.Servi
 	if err != nil {
 		return generation.Service{}, false, err
 	}
-	channel, ok := selectAPIChannelForModel(configuredGenerationChannels(data), model)
+	channel, ok, routeErr := selectAPIChannelForConfiguredModel(data, model)
+	if routeErr != nil {
+		return generation.Service{}, false, routeErr
+	}
 	if !ok {
 		return generation.Service{}, false, fmt.Errorf("请先在主控 SaaS 的 API 配置中启用支持模型 %s 的上游渠道", firstNonEmpty([]string{model, "gpt-image-2"}))
 	}
@@ -1044,6 +1047,30 @@ func (a api) generationServiceForConfiguredModel(model string) (generation.Servi
 		return generation.Service{}, false, err
 	}
 	return service, true, nil
+}
+
+func selectAPIChannelForConfiguredModel(data adminPlatformData, model string) (adminAPIChannel, bool, error) {
+	channels := configuredGenerationChannels(data)
+	for _, configuredModel := range data.AIModels {
+		if !strings.EqualFold(strings.TrimSpace(configuredModel.ModelName), strings.TrimSpace(model)) || strings.TrimSpace(configuredModel.ChannelID) == "" {
+			continue
+		}
+		for _, channel := range channels {
+			if channel.ID != configuredModel.ChannelID {
+				continue
+			}
+			if !apiChannelUsableForGeneration(channel) {
+				return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s is not enabled", model, channel.Name)
+			}
+			if !apiChannelSupportsModel(channel, model) {
+				return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s does not support this model", model, channel.Name)
+			}
+			return channel, true, nil
+		}
+		return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s was not found", model, configuredModel.ChannelID)
+	}
+	channel, ok := selectAPIChannelForModel(channels, model)
+	return channel, ok, nil
 }
 
 func (a api) generationServiceForProvider(providerID string, req generation.CreateRequest) (generation.Service, error) {

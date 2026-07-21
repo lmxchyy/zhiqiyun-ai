@@ -10318,6 +10318,7 @@ async function editAIModel(row: AdminRecord) {
     modelName: aiText(row, "model_name", "modelName"),
     modelType: aiText(row, "model_type", "modelType") || "image",
     provider: aiText(row, "provider") || "NewAPI",
+    channelId: aiText(row, "channel_id", "channelId"),
     moduleCode: aiText(row, "module_code", "moduleCode") || "image_generation",
     capabilityCode: aiList(row, "capability_code", "capabilityCode").join(","),
     fallbackModel: aiText(row, "fallback_model", "fallbackModel"),
@@ -10359,6 +10360,31 @@ async function editAIModel(row: AdminRecord) {
       }
     }, options.map((option) => h("option", { value: option.value }, option.label)))
   ]);
+  if (!form.channelId && form.modelName) {
+    const matchedChannel = aiChannels.value.find(channel => aiList(channel, "models").some(modelName => modelName.toLowerCase() === form.modelName.toLowerCase()));
+    if (matchedChannel) form.channelId = String(matchedChannel.id || "");
+  }
+  const channelOptions = [
+    { label: "自动匹配（按通道优先级）", value: "", disabled: false },
+    ...aiChannels.value.map(channel => ({
+      label: `${String(channel.name || channel.id)} · ${statusLabel(channel.status)}`,
+      value: String(channel.id || ""),
+      disabled: !["ACTIVE", "ENABLED", "CONFIGURABLE"].includes(String(channel.status || "").toUpperCase())
+    })).filter(option => option.value)
+  ];
+  const channelSelect = () => h("label", { class: "channel-dialog-field" }, [
+    h("span", null, "上游供应商"),
+    h("select", {
+      class: "channel-dialog-input",
+      value: form.channelId,
+      onChange: (event: Event) => {
+        form.channelId = (event.target as HTMLSelectElement).value;
+        const channel = aiChannels.value.find(item => String(item.id || "") === form.channelId);
+        form.provider = channel ? String(channel.name || channel.id) : (form.modelName.startsWith("mock-") ? "Local" : "Auto");
+      }
+    }, channelOptions.map(option => h("option", { value: option.value, disabled: option.disabled }, option.label))),
+    h("small", { class: "channel-dialog-help" }, form.channelId ? "新任务将优先使用该通道；请确保通道模型列表包含当前模型名。" : "不指定时，按支持该模型的启用通道和优先级自动选择。")
+  ]);
   await ElMessageBox({
     title: isCreate ? "新增模型" : "编辑模型",
     message: h("div", { class: "channel-dialog-form" }, [
@@ -10369,7 +10395,7 @@ async function editAIModel(row: AdminRecord) {
         { label: "text", value: "text" },
         { label: "multimodal", value: "multimodal" }
       ]),
-      field("上游/供应商", "provider", "例如 NewAPI / OpenAI / Local"),
+      channelSelect(),
       select("所属模块", "moduleCode", [
         { label: "图片生成", value: "image_generation" },
         { label: "视频生成", value: "video_generation" },
@@ -10426,12 +10452,18 @@ async function editAIModel(row: AdminRecord) {
         ElMessage.error("排序权重必须是大于 0 的数字");
         return;
       }
+      const selectedChannel = aiChannels.value.find(channel => String(channel.id || "") === form.channelId);
+      if (selectedChannel && !aiList(selectedChannel, "models").some(item => item.toLowerCase() === modelName.toLowerCase())) {
+        ElMessage.error(`上游通道“${String(selectedChannel.name || selectedChannel.id)}”尚未配置模型 ${modelName}`);
+        return;
+      }
       instance.confirmButtonLoading = true;
       try {
         const payload = {
           model_name: modelName,
           model_type: form.modelType.trim(),
           provider: form.provider.trim(),
+          channel_id: form.channelId.trim(),
           module_code: form.moduleCode.trim(),
           capability_code: uniqueNonEmptyStrings(form.capabilityCode.split(/[,，]/)),
           fallback_model: form.fallbackModel.trim(),
