@@ -2072,6 +2072,14 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 }
 
 func commerceContextForOrderTx(ctx context.Context, tx *sql.Tx, order adminOrder, plan adminPlan) (commissionOrderContext, error) {
+	if order.CommissionSnapshotCaptured {
+		return commissionOrderContext{
+			OrderID: order.ID, OrderType: orderTypeForCommerceOrder(planBusinessType(plan), order.DirectAgentID != "", order.ParentAgentID),
+			PlanType: planBusinessType(plan), AmountCents: orderAmount(order), BuyerUserID: order.UserID,
+			DirectAgentID: order.DirectAgentID, ParentAgentID: order.ParentAgentID, OperationCenterID: order.OperationCenterID,
+			TokenGrantAmount: planTokenGrantAmount(plan), TokenGrantValueCents: planTokenRightsValueCents(plan),
+		}, nil
+	}
 	direct, hasDirect, err := directActiveAgentForUserTx(ctx, tx, order.UserID)
 	if err != nil {
 		return commissionOrderContext{}, err
@@ -5679,8 +5687,10 @@ func ensureAgentForUserTx(ctx context.Context, tx *sql.Tx, user adminUser, order
 			CreatedAt: now,
 		}
 	}
-	item.ParentID = order.DirectAgentID
-	item.OperationCenterID = order.OperationCenterID
+	if !exists {
+		item.ParentID = order.DirectAgentID
+		item.OperationCenterID = order.OperationCenterID
+	}
 	item.Status = "ACTIVE"
 	if item.Level <= 0 {
 		item.Level = 2

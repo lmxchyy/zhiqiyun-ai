@@ -18,7 +18,7 @@
       </button>
     </view>
 
-    <view class="profile-v55-role-card">
+    <view :class="['profile-v55-role-card', { compact: hideCommerceSummary }]">
       <button class="profile-v55-role-main" type="button" hover-class="profile-v55-pressed" @click="isGuest ? $emit('service', 'login') : $emit('edit')">
         <RemoteCover
           class="profile-v55-avatar"
@@ -36,24 +36,26 @@
         <view class="profile-v55-role-copy">
           <text class="profile-v55-name">{{ displayName }}</text>
           <text class="profile-v55-meta">{{ roleMeta }}</text>
-          <text class="profile-v55-points">{{ isGuest ? '--' : formatNumber(pointBalance) }} 点</text>
+          <text v-if="!hideCommerceSummary" class="profile-v55-points">{{ isGuest ? '--' : formatNumber(pointBalance) }} 点</text>
         </view>
       </button>
-      <button v-if="!hideAgentCenter"
+      <button v-if="!hideAgentCenter && !hideCommerceSummary"
         class="profile-v55-primary-cta"
         type="button"
         hover-class="profile-v55-pressed"
         @click="handleAgentCta()"
       >
-        {{ hasAgentRole ? "代理商工作台" : "升级代理商" }}
+        {{ hasAgentRole ? "代理商工作台" : "成为代理商" }}
       </button>
     </view>
 
-    <view v-if="!hideRecharge" class="profile-v55-section-head">
+    <slot name="commerce" />
+
+    <view v-if="!hideRecharge && !hideCommerceSummary" class="profile-v55-section-head">
       <text class="profile-v55-section-title">我的 AI</text>
       <button type="button" class="profile-v55-section-link" @click="$emit('service', 'membership')">升级套餐 ›</button>
     </view>
-    <view v-if="!hideRecharge" class="profile-v55-capability-grid">
+    <view v-if="!hideRecharge && !hideCommerceSummary" class="profile-v55-capability-grid">
       <button
         v-for="item in aiCapabilities"
         :key="item.id"
@@ -67,11 +69,11 @@
       </button>
     </view>
 
-    <view v-if="!hideWallet" class="profile-v55-section-head">
+    <view v-if="!hideWallet && !hideCommerceSummary" class="profile-v55-section-head">
       <text class="profile-v55-section-title">钱包摘要</text>
       <button type="button" class="profile-v55-section-link" @click="$emit('service', 'wallet')">钱包中心 ›</button>
     </view>
-    <view v-if="!hideWallet" class="profile-v55-wallet-card">
+    <view v-if="!hideWallet && !hideCommerceSummary" class="profile-v55-wallet-card">
       <button class="profile-v55-wallet-main" type="button" hover-class="profile-v55-pressed" @click="$emit('service', 'wallet')">
         <text class="profile-v55-wallet-label">点数余额</text>
         <text class="profile-v55-wallet-value">{{ isGuest ? '--' : formatNumber(pointBalance) }}</text>
@@ -184,8 +186,8 @@ import { computed } from "vue";
 import RemoteCover from "../RemoteCover.vue";
 import { RoleMenuConfig, roleLabels } from "../../config/permissions";
 import type { AppRole } from "../../types";
+import { useAuthStore } from "../../stores/auth";
 import { useUserStore } from "../../stores/user";
-import { authStorage } from "../../api/client";
 import { reviewModeHides } from "../../features/reviewMode";
 
 const props = withDefaults(
@@ -208,6 +210,7 @@ const props = withDefaults(
     avatarUrl?: string;
     avatarFallback?: string;
     isGuest?: boolean;
+		hideCommerceSummary?: boolean;
   }>(),
   {
     displayName: "当前用户",
@@ -218,6 +221,7 @@ const props = withDefaults(
     avatarUrl: "",
     avatarFallback: "",
     isGuest: false,
+		hideCommerceSummary: false,
     companyName: "企业信息待完善",
     planName: "",
     subscriptionExpiresAt: "",
@@ -240,6 +244,7 @@ const emit = defineEmits<{
   "role-change": [role: AppRole];
 }>();
 
+const authStore = useAuthStore();
 const userStore = useUserStore();
 
 async function handleRoleSwitch(role: AppRole) {
@@ -283,8 +288,7 @@ function handleLogout() {
     confirmColor: "#D64545",
     success: result => {
       if (!result.confirm) return;
-      authStorage.clear();
-      userStore.reset();
+      authStore.logout();
       uni.removeStorageSync("xianzhiMiniProgramAuth");
       uni.switchTab({ url: "/pages/user/UserHomePage" });
     },
@@ -453,6 +457,11 @@ const logoutLabel = "\u9000\u51fa\u767b\u5f55";
   box-shadow: 0 10px 28px rgba(56, 63, 92, .06);
 }
 
+.profile-v55-role-card.compact {
+  min-height: 0;
+  padding: 16px;
+}
+
 .profile-v55-role-card::before {
   position: absolute;
   top: -54px;
@@ -475,6 +484,12 @@ const logoutLabel = "\u9000\u51fa\u767b\u5f55";
   color: inherit;
   background: transparent;
   text-align: left;
+}
+
+.profile-v55-role-card.compact .profile-v55-role-main {
+  width: 100%;
+  min-height: 54px;
+  align-items: center;
 }
 
 .profile-v55-avatar { flex: 0 0 54px; width: 54px !important; height: 54px !important; }

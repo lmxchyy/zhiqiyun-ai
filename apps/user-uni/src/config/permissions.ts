@@ -72,8 +72,6 @@ export const RoleMenuConfig: Record<AppRole, readonly RoleMenuItem[]> = {
     { id: "assets", label: "作品", permission: "assets:view" },
     { id: "projects", label: "项目", permission: "project:view" },
     { id: "wallet", label: "钱包", permission: "wallet:view" },
-    { id: "settings", label: "设置", permission: "settings:view" },
-    { id: "upgrade-agent", label: "升级代理商", primary: true },
   ],
   AGENT: [
     { id: "agent-promotion", label: "推广中心", permission: "agent:promotion", primary: true },

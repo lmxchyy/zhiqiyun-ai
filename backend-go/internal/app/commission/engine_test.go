@@ -41,6 +41,32 @@ func TestEngineCalculates996CashSplitWithoutTokenRights(t *testing.T) {
 	}
 }
 
+func TestEngineAppliesExplicitlySelectedCommissionTemplateAcrossProducts(t *testing.T) {
+	for _, productType := range []string{"MEMBER_PACKAGE", "AGENT_JOIN_PACKAGE"} {
+		t.Run(productType, func(t *testing.T) {
+			input := baseEngineInput()
+			input.ProductType = productType
+			input.ProductID = "product-for-" + productType
+			input.Rules = []CommissionRule{
+				activeRule("agent", BeneficiaryAgent, CalculationFixedAmount, 10, 30_000, 0, 1),
+				activeRule("operation", BeneficiaryOperationCenter, CalculationFixedAmount, 20, 20_000, 0, 1),
+				activeRule("platform", BeneficiaryPlatform, CalculationRemainderToPlatform, 1000, 0, 0, 0),
+			}
+			for index := range input.Rules {
+				input.Rules[index].ProductType = "COMMISSION_TEMPLATE"
+				input.Rules[index].ProductID = "COMMISSION_996_STANDARD"
+			}
+			result, err := NewEngine().Calculate(input)
+			if err != nil {
+				t.Fatalf("calculate template: %v", err)
+			}
+			if len(result.Records) != 3 || result.PlatformIncomeCents != 49_600 {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
+	}
+}
+
 func TestEngineMissingRelationshipsMoveCashToPlatform(t *testing.T) {
 	tests := []struct {
 		name          string

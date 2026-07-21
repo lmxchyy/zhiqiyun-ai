@@ -65,7 +65,7 @@ export const miniProgramPptPages = {
 
 export const miniProgramMinePages: Record<MineView, string> = {
   overview: "/pages/user/UserMinePage",
-  "agent-upgrade": "/pages/user/UserAgentUpgradePage",
+  "agent-upgrade": "/pages/user/UserAgentDetailPage",
   "recharge-history": "/pages/user/UserRechargeHistoryPage",
   "usage-details": "/pages/user/UserUsageDetailsPage",
   "role-permissions": "/pages/user/UserRolePermissionsPage",
@@ -87,6 +87,9 @@ export const miniProgramFeaturePages = {
   userOrders: "/pages/user/UserOrdersPage",
   userOrderDetail: "/pages/user/UserOrderDetailPage",
   userOrderConfirm: "/pages/user/UserOrderConfirmPage",
+  userCommerceOrderConfirm: "/pages/user/UserCommerceOrderConfirmPage",
+  userMembershipDetail: "/pages/user/UserMembershipDetailPage",
+  userAgentDetail: "/pages/user/UserAgentDetailPage",
   userOrderResult: "/pages/user/UserOrderResultPage",
   userRefundRequest: "/pages/user/UserRefundRequestPage",
   userInvoices: "/pages/user/UserInvoicesPage",

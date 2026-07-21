@@ -86,4 +86,21 @@ func TestCommissionEnginePersists996RecordsIdempotently(t *testing.T) {
 	if count != 3 || total != 99600 || platform != 49600 {
 		t.Fatalf("persisted records count=%d total=%d platform=%d", count, total, platform)
 	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := reverseCommissionRecordsForOrderTx(ctx, tx, orderID, orderNo, paidAt.Add(time.Hour)); err != nil {
+			t.Fatalf("reverse pending commission: %v", err)
+		}
+	}
+	var cancelled int
+	var reversals int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE record_type='EARNING' AND status='CANCELLED'),
+		       count(*) FILTER (WHERE record_type='REVERSAL')
+		FROM xz_commission_records WHERE order_id=$1
+	`, orderID).Scan(&cancelled, &reversals); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled != 3 || reversals != 0 {
+		t.Fatalf("pending refund cancellation mismatch: cancelled=%d reversals=%d", cancelled, reversals)
+	}
 }

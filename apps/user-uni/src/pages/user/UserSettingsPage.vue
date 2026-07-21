@@ -156,11 +156,13 @@ import { computed, reactive, ref } from "vue";
 import { onShow } from "@dcloudio/uni-app";
 import { authStorage } from "../../api/client";
 import { loginAPI } from "../../features/auth/api";
+import { useAuthStore } from "../../stores/auth";
 import type { AccountSecurityResponse } from "../../features/auth/types";
 import { backOrHome } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 
 const changing = ref(false);
+const authStore = useAuthStore();
 const loggingOut = ref(false);
 const loggingOutAll = ref(false);
 const smsSending = ref(false);
@@ -297,7 +299,7 @@ async function loadSecurity() {
 }
 
 function clearLocalAuthAndReturnLogin() {
-  authStorage.clear();
+  authStore.logout();
   uni.removeStorageSync("xianzhiMiniProgramAuth");
   uni.switchTab({ url: "/pages/user/UserHomePage" });
 }

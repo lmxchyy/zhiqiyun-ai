@@ -54,6 +54,8 @@ type Config struct {
 	WeChatPayPlatformPath        string
 	AlipayPublicKey              string
 	AlipayPublicKeyPath          string
+	AndroidPaymentCapability     string
+	AndroidPaymentChannel        string
 	WeChatVirtualPayEnabled      bool
 	WeChatVirtualPayEnv          string
 	WeChatVirtualPayOfferID      string
@@ -191,6 +193,8 @@ func Load() Config {
 		WeChatPayPlatformPath:        firstNonEmptyEnv("WECHAT_PAY_PLATFORM_CERT_PATH", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH"),
 		AlipayPublicKey:              firstNonEmptyEnv("ALIPAY_PUBLIC_KEY_PEM", "ALIPAY_CALLBACK_SECRET"),
 		AlipayPublicKeyPath:          os.Getenv("ALIPAY_PUBLIC_KEY_PATH"),
+		AndroidPaymentCapability:     firstNonEmptyEnv("ANDROID_PAYMENT_CAPABILITY"),
+		AndroidPaymentChannel:        firstNonEmptyEnv("ANDROID_PAYMENT_CHANNEL"),
 		WeChatVirtualPayEnabled:      boolEnv(os.Getenv("WECHAT_VIRTUAL_PAY_ENABLED")),
 		WeChatVirtualPayEnv:          os.Getenv("WECHAT_VIRTUAL_PAY_ENV"),
 		WeChatVirtualPayOfferID:      os.Getenv("WECHAT_VIRTUAL_PAY_OFFER_ID"),

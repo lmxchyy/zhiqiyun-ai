@@ -45,6 +45,14 @@ func NewService(db *sql.DB, providers []PaymentProvider, commission CommissionHo
 
 func (s *Service) Ready() bool { return s != nil && s.db != nil }
 
+func (s *Service) HasProvider(name string) bool {
+	if !s.Ready() {
+		return false
+	}
+	_, ok := s.providers[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+
+}
 func (s *Service) CreateOrder(ctx context.Context, input CreateOrderInput) (CreateOrderResult, error) {
 	if !s.Ready() {
 		return CreateOrderResult{}, errors.New("payment database is unavailable")

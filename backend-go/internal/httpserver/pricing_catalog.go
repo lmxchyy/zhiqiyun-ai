@@ -52,8 +52,8 @@ func canonicalSubscriptionPlans() []adminPlan {
 			Entitlements: map[string]any{"planType": "subscription", "billingCycle": "custom", "audience": "企业客户、代理商", "validityText": "定制", "displayPrice": "定制", "customPrice": true, "customPoints": true, "monthlyPoints": "custom", "newapiGroup": "enterprise_group", "sort": 50},
 		},
 		{
-			ID: "plan_ai_creator_996", Code: "ai_creator_996", Name: "996 AI 创作会员包", PlanType: planTypeMemberPackage, PriceCents: 99600, Points: 40000, GrantPoints: 40000, TokenAmount: 40000, MemberLevel: memberLevelPro, DurationDays: 365, Concurrency: 8, Active: true,
-			Entitlements: map[string]any{"planType": planTypeMemberPackage, "productType": "TOKEN_UPGRADE", "displayPrice": "996 元", "tokenRightsValueCents": 40000, "tokenGrantAmount": 40000, "memberLevel": memberLevelPro, "newapiGroup": "pro_group", "businessDescription": "获得 400 元 AI 点数 / Token，不包含代理商资格", "sort": 1},
+			ID: "plan_ai_creator_996", Code: "ai_creator_996", Name: "知启云AI Pro年度会员", PlanType: planTypeMemberPackage, PriceCents: 99600, Points: 40000, GrantPoints: 40000, TokenAmount: 40000, MemberLevel: memberLevelPro, DurationDays: 365, Concurrency: 8, Active: true,
+			Entitlements: map[string]any{"planType": planTypeMemberPackage, "productType": "MEMBERSHIP", "commissionTemplateCode": "COMMISSION_996_STANDARD", "displayPrice": "996 元/年", "tokenRightsValueCents": 40000, "tokenGrantAmount": 40000, "memberLevel": memberLevelPro, "newapiGroup": "pro_group", "businessDescription": "到账40000点并开通Pro会员365天", "sort": 1},
 		},
 	}
 }
@@ -98,8 +98,8 @@ func canonicalRechargePackages() []adminPlan {
 func canonicalIdentityPlans() []adminPlan {
 	return []adminPlan{
 		{
-			ID: "plan_agent_join_996", Code: "agent_join_996", Name: "996 代理商开通包", PlanType: planTypeAgentJoinPackage, PriceCents: 99600, Points: 20000, GrantPoints: 20000, TokenAmount: 20000, AgentLevel: "AGENT", DurationDays: 365, Concurrency: 0, Active: true,
-			Entitlements: map[string]any{"planType": planTypeAgentJoinPackage, "productType": "TOKEN_UPGRADE", "displayPrice": "996 元", "tokenRightsValueCents": 20000, "tokenGrantAmount": 20000, "opensAgent": true, "agentLevel": "AGENT", "businessDescription": "开通代理商身份，并获得 200 元 AI 点数 / Token", "sort": 2},
+			ID: "plan_agent_join_996", Code: "agent_join_996", Name: "知启云AI官方代理商", PlanType: planTypeAgentJoinPackage, PriceCents: 99600, Points: 20000, GrantPoints: 20000, TokenAmount: 20000, AgentLevel: "AGENT", DurationDays: 0, Concurrency: 0, Active: true,
+			Entitlements: map[string]any{"planType": planTypeAgentJoinPackage, "productType": "IDENTITY", "commissionTemplateCode": "COMMISSION_996_STANDARD", "displayPrice": "996 元", "tokenRightsValueCents": 20000, "tokenGrantAmount": 20000, "opensAgent": true, "agentLevel": "AGENT", "businessDescription": "到账20000点并开通代理商身份、推广和返佣权限", "sort": 2},
 		},
 		{
 			ID: "plan_operation_center_5000", Code: "operation_center_5000", Name: "5000 运营中心开通包", PlanType: planTypeOperationCenterPackage, PriceCents: 500000, Points: 0, GrantPoints: 0, TokenAmount: 0, DurationDays: 365, Concurrency: 0, Active: true,

@@ -235,7 +235,7 @@ func (s *virtualPaymentService) grantOrderEntitlementsTx(ctx context.Context, tx
 		return fmt.Errorf("%w: immutable entitlement snapshot mismatch", errVirtualPaymentMismatch)
 	}
 	switch strings.ToUpper(strings.TrimSpace(order.Snapshot.ProductType)) {
-	case "TOKEN_ONLY", "TOKEN_UPGRADE":
+	case "TOKEN_ONLY", "TOKEN_UPGRADE", "MEMBERSHIP", "IDENTITY":
 		if order.Snapshot.CreditUnits <= 0 {
 			return errors.New("token entitlement snapshot is invalid")
 		}
@@ -297,6 +297,12 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 	if productType == "TOKEN_UPGRADE" && planType != planTypeMemberPackage && planType != planTypeAgentJoinPackage {
 		return fmt.Errorf("%w: TOKEN_UPGRADE plan type is invalid", errVirtualPaymentMismatch)
 	}
+	if productType == "MEMBERSHIP" && planType != planTypeMemberPackage {
+		return fmt.Errorf("%w: MEMBERSHIP must use a member package", errVirtualPaymentMismatch)
+	}
+	if productType == "IDENTITY" && planType != planTypeAgentJoinPackage {
+		return fmt.Errorf("%w: IDENTITY must use an agent join package", errVirtualPaymentMismatch)
+	}
 	quantity := order.Snapshot.BuyQuantity
 	if quantity <= 0 {
 		quantity = 1
@@ -337,26 +343,32 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 		paidAt = time.Now().UTC()
 	}
 	priceSnapshot := map[string]any{
-		"productCode":      order.Snapshot.ProductCode,
-		"productName":      order.Snapshot.ProductName,
-		"productType":      productType,
-		"planType":         planType,
-		"amountCents":      order.Snapshot.AmountCents,
-		"memberLevel":      order.Snapshot.MemberLevel,
-		"agentLevel":       order.Snapshot.AgentLevel,
-		"durationDays":     order.Snapshot.MemberDays,
-		"creditUnits":      order.Snapshot.CreditUnits,
-		"buyQuantity":      quantity,
-		"unitPriceCents":   unitPrice,
-		"unitCreditUnits":  unitTokens,
-		"tokenGrantAmount": order.Snapshot.CreditUnits,
-		"tokenAmount":      order.Snapshot.CreditUnits,
-		"offerId":          order.Snapshot.OfferID,
-		"wechatProductId":  order.Snapshot.WeChatProductID,
-		"mode":             order.Snapshot.Mode,
-		"env":              order.Snapshot.Env,
-		"nonWithdrawable":  true,
-		"nonTransferable":  true,
+		"productCode":                order.Snapshot.ProductCode,
+		"productName":                order.Snapshot.ProductName,
+		"productType":                productType,
+		"planType":                   planType,
+		"amountCents":                order.Snapshot.AmountCents,
+		"memberLevel":                order.Snapshot.MemberLevel,
+		"agentLevel":                 order.Snapshot.AgentLevel,
+		"durationDays":               order.Snapshot.MemberDays,
+		"creditUnits":                order.Snapshot.CreditUnits,
+		"buyQuantity":                quantity,
+		"unitPriceCents":             unitPrice,
+		"unitCreditUnits":            unitTokens,
+		"tokenGrantAmount":           order.Snapshot.CreditUnits,
+		"tokenAmount":                order.Snapshot.CreditUnits,
+		"offerId":                    order.Snapshot.OfferID,
+		"wechatProductId":            order.Snapshot.WeChatProductID,
+		"mode":                       order.Snapshot.Mode,
+		"env":                        order.Snapshot.Env,
+		"nonWithdrawable":            true,
+		"nonTransferable":            true,
+		"commissionTemplateCode":     order.Snapshot.CommissionTemplateCode,
+		"commissionSnapshotCaptured": order.Snapshot.CommissionSnapshotCaptured,
+		"directAgentId":              order.Snapshot.DirectAgentID,
+		"parentAgentId":              order.Snapshot.ParentAgentID,
+		"operationCenterId":          order.Snapshot.OperationCenterID,
+		"commissionRules":            order.Snapshot.CommissionRules,
 	}
 	if planType == planTypeTokenRecharge {
 		priceSnapshot["orderType"] = "COMPUTE_RECHARGE"
@@ -368,6 +380,11 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 		TokenGrantAmount: int(order.Snapshot.CreditUnits), TokenAmount: int(order.Snapshot.CreditUnits),
 		Status: virtualOrderPaid, PaidAt: paidAt.Format(time.RFC3339Nano), CreatedAt: paidAt.Format(time.RFC3339Nano),
 		PriceSnapshot: priceSnapshot,
+		DirectAgentID: order.Snapshot.DirectAgentID, ParentAgentID: order.Snapshot.ParentAgentID,
+		OperationCenterID:          order.Snapshot.OperationCenterID,
+		CommissionTemplateCode:     order.Snapshot.CommissionTemplateCode,
+		CommissionSnapshotCaptured: order.Snapshot.CommissionSnapshotCaptured,
+		CommissionRuleSnapshot:     append([]commissionRuleSnapshot(nil), order.Snapshot.CommissionRules...),
 	}
 	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &commerceOrder); err != nil {
 		return err
@@ -762,11 +779,14 @@ func (s *virtualPaymentService) recordRefundNotification(ctx context.Context, no
 		if err != nil {
 			return err
 		}
+		if err := reverseCommissionRecordsForOrderTx(ctx, tx, order.ID, order.OrderNo, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	if err := markCommercialOrderRefundedTx(ctx, tx, order, refundID, notification.AmountCents, notification.ResultCode == 0); err != nil {
 		return err
 	}
-	processMessage := "manual entitlement reversal required"
+	processMessage := "commission cancelled or reversed; entitlement reversal requires review"
 	if notification.ResultCode != 0 {
 		processMessage = firstNonEmptyString(notification.ResultMessage, "wechat refund failed")
 	}

@@ -128,3 +128,44 @@ func hasGinRoute(t *testing.T, engine *gin.Engine, method, path string) bool {
 	}
 	return false
 }
+
+func TestAndroidPaymentCapabilityDefaultsToPreparing(t *testing.T) {
+	api := paymentCenterAPI{cfg: config.Config{}}
+	result := api.paymentCapabilityFor("android")
+	if result.Platform != "app-android" || result.PaymentCapability != "preparing" || result.PaymentStatus != "PREPARING" || result.Enabled {
+		t.Fatalf("unexpected Android capability: %#v", result)
+	}
+}
+
+func TestAndroidPaymentCapabilityRequiresConfiguredProvider(t *testing.T) {
+	api := paymentCenterAPI{cfg: config.Config{
+		AndroidPaymentCapability: "available",
+		AndroidPaymentChannel:    "wechat_app",
+	}}
+	result := api.paymentCapabilityFor("app-android")
+	if result.PaymentCapability != "preparing" || result.Enabled {
+		t.Fatalf("missing provider must keep capability preparing: %#v", result)
+	}
+}
+
+func TestAndroidPaymentCapabilityBecomesAvailableWithProvider(t *testing.T) {
+	mock := paymentapp.NewMockPaymentProvider("test")
+	api := paymentCenterAPI{
+		cfg: config.Config{
+			AndroidPaymentCapability: "available",
+			AndroidPaymentChannel:    "mock",
+		},
+		service: paymentapp.NewService(&sql.DB{}, []paymentapp.PaymentProvider{mock}, nil),
+	}
+	result := api.paymentCapabilityFor("app-android")
+	if result.PaymentCapability != "available" || result.PaymentStatus != "READY" || !result.Enabled {
+		t.Fatalf("configured provider should enable capability: %#v", result)
+	}
+}
+
+func TestPreparingAndroidPaymentCannotCreateOrder(t *testing.T) {
+	api := paymentCenterAPI{cfg: config.Config{Environment: "production", AndroidPaymentCapability: "preparing"}}
+	if api.orderCreationAllowed("app-android", "wechat_app") {
+		t.Fatal("preparing Android capability must reject order creation")
+	}
+}

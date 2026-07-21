@@ -1168,7 +1168,7 @@ Page({
       .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
       .map(([key, value]) => encodeURIComponent(key) + "=" + encodeURIComponent(String(value)))
       .join("&");
-    wx.reLaunch({
+    wx.redirectTo({
       url: "/pages/${loginFormPageName}" + (query ? "?" + query : ""),
       fail: () => {
         this.entering = false;
@@ -1993,7 +1993,7 @@ for (const moduleName of ["api.js", "availability.js", "platform.js"]) {
     (source) => source.replace(/require\("\.\.\/\.\.\//g, 'require("../../../../')
   );
 }
-for (const pageName of ["UserOrderConfirmPage.js", "UserRechargePlansPage.js", "UserVirtualPaymentPage.js"]) {
+for (const pageName of ["UserOrderConfirmPage.js", "UserVirtualPaymentPage.js", "UserCommerceOrderConfirmPage.js"]) {
   const pagePath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-account", pageName));
   const original = fs.readFileSync(pagePath, "utf8");
   const updated = original
@@ -2003,6 +2003,34 @@ for (const pageName of ["UserOrderConfirmPage.js", "UserRechargePlansPage.js", "
     throw new Error(`Payment subpackage module reference was not rewritten: ${pageName}`);
   }
   fs.writeFileSync(pagePath, updated);
+}
+
+for (const extension of ["js", "json", "wxml", "wxss"]) {
+  relocateGeneratedModule(
+    `components/commerce/UserCommerceProductDetail.${extension}`,
+    `pages/user-account/components/commerce/UserCommerceProductDetail.${extension}`,
+    extension === "js"
+      ? (source) => source
+          .replace(/require\("\.\.\/\.\.\//g, 'require("../../../../')
+          .replace('require("../../../../features/payment/', 'require("../../features/payment/')
+      : undefined
+  );
+}
+for (const pageName of ["UserMembershipDetailPage", "UserAgentDetailPage"]) {
+  const pageJsPath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-account", `${pageName}.js`));
+  const pageJsonPath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-account", `${pageName}.json`));
+  const originalJs = fs.readFileSync(pageJsPath, "utf8");
+  const updatedJs = originalJs
+    .split('"../../components/commerce/UserCommerceProductDetail.js"')
+    .join('"./components/commerce/UserCommerceProductDetail.js"');
+  if (updatedJs === originalJs) throw new Error(`Commerce detail component JS reference was not rewritten: ${pageName}`);
+  fs.writeFileSync(pageJsPath, updatedJs);
+  const originalJson = fs.readFileSync(pageJsonPath, "utf8");
+  const updatedJson = originalJson
+    .split('"../../components/commerce/UserCommerceProductDetail"')
+    .join('"./components/commerce/UserCommerceProductDetail"');
+  if (updatedJson === originalJson) throw new Error(`Commerce detail component JSON reference was not rewritten: ${pageName}`);
+  fs.writeFileSync(pageJsonPath, updatedJson);
 }
 
 rewriteGeneratedUserRoutes(outputRoot);

@@ -41,6 +41,30 @@ func TestVirtualPaymentSignDataJSONIsStable(t *testing.T) {
 	}
 }
 
+func TestPointRechargeRequiresActiveMemberOrAgent(t *testing.T) {
+	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		memberLevel string
+		agentStatus string
+		expiresAt   string
+		want        bool
+	}{
+		{name: "free user", memberLevel: "FREE", want: false},
+		{name: "active member", memberLevel: "PRO", expiresAt: now.Add(24 * time.Hour).Format(time.RFC3339Nano), want: true},
+		{name: "expired member", memberLevel: "PRO", expiresAt: now.Add(-time.Second).Format(time.RFC3339Nano), want: false},
+		{name: "active agent", memberLevel: "FREE", agentStatus: "ACTIVE", want: true},
+		{name: "inactive agent", memberLevel: "FREE", agentStatus: "NONE", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := pointRechargeIdentityEligible(test.memberLevel, test.agentStatus, test.expiresAt, now); got != test.want {
+				t.Fatalf("eligibility = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestVerifyWeChatNotifySignature(t *testing.T) {
 	parts := []string{"notify-token", "1721000000", "nonce-value"}
 	sort.Strings(parts)
@@ -67,13 +91,49 @@ func TestVirtualPaymentConfigSelectsEnvironmentKey(t *testing.T) {
 
 func TestVirtualPaymentSnapshotUsesOnlyServerProduct(t *testing.T) {
 	product := virtualPaymentProduct{
-		Code: "MEMBER_YEAR_996", Name: "知启云AI年度会员", ProductType: "TOKEN_UPGRADE", PlanType: planTypeMemberPackage,
+		Code: "MEMBER_PRO_YEAR_996", Name: "知启云AI Pro年度会员", ProductType: "MEMBERSHIP", PlanType: planTypeMemberPackage,
 		PriceCents: 99600, MemberLevel: "PRO", MemberDays: 365, CreditUnits: 40000,
 		OfferID: "offer", WeChatProductID: "wechat-product", Mode: "short_series_goods", Env: 1,
 	}
 	snapshot := snapshotForVirtualProduct(product)
-	if snapshot.AmountCents != 99600 || snapshot.CreditUnits != 40000 || snapshot.MemberDays != 365 || snapshot.ProductType != "TOKEN_UPGRADE" || snapshot.PlanType != planTypeMemberPackage {
+	if snapshot.AmountCents != 99600 || snapshot.CreditUnits != 40000 || snapshot.MemberDays != 365 || snapshot.ProductType != "MEMBERSHIP" || snapshot.PlanType != planTypeMemberPackage {
 		t.Fatalf("server product was not preserved: %#v", snapshot)
+	}
+}
+
+func TestTwo996ProductsRemainIndependentAndShareCommissionTemplate(t *testing.T) {
+	member, ok := planCatalogByID("plan_ai_creator_996")
+	if !ok {
+		t.Fatal("membership plan is missing")
+	}
+	agent, ok := planCatalogByID("plan_agent_join_996")
+	if !ok {
+		t.Fatal("agent plan is missing")
+	}
+	if member.PriceCents != 99600 || member.GrantPoints != 40000 || member.DurationDays != 365 || member.MemberLevel != "PRO" {
+		t.Fatalf("unexpected membership plan: %+v", member)
+	}
+	if agent.PriceCents != 99600 || agent.GrantPoints != 20000 || agent.DurationDays != 0 || agent.AgentLevel != "AGENT" {
+		t.Fatalf("unexpected agent plan: %+v", agent)
+	}
+	if member.PlanType == agent.PlanType || stringValue(member.Entitlements["productType"]) == stringValue(agent.Entitlements["productType"]) {
+		t.Fatalf("996 products were collapsed: member=%+v agent=%+v", member, agent)
+	}
+	if commissionTemplateCode(member) != "COMMISSION_996_STANDARD" || commissionTemplateCode(agent) != "COMMISSION_996_STANDARD" {
+		t.Fatalf("996 commission template mismatch: member=%s agent=%s", commissionTemplateCode(member), commissionTemplateCode(agent))
+	}
+}
+
+func TestExistingAgentKeepsOriginalReferralWhenIdentityIsFulfilledAgain(t *testing.T) {
+	data := adminPlatformData{ChannelAgents: []adminChannelAgent{{
+		ID: "agent-self", UserID: "user-agent", ParentID: "original-parent", OperationCenterID: "original-center",
+		Status: "ACTIVE", InviteCode: "KEEP-ME",
+	}}}
+	order := adminOrder{ID: "order-agent", UserID: "user-agent", DirectAgentID: "new-parent", OperationCenterID: "new-center", AmountCents: 99600}
+	ensureAgentForUser(&data, adminUser{ID: "user-agent"}, &order, commissionSettlementResult{TokenGrantAmount: 20000}, time.Now().UTC().Format(time.RFC3339Nano))
+	got := data.ChannelAgents[0]
+	if got.ParentID != "original-parent" || got.OperationCenterID != "original-center" || got.InviteCode != "KEEP-ME" {
+		t.Fatalf("existing referral was overwritten: %+v", got)
 	}
 }
 
@@ -155,8 +215,8 @@ func TestVirtualPaymentOneCentProductUsesIntegerCents(t *testing.T) {
 
 func TestValidateVirtualPaymentConfirmationRejectsForgedAmount(t *testing.T) {
 	order := lockedVirtualOrder{
-		OrderNo: "ZQY1", ProductCode: "MEMBER_YEAR_996", AmountCents: 99600, Status: virtualOrderPending,
-		Snapshot: virtualOrderSnapshot{ProductCode: "MEMBER_YEAR_996", AmountCents: 99600},
+		OrderNo: "ZQY1", ProductCode: "MEMBER_PRO_YEAR_996", AmountCents: 99600, Status: virtualOrderPending,
+		Snapshot: virtualOrderSnapshot{ProductCode: "MEMBER_PRO_YEAR_996", AmountCents: 99600},
 	}
 	err := validateVirtualPaymentConfirmation(order, virtualPayNotification{AmountCents: 8000})
 	if !errors.Is(err, errVirtualPaymentMismatch) {

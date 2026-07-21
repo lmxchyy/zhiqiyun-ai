@@ -1,3 +1,4 @@
+import { createUniPlatformAdapter } from '@xianzhi/platform-adapter'
 import type { RequestVirtualPaymentFailure, VirtualPaymentOrderParams } from './types'
 
 interface WeChatVirtualPaymentRuntime {
@@ -62,4 +63,11 @@ export function virtualPaymentError(error: unknown) {
   if (code === -15020 || code === -15021) return { kind: 'rate-limit', message: '操作过快，请稍后再试' }
   const message = error instanceof Error ? error.message : String(item.errMsg || '支付结果未知，请查询订单状态')
   return { kind: 'unknown', message }
+}
+
+export async function requestAppPayment(paymentParams: Record<string, unknown>, paymentChannel: string) {
+  const adapter = createUniPlatformAdapter()
+  if (!adapter.requestPayment) throw new Error('当前客户端不支持支付')
+  const provider = paymentChannel.toLowerCase().includes('alipay') ? 'alipay' : 'wxpay'
+  await adapter.requestPayment({ provider, ...paymentParams })
 }

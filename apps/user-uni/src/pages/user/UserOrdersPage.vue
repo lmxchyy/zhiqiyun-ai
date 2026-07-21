@@ -9,7 +9,7 @@
       <view v-else-if="filtered.length" class="mpb-list">
         <button v-for="item in filtered" :key="orderId(item)" class="mpb-row-button" @click="open(item)"><text :class="['mpb-row-icon', statusTone(orderStatus(item)) === 'success' ? 'green' : statusTone(orderStatus(item)) === 'danger' ? 'orange' : '']">单</text><view class="mpb-row-main"><text class="mpb-row-title">{{ orderTitle(item) }}</text><text class="mpb-row-meta">{{ orderId(item) }} · {{ formatDate(rowString(item, 'createdAt', 'paidAt')) }}</text></view><view class="mpb-row-side"><text class="mpb-amount">{{ formatCurrency(orderAmount(item)) }}</text><text :class="['mpb-status', statusTone(orderStatus(item))]">{{ statusText(orderStatus(item)) }}</text></view></button>
       </view>
-      <view v-else class="mpb-card mpb-empty"><text class="mpb-empty-title">暂无{{ currentLabel }}订单</text><text class="mpb-empty-copy">选择充值方案或升级代理商后，订单会显示在这里。</text></view>
+      <view v-else class="mpb-card mpb-empty"><text class="mpb-empty-title">暂无{{ currentLabel }}订单</text><text class="mpb-empty-copy">选择充值方案或成为代理商后，订单会显示在这里。</text></view>
       <button class="mpb-button orange" @click="goRecharge">继续充值</button>
     </view>
   </view>

@@ -22,6 +22,7 @@ const (
 	CodePaymentMismatch        ErrorCode = "PAYMENT_CONFIRMATION_MISMATCH"
 	CodeDuplicateTransaction   ErrorCode = "PAYMENT_DUPLICATE_TRANSACTION"
 	CodeMockForbidden          ErrorCode = "PAYMENT_MOCK_FORBIDDEN"
+	CodeCapabilityUnavailable  ErrorCode = "PAYMENT_CAPABILITY_UNAVAILABLE"
 	CodeFulfillmentUnsupported ErrorCode = "PAYMENT_FULFILLMENT_UNSUPPORTED"
 	CodeFulfillmentFailed      ErrorCode = "PAYMENT_FULFILLMENT_FAILED"
 )

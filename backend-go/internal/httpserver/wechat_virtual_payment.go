@@ -56,6 +56,7 @@ var (
 	errVirtualProductUnavailable = errors.New("虚拟商品不存在、未上架或未完成微信映射")
 	errVirtualPaymentMismatch    = errors.New("微信支付结果与本地订单不一致")
 	errVirtualQuantityInvalid    = errors.New("自定义充值数量无效")
+	errVirtualRechargeRestricted = errors.New("点数充值仅向有效会员或代理商开放")
 )
 
 type virtualPaymentConfig struct {
@@ -123,27 +124,33 @@ type virtualPaymentProduct struct {
 }
 
 type virtualOrderSnapshot struct {
-	ProductCode        string `json:"productCode"`
-	ProductName        string `json:"productName"`
-	ProductType        string `json:"productType"`
-	PlanType           string `json:"planType"`
-	AmountCents        int64  `json:"amountCents"`
-	MemberLevel        string `json:"memberLevel,omitempty"`
-	AgentLevel         string `json:"agentLevel,omitempty"`
-	MemberDays         int64  `json:"memberDays,omitempty"`
-	CreditUnits        int64  `json:"creditUnits,omitempty"`
-	ImageQuota         int64  `json:"imageQuota,omitempty"`
-	BuyQuantity        int64  `json:"buyQuantity"`
-	UnitPriceCents     int64  `json:"unitPriceCents"`
-	UnitCreditUnits    int64  `json:"unitCreditUnits,omitempty"`
-	CustomQuantity     bool   `json:"customQuantity,omitempty"`
-	OfferID            string `json:"offerId"`
-	WeChatProductID    string `json:"wechatProductId"`
-	Mode               string `json:"mode"`
-	Env                int    `json:"env"`
-	CouponCode         string `json:"couponCode,omitempty"`
-	CouponBenefitType  string `json:"couponBenefitType,omitempty"`
-	CouponBenefitValue int64  `json:"couponBenefitValue,omitempty"`
+	ProductCode                string                   `json:"productCode"`
+	ProductName                string                   `json:"productName"`
+	ProductType                string                   `json:"productType"`
+	PlanType                   string                   `json:"planType"`
+	AmountCents                int64                    `json:"amountCents"`
+	MemberLevel                string                   `json:"memberLevel,omitempty"`
+	AgentLevel                 string                   `json:"agentLevel,omitempty"`
+	MemberDays                 int64                    `json:"memberDays,omitempty"`
+	CreditUnits                int64                    `json:"creditUnits,omitempty"`
+	ImageQuota                 int64                    `json:"imageQuota,omitempty"`
+	BuyQuantity                int64                    `json:"buyQuantity"`
+	UnitPriceCents             int64                    `json:"unitPriceCents"`
+	UnitCreditUnits            int64                    `json:"unitCreditUnits,omitempty"`
+	CustomQuantity             bool                     `json:"customQuantity,omitempty"`
+	OfferID                    string                   `json:"offerId"`
+	WeChatProductID            string                   `json:"wechatProductId"`
+	Mode                       string                   `json:"mode"`
+	Env                        int                      `json:"env"`
+	CouponCode                 string                   `json:"couponCode,omitempty"`
+	CouponBenefitType          string                   `json:"couponBenefitType,omitempty"`
+	CouponBenefitValue         int64                    `json:"couponBenefitValue,omitempty"`
+	CommissionTemplateCode     string                   `json:"commissionTemplateCode,omitempty"`
+	CommissionSnapshotCaptured bool                     `json:"commissionSnapshotCaptured"`
+	DirectAgentID              string                   `json:"directAgentId,omitempty"`
+	ParentAgentID              string                   `json:"parentAgentId,omitempty"`
+	OperationCenterID          string                   `json:"operationCenterId,omitempty"`
+	CommissionRules            []commissionRuleSnapshot `json:"commissionRules"`
 }
 
 type virtualCouponBenefit struct {
@@ -480,7 +487,7 @@ func writeVirtualPaymentError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errUnauthorized):
 		writeError(w, http.StatusUnauthorized, err)
-	case errors.Is(err, errForbidden), errors.Is(err, errVirtualOrderNotFound):
+	case errors.Is(err, errForbidden), errors.Is(err, errVirtualOrderNotFound), errors.Is(err, errVirtualRechargeRestricted):
 		writeError(w, http.StatusForbidden, err)
 	case errors.Is(err, errVirtualPaymentRelogin):
 		writeJSONWithStatus(w, http.StatusUnauthorized, map[string]any{"code": "WECHAT_SESSION_EXPIRED", "error": err.Error()})
@@ -527,6 +534,7 @@ func (s *virtualPaymentService) listProducts(ctx context.Context) ([]virtualPaym
 		from xz_plans plan
 		join xz_wechat_virtual_product_mappings mapping on mapping.plan_id = plan.id and mapping.env = $1
 		where coalesce(plan.payment_product_code, '') <> ''
+		  and ($1 <> 0 or lower(coalesce(plan.entitlements->>'testOnly', plan.raw->>'testOnly', 'false')) <> 'true')
 		order by plan.price_cents, plan.id
 	`, s.cfg.Env)
 	if err != nil {
@@ -555,6 +563,12 @@ func (s *virtualPaymentService) listProducts(ctx context.Context) ([]virtualPaym
 				item.ValidityText = "仅限平台内使用"
 				item.Description = fmt.Sprintf("充值%d Token｜不可提现或转账", item.CreditUnits)
 			}
+		case "IDENTITY":
+			item.ValidityText = "官方代理商商业身份"
+			item.Description = fmt.Sprintf("到账 %d 点，开通代理后台、推广与返佣权限", item.CreditUnits)
+		case "MEMBERSHIP":
+			item.ValidityText = fmt.Sprintf("%d天", item.MemberDays)
+			item.Description = fmt.Sprintf("到账 %d 点，开通或续费 Pro 会员 %s", item.CreditUnits, item.ValidityText)
 		case "TOKEN_UPGRADE":
 			if item.PlanType == planTypeAgentJoinPackage {
 				item.ValidityText = "开通代理商身份"
@@ -682,6 +696,15 @@ func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user 
 	if err != nil {
 		return createVirtualOrderResponse{}, err
 	}
+	if strings.EqualFold(product.ProductType, "TOKEN_ONLY") {
+		eligible, eligibilityErr := s.pointRechargeEligible(ctx, user.ID)
+		if eligibilityErr != nil {
+			return createVirtualOrderResponse{}, eligibilityErr
+		}
+		if !eligible {
+			return createVirtualOrderResponse{}, errVirtualRechargeRestricted
+		}
+	}
 	quantity, err := virtualPurchaseQuantity(product, requestedQuantity)
 	if err != nil {
 		return createVirtualOrderResponse{}, err
@@ -720,18 +743,8 @@ func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user 
 	}
 	paySig := calcVirtualPaySig(requestVirtualPayURI, signDataJSON, s.cfg.AppKey)
 	signature := calcVirtualSignature(signDataJSON, wechatSession.SessionKey)
-	snapshotJSON, err := json.Marshal(snapshot)
-	if err != nil {
-		return createVirtualOrderResponse{}, err
-	}
 	now := time.Now().UTC()
 	expiresAt := now.Add(30 * time.Minute)
-	rawOrder, _ := json.Marshal(map[string]any{
-		"id": orderNo, "orderNo": orderNo, "tenantId": tenantID, "userId": user.ID, "buyerUserId": user.ID,
-		"planId": product.PlanID, "amountCents": snapshot.AmountCents, "status": virtualOrderPending,
-		"paymentMethod": virtualPaymentChannel, "fulfillmentStatus": entitlementPending,
-		"priceSnapshot": snapshot, "createdAt": now.Format(time.RFC3339Nano),
-	})
 	responseAudit, _ := json.Marshal(map[string]any{"mode": product.Mode, "signDataHash": hashSensitiveIdentifier(string(signDataJSON))})
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -739,6 +752,53 @@ func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user 
 		return createVirtualOrderResponse{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	plan, ok := planCatalogByID(product.PlanID)
+	if !ok {
+		return createVirtualOrderResponse{}, fmt.Errorf("virtual commerce plan not found: %s", product.PlanID)
+	}
+	commerceOrder := adminOrder{
+		ID: orderNo, OrderNo: orderNo, TenantID: tenantID, UserID: user.ID, BuyerUserID: user.ID,
+		PlanID: product.PlanID, Amount: int(snapshot.AmountCents), AmountCents: int(snapshot.AmountCents),
+		CreatedAt: now.Format(time.RFC3339Nano), PriceSnapshot: map[string]any{},
+	}
+	commerceCtx, err := commerceContextForOrderTx(ctx, tx, commerceOrder, plan)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	rules, err := loadEffectiveCommissionRulesTx(ctx, tx, tenantID, planBusinessType(plan), plan.ID, commissionTemplateCode(plan), now)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	snapshot.CommissionTemplateCode = commissionTemplateCode(plan)
+	snapshot.CommissionSnapshotCaptured = true
+	snapshot.DirectAgentID = commerceCtx.DirectAgentID
+	snapshot.ParentAgentID = commerceCtx.ParentAgentID
+	snapshot.OperationCenterID = commerceCtx.OperationCenterID
+	snapshot.CommissionRules = snapshotCommissionRules(rules)
+	snapshotJSON, err := json.Marshal(snapshot)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	rewardSnapshot := map[string]any{
+		"commissionTemplateCode":     snapshot.CommissionTemplateCode,
+		"commissionSnapshotCaptured": true,
+		"referral": map[string]any{
+			"directAgentId":     snapshot.DirectAgentID,
+			"parentAgentId":     snapshot.ParentAgentID,
+			"operationCenterId": snapshot.OperationCenterID,
+		},
+		"commissionRules": snapshot.CommissionRules,
+	}
+	rewardJSON, err := json.Marshal(rewardSnapshot)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	rawOrder, _ := json.Marshal(map[string]any{
+		"id": orderNo, "orderNo": orderNo, "tenantId": tenantID, "userId": user.ID, "buyerUserId": user.ID,
+		"planId": product.PlanID, "amountCents": snapshot.AmountCents, "status": virtualOrderPending,
+		"paymentMethod": virtualPaymentChannel, "fulfillmentStatus": entitlementPending,
+		"priceSnapshot": snapshot, "rewardSnapshot": rewardSnapshot, "createdAt": now.Format(time.RFC3339Nano),
+	})
 	_, err = tx.ExecContext(ctx, `
 		insert into xz_orders(
 			id, order_no, tenant_id, user_id, buyer_user_id, plan_id, order_type, business_order_type,
@@ -746,11 +806,11 @@ func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user 
 			product_type, payment_channel, payment_scene, payment_mode, wechat_openid_hash,
 			payment_expires_at, created_at, updated_at, price_snapshot, reward_snapshot, raw
 		) values (
-			$1,$1,$2,$3,$3,$4,'VIRTUAL_PRODUCT','VIRTUAL_PRODUCT',$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,'{}'::jsonb,$19::jsonb
+			$1,$1,$2,$3,$3,$4,'VIRTUAL_PRODUCT','VIRTUAL_PRODUCT',$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,$20::jsonb
 		)
 	`, orderNo, tenantID, user.ID, product.PlanID, snapshot.AmountCents, virtualOrderPending, entitlementPending,
 		product.Code, product.Name, product.ProductType, virtualPaymentChannel, virtualPaymentScene, product.Mode,
-		hashSensitiveIdentifier(wechatSession.OpenID), expiresAt, now.Format(time.RFC3339Nano), now, snapshotJSON, rawOrder)
+		hashSensitiveIdentifier(wechatSession.OpenID), expiresAt, now.Format(time.RFC3339Nano), now, snapshotJSON, rewardJSON, rawOrder)
 	if err != nil {
 		return createVirtualOrderResponse{}, err
 	}
@@ -778,6 +838,40 @@ func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user 
 		OrderNo: orderNo, AmountCent: snapshot.AmountCents, SignData: string(signDataJSON),
 		PaySig: paySig, Signature: signature, Mode: product.Mode,
 	}, nil
+}
+
+func (s *virtualPaymentService) pointRechargeEligible(ctx context.Context, userID string) (bool, error) {
+	var memberLevel string
+	var agentStatus string
+	var expiresAt string
+	if err := s.db.QueryRowContext(ctx, `
+		select coalesce(member_level, raw->>'memberLevel', ''),
+		       coalesce(agent_status, raw->>'agentStatus', ''),
+		       coalesce(subscription_expires_at, '')
+		from xz_users where id = $1
+	`, userID).Scan(&memberLevel, &agentStatus, &expiresAt); err != nil {
+		return false, err
+	}
+	return pointRechargeIdentityEligible(memberLevel, agentStatus, expiresAt, time.Now().UTC()), nil
+}
+
+func pointRechargeIdentityEligible(memberLevel, agentStatus, expiresAt string, now time.Time) bool {
+	if strings.EqualFold(strings.TrimSpace(agentStatus), "ACTIVE") {
+		return true
+	}
+	memberLevel = strings.TrimSpace(memberLevel)
+	if memberLevel == "" || strings.EqualFold(memberLevel, "FREE") {
+		return false
+	}
+	expiresAt = strings.TrimSpace(expiresAt)
+	if expiresAt == "" {
+		return true
+	}
+	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil {
+		return false
+	}
+	return expires.After(now)
 }
 
 func newVirtualBusinessNo(prefix string) string {

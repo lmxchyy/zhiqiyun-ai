@@ -19,6 +19,7 @@ import (
 type paymentCenterAPI struct {
 	service  *paymentapp.Service
 	success  paymentapp.PaymentSuccessHandler
+	cfg      config.Config
 	mock     *paymentapp.MockPaymentProvider
 	db       *sql.DB
 	store    platformStore
@@ -27,7 +28,7 @@ type paymentCenterAPI struct {
 }
 
 func newPaymentCenterAPI(cfg config.Config, store platformStore, sessions authSessionStore, legacy virtualPaymentAPI) paymentCenterAPI {
-	result := paymentCenterAPI{store: store, sessions: sessions, legacy: legacy}
+	result := paymentCenterAPI{cfg: cfg, store: store, sessions: sessions, legacy: legacy}
 	pgStore, ok := store.(*postgresStore)
 	if !ok || pgStore.db == nil {
 		return result
@@ -61,7 +62,7 @@ func unifiedPaymentCommissionHook(ctx context.Context, tx *sql.Tx, order payment
 		return err
 	}
 	rules, err := loadEffectiveCommissionRulesTx(ctx, tx, firstNonEmptyString(order.TenantID, "tenant_default"),
-		planBusinessType(plan), plan.ID, time.Now().UTC())
+		planBusinessType(plan), plan.ID, commissionTemplateCode(plan), time.Now().UTC())
 	if err != nil || len(rules) == 0 {
 		return err
 	}
@@ -71,6 +72,90 @@ func unifiedPaymentCommissionHook(ctx context.Context, tx *sql.Tx, order payment
 
 func (a paymentCenterAPI) available() bool {
 	return a.service != nil && a.service.Ready()
+}
+
+type paymentCapabilityView struct {
+	Platform          string `json:"platform"`
+	PaymentCapability string `json:"paymentCapability"`
+	PaymentStatus     string `json:"paymentStatus"`
+	PaymentChannel    string `json:"paymentChannel,omitempty"`
+	Message           string `json:"message"`
+	Enabled           bool   `json:"enabled"`
+}
+
+func normalizedPaymentPlatform(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "android", "app", "app-plus":
+		return "app-android"
+	case "ios":
+		return "app-ios"
+	case "weixin", "wechat", "mini-program":
+		return "mp-weixin"
+	default:
+		return value
+	}
+}
+
+func (a paymentCenterAPI) paymentCapabilityFor(platform string) paymentCapabilityView {
+	platform = normalizedPaymentPlatform(platform)
+	result := paymentCapabilityView{
+		Platform: platform, PaymentCapability: "unavailable", PaymentStatus: "UNAVAILABLE",
+		Message: "当前平台暂未开放支付", Enabled: false,
+	}
+	switch platform {
+	case "mp-weixin":
+		if a.legacy.service != nil && a.legacy.service.cfg.ready() {
+			result.PaymentCapability = "available"
+			result.PaymentStatus = "READY"
+			result.PaymentChannel = "wechat_virtual"
+			result.Message = "微信虚拟支付可用"
+			result.Enabled = true
+		} else {
+			result.PaymentCapability = "preparing"
+			result.PaymentStatus = "PREPARING"
+			result.PaymentChannel = "wechat_virtual"
+			result.Message = "支付准备中"
+		}
+	case "app-android":
+		channel := strings.ToLower(strings.TrimSpace(a.cfg.AndroidPaymentChannel))
+		if channel == "" {
+			channel = "wechat_app"
+		}
+		result.PaymentChannel = channel
+		desired := strings.ToLower(strings.TrimSpace(a.cfg.AndroidPaymentCapability))
+		if desired == "unavailable" {
+			return result
+		}
+		result.PaymentCapability = "preparing"
+		result.PaymentStatus = "PREPARING"
+		result.Message = "支付准备中"
+		if desired == "available" && a.service != nil && a.service.HasProvider(channel) {
+			result.PaymentCapability = "available"
+			result.PaymentStatus = "READY"
+			result.Message = "支付可用"
+			result.Enabled = true
+		}
+	}
+	return result
+}
+
+func (a paymentCenterAPI) capability(w http.ResponseWriter, r *http.Request) {
+	platform := strings.TrimSpace(r.URL.Query().Get("platform"))
+	if platform == "" {
+		platform = strings.TrimSpace(r.Header.Get("X-Client-Platform"))
+	}
+	writeJSON(w, a.paymentCapabilityFor(platform))
+}
+
+func (a paymentCenterAPI) orderCreationAllowed(platform, channel string) bool {
+	platform = normalizedPaymentPlatform(platform)
+	channel = strings.ToLower(strings.TrimSpace(channel))
+	if channel == "mock" {
+		return strings.ToLower(strings.TrimSpace(a.cfg.Environment)) != "production"
+	}
+	capability := a.paymentCapabilityFor(platform)
+	return capability.Enabled && strings.EqualFold(capability.PaymentChannel, channel)
 }
 
 func (a paymentCenterAPI) currentUser(r *http.Request) (adminUser, error) {
@@ -123,6 +208,11 @@ func (a paymentCenterAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 		writePaymentError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Platform = normalizedPaymentPlatform(req.Platform)
+	if !a.orderCreationAllowed(req.Platform, req.PaymentChannel) {
+		writePaymentErrorWithCode(w, http.StatusConflict, paymentapp.CodeCapabilityUnavailable, "payment capability is not available for current platform")
+		return
+	}
 	result, err := a.service.CreateOrder(r.Context(), paymentapp.CreateOrderInput{
 		UserID: user.ID, TenantID: tenantID, ProductCode: req.ProductCode, Quantity: req.Quantity,
 		Platform: req.Platform, PaymentChannel: req.PaymentChannel,
@@ -143,7 +233,7 @@ func (a paymentCenterAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 
 func (a paymentCenterAPI) order(w http.ResponseWriter, r *http.Request) {
 	if !a.available() {
-		if a.legacy.service != nil {
+		if a.legacy.service != nil && a.legacy.service.cfg.ready() {
 			a.legacy.order(w, r)
 			return
 		}
@@ -449,7 +539,7 @@ func writePaymentDomainError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case paymentapp.CodeOrderForbidden, paymentapp.CodeMockForbidden:
 		status = http.StatusForbidden
-	case paymentapp.CodeIdempotencyConflict, paymentapp.CodeDuplicateTransaction, paymentapp.CodeInvalidTransition:
+	case paymentapp.CodeIdempotencyConflict, paymentapp.CodeDuplicateTransaction, paymentapp.CodeInvalidTransition, paymentapp.CodeCapabilityUnavailable:
 		status = http.StatusConflict
 	case paymentapp.CodeFulfillmentUnsupported:
 		status = http.StatusUnprocessableEntity

@@ -32,7 +32,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { onShow } from "@dcloudio/uni-app";
-import { api, businessSdk } from "../../api/client";
+import { ApiClientError } from "@xianzhi/api-client";
+import { api, authStorage, businessSdk } from "../../api/client";
+import { requireAuth } from "../../features/auth/gate";
 import { backOrHome } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 
@@ -44,6 +46,7 @@ const form = reactive({ name: "", email: "" });
 const roleLabel = computed(() => role.value.includes("AGENT") ? "代理商" : role.value.includes("OPERATION") ? "运营中心" : "普通用户");
 const statusLabel = computed(() => status.value === "ACTIVE" ? "账户正常" : status.value || "状态未知");
 const profileCompleteness = computed(() => (form.name ? 50 : 0) + (form.email ? 50 : 0));
+let requestingLogin = false;
 
 async function load() {
   loading.value = true;
@@ -54,9 +57,34 @@ async function load() {
     role.value = profile.user?.role || "";
     status.value = profile.user?.status || "";
   } catch (error) {
+    if (error instanceof ApiClientError && error.statusCode === 401) {
+      requestingLogin = false;
+      await loadWithAuthGate();
+      return;
+    }
     uni.showToast({ title: error instanceof Error ? error.message : "资料加载失败", icon: "none" });
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadWithAuthGate() {
+  if (authStorage.getToken()) {
+    requestingLogin = false;
+    await load();
+    return;
+  }
+  if (requestingLogin) return;
+  requestingLogin = true;
+  try {
+    await requireAuth({
+      action: "save_work",
+      route: "/pages/user/UserProfileEditPage",
+      payload: { source: "profile_edit" },
+      resume: load,
+    });
+  } finally {
+    requestingLogin = false;
   }
 }
 
@@ -77,7 +105,7 @@ async function save() {
   }
 }
 
-onShow(load);
+onShow(() => { void loadWithAuthGate(); });
 </script>
 
 <style>@import "../../styles/mini-program-business.css";</style>

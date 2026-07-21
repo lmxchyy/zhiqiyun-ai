@@ -2190,8 +2190,6 @@ func ensureAgentForUser(data *adminPlatformData, user adminUser, order *adminOrd
 	for i := range data.ChannelAgents {
 		if data.ChannelAgents[i].UserID == user.ID {
 			data.ChannelAgents[i].Status = "ACTIVE"
-			data.ChannelAgents[i].ParentID = order.DirectAgentID
-			data.ChannelAgents[i].OperationCenterID = order.OperationCenterID
 			data.ChannelAgents[i].JoinOrderID = order.ID
 			data.ChannelAgents[i].JoinFeeCents = orderAmount(*order)
 			data.ChannelAgents[i].TokenRightsAmount = result.TokenGrantAmount

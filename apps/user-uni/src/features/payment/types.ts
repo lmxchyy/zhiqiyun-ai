@@ -2,7 +2,7 @@ export interface VirtualPaymentProduct {
   id: string
   productCode: string
   name: string
-  productType: 'TOKEN_ONLY' | 'TOKEN_UPGRADE' | 'IMAGE_QUOTA_PACK' | 'MEMBER_PACKAGE' | string
+  productType: 'TOKEN_ONLY' | 'TOKEN_UPGRADE' | 'IMAGE_QUOTA_PACK' | 'MEMBER_PACKAGE' | 'MEMBERSHIP' | 'IDENTITY' | string
   planType?: string
   amountCent: number
   memberLevel?: string
@@ -62,4 +62,44 @@ export interface VirtualPaymentOrderStatus {
 export interface RequestVirtualPaymentFailure {
   errMsg?: string
   errCode?: number
+}
+
+export type PaymentCapability = 'unavailable' | 'preparing' | 'available'
+
+export interface PaymentCapabilityResponse {
+  platform: string
+  paymentCapability: PaymentCapability
+  paymentStatus: string
+  paymentChannel?: string
+  message: string
+  enabled: boolean
+}
+
+export interface UnifiedPaymentOrderParams {
+  orderNo: string
+  paymentNo: string
+  productName: string
+  amount: number
+  currency: string
+  platform: string
+  channel: string
+  orderStatus: string
+  paymentStatus: string
+  fulfillmentStatus: string
+  paymentParams: Record<string, unknown>
+}
+
+export interface UnifiedPaymentOrderStatus {
+  orderNo: string
+  productName: string
+  amount: number
+  currency: string
+  platform: string
+  channel: string
+  orderStatus: string
+  paymentStatus: string
+  fulfillmentStatus: string
+  createdAt?: string
+  paidAt?: string
+  fulfilledAt?: string
 }

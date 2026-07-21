@@ -57,25 +57,7 @@
         <view><text>{{ detailTitle }}</text><text>{{ detailSubtitle }}</text></view>
       </view>
 
-      <view v-if="view === 'agent-upgrade'" class="mine-detail-stack">
-        <view class="agent-hero">
-          <text class="agent-kicker">知启云代理计划</text>
-          <text class="agent-title">把客户资源变成长期收益</text>
-          <text class="agent-copy">专属推广链接 · 客户绑定 · 订单分润</text>
-          <text class="agent-pill">L1 一级代理</text>
-        </view>
-        <view class="mine-panel compact">
-          <text class="mine-section-title">升级流程</text>
-          <view class="step-row"><view v-for="(step, index) in agentSteps" :key="step"><text :class="['step-index', { active: index === 0 }]">{{ index + 1 }}</text><text>{{ step }}</text></view></view>
-        </view>
-        <view class="mine-panel compact">
-          <text class="mine-section-title">升级后可获得</text>
-          <view class="benefit-list"><view v-for="item in agentBenefits" :key="item.title"><text class="benefit-icon">{{ item.icon }}</text><view><text>{{ item.title }}</text><text>{{ item.copy }}</text></view></view></view>
-        </view>
-        <view class="detail-bottom-action"><button class="orange-action" @click="$emit('select-purchase', agentPackage)">申请升级代理商</button><text>预计 1-2 个工作日完成审核</text></view>
-      </view>
-
-      <view v-else-if="view === 'recharge-history'" class="mine-detail-stack">
+      <view v-if="view === 'recharge-history'" class="mine-detail-stack">
         <view class="record-summary dark"><text>累计充值</text><text>{{ formatCurrency(totalRechargeCents) }}</text><text>累计到账 {{ formatNumber(totalRechargePoints) }} 点</text><button @click="$emit('invoice')">电子凭证</button></view>
         <view class="filter-strip"><button :class="{ active: orderFilter === 'all' }" @click="orderFilter = 'all'">全部</button><button :class="{ active: orderFilter === 'success' }" @click="orderFilter = 'success'">成功</button><button :class="{ active: orderFilter === 'refund' }" @click="orderFilter = 'refund'">退款</button><text @click="cycleHistoryRange">{{ historyRangeLabel }}⌄</text></view>
         <view class="record-list">
@@ -110,7 +92,7 @@
         <view class="role-hero"><text>当前角色</text><text>{{ currentRoleLabel }}</text><text>页面与操作按当前角色权限动态展示</text><text class="role-status">使用中</text><button v-if="!hasAgentRole" @click="$emit('navigate', 'agent-upgrade')">代理商角色未开通　去升级 ›</button><button v-else @click="$emit('switch-agent')">切换到代理商 ›</button></view>
         <view class="mine-panel compact"><text class="mine-section-title">已授权角色</text><view v-for="role in roleRows" :key="role.id" class="role-row"><text class="mine-menu-icon green">✓</text><view><text>{{ role.label }}</text><text>{{ role.description }}</text></view><text :class="role.id === currentRole ? 'success-text' : 'muted-text'">{{ role.id === currentRole ? "当前" : "已启用" }}</text></view></view>
         <view class="mine-panel compact"><text class="mine-section-title">当前角色权限</text><view v-for="permission in grantedPermissionRows" :key="permission" class="permission-row"><text>{{ permission }}</text><text class="success-text">可用</text></view></view>
-        <button v-if="!hasAgentRole" class="orange-action" @click="$emit('navigate', 'agent-upgrade')">申请升级代理商</button>
+        <button v-if="!hasAgentRole" class="orange-action" @click="$emit('navigate', 'agent-upgrade')">成为代理商</button>
         <button v-else class="primary-action" @click="$emit('switch-agent')">进入代理工作台</button>
       </view>
 
@@ -118,13 +100,13 @@
         <view class="invite-hero">
           <text>我的推广码</text><text>{{ inviteCode }}</text><text class="agent-pill">{{ hasAgentRole ? agentLevelLabel : "待开通" }}</text>
           <view class="invite-link"><text>{{ inviteLink }}</text><button @click="$emit('copy-invite')">复制</button></view>
-          <text>{{ hasAgentRole ? "客户通过链接注册后将自动绑定" : "升级代理商后可启用客户绑定与分润" }}</text>
+          <text>{{ hasAgentRole ? "客户通过链接注册后将自动绑定" : "成为代理商后可启用客户绑定与分润" }}</text>
         </view>
         <view class="promotion-stats"><view><text>{{ stat('visits') }}</text><text>访问</text></view><view><text>{{ stat('registrations') }}</text><text>注册</text></view><view><text>{{ stat('orders') }}</text><text>成交</text></view><view><text class="orange-text">{{ conversionRate }}%</text><text>转化率</text></view></view>
         <view class="mine-panel compact"><text class="mine-section-title">选择分享方式</text><view class="share-grid"><button :disabled="!hasAgentRole" open-type="share"><text class="green">微</text><text>微信好友</text></button><button :disabled="!hasAgentRole" open-type="share"><text class="purple">圈</text><text>朋友圈</text></button><button :disabled="!hasAgentRole" @click="$emit('poster')"><text class="orange">图</text><text>生成海报</text></button></view></view>
         <view class="mine-panel compact"><text class="mine-section-title">推广流程</text><view class="step-row four"><view v-for="(step, index) in promotionSteps" :key="step"><text :class="['step-index', { active: index === 0 }]">{{ index + 1 }}</text><text>{{ step }}</text></view></view></view>
         <button v-if="hasAgentRole" class="primary-action" open-type="share">分享专属链接</button>
-        <button v-else class="orange-action" @click="$emit('navigate', 'agent-upgrade')">升级后开启推广</button>
+        <button v-else class="orange-action" @click="$emit('navigate', 'agent-upgrade')">成为代理商后开启推广</button>
       </view>
     </template>
 
@@ -201,14 +183,6 @@ defineEmits<{
 
 const recharge100: MinePurchaseOption = { kind: "recharge", id: "recharge_100", amountCents: 10000, points: 10000 };
 const recharge400: MinePurchaseOption = { kind: "recharge", id: "recharge_400", amountCents: 40000, points: 40000, recommended: true };
-const agentPackage: MinePurchaseOption = { kind: "agent", id: "plan_agent_join_996", amountCents: 99600, points: 20000 };
-const agentSteps = ["了解权益", "提交资料", "审核开通"];
-const agentBenefits = [
-  { icon: "✓", title: "推广链接", copy: "生成专属邀请码与落地页" },
-  { icon: "✓", title: "客户管理", copy: "查看绑定客户与转化进度" },
-  { icon: "¥", title: "佣金分润", copy: "订单结算与提现明细" },
-  { icon: "✓", title: "多角色账户", copy: "代理功能与普通用户创作并存" }
-];
 const promotionSteps = ["分享链接", "客户注册", "完成订单", "获得分润"];
 const orderFilter = ref<"all" | "success" | "refund">("all");
 const historyRange = ref<30 | 90 | 0>(90);
@@ -234,14 +208,14 @@ const roleRows = computed(() => props.roles.map(role => ({
 const grantedPermissionRows = computed(() => props.permissions.length ? props.permissions : ["暂无当前角色权限"]);
 
 const detailTitle = computed(() => ({
-  "agent-upgrade": "升级代理商",
+  "agent-upgrade": "成为代理商",
   "recharge-history": "充值记录",
   "usage-details": "消耗明细",
   "role-permissions": "角色与权限",
   "invite-promotion": "邀请与推广"
 } as Partial<Record<MineView, string>>)[props.view] || "我的");
 const detailSubtitle = computed(() => ({
-  "agent-upgrade": "了解权益并提交升级申请",
+  "agent-upgrade": "¥996 开通并到账 20,000 点",
   "recharge-history": "到账、订单与退款状态",
   "usage-details": "按模型、任务与日期查看",
   "role-permissions": "查看角色授权与当前权限",

@@ -239,6 +239,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/points/account", wrapF(api.pointAccount))
 	v1.POST("/points/recharge-orders", wrapF(api.createRechargeOrder))
 	v1.POST("/points/subscription-orders", wrapF(api.createSubscriptionOrder))
+	v1.GET("/payment/capability", wrapF(paymentCenter.capability))
 	v1.POST("/payment/orders", wrapF(paymentCenter.createOrder))
 	v1.GET("/payment/products", wrapF(virtualPayment.products))
 	v1.GET("/payment/coupons", wrapF(virtualPayment.coupons))

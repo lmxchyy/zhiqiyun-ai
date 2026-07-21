@@ -6,6 +6,7 @@
       "style": {
         "navigationBarTitleText": "知启云 AI",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 80,
         "navigationStyle": "custom"
       }
@@ -46,15 +47,15 @@
     },
     {
       "path": "pages/enterprise/EnterpriseOverviewPage",
-      "style": { "navigationBarTitleText": "企业中心", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "企业中心", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseOrganizationsPage",
-      "style": { "navigationBarTitleText": "组织架构", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "组织架构", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseMembersPage",
-      "style": { "navigationBarTitleText": "成员管理", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "成员管理", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseMemberDetailPage",
@@ -62,7 +63,7 @@
     },
     {
       "path": "pages/enterprise/EnterpriseInvitationsPage",
-      "style": { "navigationBarTitleText": "邀请与审核", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "邀请与审核", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseRolesPage",
@@ -70,7 +71,7 @@
     },
     {
       "path": "pages/enterprise/EnterpriseAIEmployeesPage",
-      "style": { "navigationBarTitleText": "AI员工", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "AI员工", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseAIEmployeeCreatePage",
@@ -82,7 +83,7 @@
     },
     {
       "path": "pages/enterprise/EnterpriseBillingPage",
-      "style": { "navigationBarTitleText": "企业算力", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "企业算力", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseUsagePage",
@@ -90,7 +91,7 @@
     },
     {
       "path": "pages/enterprise/EnterpriseSettingsPage",
-      "style": { "navigationBarTitleText": "企业设置", "navigationStyle": "custom", "enablePullDownRefresh": true }
+      "style": { "navigationBarTitleText": "企业设置", "navigationStyle": "custom", "enablePullDownRefresh": true, "app-plus": { "pullToRefresh": { "support": false } } }
     },
     {
       "path": "pages/enterprise/EnterpriseFeishuConnectorPage",
@@ -116,6 +117,7 @@
       "style": {
         "navigationBarTitleText": "创作中心",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 80,
         "navigationStyle": "custom"
       }
@@ -188,6 +190,7 @@
       "style": {
         "navigationBarTitleText": "我的作品",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 80,
         "navigationStyle": "custom"
       }
@@ -197,6 +200,7 @@
       "style": {
         "navigationBarTitleText": "全部作品",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 120,
         "navigationStyle": "custom"
       }
@@ -213,6 +217,7 @@
       "style": {
         "navigationBarTitleText": "全部任务",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 120,
         "navigationStyle": "custom"
       }
@@ -229,6 +234,7 @@
       "style": {
         "navigationBarTitleText": "我的",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 80,
         "navigationStyle": "custom"
       }
@@ -238,6 +244,7 @@
       "style": {
         "navigationBarTitleText": "我的推广码",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "navigationStyle": "custom"
       }
     },
@@ -260,6 +267,7 @@
       "style": {
         "navigationBarTitleText": "推广记录",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "onReachBottomDistance": 100,
         "navigationStyle": "custom"
       }
@@ -269,6 +277,7 @@
       "style": {
         "navigationBarTitleText": "推广数据",
         "enablePullDownRefresh": true,
+        "app-plus": { "pullToRefresh": { "support": false } },
         "navigationStyle": "custom"
       }
     },
@@ -282,7 +291,7 @@
     {
       "path": "pages/user/UserAgentUpgradePage",
       "style": {
-        "navigationBarTitleText": "升级代理商",
+        "navigationBarTitleText": "代理商",
         "navigationStyle": "custom"
       }
     },
@@ -381,6 +390,27 @@
       "path": "pages/user/UserOrderConfirmPage",
       "style": {
         "navigationBarTitleText": "确认订单",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserCommerceOrderConfirmPage",
+      "style": {
+        "navigationBarTitleText": "确认订单",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserMembershipDetailPage",
+      "style": {
+        "navigationBarTitleText": "Pro会员",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserAgentDetailPage",
+      "style": {
+        "navigationBarTitleText": "代理商",
         "navigationStyle": "custom"
       }
     },

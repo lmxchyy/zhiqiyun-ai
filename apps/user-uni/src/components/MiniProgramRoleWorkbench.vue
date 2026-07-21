@@ -98,7 +98,7 @@
           :ppt-count="pptAssetCount"
           :avatar-url="userAvatarUrl"
           :avatar-fallback="pageConfigStore.slot('profile', 'profile.avatar')?.imageUrl || pageConfigStore.slot('profile', 'profile.avatar')?.fallbackUrl"
-          @upgrade="openMineView('agent-upgrade')"
+          @upgrade="openFeaturePage(miniProgramFeaturePages.userAgentDetail)"
           @edit="openFeaturePage(miniProgramFeaturePages.userProfileEdit)"
           @recharge="openFeaturePage(miniProgramFeaturePages.userRechargePlans)"
           @role-change="handleV531RoleChange"
@@ -732,6 +732,7 @@ import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
 import { fetchAssetDetail } from "../features/assets/api";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
+import { useAuthStore } from "../stores/auth";
 import { useUserStore } from "../stores/user";
 import { requireAuth as requireProtectedAction } from "../features/auth/gate";
 import { trackLogin } from "../features/auth/analytics";
@@ -920,6 +921,7 @@ const pageError = ref("");
 const activeRole = ref<RoleId>(props.initialRole);
 const activeTab = ref<TabId>(props.initialTab);
 const pageConfigStore = usePageConfigStore();
+const authStore = useAuthStore();
 const userStore = useUserStore();
 const creationMode = ref<CreationMode>(props.initialCreationMode || "image");
 const creationPrompt = ref("");
@@ -1629,7 +1631,7 @@ function handleV531RoleChange(role: AppRole) {
   }
   if (targetRole === "agent") {
     if (hasAgentRole.value) void switchRole("agent");
-    else openMineView("agent-upgrade");
+    else openFeaturePage(miniProgramFeaturePages.userAgentDetail);
     return;
   }
   if (hasOperationRole.value) void switchRole("operation");
@@ -1676,6 +1678,11 @@ function openMineView(view: MineView) {
 }
 
 function selectMinePurchase(purchase: MinePurchaseOption) {
+  if (purchase.kind === "agent") {
+    selectedMinePurchase.value = null;
+    openFeaturePage(miniProgramFeaturePages.userAgentDetail);
+    return;
+  }
   selectedMinePurchase.value = purchase;
   mineLogoutConfirm.value = false;
 }
@@ -1685,9 +1692,12 @@ async function confirmMinePurchase() {
   if (!purchase || minePurchaseSubmitting.value) return;
   minePurchaseSubmitting.value = true;
   try {
-    const created = purchase.kind === "agent"
-      ? await createAgentOrder()
-      : await createRechargeOrder({ id: purchase.id, amountCents: purchase.amountCents, points: purchase.points });
+    if (purchase.kind === "agent") {
+      selectedMinePurchase.value = null;
+      openFeaturePage(miniProgramFeaturePages.userAgentDetail);
+      return;
+    }
+    const created = await createRechargeOrder({ id: purchase.id, amountCents: purchase.amountCents, points: purchase.points });
     if (created) selectedMinePurchase.value = null;
   } finally {
     minePurchaseSubmitting.value = false;
@@ -1711,7 +1721,7 @@ async function showUsageExportNotice() {
 
 function showPosterNotice() {
   if (hasAgentRole.value) replacePage(rolePage("agent", "promotion"));
-  else uni.showToast({ title: "请先升级代理商", icon: "none" });
+  else uni.showToast({ title: "请先成为代理商", icon: "none" });
 }
 
 function handlePromotionQrError(message: string) {
@@ -1912,7 +1922,7 @@ function handleV531ProfileService(payload: unknown) {
     "ai-agent": () => openCreation("agent"),
     "ai-knowledge": () => openCreation("agent"),
     "ai-infographic": () => openCreation("infographic"),
-    "upgrade-agent": () => hasAgentRole.value ? switchRole("agent") : openMineView("agent-upgrade"),
+    "upgrade-agent": () => hasAgentRole.value ? switchRole("agent") : openFeaturePage(miniProgramFeaturePages.userAgentDetail),
     "agent-promotion": () => selectAgentTab("promotion"),
     "agent-qrcode": () => selectAgentTab("promotion"),
     "agent-customers": () => selectAgentTab("customers"),
@@ -2017,16 +2027,29 @@ function selectAgentTab(tab: TabId) {
   replacePage(rolePage("agent", tab));
 }
 
+let refreshQueued = false;
+
+function clearAuthenticatedData() {
+  token.value = "";
+  auth.value = null;
+  profile.value = null;
+  wallet.value = null;
+  pointAccountResponse.value = null;
+  recentAssets.value = [];
+  generationTasks.value = [];
+  pageError.value = "";
+}
+
 async function refreshAll() {
+  if (pageLoading.value) {
+    refreshQueued = true;
+    return;
+  }
   readAuth();
   if (!token.value) {
     pageLoading.value = false;
-    pageError.value = "";
-    profile.value = null;
-    wallet.value = null;
-    pointAccountResponse.value = null;
-    recentAssets.value = [];
-    generationTasks.value = [];
+    clearAuthenticatedData();
+    userStore.reset();
     return;
   }
   pageLoading.value = true;
@@ -2060,6 +2083,10 @@ async function refreshAll() {
     pageError.value = error instanceof Error ? error.message : "工作台加载失败";
   } finally {
     pageLoading.value = false;
+    if (refreshQueued) {
+      refreshQueued = false;
+      void refreshAll();
+    }
   }
 }
 
@@ -2152,10 +2179,6 @@ async function createOrder(endpoint: string, planId: string, amountCents: number
     uni.showToast({ title: error instanceof Error ? error.message : "创建订单失败", icon: "none" });
     return false;
   }
-}
-
-async function createAgentOrder() {
-  return createOrder("/api/v1/agent/join-order", "plan_agent_join_996", 99600, "代理商订单已创建");
 }
 
 async function createMemberPackageOrder() {
@@ -2580,7 +2603,8 @@ function previewLatestGenerationResult() {
 
 function logout() {
   mineLogoutConfirm.value = false;
-  authStorage.clear();
+  clearAuthenticatedData();
+  authStore.logout();
   uni.removeStorageSync("xianzhiMiniProgramAuth");
   uni.switchTab({ url: "/pages/user/UserHomePage" });
 }
@@ -2622,6 +2646,12 @@ onMounted(() => {
     restoreActiveGeneration();
   }
   void loadTerminalCapabilities();
+  void refreshAll();
+});
+
+watch(() => authStore.token, (nextToken, previousToken) => {
+  if (nextToken === previousToken) return;
+  if (!nextToken) clearAuthenticatedData();
   void refreshAll();
 });
 

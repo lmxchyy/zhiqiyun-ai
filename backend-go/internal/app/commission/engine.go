@@ -162,12 +162,13 @@ func validateCalculationInput(input CalculationInput) error {
 }
 
 func ruleApplies(rule CommissionRule, input CalculationInput) bool {
+	isTemplateRule := strings.EqualFold(strings.TrimSpace(rule.ProductType), "COMMISSION_TEMPLATE")
 	if !strings.EqualFold(strings.TrimSpace(rule.Status), "ACTIVE") ||
 		(rule.TenantID != input.TenantID && rule.TenantID != "tenant_default") ||
-		!strings.EqualFold(rule.ProductType, input.ProductType) {
+		(!isTemplateRule && !strings.EqualFold(rule.ProductType, input.ProductType)) {
 		return false
 	}
-	if rule.ProductID != "" && rule.ProductID != input.ProductID {
+	if !isTemplateRule && rule.ProductID != "" && rule.ProductID != input.ProductID {
 		return false
 	}
 	if input.PaidAt.Before(rule.EffectiveStartAt) || (rule.EffectiveEndAt != nil && !input.PaidAt.Before(*rule.EffectiveEndAt)) {

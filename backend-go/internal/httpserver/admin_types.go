@@ -148,21 +148,22 @@ type adminAuthMergePreviewResult struct {
 }
 
 type adminPlan struct {
-	ID           string         `json:"id"`
-	Code         string         `json:"code"`
-	Name         string         `json:"name"`
-	PlanType     string         `json:"planType,omitempty"`
-	Price        int            `json:"price"`
-	PriceCents   int            `json:"priceCents"`
-	Points       int            `json:"points"`
-	GrantPoints  int            `json:"grantPoints"`
-	TokenAmount  int            `json:"tokenAmount,omitempty"`
-	MemberLevel  string         `json:"memberLevel,omitempty"`
-	AgentLevel   string         `json:"agentLevel,omitempty"`
-	DurationDays int            `json:"durationDays"`
-	Concurrency  int            `json:"concurrency"`
-	Entitlements map[string]any `json:"entitlements"`
-	Active       bool           `json:"active"`
+	ID                     string         `json:"id"`
+	Code                   string         `json:"code"`
+	Name                   string         `json:"name"`
+	PlanType               string         `json:"planType,omitempty"`
+	Price                  int            `json:"price"`
+	PriceCents             int            `json:"priceCents"`
+	Points                 int            `json:"points"`
+	GrantPoints            int            `json:"grantPoints"`
+	TokenAmount            int            `json:"tokenAmount,omitempty"`
+	MemberLevel            string         `json:"memberLevel,omitempty"`
+	AgentLevel             string         `json:"agentLevel,omitempty"`
+	DurationDays           int            `json:"durationDays"`
+	CommissionTemplateCode string         `json:"commissionTemplateCode,omitempty"`
+	Concurrency            int            `json:"concurrency"`
+	Entitlements           map[string]any `json:"entitlements"`
+	Active                 bool           `json:"active"`
 }
 
 type adminPointAccount struct {
@@ -186,29 +187,32 @@ type adminTokenRecord struct {
 }
 
 type adminOrder struct {
-	ID                  string         `json:"id"`
-	OrderNo             string         `json:"orderNo,omitempty"`
-	TenantID            string         `json:"tenantId,omitempty"`
-	UserID              string         `json:"userId"`
-	BuyerUserID         string         `json:"buyerUserId,omitempty"`
-	PlanID              string         `json:"planId"`
-	OrderType           string         `json:"orderType,omitempty"`
-	BusinessOrderType   string         `json:"businessOrderType,omitempty"`
-	Amount              int            `json:"amount"`
-	AmountCents         int            `json:"amountCents"`
-	Status              string         `json:"status"`
-	DirectAgentID       string         `json:"directAgentId,omitempty"`
-	ParentAgentID       string         `json:"parentAgentId,omitempty"`
-	OperationCenterID   string         `json:"operationCenterId,omitempty"`
-	TokenGrantAmount    int            `json:"tokenGrantAmount,omitempty"`
-	TokenAmount         int            `json:"tokenAmount,omitempty"`
-	PlatformIncomeCents int            `json:"platformIncomeCents,omitempty"`
-	FulfillmentStatus   string         `json:"fulfillmentStatus,omitempty"`
-	FulfilledAt         string         `json:"fulfilledAt,omitempty"`
-	RewardSnapshot      map[string]any `json:"rewardSnapshot,omitempty"`
-	PriceSnapshot       map[string]any `json:"priceSnapshot"`
-	PaidAt              string         `json:"paidAt"`
-	CreatedAt           string         `json:"createdAt"`
+	ID                         string                   `json:"id"`
+	OrderNo                    string                   `json:"orderNo,omitempty"`
+	TenantID                   string                   `json:"tenantId,omitempty"`
+	UserID                     string                   `json:"userId"`
+	BuyerUserID                string                   `json:"buyerUserId,omitempty"`
+	PlanID                     string                   `json:"planId"`
+	OrderType                  string                   `json:"orderType,omitempty"`
+	BusinessOrderType          string                   `json:"businessOrderType,omitempty"`
+	Amount                     int                      `json:"amount"`
+	AmountCents                int                      `json:"amountCents"`
+	Status                     string                   `json:"status"`
+	DirectAgentID              string                   `json:"directAgentId,omitempty"`
+	ParentAgentID              string                   `json:"parentAgentId,omitempty"`
+	OperationCenterID          string                   `json:"operationCenterId,omitempty"`
+	TokenGrantAmount           int                      `json:"tokenGrantAmount,omitempty"`
+	TokenAmount                int                      `json:"tokenAmount,omitempty"`
+	PlatformIncomeCents        int                      `json:"platformIncomeCents,omitempty"`
+	FulfillmentStatus          string                   `json:"fulfillmentStatus,omitempty"`
+	FulfilledAt                string                   `json:"fulfilledAt,omitempty"`
+	RewardSnapshot             map[string]any           `json:"rewardSnapshot,omitempty"`
+	PriceSnapshot              map[string]any           `json:"priceSnapshot"`
+	CommissionTemplateCode     string                   `json:"commissionTemplateCode,omitempty"`
+	CommissionSnapshotCaptured bool                     `json:"commissionSnapshotCaptured,omitempty"`
+	CommissionRuleSnapshot     []commissionRuleSnapshot `json:"commissionRuleSnapshot,omitempty"`
+	PaidAt                     string                   `json:"paidAt"`
+	CreatedAt                  string                   `json:"createdAt"`
 }
 
 type adminPayment struct {

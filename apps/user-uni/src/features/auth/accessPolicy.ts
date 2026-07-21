@@ -7,6 +7,7 @@ const authenticatedPrefixes = [
 ];
 
 const authenticatedPages = new Set([
+  "/pages/user/UserProfileEditPage",
   "/pages/user/UserWalletPage",
   "/pages/user/UserOrdersPage",
   "/pages/user/UserSettingsPage",

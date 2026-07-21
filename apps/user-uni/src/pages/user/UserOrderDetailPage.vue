@@ -33,7 +33,7 @@ const canRequestRefund = computed(() => ["PAID", "SUCCESS", "SUCCEEDED", "COMPLE
 const isCompleted = computed(() => ["PAID", "SUCCESS", "SUCCEEDED", "COMPLETED"].includes(orderStatus(order.value)));
 const orderPoints = computed(() => rowNumber(order.value, "grantPoints", "points", "tokenAmount"));
 async function load() { loading.value = true; try { const payload = asRecord(await api(`/api/v1/member/orders/${encodeURIComponent(id.value)}`)); const item = asRecord(payload.item); order.value = orderId(item) ? item : null; } catch (error) { uni.showToast({ title: error instanceof Error ? error.message : "订单加载失败", icon: "none" }); } finally { loading.value = false; } }
-function rebuy() { const planId = rowString(order.value, "planId"); if (planId) uni.navigateTo({ url: `/pages/user/UserOrderConfirmPage?planId=${encodeURIComponent(planId)}` }); else uni.navigateTo({ url: "/pages/user/UserRechargePlansPage" }); }
+function rebuy() { uni.navigateTo({ url: "/pages/user/UserRechargePlansPage" }); }
 function goOrders() { uni.navigateTo({ url: "/pages/user/UserOrdersPage" }); }
 function openRefund() { uni.navigateTo({ url: `/pages/user/UserRefundRequestPage?id=${encodeURIComponent(id.value)}` }); }
 onLoad(options => { id.value = String(options?.id || ""); void load(); });

@@ -4,30 +4,29 @@
     <view class="mpb-header">
       <button class="mpb-back" aria-label="返回" @click="backOrHome('/pages/user/UserWalletPage')">‹</button>
       <image class="mpb-logo" :src="loginLogo" mode="aspectFit" />
-      <view class="mpb-header-copy"><text class="mpb-title">微信虚拟支付</text><text class="mpb-subtitle">Token充值与会员/代理权益安全到账</text></view>
+      <view class="mpb-header-copy"><text class="mpb-title">充值中心</text><text class="mpb-subtitle">选择商品后直接完成微信支付</text></view>
       <text class="mpb-role">普通用户</text>
     </view>
     <view class="mpb-stack">
-      <view class="mpb-hero">
-        <view class="mpb-hero-top"><view><text class="mpb-hero-label">支付环境</text><text class="mpb-hero-value">{{ environmentLabel }}</text></view><text class="mpb-hero-badge">微信支付</text></view>
-        <text class="mpb-hero-copy">价格和到账权益均由知启云服务端商品配置决定；小程序不会自行修改会员或余额。</text>
-      </view>
-
       <view v-if="loading" class="mpb-card mpb-empty"><text class="mpb-empty-title">正在加载商品...</text></view>
       <view v-else-if="products.length" class="mpb-card mpb-list">
-        <view class="mpb-section-head"><text class="mpb-card-title">选择Token虚拟商品</text><text class="mpb-card-copy">以服务端价格与权益为准</text></view>
-        <button v-for="product in products" :key="product.productCode" :class="['mpb-row-button', { active: selectedCode === product.productCode }]" :disabled="paying" @click="selectedCode = product.productCode">
+        <view class="mpb-section-head"><text class="mpb-card-title">选择充值商品</text><text class="mpb-card-copy">选择后直接支付，无需重复确认</text></view>
+        <view v-if="!rechargeEligible" class="recharge-access-notice">
+          <text class="recharge-access-title">点数充值暂未开放</text>
+          <text class="recharge-access-copy">开通 Pro 会员或成为官方代理商后，即可选择点数套餐充值。</text>
+        </view>
+        <button v-for="product in products" :key="product.productCode" :class="['mpb-row-button', 'recharge-product', { active: rechargeEligible && selectedCode === product.productCode, disabled: !rechargeEligible }]" :disabled="paying || !rechargeEligible" @click="selectProduct(product.productCode)">
           <text :class="['mpb-row-icon', product.productType === 'TOKEN_UPGRADE' || product.productType === 'MEMBER_PACKAGE' ? 'orange' : 'green']">{{ productIcon(product) }}</text>
           <view class="mpb-row-main"><text class="mpb-row-title">{{ product.name }}</text><text class="mpb-row-meta">{{ product.description }}</text></view>
-          <view class="mpb-row-side"><text class="mpb-amount">{{ formatCurrency(product.amountCent) }}{{ product.customQuantity ? '/份' : '' }}</text><text v-if="selectedCode === product.productCode" class="mpb-status success">已选择</text></view>
+          <view class="mpb-row-side"><text class="mpb-amount">{{ formatCurrency(product.amountCent) }}{{ product.customQuantity ? '/份' : '' }}</text><text v-if="rechargeEligible && selectedCode === product.productCode" class="mpb-status success">已选择</text><text v-else-if="!rechargeEligible" class="mpb-status">需会员或代理</text></view>
         </button>
       </view>
       <view v-else class="mpb-card mpb-empty"><text class="mpb-empty-title">暂无可支付商品</text><text class="mpb-empty-copy">请稍后刷新，或检查微信虚拟支付商品映射。</text></view>
 
       <view v-if="selectedProduct?.customQuantity" class="mpb-card custom-recharge-card">
-        <view class="mpb-section-head"><text class="mpb-card-title">自定义充值金额</text><text class="mpb-card-copy">整数金额，1元 = {{ selectedProduct.creditUnits || 0 }} Token</text></view>
+        <view class="mpb-section-head"><text class="mpb-card-title">选择购买份数</text><text class="mpb-card-copy">每份 {{ formatCurrency(selectedProduct.amountCent) }}，到账 {{ selectedProduct.creditUnits || 0 }} Token</text></view>
         <view class="custom-recharge-input"><input v-model.number="customQuantity" type="number" :min="selectedProduct.minQuantity || 1" :max="selectedProduct.maxQuantity || 5000" /><text>份</text></view>
-        <text class="mpb-card-copy">服务端预计：支付 {{ formatCurrency(payAmountCent) }}，到账 {{ customTokenAmount }} Token</text>
+        <text class="mpb-card-copy">合计支付 {{ formatCurrency(payAmountCent) }}，到账 {{ customTokenAmount }} Token</text>
       </view>
 
       <view v-if="coupons.length" class="mpb-card mpb-list">
@@ -41,8 +40,8 @@
       </view>
 
       <view v-if="resultMessage" :class="['mpb-note', resultTone]">{{ resultMessage }}</view>
-      <button class="mpb-button" :disabled="!selectedProduct || paying || !paymentEnabled || !customQuantityValid" @click="pay()">
-        {{ paying ? actionLabel : selectedProduct ? `微信支付 ${formatCurrency(payAmountCent)}` : '请选择商品' }}
+      <button class="mpb-button" :disabled="!rechargeEligible || !selectedProduct || paying || !paymentEnabled || !customQuantityValid" @click="pay()">
+        {{ !rechargeEligible ? '开通会员或成为代理商后可充值' : paying ? actionLabel : selectedProduct ? `微信支付 ${formatCurrency(payAmountCent)}` : '请选择商品' }}
       </button>
       <button v-if="orderNo && !completed" class="mpb-button secondary" :disabled="syncing" @click="manualSync()">{{ syncing ? '正在同步...' : '查询微信支付结果' }}</button>
       <text class="mpb-footer-note">Token与创作额度仅限知启云AI平台消费，不支持提现、转账或赠送。</text>
@@ -66,7 +65,6 @@ const loading = ref(false)
 const paying = ref(false)
 const syncing = ref(false)
 const paymentEnabled = ref(false)
-const environment = ref('')
 const products = ref<VirtualPaymentProduct[]>([])
 const coupons = ref<VirtualPaymentCoupon[]>([])
 const selectedCode = ref('')
@@ -77,6 +75,7 @@ const resultMessage = ref('')
 const resultTone = ref('')
 const actionLabel = ref('正在创建订单...')
 const completed = ref(false)
+const rechargeEligible = ref(false)
 let disposed = false
 
 const selectedProduct = computed(() => products.value.find(item => item.productCode === selectedCode.value) || null)
@@ -89,16 +88,25 @@ const customQuantityValid = computed(() => {
 const purchaseQuantity = computed(() => selectedProduct.value?.customQuantity ? Number(customQuantity.value) : 1)
 const payAmountCent = computed(() => (selectedProduct.value?.amountCent || 0) * (customQuantityValid.value ? purchaseQuantity.value : 0))
 const customTokenAmount = computed(() => (selectedProduct.value?.creditUnits || 0) * (customQuantityValid.value ? purchaseQuantity.value : 0))
-const environmentLabel = computed(() => environment.value === 'sandbox' ? '沙箱联调' : environment.value === 'production' ? '正式环境' : '待配置')
-
 async function load() {
   loading.value = true
   try {
-    const payload = await listVirtualPaymentProducts()
-    products.value = payload.items.filter(item => item.active)
+    const [payload, profilePayload] = await Promise.all([
+      listVirtualPaymentProducts(),
+      businessSdk.roleWorkbench.memberProfile(),
+    ])
+    const profile = profilePayload as unknown as Record<string, any>
+    const user = (profile.user || {}) as Record<string, any>
+    const agent = (profile.agent || {}) as Record<string, any>
+    const memberLevel = String(user.memberLevel || '').toUpperCase()
+    const expiresAt = String(user.subscriptionExpiresAt || user.expiresAt || user.validUntil || '')
+    const expiresTime = expiresAt ? new Date(expiresAt).getTime() : Number.NaN
+    const memberActive = Boolean(memberLevel && memberLevel !== 'FREE') && (Number.isNaN(expiresTime) || expiresTime > Date.now())
+    const agentActive = String(user.agentStatus || agent.status || '').toUpperCase() === 'ACTIVE' || Boolean(profile.agent && !agent.status)
+    rechargeEligible.value = memberActive || agentActive
+    products.value = payload.items.filter(item => item.active && item.productType === 'TOKEN_ONLY')
     paymentEnabled.value = payload.enabled
-    environment.value = payload.environment
-    selectedCode.value = products.value[0]?.productCode || ''
+    selectedCode.value = rechargeEligible.value ? products.value[0]?.productCode || '' : ''
     if (!payload.enabled) resultMessage.value = '服务端尚未启用微信虚拟支付，请先完成环境变量和微信商品配置。'
   }
   catch (error) {
@@ -112,7 +120,7 @@ async function load() {
 
 async function pay() {
   const product = selectedProduct.value
-  if (!product || paying.value) return
+  if (!rechargeEligible.value || !product || paying.value) return
   paying.value = true
   completed.value = false
   resultTone.value = ''
@@ -144,6 +152,11 @@ async function pay() {
     paying.value = false
     actionLabel.value = '正在创建订单...'
   }
+}
+
+function selectProduct(productCode: string) {
+  if (!rechargeEligible.value || paying.value) return
+  selectedCode.value = productCode
 }
 
 async function waitForEntitlements(currentOrderNo: string) {
@@ -247,4 +260,13 @@ onUnload(() => { disposed = true })
 .custom-recharge-card { display: flex; flex-direction: column; gap: 16rpx; }
 .custom-recharge-input { display: flex; align-items: center; gap: 12rpx; padding: 18rpx 22rpx; border: 2rpx solid #d0d5dd; border-radius: 16rpx; background: #fff; }
 .custom-recharge-input input { flex: 1; font-size: 34rpx; font-weight: 700; color: #101828; }
+.recharge-access-notice { display: flex; flex-direction: column; gap: 6rpx; margin: 0 0 12rpx; padding: 20rpx 22rpx; border: 2rpx solid #e4e7ec; border-radius: 16rpx; background: #f8f9fb; }
+.recharge-access-title { color: #344054; font-size: 28rpx; font-weight: 700; }
+.recharge-access-copy { color: #7c8495; font-size: 24rpx; line-height: 1.55; }
+.recharge-product.disabled { opacity: 1; border-color: #e7e9ee; background: #f5f6f8; }
+.recharge-product.disabled .mpb-row-icon { color: #98a2b3; background: #e9ebef; }
+.recharge-product.disabled .mpb-row-title,
+.recharge-product.disabled .mpb-amount { color: #98a2b3; }
+.recharge-product.disabled .mpb-row-meta,
+.recharge-product.disabled .mpb-status { color: #b1b7c3; }
 </style>

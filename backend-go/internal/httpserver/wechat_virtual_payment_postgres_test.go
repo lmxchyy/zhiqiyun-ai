@@ -59,7 +59,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 	}
 
 	t.Run("server product controls amount and session is required", func(t *testing.T) {
-		created, err := service.createOrder(ctx, adminUser{ID: userID}, "", "MEMBER_YEAR_996")
+		created, err := service.createOrder(ctx, adminUser{ID: userID}, "", "MEMBER_PRO_YEAR_996")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,13 +71,15 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		}
 		var storedAmount int64
 		var creditUnits int64
-		if err := db.QueryRowContext(ctx, `select amount_cents, (price_snapshot->>'creditUnits')::bigint from xz_orders where order_no = $1`, created.OrderNo).Scan(&storedAmount, &creditUnits); err != nil {
+		var commissionTemplate string
+		var commissionRuleCount int
+		if err := db.QueryRowContext(ctx, `select amount_cents, (price_snapshot->>'creditUnits')::bigint, coalesce(price_snapshot->>'commissionTemplateCode',''), jsonb_array_length(coalesce(price_snapshot->'commissionRules','[]'::jsonb)) from xz_orders where order_no = $1`, created.OrderNo).Scan(&storedAmount, &creditUnits, &commissionTemplate, &commissionRuleCount); err != nil {
 			t.Fatal(err)
 		}
-		if storedAmount != 99600 || creditUnits != 40000 {
-			t.Fatalf("immutable snapshot mismatch: amount=%d credits=%d", storedAmount, creditUnits)
+		if storedAmount != 99600 || creditUnits != 40000 || commissionTemplate != "COMMISSION_996_STANDARD" || commissionRuleCount != 3 {
+			t.Fatalf("immutable snapshot mismatch: amount=%d credits=%d template=%s rules=%d", storedAmount, creditUnits, commissionTemplate, commissionRuleCount)
 		}
-		agentCreated, err := service.createOrder(ctx, adminUser{ID: userID}, "", "AGENT_JOIN_996")
+		agentCreated, err := service.createOrder(ctx, adminUser{ID: userID}, "", "AGENT_STANDARD_996")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +94,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if agentCreated.AmountCent != 99600 || agentLevel != "AGENT" || agentTokens != 20000 {
 			t.Fatalf("agent upgrade snapshot mismatch: amount=%d level=%s tokens=%d", agentCreated.AmountCent, agentLevel, agentTokens)
 		}
-		if _, err := (&virtualPaymentService{db: db, sessions: newLocalAuthSessions().(*localAuthSessions), cfg: service.cfg}).createOrder(ctx, adminUser{ID: userID}, "", "MEMBER_YEAR_996"); !errors.Is(err, errVirtualPaymentRelogin) {
+		if _, err := (&virtualPaymentService{db: db, sessions: newLocalAuthSessions().(*localAuthSessions), cfg: service.cfg}).createOrder(ctx, adminUser{ID: userID}, "", "MEMBER_PRO_YEAR_996"); !errors.Is(err, errVirtualPaymentRelogin) {
 			t.Fatalf("missing session_key was not rejected: %v", err)
 		}
 	})
@@ -100,7 +102,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 	t.Run("annual membership and credits are atomic and idempotent", func(t *testing.T) {
 		orderNo := prefix + "MEMBER"
 		insertVirtualTestOrder(t, ctx, db, orderNo, tenantID, userID, "plan_ai_creator_996", virtualOrderPaid, virtualOrderSnapshot{
-			ProductCode: "MEMBER_YEAR_996", ProductName: "知启云AI年度会员", ProductType: "MEMBER_PACKAGE",
+			ProductCode: "MEMBER_PRO_YEAR_996", ProductName: "知启云AI Pro年度会员", ProductType: "MEMBERSHIP", PlanType: planTypeMemberPackage,
 			AmountCents: 99600, MemberLevel: "PRO", MemberDays: 365, CreditUnits: 40000,
 			OfferID: "offer", WeChatProductID: "member", Mode: "short_series_goods", Env: 1,
 		}, openid)
@@ -121,7 +123,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `select count(*) from xz_membership_entitlement_records where source_order_no = $1`, orderNo).Scan(&membershipCount); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.QueryRowContext(ctx, `select count(*) from xz_token_records where source_order_no = $1`, orderNo).Scan(&tokenCount); err != nil {
+		if err := db.QueryRowContext(ctx, `select count(*) from xz_token_records where order_id = $1 or source_order_no = $1`, orderNo).Scan(&tokenCount); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.QueryRowContext(ctx, `select subscription_expires_at from xz_users where id = $1`, userID).Scan(&expiresText); err != nil {
@@ -233,7 +235,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `select count(*),max(status) from xz_billing_payment_requests where order_no=$1`, created.OrderNo).Scan(&requestCount, &requestStatus); err != nil {
 			t.Fatal(err)
 		}
-		if afterCredits-beforeCredits != 125 || redemptionStatus != "APPLIED" || invoiceCount != 1 || invoiceStatus != "PAID" || requestCount != 1 || requestStatus != "SUCCEEDED" {
+		if afterCredits-beforeCredits != 35 || redemptionStatus != "APPLIED" || invoiceCount != 1 || invoiceStatus != "PAID" || requestCount != 1 || requestStatus != "SUCCEEDED" {
 			t.Fatalf("commercial coupon flow mismatch: credits=%d redemption=%s invoices=%d/%s requests=%d/%s", afterCredits-beforeCredits, redemptionStatus, invoiceCount, invoiceStatus, requestCount, requestStatus)
 		}
 	})
@@ -266,11 +268,11 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("TOKEN_UPGRADE grants tokens and agent identity atomically", func(t *testing.T) {
+	t.Run("IDENTITY grants points and agent identity atomically", func(t *testing.T) {
 		orderNo := prefix + "AGENTUPGRADE"
 		insertVirtualTestOrder(t, ctx, db, orderNo, tenantID, userID, "plan_agent_join_996", virtualOrderPaid, virtualOrderSnapshot{
-			ProductCode: "AGENT_JOIN_996", ProductName: "996 代理商开通包", ProductType: "TOKEN_UPGRADE", PlanType: planTypeAgentJoinPackage,
-			AmountCents: 99600, AgentLevel: "AGENT", MemberDays: 365, CreditUnits: 20000,
+			ProductCode: "AGENT_STANDARD_996", ProductName: "知启云AI官方代理商", ProductType: "IDENTITY", PlanType: planTypeAgentJoinPackage,
+			AmountCents: 99600, AgentLevel: "AGENT", MemberDays: 0, CreditUnits: 20000,
 			OfferID: "offer", WeChatProductID: "agent-996", Mode: "short_series_goods", Env: 1,
 		}, openid)
 		beforeCredits := virtualTestCreditBalance(t, ctx, db, userID)
@@ -298,7 +300,35 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		if afterCredits-beforeCredits != 20000 || agentStatus != agentStatusActive || channelCount != 1 || profileCount != 1 || tokenCount != 1 {
-			t.Fatalf("TOKEN_UPGRADE mismatch: before=%d after=%d status=%s channel=%d profile=%d tokens=%d", beforeCredits, afterCredits, agentStatus, channelCount, profileCount, tokenCount)
+			t.Fatalf("IDENTITY mismatch: before=%d after=%d status=%s channel=%d profile=%d tokens=%d", beforeCredits, afterCredits, agentStatus, channelCount, profileCount, tokenCount)
+		}
+	})
+
+	t.Run("active agent can purchase membership without losing agent identity", func(t *testing.T) {
+		orderNo := prefix + "AGENTMEMBER"
+		insertVirtualTestOrder(t, ctx, db, orderNo, tenantID, userID, "plan_ai_creator_996", virtualOrderPaid, virtualOrderSnapshot{
+			ProductCode: "MEMBER_PRO_YEAR_996", ProductName: "知启云AI Pro年度会员", ProductType: "MEMBERSHIP", PlanType: planTypeMemberPackage,
+			AmountCents: 99600, MemberLevel: "PRO", MemberDays: 365, CreditUnits: 40000,
+			OfferID: "offer", WeChatProductID: "member-after-agent", Mode: "short_series_goods", Env: 1,
+		}, openid)
+		beforeCredits := virtualTestCreditBalance(t, ctx, db, userID)
+		if err := service.GrantOrderEntitlements(ctx, orderNo); err != nil {
+			t.Fatal(err)
+		}
+		if err := service.GrantOrderEntitlements(ctx, orderNo); err != nil {
+			t.Fatal(err)
+		}
+		afterCredits := virtualTestCreditBalance(t, ctx, db, userID)
+		var agentStatus string
+		var agentCount int
+		if err := db.QueryRowContext(ctx, `select coalesce(agent_status,'') from xz_users where id=$1`, userID).Scan(&agentStatus); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRowContext(ctx, `select count(*) from xz_channel_agents where user_id=$1 and status='ACTIVE'`, userID).Scan(&agentCount); err != nil {
+			t.Fatal(err)
+		}
+		if afterCredits-beforeCredits != 40000 || agentStatus != agentStatusActive || agentCount != 1 {
+			t.Fatalf("agent membership purchase mismatch: credits=%d status=%s agents=%d", afterCredits-beforeCredits, agentStatus, agentCount)
 		}
 	})
 
@@ -391,7 +421,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 	t.Run("transaction failure does not partially grant membership", func(t *testing.T) {
 		orderNo := prefix + "ROLLBACK"
 		insertVirtualTestOrder(t, ctx, db, orderNo, tenantID, userID, "plan_ai_creator_996", virtualOrderPaid, virtualOrderSnapshot{
-			ProductCode: "MEMBER_YEAR_996", ProductName: "rollback", ProductType: "MEMBER_PACKAGE",
+			ProductCode: "MEMBER_PRO_YEAR_996", ProductName: "rollback", ProductType: "MEMBERSHIP",
 			AmountCents: 99600, MemberLevel: "PRO", MemberDays: 365, CreditUnits: math.MaxInt64,
 			OfferID: "offer", WeChatProductID: "member", Mode: "short_series_goods", Env: 1,
 		}, openid)
@@ -540,6 +570,7 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	cleanupImmutableCommissionTestRows(t, ctx, db, prefix)
 	statements := []string{
 		`delete from xz_billing_dunning_events where payment_request_id in (select id from xz_billing_payment_requests where order_no like $1)`,
 		`delete from xz_billing_credit_notes where order_no like $1`,
@@ -551,7 +582,7 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 		`delete from xz_payment_events where order_id like $1`,
 		`delete from xz_membership_entitlement_records where source_order_no like $1`,
 		`delete from xz_image_quota_ledger where source_order_no like $1`,
-		`delete from xz_token_records where source_order_no like $1`,
+		`delete from xz_token_records where order_id like $1 or source_order_no like $1`,
 		`delete from xz_billing_events where task_id like $1`,
 		`delete from xz_wallet_ledger where reference_id like $1`,
 		`delete from xz_commissions where order_id like $1`,
@@ -605,5 +636,26 @@ func cleanupVirtualOrderByNo(t *testing.T, db *sql.DB, orderNo string) {
 		if _, err := db.ExecContext(ctx, statement, orderNo); err != nil {
 			t.Logf("order cleanup failed: %v", err)
 		}
+	}
+}
+
+func cleanupImmutableCommissionTestRows(t *testing.T, ctx context.Context, db *sql.DB, prefix string) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Errorf("commission cleanup transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `set local session_replication_role = replica`); err != nil {
+		t.Errorf("commission cleanup trigger isolation: %v", err)
+		return
+	}
+	if _, err := tx.ExecContext(ctx, `delete from xz_commission_records where order_no like $1`, prefix+"%"); err != nil {
+		t.Errorf("commission cleanup: %v", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		t.Errorf("commission cleanup commit: %v", err)
 	}
 }

@@ -1,5 +1,8 @@
 import { api } from '../../api/client'
 import type {
+  PaymentCapabilityResponse,
+  UnifiedPaymentOrderParams,
+  UnifiedPaymentOrderStatus,
   VirtualPaymentOrderParams,
   VirtualPaymentOrderStatus,
   VirtualPaymentCouponsResponse,
@@ -34,4 +37,25 @@ export async function syncVirtualPaymentOrder(orderNo: string) {
     headers: { 'X-Tenant-Id': '' },
   })
   return payload.item || {}
+}
+
+export function getPaymentCapability(platform: string) {
+  return api<PaymentCapabilityResponse>('/api/v1/payment/capability?platform=' + encodeURIComponent(platform))
+}
+
+export function createUnifiedPaymentOrder(
+  productCode: string,
+  platform: string,
+  paymentChannel: string,
+  idempotencyKey: string,
+) {
+  return api<UnifiedPaymentOrderParams>('/api/v1/payment/orders', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    body: JSON.stringify({ productCode, quantity: 1, platform, paymentChannel }),
+  })
+}
+
+export function getUnifiedPaymentOrder(orderNo: string) {
+  return api<UnifiedPaymentOrderStatus>('/api/v1/payment/orders/' + encodeURIComponent(orderNo))
 }

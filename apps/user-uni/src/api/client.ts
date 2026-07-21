@@ -29,6 +29,10 @@ export function getApiBaseURL(): string {
   return sharedApiClient.getBaseURL()
 }
 
+export function getClientPlatform(): string {
+  return adapter.getClientInfo().platform
+}
+
 export function getAuthToken(): string {
   return authStorage.getToken()
 }

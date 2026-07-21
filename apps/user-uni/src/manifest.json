@@ -2,8 +2,8 @@
     "name" : "知启云 AI",
     "appid" : "__UNI__F1BEA6A",
     "description" : "知启云 AI 一站式内容生产与代理商运营平台",
-    "versionName" : "0.2.0",
-    "versionCode" : "20",
+    "versionName" : "0.2.3",
+    "versionCode" : "23",
     "transformPx" : false,
     "app-plus" : {
         "screenOrientation" : [ "portrait-primary" ],
@@ -43,7 +43,7 @@
                 "appid" : "com.zhiqiyun.xianzhiai",
                 "devices" : "iphone",
                 "deploymentTarget" : "13.0",
-                "dSYMs" : true,
+                "dSYMs" : false,
                 "privacyDescription" : {
                     "NSPhotoLibraryUsageDescription" : "用于选择参考图、头像及营业执照等图片，以完成 AI 创作和企业认证。",
                     "NSPhotoLibraryAddUsageDescription" : "用于将您主动保存的 AI 图片、海报和视频写入系统相册。",
@@ -52,17 +52,34 @@
             },
             "icons" : {
                 "ios" : {
-                    "appstore" : "static/app-icons/ios/appstore.png",
+                    "appstore" : "unpackage/res/icons/1024x1024.png",
                     "iphone" : {
-                        "app@2x" : "static/app-icons/ios/icon-120.png",
-                        "app@3x" : "static/app-icons/ios/icon-180.png",
-                        "spotlight@2x" : "static/app-icons/ios/icon-80.png",
-                        "spotlight@3x" : "static/app-icons/ios/icon-120.png",
-                        "settings@2x" : "static/app-icons/ios/icon-58.png",
-                        "settings@3x" : "static/app-icons/ios/icon-87.png",
-                        "notification@2x" : "static/app-icons/ios/icon-40.png",
-                        "notification@3x" : "static/app-icons/ios/icon-60.png"
+                        "app@2x" : "unpackage/res/icons/120x120.png",
+                        "app@3x" : "unpackage/res/icons/180x180.png",
+                        "spotlight@2x" : "unpackage/res/icons/80x80.png",
+                        "spotlight@3x" : "unpackage/res/icons/120x120.png",
+                        "settings@2x" : "unpackage/res/icons/58x58.png",
+                        "settings@3x" : "unpackage/res/icons/87x87.png",
+                        "notification@2x" : "unpackage/res/icons/40x40.png",
+                        "notification@3x" : "unpackage/res/icons/60x60.png"
+                    },
+                    "ipad" : {
+                        "app" : "unpackage/res/icons/76x76.png",
+                        "app@2x" : "unpackage/res/icons/152x152.png",
+                        "notification" : "unpackage/res/icons/20x20.png",
+                        "notification@2x" : "unpackage/res/icons/40x40.png",
+                        "proapp@2x" : "unpackage/res/icons/167x167.png",
+                        "settings" : "unpackage/res/icons/29x29.png",
+                        "settings@2x" : "unpackage/res/icons/58x58.png",
+                        "spotlight" : "unpackage/res/icons/40x40.png",
+                        "spotlight@2x" : "unpackage/res/icons/80x80.png"
                     }
+                },
+                "android" : {
+                    "hdpi" : "static/app-icons/android/icon-72.png",
+                    "xhdpi" : "static/app-icons/android/icon-96.png",
+                    "xxhdpi" : "static/app-icons/android/icon-144.png",
+                    "xxxhdpi" : "static/app-icons/android/icon-192.png"
                 }
             }
         }

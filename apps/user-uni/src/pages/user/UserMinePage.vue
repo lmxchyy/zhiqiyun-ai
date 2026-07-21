@@ -18,13 +18,29 @@
       :ppt-count="pptAssetCount"
       :avatar-url="avatarUrl"
       :avatar-fallback="avatarFallback"
-      @upgrade="openPage(miniProgramMinePages['agent-upgrade'])"
+	  :hide-commerce-summary="true"
+      @upgrade="openAgentCommerce()"
       @edit="openPage(miniProgramFeaturePages.userProfileEdit)"
       @recharge="openPage(miniProgramFeaturePages.userRechargePlans)"
       @role-change="handleRoleChange($event)"
       @service="handleService($event)"
       @benefit="handleBenefit($event)"
-    />
+    >
+      <template #commerce>
+        <UserCommerceCards
+          :point-balance="pointBalance"
+          :member-active="memberActive"
+          :member-expires-text="memberExpiresText"
+          :agent-active="agentActive"
+          :invite-code="agentInviteCode"
+          :promotion-count="agentPromotionCount"
+          :pending-commission-cents="agentPendingCommissionCents"
+          @recharge="openPage(miniProgramFeaturePages.userRechargePlans)"
+          @member="openPage(miniProgramFeaturePages.userMembershipDetail)"
+          @agent="openAgentCommerce()"
+        />
+      </template>
+    </V531ProfilePage>
 
     <view v-if="loadError" class="mine-load-note" role="alert">
       <text>{{ loadError }}</text>
@@ -34,10 +50,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { onPullDownRefresh, onShow } from "@dcloudio/uni-app";
 import type { MemberProfileResponse, RoleWalletResponse } from "@xianzhi/business-sdk";
 import V531ProfilePage from "../../components/v531/V531ProfilePage.vue";
+import UserCommerceCards from "../../components/commerce/UserCommerceCards.vue";
 import { authStorage, businessSdk, setAuthToken } from "../../api/client";
 import {
   miniProgramCreationPages,
@@ -48,6 +65,7 @@ import {
 } from "../../config/miniProgramPages";
 import { isAppRole, permissionsForRole, roleLabels } from "../../config/permissions";
 import { usePageConfigStore } from "../../stores/pageConfig";
+import { useAuthStore } from "../../stores/auth";
 import { useUserStore } from "../../stores/user";
 import type { AppRole, Asset, AuthResponse, GenerationTask } from "../../types";
 import { syncCustomTabBar } from "../../utils/customTabBar";
@@ -55,6 +73,7 @@ import { syncCustomTabBar } from "../../utils/customTabBar";
 type AnyRecord = Record<string, unknown>;
 
 const userStore = useUserStore();
+const authStore = useAuthStore();
 const pageConfigStore = usePageConfigStore();
 const auth = ref<AuthResponse | null>(authStorage.getAuth());
 const profile = ref<MemberProfileResponse | null>(null);
@@ -64,16 +83,20 @@ const recentAssets = ref<Asset[]>([]);
 const generationTasks = ref<GenerationTask[]>([]);
 const loading = ref(false);
 const loadError = ref("");
-const isGuest = computed(() => !authStorage.getToken());
+const isGuest = computed(() => !authStore.token);
 
 const userPermissions = computed(() => userStore.currentRole === "USER"
   ? userStore.permissions
   : permissionsForRole("USER"));
-const displayName = computed(() => isGuest.value ? "\u6e38\u5ba2" : profile.value?.user?.name
-  || auth.value?.user?.name
-  || profile.value?.user?.email
-  || auth.value?.user?.email
-  || "当前用户");
+const displayName = computed(() => {
+  if (isGuest.value) return "\u6e38\u5ba2";
+  const value = String(profile.value?.user?.name
+    || auth.value?.user?.name
+    || profile.value?.user?.email
+    || auth.value?.user?.email
+    || "当前用户").trim();
+  return /^用户\s*1\d{2}\*+\d+/i.test(value) ? "知启云用户" : value;
+});
 const displayUserId = computed(() => rowString(profile.value?.user, "id", "userId")
   || rowString(auth.value?.user, "id", "userId")
   || "--");
@@ -96,6 +119,21 @@ const subscriptionExpiresAt = computed(() => rowString(profile.value?.user, "sub
   || rowString(profile.value?.plan, "expiresAt", "validUntil", "endedAt"));
 const pointAccount = computed(() => wallet.value?.account || points.value?.account || profile.value?.account || null);
 const pointBalance = computed(() => asNumber(pointAccount.value?.available));
+const memberActive = computed(() => {
+  const level = rowString(profile.value?.user, "memberLevel").toUpperCase();
+  if (!level || level === "FREE") return false;
+  const expires = new Date(subscriptionExpiresAt.value);
+  return Number.isNaN(expires.getTime()) || expires.getTime() > Date.now();
+});
+const memberExpiresText = computed(() => {
+  const expires = new Date(subscriptionExpiresAt.value);
+  if (Number.isNaN(expires.getTime())) return subscriptionExpiresAt.value || "--";
+  return `${expires.getFullYear()}-${String(expires.getMonth() + 1).padStart(2, "0")}-${String(expires.getDate()).padStart(2, "0")}`;
+});
+const agentActive = computed(() => userStore.roles.includes("AGENT") || rowString(profile.value?.user, "agentStatus").toUpperCase() === "ACTIVE");
+const agentInviteCode = computed(() => rowString(profile.value?.agent, "inviteCode", "invite_code") || rowString(profile.value?.user, "inviteCode"));
+const agentPromotionCount = computed(() => asNumber((profile.value?.agent as AnyRecord | undefined)?.promotionCount || (profile.value?.agent as AnyRecord | undefined)?.customerCount));
+const agentPendingCommissionCents = computed(() => asNumber((profile.value?.agent as AnyRecord | undefined)?.pendingCommissionCents || (profile.value?.agent as AnyRecord | undefined)?.frozenCommissionCents));
 const walletRecords = computed(() => [
   ...recordList(wallet.value?.transactions),
   ...recordList(points.value?.transactions),
@@ -205,6 +243,14 @@ function openUserTab(url: string) {
   uni.switchTab({ url, fail: () => uni.reLaunch({ url }) });
 }
 
+function openAgentCommerce() {
+  if (agentActive.value) {
+    uni.reLaunch({ url: rolePage("agent", "overview") });
+    return;
+  }
+  openPage(miniProgramFeaturePages.userAgentDetail);
+}
+
 async function handleRoleChange(payload: unknown) {
   const roleValue = emittedValue(payload);
   if (!isAppRole(roleValue)) {
@@ -254,8 +300,8 @@ function confirmLogout() {
     confirmColor: "#D64545",
     success: result => {
       if (!result.confirm) return;
-      authStorage.clear();
-      userStore.reset();
+      clearProfileData();
+      authStore.logout();
       uni.removeStorageSync("xianzhiMiniProgramAuth");
       uni.switchTab({ url: "/pages/user/UserHomePage" });
     },
@@ -267,7 +313,7 @@ function handleService(payload: unknown) {
   const actions: Record<string, () => void> = {
     ai: () => openUserTab(rolePage("user", "create")),
     recharge: () => openPage(miniProgramFeaturePages.userRechargePlans),
-    membership: () => openPage(miniProgramFeaturePages.userRechargePlans),
+    membership: () => openPage(miniProgramFeaturePages.userMembershipDetail),
     wallet: () => openPage(rolePage("user", "wallet")),
     assets: () => openUserTab(rolePage("user", "assets")),
     recent: () => openUserTab(rolePage("user", "assets")),
@@ -304,7 +350,7 @@ function handleService(payload: unknown) {
     "ai-infographic": () => openPage(miniProgramCreationPages.infographic),
     "upgrade-agent": () => userStore.roles.includes("AGENT")
       ? void handleRoleChange("AGENT")
-      : openPage(miniProgramMinePages["agent-upgrade"]),
+      : openPage(miniProgramFeaturePages.userAgentDetail),
     coupons: () => uni.showToast({ title: "暂无可用优惠券", icon: "none" }),
     settings: () => openPage(miniProgramFeaturePages.userSettings),
     logout: confirmLogout,
@@ -316,20 +362,34 @@ function handleService(payload: unknown) {
 
 function handleBenefit(payload: unknown) {
   const id = emittedValue(payload);
-  if (id === "member") openPage(miniProgramFeaturePages.userRechargePlans);
+  if (id === "member") openPage(miniProgramFeaturePages.userMembershipDetail);
   else showCompany();
 }
 
+let refreshQueued = false;
+let refreshEpoch = 0;
+
+function clearProfileData() {
+  refreshEpoch += 1;
+  auth.value = null;
+  profile.value = null;
+  wallet.value = null;
+  points.value = null;
+  recentAssets.value = [];
+  generationTasks.value = [];
+  loadError.value = "";
+}
+
 async function refreshProfile() {
-  if (loading.value) return;
+  const requestEpoch = ++refreshEpoch;
   const token = authStorage.getToken() || String(uni.getStorageSync("token") || "");
   if (!token) {
-    auth.value = null;
-    profile.value = null;
-    wallet.value = null;
-    points.value = null;
-    recentAssets.value = [];
-    generationTasks.value = [];
+    clearProfileData();
+    userStore.reset();
+    return;
+  }
+  if (loading.value) {
+    refreshQueued = true;
     return;
   }
 
@@ -351,6 +411,14 @@ async function refreshProfile() {
       pageConfigStore.ensure("profile"),
     ]);
 
+    if (requestEpoch !== refreshEpoch) {
+      if (!authStore.token) {
+        clearProfileData();
+        userStore.reset();
+      }
+      return;
+    }
+
     if (results[0].status === "fulfilled" && userStore.currentRole !== "USER" && userStore.roles.includes("USER")) {
       try {
         await userStore.switchRole("USER");
@@ -370,8 +438,18 @@ async function refreshProfile() {
     }
   } finally {
     loading.value = false;
+    if (refreshQueued) {
+      refreshQueued = false;
+      void refreshProfile();
+    }
   }
 }
+
+watch(() => authStore.token, (nextToken, previousToken) => {
+  if (nextToken === previousToken) return;
+  if (!nextToken) clearProfileData();
+  void refreshProfile();
+});
 
 onShow(() => {
   syncCustomTabBar(3);
