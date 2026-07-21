@@ -40,8 +40,8 @@
       </view>
 
       <view v-if="resultMessage" :class="['mpb-note', resultTone]">{{ resultMessage }}</view>
-      <button class="mpb-button" :disabled="!rechargeEligible || !selectedProduct || paying || !paymentEnabled || !customQuantityValid" @click="pay()">
-        {{ !rechargeEligible ? '开通会员或成为代理商后可充值' : paying ? actionLabel : selectedProduct ? `微信支付 ${formatCurrency(payAmountCent)}` : '请选择商品' }}
+      <button class="mpb-button" :disabled="!rechargeEligible || !selectedProduct || paying || !canPay || !customQuantityValid" @click="pay()">
+        {{ !rechargeEligible ? '开通会员或成为代理商后可充值' : paying ? actionLabel : !canPay ? '暂未开放' : selectedProduct ? `微信支付 ${formatCurrency(payAmountCent)}` : '请选择商品' }}
       </button>
       <button v-if="orderNo && !completed" class="mpb-button secondary" :disabled="syncing" @click="manualSync()">{{ syncing ? '正在同步...' : '查询微信支付结果' }}</button>
       <text class="mpb-footer-note">Token与创作额度仅限知启云AI平台消费，不支持提现、转账或赠送。</text>
@@ -52,19 +52,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
-import { businessSdk } from '../../api/client'
+import { businessSdk, getClientPlatform } from '../../api/client'
 import { backOrHome, formatCurrency } from '../../utils/miniProgramBusiness'
-import { createVirtualPaymentOrder, getVirtualPaymentOrderStatus, listVirtualPaymentCoupons, listVirtualPaymentProducts, syncVirtualPaymentOrder } from '../../features/payment/api'
-import { ensureWechatMiniProgramPaymentAvailable } from '../../features/payment/availability'
+import { createVirtualPaymentOrder, getPaymentCapability, getVirtualPaymentOrderStatus, listVirtualPaymentCoupons, listVirtualPaymentProducts, syncVirtualPaymentOrder } from '../../features/payment/api'
 import { requestWeChatVirtualPayment, virtualPaymentError } from '../../features/payment/platform'
 import { requireAuth } from '../../features/auth/gate'
-import type { VirtualPaymentCoupon, VirtualPaymentOrderStatus, VirtualPaymentProduct } from '../../features/payment/types'
+import type { PaymentCapability, VirtualPaymentCoupon, VirtualPaymentOrderStatus, VirtualPaymentProduct } from '../../features/payment/types'
 import loginLogo from '../../assets/zhiqiyun-logo-transparent.png'
 
 const loading = ref(false)
 const paying = ref(false)
 const syncing = ref(false)
 const paymentEnabled = ref(false)
+const paymentCapability = ref<PaymentCapability>('unavailable')
+const paymentStatus = ref('UNAVAILABLE')
 const products = ref<VirtualPaymentProduct[]>([])
 const coupons = ref<VirtualPaymentCoupon[]>([])
 const selectedCode = ref('')
@@ -79,6 +80,7 @@ const rechargeEligible = ref(false)
 let disposed = false
 
 const selectedProduct = computed(() => products.value.find(item => item.productCode === selectedCode.value) || null)
+const canPay = computed(() => paymentEnabled.value && paymentCapability.value === 'available' && paymentStatus.value === 'READY')
 const customQuantityValid = computed(() => {
   const product = selectedProduct.value
   if (!product?.customQuantity) return true
@@ -91,9 +93,10 @@ const customTokenAmount = computed(() => (selectedProduct.value?.creditUnits || 
 async function load() {
   loading.value = true
   try {
-    const [payload, profilePayload] = await Promise.all([
+    const [payload, profilePayload, capability] = await Promise.all([
       listVirtualPaymentProducts(),
       businessSdk.roleWorkbench.memberProfile(),
+      getPaymentCapability(getClientPlatform()),
     ])
     const profile = profilePayload as unknown as Record<string, any>
     const user = (profile.user || {}) as Record<string, any>
@@ -105,9 +108,12 @@ async function load() {
     const agentActive = String(user.agentStatus || agent.status || '').toUpperCase() === 'ACTIVE' || Boolean(profile.agent && !agent.status)
     rechargeEligible.value = memberActive || agentActive
     products.value = payload.items.filter(item => item.active && item.productType === 'TOKEN_ONLY')
-    paymentEnabled.value = payload.enabled
+    paymentCapability.value = capability.paymentCapability
+    paymentStatus.value = capability.paymentStatus
+    paymentEnabled.value = payload.enabled && capability.enabled
     selectedCode.value = rechargeEligible.value ? products.value[0]?.productCode || '' : ''
-    if (!payload.enabled) resultMessage.value = '服务端尚未启用微信虚拟支付，请先完成环境变量和微信商品配置。'
+    if (!capability.enabled) resultMessage.value = capability.message
+    else if (!payload.enabled) resultMessage.value = '服务端支付商品暂不可用，请稍后重试。'
   }
   catch (error) {
     resultMessage.value = error instanceof Error ? error.message : '商品加载失败'
@@ -120,7 +126,7 @@ async function load() {
 
 async function pay() {
   const product = selectedProduct.value
-  if (!rechargeEligible.value || !product || paying.value) return
+  if (!rechargeEligible.value || !product || paying.value || !canPay.value) return
   paying.value = true
   completed.value = false
   resultTone.value = ''
@@ -247,9 +253,7 @@ watch(selectedCode, async (productCode) => {
   catch { coupons.value = [] }
 })
 
-onLoad(() => {
-  if (ensureWechatMiniProgramPaymentAvailable()) void load()
-})
+onLoad(() => void load())
 onUnload(() => { disposed = true })
 </script>
 

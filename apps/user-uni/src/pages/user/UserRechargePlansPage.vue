@@ -9,7 +9,10 @@ import { onLoad } from '@dcloudio/uni-app'
 import { miniProgramFeaturePages } from '../../config/miniProgramPages'
 
 onLoad(() => {
-  uni.redirectTo({ url: miniProgramFeaturePages.userRechargePlans })
+  uni.redirectTo({
+    url: miniProgramFeaturePages.userVirtualPayment,
+    fail: () => uni.reLaunch({ url: miniProgramFeaturePages.userVirtualPayment }),
+  })
 })
 </script>
 
