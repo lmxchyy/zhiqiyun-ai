@@ -455,6 +455,21 @@ func TestCommercialIdentityAccessAndRBACLifecycle(t *testing.T) {
 	if principal, found, err := store.GetChannelWorkbenchAgentForUser(userID); err != nil || !found || principal.UserID != userID {
 		t.Fatalf("active agent cannot access workbench principal=%+v found=%v err=%v", principal, found, err)
 	}
+	sessions := newLocalAuthSessions()
+	if err := sessions.Put(t.Context(), "rbac-security-token", userID, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	requestWorkbench := func() *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/channel/customers", nil)
+		request.Header.Set("Authorization", "Bearer rbac-security-token")
+		recorder := httptest.NewRecorder()
+		newChannelAPI(store, sessions).customers(recorder, request)
+		return recorder
+	}
+	if recorder := requestWorkbench(); recorder.Code != http.StatusOK {
+		t.Fatalf("member upgraded to agent cannot access endpoint: %d %s", recorder.Code, recorder.Body.String())
+	}
 	if roleStatus("AGENT") != "ACTIVE" {
 		t.Fatal("AGENT RBAC role was not activated")
 	}
@@ -473,6 +488,9 @@ func TestCommercialIdentityAccessAndRBACLifecycle(t *testing.T) {
 	if _, found, err := store.GetChannelWorkbenchAgentForUser(userID); err != nil || found {
 		t.Fatalf("frozen agent retained workbench access found=%v err=%v", found, err)
 	}
+	if recorder := requestWorkbench(); recorder.Code != http.StatusForbidden {
+		t.Fatalf("frozen agent endpoint status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
 
 	confirmChange(identityChangePreviewRequest{Action: "RESTORE", Method: identityMethodOnlyIdentity, Reason: "security investigation cleared"})
 	if roleStatus("AGENT") != "ACTIVE" {
@@ -484,6 +502,9 @@ func TestCommercialIdentityAccessAndRBACLifecycle(t *testing.T) {
 	}
 	if principal, found, err := store.GetChannelWorkbenchAgentForUser(userID); err != nil || !found || principal.OperationCenterID == "" {
 		t.Fatalf("operation center inheritance failed principal=%+v found=%v err=%v", principal, found, err)
+	}
+	if recorder := requestWorkbench(); recorder.Code != http.StatusOK {
+		t.Fatalf("operation center inherited workbench status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
 	preview, err := store.PreviewAdminIdentityDowngrade(adminID, "SUPER_ADMIN", userID, identityDowngradeRequest{TargetIdentity: "AGENT", ChildStrategy: downgradeKeepHistory, Reason: "controlled operation center downgrade"})

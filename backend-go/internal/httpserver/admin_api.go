@@ -1564,7 +1564,7 @@ func marketingInviteRecordRows(data adminPlatformData) []map[string]any {
 				continue
 			}
 			rechargeStatus = "PAID"
-			if strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") {
+			if userHasActiveChannelProfile(data, user.ID) {
 				upgradeStatus = "UPGRADED"
 			}
 			break
@@ -2474,7 +2474,7 @@ func billingPaymentRows(data adminPlatformData) []map[string]any {
 }
 
 func billingCustomerGroupName(data adminPlatformData, user adminUser) string {
-	if strings.HasPrefix(user.Role, "AGENT") {
+	if userHasActiveChannelProfile(data, user.ID) {
 		return "channel_a"
 	}
 	if strings.Contains(strings.ToLower(user.Email), "vip") && len(data.CustomerGroups) > 1 {
@@ -2976,7 +2976,7 @@ func defaultAPIModels() []adminAPIModel {
 func defaultAPIKeys(data adminPlatformData) []adminAPIKey {
 	items := []adminAPIKey{}
 	for _, user := range data.Users {
-		if user.Role == "MEMBER" || strings.HasPrefix(user.Role, "AGENT") {
+		if user.Role == "MEMBER" || userHasActiveChannelProfile(data, user.ID) {
 			items = append(items, adminAPIKey{ID: "key_" + user.ID, Customer: user.Name, Prefix: "sk-" + shortID(user.ID), Status: user.Status, Models: []string{"mock-standard", "gpt-image-2"}, QuotaLimit: 100000})
 		}
 	}

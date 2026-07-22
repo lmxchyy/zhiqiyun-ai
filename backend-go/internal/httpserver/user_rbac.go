@@ -209,10 +209,10 @@ func (a *userRBACAPI) authenticatedUser(r *http.Request) (adminPlatformData, adm
 func rolesForUser(data adminPlatformData, user adminUser) []string {
 	roles := []string{roleUser}
 	legacyRole := strings.ToUpper(strings.TrimSpace(user.Role))
-	if strings.HasPrefix(legacyRole, "AGENT") || strings.EqualFold(user.AgentStatus, "ACTIVE") {
+	if strings.EqualFold(user.AgentStatus, "ACTIVE") {
 		roles = appendUnique(roles, roleAgent)
 	}
-	if legacyRole == "OPERATION_CENTER" || strings.EqualFold(user.OperationCenterStatus, "ACTIVE") {
+	if strings.EqualFold(user.OperationCenterStatus, "ACTIVE") {
 		roles = appendUnique(roles, roleOperation)
 	}
 	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok && strings.EqualFold(agent.Status, "ACTIVE") {
@@ -228,6 +228,17 @@ func rolesForUser(data adminPlatformData, user adminUser) []string {
 		roles = appendUnique(roles, roleCustomerService)
 	}
 	return sortedRoles(roles)
+}
+
+// userHasActiveChannelProfile is the explicit JSON-store compatibility path.
+// PostgreSQL authorization uses xz_user_business_identities through
+// GetChannelWorkbenchAgentForUser; this helper never grants endpoint access.
+func userHasActiveChannelProfile(data adminPlatformData, userID string) bool {
+	if agent, ok := channelAgentForUser(data.ChannelAgents, userID); ok && strings.EqualFold(agent.Status, "ACTIVE") {
+		return true
+	}
+	_, ok := activeOperationCenterForUser(data.OperationCenters, userID)
+	return ok
 }
 
 func normalizedUserRoleAccess(access userRoleAccess) userRoleAccess {

@@ -532,10 +532,11 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if enterpriseContext && len(module.OpenTenantIDs) > 0 && !stringListContains(module.OpenTenantIDs, effectiveTenantID(user)) {
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to tenant %s", moduleCode, effectiveTenantID(user))
 	}
-	if strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") && !module.AllowAgents {
+	commercialAgent := userHasActiveChannelProfile(data, user.ID)
+	if commercialAgent && !module.AllowAgents {
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to agents", moduleCode)
 	}
-	if !strings.HasPrefix(strings.ToUpper(user.Role), "AGENT") && !module.AllowEndUsers {
+	if !commercialAgent && !module.AllowEndUsers {
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to end users", moduleCode)
 	}
 	if modelName == "" {
