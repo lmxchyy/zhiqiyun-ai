@@ -37,6 +37,9 @@ func (f S3ProviderFactory) Build(cfg Config) (Provider, error) {
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrProviderUnsupported, cfg.Provider)
 	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Provider), "huawei_obs") {
+		return buildHuaweiOBSProvider(cfg, f.AutoCreateBucket)
+	}
 	region := strings.TrimSpace(cfg.Region)
 	if region == "" {
 		region = "us-east-1"
