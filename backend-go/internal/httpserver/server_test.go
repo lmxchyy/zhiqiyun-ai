@@ -1616,6 +1616,19 @@ func TestAdminCustomerProfileRejectsRoleEscalation(t *testing.T) {
 	} else if updated.Role != target.Role {
 		t.Fatalf("store-level role write was not blocked: %s", updated.Role)
 	}
+	create := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers", bytes.NewBufferString(`{"name":"escalation","email":"escalation@example.test","role":"SUPER_ADMIN"}`), adminToken)
+	if create.Code != http.StatusBadRequest || !strings.Contains(create.Body.String(), "protected fields: role") {
+		t.Fatalf("customer creation role escalation was not rejected: %d %s", create.Code, create.Body.String())
+	}
+	data, err := testStore.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range data.Users {
+		if strings.EqualFold(user.Email, "escalation@example.test") {
+			t.Fatalf("rejected role escalation created a user: %+v", user)
+		}
+	}
 }
 
 func TestDeleteMissingAssetReturnsNotFound(t *testing.T) {

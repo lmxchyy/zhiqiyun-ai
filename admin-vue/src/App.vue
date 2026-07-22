@@ -11607,10 +11607,8 @@ async function openCreateCustomerDialog() {
   const form = {
     name: "",
     email: `customer${Date.now()}@example.com`,
-    role: "MEMBER",
     status: "ACTIVE",
     planId: "plan_free",
-    referredBy: "",
     available: "1000"
   };
   await ElMessageBox({
@@ -11638,21 +11636,6 @@ async function openCreateCustomerDialog() {
         })
       ]),
       h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "客户角色"),
-        h("select", {
-          class: "channel-dialog-input",
-          value: form.role,
-          onChange: (event: Event) => {
-            form.role = (event.target as HTMLSelectElement).value;
-          }
-        }, [
-          h("option", { value: "MEMBER" }, "普通会员"),
-          h("option", { value: "ADMIN" }, "管理员"),
-          h("option", { value: "FINANCE" }, "财务"),
-          h("option", { value: "DELIVERY_MANAGER" }, "交付负责人")
-        ])
-      ]),
-      h("label", { class: "channel-dialog-field" }, [
         h("span", null, "账号状态"),
         h("select", {
           class: "channel-dialog-input",
@@ -11678,17 +11661,6 @@ async function openCreateCustomerDialog() {
           h("option", { value: "plan_month" }, "月度套餐"),
           h("option", { value: "plan_year" }, "年度套餐")
         ])
-      ]),
-      h("label", { class: "channel-dialog-field" }, [
-        h("span", null, "来源代理用户 ID"),
-        h("input", {
-          class: "channel-dialog-input",
-          value: form.referredBy,
-          placeholder: "例如：user_000003，可留空",
-          onInput: (event: Event) => {
-            form.referredBy = (event.target as HTMLInputElement).value;
-          }
-        })
       ]),
       h("label", { class: "channel-dialog-field" }, [
         h("span", null, "初始点数"),
@@ -11731,10 +11703,8 @@ async function openCreateCustomerDialog() {
         await store.mutate("POST", "/admin/customers", {
           name,
           email,
-          role: form.role,
           status: form.status,
           planId: form.planId,
-          referredBy: form.referredBy.trim(),
           available
         });
         done();

@@ -156,8 +156,29 @@ func modelRouteSummary(route adminUserModelRoute) string {
 	return strings.Join(parts, " / ")
 }
 func (a adminAPI) createCustomer(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var submitted map[string]json.RawMessage
+	if err := json.Unmarshal(body, &submitted); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	protected := make([]string, 0, 2)
+	for _, field := range []string{"role", "referredBy"} {
+		if _, exists := submitted[field]; exists {
+			protected = append(protected, field)
+		}
+	}
+	if len(protected) > 0 {
+		a.auditRejectedCustomerFields(r, "", protected)
+		writeError(w, http.StatusBadRequest, fmt.Errorf("customer creation cannot set protected fields: %s; use account-role or relationship management", strings.Join(protected, ", ")))
+		return
+	}
 	var req adminCustomerMutation
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
