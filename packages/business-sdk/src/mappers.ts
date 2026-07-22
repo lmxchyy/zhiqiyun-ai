@@ -36,6 +36,66 @@ export function normalizeWorkType(asset: Asset | GenerationTask): WorkType {
   return "image";
 }
 
+const draftOnlyParameterKeys = new Set([
+  "mode",
+  "prompt",
+  "model",
+  "modelName",
+  "style",
+  "stylePreset",
+  "size",
+  "aspectRatio",
+  "aspect_ratio",
+  "imageRatio",
+  "quality",
+  "imageQuality",
+  "count",
+  "imageCount",
+  "generationCount",
+  "referencePaths",
+  "referenceImages",
+  "files",
+  "selectedFiles",
+  "negativePrompt",
+  "negative_prompt",
+  "duration",
+  "templateId",
+  "contentType",
+  "intent",
+  "sourceAssetId",
+  "sourceTaskId",
+  "restoredParams",
+  "slideCount",
+  "dynamic",
+]);
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+export function generationParametersFromDraft(parameters?: Record<string, unknown>): Record<string, unknown> {
+  if (!parameters) return {};
+  const result: Record<string, unknown> = {
+    ...recordValue(parameters.restoredParams),
+    ...parameters,
+  };
+  const sourceAssetId = result.sourceAssetId;
+  const sourceTaskId = result.sourceTaskId;
+  for (const key of draftOnlyParameterKeys) delete result[key];
+  if (typeof sourceAssetId === "string" && sourceAssetId.trim()) {
+    result.sourceReferenceAssetId = sourceAssetId.trim();
+  }
+  if (typeof sourceTaskId === "string" && sourceTaskId.trim()) {
+    result.sourceReferenceTaskId = sourceTaskId.trim();
+  }
+  for (const [key, value] of Object.entries(result)) {
+    if (value === undefined) delete result[key];
+  }
+  return result;
+}
+
 export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRequest {
   const referenceImages = draft.referenceImages.filter(Boolean);
   const referenceImage = referenceImages[0];
@@ -48,24 +108,25 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
     url,
     name: `reference-${index + 1}`,
   }));
+  const extraParameters = generationParametersFromDraft(draft.parameters);
   const params = draft.mode === "video"
     ? {
+        ...extraParameters,
         duration: draft.duration || 5,
         resolution: draft.quality || "720p",
         aspect_ratio: draft.size || "16:9",
         generate_audio: true,
         ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
         ...(referenceImage ? { reference_image: referenceImage } : {}),
-        ...(draft.parameters || {}),
       }
     : {
+        ...extraParameters,
         size: draft.size || "1024x1024",
         quality: draft.quality || "standard",
         n: draft.count || 1,
         ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
         ...(referenceImage ? { reference_image: referenceImage } : {}),
         ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
-        ...(draft.parameters || {}),
       };
   return {
     type,
