@@ -700,19 +700,23 @@ func (a adminAPI) operationCenters(w http.ResponseWriter, _ *http.Request) {
 	items := make([]map[string]any, 0, len(data.OperationCenters))
 	for _, center := range data.OperationCenters {
 		view := map[string]any{
-			"id":           center.ID,
-			"userId":       center.UserID,
-			"name":         center.Name,
-			"owner":        users[center.UserID].Name,
-			"region":       center.Region,
-			"inviteCode":   center.InviteCode,
-			"status":       center.Status,
-			"joinOrderId":  center.JoinOrderID,
-			"joinFeeCents": center.JoinFeeCents,
-			"approvedAt":   center.ApprovedAt,
-			"createdAt":    center.CreatedAt,
-			"updatedAt":    center.UpdatedAt,
-			"summary":      operationCenterSummary(data, center.ID),
+			"id":                center.ID,
+			"userId":            center.UserID,
+			"name":              center.Name,
+			"owner":             users[center.UserID].Name,
+			"region":            center.Region,
+			"inviteCode":        center.InviteCode,
+			"responsiblePerson": center.ResponsiblePerson,
+			"contactInfo":       center.ContactInfo,
+			"settlementProfile": center.SettlementProfile,
+			"agreementStatus":   center.AgreementStatus,
+			"status":            center.Status,
+			"joinOrderId":       center.JoinOrderID,
+			"joinFeeCents":      center.JoinFeeCents,
+			"approvedAt":        center.ApprovedAt,
+			"createdAt":         center.CreatedAt,
+			"updatedAt":         center.UpdatedAt,
+			"summary":           operationCenterSummary(data, center.ID),
 		}
 		items = append(items, view)
 	}
