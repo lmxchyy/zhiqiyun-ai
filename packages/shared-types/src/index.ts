@@ -335,6 +335,9 @@ export interface CreateDraft {
   quality: string;
   count: number;
   referenceImages: string[];
+  negativePrompt?: string;
+  duration?: number;
+  parameters?: Record<string, unknown>;
 }
 
 export interface ChannelCommission {

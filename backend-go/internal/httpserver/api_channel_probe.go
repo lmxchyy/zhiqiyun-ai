@@ -463,13 +463,26 @@ func splitProviderModels(models []string) ([]string, []string, []string) {
 		switch {
 		case strings.Contains(lower, "veo") || strings.Contains(lower, "sora") || strings.Contains(lower, "video") || strings.Contains(lower, "seedance"):
 			videoModels = append(videoModels, model)
-		case strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "flux") || strings.Contains(lower, "dall") || strings.Contains(lower, "z-image"):
+		case strings.Contains(lower, "image") || strings.Contains(lower, "img") || strings.Contains(lower, "flux") || strings.Contains(lower, "dall") || strings.Contains(lower, "z-image") || strings.Contains(lower, "banana") || strings.Contains(lower, "sdxl") || strings.Contains(lower, "stable") || strings.Contains(lower, "kolors") || strings.Contains(lower, "midjourney"):
 			imageModels = append(imageModels, model)
 		default:
 			chatModels = append(chatModels, model)
 		}
 	}
 	return imageModels, chatModels, videoModels
+}
+
+func mergeAPIChannelModels(existing []string, discovered []string) ([]string, []string) {
+	merged := uniqueNonEmptyStrings(existing)
+	added := []string{}
+	for _, model := range uniqueNonEmptyStrings(discovered) {
+		if stringListContains(merged, model) {
+			continue
+		}
+		merged = append(merged, model)
+		added = append(added, model)
+	}
+	return merged, added
 }
 
 func upstreamErrorMessage(raw any, fallback string) string {

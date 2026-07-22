@@ -55,6 +55,14 @@ func TestUserRBACProfileAndCurrentRole(t *testing.T) {
 	if !containsString(operation.Roles, roleUser) || !containsString(operation.Roles, roleOperation) || containsString(operation.Roles, roleAgent) {
 		t.Fatalf("unexpected operation roles: %+v", operation.Roles)
 	}
+	operationSwitch := authedRequest(t, handler, http.MethodPost, "/api/v1/user/current-role", bytes.NewBufferString(`{"role":"OPERATION"}`), operationToken)
+	if operationSwitch.Code != http.StatusOK {
+		t.Fatalf("operation role switch status = %d, body = %s", operationSwitch.Code, operationSwitch.Body.String())
+	}
+	operation = getUserRoleAccess(t, handler, operationToken)
+	if !containsString(operation.Permissions, "operation:dashboard") || !containsString(operation.Permissions, "agent:promotion") || !containsString(operation.Permissions, "agent:commission:view") {
+		t.Fatalf("operation role does not inherit agent permissions: %+v", operation.Permissions)
+	}
 }
 
 func TestUserRBACRequiresAuthentication(t *testing.T) {

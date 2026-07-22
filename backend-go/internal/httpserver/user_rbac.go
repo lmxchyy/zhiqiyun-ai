@@ -36,6 +36,8 @@ var rolePermissionMatrix = map[string][]string{
 	roleOperation: {
 		"operation:dashboard", "operation:agent:list", "operation:agent:approve", "operation:order:view",
 		"operation:customer:view", "operation:report:view", "operation:announcement:manage", "operation:renew",
+		"agent:promotion", "agent:promotion:create", "agent:qrcode:view", "agent:customer:view",
+		"agent:commission:view", "agent:withdraw", "agent:material:view",
 	},
 	roleEnterpriseAdmin: {
 		"enterprise.ai.use", "enterprise.compute.ledger.read",

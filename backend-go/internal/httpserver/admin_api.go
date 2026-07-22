@@ -180,8 +180,29 @@ func (a adminAPI) createCustomer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a adminAPI) updateCustomer(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var submitted map[string]json.RawMessage
+	if err := json.Unmarshal(body, &submitted); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	protected := make([]string, 0, 3)
+	for _, field := range []string{"role", "planId", "referredBy"} {
+		if _, exists := submitted[field]; exists {
+			protected = append(protected, field)
+		}
+	}
+	if len(protected) > 0 {
+		a.auditRejectedCustomerFields(r, r.PathValue("id"), protected)
+		writeError(w, http.StatusBadRequest, fmt.Errorf("customer profile cannot update protected fields: %s; use identity, membership, or relationship management", strings.Join(protected, ", ")))
+		return
+	}
 	var req adminCustomerMutation
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -195,6 +216,20 @@ func (a adminAPI) updateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"item": user})
+}
+
+func (a adminAPI) auditRejectedCustomerFields(r *http.Request, userID string, fields []string) {
+	store, ok := a.store.(*postgresStore)
+	if !ok || store.db == nil {
+		return
+	}
+	actorID, actorRole := actorFromRequest(r)
+	requestID := firstNonEmptyString(strings.TrimSpace(r.Header.Get("X-Request-ID")), strings.TrimSpace(r.Header.Get("Idempotency-Key")))
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	_ = insertAuditDirect(ctx, store.db, actorID, actorRole, "customer.profile.protected_fields.rejected", "user", userID, r.Method, r.URL.Path, http.StatusBadRequest, map[string]any{
+		"fields": fields, "requestId": requestID,
+	})
 }
 
 func (a adminAPI) forceLogoutCustomer(w http.ResponseWriter, r *http.Request) {
@@ -627,69 +662,11 @@ func (a adminAPI) channelAgentTree(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a adminAPI) createChannelAgent(w http.ResponseWriter, r *http.Request) {
-	var req adminChannelCreateMutation
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	req.Name = strings.TrimSpace(req.Name)
-	req.Email = strings.TrimSpace(req.Email)
-	req.ParentID = strings.TrimSpace(req.ParentID)
-	req.Status = strings.ToUpper(strings.TrimSpace(req.Status))
-	req.InviteCode = strings.ToUpper(strings.TrimSpace(req.InviteCode))
-	if req.Name == "" || req.Email == "" {
-		writeError(w, http.StatusBadRequest, errors.New("name and email are required"))
-		return
-	}
-	if req.Level == 0 {
-		req.Level = 1
-	}
-	if !isAgentLevel(req.Level) {
-		writeError(w, http.StatusBadRequest, errors.New("level must be between L1 and L5 for channel agents"))
-		return
-	}
-	agent, user, err := a.store.CreateAdminChannelAgent(req)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	writeJSON(w, map[string]any{"item": channelAgentView(agent, user), "user": userView(user)})
+	writeError(w, http.StatusConflict, errors.New("legacy channel-agent writes are disabled; use customer 360 identity management"))
 }
 
 func (a adminAPI) updateChannelAgent(w http.ResponseWriter, r *http.Request) {
-	var req adminChannelMutation
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	req.Name = strings.TrimSpace(req.Name)
-	req.Email = strings.TrimSpace(req.Email)
-	req.ParentID = strings.TrimSpace(req.ParentID)
-	req.Status = strings.ToUpper(strings.TrimSpace(req.Status))
-	req.InviteCode = strings.ToUpper(strings.TrimSpace(req.InviteCode))
-	if req.Level != 0 && !isAgentLevel(req.Level) {
-		writeError(w, http.StatusBadRequest, errors.New("level must be between L1 and L5 for channel agents"))
-		return
-	}
-	if req.Available != nil && *req.Available < 0 {
-		writeError(w, http.StatusBadRequest, errors.New("available must be greater than or equal to 0"))
-		return
-	}
-	agent, err := a.store.UpdateAdminChannelAgent(r.PathValue("id"), req)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	data, err := a.store.AdminData()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	users := userMap(data.Users)
-	points := pointMap(data.PointAccounts)
-	view := channelAgentView(agent, users[agent.UserID])
-	view["available"] = points[agent.UserID].Available
-	writeJSON(w, map[string]any{"item": view})
+	writeError(w, http.StatusConflict, errors.New("legacy channel-agent writes are disabled; use customer 360 identity management"))
 }
 
 func (a adminAPI) operationCenters(w http.ResponseWriter, _ *http.Request) {
@@ -1188,9 +1165,19 @@ func (a adminAPI) fetchAPIProviderChannelModels(w http.ResponseWriter, r *http.R
 		writeJSON(w, map[string]any{"item": item})
 		return
 	}
+	models := stringSliceFromAny(item["all"])
+	var syncedChannel adminAPIChannel
+	addedModels := []string{}
+	if req.SyncModels {
+		syncedChannel, addedModels, err = a.store.MergeAdminAPIChannelModels(r.PathValue("id"), models)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	writeJSON(w, map[string]any{
 		"total":            intFromAny(item["modelCount"]),
-		"all":              stringSliceFromAny(item["all"]),
+		"all":              models,
 		"imageModels":      stringSliceFromAny(item["imageModels"]),
 		"chatModels":       stringSliceFromAny(item["chatModels"]),
 		"videoModels":      stringSliceFromAny(item["videoModels"]),
@@ -1198,6 +1185,10 @@ func (a adminAPI) fetchAPIProviderChannelModels(w http.ResponseWriter, r *http.R
 		"imageRequestMode": item["imageRequestMode"],
 		"raw":              item["raw"],
 		"item":             item,
+		"synced":           req.SyncModels,
+		"addedModels":      addedModels,
+		"candidateModels":  syncedChannel.Models,
+		"channel":          syncedChannel,
 	})
 }
 

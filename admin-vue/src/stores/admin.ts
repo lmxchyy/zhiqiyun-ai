@@ -144,6 +144,7 @@ export const adminModules: AdminModule[] = [
   { id: "aiCapabilityChannels", title: "上游通道", endpoint: "/admin/ai/overview", path: "/admin/ai/channels" },
   { id: "aiCapabilityLogs", title: "调用日志", endpoint: "/admin/ai/overview", path: "/admin/ai/logs" },
   { id: "knowledgeAdmin", title: "知识库中心", endpoint: "", path: "/admin/knowledge" },
+  { id: "inspirationManagement", title: "创作灵感管理", endpoint: "", path: "/admin/content/inspirations" },
   { id: "mediaAssets", title: "素材中心", endpoint: "", path: "/admin/media/assets" },
   { id: "pageDecoration", title: "页面装修", endpoint: "", path: "/admin/page-operations" },
   { id: "pageHomeConfig", title: "首页配置", endpoint: "", path: "/admin/page-operations/home" },

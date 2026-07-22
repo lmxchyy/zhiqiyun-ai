@@ -315,9 +315,7 @@
 
     <view class="inspiration-section-heading">
       <text class="inspiration-section-title">创作灵感</text>
-      <button class="inspiration-refresh" @click="refreshInspirations">
-        换一换 ↻
-      </button>
+      <view class="inspiration-heading-actions"><button class="inspiration-refresh" :disabled="inspirationLoading" @click="refreshInspirations">换一换</button><button class="inspiration-more" @click="openInspirationSquare()">查看更多 ›</button></view>
     </view>
     <scroll-view
       scroll-x
@@ -328,47 +326,18 @@
       <view class="inspiration-tabs">
         <button
           v-for="tab in inspirationTabs"
-          :key="tab"
-          :class="['inspiration-tab', { active: activeInspirationTab === tab }]"
-          @click="activeInspirationTab = tab"
+          :key="tab.code"
+          :class="['inspiration-tab', { active: activeInspirationTab === tab.code }]"
+          @click="selectInspirationCategory(tab.code)"
         >
-          {{ tab }}
+          {{ tab.name }}
         </button>
       </view>
     </scroll-view>
-    <scroll-view
-      scroll-x
-      class="horizontal-scroll inspiration-scroll"
-      enhanced
-      :show-scrollbar="false"
-    >
-      <view class="inspiration-row">
-        <button
-          class="inspiration-card"
-          v-for="item in inspirationItems"
-          :key="item.id"
-          @click="openCreationMode(item.mode)"
-        >
-          <RemoteCover
-            class="inspiration-cover"
-            page-code="home"
-            :slot-key="item.slotKey"
-            :alt="item.title"
-            mode="cover"
-            width="100%"
-            height="100%"
-            radius="10px"
-          />
-          <view class="inspiration-overlay"></view>
-          <text class="inspiration-tag">{{ item.tag }}</text>
-          <text class="inspiration-title">{{ item.title }}</text>
-          <view class="inspiration-stats"
-            ><text class="inspiration-stat">◉ {{ item.views }}</text
-            ><text class="inspiration-stat">♡ {{ item.likes }}</text></view
-          >
-        </button>
-      </view>
-    </scroll-view>
+    <view v-if="inspirationLoading && !inspirationItems.length" class="home-inspiration-skeleton"><view v-for="n in 6" :key="n" /></view>
+    <view v-else-if="inspirationError && !inspirationItems.length" class="home-inspiration-state"><text>灵感加载失败</text><button @click="loadInspirations(true)">重试</button></view>
+    <view v-else-if="!inspirationItems.length" class="home-inspiration-state"><text>暂无精选灵感</text></view>
+    <view v-else class="home-inspiration-grid"><InspirationCard v-for="item in inspirationItems" :key="item.id" :item="item" @open="openInspirationDetail" /></view>
 
     <view class="home-footer"
       ><text class="footer-title">让 AI 成为企业生产力</text
@@ -380,11 +349,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import AppImage from "../AppImage.vue";
 import RemoteCover from "../RemoteCover.vue";
 import SectionTitle from "./V531SectionTitle.vue";
-import { v531Capabilities, v531Employees, v531Inspirations } from "../../config/v531";
+import { v531Capabilities, v531Employees } from "../../config/v531";
+import InspirationCard from "../inspiration/InspirationCard.vue";
+import { inspirationAPI } from "../../features/inspiration/api";
+import type { InspirationCategory, InspirationTemplate } from "../../features/inspiration/types";
 import { miniProgramCreationPages, miniProgramFeaturePages, rolePage } from "../../config/miniProgramPages";
 
 interface AssetLike {
@@ -560,46 +532,38 @@ const employeeItems = computed(() =>
     };
   }) : [],
 );
-const inspirationTabs = [
-  "全部",
-  "设计",
-  "视频",
-  "文案",
-  "办公",
-  "知识库",
-] as const;
-const activeInspirationTab = ref<(typeof inspirationTabs)[number]>("全部");
+const inspirationCategories = ref<InspirationCategory[]>([]);
+const inspirationTabs = computed(() => [
+  { id: "recommend", code: "", name: "推荐", sort: 999 },
+  ...inspirationCategories.value.filter((item) => item.code !== "recommend"),
+]);
+const activeInspirationTab = ref("");
 const inspirationOffset = ref(0);
-const inspirationMeta: Record<
-  string,
-  { category: (typeof inspirationTabs)[number]; views: string; likes: string }
-> = {
-  poster: { category: "设计", views: "1.2k", likes: "128" },
-  video: { category: "视频", views: "896", likes: "64" },
-  ppt: { category: "文案", views: "563", likes: "32" },
-  store: { category: "办公", views: "742", likes: "48" },
-  ecommerce: { category: "设计", views: "1.1k", likes: "96" },
-};
-const inspirationItems = computed(() => {
-  const baseItems = v531Inspirations.map((item) => ({
-    ...item,
-    ...(inspirationMeta[item.id] || {
-      category: "全部" as const,
-      views: "520",
-      likes: "36",
-    }),
-  })).filter((item) => isModeAllowed(item.mode as CreationMode));
-  const filtered =
-    activeInspirationTab.value === "全部"
-      ? baseItems
-      : baseItems.filter((item) => item.category === activeInspirationTab.value);
-  const source = filtered.length ? filtered : baseItems;
-  const offset = source.length ? inspirationOffset.value % source.length : 0;
-  return source.slice(offset).concat(source.slice(0, offset));
-});
-function refreshInspirations() {
-  inspirationOffset.value += 1;
+const inspirationItems = ref<InspirationTemplate[]>([]);
+const inspirationLoading = ref(false);
+const inspirationError = ref("");
+async function loadInspirations(reset = false) {
+  if (inspirationLoading.value) return;
+  inspirationLoading.value = true;
+  inspirationError.value = "";
+  if (reset) inspirationItems.value = [];
+  try {
+    const result = await inspirationAPI.featured(activeInspirationTab.value, inspirationOffset.value, 8);
+    inspirationItems.value = result.items;
+  } catch (reason) {
+    inspirationError.value = reason instanceof Error ? reason.message : "请稍后重试";
+  } finally {
+    inspirationLoading.value = false;
+  }
 }
+function refreshInspirations() { inspirationOffset.value += 1; void loadInspirations(); }
+function selectInspirationCategory(code: string) { activeInspirationTab.value = code; inspirationOffset.value = 0; void loadInspirations(true); }
+function openInspirationDetail(item: InspirationTemplate) { uni.navigateTo({ url: `/pages/inspiration/InspirationDetailPage?templateId=${encodeURIComponent(item.id)}` }); }
+function openInspirationSquare(category = activeInspirationTab.value) { uni.navigateTo({ url: `/pages/inspiration/InspirationSquarePage?category=${encodeURIComponent(category)}` }); }
+onMounted(async () => {
+  try { inspirationCategories.value = (await inspirationAPI.categories()).items; } catch { inspirationCategories.value = []; }
+  await loadInspirations();
+});
 const metrics = computed(() => [
   {
     label: "剩余点数",
@@ -1659,9 +1623,13 @@ function showVoiceInputLimit() {
   font-size: 10px;
   line-height: 24px;
 }
-.inspiration-refresh::after {
+.inspiration-refresh::after,
+.inspiration-more::after,
+.home-inspiration-state button::after {
   display: none;
 }
+.inspiration-heading-actions { display: flex; align-items: center; gap: 12px; }
+.inspiration-more { width: auto; height: 24px; margin: 0; padding: 0; border: 0; color: #4a6cff; background: transparent; font-size: 10px; line-height: 24px; }
 .inspiration-tab-scroll {
   width: calc(100% + 20px);
   overflow: hidden;
@@ -1692,90 +1660,12 @@ function showVoiceInputLimit() {
   color: #4a6cff;
   background: #e9eeff;
 }
-.inspiration-scroll {
-  margin-top: 10px;
-}
-.inspiration-row {
-  gap: 9px;
-}
-.inspiration-card {
-  position: relative;
-  width: 178px;
-  height: 116px;
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-  overflow: hidden;
-  border: 0;
-  border-radius: 10px;
-  background: #111827;
-  text-align: left;
-  box-shadow: 0 8px 18px rgba(26, 36, 66, 0.08);
-}
-.inspiration-cover {
-  position: absolute;
-  inset: 0;
-  width: 100% !important;
-  height: 100% !important;
-}
-.inspiration-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  background:
-    linear-gradient(180deg, rgba(9, 12, 24, 0.12), rgba(9, 12, 24, 0.76)),
-    linear-gradient(90deg, rgba(13, 18, 47, 0.48), transparent 58%);
-}
-.inspiration-title,
-.inspiration-tag {
-  position: relative;
-  z-index: 3;
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.inspiration-title {
-  position: absolute;
-  right: 12px;
-  bottom: 31px;
-  left: 12px;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 17px;
-}
-.inspiration-tag {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  max-width: 54px;
-  height: 20px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: #fff;
-  background: rgba(17, 24, 39, 0.62);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 20px;
-  text-align: center;
-}
-.inspiration-stats {
-  position: absolute;
-  right: 12px;
-  bottom: 11px;
-  left: 12px;
-  z-index: 3;
-  display: flex;
-  gap: 12px;
-}
-.inspiration-stat {
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 12px;
-}
+.home-inspiration-grid { display: grid; margin-top: 11px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px; }
+.home-inspiration-skeleton { display: grid; margin-top: 11px; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.home-inspiration-skeleton view { height: 244px; border-radius: 8px; background: #e9edf5; animation: inspiration-pulse 1.1s infinite; }
+.home-inspiration-state { display: flex; min-height: 130px; margin-top: 11px; align-items: center; justify-content: center; flex-direction: column; border: 1px solid #e8eaf1; border-radius: 8px; color: #8a92a5; background: #fff; font-size: 11px; }
+.home-inspiration-state button { width: auto; height: 32px; margin-top: 10px; padding: 0 14px; border: 0; border-radius: 16px; color: #fff; background: #4a6cff; font-size: 10px; }
+@keyframes inspiration-pulse { 50% { opacity: 0.55; } }
 .home-footer {
   margin-top: 56px;
   padding: 28px 18px;

@@ -187,6 +187,9 @@ func (a channelAPI) createChildAgent(w http.ResponseWriter, r *http.Request) {
 		writeChannelAuthError(w, err)
 		return
 	}
+	writeError(w, http.StatusConflict, errors.New("legacy child-agent creation is disabled; use customer 360 identity management"))
+	return
+
 	var req adminChannelCreateMutation
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -241,15 +244,23 @@ func canAgentCreateChildLevel(parentLevel int, childLevel int) bool {
 }
 
 func (a channelAPI) authenticatedAgent(r *http.Request, data adminPlatformData) (adminUser, adminChannelAgent, error) {
+	if _, ok := a.store.(channelWorkbenchAccessStore); ok {
+		return a.currentAgent(r)
+	}
 	user, err := authAPI{store: a.store, sessions: a.sessions}.authenticatedUser(r, data)
 	if err != nil {
 		return adminUser{}, adminChannelAgent{}, err
 	}
-	agent, ok := channelAgentForUser(data.ChannelAgents, user.ID)
-	if !ok || !strings.HasPrefix(user.Role, "AGENT") {
-		return adminUser{}, adminChannelAgent{}, errForbidden
+	if !strings.EqualFold(user.Status, "ACTIVE") {
+		return adminUser{}, adminChannelAgent{}, errUnauthorized
 	}
-	return user, agent, nil
+	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok && strings.EqualFold(agent.Status, "ACTIVE") {
+		return user, agent, nil
+	}
+	if center, ok := activeOperationCenterForUser(data.OperationCenters, user.ID); ok {
+		return user, adminChannelAgent{ID: center.ID, UserID: center.UserID, OperationCenterID: center.ID, Level: 5, Status: "ACTIVE", InviteCode: center.InviteCode, CreatedAt: center.CreatedAt, UpdatedAt: center.UpdatedAt}, nil
+	}
+	return adminUser{}, adminChannelAgent{}, errForbidden
 }
 
 func (a channelAPI) authenticatedAgentData(r *http.Request, includeContent bool, billingEventLimit int) (adminPlatformData, adminUser, adminChannelAgent, error) {
@@ -288,11 +299,15 @@ func (a channelAPI) currentAgent(r *http.Request) (adminUser, adminChannelAgent,
 	if !found {
 		return adminUser{}, adminChannelAgent{}, errUnauthorized
 	}
-	agent, found, err := store.GetChannelAgentForUser(user.ID)
+	workbenchStore, ok := a.store.(channelWorkbenchAccessStore)
+	if !ok {
+		return adminUser{}, adminChannelAgent{}, errUnauthorized
+	}
+	agent, found, err := workbenchStore.GetChannelWorkbenchAgentForUser(user.ID)
 	if err != nil {
 		return adminUser{}, adminChannelAgent{}, err
 	}
-	if !found || !strings.HasPrefix(user.Role, "AGENT") {
+	if !found {
 		return adminUser{}, adminChannelAgent{}, errForbidden
 	}
 	return user, agent, nil
@@ -407,7 +422,7 @@ func channelCustomerView(user adminUser, plans map[string]adminPlan, points map[
 func channelVisibleCustomerIDs(users []adminUser, agents []adminChannelAgent, agentUserID string, agentID string) map[string]bool {
 	agentUserIDs := map[string]bool{agentUserID: true}
 	for _, item := range agents {
-		if item.ParentID == agentID {
+		if item.ParentID == agentID || item.OperationCenterID == agentID {
 			agentUserIDs[item.UserID] = true
 		}
 	}

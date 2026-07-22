@@ -103,7 +103,7 @@ func buildKnowledgeModule(cfg config.Config, tenants knowledgeapp.TenantReposito
 	runtimeResolver := knowledgeprofile.NewResolver(repo.(knowledgeapp.RuntimeProfileRepository), vectorRegistry, cfg.ModelProviderURL, cfg.ModelProviderAPIKey, timeoutMS)
 	retrieval.SetRuntimeResolver(core, runtimeResolver)
 	fallback := answerprovider.Context{}
-	chatRouter := chatprovider.NewRouter(chatprovider.NewOpenAICompatible(cfg))
+	chatRouter := chatprovider.NewRouter(chatprovider.NewOpenAICompatibleForModels(cfg, "deepseek-v4-flash", "gpt-5.2-chat-latest"))
 	var ocrProvider knowledgeapp.OCRProvider
 	if strings.TrimSpace(cfg.KnowledgeOCREndpoint) != "" {
 		ocrProvider = ocr.NewHTTP(cfg.KnowledgeOCRProvider, cfg.KnowledgeOCREndpoint, cfg.KnowledgeOCRAPIKey, 0)

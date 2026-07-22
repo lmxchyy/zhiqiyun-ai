@@ -367,6 +367,52 @@ func (s *postgresStore) GetChannelAgentForUser(userID string) (adminChannelAgent
 	return item, true, nil
 }
 
+// GetChannelWorkbenchAgentForUser resolves commercial access from the canonical
+// business identity and profile projections. It intentionally does not inspect
+// xz_users.role. Operation centers inherit the agent workbench permissions and
+// are represented by their center profile ID for downstream scoped reads.
+func (s *postgresStore) GetChannelWorkbenchAgentForUser(userID string) (adminChannelAgent, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminChannelAgent{}, false, err
+	}
+	var identityType string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT identity_type
+		FROM xz_user_business_identities
+		WHERE user_id=$1 AND identity_type IN ('AGENT','OPERATION_CENTER')
+		  AND identity_status='ACTIVE' AND ended_at IS NULL
+		  AND effective_at<=clock_timestamp() AND (expires_at IS NULL OR expires_at>clock_timestamp())
+		  AND commission_enabled=true
+		ORDER BY CASE identity_type WHEN 'OPERATION_CENTER' THEN 0 ELSE 1 END, identity_version DESC
+		LIMIT 1
+	`, strings.TrimSpace(userID)).Scan(&identityType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminChannelAgent{}, false, nil
+	}
+	if err != nil {
+		return adminChannelAgent{}, false, err
+	}
+	if identityType == "AGENT" {
+		var item adminChannelAgent
+		err = s.db.QueryRowContext(ctx, `SELECT raw FROM xz_channel_agents WHERE user_id=$1 AND upper(coalesce(status,''))='ACTIVE' ORDER BY created_at DESC,id DESC LIMIT 1`, userID).Scan(rawScanner(&item))
+		if errors.Is(err, sql.ErrNoRows) {
+			return adminChannelAgent{}, false, nil
+		}
+		return item, err == nil, err
+	}
+	var center adminOperationCenter
+	err = s.db.QueryRowContext(ctx, `SELECT raw FROM xz_operation_centers WHERE user_id=$1 AND upper(coalesce(status,''))='ACTIVE' ORDER BY created_at DESC,id DESC LIMIT 1`, userID).Scan(rawScanner(&center))
+	if errors.Is(err, sql.ErrNoRows) {
+		return adminChannelAgent{}, false, nil
+	}
+	if err != nil {
+		return adminChannelAgent{}, false, err
+	}
+	return adminChannelAgent{ID: center.ID, UserID: center.UserID, OperationCenterID: center.ID, Level: 5, Status: "ACTIVE", InviteCode: center.InviteCode, CreatedAt: center.CreatedAt, UpdatedAt: center.UpdatedAt}, true, nil
+}
+
 func (s *postgresStore) GetOperationCenterForUser(userID string) (adminOperationCenter, bool, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -2776,9 +2822,6 @@ func (s *postgresStore) UpdateAdminCustomer(id string, req adminCustomerMutation
 	if req.WeChatUnionID != "" {
 		item.WeChatUnionID = strings.TrimSpace(req.WeChatUnionID)
 	}
-	if req.Role != "" {
-		item.Role = req.Role
-	}
 	if req.Status != "" {
 		item.Status = req.Status
 	}
@@ -3988,6 +4031,32 @@ func (s *postgresStore) UpdateAdminAPIChannel(id string, req adminAPIChannelMuta
 		return adminAPIChannel{}, err
 	}
 	return item, tx.Commit()
+}
+
+func (s *postgresStore) MergeAdminAPIChannelModels(id string, discovered []string) (adminAPIChannel, []string, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminAPIChannel{}, nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminAPIChannel{}, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var item adminAPIChannel
+	if err := tx.QueryRowContext(ctx, `select raw from xz_api_channels where id = $1 for update`, id).Scan(rawScanner(&item)); err != nil {
+		return adminAPIChannel{}, nil, err
+	}
+	merged, added := mergeAPIChannelModels(item.Models, discovered)
+	item.Models = merged
+	if err := insertAPIChannel(ctx, tx, item); err != nil {
+		return adminAPIChannel{}, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return adminAPIChannel{}, nil, err
+	}
+	return item, added, nil
 }
 
 func (s *postgresStore) TestAdminAPIChannel(id string, req adminAPIChannelTestRequest) (map[string]any, error) {

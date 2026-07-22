@@ -717,8 +717,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
+import { ApiClientError } from "@xianzhi/api-client";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 import { uploadReferenceImage } from "../api/files";
+import { inspirationAPI } from "../features/inspiration/api";
+import { readInspirationDraft } from "../features/inspiration/draft";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -828,12 +831,14 @@ const props = withDefaults(defineProps<{
   initialCreationMode?: CreationMode;
   initialCreationAssetId?: string;
   initialCreationIntent?: "edit" | "regenerate";
+  initialInspirationTemplateId?: string;
   initialMineView?: MineView;
 }>(), {
   initialRole: "user",
   initialTab: "home",
   initialCreationAssetId: "",
   initialCreationIntent: "edit",
+  initialInspirationTemplateId: "",
   initialMineView: "overview"
 });
 
@@ -861,6 +866,7 @@ interface ActiveGenerationSnapshot {
   status: string;
   progress: number;
   startedAt: number;
+  inspirationTemplateId?: string;
 }
 
 const roleTabs: Record<RoleId, Array<{ id: TabId; label: string; icon: string }>> = {
@@ -932,6 +938,7 @@ const creationSourceError = ref("");
 const creationReferenceSelecting = ref(false);
 const loadedCreationAssetKey = ref("");
 const restoredCreationParams = ref<AnyRecord>({});
+const activeInspirationTemplateId = ref("");
 const creationPromptDrafts = ref<Record<CreationMode, string>>({
   image: "",
   video: "",
@@ -1316,6 +1323,7 @@ function restoreActiveGeneration() {
     return;
   }
   if (!creationPrompt.value && snapshot.prompt) creationPrompt.value = String(snapshot.prompt);
+  activeInspirationTemplateId.value = String(snapshot.inspirationTemplateId || "").trim();
   generationProgress.value = clampGenerationProgress(snapshot.progress);
   latestGenerationTask.value = {
     id,
@@ -2298,6 +2306,16 @@ function handleGenerateTap() {
   void submitCreation(prompt);
 }
 
+let pendingLegalGenerationPrompt = "";
+
+function handleLegalAcceptanceCompleted() {
+  const prompt = pendingLegalGenerationPrompt.trim();
+  pendingLegalGenerationPrompt = "";
+  if (!prompt || generationBusy.value) return;
+  creationError.value = "";
+  void submitCreation(prompt);
+}
+
 async function resolveBackendGenerationModel(
   mode: "image" | "video",
   fallback: string,
@@ -2392,7 +2410,10 @@ async function submitCreation(prompt: string) {
         size: restoredCreationString("size", "aspectRatio", "aspect_ratio") || (mode === "video" ? "16:9" : "1024x1024"),
         quality: restoredCreationString("quality", "imageQuality") || (mode === "video" ? "720p" : "standard"),
         count: restoredCreationCount(),
-        referenceImages
+        referenceImages,
+        negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
+        duration: rowNumber(restoredCreationParams.value, "duration") || undefined,
+        parameters: restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
@@ -2415,6 +2436,7 @@ async function submitCreation(prompt: string) {
       status: taskStatus,
       progress: taskProgress,
       startedAt,
+      inspirationTemplateId: activeInspirationTemplateId.value,
     });
     uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
     void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
@@ -2423,8 +2445,9 @@ async function submitCreation(prompt: string) {
     stopGenerationFeedback();
     generationProgress.value = 0;
     const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
-    if (rawMessage.includes("请先确认最新版本")) {
-      creationError.value = rawMessage;
+    if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
+      pendingLegalGenerationPrompt = prompt;
+      creationError.value = "首次生成前，请先阅读并确认用户协议、隐私政策和 AI 生成内容使用规范";
       uni.showToast({ title: "请先确认必要协议，返回后将保留当前创作内容", icon: "none" });
       setTimeout(() => uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" }), 300);
       return;
@@ -2519,6 +2542,11 @@ async function pollGenerationTask(
       if (succeeded || failed) {
         stopGenerationFeedback();
         if (succeeded) {
+          const inspirationTemplateId = activeInspirationTemplateId.value;
+          if (inspirationTemplateId) {
+            activeInspirationTemplateId.value = "";
+            void inspirationAPI.event(inspirationTemplateId, "generate_success", taskId);
+          }
           await loadAssets(false);
           uni.showToast({ title: "生成完成", icon: "success" });
         } else {
@@ -2622,15 +2650,26 @@ function confirmV531Logout() {
 }
 
 onMounted(() => {
+  uni.$on("legal-acceptance-completed", handleLegalAcceptanceCompleted);
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramGenerate = guestAwareGenerateTap;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramBackToCreation = returnToCreationHub;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramChooseReference = chooseCreationReferenceImages;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramAppendReferences = appendCreationReferencePaths;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramSetReferenceSelecting = setCreationReferenceSelecting;
   if (props.initialCreationMode) {
+    const inspirationDraft = readInspirationDraft(props.initialInspirationTemplateId);
     const savedPrompt = String(uni.getStorageSync("v531-creation-prompt") || "").trim();
     const rawStudioDraft = uni.getStorageSync("v532-studio-draft");
-    const studioDraft = rawStudioDraft && typeof rawStudioDraft === "object" ? rawStudioDraft as AnyRecord : {};
+    const studioDraft = inspirationDraft
+      ? {
+          ...inspirationDraft.parameters,
+          prompt: inspirationDraft.prompt,
+          negativePrompt: inspirationDraft.negativePrompt,
+          model: inspirationDraft.modelId,
+          referenceImages: inspirationDraft.referenceAssets,
+        }
+      : rawStudioDraft && typeof rawStudioDraft === "object" ? rawStudioDraft as AnyRecord : {};
+    if (inspirationDraft) activeInspirationTemplateId.value = inspirationDraft.templateId;
     const draftPrompt = rowString(studioDraft, "prompt");
     if (savedPrompt || draftPrompt) {
       creationPrompt.value = savedPrompt || draftPrompt;
@@ -2669,6 +2708,7 @@ async function loadTerminalCapabilities() {
 }
 
 onBeforeUnmount(() => {
+  uni.$off("legal-acceptance-completed", handleLegalAcceptanceCompleted);
   generationPollRun += 1;
   stopGenerationFeedback(false);
   const bridge = globalThis as NativeGenerateBridge;

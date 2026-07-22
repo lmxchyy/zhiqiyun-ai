@@ -383,11 +383,12 @@ func TestImageEditLineageParametersAreAllowedInternalParameters(t *testing.T) {
 
 func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	testStore := newJSONStore(dataPath)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, testStore)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
@@ -414,9 +415,8 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("unexpected image schema payload: %+v", schemaPayload)
 	}
 
-	planUpdate := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/customers/user_000002", bytes.NewBufferString(`{"planId":"plan_free"}`), adminToken)
-	if planUpdate.Code != http.StatusOK {
-		t.Fatalf("set demo plan status = %d, body = %s", planUpdate.Code, planUpdate.Body.String())
+	if _, err := testStore.UpdateAdminCustomer("user_000002", adminCustomerMutation{PlanID: "plan_free"}); err != nil {
+		t.Fatalf("set demo plan: %v", err)
 	}
 	fallbackSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
 	if fallbackSchemaRes.Code != http.StatusOK {
@@ -431,9 +431,8 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if fallbackSchemaPayload.ModelName != "mock-standard" {
 		t.Fatalf("fallback model = %s, want mock-standard", fallbackSchemaPayload.ModelName)
 	}
-	planRestore := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/customers/user_000002", bytes.NewBufferString(`{"planId":"plan_month"}`), adminToken)
-	if planRestore.Code != http.StatusOK {
-		t.Fatalf("restore demo plan status = %d, body = %s", planRestore.Code, planRestore.Body.String())
+	if _, err := testStore.UpdateAdminCustomer("user_000002", adminCustomerMutation{PlanID: "plan_month"}); err != nil {
+		t.Fatalf("restore demo plan: %v", err)
 	}
 
 	invalid := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"duration":5}}`), token)
@@ -1548,52 +1547,74 @@ func TestChannelScopedAPIsFilterCustomersAndMoney(t *testing.T) {
 		t.Fatalf("channel withdrawal response = %d %s", withdrawal.Code, withdrawalBody)
 	}
 }
-func TestCreateChannelAgentPersistsUserAndTree(t *testing.T) {
+func TestLegacyCreateChannelAgentIsBlocked(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	testStore := newJSONStore(dataPath)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, testStore)
 	handler := server.Handler
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
 	createL1 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试推广员","email":"agent-new@example.com","level":1,"inviteCode":"NEW001","status":"ACTIVE","available":88}`), adminToken)
-	if createL1.Code != http.StatusOK {
-		t.Fatalf("create level 1 channel agent status = %d, body = %s", createL1.Code, createL1.Body.String())
+	if createL1.Code != http.StatusConflict || !strings.Contains(createL1.Body.String(), "customer 360 identity management") {
+		t.Fatalf("legacy channel write was not blocked: %d %s", createL1.Code, createL1.Body.String())
 	}
-	var l1Body struct {
-		Item map[string]any `json:"item"`
-		User adminUser      `json:"user"`
-	}
-	if err := json.NewDecoder(createL1.Body).Decode(&l1Body); err != nil {
+	data, err := testStore.AdminData()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if l1Body.Item["id"] == "" || l1Body.User.Role != "AGENT_L1" {
-		t.Fatalf("unexpected level 1 body: %+v", l1Body)
-	}
-
-	parentID, _ := l1Body.Item["id"].(string)
-	createL2 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试初级代理商","email":"agent-child@example.com","level":2,"parentId":"`+parentID+`","status":"ACTIVE"}`), adminToken)
-	if createL2.Code != http.StatusOK {
-		t.Fatalf("create level 2 channel agent status = %d, body = %s", createL2.Code, createL2.Body.String())
-	}
-	createL3 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试高级代理商","email":"agent-senior@example.com","level":3,"status":"ACTIVE"}`), adminToken)
-	if createL3.Code != http.StatusOK || !strings.Contains(createL3.Body.String(), `"role":"AGENT_L3"`) {
-		t.Fatalf("create level 3 channel agent status = %d, body = %s", createL3.Code, createL3.Body.String())
-	}
-
-	login := request(t, handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"agent-new@example.com","password":"Agent123!"}`))
-	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `"defaultModule":"dashboard"`) || !strings.Contains(login.Body.String(), `"workspace":"user"`) || !strings.Contains(login.Body.String(), `"channel.dashboard"`) {
-		t.Fatalf("created agent login failed: %d %s", login.Code, login.Body.String())
-	}
-
-	tree := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/channel-agents/tree", nil, adminToken)
-	body := tree.Body.String()
-	for _, want := range []string{"测试推广员", "测试初级代理商", "测试高级代理商", "NEW001"} {
-		if !strings.Contains(body+createL1.Body.String(), want) {
-			t.Fatalf("channel tree or create response missing %q: tree=%s create=%s", want, body, createL1.Body.String())
+	for _, user := range data.Users {
+		if strings.EqualFold(user.Email, "agent-new@example.com") {
+			t.Fatalf("blocked legacy write created user %+v", user)
 		}
+	}
+}
+
+func TestAdminCustomerProfileRejectsRoleEscalation(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	testStore := newJSONStore(dataPath)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, testStore)
+	handler := server.Handler
+	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	before, err := testStore.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target adminUser
+	for _, candidate := range before.Users {
+		if candidate.ID == "user_000002" {
+			target = candidate
+			break
+		}
+	}
+	if target.ID == "" {
+		t.Fatal("test customer not found")
+	}
+	response := authedRequest(t, handler, http.MethodPatch, "/api/v1/admin/customers/"+target.ID, bytes.NewBufferString(`{"role":"SUPER_ADMIN","name":"tampered"}`), adminToken)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "protected fields: role") {
+		t.Fatalf("role escalation was not explicitly rejected: %d %s", response.Code, response.Body.String())
+	}
+	after, err := testStore.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unchanged adminUser
+	for _, candidate := range after.Users {
+		if candidate.ID == target.ID {
+			unchanged = candidate
+			break
+		}
+	}
+	if unchanged.Role != target.Role || unchanged.Name != target.Name {
+		t.Fatalf("rejected request mutated customer before=%+v after=%+v", target, unchanged)
+	}
+	if updated, err := testStore.UpdateAdminCustomer(target.ID, adminCustomerMutation{Role: "SUPER_ADMIN", Name: "safe-name"}); err != nil {
+		t.Fatal(err)
+	} else if updated.Role != target.Role {
+		t.Fatalf("store-level role write was not blocked: %s", updated.Role)
 	}
 }
 
@@ -1792,7 +1813,7 @@ func TestAdminMutationAPIsPersistMasterControlData(t *testing.T) {
 	}
 
 	updateCustomerPath := "/api/v1/admin/customers/" + customerBody.Item.ID
-	assertAuthedStatus(t, handler, http.MethodPatch, updateCustomerPath, bytes.NewBufferString(`{"status":"DISABLED","planId":"plan_year","available":7000}`), adminToken, http.StatusOK)
+	assertAuthedStatus(t, handler, http.MethodPatch, updateCustomerPath, bytes.NewBufferString(`{"status":"DISABLED","available":7000}`), adminToken, http.StatusOK)
 
 	createOrder := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/orders", bytes.NewBufferString(`{"userId":"`+customerBody.Item.ID+`","planId":"plan_year","amountCents":89900}`), adminToken)
 	if createOrder.Code != http.StatusOK {

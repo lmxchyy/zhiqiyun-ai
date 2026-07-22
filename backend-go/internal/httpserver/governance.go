@@ -110,6 +110,40 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if strings.HasPrefix(path, "/users/") && strings.Contains(path, "/identity-change/") {
+		switch {
+		case strings.HasSuffix(path, "/preview"):
+			return "identity:change:preview"
+		case strings.HasSuffix(path, "/review"):
+			return "identity:change:review"
+		default:
+			return "identity:change:confirm"
+		}
+	}
+	if strings.HasPrefix(path, "/users/") && strings.Contains(path, "/identity-downgrade/") {
+		if r.Method == http.MethodGet {
+			return "identity:downgrade:view"
+		}
+		if strings.HasSuffix(path, "/preview") {
+			return "identity:downgrade:preview"
+		}
+		return "identity:downgrade:confirm"
+	}
+	if strings.HasPrefix(path, "/inspirations") {
+		if r.Method == http.MethodGet {
+			return "content:inspiration:view"
+		}
+		if path == "/inspirations/batch" {
+			return "content:inspiration:publish"
+		}
+		if strings.Contains(path, "/audit/") {
+			return "content:inspiration:audit"
+		}
+		if strings.HasSuffix(path, "/publish") || strings.HasSuffix(path, "/withdraw") {
+			return "content:inspiration:publish"
+		}
+		return "content:inspiration:manage"
+	}
 	if path == "/commission-rules" && r.Method == http.MethodGet {
 		return "finance:commission-rule:view"
 	}

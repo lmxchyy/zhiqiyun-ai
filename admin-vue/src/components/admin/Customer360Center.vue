@@ -43,6 +43,14 @@
         <article><span>生成任务</span><strong>{{ formatNumber(detail.summary?.generationTasks) }}</strong><small>积分流水 {{ formatNumber(detail.summary?.tokenRecords) }}</small></article>
       </div>
       <el-tabs v-model="activeTab">
+        <el-tab-pane label="身份与权益" name="business-identity">
+          <IdentityEntitlementsPanel
+            v-if="selectedCustomer?.id"
+            :user-id="String(selectedCustomer.id)"
+            :user-name="String(detail.profile?.name || selectedCustomer?.name || '')"
+            :permissions="permissions"
+          />
+        </el-tab-pane>
         <el-tab-pane label="客户概览" name="overview">
           <div class="workspace-detail-grid">
             <el-card shadow="never"><template #header><strong>基本资料</strong></template><el-descriptions :column="2" border><el-descriptions-item label="客户 ID">{{ detail.profile?.id }}</el-descriptions-item><el-descriptions-item label="角色">{{ detail.profile?.role }}</el-descriptions-item><el-descriptions-item label="邮箱">{{ detail.profile?.email }}</el-descriptions-item><el-descriptions-item label="套餐">{{ detail.profile?.plan }}</el-descriptions-item><el-descriptions-item label="订阅到期">{{ detail.profile?.subscriptionExpiresAt || '-' }}</el-descriptions-item><el-descriptions-item label="模型路由">{{ detail.profile?.modelRoute || '未绑定' }}</el-descriptions-item></el-descriptions></el-card>
@@ -62,9 +70,10 @@
 import { reactive, ref } from "vue";
 import { adminWorkspaceApi, type Customer360Response, type WorkspaceRecord } from "../../api/adminWorkspaces";
 import AdminDataTable from "./AdminDataTable.vue";
+import IdentityEntitlementsPanel from "./IdentityEntitlementsPanel.vue";
 
 type Action = { action: string; label: string };
-const props = defineProps<{ rows: WorkspaceRecord[]; saving: boolean; toolbarActions: Action[]; rowActions: Action[]; columnLabels: Record<string, string>; statusFilterOptions: Array<{ label: string; value: string }>; isStatusColumn: (column: string) => boolean; statusType: (value: unknown) => any; statusLabel: (value: unknown) => string; formatCell: (value: unknown, column: string) => unknown; visibleRowActions: (row: WorkspaceRecord) => Action[]; labelForRowAction: (action: Action, row: WorkspaceRecord) => string }>();
+const props = defineProps<{ rows: WorkspaceRecord[]; saving: boolean; toolbarActions: Action[]; rowActions: Action[]; permissions?: string[]; columnLabels: Record<string, string>; statusFilterOptions: Array<{ label: string; value: string }>; isStatusColumn: (column: string) => boolean; statusType: (value: unknown) => any; statusLabel: (value: unknown) => string; formatCell: (value: unknown, column: string) => unknown; visibleRowActions: (row: WorkspaceRecord) => Action[]; labelForRowAction: (action: Action, row: WorkspaceRecord) => string }>();
 defineEmits<{ "run-action": [action: string, row?: WorkspaceRecord]; "batch-action": [action: string, rows: WorkspaceRecord[]] }>();
 
 const customerColumns = ["name", "email", "mobile", "plan", "pointsAvailable", "sourceAgentName", "status", "createdAt"];

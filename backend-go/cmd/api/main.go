@@ -36,6 +36,9 @@ func main() {
 	var server = httpserver.New(cfg)
 	if clients != nil {
 		server = httpserver.NewWithInfrastructure(cfg, clients.DB, clients.Redis)
+		workerCtx, stopWorker := context.WithCancel(context.Background())
+		defer stopWorker()
+		httpserver.StartIdentityDowngradeWorker(workerCtx, clients.DB, time.Minute)
 	}
 	log.Printf("xianzhi-ai go gin api listening on %s", cfg.Addr)
 	if err := server.ListenAndServe(); err != nil {

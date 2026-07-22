@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -422,7 +424,7 @@ func (a api) acceptCurrentLegalDocuments(w http.ResponseWriter, r *http.Request)
 	defer tx.Rollback()
 	requestID := firstNonEmptyString(strings.TrimSpace(r.Header.Get("X-Request-ID")), strings.TrimSpace(r.Header.Get("Idempotency-Key")))
 	for _, item := range documents {
-		id := "accept_" + shortID(user.ID+"_"+terminal+"_"+item.Code+"_"+item.Version)
+		id := legalAcceptanceID(user.ID, terminal, item.Code, item.Version)
 		if _, err = tx.Exec(`INSERT INTO xz_user_agreement_acceptances(id,user_id,document_code,document_version,terminal,accepted_at,request_id)
 			VALUES($1,$2,$3,$4,$5,now(),$6) ON CONFLICT(user_id,document_code,document_version,terminal) DO NOTHING`,
 			id, user.ID, item.Code, item.Version, terminal, requestID); err != nil {
@@ -435,6 +437,11 @@ func (a api) acceptCurrentLegalDocuments(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, map[string]any{"ready": true, "acceptedAt": time.Now().UTC().Format(time.RFC3339Nano), "items": documents})
+}
+
+func legalAcceptanceID(userID, terminal, documentCode, documentVersion string) string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{userID, terminal, documentCode, documentVersion}, "|")))
+	return "accept_" + hex.EncodeToString(digest[:12])
 }
 
 func (a api) recordContentAudit(taskID, stage, contentType, contentID string, req generation.CreateRequest) {

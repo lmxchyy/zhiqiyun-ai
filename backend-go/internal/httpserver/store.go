@@ -472,9 +472,6 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 			if req.WeChatUnionID != "" {
 				data.Users[i].WeChatUnionID = strings.TrimSpace(req.WeChatUnionID)
 			}
-			if req.Role != "" {
-				data.Users[i].Role = req.Role
-			}
 			if req.Status != "" {
 				data.Users[i].Status = req.Status
 			}
@@ -2723,6 +2720,25 @@ func (s *jsonStore) UpdateAdminAPIChannel(id string, req adminAPIChannelMutation
 		return fmt.Errorf("api channel not found: %s", id)
 	})
 	return updated, err
+}
+
+func (s *jsonStore) MergeAdminAPIChannelModels(id string, discovered []string) (adminAPIChannel, []string, error) {
+	var updated adminAPIChannel
+	added := []string{}
+	err := s.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.APIChannels {
+			if data.APIChannels[i].ID != id {
+				continue
+			}
+			merged, newlyAdded := mergeAPIChannelModels(data.APIChannels[i].Models, discovered)
+			data.APIChannels[i].Models = merged
+			updated = data.APIChannels[i]
+			added = newlyAdded
+			return nil
+		}
+		return fmt.Errorf("api channel not found: %s", id)
+	})
+	return updated, added, err
 }
 
 func (s *jsonStore) TestAdminAPIChannel(id string, req adminAPIChannelTestRequest) (map[string]any, error) {

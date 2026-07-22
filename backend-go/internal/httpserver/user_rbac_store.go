@@ -124,7 +124,31 @@ func syncUserRBACProjection(ctx context.Context, db *sql.DB) error {
 		WHERE role = 'USER' AND upper(status) = 'ACTIVE'
 		ON CONFLICT (user_id) DO NOTHING;
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT id FROM xz_users ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	userIDs := make([]string, 0)
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, userID := range userIDs {
+		if err := syncCommercialRBACForUser(ctx, db, userID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func seedRuntimeRolePermissions(ctx context.Context, db *sql.DB) error {
@@ -303,6 +327,14 @@ func syncUserRBACForUser(ctx context.Context, db *sql.DB, userID string) error {
 	if userID == "" {
 		return errUnauthorized
 	}
+	return syncCommercialRBACForUser(ctx, db, userID)
+}
+
+type rbacExecContext interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func syncCommercialRBACForUser(ctx context.Context, exec rbacExecContext, userID string) error {
 	queries := []string{
 		`
 		INSERT INTO xz_organizations (id, tenant_id, organization_type, name)
@@ -322,30 +354,63 @@ func syncUserRBACForUser(ctx context.Context, db *sql.DB, userID string) error {
 		DO UPDATE SET status = 'ACTIVE', updated_at = now()
 		`, `
 		INSERT INTO xz_user_roles (user_id, tenant_id, organization_id, role)
-		SELECT agent.user_id, scope.tenant_id, scope.organization_id, 'AGENT'
-		FROM xz_channel_agents agent
-		JOIN xz_user_roles scope ON scope.user_id = agent.user_id AND scope.role = 'USER' AND upper(scope.status) = 'ACTIVE'
-		WHERE agent.user_id = $1 AND upper(coalesce(agent.status, 'ACTIVE')) = 'ACTIVE'
+		SELECT identity.user_id, scope.tenant_id, scope.organization_id, 'AGENT'
+		FROM xz_user_business_identities identity
+		JOIN xz_users users ON users.id=identity.user_id AND upper(coalesce(users.status,''))='ACTIVE'
+		JOIN xz_channel_agents agent ON agent.user_id=identity.user_id AND upper(coalesce(agent.status,''))='ACTIVE'
+		JOIN xz_user_roles scope ON scope.user_id = identity.user_id AND scope.role = 'USER' AND upper(scope.status) = 'ACTIVE'
+		WHERE identity.user_id=$1 AND identity.identity_type='AGENT' AND identity.identity_status='ACTIVE'
+		  AND identity.ended_at IS NULL AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp())
 		ON CONFLICT (user_id, tenant_id, organization_id, role)
 		DO UPDATE SET status = 'ACTIVE', updated_at = now()
 		`, `
 		INSERT INTO xz_user_roles (user_id, tenant_id, organization_id, role)
-		SELECT center.user_id, scope.tenant_id, scope.organization_id, 'OPERATION'
-		FROM xz_operation_centers center
-		JOIN xz_user_roles scope ON scope.user_id = center.user_id AND scope.role = 'USER' AND upper(scope.status) = 'ACTIVE'
-		WHERE center.user_id = $1 AND upper(coalesce(center.status, '')) = 'ACTIVE'
+		SELECT identity.user_id, scope.tenant_id, scope.organization_id, 'OPERATION'
+		FROM xz_user_business_identities identity
+		JOIN xz_users users ON users.id=identity.user_id AND upper(coalesce(users.status,''))='ACTIVE'
+		JOIN xz_operation_centers center ON center.user_id=identity.user_id AND upper(coalesce(center.status,''))='ACTIVE'
+		JOIN xz_user_roles scope ON scope.user_id = identity.user_id AND scope.role = 'USER' AND upper(scope.status) = 'ACTIVE'
+		WHERE identity.user_id=$1 AND identity.identity_type='OPERATION_CENTER' AND identity.identity_status='ACTIVE'
+		  AND identity.ended_at IS NULL AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp())
 		ON CONFLICT (user_id, tenant_id, organization_id, role)
 		DO UPDATE SET status = 'ACTIVE', updated_at = now()
+		`, `
+		UPDATE xz_user_roles binding SET status=CASE WHEN EXISTS(
+		  SELECT 1 FROM xz_user_business_identities identity
+		  JOIN xz_users users ON users.id=identity.user_id AND upper(coalesce(users.status,''))='ACTIVE'
+		  JOIN xz_channel_agents agent ON agent.user_id=identity.user_id AND upper(coalesce(agent.status,''))='ACTIVE'
+		  WHERE identity.user_id=$1 AND identity.identity_type='AGENT' AND identity.identity_status='ACTIVE'
+		    AND identity.ended_at IS NULL AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp())
+		) THEN 'ACTIVE' ELSE 'INACTIVE' END, updated_at=now()
+		WHERE binding.user_id=$1 AND binding.role='AGENT'
+		`, `
+		UPDATE xz_user_roles binding SET status=CASE WHEN EXISTS(
+		  SELECT 1 FROM xz_user_business_identities identity
+		  JOIN xz_users users ON users.id=identity.user_id AND upper(coalesce(users.status,''))='ACTIVE'
+		  JOIN xz_operation_centers center ON center.user_id=identity.user_id AND upper(coalesce(center.status,''))='ACTIVE'
+		  WHERE identity.user_id=$1 AND identity.identity_type='OPERATION_CENTER' AND identity.identity_status='ACTIVE'
+		    AND identity.ended_at IS NULL AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp())
+		) THEN 'ACTIVE' ELSE 'INACTIVE' END, updated_at=now()
+		WHERE binding.user_id=$1 AND binding.role='OPERATION'
 		`, `
 		INSERT INTO xz_user_role_context (user_id, tenant_id, organization_id, current_role_code, context_type)
 		SELECT user_id, tenant_id, organization_id, 'USER', 'PERSONAL'
 		FROM xz_user_roles
 		WHERE user_id = $1 AND role = 'USER' AND upper(status) = 'ACTIVE'
 		ON CONFLICT (user_id) DO NOTHING
+		`, `
+		UPDATE xz_user_role_context context
+		SET tenant_id='tenant_default',organization_id='organization_default_' || substr(md5('tenant_default'),1,16),current_role_code='USER',context_type='PERSONAL',updated_at=now()
+		WHERE context.user_id=$1 AND NOT EXISTS(
+		  SELECT 1 FROM xz_user_roles binding
+		  WHERE binding.user_id=context.user_id AND binding.tenant_id=context.tenant_id
+		    AND binding.organization_id=context.organization_id AND binding.role=context.current_role_code
+		    AND upper(binding.status)='ACTIVE'
+		)
 		`,
 	}
 	for _, query := range queries {
-		if _, err := db.ExecContext(ctx, query, userID); err != nil {
+		if _, err := exec.ExecContext(ctx, query, userID); err != nil {
 			return err
 		}
 	}

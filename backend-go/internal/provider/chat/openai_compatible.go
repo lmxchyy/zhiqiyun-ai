@@ -69,6 +69,22 @@ func NewOpenAICompatibleForModel(cfg config.Config, model string) OpenAICompatib
 	})
 }
 
+// NewOpenAICompatibleForModels creates a multi-model chat provider for
+// user-configurable knowledge agents while keeping the environment model as
+// the default when an agent does not select one explicitly.
+func NewOpenAICompatibleForModels(cfg config.Config, models ...string) OpenAICompatible {
+	allowedModels := nonEmptyStrings(append([]string{cfg.PPTTextModel}, models...)...)
+	return NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		Code:            "openai-compatible-chat",
+		BaseURL:         cfg.PPTProviderURL,
+		APIKey:          cfg.PPTProviderAPIKey,
+		Model:           cfg.PPTTextModel,
+		Models:          allowedModels,
+		DisableThinking: cfg.PPTDisableThinking,
+		TimeoutMS:       intValue(cfg.ModelTimeoutMS),
+	})
+}
+
 func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatible {
 	timeoutMS := opts.TimeoutMS
 	if timeoutMS <= 0 {

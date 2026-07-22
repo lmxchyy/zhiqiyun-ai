@@ -109,7 +109,7 @@ function addHeader(headers: Record<string, string>, key: string, value?: string)
 }
 
 function isApiEnvelope<T>(payload: unknown): payload is ApiEnvelope<T> {
-  return Boolean(payload && typeof payload === "object" && ("data" in payload || "code" in payload || "message" in payload));
+  return Boolean(payload && typeof payload === "object" && ("data" in payload || "code" in payload || "message" in payload || "error" in payload));
 }
 
 function isUnauthorizedApiCode(code: unknown) {

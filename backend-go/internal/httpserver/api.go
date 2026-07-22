@@ -79,6 +79,7 @@ type platformStore interface {
 	SyncAdminCustomerNewAPI(string, adminNewAPISyncRequest) (adminUserModelRoute, error)
 	CreateAdminAPIChannel(adminAPIChannelMutation) (adminAPIChannel, error)
 	UpdateAdminAPIChannel(string, adminAPIChannelMutation) (adminAPIChannel, error)
+	MergeAdminAPIChannelModels(string, []string) (adminAPIChannel, []string, error)
 	TestAdminAPIChannel(string, adminAPIChannelTestRequest) (map[string]any, error)
 	UpdateAdminAPIModel(string, adminAPIModelMutation) (adminAPIModel, error)
 	CreateAdminAPIKey(adminAPIKeyMutation) (adminAPIKey, error)
@@ -124,6 +125,10 @@ type optimizedUserContentSummaryStore interface {
 type activeIdentityStore interface {
 	GetActiveUser(userID string) (adminUser, bool, error)
 	GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error)
+}
+
+type channelWorkbenchAccessStore interface {
+	GetChannelWorkbenchAgentForUser(userID string) (adminChannelAgent, bool, error)
 }
 
 type operationCenterIdentityStore interface {

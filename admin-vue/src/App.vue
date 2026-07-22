@@ -1836,6 +1836,7 @@
             </el-card>
           </section>
           <StorageCenter v-else-if="store.activeModuleId === 'storageCenter'" />
+          <InspirationManagement v-else-if="store.activeModuleId === 'inspirationManagement'" />
           <MediaCenter v-else-if="['mediaAssets', 'mediaCategories'].includes(store.activeModuleId)" />
           <PageDecoration v-else-if="mediaDecorationModuleIds.includes(store.activeModuleId)" :key="store.activeModuleId" :initial-page-code="decorationInitialPage" />
           <KnowledgeAdminCenter v-else-if="store.activeModuleId === 'knowledgeAdmin'" />
@@ -2253,7 +2254,8 @@
                       <p>从上游 API 自动拉取所有可用模型并按类型分类（image / chat / video）</p>
                     </div>
                     <div class="api-source-actions">
-                      <button class="api-source-action" type="button" :disabled="apiFetchingDraftModels" @click="fetchApiDraftModels"><el-icon><Download /></el-icon>{{ apiFetchingDraftModels ? "拉取中..." : "拉取模型" }}</button>
+                      <button class="api-source-action" type="button" :disabled="apiFetchingDraftModels || apiSyncingDraftModels" @click="fetchApiDraftModels"><el-icon><Download /></el-icon>{{ apiFetchingDraftModels ? "拉取中..." : "拉取模型" }}</button>
+                      <button class="api-source-action" type="button" :disabled="apiFetchingDraftModels || apiSyncingDraftModels" @click="syncAllApiDraftModels"><el-icon><Refresh /></el-icon>{{ apiSyncingDraftModels ? "同步中..." : "同步全部候选" }}</button>
                       <button class="api-source-action" type="button" @click="selectApiDraftModels"><el-icon><Tickets /></el-icon>选择模型</button>
                     </div>
                   </header>
@@ -2706,6 +2708,24 @@
             @run-action="runAction"
             @batch-action="runBatchAction"
           />
+          <Customer360Center
+            v-else-if="['customers', 'userManagement'].includes(store.activeModuleId)"
+            :rows="rows"
+            :saving="store.saving"
+            :toolbar-actions="toolbarActions"
+            :row-actions="rowActions"
+            :permissions="currentPermissions"
+            :column-labels="columnLabels"
+            :status-filter-options="statusFilterOptions"
+            :is-status-column="isStatusColumn"
+            :status-type="statusType"
+            :status-label="statusLabel"
+            :format-cell="formatCell"
+            :visible-row-actions="visibleRowActions"
+            :label-for-row-action="labelForRowAction"
+            @run-action="runAction"
+            @batch-action="runBatchAction"
+          />
           <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
         </section>
       </el-main>
@@ -2885,6 +2905,7 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 const store = useAdminStore();
 const authStore = useWebAuthStore();
 const AdminDataTable = defineAsyncComponent(() => import("./components/admin/AdminDataTable.vue"));
+const Customer360Center = defineAsyncComponent(() => import("./components/admin/Customer360Center.vue"));
 const BillingDomain = defineAsyncComponent(() => import("./components/billing/BillingDomain.vue"));
 const CustomerAttributionOverview = defineAsyncComponent(() => import("./components/attribution/CustomerAttributionOverview.vue"));
 const AiCapabilityDomain = defineAsyncComponent(() => import("./components/ai/AiCapabilityDomain.vue"));
@@ -2894,6 +2915,7 @@ const FeishuConnectorSetup = defineAsyncComponent(() => import("./components/ent
 const ChannelGrowthDomain = defineAsyncComponent(() => import("./components/growth/ChannelGrowthDomain.vue"));
 const KnowledgeAdminCenter = defineAsyncComponent(() => import("./components/knowledge/KnowledgeAdminCenter.vue"));
 const KnowledgeAgentCenter = defineAsyncComponent(() => import("./components/knowledge/KnowledgeAgentCenter.vue"));
+const InspirationManagement = defineAsyncComponent(() => import("./components/inspiration/InspirationManagement.vue"));
 const MediaCenter = defineAsyncComponent(() => import("./components/media/MediaCenter.vue"));
 const PageDecoration = defineAsyncComponent(() => import("./components/media/PageDecoration.vue"));
 const PlanEditorDialog = defineAsyncComponent(() => import("./components/billing/PlanEditorDialog.vue"));
@@ -3676,6 +3698,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userOrders: { badge: "交易记录", description: "查看历史订单、支付状态和点数到账结果；充值/订阅入口已拆分为独立模块。" },
   knowledgeAdmin: { badge: "知识库治理", description: "跨租户管理知识库、文档解析、Chunk、Embedding、向量索引、检索日志与问答统计。" },
   mediaAssets: { badge: "素材中心", description: "统一上传、分类、预览、启停并追踪运营素材的页面引用。" },
+  inspirationManagement: { badge: "内容运营", description: "管理创作案例、提示词、模型参数、审核发布和同款转化数据。" },
   mediaCategories: { badge: "素材分类", description: "维护平台默认与租户专属的运营素材分类。" },
   pageDecoration: { badge: "页面装修", description: "可视化配置首页、创作、作品和我的页面素材位并发布版本。" },
   pageHomeConfig: { badge: "首页配置", description: "配置首页 Hero、快捷入口、能力卡和灵感推荐素材。" },
@@ -4294,6 +4317,7 @@ const apiSavingProviderDraft = ref(false);
 const apiTestingProviderDraft = ref(false);
 const apiProbingProviderProtocol = ref(false);
 const apiFetchingDraftModels = ref(false);
+const apiSyncingDraftModels = ref(false);
 const apiDraggingProviderId = ref("");
 const apiReorderingProviders = ref(false);
 const apiProviderDraft = ref({
@@ -5287,12 +5311,12 @@ function aiTaskOutputItems(task: AdminRecord) {
   const taskId = aiTaskId(task);
   const resultIds = Array.isArray(task.resultIds) ? task.resultIds.map((item) => String(item)) : [];
   const seen = new Set<string>();
-  const items: Array<{ id: string; url: string; name: string }> = [];
-  const addItem = (id: string, url: string, name: string) => {
+  const items: Array<{ id: string; url: string; name: string; assetId?: string }> = [];
+  const addItem = (id: string, url: string, name: string, assetId = "") => {
     const key = url || id;
     if (!key || seen.has(key)) return;
     seen.add(key);
-    items.push({ id, url, name });
+    items.push({ id, url, name, ...(assetId ? { assetId } : {}) });
   };
 
   onlineAssets.value.forEach((asset) => {
@@ -5302,7 +5326,7 @@ function aiTaskOutputItems(task: AdminRecord) {
     const matchesResult = assetId && resultIds.includes(assetId);
     if (!matchesTask && !matchesResult) return;
     const url = String(asset.url || asset.imageUrl || asset.outputUrl || asset.resultUrl || asset.thumbnailUrl || "");
-    addItem(assetId || `${taskId}-${items.length + 1}`, url, String(asset.name || task.name || task.prompt || "AI 图片"));
+    addItem(assetId || `${taskId}-${items.length + 1}`, url, String(asset.name || task.name || task.prompt || "AI 图片"), assetId);
   });
 
   const directUrl = String(task.outputUrl || task.resultUrl || task.imageUrl || task.thumbnailUrl || "");
@@ -5422,11 +5446,10 @@ async function fetchAiOriginalImageDataUrl(task: AdminRecord) {
   if (!directUrl) return "";
   if (directUrl.startsWith("data:image/")) return directUrl;
   let blob: Blob;
-  try {
-    blob = await fetchResourceBlob(directUrl, { auth: false });
-  } catch {
-    if (!assetId) throw new Error("原图缓存失败");
+  if (assetId) {
     blob = await downloadAssetBlob(assetId);
+  } else {
+    blob = await fetchResourceBlob(directUrl, { auth: false });
   }
   return blobToDataUrl(blob);
 }
@@ -6784,11 +6807,13 @@ function stopAiAgent() {
   void saveAiState();
 }
 
-async function downloadUrl(url: string, fileName: string) {
+async function downloadUrl(url: string, fileName: string, assetId = "") {
   let objectUrl = "";
   const anchor = document.createElement("a");
   try {
-    const blob = await fetchResourceBlob(url, { auth: url.startsWith("/") });
+    const blob = assetId
+      ? await downloadAssetBlob(assetId)
+      : await fetchResourceBlob(url, { auth: url.startsWith("/") });
     objectUrl = URL.createObjectURL(blob);
     anchor.href = objectUrl;
     anchor.download = fileName;
@@ -6818,10 +6843,11 @@ async function downloadAiTask(task?: AdminRecord) {
   if (!ensureWorkspaceAuth("download_work", "userAiImage", { mediaKind: "image", taskId: aiTaskId(target) })) return;
   const fileName = `ai-image-${aiTaskId(target) || Date.now()}.png`;
   try {
-    await downloadUrl(imageUrl, fileName);
+    const assetId = String(aiTaskAsset(target)?.id || "");
+    await downloadUrl(imageUrl, fileName, assetId);
     ElMessage.success("已开始下载");
-  } catch {
-    ElMessage.error("下载失败，请稍后重试");
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : "下载失败，请稍后重试");
   }
 }
 
@@ -6840,7 +6866,7 @@ async function downloadAllAiTaskOutputs(task?: AdminRecord) {
   for (let index = 0; index < outputs.length; index += 1) {
     const output = outputs[index];
     try {
-      await downloadUrl(output.url, `ai-image-${aiTaskId(task) || Date.now()}-${index + 1}.png`);
+      await downloadUrl(output.url, `ai-image-${aiTaskId(task) || Date.now()}-${index + 1}.png`, output.assetId || "");
       successCount += 1;
     } catch {
       // 继续尝试剩余图片，最后统一提示成功数量。
@@ -7441,16 +7467,10 @@ function canNavigateToModule(moduleId: string) {
   return role === "SUPER_ADMIN" || currentPermissions.value.includes("admin.full") || currentPermissions.value.includes(permission);
 }
 const hasAgentIdentity = computed(() => {
-  const role = String(currentAdmin.value?.role || "").toUpperCase();
-  return Boolean(currentAgent.value?.id) || role.startsWith("AGENT") || currentPermissions.value.some((permission) => String(permission).startsWith("channel."));
+  return currentPermissions.value.some((permission) => String(permission).startsWith("agent:"));
 });
 const hasOperationCenterIdentity = computed(() => {
-  const role = String(currentAdmin.value?.role || "").toUpperCase();
-  const status = String(currentAdmin.value?.operationCenterStatus || "").toUpperCase();
-  return Boolean(currentOperationCenter.value?.id)
-    || role === "OPERATION_CENTER"
-    || status === "ACTIVE"
-    || currentPermissions.value.some((permission) => String(permission).startsWith("operation_center."));
+  return currentPermissions.value.some((permission) => String(permission).startsWith("operation:"));
 });
 const userAccountSnapshot = ref<AdminRecord | null>(null);
 watch(
@@ -8834,6 +8854,47 @@ async function fetchApiDraftModels() {
     ElMessage.error(message);
   } finally {
     apiFetchingDraftModels.value = false;
+  }
+}
+
+async function syncAllApiDraftModels() {
+  if (apiSyncingDraftModels.value || apiFetchingDraftModels.value) return;
+  apiSyncingDraftModels.value = true;
+  apiVerifyResult.value = "正在同步上游候选模型...";
+  apiVerifyPanel.value = null;
+  try {
+    const apiKey = apiProviderDraft.value.apiKey.trim();
+    const savedItem = await ensureApiProviderDraftSaved({ refresh: false });
+    const result = await adminRequest<AdminRecord>({
+      method: "POST",
+      url: `/admin/api/provider-channels/${savedItem.id}/fetch-models`,
+      data: { ...apiProviderDraftTestPayload(apiKey), syncModels: true }
+    });
+    const resultItem = (result.item || {}) as AdminRecord;
+    const ok = Boolean(result.ok ?? resultItem.ok ?? true);
+    if (!ok || String(resultItem.status || "").toUpperCase() === "ERROR") {
+      throw new Error(String(resultItem.message || "同步候选模型失败"));
+    }
+    const candidateModels = arrayFromApiModels(result.candidateModels || result.candidate_models || result.all || resultItem.all);
+    const addedModels = arrayFromApiModels(result.addedModels || result.added_models);
+    apiFetchedModelIds.value = arrayFromApiModels(result.all || resultItem.all);
+    apiProviderDraft.value.imageModels = candidateModels.filter((model) => inferApiModelCategory(model) === "image");
+    apiProviderDraft.value.videoModels = candidateModels.filter((model) => inferApiModelCategory(model) === "video");
+    apiProviderDraft.value.chatModels = candidateModels.filter((model) => inferApiModelCategory(model) === "chat");
+    await store.loadActiveModule();
+    const nextIndex = apiReferenceChannels.value.findIndex((channel) => String(channel.id || "") === String(savedItem.id || ""));
+    if (nextIndex >= 0) {
+      selectedApiReferenceIndex.value = nextIndex;
+      hydrateApiProviderDraft(apiReferenceChannels.value[nextIndex] || {});
+    }
+    apiVerifyResult.value = `候选池已同步 ${candidateModels.length} 个模型 · 本次新增 ${addedModels.length} 个 · 尚未自动发布到用户端`;
+    ElMessage.success(`候选模型同步完成，本次新增 ${addedModels.length} 个`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "同步候选模型失败";
+    apiVerifyResult.value = message;
+    ElMessage.error(message);
+  } finally {
+    apiSyncingDraftModels.value = false;
   }
 }
 
@@ -11053,7 +11114,7 @@ const toolbarActions = computed(() => {
   const actions: Record<string, Array<{ action: string; label: string }>> = {
     customers: [{ action: "createCustomer", label: "新建客户" }],
     userManagement: [{ action: "createCustomer", label: "新增用户" }],
-    channels: [{ action: "createChannel", label: "新增代理商" }],
+    channels: [],
     orders: [{ action: "createOrder", label: "新建订单" }],
     commissions: [
       { action: "createCommission", label: "登记分润" },
@@ -11095,10 +11156,7 @@ const rowActions = computed(() => {
       { action: "forceLogoutCustomer", label: "强制退出" },
       { action: "syncNewAPI", label: "同步 NewAPI" }
     ],
-    channels: [
-      { action: "editChannel", label: "编辑" },
-      { action: "toggleChannel", label: "启停" }
-    ],
+    channels: [],
     products: [{ action: "editProduct", label: "编辑" }],
     plans: [{ action: "editPlan", label: "编辑套餐" }],
     orders: [
@@ -11935,10 +11993,7 @@ async function openEditCustomerDialog(row: AdminRecord) {
   const form = {
     name: String(row.name || ""),
     email: String(row.email || ""),
-    role: String(row.role || "MEMBER"),
     status: String(row.status || "ACTIVE"),
-    planId: String(row.planId || "plan_free"),
-    referredBy: String(row.referredBy || ""),
     available: String(row.pointsAvailable ?? 0),
     modelChannelId: String(row.modelChannelId || ""),
     modelChannel: String(row.modelChannel || ""),
@@ -11977,33 +12032,11 @@ async function openEditCustomerDialog(row: AdminRecord) {
     message: h("div", { class: "channel-dialog-form" }, [
       field("客户名称", textInput(form.name, (value) => { form.name = value; }), true),
       field("登录邮箱", textInput(form.email, (value) => { form.email = value; }), true),
-      field("客户角色", h("select", {
-        class: "channel-dialog-input",
-        value: form.role,
-        onChange: (event: Event) => { form.role = (event.target as HTMLSelectElement).value; }
-      }, [
-        h("option", { value: "MEMBER" }, "普通会员"),
-        h("option", { value: "ADMIN" }, "管理员"),
-        h("option", { value: "FINANCE" }, "财务"),
-        h("option", { value: "CHANNEL_MANAGER" }, "渠道负责人"),
-        h("option", { value: "DELIVERY_MANAGER" }, "交付负责人"),
-        h("option", { value: "SUPER_ADMIN" }, "超级管理员")
-      ])),
       field("账号状态", h("select", {
         class: "channel-dialog-input",
         value: form.status,
         onChange: (event: Event) => { form.status = (event.target as HTMLSelectElement).value; }
       }, [h("option", { value: "ACTIVE" }, "启用"), h("option", { value: "DISABLED" }, "停用")])),
-      field("套餐", h("select", {
-        class: "channel-dialog-input",
-        value: form.planId,
-        onChange: (event: Event) => { form.planId = (event.target as HTMLSelectElement).value; }
-      }, [
-        h("option", { value: "plan_free" }, "免费套餐"),
-        h("option", { value: "plan_month" }, "月度套餐"),
-        h("option", { value: "plan_year" }, "年度套餐")
-      ])),
-      field("来源代理用户 ID", textInput(form.referredBy, (value) => { form.referredBy = value; }, "例如：user_000003，可留空")),
       field("可用点数", textInput(form.available, (value) => { form.available = value; }, "", { type: "number", min: "0" })),
       h("div", { class: "channel-dialog-section channel-dialog-field-wide" }, [
         h("strong", null, "模型路由配置"),
@@ -12095,10 +12128,7 @@ async function openEditCustomerDialog(row: AdminRecord) {
         await store.mutate("PATCH", `/admin/customers/${row.id}`, {
           name,
           email,
-          role: form.role,
           status: form.status,
-          planId: form.planId,
-          referredBy: form.referredBy.trim(),
           available,
           modelChannelId: form.modelChannelId.trim(),
           modelChannel: form.modelChannel.trim(),

@@ -50,18 +50,22 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   }));
   const params = draft.mode === "video"
     ? {
-        duration: 5,
+        duration: draft.duration || 5,
         resolution: draft.quality || "720p",
         aspect_ratio: draft.size || "16:9",
         generate_audio: true,
+        ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
         ...(referenceImage ? { reference_image: referenceImage } : {}),
+        ...(draft.parameters || {}),
       }
     : {
         size: draft.size || "1024x1024",
         quality: draft.quality || "standard",
         n: draft.count || 1,
+        ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
         ...(referenceImage ? { reference_image: referenceImage } : {}),
         ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
+        ...(draft.parameters || {}),
       };
   return {
     type,

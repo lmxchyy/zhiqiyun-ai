@@ -84,6 +84,19 @@ func TestMiniProgramGenerationRequiresPublishedAcceptedAgreements(t *testing.T) 
 	}
 }
 
+func TestLegalAcceptanceIDsAreStableAndDocumentSpecific(t *testing.T) {
+	first := legalAcceptanceID("user_000002", terminalMiniProgram, "user-agreement", "2026-07-22")
+	duplicate := legalAcceptanceID("user_000002", terminalMiniProgram, "user-agreement", "2026-07-22")
+	second := legalAcceptanceID("user_000002", terminalMiniProgram, "privacy-policy", "2026-07-22")
+	third := legalAcceptanceID("user_000002", terminalMiniProgram, "ai-content-rules", "2026-07-22")
+	if first != duplicate {
+		t.Fatalf("legal acceptance id is not stable: %q != %q", first, duplicate)
+	}
+	if first == second || first == third || second == third {
+		t.Fatalf("different legal documents produced duplicate ids: %q %q %q", first, second, third)
+	}
+}
+
 func TestMiniProgramModelComplianceGates(t *testing.T) {
 	now := time.Now().UTC()
 	model := compliantMiniProgramModel(now.Add(24 * time.Hour).Format(time.RFC3339))

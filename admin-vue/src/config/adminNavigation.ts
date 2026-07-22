@@ -26,7 +26,7 @@ export const commercialBillingModuleIds = ["billingCustomers", "billingProducts"
 export const billingModuleIds = moduleIdsForDomain("billing");
 export const aiCapabilityModuleIds = ["aiCapabilities", "aiCapabilityModels", "aiCapabilitySchemas", "aiCapabilityLimits", "aiCapabilityChannels", "aiCapabilityLogs"];
 export const mediaDecorationModuleIds = ["pageDecoration", "pageHomeConfig", "pageStudioConfig", "pageAssetsConfig", "pageProfileConfig"];
-export const mediaOperationModuleIds = ["mediaAssets", "mediaCategories", ...mediaDecorationModuleIds];
+export const mediaOperationModuleIds = ["inspirationManagement", "mediaAssets", "mediaCategories", ...mediaDecorationModuleIds];
 export const operationCenterModuleIds = moduleIdsForSurface("operation-center");
 export const agentModuleIds = moduleIdsForSurface("agent");
 export const userModuleIds = moduleIdsForSurface("user");
@@ -51,6 +51,7 @@ export const adminNavigationGroups: AdminNavigationGroup[] = [
     { id: "ai-capabilities", title: "AI 能力配置", primaryModuleId: "aiCapabilities", moduleIds: ["aiCapabilities", "aiCapabilityModels", "aiCapabilitySchemas"] },
     { id: "ai-governance", title: "接入与调用治理", primaryModuleId: "aiCapabilityChannels", moduleIds: ["aiCapabilityChannels", "aiCapabilityLimits", "aiCapabilityLogs", "apiSettings"] },
     { id: "knowledge", title: "知识库", primaryModuleId: "knowledgeAdmin", moduleIds: ["knowledgeAdmin"] },
+    { id: "content-operations", title: "内容运营", primaryModuleId: "inspirationManagement", moduleIds: ["inspirationManagement"] },
     { id: "media", title: "素材库", primaryModuleId: "mediaAssets", moduleIds: ["mediaAssets", "mediaCategories"] },
     { id: "page-operations", title: "页面运营", primaryModuleId: "pageDecoration", moduleIds: mediaDecorationModuleIds }
   ] },

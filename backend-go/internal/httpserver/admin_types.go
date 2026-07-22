@@ -811,6 +811,7 @@ type adminAPIChannelTestRequest struct {
 	ImageRequestMode string `json:"imageRequestMode"`
 	FetchModelsPath  string `json:"fetchModelsPath"`
 	ProbeProtocol    bool   `json:"probeProtocol"`
+	SyncModels       bool   `json:"syncModels"`
 }
 
 type adminAPIModelMutation struct {

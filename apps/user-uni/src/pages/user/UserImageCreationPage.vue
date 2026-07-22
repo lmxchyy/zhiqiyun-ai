@@ -5,6 +5,7 @@
     initial-creation-mode="image"
     :initial-creation-asset-id="assetId"
     :initial-creation-intent="intent"
+    :initial-inspiration-template-id="templateId"
   />
 </template>
 
@@ -15,10 +16,12 @@ import MiniProgramRoleWorkbench from "../../components/MiniProgramRoleWorkbench.
 
 const assetId = ref("");
 const intent = ref<"edit" | "regenerate">("edit");
+const templateId = ref("");
 
 onLoad(options => {
   assetId.value = String(options?.assetId || "").trim();
   intent.value = String(options?.intent || "").trim() === "regenerate" ? "regenerate" : "edit";
+  templateId.value = String(options?.templateId || "").trim();
 });
 </script>
 

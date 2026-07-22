@@ -151,6 +151,22 @@
       }
     },
     {
+      "path": "pages/inspiration/InspirationSquarePage",
+      "style": {
+        "navigationBarTitleText": "灵感广场",
+        "navigationStyle": "custom",
+        "enablePullDownRefresh": true,
+        "onReachBottomDistance": 100
+      }
+    },
+    {
+      "path": "pages/inspiration/InspirationDetailPage",
+      "style": {
+        "navigationBarTitleText": "灵感详情",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserInfographicCreationPage",
       "style": {
         "navigationBarTitleText": "信息图",

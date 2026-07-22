@@ -294,10 +294,32 @@ func generateCommissionRecordsForCommerceOrderTx(ctx context.Context, tx *sql.Tx
 	}
 	agentIDs := map[int]string{}
 	if commerceCtx.DirectAgentID != "" {
-		agentIDs[1] = commerceCtx.DirectAgentID
+		eligible, eligibilityErr := commissionBeneficiaryEligibleTx(ctx, tx, "AGENT", commerceCtx.DirectAgentID)
+		if eligibilityErr != nil {
+			return commissionapp.CalculationResult{}, eligibilityErr
+		}
+		if eligible {
+			agentIDs[1] = commerceCtx.DirectAgentID
+		}
 	}
 	if commerceCtx.ParentAgentID != "" {
-		agentIDs[2] = commerceCtx.ParentAgentID
+		eligible, eligibilityErr := commissionBeneficiaryEligibleTx(ctx, tx, "AGENT", commerceCtx.ParentAgentID)
+		if eligibilityErr != nil {
+			return commissionapp.CalculationResult{}, eligibilityErr
+		}
+		if eligible {
+			agentIDs[2] = commerceCtx.ParentAgentID
+		}
+	}
+	operationCenterID := commerceCtx.OperationCenterID
+	if operationCenterID != "" {
+		eligible, eligibilityErr := commissionBeneficiaryEligibleTx(ctx, tx, "OPERATION_CENTER", operationCenterID)
+		if eligibilityErr != nil {
+			return commissionapp.CalculationResult{}, eligibilityErr
+		}
+		if !eligible {
+			operationCenterID = ""
+		}
 	}
 	quantity := int64(intValue(order.PriceSnapshot["quantity"]))
 	if quantity <= 0 {
@@ -309,7 +331,7 @@ func generateCommissionRecordsForCommerceOrderTx(ctx context.Context, tx *sql.Tx
 		OrderAmountCents: commissionapp.AmountCents(orderAmount(order)), PaidAmountCents: commissionapp.AmountCents(orderAmount(order)),
 		Quantity: quantity, PaidAt: paidAt, Rules: rules,
 		Relationships: commissionapp.RelationshipSnapshot{
-			AgentIDsByLevel: agentIDs, OperationCenterID: commerceCtx.OperationCenterID, PlatformID: "platform:" + tenantID,
+			AgentIDsByLevel: agentIDs, OperationCenterID: operationCenterID, PlatformID: "platform:" + tenantID,
 		},
 	})
 	if err != nil {
@@ -329,6 +351,48 @@ func generateCommissionRecordsForCommerceOrderTx(ctx context.Context, tx *sql.Tx
 		}
 	}
 	return result, nil
+}
+
+func commissionBeneficiaryEligibleTx(ctx context.Context, tx *sql.Tx, beneficiaryType, beneficiaryID string) (bool, error) {
+	var identityTableExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('public.xz_user_business_identities') IS NOT NULL`).Scan(&identityTableExists); err != nil || !identityTableExists {
+		return !identityTableExists, err
+	}
+	var eligible, projectionExists bool
+	switch strings.ToUpper(strings.TrimSpace(beneficiaryType)) {
+	case "AGENT":
+		err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM xz_channel_agents WHERE id=$1),
+			       EXISTS(
+			         SELECT 1 FROM xz_channel_agents agent
+			         JOIN xz_user_business_identities identity ON identity.user_id=agent.user_id
+			         WHERE agent.id=$1 AND identity.identity_type='AGENT' AND identity.identity_status='ACTIVE'
+			           AND identity.commission_enabled=true AND identity.ended_at IS NULL
+			       )
+		`, beneficiaryID).Scan(&projectionExists, &eligible)
+		if err != nil {
+			return false, err
+		}
+	case "OPERATION_CENTER":
+		err := tx.QueryRowContext(ctx, `
+			SELECT EXISTS(SELECT 1 FROM xz_operation_centers WHERE id=$1),
+			       EXISTS(
+			         SELECT 1 FROM xz_operation_centers center
+			         JOIN xz_user_business_identities identity ON identity.user_id=center.user_id
+			         WHERE center.id=$1 AND identity.identity_type='OPERATION_CENTER' AND identity.identity_status='ACTIVE'
+			           AND identity.commission_enabled=true AND identity.ended_at IS NULL
+			       )
+		`, beneficiaryID).Scan(&projectionExists, &eligible)
+		if err != nil {
+			return false, err
+		}
+	default:
+		return true, nil
+	}
+	if !projectionExists {
+		return true, nil
+	}
+	return eligible, nil
 }
 
 func commissionTenantID(orderTenantID string) string {
