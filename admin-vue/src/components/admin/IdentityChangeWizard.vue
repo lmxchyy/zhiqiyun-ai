@@ -23,7 +23,7 @@
         <h3>选择目标身份</h3>
         <el-radio-group v-if="form.action === 'UPGRADE'" v-model="form.targetIdentity" class="identity-choice-grid">
           <el-radio-button value="AGENT" :disabled="currentIdentity === 'AGENT'"><strong>代理商</strong><small>推广、客户与分润权限</small></el-radio-button>
-          <el-radio-button value="OPERATION_CENTER"><strong>运营中心</strong><small>兼容代理权限，仅超级管理员可升级</small></el-radio-button>
+          <el-radio-button value="OPERATION_CENTER"><strong>运营中心</strong><small>使用独立运营中心工作台，仅超级管理员可升级</small></el-radio-button>
         </el-radio-group>
         <el-descriptions v-else :column="2" border>
           <el-descriptions-item label="当前身份">{{ identityLabel(currentIdentity) }}</el-descriptions-item>
@@ -49,8 +49,8 @@
               <el-option v-for="item in activeAgents" :key="item.id" :label="optionLabel(item)" :value="item.id" :disabled="item.userId === userId" />
             </el-select>
           </el-form-item>
-          <el-form-item label="所属运营中心">
-            <el-select v-model="form.operationCenterId" clearable filterable placeholder="不设置或解除运营中心" :disabled="form.action === 'ADJUST_PARENT_AGENT'">
+          <el-form-item :label="form.parentAgentId ? '所属运营中心（由上级代理商推导）' : '所属运营中心'">
+            <el-select v-model="form.operationCenterId" clearable filterable placeholder="不设置或解除运营中心" :disabled="Boolean(form.parentAgentId) || form.action === 'ADJUST_PARENT_AGENT'">
               <el-option v-for="item in activeCenters" :key="item.id" :label="optionLabel(item)" :value="item.id" :disabled="item.userId === userId" />
             </el-select>
           </el-form-item>
@@ -86,8 +86,13 @@
         </el-form-item>
         <div v-if="requiresPaymentProof" class="form-grid">
           <el-form-item label="付款凭证编号" prop="paymentProofReference"><el-input v-model.trim="form.paymentProofReference" placeholder="银行流水号、收据号等" /></el-form-item>
-          <el-form-item label="付款凭证文件 URL"><el-input v-model.trim="form.paymentProofUrl" placeholder="已上传凭证的文件地址" /></el-form-item>
+          <el-form-item label="存储文件 ID"><el-input v-model.trim="form.paymentProofStorageFileId" placeholder="通过文件中心上传后填写 fileId（可选）" /></el-form-item>
+          <el-form-item label="付款人" prop="paymentProofPayerName"><el-input v-model.trim="form.paymentProofPayerName" /></el-form-item>
+          <el-form-item label="付款渠道" prop="paymentProofChannel"><el-select v-model="form.paymentProofChannel"><el-option label="银行转账" value="BANK_TRANSFER" /><el-option label="微信" value="WECHAT" /><el-option label="支付宝" value="ALIPAY" /><el-option label="其他" value="OTHER" /></el-select></el-form-item>
+          <el-form-item label="付款时间" prop="paymentProofPaidAt"><el-date-picker v-model="form.paymentProofPaidAt" type="datetime" value-format="YYYY-MM-DDTHH:mm:ssZ" /></el-form-item>
+          <el-form-item label="凭证备注"><el-input v-model.trim="form.paymentProofRemark" /></el-form-item>
         </div>
+        <el-form-item v-if="isSpecialPrice" label="特殊价格/折扣原因" prop="discountReason"><el-input v-model.trim="form.discountReason" type="textarea" :rows="2" placeholder="金额与套餐价不一致时必填，并由另一名管理员审核" /></el-form-item>
         <el-form-item label="操作原因" prop="reason"><el-input v-model.trim="form.reason" type="textarea" :rows="3" maxlength="300" show-word-limit placeholder="必填，将写入身份历史和管理员审计日志" /></el-form-item>
         <el-form-item label="内部备注"><el-input v-model.trim="form.remark" maxlength="300" /></el-form-item>
         <el-alert type="warning" :closable="false" show-icon title="Token 和分润金额均由服务端套餐、原订单及分润规则计算，页面不提供余额或分润金额编辑。" />
@@ -107,10 +112,12 @@
             <el-descriptions-item label="原运营中心">{{ relationName(preview.relationshipBefore.operationCenterId, 'center') }}</el-descriptions-item>
             <el-descriptions-item label="新运营中心">{{ relationName(preview.relationshipAfter.operationCenterId, 'center') }}</el-descriptions-item>
             <el-descriptions-item label="订单实付">{{ money(preview.paidAmountCents) }}</el-descriptions-item>
+            <el-descriptions-item label="原价/折扣">{{ money(preview.originalAmountCents) }} / {{ money(preview.discountAmountCents) }}</el-descriptions-item>
             <el-descriptions-item label="Token 变化"><span :class="tokenClass(preview.tokenDelta)">{{ signedNumber(preview.tokenDelta) }}</span></el-descriptions-item>
             <el-descriptions-item label="是否产生分润">{{ preview.commissionGenerated ? '是' : '否' }}</el-descriptions-item>
             <el-descriptions-item label="生效时间">确认成功后立即生效</el-descriptions-item>
             <el-descriptions-item label="操作原因" :span="2">{{ form.reason }}</el-descriptions-item>
+            <el-descriptions-item label="预览凭证">用户 {{ preview.userId }} · {{ preview.action }} · {{ previewCountdown }} · {{ preview.status === 'APPROVED' ? '已审核' : '未审核' }}</el-descriptions-item>
           </el-descriptions>
           <el-table v-if="preview.estimatedCommissions.length" :data="preview.estimatedCommissions" size="small" border>
             <el-table-column prop="beneficiaryType" label="分润对象类型" />
@@ -145,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElMessage, type FormInstance, type FormRules } from "element-plus";
 import { identityManagementApi, type BusinessIdentityType, type IdentityChangeAction, type IdentityChangeMethod, type IdentityChangePreview, type IdentityChangePreviewRequest, type IdentityOption, type IdentityPlanOption, type UserRelationship } from "../../api/identityManagement";
 
@@ -160,12 +167,16 @@ const confirmationChecked = ref(false);
 const errorMessage = ref("");
 const formRef = ref<FormInstance>();
 
-const form = reactive({ action: "UPGRADE" as IdentityChangeAction, targetIdentity: "AGENT" as "AGENT" | "OPERATION_CENTER", method: "ONLY_IDENTITY" as IdentityChangeMethod, planId: "", parentAgentId: "", operationCenterId: "", paidAmountYuan: 0, grantPackageToken: false, giftTokenAmount: 0, conversionTokenPolicy: "" as "" | "KEEP_EXISTING" | "ADJUST_DIFFERENCE", paymentProofReference: "", paymentProofUrl: "", reason: "", remark: "" });
-const rules: FormRules = { planId: [{ validator: (_rule, value, callback) => needsPlan.value && !value ? callback(new Error("请选择升级套餐")) : callback(), trigger: "change" }], conversionTokenPolicy: [{ validator: (_rule, value, callback) => form.method === "PACKAGE_CONVERSION" && !value ? callback(new Error("请选择 Token 处理方式")) : callback(), trigger: "change" }], paymentProofReference: [{ validator: (_rule, value, callback) => requiresPaymentProof.value && !value && !form.paymentProofUrl ? callback(new Error("付款凭证编号或文件 URL 至少填写一项")) : callback(), trigger: "blur" }], reason: [{ required: true, message: "请填写操作原因", trigger: "blur" }, { min: 4, message: "操作原因至少 4 个字符", trigger: "blur" }] };
+const form = reactive({ action: "UPGRADE" as IdentityChangeAction, targetIdentity: "AGENT" as "AGENT" | "OPERATION_CENTER", method: "ONLY_IDENTITY" as IdentityChangeMethod, planId: "", parentAgentId: "", operationCenterId: "", paidAmountYuan: 0, grantPackageToken: false, giftTokenAmount: 0, conversionTokenPolicy: "" as "" | "KEEP_EXISTING" | "ADJUST_DIFFERENCE", paymentProofReference: "", paymentProofStorageFileId: "", paymentProofPayerName: "", paymentProofPaidAt: "", paymentProofChannel: "", paymentProofRemark: "", discountReason: "", reason: "", remark: "" });
+const rules: FormRules = { planId: [{ validator: (_rule, value, callback) => needsPlan.value && !value ? callback(new Error("请选择升级套餐")) : callback(), trigger: "change" }], conversionTokenPolicy: [{ validator: (_rule, value, callback) => form.method === "PACKAGE_CONVERSION" && !value ? callback(new Error("请选择 Token 处理方式")) : callback(), trigger: "change" }], paymentProofReference: [{ validator: (_rule, value, callback) => requiresPaymentProof.value && !value ? callback(new Error("请填写付款凭证编号")) : callback(), trigger: "blur" }], paymentProofPayerName: [{ validator: (_rule, value, callback) => requiresPaymentProof.value && !value ? callback(new Error("请填写付款人")) : callback(), trigger: "blur" }], paymentProofChannel: [{ validator: (_rule, value, callback) => requiresPaymentProof.value && !value ? callback(new Error("请选择付款渠道")) : callback(), trigger: "change" }], paymentProofPaidAt: [{ validator: (_rule, value, callback) => requiresPaymentProof.value && !value ? callback(new Error("请选择付款时间")) : callback(), trigger: "change" }], discountReason: [{ validator: (_rule, value, callback) => isSpecialPrice.value && !value ? callback(new Error("特殊价格必须填写折扣原因")) : callback(), trigger: "blur" }], reason: [{ required: true, message: "请填写操作原因", trigger: "blur" }, { min: 4, message: "操作原因至少 4 个字符", trigger: "blur" }] };
 
 const actionLabel = computed(() => ({ UPGRADE: "调整身份", ADJUST_PARENT_AGENT: "调整上级代理商", ADJUST_OPERATION_CENTER: "调整运营中心", FREEZE: "冻结身份", RESTORE: "恢复身份", TERMINATE: "终止身份" }[form.action]));
 const needsPlan = computed(() => form.method === "OFFLINE_ORDER" || form.method === "PACKAGE_CONVERSION");
 const requiresPaymentProof = computed(() => form.method === "OFFLINE_ORDER" || (form.method === "PACKAGE_CONVERSION" && form.paidAmountYuan > 0));
+const selectedPlan = computed(() => props.plans.find((item) => item.id === form.planId));
+const isSpecialPrice = computed(() => form.method === "OFFLINE_ORDER" && Boolean(selectedPlan.value) && Math.round(form.paidAmountYuan * 100) !== selectedPlan.value!.priceCents);
+const nowTick = ref(Date.now()); let countdownTimer = 0;
+const previewCountdown = computed(() => { if (!preview.value?.expiresAt) return "-"; const seconds=Math.max(0,Math.floor((new Date(preview.value.expiresAt).getTime()-nowTick.value)/1000)); return `${Math.floor(seconds/60)}分${seconds%60}秒后过期`; });
 const activeAgents = computed(() => props.agents.filter((item) => !item.status || String(item.status).toUpperCase() === "ACTIVE"));
 const activeCenters = computed(() => props.centers.filter((item) => !item.status || String(item.status).toUpperCase() === "ACTIVE"));
 const matchingPlans = computed(() => props.plans.filter((item) => {
@@ -178,6 +189,8 @@ const previewStatusLabel = computed(() => ({ READY: "可执行", BLOCKED: "已�
 
 watch(visible, (open) => { if (open) initializeForm(); });
 watch(() => form.method, () => { preview.value = null; if (form.method === "ONLY_IDENTITY") { form.planId = ""; form.paidAmountYuan = 0; form.giftTokenAmount = 0; } });
+watch(() => form.parentAgentId, (id) => { if (!id) return; form.operationCenterId = props.agents.find((item) => item.id === id)?.operationCenterId || ""; });
+onMounted(()=>{countdownTimer=window.setInterval(()=>{nowTick.value=Date.now()},1000)});onUnmounted(()=>window.clearInterval(countdownTimer));
 
 function initializeForm() {
   resetWizard();
@@ -189,7 +202,7 @@ function initializeForm() {
 }
 function resetWizard() {
   step.value = 0; preview.value = null; previewing.value = false; submitting.value = false; confirmationChecked.value = false; errorMessage.value = "";
-  Object.assign(form, { action: props.initialAction, targetIdentity: "AGENT", method: "ONLY_IDENTITY", planId: "", parentAgentId: "", operationCenterId: "", paidAmountYuan: 0, grantPackageToken: false, giftTokenAmount: 0, conversionTokenPolicy: "", paymentProofReference: "", paymentProofUrl: "", reason: "", remark: "" });
+  Object.assign(form, { action: props.initialAction, targetIdentity: "AGENT", method: "ONLY_IDENTITY", planId: "", parentAgentId: "", operationCenterId: "", paidAmountYuan: 0, grantPackageToken: false, giftTokenAmount: 0, conversionTokenPolicy: "", paymentProofReference: "", paymentProofStorageFileId: "", paymentProofPayerName: "", paymentProofPaidAt: "", paymentProofChannel: "", paymentProofRemark: "", discountReason: "", reason: "", remark: "" });
 }
 async function nextStep() {
   errorMessage.value = "";
@@ -211,7 +224,7 @@ async function createPreview() {
   finally { previewing.value = false; }
 }
 function requestPayload(): IdentityChangePreviewRequest {
-  return { action: form.action, method: form.method, targetIdentity: form.action === "UPGRADE" ? form.targetIdentity : undefined, planId: form.planId || undefined, parentAgentId: form.parentAgentId, operationCenterId: form.operationCenterId, paidAmountCents: Math.round(Number(form.paidAmountYuan || 0) * 100), grantPackageToken: form.grantPackageToken, giftTokenAmount: Number(form.giftTokenAmount || 0), conversionTokenPolicy: form.conversionTokenPolicy || undefined, paymentProof: { reference: form.paymentProofReference, url: form.paymentProofUrl }, reason: form.reason, remark: form.remark };
+  return { action: form.action, method: form.method, targetIdentity: form.action === "UPGRADE" ? form.targetIdentity : undefined, planId: form.planId || undefined, parentAgentId: form.parentAgentId, operationCenterId: form.operationCenterId, paidAmountCents: Math.round(Number(form.paidAmountYuan || 0) * 100), grantPackageToken: form.grantPackageToken, giftTokenAmount: Number(form.giftTokenAmount || 0), conversionTokenPolicy: form.conversionTokenPolicy || undefined, paymentProof: { reference: form.paymentProofReference, storageFileId: form.paymentProofStorageFileId, payerName: form.paymentProofPayerName, paidAt: form.paymentProofPaidAt, paymentChannel: form.paymentProofChannel, remark: form.paymentProofRemark }, discountReason: form.discountReason, reason: form.reason, remark: form.remark };
 }
 async function confirmChange() {
   if (!preview.value || submitting.value) return;

@@ -44,7 +44,7 @@ func (s *postgresStore) ReviewAdminIdentityChange(actorID, actorRole, userID str
 	if preview.userID != userID {
 		return identityChangePreviewResult{}, errIdentityPreviewNotFound
 	}
-	if preview.method != identityMethodPackageConversion || preview.status != "REVIEW_REQUIRED" {
+	if !preview.result.ReviewRequired || preview.status != "REVIEW_REQUIRED" {
 		return identityChangePreviewResult{}, errIdentityReviewRequired
 	}
 	if preview.actorID == actorID {
@@ -112,7 +112,7 @@ func (s *postgresStore) ConfirmAdminIdentityChange(actorID, actorRole, userID st
 	if preview.status == "BLOCKED" || len(preview.result.Blockers) > 0 || preview.status == "REJECTED" {
 		return identityChangeConfirmResult{}, errIdentityChangeBlocked
 	}
-	if preview.method == identityMethodPackageConversion && preview.status != "APPROVED" {
+	if preview.result.ReviewRequired && preview.status != "APPROVED" {
 		return identityChangeConfirmResult{}, errIdentityReviewRequired
 	}
 	if preview.highRisk && !request.HighRiskConfirmed {
@@ -121,11 +121,18 @@ func (s *postgresStore) ConfirmAdminIdentityChange(actorID, actorRole, userID st
 	if preview.targetIdentity == "OPERATION_CENTER" && preview.action == "UPGRADE" && !strings.EqualFold(actorRole, "SUPER_ADMIN") {
 		return identityChangeConfirmResult{}, errIdentityPermission
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM xz_users WHERE id=$1 FOR UPDATE`, userID); err != nil {
+	if err := lockIdentityCommandUserTx(ctx, tx, userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return identityChangeConfirmResult{}, errIdentityUserNotFound
 		}
 		return identityChangeConfirmResult{}, err
+	}
+	recomputed, err := s.computeIdentityChangePreviewTx(ctx, tx, preview.actorID, preview.actorRole, userID, preview.request)
+	if err != nil {
+		return identityChangeConfirmResult{}, err
+	}
+	if len(recomputed.result.Blockers) > 0 || recomputed.result.OldIdentity != preview.result.OldIdentity || recomputed.result.TargetIdentity != preview.result.TargetIdentity || recomputed.result.PaidAmountCents != preview.result.PaidAmountCents || recomputed.result.TokenDelta != preview.result.TokenDelta || recomputed.result.SourceMembershipOrderID != preview.result.SourceMembershipOrderID {
+		return identityChangeConfirmResult{}, fmt.Errorf("%w: critical state changed after preview", errIdentityChangeBlocked)
 	}
 	currentRelation, err := currentIdentityRelationshipTx(ctx, tx, userID)
 	if err != nil {
@@ -246,6 +253,9 @@ func createIdentityOfflineOrderTx(ctx context.Context, tx *sql.Tx, executionID s
 	orderID := "order_identity_" + shortID(executionID)
 	orderNo := "IDOFF-" + strings.ToUpper(shortID(executionID))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if parsed, parseErr := time.Parse(time.RFC3339, preview.request.PaymentProof.PaidAt); parseErr == nil {
+		now = parsed.UTC().Format(time.RFC3339Nano)
+	}
 	order := adminOrder{
 		ID: orderID, OrderNo: orderNo, TenantID: "tenant_default", UserID: preview.userID, BuyerUserID: preview.userID,
 		PlanID: plan.ID, OrderType: "IDENTITY_UPGRADE", BusinessOrderType: businessOrderTypeForPlanType(planBusinessType(plan)),
@@ -253,7 +263,8 @@ func createIdentityOfflineOrderTx(ctx context.Context, tx *sql.Tx, executionID s
 		FulfillmentStatus: "FULFILLED", FulfilledAt: now, PriceSnapshot: map[string]any{
 			"identityChangeMethod": preview.method, "previewId": preview.id, "executionId": executionID,
 			"actualPaidAmountCents": preview.result.PaidAmountCents, "paymentProof": preview.request.PaymentProof,
-			"originalPlanPriceCents": plan.PriceCents, "tokenDelta": preview.result.TokenDelta,
+			"originalPlanPriceCents": plan.PriceCents, "discountAmountCents": preview.result.DiscountAmountCents,
+			"discountReason": preview.request.DiscountReason, "specialPrice": preview.result.SpecialPrice, "tokenDelta": preview.result.TokenDelta,
 		},
 	}
 	if err := insertOrder(ctx, tx, order); err != nil {

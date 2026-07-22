@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -251,7 +252,7 @@ func TestAdminIdentityChangeNormalAbnormalDuplicateConcurrentAndPermission(t *te
 	t.Run("offline order persists payment token and commission", func(t *testing.T) {
 		userID := "identity_offline_" + suffix
 		seedIdentityChangeUser(t, db, userID, "MEMBER")
-		preview, err := store.PreviewAdminIdentityChange(admin1, "SUPER_ADMIN", userID, identityChangePreviewRequest{Action: "UPGRADE", Method: identityMethodOfflineOrder, TargetIdentity: "AGENT", PlanID: "plan_agent_join_996", PaidAmountCents: 99600, GrantPackageToken: true, PaymentProof: identityPaymentProof{Reference: "BANK-TEST-001"}, Reason: "offline bank transfer verified"})
+		preview, err := store.PreviewAdminIdentityChange(admin1, "SUPER_ADMIN", userID, identityChangePreviewRequest{Action: "UPGRADE", Method: identityMethodOfflineOrder, TargetIdentity: "AGENT", PlanID: "plan_agent_join_996", PaidAmountCents: 99600, GrantPackageToken: true, PaymentProof: identityPaymentProof{Reference: "BANK-TEST-001", PayerName: "Identity Test", PaidAt: time.Now().UTC().Format(time.RFC3339), PaymentChannel: "BANK_TRANSFER"}, Reason: "offline bank transfer verified"})
 		if err != nil || preview.Status != "READY" || preview.TokenDelta <= 0 || !preview.CommissionGenerated || !preview.PaymentRequired {
 			t.Fatalf("unexpected offline preview: %+v err=%v", preview, err)
 		}
@@ -274,7 +275,7 @@ func TestAdminIdentityChangeNormalAbnormalDuplicateConcurrentAndPermission(t *te
 		seedIdentityChangeUser(t, db, userID, "MEMBER")
 		sourceOrderID := "member_source_" + suffix
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := db.Exec(`INSERT INTO xz_orders(id,order_no,tenant_id,user_id,plan_id,amount_cents,token_grant_amount,token_amount,status,paid_at,created_at,price_snapshot,raw) VALUES($1,$2,'tenant_default',$3,'plan_ai_creator_996',99600,40000,40000,'PAID',$4,$4,'{}','{}')`, sourceOrderID, "MEMBER-"+suffix, userID, now); err != nil {
+		if _, err := db.Exec(`INSERT INTO xz_orders(id,order_no,tenant_id,user_id,plan_id,amount_cents,token_grant_amount,token_amount,status,order_status,fulfillment_status,paid_at,created_at,price_snapshot,raw) VALUES($1,$2,'tenant_default',$3,'plan_ai_creator_996',99600,40000,40000,'PAID','PAID','FULFILLED',$4,$4,'{}','{}')`, sourceOrderID, "MEMBER-"+suffix, userID, now); err != nil {
 			t.Fatal(err)
 		}
 		preview, err := store.PreviewAdminIdentityChange(admin1, "SUPER_ADMIN", userID, identityChangePreviewRequest{Action: "UPGRADE", Method: identityMethodPackageConversion, TargetIdentity: "AGENT", PlanID: "plan_agent_join_996", ConversionTokenPolicy: "KEEP_EXISTING", Reason: "member conversion approved"})
@@ -503,11 +504,11 @@ func TestCommercialIdentityAccessAndRBACLifecycle(t *testing.T) {
 	if roleStatus("AGENT") == "ACTIVE" || roleStatus("OPERATION") != "ACTIVE" {
 		t.Fatalf("operation upgrade roles agent=%s operation=%s", roleStatus("AGENT"), roleStatus("OPERATION"))
 	}
-	if principal, found, err := store.GetChannelWorkbenchAgentForUser(userID); err != nil || !found || principal.OperationCenterID == "" {
-		t.Fatalf("operation center inheritance failed principal=%+v found=%v err=%v", principal, found, err)
+	if principal, found, err := store.GetChannelWorkbenchAgentForUser(userID); err != nil || found {
+		t.Fatalf("dedicated operation center must not inherit agent workbench principal=%+v found=%v err=%v", principal, found, err)
 	}
-	if recorder := requestWorkbench(); recorder.Code != http.StatusOK {
-		t.Fatalf("operation center inherited workbench status=%d body=%s", recorder.Code, recorder.Body.String())
+	if recorder := requestWorkbench(); recorder.Code != http.StatusForbidden {
+		t.Fatalf("dedicated operation center workbench status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
 	preview, err := store.PreviewAdminIdentityDowngrade(adminID, "SUPER_ADMIN", userID, identityDowngradeRequest{TargetIdentity: "AGENT", ChildStrategy: downgradeKeepHistory, Reason: "controlled operation center downgrade"})
@@ -535,11 +536,21 @@ func TestCommercialIdentityAccessAndRBACLifecycle(t *testing.T) {
 
 func TestIdentityChangePermissionMapping(t *testing.T) {
 	for path, want := range map[string]string{
-		"/api/v1/admin/users/u1/identity-change/preview": "identity:change:preview",
-		"/api/v1/admin/users/u1/identity-change/review":  "identity:change:review",
-		"/api/v1/admin/users/u1/identity-change/confirm": "identity:change:confirm",
+		"/api/v1/admin/users/u1/identity-change/preview":     "identity:change:preview",
+		"/api/v1/admin/users/u1/identity-change/review":      "identity:change:review",
+		"/api/v1/admin/users/u1/identity-change/confirm":     "identity:change:confirm",
+		"/api/v1/admin/identity-consistency":                 "identity:consistency:view",
+		"/api/v1/admin/operation-centers/center-1/profile":   "identity:operation-profile:update",
+		"/api/v1/admin/users/u1/identity-downgrade/preview":  "identity:downgrade:preview",
+		"/api/v1/admin/users/u1/identity-downgrade/requests": "identity:downgrade:view",
+		"/api/v1/admin/users/u1/identity-downgrade/confirm":  "identity:downgrade:confirm",
+		"/api/v1/admin/users/u1/identity-downgrade/recheck":  "identity:downgrade:confirm",
 	} {
-		req, _ := http.NewRequest(http.MethodPost, path, nil)
+		method := http.MethodPost
+		if strings.HasSuffix(path, "/requests") || strings.HasSuffix(path, "/identity-consistency") {
+			method = http.MethodGet
+		}
+		req, _ := http.NewRequest(method, path, nil)
 		if got := adminPermissionForRequest(req); got != want {
 			t.Fatalf("permission for %s = %s, want %s", path, got, want)
 		}

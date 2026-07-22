@@ -68,12 +68,15 @@ type adminIdentityChangeRecord struct {
 }
 
 type adminIdentityProfile struct {
-	UserID          string                  `json:"userId"`
-	AccountStatus   string                  `json:"accountStatus"`
-	LegacyRole      string                  `json:"legacyRole"`
-	AccountRoles    []string                `json:"accountRoles"`
-	PrimaryIdentity string                  `json:"primaryIdentity"`
-	Identities      []adminBusinessIdentity `json:"identities"`
+	UserID                       string                  `json:"userId"`
+	AccountStatus                string                  `json:"accountStatus"`
+	LegacyRole                   string                  `json:"legacyRole"`
+	AccountRoles                 []string                `json:"accountRoles"`
+	PrimaryIdentity              string                  `json:"primaryIdentity"`
+	Identities                   []adminBusinessIdentity `json:"identities"`
+	CurrentRole                  string                  `json:"currentRole"`
+	AgentProfileStatus           string                  `json:"agentProfileStatus,omitempty"`
+	OperationCenterProfileStatus string                  `json:"operationCenterProfileStatus,omitempty"`
 }
 
 type adminIdentityHistory struct {

@@ -30,6 +30,9 @@ export interface IdentityProfile {
   accountRoles: string[];
   primaryIdentity: BusinessIdentityType;
   identities: BusinessIdentity[];
+  currentRole: string;
+  agentProfileStatus?: string;
+  operationCenterProfileStatus?: string;
 }
 
 export interface UserRelationship {
@@ -94,7 +97,8 @@ export interface IdentityChangePreviewRequest {
   grantPackageToken?: boolean;
   giftTokenAmount?: number;
   conversionTokenPolicy?: "KEEP_EXISTING" | "ADJUST_DIFFERENCE";
-  paymentProof?: { reference?: string; url?: string; note?: string };
+  paymentProof?: { reference?: string; storageFileId?: string; payerName?: string; paidAt?: string; paymentChannel?: string; remark?: string; url?: string };
+  discountReason?: string;
   reason: string;
   remark?: string;
 }
@@ -111,6 +115,10 @@ export interface IdentityChangePreview {
   relationshipAfter: Record<string, string>;
   paymentRequired: boolean;
   paidAmountCents: number;
+  originalAmountCents: number;
+  discountAmountCents: number;
+  payableAmountCents: number;
+  specialPrice: boolean;
   tokenDelta: number;
   tokenChangeType?: string;
   commissionGenerated: boolean;
@@ -125,14 +133,16 @@ export interface IdentityChangePreview {
   sourceMembershipOrderId?: string;
 }
 
-export interface IdentityOption { id: string; userId?: string; name?: string; owner?: string; status?: string; level?: number }
+export interface IdentityOption { id: string; userId?: string; name?: string; owner?: string; status?: string; level?: number; operationCenterId?: string; region?: string; inviteCode?: string; responsiblePerson?: string; contactInfo?: string; settlementProfile?: Record<string, unknown>; agreementStatus?: string }
+export interface OperationCenterProfileUpdate { name: string; region?: string; inviteCode?: string; responsiblePerson?: string; contactInfo?: string; settlementProfile?: Record<string, unknown>; agreementStatus?: string }
 export interface IdentityPlanOption { id: string; code: string; name: string; priceCents: number; grantPoints: number; active: boolean; entitlements?: Record<string, any> }
 
 export type IdentityDowngradeStrategy = "TRANSFER_TO_AGENT" | "DIRECT_OPERATION_CENTER" | "PRESERVE_HISTORY";
 export interface IdentityDowngradeRequest { targetIdentity?: "AGENT"; childStrategy: IdentityDowngradeStrategy; targetAgentId?: string; targetOperationCenterId?: string; waitForSettlement: boolean; effectiveAt?: string; reason: string; remark?: string }
 export interface IdentityDowngradeCheck { code: string; label: string; count: number; amountCents: number; blocking: boolean }
-export interface IdentityDowngradePreview { previewToken: string; previewId: string; userId: string; currentIdentity: "AGENT" | "OPERATION_CENTER"; targetIdentity?: "AGENT"; childStrategy: IdentityDowngradeStrategy; effectiveAt: string; waitForSettlement: boolean; checks: IdentityDowngradeCheck[]; downlineMembers: number; downlineAgents: number; migrationCount: number; relationshipBefore: Record<string, unknown>; relationshipAfter: Record<string, unknown>; blockers: string[]; riskWarnings: string[]; status: "READY" | "BLOCKED" | "WAITING" | "SCHEDULED" | "CONSUMED" | "EXPIRED"; expiresAt: string }
-export interface IdentityDowngradeResult { requestId: string; userId: string; status: "WAITING" | "SCHEDULED" | "PROCESSING" | "SUCCEEDED" | "FAILED" | "CANCELLED"; effectiveAt: string; migratedMembers: number; migratedAgents: number; migratedRelationships: number; idempotent: boolean }
+export interface IdentityDowngradePreview { previewToken: string; previewId: string; userId: string; currentIdentity: "AGENT" | "OPERATION_CENTER"; targetIdentity?: "AGENT"; childStrategy: IdentityDowngradeStrategy; effectiveAt: string; waitForSettlement: boolean; checks: IdentityDowngradeCheck[]; downlineMembers: number; downlineAgents: number; migrationCount: number; unassignedCount: number; commissionImpact: string; relationshipBefore: Record<string, unknown>; relationshipAfter: Record<string, unknown>; blockers: string[]; riskWarnings: string[]; status: "READY" | "BLOCKED" | "WAITING" | "SCHEDULED" | "CONSUMED" | "EXPIRED"; expiresAt: string }
+export interface IdentityDowngradeResult { requestId: string; userId: string; status: "WAITING" | "SCHEDULED" | "PROCESSING" | "SUCCEEDED" | "FAILED" | "CANCELLED"; effectiveAt: string; migratedMembers: number; migratedAgents: number; migratedRelationships: number; idempotent: boolean; blockers?: string[]; failureMessage?: string; lastCheckedAt?: string; createdAt?: string; timeoutWarning?: boolean }
+export interface IdentityConsistencyIssue { code: string; severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"; userId: string; entityId?: string; message: string; suggestedAction: string; details?: Record<string, unknown> }
 
 function userPath(userId: string, suffix: string) {
   return `/admin/users/${encodeURIComponent(userId)}/identity-change/${suffix}`;
@@ -166,6 +176,10 @@ export const identityManagementApi = {
     const response = await adminRequest<{ items: IdentityOption[] }>({ method: "GET", url: "/admin/operation-centers" });
     return response.items;
   },
+  async updateOperationCenterProfile(centerId: string, data: OperationCenterProfileUpdate) {
+    const response = await adminRequest<{ item: IdentityOption }>({ method: "PATCH", url: `/admin/operation-centers/${encodeURIComponent(centerId)}/profile`, data, retryOnUnauthorized: false });
+    return response.item;
+  },
   async plans() {
     const response = await adminRequest<{ items: IdentityPlanOption[] }>({ method: "GET", url: "/admin/plans" });
     return response.items;
@@ -186,12 +200,24 @@ export const identityManagementApi = {
     const response = await adminRequest<{ item: IdentityDowngradePreview }>({ method: "POST", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/preview`, data, retryOnUnauthorized: false });
     return response.item;
   },
-  async downgradeConfirm(userId: string, previewToken: string) {
-    const response = await adminRequest<{ item: IdentityDowngradeResult }>({ method: "POST", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/confirm`, data: { previewToken, highRiskConfirmed: true }, retryOnUnauthorized: false });
+  async downgradeConfirm(userId: string, previewToken: string, confirmationText?: string) {
+    const response = await adminRequest<{ item: IdentityDowngradeResult }>({ method: "POST", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/confirm`, data: { previewToken, highRiskConfirmed: true, confirmationText }, retryOnUnauthorized: false });
     return response.item;
   },
   async downgradeRequests(userId: string) {
     const response = await adminRequest<{ items: IdentityDowngradeResult[] }>({ method: "GET", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/requests` });
     return response.items;
+  },
+  async downgradeRecheck(userId: string, requestId: string) {
+    const response = await adminRequest<{ item: IdentityDowngradeResult }>({ method: "POST", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/requests/${encodeURIComponent(requestId)}/recheck`, retryOnUnauthorized: false }); return response.item;
+  },
+  async downgradeCancel(userId: string, requestId: string) {
+    const response = await adminRequest<{ item: IdentityDowngradeResult }>({ method: "POST", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/requests/${encodeURIComponent(requestId)}/cancel`, retryOnUnauthorized: false }); return response.item;
+  },
+  async downgradeReschedule(userId: string, requestId: string, effectiveAt: string, reason: string) {
+    const response = await adminRequest<{ item: IdentityDowngradeResult }>({ method: "POST", url: `/admin/users/${encodeURIComponent(userId)}/identity-downgrade/requests/${encodeURIComponent(requestId)}/reschedule`, data: { effectiveAt, reason }, retryOnUnauthorized: false }); return response.item;
+  },
+  async consistency(userId?: string) {
+    const response = await adminRequest<{ items: IdentityConsistencyIssue[] }>({ method: "GET", url: "/admin/identity-consistency", params: userId ? { userId } : undefined }); return response.items;
   }
 };

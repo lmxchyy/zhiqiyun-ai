@@ -475,16 +475,12 @@ func (s *jsonStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (a
 			if req.Status != "" {
 				data.Users[i].Status = req.Status
 			}
-			if req.PlanID != "" {
-				data.Users[i].PlanID = req.PlanID
-			}
 			if customerModelRouteRequested(req) {
 				route := applyCustomerModelRoute(data, data.Users[i], req, data.Users[i].UpdatedAt)
 				if route.ID != "" {
 					data.Users[i].ModelRoutes = upsertUserModelRoute(data.Users[i].ModelRoutes, route)
 				}
 			}
-			data.Users[i].ReferredBy = strings.TrimSpace(req.ReferredBy)
 			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			updated = data.Users[i]
 			if req.Available != nil {
@@ -1546,128 +1542,13 @@ func stringPointerValue(value *string) string {
 }
 
 func (s *jsonStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adminChannelAgent, adminUser, error) {
-	var createdAgent adminChannelAgent
-	var createdUser adminUser
-	err := s.updateAdmin(func(data *adminPlatformData) error {
-		for _, user := range data.Users {
-			if strings.EqualFold(user.Email, req.Email) {
-				return fmt.Errorf("email already exists: %s", req.Email)
-			}
-		}
-		if strings.TrimSpace(req.ParentID) != "" {
-			foundParent := false
-			for _, agent := range data.ChannelAgents {
-				if agent.ID == req.ParentID {
-					foundParent = true
-					break
-				}
-			}
-			if !foundParent {
-				return fmt.Errorf("parent channel agent not found: %s", req.ParentID)
-			}
-		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		role := agentRoleForLevel(req.Level)
-		createdUser = adminUser{
-			ID:        uniqueAdminID("user", userIDs(data.Users)),
-			Email:     req.Email,
-			Name:      req.Name,
-			Role:      role,
-			Status:    fallback(req.Status, "ACTIVE"),
-			PlanID:    "plan_free",
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
-		createdAgent = adminChannelAgent{
-			ID:         uniqueAdminID("channel", channelAgentIDs(data.ChannelAgents)),
-			UserID:     createdUser.ID,
-			ParentID:   req.ParentID,
-			Level:      req.Level,
-			Status:     fallback(req.Status, "ACTIVE"),
-			InviteCode: req.InviteCode,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		if createdAgent.InviteCode == "" {
-			createdAgent.InviteCode = strings.ToUpper("AG" + fmtSix(len(data.ChannelAgents)+1))
-		}
-		data.Users = append(data.Users, createdUser)
-		data.ChannelAgents = append(data.ChannelAgents, createdAgent)
-		return setAdminPointAccountWithLedgerV1(data, createdUser.ID, req.Available, "ADJUSTMENT", "ADMIN_CHANNEL_CREATE", createdAgent.ID, "admin channel account initial balance")
-	})
-	return createdAgent, createdUser, err
+	_ = req
+	return adminChannelAgent{}, adminUser{}, errors.New("legacy channel-agent writes are disabled; use customer 360 identity management")
 }
 
 func (s *jsonStore) UpdateAdminChannelAgent(id string, req adminChannelMutation) (adminChannelAgent, error) {
-	var updated adminChannelAgent
-	err := s.updateAdmin(func(data *adminPlatformData) error {
-		for i := range data.ChannelAgents {
-			if data.ChannelAgents[i].ID != id {
-				continue
-			}
-			item := data.ChannelAgents[i]
-			if req.Level > 0 {
-				item.Level = req.Level
-			}
-			if strings.TrimSpace(req.ParentID) != "" {
-				parentID := fallback(req.ParentID, item.ParentID)
-				foundParent := false
-				for _, agent := range data.ChannelAgents {
-					if agent.ID == parentID && agent.ID != item.ID {
-						foundParent = true
-						break
-					}
-				}
-				if !foundParent {
-					return fmt.Errorf("parent channel agent not found: %s", parentID)
-				}
-				item.ParentID = parentID
-			} else if req.Level > 0 {
-				item.ParentID = ""
-			} else if req.ParentID != "" {
-				item.ParentID = req.ParentID
-			}
-			if req.Status != "" {
-				item.Status = req.Status
-			}
-			if req.InviteCode != "" {
-				item.InviteCode = req.InviteCode
-			}
-			item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			for j := range data.Users {
-				if data.Users[j].ID != item.UserID {
-					continue
-				}
-				if req.Email != "" && !strings.EqualFold(req.Email, data.Users[j].Email) {
-					for _, user := range data.Users {
-						if user.ID != data.Users[j].ID && strings.EqualFold(user.Email, req.Email) {
-							return fmt.Errorf("email already exists: %s", req.Email)
-						}
-					}
-					data.Users[j].Email = req.Email
-				}
-				if req.Name != "" {
-					data.Users[j].Name = req.Name
-				}
-				data.Users[j].Role = agentRoleForLevel(item.Level)
-				if req.Status != "" {
-					data.Users[j].Status = req.Status
-				}
-				data.Users[j].UpdatedAt = item.UpdatedAt
-				break
-			}
-			if req.Available != nil {
-				if err := setAdminPointAccountWithLedgerV1(data, item.UserID, *req.Available, "ADJUSTMENT", "ADMIN_CHANNEL_UPDATE", item.ID+":"+item.UpdatedAt, "admin channel account balance adjustment"); err != nil {
-					return err
-				}
-			}
-			data.ChannelAgents[i] = item
-			updated = item
-			return nil
-		}
-		return fmt.Errorf("channel agent not found: %s", id)
-	})
-	return updated, err
+	_, _ = id, req
+	return adminChannelAgent{}, errors.New("legacy channel-agent writes are disabled; use customer 360 identity management")
 }
 
 func (s *jsonStore) UpdateAdminProduct(id string, req adminProductMutation) (adminProduct, error) {

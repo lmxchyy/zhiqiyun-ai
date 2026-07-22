@@ -28,9 +28,13 @@ var (
 )
 
 type identityPaymentProof struct {
-	Reference string `json:"reference"`
-	URL       string `json:"url,omitempty"`
-	Note      string `json:"note,omitempty"`
+	Reference      string `json:"reference"`
+	StorageFileID  string `json:"storageFileId,omitempty"`
+	PayerName      string `json:"payerName"`
+	PaidAt         string `json:"paidAt"`
+	PaymentChannel string `json:"paymentChannel"`
+	Remark         string `json:"remark,omitempty"`
+	URL            string `json:"url,omitempty"` // legacy preview compatibility; never accepted as sole proof
 }
 
 type identityChangePreviewRequest struct {
@@ -45,6 +49,7 @@ type identityChangePreviewRequest struct {
 	GiftTokenAmount       int                  `json:"giftTokenAmount,omitempty"`
 	ConversionTokenPolicy string               `json:"conversionTokenPolicy,omitempty"`
 	PaymentProof          identityPaymentProof `json:"paymentProof,omitempty"`
+	DiscountReason        string               `json:"discountReason,omitempty"`
 	Reason                string               `json:"reason"`
 	Remark                string               `json:"remark,omitempty"`
 }
@@ -69,6 +74,10 @@ type identityChangePreviewResult struct {
 	RelationshipAfter       map[string]any              `json:"relationshipAfter"`
 	PaymentRequired         bool                        `json:"paymentRequired"`
 	PaidAmountCents         int64                       `json:"paidAmountCents"`
+	OriginalAmountCents     int64                       `json:"originalAmountCents"`
+	DiscountAmountCents     int64                       `json:"discountAmountCents"`
+	PayableAmountCents      int64                       `json:"payableAmountCents"`
+	SpecialPrice            bool                        `json:"specialPrice"`
 	TokenDelta              int64                       `json:"tokenDelta"`
 	TokenChangeType         string                      `json:"tokenChangeType,omitempty"`
 	CommissionGenerated     bool                        `json:"commissionGenerated"`
@@ -111,25 +120,20 @@ type adminIdentityChangeStore interface {
 	ConfirmAdminIdentityChange(actorID, actorRole, userID string, request identityChangeConfirmRequest) (identityChangeConfirmResult, error)
 }
 
-type identityChangeAPI struct{ store platformStore }
+type identityChangeAPI struct{ commands *identityCommandService }
 
 func newIdentityChangeAPI(store platformStore) identityChangeAPI {
-	return identityChangeAPI{store: store}
+	return identityChangeAPI{commands: newIdentityCommandService(store)}
 }
 
 func (a identityChangeAPI) preview(w http.ResponseWriter, r *http.Request) {
-	store, ok := a.store.(adminIdentityChangeStore)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, errors.New("identity change store is unavailable"))
-		return
-	}
 	var request identityChangePreviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	actorID, actorRole := actorFromRequest(r)
-	result, err := store.PreviewAdminIdentityChange(actorID, actorRole, strings.TrimSpace(r.PathValue("id")), request)
+	result, err := a.commands.Preview(actorID, actorRole, strings.TrimSpace(r.PathValue("id")), request)
 	if err != nil {
 		writeIdentityChangeError(w, err)
 		return
@@ -138,18 +142,13 @@ func (a identityChangeAPI) preview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a identityChangeAPI) review(w http.ResponseWriter, r *http.Request) {
-	store, ok := a.store.(adminIdentityChangeStore)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, errors.New("identity change store is unavailable"))
-		return
-	}
 	var request identityChangeReviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	actorID, actorRole := actorFromRequest(r)
-	result, err := store.ReviewAdminIdentityChange(actorID, actorRole, strings.TrimSpace(r.PathValue("id")), request)
+	result, err := a.commands.Review(actorID, actorRole, strings.TrimSpace(r.PathValue("id")), request)
 	if err != nil {
 		writeIdentityChangeError(w, err)
 		return
@@ -158,18 +157,13 @@ func (a identityChangeAPI) review(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a identityChangeAPI) confirm(w http.ResponseWriter, r *http.Request) {
-	store, ok := a.store.(adminIdentityChangeStore)
-	if !ok {
-		writeError(w, http.StatusNotImplemented, errors.New("identity change store is unavailable"))
-		return
-	}
 	var request identityChangeConfirmRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	actorID, actorRole := actorFromRequest(r)
-	result, err := store.ConfirmAdminIdentityChange(actorID, actorRole, strings.TrimSpace(r.PathValue("id")), request)
+	result, err := a.commands.Confirm(actorID, actorRole, strings.TrimSpace(r.PathValue("id")), request)
 	if err != nil {
 		writeIdentityChangeError(w, err)
 		return

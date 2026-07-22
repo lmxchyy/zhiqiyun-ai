@@ -14,7 +14,14 @@ type downgradeChildRelationship struct {
 }
 
 func executeIdentityDowngradeTx(ctx context.Context, tx *sql.Tx, requestID, actorID, actorRole string, request identityDowngradeRequest, preview identityDowngradePreview) (identityDowngradeResult, error) {
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return identityDowngradeResult{}, err
+	}
+	now = now.UTC()
+	if err := lockIdentityCommandUserTx(ctx, tx, preview.UserID); err != nil {
+		return identityDowngradeResult{}, err
+	}
 	rolesBefore, err := commercialRoleStatusSnapshotTx(ctx, tx, preview.UserID)
 	if err != nil {
 		return identityDowngradeResult{}, err

@@ -182,65 +182,12 @@ func (a channelAPI) createChildAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	_, agent, err := a.authenticatedAgent(r, data)
+	_, _, err = a.authenticatedAgent(r, data)
 	if err != nil {
 		writeChannelAuthError(w, err)
 		return
 	}
 	writeError(w, http.StatusConflict, errors.New("legacy child-agent creation is disabled; use customer 360 identity management"))
-	return
-
-	var req adminChannelCreateMutation
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	req.Name = strings.TrimSpace(req.Name)
-	req.Email = strings.TrimSpace(req.Email)
-	req.Status = strings.ToUpper(strings.TrimSpace(req.Status))
-	if req.Name == "" || req.Email == "" {
-		writeError(w, http.StatusBadRequest, errors.New("name and email are required"))
-		return
-	}
-	if req.Level == 0 {
-		req.Level = 1
-	}
-	if !isAgentLevel(req.Level) {
-		writeError(w, http.StatusBadRequest, errors.New("level must be between L1 and L5 for channel agents"))
-		return
-	}
-	if req.Available < 0 {
-		writeError(w, http.StatusBadRequest, errors.New("available must be greater than or equal to 0"))
-		return
-	}
-	if !canAgentCreateChildLevel(agent.Level, req.Level) {
-		writeError(w, http.StatusForbidden, errors.New("当前代理等级无权开通该下级等级"))
-		return
-	}
-	req.ParentID = agent.ID
-	req.Status = fallback(req.Status, "ACTIVE")
-	req.InviteCode = strings.ToUpper(strings.TrimSpace(req.InviteCode))
-	createdAgent, createdUser, err := a.store.CreateAdminChannelAgent(req)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	item := channelAgentView(createdAgent, createdUser)
-	writeJSON(w, map[string]any{"item": item, "user": userView(createdUser)})
-}
-
-func canAgentCreateChildLevel(parentLevel int, childLevel int) bool {
-	if parentLevel < 3 || childLevel < 1 {
-		return false
-	}
-	switch parentLevel {
-	case 3:
-		return childLevel == 1 || childLevel == 2
-	case 4:
-		return childLevel >= 1 && childLevel <= 3
-	default:
-		return childLevel >= 1 && childLevel <= 4
-	}
 }
 
 func (a channelAPI) authenticatedAgent(r *http.Request, data adminPlatformData) (adminUser, adminChannelAgent, error) {
@@ -256,9 +203,6 @@ func (a channelAPI) authenticatedAgent(r *http.Request, data adminPlatformData) 
 	}
 	if agent, ok := channelAgentForUser(data.ChannelAgents, user.ID); ok && strings.EqualFold(agent.Status, "ACTIVE") {
 		return user, agent, nil
-	}
-	if center, ok := activeOperationCenterForUser(data.OperationCenters, user.ID); ok {
-		return user, adminChannelAgent{ID: center.ID, UserID: center.UserID, OperationCenterID: center.ID, Level: 5, Status: "ACTIVE", InviteCode: center.InviteCode, CreatedAt: center.CreatedAt, UpdatedAt: center.UpdatedAt}, nil
 	}
 	return adminUser{}, adminChannelAgent{}, errForbidden
 }

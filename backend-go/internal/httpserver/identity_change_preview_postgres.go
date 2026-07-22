@@ -73,7 +73,13 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 	request.Reason = strings.TrimSpace(request.Reason)
 	request.Remark = strings.TrimSpace(request.Remark)
 	request.PaymentProof.Reference = strings.TrimSpace(request.PaymentProof.Reference)
+	request.PaymentProof.StorageFileID = strings.TrimSpace(request.PaymentProof.StorageFileID)
+	request.PaymentProof.PayerName = strings.TrimSpace(request.PaymentProof.PayerName)
+	request.PaymentProof.PaidAt = strings.TrimSpace(request.PaymentProof.PaidAt)
+	request.PaymentProof.PaymentChannel = strings.ToUpper(strings.TrimSpace(request.PaymentProof.PaymentChannel))
+	request.PaymentProof.Remark = strings.TrimSpace(request.PaymentProof.Remark)
 	request.PaymentProof.URL = strings.TrimSpace(request.PaymentProof.URL)
+	request.DiscountReason = strings.TrimSpace(request.DiscountReason)
 	if actorID == "" || userID == "" || request.Reason == "" {
 		return identityChangeComputed{}, fmt.Errorf("%w: actor, user and reason are required", errIdentityChangeInvalid)
 	}
@@ -120,7 +126,7 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 	switch request.Action {
 	case "UPGRADE":
 		if request.TargetIdentity != "AGENT" && request.TargetIdentity != "OPERATION_CENTER" {
-			result.Blockers = append(result.Blockers, "鍗囩骇鐩爣蹇呴』鏄?AGENT 鎴?OPERATION_CENTER")
+			result.Blockers = append(result.Blockers, "升级目标必须是 AGENT 或 OPERATION_CENTER")
 		}
 		if request.TargetIdentity == oldIdentity && oldStatus != "TERMINATED" {
 			result.Blockers = append(result.Blockers, "user already has the target business identity")
@@ -159,8 +165,13 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 	if request.Action == "ADJUST_PARENT_AGENT" && request.ParentAgentID == "" {
 		result.RiskWarnings = append(result.RiskWarnings, "confirmation will remove the current parent agent")
 	}
-	if err := validateIdentityRelationshipTargetsTx(ctx, tx, userID, request.ParentAgentID, request.OperationCenterID); err != nil {
-		result.Blockers = append(result.Blockers, err.Error())
+	resolvedCenterID, relationshipErr := resolveIdentityRelationshipTargetsTx(ctx, tx, userID, request.ParentAgentID, request.OperationCenterID)
+	if relationshipErr != nil {
+		result.Blockers = append(result.Blockers, relationshipErr.Error())
+	} else {
+		request.OperationCenterID = resolvedCenterID
+		afterRelation.OperationCenterID = resolvedCenterID
+		result.RelationshipAfter = identityRelationshipSnapshot(afterRelation)
 	}
 
 	var plan adminPlan
@@ -189,11 +200,29 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 	case identityMethodOfflineOrder:
 		result.PaymentRequired = true
 		result.PaidAmountCents = int64(request.PaidAmountCents)
-		if request.PaidAmountCents <= 0 || (plan.PriceCents > 0 && request.PaidAmountCents > plan.PriceCents) {
-			result.Blockers = append(result.Blockers, "offline paid amount must be positive and not exceed plan price")
+		result.OriginalAmountCents = int64(plan.PriceCents)
+		result.PayableAmountCents = int64(request.PaidAmountCents)
+		if request.PaidAmountCents <= 0 || plan.PriceCents <= 0 || request.PaidAmountCents > plan.PriceCents {
+			result.Blockers = append(result.Blockers, "offline paid amount must be positive and cannot exceed the package price")
 		}
-		if request.PaymentProof.Reference == "" && request.PaymentProof.URL == "" {
-			result.Blockers = append(result.Blockers, "offline order requires payment proof")
+		if plan.PriceCents > 0 && request.PaidAmountCents != plan.PriceCents {
+			result.SpecialPrice = true
+			result.DiscountAmountCents = int64(plan.PriceCents - request.PaidAmountCents)
+			if request.DiscountReason == "" {
+				result.Blockers = append(result.Blockers, "special price requires discountReason")
+			}
+			allowed, permissionErr := identityActorHasPermissionTx(ctx, tx, actorID, actorRole, "identity:change:special-price")
+			if permissionErr != nil {
+				return identityChangeComputed{}, permissionErr
+			}
+			if !allowed {
+				result.Blockers = append(result.Blockers, "special price permission is required")
+			}
+			result.ReviewRequired = true
+			result.RiskWarnings = append(result.RiskWarnings, "special price requires approval by another administrator")
+		}
+		if proofErr := validateIdentityPaymentProofTx(ctx, tx, request.PaymentProof); proofErr != nil {
+			result.Blockers = append(result.Blockers, proofErr.Error())
 		}
 		if request.GrantPackageToken {
 			result.TokenDelta = int64(planTokenGrantAmount(plan))
@@ -215,7 +244,7 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 		if request.TargetIdentity != "AGENT" {
 			result.Blockers = append(result.Blockers, "package conversion only supports membership to agent plan")
 		}
-		sourceOrderID, sourcePaid, sourceToken, sourceErr := membershipConversionSourceTx(ctx, tx, userID)
+		sourceOrderID, sourcePaid, sourceToken, sourceErr := membershipConversionSourceTx(ctx, tx, userID, request.PlanID)
 		if sourceErr != nil {
 			result.Blockers = append(result.Blockers, sourceErr.Error())
 		} else {
@@ -225,6 +254,9 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 				difference = 0
 			}
 			result.PaidAmountCents = difference
+			result.OriginalAmountCents = int64(plan.PriceCents)
+			result.PayableAmountCents = difference
+			result.DiscountAmountCents = sourcePaid
 			result.PaymentRequired = difference > 0
 			if difference > 0 && request.PaidAmountCents != int(difference) {
 				result.Blockers = append(result.Blockers, "conversion paid amount must equal the server-calculated difference")
@@ -232,8 +264,10 @@ func (s *postgresStore) computeIdentityChangePreviewTx(ctx context.Context, tx *
 			if difference == 0 && request.PaidAmountCents != 0 {
 				result.Blockers = append(result.Blockers, "conversion has no price difference; duplicate payment is forbidden")
 			}
-			if difference > 0 && request.PaymentProof.Reference == "" && request.PaymentProof.URL == "" {
-				result.Blockers = append(result.Blockers, "payment proof is required when a conversion difference is payable")
+			if difference > 0 {
+				if proofErr := validateIdentityPaymentProofTx(ctx, tx, request.PaymentProof); proofErr != nil {
+					result.Blockers = append(result.Blockers, proofErr.Error())
+				}
 			}
 			switch request.ConversionTokenPolicy {
 			case "KEEP_EXISTING":
@@ -329,38 +363,8 @@ func identityRelationshipSnapshot(item adminUserRelationship) map[string]any {
 }
 
 func validateIdentityRelationshipTargetsTx(ctx context.Context, tx *sql.Tx, userID, parentAgentID, operationCenterID string) error {
-	if parentAgentID != "" {
-		var parentUserID string
-		if err := tx.QueryRowContext(ctx, `SELECT user_id FROM xz_channel_agents WHERE id=$1 AND upper(coalesce(status,''))='ACTIVE'`, parentAgentID).Scan(&parentUserID); err != nil {
-			return errors.New("parent agent does not exist or is inactive")
-		}
-		if parentUserID == userID {
-			return errors.New("user cannot be their own parent agent")
-		}
-		var cyclic bool
-		if err := tx.QueryRowContext(ctx, `
-			WITH RECURSIVE chain AS (
-			  SELECT id,user_id,parent_id FROM xz_channel_agents WHERE id=$1
-			  UNION ALL SELECT parent.id,parent.user_id,parent.parent_id FROM xz_channel_agents parent JOIN chain child ON parent.id=child.parent_id
-			)
-			SELECT EXISTS(SELECT 1 FROM chain WHERE user_id=$2)
-		`, parentAgentID, userID).Scan(&cyclic); err != nil {
-			return err
-		}
-		if cyclic {
-			return errors.New("cyclic agent relationship is forbidden")
-		}
-	}
-	if operationCenterID != "" {
-		var centerUserID string
-		if err := tx.QueryRowContext(ctx, `SELECT user_id FROM xz_operation_centers WHERE id=$1 AND upper(coalesce(status,''))='ACTIVE'`, operationCenterID).Scan(&centerUserID); err != nil {
-			return errors.New("operation center does not exist or is inactive")
-		}
-		if centerUserID == userID {
-			return errors.New("user cannot belong to their own operation center")
-		}
-	}
-	return nil
+	_, err := resolveIdentityRelationshipTargetsTx(ctx, tx, userID, parentAgentID, operationCenterID)
+	return err
 }
 
 func loadIdentityChangePlanTx(ctx context.Context, tx *sql.Tx, planID string) (adminPlan, error) {
@@ -380,7 +384,7 @@ func loadIdentityChangePlanTx(ctx context.Context, tx *sql.Tx, planID string) (a
 	return item, nil
 }
 
-func membershipConversionSourceTx(ctx context.Context, tx *sql.Tx, userID string) (string, int64, int64, error) {
+func membershipConversionSourceTx(ctx context.Context, tx *sql.Tx, userID, targetPlanID string) (string, int64, int64, error) {
 	var orderID string
 	var paid, tokens int64
 	err := tx.QueryRowContext(ctx, `
@@ -388,8 +392,24 @@ func membershipConversionSourceTx(ctx context.Context, tx *sql.Tx, userID string
 		FROM xz_orders o JOIN xz_plans p ON p.id=o.plan_id
 		WHERE o.user_id=$1 AND upper(coalesce(o.status,'')) IN ('PAID','SUCCEEDED')
 		  AND upper(coalesce(p.plan_type,''))='MEMBER_PACKAGE'
+		  AND coalesce((p.entitlements->>'convertibleToAgent')::boolean,false)=true
+		  AND coalesce(p.entitlements->'conversionTargetPlanIds','[]'::jsonb) ? $2
+		  AND upper(coalesce(o.fulfillment_status,o.price_snapshot->>'fulfillmentStatus',''))='FULFILLED'
+		  AND upper(coalesce(o.order_status,'')) NOT IN ('CANCELLED','REVOKED','REFUNDED')
+		  AND coalesce(nullif(o.paid_at,'')::timestamptz,nullif(o.created_at,'')::timestamptz,now())
+		      + make_interval(days=>coalesce(nullif(p.entitlements->>'conversionValidityDays','')::int,0)) >= clock_timestamp()
+		  AND NOT EXISTS (
+		    SELECT 1 FROM xz_refund_records refund
+		    WHERE refund.order_id=o.id AND upper(coalesce(refund.status,'')) NOT IN ('FAILED','REJECTED','CANCELLED')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM xz_identity_change_executions execution
+		    WHERE execution.source_membership_order_id=o.id
+		      AND execution.change_method='PACKAGE_CONVERSION'
+		      AND execution.status IN ('PROCESSING','SUCCEEDED')
+		  )
 		ORDER BY coalesce(nullif(o.paid_at,''),o.created_at) DESC,o.id DESC LIMIT 1
-	`, userID).Scan(&orderID, &paid, &tokens)
+	`, userID, targetPlanID).Scan(&orderID, &paid, &tokens)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", 0, 0, errors.New("user has no paid membership order eligible for conversion")
 	}

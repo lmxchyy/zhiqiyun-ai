@@ -204,6 +204,24 @@ func (s *postgresStore) BindPromotionInvite(input promotionBindInput) (promotion
 		return promotionRecord{}, errPromotionInviteCycle
 	}
 	now := input.BoundAt.UTC()
+	var inviterAgentID string
+	lookupErr := tx.QueryRowContext(ctx, `
+		SELECT agent.id FROM xz_channel_agents agent
+		JOIN xz_user_business_identities identity ON identity.user_id=agent.user_id
+		 AND identity.identity_type='AGENT' AND identity.identity_status='ACTIVE' AND identity.ended_at IS NULL
+		 AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp())
+		WHERE agent.user_id=$1 AND upper(coalesce(agent.status,''))='ACTIVE'
+	`, input.InviterUserID).Scan(&inviterAgentID)
+	if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+		return promotionRecord{}, lookupErr
+	}
+	if inviterAgentID != "" {
+		if err := replaceIdentityRelationshipTx(ctx, tx, input.InviteeUserID, inviterAgentID, "", input.InviterUserID, "PROMOTION_BIND", now); err != nil {
+			return promotionRecord{}, err
+		}
+	}
+	// referred_by remains a compatibility projection for legacy reports. Current
+	// commercial attribution is read from xz_user_relationships.
 	invitee.ReferredBy = input.InviterUserID
 	invitee.UpdatedAt = now.Format(time.RFC3339)
 	if _, err := tx.ExecContext(ctx, `update xz_users set referred_by=$2, updated_at=$3, raw=$4::jsonb where id=$1`, invitee.ID, invitee.ReferredBy, invitee.UpdatedAt, jsonProjection(invitee)); err != nil {

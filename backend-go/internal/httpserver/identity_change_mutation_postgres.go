@@ -12,7 +12,11 @@ import (
 )
 
 func applyIdentityMutationTx(ctx context.Context, tx *sql.Tx, preview storedIdentityPreview, actorID, orderID, executionID string) (map[string]any, error) {
-	now := time.Now().UTC()
+	var now time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return nil, err
+	}
+	now = now.UTC()
 	nowText := now.Format(time.RFC3339Nano)
 	rolesBefore, err := commercialRoleStatusSnapshotTx(ctx, tx, preview.userID)
 	if err != nil {
@@ -224,14 +228,19 @@ func updateLegacyIdentityProjectionTx(ctx context.Context, tx *sql.Tx, preview s
 }
 
 func replaceIdentityRelationshipTx(ctx context.Context, tx *sql.Tx, userID, parentAgentID, operationCenterID, actorID, sourceType string, now time.Time) error {
-	if err := validateIdentityRelationshipTargetsTx(ctx, tx, userID, parentAgentID, operationCenterID); err != nil {
+	resolvedCenterID, err := resolveIdentityRelationshipTargetsTx(ctx, tx, userID, parentAgentID, operationCenterID)
+	if err != nil {
 		return err
 	}
+	operationCenterID = resolvedCenterID
 	if _, err := tx.ExecContext(ctx, `UPDATE xz_user_relationships SET status='ENDED',ended_at=$2,updated_at=$2 WHERE user_id=$1 AND status='ACTIVE' AND ended_at IS NULL`, userID, now); err != nil {
 		return err
 	}
+	if parentAgentID == "" && operationCenterID == "" {
+		return nil
+	}
 	id := identityChangeStableID("user_relationship", userID, now.Format(time.RFC3339Nano))
-	_, err := tx.ExecContext(ctx, `INSERT INTO xz_user_relationships(id,tenant_id,user_id,parent_agent_id,operation_center_id,effective_at,status,source_type,created_by,created_at,updated_at) VALUES($1,'tenant_default',$2,nullif($3,''),nullif($4,''),$5,'ACTIVE',$6,$7,$5,$5)`, id, userID, parentAgentID, operationCenterID, now, sourceType, actorID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO xz_user_relationships(id,tenant_id,user_id,parent_agent_id,operation_center_id,effective_at,status,source_type,created_by,created_at,updated_at) VALUES($1,'tenant_default',$2,nullif($3,''),nullif($4,''),$5,'ACTIVE',$6,$7,$5,$5)`, id, userID, parentAgentID, operationCenterID, now, sourceType, actorID)
 	return err
 }
 

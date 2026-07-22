@@ -369,8 +369,8 @@ func (s *postgresStore) GetChannelAgentForUser(userID string) (adminChannelAgent
 
 // GetChannelWorkbenchAgentForUser resolves commercial access from the canonical
 // business identity and profile projections. It intentionally does not inspect
-// xz_users.role. Operation centers inherit the agent workbench permissions and
-// are represented by their center profile ID for downstream scoped reads.
+// xz_users.role. Operation centers use their dedicated workspace and are not
+// projected as ordinary agents.
 func (s *postgresStore) GetChannelWorkbenchAgentForUser(userID string) (adminChannelAgent, bool, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -381,11 +381,11 @@ func (s *postgresStore) GetChannelWorkbenchAgentForUser(userID string) (adminCha
 	err := s.db.QueryRowContext(ctx, `
 		SELECT identity_type
 		FROM xz_user_business_identities
-		WHERE user_id=$1 AND identity_type IN ('AGENT','OPERATION_CENTER')
+		WHERE user_id=$1 AND identity_type='AGENT'
 		  AND identity_status='ACTIVE' AND ended_at IS NULL
 		  AND effective_at<=clock_timestamp() AND (expires_at IS NULL OR expires_at>clock_timestamp())
 		  AND commission_enabled=true
-		ORDER BY CASE identity_type WHEN 'OPERATION_CENTER' THEN 0 ELSE 1 END, identity_version DESC
+		ORDER BY identity_version DESC
 		LIMIT 1
 	`, strings.TrimSpace(userID)).Scan(&identityType)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -394,23 +394,13 @@ func (s *postgresStore) GetChannelWorkbenchAgentForUser(userID string) (adminCha
 	if err != nil {
 		return adminChannelAgent{}, false, err
 	}
-	if identityType == "AGENT" {
-		var item adminChannelAgent
-		err = s.db.QueryRowContext(ctx, `SELECT raw FROM xz_channel_agents WHERE user_id=$1 AND upper(coalesce(status,''))='ACTIVE' ORDER BY created_at DESC,id DESC LIMIT 1`, userID).Scan(rawScanner(&item))
-		if errors.Is(err, sql.ErrNoRows) {
-			return adminChannelAgent{}, false, nil
-		}
-		return item, err == nil, err
-	}
-	var center adminOperationCenter
-	err = s.db.QueryRowContext(ctx, `SELECT raw FROM xz_operation_centers WHERE user_id=$1 AND upper(coalesce(status,''))='ACTIVE' ORDER BY created_at DESC,id DESC LIMIT 1`, userID).Scan(rawScanner(&center))
+	_ = identityType
+	var item adminChannelAgent
+	err = s.db.QueryRowContext(ctx, `SELECT raw FROM xz_channel_agents WHERE user_id=$1 AND upper(coalesce(status,''))='ACTIVE' ORDER BY created_at DESC,id DESC LIMIT 1`, userID).Scan(rawScanner(&item))
 	if errors.Is(err, sql.ErrNoRows) {
 		return adminChannelAgent{}, false, nil
 	}
-	if err != nil {
-		return adminChannelAgent{}, false, err
-	}
-	return adminChannelAgent{ID: center.ID, UserID: center.UserID, OperationCenterID: center.ID, Level: 5, Status: "ACTIVE", InviteCode: center.InviteCode, CreatedAt: center.CreatedAt, UpdatedAt: center.UpdatedAt}, true, nil
+	return item, err == nil, err
 }
 
 func (s *postgresStore) GetOperationCenterForUser(userID string) (adminOperationCenter, bool, error) {
@@ -1504,13 +1494,9 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 	if err != nil {
 		return adminBillingEvent{}, err
 	}
-	var agent adminChannelAgent
-	hasAgent := false
-	if strings.TrimSpace(user.ReferredBy) != "" {
-		agent, hasAgent, err = channelAgentByUserIDForTx(ctx, tx, user.ReferredBy)
-		if err != nil {
-			return adminBillingEvent{}, err
-		}
+	agent, hasAgent, err := directActiveAgentForUserTx(ctx, tx, userID)
+	if err != nil {
+		return adminBillingEvent{}, err
 	}
 	event := pptBillingEvent(task, pointCost, balanceBefore, balanceAfter, now, user, agent, hasAgent)
 	event.TenantID = authorization.TenantID
@@ -2297,24 +2283,9 @@ func fulfillIdentityForOrderTx(ctx context.Context, tx *sql.Tx, order *adminOrde
 			user.SubscriptionExpiresAt = expiresAt.Format(time.RFC3339Nano)
 		}
 	case planTypeAgentJoinPackage:
-		user.AgentStatus = agentStatusActive
-		if user.MemberLevel == "" {
-			user.MemberLevel = memberLevelFree
-		}
-		if strings.TrimSpace(user.Role) == "" {
-			user.Role = "MEMBER"
-		}
-		if err := ensureAgentForUserTx(ctx, tx, user, order, result, now); err != nil {
-			return err
-		}
+		return fulfillCommercialIdentityForOrderTx(ctx, tx, order, plan, result, now)
 	case planTypeOperationCenterPackage:
-		user.OperationCenterStatus = operationStatusActive
-		if user.MemberLevel == "" {
-			user.MemberLevel = memberLevelFree
-		}
-		if err := ensureOperationCenterForUserTx(ctx, tx, user, order, now); err != nil {
-			return err
-		}
+		return fulfillCommercialIdentityForOrderTx(ctx, tx, order, plan, result, now)
 	}
 	user.UpdatedAt = now
 	return insertUser(ctx, tx, user)
@@ -2825,10 +2796,6 @@ func (s *postgresStore) UpdateAdminCustomer(id string, req adminCustomerMutation
 	if req.Status != "" {
 		item.Status = req.Status
 	}
-	if req.PlanID != "" {
-		item.PlanID = req.PlanID
-	}
-	item.ReferredBy = strings.TrimSpace(req.ReferredBy)
 	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if customerModelRouteRequested(req) {
 		route, err := applyCustomerModelRouteTx(ctx, tx, item, req, item.UpdatedAt)
@@ -3603,132 +3570,13 @@ func usersForMergeResult(users []adminUser, result adminAuthMergeExecuteResult) 
 }
 
 func (s *postgresStore) CreateAdminChannelAgent(req adminChannelCreateMutation) (adminChannelAgent, adminUser, error) {
-	ctx, cancel := s.withTimeout()
-	defer cancel()
-	if err := s.ensureReady(ctx); err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if strings.TrimSpace(req.ParentID) != "" {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `select exists(select 1 from xz_channel_agents where id = $1)`, req.ParentID).Scan(&exists); err != nil {
-			return adminChannelAgent{}, adminUser{}, err
-		}
-		if !exists {
-			return adminChannelAgent{}, adminUser{}, fmt.Errorf("parent channel agent not found: %s", req.ParentID)
-		}
-	}
-	role := agentRoleForLevel(req.Level)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	userID, err := nextTableID(ctx, tx, "xz_users", "user")
-	if err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	user := adminUser{ID: userID, Email: req.Email, Name: req.Name, Role: role, Status: fallback(req.Status, "ACTIVE"), PlanID: "plan_free", CreatedAt: now, UpdatedAt: now}
-	if err := insertUser(ctx, tx, user); err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	agentID, err := nextTableID(ctx, tx, "xz_channel_agents", "channel")
-	if err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	agent := adminChannelAgent{ID: agentID, UserID: user.ID, ParentID: req.ParentID, Level: req.Level, Status: fallback(req.Status, "ACTIVE"), InviteCode: req.InviteCode, CreatedAt: now, UpdatedAt: now}
-	if agent.InviteCode == "" {
-		agent.InviteCode = strings.ToUpper("AG" + shortID(agent.ID))
-	}
-	if err := insertChannelAgent(ctx, tx, agent); err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	if err := upsertPointAccountByUser(ctx, tx, user.ID, req.Available); err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	if err := insertAuditLog(ctx, tx, "", "", "channel_agents.create", "channel_agent", agent.ID, "", "", 200, map[string]any{"userId": user.ID}); err != nil {
-		return adminChannelAgent{}, adminUser{}, err
-	}
-	return agent, user, tx.Commit()
+	_ = req
+	return adminChannelAgent{}, adminUser{}, errors.New("legacy channel-agent writes are disabled; use customer 360 identity management")
 }
 
 func (s *postgresStore) UpdateAdminChannelAgent(id string, req adminChannelMutation) (adminChannelAgent, error) {
-	ctx, cancel := s.withTimeout()
-	defer cancel()
-	if err := s.ensureReady(ctx); err != nil {
-		return adminChannelAgent{}, err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return adminChannelAgent{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var item adminChannelAgent
-	if err := tx.QueryRowContext(ctx, `select raw from xz_channel_agents where id = $1 for update`, id).Scan(rawScanner(&item)); err != nil {
-		return adminChannelAgent{}, err
-	}
-	if req.Level > 0 {
-		item.Level = req.Level
-	}
-	if strings.TrimSpace(req.ParentID) != "" {
-		parentID := fallback(req.ParentID, item.ParentID)
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `select exists(select 1 from xz_channel_agents where id = $1 and id <> $2)`, parentID, item.ID).Scan(&exists); err != nil {
-			return adminChannelAgent{}, err
-		}
-		if !exists {
-			return adminChannelAgent{}, fmt.Errorf("parent channel agent not found: %s", parentID)
-		}
-		item.ParentID = parentID
-	} else if req.Level > 0 {
-		item.ParentID = ""
-	} else if req.ParentID != "" {
-		item.ParentID = req.ParentID
-	}
-	if req.Status != "" {
-		item.Status = req.Status
-	}
-	if req.InviteCode != "" {
-		item.InviteCode = req.InviteCode
-	}
-	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	var user adminUser
-	if err := tx.QueryRowContext(ctx, `select raw from xz_users where id = $1 for update`, item.UserID).Scan(rawScanner(&user)); err != nil {
-		return adminChannelAgent{}, err
-	}
-	if req.Email != "" && !strings.EqualFold(req.Email, user.Email) {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `select exists(select 1 from xz_users where lower(email) = lower($1) and id <> $2)`, req.Email, user.ID).Scan(&exists); err != nil {
-			return adminChannelAgent{}, err
-		}
-		if exists {
-			return adminChannelAgent{}, fmt.Errorf("email already exists: %s", req.Email)
-		}
-		user.Email = req.Email
-	}
-	if req.Name != "" {
-		user.Name = req.Name
-	}
-	user.Role = agentRoleForLevel(item.Level)
-	if req.Status != "" {
-		user.Status = req.Status
-	}
-	user.UpdatedAt = item.UpdatedAt
-	if err := insertUser(ctx, tx, user); err != nil {
-		return adminChannelAgent{}, err
-	}
-	if req.Available != nil {
-		if err := upsertPointAccountByUser(ctx, tx, item.UserID, *req.Available); err != nil {
-			return adminChannelAgent{}, err
-		}
-	}
-	if err := insertChannelAgent(ctx, tx, item); err != nil {
-		return adminChannelAgent{}, err
-	}
-	if err := insertAuditLog(ctx, tx, "", "", "channel_agents.update", "channel_agent", item.ID, "", "", 200, nil); err != nil {
-		return adminChannelAgent{}, err
-	}
-	return item, tx.Commit()
+	_, _ = id, req
+	return adminChannelAgent{}, errors.New("legacy channel-agent writes are disabled; use customer 360 identity management")
 }
 
 func (s *postgresStore) UpdateAdminPlan(id string, req adminPlanMutation) (adminPlan, error) {
@@ -5658,13 +5506,9 @@ func generationBillingArtifactsForTx(ctx context.Context, tx *sql.Tx, task gener
 	if err != nil {
 		return adminBillingEvent{}, nil, err
 	}
-	var agent adminChannelAgent
-	hasAgent := false
-	if strings.TrimSpace(user.ReferredBy) != "" {
-		agent, hasAgent, err = channelAgentByUserIDForTx(ctx, tx, user.ReferredBy)
-		if err != nil {
-			return adminBillingEvent{}, nil, err
-		}
+	agent, hasAgent, err := directActiveAgentForUserTx(ctx, tx, task.UserID)
+	if err != nil {
+		return adminBillingEvent{}, nil, err
 	}
 	event := generationBillingEvent(task, before, after, now, user, agent, hasAgent)
 	moduleCode := firstNonEmptyString(task.ModuleCode, stringValue(task.Params["module_code"]), moduleCodeForType(task.Type))
@@ -5721,6 +5565,24 @@ func channelAgentByIDForTx(ctx context.Context, tx *sql.Tx, id string) (adminCha
 }
 
 func directActiveAgentForUserTx(ctx context.Context, tx *sql.Tx, userID string) (adminChannelAgent, bool, error) {
+	var item adminChannelAgent
+	err := tx.QueryRowContext(ctx, `
+		SELECT agent.raw
+		FROM xz_user_relationships relation
+		JOIN xz_channel_agents agent ON agent.id=relation.parent_agent_id AND upper(coalesce(agent.status,''))='ACTIVE'
+		JOIN xz_user_business_identities identity ON identity.user_id=agent.user_id
+		 AND identity.identity_type='AGENT' AND identity.identity_status='ACTIVE' AND identity.ended_at IS NULL
+		 AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp())
+		WHERE relation.user_id=$1 AND relation.status='ACTIVE' AND relation.ended_at IS NULL
+	`, userID).Scan(rawScanner(&item))
+	if err == nil {
+		return item, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return adminChannelAgent{}, false, err
+	}
+	// Compatibility only: legacy records without a canonical relationship may
+	// still read referred_by until they are migrated. New writes use relationships.
 	user, err := userByIDForTx(ctx, tx, userID)
 	if err != nil {
 		return adminChannelAgent{}, false, err

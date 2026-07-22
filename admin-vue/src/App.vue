@@ -12239,15 +12239,8 @@ async function openCreateChannelDialog() {
       }
       instance.confirmButtonLoading = true;
       try {
-        await store.mutate("POST", "/admin/channel-agents", {
-          name,
-          email,
-          level,
-          parentId: form.parentId.trim(),
-          inviteCode: form.inviteCode.trim(),
-          status: form.status,
-          available
-        });
+        void [name, email, level, available];
+        throw new Error("旧代理商创建入口已关闭，请在客户360中搜索并选择已有用户后执行身份开通");
         done();
         ElMessage.success("代理商已创建");
       } catch (error) {
@@ -12395,7 +12388,8 @@ async function openEditChannelDialog(row: AdminRecord) {
       }
       instance.confirmButtonLoading = true;
       try {
-        await store.mutate("PATCH", `/admin/channel-agents/${row.id}`, payload);
+        void payload;
+        throw new Error("代理商身份、关系和状态请在客户360身份管理中调整；此处仅保留档案读取");
         done();
         ElMessage.success("代理商已保存");
       } catch (error) {
@@ -12672,8 +12666,8 @@ async function runAction(action: string, row: AdminRecord = {}) {
     } else if (action === "editChannel") {
       await openEditChannelDialog(row);
     } else if (action === "toggleChannel") {
-      const status = String(row.status).toUpperCase() === "ACTIVE" ? "DISABLED" : "ACTIVE";
-      await store.mutate("PATCH", `/admin/channel-agents/${row.id}`, { status });
+      ElMessage.warning("代理商冻结、恢复或终止必须通过客户360身份管理流程");
+      return;
     } else if (action === "editProduct") {
       const status = await ask("产品状态", String(row.status || "ACTIVE"));
       const name = await ask("产品名称", String(row.name || ""));

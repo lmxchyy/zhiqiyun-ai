@@ -121,6 +121,8 @@ func calculateIdentityDowngradePreview(ctx context.Context, q identityDowngradeQ
 			} else if reason != "" {
 				blockers = append(blockers, reason)
 			}
+		case downgradeKeepHistory:
+			warnings = append(warnings, "将结束当前归属且不重新分配，下级将失去后续订单和分润归属；确认时必须输入指定文字")
 		}
 	}
 
@@ -133,7 +135,12 @@ func calculateIdentityDowngradePreview(ctx context.Context, q identityDowngradeQ
 			blockers = append(blockers, check.Label)
 		}
 	}
-	effectiveAt := time.Now().UTC()
+	var databaseNow time.Time
+	if err := q.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
+		return identityDowngradePreview{}, err
+	}
+	databaseNow = databaseNow.UTC()
+	effectiveAt := databaseNow
 	if strings.TrimSpace(request.EffectiveAt) != "" {
 		parsed, parseErr := time.Parse(time.RFC3339, request.EffectiveAt)
 		if parseErr != nil {
@@ -147,10 +154,15 @@ func calculateIdentityDowngradePreview(ctx context.Context, q identityDowngradeQ
 		if request.WaitForSettlement {
 			status = "WAITING"
 		}
-	} else if effectiveAt.After(time.Now().UTC().Add(time.Second)) {
+	} else if effectiveAt.After(databaseNow.Add(time.Second)) {
 		status = "SCHEDULED"
 	}
-	return identityDowngradePreview{UserID: userID, CurrentIdentity: currentIdentity, TargetIdentity: request.TargetIdentity, ChildStrategy: request.ChildStrategy, EffectiveAt: effectiveAt.Format(time.RFC3339Nano), WaitForSettlement: request.WaitForSettlement, Checks: checks, DownlineMembers: members, DownlineAgents: agents, MigrationCount: migrationCount, RelationshipBefore: map[string]any{"identityEntityId": entityID, "downlineCount": migrationCount}, RelationshipAfter: map[string]any{"strategy": request.ChildStrategy, "targetAgentId": request.TargetAgentID, "targetOperationCenterId": request.TargetOperationCenterID}, Blockers: blockers, RiskWarnings: warnings, Status: status}, nil
+	unassigned := int64(0)
+	if request.ChildStrategy == downgradeKeepHistory {
+		unassigned = migrationCount
+	}
+	impact := "历史订单和历史分润不变；仅生效后的新订单按新关系计算"
+	return identityDowngradePreview{UserID: userID, CurrentIdentity: currentIdentity, TargetIdentity: request.TargetIdentity, ChildStrategy: request.ChildStrategy, EffectiveAt: effectiveAt.Format(time.RFC3339Nano), WaitForSettlement: request.WaitForSettlement, Checks: checks, DownlineMembers: members, DownlineAgents: agents, MigrationCount: migrationCount, UnassignedCount: unassigned, CommissionImpact: impact, RelationshipBefore: map[string]any{"identityEntityId": entityID, "downlineCount": migrationCount}, RelationshipAfter: map[string]any{"strategy": request.ChildStrategy, "targetAgentId": request.TargetAgentID, "targetOperationCenterId": request.TargetOperationCenterID}, Blockers: blockers, RiskWarnings: warnings, Status: status}, nil
 }
 
 func collectIdentityDowngradeChecks(ctx context.Context, q identityDowngradeQueryer, userID, identityType, entityID string) ([]identityDowngradeCheck, error) {
@@ -178,7 +190,7 @@ func collectIdentityDowngradeChecks(ctx context.Context, q identityDowngradeQuer
 	}
 	checks = append(checks, identityDowngradeCheck{Code: "OPEN_RECONCILIATIONS", Label: "存在未完成对账单", Count: reconciliationCount, Blocking: reconciliationCount > 0})
 	var agreements int64
-	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM xz_labor_worker_profiles WHERE user_id=$1 AND subject_type=$2 AND upper(contract_status) IN ('ACTIVE','SIGNED','COMPLETED')`, userID, identityType).Scan(&agreements); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM xz_labor_worker_profiles WHERE user_id=$1 AND subject_type=$2 AND upper(contract_status) IN ('ACTIVE','SIGNED')`, userID, identityType).Scan(&agreements); err != nil {
 		return nil, err
 	}
 	checks = append(checks, identityDowngradeCheck{Code: "ACTIVE_AGREEMENTS", Label: "存在有效协议", Count: agreements, Blocking: agreements > 0})
@@ -192,7 +204,7 @@ func collectIdentityDowngradeChecks(ctx context.Context, q identityDowngradeQuer
 
 func validateDowngradeTargetAgent(ctx context.Context, q identityDowngradeQueryer, userID, agentID string) (string, error) {
 	var targetUser, status string
-	if err := q.QueryRowContext(ctx, `SELECT user_id,upper(coalesce(status,'')) FROM xz_channel_agents WHERE id=$1`, agentID).Scan(&targetUser, &status); errors.Is(err, sql.ErrNoRows) {
+	if err := q.QueryRowContext(ctx, `SELECT agent.user_id,upper(coalesce(agent.status,'')) FROM xz_channel_agents agent JOIN xz_user_business_identities identity ON identity.user_id=agent.user_id AND identity.identity_type='AGENT' AND identity.identity_status='ACTIVE' AND identity.ended_at IS NULL AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp()) WHERE agent.id=$1`, agentID).Scan(&targetUser, &status); errors.Is(err, sql.ErrNoRows) {
 		return "新上级代理商不存在", nil
 	} else if err != nil {
 		return "", err
@@ -216,7 +228,7 @@ func validateDowngradeTargetAgent(ctx context.Context, q identityDowngradeQuerye
 
 func validateDowngradeTargetCenter(ctx context.Context, q identityDowngradeQueryer, userID, centerID string) (string, error) {
 	var targetUser, status string
-	if err := q.QueryRowContext(ctx, `SELECT user_id,upper(coalesce(status,'')) FROM xz_operation_centers WHERE id=$1`, centerID).Scan(&targetUser, &status); errors.Is(err, sql.ErrNoRows) {
+	if err := q.QueryRowContext(ctx, `SELECT center.user_id,upper(coalesce(center.status,'')) FROM xz_operation_centers center JOIN xz_user_business_identities identity ON identity.user_id=center.user_id AND identity.identity_type='OPERATION_CENTER' AND identity.identity_status='ACTIVE' AND identity.ended_at IS NULL AND identity.effective_at<=clock_timestamp() AND (identity.expires_at IS NULL OR identity.expires_at>clock_timestamp()) WHERE center.id=$1`, centerID).Scan(&targetUser, &status); errors.Is(err, sql.ErrNoRows) {
 		return "承接运营中心不存在", nil
 	} else if err != nil {
 		return "", err
@@ -273,6 +285,9 @@ func (s *postgresStore) ConfirmAdminIdentityDowngrade(actorID, actorRole, userID
 	if err != nil {
 		return identityDowngradeResult{}, err
 	}
+	if stored.request.ChildStrategy == downgradeKeepHistory && preview.MigrationCount > 0 && strings.TrimSpace(request.ConfirmationText) != "确认结束当前归属" {
+		return identityDowngradeResult{}, fmt.Errorf("%w: type 确认结束当前归属 to continue", errIdentityHighRiskConfirm)
+	}
 	requestID := "identity_downgrade_" + shortID(stored.id)
 	effectiveAt := parseDowngradeTime(preview.EffectiveAt, time.Now().UTC())
 	status := "PROCESSING"
@@ -328,7 +343,7 @@ func (s *postgresStore) ListAdminIdentityDowngrades(actorID, actorRole, userID s
 	}
 	ctx, cancel := s.withTimeout()
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,status,effective_at,coalesce((result_snapshot->>'migratedMembers')::bigint,0),coalesce((result_snapshot->>'migratedAgents')::bigint,0),coalesce((result_snapshot->>'migratedRelationships')::bigint,0) FROM xz_identity_downgrade_requests WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,user_id,status,effective_at,coalesce((result_snapshot->>'migratedMembers')::bigint,0),coalesce((result_snapshot->>'migratedAgents')::bigint,0),coalesce((result_snapshot->>'migratedRelationships')::bigint,0),blocker_snapshot,coalesce(failure_message,''),last_checked_at,created_at FROM xz_identity_downgrade_requests WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -336,11 +351,19 @@ func (s *postgresStore) ListAdminIdentityDowngrades(actorID, actorRole, userID s
 	items := make([]identityDowngradeResult, 0)
 	for rows.Next() {
 		var item identityDowngradeResult
-		var effective time.Time
-		if err := rows.Scan(&item.RequestID, &item.UserID, &item.Status, &effective, &item.MigratedMembers, &item.MigratedAgents, &item.MigratedRelationships); err != nil {
+		var effective, created time.Time
+		var lastChecked sql.NullTime
+		var blockersJSON []byte
+		if err := rows.Scan(&item.RequestID, &item.UserID, &item.Status, &effective, &item.MigratedMembers, &item.MigratedAgents, &item.MigratedRelationships, &blockersJSON, &item.FailureMessage, &lastChecked, &created); err != nil {
 			return nil, err
 		}
 		item.EffectiveAt = effective.UTC().Format(time.RFC3339Nano)
+		item.CreatedAt = created.UTC().Format(time.RFC3339Nano)
+		if lastChecked.Valid {
+			item.LastCheckedAt = lastChecked.Time.UTC().Format(time.RFC3339Nano)
+		}
+		_ = json.Unmarshal(blockersJSON, &item.Blockers)
+		item.TimeoutWarning = item.Status == "WAITING" && time.Since(created) > 72*time.Hour
 		items = append(items, item)
 	}
 	_ = actorID
@@ -395,8 +418,10 @@ func (s *postgresStore) processOneDueIdentityDowngrade(ctx context.Context) (boo
 		return true, err
 	}
 	if _, err = executeIdentityDowngradeTx(ctx, tx, id, actorID, actorRole, request, preview); err != nil {
-		_, _ = tx.ExecContext(ctx, `UPDATE xz_identity_downgrade_requests SET status='FAILED',failure_message=$2,last_checked_at=now(),updated_at=now() WHERE id=$1`, id, err.Error())
-		_ = tx.Commit()
+		_ = tx.Rollback()
+		if _, recordErr := s.db.ExecContext(ctx, `UPDATE xz_identity_downgrade_requests SET status='FAILED',failure_message=$2,last_checked_at=now(),updated_at=now() WHERE id=$1`, id, err.Error()); recordErr != nil {
+			return true, errors.Join(err, recordErr)
+		}
 		return true, err
 	}
 	return true, tx.Commit()

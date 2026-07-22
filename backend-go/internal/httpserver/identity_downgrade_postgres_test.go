@@ -48,14 +48,14 @@ func TestControlledIdentityDowngrade(t *testing.T) {
 		if preview.Status != "READY" || preview.DownlineMembers != 1 || preview.MigrationCount != 1 {
 			t.Fatalf("unexpected preview: %+v", preview)
 		}
-		result, err := store.ConfirmAdminIdentityDowngrade(adminID, "SUPER_ADMIN", userID, identityDowngradeConfirmRequest{PreviewToken: preview.PreviewToken, HighRiskConfirmed: true})
+		result, err := store.ConfirmAdminIdentityDowngrade(adminID, "SUPER_ADMIN", userID, identityDowngradeConfirmRequest{PreviewToken: preview.PreviewToken, HighRiskConfirmed: true, ConfirmationText: "确认结束当前归属"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if result.Status != "SUCCEEDED" || result.MigratedRelationships != 1 {
 			t.Fatalf("unexpected result: %+v", result)
 		}
-		repeated, err := store.ConfirmAdminIdentityDowngrade(adminID, "SUPER_ADMIN", userID, identityDowngradeConfirmRequest{PreviewToken: preview.PreviewToken, HighRiskConfirmed: true})
+		repeated, err := store.ConfirmAdminIdentityDowngrade(adminID, "SUPER_ADMIN", userID, identityDowngradeConfirmRequest{PreviewToken: preview.PreviewToken, HighRiskConfirmed: true, ConfirmationText: "确认结束当前归属"})
 		if err != nil || !repeated.Idempotent || repeated.RequestID != result.RequestID {
 			t.Fatalf("duplicate confirmation was not idempotent: %+v %v", repeated, err)
 		}

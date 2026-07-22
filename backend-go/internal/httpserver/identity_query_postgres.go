@@ -34,6 +34,9 @@ func (s *postgresStore) GetAdminIdentityProfile(userID string) (adminIdentityPro
 	profile.AccountRoles = roles
 	profile.Identities = identities
 	profile.PrimaryIdentity = primaryBusinessIdentity(identities)
+	_ = s.db.QueryRowContext(ctx, `SELECT coalesce(current_role_code,'USER') FROM xz_user_role_context WHERE user_id=$1`, userID).Scan(&profile.CurrentRole)
+	_ = s.db.QueryRowContext(ctx, `SELECT coalesce((SELECT upper(status) FROM xz_channel_agents WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1),'')`, userID).Scan(&profile.AgentProfileStatus)
+	_ = s.db.QueryRowContext(ctx, `SELECT coalesce((SELECT upper(status) FROM xz_operation_centers WHERE user_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1),'')`, userID).Scan(&profile.OperationCenterProfileStatus)
 	return profile, nil
 }
 

@@ -256,17 +256,21 @@ type adminChannelAgent struct {
 }
 
 type adminOperationCenter struct {
-	ID           string `json:"id"`
-	UserID       string `json:"userId"`
-	Name         string `json:"name"`
-	Region       string `json:"region,omitempty"`
-	InviteCode   string `json:"inviteCode"`
-	Status       string `json:"status"`
-	JoinOrderID  string `json:"joinOrderId,omitempty"`
-	JoinFeeCents int    `json:"joinFeeCents,omitempty"`
-	ApprovedAt   string `json:"approvedAt,omitempty"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt,omitempty"`
+	ID                string         `json:"id"`
+	UserID            string         `json:"userId"`
+	Name              string         `json:"name"`
+	Region            string         `json:"region,omitempty"`
+	InviteCode        string         `json:"inviteCode"`
+	Status            string         `json:"status"`
+	JoinOrderID       string         `json:"joinOrderId,omitempty"`
+	JoinFeeCents      int            `json:"joinFeeCents,omitempty"`
+	ApprovedAt        string         `json:"approvedAt,omitempty"`
+	CreatedAt         string         `json:"createdAt"`
+	UpdatedAt         string         `json:"updatedAt,omitempty"`
+	ResponsiblePerson string         `json:"responsiblePerson,omitempty"`
+	ContactInfo       string         `json:"contactInfo,omitempty"`
+	SettlementProfile map[string]any `json:"settlementProfile,omitempty"`
+	AgreementStatus   string         `json:"agreementStatus,omitempty"`
 }
 
 type adminCustomerRelation struct {

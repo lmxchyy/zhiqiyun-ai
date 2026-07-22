@@ -415,7 +415,18 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("unexpected image schema payload: %+v", schemaPayload)
 	}
 
-	if _, err := testStore.UpdateAdminCustomer("user_000002", adminCustomerMutation{PlanID: "plan_free"}); err != nil {
+	setTestPlan := func(planID string) error {
+		return testStore.updateAdmin(func(data *adminPlatformData) error {
+			for i := range data.Users {
+				if data.Users[i].ID == "user_000002" {
+					data.Users[i].PlanID = planID
+					return nil
+				}
+			}
+			return errors.New("test user not found")
+		})
+	}
+	if err := setTestPlan("plan_free"); err != nil {
 		t.Fatalf("set demo plan: %v", err)
 	}
 	fallbackSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
@@ -431,7 +442,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if fallbackSchemaPayload.ModelName != "mock-standard" {
 		t.Fatalf("fallback model = %s, want mock-standard", fallbackSchemaPayload.ModelName)
 	}
-	if _, err := testStore.UpdateAdminCustomer("user_000002", adminCustomerMutation{PlanID: "plan_month"}); err != nil {
+	if err := setTestPlan("plan_month"); err != nil {
 		t.Fatalf("restore demo plan: %v", err)
 	}
 
@@ -1561,6 +1572,12 @@ func TestLegacyCreateChannelAgentIsBlocked(t *testing.T) {
 	createL1 := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/channel-agents", bytes.NewBufferString(`{"name":"测试推广员","email":"agent-new@example.com","level":1,"inviteCode":"NEW001","status":"ACTIVE","available":88}`), adminToken)
 	if createL1.Code != http.StatusConflict || !strings.Contains(createL1.Body.String(), "customer 360 identity management") {
 		t.Fatalf("legacy channel write was not blocked: %d %s", createL1.Code, createL1.Body.String())
+	}
+	if _, _, err := testStore.CreateAdminChannelAgent(adminChannelCreateMutation{Name: "Bypass", Email: "bypass@example.test", Level: 1}); err == nil {
+		t.Fatal("store-level legacy channel creation bypass was not blocked")
+	}
+	if _, err := testStore.UpdateAdminChannelAgent("channel_000001", adminChannelMutation{Status: "TERMINATED"}); err == nil {
+		t.Fatal("store-level legacy channel update bypass was not blocked")
 	}
 	data, err := testStore.AdminData()
 	if err != nil {

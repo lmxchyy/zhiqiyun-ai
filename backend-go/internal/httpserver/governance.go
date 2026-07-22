@@ -110,6 +110,12 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if path == "/identity-consistency" {
+		return "identity:consistency:view"
+	}
+	if strings.HasPrefix(path, "/operation-centers/") && strings.HasSuffix(path, "/profile") {
+		return "identity:operation-profile:update"
+	}
 	if strings.HasPrefix(path, "/users/") && strings.Contains(path, "/identity-change/") {
 		switch {
 		case strings.HasSuffix(path, "/preview"):

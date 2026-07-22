@@ -6,9 +6,11 @@
       <template #default><el-button size="small" @click="loadAll">重新加载</el-button></template>
     </el-alert>
     <template v-else>
+      <el-alert v-if="sectionErrors.length" type="warning" :closable="false" show-icon title="部分数据加载失败，其余身份信息仍可使用"><template #default>{{ sectionErrors.join('；') }}</template></el-alert>
       <header class="identity-toolbar">
         <div><span>商业身份、会员与资金概况</span><small>身份、权限角色和会员权益相互独立</small></div>
         <div class="toolbar-actions">
+          <el-button v-if="currentIdentity === 'OPERATION_CENTER' && canEditOperationProfile" :disabled="!currentCenter" @click="openOperationProfile">编辑运营中心资料</el-button>
           <el-button :disabled="!profile" @click="openHistory">查看身份变更记录</el-button>
           <el-dropdown v-if="canChangeIdentity || canReviewIdentity || canDowngradeIdentity" trigger="click" @command="openAction">
             <el-button type="primary">身份操作<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
@@ -35,6 +37,8 @@
             <el-descriptions-item label="身份状态"><el-tag :type="statusTagType(currentStatus)">{{ statusLabel(currentStatus) }}</el-tag></el-descriptions-item>
             <el-descriptions-item label="分润资格"><el-tag :type="currentRecord?.commissionEnabled ? 'success' : 'info'">{{ currentRecord?.commissionEnabled ? '具备' : '不具备' }}</el-tag></el-descriptions-item>
             <el-descriptions-item label="系统权限角色"><el-space wrap><el-tag v-for="role in profile?.accountRoles || []" :key="role" effect="plain">{{ role }}</el-tag><span v-if="!profile?.accountRoles?.length">{{ profile?.legacyRole || '-' }}</span></el-space></el-descriptions-item>
+            <el-descriptions-item label="当前工作台角色">{{ profile?.currentRole || 'USER' }}</el-descriptions-item>
+            <el-descriptions-item label="业务档案状态">代理商 {{ profile?.agentProfileStatus || '-' }} / 运营中心 {{ profile?.operationCenterProfileStatus || '-' }}</el-descriptions-item>
             <el-descriptions-item label="生效时间">{{ dateTime(currentRecord?.effectiveAt) }}</el-descriptions-item>
             <el-descriptions-item label="到期时间">{{ dateTime(currentRecord?.expiresAt) }}</el-descriptions-item>
             <el-descriptions-item label="上级代理商">{{ relationship?.parentAgentName || relationship?.parentAgentId || '未设置' }}</el-descriptions-item>
@@ -61,6 +65,8 @@
       </div>
 
       <el-alert type="info" :closable="false" show-icon title="关系调整只影响生效后的新订单；冻结或终止会关闭新分润资格，不会回溯修改历史分润。" />
+      <el-alert v-if="consistencyIssues.length" type="error" :closable="false" show-icon :title="`发现 ${consistencyIssues.length} 项身份数据一致性问题`"><ul><li v-for="item in consistencyIssues" :key="`${item.code}-${item.entityId}`">{{ item.code }}：{{ item.message }}（建议：{{ item.suggestedAction }}）</li></ul></el-alert>
+      <el-alert v-else-if="canViewConsistency" type="success" :closable="false" show-icon title="身份、档案、关系与RBAC一致性检查通过" />
     </template>
 
     <IdentityChangeWizard v-if="profile" v-model="wizardOpen" :user-id="userId" :user-name="userName" :current-identity="currentIdentity" :relationship="relationship" :agents="agents" :centers="centers" :plans="plans" :initial-action="wizardAction" @success="loadAll" />
@@ -75,6 +81,8 @@
             <el-table-column label="分润资格"><template #default="scope">{{ scope.row.commissionEnabled ? '是' : '否' }}</template></el-table-column>
             <el-table-column prop="sourceType" label="来源" min-width="150" />
             <el-table-column label="生效时间" min-width="180"><template #default="scope">{{ dateTime(scope.row.effectiveAt) }}</template></el-table-column>
+            <el-table-column label="阻断/异常" min-width="220"><template #default="scope"><el-tag v-if="scope.row.timeoutWarning" type="danger">等待超时</el-tag>{{ scope.row.failureMessage || scope.row.blockers?.join('；') || '-' }}</template></el-table-column>
+            <el-table-column label="操作" width="260"><template #default="scope"><el-space><el-button v-if="['WAITING','SCHEDULED','FAILED'].includes(scope.row.status)" link type="primary" @click="recheckDowngrade(scope.row)">{{ scope.row.status === 'FAILED' ? '安全重试' : '重新检查' }}</el-button><el-button v-if="['WAITING','SCHEDULED'].includes(scope.row.status)" link type="primary" @click="rescheduleDowngrade(scope.row)">修改时间</el-button><el-button v-if="['WAITING','SCHEDULED'].includes(scope.row.status)" link type="danger" @click="cancelDowngrade(scope.row)">取消</el-button></el-space></template></el-table-column>
             <el-table-column label="结束时间" min-width="180"><template #default="scope">{{ dateTime(scope.row.endedAt) }}</template></el-table-column>
           </el-table>
         </el-tab-pane>
@@ -116,19 +124,31 @@
       </el-form>
       <template #footer><el-button @click="reviewOpen = false">取消</el-button><el-button type="primary" :loading="reviewing" :disabled="!reviewForm.previewToken || reviewForm.reason.length < 4" @click="submitReview">提交审核</el-button></template>
     </el-dialog>
+    <el-dialog v-model="operationProfileOpen" title="运营中心业务资料" width="620px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon title="此处只修改业务资料，不改变商业身份或身份状态。" />
+      <el-form label-position="top">
+        <el-form-item label="运营中心名称" required><el-input v-model.trim="operationProfileForm.name" maxlength="100" /></el-form-item>
+        <el-row :gutter="12"><el-col :span="12"><el-form-item label="负责人"><el-input v-model.trim="operationProfileForm.responsiblePerson" /></el-form-item></el-col><el-col :span="12"><el-form-item label="区域"><el-input v-model.trim="operationProfileForm.region" /></el-form-item></el-col></el-row>
+        <el-row :gutter="12"><el-col :span="12"><el-form-item label="邀请码"><el-input v-model.trim="operationProfileForm.inviteCode" /></el-form-item></el-col><el-col :span="12"><el-form-item label="协议状态"><el-input v-model.trim="operationProfileForm.agreementStatus" /></el-form-item></el-col></el-row>
+        <el-form-item label="联系方式"><el-input v-model.trim="operationProfileForm.contactInfo" /></el-form-item>
+        <el-form-item label="结算资料（JSON）"><el-input v-model="operationProfileForm.settlementProfileText" type="textarea" :rows="4" placeholder="{}" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="operationProfileOpen=false">取消</el-button><el-button type="primary" :loading="operationProfileSaving" :disabled="!operationProfileForm.name" @click="saveOperationProfile">保存资料</el-button></template>
+    </el-dialog>
   </section>
 </template>
 
 <script setup lang="ts">
 import { ArrowDown } from "@element-plus/icons-vue";
 import { computed, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
-import { identityManagementApi, type BusinessIdentity, type BusinessIdentityType, type IdentityChangeAction, type IdentityChangeRecord, type IdentityDowngradeResult, type IdentityFinancialOverview, type IdentityOption, type IdentityPlanOption, type IdentityProfile, type UserRelationship } from "../../api/identityManagement";
+import { ElMessage, ElMessageBox } from "element-plus";
+import { identityManagementApi, type BusinessIdentity, type BusinessIdentityType, type IdentityChangeAction, type IdentityChangeRecord, type IdentityConsistencyIssue, type IdentityDowngradeResult, type IdentityFinancialOverview, type IdentityOption, type IdentityPlanOption, type IdentityProfile, type UserRelationship } from "../../api/identityManagement";
 import IdentityChangeWizard from "./IdentityChangeWizard.vue";
 import IdentityDowngradeWizard from "./IdentityDowngradeWizard.vue";
 
 const props = defineProps<{ userId: string; userName?: string; permissions?: string[] }>();
 const loading = ref(false); const errorMessage = ref(""); const forbidden = ref(false);
+const sectionErrors = ref<string[]>([]); const consistencyIssues = ref<IdentityConsistencyIssue[]>([]);
 const profile = ref<IdentityProfile | null>(null); const relationship = ref<UserRelationship | null>(null); const financial = ref<IdentityFinancialOverview | null>(null);
 const agents = ref<IdentityOption[]>([]); const centers = ref<IdentityOption[]>([]); const plans = ref<IdentityPlanOption[]>([]); const relationshipHistory = ref<UserRelationship[]>([]);
 const history = reactive<{ identities: BusinessIdentity[]; changeRecords: IdentityChangeRecord[] }>({ identities: [], changeRecords: [] });
@@ -146,24 +166,32 @@ const hasPermission = (permission: string) => Boolean(props.permissions?.include
 const canChangeIdentity = computed(() => hasPermission("identity:change:preview") && hasPermission("identity:change:confirm"));
 const canReviewIdentity = computed(() => hasPermission("identity:change:review"));
 const canDowngradeIdentity = computed(() => hasPermission("identity:downgrade:preview") && hasPermission("identity:downgrade:confirm"));
+const canViewConsistency = computed(() => hasPermission("identity:consistency:view"));
+const canEditOperationProfile = computed(() => hasPermission("identity:operation-profile:update"));
+const currentCenter = computed(() => centers.value.find((item) => item.userId === props.userId));
+const operationProfileOpen=ref(false);const operationProfileSaving=ref(false);const operationProfileForm=reactive({name:"",region:"",inviteCode:"",responsiblePerson:"",contactInfo:"",agreementStatus:"",settlementProfileText:"{}"});
 
 watch(() => props.userId, () => loadAll(), { immediate: true });
 
 async function loadAll() {
   if (!props.userId) return;
-  loading.value = true; errorMessage.value = ""; forbidden.value = false;
-  try {
-    const [profileValue, relationshipValue, financialValue, historyValue, relationHistoryValue, agentValues, centerValues, planValues] = await Promise.all([
-      identityManagementApi.profile(props.userId), identityManagementApi.relationship(props.userId), identityManagementApi.financialOverview(props.userId), identityManagementApi.history(props.userId), identityManagementApi.relationshipHistory(props.userId), identityManagementApi.agents(), identityManagementApi.operationCenters(), identityManagementApi.plans()
-    ]);
-    profile.value = profileValue; relationship.value = relationshipValue; financial.value = financialValue; history.identities = historyValue.identities || []; history.changeRecords = historyValue.changeRecords || []; relationshipHistory.value = relationHistoryValue || []; agents.value = agentValues || []; centers.value = centerValues || []; plans.value = planValues || [];
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "身份与权益加载失败";
-    forbidden.value = /forbidden|permission denied|无权限/i.test(message); errorMessage.value = message;
-  } finally { loading.value = false; }
+  loading.value = true; errorMessage.value = ""; forbidden.value = false; sectionErrors.value=[];
+  const requests=[identityManagementApi.profile(props.userId),identityManagementApi.relationship(props.userId),identityManagementApi.financialOverview(props.userId),identityManagementApi.history(props.userId),identityManagementApi.relationshipHistory(props.userId),identityManagementApi.agents(),identityManagementApi.operationCenters(),identityManagementApi.plans(),canViewConsistency.value?identityManagementApi.consistency(props.userId):Promise.resolve([] as IdentityConsistencyIssue[])];
+  const results=await Promise.allSettled(requests);const labels=["身份概况","当前关系","财务概况","身份历史","关系历史","代理商候选","运营中心候选","套餐","一致性检查"];
+  results.forEach((result,index)=>{if(result.status==="rejected")sectionErrors.value.push(`${labels[index]}：${result.reason instanceof Error?result.reason.message:"加载失败"}`)});
+  if(results[0].status==="rejected"){const message=results[0].reason instanceof Error?results[0].reason.message:"身份概况加载失败";forbidden.value=/forbidden|permission denied|无权限/i.test(message);errorMessage.value=message}else profile.value=results[0].value as IdentityProfile;
+  if(results[1].status==="fulfilled")relationship.value=results[1].value as UserRelationship|null;if(results[2].status==="fulfilled")financial.value=results[2].value as IdentityFinancialOverview;
+  if(results[3].status==="fulfilled"){const value=results[3].value as {identities:BusinessIdentity[];changeRecords:IdentityChangeRecord[]};history.identities=value.identities||[];history.changeRecords=value.changeRecords||[]}
+  if(results[4].status==="fulfilled")relationshipHistory.value=results[4].value as UserRelationship[];if(results[5].status==="fulfilled")agents.value=results[5].value as IdentityOption[];if(results[6].status==="fulfilled")centers.value=results[6].value as IdentityOption[];if(results[7].status==="fulfilled")plans.value=results[7].value as IdentityPlanOption[];if(results[8].status==="fulfilled")consistencyIssues.value=results[8].value as IdentityConsistencyIssue[];
+  loading.value=false;
 }
 function openAction(command: IdentityChangeAction | "REVIEW" | "DOWNGRADE") { if (command === "REVIEW") { reviewOpen.value = true; return; } if (command === "DOWNGRADE") { downgradeOpen.value = true; return; } wizardAction.value = command; wizardOpen.value = true; }
 async function openHistory() { historyOpen.value = true; try { downgradeRequests.value = await identityManagementApi.downgradeRequests(props.userId); } catch { downgradeRequests.value = []; } }
+async function recheckDowngrade(item:IdentityDowngradeResult){try{await identityManagementApi.downgradeRecheck(props.userId,item.requestId);downgradeRequests.value=await identityManagementApi.downgradeRequests(props.userId);ElMessage.success("已重新检查阻断项")}catch(error){ElMessage.error(error instanceof Error?error.message:"重新检查失败")}}
+async function rescheduleDowngrade(item:IdentityDowngradeResult){try{const time=await ElMessageBox.prompt("请输入新的 ISO 8601 生效时间，例如 2026-08-01T09:00:00+08:00。","修改降级生效时间",{inputValue:item.effectiveAt,inputPattern:/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/,inputErrorMessage:"请输入有效的 ISO 8601 时间"});const reason=await ElMessageBox.prompt("请输入修改生效时间的原因（至少 4 个字符）。","变更原因",{inputPattern:/.{4,}/,inputErrorMessage:"原因至少 4 个字符"});await identityManagementApi.downgradeReschedule(props.userId,item.requestId,time.value,reason.value);downgradeRequests.value=await identityManagementApi.downgradeRequests(props.userId);ElMessage.success("生效时间已更新")}catch(error){if(error!=="cancel")ElMessage.error(error instanceof Error?error.message:"修改时间失败")}}
+async function cancelDowngrade(item:IdentityDowngradeResult){try{await ElMessageBox.confirm("取消后保留请求历史，且不会执行身份或关系变更。","取消降级请求",{type:"warning"});await identityManagementApi.downgradeCancel(props.userId,item.requestId);downgradeRequests.value=await identityManagementApi.downgradeRequests(props.userId);ElMessage.success("降级请求已取消")}catch(error){if(error!=="cancel")ElMessage.error(error instanceof Error?error.message:"取消失败")}}
+function openOperationProfile(){const item=currentCenter.value;if(!item)return;Object.assign(operationProfileForm,{name:item.name||"",region:item.region||"",inviteCode:item.inviteCode||"",responsiblePerson:item.responsiblePerson||"",contactInfo:item.contactInfo||"",agreementStatus:item.agreementStatus||"",settlementProfileText:JSON.stringify(item.settlementProfile||{},null,2)});operationProfileOpen.value=true}
+async function saveOperationProfile(){const item=currentCenter.value;if(!item||operationProfileSaving.value)return;let settlementProfile:Record<string,unknown>;try{settlementProfile=JSON.parse(operationProfileForm.settlementProfileText||"{}")}catch{ElMessage.error("结算资料必须是有效 JSON");return}operationProfileSaving.value=true;try{await identityManagementApi.updateOperationCenterProfile(item.id,{name:operationProfileForm.name,region:operationProfileForm.region,inviteCode:operationProfileForm.inviteCode,responsiblePerson:operationProfileForm.responsiblePerson,contactInfo:operationProfileForm.contactInfo,agreementStatus:operationProfileForm.agreementStatus,settlementProfile});operationProfileOpen.value=false;await loadAll();ElMessage.success("运营中心资料已更新")}catch(error){ElMessage.error(error instanceof Error?error.message:"保存失败")}finally{operationProfileSaving.value=false}}
 async function submitReview() {
   if (reviewing.value) return; reviewing.value = true;
   try { await identityManagementApi.review(props.userId, reviewForm.previewToken, reviewForm.decision, reviewForm.reason); ElMessage.success("审核结果已提交"); reviewOpen.value = false; Object.assign(reviewForm, { previewToken: "", decision: "APPROVED", reason: "" }); }

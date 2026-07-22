@@ -53,7 +53,7 @@ func canonicalSubscriptionPlans() []adminPlan {
 		},
 		{
 			ID: "plan_ai_creator_996", Code: "ai_creator_996", Name: "知启云AI Pro年度会员", PlanType: planTypeMemberPackage, PriceCents: 99600, Points: 40000, GrantPoints: 40000, TokenAmount: 40000, MemberLevel: memberLevelPro, DurationDays: 365, Concurrency: 8, Active: true,
-			Entitlements: map[string]any{"planType": planTypeMemberPackage, "productType": "MEMBERSHIP", "commissionTemplateCode": "COMMISSION_996_STANDARD", "displayPrice": "996 元/年", "tokenRightsValueCents": 40000, "tokenGrantAmount": 40000, "memberLevel": memberLevelPro, "newapiGroup": "pro_group", "businessDescription": "到账40000点并开通Pro会员365天", "sort": 1},
+			Entitlements: map[string]any{"planType": planTypeMemberPackage, "productType": "MEMBERSHIP", "commissionTemplateCode": "COMMISSION_996_STANDARD", "displayPrice": "996 元/年", "tokenRightsValueCents": 40000, "tokenGrantAmount": 40000, "memberLevel": memberLevelPro, "newapiGroup": "pro_group", "businessDescription": "到账40000点并开通Pro会员365天", "convertibleToAgent": true, "conversionTargetPlanIds": []string{"plan_agent_join_996"}, "conversionValuePolicy": "ACTUAL_PAID", "conversionValidityDays": 365, "tokenConversionPolicy": []string{"KEEP_EXISTING", "ADJUST_DIFFERENCE"}, "sort": 1},
 		},
 	}
 }

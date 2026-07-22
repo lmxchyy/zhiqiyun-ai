@@ -60,8 +60,8 @@ func TestUserRBACProfileAndCurrentRole(t *testing.T) {
 		t.Fatalf("operation role switch status = %d, body = %s", operationSwitch.Code, operationSwitch.Body.String())
 	}
 	operation = getUserRoleAccess(t, handler, operationToken)
-	if !containsString(operation.Permissions, "operation:dashboard") || !containsString(operation.Permissions, "agent:promotion") || !containsString(operation.Permissions, "agent:commission:view") {
-		t.Fatalf("operation role does not inherit agent permissions: %+v", operation.Permissions)
+	if !containsString(operation.Permissions, "operation:dashboard") || containsString(operation.Permissions, "agent:promotion") || containsString(operation.Permissions, "agent:commission:view") {
+		t.Fatalf("dedicated operation role permissions are inconsistent: %+v", operation.Permissions)
 	}
 }
 
