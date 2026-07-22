@@ -753,7 +753,7 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 			return
 		}
 	}
-	if err := auditGeneratedOutput(&prepared); err != nil {
+	if err := a.auditPreparedGeneratedOutput(ctx, &prepared); err != nil {
 		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 		return

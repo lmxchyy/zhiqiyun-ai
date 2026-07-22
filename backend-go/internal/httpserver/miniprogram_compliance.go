@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -343,6 +344,66 @@ func auditGeneratedOutput(req *generation.CreateRequest) error {
 	req.Params["ai_label_text"] = "本内容由人工智能生成"
 	req.Params["generated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	return nil
+}
+
+func (a api) auditPreparedGeneratedOutput(ctx context.Context, req *generation.CreateRequest) error {
+	if req == nil || req.Params == nil || !strings.EqualFold(stringValue(req.Params["terminal"]), terminalMiniProgram) {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("CONTENT_AUDIT_OUTPUT_MODE")))
+	if mode != "formal" {
+		return auditGeneratedOutput(req)
+	}
+	if a.contentSecurity == nil || len(req.GeneratedImages) == 0 {
+		markGeneratedOutputAudit(req, auditManualReview, "wechat-content-security", "audit_service_unavailable")
+		return errContentSecurityUnavailable
+	}
+	for index, image := range req.GeneratedImages {
+		raw, contentType, _, err := readGeneratedArtifact(ctx, image.URL, image.ContentType)
+		if err != nil {
+			markGeneratedOutputAudit(req, auditManualReview, "wechat-content-security", "generated_image_unavailable")
+			return errContentSecurityUnavailable
+		}
+		filename := fmt.Sprintf("generated-%02d", index+1)
+		if thumbnailURL, _, _, ok := thumbnailAndDimensionsFromBytes(raw); ok && strings.HasPrefix(thumbnailURL, "data:image/jpeg;base64,") {
+			if compact, compactType, _, compactErr := readGeneratedDataURL(thumbnailURL, "image/jpeg"); compactErr == nil {
+				raw = compact
+				contentType = compactType
+				filename += ".jpg"
+			}
+		}
+		if err := a.contentSecurity.CheckImage(ctx, raw, filename, contentType); err != nil {
+			if errors.Is(err, errContentSecurityRejected) {
+				markGeneratedOutputAudit(req, auditRejected, "wechat-content-security", "content_policy_not_approved")
+				return errOutputAuditRejected
+			}
+			markGeneratedOutputAudit(req, auditManualReview, "wechat-content-security", "audit_service_unavailable")
+			return errContentSecurityUnavailable
+		}
+	}
+	markGeneratedOutputAudit(req, auditApproved, "wechat-content-security", "")
+	return nil
+}
+
+func markGeneratedOutputAudit(req *generation.CreateRequest, status, service, reason string) {
+	if req == nil || req.Params == nil {
+		return
+	}
+	req.Params["output_audit_status"] = status
+	req.Params["output_audit_service"] = service
+	req.Params["output_audit_request_id"] = ""
+	if reason != "" {
+		req.Params["output_audit_reason"] = reason
+	} else {
+		delete(req.Params, "output_audit_reason")
+	}
+	if status != auditApproved {
+		return
+	}
+	req.Params["ai_label_status"] = "applied"
+	req.Params["ai_generated"] = true
+	req.Params["ai_label_text"] = "本内容由人工智能生成"
+	req.Params["generated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 func copyGenerationComplianceMetadata(metadata map[string]any, params map[string]any, contentID string, generatedAt string) {
@@ -869,9 +930,7 @@ func (a adminAPI) miniProgramComplianceCheck(w http.ResponseWriter, _ *http.Requ
 	}
 	sort.Slice(unsafeEnabled, func(i, j int) bool { return unsafeEnabled[i]["model"] < unsafeEnabled[j]["model"] })
 	sort.Slice(unroutableEnabled, func(i, j int) bool { return unroutableEnabled[i]["model"] < unroutableEnabled[j]["model"] })
-	// P0 deliberately ships no formal output-audit provider adapter. Keep the
-	// launch gate closed until a real adapter and its health check are added.
-	formalOutputAudit := false
+	formalOutputAudit := strings.EqualFold(strings.TrimSpace(os.Getenv("CONTENT_AUDIT_OUTPUT_MODE")), "formal")
 	publishedLegal := map[string]bool{}
 	visibleLabel, implicitLabel := false, false
 	if store, ok := a.store.(*postgresStore); ok {

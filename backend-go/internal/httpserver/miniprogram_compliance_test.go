@@ -2,6 +2,9 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,6 +14,18 @@ import (
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 )
+
+type staticImageSecurityChecker struct {
+	imageErr error
+}
+
+func (s staticImageSecurityChecker) CheckImage(context.Context, []byte, string, string) error {
+	return s.imageErr
+}
+
+func (s staticImageSecurityChecker) CheckText(context.Context, string, string) error {
+	return nil
+}
 
 func compliantMiniProgramModel(expiry string) adminAIModel {
 	return adminAIModel{
@@ -73,6 +88,43 @@ func TestFormalOutputAuditFlagCannotPretendProviderIsConnected(t *testing.T) {
 	}
 	if request.Params["output_audit_status"] != auditManualReview || request.Params["output_audit_service"] != "formal-unconfigured" {
 		t.Fatalf("unexpected fail-closed audit metadata: %#v", request.Params)
+	}
+}
+
+func TestFormalGeneratedOutputUsesWeChatImageSecurity(t *testing.T) {
+	t.Setenv("CONTENT_AUDIT_OUTPUT_MODE", "formal")
+	raw := bytes.Buffer{}
+	if err := png.Encode(&raw, image.NewRGBA(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	request := generation.CreateRequest{
+		Params: map[string]any{"terminal": terminalMiniProgram},
+		GeneratedImages: []generation.GeneratedImage{{
+			URL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw.Bytes()), ContentType: "image/png",
+		}},
+	}
+	a := api{contentSecurity: staticImageSecurityChecker{}}
+	if err := a.auditPreparedGeneratedOutput(context.Background(), &request); err != nil {
+		t.Fatalf("formal output audit rejected safe image: %v", err)
+	}
+	if request.Params["output_audit_status"] != auditApproved || request.Params["output_audit_service"] != "wechat-content-security" {
+		t.Fatalf("unexpected formal audit metadata: %#v", request.Params)
+	}
+
+	a.contentSecurity = staticImageSecurityChecker{imageErr: errContentSecurityRejected}
+	if err := a.auditPreparedGeneratedOutput(context.Background(), &request); !errors.Is(err, errOutputAuditRejected) {
+		t.Fatalf("explicit rejection returned %v", err)
+	}
+	if request.Params["output_audit_status"] != auditRejected {
+		t.Fatalf("explicit rejection status: %#v", request.Params)
+	}
+
+	a.contentSecurity = staticImageSecurityChecker{imageErr: errContentSecurityUnavailable}
+	if err := a.auditPreparedGeneratedOutput(context.Background(), &request); !errors.Is(err, errContentSecurityUnavailable) {
+		t.Fatalf("unavailable audit returned %v", err)
+	}
+	if request.Params["output_audit_status"] != auditManualReview {
+		t.Fatalf("unavailable audit status: %#v", request.Params)
 	}
 }
 
