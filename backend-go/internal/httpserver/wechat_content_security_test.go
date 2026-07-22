@@ -11,6 +11,37 @@ import (
 	"time"
 )
 
+type openIDMatchingContentSecurity struct {
+	validOpenID string
+	attempts    []string
+}
+
+func (s *openIDMatchingContentSecurity) CheckImage(context.Context, []byte, string, string) error {
+	return nil
+}
+
+func (s *openIDMatchingContentSecurity) CheckText(_ context.Context, _ string, openID string) error {
+	s.attempts = append(s.attempts, openID)
+	if openID == s.validOpenID {
+		return nil
+	}
+	return errContentSecurityUnavailable
+}
+
+func TestMiniProgramTextCheckFallsBackAcrossBoundOpenIDs(t *testing.T) {
+	checker := &openIDMatchingContentSecurity{validOpenID: "openid-current-app"}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/generation-tasks", nil)
+	request.Header.Set("X-Client-Platform", "mp-weixin")
+	a := api{contentSecurity: checker}
+	user := adminUser{ID: "user", WeChatOpenIDs: []string{"openid-other-app", "openid-current-app"}}
+	if err := a.checkMiniProgramText(context.Background(), request, user, "合规的创作提示词"); err != nil {
+		t.Fatalf("valid fallback openid was rejected: %v", err)
+	}
+	if len(checker.attempts) != 2 || checker.attempts[0] != "openid-other-app" || checker.attempts[1] != "openid-current-app" {
+		t.Fatalf("unexpected openid attempts: %#v", checker.attempts)
+	}
+}
+
 func TestWeChatContentSecurityChecksTextAndImage(t *testing.T) {
 	var tokenCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

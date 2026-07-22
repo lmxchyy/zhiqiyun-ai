@@ -236,18 +236,26 @@ func writeContentSecurityError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusServiceUnavailable, errContentSecurityUnavailable)
 }
 
-func (a api) miniProgramOpenID(ctx context.Context, user adminUser) string {
+func (a api) miniProgramOpenIDs(ctx context.Context, user adminUser) []string {
+	openIDs := make([]string, 0, 1+len(user.WeChatOpenIDs))
+	seen := map[string]bool{}
+	appendOpenID := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		openIDs = append(openIDs, value)
+	}
 	if sessions, ok := a.sessions.(wechatMiniProgramSessionStore); ok {
 		if session, found, err := sessions.WeChatSession(ctx, user.ID); err == nil && found && strings.TrimSpace(session.OpenID) != "" {
-			return strings.TrimSpace(session.OpenID)
+			appendOpenID(session.OpenID)
 		}
 	}
 	for _, value := range user.WeChatOpenIDs {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
+		appendOpenID(value)
 	}
-	return ""
+	return openIDs
 }
 
 func (a api) checkMiniProgramText(ctx context.Context, r *http.Request, user adminUser, content string) error {
@@ -257,5 +265,15 @@ func (a api) checkMiniProgramText(ctx context.Context, r *http.Request, user adm
 	if a.contentSecurity == nil {
 		return errContentSecurityUnavailable
 	}
-	return a.contentSecurity.CheckText(ctx, content, a.miniProgramOpenID(ctx, user))
+	openIDs := a.miniProgramOpenIDs(ctx, user)
+	if len(openIDs) == 0 {
+		return errContentSecurityUnavailable
+	}
+	for _, openID := range openIDs {
+		err := a.contentSecurity.CheckText(ctx, content, openID)
+		if err == nil || errors.Is(err, errContentSecurityRejected) {
+			return err
+		}
+	}
+	return errContentSecurityUnavailable
 }
