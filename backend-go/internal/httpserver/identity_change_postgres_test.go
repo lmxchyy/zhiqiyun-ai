@@ -422,7 +422,10 @@ func TestCommercialIdentityAccessAndRBACLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	store := &postgresStore{db: db, ready: true}
+	store := &postgresStore{db: db}
+	if err := store.ensureReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
 	adminID, userID := "rbac_security_admin_"+suffix, "rbac_security_user_"+suffix
 	seedIdentityChangeUser(t, db, adminID, "SUPER_ADMIN")
