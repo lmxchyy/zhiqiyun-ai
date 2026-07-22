@@ -132,7 +132,7 @@ const disposeNativeBridge=registerAssetNativeBridge({
   openAssetActions:id=>{const asset=store.assets.find(item=>item.id===id);if(asset)activeAsset.value=asset;},
 });onBeforeUnmount(()=>{clearSearchTimer();disposeNativeBridge();});
 function openAsset(asset:AssetItem){if(asset.status==="generating"||asset.status==="queued"){const task=store.recentTasks.find(item=>item.id===asset.taskId);if(task)openTask(task);return;}openDetail(asset);}
-function openDetail(asset:AssetItem){uni.navigateTo({url:`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(asset.id)}`});}
+function openDetail(asset:AssetItem){store.primeCurrentAsset(asset);uni.navigateTo({url:`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(asset.id)}`});}
 async function toggleFavorite(asset:AssetItem){try{await store.toggleFavorite(asset.id);}catch{/* store rolls back */}}
 function continueEditing(asset:AssetItem){const page=asset.type==="video"?"UserVideoCreationPage":asset.type==="ppt"?"UserPptCreationPage":"UserImageCreationPage";uni.navigateTo({url:`/pages/user/${page}?assetId=${encodeURIComponent(asset.id)}`});}
 function confirmDelete(asset:AssetItem){uni.showModal({title:"移到回收站",content:"删除后作品将进入回收站，可在保留期内恢复。",confirmColor:"#ff771b",success:result=>{if(result.confirm)void store.deleteAsset(asset.id).then(()=>uni.showToast({title:"已移到回收站",icon:"success"}));}});}

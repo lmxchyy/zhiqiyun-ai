@@ -106,6 +106,10 @@ type optimizedUserContentStore interface {
 	GetGenerationTaskForUser(userID string, id string) (generationTask, bool, error)
 }
 
+type optimizedUserAssetDetailStore interface {
+	GetAssetForUser(userID string, id string) (asset, bool, error)
+}
+
 type optimizedUserContentPageStore interface {
 	ListGenerationTasksPageForUser(userID string, limit int, offset int, prioritize bool) ([]generationTask, int, error)
 	ListAssetsPageForUser(userID string, limit int, offset int) ([]asset, int, error)
@@ -395,6 +399,39 @@ func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, 
 		assets = assets[:limit]
 	}
 	return a.signStoredAssetURLs(ctx, userID, assets), nil
+}
+
+func (a api) assetForUser(r *http.Request, userID string, id string) (asset, bool, error) {
+	ctx := context.Background()
+	if r != nil {
+		ctx = r.Context()
+	}
+	if optimized, ok := a.store.(optimizedUserAssetDetailStore); ok {
+		item, found, err := optimized.GetAssetForUser(userID, id)
+		if err != nil || !found {
+			return asset{}, found, err
+		}
+		signed := a.signStoredAssetURLs(ctx, userID, []asset{item})
+		if len(signed) == 1 {
+			item = signed[0]
+		}
+		return item, true, nil
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		return asset{}, false, err
+	}
+	for _, item := range assets {
+		if item.ID != id || item.UserID != userID || strings.TrimSpace(item.DeletedAt) != "" {
+			continue
+		}
+		signed := a.signStoredAssetURLs(ctx, userID, []asset{item})
+		if len(signed) == 1 {
+			item = signed[0]
+		}
+		return item, true, nil
+	}
+	return asset{}, false, nil
 }
 
 func (a api) userAccountData(userID string) (adminPlatformData, error) {

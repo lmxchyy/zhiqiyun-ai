@@ -220,6 +220,44 @@ func enforceMiniProgramModelCompliance(data adminPlatformData, req *generation.C
 	return nil
 }
 
+func resolveMiniProgramCompliantModuleSchema(data adminPlatformData, user adminUser, moduleCode string, resolved resolvedModuleSchema) (resolvedModuleSchema, error) {
+	moduleCode = canonicalModuleCode(moduleCode)
+	expectedCapability := defaultAIModelTypeForModule(moduleCode)
+	allowed, reason := modelAllowedForMiniProgram(resolved.Model, time.Now().UTC())
+	if allowed && stringListContainsFold(resolved.Model.AllowedCapabilities, expectedCapability) {
+		return resolved, nil
+	}
+	if allowed {
+		reason = "capability_not_allowed"
+	}
+
+	candidates := append([]adminAIModel(nil), data.AIModels...)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].SortWeight != candidates[j].SortWeight {
+			return candidates[i].SortWeight > candidates[j].SortWeight
+		}
+		return strings.ToLower(candidates[i].ModelName) < strings.ToLower(candidates[j].ModelName)
+	})
+	for _, candidate := range candidates {
+		if canonicalModuleCode(firstNonEmptyString(candidate.ModuleCode, candidate.ModuleCodeCamel)) != moduleCode ||
+			strings.EqualFold(strings.TrimSpace(candidate.ModelName), strings.TrimSpace(resolved.Model.ModelName)) ||
+			!isActiveLike(candidate.Status) {
+			continue
+		}
+		if ok, _ := modelAllowedForMiniProgram(candidate, time.Now().UTC()); !ok || !stringListContainsFold(candidate.AllowedCapabilities, expectedCapability) {
+			continue
+		}
+		fallback, err := resolveModuleSchema(data, user, moduleCode, candidate.ModelName)
+		if err == nil {
+			return fallback, nil
+		}
+	}
+	if reason == "" {
+		reason = "no_compliant_model_available"
+	}
+	return resolvedModuleSchema{}, fmt.Errorf("%w: %s", errMiniProgramModelNotCompliant, reason)
+}
+
 func configuredMiniProgramCreationModes() []string {
 	allowed := map[string]bool{"image": true, "infographic": true, "video": true, "ppt": true, "agent": true, "review": true}
 	raw := strings.TrimSpace(os.Getenv("MINIPROGRAM_CREATION_MODES"))

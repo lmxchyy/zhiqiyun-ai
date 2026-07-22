@@ -287,6 +287,13 @@ func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if isWeChatMiniProgramRequest(r) {
+		resolved, err = resolveMiniProgramCompliantModuleSchema(data, user, moduleCode, resolved)
+		if err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+	}
 	writeJSON(w, moduleSchemaResponse(resolved, user))
 }
 

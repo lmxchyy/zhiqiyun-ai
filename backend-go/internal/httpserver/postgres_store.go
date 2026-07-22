@@ -724,6 +724,35 @@ func (s *postgresStore) ListAssetsForUser(userID string, limit int) ([]asset, er
 	return items, err
 }
 
+func (s *postgresStore) GetAssetForUser(userID string, id string) (asset, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return asset{}, false, err
+	}
+	contextType, tenantID, _, err := s.currentTenantScopeForUser(ctx, userID)
+	if err != nil {
+		return asset{}, false, err
+	}
+	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+		where user_id=$1 and id=$2 and deleted_at is null
+		  and (($3='ENTERPRISE' and tenant_id=$4) or ($3<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
+		limit 1
+	`, userID, id, contextType, tenantID)
+	if err != nil {
+		return asset{}, false, err
+	}
+	defer rows.Close()
+	items, err := scanAssetSummaryRows(rows)
+	if err != nil {
+		return asset{}, false, err
+	}
+	if len(items) == 0 {
+		return asset{}, false, nil
+	}
+	return items[0], true, nil
+}
+
 func (s *postgresStore) ListAssetsPageForUser(userID string, limit int, offset int) ([]asset, int, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()

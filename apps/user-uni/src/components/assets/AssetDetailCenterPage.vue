@@ -6,7 +6,7 @@
     </view>
 
     <view class="detail-content">
-      <AssetSkeleton v-if="store.currentLoading" :count="2" />
+      <AssetSkeleton v-if="store.currentLoading && !asset" :count="2" />
 
       <view v-else-if="notFound" class="empty-panel">
         <text class="empty-symbol">□</text>

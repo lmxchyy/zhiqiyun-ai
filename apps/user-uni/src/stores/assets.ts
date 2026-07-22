@@ -294,6 +294,17 @@ export const useAssetStore = defineStore("assets", {
       if (index >= 0) this.assets.splice(index, 1, item);
       if (this.currentAsset?.id === item.id) this.currentAsset = { ...this.currentAsset, ...item };
     },
+    primeCurrentAsset(item: AssetItem) {
+      this.currentAsset = {
+        ...item,
+        downloadUrl: "",
+        shareUrl: item.remoteUrl,
+        variables: item.metadata?.variables && typeof item.metadata.variables === "object" && !Array.isArray(item.metadata.variables)
+          ? item.metadata.variables as Record<string, unknown>
+          : {},
+      };
+      this.error = "";
+    },
     async toggleFavorite(id: string) {
       const item = this.assets.find(asset => asset.id === id) || this.currentAsset;
       if (!item) return;

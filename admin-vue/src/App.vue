@@ -10375,9 +10375,10 @@ async function createAIModel() {
 
 async function editAIModel(row: AdminRecord) {
   const isCreate = !row.id;
+  const existingModelType = aiText(row, "model_type", "modelType") || "image";
   const form = {
     modelName: aiText(row, "model_name", "modelName"),
-    modelType: aiText(row, "model_type", "modelType") || "image",
+    modelType: existingModelType,
     provider: aiText(row, "provider") || "NewAPI",
     channelId: aiText(row, "channel_id", "channelId"),
     moduleCode: aiText(row, "module_code", "moduleCode") || "image_generation",
@@ -10389,12 +10390,12 @@ async function editAIModel(row: AdminRecord) {
     providerCompany: aiText(row, "provider_company"),
     algorithmName: aiText(row, "algorithm_name"),
     algorithmFilingNo: aiText(row, "algorithm_filing_no"),
-    algorithmType: aiText(row, "algorithm_type"),
+    algorithmType: aiText(row, "algorithm_type") || existingModelType,
     contractStatus: aiText(row, "contract_status") || "draft",
     contractExpireAt: aiText(row, "contract_expire_at"),
     complianceStatus: aiText(row, "compliance_status") || "draft",
-    allowedTerminals: aiList(row, "allowed_terminals").join(","),
-    allowedCapabilities: aiList(row, "allowed_capabilities").join(","),
+    allowedTerminals: aiList(row, "allowed_terminals").join(",") || "pc,web,h5,miniprogram",
+    allowedCapabilities: aiList(row, "allowed_capabilities").join(",") || existingModelType,
     miniprogramEnabled: Boolean(aiValue(row, "miniprogram_enabled")),
     complianceRemark: aiText(row, "compliance_remark"),
     modelVersion: aiText(row, "model_version"),
@@ -10517,6 +10518,28 @@ async function editAIModel(row: AdminRecord) {
       if (selectedChannel && !aiList(selectedChannel, "models").some(item => item.toLowerCase() === modelName.toLowerCase())) {
         ElMessage.error(`上游通道“${String(selectedChannel.name || selectedChannel.id)}”尚未配置模型 ${modelName}`);
         return;
+      }
+      if (form.miniprogramEnabled) {
+        const allowedTerminals = uniqueNonEmptyStrings(form.allowedTerminals.split(/[,，]/)).map(item => item.toLowerCase());
+        const allowedCapabilities = uniqueNonEmptyStrings(form.allowedCapabilities.split(/[,，]/)).map(item => item.toLowerCase());
+        const missing: string[] = [];
+        if (!allowedTerminals.includes("miniprogram")) missing.push("允许终端需包含 miniprogram");
+        if (!allowedCapabilities.includes(form.modelType.toLowerCase())) missing.push(`允许能力需包含 ${form.modelType.toLowerCase()}`);
+        if (!form.providerName.trim()) missing.push("技术提供方");
+        if (!form.providerCompany.trim()) missing.push("技术主体公司全称");
+        if (!form.algorithmName.trim()) missing.push("算法名称");
+        if (!form.algorithmFilingNo.trim()) missing.push("算法备案编号");
+        if (!form.algorithmType.trim()) missing.push("算法类型");
+        if (form.complianceStatus !== "approved") missing.push("合规状态需为已通过");
+        if (form.contractStatus !== "valid") missing.push("合作协议状态需为有效");
+        const contractExpiry = Date.parse(form.contractExpireAt.trim());
+        if (!form.contractExpireAt.trim() || !Number.isFinite(contractExpiry) || contractExpiry <= Date.now()) missing.push("有效的合作协议到期时间");
+        const filingSubjects = [form.providerName, form.providerCompany].map(value => value.toLowerCase().replace(/[-_\s]/g, ""));
+        if (filingSubjects.includes("newapi")) missing.push("技术提供方/主体不能填写 NewAPI 网关");
+        if (missing.length) {
+          ElMessage.error(`开启小程序前请补齐：${missing.join("、")}`);
+          return;
+        }
       }
       instance.confirmButtonLoading = true;
       try {

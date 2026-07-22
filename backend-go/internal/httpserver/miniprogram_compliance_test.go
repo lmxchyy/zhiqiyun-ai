@@ -132,6 +132,36 @@ func TestForgedMiniProgramModelIDCannotBypassCompliance(t *testing.T) {
 	}
 }
 
+func TestMiniProgramModuleSchemaSwitchesToCompliantModel(t *testing.T) {
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	expiry := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	for index := range data.AIModels {
+		switch data.AIModels[index].ModelName {
+		case "gpt-image-2":
+			data.AIModels[index].ComplianceStatus = "draft"
+		case "mock-standard":
+			qualified := compliantMiniProgramModel(expiry)
+			qualified.ID = data.AIModels[index].ID
+			qualified.ModelName = "mock-standard"
+			qualified.ModuleCode = moduleImageGeneration
+			qualified.Status = "ACTIVE"
+			data.AIModels[index] = qualified
+		}
+	}
+	user := adminUser{ID: "user_test", TenantID: "default", PlanID: "plan_pro", Role: "USER"}
+	requested, err := resolveModuleSchema(data, user, moduleImageGeneration, "gpt-image-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveMiniProgramCompliantModuleSchema(data, user, moduleImageGeneration, requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model.ModelName != "mock-standard" {
+		t.Fatalf("mini-program model fallback = %q", resolved.Model.ModelName)
+	}
+}
+
 func TestOutputAuditAndMarkedDownload(t *testing.T) {
 	request := generation.CreateRequest{Prompt: "safe prompt", Params: map[string]any{"terminal": terminalMiniProgram}}
 	if err := auditGeneratedOutput(&request); err != nil {

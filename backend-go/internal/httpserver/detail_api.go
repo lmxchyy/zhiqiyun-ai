@@ -49,17 +49,15 @@ func (a api) assetDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	items, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
+	id := strings.TrimSpace(r.PathValue("id"))
+	item, found, err := a.assetForUser(r, user.ID, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	id := strings.TrimSpace(r.PathValue("id"))
-	for _, item := range items {
-		if item.ID == id && item.UserID == user.ID && strings.TrimSpace(item.DeletedAt) == "" {
-			writeJSON(w, map[string]any{"item": secureAssetForClient(item)})
-			return
-		}
+	if found {
+		writeJSON(w, map[string]any{"item": secureAssetForClient(item)})
+		return
 	}
 	writeError(w, http.StatusNotFound, errAssetNotFound)
 }
