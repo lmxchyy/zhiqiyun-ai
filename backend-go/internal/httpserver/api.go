@@ -1092,27 +1092,39 @@ func (a api) generationServiceForConfiguredModel(model string) (generation.Servi
 }
 
 func selectAPIChannelForConfiguredModel(data adminPlatformData, model string) (adminAPIChannel, bool, error) {
-	channels := configuredGenerationChannels(data)
-	for _, configuredModel := range data.AIModels {
-		if !strings.EqualFold(strings.TrimSpace(configuredModel.ModelName), strings.TrimSpace(model)) || strings.TrimSpace(configuredModel.ChannelID) == "" {
+	if configuredModel, found := findConfiguredAIModel(data, model); found && configuredModelChannelID(configuredModel) != "" {
+		return selectBoundAPIChannelForConfiguredModel(data, model)
+	}
+	channel, ok := selectAPIChannelForModel(configuredGenerationChannels(data), model)
+	return channel, ok, nil
+}
+
+func configuredModelChannelID(model adminAIModel) string {
+	return firstNonEmptyString(model.ChannelID, model.ChannelIDCamel)
+}
+
+func selectBoundAPIChannelForConfiguredModel(data adminPlatformData, model string) (adminAPIChannel, bool, error) {
+	configuredModel, found := findConfiguredAIModel(data, model)
+	if !found {
+		return adminAPIChannel{}, false, nil
+	}
+	channelID := configuredModelChannelID(configuredModel)
+	if channelID == "" {
+		return adminAPIChannel{}, false, fmt.Errorf("model %s is not bound to an api provider", model)
+	}
+	for _, channel := range configuredGenerationChannels(data) {
+		if channel.ID != channelID {
 			continue
 		}
-		for _, channel := range channels {
-			if channel.ID != configuredModel.ChannelID {
-				continue
-			}
-			if !apiChannelUsableForGeneration(channel) {
-				return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s is not enabled", model, channel.Name)
-			}
-			if !apiChannelSupportsModel(channel, model) {
-				return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s does not support this model", model, channel.Name)
-			}
-			return channel, true, nil
+		if !apiChannelUsableForGeneration(channel) {
+			return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s is not enabled", model, channel.Name)
 		}
-		return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s was not found", model, configuredModel.ChannelID)
+		if !apiChannelSupportsModel(channel, model) {
+			return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s does not support this model", model, channel.Name)
+		}
+		return channel, true, nil
 	}
-	channel, ok := selectAPIChannelForModel(channels, model)
-	return channel, ok, nil
+	return adminAPIChannel{}, false, fmt.Errorf("model %s bound api provider %s was not found or has no credential", model, channelID)
 }
 
 func (a api) generationServiceForProvider(providerID string, req generation.CreateRequest) (generation.Service, error) {
@@ -1360,22 +1372,19 @@ func (a api) generationServiceForCompliantMiniProgram(req generation.CreateReque
 	if !strings.EqualFold(stringValue(req.Params["terminal"]), terminalMiniProgram) {
 		return generation.Service{}, false, nil
 	}
-	requiredProvider := stringValue(req.Params["required_provider_kind"])
-	if !isCloudBaseProviderName(requiredProvider) {
-		return generation.Service{}, false, fmt.Errorf("小程序合规模型未绑定 CloudBase 技术通道")
-	}
 	data, err := a.onlineGenerationSettings()
 	if err != nil {
 		return generation.Service{}, false, err
 	}
-	for _, channel := range configuredGenerationChannels(data) {
-		if !strings.EqualFold(channel.Protocol, "cloudbase-function") || !apiChannelSupportsModel(channel, req.Model) {
-			continue
-		}
-		service, serviceErr := a.generationServiceForChannel(data, channel)
-		return service, serviceErr == nil, serviceErr
+	channel, ok, routeErr := selectAPIChannelForConfiguredModel(data, req.Model)
+	if routeErr != nil {
+		return generation.Service{}, false, routeErr
 	}
-	return generation.Service{}, false, errors.New("CloudBase 合规生图通道未配置或不可用")
+	if !ok {
+		return generation.Service{}, false, fmt.Errorf("mini-program compliant model %s is not configured", req.Model)
+	}
+	service, serviceErr := a.generationServiceForChannel(data, channel)
+	return service, serviceErr == nil, serviceErr
 }
 
 func runtimeGenerationChannelFromEnv() (adminAPIChannel, bool) {
@@ -1521,8 +1530,10 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 				approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
 				continue
 			}
-			if allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC()); allowed && isCloudBaseProviderName(model.Provider) {
-				approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
+			if allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC()); allowed {
+				if _, routed, routeErr := selectAPIChannelForConfiguredModel(data, model.ModelName); routed && routeErr == nil {
+					approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
+				}
 			}
 		}
 		if miniProgram {

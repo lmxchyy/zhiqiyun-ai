@@ -72,6 +72,56 @@ func TestSelectAPIChannelForConfiguredModelRejectsUnsupportedBinding(t *testing.
 	}
 }
 
+func TestSelectAPIChannelForConfiguredModelKeepsFallbackWithoutBinding(t *testing.T) {
+	data := adminPlatformData{
+		AIModels: []adminAIModel{{ModelName: "qualified-image"}},
+		APIKeys:  []adminAPIKey{{Customer: "channel_primary", Secret: "sk-test", Status: "ACTIVE"}},
+		APIChannels: []adminAPIChannel{
+			{ID: "channel_primary", Primary: true, Status: "ACTIVE", Models: []string{"qualified-image"}},
+		},
+	}
+
+	selected, ok, err := selectAPIChannelForConfiguredModel(data, "qualified-image")
+	if err != nil {
+		t.Fatalf("select fallback channel: %v", err)
+	}
+	if !ok || selected.ID != "channel_primary" {
+		t.Fatalf("selected channel=%s ok=%v, want channel_primary", selected.ID, ok)
+	}
+}
+
+func TestSelectBoundAPIChannelAllowsOpenAICompatibleChannel(t *testing.T) {
+	data := adminPlatformData{
+		AIModels: []adminAIModel{{ModelName: "qualified-image", ChannelID: "channel_newapi"}},
+		APIKeys:  []adminAPIKey{{Customer: "channel_newapi", Secret: "sk-test", Status: "ACTIVE"}},
+		APIChannels: []adminAPIChannel{
+			{ID: "channel_newapi", Protocol: "openai", Status: "ACTIVE", Models: []string{"qualified-image"}},
+		},
+	}
+
+	selected, ok, err := selectBoundAPIChannelForConfiguredModel(data, "qualified-image")
+	if err != nil {
+		t.Fatalf("select bound mini-program channel: %v", err)
+	}
+	if !ok || selected.ID != "channel_newapi" {
+		t.Fatalf("selected channel=%s ok=%v, want channel_newapi", selected.ID, ok)
+	}
+}
+
+func TestSelectBoundAPIChannelRequiresExplicitBinding(t *testing.T) {
+	data := adminPlatformData{
+		AIModels: []adminAIModel{{ModelName: "qualified-image"}},
+		APIKeys:  []adminAPIKey{{Customer: "channel_newapi", Secret: "sk-test", Status: "ACTIVE"}},
+		APIChannels: []adminAPIChannel{
+			{ID: "channel_newapi", Protocol: "openai", Status: "ACTIVE", Models: []string{"qualified-image"}},
+		},
+	}
+
+	if _, _, err := selectBoundAPIChannelForConfiguredModel(data, "qualified-image"); err == nil {
+		t.Fatal("expected mini-program model without channel binding to fail")
+	}
+}
+
 func TestConnectorFailureContextDetachesExpiredParent(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.Background())
 	cancelParent()

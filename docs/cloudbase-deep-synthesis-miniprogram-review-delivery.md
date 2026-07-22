@@ -1,5 +1,7 @@
 # CloudBase 第三方深度合成资质接入与小程序审核版交付记录
 
+> 更新说明（2026-07-22）：本文中的 CloudBase 强制路由方案已废止。小程序合规模型有 `channel_id` 时优先使用绑定通道，未绑定时按模型支持情况和通道优先级自动选择；CloudBase Adapter 保留为可选通道，不再是统一前置条件。
+
 日期：2026-07-19
 
 ## 1. 项目检查结论
@@ -29,7 +31,7 @@
 ## 3. 实施内容与文件清单
 
 - Provider：`backend-go/internal/provider/image/cloudbase_function.go`、`cloudbase_function_test.go`。复用现有 image Provider 形态，严格允许当前两个官方模型、官方 HTTPS 网关、服务端 Bearer 凭证、500 字提示词和单张图生图参考图。
-- 路由与审计：`backend-go/internal/httpserver/api.go`、`generation_storage.go`、`store.go`、`postgres_store.go`、`internal/app/generation/service.go`。小程序的 CloudBase 合规模型必须路由到 CloudBase Adapter，不能被用户路由或 NewAPI 配置截走；保存 provider task ID、实际模型和供应商元数据。
+- 路由与审计：`backend-go/internal/httpserver/api.go`、`generation_storage.go`、`store.go`、`postgres_store.go`、`internal/app/generation/service.go`。小程序合规模型优先使用显式绑定的 `channel_id`；未绑定时从支持该模型的可用通道中按优先级选择。保存 provider task ID、实际模型和供应商元数据。
 - 合规门与上线检查：`backend-go/internal/httpserver/miniprogram_compliance.go`、`server.go`。模型仍必须同时满足 approved、miniprogram、image、开关开启、协议有效和完整备案字段；NewAPI 主体会被拒绝。上线检查新增 CloudBase Adapter 和 CloudBase 合规模型检查。
 - 渠道管理：`backend-go/internal/httpserver/api_channel_probe.go`、`admin-vue/src/App.vue`。增加 `cloudbase-function` 协议配置；测试按钮只检查配置，不产生图片费用，也不会伪装为已验证资质。
 - 云函数：`cloudbase/functions/zhiqiyun-ai-image/index.js`、`package.json`、`README.md`。固定当前模型白名单、水印、revise 和输入约束，不含任何真实凭证。
@@ -55,8 +57,8 @@ CloudBase 云函数：`ENV_ID`、`AI_WATERMARK_TEXT`。示例文件只有变量�
 ## 5. API 变更
 
 - `GET /api/v1/public/terminal-capabilities`：返回当前终端允许的创作模式，小程序前端 fail-closed。
-- `POST /api/v1/generation-tasks`：小程序新增创作模式、模型合规和 CloudBase Provider 强制路由校验；伪造 model ID 或网关主体不能绕过。
-- `GET /api/v1/admin/compliance/miniprogram-launch-check`：新增 `cloudbase_adapter`、`cloudbase_qualified_models` 检查。
+- `POST /api/v1/generation-tasks`：小程序执行创作模式、模型合规和技术通道可用性校验；伪造 model ID 仍会被拒绝，模型无需强制绑定技术通道。
+- `GET /api/v1/admin/compliance/miniprogram-launch-check`：检查合规模型是否存在、是否绑定可用技术通道，以及是否存在已启用但不可路由的模型。
 - 管理端渠道协议新增 `cloudbase-function`。其“测试”只做非计费配置校验，文案明确未调用模型、未验证资质材料。
 
 ## 6. 管理端配置顺序

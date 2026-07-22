@@ -158,12 +158,6 @@ func stringListContainsFold(items []string, target string) bool {
 	return false
 }
 
-func isCloudBaseProviderName(value string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.NewReplacer(" ", "", "-", "", "_", "").Replace(normalized)
-	return normalized == "cloudbase" || normalized == "tencentcloudbase" || normalized == "腾讯云开发cloudbase"
-}
-
 func requestTerminal(r *http.Request) string {
 	if isWeChatMiniProgramRequest(r) {
 		return terminalMiniProgram
@@ -215,7 +209,7 @@ func enforceMiniProgramModelCompliance(data adminPlatformData, req *generation.C
 	req.Params["algorithm_filing_no"] = model.AlgorithmFilingNo
 	req.Params["algorithm_type"] = model.AlgorithmType
 	req.Params["model_version"] = model.ModelVersion
-	req.Params["required_provider_kind"] = strings.ToLower(strings.TrimSpace(model.Provider))
+	req.Params["configured_channel_id"] = configuredModelChannelID(model)
 	req.Params["compliance_snapshot_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	return nil
 }
@@ -846,15 +840,22 @@ func (a adminAPI) miniProgramComplianceCheck(w http.ResponseWriter, _ *http.Requ
 	}
 	now := time.Now().UTC()
 	available := 0
-	cloudBaseAvailable := 0
+	routable := 0
 	unsafeEnabled := []map[string]string{}
+	unroutableEnabled := []map[string]string{}
 	expiring := []map[string]string{}
 	for _, model := range data.AIModels {
 		allowed, reason := modelAllowedForMiniProgram(model, now)
 		if allowed {
 			available++
-			if isCloudBaseProviderName(model.Provider) {
-				cloudBaseAvailable++
+			if _, routed, routeErr := selectAPIChannelForConfiguredModel(data, model.ModelName); routed && routeErr == nil {
+				routable++
+			} else if model.MiniProgramEnabled {
+				routeReason := "model_channel_not_configured"
+				if routeErr != nil {
+					routeReason = routeErr.Error()
+				}
+				unroutableEnabled = append(unroutableEnabled, map[string]string{"id": model.ID, "model": model.ModelName, "reason": routeReason})
 			}
 		}
 		if model.MiniProgramEnabled && !allowed {
@@ -867,10 +868,10 @@ func (a adminAPI) miniProgramComplianceCheck(w http.ResponseWriter, _ *http.Requ
 		}
 	}
 	sort.Slice(unsafeEnabled, func(i, j int) bool { return unsafeEnabled[i]["model"] < unsafeEnabled[j]["model"] })
+	sort.Slice(unroutableEnabled, func(i, j int) bool { return unroutableEnabled[i]["model"] < unroutableEnabled[j]["model"] })
 	// P0 deliberately ships no formal output-audit provider adapter. Keep the
 	// launch gate closed until a real adapter and its health check are added.
 	formalOutputAudit := false
-	_, cloudBaseAdapterConfigured := runtimeCloudBaseChannelFromEnv()
 	publishedLegal := map[string]bool{}
 	visibleLabel, implicitLabel := false, false
 	if store, ok := a.store.(*postgresStore); ok {
@@ -887,10 +888,10 @@ func (a adminAPI) miniProgramComplianceCheck(w http.ResponseWriter, _ *http.Requ
 		_ = store.db.QueryRow(`SELECT enabled,implicit_label_enabled FROM xz_ai_label_settings WHERE terminal='miniprogram'`).Scan(&visibleLabel, &implicitLabel)
 	}
 	checks := []map[string]any{
-		{"code": "cloudbase_adapter", "label": "CloudBase 服务端适配器已配置", "passed": cloudBaseAdapterConfigured},
-		{"code": "cloudbase_qualified_models", "label": "存在完成资质登记的 CloudBase 小程序生图模型", "passed": cloudBaseAvailable > 0, "value": cloudBaseAvailable},
 		{"code": "enterprise_profile", "label": "企业主体资料已配置", "passed": strings.TrimSpace(os.Getenv("ENTERPRISE_LEGAL_NAME")) != ""},
 		{"code": "available_models", "label": "存在小程序合规模型", "passed": available > 0, "value": available},
+		{"code": "routable_models", "label": "小程序合规模型存在可用技术通道", "passed": routable > 0, "value": routable},
+		{"code": "unroutable_models", "label": "不存在已启用但无法路由的合规模型", "passed": len(unroutableEnabled) == 0, "items": unroutableEnabled},
 		{"code": "content_audit", "label": "内容审核正式启用", "passed": strings.TrimSpace(os.Getenv("WECHAT_MINI_PROGRAM_APPID")) != "" && strings.TrimSpace(os.Getenv("WECHAT_MINI_PROGRAM_SECRET")) != "" && formalOutputAudit},
 		{"code": "visible_label", "label": "AI显式标识已启用", "passed": visibleLabel},
 		{"code": "implicit_label", "label": "AI隐式标识字段已启用", "passed": implicitLabel},

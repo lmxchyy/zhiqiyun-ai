@@ -15,6 +15,7 @@ import (
 func compliantMiniProgramModel(expiry string) adminAIModel {
 	return adminAIModel{
 		ID: "model_approved", ModelName: "qualified-image", ModelType: "image",
+		ChannelID:    "channel_qualified",
 		Provider:     "CloudBase",
 		ProviderName: "qualified-provider", ProviderCompany: "Qualified Technology Co., Ltd.",
 		AlgorithmName: "Qualified Image Algorithm", AlgorithmFilingNo: "ALG-TEST-001",
@@ -127,7 +128,7 @@ func TestForgedMiniProgramModelIDCannotBypassCompliance(t *testing.T) {
 	if err := enforceMiniProgramModelCompliance(data, &request); err != nil {
 		t.Fatalf("qualified model rejected: %v", err)
 	}
-	if request.Params["algorithm_filing_no"] != "ALG-TEST-001" || request.Params["provider_company"] == "" {
+	if request.Params["algorithm_filing_no"] != "ALG-TEST-001" || request.Params["provider_company"] == "" || request.Params["configured_channel_id"] != "channel_qualified" {
 		t.Fatalf("compliance snapshot missing: %#v", request.Params)
 	}
 }
