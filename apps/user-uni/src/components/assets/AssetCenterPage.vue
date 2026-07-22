@@ -75,7 +75,7 @@ import { onBeforeUnmount,ref } from "vue";
 import { useAssetStore } from "../../stores/assets";
 import type { AssetFilter,AssetItem,AssetSort,AssetStatus,AssetType,GenerationTask } from "../../features/assets/types";
 import { downloadAssetFile,shareAsset } from "../../features/assets/platform";
-import { miniProgramFeaturePages,miniProgramRolePages } from "../../config/miniProgramPages";
+import { miniProgramAssetCreationPages,miniProgramFeaturePages,miniProgramRolePages } from "../../config/miniProgramPages";
 import { registerAssetNativeBridge } from "../../features/assets/nativeBridge";
 import AssetActionSheet from "./AssetActionSheet.vue";
 import AssetEmptyState from "./AssetEmptyState.vue";
@@ -134,7 +134,7 @@ const disposeNativeBridge=registerAssetNativeBridge({
 function openAsset(asset:AssetItem){if(asset.status==="generating"||asset.status==="queued"){const task=store.recentTasks.find(item=>item.id===asset.taskId);if(task)openTask(task);return;}openDetail(asset);}
 function openDetail(asset:AssetItem){store.primeCurrentAsset(asset);uni.navigateTo({url:`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(asset.id)}`});}
 async function toggleFavorite(asset:AssetItem){try{await store.toggleFavorite(asset.id);}catch{/* store rolls back */}}
-function continueEditing(asset:AssetItem){const page=asset.type==="video"?"UserVideoCreationPage":asset.type==="ppt"?"UserPptCreationPage":"UserImageCreationPage";uni.navigateTo({url:`/pages/user/${page}?assetId=${encodeURIComponent(asset.id)}`});}
+function continueEditing(asset:AssetItem){const mode=asset.type==="video"?"video":asset.type==="ppt"?"ppt":asset.type==="infographic"?"infographic":"image";uni.navigateTo({url:`${miniProgramAssetCreationPages[mode]}?assetId=${encodeURIComponent(asset.id)}&intent=edit`});}
 function confirmDelete(asset:AssetItem){uni.showModal({title:"移到回收站",content:"删除后作品将进入回收站，可在保留期内恢复。",confirmColor:"#ff771b",success:result=>{if(result.confirm)void store.deleteAsset(asset.id).then(()=>uni.showToast({title:"已移到回收站",icon:"success"}));}});}
 function confirmPermanent(asset:AssetItem){uni.showModal({title:"彻底删除",content:"此操作不可恢复，确定永久删除该作品吗？",confirmText:"彻底删除",confirmColor:"#e05435",success:result=>{if(result.confirm)void store.permanentlyDeleteAsset(asset.id).then(()=>uni.showToast({title:"已彻底删除",icon:"success"}));}});}
 function rename(asset:AssetItem){uni.showModal({title:"重命名作品",editable:true,placeholderText:asset.name,content:asset.name,success:result=>{const name=String(result.content||"").trim();if(result.confirm&&name)void store.renameAsset(asset.id,name);}});}

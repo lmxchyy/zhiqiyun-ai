@@ -189,6 +189,7 @@ import AssetSkeleton from "./AssetSkeleton.vue";
 import AssetStatusBadge from "./AssetStatusBadge.vue";
 import AiGeneratedContentNotice from "../compliance/AiGeneratedContentNotice.vue";
 import { backOrHome } from "../../utils/miniProgramBusiness";
+import { miniProgramAssetCreationPages } from "../../config/miniProgramPages";
 
 type DetailAction = "" | "preview" | "edit" | "regenerate" | "download" | "favorite" | "move" | "rename" | "archive" | "delete";
 type DetailRow = { label: string; value: string };
@@ -439,13 +440,7 @@ function creationMode(item: AssetItem): CreationMode {
 }
 
 function creationPage(mode: CreationMode) {
-  return ({
-    image: "UserImageCreationPage",
-    video: "UserVideoCreationPage",
-    ppt: "UserPptCreationPage",
-    agent: "UserAgentCreationPage",
-    infographic: "UserInfographicCreationPage",
-  } as Record<CreationMode, string>)[mode];
+	return miniProgramAssetCreationPages[mode];
 }
 
 function buildCreationDraft(item: AssetItem, intent: "edit" | "regenerate") {
@@ -498,8 +493,8 @@ function openCreation(intent: "edit" | "regenerate") {
   persistCreationDraft(item, intent);
   activeAction.value = intent;
   uni.navigateTo({
-    url: `/pages/user/${creationPage(mode)}?assetId=${encodeURIComponent(item.id)}&intent=${intent}`,
-    fail: () => uni.showToast({ title: "创作页面打开失败", icon: "none" }),
+		url: `${creationPage(mode)}?assetId=${encodeURIComponent(item.id)}&intent=${intent}`,
+		fail: result => uni.showToast({ title: result.errMsg || "创作页面打开失败", icon: "none" }),
     complete: () => { activeAction.value = ""; },
   });
 }

@@ -48,6 +48,14 @@ export const miniProgramCreationPages: Record<MiniProgramCreationMode, string> =
   agent: "/pages/user/UserAgentCreationPage"
 };
 
+export const miniProgramAssetCreationPages = {
+  image: "/pages/user/UserImageCreationPage",
+  video: "/pages/user/UserVideoCreationPage",
+  ppt: "/pages/user/UserPptCreationPage",
+  agent: "/pages/user/UserAgentCreationPage",
+  infographic: "/pages/user/UserInfographicCreationPage"
+} as const;
+
 export const miniProgramPptPages = {
   index: "/packagePpt/pages/index",
   create: "/packagePpt/pages/create",
