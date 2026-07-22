@@ -1611,13 +1611,7 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 	}
 	assets = secureAssetsForClient(assets)
 	if pagedListRequested(r) {
-		summary, summaryErr := a.assetListSummaryForUser(user.ID)
-		if summaryErr != nil {
-			writeError(w, http.StatusInternalServerError, summaryErr)
-			return
-		}
-		summary.Total = total
-		writeJSON(w, map[string]any{
+		response := map[string]any{
 			"items":    assets,
 			"total":    total,
 			"limit":    limit,
@@ -1625,8 +1619,17 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 			"page":     offset/limit + 1,
 			"pageSize": limit,
 			"hasMore":  offset+len(assets) < total,
-			"summary":  summary,
-		})
+		}
+		if !strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("includeSummary")), "false") {
+			summary, summaryErr := a.assetListSummaryForUser(user.ID)
+			if summaryErr != nil {
+				writeError(w, http.StatusInternalServerError, summaryErr)
+				return
+			}
+			summary.Total = total
+			response["summary"] = summary
+		}
+		writeJSON(w, response)
 		return
 	}
 	writeJSON(w, assets)

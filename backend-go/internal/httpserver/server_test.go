@@ -451,6 +451,27 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("cross-module param was not rejected: %d %s", invalid.Code, invalid.Body.String())
 	}
 
+	legacyAssetMetadata := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{
+		"module_code":"image_generation",
+		"prompt":"edit an existing asset",
+		"model":"mock-standard",
+		"params":{
+			"n":1,
+			"index":0,
+			"sourceReferenceAssetId":"asset_legacy"
+		}
+	}`), token)
+	if legacyAssetMetadata.Code != http.StatusOK {
+		t.Fatalf("legacy asset metadata was rejected: %d %s", legacyAssetMetadata.Code, legacyAssetMetadata.Body.String())
+	}
+	var legacyAssetTask generationTask
+	if err := json.NewDecoder(legacyAssetMetadata.Body).Decode(&legacyAssetTask); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := legacyAssetTask.Params["index"]; exists {
+		t.Fatalf("legacy asset index leaked into generation params: %+v", legacyAssetTask.Params)
+	}
+
 	internalMeta := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{
 		"module_code":"image_generation",
 		"prompt":"image prompt with internal metadata",

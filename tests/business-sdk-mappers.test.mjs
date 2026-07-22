@@ -49,6 +49,7 @@ test("template parameters survive while navigation fields are removed", () => {
 test("asset recreation maps source ids to accepted provenance parameters", () => {
   const params = generationParametersFromDraft({
     intent: "regenerate",
+    index: 0,
     sourceAssetId: "asset-1",
     sourceTaskId: "task-1",
     aspectRatio: "1:1",

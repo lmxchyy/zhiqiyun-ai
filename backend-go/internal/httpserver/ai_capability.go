@@ -496,6 +496,7 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if err != nil {
 		return req, err
 	}
+	removeLegacyGenerationMetadata(&req, resolved)
 	if err := validateGenerationParams(req, resolved); err != nil {
 		return req, err
 	}
@@ -513,6 +514,18 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	req.Params["agent_id"] = effectiveAgentID(data, user)
 	req.Params["package_id"] = user.PlanID
 	return req, nil
+}
+
+func removeLegacyGenerationMetadata(req *generation.CreateRequest, resolved resolvedModuleSchema) {
+	if req == nil || req.Params == nil {
+		return
+	}
+	for _, field := range resolved.Schema.SchemaJSON.Fields {
+		if field.Key == "index" {
+			return
+		}
+	}
+	delete(req.Params, "index")
 }
 
 func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {

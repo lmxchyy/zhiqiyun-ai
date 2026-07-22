@@ -2072,6 +2072,9 @@ async function refreshAll() {
     if (userStore.currentRole !== requestedRole) {
       await userStore.switchRole(requestedRole);
     }
+    if (activeRole.value === "user" && activeTab.value === "assets") {
+      return;
+    }
     await Promise.all([loadMemberProfile(), loadWallet(), loadAssets(false)]);
     if (activeRole.value === "agent" && !hasAgentRole.value) {
       uni.showToast({ title: "当前账号尚未开通代理商", icon: "none" });

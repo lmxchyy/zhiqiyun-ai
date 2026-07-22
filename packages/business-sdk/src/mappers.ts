@@ -62,6 +62,7 @@ const draftOnlyParameterKeys = new Set([
   "templateId",
   "contentType",
   "intent",
+  "index",
   "sourceAssetId",
   "sourceTaskId",
   "restoredParams",

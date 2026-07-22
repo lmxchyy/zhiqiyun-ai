@@ -236,7 +236,9 @@ export const useAssetStore = defineStore("assets", {
       }
       this.refreshing = !options.silent;
       this.selectedIds = [];
-      activeRefreshPromise = Promise.all([this.fetchOverview(), this.fetchAssets({ reset: true, pageSize }), this.fetchRecentTasks()]).then(() => undefined);
+      const overviewPromise = this.fetchOverview();
+      const recentTasksPromise = this.fetchRecentTasks({ refreshCompletedAssets: false });
+      activeRefreshPromise = this.fetchAssets({ reset: true, pageSize });
       try {
         await activeRefreshPromise;
         this.lastRefreshAt = Date.now();
@@ -245,6 +247,7 @@ export const useAssetStore = defineStore("assets", {
         activeRefreshPromise = null;
         this.refreshing = false;
       }
+      void Promise.all([overviewPromise, recentTasksPromise]).then(() => this.persistRecentCache());
     },
     loadMoreAssets() {
       return this.fetchAssets({ reset: false });
@@ -368,7 +371,7 @@ export const useAssetStore = defineStore("assets", {
         this.currentLoading = false;
       }
     },
-    async fetchRecentTasks() {
+    async fetchRecentTasks(options: { refreshCompletedAssets?: boolean } = {}) {
       if (this.tasksLoading) return;
       this.tasksLoading = true;
       this.taskError = "";
@@ -378,7 +381,7 @@ export const useAssetStore = defineStore("assets", {
         const hasNewCompletedResult = nextTasks.some(task => task.status === "completed" && task.resultIds.some(id => !assetIds.has(id)));
         this.recentTasks = nextTasks;
         this.pollingFailures = 0;
-        if (hasNewCompletedResult && !this.loading && this.filters.status === "recent") {
+        if (options.refreshCompletedAssets !== false && hasNewCompletedResult && !this.loading && !activeRefreshPromise && this.filters.status === "recent") {
           await this.fetchAssets({ reset: true, pageSize: 4 });
           this.persistRecentCache();
         }

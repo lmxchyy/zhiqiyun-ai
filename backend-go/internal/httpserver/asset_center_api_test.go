@@ -90,6 +90,25 @@ func TestAssetCenterTaskCancellation(t *testing.T) {
 	}
 }
 
+func TestAssetCenterLightweightListCanSkipSummary(t *testing.T) {
+	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	handler := server.Handler
+	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+
+	withoutSummary := authedRequest(t, handler, http.MethodGet, "/api/v1/assets?paged=true&limit=4&lightweight=true&includeSummary=false", nil, token)
+	if withoutSummary.Code != http.StatusOK {
+		t.Fatalf("lightweight list status = %d, body = %s", withoutSummary.Code, withoutSummary.Body.String())
+	}
+	if bytes.Contains(withoutSummary.Body.Bytes(), []byte(`"summary"`)) {
+		t.Fatalf("lightweight list unexpectedly contains summary: %s", withoutSummary.Body.String())
+	}
+
+	withSummary := authedRequest(t, handler, http.MethodGet, "/api/v1/assets?paged=true&limit=4&lightweight=true", nil, token)
+	if withSummary.Code != http.StatusOK || !bytes.Contains(withSummary.Body.Bytes(), []byte(`"summary"`)) {
+		t.Fatalf("default paged list must keep summary compatibility: status = %d, body = %s", withSummary.Code, withSummary.Body.String())
+	}
+}
+
 func assertAssetCenterStatus(t *testing.T, handler http.Handler, token string, method string, path string, body *bytes.Buffer, want int) struct {
 	Item asset `json:"item"`
 } {

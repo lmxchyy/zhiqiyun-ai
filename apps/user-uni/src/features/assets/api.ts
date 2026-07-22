@@ -155,6 +155,7 @@ function assetQuery(page: number, pageSize: number, filters: AssetFilter, sort: 
   append(params, "favorite", filters.favorite);
   append(params, "sort", sort);
   append(params, "lightweight", pageSize <= 4 ? true : undefined);
+  append(params, "includeSummary", pageSize <= 4 ? false : undefined);
   return params.join("&");
 }
 
