@@ -10130,6 +10130,7 @@ const aiCapabilityViewModel = computed(() => ({
   moduleLabel: aiModuleLabel,
   limitScope: aiLimitScope,
   jsonPreview: aiJsonPreview,
+  limitSummary: aiLimitSummary,
   schemaFields: aiSchemaFields,
   schemaFieldLabel: aiSchemaFieldLabel,
   schemaFieldOptionsText: aiSchemaFieldOptionsText,
@@ -10186,8 +10187,7 @@ function aiSchemaFields(row: AdminRecord): AdminRecord[] {
 function aiSchemaFieldLabel(field: AdminRecord) {
   const key = aiText(field, "key");
   const label = aiText(field, "label") || key;
-  if (!key || key === label) return label || "-";
-  return `${label} / ${key}`;
+  return label || key || "-";
 }
 
 function aiSchemaFieldOptionsText(field: AdminRecord) {
@@ -10197,7 +10197,7 @@ function aiSchemaFieldOptionsText(field: AdminRecord) {
     return text.length > 56 ? `${text.slice(0, 53)}...` : text;
   }
   const type = aiText(field, "type");
-  return type ? `类型: ${type}` : "";
+  return type ? aiSchemaFieldTypeLabel(type) : "";
 }
 
 function aiSchemaValueText(value: unknown) {
@@ -10247,7 +10247,9 @@ function aiSchemaEditableFields(schema: Record<string, unknown>) {
     defaultText: aiSchemaValueText(field.default),
     optionsText: aiSchemaOptionsText(field.options),
     placeholderText: aiText(field, "placeholder"),
-    unitText: aiText(field, "unit")
+    unitText: aiText(field, "unit"),
+    minText: aiSchemaValueText(field.min),
+    maxText: aiSchemaValueText(field.max)
   }));
 }
 
@@ -10271,10 +10273,18 @@ function normalizeAISchemaEditableField(field: AdminRecord) {
   const unit = String(field.unitText || "").trim();
   if (unit) next.unit = unit;
   else delete next.unit;
+  const minText = String(field.minText || "").trim();
+  if (minText) next.min = Number(minText);
+  else delete next.min;
+  const maxText = String(field.maxText || "").trim();
+  if (maxText) next.max = Number(maxText);
+  else delete next.max;
   delete next.defaultText;
   delete next.optionsText;
   delete next.placeholderText;
   delete next.unitText;
+  delete next.minText;
+  delete next.maxText;
   return next;
 }
 
@@ -10284,15 +10294,60 @@ function assertAISchemaEditableFields(fields: AdminRecord[]) {
     const key = String(field.key || "").trim();
     if (!key) throw new Error(`第 ${index + 1} 行缺少 key`);
     if (seen.has(key)) throw new Error(`参数 key 重复：${key}`);
+    const minText = String(field.minText || "").trim();
+    const maxText = String(field.maxText || "").trim();
+    if (minText && !Number.isFinite(Number(minText))) throw new Error(`${field.label || key} 的最小值必须是数字`);
+    if (maxText && !Number.isFinite(Number(maxText))) throw new Error(`${field.label || key} 的最大值必须是数字`);
+    if (minText && maxText && Number(minText) > Number(maxText)) throw new Error(`${field.label || key} 的最小值不能大于最大值`);
     seen.add(key);
   });
 }
 
-const aiSchemaFieldTypes = ["text", "textarea", "select", "number", "switch", "image_upload", "file_upload", "template_select"];
+const aiSchemaFieldTypes = [
+  { value: "text", label: "单行文本" },
+  { value: "textarea", label: "多行文本" },
+  { value: "select", label: "下拉单选" },
+  { value: "radio", label: "平铺单选" },
+  { value: "number", label: "数字" },
+  { value: "switch", label: "开关" },
+  { value: "image_upload", label: "图片上传" },
+  { value: "file_upload", label: "文件上传" },
+  { value: "template_select", label: "模板选择" }
+];
+
+function aiSchemaFieldTypeLabel(type: string) {
+  return aiSchemaFieldTypes.find((item) => item.value === type)?.label || type || "未设置";
+}
 
 function aiJsonPreview(value: unknown) {
   const text = JSON.stringify(value || {});
   return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+}
+
+function aiLimitSummary(row: AdminRecord) {
+  const labels: Record<string, string> = {
+    models: "模型",
+    quality: "质量",
+    size: "尺寸",
+    n: "生成数量",
+    duration: "视频时长",
+    resolution: "分辨率",
+    aspect_ratio: "画面比例",
+    page_count: "PPT 页数",
+    uploaded_file: "文件上传",
+    with_images: "生成配图"
+  };
+  const limit = aiObject(row, "limit_json", "limitJson");
+  return Object.entries(limit).map(([key, rawRule]) => {
+    const rule = rawRule && typeof rawRule === "object" && !Array.isArray(rawRule) ? rawRule as AdminRecord : {};
+    const parts: string[] = [];
+    if (Array.isArray(rule.allowed)) parts.push(`允许 ${rule.allowed.map(String).join("、")}`);
+    if (rule.min !== undefined) parts.push(`最小 ${rule.min}`);
+    if (rule.max !== undefined) parts.push(`最大 ${rule.max}`);
+    if (rule.enabled === false) parts.push("禁用");
+    if (rule.enabled === true) parts.push("启用");
+    return { key, label: labels[key] || key, value: parts.join("；") || "沿用参数规则" };
+  });
 }
 
 function isActiveStatus(value: unknown) {
@@ -10599,7 +10654,9 @@ async function toggleAIParameterSchema(row: AdminRecord) {
 async function editAIParameterSchema(row: AdminRecord) {
   const schema = { ...aiObject(row, "schema_json", "schemaJson") };
   const fields = ref<AdminRecord[]>(aiSchemaEditableFields(schema));
-  const title = `编辑参数 Schema：${row.id}`;
+  const moduleName = aiModuleLabel(aiText(row, "module_code", "moduleCode"));
+  const modelName = aiText(row, "model_name", "modelName") || "模块默认模型";
+  const title = `配置生成参数 · ${moduleName} · ${modelName}`;
   const SchemaEditor = {
     name: "AISchemaEditorDialog",
     setup() {
@@ -10614,7 +10671,9 @@ async function editAIParameterSchema(row: AdminRecord) {
           defaultText: "",
           optionsText: "",
           placeholderText: "",
-          unitText: ""
+          unitText: "",
+          minText: "",
+          maxText: ""
         });
       };
       const removeField = (index: number) => {
@@ -10649,34 +10708,71 @@ async function editAIParameterSchema(row: AdminRecord) {
         h("span", label)
       ]);
       return () => h("div", { class: "ai-schema-editor" }, [
-        h("p", { class: "ai-schema-editor-hint" }, "可直接编辑字段、默认值和选项。选项支持逗号或换行分隔，例如：1024x1024,1024x1536,1536x1024。"),
+        h("div", { class: "ai-schema-editor-guide" }, [
+          h("strong", "这里决定用户创作时能看到和修改哪些参数"),
+          h("p", "一般只需要调整中文名称、默认值和可选项。参数编码用于接口传参，已有字段通常不要修改。"),
+          h("div", { class: "ai-schema-editor-steps" }, [
+            h("span", [h("b", "1"), "设置参数名称和类型"]),
+            h("span", [h("b", "2"), "填写默认值和允许范围"]),
+            h("span", [h("b", "3"), "决定用户是否可见、可修改"])
+          ])
+        ]),
         h("div", { class: "ai-schema-editor-rows" }, fields.value.map((field, index) => h("section", { class: "ai-schema-editor-row", key: `${field.key || "field"}-${index}` }, [
           h("div", { class: "ai-schema-editor-row-head" }, [
-            h("strong", field.key ? `${field.label || field.key}` : `新参数 ${index + 1}`),
+            h("div", [
+              h("span", `参数 ${index + 1}`),
+              h("strong", field.label || field.key || "未命名参数"),
+              field.key ? h("code", String(field.key)) : null
+            ]),
             h("button", { type: "button", onClick: () => removeField(index) }, "删除")
           ]),
+          h("div", { class: "ai-schema-editor-group-title" }, "基本设置"),
           h("div", { class: "ai-schema-editor-grid" }, [
-            input(index, "key", "Key", "duration"),
-            input(index, "label", "名称", "视频时长"),
+            input(index, "label", "显示名称", "例如：图片质量"),
             h("label", { class: "ai-schema-editor-cell" }, [
-              h("span", "类型"),
+              h("span", "输入方式"),
               h("select", {
                 value: String(field.type || "text"),
                 onChange: (event: Event) => updateField(index, "type", (event.target as HTMLSelectElement).value)
-              }, aiSchemaFieldTypes.map((type) => h("option", { value: type }, type)))
+              }, aiSchemaFieldTypes.map((type) => h("option", { value: type.value }, type.label)))
             ]),
-            input(index, "defaultText", "默认值", "5"),
-            textarea(index, "optionsText", "选项", "1024x1024,1024x1536,1536x1024"),
-            input(index, "unitText", "单位", "秒"),
-            input(index, "placeholderText", "占位提示", "描述视频画面、运动和风格"),
-            h("div", { class: "ai-schema-editor-switches" }, [
-              checkbox(index, "required", "必填"),
-              checkbox(index, "visible", "显示"),
-              checkbox(index, "user_editable", "用户可编辑")
+            input(index, "defaultText", "默认值", "例如：standard"),
+            input(index, "unitText", "单位（可选）", "例如：秒、张"),
+            h("div", { class: "ai-schema-editor-cell ai-schema-editor-cell-technical" }, [
+              h("span", "参数编码（通常不要修改）"),
+              h("input", {
+                value: String(field.key || ""),
+                placeholder: "例如：quality",
+                onInput: (event: Event) => updateField(index, "key", (event.target as HTMLInputElement).value)
+              })
+            ])
+          ]),
+          h("div", { class: "ai-schema-editor-group-title" }, "取值规则"),
+          h("div", { class: "ai-schema-editor-grid ai-schema-editor-rules" }, [
+            ["select", "radio"].includes(String(field.type || ""))
+              ? textarea(index, "optionsText", "允许用户选择的值", "每行一个，例如：\nstandard\nhigh")
+              : null,
+            String(field.type || "") === "number" ? input(index, "minText", "最小值", "例如：1") : null,
+            String(field.type || "") === "number" ? input(index, "maxText", "最大值", "例如：8") : null,
+            input(index, "placeholderText", "输入提示（可选）", "例如：描述想生成的画面")
+          ]),
+          h("div", { class: "ai-schema-editor-group-title" }, "用户端权限"),
+          h("div", { class: "ai-schema-editor-switches" }, [
+            h("div", [
+              checkbox(index, "required", "必须填写"),
+              h("small", "未填写时不允许提交")
+            ]),
+            h("div", [
+              checkbox(index, "visible", "在创作页显示"),
+              h("small", "关闭后用户看不到该参数")
+            ]),
+            h("div", [
+              checkbox(index, "user_editable", "允许用户修改"),
+              h("small", "关闭后只能使用后台默认值")
             ])
           ])
         ]))),
-        h("button", { type: "button", class: "ai-schema-editor-add", onClick: addField }, "+ 新增参数")
+        h("button", { type: "button", class: "ai-schema-editor-add", onClick: addField }, "+ 添加一个生成参数")
       ]);
     }
   };
@@ -10718,9 +10814,142 @@ async function toggleAILimit(row: AdminRecord) {
 }
 
 async function editAILimitJSON(row: AdminRecord) {
-  const limit = await askAIJson("编辑租户参数限制", aiObject(row, "limit_json", "limitJson"));
-  await store.mutate("PATCH", `/admin/ai/tenant-module-limits/${row.id}`, { limit_json: limit, status: row.status || "ACTIVE" });
-  ElMessage.success("租户限制已更新");
+  const original = aiObject(row, "limit_json", "limitJson");
+  const rules = ref<AdminRecord[]>(Object.entries(original).map(([key, rawRule]) => {
+    const rule = rawRule && typeof rawRule === "object" && !Array.isArray(rawRule) ? rawRule as AdminRecord : {};
+    return {
+      key,
+      allowedText: aiSchemaOptionsText(rule.allowed),
+      minText: aiSchemaValueText(rule.min),
+      maxText: aiSchemaValueText(rule.max),
+      enabledMode: rule.enabled === false ? "disabled" : rule.enabled === true ? "enabled" : "inherit",
+      originalRule: { ...rule }
+    };
+  }));
+  const limitLabels: Record<string, string> = {
+    models: "允许使用的模型",
+    quality: "图片质量",
+    size: "图片尺寸",
+    n: "单次生成数量",
+    duration: "视频时长",
+    resolution: "视频分辨率",
+    aspect_ratio: "画面比例",
+    page_count: "PPT 页数",
+    uploaded_file: "允许上传文件",
+    with_images: "允许生成配图"
+  };
+  const LimitEditor = {
+    name: "AILimitEditorDialog",
+    setup() {
+      const updateRule = (index: number, key: string, value: unknown) => {
+        rules.value[index] = { ...rules.value[index], [key]: value };
+      };
+      const input = (index: number, key: string, label: string, placeholder = "") => h("label", { class: "ai-schema-editor-cell" }, [
+        h("span", label),
+        h("input", {
+          value: String(rules.value[index][key] || ""),
+          placeholder,
+          onInput: (event: Event) => updateRule(index, key, (event.target as HTMLInputElement).value)
+        })
+      ]);
+      const addRule = () => rules.value.push({
+        key: "",
+        allowedText: "",
+        minText: "",
+        maxText: "",
+        enabledMode: "inherit",
+        originalRule: {}
+      });
+      return () => h("div", { class: "ai-schema-editor ai-limit-editor" }, [
+        h("div", { class: "ai-schema-editor-guide" }, [
+          h("strong", "这里只配置额外限制，不需要重复填写模型的全部参数"),
+          h("p", "例如免费套餐的图片质量只允许 standard，就在“允许值”中填写 standard。留空表示沿用参数规则，不额外限制。")
+        ]),
+        h("div", { class: "ai-schema-editor-rows" }, rules.value.map((rule, index) => h("section", { class: "ai-schema-editor-row", key: `${rule.key || "rule"}-${index}` }, [
+          h("div", { class: "ai-schema-editor-row-head" }, [
+            h("div", [
+              h("span", `限制 ${index + 1}`),
+              h("strong", limitLabels[String(rule.key || "")] || rule.key || "新限制项"),
+              rule.key ? h("code", String(rule.key)) : null
+            ]),
+            h("button", { type: "button", onClick: () => rules.value.splice(index, 1) }, "删除")
+          ]),
+          h("div", { class: "ai-schema-editor-grid" }, [
+            input(index, "key", "参数编码", "例如：quality"),
+            h("label", { class: "ai-schema-editor-cell" }, [
+              h("span", "启用状态"),
+              h("select", {
+                value: String(rule.enabledMode || "inherit"),
+                onChange: (event: Event) => updateRule(index, "enabledMode", (event.target as HTMLSelectElement).value)
+              }, [
+                h("option", { value: "inherit" }, "沿用参数规则"),
+                h("option", { value: "enabled" }, "明确启用"),
+                h("option", { value: "disabled" }, "禁止使用")
+              ])
+            ]),
+            input(index, "allowedText", "允许值（逗号或换行分隔）", "例如：standard,high"),
+            input(index, "minText", "最小值（可选）", "例如：1"),
+            input(index, "maxText", "最大值（可选）", "例如：4")
+          ])
+        ]))),
+        h("button", { type: "button", class: "ai-schema-editor-add", onClick: addRule }, "+ 添加限制项"),
+        h("details", { class: "ai-limit-json-preview" }, [
+          h("summary", "查看当前高级 JSON"),
+          h("pre", JSON.stringify(original, null, 2))
+        ])
+      ]);
+    }
+  };
+
+  await ElMessageBox({
+    title: `配置套餐限制 · ${aiModuleLabel(aiText(row, "module_code", "moduleCode"))} · ${aiLimitScope(row)}`,
+    message: h(LimitEditor),
+    showCancelButton: true,
+    confirmButtonText: "保存限制",
+    cancelButtonText: "取消",
+    customClass: "ai-schema-editor-dialog",
+    beforeClose: async (action, instance, done) => {
+      if (action !== "confirm") {
+        done();
+        return;
+      }
+      instance.confirmButtonLoading = true;
+      try {
+        const nextLimit: AdminRecord = {};
+        const seen = new Set<string>();
+        for (const [index, rule] of rules.value.entries()) {
+          const key = String(rule.key || "").trim();
+          if (!key) throw new Error(`第 ${index + 1} 项缺少参数编码`);
+          if (seen.has(key)) throw new Error(`限制参数重复：${key}`);
+          seen.add(key);
+          const minText = String(rule.minText || "").trim();
+          const maxText = String(rule.maxText || "").trim();
+          if (minText && !Number.isFinite(Number(minText))) throw new Error(`${limitLabels[key] || key} 的最小值必须是数字`);
+          if (maxText && !Number.isFinite(Number(maxText))) throw new Error(`${limitLabels[key] || key} 的最大值必须是数字`);
+          if (minText && maxText && Number(minText) > Number(maxText)) throw new Error(`${limitLabels[key] || key} 的最小值不能大于最大值`);
+          const nextRule: AdminRecord = { ...(rule.originalRule as AdminRecord || {}) };
+          const allowed = parseAISchemaOptions(String(rule.allowedText || ""));
+          if (allowed.length) nextRule.allowed = allowed;
+          else delete nextRule.allowed;
+          if (minText) nextRule.min = Number(minText);
+          else delete nextRule.min;
+          if (maxText) nextRule.max = Number(maxText);
+          else delete nextRule.max;
+          if (rule.enabledMode === "enabled") nextRule.enabled = true;
+          else if (rule.enabledMode === "disabled") nextRule.enabled = false;
+          else delete nextRule.enabled;
+          nextLimit[key] = nextRule;
+        }
+        await store.mutate("PATCH", `/admin/ai/tenant-module-limits/${row.id}`, { limit_json: nextLimit, status: row.status || "ACTIVE" });
+        ElMessage.success("套餐与租户限制已更新");
+        done();
+      } catch (error) {
+        ElMessage.error(error instanceof Error ? error.message : "保存套餐限制失败");
+      } finally {
+        instance.confirmButtonLoading = false;
+      }
+    }
+  });
 }
 
 const rows = computed(() => {

@@ -13076,11 +13076,11 @@ body {
   display: inline-flex;
   flex-direction: column;
   gap: 2px;
-  max-width: 190px;
-  padding: 5px 8px;
+  max-width: 240px;
+  padding: 7px 9px;
   border: 1px solid #e4e7ec;
-  border-radius: 8px;
-  background: #f9fafb;
+  border-radius: 6px;
+  background: #ffffff;
   color: #101828;
   line-height: 1.35;
 }
@@ -13101,12 +13101,48 @@ body {
   white-space: nowrap;
 }
 
+.ai-schema-field-chip code {
+  color: #98a2b3;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ai-schema-explainer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-bottom: 16px;
+  overflow: hidden;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #dbe4f0;
+}
+
+.ai-schema-explainer > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: #f8fafc;
+}
+
+.ai-schema-explainer b {
+  color: #344054;
+  font-size: 13px;
+}
+
+.ai-schema-explainer span {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .ai-schema-editor-dialog {
-  width: min(1080px, calc(100vw - 36px));
+  width: min(980px, calc(100vw - 36px));
 }
 
 .ai-schema-editor-dialog .el-message-box__message {
-  max-height: 68vh;
+  max-height: 72vh;
   overflow: auto;
 }
 
@@ -13124,6 +13160,54 @@ body {
   line-height: 1.6;
 }
 
+.ai-schema-editor-guide {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  background: #f5f8ff;
+}
+
+.ai-schema-editor-guide > strong {
+  color: #1d2939;
+  font-size: 15px;
+}
+
+.ai-schema-editor-guide > p {
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-schema-editor-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ai-schema-editor-steps span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #344054;
+  font-size: 12px;
+}
+
+.ai-schema-editor-steps b {
+  display: grid;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: #4f6ef7;
+  color: #ffffff;
+  font-size: 11px;
+}
+
 .ai-schema-editor-rows {
   display: flex;
   flex-direction: column;
@@ -13131,10 +13215,10 @@ body {
 }
 
 .ai-schema-editor-row {
-  padding: 12px;
-  border: 1px solid #e4e7ec;
-  border-radius: 10px;
-  background: #f9fafb;
+  padding: 16px;
+  border: 1px solid #dfe5ee;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .ai-schema-editor-row-head {
@@ -13145,6 +13229,19 @@ body {
   margin-bottom: 10px;
 }
 
+.ai-schema-editor-row-head > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-schema-editor-row-head span {
+  color: #98a2b3;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .ai-schema-editor-row-head strong {
   min-width: 0;
   overflow: hidden;
@@ -13152,6 +13249,14 @@ body {
   white-space: nowrap;
   color: #101828;
   font-size: 14px;
+}
+
+.ai-schema-editor-row-head code {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f2f4f7;
+  color: #667085;
+  font-size: 11px;
 }
 
 .ai-schema-editor-row-head button,
@@ -13171,12 +13276,37 @@ body {
 
 .ai-schema-editor-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .ai-schema-editor-cell-wide {
+  grid-column: 1 / -1;
+}
+
+.ai-schema-editor-group-title {
+  margin: 14px 0 8px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.ai-schema-editor-row-head + .ai-schema-editor-group-title {
+  margin-top: 0;
+}
+
+.ai-schema-editor-cell-technical {
   grid-column: span 2;
+}
+
+.ai-schema-editor-cell-technical input {
+  background: #f8fafc;
+  color: #475467;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.ai-schema-editor-rules {
+  align-items: start;
 }
 
 .ai-schema-editor-cell {
@@ -13223,10 +13353,24 @@ body {
 }
 
 .ai-schema-editor-switches {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: center;
-  gap: 8px 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ai-schema-editor-switches > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.ai-schema-editor-switches small {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .ai-schema-editor-check {
@@ -13249,6 +13393,33 @@ body {
   padding: 8px 12px;
 }
 
+@media (max-width: 900px) {
+  .ai-schema-explainer,
+  .ai-schema-editor-steps,
+  .ai-schema-editor-switches {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-schema-editor-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .ai-schema-editor-dialog {
+    width: calc(100vw - 20px);
+  }
+
+  .ai-schema-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-schema-editor-cell-technical,
+  .ai-schema-editor-cell-wide {
+    grid-column: auto;
+  }
+}
+
 .ai-capability-more {
   color: #667085;
   font-size: 12px;
@@ -13267,6 +13438,67 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ai-limit-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-limit-summary > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #dfe5ee;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.ai-limit-summary strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.ai-limit-summary small {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-limit-summary em {
+  color: #98a2b3;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.ai-limit-json-preview {
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-limit-json-preview summary {
+  padding: 10px 12px;
+  color: #667085;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-limit-json-preview pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+  color: #475467;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .billing-page {

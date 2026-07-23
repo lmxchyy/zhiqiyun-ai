@@ -56,24 +56,33 @@
     </section>
 
     <section v-if="model.activeModuleId === 'aiCapabilitySchemas'" class="ai-capability-section">
-      <el-table v-if="model.schemas.length" :data="model.schemas" height="430" stripe>
-        <el-table-column label="Schema" min-width="220"><template #default="scope"><div class="ai-capability-main-cell"><strong>{{ scope.row.id }}</strong><small>{{ model.text(scope.row, 'model_name', 'modelName') || '默认模型' }}</small></div></template></el-table-column>
-        <el-table-column label="模块" min-width="150"><template #default="scope">{{ model.moduleLabel(model.text(scope.row, 'module_code', 'moduleCode')) }}</template></el-table-column>
-        <el-table-column label="字段与选项" min-width="520"><template #default="scope"><div class="ai-schema-field-list"><span v-for="field in model.schemaFields(scope.row).slice(0, 8)" :key="String(field.key || field.label)" class="ai-schema-field-chip"><strong>{{ model.schemaFieldLabel(field) }}</strong><small v-if="model.schemaFieldOptionsText(field)">{{ model.schemaFieldOptionsText(field) }}</small></span><span v-if="model.schemaFields(scope.row).length > 8" class="ai-capability-more">+{{ model.schemaFields(scope.row).length - 8 }}</span></div></template></el-table-column>
+      <div class="ai-capability-section-head">
+        <div><h3>生成参数规则</h3><p>配置创作页展示的尺寸、质量、数量、时长等参数。模型决定“支持什么”，套餐限制决定“当前用户能用什么”。</p></div>
+      </div>
+      <div class="ai-schema-explainer">
+        <div><b>参数规则</b><span>定义字段名称、输入方式、默认值和模型支持范围</span></div>
+        <div><b>套餐限制</b><span>在“套餐与租户限制”中缩小可选范围，例如免费版仅允许 standard</span></div>
+        <div><b>最终效果</b><span>用户端只显示两者交集，提交时后端再次校验</span></div>
+      </div>
+      <el-table v-if="model.schemas.length" :data="model.schemas" max-height="520" stripe>
+        <el-table-column label="适用模型" min-width="220"><template #default="scope"><div class="ai-capability-main-cell"><strong>{{ model.text(scope.row, 'model_name', 'modelName') || '模块默认模型' }}</strong><small>{{ scope.row.id }}</small></div></template></el-table-column>
+        <el-table-column label="能力模块" min-width="150"><template #default="scope"><el-tag effect="plain">{{ model.moduleLabel(model.text(scope.row, 'module_code', 'moduleCode')) }}</el-tag></template></el-table-column>
+        <el-table-column label="用户端参数" min-width="520"><template #default="scope"><div class="ai-schema-field-list"><span v-for="field in model.schemaFields(scope.row).slice(0, 8)" :key="String(field.key || field.label)" class="ai-schema-field-chip"><strong>{{ model.schemaFieldLabel(field) }}</strong><small v-if="model.schemaFieldOptionsText(field)">{{ model.schemaFieldOptionsText(field) }}</small><code>{{ field.key }}</code></span><span v-if="model.schemaFields(scope.row).length > 8" class="ai-capability-more">另有 {{ model.schemaFields(scope.row).length - 8 }} 项</span></div></template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="model.statusType(scope.row.status)">{{ model.statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" fixed="right" width="170"><template #default="scope"><el-button link type="primary" @click="model.editSchema(scope.row)">编辑</el-button><el-button link :type="model.isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="model.toggleSchema(scope.row)">{{ model.isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button></template></el-table-column>
+        <el-table-column label="操作" fixed="right" width="190"><template #default="scope"><el-button type="primary" plain size="small" @click="model.editSchema(scope.row)">配置参数</el-button><el-button link :type="model.isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="model.toggleSchema(scope.row)">{{ model.isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button></template></el-table-column>
       </el-table>
       <el-empty v-else description="暂无参数 Schema" />
     </section>
 
     <section v-if="model.activeModuleId === 'aiCapabilityLimits'" class="ai-capability-section">
+      <div class="ai-capability-section-head"><div><h3>套餐与租户限制</h3><p>这里是在模型参数规则基础上进一步收紧范围。没有特殊业务要求时，不需要重复配置全部参数。</p></div></div>
       <el-table v-if="model.limits.length" :data="model.limits" height="430" stripe>
         <el-table-column label="适用范围" min-width="190"><template #default="scope"><div class="ai-capability-main-cell"><strong>{{ model.limitScope(scope.row) }}</strong><small>{{ scope.row.id }}</small></div></template></el-table-column>
         <el-table-column label="模块" min-width="150"><template #default="scope">{{ model.moduleLabel(model.text(scope.row, 'module_code', 'moduleCode')) }}</template></el-table-column>
         <el-table-column label="模型" min-width="150"><template #default="scope">{{ model.text(scope.row, 'model_name', 'modelName') || '模块默认' }}</template></el-table-column>
-        <el-table-column label="限制项" min-width="300"><template #default="scope"><code class="ai-capability-json-preview">{{ model.jsonPreview(model.object(scope.row, 'limit_json', 'limitJson')) }}</code></template></el-table-column>
+        <el-table-column label="当前限制" min-width="380"><template #default="scope"><div class="ai-limit-summary"><span v-for="item in model.limitSummary(scope.row)" :key="item.key"><strong>{{ item.label }}</strong><small>{{ item.value }}</small></span><em v-if="!model.limitSummary(scope.row).length">未设置额外限制</em></div></template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="model.statusType(scope.row.status)">{{ model.statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" fixed="right" width="170"><template #default="scope"><el-button link type="primary" @click="model.editLimit(scope.row)">JSON</el-button><el-button link :type="model.isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="model.toggleLimit(scope.row)">{{ model.isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button></template></el-table-column>
+        <el-table-column label="操作" fixed="right" width="190"><template #default="scope"><el-button type="primary" plain size="small" @click="model.editLimit(scope.row)">配置限制</el-button><el-button link :type="model.isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="model.toggleLimit(scope.row)">{{ model.isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button></template></el-table-column>
       </el-table>
       <el-empty v-else description="暂无租户限制" />
     </section>
@@ -118,6 +127,7 @@ defineProps<{ model: {
   refresh: () => unknown; navigate: (moduleId: string) => unknown;
   text: (record: RecordValue, ...keys: string[]) => string; list: (record: RecordValue, ...keys: string[]) => string[]; object: (record: RecordValue, ...keys: string[]) => RecordValue;
   audienceLabel: (record: RecordValue) => string; moduleLabel: (value: string) => string; limitScope: (record: RecordValue) => string; jsonPreview: (value: RecordValue) => string;
+  limitSummary: (record: RecordValue) => Array<{ key: string; label: string; value: string }>;
   schemaFields: (record: RecordValue) => RecordValue[]; schemaFieldLabel: (field: RecordValue) => string; schemaFieldOptionsText: (field: RecordValue) => string;
   statusType: (value: unknown) => any; statusLabel: (value: unknown) => string; isActiveStatus: (value: unknown) => boolean; moneyYuan: (value: unknown) => string;
   toggleModule: Action; editModulePackages: Action; editModuleModels: Action; createModel: () => unknown; editModel: Action; editModelCapabilities: Action; toggleModel: Action;
