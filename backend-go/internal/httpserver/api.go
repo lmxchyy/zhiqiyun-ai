@@ -150,7 +150,7 @@ type optimizedUserAccountStore interface {
 const (
 	defaultUserContentListLimit = 120
 	maxUserContentListLimit     = 300
-	imageGenerationTimeout      = 3 * time.Minute
+	imageGenerationTimeout      = 5 * time.Minute
 	videoGenerationTimeout      = 20 * time.Minute
 	otherGenerationStaleTimeout = 15 * time.Minute
 )
