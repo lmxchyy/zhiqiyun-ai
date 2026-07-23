@@ -17,11 +17,11 @@ export function listVirtualPaymentCoupons(productCode: string) {
   return api<VirtualPaymentCouponsResponse>(`/api/v1/payment/coupons?productCode=${encodeURIComponent(productCode)}`)
 }
 
-export function createVirtualPaymentOrder(productCode: string, quantity = 1, couponCode = '') {
+export function createVirtualPaymentOrder(productCode: string, quantity = 1, couponCode = '', wxLoginCode = '') {
   return api<VirtualPaymentOrderParams>('/api/v1/payment/wechat-virtual/orders', {
     method: 'POST',
     headers: { 'X-Tenant-Id': '' },
-    body: JSON.stringify({ productCode, quantity, couponCode }),
+    body: JSON.stringify({ productCode, quantity, couponCode, wxLoginCode }),
   })
 }
 

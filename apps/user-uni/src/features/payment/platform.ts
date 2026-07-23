@@ -55,12 +55,17 @@ export function requestWeChatVirtualPayment(order: VirtualPaymentOrderParams) {
   })
 }
 
-export async function refreshWeChatVirtualPaymentSession(linkSession: (wxLoginCode: string) => Promise<unknown>) {
+export async function getWeChatVirtualPaymentLoginCode() {
   const adapter = createUniPlatformAdapter()
   if (!adapter.login) throw new Error('当前客户端无法刷新微信登录态，请重新进入小程序后再试')
   const result = await adapter.login('weixin')
   const wxLoginCode = String(result.code || '').trim()
   if (!wxLoginCode) throw new Error('未获取到微信登录凭证，请重新进入小程序后再试')
+  return wxLoginCode
+}
+
+export async function refreshWeChatVirtualPaymentSession(linkSession: (wxLoginCode: string) => Promise<unknown>) {
+  const wxLoginCode = await getWeChatVirtualPaymentLoginCode()
   await linkSession(wxLoginCode)
 }
 

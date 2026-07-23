@@ -319,12 +319,48 @@ func (a virtualPaymentAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 		ProductCode string `json:"productCode"`
 		Quantity    int64  `json:"quantity"`
 		CouponCode  string `json:"couponCode"`
+		WxLoginCode string `json:"wxLoginCode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	result, err := a.service.createOrderWithCoupon(r.Context(), user, strings.TrimSpace(r.Header.Get("X-Tenant-Id")), request.ProductCode, request.Quantity, request.CouponCode)
+	var paymentSession *wechatMiniProgramSession
+	if code := strings.TrimSpace(request.WxLoginCode); code != "" {
+		session, exchangeErr := exchangeWeChatMiniProgramCode(r.Context(), code)
+		if exchangeErr != nil {
+			writeJSONWithStatus(w, http.StatusUnauthorized, map[string]any{"code": "WECHAT_SESSION_REFRESH_FAILED", "error": "微信登录态刷新失败，请重试"})
+			return
+		}
+		data, dataErr := a.store.AdminData()
+		if dataErr != nil {
+			writeError(w, http.StatusInternalServerError, dataErr)
+			return
+		}
+		if existing, found := findUserByWechatIdentity(data.Users, session); found && existing.ID != user.ID {
+			writeAuthFlowError(w, http.StatusConflict, "AUTH_WECHAT_ALREADY_BOUND", "该微信身份已绑定其他账号")
+			return
+		}
+		updated, updateErr := a.store.UpdateAdminCustomer(user.ID, adminCustomerMutation{
+			WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID,
+		})
+		if updateErr != nil {
+			writeError(w, http.StatusInternalServerError, updateErr)
+			return
+		}
+		if sessionStore, ok := a.sessions.(wechatMiniProgramSessionStore); ok {
+			if storeErr := sessionStore.PutWeChatSession(r.Context(), updated.ID, session, authSessionTTL); storeErr != nil {
+				writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+				return
+			}
+		}
+		user = updated
+		paymentSession = &session
+	}
+	result, err := a.service.createOrderWithCouponAndSession(
+		r.Context(), user, strings.TrimSpace(r.Header.Get("X-Tenant-Id")),
+		request.ProductCode, request.Quantity, request.CouponCode, paymentSession,
+	)
 	if err != nil {
 		writeVirtualPaymentError(w, err)
 		return
@@ -689,6 +725,10 @@ func (s *virtualPaymentService) createOrder(ctx context.Context, user adminUser,
 }
 
 func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user adminUser, requestedTenant string, productCode string, requestedQuantity int64, couponCode string) (createVirtualOrderResponse, error) {
+	return s.createOrderWithCouponAndSession(ctx, user, requestedTenant, productCode, requestedQuantity, couponCode, nil)
+}
+
+func (s *virtualPaymentService) createOrderWithCouponAndSession(ctx context.Context, user adminUser, requestedTenant string, productCode string, requestedQuantity int64, couponCode string, paymentSession *wechatMiniProgramSession) (createVirtualOrderResponse, error) {
 	if !s.cfg.ready() {
 		return createVirtualOrderResponse{}, errVirtualPaymentUnavailable
 	}
@@ -723,11 +763,20 @@ func (s *virtualPaymentService) createOrderWithCoupon(ctx context.Context, user 
 	if err != nil {
 		return createVirtualOrderResponse{}, err
 	}
-	wechatSession, ok, err := s.sessions.WeChatSession(ctx, user.ID)
-	if err != nil {
-		return createVirtualOrderResponse{}, err
+	wechatSession := wechatMiniProgramSession{}
+	if paymentSession != nil {
+		wechatSession = *paymentSession
+	} else {
+		var ok bool
+		wechatSession, ok, err = s.sessions.WeChatSession(ctx, user.ID)
+		if err != nil {
+			return createVirtualOrderResponse{}, err
+		}
+		if !ok {
+			return createVirtualOrderResponse{}, errVirtualPaymentRelogin
+		}
 	}
-	if !ok || strings.TrimSpace(wechatSession.OpenID) == "" || strings.TrimSpace(wechatSession.SessionKey) == "" {
+	if strings.TrimSpace(wechatSession.OpenID) == "" || strings.TrimSpace(wechatSession.SessionKey) == "" {
 		return createVirtualOrderResponse{}, errVirtualPaymentRelogin
 	}
 

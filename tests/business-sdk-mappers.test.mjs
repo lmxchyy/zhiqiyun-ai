@@ -69,6 +69,13 @@ test("provider output metadata is not replayed as generation parameters", () => 
       seed: 7,
       providerRevisedPrompt: "provider rewritten prompt",
       provider_revised_prompt: "provider rewritten prompt",
+      referenceCount: 1,
+      contentType: "image/png",
+      providerTaskId: "provider-task",
+      thumbnailUrl: "https://example.test/thumb.png",
+      storageObjectKey: "tenant/asset.png",
+      ai_generated: true,
+      output_audit_status: "approved",
     },
   });
 

@@ -460,6 +460,13 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 			"index":0,
 			"providerRevisedPrompt":"legacy provider output",
 			"provider_revised_prompt":"legacy provider output",
+			"referenceCount":1,
+			"contentType":"image/png",
+			"providerTaskId":"provider-task",
+			"thumbnailUrl":"https://example.test/thumb.png",
+			"storageObjectKey":"tenant/asset.png",
+			"ai_generated":true,
+			"output_audit_status":"approved",
 			"sourceReferenceAssetId":"asset_legacy"
 		}
 	}`), token)
@@ -473,7 +480,10 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if _, exists := legacyAssetTask.Params["index"]; exists {
 		t.Fatalf("legacy asset index leaked into generation params: %+v", legacyAssetTask.Params)
 	}
-	for _, key := range []string{"providerRevisedPrompt", "provider_revised_prompt"} {
+	for _, key := range []string{
+		"providerRevisedPrompt", "provider_revised_prompt", "referenceCount", "contentType",
+		"providerTaskId", "thumbnailUrl", "storageObjectKey", "ai_generated", "output_audit_status",
+	} {
 		if _, exists := legacyAssetTask.Params[key]; exists {
 			t.Fatalf("legacy provider metadata %s leaked into generation params: %+v", key, legacyAssetTask.Params)
 		}
@@ -1782,7 +1792,10 @@ func TestSelectedProviderMustSupportRequestedModel(t *testing.T) {
 	token := loginToken(t, server.Handler, "demo@xianzhi.ai", "Demo123!")
 	body := `{"type":"TEXT_TO_IMAGE","prompt":"should not route","model":"gpt-image-2","params":{"provider":"channel_video_only","count":1}}`
 	res := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(body), token)
-	if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "does not support model gpt-image-2") {
+	rejection := res.Body.String()
+	if res.Code != http.StatusBadRequest ||
+		(!strings.Contains(rejection, "does not support model gpt-image-2") &&
+			!strings.Contains(rejection, "支持模型 gpt-image-2")) {
 		t.Fatalf("unsupported provider/model was not rejected: %d %s", res.Code, res.Body.String())
 	}
 	tasks := authedRequest(t, server.Handler, http.MethodGet, "/api/v1/generation-tasks", nil, token)

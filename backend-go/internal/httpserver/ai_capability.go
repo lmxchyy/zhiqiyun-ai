@@ -524,7 +524,17 @@ func removeLegacyGenerationMetadata(req *generation.CreateRequest, resolved reso
 	for _, field := range resolved.Schema.SchemaJSON.Fields {
 		allowedFields[field.Key] = true
 	}
-	for _, key := range []string{"index", "providerRevisedPrompt", "provider_revised_prompt"} {
+	for _, key := range []string{
+		"index", "providerRevisedPrompt", "provider_revised_prompt", "referenceCount",
+		"type", "module_code", "billing_type", "sourceType", "contentType", "source", "provider",
+		"providerTaskId", "provider_task_id", "thumbnailUrl", "thumbnail_url", "width", "height", "resolution",
+		"fileId", "storageFileId", "storageTenantId", "storageProvider", "storageBucket", "storageObjectKey",
+		"fileSize", "fileSizeBytes", "sourceUrl", "storageManaged", "inputImageIds", "inputImagesSnapshot",
+		"terminal", "provider_name", "provider_company", "algorithm_name", "algorithm_filing_no", "algorithm_type",
+		"model_version", "input_audit_status", "input_audit_service", "input_audit_request_id",
+		"output_audit_status", "output_audit_service", "output_audit_request_id", "output_audit_reason",
+		"ai_generated", "ai_label_status", "ai_label_text", "content_id", "generated_at", "download_derivative_required",
+	} {
 		if !allowedFields[key] {
 			delete(req.Params, key)
 		}

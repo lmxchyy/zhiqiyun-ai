@@ -53,10 +53,9 @@
 import { computed, ref, watch } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { businessSdk, getClientPlatform } from '../../api/client'
-import { loginAPI } from '../../features/auth/api'
 import { backOrHome, formatCurrency } from '../../utils/miniProgramBusiness'
 import { createVirtualPaymentOrder, getPaymentCapability, getVirtualPaymentOrderStatus, listVirtualPaymentCoupons, listVirtualPaymentProducts, syncVirtualPaymentOrder } from '../../features/payment/api'
-import { refreshWeChatVirtualPaymentSession, requestWeChatVirtualPayment, virtualPaymentError } from '../../features/payment/platform'
+import { getWeChatVirtualPaymentLoginCode, requestWeChatVirtualPayment, virtualPaymentError } from '../../features/payment/platform'
 import { requireAuth } from '../../features/auth/gate'
 import type { PaymentCapability, VirtualPaymentCoupon, VirtualPaymentOrderStatus, VirtualPaymentProduct } from '../../features/payment/types'
 import loginLogo from '../../assets/zhiqiyun-logo-transparent.png'
@@ -134,9 +133,9 @@ async function pay() {
   resultMessage.value = ''
   try {
     actionLabel.value = '正在刷新微信登录态...'
-    await refreshWeChatVirtualPaymentSession(code => loginAPI.linkWechat(code))
+    const wxLoginCode = await getWeChatVirtualPaymentLoginCode()
     actionLabel.value = '正在创建订单...'
-    const order = await createVirtualPaymentOrder(product.productCode, purchaseQuantity.value, selectedCouponCode.value)
+    const order = await createVirtualPaymentOrder(product.productCode, purchaseQuantity.value, selectedCouponCode.value, wxLoginCode)
     orderNo.value = order.orderNo
     actionLabel.value = '等待微信支付...'
     await requestWeChatVirtualPayment(order)
