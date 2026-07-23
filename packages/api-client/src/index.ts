@@ -41,6 +41,111 @@ export class ApiClientError extends Error {
   }
 }
 
+const statusMessageMap: Record<number, string> = {
+  400: "请求参数不正确，请检查后重试",
+  401: "登录状态已失效，请重新登录",
+  403: "暂无权限执行此操作",
+  404: "请求的内容不存在或已被删除",
+  405: "当前操作不受支持",
+  408: "请求超时，请稍后重试",
+  409: "当前数据状态已变化，请刷新后重试",
+  413: "提交的内容过大，请调整后重试",
+  415: "提交的文件或内容格式不受支持",
+  422: "提交的信息不符合要求，请检查后重试",
+  429: "操作过于频繁，请稍后重试",
+  500: "服务器处理失败，请稍后重试",
+  502: "服务暂时不可用，请稍后重试",
+  503: "服务繁忙，请稍后重试",
+  504: "服务响应超时，请稍后重试",
+};
+
+const apiCodeMessageMap: Record<string, string> = {
+  AUTH_REQUIRED: "请先登录后再继续",
+  UNAUTHORIZED: "登录状态已失效，请重新登录",
+  FORBIDDEN: "暂无权限执行此操作",
+  NOT_FOUND: "请求的内容不存在或已被删除",
+  CONFLICT: "当前数据状态已变化，请刷新后重试",
+  RATE_LIMITED: "操作过于频繁，请稍后重试",
+  TOO_MANY_REQUESTS: "操作过于频繁，请稍后重试",
+  INSUFFICIENT_BALANCE: "账户余额不足，请充值后重试",
+  INSUFFICIENT_CREDITS: "可用额度不足，请充值或升级套餐",
+  VALIDATION_FAILED: "提交的信息不符合要求，请检查后重试",
+};
+
+function containsChinese(value: string) {
+  return /[\u3400-\u9fff]/.test(value);
+}
+
+function knownEnglishMessage(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "";
+  if (/network error|failed to fetch|network request failed|request:fail|connection (?:refused|reset)|load failed/.test(normalized)) {
+    return "网络连接失败，请检查网络后重试";
+  }
+  if (/timeout|timed out/.test(normalized)) return "请求超时，请稍后重试";
+  if (/invalid (?:username|email|mobile|phone|account|password|credentials)|incorrect password|bad credentials/.test(normalized)) {
+    return "账号或密码不正确";
+  }
+  if (/token.*(?:expired|invalid)|(?:expired|invalid).*token|session.*expired/.test(normalized)) {
+    return "登录状态已失效，请重新登录";
+  }
+  if (/unauthorized|authentication required|not authenticated|please log in/.test(normalized)) {
+    return "请先登录后再继续";
+  }
+  if (/forbidden|permission denied|access denied|not allowed/.test(normalized)) {
+    return "暂无权限执行此操作";
+  }
+  if (/insufficient (?:balance|funds)|balance is not enough/.test(normalized)) {
+    return "账户余额不足，请充值后重试";
+  }
+  if (/insufficient (?:credits?|quota)|quota exceeded/.test(normalized)) {
+    return "可用额度不足，请充值或升级套餐";
+  }
+  if (/too many requests|rate limit|rate exceeded/.test(normalized)) {
+    return "操作过于频繁，请稍后重试";
+  }
+  if (/already exists|duplicate|conflict/.test(normalized)) {
+    return "该数据已存在，请勿重复提交";
+  }
+  if (/not found|does not exist|no such/.test(normalized)) {
+    return "请求的内容不存在或已被删除";
+  }
+  if (/required|invalid|validation|malformed|bad request/.test(normalized)) {
+    return "提交的信息不符合要求，请检查后重试";
+  }
+  if (/service unavailable|bad gateway|gateway timeout|internal server error/.test(normalized)) {
+    return "服务暂时不可用，请稍后重试";
+  }
+  return "";
+}
+
+/**
+ * Converts transport and server errors into text that is safe to display in a
+ * Chinese UI. Original payloads remain available on ApiClientError for logs.
+ */
+export function toChineseApiErrorMessage(
+  message: unknown,
+  options: { statusCode?: number; apiCode?: unknown; fallback?: string } = {},
+) {
+  const source = String(message || "").trim();
+  if (containsChinese(source)) return source;
+
+  const apiCode = String(options.apiCode ?? "").trim().toUpperCase();
+  if (apiCode && apiCodeMessageMap[apiCode]) return apiCodeMessageMap[apiCode];
+
+  const knownMessage = knownEnglishMessage(source);
+  if (knownMessage) return knownMessage;
+
+  const statusCode = Number(options.statusCode || 0);
+  if (statusMessageMap[statusCode]) return statusMessageMap[statusCode];
+  if (statusCode >= 500) return "服务器处理失败，请稍后重试";
+  if (statusCode >= 400) return "请求失败，请检查后重试";
+
+  const fallback = String(options.fallback || "").trim();
+  if (containsChinese(fallback)) return fallback;
+  return "请求失败，请稍后重试";
+}
+
 export interface ApiRequestContext {
   path: string;
   method: string;
@@ -95,7 +200,7 @@ function normalizeApiError(error: unknown): Error {
     const errMsg = (error as { errMsg?: unknown }).errMsg;
     if (typeof errMsg === "string" && errMsg.trim()) return new Error(errMsg);
   }
-  return new Error(String(error || "Request failed"));
+  return new Error(String(error || ""));
 }
 
 function createDefaultRequestId() {
@@ -186,7 +291,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
           });
         } catch (error) {
           const normalized = normalizeApiError(error);
-          throw new ApiClientError(normalized.message, {
+          throw new ApiClientError(toChineseApiErrorMessage(normalized.message), {
             path,
             statusCode: 0,
             requestId,
@@ -202,7 +307,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
           const message = isApiEnvelope<T>(payload) ? payload.message || payload.error : "";
-          throw new ApiClientError(message || `HTTP ${response.statusCode}`, {
+          throw new ApiClientError(toChineseApiErrorMessage(message, { statusCode: response.statusCode }), {
             path,
             statusCode: response.statusCode,
             requestId,
@@ -228,7 +333,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
               const retryAllowed = requestOptions.retryOnUnauthorized !== false && (method.toUpperCase() === "GET" || requestOptions.retryOnUnauthorized === true);
               if (recovered === true && retryAttempt === 0 && retryAllowed) return send(1);
             }
-            throw new ApiClientError(payload.message || payload.error || `API code ${code}`, {
+            throw new ApiClientError(toChineseApiErrorMessage(payload.message || payload.error, {
+              statusCode: response.statusCode,
+              apiCode: code,
+            }), {
               path,
               statusCode: response.statusCode,
               requestId,

@@ -1,4 +1,4 @@
-import { configureApiClient } from '@xianzhi/api-client'
+import { configureApiClient, toChineseApiErrorMessage } from '@xianzhi/api-client'
 import { createBusinessSdk } from '@xianzhi/business-sdk'
 import { createUniPlatformAdapter, type AdapterDownloadFileResponse } from '@xianzhi/platform-adapter'
 import { createAuthService, createAuthStorage } from '@xianzhi/shared-auth'
@@ -87,12 +87,12 @@ function trustedApiURL(path: string) {
   return false
 }
 
-function responsePayloadMessage(payload: unknown, fallback: string) {
+function responsePayloadMessage(payload: unknown, fallback: string, statusCode = 0) {
   if (payload && typeof payload === 'object') {
-    const record = payload as { error?: unknown; message?: unknown }
-    return String(record.error || record.message || fallback)
+    const record = payload as { code?: unknown; error?: unknown; message?: unknown }
+    return toChineseApiErrorMessage(record.error || record.message, { statusCode, apiCode: record.code, fallback })
   }
-  return typeof payload === 'string' && payload.trim() ? payload.trim() : fallback
+  return toChineseApiErrorMessage(payload, { statusCode, fallback })
 }
 
 function unwrapTransportPayload<T>(payload: unknown) {
@@ -100,7 +100,7 @@ function unwrapTransportPayload<T>(payload: unknown) {
   const record = payload as { code?: unknown; data?: T; error?: unknown; message?: unknown }
   const hasEnvelopeShape = 'code' in record || 'message' in record || 'error' in record
   if (hasEnvelopeShape && record.code !== undefined && record.code !== 0 && record.code !== '0') {
-    throw new Error(responsePayloadMessage(record, `API code ${String(record.code)}`))
+    throw new Error(responsePayloadMessage(record, "请求失败，请稍后重试"))
   }
   if (hasEnvelopeShape && Object.prototype.hasOwnProperty.call(record, 'data')) return record.data as T
   return payload as T
@@ -111,10 +111,10 @@ async function fetchErrorMessage(response: Response) {
   const raw = await response.text().catch(() => '')
   if (!raw) return fallback
   try {
-    return responsePayloadMessage(JSON.parse(raw), fallback)
+    return responsePayloadMessage(JSON.parse(raw), fallback, response.status)
   }
   catch {
-    return raw.trim() || fallback
+    return toChineseApiErrorMessage(raw, { statusCode: response.status, fallback })
   }
 }
 
@@ -272,7 +272,7 @@ export function apiRequestTask<T = unknown, TBody = unknown>(
           void handleUnauthorized({ path, statusCode: response.statusCode, payload: response.data, retryAttempt: 0 })
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(new Error(responsePayloadMessage(response.data, `请求失败 (${response.statusCode})`)))
+          reject(new Error(responsePayloadMessage(response.data, `请求失败 (${response.statusCode})`, response.statusCode)))
           return
         }
         try {
@@ -283,7 +283,7 @@ export function apiRequestTask<T = unknown, TBody = unknown>(
         }
       },
       fail(error) {
-        reject(new Error(error.errMsg || '请求失败，请检查网络'))
+        reject(new Error(toChineseApiErrorMessage(error.errMsg, { fallback: '请求失败，请检查网络' })))
       },
     }) as UniApp.RequestTask
   })
@@ -310,7 +310,7 @@ export async function uploadApiFile<T = unknown>(
     if (recovered && retryAttempt === 0) return uploadApiFile(path, { ...options, retriedAfterRefresh: true })
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(responsePayloadMessage(response.data, `文件上传失败 (${response.statusCode})`))
+    throw new Error(responsePayloadMessage(response.data, `文件上传失败 (${response.statusCode})`, response.statusCode))
   }
   return unwrapTransportPayload<T>(response.data)
 }
@@ -332,7 +332,7 @@ export async function downloadApiFile<T = unknown>(
     if (recovered && retryAttempt === 0) return downloadApiFile(path, { ...options, retriedAfterRefresh: true })
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(responsePayloadMessage(response.data, `文件下载失败 (${response.statusCode})`))
+    throw new Error(responsePayloadMessage(response.data, `文件下载失败 (${response.statusCode})`, response.statusCode))
   }
   return response
 }
