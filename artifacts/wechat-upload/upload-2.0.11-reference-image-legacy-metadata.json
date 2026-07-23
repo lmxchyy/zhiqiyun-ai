@@ -1,0 +1,43 @@
+{
+  "size": {
+    "total": 2410570,
+    "packages": [
+      {
+        "name": "TOTAL",
+        "size": 2410570
+      },
+      {
+        "name": "main",
+        "size": 1654709
+      },
+      {
+        "name": "/packagePpt/",
+        "size": 71794
+      },
+      {
+        "name": "/pages/agent/",
+        "size": 150404
+      },
+      {
+        "name": "/pages/enterprise/",
+        "size": 34134
+      },
+      {
+        "name": "/pages/operation/",
+        "size": 43204
+      },
+      {
+        "name": "/pages/promotion/",
+        "size": 149650
+      },
+      {
+        "name": "/pages/user-account/",
+        "size": 241799
+      },
+      {
+        "name": "/pages/user-creation/",
+        "size": 64876
+      }
+    ]
+  }
+}

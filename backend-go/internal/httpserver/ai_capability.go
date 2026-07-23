@@ -520,12 +520,15 @@ func removeLegacyGenerationMetadata(req *generation.CreateRequest, resolved reso
 	if req == nil || req.Params == nil {
 		return
 	}
+	allowedFields := map[string]bool{}
 	for _, field := range resolved.Schema.SchemaJSON.Fields {
-		if field.Key == "index" {
-			return
+		allowedFields[field.Key] = true
+	}
+	for _, key := range []string{"index", "providerRevisedPrompt", "provider_revised_prompt"} {
+		if !allowedFields[key] {
+			delete(req.Params, key)
 		}
 	}
-	delete(req.Params, "index")
 }
 
 func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {

@@ -458,6 +458,8 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		"params":{
 			"n":1,
 			"index":0,
+			"providerRevisedPrompt":"legacy provider output",
+			"provider_revised_prompt":"legacy provider output",
 			"sourceReferenceAssetId":"asset_legacy"
 		}
 	}`), token)
@@ -470,6 +472,11 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	}
 	if _, exists := legacyAssetTask.Params["index"]; exists {
 		t.Fatalf("legacy asset index leaked into generation params: %+v", legacyAssetTask.Params)
+	}
+	for _, key := range []string{"providerRevisedPrompt", "provider_revised_prompt"} {
+		if _, exists := legacyAssetTask.Params[key]; exists {
+			t.Fatalf("legacy provider metadata %s leaked into generation params: %+v", key, legacyAssetTask.Params)
+		}
 	}
 
 	internalMeta := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{

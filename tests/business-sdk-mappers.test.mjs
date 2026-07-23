@@ -62,3 +62,15 @@ test("asset recreation maps source ids to accepted provenance parameters", () =>
     sourceReferenceTaskId: "task-1",
   });
 });
+
+test("provider output metadata is not replayed as generation parameters", () => {
+  const params = generationParametersFromDraft({
+    restoredParams: {
+      seed: 7,
+      providerRevisedPrompt: "provider rewritten prompt",
+      provider_revised_prompt: "provider rewritten prompt",
+    },
+  });
+
+  assert.deepEqual(params, { seed: 7 });
+});
