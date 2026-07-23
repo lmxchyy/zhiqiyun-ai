@@ -29,6 +29,8 @@
       <template #commerce>
         <UserCommerceCards
           :point-balance="pointBalance"
+          :point-balance-loading="balanceLoading"
+          :point-balance-ready="pointBalanceReady"
           :member-active="memberActive"
           :member-expires-text="memberExpiresText"
           :agent-active="agentActive"
@@ -56,6 +58,8 @@ import type { MemberProfileResponse, RoleWalletResponse } from "@xianzhi/busines
 import V531ProfilePage from "../../components/v531/V531ProfilePage.vue";
 import UserCommerceCards from "../../components/commerce/UserCommerceCards.vue";
 import { authStorage, businessSdk, setAuthToken } from "../../api/client";
+import { fetchRecentWorksTask } from "../../features/assets/api";
+import type { AssetItem } from "../../features/assets/types";
 import {
   miniProgramCreationPages,
   miniProgramEnterprisePages,
@@ -67,21 +71,55 @@ import { isAppRole, permissionsForRole, roleLabels } from "../../config/permissi
 import { usePageConfigStore } from "../../stores/pageConfig";
 import { useAuthStore } from "../../stores/auth";
 import { useUserStore } from "../../stores/user";
-import type { AppRole, Asset, AuthResponse, GenerationTask } from "../../types";
+import type { AppRole, AuthResponse, GenerationTask } from "../../types";
 import { syncCustomTabBar } from "../../utils/customTabBar";
 
 type AnyRecord = Record<string, unknown>;
+type CachedPointAccount = NonNullable<RoleWalletResponse["account"]>;
+
+interface MineSnapshot {
+  scope: string;
+  storedAt: number;
+  profile?: MemberProfileResponse;
+  account?: CachedPointAccount;
+}
+
+const mineSnapshotStorageKey = "zhiqiyun:user-mine-snapshot:v1";
+
+function authScope(value: AuthResponse | null) {
+  return String(value?.user?.id || "").trim();
+}
+
+function readMineSnapshot(value: AuthResponse | null): MineSnapshot | null {
+  const scope = authScope(value);
+  if (!scope) return null;
+  try {
+    const snapshot = uni.getStorageSync(`${mineSnapshotStorageKey}:${encodeURIComponent(scope)}`) as Partial<MineSnapshot> | "";
+    return snapshot
+      && typeof snapshot === "object"
+      && snapshot.scope === scope
+      && Number.isFinite(snapshot.storedAt)
+      ? snapshot as MineSnapshot
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 const userStore = useUserStore();
 const authStore = useAuthStore();
 const pageConfigStore = usePageConfigStore();
-const auth = ref<AuthResponse | null>(authStorage.getAuth());
-const profile = ref<MemberProfileResponse | null>(null);
+const initialAuth = authStorage.getAuth();
+const initialSnapshot = readMineSnapshot(initialAuth);
+const auth = ref<AuthResponse | null>(initialAuth);
+const profile = ref<MemberProfileResponse | null>(initialSnapshot?.profile || null);
 const wallet = ref<RoleWalletResponse | null>(null);
-const points = ref<RoleWalletResponse | null>(null);
-const recentAssets = ref<Asset[]>([]);
+const points = ref<RoleWalletResponse | null>(initialSnapshot?.account ? { account: initialSnapshot.account } : null);
+const recentAssets = ref<AssetItem[]>([]);
 const generationTasks = ref<GenerationTask[]>([]);
 const loading = ref(false);
+const balanceLoading = ref(false);
+const pointBalanceReady = ref(Boolean(initialSnapshot?.account));
 const loadError = ref("");
 const isGuest = computed(() => !authStore.token);
 
@@ -90,24 +128,24 @@ const userPermissions = computed(() => userStore.currentRole === "USER"
   : permissionsForRole("USER"));
 const displayName = computed(() => {
   if (isGuest.value) return "\u6e38\u5ba2";
-  const value = String(profile.value?.user?.name
-    || auth.value?.user?.name
-    || profile.value?.user?.email
+  const value = String(auth.value?.user?.name
+    || profile.value?.user?.name
     || auth.value?.user?.email
+    || profile.value?.user?.email
     || "当前用户").trim();
   return /^用户\s*1\d{2}\*+\d+/i.test(value) ? "知启云用户" : value;
 });
-const displayUserId = computed(() => rowString(profile.value?.user, "id", "userId")
-  || rowString(auth.value?.user, "id", "userId")
+const displayUserId = computed(() => rowString(auth.value?.user, "id", "userId")
+  || rowString(profile.value?.user, "id", "userId")
   || "--");
-const avatarUrl = computed(() => rowString(profile.value?.user, "avatarUrl", "avatar", "headImage")
-  || rowString(auth.value?.user, "avatarUrl", "avatar", "headImage"));
+const avatarUrl = computed(() => rowString(auth.value?.user, "avatarUrl", "avatar", "headImage")
+  || rowString(profile.value?.user, "avatarUrl", "avatar", "headImage"));
 const avatarFallback = computed(() => {
   const slot = pageConfigStore.slot("profile", "profile.avatar");
   return slot?.imageUrl || slot?.fallbackUrl || "";
 });
 const planName = computed(() => rowString(profile.value?.plan, "name", "planName")
-  || auth.value?.defaultModule
+  || rowString(auth.value?.user, "planName", "memberLevel", "planId")
   || "AI 创作用户");
 const companyName = computed(() => rowString(profile.value?.user, "companyName", "company", "organization", "tenantName")
   || rowString(auth.value?.user, "companyName", "company", "organization", "tenantName")
@@ -117,7 +155,7 @@ const companyName = computed(() => rowString(profile.value?.user, "companyName",
 const subscriptionExpiresAt = computed(() => rowString(profile.value?.user, "subscriptionExpiresAt", "expiresAt", "validUntil")
   || rowString(auth.value?.user, "subscriptionExpiresAt", "expiresAt", "validUntil")
   || rowString(profile.value?.plan, "expiresAt", "validUntil", "endedAt"));
-const pointAccount = computed(() => wallet.value?.account || points.value?.account || profile.value?.account || null);
+const pointAccount = computed(() => points.value?.account || wallet.value?.account || profile.value?.account || null);
 const pointBalance = computed(() => asNumber(pointAccount.value?.available));
 const memberActive = computed(() => {
   const level = rowString(profile.value?.user, "memberLevel").toUpperCase();
@@ -366,58 +404,139 @@ function handleBenefit(payload: unknown) {
   else showCompany();
 }
 
-let refreshQueued = false;
 let refreshEpoch = 0;
+let activeProfileScope = authScope(initialAuth);
+let activeRecentAbort: (() => void) | null = null;
+let activeProfileRefresh: { token: string; promise: Promise<void> } | null = null;
+
+function writeMineSnapshot() {
+  const scope = authScope(auth.value);
+  if (!scope) return;
+  const snapshot: MineSnapshot = {
+    scope,
+    storedAt: Date.now(),
+  };
+  if (profile.value) snapshot.profile = profile.value;
+  if (pointAccount.value) snapshot.account = pointAccount.value;
+  try {
+    uni.setStorageSync(`${mineSnapshotStorageKey}:${encodeURIComponent(scope)}`, snapshot);
+  } catch {
+    // A full or unavailable local cache must never block live profile requests.
+  }
+}
+
+function hydrateMineSnapshot(nextAuth: AuthResponse | null) {
+  const nextScope = authScope(nextAuth);
+  auth.value = nextAuth;
+  if (nextScope === activeProfileScope) return;
+  activeProfileScope = nextScope;
+  const snapshot = readMineSnapshot(nextAuth);
+  profile.value = snapshot?.profile || null;
+  wallet.value = null;
+  points.value = snapshot?.account ? { account: snapshot.account } : null;
+  pointBalanceReady.value = Boolean(snapshot?.account);
+  recentAssets.value = [];
+  generationTasks.value = [];
+}
 
 function clearProfileData() {
   refreshEpoch += 1;
+  activeProfileScope = "";
+  activeRecentAbort?.();
+  activeRecentAbort = null;
   auth.value = null;
   profile.value = null;
   wallet.value = null;
   points.value = null;
   recentAssets.value = [];
   generationTasks.value = [];
+  loading.value = false;
+  balanceLoading.value = false;
+  pointBalanceReady.value = false;
   loadError.value = "";
 }
 
-async function refreshProfile() {
-  const requestEpoch = ++refreshEpoch;
-  const token = authStorage.getToken() || String(uni.getStorageSync("token") || "");
-  if (!token) {
-    clearProfileData();
-    userStore.reset();
-    return;
-  }
-  if (loading.value) {
-    refreshQueued = true;
-    return;
-  }
+function isCurrentRefresh(requestEpoch: number, token: string) {
+  return requestEpoch === refreshEpoch
+    && token === (authStorage.getToken() || String(uni.getStorageSync("token") || ""));
+}
 
+function acceptPointAccount(response: RoleWalletResponse, target: "wallet" | "points", requestEpoch: number, token: string) {
+  if (!isCurrentRefresh(requestEpoch, token)) return;
+  if (target === "points") points.value = response;
+  else wallet.value = response;
+  if (response.account) {
+    pointBalanceReady.value = true;
+    balanceLoading.value = false;
+    writeMineSnapshot();
+  }
+}
+
+function refreshSecondaryData(requestEpoch: number, token: string) {
+  activeRecentAbort?.();
+  const recentRequest = fetchRecentWorksTask(20);
+  activeRecentAbort = recentRequest.abort;
+  void recentRequest.promise
+    .then(items => {
+      if (isCurrentRefresh(requestEpoch, token)) recentAssets.value = items;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      if (activeRecentAbort === recentRequest.abort) activeRecentAbort = null;
+    });
+
+  void businessSdk.generation.listTaskPage({ limit: 20, offset: 0, prioritizeActive: true })
+    .then(value => {
+      if (isCurrentRefresh(requestEpoch, token)) {
+        generationTasks.value = collectionOf<GenerationTask>(value);
+      }
+    })
+    .catch(() => undefined);
+  void pageConfigStore.ensure("profile").catch(() => undefined);
+}
+
+async function runProfileRefresh(token: string, requestEpoch: number) {
   loading.value = true;
+  balanceLoading.value = true;
   loadError.value = "";
-  setAuthToken(token);
-  const legacyAuth = uni.getStorageSync("xianzhiMiniProgramAuth") as AuthResponse | "";
-  auth.value = authStorage.getAuth() || legacyAuth || null;
-  pageConfigStore.hydrate("profile");
 
   try {
+    setAuthToken(token);
+    const legacyAuth = uni.getStorageSync("xianzhiMiniProgramAuth") as AuthResponse | "";
+    hydrateMineSnapshot(authStorage.getAuth() || legacyAuth || null);
+    pageConfigStore.hydrate("profile");
+    refreshSecondaryData(requestEpoch, token);
+
+    const userProfileRequest = userStore.loadProfile(true);
+    const memberProfileRequest = businessSdk.roleWorkbench.memberProfile()
+      .then(value => {
+        if (!isCurrentRefresh(requestEpoch, token)) return value;
+        profile.value = value;
+        if (value.account) {
+          pointBalanceReady.value = true;
+          balanceLoading.value = false;
+        }
+        writeMineSnapshot();
+        return value;
+      });
+    const walletRequest = businessSdk.roleWorkbench.wallet()
+      .then(value => {
+        acceptPointAccount(value, "wallet", requestEpoch, token);
+        return value;
+      });
+    const pointsRequest = businessSdk.roleWorkbench.pointsAccount()
+      .then(value => {
+        acceptPointAccount(value, "points", requestEpoch, token);
+        return value;
+      });
     const results = await Promise.allSettled([
-      userStore.loadProfile(true),
-      businessSdk.roleWorkbench.memberProfile(),
-      businessSdk.roleWorkbench.wallet(),
-      businessSdk.roleWorkbench.pointsAccount(),
-      businessSdk.assets.listPage({ limit: 40, offset: 0 }),
-      businessSdk.generation.listTaskPage({ limit: 20, offset: 0, prioritizeActive: true }),
-      pageConfigStore.ensure("profile"),
+      userProfileRequest,
+      memberProfileRequest,
+      walletRequest,
+      pointsRequest,
     ]);
 
-    if (requestEpoch !== refreshEpoch) {
-      if (!authStore.token) {
-        clearProfileData();
-        userStore.reset();
-      }
-      return;
-    }
+    if (!isCurrentRefresh(requestEpoch, token)) return;
 
     if (results[0].status === "fulfilled" && userStore.currentRole !== "USER" && userStore.roles.includes("USER")) {
       try {
@@ -426,28 +545,53 @@ async function refreshProfile() {
         // The page remains a safe USER view even when role synchronization is temporarily unavailable.
       }
     }
-    if (results[1].status === "fulfilled") profile.value = results[1].value;
-    if (results[2].status === "fulfilled") wallet.value = results[2].value;
-    if (results[3].status === "fulfilled") points.value = results[3].value;
-    if (results[4].status === "fulfilled") recentAssets.value = collectionOf<Asset>(results[4].value);
-    if (results[5].status === "fulfilled") generationTasks.value = collectionOf<GenerationTask>(results[5].value);
 
-    const businessResults = results.slice(0, 6);
-    if (businessResults.every(result => result.status === "rejected")) {
-      loadError.value = "数据暂时未同步，已显示本地个人中心。";
+    const profileFresh = results[1].status === "fulfilled";
+    const accountFresh = (results[1].status === "fulfilled" && Boolean(results[1].value.account))
+      || (results[2].status === "fulfilled" && Boolean(results[2].value.account))
+      || (results[3].status === "fulfilled" && Boolean(results[3].value.account));
+    const errors: string[] = [];
+    if (!profileFresh) errors.push("登录信息同步失败");
+    if (!accountFresh) errors.push("点数余额同步失败");
+    if (errors.length) {
+      loadError.value = `${errors.join("、")}${pointBalanceReady.value ? "，当前显示上次数据" : "，请下拉刷新重试"}`;
+    }
+  } catch {
+    if (isCurrentRefresh(requestEpoch, token)) {
+      loadError.value = `登录信息、点数余额同步失败${pointBalanceReady.value ? "，当前显示上次数据" : "，请下拉刷新重试"}`;
     }
   } finally {
+    if (!isCurrentRefresh(requestEpoch, token)) return;
     loading.value = false;
-    if (refreshQueued) {
-      refreshQueued = false;
-      void refreshProfile();
-    }
+    balanceLoading.value = false;
   }
+}
+
+function refreshProfile(): Promise<void> {
+  const token = authStorage.getToken() || String(uni.getStorageSync("token") || "");
+  if (!token) {
+    clearProfileData();
+    userStore.reset();
+    return Promise.resolve();
+  }
+  if (activeProfileRefresh?.token === token) return activeProfileRefresh.promise;
+
+  const requestEpoch = ++refreshEpoch;
+  const promise = Promise.resolve()
+    .then(() => runProfileRefresh(token, requestEpoch))
+    .finally(() => {
+      if (activeProfileRefresh?.promise === promise) activeProfileRefresh = null;
+    });
+  activeProfileRefresh = { token, promise };
+  return promise;
 }
 
 watch(() => authStore.token, (nextToken, previousToken) => {
   if (nextToken === previousToken) return;
-  if (!nextToken) clearProfileData();
+  if (!nextToken) {
+    clearProfileData();
+    return;
+  }
   void refreshProfile();
 });
 

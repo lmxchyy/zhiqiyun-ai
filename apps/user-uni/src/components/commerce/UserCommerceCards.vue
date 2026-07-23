@@ -4,8 +4,8 @@
       <view class="zc-wallet-glow" />
       <view class="zc-wallet-copy">
         <text class="zc-eyebrow">我的点数</text>
-        <view class="zc-balance"><text>{{ pointBalance }}</text><text class="zc-wallet-unit">点</text></view>
-        <text class="zc-wallet-hint">用于 AI 创作与增值服务</text>
+        <view class="zc-balance"><text>{{ pointBalanceReady ? pointBalance : '--' }}</text><text class="zc-wallet-unit">点</text></view>
+        <text class="zc-wallet-hint">{{ pointBalanceLoading ? '正在同步账户余额…' : pointBalanceReady ? '用于 AI 创作与增值服务' : '余额暂未同步，下拉可重试' }}</text>
       </view>
       <button class="zc-wallet-button" type="button" @click="$emit('recharge')">充值点数 <text>›</text></button>
     </view>
@@ -106,15 +106,20 @@ const DESIGN_WIDTH = 1440
 const DESIGN_HEIGHT = 846
 const PAGE_HORIZONTAL_PADDING = 32
 
-defineProps<{
+withDefaults(defineProps<{
   pointBalance: number
+  pointBalanceLoading?: boolean
+  pointBalanceReady?: boolean
   memberActive: boolean
   memberExpiresText: string
   agentActive: boolean
   inviteCode: string
   promotionCount: number
   pendingCommissionCents: number
-}>()
+}>(), {
+  pointBalanceLoading: false,
+  pointBalanceReady: true,
+})
 
 defineEmits<{ recharge: []; member: []; agent: [] }>()
 
