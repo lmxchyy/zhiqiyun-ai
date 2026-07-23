@@ -120,13 +120,19 @@
         <text class="guest-brand-name">知启云 AI</text>
       </view>
       <text>AI 创作，从体验开始</text>
-      <text>用户协议 · 隐私政策 · 帮助中心</text>
+      <view class="guest-legal-links">
+        <text @click="openLegalDocument('user-agreement')">用户协议</text>
+        <text>·</text>
+        <text @click="openLegalDocument('privacy-policy')">隐私政策</text>
+        <text>· 帮助中心</text>
+      </view>
     </footer>
   </view>
 </template>
 
 <script setup lang="ts">
 import { ref } from "vue";
+import { openLegalDocument } from "../features/legal/navigation";
 
 type GuestModule = "videoGeneration" | "wirelessCanvas" | "ppt" | "agents";
 
@@ -298,7 +304,8 @@ function startWithPrompt() {
 .guest-final-cta button { flex: 0 0 auto; margin: 0; padding: 12px 20px; border: 0; border-radius: 11px; background: #f3f7ff; color: #14213a; font-size: 12px; font-weight: 900; }
 
 .guest-footer { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 40px; border-top: 1px solid var(--guest-line); color: #607086; font-size: 10px; }
-.guest-footer > text:last-child { justify-self: end; }
+.guest-legal-links { display: flex; gap: 4px; justify-self: end; }
+.guest-legal-links text:nth-child(odd) { cursor: pointer; }
 
 @media (max-width: 900px) {
   .guest-nav { grid-template-columns: 1fr auto; }
@@ -332,6 +339,6 @@ function startWithPrompt() {
   .guest-final-cta { align-items: stretch; flex-direction: column; padding: 30px 24px; }
   .guest-final-cta button { width: 100%; }
   .guest-footer { grid-template-columns: 1fr; gap: 12px; }
-  .guest-footer > text:last-child { justify-self: start; }
+  .guest-legal-links { justify-self: start; }
 }
 </style>

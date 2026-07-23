@@ -44,7 +44,7 @@
         <view><text class="enterprise-field-label">联系电话</text><input v-model="createDraft.phone" class="enterprise-input" maxlength="20" type="number" placeholder="请输入联系电话" /></view>
         <view><text class="enterprise-field-label">所在地区</text><input v-model="createDraft.region" class="enterprise-input" maxlength="80" placeholder="请输入所在地区" /></view>
         <text class="enterprise-copy">当前企业V1创建接口先保存企业名称，其余资料可在企业设置和认证中继续完善。</text>
-        <text class="enterprise-agreement">✓ 我已阅读并同意《企业空间服务协议》</text>
+        <text class="enterprise-agreement" @click="openLegalDocument('enterprise-space-service-agreement')">✓ 我已阅读并同意《企业空间服务协议》</text>
       </view>
     </template>
 
@@ -228,6 +228,7 @@ import EnterpriseOrganizationNode from "./EnterpriseOrganizationNode.vue";
 import EnterprisePageShell from "./EnterprisePageShell.vue";
 import EnterpriseStatePanel from "./EnterpriseStatePanel.vue";
 import { enterpriseAPI, uploadEnterpriseDocument } from "../../features/enterprise/api";
+import { openLegalDocument } from "../../features/legal/navigation";
 import type { EnterpriseAIEmployee, EnterpriseCertification, EnterpriseInvitation, EnterpriseJoinRequest, EnterpriseMember, EnterpriseOrganization } from "../../features/enterprise/types";
 import { miniProgramEnterprisePages as pages } from "../../config/miniProgramPages";
 import { roleLabels } from "../../config/permissions";

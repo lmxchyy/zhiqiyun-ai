@@ -1,6 +1,6 @@
 <template>
   <view :class="['asset-cover-shell', `type-${asset.type}`]">
-    <AppImage v-if="hasImage" :src="asset.thumbnailUrl || asset.remoteUrl" :fallback="asset.fallbackUrl" :alt="asset.name" width="100%" height="100%" radius="11px 11px 0 0" :lazy-load="true" />
+    <AppImage v-if="hasImage" :src="asset.thumbnailUrl || asset.remoteUrl" :fallback="asset.fallbackUrl" :alt="asset.name" width="100%" height="100%" radius="11px 11px 0 0" :lazy-load="true" @load="$emit('thumbnail-load', asset.id)" />
     <view v-else class="asset-cover-placeholder"><text class="asset-cover-symbol">{{ symbol }}</text><text class="asset-cover-type">{{ label }}</text></view>
     <text class="cover-type-tag">{{ coverTag }}</text>
     <view v-if="asset.type === 'video'" class="play-mark"><text>▶</text></view>
@@ -13,6 +13,7 @@ import { computed } from "vue";
 import type { AssetItem } from "../../features/assets/types";
 import AppImage from "../AppImage.vue";
 const props = defineProps<{ asset: AssetItem }>();
+defineEmits<{ "thumbnail-load": [assetID: string] }>();
 const hasImage = computed(() => Boolean(props.asset.thumbnailUrl || props.asset.remoteUrl || props.asset.fallbackUrl));
 const symbol = computed(() => ({ image: "图", video: "视", ppt: "P", document: "文", agent: "A", infographic: "表", knowledge: "知", prompt: "{ }", template: "模" } as Record<string, string>)[props.asset.type] || "作");
 const label = computed(() => ({ image: "AI 图片", video: "AI 视频", ppt: "PPT", document: "文档", agent: "Agent", infographic: "信息图", knowledge: "知识库", prompt: "Prompt", template: "模板" } as Record<string, string>)[props.asset.type] || "数字资产");

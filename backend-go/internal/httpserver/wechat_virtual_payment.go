@@ -270,7 +270,8 @@ func (a virtualPaymentAPI) authenticatedUser(r *http.Request) (adminUser, error)
 }
 
 func (a virtualPaymentAPI) products(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.authenticatedUser(r); err != nil {
+	user, err := a.authenticatedUser(r)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
@@ -282,10 +283,17 @@ func (a virtualPaymentAPI) products(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	rechargeEligible, err := a.service.pointRechargeEligible(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, map[string]any{
-		"items":       products,
-		"enabled":     a.service.cfg.ready(),
-		"environment": map[int]string{0: "production", 1: "sandbox"}[a.service.cfg.Env],
+		"items":                     products,
+		"enabled":                   a.service.cfg.ready(),
+		"environment":               map[int]string{0: "production", 1: "sandbox"}[a.service.cfg.Env],
+		"rechargeEligible":          rechargeEligible,
+		"rechargeEligibilityReason": map[bool]string{true: "", false: "点数充值仅向有效会员或代理商开放"}[rechargeEligible],
 	})
 }
 
@@ -914,7 +922,7 @@ func pointRechargeIdentityEligible(memberLevel, agentStatus, expiresAt string, n
 	}
 	expiresAt = strings.TrimSpace(expiresAt)
 	if expiresAt == "" {
-		return true
+		return false
 	}
 	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
 	if err != nil {

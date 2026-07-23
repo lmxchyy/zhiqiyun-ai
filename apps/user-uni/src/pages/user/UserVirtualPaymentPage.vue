@@ -93,20 +93,11 @@ const customTokenAmount = computed(() => (selectedProduct.value?.creditUnits || 
 async function load() {
   loading.value = true
   try {
-    const [payload, profilePayload, capability] = await Promise.all([
+    const [payload, capability] = await Promise.all([
       listVirtualPaymentProducts(),
-      businessSdk.roleWorkbench.memberProfile(),
       getPaymentCapability(getClientPlatform()),
     ])
-    const profile = profilePayload as unknown as Record<string, any>
-    const user = (profile.user || {}) as Record<string, any>
-    const agent = (profile.agent || {}) as Record<string, any>
-    const memberLevel = String(user.memberLevel || '').toUpperCase()
-    const expiresAt = String(user.subscriptionExpiresAt || user.expiresAt || user.validUntil || '')
-    const expiresTime = expiresAt ? new Date(expiresAt).getTime() : Number.NaN
-    const memberActive = Boolean(memberLevel && memberLevel !== 'FREE') && (Number.isNaN(expiresTime) || expiresTime > Date.now())
-    const agentActive = String(user.agentStatus || agent.status || '').toUpperCase() === 'ACTIVE' || Boolean(profile.agent && !agent.status)
-    rechargeEligible.value = memberActive || agentActive
+    rechargeEligible.value = payload.rechargeEligible === true
     products.value = payload.items.filter(item => item.active && item.productType === 'TOKEN_ONLY')
     paymentCapability.value = capability.paymentCapability
     paymentStatus.value = capability.paymentStatus
@@ -114,6 +105,7 @@ async function load() {
     selectedCode.value = rechargeEligible.value ? products.value[0]?.productCode || '' : ''
     if (!capability.enabled) resultMessage.value = capability.message
     else if (!payload.enabled) resultMessage.value = '服务端支付商品暂不可用，请稍后重试。'
+    else if (!payload.rechargeEligible) resultMessage.value = payload.rechargeEligibilityReason || '点数充值仅向有效会员或代理商开放'
   }
   catch (error) {
     resultMessage.value = error instanceof Error ? error.message : '商品加载失败'

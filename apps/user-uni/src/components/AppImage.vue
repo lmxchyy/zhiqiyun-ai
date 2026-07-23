@@ -52,6 +52,7 @@ const props = withDefaults(
     circle: false,
   },
 );
+const emit = defineEmits<{ load: [source: string]; error: [source: string] }>();
 const loading = ref(true);
 const stage = ref(0);
 const sourceChain = computed(() =>
@@ -94,8 +95,10 @@ watch(
 );
 function handleLoad() {
   loading.value = false;
+  emit("load", currentSrc.value);
 }
 function handleError() {
+  emit("error", currentSrc.value);
   if (stage.value < sourceChain.value.length - 1) {
     stage.value++;
     loading.value = true;

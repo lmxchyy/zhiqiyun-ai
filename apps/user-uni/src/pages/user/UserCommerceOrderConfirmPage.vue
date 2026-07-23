@@ -17,7 +17,11 @@
           <view><text>实付金额</text><strong class="accent">{{ amountLabel }}</strong></view>
         </view>
         <view class="order-card payment-card"><view><text>支付方式</text><strong>{{ paymentMethodLabel }}</strong></view><text class="selected">● {{ capabilityMessage }}</text></view>
-        <label class="agreement"><checkbox :checked="agreed" @click="agreed = !agreed" />我已阅读并同意《{{ isMember ? '知启云AI会员服务协议' : '知启云AI代理商服务协议' }}》</label>
+        <view class="agreement">
+          <checkbox :checked="agreed" @click="agreed = !agreed" />
+          <text @click="agreed = !agreed">我已阅读并同意</text>
+          <text class="agreement-link" @click.stop="openCommerceAgreement">《{{ agreementTitle }}》</text>
+        </view>
         <view v-if="message" :class="['order-message', messageTone]">{{ message }}</view>
         <button class="pay-button" type="button" :disabled="paying || !agreed || !canPay" @click="pay">{{ payButtonLabel }}</button>
         <button v-if="orderNo && !completed" class="status-button" type="button" :disabled="syncing" @click="manualSync">{{ syncing ? '正在查询...' : '查看订单状态' }}</button>
@@ -48,6 +52,7 @@ import type {
   VirtualPaymentProduct,
 } from '../../features/payment/types'
 import { backOrHome } from '../../utils/miniProgramBusiness'
+import { openLegalDocument } from '../../features/legal/navigation'
 
 const productCode = ref('')
 const kind = ref<'member' | 'agent'>('member')
@@ -69,6 +74,7 @@ const actionLabel = ref('正在创建订单...')
 let disposed = false
 
 const isMember = computed(() => kind.value === 'member')
+const agreementTitle = computed(() => isMember.value ? '知启云AI会员服务协议' : '知启云AI代理商服务协议')
 const amountLabel = computed(() => '¥' + ((product.value?.amountCent || 0) / 100).toFixed(2))
 const pointsLabel = computed(() => Number(product.value?.creditUnits || 0).toLocaleString() + '点')
 const canPay = computed(() => paymentCapability.value === 'available' && paymentStatus.value === 'READY' && Boolean(product.value))
@@ -82,6 +88,10 @@ const payButtonLabel = computed(() => {
   if (!canPay.value) return '暂未开放'
   return '立即支付 ' + amountLabel.value
 })
+
+function openCommerceAgreement() {
+  openLegalDocument(isMember.value ? 'member-service-agreement' : 'agent-service-agreement')
+}
 
 function matchesCommerceProduct(item: VirtualPaymentProduct) {
   if (item.productCode === productCode.value) return true
@@ -260,7 +270,7 @@ onUnload(() => { disposed = true })
 .product-name { color: #635bff; font-size: 32rpx; font-weight: 800; }.agent .product-name, .agent .accent { color: #ff7a1a; }
 .order-card view { display: flex; align-items: flex-start; justify-content: space-between; gap: 30rpx; color: #667085; font-size: 26rpx; line-height: 38rpx; }.order-card strong { max-width: 65%; color: #111827; text-align: right; }
 .amount-card .accent { color: #635bff; }.payment-card strong, .selected { color: #16a765; }.selected { font-size: 26rpx; }
-.agreement { color: #667085; font-size: 22rpx; line-height: 34rpx; }.agreement checkbox { transform: scale(.75); transform-origin: left center; }
+.agreement { display: flex; flex-wrap: wrap; align-items: center; color: #667085; font-size: 22rpx; line-height: 34rpx; }.agreement checkbox { transform: scale(.75); transform-origin: left center; }.agreement-link { color: #635bff; }
 .order-message { padding: 20rpx 24rpx; border-radius: 20rpx; color: #667085; background: #fff; font-size: 24rpx; line-height: 36rpx; }.order-message.success { color: #087443; background: #effcf5; }.order-message.danger { color: #b42318; background: #fef3f2; }
 .pay-button, .status-button { display: flex; height: 104rpx; margin: 0; align-items: center; justify-content: center; border: 0; border-radius: 28rpx; font-size: 30rpx; font-weight: 700; line-height: 104rpx; }.pay-button { color: #fff; background: #635bff; }.agent .pay-button { background: #ff7a1a; }.status-button { color: #635bff; background: #fff; }.pay-button::after, .status-button::after { display: none; }.pay-button[disabled] { opacity: .5; }
 </style>

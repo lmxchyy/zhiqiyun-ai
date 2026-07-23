@@ -812,6 +812,10 @@ func (a api) publicLegalDocuments(w http.ResponseWriter, _ *http.Request) {
 		{"code": "ai-content-rules", "title": "AI生成内容使用规范", "version": envOrPlaceholder("LEGAL_AI_CONTENT_RULES_VERSION"), "content": envOrPlaceholder("LEGAL_AI_CONTENT_RULES_CONTENT")},
 		{"code": "platform-convention", "title": "平台公约", "version": envOrPlaceholder("LEGAL_PLATFORM_CONVENTION_VERSION"), "content": envOrPlaceholder("LEGAL_PLATFORM_CONVENTION_CONTENT")},
 		{"code": "minor-protection", "title": "未成年人保护说明", "version": envOrPlaceholder("LEGAL_MINOR_PROTECTION_VERSION"), "content": envOrPlaceholder("LEGAL_MINOR_PROTECTION_CONTENT")},
+		{"code": "member-service-agreement", "title": "知启云AI会员服务协议", "version": envOrPlaceholder("LEGAL_MEMBER_SERVICE_AGREEMENT_VERSION"), "content": envOrPlaceholder("LEGAL_MEMBER_SERVICE_AGREEMENT_CONTENT")},
+		{"code": "agent-service-agreement", "title": "知启云AI代理商服务协议", "version": envOrPlaceholder("LEGAL_AGENT_SERVICE_AGREEMENT_VERSION"), "content": envOrPlaceholder("LEGAL_AGENT_SERVICE_AGREEMENT_CONTENT")},
+		{"code": "enterprise-space-service-agreement", "title": "企业空间服务协议", "version": envOrPlaceholder("LEGAL_ENTERPRISE_SPACE_SERVICE_AGREEMENT_VERSION"), "content": envOrPlaceholder("LEGAL_ENTERPRISE_SPACE_SERVICE_AGREEMENT_CONTENT")},
+		{"code": "recharge-service-agreement", "title": "点数充值服务协议", "version": envOrPlaceholder("LEGAL_RECHARGE_SERVICE_AGREEMENT_VERSION"), "content": envOrPlaceholder("LEGAL_RECHARGE_SERVICE_AGREEMENT_CONTENT")},
 	}
 	writeJSON(w, map[string]any{"items": documents, "complaintUrl": envOrPlaceholder("COMPLAINT_ENTRY_URL"), "infringementUrl": envOrPlaceholder("INFRINGEMENT_COMPLAINT_URL")})
 }

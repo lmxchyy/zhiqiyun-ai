@@ -8,6 +8,7 @@ import {
   fetchAssetOverview,
   fetchAssetPage,
   fetchProjects,
+  fetchRecentWorksTask,
   fetchTaskPage,
   moveAssetToProject,
   permanentlyDeleteAsset,
@@ -29,17 +30,23 @@ import {
   type GenerationTask,
   type ProjectOption,
 } from "../features/assets/types";
+import { beginWorksPerformanceStep, recordWorksPerformance } from "../features/assets/performance";
+import {
+  isCurrentRecentRequest,
+  mergeRecentWorks,
+  shouldDedupeRecentRequest,
+  stableAsset,
+} from "../features/assets/recent";
 
 const filterStorageKey = "zhiqiyun:asset-center:filters";
 const sortStorageKey = "zhiqiyun:asset-center:sort";
-const recentCacheStorageKey = "zhiqiyun:asset-center:recent-cache";
-const recentCacheMaxAgeMs = 10 * 60 * 1000;
+const recentCacheStorageKey = "recent_works_cache";
+const recentRequestDedupeMs = 3000;
 
-interface RecentAssetCache {
+interface RecentWorksCache {
+  scope: string;
   storedAt: number;
   assets: AssetItem[];
-  overview: AssetOverview;
-  recentTasks: GenerationTask[];
 }
 
 function emptyOverview(): AssetOverview {
@@ -73,44 +80,55 @@ function persist(filters: AssetFilter, sort: AssetSort) {
   }
 }
 
-function readRecentCache(): RecentAssetCache | null {
+function recentCacheKey(scope: string) {
+  return `${recentCacheStorageKey}:${encodeURIComponent(scope)}`;
+}
+
+function readRecentCache(scope: string): RecentWorksCache | null {
+  const timing = beginWorksPerformanceStep("local_cache_read", {
+    serialWait: true,
+    source: "assetStore.hydrateRecentWorksCache",
+  });
   try {
-    const value = uni.getStorageSync(recentCacheStorageKey) as Partial<RecentAssetCache> | "";
-    if (!value || typeof value !== "object" || !Number.isFinite(value.storedAt)) return null;
-    if (Date.now() - Number(value.storedAt) > recentCacheMaxAgeMs) return null;
-    if (!Array.isArray(value.assets) || !Array.isArray(value.recentTasks) || !value.overview) return null;
-    return value as RecentAssetCache;
+    const value = uni.getStorageSync(recentCacheKey(scope)) as Partial<RecentWorksCache> | "";
+    if (!value || typeof value !== "object" || value.scope !== scope || !Number.isFinite(value.storedAt) || !Array.isArray(value.assets)) {
+      timing.end({ cacheHit: false, itemCount: 0 });
+      return null;
+    }
+    const cache = value as RecentWorksCache;
+    timing.end({ cacheHit: true, itemCount: cache.assets.length });
+    return cache;
   } catch {
+    timing.end({ cacheHit: false, note: "cache_read_failed" });
     return null;
   }
 }
 
 function cacheAsset(item: AssetItem): AssetItem {
-  const metadata = { ...item.metadata };
-  delete metadata.thumbnailUrl;
-  return { ...item, metadata };
-}
-
-function writeRecentCache(assets: AssetItem[], overview: AssetOverview, recentTasks: GenerationTask[]) {
-  try {
-    uni.setStorageSync(recentCacheStorageKey, {
-      storedAt: Date.now(),
-      assets: assets.slice(0, 4).map(cacheAsset),
-      overview,
-      recentTasks: recentTasks.slice(0, 5),
-    } satisfies RecentAssetCache);
-  } catch {
-    /* the cache is an optional first-paint optimization */
-  }
-}
-
-function stableAsset(previous: AssetItem | undefined, next: AssetItem): AssetItem {
-  if (!previous || previous.updatedAt !== next.updatedAt || next.thumbnailUrl.startsWith("data:image/")) return next;
   return {
-    ...next,
-    remoteUrl: previous.remoteUrl || next.remoteUrl,
-    thumbnailUrl: previous.thumbnailUrl || next.thumbnailUrl,
+    ...item,
+    remoteUrl: "",
+    metadata: {},
   };
+}
+
+function writeRecentCache(scope: string, assets: AssetItem[]) {
+  if (!scope) return;
+  const timing = beginWorksPerformanceStep("local_cache_write", {
+    serialWait: true,
+    source: "assetStore.persistRecentCache",
+  });
+  try {
+    const cachedAssets = assets.slice(0, 20).map(cacheAsset);
+    uni.setStorageSync(recentCacheKey(scope), {
+      scope,
+      storedAt: Date.now(),
+      assets: cachedAssets,
+    } satisfies RecentWorksCache);
+    timing.end({ itemCount: cachedAssets.length });
+  } catch {
+    timing.end({ note: "cache_write_failed" });
+  }
 }
 
 function errorText(error: unknown, fallback: string): string {
@@ -127,13 +145,13 @@ function errorFlags(error: unknown) {
 
 let pollingTimer: ReturnType<typeof setTimeout> | null = null;
 let activeRefreshPromise: Promise<void> | null = null;
+let activeRecentRequest: { scope: string; promise: Promise<void>; abort: () => void } | null = null;
 
 export const useAssetStore = defineStore("assets", {
   state: () => {
-    const cache = readRecentCache();
     return {
-    assets: cache?.assets || [] as AssetItem[],
-    overview: cache?.overview || emptyOverview(),
+    assets: [] as AssetItem[],
+    overview: emptyOverview(),
     filters: readFilters(),
     sort: readSort(),
     pagination: { page: 1, pageSize: 20, total: 0, hasMore: false },
@@ -147,7 +165,7 @@ export const useAssetStore = defineStore("assets", {
     noPermission: false,
     selectedIds: [] as string[],
     multiSelectMode: false,
-    recentTasks: cache?.recentTasks || [] as GenerationTask[],
+    recentTasks: [] as GenerationTask[],
     tasks: [] as GenerationTask[],
     taskPagination: { page: 1, pageSize: 20, total: 0, hasMore: false },
     tasksLoading: false,
@@ -159,9 +177,14 @@ export const useAssetStore = defineStore("assets", {
     currentLoading: false,
     projects: [] as ProjectOption[],
     requestSequence: 0,
+    recentRequestSequence: 0,
     pollingFailures: 0,
     pageVisible: false,
-    lastRefreshAt: cache?.storedAt || 0,
+    lastRefreshAt: 0,
+    lastRecentRequestStartedAt: 0,
+    recentCacheScope: "",
+    recentCacheHydrated: false,
+    showingCachedWorks: false,
   };
   },
   getters: {
@@ -174,21 +197,151 @@ export const useAssetStore = defineStore("assets", {
     isSearchResult(state): boolean {
       return Boolean(state.filters.keyword.trim());
     },
+    isDefaultRecentView(state): boolean {
+      return state.filters.type === "all"
+        && state.filters.status === "recent"
+        && !state.filters.keyword.trim()
+        && !state.filters.projectId
+        && !state.filters.tagIds.length
+        && !state.filters.model
+        && !state.filters.createdFrom
+        && !state.filters.createdTo
+        && state.sort === "created_desc";
+    },
   },
   actions: {
     persistPreferences() {
       persist(this.filters, this.sort);
     },
     persistRecentCache() {
-      writeRecentCache(this.assets, this.overview, this.recentTasks);
+      if (this.isDefaultRecentView) writeRecentCache(this.recentCacheScope, this.assets);
+    },
+    hydrateRecentWorksCache(scope: string) {
+      const normalizedScope = String(scope || "").trim();
+      if (!normalizedScope) return false;
+      if (this.recentCacheHydrated && this.recentCacheScope === normalizedScope) {
+        const now = Date.now();
+        recordWorksPerformance("local_cache_read", now, now, {
+          serialWait: false,
+          source: "assetStore.hydrateRecentWorksCache",
+          duplicate: true,
+          cacheHit: this.assets.length > 0,
+          itemCount: this.assets.length,
+        });
+        return this.assets.length > 0;
+      }
+      if (activeRecentRequest && activeRecentRequest.scope !== normalizedScope) {
+        activeRecentRequest.abort();
+        activeRecentRequest = null;
+        this.recentRequestSequence += 1;
+      }
+      const cache = readRecentCache(normalizedScope);
+      this.recentCacheScope = normalizedScope;
+      this.recentCacheHydrated = true;
+      this.assets = cache?.assets || [];
+      this.lastRefreshAt = Number(cache?.storedAt || 0);
+      this.showingCachedWorks = Boolean(cache?.assets.length);
+      this.loading = !cache?.assets.length;
+      this.error = "";
+      this.offline = false;
+      return Boolean(cache?.assets.length);
+    },
+    async refreshRecentWorks(options: { scope?: string; source?: string; force?: boolean; silent?: boolean } = {}) {
+      const scope = String(options.scope || this.recentCacheScope || "").trim();
+      const source = options.source || "unknown";
+      if (!scope) return;
+      if (!this.recentCacheHydrated || this.recentCacheScope !== scope) this.hydrateRecentWorksCache(scope);
+      if (activeRecentRequest && activeRecentRequest.scope === scope) {
+        const now = Date.now();
+        recordWorksPerformance("recent_works_request", now, now, {
+          serialWait: false,
+          source,
+          requestUrl: "/api/v1/works/recent?limit=20",
+          duplicate: true,
+          itemCount: this.assets.length,
+          note: "reuse_in_flight_request",
+        });
+        await activeRecentRequest.promise;
+        return;
+      }
+      const requestStartedAt = Date.now();
+      if (shouldDedupeRecentRequest(this.lastRecentRequestStartedAt, requestStartedAt, options.force, recentRequestDedupeMs)) {
+        const now = requestStartedAt;
+        recordWorksPerformance("recent_works_request", now, now, {
+          serialWait: false,
+          source,
+          requestUrl: "/api/v1/works/recent?limit=20",
+          duplicate: true,
+          itemCount: this.assets.length,
+          note: "dedupe_window",
+        });
+        return;
+      }
+      if (activeRecentRequest && activeRecentRequest.scope !== scope) {
+        activeRecentRequest.abort();
+        activeRecentRequest = null;
+      }
+      const sequence = ++this.recentRequestSequence;
+      this.lastRecentRequestStartedAt = requestStartedAt;
+      this.loading = this.assets.length === 0;
+      this.refreshing = false;
+      this.error = "";
+      this.offline = false;
+      this.noPermission = false;
+      const timing = beginWorksPerformanceStep("recent_works_request", {
+        serialWait: false,
+        source,
+        requestUrl: "/api/v1/works/recent?limit=20",
+      });
+      const request = fetchRecentWorksTask(20);
+      const promise = (async () => {
+        try {
+          const incoming = await request.promise;
+          if (!isCurrentRecentRequest(sequence, this.recentRequestSequence, scope, this.recentCacheScope)) return;
+          this.assets = mergeRecentWorks(this.assets, incoming, 20);
+          this.pagination = {
+            page: 1,
+            pageSize: 20,
+            total: this.assets.length,
+            hasMore: false,
+          };
+          this.lastRefreshAt = Date.now();
+          this.showingCachedWorks = false;
+          this.persistRecentCache();
+          timing.end({ itemCount: incoming.length });
+        } catch (error) {
+          if (!isCurrentRecentRequest(sequence, this.recentRequestSequence, scope, this.recentCacheScope)) return;
+          this.error = errorText(error, "作品加载失败");
+          const flags = errorFlags(error);
+          this.offline = flags.offline;
+          this.noPermission = flags.noPermission;
+          this.showingCachedWorks = this.assets.length > 0;
+          timing.end({ itemCount: this.assets.length, note: this.offline ? "offline_cache_retained" : "request_failed" });
+        } finally {
+          if (sequence === this.recentRequestSequence) this.loading = false;
+        }
+      })();
+      activeRecentRequest = { scope, promise, abort: request.abort };
+      try {
+        await promise;
+      } finally {
+        if (activeRecentRequest?.promise === promise) activeRecentRequest = null;
+      }
     },
     async fetchOverview() {
+      const timing = beginWorksPerformanceStep("asset_overview_refresh", {
+        serialWait: false,
+        source: "assetStore.fetchOverview",
+        requestUrl: "/api/v1/assets/overview",
+      });
       this.overviewLoading = true;
       this.overviewError = "";
       try {
         this.overview = await fetchAssetOverview();
+        timing.end();
       } catch (error) {
         this.overviewError = errorText(error, "资产概览加载失败");
+        timing.end({ note: "request_failed" });
       } finally {
         this.overviewLoading = false;
       }
@@ -236,8 +389,6 @@ export const useAssetStore = defineStore("assets", {
       }
       this.refreshing = !options.silent;
       this.selectedIds = [];
-      const overviewPromise = this.fetchOverview();
-      const recentTasksPromise = this.fetchRecentTasks({ refreshCompletedAssets: false });
       activeRefreshPromise = this.fetchAssets({ reset: true, pageSize });
       try {
         await activeRefreshPromise;
@@ -247,7 +398,19 @@ export const useAssetStore = defineStore("assets", {
         activeRefreshPromise = null;
         this.refreshing = false;
       }
-      void Promise.all([overviewPromise, recentTasksPromise]).then(() => this.persistRecentCache());
+    },
+    refreshAssetCenterBackground(source = "page_show") {
+      const timing = beginWorksPerformanceStep("asset_center_background_refresh", {
+        serialWait: false,
+        source,
+        requestUrl: "/api/v1/assets/overview + /api/v1/generation-tasks",
+      });
+      return Promise.allSettled([
+        this.fetchOverview(),
+        this.fetchRecentTasks({ refreshCompletedAssets: false }),
+      ]).then(() => {
+        timing.end();
+      });
     },
     loadMoreAssets() {
       return this.fetchAssets({ reset: false });
@@ -372,7 +535,21 @@ export const useAssetStore = defineStore("assets", {
       }
     },
     async fetchRecentTasks(options: { refreshCompletedAssets?: boolean } = {}) {
-      if (this.tasksLoading) return;
+      if (this.tasksLoading) {
+        const now = Date.now();
+        recordWorksPerformance("task_sync", now, now, {
+          serialWait: false,
+          source: "assetStore.fetchRecentTasks",
+          requestUrl: "/api/v1/generation-tasks",
+          duplicate: true,
+        });
+        return;
+      }
+      const timing = beginWorksPerformanceStep("task_sync", {
+        serialWait: false,
+        source: "assetStore.fetchRecentTasks",
+        requestUrl: "/api/v1/generation-tasks",
+      });
       this.tasksLoading = true;
       this.taskError = "";
       try {
@@ -381,13 +558,14 @@ export const useAssetStore = defineStore("assets", {
         const hasNewCompletedResult = nextTasks.some(task => task.status === "completed" && task.resultIds.some(id => !assetIds.has(id)));
         this.recentTasks = nextTasks;
         this.pollingFailures = 0;
-        if (options.refreshCompletedAssets !== false && hasNewCompletedResult && !this.loading && !activeRefreshPromise && this.filters.status === "recent") {
-          await this.fetchAssets({ reset: true, pageSize: 4 });
-          this.persistRecentCache();
+        if (options.refreshCompletedAssets !== false && hasNewCompletedResult && !this.loading && !activeRefreshPromise && this.isDefaultRecentView) {
+          await this.refreshRecentWorks({ source: "task_sync", force: true, silent: true });
         }
+        timing.end({ itemCount: nextTasks.length });
       } catch (error) {
         this.taskError = errorText(error, "任务加载失败");
         this.pollingFailures += 1;
+        timing.end({ note: "request_failed" });
       } finally {
         this.tasksLoading = false;
       }
@@ -441,9 +619,9 @@ export const useAssetStore = defineStore("assets", {
         this.projects = [];
       }
     },
-    startTaskPolling() {
+    startTaskPolling(initialDelay = 4000) {
       this.pageVisible = true;
-      this.scheduleTaskPolling(0);
+      this.scheduleTaskPolling(initialDelay);
     },
     stopTaskPolling() {
       this.pageVisible = false;

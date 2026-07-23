@@ -3,8 +3,10 @@ package httpserver
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
@@ -106,6 +108,86 @@ func TestAssetCenterLightweightListCanSkipSummary(t *testing.T) {
 	withSummary := authedRequest(t, handler, http.MethodGet, "/api/v1/assets?paged=true&limit=4&lightweight=true", nil, token)
 	if withSummary.Code != http.StatusOK || !bytes.Contains(withSummary.Body.Bytes(), []byte(`"summary"`)) {
 		t.Fatalf("default paged list must keep summary compatibility: status = %d, body = %s", withSummary.Code, withSummary.Body.String())
+	}
+}
+
+func TestRecentWorksEndpointReturnsOnlyCompactCardFields(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	handler := newWithStore(config.Config{Addr: ":0", StaticDir: t.TempDir()}, store).Handler
+	login := request(t, handler, http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"email":"demo@xianzhi.ai","password":"Demo123!"}`))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", login.Code, login.Body.String())
+	}
+	var authPayload struct {
+		AccessToken string `json:"accessToken"`
+		User        struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(login.Body).Decode(&authPayload); err != nil {
+		t.Fatal(err)
+	}
+	if authPayload.AccessToken == "" || authPayload.User.ID == "" {
+		t.Fatalf("login response is incomplete: %+v", authPayload)
+	}
+	if err := store.update(func(data *platformData) error {
+		for index := 0; index < 25; index++ {
+			data.Assets = append(data.Assets, asset{
+				ID:           fmt.Sprintf("large_asset_%02d", index),
+				UserID:       authPayload.User.ID,
+				TaskID:       fmt.Sprintf("task_%02d", index),
+				Name:         fmt.Sprintf("作品 %02d", index),
+				MediaType:    "image",
+				URL:          "data:image/png;base64," + strings.Repeat("A", 256*1024),
+				ThumbnailURL: "data:image/jpeg;base64," + strings.Repeat("B", 1024),
+				Metadata: map[string]any{
+					"sourceUrl":   "data:image/png;base64," + strings.Repeat("A", 256*1024),
+					"projectId":   "project_recent",
+					"projectName": "最近项目",
+					"fileSize":    1024,
+				},
+				CreatedAt: fmt.Sprintf("2026-07-%02dT12:00:00Z", index+1),
+				UpdatedAt: fmt.Sprintf("2026-07-%02dT12:00:00Z", index+1),
+			})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	directItems, err := store.ListRecentWorksForUser(authPayload.User.ID, maxRecentWorksLimit)
+	if err != nil || len(directItems) != maxRecentWorksLimit {
+		t.Fatalf("direct recent works count = %d, err = %v", len(directItems), err)
+	}
+	response := authedRequest(t, handler, http.MethodGet, "/api/v1/works/recent", nil, authPayload.AccessToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("recent works status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Server-Timing") == "" {
+		t.Fatal("recent works response is missing Server-Timing")
+	}
+	if response.Body.Len() > 100*1024 {
+		t.Fatalf("recent works response is not compact: %d bytes", response.Body.Len())
+	}
+	for _, forbidden := range []string{`"metadata"`, `"sourceUrl"`, `"url"`} {
+		if bytes.Contains(response.Body.Bytes(), []byte(forbidden)) {
+			t.Fatalf("recent works leaked %s", forbidden)
+		}
+	}
+	var payload struct {
+		Items []recentWork `json:"items"`
+	}
+	rawBody := append([]byte(nil), response.Body.Bytes()...)
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) != maxRecentWorksLimit {
+		t.Fatalf("recent works count = %d, want %d, body = %s", len(payload.Items), maxRecentWorksLimit, string(rawBody))
+	}
+	if payload.Items[0].ID != "large_asset_24" {
+		t.Fatalf("recent works order starts with %q, want large_asset_24", payload.Items[0].ID)
+	}
+	if payload.Items[recentWorksFirstPaintCovers-1].ThumbnailURL == "" || payload.Items[recentWorksFirstPaintCovers].ThumbnailURL != "" {
+		t.Fatalf("recent works must include only first-paint covers: %#v", payload.Items[:recentWorksFirstPaintCovers+1])
 	}
 }
 

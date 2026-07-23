@@ -497,6 +497,7 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 		return req, err
 	}
 	removeLegacyGenerationMetadata(&req, resolved)
+	normalizeGenerationQualityForLimit(&req, resolved)
 	if err := validateGenerationParams(req, resolved); err != nil {
 		return req, err
 	}
@@ -539,6 +540,41 @@ func removeLegacyGenerationMetadata(req *generation.CreateRequest, resolved reso
 			delete(req.Params, key)
 		}
 	}
+}
+
+func normalizeGenerationQualityForLimit(req *generation.CreateRequest, resolved resolvedModuleSchema) {
+	if req == nil || req.Params == nil {
+		return
+	}
+	value, ok := req.Params["quality"]
+	if !ok || !hasNonEmptyValue(value) {
+		return
+	}
+	var schemaField adminAIParameterField
+	var finalField adminAIParameterField
+	for _, field := range resolved.Schema.SchemaJSON.Fields {
+		if field.Key == "quality" {
+			schemaField = field
+			break
+		}
+	}
+	for _, field := range resolved.FinalSchema.Fields {
+		if field.Key == "quality" {
+			finalField = field
+			break
+		}
+	}
+	if len(schemaField.Options) == 0 || len(finalField.Options) == 0 {
+		return
+	}
+	if !anyListContains(schemaField.Options, value) || anyListContains(finalField.Options, value) {
+		return
+	}
+	if finalField.Default != nil && anyListContains(finalField.Options, finalField.Default) {
+		req.Params["quality"] = finalField.Default
+		return
+	}
+	req.Params["quality"] = finalField.Options[0]
 }
 
 func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {

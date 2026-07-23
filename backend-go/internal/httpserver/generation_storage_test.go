@@ -100,6 +100,9 @@ func TestPersistGeneratedImagesBindsFileAndSignsAssetURL(t *testing.T) {
 	if stringValue(item.Metadata["fileId"]) != files[0].FileID || !boolValue(item.Metadata["storageManaged"]) {
 		t.Fatalf("asset is not bound to stored file: %+v", item.Metadata)
 	}
+	if stringValue(item.Metadata["sourceUrl"]) != "" || strings.HasPrefix(item.URL, "data:") {
+		t.Fatalf("stored asset duplicated an inline original: url=%q metadata=%+v", item.URL, item.Metadata)
+	}
 	signed := a.signStoredAssetURLs(context.Background(), req.UserID, []asset{item})
 	if len(signed) != 1 || !strings.Contains(signed[0].URL, "/download/"+files[0].ObjectKey) || signed[0].ThumbnailURL != signed[0].URL {
 		t.Fatalf("asset URL was not signed from storage: %+v", signed)

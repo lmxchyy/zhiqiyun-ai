@@ -139,8 +139,8 @@
       </view>
 
       <view class="mpb-inline-actions">
-        <button class="mpb-button secondary" @click="showInfo('隐私政策', '隐私政策正文将由运营后台配置并在正式发布前完成审核。')">隐私政策</button>
-        <button class="mpb-button secondary" @click="showInfo('用户协议', '用户协议正文将由运营后台配置并在正式发布前完成审核。')">用户协议</button>
+        <button class="mpb-button secondary" @click="openLegalDocument('privacy-policy')">隐私政策</button>
+        <button class="mpb-button secondary" @click="openLegalDocument('user-agreement')">用户协议</button>
         <button class="mpb-button secondary" @click="openComplianceCenter">协议、AI规范与投诉</button>
       </view>
       <view class="mpb-inline-actions">
@@ -160,6 +160,7 @@ import { useAuthStore } from "../../stores/auth";
 import type { AccountSecurityResponse } from "../../features/auth/types";
 import { backOrHome } from "../../utils/miniProgramBusiness";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
+import { openLegalDocument } from "../../features/legal/navigation";
 
 const changing = ref(false);
 const authStore = useAuthStore();

@@ -79,7 +79,12 @@
             <view class="wechat-login-icon" aria-hidden="true"></view>
             <text>{{ wechatLoginLoading ? "微信授权中..." : "微信手机号授权登录" }}</text>
           </button>
-          <text class="login-agreement">登录即表示同意《用户协议》和《隐私政策》</text>
+          <view class="login-agreement">
+            <text>登录即表示同意</text>
+            <text @click="openLegalDocument('user-agreement')">《用户协议》</text>
+            <text>和</text>
+            <text @click="openLegalDocument('privacy-policy')">《隐私政策》</text>
+          </view>
         </view>
       </view>
 
@@ -1137,6 +1142,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, apiClient, authService, businessSdk } from "../api/client";
+import { openLegalDocument } from "../features/legal/navigation";
 import { pendingActions, requireAuth, resumePendingAction } from "../features/auth/gate";
 import { trackLogin } from "../features/auth/analytics";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
@@ -3535,12 +3541,14 @@ async function loginWithWechatPhoneNumber(event: unknown) {
 }
 
 .login-agreement {
-  display: block;
+  display: flex;
+  justify-content: center;
   color: #667085;
   font-size: 11px;
   line-height: 1.45;
   text-align: center;
 }
+.login-agreement text:nth-child(2), .login-agreement text:nth-child(4) { color: #5b55d6; cursor: pointer; }
 
 .login-helper {
   width: 100%;
@@ -3687,7 +3695,6 @@ async function loginWithWechatPhoneNumber(event: unknown) {
   min-height: 100%;
   background: #f8fafc;
 }
-
 .video-generation-scroll {
   height: calc(100vh - 72px);
   background: #f8fafc;

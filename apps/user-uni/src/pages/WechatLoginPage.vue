@@ -217,7 +217,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { onLoad, onUnload } from "@dcloudio/uni-app";
 import { ApiClientError } from "@xianzhi/api-client";
-import { authStorage } from "../api/client";
+import { apiRequestTask, authStorage } from "../api/client";
 import AgreementCheckbox from "../components/auth/AgreementCheckbox.vue";
 import BottomSheet from "../components/auth/BottomSheet.vue";
 import BrandHeader from "../components/auth/BrandHeader.vue";
@@ -683,12 +683,20 @@ function removeInvite() {
   closeInviteSheet();
 }
 
-function openAgreement(type: "user" | "privacy") {
+async function openAgreement(type: "user" | "privacy") {
+  const code = type === "user" ? "user-agreement" : "privacy-policy";
   agreementSheetTitle.value = type === "user" ? "用户协议" : "隐私政策";
-  agreementSheetContent.value = type === "user"
-    ? "请在使用知启云AI前仔细阅读用户协议。账号注册、登录、内容创作及企业功能应遵守平台规则。正式正文由运营后台发布并在小程序上线前完成审核。"
-    : "知启云AI仅在登录和提供服务所必需的范围内处理手机号、微信身份及账号信息，不会在前端保存微信 session_key，也不会在日志中输出密码、完整手机号或登录凭证。正式正文由运营后台发布并在小程序上线前完成审核。";
+  agreementSheetContent.value = "正在加载协议正文...";
   agreementSheetVisible.value = true;
+  try {
+    const payload = await apiRequestTask<{ items: Array<{ code: string; title: string; content: string }> }>("/api/v1/public/legal-documents", { auth: false }).promise;
+    const document = (payload.items || []).find(item => item.code === code);
+    if (!document?.content || document.content === "待配置") throw new Error("协议正文尚未发布");
+    agreementSheetTitle.value = document.title || agreementSheetTitle.value;
+    agreementSheetContent.value = document.content;
+  } catch (error) {
+    agreementSheetContent.value = error instanceof Error ? error.message : "协议加载失败，请稍后重试";
+  }
 }
 
 function acceptAgreementFromSheet() {

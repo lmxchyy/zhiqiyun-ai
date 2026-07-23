@@ -41,6 +41,35 @@ function currentRoute() {
   return current && current.route ? current.route : "";
 }
 
+function recordWorksTabClick() {
+  const clickedAt = Date.now();
+  globalThis.__XIANZHI_WORKS_TAB_CLICK_AT__ = clickedAt;
+  let development = false;
+  try {
+    development = wx.getAccountInfoSync().miniProgram.envVersion === "develop";
+  } catch {
+    development = false;
+  }
+  if (!development && !globalThis.__XIANZHI_WORKS_PERF__) return;
+  const event = {
+    step: "works_tab_click",
+    startTime: new Date(clickedAt).toISOString(),
+    endTime: new Date(clickedAt).toISOString(),
+    durationMs: 0,
+    serialWait: false,
+    source: "custom-tab-bar.switchTab",
+    requestUrl: "",
+    duplicate: false,
+    cacheHit: false,
+    itemCount: 0,
+    note: "",
+  };
+  const events = globalThis.__XIANZHI_WORKS_PERF_EVENTS__ || [];
+  events.push(event);
+  globalThis.__XIANZHI_WORKS_PERF_EVENTS__ = events;
+  console.info(`[works-perf] ${JSON.stringify(event)}`);
+}
+
 Component({
   data: {
     selected: 0,
@@ -94,6 +123,9 @@ Component({
       if (currentRoute() === item.route) {
         this.syncSelected();
         return;
+      }
+      if (index === 2) {
+        recordWorksTabClick();
       }
       this.setData({ switching: true });
       this.scheduleSwitchingReset();

@@ -193,6 +193,36 @@ func TestApplyAdminPlanCapabilitiesPersistsAccessModelsAndLimits(t *testing.T) {
 	}
 }
 
+func TestNormalizeGenerationQualityForPackageLimit(t *testing.T) {
+	data := normalizeAICapabilityDefaults(seedAdminData())
+	user := adminUser{ID: "user_free", Role: "MEMBER", PlanID: "plan_free"}
+	resolved, err := resolveModuleSchema(data, user, moduleImageGeneration, "mock-standard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration,
+		Model:      "mock-standard",
+		Prompt:     "test image",
+		Params: map[string]any{
+			"size": "1024x1024", "quality": "high", "n": float64(1),
+		},
+	}
+	normalizeGenerationQualityForLimit(&request, resolved)
+	if request.Params["quality"] != "standard" {
+		t.Fatalf("quality was not normalized to package option: %#v", request.Params["quality"])
+	}
+	if err := validateGenerationParams(request, resolved); err != nil {
+		t.Fatalf("normalized request should pass validation: %v", err)
+	}
+
+	request.Params["quality"] = "unsupported"
+	normalizeGenerationQualityForLimit(&request, resolved)
+	if request.Params["quality"] != "unsupported" {
+		t.Fatalf("invalid schema value must not be silently normalized: %#v", request.Params["quality"])
+	}
+}
+
 func TestLegacyPackageCapabilitiesExpandPaidVariantsOnlyBeforeFirstEdit(t *testing.T) {
 	data := normalizeAICapabilityDefaults(seedAdminData())
 	video := findAIModule(data.AIModules, moduleVideoGeneration)

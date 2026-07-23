@@ -734,6 +734,7 @@ import V531ProfilePage from "./v531/V531ProfilePage.vue";
 import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
 import { fetchAssetDetail } from "../features/assets/api";
+import { beginWorksPerformanceStep } from "../features/assets/performance";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
 import { useAuthStore } from "../stores/auth";
 import { useUserStore } from "../stores/user";
@@ -2063,7 +2064,17 @@ async function refreshAll() {
   pageLoading.value = true;
   pageError.value = "";
   try {
-    await userStore.loadProfile(true);
+    const isWorksEntry = activeRole.value === "user" && activeTab.value === "assets";
+    const profileTiming = beginWorksPerformanceStep("user_profile_initialization", {
+      serialWait: !isWorksEntry,
+      source: "MiniProgramRoleWorkbench.refreshAll",
+      requestUrl: "/api/v1/user/profile",
+    });
+    await userStore.loadProfile(!isWorksEntry);
+    profileTiming.end({
+      cacheHit: isWorksEntry && userStore.loaded,
+      note: isWorksEntry ? "cached_profile_allowed" : "forced_refresh",
+    });
     const requestedRole = roleToAppRole[activeRole.value];
     if (!userStore.hasRole(requestedRole)) {
       uni.reLaunch({ url: `/pages/ForbiddenPage?role=${encodeURIComponent(requestedRole)}` });
@@ -2319,29 +2330,64 @@ function handleLegalAcceptanceCompleted() {
   void submitCreation(prompt);
 }
 
-async function resolveBackendGenerationModel(
+type BackendGenerationConfig = {
+  model: string;
+  schema: AnyRecord;
+};
+
+function moduleSchemaFields(schema: AnyRecord) {
+  const nested = schema.schema && typeof schema.schema === "object" && !Array.isArray(schema.schema)
+    ? schema.schema as AnyRecord
+    : {};
+  const directFields = listOf(schema.fields);
+  return directFields.length ? directFields : listOf(nested.fields);
+}
+
+function constrainedSchemaString(schema: AnyRecord, key: string, requested: string, fallback: string) {
+  const field = moduleSchemaFields(schema).find(item => rowString(item, "key") === key);
+  if (!field) return requested || fallback;
+  const options = Array.isArray(field.options)
+    ? field.options.map(item => typeof item === "string" ? item.trim() : "").filter(Boolean)
+    : [];
+  if (!options.length || options.includes(requested)) return requested || fallback;
+  const defaultValue = rowString(field, "default");
+  return options.includes(defaultValue) ? defaultValue : options[0] || fallback;
+}
+
+function constrainedSchemaNumber(schema: AnyRecord, key: string, requested: number, fallback: number) {
+  const field = moduleSchemaFields(schema).find(item => rowString(item, "key") === key);
+  let value = Number.isFinite(requested) && requested > 0 ? requested : fallback;
+  if (!field) return value;
+  const min = Number(field.min);
+  const max = Number(field.max);
+  if (Number.isFinite(min)) value = Math.max(value, min);
+  if (Number.isFinite(max)) value = Math.min(value, max);
+  return value;
+}
+
+async function resolveBackendGenerationConfig(
   mode: "image" | "video",
   fallback: string,
-) {
+): Promise<BackendGenerationConfig> {
   const moduleCode = mode === "video" ? "video_generation" : "image_generation";
   const loadSchema = (modelName = "") => api<AnyRecord>(
     `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
   );
   try {
     const schema = await loadSchema(fallback);
-    return rowString(schema, "model_name", "modelName") || fallback;
+    return { model: rowString(schema, "model_name", "modelName") || fallback, schema };
   } catch (preferredModelError) {
     try {
       const schema = await loadSchema();
       const availableModel = rowString(schema, "model_name", "modelName");
       if (availableModel) {
         console.warn("[创作模型自动回退]", { moduleCode, fallback, availableModel, preferredModelError });
-        return availableModel;
+        return { model: availableModel, schema };
       }
     } catch (defaultModelError) {
       console.warn("[创作模型预检降级]", { moduleCode, fallback, preferredModelError, defaultModelError });
     }
-    return fallback;
+    return { model: fallback, schema: {} };
   }
 }
 
@@ -2401,21 +2447,25 @@ async function submitCreation(prompt: string) {
     } else {
       const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
       const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
-      const model = await resolveBackendGenerationModel(
+      const generationConfig = await resolveBackendGenerationConfig(
         mode,
         activeCreationModel.value,
       );
+      const requestedQuality = restoredCreationString("quality", "imageQuality") || (mode === "video" ? "720p" : "standard");
+      const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || (mode === "video" ? "16:9" : "1024x1024");
       const result = await businessSdk.generation.createTask({
         mode,
         prompt,
-        model,
+        model: generationConfig.model,
         style: restoredCreationString("style", "stylePreset") || (mode === "video" ? "cinematic" : creationMode.value === "infographic" ? "infographic" : "commercial"),
-        size: restoredCreationString("size", "aspectRatio", "aspect_ratio") || (mode === "video" ? "16:9" : "1024x1024"),
-        quality: restoredCreationString("quality", "imageQuality") || (mode === "video" ? "720p" : "standard"),
-        count: restoredCreationCount(),
+        size: constrainedSchemaString(generationConfig.schema, mode === "video" ? "aspect_ratio" : "size", requestedSize, mode === "video" ? "16:9" : "1024x1024"),
+        quality: constrainedSchemaString(generationConfig.schema, mode === "video" ? "resolution" : "quality", requestedQuality, mode === "video" ? "720p" : "standard"),
+        count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
-        duration: rowNumber(restoredCreationParams.value, "duration") || undefined,
+        duration: mode === "video"
+          ? constrainedSchemaNumber(generationConfig.schema, "duration", rowNumber(restoredCreationParams.value, "duration"), 5)
+          : undefined,
         parameters: restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");

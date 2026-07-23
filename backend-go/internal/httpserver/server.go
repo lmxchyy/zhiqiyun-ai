@@ -308,6 +308,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/video/download", wrapF(api.downloadVideoByURL))
 	v1.GET("/assets", wrapF(api.listAssets))
 	v1.GET("/assets/overview", wrapF(api.assetsOverview))
+	v1.GET("/works/recent", wrapF(api.listRecentWorks))
 	v1.GET("/assets/projects", wrapF(api.assetProjects))
 	v1.POST("/assets/batch", wrapF(api.batchAssets))
 	v1.GET("/assets/:id", wrapF(api.assetDetail))

@@ -51,6 +51,9 @@ func TestPointRechargeRequiresActiveMemberOrAgent(t *testing.T) {
 		want        bool
 	}{
 		{name: "free user", memberLevel: "FREE", want: false},
+		{name: "stale basic user without expiry", memberLevel: "BASIC", want: false},
+		{name: "active basic member", memberLevel: "BASIC", expiresAt: now.Add(24 * time.Hour).Format(time.RFC3339Nano), want: true},
+		{name: "pro member without expiry", memberLevel: "PRO", want: false},
 		{name: "active member", memberLevel: "PRO", expiresAt: now.Add(24 * time.Hour).Format(time.RFC3339Nano), want: true},
 		{name: "expired member", memberLevel: "PRO", expiresAt: now.Add(-time.Second).Format(time.RFC3339Nano), want: false},
 		{name: "active agent", memberLevel: "FREE", agentStatus: "ACTIVE", want: true},

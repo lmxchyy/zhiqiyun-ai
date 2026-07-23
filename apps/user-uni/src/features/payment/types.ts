@@ -24,6 +24,8 @@ export interface VirtualPaymentProductsResponse {
   items: VirtualPaymentProduct[]
   enabled: boolean
   environment: 'production' | 'sandbox' | string
+  rechargeEligible: boolean
+  rechargeEligibilityReason?: string
 }
 
 export interface VirtualPaymentCoupon {

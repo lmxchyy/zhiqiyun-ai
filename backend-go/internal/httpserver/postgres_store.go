@@ -1726,8 +1726,20 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 		item.Metadata["storageObjectKey"] = stringValue(stored["objectKey"])
 		item.Metadata["fileSize"] = int64Value(stored["fileSize"])
 		item.Metadata["fileSizeBytes"] = int64Value(stored["fileSize"])
-		item.Metadata["sourceUrl"] = stringValue(stored["sourceUrl"])
+		if sourceURL := compactPersistedSourceURL(stringValue(stored["sourceUrl"])); sourceURL != "" {
+			item.Metadata["sourceUrl"] = sourceURL
+		}
 		item.Metadata["storageManaged"] = true
+		if item.Metadata["fileId"] != "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.URL)), "data:") {
+			// The managed file is the durable original. Do not duplicate the same
+			// multi-megabyte Data URL in the asset row.
+			originalURL := item.URL
+			item.URL = ""
+			if item.ThumbnailURL == originalURL {
+				item.ThumbnailURL = ""
+				delete(item.Metadata, "thumbnailUrl")
+			}
+		}
 		if storedContentType := stringValue(stored["contentType"]); storedContentType != "" {
 			item.Metadata["contentType"] = storedContentType
 		}

@@ -76,7 +76,7 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 			req.GeneratedImages[index].ThumbnailURL = image.URL
 		}
 		stored = append(stored, file)
-		records = append(records, map[string]any{
+		record := map[string]any{
 			"fileId":         file.FileID,
 			"tenantId":       file.TenantID,
 			"provider":       file.Provider,
@@ -84,13 +84,24 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 			"objectKey":      file.ObjectKey,
 			"fileSize":       file.FileSize,
 			"contentType":    file.MIMEType,
-			"sourceUrl":      image.URL,
 			"source":         image.Source,
 			"providerTaskId": image.ProviderTaskID,
-		})
+		}
+		if sourceURL := compactPersistedSourceURL(image.URL); sourceURL != "" {
+			record["sourceUrl"] = sourceURL
+		}
+		records = append(records, record)
 	}
 	req.Params[generatedStorageFilesParam] = records
 	return req, stored, nil
+}
+
+func compactPersistedSourceURL(value string) string {
+	text := strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(text), "data:") || len(text) > 4096 {
+		return ""
+	}
+	return text
 }
 
 func applyGeneratedImageProviderMetadata(req generation.CreateRequest) generation.CreateRequest {

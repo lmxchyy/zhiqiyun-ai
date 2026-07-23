@@ -14,6 +14,9 @@
       <button class="retry" @click="load">重新加载</button>
     </view>
     <view v-else class="document-list">
+      <view v-if="targetMissing" class="state error">
+        <text>该协议正文尚未发布，请联系平台客服后再继续操作。</text>
+      </view>
       <button v-for="item in documents" :key="item.code" class="document" @click="openDocument(item)">
         <view>
           <text class="document-title">{{ item.title }}</text>
@@ -22,7 +25,7 @@
         <text>›</text>
       </button>
 
-      <view class="acceptance-card">
+      <view v-if="!viewOnly" class="acceptance-card">
         <text class="acceptance-title">首次生成前协议确认</text>
         <text class="acceptance-summary">
           {{ acceptanceReady ? "当前必要协议已确认" : "请阅读并确认当前发布版本；协议更新后需要重新确认。" }}
@@ -61,8 +64,9 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { apiRequestTask } from "../../api/client";
+import { ref } from "vue";
+import { onLoad } from "@dcloudio/uni-app";
+import { apiRequestTask, getAuthToken } from "../../api/client";
 
 interface LegalDocument { code: string; title: string; version: string; content: string }
 interface AcceptanceDocument { code: string; title: string; version: string; accepted: boolean }
@@ -76,23 +80,35 @@ const error = ref("");
 const acceptanceItems = ref<AcceptanceDocument[]>([]);
 const acceptanceReady = ref(false);
 const accepting = ref(false);
+const targetCode = ref("");
+const targetMissing = ref(false);
+const viewOnly = ref(false);
 
-onMounted(load);
+onLoad(options => {
+  targetCode.value = String(options?.document || "");
+  viewOnly.value = options?.view === "1" || !getAuthToken();
+  void load();
+});
 
 async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [publicPayload, status] = await Promise.all([
-      apiRequestTask<{ items: LegalDocument[]; complaintUrl: string; infringementUrl: string }>("/api/v1/public/legal-documents", { auth: false }).promise,
-      apiRequestTask<{ ready: boolean; items: AcceptanceDocument[] }>("/api/v1/legal/acceptance-status").promise,
-    ]);
+    const publicPayload = await apiRequestTask<{ items: LegalDocument[]; complaintUrl: string; infringementUrl: string }>("/api/v1/public/legal-documents", { auth: false }).promise;
     documents.value = publicPayload.items || [];
     complaintUrl.value = publicPayload.complaintUrl || "";
     infringementUrl.value = publicPayload.infringementUrl || "";
-    acceptanceReady.value = Boolean(status.ready);
-    acceptanceItems.value = status.items || [];
-    if (acceptanceItems.value.length !== 3) error.value = "必要协议尚未全部发布，请联系平台管理员";
+    if (targetCode.value) {
+      const target = documents.value.find(item => item.code === targetCode.value);
+      targetMissing.value = !target;
+      if (target) active.value = target;
+    }
+    if (!viewOnly.value) {
+      const status = await apiRequestTask<{ ready: boolean; items: AcceptanceDocument[] }>("/api/v1/legal/acceptance-status").promise;
+      acceptanceReady.value = Boolean(status.ready);
+      acceptanceItems.value = status.items || [];
+      if (acceptanceItems.value.length !== 3) error.value = "必要协议尚未全部发布，请联系平台管理员";
+    }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "合规信息加载失败";
   } finally {

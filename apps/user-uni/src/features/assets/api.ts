@@ -1,5 +1,6 @@
-import { api, getApiBaseURL } from "../../api/client";
+import { api, apiRequestTask, getApiBaseURL, type ApiRequestTaskHandle } from "../../api/client";
 import { v531SlotsByPage } from "../../config/v531";
+import { beginWorksPerformanceStep } from "./performance";
 import type {
   AssetBatchPayload,
   AssetDetail,
@@ -162,6 +163,40 @@ function assetQuery(page: number, pageSize: number, filters: AssetFilter, sort: 
 export async function fetchAssetOverview(): Promise<AssetOverview> {
   const payload = record(await api<unknown>("/api/v1/assets/overview"));
   return normalizeOverview(payload.overview || payload.summary || payload);
+}
+
+export function fetchRecentWorksTask(limit = 20): ApiRequestTaskHandle<AssetItem[]> {
+  const resolvedLimit = Math.max(1, Math.min(20, Math.round(Number(limit) || 20)));
+  const requestUrl = `/api/v1/works/recent?limit=${resolvedLimit}`;
+  const request = apiRequestTask<unknown>(requestUrl, { timeout: 3000 });
+  return {
+    abort: request.abort,
+    promise: request.promise.then((value) => {
+      const transform = beginWorksPerformanceStep("data_transform", {
+        serialWait: true,
+        source: "fetchRecentWorksTask",
+        requestUrl,
+      });
+      const payload = record(value);
+      const transformed = Array.isArray(payload.items)
+        ? payload.items.map(normalizeAsset).filter(item => item.id)
+        : [];
+      transform.end({ itemCount: transformed.length });
+      const mediaURLTiming = beginWorksPerformanceStep("image_url_processing", {
+        serialWait: true,
+        source: "fetchRecentWorksTask",
+        requestUrl,
+      });
+      const items = transformed.map(item => ({
+        ...item,
+        remoteUrl: item.remoteUrl.trim(),
+        thumbnailUrl: item.thumbnailUrl.trim(),
+        fallbackUrl: item.fallbackUrl.trim(),
+      }));
+      mediaURLTiming.end({ itemCount: items.length });
+      return items;
+    }),
+  };
 }
 
 export async function fetchAssetPage(page: number, pageSize: number, filters: AssetFilter, sort: AssetSort): Promise<AssetPageResponse> {
