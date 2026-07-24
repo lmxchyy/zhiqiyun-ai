@@ -54,7 +54,7 @@ func (p *fakeProvider) CopyObject(_ context.Context, source string, target strin
 	return nil
 }
 
-func (p *fakeProvider) CreatePresignedUploadURL(_ context.Context, key string, _ time.Duration) (string, error) {
+func (p *fakeProvider) CreatePresignedUploadURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	return "https://storage.example/upload/" + key, nil
 }
 

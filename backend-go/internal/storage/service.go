@@ -57,7 +57,7 @@ func (s *Service) InitUpload(ctx context.Context, input UploadInitInput) (Upload
 	if err != nil {
 		return UploadTicket{}, err
 	}
-	uploadURL, err := provider.CreatePresignedUploadURL(ctx, file.ObjectKey, s.options.UploadURLTTL)
+	uploadURL, err := provider.CreatePresignedUploadURL(ctx, file.ObjectKey, file.MIMEType, s.options.UploadURLTTL)
 	if err != nil {
 		_ = s.repo.MarkUploadFailed(ctx, file.TenantID, file.FileID, err.Error())
 		return UploadTicket{}, fmt.Errorf("STORAGE_UPLOAD_INIT_FAILED: %w", err)

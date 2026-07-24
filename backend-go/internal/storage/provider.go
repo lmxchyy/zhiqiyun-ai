@@ -18,7 +18,7 @@ type Provider interface {
 	HeadObject(context.Context, string) (ObjectMetadata, error)
 	DeleteObject(context.Context, string) error
 	CopyObject(context.Context, string, string) error
-	CreatePresignedUploadURL(context.Context, string, time.Duration) (string, error)
+	CreatePresignedUploadURL(context.Context, string, string, time.Duration) (string, error)
 	CreatePresignedDownloadURL(context.Context, string, time.Duration) (string, error)
 	TestConnection(context.Context) error
 }
@@ -155,7 +155,7 @@ func (p *s3Provider) CopyObject(ctx context.Context, sourceKey string, targetKey
 	return err
 }
 
-func (p *s3Provider) CreatePresignedUploadURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
+func (p *s3Provider) CreatePresignedUploadURL(ctx context.Context, objectKey, _ string, ttl time.Duration) (string, error) {
 	if err := p.ensureBucket(ctx); err != nil {
 		return "", err
 	}

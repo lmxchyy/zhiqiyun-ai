@@ -50,7 +50,7 @@ func (p *generatedStorageTestProvider) CopyObject(_ context.Context, source stri
 	return nil
 }
 
-func (p *generatedStorageTestProvider) CreatePresignedUploadURL(_ context.Context, key string, _ time.Duration) (string, error) {
+func (p *generatedStorageTestProvider) CreatePresignedUploadURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
 	return "https://storage.example/upload/" + key, nil
 }
 

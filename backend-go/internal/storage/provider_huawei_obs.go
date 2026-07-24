@@ -140,18 +140,22 @@ func (p *huaweiOBSProvider) CopyObject(ctx context.Context, sourceKey string, ta
 	return err
 }
 
-func (p *huaweiOBSProvider) CreatePresignedUploadURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
+func (p *huaweiOBSProvider) CreatePresignedUploadURL(ctx context.Context, objectKey, contentType string, ttl time.Duration) (string, error) {
 	if err := p.ensureBucket(ctx); err != nil {
 		return "", err
 	}
-	return p.createSignedURL(ctx, huaweiobs.HttpMethodPut, objectKey, ttl)
+	headers := map[string]string{}
+	if value := strings.TrimSpace(contentType); value != "" {
+		headers["Content-Type"] = value
+	}
+	return p.createSignedURL(ctx, huaweiobs.HttpMethodPut, objectKey, ttl, headers)
 }
 
 func (p *huaweiOBSProvider) CreatePresignedDownloadURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
-	return p.createSignedURL(ctx, huaweiobs.HttpMethodGet, objectKey, ttl)
+	return p.createSignedURL(ctx, huaweiobs.HttpMethodGet, objectKey, ttl, nil)
 }
 
-func (p *huaweiOBSProvider) createSignedURL(ctx context.Context, method huaweiobs.HttpMethodType, objectKey string, ttl time.Duration) (string, error) {
+func (p *huaweiOBSProvider) createSignedURL(ctx context.Context, method huaweiobs.HttpMethodType, objectKey string, ttl time.Duration, headers map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -160,7 +164,7 @@ func (p *huaweiOBSProvider) createSignedURL(ctx context.Context, method huaweiob
 		expires = 1
 	}
 	output, err := p.signer.CreateSignedUrl(&huaweiobs.CreateSignedUrlInput{
-		Method: method, Bucket: p.bucket, Key: objectKey, Expires: expires,
+		Method: method, Bucket: p.bucket, Key: objectKey, Expires: expires, Headers: headers,
 	})
 	if err != nil {
 		return "", err

@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	huaweiobs "github.com/huaweicloud/huaweicloud-sdk-go-obs/obs"
 )
 
 func TestS3ProviderUsesPublicSigningEndpoint(t *testing.T) {
@@ -71,6 +73,24 @@ func TestHuaweiOBSProviderUsesNativeClientAndSignature(t *testing.T) {
 	}
 	if parsed.Query().Get("X-Amz-Signature") != "" {
 		t.Fatalf("presigned URL unexpectedly uses AWS signature: %s", signed)
+	}
+
+	uploadURL, err := provider.(*huaweiOBSProvider).createSignedURL(
+		context.Background(),
+		huaweiobs.HttpMethodPut,
+		"tenants/t1/test.jpg",
+		time.Minute,
+		map[string]string{"Content-Type": "image/jpeg"},
+	)
+	if err != nil {
+		t.Fatalf("presign upload: %v", err)
+	}
+	uploadParsed, err := url.Parse(uploadURL)
+	if err != nil {
+		t.Fatalf("parse presigned upload URL: %v", err)
+	}
+	if uploadParsed.Query().Get("Signature") == "" {
+		t.Fatalf("presigned upload URL has no OBS signature: %s", uploadURL)
 	}
 }
 
