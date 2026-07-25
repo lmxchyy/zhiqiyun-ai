@@ -8,6 +8,7 @@ services:
       context: .
       args:
         INSTALL_OFFICECLI: "${INSTALL_OFFICECLI:-false}"
+        ALPINE_MIRROR: "${ALPINE_MIRROR:-https://mirrors.aliyun.com/alpine}"
         OFFICECLI_INSTALL_URL: "${OFFICECLI_INSTALL_URL:-https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh}"
         OFFICECLI_INSTALL_SHA256: "${OFFICECLI_INSTALL_SHA256:-}"
     image: ${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}

@@ -30,9 +30,13 @@ FROM alpine:3.20
 WORKDIR /app
 ARG INSTALL_SEEDANCE_SDK=false
 ARG INSTALL_OFFICECLI=false
+ARG ALPINE_MIRROR=
 ARG OFFICECLI_INSTALL_URL=https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh
 ARG OFFICECLI_INSTALL_SHA256=
-RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip ffmpeg=6.1.1-r8 font-noto-cjk \
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+    sed -i "s#https://dl-cdn.alpinelinux.org/alpine#$ALPINE_MIRROR#g" /etc/apk/repositories; \
+  fi \
+  && apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip ffmpeg=6.1.1-r8 font-noto-cjk \
   && mkdir -p /app/seedance-python \
   && if [ "$INSTALL_SEEDANCE_SDK" = "true" ]; then \
     curl -fL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 180 "https://ecloud.10086.cn/api/query/maas/public/backend/model/link/aicc-sdk/python/download" -o /tmp/maas-seedance-sdk.zip \
