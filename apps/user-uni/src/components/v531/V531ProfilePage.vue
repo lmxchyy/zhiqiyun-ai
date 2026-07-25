@@ -1,9 +1,5 @@
 <template>
   <view class="profile-v55-page">
-    <view class="profile-v55-title-row">
-      <text class="profile-v55-title">我的</text>
-    </view>
-
     <view v-if="!isGuest && selectableRoles.length > 1" class="profile-v55-role-switcher" aria-label="角色切换">
       <button
         v-for="role in selectableRoles"
@@ -382,7 +378,7 @@ const logoutLabel = "\u9000\u51fa\u767b\u5f55";
 <style scoped>
 .profile-v55-page {
   min-height: 100vh;
-  padding: 18px 16px calc(110px + env(safe-area-inset-bottom));
+  padding: 0 16px calc(110px + env(safe-area-inset-bottom));
   box-sizing: border-box;
   color: var(--color-text-primary, #171c29);
   background: var(--color-bg-page, #f7f8fc);
@@ -400,7 +396,6 @@ const logoutLabel = "\u9000\u51fa\u767b\u5f55";
 .profile-v55-page button::after { display: none; }
 .profile-v55-pressed { opacity: .78; transform: scale(.985); }
 
-.profile-v55-title-row,
 .profile-v55-section-head,
 .profile-v55-wallet-card,
 .profile-v55-enterprise-card,
@@ -408,9 +403,6 @@ const logoutLabel = "\u9000\u51fa\u767b\u5f55";
   display: flex;
   align-items: center;
 }
-
-.profile-v55-title-row { min-height: 34px; }
-.profile-v55-title { font-size: 28px; font-weight: 700; line-height: 34px; }
 
 .profile-v55-role-switcher {
   display: grid;
