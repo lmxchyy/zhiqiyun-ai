@@ -47,6 +47,18 @@ function createRequestId() {
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
 }
 
+function getDeviceRequestId() {
+  const key = "zhiqiyunDeviceId"
+  const existing = String(uni.getStorageSync(key) || "")
+  if (existing) return existing
+  const cryptoRuntime = globalThis.crypto
+  const created = cryptoRuntime?.randomUUID
+    ? cryptoRuntime.randomUUID()
+    : `device_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`
+  uni.setStorageSync(key, created)
+  return created
+}
+
 function currentContextHeaders() {
   const auth = authStorage.getAuth()
   const headers: Record<string, string> = {}
@@ -61,6 +73,7 @@ function clientTransportHeaders(headers: Record<string, string> = {}, auth = tru
     Accept: 'application/json',
     'X-Request-Id': createRequestId(),
     'X-Client-Platform': clientInfo.platform,
+    'X-Device-Id': getDeviceRequestId(),
     ...currentContextHeaders(),
     ...headers,
   }

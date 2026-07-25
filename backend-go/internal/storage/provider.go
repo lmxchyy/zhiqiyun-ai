@@ -15,6 +15,7 @@ import (
 
 type Provider interface {
 	PutObject(context.Context, string, io.Reader, int64, string) (ObjectMetadata, error)
+	OpenObject(context.Context, string) (io.ReadCloser, error)
 	HeadObject(context.Context, string) (ObjectMetadata, error)
 	DeleteObject(context.Context, string) error
 	CopyObject(context.Context, string, string) error
@@ -122,6 +123,22 @@ func (p *s3Provider) PutObject(ctx context.Context, objectKey string, source io.
 		return ObjectMetadata{}, err
 	}
 	return ObjectMetadata{Size: info.Size, ETag: info.ETag, ContentType: contentType}, nil
+}
+
+func (p *s3Provider) OpenObject(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	object, err := p.client.GetObject(ctx, p.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := object.Stat(); err != nil {
+		_ = object.Close()
+		response := minio.ToErrorResponse(err)
+		if response.StatusCode == http.StatusNotFound || response.Code == "NoSuchKey" || response.Code == "NoSuchObject" {
+			return nil, ErrFileNotFound
+		}
+		return nil, err
+	}
+	return object, nil
 }
 
 func (p *s3Provider) HeadObject(ctx context.Context, objectKey string) (ObjectMetadata, error) {

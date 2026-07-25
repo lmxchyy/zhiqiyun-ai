@@ -48,10 +48,6 @@ type OpenAICompatible struct {
 }
 
 func NewOpenAICompatible(cfg config.Config) OpenAICompatible {
-	timeoutMS, _ := strconv.Atoi(cfg.ModelTimeoutMS)
-	if timeoutMS <= 0 {
-		timeoutMS = 30000
-	}
 	model := strings.TrimSpace(cfg.ImageModel)
 	return OpenAICompatible{
 		code:              "openai-compatible",
@@ -60,7 +56,7 @@ func NewOpenAICompatible(cfg config.Config) OpenAICompatible {
 		model:             model,
 		models:            nonEmptyStrings(model),
 		referenceImageDir: referenceImageDirFromDataPath(cfg.DataPath),
-		client:            &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
+		client:            &http.Client{Timeout: cfg.ImageProviderTimeout()},
 	}
 }
 func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatible {
@@ -163,16 +159,15 @@ func (p OpenAICompatible) generate(ctx context.Context, req generation.CreateReq
 			return nil, prepareErr
 		}
 		references = preparedReferences
-		editCtx, cancel := context.WithTimeout(ctx, 150*time.Second)
-		defer cancel()
-		images, err := p.edit(editCtx, req, references)
+		images, err := p.edit(ctx, req, references)
 		if err == nil {
 			return images, nil
 		}
+		if isTimeoutError(err) {
+			return nil, err
+		}
 		_, width, height := imageSize(req.Params)
-		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 90*time.Second)
-		defer fallbackCancel()
-		fallbackImages, fallbackErr := p.generateWithReferences(fallbackCtx, req, references, width, height)
+		fallbackImages, fallbackErr := p.generateWithReferences(ctx, req, references, width, height)
 		if fallbackErr == nil {
 			return fallbackImages, nil
 		}
@@ -1195,10 +1190,7 @@ func isRetryableProviderError(status int, err error) bool {
 	if isTransientProviderStatus(status) {
 		return true
 	}
-	if status != 0 {
-		return false
-	}
-	return isTimeoutError(err)
+	return false
 }
 
 func sleepWithContext(ctx context.Context, duration time.Duration) bool {

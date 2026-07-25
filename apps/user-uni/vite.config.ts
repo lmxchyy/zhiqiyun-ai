@@ -5,6 +5,7 @@ import uniPlugin from "@dcloudio/vite-plugin-uni";
 const uni = (uniPlugin as unknown as { default?: typeof uniPlugin }).default || uniPlugin;
 
 export default defineConfig({
+  base: process.env.UNI_PLATFORM === "h5" ? "/h5/" : undefined,
   plugins: [uni()],
   resolve: {
     alias: {

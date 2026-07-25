@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"xianzhi-ai/backend-go/internal/config"
 )
 
 const (
@@ -180,23 +183,24 @@ func developmentSMSCode() string {
 	return strings.TrimSpace(firstNonEmptyString(os.Getenv("XIANZHI_SMS_DEV_CODE"), os.Getenv("SMS_DEV_CODE")))
 }
 
-func sendSMSProvider(ctx context.Context, mobile, code string) error {
+func sendSMSProvider(ctx context.Context, cfg config.Config, mobile, code string) error {
 	if devCode := developmentSMSCode(); devCode != "" {
 		return nil
 	}
-	providerURL := strings.TrimSpace(os.Getenv("SMS_PROVIDER_URL"))
+	providerURL := strings.TrimSpace(cfg.SMSProviderURL)
 	if providerURL == "" {
 		return &authFlowError{status: http.StatusServiceUnavailable, code: "SMS_NOT_CONFIGURED", message: "短信服务尚未配置"}
 	}
 	payload, _ := json.Marshal(map[string]string{
-		"mobile": mobile, "code": code, "templateId": strings.TrimSpace(os.Getenv("SMS_TEMPLATE_ID")),
+		"mobile": mobile, "code": code, "templateId": strings.TrimSpace(cfg.SMSTemplateID),
+		"signature": strings.TrimSpace(cfg.SMSSignature),
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, providerURL, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if token := strings.TrimSpace(os.Getenv("SMS_PROVIDER_API_KEY")); token != "" {
+	if token := strings.TrimSpace(cfg.SMSProviderAPIKey); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	response, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
@@ -311,6 +315,43 @@ func (a authAPI) smsSend(w http.ResponseWriter, r *http.Request) {
 		writeAuthFlowError(w, http.StatusBadRequest, "MOBILE_INVALID", "请输入正确的11位手机号")
 		return
 	}
+	if limiter, ok := a.sessions.(smsRateLimitStore); ok {
+		mobileDailyLimit, deviceDailyLimit, ipDailyLimit := a.config.SMSDailyLimits()
+		namespace := strings.Trim(strings.TrimSpace(a.config.SMSRedisNamespace), ":")
+		if namespace == "" {
+			namespace = "zhiqiyun:development:sms"
+		}
+		dailyWindow := smsDailyWindow(time.Now())
+		ipIdentity := smsRateIdentity(requestClientIP(r))
+		deviceIdentity := smsRateIdentity(firstNonEmptyString(r.Header.Get("X-Device-Id"), r.UserAgent()))
+		identities := []struct {
+			key    string
+			limit  int64
+			window time.Duration
+		}{
+			{key: namespace + ":short:ip:" + ipIdentity, limit: 10, window: 10 * time.Minute},
+			{key: namespace + ":short:device:" + deviceIdentity, limit: 10, window: 10 * time.Minute},
+			{key: namespace + ":daily:mobile:" + smsRateIdentity(mobile), limit: mobileDailyLimit, window: dailyWindow},
+			{key: namespace + ":daily:ip:" + ipIdentity, limit: ipDailyLimit, window: dailyWindow},
+			{key: namespace + ":daily:device:" + deviceIdentity, limit: deviceDailyLimit, window: dailyWindow},
+		}
+		for _, identity := range identities {
+			allowed, retryAfter, err := limiter.AllowSMSRequest(r.Context(), identity.key, identity.limit, identity.window)
+			if err != nil {
+				writeAuthFlowError(w, http.StatusServiceUnavailable, "SMS_STATE_UNAVAILABLE", "验证码服务暂时不可用")
+				return
+			}
+			if !allowed {
+				retry := int(retryAfter.Seconds()) + 1
+				if retry < 1 {
+					retry = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retry))
+				writeAuthFlowError(w, http.StatusTooManyRequests, "SMS_RATE_LIMITED", "当前设备或网络请求过于频繁，请稍后再试")
+				return
+			}
+		}
+	}
 	now := time.Now()
 	nextSendAt, hasNextSend, err := a.smsNextSendAt(r.Context(), mobile)
 	if err != nil {
@@ -332,7 +373,7 @@ func (a authAPI) smsSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := sendSMSProvider(r.Context(), mobile, code); err != nil {
+	if err := sendSMSProvider(r.Context(), a.config, mobile, code); err != nil {
 		writeMappedAuthFlowError(w, err)
 		return
 	}
@@ -348,6 +389,42 @@ func (a authAPI) smsSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"sent": true, "retryAfterSeconds": int(smsSendInterval.Seconds()), "expiresInSeconds": int(smsCodeTTL.Seconds())})
+}
+
+func requestClientIP(r *http.Request) string {
+	for _, header := range []string{"CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"} {
+		value := strings.TrimSpace(r.Header.Get(header))
+		if comma := strings.Index(value, ","); comma >= 0 {
+			value = strings.TrimSpace(value[:comma])
+		}
+		if value != "" {
+			return value
+		}
+	}
+	host := strings.TrimSpace(r.RemoteAddr)
+	if colon := strings.LastIndex(host, ":"); colon > 0 {
+		host = host[:colon]
+	}
+	return host
+}
+
+func smsRateIdentity(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:12])
+}
+
+func smsDailyWindow(now time.Time) time.Duration {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.FixedZone("CST", 8*60*60)
+	}
+	localNow := now.In(location)
+	nextDay := time.Date(localNow.Year(), localNow.Month(), localNow.Day()+1, 0, 0, 0, 0, location)
+	window := nextDay.Sub(localNow)
+	if window <= 0 {
+		return 24 * time.Hour
+	}
+	return window
 }
 
 func (a authAPI) verifySMSCode(ctx context.Context, mobile, code string) error {

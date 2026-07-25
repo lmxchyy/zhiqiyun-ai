@@ -1,6 +1,6 @@
 import { api } from "../../api/client";
 import { promotionScope, readPromotionCodeCache, readPromotionOverviewCache, writePromotionCodeCache, writePromotionOverviewCache } from "./cache";
-import type { PromotionAnalytics, PromotionCode, PromotionOverview, PromotionProfile, PromotionRecordsResponse, PromotionShareCopy, PromotionTemplate, PromotionTemplateId } from "./types";
+import type { AgentInvitePoster, AgentInviteProfile, PromotionAnalytics, PromotionCode, PromotionOverview, PromotionProfile, PromotionRecordsResponse, PromotionShareCopy, PromotionTemplate, PromotionTemplateId } from "./types";
 
 const inflight = new Map<string, Promise<unknown>>();
 
@@ -46,4 +46,6 @@ export const promotionAPI = {
   renderConfig: (templateId: PromotionTemplateId, activityId = "") => api<Record<string, unknown>>("/api/v1/promotion/poster/render", { method: "POST", body: JSON.stringify({ templateId, activityId }) }),
   visit: (input: { inviteCode: string; templateId: PromotionTemplateId; activityId?: string; source?: string }) => api("/api/v1/promotion/visit", { method: "POST", body: JSON.stringify(input) }),
   bind: (input: { inviteCode: string; templateId: PromotionTemplateId; activityId?: string; source?: string }) => api("/api/v1/promotion/bind", { method: "POST", body: JSON.stringify(input) }),
+  agentInviteProfile: () => api<AgentInviteProfile>("/api/v1/agent/invite/profile"),
+  agentPoster: () => api<AgentInvitePoster>("/api/v1/agent/invite/poster", { method: "POST", body: JSON.stringify({}) }),
 };

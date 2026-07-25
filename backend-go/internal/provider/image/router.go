@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
@@ -26,7 +27,7 @@ func NewRouter(providers ...Provider) Router {
 }
 
 func NewDefaultRouter(cfg config.Config) Router {
-	providers := providersFromJSON(cfg.ModelProvidersJSON)
+	providers := providersFromJSON(cfg.ModelProvidersJSON, int(cfg.ImageProviderTimeout()/time.Millisecond))
 	if len(providers) == 0 {
 		providers = append(providers, NewOpenAICompatible(cfg))
 	}
@@ -69,7 +70,7 @@ func isFallbackEligible(err error) bool {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err) {
-		return true
+		return false
 	}
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "returned 429") ||
@@ -107,7 +108,7 @@ type providerJSON struct {
 	Enabled                 *bool    `json:"enabled"`
 }
 
-func providersFromJSON(raw string) []Provider {
+func providersFromJSON(raw string, defaultTimeoutMS int) []Provider {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -118,6 +119,10 @@ func providersFromJSON(raw string) []Provider {
 		if !providerEnabled(item) || !providerKindSupported(item.Kind) {
 			continue
 		}
+		timeoutMS := intValue(item.TimeoutMS)
+		if timeoutMS <= 0 {
+			timeoutMS = defaultTimeoutMS
+		}
 		providers = append(providers, NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
 			Code:                    item.Code,
 			BaseURL:                 item.BaseURL,
@@ -126,7 +131,7 @@ func providersFromJSON(raw string) []Provider {
 			Models:                  item.Models,
 			ImageGenerationEndpoint: item.ImageGenerationEndpoint,
 			ImageEditEndpoint:       item.ImageEditEndpoint,
-			TimeoutMS:               intValue(item.TimeoutMS),
+			TimeoutMS:               timeoutMS,
 		}))
 	}
 	return providers

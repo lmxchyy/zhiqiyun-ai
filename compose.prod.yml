@@ -20,6 +20,10 @@ services:
       PORT: "3100"
       XIANZHI_ENV: "production"
       XIANZHI_DATA_PATH: "/app/data/store.json"
+      AGENT_INVITE_LANDING_BASE_URL: "${AGENT_INVITE_LANDING_BASE_URL:-https://ai.zs-kjhn.cn}"
+      AGENT_INVITE_REGISTRATION_ENABLED: "${AGENT_INVITE_REGISTRATION_ENABLED:-false}"
+      APK_DOWNLOAD_ENABLED: "${APK_DOWNLOAD_ENABLED:-false}"
+      APP_ACTIVATION_REPORT_ENABLED: "${APP_ACTIVATION_REPORT_ENABLED:-false}"
       MEDIA_STORAGE_PROVIDER: "${MEDIA_STORAGE_PROVIDER:-local}"
       MEDIA_STORAGE_ROOT: "${MEDIA_STORAGE_ROOT:-/app/data/media-assets}"
       MEDIA_PUBLIC_BASE_URL: "${MEDIA_PUBLIC_BASE_URL:-/api/v1/media/files}"
@@ -28,6 +32,8 @@ services:
       MEDIA_KEEP_ORIGINAL: "${MEDIA_KEEP_ORIGINAL:-true}"
       XIANZHI_STATIC_DIR: "/app/admin-vue/dist"
       XIANZHI_ADMIN_STATIC_DIR: "/app/admin-vue/dist"
+      XIANZHI_USER_H5_STATIC_DIR: "/app/user-h5"
+      XIANZHI_CORS_ALLOWED_ORIGINS: "${XIANZHI_CORS_ALLOWED_ORIGINS:-https://ai.zs-kjhn.cn}"
       XIANZHI_ENFORCE_RBAC: "${XIANZHI_ENFORCE_RBAC:-true}"
       XIANZHI_ENABLE_MOCK_LOGIN: "false"
       XIANZHI_ALLOW_WECHAT_MOCK_LOGIN: "false"
@@ -84,6 +90,8 @@ services:
       KNOWLEDGE_OCR_API_KEY: "${KNOWLEDGE_OCR_API_KEY:-}"
       MODEL_PROVIDER_VIDEO_MODEL: "${MODEL_PROVIDER_VIDEO_MODEL:-sora-2}"
       MODEL_PROVIDER_TIMEOUT_MS: "${MODEL_PROVIDER_TIMEOUT_MS:-30000}"
+      IMAGE_PROVIDER_TIMEOUT_MS: "${IMAGE_PROVIDER_TIMEOUT_MS:-600000}"
+      IMAGE_GENERATION_TIMEOUT_MS: "${IMAGE_GENERATION_TIMEOUT_MS:-720000}"
       MODEL_PROVIDERS_JSON: "${MODEL_PROVIDERS_JSON:-}"
       CLOUDBASE_ENABLED: "${CLOUDBASE_ENABLED:-false}"
       CLOUDBASE_ENV_ID: "${CLOUDBASE_ENV_ID:-}"
@@ -123,6 +131,12 @@ services:
       SMS_PROVIDER_URL: "${SMS_PROVIDER_URL:-}"
       SMS_PROVIDER_API_KEY: "${SMS_PROVIDER_API_KEY:-}"
       SMS_TEMPLATE_ID: "${SMS_TEMPLATE_ID:-}"
+      SMS_PROVIDER_NAME: "${SMS_PROVIDER_NAME:-}"
+      SMS_SIGNATURE: "${SMS_SIGNATURE:-}"
+      SMS_REDIS_NAMESPACE: "${SMS_REDIS_NAMESPACE:-zhiqiyun:production:sms}"
+      SMS_MOBILE_DAILY_LIMIT: "${SMS_MOBILE_DAILY_LIMIT:-10}"
+      SMS_DEVICE_DAILY_LIMIT: "${SMS_DEVICE_DAILY_LIMIT:-20}"
+      SMS_IP_DAILY_LIMIT: "${SMS_IP_DAILY_LIMIT:-50}"
       WECHAT_PAY_API_V3_KEY: "${WECHAT_PAY_API_V3_KEY:-}"
       WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM: "${WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM:-}"
       WECHAT_PAY_PLATFORM_CERT_PATH: "${WECHAT_PAY_PLATFORM_CERT_PATH:-}"
@@ -196,13 +210,27 @@ services:
       POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
       POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
       PGPASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      MIGRATION_FILES: "${MIGRATION_FILES:-}"
     volumes:
       - ./database/migrations:/migrations:ro
     command:
       - sh
       - -c
       - |
-        for file in /migrations/*.sql; do
+        if [ -z "$${MIGRATION_FILES}" ]; then
+          echo "No migration files selected; skipping automatic migration."
+          exit 0
+        fi
+        for name in $${MIGRATION_FILES}; do
+          case "$${name}" in
+            [0-9][0-9][0-9]-*.sql) ;;
+            *) echo "Invalid migration filename: $${name}"; exit 2 ;;
+          esac
+          file="/migrations/$${name}"
+          if [ ! -f "$${file}" ]; then
+            echo "Migration file not found: $${name}"
+            exit 3
+          fi
           echo "Applying $$file"
           psql -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -v ON_ERROR_STOP=1 -f "$$file"
         done

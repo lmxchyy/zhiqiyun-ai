@@ -24,6 +24,14 @@ type fakeProvider struct {
 	deleted []string
 }
 
+func (p *fakeProvider) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
+	metadata, ok := p.objects[key]
+	if !ok {
+		return nil, ErrFileNotFound
+	}
+	return io.NopCloser(strings.NewReader(strings.Repeat("\x00", int(metadata.Size)))), nil
+}
+
 func newFakeProvider() *fakeProvider {
 	return &fakeProvider{objects: map[string]ObjectMetadata{}}
 }
@@ -114,6 +122,19 @@ func TestUploadCompleteAccessAndRecycleLifecycle(t *testing.T) {
 	if _, err = service.GetFile(ctx, AccessContext{TenantID: "tenant_a", UserID: "user_b"}, file.FileID); err != ErrFileForbidden {
 		t.Fatalf("private file access error = %v", err)
 	}
+	opened, stream, err := service.OpenObject(ctx, access, file.FileID)
+	if err != nil || opened.FileID != file.FileID {
+		t.Fatalf("OpenObject file = %+v err=%v", opened, err)
+	}
+	if closeErr := stream.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if _, _, err = service.OpenObject(ctx, AccessContext{TenantID: "tenant_b", UserID: "user_a"}, file.FileID); err == nil {
+		t.Fatal("cross-tenant object stream access must be rejected")
+	}
+	if _, _, err = service.OpenObject(ctx, AccessContext{TenantID: "tenant_a", UserID: "user_b"}, file.FileID); err != ErrFileForbidden {
+		t.Fatalf("private object stream access error = %v", err)
+	}
 	accessTicket, err := service.AccessURL(ctx, access, file.FileID, true)
 	if err != nil || !strings.Contains(accessTicket.URL, file.ObjectKey) {
 		t.Fatalf("access ticket = %+v err=%v", accessTicket, err)
@@ -121,6 +142,9 @@ func TestUploadCompleteAccessAndRecycleLifecycle(t *testing.T) {
 	deleted, err := service.Delete(ctx, access, file.FileID)
 	if err != nil || deleted.Status != StatusDeletePending || deleted.RecycleExpiresAt == nil {
 		t.Fatalf("delete result = %+v err=%v", deleted, err)
+	}
+	if _, _, err = service.OpenObject(ctx, access, file.FileID); err != ErrFileNotFound {
+		t.Fatalf("non-ACTIVE object stream error = %v, want ErrFileNotFound", err)
 	}
 	restored, err := service.Restore(ctx, access, file.FileID)
 	if err != nil || restored.Status != StatusActive {

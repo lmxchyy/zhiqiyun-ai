@@ -16,8 +16,12 @@
 
         <view class="promotion-code-card">
           <view class="promotion-card-heading">
-            <view><text class="promotion-section-title">微信扫码，立即体验</text><text class="promotion-section-copy">小程序码已绑定你的专属邀请码</text></view>
+            <view><text class="promotion-section-title">{{ agentInvite ? "扫码注册并下载安卓 APP" : "微信扫码，立即体验" }}</text><text class="promotion-section-copy">{{ agentInvite ? "二维码进入代理商专属 H5 注册页，所有用户下载统一 APK" : "小程序码已绑定你的专属邀请码" }}</text></view>
             <button class="promotion-icon-button" :disabled="codeLoading" @click="refreshCode"><text>↻</text></button>
+          </view>
+          <view v-if="agentInvite" class="promotion-invite-row promotion-h5-link">
+            <view><text>专属邀请链接</text><text class="promotion-section-copy">{{ agentInvite.inviteLink }}</text></view>
+            <button class="promotion-text-button" @click="copyInviteLink"><text>复制链接</text></button>
           </view>
           <view class="promotion-code-stage">
             <view v-if="codeLoading" class="promotion-code-skeleton" />
@@ -64,7 +68,7 @@ import { promotionAPI } from "../../features/promotion/api";
 import { trackPromotion } from "../../features/promotion/analytics";
 import { imageDataUrlToLocalPath } from "../../features/promotion/platform";
 import { promotionTemplateById, promotionTemplatesForRole } from "../../features/promotion/templates";
-import type { PromotionCode, PromotionOverview, PromotionShareCopy, PromotionTemplateId } from "../../features/promotion/types";
+import type { AgentInviteProfile, PromotionCode, PromotionOverview, PromotionShareCopy, PromotionTemplateId } from "../../features/promotion/types";
 import { useUserStore } from "../../stores/user";
 
 const userStore = useUserStore();
@@ -72,10 +76,15 @@ const overview = ref<PromotionOverview | null>(null);
 const promotionCode = ref<PromotionCode | null>(null);
 const codePath = ref("");
 const shareCopy = ref<PromotionShareCopy | null>(null);
+const agentInvite = ref<AgentInviteProfile | null>(null);
 const selectedTemplateId = ref<PromotionTemplateId>("poster.brand.simple");
 const loading = ref(false); const codeLoading = ref(false); const error = ref("");
 const visibleTemplates = computed(() => promotionTemplatesForRole(userStore.currentRole));
 const metrics = computed(() => {
+  if (agentInvite.value) {
+    const funnel = agentInvite.value.funnel;
+    return [{ label: "扫码访问", value: funnel.pageViews || 0 }, { label: "成功注册", value: funnel.registered || 0 }, { label: "APK下载", value: funnel.downloads || 0 }, { label: "APP激活", value: funnel.activations || 0 }];
+  }
   const value = overview.value?.summary;
   return [{ label: "访问", value: value?.visitCount || 0 }, { label: "注册", value: value?.registerCount || 0 }, { label: "成交", value: value?.paidCount || 0 }, { label: "奖励", value: `¥${((value?.rewardAmountCents || 0) / 100).toFixed(2)}` }];
 });
@@ -88,6 +97,7 @@ async function load(force: boolean) {
   loading.value = true; error.value = "";
   try {
     await userStore.loadProfile(force);
+    agentInvite.value = userStore.currentRole === "AGENT" ? await promotionAPI.agentInviteProfile() : null;
     overview.value = await promotionAPI.overview(userStore.userId, userStore.tenantId, userStore.currentRole, force);
     if (!visibleTemplates.value.some(item => item.id === selectedTemplateId.value)) selectedTemplateId.value = overview.value.defaultTemplateId;
     await Promise.all([loadCode(force), loadShareCopy()]);
@@ -100,6 +110,12 @@ async function loadCode(invalidate = false) {
   if (!overview.value || codeLoading.value) return;
   codeLoading.value = true; codePath.value = "";
   try {
+    if (userStore.currentRole === "AGENT") {
+      const poster = await promotionAPI.agentPoster();
+      promotionCode.value = { imageDataUrl: poster.qrCodeDataUrl, scene: poster.inviteCode, page: poster.inviteLink, isPlaceholder: false, cacheKey: `agent-h5-${poster.inviteCode}`, expiresAt: "" };
+      codePath.value = await imageDataUrlToLocalPath(poster.qrCodeDataUrl, `agent-h5-${poster.inviteCode}`);
+      return;
+    }
     const code = await promotionAPI.code({ userId: userStore.userId, tenantId: userStore.tenantId, currentRole: userStore.currentRole, templateId: selectedTemplateId.value, activityId: overview.value.activity?.id, invalidate });
     promotionCode.value = code;
     codePath.value = await imageDataUrlToLocalPath(code.imageDataUrl, code.cacheKey);
@@ -112,6 +128,7 @@ async function loadShareCopy() { try { shareCopy.value = await promotionAPI.shar
 async function selectTemplate(id: PromotionTemplateId) { selectedTemplateId.value = id; trackPromotion("promotion_template_select", { templateId: id }); await Promise.all([loadCode(false), loadShareCopy()]); }
 function refreshCode() { void loadCode(true); }
 function copyInvite() { if (!overview.value) return; uni.setClipboardData({ data: overview.value.profile.inviteCode, success: () => uni.showToast({ title: "邀请码已复制", icon: "success" }) }); trackPromotion("promotion_copy", { type: "invite_code" }); }
+function copyInviteLink() { if (!agentInvite.value) return; uni.setClipboardData({ data: agentInvite.value.inviteLink, success: () => uni.showToast({ title: "邀请链接已复制", icon: "success" }) }); trackPromotion("promotion_copy", { type: "agent_h5_link" }); }
 function openPreview() { uni.navigateTo({ url: `/pages/promotion/PromotionPosterPreviewPage?templateId=${encodeURIComponent(selectedTemplateId.value)}` }); }
 function openTemplates() { uni.navigateTo({ url: `/pages/promotion/PromotionTemplateCenterPage?templateId=${encodeURIComponent(selectedTemplateId.value)}` }); }
 function openRecords() { trackPromotion("promotion_records_view"); uni.navigateTo({ url: "/pages/promotion/PromotionRecordsPage" }); }

@@ -236,6 +236,7 @@ import { trackLogin } from "../features/auth/analytics";
 import { loginAPI } from "../features/auth/api";
 import { redirectAfterAuth } from "../features/auth/redirect";
 import { parseLoginSource, parseRedirectInfo } from "../features/auth/source";
+import { recordAgentInviteAppActivation } from "../features/invite/activation";
 import type {
   AuthFlowResponse,
   InviteStatus,
@@ -385,6 +386,9 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
     authStorage.setRefreshToken(auth.refreshToken || "");
     authStorage.setAuth(auth);
     authStore.applyAuth(auth);
+    // #ifdef APP-PLUS
+    void recordAgentInviteAppActivation();
+    // #endif
   } catch {
     throw new Error("TOKEN_SAVE_FAILED");
   }

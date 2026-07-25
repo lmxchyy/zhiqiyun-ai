@@ -32,6 +32,14 @@ func (p *generatedStorageTestProvider) PutObject(_ context.Context, key string, 
 	return metadata, nil
 }
 
+func (p *generatedStorageTestProvider) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
+	item, ok := p.objects[key]
+	if !ok {
+		return nil, storagecenter.ErrFileNotFound
+	}
+	return io.NopCloser(strings.NewReader(strings.Repeat("\x00", int(item.Size)))), nil
+}
+
 func (p *generatedStorageTestProvider) HeadObject(_ context.Context, key string) (storagecenter.ObjectMetadata, error) {
 	item, ok := p.objects[key]
 	if !ok {

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -150,7 +151,6 @@ type optimizedUserAccountStore interface {
 const (
 	defaultUserContentListLimit = 120
 	maxUserContentListLimit     = 300
-	imageGenerationTimeout      = 5 * time.Minute
 	videoGenerationTimeout      = 20 * time.Minute
 	otherGenerationStaleTimeout = 15 * time.Minute
 )
@@ -169,6 +169,7 @@ type api struct {
 	pptVisualLocker            pptVisualDistributedLocker
 	fileService                *storagecenter.Service
 	contentSecurity            wechatContentSecurityChecker
+	imageGenerationTimeout     time.Duration
 }
 
 type generatedImageDecorator struct{}
@@ -199,8 +200,9 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 	if pgStore, ok := store.(*postgresStore); ok {
 		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
 	}
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg)}
-	go api.repairStaleGenerationTasks(imageGenerationTimeout)
+	imageTimeout := cfg.ImageGenerationTimeout()
+	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
+	go api.repairStaleGenerationTasks(imageTimeout)
 	return api
 }
 
@@ -739,7 +741,10 @@ type generationServiceCandidate struct {
 }
 
 func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), imageGenerationTimeout)
+	startedAt := time.Now()
+	taskTimeout := a.configuredImageGenerationTimeout()
+	log.Printf("generation task started task_id=%s type=%s model=%s timeout_ms=%d", taskID, req.Type, req.Model, taskTimeout.Milliseconds())
+	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 	a.registerGenerationTaskCancel(taskID, cancel)
 	defer func() {
 		a.unregisterGenerationTaskCancel(taskID)
@@ -749,30 +754,44 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	if err != nil {
 		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
 		if err != nil {
-			_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+			a.failImageGenerationTask(taskID, "provider", startedAt, err)
 			return
 		}
 	}
 	if err := a.auditPreparedGeneratedOutput(ctx, &prepared); err != nil {
 		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		a.failImageGenerationTask(taskID, "content_audit", startedAt, err)
 		return
 	}
 	a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 	prepared, storedFiles, err := a.persistGeneratedImages(ctx, taskID, prepared)
 	if err != nil {
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		a.failImageGenerationTask(taskID, "persistence", startedAt, err)
 		return
 	}
 	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
 	if err != nil {
 		a.cleanupGeneratedFiles(storedFiles)
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		a.failImageGenerationTask(taskID, "completion", startedAt, err)
 		return
 	}
 	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
 		a.cleanupGeneratedFiles(storedFiles)
 	}
+	log.Printf("generation task finished task_id=%s status=%s elapsed_ms=%d", taskID, completed.Status, time.Since(startedAt).Milliseconds())
+}
+
+func (a api) configuredImageGenerationTimeout() time.Duration {
+	if a.imageGenerationTimeout > 0 {
+		return a.imageGenerationTimeout
+	}
+	return a.cfg.ImageGenerationTimeout()
+}
+
+func (a api) failImageGenerationTask(taskID string, stage string, startedAt time.Time, err error) {
+	message := generationErrorMessage(err)
+	log.Printf("generation task failed task_id=%s stage=%s elapsed_ms=%d error=%q", taskID, stage, time.Since(startedAt).Milliseconds(), message)
+	_, _ = a.store.FailGenerationTask(taskID, message)
 }
 
 func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.CreateRequest, firstErr error) (generation.CreateRequest, error) {
@@ -890,7 +909,7 @@ func shouldFallbackImageGeneration(err error) bool {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return true
+		return false
 	}
 	lower := strings.ToLower(err.Error())
 	return strings.Contains(lower, "returned 502") ||
@@ -1198,7 +1217,7 @@ func (a api) generationServiceForChannelWithAPIKey(channel adminAPIChannel, apiK
 			ImageGenerationEndpoint: channel.ImageGenerationEndpoint,
 			ImageEditEndpoint:       channel.ImageEditEndpoint,
 			ReferenceImageDir:       a.referenceImageDir(),
-			TimeoutMS:               intConfigValue(a.cfg.ModelTimeoutMS),
+			TimeoutMS:               int(a.cfg.ImageProviderTimeout() / time.Millisecond),
 		})
 	}
 	var videoProvider generation.VideoProvider

@@ -5057,7 +5057,7 @@ func upsertAgentProfileFromChannelAgent(ctx context.Context, tx *sql.Tx, item ad
 	}
 	inviteCode := item.InviteCode
 	if inviteCode == "" {
-		inviteCode = strings.ToUpper("AG" + shortID(item.ID))
+		inviteCode = secureAgentInviteCode()
 	}
 	_, err := tx.ExecContext(ctx, `
 		insert into xz_agent_profiles (id, user_id, parent_agent_id, operation_center_id, level, status, invite_code, join_order_id, join_fee_cents, token_rights_amount, created_at, updated_at, raw)
@@ -5672,7 +5672,7 @@ func ensureAgentForUserTx(ctx context.Context, tx *sql.Tx, user adminUser, order
 		item.Level = 2
 	}
 	if item.InviteCode == "" {
-		item.InviteCode = strings.ToUpper("AG" + shortID(item.ID))
+		item.InviteCode = secureAgentInviteCode()
 	}
 	item.JoinOrderID = order.ID
 	item.JoinFeeCents = orderAmount(*order)

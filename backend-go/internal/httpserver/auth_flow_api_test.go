@@ -2,9 +2,11 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,21 @@ import (
 
 	"xianzhi-ai/backend-go/internal/config"
 )
+
+type selectiveSMSRateSessions struct {
+	*localAuthSessions
+	denyPart string
+	err      error
+	keys     []string
+}
+
+func (s *selectiveSMSRateSessions) AllowSMSRequest(_ context.Context, key string, _ int64, _ time.Duration) (bool, time.Duration, error) {
+	s.keys = append(s.keys, key)
+	if s.err != nil {
+		return false, 0, s.err
+	}
+	return !strings.Contains(key, s.denyPart), time.Hour, nil
+}
 
 type authFlowTestResponse struct {
 	AccessToken      string `json:"accessToken"`
@@ -252,6 +269,69 @@ func TestSMSCodeErrorsAndRateLimitUseStableCodes(t *testing.T) {
 	rateLimited := request(t, handler, http.MethodPost, "/api/v1/auth/sms/send", bytes.NewBufferString(`{"mobile":"13900001111"}`))
 	if rateLimited.Code != http.StatusTooManyRequests || !strings.Contains(rateLimited.Body.String(), "SMS_TOO_FREQUENT") {
 		t.Fatalf("rate limited response = %d %s", rateLimited.Code, rateLimited.Body.String())
+	}
+}
+
+func TestSMSDailyLimitsCoverMobileIPAndDevice(t *testing.T) {
+	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")
+	for _, testCase := range []struct {
+		name     string
+		denyPart string
+	}{
+		{name: "mobile", denyPart: ":daily:mobile:"},
+		{name: "ip", denyPart: ":daily:ip:"},
+		{name: "device", denyPart: ":daily:device:"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			sessions := &selectiveSMSRateSessions{
+				localAuthSessions: newLocalAuthSessions().(*localAuthSessions),
+				denyPart:          testCase.denyPart,
+			}
+			auth := newAuthAPI(newJSONStore(filepath.Join(t.TempDir(), "store.json")), sessions, config.Config{
+				SMSRedisNamespace:   "zhiqiyun:test:sms",
+				SMSMobileDailyLimit: "10",
+				SMSDeviceDailyLimit: "20",
+				SMSIPDailyLimit:     "50",
+			})
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/sms/send", strings.NewReader(`{"mobile":"13800138000"}`))
+			request.RemoteAddr = "203.0.113.10:443"
+			request.Header.Set("X-Device-Id", "test-device")
+			response := httptest.NewRecorder()
+
+			auth.smsSend(response, request)
+
+			if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), "SMS_RATE_LIMITED") {
+				t.Fatalf("status=%d body=%s keys=%v", response.Code, response.Body.String(), sessions.keys)
+			}
+			foundNamespace := false
+			for _, key := range sessions.keys {
+				if strings.HasPrefix(key, "zhiqiyun:test:sms:") {
+					foundNamespace = true
+				}
+			}
+			if !foundNamespace {
+				t.Fatalf("namespaced rate key missing: %v", sessions.keys)
+			}
+		})
+	}
+}
+
+func TestSMSRateLimitStoreFailureIsFailClosed(t *testing.T) {
+	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")
+	sessions := &selectiveSMSRateSessions{
+		localAuthSessions: newLocalAuthSessions().(*localAuthSessions),
+		err:               errors.New("redis unavailable"),
+	}
+	auth := newAuthAPI(newJSONStore(filepath.Join(t.TempDir(), "store.json")), sessions, config.Config{
+		SMSRedisNamespace: "zhiqiyun:test:sms",
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/sms/send", strings.NewReader(`{"mobile":"13800138000"}`))
+	response := httptest.NewRecorder()
+
+	auth.smsSend(response, request)
+
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "SMS_STATE_UNAVAILABLE") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

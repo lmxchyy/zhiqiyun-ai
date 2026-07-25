@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 )
@@ -54,9 +55,9 @@ func TestReferenceBytesReadsUploadedImageFromLocalStorage(t *testing.T) {
 	}
 }
 
-func TestRetryableProviderErrorIncludesNetworkTimeout(t *testing.T) {
-	if !isRetryableProviderError(0, timeoutProviderError{}) {
-		t.Fatal("network timeout with no HTTP status should be retryable")
+func TestRetryableProviderErrorDoesNotRetryAmbiguousNetworkTimeout(t *testing.T) {
+	if isRetryableProviderError(0, timeoutProviderError{}) {
+		t.Fatal("network timeout must not retry a non-idempotent image request")
 	}
 	if !isRetryableProviderError(http.StatusTooManyRequests, errors.New("rate limited")) {
 		t.Fatal("HTTP 429 should be retried briefly before provider fallback")
@@ -72,6 +73,49 @@ func TestRetryableProviderErrorIncludesNetworkTimeout(t *testing.T) {
 	}
 	if isRetryableProviderError(http.StatusBadRequest, timeoutProviderError{}) {
 		t.Fatal("HTTP 400 should not be retried even if error text is timeout-like")
+	}
+}
+
+func TestImageEditTimeoutDoesNotStartDuplicateGenerationFallback(t *testing.T) {
+	var generationCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/images/edits":
+			time.Sleep(100 * time.Millisecond)
+			writeImageAPIResponse(w)
+		case "/v1/images/generations":
+			generationCalls++
+			writeImageAPIResponse(w)
+		default:
+			t.Fatalf("unexpected path = %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL:    server.URL + "/v1",
+		APIKey:     "test-key",
+		ImageModel: "gpt-image-2",
+		TimeoutMS:  1000,
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	_, err := provider.Generate(ctx, generation.CreateRequest{
+		Type:   "IMAGE_TO_IMAGE",
+		Prompt: "add a logo",
+		Model:  "gpt-image-2",
+		Params: map[string]any{
+			"referenceImages": []any{map[string]any{
+				"name": "reference.png",
+				"url":  tinyReferenceDataURL,
+			}},
+		},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Generate() error = %v, want context deadline exceeded", err)
+	}
+	if generationCalls != 0 {
+		t.Fatalf("generation fallback calls = %d, want 0 after ambiguous timeout", generationCalls)
 	}
 }
 

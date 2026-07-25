@@ -23,16 +23,7 @@ func newFileCenterAPI(service *storagecenter.Service, store platformStore, sessi
 }
 
 func fileCenterOptions(cfg config.Config) storagecenter.Options {
-	return storagecenter.Options{
-		Environment: cfg.Environment, DefaultProvider: firstNonEmptyString(cfg.StorageDefaultProvider, "minio"),
-		Endpoint: cfg.S3Endpoint, PublicEndpoint: cfg.StoragePublicEndpoint, Region: cfg.S3Region, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey, Bucket: cfg.S3Bucket,
-		PublicDomain: cfg.StoragePublicDomain, CDNDomain: cfg.StorageCDNDomain, MasterKey: cfg.StorageMasterKey,
-		DefaultQuotaBytes: storageInt64(cfg.StorageDefaultQuotaBytes, 10<<30), MaxUploadBytes: storageInt64(cfg.StorageMaxUploadBytes, 2<<30),
-		UploadURLTTL:     time.Duration(storageInt64(cfg.StorageUploadURLTTLSeconds, 600)) * time.Second,
-		AccessURLTTL:     time.Duration(storageInt64(cfg.StorageAccessURLTTLSeconds, 900)) * time.Second,
-		RecycleRetention: time.Duration(storageInt64(cfg.StorageRecycleDays, 30)) * 24 * time.Hour,
-		AutoCreateBucket: cfg.StorageAutoCreateBucket, ForcePathStyle: cfg.StorageForcePathStyle,
-	}
+	return storagecenter.OptionsFromConfig(cfg)
 }
 
 func storageInt64(value string, fallback int64) int64 {

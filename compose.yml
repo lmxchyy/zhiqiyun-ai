@@ -16,6 +16,10 @@
       PORT: "3100"
       XIANZHI_ENV: "development"
       XIANZHI_DATA_PATH: "/app/data/store.json"
+      AGENT_INVITE_LANDING_BASE_URL: "${AGENT_INVITE_LANDING_BASE_URL:-http://localhost:5173}"
+      AGENT_INVITE_REGISTRATION_ENABLED: "${AGENT_INVITE_REGISTRATION_ENABLED:-false}"
+      APK_DOWNLOAD_ENABLED: "${APK_DOWNLOAD_ENABLED:-false}"
+      APP_ACTIVATION_REPORT_ENABLED: "${APP_ACTIVATION_REPORT_ENABLED:-false}"
       MEDIA_STORAGE_PROVIDER: "${MEDIA_STORAGE_PROVIDER:-local}"
       MEDIA_STORAGE_ROOT: "/app/data/media-assets"
       MEDIA_PUBLIC_BASE_URL: "${MEDIA_PUBLIC_BASE_URL:-/api/v1/media/files}"
@@ -118,6 +122,12 @@
       SMS_PROVIDER_URL: "${SMS_PROVIDER_URL:-}"
       SMS_PROVIDER_API_KEY: "${SMS_PROVIDER_API_KEY:-}"
       SMS_TEMPLATE_ID: "${SMS_TEMPLATE_ID:-}"
+      SMS_PROVIDER_NAME: "${SMS_PROVIDER_NAME:-}"
+      SMS_SIGNATURE: "${SMS_SIGNATURE:-}"
+      SMS_REDIS_NAMESPACE: "${SMS_REDIS_NAMESPACE:-zhiqiyun:development:sms}"
+      SMS_MOBILE_DAILY_LIMIT: "${SMS_MOBILE_DAILY_LIMIT:-10}"
+      SMS_DEVICE_DAILY_LIMIT: "${SMS_DEVICE_DAILY_LIMIT:-20}"
+      SMS_IP_DAILY_LIMIT: "${SMS_IP_DAILY_LIMIT:-50}"
       XIANZHI_SMS_DEV_CODE: "${XIANZHI_SMS_DEV_CODE:-}"
       WECHAT_PAY_API_V3_KEY: "${WECHAT_PAY_API_V3_KEY:-}"
       WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM: "${WECHAT_PAY_PLATFORM_PUBLIC_KEY_PEM:-}"
@@ -127,12 +137,72 @@
       ALIPAY_PUBLIC_KEY_PATH: "${ALIPAY_PUBLIC_KEY_PATH:-}"
       ALIPAY_CALLBACK_SECRET: "${ALIPAY_CALLBACK_SECRET:-}"
       METRICS_TOKEN: "${METRICS_TOKEN:-}"
+      SMARTVIDEO_ANALYSIS_ENABLED: "${SMARTVIDEO_ANALYSIS_ENABLED:-false}"
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  smartvideo-worker:
+    profiles: ["smartvideo"]
+    image: xianzhi-ai-platform:local
+    command: ["/app/smartvideo-worker"]
+    restart: unless-stopped
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 256
+    tmpfs:
+      - /tmp/smartvideo:size=2g,mode=0700,uid=1000,gid=1000
+    environment:
+      XIANZHI_ENV: "development"
+      DATABASE_URL: "postgresql://xianzhi:xianzhi@postgres:5432/xianzhi"
+      REDIS_URL: "redis://redis:6379"
+      S3_ENDPOINT: "http://minio:9000"
+      STORAGE_PUBLIC_ENDPOINT: "${STORAGE_PUBLIC_ENDPOINT:-http://localhost:9000}"
+      S3_ACCESS_KEY: "xianzhi"
+      S3_SECRET_KEY: "xianzhi-minio"
+      S3_BUCKET: "xianzhi-assets"
+      S3_REGION: "${S3_REGION:-}"
+      STORAGE_MASTER_KEY: "${STORAGE_MASTER_KEY:-xianzhi-dev-storage-master-key-32bytes}"
+      STORAGE_DEFAULT_PROVIDER: "${STORAGE_DEFAULT_PROVIDER:-minio}"
+      STORAGE_DEFAULT_QUOTA_BYTES: "${STORAGE_DEFAULT_QUOTA_BYTES:-10737418240}"
+      STORAGE_MAX_UPLOAD_BYTES: "${STORAGE_MAX_UPLOAD_BYTES:-2147483648}"
+      STORAGE_AUTO_CREATE_BUCKET: "${STORAGE_AUTO_CREATE_BUCKET:-true}"
+      STORAGE_FORCE_PATH_STYLE: "${STORAGE_FORCE_PATH_STYLE:-true}"
+      SMARTVIDEO_ANALYSIS_ENABLED: "true"
+      SMARTVIDEO_FFPROBE_PATH: "${SMARTVIDEO_FFPROBE_PATH:-ffprobe}"
+      SMARTVIDEO_FFMPEG_PATH: "${SMARTVIDEO_FFMPEG_PATH:-ffmpeg}"
+      SMARTVIDEO_PROBE_TIMEOUT: "${SMARTVIDEO_PROBE_TIMEOUT:-30s}"
+      SMARTVIDEO_PROCESS_TIMEOUT: "${SMARTVIDEO_PROCESS_TIMEOUT:-10m}"
+      SMARTVIDEO_MAX_FILE_BYTES: "${SMARTVIDEO_MAX_FILE_BYTES:-2147483648}"
+      SMARTVIDEO_MAX_VIDEO_DURATION: "${SMARTVIDEO_MAX_VIDEO_DURATION:-30m}"
+      SMARTVIDEO_MAX_VIDEO_PIXELS: "${SMARTVIDEO_MAX_VIDEO_PIXELS:-8294400}"
+      SMARTVIDEO_MAX_IMAGE_PIXELS: "${SMARTVIDEO_MAX_IMAGE_PIXELS:-80000000}"
+      SMARTVIDEO_PROXY_MAX_WIDTH: "${SMARTVIDEO_PROXY_MAX_WIDTH:-960}"
+      SMARTVIDEO_PROXY_VIDEO_BITRATE: "${SMARTVIDEO_PROXY_VIDEO_BITRATE:-1200k}"
+      SMARTVIDEO_PROXY_AUDIO_BITRATE: "${SMARTVIDEO_PROXY_AUDIO_BITRATE:-96k}"
+      SMARTVIDEO_ANALYSIS_MAX_ATTEMPTS: "${SMARTVIDEO_ANALYSIS_MAX_ATTEMPTS:-3}"
+      SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY: "${SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY:-2}"
+      SMARTVIDEO_RENDER_CONCURRENCY: "${SMARTVIDEO_RENDER_CONCURRENCY:-1}"
+      SMARTVIDEO_RENDER_TIMEOUT: "${SMARTVIDEO_RENDER_TIMEOUT:-10m}"
+      SMARTVIDEO_RENDER_MAX_OUTPUT_BYTES: "${SMARTVIDEO_RENDER_MAX_OUTPUT_BYTES:-536870912}"
+      SMARTVIDEO_RENDER_FONT_PATH: "${SMARTVIDEO_RENDER_FONT_PATH:-/usr/share/fonts/noto/NotoSansCJK-Regular.ttc}"
+      SMARTVIDEO_TEMP_DIR: "/tmp/smartvideo"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/smartvideo/worker.healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
       minio:
         condition: service_healthy

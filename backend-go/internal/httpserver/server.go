@@ -18,7 +18,9 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	paymentapp "xianzhi-ai/backend-go/internal/app/payment"
+	"xianzhi-ai/backend-go/internal/app/smartvideo"
 	"xianzhi-ai/backend-go/internal/config"
+	"xianzhi-ai/backend-go/internal/infra"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -73,7 +75,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	identityChanges := newIdentityChangeAPI(store)
 	identityDowngrades := newIdentityDowngradeAPI(store)
 	adminEnterprise := newAdminEnterpriseAPI(store)
-	auth := newAuthAPI(store, sessions)
+	auth := newAuthAPI(store, sessions, cfg)
+	agentInvites := newAgentInviteAPI(store, sessions, cfg)
 	userRBAC := newUserRBACAPI(store, sessions)
 	promotion := newPromotionAPI(store, sessions, userRBAC, cfg)
 	enterprise := newEnterpriseAPI(store, sessions)
@@ -101,6 +104,23 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	paymentCenter := newPaymentCenterAPI(cfg, store, sessions, virtualPayment)
 	connectors := newConnectorAPI(cfg, store, enterprise, api, redisClient)
 	files := newFileCenterAPI(fileService, store, sessions)
+	var smartVideoRepository smartvideo.Repository = smartvideo.NewMemoryRepository()
+	if pgStore, ok := store.(*postgresStore); ok {
+		smartVideoRepository = smartvideo.NewPostgresRepository(pgStore.db)
+	}
+	var smartVideoAnalysisQueue smartvideo.AnalysisQueue
+	if redisClient != nil {
+		smartVideoAnalysisQueue = infra.NewSmartVideoAnalysisQueue(redisClient, "")
+	}
+	var smartVideoRenderQueue smartvideo.RenderQueue
+	if redisClient != nil {
+		smartVideoRenderQueue = infra.NewSmartVideoRenderQueue(redisClient)
+	}
+	smartVideos := newSmartVideoAPI(
+		smartvideo.NewService(smartVideoRepository, smartVideoFileResolver{service: fileService}).SetRenderQueue(smartVideoRenderQueue),
+		smartvideo.NewAnalysisService(smartVideoRepository, smartVideoAnalysisQueue, smartVideoAnalysisOptions(cfg)),
+		files,
+	)
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -112,6 +132,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	}
 
 	router.GET("/healthz", wrapF(health))
+	router.GET("/d/:inviteCode", wrapF(agentInviteH5Redirect))
+	router.GET("/android/latest", wrapF(agentInvites.download))
 	router.POST("/api/open/connectors/feishu/events/:connectorKey", wrapF(connectors.event))
 	router.GET("/api/open/connectors/authorize/:ticket", wrapF(connectors.authorizationLanding))
 	router.GET("/api/open/connectors/authorize/:ticket/start", wrapF(connectors.startAuthorization))
@@ -138,6 +160,13 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/auth/change-password", wrapF(auth.changePassword))
 	v1.GET("/auth/security", wrapF(auth.security))
 	v1.GET("/invite/agent/resolve", wrapF(auth.resolveInvite))
+	v1.GET("/public/invites/:inviteCode", wrapF(agentInvites.invite))
+	v1.POST("/public/invites/:inviteCode/register", wrapF(agentInvites.register))
+	v1.GET("/public/app/releases/latest", wrapF(agentInvites.latestRelease))
+	v1.GET("/public/app/releases/android/latest/download", wrapF(agentInvites.download))
+	v1.GET("/agent/invite/profile", wrapF(agentInvites.profile))
+	v1.POST("/agent/invite/poster", wrapF(agentInvites.poster))
+	v1.POST("/app/activation", wrapF(agentInvites.activation))
 	v1.GET("/user/profile", wrapF(userRBAC.profile))
 	v1.POST("/user/current-role", wrapF(userRBAC.switchCurrentRole))
 	v1.GET("/promotion/overview", wrapF(promotion.overview))
@@ -330,6 +359,21 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.DELETE("/files/:fileId", wrapF(files.deleteFile))
 	v1.POST("/files/:fileId/restore", wrapF(files.restoreFile))
 	v1.DELETE("/files/:fileId/permanent", wrapF(files.permanentDeleteFile))
+	v1.GET("/video-projects", wrapF(smartVideos.projects))
+	v1.POST("/video-projects", wrapF(smartVideos.projects))
+	v1.GET("/video-projects/:id", wrapF(smartVideos.project))
+	v1.PATCH("/video-projects/:id", wrapF(smartVideos.project))
+	v1.DELETE("/video-projects/:id", wrapF(smartVideos.project))
+	v1.GET("/video-projects/:id/assets", wrapF(smartVideos.assets))
+	v1.POST("/video-projects/:id/assets", wrapF(smartVideos.assets))
+	v1.PUT("/video-projects/:id/assets/order", wrapF(smartVideos.reorderAssets))
+	v1.DELETE("/video-projects/:id/assets/:assetId", wrapF(smartVideos.deleteAsset))
+	v1.POST("/video-projects/:id/analyze", wrapF(smartVideos.analyze))
+	v1.GET("/video-projects/:id/analysis", wrapF(smartVideos.analysisStatus))
+	v1.POST("/video-projects/:id/assets/:assetId/retry-analysis", wrapF(smartVideos.retryAnalysis))
+	v1.POST("/video-projects/:id/render-tasks", wrapF(smartVideos.createRenderTask))
+	v1.GET("/video-projects/:id/render-tasks/:taskId", wrapF(smartVideos.renderTask))
+	v1.POST("/video-projects/:id/render-tasks/:taskId/retry", wrapF(smartVideos.retryRenderTask))
 	v1.POST("/reference-images", wrapF(api.uploadReferenceImage))
 	v1.GET("/reference-images/:name", wrapF(api.serveReferenceImage))
 	v1.GET("/generated-media/:name", wrapF(api.serveGeneratedMedia))
@@ -656,6 +700,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router.GET("/", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/login", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/register", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
+	router.GET("/h5", wrapF(redirectToUserH5Slash))
+	router.GET("/h5/*filepath", gin.WrapH(staticPrefixFiles("/h5/", cfg.UserH5StaticDir)))
 	router.GET("/assets/*filepath", gin.WrapH(staticPrefixFiles("/assets/", filepath.Join(cfg.StaticDir, "assets"))))
 	router.GET("/static/*filepath", gin.WrapH(staticPrefixFiles("/static/", filepath.Join(cfg.StaticDir, "static"))))
 	router.GET("/mobile", wrapF(notFound))
@@ -684,7 +730,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 }
 
 const requestIDHeader = "X-Request-Id"
-const corsAllowedHeaders = "Authorization, Content-Type, Idempotency-Key, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Tenant-Id, X-Organization-Id"
+const corsAllowedHeaders = "Authorization, Content-Type, Idempotency-Key, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Device-Id, X-Tenant-Id, X-Organization-Id"
 const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
 func requestContextMiddleware() gin.HandlerFunc {
@@ -778,6 +824,10 @@ func wrapF(handler http.HandlerFunc) gin.HandlerFunc {
 
 func redirectToAdminSlash(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/", http.StatusMovedPermanently)
+}
+
+func redirectToUserH5Slash(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/h5/", http.StatusMovedPermanently)
 }
 
 func redirectToRoot(w http.ResponseWriter, r *http.Request) {

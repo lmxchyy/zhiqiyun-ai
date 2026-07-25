@@ -2083,7 +2083,7 @@ func ensureAgentForUser(data *adminPlatformData, user adminUser, order *adminOrd
 		}
 	}
 	agentID := uniqueAdminID("channel", channelAgentIDs(data.ChannelAgents))
-	inviteCode := strings.ToUpper("AG" + shortID(agentID))
+	inviteCode := secureAgentInviteCode()
 	data.ChannelAgents = append(data.ChannelAgents, adminChannelAgent{
 		ID:                agentID,
 		UserID:            user.ID,

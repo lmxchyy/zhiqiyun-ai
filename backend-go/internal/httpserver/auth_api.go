@@ -20,6 +20,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
+
+	"xianzhi-ai/backend-go/internal/config"
 )
 
 var (
@@ -66,6 +68,10 @@ type smsChallengeStore interface {
 	SMSNextSend(context.Context, string) (time.Time, bool, error)
 }
 
+type smsRateLimitStore interface {
+	AllowSMSRequest(context.Context, string, int64, time.Duration) (bool, time.Duration, error)
+}
+
 type localAuthSession struct {
 	userID    string
 	expiresAt time.Time
@@ -78,6 +84,12 @@ type localAuthSessions struct {
 	wechatWebLogins map[string]localWeChatWebLogin
 	smsChallenges   map[string]smsChallenge
 	smsNextSend     map[string]time.Time
+	smsRateLimits   map[string]localSMSRateLimit
+}
+
+type localSMSRateLimit struct {
+	count     int64
+	expiresAt time.Time
 }
 
 type localWeChatSession struct {
@@ -97,7 +109,21 @@ func newLocalAuthSessions() authSessionStore {
 		wechatWebLogins: map[string]localWeChatWebLogin{},
 		smsChallenges:   map[string]smsChallenge{},
 		smsNextSend:     map[string]time.Time{},
+		smsRateLimits:   map[string]localSMSRateLimit{},
 	}
+}
+
+func (s *localAuthSessions) AllowSMSRequest(_ context.Context, key string, limit int64, window time.Duration) (bool, time.Duration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	item := s.smsRateLimits[key]
+	if item.expiresAt.IsZero() || now.After(item.expiresAt) {
+		item = localSMSRateLimit{expiresAt: now.Add(window)}
+	}
+	item.count++
+	s.smsRateLimits[key] = item
+	return item.count <= limit, time.Until(item.expiresAt), nil
 }
 
 func (s *localAuthSessions) PutWeChatWebLogin(_ context.Context, id string, session wechatWebLoginSession, ttl time.Duration) error {
@@ -259,6 +285,24 @@ func (s *localAuthSessions) SMSNextSend(_ context.Context, mobile string) (time.
 
 type redisAuthSessions struct {
 	client *redis.Client
+}
+
+func (s redisAuthSessions) AllowSMSRequest(ctx context.Context, key string, limit int64, window time.Duration) (bool, time.Duration, error) {
+	redisKey := "auth:sms:rate:" + key
+	count, err := s.client.Incr(ctx, redisKey).Result()
+	if err != nil {
+		return false, 0, err
+	}
+	if count == 1 {
+		if err := s.client.Expire(ctx, redisKey, window).Err(); err != nil {
+			return false, 0, err
+		}
+	}
+	ttl, err := s.client.TTL(ctx, redisKey).Result()
+	if err != nil {
+		return false, 0, err
+	}
+	return count <= limit, ttl, nil
 }
 
 func newRedisAuthSessions(client *redis.Client) authSessionStore {
@@ -511,6 +555,7 @@ type authAPI struct {
 	store    platformStore
 	sessions authSessionStore
 	flow     *authFlowCoordinator
+	config   config.Config
 }
 
 type loginRequest struct {
@@ -562,8 +607,12 @@ type wechatMiniProgramSession struct {
 	SessionKey string `json:"sessionKey"`
 }
 
-func newAuthAPI(store platformStore, sessions authSessionStore) authAPI {
-	return authAPI{store: store, sessions: sessions, flow: newAuthFlowCoordinator()}
+func newAuthAPI(store platformStore, sessions authSessionStore, configs ...config.Config) authAPI {
+	cfg := config.Load()
+	if len(configs) > 0 {
+		cfg = configs[0]
+	}
+	return authAPI{store: store, sessions: sessions, flow: newAuthFlowCoordinator(), config: cfg}
 }
 
 func (a authAPI) login(w http.ResponseWriter, r *http.Request) {

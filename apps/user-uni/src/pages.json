@@ -305,6 +305,13 @@
       }
     },
     {
+      "path": "pages/invite/InviteRegisterPage",
+      "style": {
+        "navigationBarTitleText": "知启云AI专属邀请",
+        "navigationStyle": "custom"
+      }
+    },
+    {
       "path": "pages/user/UserAgentUpgradePage",
       "style": {
         "navigationBarTitleText": "代理商",

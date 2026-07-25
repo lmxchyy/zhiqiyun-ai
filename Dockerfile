@@ -7,6 +7,16 @@ COPY packages /src/packages
 COPY admin-vue ./
 RUN npm run build
 
+FROM node:24-alpine AS user-h5-build
+WORKDIR /src/apps/user-uni
+COPY apps/user-uni/package.json apps/user-uni/package-lock.json ./
+RUN npm ci
+COPY tsconfig.package.base.json /src/tsconfig.package.base.json
+COPY packages /src/packages
+COPY apps/user-uni ./
+ENV VITE_API_BASE_URL=
+RUN npm run build:h5
+
 FROM golang:1.25-alpine AS api-build
 WORKDIR /src/backend-go
 COPY backend-go/go.mod backend-go/go.sum ./
@@ -14,6 +24,7 @@ ENV GOPROXY=https://goproxy.cn,direct
 RUN for i in 1 2 3 4 5; do go mod download && exit 0; echo "go mod download failed, retrying in 5s ($i/5)"; sleep 5; done; go mod download
 COPY backend-go ./
 RUN go build -o /out/xianzhi-api ./cmd/api
+RUN go build -o /out/smartvideo-worker ./cmd/smartvideo-worker
 
 FROM alpine:3.20
 WORKDIR /app
@@ -21,7 +32,7 @@ ARG INSTALL_SEEDANCE_SDK=false
 ARG INSTALL_OFFICECLI=false
 ARG OFFICECLI_INSTALL_URL=https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh
 ARG OFFICECLI_INSTALL_SHA256=
-RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
+RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip ffmpeg=6.1.1-r8 font-noto-cjk \
   && mkdir -p /app/seedance-python \
   && if [ "$INSTALL_SEEDANCE_SDK" = "true" ]; then \
     curl -fL --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 180 "https://ecloud.10086.cn/api/query/maas/public/backend/model/link/aicc-sdk/python/download" -o /tmp/maas-seedance-sdk.zip \
@@ -42,18 +53,21 @@ RUN apk add --no-cache ca-certificates curl bash icu-libs python3 py3-pip \
     echo "Skipping OfficeCLI install"; \
   fi
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
+COPY --from=api-build /out/smartvideo-worker /app/smartvideo-worker
 COPY --from=admin-build /src/admin-vue/dist /app/admin-vue/dist
+COPY --from=user-h5-build /src/apps/user-uni/dist/build/h5 /app/user-h5
 COPY backend-go/internal/provider/video/seedance_bridge.py /app/seedance_bridge.py
 ENV PORT=3100
 ENV XIANZHI_DATA_PATH=/app/data/store.json
 ENV XIANZHI_STATIC_DIR=/app/admin-vue/dist
 ENV XIANZHI_ADMIN_STATIC_DIR=/app/admin-vue/dist
+ENV XIANZHI_USER_H5_STATIC_DIR=/app/user-h5
 ENV CME_SEEDANCE_BRIDGE=/app/seedance_bridge.py
 ENV CME_SEEDANCE_DEPS_PATH=/app/seedance-python
-RUN mkdir -p /app/data \
+RUN mkdir -p /app/data /tmp/smartvideo \
   && printf '{"generationTasks":[],"assets":[],"counters":{}}\n' > /app/data/store.json \
   && adduser -D -H xianzhi \
-  && chown -R xianzhi:xianzhi /app/data
+  && chown -R xianzhi:xianzhi /app/data /tmp/smartvideo
 USER xianzhi
 EXPOSE 3100
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \

@@ -104,6 +104,22 @@ func (p *huaweiOBSProvider) PutObject(ctx context.Context, objectKey string, sou
 	return ObjectMetadata{Size: size, ETag: strings.Trim(output.ETag, "\""), ContentType: contentType}, nil
 }
 
+func (p *huaweiOBSProvider) OpenObject(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	output, err := p.client.GetObject(&huaweiobs.GetObjectInput{
+		GetObjectMetadataInput: huaweiobs.GetObjectMetadataInput{Bucket: p.bucket, Key: objectKey},
+	})
+	if err != nil {
+		if isHuaweiOBSNotFound(err) {
+			return nil, ErrFileNotFound
+		}
+		return nil, err
+	}
+	return output.Body, nil
+}
+
 func (p *huaweiOBSProvider) HeadObject(ctx context.Context, objectKey string) (ObjectMetadata, error) {
 	if err := ctx.Err(); err != nil {
 		return ObjectMetadata{}, err

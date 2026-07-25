@@ -150,6 +150,35 @@ export interface PromotionShareCopy {
   path: string;
 }
 
+export interface AgentInviteFunnel {
+  pageViews: number;
+  registered: number;
+  downloads: number;
+  activations: number;
+}
+
+export interface AgentInviteProfile {
+  inviteCode: string;
+  inviteLink: string;
+  agentDisplayName: string;
+  agentStatus: string;
+  funnel: AgentInviteFunnel;
+}
+
+export interface AgentInvitePoster {
+  inviteCode: string;
+  inviteLink: string;
+  qrCodeDataUrl: string;
+  poster: {
+    title: string;
+    subtitle: string;
+    width: number;
+    height: number;
+    format: "png";
+  };
+  funnel: AgentInviteFunnel;
+}
+
 export interface PromotionReferral {
   inviteCode: string;
   templateId: PromotionTemplateId;

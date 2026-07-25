@@ -216,6 +216,27 @@ func (s *Service) GetFile(ctx context.Context, access AccessContext, fileID stri
 	return file, nil
 }
 
+// OpenObject returns a private object stream after applying the same tenant,
+// ownership and lifecycle checks as file-center reads. Callers must close it.
+func (s *Service) OpenObject(ctx context.Context, access AccessContext, fileID string) (FileObject, io.ReadCloser, error) {
+	file, err := s.GetFile(ctx, access, fileID)
+	if err != nil {
+		return FileObject{}, nil, err
+	}
+	if file.Status != StatusActive {
+		return FileObject{}, nil, ErrFileNotFound
+	}
+	provider, err := s.providerForFile(ctx, file)
+	if err != nil {
+		return FileObject{}, nil, err
+	}
+	stream, err := provider.OpenObject(ctx, file.ObjectKey)
+	if err != nil {
+		return FileObject{}, nil, err
+	}
+	return file, stream, nil
+}
+
 func (s *Service) AccessURL(ctx context.Context, access AccessContext, fileID string, download bool) (AccessTicket, error) {
 	file, err := s.GetFile(ctx, access, fileID)
 	if err != nil {
