@@ -14,6 +14,8 @@ import EnterpriseFeishuConnectorPage from "./pages/enterprise/EnterpriseFeishuCo
 import { capturePromotionReferral, syncPendingPromotionReferral } from "./features/promotion/referral";
 import { initializeAuth } from "./features/auth/gate";
 import { initializeReviewMode } from "./features/reviewMode";
+import { recordAgentInviteAppActivation } from "./features/invite/activation";
+import { syncMiniProgramNavigation } from "./composables/useMiniProgramNavigation";
 
 const isFeishuConnectorRoute = typeof window !== "undefined" && [
   "/mobile/enterprise/feishu",
@@ -28,13 +30,21 @@ function captureLaunch(options?: PromotionLaunchOptions) {
 }
 
 onLaunch(options => {
+  syncMiniProgramNavigation();
   initializeAuth();
   void initializeReviewMode();
+  // #ifdef APP-PLUS
+  void recordAgentInviteAppActivation();
+  // #endif
   captureLaunch(options);
 });
 onShow(options => {
+  syncMiniProgramNavigation();
   captureLaunch(options);
   void syncPendingPromotionReferral();
+  // #ifdef APP-PLUS
+  void recordAgentInviteAppActivation();
+  // #endif
 });
 </script>
 

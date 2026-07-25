@@ -1,5 +1,5 @@
 <template>
-  <view class="mpb-page">
+  <view class="mpb-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header"><NativePageBack fallback="/pages/user/UserHomePage" /><image class="mpb-logo" :src="loginLogo" mode="aspectFit" /><view class="mpb-header-copy"><text class="mpb-title">AI Agent</text><text class="mpb-subtitle">创建并管理知识智能体</text></view><text class="mpb-role">普通用户</text></view>
     <view v-if="guest" class="mpb-card mpb-guest"><text class="mpb-card-title">可先浏览，创建时再登录</text><text class="mpb-card-copy">登录仅在保存智能体时需要，不影响查看本页功能。</text><button class="mpb-guest-button" @click="requestLogin">登录 / 注册</button></view>

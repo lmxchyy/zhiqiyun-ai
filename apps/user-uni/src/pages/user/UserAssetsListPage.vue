@@ -1,15 +1,18 @@
 <template>
   <AssetLibraryPage v-if="enterpriseAssetCenter" />
-  <view v-else class="list-page">
-    <view class="safe-top" />
-    <view class="page-header">
-      <button class="back-button" aria-label="返回作品页" @click="backOrHome('/pages/user/UserAssetsPage')">‹</button>
-      <view class="header-copy">
-        <text class="page-title">全部作品</text>
-        <text class="page-subtitle">{{ total }} 个作品 · 按创建时间倒序</text>
+  <view v-else class="mpb-page" :style="miniProgramNavigationStyle">
+    <view class="mpb-safe" />
+    <view class="mpb-header">
+      <button class="mpb-back" aria-label="返回作品页" @click="backOrHome('/pages/user/UserAssetsPage')">‹</button>
+      <image class="mpb-logo" :src="loginLogo" mode="aspectFit" />
+      <view class="mpb-header-copy">
+        <text class="mpb-title">全部作品</text>
+        <text class="mpb-subtitle">{{ total }} 个作品 · 按创建时间倒序</text>
       </view>
-      <button class="manage-button" @click="toggleManage">{{ manageMode ? '完成' : '管理' }}</button>
+      <button class="mpb-link-button manage-button" @click="toggleManage">{{ manageMode ? '完成' : '管理' }}</button>
     </view>
+
+    <view class="mpb-stack">
 
     <view v-if="error && !items.length" class="state-card error">
       <text>{{ error }}</text>
@@ -49,6 +52,7 @@
       <button v-else-if="hasMore" @click="loadMore">加载更多</button>
       <text v-else-if="items.length">已加载全部 {{ total }} 个作品</text>
     </view>
+    </view>
 
     <view v-if="manageMode" class="manage-bar">
       <text>已选择 {{ selectedIds.length }} 项</text>
@@ -72,6 +76,7 @@ import { backOrHome } from "../../utils/miniProgramBusiness";
 import AssetLibraryPage from "../../components/assets/AssetLibraryPage.vue";
 import { useAssetStore } from "../../stores/assets";
 import type { AssetStatus, AssetType } from "../../features/assets/types";
+import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 
 const enterpriseAssetCenter = true;
 const enterpriseStore = useAssetStore();
@@ -226,16 +231,8 @@ onPullDownRefresh(() => {
 </script>
 
 <style scoped>
-.list-page { min-height: 100vh; box-sizing: border-box; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); color: #1a1f2e; background: #f7f8fc; }
-.safe-top { height: calc(12px + env(safe-area-inset-top)); }
-.page-header { display: flex; min-height: 56px; align-items: center; gap: 12px; }
-.back-button, .manage-button, .asset-card, .state-button, .load-state button, .manage-bar button { margin: 0; border: 0; }
-.back-button::after, .manage-button::after, .asset-card::after, .state-button::after, .load-state button::after, .manage-bar button::after { display: none; }
-.back-button { width: 36px; height: 36px; padding: 0; border-radius: 12px; color: #594db2; background: #fff; font-size: 28px; line-height: 34px; }
-.header-copy { min-width: 0; flex: 1; }
-.page-title, .page-subtitle { display: block; }
-.page-title { font-size: 22px; font-weight: 700; line-height: 28px; }
-.page-subtitle { margin-top: 2px; color: #6e758c; font-size: 11px; }
+@import "../../styles/mini-program-business.css";
+
 .manage-button { width: auto; height: 34px; padding: 0 12px; border-radius: 17px; color: #594db2; background: #fff; font-size: 12px; line-height: 34px; }
 .asset-grid { display: grid; padding-top: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .asset-card { position: relative; min-width: 0; padding: 10px; overflow: hidden; border: 1px solid #e3e5f0; border-radius: 16px; background: #fff; text-align: left; }

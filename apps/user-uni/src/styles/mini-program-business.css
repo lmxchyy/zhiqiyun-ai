@@ -1,7 +1,7 @@
 page { min-height: 100%; background: #f7f8fc; }
 .mpb-page { min-height: 100vh; padding: 0 15px calc(32px + env(safe-area-inset-bottom)); box-sizing: border-box; color: #111827; background: #f7f8fc; }
-.mpb-safe { height: env(safe-area-inset-top); min-height: 8px; }
-.mpb-header { display: flex; min-height: 58px; align-items: center; gap: 8px; }
+.mpb-safe { height: var(--header-padding-top, max(0px, env(safe-area-inset-top, 0px))); min-height: 0; }
+.mpb-header { display: flex; min-height: var(--navigation-bar-height, 44px); padding-right: var(--capsule-right-space, 0px); box-sizing: border-box; align-items: center; gap: 8px; }
 .mpb-back { display: grid; width: 34px; min-width: 34px; height: 34px; margin: 0; padding: 0; place-items: center; border: 1px solid #dfe5f2; border-radius: 8px; color: #475467; background: #fff; font-size: 22px; line-height: 1; }
 .mpb-back::after, .mpb-button::after, .mpb-link-button::after, .mpb-row-button::after { display: none; }
 .mpb-logo { width: 36px; min-width: 36px; height: 36px; border-radius: 8px; background: #fff; object-fit: contain; }

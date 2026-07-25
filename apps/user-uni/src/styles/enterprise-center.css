@@ -9,12 +9,12 @@ page { background: #f7f8fc; }
 }
 
 .enterprise-page.has-fixed-action { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
-.enterprise-status-space { height: var(--status-bar-height, env(safe-area-inset-top)); min-height: 20px; }
+.enterprise-status-space { height: var(--header-padding-top, max(0px, env(safe-area-inset-top, 0px))); min-height: 0; }
 
 .enterprise-nav {
   display: grid;
-  height: 64px;
-  padding: 0 20px;
+  min-height: var(--navigation-bar-height, 44px);
+  padding: 0 max(20px, var(--capsule-right-space, 0px)) 0 20px;
   box-sizing: border-box;
   grid-template-columns: 56px minmax(0, 1fr) 64px;
   align-items: center;

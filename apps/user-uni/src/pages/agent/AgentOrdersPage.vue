@@ -1,5 +1,5 @@
 <template>
-  <view class="mpb-page">
+  <view class="mpb-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header"><button class="mpb-back" aria-label="返回" @click="backOrHome(customerId ? `/pages/agent/AgentCustomerDetailPage?id=${encodeURIComponent(customerId)}` : '/pages/agent/AgentOverviewPage')">‹</button><image class="mpb-logo" :src="loginLogo" mode="aspectFit" /><view class="mpb-header-copy"><text class="mpb-title">客户订单</text><text class="mpb-subtitle">查看客户成交与退款状态</text></view><text class="mpb-role agent">代理商</text></view>
     <view class="mpb-stack">

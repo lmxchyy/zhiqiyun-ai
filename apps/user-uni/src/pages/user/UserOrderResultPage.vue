@@ -1,5 +1,5 @@
 <template>
-  <view class="mpb-page">
+  <view class="mpb-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header"><image class="mpb-logo" :src="loginLogo" mode="aspectFit" /><view class="mpb-header-copy"><text class="mpb-title">支付结果</text><text class="mpb-subtitle">支付状态与点数到账反馈</text></view><text class="mpb-role">普通用户</text></view>
     <view class="mpb-stack">

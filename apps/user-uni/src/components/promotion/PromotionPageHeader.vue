@@ -1,5 +1,5 @@
 <template>
-  <view class="promotion-page-header" :style="{ paddingTop: `${statusBarHeight}px` }">
+  <view class="promotion-page-header" :style="navigationStyle">
     <view class="promotion-header-row">
       <button v-if="showBack" class="promotion-header-back" aria-label="返回" @click="goBack"><text>‹</text></button>
       <image class="promotion-header-logo" :src="loginLogo" mode="aspectFit" />
@@ -13,12 +13,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
 import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
+import { useMiniProgramNavigation } from "../../composables/useMiniProgramNavigation";
 
 withDefaults(defineProps<{ title: string; subtitle?: string; showBack?: boolean; fallback?: string }>(), { subtitle: "", showBack: true, fallback: "/pages/user/UserMinePage" });
-const statusBarHeight = ref(20);
-try { statusBarHeight.value = uni.getSystemInfoSync().statusBarHeight || 20; } catch { /* use design fallback */ }
+const { navigationStyle } = useMiniProgramNavigation();
 
 function goBack() {
   const pages = getCurrentPages();
@@ -26,3 +25,14 @@ function goBack() {
   uni.switchTab({ url: "/pages/user/UserMinePage", fail: () => uni.reLaunch({ url: "/pages/user/UserHomePage" }) });
 }
 </script>
+
+<style scoped>
+.promotion-page-header {
+  box-sizing: border-box;
+  padding-top: var(--header-padding-top);
+  padding-right: max(18px, var(--capsule-right-space));
+  padding-left: 18px;
+}
+
+.promotion-header-row { min-height: var(--navigation-bar-height); }
+</style>

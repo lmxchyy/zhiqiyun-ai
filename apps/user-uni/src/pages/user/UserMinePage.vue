@@ -1,5 +1,5 @@
 <template>
-  <view class="user-mine-page">
+  <view class="user-mine-page" :style="miniProgramNavigationStyle">
     <V531ProfilePage
       :display-name="displayName"
       :user-id="displayUserId"
@@ -608,7 +608,7 @@ onPullDownRefresh(() => {
 <style>
 page { background: #f7f8fc; }
 
-.user-mine-page { min-height: 100vh; background: #f7f8fc; }
+.user-mine-page { min-height: 100vh; padding-top: var(--header-height, 64px); box-sizing: border-box; background: #f7f8fc; }
 
 .mine-load-note {
   display: flex;

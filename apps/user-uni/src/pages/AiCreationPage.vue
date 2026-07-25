@@ -34,15 +34,6 @@
       <view class="login-bg-accent login-bg-accent-blue"></view>
       <view class="login-bg-accent login-bg-accent-warm"></view>
 
-      <view class="login-statusbar">
-        <text>9:41</text>
-        <view class="mini-capsule" aria-label="微信小程序菜单">
-          <view class="mini-dot"></view>
-          <view class="mini-dot"></view>
-          <view class="mini-dot"></view>
-        </view>
-      </view>
-
       <view class="login-brand">
         <image class="login-logo" :src="loginLogo" mode="aspectFit" />
         <text class="eyebrow">微信小程序入口</text>
@@ -3269,7 +3260,7 @@ async function loginWithWechatPhoneNumber(event: unknown) {
   display: grid;
   place-items: center;
   overflow-x: hidden;
-  padding: 24px;
+  padding: max(24px, env(safe-area-inset-top, 0px)) 24px 24px;
   background: #eef0f4;
   box-sizing: border-box;
 }
@@ -3313,39 +3304,6 @@ async function loginWithWechatPhoneNumber(event: unknown) {
   width: 224px;
   height: 224px;
   background: rgba(255, 244, 235, .64);
-}
-
-.login-statusbar {
-  width: 100%;
-  max-width: 100%;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #101828;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.mini-capsule {
-  width: 74px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid #e7ebf2;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .94);
-  box-shadow: 0 8px 18px rgba(16, 24, 40, .08);
-}
-
-.mini-dot {
-  width: 4px;
-  height: 4px;
-  display: block;
-  border-radius: 999px;
-  background: rgba(52, 64, 84, .82);
 }
 
 .login-brand {

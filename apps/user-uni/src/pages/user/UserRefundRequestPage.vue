@@ -1,5 +1,5 @@
 <template>
-  <view class="mpb-page">
+  <view class="mpb-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header"><button class="mpb-back" aria-label="返回" @click="returnToOrder">‹</button><image class="mpb-logo" :src="loginLogo" mode="aspectFit" /><view class="mpb-header-copy"><text class="mpb-title">退款申请</text><text class="mpb-subtitle">提交原因并等待人工审核</text></view><text class="mpb-role">普通用户</text></view>
     <view class="mpb-stack">

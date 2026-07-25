@@ -1,5 +1,5 @@
 <template>
-  <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage }]">
+  <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage }]" :style="miniWorkbenchSafeAreaStyle">
     <view class="native-safe-note"></view>
 
     <view v-if="activeRole !== 'user' && !isUserMineDetail" class="business-header">
@@ -717,8 +717,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
+import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
 import { ApiClientError } from "@xianzhi/api-client";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
+
+const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
 import { uploadReferenceImage } from "../api/files";
 import { inspirationAPI } from "../features/inspiration/api";
 import { readInspirationDraft } from "../features/inspiration/draft";
@@ -3609,8 +3612,8 @@ onBackPress(() => {
 }
 
 .user-v531-shell .native-safe-note {
-  height: var(--status-bar-height, env(safe-area-inset-top));
-  min-height: env(safe-area-inset-top);
+  height: var(--header-height, 64px);
+  min-height: 0;
 }
 
 .user-v531-shell .role-content {
@@ -3618,14 +3621,16 @@ onBackPress(() => {
 }
 
 .native-safe-note {
-  height: env(safe-area-inset-top);
-  min-height: 4px;
+  height: var(--header-padding-top, max(0px, env(safe-area-inset-top, 0px)));
+  min-height: 0;
 }
 
 .business-header {
   display: flex;
-  height: 46px;
+  min-height: var(--navigation-bar-height, 44px);
   margin-top: 5px;
+  padding-right: var(--capsule-right-space, 0px);
+  box-sizing: border-box;
   align-items: center;
   gap: 10px;
 }

@@ -1,4 +1,4 @@
-<template><view class="enterprise-entry"><EnterpriseStatePanel :kind="stateKind" :title="stateTitle" :copy="stateCopy" action-label="重新加载" @action="enterEnterprise()" /></view></template>
+<template><view class="enterprise-entry" :style="miniProgramNavigationStyle"><EnterpriseStatePanel :kind="stateKind" :title="stateTitle" :copy="stateCopy" action-label="重新加载" @action="enterEnterprise()" /></view></template>
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
@@ -38,4 +38,4 @@ onMounted(() => { void enterEnterprise(); });
 </script>
 
 <style src="../../styles/enterprise-center.css"></style>
-<style>.enterprise-entry { min-height: 100vh; padding-top: calc(var(--status-bar-height, env(safe-area-inset-top)) + 80px); box-sizing: border-box; background: #f7f8fc; }</style>
+<style>.enterprise-entry { min-height: 100vh; padding-top: var(--header-height, 64px); box-sizing: border-box; background: #f7f8fc; }</style>

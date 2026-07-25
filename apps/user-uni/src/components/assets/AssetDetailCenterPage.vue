@@ -1,6 +1,6 @@
 <template>
-  <view class="detail-page">
-    <view class="detail-header" :style="navigationStyle">
+  <view class="detail-page" :style="navigationStyle">
+    <view class="detail-header">
       <button class="back-button" aria-label="返回作品列表" @click="backOrHome('/pages/user/UserAssetsPage')">‹</button>
       <text class="header-title">作品详情</text>
     </view>
@@ -176,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { onShareAppMessage, onShow } from "@dcloudio/uni-app";
 import { useAssetStore } from "../../stores/assets";
 import { copyText, downloadAssetFile, previewAsset } from "../../features/assets/platform";
@@ -190,6 +190,7 @@ import AssetStatusBadge from "./AssetStatusBadge.vue";
 import AiGeneratedContentNotice from "../compliance/AiGeneratedContentNotice.vue";
 import { backOrHome } from "../../utils/miniProgramBusiness";
 import { miniProgramAssetCreationPages } from "../../config/miniProgramPages";
+import { useMiniProgramNavigation } from "../../composables/useMiniProgramNavigation";
 
 type DetailAction = "" | "preview" | "edit" | "regenerate" | "download" | "favorite" | "move" | "rename" | "archive" | "delete";
 type DetailRow = { label: string; value: string };
@@ -213,7 +214,7 @@ const parametersExpanded = ref(false);
 const assetInfoExpanded = ref(false);
 const moreVisible = ref(false);
 const activeAction = ref<DetailAction>("");
-const navigationStyle = ref<Record<string, string>>({ paddingTop: "env(safe-area-inset-top)", paddingRight: "92px" });
+const { navigationStyle } = useMiniProgramNavigation();
 let previewLoadingTimer: ReturnType<typeof setTimeout> | null = null;
 
 const autoplay = computed(() => props.autoplay);
@@ -667,18 +668,6 @@ function armPreviewLoadingTimeout() {
   }, 1800);
 }
 
-function syncNavigationInsets() {
-  try {
-    const system = uni.getSystemInfoSync() as { statusBarHeight?: number; windowWidth?: number };
-    const capsule = typeof uni.getMenuButtonBoundingClientRect === "function" ? uni.getMenuButtonBoundingClientRect() : null;
-    const statusBarHeight = Math.max(0, Number(system.statusBarHeight || 0));
-    const rightInset = capsule && system.windowWidth ? Math.max(88, system.windowWidth - capsule.left + 8) : 92;
-    navigationStyle.value = { paddingTop: `${statusBarHeight}px`, paddingRight: `${rightInset}px` };
-  } catch {
-    navigationStyle.value = { paddingTop: "env(safe-area-inset-top)", paddingRight: "92px" };
-  }
-}
-
 let disposeNativeBridge = () => {};
 
 function installNativeBridge() {
@@ -698,7 +687,6 @@ onShow(() => {
   moreVisible.value = false;
   installNativeBridge();
 });
-onMounted(syncNavigationInsets);
 onBeforeUnmount(() => {
   clearPreviewLoadingTimer();
   disposeNativeBridge();
@@ -724,7 +712,7 @@ onShareAppMessage(() => ({
 
 <style scoped>
 .detail-page { min-height: 100vh; box-sizing: border-box; color: #182033; background: #f5f7fc; }
-.detail-header { position: sticky; z-index: 30; top: 0; display: flex; min-height: 48px; box-sizing: content-box; padding-left: 16px; align-items: center; gap: 12px; border-bottom: 1px solid rgba(224,228,240,.8); background: rgba(248,250,255,.96); }
+.detail-header { position: sticky; z-index: 30; top: 0; display: flex; min-height: var(--navigation-bar-height, 44px); box-sizing: border-box; padding: var(--header-padding-top, 20px) var(--capsule-right-space, 0px) 0 16px; align-items: center; gap: 12px; border-bottom: 1px solid rgba(224,228,240,.8); background: rgba(248,250,255,.96); }
 .header-title { overflow: hidden; font-size: 18px; font-weight: 650; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
 .detail-content { padding: 0 16px calc(28px + env(safe-area-inset-bottom)); }
 .back-button,.preview-error button,.ppt-controls button,.primary-actions button,.utility-actions button,.card-head button,.collapse-trigger,.expand-button,.empty-action { margin: 0; border: 0; }

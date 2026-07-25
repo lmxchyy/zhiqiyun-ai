@@ -1,5 +1,5 @@
 <template>
-  <view class="mpb-page">
+  <view class="mpb-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header"><button class="mpb-back" aria-label="返回" @click="backOrHome('/pages/user/UserRechargePlansPage')">‹</button><image class="mpb-logo" :src="loginLogo" mode="aspectFit" /><view class="mpb-header-copy"><text class="mpb-title">确认订单</text><text class="mpb-subtitle">核对套餐与微信支付金额</text></view><text class="mpb-role">普通用户</text></view>
     <view class="mpb-stack">

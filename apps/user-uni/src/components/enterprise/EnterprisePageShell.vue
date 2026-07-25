@@ -1,5 +1,5 @@
 <template>
-  <view :class="['enterprise-page', { 'has-fixed-action': fixedAction }]">
+  <view :class="['enterprise-page', { 'has-fixed-action': fixedAction }]" :style="navigationStyle">
     <view class="enterprise-status-space" />
     <view class="enterprise-nav">
       <button class="enterprise-nav-back" type="button" hover-class="enterprise-pressed" @click="goBack()">‹</button>
@@ -20,6 +20,10 @@
 </template>
 
 <script setup lang="ts">
+import { useMiniProgramNavigation } from "../../composables/useMiniProgramNavigation";
+
+const { navigationStyle } = useMiniProgramNavigation();
+
 defineProps<{
   title: string;
   actionLabel?: string;

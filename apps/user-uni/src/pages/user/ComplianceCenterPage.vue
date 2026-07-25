@@ -1,10 +1,12 @@
 <template>
-  <view class="compliance-page">
-    <view class="compliance-header">
-      <button class="back" aria-label="返回" @click="back">‹</button>
-      <view>
-        <text class="title">协议与安全</text>
-        <text class="subtitle">知启云AI小程序合规信息</text>
+  <view class="mpb-page" :style="miniProgramNavigationStyle">
+    <view class="mpb-safe" />
+    <view class="mpb-header">
+      <button class="mpb-back" aria-label="返回" @click="back">‹</button>
+      <image class="mpb-logo" :src="loginLogo" mode="aspectFit" />
+      <view class="mpb-header-copy">
+        <text class="mpb-title">协议与安全</text>
+        <text class="mpb-subtitle">知启云AI小程序合规信息</text>
       </view>
     </view>
 
@@ -67,6 +69,7 @@
 import { ref } from "vue";
 import { onLoad } from "@dcloudio/uni-app";
 import { apiRequestTask, getAuthToken } from "../../api/client";
+import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 
 interface LegalDocument { code: string; title: string; version: string; content: string }
 interface AcceptanceDocument { code: string; title: string; version: string; accepted: boolean }
@@ -156,5 +159,29 @@ function openExternal(value: string, title: string) {
 </script>
 
 <style scoped>
-.compliance-page{min-height:100vh;padding:24px 16px;background:#f8fafc;color:#101828}.compliance-header{display:flex;align-items:center;gap:12px;margin-bottom:20px}.back{width:42px;height:42px;padding:0;border:0;border-radius:14px;background:#fff;font-size:30px;line-height:38px}.title,.subtitle,.document-title,.document-version,.sheet-title,.sheet-version{display:block}.title{font-size:22px;font-weight:800}.subtitle,.document-version,.sheet-version{margin-top:3px;color:#667085;font-size:12px}.document-list{display:grid;gap:10px}.document{display:flex;align-items:center;justify-content:space-between;width:100%;padding:16px;border:1px solid #eaecf0;border-radius:14px;background:#fff;text-align:left}.document-title{font-size:15px;font-weight:700}.state{display:grid;gap:14px;padding:30px;text-align:center;color:#667085}.error{color:#b42318}.retry{margin:auto;border:0;border-radius:10px;background:#4f46e5;color:#fff}.sheet{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;background:rgba(16,24,40,.45)}.sheet-card{width:100%;max-height:78vh;padding:22px 18px;background:#fff;border-radius:24px 24px 0 0}.sheet-title{font-size:20px;font-weight:800}.sheet-content{height:46vh;margin:18px 0;color:#344054;line-height:1.75;white-space:pre-wrap}.close{width:100%;border:0;border-radius:12px;background:#4f46e5;color:#fff}.acceptance-card{padding:16px;border:1px solid #d0d5dd;border-radius:14px;background:#fff}.acceptance-title,.acceptance-summary{display:block}.acceptance-title{font-weight:800}.acceptance-summary{margin:6px 0 12px;color:#667085;font-size:12px;line-height:1.6}.acceptance-row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid #f2f4f7;font-size:12px}.accepted{color:#067647}.pending{color:#b54708}.accept-button{margin-top:12px;width:100%;border:0;border-radius:12px;background:#4f46e5;color:#fff}.accept-button[disabled]{opacity:.5}.close:after,.document:after,.back:after,.retry:after,.accept-button:after{border:0}
+@import "../../styles/mini-program-business.css";
+
+.compliance-page { min-height: 100vh; color: #101828; }
+.state { display: grid; gap: 14px; padding: 30px; text-align: center; color: #667085; }
+.error { color: #b42318; }
+.document { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 16px; border: 1px solid #eaecf0; border-radius: 14px; background: #fff; text-align: left; }
+.document-title { font-size: 15px; font-weight: 700; }
+.document-list { display: grid; gap: 10px; }
+.document-version, .sheet-version { margin-top: 3px; color: #667085; font-size: 12px; }
+.retry { margin: auto; border: 0; border-radius: 10px; background: #4f46e5; color: #fff; }
+.sheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; background: rgba(16, 24, 40, 0.45); }
+.sheet-card { width: 100%; max-height: 78vh; padding: 22px 18px; background: #fff; border-radius: 24px 24px 0 0; }
+.sheet-title { font-size: 20px; font-weight: 800; }
+.sheet-content { height: 46vh; margin: 18px 0; color: #344054; line-height: 1.75; white-space: pre-wrap; }
+.close { width: 100%; border: 0; border-radius: 12px; background: #4f46e5; color: #fff; }
+.acceptance-card { padding: 16px; border: 1px solid #d0d5dd; border-radius: 14px; background: #fff; }
+.acceptance-title, .acceptance-summary { display: block; }
+.acceptance-title { font-weight: 800; }
+.acceptance-summary { margin: 6px 0 12px; color: #667085; font-size: 12px; line-height: 1.6; }
+.acceptance-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid #f2f4f7; font-size: 12px; }
+.accepted { color: #067647; }
+.pending { color: #b54708; }
+.accept-button { margin-top: 12px; width: 100%; border: 0; border-radius: 12px; background: #4f46e5; color: #fff; }
+.accept-button[disabled] { opacity: .5; }
+.close:after, .document:after, .retry:after, .accept-button:after { border: 0; }
 </style>

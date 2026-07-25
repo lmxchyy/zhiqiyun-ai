@@ -1,7 +1,16 @@
 <template>
-  <view :class="['order-page', kind]">
-    <view class="order-header"><button type="button" @click="backOrHome('/pages/user/UserMinePage')">‹</button><text>确认订单</text><view /></view>
-    <view class="order-content">
+  <view class="mpb-page" :style="miniProgramNavigationStyle" :class="kind">
+    <view class="mpb-safe" />
+    <view class="mpb-header">
+      <button class="mpb-back" aria-label="返回" @click="backOrHome('/pages/user/UserMinePage')">‹</button>
+      <image class="mpb-logo" :src="loginLogo" mode="aspectFit" />
+      <view class="mpb-header-copy">
+        <text class="mpb-title">确认订单</text>
+        <text class="mpb-subtitle">支付订单与会员权益</text>
+      </view>
+      <view />
+    </view>
+    <view class="mpb-stack">
       <view v-if="loading" class="order-card"><text>正在加载商品...</text></view>
       <template v-else-if="product">
         <view class="order-card product-card">
@@ -53,6 +62,7 @@ import type {
 } from '../../features/payment/types'
 import { backOrHome } from '../../utils/miniProgramBusiness'
 import { openLegalDocument } from '../../features/legal/navigation'
+import loginLogo from '../../assets/zhiqiyun-logo-transparent.png'
 
 const productCode = ref('')
 const kind = ref<'member' | 'agent'>('member')
@@ -262,9 +272,8 @@ onUnload(() => { disposed = true })
 </script>
 
 <style scoped>
-.order-page { min-height: 100vh; color: #111827; background: #f6f8fc; }
-.order-header { display: grid; height: 112rpx; padding: 0 32rpx; grid-template-columns: 60rpx 1fr 60rpx; align-items: center; background: #fff; font-size: 32rpx; font-weight: 700; text-align: center; }
-.order-header button { width: 60rpx; height: 80rpx; margin: 0; padding: 0; border: 0; background: transparent; font-size: 56rpx; line-height: 80rpx; text-align: left; }.order-header button::after { display: none; }
+@import "../../styles/mini-program-business.css";
+.mpb-page { background: #f6f8fc; }
 .order-content { display: flex; flex-direction: column; gap: 32rpx; padding: 32rpx; }
 .order-card { display: flex; box-sizing: border-box; flex-direction: column; gap: 20rpx; padding: 32rpx; border: 2rpx solid #e8ecf3; border-radius: 32rpx; background: #fff; box-shadow: 0 8rpx 24rpx rgba(16,24,40,.05); }
 .product-name { color: #635bff; font-size: 32rpx; font-weight: 800; }.agent .product-name, .agent .accent { color: #ff7a1a; }

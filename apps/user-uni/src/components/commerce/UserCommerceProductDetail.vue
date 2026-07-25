@@ -1,5 +1,5 @@
 <template>
-  <view :class="['commerce-page', kind]">
+  <view :class="['commerce-page', kind]" :style="miniProgramNavigationStyle">
     <view class="commerce-header"><button type="button" @click="backOrHome('/pages/user/UserMinePage')">‹</button><text>{{ isMember ? 'Pro会员' : '代理商' }}</text><view /></view>
     <view class="commerce-content">
       <view v-if="loading" class="commerce-card"><text>正在加载商品...</text></view>
@@ -111,7 +111,7 @@ onShow(() => void load())
 
 <style scoped>
 .commerce-page { min-height: 100vh; color: #111827; background: #f6f8fc; }
-.commerce-header { display: grid; height: 112rpx; padding: 0 32rpx; grid-template-columns: 60rpx 1fr 60rpx; align-items: center; background: #fff; font-size: 32rpx; font-weight: 700; text-align: center; }
+.commerce-header { display: grid; min-height: var(--header-height, 64px); padding: var(--header-padding-top, 20px) max(32rpx, var(--capsule-right-space, 0px)) 0 32rpx; box-sizing: border-box; grid-template-columns: 60rpx 1fr 60rpx; align-items: center; background: #fff; font-size: 32rpx; font-weight: 700; text-align: center; }
 .commerce-header button { width: 60rpx; height: 80rpx; margin: 0; padding: 0; border: 0; background: transparent; font-size: 56rpx; line-height: 80rpx; text-align: left; }
 .commerce-header button::after { display: none; }
 .commerce-content { display: flex; flex-direction: column; gap: 32rpx; padding: 32rpx; }

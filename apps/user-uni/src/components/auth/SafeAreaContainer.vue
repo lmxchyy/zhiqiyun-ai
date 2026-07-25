@@ -10,13 +10,16 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useMiniProgramNavigation } from "../../composables/useMiniProgramNavigation";
 
 const props = withDefaults(defineProps<{ keyboardHeight?: number; scrollIntoView?: string }>(), {
   keyboardHeight: 0,
   scrollIntoView: "",
 });
+const { navigationStyle } = useMiniProgramNavigation();
 
 const pageStyle = computed(() => ({
+  ...navigationStyle.value,
   paddingBottom: `${Math.max(28, props.keyboardHeight + 28)}px`,
 }));
 </script>
@@ -27,7 +30,7 @@ const pageStyle = computed(() => ({
   position: relative;
   min-height: 100vh;
   box-sizing: border-box;
-  padding: calc(env(safe-area-inset-top) + 42px) 20px 28px;
+  padding: var(--header-height, max(44px, env(safe-area-inset-top, 0px))) 20px 28px;
   overflow: hidden;
   color: #181c28;
   background: #f7f9fd;
@@ -37,6 +40,6 @@ const pageStyle = computed(() => ({
 .auth-glow-left { width: 210px; height: 170px; left: -70px; top: -40px; background: rgba(92, 132, 255, 0.22); }
 .auth-glow-right { width: 170px; height: 160px; right: -55px; top: 70px; background: rgba(146, 102, 255, 0.17); }
 @media (max-width: 340px) {
-  .auth-safe-page { padding-left: 16px; padding-right: 16px; padding-top: calc(env(safe-area-inset-top) + 34px); }
+  .auth-safe-page { padding-left: 16px; padding-right: 16px; padding-top: var(--header-height, max(44px, env(safe-area-inset-top, 0px))); }
 }
 </style>

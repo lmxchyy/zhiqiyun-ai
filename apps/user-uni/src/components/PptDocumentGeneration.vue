@@ -1,5 +1,5 @@
 <template>
-  <view :class="['ppt-page', { 'is-editor': currentMode === 'editor' }]">
+  <view :class="['ppt-page', { 'is-editor': currentMode === 'editor' }]" :style="miniProgramNavigationStyle">
     <AiGeneratedContentNotice v-if="currentMode !== 'editor'" />
     <template v-if="currentMode === 'editor'">
       <view class="ppt-editor-shell" :class="{ presenting: presentationMode === 'present' }">
@@ -2796,8 +2796,8 @@ async function openDownloadUrl(url: string) {
 
 .ppt-present-header {
   position: absolute;
-  top: 18px;
-  right: 24px;
+  top: max(18px, var(--header-padding-top, 0px));
+  right: max(24px, var(--capsule-right-space, 0px));
   left: 24px;
   display: flex;
   align-items: center;
@@ -2907,7 +2907,9 @@ async function openDownloadUrl(url: string) {
     position: sticky;
     top: 0;
     z-index: 40;
-    padding: 10px;
+    min-height: var(--header-height, 64px);
+    padding: calc(var(--header-padding-top, 20px) + 10px) max(10px, var(--capsule-right-space, 0px)) 10px 10px;
+    box-sizing: border-box;
   }
 
   .ppt-editor-titlebar {

@@ -4,7 +4,7 @@
     :asset-id="enterpriseAssetId"
     :autoplay="enterpriseAutoplay"
   />
-  <view v-else class="mpb-page">
+  <view v-else class="mpb-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header">
       <button class="mpb-back" aria-label="返回" @click="backOrHome('/pages/user/UserAssetsPage')">‹</button>

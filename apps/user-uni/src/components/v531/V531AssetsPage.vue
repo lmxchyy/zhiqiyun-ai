@@ -1,5 +1,5 @@
 <template>
-  <view class="works-page">
+  <view class="works-page" :style="miniProgramNavigationStyle">
     <view class="works-header">
       <text class="works-title">作品</text>
       <view class="works-actions">
@@ -355,7 +355,7 @@ function taskMeta(task: TaskLike) {
 .works-page {
   min-height: 100vh;
   box-sizing: border-box;
-  padding: calc(16px + env(safe-area-inset-top)) 16px calc(104px + env(safe-area-inset-bottom));
+  padding: calc(16px + var(--header-padding-top, 20px)) 16px calc(104px + env(safe-area-inset-bottom));
   color: #1a1f2e;
   background: #f7f8fc;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
@@ -363,6 +363,8 @@ function taskMeta(task: TaskLike) {
 .works-header {
   display: flex;
   height: 48px;
+  padding-right: var(--capsule-right-space, 0px);
+  box-sizing: border-box;
   align-items: flex-start;
   justify-content: space-between;
 }

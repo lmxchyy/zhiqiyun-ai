@@ -1,5 +1,5 @@
 <template>
-  <view class="forbidden-page">
+  <view class="forbidden-page" :style="miniProgramNavigationStyle">
     <view class="forbidden-card">
       <text class="forbidden-code">403</text>
       <text class="forbidden-title">暂无访问权限</text>
@@ -31,7 +31,7 @@ function goHome() {
 </script>
 
 <style scoped>
-.forbidden-page { min-height: 100vh; padding: 96px 24px 40px; box-sizing: border-box; background: #f7f8fc; }
+.forbidden-page { min-height: 100vh; padding: var(--header-height, 64px) 24px 40px; box-sizing: border-box; background: #f7f8fc; }
 .forbidden-card { padding: 34px 24px; border: 1px solid #e8eaf2; border-radius: 22px; background: #fff; box-shadow: 0 18px 45px rgba(23, 28, 56, .08); text-align: center; }
 .forbidden-code, .forbidden-title, .forbidden-copy, .forbidden-permission { display: block; }
 .forbidden-code { color: #7d8df6; font-size: 54px; font-weight: 700; line-height: 1; }

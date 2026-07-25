@@ -1,20 +1,22 @@
 <template>
   <GenerationTaskListPage v-if="enterpriseTaskCenter" />
-  <view v-else class="tasks-page">
-    <view class="safe-top" />
-    <view class="page-header">
-      <button class="back-button" aria-label="返回作品页" @click="backOrHome('/pages/user/UserAssetsPage')">‹</button>
-      <view class="header-copy">
-        <text class="page-title">全部任务</text>
-        <text class="page-subtitle">优先展示生成中、排队中和失败任务</text>
+  <view v-else class="mpb-page" :style="miniProgramNavigationStyle">
+    <view class="mpb-safe" />
+    <view class="mpb-header">
+      <button class="mpb-back" aria-label="返回作品页" @click="backOrHome('/pages/user/UserAssetsPage')">‹</button>
+      <image class="mpb-logo" :src="loginLogo" mode="aspectFit" />
+      <view class="mpb-header-copy">
+        <text class="mpb-title">全部任务</text>
+        <text class="mpb-subtitle">优先展示生成中、排队中和失败任务</text>
       </view>
       <text class="count-badge">{{ total }}</text>
     </view>
 
-    <view v-if="error && !items.length" class="state-card error">
-      <text>{{ error }}</text>
-      <button class="state-button" @click="refresh">重新加载</button>
-    </view>
+    <view class="mpb-stack">
+      <view v-if="error && !items.length" class="state-card error">
+        <text>{{ error }}</text>
+        <button class="state-button" @click="refresh">重新加载</button>
+      </view>
     <view v-else-if="loading && !items.length" class="state-card"><text>正在加载任务...</text></view>
     <view v-else-if="items.length" class="task-list">
       <button v-for="task in items" :key="task.id" class="task-card" @click="openTask(task)">
@@ -35,6 +37,7 @@
       <text v-else-if="items.length">已加载全部 {{ total }} 条任务</text>
     </view>
     <view class="bottom-safe" />
+    </view>
   </view>
 </template>
 
@@ -47,6 +50,7 @@ import { miniProgramFeaturePages } from "../../config/miniProgramPages";
 import { backOrHome } from "../../utils/miniProgramBusiness";
 import GenerationTaskListPage from "../../components/assets/GenerationTaskListPage.vue";
 import { useAssetStore } from "../../stores/assets";
+import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
 
 const enterpriseTaskCenter = true;
 const enterpriseStore = useAssetStore();
@@ -159,16 +163,8 @@ onPullDownRefresh(() => {
 </script>
 
 <style scoped>
-.tasks-page { min-height: 100vh; box-sizing: border-box; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); color: #1a1f2e; background: #f7f8fc; }
-.safe-top { height: calc(12px + env(safe-area-inset-top)); }
-.page-header { display: flex; min-height: 58px; align-items: center; gap: 12px; }
-.back-button, .task-card, .state-button, .load-state button { margin: 0; border: 0; }
-.back-button::after, .task-card::after, .state-button::after, .load-state button::after { display: none; }
-.back-button { width: 36px; height: 36px; padding: 0; border-radius: 12px; color: #594db2; background: #fff; font-size: 28px; line-height: 34px; }
-.header-copy { min-width: 0; flex: 1; }
-.page-title, .page-subtitle { display: block; }
-.page-title { font-size: 22px; font-weight: 700; line-height: 28px; }
-.page-subtitle { margin-top: 2px; color: #6e758c; font-size: 11px; }
+@import "../../styles/mini-program-business.css";
+
 .count-badge { min-width: 32px; padding: 5px 9px; border-radius: 15px; color: #594db2; background: #fff; font-size: 12px; text-align: center; }
 .task-list { display: flex; padding-top: 12px; flex-direction: column; gap: 10px; }
 .task-card { display: flex; width: 100%; min-height: 76px; box-sizing: border-box; padding: 12px; align-items: center; gap: 10px; border: 1px solid #e3e5f0; border-radius: 14px; background: #fff; text-align: left; }
