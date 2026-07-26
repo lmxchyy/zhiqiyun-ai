@@ -1,0 +1,10 @@
+﻿{
+  "version": "v1.3.2-rc1",
+  "gitCommit": "efe5ba73ca0f12f9a95e9ea7cddf06f465f30c17",
+  "gitTag": "v1.3.2-rc1",
+  "archiveSha256": "a105259638fc138c04745b076f16166cb98631ed0976eed89009e943c715bfb6",
+  "archiveBytes": 47956308,
+  "goBuild": "PASS",
+  "goTest": "PASS",
+  "changeRequest": "CR-2026-OC-009"
+}
