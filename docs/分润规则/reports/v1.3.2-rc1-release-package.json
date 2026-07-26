@@ -1,10 +1,17 @@
 ﻿{
   "version": "v1.3.2-rc1",
-  "gitCommit": "efe5ba73ca0f12f9a95e9ea7cddf06f465f30c17",
+  "gitCommit": "ac0149bf0eb7992c2bcae6f982ad39359a4b040f",
   "gitTag": "v1.3.2-rc1",
-  "archiveSha256": "a105259638fc138c04745b076f16166cb98631ed0976eed89009e943c715bfb6",
-  "archiveBytes": 47956308,
+  "includesCommits": [
+    "1ce0577e5894769792d56c52de3f678c9417ec58",
+    "efe5ba73ca0f12f9a95e9ea7cddf06f465f30c17",
+    "ac0149bf0eb7992c2bcae6f982ad39359a4b040f"
+  ],
+  "archive": "xianzhi-v1.3.2-rc1-ac0149bf0.tar.gz",
+  "archiveSha256": "1ae4a8f315febec103ffbd66f93cafd215b5ed19103e86c7d042cb525da8eb75",
+  "archiveBytes": 47957964,
   "goBuild": "PASS",
   "goTest": "PASS",
-  "changeRequest": "CR-2026-OC-009"
+  "changeRequest": "CR-2026-OC-009",
+  "createdAtUtc": "2026-07-26T21:42:54.2208041Z"
 }
