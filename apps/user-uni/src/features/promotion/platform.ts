@@ -11,7 +11,13 @@ export async function imageDataUrlToLocalPath(dataUrl: string, cacheKey: string)
   const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
   const filePath = `${wxApi.env.USER_DATA_PATH}/promotion-code-${cacheKey || Date.now()}.png`;
   await withTimeout(new Promise<void>((resolve, reject) => {
-    wxApi.getFileSystemManager().writeFile({ filePath, data: base64, encoding: "base64", success: () => resolve(), fail: reject });
+    wxApi.getFileSystemManager().writeFile({
+      filePath,
+      data: base64,
+      encoding: "base64",
+      success: () => resolve(),
+      fail: (error: { errMsg?: string }) => reject(new Error(error?.errMsg || "小程序码写入失败")),
+    });
   }), "小程序码写入超时");
   return filePath;
   // #endif

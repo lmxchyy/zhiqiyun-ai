@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -344,8 +345,8 @@ func (a *agentInviteAPI) poster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.SaveAgentInviteLanding(r.Context(), invite, link); err != nil {
-		writeAuthFlowError(w, http.StatusInternalServerError, "POSTER_SAVE_FAILED", "邀请海报信息保存失败")
-		return
+		// Landing persistence must not block QR delivery for poster rendering.
+		log.Printf("agent invite landing save failed agent=%s code=%s err=%v", invite.AgentID, invite.InviteCode, err)
 	}
 	writeJSON(w, map[string]any{
 		"inviteCode": invite.InviteCode, "inviteLink": link,
