@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -86,10 +87,16 @@ func validPromotionInviteToken(value string) bool {
 
 func ensurePromotionInviteToken(ctx context.Context, store platformStore, ownerUserID, identityType, inviteCode string) (string, error) {
 	identityType = promotionInviteIdentityType(identityType)
+	fallback := fallbackPromotionInviteToken(ownerUserID, identityType, inviteCode)
 	if tokenStore, ok := store.(promotionInviteTokenStore); ok {
-		return tokenStore.EnsurePromotionInviteToken(ctx, ownerUserID, identityType, inviteCode)
+		token, err := tokenStore.EnsurePromotionInviteToken(ctx, ownerUserID, identityType, inviteCode)
+		if err == nil && validPromotionInviteToken(token) {
+			return strings.ToLower(token), nil
+		}
+		// Keep promotion center available when migration 078 is pending or token persistence fails.
+		log.Printf("promotion invite token ensure fallback owner=%s identity=%s err=%v", ownerUserID, identityType, err)
 	}
-	return fallbackPromotionInviteToken(ownerUserID, identityType, inviteCode), nil
+	return fallback, nil
 }
 
 func resolvePromotionInvitation(ctx context.Context, store platformStore, data adminPlatformData, rawToken, rawCode string) (promotionInvitation, error) {
@@ -110,6 +117,9 @@ func resolvePromotionInvitation(ctx context.Context, store platformStore, data a
 	var err error
 	if tokenStore, ok := store.(promotionInviteTokenStore); ok {
 		record, err = tokenStore.ResolvePromotionInviteToken(ctx, token)
+		if err != nil && (errors.Is(err, sql.ErrNoRows) || promotionInviteTokenSchemaUnavailable(err)) {
+			record, err = fallbackPromotionInviteTokenRecord(data, token)
+		}
 	} else {
 		record, err = fallbackPromotionInviteTokenRecord(data, token)
 	}
@@ -123,6 +133,15 @@ func resolvePromotionInvitation(ctx context.Context, store platformStore, data a
 		return promotionInvitation{}, err
 	}
 	return promotionInvitationFromUser(data, record, "")
+}
+
+func promotionInviteTokenSchemaUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "invite_token") &&
+		(strings.Contains(message, "does not exist") || strings.Contains(message, "42703") || strings.Contains(message, "undefined_column"))
 }
 
 func promotionInviteTokenRecordError(record promotionInviteTokenRecord, now time.Time) error {

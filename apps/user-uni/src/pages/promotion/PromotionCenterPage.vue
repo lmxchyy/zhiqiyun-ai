@@ -97,8 +97,13 @@ async function load(force: boolean) {
   loading.value = true; error.value = "";
   try {
     await userStore.loadProfile(force);
-    agentInvite.value = userStore.currentRole === "AGENT" ? await promotionAPI.agentInviteProfile() : null;
     overview.value = await promotionAPI.overview(userStore.userId, userStore.tenantId, userStore.currentRole, force);
+    if (userStore.currentRole === "AGENT") {
+      try { agentInvite.value = await promotionAPI.agentInviteProfile(); }
+      catch { agentInvite.value = null; }
+    } else {
+      agentInvite.value = null;
+    }
     if (!visibleTemplates.value.some(item => item.id === selectedTemplateId.value)) selectedTemplateId.value = overview.value.defaultTemplateId;
     await Promise.all([loadCode(force), loadShareCopy()]);
     trackPromotion("promotion_page_view", { role: userStore.currentRole });

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -191,6 +192,49 @@ func TestOperationCenterPromotionCodeUsesOpaqueInviteToken(t *testing.T) {
 	if registration.Code != http.StatusOK || !strings.Contains(registration.Body.String(), `"inviteBindStatus":"bound"`) {
 		t.Fatalf("operation center token registration = %d %s", registration.Code, registration.Body.String())
 	}
+}
+
+func TestPromotionInviteTokenFallsBackWhenSchemaUnavailable(t *testing.T) {
+	err := errors.New("ERROR: column \"invite_token\" does not exist (SQLSTATE 42703)")
+	if !promotionInviteTokenSchemaUnavailable(err) {
+		t.Fatalf("schema unavailable not detected: %v", err)
+	}
+	if promotionInviteTokenSchemaUnavailable(errors.New("other failure")) {
+		t.Fatal("unexpected schema unavailable match")
+	}
+	store := failingPromotionInviteTokenStore{err: err}
+	token, ensureErr := ensurePromotionInviteToken(context.Background(), store, "user_agent_a", roleAgent, "AGENT-A")
+	if ensureErr != nil {
+		t.Fatalf("ensure fallback error = %v", ensureErr)
+	}
+	expected := fallbackPromotionInviteToken("user_agent_a", roleAgent, "AGENT-A")
+	if token != expected {
+		t.Fatalf("ensure fallback token = %s want %s", token, expected)
+	}
+	data := adminPlatformData{
+		Users:         []adminUser{{ID: "user_agent_a", Name: "Agent A", Status: "ACTIVE", TenantID: "tenant_a"}},
+		ChannelAgents: []adminChannelAgent{{ID: "channel_a", UserID: "user_agent_a", Status: "ACTIVE", InviteCode: "AGENT-A"}},
+	}
+	invitation, resolveErr := resolvePromotionInvitation(context.Background(), store, data, token, "")
+	if resolveErr != nil {
+		t.Fatalf("resolve fallback error = %v", resolveErr)
+	}
+	if invitation.InviteCode != "AGENT-A" || invitation.IdentityType != roleAgent || invitation.InviterUserID != "user_agent_a" {
+		t.Fatalf("resolve fallback invitation = %+v", invitation)
+	}
+}
+
+type failingPromotionInviteTokenStore struct {
+	platformStore
+	err error
+}
+
+func (s failingPromotionInviteTokenStore) EnsurePromotionInviteToken(context.Context, string, string, string) (string, error) {
+	return "", s.err
+}
+
+func (s failingPromotionInviteTokenStore) ResolvePromotionInviteToken(context.Context, string) (promotionInviteTokenRecord, error) {
+	return promotionInviteTokenRecord{}, s.err
 }
 
 func TestPromotionInviteTokenH5Redirect(t *testing.T) {
