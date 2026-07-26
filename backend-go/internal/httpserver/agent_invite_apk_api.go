@@ -465,7 +465,8 @@ func (s *postgresStore) ResolveAgentInvite(ctx context.Context, code string) (ag
 		FROM xz_channel_agents agent
 		JOIN xz_users users ON users.id=agent.user_id
 		LEFT JOIN xz_marketing_invite_codes codes ON codes.agent_id=agent.id
-		WHERE upper(btrim(agent.invite_code))=$1
+		LEFT JOIN xz_agent_invite_code_migrations legacy ON legacy.agent_id=agent.id
+		WHERE (upper(btrim(agent.invite_code))=$1 OR upper(btrim(coalesce(legacy.old_code, '')))=$1)
 		  AND upper(coalesce(users.status, ''))='ACTIVE'
 		LIMIT 1
 	`, code).Scan(&item.AgentID, &item.InviterUserID, &item.TenantID, &item.InviteCode, &item.DisplayName, &item.AgentStatus, &item.ActivityIntro, &item.OperationCenter)

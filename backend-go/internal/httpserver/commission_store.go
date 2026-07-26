@@ -449,6 +449,17 @@ func loadSnapshottedCommissionRulesTx(ctx context.Context, tx *sql.Tx, tenantID 
 }
 
 func reverseCommissionRecordsForOrderTx(ctx context.Context, tx *sql.Tx, orderID, orderNo string, now time.Time) error {
+	v132Settlement, err := isV132SettlementOrderTx(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+	commercialSnapshot := map[string]any{}
+	if v132Settlement {
+		commercialSnapshot, err = loadV132OrderCommercialSnapshotTx(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id,tenant_id,beneficiary_type,beneficiary_id,source_user_id,rule_id,rule_version,
 		       amount_cents,currency,status
@@ -478,6 +489,27 @@ func reverseCommissionRecordsForOrderTx(ctx context.Context, tx *sql.Tx, orderID
 		return err
 	}
 	for _, item := range earnings {
+		if v132Settlement {
+			key := "commission-refund:" + item.id
+			reversal := commissionapp.CommissionRecord{
+				ID: "commission_reversal_" + shortID(key), TenantID: item.tenantID, OrderID: orderID, OrderNo: orderNo,
+				BeneficiaryType: commissionapp.BeneficiaryType(item.beneficiaryType), BeneficiaryID: item.beneficiaryID,
+				SourceUserID: item.sourceUserID, RuleID: item.ruleID, RuleVersion: item.ruleVersion,
+				AmountCents: -item.amount, Currency: item.currency, RecordType: commissionapp.RecordReversal,
+				Status: commissionapp.CommissionReversed, ReversalOfID: item.id, IdempotencyKey: key,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			if err := insertImmutableCommissionRecordTx(ctx, tx, reversal, commissionapp.CommissionRule{Code: "REFUND_REVERSAL", RefundPolicy: "REVERSE_OR_RECOVER"}, adminPlan{}); err != nil {
+				return err
+			}
+			if err := reverseV132CommissionWalletTx(ctx, tx, item.id, reversal.ID, item.tenantID, item.beneficiaryType, item.beneficiaryID, orderID, orderNo, item.ruleID, item.ruleVersion, item.status, int64(item.amount), now, commercialSnapshot); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE xz_commission_records SET status='REVERSED', updated_at=$2 WHERE id=$1`, item.id, now); err != nil {
+				return err
+			}
+			continue
+		}
 		if item.status == string(commissionapp.CommissionExpected) || item.status == string(commissionapp.CommissionFrozen) || item.status == string(commissionapp.CommissionAvailable) {
 			if _, err := tx.ExecContext(ctx, `UPDATE xz_commission_records SET status='CANCELLED', updated_at=$2 WHERE id=$1`, item.id, now); err != nil {
 				return err

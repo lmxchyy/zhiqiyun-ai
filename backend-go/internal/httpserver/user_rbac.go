@@ -54,6 +54,8 @@ var rolePermissionMatrix = map[string][]string{
 	roleFinance: {
 		"finance:view", "finance:approve", "finance:commission-rule:view", "finance:commission-rule:manage", "enterprise.compute.ledger.read", "enterprise.overview.read", "enterprise.member.read",
 		"enterprise.billing.read", "enterprise.audit.read",
+		"channel:operation-center:refund-request", "channel:operation-center:refund-view", "channel:operation-center:refund-retry",
+		"channel:operation-center:refund-manual-submit", "channel:operation-center:refund-manual-approve",
 	},
 	roleCustomerService: {
 		"customer-service:manage", "enterprise.overview.read", "enterprise.organization.read", "enterprise.member.read",

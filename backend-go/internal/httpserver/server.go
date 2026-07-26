@@ -2,10 +2,12 @@ package httpserver
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -17,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	operationcenter "xianzhi-ai/backend-go/internal/app/operationcenter"
 	paymentapp "xianzhi-ai/backend-go/internal/app/payment"
 	"xianzhi-ai/backend-go/internal/app/smartvideo"
 	"xianzhi-ai/backend-go/internal/config"
@@ -71,6 +74,21 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		knowledge.rag.SetBillingRecorder(store)
 	}
 	admin := newAdminAPI(store, sessions)
+	operationCenterReviews := newOperationCenterReviewAPI(nil)
+	operationCenterRefunds := newOperationCenterRefundAPI(nil, nil)
+	var operationCenterRefundManagement *operationcenter.RefundManagementService
+	var operationCenterRuntime *operationcenter.OperationCenterRuntime
+	if pgStore, ok := store.(*postgresStore); ok {
+		workflow, workflowErr := operationcenter.NewWorkflowService(pgStore.db, operationcenter.WorkflowOptions{})
+		if workflowErr == nil {
+			operationCenterReviews = newOperationCenterReviewAPI(workflow)
+		}
+		management, managementErr := operationcenter.NewRefundManagementService(pgStore.db)
+		if managementErr == nil {
+			operationCenterRefundManagement = management
+			operationCenterRefunds = newOperationCenterRefundAPI(management, nil)
+		}
+	}
 	identityQueries := newIdentityQueryAPI(store)
 	identityChanges := newIdentityChangeAPI(store)
 	identityDowngrades := newIdentityDowngradeAPI(store)
@@ -101,6 +119,18 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	publicCatalog := publicCatalogAPI{store: store}
 	api.pptVisualLocker = newRedisPPTVisualLocker(redisClient)
 	virtualPayment := newVirtualPaymentAPI(cfg, store, sessions, redisClient)
+	if pgStore, ok := store.(*postgresStore); ok && operationCenterRefundManagement != nil {
+		var runtimeErr error
+		operationCenterRuntime, runtimeErr = newOperationCenterRuntime(pgStore.db, cfg.Environment, virtualPayment.service)
+		if runtimeErr == nil {
+			operationCenterRefunds = newOperationCenterRefundAPI(operationCenterRefundManagement, operationCenterRuntime)
+		} else {
+			slog.Error("operation center runtime unavailable", "environment", cfg.Environment, "error", runtimeErr)
+			if operationCenterProductionEnvironment(cfg.Environment) {
+				panic(runtimeErr)
+			}
+		}
+	}
 	paymentCenter := newPaymentCenterAPI(cfg, store, sessions, virtualPayment)
 	connectors := newConnectorAPI(cfg, store, enterprise, api, redisClient)
 	files := newFileCenterAPI(fileService, store, sessions)
@@ -133,6 +163,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 
 	router.GET("/healthz", wrapF(health))
 	router.GET("/d/:inviteCode", wrapF(agentInviteH5Redirect))
+	router.GET("/i/:inviteToken", wrapF(promotionInviteTokenH5Redirect))
 	router.GET("/android/latest", wrapF(agentInvites.download))
 	router.POST("/api/open/connectors/feishu/events/:connectorKey", wrapF(connectors.event))
 	router.GET("/api/open/connectors/authorize/:ticket", wrapF(connectors.authorizationLanding))
@@ -160,6 +191,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/auth/change-password", wrapF(auth.changePassword))
 	v1.GET("/auth/security", wrapF(auth.security))
 	v1.GET("/invite/agent/resolve", wrapF(auth.resolveInvite))
+	v1.GET("/invite/resolve", wrapF(auth.resolvePromotionInvite))
 	v1.GET("/public/invites/:inviteCode", wrapF(agentInvites.invite))
 	v1.POST("/public/invites/:inviteCode/register", wrapF(agentInvites.register))
 	v1.GET("/public/app/releases/latest", wrapF(agentInvites.latestRelease))
@@ -449,7 +481,25 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	} else {
 		adminPaymentGroup.Use(superAdminMiddleware(auth))
 	}
+	dashboardBillingGroup := router.Group("/v1/dashboard/billing")
+	if pgStore, ok := store.(*postgresStore); ok {
+		dashboardBillingGroup.Use(func(c *gin.Context) {
+			permission := adminPermissionForRequest(c.Request)
+			pgStore.rbacMiddleware(auth, permission)(c)
+		})
+	} else {
+		dashboardBillingGroup.Use(superAdminMiddleware(auth))
+	}
 	adminGroup.GET("/overview", wrapF(admin.overview))
+	adminGroup.GET("/channel-ecosystem/operation-centers/:id", wrapF(operationCenterReviews.status))
+	adminGroup.POST("/channel-ecosystem/operation-centers/:id/approve", wrapF(operationCenterReviews.approve))
+	adminGroup.POST("/channel-ecosystem/operation-centers/:id/reject", wrapF(operationCenterReviews.reject))
+	adminGroup.POST("/channel-ecosystem/operation-centers/:id/refunds", wrapF(operationCenterRefunds.requestActive))
+	adminGroup.GET("/channel-ecosystem/refunds/:refundTaskId", wrapF(operationCenterRefunds.get))
+	adminGroup.GET("/channel-ecosystem/refunds", wrapF(operationCenterRefunds.list))
+	adminGroup.POST("/channel-ecosystem/refunds/:refundTaskId/retry", wrapF(operationCenterRefunds.retry))
+	adminGroup.POST("/channel-ecosystem/refunds/:refundTaskId/manual-submit", wrapF(operationCenterRefunds.manualSubmit))
+	adminGroup.POST("/channel-ecosystem/refunds/:refundTaskId/manual-approve", wrapF(operationCenterRefunds.manualApprove))
 	adminGroup.GET("/search", wrapF(admin.globalSearch))
 	adminGroup.PATCH("/exceptions/:id", wrapF(admin.updateExceptionCase))
 	adminGroup.POST("/experience-events", wrapF(admin.recordExperienceEvent))
@@ -632,6 +682,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/commission-rules", wrapF(admin.commissionRulesV2))
 	adminGroup.POST("/commission-rules", wrapF(admin.createCommissionRuleV2))
 	adminGroup.PUT("/commission-rules/:id", wrapF(admin.updateCommissionRuleV2))
+	adminGroup.GET("/channel-ecosystem/shadow-differences", wrapF(admin.commerceShadowDifferences))
+	adminGroup.GET("/channel-ecosystem/shadow-differences/:id", wrapF(admin.commerceShadowDifference))
+	adminGroup.GET("/channel-ecosystem/rollout-config", wrapF(admin.channelRolloutConfig))
+	adminGroup.PUT("/channel-ecosystem/rollout-config", wrapF(admin.updateChannelRolloutConfig))
 	adminGroup.POST("/commissions", wrapF(admin.createCommission))
 	adminGroup.POST("/commissions/:id/approve", wrapF(admin.approveCommission))
 	adminGroup.POST("/commissions/:id/reject", wrapF(admin.rejectCommission))
@@ -694,8 +748,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/billing/payments", wrapF(admin.billingPayments))
 	adminGroup.PATCH("/billing/subscriptions/:id", wrapF(admin.updateBillingSubscription))
 
-	router.GET("/v1/dashboard/billing/subscription", wrapF(admin.billingSubscription))
-	router.GET("/v1/dashboard/billing/usage", wrapF(admin.billingUsage))
+	dashboardBillingGroup.GET("/subscription", wrapF(admin.billingSubscription))
+	dashboardBillingGroup.GET("/usage", wrapF(admin.billingUsage))
 	registerWirelessCanvasCompatibilityRoutes(router, cfg)
 	router.GET("/", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/login", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
@@ -719,13 +773,34 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router.GET("/user/*filepath", wrapF(notFound))
 	router.NoRoute(redirectUnknownWebToRoot)
 
-	return &http.Server{
+	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       60 * time.Second,
+	}
+	if operationCenterRuntime != nil {
+		schedulers, err := operationCenterRuntime.StartSchedulers(context.Background(), slog.Default())
+		if err != nil {
+			slog.Error("operation center scheduler startup rejected", "environment", cfg.Environment, "error", err)
+			if operationCenterProductionEnvironment(cfg.Environment) {
+				panic(err)
+			}
+		} else {
+			registerWaitableShutdownHook(server, schedulers.Stop)
+		}
+	}
+	return server
+}
+
+func operationCenterProductionEnvironment(environment string) bool {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod":
+		return true
+	default:
+		return false
 	}
 }
 

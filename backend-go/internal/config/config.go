@@ -116,6 +116,7 @@ type Config struct {
 	SmartVideoAnalysisMaxAttempts  string
 	SmartVideoWorkerConcurrency    string
 	SmartVideoTempDir              string
+	ShutdownTimeout                string
 }
 
 func Load() Config {
@@ -306,7 +307,16 @@ func Load() Config {
 		SmartVideoAnalysisMaxAttempts:  os.Getenv("SMARTVIDEO_ANALYSIS_MAX_ATTEMPTS"),
 		SmartVideoWorkerConcurrency:    os.Getenv("SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY"),
 		SmartVideoTempDir:              os.Getenv("SMARTVIDEO_TEMP_DIR"),
+		ShutdownTimeout:                stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
 	}
+}
+
+func (c Config) APIShutdownTimeout() time.Duration {
+	timeout, err := time.ParseDuration(strings.TrimSpace(c.ShutdownTimeout))
+	if err != nil || timeout <= 0 {
+		return 30 * time.Second
+	}
+	return timeout
 }
 
 func (c Config) FeishuHTTPTimeout() time.Duration {
@@ -351,6 +361,13 @@ func (c Config) SMSDailyLimits() (mobile, device, ip int64) {
 }
 
 func (c Config) ValidateProduction() error {
+	shutdownTimeout := strings.TrimSpace(c.ShutdownTimeout)
+	if shutdownTimeout == "" {
+		shutdownTimeout = "30s"
+	}
+	if timeout, err := time.ParseDuration(shutdownTimeout); err != nil || timeout <= 0 || timeout > 10*time.Minute {
+		return fmt.Errorf("XIANZHI_SHUTDOWN_TIMEOUT must be between 1ns and 10m")
+	}
 	if c.WeChatVirtualPayEnabled {
 		required := map[string]string{
 			"WECHAT_MINI_PROGRAM_APPID":       c.WeChatMiniProgramAppID,

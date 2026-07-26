@@ -1613,7 +1613,7 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 	query := assetCenterQueryFromRequest(r)
 	limit := query.Limit
 	offset := query.Offset
-	assets, total, err := a.assetsForCenter(user.ID, query)
+	assets, total, err := a.assetsForCenter(user.ID, firstNonEmptyString(user.TenantID, "tenant_default"), query)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

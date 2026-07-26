@@ -386,7 +386,7 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 		CommissionSnapshotCaptured: order.Snapshot.CommissionSnapshotCaptured,
 		CommissionRuleSnapshot:     append([]commissionRuleSnapshot(nil), order.Snapshot.CommissionRules...),
 	}
-	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &commerceOrder); err != nil {
+	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &commerceOrder); err != nil {
 		return err
 	}
 	if commerceOrder.FulfillmentStatus != "FULFILLED" {

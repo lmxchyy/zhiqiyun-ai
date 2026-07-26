@@ -124,3 +124,5 @@ backend-go/tmp/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+.tmp-go-cache/

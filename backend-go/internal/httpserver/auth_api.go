@@ -571,6 +571,7 @@ type wechatMiniProgramLoginRequest struct {
 	WxLoginCode    string `json:"wxLoginCode"`
 	PhoneCode      string `json:"phoneCode"`
 	InviteCode     string `json:"inviteCode"`
+	InviteToken    string `json:"inviteToken"`
 	Scene          string `json:"scene"`
 	PromoterCode   string `json:"promoterCode"`
 	CampaignCode   string `json:"campaignCode"`
@@ -589,6 +590,7 @@ type registerRequest struct {
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirmPassword"`
 	InviteCode      string `json:"inviteCode"`
+	InviteToken     string `json:"inviteToken"`
 }
 
 type changePasswordRequest struct {
@@ -716,7 +718,7 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			data, user, isNewUser, inviteBindStatus, err = a.userForPhoneIdentity(mobile, session, authRegistrationInput{
-				InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
+				Context: r.Context(), InviteToken: req.InviteToken, InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
 				CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
 			})
 			if err != nil {

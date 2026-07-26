@@ -1214,6 +1214,7 @@ type wechatQueryOrderResponse struct {
 		WxOrderID      string `json:"wx_order_id"`
 		ChannelOrderID string `json:"channel_order_id"`
 		WxPayOrderID   string `json:"wxpay_order_id"`
+		WxRefundID     string `json:"wx_refund_id"`
 		EnvType        int    `json:"env_type"`
 	} `json:"order"`
 }

@@ -88,15 +88,16 @@ func splitAssetCenterValues(value string) []string {
 	return items
 }
 
-func (a api) assetsForCenter(userID string, query assetCenterListQuery) ([]asset, int, error) {
+func (a api) assetsForCenter(userID string, tenantID string, query assetCenterListQuery) ([]asset, int, error) {
 	if store, ok := a.store.(assetCenterDataStore); ok {
 		return store.ListAssetsForCenter(userID, query)
 	}
+	tenantID = strings.TrimSpace(tenantID)
 	items, err := a.store.ListAssets()
 	if err != nil {
 		return nil, 0, err
 	}
-	items = filterAssetCenterItems(items, userID, query)
+	items = filterAssetCenterItems(items, userID, tenantID, query)
 	total := len(items)
 	start := query.Offset
 	if start > total {
@@ -465,11 +466,17 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 	return task, nil
 }
 
-func filterAssetCenterItems(items []asset, userID string, query assetCenterListQuery) []asset {
+func filterAssetCenterItems(items []asset, userID string, tenantID string, query assetCenterListQuery) []asset {
 	filtered := make([]asset, 0, len(items))
 	for _, item := range items {
 		if item.UserID != userID || !assetMatchesCenterQuery(item, query) {
 			continue
+		}
+		if tenantID != "" {
+			itemTenantID := strings.TrimSpace(item.TenantID)
+			if itemTenantID != "" && itemTenantID != tenantID {
+				continue
+			}
 		}
 		filtered = append(filtered, item)
 	}
@@ -621,7 +628,7 @@ func (s *jsonStore) ListAssetsForCenter(userID string, query assetCenterListQuer
 	if err != nil {
 		return nil, 0, err
 	}
-	items := filterAssetCenterItems(data.Assets, userID, query)
+	items := filterAssetCenterItems(data.Assets, userID, "", query)
 	total := len(items)
 	start := query.Offset
 	if start > total {

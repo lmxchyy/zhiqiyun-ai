@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	operationcenter "xianzhi-ai/backend-go/internal/app/operationcenter"
 
+	commissionapp "xianzhi-ai/backend-go/internal/app/commission"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 )
 
@@ -1856,7 +1858,7 @@ func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any
 	}
 	mergeOrderPaymentMetadata(&item, metadata...)
 	if strings.EqualFold(item.Status, "PAID") {
-		if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &item); err != nil {
+		if err := applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &item); err != nil {
 			return adminOrder{}, err
 		}
 		if err := insertOrder(ctx, tx, item); err != nil {
@@ -1869,7 +1871,7 @@ func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any
 	}
 	item.Status = "PAID"
 	item.PaidAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &item); err != nil {
+	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &item); err != nil {
 		return adminOrder{}, err
 	}
 	if isRechargeOrder(item) {
@@ -2087,7 +2089,7 @@ func applyRechargeSettlementForTx(ctx context.Context, tx *sql.Tx, order *adminO
 	return nil
 }
 
-func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *adminOrder) error {
+func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, db *sql.DB, order *adminOrder) error {
 	if order == nil {
 		return nil
 	}
@@ -2114,11 +2116,26 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	default:
 		return nil
 	}
+	if planType == planTypeOperationCenterPackage {
+		return applyOperationCenterPaymentSucceededForTx(ctx, tx, db, order)
+	}
 	commerceCtx, err := commerceContextForOrderTx(ctx, tx, *order, plan)
 	if err != nil {
 		return err
 	}
-	engineResult, err := generateCommissionRecordsForCommerceOrderTx(ctx, tx, *order, plan, commerceCtx)
+	settlementDecision, err := resolveOrderSettlementDecisionTx(ctx, tx, order, plan)
+	if err != nil {
+		return err
+	}
+	if err := claimSettlementWriteSourceTx(ctx, tx, settlementDecision); err != nil {
+		return err
+	}
+	var engineResult commissionapp.CalculationResult
+	if settlementDecision.SettlementEngine == settlementEngineV132 {
+		engineResult, err = generateV132CommissionRecordsForCommerceOrderTx(ctx, tx, order, plan, commerceCtx, settlementDecision)
+	} else {
+		engineResult, err = generateCommissionRecordsForCommerceOrderTx(ctx, tx, *order, plan, commerceCtx)
+	}
 	if err != nil {
 		return err
 	}
@@ -2126,15 +2143,24 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	if err != nil {
 		return err
 	}
+	shadowLegacyResult := result
+	if settlementDecision.SettlementEngine == settlementEngineV132 {
+		if preview, previewErr := calculateCommissionSettlement(commerceCtx); previewErr == nil {
+			shadowLegacyResult = preview
+		}
+	}
+	recordCommerceShadowDifferenceTx(ctx, tx, *order, plan, commerceCtx, shadowLegacyResult)
 	applySettlementToOrder(order, commerceCtx, result, planType)
 	if result.TokenGrantAmount > 0 {
 		if err := grantTokensToUserTx(ctx, tx, order.UserID, order.ID, tokenChangeTypeForPlan(planType), result.TokenGrantAmount, result.TokenGrantValueCents, nowForOrder(*order)); err != nil {
 			return err
 		}
 	}
-	for _, commission := range settlementCommissionRecords(commerceCtx, result, nowForOrder(*order)) {
-		if err := insertCommission(ctx, tx, commission); err != nil {
-			return err
+	if shouldWriteLegacyCommissionProjection(*order) {
+		for _, commission := range settlementCommissionRecords(commerceCtx, result, nowForOrder(*order)) {
+			if err := insertCommission(ctx, tx, commission); err != nil {
+				return err
+			}
 		}
 	}
 	if err := fulfillIdentityForOrderTx(ctx, tx, order, plan, result, nowForOrder(*order)); err != nil {
@@ -2142,6 +2168,104 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	}
 	markOrderFulfilled(order, result.OrderType, nowForOrder(*order))
 	return nil
+}
+
+func applyOperationCenterPaymentSucceededForTx(ctx context.Context, tx *sql.Tx, db *sql.DB, order *adminOrder) error {
+	if tx == nil || db == nil || order == nil {
+		return operationcenter.ErrTransactionRequired
+	}
+	if order.PriceSnapshot == nil {
+		order.PriceSnapshot = map[string]any{}
+	}
+	paymentRecordID, err := operationCenterPaymentRecordIDForTx(ctx, tx, order)
+	if err != nil {
+		return err
+	}
+	paidAt := nowForOrder(*order)
+	providerTransactionID := firstOperationCenterCallbackValue(order.PriceSnapshot, "providerTransactionId", "transactionId")
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE xz_payment_records
+		SET payment_status='SUCCESS',
+		    paid_at=coalesce(paid_at,$3::timestamptz),
+		    provider_transaction_id=coalesce(nullif(provider_transaction_id,''),nullif($4,''))
+		WHERE id=$1 AND order_id=$2 AND amount_cents=$5
+		  AND upper(coalesce(payment_status,prepay_status,'')) IN ('PENDING','SIGNED','SUCCESS','PAID')
+	`, paymentRecordID, order.ID, paidAt, providerTransactionID, orderAmount(*order)); err != nil {
+		return err
+	}
+	order.Status = "PAID"
+	order.OrderType = "OPERATION_CENTER_SERVICE"
+	order.BusinessOrderType = "OPERATION_CENTER_SERVICE"
+	order.FulfillmentStatus = string(operationcenter.OperationCenterServiceReviewRequired)
+	order.FulfilledAt = ""
+	order.PriceSnapshot["orderType"] = order.OrderType
+	order.PriceSnapshot["businessOrderType"] = order.BusinessOrderType
+	order.PriceSnapshot["fulfillmentStatus"] = order.FulfillmentStatus
+	delete(order.PriceSnapshot, "fulfilledAt")
+	priceSnapshot, err := json.Marshal(order.PriceSnapshot)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE xz_orders
+		SET status='PAID',order_status='PAID',paid_at=$2::timestamptz,
+		    fulfillment_status=$3,fulfilled_at=NULL,order_type=$4,business_order_type=$5,
+		    price_snapshot=$6::jsonb,updated_at=clock_timestamp()
+		WHERE id=$1
+	`, order.ID, paidAt, order.FulfillmentStatus, order.OrderType, order.BusinessOrderType, string(priceSnapshot)); err != nil {
+		return err
+	}
+	workflow, err := operationcenter.NewWorkflowService(db, operationcenter.WorkflowOptions{})
+	if err != nil {
+		return err
+	}
+	result, err := workflow.RecordPaymentSucceededForTx(ctx, tx, operationcenter.PaymentSucceededCommand{
+		OrderID: order.ID, PaymentRecordID: paymentRecordID,
+	})
+	if err != nil {
+		return err
+	}
+	order.PriceSnapshot["operationCenterServiceOrderId"] = result.ServiceOrder.ID
+	order.PriceSnapshot["operationCenterServiceStatus"] = string(result.ServiceOrder.Status)
+	return nil
+}
+
+func operationCenterPaymentRecordIDForTx(ctx context.Context, tx *sql.Tx, order *adminOrder) (string, error) {
+	var paymentRecordID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT coalesce(metadata->>'paymentRecordId','')
+		FROM xz_operation_center_service_orders
+		WHERE order_id=$1
+		FOR UPDATE
+	`, order.ID).Scan(&paymentRecordID)
+	if err == nil && strings.TrimSpace(paymentRecordID) != "" {
+		return paymentRecordID, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	err = tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM xz_payment_records
+		WHERE order_id=$1 AND amount_cents=$2
+		ORDER BY CASE WHEN upper(coalesce(payment_status,prepay_status,'')) IN ('SUCCESS','PAID') THEN 0 ELSE 1 END,
+		         created_at,id
+		LIMIT 1
+		FOR UPDATE
+	`, order.ID, orderAmount(*order)).Scan(&paymentRecordID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", operationcenter.ErrPaymentNotSuccessful
+	}
+	return paymentRecordID, err
+}
+
+func firstOperationCenterCallbackValue(snapshot map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(stringValue(snapshot[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func commerceContextForOrderTx(ctx context.Context, tx *sql.Tx, order adminOrder, plan adminPlan) (commissionOrderContext, error) {

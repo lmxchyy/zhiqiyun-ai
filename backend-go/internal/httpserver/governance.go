@@ -110,6 +110,24 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if strings.HasPrefix(path, "/channel-ecosystem/refunds") {
+		switch {
+		case strings.HasSuffix(path, "/manual-submit"):
+			return "channel:operation-center:refund-manual-submit"
+		case strings.HasSuffix(path, "/manual-approve"):
+			return "channel:operation-center:refund-manual-approve"
+		case strings.HasSuffix(path, "/retry"):
+			return "channel:operation-center:refund-retry"
+		default:
+			return "channel:operation-center:refund-view"
+		}
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/operation-centers/") && strings.HasSuffix(path, "/refunds") {
+		return "channel:operation-center:refund-request"
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/operation-centers/") {
+		return "channel:operation-center:review"
+	}
 	if path == "/identity-consistency" {
 		return "identity:consistency:view"
 	}
@@ -157,6 +175,15 @@ func adminPermissionForRequest(r *http.Request) string {
 		return "finance:commission-rule:manage"
 	}
 	if strings.HasPrefix(path, "/commission-rules/") && r.Method == http.MethodPut {
+		return "finance:commission-rule:manage"
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/shadow-differences") && r.Method == http.MethodGet {
+		return "finance:commission-rule:view"
+	}
+	if path == "/channel-ecosystem/rollout-config" && r.Method == http.MethodGet {
+		return "finance:commission-rule:view"
+	}
+	if path == "/channel-ecosystem/rollout-config" && r.Method == http.MethodPut {
 		return "finance:commission-rule:manage"
 	}
 	if strings.HasPrefix(path, "/storage/") {

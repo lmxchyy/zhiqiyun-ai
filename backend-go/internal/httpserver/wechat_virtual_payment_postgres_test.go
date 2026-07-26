@@ -571,6 +571,7 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cleanupImmutableCommissionTestRows(t, ctx, db, prefix)
+	cleanupImmutableIdentityChangeTestRows(t, ctx, db, userIDs)
 	statements := []string{
 		`delete from xz_billing_dunning_events where payment_request_id in (select id from xz_billing_payment_requests where order_no like $1)`,
 		`delete from xz_billing_credit_notes where order_no like $1`,
@@ -599,6 +600,8 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 			`delete from xz_image_quota_accounts where user_id = $1`,
 			`delete from xz_agent_wallets where user_id = $1`,
 			`delete from xz_agent_profiles where user_id = $1`,
+			`delete from xz_user_relationships where user_id = $1`,
+			`delete from xz_user_business_identities where user_id = $1`,
 			`delete from xz_channel_agents where user_id = $1`,
 			`delete from xz_user_wallets where user_id = $1`,
 			`delete from xz_point_accounts where user_id = $1`,
@@ -657,5 +660,28 @@ func cleanupImmutableCommissionTestRows(t *testing.T, ctx context.Context, db *s
 	}
 	if err := tx.Commit(); err != nil {
 		t.Errorf("commission cleanup commit: %v", err)
+	}
+}
+
+func cleanupImmutableIdentityChangeTestRows(t *testing.T, ctx context.Context, db *sql.DB, userIDs []string) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Errorf("identity change cleanup transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `set local session_replication_role = replica`); err != nil {
+		t.Errorf("identity change cleanup trigger isolation: %v", err)
+		return
+	}
+	for _, userID := range userIDs {
+		if _, err := tx.ExecContext(ctx, `delete from xz_identity_change_records where user_id=$1`, userID); err != nil {
+			t.Errorf("identity change cleanup: %v", err)
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Errorf("identity change cleanup commit: %v", err)
 	}
 }
