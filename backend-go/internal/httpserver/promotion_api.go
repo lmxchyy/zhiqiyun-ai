@@ -165,15 +165,20 @@ func (a *promotionAPI) miniProgramCode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	scene := ctx.InviteToken
-	png, placeholder, err := a.miniCode.Generate(scene, req.Page)
+	image, placeholder, err := a.miniCode.Generate(scene, req.Page)
 	if err != nil {
 		log.Printf("promotion mini program code failed stage=wechat_code request_id=%s user_id=%s error=%v", strings.TrimSpace(r.Header.Get("X-Request-Id")), ctx.Access.UserID, err)
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	mediaType := promotionMiniProgramImageMediaType(image)
+	if mediaType == "" {
+		writeError(w, http.StatusServiceUnavailable, errors.New("official mini program code failed: unsupported image format"))
+		return
+	}
 	expiresAt := time.Now().UTC().Add(6 * time.Hour)
 	response := promotionCodeResponse{
-		ImageDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), Scene: scene, Page: req.Page,
+		ImageDataURL: "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(image), Scene: scene, Page: req.Page,
 		IsPlaceholder: placeholder, CacheKey: shortStableHash(cacheKey, 20), ExpiresAt: expiresAt.Format(time.RFC3339),
 		InviteToken: ctx.InviteToken, InviterName: ctx.User.Name, IdentityType: promotionInviteIdentityType(ctx.Access.CurrentRole),
 	}
@@ -829,10 +834,21 @@ func (s *wechatMiniProgramCodeService) Generate(scene, page string) ([]byte, boo
 		_ = json.Unmarshal(body, &apiError)
 		return nil, false, fmt.Errorf("official mini program code failed (%d): %s", apiError.ErrCode, firstNonEmptyString(apiError.ErrMsg, response.Status))
 	}
-	if len(body) < 8 || !bytes.Equal(body[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
-		return nil, false, errors.New("official mini program code failed: response is not a PNG image")
+	if promotionMiniProgramImageMediaType(body) == "" {
+		return nil, false, errors.New("official mini program code failed: response is not a supported image")
 	}
 	return body, false, nil
+}
+
+func promotionMiniProgramImageMediaType(body []byte) string {
+	switch {
+	case len(body) >= 8 && bytes.Equal(body[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}):
+		return "image/png"
+	case len(body) >= 3 && body[0] == 0xff && body[1] == 0xd8 && body[2] == 0xff:
+		return "image/jpeg"
+	default:
+		return ""
+	}
 }
 
 func (s *wechatMiniProgramCodeService) accessToken(appID, secret string) (string, error) {

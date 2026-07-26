@@ -287,6 +287,7 @@ const agreementSheetVisible = ref(false);
 const agreementSheetTitle = ref("");
 const agreementSheetContent = ref("");
 const pendingInviteCode = ref("");
+const pendingInviteToken = ref("");
 const inviteDraft = ref("");
 const inviteStatus = ref<InviteStatus>("empty");
 const inviteValidating = ref(false);
@@ -303,7 +304,7 @@ let agreementTimer: ReturnType<typeof setTimeout> | null = null;
 let requestVersion = 0;
 let destroyed = false;
 let sourceParams: LoginSourceParams = {
-  inviteCode: "", inviteSource: "none", sceneCode: "", promoterCode: "", campaignCode: "", channel: "", sourcePage: "",
+  inviteCode: "", inviteToken: "", inviteSource: "none", sceneCode: "", promoterCode: "", campaignCode: "", channel: "", sourcePage: "",
 };
 let redirectInfo: LoginRedirectInfo = { path: "", query: {}, action: "", sourcePage: "" };
 
@@ -364,6 +365,7 @@ function nextIdempotencyKey(method: LoginMode): string {
 function attribution(method: LoginMode) {
   return {
     inviteCode: pendingInviteCode.value || undefined,
+    inviteToken: pendingInviteToken.value || sourceParams.inviteToken || undefined,
     scene: sourceParams.sceneCode || undefined,
     promoterCode: sourceParams.promoterCode || undefined,
     campaignCode: sourceParams.campaignCode || undefined,
@@ -395,6 +397,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
   const targetRole = defaultRole(auth.roles);
   if (userStore.currentRole !== targetRole) await userStore.switchRole(targetRole);
   pendingInviteCode.value = "";
+  pendingInviteToken.value = "";
   inviteStatus.value = "empty";
   uni.removeStorageSync("zhiqiyun.promotion.pending-referral.v1");
   trackLogin(auth.isNewUser ? "register_success" : "login_success", { method: mode.value, isNewUser: Boolean(auth.isNewUser) });
@@ -406,7 +409,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
     viewState.value = "success";
     return;
   }
-  if (auth.inviteBindStatus === "ignored_existing" && sourceParams.inviteCode) {
+  if (auth.inviteBindStatus === "ignored_existing" && (sourceParams.inviteCode || sourceParams.inviteToken)) {
     showToast("当前账号已注册，邀请码仅适用于新用户");
   }
   loadingStep.value = "entering";
@@ -641,6 +644,39 @@ function inviteStatusMessage(status: InviteStatus): string {
   return messages[status] || "邀请码校验失败，不影响正常登录注册";
 }
 
+async function validateInviteToken(token: string, carried: boolean) {
+  inviteValidating.value = true;
+  inviteStatus.value = "resolving";
+  try {
+    const result = await loginAPI.validateInviteToken(token);
+    if (result.valid) {
+      pendingInviteToken.value = token;
+      pendingInviteCode.value = String(result.inviteCode || "").toUpperCase();
+      sourceParams.inviteToken = token;
+      if (pendingInviteCode.value) sourceParams.inviteCode = pendingInviteCode.value;
+      inviteStatus.value = carried ? "carried" : "filled";
+      inviteMessage.value = "邀请码有效";
+      inviteMessageTone.value = "success";
+      trackLogin("invite_validate_success", { source: carried ? sourceParams.inviteSource : "scene" });
+      return true;
+    }
+    pendingInviteToken.value = token;
+    inviteStatus.value = result.status || "invalid";
+    inviteMessage.value = result.message || inviteStatusMessage(inviteStatus.value);
+    inviteMessageTone.value = "error";
+    trackLogin("invite_validate_failed", { status: inviteStatus.value });
+    return false;
+  } catch {
+    pendingInviteToken.value = token;
+    inviteStatus.value = "invalid";
+    inviteMessage.value = "邀请码暂时无法校验，不影响正常登录注册";
+    inviteMessageTone.value = "error";
+    return false;
+  } finally {
+    inviteValidating.value = false;
+  }
+}
+
 async function validateInvite(code: string, carried: boolean) {
   inviteValidating.value = true;
   inviteStatus.value = "resolving";
@@ -681,9 +717,11 @@ async function confirmInvite() {
 
 function removeInvite() {
   pendingInviteCode.value = "";
+  pendingInviteToken.value = "";
   inviteDraft.value = "";
   inviteStatus.value = "empty";
   sourceParams.inviteCode = "";
+  sourceParams.inviteToken = "";
   closeInviteSheet();
 }
 
@@ -761,8 +799,11 @@ onLoad(async options => {
   const query = (options || {}) as Record<string, unknown>;
   sourceParams = parseLoginSource(query);
   redirectInfo = parseRedirectInfo(query);
-  trackLogin("login_page_view", { hasInvite: Boolean(sourceParams.inviteCode), source: sourceParams.inviteSource });
-  if (sourceParams.inviteCode) {
+  trackLogin("login_page_view", { hasInvite: Boolean(sourceParams.inviteCode || sourceParams.inviteToken), source: sourceParams.inviteSource });
+  if (sourceParams.inviteToken) {
+    pendingInviteToken.value = sourceParams.inviteToken;
+    await validateInviteToken(sourceParams.inviteToken, true);
+  } else if (sourceParams.inviteCode) {
     pendingInviteCode.value = sourceParams.inviteCode;
     await validateInvite(sourceParams.inviteCode, true);
   }

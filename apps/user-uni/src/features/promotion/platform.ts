@@ -9,7 +9,8 @@ export async function imageDataUrlToLocalPath(dataUrl: string, cacheKey: string)
   // #ifdef MP-WEIXIN
   const wxApi = (globalThis as unknown as { wx: { env: { USER_DATA_PATH: string }; getFileSystemManager: () => { writeFile: (options: Record<string, unknown>) => void } } }).wx;
   const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-  const filePath = `${wxApi.env.USER_DATA_PATH}/promotion-code-${cacheKey || Date.now()}.png`;
+  const ext = dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg") ? "jpg" : "png";
+  const filePath = `${wxApi.env.USER_DATA_PATH}/promotion-code-${cacheKey || Date.now()}.${ext}`;
   await withTimeout(new Promise<void>((resolve, reject) => {
     wxApi.getFileSystemManager().writeFile({
       filePath,

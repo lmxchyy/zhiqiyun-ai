@@ -2787,7 +2787,7 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.Users) == 0 {
 		data.Users = []adminUser{
 			{ID: "user_000001", Email: "admin@xianzhi.ai", Name: "平台管理员", Role: "SUPER_ADMIN", MemberLevel: memberLevelEnterprise, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_free"},
-			{ID: "user_000002", Email: "demo@xianzhi.ai", Name: "演示用户", Role: "MEMBER", MemberLevel: memberLevelBasic, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_month", ReferredBy: "user_000003"},
+			{ID: "user_000002", Email: "demo@xianzhi.ai", Name: "演示用户", Role: "MEMBER", MemberLevel: memberLevelBasic, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_month"},
 			{ID: "user_000003", Email: "agent1@xianzhi.ai", Name: "华东推广员", Role: "AGENT_L1", MemberLevel: memberLevelFree, AgentStatus: agentStatusActive, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_free"},
 			{ID: "user_000004", Email: "operation@xianzhi.ai", Name: "华东运营中心", Role: "OPERATION_CENTER", MemberLevel: memberLevelFree, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusActive, Status: "ACTIVE", PlanID: "plan_free"},
 			{ID: "user_000010", Email: "demo2@xianzhi.ai", Name: "demo2", Role: "MEMBER", MemberLevel: memberLevelFree, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_free"},

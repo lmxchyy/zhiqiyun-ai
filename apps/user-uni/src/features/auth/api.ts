@@ -52,6 +52,13 @@ export const loginAPI = {
     );
   },
 
+  validateInviteToken(inviteToken: string) {
+    return apiClient.request<InviteValidationResponse & { inviteCode?: string; inviteToken?: string }>(
+      `/api/v1/invite/resolve?inviteToken=${encodeURIComponent(inviteToken)}`,
+      { timeout: 10000, auth: false },
+    );
+  },
+
   security() {
     return apiClient.request<AccountSecurityResponse>("/api/v1/auth/security");
   },

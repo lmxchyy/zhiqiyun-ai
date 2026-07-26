@@ -138,6 +138,41 @@ func TestWechatMiniProgramCodeRejectsJSONErrorWithImageContentType(t *testing.T)
 	}
 }
 
+func TestWechatMiniProgramCodeAcceptsJPEG(t *testing.T) {
+	t.Setenv("WECHAT_MINI_PROGRAM_APPID", "test-appid")
+	t.Setenv("WECHAT_MINI_PROGRAM_SECRET", "test-secret")
+	jpegBody := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0xff, 0xd9}
+	service := newWechatMiniProgramCodeService(config.Config{Environment: "production"})
+	service.client = &http.Client{Transport: promotionCodeRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := `{"access_token":"test-token","expires_in":7200}`
+		contentType := "application/json"
+		var reader io.Reader = strings.NewReader(body)
+		if strings.Contains(request.URL.Path, "getwxacodeunlimit") {
+			contentType = "image/jpeg"
+			reader = bytes.NewReader(jpegBody)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{contentType}},
+			Body:       io.NopCloser(reader),
+		}, nil
+	})}
+
+	got, placeholder, err := service.Generate("inv_a1234567890abcd", defaultPromotionPage)
+	if err != nil {
+		t.Fatalf("Generate jpeg: %v", err)
+	}
+	if placeholder {
+		t.Fatalf("expected official jpeg code, got placeholder")
+	}
+	if !bytes.Equal(got, jpegBody) {
+		t.Fatalf("unexpected jpeg body: %x", got)
+	}
+	if media := promotionMiniProgramImageMediaType(got); media != "image/jpeg" {
+		t.Fatalf("media type = %q", media)
+	}
+}
+
 func TestPromotionInviteTokenRecordRejectsExpiredAndInactive(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	expiredAt := now.Add(-time.Minute)

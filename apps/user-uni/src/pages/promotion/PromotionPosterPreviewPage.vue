@@ -69,29 +69,7 @@ async function waitForCanvas(timeoutMs = 4000) {
 }
 
 async function loadPromotionCode(invalidate: boolean): Promise<{ code: PromotionCode; copy: PromotionShareCopy }> {
-  let copy = await promotionAPI.shareCopy(templateId.value);
-  if (userStore.currentRole === "AGENT") {
-    try {
-      const agentPoster = await promotionAPI.agentPoster();
-      return {
-        code: {
-          imageDataUrl: agentPoster.qrCodeDataUrl,
-          scene: agentPoster.inviteCode,
-          page: agentPoster.inviteLink,
-          isPlaceholder: false,
-          cacheKey: `agent-h5-${agentPoster.inviteCode}`,
-          expiresAt: "",
-        },
-        copy: {
-          ...copy,
-          text: `${copy.text}\n安卓 APP 专属注册下载：${agentPoster.inviteLink}`,
-          path: agentPoster.inviteLink,
-        },
-      };
-    } catch {
-      // Fall through to mini-program code so poster preview still works.
-    }
-  }
+  const copy = await promotionAPI.shareCopy(templateId.value);
   const codePayload = await promotionAPI.code({
     userId: userStore.userId,
     tenantId: userStore.tenantId,

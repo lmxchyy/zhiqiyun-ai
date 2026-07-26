@@ -1278,7 +1278,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	raw := `{
 		"users":[
 			{"id":"user_000001","email":"admin@xianzhi.ai","name":"平台管理员","role":"SUPER_ADMIN","status":"ACTIVE","planId":"plan_free"},
-			{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month","referredBy":"user_000003"},
+			{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month"},
 			{"id":"user_000003","email":"agent1@xianzhi.ai","name":"华东推广员","role":"AGENT_L1","status":"ACTIVE","planId":"plan_free"},
 			{"id":"user_000004","email":"agent2@xianzhi.ai","name":"华东初级代理商","role":"AGENT_L2","status":"ACTIVE","planId":"plan_free"}
 		],
@@ -1325,7 +1325,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	body := res.Body.String()
-	if res.Code != http.StatusOK || !strings.Contains(body, `"directCustomers":1`) || !strings.Contains(body, `"childAgents":1`) || !strings.Contains(body, `"totalCommission":990`) || !strings.Contains(body, "演示用户") || !strings.Contains(body, `"inviteLink":"http://localhost:3100/register?invite=EAST001"`) {
+	if res.Code != http.StatusOK || !strings.Contains(body, `"directCustomers":0`) || !strings.Contains(body, `"childAgents":1`) || !strings.Contains(body, `"totalCommission":990`) || strings.Contains(body, "演示用户") || !strings.Contains(body, `"inviteLink":"http://localhost:3100/register?invite=EAST001"`) {
 		t.Fatalf("channel center response = %d %s", res.Code, body)
 	}
 
@@ -1342,7 +1342,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	reqAfterRegister.Header.Set("Authorization", "Bearer "+loginBody.AccessToken)
 	resAfterRegister := httptest.NewRecorder()
 	handler.ServeHTTP(resAfterRegister, reqAfterRegister)
-	if resAfterRegister.Code != http.StatusOK || !strings.Contains(resAfterRegister.Body.String(), "邀请注册用户") || !strings.Contains(resAfterRegister.Body.String(), `"directCustomers":2`) {
+	if resAfterRegister.Code != http.StatusOK || !strings.Contains(resAfterRegister.Body.String(), "邀请注册用户") || !strings.Contains(resAfterRegister.Body.String(), `"directCustomers":1`) {
 		t.Fatalf("channel center after register = %d %s", resAfterRegister.Code, resAfterRegister.Body.String())
 	}
 	adminCustomers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
