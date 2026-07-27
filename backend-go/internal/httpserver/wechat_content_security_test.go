@@ -37,6 +37,9 @@ func TestMiniProgramTextCheckRequiresOpenID(t *testing.T) {
 	if !errors.Is(err, errContentSecurityOpenIDRequired) {
 		t.Fatalf("expected openid required, got %v", err)
 	}
+	if err.Error() != "内容安全检测暂不可用，请稍后重试" {
+		t.Fatalf("unexpected openid required message: %v", err)
+	}
 }
 
 func TestMiniProgramTextCheckFallsBackAcrossBoundOpenIDs(t *testing.T) {

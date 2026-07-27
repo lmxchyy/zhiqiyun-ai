@@ -21,7 +21,7 @@ import (
 var (
 	errContentSecurityRejected       = errors.New("所发布内容含违规信息")
 	errContentSecurityUnavailable    = errors.New("内容安全检测暂不可用，请稍后重试")
-	errContentSecurityOpenIDRequired = errors.New("请先完成微信授权后再创作")
+	errContentSecurityOpenIDRequired = errors.New("内容安全检测暂不可用，请稍后重试")
 )
 
 type wechatContentSecurityChecker interface {
@@ -234,10 +234,6 @@ func isWeChatMiniProgramRequest(r *http.Request) bool {
 func writeContentSecurityError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errContentSecurityRejected) {
 		writeError(w, http.StatusUnprocessableEntity, errContentSecurityRejected)
-		return
-	}
-	if errors.Is(err, errContentSecurityOpenIDRequired) {
-		writeError(w, http.StatusPreconditionRequired, errContentSecurityOpenIDRequired)
 		return
 	}
 	writeError(w, http.StatusServiceUnavailable, errContentSecurityUnavailable)

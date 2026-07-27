@@ -2423,11 +2423,11 @@ async function submitCreation(prompt: string) {
   };
   try {
     // #ifdef MP-WEIXIN
+    // Password/SMS login is fine; silently refresh device openid for WeChat content security only.
     try {
       await ensureWechatMiniProgramSession();
-    } catch (sessionError) {
-      const sessionMessage = sessionError instanceof Error ? sessionError.message : "微信授权失败，请重试";
-      throw new Error(sessionMessage.includes("微信") ? sessionMessage : "请先完成微信授权后再创作");
+    } catch {
+      throw new Error("内容安全检测暂不可用，请稍后重试");
     }
     // #endif
     let taskId = "";
@@ -2516,17 +2516,13 @@ async function submitCreation(prompt: string) {
     }
     const message = rawMessage.includes("所发布内容含违规信息")
       ? "所发布内容含违规信息"
-      : rawMessage.includes("请先完成微信授权")
-        ? "请先完成微信授权后再创作"
-        : rawMessage.includes("内容安全检测暂不可用")
-          ? "内容安全检测暂不可用，请稍后重试"
-          : rawMessage;
+      : rawMessage.includes("内容安全检测暂不可用")
+        ? "内容安全检测暂不可用，请稍后重试"
+        : rawMessage;
     creationError.value = message;
     latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
     const toastTitle =
-      message === "所发布内容含违规信息" ||
-      message.includes("微信授权") ||
-      message.includes("内容安全检测")
+      message === "所发布内容含违规信息" || message.includes("内容安全检测")
         ? message
         : "生成失败，请重试";
     uni.showToast({ title: toastTitle, icon: "none" });
