@@ -140,7 +140,7 @@ const props = withDefaults(defineProps<{
   pointBalance: 0,
   planName: "普通用户",
   recentModel: "豆包·通用 Pro",
-  allowedCreationModes: () => ["image", "infographic"],
+  allowedCreationModes: () => ["image", "infographic", "video"],
 });
 
 const emit = defineEmits<{

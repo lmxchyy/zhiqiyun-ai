@@ -886,7 +886,7 @@ const allCreationModules = [
   { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
 ];
 
-const allowedCreationModes = ref<CreationMode[]>(["image", "infographic"]);
+const allowedCreationModes = ref<CreationMode[]>(["image", "infographic", "video"]);
 const creationModules = computed(() => allCreationModules.filter(item => allowedCreationModes.value.includes(item.id)));
 
 const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"];
@@ -2773,7 +2773,7 @@ async function loadTerminalCapabilities() {
     allowedCreationModes.value = allowed.length ? allowed : ["image"];
     if (!allowedCreationModes.value.includes(creationMode.value)) creationMode.value = "image";
   } catch {
-    allowedCreationModes.value = ["image", "infographic"];
+    allowedCreationModes.value = ["image", "infographic", "video"];
   }
 }
 

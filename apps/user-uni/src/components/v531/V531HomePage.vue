@@ -423,7 +423,7 @@ const greeting = computed(() => {
         : "晚上好";
 });
 const isModeAllowed = (mode: CreationMode) =>
-  (props.allowedCreationModes || ["image", "infographic"]).includes(mode);
+  (props.allowedCreationModes || ["image", "infographic", "video"]).includes(mode);
 const quickActionsSource = [
   { label: "宣传海报", mode: "image" },
   { label: "招商PPT", mode: "ppt" },
