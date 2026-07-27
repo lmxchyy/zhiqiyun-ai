@@ -117,12 +117,43 @@ const draftOnlyParameterKeys = new Set([
   "restoredParams",
   "slideCount",
   "dynamic",
+  "language",
+  "seed",
+  "n",
+  "ratio",
+]);
+
+const videoParameterKeys = new Set([
+  "duration",
+  "resolution",
+  "aspect_ratio",
+  "fps",
+  "motion_strength",
+  "camera_movement",
+  "generate_audio",
+  "negative_prompt",
+  "reference_image",
+  "first_frame",
+  "last_frame",
+  "sourceReferenceAssetId",
+  "sourceReferenceTaskId",
 ]);
 
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function pickAllowedParameters(
+  parameters: Record<string, unknown>,
+  allowedKeys: Set<string>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of allowedKeys) {
+    if (parameters[key] !== undefined) result[key] = parameters[key];
+  }
+  return result;
 }
 
 export function generationParametersFromDraft(parameters?: Record<string, unknown>): Record<string, unknown> {
@@ -133,12 +164,16 @@ export function generationParametersFromDraft(parameters?: Record<string, unknow
   };
   const sourceAssetId = result.sourceAssetId;
   const sourceTaskId = result.sourceTaskId;
+  const ratio = result.ratio;
   for (const key of draftOnlyParameterKeys) delete result[key];
   if (typeof sourceAssetId === "string" && sourceAssetId.trim()) {
     result.sourceReferenceAssetId = sourceAssetId.trim();
   }
   if (typeof sourceTaskId === "string" && sourceTaskId.trim()) {
     result.sourceReferenceTaskId = sourceTaskId.trim();
+  }
+  if (result.aspect_ratio === undefined && typeof ratio === "string" && ratio.trim()) {
+    result.aspect_ratio = ratio.trim();
   }
   for (const [key, value] of Object.entries(result)) {
     if (value === undefined) delete result[key];
@@ -161,11 +196,11 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   const extraParameters = generationParametersFromDraft(draft.parameters);
   const params = draft.mode === "video"
     ? {
-        ...extraParameters,
-        duration: draft.duration || 5,
-        resolution: draft.quality || "720p",
-        aspect_ratio: draft.size || "16:9",
-        generate_audio: true,
+        ...pickAllowedParameters(extraParameters, videoParameterKeys),
+        duration: draft.duration || Number(extraParameters.duration) || 5,
+        resolution: draft.quality || String(extraParameters.resolution || "") || "720p",
+        aspect_ratio: draft.size || String(extraParameters.aspect_ratio || "") || "16:9",
+        generate_audio: extraParameters.generate_audio !== false,
         ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
         ...(referenceImage ? { reference_image: referenceImage } : {}),
       }

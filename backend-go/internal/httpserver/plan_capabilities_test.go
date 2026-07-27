@@ -20,7 +20,7 @@ func TestResolveModuleSchemaEnforcesPackageCapability(t *testing.T) {
 	if _, err := resolveModuleSchema(data, freeUser, moduleImageGeneration, "mock-standard"); err != nil {
 		t.Fatalf("free image capability should remain available: %v", err)
 	}
-	if _, err := resolveModuleSchema(data, freeUser, moduleVideoGeneration, "mock-video"); err == nil || !strings.Contains(err.Error(), "not included in package") {
+	if _, err := resolveModuleSchema(data, freeUser, moduleVideoGeneration, "mock-video"); err == nil || !strings.Contains(err.Error(), "当前套餐不支持视频生成") {
 		t.Fatalf("free video capability should be rejected, got: %v", err)
 	}
 }
@@ -33,7 +33,7 @@ func TestPPTOutlineEndpointEnforcesPackageCapability(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "platform.json")
 	server := newWithStoreAndSessions(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, newJSONStore(dataPath), sessions)
 	response := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/ppt/outline/generate", bytes.NewBufferString(`{"prompt":"free plan ppt","slideCount":5,"textModel":"kimi-k2.6"}`), "free-ppt-token")
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "not included in package") {
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "当前套餐不支持该能力") {
 		t.Fatalf("free PPT outline should be rejected by package capability: %d %s", response.Code, response.Body.String())
 	}
 }

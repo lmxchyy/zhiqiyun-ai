@@ -596,7 +596,10 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 		}
 	}
 	if !enterpriseContext && !stringListContains(module.OpenPackageIDs, user.PlanID) {
-		return resolvedModuleSchema{}, fmt.Errorf("module %s is not included in package %s", moduleCode, user.PlanID)
+		if moduleCode == moduleVideoGeneration {
+			return resolvedModuleSchema{}, fmt.Errorf("当前套餐不支持视频生成，请升级后重试")
+		}
+		return resolvedModuleSchema{}, fmt.Errorf("当前套餐不支持该能力，请升级后重试")
 	}
 	if enterpriseContext && len(module.OpenTenantIDs) > 0 && !stringListContains(module.OpenTenantIDs, effectiveTenantID(user)) {
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to tenant %s", moduleCode, effectiveTenantID(user))

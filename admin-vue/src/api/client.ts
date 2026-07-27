@@ -35,6 +35,9 @@ export function chineseAdminErrorMessage(message: unknown, status = 0, fallback 
   if (/invalid (?:username|email|mobile|phone|account|password|credentials)|incorrect password|bad credentials/.test(normalized)) return "账号或密码不正确";
   if (/token.*(?:expired|invalid)|(?:expired|invalid).*token|session.*expired/.test(normalized)) return "登录状态已失效，请重新登录";
   if (/unauthorized|authentication required|not authenticated|please log in/.test(normalized)) return "请先登录后再继续";
+  if (/not included in package|module .+ is not included/.test(normalized)) return "当前套餐不支持该能力，请升级后重试";
+  if (/not allowed by schema|parameter .+ is required|exceeds tenant\/package|is not in schema options/.test(normalized)) return "提交的信息不符合要求，请检查后重试";
+  if (/upstream|api (?:provider|channel)|not bound to an api provider|does not support this model/.test(normalized)) return "视频模型上游渠道未启用，请先在主控后台完成 API 配置";
   if (/forbidden|permission denied|access denied|not allowed/.test(normalized)) return "暂无权限执行此操作";
   if (/too many requests|rate limit/.test(normalized)) return "操作过于频繁，请稍后重试";
   if (/already exists|duplicate|conflict/.test(normalized)) return "该数据已存在，请勿重复提交";

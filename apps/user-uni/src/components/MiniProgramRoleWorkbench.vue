@@ -220,7 +220,7 @@
                     <text v-if="creationReferencePaths.length" class="v31-reference-mode">{{ creationReferenceModeLabel }}</text>
                   </view>
                   <text class="v31-reference-description">
-                    {{ creationSourceLoading ? "正在载入原作品..." : creationSourceError || (creationReferencePaths.length ? "生成时会保留参考图的主体与视觉特征" : "添加参考图后将自动使用参考图生成") }}
+                    {{ creationSourceLoading ? "正在载入原作品..." : creationSourceError || (creationReferencePaths.length ? (creationMode === "video" ? "已添加首帧/参考图，将按图生视频提交" : "生成时会保留参考图的主体与视觉特征") : (creationMode === "video" ? "可选：添加首帧参考图；不添加则走文生视频" : "添加参考图后将自动使用参考图生成")) }}
                   </text>
                 </view>
                 <button
@@ -2737,6 +2737,7 @@ onMounted(() => {
           negativePrompt: inspirationDraft.negativePrompt,
           model: inspirationDraft.modelId,
           referenceImages: inspirationDraft.referenceAssets,
+          mode: inspirationDraft.contentType,
         }
       : rawStudioDraft && typeof rawStudioDraft === "object" ? rawStudioDraft as AnyRecord : {};
     if (inspirationDraft) activeInspirationTemplateId.value = inspirationDraft.templateId;
@@ -2745,13 +2746,25 @@ onMounted(() => {
       creationPrompt.value = savedPrompt || draftPrompt;
       uni.removeStorageSync("v531-creation-prompt");
     }
+    const draftMode = rowString(studioDraft, "mode", "contentType");
+    const draftMatchesMode = !draftMode || draftMode === creationMode.value
+      || (creationMode.value === "infographic" && draftMode === "image")
+      || (creationMode.value === "image" && draftMode === "infographic");
     const draftReferences = Array.isArray(studioDraft.referencePaths)
       ? studioDraft.referencePaths
       : Array.isArray(studioDraft.referenceImages) ? studioDraft.referenceImages : [];
-    if (draftReferences.length) {
-      creationReferencePaths.value = draftReferences.filter((item): item is string => typeof item === "string" && Boolean(item));
+    if (draftMatchesMode && draftReferences.length) {
+      creationReferencePaths.value = draftReferences.flatMap((item) => {
+        if (typeof item === "string" && item.trim()) return [item.trim()];
+        return [rowString(item, "url", "remoteUrl", "sourceUrl", "fileUrl")].filter(Boolean);
+      });
     }
-    restoredCreationParams.value = studioDraft;
+    restoredCreationParams.value = draftMatchesMode ? studioDraft : {
+      model: rowString(studioDraft, "model", "modelId", "modelName"),
+    };
+    if (draftMatchesMode) {
+      uni.removeStorageSync("v532-studio-draft");
+    }
     restoreActiveGeneration();
   }
   void loadTerminalCapabilities();
