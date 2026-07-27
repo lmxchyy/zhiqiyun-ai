@@ -47,6 +47,7 @@ type assetCenterDataStore interface {
 
 type generationTaskControlStore interface {
 	CancelGenerationTaskForUser(userID string, id string) (generationTask, error)
+	DeleteGenerationTaskForUser(userID string, id string) error
 }
 
 func assetCenterQueryFromRequest(r *http.Request) assetCenterListQuery {
@@ -324,6 +325,29 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 	writeJSON(w, task)
+}
+
+func (a api) deleteGenerationTask(w http.ResponseWriter, r *http.Request) {
+	user, err := a.currentUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	store, ok := a.store.(generationTaskControlStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, errors.New("generation task deletion is unavailable"))
+		return
+	}
+	if err := store.DeleteGenerationTaskForUser(user.ID, id); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "id": id})
 }
 
 func (a api) registerGenerationTaskCancel(id string, cancel context.CancelFunc) {
@@ -738,6 +762,32 @@ func (s *jsonStore) CancelGenerationTaskForUser(userID string, id string) (gener
 	return task, err
 }
 
+func generationTaskDeletable(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "FAILED", "ERROR", "CANCELLED", "CANCELED", "REJECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *jsonStore) DeleteGenerationTaskForUser(userID string, id string) error {
+	return s.update(func(data *platformData) error {
+		for index := range data.GenerationTasks {
+			item := data.GenerationTasks[index]
+			if item.ID != id || item.UserID != userID {
+				continue
+			}
+			if !generationTaskDeletable(item.Status) {
+				return errors.New("only failed or cancelled tasks can be deleted")
+			}
+			data.GenerationTasks = append(data.GenerationTasks[:index], data.GenerationTasks[index+1:]...)
+			return nil
+		}
+		return errors.New("generation task not found")
+	})
+}
+
 func (s *postgresStore) ListAssetsForCenter(userID string, query assetCenterListQuery) ([]asset, int, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -944,6 +994,37 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 		return generationTask{}, err
 	}
 	return task, nil
+}
+
+func (s *postgresStore) DeleteGenerationTaskForUser(userID string, id string) error {
+	task, found, err := s.GetGenerationTaskForUser(userID, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("generation task not found")
+	}
+	if !generationTaskDeletable(task.Status) {
+		return errors.New("only failed or cancelled tasks can be deleted")
+	}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	result, err := s.db.ExecContext(ctx, `
+		delete from xz_generation_tasks
+		where id = $1 and user_id = $2
+		  and upper(coalesce(status, '')) in ('FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REJECTED')
+	`, id, userID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return errors.New("generation task not found")
+	}
+	return nil
 }
 
 var _ assetCenterDataStore = (*jsonStore)(nil)
