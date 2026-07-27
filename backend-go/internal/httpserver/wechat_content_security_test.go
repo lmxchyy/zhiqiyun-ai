@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,6 +27,16 @@ func (s *openIDMatchingContentSecurity) CheckText(_ context.Context, _ string, o
 		return nil
 	}
 	return errContentSecurityUnavailable
+}
+
+func TestMiniProgramTextCheckRequiresOpenID(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/generation-tasks", nil)
+	request.Header.Set("X-Client-Platform", "mp-weixin")
+	a := api{contentSecurity: &openIDMatchingContentSecurity{validOpenID: "openid-current-app"}}
+	err := a.checkMiniProgramText(context.Background(), request, adminUser{ID: "user"}, "合规的创作提示词")
+	if !errors.Is(err, errContentSecurityOpenIDRequired) {
+		t.Fatalf("expected openid required, got %v", err)
+	}
 }
 
 func TestMiniProgramTextCheckFallsBackAcrossBoundOpenIDs(t *testing.T) {

@@ -816,6 +816,81 @@ func (a authAPI) linkWeChatMiniProgram(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"linked": true, "userId": updated.ID})
 }
 
+// refreshWeChatMiniProgramSession stores the current device WeChat openid on the
+// authenticated user's session so mini-program content security (and payment)
+// can resolve an openid even when the account was opened via email/SMS, or when
+// the same WeChat identity is already bound to another account.
+func (a authAPI) refreshWeChatMiniProgramSession(w http.ResponseWriter, r *http.Request) {
+	var req wechatMiniProgramLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	code := strings.TrimSpace(firstNonEmptyString(req.WxLoginCode, req.Code))
+	if code == "" {
+		writeError(w, http.StatusBadRequest, errors.New("wechat mini program code is required"))
+		return
+	}
+	if isWeChatMiniProgramMockCodeValue(code) {
+		writeAuthFlowError(w, http.StatusBadRequest, "WECHAT_REAL_CODE_REQUIRED", "real wechat login code is required")
+		return
+	}
+
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	target, err := a.authenticatedUser(r, data)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	session, err := exchangeWeChatMiniProgramCode(r.Context(), code)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	wechatSessions, ok := a.sessions.(wechatMiniProgramSessionStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	if err := wechatSessions.PutWeChatSession(r.Context(), target.ID, session, authSessionTTL); err != nil {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+
+	linked := false
+	if existing, found := findUserByWechatIdentity(data.Users, session); found && existing.ID != target.ID {
+		writeJSON(w, map[string]any{
+			"sessionReady": true,
+			"linked":       false,
+			"userId":       target.ID,
+			"boundToOther": true,
+		})
+		return
+	}
+	if !containsFold(target.WeChatOpenIDs, session.OpenID) || (session.UnionID != "" && target.WeChatUnionID != session.UnionID) {
+		if updated, updateErr := a.store.UpdateAdminCustomer(target.ID, adminCustomerMutation{
+			WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID,
+		}); updateErr != nil {
+			log.Printf("wechat mini program session ready but identity bind failed user=%s err=%v", target.ID, updateErr)
+		} else {
+			target = updated
+			linked = true
+		}
+	} else {
+		linked = len(target.WeChatOpenIDs) > 0 || target.WeChatUnionID != ""
+	}
+	writeJSON(w, map[string]any{
+		"sessionReady": true,
+		"linked":       linked,
+		"userId":       target.ID,
+		"boundToOther": false,
+	})
+}
+
 func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

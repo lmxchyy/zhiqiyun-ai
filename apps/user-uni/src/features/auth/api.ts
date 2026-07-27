@@ -79,6 +79,17 @@ export const loginAPI = {
     });
   },
 
+  refreshWechatSession(wxLoginCode: string) {
+    return apiClient.request<{ sessionReady: boolean; linked: boolean; userId: string; boundToOther?: boolean }>(
+      "/api/v1/auth/wechat-mini-program/session",
+      {
+        method: "POST",
+        body: { wxLoginCode },
+        timeout: 15000,
+      },
+    );
+  },
+
   changePassword(currentPassword: string, newPassword: string) {
     return apiClient.request<{ ok: boolean; passwordSet: boolean }>("/api/v1/auth/change-password", {
       method: "POST",

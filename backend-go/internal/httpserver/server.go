@@ -175,6 +175,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/auth/login", wrapF(auth.login))
 	v1.POST("/auth/wechat-mini-program/login", wrapF(auth.wechatMiniProgramLogin))
 	v1.POST("/auth/wechat-mini-program/link", wrapF(auth.linkWeChatMiniProgram))
+	v1.POST("/auth/wechat-mini-program/session", wrapF(auth.refreshWeChatMiniProgramSession))
 	v1.POST("/auth/wechat/phone-login", wrapF(auth.wechatMiniProgramLogin))
 	v1.GET("/auth/wechat/qrcode", wrapF(auth.wechatWebQRCode))
 	v1.GET("/auth/wechat/status", wrapF(auth.wechatWebStatus))

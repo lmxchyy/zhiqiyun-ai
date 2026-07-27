@@ -25,7 +25,7 @@ export const miniProgramRolePages: Record<MiniProgramRoleId, Partial<Record<Mini
   },
   agent: {
     overview: "/pages/agent/AgentOverviewPage",
-    promotion: "/pages/promotion/PromotionCenterPage",
+    promotion: "/pages/agent/AgentPromotionPage",
     customers: "/pages/agent/AgentCustomersPage",
     commission: "/pages/agent/AgentCommissionPage",
     mine: "/pages/agent/AgentMinePage"

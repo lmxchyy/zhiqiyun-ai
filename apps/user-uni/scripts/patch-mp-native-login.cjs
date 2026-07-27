@@ -1969,22 +1969,8 @@ if (logoFile && commonAssetsUpdated === commonAssetsOriginal) {
 }
 fs.writeFileSync(commonAssetsPath, commonAssetsUpdated);
 
-relocateGeneratedModule(
-  "PromotionCenterPage.vue_vue_type_style_index_0_lang.js",
-  "pages/promotion/PromotionCenterPage.vue_vue_type_style_index_0_lang.js",
-  (source) => source.replace(/(["'])\.\//g, "$1../../")
-);
-for (const pageName of ["PromotionCenterPage.js", "PromotionCenterPage2.js"]) {
-  const pagePath = assertGeneratedPath(path.resolve(outputRoot, "pages", "promotion", pageName));
-  const original = fs.readFileSync(pagePath, "utf8");
-  const updated = original
-    .split('require("../../PromotionCenterPage.vue_vue_type_style_index_0_lang.js")')
-    .join('require("./PromotionCenterPage.vue_vue_type_style_index_0_lang.js")');
-  if (updated === original) {
-    throw new Error(`Promotion subpackage module reference was not rewritten: ${pageName}`);
-  }
-  fs.writeFileSync(pagePath, updated);
-}
+// PromotionCenterPage is now a thin wrapper around components/promotion/PromotionCenterScreen.
+// No cross-package style module relocation is required.
 
 for (const moduleName of ["api.js", "availability.js", "platform.js"]) {
   relocateGeneratedModule(
