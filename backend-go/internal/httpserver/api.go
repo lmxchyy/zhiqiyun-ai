@@ -132,6 +132,10 @@ type activeIdentityStore interface {
 	GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error)
 }
 
+type authPricingPermissionStore interface {
+	PricingPermissionsForRole(ctx context.Context, role string) ([]string, error)
+}
+
 type channelWorkbenchAccessStore interface {
 	GetChannelWorkbenchAgentForUser(userID string) (adminChannelAgent, bool, error)
 }
@@ -1542,43 +1546,61 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{"mock-standard": true}
 	data, err := a.store.AdminData()
 	if err == nil {
+		data = normalizeAICapabilityDefaults(data)
 		miniProgram := isWeChatMiniProgramRequest(r)
 		approvedModels := map[string]adminAIModel{}
-		for _, model := range data.AIModels {
-			if !miniProgram {
-				approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
-				continue
-			}
-			if allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC()); allowed {
-				if _, routed, routeErr := selectAPIChannelForConfiguredModel(data, model.ModelName); routed && routeErr == nil {
-					approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
-				}
-			}
-		}
 		if miniProgram {
 			items = items[:0]
 			seen = map[string]bool{}
-			for _, model := range approvedModels {
-				code := strings.TrimSpace(model.ModelName)
-				seen[code] = true
-				items = append(items, map[string]any{
-					"code": code, "name": code, "capabilities": []string{"TEXT_TO_IMAGE", "IMAGE_TO_IMAGE"},
-					"online": true, "pointCost": modelPointCost(code),
-				})
+		}
+		for _, model := range data.AIModels {
+			code := strings.TrimSpace(model.ModelName)
+			key := strings.ToLower(code)
+			if code == "" || !isActiveLike(model.Status) {
+				continue
 			}
+			localModel := strings.EqualFold(code, "mock-standard") || strings.EqualFold(code, "mock-video")
+			_, routed, routeErr := selectAPIChannelForConfiguredModel(data, code)
+			if !localModel && (!routed || routeErr != nil) {
+				continue
+			}
+			if miniProgram {
+				allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC())
+				if !allowed {
+					continue
+				}
+			}
+			approvedModels[key] = model
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			schema := findAIParameterSchema(data.AIParameterSchemas, model.ModuleCode, model.ModelName)
+			capabilities := publicModelCapabilities(model, schema.SchemaJSON)
+			item := map[string]any{
+				"code": code, "name": code, "capabilities": capabilities,
+				"online": true, "pointCost": modelPointCost(code),
+			}
+			if isVideoAIModel(model) {
+				videoCapabilities := resolveVideoModelCapabilities(model, schema.SchemaJSON)
+				item["videoCapabilities"] = videoCapabilities
+				item["video_capabilities"] = videoCapabilities
+			}
+			items = append(items, item)
 		}
 		for _, channel := range configuredGenerationChannels(data) {
 			for _, model := range channel.Models {
 				code := strings.TrimSpace(model)
+				key := strings.ToLower(code)
 				if miniProgram {
-					if _, ok := approvedModels[strings.ToLower(code)]; !ok {
+					if _, ok := approvedModels[key]; !ok {
 						continue
 					}
 				}
-				if code == "" || seen[code] {
+				if code == "" || seen[key] {
 					continue
 				}
-				seen[code] = true
+				seen[key] = true
 				items = append(items, map[string]any{
 					"code":         code,
 					"name":         code,
@@ -1763,7 +1785,7 @@ func (a api) downloadAsset(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, errAssetNotFound)
 			return
 		}
-		if item.URL == "" {
+		if strings.TrimSpace(item.URL) == "" && assetStorageFileID(item) == "" {
 			writeError(w, http.StatusNotFound, errAssetNotFound)
 			return
 		}
@@ -1859,6 +1881,9 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 	if a.writeCompliantAssetDownload(w, r, item) {
 		return
 	}
+	if a.writeStoredAssetDownload(w, r, item) {
+		return
+	}
 	contentType := stringMetadataValue(item, "contentType")
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -1890,7 +1915,54 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 		_, _ = w.Write(raw)
 		return
 	}
+	if strings.TrimSpace(item.URL) == "" {
+		writeError(w, http.StatusNotFound, errAssetNotFound)
+		return
+	}
 	a.writeRemoteDownload(w, r, item.URL, contentType, downloadAssetName(item, contentType))
+}
+
+func assetStorageFileID(item asset) string {
+	return firstNonEmptyString(stringValue(item.Metadata["fileId"]), stringValue(item.Metadata["storageFileId"]))
+}
+
+func (a api) writeStoredAssetDownload(w http.ResponseWriter, r *http.Request, item asset) bool {
+	raw, contentType, ok := a.readStoredAssetBytes(r.Context(), item)
+	if !ok {
+		return false
+	}
+	if contentType == "" {
+		contentType = firstNonEmptyString(stringMetadataValue(item, "contentType"), "application/octet-stream")
+	}
+	writeAttachmentHeaders(w, contentType, downloadAssetName(item, contentType))
+	_, _ = w.Write(raw)
+	return true
+}
+
+func (a api) readStoredAssetBytes(ctx context.Context, item asset) ([]byte, string, bool) {
+	if a.fileService == nil {
+		return nil, "", false
+	}
+	fileID := firstNonEmptyString(stringValue(item.Metadata["fileId"]), stringValue(item.Metadata["storageFileId"]))
+	if fileID == "" {
+		return nil, "", false
+	}
+	tenantID := firstNonEmptyString(item.TenantID, stringValue(item.Metadata["storageTenantId"]), "tenant_default")
+	userID := firstNonEmptyString(item.UserID)
+	file, stream, err := a.fileService.OpenObject(ctx, storagecenter.AccessContext{
+		TenantID: tenantID,
+		UserID:   userID,
+	}, fileID)
+	if err != nil {
+		return nil, "", false
+	}
+	defer stream.Close()
+	raw, err := io.ReadAll(io.LimitReader(stream, 512<<20))
+	if err != nil || len(raw) == 0 {
+		return nil, "", false
+	}
+	contentType := firstNonEmptyString(file.MIMEType, stringMetadataValue(item, "contentType"), item.MediaType)
+	return raw, contentType, true
 }
 
 func (a api) serveGeneratedMedia(w http.ResponseWriter, r *http.Request) {
@@ -2295,6 +2367,10 @@ func (a api) createCommerceOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := a.rejectManagedV2LegacyOrder(r.Context(), req.PlanID); err != nil {
+		writeBusinessPlanAdminError(w, err)
+		return
+	}
 	plan, ok := commercePlanByID(data, req.PlanID)
 	if !ok || !commercePlanVisible(plan) {
 		writeError(w, http.StatusBadRequest, errors.New("valid planId is required"))
@@ -2302,7 +2378,7 @@ func (a api) createCommerceOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := a.createOrderForPlan(user, plan, req.AmountCents, req.PaymentMethod, req.IdempotencyKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeCommerceOrderCreationError(w, err)
 		return
 	}
 	writeJSON(w, commerceOrderResponse(order, plan))
@@ -2330,6 +2406,10 @@ func (a api) createAgentJoinOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	planID := firstNonEmptyString(req.PlanID, "plan_agent_join_996")
+	if err := a.rejectManagedV2LegacyOrder(r.Context(), planID); err != nil {
+		writeBusinessPlanAdminError(w, err)
+		return
+	}
 	plan, ok := commercePlanByID(data, planID)
 	if !ok || planBusinessType(plan) != planTypeAgentJoinPackage {
 		writeError(w, http.StatusBadRequest, errors.New("valid agent join plan is required"))
@@ -2337,10 +2417,35 @@ func (a api) createAgentJoinOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := a.createOrderForPlan(user, plan, 0, req.PaymentMethod, req.IdempotencyKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeCommerceOrderCreationError(w, err)
 		return
 	}
 	writeJSON(w, commerceOrderResponse(order, plan))
+}
+
+func (a api) rejectManagedV2LegacyOrder(ctx context.Context, planRef string) error {
+	postgres, ok := a.store.(*postgresStore)
+	if !ok || postgres == nil || postgres.db == nil || strings.TrimSpace(planRef) == "" {
+		return nil
+	}
+	service := virtualPaymentService{db: postgres.db, cfg: virtualPaymentConfigFromApp(a.cfg)}
+	managed, err := service.isManagedMemberAgentPlanRef(ctx, planRef)
+	if err != nil {
+		return err
+	}
+	if !managed {
+		return nil
+	}
+	return newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PRICE_QUOTE", "V2 managed member and agent plans must be ordered with a server-issued price quote")
+}
+
+func writeCommerceOrderCreationError(w http.ResponseWriter, err error) {
+	var businessErr *businessPlanAdminError
+	if errors.As(err, &businessErr) {
+		writeBusinessPlanAdminError(w, businessErr)
+		return
+	}
+	writeError(w, http.StatusBadRequest, err)
 }
 
 func (a api) createOperationCenterJoinOrder(w http.ResponseWriter, r *http.Request) {
@@ -3329,12 +3434,13 @@ func (a api) createOrderForPlan(user adminUser, plan adminPlan, requestedAmountC
 		}
 	}
 	return a.store.CreateAdminOrder(adminOrderMutation{
-		UserID:         user.ID,
-		PlanID:         plan.ID,
-		AmountCents:    amountCents,
-		Status:         "PENDING",
-		PaymentMethod:  paymentMethod,
-		IdempotencyKey: idempotencyKey,
+		UserID:             user.ID,
+		PlanID:             plan.ID,
+		AmountCents:        amountCents,
+		Status:             "PENDING",
+		PaymentMethod:      paymentMethod,
+		IdempotencyKey:     idempotencyKey,
+		PaymentEnvironment: map[int]string{0: "PRODUCTION", 1: "SANDBOX"}[virtualPaymentConfigFromApp(a.cfg).Env],
 	})
 }
 
@@ -4110,7 +4216,9 @@ func securePublicMediaURL(rawURL string) string {
 		return rawURL
 	}
 	host := strings.ToLower(strings.Trim(parsed.Hostname(), "[]"))
-	if host == "localhost" {
+	// Keep internal docker / loopback endpoints untouched; upgrading them to https
+	// makes browser detail previews fail harder (e.g. https://minio:9000/...).
+	if host == "localhost" || host == "minio" || !strings.Contains(host, ".") {
 		return rawURL
 	}
 	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {

@@ -245,7 +245,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -256,7 +256,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -1183,10 +1183,10 @@
               </div>
             </section>
             <teleport to="body">
-              <div v-if="aiDetailTask && aiTaskDisplayImageUrl(aiDetailTask)" class="ai-detail-overlay" @click="closeAiDetailModal">
+              <div v-if="aiDetailTask" class="ai-detail-overlay" @click="closeAiDetailModal">
                 <section class="ai-detail-modal" @click.stop>
                   <div class="ai-detail-preview">
-                    <button type="button" class="ai-detail-download" aria-label="下载图片" @click.stop="downloadAiTask(aiDetailTask)">
+                    <button type="button" class="ai-detail-download" aria-label="下载图片" :disabled="!aiTaskCanDownload(aiDetailTask)" @click.stop="downloadAiTask(aiDetailTask)">
                       <el-icon><Download /></el-icon>
                     </button>
                     <div class="ai-detail-badges">
@@ -1194,12 +1194,23 @@
                       <span>{{ aiTaskDisplayResolutionLabel(aiDetailTask) }}</span>
                     </div>
                     <img
+                      v-if="aiTaskDisplayImageUrl(aiDetailTask)"
                       :src="aiTaskDisplayImageUrl(aiDetailTask)"
+                      :class="{ 'is-placeholder': isAiDetailShowingPlaceholder(aiDetailTask) }"
                       alt="生成图片详情预览"
                       @load="handleAiDetailImageLoad($event, aiDetailTask)"
+                      @error="handleAiDetailImageError(aiDetailTask)"
                       @click.stop="openAiDetailImageLightbox(aiDetailTask)"
                       @contextmenu.prevent.stop="openAiImageContextMenu($event, aiDetailTask)"
                     />
+                    <div v-if="isAiOriginalImageLoading(aiDetailTask)" class="ai-detail-image-status">正在加载原图…</div>
+                    <div v-else-if="aiOriginalImageErrorMessage(aiDetailTask)" class="ai-detail-image-status is-error">
+                      <p>{{ aiOriginalImageErrorMessage(aiDetailTask) }}</p>
+                      <button type="button" @click.stop="retryAiOriginalImageLoad(aiDetailTask)">重试</button>
+                    </div>
+                    <div v-else-if="!aiTaskDisplayImageUrl(aiDetailTask)" class="ai-detail-image-status is-error">
+                      <p>暂无可预览图片</p>
+                    </div>
                   </div>
                   <aside class="ai-detail-info">
                     <button type="button" class="ai-detail-close" aria-label="关闭详情" @click="closeAiDetailModal">×</button>
@@ -1264,14 +1275,14 @@
               </div>
             </teleport>
             <teleport to="body">
-              <div v-if="aiLightboxTask && aiTaskDisplayImageUrl(aiLightboxTask)" class="ai-lightbox" @click="closeAiLightbox" @wheel.prevent="handleAiLightboxWheel">
+              <div v-if="aiLightboxTask" class="ai-lightbox" @click="closeAiLightbox" @wheel.prevent="handleAiLightboxWheel">
                 <div class="ai-lightbox-backdrop"></div>
                 <div class="ai-lightbox-toolbar" @click.stop>
                   <span class="ai-lightbox-zoom">{{ aiLightboxZoomText }}</span>
                   <button type="button" aria-label="缩小图片" @click="zoomAiLightboxBy(1 / 1.25)"><span>−</span></button>
                   <button type="button" aria-label="放大图片" @click="zoomAiLightboxBy(1.25)"><span>+</span></button>
                   <button type="button" aria-label="适配窗口" @click="resetAiLightboxTransform"><span>适配</span></button>
-                  <button type="button" aria-label="下载图片" @click="downloadAiTask(aiLightboxTask)"><el-icon><Download /></el-icon></button>
+                  <button type="button" aria-label="下载图片" :disabled="!aiTaskCanDownload(aiLightboxTask)" @click="downloadAiTask(aiLightboxTask)"><el-icon><Download /></el-icon></button>
                   <button type="button" aria-label="关闭预览" @click="closeAiLightbox"><span>×</span></button>
                 </div>
                 <button v-if="aiLightboxTotal > 1" type="button" class="ai-lightbox-nav prev" aria-label="上一张" @click.stop="moveAiLightbox(-1)">‹</button>
@@ -1292,12 +1303,20 @@
                       <span>{{ aiTaskDisplayResolutionLabel(aiLightboxTask) }}</span>
                     </div>
                     <img
+                      v-if="aiTaskDisplayImageUrl(aiLightboxTask)"
                       :src="aiTaskDisplayImageUrl(aiLightboxTask)"
+                      :class="{ 'is-placeholder': isAiDetailShowingPlaceholder(aiLightboxTask) }"
                       alt="生成图片预览"
                       draggable="false"
                       @load="handleAiDetailImageLoad($event, aiLightboxTask)"
+                      @error="handleAiDetailImageError(aiLightboxTask)"
                       @contextmenu.prevent.stop="openAiImageContextMenu($event, aiLightboxTask)"
                     />
+                    <div v-if="isAiOriginalImageLoading(aiLightboxTask)" class="ai-detail-image-status">正在加载原图…</div>
+                    <div v-else-if="aiOriginalImageErrorMessage(aiLightboxTask)" class="ai-detail-image-status is-error">
+                      <p>{{ aiOriginalImageErrorMessage(aiLightboxTask) }}</p>
+                      <button type="button" @click.stop="retryAiOriginalImageLoad(aiLightboxTask)">重试</button>
+                    </div>
                   </figure>
                 </div>
                 <button v-if="aiLightboxTotal > 1" type="button" class="ai-lightbox-nav next" aria-label="下一张" @click.stop="moveAiLightbox(1)">›</button>
@@ -2121,6 +2140,11 @@
               <el-empty v-else description="暂无订单明细记录" />
             </section>
           </section>
+          <PricePlanGovernance
+            v-else-if="store.activeModuleId === 'pricePlanGovernance'"
+            :current-role="String(currentAdmin?.role || '')"
+            :current-permissions="currentPermissions"
+          />
           <BillingDomain v-else-if="billingModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
           <section v-else-if="store.activeModuleId === 'apiSettings'" class="api-settings-admin">
             <section class="api-settings-titlebar">
@@ -2734,8 +2758,11 @@
   <PlanEditorDialog
     v-model="planEditorOpen"
     :plan="editingPlan"
-    :saving="store.saving"
+    :gate="planEditorGate"
+    :saving="store.saving || planEditorSaving"
     @save="savePlanConfiguration"
+    @retry-gate="retryPlanEditorGate"
+    @managed-handoff="goToManagedPlanGovernance"
   />
   <GlobalCommandPalette v-if="isUserConsole || isAgentConsole" v-model:open="commandPaletteOpen" v-model:query="globalSearchKeyword" :module-results="globalModuleResults" :record-results="currentRecordResults" :business-results="globalBusinessResults" @select-module="openGlobalModuleResult" @select-record="openCurrentRecordResult" @select-business="openGlobalBusinessResult" />
   <div v-if="apiModelPickerOpen" class="api-model-picker-overlay" @click.self="closeApiModelPicker">
@@ -2840,6 +2867,16 @@ import {
 import { modulePermission, resolveModuleIdFromPath, resolveModulePath } from "./config/moduleRegistry";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { useWebAuthStore, type WebAuthResponse } from "./stores/auth";
+import {
+  canAccessAdminModule,
+  legacyPlanSaveContextIsCurrent,
+  legacyPlanEditorAllowsIO,
+  managedPlanHandoff,
+  revalidateLegacyPlanEditorForSave,
+  resolveAuthorizedAdminModule,
+  resolveLegacyPlanEditorGate,
+  type LegacyPlanEditorGate
+} from "./domain/pricePlanGovernance.ts";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
 import {
   agentCenterMetrics,
@@ -2904,9 +2941,14 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 
 const store = useAdminStore();
 const authStore = useWebAuthStore();
+async function loadPricePlanAdminStore() {
+  const { usePricePlanAdminStore } = await import("./stores/pricePlanAdmin.ts");
+  return usePricePlanAdminStore();
+}
 const AdminDataTable = defineAsyncComponent(() => import("./components/admin/AdminDataTable.vue"));
 const Customer360Center = defineAsyncComponent(() => import("./components/admin/Customer360Center.vue"));
 const BillingDomain = defineAsyncComponent(() => import("./components/billing/BillingDomain.vue"));
+const PricePlanGovernance = defineAsyncComponent(() => import("./components/billing/price-plan-admin/PricePlanGovernance.vue"));
 const CustomerAttributionOverview = defineAsyncComponent(() => import("./components/attribution/CustomerAttributionOverview.vue"));
 const AiCapabilityDomain = defineAsyncComponent(() => import("./components/ai/AiCapabilityDomain.vue"));
 const EnterpriseManagement = defineAsyncComponent(() => import("./components/enterprise/EnterpriseManagement.vue"));
@@ -2922,6 +2964,18 @@ const PlanEditorDialog = defineAsyncComponent(() => import("./components/billing
 const StorageCenter = defineAsyncComponent(() => import("./components/storage/StorageCenter.vue"));
 const planEditorOpen = ref(false);
 const editingPlan = ref<AdminRecord | null>(null);
+const planEditorGate = ref<LegacyPlanEditorGate>({ status: "BLOCKED", planId: "", message: "尚未检查套餐托管状态。" });
+const planEditorSaving = ref(false);
+let planEditorGateSequence = 0;
+let planEditorSaveSequence = 0;
+watch(planEditorOpen, (visible) => {
+  if (visible) return;
+  planEditorGateSequence += 1;
+  planEditorSaveSequence += 1;
+  planEditorSaving.value = false;
+  editingPlan.value = null;
+  planEditorGate.value = { status: "BLOCKED", planId: "", message: "尚未检查套餐托管状态。" };
+});
 const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
 const PptDocumentGeneration = defineAsyncComponent({
@@ -4224,6 +4278,8 @@ const aiReferenceImages = ref<AiReferenceImage[]>([]);
 const aiDetailTaskId = ref("");
 const aiDetailImageMeta = ref<Record<string, { width: number; height: number }>>({});
 const aiOriginalImageCache = ref<Record<string, string>>({});
+const aiOriginalImageLoadState = ref<Record<string, "idle" | "loading" | "ready" | "error">>({});
+const aiOriginalImageLoadError = ref<Record<string, string>>({});
 const aiRawUrlsTaskId = ref("");
 const aiRawResponseTaskId = ref("");
 const aiLightboxTaskId = ref("");
@@ -4262,6 +4318,7 @@ let aiImageDraftHydrated = false;
 let aiImageDraftSaveTimer: ReturnType<typeof window.setTimeout> | null = null;
 let aiTaskLongPressTimer: ReturnType<typeof window.setTimeout> | null = null;
 const aiOriginalImageCachePending = new Set<string>();
+const aiOriginalImageCacheWaiters = new Map<string, Promise<boolean>>();
 let aiLightboxPointerStart: { id: number; x: number; y: number; baseX: number; baseY: number; moved: boolean; startedAt: number } | null = null;
 let aiLightboxPinchStart: { distance: number; scale: number; tx: number; ty: number; midX: number; midY: number } | null = null;
 let aiLightboxLastTap = { time: 0, x: 0, y: 0 };
@@ -4822,7 +4879,7 @@ watch(
   () => syncOnlineProviderForModel()
 );
 const onlinePreviewTask = computed(() => onlineImageTasks.value.find((task) => String(task.status || "").toUpperCase() === "SUCCEEDED") || onlineImageTasks.value[0]);
-const onlinePreviewImage = computed(() => onlinePreviewTask.value ? aiTaskImageUrl(onlinePreviewTask.value) : "");
+const onlinePreviewImage = computed(() => onlinePreviewTask.value ? aiTaskDisplayImageUrl(onlinePreviewTask.value) : "");
 const imageWorkspaceTitle = computed(() => {
   return "AI Image Playground";
 });
@@ -5339,6 +5396,30 @@ function aiTaskOriginalCacheId(task: AdminRecord) {
   return String(asset?.id || task.id || task.resultUrl || task.outputUrl || task.imageUrl || "");
 }
 
+function isBrowserReachableMediaUrl(url: string) {
+  const value = String(url || "").trim();
+  if (!value) return false;
+  if (value.startsWith("data:") || value.startsWith("blob:") || value.startsWith("/")) return true;
+  try {
+    const parsed = new URL(value, typeof window !== "undefined" ? window.location.origin : "https://local.invalid");
+    const host = parsed.hostname.toLowerCase();
+    if (!host || host === "minio" || host === "localhost" || host === "127.0.0.1" || host.endsWith(".internal") || host.endsWith(".local")) {
+      return false;
+    }
+    // Docker service hostnames (e.g. minio) have no dot and are not browser-reachable.
+    if (!host.includes(".")) return false;
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      const a = Number(ipv4[1]);
+      const b = Number(ipv4[2]);
+      if (a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function aiTaskImageUrl(task: AdminRecord) {
   const directUrl = String(task.outputUrl || task.resultUrl || task.imageUrl || "");
   if (directUrl) return directUrl;
@@ -5372,9 +5453,80 @@ function markAiTaskThumbnailFailed(task: AdminRecord) {
   aiBrokenThumbnailKeys.value = [...aiBrokenThumbnailKeys.value, key];
 }
 
+function aiTaskAssetId(task: AdminRecord) {
+  return String(aiTaskAsset(task)?.id || "");
+}
+
+function aiTaskCanDownload(task: AdminRecord) {
+  return Boolean(aiTaskAssetId(task) || aiTaskImageUrl(task));
+}
+
+function aiTaskSafePlaceholderUrl(task: AdminRecord) {
+  const thumbUrl = aiTaskThumbnailUrl(task);
+  return isBrowserReachableMediaUrl(thumbUrl) ? thumbUrl : "";
+}
+
 function aiTaskDisplayImageUrl(task: AdminRecord) {
   const cacheId = aiTaskOriginalCacheId(task);
-  return (cacheId && aiOriginalImageCache.value[cacheId]) || aiTaskImageUrl(task);
+  const cached = cacheId ? aiOriginalImageCache.value[cacheId] : "";
+  if (cached) return cached;
+  // 有 assetId 时绝不把内网 MinIO 签名 URL 直接塞进 <img src>，优先缩略图占位。
+  if (aiTaskAssetId(task)) return aiTaskSafePlaceholderUrl(task);
+  const fullUrl = aiTaskImageUrl(task);
+  if (isBrowserReachableMediaUrl(fullUrl)) return fullUrl;
+  return aiTaskSafePlaceholderUrl(task);
+}
+
+function isAiDetailShowingPlaceholder(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (cacheId && aiOriginalImageCache.value[cacheId]) return false;
+  const display = aiTaskDisplayImageUrl(task);
+  const direct = aiTaskImageUrl(task);
+  return Boolean(display && display !== direct);
+}
+
+function isAiOriginalImageLoading(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!cacheId || aiOriginalImageCache.value[cacheId]) return false;
+  return aiOriginalImageLoadState.value[cacheId] === "loading" || aiOriginalImageCachePending.has(cacheId);
+}
+
+function aiOriginalImageErrorMessage(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!cacheId || aiOriginalImageCache.value[cacheId]) return "";
+  if (aiOriginalImageLoadState.value[cacheId] !== "error") return "";
+  return aiOriginalImageLoadError.value[cacheId] || "原图加载失败，请稍后重试";
+}
+
+function setAiOriginalImageLoadState(cacheId: string, state: "idle" | "loading" | "ready" | "error", message = "") {
+  if (!cacheId) return;
+  aiOriginalImageLoadState.value = { ...aiOriginalImageLoadState.value, [cacheId]: state };
+  if (state === "error") {
+    aiOriginalImageLoadError.value = { ...aiOriginalImageLoadError.value, [cacheId]: message || "原图加载失败，请稍后重试" };
+    return;
+  }
+  if (aiOriginalImageLoadError.value[cacheId]) {
+    const next = { ...aiOriginalImageLoadError.value };
+    delete next[cacheId];
+    aiOriginalImageLoadError.value = next;
+  }
+}
+
+function handleAiDetailImageError(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!cacheId || aiOriginalImageCache.value[cacheId] || isAiOriginalImageLoading(task)) return;
+  setAiOriginalImageLoadState(cacheId, "error", "图片预览失败，请重试加载原图");
+}
+
+async function retryAiOriginalImageLoad(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (cacheId) {
+    aiOriginalImageCacheWaiters.delete(cacheId);
+    aiOriginalImageCachePending.delete(cacheId);
+    setAiOriginalImageLoadState(cacheId, "loading");
+  }
+  const ok = await ensureAiOriginalImageCached(task, { force: true });
+  if (!ok) ElMessage.error(aiOriginalImageErrorMessage(task) || "原图加载失败");
 }
 
 function aiTaskRawImageUrls(task: AdminRecord) {
@@ -5440,40 +5592,65 @@ function blobToDataUrl(blob: Blob) {
 }
 
 async function fetchAiOriginalImageDataUrl(task: AdminRecord) {
-  const asset = aiTaskAsset(task);
-  const assetId = String(asset?.id || "");
+  const assetId = aiTaskAssetId(task);
   const directUrl = aiTaskImageUrl(task);
+  if (assetId) {
+    const blob = await downloadAssetBlob(assetId);
+    return blobToDataUrl(blob);
+  }
   if (!directUrl) return "";
   if (directUrl.startsWith("data:image/")) return directUrl;
-  let blob: Blob;
-  if (assetId) {
-    blob = await downloadAssetBlob(assetId);
-  } else {
-    blob = await fetchResourceBlob(directUrl, { auth: false });
+  if (!isBrowserReachableMediaUrl(directUrl)) {
+    throw new Error("原图地址浏览器不可达，且缺少可鉴权下载的作品 ID");
   }
+  const blob = await fetchResourceBlob(directUrl, { auth: directUrl.startsWith("/") });
   return blobToDataUrl(blob);
 }
 
-async function ensureAiOriginalImageCached(task: AdminRecord) {
+async function ensureAiOriginalImageCached(task: AdminRecord, options: { force?: boolean } = {}) {
   const cacheId = aiTaskOriginalCacheId(task);
-  if (!cacheId || aiOriginalImageCache.value[cacheId] || aiOriginalImageCachePending.has(cacheId)) return;
-  aiOriginalImageCachePending.add(cacheId);
-  try {
-    const sourceUrl = aiTaskImageUrl(task);
-    const cached = await readCachedOriginalImage(cacheId);
-    if (cached?.dataUrl && cached.version === 2 && cached.sourceUrl === sourceUrl) {
-      aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: cached.dataUrl };
-      return;
-    }
-    const dataUrl = await fetchAiOriginalImageDataUrl(task);
-    if (!dataUrl) return;
-    aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: dataUrl };
-    await writeCachedOriginalImage({ id: cacheId, dataUrl, sourceUrl, version: 2 });
-  } catch (error) {
-    console.warn("AI original image cache skipped", error);
-  } finally {
-    aiOriginalImageCachePending.delete(cacheId);
+  if (!cacheId) return false;
+  if (!options.force && aiOriginalImageCache.value[cacheId]) {
+    setAiOriginalImageLoadState(cacheId, "ready");
+    return true;
   }
+  const existing = aiOriginalImageCacheWaiters.get(cacheId);
+  if (existing && !options.force) return existing;
+
+  const run = (async () => {
+    setAiOriginalImageLoadState(cacheId, "loading");
+    aiOriginalImageCachePending.add(cacheId);
+    try {
+      const sourceUrl = aiTaskImageUrl(task);
+      if (!options.force) {
+        const cached = await readCachedOriginalImage(cacheId);
+        if (cached?.dataUrl && cached.version === 2 && cached.sourceUrl === sourceUrl) {
+          aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: cached.dataUrl };
+          setAiOriginalImageLoadState(cacheId, "ready");
+          return true;
+        }
+      }
+      const dataUrl = await fetchAiOriginalImageDataUrl(task);
+      if (!dataUrl) {
+        setAiOriginalImageLoadState(cacheId, "error", "未获取到原图数据");
+        return false;
+      }
+      aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: dataUrl };
+      setAiOriginalImageLoadState(cacheId, "ready");
+      await writeCachedOriginalImage({ id: cacheId, dataUrl, sourceUrl, version: 2 });
+      return true;
+    } catch (error) {
+      console.warn("AI original image cache skipped", error);
+      setAiOriginalImageLoadState(cacheId, "error", error instanceof Error ? error.message : "原图加载失败，请稍后重试");
+      return false;
+    } finally {
+      aiOriginalImageCachePending.delete(cacheId);
+      aiOriginalImageCacheWaiters.delete(cacheId);
+    }
+  })();
+
+  aiOriginalImageCacheWaiters.set(cacheId, run);
+  return run;
 }
 
 function prefetchAiOriginalImage(task: AdminRecord) {
@@ -6430,10 +6607,11 @@ function normalizeAiImageQuality(value: unknown) {
 
 function previewAiTask(task: AdminRecord) {
   const imageUrl = aiTaskImageUrl(task);
-  if (imageUrl) {
+  const placeholder = aiTaskSafePlaceholderUrl(task);
+  if (imageUrl || placeholder) {
     aiDetailTaskId.value = aiTaskId(task);
-    void ensureAiOriginalImageCached(task);
     closeAiImageContextMenu();
+    void ensureAiOriginalImageCached(task);
     return;
   }
   reuseAiTask(task);
@@ -6445,7 +6623,7 @@ function closeAiDetailModal() {
 }
 
 function openAiDetailImageLightbox(task: AdminRecord) {
-  if (!aiTaskImageUrl(task)) return;
+  if (!aiTaskImageUrl(task) && !aiTaskDisplayImageUrl(task)) return;
   aiLightboxTaskId.value = aiTaskId(task);
   void ensureAiOriginalImageCached(task);
   resetAiLightboxTransform();
@@ -6836,15 +7014,28 @@ async function downloadAiTask(task?: AdminRecord) {
     return;
   }
   const imageUrl = aiTaskImageUrl(target);
-  if (!imageUrl) {
+  const assetId = aiTaskAssetId(target);
+  if (!imageUrl && !assetId) {
     ElMessage.warning("当前任务还没有生成图片");
     return;
   }
   if (!ensureWorkspaceAuth("download_work", "userAiImage", { mediaKind: "image", taskId: aiTaskId(target) })) return;
   const fileName = `ai-image-${aiTaskId(target) || Date.now()}.png`;
   try {
-    const assetId = String(aiTaskAsset(target)?.id || "");
-    await downloadUrl(imageUrl, fileName, assetId);
+    if (assetId) {
+      await downloadUrl(imageUrl || assetId, fileName, assetId);
+    } else {
+      const cached = aiOriginalImageCache.value[aiTaskOriginalCacheId(target)];
+      if (cached?.startsWith("data:")) {
+        await downloadUrl(cached, fileName);
+      } else if (imageUrl && isBrowserReachableMediaUrl(imageUrl)) {
+        await downloadUrl(imageUrl, fileName);
+      } else {
+        const dataUrl = await fetchAiOriginalImageDataUrl(target);
+        if (!dataUrl) throw new Error("未获取到可下载的原图");
+        await downloadUrl(dataUrl, fileName);
+      }
+    }
     ElMessage.success("已开始下载");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "下载失败，请稍后重试");
@@ -7462,9 +7653,25 @@ const canViewEnterpriseManagement = computed(() => {
 });
 function canNavigateToModule(moduleId: string) {
   const permission = modulePermission(moduleId);
-  if (!permission) return true;
-  const role = String(currentAdmin.value?.role || "").toUpperCase();
-  return role === "SUPER_ADMIN" || currentPermissions.value.includes("admin.full") || currentPermissions.value.includes(permission);
+  return canAccessAdminModule({
+    role: String(currentAdmin.value?.role || ""),
+    permissions: currentPermissions.value
+  }, permission);
+}
+function authorizedAdminModuleId(requestedModuleId: string, fallbackModuleId = defaultOpenTabIds[0]) {
+  return resolveAuthorizedAdminModule({
+    requestedModuleId,
+    fallbackModuleId,
+    allowedModuleIds,
+    modulePermissions: {
+      [requestedModuleId]: modulePermission(requestedModuleId),
+      [fallbackModuleId]: modulePermission(fallbackModuleId)
+    },
+    principal: {
+      role: String(currentAdmin.value?.role || ""),
+      permissions: currentPermissions.value
+    }
+  });
 }
 const hasAgentIdentity = computed(() => {
   return currentPermissions.value.some((permission) => String(permission).startsWith("agent:"));
@@ -8067,6 +8274,15 @@ function syncAdminModulePath(moduleId: string) {
   if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = nextPath;
 }
 
+function replaceAdminModulePath(moduleId: string) {
+  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value) return;
+  const enterpriseId = window.location.pathname.match(/^\/admin\/enterprises\/([^/]+)/)?.[1];
+  const nextPath = resolveModulePath(moduleId, { enterpriseId });
+  if (!nextPath || window.location.pathname.replace(/\/$/, "") === nextPath) return;
+  window.history.replaceState({}, "", nextPath);
+  if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = nextPath;
+}
+
 async function navigateEnterpriseRoute(payload: { path: string; moduleId: string }) {
   if (typeof window !== "undefined") {
     const current = `${window.location.pathname}${window.location.search}`;
@@ -8081,9 +8297,17 @@ function handleAdminEnterpriseHistoryPopState() {
   const moduleId = resolveModuleIdFromPath(canonicalUserConsolePath(window.location.pathname));
   if (!moduleId) return;
   if (!allowedModuleIds.includes(moduleId)) return;
-  if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
-  ensureOpenTab(moduleId);
-  void store.selectModule(moduleId);
+  const authorizedModuleId = isUserConsole.value || isAgentConsole.value
+    ? moduleId
+    : authorizedAdminModuleId(moduleId);
+  if (!authorizedModuleId) return;
+  if (authorizedModuleId !== moduleId) {
+    replaceAdminModulePath(authorizedModuleId);
+    ElMessage.warning("当前角色没有访问该模块的权限，已返回可访问页面");
+  } else if (enterpriseModuleIds.includes(moduleId)) {
+    enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
+  }
+  void selectAdminModule(authorizedModuleId);
 }
 
 function initialActiveModuleId() {
@@ -8163,6 +8387,28 @@ function resolveOpenTabs() {
 }
 
 const openTabs = ref(resolveOpenTabs());
+
+function pruneUnauthorizedAdminTabs() {
+  if (isUserConsole.value || isAgentConsole.value) return;
+  openTabs.value = openTabs.value.filter((tab) => allowedModuleIds.includes(tab.id) && canNavigateToModule(tab.id));
+  const fallbackModuleId = authorizedAdminModuleId(store.activeModuleId);
+  if (fallbackModuleId) ensureOpenTab(fallbackModuleId);
+}
+
+function enforceActiveAdminModuleAccess() {
+  if (isUserConsole.value || isAgentConsole.value) return true;
+  const requestedModuleId = store.activeModuleId;
+  const authorizedModuleId = authorizedAdminModuleId(requestedModuleId);
+  if (!authorizedModuleId) return false;
+  pruneUnauthorizedAdminTabs();
+  ensureOpenTab(authorizedModuleId);
+  if (authorizedModuleId !== requestedModuleId) {
+    store.activeModuleId = authorizedModuleId;
+    if (typeof window !== "undefined") window.localStorage.setItem(activeTabStorageKey, authorizedModuleId);
+    replaceAdminModulePath(authorizedModuleId);
+  }
+  return true;
+}
 
 const iconMap = {
   enterpriseList: Goods,
@@ -9761,7 +10007,7 @@ const visibleModuleGroups = computed(() => {
   return adminModuleGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => !item.requiresEnterpriseManagement || canViewEnterpriseManagement.value)
+      items: group.items.filter((item) => (!item.requiresEnterpriseManagement || canViewEnterpriseManagement.value) && canNavigateToModule(item.id))
     }))
     .filter((group) => group.items.length > 0);
 });
@@ -9795,6 +10041,7 @@ function scrollOpenTabs(direction: -1 | 1) {
 
 function ensureOpenTab(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
+  if (!canNavigateToModule(moduleId)) return;
   if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) return;
   if (operationCenterModuleIds.includes(moduleId) && !hasOperationCenterIdentity.value) return;
   const module = modules.find((item) => item.id === moduleId);
@@ -9889,15 +10136,14 @@ function isDefaultTab(moduleId: string) {
 }
 
 async function activateTabAfterPrune(preferredId = store.activeModuleId) {
+  if (!isUserConsole.value && !isAgentConsole.value) pruneUnauthorizedAdminTabs();
   if (!openTabs.value.length) {
-    openTabs.value = modules.filter((item) => defaultOpenTabIds.includes(item.id));
+    openTabs.value = modules.filter((item) => defaultOpenTabIds.includes(item.id) && canNavigateToModule(item.id));
   }
-  const next = openTabs.value.find((item) => item.id === preferredId) || openTabs.value[0];
+  const next = openTabs.value.find((item) => item.id === preferredId && canNavigateToModule(item.id))
+    || openTabs.value.find((item) => canNavigateToModule(item.id));
   if (!next) return;
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(activeTabStorageKey, next.id);
-  }
-  await store.selectModule(next.id);
+  await selectAdminModule(next.id);
 }
 
 async function closeOtherTabs() {
@@ -9942,10 +10188,7 @@ async function closeOpenTab(moduleId: string) {
   openTabs.value = openTabs.value.filter((item) => item.id !== moduleId);
   if (closingActive) {
     const next = openTabs.value[Math.max(0, index - 1)] || openTabs.value[0];
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(activeTabStorageKey, next.id);
-    }
-    await store.selectModule(next.id);
+    if (next) await selectAdminModule(next.id);
   }
 }
 
@@ -10431,6 +10674,11 @@ async function createAIModel() {
 async function editAIModel(row: AdminRecord) {
   const isCreate = !row.id;
   const existingModelType = aiText(row, "model_type", "modelType") || "image";
+  const existingVideoCapabilities = aiObject(row, "video_capabilities", "videoCapabilities");
+  const videoCapabilityBoolean = (key: string, fallback: boolean) =>
+    Object.prototype.hasOwnProperty.call(existingVideoCapabilities, key)
+      ? Boolean(existingVideoCapabilities[key])
+      : fallback;
   const form = {
     modelName: aiText(row, "model_name", "modelName"),
     modelType: existingModelType,
@@ -10454,6 +10702,14 @@ async function editAIModel(row: AdminRecord) {
     miniprogramEnabled: Boolean(aiValue(row, "miniprogram_enabled")),
     complianceRemark: aiText(row, "compliance_remark"),
     modelVersion: aiText(row, "model_version"),
+    videoSupportsTextToVideo: videoCapabilityBoolean("supports_text_to_video", true),
+    videoSupportsImageToVideo: videoCapabilityBoolean("supports_image_to_video", false),
+    videoSupportsFirstFrame: videoCapabilityBoolean("supports_first_frame", false),
+    videoSupportsLastFrame: videoCapabilityBoolean("supports_last_frame", false),
+    videoMaxReferenceImages: String(Number(existingVideoCapabilities.max_reference_images || 0)),
+    videoSupportedDurations: aiList(existingVideoCapabilities, "supported_durations").join(","),
+    videoSupportedResolutions: aiList(existingVideoCapabilities, "supported_resolutions").join(","),
+    videoSupportedAspectRatios: aiList(existingVideoCapabilities, "supported_aspect_ratios").join(","),
     status: String(row.status || "ACTIVE")
   };
   const field = (label: string, key: keyof typeof form, placeholder = "") => h("label", { class: "channel-dialog-field" }, [
@@ -10476,6 +10732,16 @@ async function editAIModel(row: AdminRecord) {
         (form[key] as string) = (event.target as HTMLSelectElement).value;
       }
     }, options.map((option) => h("option", { value: option.value }, option.label)))
+  ]);
+  const checkbox = (label: string, key: keyof typeof form) => h("label", { class: "channel-dialog-check" }, [
+    h("input", {
+      type: "checkbox",
+      checked: Boolean(form[key]),
+      onChange: (event: Event) => {
+        (form[key] as boolean) = (event.target as HTMLInputElement).checked;
+      }
+    }),
+    h("span", null, label)
   ]);
   if (!form.channelId && form.modelName) {
     const matchedChannel = aiChannels.value.find(channel => aiList(channel, "models").some(modelName => modelName.toLowerCase() === form.modelName.toLowerCase()));
@@ -10533,6 +10799,15 @@ async function editAIModel(row: AdminRecord) {
       field("允许能力", "allowedCapabilities", "text,image,video"),
       field("模型版本", "modelVersion"),
       field("合规备注", "complianceRemark"),
+      h("div", { class: "channel-dialog-section-title" }, "视频生成能力（仅视频模型生效）"),
+      checkbox("支持文生视频", "videoSupportsTextToVideo"),
+      checkbox("支持图生视频", "videoSupportsImageToVideo"),
+      checkbox("支持首帧图", "videoSupportsFirstFrame"),
+      checkbox("支持尾帧图", "videoSupportsLastFrame"),
+      field("视频输入图片上限", "videoMaxReferenceImages", "文生视频为 0，首帧为 1，首尾帧为 2"),
+      field("支持时长（秒）", "videoSupportedDurations", "例如 5,10,15"),
+      field("支持分辨率", "videoSupportedResolutions", "例如 720p,1080p"),
+      field("支持画面比例", "videoSupportedAspectRatios", "例如 16:9,9:16,1:1"),
       select("状态", "status", [
         { label: "启用", value: "ACTIVE" },
         { label: "停用", value: "DISABLED" }
@@ -10568,6 +10843,29 @@ async function editAIModel(row: AdminRecord) {
       if (!Number.isFinite(sortWeight) || sortWeight <= 0) {
         ElMessage.error("排序权重必须是大于 0 的数字");
         return;
+      }
+      const isVideoModel = form.moduleCode === "video_generation" || form.modelType === "video";
+      const videoMaxReferenceImages = Number(form.videoMaxReferenceImages);
+      const videoSupportedDurations = uniqueNonEmptyStrings(form.videoSupportedDurations.split(/[,，]/))
+        .map(value => Number(value))
+        .filter(value => Number.isInteger(value) && value > 0);
+      if (isVideoModel) {
+        if (!form.videoSupportsTextToVideo && !form.videoSupportsImageToVideo) {
+          ElMessage.error("视频模型至少需要支持文生视频或图生视频");
+          return;
+        }
+        if (form.videoSupportsImageToVideo && (!form.videoSupportsFirstFrame || videoMaxReferenceImages < 1)) {
+          ElMessage.error("图生视频必须支持首帧图，且视频输入图片上限至少为 1");
+          return;
+        }
+        if (form.videoSupportsLastFrame && (!form.videoSupportsImageToVideo || videoMaxReferenceImages < 2)) {
+          ElMessage.error("尾帧图仅能用于图生视频，且图片上限至少为 2");
+          return;
+        }
+        if (!Number.isInteger(videoMaxReferenceImages) || videoMaxReferenceImages < 0 || videoMaxReferenceImages > 2) {
+          ElMessage.error("视频输入图片上限只能是 0、1 或 2");
+          return;
+        }
       }
       const selectedChannel = aiChannels.value.find(channel => String(channel.id || "") === form.channelId);
       if (selectedChannel && !aiList(selectedChannel, "models").some(item => item.toLowerCase() === modelName.toLowerCase())) {
@@ -10621,7 +10919,17 @@ async function editAIModel(row: AdminRecord) {
           allowed_capabilities: uniqueNonEmptyStrings(form.allowedCapabilities.split(/[,，]/)),
           miniprogram_enabled: form.miniprogramEnabled,
           compliance_remark: form.complianceRemark.trim(),
-          model_version: form.modelVersion.trim()
+          model_version: form.modelVersion.trim(),
+          video_capabilities: isVideoModel ? {
+            supports_text_to_video: form.videoSupportsTextToVideo,
+            supports_image_to_video: form.videoSupportsImageToVideo,
+            supports_first_frame: form.videoSupportsFirstFrame,
+            supports_last_frame: form.videoSupportsLastFrame,
+            max_reference_images: videoMaxReferenceImages,
+            supported_durations: videoSupportedDurations,
+            supported_resolutions: uniqueNonEmptyStrings(form.videoSupportedResolutions.split(/[,，]/)),
+            supported_aspect_ratios: uniqueNonEmptyStrings(form.videoSupportedAspectRatios.split(/[,，]/))
+          } : undefined
         };
         if (isCreate) {
           await store.mutate("POST", "/admin/ai/models", payload);
@@ -12850,18 +13158,88 @@ function apiChannelMutationPayload(channel: AdminRecord) {
   };
 }
 
-function openPlanEditor(row: AdminRecord) {
+async function openPlanEditor(row: AdminRecord) {
+  if (planEditorSaving.value) {
+    ElMessage.warning("套餐配置正在保存，请等待当前操作完成");
+    return;
+  }
+  const planId = String(row.id || "").trim();
   editingPlan.value = { ...row };
   planEditorOpen.value = true;
+  await checkPlanEditorGate(planId);
+}
+
+async function checkPlanEditorGate(planId: string) {
+  planEditorGate.value = { status: "CHECKING", planId, message: "正在确认套餐是否由 V2 配置托管。" };
+  const requestSequence = ++planEditorGateSequence;
+  const gate = await resolveLegacyPlanEditorGate(planId, async (lookupPlanId) => {
+    const pricingAdminStore = await loadPricePlanAdminStore();
+    return { item: await pricingAdminStore.loadBusinessPlan(lookupPlanId) };
+  });
+  if (requestSequence !== planEditorGateSequence) return;
+  planEditorGate.value = gate;
+}
+
+function retryPlanEditorGate() {
+  const planId = String(editingPlan.value?.id || "").trim();
+  if (planId) void checkPlanEditorGate(planId);
+}
+
+async function goToManagedPlanGovernance() {
+  const target = managedPlanHandoff(planEditorGate.value);
+  if (!target) return;
+  const pricingAdminStore = await loadPricePlanAdminStore();
+  const currentTarget = managedPlanHandoff(planEditorGate.value);
+  if (!currentTarget || currentTarget.planId !== target.planId || currentTarget.moduleId !== target.moduleId) return;
+  pricingAdminStore.setSelection(target.planId);
+  planEditorOpen.value = false;
+  editingPlan.value = null;
+  await selectAdminModule(target.moduleId);
 }
 
 async function savePlanConfiguration(payload: AdminRecord) {
+  if (planEditorSaving.value) return;
   const planId = String(editingPlan.value?.id || "");
   if (!planId) {
     ElMessage.error("套餐 ID 不存在");
     return;
   }
+  if (!legacyPlanEditorAllowsIO(planEditorGate.value.status) || planEditorGate.value.planId !== planId) {
+    planEditorOpen.value = false;
+    planEditorGate.value = {
+      status: "BLOCKED",
+      planId,
+      message: "套餐托管状态未通过安全检查，旧编辑器已阻止保存。"
+    };
+    planEditorOpen.value = true;
+    ElMessage.error("套餐托管状态未通过安全检查，已阻止保存");
+    return;
+  }
+  const saveSequence = ++planEditorSaveSequence;
+  planEditorSaving.value = true;
   try {
+    const openedGate = planEditorGate.value;
+    planEditorGate.value = { status: "CHECKING", planId, message: "保存前正在重新确认套餐托管状态。" };
+    const verifiedGate = await revalidateLegacyPlanEditorForSave(openedGate, planId, async (lookupPlanId) => {
+      const pricingAdminStore = await loadPricePlanAdminStore();
+      return { item: await pricingAdminStore.loadBusinessPlan(lookupPlanId) };
+    });
+    if (saveSequence !== planEditorSaveSequence || !planEditorOpen.value || String(editingPlan.value?.id || "") !== planId) return;
+    planEditorGate.value = verifiedGate;
+    if (!legacyPlanEditorAllowsIO(verifiedGate.status) || verifiedGate.planId !== planId) {
+      ElMessage.error(verifiedGate.status === "MANAGED"
+        ? "该套餐已转为 V2 托管，旧编辑器已阻止保存"
+        : "无法确认套餐托管状态，旧编辑器已阻止保存");
+      return;
+    }
+    if (!legacyPlanSaveContextIsCurrent({
+      saveSequence,
+      currentSequence: planEditorSaveSequence,
+      dialogOpen: planEditorOpen.value,
+      expectedPlanId: planId,
+      currentPlanId: String(editingPlan.value?.id || ""),
+      gate: planEditorGate.value
+    })) return;
     const planPayload = payload.plan && typeof payload.plan === "object" ? payload.plan as AdminRecord : payload;
     const capabilitiesPayload = payload.capabilities && typeof payload.capabilities === "object"
       ? payload.capabilities as AdminRecord
@@ -12872,7 +13250,11 @@ async function savePlanConfiguration(payload: AdminRecord) {
     editingPlan.value = null;
     ElMessage.success("套餐配置已保存并立即生效");
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "套餐保存失败");
+    if (saveSequence === planEditorSaveSequence) {
+      ElMessage.error(error instanceof Error ? error.message : "套餐保存失败");
+    }
+  } finally {
+    if (saveSequence === planEditorSaveSequence) planEditorSaving.value = false;
   }
 }
 
@@ -12925,7 +13307,7 @@ async function runAction(action: string, row: AdminRecord = {}) {
       const name = await ask("产品名称", String(row.name || ""));
       await store.mutate("PATCH", `/admin/products/${row.id}`, { name, type: row.type, status, entitlements: Array.isArray(row.entitlements) ? row.entitlements : [] });
     } else if (action === "editPlan") {
-      openPlanEditor(row);
+      await openPlanEditor(row);
       return;
     } else if (action === "createOrder") {
       const userId = await ask("客户 userId", "user_000002");
@@ -13312,13 +13694,19 @@ async function loadCurrentAdmin() {
       return false;
     }
     const platformAdminRoles = ["SUPER_ADMIN", "ENTERPRISE_OPERATOR", "CERTIFICATION_REVIEWER", "FINANCE", "RISK_MANAGER", "CUSTOMER_SERVICE"];
-    const isPlatformAdmin = role.includes("ADMIN") || platformAdminRoles.includes(role) || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:"));
+    const isPlatformAdmin = role.includes("ADMIN")
+      || platformAdminRoles.includes(role)
+      || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:") || String(permission).startsWith("pricing:"));
     if (!isAgentConsole.value && !isUserConsole.value && !isPlatformAdmin && !role.startsWith("AGENT")) {
       window.location.href = "/";
       return false;
     }
     if (!isAgentConsole.value && !isUserConsole.value && role.startsWith("AGENT")) {
       window.location.href = "/agent/";
+      return false;
+    }
+    if (!enforceActiveAdminModuleAccess()) {
+      ElMessage.error("当前账号没有可访问的后台模块");
       return false;
     }
     authReady.value = true;
@@ -13466,6 +13854,7 @@ onMounted(async () => {
       const routeModuleId = moduleIdFromLocationPath();
       const savedActiveTab = window.localStorage.getItem(activeTabStorageKey);
       const canUseModule = (moduleId: string) => allowedModuleIds.includes(moduleId)
+        && canNavigateToModule(moduleId)
         && (!isGuestUser.value || guestVisibleModuleIds.has(moduleId))
         && (!agentModuleIds.includes(moduleId) || hasAgentIdentity.value)
         && (!operationCenterModuleIds.includes(moduleId) || hasOperationCenterIdentity.value);
