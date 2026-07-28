@@ -13172,7 +13172,7 @@ async function openPlanEditor(row: AdminRecord) {
 async function checkPlanEditorGate(planId: string) {
   planEditorGate.value = { status: "CHECKING", planId, message: "正在确认套餐是否由 V2 配置托管。" };
   const requestSequence = ++planEditorGateSequence;
-  const gate = await resolveLegacyPlanEditorGate(planId, async (lookupPlanId) => {
+  const gate = await resolveLegacyPlanEditorGate(planId, async (lookupPlanId: string) => {
     const pricingAdminStore = await loadPricePlanAdminStore();
     return { item: await pricingAdminStore.loadBusinessPlan(lookupPlanId) };
   });
@@ -13220,7 +13220,7 @@ async function savePlanConfiguration(payload: AdminRecord) {
   try {
     const openedGate = planEditorGate.value;
     planEditorGate.value = { status: "CHECKING", planId, message: "保存前正在重新确认套餐托管状态。" };
-    const verifiedGate = await revalidateLegacyPlanEditorForSave(openedGate, planId, async (lookupPlanId) => {
+    const verifiedGate = await revalidateLegacyPlanEditorForSave(openedGate, planId, async (lookupPlanId: string) => {
       const pricingAdminStore = await loadPricePlanAdminStore();
       return { item: await pricingAdminStore.loadBusinessPlan(lookupPlanId) };
     });

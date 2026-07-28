@@ -110,6 +110,7 @@ export const adminModules: AdminModule[] = [
   { id: "operationCenters", title: "运营中心", endpoint: "/admin/operation-centers", path: "/admin/channels/operation-centers" },
   { id: "products", title: "产品目录", endpoint: "/admin/products", path: "/admin/catalog/products" },
   { id: "plans", title: "套餐权益", endpoint: "/admin/plans", path: "/admin/catalog/plans" },
+  { id: "pricePlanGovernance", title: "套餐与价格配置", endpoint: "", path: "/admin/catalog/price-plans", permission: "pricing:plan:view" },
   { id: "orders", title: "订单中心", endpoint: "/admin/orders", path: "/admin/orders" },
   { id: "usage", title: "用量中心", endpoint: "/admin/usage", path: "/admin/usage" },
   { id: "tokenRecords", title: "Token 流水", endpoint: "/admin/token-records", path: "/admin/usage/token-records" },

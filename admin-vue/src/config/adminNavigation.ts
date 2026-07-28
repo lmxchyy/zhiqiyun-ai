@@ -42,6 +42,7 @@ export const adminNavigationGroups: AdminNavigationGroup[] = [
   ] },
   { id: "products-billing", title: "商品与计费", icon: "commercial", sections: [
     { id: "catalog", title: "商品与权益", primaryModuleId: "products", moduleIds: ["products", "plans", "billingProducts", "billingSubscriptions"] },
+    { id: "price-plan-governance", title: "套餐与价格配置", primaryModuleId: "pricePlanGovernance", moduleIds: ["pricePlanGovernance"] },
     { id: "orders-payments", title: "订单与支付", primaryModuleId: "orders", moduleIds: ["orders", "billingPaymentRequests", "billingPayments", "billingInvoices", "billingCreditNotes"] },
     { id: "pricing-costs", title: "定价与成本", primaryModuleId: "billingRules", moduleIds: ["billingRules", "billingProviderCosts"] },
     { id: "accounting", title: "账务与对账", primaryModuleId: "billingOverview", moduleIds: ["billingOverview", "billingEvents", "billingReconciliation", "billingWalletLedger", "billingCustomers", "usage", "tokenRecords"] },
