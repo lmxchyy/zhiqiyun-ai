@@ -18,7 +18,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 python3 - <<'PY' "$@"
-import hashlib, hmac, json, os, ssl, sys, time, urllib.parse, urllib.request, subprocess
+import hashlib, hmac, json, os, ssl, sys, time, urllib.error, urllib.parse, urllib.request, subprocess
 
 APP_C = os.environ.get("APP_C", "zhiqiyun-ai-prod-xianzhi-ai-1")
 PG_C = os.environ.get("PG_C", "zhiqiyun-ai-prod-postgres-1")
@@ -26,18 +26,18 @@ EVID_DIR = os.environ.get("EVID_DIR", "/tmp/deliver-notify-oneshot")
 URI = "/xpay/notify_provide_goods"
 orders = [o.strip() for o in sys.argv[1:] if o.strip()]
 
-def docker_env(name: str) -> str:
-    out = subprocess.check_output(["docker", "exec", APP_C, "printenv", name], text=True).strip()
+def docker_env(name):
+    out = subprocess.check_output(["docker", "exec", APP_C, "printenv", name], universal_newlines=True).strip()
     if not out:
-        raise SystemExit(f"missing env {name} in {APP_C}")
+        raise SystemExit("missing env %s in %s" % (name, APP_C))
     return out
 
-def pg_query(sql: str) -> str:
-    db = subprocess.check_output(["docker", "exec", PG_C, "printenv", "POSTGRES_DB"], text=True).strip()
-    user = subprocess.check_output(["docker", "exec", PG_C, "printenv", "POSTGRES_USER"], text=True).strip()
+def pg_query(sql):
+    db = subprocess.check_output(["docker", "exec", PG_C, "printenv", "POSTGRES_DB"], universal_newlines=True).strip()
+    user = subprocess.check_output(["docker", "exec", PG_C, "printenv", "POSTGRES_USER"], universal_newlines=True).strip()
     return subprocess.check_output(
         ["docker", "exec", "-i", PG_C, "psql", "-U", user, "-d", db, "-At", "-F", "|", "-c", sql],
-        text=True,
+        universal_newlines=True,
     ).strip()
 
 appid = docker_env("WECHAT_MINI_PROGRAM_APPID")
