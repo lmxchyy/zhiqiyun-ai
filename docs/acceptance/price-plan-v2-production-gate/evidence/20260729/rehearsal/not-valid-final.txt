@@ -1,0 +1,8 @@
+      table_name       |                conname                 | convalidated 
+-----------------------+----------------------------------------+--------------
+ xz_orders             | fk_xz_orders_plan_version_097          | f
+ xz_orders             | fk_xz_orders_price_plan_097            | f
+ xz_orders             | fk_xz_orders_price_quote_097           | f
+ xz_order_price_quotes | fk_xz_order_price_quotes_whitelist_100 | f
+(4 rows)
+

@@ -1,0 +1,8 @@
+source-*/
+*.tar
+rehearsal/restore.log
+rehearsal/restore-second.log
+rehearsal/migrate.log
+rehearsal/validate.log
+rehearsal/validate2.log
+rehearsal/validate-fk.log

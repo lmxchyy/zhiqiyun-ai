@@ -1,0 +1,23 @@
+           conrelid           |                  conname                   | contype | convalidated 
+------------------------------+--------------------------------------------+---------+--------------
+ xz_audit_logs                | ck_xz_audit_logs_pricing_required_100      | c       | t
+ xz_audit_logs                | ck_xz_audit_logs_pricing_result_100        | c       | t
+ xz_orders                    | ck_xz_orders_snapshot_v2_097               | c       | t
+ xz_orders                    | fk_xz_orders_plan_version_097              | f       | t
+ xz_orders                    | fk_xz_orders_price_plan_097                | f       | t
+ xz_orders                    | fk_xz_orders_price_quote_097               | f       | t
+ xz_price_plans               | ck_xz_price_plans_audience_099             | c       | t
+ xz_price_plans               | ck_xz_price_plans_audience_rule_099        | c       | t
+ xz_price_plans               | ck_xz_price_plans_code_format_099          | c       | t
+ xz_price_plans               | ck_xz_price_plans_currency_099             | c       | t
+ xz_price_plans               | ck_xz_price_plans_default_state_099        | c       | t
+ xz_price_plans               | ck_xz_price_plans_test_scope_099           | c       | t
+ xz_wechat_virtual_goods      | ck_xz_wechat_goods_manual_confirmation_098 | c       | t
+ xz_wechat_virtual_goods      | ck_xz_wechat_goods_verification_expiry_098 | c       | t
+ xz_wechat_virtual_goods      | ck_xz_wechat_goods_verification_status_098 | c       | t
+ xz_price_plan_user_whitelist | ck_xz_price_plan_whitelist_enabled_100     | c       | t
+ xz_price_plan_user_whitelist | ck_xz_price_plan_whitelist_lifecycle_100   | c       | t
+ xz_order_price_quotes        | ck_xz_order_price_quotes_whitelist_pin_100 | c       | t
+ xz_order_price_quotes        | fk_xz_order_price_quotes_whitelist_100     | f       | t
+(19 rows)
+

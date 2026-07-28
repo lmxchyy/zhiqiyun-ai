@@ -1,0 +1,52 @@
+{
+  "filledAt": "2026-07-29T04:10:00+08:00",
+  "filledBy": "release-owner+DBA (delegated to Codex by user)",
+  "status": "NO-GO",
+  "notes": "Materials freeze + DBA preflight + isolated rehearsal completed. Missing registry RepoDigest and WeChat/QA gates. V2 switches remain false. No production migration applied.",
+  "releaseCommit": "e8f191805ca1d6c9a4b214ee91312aeb796c0b10",
+  "releaseTree": "c0bf56a2ddc51dd2c77e4918b157e1ab15178db2",
+  "branch": "codex/channel-ecosystem-v132-phase3",
+  "imageRef": null,
+  "imageId": null,
+  "repoDigest": null,
+  "migrations": [
+    {
+      "file": "database/migrations/097-member-agent-price-plan-v2.sql",
+      "sha256": "784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7"
+    },
+    {
+      "file": "database/migrations/098-price-plan-admin-governance.sql",
+      "sha256": "AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2"
+    },
+    {
+      "file": "database/migrations/099-price-plan-default-switch.sql",
+      "sha256": "1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9"
+    },
+    {
+      "file": "database/migrations/100-price-plan-test-whitelist-audit.sql",
+      "sha256": "8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649"
+    }
+  ],
+  "dbaPreflight": {
+    "log": "evidence/20260729/dba-preflight.log",
+    "sha256": "256ff4b463cada4defff50bb0eb07bdafa4b93c30233f6e8d5015a14b6b98433",
+    "transactionReadOnly": "on",
+    "v132BlockerRows": 0,
+    "schemaBlockerRows": 0,
+    "conclusion": "PASS"
+  },
+  "rehearsal": {
+    "backup": "/opt/zhiqiyun-ai/backups/postgres/db_2026-07-25_231939.sql",
+    "backupSha256": "eb768b008896911f40d91a7d32afcb84143869d5eab881df7f8e5257252d3abe",
+    "engine": "pgvector/pgvector:pg16 container priceplan-rehearsal-pg",
+    "database": "zhiqiyun_rehearsal_202607290400",
+    "restoreSec": 10,
+    "restoreAclErrors": 275,
+    "migrateSec": { "097": "<1", "098": "<1", "099": "<1", "100": "<1" },
+    "baselineBefore": { "orders": 47, "plans": 24, "amountSum": 3285592 },
+    "baselineAfter": { "orders": 47, "plans": 24, "amountSum": 3285592, "pricePlans": 0, "goods": 0 },
+    "notValidRemaining": 0,
+    "secondRestoreSec": 10,
+    "conclusion": "PASS"
+  }
+}
