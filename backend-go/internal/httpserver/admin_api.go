@@ -780,7 +780,7 @@ func (a adminAPI) updatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	plan, err := a.store.UpdateAdminPlan(r.PathValue("id"), req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeBusinessPlanAdminError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": plan})
@@ -813,7 +813,7 @@ func (a adminAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := a.store.CreateAdminOrder(req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeAdminOrderMutationError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": order})
@@ -848,10 +848,19 @@ func (a adminAPI) markOrderPaid(w http.ResponseWriter, r *http.Request) {
 func (a adminAPI) renewOrder(w http.ResponseWriter, r *http.Request) {
 	order, err := a.store.RenewAdminOrder(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeAdminOrderMutationError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": order})
+}
+
+func writeAdminOrderMutationError(w http.ResponseWriter, err error) {
+	var businessErr *businessPlanAdminError
+	if errors.As(err, &businessErr) {
+		writeBusinessPlanAdminError(w, businessErr)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err)
 }
 
 func (a adminAPI) deliveryProjects(w http.ResponseWriter, _ *http.Request) {

@@ -2865,6 +2865,9 @@ func (s *jsonStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIModel, 
 		if len(created.CapabilityCode) == 0 {
 			created.CapabilityCode = defaultAICapabilitiesForModule(moduleCode)
 		}
+		if err := applyAIModelVideoCapabilitiesMutation(&created, req); err != nil {
+			return err
+		}
 		data.AIModels = append(data.AIModels, created)
 		bindAIModelToModule(data, moduleCode, modelName)
 		return nil
@@ -2918,6 +2921,9 @@ func (s *jsonStore) UpdateAdminAIModel(id string, req adminAIModelMutation) (adm
 			}
 			if req.AllowFallbackSwitch != nil {
 				data.AIModels[i].AllowFallbackSwitch = *req.AllowFallbackSwitch
+			}
+			if err := applyAIModelVideoCapabilitiesMutation(&data.AIModels[i], req); err != nil {
+				return err
 			}
 			applyAIModelComplianceMutation(&data.AIModels[i], req)
 			if err := validateAIModelMiniProgramEnable(data.AIModels[i]); err != nil {

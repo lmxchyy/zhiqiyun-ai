@@ -511,12 +511,13 @@ type adminPlanMutation struct {
 }
 
 type adminOrderMutation struct {
-	UserID         string `json:"userId"`
-	PlanID         string `json:"planId"`
-	AmountCents    int    `json:"amountCents"`
-	Status         string `json:"status"`
-	PaymentMethod  string `json:"paymentMethod"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	UserID             string `json:"userId"`
+	PlanID             string `json:"planId"`
+	AmountCents        int    `json:"amountCents"`
+	Status             string `json:"status"`
+	PaymentMethod      string `json:"paymentMethod"`
+	IdempotencyKey     string `json:"idempotencyKey"`
+	PaymentEnvironment string `json:"-"`
 }
 
 type adminDeliveryMutation struct {
@@ -646,7 +647,22 @@ type adminAIModel struct {
 	MiniProgramEnabled       bool     `json:"miniprogram_enabled"`
 	ComplianceRemark         string   `json:"compliance_remark,omitempty"`
 	ModelVersion             string   `json:"model_version,omitempty"`
+
+	VideoCapabilities *videoCaps `json:"video_capabilities,omitempty"`
 }
+
+type adminVideoModelCapabilities struct {
+	SupportsTextToVideo   bool     `json:"supports_text_to_video"`
+	SupportsImageToVideo  bool     `json:"supports_image_to_video"`
+	SupportsFirstFrame    bool     `json:"supports_first_frame"`
+	SupportsLastFrame     bool     `json:"supports_last_frame"`
+	MaxReferenceImages    int      `json:"max_reference_images"`
+	SupportedDurations    []int    `json:"supported_durations,omitempty"`
+	SupportedResolutions  []string `json:"supported_resolutions,omitempty"`
+	SupportedAspectRatios []string `json:"supported_aspect_ratios,omitempty"`
+}
+
+type videoCaps = adminVideoModelCapabilities
 
 type adminAIParameterField struct {
 	Key          string   `json:"key"`
@@ -736,6 +752,8 @@ type adminAIModelMutation struct {
 	MiniProgramEnabled  *bool    `json:"miniprogram_enabled"`
 	ComplianceRemark    string   `json:"compliance_remark"`
 	ModelVersion        string   `json:"model_version"`
+
+	VideoCapabilities *videoCaps `json:"video_capabilities"`
 }
 
 type adminAIParameterSchemaMutation struct {

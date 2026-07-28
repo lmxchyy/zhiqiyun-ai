@@ -92,19 +92,19 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	if len(p.models) > 0 && !containsString(p.models, model) {
 		return nil, fmt.Errorf("video provider %s does not support model %s", p.providerCode(), model)
 	}
-	if p.shouldUseSeedanceBridge(model) {
-		return p.createWithSeedanceBridge(ctx, model, req)
-	}
 	imageURLs := referenceImageURLs(req.Params)
-	body := videoRequestBodyForEndpoint(model, req, p.endpoint, imageURLs)
 	if isGrokVideo15Model(model) {
 		if len(imageURLs) == 0 {
 			return nil, errors.New("Grok Video 1.5 requires exactly one reference image")
 		}
 		if len(imageURLs) > 1 {
-			imageURLs = imageURLs[:1]
+			return nil, errors.New("Grok Video 1.5 supports exactly one reference image")
 		}
 	}
+	if p.shouldUseSeedanceBridge(model) {
+		return p.createWithSeedanceBridge(ctx, model, req)
+	}
+	body := videoRequestBodyForEndpoint(model, req, p.endpoint, imageURLs)
 	if len(imageURLs) > 0 && !useSeedanceContentTaskProtocol(p.endpoint) {
 		body["image_urls"] = imageURLs
 		if len(imageURLs) == 1 {
@@ -197,9 +197,10 @@ func videoRequestBody(model string, req generation.CreateRequest) map[string]any
 
 func videoRequestBodyForEndpoint(model string, req generation.CreateRequest, endpoint string, imageURLs []string) map[string]any {
 	if isDoubaoSeedance2Model(model) && useSeedanceContentTaskProtocol(endpoint) {
+		firstFrame, lastFrame := videoFrameURLs(req.Params, imageURLs)
 		return map[string]any{
 			"model":             model,
-			"content":           seedanceContentItems(req.Prompt, imageURLs),
+			"content":           seedanceContentItems(req.Prompt, firstFrame, lastFrame),
 			"ratio":             videoAspectRatio(req.Params),
 			"duration":          videoSeconds(req.Params),
 			"resolution":        videoResolution(req.Params),
@@ -211,16 +212,19 @@ func videoRequestBodyForEndpoint(model string, req generation.CreateRequest, end
 	return videoRequestBody(model, req)
 }
 
-func seedanceContentItems(prompt string, imageURLs []string) []map[string]any {
+func seedanceContentItems(prompt string, firstFrame string, lastFrame string) []map[string]any {
 	items := []map[string]any{{"type": "text", "text": prompt}}
-	for _, imageURL := range imageURLs {
-		if strings.TrimSpace(imageURL) == "" {
+	for _, frame := range []struct {
+		url  string
+		role string
+	}{{firstFrame, "first_frame"}, {lastFrame, "last_frame"}} {
+		if strings.TrimSpace(frame.url) == "" {
 			continue
 		}
 		items = append(items, map[string]any{
 			"type":      "image_url",
-			"image_url": map[string]any{"url": imageURL},
-			"role":      "reference_image",
+			"image_url": map[string]any{"url": frame.url},
+			"role":      frame.role,
 		})
 	}
 	return items
@@ -291,6 +295,8 @@ func (p OpenAICompatible) createWithSeedanceBridge(ctx context.Context, model st
 		"prompt":         req.Prompt,
 		"params":         req.Params,
 		"imageUrls":      referenceImageURLs(req.Params),
+		"firstFrame":     imageURLFromValue(req.Params["first_frame"]),
+		"lastFrame":      imageURLFromValue(req.Params["last_frame"]),
 		"outputDir":      outputDir,
 		"publicURLBase":  publicURLBase,
 		"timeoutSeconds": seedanceBridgeTimeoutSeconds(p.timeoutMS),
@@ -640,17 +646,13 @@ func videoGenerateAudio(params map[string]any) bool {
 
 func referenceImageURLs(params map[string]any) []string {
 	result := []string{}
-	for _, key := range []string{"imageUrl", "image_url", "inputImageUrl", "input_image_url"} {
+	for _, key := range []string{"first_frame", "last_frame", "imageUrl", "image_url", "inputImageUrl", "input_image_url"} {
 		if value := strings.TrimSpace(fmt.Sprint(params[key])); value != "" && value != "<nil>" {
 			result = appendIfMissing(result, value)
 		}
 	}
 	for _, key := range []string{"image_urls", "referenceImages", "reference_images", "inputImages", "inputImagesSnapshot"} {
-		items, ok := params[key].([]any)
-		if !ok || len(items) == 0 {
-			continue
-		}
-		for _, item := range items {
+		for _, item := range imageListValues(params[key]) {
 			if value := imageURLFromValue(item); value != "" {
 				result = appendIfMissing(result, value)
 			}
@@ -662,6 +664,33 @@ func referenceImageURLs(params map[string]any) []string {
 		}
 	}
 	return result
+}
+
+func videoFrameURLs(params map[string]any, imageURLs []string) (string, string) {
+	firstFrame := imageURLFromValue(params["first_frame"])
+	lastFrame := imageURLFromValue(params["last_frame"])
+	if firstFrame == "" && len(imageURLs) > 0 {
+		firstFrame = imageURLs[0]
+	}
+	if lastFrame == "" && len(imageURLs) > 1 {
+		lastFrame = imageURLs[1]
+	}
+	return firstFrame, lastFrame
+}
+
+func imageListValues(value any) []any {
+	switch typed := value.(type) {
+	case []any:
+		return typed
+	case []string:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, item)
+		}
+		return result
+	default:
+		return nil
+	}
 }
 
 func imageURLFromValue(value any) string {

@@ -7,24 +7,68 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 )
 
 type lockedVirtualOrder struct {
-	ID                string
-	OrderNo           string
-	TenantID          string
-	UserID            string
-	PlanID            string
-	ProductCode       string
-	ProductName       string
-	ProductType       string
-	AmountCents       int64
-	Status            string
-	EntitlementStatus string
-	WeChatOpenIDHash  string
-	Snapshot          virtualOrderSnapshot
+	ID                          string
+	OrderNo                     string
+	TenantID                    string
+	UserID                      string
+	PlanID                      string
+	ProductCode                 string
+	ProductName                 string
+	ProductType                 string
+	AmountCents                 int64
+	Status                      string
+	EntitlementStatus           string
+	WeChatOpenIDHash            string
+	StoredSnapshotVersion       int
+	StoredPlanVersionID         string
+	StoredPricePlanID           string
+	StoredTransactionPriceCents int64
+	StoredWeChatProductID       string
+	StoredWeChatGoodsPriceCents int64
+	StoredCurrency              string
+	StoredPaymentChannel        string
+	StoredPaymentEnvironment    string
+	StoredRights                map[string]any
+	StoredCommissionRuleVersion string
+	StoredCommissionSnapshot    map[string]any
+	Snapshot                    virtualOrderSnapshot
+}
+
+func (order lockedVirtualOrder) isV2() bool {
+	return order.StoredSnapshotVersion == 2
+}
+
+func validateLockedVirtualOrderSnapshot(order lockedVirtualOrder) error {
+	if !order.isV2() {
+		if order.Snapshot.SnapshotVersion == 2 {
+			return fmt.Errorf("%w: JSON snapshotVersion does not match the database order version", errVirtualPaymentMismatch)
+		}
+		return nil
+	}
+	if order.Snapshot.SnapshotVersion != 2 {
+		return fmt.Errorf("%w: database V2 order is missing its V2 JSON snapshot", errVirtualPaymentMismatch)
+	}
+	if err := validateV2MemberAgentSnapshot(order.Snapshot, order.AmountCents); err != nil {
+		return err
+	}
+	if order.PlanID != order.Snapshot.PlanID || order.StoredPlanVersionID != order.Snapshot.PlanVersionID ||
+		order.StoredPricePlanID != order.Snapshot.PricePlanID || order.StoredTransactionPriceCents != order.Snapshot.TransactionPriceCents ||
+		order.StoredWeChatProductID != order.Snapshot.WeChatProductID || order.StoredWeChatGoodsPriceCents != order.Snapshot.WeChatGoodsPriceCents ||
+		!strings.EqualFold(order.StoredCurrency, order.Snapshot.Currency) ||
+		!strings.EqualFold(order.StoredPaymentChannel, order.Snapshot.PaymentChannel) ||
+		!strings.EqualFold(order.StoredPaymentEnvironment, order.Snapshot.PaymentEnvironment) ||
+		!reflect.DeepEqual(order.StoredRights, order.Snapshot.Rights) ||
+		order.StoredCommissionRuleVersion != order.Snapshot.CommissionRuleVersion ||
+		!reflect.DeepEqual(order.StoredCommissionSnapshot, order.Snapshot.CommissionSnapshotV2) {
+		return fmt.Errorf("%w: V2 JSON snapshot does not match normalized order columns", errVirtualPaymentMismatch)
+	}
+	return nil
 }
 
 func (s *virtualPaymentService) confirmPaidAndGrant(ctx context.Context, notification virtualPayNotification) error {
@@ -175,17 +219,26 @@ func validateVirtualPaymentConfirmation(order lockedVirtualOrder, notification v
 
 func virtualOrderForUpdate(ctx context.Context, tx *sql.Tx, orderNo string) (lockedVirtualOrder, error) {
 	var order lockedVirtualOrder
-	var snapshot []byte
+	var snapshot, storedRights, storedCommission []byte
 	err := tx.QueryRowContext(ctx, `
 		select id, order_no, tenant_id, user_id, plan_id, product_code, product_name, product_type,
-		       amount_cents, status, entitlement_status, coalesce(wechat_openid_hash, ''), price_snapshot
+		       amount_cents, status, entitlement_status, coalesce(wechat_openid_hash, ''), price_snapshot,
+		       coalesce(snapshot_version,0),coalesce(plan_version_id,''),coalesce(price_plan_id,''),
+		       coalesce(transaction_price_cents,0),coalesce(wechat_product_id_snapshot,''),
+		       coalesce(wechat_goods_price_cents,0),coalesce(currency,'CNY'),coalesce(payment_channel,''),
+		       coalesce(payment_environment,''),coalesce(rights_snapshot,'{}'::jsonb),
+		       coalesce(commission_rule_version_snapshot,''),coalesce(commission_snapshot_v2,'{}'::jsonb)
 		from xz_orders
 		where order_no = $1 and payment_channel = $2
 		for update
 	`, strings.TrimSpace(orderNo), virtualPaymentChannel).Scan(
 		&order.ID, &order.OrderNo, &order.TenantID, &order.UserID, &order.PlanID, &order.ProductCode,
 		&order.ProductName, &order.ProductType, &order.AmountCents, &order.Status,
-		&order.EntitlementStatus, &order.WeChatOpenIDHash, &snapshot,
+		&order.EntitlementStatus, &order.WeChatOpenIDHash, &snapshot, &order.StoredSnapshotVersion,
+		&order.StoredPlanVersionID, &order.StoredPricePlanID, &order.StoredTransactionPriceCents,
+		&order.StoredWeChatProductID, &order.StoredWeChatGoodsPriceCents, &order.StoredCurrency,
+		&order.StoredPaymentChannel, &order.StoredPaymentEnvironment, &storedRights,
+		&order.StoredCommissionRuleVersion, &storedCommission,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return lockedVirtualOrder{}, errVirtualOrderNotFound
@@ -194,6 +247,15 @@ func virtualOrderForUpdate(ctx context.Context, tx *sql.Tx, orderNo string) (loc
 		return lockedVirtualOrder{}, err
 	}
 	if err := json.Unmarshal(snapshot, &order.Snapshot); err != nil {
+		return lockedVirtualOrder{}, err
+	}
+	if err := json.Unmarshal(storedRights, &order.StoredRights); err != nil {
+		return lockedVirtualOrder{}, err
+	}
+	if err := json.Unmarshal(storedCommission, &order.StoredCommissionSnapshot); err != nil {
+		return lockedVirtualOrder{}, err
+	}
+	if err := validateLockedVirtualOrderSnapshot(order); err != nil {
 		return lockedVirtualOrder{}, err
 	}
 	return order, nil
@@ -282,9 +344,23 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 	if order.AmountCents <= 0 || order.AmountCents > math.MaxInt || order.Snapshot.CreditUnits <= 0 || order.Snapshot.CreditUnits > math.MaxInt {
 		return errors.New("virtual commerce amount or token grant is invalid")
 	}
-	plan, ok := planCatalogByID(order.PlanID)
-	if !ok {
-		return fmt.Errorf("virtual commerce plan not found: %s", order.PlanID)
+	isV2 := order.isV2()
+	var plan adminPlan
+	if isV2 {
+		if !s.cfg.SnapshotV2FulfillmentEnabled {
+			return errors.New("V2 member/agent fulfillment is disabled")
+		}
+		var err error
+		plan, err = planForV2Snapshot(order.Snapshot)
+		if err != nil {
+			return err
+		}
+	} else {
+		var ok bool
+		plan, ok = planCatalogByID(order.PlanID)
+		if !ok {
+			return fmt.Errorf("virtual commerce plan not found: %s", order.PlanID)
+		}
 	}
 	planType := planBusinessType(plan)
 	productType := strings.ToUpper(strings.TrimSpace(order.Snapshot.ProductType))
@@ -370,6 +446,9 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 		"operationCenterId":          order.Snapshot.OperationCenterID,
 		"commissionRules":            order.Snapshot.CommissionRules,
 	}
+	if isV2 {
+		priceSnapshot["snapshotVersion"] = 2
+	}
 	if planType == planTypeTokenRecharge {
 		priceSnapshot["orderType"] = "COMPUTE_RECHARGE"
 		priceSnapshot["rechargePoints"] = order.Snapshot.CreditUnits
@@ -386,8 +465,14 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 		CommissionSnapshotCaptured: order.Snapshot.CommissionSnapshotCaptured,
 		CommissionRuleSnapshot:     append([]commissionRuleSnapshot(nil), order.Snapshot.CommissionRules...),
 	}
-	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &commerceOrder); err != nil {
-		return err
+	var fulfillmentErr error
+	if isV2 {
+		fulfillmentErr = applyCommerceOrderFulfillmentWithPlanForTx(ctx, tx, s.db, &commerceOrder, plan)
+	} else {
+		fulfillmentErr = applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &commerceOrder)
+	}
+	if fulfillmentErr != nil {
+		return fulfillmentErr
 	}
 	if commerceOrder.FulfillmentStatus != "FULFILLED" {
 		return errors.New("virtual commerce entitlement was not fulfilled")
@@ -403,6 +488,22 @@ func (s *virtualPaymentService) grantCommerceVirtualProductTx(ctx context.Contex
 	}
 	rewardJSON, err := json.Marshal(commerceOrder.RewardSnapshot)
 	if err != nil {
+		return err
+	}
+	if isV2 {
+		_, err = tx.ExecContext(ctx, `
+			update xz_orders
+			set buyer_user_id = $2, order_type = $3, business_order_type = $4,
+			    direct_agent_id = nullif($5, ''), parent_agent_id = nullif($6, ''),
+			    operation_center_id = nullif($7, ''), token_amount = $8, token_grant_amount = $8,
+			    token_grant_value_cents = $9, platform_income_cents = $10,
+			    reward_snapshot = $11::jsonb,
+			    fulfillment_status = $12, fulfilled_at = $13, updated_at = now()
+			where order_no = $1
+		`, order.OrderNo, order.UserID, commerceOrder.OrderType, businessOrderTypeFromOrder(commerceOrder),
+			commerceOrder.DirectAgentID, commerceOrder.ParentAgentID, commerceOrder.OperationCenterID,
+			commerceOrder.TokenGrantAmount, intValue(commerceOrder.PriceSnapshot["tokenGrantValueCents"]),
+			commerceOrder.PlatformIncomeCents, rewardJSON, commerceOrder.FulfillmentStatus, commerceOrder.FulfilledAt)
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `

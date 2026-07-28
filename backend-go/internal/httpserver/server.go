@@ -74,6 +74,12 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		knowledge.rag.SetBillingRecorder(store)
 	}
 	admin := newAdminAPI(store, sessions)
+	businessPlans := newBusinessPlanAdminAPI(store)
+	pricePlans := newPricePlanAdminAPI(store)
+	pricePlanTestWhitelist := newPricePlanTestWhitelistAdminAPI(store)
+	pricingAudit := newPricingAuditAdminAPI(store)
+	pricingHealth := newPricingHealthAdminAPI(store, cfg)
+	wechatGoods := newWechatVirtualGoodsAdminAPI(store)
 	operationCenterReviews := newOperationCenterReviewAPI(nil)
 	operationCenterRefunds := newOperationCenterRefundAPI(nil, nil)
 	var operationCenterRefundManagement *operationcenter.RefundManagementService
@@ -320,6 +326,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/payment/orders", wrapF(paymentCenter.createOrder))
 	v1.GET("/payment/products", wrapF(virtualPayment.products))
 	v1.GET("/payment/coupons", wrapF(virtualPayment.coupons))
+	v1.POST("/payment/price-quotes", wrapF(virtualPayment.createPublicPriceQuote))
+	v1.POST("/payment/test-price-quotes", wrapF(virtualPayment.createTestPriceQuote))
 	v1.POST("/payment/wechat-virtual/orders", wrapF(virtualPayment.createOrder))
 	v1.GET("/payment/orders/:orderNo", wrapF(paymentCenter.order))
 	if !cfg.IsProduction() {
@@ -636,6 +644,38 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.PATCH("/plans/:id", wrapF(admin.updatePlan))
 	adminGroup.GET("/plans/:id/capabilities", wrapF(admin.planCapabilities))
 	adminGroup.PUT("/plans/:id/capabilities", wrapF(admin.updatePlanCapabilities))
+	adminGroup.GET("/business-plans", wrapF(businessPlans.plans))
+	adminGroup.GET("/business-plans/:planId", wrapF(businessPlans.plan))
+	adminGroup.GET("/business-plans/:planId/versions", wrapF(businessPlans.versions))
+	adminGroup.POST("/business-plans/:planId/versions", wrapF(businessPlans.createVersion))
+	adminGroup.PATCH("/plan-versions/:versionId", wrapF(businessPlans.updateVersion))
+	adminGroup.POST("/plan-versions/:versionId/activate", wrapF(businessPlans.activateVersion))
+	adminGroup.POST("/plan-versions/:versionId/retire", wrapF(businessPlans.retireVersion))
+	adminGroup.GET("/business-plans/:planId/price-plans", wrapF(pricePlans.plans))
+	adminGroup.POST("/business-plans/:planId/price-plans", wrapF(pricePlans.createPlan))
+	adminGroup.GET("/price-plans/:pricePlanId", wrapF(pricePlans.plan))
+	adminGroup.PATCH("/price-plans/:pricePlanId", wrapF(pricePlans.updatePlan))
+	adminGroup.POST("/price-plans/:pricePlanId/clone", wrapF(pricePlans.clonePlan))
+	adminGroup.GET("/price-plans/:pricePlanId/validation", wrapF(pricePlans.validation))
+	adminGroup.POST("/price-plans/:pricePlanId/enable", wrapF(pricePlans.enablePlan))
+	adminGroup.POST("/price-plans/:pricePlanId/disable", wrapF(pricePlans.disablePlan))
+	adminGroup.POST("/price-plans/:pricePlanId/make-default", wrapF(pricePlans.makeDefault))
+	adminGroup.GET("/price-plans/:pricePlanId/whitelist", wrapF(pricePlanTestWhitelist.list))
+	adminGroup.POST("/price-plans/:pricePlanId/whitelist", wrapF(pricePlanTestWhitelist.create))
+	adminGroup.PATCH("/price-plans/:pricePlanId/whitelist/:entryId", wrapF(pricePlanTestWhitelist.update))
+	adminGroup.POST("/price-plans/:pricePlanId/whitelist/:entryId/disable", wrapF(pricePlanTestWhitelist.disable))
+	adminGroup.GET("/pricing-audit-logs", wrapF(pricingAudit.list))
+	adminGroup.GET("/pricing-health", wrapF(pricingHealth.get))
+	adminGroup.GET("/wechat-virtual-goods", wrapF(wechatGoods.goods))
+	adminGroup.GET("/wechat-virtual-goods/:goodId", wrapF(wechatGoods.good))
+	adminGroup.GET("/wechat-virtual-goods/:goodId/references", wrapF(wechatGoods.references))
+	adminGroup.POST("/wechat-virtual-goods", wrapF(wechatGoods.createGood))
+	adminGroup.PATCH("/wechat-virtual-goods/:goodId", wrapF(wechatGoods.updateGood))
+	adminGroup.POST("/wechat-virtual-goods/:goodId/confirm-published", wrapF(wechatGoods.confirmGood))
+	adminGroup.POST("/wechat-virtual-goods/:goodId/disable", wrapF(wechatGoods.disableGood))
+	adminGroup.GET("/price-plans/:pricePlanId/payment-bindings", wrapF(wechatGoods.bindings))
+	adminGroup.POST("/price-plans/:pricePlanId/payment-bindings", wrapF(wechatGoods.createBinding))
+	adminGroup.PATCH("/payment-bindings/:bindingId", wrapF(wechatGoods.updateBinding))
 	adminGroup.GET("/orders", wrapF(admin.orders))
 	adminGroup.GET("/orders/:id/timeline", wrapF(admin.orderTimeline))
 	adminGroup.POST("/orders", wrapF(admin.createOrder))
@@ -810,6 +850,15 @@ const requestIDHeader = "X-Request-Id"
 const corsAllowedHeaders = "Authorization, Content-Type, Idempotency-Key, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Device-Id, X-Tenant-Id, X-Organization-Id"
 const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 
+type requestIDContextKeyType struct{}
+
+var requestIDContextKey requestIDContextKeyType
+
+func requestIDFromContext(ctx context.Context) string {
+	requestID, _ := ctx.Value(requestIDContextKey).(string)
+	return strings.TrimSpace(requestID)
+}
+
 func requestContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := sanitizeRequestID(c.GetHeader(requestIDHeader))
@@ -817,6 +866,7 @@ func requestContextMiddleware() gin.HandlerFunc {
 			requestID = newRequestID()
 		}
 		c.Set("request_id", requestID)
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), requestIDContextKey, requestID))
 		c.Header(requestIDHeader, requestID)
 		c.Header("Access-Control-Expose-Headers", requestIDHeader)
 		c.Next()
@@ -931,7 +981,12 @@ func writeJSON(w http.ResponseWriter, value any) {
 func writeError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	payload := map[string]any{"error": err.Error()}
+	if coded, ok := err.(interface{ BusinessCode() string }); ok {
+		payload["code"] = coded.BusinessCode()
+		payload["message"] = err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func staticIndex(root string) http.HandlerFunc {

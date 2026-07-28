@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -1761,6 +1762,13 @@ func (s *postgresStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, er
 		return adminOrder{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	managedV2, err := legacyOrderManagedV2Tx(ctx, tx, req.PlanID, req.PaymentEnvironment)
+	if err != nil {
+		return adminOrder{}, err
+	}
+	if managedV2 {
+		return adminOrder{}, newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PRICE_QUOTE", "V2 managed member and agent plans must be ordered with a server-issued price quote")
+	}
 	id, err := nextTableID(ctx, tx, "xz_orders", "order")
 	if err != nil {
 		return adminOrder{}, err
@@ -2110,6 +2118,10 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, db *sql
 	if !ok {
 		return nil
 	}
+	return applyCommerceOrderFulfillmentWithPlanForTx(ctx, tx, db, order, plan)
+}
+
+func applyCommerceOrderFulfillmentWithPlanForTx(ctx context.Context, tx *sql.Tx, db *sql.DB, order *adminOrder, plan adminPlan) error {
 	planType := planBusinessType(plan)
 	switch planType {
 	case planTypeMemberPackage, planTypeAgentJoinPackage, planTypeOperationCenterPackage:
@@ -2552,6 +2564,13 @@ func (s *postgresStore) RenewAdminOrder(id string) (adminOrder, error) {
 	source, err := getOrderForUpdate(ctx, tx, id)
 	if err != nil {
 		return adminOrder{}, err
+	}
+	managedV2, err := legacyOrderManagedV2Tx(ctx, tx, source.PlanID, "")
+	if err != nil {
+		return adminOrder{}, err
+	}
+	if managedV2 {
+		return adminOrder{}, newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PRICE_QUOTE", "V2 managed member and agent plans cannot renew a legacy order without a new price quote")
 	}
 	nextID, err := nextTableID(ctx, tx, "xz_orders", "order")
 	if err != nil {
@@ -3756,6 +3775,18 @@ func (s *postgresStore) UpdateAdminPlan(id string, req adminPlanMutation) (admin
 	if err := tx.QueryRowContext(ctx, `select raw from xz_plans where id = $1 for update`, id).Scan(rawScanner(&item)); err != nil {
 		return adminPlan{}, err
 	}
+	var managed bool
+	if err := tx.QueryRowContext(ctx, `
+		select exists(
+			select 1 from xz_plan_versions
+			where plan_id=$1 and business_type in('MEMBER','AGENT')
+		)
+	`, id).Scan(&managed); err != nil {
+		return adminPlan{}, err
+	}
+	if managed {
+		return adminPlan{}, managedPlanRequiresVersionError()
+	}
 	if req.Name != "" {
 		item.Name = req.Name
 	}
@@ -3876,7 +3907,11 @@ func (s *postgresStore) aiCapabilityAdminData(ctx context.Context) (adminPlatfor
 	return applyPublishedBillingRulesV1(data), nil
 }
 
-func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data adminPlatformData) error {
+type contextSQLExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func saveAICapabilityAdminDataWithExecutor(ctx context.Context, executor contextSQLExecer, data adminPlatformData) error {
 	data = normalizeAICapabilityDefaults(data)
 	cfg := adminAICapabilityConfig{
 		AIModules:          data.AIModules,
@@ -3886,12 +3921,16 @@ func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data admi
 		BillingRules:       data.BillingRules,
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
+	_, err := executor.ExecContext(ctx, `
 		insert into xz_system_settings (id, raw, updated_at)
 		values ($1, $2::jsonb, $3)
 		on conflict (id) do update set raw=excluded.raw, updated_at=excluded.updated_at
 	`, aiCapabilitySettingsID, jsonProjection(cfg), now)
 	return err
+}
+
+func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data adminPlatformData) error {
+	return saveAICapabilityAdminDataWithExecutor(ctx, s.db, data)
 }
 
 func (s *postgresStore) updateAICapabilityAdminData(mutator func(*adminPlatformData) error) error {
@@ -4265,6 +4304,9 @@ func (s *postgresStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIMod
 		if len(created.CapabilityCode) == 0 {
 			created.CapabilityCode = defaultAICapabilitiesForModule(moduleCode)
 		}
+		if err := applyAIModelVideoCapabilitiesMutation(&created, req); err != nil {
+			return err
+		}
 		data.AIModels = append(data.AIModels, created)
 		bindAIModelToModule(data, moduleCode, modelName)
 		return nil
@@ -4317,6 +4359,9 @@ func (s *postgresStore) UpdateAdminAIModel(id string, req adminAIModelMutation) 
 			}
 			if req.AllowFallbackSwitch != nil {
 				data.AIModels[i].AllowFallbackSwitch = *req.AllowFallbackSwitch
+			}
+			if err := applyAIModelVideoCapabilitiesMutation(&data.AIModels[i], req); err != nil {
+				return err
 			}
 			applyAIModelComplianceMutation(&data.AIModels[i], req)
 			if err := validateAIModelMiniProgramEnable(data.AIModels[i]); err != nil {
@@ -4388,9 +4433,46 @@ func (s *postgresStore) UpdateAdminTenantModuleLimit(id string, req adminTenantM
 }
 
 func (s *postgresStore) UpdateAdminPlanCapabilities(planID string, req adminPlanCapabilitiesMutation) error {
-	return s.updateAICapabilityAdminData(func(data *adminPlatformData) error {
-		return applyAdminPlanCapabilities(data, planID, req)
-	})
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var lockedPlanID string
+	if err := tx.QueryRowContext(ctx, `select id from xz_plans where id=$1 for update`, strings.TrimSpace(planID)).Scan(&lockedPlanID); err != nil {
+		return err
+	}
+	var managed bool
+	if err := tx.QueryRowContext(ctx, `
+		select exists(
+			select 1 from xz_plan_versions
+			where plan_id=$1 and business_type in('MEMBER','AGENT')
+		)
+	`, lockedPlanID).Scan(&managed); err != nil {
+		return err
+	}
+	if managed {
+		return managedPlanRequiresVersionError()
+	}
+
+	data, err := s.aiCapabilityAdminData(ctx)
+	if err != nil {
+		return err
+	}
+	data = normalizeAICapabilityDefaults(data)
+	if err := applyAdminPlanCapabilities(&data, lockedPlanID, req); err != nil {
+		return err
+	}
+	if err := saveAICapabilityAdminDataWithExecutor(ctx, tx, data); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *postgresStore) UpdateAdminBillingRule(id string, req adminBillingRuleMutation) (adminBillingRule, error) {
@@ -6101,6 +6183,11 @@ func nextTableID(ctx context.Context, tx *sql.Tx, table string, prefix string) (
 }
 
 func insertAuditLog(ctx context.Context, tx *sql.Tx, actorID string, actorRole string, action string, resource string, resourceID string, method string, path string, status int, metadata map[string]any) error {
+	if isPricingAuditAction(action) {
+		return insertPricingAuditLog(ctx, tx, pricingAuditMutationFromLegacy(
+			actorID, actorRole, action, resource, resourceID, method, path, status, metadata,
+		))
+	}
 	id := newAuditID()
 	_, err := tx.ExecContext(ctx, `
 		insert into xz_audit_logs (id, actor_id, actor_role, action, resource, resource_id, method, path, status, metadata)

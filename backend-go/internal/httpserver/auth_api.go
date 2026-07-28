@@ -1003,7 +1003,12 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 				identityData.OperationCenters = []adminOperationCenter{center}
 			}
 		}
-		writeJSON(w, authResponse(identityData, user, false))
+		response, err := a.authResponseWithPricingPermissions(r.Context(), identityData, user, false)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, response)
 		return
 	}
 	data, err := a.store.AdminData()
@@ -1016,7 +1021,27 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	writeJSON(w, authResponse(data, user, false))
+	response, err := a.authResponseWithPricingPermissions(r.Context(), data, user, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, response)
+}
+
+func (a authAPI) authResponseWithPricingPermissions(ctx context.Context, data adminPlatformData, user adminUser, includeToken bool) (map[string]any, error) {
+	response := authResponse(data, user, includeToken)
+	permissionStore, ok := a.store.(authPricingPermissionStore)
+	if !ok {
+		return response, nil
+	}
+	pricingPermissions, err := permissionStore.PricingPermissionsForRole(ctx, user.Role)
+	if err != nil {
+		return nil, err
+	}
+	permissions, _ := response["permissions"].([]string)
+	response["permissions"] = appendUnique(permissions, pricingPermissions...)
+	return response, nil
 }
 
 func (a authAPI) refresh(w http.ResponseWriter, r *http.Request) {
@@ -1177,7 +1202,10 @@ func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adm
 }
 
 func (a authAPI) authResponseWithToken(ctx context.Context, data adminPlatformData, user adminUser) (map[string]any, error) {
-	response := authResponse(data, user, false)
+	response, err := a.authResponseWithPricingPermissions(ctx, data, user, false)
+	if err != nil {
+		return nil, err
+	}
 	if a.sessions == nil {
 		if !devAuthFallbackEnabled() {
 			return nil, errAuthSessionUnavailable

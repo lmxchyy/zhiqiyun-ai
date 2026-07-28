@@ -44,6 +44,7 @@ func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.AIModels) == 0 {
 		data.AIModels = defaultAIModels(now)
 	}
+	data = normalizeVideoModelCapabilityData(data)
 	if len(data.AIParameterSchemas) == 0 {
 		data.AIParameterSchemas = defaultAIParameterSchemas(now)
 	} else {
@@ -217,7 +218,6 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 				{Key: "motion_strength", Label: "运动强度", Type: "select", Options: anyOptions("low", "medium", "high"), UserEditable: true, Visible: true},
 				{Key: "camera_movement", Label: "镜头运动", Type: "select", Options: anyOptions("static", "pan", "push", "pull"), UserEditable: true, Visible: true},
 				{Key: "generate_audio", Label: "生成音频", Type: "boolean", Default: true, UserEditable: true, Visible: true},
-				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "first_frame", Label: "首帧图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "last_frame", Label: "尾帧图", Type: "image_upload", UserEditable: true, Visible: true},
 			}},
@@ -496,6 +496,11 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if err != nil {
 		return req, err
 	}
+	if moduleCode == moduleVideoGeneration {
+		if err := validateVideoGenerationRequest(&req, resolved); err != nil {
+			return req, err
+		}
+	}
 	removeLegacyGenerationMetadata(&req, resolved)
 	normalizeGenerationQualityForLimit(&req, resolved)
 	if err := validateGenerationParams(req, resolved); err != nil {
@@ -637,19 +642,27 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 		rule = fallbackBillingRule(moduleCode, model.ModelName)
 	}
 	finalSchema := applyLimitToSchema(schema.SchemaJSON, limit.LimitJSON)
+	if moduleCode == moduleVideoGeneration {
+		capabilities := resolveVideoModelCapabilities(model, schema.SchemaJSON)
+		model.VideoCapabilities = &capabilities
+		model.CapabilityCode = syncVideoCapabilityCodes(model.CapabilityCode, capabilities)
+		model.CapabilityCodeCamel = append([]string(nil), model.CapabilityCode...)
+		finalSchema = applyVideoCapabilitiesToSchema(finalSchema, capabilities)
+	}
 	return resolvedModuleSchema{Module: module, Model: model, Schema: schema, FinalSchema: finalSchema, Limit: limit, BillingRule: rule}, nil
 }
 
 func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[string]any {
 	return map[string]any{
-		"module_code":  resolved.Module.ModuleCode,
-		"model_name":   resolved.Model.ModelName,
-		"schema":       resolved.FinalSchema,
-		"fields":       resolved.FinalSchema.Fields,
-		"limit_json":   resolved.Limit.LimitJSON,
-		"module":       resolved.Module,
-		"model":        resolved.Model,
-		"billing_rule": resolved.BillingRule,
+		"module_code":        resolved.Module.ModuleCode,
+		"model_name":         resolved.Model.ModelName,
+		"schema":             resolved.FinalSchema,
+		"fields":             resolved.FinalSchema.Fields,
+		"limit_json":         resolved.Limit.LimitJSON,
+		"module":             resolved.Module,
+		"model":              resolved.Model,
+		"video_capabilities": resolved.Model.VideoCapabilities,
+		"billing_rule":       resolved.BillingRule,
 		"context": map[string]any{
 			"user_id": user.ID, "tenant_id": effectiveTenantID(user), "agent_id": user.ReferredBy, "package_id": user.PlanID,
 		},
@@ -1012,7 +1025,7 @@ func defaultAIModelTypeForModule(moduleCode string) string {
 func defaultAICapabilitiesForModule(moduleCode string) []string {
 	switch canonicalModuleCode(moduleCode) {
 	case moduleVideoGeneration:
-		return []string{"text_to_video", "image_to_video"}
+		return []string{"text_to_video"}
 	case modulePPTGeneration:
 		return []string{"ppt_outline", "ppt_content"}
 	default:

@@ -76,6 +76,9 @@ type Config struct {
 	WeChatVirtualPaySandboxKey     string
 	WeChatVirtualPayNotifyToken    string
 	WeChatVirtualPayMode           string
+	PricePlanCreationEnabled       bool
+	PricePlanTestEntryEnabled      bool
+	SnapshotV2FulfillmentEnabled   bool
 	ModelProviderURL               string
 	ModelProviderAPIKey            string
 	ImageModel                     string
@@ -267,6 +270,9 @@ func Load() Config {
 		WeChatVirtualPaySandboxKey:     os.Getenv("WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY"),
 		WeChatVirtualPayNotifyToken:    os.Getenv("WECHAT_VIRTUAL_PAY_NOTIFY_TOKEN"),
 		WeChatVirtualPayMode:           os.Getenv("WECHAT_VIRTUAL_PAY_MODE"),
+		PricePlanCreationEnabled:       boolEnv(os.Getenv("PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED")),
+		PricePlanTestEntryEnabled:      boolEnv(os.Getenv("PRICE_PLAN_TEST_ENTRY_ENABLED")),
+		SnapshotV2FulfillmentEnabled:   boolEnv(os.Getenv("SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED")),
 		ModelProviderURL:               modelProviderURL,
 		ModelProviderAPIKey:            modelProviderAPIKey,
 		ImageModel:                     imageModel,
@@ -361,6 +367,9 @@ func (c Config) SMSDailyLimits() (mobile, device, ip int64) {
 }
 
 func (c Config) ValidateProduction() error {
+	if c.PricePlanCreationEnabled && !c.SnapshotV2FulfillmentEnabled {
+		return fmt.Errorf("PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED requires SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED")
+	}
 	shutdownTimeout := strings.TrimSpace(c.ShutdownTimeout)
 	if shutdownTimeout == "" {
 		shutdownTimeout = "30s"
