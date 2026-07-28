@@ -1,8 +1,10 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `NO-GO`（开关已开；MEMBER+AGENT TEST 内部履约 PASS；微信未发货 FLAG；NORMAL/sandbox/RepoDigest 未齐）**
+> **当前总状态 = `NO-GO`（开关已开；MEMBER+AGENT TEST 内部履约 PASS；两单 deliver-notify API ack PASS；微信控制台目视未复核；NORMAL/sandbox/RepoDigest 未齐）**
 >
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
+>
+> **2026-07-29 06:37+08 更新：** 已补齐微信虚拟支付发货确认。代码在非 push 履约路径调用 `/xpay/notify_provide_goods`；管理端 `…/notify-provide-goods`；oneshot 脚本已对两单回补。**API：** MEMBER `ZQY202607282159389857812495` + AGENT `ZQY20260728221656E339AB7A54` 均 `errcode=0 OK`；本地 `xz_payment_events.notify_provide_goods=SUCCESS`。生产镜像 `a39485ef1`（commit `a39485ef1…`），V2 三开关 **true**，pay env **production**。**未**发明控制台「未发货已清除」PASS（无新截图；`query_order` 因 openid 不符未验 status=4）。未退款、未改价。证据：`evidence/20260729/deliver-notify/`。§5 仍 **PARTIAL** / 总 **NO-GO**。
 >
 > **2026-07-29 06:23+08 更新：** 真机 AGENT TEST ¥1（`AGENT_TEST_1YUAN`）已支付并 **系统内 V2 履约 PASS**：订单 `ZQY20260728221656E339AB7A54`，微信交易号 `4500000301202607297737425043`，`PAID`/`FULFILLED`/`SUCCESS`，`snapshot_version=2`，`user_000002` → `agent_status=ACTIVE` + AGENT 身份 + `channel_000002` L2 + Token +20000。确认路径同样为 `query_order_paid`（**无** deliver-notify / **无** `notify_provide_goods`）。MEMBER+AGENT TEST 设备路径内部履约均 PASS；§5 整包仍 **PARTIAL**（缺 NORMAL 996、sandbox、幂等专项、RepoDigest、发货 ack）。V2 三开关未改。证据：`evidence/20260729/agent-test-pay/`。
 >
@@ -378,7 +380,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
 | §4 微信道具 | **PARTIAL** | 双签 PASS；静态强制等式 PASS；quote 层仍 BLOCKED；截图齐 | 2026-07-29 |
-| §5 沙箱真机 | **PARTIAL** | MEMBER+AGENT TEST 内部履约 PASS；微信未发货 FLAG；NORMAL/sandbox/矩阵未齐；仍缺 digest；pay env=production | 2026-07-29 06:23+08 |
+| §5 沙箱真机 | **PARTIAL** | MEMBER+AGENT TEST 内部履约 PASS；两单 `notify_provide_goods` API ack PASS（控制台目视未复核）；NORMAL/sandbox/矩阵未齐；仍缺 digest；pay env=production | 2026-07-29 06:37+08 |
 | §6 开关启用 | **DONE（授权窗口）** | 三开关 = true；pay env = production；证据 `v2-flags-enable/` | 2026-07-29 05:35+08 |
 | TEST 白名单 | **DONE** | `user_000002` → MEMBER/AGENT TEST；health HEALTHY；`evidence/20260729/test-whitelist/` | 2026-07-29 05:44+08 |
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/`；SHA 对齐；VALIDATE=0 | 2026-07-29 05:19+08 |
@@ -386,7 +388,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
 
-**本轮结论（2026-07-29 06:23+08）：总状态 = `NO-GO`。** MEMBER TEST（`ZQY202607282159389857812495`）+ AGENT TEST（`ZQY20260728221656E339AB7A54`）系统内履约均 **PASS**；微信「未发货」**FLAG**（无 deliver-notify / 无 `notify_provide_goods`）；NORMAL 996 / sandbox / 幂等专项仍未测；RepoDigest 仍缺；pay env 仍 production。下一步：评估补调 `notify_provide_goods`；推 RepoDigest；测 NORMAL 或切 sandbox；禁止发明 §5 全 PASS / 总 GO。
+**本轮结论（2026-07-29 06:37+08）：总状态 = `NO-GO`。** MEMBER+AGENT TEST 系统内履约 **PASS**；两单 `/xpay/notify_provide_goods` **API ack PASS**（本地事件 SUCCESS；**未**发明控制台清除 PASS）；生产已部署 `a39485ef1` 且 V2 三开关 true。NORMAL 996 / sandbox / 幂等专项仍未测；RepoDigest 仍缺；pay env 仍 production。下一步：人工复核微信控制台发货态截图；推 RepoDigest；测 NORMAL 或切 sandbox；禁止发明 §5 全 PASS / 总 GO。
 
 ---
 
@@ -398,7 +400,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 强制等式（quote 层） | PRODUCTION dry quote MEMBER/AGENT NORMAL 201@99600（未下单）；真机/sandbox 未测 | 另窗 sandbox 真机；禁止用 dry quote 冒充真机 PASS |
 | RepoDigest | 仍缺 | 发布/运维 |
 | 代理正式价 vs 库内价 | 价格负责人确认正式 **99600**；生产已恢复 **99600**；¥1 已独立 productId | 已处理 |
-| 沙箱真机未跑 | Gate B/C 部分缓解（MEMBER+AGENT TEST 内部 PASS）；NORMAL/全矩阵/微信发货态仍阻断 | 微信+QA；补 `notify_provide_goods` |
+| 沙箱真机未跑 | Gate B/C 部分缓解（MEMBER+AGENT TEST 内部 PASS + deliver API ack）；NORMAL/全矩阵/控制台发货目视仍缺口 | 微信+QA；控制台截图确认 |
 | offerId/mode↔AppKey | 双签已确认 offer/mode/AppID 与运行时一致；AppKey 仅 Secret 版本 | 已双签（密钥不入证） |
 | phase3 退款/补偿/补发 | 本包不做 | 业务+应用 |
 
