@@ -1,5 +1,5 @@
 import axios, { type AxiosRequestConfig } from "axios";
-import { clearWebAuthSession, getWebAccessToken, hasPersistentWebSessionMarker, hasWebSessionMarker, isPersistentWebSession, persistWebAccessToken } from "../utils/webAuthSession";
+import { clearWebAuthSession, getWebAccessToken, hasPersistentWebSessionMarker, hasWebSessionMarker, isPersistentWebSession, persistWebAccessToken } from "../utils/webAuthSession.ts";
 
 export type WebApiAuthMode = "none" | "optional" | "required";
 
@@ -7,6 +7,27 @@ export interface WebApiRequestConfig extends AxiosRequestConfig {
   authMode?: WebApiAuthMode;
   retryOnUnauthorized?: boolean;
   _authRetry?: boolean;
+}
+
+export interface AdminApiErrorPayload {
+  code?: string;
+  error?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export class AdminApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly payload: unknown;
+
+  constructor(message: string, status = 0, code = "", payload: unknown = undefined) {
+    super(message);
+    this.name = "AdminApiError";
+    this.status = status;
+    this.code = code;
+    this.payload = payload;
+  }
 }
 
 let refreshPromise: Promise<string> | null = null;
@@ -47,6 +68,15 @@ export function chineseAdminErrorMessage(message: unknown, status = 0, fallback 
   if (status >= 500) return "服务器处理失败，请稍后重试";
   if (status >= 400) return "请求失败，请检查后重试";
   return /[\u3400-\u9fff]/.test(fallback) ? fallback : "请求失败，请稍后重试";
+}
+
+export function createAdminApiError(payload: unknown, status = 0, fallback = "请求失败，请稍后重试"): AdminApiError {
+  const record = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as AdminApiErrorPayload
+    : {};
+  const source = record.error || record.message || payload;
+  const code = typeof record.code === "string" ? record.code.trim() : "";
+  return new AdminApiError(chineseAdminErrorMessage(source, status, fallback), status, code, payload);
 }
 
 function requestAuthMode(config: WebApiRequestConfig): WebApiAuthMode {
@@ -144,8 +174,8 @@ apiClient.interceptors.response.use(
         // refreshWebAuthSession already cleared the invalid local session.
       }
     }
-    const message = error.response?.data?.error || error.response?.data?.message || error.message;
-    return Promise.reject(new Error(chineseAdminErrorMessage(message, status)));
+    const payload = error.response?.data ?? error.message;
+    return Promise.reject(createAdminApiError(payload, status));
   }
 );
 
