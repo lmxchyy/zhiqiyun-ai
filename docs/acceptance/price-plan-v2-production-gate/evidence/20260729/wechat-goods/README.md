@@ -1,38 +1,37 @@
 # WeChat virtual goods evidence — 2026-07-29
 
-## Observed (线上版本)
+## Online version — NORMAL only (earlier)
 
-Screenshot: `../wechat-online-props-20260729.png` and `wechat-online-props-20260729.png` (copy under wechat-goods/).
+Screenshot: `../wechat-online-props-20260729.png`
 
 | productId | price (¥) | note |
 |---|---:|---|
-| MEMBER_PRO_YEAR_996 | 996 | legacy / alternate |
-| MEMBER_YEAR_996 | 996 | MEMBER NORMAL ✅ |
-| AGENT_JOIN_996 | 996 | AGENT NORMAL ✅ (official restored) |
-| IMAGE_PACK_1000 | 80 | unrelated |
-| TOKEN_TEST_1FEN | 0.01 | Token only — NOT member/agent TEST |
-| TOKEN_CUSTOM_1YUAN | 0.1 | Token only |
+| MEMBER_YEAR_996 | 996 | MEMBER NORMAL |
+| AGENT_JOIN_996 | 996 | AGENT NORMAL |
 
-## Created (开发版本) + operator publish confirmation
+## Online version — NORMAL + TEST (after publish)
 
-Screenshot (dev list): `61-dev-list-both-tests.png` / `../wechat-dev-props-after-test-create.png`
+Screenshot: `72-online-props-with-tests.png` / `../wechat-online-props-with-tests-20260729.png`
 
-| productId | name | price (¥) | remark |
+| productId | name | price (¥) | note |
 |---|---|---:|---|
-| MEMBER_TEST_1YUAN | 会员沙箱1元测试 | 1 | V2门禁TEST勿改价 |
-| AGENT_TEST_1YUAN | 代理沙箱1元测试 | 1 | V2门禁TEST勿改价 |
+| AGENT_TEST_1YUAN | 代理沙箱1元测试 | 1 | published 2026-07-29 |
+| MEMBER_TEST_1YUAN | 会员沙箱1元测试 | 1 | published 2026-07-29 |
+| MEMBER_PRO_YEAR_996 | 知启云AIPro年度会员 | 996 | legacy |
+| MEMBER_YEAR_996 | 996AI创作会员包 | 996 | MEMBER NORMAL |
+| AGENT_JOIN_996 | 996代理商开通包 | 996 | AGENT NORMAL |
+| IMAGE_PACK_1000 | 1000张图片生成额度 | 80 | unrelated |
 
-Icon used for upload: `wechat-test-prop-icon-200x200.png` (200×200 PNG).
+## Dev version (create evidence)
 
-Official `MEMBER_YEAR_996` / `AGENT_JOIN_996` prices were **not** changed.
+Screenshot: `61-dev-list-both-tests.png`
 
-**Operator confirmation 2026-07-29:** 「道具已经创建完成并发布」— reconciles prior agent note that production online TEST rows were intentionally not created.
+Icon: `wechat-test-prop-icon-200x200.png` (also `../wechat-prop-icon-200.png`).
 
-**Visual (same day):** `70-current-console.png` — 开发版本列表中两 TEST 均为「已发布」，并有「查看线上」入口。切换到「线上版本」专用列表截图仍为可选待补。
+Operator confirmation 2026-07-29: created and published. Official 996 prices not changed.
 
 ## Remaining
 
 - Dual-sign: price owner second signature still pending (do not invent PASS).
-- V2 tables / bindings still absent → force-equality cannot be closed → production gate overall remains NO-GO.
-- Optional: screenshot 线上版本 props list with `MEMBER_TEST_1YUAN` + `AGENT_TEST_1YUAN` into this folder.
-- Do not mark WeChat gate PASS without dual-sign + force-equality.
+- V2 tables / bindings still absent → force-equality cannot close → overall gate NO-GO.
+- Sandbox real-device V2 quote (§5) still blocked.

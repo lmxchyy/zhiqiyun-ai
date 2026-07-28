@@ -3,9 +3,9 @@
 本表必须由微信支付负责人和价格负责人双人核对。`MANUALLY_CONFIRMED_PUBLISHED` 只是本地人工声明，不代表系统已实时连接微信后台验证。
 
 **系统只读预填（2026-07-28）：** 已从生产库 `xz_wechat_virtual_product_mappings` + `xz_plans` + 运行时 env 填入可知字段。  
-**微信后台实观（2026-07-29）：** 见下方矩阵更新 + `evidence/20260729/wechat-goods/`。  
-**操作员口头确认（2026-07-29）：** 「道具已经创建完成并发布」— `MEMBER_TEST_1YUAN` / `AGENT_TEST_1YUAN` 已创建并发布（对照旧代理报告「生产线上 TEST 未建 / 仅开发版本」已调和）。  
-**线上版本列表视觉核验：** 本轮浏览器无可用微信控制台会话 → **可选待补**截图（`evidence/20260729/wechat-goods/` 线上列表含两 TEST）；不得以口头确认替代双人签或强制等式。  
+**微信后台实观（2026-07-29）：** 见下方矩阵 + `evidence/20260729/wechat-goods/`。  
+**操作员确认（2026-07-29）：** 「道具已经创建完成并发布」— `MEMBER_TEST_1YUAN` / `AGENT_TEST_1YUAN`。  
+**线上版本列表视觉核验：** **已补** `72-online-props-with-tests.png`（两 TEST ¥1 + 两 NORMAL ¥996 同屏）。不得以单人操作替代双人签或强制等式。  
 **V2 表未建** → 无 V2 pricePlan/good/binding；强制等式仍无法端到端建立 → **总结论仍 NO-GO**（双人签未齐 / V2 未落地）。**不得宣称微信门禁 PASS。**
 
 ### 0.1 微信后台实观摘要（2026-07-29）
@@ -15,26 +15,26 @@
 | 页面 | `mp.weixin.qq.com/wxamp/subApp/skit/manage/config/prop`（虚拟支付 → 道具配置） |
 | offerId（运行时） | `1450579876`；mode=`short_series_goods` |
 | 线上版本 NORMAL | `MEMBER_YEAR_996`=¥996；`AGENT_JOIN_996`=¥996（正式价未改动） |
-| TEST 道具 | `MEMBER_TEST_1YUAN`=¥1；`AGENT_TEST_1YUAN`=¥1（独立 productId）；操作员确认已创建并发布 |
-| 操作员 | Codex 代操创建（开发版本截图已有）；用户确认发布；**价格负责人第二签字仍待** |
-| 证据 | 开发版本：`61-dev-list-both-tests.png`；发布态：`70-current-console.png`（两 TEST「已发布」+「查看线上」）；线上 NORMAL：`wechat-online-props-20260729.png`；**线上版本专用列表含 TEST：可选待补** |
+| 线上版本 TEST | `MEMBER_TEST_1YUAN`=¥1；`AGENT_TEST_1YUAN`=¥1（独立 productId；已发布） |
+| 操作员 | Codex 代操 + 用户确认发布；**价格负责人第二签字仍待** |
+| 证据 | `wechat-online-props-20260729.png`；`wechat-online-props-with-tests-20260729.png`；`wechat-goods/72-online-props-with-tests.png`；`61-dev-list-both-tests.png` |
 
 ## 1. 必需商品矩阵
 
-TEST 道具本轮已由操作员确认「创建完成并发布」；系统侧 V2/映射/双人签仍未齐。线上版本列表含两 TEST 的视觉截图为可选待补。
+TEST 已创建并发布到线上版本（截图已核）；系统侧 V2/映射/双人签仍未齐。
 
 运行时：`WECHAT_VIRTUAL_PAY_ENV=production`，`offerId=1450579876`，`mode=short_series_goods`。
 
 | 业务 | 方案 | 环境 | 目标价格 | 可见/受众/默认 | 微信 productId | offerId | 微信发布状态 | 本地确认 | 结论 |
 |---|---|---|---:|---|---|---|---|---|---|
-| MEMBER | NORMAL | SANDBOX | 微信后台 **¥996**（=99600 分）已截图 | V1 enabled；V2 无 | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 截图见 online-props；业务码≠productId 仍在 | **PARTIAL**（价 OK；V2/双签未齐） |
-| AGENT | NORMAL | SANDBOX | 微信后台 **¥996**（=99600 分）已截图 | V1 enabled；V2 无 | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 正式价未改成 ¥1 | **PARTIAL**（价 OK；V2/双签未齐） |
-| MEMBER | TEST | SANDBOX | **¥1（100 分）** | 独立 TEST productId | `MEMBER_TEST_1YUAN` | `1450579876` | 操作员确认已创建并发布 | 开发版截图已有；线上列表视觉核验可选待补 | **PARTIAL**（道具已建/已发；V2/映射/双签未齐） |
-| AGENT | TEST | SANDBOX | **¥1（100 分）** | 独立 TEST productId | `AGENT_TEST_1YUAN` | `1450579876` | 操作员确认已创建并发布 | 开发版截图已有；线上列表视觉核验可选待补 | **PARTIAL**（道具已建/已发；V2/映射/双签未齐） |
-| MEMBER | NORMAL | PRODUCTION | 微信后台 **¥996** 已截图 | V1 enabled | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 同 SANDBOX productId | **PARTIAL**（价 OK；V2 无） |
-| AGENT | NORMAL | PRODUCTION | 微信后台 **¥996** 已截图 | V1 enabled | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 正式价保持 996 | **PARTIAL**（价 OK；V2 无） |
-| MEMBER | TEST | PRODUCTION | **¥1（100 分）** | 操作员确认已发布 | `MEMBER_TEST_1YUAN` | `1450579876` | 操作员确认已创建并发布 | 线上列表截图可选待补；非双人签 PASS | **PARTIAL**（口头确认已调和；双签/V2/强制等式仍 NO-GO） |
-| AGENT | TEST | PRODUCTION | **¥1（100 分）** | 操作员确认已发布 | `AGENT_TEST_1YUAN` | `1450579876` | 操作员确认已创建并发布 | 线上列表截图可选待补；非双人签 PASS | **PARTIAL**（口头确认已调和；双签/V2/强制等式仍 NO-GO） |
+| MEMBER | NORMAL | SANDBOX | **¥996（99600 分）** | V1 enabled；V2 无 | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 截图已核；业务码≠productId 仍在 | **PARTIAL**（价 OK；V2/双签未齐） |
+| AGENT | NORMAL | SANDBOX | **¥996（99600 分）** | V1 enabled；V2 无 | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 正式价未改成 ¥1 | **PARTIAL**（价 OK；V2/双签未齐） |
+| MEMBER | TEST | SANDBOX | **¥1（100 分）** | 独立 TEST productId | `MEMBER_TEST_1YUAN` | `1450579876` | **已发布**（线上版本可见） | `72-online-props-with-tests.png` | **PARTIAL**（微信已发；V2/映射/双签未齐） |
+| AGENT | TEST | SANDBOX | **¥1（100 分）** | 独立 TEST productId | `AGENT_TEST_1YUAN` | `1450579876` | **已发布**（线上版本可见） | `72-online-props-with-tests.png` | **PARTIAL**（微信已发；V2/映射/双签未齐） |
+| MEMBER | NORMAL | PRODUCTION | **¥996（99600 分）** | V1 enabled | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 同 SANDBOX productId | **PARTIAL**（价 OK；V2 无） |
+| AGENT | NORMAL | PRODUCTION | **¥996（99600 分）** | V1 enabled | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 正式价保持 996 | **PARTIAL**（价 OK；V2 无） |
+| MEMBER | TEST | PRODUCTION | **¥1（100 分）** | 线上已发布（门禁受控 TEST） | `MEMBER_TEST_1YUAN` | `1450579876` | **已发布**（published per operator + 线上截图 2026-07-29） | `72-online-props-with-tests.png`；非双人签 PASS | **PARTIAL**（微信已发；双签/V2/强制等式仍 NO-GO） |
+| AGENT | TEST | PRODUCTION | **¥1（100 分）** | 线上已发布（门禁受控 TEST） | `AGENT_TEST_1YUAN` | `1450579876` | **已发布**（published per operator + 线上截图 2026-07-29） | `72-online-props-with-tests.png`；非双人签 PASS | **PARTIAL**（微信已发；双签/V2/强制等式仍 NO-GO） |
 
 ## 2. 每条记录必填信息
 
@@ -117,4 +117,4 @@ PRODUCTION signData.env = 0
 
 微信负责人：Codex 代操 + 用户确认发布  价格负责人：__________（第二签字仍待）  复核时间：2026-07-29  变更单：__________
 
-**本轮结论：调和后 — 操作员确认 `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN` 已创建并发布；NORMAL ¥996 截图仍有效。仍为 PARTIAL：双人签未齐 + 强制等式/V2 未建 + 线上 TEST 列表截图可选待补 → 微信门禁与总状态仍 NO-GO，不得宣称 PASS。**
+**本轮结论：操作员确认并已截图核验 `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN` 已创建并发布到线上版本；NORMAL ¥996 截图仍有效。仍为 PARTIAL：双人签未齐 + 强制等式/V2 未建 → 微信门禁与总状态仍 NO-GO，不得宣称 PASS。**

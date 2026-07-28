@@ -42,9 +42,9 @@
 
 1. **V2 表缺失**：不能做 V2 quote / binding 验收。  
 2. **业务码 ≠ 微信 productId**：会员 `MEMBER_PRO_YEAR_996` vs 微信 `MEMBER_YEAR_996`；代理 `AGENT_STANDARD_996` vs 微信 `AGENT_JOIN_996`。  
-3. **代理本地价 = 100 分**：`xz_plans.price_cents=100`，但微信 productId 仍为 `AGENT_JOIN_996`（历史 996 价道具名）；**强制等式无法在无人核微信后台价时宣称一致** → 单项至少 NO-GO。  
+3. **代理价格（已恢复）**：正式售价 **99600 分（¥996）**；¥1 仅为临时测试。生产已于 2026-07-29 将 `plan_agent_join_996.price_cents` 从 100 恢复为 99600。  
 4. **grant_points > 0**：会员 40000、代理 100；V2 门禁要求候选方案 `giftPoints=0`。  
-5. **无会员/代理独立 ¥1 TEST productId**：仅有 Token 联调 `TOKEN_TEST_1FEN`（`recharge_test_1fen`，price_cents=1，沙箱 enabled、生产 mapping enabled=false）。  
+5. **微信 ¥1 TEST productId（2026-07-29 已发布）**：`MEMBER_TEST_1YUAN` / `AGENT_TEST_1YUAN` @ ¥1；正式 `AGENT_JOIN_996`/`MEMBER_YEAR_996` 保持 ¥996。系统侧 V2 映射/绑定仍缺失。  
 6. **无 RepoDigest**：不能按 digest 不可变发布。
 
 ## 仍须人工（系统内无）

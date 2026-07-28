@@ -234,31 +234,31 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 价格 | 正常价 / ¥1 TEST（100 分）**分开**，独立 productId |
 | 一致性 | productId、offerId、mode、environment、价格分 **完全一致** |
 
-生产 TEST：旧默认「不创建」已由 **操作员确认 2026-07-29「创建完成并发布」** 调和；线上列表视觉截图仍可选待补。双人签 / 强制等式未齐 → 仍不得 PASS。
+生产 TEST：操作员确认已创建并发布；**线上版本列表截图已补**（含两 TEST + 两 NORMAL 996）。双人签 / 强制等式 / V2 未齐 → 仍不得 PASS。
 
 ### 4.2 执行清单
 
 | # | 动作 | 勾选 |
 |---|---|---|
-| 1 | 按矩阵填完 SANDBOX/PRODUCTION × MEMBER/AGENT × NORMAL/TEST | [x] 微信侧 NORMAL+TEST 已填（含操作员发布确认）；系统 V2 仍缺 |
-| 2 | 微信后台按 productId 定位（禁止只凭商品名） | [x] 2026-07-29 已按 ID 核对/新建；线上含 TEST 列表视觉核验可选待补 |
+| 1 | 按矩阵填完 SANDBOX/PRODUCTION × MEMBER/AGENT × NORMAL/TEST | [x] 微信侧 NORMAL+TEST 已填并截图；系统 V2 仍缺 |
+| 2 | 微信后台按 productId 定位（禁止只凭商品名） | [x] 2026-07-29 已按 ID 核对/新建/线上核验 |
 | 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [ ] **未齐**（V2 对象不存在，无法端到端） |
 | 4 | 证明 good.offerId/mode 与运行时 offer/AppKey/AppID 同一套（代码不自动证明） | [ ] 仍待价格负责人复核 |
-| 5 | 截图 + 双人签字；密钥只记 Secret 版本，不写明文 | [~] 开发版/正式 NORMAL 截图已有；线上 TEST 列表可选待补；**第二人签字仍待** |
+| 5 | 截图 + 双人签字；密钥只记 Secret 版本，不写明文 | [~] 线上含 TEST 列表截图已齐；**第二人签字仍待** |
 
 ### 4.3 回填表
 
 | 字段 | 回填 |
 |---|---|
-| 执行人 / 复核人 / 时间 | 微信侧：Codex 代操创建 + 用户确认发布 2026-07-29；**价格负责人第二签字：待补** |
+| 执行人 / 复核人 / 时间 | 微信侧：Codex 代操创建 + 用户确认发布 + 线上列表截图 2026-07-29；**价格负责人第二签字：待补** |
 | 绑定的 releaseCommit / RepoDigest | §1 有 commit；RepoDigest 仍空 |
-| 矩阵完成行数 / 失败行 | 线上 NORMAL：`MEMBER_YEAR_996`/`AGENT_JOIN_996`=¥996 已截图；TEST：`MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`=¥1 — 操作员确认已创建并发布；线上列表截图可选待补；V2/双签未齐 |
+| 矩阵完成行数 / 失败行 | 线上：`MEMBER_YEAR_996`/`AGENT_JOIN_996`=¥996；`MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`=¥1 均已在**线上版本**可见；V2/双签/沙箱真机未齐 |
 | 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**；TEST `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`/**100 分**；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 对象=**系统无** |
 | 跨环境或 productId 复用问题 | 正式 996 未改价；¥1 使用独立 TEST productId（未复用 `AGENT_JOIN_996`） |
-| 操作员确认（2026-07-29） | 「道具已经创建完成并发布」— 调和旧报告「生产线上 TEST 未建」 |
-| 价格负责人确认（2026-07-29） | 正式 ¥996 已在线上版本核实；¥1 TEST 已创建并（操作员确认）发布。**待价格负责人签字确认** |
-| 证据路径 | `evidence/20260729/wechat-online-props-20260729.png`；`evidence/20260729/wechat-goods/`（含 `61-dev-list-both-tests.png` 等）；线上含两 TEST 列表截图：**可选待补** |
-| 单项结论 | **`PARTIAL / NO-GO`**（TEST 已创建并发布已调和；双人签未齐；无 V2/强制等式 → 不得 PASS） |
+| 操作员确认（2026-07-29） | 「道具已经创建完成并发布」+ 线上版本截图核验 |
+| 价格负责人确认（2026-07-29） | 正式 ¥996 与 TEST ¥1 微信侧已落地。**待价格负责人签字确认** |
+| 证据路径 | `evidence/20260729/wechat-online-props-20260729.png`；`wechat-online-props-with-tests-20260729.png`；`wechat-goods/72-online-props-with-tests.png`；`61-dev-list-both-tests.png` |
+| 单项结论 | **`PARTIAL / NO-GO`**（微信商品已创建并发布且截图齐；双人签未齐；无 V2/强制等式/沙箱 QA → 不得 PASS） |
 | 签字 | 第一操作员：Codex/用户会话；第二人（价格负责人）：**待签** |
 
 ---
@@ -355,13 +355,13 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §1 发布冻结 | **NO-GO** | commit+SHA 齐；**缺 RepoDigest/同 commit 镜像** | 2026-07-29 |
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
-| §4 微信道具 | **PARTIAL / NO-GO** | 线上 996 已截图；¥1 TEST 操作员确认已创建并发布；线上 TEST 列表截图可选待补；双人签未齐；无 V2 | 2026-07-29（第二签待） |
-| §5 沙箱真机 | **NO-GO** | 前置 FAIL（无 digest / 运行时非 sandbox / 矩阵 NO-GO） | 2026-07-28 |
+| §4 微信道具 | **PARTIAL / NO-GO** | 线上 996 + ¥1 TEST 已截图发布；双人签未齐；无 V2 | 2026-07-29（第二签待） |
+| §5 沙箱真机 | **NO-GO** | 前置 FAIL（无 digest / 运行时非 sandbox / V2 未建） | 2026-07-28 |
 | §6 开关启用 | **禁止** | 三开关 UNSET→false | — |
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
 
-**本轮结论（2026-07-29）：总状态 = `NO-GO`。** §2/§3 已代行完成；§1 仍缺镜像 digest；§4/§5 未过。不可启用 V2 开关，未对生产执行 097–100。
+**本轮结论（2026-07-29）：总状态 = `NO-GO`。** §2/§3 已代行完成；§1 仍缺镜像 digest；§4 微信商品已创建发布但双签/V2 未过；§5 未过。不可启用 V2 开关，未对生产执行 097–100。
 
 ---
 
@@ -370,8 +370,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 缺口 | 影响 | 谁补 |
 |---|---|---|
 | release commit 已有，**缺同 commit 镜像 RepoDigest** | 不能按 digest 不可变部署 | 发布/运维 |
-| 微信后台发布状态/截图/双人签 | TEST 操作员确认已创建并发布；双人签仍缺 → 不能宣称道具 PASS | 微信 |
-| 代理正式价 vs 库内价 | 价格负责人确认正式 **99600**；生产已于 2026-07-29 恢复 **99600**（原测试价 100 已撤） | 已处理；¥1 TEST 仍须独立 productId |
+| 微信双人签 / 强制等式 | 商品已发布截图齐；双人签与 V2 映射仍缺 → 不能宣称道具 PASS | 微信+价格 |
+| 代理正式价 vs 库内价 | 价格负责人确认正式 **99600**；生产已恢复 **99600**；¥1 已独立 productId | 已处理 |
 | 沙箱真机未跑 | Gate B/C 阻断 | 微信+QA |
 | offerId/mode↔AppKey 无自动证明 | 必须双人人工闭环 | 微信 |
 | phase3 退款/补偿/补发 | 本包不做 | 业务+应用 |
