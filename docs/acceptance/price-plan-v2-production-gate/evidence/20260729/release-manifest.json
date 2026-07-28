@@ -1,8 +1,22 @@
 {
-  "filledAt": "2026-07-29T04:35:00+08:00",
-  "filledBy": "release-owner+DBA (delegated to Codex by user)",
+  "filledAt": "2026-07-29T05:25:00+08:00",
+  "filledBy": "release-owner+DBA+price-owner (delegated to Codex by user)",
   "status": "NO-GO",
-  "notes": "Materials freeze + DBA preflight + isolated rehearsal completed. Prod local image built/deployed for deployCommit 3d0c0e032 (includes f2433ea1b admin modules + AdminApiError + backend modules). RepoDigest still null (local-only tag). WeChat/QA gates missing. V2 switches remain false. No production migration 097-100 applied.",
+  "notes": "Dual-sign PASS for WeChat goods. Prod migrations 097-100 APPLIED from freeze archive SHAs; VALIDATE 097-100 STILL_NOT_VALID=0; baselines unchanged; V2 tables empty (0 rows). Three V2 switches remain false. Force-equality still BLOCKED (no V2 business rows). Sandbox QA not run. RepoDigest still null.",
+  "prodMigrate": {
+    "appliedAt": "2026-07-29T05:19:00+08:00",
+    "order": ["097", "098", "099", "100"],
+    "exitCodes": [0, 0, 0, 0],
+    "validateStillNotValid097_100": 0,
+    "evidence": "evidence/20260729/prod-migrate/",
+    "baselineBefore": {"orders": 51, "plans": 24, "amountSum": 3484992},
+    "baselineAfter": {"orders": 51, "plans": 24, "amountSum": 3484992, "pricePlans": 0, "goods": 0, "bindings": 0},
+    "v2SwitchesAfter": {
+      "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": false,
+      "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": false,
+      "PRICE_PLAN_TEST_ENTRY_ENABLED": false
+    }
+  },
   "releaseCommit": "e8f191805ca1d6c9a4b214ee91312aeb796c0b10",
   "releaseTree": "c0bf56a2ddc51dd2c77e4918b157e1ab15178db2",
   "deployCommit": "3d0c0e032d79a61611b83771874be91df3715e7a",

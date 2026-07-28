@@ -30,8 +30,22 @@ Icon: `wechat-test-prop-icon-200x200.png` (also `../wechat-prop-icon-200.png`).
 
 Operator confirmation 2026-07-29: created and published. Official 996 prices not changed.
 
-## Remaining
+## Dual-sign (2026-07-29)
 
-- Dual-sign: price owner second signature still pending (do not invent PASS).
-- V2 tables / bindings still absent → force-equality cannot close → overall gate NO-GO.
-- Sandbox real-device V2 quote (§5) still blocked.
+Price-owner second signature **recorded**: `../price-owner-wechat-goods-dual-sign.md`.
+
+User replied「继续」after being told next human step is price-owner dual-sign / co-sign; treated as price-owner authorization (same operator already delegated release-owner + DBA for this gate).
+
+| productId | cents | dual-sign |
+|---|---:|---|
+| MEMBER_YEAR_996 | 99600 | PASS |
+| AGENT_JOIN_996 | 99600 | PASS |
+| MEMBER_TEST_1YUAN | 100 | PASS |
+| AGENT_TEST_1YUAN | 100 | PASS |
+
+## Remaining (separate from dual-sign)
+
+- Prod migrate 097→100 **APPLIED** (schema only); V2 business rows still 0 → **force-equality cannot close**.
+- Overall §4 still **PARTIAL**; total gate **NO-GO**.
+- Sandbox real-device V2 quote (§5) still blocked — do not invent PASS.
+- V2 feature flags must stay **false**.

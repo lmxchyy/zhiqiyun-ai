@@ -1,0 +1,8 @@
+PROD_MIGRATE_FILES_DONE 2026-07-29T05:19:12+0800
+baseline_after:
+orders=51
+plans=24
+amount_sum=3484992
+price_plans=0
+goods=0
+bindings=0
