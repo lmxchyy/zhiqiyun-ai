@@ -5,7 +5,9 @@
 > 代码与上线材料已准备，真实环境未验收。未收回填前：**禁止生产迁移、禁止生产部署启用、禁止打开任何 V2 开关。**
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
-> **2026-07-29 04:10+08 更新：** 用户授权代行发布负责人+DBA。已完成：release commit `e8f191805…`、archive SHA、全量只读预检 PASS、隔离库 097→100 + VALIDATE=0 + 二次恢复 PASS。仍缺：同 commit 镜像 RepoDigest、微信后台、沙箱真机。**总状态保持 NO-GO。**
+> **2026-07-29 04:35+08 更新：** 生产已构建并切换本地镜像 local/xianzhi-ai-platform:3d0c0e032（IMAGE_ID sha256:ead3963844…，基于 deployCommit 3d0c0e032，含 f2433ea1b 管理端模块）。RepoDigest 仍为空（未推 registry）。V2 三开关均为 false。未执行 097–100。仍缺微信后台与沙箱真机验收；**总状态保持 NO-GO。**
+>
+> **2026-07-29 04:10+08 更新（历史）：** 用户授权代行发布负责人+DBA。已完成：release commit `e8f191805…`、archive SHA、全量只读预检 PASS、隔离库 097→100 + VALIDATE=0 + 二次恢复 PASS。仍缺：同 commit 镜像 RepoDigest、微信后台、沙箱真机。**总状态保持 NO-GO。**
 
 ## 交接总览
 
@@ -100,7 +102,7 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 | # | 动作 | 命令/出处 | 勾选 |
 |---|---|---|---|
 | 1 | 形成审批过的 release commit | `release-freeze-runbook.md` §2 | [x] `e8f191805…` |
-| 2 | 同 commit 构建镜像（禁止脏工作区 build） | 同手册 §4 | [ ] **未做** |
+| 2 | 同 commit 构建镜像（禁止脏工作区 build） | 同手册 §4 | [x] 3d0c0e032 local image |
 | 3 | push 后记录不可变 `repository@sha256:...` RepoDigest | 同手册 §5 | [ ] **无** |
 | 4 | 从 `git archive` 重算 097–100 SHA256 | 同手册 §3 | [x] |
 | 5 | 写出 release manifest JSON（commit/tree/imageId/repoDigest/migrations） | 同手册 §6 | [x]（digest=null） |
@@ -113,14 +115,14 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 | 执行人 / 日期 | 用户授权代行发布负责人；Codex 执行 2026-07-29 04:00+08 |
 | releaseCommit (40 hex) | `e8f191805ca1d6c9a4b214ee91312aeb796c0b10` |
 | releaseTree | `c0bf56a2ddc51dd2c77e4918b157e1ab15178db2` |
-| imageRef / imageId | **未构建**（本轮仅冻结材料 commit；现网旧镜像仍为 `sha256:71f110f7…`） |
+| imageRef / imageId | local/xianzhi-ai-platform:git-3d0c0e032 / sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331（deployCommit 3d0c0e032；含 f2433ea1b） |
 | repoDigest (`@sha256:...`) | **无** |
 | 097 SHA256 | `784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7` |
 | 098 SHA256 | `AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2` |
 | 099 SHA256 | `1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9` |
 | 100 SHA256 | `8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649` |
 | 证据路径 | `evidence/20260729/release-manifest.json` + `migration-sha256-from-archive.txt` |
-| 单项结论 | **`NO-GO`**（材料已冻结且 SHA 已算；**缺同 commit 镜像与 RepoDigest**） |
+| 单项结论 | **NO-GO**（本地镜像已构建并切换 xianzhi-ai；**仍缺 registry RepoDigest**；微信/沙箱未做；V2 开关保持 false；未跑 097–100） |
 | 签字 | 用户（发布负责人）授权代行 / Codex 代填 |
 
 **单项 PASS 不等于生产 GO。**
@@ -166,7 +168,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 硬阻断非零项（区段+简述） | **无**（C 缺列=0；锁等待=0；V132 阻断行=0；plan code 重复=0） |
 | V132 行数 | **`0`** |
 | giftPoints(V2) | N/A（`xz_price_plans` 尚未创建；首次应用前预期） |
-| V1 价格基线（只读） | 会员 99600；代理 **100**（仍须价格负责人确认，不计入本预检 SQL 硬阻断） |
+| V1 价格基线（只读） | 会员正式 **99600**；代理已于 2026-07-29 从测试价 100 **恢复为正式 99600**（grant_points 同步恢复 20000）。¥1 仍仅为临时测试语义，须独立 TEST 方案/productId |
 | 证据文件路径 + SHA256 | `evidence/20260729/dba-preflight.log` / `256ff4b463cada4defff50bb0eb07bdafa4b93c30233f6e8d5015a14b6b98433` |
 | 单项结论 | **`PASS`**（只读预检；**不代表**允许生产迁移或开开关） |
 | 签字 | 用户（DBA）授权代行 / Codex 代填 |
@@ -251,8 +253,9 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 执行人 / 复核人 / 时间 | **待微信 + 价格负责人**（后台不可代登）；协调人已填系统侧 ID/价格 |
 | 绑定的 releaseCommit / RepoDigest | 无（§1 未冻结） |
 | 矩阵完成行数 / 失败行 | 系统字段已填 6 行可查基线；**微信发布状态/截图/双人签仍待人工**；生产 TEST 两行默认 NO-GO；沙箱 TEST productId=**系统无** |
-| 系统已填关键值 | MEMBER productId=`MEMBER_YEAR_996` 价 **99600**；AGENT productId=`AGENT_JOIN_996` 价 **100**；offerId 运行时=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 pricePlan/binding/good=**系统无** |
-| 跨环境或 productId 复用问题 | V1 正式/沙箱 **共用同一 productId**（仅 env 0/1 分行）。会员本地码 `MEMBER_PRO_YEAR_996` ≠ 微信 `MEMBER_YEAR_996`；代理本地码 `AGENT_STANDARD_996` ≠ 微信 `AGENT_JOIN_996`；代理本地价 **100 分** vs 996 命名道具 |
+| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**（2026-07-29 已从 100 恢复）；审批：正式 99600 / 临时测试 100；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 对象=**系统无** |
+| 跨环境或 productId 复用问题 | V1 正式/沙箱共用 productId（env 0/1）。会员业务码≠微信 productId。代理正式价已恢复 99600；**仍缺独立 AGENT ¥1 TEST productId** |
+| 价格负责人确认（2026-07-29） | 代理正式售价 **¥996**；**¥1 为临时测试**。生产 `plan_agent_join_996.price_cents` 已恢复 **99600** |
 | 证据路径 | `evidence/20260728/system-snapshot.md`；微信截图目录 `evidence/20260728/wechat-goods/`（待建） |
 | 单项结论 | **`NO-GO`**（系统基线已填，微信后台与双人签未完成；无 V2） |
 | 签字 | 待双人签 |
@@ -367,7 +370,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|---|
 | release commit 已有，**缺同 commit 镜像 RepoDigest** | 不能按 digest 不可变部署 | 发布/运维 |
 | 微信后台发布状态/截图/双人签 | 不能宣称道具 PASS | 微信 |
-| 代理生产价 `price_cents=100` 未确认 | 可能与审批正式价不符 | 价格负责人 |
+| 代理正式价 vs 库内价 | 价格负责人确认正式 **99600**；生产已于 2026-07-29 恢复 **99600**（原测试价 100 已撤） | 已处理；¥1 TEST 仍须独立 productId |
 | 沙箱真机未跑 | Gate B/C 阻断 | 微信+QA |
 | offerId/mode↔AppKey 无自动证明 | 必须双人人工闭环 | 微信 |
 | phase3 退款/补偿/补发 | 本包不做 | 业务+应用 |

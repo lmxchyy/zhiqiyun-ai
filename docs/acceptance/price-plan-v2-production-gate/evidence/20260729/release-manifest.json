@@ -1,14 +1,25 @@
 {
-  "filledAt": "2026-07-29T04:10:00+08:00",
+  "filledAt": "2026-07-29T04:35:00+08:00",
   "filledBy": "release-owner+DBA (delegated to Codex by user)",
   "status": "NO-GO",
-  "notes": "Materials freeze + DBA preflight + isolated rehearsal completed. Missing registry RepoDigest and WeChat/QA gates. V2 switches remain false. No production migration applied.",
+  "notes": "Materials freeze + DBA preflight + isolated rehearsal completed. Prod local image built/deployed for deployCommit 3d0c0e032 (includes f2433ea1b admin modules + AdminApiError + backend modules). RepoDigest still null (local-only tag). WeChat/QA gates missing. V2 switches remain false. No production migration 097-100 applied.",
   "releaseCommit": "e8f191805ca1d6c9a4b214ee91312aeb796c0b10",
   "releaseTree": "c0bf56a2ddc51dd2c77e4918b157e1ab15178db2",
+  "deployCommit": "3d0c0e032d79a61611b83771874be91df3715e7a",
+  "deployTree": "a0a260d6099a3edb42e2765d617acc7d46619082",
   "branch": "codex/channel-ecosystem-v132-phase3",
-  "imageRef": null,
-  "imageId": null,
+  "imageRef": "local/xianzhi-ai-platform:git-3d0c0e032",
+  "imageTags": [
+    "local/xianzhi-ai-platform:git-3d0c0e032",
+    "local/xianzhi-ai-platform:3d0c0e032"
+  ],
+  "imageId": "sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331",
   "repoDigest": null,
+  "v2Switches": {
+    "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": false,
+    "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": false,
+    "PRICE_PLAN_TEST_ENTRY_ENABLED": false
+  },
   "migrations": [
     {
       "file": "database/migrations/097-member-agent-price-plan-v2.sql",
@@ -42,9 +53,24 @@
     "database": "zhiqiyun_rehearsal_202607290400",
     "restoreSec": 10,
     "restoreAclErrors": 275,
-    "migrateSec": { "097": "<1", "098": "<1", "099": "<1", "100": "<1" },
-    "baselineBefore": { "orders": 47, "plans": 24, "amountSum": 3285592 },
-    "baselineAfter": { "orders": 47, "plans": 24, "amountSum": 3285592, "pricePlans": 0, "goods": 0 },
+    "migrateSec": {
+      "097": "<1",
+      "098": "<1",
+      "099": "<1",
+      "100": "<1"
+    },
+    "baselineBefore": {
+      "orders": 47,
+      "plans": 24,
+      "amountSum": 3285592
+    },
+    "baselineAfter": {
+      "orders": 47,
+      "plans": 24,
+      "amountSum": 3285592,
+      "pricePlans": 0,
+      "goods": 0
+    },
     "notValidRemaining": 0,
     "secondRestoreSec": 10,
     "conclusion": "PASS"
