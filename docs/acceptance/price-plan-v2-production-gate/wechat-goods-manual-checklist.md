@@ -17,7 +17,7 @@
 | 线上版本 NORMAL | `MEMBER_YEAR_996`=¥996；`AGENT_JOIN_996`=¥996（正式价未改动） |
 | TEST 道具 | `MEMBER_TEST_1YUAN`=¥1；`AGENT_TEST_1YUAN`=¥1（独立 productId）；操作员确认已创建并发布 |
 | 操作员 | Codex 代操创建（开发版本截图已有）；用户确认发布；**价格负责人第二签字仍待** |
-| 证据 | 开发版本：`evidence/20260729/wechat-goods/61-dev-list-both-tests.png` 等；线上 NORMAL：`wechat-online-props-20260729.png`；**线上含 TEST 列表截图：可选待补** |
+| 证据 | 开发版本：`61-dev-list-both-tests.png`；发布态：`70-current-console.png`（两 TEST「已发布」+「查看线上」）；线上 NORMAL：`wechat-online-props-20260729.png`；**线上版本专用列表含 TEST：可选待补** |
 
 ## 1. 必需商品矩阵
 

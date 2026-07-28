@@ -26,7 +26,9 @@ Icon used for upload: `wechat-test-prop-icon-200x200.png` (200×200 PNG).
 
 Official `MEMBER_YEAR_996` / `AGENT_JOIN_996` prices were **not** changed.
 
-**Operator confirmation 2026-07-29:** 「道具已经创建完成并发布」— reconciles prior agent note that production online TEST rows were intentionally not created. Visual verify of **线上版本** list showing both TEST productIds is **optional pending** (no browser WeChat session this round; screenshot not captured under this folder).
+**Operator confirmation 2026-07-29:** 「道具已经创建完成并发布」— reconciles prior agent note that production online TEST rows were intentionally not created.
+
+**Visual (same day):** `70-current-console.png` — 开发版本列表中两 TEST 均为「已发布」，并有「查看线上」入口。切换到「线上版本」专用列表截图仍为可选待补。
 
 ## Remaining
 
