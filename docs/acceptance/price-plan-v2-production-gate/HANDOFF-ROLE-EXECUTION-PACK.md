@@ -1,10 +1,12 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `NO-GO`（开关已开；真机/沙箱未过）**
+> **当前总状态 = `NO-GO`（开关已开；白名单已补；真机/沙箱未过）**
 >
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
-> **2026-07-29 05:36+08 更新：** 用户「明确授权开」——生产按序启用三开关（履约 05:34:54 → 创建 05:35:11 → TEST 05:35:27，均 +0800）。每次 recreate 后 **healthy**；容器实读三开关 **true**；`WECHAT_VIRTUAL_PAY_ENV` **保持 production（未切 sandbox）**。MEMBER/AGENT NORMAL dry quote **201 @99600**（未下单）；pricing-health `blockedIssueCount=2`（`TEST_WHITELIST_MISSING`）。正式价基线仍 **99600**。沙箱真机仍 **未测 / 禁止发明 PASS**。总状态仍 **NO-GO**（缺 RepoDigest、sandbox 运行时、白名单、真机支付）。证据：`evidence/20260729/v2-flags-enable/`。
+> **2026-07-29 05:44+08 更新：** 已为 MEMBER/AGENT TEST 写入有效白名单（真实账号 `user_000002` / 演示用户，两端同人；**未造号**）。pricing-health → **HEALTHY**，`blockedIssueCount=0`，`TEST_WHITELIST_MISSING` **已清除**。三开关仍 **true/true/true**；`WECHAT_VIRTUAL_PAY_ENV` **仍为 production（未切）**。沙箱真机仍 **未测 / 禁止发明 PASS**。总状态仍 **NO-GO**（缺 RepoDigest、sandbox 运行时、真机支付）。证据：`evidence/20260729/test-whitelist/`。
+>
+> **2026-07-29 05:36+08 更新：** 用户「明确授权开」——生产按序启用三开关（履约 05:34:54 → 创建 05:35:11 → TEST 05:35:27，均 +0800）。每次 recreate 后 **healthy**；容器实读三开关 **true**；`WECHAT_VIRTUAL_PAY_ENV` **保持 production（未切 sandbox）**。MEMBER/AGENT NORMAL dry quote **201 @99600**（未下单）；pricing-health 当时 `blockedIssueCount=2`（`TEST_WHITELIST_MISSING`，**其后已清**）。正式价基线仍 **99600**。证据：`evidence/20260729/v2-flags-enable/`。
 >
 > **2026-07-29 05:30+08 更新：** 已在生产建齐 MEMBER/AGENT × NORMAL/TEST 的 V2 对象（SQL 引导首个 plan_version + admin API 建 pricePlan/good/binding；`giftPoints=0`）。静态强制等式 **PASS**（plan=binding=good；矩阵缺行=0；对齐双签 99600/100）。含 quote 的端到端强制等式仍 **BLOCKED**（三开关 false，未发 quote）。沙箱真机 **STOP**（运行时 production；开 quote 需开关）。三开关保持 **false**。总状态 **NO-GO**。
 >
@@ -287,7 +289,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 4 | §4 沙箱道具矩阵 PASS | [~] 微信双签 PASS；PRODUCTION 静态强制等式 PASS；**无 SANDBOX env V2 行**；quote 未测 |
 | 5 | V132=0、giftPoints=0 | [x] 点查 **V132=0**；V2 pricePlan `giftPoints=0`；禁止用 V1 `grant_points` 冒充门禁通过 |
 
-**STOP / 未测：** V2 三开关已按授权打开，但运行时仍为 `WECHAT_VIRTUAL_PAY_ENV=production`（**未静默切 sandbox**）。完整沙箱真机仍需 sandbox 运行时 + SANDBOX 商品行 + TEST 白名单；见 `evidence/20260729/v2-flags-enable/README.md` 人工清单。**禁止发明沙箱 QA PASS。**
+**STOP / 未测：** V2 三开关已按授权打开，但运行时仍为 `WECHAT_VIRTUAL_PAY_ENV=production`（**未静默切 sandbox**）。TEST 白名单已写入（`user_000002`）；完整沙箱真机仍需 sandbox 运行时 + SANDBOX 商品行；见 `evidence/20260729/v2-flags-enable/README.md` 与 `evidence/20260729/test-whitelist/`。**禁止发明沙箱 QA PASS。**
 
 事故回退顺序仍见 `go-no-go-gate.md`：先关 TEST → 再关创建 → 履约视在途单保留。
 
@@ -312,7 +314,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|
 | 执行人 / 微信 / 后端复核 / 日期 | **STOP** — 2026-07-29 05:36+08：三开关已开；pay env 仍 production；真机未测 |
 | 体验版版本 / 真机与基础库 | 系统无 / 待人工 |
-| 失败用例编号 | 全部未测（1–10）；前置 1/3 未满足；缺 TEST 白名单；PRODUCTION dry quote 仅作探针 |
+| 失败用例编号 | 全部未测（1–10）；前置 1/3 未满足；TEST 白名单已补；PRODUCTION dry quote 仅作探针 |
 | 证据路径 | `evidence/20260729/v2-flags-enable/`（开关+dry quote）；真机目录未建 |
 | 单项结论 | **`NO-GO` / STOP**（开关已开 ≠ 沙箱真机 PASS；禁止发明 PASS） |
 | 签字 | 待签 |
@@ -322,7 +324,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 ## §6 发布负责人 — 启用开关
 
 **2026-07-29 05:34–05:35+08：** 用户「明确授权开」已按序执行；证据 `evidence/20260729/v2-flags-enable/`。  
-**仍非最终 GO：** §1 缺 RepoDigest、§5 沙箱真机未测、TEST 白名单缺失、pay env 仍 production。
+**仍非最终 GO：** §1 缺 RepoDigest、§5 沙箱真机未测、pay env 仍 production。
 
 ### 6.1 启用顺序（不可颠倒）— 已执行
 
@@ -340,7 +342,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 任一 V132/CANARY affected tenant | health：`v132Blocked=false`，affected=0 |
 | 任一候选方案 `giftPoints > 0` | V2 NORMAL/TEST `giftPoints=0` |
 | §1–§5 任一项未回填或 NO-GO | **仍 NO-GO**（RepoDigest / 沙箱真机） |
-| TEST 白名单 | **缺失** → pricing-health BLOCKED ×2 |
+| TEST 白名单 | **已写入** `user_000002`（演示用户）→ MEMBER_TEST + AGENT_TEST；pricing-health **HEALTHY** |
 | 第三阶段需求未另批 | **继续 OUT OF SCOPE** |
 | 静默切 `WECHAT_VIRTUAL_PAY_ENV=sandbox` | **未做**（有意保持 production） |
 
@@ -353,7 +355,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 履约开启时间 / 操作人 | **2026-07-29 05:34:54 +0800** / agent（用户授权） |
 | 创建开启时间 / 操作人 | **2026-07-29 05:35:11 +0800** / agent（用户授权） |
 | TEST 开启时间 / 操作人 | **2026-07-29 05:35:27 +0800** / agent（用户授权） |
-| pricing health blockedIssueCount | **2**（`TEST_WHITELIST_MISSING` × MEMBER/AGENT TEST）；NORMAL HEALTHY @99600 |
+| pricing health blockedIssueCount | **0**（2026-07-29 05:44+08 复核；`TEST_WHITELIST_MISSING` 已清；status=HEALTHY） |
+| TEST 白名单账号 | `user_000002` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
 | dry quote | MEMBER/AGENT NORMAL **201 @99600**（PRODUCTION；未下单；quoteId 脱敏） |
 | 最终 GO/NO-GO | **NO-GO**（开关已开 ≠ 全门禁 PASS；禁止发明沙箱真机 PASS） |
 
@@ -369,14 +372,15 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
 | §4 微信道具 | **PARTIAL** | 双签 PASS；静态强制等式 PASS；quote 层仍 BLOCKED；截图齐 | 2026-07-29 |
-| §5 沙箱真机 | **NO-GO / STOP** | 三开关已开；仍缺 digest / sandbox 运行时 / 白名单 / 真机支付 | 2026-07-29 |
+| §5 沙箱真机 | **NO-GO / STOP** | 三开关已开；白名单已补；仍缺 digest / sandbox 运行时 / 真机支付 | 2026-07-29 |
 | §6 开关启用 | **DONE（授权窗口）** | 三开关 = true；pay env = production；证据 `v2-flags-enable/` | 2026-07-29 05:35+08 |
+| TEST 白名单 | **DONE** | `user_000002` → MEMBER/AGENT TEST；health HEALTHY；`evidence/20260729/test-whitelist/` | 2026-07-29 05:44+08 |
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/`；SHA 对齐；VALIDATE=0 | 2026-07-29 05:19+08 |
 | V2 业务行 seed | **DONE** | `evidence/20260729/v2-seed/`；4 plan + 4 good + 4 binding | 2026-07-29 05:26+08 |
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
 
-**本轮结论（2026-07-29 05:36+08）：总状态 = `NO-GO`。** 三开关已按授权打开且 health/dry quote 正常；正式价 99600 未破坏；**未**切 sandbox；§5 真机未测；pricing-health 因 TEST 白名单仍 BLOCKED。下一步：补 TEST 白名单；另窗评估 sandbox 真机；推 RepoDigest；禁止发明沙箱 QA PASS。
+**本轮结论（2026-07-29 05:44+08）：总状态 = `NO-GO`。** 三开关已开；TEST 白名单已用真实账号 `user_000002`（演示用户）补齐，pricing-health **HEALTHY**；正式价 99600 未破坏；**未**切 sandbox；§5 真机未测。下一步：另窗评估 sandbox 真机；推 RepoDigest；禁止发明沙箱 QA PASS。
 
 ---
 

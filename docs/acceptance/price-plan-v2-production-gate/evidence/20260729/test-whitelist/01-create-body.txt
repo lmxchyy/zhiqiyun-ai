@@ -1,0 +1,1 @@
+{"revision": 0, "userId": "user_000002", "reason": "production-gate TEST whitelist: existing demo payment tester user_000002 (演示用户); wechat-bound; prior MEMBER/AGENT virtual pay attempts", "changeReason": "clear TEST_WHITELIST_MISSING for MEMBER_TEST/AGENT_TEST using real xz_users account"}

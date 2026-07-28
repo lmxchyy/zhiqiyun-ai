@@ -11,7 +11,7 @@
 > **真机前人工 checklist（给操作者）：**  
 > 1) 确认变更窗是否允许临时 `WECHAT_VIRTUAL_PAY_ENV=sandbox`（或独立沙箱栈）；切前备份 `.env.production` 并记录风险。  
 > 2) 确认 sandbox AppKey/offer 与 SANDBOX 商品矩阵就绪。  
-> 3) 为 MEMBER/AGENT TEST 写入有效白名单（清 `TEST_WHITELIST_MISSING`）。  
+> 3) TEST 白名单已写入（`user_000002`）；真机前确认账号仍为 ACTIVE。  
 > 4) 体验版自定义编译进入 TEST 隐藏页；NORMAL/TEST 均走 quoteId 下单。  
 > 5) 测完按回退顺序关 TEST→创建；有在途 V2 单时勿关履约。
 
