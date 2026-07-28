@@ -4,7 +4,9 @@
 >
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
-> **2026-07-29 05:44+08 更新：** 已为 MEMBER/AGENT TEST 写入有效白名单（真实账号 `user_000002` / 演示用户，两端同人；**未造号**）。pricing-health → **HEALTHY**，`blockedIssueCount=0`，`TEST_WHITELIST_MISSING` **已清除**。三开关仍 **true/true/true**；`WECHAT_VIRTUAL_PAY_ENV` **仍为 production（未切）**。沙箱真机仍 **未测 / 禁止发明 PASS**。总状态仍 **NO-GO**（缺 RepoDigest、sandbox 运行时、真机支付）。证据：`evidence/20260729/test-whitelist/`。
+> **2026-07-29 05:45+08 更新：** 用户点名 `demo@xianzhi.ai` → 生产解析为 **`user_000002`（演示用户）**，与已写入 MEMBER/AGENT TEST 白名单为同一账号（两端 ACTIVE，无需重复创建）。pricing-health 再查仍 **HEALTHY** / `blockedIssueCount=0`。三开关仍 **true/true/true**；pay env 仍 **production**。总状态仍 **NO-GO**（缺 RepoDigest、sandbox 运行时、真机支付）。证据：`evidence/20260729/test-whitelist/`（含 `00-resolve-demo-email.txt`）。
+>
+> **2026-07-29 05:44+08 更新：** 已为 MEMBER/AGENT TEST 写入有效白名单（真实账号 `user_000002` / 演示用户 / `demo@xianzhi.ai`，两端同人；**未造号**）。pricing-health → **HEALTHY**，`blockedIssueCount=0`，`TEST_WHITELIST_MISSING` **已清除**。三开关仍 **true/true/true**；`WECHAT_VIRTUAL_PAY_ENV` **仍为 production（未切）**。沙箱真机仍 **未测 / 禁止发明 PASS**。总状态仍 **NO-GO**。证据：`evidence/20260729/test-whitelist/`。
 >
 > **2026-07-29 05:36+08 更新：** 用户「明确授权开」——生产按序启用三开关（履约 05:34:54 → 创建 05:35:11 → TEST 05:35:27，均 +0800）。每次 recreate 后 **healthy**；容器实读三开关 **true**；`WECHAT_VIRTUAL_PAY_ENV` **保持 production（未切 sandbox）**。MEMBER/AGENT NORMAL dry quote **201 @99600**（未下单）；pricing-health 当时 `blockedIssueCount=2`（`TEST_WHITELIST_MISSING`，**其后已清**）。正式价基线仍 **99600**。证据：`evidence/20260729/v2-flags-enable/`。
 >
@@ -356,7 +358,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 创建开启时间 / 操作人 | **2026-07-29 05:35:11 +0800** / agent（用户授权） |
 | TEST 开启时间 / 操作人 | **2026-07-29 05:35:27 +0800** / agent（用户授权） |
 | pricing health blockedIssueCount | **0**（2026-07-29 05:44+08 复核；`TEST_WHITELIST_MISSING` 已清；status=HEALTHY） |
-| TEST 白名单账号 | `user_000002` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
+| TEST 白名单账号 | `user_000002` / `demo@xianzhi.ai` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
 | dry quote | MEMBER/AGENT NORMAL **201 @99600**（PRODUCTION；未下单；quoteId 脱敏） |
 | 最终 GO/NO-GO | **NO-GO**（开关已开 ≠ 全门禁 PASS；禁止发明沙箱真机 PASS） |
 

@@ -10,9 +10,11 @@
 
 ## 选用账号（真实 xz_users，未造号）
 
-| userId | 昵称 | 选用理由 |
-|---|---|---|
-| `user_000002` | 演示用户 | 系统既有演示/支付测试账号；`wechatOpenIds` 已绑定（2）；近期 MEMBER/AGENT 虚拟支付下单记录最多（含 AGENT/MEMBER @99600 与历史 ¥1 试单）；仓库 artifacts 多处以此为小程序登录身份 |
+| userId | 邮箱 | 昵称 | 选用理由 |
+|---|---|---|---|
+| `user_000002` | **`demo@xianzhi.ai`** | 演示用户 | 邮件查找确认 `email=demo@xianzhi.ai` → 即本账号；系统既有演示/支付测试账号；`wechatOpenIds` 已绑定（2）；近期 MEMBER/AGENT 虚拟支付下单最多；artifacts 多处以此为小程序登录身份 |
+
+**2026-07-29 复核：** 用户点名 `demo@xianzhi.ai` → 解析为 `user_000002`；MEMBER/AGENT TEST 白名单 **已 ACTIVE**（无需重复创建）；pricing-health 再查仍 **HEALTHY**。证据：`00-resolve-demo-email.txt`。
 
 同一账号同时写入：
 
