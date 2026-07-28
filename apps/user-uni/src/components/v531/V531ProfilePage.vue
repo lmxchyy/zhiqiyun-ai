@@ -158,6 +158,8 @@
       </button>
     </view>
 
+    <slot name="extra" />
+
     <view class="profile-v55-settings-card">
       <button type="button" class="profile-v55-settings-row" hover-class="profile-v55-pressed" @click="$emit('service', 'settings')">
         <text class="profile-v55-settings-icon">设</text>

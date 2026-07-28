@@ -92,6 +92,7 @@ export const miniProgramFeaturePages = {
   userSettings: "/pages/user/UserSettingsPage",
   userRechargePlans: "/pages/user/UserRechargePlansPage",
   userVirtualPayment: "/pages/user/UserVirtualPaymentPage",
+  userVirtualPaymentTest: "/pages/user/UserVirtualPaymentTestPage",
   userOrders: "/pages/user/UserOrdersPage",
   userOrderDetail: "/pages/user/UserOrderDetailPage",
   userOrderConfirm: "/pages/user/UserOrderConfirmPage",

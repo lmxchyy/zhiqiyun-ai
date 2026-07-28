@@ -1979,7 +1979,7 @@ for (const moduleName of ["api.js", "availability.js", "platform.js"]) {
     (source) => source.replace(/require\("\.\.\/\.\.\//g, 'require("../../../../')
   );
 }
-for (const pageName of ["UserOrderConfirmPage.js", "UserVirtualPaymentPage.js", "UserCommerceOrderConfirmPage.js"]) {
+for (const pageName of ["UserOrderConfirmPage.js", "UserVirtualPaymentPage.js", "UserVirtualPaymentTestPage.js", "UserCommerceOrderConfirmPage.js"]) {
   const pagePath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-account", pageName));
   const original = fs.readFileSync(pagePath, "utf8");
   const updated = original
