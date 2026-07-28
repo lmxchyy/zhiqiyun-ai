@@ -1,0 +1,26 @@
+{
+  "quoteId": "sha256:8905c69fe4abe4f0",
+  "planId": "plan_agent_join_996",
+  "planVersionId": "plan_version_agent_996_v1",
+  "pricePlanId": "price_plan_20260728212620000000000_1ae3da1d",
+  "name": "代理正式价996",
+  "amountCent": 99600,
+  "originalAmountCent": 99600,
+  "currency": "CNY",
+  "giftPoints": 0,
+  "giftTokens": 0,
+  "environment": "PRODUCTION",
+  "expiresAt": "2026-07-28T23:39:56.138172062Z",
+  "entitlements": {
+    "agentLevel": "AGENT",
+    "basePointsAmount": 0,
+    "baseTokenAmount": 20000,
+    "durationDays": 0,
+    "pointsAmount": 0,
+    "pricePlanGiftPoints": 0,
+    "pricePlanGiftTokens": 0,
+    "tokenAmount": 20000,
+    "tokenGrantAmount": 20000
+  },
+  "testOnly": false
+}

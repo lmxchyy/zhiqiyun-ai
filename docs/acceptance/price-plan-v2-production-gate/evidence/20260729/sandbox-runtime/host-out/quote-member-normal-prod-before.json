@@ -1,0 +1,26 @@
+{
+  "quoteId": "sha256:810c1ad66e639be8",
+  "planId": "plan_ai_creator_996",
+  "planVersionId": "plan_version_member_996_v1",
+  "pricePlanId": "price_plan_20260728212620000000000_a2443d26",
+  "name": "会员正式价996",
+  "amountCent": 99600,
+  "originalAmountCent": 99600,
+  "currency": "CNY",
+  "giftPoints": 0,
+  "giftTokens": 0,
+  "environment": "PRODUCTION",
+  "expiresAt": "2026-07-28T23:39:32.457388888Z",
+  "entitlements": {
+    "basePointsAmount": 0,
+    "baseTokenAmount": 40000,
+    "durationDays": 365,
+    "memberLevel": "PRO",
+    "pointsAmount": 0,
+    "pricePlanGiftPoints": 0,
+    "pricePlanGiftTokens": 0,
+    "tokenAmount": 40000,
+    "tokenGrantAmount": 40000
+  },
+  "testOnly": false
+}

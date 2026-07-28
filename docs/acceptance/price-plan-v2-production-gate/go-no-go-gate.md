@@ -1,17 +1,19 @@
 # 会员/代理价格方案 V2 上线前 GO/NO-GO 门禁
 
-当前总状态：`NO-GO FOR PRODUCTION ENABLEMENT`
+当前总状态：`NO-GO`（主残差：registry RepoDigest）
 
-当前只允许继续：冻结候选制品、生产只读预检、生产备份隔离演练、人工核对和沙箱验收准备。任何生产迁移、部署、微信操作或开关启用都需要新的变更批准。
+**2026-07-29 政策：** 生产真机付真实 ¥996 **不再作为门禁必要条件**。支付技术链路以 MEMBER/AGENT ¥1 TEST 两单为 ACCEPTED；NORMAL @99600 用 dry quote + 强制等式 / sandbox 配置验收。详见 `evidence/20260729/POLICY-NO-REAL-996.md`。
 
-准备期实际值必须保持：
+当前运行时（sandbox 临时窗后已恢复）：
 
 ```text
-PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=false
-PRICE_PLAN_TEST_ENTRY_ENABLED=false
-SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=false
+SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=true
+PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=true
+PRICE_PLAN_TEST_ENTRY_ENABLED=true
+WECHAT_VIRTUAL_PAY_ENV=production
 ```
 
+准备期历史默认值（启用前）曾为 false；现已授权开启。
 ## Gate A：代码与增量 schema 候选发布，三开关关闭
 
 | 门禁 | GO 证据 | NO-GO |
@@ -44,7 +46,7 @@ Gate A 通过只允许提出“部署代码/迁移且三开关保持 false”的
 | 微信商品 | 正常价正式/沙箱商品已发布并双人实时核对 | 未确认、过期、跨环境或 productId 不明 |
 | 价值守恒 | quote、方案、绑定、本地商品、微信后台价格完全一致 | 任差 1 分 |
 | 运行配置 | AppID/offerId/mode/AppKey/environment 证明属于同一套 | 仅凭本地 health 推测微信配置 |
-| 沙箱真机 | MEMBER/AGENT NORMAL 成功；回调、查单、幂等和 V1 回归通过 | 只跑旧 productCode 脚本或缺真机证据 |
+| 沙箱真机 | MEMBER/AGENT **支付管线**经 ¥1 TEST ACCEPTED；NORMAL **配置/quote** dry-run @99600；sandbox 临时窗 quote PASS | 仅旧 productCode 脚本；或要求真实 ¥996 收费（已政策 WAIVE） |
 | 流量范围 | 有明确全局开关影响评估和批准 | 把全局开关误当租户/用户 canary |
 | 第三阶段边界 | 退款、补偿、人工补发对 V2 的运行限制和人工事故 SOP 已书面批准 | 需要这些流程但仍读取当前配置或硬编码；无处置方案 |
 
@@ -66,22 +68,23 @@ Gate C 必须在 Gate B 通过后单独审批，且最后开启。
 
 生产环境默认不启用 TEST；沙箱通过不授权生产 TEST 商品或入口。
 
-## 当前已确认状态
+## 当前已确认状态（2026-07-29 滚动）
 
 | 项目 | 当前状态 | 说明 |
 |---|---|---|
-| Compose 三开关注入 | PASS（本地静态/离线渲染） | 待进入冻结 release commit |
-| 开关实际启用 | PASS/保持关闭 | 本轮未开启任何开关 |
-| Release commit | NO-GO | 当前工作区大量 modified/untracked，097–100 未跟踪 |
-| 镜像 RepoDigest | NO-GO | 本轮未构建、未 push；不得从当前工作区构建 |
-| 097–100 最终 SHA | NO-GO | 必须从未来 release commit 的 git archive 冻结 |
-| 生产只读预检 | NOT RUN | 本轮未连接生产数据库 |
-| 隔离迁移/恢复演练 | NOT RUN | 本轮只提供命令 |
-| 微信后台人工核对 | NOT RUN | 本轮未操作微信后台 |
-| 沙箱真机 V2 quote | NOT RUN | 本轮未发起支付 |
-| 真实角色授权 | NOT VERIFIED | 需生产只读结果和真实账号正反向验收 |
-| V132/giftPoints | NO-GO UNTIL VERIFIED | V132 必须为 0；giftPoints 必须为 0 |
-| 第三阶段流程 | OUT OF SCOPE | 未进入退款、补偿、人工补发统一履约 |
+| Compose 三开关注入 | PASS | 现网 true（授权启用） |
+| 开关实际启用 | DONE | 履约→创建→TEST；pay env production（sandbox 窗已恢复） |
+| Release commit / 迁移 SHA | PASS（制品层） | 冻结 archive SHA 已落盘 |
+| 镜像 RepoDigest | **NO-GO / residual** | 本地 IMAGE_ID 有；无 registry digest |
+| 097–100 生产应用 | APPLIED | VALIDATE=0 |
+| 生产只读预检 | PASS | |
+| 隔离迁移/恢复演练 | PASS | |
+| 微信后台双签 | PASS | NORMAL 996 + TEST ¥1 |
+| 支付技术链路 | **ACCEPTED** | ¥1 MEMBER+AGENT + deliver-notify CLOSED |
+| NORMAL ¥996 真机付 | **WAIVED** | dry quote 201@99600 + bindings |
+| 沙箱运行时 quote | PASS（自动化） | 临时 sandbox 窗后已恢复 production |
+| V132/giftPoints | PASS 点查 | 0 / 0 |
+| 第三阶段流程 | OUT OF SCOPE | |
 
 ## 当前实现风险需修复或书面豁免
 

@@ -1,0 +1,11 @@
+=== QUOTES label=prod-before runtime=production env_name=PRODUCTION 2026-07-29 07:34:32 +0800 ===
+PP_MEMBER_N=price_plan_20260728212620000000000_a2443d26 PP_AGENT_N=price_plan_20260728212620000000000_1ae3da1d PP_MEMBER_T=price_plan_20260728212634000000000_049a91b1 PP_AGENT_T=price_plan_20260728212634000000000_2ec1c485
+POST /api/v1/payment/price-quotes plan=plan_ai_creator_996 pp=price_plan_20260728212620000000000_a2443d26 -> 201
+amountCent= 99600 env= PRODUCTION testOnly= False productId= None
+POST /api/v1/payment/price-quotes plan=plan_agent_join_996 pp=price_plan_20260728212620000000000_1ae3da1d -> 201
+amountCent= 99600 env= PRODUCTION testOnly= False productId= None
+POST /api/v1/payment/test-price-quotes plan=plan_ai_creator_996 pp=price_plan_20260728212634000000000_049a91b1 -> 201
+amountCent= 100 env= PRODUCTION testOnly= True productId= None
+POST /api/v1/payment/test-price-quotes plan=plan_agent_join_996 pp=price_plan_20260728212634000000000_2ec1c485 -> 201
+amountCent= 100 env= PRODUCTION testOnly= True productId= None
+U0 TEST member quote -> 403 (expect 403)

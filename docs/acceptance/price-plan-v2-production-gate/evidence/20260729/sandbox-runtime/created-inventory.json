@@ -1,0 +1,43 @@
+{
+  "environment": "SANDBOX",
+  "offerId": "1450579876",
+  "mode": "short_series_goods",
+  "versions": {
+    "member": "plan_version_member_996_v1",
+    "agent": "plan_version_agent_996_v1"
+  },
+  "pricePlans": {
+    "memberNormal": {
+      "id": "price_plan_20260728233421000000000_473e4c73",
+      "code": "pp_member_normal_sbx_996",
+      "cents": 99600,
+      "productId": "MEMBER_YEAR_996",
+      "bindingId": "payment_binding_20260728233422000000000_041b2680",
+      "goodId": "wechat_good_20260728233421000000000_e935168a"
+    },
+    "agentNormal": {
+      "id": "price_plan_20260728233421000000000_565382fa",
+      "code": "pp_agent_normal_sbx_996",
+      "cents": 99600,
+      "productId": "AGENT_JOIN_996",
+      "bindingId": "payment_binding_20260728233422000000000_3e06efc1",
+      "goodId": "wechat_good_20260728233421000000000_c0ac85e7"
+    },
+    "memberTest": {
+      "id": "price_plan_20260728233422000000000_61a1aff6",
+      "code": "pp_member_test_sbx_entry",
+      "cents": 100,
+      "productId": "MEMBER_TEST_1YUAN",
+      "bindingId": "payment_binding_20260728233422000000000_bdea1409",
+      "goodId": "wechat_good_20260728233421000000000_67820803"
+    },
+    "agentTest": {
+      "id": "price_plan_20260728233422000000000_b489661c",
+      "code": "pp_agent_test_sbx_entry",
+      "cents": 100,
+      "productId": "AGENT_TEST_1YUAN",
+      "bindingId": "payment_binding_20260728233422000000000_50a8c13f",
+      "goodId": "wechat_good_20260728233421000000000_0be607e9"
+    }
+  }
+}

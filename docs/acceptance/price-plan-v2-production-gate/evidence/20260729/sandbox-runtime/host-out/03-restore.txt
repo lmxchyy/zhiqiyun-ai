@@ -1,0 +1,13 @@
+=== RESTORE production 2026-07-29 07:34:44 +0800 ===
+wait_1 health=starting 2026-07-29 07:34:45 +0800
+wait_2 health=starting 2026-07-29 07:34:47 +0800
+wait_3 health=starting 2026-07-29 07:34:49 +0800
+wait_4 health=starting 2026-07-29 07:34:51 +0800
+wait_5 health=starting 2026-07-29 07:34:53 +0800
+wait_6 health=healthy 2026-07-29 07:34:55 +0800
+health=healthy status=running
+true
+true
+true
+production
+WECHAT_VIRTUAL_PAY_ENV=production
