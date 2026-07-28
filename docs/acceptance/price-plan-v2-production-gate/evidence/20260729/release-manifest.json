@@ -1,151 +1,156 @@
-﻿{
-    "filledAt":  "2026-07-29T05:30:00+08:00",
-    "filledBy":  "release-owner+DBA+price-owner (delegated to Codex by user)",
-    "status":  "NO-GO",
-    "notes":  "Policy 2026-07-29: real Y996 pay WAIVED. Payment path ACCEPTED via Y1 TEST. NORMAL validated by dry quote 201@99600 + bindings. Sandbox window quotes PASS then restored production. RepoDigest still null (no registry). Current deploy local/xianzhi-ai-platform:a39485ef1 imageId sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32.",
-    "prodMigrate":  {
-                        "appliedAt":  "2026-07-29T05:19:00+08:00",
-                        "order":  [
-                                      "097",
-                                      "098",
-                                      "099",
-                                      "100"
-                                  ],
-                        "exitCodes":  [
-                                          0,
-                                          0,
-                                          0,
-                                          0
-                                      ],
-                        "validateStillNotValid097_100":  0,
-                        "evidence":  "evidence/20260729/prod-migrate/",
-                        "baselineBefore":  {
-                                               "orders":  51,
-                                               "plans":  24,
-                                               "amountSum":  3484992
-                                           },
-                        "baselineAfter":  {
-                                              "orders":  51,
-                                              "plans":  24,
-                                              "amountSum":  3484992,
-                                              "pricePlans":  0,
-                                              "goods":  0,
-                                              "bindings":  0
-                                          },
-                        "v2SwitchesAfter":  {
-                                                "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED":  false,
-                                                "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED":  false,
-                                                "PRICE_PLAN_TEST_ENTRY_ENABLED":  false
-                                            }
-                    },
-    "v2Seed":  {
-                   "appliedAt":  "2026-07-29T05:26:00+08:00",
-                   "evidence":  "evidence/20260729/v2-seed/",
-                   "inventory":  "evidence/20260729/v2-seed/created-inventory.json",
-                   "counts":  {
-                                  "planVersionsActive":  2,
-                                  "pricePlans":  4,
-                                  "goods":  4,
-                                  "bindings":  4
-                              },
-                   "staticForceEqualityBlockers":  0,
-                   "missingMatrixRows":  0,
-                   "quoteForceEquality":  "BLOCKED",
-                   "v2SwitchesAfter":  {
-                                           "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED":  false,
-                                           "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED":  false,
-                                           "PRICE_PLAN_TEST_ENTRY_ENABLED":  false
-                                       }
-               },
-    "releaseCommit":  "e8f191805ca1d6c9a4b214ee91312aeb796c0b10",
-    "releaseTree":  "c0bf56a2ddc51dd2c77e4918b157e1ab15178db2",
-    "deployCommit":  "3d0c0e032d79a61611b83771874be91df3715e7a",
-    "deployTree":  "a0a260d6099a3edb42e2765d617acc7d46619082",
-    "branch":  "codex/channel-ecosystem-v132-phase3",
-    "imageRef":  "local/xianzhi-ai-platform:git-3d0c0e032",
-    "imageTags":  [
-                      "local/xianzhi-ai-platform:git-3d0c0e032",
-                      "local/xianzhi-ai-platform:3d0c0e032"
-                  ],
-    "imageId":  "sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331",
-    "repoDigest":  null,
-    "v2Switches":  {
-                       "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED":  true,
-                       "PRICE_PLAN_TEST_ENTRY_ENABLED":  true,
-                       "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED":  true
-                   },
-    "migrations":  [
-                       {
-                           "file":  "database/migrations/097-member-agent-price-plan-v2.sql",
-                           "sha256":  "784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7"
-                       },
-                       {
-                           "file":  "database/migrations/098-price-plan-admin-governance.sql",
-                           "sha256":  "AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2"
-                       },
-                       {
-                           "file":  "database/migrations/099-price-plan-default-switch.sql",
-                           "sha256":  "1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9"
-                       },
-                       {
-                           "file":  "database/migrations/100-price-plan-test-whitelist-audit.sql",
-                           "sha256":  "8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649"
-                       }
-                   ],
-    "dbaPreflight":  {
-                         "log":  "evidence/20260729/dba-preflight.log",
-                         "sha256":  "256ff4b463cada4defff50bb0eb07bdafa4b93c30233f6e8d5015a14b6b98433",
-                         "transactionReadOnly":  "on",
-                         "v132BlockerRows":  0,
-                         "schemaBlockerRows":  0,
-                         "conclusion":  "PASS"
-                     },
-    "rehearsal":  {
-                      "backup":  "/opt/zhiqiyun-ai/backups/postgres/db_2026-07-25_231939.sql",
-                      "backupSha256":  "eb768b008896911f40d91a7d32afcb84143869d5eab881df7f8e5257252d3abe",
-                      "engine":  "pgvector/pgvector:pg16 container priceplan-rehearsal-pg",
-                      "database":  "zhiqiyun_rehearsal_202607290400",
-                      "restoreSec":  10,
-                      "restoreAclErrors":  275,
-                      "migrateSec":  {
-                                         "097":  "\u003c1",
-                                         "098":  "\u003c1",
-                                         "099":  "\u003c1",
-                                         "100":  "\u003c1"
-                                     },
-                      "baselineBefore":  {
-                                             "orders":  47,
-                                             "plans":  24,
-                                             "amountSum":  3285592
-                                         },
-                      "baselineAfter":  {
-                                            "orders":  47,
-                                            "plans":  24,
-                                            "amountSum":  3285592,
-                                            "pricePlans":  0,
-                                            "goods":  0
-                                        },
-                      "notValidRemaining":  0,
-                      "secondRestoreSec":  10,
-                      "conclusion":  "PASS"
-                  },
-    "currentDeploy":  {
-                          "imageId":  "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
-                          "filledAt":  "2026-07-29T07:40:00+08:00",
-                          "gitSha":  "a39485ef159dabf348a71059a0e922af4894ab5a",
-                          "wechatVirtualPayEnv":  "production",
-                          "v2Flags":  true,
-                          "imageRef":  "local/xianzhi-ai-platform:a39485ef1"
-                      },
-    "policyNoReal996":  {
-                            "repoDigestResidual":  "evidence/20260729/repo-digest/",
-                            "sandboxRuntime":  "evidence/20260729/sandbox-runtime/",
-                            "normalSubstitute":  "evidence/20260729/normal-996/",
-                            "paymentAcceptedOrders":  [
-                                                          "ZQY202607282159389857812495",
-                                                          "ZQY20260728221656E339AB7A54"
-                                                      ],
-                            "evidence":  "evidence/20260729/POLICY-NO-REAL-996.md",
-                            "status":  "WAIVED"
-                        }
+{
+    "filledAt": "2026-07-29T05:30:00+08:00",
+    "filledBy": "release-owner+DBA+price-owner (delegated to Codex by user)",
+    "status": "NO-GO",
+    "notes": "Policy 2026-07-29: real Y996 pay WAIVED. Payment path ACCEPTED via Y1 TEST. NORMAL dry quote 201@99600 + bindings. Sandbox window restored to production. RepoDigest null (confirmed no registry). Proposed §1 close = PASS-WITH-LOCAL-IMMUTABLE on local/xianzhi-ai-platform:a39485ef1 / sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32 pending PO accept — evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md. V2 flags unchanged; pay env production.",
+    "prodMigrate": {
+        "appliedAt": "2026-07-29T05:19:00+08:00",
+        "order": [
+            "097",
+            "098",
+            "099",
+            "100"
+        ],
+        "exitCodes": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "validateStillNotValid097_100": 0,
+        "evidence": "evidence/20260729/prod-migrate/",
+        "baselineBefore": {
+            "orders": 51,
+            "plans": 24,
+            "amountSum": 3484992
+        },
+        "baselineAfter": {
+            "orders": 51,
+            "plans": 24,
+            "amountSum": 3484992,
+            "pricePlans": 0,
+            "goods": 0,
+            "bindings": 0
+        },
+        "v2SwitchesAfter": {
+            "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": false,
+            "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": false,
+            "PRICE_PLAN_TEST_ENTRY_ENABLED": false
+        }
+    },
+    "v2Seed": {
+        "appliedAt": "2026-07-29T05:26:00+08:00",
+        "evidence": "evidence/20260729/v2-seed/",
+        "inventory": "evidence/20260729/v2-seed/created-inventory.json",
+        "counts": {
+            "planVersionsActive": 2,
+            "pricePlans": 4,
+            "goods": 4,
+            "bindings": 4
+        },
+        "staticForceEqualityBlockers": 0,
+        "missingMatrixRows": 0,
+        "quoteForceEquality": "BLOCKED",
+        "v2SwitchesAfter": {
+            "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": false,
+            "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": false,
+            "PRICE_PLAN_TEST_ENTRY_ENABLED": false
+        }
+    },
+    "releaseCommit": "e8f191805ca1d6c9a4b214ee91312aeb796c0b10",
+    "releaseTree": "c0bf56a2ddc51dd2c77e4918b157e1ab15178db2",
+    "deployCommit": "3d0c0e032d79a61611b83771874be91df3715e7a",
+    "deployTree": "a0a260d6099a3edb42e2765d617acc7d46619082",
+    "branch": "codex/channel-ecosystem-v132-phase3",
+    "imageRef": "local/xianzhi-ai-platform:git-3d0c0e032",
+    "imageTags": [
+        "local/xianzhi-ai-platform:git-3d0c0e032",
+        "local/xianzhi-ai-platform:3d0c0e032"
+    ],
+    "imageId": "sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331",
+    "repoDigest": null,
+    "v2Switches": {
+        "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": true,
+        "PRICE_PLAN_TEST_ENTRY_ENABLED": true,
+        "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": true
+    },
+    "migrations": [
+        {
+            "file": "database/migrations/097-member-agent-price-plan-v2.sql",
+            "sha256": "784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7"
+        },
+        {
+            "file": "database/migrations/098-price-plan-admin-governance.sql",
+            "sha256": "AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2"
+        },
+        {
+            "file": "database/migrations/099-price-plan-default-switch.sql",
+            "sha256": "1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9"
+        },
+        {
+            "file": "database/migrations/100-price-plan-test-whitelist-audit.sql",
+            "sha256": "8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649"
+        }
+    ],
+    "dbaPreflight": {
+        "log": "evidence/20260729/dba-preflight.log",
+        "sha256": "256ff4b463cada4defff50bb0eb07bdafa4b93c30233f6e8d5015a14b6b98433",
+        "transactionReadOnly": "on",
+        "v132BlockerRows": 0,
+        "schemaBlockerRows": 0,
+        "conclusion": "PASS"
+    },
+    "rehearsal": {
+        "backup": "/opt/zhiqiyun-ai/backups/postgres/db_2026-07-25_231939.sql",
+        "backupSha256": "eb768b008896911f40d91a7d32afcb84143869d5eab881df7f8e5257252d3abe",
+        "engine": "pgvector/pgvector:pg16 container priceplan-rehearsal-pg",
+        "database": "zhiqiyun_rehearsal_202607290400",
+        "restoreSec": 10,
+        "restoreAclErrors": 275,
+        "migrateSec": {
+            "097": "<1",
+            "098": "<1",
+            "099": "<1",
+            "100": "<1"
+        },
+        "baselineBefore": {
+            "orders": 47,
+            "plans": 24,
+            "amountSum": 3285592
+        },
+        "baselineAfter": {
+            "orders": 47,
+            "plans": 24,
+            "amountSum": 3285592,
+            "pricePlans": 0,
+            "goods": 0
+        },
+        "notValidRemaining": 0,
+        "secondRestoreSec": 10,
+        "conclusion": "PASS"
+    },
+    "currentDeploy": {
+        "filledAt": "2026-07-29T07:50:00+08:00",
+        "imageRef": "local/xianzhi-ai-platform:a39485ef1",
+        "imageId": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
+        "gitSha": "a39485ef159dabf348a71059a0e922af4894ab5a",
+        "repoDigests": [],
+        "wechatVirtualPayEnv": "production",
+        "v2Flags": true,
+        "section1Proposal": "PASS-WITH-LOCAL-IMMUTABLE",
+        "section1PoAccept": "PENDING",
+        "evidence": "evidence/20260729/repo-digest/"
+    },
+    "policyNoReal996": {
+        "repoDigestResidual": "evidence/20260729/repo-digest/",
+        "sandboxRuntime": "evidence/20260729/sandbox-runtime/",
+        "normalSubstitute": "evidence/20260729/normal-996/",
+        "paymentAcceptedOrders": [
+            "ZQY202607282159389857812495",
+            "ZQY20260728221656E339AB7A54"
+        ],
+        "evidence": "evidence/20260729/POLICY-NO-REAL-996.md",
+        "status": "WAIVED",
+        "section1Amendment": "evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md"
+    }
 }

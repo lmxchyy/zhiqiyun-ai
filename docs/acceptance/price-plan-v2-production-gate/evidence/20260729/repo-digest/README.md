@@ -1,55 +1,42 @@
-# RepoDigest residual — 2026-07-29
+# RepoDigest residual → local-immutable amendment — 2026-07-29
 
 ## Verdict
 
-**§1 RepoDigest = residual / NOT PASS.** Did **not** invent a digest.
+**No usable container registry credentials found** (deep re-probe). Real registry RepoDigest **cannot** be produced. **Did not invent a digest.**
 
-## Probe (prod `119.29.191.227` / `/opt/zhiqiyun-ai`)
+§1 recommendation: **`PASS-WITH-LOCAL-IMMUTABLE`** pending product-owner accept — see `AMENDMENT-LOCAL-IMMUTABLE.md`.
+
+Until PO checkbox is signed, treat §1 as **residual / PENDING-PO-ACCEPT** (not full registry PASS).
+
+## Immutable local identity (current prod)
+
+```text
+imageRef=local/xianzhi-ai-platform:a39485ef1
+imageId=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+gitSha=a39485ef159dabf348a71059a0e922af4894ab5a
+RepoDigests=[]
+WECHAT_VIRTUAL_PAY_ENV=production
+V2 flags=true/true/true
+```
+
+## Probe summary
 
 | Item | Value |
 |---|---|
-| Running image ref | `local/xianzhi-ai-platform:a39485ef1` |
-| Image ID (immutable local) | `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32` |
-| RepoTags | `local/xianzhi-ai-platform:a39485ef1`, `local/xianzhi-ai-platform:git-a39485ef1` |
-| RepoDigests | **`[]` (empty)** |
-| Deploy git SHA | `a39485ef159dabf348a71059a0e922af4894ab5a` |
-| Compose image | `${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}` → local tag only |
-| `.env.production` | `XIANZHI_IMAGE=local/xianzhi-ai-platform` / `IMAGE_TAG=a39485ef1` |
-| `/root/.docker/config.json` | **missing** — no registry auths |
-| GHCR / Docker Hub / Tencent TCR creds on host | **not found** (env + docker config) |
+| Host | `119.29.191.227` `/opt/zhiqiyun-ai` |
+| `/root/.docker/config.json` | missing — no auths |
+| Registry env / compose remote repos | none |
+| `deploy.sh` / `install_panel.sh` push/login | none |
+| docker.io | pull mirror only (`mirror.ccs.tencentyun.com`) |
+| Workstation docker auths | empty |
 
-## Attempted path
+Evidence: `probe-registry.sh`, `probe-registry-deep.sh`, `host-out/probe-registry.txt`, `host-out/probe-registry-deep.txt`, `AMENDMENT-LOCAL-IMMUTABLE.md`.
 
-Tried to locate a pushable registry that would yield `repository@sha256:...`.
+## What true RepoDigest still requires (ops follow-up)
 
-Blocked by: no logged-in registry, no `auths` file, compose path is local-tag only. Pushing to anonymous Docker Hub / GHCR without credentials is impossible.
+1. Provision GHCR / TCR / Hub write credentials
+2. `docker login` → tag `local/xianzhi-ai-platform:a39485ef1` → `docker push`
+3. Record `docker image inspect --format '{{index .RepoDigests 0}}'`
+4. Pin compose to digest; set `release-manifest.json.repoDigest`
 
-## What true RepoDigest requires (ops)
-
-1. Provision registry write credentials (GHCR / TCR / Docker Hub) on the deploy host or CI.
-2. `docker login <registry>`
-3. Tag current immutable image:
-   ```bash
-   docker tag local/xianzhi-ai-platform:a39485ef1 <registry>/<repo>:a39485ef1
-   docker push <registry>/<repo>:a39485ef1
-   ```
-4. Record:
-   ```bash
-   docker image inspect --format '{{index .RepoDigests 0}}' <registry>/<repo>:a39485ef1
-   ```
-5. Point compose/`XIANZHI_IMAGE` at that registry repo (still pin by digest in release manifest).
-6. Update `release-manifest.json` `repoDigest` and HANDOFF §1.
-
-## Residual substitute (NOT a digest)
-
-Until registry exists, ops may track:
-
-```text
-imageId=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
-gitSha=a39485ef159dabf348a71059a0e922af4894ab5a
-tag=local/xianzhi-ai-platform:a39485ef1
-```
-
-This proves local immutability for the current host only — **not** Gate A registry RepoDigest.
-
-Evidence files: `probe-registry.sh`, `probe-registry.out` (copied from host `/tmp/probe-registry.out`).
+Until then, local IMAGE_ID is the only honest immutability proof for this deploy model.

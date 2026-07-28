@@ -1,6 +1,8 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `NO-GO`（开关已开；支付链路经 ¥1 TEST ACCEPTED；NORMAL 真机 ¥996 = WAIVED；sandbox 临时窗+dry quote PASS 已恢复 production；仍缺 registry RepoDigest）**
+> **当前总状态 = `NO-GO`（支付管线 ¥1 TEST ACCEPTED；NORMAL 真机 ¥996 = WAIVED；sandbox 临时窗+dry quote PASS 已恢复 production；§1 registry RepoDigest **CONFIRMED ABSENT** → 提议 `PASS-WITH-LOCAL-IMMUTABLE`，待产品负责人勾选；禁止伪造 digest。证据 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`）。**
+>
+> **2026-07-29 ~07:50+08 RepoDigest 深探针：** 生产机无 `/root/.docker/config.json` auths；无 CCR/ACR/TCR/GHCR 环境变量；compose 仅 `local/xianzhi-ai-platform`；`RepoDigests=[]`；镜像 Id=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`。**无可用 registry → 无法 push。** 门禁修正提案：§1 `PASS-WITH-LOCAL-IMMUTABLE`（本地 tag+IMAGE_ID），见 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。**请产品负责人勾选是否接受。** V2 三开关与 `WECHAT_VIRTUAL_PAY_ENV=production` **未改动**。
 >
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
@@ -127,7 +129,7 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 |---|---|---|---|
 | 1 | 形成审批过的 release commit | `release-freeze-runbook.md` §2 | [x] `e8f191805…` |
 | 2 | 同 commit 构建镜像（禁止脏工作区 build） | 同手册 §4 | [x] 3d0c0e032 local image |
-| 3 | push 后记录不可变 `repository@sha256:...` RepoDigest | 同手册 §5 | [ ] **residual** — 主机无 registry 凭据；`RepoDigests=[]`；见 `evidence/20260729/repo-digest/`（禁止伪造 digest） |
+| 3 | push 并记录可变 `repository@sha256:...` RepoDigest | 同手册 §5 | [~] **CONFIRMED NONE** — 深探针无 docker login/auths/CCR/ACR/TCR；提议 §1=`PASS-WITH-LOCAL-IMMUTABLE`（`AMENDMENT-LOCAL-IMMUTABLE.md`）；`RepoDigests=[]`；禁止伪造 |
 | 4 | 从 `git archive` 重算 097–100 SHA256 | 同手册 §3 | [x] |
 | 5 | 写出 release manifest JSON（commit/tree/imageId/repoDigest/migrations） | 同手册 §6 | [x]（digest=null；现网 imageId=`sha256:1bd6777d671b…` / tag `a39485ef1`） |
 | 6 | 确认 compose 三开关注入 | `go-no-go-gate.md` Gate A | [x] 现网 true（授权启用后） |
@@ -140,13 +142,13 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 | releaseCommit (40 hex) | `e8f191805ca1d6c9a4b214ee91312aeb796c0b10` |
 | releaseTree | `c0bf56a2ddc51dd2c77e4918b157e1ab15178db2` |
 | imageRef / imageId | **现网** `local/xianzhi-ai-platform:a39485ef1` / `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`（git `a39485ef1…`）；历史冻结点仍见 manifest 内 3d0c0e032 |
-| repoDigest (`@sha256:...`) | **无 / residual** — 无 `/root/.docker/config.json`、无 GHCR/Hub/TCR 登录；compose 仅本地 tag；见 `evidence/20260729/repo-digest/README.md` |
+| repoDigest (`@sha256:...`) | **空（CONFIRMED）** — 深探针无 registry 凭据；**不伪造**。§1 提议 `PASS-WITH-LOCAL-IMMUTABLE`=`local/xianzhi-ai-platform:a39485ef1` + `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`，待 PO 接受。见 `repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md` |
 | 097 SHA256 | `784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7` |
 | 098 SHA256 | `AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2` |
 | 099 SHA256 | `1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9` |
 | 100 SHA256 | `8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649` |
 | 证据路径 | `evidence/20260729/release-manifest.json` + `migration-sha256-from-archive.txt` + `repo-digest/` |
-| 单项结论 | **NO-GO / residual**（本地 IMAGE_ID+git SHA 可追踪；**仍非** registry RepoDigest；不得伪造） |
+| 单项结论 | **PENDING-PO → 提议 `PASS-WITH-LOCAL-IMMUTABLE`**（本地 IMAGE_ID+git SHA 已核验；registry digest **确认不存在**；待产品负责人接受本地不可变身份作为 §1 关闭条件） |
 | 签字 | 用户（发布负责人）授权代行 / Codex 代填 |
 
 **单项 PASS 不等于生产 GO。**
@@ -297,7 +299,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | # | 前置 | 勾选 |
 |---|---|---|
-| 1 | 沙箱服务 = 冻结 commit + RepoDigest | [~] **partial** — 有本地 imageId `sha256:1bd6777d…` / git `a39485ef1`；**无** registry RepoDigest（residual） |
+| 1 | 沙箱服务 = 冻结 commit + RepoDigest | [~] **partial → 提议 local-immutable** — 有冻结 imageId sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32 / git 39485ef1；registry RepoDigest 确认无；待 PO 接受 §1 豁免 |
 | 2 | 沙箱库已 097–100 且约束证据通过 | [x] 生产库已 097–100 + VALIDATE=0；SANDBOX env 业务行已 seed |
 | 3 | `WECHAT_VIRTUAL_PAY_ENV=sandbox` | [x] **临时窗已跑并恢复 production**（~07:34:32–07:34:55 +08）；见 `sandbox-runtime/` |
 | 4 | §4 沙箱道具矩阵 PASS | [x] SANDBOX V2 NORMAL/TEST goods+bindings+whitelist seed；dry quote PASS |
@@ -380,7 +382,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | 角色包 | 结论 | 证据齐备 | 签字日期 |
 |---|---|---|---|
-| §1 发布冻结 | **NO-GO / residual** | commit+本地 IMAGE_ID 齐；**缺 registry RepoDigest**（`repo-digest/`） | 2026-07-29 |
+| §1 发布冻结 | **PENDING-PO / `PASS-WITH-LOCAL-IMMUTABLE` 提议** | 本地 `local/xianzhi-ai-platform:a39485ef1` + `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；registry **确认无凭据**；待 PO 勾选 `AMENDMENT-LOCAL-IMMUTABLE.md` | 2026-07-29 |
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
 | §4 微信道具 | **PARTIAL→趋近 PASS** | 双签 PASS；PRODUCTION+SANDBOX 静态绑定 99600；quote dry-run PASS | 2026-07-29 |
@@ -393,8 +395,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
 
-**本轮结论（2026-07-29 政策+sandbox 窗）：总状态 = `NO-GO`。**  
-原因主残差：**RepoDigest**（无 registry）。支付链路经 ¥1 ACCEPTED；NORMAL 配置/quote 已替代真机 ¥996；sandbox 临时窗已恢复 production。禁止发明总 GO。
+**本轮结论（2026-07-29 深探针后）：总状态仍 = `NO-GO`（待 PO）。**  
+硬残差原为 RepoDigest；现 **确认无 registry**，已提案 §1=`PASS-WITH-LOCAL-IMMUTABLE`（本地 IMAGE_ID）。支付管线 ¥1 ACCEPTED；NORMAL 配置/quote 替代真机 ¥996；pay env=production；**未改 V2 开关**。PO 勾选接受前禁止口头改 GO。
 
 ---
 
@@ -402,7 +404,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | 缺口 | 影响 | 谁补 |
 |---|---|---|
-| **缺 registry RepoDigest**（仅有本地 IMAGE_ID+git SHA） | Gate A 不可变部署证据不完整 | 发布/运维：提供 GHCR/TCR/Hub 凭据后 push |
+| **缺 registry RepoDigest**（仅有本地 IMAGE_ID+git SHA；凭据深探针已确认无） | Gate A 原措辞未满足；**提议**本地不可变豁免 | **PO 决定**：接受 `PASS-WITH-LOCAL-IMMUTABLE` 或补 registry 后 push |
 | NORMAL 真机 ¥996 | **WAIVED**（政策）— 用 dry quote+绑定替代 | 已替代；见 `normal-996/` |
 | 强制等式（quote 层） | PRODUCTION+SANDBOX dry quote MEMBER/AGENT NORMAL **201@99600** | 已覆盖；非真机付 |
 | 沙箱真机付 | 支付管线已由 ¥1 ACCEPTED；sandbox **dry quote** PASS | 可选；非本轮必须 |

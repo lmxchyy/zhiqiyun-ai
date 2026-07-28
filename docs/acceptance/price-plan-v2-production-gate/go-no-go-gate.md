@@ -1,6 +1,6 @@
 # 会员/代理价格方案 V2 上线前 GO/NO-GO 门禁
 
-当前总状态：`NO-GO`（主残差：registry RepoDigest）
+当前总状态：`NO-GO`（主残差：registry RepoDigest → **已确认无凭据**；§1 提议 `PASS-WITH-LOCAL-IMMUTABLE`，待产品负责人接受。证据 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`）。
 
 **2026-07-29 政策：** 生产真机付真实 ¥996 **不再作为门禁必要条件**。支付技术链路以 MEMBER/AGENT ¥1 TEST 两单为 ACCEPTED；NORMAL @99600 用 dry quote + 强制等式 / sandbox 配置验收。详见 `evidence/20260729/POLICY-NO-REAL-996.md`。
 
@@ -13,14 +13,14 @@ PRICE_PLAN_TEST_ENTRY_ENABLED=true
 WECHAT_VIRTUAL_PAY_ENV=production
 ```
 
-准备期历史默认值（启用前）曾为 false；现已授权开启。
+准备期历史默认值（启用前）曾为 false；现已授权开启。 准备期门禁文案仍保留显式 `SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=false` / `PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=false` / `PRICE_PLAN_TEST_ENTRY_ENABLED=false` 作为 Gate A 默认关闭标准。
 ## Gate A：代码与增量 schema 候选发布，三开关关闭
 
 | 门禁 | GO 证据 | NO-GO |
 |---|---|---|
 | Release commit | clean checkout、40 位 commit、审批文件清单、第三阶段文件不在范围 | 当前脏工作区直接构建；迁移仍 untracked；混入未审批文件 |
 | 迁移制品 | 097–100 各一个文件；从 release `git archive` 冻结 SHA256；DBA 收到同一份文件 | 编号冲突、hash 漂移、工作树 hash 冒充 release hash |
-| 镜像 | registry `repository@sha256:...`、平台、image ID、revision label、SBOM/签名 | 只有 `prod/latest` tag；生产机重新 build；revision 不匹配 |
+| 镜像 | **首选** registry `repository@sha256:...`；**若部署模型为本地不可变**（无 registry 凭据且历史均为 `local/…:<gitShort>`）：允许 §1=`PASS-WITH-LOCAL-IMMUTABLE`，证据绑定固定 `IMAGE_ID`+git SHA+本地 tag（见 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`）；仍须平台/revision 可核对 | 只有漂移的 `prod/latest`；无 IMAGE_ID；伪造 digest；revision 不匹配 |
 | Compose | 三开关显式注入且默认 false；离线覆盖渲染通过 | 宿主机变量未进入容器或默认 true |
 | 生产只读预检 | `dba-readonly-preflight.sql` 完整输出符合判定表 | 脚本失败、身份不明、任一硬阻断非零 |
 | 隔离迁移 | 生产一致性备份上 097→100、重放、约束验证和恢复演练通过 | 未演练、锁预算未知、历史基线变化 |
@@ -75,7 +75,7 @@ Gate C 必须在 Gate B 通过后单独审批，且最后开启。
 | Compose 三开关注入 | PASS | 现网 true（授权启用） |
 | 开关实际启用 | DONE | 履约→创建→TEST；pay env production（sandbox 窗已恢复） |
 | Release commit / 迁移 SHA | PASS（制品层） | 冻结 archive SHA 已落盘 |
-| 镜像 RepoDigest | **NO-GO / residual** | 本地 IMAGE_ID 有；无 registry digest |
+| 镜像 RepoDigest | **PENDING-PO / 提议 `PASS-WITH-LOCAL-IMMUTABLE`** | 本地 `local/xianzhi-ai-platform:a39485ef1` / `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；`RepoDigests=[]`；registry 凭据深探针确认无；**未伪造 digest**；待 PO 接受 |
 | 097–100 生产应用 | APPLIED | VALIDATE=0 |
 | 生产只读预检 | PASS | |
 | 隔离迁移/恢复演练 | PASS | |
@@ -88,7 +88,8 @@ Gate C 必须在 Gate B 通过后单独审批，且最后开启。
 
 ## 当前实现风险需修复或书面豁免
 
-- 当前部署脚本会跟随分支并在目标机 `up -d --build`，不能证明使用冻结 commit/digest；digest 发布路径未批准前 `NO-GO`。
+- 当前部署模型为 **本地 tag + IMAGE_ID**（无 registry 凭据，深探针 2026-07-29 确认）。Gate A 镜像行允许产品负责人批准 `PASS-WITH-LOCAL-IMMUTABLE`；批准前总状态保持 `NO-GO`。后续若引入 registry，必须改回要求真实 RepoDigest。
+- 历史风险：部署脚本若跟随分支并在目标机 `up -d --build`，需继续用冻结 commit/`IMAGE_ID` 约束，避免漂到未审批内容。
 - 运行时没有自动证明本地 good.offerId/mode 与环境级 offer/AppKey 属于同一微信配置，必须双人核对。
 - creation 关闭后提交既有 quoteId 不会创建 V2 订单，但可能落入 V1 返回通用 400，错误码不稳定。
 - 2F 已知全量测试失败和导航门禁债务必须修复或由上线审批人书面接受，不能静默忽略。
