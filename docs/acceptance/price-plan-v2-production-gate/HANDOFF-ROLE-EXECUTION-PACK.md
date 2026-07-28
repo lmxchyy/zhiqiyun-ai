@@ -240,25 +240,25 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | # | 动作 | 勾选 |
 |---|---|---|
-| 1 | 按矩阵填完 SANDBOX/PRODUCTION × MEMBER/AGENT × NORMAL/TEST | [ ] |
-| 2 | 微信后台按 productId 定位（禁止只凭商品名） | [ ] |
-| 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [ ] |
-| 4 | 证明 good.offerId/mode 与运行时 offer/AppKey/AppID 同一套（代码不自动证明） | [ ] |
-| 5 | 截图 + 双人签字；密钥只记 Secret 版本，不写明文 | [ ] |
+| 1 | 按矩阵填完 SANDBOX/PRODUCTION × MEMBER/AGENT × NORMAL/TEST | [x] 微信侧 NORMAL+TEST 已填；系统 V2 仍缺 |
+| 2 | 微信后台按 productId 定位（禁止只凭商品名） | [x] 2026-07-29 已按 ID 核对/新建 |
+| 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [ ] **未齐**（V2 对象不存在，无法端到端） |
+| 4 | 证明 good.offerId/mode 与运行时 offer/AppKey/AppID 同一套（代码不自动证明） | [ ] 仍待价格负责人复核 |
+| 5 | 截图 + 双人签字；密钥只记 Secret 版本，不写明文 | [~] 截图已齐；**第二人签字仍待** |
 
 ### 4.3 回填表
 
 | 字段 | 回填 |
 |---|---|
-| 执行人 / 复核人 / 时间 | **待微信 + 价格负责人**（后台不可代登）；协调人已填系统侧 ID/价格 |
-| 绑定的 releaseCommit / RepoDigest | 无（§1 未冻结） |
-| 矩阵完成行数 / 失败行 | 系统字段已填 6 行可查基线；**微信发布状态/截图/双人签仍待人工**；生产 TEST 两行默认 NO-GO；沙箱 TEST productId=**系统无** |
-| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**（2026-07-29 已从 100 恢复）；审批：正式 99600 / 临时测试 100；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 对象=**系统无** |
-| 跨环境或 productId 复用问题 | V1 正式/沙箱共用 productId（env 0/1）。会员业务码≠微信 productId。代理正式价已恢复 99600；**仍缺独立 AGENT ¥1 TEST productId** |
-| 价格负责人确认（2026-07-29） | 代理正式售价 **¥996**；**¥1 为临时测试**。生产 `plan_agent_join_996.price_cents` 已恢复 **99600** |
-| 证据路径 | `evidence/20260728/system-snapshot.md`；微信截图目录 `evidence/20260728/wechat-goods/`（待建） |
-| 单项结论 | **`NO-GO`**（系统基线已填，微信后台与双人签未完成；无 V2） |
-| 签字 | 待双人签 |
+| 执行人 / 复核人 / 时间 | 微信侧：Codex 代操（用户已打开 MP 控制台）2026-07-29；**价格负责人第二签字：待补** |
+| 绑定的 releaseCommit / RepoDigest | §1 有 commit；RepoDigest 仍空 |
+| 矩阵完成行数 / 失败行 | 线上 NORMAL：`MEMBER_YEAR_996`/`AGENT_JOIN_996`=¥996 已截图；开发版 TEST：`MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`=¥1 已创建；生产 TEST 仍默认不建；V2/双签未齐 |
+| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**；TEST 新建 `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`/**100 分**；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 对象=**系统无** |
+| 跨环境或 productId 复用问题 | 正式 996 未改价；¥1 使用独立 TEST productId（未复用 `AGENT_JOIN_996`） |
+| 价格负责人确认（2026-07-29） | 正式 ¥996 已在线上版本核实；¥1 TEST 已在开发版本创建。**待价格负责人签字确认** |
+| 证据路径 | `evidence/20260729/wechat-online-props-20260729.png`；`evidence/20260729/wechat-goods/`（含 `61-dev-list-both-tests.png`、`wechat-dev-props-after-test-create.png`、`wechat-test-prop-icon-200x200.png`） |
+| 单项结论 | **`PARTIAL / NO-GO`**（微信道具价与独立 TEST 已落地；双人签未齐；无 V2 → 不得 PASS） |
+| 签字 | 第一操作员：Codex/用户会话；第二人（价格负责人）：**待签** |
 
 ---
 
@@ -354,7 +354,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §1 发布冻结 | **NO-GO** | commit+SHA 齐；**缺 RepoDigest/同 commit 镜像** | 2026-07-29 |
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
-| §4 微信道具 | **NO-GO** | 系统 ID/价格已填；微信后台截图与双人签无 | 待微信 |
+| §4 微信道具 | **PARTIAL / NO-GO** | 线上 996 已截图；开发版 ¥1 TEST 已建；双人签未齐；无 V2 | 2026-07-29（第二签待） |
 | §5 沙箱真机 | **NO-GO** | 前置 FAIL（无 digest / 运行时非 sandbox / 矩阵 NO-GO） | 2026-07-28 |
 | §6 开关启用 | **禁止** | 三开关 UNSET→false | — |
 

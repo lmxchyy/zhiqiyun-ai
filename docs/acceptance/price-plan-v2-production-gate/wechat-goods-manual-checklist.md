@@ -3,25 +3,36 @@
 本表必须由微信支付负责人和价格负责人双人核对。`MANUALLY_CONFIRMED_PUBLISHED` 只是本地人工声明，不代表系统已实时连接微信后台验证。
 
 **系统只读预填（2026-07-28）：** 已从生产库 `xz_wechat_virtual_product_mappings` + `xz_plans` + 运行时 env 填入可知字段。  
-微信后台「发布状态 / 实时价截图」仍为待人工。详见 `evidence/20260728/system-snapshot.md`。  
-**V2 表未建** → 无 V2 pricePlan/good/binding；本矩阵按 **现行 V1 映射** 填写，**结论默认 NO-GO**。
+**微信后台实观（2026-07-29）：** 见下方矩阵更新 + `evidence/20260729/wechat-goods/`。  
+**V2 表未建** → 无 V2 pricePlan/good/binding；强制等式仍无法端到端建立 → **总结论仍 NO-GO**（双人签未齐 / V2 未落地）。
+
+### 0.1 微信后台实观摘要（2026-07-29）
+
+| 项 | 实观 |
+|---|---|
+| 页面 | `mp.weixin.qq.com/wxamp/subApp/skit/manage/config/prop`（虚拟支付 → 道具配置） |
+| offerId（运行时） | `1450579876`；mode=`short_series_goods` |
+| 线上版本 NORMAL | `MEMBER_YEAR_996`=¥996；`AGENT_JOIN_996`=¥996（正式价未改动） |
+| 开发版本 TEST（新建） | `MEMBER_TEST_1YUAN`=¥1；`AGENT_TEST_1YUAN`=¥1（独立 productId） |
+| 操作员 | Codex 代操微信控制台（用户已打开会话）；**价格负责人第二签字仍待** |
+| 证据 | `evidence/20260729/wechat-online-props-20260729.png`；`evidence/20260729/wechat-goods/61-dev-list-both-tests.png`；`wechat-dev-props-after-test-create.png` |
 
 ## 1. 必需商品矩阵
 
-生产 TEST 商品默认不创建、不启用；若未来确需生产受控 TEST，必须另开审批单。
+生产 TEST 商品默认不创建、不启用；沙箱/开发版本 TEST 可另建独立 productId（本轮已建）。
 
 运行时：`WECHAT_VIRTUAL_PAY_ENV=production`，`offerId=1450579876`，`mode=short_series_goods`。
 
 | 业务 | 方案 | 环境 | 目标价格 | 可见/受众/默认 | 微信 productId | offerId | 微信发布状态 | 本地确认 | 结论 |
 |---|---|---|---:|---|---|---|---|---|---|
-| MEMBER | NORMAL | SANDBOX | 本地 `99600` 分；微信后台价 **待人工核** | V1 映射 enabled=true；V2 无 | `MEMBER_YEAR_996` | `1450579876`（运行时） | 待人工核 | 系统有映射；`payment_product_code=MEMBER_PRO_YEAR_996`≠productId | **NO-GO**（待截图+码一致） |
-| AGENT | NORMAL | SANDBOX | 本地 `price_cents=100`；微信 product=`AGENT_JOIN_996` 价 **待人工核** | V1 enabled=true；V2 无 | `AGENT_JOIN_996` | `1450579876` | 待人工核 | 本地 100 分 vs 996 命名道具，疑价格差 | **NO-GO** |
-| MEMBER | TEST | SANDBOX | 系统 **无** 会员 ¥1 独立 productId | 无 V2 TEST 方案 | 系统无 | — | — | 仅有 Token `TOKEN_TEST_1FEN`，不属会员 | **NO-GO** |
-| AGENT | TEST | SANDBOX | 系统 **无** 代理 ¥1 独立 productId（代理正式价已被改成 100 分，更危险） | 无独立 TEST productId | 系统无（勿复用 `AGENT_JOIN_996`） | — | — | 禁止把正式道具当 TEST | **NO-GO** |
-| MEMBER | NORMAL | PRODUCTION | 本地 `99600`；微信后台价 **待人工核** | V1 enabled=true | `MEMBER_YEAR_996` | `1450579876` | 待人工核 | 同 SANDBOX 码不一致问题 | **NO-GO** |
-| AGENT | NORMAL | PRODUCTION | 本地 `100` 分；微信 `AGENT_JOIN_996` 价 **待人工核** | V1 enabled=true | `AGENT_JOIN_996` | `1450579876` | 待人工核 | 强制等式高风险失败 | **NO-GO** |
-| MEMBER | TEST | PRODUCTION | `N/A` | disabled | 不创建 | 不创建 | N/A | N/A | 默认 NO-GO |
-| AGENT | TEST | PRODUCTION | `N/A` | disabled | 不创建 | 不创建 | N/A | N/A | 默认 NO-GO |
+| MEMBER | NORMAL | SANDBOX | 微信后台 **¥996**（=99600 分）已截图 | V1 enabled；V2 无 | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 截图见 online-props；业务码≠productId 仍在 | **PARTIAL**（价 OK；V2/双签未齐） |
+| AGENT | NORMAL | SANDBOX | 微信后台 **¥996**（=99600 分）已截图 | V1 enabled；V2 无 | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 正式价未改成 ¥1 | **PARTIAL**（价 OK；V2/双签未齐） |
+| MEMBER | TEST | SANDBOX | **¥1（100 分）** | 开发版本新建 | `MEMBER_TEST_1YUAN` | `1450579876` | 开发版本已创建（提交审核成功） | 独立 ID；未动 996 | **PARTIAL**（道具已建；系统侧 V2/映射/双签未齐） |
+| AGENT | TEST | SANDBOX | **¥1（100 分）** | 开发版本新建 | `AGENT_TEST_1YUAN` | `1450579876` | 开发版本已创建（提交审核成功） | 独立 ID；未复用 `AGENT_JOIN_996` | **PARTIAL**（道具已建；系统侧 V2/映射/双签未齐） |
+| MEMBER | NORMAL | PRODUCTION | 微信后台 **¥996** 已截图 | V1 enabled | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 同 SANDBOX productId | **PARTIAL**（价 OK；V2 无） |
+| AGENT | NORMAL | PRODUCTION | 微信后台 **¥996** 已截图 | V1 enabled | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 正式价保持 996 | **PARTIAL**（价 OK；V2 无） |
+| MEMBER | TEST | PRODUCTION | `N/A` | disabled | 不创建线上 TEST | 不创建 | N/A | 仅开发版本有 TEST | 默认 NO-GO |
+| AGENT | TEST | PRODUCTION | `N/A` | disabled | 不创建线上 TEST | 不创建 | N/A | 仅开发版本有 TEST | 默认 NO-GO |
 
 ## 2. 每条记录必填信息
 
@@ -45,7 +56,9 @@
 | MEMBER planId | `plan_ai_creator_996` |
 | AGENT planId | `plan_agent_join_996` |
 | MEMBER 本地价 | `99600` |
-| AGENT 本地价 | `100`（异常，需业务确认是否误改） |
+| AGENT 本地价（库内实读） | **`99600`**（2026-07-29 已从临时测试 100 恢复） |
+| AGENT 审批正式售价 | **`99600`（¥996）** — 价格负责人确认 |
+| AGENT 临时测试价 | **`100`（¥1）** — 须独立 TEST productId / V2 TEST 方案，不得占用 `AGENT_JOIN_996` 正式语义 |
 | MEMBER grant_points | `40000`（V2 要求 giftPoints=0 → 阻断） |
 | AGENT grant_points | `100`（同上） |
 | mode | `short_series_goods` |
@@ -100,6 +113,6 @@ PRODUCTION signData.env = 0
 
 因此当次微信后台截图/工单和双人复核是硬门禁，不能由本地 `pricing-health` 替代。
 
-微信负责人：__________  价格负责人：__________  复核时间：__________  变更单：__________
+微信负责人：Codex 代操（用户授权打开控制台）  价格负责人：__________（第二签字仍待）  复核时间：2026-07-29  变更单：__________
 
-**协调人预填结论：矩阵 6 行可测业务均为 NO-GO（系统证据）。** 人工截图只能确认或加重阻断，不能在 V2 表缺失时改成 PASS。
+**本轮结论：微信 NORMAL 价与独立 ¥1 TEST 道具已在控制台落地（PARTIAL），但双人签未齐 + V2 表未建 → 门禁总状态仍 NO-GO，不得宣称 PASS。**
