@@ -1,0 +1,17 @@
+=== PROBE 2026-07-29 05:35:42 +0800 ===
+GET /api/v1/health -> 200
+GET /healthz -> 200
+GET /readyz -> 307
+GET /api/v1/payment/price-quotes -> 404
+GET /api/v1/payment/test-price-quotes -> 404
+POST /api/v1/payment/price-quotes empty -> 401 body={"error":"unauthorized"}
+POST /api/v1/payment/test-price-quotes empty -> 401 body={"error":"unauthorized"}
+GET /api/v1/admin/pricing-health -> 200
+blockedIssueCount= None
+warningIssueCount= None
+issue: TEST_WHITELIST_MISSING BLOCKING
+issue: TEST_WHITELIST_MISSING BLOCKING
+probe_user=user_000004 plan=plan_ai_creator_996 pricePlan=price_plan_20260728212620000000000_a2443d26
+POST price-quotes member-normal -> 201
+{"code": null, "error": null, "message": null, "transactionPrice": null, "priceCents": null, "currency": "CNY", "environment": "PRODUCTION", "channel": null, "quoteId": "sha256:e61f0d061ae2e218", "pricePlanId": "price_plan_20260728212620000000000_a2443d26", "planId": "plan_ai_creator_996"}
+PROBE_DONE 2026-07-29 05:35:43 +0800
