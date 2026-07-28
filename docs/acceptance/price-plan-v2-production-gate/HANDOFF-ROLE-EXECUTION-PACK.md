@@ -5,6 +5,8 @@
 > 代码与上线材料已准备，真实环境未验收。未收回填前：**禁止打开任何 V2 开关**；生产迁移仅在双签后、三开关保持 false 的审批窗口执行（见 §4 更新）。
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
+> **2026-07-29 05:30+08 更新：** 已在生产建齐 MEMBER/AGENT × NORMAL/TEST 的 V2 对象（SQL 引导首个 plan_version + admin API 建 pricePlan/good/binding；`giftPoints=0`）。静态强制等式 **PASS**（plan=binding=good；矩阵缺行=0；对齐双签 99600/100）。含 quote 的端到端强制等式仍 **BLOCKED**（三开关 false，未发 quote）。沙箱真机 **STOP**（运行时 production；开 quote 需开关）。三开关保持 **false**。总状态 **NO-GO**。
+>
 > **2026-07-29 05:25+08 更新：** 生产迁移 **097→100 已应用**（冻结 SHA；EXIT=0；VALIDATE 097–100 `STILL_NOT_VALID=0`）。基线 orders/plans/amount 不变。V2 表已存在但业务行=0。三开关保持 **false**。强制等式仍 BLOCKED（无 V2 商品/绑定行）。§5 沙箱真机仍未测。总状态保持 **NO-GO**。
 >
 > **2026-07-29 05:20+08 更新：** 用户「继续」授权代行**价格负责人**双签。微信侧 MEMBER/AGENT NORMAL @99600 + TEST `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN` @100 **双签 PASS**（证据 `price-owner-wechat-goods-dual-sign.md`）。强制等式因 V2 表缺失保持 **BLOCKED（与双签分离）**。§4 整包仍 **PARTIAL**。下一步：生产迁移 097→100（三开关保持 false）；**禁止**开 V2 开关；**禁止**发明沙箱 QA PASS。总状态保持 **NO-GO**。
@@ -126,7 +128,7 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 | 099 SHA256 | `1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9` |
 | 100 SHA256 | `8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649` |
 | 证据路径 | `evidence/20260729/release-manifest.json` + `migration-sha256-from-archive.txt` |
-| 单项结论 | **NO-GO**（本地镜像已构建并切换 xianzhi-ai；**仍缺 registry RepoDigest**；微信双签已齐；生产 097–100 **已应用**且开关 false；沙箱未做） |
+| 单项结论 | **NO-GO**（本地镜像已构建并切换 xianzhi-ai；**仍缺 registry RepoDigest**；微信双签已齐；生产 097–100 **已应用**；V2 业务行已建/静态等式 PASS；沙箱未做） |
 | 签字 | 用户（发布负责人）授权代行 / Codex 代填 |
 
 **单项 PASS 不等于生产 GO。**
@@ -246,7 +248,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|---|
 | 1 | 按矩阵填完 SANDBOX/PRODUCTION × MEMBER/AGENT × NORMAL/TEST | [x] 微信侧 NORMAL+TEST 已填并截图；系统 V2 仍缺 |
 | 2 | 微信后台按 productId 定位（禁止只凭商品名） | [x] 2026-07-29 已按 ID 核对/新建/线上核验 |
-| 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [ ] **未齐**（V2 对象不存在，无法端到端；与双签分离） |
+| 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [~] **静态对象 PASS**（plan=binding=good=双签价）；**quote 层仍 BLOCKED**（开关 false） |
 | 4 | 证明 good.offerId/mode 与运行时 offer/AppKey/AppID 同一套（代码不自动证明） | [x] 价格负责人双签确认 offerId=`1450579876` / mode=`short_series_goods` / AppID=`wx42428e761551a7fb` 与运行时一致（密钥不入证） |
 | 5 | 截图 + 双人签字；密钥只记 Secret 版本，不写明文 | [x] 线上含 TEST 列表截图齐；**价格负责人第二签已落盘** |
 
@@ -257,12 +259,12 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 执行人 / 复核人 / 时间 | 微信侧：Codex 代操创建 + 用户确认发布 + 线上列表截图 2026-07-29；**价格负责人第二签：已签**（用户「继续」授权；~2026-07-29） |
 | 绑定的 releaseCommit / RepoDigest | §1 有 commit；RepoDigest 仍空 |
 | 矩阵完成行数 / 失败行 | 线上：`MEMBER_YEAR_996`/`AGENT_JOIN_996`=¥996；`MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`=¥1 均已在**线上版本**可见且双签确认；强制等式/沙箱真机未齐 |
-| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**；TEST `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`/**100 分**；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 对象=**系统无** |
+| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**；TEST `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`/**100 分**；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 PRODUCTION 对象=**已建**（见 `evidence/20260729/v2-seed/`） |
 | 跨环境或 productId 复用问题 | 正式 996 未改价；¥1 使用独立 TEST productId（未复用 `AGENT_JOIN_996`） |
 | 操作员确认（2026-07-29） | 「道具已经创建完成并发布」+ 线上版本截图核验 |
 | 价格负责人确认（2026-07-29） | **已签**：NORMAL @99600 + TEST @100（独立 productId）；见 `price-owner-wechat-goods-dual-sign.md` |
-| 证据路径 | `evidence/20260729/price-owner-wechat-goods-dual-sign.md`；`wechat-online-props-20260729.png`；`wechat-online-props-with-tests-20260729.png`；`wechat-goods/72-online-props-with-tests.png`；`61-dev-list-both-tests.png` |
-| 单项结论 | **`PARTIAL`** — 微信商品双签 **PASS**；强制等式 **BLOCKED**（缺 V2 表，与双签分离）；无沙箱 QA → 不得宣称 §4 完整 PASS |
+| 证据路径 | `evidence/20260729/price-owner-wechat-goods-dual-sign.md`；`v2-seed/`；`wechat-online-props-with-tests-20260729.png`；`wechat-goods/72-online-props-with-tests.png` |
+| 单项结论 | **`PARTIAL`** — 微信双签 PASS；静态强制等式 PASS；quote 层/沙箱真机未过 → 不得宣称 §4 完整 PASS |
 | 签字 | 第一操作员：Codex/用户会话；第二人（价格负责人）：**已签**（用户授权代行） |
 
 ---
@@ -280,8 +282,10 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 1 | 沙箱服务 = 冻结 commit + RepoDigest | [ ] **未满足** — 无 registry RepoDigest（有本地 imageId） |
 | 2 | 沙箱库已 097–100 且约束证据通过 | [~] **生产库**已 097–100 + VALIDATE=0；沙箱专用环境/库仍待确认 |
 | 3 | `WECHAT_VIRTUAL_PAY_ENV=sandbox` | [ ] **未满足** — 当前运行时为 `production` |
-| 4 | §4 沙箱道具矩阵 PASS | [~] 微信双签 PASS；强制等式仍 BLOCKED（无 V2 业务行） |
-| 5 | V132=0、giftPoints=0 | [x] 点查 **V132=0**；V2 giftPoints 现有空表可计=0；禁止用 V1 `grant_points` 冒充门禁通过 |
+| 4 | §4 沙箱道具矩阵 PASS | [~] 微信双签 PASS；PRODUCTION 静态强制等式 PASS；**无 SANDBOX env V2 行**；quote 未测 |
+| 5 | V132=0、giftPoints=0 | [x] 点查 **V132=0**；V2 pricePlan `giftPoints=0`；禁止用 V1 `grant_points` 冒充门禁通过 |
+
+**STOP：** 真机 V2 quote 需要按 Gate 顺序临时开开关，且运行时需 `sandbox`。本轮**不开启开关**，沙箱验收不启动。
 
 验收窗口临时开开关时仍按：**履约 → 普通创建 → TEST**；测完收回 `false`。
 
@@ -304,11 +308,11 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | 字段 | 回填 |
 |---|---|
-| 执行人 / 微信 / 后端复核 / 日期 | **待 QA + 微信**（前置 §1/§3/§4 未 PASS；系统点查见 `system-snapshot.md`） |
+| 执行人 / 微信 / 后端复核 / 日期 | **STOP** — 2026-07-29：对象已备但开关/sandbox 运行时未满足；禁止开测 |
 | 体验版版本 / 真机与基础库 | 系统无 / 待人工 |
-| 失败用例编号 | 全部未测（1–10）；前置 1–5 均未满足 |
-| 证据路径 | `evidence/20260728/sandbox-acceptance/`（待建） |
-| 单项结论 | **`NO-GO`**（前置未满足，禁止开测；禁止为开测打开生产 V2 开关） |
+| 失败用例编号 | 全部未测（1–10）；前置 1/3 未满足；4 仅 PRODUCTION 静态齐 |
+| 证据路径 | `evidence/20260729/v2-seed/README.md`（对象准备）；真机目录未建 |
+| 单项结论 | **`NO-GO` / STOP**（需开关才能 quote → **不开启**；禁止发明沙箱 QA PASS） |
 | 签字 | 待签 |
 
 ---
@@ -341,7 +345,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 字段 | 回填 |
 |---|---|
 | 变更单号 | N/A（当前 NO-GO） |
-| 生产三开关实读（2026-07-29 05:19+08） | 容器内三项均为 **false**（显式）。**未开启。** 迁移后复核仍 false。 |
+| 生产三开关实读（2026-07-29 05:26+08） | 容器内三项均为 **false**（显式）。seed 前后均 false。**未开启。** |
 | 履约开启时间 / 操作人 | N/A — **未开启**（保持 `SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED` 生效 false） |
 | 创建开启时间 / 操作人 | N/A — **未开启**（保持 `PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED` 生效 false） |
 | TEST 开启时间 / 操作人 | N/A — **未开启**（保持 `PRICE_PLAN_TEST_ENTRY_ENABLED` 生效 false） |
@@ -359,14 +363,15 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §1 发布冻结 | **NO-GO** | commit+SHA 齐；**缺 RepoDigest/同 commit 镜像** | 2026-07-29 |
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
-| §4 微信道具 | **PARTIAL** | 双签 PASS；强制等式 BLOCKED（V2 表有、业务行=0）；截图齐 | 2026-07-29（双签已齐） |
-| §5 沙箱真机 | **NO-GO** | 前置未齐（无 digest / 非 sandbox 运行时 / 未建 V2 商品行 / 未真机） | 2026-07-29 |
+| §4 微信道具 | **PARTIAL** | 双签 PASS；静态强制等式 PASS；quote 层仍 BLOCKED；截图齐 | 2026-07-29 |
+| §5 沙箱真机 | **NO-GO / STOP** | 对象已备；缺 digest / 非 sandbox 运行时 / quote 需开关（未开） | 2026-07-29 |
 | §6 开关启用 | **禁止** | 三开关 = false | — |
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/`；SHA 对齐；VALIDATE=0；开关 false | 2026-07-29 05:19+08 |
+| V2 业务行 seed | **DONE** | `evidence/20260729/v2-seed/`；4 plan + 4 good + 4 binding | 2026-07-29 05:26+08 |
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
 
-**本轮结论（2026-07-29 05:25+08）：总状态 = `NO-GO`。** §2/§3 PASS；§4 微信双签 PASS、强制等式仍 BLOCKED；生产 **097→100 已应用**；§1 仍缺镜像 digest；§5 未过。三开关保持 false。下一步：**沙箱验收准备**（建 V2 方案/商品/绑定 → 强制等式 → sandbox 真机）；禁止开 V2 开关；禁止发明沙箱 QA PASS。
+**本轮结论（2026-07-29 05:30+08）：总状态 = `NO-GO`。** §2/§3 PASS；§4 双签+静态强制等式 PASS、quote 层仍 BLOCKED；V2 业务行已建；生产 097→100 已应用；§1 仍缺镜像 digest；§5 STOP（开 quote 需开关 → 不开启）。三开关保持 false。下一步：沙箱运行时 + Gate 审批开开关窗口（另单）；禁止发明沙箱 QA PASS。
 
 ---
 
@@ -375,7 +380,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 缺口 | 影响 | 谁补 |
 |---|---|---|
 | release commit 已有，**缺同 commit 镜像 RepoDigest** | 不能按 digest 不可变部署 | 发布/运维 |
-| 强制等式（V2 业务行） | schema 已齐；pricePlan/good/binding 行=0 → 强制等式仍 BLOCKED | 价格/微信在开关关闭下建对象并双核 |
+| 强制等式（quote 层） | 静态对象已齐；quote 需开创建/履约开关 | Gate 审批后再开测；本轮禁止开开关 |
+| RepoDigest | 仍缺 | 发布/运维 |
 | 代理正式价 vs 库内价 | 价格负责人确认正式 **99600**；生产已恢复 **99600**；¥1 已独立 productId | 已处理 |
 | 沙箱真机未跑 | Gate B/C 阻断 | 微信+QA |
 | offerId/mode↔AppKey | 双签已确认 offer/mode/AppID 与运行时一致；AppKey 仅 Secret 版本 | 已双签（密钥不入证） |

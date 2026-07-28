@@ -4,6 +4,10 @@
 
 `productCode` 旧脚本不能作为 V2 验收证据；V2 必须走服务端 quoteId 链路。
 
+> **2026-07-29 05:30+08 状态：** PRODUCTION V2 对象已建（`evidence/20260729/v2-seed/`）。  
+> **STOP — 不开测：** 当前 `WECHAT_VIRTUAL_PAY_ENV=production`；发 V2 quote 需要按 Gate 顺序临时开启履约/创建/TEST 开关。本轮**未开启任何开关**，禁止发明沙箱 QA PASS。  
+> 准备就绪的 checklist 字段：ACTIVE entitlement、NORMAL+TEST pricePlan、独立 productId 商品、ACTIVE binding、`giftPoints=0`（均在 PRODUCTION）。仍缺：sandbox 运行时、RepoDigest、SANDBOX env 行、开关审批窗口。
+
 ## 1. 真实链路
 
 ```text

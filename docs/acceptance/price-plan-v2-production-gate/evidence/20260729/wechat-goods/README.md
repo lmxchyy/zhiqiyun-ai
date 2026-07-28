@@ -45,7 +45,8 @@ User replied「继续」after being told next human step is price-owner dual-sig
 
 ## Remaining (separate from dual-sign)
 
-- Prod migrate 097→100 **APPLIED** (schema only); V2 business rows still 0 → **force-equality cannot close**.
+- Prod migrate 097→100 **APPLIED**; V2 PRODUCTION business rows **seeded** (`../v2-seed/`) → static force-equality **PASS**.
+- Quote-layer force-equality still **BLOCKED** (switches false).
 - Overall §4 still **PARTIAL**; total gate **NO-GO**.
-- Sandbox real-device V2 quote (§5) still blocked — do not invent PASS.
+- Sandbox real-device V2 quote (§5) **STOP** — needs sandbox runtime + switches; do not invent PASS.
 - V2 feature flags must stay **false**.

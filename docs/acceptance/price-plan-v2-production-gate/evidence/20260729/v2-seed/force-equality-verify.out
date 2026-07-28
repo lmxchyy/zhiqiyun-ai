@@ -1,0 +1,25 @@
+Pager usage is off.
+ section | price_plans | goods | bindings | active_versions 
+---------+-------------+-------+----------+-----------------
+ counts  |           4 |     4 |        4 |               2
+(1 row)
+
+           code            |       plan_id       |  kind  | environment | sale_price_cents | gift_points | enabled | is_default | price_status |                    binding_id                    | binding_enabled | binding_status | provider_price_snapshot_cents |                   good_id                    |    product_id     |  offer_id  |        mode        | platform_price_cents | published | good_enabled | good_status |     verification_status      | price_equal | channel_ok | env_ok | offer_mode_ok 
+---------------------------+---------------------+--------+-------------+------------------+-------------+---------+------------+--------------+--------------------------------------------------+-----------------+----------------+-------------------------------+----------------------------------------------+-------------------+------------+--------------------+----------------------+-----------+--------------+-------------+------------------------------+-------------+------------+--------+---------------
+ pp_agent_normal_prod_996  | plan_agent_join_996 | NORMAL | PRODUCTION  |            99600 |           0 | t       | t          | ACTIVE       | payment_binding_20260728212634000000000_a5d1239f | t               | ACTIVE         |                         99600 | wechat_good_20260728212604000000000_3c11d01c | AGENT_JOIN_996    | 1450579876 | short_series_goods |                99600 | t         | t            | PUBLISHED   | MANUALLY_CONFIRMED_PUBLISHED | t           | t          | t      | t
+ pp_member_normal_prod_996 | plan_ai_creator_996 | NORMAL | PRODUCTION  |            99600 |           0 | t       | t          | ACTIVE       | payment_binding_20260728212634000000000_46b3450b | t               | ACTIVE         |                         99600 | wechat_good_20260728212604000000000_ee3e62c6 | MEMBER_YEAR_996   | 1450579876 | short_series_goods |                99600 | t         | t            | PUBLISHED   | MANUALLY_CONFIRMED_PUBLISHED | t           | t          | t      | t
+ pp_agent_test_prod_entry  | plan_agent_join_996 | TEST   | PRODUCTION  |              100 |           0 | t       | f          | ACTIVE       | payment_binding_20260728212634000000000_ae9add70 | t               | ACTIVE         |                           100 | wechat_good_20260728212605000000000_4d2fb356 | AGENT_TEST_1YUAN  | 1450579876 | short_series_goods |                  100 | t         | t            | PUBLISHED   | MANUALLY_CONFIRMED_PUBLISHED | t           | t          | t      | t
+ pp_member_test_prod_entry | plan_ai_creator_996 | TEST   | PRODUCTION  |              100 |           0 | t       | f          | ACTIVE       | payment_binding_20260728212634000000000_23904db9 | t               | ACTIVE         |                           100 | wechat_good_20260728212604000000000_49523b0e | MEMBER_TEST_1YUAN | 1450579876 | short_series_goods |                  100 | t         | t            | PUBLISHED   | MANUALLY_CONFIRMED_PUBLISHED | t           | t          | t      | t
+(4 rows)
+
+       check_name        | blocker_count 
+-------------------------+---------------
+ force_equality_blockers |             0
+(1 row)
+
+          check_name          | missing_count 
+------------------------------+---------------
+ missing_required_matrix_rows |             0
+(1 row)
+
+EXIT=True

@@ -7,8 +7,8 @@
 **操作员确认（2026-07-29）：** 「道具已经创建完成并发布」— `MEMBER_TEST_1YUAN` / `AGENT_TEST_1YUAN`。  
 **线上版本列表视觉核验：** **已补** `72-online-props-with-tests.png`（两 TEST ¥1 + 两 NORMAL ¥996 同屏）。  
 **价格负责人双签（2026-07-29）：** 用户「继续」授权代行价格负责人第二签 — 见 `evidence/20260729/price-owner-wechat-goods-dual-sign.md`。微信侧 productId×价格矩阵 **双签 PASS**。  
-**强制等式：** 生产已应用 097→100（表存在）但 **pricePlan/good/binding 业务行=0** → 强制等式仍无法端到端建立 → **与双签分离，保持 BLOCKED**。  
-**§4 整包 / 总状态：** 双签已齐但仍 **PARTIAL / NO-GO**（强制等式未过；§5 未测；不得宣称完整微信门禁 PASS）。
+**强制等式：** PRODUCTION 静态对象（pricePlan/binding/good）**PASS**（`force_equality_blockers=0`；对齐双签 99600/100）；含 quote 的端到端强制等式仍 **BLOCKED**（三开关 false）。  
+**§4 整包 / 总状态：** 双签+静态等式已齐但仍 **PARTIAL / NO-GO**（quote/沙箱未过；不得宣称完整微信门禁 PASS）。
 
 ### 0.1 微信后台实观摘要（2026-07-29）
 
@@ -33,10 +33,10 @@ TEST 已创建并发布到线上版本（截图已核）；**微信侧双签已�
 | AGENT | NORMAL | SANDBOX | **¥996（99600 分）** | V1 enabled；V2 无 | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 双签 PASS；正式价未改成 ¥1 | **PARTIAL**（微信价+双签 OK；V2 无） |
 | MEMBER | TEST | SANDBOX | **¥1（100 分）** | 独立 TEST productId | `MEMBER_TEST_1YUAN` | `1450579876` | **已发布**（线上版本可见） | 双签 PASS；`72-online-props-with-tests.png` | **PARTIAL**（微信+双签 OK；V2/映射未齐） |
 | AGENT | TEST | SANDBOX | **¥1（100 分）** | 独立 TEST productId | `AGENT_TEST_1YUAN` | `1450579876` | **已发布**（线上版本可见） | 双签 PASS；`72-online-props-with-tests.png` | **PARTIAL**（微信+双签 OK；V2/映射未齐） |
-| MEMBER | NORMAL | PRODUCTION | **¥996（99600 分）** | V1 enabled | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 双签 PASS | **PARTIAL**（价+双签 OK；V2 无） |
-| AGENT | NORMAL | PRODUCTION | **¥996（99600 分）** | V1 enabled | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 双签 PASS；正式价保持 996 | **PARTIAL**（价+双签 OK；V2 无） |
-| MEMBER | TEST | PRODUCTION | **¥1（100 分）** | 线上已发布（门禁受控 TEST） | `MEMBER_TEST_1YUAN` | `1450579876` | **已发布**（published + 线上截图 + 双签 2026-07-29） | 双签 PASS；强制等式仍 BLOCKED | **PARTIAL**（微信双签 OK；强制等式/V2 仍 NO-GO） |
-| AGENT | TEST | PRODUCTION | **¥1（100 分）** | 线上已发布（门禁受控 TEST） | `AGENT_TEST_1YUAN` | `1450579876` | **已发布**（published + 线上截图 + 双签 2026-07-29） | 双签 PASS；强制等式仍 BLOCKED | **PARTIAL**（微信双签 OK；强制等式/V2 仍 NO-GO） |
+| MEMBER | NORMAL | PRODUCTION | **¥996（99600 分）** | V2 ACTIVE+default；giftPoints=0 | `MEMBER_YEAR_996` | `1450579876` | 线上版本已发布 | 双签 PASS；静态等式 PASS | **PASS（静态）** |
+| AGENT | NORMAL | PRODUCTION | **¥996（99600 分）** | V2 ACTIVE+default；giftPoints=0 | `AGENT_JOIN_996` | `1450579876` | 线上版本已发布 | 双签 PASS；静态等式 PASS | **PASS（静态）** |
+| MEMBER | TEST | PRODUCTION | **¥1（100 分）** | V2 ACTIVE；hidden/TEST；非 default | `MEMBER_TEST_1YUAN` | `1450579876` | **已发布** | 双签 PASS；静态等式 PASS | **PASS（静态）** |
+| AGENT | TEST | PRODUCTION | **¥1（100 分）** | V2 ACTIVE；hidden/TEST；非 default | `AGENT_TEST_1YUAN` | `1450579876` | **已发布** | 双签 PASS；静态等式 PASS | **PASS（静态）** |
 
 ## 2. 每条记录必填信息
 
@@ -67,7 +67,7 @@ TEST 已创建并发布到线上版本（截图已核）；**微信侧双签已�
 | AGENT grant_points | `100`（同上） |
 | mode | `short_series_goods` |
 | offerId（运行时） | `1450579876` |
-| V2 pricePlanId / wechatGoodId / bindingId | **表已建（097–100 APPLIED 2026-07-29）；业务行=0** |
+| V2 pricePlanId / wechatGoodId / bindingId | **已建**（见 `evidence/20260729/v2-seed/created-inventory.json`） |
 
 AppKey、AppSecret、sessionKey、NotifyToken、登录凭证不得写入表格，只记录 Secret 版本或脱敏指纹。
 
@@ -92,7 +92,7 @@ SANDBOX signData.env = 1
 PRODUCTION signData.env = 0
 ```
 
-**当前：** V2 schema 已落地（097–100），但 pricePlan/good/binding **业务行=0**，强制等式 **无法建立** → **BLOCKED**（与微信双签 PASS **分离**；不得用双签冒充强制等式 PASS）。
+**当前：** PRODUCTION 静态强制等式 **PASS**（plan=binding=good；blocker=0；对齐双签价）。含 `quote.transactionPrice` 的端到端等式仍 **BLOCKED**（三开关 false，未发 quote）。不得用静态 PASS 冒充 quote/沙箱 PASS。
 
 ## 4. 单行核对步骤
 
@@ -119,4 +119,4 @@ PRODUCTION signData.env = 0
 
 微信负责人：Codex 代操 + 用户确认发布  价格负责人：**已签**（用户「继续」授权；`price-owner-wechat-goods-dual-sign.md`）  复核时间：2026-07-29  变更单：price-plan-v2-production-gate / dual-sign
 
-**本轮结论：微信商品双人签 PASS（NORMAL @99600 + TEST @100 独立 productId，截图齐）。强制等式因 V2 业务行未建保持 BLOCKED（与双签分离；097–100 schema 已应用）。§4 整包仍 PARTIAL / 总状态 NO-GO；不得宣称完整微信门禁或沙箱 QA PASS；禁止开 V2 开关。**
+**本轮结论：微信商品双人签 PASS。PRODUCTION 静态强制等式 PASS（`v2-seed/`）。quote 层/沙箱真机仍 NO-GO；§4 整包仍 PARTIAL；总状态 NO-GO；禁止开 V2 开关；禁止发明沙箱 QA PASS。**

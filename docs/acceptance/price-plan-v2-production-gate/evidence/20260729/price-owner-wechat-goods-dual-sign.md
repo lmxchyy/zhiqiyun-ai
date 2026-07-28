@@ -35,22 +35,24 @@
 
 操作员确认时间戳：2026-07-29（「道具已经创建完成并发布」）。
 
-## 明确不在本签范围内
+## 明确不在本签范围内 / 后续状态（2026-07-29 05:30 更新）
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 强制等式（quote = plan = binding = localGood = 微信价） | **未闭合** | 生产尚无 V2 表（`xz_price_plans` / goods / bindings）；不得宣称强制等式 PASS |
-| V2 pricePlan / wechatGood / binding 对象 | **系统无** | 待生产迁移 097→100（三开关保持 false）后再建对象与映射 |
-| §5 沙箱真机 V2 quote | **未测** | 禁止发明 PASS |
-| V2 三开关 | **保持 false** | 本签不授权启用 |
+| 静态强制等式（plan = binding = localGood = 双签微信价） | **PASS** | `evidence/20260729/v2-seed/`；blocker=0 |
+| 含 quote 的端到端强制等式 | **BLOCKED** | 三开关 false；未发 quote |
+| V2 pricePlan / wechatGood / binding 对象 | **已建（PRODUCTION）** | 见 `v2-seed/created-inventory.json` |
+| §5 沙箱真机 V2 quote | **STOP / 未测** | 需 sandbox 运行时 + 开关；禁止发明 PASS |
+| V2 三开关 | **保持 false** | seed 前后均为 false |
 
 ## 签字结论
 
 | 维度 | 结论 |
 |---|---|
 | 微信商品双人签（productId × 价格矩阵） | **`PASS`** |
-| 强制等式 / 端到端 V2 映射 | **`BLOCKED`**（缺 V2 表；与双签分离） |
-| §4 微信道具单项（整包） | **`PARTIAL`** — 双签已齐；强制等式仍 NO-GO |
-| 总 GO/NO-GO | 仍 **`NO-GO`**（§1 缺 RepoDigest；§5 未过；开关禁止） |
+| 静态强制等式 / V2 对象映射 | **`PASS`**（2026-07-29 seed 后） |
+| quote 端到端强制等式 | **`BLOCKED`** |
+| §4 微信道具单项（整包） | **`PARTIAL`** — 双签+静态等式齐；quote/沙箱未过 |
+| 总 GO/NO-GO | 仍 **`NO-GO`**（§1 缺 RepoDigest；§5 STOP；开关禁止） |
 
-签字：价格负责人（用户授权）/ Codex 代填 — 2026-07-29
+签字：价格负责人（用户授权）/ Codex 代填 — 2026-07-29（双签）；对象 seed 续填 05:30+08
