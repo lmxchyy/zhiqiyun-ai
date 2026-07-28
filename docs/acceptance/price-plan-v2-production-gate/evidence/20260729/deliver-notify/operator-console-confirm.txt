@@ -1,0 +1,19 @@
+# WeChat MP console — operator confirmation (text only)
+
+ConfirmedAt: 2026-07-29 (operator session; after deliver-notify oneshot)
+Source: User / operator verbal confirmation in Cursor chat
+Screenshot: NONE pasted — do not invent image evidence
+
+Confirmation (verbatim sense):
+  WeChat console now shows 已发货 for the deliver-notify orders
+  (MEMBER + AGENT ¥1 TEST).
+
+Orders covered:
+  - MEMBER TEST  ZQY202607282159389857812495  txn 4500000265202607293548593890
+  - AGENT TEST   ZQY20260728221656E339AB7A54  txn 4500000301202607297737425043
+
+Verdict for this FLAG:
+  wechatConsoleUnshippedCleared = CLOSED (operator text confirm; no screenshot artifact)
+  query_order status=4 remains NOT_VERIFIED (openid mismatch earlier)
+
+Do not flip §5 whole pack or total GO from this note alone.

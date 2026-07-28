@@ -1,6 +1,7 @@
 {
   "checkedAt": "2026-07-29T06:37:00+08:00",
-  "verdict": "API_ACK_PASS_CONSOLE_UNVERIFIED",
+  "consoleConfirmedAt": "2026-07-29",
+  "verdict": "API_ACK_PASS_CONSOLE_OPERATOR_CONFIRMED",
   "deployCommit": "a39485ef159dabf348a71059a0e922af4894ab5a",
   "imageTag": "a39485ef1",
   "v2Flags": {
@@ -17,7 +18,8 @@
       "wechatOrderId": "VPO260729055939046718422",
       "localStatus": "PAID",
       "entitlementStatus": "SUCCESS",
-      "notifyProvideGoods": { "ok": true, "errcode": 0, "errmsg": "OK" }
+      "notifyProvideGoods": { "ok": true, "errcode": 0, "errmsg": "OK" },
+      "wechatConsoleShipState": "已发货"
     },
     {
       "orderNo": "ZQY20260728221656E339AB7A54",
@@ -26,18 +28,20 @@
       "wechatOrderId": "VPO260729061656022982037",
       "localStatus": "PAID",
       "entitlementStatus": "SUCCESS",
-      "notifyProvideGoods": { "ok": true, "errcode": 0, "errmsg": "OK" }
+      "notifyProvideGoods": { "ok": true, "errcode": 0, "errmsg": "OK" },
+      "wechatConsoleShipState": "已发货"
     }
   ],
   "queryOrderStatus4": "NOT_VERIFIED_OPENID_ERROR",
-  "wechatConsoleUnshippedCleared": "NOT_VERIFIED_NO_SCREENSHOT",
+  "wechatConsoleUnshippedCleared": "CLOSED_OPERATOR_TEXT_CONFIRM",
+  "wechatConsoleScreenshot": "NONE",
+  "operatorConfirmEvidence": "operator-console-confirm.txt",
   "codeChanges": [
     "backend-go/internal/httpserver/wechat_virtual_deliver_notify.go",
     "POST /api/v1/admin/payment/virtual/orders/:orderNo/notify-provide-goods",
     "tools/notify-provide-goods-oneshot.sh"
   ],
   "remaining": [
-    "wechat_console_screenshot_confirm",
     "NORMAL_996_real_device",
     "sandbox_runtime",
     "RepoDigest"

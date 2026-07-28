@@ -27,6 +27,7 @@
 | `redeploy.meta` | Redeploy to correct tip + V2 flags true in container |
 | `verify-deliver-status.py` | Attempted `query_order` status=4 check (blocked: openid mismatch) |
 | `query-order-after.json` | query_order failed with `268490001 openid错误` — **not** used as console PASS |
+| `operator-console-confirm.txt` | Operator text: console shows 已发货 for both TEST orders (no screenshot) |
 
 ## Honest WeChat-side verdict
 
@@ -35,9 +36,9 @@
 | `/xpay/notify_provide_goods` HTTP/API | **PASS** (both orders `errcode=0`, `errmsg=OK`) |
 | Local `xz_payment_events` | **PASS** (`notify_provide_goods` SUCCESS ×2) |
 | `query_order` → status=4 | **NOT VERIFIED** (openid from prior evidence string rejected by WeChat) |
-| WeChat MP console 「未发货」filter cleared | **NOT VERIFIED** (no fresh console screenshot this window) |
+| WeChat MP console 「未发货」→「已发货」 | **CLOSED** — operator text confirm 2026-07-29（无截图；见 `operator-console-confirm.txt`） |
 
-**Do not invent console PASS.** Human should re-open 虚拟支付订单 and confirm the two txns left 「未发货」.
+**Operator confirmation (2026-07-29):** User confirmed WeChat console now shows **已发货** for both deliver-notify orders (MEMBER + AGENT ¥1 TEST). No screenshot was pasted — recorded as text only; do not invent image evidence.
 
 ## Deploy note
 
@@ -45,7 +46,7 @@ First deploy attempt used a **stale** `origin/` tip (`f8a7632`) and briefly ran 
 
 ## Remaining gaps (unchanged gate)
 
-- WeChat console visual confirmation of ship state
+- ~~WeChat console 「未发货」FLAG~~ → **CLOSED** (operator text)
 - NORMAL ¥996 real-device matrix
 - sandbox runtime / pay env still production
 - RepoDigest still empty
