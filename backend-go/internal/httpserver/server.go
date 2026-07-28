@@ -702,6 +702,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/payment/virtual/refunds", wrapF(virtualPayment.adminList("refunds")))
 	adminGroup.GET("/payment/virtual/failures", wrapF(virtualPayment.adminList("failures")))
 	adminGroup.POST("/payment/virtual/orders/:orderNo/grant", wrapF(virtualPayment.adminGrantOrder))
+	adminGroup.POST("/payment/virtual/orders/:orderNo/notify-provide-goods", wrapF(virtualPayment.adminNotifyProvideGoods))
 	adminGroup.GET("/delivery-projects", wrapF(admin.deliveryProjects))
 	adminGroup.PATCH("/delivery-projects/:id", wrapF(admin.updateDeliveryProject))
 	adminGroup.GET("/generation-tasks", wrapF(admin.generationTasks))

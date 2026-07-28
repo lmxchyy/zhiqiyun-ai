@@ -137,7 +137,12 @@ func (s *virtualPaymentService) confirmPaidAndGrant(ctx context.Context, notific
 	if err := markVirtualPaymentEventProcessedTx(ctx, tx, notification, "SUCCESS", ""); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Query-compensation (and any non-push path) must ack WeChat ship state; push success already does.
+	s.maybeNotifyProvideGoodsAfterGrant(ctx, order.OrderNo, notification.Event)
+	return nil
 }
 
 func (s *virtualPaymentService) persistPaidEntitlementFailure(ctx context.Context, notification virtualPayNotification, paidAt time.Time, cause error) error {
@@ -286,7 +291,12 @@ func (s *virtualPaymentService) GrantOrderEntitlements(ctx context.Context, orde
 		_ = s.markEntitlementFailed(ctx, order.OrderNo, err)
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Admin/compensation grant path: ensure WeChat deliver ack when push never arrived.
+	s.maybeNotifyProvideGoodsAfterGrant(ctx, order.OrderNo, "grant_order_entitlements")
+	return nil
 }
 
 func (s *virtualPaymentService) grantOrderEntitlementsTx(ctx context.Context, tx *sql.Tx, order lockedVirtualOrder, paidAt time.Time) error {

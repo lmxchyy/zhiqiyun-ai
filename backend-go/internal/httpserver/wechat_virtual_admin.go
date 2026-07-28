@@ -234,6 +234,31 @@ func (a virtualPaymentAPI) adminGrantOrder(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, map[string]any{"item": item, "message": "权益发放已完成或已幂等确认"})
 }
 
+func (a virtualPaymentAPI) adminNotifyProvideGoods(w http.ResponseWriter, r *http.Request) {
+	if !a.available(w) {
+		return
+	}
+	orderNo := strings.TrimSpace(r.PathValue("orderNo"))
+	if orderNo == "" {
+		writeError(w, http.StatusBadRequest, errors.New("orderNo is required"))
+		return
+	}
+	if err := a.service.notifyProvideGoodsForOrder(r.Context(), orderNo); err != nil {
+		writeVirtualPaymentError(w, err)
+		return
+	}
+	item, _, _, err := a.service.orderView(r.Context(), orderNo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"item":    item,
+		"orderNo": orderNo,
+		"message": "发货确认已提交或已幂等确认（不重复发放权益）",
+	})
+}
+
 func virtualAdminListLimit(r *http.Request) int {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
