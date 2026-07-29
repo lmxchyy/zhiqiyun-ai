@@ -126,3 +126,15 @@ Thumbs.db
 desktop.ini
 
 .tmp-go-cache/
+
+# =========================
+# Local working leftovers (do not push)
+# =========================
+.superpowers/
+artifacts/
+tools/tmp-*
+docs/superpowers/
+docs/ui/
+docs/CODEX-STAGE-MODES.md
+docs/acceptance/price-plan-v2-production-gate/evidence/**/_agent_*.sql
+docs/acceptance/price-plan-v2-production-gate/evidence/**/run-build-deploy-image.sh
