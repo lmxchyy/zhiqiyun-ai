@@ -18,6 +18,8 @@
 ## Evidence basis (FULL SHAs — do not truncate)
 
 ```text
+docsGoCommit (FULL)          = 719f898c5ca160348ca5d597f9644901d0a60242
+  subject = docs(pricing): PO accept §5 substitutions; declare production gate GO
 basisDocsParentCommit (FULL) = 4fc14fffe1acc534b573c2baf4e60bf78caf85e1
   subject = docs(pricing): close §5 #5/#7/#8/#10 probes; keep overall NO-GO
 
