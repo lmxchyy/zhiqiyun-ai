@@ -1,8 +1,8 @@
 {
-    "filledAt": "2026-07-29T09:46:00+08:00",
-    "filledBy": "release-owner+DBA+price-owner (delegated to Codex by user); PO ACCEPTED local-immutable",
+    "filledAt": "2026-07-29T09:58:00+08:00",
+    "filledBy": "release-owner+DBA+price-owner+QA probes (delegated to Codex by user); PO ACCEPTED local-immutable",
     "status": "NO-GO",
-    "notes": "§1 PASS-WITH-LOCAL-IMMUTABLE (PO ACCEPTED 2026-07-29T09:44:00+08). FULL git a39485ef159dabf348a71059a0e922af4894ab5a; FULL IMAGE_ID sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32; before/after EXACT; current tar SHA256 4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09; previous tar EXPORTED. Forbidden: docker compose up -d --build; retag overwrite. Registry remains long-term standard; local-immutable NOT long-term policy. repoDigest null. Overall still NO-GO: §5 PARTIAL (#5/#7/#8/#10). V2 flags unchanged; pay env production. Policy: real Y996 WAIVED; Y1 payment ACCEPTED.",
+    "notes": "§1 PASS-WITH-LOCAL-IMMUTABLE (PO ACCEPTED). §4 PASS. §5 PASS-WITH-SUBSTITUTIONS: #5/#7/#8/#10 CLOSED via section5-probes (re-sync idempotency; whitelist soft-expire 403; binding +1fen MISMATCH; V1 status+legacy TOKEN create). Overall still NO-GO: final go-no-go-gate signatures empty; need PO accept §5 substitutions. FULL git a39485ef159dabf348a71059a0e922af4894ab5a; FULL IMAGE_ID sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32. V2 flags unchanged; pay env production. Policy: real Y996 WAIVED; Y1 payment ACCEPTED.",
     "prodMigrate": {
         "appliedAt": "2026-07-29T05:19:00+08:00",
         "order": [
@@ -147,6 +147,12 @@
         "section1Status": "PASS-WITH-LOCAL-IMMUTABLE",
         "section1PoAccept": "ACCEPTED",
         "section1PoAcceptAt": "2026-07-29T09:44:00+08:00",
+        "section4Status": "PASS",
+        "section5Status": "PASS-WITH-SUBSTITUTIONS",
+        "section5ProbesAt": "2026-07-29T09:57:39+08:00",
+        "section5Evidence": "evidence/20260729/section5-probes/",
+        "overallStatus": "NO-GO",
+        "overallBlocker": "final go-no-go-gate signatures empty; PO accept of §5 substitutions pending",
         "forbiddenOps": [
             "docker compose up -d --build",
             "retag or rebuild overwrite of an already-used image tag",

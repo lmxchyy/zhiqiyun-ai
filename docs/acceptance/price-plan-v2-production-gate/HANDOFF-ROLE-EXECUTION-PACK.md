@@ -1,12 +1,14 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `NO-GO`（§1 已 `PASS-WITH-LOCAL-IMMUTABLE`；§5 等仍 PARTIAL；禁止发明整体 GO）。**
+> **当前总状态 = `NO-GO`（§1 local-immutable + §5 清单已关；缺最终门禁签字 / PO 接受 §5 替代项；禁止口头改 GO）。**
+>
+> **2026-07-29T09:57+08 §5 #5/#7/#8/#10 CLOSED：** 生产安全探针 PASS（无 ¥996 收费；pay env 保持 production）。#5 re-sync×2 幂等；#7 quote 后白名单失效 → 403 `PRICE_PLAN_NOT_ELIGIBLE`（旧 entry EXPIRED immutable → admin 重建 ACTIVE）；#8 binding +1 分 → 409 `PRICE_PLAN_WECHAT_PRICE_MISMATCH` 后恢复；#10 V1 status 200 + legacy TOKEN create 201。证据 `evidence/20260729/section5-probes/`。§5 = **`PASS-WITH-SUBSTITUTIONS`**（无 sandbox 真机付；#5 非 push 风暴）。总状态仍 **NO-GO**（`go-no-go-gate.md` 最终签字栏空；需 PO 接受替代项）。
 >
 > **2026-07-29T09:44:00+08 PO ACCEPTED `PASS-WITH-LOCAL-IMMUTABLE`（严格条件已执行）：** FULL git=`a39485ef159dabf348a71059a0e922af4894ab5a`；FULL IMAGE_ID=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；before/after EXACT；current tar=`/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar` SHA256=`4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09`；previous tar EXPORTED（`3d0c0e032` / `sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331`）；**禁止** `docker compose up -d --build` 与同 tag 覆盖；registry 仍为长期标准。证据 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。V2 三开关与 `WECHAT_VIRTUAL_PAY_ENV=production` **未改动**。
 >
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
-> **2026-07-29（政策）更新：** 用户明确：**禁止**再要求生产真机付真实 ¥996。支付技术链路由 ¥1 TEST 两单完整证明（下单→微信支付→回调/查单→会员开通→代理分润）；¥996 与 ¥1 无本质支付路径差异。NORMAL @99600 改用 **配置强制等式 + dry quote 201@99600**（及 sandbox 同价 dry quote）验收；**不收费**。证据：`evidence/20260729/POLICY-NO-REAL-996.md`、`normal-996/`、`sandbox-runtime/`。总状态仍 **NO-GO**（§5 PARTIAL 等）。
+> **2026-07-29（政策）更新：** 用户明确：**禁止**再要求生产真机付真实 ¥996。支付技术链路由 ¥1 TEST 两单完整证明（下单→微信支付→回调/查单→会员开通→代理分润）；¥996 与 ¥1 无本质支付路径差异。NORMAL @99600 改用 **配置强制等式 + dry quote 201@99600**（及 sandbox 同价 dry quote）验收；**不收费**。证据：`evidence/20260729/POLICY-NO-REAL-996.md`、`normal-996/`、`sandbox-runtime/`。
 >
 > **2026-07-29 ~07:34+08 sandbox 窗：** 已 seed SANDBOX V2 行列；临时 `WECHAT_VIRTUAL_PAY_ENV=sandbox` → NORMAL/TEST dry quote PASS + U0 TEST 403 → **已恢复 production**；V2 三开关保持 true。见 `evidence/20260729/sandbox-runtime/`。
 >
@@ -272,7 +274,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|---|
 | 1 | 按矩阵填完 SANDBOX/PRODUCTION × MEMBER/AGENT × NORMAL/TEST | [x] 微信侧 NORMAL+TEST 已填并截图；系统 V2 仍缺 |
 | 2 | 微信后台按 productId 定位（禁止只凭商品名） | [x] 2026-07-29 已按 ID 核对/新建/线上核验 |
-| 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [~] **静态对象 PASS**（plan=binding=good=双签价）；**quote 层仍 BLOCKED**（开关 false） |
+| 3 | 核对强制等式：quote = 方案 = 绑定 = 本地商品 = 微信后台价（差 1 分即 NO-GO） | [x] **静态 + dry quote PASS**（plan=binding=good=双签价；PRODUCTION/SANDBOX MEMBER/AGENT NORMAL **201@99600**；TEST **201@100**；#8 +1 分拒绝已证） |
 | 4 | 证明 good.offerId/mode 与运行时 offer/AppKey/AppID 同一套（代码不自动证明） | [x] 价格负责人双签确认 offerId=`1450579876` / mode=`short_series_goods` / AppID=`wx42428e761551a7fb` 与运行时一致（密钥不入证） |
 | 5 | 截图 + 双人签字；密钥只记 Secret 版本，不写明文 | [x] 线上含 TEST 列表截图齐；**价格负责人第二签已落盘** |
 
@@ -281,14 +283,14 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 字段 | 回填 |
 |---|---|
 | 执行人 / 复核人 / 时间 | 微信侧：Codex 代操创建 + 用户确认发布 + 线上列表截图 2026-07-29；**价格负责人第二签：已签**（用户「继续」授权；~2026-07-29） |
-| 绑定的 releaseCommit / RepoDigest | §1 有 commit；RepoDigest 仍空 |
-| 矩阵完成行数 / 失败行 | 线上：`MEMBER_YEAR_996`/`AGENT_JOIN_996`=¥996；`MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`=¥1 均已在**线上版本**可见且双签确认；强制等式/沙箱真机未齐 |
-| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**；TEST `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`/**100 分**；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 PRODUCTION 对象=**已建**（见 `evidence/20260729/v2-seed/`） |
+| 绑定的 releaseCommit / RepoDigest | §1 FULL git + IMAGE_ID（local-immutable）；registry RepoDigest 仍空（accepted） |
+| 矩阵完成行数 / 失败行 | 线上：`MEMBER_YEAR_996`/`AGENT_JOIN_996`=¥996；`MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`=¥1 均双签；强制等式 + dry quote 齐 |
+| 系统已填关键值 | MEMBER `MEMBER_YEAR_996`/**99600**；AGENT `AGENT_JOIN_996`/**99600**；TEST `MEMBER_TEST_1YUAN`/`AGENT_TEST_1YUAN`/**100 分**；offerId=`1450579876`；mode=`short_series_goods`；AppID=`wx42428e761551a7fb`；V2 PRODUCTION+SANDBOX 对象=**已建** |
 | 跨环境或 productId 复用问题 | 正式 996 未改价；¥1 使用独立 TEST productId（未复用 `AGENT_JOIN_996`） |
 | 操作员确认（2026-07-29） | 「道具已经创建完成并发布」+ 线上版本截图核验 |
 | 价格负责人确认（2026-07-29） | **已签**：NORMAL @99600 + TEST @100（独立 productId）；见 `price-owner-wechat-goods-dual-sign.md` |
-| 证据路径 | `evidence/20260729/price-owner-wechat-goods-dual-sign.md`；`v2-seed/`；`wechat-online-props-with-tests-20260729.png`；`wechat-goods/72-online-props-with-tests.png` |
-| 单项结论 | **`PARTIAL`** — 微信双签 PASS；静态强制等式 PASS；quote 层/沙箱真机未过 → 不得宣称 §4 完整 PASS |
+| 证据路径 | `evidence/20260729/price-owner-wechat-goods-dual-sign.md`；`v2-seed/`；`normal-996/`；`sandbox-runtime/`；`section5-probes/`（#8） |
+| 单项结论 | **`PASS`** — 双签 + 静态强制等式 + dry quote 层齐；sandbox 真机付按政策由 ¥1 ACCEPTED 覆盖（非本项阻断） |
 | 签字 | 第一操作员：Codex/用户会话；第二人（价格负责人）：**已签**（用户授权代行） |
 
 ---
@@ -309,7 +311,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 4 | §4 沙箱道具矩阵 PASS | [x] SANDBOX V2 NORMAL/TEST goods+bindings+whitelist seed；dry quote PASS |
 | 5 | V132=0、giftPoints=0 | [x] V132=0；giftPoints/bonus=0 |
 
-**政策（2026-07-29）：** 支付技术链路以 PRODUCTION ¥1 TEST 两单为 **ACCEPTED**；NORMAL 真机 ¥996 = **WAIVED**。sandbox 自动化 quote 已 PASS；真机 sandbox 付未跑（支付管线已由 ¥1 覆盖）。**禁止发明 §5 全矩阵 PASS / 总 GO。**
+**政策（2026-07-29）：** 支付技术链路以 PRODUCTION ¥1 TEST 两单为 **ACCEPTED**；NORMAL 真机 ¥996 = **WAIVED**。sandbox 自动化 quote 已 PASS；真机 sandbox 付未跑（支付管线已由 ¥1 覆盖）。**禁止发明总 GO**（最终签字栏仍空）。
 
 ### 5.2 必测清单
 
@@ -319,30 +321,30 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 2 | AGENT NORMAL：同上 | **WAIVED 真机付**；dry quote **201@99600** + binding `AGENT_JOIN_996` PASS；支付管线见 #4 |
 | 3 | MEMBER TEST ¥1：`goodsPrice=100`、独立 productId | **内部履约 PASS + 发货确认 CLOSED**（`ZQY202607282159389857812495`）→ **支付链路 ACCEPTED** |
 | 4 | AGENT TEST ¥1：同上，且不再走 99600 | **内部履约 PASS + 发货确认 CLOSED**（`ZQY20260728221656E339AB7A54`）→ **支付链路 ACCEPTED** |
-| 5 | 重复/并发微信回调：权益/Token/分润各一次 | **未专项压测**（观测到查单履约幂等键路径） |
+| 5 | 重复/并发微信回调：权益/Token/分润各一次 | **PASS（替代）** — 已履约两单 `POST .../sync`×2；memb/tok 行数与余额不变（`section5-probes/`）；**非** push 风暴压测 |
 | 6 | 回调丢失后官方查单补偿：仍只履约一次 | **观测到** MEMBER+AGENT 均走 `query_order_paid` 履约成功 |
-| 7 | quote 后白名单失效：下单拒绝，不改正式价 | **未测** |
-| 8 | 价格差 1 分：`PRICE_PLAN_WECHAT_PRICE_MISMATCH` | **未测** |
+| 7 | quote 后白名单失效：下单拒绝，不改正式价 | **PASS** — soft-expire 后 checkout **403 `PRICE_PLAN_NOT_ELIGIBLE`**；无新订单；admin 重建 ACTIVE whitelist |
+| 8 | 价格差 1 分：`PRICE_PLAN_WECHAT_PRICE_MISMATCH` | **PASS** — binding +1 分 → **409**；立即恢复；quote 201 |
 | 9 | U0 无白名单请求 TEST：403 | **PASS（自动化）** sandbox+prod-after：`PRICE_PLAN_NOT_ELIGIBLE` |
-| 10 | V1 历史订单回归仍可用 | **未测** |
+| 10 | V1 历史订单回归仍可用 | **PASS** — V1 CLOSED status 200；legacy `TOKEN_CUSTOM_1YUAN` create 201（未付即 CLOSED）；V2 两单仍 SUCCESS |
 
 ### 5.3 回填表
 
 | 字段 | 回填 |
 |---|---|
-| 执行人 / 微信 / 后端复核 / 日期 | 2026-07-29：¥1 真机 ACCEPTED；NORMAL WAIVED；sandbox 窗 quote PASS 并恢复 production |
-| 体验版版本 / 真机与基础库 | 用户真机（¥1）；体验版版本号系统无 / 待补 |
-| 失败用例编号 | #5/#7/#8/#10 未测；#1/#2 真机付 WAIVED（配置+quote 替代）；§1 RepoDigest 已由 local-immutable 关闭 |
-| 证据路径 | `member-test-pay/`；`agent-test-pay/`；`deliver-notify/`；`normal-996/`；`sandbox-runtime/`；`repo-digest/`；`POLICY-NO-REAL-996.md` |
-| 单项结论 | **`PARTIAL`** — 支付链路 ACCEPTED（¥1）；NORMAL config+quote PASS（无收费）；sandbox 运行时 dry quote PASS 已恢复；**#5/#7/#8/#10 未齐**；§5 非整包 PASS |
-| 签字 | 待签 |
+| 执行人 / 微信 / 后端复核 / 日期 | 2026-07-29：¥1 真机 ACCEPTED；NORMAL WAIVED；sandbox 窗 quote PASS；**09:57+08 #5/#7/#8/#10 探针 CLOSED** |
+| 体验版版本 / 真机与基础库 | 用户真机（¥1）；体验版版本号系统无 / 待补（非阻断） |
+| 失败用例编号 | 无未测必测项；#1/#2 真机付 WAIVED；#5 为 re-sync 替代（非 push 风暴） |
+| 证据路径 | `member-test-pay/`；`agent-test-pay/`；`deliver-notify/`；`normal-996/`；`sandbox-runtime/`；`repo-digest/`；`section5-probes/`；`POLICY-NO-REAL-996.md` |
+| 单项结论 | **`PASS-WITH-SUBSTITUTIONS`** — 清单 1–10 均已关；替代项：NORMAL 真机付 WAIVED；sandbox 真机付未跑（¥1 覆盖）；#5=re-sync 幂等非并发 push |
+| 签字 | 待 PO / QA 接受替代项后签 |
 
 ---
 
 ## §6 发布负责人 — 启用开关
 
 **2026-07-29 05:34–05:35+08：** 用户「明确授权开」已按序执行；证据 `evidence/20260729/v2-flags-enable/`。  
-**仍非最终 GO：** §1 已 `PASS-WITH-LOCAL-IMMUTABLE`；§5 仍 PARTIAL（#5/#7/#8/#10 等）；§4 未宣告完整 PASS；pay env=production。禁止发明整体 GO。
+**仍非最终 GO：** §1 `PASS-WITH-LOCAL-IMMUTABLE`；§4 **PASS**；§5 **PASS-WITH-SUBSTITUTIONS**；`go-no-go-gate.md` 最终签字栏仍空；pay env=production。禁止发明整体 GO。
 
 ### 6.1 启用顺序（不可颠倒）— 已执行
 
@@ -359,7 +361,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|
 | 任一 V132/CANARY affected tenant | health：`v132Blocked=false`，affected=0 |
 | 任一候选方案 `giftPoints > 0` | V2 NORMAL/TEST `giftPoints=0` |
-| §1–§5 任一项未回填或 NO-GO | **仍 NO-GO**（§5 PARTIAL / 未齐专项等；§1 已 local-immutable） |
+| §1–§5 任一项未回填或 NO-GO | §1–§5 技术项已关；**总 GO 仍缺最终签字 / PO 接受 §5 替代项** |
 | TEST 白名单 | **已写入** `user_000002`（演示用户）→ MEMBER_TEST + AGENT_TEST；pricing-health **HEALTHY** |
 | 第三阶段需求未另批 | **继续 OUT OF SCOPE** |
 | 静默切 `WECHAT_VIRTUAL_PAY_ENV=sandbox` | **未做**（有意保持 production） |
@@ -376,7 +378,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | pricing health blockedIssueCount | **0**（2026-07-29 05:44+08 复核；`TEST_WHITELIST_MISSING` 已清；status=HEALTHY） |
 | TEST 白名单账号 | `user_000002` / `demo@xianzhi.ai` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
 | dry quote | MEMBER/AGENT NORMAL **201 @99600**（PRODUCTION；未下单；quoteId 脱敏） |
-| 最终 GO/NO-GO | **NO-GO**（§1 local-immutable 已关；§5 PARTIAL / #5#7#8#10 未齐等仍阻断；NORMAL 真机付 WAIVED；支付链路 ¥1 ACCEPTED） |
+| 最终 GO/NO-GO | **NO-GO**（技术清单已关；缺 `go-no-go-gate.md` 最终签字 + PO 接受 §5 替代项；NORMAL 真机付 WAIVED；支付链路 ¥1 ACCEPTED） |
 
 事故回退顺序见 `go-no-go-gate.md`「事故回退顺序」。
 
@@ -389,18 +391,18 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §1 发布冻结 | **`PASS-WITH-LOCAL-IMMUTABLE`** | PO ACCEPTED 2026-07-29T09:44:00+08；FULL IMAGE_ID+git+tar；before/after EXACT；prev tar EXPORTED；禁止 `--build`/retag；registry 长期标准 | 2026-07-29 |
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
-| §4 微信道具 | **PARTIAL→趋近 PASS** | 双签 PASS；PRODUCTION+SANDBOX 静态绑定 99600；quote dry-run PASS | 2026-07-29 |
-| §5 沙箱/真机 | **PARTIAL** | 支付链路 **ACCEPTED**（¥1×2）；NORMAL 真机付 **WAIVED**；sandbox 窗 quote PASS 已恢复；**#5/#7/#8/#10 未齐** → 仍阻断整体 GO | 2026-07-29 政策 |
+| §4 微信道具 | **PASS** | 双签 PASS；PRODUCTION+SANDBOX 静态绑定；dry quote 201@99600/100；#8 差价拒绝已证 | 2026-07-29 |
+| §5 沙箱/真机 | **PASS-WITH-SUBSTITUTIONS** | 支付链路 ACCEPTED（¥1×2）；NORMAL WAIVED；sandbox quote PASS；**#5/#7/#8/#10 CLOSED**（`section5-probes/`） | 2026-07-29 09:57+08 |
 | §6 开关启用 | **DONE（授权窗口）** | 三开关 = true；pay env = **production**（sandbox 窗后已恢复） | 2026-07-29 |
-| TEST 白名单 | **DONE** | PRODUCTION + SANDBOX TEST → `user_000002` | 2026-07-29 |
+| TEST 白名单 | **DONE** | PRODUCTION + SANDBOX TEST → `user_000002`；#7 后 MEMBER 重建 ACTIVE `…7e4a20c8` | 2026-07-29 |
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/` | 2026-07-29 |
 | V2 业务行 seed | **DONE** | PRODUCTION 4 + SANDBOX 4 | 2026-07-29 |
 | NORMAL ¥996 真机付 | **WAIVED** | 政策：`POLICY-NO-REAL-996.md`；替代 `normal-996/` | 2026-07-29 |
 
-**汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
+**汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部技术 PASS 且最终签字栏签署后，才允许提议生产变更。
 
-**本轮结论（2026-07-29T09:46+08）：总状态仍 = `NO-GO`。**  
-§1 RepoDigest 残差已由 PO 接受的 **`PASS-WITH-LOCAL-IMMUTABLE`** 关闭（含 tar 制品与禁止项）。**整体仍 NO-GO**：§5 仍 **PARTIAL**（#5/#7/#8/#10 等未齐）；§4 亦未宣告完整 PASS。支付管线 ¥1 ACCEPTED；NORMAL 配置/quote 替代真机 ¥996；pay env=production；**未改 V2 开关**。禁止口头改 GO。
+**本轮结论（2026-07-29T09:58+08）：总状态仍 = `NO-GO`。**  
+§1 local-immutable + §4 PASS + §5 **PASS-WITH-SUBSTITUTIONS**（#5/#7/#8/#10 已关）。**整体仍 NO-GO**：`go-no-go-gate.md` 最终签字栏空；需 PO 书面接受 §5 替代项（re-sync 非 push 风暴；无 sandbox 真机付）。pay env=production；**未改 V2 开关**。禁止口头改 GO。
 
 ---
 
@@ -412,7 +414,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | NORMAL 真机 ¥996 | **WAIVED**（政策）— 用 dry quote+绑定替代 | 已替代；见 `normal-996/` |
 | 强制等式（quote 层） | PRODUCTION+SANDBOX dry quote MEMBER/AGENT NORMAL **201@99600** | 已覆盖；非真机付 |
 | 沙箱真机付 | 支付管线已由 ¥1 ACCEPTED；sandbox **dry quote** PASS | 可选；非本轮必须 |
-| 幂等/白名单失效/差价/V1 回归专项 | §5 #5/#7/#8/#10 | QA（另窗） |
+| 幂等/白名单失效/差价/V1 回归专项 | §5 #5/#7/#8/#10 | **CLOSED** — `section5-probes/` |
+| §5 替代项 PO 接受 + 最终门禁签字 | 阻断总 GO | PO / 发布 / 支付 / 业务负责人 |
 | offerId/mode↔AppKey | 双签已确认 | 已双签 |
 | phase3 退款/补偿/补发 | 本包不做 | 业务+应用 |
 

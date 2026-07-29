@@ -28,4 +28,4 @@ Seed inventory: `created-inventory.json`.
 
 ## Residual vs full §5 matrix
 
-Still not claimed: concurrent callback pressure, quote-after-whitelist-disable, 1-cent mismatch, V1 regression battery. Payment path + NORMAL config substituted per user policy (see `../normal-996/README.md`).
+§5 #5/#7/#8/#10 **CLOSED** 2026-07-29T09:57+08 — see `../section5-probes/`. Payment path + NORMAL config substituted per user policy (see `../normal-996/README.md`). Overall gate still **NO-GO** pending final signatures.

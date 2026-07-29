@@ -1,0 +1,10 @@
+=== #8 ONE-CENT MISMATCH 2026-07-29 09:56:41 +0800 ===
+GOOD_ID=wechat_good_20260728212604000000000_49523b0e GOOD_PRICE_ORIG=100
+TEST quote with +1 fen good -> 201
+code= None error= None
+UPDATE 1
+RESTORED good price=100
+TEST quote after restore -> 201
+NORMAL dry quote -> 201 amountCent=99600
+VERDICT_#8=INVESTIGATE mm_code= restore_quote=201 good_now=100
+VERDICT_#8=PASS (PRICE_PLAN_WECHAT_PRICE_MISMATCH on +1 fen chain drift; restored; quote 201)
