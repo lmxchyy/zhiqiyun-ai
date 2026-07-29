@@ -3242,6 +3242,11 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
+	_, _, _, _, sourceUserID, err := resolveAdminAuthMergeUsers(&data, id, req.TargetUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	sourceOrderIDs := adminAuthMergeOrderIDs(data.Orders, sourceUserID)
 	updated, result, err := executeAdminAuthMergeRequestOnData(&data, id, req)
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
@@ -3295,7 +3300,7 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 		}
 	}
 	for _, item := range data.Orders {
-		if item.UserID == result.TargetUserID || item.BuyerUserID == result.TargetUserID {
+		if sourceOrderIDs[item.ID] {
 			if err := insertOrder(ctx, tx, item); err != nil {
 				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 			}
@@ -3369,6 +3374,19 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
 	return updated, result, tx.Commit()
+}
+
+func adminAuthMergeOrderIDs(items []adminOrder, userID string) map[string]bool {
+	result := map[string]bool{}
+	for _, item := range items {
+		if item.ID == "" {
+			continue
+		}
+		if item.UserID == userID || item.BuyerUserID == userID || (item.PriceSnapshot != nil && stringValue(item.PriceSnapshot["buyerUserId"]) == userID) {
+			result[item.ID] = true
+		}
+	}
+	return result
 }
 
 func mergeUserAIStateForAdminAuthMerge(ctx context.Context, tx *sql.Tx, targetID string, sourceID string) (int, error) {
