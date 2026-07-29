@@ -1,8 +1,10 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `NO-GO`（§1 local-immutable + §5 清单已关；缺最终门禁签字 / PO 接受 §5 替代项；禁止口头改 GO）。**
+> **当前总状态 = `GO`（2026-07-29T10:03:20+08:00 Product Owner 签字）。**
 >
-> **2026-07-29T09:57+08 §5 #5/#7/#8/#10 CLOSED：** 生产安全探针 PASS（无 ¥996 收费；pay env 保持 production）。#5 re-sync×2 幂等；#7 quote 后白名单失效 → 403 `PRICE_PLAN_NOT_ELIGIBLE`（旧 entry EXPIRED immutable → admin 重建 ACTIVE）；#8 binding +1 分 → 409 `PRICE_PLAN_WECHAT_PRICE_MISMATCH` 后恢复；#10 V1 status 200 + legacy TOKEN create 201。证据 `evidence/20260729/section5-probes/`。§5 = **`PASS-WITH-SUBSTITUTIONS`**（无 sandbox 真机付；#5 非 push 风暴）。总状态仍 **NO-GO**（`go-no-go-gate.md` 最终签字栏空；需 PO 接受替代项）。
+> **2026-07-29T10:03:20+08 PO ACCEPTED §5 `PASS-WITH-SUBSTITUTIONS` 并签字 GO：** 接受（1）幂等 = 服务端 re-sync×2（非微信 push 风暴）；（2）无 sandbox 真机付（由生产 ¥1 TEST + 政策覆盖）。总门禁 **`GO`**，条件/残差见 `evidence/20260729/PO-GO-SIGNATURE.md` 与 `go-no-go-gate.md` 最终签字块（registry 长期标准；§1 local-immutable；NORMAL ¥996 WAIVED；phase3 OUT OF SCOPE）。本动作 **未**改 V2 开关 / pay env / 价格，**未**部署。
+>
+> **2026-07-29T09:57+08 §5 #5/#7/#8/#10 CLOSED：** 生产安全探针 PASS（无 ¥996 收费；pay env 保持 production）。#5 re-sync×2 幂等；#7 quote 后白名单失效 → 403 `PRICE_PLAN_NOT_ELIGIBLE`（旧 entry EXPIRED immutable → admin 重建 ACTIVE）；#8 binding +1 分 → 409 `PRICE_PLAN_WECHAT_PRICE_MISMATCH` 后恢复；#10 V1 status 200 + legacy TOKEN create 201。证据 `evidence/20260729/section5-probes/`。§5 = **`PASS-WITH-SUBSTITUTIONS`**（PO ACCEPTED）。
 >
 > **2026-07-29T09:44:00+08 PO ACCEPTED `PASS-WITH-LOCAL-IMMUTABLE`（严格条件已执行）：** FULL git=`a39485ef159dabf348a71059a0e922af4894ab5a`；FULL IMAGE_ID=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；before/after EXACT；current tar=`/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar` SHA256=`4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09`；previous tar EXPORTED（`3d0c0e032` / `sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331`）；**禁止** `docker compose up -d --build` 与同 tag 覆盖；registry 仍为长期标准。证据 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。V2 三开关与 `WECHAT_VIRTUAL_PAY_ENV=production` **未改动**。
 >
@@ -311,7 +313,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 4 | §4 沙箱道具矩阵 PASS | [x] SANDBOX V2 NORMAL/TEST goods+bindings+whitelist seed；dry quote PASS |
 | 5 | V132=0、giftPoints=0 | [x] V132=0；giftPoints/bonus=0 |
 
-**政策（2026-07-29）：** 支付技术链路以 PRODUCTION ¥1 TEST 两单为 **ACCEPTED**；NORMAL 真机 ¥996 = **WAIVED**。sandbox 自动化 quote 已 PASS；真机 sandbox 付未跑（支付管线已由 ¥1 覆盖）。**禁止发明总 GO**（最终签字栏仍空）。
+**政策（2026-07-29）：** 支付技术链路以 PRODUCTION ¥1 TEST 两单为 **ACCEPTED**；NORMAL 真机 ¥996 = **WAIVED**。sandbox 自动化 quote 已 PASS；真机 sandbox 付未跑（支付管线已由 ¥1 覆盖）。**PO 已接受替代项并签字总 GO**（2026-07-29T10:03:20+08；见 `PO-GO-SIGNATURE.md`）。
 
 ### 5.2 必测清单
 
@@ -337,14 +339,14 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 失败用例编号 | 无未测必测项；#1/#2 真机付 WAIVED；#5 为 re-sync 替代（非 push 风暴） |
 | 证据路径 | `member-test-pay/`；`agent-test-pay/`；`deliver-notify/`；`normal-996/`；`sandbox-runtime/`；`repo-digest/`；`section5-probes/`；`POLICY-NO-REAL-996.md` |
 | 单项结论 | **`PASS-WITH-SUBSTITUTIONS`** — 清单 1–10 均已关；替代项：NORMAL 真机付 WAIVED；sandbox 真机付未跑（¥1 覆盖）；#5=re-sync 幂等非并发 push |
-| 签字 | 待 PO / QA 接受替代项后签 |
+| 签字 | **PO ACCEPTED** 2026-07-29T10:03:20+08:00 — 「接受 §5 替代并签字 GO」；证据 `PO-GO-SIGNATURE.md` |
 
 ---
 
 ## §6 发布负责人 — 启用开关
 
 **2026-07-29 05:34–05:35+08：** 用户「明确授权开」已按序执行；证据 `evidence/20260729/v2-flags-enable/`。  
-**仍非最终 GO：** §1 `PASS-WITH-LOCAL-IMMUTABLE`；§4 **PASS**；§5 **PASS-WITH-SUBSTITUTIONS**；`go-no-go-gate.md` 最终签字栏仍空；pay env=production。禁止发明整体 GO。
+**最终 GO：** 2026-07-29T10:03:20+08 PO 接受 §5 替代并签字；§1 `PASS-WITH-LOCAL-IMMUTABLE`；§4 **PASS**；§5 **PASS-WITH-SUBSTITUTIONS**；pay env=production。本签字动作未再改开关。
 
 ### 6.1 启用顺序（不可颠倒）— 已执行
 
@@ -361,7 +363,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|
 | 任一 V132/CANARY affected tenant | health：`v132Blocked=false`，affected=0 |
 | 任一候选方案 `giftPoints > 0` | V2 NORMAL/TEST `giftPoints=0` |
-| §1–§5 任一项未回填或 NO-GO | §1–§5 技术项已关；**总 GO 仍缺最终签字 / PO 接受 §5 替代项** |
+| §1–§5 任一项未回填或 NO-GO | §1–§5 已关；**PO 已接受 §5 替代并签字总 GO**（2026-07-29T10:03:20+08） |
 | TEST 白名单 | **已写入** `user_000002`（演示用户）→ MEMBER_TEST + AGENT_TEST；pricing-health **HEALTHY** |
 | 第三阶段需求未另批 | **继续 OUT OF SCOPE** |
 | 静默切 `WECHAT_VIRTUAL_PAY_ENV=sandbox` | **未做**（有意保持 production） |
@@ -378,7 +380,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | pricing health blockedIssueCount | **0**（2026-07-29 05:44+08 复核；`TEST_WHITELIST_MISSING` 已清；status=HEALTHY） |
 | TEST 白名单账号 | `user_000002` / `demo@xianzhi.ai` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
 | dry quote | MEMBER/AGENT NORMAL **201 @99600**（PRODUCTION；未下单；quoteId 脱敏） |
-| 最终 GO/NO-GO | **NO-GO**（技术清单已关；缺 `go-no-go-gate.md` 最终签字 + PO 接受 §5 替代项；NORMAL 真机付 WAIVED；支付链路 ¥1 ACCEPTED） |
+| 最终 GO/NO-GO | **`GO`**（2026-07-29T10:03:20+08；PO「接受 §5 替代并签字 GO」；条件见 `PO-GO-SIGNATURE.md`） |
 
 事故回退顺序见 `go-no-go-gate.md`「事故回退顺序」。
 
@@ -392,17 +394,18 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
 | §4 微信道具 | **PASS** | 双签 PASS；PRODUCTION+SANDBOX 静态绑定；dry quote 201@99600/100；#8 差价拒绝已证 | 2026-07-29 |
-| §5 沙箱/真机 | **PASS-WITH-SUBSTITUTIONS** | 支付链路 ACCEPTED（¥1×2）；NORMAL WAIVED；sandbox quote PASS；**#5/#7/#8/#10 CLOSED**（`section5-probes/`） | 2026-07-29 09:57+08 |
+| §5 沙箱/真机 | **PASS-WITH-SUBSTITUTIONS（PO ACCEPTED）** | 支付链路 ACCEPTED（¥1×2）；NORMAL WAIVED；sandbox quote PASS；**#5/#7/#8/#10 CLOSED**；PO 接受替代 | 2026-07-29T10:03:20+08 |
 | §6 开关启用 | **DONE（授权窗口）** | 三开关 = true；pay env = **production**（sandbox 窗后已恢复） | 2026-07-29 |
 | TEST 白名单 | **DONE** | PRODUCTION + SANDBOX TEST → `user_000002`；#7 后 MEMBER 重建 ACTIVE `…7e4a20c8` | 2026-07-29 |
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/` | 2026-07-29 |
 | V2 业务行 seed | **DONE** | PRODUCTION 4 + SANDBOX 4 | 2026-07-29 |
 | NORMAL ¥996 真机付 | **WAIVED** | 政策：`POLICY-NO-REAL-996.md`；替代 `normal-996/` | 2026-07-29 |
+| 最终门禁签字 | **`GO`** | `PO-GO-SIGNATURE.md`；`go-no-go-gate.md` 最终签字栏已填 | 2026-07-29T10:03:20+08 |
 
-**汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部技术 PASS 且最终签字栏签署后，才允许提议生产变更。
+**汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部技术 PASS 且最终签字栏签署后 → **`GO`**。
 
-**本轮结论（2026-07-29T09:58+08）：总状态仍 = `NO-GO`。**  
-§1 local-immutable + §4 PASS + §5 **PASS-WITH-SUBSTITUTIONS**（#5/#7/#8/#10 已关）。**整体仍 NO-GO**：`go-no-go-gate.md` 最终签字栏空；需 PO 书面接受 §5 替代项（re-sync 非 push 风暴；无 sandbox 真机付）。pay env=production；**未改 V2 开关**。禁止口头改 GO。
+**本轮结论（2026-07-29T10:03:20+08）：总状态 = `GO`。**  
+§1 local-immutable（PO ACCEPTED）+ §4 PASS + §5 **PASS-WITH-SUBSTITUTIONS**（PO ACCEPTED：re-sync 非 push 风暴；无 sandbox 真机付）。最终签字栏已填。条件/残差：registry 长期标准；禁止 `--build`/retag；NORMAL ¥996 WAIVED；phase3 OUT OF SCOPE。pay env=production；本签字动作 **未改 V2 开关**、未部署。
 
 ---
 
@@ -415,7 +418,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 强制等式（quote 层） | PRODUCTION+SANDBOX dry quote MEMBER/AGENT NORMAL **201@99600** | 已覆盖；非真机付 |
 | 沙箱真机付 | 支付管线已由 ¥1 ACCEPTED；sandbox **dry quote** PASS | 可选；非本轮必须 |
 | 幂等/白名单失效/差价/V1 回归专项 | §5 #5/#7/#8/#10 | **CLOSED** — `section5-probes/` |
-| §5 替代项 PO 接受 + 最终门禁签字 | 阻断总 GO | PO / 发布 / 支付 / 业务负责人 |
+| §5 替代项 PO 接受 + 最终门禁签字 | **CLOSED → GO** | PO 2026-07-29T10:03:20+08；见 `PO-GO-SIGNATURE.md` |
 | offerId/mode↔AppKey | 双签已确认 | 已双签 |
 | phase3 退款/补偿/补发 | 本包不做 | 业务+应用 |
 
@@ -426,4 +429,4 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 1. 把本文件 + 同目录手册发给三位负责人（发布 / DBA / 微信）；QA 跟微信领 §5。  
 2. 各自只改自己的回填表与 `evidence/<date>/` 产出，完成后通知协调人勾 §7。  
 3. **不要**在未冻结前让 DBA 用工作树 SQL；**不要**在 §5 前开生产开关。  
-4. 全部回填齐之前，对外口径统一：**NO-GO。**
+4. 自 2026-07-29T10:03:20+08 起，对外口径：**GO**（条件/残差见 `PO-GO-SIGNATURE.md`）。此前未签字期间统一为 NO-GO。

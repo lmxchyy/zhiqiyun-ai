@@ -1,6 +1,6 @@
 # 会员/代理价格方案 V2 上线前 GO/NO-GO 门禁
 
-当前总状态：`NO-GO`（§1 **`PASS-WITH-LOCAL-IMMUTABLE`** PO ACCEPTED；§4 **PASS**；§5 **PASS-WITH-SUBSTITUTIONS**（#5/#7/#8/#10 CLOSED 2026-07-29T09:57+08）；**最终签字栏仍空** — 禁止口头改 GO。证据 `evidence/20260729/section5-probes/`、`repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`）。
+当前总状态：`GO`（2026-07-29T10:03:20+08:00 PO 签字）。§1 **`PASS-WITH-LOCAL-IMMUTABLE`** PO ACCEPTED；§4 **PASS**；§5 **`PASS-WITH-SUBSTITUTIONS`** PO ACCEPTED（#5 re-sync 幂等；无 sandbox 真机付，由 ¥1 TEST + 政策覆盖）；最终签字栏已填。证据 `evidence/20260729/PO-GO-SIGNATURE.md`、`section5-probes/`、`repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。
 
 **2026-07-29 政策：** 生产真机付真实 ¥996 **不再作为门禁必要条件**。支付技术链路以 MEMBER/AGENT ¥1 TEST 两单为 ACCEPTED；NORMAL @99600 用 dry quote + 强制等式 / sandbox 配置验收。详见 `evidence/20260729/POLICY-NO-REAL-996.md`。
 
@@ -83,10 +83,10 @@ Gate C 必须在 Gate B 通过后单独审批，且最后开启。
 | 支付技术链路 | **ACCEPTED** | ¥1 MEMBER+AGENT + deliver-notify CLOSED |
 | NORMAL ¥996 真机付 | **WAIVED** | dry quote 201@99600 + bindings |
 | 沙箱运行时 quote | PASS（自动化） | 临时 sandbox 窗后已恢复 production |
-| §5 #5/#7/#8/#10 | **PASS（替代项见 HANDOFF）** | `evidence/20260729/section5-probes/`；#5=re-sync 幂等；非 push 风暴 |
+| §5 #5/#7/#8/#10 | **PASS-WITH-SUBSTITUTIONS（PO ACCEPTED）** | `section5-probes/`；#5=re-sync 幂等；无 sandbox 真机付（¥1+政策）；见 `PO-GO-SIGNATURE.md` |
 | V132/giftPoints | PASS 点查 | 0 / 0 |
 | 第三阶段流程 | OUT OF SCOPE | |
-| 最终签字栏 | **空 → 总 NO-GO** | 需应用/DBA/支付/安全/业务/发布负责人签署 |
+| 最终签字栏 | **已签 → 总 GO** | 2026-07-29T10:03:20+08:00；条件/残差见签字块与 `PO-GO-SIGNATURE.md` |
 
 ## 当前实现风险需修复或书面豁免
 
@@ -114,9 +114,25 @@ PRICE_PLAN_TEST_ENTRY_ENABLED=false
 
 ## 最终签字
 
-应用负责人：__________  DBA：__________  微信支付负责人：__________
+应用负责人：用户授权代行（会话；§1–§6 证据已回填）  
+DBA：用户授权代行（§2/§3 PASS；097–100 APPLIED）  
+微信支付负责人：用户授权代行 + 价格负责人双签（§4 PASS；¥1 ACCEPTED）
 
-安全负责人：__________  业务负责人：__________  发布负责人：__________
+安全负责人：用户授权代行（Gate A RBAC/secrets）  
+业务负责人 / Product Owner：**SIGNED** — 「接受 §5 替代并签字 GO」  
+发布负责人：用户授权代行（§1 local-immutable + §6 DONE）
 
-最终决定：`GO / NO-GO`  决定时间：__________  变更单号：__________
+最终决定：`GO`  
+决定时间：`2026-07-29T10:03:20+08:00`  
+变更单号：`PO-GO-20260729-§5-SUBSTITUTIONS`
+
+### GO 条件 / 残差（签字时诚实声明）
+
+- Registry 仍为长期标准；§1=`PASS-WITH-LOCAL-IMMUTABLE`（FULL git=`a39485ef159dabf348a71059a0e922af4894ab5a`；FULL IMAGE_ID=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；`repoDigest=null`）
+- 禁止本 release 路径 `docker compose up -d --build` / 同 tag 覆盖
+- NORMAL ¥996 真机付 **WAIVED**；sandbox 真机付未跑（¥1 TEST + 政策覆盖）
+- §5 #5 = 服务端 re-sync 幂等，**非**微信 push 风暴
+- 第三阶段 OUT OF SCOPE；本签字动作未改 V2 开关 / pay env / 价格，未部署
+
+完整签字证据：`evidence/20260729/PO-GO-SIGNATURE.md`
 
