@@ -104,6 +104,19 @@ export type GenerationTaskType =
   | "PPT_GENERATION"
   | string;
 
+export type VideoGenerationMode = "TEXT_TO_VIDEO" | "IMAGE_TO_VIDEO";
+
+export interface VideoModelCapabilities {
+  supportsTextToVideo: boolean;
+  supportsImageToVideo: boolean;
+  supportsFirstFrame: boolean;
+  supportsLastFrame: boolean;
+  maxReferenceImages: number;
+  supportedDurations: number[];
+  supportedResolutions: string[];
+  supportedAspectRatios: string[];
+}
+
 export interface ApiEnvelope<T> {
   code?: number | string;
   message?: string;
@@ -193,6 +206,7 @@ export interface GeneratedImage {
 
 export interface CreateGenerationTaskRequest {
   type: GenerationTaskType;
+  clientRequestId?: string;
   module_code?: string;
   moduleCode?: string;
   prompt: string;
@@ -229,6 +243,7 @@ export interface ModelInfo {
   providerId?: string;
   providerName?: string;
   online?: boolean;
+  videoCapabilities?: VideoModelCapabilities;
 }
 
 export interface PointAccount {
@@ -335,6 +350,11 @@ export interface CreateDraft {
   quality: string;
   count: number;
   referenceImages: string[];
+  videoMode?: VideoGenerationMode;
+  firstFrame?: string;
+  lastFrame?: string;
+  videoCapabilities?: VideoModelCapabilities;
+  clientRequestId?: string;
   negativePrompt?: string;
   duration?: number;
   parameters?: Record<string, unknown>;

@@ -7,6 +7,8 @@ import type {
   FeatureEntry,
   GenerationTask,
   MembershipPlan,
+  VideoGenerationMode,
+  VideoModelCapabilities,
   UserProfile,
   WorkItem,
   WorkStatus,
@@ -54,6 +56,11 @@ const draftOnlyParameterKeys = new Set([
   "generationCount",
   "referencePaths",
   "referenceImages",
+  "videoMode",
+  "firstFrame",
+  "lastFrame",
+  "videoCapabilities",
+  "clientRequestId",
   "files",
   "selectedFiles",
   "negativePrompt",
@@ -118,8 +125,7 @@ const draftOnlyParameterKeys = new Set([
   "slideCount",
   "dynamic",
   "language",
-  "seed",
-  "n",
+	"n",
   "ratio",
 ]);
 
@@ -132,17 +138,158 @@ const videoParameterKeys = new Set([
   "camera_movement",
   "generate_audio",
   "negative_prompt",
-  "reference_image",
-  "first_frame",
-  "last_frame",
   "sourceReferenceAssetId",
   "sourceReferenceTaskId",
 ]);
+
+const videoImageParameterKeys = [
+  "reference_image",
+  "first_frame",
+  "last_frame",
+  "image_url",
+  "imageUrl",
+  "image_urls",
+  "imageUrls",
+  "inputImageUrl",
+  "input_image_url",
+  "inputImageUrls",
+  "referenceImages",
+  "reference_images",
+  "inputImages",
+  "inputImagesSnapshot",
+  "input_reference",
+] as const;
+
+const safeVideoCapabilities: VideoModelCapabilities = {
+  supportsTextToVideo: true,
+  supportsImageToVideo: false,
+  supportsFirstFrame: false,
+  supportsLastFrame: false,
+  maxReferenceImages: 0,
+  supportedDurations: [],
+  supportedResolutions: [],
+  supportedAspectRatios: [],
+};
+
+export class VideoGenerationValidationError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "VideoGenerationValidationError";
+    this.code = code;
+  }
+}
 
 function recordValue(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function firstDefined(record: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined && record[key] !== null) return record[key];
+  }
+  return undefined;
+}
+
+function strictBoolean(record: Record<string, unknown>, ...keys: string[]): boolean {
+  return firstDefined(record, ...keys) === true;
+}
+
+function uniqueStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(item => String(item || "").trim()).filter(Boolean))];
+}
+
+function uniquePositiveNumbers(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(Number).filter(item => Number.isFinite(item) && item > 0))];
+}
+
+export function normalizeVideoModelCapabilities(value: unknown): VideoModelCapabilities {
+  const root = recordValue(value);
+  const nested = recordValue(firstDefined(root, "videoCapabilities", "video_capabilities"));
+  const source = Object.keys(nested).length ? nested : root;
+  if (!Object.keys(source).length) return { ...safeVideoCapabilities };
+
+  const supportsTextToVideo = strictBoolean(source, "supportsTextToVideo", "supports_text_to_video");
+  const supportsImageToVideo = strictBoolean(source, "supportsImageToVideo", "supports_image_to_video");
+  const supportsFirstFrame = supportsImageToVideo && strictBoolean(source, "supportsFirstFrame", "supports_first_frame");
+  const configuredMax = Math.max(0, Math.floor(Number(firstDefined(source, "maxReferenceImages", "max_reference_images")) || 0));
+  const supportsLastFrame = supportsFirstFrame
+    && strictBoolean(source, "supportsLastFrame", "supports_last_frame")
+    && configuredMax >= 2;
+
+  return {
+    supportsTextToVideo,
+    supportsImageToVideo: supportsImageToVideo && supportsFirstFrame && configuredMax >= 1,
+    supportsFirstFrame,
+    supportsLastFrame,
+    maxReferenceImages: supportsImageToVideo && supportsFirstFrame ? configuredMax : 0,
+    supportedDurations: uniquePositiveNumbers(firstDefined(source, "supportedDurations", "supported_durations")),
+    supportedResolutions: uniqueStrings(firstDefined(source, "supportedResolutions", "supported_resolutions")),
+    supportedAspectRatios: uniqueStrings(firstDefined(source, "supportedAspectRatios", "supported_aspect_ratios")),
+  };
+}
+
+export function reconcileVideoGenerationState(
+  state: { mode?: VideoGenerationMode; firstFrame?: string; lastFrame?: string },
+  capabilitiesValue: unknown,
+) {
+  const capabilities = normalizeVideoModelCapabilities(capabilitiesValue);
+  const requestedMode = state.mode === "IMAGE_TO_VIDEO" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+  let mode: VideoGenerationMode = requestedMode;
+  if (requestedMode === "TEXT_TO_VIDEO" && !capabilities.supportsTextToVideo) {
+    mode = capabilities.supportsImageToVideo ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+  } else if (requestedMode === "IMAGE_TO_VIDEO" && !capabilities.supportsImageToVideo) {
+    mode = capabilities.supportsTextToVideo ? "TEXT_TO_VIDEO" : "IMAGE_TO_VIDEO";
+  }
+
+  const originalFirstFrame = String(state.firstFrame || "").trim();
+  const originalLastFrame = String(state.lastFrame || "").trim();
+  const firstFrame = mode === "IMAGE_TO_VIDEO" ? originalFirstFrame : "";
+  const lastFrame = mode === "IMAGE_TO_VIDEO" && capabilities.supportsLastFrame && capabilities.maxReferenceImages >= 2
+    ? originalLastFrame
+    : "";
+
+  return {
+    mode,
+    firstFrame,
+    lastFrame,
+    modeChanged: mode !== requestedMode,
+    clearedFirstFrame: Boolean(originalFirstFrame && !firstFrame),
+    clearedLastFrame: Boolean(originalLastFrame && !lastFrame),
+  };
+}
+
+function imageURLFromUnknown(value: unknown): string[] {
+  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+  if (Array.isArray(value)) return value.flatMap(imageURLFromUnknown);
+  const record = recordValue(value);
+  for (const key of ["url", "imageUrl", "image_url", "src"]) {
+    const url = String(record[key] || "").trim();
+    if (url) return [url];
+  }
+  return [];
+}
+
+function videoParameterImageURLs(parameters?: Record<string, unknown>): string[] {
+  if (!parameters) return [];
+  const merged = { ...recordValue(parameters.restoredParams), ...parameters };
+  return videoImageParameterKeys.flatMap(key => imageURLFromUnknown(merged[key]));
+}
+
+function validateSupportedVideoValue<T extends string | number>(
+  value: T,
+  supported: T[],
+  code: string,
+  label: string,
+) {
+  if (supported.length && !supported.includes(value)) {
+    throw new VideoGenerationValidationError(code, `当前模型不支持${label} ${value}`);
+  }
 }
 
 function pickAllowedParameters(
@@ -185,7 +332,7 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   const referenceImages = draft.referenceImages.filter(Boolean);
   const referenceImage = referenceImages[0];
   const type = draft.mode === "video"
-    ? referenceImage ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO"
+    ? draft.videoMode === "IMAGE_TO_VIDEO" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO"
     : draft.mode === "ppt"
       ? "PPT_GENERATION"
       : referenceImage ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
@@ -195,15 +342,58 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   }));
   const extraParameters = generationParametersFromDraft(draft.parameters);
   const params = draft.mode === "video"
-    ? {
-        ...pickAllowedParameters(extraParameters, videoParameterKeys),
-        duration: draft.duration || Number(extraParameters.duration) || 5,
-        resolution: draft.quality || String(extraParameters.resolution || "") || "720p",
-        aspect_ratio: draft.size || String(extraParameters.aspect_ratio || "") || "16:9",
-        generate_audio: extraParameters.generate_audio !== false,
-        ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
-        ...(referenceImage ? { reference_image: referenceImage } : {}),
-      }
+    ? (() => {
+        const videoMode: VideoGenerationMode = type === "IMAGE_TO_VIDEO" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+        const capabilities = normalizeVideoModelCapabilities(draft.videoCapabilities);
+        const firstFrame = String(draft.firstFrame || "").trim();
+        const lastFrame = String(draft.lastFrame || "").trim();
+        const allImageURLs = [...new Set([
+          ...referenceImages,
+          ...videoParameterImageURLs(draft.parameters),
+          firstFrame,
+          lastFrame,
+        ].filter(Boolean))];
+
+        if (videoMode === "TEXT_TO_VIDEO") {
+          if (!capabilities.supportsTextToVideo) {
+            throw new VideoGenerationValidationError("VIDEO_MODE_NOT_SUPPORTED", "当前模型不支持文生视频模式");
+          }
+          if (allImageURLs.length) {
+            throw new VideoGenerationValidationError("VIDEO_TEXT_MODE_IMAGE_FORBIDDEN", "文生视频模式不得携带首帧图、尾帧图或其他图片字段");
+          }
+        } else {
+          if (!capabilities.supportsImageToVideo || !capabilities.supportsFirstFrame) {
+            throw new VideoGenerationValidationError("VIDEO_MODE_NOT_SUPPORTED", "当前模型不支持图生视频模式");
+          }
+          if (!firstFrame) {
+            throw new VideoGenerationValidationError("VIDEO_FIRST_FRAME_REQUIRED", "图生视频模式必须上传首帧图");
+          }
+          if (lastFrame && !capabilities.supportsLastFrame) {
+            throw new VideoGenerationValidationError("VIDEO_LAST_FRAME_NOT_SUPPORTED", "当前模型不支持尾帧图");
+          }
+          if (allImageURLs.length > capabilities.maxReferenceImages) {
+            throw new VideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", `当前模型最多允许 ${capabilities.maxReferenceImages} 张视频输入图片`);
+          }
+        }
+
+        const duration = draft.duration || Number(extraParameters.duration) || 5;
+        const resolution = draft.quality || String(extraParameters.resolution || "") || "720p";
+        const aspectRatio = draft.size || String(extraParameters.aspect_ratio || "") || "16:9";
+        validateSupportedVideoValue(duration, capabilities.supportedDurations, "VIDEO_DURATION_NOT_SUPPORTED", "视频时长");
+        validateSupportedVideoValue(resolution, capabilities.supportedResolutions, "VIDEO_RESOLUTION_NOT_SUPPORTED", "分辨率");
+        validateSupportedVideoValue(aspectRatio, capabilities.supportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "画面比例");
+
+        return {
+          ...pickAllowedParameters(extraParameters, videoParameterKeys),
+          duration,
+          resolution,
+          aspect_ratio: aspectRatio,
+          generate_audio: extraParameters.generate_audio !== false,
+          ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
+          ...(videoMode === "IMAGE_TO_VIDEO" ? { first_frame: firstFrame } : {}),
+          ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),
+        };
+      })()
     : {
         ...extraParameters,
         size: draft.size || "1024x1024",
@@ -215,6 +405,7 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
       };
   return {
     type,
+    ...(draft.clientRequestId ? { clientRequestId: draft.clientRequestId } : {}),
     moduleCode: draft.mode === "video" ? "video_generation" : "image_generation",
     prompt: draft.prompt,
     model: draft.model,

@@ -47,7 +47,27 @@
         <el-table-column prop="provider" label="上游" min-width="120" />
         <el-table-column label="小程序合规" min-width="160"><template #default="scope"><div class="ai-capability-main-cell"><el-tag :type="scope.row.miniprogram_enabled && scope.row.compliance_status === 'approved' ? 'success' : 'info'">{{ scope.row.miniprogram_enabled && scope.row.compliance_status === 'approved' ? '可用' : '未开放' }}</el-tag><small>{{ scope.row.algorithm_filing_no || '备案号待配置' }}</small></div></template></el-table-column>
         <el-table-column label="类型" width="110"><template #default="scope">{{ model.text(scope.row, 'model_type', 'modelType') || '-' }}</template></el-table-column>
-        <el-table-column label="能力" min-width="260"><template #default="scope"><div class="ai-capability-chip-list"><el-tag v-for="item in model.list(scope.row, 'capability_code', 'capabilityCode')" :key="item" size="small">{{ item }}</el-tag></div></template></el-table-column>
+        <el-table-column label="能力" min-width="360">
+          <template #default="scope">
+            <div class="ai-capability-main-cell">
+              <div class="ai-capability-chip-list"><el-tag v-for="item in model.list(scope.row, 'capability_code', 'capabilityCode')" :key="item" size="small">{{ item }}</el-tag></div>
+              <template v-if="model.text(scope.row, 'module_code', 'moduleCode') === 'video_generation'">
+                <small>
+                  文生 {{ model.object(scope.row, 'video_capabilities', 'videoCapabilities').supports_text_to_video ? '是' : '否' }}
+                  · 图生 {{ model.object(scope.row, 'video_capabilities', 'videoCapabilities').supports_image_to_video ? '是' : '否' }}
+                  · 首帧 {{ model.object(scope.row, 'video_capabilities', 'videoCapabilities').supports_first_frame ? '是' : '否' }}
+                  · 尾帧 {{ model.object(scope.row, 'video_capabilities', 'videoCapabilities').supports_last_frame ? '是' : '否' }}
+                  · 图片上限 {{ model.object(scope.row, 'video_capabilities', 'videoCapabilities').max_reference_images || 0 }}
+                </small>
+                <small>
+                  时长 {{ model.list(model.object(scope.row, 'video_capabilities', 'videoCapabilities'), 'supported_durations').join('/') || '-' }}
+                  · 分辨率 {{ model.list(model.object(scope.row, 'video_capabilities', 'videoCapabilities'), 'supported_resolutions').join('/') || '-' }}
+                  · 比例 {{ model.list(model.object(scope.row, 'video_capabilities', 'videoCapabilities'), 'supported_aspect_ratios').join('/') || '-' }}
+                </small>
+              </template>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="Fallback" min-width="140"><template #default="scope">{{ model.text(scope.row, 'fallback_model', 'fallbackModel') || '-' }}</template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="scope"><el-tag :type="model.statusType(scope.row.status)">{{ model.statusLabel(scope.row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="操作" fixed="right" width="210"><template #default="scope"><el-button link type="primary" @click="model.editModel(scope.row)">编辑</el-button><el-button link type="primary" @click="model.editModelCapabilities(scope.row)">能力</el-button><el-button link :type="model.isActiveStatus(scope.row.status) ? 'danger' : 'success'" @click="model.toggleModel(scope.row)">{{ model.isActiveStatus(scope.row.status) ? '停用' : '启用' }}</el-button></template></el-table-column>

@@ -212,22 +212,35 @@
           </template>
 
           <template v-else>
+            <view v-if="creationMode === 'video' && creationVideoModeSwitchVisible" class="v31-video-mode-switch">
+              <button
+                class="v31-video-mode-button"
+                :class="{ 'is-active': videoGenerationMode === 'TEXT_TO_VIDEO' }"
+                type="button"
+                @click="switchVideoGenerationMode('TEXT_TO_VIDEO')"
+              >文生视频</button>
+              <button
+                class="v31-video-mode-button"
+                :class="{ 'is-active': videoGenerationMode === 'IMAGE_TO_VIDEO' }"
+                type="button"
+                @click="switchVideoGenerationMode('IMAGE_TO_VIDEO')"
+              >图生视频</button>
+            </view>
+
             <view v-if="creationReferenceEnabled" class="v31-reference-panel">
               <view class="v31-reference-head">
                 <view class="v31-reference-copy">
                   <view class="v31-reference-title-row">
-                    <text class="v31-reference-title">参考图</text>
+                    <text class="v31-reference-title">{{ creationReferenceTitle }}</text>
                     <text v-if="creationReferencePaths.length" class="v31-reference-mode">{{ creationReferenceModeLabel }}</text>
                   </view>
-                  <text class="v31-reference-description">
-                    {{ creationSourceLoading ? "正在载入原作品..." : creationSourceError || (creationReferencePaths.length ? (creationMode === "video" ? "已添加首帧/参考图，将按图生视频提交" : "生成时会保留参考图的主体与视觉特征") : (creationMode === "video" ? "可选：添加首帧参考图；不添加则走文生视频" : "添加参考图后将自动使用参考图生成")) }}
-                  </text>
+                  <text class="v31-reference-description">{{ creationReferenceDescription }}</text>
                 </view>
                 <button
-                  v-if="!creationSourceLoading && creationReferencePaths.length < 3"
+                  v-if="!creationSourceLoading && creationReferencePaths.length < creationReferenceLimit"
                   class="v31-reference-add"
                   type="button"
-                  :data-reference-remaining="3 - creationReferencePaths.length"
+                  :data-reference-remaining="creationReferenceLimit - creationReferencePaths.length"
                   :disabled="creationReferenceSelecting"
                   @click="chooseCreationReferenceImages"
                 >{{ creationReferenceSelecting ? "选择中..." : creationReferencePaths.length ? "添加" : "选择图片" }}</button>
@@ -250,16 +263,40 @@
                 v-else
                 class="v31-reference-empty"
                 type="button"
-                :data-reference-remaining="3"
+                :data-reference-remaining="creationReferenceLimit"
                 :disabled="creationReferenceSelecting"
                 @click="chooseCreationReferenceImages"
               >
                 <text class="v31-reference-empty-icon">＋</text>
                 <view>
-                  <text class="v31-reference-empty-title">{{ creationReferenceSelecting ? "正在打开图片..." : "添加参考图" }}</text>
-                  <text class="v31-reference-empty-copy">支持最多 3 张图片</text>
+                  <text class="v31-reference-empty-title">{{ creationReferenceSelecting ? "正在打开图片..." : "添加" + creationReferenceTitle }}</text>
+                  <text class="v31-reference-empty-copy">最多 {{ creationReferenceLimit }} 张，视频首帧必填</text>
                 </view>
               </button>
+            </view>
+
+            <view v-if="creationLastFrameEnabled" class="v31-reference-panel">
+              <view class="v31-reference-head">
+                <view class="v31-reference-copy">
+                  <view class="v31-reference-title-row">
+                    <text class="v31-reference-title">尾帧图</text>
+                    <text v-if="creationLastFramePath" class="v31-reference-mode">1 张</text>
+                  </view>
+                  <text class="v31-reference-description">可选，仅当前模型声明支持时提交</text>
+                </view>
+                <button
+                  v-if="!creationLastFramePath"
+                  class="v31-last-frame-add"
+                  type="button"
+                  @click="chooseCreationLastFrame"
+                >选择图片</button>
+              </view>
+              <view v-if="creationLastFramePath" class="v31-reference-row">
+                <view class="v31-reference-item">
+                  <image class="v31-reference-image" :src="creationLastFramePath" mode="aspectFill" />
+                  <button class="v31-reference-remove" type="button" aria-label="移除尾帧图" @click.stop="removeCreationLastFrame">×</button>
+                </view>
+              </view>
             </view>
 
             <view class="v31-prompt-panel">
@@ -693,6 +730,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
 import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
 import { ApiClientError } from "@xianzhi/api-client";
+import { normalizeVideoModelCapabilities } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 
 const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
@@ -722,7 +760,13 @@ import { reviewModeHides } from "../features/reviewMode";
 import { RoleMenuConfig, roleLabels } from "../config/permissions";
 import type { MinePurchaseOption, MineView } from "../types";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
-import type { ItemsResponse, MemberProfileResponse, OperationProfileResponse, RoleWalletResponse } from "@xianzhi/business-sdk";
+import type {
+  ItemsResponse,
+  MemberProfileResponse,
+  OperationProfileResponse,
+  RoleWalletResponse,
+} from "@xianzhi/business-sdk";
+import type { VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
 import type { AppRole, Asset, AuthResponse, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
 import {
   miniProgramCreationPages,
@@ -753,6 +797,8 @@ function guestAwareGenerateTap() {
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
     referencePaths: creationReferencePaths.value, restoredParams: restoredCreationParams.value,
+    videoMode: creationMode.value === "video" ? videoGenerationMode.value : undefined,
+    lastFrame: creationMode.value === "video" ? creationLastFramePath.value : undefined,
     slideCount: pptSlideCount.value, language: pptLanguage.value, dynamic: pptDynamic.value,
   };
   uni.setStorageSync("v532-studio-draft", payload);
@@ -911,6 +957,9 @@ const userStore = useUserStore();
 const creationMode = ref<CreationMode>(props.initialCreationMode || "image");
 const creationPrompt = ref("");
 const creationReferencePaths = ref<string[]>([]);
+const creationLastFramePath = ref("");
+const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
+const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
 const creationSourceReferenceUrl = ref("");
 const creationSourceLoading = ref(false);
 const creationSourceError = ref("");
@@ -972,8 +1021,37 @@ const legacyActiveTab = computed<TabId>(() => activeTab.value);
 const isCreationDetail = computed(
   () => activeRole.value === "user" && activeTab.value === "create" && Boolean(props.initialCreationMode),
 );
-const creationReferenceEnabled = computed(() => (["image", "video", "infographic"] as CreationMode[]).includes(creationMode.value));
-const creationReferenceModeLabel = computed(() => `${creationReferencePaths.value.length} 张 · ${creationMode.value === "video" ? "参考图模式" : "图生图模式"}`);
+const creationVideoModeSwitchVisible = computed(
+  () => videoModelCapabilities.value.supportsTextToVideo && videoModelCapabilities.value.supportsImageToVideo,
+);
+const creationReferenceEnabled = computed(
+  () => (["image", "infographic"] as CreationMode[]).includes(creationMode.value)
+    || (creationMode.value === "video"
+      && videoGenerationMode.value === "IMAGE_TO_VIDEO"
+      && videoModelCapabilities.value.supportsImageToVideo),
+);
+const creationReferenceTitle = computed(() => creationMode.value === "video" ? "首帧图" : "参考图");
+const creationReferenceLimit = computed(() => creationMode.value === "video"
+  ? Math.max(1, Math.min(1, videoModelCapabilities.value.maxReferenceImages || 1))
+  : 3);
+const creationReferenceDescription = computed(() => {
+  if (creationSourceLoading.value) return "正在载入原作品...";
+  if (creationSourceError.value) return creationSourceError.value;
+  if (creationMode.value === "video") return creationReferencePaths.value.length
+    ? "首帧图已就绪"
+    : "请上传 1 张首帧图";
+  return creationReferencePaths.value.length
+    ? "已添加参考图"
+    : "可添加参考图";
+});
+const creationLastFrameEnabled = computed(
+  () => creationMode.value === "video"
+    && videoGenerationMode.value === "IMAGE_TO_VIDEO"
+    && videoModelCapabilities.value.supportsLastFrame,
+);
+const creationReferenceModeLabel = computed(
+  () => `${creationReferencePaths.value.length} 张 · ${creationMode.value === "video" ? "首帧图" : "图生图模式"}`,
+);
 const roleLabel = computed(() => roleNames[activeRole.value]);
 const isUserMineDetail = computed(() => activeRole.value === "user" && activeTab.value === "mine" && mineView.value !== "overview");
 const isV531PrimaryPage = computed(
@@ -1354,12 +1432,88 @@ async function initializeCreationFromAsset(assetId: string, intent: "edit" | "re
   }
 }
 
+function applyVideoModelCapabilities(raw: unknown, notify = false) {
+  const nextCapabilities = normalizeVideoModelCapabilities(raw);
+  const previousMode = videoGenerationMode.value;
+  videoModelCapabilities.value = nextCapabilities;
+  if (previousMode === "TEXT_TO_VIDEO" && !nextCapabilities.supportsTextToVideo) {
+    videoGenerationMode.value = nextCapabilities.supportsImageToVideo ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+  } else if (previousMode === "IMAGE_TO_VIDEO" && !nextCapabilities.supportsImageToVideo) {
+    videoGenerationMode.value = nextCapabilities.supportsTextToVideo ? "TEXT_TO_VIDEO" : "IMAGE_TO_VIDEO";
+  }
+  if (videoGenerationMode.value === "TEXT_TO_VIDEO") {
+    creationReferencePaths.value = [];
+    creationLastFramePath.value = "";
+  } else {
+    creationReferencePaths.value = creationReferencePaths.value.slice(0, 1);
+    if (!nextCapabilities.supportsLastFrame) creationLastFramePath.value = "";
+  }
+  const cleanParameters = { ...restoredCreationParams.value };
+  for (const key of [
+    "first_frame", "last_frame", "reference_image", "reference_images",
+    "image_url", "image_urls", "imageUrl", "imageUrls", "inputImageUrl", "inputImageUrls",
+  ]) delete cleanParameters[key];
+  restoredCreationParams.value = cleanParameters;
+  if (notify && previousMode !== videoGenerationMode.value) {
+    uni.showToast({
+      title: videoGenerationMode.value === "TEXT_TO_VIDEO"
+        ? "当前模型不支持图生视频，已切换为文生视频"
+        : "当前模型不支持文生视频，已切换为图生视频",
+      icon: "none",
+    });
+  }
+}
+
+function switchVideoGenerationMode(mode: VideoGenerationMode) {
+  const supported = mode === "TEXT_TO_VIDEO"
+    ? videoModelCapabilities.value.supportsTextToVideo
+    : videoModelCapabilities.value.supportsImageToVideo;
+  if (!supported) {
+    uni.showToast({ title: mode === "TEXT_TO_VIDEO" ? "当前模型不支持文生视频" : "当前模型不支持图生视频", icon: "none" });
+    return;
+  }
+  if (videoGenerationMode.value === mode) return;
+  videoGenerationMode.value = mode;
+  creationReferencePaths.value = [];
+  creationLastFramePath.value = "";
+  creationError.value = "";
+}
+
+function chooseCreationLastFrame() {
+  if (!requestLogin("登录后可上传尾帧图")) return;
+  uni.chooseImage({
+    count: 1,
+    sizeType: ["compressed"],
+    sourceType: ["album", "camera"],
+    success: result => {
+      const selectedPaths = result.tempFilePaths;
+      creationLastFramePath.value = Array.isArray(selectedPaths)
+        ? String(selectedPaths[0] || "")
+        : String(selectedPaths || "");
+      creationError.value = "";
+    },
+    fail: error => {
+      if (!String(error.errMsg || "").toLowerCase().includes("cancel")) {
+        uni.showToast({ title: "尾帧图选择失败", icon: "none" });
+      }
+    },
+  });
+}
+
+function removeCreationLastFrame() {
+  creationLastFramePath.value = "";
+}
+
 function chooseCreationReferenceImages() {
   if (!requestLogin("登录后可上传参考图片")) return;
   if (creationReferenceSelecting.value) return;
-  const remaining = Math.max(0, 3 - creationReferencePaths.value.length);
+  if (creationMode.value === "video" && videoGenerationMode.value !== "IMAGE_TO_VIDEO") {
+    uni.showToast({ title: "文生视频模式不能上传图片", icon: "none" });
+    return;
+  }
+  const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
   if (!remaining) {
-    uni.showToast({ title: "最多添加 3 张参考图", icon: "none" });
+    uni.showToast({ title: creationMode.value === "video" ? "首帧图最多 1 张" : "最多添加 3 张参考图", icon: "none" });
     return;
   }
   creationReferenceSelecting.value = true;
@@ -1387,7 +1541,7 @@ function appendCreationReferencePaths(paths: string[]) {
   if (!requestLogin("登录后可上传参考图片")) return;
   creationReferencePaths.value = [...creationReferencePaths.value, ...paths]
     .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-    .slice(0, 3);
+    .slice(0, creationReferenceLimit.value);
   creationSourceError.value = "";
   creationError.value = "";
 }
@@ -2334,6 +2488,7 @@ function handleLegalAcceptanceCompleted() {
 type BackendGenerationConfig = {
   model: string;
   schema: AnyRecord;
+  videoCapabilities: VideoModelCapabilities;
 };
 
 function moduleSchemaFields(schema: AnyRecord) {
@@ -2342,6 +2497,18 @@ function moduleSchemaFields(schema: AnyRecord) {
     : {};
   const directFields = listOf(schema.fields);
   return directFields.length ? directFields : listOf(nested.fields);
+}
+
+function moduleSchemaVideoCapabilities(schema: AnyRecord) {
+  const model = schema.model && typeof schema.model === "object" && !Array.isArray(schema.model)
+    ? schema.model as AnyRecord
+    : {};
+  return normalizeVideoModelCapabilities(
+    schema.video_capabilities
+      || schema.videoCapabilities
+      || model.video_capabilities
+      || model.videoCapabilities,
+  );
 }
 
 function constrainedSchemaString(schema: AnyRecord, key: string, requested: string, fallback: string) {
@@ -2376,21 +2543,38 @@ async function resolveBackendGenerationConfig(
   );
   try {
     const schema = await loadSchema(fallback);
-    return { model: rowString(schema, "model_name", "modelName") || fallback, schema };
+    return {
+      model: rowString(schema, "model_name", "modelName") || fallback,
+      schema,
+      videoCapabilities: moduleSchemaVideoCapabilities(schema),
+    };
   } catch (preferredModelError) {
     try {
       const schema = await loadSchema();
       const availableModel = rowString(schema, "model_name", "modelName");
       if (availableModel) {
         console.warn("[创作模型自动回退]", { moduleCode, fallback, availableModel, preferredModelError });
-        return { model: availableModel, schema };
+        return { model: availableModel, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
       }
     } catch (defaultModelError) {
       console.warn("[创作模型预检降级]", { moduleCode, fallback, preferredModelError, defaultModelError });
     }
-    return { model: fallback, schema: {} };
+    return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
   }
 }
+
+let videoCapabilityLoadSequence = 0;
+watch(
+  () => [creationMode.value, activeCreationModel.value] as const,
+  async ([mode, model], previous) => {
+    if (mode !== "video") return;
+    const sequence = ++videoCapabilityLoadSequence;
+    const config = await resolveBackendGenerationConfig("video", model);
+    if (sequence !== videoCapabilityLoadSequence || creationMode.value !== "video") return;
+    applyVideoModelCapabilities(config.videoCapabilities, Boolean(previous && previous[1] !== model));
+  },
+  { immediate: true },
+);
 
 async function resolvePptGenerationModels() {
   const [textResult, imageResult] = await Promise.allSettled([
@@ -2455,11 +2639,29 @@ async function submitCreation(prompt: string) {
       taskProgress = clampGenerationProgress(result.progress);
     } else {
       const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
-      const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
       const generationConfig = await resolveBackendGenerationConfig(
         mode,
         activeCreationModel.value,
       );
+      const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
+      if (mode === "video") {
+        applyVideoModelCapabilities(generationConfig.videoCapabilities, true);
+        if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && referenceCountBeforeCapabilityCheck > 1) {
+          throw new Error("旧草稿包含多张视频参考图，请重新选择 1 张首帧图");
+        }
+        if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && !creationReferencePaths.value[0]) {
+          throw new Error("图生视频模式必须上传首帧图");
+        }
+      }
+      const referenceImages = mode === "image"
+        ? await uploadCreationReferenceImages(creationReferencePaths.value)
+        : [];
+      const firstFrame = mode === "video" && videoGenerationMode.value === "IMAGE_TO_VIDEO"
+        ? (await uploadCreationReferenceImages(creationReferencePaths.value.slice(0, 1)))[0] || ""
+        : "";
+      const lastFrame = mode === "video" && creationLastFrameEnabled.value && creationLastFramePath.value
+        ? (await uploadCreationReferenceImages([creationLastFramePath.value]))[0] || ""
+        : "";
       const requestedQuality = restoredCreationString("quality", "imageQuality") || (mode === "video" ? "720p" : "standard");
       const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || (mode === "video" ? "16:9" : "1024x1024");
       const result = await businessSdk.generation.createTask({
@@ -2471,6 +2673,10 @@ async function submitCreation(prompt: string) {
         quality: constrainedSchemaString(generationConfig.schema, mode === "video" ? "resolution" : "quality", requestedQuality, mode === "video" ? "720p" : "standard"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
+        videoMode: mode === "video" ? videoGenerationMode.value : undefined,
+        firstFrame: mode === "video" ? firstFrame : undefined,
+        lastFrame: mode === "video" ? lastFrame : undefined,
+        videoCapabilities: mode === "video" ? generationConfig.videoCapabilities : undefined,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
         duration: mode === "video"
           ? constrainedSchemaNumber(generationConfig.schema, "duration", rowNumber(restoredCreationParams.value, "duration"), 5)
@@ -2753,11 +2959,25 @@ onMounted(() => {
     const draftReferences = Array.isArray(studioDraft.referencePaths)
       ? studioDraft.referencePaths
       : Array.isArray(studioDraft.referenceImages) ? studioDraft.referenceImages : [];
-    if (draftMatchesMode && draftReferences.length) {
-      creationReferencePaths.value = draftReferences.flatMap((item) => {
+    const normalizedDraftReferences = draftReferences.flatMap((item) => {
         if (typeof item === "string" && item.trim()) return [item.trim()];
         return [rowString(item, "url", "remoteUrl", "sourceUrl", "fileUrl")].filter(Boolean);
       });
+    if (draftMatchesMode && creationMode.value === "video") {
+      const draftVideoMode = rowString(studioDraft, "videoMode", "video_mode").toUpperCase();
+      videoGenerationMode.value = draftVideoMode === "IMAGE_TO_VIDEO" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+      if (!draftVideoMode && normalizedDraftReferences.length) {
+        creationReferencePaths.value = [];
+        uni.showToast({ title: "旧视频草稿未记录生成模式，已按文生视频安全加载", icon: "none" });
+      } else if (normalizedDraftReferences.length > 1) {
+        creationReferencePaths.value = [];
+        uni.showToast({ title: "旧视频草稿含多张图片，请重新选择 1 张首帧图", icon: "none" });
+      } else if (videoGenerationMode.value === "IMAGE_TO_VIDEO") {
+        creationReferencePaths.value = normalizedDraftReferences.slice(0, 1);
+        creationLastFramePath.value = rowString(studioDraft, "lastFrame", "last_frame");
+      }
+    } else if (draftMatchesMode && normalizedDraftReferences.length) {
+      creationReferencePaths.value = normalizedDraftReferences.slice(0, 3);
     }
     restoredCreationParams.value = draftMatchesMode ? studioDraft : {
       model: rowString(studioDraft, "model", "modelId", "modelName"),
@@ -4055,6 +4275,32 @@ onBackPress(() => {
 .v31-chip.green { color: #168a54; border-color: #bdeecd; background: #eafbf2; }
 .v31-link { color: #5b55d6; font-size: 10px; }
 
+.v31-video-mode-switch {
+  display: flex;
+  gap: 12rpx;
+  padding: 8rpx;
+  border-radius: 20rpx;
+  background: #eef8f1;
+}
+
+.v31-video-mode-button {
+  flex: 1;
+  border: 0;
+  border-radius: 15rpx;
+  color: #315a4a;
+  background: transparent;
+  font-weight: 700;
+}
+
+.v31-video-mode-button::after {
+  border: 0;
+}
+
+.v31-video-mode-button.is-active {
+  color: #fff;
+  background: #13795b;
+}
+
 .v31-reference-panel {
   padding: 15px;
   border: 1px solid #d9e0ff;
@@ -4078,7 +4324,8 @@ onBackPress(() => {
 .v31-reference-mode { padding: 3px 8px; border-radius: 999px; color: #5a4db2; background: #eeedff; font-size: 10px; }
 .v31-reference-description { display: block; margin-top: 4px; color: #697386; font-size: 10px; line-height: 16px; }
 
-.v31-reference-add {
+.v31-reference-add,
+.v31-last-frame-add {
   width: auto;
   min-width: 58px;
   height: 30px;

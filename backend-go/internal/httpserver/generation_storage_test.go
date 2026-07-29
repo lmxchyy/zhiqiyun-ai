@@ -1,9 +1,12 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +26,18 @@ func (f generatedStorageTestFactory) Build(storagecenter.Config) (storagecenter.
 
 type generatedStorageTestProvider struct {
 	objects map[string]storagecenter.ObjectMetadata
+	payload map[string][]byte
 }
 
 func (p *generatedStorageTestProvider) PutObject(_ context.Context, key string, source io.Reader, size int64, contentType string) (storagecenter.ObjectMetadata, error) {
-	_, _ = io.Copy(io.Discard, source)
+	raw, err := io.ReadAll(io.LimitReader(source, size+1))
+	if err != nil {
+		return storagecenter.ObjectMetadata{}, err
+	}
+	if p.payload == nil {
+		p.payload = map[string][]byte{}
+	}
+	p.payload[key] = append([]byte(nil), raw...)
 	metadata := storagecenter.ObjectMetadata{Size: size, ContentType: contentType, ETag: "generated-etag"}
 	p.objects[key] = metadata
 	return metadata, nil
@@ -36,6 +47,9 @@ func (p *generatedStorageTestProvider) OpenObject(_ context.Context, key string)
 	item, ok := p.objects[key]
 	if !ok {
 		return nil, storagecenter.ErrFileNotFound
+	}
+	if raw, exists := p.payload[key]; exists {
+		return io.NopCloser(bytes.NewReader(raw)), nil
 	}
 	return io.NopCloser(strings.NewReader(strings.Repeat("\x00", int(item.Size)))), nil
 }
@@ -114,6 +128,38 @@ func TestPersistGeneratedImagesBindsFileAndSignsAssetURL(t *testing.T) {
 	signed := a.signStoredAssetURLs(context.Background(), req.UserID, []asset{item})
 	if len(signed) != 1 || !strings.Contains(signed[0].URL, "/download/"+files[0].ObjectKey) || signed[0].ThumbnailURL != signed[0].URL {
 		t.Fatalf("asset URL was not signed from storage: %+v", signed)
+	}
+}
+
+func TestWriteAssetDownloadStreamsPrivateObjectStorage(t *testing.T) {
+	repo := storagecenter.NewMemoryRepository()
+	provider := &generatedStorageTestProvider{objects: map[string]storagecenter.ObjectMetadata{}}
+	service := storagecenter.NewService(repo, generatedStorageTestFactory{provider: provider}, storagecenter.Options{
+		DefaultProvider: "s3", Endpoint: "http://minio:9000", PublicEndpoint: "http://minio:9000",
+		AccessKey: "access", SecretKey: "secret", Bucket: "private-files",
+		DefaultQuotaBytes: 1024, MaxUploadBytes: 1024, MasterKey: "0123456789abcdef0123456789abcdef",
+	})
+	a := api{fileService: service}
+	raw := []byte("private-original-bytes")
+	prepared, files, err := a.persistGeneratedImages(context.Background(), "task_private", generation.CreateRequest{
+		UserID: "user_1", Type: "TEXT_TO_IMAGE", Prompt: "prompt", Model: "model",
+		Params:          map[string]any{"tenant_id": "tenant_default"},
+		GeneratedImages: []generation.GeneratedImage{{URL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw), ContentType: "image/png"}},
+	})
+	if err != nil || len(files) != 1 {
+		t.Fatalf("persist failed: files=%#v err=%v", files, err)
+	}
+	item := generatedAssetForRequest(prepared, "user_1", "task_private", "asset_private", 0, time.Now().UTC().Format(time.RFC3339Nano))
+	item.URL = "http://minio:9000/private-files/" + files[0].ObjectKey + "?X-Amz-Signature=deadbeef"
+	item.Metadata["ai_generated"] = false
+
+	response := httptest.NewRecorder()
+	a.writeAssetDownload(response, httptest.NewRequest(http.MethodGet, "/assets/asset_private/download", nil), item)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response.Body.String() != string(raw) {
+		t.Fatalf("body=%q want=%q", response.Body.String(), raw)
 	}
 }
 

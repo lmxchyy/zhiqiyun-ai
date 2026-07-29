@@ -151,7 +151,7 @@ func TestOpenAICompatibleDoubaoSeedanceUsesConfiguredContentTaskEndpoint(t *test
 		t.Fatalf("first content item = %#v", first)
 	}
 	second, _ := content[1].(map[string]any)
-	if second["type"] != "image_url" || second["role"] != "reference_image" {
+	if second["type"] != "image_url" || second["role"] != "first_frame" {
 		t.Fatalf("second content item = %#v", second)
 	}
 	resultMap, ok := result.(map[string]any)
@@ -203,5 +203,78 @@ func TestDecodeSeedanceBridgeResponseIgnoresSDKNoise(t *testing.T) {
 	}
 	if got := result["videoUrl"]; got != "/api/v1/generated-media/video.mp4" {
 		t.Fatalf("videoUrl = %#v", got)
+	}
+}
+
+func TestOpenAICompatibleCanonicalFirstFrameUsesOneImage(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "task-first-frame", "status": "succeeded", "video_url": "https://cdn.example/video.mp4",
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "video-model", Models: []string{"video-model"},
+	})
+	_, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "IMAGE_TO_VIDEO", Model: "video-model", Prompt: "camera push in",
+		Params: map[string]any{"first_frame": "https://cdn.example/first.png"},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	imageURLs, ok := payload["image_urls"].([]any)
+	if !ok || len(imageURLs) != 1 || imageURLs[0] != "https://cdn.example/first.png" {
+		t.Fatalf("image_urls payload = %#v", payload["image_urls"])
+	}
+	inputReference, ok := payload["input_reference"].(map[string]any)
+	if !ok || inputReference["image_url"] != "https://cdn.example/first.png" {
+		t.Fatalf("input_reference payload = %#v", payload["input_reference"])
+	}
+}
+
+func TestSeedanceContentItemsPreserveFirstAndLastFrameRoles(t *testing.T) {
+	items := seedanceContentItems(
+		"a flower blooming",
+		"https://cdn.example/first.png",
+		"https://cdn.example/last.png",
+	)
+	if len(items) != 3 {
+		t.Fatalf("content item count = %d, items=%#v", len(items), items)
+	}
+	if items[1]["role"] != "first_frame" || items[2]["role"] != "last_frame" {
+		t.Fatalf("frame roles were not preserved: %#v", items)
+	}
+}
+
+func TestGrokRejectsMultipleImagesBeforeCallingUpstream(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "task-grok", "status": "succeeded", "video_url": "https://cdn.example/video.mp4",
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "grok-video-1.5", Models: []string{"grok-video-1.5"},
+	})
+	_, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "IMAGE_TO_VIDEO", Model: "grok-video-1.5", Prompt: "camera push in",
+		Params: map[string]any{
+			"image_urls": []any{"https://cdn.example/first.png", "https://cdn.example/second.png"},
+		},
+	})
+	if err == nil {
+		t.Fatal("multiple images were silently truncated")
+	}
+	if requestCount != 0 {
+		t.Fatalf("upstream was called %d times for an invalid request", requestCount)
 	}
 }
