@@ -144,6 +144,40 @@ docker buildx imagetools inspect $repoDigest
 
 生产部署单只能引用不可变的 `$repoDigest`，不得引用可移动的 `prod`、`latest` 或仅有版本 tag 的镜像。
 
+## 5b. Local-immutable path（仅无 registry 凭据时；非长期政策）
+
+**长期标准仍是 registry RepoDigest。** 本路径仅在产品负责人批准 `PASS-WITH-LOCAL-IMMUTABLE` 且主机确认无 push 凭据时使用。
+
+### 强制规则
+
+1. 部署 **必须** 使用已构建的不可变 tag（建议 `git-<full40hex>` 或已记录过的 short tag），并在部署前后核验：
+   - `docker inspect <container> --format '{{.Image}}'` **等于** 验收记录中的 **完整** `IMAGE_ID`（`sha256:` + 64 hex）。
+2. **禁止** `docker compose up -d --build`（现场重构镜像禁止）。
+3. **禁止** 对同一 tag 重新 build 后覆盖（同一镜像标签禁止被重新覆盖）。新构建必须换新 tag；已导出的 tar/SHA256 是跨机恢复依据。
+4. 验收记录中的 commit / IMAGE_ID / tar SHA256 **禁止截断**。
+5. 导出当前运行镜像 tar + `sha256sum`；尽量保留上一版可运行镜像 tar + SHA256。
+
+### 推荐部署动作（示意）
+
+```powershell
+# 1) 可选：从已保存 tar 恢复
+# docker load -i /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-<FULLCOMMIT>.tar
+
+# 2) 部署前核验 IMAGE_ID（完整）
+$expected = 'sha256:<FULL-64-HEX>'
+$actual = (docker image inspect --format '{{.Id}}' 'local/xianzhi-ai-platform:<immutable-tag>').Trim()
+if ($actual -ne $expected) { throw 'IMAGE_ID mismatch — refuse deploy' }
+
+# 3) 仅 up（无 --build）
+docker compose up -d   # NEVER: docker compose up -d --build
+
+# 4) 部署后核验容器 Image 字段
+$running = (docker inspect --format '{{.Image}}' '<service-container>').Trim()
+if ($running -ne $expected) { throw 'running container IMAGE_ID mismatch' }
+```
+
+本路径关闭的是「缺 RepoDigest」残差，**不**自动等于整体 GO。
+
 ## 6. Release manifest 必填字段
 
 ```json
@@ -172,6 +206,7 @@ docker buildx imagetools inspect $repoDigest
 - 工作树或暂存区混入未审批文件。
 - release commit、镜像 revision label、迁移 SHA256 不属于同一 Git tree。
 - 迁移编号冲突或文件缺失。
-- 镜像只记录 tag，没有 RepoDigest。
+- 镜像只记录 tag，没有 RepoDigest，**且**未获 PO 批准的 `PASS-WITH-LOCAL-IMMUTABLE`（含完整 IMAGE_ID + tar SHA256 + 禁止 `--build`/retag）。
+- 在 local-immutable 路径下仍执行 `docker compose up -d --build`，或覆盖已使用的同一 tag。
 - 构建日志、镜像层或 manifest 出现 Secret、AppKey、sessionKey、数据库密码。
 - 无法重现同一 commit 的镜像或迁移 hash。

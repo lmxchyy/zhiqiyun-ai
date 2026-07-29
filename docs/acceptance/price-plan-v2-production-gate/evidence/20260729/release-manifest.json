@@ -1,8 +1,8 @@
 {
-    "filledAt": "2026-07-29T05:30:00+08:00",
-    "filledBy": "release-owner+DBA+price-owner (delegated to Codex by user)",
+    "filledAt": "2026-07-29T09:46:00+08:00",
+    "filledBy": "release-owner+DBA+price-owner (delegated to Codex by user); PO ACCEPTED local-immutable",
     "status": "NO-GO",
-    "notes": "Policy 2026-07-29: real Y996 pay WAIVED. Payment path ACCEPTED via Y1 TEST. NORMAL dry quote 201@99600 + bindings. Sandbox window restored to production. RepoDigest null (confirmed no registry). Proposed §1 close = PASS-WITH-LOCAL-IMMUTABLE on local/xianzhi-ai-platform:a39485ef1 / sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32 pending PO accept — evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md. V2 flags unchanged; pay env production.",
+    "notes": "§1 PASS-WITH-LOCAL-IMMUTABLE (PO ACCEPTED 2026-07-29T09:44:00+08). FULL git a39485ef159dabf348a71059a0e922af4894ab5a; FULL IMAGE_ID sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32; before/after EXACT; current tar SHA256 4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09; previous tar EXPORTED. Forbidden: docker compose up -d --build; retag overwrite. Registry remains long-term standard; local-immutable NOT long-term policy. repoDigest null. Overall still NO-GO: §5 PARTIAL (#5/#7/#8/#10). V2 flags unchanged; pay env production. Policy: real Y996 WAIVED; Y1 payment ACCEPTED.",
     "prodMigrate": {
         "appliedAt": "2026-07-29T05:19:00+08:00",
         "order": [
@@ -130,19 +130,42 @@
         "conclusion": "PASS"
     },
     "currentDeploy": {
-        "filledAt": "2026-07-29T07:50:00+08:00",
+        "filledAt": "2026-07-29T09:46:00+08:00",
         "imageRef": "local/xianzhi-ai-platform:a39485ef1",
+        "imageTags": [
+            "local/xianzhi-ai-platform:a39485ef1",
+            "local/xianzhi-ai-platform:git-a39485ef1"
+        ],
         "imageId": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
         "gitSha": "a39485ef159dabf348a71059a0e922af4894ab5a",
         "repoDigests": [],
+        "imageIdVerifyBefore": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
+        "imageIdVerifyAfter": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
+        "imageIdMatch": "EXACT",
         "wechatVirtualPayEnv": "production",
         "v2Flags": true,
-        "section1Proposal": "PASS-WITH-LOCAL-IMMUTABLE",
-        "section1PoAccept": "PENDING",
+        "section1Status": "PASS-WITH-LOCAL-IMMUTABLE",
+        "section1PoAccept": "ACCEPTED",
+        "section1PoAcceptAt": "2026-07-29T09:44:00+08:00",
+        "forbiddenOps": [
+            "docker compose up -d --build",
+            "retag or rebuild overwrite of an already-used image tag",
+            "invent repository@sha256 RepoDigest"
+        ],
+        "registryLongTermStandard": true,
+        "localImmutableIsNotLongTermPolicy": true,
+        "currentImageTar": "/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar",
+        "currentImageTarSha256": "4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09",
+        "previousImageRef": "local/xianzhi-ai-platform:3d0c0e032",
+        "previousImageId": "sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331",
+        "previousImageTar": "/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar",
+        "previousImageTarSha256": "4c08c51a41d6fc527e854c4e4c64988a35e9773622b5506433eb4d5a76f9a9ee",
+        "previousStatus": "EXPORTED",
         "evidence": "evidence/20260729/repo-digest/"
     },
     "policyNoReal996": {
-        "repoDigestResidual": "evidence/20260729/repo-digest/",
+        "section1Status": "PASS-WITH-LOCAL-IMMUTABLE",
+        "section1Evidence": "evidence/20260729/repo-digest/",
         "sandboxRuntime": "evidence/20260729/sandbox-runtime/",
         "normalSubstitute": "evidence/20260729/normal-996/",
         "paymentAcceptedOrders": [

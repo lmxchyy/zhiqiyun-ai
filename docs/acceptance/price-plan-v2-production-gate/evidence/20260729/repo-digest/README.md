@@ -1,14 +1,12 @@
-# RepoDigest residual → local-immutable amendment — 2026-07-29
+# RepoDigest residual → local-immutable — 2026-07-29
 
 ## Verdict
 
-**No usable container registry credentials found** (deep re-probe). Real registry RepoDigest **cannot** be produced. **Did not invent a digest.**
+**No usable container registry credentials** (deep probe). Real registry RepoDigest **cannot** be produced. **Did not invent a digest.**
 
-§1 recommendation: **`PASS-WITH-LOCAL-IMMUTABLE`** pending product-owner accept — see `AMENDMENT-LOCAL-IMMUTABLE.md`.
+§1 status: **`PASS-WITH-LOCAL-IMMUTABLE`** — product owner **ACCEPTED** at **2026-07-29T09:44:00+08:00** with strict conditions (full SHAs, IMAGE_ID before/after verify, tar+SHA256, previous tar, forbidden `--build`/retag overwrite, registry long-term note). See `AMENDMENT-LOCAL-IMMUTABLE.md`.
 
-Until PO checkbox is signed, treat §1 as **residual / PENDING-PO-ACCEPT** (not full registry PASS).
-
-## Immutable local identity (current prod)
+## Immutable local identity (FULL — never truncate in gate records)
 
 ```text
 imageRef=local/xianzhi-ai-platform:a39485ef1
@@ -19,24 +17,33 @@ WECHAT_VIRTUAL_PAY_ENV=production
 V2 flags=true/true/true
 ```
 
-## Probe summary
+## Tar artifacts (prod)
 
-| Item | Value |
-|---|---|
-| Host | `119.29.191.227` `/opt/zhiqiyun-ai` |
-| `/root/.docker/config.json` | missing — no auths |
-| Registry env / compose remote repos | none |
-| `deploy.sh` / `install_panel.sh` push/login | none |
-| docker.io | pull mirror only (`mirror.ccs.tencentyun.com`) |
-| Workstation docker auths | empty |
+| Role | Path | SHA256 |
+|---|---|---|
+| Current | `/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar` | `4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09` |
+| Previous | `/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar` | `4c08c51a41d6fc527e854c4e4c64988a35e9773622b5506433eb4d5a76f9a9ee` |
 
-Evidence: `probe-registry.sh`, `probe-registry-deep.sh`, `host-out/probe-registry.txt`, `host-out/probe-registry-deep.txt`, `AMENDMENT-LOCAL-IMMUTABLE.md`.
+Previous IMAGE_ID: `sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331` (`local/xianzhi-ai-platform:3d0c0e032`).
 
-## What true RepoDigest still requires (ops follow-up)
+## Forbidden (this release path)
 
-1. Provision GHCR / TCR / Hub write credentials
-2. `docker login` → tag `local/xianzhi-ai-platform:a39485ef1` → `docker push`
-3. Record `docker image inspect --format '{{index .RepoDigests 0}}'`
-4. Pin compose to digest; set `release-manifest.json.repoDigest`
+- `docker compose up -d --build`（现场重构镜像禁止）
+- Retag/overwrite same already-used image tag
+- Inventing RepoDigest
 
-Until then, local IMAGE_ID is the only honest immutability proof for this deploy model.
+Deploy MUST use pre-built immutable tag + IMAGE_ID exact match (or `docker load` from saved tar). See `release-freeze-runbook.md` §5b.
+
+## Registry long-term
+
+Registry `repository@sha256:...` remains the **long-term standard**. Local-immutable is **not** standing policy.
+
+## Evidence files
+
+- `AMENDMENT-LOCAL-IMMUTABLE.md`
+- `probe-and-export-local-immutable.sh`
+- `host-out/probe-and-export.txt` (same content as prod `/tmp/.../probe-and-export.log`; `.log` gitignored)
+- `host-out/local-immutable-summary.env`
+- `host-out/*.tar.sha256`
+- `host-out/container-inspect.json`, `host-out/image-inspect.json`
+- Earlier: `probe-registry*.sh`, `host-out/probe-registry*.txt`

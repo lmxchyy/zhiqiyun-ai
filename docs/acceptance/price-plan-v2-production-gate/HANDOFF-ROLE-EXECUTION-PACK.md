@@ -1,12 +1,12 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `NO-GO`（支付管线 ¥1 TEST ACCEPTED；NORMAL 真机 ¥996 = WAIVED；sandbox 临时窗+dry quote PASS 已恢复 production；§1 registry RepoDigest **CONFIRMED ABSENT** → 提议 `PASS-WITH-LOCAL-IMMUTABLE`，待产品负责人勾选；禁止伪造 digest。证据 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`）。**
+> **当前总状态 = `NO-GO`（§1 已 `PASS-WITH-LOCAL-IMMUTABLE`；§5 等仍 PARTIAL；禁止发明整体 GO）。**
 >
-> **2026-07-29 ~07:50+08 RepoDigest 深探针：** 生产机无 `/root/.docker/config.json` auths；无 CCR/ACR/TCR/GHCR 环境变量；compose 仅 `local/xianzhi-ai-platform`；`RepoDigests=[]`；镜像 Id=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`。**无可用 registry → 无法 push。** 门禁修正提案：§1 `PASS-WITH-LOCAL-IMMUTABLE`（本地 tag+IMAGE_ID），见 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。**请产品负责人勾选是否接受。** V2 三开关与 `WECHAT_VIRTUAL_PAY_ENV=production` **未改动**。
+> **2026-07-29T09:44:00+08 PO ACCEPTED `PASS-WITH-LOCAL-IMMUTABLE`（严格条件已执行）：** FULL git=`a39485ef159dabf348a71059a0e922af4894ab5a`；FULL IMAGE_ID=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；before/after EXACT；current tar=`/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar` SHA256=`4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09`；previous tar EXPORTED（`3d0c0e032` / `sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331`）；**禁止** `docker compose up -d --build` 与同 tag 覆盖；registry 仍为长期标准。证据 `evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。V2 三开关与 `WECHAT_VIRTUAL_PAY_ENV=production` **未改动**。
 >
 > 第三阶段（V132 phase3）= **OUT OF SCOPE / NO-GO**，本包不涉及。
 >
-> **2026-07-29（政策）更新：** 用户明确：**禁止**再要求生产真机付真实 ¥996。支付技术链路由 ¥1 TEST 两单完整证明（下单→微信支付→回调/查单→会员开通→代理分润）；¥996 与 ¥1 无本质支付路径差异。NORMAL @99600 改用 **配置强制等式 + dry quote 201@99600**（及 sandbox 同价 dry quote）验收；**不收费**。证据：`evidence/20260729/POLICY-NO-REAL-996.md`、`normal-996/`、`sandbox-runtime/`。总状态仍 **NO-GO**（RepoDigest residual）。
+> **2026-07-29（政策）更新：** 用户明确：**禁止**再要求生产真机付真实 ¥996。支付技术链路由 ¥1 TEST 两单完整证明（下单→微信支付→回调/查单→会员开通→代理分润）；¥996 与 ¥1 无本质支付路径差异。NORMAL @99600 改用 **配置强制等式 + dry quote 201@99600**（及 sandbox 同价 dry quote）验收；**不收费**。证据：`evidence/20260729/POLICY-NO-REAL-996.md`、`normal-996/`、`sandbox-runtime/`。总状态仍 **NO-GO**（§5 PARTIAL 等）。
 >
 > **2026-07-29 ~07:34+08 sandbox 窗：** 已 seed SANDBOX V2 行列；临时 `WECHAT_VIRTUAL_PAY_ENV=sandbox` → NORMAL/TEST dry quote PASS + U0 TEST 403 → **已恢复 production**；V2 三开关保持 true。见 `evidence/20260729/sandbox-runtime/`。
 >
@@ -129,9 +129,9 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 |---|---|---|---|
 | 1 | 形成审批过的 release commit | `release-freeze-runbook.md` §2 | [x] `e8f191805…` |
 | 2 | 同 commit 构建镜像（禁止脏工作区 build） | 同手册 §4 | [x] 3d0c0e032 local image |
-| 3 | push 并记录可变 `repository@sha256:...` RepoDigest | 同手册 §5 | [~] **CONFIRMED NONE** — 深探针无 docker login/auths/CCR/ACR/TCR；提议 §1=`PASS-WITH-LOCAL-IMMUTABLE`（`AMENDMENT-LOCAL-IMMUTABLE.md`）；`RepoDigests=[]`；禁止伪造 |
+| 3 | push 并记录可变 `repository@sha256:...` RepoDigest | 同手册 §5 / §5b | [x] **`PASS-WITH-LOCAL-IMMUTABLE`（PO ACCEPTED 2026-07-29T09:44:00+08）** — registry 仍无；本地 FULL IMAGE_ID+tar+prev；禁止 `--build`/retag；`RepoDigests=[]`；禁止伪造 |
 | 4 | 从 `git archive` 重算 097–100 SHA256 | 同手册 §3 | [x] |
-| 5 | 写出 release manifest JSON（commit/tree/imageId/repoDigest/migrations） | 同手册 §6 | [x]（digest=null；现网 imageId=`sha256:1bd6777d671b…` / tag `a39485ef1`） |
+| 5 | 写出 release manifest JSON（commit/tree/imageId/repoDigest/migrations） | 同手册 §6 | [x]（digest=null；FULL imageId=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32` / tag `a39485ef1`；tar SHA 已记） |
 | 6 | 确认 compose 三开关注入 | `go-no-go-gate.md` Gate A | [x] 现网 true（授权启用后） |
 
 ### 1.3 回填表
@@ -141,15 +141,19 @@ docs/acceptance/price-plan-v2-production-gate/evidence/<YYYYMMDD>/
 | 执行人 / 日期 | 用户授权代行发布负责人；Codex 执行 2026-07-29 04:00+08 |
 | releaseCommit (40 hex) | `e8f191805ca1d6c9a4b214ee91312aeb796c0b10` |
 | releaseTree | `c0bf56a2ddc51dd2c77e4918b157e1ab15178db2` |
-| imageRef / imageId | **现网** `local/xianzhi-ai-platform:a39485ef1` / `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`（git `a39485ef1…`）；历史冻结点仍见 manifest 内 3d0c0e032 |
-| repoDigest (`@sha256:...`) | **空（CONFIRMED）** — 深探针无 registry 凭据；**不伪造**。§1 提议 `PASS-WITH-LOCAL-IMMUTABLE`=`local/xianzhi-ai-platform:a39485ef1` + `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`，待 PO 接受。见 `repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md` |
+| imageRef / imageId | **现网** `local/xianzhi-ai-platform:a39485ef1` / `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；FULL git=`a39485ef159dabf348a71059a0e922af4894ab5a`；历史 previous=`local/xianzhi-ai-platform:3d0c0e032` / `sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331` |
+| repoDigest (`@sha256:...`) | **空（CONFIRMED）** — 无 registry 凭据；**不伪造**。§1=`PASS-WITH-LOCAL-IMMUTABLE`（PO ACCEPTED）。见 `repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md` |
+| current tar / SHA256 | `/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar` / `4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09` |
+| previous tar / SHA256 | `/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar` / `4c08c51a41d6fc527e854c4e4c64988a35e9773622b5506433eb4d5a76f9a9ee` |
+| IMAGE_ID verify | before+after `docker save`：**EXACT MATCH** running container Image == recorded IMAGE_ID |
+| Forbidden ops | `docker compose up -d --build`；同一 tag 覆盖重建；伪造 RepoDigest |
 | 097 SHA256 | `784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7` |
 | 098 SHA256 | `AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2` |
 | 099 SHA256 | `1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9` |
 | 100 SHA256 | `8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649` |
 | 证据路径 | `evidence/20260729/release-manifest.json` + `migration-sha256-from-archive.txt` + `repo-digest/` |
-| 单项结论 | **PENDING-PO → 提议 `PASS-WITH-LOCAL-IMMUTABLE`**（本地 IMAGE_ID+git SHA 已核验；registry digest **确认不存在**；待产品负责人接受本地不可变身份作为 §1 关闭条件） |
-| 签字 | 用户（发布负责人）授权代行 / Codex 代填 |
+| 单项结论 | **`PASS-WITH-LOCAL-IMMUTABLE`**（PO ACCEPTED 2026-07-29T09:44:00+08；registry 仍为长期标准，本路径非长期政策） |
+| 签字 | Product Owner ACCEPT；Codex 执行导出与文档回填 |
 
 **单项 PASS 不等于生产 GO。**
 
@@ -299,7 +303,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | # | 前置 | 勾选 |
 |---|---|---|
-| 1 | 沙箱服务 = 冻结 commit + RepoDigest | [~] **partial → 提议 local-immutable** — 有冻结 imageId sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32 / git 39485ef1；registry RepoDigest 确认无；待 PO 接受 §1 豁免 |
+| 1 | 沙箱服务 = 冻结 commit + RepoDigest | [x] **§1 local-immutable CLOSED** — FULL imageId `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32` / FULL git `a39485ef159dabf348a71059a0e922af4894ab5a`；registry RepoDigest 仍无（accepted substitute） |
 | 2 | 沙箱库已 097–100 且约束证据通过 | [x] 生产库已 097–100 + VALIDATE=0；SANDBOX env 业务行已 seed |
 | 3 | `WECHAT_VIRTUAL_PAY_ENV=sandbox` | [x] **临时窗已跑并恢复 production**（~07:34:32–07:34:55 +08）；见 `sandbox-runtime/` |
 | 4 | §4 沙箱道具矩阵 PASS | [x] SANDBOX V2 NORMAL/TEST goods+bindings+whitelist seed；dry quote PASS |
@@ -328,9 +332,9 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|
 | 执行人 / 微信 / 后端复核 / 日期 | 2026-07-29：¥1 真机 ACCEPTED；NORMAL WAIVED；sandbox 窗 quote PASS 并恢复 production |
 | 体验版版本 / 真机与基础库 | 用户真机（¥1）；体验版版本号系统无 / 待补 |
-| 失败用例编号 | #5/#7/#8/#10 未测；#1/#2 真机付 WAIVED（配置+quote 替代）；RepoDigest residual |
+| 失败用例编号 | #5/#7/#8/#10 未测；#1/#2 真机付 WAIVED（配置+quote 替代）；§1 RepoDigest 已由 local-immutable 关闭 |
 | 证据路径 | `member-test-pay/`；`agent-test-pay/`；`deliver-notify/`；`normal-996/`；`sandbox-runtime/`；`repo-digest/`；`POLICY-NO-REAL-996.md` |
-| 单项结论 | **`PARTIAL`** — 支付链路 ACCEPTED（¥1）；NORMAL config+quote PASS（无收费）；sandbox 运行时 dry quote PASS 已恢复；RepoDigest/幂等专项等未齐；§5 非整包 PASS |
+| 单项结论 | **`PARTIAL`** — 支付链路 ACCEPTED（¥1）；NORMAL config+quote PASS（无收费）；sandbox 运行时 dry quote PASS 已恢复；**#5/#7/#8/#10 未齐**；§5 非整包 PASS |
 | 签字 | 待签 |
 
 ---
@@ -338,7 +342,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 ## §6 发布负责人 — 启用开关
 
 **2026-07-29 05:34–05:35+08：** 用户「明确授权开」已按序执行；证据 `evidence/20260729/v2-flags-enable/`。  
-**仍非最终 GO：** §1 缺 RepoDigest、§5 sandbox/NORMAL 未测、pay env 仍 production；TEST 设备路径内部履约已更完整。
+**仍非最终 GO：** §1 已 `PASS-WITH-LOCAL-IMMUTABLE`；§5 仍 PARTIAL（#5/#7/#8/#10 等）；§4 未宣告完整 PASS；pay env=production。禁止发明整体 GO。
 
 ### 6.1 启用顺序（不可颠倒）— 已执行
 
@@ -355,7 +359,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 |---|---|
 | 任一 V132/CANARY affected tenant | health：`v132Blocked=false`，affected=0 |
 | 任一候选方案 `giftPoints > 0` | V2 NORMAL/TEST `giftPoints=0` |
-| §1–§5 任一项未回填或 NO-GO | **仍 NO-GO**（RepoDigest / 沙箱真机） |
+| §1–§5 任一项未回填或 NO-GO | **仍 NO-GO**（§5 PARTIAL / 未齐专项等；§1 已 local-immutable） |
 | TEST 白名单 | **已写入** `user_000002`（演示用户）→ MEMBER_TEST + AGENT_TEST；pricing-health **HEALTHY** |
 | 第三阶段需求未另批 | **继续 OUT OF SCOPE** |
 | 静默切 `WECHAT_VIRTUAL_PAY_ENV=sandbox` | **未做**（有意保持 production） |
@@ -372,7 +376,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | pricing health blockedIssueCount | **0**（2026-07-29 05:44+08 复核；`TEST_WHITELIST_MISSING` 已清；status=HEALTHY） |
 | TEST 白名单账号 | `user_000002` / `demo@xianzhi.ai` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
 | dry quote | MEMBER/AGENT NORMAL **201 @99600**（PRODUCTION；未下单；quoteId 脱敏） |
-| 最终 GO/NO-GO | **NO-GO**（主残差 RepoDigest；NORMAL 真机付已政策 WAIVE；支付链路 ¥1 ACCEPTED；sandbox 窗已恢复） |
+| 最终 GO/NO-GO | **NO-GO**（§1 local-immutable 已关；§5 PARTIAL / #5#7#8#10 未齐等仍阻断；NORMAL 真机付 WAIVED；支付链路 ¥1 ACCEPTED） |
 
 事故回退顺序见 `go-no-go-gate.md`「事故回退顺序」。
 
@@ -382,11 +386,11 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | 角色包 | 结论 | 证据齐备 | 签字日期 |
 |---|---|---|---|
-| §1 发布冻结 | **PENDING-PO / `PASS-WITH-LOCAL-IMMUTABLE` 提议** | 本地 `local/xianzhi-ai-platform:a39485ef1` + `sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；registry **确认无凭据**；待 PO 勾选 `AMENDMENT-LOCAL-IMMUTABLE.md` | 2026-07-29 |
+| §1 发布冻结 | **`PASS-WITH-LOCAL-IMMUTABLE`** | PO ACCEPTED 2026-07-29T09:44:00+08；FULL IMAGE_ID+git+tar；before/after EXACT；prev tar EXPORTED；禁止 `--build`/retag；registry 长期标准 | 2026-07-29 |
 | §2 DBA 只读预检 | **PASS** | `dba-preflight.log` + SHA | 2026-07-29 |
 | §3 隔离迁移演练 | **PASS** | `evidence/20260729/rehearsal/`；VALIDATE=0 | 2026-07-29 |
 | §4 微信道具 | **PARTIAL→趋近 PASS** | 双签 PASS；PRODUCTION+SANDBOX 静态绑定 99600；quote dry-run PASS | 2026-07-29 |
-| §5 沙箱/真机 | **PARTIAL** | 支付链路 **ACCEPTED**（¥1×2）；NORMAL 真机付 **WAIVED**（dry quote+绑定替代）；sandbox 窗 quote PASS 已恢复 production；RepoDigest residual；#5/#7/#8/#10 未齐 | 2026-07-29 政策 |
+| §5 沙箱/真机 | **PARTIAL** | 支付链路 **ACCEPTED**（¥1×2）；NORMAL 真机付 **WAIVED**；sandbox 窗 quote PASS 已恢复；**#5/#7/#8/#10 未齐** → 仍阻断整体 GO | 2026-07-29 政策 |
 | §6 开关启用 | **DONE（授权窗口）** | 三开关 = true；pay env = **production**（sandbox 窗后已恢复） | 2026-07-29 |
 | TEST 白名单 | **DONE** | PRODUCTION + SANDBOX TEST → `user_000002` | 2026-07-29 |
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/` | 2026-07-29 |
@@ -395,8 +399,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部 PASS 后，才允许在 `go-no-go-gate.md` 最终签字栏提议生产变更。
 
-**本轮结论（2026-07-29 深探针后）：总状态仍 = `NO-GO`（待 PO）。**  
-硬残差原为 RepoDigest；现 **确认无 registry**，已提案 §1=`PASS-WITH-LOCAL-IMMUTABLE`（本地 IMAGE_ID）。支付管线 ¥1 ACCEPTED；NORMAL 配置/quote 替代真机 ¥996；pay env=production；**未改 V2 开关**。PO 勾选接受前禁止口头改 GO。
+**本轮结论（2026-07-29T09:46+08）：总状态仍 = `NO-GO`。**  
+§1 RepoDigest 残差已由 PO 接受的 **`PASS-WITH-LOCAL-IMMUTABLE`** 关闭（含 tar 制品与禁止项）。**整体仍 NO-GO**：§5 仍 **PARTIAL**（#5/#7/#8/#10 等未齐）；§4 亦未宣告完整 PASS。支付管线 ¥1 ACCEPTED；NORMAL 配置/quote 替代真机 ¥996；pay env=production；**未改 V2 开关**。禁止口头改 GO。
 
 ---
 
@@ -404,7 +408,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 
 | 缺口 | 影响 | 谁补 |
 |---|---|---|
-| **缺 registry RepoDigest**（仅有本地 IMAGE_ID+git SHA；凭据深探针已确认无） | Gate A 原措辞未满足；**提议**本地不可变豁免 | **PO 决定**：接受 `PASS-WITH-LOCAL-IMMUTABLE` 或补 registry 后 push |
+| **缺 registry RepoDigest**（已由 local-immutable 关闭 §1；凭据仍无） | 长期 hardening 缺口；非本轮 §1 blocker | 运维后续 provision registry；Gate A 镜像行将改回要求真实 digest |
 | NORMAL 真机 ¥996 | **WAIVED**（政策）— 用 dry quote+绑定替代 | 已替代；见 `normal-996/` |
 | 强制等式（quote 层） | PRODUCTION+SANDBOX dry quote MEMBER/AGENT NORMAL **201@99600** | 已覆盖；非真机付 |
 | 沙箱真机付 | 支付管线已由 ¥1 ACCEPTED；sandbox **dry quote** PASS | 可选；非本轮必须 |
