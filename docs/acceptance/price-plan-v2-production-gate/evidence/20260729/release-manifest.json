@@ -1,8 +1,47 @@
 {
-    "filledAt": "2026-07-29T09:58:00+08:00",
-    "filledBy": "release-owner+DBA+price-owner+QA probes (delegated to Codex by user); PO ACCEPTED local-immutable",
-    "status": "NO-GO",
-    "notes": "§1 PASS-WITH-LOCAL-IMMUTABLE (PO ACCEPTED). §4 PASS. §5 PASS-WITH-SUBSTITUTIONS: #5/#7/#8/#10 CLOSED via section5-probes (re-sync idempotency; whitelist soft-expire 403; binding +1fen MISMATCH; V1 status+legacy TOKEN create). Overall still NO-GO: final go-no-go-gate signatures empty; need PO accept §5 substitutions. FULL git a39485ef159dabf348a71059a0e922af4894ab5a; FULL IMAGE_ID sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32. V2 flags unchanged; pay env production. Policy: real Y996 WAIVED; Y1 payment ACCEPTED.",
+    "filledAt": "2026-07-29T10:58:00+08:00",
+    "filledBy": "operational GO after P0-P6 closed; user verbatim P5 reuse + GO; docs-only (no deploy/flag/price change)",
+    "status": "GO",
+    "notes": "OPS-GO-20260729-P0-P6-CLOSED. Truth: OPERATIONAL-GO-SIGNATURE.md. P0 CLOSED-WITH-ACCEPTED-RESIDUAL (no key rotation). P1 three SHAs documented. P2 PASS live reconcile. P3/P4 PASS user一致. P5 ACCEPTED reuse. P6 SIGNED GO. runtimeImageGitSha=a39485ef159dabf348a71059a0e922af4894ab5a IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32; docsGoCommit=719f898c5ca160348ca5d597f9644901d0a60242 NOT image build; evidenceRepoHeadAtAmend=cd9b88abcdf79227d9e65333049dd6f97e0fdb8a. Do not mix SHAs. Do not compose up --build. Do not rerun 097-100 blindly.",
+    "identitySplit": {
+        "runtimeImageGitSha": "a39485ef159dabf348a71059a0e922af4894ab5a",
+        "docsGoCommit": "719f898c5ca160348ca5d597f9644901d0a60242",
+        "evidenceRepoHeadAtAmend": "cd9b88abcdf79227d9e65333049dd6f97e0fdb8a",
+        "docsGoCommitIsNotImageBuild": true,
+        "mustNotMix": true
+    },
+    "securityHardBlock": {
+        "code": "TRACKED_CONTAINER_INSPECT_SECRETS",
+        "path": "evidence/20260729/repo-digest/host-out/container-inspect.json",
+        "access": "RESTRICT_HISTORY_COPIES",
+        "valuesPrinted": false,
+        "status": "CLOSED-WITH-ACCEPTED-RESIDUAL",
+        "closedAt": "2026-07-29T10:40:00+08:00",
+        "keyRotation": "DECLINED",
+        "worktreeRedacted": true,
+        "exportScriptHardened": true,
+        "gitHistoryMayStillContainPlaintext": true,
+        "evidence": "evidence/20260729/P0-SECRETS-REDACTION.md",
+        "blocksRedeploy": false,
+        "blocksEvidenceRedistribution": true,
+        "blocksUnredactedHistoryCopies": true
+    },
+    "agentPricingLocalConclusion": {
+        "choice": "A",
+        "normal": {
+            "channel": "AGENT",
+            "productId": "AGENT_JOIN_996",
+            "yuan": 996,
+            "cents": 99600
+        },
+        "test": {
+            "channel": "AGENT",
+            "productId": "AGENT_TEST_1YUAN",
+            "yuan": 1,
+            "cents": 100
+        },
+        "humanDualSignStillRequiredIfSoD": true
+    },
     "prodMigrate": {
         "appliedAt": "2026-07-29T05:19:00+08:00",
         "order": [
@@ -151,8 +190,10 @@
         "section5Status": "PASS-WITH-SUBSTITUTIONS",
         "section5ProbesAt": "2026-07-29T09:57:39+08:00",
         "section5Evidence": "evidence/20260729/section5-probes/",
-        "overallStatus": "NO-GO",
-        "overallBlocker": "final go-no-go-gate signatures empty; PO accept of §5 substitutions pending",
+        "overallStatus": "GO",
+        "overallBlocker": null,
+        "overallGoAt": "2026-07-29T10:58:00+08:00",
+        "overallGoEvidence": "evidence/20260729/OPERATIONAL-GO-SIGNATURE.md",
         "forbiddenOps": [
             "docker compose up -d --build",
             "retag or rebuild overwrite of an already-used image tag",

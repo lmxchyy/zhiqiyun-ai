@@ -29,6 +29,44 @@ EXPECTED_TAG_SHORT="a39485ef1"
   echo "CONTAINER_IMAGE_FIELD=${IMG}"
   docker inspect "$IMG" > "$EVIDENCE_HOST_OUT/image-inspect.json"
 
+  # P0: never keep plaintext Env values in evidence dumps (no key rotation required for this step).
+  redact_inspect_env() {
+    local f="$1"
+    python3 - "$f" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+def scrub(obj):
+    if isinstance(obj, list):
+        return [scrub(x) for x in obj]
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if k == "Env" and isinstance(v, list):
+                out[k] = []
+                for item in v:
+                    s = str(item)
+                    eq = s.find("=")
+                    if eq < 0:
+                        out[k].append("REDACTED_UNPARSED")
+                    else:
+                        out[k].append(s[:eq] + "=***REDACTED***")
+            else:
+                out[k] = scrub(v)
+        return out
+    return obj
+
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(scrub(data), fh, indent=2)
+    fh.write("\n")
+print(f"REDACTED_ENV_IN={path}")
+PY
+  }
+  redact_inspect_env "$EVIDENCE_HOST_OUT/container-inspect.json"
+  redact_inspect_env "$EVIDENCE_HOST_OUT/image-inspect.json"
+
   echo
   echo "=== CONTAINER SUMMARY ==="
   docker inspect -f 'Id={{.Id}}

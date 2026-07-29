@@ -1,10 +1,23 @@
 # 会员/代理价格方案 V2 上线前 GO/NO-GO 门禁
 
-当前总状态：`GO`（2026-07-29T10:03:20+08:00 PO 签字）。§1 **`PASS-WITH-LOCAL-IMMUTABLE`** PO ACCEPTED；§4 **PASS**；§5 **`PASS-WITH-SUBSTITUTIONS`** PO ACCEPTED（#5 re-sync 幂等；无 sandbox 真机付，由 ¥1 TEST + 政策覆盖）；最终签字栏已填。证据 `evidence/20260729/PO-GO-SIGNATURE.md`、`section5-probes/`、`repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md`。
+> **当前总状态：`GO`（2026-07-29T10:58:00+08:00）。**  
+> **真相源：** `evidence/20260729/OPERATIONAL-GO-SIGNATURE.md`（用户「P5 沿用，GO」）  
+> P0–P6 已关。本签字 **未**改开关/部署/改价。P0 密钥不轮换残余已接受。  
+> 历史：10:03 PO GO → 10:31 NO-GO 降级 → 10:58 运营 GO。
+
+当前总状态：`GO`。§1 **`PASS-WITH-LOCAL-IMMUTABLE`**；§4 **PASS**；§5 **`PASS-WITH-SUBSTITUTIONS`**（P5 沿用）；P2 现场只读 **PASS**；P3/P4 **PASS**。
 
 **2026-07-29 政策：** 生产真机付真实 ¥996 **不再作为门禁必要条件**。支付技术链路以 MEMBER/AGENT ¥1 TEST 两单为 ACCEPTED；NORMAL @99600 用 dry quote + 强制等式 / sandbox 配置验收。详见 `evidence/20260729/POLICY-NO-REAL-996.md`。
 
-当前运行时（sandbox 临时窗后已恢复）：
+**三 SHA 必须分开（FULL，禁止混用）：**
+
+```text
+运行镜像源码 = a39485ef159dabf348a71059a0e922af4894ab5a
+PO GO 文档   = 719f898c5ca160348ca5d597f9644901d0a60242
+证据仓库 HEAD = cd9b88abcdf79227d9e65333049dd6f97e0fdb8a
+```
+
+当前运行时（P2 实读；本 GO 签字未改动）：
 
 ```text
 SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=true
@@ -13,7 +26,7 @@ PRICE_PLAN_TEST_ENTRY_ENABLED=true
 WECHAT_VIRTUAL_PAY_ENV=production
 ```
 
-准备期历史默认值（启用前）曾为 false；现已授权开启。 准备期门禁文案仍保留显式 `SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=false` / `PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=false` / `PRICE_PLAN_TEST_ENTRY_ENABLED=false` 作为 Gate A 默认关闭标准。
+准备期历史默认值（启用前）曾为 false；现已授权开启（证据记录）。准备期门禁文案仍保留显式 `SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=false` / `PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=false` / `PRICE_PLAN_TEST_ENTRY_ENABLED=false` 作为 Gate A 默认关闭标准。
 ## Gate A：代码与增量 schema 候选发布，三开关关闭
 
 | 门禁 | GO 证据 | NO-GO |
@@ -83,10 +96,15 @@ Gate C 必须在 Gate B 通过后单独审批，且最后开启。
 | 支付技术链路 | **ACCEPTED** | ¥1 MEMBER+AGENT + deliver-notify CLOSED |
 | NORMAL ¥996 真机付 | **WAIVED** | dry quote 201@99600 + bindings |
 | 沙箱运行时 quote | PASS（自动化） | 临时 sandbox 窗后已恢复 production |
-| §5 #5/#7/#8/#10 | **PASS-WITH-SUBSTITUTIONS（PO ACCEPTED）** | `section5-probes/`；#5=re-sync 幂等；无 sandbox 真机付（¥1+政策）；见 `PO-GO-SIGNATURE.md` |
-| V132/giftPoints | PASS 点查 | 0 / 0 |
+| §5 #5/#7/#8/#10 | **PASS-WITH-SUBSTITUTIONS（PO ACCEPTED，历史）** | `section5-probes/`；#5=re-sync 幂等；无 sandbox 真机付（¥1+政策）；见 `PO-GO-SIGNATURE.md` |
+| V132/giftPoints | PASS 点查（证据） | 0 / 0 |
 | 第三阶段流程 | OUT OF SCOPE | |
-| 最终签字栏 | **已签 → 总 GO** | 2026-07-29T10:03:20+08:00；条件/残差见签字块与 `PO-GO-SIGNATURE.md` |
+| 敏感凭据入仓 | **P0 CLOSED-WITH-ACCEPTED-RESIDUAL** | 工作区已脱敏；**不轮换密钥**；Git 历史残余见 `P0-SECRETS-REDACTION.md` |
+| 三 SHA 身份 | **DOCUMENTED（禁止混用）** | 镜像 `a39485ef…` / 文档 `719f898c…` / 证据 `cd9b88ab…` |
+| 现场只读对账 | **P2 PASS** | 2026-07-29T10:52+08；见 `P2-READONLY-RECONCILE.md` |
+| P3/P4 真人确认 | **PASS** | 2026-07-29T10:54「一致」；见 `P3-P4-HUMAN-CONFIRM.md` |
+| P5 测试豁免 | **ACCEPTED — 沿用** | 2026-07-29T10:58「P5 沿用」 |
+| 最终运营签字 | **SIGNED → 总 GO** | 2026-07-29T10:58；见 `OPERATIONAL-GO-SIGNATURE.md` |
 
 ## 当前实现风险需修复或书面豁免
 
@@ -118,21 +136,25 @@ PRICE_PLAN_TEST_ENTRY_ENABLED=false
 DBA：用户授权代行（§2/§3 PASS；097–100 APPLIED）  
 微信支付负责人：用户授权代行 + 价格负责人双签（§4 PASS；¥1 ACCEPTED）
 
-安全负责人：用户授权代行（Gate A RBAC/secrets）  
-业务负责人 / Product Owner：**SIGNED** — 「接受 §5 替代并签字 GO」  
+安全负责人：用户授权代行（Gate A RBAC/secrets）— **P0 凭据入仓未关闭前不得维持 GO**  
+业务负责人 / Product Owner：**历史 SIGNED GO** @ 2026-07-29T10:03:20+08:00 — **已 SUPERSEDED**  
 发布负责人：用户授权代行（§1 local-immutable + §6 DONE）
 
-最终决定：`GO`  
-决定时间：`2026-07-29T10:03:20+08:00`  
-变更单号：`PO-GO-20260729-§5-SUBSTITUTIONS`
+最终决定（历史 10:03）：`GO`  
+**中间降级（历史 10:31）：`NO-GO`**  
+**当前有效决定：`GO` @ `2026-07-29T10:58:00+08:00`**  
+变更单号：`OPS-GO-20260729-P0-P6-CLOSED`（用户「P5 沿用，GO」）  
+历史变更单：`PO-GO-20260729-§5-SUBSTITUTIONS` / `NO-GO-20260729-SECURITY-RECONCILE`
 
-### GO 条件 / 残差（签字时诚实声明）
+### GO 条件 / 残差（10:58 运营签字）
 
-- Registry 仍为长期标准；§1=`PASS-WITH-LOCAL-IMMUTABLE`（FULL git=`a39485ef159dabf348a71059a0e922af4894ab5a`；FULL IMAGE_ID=`sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32`；`repoDigest=null`）
+- Registry 仍为长期标准；§1=`PASS-WITH-LOCAL-IMMUTABLE`
 - 禁止本 release 路径 `docker compose up -d --build` / 同 tag 覆盖
-- NORMAL ¥996 真机付 **WAIVED**；sandbox 真机付未跑（¥1 TEST + 政策覆盖）
-- §5 #5 = 服务端 re-sync 幂等，**非**微信 push 风暴
-- 第三阶段 OUT OF SCOPE；本签字动作未改 V2 开关 / pay env / 价格，未部署
+- NORMAL ¥996 真机付 **WAIVED**；sandbox 真机付未跑（P5 沿用）
+- P0：工作区已脱敏；**密钥不轮换**残余已接受
+- 第三阶段 OUT OF SCOPE；本签字未改 V2 开关 / pay env / 价格，未部署
 
-完整签字证据：`evidence/20260729/PO-GO-SIGNATURE.md`
+完整运营签字：`evidence/20260729/OPERATIONAL-GO-SIGNATURE.md`  
+历史降级记录：`evidence/20260729/STATUS-NO-GO-RECONCILE.md`  
+负责人待办：`evidence/20260729/OWNER-TODO-NO-GO.md`
 

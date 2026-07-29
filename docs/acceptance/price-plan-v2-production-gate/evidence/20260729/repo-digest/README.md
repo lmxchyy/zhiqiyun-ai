@@ -1,10 +1,13 @@
 # RepoDigest residual → local-immutable — 2026-07-29
 
+> **P0 (2026-07-29T10:40+08):** `host-out/container-inspect.json` / `image-inspect.json` **worktree Env values redacted** (`***REDACTED***`). Key rotation **DECLINED**. Git history may still contain prior plaintext — do not redistribute old copies. See `../P0-SECRETS-REDACTION.md`. Overall gate remains **`NO-GO`** (P1/P2/…).
+
 ## Verdict
 
 **No usable container registry credentials** (deep probe). Real registry RepoDigest **cannot** be produced. **Did not invent a digest.**
 
-§1 status: **`PASS-WITH-LOCAL-IMMUTABLE`** — product owner **ACCEPTED** at **2026-07-29T09:44:00+08:00** with strict conditions (full SHAs, IMAGE_ID before/after verify, tar+SHA256, previous tar, forbidden `--build`/retag overwrite, registry long-term note). See `AMENDMENT-LOCAL-IMMUTABLE.md`.
+§1 status: **`PASS-WITH-LOCAL-IMMUTABLE`** — product owner **ACCEPTED** at **2026-07-29T09:44:00+08:00** with strict conditions (full SHAs, IMAGE_ID before/after verify, tar+SHA256, previous tar, forbidden `--build`/retag overwrite, registry long-term note). See `AMENDMENT-LOCAL-IMMUTABLE.md`.  
+**Note:** §1 local-immutable acceptance does **not** override the 10:31 overall **`NO-GO`** (security + field reconcile).
 
 ## Immutable local identity (FULL — never truncate in gate records)
 
@@ -16,6 +19,8 @@ RepoDigests=[]
 WECHAT_VIRTUAL_PAY_ENV=production
 V2 flags=true/true/true
 ```
+
+Do **not** confuse with docsGoCommit `719f898c5ca160348ca5d597f9644901d0a60242` or evidence HEAD `cd9b88abcdf79227d9e65333049dd6f97e0fdb8a`.
 
 ## Tar artifacts (prod)
 
@@ -31,6 +36,8 @@ Previous IMAGE_ID: `sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406
 - `docker compose up -d --build`（现场重构镜像禁止）
 - Retag/overwrite same already-used image tag
 - Inventing RepoDigest
+- Redeploy / redistribute **unredacted historical** `container-inspect` copies
+- Commit raw/unredacted inspect dumps（script now redacts Env after `docker inspect`）
 
 Deploy MUST use pre-built immutable tag + IMAGE_ID exact match (or `docker load` from saved tar). See `release-freeze-runbook.md` §5b.
 
@@ -45,5 +52,8 @@ Registry `repository@sha256:...` remains the **long-term standard**. Local-immut
 - `host-out/probe-and-export.txt` (same content as prod `/tmp/.../probe-and-export.log`; `.log` gitignored)
 - `host-out/local-immutable-summary.env`
 - `host-out/*.tar.sha256`
-- `host-out/container-inspect.json`, `host-out/image-inspect.json`
+- `host-out/container-inspect.json` — **Env redacted**（见 `../P0-SECRETS-REDACTION.md`）
+- `host-out/container-inspect.redaction-meta.json`
+- `host-out/image-inspect.json` — **Env redacted**
+- `host-out/image-inspect.redaction-meta.json`
 - Earlier: `probe-registry*.sh`, `host-out/probe-registry*.txt`

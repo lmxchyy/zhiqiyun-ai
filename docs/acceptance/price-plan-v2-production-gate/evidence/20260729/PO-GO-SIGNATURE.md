@@ -1,7 +1,9 @@
 # Product Owner — production gate GO signature
 
+> **历史文件。** 10:03 曾签 GO → 10:31 NO-GO → **当前有效 = `GO` @ 10:58**（[`OPERATIONAL-GO-SIGNATURE.md`](./OPERATIONAL-GO-SIGNATURE.md)，「P5 沿用，GO」）。本文件仅保留 10:03 签字证据。
+
 **PO_GO_AT:** 2026-07-29T10:03:20+08:00  
-**Decision:** **`GO`** (with residual conditions below)  
+**Decision（历史）：** **`GO`**（已被 10:31 更正 **supersede → `NO-GO`**）  
 **Verbatim intent:** 「接受 §5 替代并签字 GO」  
 **Signer:** Product Owner（用户会话正式决策）  
 **ExecutedBy:** Codex agent（docs-only；未改生产开关 / 未部署 / 未改价）
@@ -13,7 +15,7 @@
 | §5 overall | **`PASS-WITH-SUBSTITUTIONS` ACCEPTED** | 清单 1–10 已关；见 `section5-probes/`、`HANDOFF-ROLE-EXECUTION-PACK.md` §5 |
 | §5 #5 substitution | **ACCEPTED** | 幂等证明 = 已履约两单服务端 `POST .../sync`×2；**不是**微信 push 风暴并发压测 |
 | §5 sandbox 真机付缺失 | **ACCEPTED** | 由生产 ¥1 TEST MEMBER+AGENT 支付链路 ACCEPTED + `POLICY-NO-REAL-996.md` 覆盖；sandbox dry quote 窗已 PASS 并恢复 production |
-| Overall gate | **`GO`** | 最终签字栏已填；条件/残差见下 |
+| Overall gate | **历史 `GO` → 已 SUPERSEDED 为 `NO-GO`** | 10:03 曾签字；10:31 因安全硬阻断+现场未复核降级；见 `STATUS-NO-GO-RECONCILE.md` |
 
 ## Evidence basis (FULL SHAs — do not truncate)
 
@@ -58,14 +60,17 @@ NORMAL ¥996: `POLICY-NO-REAL-996.md` + `normal-996/`（WAIVED）。
 | 业务负责人 / Product Owner | **SIGNED GO** — 「接受 §5 替代并签字 GO」@ 2026-07-29T10:03:20+08:00 |
 | 发布负责人 | 用户授权代行（§1 local-immutable + §6 开关窗 DONE） |
 
-**最终决定：** `GO`  
-**决定时间：** 2026-07-29T10:03:20+08:00  
-**变更单号：** PO-GO-20260729-§5-SUBSTITUTIONS（用户 verbatim「接受 §5 替代并签字 GO」）
+**最终决定（历史）：** `GO` @ 2026-07-29T10:03:20+08:00  
+**当前有效决定：** `NO-GO` @ 2026-07-29T10:31:00+08:00（见 `STATUS-NO-GO-RECONCILE.md`）  
+**变更单号（历史）：** PO-GO-20260729-§5-SUBSTITUTIONS（用户 verbatim「接受 §5 替代并签字 GO」）  
+**更正单号：** NO-GO-20260729-SECURITY-RECONCILE
 
 ## Cross-links
 
-- `../../go-no-go-gate.md` — 总状态翻为 `GO`
-- `../../HANDOFF-ROLE-EXECUTION-PACK.md` — §5 签字 + §7 汇总翻为 `GO`
+- `STATUS-NO-GO-RECONCILE.md` — **当前唯一总状态真相源（NO-GO）**
+- `OWNER-TODO-NO-GO.md` — 负责人 P0–P6 待办
+- `../../go-no-go-gate.md` — 总状态已更正为 `NO-GO`
+- `../../HANDOFF-ROLE-EXECUTION-PACK.md` — §7 汇总已更正为 `NO-GO`
 - `section5-probes/README.md` — #5/#7/#8/#10 CLOSED
 - `repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md` — §1 PO ACCEPTED
 - `POLICY-NO-REAL-996.md` — NORMAL ¥996 WAIVE

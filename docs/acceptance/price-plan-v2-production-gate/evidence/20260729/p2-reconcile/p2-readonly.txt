@@ -1,0 +1,89 @@
+=== P2 READ-ONLY START 2026-07-29T10:52:19+0800 ===
+HOSTNAME=VM-0-11-centos
+FORBIDDEN: migrate / deploy / compose up --build / flag flip / wechat console
+
+A_CID=decf56063eb4
+A_CONFIG_IMAGE=local/xianzhi-ai-platform:a39485ef1
+A_RUNNING_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+A_EXPECTED_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+A_IMAGE_MATCH=EXACT
+A_GIT_EXPECTED=a39485ef159dabf348a71059a0e922af4894ab5a
+
+B_SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=true
+B_PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=true
+B_PRICE_PLAN_TEST_ENTRY_ENABLED=true
+B_WECHAT_VIRTUAL_PAY_ENV=production
+B_FLAGS_RESULT=PASS
+
+C_DB_NAME=zhiqiyun
+C_DB_USER=zhiqiyun_prod
+BEGIN
+    db    |    db_user    | is_replica | txn_ro 
+----------+---------------+------------+--------
+ zhiqiyun | zhiqiyun_prod | f          | on
+(1 row)
+
+            relname             | present 
+--------------------------------+---------
+ xz_price_plans                 | t
+ xz_price_plan_versions         | f
+ xz_price_plan_payment_bindings | t
+ xz_wechat_virtual_goods        | t
+ xz_price_plan_user_whitelist   | t
+ xz_order_price_quotes          | t
+(6 rows)
+
+ still_not_valid_097_100 
+-------------------------
+                       0
+(1 row)
+
+          table_name          |                  conname                   | contype | convalidated 
+------------------------------+--------------------------------------------+---------+--------------
+ xz_audit_logs                | ck_xz_audit_logs_pricing_required_100      | c       | t
+ xz_audit_logs                | ck_xz_audit_logs_pricing_result_100        | c       | t
+ xz_order_price_quotes        | ck_xz_order_price_quotes_whitelist_pin_100 | c       | t
+ xz_order_price_quotes        | fk_xz_order_price_quotes_whitelist_100     | f       | t
+ xz_orders                    | ck_xz_orders_snapshot_v2_097               | c       | t
+ xz_orders                    | fk_xz_orders_plan_version_097              | f       | t
+ xz_orders                    | fk_xz_orders_price_plan_097                | f       | t
+ xz_orders                    | fk_xz_orders_price_quote_097               | f       | t
+ xz_price_plans               | ck_xz_price_plans_audience_099             | c       | t
+ xz_price_plans               | ck_xz_price_plans_audience_rule_099        | c       | t
+ xz_price_plans               | ck_xz_price_plans_code_format_099          | c       | t
+ xz_price_plans               | ck_xz_price_plans_currency_099             | c       | t
+ xz_price_plans               | ck_xz_price_plans_default_state_099        | c       | t
+ xz_price_plans               | ck_xz_price_plans_test_scope_099           | c       | t
+ xz_price_plan_user_whitelist | ck_xz_price_plan_whitelist_enabled_100     | c       | t
+ xz_price_plan_user_whitelist | ck_xz_price_plan_whitelist_lifecycle_100   | c       | t
+ xz_wechat_virtual_goods      | ck_xz_wechat_goods_manual_confirmation_098 | c       | t
+ xz_wechat_virtual_goods      | ck_xz_wechat_goods_verification_expiry_098 | c       | t
+ xz_wechat_virtual_goods      | ck_xz_wechat_goods_verification_status_098 | c       | t
+(19 rows)
+
+           code           | status | enabled | is_default | sale_price_cents | price_type | environment 
+--------------------------+--------+---------+------------+------------------+------------+-------------
+ pp_agent_normal_prod_996 | ACTIVE | t       | t          |            99600 | NORMAL     | PRODUCTION
+ pp_agent_test_prod_entry | ACTIVE | t       | f          |              100 | TEST       | PRODUCTION
+(2 rows)
+
+    product_id     | platform_price_cents |  status   | environment 
+-------------------+----------------------+-----------+-------------
+ AGENT_JOIN_996    |                99600 | PUBLISHED | PRODUCTION
+ AGENT_JOIN_996    |                99600 | PUBLISHED | SANDBOX
+ AGENT_TEST_1YUAN  |                  100 | PUBLISHED | PRODUCTION
+ AGENT_TEST_1YUAN  |                  100 | PUBLISHED | SANDBOX
+ MEMBER_TEST_1YUAN |                  100 | PUBLISHED | PRODUCTION
+ MEMBER_TEST_1YUAN |                  100 | PUBLISHED | SANDBOX
+ MEMBER_YEAR_996   |                99600 | PUBLISHED | PRODUCTION
+ MEMBER_YEAR_996   |                99600 | PUBLISHED | SANDBOX
+(8 rows)
+
+ROLLBACK
+C_STILL_NOT_VALID_097_100=0
+C_AGENT_JOIN_996_CENTS=99600
+C_AGENT_TEST_1YUAN_CENTS=100
+C_RESULT=PASS
+P2_OVERALL=PASS
+=== P2 READ-ONLY END 2026-07-29T10:52:20+0800 ===
+EVIDENCE_DIR=/tmp/p2-reconcile-20260729

@@ -1,8 +1,12 @@
 # 会员/代理价格方案 V2 — 角色交接执行包
 
-> **当前总状态 = `GO`（2026-07-29T10:03:20+08:00 Product Owner 签字）。**
+> **当前总状态 = `GO`（2026-07-29T10:58:00+08:00；用户「P5 沿用，GO」）。**  
+> **真相源：** `evidence/20260729/OPERATIONAL-GO-SIGNATURE.md`  
+> P0–P6 已关。本签字未改开关/未部署。P0 密钥不轮换残余已接受。  
+> **三 SHA 分写：** 镜像 `a39485ef159dabf348a71059a0e922af4894ab5a` / PO 文档 `719f898c5ca160348ca5d597f9644901d0a60242` / 证据 HEAD `cd9b88abcdf79227d9e65333049dd6f97e0fdb8a`。  
+> 历史路径：10:03 PO GO → 10:31 NO-GO → 10:58 运营 GO。
 >
-> **2026-07-29T10:03:20+08 PO ACCEPTED §5 `PASS-WITH-SUBSTITUTIONS` 并签字 GO：** 接受（1）幂等 = 服务端 re-sync×2（非微信 push 风暴）；（2）无 sandbox 真机付（由生产 ¥1 TEST + 政策覆盖）。总门禁 **`GO`**，条件/残差见 `evidence/20260729/PO-GO-SIGNATURE.md` 与 `go-no-go-gate.md` 最终签字块（registry 长期标准；§1 local-immutable；NORMAL ¥996 WAIVED；phase3 OUT OF SCOPE）。本动作 **未**改 V2 开关 / pay env / 价格，**未**部署。
+> **历史 2026-07-29T10:03:20+08 PO ACCEPTED §5 并曾签字 GO：** 其后被 10:31 NO-GO supersede；现由 10:58 运营 GO 接续（P5 沿用 §5 替代）。
 >
 > **2026-07-29T09:57+08 §5 #5/#7/#8/#10 CLOSED：** 生产安全探针 PASS（无 ¥996 收费；pay env 保持 production）。#5 re-sync×2 幂等；#7 quote 后白名单失效 → 403 `PRICE_PLAN_NOT_ELIGIBLE`（旧 entry EXPIRED immutable → admin 重建 ACTIVE）；#8 binding +1 分 → 409 `PRICE_PLAN_WECHAT_PRICE_MISMATCH` 后恢复；#10 V1 status 200 + legacy TOKEN create 201。证据 `evidence/20260729/section5-probes/`。§5 = **`PASS-WITH-SUBSTITUTIONS`**（PO ACCEPTED）。
 >
@@ -380,7 +384,7 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | pricing health blockedIssueCount | **0**（2026-07-29 05:44+08 复核；`TEST_WHITELIST_MISSING` 已清；status=HEALTHY） |
 | TEST 白名单账号 | `user_000002` / `demo@xianzhi.ai` / 演示用户（两端同人；既有支付测试账号，微信已绑定） |
 | dry quote | MEMBER/AGENT NORMAL **201 @99600**（PRODUCTION；未下单；quoteId 脱敏） |
-| 最终 GO/NO-GO | **`GO`**（2026-07-29T10:03:20+08；PO「接受 §5 替代并签字 GO」；条件见 `PO-GO-SIGNATURE.md`） |
+| 最终 GO/NO-GO | **`GO`**（2026-07-29T10:58；「P5 沿用，GO」；见 `OPERATIONAL-GO-SIGNATURE.md`） |
 
 事故回退顺序见 `go-no-go-gate.md`「事故回退顺序」。
 
@@ -400,12 +404,13 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 生产迁移 097–100 | **APPLIED** | `evidence/20260729/prod-migrate/` | 2026-07-29 |
 | V2 业务行 seed | **DONE** | PRODUCTION 4 + SANDBOX 4 | 2026-07-29 |
 | NORMAL ¥996 真机付 | **WAIVED** | 政策：`POLICY-NO-REAL-996.md`；替代 `normal-996/` | 2026-07-29 |
-| 最终门禁签字 | **`GO`** | `PO-GO-SIGNATURE.md`；`go-no-go-gate.md` 最终签字栏已填 | 2026-07-29T10:03:20+08 |
+| 最终门禁签字 | **`GO`** | `OPERATIONAL-GO-SIGNATURE.md`；P0–P6 已关 | 2026-07-29T10:58:00+08 |
+| P0 敏感凭据入仓 | **CLOSED-WITH-ACCEPTED-RESIDUAL** | 工作区已脱敏；不轮换密钥；见 `P0-SECRETS-REDACTION.md` | 2026-07-29T10:40:00+08 |
 
 **汇总规则：** 任一项空、NO-GO 或不完整 → 总状态保持 **`NO-GO`**。全部技术 PASS 且最终签字栏签署后 → **`GO`**。
 
-**本轮结论（2026-07-29T10:03:20+08）：总状态 = `GO`。**  
-§1 local-immutable（PO ACCEPTED）+ §4 PASS + §5 **PASS-WITH-SUBSTITUTIONS**（PO ACCEPTED：re-sync 非 push 风暴；无 sandbox 真机付）。最终签字栏已填。条件/残差：registry 长期标准；禁止 `--build`/retag；NORMAL ¥996 WAIVED；phase3 OUT OF SCOPE。pay env=production；本签字动作 **未改 V2 开关**、未部署。
+**本轮结论（2026-07-29T10:58:00+08）：总状态 = `GO`。**  
+P0–P6 关闭；用户「P5 沿用，GO」。现网开关未改；镜像 `a39485ef…` EXACT。条件/残差见 `OPERATIONAL-GO-SIGNATURE.md`。
 
 ---
 
@@ -418,7 +423,8 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 | 强制等式（quote 层） | PRODUCTION+SANDBOX dry quote MEMBER/AGENT NORMAL **201@99600** | 已覆盖；非真机付 |
 | 沙箱真机付 | 支付管线已由 ¥1 ACCEPTED；sandbox **dry quote** PASS | 可选；非本轮必须 |
 | 幂等/白名单失效/差价/V1 回归专项 | §5 #5/#7/#8/#10 | **CLOSED** — `section5-probes/` |
-| §5 替代项 PO 接受 + 最终门禁签字 | **CLOSED → GO** | PO 2026-07-29T10:03:20+08；见 `PO-GO-SIGNATURE.md` |
+| §5 替代项 PO 接受 + 最终门禁签字 | **CLOSED → GO** | 10:58 运营 GO；P5 沿用；见 `OPERATIONAL-GO-SIGNATURE.md` |
+| 敏感凭据入仓（container-inspect） | **CLOSED-WITH-ACCEPTED-RESIDUAL** | 工作区脱敏；不轮换；历史残余已接受 |
 | offerId/mode↔AppKey | 双签已确认 | 已双签 |
 | phase3 退款/补偿/补发 | 本包不做 | 业务+应用 |
 
@@ -429,4 +435,4 @@ psql 'service=xianzhi_prod_readonly' -X -v ON_ERROR_STOP=1 `
 1. 把本文件 + 同目录手册发给三位负责人（发布 / DBA / 微信）；QA 跟微信领 §5。  
 2. 各自只改自己的回填表与 `evidence/<date>/` 产出，完成后通知协调人勾 §7。  
 3. **不要**在未冻结前让 DBA 用工作树 SQL；**不要**在 §5 前开生产开关。  
-4. 自 2026-07-29T10:03:20+08 起，对外口径：**GO**（条件/残差见 `PO-GO-SIGNATURE.md`）。此前未签字期间统一为 NO-GO。
+4. 自 2026-07-29T10:58:00+08 起，对外口径：**GO**（真相源 `OPERATIONAL-GO-SIGNATURE.md`）。遵守 GO 条件/残余；禁止盲部署与混用三 SHA。
