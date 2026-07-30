@@ -61,3 +61,80 @@ func TestInspirationAdminRequiresAuditBeforePublish(t *testing.T) {
 		t.Fatalf("publish = %d %s", publish.Code, publish.Body.String())
 	}
 }
+
+func TestInspirationPhotoRestorationContractRoundTrips(t *testing.T) {
+	handler := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()}).Handler
+	token := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	body := bytes.NewBufferString(`{
+		"title":"Old photo restoration",
+		"description":"Restore treasured memories",
+		"contentType":"image",
+		"categoryId":"inspiration-category-portrait",
+		"coverUrl":"https://example.com/restoration-cover.webp",
+		"prompt":"Restore the uploaded old photo while preserving identity",
+		"modelId":"mock-standard",
+		"scenarioCode":"photo_restoration",
+		"displayConfig":{
+			"comparisonMode":"side_by_side",
+			"beforeUrl":"https://example.com/before.jpg",
+			"afterUrl":"https://example.com/after.jpg"
+		},
+		"inputRequirements":{
+			"referenceImageRequired":true
+		},
+		"presetConfig":{
+			"colorMode":"natural",
+			"identityProtection":true
+		},
+		"referenceAssets":["https://example.com/example-only.jpg"],
+		"platforms":["miniprogram"],
+		"sourceAuthorized":true
+	}`)
+	created := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/inspirations", body, token)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+	var payload struct {
+		Item map[string]any `json:"item"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode create: %v %s", err, created.Body.String())
+	}
+	if got := payload.Item["scenarioCode"]; got != "photo_restoration" {
+		t.Fatalf("scenarioCode = %#v, want photo_restoration", got)
+	}
+	display, ok := payload.Item["displayConfig"].(map[string]any)
+	if !ok || display["comparisonMode"] != "side_by_side" || display["beforeUrl"] == "" || display["afterUrl"] == "" {
+		t.Fatalf("displayConfig = %#v", payload.Item["displayConfig"])
+	}
+	requirements, ok := payload.Item["inputRequirements"].(map[string]any)
+	if !ok || requirements["referenceImageRequired"] != true || requirements["referenceImageMin"] != float64(1) || requirements["referenceImageMax"] != float64(1) {
+		t.Fatalf("inputRequirements = %#v", payload.Item["inputRequirements"])
+	}
+	if refs, ok := payload.Item["referenceAssets"].([]any); !ok || len(refs) != 0 {
+		t.Fatalf("referenceAssets = %#v, want empty for user-upload-required template", payload.Item["referenceAssets"])
+	}
+}
+
+func TestInspirationRejectsInvalidReferenceImageRange(t *testing.T) {
+	handler := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()}).Handler
+	token := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
+	body := bytes.NewBufferString(`{
+		"title":"Invalid restoration template",
+		"contentType":"image",
+		"categoryId":"inspiration-category-portrait",
+		"coverUrl":"https://example.com/cover.webp",
+		"prompt":"Restore photo",
+		"inputRequirements":{
+			"referenceImageRequired":true,
+			"referenceImageMin":2,
+			"referenceImageMax":1
+		},
+		"platforms":["miniprogram"],
+		"sourceAuthorized":true
+	}`)
+	created := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/inspirations", body, token)
+	if created.Code != http.StatusBadRequest {
+		t.Fatalf("invalid reference image range = %d %s, want 400", created.Code, created.Body.String())
+	}
+}
