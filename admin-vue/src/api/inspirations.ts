@@ -4,7 +4,9 @@ export type InspirationContentType = "image" | "video" | "ppt";
 export interface InspirationTemplate {
   id: string; tenantId: string; title: string; description: string; contentType: InspirationContentType;
   categoryId: string; categoryName?: string; coverUrl: string; thumbnailUrl?: string; resultUrl?: string;
-  prompt: string; negativePrompt: string; modelId: string; parameters: Record<string, unknown>;
+  prompt: string; negativePrompt: string; modelId: string; scenarioCode?: string;
+  displayConfig?: Record<string, unknown>; inputRequirements?: Record<string, unknown>; presetConfig?: Record<string, unknown>;
+  parameters: Record<string, unknown>;
   referenceAssets: unknown[]; platforms: string[]; tags: string[]; applicableTenantIds: string[];
   featured: boolean; hot: boolean; pinned: boolean; sort: number; status: string; auditStatus: string;
   auditNote?: string; startTime?: string; endTime?: string; version: number; sourceAssetId?: string;
