@@ -854,7 +854,12 @@ func writeJSON(w http.ResponseWriter, value any) {
 func writeError(w http.ResponseWriter, status int, err error) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	payload := map[string]any{"error": err.Error()}
+	if coded, ok := err.(interface{ BusinessCode() string }); ok {
+		payload["code"] = coded.BusinessCode()
+		payload["message"] = err.Error()
+	}
+	_ = json.NewEncoder(w).Encode(payload)
 }
 
 func staticIndex(root string) http.HandlerFunc {

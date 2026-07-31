@@ -104,6 +104,20 @@ export type GenerationTaskType =
   | "PPT_GENERATION"
   | string;
 
+export type VideoGenerationMode = "TEXT_TO_VIDEO" | "IMAGE_TO_VIDEO";
+
+export interface VideoModelCapabilities {
+  supportsTextToVideo: boolean;
+  supportsImageToVideo: boolean;
+  supportsFirstFrame: boolean;
+  supportsLastFrame: boolean;
+  maxReferenceImages: number;
+  supportedDurations: number[];
+  supportedResolutions: string[];
+  supportedAspectRatios: string[];
+  supportedParameters?: string[];
+}
+
 export interface ApiEnvelope<T> {
   code?: number | string;
   message?: string;

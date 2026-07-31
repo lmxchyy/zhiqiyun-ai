@@ -61,6 +61,12 @@ def _bool(value, fallback=False):
     return fallback
 
 
+def _video_aspect_ratio(params):
+    if not isinstance(params, dict):
+        return "16:9"
+    return _text(params.get("aspect_ratio", params.get("ratio")), "16:9")
+
+
 def _image_items(image_urls):
     items = []
     if not isinstance(image_urls, list):
@@ -120,7 +126,7 @@ def main() -> int:
 
     timeout_seconds = _number(req.get("timeoutSeconds"), 900)
     duration = _number(params.get("duration"), 5)
-    ratio = _text(params.get("ratio"), "16:9")
+    ratio = _video_aspect_ratio(params)
     resolution = _text(params.get("resolution"), "720p")
     generate_audio = _bool(params.get("generate_audio", params.get("generateAudio")), False)
 

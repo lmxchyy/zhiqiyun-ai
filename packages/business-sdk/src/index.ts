@@ -13,6 +13,13 @@ import { createRoleWorkbenchSdk } from "./role-workbench";
 import type { BusinessSdk } from "./types";
 
 export * from "./files";
+export {
+  VideoGenerationValidationError,
+  confirmResolvedVideoModel,
+  normalizeVideoModelCapabilities,
+  reconcileVideoGenerationState,
+  taskRequestFromDraft,
+} from "./mappers";
 
 export type {
   BillingOrderInput,
