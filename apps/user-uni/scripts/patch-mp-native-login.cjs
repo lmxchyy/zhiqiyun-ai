@@ -1434,6 +1434,7 @@ function rewriteGeneratedUserRoutes(directory) {
 }
 
 const splitPackageRoots = [
+  "pages/inspiration",
   "pages/enterprise",
   "pages/promotion",
   "pages/agent",

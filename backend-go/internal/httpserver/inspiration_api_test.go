@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.6 seconds
-Output:
 package httpserver
 
 import (
@@ -144,4 +141,3 @@ func TestInspirationRejectsInvalidReferenceImageRange(t *testing.T) {
 		t.Fatalf("invalid reference image range = %d %s, want 400", created.Code, created.Body.String())
 	}
 }
-

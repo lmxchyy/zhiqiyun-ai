@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.4 seconds
-Output:
 package httpserver
 
 import (
@@ -674,4 +671,3 @@ func activeInspirationNow(item inspirationTemplate) bool {
 	}
 	return true
 }
-
