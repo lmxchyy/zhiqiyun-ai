@@ -18,6 +18,7 @@ const (
 
 var videoCoreParameters = []string{"duration", "resolution", "aspect_ratio"}
 var videoOptionalProviderParameters = []string{"fps", "generate_audio", "motion_strength", "camera_movement"}
+var videoUserParameterWhitelist = append(append([]string(nil), videoCoreParameters...), videoOptionalProviderParameters...)
 
 type videoGenerationValidationError struct {
 	code    string
@@ -262,7 +263,16 @@ func applyAIModelVideoCapabilitiesMutation(model *adminAIModel, mutation adminAI
 func applyVideoCapabilitiesToSchema(schema adminAIParameterSchemaJSON, capabilities adminVideoModelCapabilities) adminAIParameterSchemaJSON {
 	filtered := make([]adminAIParameterField, 0, len(schema.Fields))
 	for _, field := range schema.Fields {
-		switch strings.ToLower(strings.TrimSpace(field.Key)) {
+		key := strings.ToLower(strings.TrimSpace(field.Key))
+		if key == "ratio" {
+			key = "aspect_ratio"
+			field.Key = key
+		}
+		if videoParameterSupported(videoUserParameterWhitelist, key) &&
+			(!field.Visible || !field.UserEditable || !videoParameterSupported(capabilities.SupportedParameters, key)) {
+			continue
+		}
+		switch key {
 		case "reference_image", "reference_images", "image", "image_url", "image_urls":
 			continue
 		case "first_frame":
@@ -284,14 +294,9 @@ func applyVideoCapabilitiesToSchema(schema adminAIParameterSchemaJSON, capabilit
 			if len(capabilities.SupportedResolutions) > 0 {
 				field.Options = stringOptionsToAny(capabilities.SupportedResolutions)
 			}
-		case "ratio", "aspect_ratio":
-			field.Key = "aspect_ratio"
+		case "aspect_ratio":
 			if len(capabilities.SupportedAspectRatios) > 0 {
 				field.Options = stringOptionsToAny(capabilities.SupportedAspectRatios)
-			}
-		case "fps", "generate_audio", "motion_strength", "camera_movement":
-			if !videoParameterSupported(capabilities.SupportedParameters, field.Key) {
-				continue
 			}
 		}
 		filtered = append(filtered, field)
@@ -355,6 +360,9 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 		return newVideoGenerationValidationError("VIDEO_MODE_INVALID", "视频生成模式无效，请选择文生视频或图生视频")
 	}
 	capabilities := resolveVideoModelCapabilities(resolved.Model, resolved.Schema.SchemaJSON)
+	if err := validateEditableVideoParameters(req.Params, resolved, capabilities); err != nil {
+		return err
+	}
 	images := collectVideoImageParameters(req.Params)
 	firstFrame := strings.TrimSpace(parameterString(req.Params, "first_frame"))
 	lastFrame := strings.TrimSpace(parameterString(req.Params, "last_frame"))
@@ -418,6 +426,44 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 				fmt.Sprintf("当前视频 Provider 不支持参数 %s", key),
 			)
 		}
+	}
+	return nil
+}
+
+func validateEditableVideoParameters(parameters map[string]any, resolved resolvedModuleSchema, capabilities adminVideoModelCapabilities) error {
+	if len(parameters) == 0 {
+		return nil
+	}
+	editable := map[string]bool{}
+	for _, field := range resolved.FinalSchema.Fields {
+		key := strings.ToLower(strings.TrimSpace(field.Key))
+		if key == "ratio" {
+			key = "aspect_ratio"
+		}
+		if videoParameterSupported(videoUserParameterWhitelist, key) &&
+			field.Visible && field.UserEditable &&
+			videoParameterSupported(capabilities.SupportedParameters, key) {
+			editable[key] = true
+		}
+	}
+	for key := range parameters {
+		canonical := strings.ToLower(strings.TrimSpace(key))
+		if canonical == "ratio" {
+			canonical = "aspect_ratio"
+		}
+		if !videoParameterSupported(videoUserParameterWhitelist, canonical) || editable[canonical] {
+			continue
+		}
+		if videoParameterSupported(capabilities.SupportedParameters, canonical) {
+			return newVideoGenerationValidationError(
+				"VIDEO_PARAMETER_NOT_EDITABLE",
+				fmt.Sprintf("当前模型不允许用户配置参数 %s", canonical),
+			)
+		}
+		return newVideoGenerationValidationError(
+			"VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED",
+			fmt.Sprintf("当前视频 Provider 不支持参数 %s", canonical),
+		)
 	}
 	return nil
 }

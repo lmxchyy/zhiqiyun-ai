@@ -310,6 +310,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/officecli/documents", wrapF(api.createOfficeCLIDocument))
 	v1.GET("/officecli/documents/:fileName/download", wrapF(api.downloadOfficeCLIDocument))
 	v1.GET("/generation-tasks", wrapF(api.listGenerationTasks))
+	v1.POST("/generation-tasks/estimate", wrapF(api.estimateVideoGenerationCost))
 	v1.GET("/generation-tasks/:id", wrapF(api.getGenerationTask))
 	v1.POST("/generation-tasks/:id/retry", wrapF(api.retryGenerationTask))
 	v1.POST("/generation-tasks/:id/cancel", wrapF(api.cancelGenerationTask))

@@ -14,6 +14,18 @@ type businessCodeError interface {
 }
 
 func videoValidationTestResolved(capabilities adminVideoModelCapabilities) resolvedModuleSchema {
+	fields := []adminAIParameterField{
+		{Key: "duration", Type: "select", Options: []any{float64(4), float64(5), float64(10), float64(15)}, Visible: true, UserEditable: true},
+		{Key: "resolution", Type: "select", Options: []any{"480p", "720p", "1080p", "4k"}, Visible: true, UserEditable: true},
+		{Key: "aspect_ratio", Type: "select", Options: []any{"16:9", "9:16", "1:1"}, Visible: true, UserEditable: true},
+		{Key: "fps", Type: "select", Options: []any{float64(24), float64(30)}, Visible: true, UserEditable: true},
+		{Key: "generate_audio", Type: "switch", Visible: true, UserEditable: true},
+		{Key: "motion_strength", Type: "select", Options: []any{"low", "medium", "high"}, Visible: true, UserEditable: true},
+		{Key: "camera_movement", Type: "select", Options: []any{"static", "pan", "push", "pull"}, Visible: true, UserEditable: true},
+		{Key: "first_frame", Type: "image_upload", Visible: true, UserEditable: true},
+		{Key: "last_frame", Type: "image_upload", Visible: true, UserEditable: true},
+	}
+	schema := adminAIParameterSchemaJSON{Fields: fields}
 	return resolvedModuleSchema{
 		Module: adminAIModule{ModuleCode: moduleVideoGeneration},
 		Model: adminAIModel{
@@ -22,17 +34,8 @@ func videoValidationTestResolved(capabilities adminVideoModelCapabilities) resol
 			ModuleCode:        moduleVideoGeneration,
 			VideoCapabilities: &capabilities,
 		},
-		Schema: adminAIParameterSchema{SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
-			{Key: "duration", Type: "select", Options: []any{float64(4), float64(5), float64(10), float64(15)}},
-			{Key: "resolution", Type: "select", Options: []any{"480p", "720p", "1080p", "4k"}},
-			{Key: "aspect_ratio", Type: "select", Options: []any{"16:9", "9:16", "1:1"}},
-			{Key: "fps", Type: "select", Options: []any{float64(24), float64(30)}},
-			{Key: "generate_audio", Type: "switch"},
-			{Key: "motion_strength", Type: "select", Options: []any{"low", "medium", "high"}},
-			{Key: "camera_movement", Type: "select", Options: []any{"static", "pan", "push", "pull"}},
-			{Key: "first_frame", Type: "image_upload"},
-			{Key: "last_frame", Type: "image_upload"},
-		}}},
+		Schema:      adminAIParameterSchema{SchemaJSON: schema},
+		FinalSchema: applyVideoCapabilitiesToSchema(schema, capabilities),
 	}
 }
 
@@ -115,6 +118,37 @@ func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
 			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
 			err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
 			requireVideoValidationCode(t, err, "VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED")
+		})
+	}
+}
+
+func TestVideoGenerationRejectsSchemaHiddenOrNonEditableParameters(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value any
+		edit  func(*adminAIParameterField)
+	}{
+		{
+			name: "hidden resolution", key: "resolution", value: "720p",
+			edit: func(field *adminAIParameterField) { field.Visible = false },
+		},
+		{
+			name: "locked duration", key: "duration", value: float64(5),
+			edit: func(field *adminAIParameterField) { field.UserEditable = false },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := videoValidationTestResolved(videoValidationTestCapabilities())
+			for index := range resolved.FinalSchema.Fields {
+				if resolved.FinalSchema.Fields[index].Key == tt.key {
+					tt.edit(&resolved.FinalSchema.Fields[index])
+				}
+			}
+			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
+			err := validateVideoGenerationRequest(&request, resolved)
+			requireVideoValidationCode(t, err, "VIDEO_PARAMETER_NOT_EDITABLE")
 		})
 	}
 }
@@ -232,7 +266,7 @@ func TestResolveModuleSchemaIntersectsSchemaWithRealProviderProtocol(t *testing.
 func TestLegacyVideoSchemaWritesCanonicalAspectRatioToTaskParams(t *testing.T) {
 	resolved := videoValidationTestResolved(videoValidationTestCapabilities())
 	resolved.Schema.SchemaJSON.Fields = []adminAIParameterField{
-		{Key: "ratio", Type: "select", Default: "9:16", Options: []any{"16:9", "9:16"}},
+		{Key: "ratio", Type: "select", Default: "9:16", Options: []any{"16:9", "9:16"}, Visible: true, UserEditable: true},
 	}
 	resolved.FinalSchema = applyVideoCapabilitiesToSchema(resolved.Schema.SchemaJSON, videoValidationTestCapabilities())
 	req := generation.CreateRequest{ModuleCode: moduleVideoGeneration, Params: map[string]any{}}
