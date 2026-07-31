@@ -14,6 +14,16 @@ import type { BusinessSdk } from "./types";
 
 export * from "./files";
 export {
+  VIDEO_PARAMETER_KEYS,
+  buildVideoSubmissionParameters,
+  deriveEditableVideoFields,
+  transitionVideoParameterValues,
+} from "./videoParameters";
+export type {
+  EditableVideoField,
+  VideoParameterKey,
+} from "./videoParameters";
+export {
   VideoGenerationValidationError,
   confirmResolvedVideoModel,
   normalizeVideoModelCapabilities,
