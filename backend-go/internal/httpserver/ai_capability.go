@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 )
 
 const (
@@ -644,12 +645,30 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	finalSchema := applyLimitToSchema(schema.SchemaJSON, limit.LimitJSON)
 	if moduleCode == moduleVideoGeneration {
 		capabilities := resolveVideoModelCapabilities(model, schema.SchemaJSON)
+		capabilities.SupportedParameters = resolveVideoProviderSupportedParameters(data, model)
 		model.VideoCapabilities = &capabilities
 		model.CapabilityCode = syncVideoCapabilityCodes(model.CapabilityCode, capabilities)
 		model.CapabilityCodeCamel = append([]string(nil), model.CapabilityCode...)
 		finalSchema = applyVideoCapabilitiesToSchema(finalSchema, capabilities)
 	}
 	return resolvedModuleSchema{Module: module, Model: model, Schema: schema, FinalSchema: finalSchema, Limit: limit, BillingRule: rule}, nil
+}
+
+func resolveVideoProviderSupportedParameters(data adminPlatformData, model adminAIModel) []string {
+	if strings.EqualFold(strings.TrimSpace(model.ModelName), "mock-video") {
+		return []string{"duration", "resolution", "aspect_ratio", "fps", "generate_audio", "motion_strength", "camera_movement"}
+	}
+	channel, routed, err := selectAPIChannelForConfiguredModel(data, model.ModelName)
+	if err != nil || !routed || strings.EqualFold(strings.TrimSpace(channel.Protocol), "cloudbase-function") {
+		return append([]string(nil), videoCoreParameters...)
+	}
+	return videoprovider.OpenAICompatibleSupportedParameters(videoprovider.OpenAICompatibleOptions{
+		Code:     channel.ID,
+		BaseURL:  channel.BaseURL,
+		Model:    model.ModelName,
+		Models:   channel.Models,
+		Endpoint: channel.VideoGenerationEndpoint,
+	}, model.ModelName)
 }
 
 func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[string]any {
@@ -670,14 +689,28 @@ func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[str
 }
 
 func validateGenerationParams(req generation.CreateRequest, resolved resolvedModuleSchema) error {
+	schema := resolved.Schema.SchemaJSON
+	if canonicalModuleCode(resolved.Module.ModuleCode) == moduleVideoGeneration {
+		schema = resolved.FinalSchema
+		schema.Fields = append([]adminAIParameterField(nil), schema.Fields...)
+		for index := range schema.Fields {
+			if strings.EqualFold(strings.TrimSpace(schema.Fields[index].Key), "first_frame") {
+				// IMAGE_TO_VIDEO presence is mode-dependent and is enforced by
+				// validateVideoGenerationRequest, not by the shared schema pass.
+				schema.Fields[index].Required = false
+			}
+		}
+	}
 	fields := map[string]adminAIParameterField{}
-	for _, field := range resolved.Schema.SchemaJSON.Fields {
+	for _, rawField := range schema.Fields {
+		field := canonicalGenerationSchemaField(resolved.Module.ModuleCode, rawField)
 		fields[field.Key] = field
 		if _, ok := req.Params[field.Key]; !ok && field.Default != nil {
 			req.Params[field.Key] = field.Default
 		}
 	}
-	for _, field := range resolved.Schema.SchemaJSON.Fields {
+	for _, rawField := range schema.Fields {
+		field := canonicalGenerationSchemaField(resolved.Module.ModuleCode, rawField)
 		value, ok := valueForField(req, field.Key)
 		if field.Required && !hasNonEmptyValue(value) {
 			return fmt.Errorf("parameter %s is required", field.Key)
@@ -699,6 +732,19 @@ func validateGenerationParams(req generation.CreateRequest, resolved resolvedMod
 		return fmt.Errorf("parameter %s is not allowed by schema for module %s", key, resolved.Module.ModuleCode)
 	}
 	return nil
+}
+
+func canonicalGenerationSchemaField(moduleCode string, field adminAIParameterField) adminAIParameterField {
+	if canonicalModuleCode(moduleCode) != moduleVideoGeneration {
+		return field
+	}
+	switch strings.TrimSpace(field.Key) {
+	case "ratio":
+		field.Key = "aspect_ratio"
+	case "generateAudio":
+		field.Key = "generate_audio"
+	}
+	return field
 }
 
 func validateFieldValue(field adminAIParameterField, value any) error {
@@ -1086,6 +1132,13 @@ func normalizeRequestParamAliases(req *generation.CreateRequest) {
 				req.Params["aspect_ratio"] = ratio
 			}
 		}
+		delete(req.Params, "ratio")
+		if _, ok := req.Params["generate_audio"]; !ok {
+			if generateAudio, exists := req.Params["generateAudio"]; exists {
+				req.Params["generate_audio"] = generateAudio
+			}
+		}
+		delete(req.Params, "generateAudio")
 	}
 }
 

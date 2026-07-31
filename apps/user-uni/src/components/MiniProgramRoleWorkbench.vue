@@ -730,7 +730,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
 import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
 import { ApiClientError } from "@xianzhi/api-client";
-import { normalizeVideoModelCapabilities } from "@xianzhi/business-sdk";
+import {
+  confirmResolvedVideoModel,
+  normalizeVideoModelCapabilities,
+} from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 
 const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
@@ -2533,32 +2536,48 @@ function constrainedSchemaNumber(schema: AnyRecord, key: string, requested: numb
   return value;
 }
 
+function confirmVideoModelSwitch(message: string): Promise<boolean> {
+  return new Promise(resolve => {
+    uni.showModal({
+      content: message,
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    });
+  });
+}
+
 async function resolveBackendGenerationConfig(
   mode: "image" | "video",
   fallback: string,
-): Promise<BackendGenerationConfig> {
+): Promise<BackendGenerationConfig | null> {
   const moduleCode = mode === "video" ? "video_generation" : "image_generation";
   const loadSchema = (modelName = "") => api<AnyRecord>(
     `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
   );
   try {
     const schema = await loadSchema(fallback);
+    const resolvedModel = rowString(schema, "model_name", "modelName") || fallback;
+    const model = mode === "video"
+      ? await confirmResolvedVideoModel(fallback, resolvedModel, confirmVideoModelSwitch)
+      : resolvedModel;
+    if (!model) return null;
     return {
-      model: rowString(schema, "model_name", "modelName") || fallback,
+      model,
       schema,
       videoCapabilities: moduleSchemaVideoCapabilities(schema),
     };
-  } catch (preferredModelError) {
+  } catch {
     try {
       const schema = await loadSchema();
       const availableModel = rowString(schema, "model_name", "modelName");
       if (availableModel) {
-        console.warn("[创作模型自动回退]", { moduleCode, fallback, availableModel, preferredModelError });
-        return { model: availableModel, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
+        const model = mode === "video"
+          ? await confirmResolvedVideoModel(fallback, availableModel, confirmVideoModelSwitch)
+          : availableModel;
+        if (!model) return null;
+        return { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
       }
-    } catch (defaultModelError) {
-      console.warn("[创作模型预检降级]", { moduleCode, fallback, preferredModelError, defaultModelError });
-    }
+    } catch {}
     return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
   }
 }
@@ -2570,7 +2589,11 @@ watch(
     if (mode !== "video") return;
     const sequence = ++videoCapabilityLoadSequence;
     const config = await resolveBackendGenerationConfig("video", model);
+    if (!config) return;
     if (sequence !== videoCapabilityLoadSequence || creationMode.value !== "video") return;
+    if (config.model && config.model !== model) {
+      restoredCreationParams.value.model = config.model;
+    }
     applyVideoModelCapabilities(config.videoCapabilities, Boolean(previous && previous[1] !== model));
   },
   { immediate: true },
@@ -2643,6 +2666,7 @@ async function submitCreation(prompt: string) {
         mode,
         activeCreationModel.value,
       );
+      if (!generationConfig) throw new Error("已取消切换模型");
       const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
       if (mode === "video") {
         applyVideoModelCapabilities(generationConfig.videoCapabilities, true);

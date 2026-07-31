@@ -660,6 +660,7 @@ type adminVideoModelCapabilities struct {
 	SupportedDurations    []int    `json:"supported_durations,omitempty"`
 	SupportedResolutions  []string `json:"supported_resolutions,omitempty"`
 	SupportedAspectRatios []string `json:"supported_aspect_ratios,omitempty"`
+	SupportedParameters   []string `json:"supported_parameters"`
 }
 
 type videoCaps = adminVideoModelCapabilities

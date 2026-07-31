@@ -16,6 +16,15 @@ const textOnlyVideoCapabilities = {
   supportedDurations: [5],
   supportedResolutions: ["720p"],
   supportedAspectRatios: ["16:9"],
+  supportedParameters: [
+    "duration",
+    "resolution",
+    "aspect_ratio",
+    "fps",
+    "generate_audio",
+    "motion_strength",
+    "camera_movement",
+  ],
 };
 
 const dualVideoCapabilities = {
@@ -122,7 +131,7 @@ test("provider output metadata is not replayed as generation parameters", () => 
 test("explicit text-to-video request never carries image fields", () => {
   const request = taskRequestFromDraft(videoDraft({
     videoMode: "TEXT_TO_VIDEO",
-    parameters: { motion_strength: "medium" },
+    parameters: { motion_strength: "medium", generate_audio: true },
   }));
 
   assert.equal(request.type, "TEXT_TO_VIDEO");
@@ -222,7 +231,73 @@ test("legacy capability defaults are safe and do not open image-to-video", () =>
     supportedDurations: [],
     supportedResolutions: [],
     supportedAspectRatios: [],
+    supportedParameters: ["duration", "resolution", "aspect_ratio"],
   });
+});
+
+test("video request omits optional parameters that the Provider cannot transmit", () => {
+  const request = taskRequestFromDraft(videoDraft({
+    videoCapabilities: {
+      ...dualVideoCapabilities,
+      supportedParameters: ["duration", "resolution", "aspect_ratio"],
+    },
+    parameters: {
+      fps: 30,
+      generate_audio: true,
+      motion_strength: "high",
+      camera_movement: "push",
+    },
+  }));
+
+  assert.deepEqual(request.params, {
+    duration: 5,
+    resolution: "720p",
+    aspect_ratio: "16:9",
+  });
+});
+
+test("video request preserves every supported canonical user selection", () => {
+  const cases = [
+    { aspectRatio: "16:9", resolution: "480p", duration: 4, fps: 24, audio: true, motion: "low", camera: "static" },
+    { aspectRatio: "9:16", resolution: "720p", duration: 5, fps: 30, audio: false, motion: "medium", camera: "pan" },
+    { aspectRatio: "1:1", resolution: "1080p", duration: 10, fps: 24, audio: true, motion: "high", camera: "push" },
+    { aspectRatio: "16:9", resolution: "4k", duration: 15, fps: 30, audio: false, motion: "low", camera: "pull" },
+  ];
+
+  for (const item of cases) {
+    const capabilities = {
+      ...dualVideoCapabilities,
+      supportedDurations: [4, 5, 10, 15],
+      supportedResolutions: ["480p", "720p", "1080p", "4k"],
+      supportedAspectRatios: ["16:9", "9:16", "1:1"],
+    };
+    const request = taskRequestFromDraft(videoDraft({
+      size: item.aspectRatio,
+      quality: item.resolution,
+      duration: item.duration,
+      videoCapabilities: capabilities,
+      parameters: {
+        duration: item.duration,
+        resolution: item.resolution,
+        aspect_ratio: item.aspectRatio,
+        fps: item.fps,
+        generate_audio: item.audio,
+        motion_strength: item.motion,
+        camera_movement: item.camera,
+      },
+    }));
+
+    assert.deepEqual(request.params, {
+      duration: item.duration,
+      resolution: item.resolution,
+      aspect_ratio: item.aspectRatio,
+      fps: item.fps,
+      generate_audio: item.audio,
+      motion_strength: item.motion,
+      camera_movement: item.camera,
+    });
+    assert.equal(Object.hasOwn(request.params, "ratio"), false);
+  }
 });
 
 test("text-only model locks text mode and clears incompatible frames", () => {

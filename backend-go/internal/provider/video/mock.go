@@ -36,9 +36,13 @@ func (MockProvider) Create(ctx context.Context, req generation.CreateRequest) (a
 		"videoUrl":       "/admin/static/mock-video.mp4",
 		"thumbnailUrl":   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 180'%3E%3Crect width='320' height='180' fill='%230f172a'/%3E%3Ccircle cx='160' cy='90' r='38' fill='%2314b8a6'/%3E%3Cpolygon points='151,70 151,110 187,90' fill='white'/%3E%3Ctext x='160' y='150' text-anchor='middle' font-size='18' font-family='Arial' fill='white'%3EMock Video%3C/text%3E%3C/svg%3E",
 		"metadata": map[string]any{
-			"duration":   req.Params["duration"],
-			"ratio":      req.Params["ratio"],
-			"resolution": req.Params["resolution"],
+			"duration":        req.Params["duration"],
+			"aspect_ratio":    req.Params["aspect_ratio"],
+			"resolution":      req.Params["resolution"],
+			"fps":             req.Params["fps"],
+			"generate_audio":  req.Params["generate_audio"],
+			"motion_strength": req.Params["motion_strength"],
+			"camera_movement": req.Params["camera_movement"],
 		},
 	}, nil
 }

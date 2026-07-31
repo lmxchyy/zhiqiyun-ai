@@ -15,6 +15,7 @@ import type { BusinessSdk } from "./types";
 export * from "./files";
 export {
   VideoGenerationValidationError,
+  confirmResolvedVideoModel,
   normalizeVideoModelCapabilities,
   reconcileVideoGenerationState,
   taskRequestFromDraft,
