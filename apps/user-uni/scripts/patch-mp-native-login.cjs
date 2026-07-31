@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { neutralizeIgnoredAssets } = require("./mp-package-assets.cjs");
 
 const root = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(root, "../..");
@@ -1530,6 +1531,18 @@ function preserveGeneratedComponents(configPath) {
 
 preserveGeneratedComponents(path.resolve(outputRoot, "project.config.json"));
 preserveGeneratedComponents(path.resolve(outputRoot, "project.private.config.json"));
+const uploadProjectConfig = JSON.parse(
+  fs.readFileSync(path.resolve(outputRoot, "project.config.json"), "utf8")
+);
+const neutralizedUploadAssets = neutralizeIgnoredAssets(
+  outputRoot,
+  Array.isArray(uploadProjectConfig.packOptions?.ignore)
+    ? uploadProjectConfig.packOptions.ignore
+    : []
+);
+console.log(
+  `Neutralized ${neutralizedUploadAssets.length} ignored generated assets before WeChat source-size validation.`
+);
 
 const homeComponentWxmlPath = path.resolve(outputRoot, "components", "v531", "V531HomePage.wxml");
 const homeComponentJsPath = path.resolve(outputRoot, "components", "v531", "V531HomePage.js");

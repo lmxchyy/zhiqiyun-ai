@@ -71,7 +71,8 @@ const projectConfig = readJson("project.config.json");
 const ignoreRules = Array.isArray(projectConfig.packOptions?.ignore)
   ? projectConfig.packOptions.ignore
   : [];
-const includedFiles = listFiles(outputRoot).filter((filePath) => {
+const sourceFiles = listFiles(outputRoot);
+const includedFiles = sourceFiles.filter((filePath) => {
   const relativePath = normalizedRelative(filePath);
   return !ignoreRules.some((rule) => ignoredByRule(relativePath, rule));
 });
@@ -98,18 +99,47 @@ const packageRows = [
   ...item,
   bytes: item.files.reduce((sum, filePath) => sum + fs.statSync(filePath).size, 0)
 }));
+const sourcePackageRows = [
+  {
+    name: "MAIN",
+    files: sourceFiles.filter((filePath) => {
+      const relativePath = normalizedRelative(filePath);
+      return !subPackageRoots.some((root) => relativePath.startsWith(`${root}/`));
+    })
+  },
+  ...subPackages.map((item) => ({
+    name: item.root,
+    files: sourceFiles.filter((filePath) =>
+      normalizedRelative(filePath).startsWith(`${item.root}/`)
+    )
+  }))
+].map((item) => ({
+  ...item,
+  bytes: item.files.reduce((sum, filePath) => sum + fs.statSync(filePath).size, 0)
+}));
 
 for (const item of packageRows) {
   console.log(`${item.name}: ${formatMB(item.bytes)}, ${item.pages} pages`);
 }
+for (const item of sourcePackageRows) {
+  console.log(`SOURCE ${item.name}: ${formatMB(item.bytes)}`);
+}
 
 const oversized = packageRows.filter((item) => item.bytes > maxPackageBytes);
+const oversizedSourcePackages = sourcePackageRows.filter((item) => item.bytes > maxPackageBytes);
 const mainPackage = packageRows.find((item) => item.name === "MAIN");
 const totalBytes = includedFiles.reduce((sum, filePath) => sum + fs.statSync(filePath).size, 0);
 console.log(`TOTAL: ${formatMB(totalBytes)}`);
 if (oversized.length > 0) {
   throw new Error(
     `WeChat package size exceeds 2 MB: ${oversized
+      .map((item) => `${item.name}=${formatMB(item.bytes)}`)
+      .join(", ")}`
+  );
+}
+if (oversizedSourcePackages.length > 0) {
+  throw new Error(
+    `WeChat source package size exceeds 2 MB before upload filtering: ${oversizedSourcePackages
       .map((item) => `${item.name}=${formatMB(item.bytes)}`)
       .join(", ")}`
   );
