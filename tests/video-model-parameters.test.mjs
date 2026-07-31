@@ -66,6 +66,22 @@ test("editable fields require visible editable schema fields and provider suppor
   assert.equal(fields[2].defaultValue, "16:9");
 });
 
+test("backend snake_case user_editable fields are treated as editable", () => {
+  const fields = deriveEditableVideoFields({
+    fields: [{
+      key: "duration",
+      label: "视频时长",
+      type: "select",
+      visible: true,
+      user_editable: true,
+      default: 5,
+      options: [5, 10],
+    }],
+  }, coreCapabilities);
+
+  assert.deepEqual(fields.map(item => item.key), ["duration"]);
+});
+
 test("seedance audio is exposed only when both schema and provider support it", () => {
   const audioSchema = schema([
     field("generate_audio", { type: "boolean", default: true }),

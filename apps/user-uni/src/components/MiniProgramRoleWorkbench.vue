@@ -212,6 +212,62 @@
           </template>
 
           <template v-else>
+            <view v-if="creationMode === 'video'" class="v31-video-parameter-panel">
+              <view class="v31-video-parameter-head">
+                <view>
+                  <text class="v31-video-parameter-title">视频模型与参数</text>
+                  <text class="v31-video-parameter-copy">参数由当前模型能力自动提供</text>
+                </view>
+                <text v-if="videoModelSwitching" class="v31-video-parameter-status">载入中...</text>
+              </view>
+              <scroll-view v-if="videoModelOptions.length" class="v31-video-model-scroll" scroll-x :show-scrollbar="false">
+                <view class="v31-video-model-row">
+                  <button
+                    v-for="model in videoModelOptions"
+                    :key="model.code"
+                    type="button"
+                    :class="['v31-video-model-button', { 'is-active': selectedVideoModelCode === model.code }]"
+                    :disabled="videoModelSwitching"
+                    @click="requestVideoModelSwitch(model.code)"
+                  >{{ model.name || model.code }}</button>
+                </view>
+              </scroll-view>
+              <text v-else-if="videoModelError" class="v31-video-parameter-error">{{ videoModelError }}</text>
+              <view v-for="field in videoParameterFields" :key="field.key" class="v31-video-parameter-field">
+                <view class="v31-video-parameter-label">
+                  <text>{{ field.label }}</text>
+                  <text v-if="field.unit">{{ field.unit }}</text>
+                </view>
+                <switch
+                  v-if="field.type === 'boolean' || field.type === 'switch'"
+                  color="#13795b"
+                  :checked="videoBooleanParameterValue(field.key)"
+                  @change="setVideoBooleanParameter(field.key, $event)"
+                />
+                <view v-else-if="field.options.length" class="v31-video-option-row">
+                  <button
+                    v-for="option in field.options"
+                    :key="`${field.key}-${String(option)}`"
+                    type="button"
+                    :class="['v31-video-option-button', { 'is-active': videoParameterValueEquals(field.key, option) }]"
+                    @click="setVideoParameterValue(field.key, option)"
+                  >{{ option }}{{ field.unit || "" }}</button>
+                </view>
+                <input
+                  v-else
+                  class="v31-video-number-input"
+                  type="number"
+                  :value="String(videoParameterValues[field.key] ?? '')"
+                  :min="field.min"
+                  :max="field.max"
+                  @input="setVideoNumberParameter(field.key, $event)"
+                />
+              </view>
+              <text v-if="videoEstimateLoading" class="v31-video-estimate">正在试算积分...</text>
+              <text v-else-if="videoEstimate" class="v31-video-estimate strong">预计消耗 {{ videoEstimate.estimatedPoints }} 积分</text>
+              <text v-else-if="videoEstimateError" class="v31-video-estimate error">{{ videoEstimateError }}，正式提交时以后端为准</text>
+            </view>
+
             <view v-if="creationMode === 'video' && creationVideoModeSwitchVisible" class="v31-video-mode-switch">
               <button
                 class="v31-video-mode-button"
@@ -731,8 +787,11 @@ import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from
 import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
 import { ApiClientError } from "@xianzhi/api-client";
 import {
+  buildVideoSubmissionParameters,
   confirmResolvedVideoModel,
+  deriveEditableVideoFields,
   normalizeVideoModelCapabilities,
+  transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 
@@ -764,12 +823,15 @@ import { RoleMenuConfig, roleLabels } from "../config/permissions";
 import type { MinePurchaseOption, MineView } from "../types";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 import type {
+  EditableVideoField,
   ItemsResponse,
   MemberProfileResponse,
   OperationProfileResponse,
   RoleWalletResponse,
+  VideoGenerationEstimate,
 } from "@xianzhi/business-sdk";
 import type { VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
+import type { ModelInfo } from "@xianzhi/shared-types";
 import type { AppRole, Asset, AuthResponse, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
 import {
   miniProgramCreationPages,
@@ -963,6 +1025,18 @@ const creationReferencePaths = ref<string[]>([]);
 const creationLastFramePath = ref("");
 const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
 const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
+const videoModelOptions = ref<ModelInfo[]>([]);
+const selectedVideoModelCode = ref("");
+const videoParameterFields = ref<EditableVideoField[]>([]);
+const videoParameterValues = ref<Record<string, unknown>>({});
+const videoModelSwitching = ref(false);
+const videoModelError = ref("");
+const videoEstimate = ref<VideoGenerationEstimate | null>(null);
+const videoEstimateLoading = ref(false);
+const videoEstimateError = ref("");
+let videoModelSwitchSequence = 0;
+let videoEstimateSequence = 0;
+let videoEstimateTimer: ReturnType<typeof setTimeout> | null = null;
 const creationSourceReferenceUrl = ref("");
 const creationSourceLoading = ref(false);
 const creationSourceError = ref("");
@@ -1154,7 +1228,9 @@ const currentRoleMenuItems = computed(() => RoleMenuConfig[userStore.currentRole
 
 const activeCreation = computed(() => creationModules.value.find(item => item.id === creationMode.value) || creationModules.value[0] || allCreationModules[0]);
 const activeCreationName = computed(() => activeCreation.value.name);
-const activeCreationModel = computed(() => rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model);
+const activeCreationModel = computed(() => creationMode.value === "video" && selectedVideoModelCode.value
+  ? selectedVideoModelCode.value
+  : rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model);
 const activeCreationCost = computed(() => activeCreation.value.cost);
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
 const generationNoticePending = computed(() => latestGenerationTask.value?.tone === "pending");
@@ -1264,6 +1340,7 @@ watch(() => props.initialTab, tab => { activeTab.value = tab; });
 watch(activeTab, tab => { const code = ({ home: "home", create: "studio", assets: "assets", mine: "profile" } as Partial<Record<TabId, AppPageCode>>)[tab]; if (code) void pageConfigStore.ensure(code); }, { immediate: true });
 watch(() => props.initialCreationMode, mode => {
   if (mode) creationMode.value = mode;
+  if (mode === "video") void initializeVideoModelForm();
 });
 watch(
   () => [props.initialCreationAssetId, props.initialCreationIntent] as const,
@@ -1480,6 +1557,7 @@ function switchVideoGenerationMode(mode: VideoGenerationMode) {
   creationReferencePaths.value = [];
   creationLastFramePath.value = "";
   creationError.value = "";
+  scheduleVideoEstimate();
 }
 
 function chooseCreationLastFrame() {
@@ -1494,6 +1572,7 @@ function chooseCreationLastFrame() {
         ? String(selectedPaths[0] || "")
         : String(selectedPaths || "");
       creationError.value = "";
+      scheduleVideoEstimate();
     },
     fail: error => {
       if (!String(error.errMsg || "").toLowerCase().includes("cancel")) {
@@ -1505,6 +1584,7 @@ function chooseCreationLastFrame() {
 
 function removeCreationLastFrame() {
   creationLastFramePath.value = "";
+  scheduleVideoEstimate();
 }
 
 function chooseCreationReferenceImages() {
@@ -1547,6 +1627,7 @@ function appendCreationReferencePaths(paths: string[]) {
     .slice(0, creationReferenceLimit.value);
   creationSourceError.value = "";
   creationError.value = "";
+  if (creationMode.value === "video") scheduleVideoEstimate();
 }
 
 function setCreationReferenceSelecting(selecting: boolean) {
@@ -1561,6 +1642,7 @@ function previewCreationReference(index: number) {
 
 function removeCreationReference(index: number) {
   creationReferencePaths.value = creationReferencePaths.value.filter((_, itemIndex) => itemIndex !== index);
+  if (creationMode.value === "video") scheduleVideoEstimate();
 }
 
 function isToday(value: string) {
@@ -2578,26 +2660,179 @@ async function resolveBackendGenerationConfig(
         return { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
       }
     } catch {}
+    if (mode === "video") return null;
     return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
   }
 }
 
-let videoCapabilityLoadSequence = 0;
-watch(
-  () => [creationMode.value, activeCreationModel.value] as const,
-  async ([mode, model], previous) => {
-    if (mode !== "video") return;
-    const sequence = ++videoCapabilityLoadSequence;
-    const config = await resolveBackendGenerationConfig("video", model);
-    if (!config) return;
-    if (sequence !== videoCapabilityLoadSequence || creationMode.value !== "video") return;
-    if (config.model && config.model !== model) {
-      restoredCreationParams.value.model = config.model;
+function videoParameterValueEquals(key: string, option: unknown) {
+  const current = videoParameterValues.value[key];
+  if (typeof current === "number" || typeof option === "number") {
+    return Number(current) === Number(option);
+  }
+  return current === option;
+}
+
+function videoBooleanParameterValue(key: string) {
+  return videoParameterValues.value[key] === true;
+}
+
+function eventDetailValue(event: unknown) {
+  const row = event && typeof event === "object" ? event as AnyRecord : {};
+  const detail = row.detail && typeof row.detail === "object" ? row.detail as AnyRecord : {};
+  return detail.value;
+}
+
+function syncVideoParameterDraft(values: Record<string, unknown>, model = selectedVideoModelCode.value) {
+  const next = { ...restoredCreationParams.value };
+  for (const key of [
+    "duration", "resolution", "aspect_ratio", "ratio", "fps", "generate_audio", "generateAudio",
+    "motion_strength", "camera_movement",
+  ]) delete next[key];
+  Object.assign(next, values);
+  if (model) next.model = model;
+  restoredCreationParams.value = next;
+}
+
+function setVideoParameterValue(key: string, value: unknown) {
+  const next = transitionVideoParameterValues(
+    { ...videoParameterValues.value, [key]: value },
+    videoParameterFields.value,
+  );
+  videoParameterValues.value = next;
+  syncVideoParameterDraft(next);
+  scheduleVideoEstimate();
+}
+
+function setVideoBooleanParameter(key: string, event: unknown) {
+  setVideoParameterValue(key, eventDetailValue(event) === true);
+}
+
+function setVideoNumberParameter(key: string, event: unknown) {
+  const value = Number(eventDetailValue(event));
+  if (Number.isFinite(value)) setVideoParameterValue(key, value);
+}
+
+function confirmVideoReferenceRemoval(): Promise<boolean> {
+  return new Promise(resolve => {
+    uni.showModal({
+      title: "切换视频模型",
+      content: "当前模型不支持参考图，切换后将移除已上传图片，是否继续？",
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    });
+  });
+}
+
+function videoConfigRemovesReferences(config: BackendGenerationConfig) {
+  if (!creationReferencePaths.value.length && !creationLastFramePath.value) return false;
+  if (creationReferencePaths.value.length && !config.videoCapabilities.supportsImageToVideo) return true;
+  return Boolean(creationLastFramePath.value && !config.videoCapabilities.supportsLastFrame);
+}
+
+function commitVideoModelConfig(config: BackendGenerationConfig) {
+  const fields = deriveEditableVideoFields(config.schema, config.videoCapabilities);
+  const previous = Object.keys(videoParameterValues.value).length
+    ? videoParameterValues.value
+    : restoredCreationParams.value;
+  const nextValues = transitionVideoParameterValues(previous, fields);
+  applyVideoModelCapabilities(config.videoCapabilities, Boolean(selectedVideoModelCode.value));
+  selectedVideoModelCode.value = config.model;
+  videoParameterFields.value = fields;
+  videoParameterValues.value = nextValues;
+  videoModelError.value = "";
+  syncVideoParameterDraft(nextValues, config.model);
+  scheduleVideoEstimate();
+}
+
+async function requestVideoModelSwitch(modelCode: string) {
+  const candidate = String(modelCode || "").trim();
+  if (!candidate || (candidate === selectedVideoModelCode.value && videoParameterFields.value.length)) return;
+  const sequence = ++videoModelSwitchSequence;
+  videoModelSwitching.value = true;
+  videoModelError.value = "";
+  try {
+    const config = await resolveBackendGenerationConfig("video", candidate);
+    if (sequence !== videoModelSwitchSequence || creationMode.value !== "video" || !config) {
+      if (!config && sequence === videoModelSwitchSequence) {
+        videoModelError.value = isGuest.value ? "登录后加载当前模型参数" : "当前模型参数加载失败";
+      }
+      return;
     }
-    applyVideoModelCapabilities(config.videoCapabilities, Boolean(previous && previous[1] !== model));
-  },
-  { immediate: true },
-);
+    if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval()) return;
+    if (sequence !== videoModelSwitchSequence) return;
+    commitVideoModelConfig(config);
+  } finally {
+    if (sequence === videoModelSwitchSequence) videoModelSwitching.value = false;
+  }
+}
+
+async function initializeVideoModelForm() {
+  if (creationMode.value !== "video") return;
+  try {
+    const models = await businessSdk.models.list();
+    videoModelOptions.value = models.filter(item => {
+      const capabilities = (item.capabilities || []).map(value => String(value).toUpperCase());
+      return capabilities.includes("TEXT_TO_VIDEO")
+        || capabilities.includes("IMAGE_TO_VIDEO")
+        || Boolean(item.videoCapabilities);
+    });
+  } catch {
+    videoModelOptions.value = [];
+  }
+  const requested = rowString(restoredCreationParams.value, "model", "modelName")
+    || activeCreation.value.model
+    || videoModelOptions.value[0]?.code
+    || "";
+  await requestVideoModelSwitch(requested);
+}
+
+function clearVideoEstimateTimer() {
+  if (videoEstimateTimer) {
+    clearTimeout(videoEstimateTimer);
+    videoEstimateTimer = null;
+  }
+}
+
+function scheduleVideoEstimate() {
+  clearVideoEstimateTimer();
+  const sequence = ++videoEstimateSequence;
+  videoEstimate.value = null;
+  videoEstimateError.value = "";
+  if (!selectedVideoModelCode.value || !videoParameterFields.value.length) return;
+  if (isGuest.value) {
+    videoEstimateError.value = "登录后可查看预计积分";
+    return;
+  }
+  videoEstimateTimer = setTimeout(async () => {
+    videoEstimateLoading.value = true;
+    try {
+      const params = buildVideoSubmissionParameters(
+        videoParameterValues.value,
+        videoParameterFields.value,
+      );
+      if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationReferencePaths.value[0]) {
+        params.first_frame = creationReferencePaths.value[0];
+      }
+      if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationLastFramePath.value) {
+        params.last_frame = creationLastFramePath.value;
+      }
+      const result = await businessSdk.generation.estimateVideo({
+        type: videoGenerationMode.value,
+        prompt: creationPrompt.value.trim(),
+        model: selectedVideoModelCode.value,
+        params,
+      });
+      if (sequence !== videoEstimateSequence) return;
+      videoEstimate.value = result;
+    } catch {
+      if (sequence !== videoEstimateSequence) return;
+      videoEstimateError.value = "暂无法试算";
+    } finally {
+      if (sequence === videoEstimateSequence) videoEstimateLoading.value = false;
+    }
+  }, 250);
+}
 
 async function resolvePptGenerationModels() {
   const [textResult, imageResult] = await Promise.allSettled([
@@ -2669,7 +2904,10 @@ async function submitCreation(prompt: string) {
       if (!generationConfig) throw new Error("已取消切换模型");
       const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
       if (mode === "video") {
-        applyVideoModelCapabilities(generationConfig.videoCapabilities, true);
+        if (videoConfigRemovesReferences(generationConfig) && !await confirmVideoReferenceRemoval()) {
+          throw new Error("已取消切换模型");
+        }
+        commitVideoModelConfig(generationConfig);
         if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && referenceCountBeforeCapabilityCheck > 1) {
           throw new Error("旧草稿包含多张视频参考图，请重新选择 1 张首帧图");
         }
@@ -2686,26 +2924,43 @@ async function submitCreation(prompt: string) {
       const lastFrame = mode === "video" && creationLastFrameEnabled.value && creationLastFramePath.value
         ? (await uploadCreationReferenceImages([creationLastFramePath.value]))[0] || ""
         : "";
-      const requestedQuality = restoredCreationString("quality", "imageQuality") || (mode === "video" ? "720p" : "standard");
-      const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || (mode === "video" ? "16:9" : "1024x1024");
+      const finalVideoParameters = mode === "video"
+        ? buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value)
+        : {};
+      const requestedQuality = mode === "video"
+        ? String(finalVideoParameters.resolution || "")
+        : restoredCreationString("quality", "imageQuality") || "standard";
+      const requestedSize = mode === "video"
+        ? String(finalVideoParameters.aspect_ratio || "")
+        : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
+      const finalVideoCapabilities = mode === "video"
+        ? {
+            ...generationConfig.videoCapabilities,
+            supportedParameters: videoParameterFields.value.map(field => field.key),
+          }
+        : undefined;
       const result = await businessSdk.generation.createTask({
         mode,
         prompt,
         model: generationConfig.model,
         style: restoredCreationString("style", "stylePreset") || (mode === "video" ? "cinematic" : creationMode.value === "infographic" ? "infographic" : "commercial"),
-        size: constrainedSchemaString(generationConfig.schema, mode === "video" ? "aspect_ratio" : "size", requestedSize, mode === "video" ? "16:9" : "1024x1024"),
-        quality: constrainedSchemaString(generationConfig.schema, mode === "video" ? "resolution" : "quality", requestedQuality, mode === "video" ? "720p" : "standard"),
+        size: mode === "video"
+          ? requestedSize
+          : constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
+        quality: mode === "video"
+          ? requestedQuality
+          : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
         videoMode: mode === "video" ? videoGenerationMode.value : undefined,
         firstFrame: mode === "video" ? firstFrame : undefined,
         lastFrame: mode === "video" ? lastFrame : undefined,
-        videoCapabilities: mode === "video" ? generationConfig.videoCapabilities : undefined,
+        videoCapabilities: finalVideoCapabilities,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
-        duration: mode === "video"
-          ? constrainedSchemaNumber(generationConfig.schema, "duration", rowNumber(restoredCreationParams.value, "duration"), 5)
+        duration: mode === "video" && finalVideoParameters.duration !== undefined
+          ? Number(finalVideoParameters.duration)
           : undefined,
-        parameters: restoredCreationParams.value,
+        parameters: mode === "video" ? finalVideoParameters : restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
@@ -3011,6 +3266,7 @@ onMounted(() => {
     }
     restoreActiveGeneration();
   }
+  if (creationMode.value === "video") void initializeVideoModelForm();
   void loadTerminalCapabilities();
   void refreshAll();
 });
@@ -3018,6 +3274,7 @@ onMounted(() => {
 watch(() => authStore.token, (nextToken, previousToken) => {
   if (nextToken === previousToken) return;
   if (!nextToken) clearAuthenticatedData();
+  if (nextToken && creationMode.value === "video") void initializeVideoModelForm();
   void refreshAll();
 });
 
@@ -3036,6 +3293,9 @@ async function loadTerminalCapabilities() {
 
 onBeforeUnmount(() => {
   uni.$off("legal-acceptance-completed", handleLegalAcceptanceCompleted);
+  clearVideoEstimateTimer();
+  videoModelSwitchSequence += 1;
+  videoEstimateSequence += 1;
   generationPollRun += 1;
   stopGenerationFeedback(false);
   const bridge = globalThis as NativeGenerateBridge;
@@ -4298,6 +4558,78 @@ onBackPress(() => {
 .v31-chip.orange { color: #ff6b1a; border-color: #ffd0b3; background: #fff2e8; }
 .v31-chip.green { color: #168a54; border-color: #bdeecd; background: #eafbf2; }
 .v31-link { color: #5b55d6; font-size: 10px; }
+
+.v31-video-parameter-panel {
+  padding: 15px;
+  border: 1px solid #d9e0ff;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(23, 28, 56, 0.06);
+}
+
+.v31-video-parameter-head,
+.v31-video-parameter-label,
+.v31-video-model-row,
+.v31-video-option-row {
+  display: flex;
+  align-items: center;
+}
+
+.v31-video-parameter-head,
+.v31-video-parameter-label {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.v31-video-parameter-title,
+.v31-video-parameter-copy,
+.v31-video-parameter-error,
+.v31-video-estimate {
+  display: block;
+}
+
+.v31-video-parameter-title { color: #111827; font-size: 15px; font-weight: 700; }
+.v31-video-parameter-copy { margin-top: 4px; color: #697386; font-size: 10px; }
+.v31-video-parameter-status { color: #13795b; font-size: 10px; }
+.v31-video-parameter-error { margin-top: 10px; color: #c2413b; font-size: 11px; }
+.v31-video-model-scroll { width: 100%; margin-top: 12px; white-space: nowrap; }
+.v31-video-model-row { display: inline-flex; padding-right: 4px; gap: 8px; }
+
+.v31-video-model-button,
+.v31-video-option-button {
+  width: auto;
+  min-width: 64px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid #d9e0ff;
+  border-radius: 9px;
+  color: #4b5563;
+  background: #f8f9ff;
+  font-size: 11px;
+  line-height: 32px;
+}
+
+.v31-video-model-button::after,
+.v31-video-option-button::after { border: 0; }
+.v31-video-model-button.is-active,
+.v31-video-option-button.is-active { color: #ffffff; border-color: #13795b; background: #13795b; }
+.v31-video-parameter-field { margin-top: 14px; }
+.v31-video-parameter-label { margin-bottom: 8px; color: #374151; font-size: 12px; font-weight: 600; }
+.v31-video-option-row { flex-wrap: wrap; gap: 8px; }
+
+.v31-video-number-input {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #d9e0ff;
+  border-radius: 9px;
+  color: #111827;
+  background: #f8f9ff;
+  font-size: 12px;
+}
+
+.v31-video-estimate { margin-top: 13px; color: #697386; font-size: 11px; }
+.v31-video-estimate.strong { color: #13795b; font-weight: 700; }
+.v31-video-estimate.error { color: #c2413b; }
 
 .v31-video-mode-switch {
   display: flex;

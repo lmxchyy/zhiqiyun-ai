@@ -254,6 +254,25 @@ test("video request omits optional parameters that the Provider cannot transmit"
   });
 });
 
+test("video request does not recreate core parameters hidden by the final schema contract", () => {
+  const request = taskRequestFromDraft(videoDraft({
+    videoCapabilities: {
+      ...dualVideoCapabilities,
+      supportedParameters: ["generate_audio"],
+    },
+    parameters: {
+      duration: 10,
+      resolution: "1080p",
+      aspect_ratio: "9:16",
+      generate_audio: false,
+    },
+  }));
+
+  assert.deepEqual(request.params, {
+    generate_audio: false,
+  });
+});
+
 test("video request preserves every supported canonical user selection", () => {
   const cases = [
     { aspectRatio: "16:9", resolution: "480p", duration: 4, fps: 24, audio: true, motion: "low", camera: "static" },

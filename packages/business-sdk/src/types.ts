@@ -11,6 +11,7 @@ import type {
   EnterpriseCertification,
   EnterpriseCertificationSubmitRequest,
   CreateDraft,
+  CreateGenerationTaskRequest,
   FeatureEntry,
   GenerationTask,
   MembershipPlan,
@@ -68,6 +69,15 @@ export interface TaskPageOptions extends PageOptions {
   prioritizeActive?: boolean;
 }
 
+export interface VideoGenerationEstimate {
+  model: string;
+  estimatedPoints: number;
+  billingType: string;
+  quantityField: string;
+  quantity: number;
+  note: string;
+}
+
 export interface PagedItems<T> {
   items: T[];
   total: number;
@@ -118,6 +128,7 @@ export interface BusinessSdk {
   };
   generation: {
     createTask(draft: CreateDraft): Promise<GenerationTask>;
+    estimateVideo(request: CreateGenerationTaskRequest): Promise<VideoGenerationEstimate>;
     listTasks(): Promise<GenerationTask[]>;
     listTaskPage(options?: TaskPageOptions): Promise<PagedItems<GenerationTask>>;
   };

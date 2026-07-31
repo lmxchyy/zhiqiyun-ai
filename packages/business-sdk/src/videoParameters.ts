@@ -102,7 +102,8 @@ export function deriveEditableVideoFields(
 
   for (const raw of schemaFields(schema)) {
     const key = canonicalVideoParameterKey(raw.key);
-    if (!key || seen.has(key) || raw.visible !== true || raw.userEditable !== true || !supported.has(key)) {
+    const userEditable = raw.userEditable ?? raw.user_editable;
+    if (!key || seen.has(key) || raw.visible !== true || userEditable !== true || !supported.has(key)) {
       continue;
     }
     seen.add(key);
