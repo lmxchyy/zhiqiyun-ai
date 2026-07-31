@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 0.4 seconds
+Output:
 package httpserver
 
 import (
@@ -267,6 +270,7 @@ func normalizeInspirationTemplate(item *inspirationTemplate, tenantID, actor str
 	item.CoverURL = strings.TrimSpace(item.CoverURL)
 	item.Prompt = strings.TrimSpace(item.Prompt)
 	item.ModelID = strings.TrimSpace(item.ModelID)
+	item.ScenarioCode = strings.ToLower(strings.TrimSpace(item.ScenarioCode))
 	if item.Title == "" || item.CategoryID == "" || item.CoverURL == "" || item.Prompt == "" {
 		return errors.New("title, categoryId, coverUrl and prompt are required")
 	}
@@ -276,11 +280,33 @@ func normalizeInspirationTemplate(item *inspirationTemplate, tenantID, actor str
 	if item.Parameters == nil {
 		item.Parameters = map[string]any{}
 	}
+	if item.DisplayConfig == nil {
+		item.DisplayConfig = map[string]any{}
+	}
+	if item.InputRequirements == nil {
+		item.InputRequirements = map[string]any{}
+	}
+	if item.PresetConfig == nil {
+		item.PresetConfig = map[string]any{}
+	}
+	if item.ScenarioCode != "" {
+		for _, char := range item.ScenarioCode {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' && char != '-' {
+				return errors.New("scenarioCode must contain only lowercase letters, numbers, underscore or hyphen")
+			}
+		}
+	}
+	if err := normalizeInspirationInputRequirements(item); err != nil {
+		return err
+	}
 	if item.ReferenceAssets == nil {
 		item.ReferenceAssets = []any{}
 	}
 	if len(item.Platforms) == 0 {
 		item.Platforms = []string{"miniprogram"}
+	}
+	if item.ApplicableTenantIDs == nil {
+		item.ApplicableTenantIDs = []string{}
 	}
 	if item.Status == "" {
 		item.Status = "DRAFT"
@@ -298,6 +324,56 @@ func normalizeInspirationTemplate(item *inspirationTemplate, tenantID, actor str
 	item.UpdatedBy = actor
 	if item.SourceAssetID != "" && !item.SourceAuthorized {
 		return errors.New("source asset must have explicit publication authorization")
+	}
+	return nil
+}
+
+func inspirationConfigInt(config map[string]any, key string) (int, bool) {
+	value, found := config[key]
+	if !found || value == nil {
+		return 0, false
+	}
+	switch number := value.(type) {
+	case float64:
+		return int(number), number == float64(int(number))
+	case int:
+		return number, true
+	case int64:
+		return int(number), true
+	default:
+		return 0, false
+	}
+}
+
+func normalizeInspirationInputRequirements(item *inspirationTemplate) error {
+	required, _ := item.InputRequirements["referenceImageRequired"].(bool)
+	minimum, hasMinimum := inspirationConfigInt(item.InputRequirements, "referenceImageMin")
+	maximum, hasMaximum := inspirationConfigInt(item.InputRequirements, "referenceImageMax")
+	if required {
+		if !hasMinimum {
+			minimum = 1
+		}
+		if !hasMaximum {
+			maximum = minimum
+		}
+	}
+	if minimum < 0 || maximum < 0 || minimum > 3 || maximum > 3 || maximum < minimum {
+		return errors.New("reference image range must be between 0 and 3 and max must be greater than or equal to min")
+	}
+	if required && minimum < 1 {
+		return errors.New("referenceImageMin must be at least 1 when a reference image is required")
+	}
+	if hasMinimum || required {
+		item.InputRequirements["referenceImageMin"] = minimum
+	}
+	if hasMaximum || required {
+		item.InputRequirements["referenceImageMax"] = maximum
+	}
+	if required && item.ContentType != "image" {
+		return errors.New("required reference images are currently supported only for image templates")
+	}
+	if required && item.ScenarioCode == "photo_restoration" {
+		item.ReferenceAssets = []any{}
 	}
 	return nil
 }
@@ -598,3 +674,4 @@ func activeInspirationNow(item inspirationTemplate) bool {
 	}
 	return true
 }
+
