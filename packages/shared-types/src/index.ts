@@ -207,6 +207,7 @@ export interface GeneratedImage {
 
 export interface CreateGenerationTaskRequest {
   type: GenerationTaskType;
+  clientRequestId?: string;
   module_code?: string;
   moduleCode?: string;
   prompt: string;
@@ -243,6 +244,7 @@ export interface ModelInfo {
   providerId?: string;
   providerName?: string;
   online?: boolean;
+  videoCapabilities?: VideoModelCapabilities;
 }
 
 export interface PointAccount {
@@ -349,6 +351,11 @@ export interface CreateDraft {
   quality: string;
   count: number;
   referenceImages: string[];
+  videoMode?: VideoGenerationMode;
+  firstFrame?: string;
+  lastFrame?: string;
+  videoCapabilities?: VideoModelCapabilities;
+  clientRequestId?: string;
   negativePrompt?: string;
   duration?: number;
   parameters?: Record<string, unknown>;

@@ -2340,31 +2340,30 @@ async function submitWebVideoGeneration() {
   try {
     const firstFrame = videoFirstFrame.value.trim();
     const lastFrame = videoLastFrame.value.trim();
-    if (!selectedVideoModel.value) throw new Error("请选择后端已配置的视频模型");
-    if (videoMode.value === "TEXT_TO_VIDEO" && (firstFrame || lastFrame)) {
-      throw new Error("文生视频模式不能携带首帧图或尾帧图");
-    }
-    if (videoMode.value === "IMAGE_TO_VIDEO" && !firstFrame) {
-      throw new Error("图生视频模式必须填写首帧图");
-    }
-    if (lastFrame && !selectedVideoCapabilities.value.supportsLastFrame) {
-      throw new Error("当前模型不支持尾帧图");
-    }
-    const task = await businessSdk.generation.createTask({
-      mode: "video",
-      videoMode: videoMode.value,
-      prompt,
-      model: selectedVideoModel.value.code,
-      style: "cinematic",
-      size: videoRatio.value,
-      quality: videoResolution.value,
-      count: 1,
-      duration: videoDuration.value,
-      referenceImages: [],
-      firstFrame: videoMode.value === "IMAGE_TO_VIDEO" ? firstFrame : undefined,
-      lastFrame: videoMode.value === "IMAGE_TO_VIDEO" ? lastFrame : undefined,
-      videoCapabilities: selectedVideoCapabilities.value,
-      clientRequestId,
+    const task = await apiClient.request<GenerationTask, Record<string, unknown>>("/api/v1/generation-tasks", {
+      method: "POST",
+      auth: "required",
+      retryOnUnauthorized: false,
+      headers: { "Idempotency-Key": clientRequestId },
+      body: {
+        clientRequestId,
+        module_code: "video_generation",
+        type: firstFrame ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO",
+        prompt,
+        model: videoModel.value || "mock-video",
+        params: {
+          duration: videoDuration.value,
+          resolution: videoResolution.value,
+          aspect_ratio: videoRatio.value,
+          ...(firstFrame ? {
+            image_url: firstFrame,
+            image_urls: [firstFrame],
+            first_frame: firstFrame,
+            referenceImages: [{ name: "first-frame", url: firstFrame }],
+          } : {}),
+          ...(lastFrame ? { last_frame: lastFrame } : {}),
+        },
+      },
     });
     videoTask.value = task;
     if (videoGenerationResumedAfterLogin) {

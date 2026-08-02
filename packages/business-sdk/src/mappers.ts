@@ -7,6 +7,8 @@ import type {
   FeatureEntry,
   GenerationTask,
   MembershipPlan,
+  VideoGenerationMode,
+  VideoModelCapabilities,
   UserProfile,
   WorkItem,
   WorkStatus,
@@ -54,6 +56,11 @@ const draftOnlyParameterKeys = new Set([
   "generationCount",
   "referencePaths",
   "referenceImages",
+  "videoMode",
+  "firstFrame",
+  "lastFrame",
+  "videoCapabilities",
+  "clientRequestId",
   "files",
   "selectedFiles",
   "negativePrompt",
@@ -323,7 +330,7 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   const referenceImages = draft.referenceImages.filter(Boolean);
   const referenceImage = referenceImages[0];
   const type = draft.mode === "video"
-    ? referenceImage ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO"
+    ? draft.videoMode === "IMAGE_TO_VIDEO" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO"
     : draft.mode === "ppt"
       ? "PPT_GENERATION"
       : referenceImage ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
@@ -407,6 +414,7 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
       };
   return {
     type,
+    ...(draft.clientRequestId ? { clientRequestId: draft.clientRequestId } : {}),
     moduleCode: draft.mode === "video" ? "video_generation" : "image_generation",
     prompt: draft.prompt,
     model: draft.model,

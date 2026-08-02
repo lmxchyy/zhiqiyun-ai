@@ -639,13 +639,39 @@
           <button class="agent-v4-cta" @click="selectAgentTab('promotion')">查看推广数据</button>
         </view>
 
-        <view v-else-if="activeTab === 'promotion'" class="agent-promotion-embed">
-          <PromotionCenterScreen
-            embedded
-            :show-header="false"
-            :show-back="false"
-            :active="activeTab === 'promotion'"
-          />
+        <view v-else-if="activeTab === 'promotion'" class="section-stack">
+          <view class="promo-card">
+            <PromotionQrCode
+              class="share-code-box"
+              :value="promotionQrPayload"
+              :size="168"
+              label="微信推广二维码"
+              @error="handlePromotionQrError"
+            />
+            <text class="section-title">微信小程序推广</text>
+            <text class="body-copy">微信内使用原生分享；H5 推广链接用于朋友圈海报、社群文案和客服转发。</text>
+            <view class="invite-code">
+              <text>{{ inviteCode }}</text>
+            </view>
+            <button type="button" class="primary-button" open-type="share">微信分享</button>
+            <button type="button" class="outline-button" @click="copyInviteLink">复制推广链接</button>
+            <button type="button" class="outline-button" @click="openFeaturePage(miniProgramFeaturePages.agentInviteRecords)">查看邀请记录</button>
+          </view>
+
+          <view class="section-card">
+            <view class="section-header compact">
+              <text class="section-title">推广路径</text>
+              <text class="soft-tag">自动带 invite</text>
+            </view>
+            <view class="config-row">
+              <text>小程序路径</text>
+              <text>{{ sharePath }}</text>
+            </view>
+            <view class="config-row">
+              <text>H5 链接</text>
+              <text>{{ inviteLink || '后端暂未生成推广链接' }}</text>
+            </view>
+          </view>
         </view>
 
         <view v-else-if="activeTab === 'customers'" class="section-stack">
@@ -896,7 +922,7 @@ import { readInspirationDraft } from "../features/inspiration/draft";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
-import PromotionCenterScreen from "./promotion/PromotionCenterScreen.vue";
+import PromotionQrCode from "./PromotionQrCode.vue";
 import AppImage from "./AppImage.vue";
 import RemoteCover from "./RemoteCover.vue";
 import AssetCenterPage from "./assets/AssetCenterPage.vue";
@@ -912,7 +938,6 @@ import { useUserStore } from "../stores/user";
 import { requireAuth as requireProtectedAction } from "../features/auth/gate";
 import { acceptGuestBrowse, hasAcceptedGuestBrowse, isLoginPromptSuppressed, suppressLoginPrompt } from "../features/auth/guestBrowse";
 import { trackLogin } from "../features/auth/analytics";
-import { ensureWechatMiniProgramSession } from "../features/auth/wechatSession";
 import { reviewModeHides } from "../features/reviewMode";
 import { RoleMenuConfig, roleLabels } from "../config/permissions";
 import type { MinePurchaseOption, MineView } from "../types";
@@ -1452,6 +1477,10 @@ const promotionInfo = computed<PromotionInfo>(() => (channelCenter.value as unkn
 const inviteCode = computed(() => promotionInfo.value.inviteCode || currentAgent.value?.inviteCode || rowString(currentAgent.value || {}, "inviteCode") || "未生成");
 const inviteLink = computed(() => promotionInfo.value.inviteLink || promotionInfo.value.landingURL || rowString(currentAgent.value || {}, "inviteLink"));
 const sharePath = computed(() => `/pages/WechatLoginPage?invite=${encodeURIComponent(inviteCode.value)}`);
+const promotionQrPayload = computed(() => {
+  if (!inviteCode.value || inviteCode.value === "未生成") return "";
+  return inviteLink.value || sharePath.value;
+});
 const conversionRate = computed(() => {
   const visits = summaryNumber(channelSummary.value, "visits");
   const orders = summaryNumber(channelSummary.value, "orders");
@@ -2108,6 +2137,10 @@ async function showUsageExportNotice() {
 function showPosterNotice() {
   if (hasAgentRole.value) replacePage(rolePage("agent", "promotion"));
   else uni.showToast({ title: "请先成为代理商", icon: "none" });
+}
+
+function handlePromotionQrError(message: string) {
+  console.error("promotion qrcode render failed", message);
 }
 
 async function showNotifications() {
@@ -3059,14 +3092,6 @@ async function submitCreation(prompt: string) {
     resultType: creationMode.value,
   };
   try {
-    // #ifdef MP-WEIXIN
-    // Password/SMS login is fine; silently refresh device openid for WeChat content security only.
-    try {
-      await ensureWechatMiniProgramSession();
-    } catch {
-      throw new Error("内容安全检测暂不可用，请稍后重试");
-    }
-    // #endif
     let taskId = "";
     let taskStatus = "PENDING";
     let taskProgress = 0;
