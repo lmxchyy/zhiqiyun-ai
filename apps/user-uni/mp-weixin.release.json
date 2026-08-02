@@ -1,5 +1,5 @@
 {
-  "version": "2.0.40",
-  "previousVersion": "2.0.39",
-  "description": "修复视频模型参数加载并保留优化后创作界面"
+  "version": "2.0.41",
+  "previousVersion": "2.0.40",
+  "description": "修复视频参考图上传并自动切换图生视频"
 }

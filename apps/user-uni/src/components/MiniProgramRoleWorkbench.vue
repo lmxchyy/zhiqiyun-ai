@@ -1764,8 +1764,8 @@ function removeCreationLastFrame() {
 function chooseCreationReferenceImages() {
   if (!requestLogin("登录后可上传参考图片")) return;
   if (creationReferenceSelecting.value) return;
-  if (creationMode.value === "video" && videoGenerationMode.value !== "IMAGE_TO_VIDEO") {
-    uni.showToast({ title: "文生视频模式不能上传图片", icon: "none" });
+  if (creationMode.value === "video" && !videoModelCapabilities.value.supportsImageToVideo) {
+    uni.showToast({ title: "当前模型不支持图生视频", icon: "none" });
     return;
   }
   const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
@@ -1796,9 +1796,17 @@ function chooseCreationReferenceImages() {
 
 function appendCreationReferencePaths(paths: string[]) {
   if (!requestLogin("登录后可上传参考图片")) return;
-  creationReferencePaths.value = [...creationReferencePaths.value, ...paths]
+  const nextPaths = [...creationReferencePaths.value, ...paths]
     .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
     .slice(0, creationReferenceLimit.value);
+  if (creationMode.value === "video") {
+    if (!videoModelCapabilities.value.supportsImageToVideo) {
+      uni.showToast({ title: "当前模型不支持图生视频", icon: "none" });
+      return;
+    }
+    if (nextPaths.length) videoGenerationMode.value = "IMAGE_TO_VIDEO";
+  }
+  creationReferencePaths.value = nextPaths;
   creationSourceError.value = "";
   creationError.value = "";
   if (creationMode.value === "video") scheduleVideoEstimate();

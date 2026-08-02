@@ -90,11 +90,11 @@ test("video creation detail uses the optimized card layout instead of the generi
   assert.doesNotMatch(template, /video-prompt-optimize/);
 });
 
-test("release metadata advances the current 2.0.39 upload to 2.0.40", () => {
+test("release metadata advances the current 2.0.40 upload to 2.0.41", () => {
   const metadata = JSON.parse(readFileSync(join(root, "apps/user-uni/mp-weixin.release.json"), "utf8"));
   assert.deepEqual(metadata, {
-    version: "2.0.40",
-    previousVersion: "2.0.39",
-    description: "修复视频模型参数加载并保留优化后创作界面",
+    version: "2.0.41",
+    previousVersion: "2.0.40",
+    description: "修复视频参考图上传并自动切换图生视频",
   });
 });

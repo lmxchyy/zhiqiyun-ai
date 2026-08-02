@@ -53,3 +53,16 @@ test("reference upload visibility remains tied to real image-to-video support", 
   assert.match(source, /videoGenerationMode\.value === "IMAGE_TO_VIDEO"/);
   assert.match(source, /videoModelCapabilities\.value\.supportsImageToVideo/);
 });
+
+test("reference upload switches a supported text-to-video model after image selection", () => {
+  const chooseStart = source.indexOf("function chooseCreationReferenceImages");
+  const chooseEnd = source.indexOf("function appendCreationReferencePaths", chooseStart);
+  const chooseBody = source.slice(chooseStart, chooseEnd);
+  assert.doesNotMatch(chooseBody, /videoGenerationMode\.value !== "IMAGE_TO_VIDEO"/);
+
+  const appendStart = chooseEnd;
+  const appendEnd = source.indexOf("function setCreationReferenceSelecting", appendStart);
+  const appendBody = source.slice(appendStart, appendEnd);
+  assert.match(appendBody, /videoModelCapabilities\.value\.supportsImageToVideo/);
+  assert.match(appendBody, /videoGenerationMode\.value = "IMAGE_TO_VIDEO"/);
+});
