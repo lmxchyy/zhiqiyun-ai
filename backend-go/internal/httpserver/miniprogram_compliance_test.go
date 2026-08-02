@@ -57,6 +57,49 @@ func TestMiniProgramRejectsGatewayAsFilingSubjectAndClosedCreationMode(t *testin
 	}
 }
 
+func TestMiniProgramVideoComplianceBypassAllowsConfiguredVideoTask(t *testing.T) {
+	t.Setenv("MINIPROGRAM_VIDEO_COMPLIANCE_BYPASS", "true")
+	t.Setenv("MINIPROGRAM_CREATION_MODES", "image,video")
+	model := adminAIModel{
+		ID:         "model_video_unreviewed",
+		ModelName:  "video-unreviewed",
+		ModelType:  "video",
+		ModuleCode: moduleVideoGeneration,
+		Status:     "ACTIVE",
+		ChannelID:  "channel_video",
+	}
+	request := generation.CreateRequest{
+		Type:   "TEXT_TO_VIDEO",
+		Model:  model.ModelName,
+		Params: map[string]any{"terminal": terminalMiniProgram},
+	}
+
+	if err := enforceMiniProgramModelCompliance(adminPlatformData{AIModels: []adminAIModel{model}}, &request); err != nil {
+		t.Fatalf("configured video model was rejected while bypass was enabled: %v", err)
+	}
+	if request.Params["configured_channel_id"] != "channel_video" {
+		t.Fatalf("configured channel snapshot missing: %#v", request.Params)
+	}
+}
+
+func TestMiniProgramVideoComplianceBypassAllowsVideoSchema(t *testing.T) {
+	t.Setenv("MINIPROGRAM_VIDEO_COMPLIANCE_BYPASS", "true")
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	user := adminUser{ID: "user_test", TenantID: "default", PlanID: "plan_pro", Role: "USER"}
+	requested, err := resolveModuleSchema(data, user, moduleVideoGeneration, "mock-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := resolveMiniProgramCompliantModuleSchema(data, user, moduleVideoGeneration, requested)
+	if err != nil {
+		t.Fatalf("video schema was rejected while bypass was enabled: %v", err)
+	}
+	if resolved.Model.ModelName != "mock-video" {
+		t.Fatalf("resolved video model = %q", resolved.Model.ModelName)
+	}
+}
+
 func TestRasterDownloadLabelIsRendered(t *testing.T) {
 	source := image.NewRGBA(image.Rect(0, 0, 320, 200))
 	for y := 0; y < 200; y++ {

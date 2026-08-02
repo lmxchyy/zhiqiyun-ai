@@ -57,6 +57,31 @@ func TestPublicModelsDoNotLeakProviderRouting(t *testing.T) {
 	}
 }
 
+func TestMiniProgramVideoComplianceBypassListsConfiguredVideoModels(t *testing.T) {
+	t.Setenv("MINIPROGRAM_VIDEO_COMPLIANCE_BYPASS", "true")
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	handler := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}).Handler
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+	req.Header.Set("X-Client-Platform", "mp-weixin")
+	req.Header.Set("X-Client-Name", "xianzhi-mini-program")
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("models status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var items []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		code := firstNonEmptyString(stringValue(item["code"]), stringValue(item["id"]))
+		if code == "mock-video" {
+			return
+		}
+	}
+	t.Fatalf("configured video model missing while bypass was enabled: %#v", items)
+}
+
 func TestPublicCatalogIsAnonymousAndPresentationOnly(t *testing.T) {
 	handler := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()}).Handler
 	for _, route := range []string{"/api/v1/public/home", "/api/v1/public/cases", "/api/v1/public/templates", "/api/v1/public/agents", "/api/v1/public/models", "/api/v1/public/pricing"} {

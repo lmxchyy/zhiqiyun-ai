@@ -40,6 +40,19 @@ var (
 
 var requiredGenerationLegalCodes = []string{"user-agreement", "privacy-policy", "ai-content-rules"}
 
+func miniProgramVideoComplianceBypassEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MINIPROGRAM_VIDEO_COMPLIANCE_BYPASS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func miniProgramVideoComplianceBypassAllows(item adminAIModel) bool {
+	return miniProgramVideoComplianceBypassEnabled() && isActiveLike(item.Status) && isVideoAIModel(item)
+}
+
 func applyAIModelComplianceMutation(item *adminAIModel, req adminAIModelMutation) {
 	if item == nil {
 		return
@@ -193,16 +206,21 @@ func enforceMiniProgramModelCompliance(data adminPlatformData, req *generation.C
 	if !found {
 		return errMiniProgramModelNotCompliant
 	}
-	allowed, reason := modelAllowedForMiniProgram(model, time.Now().UTC())
-	if !allowed {
-		return fmt.Errorf("%w: %s", errMiniProgramModelNotCompliant, reason)
-	}
-	capability := strings.ToLower(strings.TrimSpace(model.ModelType))
-	if isImageGenerationRequest(req.Type) {
-		capability = "image"
-	}
-	if capability == "" || !stringListContainsFold(model.AllowedCapabilities, capability) {
-		return fmt.Errorf("%w: capability_not_allowed", errMiniProgramModelNotCompliant)
+	bypassVideoCompliance := mode == "video" && miniProgramVideoComplianceBypassAllows(model)
+	if !bypassVideoCompliance {
+		allowed, reason := modelAllowedForMiniProgram(model, time.Now().UTC())
+		if !allowed {
+			return fmt.Errorf("%w: %s", errMiniProgramModelNotCompliant, reason)
+		}
+		capability := strings.ToLower(strings.TrimSpace(model.ModelType))
+		if isImageGenerationRequest(req.Type) {
+			capability = "image"
+		}
+		if capability == "" || !stringListContainsFold(model.AllowedCapabilities, capability) {
+			return fmt.Errorf("%w: capability_not_allowed", errMiniProgramModelNotCompliant)
+		}
+	} else {
+		req.Params["compliance_bypass"] = "video_model_override"
 	}
 	req.Params["provider_name"] = model.ProviderName
 	req.Params["provider_company"] = model.ProviderCompany
@@ -217,6 +235,9 @@ func enforceMiniProgramModelCompliance(data adminPlatformData, req *generation.C
 
 func resolveMiniProgramCompliantModuleSchema(data adminPlatformData, user adminUser, moduleCode string, resolved resolvedModuleSchema) (resolvedModuleSchema, error) {
 	moduleCode = canonicalModuleCode(moduleCode)
+	if moduleCode == moduleVideoGeneration && miniProgramVideoComplianceBypassAllows(resolved.Model) {
+		return resolved, nil
+	}
 	expectedCapability := defaultAIModelTypeForModule(moduleCode)
 	allowed, reason := modelAllowedForMiniProgram(resolved.Model, time.Now().UTC())
 	if allowed && stringListContainsFold(resolved.Model.AllowedCapabilities, expectedCapability) {

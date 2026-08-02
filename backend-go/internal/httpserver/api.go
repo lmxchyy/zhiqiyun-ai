@@ -1542,43 +1542,61 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]bool{"mock-standard": true}
 	data, err := a.store.AdminData()
 	if err == nil {
+		data = normalizeAICapabilityDefaults(data)
 		miniProgram := isWeChatMiniProgramRequest(r)
 		approvedModels := map[string]adminAIModel{}
-		for _, model := range data.AIModels {
-			if !miniProgram {
-				approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
-				continue
-			}
-			if allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC()); allowed {
-				if _, routed, routeErr := selectAPIChannelForConfiguredModel(data, model.ModelName); routed && routeErr == nil {
-					approvedModels[strings.ToLower(strings.TrimSpace(model.ModelName))] = model
-				}
-			}
-		}
 		if miniProgram {
 			items = items[:0]
 			seen = map[string]bool{}
-			for _, model := range approvedModels {
-				code := strings.TrimSpace(model.ModelName)
-				seen[code] = true
-				items = append(items, map[string]any{
-					"code": code, "name": code, "capabilities": []string{"TEXT_TO_IMAGE", "IMAGE_TO_IMAGE"},
-					"online": true, "pointCost": modelPointCost(code),
-				})
+		}
+		for _, model := range data.AIModels {
+			code := strings.TrimSpace(model.ModelName)
+			key := strings.ToLower(code)
+			if code == "" || !isActiveLike(model.Status) {
+				continue
 			}
+			localModel := strings.EqualFold(code, "mock-standard") || strings.EqualFold(code, "mock-video")
+			_, routed, routeErr := selectAPIChannelForConfiguredModel(data, code)
+			if !localModel && (!routed || routeErr != nil) {
+				continue
+			}
+			if miniProgram {
+				allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC())
+				if !allowed && !miniProgramVideoComplianceBypassAllows(model) {
+					continue
+				}
+			}
+			approvedModels[key] = model
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			schema := findAIParameterSchema(data.AIParameterSchemas, model.ModuleCode, model.ModelName)
+			capabilities := publicModelCapabilities(model, schema.SchemaJSON)
+			item := map[string]any{
+				"code": code, "name": code, "capabilities": capabilities,
+				"online": true, "pointCost": modelPointCost(code),
+			}
+			if isVideoAIModel(model) {
+				videoCapabilities := resolveVideoModelCapabilities(model, schema.SchemaJSON)
+				item["videoCapabilities"] = videoCapabilities
+				item["video_capabilities"] = videoCapabilities
+			}
+			items = append(items, item)
 		}
 		for _, channel := range configuredGenerationChannels(data) {
 			for _, model := range channel.Models {
 				code := strings.TrimSpace(model)
+				key := strings.ToLower(code)
 				if miniProgram {
-					if _, ok := approvedModels[strings.ToLower(code)]; !ok {
+					if _, ok := approvedModels[key]; !ok {
 						continue
 					}
 				}
-				if code == "" || seen[code] {
+				if code == "" || seen[key] {
 					continue
 				}
-				seen[code] = true
+				seen[key] = true
 				items = append(items, map[string]any{
 					"code":         code,
 					"name":         code,
