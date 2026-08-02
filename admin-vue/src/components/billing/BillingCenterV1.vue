@@ -52,10 +52,23 @@
     </template>
 
     <template v-else-if="moduleId === 'billingRules'">
-      <div class="billing-v1__filters"><el-input v-model="keyword" clearable placeholder="搜索模型名称、编码、模块或来源" :prefix-icon="Search" /></div>
+      <div class="billing-v1__filters billing-v1__filters--rules">
+        <el-input v-model="keyword" clearable placeholder="搜索模型名称、编码、模块或来源" :prefix-icon="Search" />
+        <el-switch v-model="showRuleHistory" active-text="显示历史版本" inactive-text="仅看当前价格" />
+        <el-tag effect="plain">{{ showRuleHistory ? rules.length : currentBillingRules.length }} 条</el-tag>
+      </div>
       <el-card shadow="never" v-loading="loading">
         <el-table :data="filteredRules" height="650" stripe empty-text="暂无计费规则">
-          <el-table-column prop="modelName" label="模型名称" min-width="160" fixed show-overflow-tooltip />
+          <el-table-column prop="modelName" label="模型名称" min-width="210" fixed>
+            <template #default="s">
+              <div class="billing-rule-name">
+                <span>{{ s.row.modelName }}</span>
+                <el-tag v-if="s.row.status === 'PUBLISHED'" size="small" type="success">当前生效</el-tag>
+                <el-tag v-else-if="s.row.status === 'DRAFT'" size="small" type="warning">待发布草稿</el-tag>
+                <el-tag v-else size="small" type="info">历史归档</el-tag>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column prop="modelCode" label="模型编码" min-width="180" show-overflow-tooltip />
           <el-table-column prop="moduleCode" label="所属模块" min-width="130" />
           <el-table-column prop="billingUnit" label="计费单位" min-width="125" />
@@ -64,7 +77,7 @@
           <el-table-column label="参数规则" min-width="230" show-overflow-tooltip><template #default="s">{{ jsonText(s.row.parameterRules) }}</template></el-table-column>
           <el-table-column prop="ruleSource" label="规则来源" min-width="145"><template #default="s"><el-tag :type="s.row.ruleSource === 'CODE_DEFAULT' ? 'warning' : s.row.ruleSource === 'DATABASE' ? 'success' : 'primary'" :effect="s.row.ruleSource === 'CODE_DEFAULT' ? 'dark' : 'light'">{{ s.row.ruleSource }}</el-tag></template></el-table-column>
           <el-table-column prop="version" label="版本" width="78"><template #default="s">v{{ s.row.version }}</template></el-table-column>
-          <el-table-column prop="status" label="状态" width="104"><template #default="s"><status-tag :value="s.row.status" /></template></el-table-column>
+          <el-table-column prop="status" label="版本状态" width="112"><template #default="s">{{ ruleStatusLabel(s.row.status) }}</template></el-table-column>
           <el-table-column prop="updatedAt" label="更新时间" min-width="178"><template #default="s">{{ dateTime(s.row.updatedAt) }}</template></el-table-column>
           <el-table-column label="操作" width="210" fixed="right">
             <template #default="s">
@@ -219,6 +232,7 @@ const errorMessage = ref("");
 const keyword = ref("");
 const onlyAbnormal = ref(false);
 const ledgerType = ref("");
+const showRuleHistory = ref(false);
 const rules = ref<BillingRuleVersion[]>([]);
 const costs = ref<ProviderCost[]>([]);
 const events = ref<BillingLifecycleEvent[]>([]);
@@ -248,7 +262,22 @@ const overviewMetrics = computed(() => [
 
 function searchable(row: unknown) { return JSON.stringify(row).toLowerCase(); }
 const query = computed(() => keyword.value.trim().toLowerCase());
-const filteredRules = computed(() => rules.value.filter((row) => !query.value || searchable(row).includes(query.value)));
+const currentBillingRules = computed(() => {
+  const groups = new Map<string, BillingRuleVersion[]>();
+  for (const rule of rules.value) {
+    const key = rule.ruleKey || `${rule.moduleCode}:${rule.modelCode}`;
+    const versions = groups.get(key) || [];
+    versions.push(rule);
+    groups.set(key, versions);
+  }
+  return [...groups.values()].map((versions) => [...versions].sort((left, right) => {
+    const leftCurrent = left.status === "PUBLISHED" ? 1 : 0;
+    const rightCurrent = right.status === "PUBLISHED" ? 1 : 0;
+    if (leftCurrent !== rightCurrent) return rightCurrent - leftCurrent;
+    return right.version - left.version;
+  })[0]);
+});
+const filteredRules = computed(() => (showRuleHistory.value ? rules.value : currentBillingRules.value).filter((row) => !query.value || searchable(row).includes(query.value)));
 const filteredCosts = computed(() => costs.value.filter((row) => !query.value || searchable(row).includes(query.value)));
 const filteredEvents = computed(() => events.value.filter((row) => !query.value || searchable(row).includes(query.value)));
 const filteredReconciliation = computed(() => reconciliation.value.filter((row) => (!onlyAbnormal.value || row.anomalies.length > 0) && (!query.value || searchable(row).includes(query.value))));
@@ -298,6 +327,7 @@ async function saveRuleDraft() {
     const parameterRules = JSON.parse(ruleDraft.parameterRulesText || "{}");
     saving.value = true;
     await billingApi.createRuleDraft(selectedRule.value.id, { billing_type: selectedRule.value.billingUnit, base_price: ruleDraft.basePrice, minimum_charge: ruleDraft.minimumCharge, parameter_multiplier: parameterRules, status: "DRAFT" });
+    showRuleHistory.value = true;
     ruleDialogVisible.value = false;
     ElMessage.success("已创建新草稿，当前正式版本未被覆盖");
     await load();
@@ -351,6 +381,7 @@ function nullableNumber(value: unknown) { return value === null || value === und
 function money(value: unknown, currency = "CNY") { const n = Number(value); return Number.isFinite(n) ? `${number(n)} ${currency}` : "-"; }
 function dateTime(value?: string) { if (!value) return "-"; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false }); }
 function jsonText(value: unknown) { return JSON.stringify(value || {}); }
+function ruleStatusLabel(value: string) { return value === "PUBLISHED" ? "当前生效" : value === "DRAFT" ? "待发布草稿" : "历史归档"; }
 </script>
 
 <style scoped>
@@ -371,6 +402,9 @@ function jsonText(value: unknown) { return JSON.stringify(value || {}); }
 .billing-v1__filters { display: flex; justify-content: flex-end; gap: 14px; align-items: center; margin-bottom: 12px; }
 .billing-v1__filters .el-input { width: min(460px, 100%); }
 .billing-v1__filters--wide { justify-content: flex-start; }
+.billing-v1__filters--rules { flex-wrap: wrap; }
+.billing-rule-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.billing-rule-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .billing-status { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .billing-status--success { color: #067647; background: #ecfdf3; }
 .billing-status--warning { color: #b54708; background: #fffaeb; }
