@@ -15,12 +15,16 @@ test("mini-program video page derives controls from model schema contract", () =
     "videoParameterFields",
     "videoParameterValues",
     "requestVideoModelSwitch",
-    "v31-video-parameter-panel",
+    "basicVideoSelectFields",
+    "videoAudioField",
+    "advancedVideoParameterFields",
+    "video-basic-card",
   ]) {
     assert.ok(source.includes(token), `missing dynamic video form token: ${token}`);
   }
-  assert.match(source, /v-for="field in videoParameterFields"/);
-  assert.match(source, /field\.type === ['"]boolean['"] \|\| field\.type === ['"]switch['"]/);
+  assert.match(source, /v-for="field in basicVideoSelectFields"/);
+  assert.match(source, /v-for="field in advancedVideoParameterFields"/);
+  assert.match(source, /videoBooleanParameterValue\('generate_audio'\)/);
 });
 
 test("model switch confirms before clearing an existing reference image", () => {

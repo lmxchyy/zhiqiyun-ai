@@ -27,6 +27,15 @@
         @getphonenumber="onGetPhoneNumber($event)"
       />
       <text class="auth-auto-register">未注册手机号将自动创建账号</text>
+      <button
+        class="auth-guest-enter-button"
+        hover-class="auth-guest-enter-pressed"
+        :disabled="busy"
+        @click="enterGuestBrowse()"
+      >
+        <text>暂不登录，进入首页</text>
+      </button>
+      <text class="auth-guest-hint">可先浏览功能，需要创作时再登录</text>
       <view class="auth-divider"><view /><text>其他登录方式</text><view /></view>
       <button class="auth-login-mode-button" hover-class="auth-login-mode-hover" @click="switchMode('sms')">
         <text>使用手机号验证码登录</text>
@@ -46,7 +55,6 @@
         @open="openAgreement($event)"
       />
       <SecondaryLoginEntry class="auth-help-spacing" label="登录遇到问题？" muted @activate="showLoginHelp()" />
-      <SecondaryLoginEntry class="auth-browse-entry" label="暂不登录，先浏览功能" muted @activate="enterGuestBrowse()" />
     </LoginCard>
     <!-- #endif -->
 
@@ -66,6 +74,15 @@
         @confirm="loginWithSms()"
       />
       <PrimaryLoginButton label="登录 / 注册" :disabled="busy" @activate="loginWithSms()" />
+      <button
+        class="auth-guest-enter-button"
+        hover-class="auth-guest-enter-pressed"
+        :disabled="busy"
+        @click="enterGuestBrowse()"
+      >
+        <text>暂不登录，进入首页</text>
+      </button>
+      <text class="auth-guest-hint">可先浏览功能，需要创作时再登录</text>
       <SecondaryLoginEntry class="auth-mode-back" label="账号密码登录" @activate="switchMode('password')" />
       <!-- #ifdef MP-WEIXIN -->
       <SecondaryLoginEntry class="auth-mode-back" label="返回手机号快捷登录" @activate="switchMode('wechat')" />
@@ -78,7 +95,6 @@
         @open="openAgreement($event)"
       />
       <SecondaryLoginEntry class="auth-help-spacing sms" label="登录遇到问题？" muted @activate="showLoginHelp()" />
-      <SecondaryLoginEntry class="auth-browse-entry" label="暂不登录，先浏览功能" muted @activate="enterGuestBrowse()" />
     </LoginCard>
 
     <LoginCard
@@ -136,6 +152,15 @@
       >
         <text>{{ busy ? "正在登录…" : agreementAccepted ? "登录" : "同意协议并登录" }}</text>
       </view>
+      <button
+        class="auth-guest-enter-button"
+        hover-class="auth-guest-enter-pressed"
+        :disabled="busy"
+        @click="enterGuestBrowse()"
+      >
+        <text>暂不登录，进入首页</text>
+      </button>
+      <text class="auth-guest-hint">可先浏览功能，需要创作时再登录</text>
       <SecondaryLoginEntry label="使用手机号验证码登录" @activate="switchMode('sms')" />
       <!-- #ifdef MP-WEIXIN -->
       <SecondaryLoginEntry label="返回手机号快捷登录" muted @activate="switchMode('wechat')" />
@@ -154,7 +179,6 @@
           <text class="auth-password-agreement-link" @click.stop="openAgreement('privacy')">《隐私政策》</text>
         </view>
       </view>
-      <SecondaryLoginEntry class="auth-browse-entry" label="暂不登录，先浏览功能" muted @activate="enterGuestBrowse()" />
     </LoginCard>
 
     <BottomSheet
@@ -185,7 +209,11 @@
     </BottomSheet>
 
     <!-- #ifdef MP-WEIXIN -->
-    <BottomSheet :visible="authorizationSheetVisible" :closable="false" :close-on-overlay="false">
+    <BottomSheet
+      :visible="authorizationSheetVisible"
+      title="选择登录方式"
+      @close="closeAuthorizationSheet()"
+    >
       <view class="auth-permission-sheet">
         <view class="auth-permission-icon">!</view>
         <text class="auth-permission-title">未获得手机号授权</text>
@@ -197,6 +225,13 @@
           open-type="getPhoneNumber"
           @getphonenumber="onGetPhoneNumber($event)"
         />
+        <button
+          class="auth-guest-enter-button auth-permission-guest-button"
+          hover-class="auth-guest-enter-pressed"
+          @click="enterGuestBrowse()"
+        >
+          <text>暂不登录，进入首页</text>
+        </button>
       </view>
     </BottomSheet>
     <!-- #endif -->
@@ -234,6 +269,7 @@ import Toast from "../components/auth/Toast.vue";
 import VerificationCodeInput from "../components/auth/VerificationCodeInput.vue";
 import { trackLogin } from "../features/auth/analytics";
 import { loginAPI } from "../features/auth/api";
+import { clearGuestBrowse, enterGuestBrowseHome } from "../features/auth/guestBrowse";
 import { redirectAfterAuth } from "../features/auth/redirect";
 import { parseLoginSource, parseRedirectInfo } from "../features/auth/source";
 import { recordAgentInviteAppActivation } from "../features/invite/activation";
@@ -386,6 +422,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
     authStorage.setRefreshToken(auth.refreshToken || "");
     authStorage.setAuth(auth);
     authStore.applyAuth(auth);
+    clearGuestBrowse();
     // #ifdef APP-PLUS
     void recordAgentInviteAppActivation();
     // #endif
@@ -540,6 +577,11 @@ async function onGetPhoneNumber(event: unknown) {
 function useSmsAfterAuthorizationFailure() {
   authorizationSheetVisible.value = false;
   switchMode("sms");
+}
+
+function closeAuthorizationSheet() {
+  authorizationSheetVisible.value = false;
+  trackLogin("phone_auth_sheet_close");
 }
 
 async function sendSmsCode() {
@@ -742,10 +784,9 @@ function returnToAvailableLogin() {
 }
 
 function enterGuestBrowse() {
-  uni.switchTab({
-    url: "/pages/user/UserHomePage",
-    fail: () => uni.reLaunch({ url: "/pages/user/UserHomePage" }),
-  });
+  authorizationSheetVisible.value = false;
+  trackLogin("guest_browse_enter");
+  enterGuestBrowseHome();
 }
 
 const keyboardHandler = (result: { height?: number }) => {
@@ -781,6 +822,10 @@ onUnload(() => {
 
 <style scoped>
 .auth-auto-register { display: block; margin-top: 10px; color: #8c94a8; font-size: 11px; line-height: 20px; text-align: center; }
+.auth-guest-enter-button { width: 100%; min-height: 46px; margin: 16px 0 0; padding: 10px 16px; box-sizing: border-box; border: 1px solid #cfd8ff; border-radius: 14px; color: #3555e8; background: #f3f6ff; font-size: 14px; line-height: 24px; font-weight: 600; }
+.auth-guest-enter-button::after { display: none; }
+.auth-guest-enter-pressed { opacity: .72; }
+.auth-guest-hint { display: block; margin-top: 7px; color: #697085; font-size: 11px; line-height: 18px; text-align: center; }
 .auth-divider { display: flex; align-items: center; gap: 7px; margin: 24px 0 2px; color: #8c94a8; font-size: 12px; line-height: 20px; }
 .auth-divider view { height: 1px; flex: 1; background: #e3e8f5; }
 .auth-login-mode-button { width: 100%; min-height: 34px; margin: 0; padding: 5px 4px; box-sizing: border-box; border: 0; color: #4a6bff; background: transparent; font-size: 13px; line-height: 24px; font-weight: 500; }
@@ -792,7 +837,6 @@ onUnload(() => {
 .auth-agreement-spacing.sms { margin-top: 16px; }
 .auth-agreement-spacing.password { margin-top: 11px; }
 .auth-help-spacing { margin-top: 22px; }
-.auth-browse-entry { margin-top: 8px; color: #4a6bff; }
 .auth-help-spacing.sms { margin-top: 7px; }
 .auth-mode-back { margin: 7px 0 5px; }
 .auth-field-block { margin-bottom: 12px; }
@@ -833,6 +877,7 @@ onUnload(() => {
 .auth-permission-title { color: #181c28; font-size: 21px; line-height: 32px; font-weight: 700; }
 .auth-permission-copy { margin: 8px 0 24px; color: #697085; font-size: 13px; line-height: 24px; }
 .auth-retry-authorization { margin-top: 14px; color: #4a6bff !important; border: 1px solid #e0e5f2 !important; background: #fff !important; box-shadow: none !important; }
+.auth-permission-guest-button { margin-top: 14px; }
 .auth-agreement-document { max-height: 220px; margin-bottom: 22px; color: #697085; font-size: 13px; line-height: 24px; }
 @media (max-width: 340px) {
   .auth-auto-register { font-size: 10px; }

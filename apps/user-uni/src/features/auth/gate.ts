@@ -2,6 +2,7 @@ import { createAuthGate, createPendingActionStore, type AuthStatus, type Pending
 import { createUniPlatformAdapter } from "@xianzhi/platform-adapter";
 import { authStorage } from "../../api/client";
 import { trackLogin } from "./analytics";
+import { acceptGuestBrowse, clearGuestBrowse, isLoginPromptSuppressed, suppressLoginPrompt } from "./guestBrowse";
 
 const adapter = createUniPlatformAdapter();
 export const pendingActions = createPendingActionStore({ adapter });
@@ -16,7 +17,13 @@ export function authStatus(): AuthStatus {
 export function initializeAuth() {
   expired = false;
   pendingActions.get();
-  trackLogin(authStorage.getToken() ? "authenticated_open_app" : "guest_open_app");
+  if (authStorage.getToken()) {
+    clearGuestBrowse();
+    trackLogin("authenticated_open_app");
+  } else {
+    acceptGuestBrowse();
+    trackLogin("guest_open_app");
+  }
   return authStatus();
 }
 
@@ -27,6 +34,7 @@ export function hasValidToken() {
 export function handleTokenExpired() {
   expired = true;
   authStorage.clearSession();
+  acceptGuestBrowse();
 }
 
 function currentRoute() {
@@ -39,6 +47,11 @@ function currentRoute() {
 
 function openLoginPage() {
   return new Promise<void>(resolve => {
+    if (isLoginPromptSuppressed()) {
+      trackLogin("login_prompt_suppressed");
+      resolve();
+      return;
+    }
     trackLogin("login_modal_show");
     uni.showModal({
       title: "\u767b\u5f55\u540e\u7ee7\u7eed\u4f7f\u7528",
@@ -49,6 +62,9 @@ function openLoginPage() {
       success(result) {
         if (!result.confirm) {
           trackLogin("login_cancel");
+          acceptGuestBrowse();
+          suppressLoginPrompt();
+          pendingActions.clear();
           if (adapter.platform === "web" && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("zhiqiyun:auth-cancelled"));
           resolve();
           return;
@@ -77,6 +93,10 @@ const gate = createAuthGate({
 });
 
 export function requireAuth(input: PendingActionInput) {
+  if (authStatus() !== "authenticated" && isLoginPromptSuppressed()) {
+    trackLogin("login_prompt_suppressed", { action: input.action });
+    return Promise.resolve(false);
+  }
   return gate.requireAuth(input);
 }
 
