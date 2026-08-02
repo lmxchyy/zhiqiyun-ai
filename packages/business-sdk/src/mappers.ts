@@ -401,6 +401,9 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
           ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" ? { first_frame: firstFrame } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),
+          ...(videoMode === "IMAGE_TO_VIDEO" && !capabilities.supportsLastFrame && capabilities.maxReferenceImages > 1
+            ? { reference_images: allImageURLs }
+            : {}),
         };
       })()
     : {

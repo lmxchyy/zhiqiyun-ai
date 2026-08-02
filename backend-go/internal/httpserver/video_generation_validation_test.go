@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -383,6 +384,63 @@ func TestVideoGenerationRejectsMultipleDistinctImages(t *testing.T) {
 	}
 	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
 	requireVideoValidationCode(t, err, "VIDEO_IMAGE_LIMIT_EXCEEDED")
+}
+
+func TestGrokImagine15VideoAcceptsSevenCanonicalReferenceImages(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.SupportsLastFrame = false
+	capabilities.MaxReferenceImages = 7
+	resolved := videoValidationTestResolved(capabilities)
+	references := make([]any, 0, 7)
+	for index := 1; index <= 7; index++ {
+		references = append(references, map[string]any{"url": fmt.Sprintf("https://example.test/reference-%d.png", index)})
+	}
+	request := generation.CreateRequest{
+		Type: "IMAGE_TO_VIDEO",
+		Params: map[string]any{
+			"duration":         float64(5),
+			"resolution":       "720p",
+			"aspect_ratio":     "9:16",
+			"reference_images": references,
+		},
+	}
+	if err := validateVideoGenerationRequest(&request, resolved); err != nil {
+		t.Fatalf("seven reference images were rejected: %v", err)
+	}
+	if request.Params["first_frame"] != "https://example.test/reference-1.png" {
+		t.Fatalf("first_frame = %#v", request.Params["first_frame"])
+	}
+	canonical, ok := request.Params["reference_images"].([]string)
+	if !ok || len(canonical) != 7 {
+		t.Fatalf("reference_images snapshot = %#v", request.Params["reference_images"])
+	}
+}
+
+func TestGrokImagine15VideoRejectsEightReferenceImages(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.MaxReferenceImages = 7
+	resolved := videoValidationTestResolved(capabilities)
+	references := make([]any, 0, 8)
+	for index := 1; index <= 8; index++ {
+		references = append(references, fmt.Sprintf("https://example.test/reference-%d.png", index))
+	}
+	request := generation.CreateRequest{Type: "IMAGE_TO_VIDEO", Params: map[string]any{"reference_images": references}}
+	err := validateVideoGenerationRequest(&request, resolved)
+	requireVideoValidationCode(t, err, "VIDEO_IMAGE_LIMIT_EXCEEDED")
+}
+
+func TestNormalizeVideoModelCapabilitiesPreservesSevenReferencesWithoutLastFrame(t *testing.T) {
+	capabilities := normalizeVideoModelCapabilities(adminVideoModelCapabilities{
+		SupportsTextToVideo:  true,
+		SupportsImageToVideo: true,
+		SupportsFirstFrame:   true,
+		SupportsLastFrame:    false,
+		MaxReferenceImages:   7,
+		SupportedParameters:  []string{"duration", "resolution", "aspect_ratio"},
+	})
+	if capabilities.MaxReferenceImages != 7 || capabilities.SupportsLastFrame {
+		t.Fatalf("normalized capabilities = %+v", capabilities)
+	}
 }
 
 func TestVideoGenerationRejectsUnsupportedLastFrame(t *testing.T) {

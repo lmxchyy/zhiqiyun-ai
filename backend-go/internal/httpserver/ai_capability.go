@@ -167,7 +167,7 @@ func defaultAIModules(now string) []adminAIModule {
 			ID: "ai_module_video_generation", ModuleCode: moduleVideoGeneration, Name: "视频生成",
 			Description: "统一管理文生视频、图生视频、首尾帧视频的模型、参数和调用策略。",
 			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_month", "plan_pro", "plan_year"},
-			BoundModels: []string{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}, DefaultSchemaID: "schema_video_generation_default",
+			BoundModels: []string{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0", "grok-imagine-1.5-video"}, DefaultSchemaID: "schema_video_generation_default",
 			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
 		},
 		{
@@ -187,6 +187,7 @@ func defaultAIModels(now string) []adminAIModel {
 		{ID: "ai_model_mock_video", ModelName: "mock-video", ModelType: "video", Provider: "Local", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_seedance_fast_20", ModelName: "seedance-fast-2.0", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_doubao_seedance_20", ModelName: "doubao-seedance-2.0", ModelType: "video", Provider: "移动云", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 30, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_grok_imagine_15_video", ModelName: "grok-imagine-1.5-video", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 40, AllowFallbackSwitch: true, VideoCapabilities: grokImagine15VideoCapabilities(), CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_kimi_k26", ModelName: "kimi-k2.6", ModelType: "text", Provider: "NewAPI", CapabilityCode: []string{"ppt_outline", "ppt_content", "ppt_export"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", FallbackModel: "ppt-text-model", SortWeight: 10, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_ppt_text", ModelName: "ppt-text-model", ModelType: "text", Provider: "Local", CapabilityCode: []string{"ppt_outline", "ppt_content"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", SortWeight: 20, CreatedAt: now, UpdatedAt: now},
 	}
@@ -225,6 +226,17 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
 		},
 		{
+			ID: "schema_video_grok_imagine_15", ModuleCode: moduleVideoGeneration, ModelName: "grok-imagine-1.5-video",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "视频提示词", Type: "textarea", Required: true, Placeholder: "描述视频画面、运动和风格", UserEditable: true, Visible: true},
+				{Key: "duration", Label: "视频时长", Type: "select", Required: true, Default: float64(6), Options: intOptionsToAny(grokImagine15SupportedDurations()), Unit: "秒", UserEditable: true, Visible: true},
+				{Key: "resolution", Label: "分辨率", Type: "select", Required: true, Default: "720p", Options: anyOptions("480p", "720p"), UserEditable: true, Visible: true},
+				{Key: "aspect_ratio", Label: "画面比例", Type: "select", Required: true, Default: "16:9", Options: anyOptions("16:9", "9:16", "1:1", "3:2", "2:3"), UserEditable: true, Visible: true},
+				{Key: "first_frame", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true, HelpText: "可上传 1 至 7 张参考图"},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
 			ID: "schema_ppt_generation_default", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6",
 			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
 				{Key: "topic", Label: "PPT主题", Type: "textarea", Required: true, Placeholder: "输入演示文稿主题和要求", UserEditable: true, Visible: true},
@@ -245,7 +257,7 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
 	return []adminTenantModuleLimit{
 		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(15)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0", "grok-imagine-1.5-video"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(30)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"kimi-k2.6", "ppt-text-model"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_plan_free_image", TenantID: "default", PackageID: "plan_free", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard"}}, "n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
@@ -259,8 +271,31 @@ func defaultBillingRules(now string) []adminBillingRule {
 		{ID: "billing_rule_video_grok_image", ModuleCode: moduleVideoGeneration, ModelName: "grok-video-image", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_seedance", ModuleCode: moduleVideoGeneration, ModelName: "seedance-fast-2.0", BillingType: "per_second", BasePrice: 12, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_doubao_seedance", ModuleCode: moduleVideoGeneration, ModelName: "doubao-seedance-2.0", BillingType: "per_second", BasePrice: 12, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2), "4k": float64(4)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_grok_imagine_15", ModuleCode: moduleVideoGeneration, ModelName: "grok-imagine-1.5-video", BillingType: "per_second", BasePrice: 15, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_ppt_kimi", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6", BillingType: "per_page", BasePrice: 1, CostPrice: 0.4, CurrencyType: "credit", ParameterMultiplier: map[string]any{"with_images": map[string]any{"true": float64(1), "false": float64(1)}, "uploaded_file": map[string]any{"true": float64(1), "false": float64(1)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
+}
+
+func grokImagine15VideoCapabilities() *adminVideoModelCapabilities {
+	return &adminVideoModelCapabilities{
+		SupportsTextToVideo:   true,
+		SupportsImageToVideo:  true,
+		SupportsFirstFrame:    true,
+		SupportsLastFrame:     false,
+		MaxReferenceImages:    7,
+		SupportedDurations:    grokImagine15SupportedDurations(),
+		SupportedResolutions:  []string{"480p", "720p"},
+		SupportedAspectRatios: []string{"16:9", "9:16", "1:1", "3:2", "2:3"},
+		SupportedParameters:   []string{"duration", "resolution", "aspect_ratio"},
+	}
+}
+
+func grokImagine15SupportedDurations() []int {
+	result := make([]int, 0, 25)
+	for seconds := 6; seconds <= 30; seconds++ {
+		result = append(result, seconds)
+	}
+	return result
 }
 
 func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {

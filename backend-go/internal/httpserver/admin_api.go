@@ -2920,6 +2920,13 @@ func defaultAPIChannels() []adminAPIChannel {
 			Status: "CONFIGURABLE", Priority: 15, Models: []string{"doubao-seedance-2.0"},
 		},
 		{
+			ID: "channel_newapi_grok_imagine", Name: "NewAPI Grok Imagine Video", BaseURL: "https://newapi.zs-kjhn.cn", Protocol: "openai",
+			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
+			VideoGenerationEndpoint: "/v1/videos",
+			FetchModelsPath:         "/v1/models", APIKeyEnv: "NEWAPI_ZS_KJHN_API_KEY", Notes: "Grok Imagine 1.5 text-to-video and multi-reference video channel.",
+			Status: "CONFIGURABLE", Priority: 16, Models: []string{"grok-imagine-1.5-video"},
+		},
+		{
 			ID: "channel_openai", Name: "OpenAI 官方", BaseURL: "https://api.openai.com/v1", Protocol: "openai",
 			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
 			FetchModelsPath: "/models", APIKeyEnv: "OPENAI_API_KEY", Status: "CONFIGURABLE", Priority: 20, Models: []string{"gpt-image-2", "mock-standard"},

@@ -66,3 +66,10 @@ test("reference upload switches a supported text-to-video model after image sele
   assert.match(appendBody, /videoModelCapabilities\.value\.supportsImageToVideo/);
   assert.match(appendBody, /videoGenerationMode\.value = "IMAGE_TO_VIDEO"/);
 });
+
+test("video reference upload uses the selected model limit and submits every uploaded image", () => {
+  assert.match(source, /Math\.min\(7,\s*videoModelCapabilities\.value\.maxReferenceImages/);
+  assert.doesNotMatch(source, /creationReferencePaths\.value\.slice\(0,\s*1\)/);
+  assert.match(source, /uploadCreationReferenceImages\(creationReferencePaths\.value\)/);
+  assert.match(source, /referenceImages:\s*mode === "video"\s*\? videoReferenceImages/);
+});

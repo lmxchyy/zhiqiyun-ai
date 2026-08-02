@@ -21,11 +21,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
 )
 
@@ -676,6 +678,111 @@ func TestNormalizeAICapabilityDefaultsMergesMissingBillingRules(t *testing.T) {
 	}, data)
 	if grokHDCost != 30 {
 		t.Fatalf("grok video 1080p point cost = %d, want 30", grokHDCost)
+	}
+}
+
+func TestGrokImagine15VideoDefaultCapabilityAndBillingContract(t *testing.T) {
+	data := seedAdminData()
+	model := findAIModel(data.AIModels, moduleVideoGeneration, "grok-imagine-1.5-video")
+	if model.ID == "" || model.VideoCapabilities == nil {
+		t.Fatalf("Grok Imagine 1.5 model is missing: %+v", model)
+	}
+	capabilities := normalizeVideoModelCapabilities(*model.VideoCapabilities)
+	if !capabilities.SupportsTextToVideo || !capabilities.SupportsImageToVideo || capabilities.MaxReferenceImages != 7 {
+		t.Fatalf("unexpected capabilities: %+v", capabilities)
+	}
+	if !slices.Contains(capabilities.SupportedDurations, 6) || !slices.Contains(capabilities.SupportedDurations, 30) || slices.Contains(capabilities.SupportedDurations, 5) {
+		t.Fatalf("unexpected duration contract: %+v", capabilities.SupportedDurations)
+	}
+	if !stringListContains(capabilities.SupportedAspectRatios, "3:2") || !stringListContains(capabilities.SupportedAspectRatios, "2:3") {
+		t.Fatalf("missing documented aspect ratios: %+v", capabilities.SupportedAspectRatios)
+	}
+	if stringListContains(capabilities.SupportedResolutions, "1080p") || stringListContains(capabilities.SupportedResolutions, "4k") {
+		t.Fatalf("unsupported resolution was exposed: %+v", capabilities.SupportedResolutions)
+	}
+	schema := findAIParameterSchema(data.AIParameterSchemas, moduleVideoGeneration, "grok-imagine-1.5-video")
+	if schema.ID == "" || schema.ModelName != "grok-imagine-1.5-video" {
+		t.Fatalf("model-specific schema is missing: %+v", schema)
+	}
+	var durationField adminAIParameterField
+	for _, field := range schema.SchemaJSON.Fields {
+		if field.Key == "duration" {
+			durationField = field
+			break
+		}
+	}
+	if len(durationField.Options) != 25 || durationField.Options[0] != 6 || durationField.Options[24] != 30 {
+		t.Fatalf("duration schema does not expose the documented 6-30 range: %+v", durationField)
+	}
+	resolved := resolvedModuleSchema{
+		Module:      adminAIModule{ModuleCode: moduleVideoGeneration},
+		Model:       model,
+		Schema:      schema,
+		FinalSchema: applyVideoCapabilitiesToSchema(schema.SchemaJSON, capabilities),
+	}
+	validRequest := generation.CreateRequest{Type: videoModeText, Params: map[string]any{
+		"duration": float64(30), "resolution": "720p", "aspect_ratio": "2:3",
+	}}
+	if err := validateVideoGenerationRequest(&validRequest, resolved); err != nil {
+		t.Fatalf("documented Grok parameters were rejected: %v", err)
+	}
+	for _, invalid := range []generation.CreateRequest{
+		{Type: videoModeText, Params: map[string]any{"duration": float64(5), "resolution": "720p", "aspect_ratio": "16:9"}},
+		{Type: videoModeText, Params: map[string]any{"duration": float64(6), "resolution": "1080p", "aspect_ratio": "16:9"}},
+	} {
+		if err := validateVideoGenerationRequest(&invalid, resolved); err == nil {
+			t.Fatalf("unsupported Grok parameters were accepted: %+v", invalid.Params)
+		}
+	}
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, adminUser{PlanID: "plan_month"}, moduleVideoGeneration, model.ModelName)
+	if err := validateModelAllowedByLimit(model.ModelName, limit.LimitJSON); err != nil {
+		t.Fatalf("default tenant limit rejects Grok model: %v", err)
+	}
+	durationLimit, _ := limit.LimitJSON["duration"].(map[string]any)
+	if durationLimit["max"] != float64(30) {
+		t.Fatalf("tenant duration limit blocks the documented 30-second maximum: %+v", durationLimit)
+	}
+	var channel adminAPIChannel
+	for _, item := range data.APIChannels {
+		if item.ID == "channel_newapi_grok_imagine" {
+			channel = item
+			break
+		}
+	}
+	if channel.ID == "" {
+		t.Fatal("Grok model default channel is missing")
+	}
+	if channel.BaseURL != "https://newapi.zs-kjhn.cn" || channel.VideoGenerationEndpoint != "/v1/videos" {
+		t.Fatalf("unexpected Grok channel contract: %+v", channel)
+	}
+	if channel.APIKeyEnv != "NEWAPI_ZS_KJHN_API_KEY" || !stringListContains(channel.Models, model.ModelName) {
+		t.Fatalf("unexpected Grok channel credential/model declaration: %+v", channel)
+	}
+
+	tests := []struct {
+		name       string
+		duration   float64
+		resolution string
+		want       int
+	}{
+		{name: "six seconds 480p", duration: 6, resolution: "480p", want: 90},
+		{name: "ten seconds 720p", duration: 10, resolution: "720p", want: 180},
+		{name: "ten seconds 1080p future price", duration: 10, resolution: "1080p", want: 300},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cost := generationPointCostForRequest(createGenerationTaskRequest{
+				ModuleCode: moduleVideoGeneration,
+				Type:       "TEXT_TO_VIDEO",
+				Model:      "grok-imagine-1.5-video",
+				Params: map[string]any{
+					"duration": tt.duration, "resolution": tt.resolution,
+				},
+			}, data)
+			if cost != tt.want {
+				t.Fatalf("point cost = %d, want %d", cost, tt.want)
+			}
+		})
 	}
 }
 

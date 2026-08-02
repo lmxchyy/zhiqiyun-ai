@@ -106,11 +106,21 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 			return nil, errors.New("Grok Video 1.5 supports exactly one reference image")
 		}
 	}
+	if isGrokImagine15VideoModel(model) && len(imageURLs) > 7 {
+		return nil, errors.New("grok-imagine-1.5-video supports at most 7 reference images")
+	}
+	if isGrokImagine15VideoModel(model) {
+		for _, imageURL := range imageURLs {
+			if !isHTTPReferenceURL(imageURL) {
+				return nil, errors.New("grok-imagine-1.5-video reference images must use public HTTP(S) URLs")
+			}
+		}
+	}
 	if p.shouldUseSeedanceBridge(model) {
 		return p.createWithSeedanceBridge(ctx, model, req)
 	}
 	body := videoRequestBodyForEndpoint(model, req, p.endpoint, imageURLs)
-	if len(imageURLs) > 0 && !useSeedanceContentTaskProtocol(p.endpoint) {
+	if len(imageURLs) > 0 && !useSeedanceContentTaskProtocol(p.endpoint) && !isGrokImagine15VideoModel(model) {
 		body["image_urls"] = imageURLs
 		if len(imageURLs) == 1 {
 			body["input_reference"] = map[string]any{"image_url": imageURLs[0]}
@@ -156,7 +166,7 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	if videoURL == "" && strings.Contains(status, "PROCESS") {
 		status = "PROCESSING"
 	}
-	taskID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), "video-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	taskID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId", "request_id", "requestId"), "video-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 	if videoURL == "" && strings.EqualFold(status, "SUCCEEDED") && taskID != "" {
 		videoURL = videoContentEndpointForModel(p.baseURL, p.endpoint, taskID, model)
 	}
@@ -179,6 +189,15 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 }
 
 func videoRequestBody(model string, req generation.CreateRequest) map[string]any {
+	if isGrokImagine15VideoModel(model) {
+		return map[string]any{
+			"model":    model,
+			"prompt":   req.Prompt,
+			"duration": videoSeconds(req.Params),
+			"size":     videoAspectRatio(req.Params),
+			"quality":  videoResolution(req.Params),
+		}
+	}
 	if isDoubaoSeedance2Model(model) {
 		return map[string]any{
 			"model":      model,
@@ -198,6 +217,13 @@ func videoRequestBody(model string, req generation.CreateRequest) map[string]any
 }
 
 func videoRequestBodyForEndpoint(model string, req generation.CreateRequest, endpoint string, imageURLs []string) map[string]any {
+	if isGrokImagine15VideoModel(model) {
+		body := videoRequestBody(model, req)
+		if len(imageURLs) > 0 {
+			body["image_urls"] = append([]string(nil), imageURLs...)
+		}
+		return body
+	}
 	if isDoubaoSeedance2Model(model) && useSeedanceContentTaskProtocol(endpoint) {
 		firstFrame, lastFrame := videoFrameURLs(req.Params, imageURLs)
 		return map[string]any{
@@ -234,9 +260,9 @@ func seedanceContentItems(prompt string, firstFrame string, lastFrame string) []
 
 func normalizeVideoStatus(status string) string {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "SUCCESS", "SUCCEEDED", "COMPLETED":
+	case "SUCCESS", "SUCCEEDED", "COMPLETED", "DONE":
 		return "SUCCEEDED"
-	case "FAILURE", "FAILED", "ERROR":
+	case "FAILURE", "FAILED", "ERROR", "EXPIRED":
 		return "FAILED"
 	case "SUBMITTED", "QUEUED", "IN_PROGRESS", "NOT_START", "PENDING", "PROCESSING", "RUNNING":
 		return "PROCESSING"
@@ -259,6 +285,20 @@ func isGrokVideo15Model(model string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	normalized = strings.ReplaceAll(normalized, "_", "-")
 	return normalized == "grok-video-1.5"
+}
+
+func isGrokImagine15VideoModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	return normalized == "grok-imagine-1.5-video"
+}
+
+func isHTTPReferenceURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")
 }
 
 func isDoubaoSeedance2Model(model string) bool {
@@ -479,6 +519,8 @@ func videoProviderEndpointForModel(baseURL string, configuredPath string, model 
 	defaultRoute := "video/generations"
 	if isDoubaoSeedance2Model(model) {
 		defaultRoute = "videos/generations"
+	} else if isGrokImagine15VideoModel(model) {
+		defaultRoute = "videos"
 	}
 	if path == "" {
 		if baseURLHasAPIVersion(base) {
@@ -518,7 +560,7 @@ func baseURLHasAPIVersion(baseURL string) bool {
 }
 
 func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[string]any, model string) map[string]any {
-	taskID := firstStringByKeys(initial, "id", "taskId", "task_id", "providerTaskId")
+	taskID := firstStringByKeys(initial, "id", "taskId", "task_id", "providerTaskId", "request_id", "requestId")
 	if taskID == "" {
 		return initial
 	}
@@ -588,6 +630,13 @@ func videoTaskEndpoint(baseURL string, taskID string) string {
 }
 
 func videoTaskEndpointForModel(baseURL string, configuredPath string, taskID string, model string) string {
+	if isGrokImagine15VideoModel(model) {
+		base := strings.TrimRight(baseURL, "/")
+		if baseURLHasAPIVersion(base) {
+			return base + "/videos/" + url.PathEscape(taskID)
+		}
+		return base + "/v1/videos/" + url.PathEscape(taskID)
+	}
 	return strings.TrimRight(videoProviderEndpointForModel(baseURL, configuredPath, model), "/") + "/" + url.PathEscape(taskID)
 }
 

@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	videoModeText  = "TEXT_TO_VIDEO"
-	videoModeImage = "IMAGE_TO_VIDEO"
+	videoModeText           = "TEXT_TO_VIDEO"
+	videoModeImage          = "IMAGE_TO_VIDEO"
+	maxVideoReferenceImages = 7
 )
 
 var videoCoreParameters = []string{"duration", "resolution", "aspect_ratio"}
@@ -85,11 +86,8 @@ func normalizeVideoModelCapabilities(capabilities adminVideoModelCapabilities) a
 	if capabilities.SupportsLastFrame && capabilities.MaxReferenceImages < 2 {
 		capabilities.MaxReferenceImages = 2
 	}
-	if !capabilities.SupportsLastFrame && capabilities.MaxReferenceImages > 1 {
-		capabilities.MaxReferenceImages = 1
-	}
-	if capabilities.MaxReferenceImages > 2 {
-		capabilities.MaxReferenceImages = 2
+	if capabilities.MaxReferenceImages > maxVideoReferenceImages {
+		capabilities.MaxReferenceImages = maxVideoReferenceImages
 	}
 	return capabilities
 }
@@ -383,21 +381,19 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 		}
 		if firstFrame == "" {
 			legacy := legacyVideoImageValues(req.Params)
-			if len(legacy) == 1 {
+			if len(legacy) > 0 {
 				firstFrame = legacy[0]
 				if req.Params == nil {
 					req.Params = map[string]any{}
 				}
 				req.Params["first_frame"] = firstFrame
-			} else if len(legacy) > 1 {
-				return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", "图生视频首帧图最多只能上传 1 张")
 			}
 		}
 		if firstFrame == "" {
 			return newVideoGenerationValidationError("VIDEO_FIRST_FRAME_REQUIRED", "图生视频必须上传首帧图")
 		}
 		for _, legacyImage := range legacyVideoImageValues(req.Params) {
-			if legacyImage != firstFrame && legacyImage != lastFrame {
+			if capabilities.MaxReferenceImages <= 2 && legacyImage != firstFrame && legacyImage != lastFrame {
 				return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", "旧视频图片字段与首帧图或尾帧图不一致，请重新选择图片")
 			}
 		}
@@ -405,6 +401,9 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 			return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", fmt.Sprintf("所选模型最多支持 %d 张视频帧图片", capabilities.MaxReferenceImages))
 		}
 		clearLegacyVideoImageParameters(req.Params)
+		if capabilities.MaxReferenceImages > 2 {
+			req.Params["reference_images"] = append([]string(nil), images...)
+		}
 	}
 
 	if err := validateVideoDurationOption(req.Params, capabilities.SupportedDurations); err != nil {

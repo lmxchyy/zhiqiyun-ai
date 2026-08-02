@@ -11,6 +11,173 @@ import (
 	"xianzhi-ai/backend-go/internal/app/generation"
 )
 
+const grokImagine15VideoModel = "grok-imagine-1.5-video"
+
+func TestNormalizeVideoStatusTreatsExpiredAsFailed(t *testing.T) {
+	if got := normalizeVideoStatus("expired"); got != "FAILED" {
+		t.Fatalf("normalizeVideoStatus(expired) = %q, want FAILED", got)
+	}
+}
+
+func TestOpenAICompatibleGrokImagine15UsesMultiReferenceProtocol(t *testing.T) {
+	var requestPath string
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/videos" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "grok-request-1",
+			"status": "completed",
+			"data": map[string]any{"result": map[string]any{"videos": []any{
+				map[string]any{"url": "https://cdn.example/grok.mp4"},
+			}}},
+		})
+	}))
+	defer server.Close()
+
+	references := make([]any, 0, 7)
+	for index := 1; index <= 7; index++ {
+		references = append(references, map[string]any{"url": fmt.Sprintf("https://cdn.example/reference-%d.png", index)})
+	}
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL,
+		APIKey:  "sk-test",
+		Model:   grokImagine15VideoModel,
+		Models:  []string{grokImagine15VideoModel},
+	})
+	result, err := provider.Create(context.Background(), generation.CreateRequest{
+		Model:  grokImagine15VideoModel,
+		Prompt: "keep the characters consistent",
+		Params: map[string]any{
+			"duration":         6,
+			"aspect_ratio":     "2:3",
+			"resolution":       "720p",
+			"reference_images": references,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if requestPath != "/v1/videos" {
+		t.Fatalf("request path = %q", requestPath)
+	}
+	if payload["model"] != grokImagine15VideoModel || payload["duration"] != float64(6) || payload["size"] != "2:3" || payload["quality"] != "720p" {
+		t.Fatalf("unexpected Grok payload: %+v", payload)
+	}
+	for _, internalKey := range []string{"seconds", "aspect_ratio", "resolution", "reference_images", "input_reference"} {
+		if _, exists := payload[internalKey]; exists {
+			t.Fatalf("Grok payload leaked internal field %s: %+v", internalKey, payload)
+		}
+	}
+	items, ok := payload["image_urls"].([]any)
+	if !ok || len(items) != 7 {
+		t.Fatalf("image_urls = %#v", payload["image_urls"])
+	}
+	for index, raw := range items {
+		want := fmt.Sprintf("https://cdn.example/reference-%d.png", index+1)
+		if raw != want {
+			t.Fatalf("reference image %d = %#v, want %q", index, raw, want)
+		}
+	}
+	resultMap, ok := result.(map[string]any)
+	if !ok || resultMap["videoUrl"] != "https://cdn.example/grok.mp4" || resultMap["providerTaskId"] != "grok-request-1" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestOpenAICompatibleGrokImagine15SupportsTextOnlyAndRejectsEightReferences(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/videos" {
+			http.NotFound(w, r)
+			return
+		}
+		calls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id": fmt.Sprintf("grok-request-%d", calls),
+			"status":     "done",
+			"video":      map[string]any{"url": "https://cdn.example/grok.mp4"},
+		})
+	}))
+	defer server.Close()
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: grokImagine15VideoModel, Models: []string{grokImagine15VideoModel},
+	})
+
+	if _, err := provider.Create(context.Background(), generation.CreateRequest{
+		Model: grokImagine15VideoModel, Prompt: "text only", Params: map[string]any{"duration": 30},
+	}); err != nil {
+		t.Fatalf("text-to-video request was rejected: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("text-to-video provider calls = %d, want 1", calls)
+	}
+
+	references := make([]any, 0, 8)
+	for index := 1; index <= 8; index++ {
+		references = append(references, fmt.Sprintf("https://cdn.example/reference-%d.png", index))
+	}
+	if _, err := provider.Create(context.Background(), generation.CreateRequest{
+		Model: grokImagine15VideoModel, Prompt: "too many", Params: map[string]any{"reference_images": references},
+	}); err == nil {
+		t.Fatal("eight reference images were accepted")
+	}
+	if calls != 1 {
+		t.Fatalf("provider was called for invalid reference count: %d", calls)
+	}
+	if _, err := provider.Create(context.Background(), generation.CreateRequest{
+		Model: grokImagine15VideoModel, Prompt: "invalid image", Params: map[string]any{"reference_images": []any{"data:image/png;base64,AAAA"}},
+	}); err == nil {
+		t.Fatal("base64 reference image was accepted")
+	}
+	if calls != 1 {
+		t.Fatalf("provider was called for a non-HTTP reference image: %d", calls)
+	}
+}
+
+func TestOpenAICompatibleGrokImagine15PollsRequestIDOnVideosEndpoint(t *testing.T) {
+	postCalls := 0
+	pollCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/videos":
+			postCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "grok-request-poll", "status": "queued"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/videos/grok-request-poll":
+			pollCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":     "grok-request-poll",
+				"status": "completed",
+				"data": map[string]any{"result": map[string]any{"videos": []any{
+					map[string]any{"url": "https://cdn.example/polled.mp4"},
+				}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: grokImagine15VideoModel, Models: []string{grokImagine15VideoModel},
+	})
+	result, err := provider.Create(context.Background(), generation.CreateRequest{
+		Model: grokImagine15VideoModel, Prompt: "poll me", Params: map[string]any{"duration": 6},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	resultMap, _ := result.(map[string]any)
+	if postCalls != 1 || pollCalls != 1 || resultMap["videoUrl"] != "https://cdn.example/polled.mp4" {
+		t.Fatalf("post=%d poll=%d result=%#v", postCalls, pollCalls, result)
+	}
+}
+
 func TestOpenAICompatibleDoubaoSeedanceUsesVideosEndpointAndPayload(t *testing.T) {
 	var requestPath string
 	var payload map[string]any

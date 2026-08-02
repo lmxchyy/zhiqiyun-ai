@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   generationParametersFromDraft,
+  normalizeVideoModelCapabilities,
+  reconcileVideoGenerationState,
   taskRequestFromDraft,
 } from "../packages/business-sdk/dist/mappers.js";
 
@@ -175,6 +177,41 @@ test("legacy video drafts with multiple reference images are rejected", () => {
       videoMode: "IMAGE_TO_VIDEO",
       firstFrame: "https://example.test/first.png",
       referenceImages: ["https://example.test/first.png", "https://example.test/second.png"],
+    })),
+    error => error?.code === "VIDEO_IMAGE_LIMIT_EXCEEDED",
+  );
+});
+
+test("Grok Imagine 1.5 sends all seven canonical reference images", () => {
+  const references = Array.from({ length: 7 }, (_, index) => `https://example.test/reference-${index + 1}.png`);
+  const request = taskRequestFromDraft(videoDraft({
+    model: "grok-imagine-1.5-video",
+    videoMode: "IMAGE_TO_VIDEO",
+    firstFrame: references[0],
+    referenceImages: references,
+    videoCapabilities: {
+      ...dualVideoCapabilities,
+      maxReferenceImages: 7,
+    },
+  }));
+
+  assert.equal(request.params.first_frame, references[0]);
+  assert.deepEqual(request.params.reference_images, references);
+  assert.equal(Object.hasOwn(request.params, "image_urls"), false);
+});
+
+test("Grok Imagine 1.5 rejects an eighth reference image", () => {
+  const references = Array.from({ length: 8 }, (_, index) => `https://example.test/reference-${index + 1}.png`);
+  assert.throws(
+    () => taskRequestFromDraft(videoDraft({
+      model: "grok-imagine-1.5-video",
+      videoMode: "IMAGE_TO_VIDEO",
+      firstFrame: references[0],
+      referenceImages: references,
+      videoCapabilities: {
+        ...dualVideoCapabilities,
+        maxReferenceImages: 7,
+      },
     })),
     error => error?.code === "VIDEO_IMAGE_LIMIT_EXCEEDED",
   );
