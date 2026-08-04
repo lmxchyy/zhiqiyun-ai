@@ -38,8 +38,14 @@ changed.
   migration-backed PostgreSQL instance was available in the worktree
   environment.
 
+## Concern for Task 3
+
+`admin_api.go` still seeds the demo `user_000002` account with an explicit
+959-point fixture. Task 2 intentionally leaves that file outside its ownership
+boundary; Task 3 should replace the fixture with zero or route it through the
+server-owned free-plan grant service before the full-suite acceptance run.
+
 ## Rollback
 
 Revert this task's commit. The migration itself is unchanged; no production
 database or traffic was touched.
-
