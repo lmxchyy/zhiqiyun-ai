@@ -1416,6 +1416,25 @@ for (const subPackage of relocatedUserSubPackages) {
   }
 }
 
+if (relocatedUserRoutes.has("/pages/user/UserWalletPage")) {
+  relocateGeneratedModule(
+    "features/wallet/personalPointsWallet.js",
+    "pages/user-account/features/wallet/personalPointsWallet.js"
+  );
+  relocateGeneratedModule(
+    "composables/usePersonalPointsWallet.js",
+    "pages/user-account/composables/usePersonalPointsWallet.js",
+    (source) => source
+      .split('require("../common/vendor.js")').join('require("../../../common/vendor.js")')
+      .split('require("../api/client.js")').join('require("../../../api/client.js")')
+  );
+  const walletPagePath = assertGeneratedPath(path.resolve(outputRoot, "pages/user-account/UserWalletPage.js"));
+  const walletPageSource = fs.readFileSync(walletPagePath, "utf8")
+    .split('require("../../composables/usePersonalPointsWallet.js")').join('require("./composables/usePersonalPointsWallet.js")')
+    .split('require("../../features/wallet/personalPointsWallet.js")').join('require("./features/wallet/personalPointsWallet.js")');
+  fs.writeFileSync(walletPagePath, walletPageSource);
+}
+
 function rewriteGeneratedUserRoutes(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const filePath = assertGeneratedPath(path.resolve(directory, entry.name));
@@ -1604,8 +1623,8 @@ workbenchWxml = workbenchWxml.replace(
     return `${prefix}bindtap="nativeBackToCreation"`;
   }
 );
-if (nativeBackBindingCount !== 2) {
-  throw new Error(`Expected 2 native back bindings, patched ${nativeBackBindingCount}`);
+if (nativeBackBindingCount !== 1) {
+  throw new Error(`Expected 1 workbench creation back binding, patched ${nativeBackBindingCount}`);
 }
 fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
 

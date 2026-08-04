@@ -375,63 +375,6 @@
           </view>
         </view>
 
-        <view v-else-if="activeTab === 'wallet'" class="section-stack">
-          <view class="v31-subpage-nav">
-            <button
-              class="v31-back-button"
-              aria-label="返回上一页"
-              data-return-fallback="/pages/user/UserHomePage"
-              @click="returnToPreviousPage('/pages/user/UserHomePage')"
-            >‹</button>
-            <view>
-              <text class="v31-subpage-title">钱包与点数</text>
-              <text class="v31-subpage-copy">余额、充值与积分消耗记录</text>
-            </view>
-          </view>
-          <view class="wallet-card">
-            <text class="wallet-label">钱包余额</text>
-            <text class="wallet-value">{{ formatNumber(pointBalance) }}</text>
-            <text class="wallet-copy">冻结 {{ formatNumber(pointFrozen) }} 点 · 订单 {{ userOrders.length }} 笔</text>
-          </view>
-          <view class="v31-batch-actions"><button class="active" @click="openFeaturePage(miniProgramFeaturePages.userRechargePlans)">全部充值方案</button><button @click="openFeaturePage(miniProgramFeaturePages.userOrders)">我的订单</button></view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">点数充值</text>
-              <text class="soft-tag">微信支付</text>
-            </view>
-            <view class="recharge-grid">
-              <button
-                v-for="pack in rechargePackages"
-                :key="rowString(pack, 'id')"
-                type="button"
-                class="recharge-card"
-                @click="openFeaturePage(miniProgramFeaturePages.userRechargePlans)"
-              >
-                <text class="recharge-points">{{ formatNumber(rowNumber(pack, 'grantPoints') || rowNumber(pack, 'points') || rowNumber(pack, 'tokenAmount')) }} 点</text>
-                <text class="recharge-price">{{ formatCurrency(rowNumber(pack, 'priceCents') || rowNumber(pack, 'amountCents')) }}</text>
-              </button>
-            </view>
-          </view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">积分消耗</text>
-              <text class="soft-tag">{{ tokenRecords.length || userTransactions.length }} 条</text>
-            </view>
-            <view v-if="walletRecords.length" class="list-stack">
-              <view v-for="record in walletRecords.slice(0, 6)" :key="rowKey(record)" class="list-item" @click="openUsageRecordDetail(record)">
-                <view>
-                  <text class="list-title">{{ usageTitle(record) }}</text>
-                  <text class="list-meta">{{ formatDate(rowDate(record)) }}</text>
-                </view>
-                <text class="cost-text">-{{ formatNumber(rowPointCost(record)) }}</text>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无消耗记录。</text>
-          </view>
-        </view>
-
         <MiniProgramMineExperience
           v-else
           :view="mineView"
@@ -1005,7 +948,6 @@ const assetTotal = ref(0);
 const assetMonthTotal = ref(0);
 const assetFavoriteTotal = ref(0);
 const assetStorageBytes = ref(0);
-const rechargePackages = ref<AnyRecord[]>([]);
 const assetsLoading = ref(false);
 const assetsError = ref("");
 
@@ -1086,7 +1028,6 @@ const profileSubscriptionExpiresAt = computed(
 
 const pointAccount = computed(() => wallet.value?.account || pointAccountResponse.value?.account || profile.value?.account || null);
 const pointBalance = computed(() => asNumber(pointAccount.value?.available));
-const pointFrozen = computed(() => asNumber(pointAccount.value?.frozen));
 const userOrders = computed(() => listOf(wallet.value?.orders || pointAccountResponse.value?.orders));
 const userTransactions = computed(() => listOf(wallet.value?.transactions || pointAccountResponse.value?.transactions));
 const tokenRecords = computed(() => listOf(wallet.value?.tokenRecords));
@@ -2272,14 +2213,12 @@ async function loadMemberProfile() {
 }
 
 async function loadWallet() {
-  const [walletResult, pointsResult, plansResult] = await Promise.allSettled([
+  const [walletResult, pointsResult] = await Promise.allSettled([
     businessSdk.roleWorkbench.wallet(),
-    businessSdk.roleWorkbench.pointsAccount(),
-    api<AnyRecord[] | { items?: AnyRecord[] }>("/api/v1/plans?planType=recharge")
+    businessSdk.roleWorkbench.pointsAccount()
   ]);
   if (walletResult.status === "fulfilled") wallet.value = walletResult.value;
   if (pointsResult.status === "fulfilled") pointAccountResponse.value = pointsResult.value;
-  if (plansResult.status === "fulfilled") rechargePackages.value = Array.isArray(plansResult.value) ? plansResult.value : listOf(plansResult.value.items);
 }
 
 async function loadAssets(showLoading = true) {

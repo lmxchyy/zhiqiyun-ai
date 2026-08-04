@@ -825,7 +825,7 @@
           <view class="membership-head">
             <view>
               <text class="membership-title">选择身份、充值与订阅</text>
-              <text class="membership-subtitle">身份包独立于充值和订阅，积分有效期为 2 年</text>
+              <text class="membership-subtitle">身份包独立于充值和订阅，积分有效期以钱包记录为准</text>
             </view>
             <view class="current-subscription-card">
               <view class="current-subscription-copy">
