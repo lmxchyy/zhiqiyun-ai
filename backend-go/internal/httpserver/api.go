@@ -136,6 +136,10 @@ type authPricingPermissionStore interface {
 	PricingPermissionsForRole(ctx context.Context, role string) ([]string, error)
 }
 
+type authRolePermissionStore interface {
+	AuthPermissionsForRole(ctx context.Context, role string) ([]string, error)
+}
+
 type channelWorkbenchAccessStore interface {
 	GetChannelWorkbenchAgentForUser(userID string) (adminChannelAgent, bool, error)
 }

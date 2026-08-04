@@ -32,6 +32,9 @@ var pricingPermissionCodes = []string{
 	"pricing:wechat-good:manage",
 	"pricing:test-whitelist:manage",
 	"pricing:audit:view",
+}
+
+var pointsAdminPermissionCodes = []string{
 	"points:gift-policy:view",
 	"points:gift-policy:manage",
 	"points:gift:grant",
@@ -457,6 +460,45 @@ func (s *postgresStore) PricingPermissionsForRole(ctx context.Context, role stri
 		where role = $1 and permission like 'pricing:%'
 		order by permission
 	`, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	permissions := make([]string, 0)
+	for rows.Next() {
+		var permission string
+		if err := rows.Scan(&permission); err != nil {
+			return nil, err
+		}
+		permission = strings.TrimSpace(permission)
+		if permission != "" {
+			permissions = append(permissions, permission)
+		}
+	}
+	return permissions, rows.Err()
+}
+
+func (s *postgresStore) AuthPermissionsForRole(ctx context.Context, role string) ([]string, error) {
+	role = strings.TrimSpace(role)
+	if strings.EqualFold(role, "SUPER_ADMIN") {
+		permissions := append([]string{}, pricingPermissionCodes...)
+		return append(permissions, pointsAdminPermissionCodes...), nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select permission
+		from xz_role_permissions
+		where role = $1 and (
+			permission like 'pricing:%'
+			or permission in ($2, $3, $4, $5, $6)
+		)
+		order by permission
+	`, role,
+		pointsAdminPermissionCodes[0],
+		pointsAdminPermissionCodes[1],
+		pointsAdminPermissionCodes[2],
+		pointsAdminPermissionCodes[3],
+		pointsAdminPermissionCodes[4],
+	)
 	if err != nil {
 		return nil, err
 	}

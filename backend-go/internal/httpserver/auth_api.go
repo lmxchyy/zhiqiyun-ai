@@ -1018,7 +1018,7 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 				identityData.OperationCenters = []adminOperationCenter{center}
 			}
 		}
-		response, err := a.authResponseWithPricingPermissions(r.Context(), identityData, user, false)
+		response, err := a.authResponseWithRolePermissions(r.Context(), identityData, user, false)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -1036,7 +1036,7 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	response, err := a.authResponseWithPricingPermissions(r.Context(), data, user, false)
+	response, err := a.authResponseWithRolePermissions(r.Context(), data, user, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1044,18 +1044,22 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
-func (a authAPI) authResponseWithPricingPermissions(ctx context.Context, data adminPlatformData, user adminUser, includeToken bool) (map[string]any, error) {
+func (a authAPI) authResponseWithRolePermissions(ctx context.Context, data adminPlatformData, user adminUser, includeToken bool) (map[string]any, error) {
 	response := authResponse(data, user, includeToken)
-	permissionStore, ok := a.store.(authPricingPermissionStore)
-	if !ok {
+	var rolePermissions []string
+	var err error
+	if permissionStore, ok := a.store.(authRolePermissionStore); ok {
+		rolePermissions, err = permissionStore.AuthPermissionsForRole(ctx, user.Role)
+	} else if permissionStore, ok := a.store.(authPricingPermissionStore); ok {
+		rolePermissions, err = permissionStore.PricingPermissionsForRole(ctx, user.Role)
+	} else {
 		return response, nil
 	}
-	pricingPermissions, err := permissionStore.PricingPermissionsForRole(ctx, user.Role)
 	if err != nil {
 		return nil, err
 	}
 	permissions, _ := response["permissions"].([]string)
-	response["permissions"] = appendUnique(permissions, pricingPermissions...)
+	response["permissions"] = appendUnique(permissions, rolePermissions...)
 	return response, nil
 }
 
@@ -1217,7 +1221,7 @@ func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adm
 }
 
 func (a authAPI) authResponseWithToken(ctx context.Context, data adminPlatformData, user adminUser) (map[string]any, error) {
-	response, err := a.authResponseWithPricingPermissions(ctx, data, user, false)
+	response, err := a.authResponseWithRolePermissions(ctx, data, user, false)
 	if err != nil {
 		return nil, err
 	}

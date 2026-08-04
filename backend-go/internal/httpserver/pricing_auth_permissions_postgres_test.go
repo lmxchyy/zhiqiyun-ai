@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -14,12 +15,75 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestAuthMeAndPricingRBACUseExactDatabaseRolePermissions(t *testing.T) {
+func TestAuthPermissionsForRoleAllowsOnlySupportedAdminPermissions(t *testing.T) {
 	t.Setenv("XIANZHI_TEST_DATABASE_URL", phase2ETestDSN)
-	t.Setenv("XIANZHI_APPLY_TEST_MIGRATION_100", "true")
+	db, ctx := openPhase2ETestPostgres(t)
+	if _, err := db.ExecContext(ctx, `
+		create table if not exists xz_role_permissions (
+			role text not null,
+			permission text not null,
+			primary key(role,permission)
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	role := "AUTH_POINTS_EXACT_" + suffix
+	configured := []string{
+		"pricing:plan:view",
+		"points:gift-policy:view",
+		"points:gift-policy:manage",
+		"points:gift:grant",
+		"points:balance:correct",
+		"points:lot:view",
+		"points:unlisted",
+		"enterprise:tenant:view",
+		"admin.full",
+	}
+	for _, permission := range configured {
+		if _, err := db.ExecContext(ctx, `insert into xz_role_permissions(role,permission) values($1,$2)`, role, permission); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _, _ = db.Exec(`delete from xz_role_permissions where role=$1`, role) })
+
+	permissions, err := (&postgresStore{db: db, ready: true}).AuthPermissionsForRole(ctx, role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, permission := range configured[:6] {
+		if !stringSliceContains(permissions, permission) {
+			t.Fatalf("permissions=%v missing supported=%s", permissions, permission)
+		}
+	}
+	for _, permission := range configured[6:] {
+		if stringSliceContains(permissions, permission) {
+			t.Fatalf("permissions=%v exposed unsupported=%s", permissions, permission)
+		}
+	}
+}
+
+func TestAuthMeAndPricingRBACUseExactDatabaseRolePermissions(t *testing.T) {
+	if os.Getenv("XIANZHI_TEST_DATABASE_URL") == "" {
+		t.Setenv("XIANZHI_TEST_DATABASE_URL", phase2ETestDSN)
+	}
+	if os.Getenv("XIANZHI_APPLY_TEST_MIGRATION_100") == "" {
+		t.Setenv("XIANZHI_APPLY_TEST_MIGRATION_100", "true")
+	}
 	t.Setenv("XIANZHI_ENFORCE_RBAC", "true")
 	db, ctx := openPhase2ETestPostgres(t)
 	applyPhase2EMigrationForTest(t, ctx, db)
+	if _, err := db.ExecContext(ctx, `
+		insert into xz_tenants(id,tenant_type,name,status)
+		values('tenant_default','PLATFORM','test default tenant','ACTIVE')
+		on conflict(id) do nothing;
+		insert into xz_organizations(id,tenant_id,organization_type,name,status)
+		values('organization_default_test','tenant_default','DEPARTMENT','test default organization','ACTIVE')
+		on conflict(id) do nothing
+	`); err != nil {
+		t.Fatal(err)
+	}
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
 	type fixture struct {
@@ -38,6 +102,29 @@ func TestAuthMeAndPricingRBACUseExactDatabaseRolePermissions(t *testing.T) {
 		"legacy": {
 			role: "PRICING_AUTH_LEGACY_" + suffix, userID: "pricing_auth_legacy_" + suffix, token: "pricing-auth-legacy-" + suffix,
 			permissions: []string{"admin.full"},
+		},
+		"points_policy_view": {
+			role: "POINTS_POLICY_VIEW_" + suffix, userID: "points_policy_view_" + suffix, token: "points-policy-view-" + suffix,
+			permissions: []string{"points:gift-policy:view", "admin.full", "points:unlisted", "enterprise:tenant:view"},
+		},
+		"points_policy_manage": {
+			role: "POINTS_POLICY_MANAGE_" + suffix, userID: "points_policy_manage_" + suffix, token: "points-policy-manage-" + suffix,
+			permissions: []string{"points:gift-policy:manage"},
+		},
+		"points_gift_grant": {
+			role: "POINTS_GIFT_GRANT_" + suffix, userID: "points_gift_grant_" + suffix, token: "points-gift-grant-" + suffix,
+			permissions: []string{"points:gift:grant"},
+		},
+		"points_balance_correct": {
+			role: "POINTS_BALANCE_CORRECT_" + suffix, userID: "points_balance_correct_" + suffix, token: "points-balance-correct-" + suffix,
+			permissions: []string{"points:balance:correct"},
+		},
+		"points_lot_view": {
+			role: "POINTS_LOT_VIEW_" + suffix, userID: "points_lot_view_" + suffix, token: "points-lot-view-" + suffix,
+			permissions: []string{"points:lot:view"},
+		},
+		"points_role_name_only": {
+			role: "POINTS_GIFT_POLICY_MANAGE_" + suffix, userID: "points_role_name_only_" + suffix, token: "points-role-name-only-" + suffix,
 		},
 		"super": {
 			role: "SUPER_ADMIN", userID: "pricing_auth_super_" + suffix, token: "pricing-auth-super-" + suffix,
@@ -66,7 +153,23 @@ func TestAuthMeAndPricingRBACUseExactDatabaseRolePermissions(t *testing.T) {
 			}
 		}
 	}
+	contextRole := "POINTS_TENANT_CONTEXT_" + suffix
+	if _, err := db.ExecContext(ctx, `insert into xz_role_permissions(role,permission) values($1,'points:balance:correct')`, contextRole); err != nil {
+		t.Fatal(err)
+	}
+	var tenantID, organizationID string
+	if err := db.QueryRowContext(ctx, `select tenant_id,id from xz_organizations where tenant_id='tenant_default' order by id limit 1`).Scan(&tenantID, &organizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		insert into xz_user_role_context(user_id,tenant_id,organization_id,current_role_code,context_type,updated_at)
+		values($1,$2,$3,$4,'PERSONAL',now())
+	`, fixtures["points_policy_view"].userID, tenantID, organizationID, contextRole); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
+		_, _ = db.Exec(`delete from xz_user_role_context where user_id=$1`, fixtures["points_policy_view"].userID)
+		_, _ = db.Exec(`delete from xz_role_permissions where role=$1`, contextRole)
 		for name, item := range fixtures {
 			_, _ = db.Exec(`delete from xz_users where id=$1`, item.userID)
 			if name != "super" {
@@ -136,6 +239,56 @@ func TestAuthMeAndPricingRBACUseExactDatabaseRolePermissions(t *testing.T) {
 	for _, permission := range allPricingPermissions {
 		if !stringSliceContains(superPermissions, permission) {
 			t.Fatalf("SUPER_ADMIN auth/me missing bypass permission %s: %v", permission, superPermissions)
+		}
+	}
+	allPointsPermissions := []string{
+		"points:gift-policy:view",
+		"points:gift-policy:manage",
+		"points:gift:grant",
+		"points:balance:correct",
+		"points:lot:view",
+	}
+	pointFixtures := []struct {
+		name       string
+		permission string
+	}{
+		{"points_policy_view", "points:gift-policy:view"},
+		{"points_policy_manage", "points:gift-policy:manage"},
+		{"points_gift_grant", "points:gift:grant"},
+		{"points_balance_correct", "points:balance:correct"},
+		{"points_lot_view", "points:lot:view"},
+	}
+	for _, test := range pointFixtures {
+		t.Run(test.name+" returns only its configured points permission", func(t *testing.T) {
+			permissions := authMe(fixtures[test.name])
+			for _, permission := range allPointsPermissions {
+				if permission == test.permission && !stringSliceContains(permissions, permission) {
+					t.Fatalf("auth/me permissions=%v missing configured=%s", permissions, permission)
+				}
+				if permission != test.permission && stringSliceContains(permissions, permission) {
+					t.Fatalf("auth/me permissions=%v invented unconfigured=%s", permissions, permission)
+				}
+			}
+			for _, permission := range []string{"admin.full", "points:unlisted", "enterprise:tenant:view"} {
+				if stringSliceContains(permissions, permission) {
+					t.Fatalf("auth/me exposed unrelated database permission %s: %v", permission, permissions)
+				}
+			}
+		})
+	}
+	contextPermissions := authMe(fixtures["points_policy_view"])
+	if stringSliceContains(contextPermissions, "points:balance:correct") {
+		t.Fatalf("tenant context role permission leaked into platform auth permissions: %v", contextPermissions)
+	}
+	roleNamePermissions := authMe(fixtures["points_role_name_only"])
+	for _, permission := range allPointsPermissions {
+		if stringSliceContains(roleNamePermissions, permission) {
+			t.Fatalf("role name expanded to %s in auth/me: %v", permission, roleNamePermissions)
+		}
+	}
+	for _, permission := range allPointsPermissions {
+		if !stringSliceContains(superPermissions, permission) {
+			t.Fatalf("SUPER_ADMIN auth/me missing points bypass permission %s: %v", permission, superPermissions)
 		}
 	}
 
