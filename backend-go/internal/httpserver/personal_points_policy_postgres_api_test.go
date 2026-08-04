@@ -96,6 +96,29 @@ func TestPostgresPersonalPointPolicyPUTArchivesAndPublishesAtomically(t *testing
 	if published.Revision != current.Revision+1 || published.Status != "PUBLISHED" || published.DurationValue != 4 || published.Enabled == current.Enabled {
 		t.Fatalf("published policy = %+v, current = %+v", published, current)
 	}
+	immediateGet := httptest.NewRecorder()
+	admin.pointExpiryPolicy(immediateGet, httptest.NewRequest(http.MethodGet, "/api/v1/admin/points/expiry-policy", nil))
+	if immediateGet.Code != http.StatusOK {
+		t.Fatalf("immediate GET after PUT status=%d body=%s", immediateGet.Code, immediateGet.Body.String())
+	}
+	var immediateBody struct {
+		Item PointExpiryPolicy `json:"item"`
+	}
+	if err := json.Unmarshal(immediateGet.Body.Bytes(), &immediateBody); err != nil {
+		t.Fatal(err)
+	}
+	if immediateBody.Item.ID != published.ID || immediateBody.Item.Revision != published.Revision {
+		t.Fatalf("immediate GET item=%+v, want published=%+v", immediateBody.Item, published)
+	}
+	var databaseEffectiveFrom, databaseCreatedAt, databaseUpdatedAt, databaseClock time.Time
+	if err := db.QueryRowContext(ctx, `SELECT effective_from,created_at,updated_at,clock_timestamp() FROM xz_point_expiry_policy_versions WHERE id=$1`, published.ID).Scan(
+		&databaseEffectiveFrom, &databaseCreatedAt, &databaseUpdatedAt, &databaseClock,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !published.EffectiveFrom.Equal(databaseEffectiveFrom) || !databaseEffectiveFrom.Equal(databaseCreatedAt) || !databaseEffectiveFrom.Equal(databaseUpdatedAt) || databaseEffectiveFrom.After(databaseClock) {
+		t.Fatalf("published timestamps response=%s database=(effective:%s created:%s updated:%s clock:%s)", published.EffectiveFrom, databaseEffectiveFrom, databaseCreatedAt, databaseUpdatedAt, databaseClock)
+	}
 
 	var oldStatus string
 	var oldAfter policyBusinessFields
@@ -185,5 +208,10 @@ func TestPostgresPersonalPointPolicyPUTArchivesAndPublishesAtomically(t *testing
 	}
 	if concurrentOldStatus != "ARCHIVED" || concurrentOldAfter != concurrentOldBefore {
 		t.Fatalf("concurrent old policy status/business fields changed unexpectedly: status=%s before=%+v after=%+v", concurrentOldStatus, concurrentOldBefore, concurrentOldAfter)
+	}
+	finalGet := httptest.NewRecorder()
+	admin.pointExpiryPolicy(finalGet, httptest.NewRequest(http.MethodGet, "/api/v1/admin/points/expiry-policy", nil))
+	if finalGet.Code != http.StatusOK {
+		t.Fatalf("GET after concurrent PUT status=%d body=%s", finalGet.Code, finalGet.Body.String())
 	}
 }

@@ -56,14 +56,19 @@ func (s *PostgresPersonalPointStore) publishPolicy(ctx context.Context, cmd Pers
 		return PointExpiryPolicy{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var now time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT transaction_timestamp()`).Scan(&now); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	now = now.UTC()
 	var current PointExpiryPolicy
-	err = tx.QueryRowContext(ctx, `SELECT id,version,revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now()) ORDER BY version DESC LIMIT 1 FOR UPDATE`).Scan(&current.ID, &current.Version, &current.Revision)
+	err = tx.QueryRowContext(ctx, `SELECT id,version,revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' ORDER BY version DESC LIMIT 1 FOR UPDATE`).Scan(&current.ID, &current.Version, &current.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		// A concurrent publisher can archive the tuple selected by this statement
 		// while we wait for its row lock. Re-read in the next READ COMMITTED
 		// statement so that replacement is reported as a revision conflict.
 		var latestRevision int64
-		rereadErr := tx.QueryRowContext(ctx, `SELECT revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now()) ORDER BY version DESC LIMIT 1`).Scan(&latestRevision)
+		rereadErr := tx.QueryRowContext(ctx, `SELECT revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' ORDER BY version DESC LIMIT 1`).Scan(&latestRevision)
 		if rereadErr == nil {
 			return PointExpiryPolicy{}, ErrPointPolicyRevisionConflict
 		}
@@ -78,7 +83,6 @@ func (s *PostgresPersonalPointStore) publishPolicy(ctx context.Context, cmd Pers
 	if current.Revision != cmd.ExpectedRevision {
 		return PointExpiryPolicy{}, ErrPointPolicyRevisionConflict
 	}
-	now := pointNow(cmd.PublishedAt)
 	published := PointExpiryPolicy{
 		ID: fmt.Sprintf("point_expiry_policy_v%d", current.Version+1), Version: current.Version + 1, Revision: current.Revision + 1,
 		Enabled: cmd.Enabled, DurationValue: cmd.DurationValue, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai",
