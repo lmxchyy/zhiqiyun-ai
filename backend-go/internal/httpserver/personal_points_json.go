@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -147,6 +148,197 @@ func appendPersonalWalletLedger(state *personalPointState, account PersonalPoint
 		FrozenBefore: beforeFrozen, FrozenAfter: account.FrozenPoints, IdempotencyKey: key,
 		ReferenceType: referenceType, ReferenceID: referenceID, Metadata: metadata, OccurredAt: occurredAt, CreatedAt: occurredAt,
 	})
+	return nil
+}
+
+func legacyWalletFloatToInt64(value float64) (int64, error) {
+	const maxInt64Exclusive = float64(uint64(1) << 63)
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value || value < -maxInt64Exclusive || value >= maxInt64Exclusive || value < 0 {
+		return 0, ErrInvalidPointCommand
+	}
+	return int64(value), nil
+}
+
+func legacyWalletCreatedAt(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, ErrInvalidPointCommand
+	}
+	return parsed.UTC(), nil
+}
+
+func resolveLegacyWalletAccount(entry walletLedgerEntry, accounts []adminPointAccount) (adminPointAccount, error) {
+	accountID := strings.TrimSpace(entry.AccountID)
+	userID := strings.TrimSpace(entry.UserID)
+	if accountID == "" && userID == "" {
+		return adminPointAccount{}, ErrInvalidPointCommand
+	}
+	var resolved adminPointAccount
+	resolvedSet := false
+	if accountID != "" {
+		matches := 0
+		for i := range accounts {
+			if strings.TrimSpace(accounts[i].ID) == accountID {
+				resolved = accounts[i]
+				matches++
+			}
+		}
+		if matches != 1 {
+			return adminPointAccount{}, ErrPointNotFound
+		}
+		resolvedSet = true
+	}
+	if userID != "" {
+		matches := 0
+		for i := range accounts {
+			if strings.TrimSpace(accounts[i].UserID) != userID {
+				continue
+			}
+			if resolvedSet {
+				if strings.TrimSpace(accounts[i].ID) != accountID {
+					return adminPointAccount{}, ErrPointOwnership
+				}
+				matches++
+				continue
+			}
+			resolved = accounts[i]
+			resolvedSet = true
+			matches++
+		}
+		if matches == 0 {
+			return adminPointAccount{}, ErrPointNotFound
+		}
+		if !resolvedSet || (accountID == "" && matches != 1) {
+			return adminPointAccount{}, ErrPointOwnership
+		}
+	}
+	if !resolvedSet || strings.TrimSpace(resolved.ID) == "" || strings.TrimSpace(resolved.UserID) == "" || resolved.Available < 0 || resolved.Frozen < 0 {
+		return adminPointAccount{}, ErrInvalidPointCommand
+	}
+	if accountID != "" && strings.TrimSpace(resolved.ID) != accountID {
+		return adminPointAccount{}, ErrPointOwnership
+	}
+	if userID != "" && strings.TrimSpace(resolved.UserID) != userID {
+		return adminPointAccount{}, ErrPointOwnership
+	}
+	resolved.ID, resolved.UserID = strings.TrimSpace(resolved.ID), strings.TrimSpace(resolved.UserID)
+	return resolved, nil
+}
+
+func legacyWalletEntryType(value string) (string, error) {
+	entryType := upperTrim(value)
+	switch entryType {
+	case "RECHARGE", "GRANT", "RESERVE", "CAPTURE", "RELEASE", "REFUND", "ADJUSTMENT", "EXPIRE":
+		return entryType, nil
+	default:
+		return "", ErrInvalidPointCommand
+	}
+}
+
+func isLegacySyntheticWalletEntry(entry walletLedgerEntry) bool {
+	if upperTrim(entry.EntryType) != "GRANT" {
+		return false
+	}
+	if upperTrim(entry.ReferenceType) == "LEGACY_IMPORT" {
+		return true
+	}
+	return entry.Metadata != nil && boolValue(entry.Metadata["legacy_import"])
+}
+
+func legacyWalletLedgerKey(accountID string, entry walletLedgerEntry, synthetic bool) (string, error) {
+	if synthetic {
+		return personalWalletKey(accountID, "grant", "legacy-import:"+accountID), nil
+	}
+	legacyKey := strings.TrimSpace(entry.IdempotencyKey)
+	legacyID := strings.TrimSpace(entry.ID)
+	if legacyKey == "" && legacyID == "" {
+		return "", ErrInvalidPointCommand
+	}
+	if legacyKey == "" {
+		legacyKey = legacyID
+	}
+	if legacyID != "" {
+		legacyKey += ":" + legacyID
+	}
+	return personalWalletKey(accountID, "legacy-wallet", legacyKey), nil
+}
+
+func appendMigratedWalletLedger(state *personalPointState, candidate PersonalPointWalletLedgerEntry) error {
+	for _, existing := range state.WalletLedger {
+		if existing.IdempotencyKey != candidate.IdempotencyKey {
+			continue
+		}
+		if existing.AccountID != candidate.AccountID || existing.UserID != candidate.UserID || existing.EntryType != candidate.EntryType || existing.Points != candidate.Points || existing.AvailableBefore != candidate.AvailableBefore || existing.AvailableAfter != candidate.AvailableAfter || existing.FrozenBefore != candidate.FrozenBefore || existing.FrozenAfter != candidate.FrozenAfter || existing.ReferenceType != candidate.ReferenceType || existing.ReferenceID != candidate.ReferenceID {
+			return ErrIdempotencyConflict
+		}
+		return nil
+	}
+	state.WalletLedger = append(state.WalletLedger, candidate)
+	return nil
+}
+
+func migrateLegacyWalletLedgerState(state *personalPointState, entries []walletLedgerEntry, accounts []adminPointAccount) error {
+	for _, legacy := range entries {
+		account, err := resolveLegacyWalletAccount(legacy, accounts)
+		if err != nil {
+			return err
+		}
+		entryType, err := legacyWalletEntryType(legacy.EntryType)
+		if err != nil {
+			return err
+		}
+		points, err := legacyWalletFloatToInt64(legacy.Points)
+		if err != nil {
+			return err
+		}
+		availableBefore, err := legacyWalletFloatToInt64(legacy.AvailableBefore)
+		if err != nil {
+			return err
+		}
+		availableAfter, err := legacyWalletFloatToInt64(legacy.AvailableAfter)
+		if err != nil {
+			return err
+		}
+		frozenBefore, err := legacyWalletFloatToInt64(legacy.FrozenBefore)
+		if err != nil {
+			return err
+		}
+		frozenAfter, err := legacyWalletFloatToInt64(legacy.FrozenAfter)
+		if err != nil {
+			return err
+		}
+		occurredAt, err := legacyWalletCreatedAt(legacy.CreatedAt)
+		if err != nil {
+			return err
+		}
+		synthetic := isLegacySyntheticWalletEntry(legacy)
+		key, err := legacyWalletLedgerKey(account.ID, legacy, synthetic)
+		if err != nil {
+			return err
+		}
+		metadata := cloneAnyMap(legacy.Metadata)
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		if strings.TrimSpace(legacy.ID) != "" {
+			metadata["legacy_ledger_id"] = legacy.ID
+		}
+		candidate := PersonalPointWalletLedgerEntry{
+			ID: stablePointID("wallet", account.ID, key), AccountID: account.ID, UserID: account.UserID,
+			TenantID: legacy.TenantID, TaskID: legacy.TaskID, BillingEventID: legacy.BillingEventID,
+			EntryType: entryType, Points: points, AvailableBefore: availableBefore, AvailableAfter: availableAfter,
+			FrozenBefore: frozenBefore, FrozenAfter: frozenAfter, IdempotencyKey: key,
+			ReferenceType: legacy.ReferenceType, ReferenceID: legacy.ReferenceID, Remark: legacy.Remark,
+			Metadata: metadata, OccurredAt: occurredAt, CreatedAt: occurredAt,
+		}
+		if err := appendMigratedWalletLedger(state, candidate); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -805,49 +997,92 @@ func (s *JSONPersonalPointStore) movementCount(ctx context.Context, accountID, u
 	return count
 }
 
+func hasLegacyImportWalletLedger(state *personalPointState, accountID string) bool {
+	for _, entry := range state.WalletLedger {
+		if entry.AccountID != accountID || entry.EntryType != "GRANT" {
+			continue
+		}
+		if entry.ReferenceType == "LEGACY_IMPORT" || boolValue(entry.Metadata["legacy_import"]) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *JSONPersonalPointStore) importLegacyProjection(accounts []adminPointAccount, ledger []walletLedgerEntry) error {
+	if s == nil {
+		return ErrInvalidPointCommand
+	}
+	return s.withState(context.Background(), func(state *personalPointState) error {
+		if err := migrateLegacyWalletLedgerState(state, ledger, accounts); err != nil {
+			return err
+		}
+		return importLegacyAccountsState(state, accounts)
+	})
+}
+
 func (s *JSONPersonalPointStore) importLegacyAccounts(accounts []adminPointAccount) error {
 	if s == nil {
 		return ErrInvalidPointCommand
 	}
 	return s.withState(context.Background(), func(state *personalPointState) error {
-		for _, source := range accounts {
-			accountID := strings.TrimSpace(source.ID)
-			userID := strings.TrimSpace(source.UserID)
-			if accountID == "" || userID == "" || source.Available < 0 || source.Frozen < 0 {
-				return ErrInvalidPointCommand
+		return importLegacyAccountsState(state, accounts)
+	})
+}
+
+func importLegacyAccountsState(state *personalPointState, accounts []adminPointAccount) error {
+	for _, source := range accounts {
+		accountID := strings.TrimSpace(source.ID)
+		userID := strings.TrimSpace(source.UserID)
+		if accountID == "" || userID == "" || source.Available < 0 || source.Frozen < 0 {
+			return ErrInvalidPointCommand
+		}
+		if source.Frozen > 0 {
+			return ErrInvalidPointCommand
+		}
+		if source.Available == 0 {
+			continue
+		}
+		legacyKey := "legacy-import:" + accountID
+		alreadyImported := false
+		for _, lot := range state.Lots {
+			if lot.AccountID == accountID && lot.UserID == userID && lot.IdempotencyKey == legacyKey {
+				alreadyImported = true
+				break
 			}
-			if source.Frozen > 0 {
-				return ErrInvalidPointCommand
-			}
-			if source.Available == 0 {
-				continue
-			}
-			legacyKey := "legacy-import:" + accountID
-			alreadyImported := false
-			for _, lot := range state.Lots {
-				if lot.AccountID == accountID && lot.UserID == userID && lot.IdempotencyKey == legacyKey {
-					alreadyImported = true
-					break
+		}
+		if alreadyImported {
+			if !hasLegacyImportWalletLedger(state, accountID) {
+				account, accountErr := findPersonalAccount(state, accountID, userID)
+				if accountErr != nil {
+					return accountErr
+				}
+				if account == nil || account.AvailablePoints < int64(source.Available) {
+					return ErrInvalidPointCommand
+				}
+				legacyBefore := account.AvailablePoints - int64(source.Available)
+				if err := appendPersonalWalletLedger(state, *account, "GRANT", int64(source.Available), legacyBefore, account.FrozenPoints, personalWalletKey(accountID, "grant", legacyKey), "LEGACY_IMPORT", accountID, map[string]any{"source_type": string(PointSourceLegacy), "legacy_import": true}, time.Now().UTC()); err != nil {
+					return err
 				}
 			}
-			if alreadyImported {
-				continue
-			}
-			account, err := ensurePersonalAccount(state, accountID, userID)
-			if err != nil {
-				return err
-			}
-			grantedAt := time.Now().UTC()
-			lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: int64(source.Available), AvailablePoints: int64(source.Available), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "LEGACY"}
-			state.Lots = append(state.Lots, lot)
-			beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
-			account.AvailablePoints += int64(source.Available)
-			account.TotalGranted += int64(source.Available)
-			appendPersonalMovement(state, lot, "OPENING", int64(source.Available), PersonalPointLot{}, "", "legacy-import:"+accountID, grantedAt)
+			continue
+		}
+		account, err := ensurePersonalAccount(state, accountID, userID)
+		if err != nil {
+			return err
+		}
+		grantedAt := time.Now().UTC()
+		lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: int64(source.Available), AvailablePoints: int64(source.Available), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "LEGACY"}
+		state.Lots = append(state.Lots, lot)
+		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
+		account.AvailablePoints += int64(source.Available)
+		account.TotalGranted += int64(source.Available)
+		appendPersonalMovement(state, lot, "OPENING", int64(source.Available), PersonalPointLot{}, "", "legacy-import:"+accountID, grantedAt)
+		if !hasLegacyImportWalletLedger(state, accountID) {
 			if err := appendPersonalWalletLedger(state, *account, "GRANT", int64(source.Available), beforeAvailable, beforeFrozen, personalWalletKey(accountID, "grant", legacyKey), lot.ReferenceType, lot.ReferenceID, map[string]any{"source_type": string(PointSourceLegacy), "legacy_import": true}, grantedAt); err != nil {
 				return err
 			}
 		}
-		return nil
-	})
+	}
+	return nil
 }

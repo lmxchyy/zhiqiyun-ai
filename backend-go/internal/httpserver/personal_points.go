@@ -260,6 +260,9 @@ type PersonalPointWalletLedgerEntry struct {
 	ID              string         `json:"id"`
 	AccountID       string         `json:"account_id"`
 	UserID          string         `json:"user_id"`
+	TenantID        string         `json:"tenant_id,omitempty"`
+	TaskID          string         `json:"task_id,omitempty"`
+	BillingEventID  string         `json:"billing_event_id,omitempty"`
 	EntryType       string         `json:"entry_type"`
 	Points          int64          `json:"points"`
 	AvailableBefore int64          `json:"available_before"`
@@ -269,6 +272,7 @@ type PersonalPointWalletLedgerEntry struct {
 	IdempotencyKey  string         `json:"idempotency_key"`
 	ReferenceType   string         `json:"reference_type"`
 	ReferenceID     string         `json:"reference_id"`
+	Remark          string         `json:"remark,omitempty"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
 	OccurredAt      time.Time      `json:"occurred_at"`
 	CreatedAt       time.Time      `json:"created_at,omitempty"`
@@ -559,7 +563,7 @@ func (s *jsonStore) PersonalPointService() *PersonalPointService {
 		data, err := s.loadLocked()
 		s.mu.Unlock()
 		if err == nil {
-			err = store.importLegacyAccounts(data.PointAccounts)
+			err = store.importLegacyProjection(data.PointAccounts, data.WalletLedger)
 		}
 		store.initErr = err
 		s.personalPointStore = store
