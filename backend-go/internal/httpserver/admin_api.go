@@ -2886,7 +2886,7 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.PointAccounts) == 0 {
 		data.PointAccounts = []adminPointAccount{
 			{ID: "points_000001", UserID: "user_000001", Available: 100000},
-			{ID: "points_000002", UserID: "user_000002", Available: 959},
+			{ID: "points_000002", UserID: "user_000002", Available: 0},
 			{ID: "points_000003", UserID: "user_000003", Available: 5000},
 			{ID: "points_000010", UserID: "user_000010", Available: 100},
 		}

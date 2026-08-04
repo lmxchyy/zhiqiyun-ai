@@ -57,9 +57,6 @@ func TestPersonalPointsRegistrationUsesCurrentPlanGrant(t *testing.T) {
 	if result.Lot.OriginalPoints != 321 {
 		t.Fatalf("registration grant = %d, want current plan grant 321", result.Lot.OriginalPoints)
 	}
-	if result.Lot.OriginalPoints == 959 {
-		t.Fatal("registration grant resurrected removed 959 default")
-	}
 	if got := store.AccountCount(); got != 1 {
 		t.Fatalf("account count = %d, want 1", got)
 	}

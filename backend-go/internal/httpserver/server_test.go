@@ -868,8 +868,12 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
 	pointsBefore := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
-	if pointsBefore.Code != http.StatusOK || !strings.Contains(pointsBefore.Body.String(), `"available":959`) {
+	if pointsBefore.Code != http.StatusOK || !strings.Contains(pointsBefore.Body.String(), `"available":0`) {
 		t.Fatalf("initial points response = %d %s", pointsBefore.Code, pointsBefore.Body.String())
+	}
+	grant := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers/user_000002/point-gifts", bytes.NewBufferString(`{"points":10,"reason":"generation closed-loop fixture","idempotencyKey":"generation-closed-loop-gift"}`), adminToken)
+	if grant.Code != http.StatusOK {
+		t.Fatalf("grant test points status = %d, body = %s", grant.Code, grant.Body.String())
 	}
 
 	createBody := bytes.NewBufferString(`{"type":"TEXT_TO_IMAGE","prompt":"闭环测试图片","model":"mock-standard","params":{"count":2}}`)
@@ -886,7 +890,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	}
 
 	pointsAfter := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
-	if pointsAfter.Code != http.StatusOK || !strings.Contains(pointsAfter.Body.String(), `"available":957`) {
+	if pointsAfter.Code != http.StatusOK || !strings.Contains(pointsAfter.Body.String(), `"available":8`) {
 		t.Fatalf("deducted points response = %d %s", pointsAfter.Code, pointsAfter.Body.String())
 	}
 
@@ -896,7 +900,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	}
 
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if customers.Code != http.StatusOK || !strings.Contains(customers.Body.String(), `"pointsAvailable":957`) || !strings.Contains(customers.Body.String(), "演示用户") {
+	if customers.Code != http.StatusOK || !strings.Contains(customers.Body.String(), `"pointsAvailable":8`) || !strings.Contains(customers.Body.String(), "演示用户") {
 		t.Fatalf("admin customers did not reflect deducted points: %d %s", customers.Code, customers.Body.String())
 	}
 
@@ -918,7 +922,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 
 	billing := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil, adminToken)
 	billingBody := billing.Body.String()
-	if billing.Code != http.StatusOK || !strings.Contains(billingBody, task.ID) || !strings.Contains(billingBody, `"balanceBefore":959`) || !strings.Contains(billingBody, `"balanceAfter":957`) {
+	if billing.Code != http.StatusOK || !strings.Contains(billingBody, task.ID) || !strings.Contains(billingBody, `"balanceBefore":10`) || !strings.Contains(billingBody, `"balanceAfter":8`) {
 		t.Fatalf("billing events missing generation task: %d %s", billing.Code, billingBody)
 	}
 
@@ -2263,7 +2267,7 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 	}
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	customerBody := customers.Body.String()
-	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":10959`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
+	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":10000`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
 		t.Fatalf("recharge points not reflected: %d %s", customers.Code, customers.Body.String())
 	}
 	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
@@ -2276,7 +2280,7 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 		t.Fatalf("repeat mark paid status = %d, body = %s", markPaidAgain.Code, markPaidAgain.Body.String())
 	}
 	customersAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":10959`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":20959`) {
+	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":10000`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":20000`) {
 		t.Fatalf("repeat mark paid was not idempotent: %s", customersAfterRepeat.Body.String())
 	}
 	commissionsAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
@@ -2374,7 +2378,7 @@ func TestPaymentCallbackRequiresSecretAndValidatesAmount(t *testing.T) {
 		t.Fatalf("repeat callback status = %d, body = %s", repeat.Code, repeat.Body.String())
 	}
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if strings.Contains(customers.Body.String(), `"pointsAvailable":2959`) {
+	if !strings.Contains(customers.Body.String(), `"pointsAvailable":1000`) || strings.Contains(customers.Body.String(), `"pointsAvailable":2000`) {
 		t.Fatalf("repeat callback duplicated point grant: %s", customers.Body.String())
 	}
 	data, err = newJSONStore(dataPath).AdminData()

@@ -379,7 +379,7 @@ func TestLegacyAbsoluteBalanceIsDeprecatedAndNeverCreatesAdminGift(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/customers/ignored", bytes.NewBufferString(`{"available":959}`))
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/customers/ignored", bytes.NewBufferString(`{"available":73}`))
 	req.SetPathValue("id", created.ID)
 	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), actorIDContextKey, "admin-correction"), actorRoleContextKey, "SUPER_ADMIN"))
 	response := httptest.NewRecorder()
@@ -391,7 +391,7 @@ func TestLegacyAbsoluteBalanceIsDeprecatedAndNeverCreatesAdminGift(t *testing.T)
 		t.Fatalf("legacy headers = %#v", response.Header())
 	}
 	account, err := store.PointAccount(created.ID)
-	if err != nil || account.Available != 959 {
+	if err != nil || account.Available != 73 {
 		t.Fatalf("account=%+v err=%v", account, err)
 	}
 	lots, err := store.PersonalPointService().ListLots(context.Background(), account.ID, created.ID, PersonalPointLotFilter{Source: PointSourceAdminGift})
