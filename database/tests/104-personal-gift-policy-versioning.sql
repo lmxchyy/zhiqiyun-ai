@@ -45,6 +45,78 @@ BEGIN
 END;
 $$;
 
+-- Direct historical ARCHIVED inserts are accepted only with a closed,
+-- well-formed interval. Invalid NULL and non-positive intervals must fail
+-- before the deferred current-PUBLISHED check runs.
+SAVEPOINT archived_insert_probes;
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO xz_point_expiry_policy_versions(
+      id, version, revision, enabled, duration_value, duration_unit, time_zone,
+      source_types, effective_from, effective_to, status, created_by,
+      change_reason, metadata
+    ) VALUES (
+      'verify_archived_null_effective_to', 9001, 1, FALSE, 0, 'CALENDAR_MONTH',
+      'Asia/Shanghai', '["REGISTRATION_GIFT"]'::jsonb, now(), NULL, 'ARCHIVED',
+      'verify:104', 'invalid archived NULL interval', '{}'::jsonb
+    );
+    RAISE EXCEPTION 'ARCHIVED INSERT with NULL effective_to was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF position('ARCHIVED INSERT with NULL effective_to was accepted' IN SQLERRM) > 0 THEN
+      RAISE;
+    END IF;
+  END;
+END;
+$$;
+
+DO $$
+BEGIN
+  BEGIN
+    INSERT INTO xz_point_expiry_policy_versions(
+      id, version, revision, enabled, duration_value, duration_unit, time_zone,
+      source_types, effective_from, effective_to, status, created_by,
+      change_reason, metadata
+    ) VALUES (
+      'verify_archived_equal_effective_range', 9002, 1, FALSE, 0, 'CALENDAR_MONTH',
+      'Asia/Shanghai', '["REGISTRATION_GIFT"]'::jsonb, now(), now(), 'ARCHIVED',
+      'verify:104', 'invalid archived non-positive interval', '{}'::jsonb
+    );
+    RAISE EXCEPTION 'ARCHIVED INSERT with non-positive interval was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF position('ARCHIVED INSERT with non-positive interval was accepted' IN SQLERRM) > 0 THEN
+      RAISE;
+    END IF;
+  END;
+END;
+$$;
+
+INSERT INTO xz_point_expiry_policy_versions(
+  id, version, revision, enabled, duration_value, duration_unit, time_zone,
+  source_types, effective_from, effective_to, status, created_by,
+  change_reason, metadata
+)
+VALUES (
+  'verify_archived_valid_history', 9003, 1, FALSE, 0, 'CALENDAR_MONTH',
+  'Asia/Shanghai', '["REGISTRATION_GIFT"]'::jsonb,
+  now() - interval '2 hours', now() - interval '1 hour', 'ARCHIVED',
+  'verify:104', 'valid archived historical import', '{}'::jsonb
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM xz_point_expiry_policy_versions
+    WHERE id = 'verify_archived_valid_history' AND status = 'ARCHIVED'
+      AND effective_to > effective_from
+  ) THEN
+    RAISE EXCEPTION 'valid ARCHIVED historical insert was not visible';
+  END IF;
+END;
+$$;
+ROLLBACK TO SAVEPOINT archived_insert_probes;
+
 -- The repaired path closes the current version once and creates the next
 -- version in the same transaction. No old PUBLISHED row remains.
 SAVEPOINT legal_publish;

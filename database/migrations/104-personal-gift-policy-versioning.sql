@@ -10,7 +10,9 @@ BEGIN;
 
 DO $$
 DECLARE
+  total_count BIGINT;
   published_count BIGINT;
+  has_history BOOLEAN;
 BEGIN
   IF to_regclass('public.xz_point_expiry_policy_versions') IS NULL THEN
     RAISE EXCEPTION 'migration 104 requires xz_point_expiry_policy_versions';
@@ -23,6 +25,16 @@ BEGIN
   IF published_count > 1 THEN
     RAISE EXCEPTION
       'migration 104 refuses multiple PUBLISHED policy versions (%)',
+      published_count;
+  END IF;
+
+  SELECT count(*),
+         coalesce(bool_or(status IN ('PUBLISHED', 'ARCHIVED')), FALSE)
+  INTO total_count, has_history
+  FROM xz_point_expiry_policy_versions;
+  IF total_count > 0 AND has_history AND published_count <> 1 THEN
+    RAISE EXCEPTION
+      'migration 104 refuses policy history without exactly one PUBLISHED version (got %)',
       published_count;
   END IF;
 
@@ -79,6 +91,11 @@ BEGIN
       IF published_count > 0 THEN
         RAISE EXCEPTION
           'published point expiry policy version already exists; revision conflict';
+      END IF;
+    ELSIF NEW.status = 'ARCHIVED' THEN
+      IF NEW.effective_to IS NULL OR NEW.effective_to <= NEW.effective_from THEN
+        RAISE EXCEPTION
+          'archived point expiry policy version requires effective_to > effective_from';
       END IF;
     END IF;
 
@@ -195,5 +212,48 @@ DROP TRIGGER IF EXISTS trg_xz_point_expiry_policy_versions_immutable
 CREATE TRIGGER trg_xz_point_expiry_policy_versions_immutable
 BEFORE INSERT OR UPDATE OR DELETE ON xz_point_expiry_policy_versions
 FOR EACH ROW EXECUTE FUNCTION xz_reject_published_personal_point_policy_mutation();
+
+-- A BEFORE trigger protects row-level immutability. This deferred constraint
+-- trigger protects the transaction boundary: a policy history may be empty or
+-- DRAFT-only during bootstrap, but once PUBLISHED/ARCHIVED history exists the
+-- transaction must finish with exactly one current PUBLISHED version. That
+-- permits UPDATE-old + INSERT-new in one transaction and rejects a closure
+-- that would commit with zero current policies.
+CREATE OR REPLACE FUNCTION xz_assert_personal_point_policy_current_published()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  total_count BIGINT;
+  published_count BIGINT;
+  has_history BOOLEAN;
+BEGIN
+  SELECT count(*),
+         count(*) FILTER (WHERE status = 'PUBLISHED'),
+         coalesce(bool_or(status IN ('PUBLISHED', 'ARCHIVED')), FALSE)
+  INTO total_count, published_count, has_history
+  FROM xz_point_expiry_policy_versions;
+
+  -- Explicit bootstrap rule: an empty table and DRAFT-only authoring rows are
+  -- permitted. The 103 migration always supplies a PUBLISHED v1 before 104.
+  IF total_count = 0 OR NOT has_history THEN
+    RETURN NULL;
+  END IF;
+
+  IF published_count <> 1 THEN
+    RAISE EXCEPTION
+      'personal point expiry policy history requires exactly one PUBLISHED version, got %',
+      published_count;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_xz_point_expiry_policy_versions_current_published
+  ON xz_point_expiry_policy_versions;
+CREATE CONSTRAINT TRIGGER trg_xz_point_expiry_policy_versions_current_published
+AFTER INSERT OR UPDATE OR DELETE ON xz_point_expiry_policy_versions
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION xz_assert_personal_point_policy_current_published();
 
 COMMIT;

@@ -25,6 +25,10 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS trg_xz_point_expiry_policy_versions_current_published
+  ON xz_point_expiry_policy_versions;
+DROP FUNCTION IF EXISTS xz_assert_personal_point_policy_current_published();
+
 CREATE OR REPLACE FUNCTION xz_reject_published_personal_point_policy_mutation()
 RETURNS trigger
 LANGUAGE plpgsql

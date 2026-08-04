@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$container = 'gift-points-104-policy-gates'
+$container = "gift-points-104-policy-gates-$PID"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $migrationDir = Join-Path $repoRoot 'database/migrations'
 $schemaPath = Join-Path $repoRoot 'database/schema.sql'
@@ -130,6 +130,20 @@ try {
   Invoke-PsqlFile $fixturePath
   Write-Output 'PASS 104 policy mutation fixture'
 
+  # A closure without a replacement must fail at transaction commit and leave
+  # the current PUBLISHED version intact. Migration 103/104 before the fix
+  # accepts this transaction, so this probe is intentionally RED for TDD.
+  Invoke-PsqlText @'
+BEGIN;
+UPDATE xz_point_expiry_policy_versions
+SET status = 'ARCHIVED', effective_to = effective_from + interval '1 hour', updated_at = now()
+WHERE id = 'point_expiry_policy_v1';
+COMMIT;
+'@ 3
+  Assert-Equal (Query-Scalar "SELECT status FROM xz_point_expiry_policy_versions WHERE id='point_expiry_policy_v1'") 'PUBLISHED' 'closure-only commit rolls back'
+  Assert-Equal (Query-Scalar "SELECT count(*) FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED'") '1' 'closure-only commit leaves one PUBLISHED'
+  Write-Output 'PASS deferred current-PUBLISHED closure gate'
+
   # Empty rollback restores the strict 103 trigger while v1 is untouched.
   Invoke-PsqlFile $rollbackPath
   Assert-Equal (Query-Scalar "SELECT count(*) FROM pg_trigger WHERE tgrelid='xz_point_expiry_policy_versions'::regclass AND tgname='trg_xz_point_expiry_policy_versions_immutable' AND NOT tgisinternal") '1' 'empty rollback trigger exists'
@@ -145,13 +159,12 @@ WHERE id = 'point_expiry_policy_v1';
   # Reapply 104 before the concurrency and live-history gates.
   Invoke-PsqlFile $migrationPath
 
-  # Close v1 and create two DRAFT candidates. Two separate transactions then
-  # race to promote them; the advisory lock permits at most one publisher.
+  # Create two DRAFT candidates while v1 remains current. Two separate
+  # transactions then close v1 and race to promote them; the advisory lock
+  # permits at most one publisher while the deferred trigger requires each
+  # successful transaction to finish with one current PUBLISHED row.
   Invoke-PsqlText @'
 BEGIN;
-UPDATE xz_point_expiry_policy_versions
-SET status = 'ARCHIVED', effective_to = effective_from + interval '1 hour', updated_at = now()
-WHERE id = 'point_expiry_policy_v1';
 INSERT INTO xz_point_expiry_policy_versions(
   id, version, revision, enabled, duration_value, duration_unit, time_zone,
   source_types, effective_from, status, created_by, change_reason, metadata
@@ -167,6 +180,9 @@ COMMIT;
 BEGIN;
 SELECT pg_advisory_xact_lock(hashtextextended('xz_point_expiry_policy_versions:published', 0));
 SELECT pg_sleep(1);
+UPDATE xz_point_expiry_policy_versions
+SET status = 'ARCHIVED', effective_to = effective_from + interval '1 hour', updated_at = now()
+WHERE id = 'point_expiry_policy_v1';
 UPDATE xz_point_expiry_policy_versions
 SET status = 'PUBLISHED', updated_at = now()
 WHERE id = '__POLICY_ID__';
@@ -206,6 +222,29 @@ WHERE id = (SELECT id FROM xz_point_expiry_policy_versions WHERE status='PUBLISH
 ROLLBACK;
 '@
   Write-Output 'PASS live-history rollback gate preserves 104 close behavior'
+
+  # A close and replacement committed in one transaction is the supported
+  # version transition and must leave exactly one current PUBLISHED row.
+  Invoke-PsqlText @'
+BEGIN;
+UPDATE xz_point_expiry_policy_versions
+SET status = 'ARCHIVED', effective_to = effective_from + interval '1 hour', updated_at = now()
+WHERE status = 'PUBLISHED';
+INSERT INTO xz_point_expiry_policy_versions(
+  id, version, revision, enabled, duration_value, duration_unit, time_zone,
+  source_types, effective_from, status, created_by, change_reason, metadata
+)
+SELECT
+  'verify_policy_commit_v4', max(version) + 1, max(revision) + 1, TRUE, 3,
+  'CALENDAR_MONTH', 'Asia/Shanghai', '["REGISTRATION_GIFT"]'::jsonb,
+  now() + interval '1 hour', 'PUBLISHED', 'verify:104',
+  'committed same-transaction replacement', '{}'::jsonb
+FROM xz_point_expiry_policy_versions;
+COMMIT;
+'@
+  Assert-Equal (Query-Scalar "SELECT count(*) FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED'") '1' 'committed replacement leaves one PUBLISHED'
+  Assert-Equal (Query-Scalar "SELECT status FROM xz_point_expiry_policy_versions WHERE id='verify_policy_commit_v4'") 'PUBLISHED' 'committed replacement exists'
+  Write-Output 'PASS committed same-transaction closure and replacement'
   Write-Output 'PASS migration 104 gate suite'
 }
 finally {
