@@ -4097,7 +4097,7 @@ func (s *jsonStore) loadAdminLocked() (adminPlatformData, error) {
 	if err := json.Unmarshal(raw, &data); err != nil {
 		return data, err
 	}
-	if len(data.Users) == 0 && len(data.Plans) == 0 && len(data.GenerationTasks) == 0 {
+	if len(data.Users) == 0 && len(data.Plans) == 0 && len(data.GenerationTasks) == 0 && data.PersonalPointImport.Version == 0 && personalPointStateEmpty(data.PersonalPoints) {
 		return seedAdminData(), nil
 	}
 	if data.Counters == nil {

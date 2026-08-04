@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,11 +26,18 @@ type personalPointState struct {
 	Policies     []PointExpiryPolicy              `json:"policies"`
 }
 
+type personalPointImportState struct {
+	Version         int       `json:"version,omitempty"`
+	SidecarChecksum string    `json:"sidecarChecksum,omitempty"`
+	ImportedAt      time.Time `json:"importedAt,omitempty"`
+}
+
 type JSONPersonalPointStore struct {
 	path    string
 	mu      sync.Mutex
 	memory  *personalPointState
 	initErr error
+	owner   *jsonStore
 }
 
 func NewJSONPersonalPointStore(path string) *JSONPersonalPointStore {
@@ -636,6 +644,11 @@ func (s *JSONPersonalPointStore) withState(ctx context.Context, fn func(*persona
 	if err := s.operationalError(); err != nil {
 		return err
 	}
+	if s.owner != nil {
+		return s.owner.updateWithPersonalPoints(ctx, func(_ *platformData, points *JSONPersonalPointStore) error {
+			return fn(points.memory)
+		})
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -658,12 +671,309 @@ func (s *JSONPersonalPointStore) readState(ctx context.Context) (personalPointSt
 	if err := s.operationalError(); err != nil {
 		return personalPointState{}, err
 	}
+	if s.owner != nil {
+		var result personalPointState
+		err := s.owner.updateWithPersonalPoints(ctx, func(_ *platformData, points *JSONPersonalPointStore) error {
+			result = clonePersonalPointState(*points.memory)
+			return nil
+		})
+		return result, err
+	}
 	if err := ctx.Err(); err != nil {
 		return personalPointState{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked()
+}
+
+func normalizePersonalPointState(state *personalPointState) {
+	if state.Accounts == nil {
+		state.Accounts = []PersonalPointAccount{}
+	}
+	if state.Lots == nil {
+		state.Lots = []PersonalPointLot{}
+	}
+	if state.Reservations == nil {
+		state.Reservations = []PersonalPointReservation{}
+	}
+	if state.Allocations == nil {
+		state.Allocations = []PersonalPointAllocation{}
+	}
+	if state.Movements == nil {
+		state.Movements = []PersonalPointLotMovement{}
+	}
+	if state.WalletLedger == nil {
+		state.WalletLedger = []PersonalPointWalletLedgerEntry{}
+	}
+	if state.Operations == nil {
+		state.Operations = []personalPointOperation{}
+	}
+	if len(state.Policies) == 0 {
+		state.Policies = []PointExpiryPolicy{defaultPersonalPointPolicy()}
+	}
+}
+
+func clonePersonalPointState(state personalPointState) personalPointState {
+	raw, _ := json.Marshal(state)
+	var cloned personalPointState
+	_ = json.Unmarshal(raw, &cloned)
+	normalizePersonalPointState(&cloned)
+	return cloned
+}
+
+func personalPointStateEmpty(state personalPointState) bool {
+	return len(state.Accounts) == 0 && len(state.Lots) == 0 && len(state.Reservations) == 0 && len(state.Allocations) == 0 && len(state.Movements) == 0 && len(state.WalletLedger) == 0 && len(state.Operations) == 0 && len(state.Policies) == 0
+}
+
+func validatePersonalPointState(state *personalPointState) error {
+	if state == nil {
+		return ErrInvalidPointCommand
+	}
+	normalizePersonalPointState(state)
+	accounts := make(map[string]PersonalPointAccount, len(state.Accounts))
+	for _, account := range state.Accounts {
+		if account.ID == "" || account.UserID == "" || account.AvailablePoints < 0 || account.FrozenPoints < 0 || account.TotalGranted < 0 || account.TotalConsumed < 0 || account.TotalExpired < 0 {
+			return ErrInvalidPointCommand
+		}
+		if _, exists := accounts[account.ID]; exists {
+			return ErrPersonalPointImportConflict
+		}
+		accounts[account.ID] = account
+	}
+	availableByAccount := map[string]int64{}
+	reservedByAccount := map[string]int64{}
+	lots := make(map[string]PersonalPointLot, len(state.Lots))
+	for _, lot := range state.Lots {
+		account, ok := accounts[lot.AccountID]
+		if !ok || account.UserID != lot.UserID || lot.ID == "" || lot.OriginalPoints < 0 || lot.AvailablePoints < 0 || lot.ReservedPoints < 0 || lot.ConsumedPoints < 0 || lot.ExpiredPoints < 0 || lot.ReversedPoints < 0 {
+			return ErrPersonalPointImportConflict
+		}
+		if lot.OriginalPoints != lot.AvailablePoints+lot.ReservedPoints+lot.ConsumedPoints+lot.ExpiredPoints+lot.ReversedPoints {
+			return ErrPersonalPointImportConflict
+		}
+		if lot.SourceType != PointSourceLegacy && !isKnownPointSource(lot.SourceType) {
+			return ErrPersonalPointImportConflict
+		}
+		if _, exists := lots[lot.ID]; exists {
+			return ErrPersonalPointImportConflict
+		}
+		lots[lot.ID] = lot
+		availableByAccount[lot.AccountID] += lot.AvailablePoints
+		reservedByAccount[lot.AccountID] += lot.ReservedPoints
+	}
+	for id, account := range accounts {
+		if availableByAccount[id] != account.AvailablePoints || reservedByAccount[id] != account.FrozenPoints {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	reservations := make(map[string]PersonalPointReservation, len(state.Reservations))
+	for _, reservation := range state.Reservations {
+		account, ok := accounts[reservation.AccountID]
+		if !ok || account.UserID != reservation.UserID || reservation.ID == "" || reservation.RequestedPoints < 0 || reservation.ReservedPoints < 0 || reservation.CapturedPoints < 0 || reservation.ReleasedPoints < 0 || reservation.ExpiredPoints < 0 || reservation.RequestedPoints != reservation.ReservedPoints+reservation.CapturedPoints+reservation.ReleasedPoints+reservation.ExpiredPoints {
+			return ErrPersonalPointImportConflict
+		}
+		if _, exists := reservations[reservation.ID]; exists {
+			return ErrPersonalPointImportConflict
+		}
+		reservations[reservation.ID] = reservation
+	}
+	for _, allocation := range state.Allocations {
+		reservation, ok := reservations[allocation.ReservationID]
+		lot, lotOK := lots[allocation.LotID]
+		if !ok || !lotOK || allocation.ID == "" || allocation.AccountID != reservation.AccountID || allocation.UserID != reservation.UserID || allocation.AccountID != lot.AccountID || allocation.UserID != lot.UserID || allocation.AllocatedPoints < 0 || allocation.ReservedPoints < 0 || allocation.CapturedPoints < 0 || allocation.ReleasedPoints < 0 || allocation.ExpiredPoints < 0 || allocation.AllocatedPoints != allocation.ReservedPoints+allocation.CapturedPoints+allocation.ReleasedPoints+allocation.ExpiredPoints {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	for _, entry := range state.WalletLedger {
+		account, ok := accounts[entry.AccountID]
+		if !ok || account.UserID != entry.UserID || entry.ID == "" || entry.IdempotencyKey == "" {
+			return ErrPersonalPointImportConflict
+		}
+		if err := validatePersonalWalletTransition(entry.EntryType, entry.Points, entry.AvailableBefore, entry.AvailableAfter, entry.FrozenBefore, entry.FrozenAfter); err != nil {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	for _, policy := range state.Policies {
+		if err := validatePointExpiryPolicy(policy); err != nil {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	return nil
+}
+
+func sidecarChecksum(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func validatePersonalPointJSONProjection(data *platformData) error {
+	if data == nil {
+		return ErrInvalidPointCommand
+	}
+	embeddedAccounts := make(map[string]struct{}, len(data.PersonalPoints.Accounts))
+	for _, account := range data.PersonalPoints.Accounts {
+		embeddedAccounts[account.ID] = struct{}{}
+		found := false
+		for _, projected := range data.PointAccounts {
+			if projected.ID != account.ID {
+				continue
+			}
+			if projected.UserID != account.UserID || int64(projected.Available) != account.AvailablePoints || int64(projected.Frozen) != account.FrozenPoints {
+				return ErrPersonalPointImportConflict
+			}
+			found = true
+			break
+		}
+		if !found {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	for _, projected := range data.PointAccounts {
+		if _, ok := embeddedAccounts[projected.ID]; !ok && (projected.Available != 0 || projected.Frozen != 0) {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	personalLedgerIDs := make(map[string]struct{}, len(data.PersonalPoints.WalletLedger))
+	for _, entry := range data.PersonalPoints.WalletLedger {
+		personalLedgerIDs[entry.ID] = struct{}{}
+	}
+	legacyEntries := make([]walletLedgerEntry, 0, len(data.WalletLedger))
+	for _, entry := range data.WalletLedger {
+		if _, projected := personalLedgerIDs[entry.ID]; !projected {
+			legacyEntries = append(legacyEntries, entry)
+		}
+	}
+	before, _ := json.Marshal(data.PersonalPoints)
+	candidate := clonePersonalPointState(data.PersonalPoints)
+	if err := migrateLegacyWalletLedgerState(&candidate, legacyEntries, data.PointAccounts); err != nil {
+		return ErrPersonalPointImportConflict
+	}
+	after, _ := json.Marshal(candidate)
+	if string(before) != string(after) {
+		return ErrPersonalPointImportConflict
+	}
+	return nil
+}
+
+func (s *jsonStore) preparePersonalPoints(data *platformData) error {
+	if s == nil || data == nil {
+		return ErrInvalidPointCommand
+	}
+	sidecarPath := s.path + ".personal-points.json"
+	if data.PersonalPointImport.Version != 0 {
+		if data.PersonalPointImport.Version != 1 {
+			return ErrPersonalPointImportConflict
+		}
+		if data.PersonalPointImport.SidecarChecksum != "" {
+			raw, err := os.ReadFile(sidecarPath)
+			if err == nil && sidecarChecksum(raw) != data.PersonalPointImport.SidecarChecksum {
+				return ErrPersonalPointImportConflict
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		normalizePersonalPointState(&data.PersonalPoints)
+		if err := validatePersonalPointState(&data.PersonalPoints); err != nil {
+			return err
+		}
+		return validatePersonalPointJSONProjection(data)
+	}
+	if !personalPointStateEmpty(data.PersonalPoints) {
+		return ErrPersonalPointImportConflict
+	}
+	candidate := personalPointState{}
+	sidecarRaw, err := os.ReadFile(sidecarPath)
+	if err == nil {
+		if len(sidecarRaw) == 0 || json.Unmarshal(sidecarRaw, &candidate) != nil {
+			return ErrPersonalPointImportConflict
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	normalizePersonalPointState(&candidate)
+	memoryStore := &JSONPersonalPointStore{memory: &candidate}
+	if err := memoryStore.importLegacyProjection(data.PointAccounts, data.WalletLedger); err != nil {
+		return err
+	}
+	candidate = clonePersonalPointState(*memoryStore.memory)
+	if err := validatePersonalPointState(&candidate); err != nil {
+		return err
+	}
+	data.PersonalPoints = candidate
+	data.PersonalPointImport = personalPointImportState{Version: 1, ImportedAt: time.Now().UTC()}
+	if err == nil && len(sidecarRaw) > 0 {
+		data.PersonalPointImport.SidecarChecksum = sidecarChecksum(sidecarRaw)
+	}
+	return nil
+}
+
+func syncPersonalPointJSONProjections(data *platformData) error {
+	if data == nil {
+		return ErrInvalidPointCommand
+	}
+	for _, account := range data.PersonalPoints.Accounts {
+		if account.AvailablePoints > int64(^uint(0)>>1) || account.FrozenPoints > int64(^uint(0)>>1) || account.TotalGranted > int64(^uint(0)>>1) || account.TotalConsumed > int64(^uint(0)>>1) {
+			return ErrInvalidPointCommand
+		}
+		found := false
+		for i := range data.PointAccounts {
+			if data.PointAccounts[i].ID != account.ID {
+				continue
+			}
+			if data.PointAccounts[i].UserID != account.UserID {
+				return ErrPointOwnership
+			}
+			data.PointAccounts[i].Available = int(account.AvailablePoints)
+			data.PointAccounts[i].Frozen = int(account.FrozenPoints)
+			data.PointAccounts[i].TotalGranted = int(account.TotalGranted)
+			data.PointAccounts[i].TotalUsed = int(account.TotalConsumed)
+			found = true
+			break
+		}
+		if !found {
+			data.PointAccounts = append(data.PointAccounts, adminPointAccount{ID: account.ID, UserID: account.UserID, Available: int(account.AvailablePoints), Frozen: int(account.FrozenPoints), TotalGranted: int(account.TotalGranted), TotalUsed: int(account.TotalConsumed)})
+		}
+	}
+	ledgerIndex := make(map[string]int, len(data.WalletLedger))
+	for i := range data.WalletLedger {
+		ledgerIndex[data.WalletLedger[i].ID] = i
+	}
+	for _, entry := range data.PersonalPoints.WalletLedger {
+		projected := walletLedgerEntry{ID: entry.ID, AccountID: entry.AccountID, UserID: entry.UserID, TenantID: entry.TenantID, TaskID: entry.TaskID, BillingEventID: entry.BillingEventID, EntryType: entry.EntryType, Points: float64(entry.Points), AvailableBefore: float64(entry.AvailableBefore), AvailableAfter: float64(entry.AvailableAfter), FrozenBefore: float64(entry.FrozenBefore), FrozenAfter: float64(entry.FrozenAfter), IdempotencyKey: entry.IdempotencyKey, ReferenceType: entry.ReferenceType, ReferenceID: entry.ReferenceID, Remark: entry.Remark, Metadata: cloneAnyMap(entry.Metadata), CreatedAt: entry.CreatedAt.UTC().Format(time.RFC3339Nano)}
+		if index, ok := ledgerIndex[entry.ID]; ok {
+			data.WalletLedger[index] = projected
+		} else {
+			ledgerIndex[entry.ID] = len(data.WalletLedger)
+			data.WalletLedger = append(data.WalletLedger, projected)
+		}
+	}
+	return nil
+}
+
+func (s *jsonStore) updateWithPersonalPoints(ctx context.Context, mutator func(*platformData, *JSONPersonalPointStore) error) error {
+	if s == nil || mutator == nil {
+		return ErrInvalidPointCommand
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.update(func(data *platformData) error {
+		if err := s.preparePersonalPoints(data); err != nil {
+			return err
+		}
+		state := clonePersonalPointState(data.PersonalPoints)
+		points := &JSONPersonalPointStore{memory: &state}
+		if err := mutator(data, points); err != nil {
+			return err
+		}
+		data.PersonalPoints = clonePersonalPointState(*points.memory)
+		if err := validatePersonalPointState(&data.PersonalPoints); err != nil {
+			return err
+		}
+		return syncPersonalPointJSONProjections(data)
+	})
 }
 
 func findPersonalAccount(state *personalPointState, accountID, userID string) (*PersonalPointAccount, error) {

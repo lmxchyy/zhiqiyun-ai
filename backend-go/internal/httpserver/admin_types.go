@@ -19,6 +19,8 @@ type adminPlatformData struct {
 	ProviderCosts          []providerCost           `json:"providerCosts,omitempty"`
 	BillingLifecycleEvents []billingLifecycleEvent  `json:"billingLifecycleEvents,omitempty"`
 	WalletLedger           []walletLedgerEntry      `json:"walletLedger,omitempty"`
+	PersonalPoints         personalPointState       `json:"personalPoints,omitempty"`
+	PersonalPointImport    personalPointImportState `json:"personalPointImport,omitempty"`
 	Withdrawals            []adminWithdrawal        `json:"withdrawals"`
 	Presentations          []adminPresentation      `json:"presentations"`
 	Agents                 []adminAgent             `json:"agents"`

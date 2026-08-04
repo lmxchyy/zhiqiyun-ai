@@ -97,10 +97,14 @@ func (s *PostgresPersonalPointStore) begin(ctx context.Context) (*sql.Tx, error)
 }
 
 type pgPointAccount struct {
-	ID        string
-	UserID    string
-	Available int64
-	Frozen    int64
+	ID            string
+	UserID        string
+	Available     int64
+	Frozen        int64
+	TotalGranted  int64
+	TotalConsumed int64
+	TotalExpired  int64
+	TotalReversed int64
 }
 
 func pgLoadAccount(ctx context.Context, tx *sql.Tx, accountID, userID string, forUpdate bool) (pgPointAccount, bool, error) {
@@ -112,7 +116,7 @@ func pgLoadAccount(ctx context.Context, tx *sql.Tx, accountID, userID string, fo
 		lock = " FOR UPDATE"
 	}
 	var account pgPointAccount
-	err := tx.QueryRowContext(ctx, `SELECT id, COALESCE(user_id,''), available, frozen FROM xz_point_accounts WHERE id=$1`+lock, accountID).Scan(&account.ID, &account.UserID, &account.Available, &account.Frozen)
+	err := tx.QueryRowContext(ctx, `SELECT id, COALESCE(user_id,''), available, frozen, COALESCE(NULLIF(raw->>'totalGranted','')::bigint,0), COALESCE(NULLIF(raw->>'totalUsed','')::bigint,0), COALESCE(NULLIF(raw->>'totalExpired','')::bigint,0), COALESCE(NULLIF(raw->>'totalReversed','')::bigint,0) FROM xz_point_accounts WHERE id=$1`+lock, accountID).Scan(&account.ID, &account.UserID, &account.Available, &account.Frozen, &account.TotalGranted, &account.TotalConsumed, &account.TotalExpired, &account.TotalReversed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return pgPointAccount{}, false, nil
 	}
@@ -140,7 +144,17 @@ func pgEnsureAccount(ctx context.Context, tx *sql.Tx, accountID, userID string) 
 }
 
 func pgUpdateAccount(ctx context.Context, tx *sql.Tx, account pgPointAccount) error {
-	_, err := tx.ExecContext(ctx, `UPDATE xz_point_accounts SET available=$2, frozen=$3 WHERE id=$1 AND user_id=$4`, account.ID, account.Available, account.Frozen, account.UserID)
+	var lotAvailable, lotReserved int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(sum(available_points),0),COALESCE(sum(reserved_points),0) FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2`, account.ID, account.UserID).Scan(&lotAvailable, &lotReserved); err != nil {
+		return err
+	}
+	if lotAvailable != account.Available || lotReserved != account.Frozen {
+		return fmt.Errorf("personal point projection mismatch for account %s: account=(%d,%d) lots=(%d,%d)", account.ID, account.Available, account.Frozen, lotAvailable, lotReserved)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE xz_point_accounts SET available=$2::bigint, frozen=$3::bigint, raw=COALESCE(raw,'{}'::jsonb)||jsonb_build_object('id',$1::text,'userId',$4::text,'available',$2::bigint,'frozen',$3::bigint,'totalGranted',$5::bigint,'totalUsed',$6::bigint,'totalExpired',$7::bigint,'totalReversed',$8::bigint) WHERE id=$1::text AND user_id=$4::text`, account.ID, account.Available, account.Frozen, account.UserID, account.TotalGranted, account.TotalConsumed, account.TotalExpired, account.TotalReversed); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO xz_user_wallets(user_id,token_balance,cash_balance_cents,frozen_token,total_token_granted,total_token_used,updated_at,raw) VALUES($1::text,$2::bigint,0,$3::bigint,$4::bigint,$5::bigint,now(),jsonb_build_object('userId',$1::text,'tokenBalance',$2::bigint,'frozenToken',$3::bigint,'totalTokenGranted',$4::bigint,'totalTokenUsed',$5::bigint)) ON CONFLICT(user_id) DO UPDATE SET token_balance=excluded.token_balance,frozen_token=excluded.frozen_token,total_token_granted=excluded.total_token_granted,total_token_used=excluded.total_token_used,updated_at=now(),raw=COALESCE(xz_user_wallets.raw,'{}'::jsonb)||excluded.raw`, account.UserID, account.Available, account.Frozen, account.TotalGranted, account.TotalConsumed)
 	return err
 }
 
@@ -269,21 +283,31 @@ func pgInsertWallet(ctx context.Context, tx *sql.Tx, account pgPointAccount, ent
 }
 
 func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPointGrantCommand) (result PersonalPointGrantResult, err error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err = s.grantTx(ctx, tx, cmd)
+	if err != nil {
+		return result, err
+	}
+	if err = tx.Commit(); err != nil {
+		return PersonalPointGrantResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresPersonalPointStore) grantTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointGrantCommand) (result PersonalPointGrantResult, err error) {
+	if tx == nil {
+		return result, ErrInvalidPointCommand
+	}
 	if err := normalizePointCommand(cmd); err != nil {
 		return result, err
 	}
 	fingerprint := pointCommandFingerprint(cmd)
 	grantedAtProvided := !cmd.GrantedAt.IsZero()
 	cmd.GrantedAt = pointNow(cmd.GrantedAt)
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
 	account, err := pgEnsureAccount(ctx, tx, cmd.AccountID, cmd.UserID)
 	if err != nil {
 		return result, err
@@ -299,9 +323,6 @@ func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPoin
 			}
 			return result, existingErr
 		}
-		if err = tx.Commit(); err != nil {
-			return result, err
-		}
 		return PersonalPointGrantResult{Lot: existing, Idempotent: true}, nil
 	}
 	var existing PersonalPointLot
@@ -309,9 +330,6 @@ func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPoin
 	if scanErr == nil {
 		if existing.UserID != cmd.UserID || existing.SourceType != cmd.Source || existing.OriginalPoints != cmd.Points || existing.ReferenceType != cmd.ReferenceType || existing.ReferenceID != cmd.ReferenceID || (grantedAtProvided && !existing.GrantedAt.Equal(cmd.GrantedAt)) {
 			return result, ErrIdempotencyConflict
-		}
-		if err = tx.Commit(); err != nil {
-			return result, err
 		}
 		return PersonalPointGrantResult{Lot: existing, Idempotent: true}, nil
 	}
@@ -337,6 +355,7 @@ func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPoin
 	}
 	beforeAvailable, beforeFrozen := account.Available, account.Frozen
 	account.Available += cmd.Points
+	account.TotalGranted += cmd.Points
 	if err = pgUpdateAccount(ctx, tx, account); err != nil {
 		return result, err
 	}
@@ -348,9 +367,6 @@ func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPoin
 		entryType = "RECHARGE"
 	}
 	if err = pgInsertWallet(ctx, tx, account, entryType, cmd.Points, beforeAvailable, beforeFrozen, walletKey, cmd.ReferenceType, cmd.ReferenceID, cmd.GrantedAt, map[string]any{"fingerprint": fingerprint, "source_type": cmd.Source}); err != nil {
-		return result, err
-	}
-	if err = tx.Commit(); err != nil {
 		return result, err
 	}
 	return PersonalPointGrantResult{Lot: lot}, nil
@@ -479,20 +495,30 @@ func pgLockAllocationLots(ctx context.Context, tx *sql.Tx, allocations []Persona
 }
 
 func (s *PostgresPersonalPointStore) reserve(ctx context.Context, cmd PersonalPointReserveCommand) (result PersonalPointReserveResult, err error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err = s.reserveTx(ctx, tx, cmd)
+	if err != nil {
+		return result, err
+	}
+	if err = tx.Commit(); err != nil {
+		return PersonalPointReserveResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointReserveCommand) (result PersonalPointReserveResult, err error) {
+	if tx == nil {
+		return result, ErrInvalidPointCommand
+	}
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.BusinessType == "" || cmd.BusinessID == "" || cmd.IdempotencyKey == "" || cmd.RequestedPoints <= 0 {
 		return result, ErrInvalidPointCommand
 	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.ReservedAt = pointNow(cmd.ReservedAt)
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
 	if err != nil {
 		return result, err
@@ -512,9 +538,6 @@ func (s *PostgresPersonalPointStore) reserve(ctx context.Context, cmd PersonalPo
 		if aErr != nil {
 			return result, aErr
 		}
-		if err = tx.Commit(); err != nil {
-			return result, err
-		}
 		return PersonalPointReserveResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
 	}
 	var existing PersonalPointReservation
@@ -526,9 +549,6 @@ func (s *PostgresPersonalPointStore) reserve(ctx context.Context, cmd PersonalPo
 		allocations, allocErr := pgLoadAllocations(ctx, tx, existing.ID, cmd.AccountID, cmd.UserID, false)
 		if allocErr != nil {
 			return result, allocErr
-		}
-		if err = tx.Commit(); err != nil {
-			return result, err
 		}
 		return PersonalPointReserveResult{Reservation: existing, Allocations: allocations, Idempotent: true}, nil
 	}
@@ -612,28 +632,35 @@ func (s *PostgresPersonalPointStore) reserve(ctx context.Context, cmd PersonalPo
 	if err = pgInsertWallet(ctx, tx, account, "RESERVE", cmd.RequestedPoints, beforeAvailable, beforeFrozen, walletKey, cmd.BusinessType, cmd.BusinessID, cmd.ReservedAt, map[string]any{"fingerprint": fingerprint}); err != nil {
 		return result, err
 	}
-	if err = tx.Commit(); err != nil {
-		return result, err
-	}
 	result.Reservation = reservation
 	return result, nil
 }
 
 func (s *PostgresPersonalPointStore) capture(ctx context.Context, cmd PersonalPointCaptureCommand) (result PersonalPointMutationResult, err error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err = s.captureTx(ctx, tx, cmd)
+	if err != nil {
+		return result, err
+	}
+	if err = tx.Commit(); err != nil {
+		return PersonalPointMutationResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointCaptureCommand) (result PersonalPointMutationResult, err error) {
+	if tx == nil {
+		return result, ErrInvalidPointCommand
+	}
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.ReservationID == "" || cmd.IdempotencyKey == "" || cmd.Points <= 0 {
 		return result, ErrInvalidPointCommand
 	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.CapturedAt = pointNow(cmd.CapturedAt)
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
 	if err != nil {
 		return result, err
@@ -652,9 +679,6 @@ func (s *PostgresPersonalPointStore) capture(ctx context.Context, cmd PersonalPo
 		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
 		if aErr != nil {
 			return result, aErr
-		}
-		if err = tx.Commit(); err != nil {
-			return result, err
 		}
 		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
 	}
@@ -725,13 +749,11 @@ func (s *PostgresPersonalPointStore) capture(ctx context.Context, cmd PersonalPo
 		return result, err
 	}
 	account.Frozen -= cmd.Points
+	account.TotalConsumed += cmd.Points
 	if err = pgUpdateAccount(ctx, tx, account); err != nil {
 		return result, err
 	}
 	if err = pgInsertWallet(ctx, tx, account, "CAPTURE", cmd.Points, beforeAvailable, beforeFrozen, walletKey, reservation.BusinessType, reservation.BusinessID, cmd.CapturedAt, map[string]any{"fingerprint": fingerprint}); err != nil {
-		return result, err
-	}
-	if err = tx.Commit(); err != nil {
 		return result, err
 	}
 	result.Reservation, result.Allocations = reservation, allocations
@@ -739,20 +761,30 @@ func (s *PostgresPersonalPointStore) capture(ctx context.Context, cmd PersonalPo
 }
 
 func (s *PostgresPersonalPointStore) release(ctx context.Context, cmd PersonalPointReleaseCommand) (result PersonalPointMutationResult, err error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err = s.releaseTx(ctx, tx, cmd)
+	if err != nil {
+		return result, err
+	}
+	if err = tx.Commit(); err != nil {
+		return PersonalPointMutationResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointReleaseCommand) (result PersonalPointMutationResult, err error) {
+	if tx == nil {
+		return result, ErrInvalidPointCommand
+	}
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.ReservationID == "" || cmd.IdempotencyKey == "" {
 		return result, ErrInvalidPointCommand
 	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.ReleasedAt = pointNow(cmd.ReleasedAt)
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
 	if err != nil {
 		return result, err
@@ -771,9 +803,6 @@ func (s *PostgresPersonalPointStore) release(ctx context.Context, cmd PersonalPo
 		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
 		if aErr != nil {
 			return result, aErr
-		}
-		if err = tx.Commit(); err != nil {
-			return result, err
 		}
 		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
 	}
@@ -870,23 +899,18 @@ func (s *PostgresPersonalPointStore) release(ctx context.Context, cmd PersonalPo
 	}
 	account.Frozen -= amountTotal
 	account.Available += amountTotal
-	if err = pgUpdateAccount(ctx, tx, account); err != nil {
-		return result, err
-	}
 	if err = pgInsertWallet(ctx, tx, account, "RELEASE", amountTotal, beforeAvailable, beforeFrozen, walletKey, reservation.BusinessType, reservation.BusinessID, cmd.ReleasedAt, map[string]any{"fingerprint": fingerprint}); err != nil {
 		return result, err
 	}
 	for _, expired := range expiredLots {
 		beforeExpireAvailable := account.Available
 		account.Available -= expired.amount
-		if err = pgUpdateAccount(ctx, tx, account); err != nil {
-			return result, err
-		}
+		account.TotalExpired += expired.amount
 		if err = pgInsertWallet(ctx, tx, account, "EXPIRE", expired.amount, beforeExpireAvailable, account.Frozen, personalWalletKey(cmd.AccountID, "expire", expired.lot.ID+":"+reservation.ID+":"+cmd.IdempotencyKey), expired.lot.ReferenceType, expired.lot.ReferenceID, cmd.ReleasedAt, map[string]any{"source": "release_after_expiry"}); err != nil {
 			return result, err
 		}
 	}
-	if err = tx.Commit(); err != nil {
+	if err = pgUpdateAccount(ctx, tx, account); err != nil {
 		return result, err
 	}
 	result.Reservation, result.Allocations = reservation, allocations
@@ -942,6 +966,7 @@ func pgExpireDueTx(ctx context.Context, tx *sql.Tx, account *pgPointAccount, acc
 				return err
 			}
 			account.Available -= amount
+			account.TotalExpired += amount
 			if err = pgInsertMovement(ctx, tx, lot, "EXPIRE", amount, before, "", "expire:"+lot.ID, now); err != nil {
 				return err
 			}
@@ -954,19 +979,25 @@ func pgExpireDueTx(ctx context.Context, tx *sql.Tx, account *pgPointAccount, acc
 }
 
 func (s *PostgresPersonalPointStore) expire(ctx context.Context, cmd PersonalPointExpiryCommand) error {
-	if cmd.AccountID == "" || cmd.UserID == "" {
-		return ErrInvalidPointCommand
-	}
-	now := pointNow(cmd.Now)
 	tx, err := s.begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
+	if err := s.expireTx(ctx, tx, cmd); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresPersonalPointStore) expireTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointExpiryCommand) error {
+	if tx == nil {
+		return ErrInvalidPointCommand
+	}
+	if cmd.AccountID == "" || cmd.UserID == "" {
+		return ErrInvalidPointCommand
+	}
+	now := pointNow(cmd.Now)
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
 	if err != nil {
 		return err
@@ -977,7 +1008,7 @@ func (s *PostgresPersonalPointStore) expire(ctx context.Context, cmd PersonalPoi
 	if err = pgExpireDueTx(ctx, tx, &account, cmd.AccountID, cmd.UserID, now); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *PostgresPersonalPointStore) movementCount(ctx context.Context, accountID, userID, movementType string) int {

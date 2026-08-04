@@ -826,6 +826,8 @@ func adminDataFromPlatformData(data platformData) adminPlatformData {
 		ProviderCosts:          data.ProviderCosts,
 		BillingLifecycleEvents: data.BillingLifecycleEvents,
 		WalletLedger:           data.WalletLedger,
+		PersonalPoints:         data.PersonalPoints,
+		PersonalPointImport:    data.PersonalPointImport,
 		Withdrawals:            data.Withdrawals,
 		AdminProducts:          data.AdminProducts,
 		AIModules:              data.AIModules,

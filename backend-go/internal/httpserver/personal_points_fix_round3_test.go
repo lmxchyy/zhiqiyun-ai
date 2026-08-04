@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,7 +164,7 @@ func TestJsonStorePersonalPointServiceRejectsInvalidLegacyWalletLedgerAtomically
 	}
 }
 
-func TestJsonStorePersonalPointServiceCompletesPartialLegacyLedgerMigration(t *testing.T) {
+func TestJsonStorePersonalPointServiceRejectsLegacyProjectionMutationAfterImport(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "platform.json")
 	store := newJSONStore(path)
 	if err := store.update(func(data *platformData) error {
@@ -184,20 +185,16 @@ func TestJsonStorePersonalPointServiceCompletesPartialLegacyLedgerMigration(t *t
 		t.Fatal(err)
 	}
 	second := newJSONStore(path).PersonalPointService()
-	if _, err := second.GetBalance(context.Background(), "partial-account", "partial-user"); err != nil {
-		t.Fatal(err)
+	if _, err := second.GetBalance(context.Background(), "partial-account", "partial-user"); !errors.Is(err, ErrPersonalPointImportConflict) {
+		t.Fatalf("post-import legacy projection mutation error=%v, want fail-closed conflict", err)
 	}
-	state, err := second.repo.(*JSONPersonalPointStore).readState(context.Background())
+	data, err := newJSONStore(path).load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	refs := map[string]int{}
-	for _, entry := range state.WalletLedger {
-		if entry.ReferenceID == "partial-ref-1" || entry.ReferenceID == "partial-ref-2" {
-			refs[entry.ReferenceID]++
+	for _, entry := range data.PersonalPoints.WalletLedger {
+		if entry.ReferenceID == "partial-ref-2" {
+			t.Fatalf("conflicting legacy projection leaked into embedded state: %+v", entry)
 		}
-	}
-	if refs["partial-ref-1"] != 1 || refs["partial-ref-2"] != 1 {
-		t.Fatalf("partial migration refs = %+v, ledger=%+v", refs, state.WalletLedger)
 	}
 }

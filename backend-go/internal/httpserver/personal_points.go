@@ -51,6 +51,7 @@ var (
 	ErrPointOwnership              = errors.New("point account ownership mismatch")
 	ErrInvalidPointCommand         = errors.New("invalid point command")
 	ErrPointNotFound               = errors.New("point record not found")
+	ErrPersonalPointImportConflict = errors.New("personal point sidecar import conflict")
 )
 
 type PointExpiryPolicy struct {
@@ -642,16 +643,8 @@ func (s *jsonStore) PersonalPointService() *PersonalPointService {
 	s.personalPointMu.Lock()
 	defer s.personalPointMu.Unlock()
 	if s.personalPointStore == nil {
-		store := NewJSONPersonalPointStore(s.path + ".personal-points.json")
-		s.mu.Lock()
-		data, err := s.loadLocked()
-		s.mu.Unlock()
-		if err == nil {
-			err = store.importLegacyProjection(data.PointAccounts, data.WalletLedger)
-		}
-		store.initErr = err
+		store := &JSONPersonalPointStore{owner: s}
 		s.personalPointStore = store
-		s.personalPointInitErr = err
 	}
 	return NewPersonalPointService(s.personalPointStore)
 }
