@@ -578,15 +578,13 @@ func grantCreationCreditsTx(ctx context.Context, tx *sql.Tx, order lockedVirtual
 	if account.Available < 0 || amount > int64(math.MaxInt-account.Available) {
 		return errors.New("credit entitlement would overflow wallet balance")
 	}
-	before := account.Available
-	account.Available += int(amount)
-	account.TotalGranted += int(amount)
-	if err := insertPointAccount(ctx, tx, account); err != nil {
+	grant, err := grantPermanentPersonalPointsTx(ctx, tx, order.UserID, PointSourceWechatVirtualOrder, int(amount),
+		"WECHAT_VIRTUAL_ORDER", order.OrderNo, idempotencyKey, now)
+	if err != nil {
 		return err
 	}
-	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "GRANT", int(amount), before, account.Available, "WECHAT_VIRTUAL_ORDER", order.OrderNo, "WeChat virtual payment credit grant"); err != nil {
-		return err
-	}
+	before := grant.AvailableBefore
+	account = grant.Account
 	recordID := virtualPaymentResourceID("token", idempotencyKey)
 	record := adminTokenRecord{
 		ID: recordID, UserID: order.UserID, OrderID: order.OrderNo, ChangeType: "WECHAT_VIRTUAL_MEMBER_BONUS",

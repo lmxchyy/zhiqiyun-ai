@@ -600,7 +600,21 @@ func (s *postgresStore) RegisterAgentInvite(ctx context.Context, invite agentInv
 	if err := insertUser(ctx, tx, user); err != nil {
 		return agentInviteRegistrationResult{}, err
 	}
-	if err := upsertPointAccountByUser(ctx, tx, user.ID, input.PlanPoints); err != nil {
+	if err := upsertPointAccountByUser(ctx, tx, user.ID, 0); err != nil {
+		return agentInviteRegistrationResult{}, err
+	}
+	if input.PlanPoints <= 0 {
+		return agentInviteRegistrationResult{}, ErrInvalidPointCommand
+	}
+	account, err := pgLoadPersonalAccountForUserTx(ctx, tx, user.ID)
+	if err != nil {
+		return agentInviteRegistrationResult{}, err
+	}
+	if _, err := NewPostgresPersonalPointStore(s.db).grantTx(ctx, tx, PersonalPointGrantCommand{
+		AccountID: account.ID, UserID: user.ID, Source: PointSourceRegistrationGift, Points: int64(input.PlanPoints),
+		ReferenceType: "AGENT_INVITE", ReferenceID: locked.InviteCode, IdempotencyKey: "agent-invite-registration:" + input.RegistrationEvent,
+		GrantedAt: time.Now().UTC(),
+	}); err != nil {
 		return agentInviteRegistrationResult{}, err
 	}
 	relationID := "user_relationship_invite_" + shortStableHash(user.ID+"|"+locked.AgentID, 20)

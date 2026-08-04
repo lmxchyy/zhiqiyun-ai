@@ -2028,16 +2028,10 @@ func orderTypeForCommerceOrder(planType string, hasDirectAgent bool, parentAgent
 }
 
 func grantTokensToUser(data *adminPlatformData, userID string, orderID string, changeType string, amount int, now string) error {
-	account, _ := adminPointAccountV1(data, userID)
-	after := account.Available + amount
-	if err := setAdminPointAccountWithLedgerV1(data, userID, after, "GRANT", "COMMERCE_ORDER", orderID+":"+changeType, "commerce order grant"); err != nil {
+	grant, err := grantPermanentAdminJSONPersonalPoints(data, userID, paidPointSourceForChangeType(changeType), amount,
+		"COMMERCE_ORDER", orderID, "commerce:"+orderID+":"+strings.ToUpper(changeType), pointGrantedAt(now))
+	if err != nil {
 		return err
-	}
-	for i := range data.PointAccounts {
-		if data.PointAccounts[i].UserID == userID {
-			data.PointAccounts[i].TotalGranted += amount
-			break
-		}
 	}
 	data.TokenRecords = append(data.TokenRecords, adminTokenRecord{
 		ID:           "token_" + shortID(orderID+"_"+changeType),
@@ -2045,7 +2039,7 @@ func grantTokensToUser(data *adminPlatformData, userID string, orderID string, c
 		OrderID:      orderID,
 		ChangeType:   changeType,
 		Amount:       amount,
-		BalanceAfter: after,
+		BalanceAfter: grant.AvailableAfter,
 		Remark:       "commerce_order_grant",
 		CreatedAt:    now,
 	})
@@ -2254,12 +2248,12 @@ func applyRechargeSettlement(data *adminPlatformData, order *adminOrder, now str
 	if billingEventExists(data.BillingEvents, order.ID, "compute.recharge") {
 		return
 	}
-	pointsByUser := pointMap(data.PointAccounts)
-	before := pointsByUser[order.UserID].Available
-	after := before + points
-	if err := setAdminPointAccountWithLedgerV1(data, order.UserID, after, "RECHARGE", "RECHARGE_ORDER", order.ID, "recharge order credited"); err != nil {
+	grant, err := grantPermanentAdminJSONPersonalPoints(data, order.UserID, PointSourceRecharge, points,
+		"RECHARGE_ORDER", order.ID, "recharge:"+order.ID, pointGrantedAt(now))
+	if err != nil {
 		return
 	}
+	before, after := grant.AvailableBefore, grant.AvailableAfter
 	directAgent, hasDirectAgent := directActiveAgentForUser(data.Users, data.ChannelAgents, order.UserID)
 	event := adminBillingEvent{
 		ID:              uniqueAdminID("evt", billingEventIDs(data.BillingEvents)),

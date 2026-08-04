@@ -2062,18 +2062,12 @@ func applyRechargeSettlementForTx(ctx context.Context, tx *sql.Tx, order *adminO
 	} else {
 		order.PriceSnapshot["newapiSyncStatus"] = "PENDING"
 	}
-	account, err := pointAccountForUpdate(ctx, tx, order.UserID)
+	grant, err := grantPermanentPersonalPointsTx(ctx, tx, order.UserID, PointSourceRecharge, points,
+		"RECHARGE_ORDER", order.ID, "recharge:"+order.ID, pointGrantedAt(now))
 	if err != nil {
 		return err
 	}
-	before := account.Available
-	account.Available += points
-	if err := insertPointAccount(ctx, tx, account); err != nil {
-		return err
-	}
-	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "RECHARGE", points, before, account.Available, "RECHARGE_ORDER", order.ID, "订单充值入账"); err != nil {
-		return err
-	}
+	account, before := grant.Account, grant.AvailableBefore
 	if route.ID != "" && account.Available > route.QuotaLimit {
 		route, err = ensureRechargeImageBackupRouteTx(ctx, tx, order.UserID, account.Available, now)
 		if err != nil {
@@ -2420,19 +2414,12 @@ func grantTokensToUserTx(ctx context.Context, tx *sql.Tx, userID string, orderID
 	if err != nil || exists {
 		return err
 	}
-	account, err := pointAccountForUpdate(ctx, tx, userID)
+	grant, err := grantPermanentPersonalPointsTx(ctx, tx, userID, paidPointSourceForChangeType(changeType), amount,
+		"COMMERCE_ORDER", orderID, "commerce:"+orderID+":"+strings.ToUpper(changeType), pointGrantedAt(now))
 	if err != nil {
 		return err
 	}
-	before := account.Available
-	account.Available += amount
-	account.TotalGranted += amount
-	if err := insertPointAccount(ctx, tx, account); err != nil {
-		return err
-	}
-	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "GRANT", amount, before, account.Available, "COMMERCE_ORDER", orderID+":"+changeType, "商业订单权益发放"); err != nil {
-		return err
-	}
+	account, before := grant.Account, grant.AvailableBefore
 	record := adminTokenRecord{
 		ID:           "token_" + shortID(orderID+"_"+changeType),
 		UserID:       userID,
