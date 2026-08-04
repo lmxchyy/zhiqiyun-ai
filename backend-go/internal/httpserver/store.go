@@ -3584,11 +3584,14 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 
 func (s *jsonStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBillingEvent, error) {
 	var event adminBillingEvent
-	err := s.updateAdmin(func(data *adminPlatformData) error {
-		userID := strings.TrimSpace(task.UserID)
-		if userID == "" {
-			userID = "user_000002"
-		}
+	userID := strings.TrimSpace(task.UserID)
+	taskID := strings.TrimSpace(task.TaskID)
+	if userID == "" || taskID == "" {
+		return event, ErrInvalidPointCommand
+	}
+	task.UserID = userID
+	task.TaskID = taskID
+	err := s.updateWithPersonalPoints(context.Background(), func(data *platformData, points *JSONPersonalPointStore) error {
 		task.UserID = userID
 		for _, item := range data.BillingEvents {
 			if item.TaskID == task.TaskID && strings.EqualFold(item.MetricCode, billingMetricPPTGenerate) {
@@ -3596,26 +3599,21 @@ func (s *jsonStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBillingEven
 				return nil
 			}
 		}
-		pointCost := pptPointCostWithRules(task, *data)
-		available := pointsAvailableForAdminUser(*data, userID)
-		if available < pointCost {
-			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
+		adminData := adminDataFromPlatformData(*data)
+		pointCost := pptPointCostWithRules(task, adminData)
+		available, nextAvailable, err := chargeJSONPersonalPointUsage(context.Background(), points, personalPointUsageChargeCommand{
+			UserID: userID, BusinessType: "PPT_TASK", BusinessID: task.TaskID, Points: int64(pointCost), IdempotencyPrefix: "ppt:" + task.TaskID,
+		})
+		if err != nil {
+			return err
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		walletTask := generationTask{ID: task.TaskID, UserID: userID, ModuleCode: modulePPTGeneration, Model: firstNonEmptyString(task.TextModel, "ppt-text-model")}
-		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "RESERVE", pointCost, "PPT generation reserve"); err != nil {
-			return err
-		}
-		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "CAPTURE", pointCost, "PPT generation capture"); err != nil {
-			return err
-		}
-		nextAvailable := available - pointCost
-
 		user := userMap(data.Users)[userID]
 		directAgent, hasDirectAgent := directActiveAgentForUser(data.Users, data.ChannelAgents, userID)
 		event = pptBillingEvent(task, pointCost, available, nextAvailable, now, user, directAgent, hasDirectAgent)
 		data.BillingEvents = append(data.BillingEvents, event)
-		data.Commissions = append(data.Commissions, commissionArtifactsForUser(data, userID, task.TaskID, "PPT_GENERATION", "ppt_generation", event.AmountCents, now)...)
+		commissionData := adminDataFromPlatformData(*data)
+		data.Commissions = append(data.Commissions, commissionArtifactsForUser(&commissionData, userID, task.TaskID, "PPT_GENERATION", "ppt_generation", event.AmountCents, now)...)
 		return nil
 	})
 	return event, err

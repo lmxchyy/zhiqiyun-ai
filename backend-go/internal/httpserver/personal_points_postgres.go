@@ -59,7 +59,18 @@ func (s *PostgresPersonalPointStore) publishPolicy(ctx context.Context, cmd Pers
 	var current PointExpiryPolicy
 	err = tx.QueryRowContext(ctx, `SELECT id,version,revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now()) ORDER BY version DESC LIMIT 1 FOR UPDATE`).Scan(&current.ID, &current.Version, &current.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
-		return PointExpiryPolicy{}, ErrPointNotFound
+		// A concurrent publisher can archive the tuple selected by this statement
+		// while we wait for its row lock. Re-read in the next READ COMMITTED
+		// statement so that replacement is reported as a revision conflict.
+		var latestRevision int64
+		rereadErr := tx.QueryRowContext(ctx, `SELECT revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now()) ORDER BY version DESC LIMIT 1`).Scan(&latestRevision)
+		if rereadErr == nil {
+			return PointExpiryPolicy{}, ErrPointPolicyRevisionConflict
+		}
+		if errors.Is(rereadErr, sql.ErrNoRows) {
+			return PointExpiryPolicy{}, ErrPointNotFound
+		}
+		return PointExpiryPolicy{}, rereadErr
 	}
 	if err != nil {
 		return PointExpiryPolicy{}, err

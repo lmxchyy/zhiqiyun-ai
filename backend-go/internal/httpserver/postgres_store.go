@@ -1489,6 +1489,13 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBillingEvent, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
+	userID := strings.TrimSpace(task.UserID)
+	taskID := strings.TrimSpace(task.TaskID)
+	if userID == "" || taskID == "" {
+		return adminBillingEvent{}, ErrInvalidPointCommand
+	}
+	task.UserID = userID
+	task.TaskID = taskID
 	if err := s.ensureReady(ctx); err != nil {
 		return adminBillingEvent{}, err
 	}
@@ -1498,11 +1505,6 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	userID := strings.TrimSpace(task.UserID)
-	if userID == "" {
-		userID = "user_000002"
-	}
-	task.UserID = userID
 	if event, ok, err := billingEventForTaskMetricTx(ctx, tx, task.TaskID, billingMetricPPTGenerate); err != nil || ok {
 		if err != nil {
 			return adminBillingEvent{}, err
@@ -1519,7 +1521,6 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 	if err != nil {
 		return adminBillingEvent{}, err
 	}
-	var account adminPointAccount
 	balanceBefore, balanceAfter := 0, 0
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "PPT_TASK", task.TaskID)
@@ -1528,24 +1529,13 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 		}
 		balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
 	} else {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		balanceBefore, balanceAfter, err = chargePostgresPersonalPointUsage(ctx, s.db, tx, personalPointUsageChargeCommand{
+			UserID: userID, BusinessType: "PPT_TASK", BusinessID: task.TaskID,
+			Points: int64(pointCost), IdempotencyPrefix: "ppt:" + task.TaskID,
+		})
 		if err != nil {
 			return adminBillingEvent{}, err
 		}
-		if account.Available < pointCost {
-			return adminBillingEvent{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
-		}
-		balanceBefore = account.Available
-		walletTask := generationTask{ID: task.TaskID, UserID: userID, TenantID: authorization.TenantID, ModuleCode: modulePPTGeneration, Model: firstNonEmptyString(task.TextModel, "ppt-text-model")}
-		reserved, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, account, "RESERVE", pointCost, "PPT generation reserve")
-		if err != nil {
-			return adminBillingEvent{}, err
-		}
-		captured, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, reserved, "CAPTURE", pointCost, "PPT generation capture")
-		if err != nil {
-			return adminBillingEvent{}, err
-		}
-		balanceAfter = captured.Available
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)

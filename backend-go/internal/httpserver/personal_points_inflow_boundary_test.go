@@ -110,6 +110,46 @@ func TestPersonalPointIntegrationStaticBoundaries(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("PPT and RAG usage bill personal lots without changing enterprise routing", func(t *testing.T) {
+		t.Parallel()
+		for _, target := range []struct {
+			path, function, required string
+		}{
+			{path: "store.go", function: "RecordPPTGenerationUsage", required: "chargeJSONPersonalPointUsage"},
+			{path: "postgres_store.go", function: "RecordPPTGenerationUsage", required: "chargePostgresPersonalPointUsage"},
+		} {
+			body := productionFunctionBody(t, target.path, target.function)
+			if !strings.Contains(body, target.required) {
+				t.Errorf("%s.%s does not use %s", target.path, target.function, target.required)
+			}
+			for _, forbidden := range []string{"applyAdminJSONWalletEntryV1", "applyPersonalWalletEntryV1", "setAdminPointAccountWithLedgerV1", "UPDATE xz_point_accounts"} {
+				if strings.Contains(body, forbidden) {
+					t.Errorf("%s.%s bypasses personal lots via %q", target.path, target.function, forbidden)
+				}
+			}
+		}
+
+		knowledgeSource, err := os.ReadFile("knowledge_billing.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		knowledge := string(knowledgeSource)
+		for _, required := range []string{"chargeJSONPersonalPointUsage", "chargePostgresPersonalPointUsage", "reserveEnterpriseComputeTx"} {
+			if !strings.Contains(knowledge, required) {
+				t.Errorf("knowledge billing is missing %q", required)
+			}
+		}
+		for _, forbidden := range []string{"applyAdminJSONWalletEntryV1", "applyPersonalWalletEntryV1", "setAdminPointAccountWithLedgerV1", "UPDATE xz_point_accounts"} {
+			if strings.Contains(knowledge, forbidden) {
+				t.Errorf("knowledge billing bypasses personal lots via %q", forbidden)
+			}
+		}
+		pptPostgres := productionFunctionBody(t, "postgres_store.go", "RecordPPTGenerationUsage")
+		if !strings.Contains(pptPostgres, "reserveEnterpriseComputeTx") {
+			t.Fatal("PPT enterprise usage no longer uses the enterprise compute reservation chain")
+		}
+	})
 }
 
 func productionFunctionBody(t *testing.T, path, functionName string) string {

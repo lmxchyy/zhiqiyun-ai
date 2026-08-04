@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -204,38 +205,88 @@ func TestJSONPersonalPointsMainDocumentWriteFailureIsAtomic(t *testing.T) {
 	}
 }
 
-func TestJSONPersonalPointsSidecarImportsOnceAndConflictsFailClosed(t *testing.T) {
+func TestJSONPersonalPointsIgnoreSidecarAfterSuccessfulImport(t *testing.T) {
 	ctx := context.Background()
+	for _, testCase := range []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{name: "modified", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte(`{"accounts":[]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "deleted", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "invalid json", mutate: func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte(`{invalid`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "platform.json")
+			if err := newJSONStore(path).save(platformData{Counters: map[string]int{}}); err != nil {
+				t.Fatal(err)
+			}
+			sidecarPath := path + ".personal-points.json"
+			sidecar := NewJSONPersonalPointStore(sidecarPath)
+			if _, err := sidecar.grant(ctx, PersonalPointGrantCommand{AccountID: "import-account", UserID: "import-user", Source: PointSourceRecharge, Points: 19, IdempotencyKey: "sidecar-first"}); err != nil {
+				t.Fatal(err)
+			}
+			store := newJSONStore(path)
+			balance, err := store.PersonalPointService().GetBalance(ctx, "import-account", "import-user")
+			if err != nil || balance.Available != 19 {
+				t.Fatalf("initial import balance=%+v err=%v", balance, err)
+			}
+			data, err := store.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if data.PersonalPointImport.Version != 1 || data.PersonalPointImport.SidecarChecksum == "" || len(data.PersonalPoints.Lots) != 1 {
+				t.Fatalf("sidecar import metadata/state = %+v lots=%d", data.PersonalPointImport, len(data.PersonalPoints.Lots))
+			}
+
+			testCase.mutate(t, sidecarPath)
+			service := newJSONStore(path).PersonalPointService()
+			if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "import-account", UserID: "import-user", Source: PointSourceAdminGift, Points: 2, IdempotencyKey: "post-import-gift"}); err != nil {
+				t.Fatalf("post-import gift: %v", err)
+			}
+			reserved, err := service.Reserve(ctx, PersonalPointReserveCommand{AccountID: "import-account", UserID: "import-user", BusinessType: "POST_IMPORT", BusinessID: "post-import", RequestedPoints: 1, IdempotencyKey: "post-import-reserve"})
+			if err != nil {
+				t.Fatalf("post-import reserve: %v", err)
+			}
+			if _, err := service.Capture(ctx, PersonalPointCaptureCommand{AccountID: "import-account", UserID: "import-user", ReservationID: reserved.Reservation.ID, Points: 1, IdempotencyKey: "post-import-capture"}); err != nil {
+				t.Fatalf("post-import capture: %v", err)
+			}
+			if _, err := service.Correct(ctx, PersonalPointCorrectionCommand{AccountID: "import-account", UserID: "import-user", Points: 1, Reason: "post-import correction", IdempotencyKey: "post-import-correction"}); err != nil {
+				t.Fatalf("post-import correction: %v", err)
+			}
+			balance, err = service.GetBalance(ctx, "import-account", "import-user")
+			if err != nil || balance.Available != 21 {
+				t.Fatalf("post-import balance=%+v err=%v, want 21", balance, err)
+			}
+		})
+	}
+}
+
+func TestJSONPersonalPointsInvalidSidecarFailsClosedBeforeFirstImport(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "platform.json")
 	if err := newJSONStore(path).save(platformData{Counters: map[string]int{}}); err != nil {
 		t.Fatal(err)
 	}
-	sidecar := NewJSONPersonalPointStore(path + ".personal-points.json")
-	if _, err := sidecar.grant(ctx, PersonalPointGrantCommand{AccountID: "import-account", UserID: "import-user", Source: PointSourceRecharge, Points: 19, IdempotencyKey: "sidecar-first"}); err != nil {
+	if err := os.WriteFile(path+".personal-points.json", []byte(`{invalid`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := newJSONStore(path)
-	balance, err := store.PersonalPointService().GetBalance(ctx, "import-account", "import-user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if balance.Available != 19 {
-		t.Fatalf("imported balance=%d, want 19", balance.Available)
-	}
-	data, err := store.load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if data.PersonalPointImport.Version != 1 || data.PersonalPointImport.SidecarChecksum == "" || len(data.PersonalPoints.Lots) != 1 {
-		t.Fatalf("sidecar import metadata/state = %+v lots=%d", data.PersonalPointImport, len(data.PersonalPoints.Lots))
-	}
-
-	if _, err := sidecar.grant(ctx, PersonalPointGrantCommand{AccountID: "import-account", UserID: "import-user", Source: PointSourceRecharge, Points: 1, IdempotencyKey: "sidecar-conflict"}); err != nil {
-		t.Fatal(err)
-	}
-	_, err = newJSONStore(path).PersonalPointService().GetBalance(ctx, "import-account", "import-user")
+	_, err := newJSONStore(path).PersonalPointService().GetBalance(context.Background(), "import-account", "import-user")
 	if !errors.Is(err, ErrPersonalPointImportConflict) {
-		t.Fatalf("mutated sidecar error=%v, want fail-closed import conflict", err)
+		t.Fatalf("initial invalid sidecar error=%v, want fail-closed import conflict", err)
 	}
 }
 

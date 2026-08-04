@@ -860,19 +860,9 @@ func (s *jsonStore) preparePersonalPoints(data *platformData) error {
 	if s == nil || data == nil {
 		return ErrInvalidPointCommand
 	}
-	sidecarPath := s.path + ".personal-points.json"
 	if data.PersonalPointImport.Version != 0 {
 		if data.PersonalPointImport.Version != 1 {
 			return ErrPersonalPointImportConflict
-		}
-		if data.PersonalPointImport.SidecarChecksum != "" {
-			raw, err := os.ReadFile(sidecarPath)
-			if err == nil && sidecarChecksum(raw) != data.PersonalPointImport.SidecarChecksum {
-				return ErrPersonalPointImportConflict
-			}
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
 		}
 		normalizePersonalPointState(&data.PersonalPoints)
 		if err := validatePersonalPointState(&data.PersonalPoints); err != nil {
@@ -880,6 +870,7 @@ func (s *jsonStore) preparePersonalPoints(data *platformData) error {
 		}
 		return validatePersonalPointJSONProjection(data)
 	}
+	sidecarPath := s.path + ".personal-points.json"
 	if !personalPointStateEmpty(data.PersonalPoints) {
 		return ErrPersonalPointImportConflict
 	}
