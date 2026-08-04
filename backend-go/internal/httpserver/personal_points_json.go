@@ -109,9 +109,53 @@ func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 	return state, nil
 }
 
+func validatePersonalWalletTransition(entryType string, points, availableBefore, availableAfter, frozenBefore, frozenAfter int64) error {
+	const maxInt64 = int64(1<<63 - 1)
+	if points <= 0 || availableBefore < 0 || availableAfter < 0 || frozenBefore < 0 || frozenAfter < 0 {
+		return ErrInvalidPointCommand
+	}
+	switch entryType {
+	case "GRANT", "RECHARGE", "REFUND":
+		if availableBefore > maxInt64-points || availableAfter != availableBefore+points || frozenAfter != frozenBefore {
+			return ErrInvalidPointCommand
+		}
+	case "RESERVE":
+		if availableBefore < points || frozenBefore > maxInt64-points || availableAfter != availableBefore-points || frozenAfter != frozenBefore+points {
+			return ErrInvalidPointCommand
+		}
+	case "CAPTURE":
+		if availableAfter != availableBefore || frozenBefore < points || frozenAfter != frozenBefore-points {
+			return ErrInvalidPointCommand
+		}
+	case "RELEASE":
+		if availableBefore > maxInt64-points || frozenBefore < points || availableAfter != availableBefore+points || frozenAfter != frozenBefore-points {
+			return ErrInvalidPointCommand
+		}
+	case "EXPIRE":
+		if availableBefore < points || availableAfter != availableBefore-points || frozenAfter != frozenBefore {
+			return ErrInvalidPointCommand
+		}
+	case "ADJUSTMENT":
+		if frozenAfter != frozenBefore {
+			return ErrInvalidPointCommand
+		}
+		positive := availableBefore <= maxInt64-points && availableAfter == availableBefore+points
+		negative := availableBefore >= points && availableAfter == availableBefore-points
+		if !positive && !negative {
+			return ErrInvalidPointCommand
+		}
+	default:
+		return ErrInvalidPointCommand
+	}
+	return nil
+}
+
 func appendPersonalWalletLedger(state *personalPointState, account PersonalPointAccount, entryType string, points, beforeAvailable, beforeFrozen int64, key, referenceType, referenceID string, metadata map[string]any, occurredAt time.Time) error {
 	if state == nil || account.ID == "" || account.UserID == "" || strings.TrimSpace(key) == "" || points < 0 || beforeAvailable < 0 || beforeFrozen < 0 || account.AvailablePoints < 0 || account.FrozenPoints < 0 {
 		return ErrInvalidPointCommand
+	}
+	if err := validatePersonalWalletTransition(entryType, points, beforeAvailable, account.AvailablePoints, beforeFrozen, account.FrozenPoints); err != nil {
+		return err
 	}
 	for _, existing := range state.WalletLedger {
 		if existing.IdempotencyKey != key {
@@ -121,22 +165,6 @@ func appendPersonalWalletLedger(state *personalPointState, account PersonalPoint
 			return ErrIdempotencyConflict
 		}
 		return nil
-	}
-	validTransition := false
-	switch entryType {
-	case "RECHARGE", "GRANT":
-		validTransition = account.AvailablePoints == beforeAvailable+points && account.FrozenPoints == beforeFrozen
-	case "RESERVE":
-		validTransition = beforeAvailable >= points && account.AvailablePoints == beforeAvailable-points && account.FrozenPoints == beforeFrozen+points
-	case "CAPTURE":
-		validTransition = account.AvailablePoints == beforeAvailable && beforeFrozen >= points && account.FrozenPoints == beforeFrozen-points
-	case "RELEASE":
-		validTransition = account.AvailablePoints == beforeAvailable+points && beforeFrozen >= points && account.FrozenPoints == beforeFrozen-points
-	case "EXPIRE":
-		validTransition = beforeAvailable >= points && account.AvailablePoints == beforeAvailable-points && account.FrozenPoints == beforeFrozen
-	}
-	if !validTransition {
-		return ErrInvalidPointCommand
 	}
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -268,6 +296,12 @@ func legacyWalletLedgerKey(accountID string, entry walletLedgerEntry, synthetic 
 }
 
 func appendMigratedWalletLedger(state *personalPointState, candidate PersonalPointWalletLedgerEntry) error {
+	if state == nil || candidate.AccountID == "" || candidate.UserID == "" || strings.TrimSpace(candidate.IdempotencyKey) == "" {
+		return ErrInvalidPointCommand
+	}
+	if err := validatePersonalWalletTransition(candidate.EntryType, candidate.Points, candidate.AvailableBefore, candidate.AvailableAfter, candidate.FrozenBefore, candidate.FrozenAfter); err != nil {
+		return err
+	}
 	for _, existing := range state.WalletLedger {
 		if existing.IdempotencyKey != candidate.IdempotencyKey {
 			continue
