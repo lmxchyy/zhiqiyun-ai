@@ -86,7 +86,7 @@ export function canAccessAdminModule(principal: AdminModulePrincipal, permission
   const role = String(principal.role || "").trim().toUpperCase();
   if (role === "SUPER_ADMIN") return true;
   const permissions = Array.isArray(principal.permissions) ? principal.permissions : [];
-  if (permission.startsWith("pricing:")) return permissions.includes(permission);
+  if (permission.startsWith("pricing:") || permission.startsWith("points:")) return permissions.includes(permission);
   return permissions.includes(permission) || permissions.includes("admin.full");
 }
 

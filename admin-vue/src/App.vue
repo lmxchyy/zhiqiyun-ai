@@ -245,7 +245,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -256,7 +256,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -2145,6 +2145,11 @@
             :current-role="String(currentAdmin?.role || '')"
             :current-permissions="currentPermissions"
           />
+          <PersonalPointsGovernance
+            v-else-if="store.activeModuleId === 'personalPointsGovernance'"
+            :role="String(currentAdmin?.role || '')"
+            :permissions="currentPermissions"
+          />
           <BillingDomain v-else-if="billingModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
           <section v-else-if="store.activeModuleId === 'apiSettings'" class="api-settings-admin">
             <section class="api-settings-titlebar">
@@ -2738,6 +2743,7 @@
             :saving="store.saving"
             :toolbar-actions="toolbarActions"
             :row-actions="rowActions"
+            :role="String(currentAdmin?.role || '')"
             :permissions="currentPermissions"
             :column-labels="columnLabels"
             :status-filter-options="statusFilterOptions"
@@ -2947,6 +2953,7 @@ async function loadPricePlanAdminStore() {
 }
 const AdminDataTable = defineAsyncComponent(() => import("./components/admin/AdminDataTable.vue"));
 const Customer360Center = defineAsyncComponent(() => import("./components/admin/Customer360Center.vue"));
+const PersonalPointsGovernance = defineAsyncComponent(() => import("./components/admin/PersonalPointsGovernance.vue"));
 const BillingDomain = defineAsyncComponent(() => import("./components/billing/BillingDomain.vue"));
 const PricePlanGovernance = defineAsyncComponent(() => import("./components/billing/price-plan-admin/PricePlanGovernance.vue"));
 const CustomerAttributionOverview = defineAsyncComponent(() => import("./components/attribution/CustomerAttributionOverview.vue"));
