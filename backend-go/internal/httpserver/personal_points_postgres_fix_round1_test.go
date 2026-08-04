@@ -14,11 +14,18 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+func personalPointPostgresTestDSN() string {
+	if dsn := os.Getenv("PERSONAL_POINTS_POSTGRES_TEST_DSN"); dsn != "" {
+		return dsn
+	}
+	return os.Getenv("XIANZHI_PERSONAL_POINT_TEST_DATABASE_URL")
+}
+
 func openPersonalPointFixRound1Postgres(t *testing.T) (*sql.DB, *PostgresPersonalPointStore, context.Context) {
 	t.Helper()
-	dsn := os.Getenv("XIANZHI_PERSONAL_POINT_TEST_DATABASE_URL")
+	dsn := personalPointPostgresTestDSN()
 	if dsn == "" {
-		t.Skip("XIANZHI_PERSONAL_POINT_TEST_DATABASE_URL is not configured")
+		t.Skip("PERSONAL_POINTS_POSTGRES_TEST_DSN or XIANZHI_PERSONAL_POINT_TEST_DATABASE_URL is not configured")
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {

@@ -156,7 +156,7 @@ func TestJsonStorePersonalPointServiceReusesRepositoryAndImportsLegacyBalance(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Lots) != 1 || state.Lots[0].SourceType != PointSourceLegacy || state.Lots[0].OriginalPoints != 7 || !state.Lots[0].Permanent() {
+	if len(state.Lots) != 1 || state.Lots[0].SourceType != PointSourceLegacy || state.Lots[0].OriginalPoints != 7 || !state.Lots[0].Permanent() || state.Lots[0].Status != "LEGACY" {
 		t.Fatalf("legacy import lots = %+v", state.Lots)
 	}
 }

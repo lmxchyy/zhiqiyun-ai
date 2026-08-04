@@ -253,6 +253,27 @@ type personalPointOperation struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// PersonalPointWalletLedgerEntry is the JSON adapter's account-level audit
+// projection.  It mirrors the observable transition fields of xz_wallet_ledger
+// while retaining source/business metadata for old file-backed deployments.
+type PersonalPointWalletLedgerEntry struct {
+	ID              string         `json:"id"`
+	AccountID       string         `json:"account_id"`
+	UserID          string         `json:"user_id"`
+	EntryType       string         `json:"entry_type"`
+	Points          int64          `json:"points"`
+	AvailableBefore int64          `json:"available_before"`
+	AvailableAfter  int64          `json:"available_after"`
+	FrozenBefore    int64          `json:"frozen_before"`
+	FrozenAfter     int64          `json:"frozen_after"`
+	IdempotencyKey  string         `json:"idempotency_key"`
+	ReferenceType   string         `json:"reference_type"`
+	ReferenceID     string         `json:"reference_id"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+	OccurredAt      time.Time      `json:"occurred_at"`
+	CreatedAt       time.Time      `json:"created_at,omitempty"`
+}
+
 // PersonalPointRepository is the storage boundary for the service.  JSON and
 // PostgreSQL repositories both implement the same domain behavior; keeping the
 // interface here also gives future HTTP callers one audited entry point.
@@ -363,7 +384,7 @@ func validatePointExpiryPolicy(policy PointExpiryPolicy) error {
 	if strings.TrimSpace(policy.ID) == "" || policy.Version <= 0 || strings.TrimSpace(policy.TimeZone) == "" {
 		return ErrInvalidPointCommand
 	}
-	if strings.ToUpper(strings.TrimSpace(policy.DurationUnit)) != "CALENDAR_MONTH" {
+	if policy.DurationUnit != "CALENDAR_MONTH" {
 		return ErrInvalidPointCommand
 	}
 	if policy.Enabled && policy.DurationValue <= 0 {

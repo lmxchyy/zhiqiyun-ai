@@ -14,13 +14,14 @@ import (
 )
 
 type personalPointState struct {
-	Accounts     []PersonalPointAccount     `json:"accounts"`
-	Lots         []PersonalPointLot         `json:"lots"`
-	Reservations []PersonalPointReservation `json:"reservations"`
-	Allocations  []PersonalPointAllocation  `json:"allocations"`
-	Movements    []PersonalPointLotMovement `json:"movements"`
-	Operations   []personalPointOperation   `json:"operations"`
-	Policies     []PointExpiryPolicy        `json:"policies"`
+	Accounts     []PersonalPointAccount           `json:"accounts"`
+	Lots         []PersonalPointLot               `json:"lots"`
+	Reservations []PersonalPointReservation       `json:"reservations"`
+	Allocations  []PersonalPointAllocation        `json:"allocations"`
+	Movements    []PersonalPointLotMovement       `json:"movements"`
+	WalletLedger []PersonalPointWalletLedgerEntry `json:"wallet_ledger"`
+	Operations   []personalPointOperation         `json:"operations"`
+	Policies     []PointExpiryPolicy              `json:"policies"`
 }
 
 type JSONPersonalPointStore struct {
@@ -55,6 +56,7 @@ func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 	if len(state.Policies) == 0 {
 		state.Policies = []PointExpiryPolicy{defaultPersonalPointPolicy()}
 	}
+	state.WalletLedger = []PersonalPointWalletLedgerEntry{}
 	if s == nil {
 		return state, nil
 	}
@@ -94,6 +96,9 @@ func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 	if state.Movements == nil {
 		state.Movements = []PersonalPointLotMovement{}
 	}
+	if state.WalletLedger == nil {
+		state.WalletLedger = []PersonalPointWalletLedgerEntry{}
+	}
 	if state.Operations == nil {
 		state.Operations = []personalPointOperation{}
 	}
@@ -101,6 +106,48 @@ func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 		state.Policies = []PointExpiryPolicy{defaultPersonalPointPolicy()}
 	}
 	return state, nil
+}
+
+func appendPersonalWalletLedger(state *personalPointState, account PersonalPointAccount, entryType string, points, beforeAvailable, beforeFrozen int64, key, referenceType, referenceID string, metadata map[string]any, occurredAt time.Time) error {
+	if state == nil || account.ID == "" || account.UserID == "" || strings.TrimSpace(key) == "" || points < 0 || beforeAvailable < 0 || beforeFrozen < 0 || account.AvailablePoints < 0 || account.FrozenPoints < 0 {
+		return ErrInvalidPointCommand
+	}
+	for _, existing := range state.WalletLedger {
+		if existing.IdempotencyKey != key {
+			continue
+		}
+		if existing.AccountID != account.ID || existing.UserID != account.UserID || existing.EntryType != entryType || existing.Points != points || existing.AvailableBefore != beforeAvailable || existing.AvailableAfter != account.AvailablePoints || existing.FrozenBefore != beforeFrozen || existing.FrozenAfter != account.FrozenPoints {
+			return ErrIdempotencyConflict
+		}
+		return nil
+	}
+	validTransition := false
+	switch entryType {
+	case "RECHARGE", "GRANT":
+		validTransition = account.AvailablePoints == beforeAvailable+points && account.FrozenPoints == beforeFrozen
+	case "RESERVE":
+		validTransition = beforeAvailable >= points && account.AvailablePoints == beforeAvailable-points && account.FrozenPoints == beforeFrozen+points
+	case "CAPTURE":
+		validTransition = account.AvailablePoints == beforeAvailable && beforeFrozen >= points && account.FrozenPoints == beforeFrozen-points
+	case "RELEASE":
+		validTransition = account.AvailablePoints == beforeAvailable+points && beforeFrozen >= points && account.FrozenPoints == beforeFrozen-points
+	case "EXPIRE":
+		validTransition = beforeAvailable >= points && account.AvailablePoints == beforeAvailable-points && account.FrozenPoints == beforeFrozen
+	}
+	if !validTransition {
+		return ErrInvalidPointCommand
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	occurredAt = pointNow(occurredAt)
+	state.WalletLedger = append(state.WalletLedger, PersonalPointWalletLedgerEntry{
+		ID: stablePointID("wallet", account.ID, key), AccountID: account.ID, UserID: account.UserID,
+		EntryType: entryType, Points: points, AvailableBefore: beforeAvailable, AvailableAfter: account.AvailablePoints,
+		FrozenBefore: beforeFrozen, FrozenAfter: account.FrozenPoints, IdempotencyKey: key,
+		ReferenceType: referenceType, ReferenceID: referenceID, Metadata: metadata, OccurredAt: occurredAt, CreatedAt: occurredAt,
+	})
+	return nil
 }
 
 func (s *JSONPersonalPointStore) saveLocked(state personalPointState) error {
@@ -366,9 +413,17 @@ func (s *JSONPersonalPointStore) grant(ctx context.Context, cmd PersonalPointGra
 			}
 		}
 		state.Lots = append(state.Lots, lot)
+		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 		account.AvailablePoints += cmd.Points
 		account.TotalGranted += cmd.Points
 		appendPersonalMovement(state, lot, "OPENING", cmd.Points, PersonalPointLot{AvailablePoints: 0}, "", "grant:"+cmd.IdempotencyKey, cmd.GrantedAt)
+		entryType := "GRANT"
+		if cmd.Source == PointSourceRecharge {
+			entryType = "RECHARGE"
+		}
+		if err := appendPersonalWalletLedger(state, *account, entryType, cmd.Points, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "grant", cmd.IdempotencyKey), cmd.ReferenceType, cmd.ReferenceID, map[string]any{"fingerprint": fingerprint, "source_type": string(cmd.Source)}, cmd.GrantedAt); err != nil {
+			return err
+		}
 		appendOperation(state, "GRANT", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint, lot.ID, 0, cmd.GrantedAt)
 		result = PersonalPointGrantResult{Lot: lot}
 		return nil
@@ -479,9 +534,13 @@ func (s *JSONPersonalPointStore) reserve(ctx context.Context, cmd PersonalPointR
 		if remaining != 0 {
 			return ErrInsufficientPoints
 		}
+		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 		account.AvailablePoints -= cmd.RequestedPoints
 		account.FrozenPoints += cmd.RequestedPoints
 		state.Reservations = append(state.Reservations, reservation)
+		if err := appendPersonalWalletLedger(state, *account, "RESERVE", cmd.RequestedPoints, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "reserve", cmd.IdempotencyKey), cmd.BusinessType, cmd.BusinessID, map[string]any{"fingerprint": fingerprint, "business_type": cmd.BusinessType, "business_id": cmd.BusinessID}, cmd.ReservedAt); err != nil {
+			return err
+		}
 		appendOperation(state, "RESERVE", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint, reservation.ID, 0, cmd.ReservedAt)
 		result.Reservation, result.Idempotent = reservation, false
 		return nil
@@ -564,8 +623,12 @@ func (s *JSONPersonalPointStore) capture(ctx context.Context, cmd PersonalPointC
 		if account == nil {
 			return ErrPointNotFound
 		}
+		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 		account.FrozenPoints -= cmd.Points
 		account.TotalConsumed += cmd.Points
+		if err := appendPersonalWalletLedger(state, *account, "CAPTURE", cmd.Points, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "capture", cmd.IdempotencyKey), reservation.BusinessType, reservation.BusinessID, map[string]any{"fingerprint": fingerprint, "reservation_id": reservation.ID, "business_type": reservation.BusinessType, "business_id": reservation.BusinessID}, cmd.CapturedAt); err != nil {
+			return err
+		}
 		appendOperation(state, "CAPTURE", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint, reservation.ID, cmd.Points, cmd.CapturedAt)
 		return populateMutationResult(state, reservation.ID, &result, false)
 	})
@@ -598,6 +661,11 @@ func (s *JSONPersonalPointStore) release(ctx context.Context, cmd PersonalPointR
 			return ErrInvalidPointCommand
 		}
 		remaining := amountTotal
+		var expiredLots []struct {
+			lot    PersonalPointLot
+			amount int64
+			key    string
+		}
 		for i := range state.Allocations {
 			allocation := &state.Allocations[i]
 			if allocation.ReservationID != reservation.ID || allocation.ReservedPoints <= 0 || remaining == 0 {
@@ -625,16 +693,13 @@ func (s *JSONPersonalPointStore) release(ctx context.Context, cmd PersonalPointR
 				lot.AvailablePoints = 0
 				lot.ExpiredPoints += expireAmount
 				setPointLotStatus(lot)
-				account, accountErr := findPersonalAccount(state, cmd.AccountID, cmd.UserID)
-				if accountErr != nil {
-					return accountErr
-				}
-				if account == nil {
-					return ErrPointNotFound
-				}
-				account.AvailablePoints -= expireAmount
-				account.TotalExpired += expireAmount
+				expireKey := personalWalletKey(cmd.AccountID, "expire", lot.ID+":"+reservation.ID+":"+cmd.IdempotencyKey)
 				appendPersonalMovement(state, *lot, "EXPIRE", expireAmount, expireBefore, reservation.ID, "expire:"+lot.ID+":"+reservation.ID+":"+cmd.IdempotencyKey, cmd.ReleasedAt)
+				expiredLots = append(expiredLots, struct {
+					lot    PersonalPointLot
+					amount int64
+					key    string
+				}{lot: *lot, amount: expireAmount, key: expireKey})
 			}
 			remaining -= amount
 		}
@@ -652,8 +717,20 @@ func (s *JSONPersonalPointStore) release(ctx context.Context, cmd PersonalPointR
 		if account == nil {
 			return ErrPointNotFound
 		}
+		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 		account.FrozenPoints -= amountTotal
 		account.AvailablePoints += amountTotal
+		if err := appendPersonalWalletLedger(state, *account, "RELEASE", amountTotal, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "release", cmd.IdempotencyKey), reservation.BusinessType, reservation.BusinessID, map[string]any{"fingerprint": fingerprint, "reservation_id": reservation.ID, "business_type": reservation.BusinessType, "business_id": reservation.BusinessID}, cmd.ReleasedAt); err != nil {
+			return err
+		}
+		for _, expired := range expiredLots {
+			beforeExpireAvailable := account.AvailablePoints
+			account.AvailablePoints -= expired.amount
+			account.TotalExpired += expired.amount
+			if err := appendPersonalWalletLedger(state, *account, "EXPIRE", expired.amount, beforeExpireAvailable, account.FrozenPoints, expired.key, expired.lot.ReferenceType, expired.lot.ReferenceID, map[string]any{"source": "release_after_expiry", "source_type": string(expired.lot.SourceType), "reservation_id": reservation.ID, "business_type": reservation.BusinessType, "business_id": reservation.BusinessID}, cmd.ReleasedAt); err != nil {
+				return err
+			}
+		}
 		appendOperation(state, "RELEASE", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint, reservation.ID, amountTotal, cmd.ReleasedAt)
 		return populateMutationResult(state, reservation.ID, &result, false)
 	})
@@ -696,9 +773,13 @@ func expirePersonalPointState(state *personalPointState, accountID, userID strin
 			lot.AvailablePoints = 0
 			lot.ExpiredPoints += amount
 			setPointLotStatus(lot)
+			beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 			account.AvailablePoints -= amount
 			account.TotalExpired += amount
 			appendPersonalMovement(state, *lot, "EXPIRE", amount, before, "", "expire:"+lot.ID, now)
+			if err := appendPersonalWalletLedger(state, *account, "EXPIRE", amount, beforeAvailable, beforeFrozen, personalWalletKey(accountID, "expire", lot.ID), lot.ReferenceType, lot.ReferenceID, map[string]any{"source": "scheduled_expiry", "source_type": string(lot.SourceType)}, now); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -757,11 +838,15 @@ func (s *JSONPersonalPointStore) importLegacyAccounts(accounts []adminPointAccou
 				return err
 			}
 			grantedAt := time.Now().UTC()
-			lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: int64(source.Available), AvailablePoints: int64(source.Available), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "ACTIVE"}
+			lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: int64(source.Available), AvailablePoints: int64(source.Available), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "LEGACY"}
 			state.Lots = append(state.Lots, lot)
+			beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 			account.AvailablePoints += int64(source.Available)
 			account.TotalGranted += int64(source.Available)
 			appendPersonalMovement(state, lot, "OPENING", int64(source.Available), PersonalPointLot{}, "", "legacy-import:"+accountID, grantedAt)
+			if err := appendPersonalWalletLedger(state, *account, "GRANT", int64(source.Available), beforeAvailable, beforeFrozen, personalWalletKey(accountID, "grant", legacyKey), lot.ReferenceType, lot.ReferenceID, map[string]any{"source_type": string(PointSourceLegacy), "legacy_import": true}, grantedAt); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
