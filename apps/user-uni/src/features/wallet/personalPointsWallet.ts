@@ -64,6 +64,11 @@ interface PersonalPointsWalletCoordinatorInput {
   onChange?: (snapshot: { state: PersonalPointsWalletState; loading: boolean }) => void;
 }
 
+interface PersonalWalletPageRefreshCoordinatorInput {
+  onInvalidate: () => void;
+  onLoadingChange: (loading: boolean) => void;
+}
+
 export interface PersonalPointsExpirySummary {
   expiringPoints: number;
   nextExpiryAt: string;
@@ -111,11 +116,17 @@ function emptyState(): PersonalPointsWalletState {
   return { scope: null, payload: null, status: "hidden", stale: false, error: "", storedAt: null };
 }
 
+export function personalWalletRuntimeScopeFingerprint(scope: PersonalPointsWalletRuntimeScope) {
+  return [scope.sessionKey, scope.userId, scope.contextType, scope.tenantId]
+    .map(value => String(value || "").trim())
+    .join("\u0000");
+}
+
 function runtimeScopeKey(scope: PersonalPointsWalletRuntimeScope) {
   const sessionKey = String(scope.sessionKey || "").trim();
   const userId = normalizedUserId(scope.userId);
   if (!sessionKey || !userId || scope.contextType !== "PERSONAL") return null;
-  return `${sessionKey}\u0000${userId}\u0000PERSONAL\u0000${String(scope.tenantId || "").trim()}`;
+  return personalWalletRuntimeScopeFingerprint({ ...scope, sessionKey, userId });
 }
 
 export function createPersonalPointsWalletCacheKey(userId: string, contextType: PersonalWalletContextType) {
@@ -240,6 +251,59 @@ export function createPersonalPointsWalletCoordinator(input: PersonalPointsWalle
       emit();
       return state;
     },
+  };
+}
+
+export function createPersonalWalletPageRefreshCoordinator(input: PersonalWalletPageRefreshCoordinatorInput) {
+  let epoch = 0;
+  let loading = false;
+  let ownedScopeChange: { token: number; scopeKey: string } | null = null;
+
+  const setLoading = (next: boolean) => {
+    if (loading === next) return;
+    loading = next;
+    input.onLoadingChange(next);
+  };
+  const cancelCurrent = () => {
+    epoch += 1;
+    ownedScopeChange = null;
+    input.onInvalidate();
+    setLoading(false);
+  };
+
+  return {
+    beginRefresh() {
+      const token = ++epoch;
+      ownedScopeChange = null;
+      setLoading(true);
+      return token;
+    },
+    commitOwnedScope(token: number, scopeKey: string, commit: () => void) {
+      if (token !== epoch) return false;
+      ownedScopeChange = { token, scopeKey };
+      commit();
+      if (ownedScopeChange?.token === token) ownedScopeChange = null;
+      return token === epoch;
+    },
+    scopeChanged(scopeKey: string) {
+      input.onInvalidate();
+      if (ownedScopeChange?.token === epoch && ownedScopeChange.scopeKey === scopeKey) {
+        ownedScopeChange = null;
+        return;
+      }
+      epoch += 1;
+      ownedScopeChange = null;
+      setLoading(false);
+    },
+    isCurrent(token: number) {
+      return token === epoch;
+    },
+    finishRefresh(token: number) {
+      if (token !== epoch) return;
+      ownedScopeChange = null;
+      setLoading(false);
+    },
+    cancel: cancelCurrent,
   };
 }
 

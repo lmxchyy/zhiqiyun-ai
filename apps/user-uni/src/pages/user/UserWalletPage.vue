@@ -73,8 +73,11 @@ import { useMiniProgramNavigation } from "../../composables/useMiniProgramNaviga
 import { usePersonalPointsWallet } from "../../composables/usePersonalPointsWallet";
 import { miniProgramFeaturePages } from "../../config/miniProgramPages";
 import {
+  createPersonalWalletPageRefreshCoordinator,
   personalPointEntryKind,
   personalPointsExpirySummary,
+  personalWalletRuntimeScopeFingerprint,
+  type PersonalPointsWalletRuntimeScope,
   type PersonalWalletContextType,
 } from "../../features/wallet/personalPointsWallet";
 import { useUserStore } from "../../stores/user";
@@ -90,14 +93,17 @@ const contextLoading = ref(false);
 const contextError = ref("");
 const wallet = ref<RoleWalletResponse | null>(null);
 const rechargePackages = ref<AnyRecord[]>([]);
-let refreshEpoch = 0;
-let resolvingScope = false;
-const personalWallet = usePersonalPointsWallet(() => ({
+const runtimeScope = (): PersonalPointsWalletRuntimeScope => ({
   sessionKey: authStore.token,
   userId: userStore.userId,
   contextType: userStore.currentContext?.type || "",
   tenantId: userStore.currentContext?.tenantId || "",
-}));
+});
+const personalWallet = usePersonalPointsWallet(runtimeScope);
+const pageRefresh = createPersonalWalletPageRefreshCoordinator({
+  onInvalidate: clearWalletContent,
+  onLoadingChange: loading => { contextLoading.value = loading; },
+});
 
 const account = personalWallet.account;
 const walletReady = personalWallet.ready;
@@ -188,55 +194,57 @@ function backOrHome() {
 }
 
 async function refreshWallet() {
-  const epoch = ++refreshEpoch;
-  resolvingScope = true;
-  contextLoading.value = true;
+  const token = pageRefresh.beginRefresh();
   contextError.value = "";
   try {
-    await userStore.loadProfile(false);
-    const contexts = await userStore.loadEnterpriseContexts();
-    if (epoch !== refreshEpoch) return;
-    contextType.value = (contexts.current?.type || "") as PersonalWalletContextType;
+    const contexts = await userStore.fetchEnterpriseContexts();
+    const nextContext = contexts.current || contexts.contexts?.find(item => item.current) || null;
+    const nextScope = {
+      sessionKey: authStore.token,
+      userId: userStore.userId,
+      contextType: nextContext?.type || "",
+      tenantId: nextContext?.tenantId || "",
+    };
+    const committed = pageRefresh.commitOwnedScope(
+      token,
+      personalWalletRuntimeScopeFingerprint(nextScope),
+      () => { userStore.applyEnterpriseContexts(contexts); },
+    );
+    if (!committed) return;
+    contextType.value = nextScope.contextType as PersonalWalletContextType;
+
+    if (contextType.value !== "PERSONAL") return;
+
+    const [walletResult, pointsResult, plansResult] = await Promise.allSettled([
+      businessSdk.roleWorkbench.wallet(),
+      personalWallet.refresh(),
+      api<AnyRecord[] | { items?: AnyRecord[] }>("/api/v1/plans?planType=recharge"),
+    ]);
+    if (!pageRefresh.isCurrent(token)) return;
+    wallet.value = walletResult.status === "fulfilled" ? walletResult.value : null;
+    if (pointsResult.status === "rejected") personalWallet.hide();
+    rechargePackages.value = plansResult.status === "fulfilled"
+      ? (Array.isArray(plansResult.value) ? plansResult.value : listOf(plansResult.value.items))
+      : [];
   } catch {
-    if (epoch !== refreshEpoch) return;
+    if (!pageRefresh.isCurrent(token)) return;
     contextType.value = "";
-    wallet.value = null;
-    rechargePackages.value = [];
-    personalWallet.hide();
+    clearWalletContent();
     contextError.value = "无法确认当前是否为个人上下文，已停止读取个人钱包。";
-    return;
   } finally {
-    resolvingScope = false;
-    if (epoch === refreshEpoch) contextLoading.value = false;
+    pageRefresh.finishRefresh(token);
   }
-
-  if (contextType.value !== "PERSONAL") {
-    wallet.value = null;
-    rechargePackages.value = [];
-    personalWallet.hide();
-    return;
-  }
-
-  const [walletResult, pointsResult, plansResult] = await Promise.allSettled([
-    businessSdk.roleWorkbench.wallet(),
-    personalWallet.refresh(),
-    api<AnyRecord[] | { items?: AnyRecord[] }>("/api/v1/plans?planType=recharge"),
-  ]);
-  if (epoch !== refreshEpoch) return;
-  wallet.value = walletResult.status === "fulfilled" ? walletResult.value : null;
-  if (pointsResult.status === "rejected") personalWallet.hide();
-  rechargePackages.value = plansResult.status === "fulfilled"
-    ? (Array.isArray(plansResult.value) ? plansResult.value : listOf(plansResult.value.items))
-    : [];
 }
 
-function invalidateWalletView() {
-  refreshEpoch += 1;
-  contextType.value = "";
-  contextLoading.value = false;
+function clearWalletContent() {
   wallet.value = null;
   rechargePackages.value = [];
   personalWallet.hide();
+}
+
+function invalidateWalletView() {
+  pageRefresh.cancel();
+  contextType.value = "";
 }
 
 watch(
@@ -247,11 +255,8 @@ watch(
     userStore.currentContext?.tenantId || "",
   ],
   () => {
-    wallet.value = null;
-    rechargePackages.value = [];
-    personalWallet.hide();
+    pageRefresh.scopeChanged(personalWalletRuntimeScopeFingerprint(runtimeScope()));
     contextType.value = userStore.currentContext?.type || "";
-    if (!resolvingScope) refreshEpoch += 1;
   },
   { flush: "sync" },
 );

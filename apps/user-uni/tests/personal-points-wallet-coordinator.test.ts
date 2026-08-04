@@ -17,10 +17,29 @@ type CoordinatorFactory = (input: {
   request(): Promise<ReturnType<typeof payloadFor>>;
 }) => Coordinator;
 
+type PageRefreshCoordinator = {
+  beginRefresh(): number;
+  commitOwnedScope(token: number, scopeKey: string, commit: () => void): boolean;
+  scopeChanged(scopeKey: string): void;
+  isCurrent(token: number): boolean;
+  finishRefresh(token: number): void;
+};
+
+type PageRefreshCoordinatorFactory = (input: {
+  onInvalidate(): void;
+  onLoadingChange(loading: boolean): void;
+}) => PageRefreshCoordinator;
+
 function coordinatorFactory() {
   const factory = (walletModule as Record<string, unknown>).createPersonalPointsWalletCoordinator;
   assert.equal(typeof factory, "function", "wallet coordinator must exist");
   return factory as CoordinatorFactory;
+}
+
+function pageRefreshCoordinatorFactory() {
+  const factory = (walletModule as Record<string, unknown>).createPersonalWalletPageRefreshCoordinator;
+  assert.equal(typeof factory, "function", "wallet page refresh coordinator must exist");
+  return factory as PageRefreshCoordinatorFactory;
 }
 
 function payloadFor(userId: string, available = 10) {
@@ -160,4 +179,106 @@ test("consecutive retries commit only the latest deferred response", async () =>
   assert.equal(coordinator.snapshot().state.status, "ready");
   assert.equal(coordinator.snapshot().state.payload?.account?.available, 222);
   assert.equal(storage.sets, 1);
+});
+
+function pageRefreshHarness() {
+  const createCoordinator = pageRefreshCoordinatorFactory();
+  let loading = false;
+  let invalidations = 0;
+  const scopeCommits: string[] = [];
+  const walletCommits: string[] = [];
+  const coordinator = createCoordinator({
+    onInvalidate: () => { invalidations += 1; },
+    onLoadingChange: value => { loading = value; },
+  });
+
+  async function refresh(
+    scopeResponse: ReturnType<typeof deferred<{ key: string }>>,
+    walletResponse: ReturnType<typeof deferred<string>>,
+  ) {
+    const token = coordinator.beginRefresh();
+    try {
+      const scope = await scopeResponse.promise;
+      const committed = coordinator.commitOwnedScope(token, scope.key, () => {
+        scopeCommits.push(scope.key);
+        coordinator.scopeChanged(scope.key);
+      });
+      if (!committed) return;
+      const wallet = await walletResponse.promise;
+      if (!coordinator.isCurrent(token)) return;
+      walletCommits.push(wallet);
+    } finally {
+      coordinator.finishRefresh(token);
+    }
+  }
+
+  return {
+    coordinator,
+    get loading() { return loading; },
+    get invalidations() { return invalidations; },
+    scopeCommits,
+    walletCommits,
+    refresh,
+  };
+}
+
+test("stale A finally cannot clear B ownership before B context watcher runs", async () => {
+  const harness = pageRefreshHarness();
+  const scopeA = deferred<{ key: string }>();
+  const scopeB = deferred<{ key: string }>();
+  const walletA = deferred<string>();
+  const walletB = deferred<string>();
+
+  const refreshA = harness.refresh(scopeA, walletA);
+  const refreshB = harness.refresh(scopeB, walletB);
+  scopeA.resolve({ key: "token-a|user-a|PERSONAL|personal" });
+  await refreshA;
+  assert.equal(harness.loading, true);
+  assert.deepEqual(harness.scopeCommits, []);
+
+  scopeB.resolve({ key: "token-b|user-b|PERSONAL|personal" });
+  walletB.resolve("wallet-b");
+  await refreshB;
+
+  assert.deepEqual(harness.scopeCommits, ["token-b|user-b|PERSONAL|personal"]);
+  assert.deepEqual(harness.walletCommits, ["wallet-b"]);
+  assert.equal(harness.loading, false);
+});
+
+test("B may finish before A without allowing A to overwrite the latest page", async () => {
+  const harness = pageRefreshHarness();
+  const scopeA = deferred<{ key: string }>();
+  const scopeB = deferred<{ key: string }>();
+  const walletA = deferred<string>();
+  const walletB = deferred<string>();
+
+  const refreshA = harness.refresh(scopeA, walletA);
+  const refreshB = harness.refresh(scopeB, walletB);
+  scopeB.resolve({ key: "token-b|user-b|PERSONAL|personal" });
+  walletB.resolve("wallet-b");
+  await refreshB;
+  scopeA.resolve({ key: "token-a|user-a|PERSONAL|personal" });
+  await refreshA;
+
+  assert.deepEqual(harness.scopeCommits, ["token-b|user-b|PERSONAL|personal"]);
+  assert.deepEqual(harness.walletCommits, ["wallet-b"]);
+  assert.equal(harness.loading, false);
+});
+
+test("external context switch cancels in-flight wallet commit and clears loading", async () => {
+  const harness = pageRefreshHarness();
+  const scope = deferred<{ key: string }>();
+  const wallet = deferred<string>();
+  const refresh = harness.refresh(scope, wallet);
+
+  scope.resolve({ key: "token-a|user-a|PERSONAL|personal" });
+  await Promise.resolve();
+  harness.coordinator.scopeChanged("token-a|user-a|ENTERPRISE|tenant-b");
+  assert.equal(harness.loading, false);
+  wallet.resolve("stale-wallet");
+  await refresh;
+
+  assert.equal(harness.invalidations, 2);
+  assert.deepEqual(harness.walletCommits, []);
+  assert.equal(harness.loading, false);
 });
