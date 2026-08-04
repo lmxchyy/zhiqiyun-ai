@@ -78,7 +78,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
 import { adminWorkspaceApi, type Customer360Response, type WorkspaceRecord } from "../../api/adminWorkspaces";
-import { pointAdminActions } from "../../domain/personalPointsAdmin.ts";
+import { canAccessCustomerPointActions } from "../../domain/personalPointsAdmin.ts";
 import AdminDataTable from "./AdminDataTable.vue";
 import CustomerPointActions from "./CustomerPointActions.vue";
 import IdentityEntitlementsPanel from "./IdentityEntitlementsPanel.vue";
@@ -96,7 +96,7 @@ const errorMessage = ref("");
 const activeTab = ref("overview");
 const selectedCustomer = ref<WorkspaceRecord | null>(null);
 const detail = reactive<Partial<Customer360Response>>({});
-const canAccessPoints = computed(() => Object.values(pointAdminActions({ role: props.role, permissions: props.permissions || [] })).some(Boolean));
+const canAccessPoints = computed(() => canAccessCustomerPointActions({ role: props.role, permissions: props.permissions || [] }));
 
 async function openCustomer(row: WorkspaceRecord) {
   selectedCustomer.value = row;

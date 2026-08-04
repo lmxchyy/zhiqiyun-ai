@@ -67,13 +67,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
-import { buildPointLotSummaries, buildPointMutationPayload, pointAdminActions } from "../../domain/personalPointsAdmin.ts";
+import { buildPointLotSummaries, buildPointMutationPayload, canAccessCustomerPointActions, pointAdminActions } from "../../domain/personalPointsAdmin.ts";
 import { usePersonalPointsAdminStore } from "../../stores/personalPointsAdmin.ts";
 
 const props = defineProps<{ userId: string; userName?: string; role: string; permissions: string[] }>();
 const store = usePersonalPointsAdminStore();
 const actions = computed(() => pointAdminActions({ role: props.role, permissions: props.permissions }));
-const hasAnyAccess = computed(() => Object.values(actions.value).some(Boolean));
+const hasAnyAccess = computed(() => canAccessCustomerPointActions({ role: props.role, permissions: props.permissions }));
 const lotKey = computed(() => `lots:${props.userId}`);
 const lots = computed(() => store.lotsByUser[props.userId] || []);
 const summaries = computed(() => buildPointLotSummaries(lots.value));

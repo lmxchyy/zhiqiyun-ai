@@ -2883,6 +2883,7 @@ import {
   resolveLegacyPlanEditorGate,
   type LegacyPlanEditorGate
 } from "./domain/pricePlanGovernance.ts";
+import { hasAnyPersonalPointsAdminPermission } from "./domain/personalPointsAdmin.ts";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
 import {
   agentCenterMetrics,
@@ -13703,7 +13704,8 @@ async function loadCurrentAdmin() {
     const platformAdminRoles = ["SUPER_ADMIN", "ENTERPRISE_OPERATOR", "CERTIFICATION_REVIEWER", "FINANCE", "RISK_MANAGER", "CUSTOMER_SERVICE"];
     const isPlatformAdmin = role.includes("ADMIN")
       || platformAdminRoles.includes(role)
-      || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:") || String(permission).startsWith("pricing:"));
+      || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:") || String(permission).startsWith("pricing:"))
+      || hasAnyPersonalPointsAdminPermission(currentPermissions.value);
     if (!isAgentConsole.value && !isUserConsole.value && !isPlatformAdmin && !role.startsWith("AGENT")) {
       window.location.href = "/";
       return false;

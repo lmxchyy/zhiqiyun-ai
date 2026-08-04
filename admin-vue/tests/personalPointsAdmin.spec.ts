@@ -1,12 +1,18 @@
 import { createPinia, setActivePinia } from "pinia";
 import { flushPromises, mount } from "@vue/test-utils";
+import { AxiosError, AxiosHeaders } from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdminApiError, apiClient } from "../src/api/client.ts";
+import { adminWorkspaceApi } from "../src/api/adminWorkspaces.ts";
 import { personalPointsAdminApi } from "../src/api/personalPointsAdmin.ts";
 import {
+  CUSTOMER_POINT_ACTION_PERMISSIONS,
+  PERSONAL_POINTS_ADMIN_PERMISSIONS,
   buildPointMutationPayload,
   buildPolicyMutationPayload,
   buildPointLotSummaries,
+  canAccessCustomerPointActions,
+  hasAnyPersonalPointsAdminPermission,
   personalPointsErrorState,
   pointAdminActions
 } from "../src/domain/personalPointsAdmin.ts";
@@ -15,8 +21,14 @@ import { usePersonalPointsAdminStore } from "../src/stores/personalPointsAdmin.t
 import { adminModules } from "../src/stores/admin.ts";
 import PersonalPointsGovernance from "../src/components/admin/PersonalPointsGovernance.vue";
 import CustomerPointActions from "../src/components/admin/CustomerPointActions.vue";
+import Customer360Center from "../src/components/admin/Customer360Center.vue";
 
-afterEach(() => vi.restoreAllMocks());
+const originalAxiosAdapter = apiClient.defaults.adapter;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  apiClient.defaults.adapter = originalAxiosAdapter;
+});
 
 const elementStubs = {
   "el-tag": { template: "<span><slot /></span>" },
@@ -27,6 +39,34 @@ const elementStubs = {
 };
 
 describe("personal point administration boundaries", () => {
+  it("allows platform entry only for the five exact personal-point permissions", () => {
+    expect(PERSONAL_POINTS_ADMIN_PERMISSIONS).toEqual([
+      "points:gift-policy:view",
+      "points:gift-policy:manage",
+      "points:gift:grant",
+      "points:balance:correct",
+      "points:lot:view"
+    ]);
+    for (const permission of PERSONAL_POINTS_ADMIN_PERMISSIONS) {
+      expect(hasAnyPersonalPointsAdminPermission([permission])).toBe(true);
+    }
+    expect(hasAnyPersonalPointsAdminPermission(["admin.full"])).toBe(false);
+    expect(hasAnyPersonalPointsAdminPermission(["points:unknown:manage"])).toBe(false);
+    expect(hasAnyPersonalPointsAdminPermission([])).toBe(false);
+  });
+
+  it("limits customer point access to gift, correction, and lot permissions", () => {
+    expect(CUSTOMER_POINT_ACTION_PERMISSIONS).toEqual([
+      "points:gift:grant",
+      "points:balance:correct",
+      "points:lot:view"
+    ]);
+    expect(canAccessCustomerPointActions({ role: "POINTS_POLICY_OWNER", permissions: ["points:gift-policy:view", "points:gift-policy:manage"] })).toBe(false);
+    expect(canAccessCustomerPointActions({ role: "POINTS_OPERATOR", permissions: ["points:gift:grant"] })).toBe(true);
+    expect(canAccessCustomerPointActions({ role: "POINTS_AUDITOR", permissions: ["points:lot:view"] })).toBe(true);
+    expect(canAccessCustomerPointActions({ role: "SUPER_ADMIN", permissions: [] })).toBe(true);
+  });
+
   it("keeps personal-point modules behind their exact permission", () => {
     expect(canAccessAdminModule(
       { role: "ADMIN", permissions: ["admin.full"] },
@@ -159,6 +199,41 @@ describe("personal point administration boundaries", () => {
       { method: "post", url: "/admin/customers/user%20%2F%201/point-corrections", data: { points: -2, reason: "repair", idempotencyKey: "repair-2" } },
       { method: "get", url: "/admin/customers/user%20%2F%201/point-lots", data: undefined }
     ]);
+  });
+
+  it("preserves the real Axios 409 policy conflict message and code locally", async () => {
+    apiClient.defaults.adapter = async (config) => Promise.reject(new AxiosError(
+      "Request failed with status code 409",
+      AxiosError.ERR_BAD_REQUEST,
+      config,
+      undefined,
+      {
+        data: { error: "point expiry policy revision conflict" },
+        status: 409,
+        statusText: "Conflict",
+        headers: new AxiosHeaders(),
+        config
+      }
+    ));
+
+    const error = await personalPointsAdminApi.updatePolicy({
+      revision: 2,
+      enabled: false,
+      durationValue: 3,
+      changeReason: "pause"
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(AdminApiError);
+    expect(error).toMatchObject({
+      message: "point expiry policy revision conflict",
+      status: 409,
+      code: "POINT_POLICY_REVISION_CONFLICT"
+    });
+    expect(personalPointsErrorState(error)).toEqual(expect.objectContaining({
+      message: "point expiry policy revision conflict",
+      code: "POINT_POLICY_REVISION_CONFLICT",
+      conflict: true
+    }));
   });
 
   it("tracks policy loading and preserves conflict details in Pinia state", async () => {
@@ -300,5 +375,58 @@ describe("personal point administration boundaries", () => {
     });
     expect(denied.text()).toContain("暂无积分管理权限");
     expect(denied.text()).not.toContain("赠送积分");
+
+    const policyOnly = mount(CustomerPointActions, {
+      props: { userId: "user-1", userName: "测试客户", role: "POINTS_POLICY_OWNER", permissions: ["points:gift-policy:view", "points:gift-policy:manage"] },
+      global: { plugins: [createPinia()], stubs: elementStubs }
+    });
+    expect(policyOnly.text()).toContain("暂无积分管理权限");
+    expect(policyOnly.text()).not.toContain("赠送积分");
+  });
+
+  it("hides the Customer360 personal-point tab for policy-only principals", () => {
+    vi.spyOn(adminWorkspaceApi, "customer360").mockResolvedValue({} as never);
+    const props = {
+      rows: [{ id: "user-1", name: "测试客户" }],
+      saving: false,
+      toolbarActions: [],
+      rowActions: [],
+      columnLabels: {},
+      statusFilterOptions: [],
+      isStatusColumn: () => false,
+      statusType: () => "info",
+      statusLabel: (value: unknown) => String(value || ""),
+      formatCell: (value: unknown) => value,
+      visibleRowActions: () => [],
+      labelForRowAction: () => ""
+    };
+    const stubs = {
+      AdminDataTable: { template: "<div />" },
+      CustomerPointActions: { template: "<div>客户积分动作</div>" },
+      IdentityEntitlementsPanel: { template: "<div />" },
+      "el-drawer": { template: "<section><slot name='header' /><slot /></section>" },
+      "el-tabs": { template: "<div><slot /></div>" },
+      "el-tab-pane": { props: ["label"], template: "<article>{{ label }}<slot /></article>" },
+      "el-skeleton": { template: "<div />" },
+      "el-alert": { template: "<div />" },
+      "el-tag": { template: "<span><slot /></span>" },
+      "el-button": { template: "<button><slot /></button>" },
+      "el-card": { template: "<article><slot name='header' /><slot /></article>" },
+      "el-descriptions": { template: "<div><slot /></div>" },
+      "el-descriptions-item": { template: "<div><slot /></div>" },
+      "el-table": { template: "<div><slot /></div>" },
+      "el-table-column": { template: "<div />" }
+    };
+    const policyOnly = mount(Customer360Center, {
+      props: { ...props, role: "POINTS_POLICY_OWNER", permissions: ["points:gift-policy:view", "points:gift-policy:manage"] },
+      global: { stubs }
+    });
+    expect(policyOnly.text()).not.toContain("赠送积分与批次");
+
+    const lotViewer = mount(Customer360Center, {
+      props: { ...props, role: "POINTS_AUDITOR", permissions: ["points:lot:view"] },
+      global: { stubs }
+    });
+    expect(lotViewer.text()).toContain("赠送积分与批次");
   });
 });

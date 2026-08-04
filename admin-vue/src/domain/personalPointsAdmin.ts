@@ -7,6 +7,39 @@ import type {
   PersonalPointsErrorState,
   UpdatePointExpiryPolicyRequest
 } from "../types/personalPointsAdmin.ts";
+import { AdminApiError } from "../api/client.ts";
+
+export const PERSONAL_POINT_ADMIN_PERMISSION = {
+  viewPolicy: "points:gift-policy:view",
+  managePolicy: "points:gift-policy:manage",
+  grantGift: "points:gift:grant",
+  correctBalance: "points:balance:correct",
+  viewLots: "points:lot:view"
+} as const;
+
+export const PERSONAL_POINTS_ADMIN_PERMISSIONS = [
+  PERSONAL_POINT_ADMIN_PERMISSION.viewPolicy,
+  PERSONAL_POINT_ADMIN_PERMISSION.managePolicy,
+  PERSONAL_POINT_ADMIN_PERMISSION.grantGift,
+  PERSONAL_POINT_ADMIN_PERMISSION.correctBalance,
+  PERSONAL_POINT_ADMIN_PERMISSION.viewLots
+] as const;
+
+export const CUSTOMER_POINT_ACTION_PERMISSIONS = [
+  PERSONAL_POINT_ADMIN_PERMISSION.grantGift,
+  PERSONAL_POINT_ADMIN_PERMISSION.correctBalance,
+  PERSONAL_POINT_ADMIN_PERMISSION.viewLots
+] as const;
+
+export function hasAnyPersonalPointsAdminPermission(permissions: readonly string[]) {
+  return PERSONAL_POINTS_ADMIN_PERMISSIONS.some((permission) => permissions.includes(permission));
+}
+
+export function canAccessCustomerPointActions(principal: PointAdminPrincipal) {
+  const role = String(principal.role || "").trim().toUpperCase();
+  const permissions = Array.isArray(principal.permissions) ? principal.permissions : [];
+  return role === "SUPER_ADMIN" || CUSTOMER_POINT_ACTION_PERMISSIONS.some((permission) => permissions.includes(permission));
+}
 
 function validationError(message: string, code: string) {
   return new AdminApiError(message, 400, code, { code });
@@ -74,11 +107,11 @@ export function pointAdminActions(principal: PointAdminPrincipal): PointAdminAct
   const permissions = Array.isArray(principal.permissions) ? principal.permissions : [];
   const has = (permission: string) => role === "SUPER_ADMIN" || permissions.includes(permission);
   return {
-    canViewPolicy: has("points:gift-policy:view"),
-    canManagePolicy: has("points:gift-policy:manage"),
-    canGift: has("points:gift:grant"),
-    canCorrect: has("points:balance:correct"),
-    canViewLots: has("points:lot:view")
+    canViewPolicy: has(PERSONAL_POINT_ADMIN_PERMISSION.viewPolicy),
+    canManagePolicy: has(PERSONAL_POINT_ADMIN_PERMISSION.managePolicy),
+    canGift: has(PERSONAL_POINT_ADMIN_PERMISSION.grantGift),
+    canCorrect: has(PERSONAL_POINT_ADMIN_PERMISSION.correctBalance),
+    canViewLots: has(PERSONAL_POINT_ADMIN_PERMISSION.viewLots)
   };
 }
 
@@ -100,4 +133,3 @@ export function personalPointsErrorState(error: unknown): PersonalPointsErrorSta
     conflict: false
   };
 }
-import { AdminApiError } from "../api/client.ts";
