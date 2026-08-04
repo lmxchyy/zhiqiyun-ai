@@ -65,8 +65,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { onPullDownRefresh, onShow } from "@dcloudio/uni-app";
+import { computed, ref, watch } from "vue";
+import { onHide, onPullDownRefresh, onShow, onUnload } from "@dcloudio/uni-app";
 import type { RoleWalletResponse } from "@xianzhi/business-sdk";
 import { api, businessSdk } from "../../api/client";
 import { useMiniProgramNavigation } from "../../composables/useMiniProgramNavigation";
@@ -78,18 +78,26 @@ import {
   type PersonalWalletContextType,
 } from "../../features/wallet/personalPointsWallet";
 import { useUserStore } from "../../stores/user";
+import { useAuthStore } from "../../stores/auth";
 
 type AnyRecord = Record<string, unknown>;
 
 const { navigationStyle } = useMiniProgramNavigation();
 const userStore = useUserStore();
-const personalWallet = usePersonalPointsWallet();
+const authStore = useAuthStore();
 const contextType = ref<PersonalWalletContextType>("");
 const contextLoading = ref(false);
 const contextError = ref("");
 const wallet = ref<RoleWalletResponse | null>(null);
 const rechargePackages = ref<AnyRecord[]>([]);
 let refreshEpoch = 0;
+let resolvingScope = false;
+const personalWallet = usePersonalPointsWallet(() => ({
+  sessionKey: authStore.token,
+  userId: userStore.userId,
+  contextType: userStore.currentContext?.type || "",
+  tenantId: userStore.currentContext?.tenantId || "",
+}));
 
 const account = personalWallet.account;
 const walletReady = personalWallet.ready;
@@ -181,6 +189,7 @@ function backOrHome() {
 
 async function refreshWallet() {
   const epoch = ++refreshEpoch;
+  resolvingScope = true;
   contextLoading.value = true;
   contextError.value = "";
   try {
@@ -197,6 +206,7 @@ async function refreshWallet() {
     contextError.value = "无法确认当前是否为个人上下文，已停止读取个人钱包。";
     return;
   } finally {
+    resolvingScope = false;
     if (epoch === refreshEpoch) contextLoading.value = false;
   }
 
@@ -209,7 +219,7 @@ async function refreshWallet() {
 
   const [walletResult, pointsResult, plansResult] = await Promise.allSettled([
     businessSdk.roleWorkbench.wallet(),
-    personalWallet.refresh(userStore.userId, contextType.value),
+    personalWallet.refresh(),
     api<AnyRecord[] | { items?: AnyRecord[] }>("/api/v1/plans?planType=recharge"),
   ]);
   if (epoch !== refreshEpoch) return;
@@ -220,8 +230,36 @@ async function refreshWallet() {
     : [];
 }
 
+function invalidateWalletView() {
+  refreshEpoch += 1;
+  contextType.value = "";
+  contextLoading.value = false;
+  wallet.value = null;
+  rechargePackages.value = [];
+  personalWallet.hide();
+}
+
+watch(
+  () => [
+    authStore.token,
+    userStore.userId,
+    userStore.currentContext?.type || "",
+    userStore.currentContext?.tenantId || "",
+  ],
+  () => {
+    wallet.value = null;
+    rechargePackages.value = [];
+    personalWallet.hide();
+    contextType.value = userStore.currentContext?.type || "";
+    if (!resolvingScope) refreshEpoch += 1;
+  },
+  { flush: "sync" },
+);
+
 onShow(() => { void refreshWallet(); });
 onPullDownRefresh(() => { void refreshWallet().finally(() => uni.stopPullDownRefresh()); });
+onHide(invalidateWalletView);
+onUnload(invalidateWalletView);
 </script>
 
 <style>

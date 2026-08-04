@@ -2,9 +2,8 @@ import { computed, ref } from "vue";
 import type { RoleWalletResponse } from "@xianzhi/business-sdk";
 import { businessSdk } from "../api/client";
 import {
-  loadPersonalPointsWallet,
-  readPersonalPointsWalletCache,
-  type PersonalWalletContextType,
+  createPersonalPointsWalletCoordinator,
+  type PersonalPointsWalletRuntimeScope,
   type PersonalPointsWalletState,
   type PersonalPointsWalletStorage,
 } from "../features/wallet/personalPointsWallet";
@@ -23,43 +22,18 @@ const storage: PersonalPointsWalletStorage = {
   set: (key, value) => uni.setStorageSync(key, value),
 };
 
-export function usePersonalPointsWallet() {
+export function usePersonalPointsWallet(getScope: () => PersonalPointsWalletRuntimeScope) {
   const state = ref<PersonalPointsWalletState>(emptyState());
   const loading = ref(false);
-  let requestEpoch = 0;
-
-  function hide() {
-    requestEpoch += 1;
-    loading.value = false;
-    state.value = emptyState();
-  }
-
-  function hydrate(userId: string, contextType: PersonalWalletContextType) {
-    const cached = readPersonalPointsWalletCache(userId, contextType, storage);
-    state.value = cached || emptyState();
-  }
-
-  async function refresh(userId: string, contextType: PersonalWalletContextType) {
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId || contextType !== "PERSONAL") {
-      hide();
-      return state.value;
-    }
-
-    const epoch = ++requestEpoch;
-    hydrate(normalizedUserId, contextType);
-    loading.value = true;
-    const nextState = await loadPersonalPointsWallet({
-      userId: normalizedUserId,
-      contextType,
-      storage,
-      request: () => businessSdk.roleWorkbench.pointsAccount() as Promise<RoleWalletResponse>,
-    });
-    if (epoch !== requestEpoch) return state.value;
-    state.value = nextState;
-    loading.value = false;
-    return nextState;
-  }
+  const coordinator = createPersonalPointsWalletCoordinator({
+    getScope,
+    storage,
+    request: () => businessSdk.roleWorkbench.pointsAccount() as Promise<RoleWalletResponse>,
+    onChange: snapshot => {
+      state.value = snapshot.state;
+      loading.value = snapshot.loading;
+    },
+  });
 
   return {
     state,
@@ -69,7 +43,7 @@ export function usePersonalPointsWallet() {
     stale: computed(() => state.value.stale),
     error: computed(() => state.value.error),
     loading,
-    refresh,
-    hide,
+    refresh: coordinator.refresh,
+    hide: coordinator.invalidate,
   };
 }

@@ -46,6 +46,22 @@ interface LoadPersonalPointsWalletInput {
   storage: PersonalPointsWalletStorage;
   request: () => Promise<PersonalPointsWalletPayload>;
   now?: () => number;
+  deferCacheWrite?: boolean;
+}
+
+export interface PersonalPointsWalletRuntimeScope {
+  sessionKey: string;
+  userId: string;
+  contextType: PersonalWalletContextType;
+  tenantId: string;
+}
+
+interface PersonalPointsWalletCoordinatorInput {
+  getScope: () => PersonalPointsWalletRuntimeScope;
+  storage: PersonalPointsWalletStorage;
+  request: () => Promise<PersonalPointsWalletPayload>;
+  now?: () => number;
+  onChange?: (snapshot: { state: PersonalPointsWalletState; loading: boolean }) => void;
 }
 
 export interface PersonalPointsExpirySummary {
@@ -89,6 +105,17 @@ function errorMessage(stale: boolean) {
   return stale
     ? "点数同步失败，当前显示上次成功数据，数据可能已过期，请重试"
     : "点数余额加载失败，请重试";
+}
+
+function emptyState(): PersonalPointsWalletState {
+  return { scope: null, payload: null, status: "hidden", stale: false, error: "", storedAt: null };
+}
+
+function runtimeScopeKey(scope: PersonalPointsWalletRuntimeScope) {
+  const sessionKey = String(scope.sessionKey || "").trim();
+  const userId = normalizedUserId(scope.userId);
+  if (!sessionKey || !userId || scope.contextType !== "PERSONAL") return null;
+  return `${sessionKey}\u0000${userId}\u0000PERSONAL\u0000${String(scope.tenantId || "").trim()}`;
 }
 
 export function createPersonalPointsWalletCacheKey(userId: string, contextType: PersonalWalletContextType) {
@@ -155,12 +182,65 @@ export async function loadPersonalPointsWallet(input: LoadPersonalPointsWalletIn
     const payload = await input.request();
     if (!validPayload(payload, normalizedUserId(input.userId))) throw new Error("invalid personal point account response");
     const storedAt = (input.now || Date.now)();
-    writePersonalPointsWalletCache(scope, payload, storedAt, input.storage);
+    if (!input.deferCacheWrite) writePersonalPointsWalletCache(scope, payload, storedAt, input.storage);
     return { scope, payload, status: "ready", stale: false, error: "", storedAt };
   } catch {
     if (cached?.payload) return { ...cached, error: errorMessage(true) };
     return { scope, payload: null, status: "error", stale: false, error: errorMessage(false), storedAt: null };
   }
+}
+
+export function createPersonalPointsWalletCoordinator(input: PersonalPointsWalletCoordinatorInput) {
+  let epoch = 0;
+  let state = emptyState();
+  let loading = false;
+  const emit = () => input.onChange?.({ state, loading });
+  const hide = () => {
+    state = emptyState();
+    loading = false;
+    emit();
+  };
+
+  return {
+    snapshot: () => ({ state, loading }),
+    invalidate() {
+      epoch += 1;
+      hide();
+    },
+    async refresh() {
+      const requestEpoch = ++epoch;
+      const scope = input.getScope();
+      const scopeKey = runtimeScopeKey(scope);
+      if (!scopeKey) {
+        hide();
+        return state;
+      }
+
+      state = readPersonalPointsWalletCache(scope.userId, scope.contextType, input.storage) || emptyState();
+      loading = true;
+      emit();
+      const nextState = await loadPersonalPointsWallet({
+        userId: scope.userId,
+        contextType: scope.contextType,
+        storage: input.storage,
+        request: input.request,
+        now: input.now,
+        deferCacheWrite: true,
+      });
+      if (requestEpoch !== epoch) return state;
+      if (scopeKey !== runtimeScopeKey(input.getScope())) {
+        hide();
+        return state;
+      }
+      if (nextState.status === "ready" && nextState.scope && nextState.payload && nextState.storedAt !== null) {
+        writePersonalPointsWalletCache(nextState.scope, nextState.payload, nextState.storedAt, input.storage);
+      }
+      state = nextState;
+      loading = false;
+      emit();
+      return state;
+    },
+  };
 }
 
 export function personalPointsExpirySummary(account: PersonalPointsAccount | null | undefined): PersonalPointsExpirySummary | null {

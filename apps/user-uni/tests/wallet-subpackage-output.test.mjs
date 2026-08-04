@@ -47,3 +47,36 @@ test("personal wallet modules and rewritten imports stay inside user-account sub
   assertRelativeRequiresResolve(composable);
   assertRelativeRequiresResolve(domain);
 });
+
+test("generated login form remains preserved behind the lightweight login gate", () => {
+  const entry = readOutput("pages/WechatLoginPage.js");
+  const form = readOutput("pages/WechatLoginFormPage.js");
+
+  assert.match(entry, /wx\.redirectTo/);
+  assert.match(entry, /\/pages\/WechatLoginFormPage/);
+  assert.match(form, /require\("\.\.\/common\/vendor\.js"\)/);
+  assert.match(form, /__name:"WechatLoginPage"/);
+  assert.match(form, /\.\.\/components\/auth\/LoginCard\.js/);
+});
+
+test("existing native generation controls remain patched in generated output", () => {
+  const workbenchJs = readOutput("components/MiniProgramRoleWorkbench.js");
+  const workbenchWxml = readOutput("components/MiniProgramRoleWorkbench.wxml");
+  const homeJs = readOutput("components/v531/V531HomePage.js");
+  const homeWxml = readOutput("components/v531/V531HomePage.wxml");
+  const studioJs = readOutput("components/v531/V531StudioPage.js");
+  const studioWxml = readOutput("components/v531/V531StudioPage.wxml");
+
+  for (const handler of ["nativeBackToCreation", "nativeGenerate", "nativeChooseReferenceImages"]) {
+    assert.match(workbenchJs, new RegExp(handler));
+    assert.match(workbenchWxml, new RegExp(handler));
+  }
+  for (const handler of ["nativeHomePromptInput", "nativeHomePromptSubmit"]) {
+    assert.match(homeJs, new RegExp(handler));
+    assert.match(homeWxml, new RegExp(handler));
+  }
+  for (const handler of ["nativeStudioChooseReference", "nativeStudioChooseFile", "nativeStudioGenerate"]) {
+    assert.match(studioJs, new RegExp(handler));
+    assert.match(studioWxml, new RegExp(handler));
+  }
+});

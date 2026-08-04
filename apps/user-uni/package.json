@@ -5,7 +5,7 @@
     "type":  "module",
     "scripts":  {
                     "typecheck":  "vue-tsc --noEmit",
-                    "test:wallet":  "node --test tests/personal-points-wallet.test.ts",
+                    "test:wallet":  "node --test tests/personal-points-wallet.test.ts tests/personal-points-wallet-coordinator.test.ts",
                     "test:wallet-build":  "node --test tests/wallet-subpackage-output.test.mjs",
                     "build:h5":  "uni build -p h5 --mode production",
                     "build:mp-weixin":  "node scripts/build-mp-weixin-release.cjs",
