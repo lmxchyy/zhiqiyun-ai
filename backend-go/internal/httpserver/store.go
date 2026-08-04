@@ -21,7 +21,6 @@ import (
 var errAssetNotFound = errors.New("asset not found")
 
 const (
-	defaultPointsAvailable     = 959
 	pointUnitAmountCents       = 10
 	billingMetricImageGenerate = "image.generations"
 	billingMetricVideoGenerate = "video.generations"
@@ -4077,7 +4076,7 @@ func (s *jsonStore) loadLocked() (platformData, error) {
 		data.Counters = map[string]int{}
 	}
 	if data.PointsAvailable == nil {
-		initial := defaultPointsAvailable
+		initial := 0
 		data.PointsAvailable = &initial
 	}
 	return data, nil
@@ -4102,7 +4101,7 @@ func (s *jsonStore) loadAdminLocked() (adminPlatformData, error) {
 		data.Counters = map[string]int{}
 	}
 	if data.PointsAvailable == nil {
-		initial := defaultPointsAvailable
+		initial := 0
 		data.PointsAvailable = &initial
 	}
 	return withAdminDefaults(data), nil
@@ -4164,7 +4163,7 @@ func nextID(counters map[string]int, name string) string {
 
 func pointsAvailable(data platformData) int {
 	if data.PointsAvailable == nil {
-		return defaultPointsAvailable
+		return 0
 	}
 	return *data.PointsAvailable
 }
@@ -4175,10 +4174,7 @@ func pointsAvailableForUser(data platformData, userID string) int {
 			return item.Available
 		}
 	}
-	if userID == "user_000002" {
-		return pointsAvailable(data)
-	}
-	return defaultPointsAvailable
+	return 0
 }
 
 func pointsAvailableForAdminUser(data adminPlatformData, userID string) int {
@@ -4187,10 +4183,7 @@ func pointsAvailableForAdminUser(data adminPlatformData, userID string) int {
 			return item.Available
 		}
 	}
-	if userID == "user_000002" && data.PointsAvailable != nil {
-		return *data.PointsAvailable
-	}
-	return defaultPointsAvailable
+	return 0
 }
 
 func totalPointsForUser(events []adminBillingEvent, userID string, available int, frozen int) int {

@@ -1022,7 +1022,7 @@ func (s *postgresStore) PointAccount(userID string) (pointAccount, error) {
 		where user_id = $1
 	`, userID).Scan(&item.ID, &item.UserID, &item.Available, &item.Frozen)
 	if errors.Is(err, sql.ErrNoRows) {
-		item = pointAccount{ID: "points_" + shortID(userID), UserID: userID, Available: defaultPointsAvailable}
+		item = pointAccount{ID: "points_" + shortID(userID), UserID: userID, Available: 0}
 	} else if err != nil {
 		return item, err
 	}
@@ -5737,11 +5737,8 @@ func pointAccountForUpdate(ctx context.Context, tx *sql.Tx, userID string) (admi
 		if idErr != nil {
 			return adminPointAccount{}, idErr
 		}
-		item = adminPointAccount{ID: id, UserID: userID, Available: defaultPointsAvailable}
+		item = adminPointAccount{ID: id, UserID: userID, Available: 0}
 		if err := insertPointAccount(ctx, tx, item); err != nil {
-			return adminPointAccount{}, err
-		}
-		if err := insertAccountBalanceLedgerV1(ctx, tx, item, "GRANT", defaultPointsAvailable, 0, defaultPointsAvailable, "SYSTEM_DEFAULT", userID, "系统默认点数赠送"); err != nil {
 			return adminPointAccount{}, err
 		}
 		return item, nil

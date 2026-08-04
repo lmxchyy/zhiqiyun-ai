@@ -774,28 +774,7 @@ func applyAdminJSONWalletEntryV1(data *adminPlatformData, task generationTask, e
 			return item, nil
 		}
 	}
-	accountExisted := false
-	for _, item := range data.PointAccounts {
-		if item.UserID == task.UserID {
-			accountExisted = true
-			break
-		}
-	}
-	defaultAvailable := 0
-	if !accountExisted {
-		defaultAvailable = pointsAvailableForAdminUser(*data, task.UserID)
-	}
 	account, index := adminPointAccountV1(data, task.UserID)
-	if !accountExisted {
-		available := defaultAvailable
-		if available > 0 {
-			next := account
-			next.Available = available
-			appendAdminWalletLedgerV1(data, account, next, "GRANT", available, "SYSTEM_DEFAULT", task.UserID, "system default points grant", nil)
-			account = next
-			data.PointAccounts[index] = next
-		}
-	}
 	next := account
 	switch entryType {
 	case "RESERVE":
