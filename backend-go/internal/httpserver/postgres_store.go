@@ -3315,20 +3315,58 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
-	_, _, _, _, sourceUserID, err := resolveAdminAuthMergeUsers(&data, id, req.TargetUserID)
-	if err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
-	sourceOrderIDs := adminAuthMergeOrderIDs(data.Orders, sourceUserID)
-	updated, result, err := executeAdminAuthMergeRequestOnData(&data, id, req)
-	if err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	lockedRequest, err := lockAdminAuthMergeRequestTx(ctx, tx, id)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	targetUserID := strings.TrimSpace(req.TargetUserID)
+	if targetUserID == "" {
+		targetUserID = lockedRequest.PrimaryUserID
+	}
+	sourceUserID := lockedRequest.SecondaryUserID
+	if targetUserID == lockedRequest.SecondaryUserID {
+		sourceUserID = lockedRequest.PrimaryUserID
+	}
+	lockedUsers, err := lockAdminAuthMergeUsersTx(ctx, tx, targetUserID, sourceUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	requestIndex := adminAuthMergeRequestIndex(data.AuthMergeRequests, id)
+	if requestIndex < 0 {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, fmt.Errorf("auth merge request not found: %s", id)
+	}
+	data.AuthMergeRequests[requestIndex] = lockedRequest
+	for userID, locked := range lockedUsers {
+		found := false
+		for i := range data.Users {
+			if data.Users[i].ID == userID {
+				data.Users[i] = locked
+				found = true
+				break
+			}
+		}
+		if !found {
+			return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, fmt.Errorf("user not found: %s", userID)
+		}
+	}
+	_, _, _, _, sourceUserID, err = resolveAdminAuthMergeUsers(&data, id, req.TargetUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	sourceOrderIDs := adminAuthMergeOrderIDs(data.Orders, sourceUserID)
+	pointStore := NewPostgresPersonalPointStore(s.db)
+	updated, result, err := executeAdminAuthMergeRequestOnDataWithPointMerge(&data, id, req, func(targetID, sourceID string) (int, error) {
+		merged, mergeErr := pointStore.mergeTx(ctx, tx, targetID, sourceID, id, time.Now().UTC())
+		return merged.AccountsMoved, mergeErr
+	})
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
 	target, source, err := usersForMergeResult(data.Users, result)
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
@@ -3345,25 +3383,6 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 	}
 	if _, err := tx.ExecContext(ctx, `delete from xz_user_model_routes where user_id = $1`, result.SourceUserID); err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `delete from xz_point_accounts where user_id = $1`, result.SourceUserID); err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
-	var walletTableExists bool
-	if err := tx.QueryRowContext(ctx, `select to_regclass('public.xz_user_wallets') is not null`).Scan(&walletTableExists); err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
-	if walletTableExists {
-		if _, err := tx.ExecContext(ctx, `delete from xz_user_wallets where user_id = $1`, result.SourceUserID); err != nil {
-			return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-		}
-	}
-	for _, item := range data.PointAccounts {
-		if item.UserID == result.TargetUserID {
-			if err := insertPointAccount(ctx, tx, item); err != nil {
-				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-			}
-		}
 	}
 	for _, item := range data.TokenRecords {
 		if item.UserID == result.TargetUserID {
@@ -3447,6 +3466,58 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
 	return updated, result, tx.Commit()
+}
+
+func lockAdminAuthMergeRequestTx(ctx context.Context, tx *sql.Tx, id string) (adminAuthMergeRequest, error) {
+	var item adminAuthMergeRequest
+	err := tx.QueryRowContext(ctx, `SELECT raw FROM xz_auth_account_merge_requests WHERE id=$1 FOR UPDATE`, strings.TrimSpace(id)).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, fmt.Errorf("auth merge request not found: %s", id)
+	}
+	return item, err
+}
+
+func lockAdminAuthMergeUsersTx(ctx context.Context, tx *sql.Tx, targetUserID, sourceUserID string) (map[string]adminUser, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,raw FROM xz_users WHERE id IN($1,$2) ORDER BY id FOR UPDATE`, targetUserID, sourceUserID)
+	if err != nil {
+		return nil, err
+	}
+	users := map[string]adminUser{}
+	for rows.Next() {
+		var id string
+		var user adminUser
+		if err := rows.Scan(&id, rawScanner(&user)); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		user.ID = id
+		users[id] = user
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(users) != 2 {
+		return nil, errors.New("target or source user not found")
+	}
+	routeRows, err := tx.QueryContext(ctx, `SELECT user_id,raw FROM xz_user_model_routes WHERE user_id IN($1,$2) ORDER BY user_id,id FOR UPDATE`, targetUserID, sourceUserID)
+	if err != nil {
+		return nil, err
+	}
+	for routeRows.Next() {
+		var userID string
+		var route adminUserModelRoute
+		if err := routeRows.Scan(&userID, rawScanner(&route)); err != nil {
+			_ = routeRows.Close()
+			return nil, err
+		}
+		user := users[userID]
+		user.ModelRoutes = mergeUserModelRoutes(user.ModelRoutes, []adminUserModelRoute{route})
+		users[userID] = user
+	}
+	if err := routeRows.Close(); err != nil {
+		return nil, err
+	}
+	return users, nil
 }
 
 func adminAuthMergeOrderIDs(items []adminOrder, userID string) map[string]bool {

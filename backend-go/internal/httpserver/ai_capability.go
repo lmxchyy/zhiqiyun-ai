@@ -817,7 +817,13 @@ func adminDataFromPlatformData(data platformData) adminPlatformData {
 		Users:                  data.Users,
 		Plans:                  data.Plans,
 		PointAccounts:          data.PointAccounts,
+		TokenRecords:           data.TokenRecords,
+		Orders:                 data.Orders,
+		Payments:               data.Payments,
+		PaymentEvents:          data.PaymentEvents,
 		ChannelAgents:          data.ChannelAgents,
+		OperationCenters:       data.OperationCenters,
+		CustomerRelations:      data.CustomerRelations,
 		Commissions:            data.Commissions,
 		CommissionRules:        data.CommissionRules,
 		BillingRules:           data.BillingRules,
@@ -829,16 +835,84 @@ func adminDataFromPlatformData(data platformData) adminPlatformData {
 		PersonalPoints:         data.PersonalPoints,
 		PersonalPointImport:    data.PersonalPointImport,
 		Withdrawals:            data.Withdrawals,
+		Presentations:          data.Presentations,
+		Agents:                 data.Agents,
+		AgentCalls:             data.AgentCalls,
+		GeoBrands:              data.GeoBrands,
+		GeoTasks:               data.GeoTasks,
 		AdminProducts:          data.AdminProducts,
+		SystemSettings:         data.SystemSettings,
+		APIChannels:            data.APIChannels,
+		APIModels:              data.APIModels,
+		APIKeys:                data.APIKeys,
+		CustomerGroups:         data.CustomerGroups,
 		AIModules:              data.AIModules,
 		AIModels:               data.AIModels,
 		AIParameterSchemas:     data.AIParameterSchemas,
 		TenantModuleLimits:     data.TenantModuleLimits,
+		Enterprise:             data.Enterprise,
+		PromotionRecords:       data.PromotionRecords,
+		AuthMergeRequests:      data.AuthMergeRequests,
+		AdminExceptionCases:    data.AdminExceptionCases,
+		AdminExperienceEvents:  data.AdminExperienceEvents,
 		GenerationTasks:        data.GenerationTasks,
 		Assets:                 data.Assets,
+		AIState:                data.AIState,
 		Counters:               data.Counters,
 		PointsAvailable:        data.PointsAvailable,
 	}))
+}
+
+func applyAdminDataToPlatformData(data *platformData, admin adminPlatformData) {
+	if data == nil {
+		return
+	}
+	data.Users = admin.Users
+	data.Plans = admin.Plans
+	data.PointAccounts = admin.PointAccounts
+	data.TokenRecords = admin.TokenRecords
+	data.Orders = admin.Orders
+	data.Payments = admin.Payments
+	data.PaymentEvents = admin.PaymentEvents
+	data.ChannelAgents = admin.ChannelAgents
+	data.OperationCenters = admin.OperationCenters
+	data.CustomerRelations = admin.CustomerRelations
+	data.Commissions = admin.Commissions
+	data.CommissionRules = admin.CommissionRules
+	data.BillingRules = admin.BillingRules
+	data.BillingEvents = admin.BillingEvents
+	data.BillingRuleVersions = admin.BillingRuleVersions
+	data.ProviderCosts = admin.ProviderCosts
+	data.BillingLifecycleEvents = admin.BillingLifecycleEvents
+	data.WalletLedger = admin.WalletLedger
+	data.PersonalPoints = admin.PersonalPoints
+	data.PersonalPointImport = admin.PersonalPointImport
+	data.Withdrawals = admin.Withdrawals
+	data.Presentations = admin.Presentations
+	data.Agents = admin.Agents
+	data.AgentCalls = admin.AgentCalls
+	data.GeoBrands = admin.GeoBrands
+	data.GeoTasks = admin.GeoTasks
+	data.AdminProducts = admin.AdminProducts
+	data.SystemSettings = admin.SystemSettings
+	data.APIChannels = admin.APIChannels
+	data.APIModels = admin.APIModels
+	data.APIKeys = admin.APIKeys
+	data.CustomerGroups = admin.CustomerGroups
+	data.AIModules = admin.AIModules
+	data.AIModels = admin.AIModels
+	data.AIParameterSchemas = admin.AIParameterSchemas
+	data.TenantModuleLimits = admin.TenantModuleLimits
+	data.Enterprise = admin.Enterprise
+	data.PromotionRecords = admin.PromotionRecords
+	data.AuthMergeRequests = admin.AuthMergeRequests
+	data.AdminExceptionCases = admin.AdminExceptionCases
+	data.AdminExperienceEvents = admin.AdminExperienceEvents
+	data.GenerationTasks = admin.GenerationTasks
+	data.Assets = admin.Assets
+	data.AIState = admin.AIState
+	data.Counters = admin.Counters
+	data.PointsAvailable = admin.PointsAvailable
 }
 
 func billingQuantity(billingType string, req createGenerationTaskRequest) float64 {

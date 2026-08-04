@@ -416,6 +416,141 @@ func nullTime(value time.Time) any {
 	return value
 }
 
+func (s *PostgresPersonalPointStore) mergeTx(ctx context.Context, tx *sql.Tx, targetUserID, sourceUserID, mergeID string, now time.Time) (personalPointMergeResult, error) {
+	result := personalPointMergeResult{}
+	targetUserID = strings.TrimSpace(targetUserID)
+	sourceUserID = strings.TrimSpace(sourceUserID)
+	mergeID = strings.TrimSpace(mergeID)
+	if tx == nil || targetUserID == "" || sourceUserID == "" || targetUserID == sourceUserID || mergeID == "" {
+		return result, ErrInvalidPointCommand
+	}
+	now = pointNow(now)
+	rows, err := tx.QueryContext(ctx, `SELECT id,COALESCE(user_id,''),available,frozen,COALESCE(NULLIF(raw->>'totalGranted','')::bigint,0),COALESCE(NULLIF(raw->>'totalUsed','')::bigint,0),COALESCE(NULLIF(raw->>'totalExpired','')::bigint,0),COALESCE(NULLIF(raw->>'totalReversed','')::bigint,0) FROM xz_point_accounts WHERE user_id IN($1,$2) ORDER BY id FOR UPDATE`, targetUserID, sourceUserID)
+	if err != nil {
+		return result, err
+	}
+	accounts := map[string]pgPointAccount{}
+	for rows.Next() {
+		var account pgPointAccount
+		if err := rows.Scan(&account.ID, &account.UserID, &account.Available, &account.Frozen, &account.TotalGranted, &account.TotalConsumed, &account.TotalExpired, &account.TotalReversed); err != nil {
+			_ = rows.Close()
+			return result, err
+		}
+		if _, exists := accounts[account.UserID]; exists {
+			_ = rows.Close()
+			return result, ErrPointOwnership
+		}
+		accounts[account.UserID] = account
+	}
+	if err := rows.Close(); err != nil {
+		return result, err
+	}
+	source, sourceExists := accounts[sourceUserID]
+	target, targetExists := accounts[targetUserID]
+	if (sourceExists && source.Frozen > 0) || (targetExists && target.Frozen > 0) {
+		return result, ErrPersonalPointMergeActiveReservation
+	}
+	var activeReservations bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM xz_personal_point_reservations WHERE user_id IN($1,$2) AND reserved_points>0)`, targetUserID, sourceUserID).Scan(&activeReservations); err != nil {
+		return result, err
+	}
+	if activeReservations {
+		return result, ErrPersonalPointMergeActiveReservation
+	}
+	if !sourceExists {
+		return result, nil
+	}
+	if !targetExists {
+		target, err = pgEnsureAccount(ctx, tx, stablePointID("account", targetUserID, "auth-merge:"+mergeID), targetUserID)
+		if err != nil {
+			return result, err
+		}
+	}
+	ordered := []*pgPointAccount{&target, &source}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	for _, account := range ordered {
+		if err := pgExpireDueTx(ctx, tx, account, account.ID, account.UserID, now); err != nil {
+			return result, err
+		}
+	}
+
+	lotRows, err := tx.QueryContext(ctx, `SELECT `+pgLotColumns+` FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2 AND available_points>0 ORDER BY id FOR UPDATE`, source.ID, source.UserID)
+	if err != nil {
+		return result, err
+	}
+	lots := []PersonalPointLot{}
+	for lotRows.Next() {
+		lot, scanErr := pgScanLot(lotRows)
+		if scanErr != nil {
+			_ = lotRows.Close()
+			return result, scanErr
+		}
+		lots = append(lots, lot)
+	}
+	if err := lotRows.Close(); err != nil {
+		return result, err
+	}
+	targetBefore, sourceBefore := target.Available, source.Available
+	for _, lot := range lots {
+		amount := lot.AvailablePoints
+		before := lot
+		lot.AvailablePoints = 0
+		lot.ReversedPoints += amount
+		lot.Status = pgStatusLot(&lot)
+		if _, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=0,reversed_points=$2,status=$3,updated_at=$4 WHERE id=$1 AND account_id=$5 AND user_id=$6`, lot.ID, lot.ReversedPoints, lot.Status, now, source.ID, source.UserID); err != nil {
+			return result, err
+		}
+		if err := pgInsertMovement(ctx, tx, lot, "REVERSE", amount, before, "", "auth-merge:reverse:"+mergeID+":"+lot.ID, now); err != nil {
+			return result, err
+		}
+		transferKey := "auth-merge:" + mergeID + ":" + lot.ID
+		transferred := before
+		transferred.ID = stablePointID("lot", target.ID, transferKey)
+		transferred.AccountID = target.ID
+		transferred.UserID = target.UserID
+		transferred.OriginalPoints = amount
+		transferred.AvailablePoints = amount
+		transferred.ReservedPoints = 0
+		transferred.ConsumedPoints = 0
+		transferred.ExpiredPoints = 0
+		transferred.ReversedPoints = 0
+		transferred.IdempotencyKey = transferKey
+		transferred.Status = pgStatusLot(&transferred)
+		policySnapshot, err := json.Marshal(transferred.PolicySnapshot)
+		if err != nil {
+			return result, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xz_personal_point_lots(id,account_id,user_id,source_type,reference_type,reference_id,original_points,available_points,reserved_points,consumed_points,expired_points,reversed_points,granted_at,expires_at,policy_version_id,policy_snapshot,idempotency_key,status,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,0,$8,$9,NULLIF($10,'')::text,$11,$12,$13,$14)`, transferred.ID, transferred.AccountID, transferred.UserID, transferred.SourceType, transferred.ReferenceType, transferred.ReferenceID, amount, transferred.GrantedAt, nullTime(transferred.ExpiresAt), transferred.PolicyVersionID, policySnapshot, transferred.IdempotencyKey, transferred.Status, now); err != nil {
+			return result, err
+		}
+		if err := pgInsertMovement(ctx, tx, transferred, "OPENING", amount, PersonalPointLot{}, "", "auth-merge:opening:"+mergeID+":"+lot.ID, now); err != nil {
+			return result, err
+		}
+		result.PointsMoved += amount
+	}
+	source.Available -= result.PointsMoved
+	source.TotalReversed += result.PointsMoved
+	target.Available += result.PointsMoved
+	target.TotalGranted += result.PointsMoved
+	ordered = []*pgPointAccount{&target, &source}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	for _, account := range ordered {
+		if err := pgUpdateAccount(ctx, tx, *account); err != nil {
+			return result, err
+		}
+	}
+	if result.PointsMoved > 0 {
+		if err := pgInsertWallet(ctx, tx, source, "ADJUSTMENT", result.PointsMoved, sourceBefore, source.Frozen, personalWalletKey(source.ID, "auth-merge-out", mergeID), "AUTH_MERGE", mergeID, now, map[string]any{"direction": "OUT", "target_user_id": targetUserID}); err != nil {
+			return result, err
+		}
+		if err := pgInsertWallet(ctx, tx, target, "ADJUSTMENT", result.PointsMoved, targetBefore, target.Frozen, personalWalletKey(target.ID, "auth-merge-in", mergeID), "AUTH_MERGE", mergeID, now, map[string]any{"direction": "IN", "source_user_id": sourceUserID}); err != nil {
+			return result, err
+		}
+	}
+	result.AccountsMoved = 1
+	return result, nil
+}
+
 func (s *PostgresPersonalPointStore) grantRegistration(ctx context.Context, cmd PersonalPointRegistrationGrantCommand) (PersonalPointGrantResult, error) {
 	if cmd.PlanGrantPoints <= 0 {
 		return PersonalPointGrantResult{}, ErrInvalidPointCommand

@@ -3,49 +3,149 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
-	db, ctx := openPhase2ETestPostgres(t)
+const authMergeTestDSN = "postgres://xianzhi_test:gift_points_auth_103_only@127.0.0.1:55443/xianzhi_auth_merge_test?sslmode=disable"
 
-	var target adminUser
-	var targetV2OrderID string
-	if err := db.QueryRowContext(ctx, `
-		select users.raw, users.id, orders.id
-		from xz_orders orders
-		join xz_users users on users.id = orders.user_id
-		where orders.snapshot_version = 2
-		  and users.status = 'ACTIVE'
-		  and users.raw->>'id' = users.id
-		  and orders.raw->>'id' = orders.id
-		  and not exists (select 1 from xz_channel_agents agents where agents.user_id = users.id)
-		  and not exists (select 1 from xz_operation_centers centers where centers.user_id = users.id)
-		order by orders.created_at desc, orders.id desc
-		limit 1
-	`).Scan(rawScanner(&target), &target.ID, &targetV2OrderID); err != nil {
-		if err == sql.ErrNoRows {
-			t.Skip("isolated PostgreSQL fixture has no eligible V2 target order")
+func TestPostgresAuthMergeActiveReservationRollsBackIdentityAndPoints(t *testing.T) {
+	db, ctx := openAuthMergeTestPostgres(t)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	targetID, sourceID := "auth_merge_target_"+suffix, "auth_merge_source_"+suffix
+	mergeID, sourceAccountID := "auth_merge_reservation_"+suffix, "auth_merge_points_"+suffix
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	target := adminUser{ID: targetID, Email: targetID + "@example.test", Name: "Merge target", Role: "MEMBER", Status: "ACTIVE", CreatedAt: now, UpdatedAt: now}
+	source := adminUser{ID: sourceID, Email: sourceID + "@example.test", Name: "Merge source", Role: "MEMBER", Status: "ACTIVE", CreatedAt: now, UpdatedAt: now}
+	request := adminAuthMergeRequest{ID: mergeID, PrimaryUserID: targetID, SecondaryUserID: sourceID, ConflictCode: "AUTH_ACCOUNT_MERGE_REQUIRED", Source: "postgres_atomic_test", Reason: "active reservation", Status: "PENDING", CreatedAt: now, UpdatedAt: now}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []adminUser{target, source} {
+		if err := insertUser(ctx, tx, user); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
 		}
+	}
+	if err := insertAuthMergeRequest(ctx, tx, request); err != nil {
+		_ = tx.Rollback()
 		t.Fatal(err)
 	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	pointStore := NewPostgresPersonalPointStore(db)
+	if _, err := pointStore.grant(ctx, PersonalPointGrantCommand{AccountID: sourceAccountID, UserID: sourceID, Source: PointSourceRecharge, Points: 3, ReferenceType: "ORDER", ReferenceID: mergeID, IdempotencyKey: "grant"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pointStore.reserve(ctx, PersonalPointReserveCommand{AccountID: sourceAccountID, UserID: sourceID, BusinessType: "GENERATION_TASK", BusinessID: mergeID, RequestedPoints: 1, IdempotencyKey: "reserve"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := contextWithPostgresTestTimeout()
+		defer cancel()
+		cleanupTx, cleanupErr := db.BeginTx(cleanupCtx, nil)
+		if cleanupErr != nil {
+			t.Errorf("begin cleanup: %v", cleanupErr)
+			return
+		}
+		defer func() { _ = cleanupTx.Rollback() }()
+		if _, err := cleanupTx.ExecContext(cleanupCtx, `ALTER TABLE xz_personal_point_lot_movements DISABLE TRIGGER trg_xz_personal_point_lot_movements_immutable`); err != nil {
+			t.Errorf("disable movement cleanup guard: %v", err)
+			return
+		}
+		statements := []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM xz_audit_logs WHERE resource_id=$1`, []any{mergeID}},
+			{`DELETE FROM xz_personal_point_lot_movements WHERE account_id=$1`, []any{sourceAccountID}},
+			{`DELETE FROM xz_personal_point_reservation_allocations WHERE account_id=$1`, []any{sourceAccountID}},
+			{`DELETE FROM xz_personal_point_reservations WHERE account_id=$1`, []any{sourceAccountID}},
+			{`DELETE FROM xz_personal_point_lots WHERE account_id=$1`, []any{sourceAccountID}},
+			{`DELETE FROM xz_wallet_ledger WHERE account_id=$1`, []any{sourceAccountID}},
+			{`DELETE FROM xz_user_wallets WHERE user_id IN($1,$2)`, []any{targetID, sourceID}},
+			{`DELETE FROM xz_point_accounts WHERE id=$1`, []any{sourceAccountID}},
+			{`DELETE FROM xz_auth_account_merge_requests WHERE id=$1`, []any{mergeID}},
+			{`DELETE FROM xz_users WHERE id IN($1,$2)`, []any{targetID, sourceID}},
+		}
+		for _, statement := range statements {
+			if _, err := cleanupTx.ExecContext(cleanupCtx, statement.query, statement.args...); err != nil {
+				t.Errorf("cleanup fixture: %v", err)
+				return
+			}
+		}
+		if _, err := cleanupTx.ExecContext(cleanupCtx, `ALTER TABLE xz_personal_point_lot_movements ENABLE TRIGGER trg_xz_personal_point_lot_movements_immutable`); err != nil {
+			t.Errorf("enable movement cleanup guard: %v", err)
+			return
+		}
+		if err := cleanupTx.Commit(); err != nil {
+			t.Errorf("commit cleanup: %v", err)
+		}
+	})
+	var targetRawBefore, sourceRawBefore, requestRawBefore string
+	if err := db.QueryRowContext(ctx, `SELECT raw::text FROM xz_users WHERE id=$1`, targetID).Scan(&targetRawBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT raw::text FROM xz_users WHERE id=$1`, sourceID).Scan(&sourceRawBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT raw::text FROM xz_auth_account_merge_requests WHERE id=$1`, mergeID).Scan(&requestRawBefore); err != nil {
+		t.Fatal(err)
+	}
+	store := &postgresStore{db: db, ready: true}
+	_, _, err = store.ExecuteAdminAuthMergeRequest(mergeID, adminAuthMergeExecuteRequest{TargetUserID: targetID, Confirm: true, ResolvedBy: "test"})
+	if !errors.Is(err, ErrPersonalPointMergeActiveReservation) {
+		t.Fatalf("execute error=%v, want active reservation conflict", err)
+	}
+	var targetRawAfter, sourceRawAfter, requestRawAfter string
+	if err := db.QueryRowContext(ctx, `SELECT raw::text FROM xz_users WHERE id=$1`, targetID).Scan(&targetRawAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT raw::text FROM xz_users WHERE id=$1`, sourceID).Scan(&sourceRawAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT raw::text FROM xz_auth_account_merge_requests WHERE id=$1`, mergeID).Scan(&requestRawAfter); err != nil {
+		t.Fatal(err)
+	}
+	if targetRawAfter != targetRawBefore || sourceRawAfter != sourceRawBefore || requestRawAfter != requestRawBefore {
+		t.Fatal("rejected PostgreSQL auth merge changed user or request state")
+	}
+	var available, frozen int64
+	if err := db.QueryRowContext(ctx, `SELECT available,frozen FROM xz_point_accounts WHERE id=$1`, sourceAccountID).Scan(&available, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if available != 2 || frozen != 1 {
+		t.Fatalf("rejected PostgreSQL auth merge changed points available=%d frozen=%d", available, frozen)
+	}
+}
 
-	var targetV2SnapshotBefore, targetV2RawBefore string
-	if err := db.QueryRowContext(ctx, `
-		select price_snapshot::text, raw::text
-		from xz_orders
-		where id = $1
-	`, targetV2OrderID).Scan(&targetV2SnapshotBefore, &targetV2RawBefore); err != nil {
-		t.Fatal(err)
-	}
+func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
+	db, ctx := openAuthMergeTestPostgres(t)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	targetID := "user_auth_merge_target_" + suffix
 	sourceID := "user_auth_merge_source_" + suffix
 	mergeID := "auth_merge_test_" + suffix
+	targetV2OrderID := "order_auth_merge_v2_" + suffix
+	priceQuoteID := "quote_auth_merge_v2_" + suffix
 	legacyOrderID := "order_auth_merge_legacy_" + suffix
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	pricing := insertPhase2EPricePlanFixture(t, ctx, db, "TEST")
+	target := adminUser{
+		ID:        targetID,
+		Email:     targetID + "@example.test",
+		Name:      "Auth merge target",
+		Role:      "MEMBER",
+		Status:    "ACTIVE",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	source := adminUser{
 		ID:        sourceID,
 		Email:     sourceID + "@example.test",
@@ -59,7 +159,7 @@ func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
 	request := adminAuthMergeRequest{
 		ID:              mergeID,
 		PrimaryUserID:   sourceID,
-		SecondaryUserID: target.ID,
+		SecondaryUserID: targetID,
 		Mobile:          source.Mobile,
 		ConflictCode:    "AUTH_ACCOUNT_MERGE_REQUIRED",
 		Source:          "postgres_regression_test",
@@ -82,7 +182,39 @@ func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := insertUser(ctx, tx, source); err != nil {
+	for _, user := range []adminUser{target, source} {
+		if err := insertUser(ctx, tx, user); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		insert into xz_order_price_quotes(
+			id,quote_token_hash,tenant_id,user_id,plan_id,plan_version_id,price_plan_id,
+			payment_binding_id,wechat_good_id,entry_type,transaction_price_cents,
+			provider_price_snapshot_cents,wechat_goods_price_cents,channel,environment,
+			offer_id,wechat_product_id,payment_mode,rights_snapshot,expires_at
+		) values(
+			$1,$1,'tenant_default',$2,$3,$4,$5,$6,$7,'PUBLIC',20,20,20,
+			'WECHAT_VIRTUAL','SANDBOX','offer',$7,'short_series_goods','{}'::jsonb,now()+interval '5 minutes'
+		)
+	`, priceQuoteID, targetID, pricing.planID, pricing.versionID, pricing.pricePlanID, pricing.bindingID, pricing.goodID); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		insert into xz_orders(
+			id,user_id,buyer_user_id,amount_cents,status,created_at,
+			price_snapshot,raw,snapshot_version,plan_version_id,price_plan_id,
+			price_quote_id,transaction_price_cents,wechat_product_id_snapshot,
+			wechat_goods_price_cents,payment_environment,rights_snapshot
+		) values(
+			$1,$2,$2,20,'PAID',$3,
+			jsonb_build_object('snapshotVersion',2,'buyerUserId',$2::text,'amountCents',20),
+			jsonb_build_object('id',$1::text,'userId',$2::text,'buyerUserId',$2::text,'amountCents',20,'status','PAID'),
+			2,$4,$5,$6,20,$7,20,'SANDBOX','{}'::jsonb
+		)
+	`, targetV2OrderID, targetID, now, pricing.versionID, pricing.pricePlanID, priceQuoteID, pricing.goodID); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
@@ -98,6 +230,15 @@ func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var targetV2SnapshotBefore, targetV2RawBefore string
+	if err := db.QueryRowContext(ctx, `
+		select price_snapshot::text, raw::text
+		from xz_orders
+		where id = $1
+	`, targetV2OrderID).Scan(&targetV2SnapshotBefore, &targetV2RawBefore); err != nil {
+		t.Fatal(err)
+	}
+
 	t.Cleanup(func() {
 		cleanupCtx, cancel := contextWithPostgresTestTimeout()
 		defer cancel()
@@ -107,18 +248,15 @@ func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
 			return
 		}
 		defer func() { _ = cleanupTx.Rollback() }()
-		if err := insertUser(cleanupCtx, cleanupTx, target); err != nil {
-			t.Errorf("restore target user: %v", err)
-			return
-		}
 		for _, statement := range []struct {
 			query string
 			args  []any
 		}{
 			{`delete from xz_audit_logs where resource = 'auth_merge_request' and resource_id = $1`, []any{mergeID}},
-			{`delete from xz_orders where id = $1`, []any{legacyOrderID}},
+			{`delete from xz_orders where id in ($1,$2)`, []any{legacyOrderID, targetV2OrderID}},
+			{`delete from xz_order_price_quotes where id = $1`, []any{priceQuoteID}},
 			{`delete from xz_auth_account_merge_requests where id = $1`, []any{mergeID}},
-			{`delete from xz_users where id = $1`, []any{sourceID}},
+			{`delete from xz_users where id in ($1,$2)`, []any{sourceID, targetID}},
 		} {
 			if _, err := cleanupTx.ExecContext(cleanupCtx, statement.query, statement.args...); err != nil {
 				t.Errorf("cleanup fixture: %v", err)
@@ -166,6 +304,28 @@ func TestPostgresAuthMergeDoesNotRewriteExistingTargetV2Orders(t *testing.T) {
 	if targetV2SnapshotAfter != targetV2SnapshotBefore || targetV2RawAfter != targetV2RawBefore {
 		t.Fatal("existing target V2 order was rewritten during auth merge")
 	}
+}
+
+func openAuthMergeTestPostgres(t *testing.T) (*sql.DB, context.Context) {
+	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("XIANZHI_AUTH_MERGE_TEST_DATABASE_URL"))
+	if dsn == "" {
+		t.Skip("XIANZHI_AUTH_MERGE_TEST_DATABASE_URL is not configured")
+	}
+	if dsn != authMergeTestDSN {
+		t.Fatalf("auth merge PostgreSQL tests refuse non-isolated DSN %q", dsn)
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	t.Cleanup(cancel)
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return db, ctx
 }
 
 func contextWithPostgresTestTimeout() (context.Context, context.CancelFunc) {

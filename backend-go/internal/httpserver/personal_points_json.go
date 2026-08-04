@@ -1050,8 +1050,130 @@ func appendPersonalMovement(state *personalPointState, lot PersonalPointLot, mov
 		MovementType: movementType, Points: points, AvailableBefore: before.AvailablePoints, AvailableAfter: lot.AvailablePoints,
 		ReservedBefore: before.ReservedPoints, ReservedAfter: lot.ReservedPoints, ConsumedBefore: before.ConsumedPoints,
 		ConsumedAfter: lot.ConsumedPoints, ExpiredBefore: before.ExpiredPoints, ExpiredAfter: lot.ExpiredPoints,
+		ReversedBefore: before.ReversedPoints, ReversedAfter: lot.ReversedPoints,
 		ReferenceType: lot.ReferenceType, ReferenceID: lot.ReferenceID, ReservationID: reservationID, IdempotencyKey: key, CreatedAt: now,
 	})
+}
+
+func personalPointAccountForMergeState(state *personalPointState, userID string) (*PersonalPointAccount, error) {
+	var found *PersonalPointAccount
+	for i := range state.Accounts {
+		if state.Accounts[i].UserID != userID {
+			continue
+		}
+		if found != nil {
+			return nil, ErrPointOwnership
+		}
+		found = &state.Accounts[i]
+	}
+	return found, nil
+}
+
+func mergePersonalPointState(state *personalPointState, targetUserID, sourceUserID, mergeID string, now time.Time) (personalPointMergeResult, error) {
+	result := personalPointMergeResult{}
+	targetUserID, sourceUserID, mergeID = strings.TrimSpace(targetUserID), strings.TrimSpace(sourceUserID), strings.TrimSpace(mergeID)
+	if state == nil || targetUserID == "" || sourceUserID == "" || targetUserID == sourceUserID || mergeID == "" {
+		return result, ErrInvalidPointCommand
+	}
+	candidate := clonePersonalPointState(*state)
+	if err := validatePersonalPointState(&candidate); err != nil {
+		return result, err
+	}
+	target, err := personalPointAccountForMergeState(&candidate, targetUserID)
+	if err != nil {
+		return result, err
+	}
+	source, err := personalPointAccountForMergeState(&candidate, sourceUserID)
+	if err != nil {
+		return result, err
+	}
+	if (source != nil && source.FrozenPoints > 0) || (target != nil && target.FrozenPoints > 0) {
+		return result, ErrPersonalPointMergeActiveReservation
+	}
+	for _, reservation := range candidate.Reservations {
+		if (reservation.UserID == targetUserID || reservation.UserID == sourceUserID) && reservation.ReservedPoints > 0 {
+			return result, ErrPersonalPointMergeActiveReservation
+		}
+	}
+	if source == nil {
+		return result, nil
+	}
+	now = pointNow(now)
+	if target != nil {
+		if err := expirePersonalPointState(&candidate, target.ID, target.UserID, now); err != nil {
+			return result, err
+		}
+	}
+	if err := expirePersonalPointState(&candidate, source.ID, source.UserID, now); err != nil {
+		return result, err
+	}
+	// Expiry can reallocate the backing slices, so resolve both account pointers again.
+	target, err = personalPointAccountForMergeState(&candidate, targetUserID)
+	if err != nil {
+		return result, err
+	}
+	source, err = personalPointAccountForMergeState(&candidate, sourceUserID)
+	if err != nil || source == nil {
+		return result, err
+	}
+	if target == nil {
+		candidate.Accounts = append(candidate.Accounts, PersonalPointAccount{ID: stablePointID("account", targetUserID, "auth-merge:"+mergeID), UserID: targetUserID})
+		target = &candidate.Accounts[len(candidate.Accounts)-1]
+		// Appending can reallocate candidate.Accounts and invalidate source.
+		source, err = personalPointAccountForMergeState(&candidate, sourceUserID)
+		if err != nil || source == nil {
+			return result, err
+		}
+	}
+	targetBefore, sourceBefore := target.AvailablePoints, source.AvailablePoints
+	for i := range candidate.Lots {
+		lot := &candidate.Lots[i]
+		if lot.AccountID != source.ID || lot.UserID != sourceUserID || lot.AvailablePoints <= 0 {
+			continue
+		}
+		amount := lot.AvailablePoints
+		sourceLotID := lot.ID
+		before := *lot
+		lot.AvailablePoints = 0
+		lot.ReversedPoints += amount
+		setPointLotStatus(lot)
+		appendPersonalMovement(&candidate, *lot, "REVERSE", amount, before, "", "auth-merge:reverse:"+mergeID+":"+sourceLotID, now)
+
+		transferKey := "auth-merge:" + mergeID + ":" + sourceLotID
+		transferred := before
+		transferred.ID = stablePointID("lot", target.ID, transferKey)
+		transferred.AccountID = target.ID
+		transferred.UserID = targetUserID
+		transferred.OriginalPoints = amount
+		transferred.AvailablePoints = amount
+		transferred.ReservedPoints = 0
+		transferred.ConsumedPoints = 0
+		transferred.ExpiredPoints = 0
+		transferred.ReversedPoints = 0
+		transferred.IdempotencyKey = transferKey
+		setPointLotStatus(&transferred)
+		candidate.Lots = append(candidate.Lots, transferred)
+		appendPersonalMovement(&candidate, transferred, "OPENING", amount, PersonalPointLot{}, "", "auth-merge:opening:"+mergeID+":"+sourceLotID, now)
+		result.PointsMoved += amount
+	}
+	source.AvailablePoints -= result.PointsMoved
+	source.TotalReversed += result.PointsMoved
+	target.AvailablePoints += result.PointsMoved
+	target.TotalGranted += result.PointsMoved
+	if result.PointsMoved > 0 {
+		if err := appendPersonalWalletLedger(&candidate, *source, "ADJUSTMENT", result.PointsMoved, sourceBefore, source.FrozenPoints, personalWalletKey(source.ID, "auth-merge-out", mergeID), "AUTH_MERGE", mergeID, map[string]any{"direction": "OUT", "target_user_id": targetUserID}, now); err != nil {
+			return personalPointMergeResult{}, err
+		}
+		if err := appendPersonalWalletLedger(&candidate, *target, "ADJUSTMENT", result.PointsMoved, targetBefore, target.FrozenPoints, personalWalletKey(target.ID, "auth-merge-in", mergeID), "AUTH_MERGE", mergeID, map[string]any{"direction": "IN", "source_user_id": sourceUserID}, now); err != nil {
+			return personalPointMergeResult{}, err
+		}
+	}
+	result.AccountsMoved = 1
+	if err := validatePersonalPointState(&candidate); err != nil {
+		return personalPointMergeResult{}, err
+	}
+	*state = candidate
+	return result, nil
 }
 
 func findPersonalLot(state *personalPointState, id, accountID, userID string) (*PersonalPointLot, error) {

@@ -54,6 +54,7 @@ var (
 	ErrPersonalPointImportConflict           = errors.New("personal point sidecar import conflict")
 	ErrPersonalPointContextMismatch          = errors.New("personal point context mismatch")
 	ErrPersonalPointReservationMarkerMissing = errors.New("personal point reservation marker missing")
+	ErrPersonalPointMergeActiveReservation   = errors.New("personal point merge blocked by active reservation")
 )
 
 const personalLotBillingEngine = "PERSONAL_LOT_V1"
@@ -103,6 +104,11 @@ type PersonalPointExpiryBatchResult struct {
 	PointsExpired     int64 `json:"points_expired"`
 }
 
+type personalPointMergeResult struct {
+	AccountsMoved int
+	PointsMoved   int64
+}
+
 type PointPolicySnapshot struct {
 	Version       int64  `json:"version"`
 	Enabled       bool   `json:"enabled"`
@@ -142,6 +148,7 @@ type PersonalPointAccount struct {
 	TotalGranted    int64  `json:"total_granted"`
 	TotalConsumed   int64  `json:"total_consumed"`
 	TotalExpired    int64  `json:"total_expired"`
+	TotalReversed   int64  `json:"total_reversed"`
 }
 
 type PersonalPointBalance struct {
@@ -199,6 +206,8 @@ type PersonalPointLotMovement struct {
 	ConsumedAfter   int64     `json:"consumed_after"`
 	ExpiredBefore   int64     `json:"expired_before"`
 	ExpiredAfter    int64     `json:"expired_after"`
+	ReversedBefore  int64     `json:"reversed_before"`
+	ReversedAfter   int64     `json:"reversed_after"`
 	ReferenceType   string    `json:"reference_type"`
 	ReferenceID     string    `json:"reference_id"`
 	ReservationID   string    `json:"reservation_id,omitempty"`

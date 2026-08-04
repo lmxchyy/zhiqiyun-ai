@@ -640,9 +640,22 @@ func (s *jsonStore) PreviewAdminAuthMergeRequest(id string, targetUserID string)
 func (s *jsonStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMergeExecuteRequest) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error) {
 	var updated adminAuthMergeRequest
 	var result adminAuthMergeExecuteResult
-	err := s.updateAdmin(func(data *adminPlatformData) error {
-		var err error
-		updated, result, err = executeAdminAuthMergeRequestOnData(data, id, req)
+	err := s.updateWithPersonalPoints(context.Background(), func(data *platformData, points *JSONPersonalPointStore) error {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		var admin adminPlatformData
+		if err := json.Unmarshal(raw, &admin); err != nil {
+			return err
+		}
+		updated, result, err = executeAdminAuthMergeRequestOnDataWithPointMerge(&admin, id, req, func(targetID, sourceID string) (int, error) {
+			merged, mergeErr := mergePersonalPointState(points.memory, targetID, sourceID, id, time.Now().UTC())
+			return merged.AccountsMoved, mergeErr
+		})
+		if err == nil {
+			applyAdminDataToPlatformData(data, admin)
+		}
 		return err
 	})
 	return updated, result, err
@@ -675,6 +688,12 @@ func previewAdminAuthMergeRequestOnData(data *adminPlatformData, id string, targ
 }
 
 func executeAdminAuthMergeRequestOnData(data *adminPlatformData, id string, req adminAuthMergeExecuteRequest) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error) {
+	return executeAdminAuthMergeRequestOnDataWithPointMerge(data, id, req, func(targetID, sourceID string) (int, error) {
+		return mergePointAccountsForUsers(data, targetID, sourceID), nil
+	})
+}
+
+func executeAdminAuthMergeRequestOnDataWithPointMerge(data *adminPlatformData, id string, req adminAuthMergeExecuteRequest, mergePoints func(targetID, sourceID string) (int, error)) (adminAuthMergeRequest, adminAuthMergeExecuteResult, error) {
 	if data == nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, errors.New("admin data is required")
 	}
@@ -726,6 +745,13 @@ func executeAdminAuthMergeRequestOnData(data *adminPlatformData, id string, req 
 	if err := validateUsersForAdminAuthMerge(data, target, source); err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
+	if mergePoints == nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, ErrInvalidPointCommand
+	}
+	pointAccountsMoved, err := mergePoints(targetID, sourceID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	moved := map[string]int{}
 	warnings := []string{}
@@ -739,7 +765,7 @@ func executeAdminAuthMergeRequestOnData(data *adminPlatformData, id string, req 
 	source.UpdatedAt = now
 	data.Users[targetIndex], data.Users[sourceIndex] = target, source
 
-	moved["pointAccounts"] = mergePointAccountsForUsers(data, targetID, sourceID)
+	moved["pointAccounts"] = pointAccountsMoved
 	moved["tokenRecords"] = replaceUserIDInTokenRecords(data.TokenRecords, sourceID, targetID)
 	moved["orders"] = replaceUserIDInOrders(data.Orders, sourceID, targetID)
 	moved["channelAgents"] = replaceUserIDInChannelAgents(data.ChannelAgents, sourceID, targetID)

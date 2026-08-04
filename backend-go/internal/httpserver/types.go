@@ -30,10 +30,20 @@ type platformData struct {
 	GeoBrands              []adminGeoBrand          `json:"geoBrands,omitempty"`
 	GeoTasks               []adminGeoTask           `json:"geoTasks,omitempty"`
 	AdminProducts          []adminProduct           `json:"adminProducts,omitempty"`
+	SystemSettings         adminSystemSettings      `json:"systemSettings,omitempty"`
+	APIChannels            []adminAPIChannel        `json:"apiChannels,omitempty"`
+	APIModels              []adminAPIModel          `json:"apiModels,omitempty"`
+	APIKeys                []adminAPIKey            `json:"apiKeys,omitempty"`
+	CustomerGroups         []adminCustomerGroup     `json:"customerGroups,omitempty"`
 	AIModules              []adminAIModule          `json:"aiModules,omitempty"`
 	AIModels               []adminAIModel           `json:"aiModels,omitempty"`
 	AIParameterSchemas     []adminAIParameterSchema `json:"aiParameterSchemas,omitempty"`
 	TenantModuleLimits     []adminTenantModuleLimit `json:"tenantModuleLimits,omitempty"`
+	Enterprise             enterpriseMemoryState    `json:"enterprise,omitempty"`
+	PromotionRecords       []promotionRecord        `json:"promotionRecords,omitempty"`
+	AuthMergeRequests      []adminAuthMergeRequest  `json:"authMergeRequests,omitempty"`
+	AdminExceptionCases    []adminExceptionCase     `json:"adminExceptionCases,omitempty"`
+	AdminExperienceEvents  []adminExperienceEvent   `json:"adminExperienceEvents,omitempty"`
 	GenerationTasks        []generationTask         `json:"generationTasks"`
 	Assets                 []asset                  `json:"assets"`
 	AIState                userAIState              `json:"aiState,omitempty"`
