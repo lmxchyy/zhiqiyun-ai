@@ -558,6 +558,22 @@ type authAPI struct {
 	config   config.Config
 }
 
+type registeredCustomerStore interface {
+	CreateRegisteredCustomer(adminCustomerMutation, int) (adminUser, error)
+}
+
+func createRegisteredCustomer(store platformStore, req adminCustomerMutation, grantPoints int) (adminUser, error) {
+	registrationStore, ok := store.(registeredCustomerStore)
+	if !ok {
+		return adminUser{}, errors.New("registration point grant service is unavailable")
+	}
+	if grantPoints <= 0 {
+		return adminUser{}, ErrInvalidPointCommand
+	}
+	req.Available = nil
+	return registrationStore.CreateRegisteredCustomer(req, grantPoints)
+}
+
 type loginRequest struct {
 	Account  string `json:"account"`
 	Email    string `json:"email"`
@@ -933,7 +949,7 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	newcomerPlan := configuredNewcomerPlan(data.Plans)
-	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+	created, err := createRegisteredCustomer(a.store, adminCustomerMutation{
 		Name:                  req.Username,
 		Email:                 req.Email,
 		Role:                  "MEMBER",
@@ -941,8 +957,7 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 		PlanID:                newcomerPlan.ID,
 		ReferredBy:            referredBy,
 		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
-		Available:             pointBalancePointer(planPoints(newcomerPlan)),
-	})
+	}, planPoints(newcomerPlan))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1286,7 +1301,7 @@ func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session
 	}
 
 	newcomerPlan := configuredNewcomerPlan(data.Plans)
-	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+	created, err := createRegisteredCustomer(a.store, adminCustomerMutation{
 		Name:                  "WeChat User",
 		Email:                 email,
 		WeChatOpenID:          session.OpenID,
@@ -1295,8 +1310,7 @@ func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session
 		Status:                "ACTIVE",
 		PlanID:                newcomerPlan.ID,
 		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
-		Available:             pointBalancePointer(planPoints(newcomerPlan)),
-	})
+	}, planPoints(newcomerPlan))
 	if err != nil {
 		return data, adminUser{}, err
 	}

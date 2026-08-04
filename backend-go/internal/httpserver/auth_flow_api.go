@@ -681,12 +681,12 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 		return data, adminUser{}, false, "", bindErr
 	}
 	newcomerPlan := configuredNewcomerPlan(data.Plans)
-	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+	created, err := createRegisteredCustomer(a.store, adminCustomerMutation{
 		Name: "用户 " + maskedMobile(mobile), Email: phoneSyntheticEmail(mobile), Mobile: mobile,
 		WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID, RegistrationSource: registrationSource(input),
 		Role: "MEMBER", Status: "ACTIVE", PlanID: newcomerPlan.ID, ReferredBy: referredBy,
-		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()), Available: pointBalancePointer(planPoints(newcomerPlan)),
-	})
+		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
+	}, planPoints(newcomerPlan))
 	if err != nil {
 		// A database-level mobile/UnionID unique constraint is the final guard when
 		// multiple API instances race to register the same real-world identity.

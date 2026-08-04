@@ -129,6 +129,39 @@ func pgLoadAccount(ctx context.Context, tx *sql.Tx, accountID, userID string, fo
 	return account, true, nil
 }
 
+func pgLoadPersonalAccountForUserTx(ctx context.Context, tx *sql.Tx, userID string) (pgPointAccount, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM xz_point_accounts WHERE user_id=$1 ORDER BY id FOR UPDATE`, userID)
+	if err != nil {
+		return pgPointAccount{}, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return pgPointAccount{}, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return pgPointAccount{}, err
+	}
+	if len(ids) == 0 {
+		return pgPointAccount{}, ErrInsufficientPoints
+	}
+	if len(ids) != 1 {
+		return pgPointAccount{}, ErrPointOwnership
+	}
+	account, ok, err := pgLoadAccount(ctx, tx, ids[0], userID, true)
+	if err != nil {
+		return pgPointAccount{}, err
+	}
+	if !ok {
+		return pgPointAccount{}, ErrPointNotFound
+	}
+	return account, nil
+}
+
 func pgEnsureAccount(ctx context.Context, tx *sql.Tx, accountID, userID string) (pgPointAccount, error) {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_point_accounts(id,user_id,available,frozen,raw) VALUES($1,$2,0,0,'{}'::jsonb) ON CONFLICT (id) DO NOTHING`, accountID, userID); err != nil {
 		return pgPointAccount{}, err

@@ -44,15 +44,19 @@ const (
 )
 
 var (
-	ErrInsufficientPoints          = errors.New("insufficient points")
-	ErrUnknownPointSource          = errors.New("unknown point source")
-	ErrIdempotencyConflict         = errors.New("point idempotency conflict")
-	ErrPointPolicyRevisionConflict = errors.New("point expiry policy revision conflict")
-	ErrPointOwnership              = errors.New("point account ownership mismatch")
-	ErrInvalidPointCommand         = errors.New("invalid point command")
-	ErrPointNotFound               = errors.New("point record not found")
-	ErrPersonalPointImportConflict = errors.New("personal point sidecar import conflict")
+	ErrInsufficientPoints                    = errors.New("insufficient points")
+	ErrUnknownPointSource                    = errors.New("unknown point source")
+	ErrIdempotencyConflict                   = errors.New("point idempotency conflict")
+	ErrPointPolicyRevisionConflict           = errors.New("point expiry policy revision conflict")
+	ErrPointOwnership                        = errors.New("point account ownership mismatch")
+	ErrInvalidPointCommand                   = errors.New("invalid point command")
+	ErrPointNotFound                         = errors.New("point record not found")
+	ErrPersonalPointImportConflict           = errors.New("personal point sidecar import conflict")
+	ErrPersonalPointContextMismatch          = errors.New("personal point context mismatch")
+	ErrPersonalPointReservationMarkerMissing = errors.New("personal point reservation marker missing")
 )
+
+const personalLotBillingEngine = "PERSONAL_LOT_V1"
 
 type PointExpiryPolicy struct {
 	ID            string    `json:"id"`

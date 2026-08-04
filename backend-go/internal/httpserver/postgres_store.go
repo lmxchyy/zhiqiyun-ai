@@ -1075,13 +1075,13 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	req.Params["organization_id"] = authorization.OrganizationID
 	req.Params["billing_scope"] = authorization.BillingScope
 	req.Params["billing_account_id"] = authorization.BillingAccountID
-	var account adminPointAccount
+	var account pgPointAccount
 	if authorization.ContextType != contextEnterprise {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		account, err = pgLoadPersonalAccountForUserTx(ctx, tx, userID)
 		if err != nil {
 			return generationTask{}, err
 		}
-		if account.Available < pointCost {
+		if account.Available < int64(pointCost) {
 			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 		}
 	}
@@ -1111,10 +1111,14 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		UpdatedAt:        now,
 		WorkerFinishedAt: now,
 	}
+	if authorization.ContextType != contextEnterprise {
+		task.BillingEngine = personalLotBillingEngine
+		task.PersonalPointAccountID = account.ID
+	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
-	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
+	balanceBefore, balanceAfter := int(account.Available), int(account.Available)-pointCost
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
 		if err != nil {
@@ -1140,11 +1144,13 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结")
+		pointStore := NewPostgresPersonalPointStore(s.db)
+		reserved, err := pointStore.reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
 		if err != nil {
 			return generationTask{}, err
 		}
-		if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, reservedAccount, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+		task.PersonalPointReservationID = reserved.Reservation.ID
+		if _, err := pointStore.captureTx(ctx, tx, PersonalPointCaptureCommand{AccountID: account.ID, UserID: userID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:capture:" + task.ID}); err != nil {
 			return generationTask{}, err
 		}
 	} else {
@@ -1228,13 +1234,13 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	req.Params["organization_id"] = authorization.OrganizationID
 	req.Params["billing_scope"] = authorization.BillingScope
 	req.Params["billing_account_id"] = authorization.BillingAccountID
-	var account adminPointAccount
+	var account pgPointAccount
 	if authorization.ContextType != contextEnterprise {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		account, err = pgLoadPersonalAccountForUserTx(ctx, tx, userID)
 		if err != nil {
 			return generationTask{}, err
 		}
-		if account.Available < pointCost {
+		if account.Available < int64(pointCost) {
 			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 		}
 	}
@@ -1243,7 +1249,7 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if err != nil {
 		return generationTask{}, err
 	}
-	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
+	balanceBefore, balanceAfter := int(account.Available), int(account.Available)-pointCost
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", taskID)
 		if err != nil {
@@ -1273,6 +1279,10 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+	if authorization.ContextType != contextEnterprise {
+		task.BillingEngine = personalLotBillingEngine
+		task.PersonalPointAccountID = account.ID
+	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
@@ -1280,9 +1290,11 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结"); err != nil {
+		reserved, err := NewPostgresPersonalPointStore(s.db).reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
+		if err != nil {
 			return generationTask{}, err
 		}
+		task.PersonalPointReservationID = reserved.Reservation.ID
 	} else {
 		if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RESERVE", pointCost, balanceBefore, balanceAfter, 0, pointCost, "生成任务冻结"); err != nil {
 			return generationTask{}, err
@@ -1326,9 +1338,13 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if err != nil {
 		return generationTask{}, err
 	}
-	var account adminPointAccount
+	lotBacked := task.BillingEngine == personalLotBillingEngine
+	if authorization.ContextType != contextEnterprise && lotBacked && (task.PersonalPointAccountID == "" || task.PersonalPointReservationID == "") {
+		return generationTask{}, ErrPersonalPointReservationMarkerMissing
+	}
+	var account pgPointAccount
 	if authorization.ContextType != contextEnterprise {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		account, err = pgLoadPersonalAccountForUserTx(ctx, tx, userID)
 		if err != nil {
 			return generationTask{}, err
 		}
@@ -1356,7 +1372,7 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	}
 	pointCost = generationTaskReservedPointCost(task, pointCost)
 	reserved := generationTaskReservedAndActive(task)
-	if authorization.ContextType != contextEnterprise && !reserved && account.Available < pointCost {
+	if authorization.ContextType != contextEnterprise && !reserved && account.Available < int64(pointCost) {
 		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 	}
 	task.Status = "SUCCEEDED"
@@ -1384,10 +1400,10 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			return generationTask{}, err
 		}
 	}
-	balanceBefore := account.Available
-	balanceAfter := account.Available - pointCost
+	balanceBefore := int(account.Available)
+	balanceAfter := int(account.Available) - pointCost
 	if reserved {
-		fallbackBalance := account.Available
+		fallbackBalance := int(account.Available)
 		if authorization.ContextType == contextEnterprise {
 			fallbackBalance = intValue(task.Params[generationBillingReservationBalanceAfterKey])
 		}
@@ -1397,11 +1413,21 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 				return generationTask{}, err
 			}
 		} else {
-			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
-				return generationTask{}, err
+			if lotBacked {
+				if _, err := NewPostgresPersonalPointStore(s.db).captureTx(ctx, tx, PersonalPointCaptureCommand{AccountID: task.PersonalPointAccountID, UserID: userID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:capture:" + task.ID}); err != nil {
+					return generationTask{}, err
+				}
+			} else {
+				legacyAccount := adminPointAccount{ID: account.ID, UserID: account.UserID, Available: int(account.Available), Frozen: int(account.Frozen), TotalGranted: int(account.TotalGranted), TotalUsed: int(account.TotalConsumed)}
+				if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, legacyAccount, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+					return generationTask{}, err
+				}
 			}
 		}
 	} else {
+		if authorization.ContextType != contextEnterprise && lotBacked {
+			return generationTask{}, ErrPersonalPointReservationMarkerMissing
+		}
 		task.QuotedPoints = float64(pointCost)
 		task.ReservedPoints = float64(pointCost)
 		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model}); err != nil {
@@ -1420,7 +1446,8 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 				return generationTask{}, err
 			}
 		} else {
-			reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结")
+			legacyAccount := adminPointAccount{ID: account.ID, UserID: account.UserID, Available: int(account.Available), Frozen: int(account.Frozen), TotalGranted: int(account.TotalGranted), TotalUsed: int(account.TotalConsumed)}
+			reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, legacyAccount, "RESERVE", pointCost, "生成任务冻结")
 			if err != nil {
 				return generationTask{}, err
 			}
@@ -1590,15 +1617,26 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 				return generationTask{}, err
 			}
 		} else {
-			account, err := pointAccountForUpdate(ctx, tx, task.UserID)
+			lotBacked := task.BillingEngine == personalLotBillingEngine
+			if lotBacked && (task.PersonalPointAccountID == "" || task.PersonalPointReservationID == "") {
+				return generationTask{}, ErrPersonalPointReservationMarkerMissing
+			}
+			account, err := pgLoadPersonalAccountForUserTx(ctx, tx, task.UserID)
 			if err != nil {
 				return generationTask{}, err
 			}
-			nextAvailable := account.Available + pointCost
-			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RELEASE", pointCost, "生成失败解冻"); err != nil {
-				return generationTask{}, err
+			nextAvailable := int(account.Available) + pointCost
+			if lotBacked {
+				if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:release:" + task.ID}); err != nil {
+					return generationTask{}, err
+				}
+			} else {
+				legacyAccount := adminPointAccount{ID: account.ID, UserID: account.UserID, Available: int(account.Available), Frozen: int(account.Frozen), TotalGranted: int(account.TotalGranted), TotalUsed: int(account.TotalConsumed)}
+				if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, legacyAccount, "RELEASE", pointCost, "生成失败解冻"); err != nil {
+					return generationTask{}, err
+				}
 			}
-			task.Params = generationBillingRefundParams(task.Params, now, account.Available, nextAvailable)
+			task.Params = generationBillingRefundParams(task.Params, now, int(account.Available), nextAvailable)
 		}
 		task.BillingStatus = billingStatusReleased
 		task.ReleasedPoints = float64(pointCost)
@@ -2945,6 +2983,54 @@ func (s *postgresStore) CreateAdminCustomer(req adminCustomerMutation) (adminUse
 		return adminUser{}, err
 	}
 	if err := insertAuditLog(ctx, tx, "", "", "customers.create", "user", item.ID, "", "", 200, map[string]any{"email": item.Email}); err != nil {
+		return adminUser{}, err
+	}
+	return item, tx.Commit()
+}
+
+func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, grantPoints int) (adminUser, error) {
+	if grantPoints <= 0 {
+		return adminUser{}, ErrInvalidPointCommand
+	}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminUser{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminUser{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UTC()
+	userID, err := nextTableID(ctx, tx, "xz_users", "user")
+	if err != nil {
+		return adminUser{}, err
+	}
+	item := adminUser{
+		ID: userID, Email: req.Email, Mobile: strings.TrimSpace(req.Mobile), WeChatOpenIDs: appendUniqueString(nil, req.WeChatOpenID),
+		WeChatUnionID: strings.TrimSpace(req.WeChatUnionID), RegistrationSource: cloneStringMap(req.RegistrationSource), Name: req.Name,
+		Role: fallback(req.Role, "MEMBER"), Status: fallback(req.Status, "ACTIVE"), PlanID: fallback(req.PlanID, "plan_free"),
+		ReferredBy: strings.TrimSpace(req.ReferredBy), SubscriptionExpiresAt: strings.TrimSpace(req.SubscriptionExpiresAt),
+		CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano),
+	}
+	if err := insertUser(ctx, tx, item); err != nil {
+		return adminUser{}, err
+	}
+	if err := upsertPointAccountByUser(ctx, tx, item.ID, 0); err != nil {
+		return adminUser{}, err
+	}
+	account, err := pgLoadPersonalAccountForUserTx(ctx, tx, item.ID)
+	if err != nil {
+		return adminUser{}, err
+	}
+	if _, err := NewPostgresPersonalPointStore(s.db).grantTx(ctx, tx, PersonalPointGrantCommand{
+		AccountID: account.ID, UserID: item.ID, Source: PointSourceRegistrationGift, Points: int64(grantPoints),
+		ReferenceType: "PLAN", ReferenceID: item.PlanID, IdempotencyKey: "registration:" + item.ID, GrantedAt: now,
+	}); err != nil {
+		return adminUser{}, err
+	}
+	if err := insertAuditLog(ctx, tx, item.ID, item.Role, "auth.registration", "user", item.ID, "", "", 201, map[string]any{"planId": item.PlanID, "grantPoints": grantPoints, "source": PointSourceRegistrationGift}); err != nil {
 		return adminUser{}, err
 	}
 	return item, tx.Commit()

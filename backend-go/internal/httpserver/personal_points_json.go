@@ -989,6 +989,23 @@ func findPersonalAccount(state *personalPointState, accountID, userID string) (*
 	return nil, nil
 }
 
+func personalPointAccountForUserState(state *personalPointState, userID string) (*PersonalPointAccount, error) {
+	var found *PersonalPointAccount
+	for i := range state.Accounts {
+		if state.Accounts[i].UserID != userID {
+			continue
+		}
+		if found != nil {
+			return nil, ErrPointOwnership
+		}
+		found = &state.Accounts[i]
+	}
+	if found == nil {
+		return nil, ErrInsufficientPoints
+	}
+	return found, nil
+}
+
 func ensurePersonalAccount(state *personalPointState, accountID, userID string) (*PersonalPointAccount, error) {
 	account, err := findPersonalAccount(state, accountID, userID)
 	if err != nil {
