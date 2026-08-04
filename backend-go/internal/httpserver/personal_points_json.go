@@ -1224,7 +1224,7 @@ func (s *JSONPersonalPointStore) grant(ctx context.Context, cmd PersonalPointGra
 	if err = normalizePointCommand(cmd); err != nil {
 		return result, err
 	}
-	fingerprint := pointCommandFingerprint(cmd)
+	fingerprint := personalPointGrantFingerprint(cmd)
 	cmd.GrantedAt = pointNow(cmd.GrantedAt)
 	err = s.withState(ctx, func(state *personalPointState) error {
 		op, opErr := operationFor(state, "GRANT", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint)
@@ -1280,11 +1280,112 @@ func (s *JSONPersonalPointStore) grant(ctx context.Context, cmd PersonalPointGra
 		if cmd.Source == PointSourceRecharge {
 			entryType = "RECHARGE"
 		}
-		if err := appendPersonalWalletLedger(state, *account, entryType, cmd.Points, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "grant", cmd.IdempotencyKey), cmd.ReferenceType, cmd.ReferenceID, map[string]any{"fingerprint": fingerprint, "source_type": string(cmd.Source)}, cmd.GrantedAt); err != nil {
+		if err := appendPersonalWalletLedger(state, *account, entryType, cmd.Points, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "grant", cmd.IdempotencyKey), cmd.ReferenceType, cmd.ReferenceID, map[string]any{"fingerprint": fingerprint, "source_type": string(cmd.Source), "reason": strings.TrimSpace(cmd.Reason), "actor_id": cmd.Audit.ActorID, "actor_role": cmd.Audit.ActorRole, "action": cmd.Audit.Action, "request_id": cmd.Audit.RequestID}, cmd.GrantedAt); err != nil {
 			return err
 		}
 		appendOperation(state, "GRANT", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint, lot.ID, 0, cmd.GrantedAt)
 		result = PersonalPointGrantResult{Lot: lot}
+		return nil
+	})
+	return result, err
+}
+
+func (s *JSONPersonalPointStore) correct(ctx context.Context, cmd PersonalPointCorrectionCommand) (result PersonalPointCorrectionResult, err error) {
+	if cmd.AccountID == "" || cmd.UserID == "" || cmd.Points == 0 || cmd.Points == math.MinInt64 || strings.TrimSpace(cmd.Reason) == "" || strings.TrimSpace(cmd.IdempotencyKey) == "" {
+		return result, ErrInvalidPointCommand
+	}
+	fingerprint := personalPointCorrectionFingerprint(cmd)
+	cmd.CorrectedAt = pointNow(cmd.CorrectedAt)
+	err = s.withState(ctx, func(state *personalPointState) error {
+		op, opErr := operationFor(state, "CORRECT", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint)
+		if opErr != nil {
+			return opErr
+		}
+		if op != nil {
+			account, findErr := findPersonalAccount(state, cmd.AccountID, cmd.UserID)
+			if findErr != nil || account == nil {
+				if findErr != nil {
+					return findErr
+				}
+				return ErrPointNotFound
+			}
+			result = PersonalPointCorrectionResult{Balance: PersonalPointBalance{AccountID: account.ID, UserID: account.UserID, Available: account.AvailablePoints, Frozen: account.FrozenPoints, Total: account.AvailablePoints + account.FrozenPoints}, Points: cmd.Points, Idempotent: true}
+			if op.ReservationID != "" {
+				for i := range state.Lots {
+					if state.Lots[i].ID == op.ReservationID {
+						lot := state.Lots[i]
+						result.Lot = &lot
+						break
+					}
+				}
+			}
+			return nil
+		}
+		account, accountErr := ensurePersonalAccount(state, cmd.AccountID, cmd.UserID)
+		if accountErr != nil {
+			return accountErr
+		}
+		if err := expirePersonalPointState(state, cmd.AccountID, cmd.UserID, cmd.CorrectedAt); err != nil {
+			return err
+		}
+		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
+		amount := cmd.Points
+		lotID := ""
+		if cmd.Points > 0 {
+			if account.AvailablePoints > math.MaxInt64-cmd.Points {
+				return ErrInvalidPointCommand
+			}
+			lot := PersonalPointLot{ID: stablePointID("lot", cmd.AccountID, "correction:"+cmd.IdempotencyKey), AccountID: cmd.AccountID, UserID: cmd.UserID, SourceType: PointSourceAdminCorrection, ReferenceType: "ADMIN_CORRECTION", ReferenceID: cmd.IdempotencyKey, OriginalPoints: cmd.Points, AvailablePoints: cmd.Points, GrantedAt: cmd.CorrectedAt, IdempotencyKey: "correction:" + cmd.IdempotencyKey, Status: "ACTIVE"}
+			state.Lots = append(state.Lots, lot)
+			account.AvailablePoints += cmd.Points
+			account.TotalGranted += cmd.Points
+			appendPersonalMovement(state, lot, "OPENING", cmd.Points, PersonalPointLot{}, "", "correction:opening:"+cmd.IdempotencyKey, cmd.CorrectedAt)
+			lotID = lot.ID
+			result.Lot = &lot
+		} else {
+			amount = -cmd.Points
+			if account.AvailablePoints < amount {
+				return ErrInsufficientPoints
+			}
+			lots := make([]PersonalPointLot, 0)
+			for _, lot := range state.Lots {
+				if lot.AccountID == cmd.AccountID && lot.UserID == cmd.UserID && lot.AvailablePoints > 0 {
+					lots = append(lots, lot)
+				}
+			}
+			sortLotsFEFO(lots)
+			remaining := amount
+			for _, selected := range lots {
+				if remaining == 0 {
+					break
+				}
+				lot, findErr := findPersonalLot(state, selected.ID, cmd.AccountID, cmd.UserID)
+				if findErr != nil {
+					return findErr
+				}
+				debit := lot.AvailablePoints
+				if debit > remaining {
+					debit = remaining
+				}
+				before := *lot
+				lot.AvailablePoints -= debit
+				lot.ReversedPoints += debit
+				setPointLotStatus(lot)
+				appendPersonalMovement(state, *lot, "REVERSE", debit, before, "", "correction:reverse:"+cmd.IdempotencyKey+":"+lot.ID, cmd.CorrectedAt)
+				remaining -= debit
+			}
+			if remaining != 0 {
+				return ErrInsufficientPoints
+			}
+			account.AvailablePoints -= amount
+			account.TotalReversed += amount
+		}
+		if err := appendPersonalWalletLedger(state, *account, "ADJUSTMENT", amount, beforeAvailable, beforeFrozen, personalWalletKey(cmd.AccountID, "correction", cmd.IdempotencyKey), "ADMIN_CORRECTION", cmd.IdempotencyKey, map[string]any{"fingerprint": fingerprint, "signed_points": cmd.Points, "reason": strings.TrimSpace(cmd.Reason), "actor_id": cmd.Audit.ActorID, "actor_role": cmd.Audit.ActorRole, "action": cmd.Audit.Action, "request_id": cmd.Audit.RequestID}, cmd.CorrectedAt); err != nil {
+			return err
+		}
+		appendOperation(state, "CORRECT", cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, fingerprint, lotID, cmd.Points, cmd.CorrectedAt)
+		result.Balance = PersonalPointBalance{AccountID: account.ID, UserID: account.UserID, Available: account.AvailablePoints, Frozen: account.FrozenPoints, Total: account.AvailablePoints + account.FrozenPoints}
+		result.Points = cmd.Points
 		return nil
 	})
 	return result, err

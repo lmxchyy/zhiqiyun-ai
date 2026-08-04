@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -89,23 +91,55 @@ func (w *personalPointExpiryWorker) Stop() {
 	})
 }
 
-func personalPointExpiryWorkerEnabled() bool {
+func personalPointExpiryWorkerEnabled() (bool, error) {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_ENABLED")))
-	return value != "0" && value != "false" && value != "off" && value != "disabled"
+	switch value {
+	case "":
+		return false, nil
+	case "1", "true", "on", "enabled":
+		return true, nil
+	case "0", "false", "off", "disabled":
+		return false, nil
+	default:
+		return false, errors.New("invalid XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_ENABLED")
+	}
 }
 
-func personalPointExpiryWorkerOptions() (time.Duration, int) {
+func personalPointExpiryWorkerOptions() (time.Duration, int, error) {
 	interval := time.Minute
 	if raw := strings.TrimSpace(os.Getenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_INTERVAL")); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			interval = parsed
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			return 0, 0, errors.New("invalid XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_INTERVAL")
 		}
+		interval = parsed
 	}
 	batch := 100
 	if raw := strings.TrimSpace(os.Getenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_BATCH")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 1000 {
-			batch = parsed
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > 1000 {
+			return 0, 0, errors.New("invalid XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_BATCH")
 		}
+		batch = parsed
 	}
-	return interval, batch
+	return interval, batch, nil
+}
+
+func configurePersonalPointExpiryWorker(server *http.Server, store platformStore, logger *slog.Logger) (*personalPointExpiryWorker, error) {
+	pgStore, ok := store.(*postgresStore)
+	if !ok || pgStore == nil || server == nil {
+		return nil, nil
+	}
+	enabled, err := personalPointExpiryWorkerEnabled()
+	if err != nil || !enabled {
+		return nil, err
+	}
+	interval, batch, err := personalPointExpiryWorkerOptions()
+	if err != nil {
+		return nil, err
+	}
+	worker := newPersonalPointExpiryWorker(pgStore.PersonalPointService(), interval, batch, logger)
+	worker.Start()
+	server.RegisterOnShutdown(worker.Stop)
+	return worker, nil
 }

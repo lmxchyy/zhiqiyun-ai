@@ -192,10 +192,41 @@ func (a adminAPI) createCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("available points cannot be negative"))
 		return
 	}
+	requestedAvailable := req.Available
+	if requestedAvailable != nil {
+		req.Available = nil
+	}
 	user, err := a.store.CreateAdminCustomer(req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if requestedAvailable != nil && *requestedAvailable > 0 {
+		account, accountErr := a.store.PointAccount(user.ID)
+		if accountErr != nil {
+			writeError(w, http.StatusInternalServerError, accountErr)
+			return
+		}
+		service, serviceErr := personalPointServiceForStore(a.store)
+		if serviceErr != nil {
+			writeError(w, http.StatusServiceUnavailable, serviceErr)
+			return
+		}
+		actorID, actorRole := actorFromRequest(r)
+		_, correctionErr := service.Correct(r.Context(), PersonalPointCorrectionCommand{
+			AccountID: account.ID, UserID: user.ID, Points: int64(*requestedAvailable), Reason: "legacy customer create available compatibility", IdempotencyKey: "legacy-create:" + user.ID + ":" + strconv.Itoa(*requestedAvailable),
+			Audit: PersonalPointAudit{ActorID: actorID, ActorRole: actorRole, Action: "personal_points.legacy_absolute_correction", Method: r.Method, Path: r.URL.Path, RequestID: requestIDFromPointMutation(r, "legacy-create:"+user.ID)},
+		})
+		if correctionErr != nil {
+			writeError(w, http.StatusInternalServerError, correctionErr)
+			return
+		}
+		user, err = a.adminCustomerByIDValue(user.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		setLegacyPointMutationHeaders(w, user.ID)
 	}
 	writeJSON(w, map[string]any{"item": user})
 }
@@ -231,12 +262,57 @@ func (a adminAPI) updateCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("available points cannot be negative"))
 		return
 	}
+	if req.Available != nil {
+		current, err := a.store.PointAccount(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		delta := int64(*req.Available) - int64(current.Available)
+		if delta != 0 {
+			service, serviceErr := personalPointServiceForStore(a.store)
+			if serviceErr != nil {
+				writeError(w, http.StatusServiceUnavailable, serviceErr)
+				return
+			}
+			actorID, actorRole := actorFromRequest(r)
+			_, grantErr := service.Correct(r.Context(), PersonalPointCorrectionCommand{
+				AccountID: current.ID, UserID: r.PathValue("id"), Points: delta, Reason: "legacy customer available compatibility", IdempotencyKey: "legacy-absolute:" + r.PathValue("id") + ":" + strconv.Itoa(*req.Available),
+				Audit: PersonalPointAudit{ActorID: actorID, ActorRole: actorRole, Action: "personal_points.legacy_absolute_correction", Method: r.Method, Path: r.URL.Path, RequestID: requestIDFromPointMutation(r, "legacy-absolute:"+r.PathValue("id")+":"+strconv.Itoa(*req.Available))},
+			})
+			if grantErr != nil {
+				writeError(w, http.StatusInternalServerError, grantErr)
+				return
+			}
+		}
+		req.Available = nil
+		setLegacyPointMutationHeaders(w, r.PathValue("id"))
+	}
 	user, err := a.store.UpdateAdminCustomer(r.PathValue("id"), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": user})
+}
+
+func setLegacyPointMutationHeaders(w http.ResponseWriter, userID string) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", "Wed, 31 Dec 2026 23:59:59 GMT")
+	w.Header().Set("Link", `</api/v1/admin/customers/`+userID+`/point-corrections>; rel="successor-version"`)
+}
+
+func (a adminAPI) adminCustomerByIDValue(userID string) (adminUser, error) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		return adminUser{}, err
+	}
+	for _, item := range data.Users {
+		if item.ID == userID {
+			return item, nil
+		}
+	}
+	return adminUser{}, ErrPointNotFound
 }
 
 func (a adminAPI) auditRejectedCustomerFields(r *http.Request, userID string, fields []string) {

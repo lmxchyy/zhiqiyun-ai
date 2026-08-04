@@ -621,6 +621,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/users/:id/identity-downgrade/requests/:requestId/reschedule", wrapF(identityDowngrades.reschedule))
 	adminGroup.POST("/customers", wrapF(admin.createCustomer))
 	adminGroup.PATCH("/customers/:id", wrapF(admin.updateCustomer))
+	adminGroup.POST("/customers/:id/point-gifts", wrapF(admin.customerPointGift))
+	adminGroup.POST("/customers/:id/point-corrections", wrapF(admin.customerPointCorrection))
 	adminGroup.GET("/customers/:id/point-lots", wrapF(admin.customerPointLots))
 	adminGroup.GET("/customers/:id/identities", wrapF(admin.customerIdentities))
 	adminGroup.GET("/customers/:id/account-merge-requests", wrapF(admin.customerAuthMergeRequests))
@@ -838,11 +840,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 			registerWaitableShutdownHook(server, schedulers.Stop)
 		}
 	}
-	if pgStore, ok := store.(*postgresStore); ok && personalPointExpiryWorkerEnabled() {
-		interval, batch := personalPointExpiryWorkerOptions()
-		worker := newPersonalPointExpiryWorker(pgStore.PersonalPointService(), interval, batch, slog.Default())
-		worker.Start()
-		server.RegisterOnShutdown(worker.Stop)
+	if _, err := configurePersonalPointExpiryWorker(server, store, slog.Default()); err != nil {
+		slog.Error("personal point expiry worker disabled by invalid configuration", "error", err)
 	}
 	return server
 }

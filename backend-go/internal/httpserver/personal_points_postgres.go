@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -315,6 +316,28 @@ func pgInsertWallet(ctx context.Context, tx *sql.Tx, account pgPointAccount, ent
 	return err
 }
 
+func pgInsertPersonalPointAudit(ctx context.Context, tx *sql.Tx, audit PersonalPointAudit, accountID, userID, idempotencyKey, reason string, signedPoints int64, source PointSource) error {
+	if strings.TrimSpace(audit.Action) == "" {
+		return nil
+	}
+	if tx == nil || strings.TrimSpace(audit.ActorID) == "" || strings.TrimSpace(audit.ActorRole) == "" || strings.TrimSpace(audit.RequestID) == "" || strings.TrimSpace(reason) == "" {
+		return ErrInvalidPointCommand
+	}
+	metadata := jsonProjection(map[string]any{"requestId": audit.RequestID, "reason": reason, "idempotencyKey": idempotencyKey, "signedPoints": signedPoints, "sourceType": source, "userId": userID})
+	result, err := tx.ExecContext(ctx, `INSERT INTO xz_audit_logs(id,actor_id,actor_role,action,resource,resource_id,method,path,status,metadata) VALUES($1,$2,$3,$4,'personal_point_account',$5,$6,$7,200,$8::jsonb) ON CONFLICT(id) DO NOTHING`, stablePointID("audit", accountID, audit.Action+":"+idempotencyKey), audit.ActorID, audit.ActorRole, audit.Action, accountID, audit.Method, audit.Path, metadata)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrIdempotencyConflict
+	}
+	return nil
+}
+
 func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPointGrantCommand) (result PersonalPointGrantResult, err error) {
 	tx, err := s.begin(ctx)
 	if err != nil {
@@ -338,7 +361,7 @@ func (s *PostgresPersonalPointStore) grantTx(ctx context.Context, tx *sql.Tx, cm
 	if err := normalizePointCommand(cmd); err != nil {
 		return result, err
 	}
-	fingerprint := pointCommandFingerprint(cmd)
+	fingerprint := personalPointGrantFingerprint(cmd)
 	grantedAtProvided := !cmd.GrantedAt.IsZero()
 	cmd.GrantedAt = pointNow(cmd.GrantedAt)
 	account, err := pgEnsureAccount(ctx, tx, cmd.AccountID, cmd.UserID)
@@ -402,7 +425,123 @@ func (s *PostgresPersonalPointStore) grantTx(ctx context.Context, tx *sql.Tx, cm
 	if err = pgInsertWallet(ctx, tx, account, entryType, cmd.Points, beforeAvailable, beforeFrozen, walletKey, cmd.ReferenceType, cmd.ReferenceID, cmd.GrantedAt, map[string]any{"fingerprint": fingerprint, "source_type": cmd.Source}); err != nil {
 		return result, err
 	}
+	if err = pgInsertPersonalPointAudit(ctx, tx, cmd.Audit, cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, strings.TrimSpace(cmd.Reason), cmd.Points, cmd.Source); err != nil {
+		return result, err
+	}
 	return PersonalPointGrantResult{Lot: lot}, nil
+}
+
+func (s *PostgresPersonalPointStore) correct(ctx context.Context, cmd PersonalPointCorrectionCommand) (result PersonalPointCorrectionResult, err error) {
+	if cmd.AccountID == "" || cmd.UserID == "" || cmd.Points == 0 || cmd.Points == math.MinInt64 || strings.TrimSpace(cmd.Reason) == "" || strings.TrimSpace(cmd.IdempotencyKey) == "" {
+		return result, ErrInvalidPointCommand
+	}
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	fingerprint := personalPointCorrectionFingerprint(cmd)
+	cmd.CorrectedAt = pointNow(cmd.CorrectedAt)
+	account, err := pgEnsureAccount(ctx, tx, cmd.AccountID, cmd.UserID)
+	if err != nil {
+		return result, err
+	}
+	walletKey := personalWalletKey(cmd.AccountID, "correction", cmd.IdempotencyKey)
+	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
+		return result, idemErr
+	} else if idem {
+		result = PersonalPointCorrectionResult{Balance: PersonalPointBalance{AccountID: account.ID, UserID: account.UserID, Available: account.Available, Frozen: account.Frozen, Total: account.Available + account.Frozen}, Points: cmd.Points, Idempotent: true}
+		if cmd.Points > 0 {
+			lot, lotErr := pgReadLot(ctx, tx, stablePointID("lot", cmd.AccountID, "correction:"+cmd.IdempotencyKey), cmd.AccountID, cmd.UserID, false)
+			if lotErr != nil {
+				return PersonalPointCorrectionResult{}, lotErr
+			}
+			result.Lot = &lot
+		}
+		return result, tx.Commit()
+	}
+	if err := pgExpireDueTx(ctx, tx, &account, cmd.AccountID, cmd.UserID, cmd.CorrectedAt); err != nil {
+		return result, err
+	}
+	beforeAvailable, beforeFrozen := account.Available, account.Frozen
+	amount := cmd.Points
+	if cmd.Points > 0 {
+		if account.Available > math.MaxInt64-cmd.Points {
+			return result, ErrInvalidPointCommand
+		}
+		lot := PersonalPointLot{ID: stablePointID("lot", cmd.AccountID, "correction:"+cmd.IdempotencyKey), AccountID: cmd.AccountID, UserID: cmd.UserID, SourceType: PointSourceAdminCorrection, ReferenceType: "ADMIN_CORRECTION", ReferenceID: cmd.IdempotencyKey, OriginalPoints: cmd.Points, AvailablePoints: cmd.Points, GrantedAt: cmd.CorrectedAt, IdempotencyKey: "correction:" + cmd.IdempotencyKey, Status: "ACTIVE"}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO xz_personal_point_lots(id,account_id,user_id,source_type,reference_type,reference_id,original_points,available_points,reserved_points,consumed_points,expired_points,reversed_points,granted_at,expires_at,policy_version_id,policy_snapshot,idempotency_key,status) VALUES($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,0,$8,NULL,NULL,'{}'::jsonb,$9,'ACTIVE')`, lot.ID, lot.AccountID, lot.UserID, lot.SourceType, lot.ReferenceType, lot.ReferenceID, lot.OriginalPoints, lot.GrantedAt, lot.IdempotencyKey); err != nil {
+			return result, err
+		}
+		account.Available += cmd.Points
+		account.TotalGranted += cmd.Points
+		if err = pgInsertMovement(ctx, tx, lot, "OPENING", cmd.Points, PersonalPointLot{}, "", "correction:opening:"+cmd.IdempotencyKey, cmd.CorrectedAt); err != nil {
+			return result, err
+		}
+		result.Lot = &lot
+	} else {
+		amount = -cmd.Points
+		if account.Available < amount {
+			return result, ErrInsufficientPoints
+		}
+		rows, queryErr := tx.QueryContext(ctx, `SELECT `+pgLotColumns+` FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2 AND available_points>0 ORDER BY expires_at ASC NULLS LAST,granted_at,id FOR UPDATE`, cmd.AccountID, cmd.UserID)
+		if queryErr != nil {
+			return result, queryErr
+		}
+		lots := []PersonalPointLot{}
+		for rows.Next() {
+			lot, scanErr := pgScanLot(rows)
+			if scanErr != nil {
+				_ = rows.Close()
+				return result, scanErr
+			}
+			lots = append(lots, lot)
+		}
+		if err := rows.Close(); err != nil {
+			return result, err
+		}
+		remaining := amount
+		for _, lot := range lots {
+			if remaining == 0 {
+				break
+			}
+			debit := lot.AvailablePoints
+			if debit > remaining {
+				debit = remaining
+			}
+			before := lot
+			lot.AvailablePoints -= debit
+			lot.ReversedPoints += debit
+			lot.Status = pgStatusLot(&lot)
+			if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=$2,reversed_points=$3,status=$4,updated_at=$5 WHERE id=$1 AND account_id=$6 AND user_id=$7`, lot.ID, lot.AvailablePoints, lot.ReversedPoints, lot.Status, cmd.CorrectedAt, lot.AccountID, lot.UserID); err != nil {
+				return result, err
+			}
+			if err = pgInsertMovement(ctx, tx, lot, "REVERSE", debit, before, "", "correction:reverse:"+cmd.IdempotencyKey+":"+lot.ID, cmd.CorrectedAt); err != nil {
+				return result, err
+			}
+			remaining -= debit
+		}
+		if remaining != 0 {
+			return result, ErrInsufficientPoints
+		}
+		account.Available -= amount
+		account.TotalReversed += amount
+	}
+	if err = pgUpdateAccount(ctx, tx, account); err != nil {
+		return result, err
+	}
+	if err = pgInsertWallet(ctx, tx, account, "ADJUSTMENT", amount, beforeAvailable, beforeFrozen, walletKey, "ADMIN_CORRECTION", cmd.IdempotencyKey, cmd.CorrectedAt, map[string]any{"fingerprint": fingerprint, "signed_points": cmd.Points, "reason": strings.TrimSpace(cmd.Reason), "actor_id": cmd.Audit.ActorID, "actor_role": cmd.Audit.ActorRole, "request_id": cmd.Audit.RequestID}); err != nil {
+		return result, err
+	}
+	if err = pgInsertPersonalPointAudit(ctx, tx, cmd.Audit, cmd.AccountID, cmd.UserID, cmd.IdempotencyKey, strings.TrimSpace(cmd.Reason), cmd.Points, PointSourceAdminCorrection); err != nil {
+		return result, err
+	}
+	result.Balance = PersonalPointBalance{AccountID: account.ID, UserID: account.UserID, Available: account.Available, Frozen: account.Frozen, Total: account.Available + account.Frozen}
+	result.Points = cmd.Points
+	if err = tx.Commit(); err != nil {
+		return PersonalPointCorrectionResult{}, err
+	}
+	return result, nil
 }
 
 func lotPolicy(lot PersonalPointLot) PointExpiryPolicy {

@@ -507,6 +507,46 @@
         }
       }
     },
+    "/api/v1/admin/points/expiry-policy": {
+      "get": {
+        "operationId": "getAdminPointExpiryPolicy",
+        "responses": { "200": { "description": "Current personal point expiry policy", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PointExpiryPolicyResponse" } } } }, "401": { "$ref": "#/components/responses/ErrorResponse" }, "403": { "$ref": "#/components/responses/ErrorResponse" } }
+      },
+      "put": {
+        "operationId": "updateAdminPointExpiryPolicy",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdatePointExpiryPolicyRequest" } } } },
+        "responses": { "200": { "description": "Published personal point expiry policy", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PointExpiryPolicyResponse" } } } }, "400": { "$ref": "#/components/responses/ErrorResponse" }, "409": { "$ref": "#/components/responses/ErrorResponse" } }
+      }
+    },
+    "/api/v1/admin/customers/{id}/point-lots": {
+      "get": {
+        "operationId": "listAdminCustomerPointLots",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "source", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 500 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0 } }
+        ],
+        "responses": { "200": { "description": "Customer point lots", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PersonalPointLotsResponse" } } } }, "401": { "$ref": "#/components/responses/ErrorResponse" }, "403": { "$ref": "#/components/responses/ErrorResponse" } }
+      }
+    },
+    "/api/v1/admin/customers/{id}/point-gifts": {
+      "post": {
+        "operationId": "grantAdminCustomerPointGift",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminPointMutationRequest" } } } },
+        "responses": { "200": { "description": "Server-derived ADMIN_GIFT lot", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminPointGiftResponse" } } } }, "400": { "$ref": "#/components/responses/ErrorResponse" }, "409": { "$ref": "#/components/responses/ErrorResponse" } }
+      }
+    },
+    "/api/v1/admin/customers/{id}/point-corrections": {
+      "post": {
+        "operationId": "correctAdminCustomerPointBalance",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminPointMutationRequest" } } } },
+        "responses": { "200": { "description": "Audited permanent point correction", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AdminPointCorrectionResponse" } } } }, "400": { "$ref": "#/components/responses/ErrorResponse" }, "409": { "$ref": "#/components/responses/ErrorResponse" } }
+      }
+    },
     "/api/v1/channel/me": {
       "get": {
         "operationId": "getChannelCenter",
@@ -1139,8 +1179,54 @@
           },
           "total": {
             "type": "integer"
+          },
+          "permanentAvailable": {
+            "type": "integer"
+          },
+          "expiringAvailable": {
+            "type": "integer"
+          },
+          "nextExpiryAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nextExpiryPoints": {
+            "type": "integer"
           }
         }
+      },
+      "PointExpiryPolicy": {
+        "type": "object",
+        "required": ["id", "version", "revision", "enabled", "duration_value", "duration_unit", "time_zone", "source_types", "effective_from", "status"],
+        "properties": {
+          "id": { "type": "string" }, "version": { "type": "integer" }, "revision": { "type": "integer" }, "enabled": { "type": "boolean" },
+          "duration_value": { "type": "integer", "minimum": 1 }, "duration_unit": { "type": "string", "enum": ["CALENDAR_MONTH"] }, "time_zone": { "type": "string" },
+          "source_types": { "type": "array", "items": { "type": "string" }, "readOnly": true }, "effective_from": { "type": "string", "format": "date-time" },
+          "effective_to": { "type": "string", "format": "date-time" }, "status": { "type": "string" }, "created_by": { "type": "string" }, "change_reason": { "type": "string" }
+        }
+      },
+      "PointExpiryPolicyResponse": { "type": "object", "required": ["item"], "properties": { "item": { "$ref": "#/components/schemas/PointExpiryPolicy" } } },
+      "UpdatePointExpiryPolicyRequest": {
+        "type": "object", "additionalProperties": false, "required": ["revision", "enabled", "durationValue", "changeReason"],
+        "properties": { "revision": { "type": "integer", "minimum": 1 }, "enabled": { "type": "boolean" }, "durationValue": { "type": "integer", "minimum": 1 }, "changeReason": { "type": "string", "minLength": 1 } }
+      },
+      "PersonalPointLot": {
+        "type": "object", "required": ["id", "account_id", "user_id", "source_type", "reference_type", "reference_id", "original_points", "available_points", "reserved_points", "consumed_points", "expired_points", "reversed_points", "granted_at", "idempotency_key", "status"],
+        "properties": {
+          "id": { "type": "string" }, "account_id": { "type": "string" }, "user_id": { "type": "string" }, "source_type": { "type": "string" }, "reference_type": { "type": "string" }, "reference_id": { "type": "string" },
+          "original_points": { "type": "integer" }, "available_points": { "type": "integer" }, "reserved_points": { "type": "integer" }, "consumed_points": { "type": "integer" }, "expired_points": { "type": "integer" }, "reversed_points": { "type": "integer" },
+          "granted_at": { "type": "string", "format": "date-time" }, "expires_at": { "type": "string", "format": "date-time" }, "policy_version_id": { "type": "string" }, "idempotency_key": { "type": "string" }, "status": { "type": "string" }
+        }
+      },
+      "PersonalPointLotsResponse": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/PersonalPointLot" } } } },
+      "AdminPointMutationRequest": {
+        "type": "object", "additionalProperties": false, "required": ["points", "reason", "idempotencyKey"],
+        "properties": { "points": { "type": "integer", "not": { "enum": [0] } }, "reason": { "type": "string", "minLength": 1 }, "idempotencyKey": { "type": "string", "minLength": 1 } }
+      },
+      "AdminPointGiftResponse": { "type": "object", "required": ["item", "idempotent"], "properties": { "item": { "$ref": "#/components/schemas/PersonalPointLot" }, "idempotent": { "type": "boolean" } } },
+      "AdminPointCorrectionResponse": {
+        "type": "object", "required": ["balance", "points", "idempotent"],
+        "properties": { "balance": { "type": "object", "required": ["account_id", "user_id", "available", "frozen", "total"], "properties": { "account_id": { "type": "string" }, "user_id": { "type": "string" }, "available": { "type": "integer" }, "frozen": { "type": "integer" }, "total": { "type": "integer" } } }, "lot": { "$ref": "#/components/schemas/PersonalPointLot" }, "points": { "type": "integer" }, "idempotent": { "type": "boolean" } }
       },
       "PointAccountResponse": {
         "type": "object",

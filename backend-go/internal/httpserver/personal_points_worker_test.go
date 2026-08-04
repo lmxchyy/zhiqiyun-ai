@@ -3,10 +3,46 @@ package httpserver
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestPersonalPointExpiryWorkerRuntimeConfigIsDefaultOffAndInvalidValuesFailClosed(t *testing.T) {
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_ENABLED", "")
+	if enabled, err := personalPointExpiryWorkerEnabled(); err != nil || enabled {
+		t.Fatalf("default config enabled=%v err=%v", enabled, err)
+	}
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_ENABLED", "true")
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_INTERVAL", "not-a-duration")
+	if _, _, err := personalPointExpiryWorkerOptions(); err == nil {
+		t.Fatal("invalid interval was accepted")
+	}
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_INTERVAL", "1m")
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_BATCH", "1001")
+	if _, _, err := personalPointExpiryWorkerOptions(); err == nil {
+		t.Fatal("out-of-range batch was accepted")
+	}
+}
+
+func TestConfigurePersonalPointExpiryWorkerUsesActualServerLifecycle(t *testing.T) {
+	server := &http.Server{}
+	store := &postgresStore{}
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_ENABLED", "")
+	worker, err := configurePersonalPointExpiryWorker(server, store, slog.Default())
+	if err != nil || worker != nil {
+		t.Fatalf("default worker=%v err=%v", worker, err)
+	}
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_ENABLED", "true")
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_INTERVAL", "1h")
+	t.Setenv("XIANZHI_PERSONAL_POINT_EXPIRY_WORKER_BATCH", "25")
+	worker, err = configurePersonalPointExpiryWorker(server, store, slog.Default())
+	if err != nil || worker == nil || worker.interval != time.Hour || worker.batch != 25 {
+		t.Fatalf("enabled worker=%+v err=%v", worker, err)
+	}
+	worker.Stop()
+}
 
 func TestPersonalPointExpiryWorkerRunOnceAndStopAreIdempotent(t *testing.T) {
 	service := NewPersonalPointService(NewJSONPersonalPointStore(filepath.Join(t.TempDir(), "points.json")))

@@ -1,10 +1,13 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -78,20 +81,50 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 			c.Next()
 			return
 		}
-		ok, err := s.roleHasPermission(c.Request.Context(), user.Role, permission)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if !ok {
-			abortAdminPermissionDenied(c)
-			return
+		for _, required := range adminPermissionsForRequest(c.Request, permission) {
+			ok, err := s.roleHasPermission(c.Request.Context(), user.Role, required)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if !ok {
+				abortAdminPermissionDenied(c)
+				return
+			}
 		}
 		c.Set("actorID", user.ID)
 		c.Set("actorRole", user.Role)
 		c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
 		c.Next()
 	}
+}
+
+func adminPermissionsForRequest(r *http.Request, primary string) []string {
+	permissions := []string{primary}
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	isCustomerCreate := r.Method == http.MethodPost && path == "/customers"
+	isCustomerPatch := r.Method == http.MethodPatch && strings.HasPrefix(path, "/customers/") && strings.Count(strings.Trim(path, "/"), "/") == 1
+	if (isCustomerCreate || isCustomerPatch) && requestJSONHasField(r, "available") && primary != "points:balance:correct" {
+		permissions = append(permissions, "points:balance:correct")
+	}
+	return permissions
+}
+
+func requestJSONHasField(r *http.Request, field string) bool {
+	if r == nil || r.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var submitted map[string]json.RawMessage
+	if json.Unmarshal(body, &submitted) != nil {
+		return false
+	}
+	_, exists := submitted[field]
+	return exists
 }
 
 func superAdminMiddleware(auth authAPI) gin.HandlerFunc {

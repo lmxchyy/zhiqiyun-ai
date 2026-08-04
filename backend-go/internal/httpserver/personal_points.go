@@ -223,7 +223,35 @@ type PersonalPointGrantCommand struct {
 	ReferenceType  string
 	ReferenceID    string
 	IdempotencyKey string
+	Reason         string
+	Audit          PersonalPointAudit
 	GrantedAt      time.Time
+}
+
+type PersonalPointAudit struct {
+	ActorID   string
+	ActorRole string
+	Action    string
+	Method    string
+	Path      string
+	RequestID string
+}
+
+type PersonalPointCorrectionCommand struct {
+	AccountID      string
+	UserID         string
+	Points         int64
+	Reason         string
+	IdempotencyKey string
+	Audit          PersonalPointAudit
+	CorrectedAt    time.Time
+}
+
+type PersonalPointCorrectionResult struct {
+	Balance    PersonalPointBalance `json:"balance"`
+	Lot        *PersonalPointLot    `json:"lot,omitempty"`
+	Points     int64                `json:"points"`
+	Idempotent bool                 `json:"idempotent"`
 }
 
 type PersonalPointRegistrationGrantCommand struct {
@@ -329,6 +357,7 @@ type PersonalPointWalletLedgerEntry struct {
 // interface here also gives future HTTP callers one audited entry point.
 type PersonalPointRepository interface {
 	grant(context.Context, PersonalPointGrantCommand) (PersonalPointGrantResult, error)
+	correct(context.Context, PersonalPointCorrectionCommand) (PersonalPointCorrectionResult, error)
 	grantRegistration(context.Context, PersonalPointRegistrationGrantCommand) (PersonalPointGrantResult, error)
 	getBalance(context.Context, string, string) (PersonalPointBalance, error)
 	reserve(context.Context, PersonalPointReserveCommand) (PersonalPointReserveResult, error)
@@ -451,9 +480,16 @@ func (s *PersonalPointService) ExpireDue(ctx context.Context, now time.Time, lim
 	return s.repo.expireDue(ctx, now, limit)
 }
 
-func (s *PersonalPointService) Correct(ctx context.Context, cmd PersonalPointGrantCommand) (PersonalPointGrantResult, error) {
-	cmd.Source = PointSourceCorrection
-	return s.Grant(ctx, cmd)
+func (s *PersonalPointService) Correct(ctx context.Context, cmd PersonalPointCorrectionCommand) (PersonalPointCorrectionResult, error) {
+	if err := s.ensure(); err != nil {
+		return PersonalPointCorrectionResult{}, err
+	}
+	if strings.TrimSpace(cmd.AccountID) == "" || strings.TrimSpace(cmd.UserID) == "" || cmd.Points == 0 || strings.TrimSpace(cmd.Reason) == "" || strings.TrimSpace(cmd.IdempotencyKey) == "" {
+		return PersonalPointCorrectionResult{}, ErrInvalidPointCommand
+	}
+	cmd.Reason = strings.TrimSpace(cmd.Reason)
+	cmd.IdempotencyKey = strings.TrimSpace(cmd.IdempotencyKey)
+	return s.repo.correct(ctx, cmd)
 }
 
 func normalizePointCommand(cmd PersonalPointGrantCommand) error {
@@ -506,6 +542,21 @@ func pointCommandFingerprint(v any) string {
 	raw, _ := json.Marshal(v)
 	hash := sha256.Sum256(raw)
 	return hex.EncodeToString(hash[:])
+}
+
+func personalPointGrantFingerprint(cmd PersonalPointGrantCommand) string {
+	return pointCommandFingerprint(struct {
+		AccountID, UserID, Source, ReferenceType, ReferenceID, IdempotencyKey, Reason string
+		Points                                                                        int64
+		GrantedAt                                                                     time.Time
+	}{cmd.AccountID, cmd.UserID, string(cmd.Source), cmd.ReferenceType, cmd.ReferenceID, cmd.IdempotencyKey, strings.TrimSpace(cmd.Reason), cmd.Points, cmd.GrantedAt})
+}
+
+func personalPointCorrectionFingerprint(cmd PersonalPointCorrectionCommand) string {
+	return pointCommandFingerprint(struct {
+		AccountID, UserID, Reason, IdempotencyKey string
+		Points                                    int64
+	}{cmd.AccountID, cmd.UserID, strings.TrimSpace(cmd.Reason), cmd.IdempotencyKey, cmd.Points})
 }
 
 func stablePointID(prefix, accountID, key string) string {
