@@ -600,6 +600,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/knowledge/:resource", wrapF(knowledgeAPI.saveAdminProfile))
 	adminGroup.PATCH("/knowledge/:resource/:id", wrapF(knowledgeAPI.saveAdminProfile))
 	adminGroup.GET("/customer-attributions", wrapF(admin.customerAttributions))
+	adminGroup.GET("/points/expiry-policy", wrapF(admin.pointExpiryPolicy))
+	adminGroup.PUT("/points/expiry-policy", wrapF(admin.pointExpiryPolicy))
 	adminGroup.GET("/customers", wrapF(admin.customers))
 	adminGroup.GET("/customers/:id/360", wrapF(admin.customer360))
 	adminGroup.GET("/customers/:id/identity-profile", wrapF(identityQueries.profile))
@@ -619,6 +621,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/users/:id/identity-downgrade/requests/:requestId/reschedule", wrapF(identityDowngrades.reschedule))
 	adminGroup.POST("/customers", wrapF(admin.createCustomer))
 	adminGroup.PATCH("/customers/:id", wrapF(admin.updateCustomer))
+	adminGroup.GET("/customers/:id/point-lots", wrapF(admin.customerPointLots))
 	adminGroup.GET("/customers/:id/identities", wrapF(admin.customerIdentities))
 	adminGroup.GET("/customers/:id/account-merge-requests", wrapF(admin.customerAuthMergeRequests))
 	adminGroup.POST("/customers/:id/identities/mobile/unlink", wrapF(admin.unlinkCustomerMobile))
@@ -834,6 +837,12 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		} else {
 			registerWaitableShutdownHook(server, schedulers.Stop)
 		}
+	}
+	if pgStore, ok := store.(*postgresStore); ok && personalPointExpiryWorkerEnabled() {
+		interval, batch := personalPointExpiryWorkerOptions()
+		worker := newPersonalPointExpiryWorker(pgStore.PersonalPointService(), interval, batch, slog.Default())
+		worker.Start()
+		server.RegisterOnShutdown(worker.Stop)
 	}
 	return server
 }

@@ -2296,6 +2296,25 @@ func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	pointService, err := personalPointServiceForStore(a.store)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	summary, err := pointService.Summary(r.Context(), account.ID, user.ID, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	accountView := map[string]any{
+		"id": account.ID, "userId": user.ID,
+		"available": summary.Available, "frozen": summary.Frozen, "total": summary.Total,
+		"permanentAvailable": summary.PermanentAvailable, "expiringAvailable": summary.ExpiringAvailable,
+		"nextExpiryPoints": summary.NextExpiryPoints,
+	}
+	if !summary.NextExpiryAt.IsZero() {
+		accountView["nextExpiryAt"] = summary.NextExpiryAt.UTC().Format(time.RFC3339Nano)
+	}
 	data, err := a.userAccountData(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -2303,7 +2322,7 @@ func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	orders := userMembershipOrders(data, user.ID)
 	writeJSON(w, map[string]any{
-		"account":      account,
+		"account":      accountView,
 		"orders":       orders,
 		"transactions": userPointTransactions(data.BillingEvents, user.ID),
 	})

@@ -448,6 +448,190 @@ func (s *JSONPersonalPointStore) SetPolicy(policy PointExpiryPolicy) error {
 	return s.saveLocked(state)
 }
 
+func currentPublishedPersonalPointPolicy(state *personalPointState, now time.Time) (PointExpiryPolicy, error) {
+	if state == nil {
+		return PointExpiryPolicy{}, ErrInvalidPointCommand
+	}
+	now = pointNow(now)
+	policies := append([]PointExpiryPolicy(nil), state.Policies...)
+	sort.SliceStable(policies, func(i, j int) bool { return policies[i].Version > policies[j].Version })
+	for _, policy := range policies {
+		if policy.Status != "PUBLISHED" || (!policy.EffectiveFrom.IsZero() && policy.EffectiveFrom.After(now)) || (!policy.EffectiveTo.IsZero() && !policy.EffectiveTo.After(now)) {
+			continue
+		}
+		if err := validatePointExpiryPolicy(policy); err != nil {
+			continue
+		}
+		return policy, nil
+	}
+	return PointExpiryPolicy{}, ErrPointNotFound
+}
+
+func (s *JSONPersonalPointStore) currentPolicy(ctx context.Context) (PointExpiryPolicy, error) {
+	state, err := s.readState(ctx)
+	if err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	return currentPublishedPersonalPointPolicy(&state, time.Now().UTC())
+}
+
+func (s *JSONPersonalPointStore) publishPolicy(ctx context.Context, cmd PersonalPointPolicyPublishCommand) (PointExpiryPolicy, error) {
+	var published PointExpiryPolicy
+	err := s.withState(ctx, func(state *personalPointState) error {
+		now := pointNow(cmd.PublishedAt)
+		current, err := currentPublishedPersonalPointPolicy(state, now)
+		if err != nil {
+			return err
+		}
+		if current.Revision != cmd.ExpectedRevision {
+			return ErrPointPolicyRevisionConflict
+		}
+		for i := range state.Policies {
+			if state.Policies[i].ID == current.ID {
+				state.Policies[i].Status = "ARCHIVED"
+				state.Policies[i].EffectiveTo = now
+				break
+			}
+		}
+		published = PointExpiryPolicy{
+			ID: "point_expiry_policy_v" + fmt.Sprint(current.Version+1), Version: current.Version + 1, Revision: current.Revision + 1,
+			Enabled: cmd.Enabled, DurationValue: cmd.DurationValue, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai",
+			SourceTypes:   []string{string(PointSourceRegistrationGift), string(PointSourceActivityGift), string(PointSourceAdminGift)},
+			EffectiveFrom: now, Status: "PUBLISHED", CreatedBy: strings.TrimSpace(cmd.ActorID), ChangeReason: strings.TrimSpace(cmd.ChangeReason),
+		}
+		if err := validatePointExpiryPolicy(published); err != nil {
+			return err
+		}
+		state.Policies = append(state.Policies, published)
+		return nil
+	})
+	return published, err
+}
+
+func (s *JSONPersonalPointStore) listLots(ctx context.Context, accountID, userID string, filter PersonalPointLotFilter) ([]PersonalPointLot, error) {
+	state, err := s.readState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	account, err := findPersonalAccount(&state, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil {
+		return []PersonalPointLot{}, nil
+	}
+	items := make([]PersonalPointLot, 0)
+	for _, lot := range state.Lots {
+		if lot.AccountID != accountID || lot.UserID != userID {
+			continue
+		}
+		if filter.Source != "" && lot.SourceType != filter.Source {
+			continue
+		}
+		if strings.TrimSpace(filter.Status) != "" && !strings.EqualFold(lot.Status, filter.Status) {
+			continue
+		}
+		items = append(items, lot)
+	}
+	sortLotsFEFO(items)
+	start := filter.Offset
+	if start > len(items) {
+		start = len(items)
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	end := start + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return append([]PersonalPointLot(nil), items[start:end]...), nil
+}
+
+func personalPointSummaryFromState(state *personalPointState, accountID, userID string) (PersonalPointBalanceSummary, error) {
+	account, err := findPersonalAccount(state, accountID, userID)
+	if err != nil {
+		return PersonalPointBalanceSummary{}, err
+	}
+	summary := PersonalPointBalanceSummary{PersonalPointBalance: PersonalPointBalance{AccountID: accountID, UserID: userID}}
+	if account == nil {
+		return summary, nil
+	}
+	summary.Available, summary.Frozen = account.AvailablePoints, account.FrozenPoints
+	summary.Total = summary.Available + summary.Frozen
+	for _, lot := range state.Lots {
+		if lot.AccountID != accountID || lot.UserID != userID || lot.AvailablePoints <= 0 {
+			continue
+		}
+		if lot.ExpiresAt.IsZero() {
+			summary.PermanentAvailable += lot.AvailablePoints
+			continue
+		}
+		summary.ExpiringAvailable += lot.AvailablePoints
+		if summary.NextExpiryAt.IsZero() || lot.ExpiresAt.Before(summary.NextExpiryAt) {
+			summary.NextExpiryAt = lot.ExpiresAt
+			summary.NextExpiryPoints = lot.AvailablePoints
+		} else if lot.ExpiresAt.Equal(summary.NextExpiryAt) {
+			summary.NextExpiryPoints += lot.AvailablePoints
+		}
+	}
+	return summary, nil
+}
+
+func (s *JSONPersonalPointStore) summary(ctx context.Context, accountID, userID string, now time.Time) (PersonalPointBalanceSummary, error) {
+	var summary PersonalPointBalanceSummary
+	err := s.withState(ctx, func(state *personalPointState) error {
+		if err := expirePersonalPointState(state, accountID, userID, now); err != nil {
+			return err
+		}
+		var err error
+		summary, err = personalPointSummaryFromState(state, accountID, userID)
+		return err
+	})
+	return summary, err
+}
+
+func (s *JSONPersonalPointStore) expireDue(ctx context.Context, now time.Time, limit int) (PersonalPointExpiryBatchResult, error) {
+	result := PersonalPointExpiryBatchResult{}
+	err := s.withState(ctx, func(state *personalPointState) error {
+		now = pointNow(now)
+		owners := map[string]string{}
+		for _, lot := range state.Lots {
+			if lot.AvailablePoints > 0 && !lot.ExpiresAt.IsZero() && !lot.ExpiresAt.After(now) {
+				owners[lot.AccountID] = lot.UserID
+			}
+		}
+		accountIDs := make([]string, 0, len(owners))
+		for accountID := range owners {
+			accountIDs = append(accountIDs, accountID)
+		}
+		sort.Strings(accountIDs)
+		if len(accountIDs) > limit {
+			accountIDs = accountIDs[:limit]
+		}
+		for _, accountID := range accountIDs {
+			account, err := findPersonalAccount(state, accountID, owners[accountID])
+			if err != nil {
+				return err
+			}
+			before := int64(0)
+			if account != nil {
+				before = account.AvailablePoints
+			}
+			if err := expirePersonalPointState(state, accountID, owners[accountID], now); err != nil {
+				return err
+			}
+			if account != nil && account.AvailablePoints < before {
+				result.AccountsProcessed++
+				result.PointsExpired += before - account.AvailablePoints
+			}
+		}
+		return nil
+	})
+	return result, err
+}
+
 func (s *JSONPersonalPointStore) withState(ctx context.Context, fn func(*personalPointState) error) error {
 	if err := s.operationalError(); err != nil {
 		return err

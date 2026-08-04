@@ -44,12 +44,13 @@ const (
 )
 
 var (
-	ErrInsufficientPoints  = errors.New("insufficient points")
-	ErrUnknownPointSource  = errors.New("unknown point source")
-	ErrIdempotencyConflict = errors.New("point idempotency conflict")
-	ErrPointOwnership      = errors.New("point account ownership mismatch")
-	ErrInvalidPointCommand = errors.New("invalid point command")
-	ErrPointNotFound       = errors.New("point record not found")
+	ErrInsufficientPoints          = errors.New("insufficient points")
+	ErrUnknownPointSource          = errors.New("unknown point source")
+	ErrIdempotencyConflict         = errors.New("point idempotency conflict")
+	ErrPointPolicyRevisionConflict = errors.New("point expiry policy revision conflict")
+	ErrPointOwnership              = errors.New("point account ownership mismatch")
+	ErrInvalidPointCommand         = errors.New("invalid point command")
+	ErrPointNotFound               = errors.New("point record not found")
 )
 
 type PointExpiryPolicy struct {
@@ -64,6 +65,37 @@ type PointExpiryPolicy struct {
 	EffectiveFrom time.Time `json:"effective_from"`
 	EffectiveTo   time.Time `json:"effective_to,omitempty"`
 	Status        string    `json:"status"`
+	CreatedBy     string    `json:"created_by,omitempty"`
+	ChangeReason  string    `json:"change_reason,omitempty"`
+}
+
+type PersonalPointPolicyPublishCommand struct {
+	ExpectedRevision int64
+	Enabled          bool
+	DurationValue    int
+	ChangeReason     string
+	ActorID          string
+	PublishedAt      time.Time
+}
+
+type PersonalPointLotFilter struct {
+	Source PointSource
+	Status string
+	Limit  int
+	Offset int
+}
+
+type PersonalPointBalanceSummary struct {
+	PersonalPointBalance
+	PermanentAvailable int64     `json:"permanent_available"`
+	ExpiringAvailable  int64     `json:"expiring_available"`
+	NextExpiryAt       time.Time `json:"next_expiry_at,omitempty"`
+	NextExpiryPoints   int64     `json:"next_expiry_points"`
+}
+
+type PersonalPointExpiryBatchResult struct {
+	AccountsProcessed int   `json:"accounts_processed"`
+	PointsExpired     int64 `json:"points_expired"`
 }
 
 type PointPolicySnapshot struct {
@@ -290,6 +322,11 @@ type PersonalPointRepository interface {
 	release(context.Context, PersonalPointReleaseCommand) (PersonalPointMutationResult, error)
 	expire(context.Context, PersonalPointExpiryCommand) error
 	movementCount(context.Context, string, string, string) int
+	currentPolicy(context.Context) (PointExpiryPolicy, error)
+	publishPolicy(context.Context, PersonalPointPolicyPublishCommand) (PointExpiryPolicy, error)
+	listLots(context.Context, string, string, PersonalPointLotFilter) ([]PersonalPointLot, error)
+	summary(context.Context, string, string, time.Time) (PersonalPointBalanceSummary, error)
+	expireDue(context.Context, time.Time, int) (PersonalPointExpiryBatchResult, error)
 }
 
 type PersonalPointService struct{ repo PersonalPointRepository }
@@ -351,6 +388,53 @@ func (s *PersonalPointService) MovementCount(ctx context.Context, accountID, mov
 		return 0
 	}
 	return s.repo.movementCount(ctx, accountID, "", movementType)
+}
+
+func (s *PersonalPointService) CurrentPolicy(ctx context.Context) (PointExpiryPolicy, error) {
+	if err := s.ensure(); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	return s.repo.currentPolicy(ctx)
+}
+
+func (s *PersonalPointService) PublishPolicy(ctx context.Context, cmd PersonalPointPolicyPublishCommand) (PointExpiryPolicy, error) {
+	if err := s.ensure(); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	if cmd.ExpectedRevision <= 0 || cmd.DurationValue <= 0 || strings.TrimSpace(cmd.ChangeReason) == "" || strings.TrimSpace(cmd.ActorID) == "" {
+		return PointExpiryPolicy{}, ErrInvalidPointCommand
+	}
+	return s.repo.publishPolicy(ctx, cmd)
+}
+
+func (s *PersonalPointService) ListLots(ctx context.Context, accountID, userID string, filter PersonalPointLotFilter) ([]PersonalPointLot, error) {
+	if err := s.ensure(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(accountID) == "" || strings.TrimSpace(userID) == "" || filter.Limit < 0 || filter.Offset < 0 {
+		return nil, ErrInvalidPointCommand
+	}
+	return s.repo.listLots(ctx, accountID, userID, filter)
+}
+
+func (s *PersonalPointService) Summary(ctx context.Context, accountID, userID string, now time.Time) (PersonalPointBalanceSummary, error) {
+	if err := s.ensure(); err != nil {
+		return PersonalPointBalanceSummary{}, err
+	}
+	if strings.TrimSpace(accountID) == "" || strings.TrimSpace(userID) == "" {
+		return PersonalPointBalanceSummary{}, ErrInvalidPointCommand
+	}
+	return s.repo.summary(ctx, accountID, userID, now)
+}
+
+func (s *PersonalPointService) ExpireDue(ctx context.Context, now time.Time, limit int) (PersonalPointExpiryBatchResult, error) {
+	if err := s.ensure(); err != nil {
+		return PersonalPointExpiryBatchResult{}, err
+	}
+	if limit <= 0 {
+		return PersonalPointExpiryBatchResult{}, ErrInvalidPointCommand
+	}
+	return s.repo.expireDue(ctx, now, limit)
 }
 
 func (s *PersonalPointService) Correct(ctx context.Context, cmd PersonalPointGrantCommand) (PersonalPointGrantResult, error) {

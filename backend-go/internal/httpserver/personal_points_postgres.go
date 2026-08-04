@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -20,6 +22,71 @@ func personalWalletKey(accountID, kind, callerKey string) string {
 
 func NewPostgresPersonalPointStore(db *sql.DB) *PostgresPersonalPointStore {
 	return &PostgresPersonalPointStore{db: db}
+}
+
+func (s *PostgresPersonalPointStore) currentPolicy(ctx context.Context) (PointExpiryPolicy, error) {
+	if s == nil || s.db == nil {
+		return PointExpiryPolicy{}, ErrInvalidPointCommand
+	}
+	var policy PointExpiryPolicy
+	var sourceTypes []byte
+	var effectiveTo sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT id,version,revision,enabled,duration_value,duration_unit,time_zone,source_types,effective_from,effective_to,status,created_by,change_reason FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now()) ORDER BY version DESC LIMIT 1`).Scan(
+		&policy.ID, &policy.Version, &policy.Revision, &policy.Enabled, &policy.DurationValue, &policy.DurationUnit, &policy.TimeZone, &sourceTypes, &policy.EffectiveFrom, &effectiveTo, &policy.Status, &policy.CreatedBy, &policy.ChangeReason,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PointExpiryPolicy{}, ErrPointNotFound
+	}
+	if err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	if effectiveTo.Valid {
+		policy.EffectiveTo = effectiveTo.Time.UTC()
+	}
+	if err := json.Unmarshal(sourceTypes, &policy.SourceTypes); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	return policy, validatePointExpiryPolicy(policy)
+}
+
+func (s *PostgresPersonalPointStore) publishPolicy(ctx context.Context, cmd PersonalPointPolicyPublishCommand) (PointExpiryPolicy, error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var current PointExpiryPolicy
+	err = tx.QueryRowContext(ctx, `SELECT id,version,revision FROM xz_point_expiry_policy_versions WHERE status='PUBLISHED' AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now()) ORDER BY version DESC LIMIT 1 FOR UPDATE`).Scan(&current.ID, &current.Version, &current.Revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PointExpiryPolicy{}, ErrPointNotFound
+	}
+	if err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	if current.Revision != cmd.ExpectedRevision {
+		return PointExpiryPolicy{}, ErrPointPolicyRevisionConflict
+	}
+	now := pointNow(cmd.PublishedAt)
+	published := PointExpiryPolicy{
+		ID: fmt.Sprintf("point_expiry_policy_v%d", current.Version+1), Version: current.Version + 1, Revision: current.Revision + 1,
+		Enabled: cmd.Enabled, DurationValue: cmd.DurationValue, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai",
+		SourceTypes:   []string{string(PointSourceRegistrationGift), string(PointSourceActivityGift), string(PointSourceAdminGift)},
+		EffectiveFrom: now, Status: "PUBLISHED", CreatedBy: strings.TrimSpace(cmd.ActorID), ChangeReason: strings.TrimSpace(cmd.ChangeReason),
+	}
+	if err := validatePointExpiryPolicy(published); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	sourceTypes, _ := json.Marshal(published.SourceTypes)
+	if _, err := tx.ExecContext(ctx, `UPDATE xz_point_expiry_policy_versions SET status='ARCHIVED',effective_to=$2,updated_at=$2 WHERE id=$1`, current.ID, now); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_point_expiry_policy_versions(id,version,revision,enabled,duration_value,duration_unit,time_zone,source_types,effective_from,status,created_by,change_reason,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,'PUBLISHED',$10,$11,$9,$9)`, published.ID, published.Version, published.Revision, published.Enabled, published.DurationValue, published.DurationUnit, published.TimeZone, sourceTypes, now, published.CreatedBy, published.ChangeReason); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PointExpiryPolicy{}, err
+	}
+	return published, nil
 }
 
 func (s *PostgresPersonalPointStore) begin(ctx context.Context) (*sql.Tx, error) {
@@ -771,7 +838,7 @@ func (s *PostgresPersonalPointStore) release(ctx context.Context, cmd PersonalPo
 			lot.Status = pgStatusLot(&lot)
 			expiredLots = append(expiredLots, expiredLot{lot: lot, amount: expireAmount})
 		}
-			if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=$2,reserved_points=$3,expired_points=$4,status=$5,updated_at=$6 WHERE id=$1`, lot.ID, lot.AvailablePoints, lot.ReservedPoints, lot.ExpiredPoints, lot.Status, cmd.ReleasedAt); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=$2,reserved_points=$3,expired_points=$4,status=$5,updated_at=$6 WHERE id=$1`, lot.ID, lot.AvailablePoints, lot.ReservedPoints, lot.ExpiredPoints, lot.Status, cmd.ReleasedAt); err != nil {
 			return result, err
 		}
 		a.ReservedPoints -= amount
@@ -923,4 +990,116 @@ func (s *PostgresPersonalPointStore) movementCount(ctx context.Context, accountI
 		return 0
 	}
 	return count
+}
+
+func (s *PostgresPersonalPointStore) listLots(ctx context.Context, accountID, userID string, filter PersonalPointLotFilter) ([]PersonalPointLot, error) {
+	if s == nil || s.db == nil {
+		return nil, ErrInvalidPointCommand
+	}
+	var owner string
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(user_id,'') FROM xz_point_accounts WHERE id=$1`, accountID).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return []PersonalPointLot{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if owner != userID {
+		return nil, ErrPointOwnership
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+pgLotColumns+` FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2 AND ($3='' OR source_type=$3) AND ($4='' OR status=$4) ORDER BY expires_at ASC NULLS LAST,granted_at ASC,id LIMIT $5 OFFSET $6`, accountID, userID, string(filter.Source), strings.ToUpper(strings.TrimSpace(filter.Status)), limit, filter.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PersonalPointLot, 0)
+	for rows.Next() {
+		lot, err := pgScanLot(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, lot)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresPersonalPointStore) summary(ctx context.Context, accountID, userID string, now time.Time) (PersonalPointBalanceSummary, error) {
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return PersonalPointBalanceSummary{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	account, found, err := pgLoadAccount(ctx, tx, accountID, userID, true)
+	if err != nil {
+		return PersonalPointBalanceSummary{}, err
+	}
+	summary := PersonalPointBalanceSummary{PersonalPointBalance: PersonalPointBalance{AccountID: accountID, UserID: userID}}
+	if !found {
+		return summary, tx.Commit()
+	}
+	if err := pgExpireDueTx(ctx, tx, &account, accountID, userID, now); err != nil {
+		return PersonalPointBalanceSummary{}, err
+	}
+	summary.Available, summary.Frozen = account.Available, account.Frozen
+	summary.Total = summary.Available + summary.Frozen
+	var nextExpiry sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(sum(available_points) FILTER (WHERE expires_at IS NULL),0),COALESCE(sum(available_points) FILTER (WHERE expires_at IS NOT NULL),0),min(expires_at) FILTER (WHERE available_points>0) FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2 AND available_points>0`, accountID, userID).Scan(&summary.PermanentAvailable, &summary.ExpiringAvailable, &nextExpiry); err != nil {
+		return PersonalPointBalanceSummary{}, err
+	}
+	if nextExpiry.Valid {
+		summary.NextExpiryAt = nextExpiry.Time.UTC()
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(sum(available_points),0) FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2 AND available_points>0 AND expires_at=$3`, accountID, userID, nextExpiry.Time).Scan(&summary.NextExpiryPoints); err != nil {
+			return PersonalPointBalanceSummary{}, err
+		}
+	}
+	return summary, tx.Commit()
+}
+
+func (s *PostgresPersonalPointStore) expireDue(ctx context.Context, now time.Time, limit int) (PersonalPointExpiryBatchResult, error) {
+	result := PersonalPointExpiryBatchResult{}
+	if s == nil || s.db == nil {
+		return result, ErrInvalidPointCommand
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account_id,user_id FROM xz_personal_point_lots WHERE expires_at IS NOT NULL AND expires_at <= $1 AND available_points>0 AND status='ACTIVE' ORDER BY account_id LIMIT $2`, pointNow(now), limit)
+	if err != nil {
+		return result, err
+	}
+	type owner struct{ accountID, userID string }
+	owners := make([]owner, 0, limit)
+	for rows.Next() {
+		var item owner
+		if err := rows.Scan(&item.accountID, &item.userID); err != nil {
+			_ = rows.Close()
+			return result, err
+		}
+		owners = append(owners, item)
+	}
+	if err := rows.Close(); err != nil {
+		return result, err
+	}
+	for _, item := range owners {
+		var before int64
+		if err := s.db.QueryRowContext(ctx, `SELECT available FROM xz_point_accounts WHERE id=$1 AND user_id=$2`, item.accountID, item.userID).Scan(&before); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return result, err
+		}
+		if err := s.expire(ctx, PersonalPointExpiryCommand{AccountID: item.accountID, UserID: item.userID, Now: now}); err != nil {
+			return result, err
+		}
+		var after int64
+		if err := s.db.QueryRowContext(ctx, `SELECT available FROM xz_point_accounts WHERE id=$1 AND user_id=$2`, item.accountID, item.userID).Scan(&after); err != nil {
+			return result, err
+		}
+		if after < before {
+			result.AccountsProcessed++
+			result.PointsExpired += before - after
+		}
+	}
+	return result, nil
 }

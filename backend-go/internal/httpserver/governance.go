@@ -29,6 +29,11 @@ var pricingPermissionCodes = []string{
 	"pricing:wechat-good:manage",
 	"pricing:test-whitelist:manage",
 	"pricing:audit:view",
+	"points:gift-policy:view",
+	"points:gift-policy:manage",
+	"points:gift:grant",
+	"points:balance:correct",
+	"points:lot:view",
 }
 
 func (s *postgresStore) auditMiddleware() gin.HandlerFunc {
@@ -140,6 +145,21 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if path == "/points/expiry-policy" {
+		if r.Method == http.MethodGet {
+			return "points:gift-policy:view"
+		}
+		return "points:gift-policy:manage"
+	}
+	if strings.HasPrefix(path, "/customers/") && strings.HasSuffix(path, "/point-gifts") {
+		return "points:gift:grant"
+	}
+	if strings.HasPrefix(path, "/customers/") && strings.HasSuffix(path, "/point-corrections") {
+		return "points:balance:correct"
+	}
+	if strings.HasPrefix(path, "/customers/") && strings.HasSuffix(path, "/point-lots") {
+		return "points:lot:view"
+	}
 	if path == "/pricing-health" && r.Method == http.MethodGet {
 		return "pricing:plan:view"
 	}
@@ -381,7 +401,8 @@ func (s *postgresStore) roleHasPermission(ctx context.Context, role string, perm
 	if role == "SUPER_ADMIN" {
 		return true, nil
 	}
-	allowLegacyAdminFull := !strings.HasPrefix(strings.TrimSpace(permission), "pricing:")
+	trimmedPermission := strings.TrimSpace(permission)
+	allowLegacyAdminFull := !strings.HasPrefix(trimmedPermission, "pricing:") && !strings.HasPrefix(trimmedPermission, "points:")
 	var ok bool
 	err := s.db.QueryRowContext(ctx, `
 		select exists (
