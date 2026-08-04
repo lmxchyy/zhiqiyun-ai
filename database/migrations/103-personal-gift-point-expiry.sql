@@ -15,6 +15,12 @@ BEGIN
 END;
 $$;
 
+-- Composite ownership references are intentionally redundant with the
+-- account primary key: they let child rows prove account/user identity in a
+-- single database constraint without adding a global user uniqueness rule.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_xz_point_accounts_id_user
+  ON xz_point_accounts(id, user_id);
+
 CREATE TABLE IF NOT EXISTS xz_point_expiry_policy_versions (
   id TEXT PRIMARY KEY,
   version BIGINT NOT NULL UNIQUE,
@@ -47,7 +53,7 @@ CREATE INDEX IF NOT EXISTS idx_xz_point_expiry_policy_versions_active
 
 CREATE TABLE IF NOT EXISTS xz_personal_point_lots (
   id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL REFERENCES xz_point_accounts(id),
+  account_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   source_type TEXT NOT NULL
     CHECK (source_type IN (
@@ -78,17 +84,45 @@ CREATE TABLE IF NOT EXISTS xz_personal_point_lots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (account_id, idempotency_key),
+  CONSTRAINT fk_xz_personal_point_lots_account_user
+    FOREIGN KEY (account_id, user_id) REFERENCES xz_point_accounts(id, user_id),
   CHECK (
     original_points = available_points + reserved_points + consumed_points
       + expired_points + reversed_points
   ),
   CHECK (available_points + reserved_points + consumed_points + expired_points + reversed_points >= 0),
+  CONSTRAINT ck_xz_personal_point_lots_idempotency_nonblank
+    CHECK (length(btrim(idempotency_key)) > 0),
   CHECK (expires_at IS NULL OR expires_at > granted_at),
-  CHECK (
-    expires_at IS NULL
+  CONSTRAINT ck_xz_personal_point_lots_non_gift_expiry CHECK (
+    source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT')
+    OR (expires_at IS NULL AND policy_version_id IS NULL)
+  ),
+  CONSTRAINT ck_xz_personal_point_lots_non_gift_policy CHECK (
+    source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT')
+    OR policy_version_id IS NULL
+  ),
+  CONSTRAINT ck_xz_personal_point_lots_policy_snapshot_object
+    CHECK (jsonb_typeof(policy_snapshot) = 'object'),
+  CONSTRAINT ck_xz_personal_point_lots_legacy_status CHECK (
+    (source_type = 'LEGACY' AND status = 'LEGACY' AND expires_at IS NULL AND policy_version_id IS NULL)
+    OR (source_type <> 'LEGACY' AND status <> 'LEGACY')
+  ),
+  CONSTRAINT ck_xz_personal_point_lots_status_balance CHECK (
+    status = 'LEGACY'
+    OR (status = 'ACTIVE' AND (available_points > 0 OR reserved_points > 0))
     OR (
-      source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT')
-      AND policy_version_id IS NOT NULL
+      status = 'EXHAUSTED'
+      AND available_points = 0
+      AND reserved_points = 0
+      AND consumed_points + expired_points + reversed_points = original_points
+    )
+    OR (status = 'EXPIRED' AND available_points = 0 AND expired_points > 0)
+    OR (
+      status = 'REVERSED'
+      AND available_points = 0
+      AND reserved_points = 0
+      AND reversed_points > 0
     )
   )
 );
@@ -108,7 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_xz_personal_point_lots_idempotency
 
 CREATE TABLE IF NOT EXISTS xz_personal_point_reservations (
   id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL REFERENCES xz_point_accounts(id),
+  account_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   business_type TEXT NOT NULL,
   business_id TEXT NOT NULL,
@@ -125,8 +159,20 @@ CREATE TABLE IF NOT EXISTS xz_personal_point_reservations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (account_id, idempotency_key),
   UNIQUE (account_id, business_type, business_id),
-  CHECK (
+  CONSTRAINT fk_xz_personal_point_reservations_account_user
+    FOREIGN KEY (account_id, user_id) REFERENCES xz_point_accounts(id, user_id),
+  CONSTRAINT ck_xz_personal_point_reservations_idempotency_nonblank
+    CHECK (length(btrim(idempotency_key)) > 0),
+  CONSTRAINT ck_xz_personal_point_reservations_conservation CHECK (
     requested_points = reserved_points + captured_points + released_points + expired_points
+  ),
+  CONSTRAINT ck_xz_personal_point_reservations_status_balance CHECK (
+    (status = 'RESERVED' AND reserved_points > 0)
+    OR (status = 'PARTIAL' AND (reserved_points > 0 OR captured_points > 0))
+    OR (status = 'CAPTURED' AND captured_points > 0)
+    OR (status = 'RELEASED' AND released_points > 0)
+    OR (status = 'EXPIRED' AND expired_points > 0)
+    OR (status = 'CANCELLED' AND released_points + expired_points > 0)
   )
 );
 
@@ -137,10 +183,17 @@ CREATE INDEX IF NOT EXISTS idx_xz_personal_point_reservations_business
 CREATE INDEX IF NOT EXISTS idx_xz_personal_point_reservations_idempotency
   ON xz_personal_point_reservations(account_id, idempotency_key);
 
+CREATE UNIQUE INDEX IF NOT EXISTS ux_xz_personal_point_lots_id_account_user
+  ON xz_personal_point_lots(id, account_id, user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_xz_personal_point_reservations_id_account_user
+  ON xz_personal_point_reservations(id, account_id, user_id);
+
 CREATE TABLE IF NOT EXISTS xz_personal_point_reservation_allocations (
   id TEXT PRIMARY KEY,
-  reservation_id TEXT NOT NULL REFERENCES xz_personal_point_reservations(id),
-  lot_id TEXT NOT NULL REFERENCES xz_personal_point_lots(id),
+  reservation_id TEXT NOT NULL,
+  lot_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
   allocated_points BIGINT NOT NULL CHECK (allocated_points > 0),
   reserved_points BIGINT NOT NULL DEFAULT 0 CHECK (reserved_points >= 0),
   captured_points BIGINT NOT NULL DEFAULT 0 CHECK (captured_points >= 0),
@@ -152,8 +205,21 @@ CREATE TABLE IF NOT EXISTS xz_personal_point_reservation_allocations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (reservation_id, lot_id),
-  CHECK (
+  CONSTRAINT fk_xz_personal_point_reservation_allocations_reservation_owner
+    FOREIGN KEY (reservation_id, account_id, user_id)
+    REFERENCES xz_personal_point_reservations(id, account_id, user_id),
+  CONSTRAINT fk_xz_personal_point_reservation_allocations_lot_owner
+    FOREIGN KEY (lot_id, account_id, user_id)
+    REFERENCES xz_personal_point_lots(id, account_id, user_id),
+  CONSTRAINT ck_xz_personal_point_reservation_allocations_conservation CHECK (
     allocated_points = reserved_points + captured_points + released_points + expired_points
+  ),
+  CONSTRAINT ck_xz_personal_point_reservation_allocations_status_balance CHECK (
+    (status = 'RESERVED' AND reserved_points > 0)
+    OR (status = 'PARTIAL' AND (reserved_points > 0 OR captured_points > 0))
+    OR (status = 'CAPTURED' AND captured_points > 0)
+    OR (status = 'RELEASED' AND released_points > 0)
+    OR (status = 'EXPIRED' AND expired_points > 0)
   )
 );
 
@@ -164,8 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_xz_personal_point_reservation_allocations_lot
 
 CREATE TABLE IF NOT EXISTS xz_personal_point_lot_movements (
   id TEXT PRIMARY KEY,
-  lot_id TEXT NOT NULL REFERENCES xz_personal_point_lots(id),
-  account_id TEXT NOT NULL REFERENCES xz_point_accounts(id),
+  lot_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
   movement_type TEXT NOT NULL
     CHECK (movement_type IN (
@@ -190,6 +256,14 @@ CREATE TABLE IF NOT EXISTS xz_personal_point_lot_movements (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (lot_id, idempotency_key),
+  CONSTRAINT fk_xz_personal_point_lot_movements_lot_owner
+    FOREIGN KEY (lot_id, account_id, user_id)
+    REFERENCES xz_personal_point_lots(id, account_id, user_id),
+  CONSTRAINT fk_xz_personal_point_lot_movements_reservation_owner
+    FOREIGN KEY (reservation_id, account_id, user_id)
+    REFERENCES xz_personal_point_reservations(id, account_id, user_id),
+  CONSTRAINT ck_xz_personal_point_lot_movements_idempotency_nonblank
+    CHECK (length(btrim(idempotency_key)) > 0),
   CHECK (
     CASE movement_type
       WHEN 'OPENING' THEN
@@ -259,6 +333,252 @@ CREATE INDEX IF NOT EXISTS idx_xz_personal_point_lot_movements_account_time
 CREATE INDEX IF NOT EXISTS idx_xz_personal_point_lot_movements_reference
   ON xz_personal_point_lot_movements(account_id, reference_type, reference_id, created_at DESC);
 
+-- The first version of 103 was already released to some isolated databases.
+-- Upgrade those tables in place before adding the ownership checks; any
+-- historic mismatch aborts this transaction instead of being silently fixed.
+UPDATE xz_personal_point_lots
+SET status = 'LEGACY'
+WHERE source_type = 'LEGACY' AND status <> 'LEGACY';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'fk_xz_personal_point_lots_account_user'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT fk_xz_personal_point_lots_account_user
+      FOREIGN KEY (account_id, user_id) REFERENCES xz_point_accounts(id, user_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_reservations'::regclass
+      AND conname = 'fk_xz_personal_point_reservations_account_user'
+  ) THEN
+    ALTER TABLE xz_personal_point_reservations
+      ADD CONSTRAINT fk_xz_personal_point_reservations_account_user
+      FOREIGN KEY (account_id, user_id) REFERENCES xz_point_accounts(id, user_id);
+  END IF;
+END;
+$$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'ck_xz_personal_point_lots_idempotency_nonblank'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT ck_xz_personal_point_lots_idempotency_nonblank
+      CHECK (length(btrim(idempotency_key)) > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'ck_xz_personal_point_lots_non_gift_expiry'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT ck_xz_personal_point_lots_non_gift_expiry
+      CHECK (
+        source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT')
+        OR (expires_at IS NULL AND policy_version_id IS NULL)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'ck_xz_personal_point_lots_non_gift_policy'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT ck_xz_personal_point_lots_non_gift_policy
+      CHECK (
+        source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT')
+        OR policy_version_id IS NULL
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'ck_xz_personal_point_lots_policy_snapshot_object'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT ck_xz_personal_point_lots_policy_snapshot_object
+      CHECK (jsonb_typeof(policy_snapshot) = 'object');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'ck_xz_personal_point_lots_legacy_status'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT ck_xz_personal_point_lots_legacy_status
+      CHECK (
+        (source_type = 'LEGACY' AND status = 'LEGACY' AND expires_at IS NULL AND policy_version_id IS NULL)
+        OR (source_type <> 'LEGACY' AND status <> 'LEGACY')
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lots'::regclass
+      AND conname = 'ck_xz_personal_point_lots_status_balance'
+  ) THEN
+    ALTER TABLE xz_personal_point_lots
+      ADD CONSTRAINT ck_xz_personal_point_lots_status_balance
+      CHECK (
+        status = 'LEGACY'
+        OR (status = 'ACTIVE' AND (available_points > 0 OR reserved_points > 0))
+        OR (
+          status = 'EXHAUSTED'
+          AND available_points = 0
+          AND reserved_points = 0
+          AND consumed_points + expired_points + reversed_points = original_points
+        )
+        OR (status = 'EXPIRED' AND available_points = 0 AND expired_points > 0)
+        OR (
+          status = 'REVERSED'
+          AND available_points = 0
+          AND reserved_points = 0
+          AND reversed_points > 0
+        )
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_reservations'::regclass
+      AND conname = 'ck_xz_personal_point_reservations_idempotency_nonblank'
+  ) THEN
+    ALTER TABLE xz_personal_point_reservations
+      ADD CONSTRAINT ck_xz_personal_point_reservations_idempotency_nonblank
+      CHECK (length(btrim(idempotency_key)) > 0);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_reservations'::regclass
+      AND conname = 'ck_xz_personal_point_reservations_status_balance'
+  ) THEN
+    ALTER TABLE xz_personal_point_reservations
+      ADD CONSTRAINT ck_xz_personal_point_reservations_status_balance
+      CHECK (
+        (status = 'RESERVED' AND reserved_points > 0)
+        OR (status = 'PARTIAL' AND (reserved_points > 0 OR captured_points > 0))
+        OR (status = 'CAPTURED' AND captured_points > 0)
+        OR (status = 'RELEASED' AND released_points > 0)
+        OR (status = 'EXPIRED' AND expired_points > 0)
+        OR (status = 'CANCELLED' AND released_points + expired_points > 0)
+      );
+  END IF;
+END;
+$$;
+
+ALTER TABLE xz_personal_point_reservation_allocations
+  ADD COLUMN IF NOT EXISTS account_id TEXT;
+ALTER TABLE xz_personal_point_reservation_allocations
+  ADD COLUMN IF NOT EXISTS user_id TEXT;
+UPDATE xz_personal_point_reservation_allocations allocation
+SET account_id = COALESCE(allocation.account_id, reservation.account_id),
+    user_id = COALESCE(allocation.user_id, reservation.user_id)
+FROM xz_personal_point_reservations reservation
+WHERE reservation.id = allocation.reservation_id;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM xz_personal_point_reservation_allocations allocation
+    LEFT JOIN xz_personal_point_reservations reservation
+      ON reservation.id = allocation.reservation_id
+    LEFT JOIN xz_personal_point_lots lot
+      ON lot.id = allocation.lot_id
+    WHERE allocation.account_id IS NULL
+       OR allocation.user_id IS NULL
+       OR reservation.id IS NULL
+       OR lot.id IS NULL
+       OR allocation.account_id IS DISTINCT FROM reservation.account_id
+       OR allocation.user_id IS DISTINCT FROM reservation.user_id
+       OR allocation.account_id IS DISTINCT FROM lot.account_id
+       OR allocation.user_id IS DISTINCT FROM lot.user_id
+  ) THEN
+    RAISE EXCEPTION 'migration 103 reservation allocation ownership mismatch';
+  END IF;
+END;
+$$;
+
+ALTER TABLE xz_personal_point_reservation_allocations
+  ALTER COLUMN account_id SET NOT NULL;
+ALTER TABLE xz_personal_point_reservation_allocations
+  ALTER COLUMN user_id SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_reservation_allocations'::regclass
+      AND conname = 'fk_xz_personal_point_reservation_allocations_reservation_owner'
+  ) THEN
+    ALTER TABLE xz_personal_point_reservation_allocations
+      ADD CONSTRAINT fk_xz_personal_point_reservation_allocations_reservation_owner
+      FOREIGN KEY (reservation_id, account_id, user_id)
+      REFERENCES xz_personal_point_reservations(id, account_id, user_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_reservation_allocations'::regclass
+      AND conname = 'fk_xz_personal_point_reservation_allocations_lot_owner'
+  ) THEN
+    ALTER TABLE xz_personal_point_reservation_allocations
+      ADD CONSTRAINT fk_xz_personal_point_reservation_allocations_lot_owner
+      FOREIGN KEY (lot_id, account_id, user_id)
+      REFERENCES xz_personal_point_lots(id, account_id, user_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_reservation_allocations'::regclass
+      AND conname = 'ck_xz_personal_point_reservation_allocations_status_balance'
+  ) THEN
+    ALTER TABLE xz_personal_point_reservation_allocations
+      ADD CONSTRAINT ck_xz_personal_point_reservation_allocations_status_balance
+      CHECK (
+        (status = 'RESERVED' AND reserved_points > 0)
+        OR (status = 'PARTIAL' AND (reserved_points > 0 OR captured_points > 0))
+        OR (status = 'CAPTURED' AND captured_points > 0)
+        OR (status = 'RELEASED' AND released_points > 0)
+        OR (status = 'EXPIRED' AND expired_points > 0)
+      );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lot_movements'::regclass
+      AND conname = 'fk_xz_personal_point_lot_movements_lot_owner'
+  ) THEN
+    ALTER TABLE xz_personal_point_lot_movements
+      ADD CONSTRAINT fk_xz_personal_point_lot_movements_lot_owner
+      FOREIGN KEY (lot_id, account_id, user_id)
+      REFERENCES xz_personal_point_lots(id, account_id, user_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lot_movements'::regclass
+      AND conname = 'fk_xz_personal_point_lot_movements_reservation_owner'
+  ) THEN
+    ALTER TABLE xz_personal_point_lot_movements
+      ADD CONSTRAINT fk_xz_personal_point_lot_movements_reservation_owner
+      FOREIGN KEY (reservation_id, account_id, user_id)
+      REFERENCES xz_personal_point_reservations(id, account_id, user_id);
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'xz_personal_point_lot_movements'::regclass
+      AND conname = 'ck_xz_personal_point_lot_movements_idempotency_nonblank'
+  ) THEN
+    ALTER TABLE xz_personal_point_lot_movements
+      ADD CONSTRAINT ck_xz_personal_point_lot_movements_idempotency_nonblank
+      CHECK (length(btrim(idempotency_key)) > 0);
+  END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION xz_reject_personal_point_lot_movement_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -271,6 +591,80 @@ DROP TRIGGER IF EXISTS trg_xz_personal_point_lot_movements_immutable
 CREATE TRIGGER trg_xz_personal_point_lot_movements_immutable
 BEFORE UPDATE OR DELETE ON xz_personal_point_lot_movements
 FOR EACH ROW EXECUTE FUNCTION xz_reject_personal_point_lot_movement_mutation();
+
+CREATE OR REPLACE FUNCTION xz_reject_published_personal_point_policy_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP IN ('UPDATE', 'DELETE') AND OLD.status = 'PUBLISHED' THEN
+    RAISE EXCEPTION 'published point expiry policy versions are immutable';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_xz_point_expiry_policy_versions_immutable
+  ON xz_point_expiry_policy_versions;
+CREATE TRIGGER trg_xz_point_expiry_policy_versions_immutable
+BEFORE UPDATE OR DELETE ON xz_point_expiry_policy_versions
+FOR EACH ROW EXECUTE FUNCTION xz_reject_published_personal_point_policy_mutation();
+
+CREATE OR REPLACE FUNCTION xz_validate_personal_point_lot_policy()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  policy RECORD;
+BEGIN
+  IF NEW.source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT') THEN
+    IF NEW.policy_version_id IS NULL THEN
+      RAISE EXCEPTION 'gift point lot requires an explicit policy version';
+    END IF;
+
+    SELECT version, enabled, duration_value, duration_unit, time_zone,
+           source_types, status
+    INTO policy
+    FROM xz_point_expiry_policy_versions
+    WHERE id = NEW.policy_version_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'gift point lot references missing policy version %', NEW.policy_version_id;
+    END IF;
+    IF policy.status NOT IN ('PUBLISHED', 'ARCHIVED') THEN
+      RAISE EXCEPTION 'gift point lot references unpublished policy version %', NEW.policy_version_id;
+    END IF;
+    IF NOT (policy.source_types ? NEW.source_type) THEN
+      RAISE EXCEPTION 'policy version % does not cover gift source %', NEW.policy_version_id, NEW.source_type;
+    END IF;
+    IF jsonb_typeof(NEW.policy_snapshot) <> 'object'
+       OR NEW.policy_snapshot = '{}'::jsonb
+       OR NEW.policy_snapshot->>'version' IS DISTINCT FROM policy.version::text
+       OR NEW.policy_snapshot->>'enabled' IS DISTINCT FROM policy.enabled::text
+       OR NEW.policy_snapshot->>'duration_value' IS DISTINCT FROM policy.duration_value::text
+       OR NEW.policy_snapshot->>'duration_unit' IS DISTINCT FROM policy.duration_unit
+       OR NEW.policy_snapshot->>'time_zone' IS DISTINCT FROM policy.time_zone THEN
+      RAISE EXCEPTION 'gift point lot policy snapshot does not match policy version %', NEW.policy_version_id;
+    END IF;
+    IF policy.enabled AND NEW.expires_at IS NULL THEN
+      RAISE EXCEPTION 'enabled gift point policy requires expires_at';
+    END IF;
+    IF NOT policy.enabled AND NEW.expires_at IS NOT NULL THEN
+      RAISE EXCEPTION 'disabled gift point policy must remain permanent';
+    END IF;
+  ELSIF NEW.policy_version_id IS NOT NULL OR NEW.expires_at IS NOT NULL THEN
+    RAISE EXCEPTION 'non-gift point lot cannot carry expiry policy or expires_at';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_xz_personal_point_lots_policy_guard
+  ON xz_personal_point_lots;
+CREATE TRIGGER trg_xz_personal_point_lots_policy_guard
+BEFORE INSERT OR UPDATE OF source_type, expires_at, policy_version_id, policy_snapshot, granted_at
+ON xz_personal_point_lots
+FOR EACH ROW EXECUTE FUNCTION xz_validate_personal_point_lot_policy();
 
 -- Frozen aggregate balances may only be reconstructed when the historical
 -- reserve ledger proves the exact outstanding amount. A missing or mismatched
@@ -342,6 +736,36 @@ VALUES (
 )
 ON CONFLICT (version) DO NOTHING;
 
+DO $$
+DECLARE
+  policy RECORD;
+BEGIN
+  SELECT id, version, revision, enabled, duration_value, duration_unit,
+         time_zone, source_types, effective_to, status, created_by,
+         change_reason, metadata
+  INTO policy
+  FROM xz_point_expiry_policy_versions
+  WHERE version = 1;
+
+  IF NOT FOUND
+     OR policy.id IS DISTINCT FROM 'point_expiry_policy_v1'
+     OR policy.version IS DISTINCT FROM 1
+     OR policy.revision IS DISTINCT FROM 1
+     OR policy.enabled IS DISTINCT FROM TRUE
+     OR policy.duration_value IS DISTINCT FROM 3
+     OR policy.duration_unit IS DISTINCT FROM 'CALENDAR_MONTH'
+     OR policy.time_zone IS DISTINCT FROM 'Asia/Shanghai'
+     OR policy.source_types IS DISTINCT FROM '["REGISTRATION_GIFT","ACTIVITY_GIFT","ADMIN_GIFT"]'::jsonb
+     OR policy.effective_to IS NOT NULL
+     OR policy.status IS DISTINCT FROM 'PUBLISHED'
+     OR policy.created_by IS DISTINCT FROM 'migration:103'
+     OR policy.change_reason IS DISTINCT FROM 'initial three-calendar-month Asia/Shanghai policy'
+     OR policy.metadata IS DISTINCT FROM '{"migration":"103-personal-gift-point-expiry","calendarMonthClamp":true}'::jsonb THEN
+    RAISE EXCEPTION 'migration 103 initial policy version 1 collision or drift detected';
+  END IF;
+END;
+$$;
+
 -- Every existing non-zero aggregate balance becomes a permanent LEGACY lot.
 -- The idempotency key is account-scoped and deterministic, so a rerun does not
 -- grant a second balance and does not rewrite the old economic ledger.
@@ -374,7 +798,7 @@ SELECT
     'legacyFrozen', account.frozen
   ),
   'migration:103:legacy:' || account.id,
-  CASE WHEN account.available + account.frozen > 0 THEN 'ACTIVE' ELSE 'EXHAUSTED' END,
+  'LEGACY',
   jsonb_build_object('migration', '103-personal-gift-point-expiry')
 FROM xz_point_accounts account
 WHERE account.available > 0 OR account.frozen > 0

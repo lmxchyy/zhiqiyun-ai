@@ -36,12 +36,19 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_xz_personal_point_lot_movements_immutable
   ON xz_personal_point_lot_movements;
+DROP TRIGGER IF EXISTS trg_xz_personal_point_lots_policy_guard
+  ON xz_personal_point_lots;
+DROP TRIGGER IF EXISTS trg_xz_point_expiry_policy_versions_immutable
+  ON xz_point_expiry_policy_versions;
 DROP FUNCTION IF EXISTS xz_reject_personal_point_lot_movement_mutation();
+DROP FUNCTION IF EXISTS xz_validate_personal_point_lot_policy();
+DROP FUNCTION IF EXISTS xz_reject_published_personal_point_policy_mutation();
 
 DROP TABLE IF EXISTS xz_personal_point_lot_movements;
 DROP TABLE IF EXISTS xz_personal_point_reservation_allocations;
 DROP TABLE IF EXISTS xz_personal_point_reservations;
 DROP TABLE IF EXISTS xz_personal_point_lots;
 DROP TABLE IF EXISTS xz_point_expiry_policy_versions;
+DROP INDEX IF EXISTS ux_xz_point_accounts_id_user;
 
 COMMIT;
