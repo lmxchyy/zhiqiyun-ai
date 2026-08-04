@@ -114,6 +114,9 @@ func TestInspirationPhotoRestorationContractRoundTrips(t *testing.T) {
 	if refs, ok := payload.Item["referenceAssets"].([]any); !ok || len(refs) != 0 {
 		t.Fatalf("referenceAssets = %#v, want empty for user-upload-required template", payload.Item["referenceAssets"])
 	}
+	if tenants, ok := payload.Item["applicableTenantIds"].([]any); !ok || len(tenants) != 0 {
+		t.Fatalf("applicableTenantIds = %#v, want empty array", payload.Item["applicableTenantIds"])
+	}
 }
 
 func TestInspirationRejectsInvalidReferenceImageRange(t *testing.T) {

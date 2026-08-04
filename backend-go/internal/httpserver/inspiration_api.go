@@ -302,6 +302,9 @@ func normalizeInspirationTemplate(item *inspirationTemplate, tenantID, actor str
 	if len(item.Platforms) == 0 {
 		item.Platforms = []string{"miniprogram"}
 	}
+	if item.ApplicableTenantIDs == nil {
+		item.ApplicableTenantIDs = []string{}
+	}
 	if item.Status == "" {
 		item.Status = "DRAFT"
 	}
