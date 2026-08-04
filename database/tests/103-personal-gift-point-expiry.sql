@@ -134,6 +134,23 @@ BEGIN
       RAISE;
     END IF;
   END;
+
+  BEGIN
+    INSERT INTO xz_personal_point_lots(
+      id, account_id, user_id, source_type, original_points, available_points,
+      reserved_points, consumed_points, expired_points, reversed_points,
+      granted_at, idempotency_key, status
+    ) VALUES (
+      'verify_103_expired_with_reserved', 'verify_103_account', 'verify_103_user',
+      'MANUAL', 2, 0, 1, 0, 1, 0, now(),
+      'verify_103_expired_with_reserved', 'EXPIRED'
+    );
+    RAISE EXCEPTION 'expired lot with reserved balance unexpectedly accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF position('unexpectedly accepted' IN SQLERRM) > 0 THEN
+      RAISE;
+    END IF;
+  END;
 END;
 $$;
 ROLLBACK TO SAVEPOINT migration_103_constraint_probes;

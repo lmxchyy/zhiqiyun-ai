@@ -49,6 +49,6 @@ DROP TABLE IF EXISTS xz_personal_point_reservation_allocations;
 DROP TABLE IF EXISTS xz_personal_point_reservations;
 DROP TABLE IF EXISTS xz_personal_point_lots;
 DROP TABLE IF EXISTS xz_point_expiry_policy_versions;
-DROP INDEX IF EXISTS ux_xz_point_accounts_id_user;
+DROP INDEX IF EXISTS ux_xz_point_accounts_id_user_103;
 
 COMMIT;

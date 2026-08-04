@@ -18,7 +18,7 @@ $$;
 -- Composite ownership references are intentionally redundant with the
 -- account primary key: they let child rows prove account/user identity in a
 -- single database constraint without adding a global user uniqueness rule.
-CREATE UNIQUE INDEX IF NOT EXISTS ux_xz_point_accounts_id_user
+CREATE UNIQUE INDEX IF NOT EXISTS ux_xz_point_accounts_id_user_103
   ON xz_point_accounts(id, user_id);
 
 CREATE TABLE IF NOT EXISTS xz_point_expiry_policy_versions (
@@ -117,7 +117,12 @@ CREATE TABLE IF NOT EXISTS xz_personal_point_lots (
       AND reserved_points = 0
       AND consumed_points + expired_points + reversed_points = original_points
     )
-    OR (status = 'EXPIRED' AND available_points = 0 AND expired_points > 0)
+    OR (
+      status = 'EXPIRED'
+      AND available_points = 0
+      AND reserved_points = 0
+      AND expired_points > 0
+    )
     OR (
       status = 'REVERSED'
       AND available_points = 0
@@ -435,7 +440,12 @@ BEGIN
           AND reserved_points = 0
           AND consumed_points + expired_points + reversed_points = original_points
         )
-        OR (status = 'EXPIRED' AND available_points = 0 AND expired_points > 0)
+        OR (
+          status = 'EXPIRED'
+          AND available_points = 0
+          AND reserved_points = 0
+          AND expired_points > 0
+        )
         OR (
           status = 'REVERSED'
           AND available_points = 0
@@ -762,6 +772,42 @@ BEGIN
      OR policy.change_reason IS DISTINCT FROM 'initial three-calendar-month Asia/Shanghai policy'
      OR policy.metadata IS DISTINCT FROM '{"migration":"103-personal-gift-point-expiry","calendarMonthClamp":true}'::jsonb THEN
     RAISE EXCEPTION 'migration 103 initial policy version 1 collision or drift detected';
+  END IF;
+END;
+$$;
+
+-- Existing 103 installations may already contain gift lots written before the
+-- policy trigger existed. Validate those rows before this migration commits;
+-- a new-write trigger alone cannot repair or silently accept historical drift.
+DO $$
+DECLARE
+  invalid_gift_count BIGINT;
+BEGIN
+  SELECT count(*)
+  INTO invalid_gift_count
+  FROM xz_personal_point_lots lot
+  LEFT JOIN xz_point_expiry_policy_versions policy
+    ON policy.id = lot.policy_version_id
+  WHERE lot.source_type IN ('REGISTRATION_GIFT', 'ACTIVITY_GIFT', 'ADMIN_GIFT')
+    AND (
+      lot.policy_version_id IS NULL
+      OR policy.id IS NULL
+      OR policy.status NOT IN ('PUBLISHED', 'ARCHIVED')
+      OR NOT (policy.source_types ? lot.source_type)
+      OR jsonb_typeof(lot.policy_snapshot) IS DISTINCT FROM 'object'
+      OR lot.policy_snapshot = '{}'::jsonb
+      OR lot.policy_snapshot->>'version' IS DISTINCT FROM policy.version::text
+      OR lot.policy_snapshot->>'enabled' IS DISTINCT FROM policy.enabled::text
+      OR lot.policy_snapshot->>'duration_value' IS DISTINCT FROM policy.duration_value::text
+      OR lot.policy_snapshot->>'duration_unit' IS DISTINCT FROM policy.duration_unit
+      OR lot.policy_snapshot->>'time_zone' IS DISTINCT FROM policy.time_zone
+      OR (policy.enabled AND lot.expires_at IS NULL)
+      OR (NOT policy.enabled AND lot.expires_at IS NOT NULL)
+    );
+
+  IF invalid_gift_count > 0 THEN
+    RAISE EXCEPTION
+      'migration 103 gift lot policy preflight failed for % row(s)', invalid_gift_count;
   END IF;
 END;
 $$;
