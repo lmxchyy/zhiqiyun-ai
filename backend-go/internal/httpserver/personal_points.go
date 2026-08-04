@@ -53,15 +53,17 @@ var (
 )
 
 type PointExpiryPolicy struct {
-	ID            string   `json:"id"`
-	Version       int64    `json:"version"`
-	Revision      int64    `json:"revision"`
-	Enabled       bool     `json:"enabled"`
-	DurationValue int      `json:"duration_value"`
-	DurationUnit  string   `json:"duration_unit"`
-	TimeZone      string   `json:"time_zone"`
-	SourceTypes   []string `json:"source_types"`
-	Status        string   `json:"status"`
+	ID            string    `json:"id"`
+	Version       int64     `json:"version"`
+	Revision      int64     `json:"revision"`
+	Enabled       bool      `json:"enabled"`
+	DurationValue int       `json:"duration_value"`
+	DurationUnit  string    `json:"duration_unit"`
+	TimeZone      string    `json:"time_zone"`
+	SourceTypes   []string  `json:"source_types"`
+	EffectiveFrom time.Time `json:"effective_from"`
+	EffectiveTo   time.Time `json:"effective_to,omitempty"`
+	Status        string    `json:"status"`
 }
 
 type PointPolicySnapshot struct {
@@ -93,7 +95,7 @@ type PersonalPointLot struct {
 	Status          string              `json:"status"`
 }
 
-func (l PersonalPointLot) Permanent() bool { return l.ExpiresAt.IsZero() && l.PolicyVersionID == "" }
+func (l PersonalPointLot) Permanent() bool { return l.ExpiresAt.IsZero() }
 
 type PersonalPointAccount struct {
 	ID              string `json:"id"`
@@ -349,12 +351,28 @@ func isKnownPointSource(source PointSource) bool {
 		PointSourceAgentJoinGrant, PointSourceOperationCenterGrant, PointSourceOrderGrant,
 		PointSourceCommerceOrder, PointSourceUnifiedPaymentGrant, PointSourceWechatVirtualOrder,
 		PointSourceWechatVirtualCoupon, PointSourceCouponGrant, PointSourceRefund,
-		PointSourceRelease, PointSourceAdjustment, PointSourceLegacy, PointSourceReversal,
+		PointSourceRelease, PointSourceAdjustment, PointSourceReversal,
 		PointSourceManual:
 		return true
 	default:
 		return false
 	}
+}
+
+func validatePointExpiryPolicy(policy PointExpiryPolicy) error {
+	if strings.TrimSpace(policy.ID) == "" || policy.Version <= 0 || strings.TrimSpace(policy.TimeZone) == "" {
+		return ErrInvalidPointCommand
+	}
+	if strings.ToUpper(strings.TrimSpace(policy.DurationUnit)) != "CALENDAR_MONTH" {
+		return ErrInvalidPointCommand
+	}
+	if policy.Enabled && policy.DurationValue <= 0 {
+		return ErrInvalidPointCommand
+	}
+	if policy.DurationValue < 0 {
+		return ErrInvalidPointCommand
+	}
+	return nil
 }
 
 func isGiftPointSource(source PointSource) bool {
@@ -406,6 +424,10 @@ func addCalendarMonthsClamp(granted time.Time, months int, zone string) (time.Ti
 }
 
 func setPointLotStatus(lot *PersonalPointLot) {
+	if lot.SourceType == PointSourceLegacy {
+		lot.Status = "LEGACY"
+		return
+	}
 	if lot.AvailablePoints+lot.ReservedPoints > 0 {
 		lot.Status = "ACTIVE"
 		return
@@ -418,7 +440,7 @@ func setPointLotStatus(lot *PersonalPointLot) {
 		lot.Status = "REVERSED"
 		return
 	}
-	lot.Status = "DEPLETED"
+	lot.Status = "EXHAUSTED"
 }
 
 func setReservationStatus(r *PersonalPointReservation) {
@@ -508,7 +530,21 @@ func (s *jsonStore) PersonalPointService() *PersonalPointService {
 	if s == nil {
 		return NewPersonalPointService(nil)
 	}
-	return NewPersonalPointService(NewJSONPersonalPointStore(s.path + ".personal-points.json"))
+	s.personalPointMu.Lock()
+	defer s.personalPointMu.Unlock()
+	if s.personalPointStore == nil {
+		store := NewJSONPersonalPointStore(s.path + ".personal-points.json")
+		s.mu.Lock()
+		data, err := s.loadLocked()
+		s.mu.Unlock()
+		if err == nil {
+			err = store.importLegacyAccounts(data.PointAccounts)
+		}
+		store.initErr = err
+		s.personalPointStore = store
+		s.personalPointInitErr = err
+	}
+	return NewPersonalPointService(s.personalPointStore)
 }
 
 func (s *postgresStore) PersonalPointService() *PersonalPointService {

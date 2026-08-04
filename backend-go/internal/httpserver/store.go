@@ -247,9 +247,12 @@ func (b postgresStateBackend) importFallback(ctx context.Context) ([]byte, error
 }
 
 type jsonStore struct {
-	path    string
-	mu      sync.Mutex
-	backend stateBackend
+	path                 string
+	mu                   sync.Mutex
+	backend              stateBackend
+	personalPointMu      sync.Mutex
+	personalPointStore   *JSONPersonalPointStore
+	personalPointInitErr error
 }
 
 func newJSONStore(path string) *jsonStore {

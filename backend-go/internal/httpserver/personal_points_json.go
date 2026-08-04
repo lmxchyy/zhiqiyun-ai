@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,13 +24,21 @@ type personalPointState struct {
 }
 
 type JSONPersonalPointStore struct {
-	path   string
-	mu     sync.Mutex
-	memory *personalPointState
+	path    string
+	mu      sync.Mutex
+	memory  *personalPointState
+	initErr error
 }
 
 func NewJSONPersonalPointStore(path string) *JSONPersonalPointStore {
 	return &JSONPersonalPointStore{path: path}
+}
+
+func (s *JSONPersonalPointStore) operationalError() error {
+	if s == nil {
+		return ErrInvalidPointCommand
+	}
+	return s.initErr
 }
 
 func defaultPersonalPointPolicy() PointExpiryPolicy {
@@ -144,8 +153,8 @@ func (s *JSONPersonalPointStore) AccountCount() int {
 }
 
 func (s *JSONPersonalPointStore) SetPolicy(policy PointExpiryPolicy) error {
-	if policy.ID == "" || policy.Version <= 0 || policy.DurationValue <= 0 || policy.TimeZone == "" {
-		return ErrInvalidPointCommand
+	if err := validatePointExpiryPolicy(policy); err != nil {
+		return err
 	}
 	if policy.Status == "" {
 		policy.Status = "PUBLISHED"
@@ -167,6 +176,9 @@ func (s *JSONPersonalPointStore) SetPolicy(policy PointExpiryPolicy) error {
 }
 
 func (s *JSONPersonalPointStore) withState(ctx context.Context, fn func(*personalPointState) error) error {
+	if err := s.operationalError(); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -186,6 +198,9 @@ func (s *JSONPersonalPointStore) withState(ctx context.Context, fn func(*persona
 }
 
 func (s *JSONPersonalPointStore) readState(ctx context.Context) (personalPointState, error) {
+	if err := s.operationalError(); err != nil {
+		return personalPointState{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return personalPointState{}, err
 	}
@@ -219,11 +234,21 @@ func ensurePersonalAccount(state *personalPointState, accountID, userID string) 
 	return &state.Accounts[len(state.Accounts)-1], nil
 }
 
-func currentPersonalPointPolicy(state *personalPointState, source PointSource) (PointExpiryPolicy, error) {
+func currentPersonalPointPolicy(state *personalPointState, source PointSource, now time.Time) (PointExpiryPolicy, error) {
 	policies := append([]PointExpiryPolicy(nil), state.Policies...)
 	sort.SliceStable(policies, func(i, j int) bool { return policies[i].Version > policies[j].Version })
+	now = pointNow(now)
 	for _, policy := range policies {
-		if policy.Status != "" && policy.Status != "PUBLISHED" && policy.Status != "ARCHIVED" {
+		if policy.Status != "PUBLISHED" {
+			continue
+		}
+		if !policy.EffectiveFrom.IsZero() && policy.EffectiveFrom.After(now) {
+			continue
+		}
+		if !policy.EffectiveTo.IsZero() && !policy.EffectiveTo.After(now) {
+			continue
+		}
+		if err := validatePointExpiryPolicy(policy); err != nil {
 			continue
 		}
 		for _, allowed := range policy.SourceTypes {
@@ -327,7 +352,7 @@ func (s *JSONPersonalPointStore) grant(ctx context.Context, cmd PersonalPointGra
 		}
 		lot := PersonalPointLot{ID: stablePointID("lot", cmd.AccountID, cmd.IdempotencyKey), AccountID: cmd.AccountID, UserID: cmd.UserID, SourceType: cmd.Source, ReferenceType: cmd.ReferenceType, ReferenceID: cmd.ReferenceID, OriginalPoints: cmd.Points, AvailablePoints: cmd.Points, GrantedAt: cmd.GrantedAt, IdempotencyKey: cmd.IdempotencyKey, Status: "ACTIVE"}
 		if isGiftPointSource(cmd.Source) {
-			policy, policyErr := currentPersonalPointPolicy(state, cmd.Source)
+			policy, policyErr := currentPersonalPointPolicy(state, cmd.Source, time.Now().UTC())
 			if policyErr != nil {
 				return policyErr
 			}
@@ -424,7 +449,7 @@ func (s *JSONPersonalPointStore) reserve(ctx context.Context, cmd PersonalPointR
 		remaining := cmd.RequestedPoints
 		lots := make([]PersonalPointLot, 0)
 		for _, lot := range state.Lots {
-			if lot.AccountID == cmd.AccountID && lot.UserID == cmd.UserID && lot.AvailablePoints > 0 && lot.Status == "ACTIVE" {
+			if lot.AccountID == cmd.AccountID && lot.UserID == cmd.UserID && lot.AvailablePoints > 0 && (lot.Status == "ACTIVE" || lot.Status == "LEGACY") {
 				lots = append(lots, lot)
 			}
 		}
@@ -594,6 +619,23 @@ func (s *JSONPersonalPointStore) release(ctx context.Context, cmd PersonalPointR
 			allocation.ReleasedPoints += amount
 			setAllocationStatus(allocation)
 			appendPersonalMovement(state, *lot, "RELEASE", amount, before, reservation.ID, "release:"+cmd.IdempotencyKey+":"+lot.ID, cmd.ReleasedAt)
+			if !lot.ExpiresAt.IsZero() && !lot.ExpiresAt.After(cmd.ReleasedAt) && lot.AvailablePoints > 0 {
+				expireAmount := lot.AvailablePoints
+				expireBefore := *lot
+				lot.AvailablePoints = 0
+				lot.ExpiredPoints += expireAmount
+				setPointLotStatus(lot)
+				account, accountErr := findPersonalAccount(state, cmd.AccountID, cmd.UserID)
+				if accountErr != nil {
+					return accountErr
+				}
+				if account == nil {
+					return ErrPointNotFound
+				}
+				account.AvailablePoints -= expireAmount
+				account.TotalExpired += expireAmount
+				appendPersonalMovement(state, *lot, "EXPIRE", expireAmount, expireBefore, reservation.ID, "expire:"+lot.ID+":"+reservation.ID+":"+cmd.IdempotencyKey, cmd.ReleasedAt)
+			}
 			remaining -= amount
 		}
 		if remaining != 0 {
@@ -658,35 +700,6 @@ func expirePersonalPointState(state *personalPointState, accountID, userID strin
 			account.TotalExpired += amount
 			appendPersonalMovement(state, *lot, "EXPIRE", amount, before, "", "expire:"+lot.ID, now)
 		}
-		if lot.ReservedPoints <= 0 {
-			continue
-		}
-		for j := range state.Allocations {
-			allocation := &state.Allocations[j]
-			if allocation.LotID != lot.ID || allocation.ReservedPoints <= 0 {
-				continue
-			}
-			amount := allocation.ReservedPoints
-			before := *lot
-			lot.ReservedPoints -= amount
-			lot.ExpiredPoints += amount
-			setPointLotStatus(lot)
-			allocation.ReservedPoints = 0
-			allocation.ExpiredPoints += amount
-			setAllocationStatus(allocation)
-			for k := range state.Reservations {
-				if state.Reservations[k].ID == allocation.ReservationID {
-					state.Reservations[k].ReservedPoints -= amount
-					state.Reservations[k].ExpiredPoints += amount
-					state.Reservations[k].UpdatedAt = now
-					setReservationStatus(&state.Reservations[k])
-					break
-				}
-			}
-			account.FrozenPoints -= amount
-			account.TotalExpired += amount
-			appendPersonalMovement(state, *lot, "EXPIRE", amount, before, allocation.ReservationID, "expire:"+lot.ID+":"+allocation.ReservationID, now)
-		}
 	}
 	return nil
 }
@@ -709,4 +722,47 @@ func (s *JSONPersonalPointStore) movementCount(ctx context.Context, accountID, u
 		}
 	}
 	return count
+}
+
+func (s *JSONPersonalPointStore) importLegacyAccounts(accounts []adminPointAccount) error {
+	if s == nil {
+		return ErrInvalidPointCommand
+	}
+	return s.withState(context.Background(), func(state *personalPointState) error {
+		for _, source := range accounts {
+			accountID := strings.TrimSpace(source.ID)
+			userID := strings.TrimSpace(source.UserID)
+			if accountID == "" || userID == "" || source.Available < 0 || source.Frozen < 0 {
+				return ErrInvalidPointCommand
+			}
+			if source.Frozen > 0 {
+				return ErrInvalidPointCommand
+			}
+			if source.Available == 0 {
+				continue
+			}
+			legacyKey := "legacy-import:" + accountID
+			alreadyImported := false
+			for _, lot := range state.Lots {
+				if lot.AccountID == accountID && lot.UserID == userID && lot.IdempotencyKey == legacyKey {
+					alreadyImported = true
+					break
+				}
+			}
+			if alreadyImported {
+				continue
+			}
+			account, err := ensurePersonalAccount(state, accountID, userID)
+			if err != nil {
+				return err
+			}
+			grantedAt := time.Now().UTC()
+			lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: int64(source.Available), AvailablePoints: int64(source.Available), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "ACTIVE"}
+			state.Lots = append(state.Lots, lot)
+			account.AvailablePoints += int64(source.Available)
+			account.TotalGranted += int64(source.Available)
+			appendPersonalMovement(state, lot, "OPENING", int64(source.Available), PersonalPointLot{}, "", "legacy-import:"+accountID, grantedAt)
+		}
+		return nil
+	})
 }
