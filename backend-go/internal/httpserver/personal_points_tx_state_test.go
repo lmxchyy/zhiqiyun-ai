@@ -249,7 +249,7 @@ func TestJSONPersonalPointsIgnoreSidecarAfterSuccessfulImport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if data.PersonalPointImport.Version != 1 || data.PersonalPointImport.SidecarChecksum == "" || len(data.PersonalPoints.Lots) != 1 {
+			if data.PersonalPointImport.Version != personalPointImportVersion || data.PersonalPointImport.SidecarChecksum == "" || len(data.PersonalPoints.Lots) != 1 {
 				t.Fatalf("sidecar import metadata/state = %+v lots=%d", data.PersonalPointImport, len(data.PersonalPoints.Lots))
 			}
 

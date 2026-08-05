@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -724,40 +725,29 @@ func assetCenterProjectsFromItems(items []asset, userID string) []map[string]any
 }
 
 func (s *jsonStore) CancelGenerationTaskForUser(userID string, id string) (generationTask, error) {
-	task, found, err := func() (generationTask, bool, error) {
-		tasks, err := s.ListGenerationTasks()
-		if err != nil {
-			return generationTask{}, false, err
-		}
-		for _, item := range tasks {
-			if item.ID == id && item.UserID == userID {
-				return item, true, nil
+	var task generationTask
+	err := s.updateWithPersonalPoints(context.Background(), func(data *platformData, points *JSONPersonalPointStore) error {
+		found := false
+		for _, item := range data.GenerationTasks {
+			if item.ID != id || item.UserID != userID {
+				continue
 			}
-		}
-		return generationTask{}, false, nil
-	}()
-	if err != nil || !found {
-		if err == nil {
-			err = errors.New("generation task not found")
-		}
-		return generationTask{}, err
-	}
-	if task.Status != "PENDING" && task.Status != "QUEUED" && task.Status != "RUNNING" && task.Status != "PROCESSING" && task.Status != "RETRYING" {
-		return generationTask{}, errors.New("only active tasks can be cancelled")
-	}
-	task, err = s.FailGenerationTask(id, "用户取消生成")
-	if err != nil {
-		return generationTask{}, err
-	}
-	err = s.update(func(data *platformData) error {
-		for index := range data.GenerationTasks {
-			if data.GenerationTasks[index].ID == id && data.GenerationTasks[index].UserID == userID {
-				data.GenerationTasks[index].Status = "CANCELLED"
-				task = data.GenerationTasks[index]
+			found = true
+			if upperTrim(item.Status) == "CANCELLED" {
+				task = item
 				return nil
 			}
+			if !activeGenerationTaskStatus(item.Status) {
+				return errors.New("only active tasks can be cancelled")
+			}
+			break
 		}
-		return errors.New("generation task not found")
+		if !found {
+			return errors.New("generation task not found")
+		}
+		var err error
+		task, err = mutateJSONGenerationFailure(data, points, userID, id, "用户取消生成", "CANCELLED", taskStatusCancelled)
+		return err
 	})
 	return task, err
 }
@@ -973,27 +963,37 @@ func (s *postgresStore) ListAssetProjectsForUser(userID string) ([]map[string]an
 }
 
 func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (generationTask, error) {
-	task, found, err := s.GetGenerationTaskForUser(userID, id)
-	if err != nil || !found {
-		if err == nil {
-			err = errors.New("generation task not found")
-		}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
 		return generationTask{}, err
 	}
-	if task.Status != "PENDING" && task.Status != "QUEUED" && task.Status != "RUNNING" && task.Status != "PROCESSING" && task.Status != "RETRYING" {
-		return generationTask{}, errors.New("only active tasks can be cancelled")
-	}
-	task, err = s.FailGenerationTask(id, "用户取消生成")
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return generationTask{}, err
 	}
-	ctx, cancel := s.withTimeout()
-	defer cancel()
-	task.Status = "CANCELLED"
-	if _, err := s.db.ExecContext(ctx, `update xz_generation_tasks set status='CANCELLED', raw=jsonb_set(coalesce(raw,'{}'::jsonb),'{status}','"CANCELLED"'::jsonb,true) where id=$1 and user_id=$2`, id, userID); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	task, err := generationTaskForUpdate(ctx, tx, id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && task.UserID != userID) {
+		return generationTask{}, errors.New("generation task not found")
+	}
+	if err != nil {
 		return generationTask{}, err
 	}
-	return task, nil
+	if upperTrim(task.Status) == "CANCELLED" {
+		return task, tx.Commit()
+	}
+	if !activeGenerationTaskStatus(task.Status) {
+		return generationTask{}, errors.New("only active tasks can be cancelled")
+	}
+	task, refunded, _, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, "用户取消生成", "CANCELLED", taskStatusCancelled)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.cancel", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
+		return generationTask{}, err
+	}
+	return task, tx.Commit()
 }
 
 func (s *postgresStore) DeleteGenerationTaskForUser(userID string, id string) error {

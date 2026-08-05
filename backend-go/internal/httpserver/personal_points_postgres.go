@@ -327,7 +327,11 @@ func pgInsertMovement(ctx context.Context, tx *sql.Tx, lot PersonalPointLot, mov
 
 func pgInsertWallet(ctx context.Context, tx *sql.Tx, account pgPointAccount, entryType string, points int64, beforeAvailable, beforeFrozen int64, key, refType, refID string, now time.Time, metadata any) error {
 	raw, _ := json.Marshal(metadata)
-	_, err := tx.ExecContext(ctx, `INSERT INTO xz_wallet_ledger(id,account_id,user_id,entry_type,points,available_before,available_after,frozen_before,frozen_after,idempotency_key,reference_type,reference_id,metadata,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (idempotency_key) DO NOTHING`, stablePointID("wallet", account.ID, key), account.ID, account.UserID, entryType, points, beforeAvailable, account.Available, beforeFrozen, account.Frozen, key, refType, refID, raw, now)
+	taskID := ""
+	if strings.EqualFold(strings.TrimSpace(refType), "GENERATION_TASK") {
+		taskID = strings.TrimSpace(refID)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO xz_wallet_ledger(id,account_id,user_id,task_id,entry_type,points,available_before,available_after,frozen_before,frozen_after,idempotency_key,reference_type,reference_id,metadata,created_at) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (idempotency_key) DO NOTHING`, stablePointID("wallet", account.ID, key), account.ID, account.UserID, taskID, entryType, points, beforeAvailable, account.Available, beforeFrozen, account.Frozen, key, refType, refID, raw, now)
 	return err
 }
 

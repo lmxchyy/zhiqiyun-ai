@@ -32,6 +32,8 @@ type personalPointImportState struct {
 	ImportedAt      time.Time `json:"importedAt,omitempty"`
 }
 
+const personalPointImportVersion = 2
+
 type JSONPersonalPointStore struct {
 	path    string
 	mu      sync.Mutex
@@ -178,8 +180,13 @@ func appendPersonalWalletLedger(state *personalPointState, account PersonalPoint
 		metadata = map[string]any{}
 	}
 	occurredAt = pointNow(occurredAt)
+	taskID := ""
+	if upperTrim(referenceType) == "GENERATION_TASK" {
+		taskID = strings.TrimSpace(referenceID)
+	}
 	state.WalletLedger = append(state.WalletLedger, PersonalPointWalletLedgerEntry{
 		ID: stablePointID("wallet", account.ID, key), AccountID: account.ID, UserID: account.UserID,
+		TaskID:    taskID,
 		EntryType: entryType, Points: points, AvailableBefore: beforeAvailable, AvailableAfter: account.AvailablePoints,
 		FrozenBefore: beforeFrozen, FrozenAfter: account.FrozenPoints, IdempotencyKey: key,
 		ReferenceType: referenceType, ReferenceID: referenceID, Metadata: metadata, OccurredAt: occurredAt, CreatedAt: occurredAt,
@@ -807,6 +814,23 @@ func sidecarChecksum(raw []byte) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
+func unprojectedLegacyWalletEntries(data *platformData, state personalPointState) []walletLedgerEntry {
+	if data == nil {
+		return nil
+	}
+	personalLedgerIDs := make(map[string]struct{}, len(state.WalletLedger))
+	for _, entry := range state.WalletLedger {
+		personalLedgerIDs[entry.ID] = struct{}{}
+	}
+	legacyEntries := make([]walletLedgerEntry, 0, len(data.WalletLedger))
+	for _, entry := range data.WalletLedger {
+		if _, projected := personalLedgerIDs[entry.ID]; !projected {
+			legacyEntries = append(legacyEntries, entry)
+		}
+	}
+	return legacyEntries
+}
+
 func validatePersonalPointJSONProjection(data *platformData) error {
 	if data == nil {
 		return ErrInvalidPointCommand
@@ -834,16 +858,7 @@ func validatePersonalPointJSONProjection(data *platformData) error {
 			return ErrPersonalPointImportConflict
 		}
 	}
-	personalLedgerIDs := make(map[string]struct{}, len(data.PersonalPoints.WalletLedger))
-	for _, entry := range data.PersonalPoints.WalletLedger {
-		personalLedgerIDs[entry.ID] = struct{}{}
-	}
-	legacyEntries := make([]walletLedgerEntry, 0, len(data.WalletLedger))
-	for _, entry := range data.WalletLedger {
-		if _, projected := personalLedgerIDs[entry.ID]; !projected {
-			legacyEntries = append(legacyEntries, entry)
-		}
-	}
+	legacyEntries := unprojectedLegacyWalletEntries(data, data.PersonalPoints)
 	before, _ := json.Marshal(data.PersonalPoints)
 	candidate := clonePersonalPointState(data.PersonalPoints)
 	if err := migrateLegacyWalletLedgerState(&candidate, legacyEntries, data.PointAccounts); err != nil {
@@ -861,14 +876,37 @@ func (s *jsonStore) preparePersonalPoints(data *platformData) error {
 		return ErrInvalidPointCommand
 	}
 	if data.PersonalPointImport.Version != 0 {
-		if data.PersonalPointImport.Version != 1 {
+		if data.PersonalPointImport.Version != 1 && data.PersonalPointImport.Version != personalPointImportVersion {
 			return ErrPersonalPointImportConflict
 		}
 		normalizePersonalPointState(&data.PersonalPoints)
 		if err := validatePersonalPointState(&data.PersonalPoints); err != nil {
 			return err
 		}
-		return validatePersonalPointJSONProjection(data)
+		if data.PersonalPointImport.Version == 1 {
+			candidate := clonePersonalPointState(data.PersonalPoints)
+			if err := migrateLegacyWalletLedgerState(&candidate, unprojectedLegacyWalletEntries(data, candidate), data.PointAccounts); err != nil {
+				return ErrPersonalPointImportConflict
+			}
+			if err := validatePersonalPointState(&candidate); err != nil {
+				return err
+			}
+			data.PersonalPoints = candidate
+			if err := validatePersonalPointJSONProjection(data); err != nil {
+				return err
+			}
+			if err := reconcileLegacyGenerationReservations(data, &candidate); err != nil {
+				return err
+			}
+			data.PersonalPoints = candidate
+			data.PersonalPointImport.Version = personalPointImportVersion
+			if data.PersonalPointImport.ImportedAt.IsZero() {
+				data.PersonalPointImport.ImportedAt = time.Now().UTC()
+			}
+		} else if err := validatePersonalPointJSONProjection(data); err != nil {
+			return err
+		}
+		return validateActivePersonalGenerationMarkers(data, &data.PersonalPoints)
 	}
 	sidecarPath := s.path + ".personal-points.json"
 	if !personalPointStateEmpty(data.PersonalPoints) {
@@ -886,18 +924,329 @@ func (s *jsonStore) preparePersonalPoints(data *platformData) error {
 	normalizePersonalPointState(&candidate)
 	memoryStore := &JSONPersonalPointStore{memory: &candidate}
 	if err := memoryStore.importLegacyProjection(data.PointAccounts, data.WalletLedger); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrPersonalPointImportConflict, err)
 	}
 	candidate = clonePersonalPointState(*memoryStore.memory)
+	if err := reconcileLegacyGenerationReservations(data, &candidate); err != nil {
+		return err
+	}
 	if err := validatePersonalPointState(&candidate); err != nil {
 		return err
 	}
 	data.PersonalPoints = candidate
-	data.PersonalPointImport = personalPointImportState{Version: 1, ImportedAt: time.Now().UTC()}
+	data.PersonalPointImport = personalPointImportState{Version: personalPointImportVersion, ImportedAt: time.Now().UTC()}
 	if err == nil && len(sidecarRaw) > 0 {
 		data.PersonalPointImport.SidecarChecksum = sidecarChecksum(sidecarRaw)
 	}
 	return nil
+}
+
+func generationTaskUsesPersonalPoints(task generationTask) (bool, error) {
+	billingAccountType := upperTrim(task.BillingAccountType)
+	billingScope := upperTrim(stringValue(task.Params["billing_scope"]))
+	for _, value := range []string{billingAccountType, billingScope} {
+		if value != "" && value != contextPersonal && value != contextEnterprise {
+			return false, ErrPersonalPointContextMismatch
+		}
+	}
+	if billingAccountType != "" && billingScope != "" && billingAccountType != billingScope {
+		return false, ErrPersonalPointContextMismatch
+	}
+	resolved := firstNonEmptyString(billingAccountType, billingScope, contextPersonal)
+	return resolved == contextPersonal, nil
+}
+
+func activeGenerationTaskStatus(status string) bool {
+	switch upperTrim(status) {
+	case "PENDING", "QUEUED", "RUNNING", "PROCESSING", "RETRYING":
+		return true
+	default:
+		return false
+	}
+}
+
+func validatePersonalGenerationReservationState(reservation PersonalPointReservation, allocations []PersonalPointAllocation, pointCost int64) error {
+	if upperTrim(reservation.Status) != "RESERVED" || reservation.RequestedPoints != pointCost || reservation.ReservedPoints != pointCost || reservation.CapturedPoints != 0 || reservation.ReleasedPoints != 0 || reservation.ExpiredPoints != 0 {
+		return ErrPersonalPointImportConflict
+	}
+	var allocated int64
+	for _, allocation := range allocations {
+		if allocation.ReservationID != reservation.ID || allocation.AccountID != reservation.AccountID || allocation.UserID != reservation.UserID || upperTrim(allocation.Status) != "RESERVED" || allocation.AllocatedPoints <= 0 || allocation.AllocatedPoints != allocation.ReservedPoints || allocation.CapturedPoints != 0 || allocation.ReleasedPoints != 0 || allocation.ExpiredPoints != 0 || allocation.ReservedPoints > math.MaxInt64-allocated {
+			return ErrPersonalPointImportConflict
+		}
+		allocated += allocation.ReservedPoints
+	}
+	if allocated != pointCost {
+		return ErrPersonalPointImportConflict
+	}
+	return nil
+}
+
+func validateGenerationTaskPersonalLotMarker(state *personalPointState, task generationTask) error {
+	if task.BillingEngine != personalLotBillingEngine || strings.TrimSpace(task.PersonalPointAccountID) == "" || strings.TrimSpace(task.PersonalPointReservationID) == "" {
+		return ErrPersonalPointReservationMarkerMissing
+	}
+	pointCost, err := generationTaskExactReservationPointCost(task)
+	if err != nil {
+		return err
+	}
+	account, err := findPersonalAccount(state, task.PersonalPointAccountID, task.UserID)
+	if err != nil {
+		return err
+	}
+	if account == nil {
+		return ErrPersonalPointReservationMarkerMissing
+	}
+	for _, reservation := range state.Reservations {
+		if reservation.ID != task.PersonalPointReservationID {
+			continue
+		}
+		if reservation.AccountID != account.ID || reservation.UserID != task.UserID {
+			return ErrPointOwnership
+		}
+		if reservation.BusinessType != "GENERATION_TASK" || reservation.BusinessID != task.ID {
+			return ErrPersonalPointImportConflict
+		}
+		allocations := make([]PersonalPointAllocation, 0)
+		for _, allocation := range state.Allocations {
+			if allocation.ReservationID != reservation.ID {
+				continue
+			}
+			lot, lotErr := findPersonalLot(state, allocation.LotID, account.ID, task.UserID)
+			if lotErr != nil || lot.SourceType != allocation.SourceType {
+				return ErrPersonalPointImportConflict
+			}
+			allocations = append(allocations, allocation)
+		}
+		return validatePersonalGenerationReservationState(reservation, allocations, pointCost)
+	}
+	return ErrPersonalPointReservationMarkerMissing
+}
+
+func validateActivePersonalGenerationMarkers(data *platformData, state *personalPointState) error {
+	for _, task := range data.GenerationTasks {
+		if !activeGenerationTaskStatus(task.Status) {
+			continue
+		}
+		usesPersonalPoints, err := generationTaskUsesPersonalPoints(task)
+		if err != nil {
+			return err
+		}
+		if !usesPersonalPoints || generationTaskReservedPointCost(task, task.PointCost) <= 0 {
+			continue
+		}
+		if err := validateGenerationTaskPersonalLotMarker(state, task); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePersonalPointReservationAllocationClosure(state *personalPointState) error {
+	if state == nil {
+		return ErrInvalidPointCommand
+	}
+	reservations := make(map[string]PersonalPointReservation, len(state.Reservations))
+	reservedByAccount := map[string]int64{}
+	reservedByReservation := map[string]int64{}
+	reservedByLot := map[string]int64{}
+	reservedAllocationsByAccount := map[string]int64{}
+	for _, reservation := range state.Reservations {
+		if reservation.ReservedPoints > math.MaxInt64-reservedByAccount[reservation.AccountID] {
+			return ErrPersonalPointImportConflict
+		}
+		reservations[reservation.ID] = reservation
+		reservedByAccount[reservation.AccountID] += reservation.ReservedPoints
+	}
+	for _, allocation := range state.Allocations {
+		reservation, ok := reservations[allocation.ReservationID]
+		if !ok || reservation.AccountID != allocation.AccountID || reservation.UserID != allocation.UserID || allocation.ReservedPoints > math.MaxInt64-reservedByReservation[allocation.ReservationID] || allocation.ReservedPoints > math.MaxInt64-reservedByLot[allocation.LotID] || allocation.ReservedPoints > math.MaxInt64-reservedAllocationsByAccount[allocation.AccountID] {
+			return ErrPersonalPointImportConflict
+		}
+		reservedByReservation[allocation.ReservationID] += allocation.ReservedPoints
+		reservedByLot[allocation.LotID] += allocation.ReservedPoints
+		reservedAllocationsByAccount[allocation.AccountID] += allocation.ReservedPoints
+	}
+	for _, account := range state.Accounts {
+		if account.FrozenPoints != reservedByAccount[account.ID] || account.FrozenPoints != reservedAllocationsByAccount[account.ID] {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	for _, lot := range state.Lots {
+		if lot.ReservedPoints != reservedByLot[lot.ID] {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	for _, reservation := range state.Reservations {
+		if reservation.ReservedPoints != reservedByReservation[reservation.ID] {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	return nil
+}
+
+func reconcileLegacyGenerationReservations(data *platformData, state *personalPointState) error {
+	allocatedByLot := map[string]int64{}
+	for _, allocation := range state.Allocations {
+		allocatedByLot[allocation.LotID] += allocation.ReservedPoints
+	}
+	for taskIndex := range data.GenerationTasks {
+		task := &data.GenerationTasks[taskIndex]
+		if !activeGenerationTaskStatus(task.Status) {
+			continue
+		}
+		usesPersonalPoints, err := generationTaskUsesPersonalPoints(*task)
+		if err != nil {
+			return err
+		}
+		if !usesPersonalPoints || generationTaskReservedPointCost(*task, task.PointCost) <= 0 {
+			continue
+		}
+		pointCost64, err := generationTaskExactReservationPointCost(*task)
+		if err != nil {
+			return err
+		}
+		pointCost := int(pointCost64)
+		if task.BillingEngine == personalLotBillingEngine || task.PersonalPointAccountID != "" || task.PersonalPointReservationID != "" {
+			if err := validateGenerationTaskPersonalLotMarker(state, *task); err != nil {
+				return err
+			}
+			continue
+		}
+		evidence, accountID, occurredAt, err := uniqueLegacyGenerationReserveEvidence(data, *task, pointCost)
+		if err != nil {
+			return err
+		}
+		account, err := findPersonalAccount(state, accountID, task.UserID)
+		if err != nil {
+			return err
+		}
+		if account == nil || account.FrozenPoints < int64(pointCost) {
+			return ErrPersonalPointImportConflict
+		}
+		idempotencyKey := "generation:reserve:" + task.ID
+		reservation := PersonalPointReservation{
+			ID: stablePointID("reservation", account.ID, idempotencyKey), AccountID: account.ID, UserID: task.UserID,
+			BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), ReservedPoints: int64(pointCost),
+			Status: "RESERVED", IdempotencyKey: idempotencyKey, CreatedAt: occurredAt, UpdatedAt: occurredAt,
+		}
+		remaining := int64(pointCost)
+		lotIndexes := make([]int, 0, len(state.Lots))
+		for i := range state.Lots {
+			if state.Lots[i].AccountID == account.ID && state.Lots[i].UserID == task.UserID && state.Lots[i].SourceType == PointSourceLegacy && state.Lots[i].ReservedPoints > allocatedByLot[state.Lots[i].ID] {
+				lotIndexes = append(lotIndexes, i)
+			}
+		}
+		sort.SliceStable(lotIndexes, func(i, j int) bool {
+			a, b := state.Lots[lotIndexes[i]], state.Lots[lotIndexes[j]]
+			if a.ExpiresAt.IsZero() != b.ExpiresAt.IsZero() {
+				return !a.ExpiresAt.IsZero()
+			}
+			if !a.ExpiresAt.Equal(b.ExpiresAt) {
+				return a.ExpiresAt.Before(b.ExpiresAt)
+			}
+			if !a.GrantedAt.Equal(b.GrantedAt) {
+				return a.GrantedAt.Before(b.GrantedAt)
+			}
+			return a.ID < b.ID
+		})
+		for _, lotIndex := range lotIndexes {
+			if remaining == 0 {
+				break
+			}
+			lot := state.Lots[lotIndex]
+			availableReserved := lot.ReservedPoints - allocatedByLot[lot.ID]
+			amount := availableReserved
+			if amount > remaining {
+				amount = remaining
+			}
+			allocation := PersonalPointAllocation{
+				ID: stablePointID("allocation", reservation.ID, lot.ID), ReservationID: reservation.ID, LotID: lot.ID,
+				AccountID: account.ID, UserID: task.UserID, SourceType: lot.SourceType,
+				AllocatedPoints: amount, ReservedPoints: amount, Status: "RESERVED",
+			}
+			state.Allocations = append(state.Allocations, allocation)
+			allocatedByLot[lot.ID] += amount
+			remaining -= amount
+		}
+		if remaining != 0 {
+			return ErrPersonalPointImportConflict
+		}
+		state.Reservations = append(state.Reservations, reservation)
+		task.BillingEngine = personalLotBillingEngine
+		task.PersonalPointAccountID = account.ID
+		task.PersonalPointReservationID = reservation.ID
+		_ = evidence
+	}
+	reservedByAccount := map[string]int64{}
+	for _, reservation := range state.Reservations {
+		reservedByAccount[reservation.AccountID] += reservation.ReservedPoints
+	}
+	for _, account := range state.Accounts {
+		if account.FrozenPoints != reservedByAccount[account.ID] {
+			return ErrPersonalPointImportConflict
+		}
+	}
+	if err := validatePersonalPointState(state); err != nil {
+		return err
+	}
+	if err := validatePersonalPointReservationAllocationClosure(state); err != nil {
+		return err
+	}
+	return validateActivePersonalGenerationMarkers(data, state)
+}
+
+func uniqueLegacyGenerationReserveEvidence(data *platformData, task generationTask, pointCost int) (walletLedgerEntry, string, time.Time, error) {
+	matches := make([]walletLedgerEntry, 0, 1)
+	for _, entry := range data.WalletLedger {
+		relatedToTask := strings.TrimSpace(entry.TaskID) == task.ID || (upperTrim(entry.ReferenceType) == "GENERATION_TASK" && strings.TrimSpace(entry.ReferenceID) == task.ID)
+		if relatedToTask && (upperTrim(entry.EntryType) == "CAPTURE" || upperTrim(entry.EntryType) == "RELEASE") {
+			return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+		}
+		if upperTrim(entry.EntryType) != "RESERVE" || strings.TrimSpace(entry.TaskID) != task.ID || upperTrim(entry.ReferenceType) != "GENERATION_TASK" || strings.TrimSpace(entry.ReferenceID) != task.ID {
+			continue
+		}
+		matches = append(matches, entry)
+	}
+	if len(matches) != 1 {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	evidence := matches[0]
+	if strings.TrimSpace(evidence.IdempotencyKey) != task.ID+":RESERVE" || strings.TrimSpace(evidence.UserID) != task.UserID {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	points, err := legacyWalletFloatToInt64(evidence.Points)
+	if err != nil || points != int64(pointCost) {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	availableBefore, err := legacyWalletFloatToInt64(evidence.AvailableBefore)
+	if err != nil {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	availableAfter, err := legacyWalletFloatToInt64(evidence.AvailableAfter)
+	if err != nil {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	frozenBefore, err := legacyWalletFloatToInt64(evidence.FrozenBefore)
+	if err != nil {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	frozenAfter, err := legacyWalletFloatToInt64(evidence.FrozenAfter)
+	if err != nil || validatePersonalWalletTransition("RESERVE", points, availableBefore, availableAfter, frozenBefore, frozenAfter) != nil {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	account, err := resolveLegacyWalletAccount(evidence, data.PointAccounts)
+	if err != nil || account.UserID != task.UserID || account.Frozen < pointCost {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	occurredAt, err := legacyWalletCreatedAt(evidence.CreatedAt)
+	if err != nil {
+		return walletLedgerEntry{}, "", time.Time{}, ErrPersonalPointImportConflict
+	}
+	if occurredAt.IsZero() {
+		occurredAt = pointNow(time.Time{})
+	}
+	return evidence, account.ID, occurredAt, nil
 }
 
 func syncPersonalPointJSONProjections(data *platformData) error {
@@ -1796,10 +2145,7 @@ func importLegacyAccountsState(state *personalPointState, accounts []adminPointA
 		if accountID == "" || userID == "" || source.Available < 0 || source.Frozen < 0 {
 			return ErrInvalidPointCommand
 		}
-		if source.Frozen > 0 {
-			return ErrInvalidPointCommand
-		}
-		if source.Available == 0 {
+		if source.Available == 0 && source.Frozen == 0 {
 			continue
 		}
 		legacyKey := "legacy-import:" + accountID
@@ -1811,17 +2157,19 @@ func importLegacyAccountsState(state *personalPointState, accounts []adminPointA
 			}
 		}
 		if alreadyImported {
+			account, accountErr := findPersonalAccount(state, accountID, userID)
+			if accountErr != nil {
+				return accountErr
+			}
+			if account == nil || account.AvailablePoints != int64(source.Available) || account.FrozenPoints != int64(source.Frozen) {
+				return ErrPersonalPointImportConflict
+			}
 			if !hasLegacyImportWalletLedger(state, accountID) {
-				account, accountErr := findPersonalAccount(state, accountID, userID)
-				if accountErr != nil {
-					return accountErr
-				}
-				if account == nil || account.AvailablePoints < int64(source.Available) {
-					return ErrInvalidPointCommand
-				}
 				legacyBefore := account.AvailablePoints - int64(source.Available)
-				if err := appendPersonalWalletLedger(state, *account, "GRANT", int64(source.Available), legacyBefore, account.FrozenPoints, personalWalletKey(accountID, "grant", legacyKey), "LEGACY_IMPORT", accountID, map[string]any{"source_type": string(PointSourceLegacy), "legacy_import": true}, time.Now().UTC()); err != nil {
-					return err
+				if source.Frozen == 0 {
+					if err := appendPersonalWalletLedger(state, *account, "GRANT", int64(source.Available), legacyBefore, account.FrozenPoints, personalWalletKey(accountID, "grant", legacyKey), "LEGACY_IMPORT", accountID, map[string]any{"source_type": string(PointSourceLegacy), "legacy_import": true}, time.Now().UTC()); err != nil {
+						return err
+					}
 				}
 			}
 			continue
@@ -1830,14 +2178,23 @@ func importLegacyAccountsState(state *personalPointState, accounts []adminPointA
 		if err != nil {
 			return err
 		}
+		if account.AvailablePoints != 0 || account.FrozenPoints != 0 {
+			return ErrPersonalPointImportConflict
+		}
 		grantedAt := time.Now().UTC()
-		lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: int64(source.Available), AvailablePoints: int64(source.Available), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "LEGACY"}
+		total := int64(source.Available) + int64(source.Frozen)
+		lot := PersonalPointLot{ID: stablePointID("lot", accountID, legacyKey), AccountID: accountID, UserID: userID, SourceType: PointSourceLegacy, ReferenceType: "LEGACY_IMPORT", ReferenceID: accountID, OriginalPoints: total, AvailablePoints: int64(source.Available), ReservedPoints: int64(source.Frozen), GrantedAt: grantedAt, IdempotencyKey: legacyKey, Status: "LEGACY"}
 		state.Lots = append(state.Lots, lot)
 		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
-		account.AvailablePoints += int64(source.Available)
-		account.TotalGranted += int64(source.Available)
-		appendPersonalMovement(state, lot, "OPENING", int64(source.Available), PersonalPointLot{}, "", "legacy-import:"+accountID, grantedAt)
-		if !hasLegacyImportWalletLedger(state, accountID) {
+		account.AvailablePoints = int64(source.Available)
+		account.FrozenPoints = int64(source.Frozen)
+		account.TotalGranted = int64(source.TotalGranted)
+		if account.TotalGranted < total {
+			account.TotalGranted = total
+		}
+		account.TotalConsumed = int64(source.TotalUsed)
+		appendPersonalMovement(state, lot, "OPENING", total, PersonalPointLot{}, "", "legacy-import:"+accountID, grantedAt)
+		if source.Frozen == 0 && !hasLegacyImportWalletLedger(state, accountID) {
 			if err := appendPersonalWalletLedger(state, *account, "GRANT", int64(source.Available), beforeAvailable, beforeFrozen, personalWalletKey(accountID, "grant", legacyKey), lot.ReferenceType, lot.ReferenceID, map[string]any{"source_type": string(PointSourceLegacy), "legacy_import": true}, grantedAt); err != nil {
 				return err
 			}
