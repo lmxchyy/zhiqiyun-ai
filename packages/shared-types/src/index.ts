@@ -115,6 +115,7 @@ export interface VideoModelCapabilities {
   supportedDurations: number[];
   supportedResolutions: string[];
   supportedAspectRatios: string[];
+  supportedParameters?: string[];
 }
 
 export interface ApiEnvelope<T> {

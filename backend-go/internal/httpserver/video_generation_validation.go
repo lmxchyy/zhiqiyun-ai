@@ -16,6 +16,9 @@ const (
 	videoModeImage = "IMAGE_TO_VIDEO"
 )
 
+var videoCoreParameters = []string{"duration", "resolution", "aspect_ratio"}
+var videoOptionalProviderParameters = []string{"fps", "generate_audio", "motion_strength", "camera_movement"}
+
 type videoGenerationValidationError struct {
 	code    string
 	message string
@@ -36,6 +39,7 @@ func newVideoGenerationValidationError(code, message string) error {
 func safeVideoModelCapabilities() adminVideoModelCapabilities {
 	return adminVideoModelCapabilities{
 		SupportsTextToVideo: true,
+		SupportedParameters: append([]string(nil), videoCoreParameters...),
 	}
 }
 
@@ -63,6 +67,10 @@ func normalizeVideoModelCapabilities(capabilities adminVideoModelCapabilities) a
 	capabilities.SupportedDurations = uniquePositiveInts(capabilities.SupportedDurations)
 	capabilities.SupportedResolutions = uniqueTrimmedStrings(capabilities.SupportedResolutions)
 	capabilities.SupportedAspectRatios = uniqueTrimmedStrings(capabilities.SupportedAspectRatios)
+	capabilities.SupportedParameters = uniqueTrimmedStrings(capabilities.SupportedParameters)
+	if len(capabilities.SupportedParameters) == 0 {
+		capabilities.SupportedParameters = append([]string(nil), videoCoreParameters...)
+	}
 	if !capabilities.SupportsImageToVideo {
 		capabilities.SupportsFirstFrame = false
 		capabilities.SupportsLastFrame = false
@@ -277,14 +285,28 @@ func applyVideoCapabilitiesToSchema(schema adminAIParameterSchemaJSON, capabilit
 				field.Options = stringOptionsToAny(capabilities.SupportedResolutions)
 			}
 		case "ratio", "aspect_ratio":
+			field.Key = "aspect_ratio"
 			if len(capabilities.SupportedAspectRatios) > 0 {
 				field.Options = stringOptionsToAny(capabilities.SupportedAspectRatios)
+			}
+		case "fps", "generate_audio", "motion_strength", "camera_movement":
+			if !videoParameterSupported(capabilities.SupportedParameters, field.Key) {
+				continue
 			}
 		}
 		filtered = append(filtered, field)
 	}
 	schema.Fields = filtered
 	return schema
+}
+
+func videoParameterSupported(supported []string, key string) bool {
+	for _, item := range supported {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(key)) {
+			return true
+		}
+	}
+	return false
 }
 
 func stringOptionsToAny(values []string) []any {
@@ -388,6 +410,14 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 	}
 	if err := validateVideoParameterOption(req.Params, "aspect_ratio", capabilities.SupportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "所选模型不支持该视频比例"); err != nil {
 		return err
+	}
+	for _, key := range videoOptionalProviderParameters {
+		if _, exists := req.Params[key]; exists && !videoParameterSupported(capabilities.SupportedParameters, key) {
+			return newVideoGenerationValidationError(
+				"VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED",
+				fmt.Sprintf("当前视频 Provider 不支持参数 %s", key),
+			)
+		}
 	}
 	return nil
 }

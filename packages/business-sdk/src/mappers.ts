@@ -169,6 +169,7 @@ const safeVideoCapabilities: VideoModelCapabilities = {
   supportedDurations: [],
   supportedResolutions: [],
   supportedAspectRatios: [],
+  supportedParameters: ["duration", "resolution", "aspect_ratio"],
 };
 
 export class VideoGenerationValidationError extends Error {
@@ -221,6 +222,7 @@ export function normalizeVideoModelCapabilities(value: unknown): VideoModelCapab
   const supportsLastFrame = supportsFirstFrame
     && strictBoolean(source, "supportsLastFrame", "supports_last_frame")
     && configuredMax >= 2;
+  const supportedParameters = uniqueStrings(firstDefined(source, "supportedParameters", "supported_parameters"));
 
   return {
     supportsTextToVideo,
@@ -231,6 +233,9 @@ export function normalizeVideoModelCapabilities(value: unknown): VideoModelCapab
     supportedDurations: uniquePositiveNumbers(firstDefined(source, "supportedDurations", "supported_durations")),
     supportedResolutions: uniqueStrings(firstDefined(source, "supportedResolutions", "supported_resolutions")),
     supportedAspectRatios: uniqueStrings(firstDefined(source, "supportedAspectRatios", "supported_aspect_ratios")),
+    supportedParameters: supportedParameters.length
+      ? supportedParameters
+      : ["duration", "resolution", "aspect_ratio"],
   };
 }
 
@@ -383,12 +388,17 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
         validateSupportedVideoValue(resolution, capabilities.supportedResolutions, "VIDEO_RESOLUTION_NOT_SUPPORTED", "分辨率");
         validateSupportedVideoValue(aspectRatio, capabilities.supportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "画面比例");
 
+        const supportedParameterKeys = capabilities.supportedParameters || [];
+        const providerParameters = pickAllowedParameters(extraParameters, videoParameterKeys);
+        for (const key in providerParameters) {
+          if (!supportedParameterKeys.includes(key)) delete providerParameters[key];
+        }
+
         return {
-          ...pickAllowedParameters(extraParameters, videoParameterKeys),
+          ...providerParameters,
           duration,
           resolution,
           aspect_ratio: aspectRatio,
-          generate_audio: extraParameters.generate_audio !== false,
           ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" ? { first_frame: firstFrame } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),
@@ -411,6 +421,15 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
     model: draft.model,
     params,
   };
+}
+
+export async function confirmResolvedVideoModel(
+  requestedModel: string,
+  resolvedModel: string,
+  confirmSwitch: (message: string) => Promise<boolean>,
+): Promise<string | null> {
+  if (!resolvedModel || resolvedModel === requestedModel) return resolvedModel || requestedModel;
+  return await confirmSwitch(`当前模型不可用，是否切换为 ${resolvedModel}？`) ? resolvedModel : null;
 }
 
 export function profileFromAuth(auth: AuthResponse, points = 0): UserProfile {

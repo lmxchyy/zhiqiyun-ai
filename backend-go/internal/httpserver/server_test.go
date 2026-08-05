@@ -519,7 +519,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		"model":"mock-video",
 		"params":{
 			"duration":5,
-			"ratio":"16:9",
+			"ratio":"9:16",
 			"resolution":"720p",
 			"generate_audio":true,
 			"generateAudio":true,
@@ -530,6 +530,21 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	}`), token)
 	if videoReference.Code != http.StatusOK {
 		t.Fatalf("video reference image params were rejected: %d %s", videoReference.Code, videoReference.Body.String())
+	}
+	var videoTask generationTask
+	if err := json.NewDecoder(videoReference.Body).Decode(&videoTask); err != nil {
+		t.Fatal(err)
+	}
+	if videoTask.Params["aspect_ratio"] != "9:16" {
+		t.Fatalf("video task snapshot aspect_ratio = %#v", videoTask.Params["aspect_ratio"])
+	}
+	for _, legacyKey := range []string{"ratio", "generateAudio"} {
+		if _, exists := videoTask.Params[legacyKey]; exists {
+			t.Fatalf("legacy parameter %s leaked into video task snapshot: %+v", legacyKey, videoTask.Params)
+		}
+	}
+	if videoTask.Params["generate_audio"] != true || fmt.Sprint(videoTask.Params["duration"]) != "5" || videoTask.Params["resolution"] != "720p" {
+		t.Fatalf("video task snapshot parameters changed: %+v", videoTask.Params)
 	}
 
 	create := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"n":2}}`), token)

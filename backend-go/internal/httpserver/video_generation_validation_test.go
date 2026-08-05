@@ -23,9 +23,13 @@ func videoValidationTestResolved(capabilities adminVideoModelCapabilities) resol
 			VideoCapabilities: &capabilities,
 		},
 		Schema: adminAIParameterSchema{SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
-			{Key: "duration", Type: "select", Options: []any{float64(5), float64(10)}},
-			{Key: "resolution", Type: "select", Options: []any{"720p", "1080p"}},
-			{Key: "aspect_ratio", Type: "select", Options: []any{"16:9", "9:16"}},
+			{Key: "duration", Type: "select", Options: []any{float64(4), float64(5), float64(10), float64(15)}},
+			{Key: "resolution", Type: "select", Options: []any{"480p", "720p", "1080p", "4k"}},
+			{Key: "aspect_ratio", Type: "select", Options: []any{"16:9", "9:16", "1:1"}},
+			{Key: "fps", Type: "select", Options: []any{float64(24), float64(30)}},
+			{Key: "generate_audio", Type: "switch"},
+			{Key: "motion_strength", Type: "select", Options: []any{"low", "medium", "high"}},
+			{Key: "camera_movement", Type: "select", Options: []any{"static", "pan", "push", "pull"}},
 			{Key: "first_frame", Type: "image_upload"},
 			{Key: "last_frame", Type: "image_upload"},
 		}}},
@@ -39,9 +43,10 @@ func videoValidationTestCapabilities() adminVideoModelCapabilities {
 		SupportsFirstFrame:    true,
 		SupportsLastFrame:     false,
 		MaxReferenceImages:    1,
-		SupportedDurations:    []int{5, 10},
-		SupportedResolutions:  []string{"720p", "1080p"},
-		SupportedAspectRatios: []string{"16:9", "9:16"},
+		SupportedDurations:    []int{4, 5, 10, 15},
+		SupportedResolutions:  []string{"480p", "720p", "1080p", "4k"},
+		SupportedAspectRatios: []string{"16:9", "9:16", "1:1"},
+		SupportedParameters:   []string{"duration", "resolution", "aspect_ratio"},
 	}
 }
 
@@ -53,6 +58,209 @@ func requireVideoValidationCode(t *testing.T, err error, want string) {
 	coded, ok := err.(businessCodeError)
 	if !ok || coded.BusinessCode() != want {
 		t.Fatalf("validation error = %T %v, want code %s", err, err, want)
+	}
+}
+
+func TestNormalizeRequestParamAliasesCanonicalizesVideoRatio(t *testing.T) {
+	tests := []struct {
+		name   string
+		params map[string]any
+		want   string
+	}{
+		{name: "canonical aspect ratio", params: map[string]any{"aspect_ratio": "9:16"}, want: "9:16"},
+		{name: "legacy ratio", params: map[string]any{"ratio": "1:1"}, want: "1:1"},
+		{name: "canonical wins", params: map[string]any{"aspect_ratio": "16:9", "ratio": "9:16"}, want: "16:9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := generation.CreateRequest{ModuleCode: moduleVideoGeneration, Params: tt.params}
+			normalizeRequestParamAliases(&req)
+			if got := req.Params["aspect_ratio"]; got != tt.want {
+				t.Fatalf("aspect_ratio = %#v, want %q", got, tt.want)
+			}
+			if _, exists := req.Params["ratio"]; exists {
+				t.Fatalf("legacy ratio leaked into normalized task params: %+v", req.Params)
+			}
+		})
+	}
+}
+
+func TestVideoCapabilitiesExposeProviderSupportedParameters(t *testing.T) {
+	raw, err := json.Marshal(adminVideoModelCapabilities{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := payload["supported_parameters"]; !exists {
+		t.Fatalf("provider parameter capabilities missing from API payload: %s", raw)
+	}
+}
+
+func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value any
+	}{
+		{name: "fps", key: "fps", value: float64(30)},
+		{name: "audio", key: "generate_audio", value: true},
+		{name: "motion strength", key: "motion_strength", value: "high"},
+		{name: "camera movement", key: "camera_movement", value: "pan"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
+			err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
+			requireVideoValidationCode(t, err, "VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED")
+		})
+	}
+}
+
+func TestVideoGenerationPreservesSupportedCanonicalParameters(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.SupportedParameters = append(capabilities.SupportedParameters,
+		"fps", "generate_audio", "motion_strength", "camera_movement")
+	tests := []struct {
+		name  string
+		key   string
+		value any
+	}{
+		{name: "ratio 16:9", key: "aspect_ratio", value: "16:9"},
+		{name: "ratio 9:16", key: "aspect_ratio", value: "9:16"},
+		{name: "ratio 1:1", key: "aspect_ratio", value: "1:1"},
+		{name: "resolution 480p", key: "resolution", value: "480p"},
+		{name: "resolution 720p", key: "resolution", value: "720p"},
+		{name: "resolution 1080p", key: "resolution", value: "1080p"},
+		{name: "resolution 4k", key: "resolution", value: "4k"},
+		{name: "duration 4", key: "duration", value: float64(4)},
+		{name: "duration 5", key: "duration", value: float64(5)},
+		{name: "duration 10", key: "duration", value: float64(10)},
+		{name: "duration 15", key: "duration", value: float64(15)},
+		{name: "fps 24", key: "fps", value: float64(24)},
+		{name: "fps 30", key: "fps", value: float64(30)},
+		{name: "audio on", key: "generate_audio", value: true},
+		{name: "audio off", key: "generate_audio", value: false},
+		{name: "motion low", key: "motion_strength", value: "low"},
+		{name: "motion medium", key: "motion_strength", value: "medium"},
+		{name: "motion high", key: "motion_strength", value: "high"},
+		{name: "camera static", key: "camera_movement", value: "static"},
+		{name: "camera pan", key: "camera_movement", value: "pan"},
+		{name: "camera push", key: "camera_movement", value: "push"},
+		{name: "camera pull", key: "camera_movement", value: "pull"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
+			if err := validateVideoGenerationRequest(&request, videoValidationTestResolved(capabilities)); err != nil {
+				t.Fatalf("supported parameter was rejected: %v", err)
+			}
+			if got := request.Params[tt.key]; got != tt.value {
+				t.Fatalf("normalized %s = %#v, want %#v", tt.key, got, tt.value)
+			}
+		})
+	}
+}
+
+func TestApplyVideoCapabilitiesToSchemaHidesProviderUnsupportedParameters(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.SupportedParameters = append(capabilities.SupportedParameters, "generate_audio")
+	schema := videoValidationTestResolved(capabilities).Schema.SchemaJSON
+	filtered := applyVideoCapabilitiesToSchema(schema, capabilities)
+	keys := map[string]bool{}
+	for _, field := range filtered.Fields {
+		keys[field.Key] = true
+	}
+	for _, key := range []string{"duration", "resolution", "aspect_ratio", "generate_audio"} {
+		if !keys[key] {
+			t.Fatalf("supported field %s was hidden: %+v", key, keys)
+		}
+	}
+	for _, key := range []string{"fps", "motion_strength", "camera_movement"} {
+		if keys[key] {
+			t.Fatalf("unsupported field %s was advertised: %+v", key, keys)
+		}
+	}
+}
+
+func TestResolveModuleSchemaIntersectsSchemaWithRealProviderProtocol(t *testing.T) {
+	data := seedAdminData()
+	for index := range data.AIModels {
+		if data.AIModels[index].ModelName == "doubao-seedance-2.0" {
+			data.AIModels[index].ChannelID = "channel_cmecloud_seedance"
+		}
+	}
+	for index := range data.APIChannels {
+		if data.APIChannels[index].ID == "channel_cmecloud_seedance" {
+			data.APIChannels[index].Status = "ACTIVE"
+		}
+	}
+	data.APIKeys = append(data.APIKeys, adminAPIKey{
+		ID: "video-contract-key", Customer: "channel_cmecloud_seedance", Secret: "sk-test", Status: "ACTIVE",
+	})
+	for _, schema := range data.AIParameterSchemas {
+		if schema.ModuleCode != moduleVideoGeneration {
+			continue
+		}
+		schema.ID = "schema_video_doubao_contract"
+		schema.ModelName = "doubao-seedance-2.0"
+		data.AIParameterSchemas = append(data.AIParameterSchemas, schema)
+		break
+	}
+
+	resolved, err := resolveModuleSchema(data, adminUser{
+		ID: "user_000002", Role: "MEMBER", PlanID: "plan_month",
+	}, moduleVideoGeneration, "doubao-seedance-2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model.VideoCapabilities == nil {
+		t.Fatal("video capabilities missing")
+	}
+	if !videoParameterSupported(resolved.Model.VideoCapabilities.SupportedParameters, "generate_audio") {
+		t.Fatalf("Seedance content audio capability missing: %+v", resolved.Model.VideoCapabilities.SupportedParameters)
+	}
+	for _, key := range []string{"fps", "motion_strength", "camera_movement"} {
+		if videoParameterSupported(resolved.Model.VideoCapabilities.SupportedParameters, key) {
+			t.Fatalf("unsupported %s advertised by Seedance content protocol", key)
+		}
+	}
+}
+
+func TestLegacyVideoSchemaWritesCanonicalAspectRatioToTaskParams(t *testing.T) {
+	resolved := videoValidationTestResolved(videoValidationTestCapabilities())
+	resolved.Schema.SchemaJSON.Fields = []adminAIParameterField{
+		{Key: "ratio", Type: "select", Default: "9:16", Options: []any{"16:9", "9:16"}},
+	}
+	resolved.FinalSchema = applyVideoCapabilitiesToSchema(resolved.Schema.SchemaJSON, videoValidationTestCapabilities())
+	req := generation.CreateRequest{ModuleCode: moduleVideoGeneration, Params: map[string]any{}}
+	if err := validateGenerationParams(req, resolved); err != nil {
+		t.Fatalf("legacy video schema validation failed: %v", err)
+	}
+	if req.Params["aspect_ratio"] != "9:16" {
+		t.Fatalf("canonical aspect_ratio default = %#v", req.Params["aspect_ratio"])
+	}
+	if _, exists := req.Params["ratio"]; exists {
+		t.Fatalf("legacy ratio leaked from schema into task params: %+v", req.Params)
+	}
+}
+
+func TestValidateGenerationParamsDoesNotWriteUnsupportedProviderDefaults(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	resolved := videoValidationTestResolved(capabilities)
+	resolved.FinalSchema = applyVideoCapabilitiesToSchema(resolved.Schema.SchemaJSON, capabilities)
+	req := generation.CreateRequest{ModuleCode: moduleVideoGeneration, Params: map[string]any{
+		"duration": float64(5), "resolution": "720p", "aspect_ratio": "16:9",
+	}}
+	if err := validateGenerationParams(req, resolved); err != nil {
+		t.Fatalf("video params validation failed: %v", err)
+	}
+	for _, key := range []string{"fps", "generate_audio", "motion_strength", "camera_movement"} {
+		if _, exists := req.Params[key]; exists {
+			t.Fatalf("unsupported default %s leaked into task params: %+v", key, req.Params)
+		}
 	}
 }
 
@@ -175,7 +383,7 @@ func TestVideoGenerationRejectsUnsupportedDuration(t *testing.T) {
 	request := generation.CreateRequest{
 		Type: "TEXT_TO_VIDEO",
 		Params: map[string]any{
-			"duration": float64(15),
+			"duration": float64(12),
 		},
 	}
 	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))

@@ -673,13 +673,21 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
 import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
 import { ApiClientError } from "@xianzhi/api-client";
-import { normalizeVideoModelCapabilities } from "@xianzhi/business-sdk";
+import {
+  confirmResolvedVideoModel,
+  normalizeVideoModelCapabilities,
+} from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 
 const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
 import { uploadReferenceImage } from "../api/files";
 import { inspirationAPI } from "../features/inspiration/api";
-import { readInspirationDraft } from "../features/inspiration/draft";
+import {
+  inspirationReferenceLimit,
+  inspirationReferenceValidationMessage,
+  readInspirationDraft,
+  type InspirationCreationDraft,
+} from "../features/inspiration/draft";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -736,6 +744,7 @@ function guestAwareGenerateTap() {
     uni.showToast({ title: creationError.value, icon: "none" });
     return;
   }
+  if (!validateActiveInspirationReferences()) return;
   trackLogin("guest_click_generate", { mode: creationMode.value });
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
@@ -910,6 +919,18 @@ const creationReferenceSelecting = ref(false);
 const loadedCreationAssetKey = ref("");
 const restoredCreationParams = ref<AnyRecord>({});
 const activeInspirationTemplateId = ref("");
+const activeInspirationDraft = ref<InspirationCreationDraft | null>(null);
+
+function validateActiveInspirationReferences() {
+  const draft = activeInspirationDraft.value;
+  if (!draft) return true;
+  const message = inspirationReferenceValidationMessage(draft, creationReferencePaths.value.filter(Boolean).length);
+  if (!message) return true;
+  creationError.value = message;
+  uni.showToast({ title: message, icon: "none" });
+  return false;
+}
+
 const creationPromptDrafts = ref<Record<CreationMode, string>>({
   image: "",
   video: "",
@@ -975,7 +996,7 @@ const creationReferenceEnabled = computed(
 const creationReferenceTitle = computed(() => creationMode.value === "video" ? "首帧图" : "参考图");
 const creationReferenceLimit = computed(() => creationMode.value === "video"
   ? Math.max(1, Math.min(1, videoModelCapabilities.value.maxReferenceImages || 1))
-  : 3);
+  : inspirationReferenceLimit(activeInspirationDraft.value));
 const creationReferenceDescription = computed(() => {
   if (creationSourceLoading.value) return "正在载入原作品...";
   if (creationSourceError.value) return creationSourceError.value;
@@ -1454,7 +1475,7 @@ function chooseCreationReferenceImages() {
   }
   const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
   if (!remaining) {
-    uni.showToast({ title: creationMode.value === "video" ? "首帧图最多 1 张" : "最多添加 3 张参考图", icon: "none" });
+    uni.showToast({ title: creationMode.value === "video" ? "首帧图最多 1 张" : `最多添加 ${creationReferenceLimit.value} 张参考图`, icon: "none" });
     return;
   }
   creationReferenceSelecting.value = true;
@@ -2405,6 +2426,7 @@ function handleGenerateTap() {
     uni.showToast({ title: creationError.value, icon: "none" });
     return;
   }
+  if (!validateActiveInspirationReferences()) return;
   if (!(["image", "video", "ppt", "infographic"] as CreationMode[]).includes(creationMode.value)) {
     creationError.value = `${activeCreationName.value}暂未开放小程序生成`;
     uni.showToast({ title: creationError.value, icon: "none" });
@@ -2472,32 +2494,48 @@ function constrainedSchemaNumber(schema: AnyRecord, key: string, requested: numb
   return value;
 }
 
+function confirmVideoModelSwitch(message: string): Promise<boolean> {
+  return new Promise(resolve => {
+    uni.showModal({
+      content: message,
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    });
+  });
+}
+
 async function resolveBackendGenerationConfig(
   mode: "image" | "video",
   fallback: string,
-): Promise<BackendGenerationConfig> {
+): Promise<BackendGenerationConfig | null> {
   const moduleCode = mode === "video" ? "video_generation" : "image_generation";
   const loadSchema = (modelName = "") => api<AnyRecord>(
     `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
   );
   try {
     const schema = await loadSchema(fallback);
+    const resolvedModel = rowString(schema, "model_name", "modelName") || fallback;
+    const model = mode === "video"
+      ? await confirmResolvedVideoModel(fallback, resolvedModel, confirmVideoModelSwitch)
+      : resolvedModel;
+    if (!model) return null;
     return {
-      model: rowString(schema, "model_name", "modelName") || fallback,
+      model,
       schema,
       videoCapabilities: moduleSchemaVideoCapabilities(schema),
     };
-  } catch (preferredModelError) {
+  } catch {
     try {
       const schema = await loadSchema();
       const availableModel = rowString(schema, "model_name", "modelName");
       if (availableModel) {
-        console.warn("[创作模型自动回退]", { moduleCode, fallback, availableModel, preferredModelError });
-        return { model: availableModel, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
+        const model = mode === "video"
+          ? await confirmResolvedVideoModel(fallback, availableModel, confirmVideoModelSwitch)
+          : availableModel;
+        if (!model) return null;
+        return { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
       }
-    } catch (defaultModelError) {
-      console.warn("[创作模型预检降级]", { moduleCode, fallback, preferredModelError, defaultModelError });
-    }
+    } catch {}
     return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
   }
 }
@@ -2509,7 +2547,11 @@ watch(
     if (mode !== "video") return;
     const sequence = ++videoCapabilityLoadSequence;
     const config = await resolveBackendGenerationConfig("video", model);
+    if (!config) return;
     if (sequence !== videoCapabilityLoadSequence || creationMode.value !== "video") return;
+    if (config.model && config.model !== model) {
+      restoredCreationParams.value.model = config.model;
+    }
     applyVideoModelCapabilities(config.videoCapabilities, Boolean(previous && previous[1] !== model));
   },
   { immediate: true },
@@ -2532,6 +2574,7 @@ async function resolvePptGenerationModels() {
 }
 
 async function submitCreation(prompt: string) {
+  if (!validateActiveInspirationReferences()) return;
   const startedAt = Date.now();
   generationSubmitting.value = true;
   generationProgress.value = 0;
@@ -2582,6 +2625,7 @@ async function submitCreation(prompt: string) {
         mode,
         activeCreationModel.value,
       );
+      if (!generationConfig) throw new Error("已取消切换模型");
       const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
       if (mode === "video") {
         applyVideoModelCapabilities(generationConfig.videoCapabilities, true);
@@ -2885,7 +2929,10 @@ onMounted(() => {
           mode: inspirationDraft.contentType,
         }
       : rawStudioDraft && typeof rawStudioDraft === "object" ? rawStudioDraft as AnyRecord : {};
-    if (inspirationDraft) activeInspirationTemplateId.value = inspirationDraft.templateId;
+    if (inspirationDraft) {
+      activeInspirationTemplateId.value = inspirationDraft.templateId;
+      activeInspirationDraft.value = inspirationDraft;
+    }
     const draftPrompt = rowString(studioDraft, "prompt");
     if (savedPrompt || draftPrompt) {
       creationPrompt.value = savedPrompt || draftPrompt;

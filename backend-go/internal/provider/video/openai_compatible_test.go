@@ -3,6 +3,7 @@ package video
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -48,9 +49,9 @@ func TestOpenAICompatibleDoubaoSeedanceUsesVideosEndpointAndPayload(t *testing.T
 		Model:  "doubao-seedance-2.0",
 		Prompt: "city skyline",
 		Params: map[string]any{
-			"duration":   5,
-			"ratio":      "16:9",
-			"resolution": "1080p",
+			"duration":     5,
+			"aspect_ratio": "16:9",
+			"resolution":   "1080p",
 		},
 	})
 	if err != nil {
@@ -116,7 +117,7 @@ func TestOpenAICompatibleDoubaoSeedanceUsesConfiguredContentTaskEndpoint(t *test
 		Prompt: "city skyline",
 		Params: map[string]any{
 			"duration":       5,
-			"ratio":          "16:9",
+			"aspect_ratio":   "16:9",
 			"resolution":     "1080p",
 			"generate_audio": true,
 			"referenceImages": []any{
@@ -181,6 +182,127 @@ func TestDoubaoSeedanceEndpointHelpersRespectVersionedBaseURL(t *testing.T) {
 	}
 	if got := videoProviderEndpointForModel("https://example.com", "", "doubao-seedance-2.0"); got != "https://example.com/v1/videos/generations" {
 		t.Fatalf("provider endpoint without version = %q", got)
+	}
+}
+
+func TestVideoAspectRatioPrefersCanonicalAndSupportsLegacyTasks(t *testing.T) {
+	tests := []struct {
+		name   string
+		params map[string]any
+		want   string
+	}{
+		{name: "canonical", params: map[string]any{"aspect_ratio": "9:16"}, want: "9:16"},
+		{name: "legacy", params: map[string]any{"ratio": "1:1"}, want: "1:1"},
+		{name: "canonical wins", params: map[string]any{"aspect_ratio": "16:9", "ratio": "9:16"}, want: "16:9"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := videoAspectRatio(tt.params); got != tt.want {
+				t.Fatalf("videoAspectRatio(%+v) = %q, want %q", tt.params, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVideoRequestBodyMapsCanonicalParametersByProtocol(t *testing.T) {
+	tests := []struct {
+		name            string
+		model           string
+		endpoint        string
+		params          map[string]any
+		wantRatioKey    string
+		wantRatio       string
+		wantResolution  string
+		wantDurationKey string
+		wantDuration    string
+		wantAudio       *bool
+	}{
+		{name: "generic 16:9 480p", model: "video-model", endpoint: "/v1/video/generations", params: map[string]any{"aspect_ratio": "16:9", "resolution": "480p", "duration": 4}, wantRatioKey: "aspect_ratio", wantRatio: "16:9", wantResolution: "480p", wantDurationKey: "seconds", wantDuration: "4"},
+		{name: "doubao video 9:16 720p", model: "doubao-seedance-2.0", endpoint: "/v1/videos/generations", params: map[string]any{"aspect_ratio": "9:16", "resolution": "720p", "duration": 5}, wantRatioKey: "size", wantRatio: "9:16", wantResolution: "720p", wantDurationKey: "duration", wantDuration: "5"},
+		{name: "seedance content 1:1 1080p audio on", model: "doubao-seedance-2.0", endpoint: "/v1/contents/generations/tasks", params: map[string]any{"aspect_ratio": "1:1", "resolution": "1080p", "duration": 10, "generate_audio": true}, wantRatioKey: "ratio", wantRatio: "1:1", wantResolution: "1080p", wantDurationKey: "duration", wantDuration: "10", wantAudio: boolPointer(true)},
+		{name: "seedance content audio off", model: "doubao-seedance-2.0", endpoint: "/v1/contents/generations/tasks", params: map[string]any{"aspect_ratio": "16:9", "resolution": "720p", "duration": 5, "generate_audio": false}, wantRatioKey: "ratio", wantRatio: "16:9", wantResolution: "720p", wantDurationKey: "duration", wantDuration: "5", wantAudio: boolPointer(false)},
+		{name: "generic 4k", model: "video-model", endpoint: "/v1/video/generations", params: map[string]any{"aspect_ratio": "16:9", "resolution": "4k", "duration": 15}, wantRatioKey: "aspect_ratio", wantRatio: "16:9", wantResolution: "4k", wantDurationKey: "seconds", wantDuration: "15"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := videoRequestBodyForEndpoint(tt.model, generation.CreateRequest{Prompt: "test", Params: tt.params}, tt.endpoint, nil)
+			if got := body[tt.wantRatioKey]; got != tt.wantRatio {
+				t.Fatalf("%s = %#v, want %q; body=%+v", tt.wantRatioKey, got, tt.wantRatio, body)
+			}
+			if got := body["resolution"]; got != tt.wantResolution {
+				t.Fatalf("resolution = %#v, want %q", got, tt.wantResolution)
+			}
+			if got := fmt.Sprint(body[tt.wantDurationKey]); got != tt.wantDuration {
+				t.Fatalf("%s = %#v, want %s", tt.wantDurationKey, body[tt.wantDurationKey], tt.wantDuration)
+			}
+			if tt.wantAudio != nil && body["generate_audio"] != *tt.wantAudio {
+				t.Fatalf("generate_audio = %#v, want %v", body["generate_audio"], *tt.wantAudio)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func TestOpenAICompatibleRejectsUnsupportedOptionalParameterBeforeSending(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "video-model", Models: []string{"video-model"},
+	})
+	tests := []struct {
+		key   string
+		value any
+	}{
+		{key: "fps", value: 30},
+		{key: "generate_audio", value: true},
+		{key: "motion_strength", value: "high"},
+		{key: "camera_movement", value: "pan"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			if _, err := provider.Create(context.Background(), generation.CreateRequest{
+				Model: "video-model", Prompt: "test", Params: map[string]any{tt.key: tt.value},
+			}); err == nil {
+				t.Fatalf("unsupported %s was accepted", tt.key)
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("provider was called %d times for unsupported parameters", calls)
+	}
+}
+
+func TestOpenAICompatibleLegacyRatioDoesNotLeakToGenericProtocol(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "legacy-ratio", "status": "succeeded", "video_url": "https://cdn.example/video.mp4",
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "video-model", Models: []string{"video-model"},
+	})
+	if _, err := provider.Create(context.Background(), generation.CreateRequest{
+		Model: "video-model", Prompt: "legacy", Params: map[string]any{"ratio": "9:16"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if payload["aspect_ratio"] != "9:16" {
+		t.Fatalf("canonical aspect_ratio = %#v", payload["aspect_ratio"])
+	}
+	if _, exists := payload["ratio"]; exists {
+		t.Fatalf("legacy ratio leaked to generic protocol: %+v", payload)
 	}
 }
 

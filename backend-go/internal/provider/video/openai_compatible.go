@@ -92,6 +92,11 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	if len(p.models) > 0 && !containsString(p.models, model) {
 		return nil, fmt.Errorf("video provider %s does not support model %s", p.providerCode(), model)
 	}
+	if err := validateVideoProviderParameters(req.Params, OpenAICompatibleSupportedParameters(OpenAICompatibleOptions{
+		Code: p.code, BaseURL: p.baseURL, Model: p.model, Models: p.models, Endpoint: p.endpoint,
+	}, model)); err != nil {
+		return nil, err
+	}
 	imageURLs := referenceImageURLs(req.Params)
 	if isGrokVideo15Model(model) {
 		if len(imageURLs) == 0 {
@@ -110,9 +115,6 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 		if len(imageURLs) == 1 {
 			body["input_reference"] = map[string]any{"image_url": imageURLs[0]}
 		}
-	}
-	if ratio := strings.TrimSpace(fmt.Sprint(req.Params["ratio"])); ratio != "" && ratio != "<nil>" {
-		body["ratio"] = ratio
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -169,9 +171,9 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 		"thumbnailUrl":   thumbnailURL,
 		"raw":            decoded,
 		"metadata": map[string]any{
-			"duration":   req.Params["duration"],
-			"ratio":      req.Params["ratio"],
-			"resolution": req.Params["resolution"],
+			"duration":     req.Params["duration"],
+			"aspect_ratio": videoAspectRatio(req.Params),
+			"resolution":   req.Params["resolution"],
 		},
 	}, nil
 }
@@ -270,6 +272,40 @@ func useSeedanceContentTaskProtocol(endpoint string) bool {
 	return strings.Contains(normalized, "contents/generations/tasks")
 }
 
+var videoCoreParameterKeys = []string{"duration", "resolution", "aspect_ratio"}
+var videoOptionalProviderParameterKeys = []string{"fps", "generate_audio", "motion_strength", "camera_movement"}
+
+// OpenAICompatibleSupportedParameters returns only parameters that this adapter
+// actually forwards for the selected upstream protocol.
+func OpenAICompatibleSupportedParameters(opts OpenAICompatibleOptions, model string) []string {
+	supported := append([]string(nil), videoCoreParameterKeys...)
+	if isDoubaoSeedance2Model(model) && useSeedanceContentTaskProtocol(opts.Endpoint) {
+		supported = append(supported, "generate_audio")
+	}
+	return supported
+}
+
+func containsVideoParameter(parameters []string, key string) bool {
+	for _, parameter := range parameters {
+		if strings.EqualFold(strings.TrimSpace(parameter), strings.TrimSpace(key)) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateVideoProviderParameters(params map[string]any, supported []string) error {
+	for _, key := range videoOptionalProviderParameterKeys {
+		if _, exists := params[key]; exists && !containsVideoParameter(supported, key) {
+			return fmt.Errorf("video provider does not support parameter %s", key)
+		}
+	}
+	if _, exists := params["generateAudio"]; exists && !containsVideoParameter(supported, "generate_audio") {
+		return errors.New("video provider does not support parameter generate_audio")
+	}
+	return nil
+}
+
 func (p OpenAICompatible) shouldUseSeedanceBridge(model string) bool {
 	if !isDoubaoSeedance2Model(model) || !useSeedanceContentTaskProtocol(p.endpoint) {
 		return false
@@ -351,10 +387,10 @@ func (p OpenAICompatible) createWithSeedanceBridge(ctx context.Context, model st
 		"thumbnailUrl":   firstStringByKeys(result, "thumbnailUrl", "thumbnail_url"),
 		"raw":            result,
 		"metadata": map[string]any{
-			"duration":    req.Params["duration"],
-			"ratio":       req.Params["ratio"],
-			"resolution":  req.Params["resolution"],
-			"actualModel": actualModel,
+			"duration":     req.Params["duration"],
+			"aspect_ratio": videoAspectRatio(req.Params),
+			"resolution":   req.Params["resolution"],
+			"actualModel":  actualModel,
 		},
 	}, nil
 }
@@ -600,11 +636,13 @@ func videoSeconds(params map[string]any) int {
 }
 
 func videoAspectRatio(params map[string]any) string {
-	ratio := strings.TrimSpace(fmt.Sprint(params["ratio"]))
-	if ratio == "" || ratio == "<nil>" {
-		return "16:9"
+	for _, key := range []string{"aspect_ratio", "ratio"} {
+		ratio := strings.TrimSpace(fmt.Sprint(params[key]))
+		if ratio != "" && ratio != "<nil>" {
+			return ratio
+		}
 	}
-	return ratio
+	return "16:9"
 }
 
 func videoResolution(params map[string]any) string {
