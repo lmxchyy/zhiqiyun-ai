@@ -58,6 +58,20 @@ func grantPermanentAdminJSONPersonalPoints(data *adminPlatformData, userID strin
 		for _, item := range data.PointAccounts {
 			if item.UserID == userID {
 				accountID = item.ID
+				store := &JSONPersonalPointStore{memory: &data.PersonalPoints}
+				if err := store.importLegacyAccounts([]adminPointAccount{item}); err != nil {
+					return personalPointInflowResult{}, err
+				}
+				account, err := findPersonalAccount(store.memory, accountID, userID)
+				if err != nil {
+					return personalPointInflowResult{}, err
+				}
+				if account != nil {
+					// The legacy opening balance is carried by its LEGACY lot; it is not
+					// a newly granted amount and must not inflate TotalGranted.
+					account.TotalGranted = int64(item.TotalGranted)
+				}
+				data.PersonalPoints = clonePersonalPointState(*store.memory)
 				break
 			}
 		}

@@ -329,7 +329,17 @@ func TestJSONRegisteredCustomerAndGiftCommitTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Users) != 1 || data.Users[0].ID != created.ID || len(data.PersonalPoints.Lots) != 1 || data.PersonalPoints.Lots[0].SourceType != PointSourceRegistrationGift || data.PersonalPoints.Lots[0].OriginalPoints != 7 {
+	registeredFound := false
+	defaultAdminFound := false
+	for _, user := range data.Users {
+		registeredFound = registeredFound || user.ID == created.ID
+		defaultAdminFound = defaultAdminFound || (user.ID == "user_000001" && user.Email == "admin@xianzhi.ai" && user.Role == "SUPER_ADMIN")
+	}
+	registrationGiftFound := false
+	for _, lot := range data.PersonalPoints.Lots {
+		registrationGiftFound = registrationGiftFound || (lot.UserID == created.ID && lot.SourceType == PointSourceRegistrationGift && lot.OriginalPoints == 7)
+	}
+	if !registeredFound || !defaultAdminFound || !registrationGiftFound {
 		t.Fatalf("atomic registration state users=%+v lots=%+v", data.Users, data.PersonalPoints.Lots)
 	}
 }

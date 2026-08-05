@@ -4196,8 +4196,15 @@ func (s *jsonStore) loadLocked() (platformData, error) {
 	raw, err := s.backend.Read()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			data.Counters = map[string]int{}
-			return data, nil
+			seeded := platformData(seedAdminData())
+			if seeded.Counters == nil {
+				seeded.Counters = map[string]int{}
+			}
+			if seeded.PointsAvailable == nil {
+				initial := 0
+				seeded.PointsAvailable = &initial
+			}
+			return seeded, nil
 		}
 		return data, err
 	}

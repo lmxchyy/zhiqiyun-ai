@@ -85,7 +85,7 @@ func TestPersonalPointsPolicySelectsOnlyCurrentlyEffectivePublishedCalendarMonth
 	ctx := context.Background()
 	store := NewJSONPersonalPointStore(filepath.Join(t.TempDir(), "points.json"))
 	service := NewPersonalPointService(store)
-	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	if err := store.SetPolicy(PointExpiryPolicy{ID: "future", Version: 2, Revision: 1, Enabled: true, DurationValue: 9, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai", SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED", EffectiveFrom: now.Add(24 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}

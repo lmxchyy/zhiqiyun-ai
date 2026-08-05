@@ -112,11 +112,13 @@ func TestPublicGuestExperienceEventsAreWhitelistedAndSanitized(t *testing.T) {
 
 func TestGenerationTaskLifecycle(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 
 	assertStatus(t, handler, http.MethodGet, "/api/v1/health", nil, http.StatusOK)
@@ -169,7 +171,10 @@ func TestGenerationTaskLifecycle(t *testing.T) {
 }
 
 func TestUserContentPagedResponses(t *testing.T) {
-	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -235,11 +240,13 @@ func TestGenerationTaskPrioritySort(t *testing.T) {
 
 func TestVideoGenerationReturnsPendingAndCompletesAsync(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -384,6 +391,7 @@ func TestImageEditLineageParametersAreAllowedInternalParameters(t *testing.T) {
 func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	testStore := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, testStore, "user_000002", 100)
 	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
@@ -1021,7 +1029,9 @@ func TestFirstRechargeRequires996AgentPackage(t *testing.T) {
 
 func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -1067,11 +1077,13 @@ func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 
 func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -1177,11 +1189,13 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 
 func TestPPTImageGenerationCreatesImageUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -2942,11 +2956,13 @@ func TestAdminUsageAndCommissionOperations(t *testing.T) {
 
 func TestConcurrentGenerationTaskCreatesKeepUniqueIDs(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 

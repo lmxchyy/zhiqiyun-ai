@@ -14,7 +14,10 @@ import (
 )
 
 func TestAssetCenterLifecycle(t *testing.T) {
-	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -73,6 +76,7 @@ func TestAssetCenterLifecycle(t *testing.T) {
 
 func TestAssetCenterTaskCancellation(t *testing.T) {
 	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	grantPermanentTestPoints(t, store, "user_000002", 100)
 	task, err := store.CreatePendingGenerationTask(generation.CreateRequest{
 		UserID: "user_000002",
 		Type:   "TEXT_TO_IMAGE",
@@ -111,6 +115,7 @@ func TestAssetCenterTaskCancellation(t *testing.T) {
 
 func TestAssetCenterTaskDeletionRejectsActive(t *testing.T) {
 	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	grantPermanentTestPoints(t, store, "user_000002", 100)
 	task, err := store.CreatePendingGenerationTask(generation.CreateRequest{
 		UserID: "user_000002",
 		Type:   "TEXT_TO_IMAGE",
