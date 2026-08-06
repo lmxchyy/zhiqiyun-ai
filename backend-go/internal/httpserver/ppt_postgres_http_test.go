@@ -104,12 +104,22 @@ func newPPTHTTPTestFixture(t *testing.T) (*sql.DB, pptHTTPTestFixture) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := insertPointAccount(ctx, tx, adminPointAccount{ID: "points_" + user.item.ID, UserID: user.item.ID, Available: 100}); err != nil {
+		available := 100
+		if user.item.ID == fixture.owner.ID {
+			available = 0
+		}
+		if err := insertPointAccount(ctx, tx, adminPointAccount{ID: "points_" + user.item.ID, UserID: user.item.ID, Available: available}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := NewPostgresPersonalPointStore(db).grant(ctx, PersonalPointGrantCommand{
+		AccountID: "points_" + fixture.owner.ID, UserID: fixture.owner.ID, Source: PointSourceRecharge, Points: 100,
+		ReferenceType: "TEST", ReferenceID: "ppt-http-fixture-" + suffix, IdempotencyKey: "ppt-http-fixture-" + suffix,
+	}); err != nil {
+		t.Fatalf("grant PPT HTTP fixture points: %v", err)
 	}
 	t.Cleanup(func() { cleanupPPTHTTPTestFixture(t, db, fixture) })
 	return db, fixture
@@ -244,6 +254,15 @@ func cleanupPPTHTTPTestFixture(t *testing.T, db *sql.DB, fixture pptHTTPTestFixt
 			`delete from xz_billing_events where user_id = $1`,
 			`delete from xz_audit_logs where actor_id = $1`,
 			`delete from xz_user_wallets where user_id = $1`,
+		} {
+			if _, err := db.ExecContext(ctx, statement, user.ID); err != nil {
+				t.Errorf("cleanup fixture user %s: %v", user.ID, err)
+			}
+		}
+	}
+	cleanupPPTHTTPPersonalPointRows(t, ctx, db, []string{fixture.owner.ID, fixture.other.ID, fixture.admin.ID})
+	for _, user := range []pptHTTPTestUser{fixture.owner, fixture.other, fixture.admin} {
+		for _, statement := range []string{
 			`delete from xz_point_accounts where user_id = $1`,
 			`delete from xz_users where id = $1`,
 		} {
@@ -254,6 +273,36 @@ func cleanupPPTHTTPTestFixture(t *testing.T, db *sql.DB, fixture pptHTTPTestFixt
 	}
 	if _, err := db.ExecContext(ctx, `delete from xz_audit_logs where metadata->>'clientIP' = $1`, fixture.clientIP); err != nil {
 		t.Errorf("cleanup fixture audit records: %v", err)
+	}
+}
+
+func cleanupPPTHTTPPersonalPointRows(t *testing.T, ctx context.Context, db *sql.DB, userIDs []string) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Errorf("begin PPT HTTP personal point cleanup: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `set local session_replication_role = replica`); err != nil {
+		t.Errorf("isolate PPT HTTP personal point cleanup triggers: %v", err)
+		return
+	}
+	for _, userID := range userIDs {
+		for _, statement := range []string{
+			`delete from xz_personal_point_lot_movements where user_id=$1`,
+			`delete from xz_personal_point_reservation_allocations where user_id=$1`,
+			`delete from xz_personal_point_reservations where user_id=$1`,
+			`delete from xz_personal_point_lots where user_id=$1`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement, userID); err != nil {
+				t.Errorf("clean PPT HTTP personal point rows for %s: %v", userID, err)
+				return
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Errorf("commit PPT HTTP personal point cleanup: %v", err)
 	}
 }
 

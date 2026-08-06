@@ -1421,7 +1421,7 @@ func TestFailedGenerationReservationClaimCanRetryAndThenCancel(t *testing.T) {
 	}
 }
 
-func TestGenerationClaimReplayRefreshesLeaseAndBlocksStaleCancelTransfer(t *testing.T) {
+func TestGenerationClaimProcessingReplayIsReadOnlyAndPreservesOriginalStaleAge(t *testing.T) {
 	db, state := newPPTPostgresTestDB(t)
 	service := NewPostgresService(db)
 	task := createOutlineReadySession(t, service, "user_prebind_heartbeat", 1)
@@ -1440,20 +1440,45 @@ func TestGenerationClaimReplayRefreshesLeaseAndBlocksStaleCancelTransfer(t *test
 	}); err != nil {
 		t.Fatalf("age confirm claim: %v", err)
 	}
-	replayed, refreshed, err := service.BeginGenerationClaim(context.Background(), taskOwner(task), task.TaskID, claim.Key, claim.RequestHash)
-	if err != nil || !replayed.Replay {
-		t.Fatalf("claim replay=%#v task=%#v err=%v", replayed, refreshed, err)
+	beforeReplay, _ := state.snapshot(task.TaskID)
+	writesBeforeReplay := state.strictUpsertCount()
+	replayed, replayTask, err := service.BeginGenerationClaim(context.Background(), taskOwner(task), task.TaskID, claim.Key, claim.RequestHash)
+	if err != nil || !replayed.Replay || replayed.CompletedReplay || replayed.OperationToken != claim.OperationToken {
+		t.Fatalf("claim replay=%#v task=%#v err=%v", replayed, replayTask, err)
 	}
-	record, ok := idempotencyRecordByScope(refreshed.IdempotencyRecords, idempotencyScopeConfirm)
-	if !ok || record.UpdatedAt == staleAt {
-		t.Fatalf("refreshed confirm record=%#v found=%v", record, ok)
+	record, ok := idempotencyRecordByScope(replayTask.IdempotencyRecords, idempotencyScopeConfirm)
+	if !ok || record.UpdatedAt != staleAt || replayTask.UpdatedAt != beforeReplay.updatedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("read-only replay record=%#v found=%v task=%#v", record, ok, replayTask)
 	}
-	before, _ := state.snapshot(task.TaskID)
-	if _, _, err := service.BeginCancelAfterStaleGenerationClaim(
-		context.Background(), taskOwner(task), task.TaskID, replayed, "cancel-heartbeat", "cancel-hash", time.Now().UTC()); !errors.Is(err, ErrOperationInProgress) {
-		t.Fatalf("fresh replay cancel transfer error = %v, want ErrOperationInProgress", err)
+	assertPPTPostgresRowUnchanged(t, state, task.TaskID, beforeReplay)
+	if writesAfterReplay := state.strictUpsertCount(); writesAfterReplay != writesBeforeReplay {
+		t.Fatalf("processing replay persisted task: before=%d after=%d", writesBeforeReplay, writesAfterReplay)
 	}
-	assertPPTPostgresRowUnchanged(t, state, task.TaskID, before)
+	cancelClaim, recovered, err := service.BeginCancelAfterStaleGenerationClaim(
+		context.Background(), taskOwner(task), task.TaskID, replayed, "cancel-heartbeat", "cancel-hash", time.Now().UTC())
+	if err != nil || cancelClaim.OperationToken == "" || recovered.Stage != StageGenerating {
+		t.Fatalf("stale replay cancel transfer claim=%#v task=%#v err=%v", cancelClaim, recovered, err)
+	}
+}
+
+func TestRequireOperationStageAllowsOnlyExactLegacyOutlineScopeAtOutlineStages(t *testing.T) {
+	for _, stage := range []Stage{StageDraft, StageOutlineReady} {
+		if err := requireOperationStage(Task{Stage: stage}, "legacy-outline"); err != nil {
+			t.Errorf("legacy-outline at %s error = %v", stage, err)
+		}
+	}
+
+	for _, stage := range []Stage{StageGenerating, StageReady, StageFailed, StageCancelled} {
+		if err := requireOperationStage(Task{Stage: stage}, "legacy-outline"); err == nil {
+			t.Errorf("legacy-outline at %s unexpectedly allowed", stage)
+		}
+	}
+
+	for _, scope := range []string{"legacy-outline-extra", "legacy-outline:message", "legacy_outline"} {
+		if err := requireOperationStage(Task{Stage: StageDraft}, scope); !errors.Is(err, ErrInvalidStage) {
+			t.Errorf("near-miss scope %q error = %v, want ErrInvalidStage", scope, err)
+		}
+	}
 }
 
 func TestStaleGenerationClaimUsesOnlyFencedBillingBindingForRetryableCancel(t *testing.T) {

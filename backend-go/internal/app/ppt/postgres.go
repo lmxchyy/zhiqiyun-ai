@@ -793,8 +793,7 @@ func (s *Service) BeginGenerationClaim(ctx context.Context, owner OwnerScope, ta
 				}
 				claim = operationClaimFromRecord(*record, false)
 				claim.Replay = true
-				record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-				return nil
+				return errPPTPostgresReadOnly
 			}
 			if task.Stage != StageOutlineReady {
 				return stageTransitionError(*task)
@@ -1631,7 +1630,7 @@ func requireOperationStage(task Task, scope string) error {
 		return stageTransitionError(task)
 	}
 	switch scope {
-	case "message", "messages", "import-outline", "import_outline":
+	case "message", "messages", "import-outline", "import_outline", "legacy-outline":
 		return requireOutlineOperationStage(task)
 	case "revise-slide", "revise_slide":
 		if task.Stage == StageReady {

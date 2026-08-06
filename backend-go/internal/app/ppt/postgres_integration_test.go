@@ -88,7 +88,8 @@ func TestPostgresPPTTaskPersistenceConcurrencyDoesNotMirrorLegacyFile(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Slides[0].ImageURL != generatedImage || updated.Slides[0].VisualTaskID != "image_task_test" || updated.Slides[0].VisualModelName != "image_model_test" || len(updated.Slides[0].VisualHistory) != 1 {
+	assertSlideImageRepresentations(t, updated.Slides[0], generatedImage)
+	if updated.Slides[0].VisualTaskID != "image_task_test" || updated.Slides[0].VisualModelName != "image_model_test" || len(updated.Slides[0].VisualHistory) != 0 {
 		t.Fatalf("atomic visual update failed: %#v", updated.Slides[0])
 	}
 
@@ -142,7 +143,7 @@ func TestPostgresPPTActiveStateDoesNotExpireAndTerminalStatesDoNotBlock(t *testi
 	}()
 
 	persistPPTIntegrationTask(t, db, NormalizeTask(Task{
-		TaskID: "ppt_active_task_" + suffix, UserID: users[0], Stage: StageGenerating,
+		TaskID: "ppt_active_task_" + suffix, TenantID: "tenant_default", UserID: users[0], Stage: StageGenerating,
 		Status: StatusProcessing, SlideCount: 3, CreatedAt: old, UpdatedAt: old,
 	}))
 	if _, err := service.GenerateWithConcurrency(GenerateRequest{Owner: testOwner(users[0]), Prompt: "blocked", SlideCount: 3}, 0, 1); !errors.Is(err, ErrConcurrency) {
@@ -151,8 +152,8 @@ func TestPostgresPPTActiveStateDoesNotExpireAndTerminalStatesDoNotBlock(t *testi
 
 	for index, stage := range []Stage{StageFailed, StageCancelled} {
 		persistPPTIntegrationTask(t, db, NormalizeTask(Task{
-			TaskID: "ppt_terminal_task_" + fmt.Sprint(index) + "_" + suffix,
-			UserID: users[index+1], Stage: stage, Status: StageStatus(stage),
+			TaskID:   "ppt_terminal_task_" + fmt.Sprint(index) + "_" + suffix,
+			TenantID: "tenant_default", UserID: users[index+1], Stage: stage, Status: StageStatus(stage),
 			SlideCount: 3, CreatedAt: old, UpdatedAt: old,
 		}))
 		if _, err := service.GenerateWithConcurrency(GenerateRequest{Owner: testOwner(users[index+1]), Prompt: "allowed", SlideCount: 3}, 0, 1); err != nil {
@@ -282,7 +283,7 @@ func TestPostgresPPTNoopReplayBranchesAreReadOnly(t *testing.T) {
 		staleAt := now.Add(-operationProcessingStaleAfter - time.Minute).Format(time.RFC3339Nano)
 		userID := newUser("ppt_noop_stale_cancel")
 		task := NormalizeTask(Task{
-			TaskID: "ppt_noop_stale_cancel_" + suffix, SessionID: "ppt_noop_stale_cancel_" + suffix, UserID: userID,
+			TaskID: "ppt_noop_stale_cancel_" + suffix, SessionID: "ppt_noop_stale_cancel_" + suffix, TenantID: "tenant_default", UserID: userID,
 			SkillCode: "general", Stage: StageGenerating, Status: StatusProcessing, BillingTaskID: "billing-verified",
 			Outline: &Outline{Title: "Stale", Slides: []OutlineSlide{{Page: 1, Title: "Only"}}}, SlideCount: 1,
 			IdempotencyRecords: []IdempotencyRecord{
