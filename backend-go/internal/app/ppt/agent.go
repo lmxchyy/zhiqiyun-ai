@@ -89,6 +89,35 @@ type IdempotencyRecord struct {
 	UpdatedAt      string `json:"updatedAt"`
 }
 
+// DeckSpec is the canonical presentation configuration captured when a
+// session is created. It is part of the create-session idempotency identity so
+// reloads and replays cannot silently change generation or billing intent.
+type DeckSpec struct {
+	Tone                  string `json:"tone,omitempty"`
+	TextContent           string `json:"textContent,omitempty"`
+	Scenario              string `json:"scenario,omitempty"`
+	GenerationAspectRatio string `json:"generationAspectRatio,omitempty"`
+	Theme                 string `json:"theme,omitempty"`
+	AutoThemeEnabled      bool   `json:"autoThemeEnabled,omitempty"`
+	EnableWebSearch       bool   `json:"enableWebSearch,omitempty"`
+	ImageSource           string `json:"imageSource,omitempty"`
+	TextModel             string `json:"textModel,omitempty"`
+	ImageModel            string `json:"imageModel,omitempty"`
+	ImageStyle            string `json:"imageStyle,omitempty"`
+	PeopleStyle           string `json:"peopleStyle,omitempty"`
+	ImageLighting         string `json:"imageLighting,omitempty"`
+	ImageComposition      string `json:"imageComposition,omitempty"`
+	TextInImage           bool   `json:"textInImage,omitempty"`
+}
+
+func (spec DeckSpec) WithImages() bool {
+	return normalizeDeckSpec(spec).ImageSource != "none"
+}
+
+func (task Task) WithImages() bool {
+	return deckSpecFromTask(task).WithImages()
+}
+
 type SessionRequest struct {
 	Owner            OwnerScope `json:"-"`
 	OrganizationID   string     `json:"organizationId,omitempty"`
@@ -102,6 +131,34 @@ type SessionRequest struct {
 	SlideCount       int        `json:"slideCount"`
 	Language         string     `json:"language"`
 	Audience         string     `json:"audience"`
+	DeckSpec         DeckSpec   `json:"deckSpec"`
+}
+
+func normalizeDeckSpec(spec DeckSpec) DeckSpec {
+	spec.Tone = strings.ToLower(strings.TrimSpace(spec.Tone))
+	spec.TextContent = strings.ToLower(strings.TrimSpace(spec.TextContent))
+	spec.Scenario = strings.ToLower(strings.TrimSpace(spec.Scenario))
+	spec.GenerationAspectRatio = strings.TrimSpace(spec.GenerationAspectRatio)
+	spec.Theme = strings.TrimSpace(spec.Theme)
+	spec.ImageSource = strings.ToLower(strings.TrimSpace(spec.ImageSource))
+	spec.TextModel = strings.TrimSpace(spec.TextModel)
+	spec.ImageModel = strings.TrimSpace(spec.ImageModel)
+	spec.ImageStyle = strings.TrimSpace(spec.ImageStyle)
+	spec.PeopleStyle = strings.TrimSpace(spec.PeopleStyle)
+	spec.ImageLighting = strings.TrimSpace(spec.ImageLighting)
+	spec.ImageComposition = strings.TrimSpace(spec.ImageComposition)
+	return spec
+}
+
+func deckSpecFromTask(task Task) DeckSpec {
+	return normalizeDeckSpec(DeckSpec{
+		Tone: task.Tone, TextContent: task.TextContent, Scenario: task.Scenario,
+		GenerationAspectRatio: task.GenerationAspectRatio, Theme: task.Theme,
+		AutoThemeEnabled: task.AutoThemeEnabled, EnableWebSearch: task.EnableWebSearch,
+		ImageSource: task.ImageSource, TextModel: task.TextModel, ImageModel: task.ImageModel,
+		ImageStyle: task.ImageStyle, PeopleStyle: task.PeopleStyle, ImageLighting: task.ImageLighting,
+		ImageComposition: task.ImageComposition, TextInImage: task.TextInImage,
+	})
 }
 
 type OperationClaim struct {

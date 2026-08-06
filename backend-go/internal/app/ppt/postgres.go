@@ -356,6 +356,7 @@ type postgresSessionRequestIdentity struct {
 	SlideCount       int      `json:"slideCount"`
 	Language         string   `json:"language"`
 	Audience         string   `json:"audience"`
+	DeckSpec         DeckSpec `json:"deckSpec"`
 }
 
 type postgresSessionQueryer interface {
@@ -375,6 +376,7 @@ func normalizePostgresSessionRequest(req SessionRequest) SessionRequest {
 	req.SourceFileIDs = normalizePPTSourceFileIDs(req.SourceFileIDs)
 	req.Language = strings.ToLower(strings.TrimSpace(req.Language))
 	req.Audience = strings.TrimSpace(req.Audience)
+	req.DeckSpec = normalizeDeckSpec(req.DeckSpec)
 	return req
 }
 
@@ -384,7 +386,7 @@ func postgresSessionIdentityFromRequest(req SessionRequest) postgresSessionReque
 		UserID: req.Owner.UserID, TenantID: req.Owner.TenantID, OrganizationID: req.OrganizationID, ContextType: req.ContextType,
 		BillingScope: req.BillingScope, BillingAccountID: req.BillingAccountID, ClientRequestID: req.ClientRequestID,
 		Prompt: req.Prompt, SkillCode: req.SkillCode, SourceFileIDs: append([]string(nil), req.SourceFileIDs...),
-		SlideCount: req.SlideCount, Language: req.Language, Audience: req.Audience,
+		SlideCount: req.SlideCount, Language: req.Language, Audience: req.Audience, DeckSpec: req.DeckSpec,
 	}
 }
 
@@ -393,7 +395,7 @@ func postgresSessionIdentityFromTask(task Task) postgresSessionRequestIdentity {
 		Owner: OwnerScope{UserID: task.UserID, TenantID: task.TenantID}, OrganizationID: task.OrganizationID, ContextType: task.ContextType,
 		BillingScope: task.BillingScope, BillingAccountID: task.BillingAccountID, ClientRequestID: task.ClientRequestID,
 		Prompt: task.Prompt, SkillCode: task.SkillCode, SourceFileIDs: task.SourceFileIDs,
-		SlideCount: task.SlideCount, Language: task.Language, Audience: task.Audience,
+		SlideCount: task.SlideCount, Language: task.Language, Audience: task.Audience, DeckSpec: deckSpecFromTask(task),
 	})
 }
 
@@ -506,7 +508,14 @@ func (s *Service) CreateSession(ctx context.Context, req SessionRequest) (Task, 
 		Type: "ppt", MediaType: "ppt", SkillCode: req.SkillCode, Stage: StageDraft, Status: StatusPending,
 		Title: titleFromPrompt(req.Prompt), Prompt: req.Prompt, SlideCount: req.SlideCount,
 		Language: req.Language, Audience: req.Audience, SourceFileIDs: append([]string(nil), req.SourceFileIDs...),
-		CreatedAt: now, UpdatedAt: now,
+		Tone: req.DeckSpec.Tone, TextContent: req.DeckSpec.TextContent, Scenario: req.DeckSpec.Scenario,
+		GenerationAspectRatio: req.DeckSpec.GenerationAspectRatio, Theme: req.DeckSpec.Theme,
+		AutoThemeEnabled: req.DeckSpec.AutoThemeEnabled, EnableWebSearch: req.DeckSpec.EnableWebSearch,
+		ImageSource: req.DeckSpec.ImageSource, TextModel: req.DeckSpec.TextModel, ImageModel: req.DeckSpec.ImageModel,
+		ImageStyle: req.DeckSpec.ImageStyle, PeopleStyle: req.DeckSpec.PeopleStyle,
+		ImageLighting: req.DeckSpec.ImageLighting, ImageComposition: req.DeckSpec.ImageComposition,
+		TextInImage: req.DeckSpec.TextInImage,
+		CreatedAt:   now, UpdatedAt: now,
 	})
 	if req.ClientRequestID != "" {
 		task.IdempotencyRecords = []IdempotencyRecord{{
@@ -1034,6 +1043,33 @@ func (s *Service) RenewGenerationRun(ctx context.Context, owner OwnerScope, task
 		return GenerationClaim{}, Task{}, err
 	}
 	return renewed, task, nil
+}
+
+// AcquireGenerationCleanupFence atomically extends the canonical lease only
+// when claim still owns its exact run token. Unlike ordinary renewal it allows
+// a live cancel claim, because billing release must still settle before cancel.
+func (s *Service) AcquireGenerationCleanupFence(ctx context.Context, owner OwnerScope, taskID string, claim GenerationClaim, now time.Time) (GenerationClaim, Task, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	var fenced GenerationClaim
+	task, err := s.updatePostgresTaskContext(ctx, owner, taskID, func(task *Task, _ time.Time) error {
+		if err := requireGenerationClaim(*task, claim); err != nil {
+			return err
+		}
+		renewGenerationLease(task, claim.RunToken, now)
+		fenced = GenerationClaim{
+			RunToken:   task.GenerationLease.RunToken,
+			LeaseUntil: task.GenerationLease.LeaseUntil,
+		}
+		return nil
+	})
+	if err != nil {
+		return GenerationClaim{}, Task{}, err
+	}
+	return fenced, task, nil
 }
 
 func (s *Service) PersistGeneratedSlide(ctx context.Context, owner OwnerScope, taskID string, claim GenerationClaim, slide Slide) (Task, error) {

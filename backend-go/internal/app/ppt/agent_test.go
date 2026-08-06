@@ -45,6 +45,29 @@ func TestOwnerScopeRejectsBlankTenantOrUser(t *testing.T) {
 	}
 }
 
+func TestDeckSpecWithImagesUsesCanonicalNormalizedStrategy(t *testing.T) {
+	tests := []struct {
+		imageSource string
+		want        bool
+	}{
+		{imageSource: "none", want: false},
+		{imageSource: " NONE ", want: false},
+		{imageSource: "ai", want: true},
+		{imageSource: "stock", want: true},
+		{imageSource: "", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.imageSource, func(t *testing.T) {
+			if got := (DeckSpec{ImageSource: test.imageSource}).WithImages(); got != test.want {
+				t.Fatalf("DeckSpec.WithImages() = %v, want %v for %q", got, test.want, test.imageSource)
+			}
+			if got := (Task{ImageSource: test.imageSource}).WithImages(); got != test.want {
+				t.Fatalf("Task.WithImages() = %v, want %v for %q", got, test.want, test.imageSource)
+			}
+		})
+	}
+}
+
 func TestNormalizeTaskDoesNotRepairConflictingTerminalStatus(t *testing.T) {
 	for _, stage := range []Stage{StageFailed, StageCancelled} {
 		t.Run(string(stage), func(t *testing.T) {

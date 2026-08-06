@@ -24,34 +24,29 @@ func TestPPTVisualHTTPDisablePreservesContentAndEnforcesOwnership(t *testing.T) 
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	store := newJSONStore(dataPath)
 	grantPermanentTestPoints(t, store, "user_000002", 100)
-	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir(), PPTAutoImageMode: "disabled"}, store)
-	handler := server.Handler
+	handler, pptService := newInMemoryPPTTestHandler(t, config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir(), PPTAutoImageMode: "disabled"}, store)
 	ownerToken := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 	otherToken := loginToken(t, handler, "agent1@xianzhi.ai", "Agent123!")
 
-	createBody := bytes.NewBufferString(`{
-		"prompt":"HTTP visual contract test",
-		"slideCount":1,
-		"imageSource":"none",
-		"outline":{"title":"Contract deck","slides":[{"page":1,"title":"Keep this title","summary":"Keep this complete slide body","bulletPoints":["Keep this bullet"],"layout":"imageText","slideType":"text_image"}]}
-	}`)
-	createdResponse := authedRequest(t, handler, http.MethodPost, "/api/v1/ppt/generate", createBody, ownerToken)
-	if createdResponse.Code != http.StatusOK {
-		t.Fatalf("create ppt status = %d, body = %s", createdResponse.Code, createdResponse.Body.String())
-	}
-	var created pptapp.GenerateResponse
-	if err := json.NewDecoder(createdResponse.Body).Decode(&created); err != nil {
+	owner := pptapp.OwnerScope{TenantID: "tenant_default", UserID: "user_000002"}
+	created, err := pptService.Generate(pptapp.GenerateRequest{
+		Owner: owner, TenantID: owner.TenantID, UserID: owner.UserID,
+		Prompt: "HTTP visual contract test", SlideCount: 1, ImageSource: "none",
+		Outline: &pptapp.Outline{
+			Title: "Contract deck",
+			Slides: []pptapp.OutlineSlide{{
+				Page: 1, Title: "Keep this title", Summary: "Keep this complete slide body", BulletPoints: []string{"Keep this bullet"}, Layout: "imageText", SlideType: "text_image",
+			}},
+		},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	taskResponse := authedRequest(t, handler, http.MethodGet, "/api/v1/ppt/tasks/"+created.TaskID, nil, ownerToken)
-	if taskResponse.Code != http.StatusOK {
-		t.Fatalf("get ppt status = %d, body = %s", taskResponse.Code, taskResponse.Body.String())
-	}
-	var task pptapp.Task
-	if err := json.NewDecoder(taskResponse.Body).Decode(&task); err != nil {
+	task, err := pptService.GetTask(owner, created.TaskID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	task = projectPPTTaskForHTTP(task)
 	if len(task.Slides) != 1 {
 		t.Fatalf("unexpected slides: %#v", task.Slides)
 	}
@@ -81,6 +76,58 @@ func TestPPTVisualHTTPDisablePreservesContentAndEnforcesOwnership(t *testing.T) 
 	}
 	if updated.Slide.VisualPlan == nil || updated.Slide.VisualPlan.ImageRequired || updated.Slide.VisualPlan.TextInImage || updated.Slide.VisualPlan.VisualType != "none" {
 		t.Fatalf("visual disable response is invalid: %#v", updated.Slide.VisualPlan)
+	}
+}
+
+func TestPPTLegacyMutationUsesActiveCapabilityTenantWithoutUserTenantFallback(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	authorized := &pptAgentAuthorizationStore{
+		jsonStore: store,
+		authorization: modelCallAuthorization{
+			TenantID: "tenant_active_ppt", OrganizationID: "organization_active_ppt",
+			ContextType: contextEnterprise, BillingScope: contextEnterprise,
+			BillingAccountID: "tenant_active_ppt", ServiceState: "ACTIVE",
+		},
+	}
+	handler, pptService := newInMemoryPPTTestHandler(t, config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir(), PPTAutoImageMode: "disabled"}, authorized)
+	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+	activeOwner := pptapp.OwnerScope{TenantID: "tenant_active_ppt", UserID: "user_000002"}
+	defaultOwner := pptapp.OwnerScope{TenantID: "tenant_default", UserID: "user_000002"}
+	create := func(owner pptapp.OwnerScope, prompt string) pptapp.GenerateResponse {
+		created, err := pptService.Generate(pptapp.GenerateRequest{
+			Owner: owner, Prompt: prompt, SlideCount: 1, ImageSource: "none",
+			Outline: &pptapp.Outline{Title: prompt, Slides: []pptapp.OutlineSlide{{
+				Page: 1, Title: prompt, Summary: "Original", BulletPoints: []string{"Point"}, Layout: "content",
+			}}},
+		})
+		if err != nil {
+			t.Fatalf("seed %s: %v", owner.TenantID, err)
+		}
+		return created
+	}
+	active := create(activeOwner, "Active tenant deck")
+	// The in-memory task ID uses the wall clock; keep both tenant fixtures distinct
+	// even on Windows clocks with a coarser resolution than UnixNano.
+	time.Sleep(2 * time.Millisecond)
+	wrongDefault := create(defaultOwner, "Default tenant deck")
+	activeTask, err := pptService.GetTask(activeOwner, active.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultTask, err := pptService.GetTask(defaultOwner, wrongDefault.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"blocks":[{"type":"title","text":"Capability-scoped update"},{"type":"paragraph","text":"Updated"}],"layout":"content"}`
+
+	activeResponse := authedRequest(t, handler, http.MethodPatch, "/api/v1/presentations/"+active.TaskID+"/slides/"+activeTask.Slides[0].ID, bytes.NewBufferString(body), token)
+	if activeResponse.Code != http.StatusOK {
+		t.Fatalf("active capability tenant mutation status=%d body=%s", activeResponse.Code, activeResponse.Body.String())
+	}
+	defaultResponse := authedRequest(t, handler, http.MethodPatch, "/api/v1/presentations/"+wrongDefault.TaskID+"/slides/"+defaultTask.Slides[0].ID, bytes.NewBufferString(body), token)
+	if defaultResponse.Code != http.StatusNotFound {
+		t.Fatalf("user-record tenant fallback mutation status=%d body=%s", defaultResponse.Code, defaultResponse.Body.String())
 	}
 }
 

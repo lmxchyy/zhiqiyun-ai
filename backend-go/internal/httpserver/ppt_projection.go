@@ -6,18 +6,19 @@ import (
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 )
 
-func pptOwnerForUser(user adminUser) pptapp.OwnerScope {
-	return pptapp.OwnerScope{
-		TenantID: firstNonEmptyString(user.TenantID, "tenant_default"),
-		UserID:   strings.TrimSpace(user.ID),
+func pptOwnerForCapability(store any, user adminUser) (pptapp.OwnerScope, error) {
+	authorizer, ok := store.(modelCallAuthorizer)
+	if !ok {
+		return pptapp.OwnerScope{}, errEnterpriseServiceUnavailable
 	}
-}
-
-func pptOwnerForTask(user adminUser, task pptapp.Task) pptapp.OwnerScope {
-	return pptapp.OwnerScope{
-		TenantID: firstNonEmptyString(task.TenantID, user.TenantID, "tenant_default"),
-		UserID:   strings.TrimSpace(user.ID),
+	authorization, err := authorizer.AuthorizeModelCall(user.ID, modulePPTGeneration)
+	if err != nil {
+		return pptapp.OwnerScope{}, err
 	}
+	return (pptapp.OwnerScope{
+		TenantID: strings.TrimSpace(authorization.TenantID),
+		UserID:   strings.TrimSpace(user.ID),
+	}).Validated()
 }
 
 func applyPPTCapabilityContext(req *pptapp.GenerateRequest, user adminUser, params map[string]any) {
@@ -34,7 +35,12 @@ func applyPPTCapabilityContext(req *pptapp.GenerateRequest, user adminUser, para
 	req.BillingAccountID = firstNonEmptyString(stringValue(params["billing_account_id"]), req.UserID)
 }
 
-func canonicalPPTSlideUpdate(slide pptapp.Slide) pptapp.Slide {
+func canonicalPPTSlideUpdate(expectedTenantID string, slide pptapp.Slide) (pptapp.Slide, error) {
+	if len(slide.Blocks) == 0 && slide.ImageURL != "" {
+		if err := pptapp.ValidateVisualStorageReference(expectedTenantID, slide.ImageURL); err != nil {
+			return pptapp.Slide{}, err
+		}
+	}
 	if len(slide.Blocks) == 0 {
 		if value := strings.TrimSpace(slide.Title); value != "" {
 			slide.Blocks = append(slide.Blocks, pptapp.SlideBlock{Type: "title", Text: value})
@@ -52,12 +58,19 @@ func canonicalPPTSlideUpdate(slide pptapp.Slide) pptapp.Slide {
 			slide.Blocks = append(slide.Blocks, pptapp.SlideBlock{Type: "note", Text: value})
 		}
 	}
+	for _, block := range slide.Blocks {
+		if strings.EqualFold(strings.TrimSpace(block.Type), "image") {
+			if err := pptapp.ValidateVisualStorageReference(expectedTenantID, block.ImageRef); err != nil {
+				return pptapp.Slide{}, err
+			}
+		}
+	}
 	slide.Title = ""
 	slide.Content = ""
 	slide.BulletPoints = nil
 	slide.ImageURL = ""
 	slide.SpeakerNotes = ""
-	return slide
+	return slide, nil
 }
 
 func projectPPTTaskForHTTP(task pptapp.Task) pptapp.Task {

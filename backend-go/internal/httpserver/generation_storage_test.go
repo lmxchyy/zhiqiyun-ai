@@ -313,7 +313,7 @@ func TestPPTStorageReferenceMaterializesFreshSignedURLs(t *testing.T) {
 	if !ok || tenantID != files[0].TenantID || fileID != files[0].FileID {
 		t.Fatalf("storage reference did not round trip: ref=%q tenant=%q file=%q", ref, tenantID, fileID)
 	}
-	task := pptapp.Task{Slides: []pptapp.Slide{{
+	task := pptapp.Task{TenantID: tenantID, UserID: "user_1", Slides: []pptapp.Slide{{
 		ID: "slide_1", ImageURL: ref,
 		VisualHistory: []pptapp.VisualAsset{{URL: ref, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}},
 	}}}

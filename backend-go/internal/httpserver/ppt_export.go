@@ -4,13 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"html"
-	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 	"time"
 	"unicode"
@@ -32,37 +29,72 @@ type pptxMedia struct {
 	Content  []byte
 }
 
+type pptxImageResolver func(context.Context, string, string) (string, []byte, bool)
+
+func validatePPTExportTask(task pptapp.Task) error {
+	if task.Stage != pptapp.StageReady || pptapp.ValidateTaskStage(task) != nil {
+		return newPPTAgentError(http.StatusConflict, "PPT_EXPORT_NOT_READY", "PPT 尚未完成，暂不可导出")
+	}
+	if strings.TrimSpace(task.BillingTaskID) == "" || task.SlideCount <= 0 || len(task.Slides) != task.SlideCount {
+		return newPPTAgentError(http.StatusConflict, "PPT_EXPORT_INCOMPLETE", "PPT 内容不完整，暂不可导出")
+	}
+	pages := make(map[int]struct{}, task.SlideCount)
+	ids := make(map[string]struct{}, task.SlideCount)
+	for _, slide := range task.Slides {
+		id := strings.TrimSpace(slide.ID)
+		if id == "" || slide.Page < 1 || slide.Page > task.SlideCount || len(pptapp.NormalizeSlideIR(slide).Blocks) == 0 {
+			return newPPTAgentError(http.StatusConflict, "PPT_EXPORT_INCOMPLETE", "PPT 内容不完整，暂不可导出")
+		}
+		if _, exists := pages[slide.Page]; exists {
+			return newPPTAgentError(http.StatusConflict, "PPT_EXPORT_INCOMPLETE", "PPT 内容不完整，暂不可导出")
+		}
+		if _, exists := ids[id]; exists {
+			return newPPTAgentError(http.StatusConflict, "PPT_EXPORT_INCOMPLETE", "PPT 内容不完整，暂不可导出")
+		}
+		pages[slide.Page] = struct{}{}
+		ids[id] = struct{}{}
+	}
+	return nil
+}
+
 func buildPPTX(task pptapp.Task) ([]byte, error) {
-	task = projectPPTTaskForHTTP(task)
+	return buildPPTXWithImageResolver(context.Background(), task, nil)
+}
+
+func buildPPTXWithImageResolver(ctx context.Context, task pptapp.Task, resolveImage pptxImageResolver) ([]byte, error) {
 	slides := task.Slides
 	if len(slides) == 0 && task.Outline != nil {
 		for index, outlineSlide := range task.Outline.Slides {
-			slides = append(slides, pptapp.Slide{
-				ID:           fmt.Sprintf("slide_%d", index+1),
-				Page:         index + 1,
-				Title:        outlineSlide.Title,
-				Content:      outlineSlide.Summary,
-				BulletPoints: append([]string(nil), outlineSlide.BulletPoints...),
-				Layout:       outlineSlide.Layout,
-			})
+			slides = append(slides, pptapp.NormalizeSlideIR(pptapp.Slide{
+				ID: fmt.Sprintf("slide_%d", index+1), Page: index + 1, Layout: outlineSlide.Layout,
+				Blocks: []pptapp.SlideBlock{
+					{Type: "title", Text: outlineSlide.Title},
+					{Type: "paragraph", Text: outlineSlide.Summary},
+					{Type: "bullets", Items: append([]string(nil), outlineSlide.BulletPoints...)},
+				},
+			}))
 		}
 	}
 	if len(slides) == 0 {
-		slides = []pptapp.Slide{{
-			ID:      "slide_1",
-			Page:    1,
-			Title:   firstPPTXNonEmpty(task.Title, task.Prompt, "Presentation"),
-			Content: task.Prompt,
-			Layout:  "cover",
-		}}
+		slides = []pptapp.Slide{pptapp.NormalizeSlideIR(pptapp.Slide{
+			ID: "slide_1", Page: 1, Layout: "cover",
+			Blocks: []pptapp.SlideBlock{
+				{Type: "title", Text: firstPPTXNonEmpty(task.Title, task.Prompt, "Presentation")},
+				{Type: "paragraph", Text: task.Prompt},
+			},
+		})}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	mediaBySlide := make(map[int]pptxMedia)
 	mediaIndex := 1
 	for index, slide := range slides {
-		if media, ok := fetchPPTXSlideImage(ctx, slide.ImageURL, mediaIndex); ok {
+		content := pptxSlideContentForTask(task, slide)
+		if media, ok := resolvePPTXSlideImage(ctx, resolveImage, task.TenantID, content.ImageRef, mediaIndex); ok {
 			mediaBySlide[index] = media
 			mediaIndex++
 		}
@@ -300,8 +332,7 @@ func pptxThemeLineXML(width int) string {
 }
 
 func pptxSlideXML(task pptapp.Task, slide pptapp.Slide, index int, total int, media pptxMedia) string {
-	title := firstPPTXNonEmpty(slide.Title, task.Title, "Slide")
-	content := firstPPTXNonEmpty(slide.Content, slide.SpeakerNotes, task.Prompt)
+	content := pptxSlideContentForTask(task, slide)
 	accent := pptxAccentColor(task.Theme)
 	background := pptxBackgroundColor(task.Theme, index)
 	titleColor := "111827"
@@ -321,10 +352,10 @@ func pptxSlideXML(task pptapp.Task, slide pptapp.Slide, index int, total int, me
 
 	var shapes strings.Builder
 	shapes.WriteString(pptxTextShape(2, "Page", 760000, 520000, 1300000, 320000, pptxParagraph(fmt.Sprintf("%d / %d", index+1, total), 1600, accent, true)))
-	shapes.WriteString(pptxTextShape(3, "Title", 760000, 940000, titleWidth, 950000, pptxParagraph(title, 3900, titleColor, true)))
-	shapes.WriteString(pptxTextShape(4, "Summary", 760000, 2040000, bodyWidth, 760000, pptxParagraph(content, 1900, bodyColor, false)))
-	if len(slide.BulletPoints) > 0 {
-		shapes.WriteString(pptxTextShape(5, "Bullets", 900000, 2920000, bodyWidth-300000, 2600000, pptxBulletParagraphs(slide.BulletPoints, bodyColor)))
+	shapes.WriteString(pptxTextShape(3, "Title", 760000, 940000, titleWidth, 950000, pptxParagraph(content.Title, 3900, titleColor, true)))
+	shapes.WriteString(pptxTextShape(4, "Summary", 760000, 1960000, bodyWidth, 1080000, pptxSlideBodyParagraphs(content, bodyColor)))
+	if len(content.Bullets) > 0 {
+		shapes.WriteString(pptxTextShape(5, "Bullets", 900000, 3100000, bodyWidth-300000, 2400000, pptxBulletParagraphs(content.Bullets, bodyColor)))
 	}
 	if hasImage {
 		shapes.WriteString(pptxPicture(10, "Slide image", 7460000, 1600000, 3900000, 3420000))
@@ -339,6 +370,63 @@ func pptxSlideXML(task pptapp.Task, slide pptapp.Slide, index int, total int, me
 		`<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>` +
 		shapes.String() +
 		`</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`
+}
+
+type pptxSlideContent struct {
+	Title      string
+	Subtitles  []string
+	Paragraphs []string
+	Bullets    []string
+	ImageRef   string
+}
+
+func pptxSlideContentForTask(task pptapp.Task, slide pptapp.Slide) pptxSlideContent {
+	slide = pptapp.NormalizeSlideIR(slide)
+	content := pptxSlideContent{}
+	for _, block := range slide.Blocks {
+		switch block.Type {
+		case "title":
+			if content.Title == "" {
+				content.Title = strings.TrimSpace(block.Text)
+			}
+		case "subtitle":
+			if text := strings.TrimSpace(block.Text); text != "" {
+				content.Subtitles = append(content.Subtitles, text)
+			}
+		case "paragraph":
+			if text := strings.TrimSpace(block.Text); text != "" {
+				content.Paragraphs = append(content.Paragraphs, text)
+			}
+		case "bullets":
+			for _, item := range block.Items {
+				if item = strings.TrimSpace(item); item != "" {
+					content.Bullets = append(content.Bullets, item)
+				}
+			}
+		case "image":
+			if content.ImageRef == "" {
+				content.ImageRef = strings.TrimSpace(block.ImageRef)
+			}
+		case "note":
+			// Notes remain data-only until the exporter supports OOXML notes parts.
+		}
+	}
+	content.Title = firstPPTXNonEmpty(content.Title, task.Title, "Slide")
+	return content
+}
+
+func pptxSlideBodyParagraphs(content pptxSlideContent, color string) string {
+	var body strings.Builder
+	for _, subtitle := range content.Subtitles {
+		body.WriteString(pptxParagraph(subtitle, 2100, color, true))
+	}
+	for _, paragraph := range content.Paragraphs {
+		body.WriteString(pptxParagraph(paragraph, 1900, color, false))
+	}
+	if body.Len() == 0 {
+		return pptxParagraph("", 1900, color, false)
+	}
+	return body.String()
 }
 
 func pptxSlideRelsXML(media pptxMedia) string {
@@ -409,61 +497,20 @@ func pptxFooterShape(id int, title string, accent string, dark bool) string {
 	return fmt.Sprintf(`<p:sp><p:nvSpPr><p:cNvPr id="%d" name="Footer"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="760000" y="6280000"/><a:ext cx="10400000" cy="260000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:solidFill><a:srgbClr val="%s"><a:alpha val="50000"/></a:srgbClr></a:solidFill></a:ln></p:spPr><p:txBody><a:bodyPr wrap="square"/><a:lstStyle/>%s</p:txBody></p:sp>`, id, accent, body)
 }
 
-func fetchPPTXSlideImage(ctx context.Context, raw string, index int) (pptxMedia, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.HasPrefix(raw, "mock://") {
+func resolvePPTXSlideImage(ctx context.Context, resolveImage pptxImageResolver, expectedTenantID string, raw string, index int) (pptxMedia, bool) {
+	if resolveImage == nil {
 		return pptxMedia{}, false
 	}
-	var data []byte
-	var contentType string
-	if strings.HasPrefix(raw, "data:") {
-		payload := strings.TrimPrefix(raw, "data:")
-		parts := strings.SplitN(payload, ",", 2)
-		if len(parts) != 2 {
-			return pptxMedia{}, false
-		}
-		meta := strings.ToLower(parts[0])
-		contentType = strings.Split(meta, ";")[0]
-		if strings.Contains(meta, ";base64") {
-			decoded, err := base64.StdEncoding.DecodeString(parts[1])
-			if err != nil {
-				return pptxMedia{}, false
-			}
-			data = decoded
-		} else {
-			decoded, err := url.QueryUnescape(parts[1])
-			if err != nil {
-				return pptxMedia{}, false
-			}
-			data = []byte(decoded)
-		}
-	} else {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-		if err != nil {
-			return pptxMedia{}, false
-		}
-		client := http.Client{Timeout: 15 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return pptxMedia{}, false
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return pptxMedia{}, false
-		}
-		contentType = strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]))
-		data, err = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		if err != nil {
-			return pptxMedia{}, false
-		}
-		if contentType == "" || contentType == "application/octet-stream" {
-			if parsed, err := url.Parse(raw); err == nil {
-				contentType = pptxContentTypeFromExt(path.Ext(parsed.Path))
-			}
-		}
+	tenantID, fileID, ok := parsePPTStorageReference(raw)
+	if !ok || strings.TrimSpace(expectedTenantID) == "" || tenantID != strings.TrimSpace(expectedTenantID) {
+		return pptxMedia{}, false
 	}
-	ext, contentType := pptxImageType(contentType, data)
-	if ext == "" || len(data) == 0 {
+	contentType, data, ok := resolveImage(ctx, tenantID, fileID)
+	if !ok || len(data) == 0 || len(data) > 8<<20 {
+		return pptxMedia{}, false
+	}
+	ext, _ := pptxImageType(contentType, data)
+	if ext == "" {
 		return pptxMedia{}, false
 	}
 	return pptxMedia{

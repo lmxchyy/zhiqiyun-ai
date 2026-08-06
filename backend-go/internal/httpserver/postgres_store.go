@@ -1128,7 +1128,7 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		task.Params["billing_ledger_id"] = reservation.LedgerID
 		task.Params["billing_reserved"] = true
 	}
-	count := imageCount(req.Params)
+	count := generationOutputAssetCount(req)
 	for i := 0; i < count; i++ {
 		assetID, err := nextTableID(ctx, tx, "xz_assets", "asset")
 		if err != nil {
@@ -1398,7 +1398,7 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 	task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
-	count := imageCount(req.Params)
+	count := generationOutputAssetCount(req)
 	for i := 0; i < count; i++ {
 		assetID, err := nextTableID(ctx, tx, "xz_assets", "asset")
 		if err != nil {

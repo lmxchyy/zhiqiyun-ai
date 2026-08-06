@@ -35,10 +35,10 @@ func TestRestoreSlideVisualSwapsCurrentAndHistoricalImagesWithoutChangingContent
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.UpdateSlideImage(testOwner("user_1"), created.TaskID, "slide_1", "https://example.test/old.png"); err != nil {
+	if _, err = service.UpdateSlideImage(testOwner("user_1"), created.TaskID, "slide_1", "storage://tenant_default/old_image"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = service.UpdateSlideImage(testOwner("user_1"), created.TaskID, "slide_1", "https://example.test/current.png"); err != nil {
+	if _, err = service.UpdateSlideImage(testOwner("user_1"), created.TaskID, "slide_1", "storage://tenant_default/current_image"); err != nil {
 		t.Fatal(err)
 	}
 	_, before, err := service.GetSlide(testOwner("user_1"), created.TaskID, "slide_1")
@@ -47,7 +47,7 @@ func TestRestoreSlideVisualSwapsCurrentAndHistoricalImagesWithoutChangingContent
 	}
 	var historical VisualAsset
 	for _, asset := range before.VisualHistory {
-		if asset.URL == "https://example.test/old.png" {
+		if asset.URL == "storage://tenant_default/old_image" {
 			historical = asset
 		}
 	}
@@ -59,10 +59,10 @@ func TestRestoreSlideVisualSwapsCurrentAndHistoricalImagesWithoutChangingContent
 		t.Fatal(err)
 	}
 	slide := updated.Slides[0]
-	if slideImageRef(slide) != "https://example.test/old.png" || slideContent(slide) != slideContent(before) || slideTitle(slide) != slideTitle(before) {
+	if slideImageRef(slide) != "storage://tenant_default/old_image" || slideContent(slide) != slideContent(before) || slideTitle(slide) != slideTitle(before) {
 		t.Fatalf("restore changed content or selected wrong image: %#v", slide)
 	}
-	if !containsVisualURL(slide.VisualHistory, "https://example.test/current.png") {
+	if !containsVisualURL(slide.VisualHistory, "storage://tenant_default/current_image") {
 		t.Fatalf("current visual was not retained for rollback: %#v", slide.VisualHistory)
 	}
 	if slide.VisualPlan == nil || !slide.VisualPlan.ImageRequired || slide.VisualPlan.TextInImage {
@@ -86,17 +86,17 @@ func TestCompleteSlideVisualAtomicallyUpdatesPlanImageAndHistoryMetadata(t *test
 	firstPlan := *original.VisualPlan
 	firstPlan.TextInImage = true
 	firstCreatedAt := "2026-07-16T01:00:00Z"
-	if _, err = service.CompleteSlideVisual(testOwner("user_1"), created.TaskID, original.ID, firstPlan, VisualAsset{URL: "https://example.test/first.png", TaskID: "image_task_1", ModelName: "model_a", CreatedAt: firstCreatedAt}); err != nil {
+	if _, err = service.CompleteSlideVisual(testOwner("user_1"), created.TaskID, original.ID, firstPlan, VisualAsset{URL: "storage://tenant_default/first_image", TaskID: "image_task_1", ModelName: "model_a", CreatedAt: firstCreatedAt}); err != nil {
 		t.Fatal(err)
 	}
 	secondPlan := firstPlan
 	secondPlan.Style = "consistent corporate 3d"
-	updated, err := service.CompleteSlideVisual(testOwner("user_1"), created.TaskID, original.ID, secondPlan, VisualAsset{URL: "https://example.test/second.png", TaskID: "image_task_2", ModelName: "model_b", CreatedAt: "2026-07-16T02:00:00Z"})
+	updated, err := service.CompleteSlideVisual(testOwner("user_1"), created.TaskID, original.ID, secondPlan, VisualAsset{URL: "storage://tenant_default/second_image", TaskID: "image_task_2", ModelName: "model_b", CreatedAt: "2026-07-16T02:00:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	slide := updated.Slides[0]
-	if slideTitle(slide) != slideTitle(original) || slideContent(slide) != slideContent(original) || slideImageRef(slide) != "https://example.test/second.png" {
+	if slideTitle(slide) != slideTitle(original) || slideContent(slide) != slideContent(original) || slideImageRef(slide) != "storage://tenant_default/second_image" {
 		t.Fatalf("atomic completion changed content or selected wrong image: %#v", slide)
 	}
 	if slide.VisualPlan == nil || slide.VisualPlan.TextInImage || slide.VisualPlan.Style != secondPlan.Style || slide.VisualTaskID != "image_task_2" || slide.VisualModelName != "model_b" {
@@ -104,7 +104,7 @@ func TestCompleteSlideVisualAtomicallyUpdatesPlanImageAndHistoryMetadata(t *test
 	}
 	var firstHistory VisualAsset
 	for _, asset := range slide.VisualHistory {
-		if asset.URL == "https://example.test/first.png" {
+		if asset.URL == "storage://tenant_default/first_image" {
 			firstHistory = asset
 		}
 	}
@@ -118,7 +118,7 @@ func TestCompleteSlideVisualAtomicallyUpdatesPlanImageAndHistoryMetadata(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if processing.VisualTaskID != "image_task_2" || slideImageRef(processing) != "https://example.test/second.png" {
+	if processing.VisualTaskID != "image_task_2" || slideImageRef(processing) != "storage://tenant_default/second_image" {
 		t.Fatalf("planning status overwrote current visual metadata: %#v", processing)
 	}
 	secondPlan.VisualType = "none"
@@ -132,7 +132,7 @@ func TestCompleteSlideVisualAtomicallyUpdatesPlanImageAndHistoryMetadata(t *test
 	}
 	var secondHistory VisualAsset
 	for _, asset := range disabledSlide.VisualHistory {
-		if asset.URL == "https://example.test/second.png" {
+		if asset.URL == "storage://tenant_default/second_image" {
 			secondHistory = asset
 		}
 	}

@@ -31,7 +31,8 @@ func TestPPTOutlineEndpointEnforcesPackageCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	dataPath := filepath.Join(t.TempDir(), "platform.json")
-	server := newWithStoreAndSessions(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, newJSONStore(dataPath), sessions)
+	store := newJSONStore(dataPath)
+	server := newWithStoreAndSessions(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, &pptInMemoryCapabilityStore{jsonStore: store}, sessions)
 	response := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/ppt/outline/generate", bytes.NewBufferString(`{"prompt":"free plan ppt","slideCount":5,"textModel":"kimi-k2.6"}`), "free-ppt-token")
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "当前套餐不支持该能力") {
 		t.Fatalf("free PPT outline should be rejected by package capability: %d %s", response.Code, response.Body.String())

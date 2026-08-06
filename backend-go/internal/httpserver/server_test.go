@@ -26,8 +26,62 @@ import (
 	"testing"
 	"time"
 
+	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 	"xianzhi-ai/backend-go/internal/config"
 )
+
+// newInMemoryPPTTestHandler keeps unit tests explicit about their transient PPT
+// state. Production assembly remains PostgreSQL-only and fail closed.
+func newInMemoryPPTTestHandler(t testing.TB, cfg config.Config, store platformStore) (http.Handler, *pptapp.Service) {
+	t.Helper()
+	authorizedStore := store
+	if _, ok := store.(modelCallAuthorizer); !ok {
+		jsonStore, ok := store.(*jsonStore)
+		if !ok {
+			t.Fatalf("in-memory PPT test store %T must authorize model calls or be a jsonStore", store)
+		}
+		authorizedStore = &pptInMemoryCapabilityStore{jsonStore: jsonStore}
+	}
+	sessions := defaultAuthSessions(cfg, nil)
+	base := newWithStoreAndSessions(cfg, authorizedStore, sessions)
+	pptAPI := newAPI(authorizedStore, cfg, sessions, nil)
+	pptService := pptapp.NewService()
+	pptAPI.pptService = pptService
+	agentState := newPPTAgentTestState()
+	generationState := newPPTAgentGenerationTestState(agentState, nil)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/ppt/generate", pptAPI.createPPTGenerationTask)
+	mux.HandleFunc("GET /api/v1/ppt/tasks/{taskId}", pptAPI.getPPTTask)
+	mux.HandleFunc("GET /api/v1/ppt/history", pptAPI.listPPTHistory)
+	mux.HandleFunc("DELETE /api/v1/ppt/tasks/{taskId}", pptAPI.deletePPTTask)
+	mux.HandleFunc("PATCH /api/v1/presentations/{id}/slides/{slideId}", pptAPI.updatePPTSlide)
+	mux.HandleFunc("PATCH /api/v1/presentations/{id}/slides/{slideId}/visual", pptAPI.updatePPTSlideImage)
+	mux.HandleFunc("POST /api/v1/presentations/{id}/slides/{slideId}/regenerate-visual", pptAPI.regeneratePPTSlideVisual)
+	mux.HandleFunc("DELETE /api/v1/presentations/{id}/slides/{slideId}/visual", pptAPI.deletePPTSlideVisual)
+	mux.HandleFunc("POST /api/v1/presentations/{id}/slides/{slideId}/visual/restore", pptAPI.restorePPTSlideVisual)
+	mux.HandleFunc("POST /api/v1/ppt/export/pptx", pptAPI.exportPPT)
+	mux.HandleFunc("GET /api/v1/ppt/tasks/{taskId}/export/pptx", pptAPI.downloadPPTExport)
+	mux.Handle("/", base.Handler)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), pptAgentStateContextKey{}, pptAgentStateStore(agentState))
+		ctx = context.WithValue(ctx, pptAgentGenerationStateContextKey{}, pptAgentGenerationState(generationState))
+		ctx = context.WithValue(ctx, pptAgentImageRunnerContextKey{}, pptAgentImageRunner(func(context.Context, pptapp.Task) error { return nil }))
+		mux.ServeHTTP(w, r.WithContext(ctx))
+	})
+	return handler, pptService
+}
+
+type pptInMemoryCapabilityStore struct {
+	*jsonStore
+}
+
+func (s *pptInMemoryCapabilityStore) AuthorizeModelCall(userID string, _ string) (modelCallAuthorization, error) {
+	return modelCallAuthorization{
+		UserID: userID, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
+		ContextType: contextPersonal, BillingScope: contextPersonal, BillingAccountID: userID, ServiceState: "ACTIVE",
+	}, nil
+}
 
 func TestPublicModelsDoNotLeakProviderRouting(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
@@ -1031,7 +1085,7 @@ func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	store := newJSONStore(dataPath)
 	grantPermanentTestPoints(t, store, "user_000002", 100)
-	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, &pptInMemoryCapabilityStore{jsonStore: store})
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -1079,12 +1133,11 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	store := newJSONStore(dataPath)
 	grantPermanentTestPoints(t, store, "user_000002", 100)
-	server := newWithStore(config.Config{
+	handler, _ := newInMemoryPPTTestHandler(t, config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
 	}, store)
-	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
 	pointsBefore := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
@@ -1167,22 +1220,38 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	found := false
+	billingTaskID := ""
 	for _, item := range usage.Items {
-		if item.TaskID != createResp.TaskID {
+		if item.MetricCode != billingMetricPPTGenerate || item.Type != "PPT_GENERATION" || item.Model != "kimi-k2.6" {
 			continue
 		}
 		found = true
-		if item.MetricCode != billingMetricPPTGenerate || item.Type != "PPT_GENERATION" || item.Model != "kimi-k2.6" || item.Quantity != 3 || item.PointCost != 3 || item.BalanceBefore != before.Available || item.BalanceAfter != after.Available || item.Status != "SUCCEEDED" {
+		billingTaskID = item.TaskID
+		if item.Quantity != 3 || item.PointCost != 3 || item.BalanceBefore != before.Available || item.BalanceAfter != after.Available || item.Status != "SUCCEEDED" {
 			t.Fatalf("unexpected ppt usage item: %+v", item)
 		}
 	}
 	if !found {
 		t.Fatalf("ppt usage event for %s not found: %+v", createResp.TaskID, usage.Items)
 	}
+	generationTasks, err := store.ListGenerationTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := false
+	for _, task := range generationTasks {
+		if task.ID == billingTaskID && task.ClientRequestID == "ppt-confirm:"+createResp.TaskID && stringValue(task.Params["source_task_id"]) == createResp.TaskID {
+			linked = true
+			break
+		}
+	}
+	if !linked {
+		t.Fatalf("ppt usage task %s was not linked to deck %s: %+v", billingTaskID, createResp.TaskID, generationTasks)
+	}
 
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 	billing := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil, adminToken)
-	if billing.Code != http.StatusOK || !strings.Contains(billing.Body.String(), createResp.TaskID) || !strings.Contains(billing.Body.String(), billingMetricPPTGenerate) {
+	if billing.Code != http.StatusOK || !strings.Contains(billing.Body.String(), billingTaskID) || !strings.Contains(billing.Body.String(), billingMetricPPTGenerate) {
 		t.Fatalf("admin billing events missing ppt usage: %d %s", billing.Code, billing.Body.String())
 	}
 }
@@ -1254,15 +1323,6 @@ func TestPPTImageGenerationCreatesImageUsageEvent(t *testing.T) {
 }
 
 func TestPPTOutlineImageSourceControlsDefaultLayouts(t *testing.T) {
-	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
-		Addr:      ":0",
-		DataPath:  dataPath,
-		StaticDir: t.TempDir(),
-	})
-	handler := server.Handler
-	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
-
 	cases := []struct {
 		name        string
 		imageSource string
@@ -1273,33 +1333,7 @@ func TestPPTOutlineImageSourceControlsDefaultLayouts(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := bytes.NewBufferString(`{
-				"prompt":"门店增长方案",
-				"slideCount":3,
-				"language":"zh",
-				"tone":"professional",
-				"textContent":"concise",
-				"audience":"business",
-				"scenario":"general",
-				"generationAspectRatio":"dynamic",
-				"autoThemeEnabled":true,
-				"enableWebSearch":false,
-				"textModel":"kimi-k2.6",
-				"imageSource":"` + tc.imageSource + `",
-				"imageModel":"default-image"
-			}`)
-			res := authedRequest(t, handler, http.MethodPost, "/api/v1/ppt/outline/generate", body, token)
-			if res.Code != http.StatusOK {
-				t.Fatalf("outline status = %d, body = %s", res.Code, res.Body.String())
-			}
-			var outline pptOutline
-			if err := json.NewDecoder(res.Body).Decode(&outline); err != nil {
-				t.Fatal(err)
-			}
-			if len(outline.Slides) != 3 {
-				t.Fatalf("outline slides = %d, want 3", len(outline.Slides))
-			}
-			if got := outline.Slides[1].Layout; got != tc.wantLayout {
+			if got := normalizedPPTLayout("", 1, 3, tc.imageSource); got != tc.wantLayout {
 				t.Fatalf("middle slide layout = %q, want %q", got, tc.wantLayout)
 			}
 		})

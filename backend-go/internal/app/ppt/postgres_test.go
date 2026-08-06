@@ -53,7 +53,7 @@ func TestPostgresUpdateSlideImagePersistsReplacementAcrossFreshRead(t *testing.T
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	const replacement = "https://example.test/replacement.png"
+	const replacement = "storage://tenant_default/replacement_image"
 	updated, err := service.UpdateSlideImage(testOwner("user_replace"), response.TaskID, "slide_1", replacement)
 	if err != nil {
 		t.Fatalf("UpdateSlideImage() error = %v", err)
@@ -67,7 +67,7 @@ func TestPostgresUpdateSlideImagePersistsReplacementAcrossFreshRead(t *testing.T
 	assertSlideImageRepresentations(t, reread.Slides[0], replacement)
 }
 
-func TestPostgresUpdateSlideImagePersistsRemovalAcrossFreshRead(t *testing.T) {
+func TestPostgresDisableSlideVisualPersistsRemovalAcrossFreshRead(t *testing.T) {
 	db, _ := newPPTPostgresTestDB(t)
 	service := NewPostgresService(db)
 	response, err := service.Generate(GenerateRequest{
@@ -77,9 +77,9 @@ func TestPostgresUpdateSlideImagePersistsRemovalAcrossFreshRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	updated, err := service.UpdateSlideImage(testOwner("user_remove"), response.TaskID, "slide_1", "")
+	updated, err := service.DisableSlideVisual(testOwner("user_remove"), response.TaskID, "slide_1", VisualPlan{})
 	if err != nil {
-		t.Fatalf("UpdateSlideImage() error = %v", err)
+		t.Fatalf("DisableSlideVisual() error = %v", err)
 	}
 	assertSlideImageRepresentations(t, updated.Slides[0], "")
 
@@ -220,6 +220,103 @@ func TestCreateSessionClientRequestIdempotency(t *testing.T) {
 	conflicting.Prompt = "Different board update"
 	if _, err := service.CreateSession(context.Background(), conflicting); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("conflicting CreateSession() error = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
+func TestCreateSessionDeckSpecSurvivesReloadAndIdempotentReplay(t *testing.T) {
+	db, state := newPPTPostgresTestDB(t)
+	request := SessionRequest{
+		Owner:          OwnerScope{TenantID: "tenant_deck_spec", UserID: "user_deck_spec"},
+		OrganizationID: "organization_deck_spec", ContextType: "PERSONAL",
+		BillingScope: "PERSONAL", BillingAccountID: "user_deck_spec",
+		ClientRequestID: "deck-spec-replay", Prompt: "Deck spec", SkillCode: "general",
+		SlideCount: 2, Language: "en", Audience: "investor",
+		DeckSpec: DeckSpec{
+			Tone: "pitch", TextContent: "detailed", Scenario: "analysis-report",
+			GenerationAspectRatio: "16:9", Theme: "midnight", AutoThemeEnabled: true,
+			EnableWebSearch: true, ImageSource: "ai", TextModel: "kimi-k2.6", ImageModel: "gpt-image-2",
+			ImageStyle: "editorial isometric", PeopleStyle: "natural professionals",
+			ImageLighting: "warm studio", ImageComposition: "image_left", TextInImage: false,
+		},
+	}
+
+	created, err := NewPostgresService(db).CreateSession(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if got := deckSpecFromTask(created); got != request.DeckSpec {
+		t.Fatalf("created DeckSpec = %#v, want %#v", got, request.DeckSpec)
+	}
+
+	reloaded, err := NewPostgresService(db).GetTask(request.Owner, created.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask() reload error = %v", err)
+	}
+	if got := deckSpecFromTask(reloaded); got != request.DeckSpec {
+		t.Fatalf("reloaded DeckSpec = %#v, want %#v", got, request.DeckSpec)
+	}
+
+	replayed, err := NewPostgresService(db).CreateSession(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateSession() replay error = %v", err)
+	}
+	if replayed.TaskID != created.TaskID || deckSpecFromTask(replayed) != request.DeckSpec {
+		t.Fatalf("replayed task = %#v, want task %q with DeckSpec %#v", replayed, created.TaskID, request.DeckSpec)
+	}
+	state.mu.Lock()
+	rowCount := len(state.tasks)
+	state.mu.Unlock()
+	if rowCount != 1 {
+		t.Fatalf("DeckSpec replay persisted %d rows, want 1", rowCount)
+	}
+
+	conflicting := request
+	conflicting.DeckSpec.ImageSource = "none"
+	if _, err := NewPostgresService(db).CreateSession(context.Background(), conflicting); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("DeckSpec conflict error = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
+func TestReloadedDeckSpecDrivesBillingImageIntentAfterIdempotentReplay(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		imageSource string
+		wantImages  bool
+	}{
+		{name: "image enabled", imageSource: "ai", wantImages: true},
+		{name: "images disabled", imageSource: "none", wantImages: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, _ := newPPTPostgresTestDB(t)
+			request := SessionRequest{
+				Owner:          OwnerScope{TenantID: "tenant_reload_billing", UserID: "user_reload_billing"},
+				OrganizationID: "organization_reload_billing", ContextType: "PERSONAL",
+				BillingScope: "PERSONAL", BillingAccountID: "user_reload_billing",
+				ClientRequestID: "reload-billing-" + strings.ReplaceAll(test.name, " ", "-"),
+				Prompt:          "Reload billing image intent", SkillCode: "general", SlideCount: 2,
+				DeckSpec: DeckSpec{ImageSource: test.imageSource, TextModel: "kimi-k2.6", ImageModel: "gpt-image-2"},
+			}
+			created, err := NewPostgresService(db).CreateSession(context.Background(), request)
+			if err != nil {
+				t.Fatalf("CreateSession() error = %v", err)
+			}
+			reloaded, err := NewPostgresService(db).GetTask(request.Owner, created.TaskID)
+			if err != nil {
+				t.Fatalf("GetTask() reload error = %v", err)
+			}
+			replayed, err := NewPostgresService(db).CreateSession(context.Background(), request)
+			if err != nil {
+				t.Fatalf("CreateSession() replay error = %v", err)
+			}
+			if replayed.TaskID != created.TaskID {
+				t.Fatalf("replay task ID = %q, want %q", replayed.TaskID, created.TaskID)
+			}
+			for name, task := range map[string]Task{"reloaded": reloaded, "replayed": replayed} {
+				if got := task.WithImages(); got != test.wantImages {
+					t.Fatalf("%s task WithImages() = %v, want %v; DeckSpec=%#v", name, got, test.wantImages, deckSpecFromTask(task))
+				}
+			}
+		})
 	}
 }
 
@@ -1048,6 +1145,105 @@ func TestGenerationLeaseRenewalPreservesLongOwnerLease(t *testing.T) {
 	}
 	if _, _, err := service.RenewGenerationRun(context.Background(), taskOwner(task), task.TaskID, GenerationClaim{RunToken: "wrong-run"}, now.Add(2*time.Second), time.Minute); !errors.Is(err, ErrGenerationRunMismatch) {
 		t.Fatalf("mismatched renewal error=%v, want ErrGenerationRunMismatch", err)
+	}
+}
+
+func TestGenerationCleanupFenceReclaimsExpiredMatchingLeaseAndBlocksTakeover(t *testing.T) {
+	db, _ := newPPTPostgresTestDB(t)
+	workerA := NewPostgresService(db)
+	workerB := NewPostgresService(db)
+	task := createOutlineReadySession(t, workerA, "user_cleanup_fence_a_wins", 1)
+	if _, err := claimAndBindGenerationForTest(context.Background(), workerA, taskOwner(task), task.TaskID, "billing_cleanup_fence", "confirm-cleanup-fence", "confirm-hash"); err != nil {
+		t.Fatalf("BeginGeneration() error = %v", err)
+	}
+	startedAt := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	runA, _, err := workerA.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, startedAt)
+	if err != nil {
+		t.Fatalf("ClaimGenerationRun(A) error = %v", err)
+	}
+	fenceAt := startedAt.Add(generationLeaseDuration + time.Second)
+	fenced, fencedTask, err := workerA.AcquireGenerationCleanupFence(context.Background(), taskOwner(task), task.TaskID, runA, fenceAt)
+	if err != nil {
+		t.Fatalf("AcquireGenerationCleanupFence(A) error = %v", err)
+	}
+	wantUntil := fenceAt.Add(generationLeaseDuration)
+	gotUntil, parseErr := time.Parse(time.RFC3339Nano, fenced.LeaseUntil)
+	if parseErr != nil || fenced.RunToken != runA.RunToken || !gotUntil.Equal(wantUntil) || fencedTask.GenerationLease == nil || fencedTask.GenerationLease.RunToken != runA.RunToken {
+		t.Fatalf("cleanup fence claim=%#v task lease=%#v wantUntil=%s parseErr=%v", fenced, fencedTask.GenerationLease, wantUntil, parseErr)
+	}
+	if runB, _, claimErr := workerB.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, fenceAt.Add(time.Second)); !errors.Is(claimErr, ErrGenerationAlreadyRunning) || runB.RunToken != "" {
+		t.Fatalf("ClaimGenerationRun(B) during cleanup fence = %#v err=%v, want ErrGenerationAlreadyRunning", runB, claimErr)
+	}
+	failed, err := workerA.FailGenerationAfterRelease(context.Background(), taskOwner(task), task.TaskID, fenced, "PPT_GENERATION_FAILED")
+	if err != nil {
+		t.Fatalf("FailGenerationAfterRelease(A) error = %v", err)
+	}
+	if failed.Stage != StageFailed || failed.GenerationLease != nil || failed.ErrorCode != "PPT_GENERATION_FAILED" {
+		t.Fatalf("cleanup-fenced failure task = %#v", failed)
+	}
+}
+
+func TestGenerationCleanupFenceRejectsReplacedRunWithoutWrite(t *testing.T) {
+	db, state := newPPTPostgresTestDB(t)
+	workerA := NewPostgresService(db)
+	workerB := NewPostgresService(db)
+	task := createOutlineReadySession(t, workerA, "user_cleanup_fence_b_wins", 1)
+	if _, err := claimAndBindGenerationForTest(context.Background(), workerA, taskOwner(task), task.TaskID, "billing_cleanup_b_wins", "confirm-cleanup-b-wins", "confirm-hash"); err != nil {
+		t.Fatalf("BeginGeneration() error = %v", err)
+	}
+	startedAt := time.Date(2026, time.August, 6, 13, 0, 0, 0, time.UTC)
+	runA, _, err := workerA.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, startedAt)
+	if err != nil {
+		t.Fatalf("ClaimGenerationRun(A) error = %v", err)
+	}
+	takeoverAt := startedAt.Add(generationLeaseDuration + time.Second)
+	runB, _, err := workerB.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, takeoverAt)
+	if err != nil {
+		t.Fatalf("ClaimGenerationRun(B) error = %v", err)
+	}
+	before, ok := state.snapshot(task.TaskID)
+	if !ok {
+		t.Fatalf("task %q was not persisted", task.TaskID)
+	}
+	writesBefore := state.strictUpsertCount()
+	if _, _, err := workerA.AcquireGenerationCleanupFence(context.Background(), taskOwner(task), task.TaskID, runA, takeoverAt.Add(time.Second)); !errors.Is(err, ErrGenerationRunMismatch) {
+		t.Fatalf("AcquireGenerationCleanupFence(stale A) error = %v, want ErrGenerationRunMismatch", err)
+	}
+	assertPPTPostgresRowUnchanged(t, state, task.TaskID, before)
+	if writesAfter := state.strictUpsertCount(); writesAfter != writesBefore {
+		t.Fatalf("stale cleanup fence caused PostgreSQL write: before=%d after=%d", writesBefore, writesAfter)
+	}
+	if _, err := workerB.PersistGeneratedSlide(context.Background(), taskOwner(task), task.TaskID, runB, Slide{ID: "slide_1", Page: 1, Blocks: []SlideBlock{{Type: "title", Text: "Successor"}}}); err != nil {
+		t.Fatalf("PersistGeneratedSlide(B) error = %v", err)
+	}
+	ready, err := workerB.CompleteGenerationAfterCapture(context.Background(), taskOwner(task), task.TaskID, runB)
+	if err != nil || ready.Stage != StageReady {
+		t.Fatalf("CompleteGenerationAfterCapture(B) task=%#v err=%v", ready, err)
+	}
+}
+
+func TestGenerationCleanupFenceAllowsLiveCancellationToSettle(t *testing.T) {
+	db, _ := newPPTPostgresTestDB(t)
+	service := NewPostgresService(db)
+	task := createOutlineReadySession(t, service, "user_cleanup_fence_cancel", 1)
+	if _, err := claimAndBindGenerationForTest(context.Background(), service, taskOwner(task), task.TaskID, "billing_cleanup_cancel", "confirm-cleanup-cancel", "confirm-hash"); err != nil {
+		t.Fatalf("BeginGeneration() error = %v", err)
+	}
+	startedAt := time.Date(2026, time.August, 6, 14, 0, 0, 0, time.UTC)
+	run, _, err := service.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, startedAt)
+	if err != nil {
+		t.Fatalf("ClaimGenerationRun() error = %v", err)
+	}
+	cancelClaim, _, err := service.BeginCancel(context.Background(), taskOwner(task), task.TaskID, "cancel-cleanup-fence", "cancel-hash")
+	if err != nil {
+		t.Fatalf("BeginCancel() error = %v", err)
+	}
+	if _, _, err := service.AcquireGenerationCleanupFence(context.Background(), taskOwner(task), task.TaskID, run, startedAt.Add(generationLeaseDuration+time.Second)); err != nil {
+		t.Fatalf("AcquireGenerationCleanupFence(live cancel) error = %v", err)
+	}
+	cancelled, err := service.CompleteCancel(context.Background(), taskOwner(task), task.TaskID, cancelClaim)
+	if err != nil || cancelled.Stage != StageCancelled {
+		t.Fatalf("CompleteCancel() task=%#v err=%v", cancelled, err)
 	}
 }
 

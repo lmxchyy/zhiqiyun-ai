@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"io"
 	"net/url"
 	"strings"
 
@@ -20,8 +21,11 @@ func pptStorageReference(file storagecenter.FileObject) string {
 }
 
 func parsePPTStorageReference(value string) (tenantID, fileID string, ok bool) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || !strings.EqualFold(parsed.Scheme, pptStorageReferenceScheme) {
+	if value == "" || value != strings.TrimSpace(value) {
+		return "", "", false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != pptStorageReferenceScheme || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
 		return "", "", false
 	}
 	tenantID, err = url.PathUnescape(parsed.Host)
@@ -32,10 +36,45 @@ func parsePPTStorageReference(value string) (tenantID, fileID string, ok bool) {
 	if err != nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(fileID) == "" || strings.Contains(fileID, "/") {
 		return "", "", false
 	}
-	return strings.TrimSpace(tenantID), strings.TrimSpace(fileID), true
+	tenantID, fileID = strings.TrimSpace(tenantID), strings.TrimSpace(fileID)
+	if pptStorageReference(storagecenter.FileObject{TenantID: tenantID, FileID: fileID}) != value {
+		return "", "", false
+	}
+	return tenantID, fileID, true
+}
+
+func (a api) pptxStorageImageResolver(user adminUser, expectedTenantID string) pptxImageResolver {
+	expectedTenantID = strings.TrimSpace(expectedTenantID)
+	return func(ctx context.Context, referencedTenantID, fileID string) (string, []byte, bool) {
+		if a.fileService == nil || expectedTenantID == "" || strings.TrimSpace(referencedTenantID) != expectedTenantID {
+			return "", nil, false
+		}
+		role := strings.ToUpper(strings.TrimSpace(user.Role))
+		file, stream, err := a.fileService.OpenObject(ctx, storagecenter.AccessContext{
+			TenantID: expectedTenantID,
+			UserID:   strings.TrimSpace(user.ID),
+			IsAdmin:  role == "SUPER_ADMIN" || role == "PLATFORM_ADMIN" || role == "ADMIN",
+		}, strings.TrimSpace(fileID))
+		if err != nil || stream == nil {
+			if stream != nil {
+				_ = stream.Close()
+			}
+			return "", nil, false
+		}
+		defer stream.Close()
+		if strings.TrimSpace(file.TenantID) != expectedTenantID || strings.TrimSpace(file.FileID) != strings.TrimSpace(fileID) || file.FileSize > 8<<20 {
+			return "", nil, false
+		}
+		data, err := io.ReadAll(io.LimitReader(stream, (8<<20)+1))
+		if err != nil || len(data) == 0 || len(data) > 8<<20 {
+			return "", nil, false
+		}
+		return strings.TrimSpace(file.MIMEType), data, true
+	}
 }
 
 func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, task pptapp.Task) pptapp.Task {
+	expectedTenantID := strings.TrimSpace(task.TenantID)
 	task = projectPPTTaskForHTTP(task)
 	if a.fileService == nil {
 		return task
@@ -49,13 +88,13 @@ func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, t
 	}
 	for slideIndex := range task.Slides {
 		slide := &task.Slides[slideIndex]
-		if signed, ok := a.resolvePPTStorageReference(ctx, user, slide.ImageURL); ok {
+		if signed, ok := a.resolvePPTStorageReference(ctx, user, expectedTenantID, slide.ImageURL); ok {
 			slide.VisualStorageRef = slide.ImageURL
 			slide.ImageURL = signed
 		}
 		for historyIndex := range slide.VisualHistory {
 			asset := &slide.VisualHistory[historyIndex]
-			if signed, ok := a.resolvePPTStorageReference(ctx, user, asset.URL); ok {
+			if signed, ok := a.resolvePPTStorageReference(ctx, user, expectedTenantID, asset.URL); ok {
 				asset.StorageRef = asset.URL
 				asset.URL = signed
 			}
@@ -64,9 +103,9 @@ func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, t
 	return task
 }
 
-func (a api) resolvePPTStorageReference(ctx context.Context, user adminUser, value string) (string, bool) {
+func (a api) resolvePPTStorageReference(ctx context.Context, user adminUser, expectedTenantID string, value string) (string, bool) {
 	tenantID, fileID, ok := parsePPTStorageReference(value)
-	if !ok || a.fileService == nil {
+	if !ok || a.fileService == nil || tenantID != strings.TrimSpace(expectedTenantID) {
 		return "", false
 	}
 	role := strings.ToUpper(strings.TrimSpace(user.Role))

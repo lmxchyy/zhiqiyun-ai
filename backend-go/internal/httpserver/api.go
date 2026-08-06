@@ -174,6 +174,7 @@ type api struct {
 	sessions                   authSessionStore
 	taskCancels                *sync.Map
 	pptVisualTasks             *sync.Map
+	pptGenerationRuns          *sync.Map
 	pptVisualLocker            pptVisualDistributedLocker
 	fileService                *storagecenter.Service
 	contentSecurity            wechatContentSecurityChecker
@@ -204,14 +205,20 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 			return store.CreateGenerationTask(req)
 		},
 	})
-	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
-	if pgStore, ok := store.(*postgresStore); ok {
-		pptService = pptapp.NewPostgresService(pgStore.db)
-	}
+	pptService := newPPTService(store)
 	imageTimeout := cfg.ImageGenerationTimeout()
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
+	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, pptGenerationRuns: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
 	go api.repairStaleGenerationTasks(imageTimeout)
 	return api
+}
+
+func newPPTService(store platformStore) *pptapp.Service {
+	if pgStore, ok := store.(*postgresStore); ok {
+		return pptapp.NewPostgresService(pgStore.db)
+	}
+	// PPT Agent state is PostgreSQL-only. A nil PostgreSQL service fails closed
+	// with PPT_POSTGRES_UNAVAILABLE instead of creating a JSON mirror/fallback.
+	return pptapp.NewPostgresService(nil)
 }
 
 func (a api) repairStaleGenerationTasks(maxAge time.Duration) {

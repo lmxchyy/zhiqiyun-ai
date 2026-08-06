@@ -15,6 +15,7 @@ import (
 	"xianzhi-ai/backend-go/internal/app/generation"
 	knowledgeapp "xianzhi-ai/backend-go/internal/app/knowledge"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
+	"xianzhi-ai/backend-go/internal/app/ppt/skills"
 	"xianzhi-ai/backend-go/internal/config"
 	chatprovider "xianzhi-ai/backend-go/internal/provider/chat"
 	ocrprovider "xianzhi-ai/backend-go/internal/provider/ocr"
@@ -157,71 +158,110 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	req.UserID = user.ID
+	req.Prompt = normalizePPTAgentText(req.Prompt, 0)
+	if req.Prompt == "" {
+		writePPTAgentError(w, newPPTAgentError(http.StatusBadRequest, "PPT_PROMPT_REQUIRED", "请输入演示主题"))
+		return
+	}
 	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
 		writeContentSecurityError(w, err)
+		return
+	}
+	skill, ok := skills.Resolve("general")
+	if !ok {
+		writePPTAgentError(w, newPPTAgentError(http.StatusNotFound, "PPT_SKILL_NOT_FOUND", "未找到指定的 PPT Skill"))
 		return
 	}
 	pageCount := req.SlideCount
 	if req.Outline != nil && len(req.Outline.Slides) > 0 {
 		pageCount = len(req.Outline.Slides)
 	}
+	pageCount = boundedPPTAgentSlideCount(pageCount, skill.MaxSlides)
 	capability, err := a.preparePPTCapabilityRequest(data, user, req.Prompt, req.TextModel, pageCount, pptImagesEnabled(req.ImageSource), false)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writePPTAgentError(w, newPPTAgentError(http.StatusBadRequest, "PPT_CAPABILITY_DENIED", "当前账户无法使用该 PPT 能力"))
 		return
 	}
-	req.TextModel = capability.Model
-	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], 5))
-	applyPPTCapabilityContext(&req, user, capability.Params)
+	pageCount = int(anyFloatOrDefault(capability.Params["page_count"], float64(pageCount)))
+	tenantContext, err := pptAgentTenantContextFromCapability(capability)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
+	var messages []pptapp.AgentMessage
 	if req.Outline == nil {
-		outline, err := a.generatePPTOutlineWithModel(r.Context(), outlineRequestFromGenerate(req))
+		seed := pptapp.Task{
+			Prompt: req.Prompt, SkillCode: skill.Code, SlideCount: pageCount,
+			Language: req.Language, Audience: req.Audience,
+		}
+		response, chatErr := pptAgentChatForRequest(a, r)(r.Context(), buildPPTAgentChatRequest(skill, seed, req.Prompt, capability.Model))
+		if chatErr != nil {
+			writePPTAgentError(w, newPPTAgentError(http.StatusBadGateway, "PPT_AGENT_PROVIDER_UNAVAILABLE", "PPT Agent 服务暂时不可用，请稍后重试"))
+			return
+		}
+		outline, err := parsePPTAgentOutline(response.Message.Content, pageCount, skill)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, err)
+			writePPTAgentError(w, newPPTAgentError(http.StatusBadGateway, "PPT_AGENT_RESPONSE_INVALID", "PPT Agent 返回了无效的大纲"))
 			return
 		}
 		req.Outline = &outline
 		req.SlideCount = len(outline.Slides)
-	}
-	externalActive := 0
-	concurrencyLimit := 0
-	if !strings.EqualFold(stringValue(capability.Params["billing_scope"]), contextEnterprise) {
-		concurrencyLimit = adminPlanConcurrencyLimit(data, user)
-		var listErr error
-		externalActive, listErr = activeGenerationTaskCountForStore(a.store, user.ID)
-		if listErr != nil {
-			writeError(w, http.StatusInternalServerError, listErr)
-			return
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		messages = []pptapp.AgentMessage{
+			{Role: "user", Content: req.Prompt, CreatedAt: now},
+			{Role: "assistant", Content: pptAgentOutlineAssistantMessage(outline), CreatedAt: now},
 		}
 	}
-	resp, err := a.pptService.GenerateWithConcurrency(req, externalActive, concurrencyLimit)
+	if req.Outline == nil || len(req.Outline.Slides) != pageCount {
+		writePPTAgentError(w, newPPTAgentError(http.StatusConflict, "PPT_OUTLINE_REQUIRED", "PPT 大纲内容不完整"))
+		return
+	}
+	if _, err := validatePPTAgentConfirmedOutline(pptapp.Task{Outline: req.Outline, SlideCount: pageCount}, skill); err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	owner := pptapp.OwnerScope{TenantID: tenantContext.TenantID, UserID: user.ID}
+	state := pptAgentStateForRequest(a, r)
+	task, err := state.CreateSession(r.Context(), pptapp.SessionRequest{
+		Owner: owner, OrganizationID: tenantContext.OrganizationID, ContextType: tenantContext.ContextType,
+		BillingScope: tenantContext.BillingScope, BillingAccountID: tenantContext.BillingAccountID,
+		ClientRequestID: strings.TrimSpace(r.Header.Get("Idempotency-Key")), Prompt: req.Prompt,
+		SkillCode: skill.Code, SlideCount: pageCount, Language: req.Language, Audience: req.Audience,
+		DeckSpec: pptapp.DeckSpec{
+			Tone: req.Tone, TextContent: req.TextContent, Scenario: req.Scenario,
+			GenerationAspectRatio: req.GenerationAspectRatio, Theme: req.Theme,
+			AutoThemeEnabled: req.AutoThemeEnabled, EnableWebSearch: req.EnableWebSearch,
+			ImageSource: req.ImageSource, TextModel: capability.Model, ImageModel: req.ImageModel,
+			ImageStyle: req.ImageStyle, PeopleStyle: req.PeopleStyle, ImageLighting: req.ImageLighting,
+			ImageComposition: req.ImageComposition, TextInImage: req.TextInImage,
+		},
+	})
 	if err != nil {
-		if errors.Is(err, pptapp.ErrConcurrency) {
-			writeError(w, http.StatusTooManyRequests, err)
-			return
-		}
-		writeError(w, http.StatusBadRequest, err)
+		writePPTAgentStateError(w, err)
 		return
 	}
-	task, err := a.pptService.GetTask(req.Owner, resp.TaskID)
+	outlineRaw, _ := json.Marshal(req.Outline)
+	requestHash := pptAgentMessageHash("legacy-outline", string(outlineRaw))
+	operationKey := "legacy-outline:" + task.TaskID
+	claim, _, err := state.BeginOperation(r.Context(), owner, task.TaskID, "legacy-outline", operationKey, requestHash)
 	if err != nil {
-		_ = a.pptService.Delete(req.Owner, resp.TaskID)
-		writeError(w, http.StatusInternalServerError, err)
+		writePPTAgentStateError(w, err)
 		return
 	}
-	if _, err := a.store.RecordPPTGenerationUsage(task); err != nil {
-		_ = a.pptService.Delete(req.Owner, resp.TaskID)
-		writeError(w, http.StatusBadRequest, err)
+	task, err = state.CompleteOutlineOperation(r.Context(), owner, task.TaskID, claim, messages, *req.Outline)
+	if err != nil {
+		writePPTAgentStateError(w, err)
 		return
 	}
-	if shouldAutoGeneratePPTImages(req, a.cfg) {
-		if pptAutoImageEnabled(a.cfg) {
-			go a.runPPTTaskImageGeneration(user, task)
-		} else {
-			log.Printf("ppt automatic image generation disabled presentationId=%s userId=%s mode=%s", task.TaskID, user.ID, firstNonEmptyString(a.cfg.PPTAutoImageMode, "enabled"))
-		}
+	started, err := a.beginPPTAgentGeneration(
+		r.Context(), pptAgentGenerationStateForRequest(a, r), pptAgentBillingForRequest(a, r),
+		pptAgentImageRunnerForRequest(a, r, user), owner, task, capability, pageCount,
+	)
+	if err != nil {
+		writePPTAgentStateError(w, err)
+		return
 	}
-	writeJSON(w, resp)
+	writeJSON(w, pptapp.GenerateResponse{TaskID: started.TaskID, Status: started.Status})
 }
 
 func (a api) estimatePPTGenerationCost(w http.ResponseWriter, r *http.Request) {
@@ -283,14 +323,19 @@ func (a api) getPPTTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	taskID := strings.TrimSpace(r.PathValue("taskId"))
-	task, err := a.pptService.GetTask(pptOwnerForUser(user), taskID)
+	owner, err := pptOwnerForCapability(a.store, user)
 	if err != nil {
-		writePPTError(w, err)
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
+	taskID := strings.TrimSpace(r.PathValue("taskId"))
+	task, err := pptAgentStateForRequest(a, r).GetTask(r.Context(), owner, taskID)
+	if err != nil {
+		writePPTAgentStateError(w, err)
 		return
 	}
 	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
-	writeJSON(w, task)
+	writeJSON(w, pptTaskResponse(task))
 }
 
 func (a api) listPPTHistory(w http.ResponseWriter, r *http.Request) {
@@ -299,15 +344,22 @@ func (a api) listPPTHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	items, err := a.pptService.HistoryWithError(pptOwnerForUser(user))
+	owner, err := pptOwnerForCapability(a.store, user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
 		return
 	}
-	for index := range items {
-		items[index] = a.materializePPTTaskVisualURLs(r.Context(), user, items[index])
+	items, err := pptAgentStateForRequest(a, r).History(r.Context(), owner)
+	if err != nil {
+		writePPTAgentStateError(w, err)
+		return
 	}
-	writeJSON(w, items)
+	responses := make([]pptTaskPublicResponse, 0, len(items))
+	for index := range items {
+		item := a.materializePPTTaskVisualURLs(r.Context(), user, items[index])
+		responses = append(responses, pptTaskResponse(item))
+	}
+	writeJSON(w, responses)
 }
 
 func (a api) deletePPTTask(w http.ResponseWriter, r *http.Request) {
@@ -316,8 +368,13 @@ func (a api) deletePPTTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
 	taskID := strings.TrimSpace(r.PathValue("taskId"))
-	if err := a.pptService.Delete(pptOwnerForUser(user), taskID); err != nil {
+	if err := a.pptService.Delete(owner, taskID); err != nil {
 		writePPTError(w, err)
 		return
 	}
@@ -353,7 +410,7 @@ func (a api) generatePPTOutline(w http.ResponseWriter, r *http.Request) {
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], 5))
 	outline, err := a.generatePPTOutlineWithModel(r.Context(), req)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		writePPTAgentError(w, newPPTAgentError(http.StatusBadGateway, "PPT_AGENT_PROVIDER_UNAVAILABLE", "PPT Agent 服务暂时不可用，请稍后重试"))
 		return
 	}
 	writeJSON(w, outline)
@@ -402,6 +459,11 @@ func (a api) updatePPTSlide(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
 	var slide pptSlide
 	if err := json.NewDecoder(r.Body).Decode(&slide); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -409,8 +471,12 @@ func (a api) updatePPTSlide(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
-	slide = canonicalPPTSlideUpdate(slide)
-	task, err := a.pptService.UpdateSlideContent(pptOwnerForUser(user), taskID, slideID, slide)
+	slide, err = canonicalPPTSlideUpdate(owner.TenantID, slide)
+	if err != nil {
+		writePPTError(w, err)
+		return
+	}
+	task, err := a.pptService.UpdateSlideContent(owner, taskID, slideID, slide)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -430,6 +496,11 @@ func (a api) updatePPTSlideImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
 	var req struct {
 		ImageURL string `json:"imageUrl"`
 	}
@@ -443,7 +514,7 @@ func (a api) updatePPTSlideImage(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
-	updated, err := a.pptService.UpdateSlideImage(pptOwnerForUser(user), taskID, slideID, req.ImageURL)
+	updated, err := a.pptService.UpdateSlideImage(owner, taskID, slideID, req.ImageURL)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -464,9 +535,14 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
 	presentationID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
-	task, slide, err := a.pptService.GetSlide(pptOwnerForUser(user), presentationID, slideID)
+	task, slide, err := a.pptService.GetSlide(owner, presentationID, slideID)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -510,12 +586,12 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		PeopleStyle: task.PeopleStyle, ImageLighting: task.ImageLighting,
 		ImageComposition: firstNonEmptyString(req.Composition, task.ImageComposition),
 	})
-	if _, err := a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "processing", ""); err != nil {
+	if _, err := a.pptService.UpdateSlideVisualPlan(owner, presentationID, slideID, plan, "", "processing", ""); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if !plan.ImageRequired {
-		updated, err := a.pptService.DisableSlideVisual(pptOwnerForUser(user), presentationID, slideID, plan)
+		updated, err := a.pptService.DisableSlideVisual(owner, presentationID, slideID, plan)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -540,7 +616,7 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 	model := pptImageProviderModel(imageReq.ImageModel, a.cfg.ImageModel)
 	service, err := a.generationServiceForPPTImage(user, model)
 	if err != nil {
-		_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
+		_, _ = a.pptService.UpdateSlideVisualPlan(owner, presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -551,7 +627,7 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 115*time.Second)
 		image, generationErr = a.generateBillablePPTImage(ctx, user, service, imageReq, model, presentationID)
 		cancel()
-		if generationErr == nil && strings.TrimSpace(image.URL) != "" {
+		if generationErr == nil && strings.TrimSpace(image.StorageRef) != "" {
 			break
 		}
 		if r.Context().Err() != nil {
@@ -561,16 +637,19 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(time.Second)
 		}
 	}
+	if generationErr == nil && strings.TrimSpace(image.StorageRef) == "" {
+		generationErr = errors.New("ppt visual storage reference is unavailable")
+	}
 	if generationErr != nil {
-		_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "failed", generationErrorMessage(generationErr))
+		_, _ = a.pptService.UpdateSlideVisualPlan(owner, presentationID, slideID, plan, "", "failed", generationErrorMessage(generationErr))
 		writeError(w, http.StatusBadGateway, generationErr)
 		return
 	}
-	updated, err := a.pptService.CompleteSlideVisual(pptOwnerForUser(user), presentationID, slideID, plan, pptapp.VisualAsset{
-		URL: firstNonEmptyString(image.StorageRef, image.URL), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	updated, err := a.pptService.CompleteSlideVisual(owner, presentationID, slideID, plan, pptapp.VisualAsset{
+		URL: strings.TrimSpace(image.StorageRef), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
+		_, _ = a.pptService.UpdateSlideVisualPlan(owner, presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -621,6 +700,11 @@ func (a api) deletePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
 	presentationID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
 	lockKey := user.ID + ":" + presentationID + ":" + slideID
@@ -634,7 +718,7 @@ func (a api) deletePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseVisual()
-	_, slide, err := a.pptService.GetSlide(pptOwnerForUser(user), presentationID, slideID)
+	_, slide, err := a.pptService.GetSlide(owner, presentationID, slideID)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -645,7 +729,7 @@ func (a api) deletePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		plan.VisualType = "none"
 		plan.ImageRequired = false
 	}
-	updated, err := a.pptService.DisableSlideVisual(pptOwnerForUser(user), presentationID, slideID, plan)
+	updated, err := a.pptService.DisableSlideVisual(owner, presentationID, slideID, plan)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -665,6 +749,11 @@ func (a api) restorePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil {
+		writePPTAgentError(w, newPPTAgentError(http.StatusServiceUnavailable, "PPT_TENANT_CONTEXT_UNAVAILABLE", "PPT 会话租户上下文暂时不可用"))
+		return
+	}
 	presentationID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
 	var req pptRestoreVisualRequest
@@ -672,9 +761,9 @@ func (a api) restorePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	visualReference := firstNonEmptyString(req.StorageRef, req.URL)
+	visualReference := req.StorageRef
 	if strings.TrimSpace(req.CreatedAt) == "" || strings.TrimSpace(visualReference) == "" {
-		writeError(w, http.StatusBadRequest, errors.New("visual history createdAt and url are required"))
+		writeError(w, http.StatusBadRequest, errors.New("visual history createdAt and storageRef are required"))
 		return
 	}
 	lockKey := user.ID + ":" + presentationID + ":" + slideID
@@ -688,7 +777,7 @@ func (a api) restorePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseVisual()
-	updated, err := a.pptService.RestoreSlideVisual(pptOwnerForUser(user), presentationID, slideID, req.CreatedAt, visualReference)
+	updated, err := a.pptService.RestoreSlideVisual(owner, presentationID, slideID, req.CreatedAt, visualReference)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -720,13 +809,21 @@ func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("ppt task id is required"))
 		return
 	}
-	task, err := a.pptService.GetTask(pptOwnerForUser(user), taskID)
+	owner, err := pptOwnerForCapability(a.store, user)
 	if err != nil {
 		writePPTError(w, err)
 		return
 	}
-	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
-	payload, err := buildPPTX(task)
+	task, err := pptAgentStateForRequest(a, r).GetTask(r.Context(), owner, taskID)
+	if err != nil {
+		writePPTAgentStateError(w, err)
+		return
+	}
+	if err := validatePPTExportTask(task); err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	payload, err := buildPPTXWithImageResolver(r.Context(), task, a.pptxStorageImageResolver(user, owner.TenantID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -748,13 +845,21 @@ func (a api) downloadPPTExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskID := strings.TrimSpace(r.PathValue("taskId"))
-	task, err := a.pptService.GetTask(pptOwnerForUser(user), taskID)
+	owner, err := pptOwnerForCapability(a.store, user)
 	if err != nil {
 		writePPTError(w, err)
 		return
 	}
-	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
-	payload, err := buildPPTX(task)
+	task, err := pptAgentStateForRequest(a, r).GetTask(r.Context(), owner, taskID)
+	if err != nil {
+		writePPTAgentStateError(w, err)
+		return
+	}
+	if err := validatePPTExportTask(task); err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	payload, err := buildPPTXWithImageResolver(r.Context(), task, a.pptxStorageImageResolver(user, owner.TenantID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -856,6 +961,11 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 	if task.TaskID == "" || len(task.Slides) == 0 {
 		return
 	}
+	owner, err := pptOwnerForCapability(a.store, user)
+	if err != nil || owner.TenantID != strings.TrimSpace(task.TenantID) {
+		log.Printf("ppt image generation skipped because capability tenant is unavailable task=%s", task.TaskID)
+		return
+	}
 	parallelism := 3
 	if len(task.Slides) < parallelism {
 		parallelism = len(task.Slides)
@@ -891,7 +1001,7 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 			planCtx, planCancel := context.WithTimeout(context.Background(), 35*time.Second)
 			if plan, planErr := a.generatePPTVisualPlan(planCtx, task, slide); planErr == nil {
 				slide.VisualPlan = &plan
-				_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForTask(user, task), task.TaskID, slide.ID, plan, "", "planned", "")
+				_, _ = a.pptService.UpdateSlideVisualPlan(owner, task.TaskID, slide.ID, plan, "", "planned", "")
 			}
 			planCancel()
 			req := pptImageGenerateRequest{
@@ -914,16 +1024,16 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 				ctx, cancel := context.WithTimeout(context.Background(), 115*time.Second)
 				image, err := a.generatePPTTaskSlideImage(ctx, user, task.TaskID, req)
 				cancel()
-				if err == nil && strings.TrimSpace(image.URL) != "" {
+				if err == nil && strings.TrimSpace(image.StorageRef) != "" {
 					plan := pptapp.NormalizeVisualPlan(pptapp.VisualPlan{}, pptapp.VisualPlannerInput{SlideType: slide.SlideType, SlideTitle: slide.Title, CoreIdea: concisePPTVisualIdea(slide.Content)})
 					if slide.VisualPlan != nil {
 						plan = *slide.VisualPlan
 					}
 					model := pptImageProviderModel(req.ImageModel, a.cfg.ImageModel)
-					if _, updateErr := a.pptService.CompleteSlideVisual(pptOwnerForTask(user, task), task.TaskID, slide.ID, plan, pptapp.VisualAsset{
-						URL: firstNonEmptyString(image.StorageRef, image.URL), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+					if _, updateErr := a.pptService.CompleteSlideVisual(owner, task.TaskID, slide.ID, plan, pptapp.VisualAsset{
+						URL: strings.TrimSpace(image.StorageRef), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 					}); updateErr != nil {
-						_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForTask(user, task), task.TaskID, slide.ID, plan, "", "failed", generationErrorMessage(updateErr))
+						_, _ = a.pptService.UpdateSlideVisualPlan(owner, task.TaskID, slide.ID, plan, "", "failed", generationErrorMessage(updateErr))
 						log.Printf("ppt image update failed task=%s slide=%s: %v", task.TaskID, slide.ID, updateErr)
 					}
 					return
@@ -936,7 +1046,7 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
 			if slide.VisualPlan != nil {
-				_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForTask(user, task), task.TaskID, slide.ID, *slide.VisualPlan, "", "failed", generationErrorMessage(lastErr))
+				_, _ = a.pptService.UpdateSlideVisualPlan(owner, task.TaskID, slide.ID, *slide.VisualPlan, "", "failed", generationErrorMessage(lastErr))
 			}
 			log.Printf("ppt image generation failed presentationId=%s slideId=%s page=%d modelName=%s err=%v", task.TaskID, slide.ID, slide.Page, task.ImageModel, lastErr)
 		}()
@@ -1049,7 +1159,11 @@ func (a api) generateBillablePPTImage(ctx context.Context, user adminUser, servi
 		storageRef = pptStorageReference(storedFiles[0])
 	}
 	displayURL := imageURL
-	if signed, ok := a.resolvePPTStorageReference(ctx, user, storageRef); ok {
+	storageTenantID := ""
+	if len(storedFiles) > 0 {
+		storageTenantID = storedFiles[0].TenantID
+	}
+	if signed, ok := a.resolvePPTStorageReference(ctx, user, storageTenantID, storageRef); ok {
 		displayURL = signed
 	}
 	return pptImageSearchResponse{
@@ -1313,45 +1427,6 @@ func (a api) searchPPTImages(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func buildPPTOutline(req pptOutlineGenerateRequest) pptOutline {
-	slideCount := req.SlideCount
-	if slideCount <= 0 {
-		slideCount = 5
-	}
-	title := titleFromPromptForOutline(req.Prompt)
-	slides := make([]pptOutlineSlide, 0, slideCount)
-	for i := 1; i <= slideCount; i++ {
-		slideTitle := title
-		summary := "围绕主题提炼核心观点，形成适合演示的页面内容。"
-		points := []string{"明确页面目标", "提炼关键论据", "形成清晰表达"}
-		switch i {
-		case 1:
-			slideTitle = title
-			summary = "封面页，突出主题和演示定位。"
-			points = []string{"主题名称", "目标受众", "演示价值"}
-		case slideCount:
-			slideTitle = "总结与行动建议"
-			summary = "收束主要观点，并给出下一步行动建议。"
-			points = []string{"关键结论", "落地路径", "下一步计划"}
-		default:
-			slideTitle = title + " · 第" + strconv.Itoa(i) + "部分"
-		}
-		slides = append(slides, pptOutlineSlide{
-			Page:         i,
-			Title:        slideTitle,
-			Summary:      summary,
-			BulletPoints: points,
-			Layout:       normalizedPPTLayout("", i-1, slideCount, req.ImageSource),
-			SlideType:    defaultPPTSlideType(i, slideCount),
-		})
-	}
-	return pptOutline{
-		Title:     title,
-		Slides:    slides,
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-	}
-}
-
 func defaultPPTSlideType(page, total int) string {
 	if page == 1 {
 		return "cover"
@@ -1368,14 +1443,14 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 		return pptOutline{}, pptapp.ErrInvalidPrompt
 	}
 	if !a.pptProviderConfigured() {
-		return buildPPTOutline(req), nil
+		return pptOutline{}, errors.New("ppt outline provider is not configured")
 	}
 	model := strings.TrimSpace(req.TextModel)
 	if model == "" {
 		model = strings.TrimSpace(a.cfg.PPTTextModel)
 	}
 	if model == "" {
-		return buildPPTOutline(req), nil
+		return pptOutline{}, errors.New("ppt outline model is not configured")
 	}
 	provider := chatprovider.NewOpenAICompatibleForModel(a.cfg, model)
 	response, err := provider.Chat(ctx, generation.CreateRequest{
@@ -1389,10 +1464,6 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 		},
 	})
 	if err != nil {
-		if shouldFallbackPPTOutline(err) {
-			log.Printf("ppt outline provider unavailable model=%s fallback=local error=%v", model, err)
-			return buildPPTOutline(req), nil
-		}
 		return pptOutline{}, fmt.Errorf("ppt outline model call failed: %w", err)
 	}
 	outline, err := parsePPTOutlineModelOutput(response.Message.Content, req)
@@ -1400,24 +1471,6 @@ func (a api) generatePPTOutlineWithModel(ctx context.Context, req pptOutlineGene
 		return pptOutline{}, fmt.Errorf("parse ppt outline model output: %w", err)
 	}
 	return outline, nil
-}
-
-func shouldFallbackPPTOutline(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"http 429", "http 502", "http 503", "http 504",
-		"system_memory_overloaded", "system memory overloaded",
-		"context deadline exceeded", "client.timeout", "connection reset",
-		"connection refused", "temporary failure", "no such host",
-	} {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func (a api) preparePPTCapabilityRequest(data adminPlatformData, user adminUser, prompt string, model string, pageCount int, withImages bool, uploadedFile bool) (generation.CreateRequest, error) {
@@ -1432,17 +1485,15 @@ func (a api) preparePPTCapabilityRequestWithAuthorization(data adminPlatformData
 	if authorizationOverride != nil {
 		authorization = *authorizationOverride
 	} else {
-		authorization = modelCallAuthorization{
-			ContextType: contextPersonal, TenantID: "tenant_default", OrganizationID: defaultOrganizationID("tenant_default"),
-			UserID: user.ID, Role: roleUser, BillingScope: contextPersonal, BillingAccountID: user.ID, ServiceState: "ACTIVE",
+		authorizer, ok := a.store.(modelCallAuthorizer)
+		if !ok {
+			return generation.CreateRequest{}, errEnterpriseServiceUnavailable
 		}
-		if authorizer, ok := a.store.(modelCallAuthorizer); ok {
-			resolvedAuthorization, err := authorizer.AuthorizeModelCall(user.ID, modulePPTGeneration)
-			if err != nil {
-				return generation.CreateRequest{}, err
-			}
-			authorization = resolvedAuthorization
+		resolvedAuthorization, err := authorizer.AuthorizeModelCall(user.ID, modulePPTGeneration)
+		if err != nil {
+			return generation.CreateRequest{}, err
 		}
+		authorization = resolvedAuthorization
 	}
 	user.TenantID = authorization.TenantID
 	user.OrganizationID = authorization.OrganizationID
@@ -1469,6 +1520,7 @@ func (a api) preparePPTCapabilityRequestWithAuthorization(data adminPlatformData
 	request.Params["package_id"] = user.PlanID
 	request.Params["tenant_id"] = authorization.TenantID
 	request.Params["organization_id"] = authorization.OrganizationID
+	request.Params["context_type"] = authorization.ContextType
 	request.Params["billing_scope"] = authorization.BillingScope
 	request.Params["billing_account_id"] = authorization.BillingAccountID
 	request.Params["final_schema_snapshot"] = map[string]any{"fields": resolved.FinalSchema.Fields}

@@ -83,15 +83,16 @@ func TestPostgresPPTTaskPersistenceConcurrencyDoesNotMirrorLegacyFile(t *testing
 		t.Fatalf("cross-instance ready task read failed: task=%#v err=%v", task, err)
 	}
 	plan := NormalizeVisualPlan(VisualPlan{VisualType: "illustration"}, VisualPlannerInput{SlideType: "cover", SlideTitle: task.Slides[0].Title})
-	updated, err := services[1].CompleteSlideVisual(testOwner(userID), readyResponse.TaskID, task.Slides[0].ID, plan, VisualAsset{URL: "https://example.test/new-image.png", TaskID: "image_task_test", ModelName: "image_model_test", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	const generatedImage = "storage://tenant_default/new-image.png"
+	updated, err := services[1].CompleteSlideVisual(testOwner(userID), readyResponse.TaskID, task.Slides[0].ID, plan, VisualAsset{URL: generatedImage, TaskID: "image_task_test", ModelName: "image_model_test", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Slides[0].ImageURL != "https://example.test/new-image.png" || updated.Slides[0].VisualTaskID != "image_task_test" || updated.Slides[0].VisualModelName != "image_model_test" || len(updated.Slides[0].VisualHistory) != 1 {
+	if updated.Slides[0].ImageURL != generatedImage || updated.Slides[0].VisualTaskID != "image_task_test" || updated.Slides[0].VisualModelName != "image_model_test" || len(updated.Slides[0].VisualHistory) != 1 {
 		t.Fatalf("atomic visual update failed: %#v", updated.Slides[0])
 	}
 
-	const replacement = "https://example.test/replacement.png"
+	const replacement = "storage://tenant_default/replacement.png"
 	replaced, err := services[1].UpdateSlideImage(testOwner(userID), readyResponse.TaskID, task.Slides[0].ID, replacement)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +104,7 @@ func TestPostgresPPTTaskPersistenceConcurrencyDoesNotMirrorLegacyFile(t *testing
 		t.Fatal(err)
 	}
 	assertSlideImageRepresentations(t, reread.Slides[0], replacement)
-	removed, err := fresh.UpdateSlideImage(testOwner(userID), readyResponse.TaskID, task.Slides[0].ID, "")
+	removed, err := fresh.DisableSlideVisual(testOwner(userID), readyResponse.TaskID, task.Slides[0].ID, VisualPlan{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,6 +597,40 @@ func TestPostgresPPTAgentConcurrentSameRowTransitions(t *testing.T) {
 			t.Fatalf("terminal task=%#v err=%v", terminal, err)
 		}
 	})
+}
+
+func TestPostgresPPTGenerationCleanupFenceBlocksCrossInstanceTakeover(t *testing.T) {
+	db := openPPTIntegrationTestDB(t)
+	workerA := NewPostgresService(db)
+	workerB := NewPostgresService(db)
+	userID := "ppt_agent_cleanup_fence_" + time.Now().UTC().Format("20060102150405.000000000")
+	task := createOutlineReadySession(t, workerA, userID, 1)
+	defer func() {
+		_, _ = db.ExecContext(context.Background(), `delete from xz_ppt_tasks where task_id=$1 and user_id=$2`, task.TaskID, userID)
+	}()
+	if _, err := claimAndBindGenerationForTest(context.Background(), workerA, taskOwner(task), task.TaskID, "billing_cleanup_fence", "confirm-cleanup-fence", "confirm-hash"); err != nil {
+		t.Fatalf("BeginGeneration() error = %v", err)
+	}
+	startedAt := time.Now().UTC()
+	runA, _, err := workerA.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, startedAt)
+	if err != nil {
+		t.Fatalf("ClaimGenerationRun(A) error = %v", err)
+	}
+	fenceAt := startedAt.Add(generationLeaseDuration + time.Second)
+	fenced, _, err := workerA.AcquireGenerationCleanupFence(context.Background(), taskOwner(task), task.TaskID, runA, fenceAt)
+	if err != nil {
+		t.Fatalf("AcquireGenerationCleanupFence(A) error = %v", err)
+	}
+	if runB, _, claimErr := workerB.ClaimGenerationRun(context.Background(), taskOwner(task), task.TaskID, fenceAt.Add(time.Second)); !errors.Is(claimErr, ErrGenerationAlreadyRunning) || runB.RunToken != "" {
+		t.Fatalf("ClaimGenerationRun(B) during cleanup fence = %#v err=%v, want ErrGenerationAlreadyRunning", runB, claimErr)
+	}
+	if _, err := workerA.FailGenerationAfterRelease(context.Background(), taskOwner(task), task.TaskID, fenced, "PPT_GENERATION_FAILED"); err != nil {
+		t.Fatalf("FailGenerationAfterRelease(A) error = %v", err)
+	}
+	failed, err := workerB.GetTask(taskOwner(task), task.TaskID)
+	if err != nil || failed.Stage != StageFailed || failed.GenerationLease != nil {
+		t.Fatalf("fresh cleanup-fenced task=%#v err=%v", failed, err)
+	}
 }
 
 func TestPostgresReadinessOnMigratedSchemaIsReadOnly(t *testing.T) {

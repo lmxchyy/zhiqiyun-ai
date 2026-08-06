@@ -3269,7 +3269,7 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
-		count := imageCount(req.Params)
+		count := generationOutputAssetCount(req)
 		pointCost := generationPointCostForRequest(req, adminData)
 		account, err := personalPointAccountForUserState(points.memory, userID)
 		if err != nil {
@@ -3564,7 +3564,7 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 		task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
 		applyTaskSupplierCost(&task, adminData.ProviderCosts)
-		count := imageCount(req.Params)
+		count := generationOutputAssetCount(req)
 		for i := 0; i < count; i++ {
 			assetID := nextID(data.Counters, "asset")
 			item := generatedAssetForRequest(req, task.UserID, task.ID, assetID, i, now)
@@ -4363,6 +4363,13 @@ func imageCount(params map[string]any) int {
 		return 8
 	}
 	return count
+}
+
+func generationOutputAssetCount(req createGenerationTaskRequest) int {
+	if strings.EqualFold(strings.TrimSpace(req.Type), "PPT_GENERATION") {
+		return 0
+	}
+	return imageCount(req.Params)
 }
 
 func generationAssetName(taskType string, taskID string, index int) string {

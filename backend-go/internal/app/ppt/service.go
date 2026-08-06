@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,10 +24,11 @@ const (
 )
 
 var (
-	ErrInvalidPrompt  = errors.New("ppt prompt is required")
-	ErrTaskNotFound   = errors.New("ppt task not found")
-	ErrVisualNotFound = errors.New("ppt visual history item not found")
-	ErrConcurrency    = errors.New("ppt generation concurrency limit reached")
+	ErrInvalidPrompt          = errors.New("ppt prompt is required")
+	ErrTaskNotFound           = errors.New("ppt task not found")
+	ErrVisualNotFound         = errors.New("ppt visual history item not found")
+	ErrConcurrency            = errors.New("ppt generation concurrency limit reached")
+	ErrInvalidVisualReference = errors.New("ppt visual reference must be a canonical same-tenant storage reference")
 )
 
 type GenerateRequest struct {
@@ -344,6 +346,9 @@ func (s *Service) UpdateSlideImage(owner OwnerScope, taskID string, slideID stri
 	if err != nil {
 		return Task{}, err
 	}
+	if err := ValidateVisualStorageReference(owner.TenantID, imageURL); err != nil {
+		return Task{}, err
+	}
 	userID := owner.UserID
 	if s.postgresMode {
 		if s.db == nil {
@@ -389,6 +394,9 @@ func (s *Service) UpdateSlideImage(owner OwnerScope, taskID string, slideID stri
 func (s *Service) UpdateSlideContent(owner OwnerScope, taskID, slideID string, update Slide) (Task, error) {
 	owner, err := owner.Validated()
 	if err != nil {
+		return Task{}, err
+	}
+	if err := validateSlideVisualReferences(owner.TenantID, update); err != nil {
 		return Task{}, err
 	}
 	userID := owner.UserID
@@ -554,6 +562,9 @@ func (s *Service) CompleteSlideVisual(owner OwnerScope, taskID, slideID string, 
 	if err != nil {
 		return Task{}, err
 	}
+	if err := ValidateVisualStorageReference(owner.TenantID, asset.URL); err != nil {
+		return Task{}, err
+	}
 	userID := owner.UserID
 	if s.postgresMode {
 		if s.db == nil {
@@ -633,6 +644,9 @@ func (s *Service) RestoreSlideVisual(owner OwnerScope, taskID, slideID, createdA
 	if err != nil {
 		return Task{}, err
 	}
+	if err := ValidateVisualStorageReference(owner.TenantID, imageURL); err != nil {
+		return Task{}, err
+	}
 	userID := owner.UserID
 	if s.postgresMode {
 		if s.db == nil {
@@ -658,6 +672,45 @@ func (s *Service) RestoreSlideVisual(owner OwnerScope, taskID, slideID, createdA
 		return Task{}, err
 	}
 	return task, nil
+}
+
+func validateSlideVisualReferences(expectedTenantID string, slide Slide) error {
+	for _, block := range slide.Blocks {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "image") {
+			continue
+		}
+		if err := ValidateVisualStorageReference(expectedTenantID, block.ImageRef); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ValidateVisualStorageReference(expectedTenantID, value string) error {
+	if value == "" || value != strings.TrimSpace(value) {
+		return ErrInvalidVisualReference
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "storage" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Opaque != "" {
+		return ErrInvalidVisualReference
+	}
+	tenantID, err := url.PathUnescape(parsed.Host)
+	if err != nil || tenantID == "" || tenantID != expectedTenantID || tenantID != strings.TrimSpace(tenantID) {
+		return ErrInvalidVisualReference
+	}
+	escapedPath := parsed.EscapedPath()
+	if !strings.HasPrefix(escapedPath, "/") || strings.Count(escapedPath, "/") != 1 {
+		return ErrInvalidVisualReference
+	}
+	fileID, err := url.PathUnescape(strings.TrimPrefix(escapedPath, "/"))
+	if err != nil || fileID == "" || fileID != strings.TrimSpace(fileID) || strings.Contains(fileID, "/") {
+		return ErrInvalidVisualReference
+	}
+	canonical := "storage://" + url.PathEscape(tenantID) + "/" + url.PathEscape(fileID)
+	if canonical != value {
+		return ErrInvalidVisualReference
+	}
+	return nil
 }
 
 func restoreSlideVisual(task *Task, slideID, createdAt, imageURL string) error {
@@ -913,7 +966,11 @@ func slidesFromOutline(outline *Outline, req GenerateRequest) []Slide {
 	slides := make([]Slide, 0, len(outline.Slides))
 	for i, item := range outline.Slides {
 		item.Page = i + 1
-		slides = append(slides, SlideFromOutline(item, req))
+		slide := SlideFromOutline(item, req)
+		// SlideFromOutline may render an in-process preview placeholder. Canonical
+		// tasks only persist private same-tenant storage references, so generation
+		// starts without an image until the provider result is stored privately.
+		slides = append(slides, setSlideImageRef(slide, ""))
 	}
 	return slides
 }
