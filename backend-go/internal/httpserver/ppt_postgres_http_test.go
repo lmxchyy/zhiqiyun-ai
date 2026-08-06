@@ -260,49 +260,11 @@ func cleanupPPTHTTPTestFixture(t *testing.T, db *sql.DB, fixture pptHTTPTestFixt
 			}
 		}
 	}
-	cleanupPPTHTTPPersonalPointRows(t, ctx, db, []string{fixture.owner.ID, fixture.other.ID, fixture.admin.ID})
-	for _, user := range []pptHTTPTestUser{fixture.owner, fixture.other, fixture.admin} {
-		for _, statement := range []string{
-			`delete from xz_point_accounts where user_id = $1`,
-			`delete from xz_users where id = $1`,
-		} {
-			if _, err := db.ExecContext(ctx, statement, user.ID); err != nil {
-				t.Errorf("cleanup fixture user %s: %v", user.ID, err)
-			}
-		}
-	}
+	// The dedicated test database and unique fixture suffix own the append-only
+	// point-lot audit trail, its point account, and its user rows. Retain them
+	// instead of bypassing the production immutability and policy triggers.
 	if _, err := db.ExecContext(ctx, `delete from xz_audit_logs where metadata->>'clientIP' = $1`, fixture.clientIP); err != nil {
 		t.Errorf("cleanup fixture audit records: %v", err)
-	}
-}
-
-func cleanupPPTHTTPPersonalPointRows(t *testing.T, ctx context.Context, db *sql.DB, userIDs []string) {
-	t.Helper()
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Errorf("begin PPT HTTP personal point cleanup: %v", err)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `set local session_replication_role = replica`); err != nil {
-		t.Errorf("isolate PPT HTTP personal point cleanup triggers: %v", err)
-		return
-	}
-	for _, userID := range userIDs {
-		for _, statement := range []string{
-			`delete from xz_personal_point_lot_movements where user_id=$1`,
-			`delete from xz_personal_point_reservation_allocations where user_id=$1`,
-			`delete from xz_personal_point_reservations where user_id=$1`,
-			`delete from xz_personal_point_lots where user_id=$1`,
-		} {
-			if _, err := tx.ExecContext(ctx, statement, userID); err != nil {
-				t.Errorf("clean PPT HTTP personal point rows for %s: %v", userID, err)
-				return
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Errorf("commit PPT HTTP personal point cleanup: %v", err)
 	}
 }
 
