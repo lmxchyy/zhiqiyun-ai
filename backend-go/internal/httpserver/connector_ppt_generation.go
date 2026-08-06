@@ -40,6 +40,7 @@ func (a api) estimateConnectorPPT(ctx context.Context, userID string, enterprise
 	}
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], float64(req.SlideCount)))
+	applyPPTCapabilityContext(&req, user, capability.Params)
 	task := pptapp.Task{UserID: user.ID, Prompt: req.Prompt, SlideCount: req.SlideCount, TextModel: req.TextModel, ImageSource: normalizedPPTImageSource(req.ImageSource)}
 	return req, int64(pptPointCostWithRules(task, data)), nil
 }
@@ -60,6 +61,7 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	}
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], float64(req.SlideCount)))
+	applyPPTCapabilityContext(&req, user, capability.Params)
 	billingReq, err := connectorPPTBillingRequest(data, user, authorization, capability, req, clientRequestID, billingMetadata)
 	if err != nil {
 		return connectorPPTExecution{}, err
@@ -83,7 +85,7 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	if err != nil {
 		return failBilling(err)
 	}
-	task, err := a.pptService.GetTask(user.ID, response.TaskID)
+	task, err := a.pptService.GetTask(req.Owner, response.TaskID)
 	if err != nil {
 		return failBilling(err)
 	}
@@ -92,7 +94,7 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	}
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		task, err = a.pptService.GetTask(user.ID, response.TaskID)
+		task, err = a.pptService.GetTask(req.Owner, response.TaskID)
 		if err != nil {
 			return failBilling(err)
 		}

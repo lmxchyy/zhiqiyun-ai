@@ -173,6 +173,7 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], 5))
+	applyPPTCapabilityContext(&req, user, capability.Params)
 	if req.Outline == nil {
 		outline, err := a.generatePPTOutlineWithModel(r.Context(), outlineRequestFromGenerate(req))
 		if err != nil {
@@ -202,14 +203,14 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	task, err := a.pptService.GetTask(user.ID, resp.TaskID)
+	task, err := a.pptService.GetTask(req.Owner, resp.TaskID)
 	if err != nil {
-		_ = a.pptService.Delete(user.ID, resp.TaskID)
+		_ = a.pptService.Delete(req.Owner, resp.TaskID)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if _, err := a.store.RecordPPTGenerationUsage(task); err != nil {
-		_ = a.pptService.Delete(user.ID, resp.TaskID)
+		_ = a.pptService.Delete(req.Owner, resp.TaskID)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -283,7 +284,7 @@ func (a api) getPPTTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskID := strings.TrimSpace(r.PathValue("taskId"))
-	task, err := a.pptService.GetTask(user.ID, taskID)
+	task, err := a.pptService.GetTask(pptOwnerForUser(user), taskID)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -298,7 +299,7 @@ func (a api) listPPTHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	items, err := a.pptService.HistoryWithError(user.ID)
+	items, err := a.pptService.HistoryWithError(pptOwnerForUser(user))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -316,7 +317,7 @@ func (a api) deletePPTTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskID := strings.TrimSpace(r.PathValue("taskId"))
-	if err := a.pptService.Delete(user.ID, taskID); err != nil {
+	if err := a.pptService.Delete(pptOwnerForUser(user), taskID); err != nil {
 		writePPTError(w, err)
 		return
 	}
@@ -408,14 +409,15 @@ func (a api) updatePPTSlide(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
-	task, err := a.pptService.UpdateSlideContent(user.ID, taskID, slideID, slide)
+	slide = canonicalPPTSlideUpdate(slide)
+	task, err := a.pptService.UpdateSlideContent(pptOwnerForUser(user), taskID, slideID, slide)
 	if err != nil {
 		writePPTError(w, err)
 		return
 	}
 	for _, updated := range task.Slides {
 		if updated.ID == slideID {
-			writeJSON(w, updated)
+			writeJSON(w, projectPPTSlideForHTTP(updated))
 			return
 		}
 	}
@@ -441,7 +443,7 @@ func (a api) updatePPTSlideImage(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
-	updated, err := a.pptService.UpdateSlideImage(user.ID, taskID, slideID, req.ImageURL)
+	updated, err := a.pptService.UpdateSlideImage(pptOwnerForUser(user), taskID, slideID, req.ImageURL)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -464,11 +466,13 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 	}
 	presentationID := strings.TrimSpace(r.PathValue("id"))
 	slideID := strings.TrimSpace(r.PathValue("slideId"))
-	task, slide, err := a.pptService.GetSlide(user.ID, presentationID, slideID)
+	task, slide, err := a.pptService.GetSlide(pptOwnerForUser(user), presentationID, slideID)
 	if err != nil {
 		writePPTError(w, err)
 		return
 	}
+	task = projectPPTTaskForHTTP(task)
+	slide = projectPPTSlideForHTTP(slide)
 	var req pptRegenerateVisualRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -506,12 +510,12 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		PeopleStyle: task.PeopleStyle, ImageLighting: task.ImageLighting,
 		ImageComposition: firstNonEmptyString(req.Composition, task.ImageComposition),
 	})
-	if _, err := a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "processing", ""); err != nil {
+	if _, err := a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "processing", ""); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	if !plan.ImageRequired {
-		updated, err := a.pptService.DisableSlideVisual(user.ID, presentationID, slideID, plan)
+		updated, err := a.pptService.DisableSlideVisual(pptOwnerForUser(user), presentationID, slideID, plan)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -536,7 +540,7 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 	model := pptImageProviderModel(imageReq.ImageModel, a.cfg.ImageModel)
 	service, err := a.generationServiceForPPTImage(user, model)
 	if err != nil {
-		_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
+		_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -558,15 +562,15 @@ func (a api) regeneratePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if generationErr != nil {
-		_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "failed", generationErrorMessage(generationErr))
+		_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "failed", generationErrorMessage(generationErr))
 		writeError(w, http.StatusBadGateway, generationErr)
 		return
 	}
-	updated, err := a.pptService.CompleteSlideVisual(user.ID, presentationID, slideID, plan, pptapp.VisualAsset{
+	updated, err := a.pptService.CompleteSlideVisual(pptOwnerForUser(user), presentationID, slideID, plan, pptapp.VisualAsset{
 		URL: firstNonEmptyString(image.StorageRef, image.URL), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
+		_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForUser(user), presentationID, slideID, plan, "", "failed", generationErrorMessage(err))
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -630,7 +634,7 @@ func (a api) deletePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseVisual()
-	_, slide, err := a.pptService.GetSlide(user.ID, presentationID, slideID)
+	_, slide, err := a.pptService.GetSlide(pptOwnerForUser(user), presentationID, slideID)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -641,7 +645,7 @@ func (a api) deletePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		plan.VisualType = "none"
 		plan.ImageRequired = false
 	}
-	updated, err := a.pptService.DisableSlideVisual(user.ID, presentationID, slideID, plan)
+	updated, err := a.pptService.DisableSlideVisual(pptOwnerForUser(user), presentationID, slideID, plan)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -684,7 +688,7 @@ func (a api) restorePPTSlideVisual(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseVisual()
-	updated, err := a.pptService.RestoreSlideVisual(user.ID, presentationID, slideID, req.CreatedAt, visualReference)
+	updated, err := a.pptService.RestoreSlideVisual(pptOwnerForUser(user), presentationID, slideID, req.CreatedAt, visualReference)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -716,7 +720,7 @@ func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("ppt task id is required"))
 		return
 	}
-	task, err := a.pptService.GetTask(user.ID, taskID)
+	task, err := a.pptService.GetTask(pptOwnerForUser(user), taskID)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -744,7 +748,7 @@ func (a api) downloadPPTExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskID := strings.TrimSpace(r.PathValue("taskId"))
-	task, err := a.pptService.GetTask(user.ID, taskID)
+	task, err := a.pptService.GetTask(pptOwnerForUser(user), taskID)
 	if err != nil {
 		writePPTError(w, err)
 		return
@@ -848,6 +852,7 @@ func pptVisualOCRStrict(cfg config.Config) bool {
 }
 
 func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
+	task = projectPPTTaskForHTTP(task)
 	if task.TaskID == "" || len(task.Slides) == 0 {
 		return
 	}
@@ -886,7 +891,7 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 			planCtx, planCancel := context.WithTimeout(context.Background(), 35*time.Second)
 			if plan, planErr := a.generatePPTVisualPlan(planCtx, task, slide); planErr == nil {
 				slide.VisualPlan = &plan
-				_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, task.TaskID, slide.ID, plan, "", "planned", "")
+				_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForTask(user, task), task.TaskID, slide.ID, plan, "", "planned", "")
 			}
 			planCancel()
 			req := pptImageGenerateRequest{
@@ -915,10 +920,10 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 						plan = *slide.VisualPlan
 					}
 					model := pptImageProviderModel(req.ImageModel, a.cfg.ImageModel)
-					if _, updateErr := a.pptService.CompleteSlideVisual(user.ID, task.TaskID, slide.ID, plan, pptapp.VisualAsset{
+					if _, updateErr := a.pptService.CompleteSlideVisual(pptOwnerForTask(user, task), task.TaskID, slide.ID, plan, pptapp.VisualAsset{
 						URL: firstNonEmptyString(image.StorageRef, image.URL), TaskID: image.TaskID, ModelName: model, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 					}); updateErr != nil {
-						_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, task.TaskID, slide.ID, plan, "", "failed", generationErrorMessage(updateErr))
+						_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForTask(user, task), task.TaskID, slide.ID, plan, "", "failed", generationErrorMessage(updateErr))
 						log.Printf("ppt image update failed task=%s slide=%s: %v", task.TaskID, slide.ID, updateErr)
 					}
 					return
@@ -931,7 +936,7 @@ func (a api) runPPTTaskImageGeneration(user adminUser, task pptapp.Task) {
 				time.Sleep(time.Duration(attempt) * time.Second)
 			}
 			if slide.VisualPlan != nil {
-				_, _ = a.pptService.UpdateSlideVisualPlan(user.ID, task.TaskID, slide.ID, *slide.VisualPlan, "", "failed", generationErrorMessage(lastErr))
+				_, _ = a.pptService.UpdateSlideVisualPlan(pptOwnerForTask(user, task), task.TaskID, slide.ID, *slide.VisualPlan, "", "failed", generationErrorMessage(lastErr))
 			}
 			log.Printf("ppt image generation failed presentationId=%s slideId=%s page=%d modelName=%s err=%v", task.TaskID, slide.ID, slide.Page, task.ImageModel, lastErr)
 		}()

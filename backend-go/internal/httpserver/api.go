@@ -206,7 +206,7 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 	})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
 	if pgStore, ok := store.(*postgresStore); ok {
-		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+		pptService = pptapp.NewPostgresService(pgStore.db)
 	}
 	imageTimeout := cfg.ImageGenerationTimeout()
 	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}

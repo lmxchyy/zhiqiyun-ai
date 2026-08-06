@@ -36,6 +36,7 @@ func parsePPTStorageReference(value string) (tenantID, fileID string, ok bool) {
 }
 
 func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, task pptapp.Task) pptapp.Task {
+	task = projectPPTTaskForHTTP(task)
 	if a.fileService == nil {
 		return task
 	}

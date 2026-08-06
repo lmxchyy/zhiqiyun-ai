@@ -33,6 +33,7 @@ type pptxMedia struct {
 }
 
 func buildPPTX(task pptapp.Task) ([]byte, error) {
+	task = projectPPTTaskForHTTP(task)
 	slides := task.Slides
 	if len(slides) == 0 && task.Outline != nil {
 		for index, outlineSlide := range task.Outline.Slides {

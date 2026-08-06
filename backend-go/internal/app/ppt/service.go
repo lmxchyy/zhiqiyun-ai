@@ -19,6 +19,7 @@ const (
 	StatusProcessing = "processing"
 	StatusSuccess    = "success"
 	StatusFailed     = "failed"
+	StatusCancelled  = "cancelled"
 )
 
 var (
@@ -29,28 +30,34 @@ var (
 )
 
 type GenerateRequest struct {
-	UserID                string   `json:"-"`
-	ClientRequestID       string   `json:"-"`
-	Prompt                string   `json:"prompt"`
-	SlideCount            int      `json:"slideCount"`
-	Language              string   `json:"language"`
-	Tone                  string   `json:"tone"`
-	TextContent           string   `json:"textContent"`
-	Audience              string   `json:"audience"`
-	Scenario              string   `json:"scenario"`
-	GenerationAspectRatio string   `json:"generationAspectRatio"`
-	Theme                 string   `json:"theme"`
-	AutoThemeEnabled      bool     `json:"autoThemeEnabled"`
-	EnableWebSearch       bool     `json:"enableWebSearch"`
-	ImageSource           string   `json:"imageSource"`
-	TextModel             string   `json:"textModel"`
-	ImageModel            string   `json:"imageModel"`
-	ImageStyle            string   `json:"imageStyle,omitempty"`
-	PeopleStyle           string   `json:"peopleStyle,omitempty"`
-	ImageLighting         string   `json:"imageLighting,omitempty"`
-	ImageComposition      string   `json:"imageComposition,omitempty"`
-	TextInImage           bool     `json:"textInImage"`
-	Outline               *Outline `json:"outline,omitempty"`
+	Owner                 OwnerScope `json:"-"`
+	UserID                string     `json:"-"`
+	TenantID              string     `json:"-"`
+	OrganizationID        string     `json:"-"`
+	ContextType           string     `json:"-"`
+	BillingScope          string     `json:"-"`
+	BillingAccountID      string     `json:"-"`
+	ClientRequestID       string     `json:"-"`
+	Prompt                string     `json:"prompt"`
+	SlideCount            int        `json:"slideCount"`
+	Language              string     `json:"language"`
+	Tone                  string     `json:"tone"`
+	TextContent           string     `json:"textContent"`
+	Audience              string     `json:"audience"`
+	Scenario              string     `json:"scenario"`
+	GenerationAspectRatio string     `json:"generationAspectRatio"`
+	Theme                 string     `json:"theme"`
+	AutoThemeEnabled      bool       `json:"autoThemeEnabled"`
+	EnableWebSearch       bool       `json:"enableWebSearch"`
+	ImageSource           string     `json:"imageSource"`
+	TextModel             string     `json:"textModel"`
+	ImageModel            string     `json:"imageModel"`
+	ImageStyle            string     `json:"imageStyle,omitempty"`
+	PeopleStyle           string     `json:"peopleStyle,omitempty"`
+	ImageLighting         string     `json:"imageLighting,omitempty"`
+	ImageComposition      string     `json:"imageComposition,omitempty"`
+	TextInImage           bool       `json:"textInImage"`
+	Outline               *Outline   `json:"outline,omitempty"`
 }
 
 type GenerateResponse struct {
@@ -59,41 +66,59 @@ type GenerateResponse struct {
 }
 
 type Task struct {
-	TaskID                string   `json:"taskId"`
-	UserID                string   `json:"-"`
-	ClientRequestID       string   `json:"clientRequestId,omitempty"`
-	Type                  string   `json:"type,omitempty"`
-	MediaType             string   `json:"mediaType,omitempty"`
-	Status                string   `json:"status"`
-	Title                 string   `json:"title"`
-	Prompt                string   `json:"prompt,omitempty"`
-	SlideCount            int      `json:"slideCount,omitempty"`
-	Language              string   `json:"language,omitempty"`
-	Tone                  string   `json:"tone,omitempty"`
-	TextContent           string   `json:"textContent,omitempty"`
-	Audience              string   `json:"audience,omitempty"`
-	Scenario              string   `json:"scenario,omitempty"`
-	GenerationAspectRatio string   `json:"generationAspectRatio,omitempty"`
-	Theme                 string   `json:"theme,omitempty"`
-	AutoThemeEnabled      bool     `json:"autoThemeEnabled"`
-	EnableWebSearch       bool     `json:"enableWebSearch,omitempty"`
-	ImageSource           string   `json:"imageSource,omitempty"`
-	TextModel             string   `json:"textModel,omitempty"`
-	ImageModel            string   `json:"imageModel,omitempty"`
-	ImageStyle            string   `json:"imageStyle,omitempty"`
-	PeopleStyle           string   `json:"peopleStyle,omitempty"`
-	ImageLighting         string   `json:"imageLighting,omitempty"`
-	ImageComposition      string   `json:"imageComposition,omitempty"`
-	TextInImage           bool     `json:"textInImage"`
-	Progress              int      `json:"progress,omitempty"`
-	CurrentPage           int      `json:"currentPage,omitempty"`
-	Outline               *Outline `json:"outline,omitempty"`
-	Slides                []Slide  `json:"slides,omitempty"`
-	PPTURL                string   `json:"pptUrl"`
-	PDFURL                string   `json:"pdfUrl"`
-	ErrorMessage          string   `json:"errorMessage"`
-	CreatedAt             string   `json:"createdAt,omitempty"`
-	UpdatedAt             string   `json:"updatedAt,omitempty"`
+	TaskID                string              `json:"taskId"`
+	SessionID             string              `json:"sessionId,omitempty"`
+	UserID                string              `json:"-"`
+	TenantID              string              `json:"tenantId,omitempty"`
+	OrganizationID        string              `json:"organizationId,omitempty"`
+	ContextType           string              `json:"contextType,omitempty"`
+	BillingScope          string              `json:"billingScope,omitempty"`
+	BillingAccountID      string              `json:"billingAccountId,omitempty"`
+	ClientRequestID       string              `json:"clientRequestId,omitempty"`
+	Type                  string              `json:"type,omitempty"`
+	MediaType             string              `json:"mediaType,omitempty"`
+	SkillCode             string              `json:"skillCode,omitempty"`
+	Stage                 Stage               `json:"stage,omitempty"`
+	Status                string              `json:"status"`
+	Title                 string              `json:"title"`
+	Prompt                string              `json:"prompt,omitempty"`
+	SlideCount            int                 `json:"slideCount,omitempty"`
+	Language              string              `json:"language,omitempty"`
+	Tone                  string              `json:"tone,omitempty"`
+	TextContent           string              `json:"textContent,omitempty"`
+	Audience              string              `json:"audience,omitempty"`
+	Scenario              string              `json:"scenario,omitempty"`
+	GenerationAspectRatio string              `json:"generationAspectRatio,omitempty"`
+	Theme                 string              `json:"theme,omitempty"`
+	AutoThemeEnabled      bool                `json:"autoThemeEnabled"`
+	EnableWebSearch       bool                `json:"enableWebSearch,omitempty"`
+	ImageSource           string              `json:"imageSource,omitempty"`
+	TextModel             string              `json:"textModel,omitempty"`
+	ImageModel            string              `json:"imageModel,omitempty"`
+	ImageStyle            string              `json:"imageStyle,omitempty"`
+	PeopleStyle           string              `json:"peopleStyle,omitempty"`
+	ImageLighting         string              `json:"imageLighting,omitempty"`
+	ImageComposition      string              `json:"imageComposition,omitempty"`
+	TextInImage           bool                `json:"textInImage"`
+	Progress              int                 `json:"progress,omitempty"`
+	CurrentPage           int                 `json:"currentPage,omitempty"`
+	VisualProgress        int                 `json:"visualProgress,omitempty"`
+	Outline               *Outline            `json:"outline,omitempty"`
+	Slides                []Slide             `json:"slides,omitempty"`
+	AgentMessages         []AgentMessage      `json:"agentMessages,omitempty"`
+	SourceFileIDs         []string            `json:"sourceFileIds,omitempty"`
+	OutlineConfirmedAt    string              `json:"outlineConfirmedAt,omitempty"`
+	GenerationStartedAt   string              `json:"generationStartedAt,omitempty"`
+	CompletedAt           string              `json:"completedAt,omitempty"`
+	ErrorCode             string              `json:"errorCode,omitempty"`
+	BillingTaskID         string              `json:"billingTaskId,omitempty"`
+	GenerationLease       *GenerationLease    `json:"generationLease,omitempty"`
+	IdempotencyRecords    []IdempotencyRecord `json:"idempotencyRecords,omitempty"`
+	PPTURL                string              `json:"pptUrl"`
+	PDFURL                string              `json:"pdfUrl"`
+	ErrorMessage          string              `json:"errorMessage"`
+	CreatedAt             string              `json:"createdAt,omitempty"`
+	UpdatedAt             string              `json:"updatedAt,omitempty"`
 }
 
 type Outline struct {
@@ -121,6 +146,7 @@ type Slide struct {
 	VisualStorageRef string        `json:"visualStorageRef,omitempty"`
 	Layout           string        `json:"layout"`
 	SpeakerNotes     string        `json:"speakerNotes,omitempty"`
+	Blocks           []SlideBlock  `json:"blocks,omitempty"`
 	SlideType        string        `json:"slideType,omitempty"`
 	VisualPlan       *VisualPlan   `json:"visualPlan,omitempty"`
 	VisualHistory    []VisualAsset `json:"visualHistory,omitempty"`
@@ -136,6 +162,7 @@ type Service struct {
 	tasks           map[string]Task
 	path            string
 	db              *sql.DB
+	postgresMode    bool
 	postgresReadyMu sync.Mutex
 	postgresReady   bool
 }
@@ -159,11 +186,8 @@ func NewPersistentService(path string) *Service {
 	return s
 }
 
-func NewPostgresService(db *sql.DB, legacyPath string) *Service {
-	if db == nil {
-		return NewPersistentService(legacyPath)
-	}
-	return &Service{tasks: map[string]Task{}, path: strings.TrimSpace(legacyPath), db: db}
+func NewPostgresService(db *sql.DB) *Service {
+	return &Service{tasks: map[string]Task{}, db: db, postgresMode: true}
 }
 
 func (s *Service) Generate(req GenerateRequest) (GenerateResponse, error) {
@@ -171,18 +195,29 @@ func (s *Service) Generate(req GenerateRequest) (GenerateResponse, error) {
 }
 
 func (s *Service) GenerateWithConcurrency(req GenerateRequest, externalActive int, limit int) (GenerateResponse, error) {
+	if s.postgresMode && s.db == nil {
+		return GenerateResponse{}, ErrPostgresUnavailable
+	}
+	owner, err := req.Owner.Validated()
+	if err != nil {
+		return GenerateResponse{}, err
+	}
+	req.Owner, req.UserID, req.TenantID = owner, owner.UserID, owner.TenantID
 	req = normalizeRequest(req)
 	if req.Prompt == "" {
 		return GenerateResponse{}, ErrInvalidPrompt
 	}
-	if s.db != nil {
+	if s.postgresMode {
+		if s.db == nil {
+			return GenerateResponse{}, ErrPostgresUnavailable
+		}
 		return s.generatePostgres(req, externalActive, limit)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if req.ClientRequestID != "" {
 		for _, existing := range s.tasks {
-			if existing.UserID == req.UserID && existing.ClientRequestID == req.ClientRequestID {
+			if existing.TenantID == req.TenantID && existing.UserID == req.UserID && existing.ClientRequestID == req.ClientRequestID {
 				return GenerateResponse{TaskID: existing.TaskID, Status: existing.Status}, nil
 			}
 		}
@@ -190,8 +225,11 @@ func (s *Service) GenerateWithConcurrency(req GenerateRequest, externalActive in
 	if limit > 0 {
 		active := externalActive
 		for _, existing := range s.tasks {
-			existing = s.materializeLocked(existing)
-			if existing.UserID == req.UserID && (existing.Status == StatusPending || existing.Status == StatusProcessing) {
+			if err := ValidateTaskStage(existing); err != nil {
+				return GenerateResponse{}, err
+			}
+			existing = NormalizeTask(existing)
+			if existing.TenantID == req.TenantID && existing.UserID == req.UserID && (existing.Status == StatusPending || existing.Status == StatusProcessing) {
 				active++
 			}
 		}
@@ -199,7 +237,7 @@ func (s *Service) GenerateWithConcurrency(req GenerateRequest, externalActive in
 			return GenerateResponse{}, fmt.Errorf("%w: active %d, limit %d", ErrConcurrency, active, limit)
 		}
 	}
-	task := taskFromGenerateRequest(req)
+	task := NormalizeTask(taskFromGenerateRequest(req))
 	taskID := task.TaskID
 
 	s.tasks[taskID] = task
@@ -210,40 +248,65 @@ func (s *Service) GenerateWithConcurrency(req GenerateRequest, externalActive in
 	return GenerateResponse{TaskID: taskID, Status: task.Status}, nil
 }
 
-func (s *Service) GetTask(userID string, taskID string) (Task, error) {
-	if s.db != nil {
-		return s.getTaskPostgres(userID, taskID)
+func (s *Service) GetTask(owner OwnerScope, taskID string) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.getTaskPostgres(owner, taskID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
-	task = s.materializeLocked(task)
+	if err := ValidateTaskStage(task); err != nil {
+		return Task{}, err
+	}
+	task = NormalizeTask(task)
+	s.tasks[task.TaskID] = task
 	if err := s.saveLocked(); err != nil {
 		return Task{}, err
 	}
 	return task, nil
 }
 
-func (s *Service) History(userID string) []Task {
-	items, _ := s.HistoryWithError(userID)
+func (s *Service) History(owner OwnerScope) []Task {
+	items, _ := s.HistoryWithError(owner)
 	return items
 }
 
-func (s *Service) HistoryWithError(userID string) ([]Task, error) {
-	if s.db != nil {
-		return s.historyPostgres(userID)
+func (s *Service) HistoryWithError(owner OwnerScope) ([]Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return nil, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return nil, ErrPostgresUnavailable
+		}
+		return s.historyPostgres(owner)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := make([]Task, 0, len(s.tasks))
 	for _, task := range s.tasks {
-		if task.UserID != userID {
+		if task.UserID != userID || task.TenantID != owner.TenantID {
 			continue
 		}
-		items = append(items, s.materializeLocked(task))
+		if err := ValidateTaskStage(task); err != nil {
+			return nil, err
+		}
+		task = NormalizeTask(task)
+		s.tasks[task.TaskID] = task
+		items = append(items, task)
 	}
 	if err := s.saveLocked(); err != nil {
 		return nil, err
@@ -254,28 +317,44 @@ func (s *Service) HistoryWithError(userID string) ([]Task, error) {
 	return items, nil
 }
 
-func (s *Service) Delete(userID string, taskID string) error {
-	if s.db != nil {
-		return s.deletePostgres(userID, taskID)
+func (s *Service) Delete(owner OwnerScope, taskID string) error {
+	owner, err := owner.Validated()
+	if err != nil {
+		return err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return ErrPostgresUnavailable
+		}
+		return s.deletePostgres(owner, taskID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return ErrTaskNotFound
 	}
 	delete(s.tasks, taskID)
 	return s.saveLocked()
 }
 
-func (s *Service) UpdateSlideImage(userID string, taskID string, slideID string, imageURL string) (Task, error) {
-	if s.db != nil {
-		return s.updateSlideImagePostgres(userID, taskID, slideID, imageURL)
+func (s *Service) UpdateSlideImage(owner OwnerScope, taskID string, slideID string, imageURL string) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.updateSlideImagePostgres(owner, taskID, slideID, imageURL)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
 	previous := task
@@ -285,12 +364,12 @@ func (s *Service) UpdateSlideImage(userID string, taskID string, slideID string,
 	updated := false
 	for i := range task.Slides {
 		if task.Slides[i].ID == slideID {
-			if old := strings.TrimSpace(task.Slides[i].ImageURL); old != "" && old != imageURL {
+			if old := slideImageRef(task.Slides[i]); old != "" && old != imageURL {
 				task.Slides[i].VisualHistory = append(task.Slides[i].VisualHistory, VisualAsset{URL: old, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
 			}
-			task.Slides[i].ImageURL = imageURL
 			task.Slides[i].VisualStatus = "success"
 			task.Slides[i].VisualError = ""
+			task.Slides[i] = setSlideImageRef(task.Slides[i], imageURL)
 			updated = true
 			break
 		}
@@ -307,14 +386,22 @@ func (s *Service) UpdateSlideImage(userID string, taskID string, slideID string,
 	return task, nil
 }
 
-func (s *Service) UpdateSlideContent(userID, taskID, slideID string, update Slide) (Task, error) {
-	if s.db != nil {
-		return s.updateSlideContentPostgres(userID, taskID, slideID, update)
+func (s *Service) UpdateSlideContent(owner OwnerScope, taskID, slideID string, update Slide) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.updateSlideContentPostgres(owner, taskID, slideID, update)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
 	previous := task
@@ -337,26 +424,39 @@ func applySlideContentUpdate(task *Task, slideID string, update Slide) error {
 		if task.Slides[i].ID != slideID {
 			continue
 		}
-		task.Slides[i].Title = strings.TrimSpace(update.Title)
-		task.Slides[i].Content = strings.TrimSpace(update.Content)
-		task.Slides[i].BulletPoints = append([]string(nil), update.BulletPoints...)
-		task.Slides[i].SpeakerNotes = strings.TrimSpace(update.SpeakerNotes)
-		if layout := strings.TrimSpace(update.Layout); layout != "" {
-			task.Slides[i].Layout = layout
+		slide := task.Slides[i]
+		if len(update.Blocks) == 0 {
+			return ErrInvalidSlideIR
 		}
+		slide.Blocks = append([]SlideBlock(nil), update.Blocks...)
+		for blockIndex := range slide.Blocks {
+			slide.Blocks[blockIndex].Items = append([]string(nil), slide.Blocks[blockIndex].Items...)
+		}
+		if layout := strings.TrimSpace(update.Layout); layout != "" {
+			slide.Layout = layout
+		}
+		task.Slides[i] = NormalizeSlideIR(slide)
 		return nil
 	}
 	return ErrTaskNotFound
 }
 
-func (s *Service) UpdateSlideVisualPlan(userID, taskID, slideID string, plan VisualPlan, visualTaskID, status, errorMessage string) (Task, error) {
-	if s.db != nil {
-		return s.updateSlideVisualPlanPostgres(userID, taskID, slideID, plan, visualTaskID, status, errorMessage)
+func (s *Service) UpdateSlideVisualPlan(owner OwnerScope, taskID, slideID string, plan VisualPlan, visualTaskID, status, errorMessage string) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.updateSlideVisualPlanPostgres(owner, taskID, slideID, plan, visualTaskID, status, errorMessage)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
 	previous := task
@@ -387,14 +487,22 @@ func (s *Service) UpdateSlideVisualPlan(userID, taskID, slideID string, plan Vis
 	return task, nil
 }
 
-func (s *Service) DisableSlideVisual(userID, taskID, slideID string, plan VisualPlan) (Task, error) {
-	if s.db != nil {
-		return s.disableSlideVisualPostgres(userID, taskID, slideID, plan)
+func (s *Service) DisableSlideVisual(owner OwnerScope, taskID, slideID string, plan VisualPlan) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.disableSlideVisualPostgres(owner, taskID, slideID, plan)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
 	previous := task
@@ -419,7 +527,7 @@ func disableSlideVisual(task *Task, slideID string, plan VisualPlan) error {
 		if slide.ID != slideID {
 			continue
 		}
-		if currentURL := strings.TrimSpace(slide.ImageURL); currentURL != "" {
+		if currentURL := slideImageRef(*slide); currentURL != "" {
 			slide.VisualHistory = append(slide.VisualHistory, VisualAsset{
 				URL: currentURL, TaskID: strings.TrimSpace(slide.VisualTaskID),
 				ModelName: firstNonEmptyVisual(slide.VisualModelName, task.ImageModel),
@@ -430,25 +538,33 @@ func disableSlideVisual(task *Task, slideID string, plan VisualPlan) error {
 		plan.TextInImage = false
 		plan.Objects = append([]string(nil), plan.Objects...)
 		slide.VisualPlan = &plan
-		slide.ImageURL = ""
 		slide.VisualTaskID = ""
 		slide.VisualModelName = ""
 		slide.VisualCreatedAt = ""
 		slide.VisualStatus = "success"
 		slide.VisualError = ""
+		*slide = setSlideImageRef(*slide, "")
 		return nil
 	}
 	return ErrTaskNotFound
 }
 
-func (s *Service) CompleteSlideVisual(userID, taskID, slideID string, plan VisualPlan, asset VisualAsset) (Task, error) {
-	if s.db != nil {
-		return s.completeSlideVisualPostgres(userID, taskID, slideID, plan, asset)
+func (s *Service) CompleteSlideVisual(owner OwnerScope, taskID, slideID string, plan VisualPlan, asset VisualAsset) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.completeSlideVisualPostgres(owner, taskID, slideID, plan, asset)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
 	previous := task
@@ -481,7 +597,7 @@ func completeSlideVisual(task *Task, slideID string, plan VisualPlan, asset Visu
 		if slide.ID != slideID {
 			continue
 		}
-		if oldURL := strings.TrimSpace(slide.ImageURL); oldURL != "" && oldURL != asset.URL {
+		if oldURL := slideImageRef(*slide); oldURL != "" && oldURL != asset.URL {
 			createdAt := strings.TrimSpace(slide.VisualCreatedAt)
 			if createdAt == "" {
 				createdAt = now
@@ -501,25 +617,33 @@ func completeSlideVisual(task *Task, slideID string, plan VisualPlan, asset Visu
 		}
 		plan.Objects = append([]string(nil), plan.Objects...)
 		slide.VisualPlan = &plan
-		slide.ImageURL = asset.URL
 		slide.VisualTaskID = asset.TaskID
 		slide.VisualModelName = asset.ModelName
 		slide.VisualCreatedAt = asset.CreatedAt
 		slide.VisualStatus = "success"
 		slide.VisualError = ""
+		*slide = setSlideImageRef(*slide, asset.URL)
 		return nil
 	}
 	return ErrTaskNotFound
 }
 
-func (s *Service) RestoreSlideVisual(userID, taskID, slideID, createdAt, imageURL string) (Task, error) {
-	if s.db != nil {
-		return s.restoreSlideVisualPostgres(userID, taskID, slideID, createdAt, imageURL)
+func (s *Service) RestoreSlideVisual(owner OwnerScope, taskID, slideID, createdAt, imageURL string) (Task, error) {
+	owner, err := owner.Validated()
+	if err != nil {
+		return Task{}, err
+	}
+	userID := owner.UserID
+	if s.postgresMode {
+		if s.db == nil {
+			return Task{}, ErrPostgresUnavailable
+		}
+		return s.restoreSlideVisualPostgres(owner, taskID, slideID, createdAt, imageURL)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[taskID]
-	if !ok || task.UserID != userID {
+	if !ok || task.UserID != userID || task.TenantID != owner.TenantID {
 		return Task{}, ErrTaskNotFound
 	}
 	previous := task
@@ -547,7 +671,7 @@ func restoreSlideVisual(task *Task, slideID, createdAt, imageURL string) error {
 			if strings.TrimSpace(asset.CreatedAt) != createdAt || strings.TrimSpace(asset.URL) != imageURL || imageURL == "" {
 				continue
 			}
-			currentURL := strings.TrimSpace(slide.ImageURL)
+			currentURL := slideImageRef(*slide)
 			if currentURL != "" && currentURL != strings.TrimSpace(asset.URL) {
 				modelName := firstNonEmptyVisual(slide.VisualModelName, task.ImageModel)
 				createdAt := firstNonEmptyVisual(slide.VisualCreatedAt, time.Now().UTC().Format(time.RFC3339Nano))
@@ -556,7 +680,6 @@ func restoreSlideVisual(task *Task, slideID, createdAt, imageURL string) error {
 				})
 			}
 			slide.VisualHistory = append(slide.VisualHistory[:historyIndex], slide.VisualHistory[historyIndex+1:]...)
-			slide.ImageURL = strings.TrimSpace(asset.URL)
 			slide.VisualTaskID = strings.TrimSpace(asset.TaskID)
 			slide.VisualModelName = strings.TrimSpace(asset.ModelName)
 			slide.VisualCreatedAt = strings.TrimSpace(asset.CreatedAt)
@@ -571,6 +694,7 @@ func restoreSlideVisual(task *Task, slideID, createdAt, imageURL string) error {
 					slide.VisualPlan.VisualType = "illustration"
 				}
 			}
+			*slide = setSlideImageRef(*slide, asset.URL)
 			return nil
 		}
 		return ErrVisualNotFound
@@ -578,8 +702,8 @@ func restoreSlideVisual(task *Task, slideID, createdAt, imageURL string) error {
 	return ErrTaskNotFound
 }
 
-func (s *Service) GetSlide(userID, taskID, slideID string) (Task, Slide, error) {
-	task, err := s.GetTask(userID, taskID)
+func (s *Service) GetSlide(owner OwnerScope, taskID, slideID string) (Task, Slide, error) {
+	task, err := s.GetTask(owner, taskID)
 	if err != nil {
 		return Task{}, Slide{}, err
 	}
@@ -610,7 +734,7 @@ func (s *Service) load() {
 				task.TaskID = taskID
 			}
 			if task.TaskID != "" {
-				task = normalizeLegacyTask(task)
+				task = NormalizeTask(task)
 				s.tasks[task.TaskID] = task
 			}
 		}
@@ -619,7 +743,7 @@ func (s *Service) load() {
 	for _, item := range state.Tasks {
 		task := item.Task
 		task.UserID = item.UserID
-		task = normalizeLegacyTask(task)
+		task = NormalizeTask(task)
 		if task.TaskID != "" {
 			s.tasks[task.TaskID] = task
 		}
@@ -645,39 +769,6 @@ func (s *Service) saveLocked() error {
 		return err
 	}
 	return os.WriteFile(s.path, append(raw, '\n'), 0o644)
-}
-
-func (s *Service) materializeLocked(task Task) Task {
-	task = materializeTask(task)
-	s.tasks[task.TaskID] = task
-	return task
-}
-
-func materializeTask(task Task) Task {
-	if task.Status == StatusSuccess || task.Status == StatusFailed {
-		return task
-	}
-	createdAt, err := time.Parse(time.RFC3339Nano, task.CreatedAt)
-	if err != nil {
-		createdAt = time.Now().UTC()
-	}
-	elapsed := time.Since(createdAt)
-	switch {
-	case elapsed >= 2500*time.Millisecond:
-		task.Status = StatusSuccess
-		task.Progress = 100
-		task.CurrentPage = task.SlideCount
-	case elapsed >= 700*time.Millisecond:
-		task.Status = StatusProcessing
-		task.Progress = 65
-		task.CurrentPage = maxInt(1, task.SlideCount/2)
-	default:
-		task.Status = StatusPending
-		task.Progress = 20
-		task.CurrentPage = 0
-	}
-	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	return task
 }
 
 func normalizeRequest(req GenerateRequest) GenerateRequest {
@@ -818,28 +909,11 @@ func slidesFromOutline(outline *Outline, req GenerateRequest) []Slide {
 	if outline == nil {
 		return nil
 	}
+	req.SlideCount = len(outline.Slides)
 	slides := make([]Slide, 0, len(outline.Slides))
 	for i, item := range outline.Slides {
-		input := VisualPlannerInput{
-			DeckTheme: req.Theme, SlideType: item.SlideType, SlideTitle: item.Title,
-			CoreIdea: item.Summary, ContentSummary: item.Summary, Layout: item.Layout,
-			ImagePosition: req.ImageComposition, ImageStyle: req.ImageStyle,
-			PeopleStyle: req.PeopleStyle, ImageLighting: req.ImageLighting,
-			ImageComposition: req.ImageComposition,
-		}
-		plan := NormalizeVisualPlan(VisualPlan{}, input)
-		slides = append(slides, Slide{
-			ID:           fmt.Sprintf("slide_%d", i+1),
-			Page:         i + 1,
-			Title:        item.Title,
-			Content:      item.Summary,
-			BulletPoints: append([]string{}, item.BulletPoints...),
-			ImageURL:     slideImageURL(item, outline.Title, req),
-			Layout:       normalizeSlideLayout(item.Layout, i, len(outline.Slides), req.ImageSource),
-			SpeakerNotes: fmt.Sprintf("Page %d speaker notes can be refined after deck review.", i+1),
-			SlideType:    NormalizeSlideType(item.SlideType),
-			VisualPlan:   &plan,
-		})
+		item.Page = i + 1
+		slides = append(slides, SlideFromOutline(item, req))
 	}
 	return slides
 }
@@ -857,30 +931,30 @@ func inferSlideType(layout string, index int) string {
 	return "text_image"
 }
 
-func normalizeLegacyTask(task Task) Task {
-	for i := range task.Slides {
-		if strings.TrimSpace(task.Slides[i].SlideType) == "" {
-			task.Slides[i].SlideType = "text_image"
-		}
-		task.Slides[i].SlideType = NormalizeSlideType(task.Slides[i].SlideType)
-		if task.Slides[i].VisualPlan != nil {
-			plan := NormalizeVisualPlan(*task.Slides[i].VisualPlan, VisualPlannerInput{
-				SlideType: task.Slides[i].SlideType, SlideTitle: task.Slides[i].Title,
-				CoreIdea: task.Slides[i].Content, Layout: task.Slides[i].Layout,
-				ImagePosition: task.ImageComposition, ImageStyle: task.ImageStyle,
-				PeopleStyle: task.PeopleStyle, ImageLighting: task.ImageLighting,
-			})
-			task.Slides[i].VisualPlan = &plan
-		}
-	}
-	return task
-}
-
 func cloneTask(task Task) Task {
 	cloned := task
+	cloned.SourceFileIDs = append([]string(nil), task.SourceFileIDs...)
+	cloned.AgentMessages = append([]AgentMessage(nil), task.AgentMessages...)
+	cloned.IdempotencyRecords = append([]IdempotencyRecord(nil), task.IdempotencyRecords...)
+	if task.GenerationLease != nil {
+		lease := *task.GenerationLease
+		cloned.GenerationLease = &lease
+	}
+	if task.Outline != nil {
+		outline := *task.Outline
+		outline.Slides = append([]OutlineSlide(nil), task.Outline.Slides...)
+		for i := range outline.Slides {
+			outline.Slides[i].BulletPoints = append([]string(nil), outline.Slides[i].BulletPoints...)
+		}
+		cloned.Outline = &outline
+	}
 	cloned.Slides = append([]Slide(nil), task.Slides...)
 	for i := range cloned.Slides {
 		cloned.Slides[i].BulletPoints = append([]string(nil), cloned.Slides[i].BulletPoints...)
+		cloned.Slides[i].Blocks = append([]SlideBlock(nil), cloned.Slides[i].Blocks...)
+		for blockIndex := range cloned.Slides[i].Blocks {
+			cloned.Slides[i].Blocks[blockIndex].Items = append([]string(nil), cloned.Slides[i].Blocks[blockIndex].Items...)
+		}
 		cloned.Slides[i].VisualHistory = append([]VisualAsset(nil), cloned.Slides[i].VisualHistory...)
 		if cloned.Slides[i].VisualPlan != nil {
 			plan := *cloned.Slides[i].VisualPlan
@@ -928,11 +1002,4 @@ func normalizeSlideLayout(layout string, index int, total int, imageSource strin
 		return "content"
 	}
 	return "imageText"
-}
-
-func maxInt(left int, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }
