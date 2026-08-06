@@ -446,6 +446,49 @@
             </div>
           </header>
 
+          <section class="ppt-agent-session-card" aria-label="PPT Agent 会话">
+            <div class="ppt-agent-session-heading">
+              <div>
+                <strong>PPT Agent</strong>
+                <small>{{ store.agentStage || "未开始" }}</small>
+              </div>
+              <label>
+                <span>Skill</span>
+                <select v-model="store.skillCode" :disabled="Boolean(store.agentStage) || agentSessionBusy" title="选择 PPT Skill" aria-label="选择 PPT Skill">
+                  <option v-if="!store.skills.length" value="general">通用演示</option>
+                  <option v-for="skill in store.skills" :key="skill.code" :value="skill.code">{{ skill.name }}</option>
+                </select>
+              </label>
+            </div>
+            <div v-if="store.agentMessages.length" class="ppt-agent-messages ppt-agent-session-messages" aria-live="polite">
+              <article v-for="(message, index) in store.agentMessages" :key="`${message.createdAt}-${index}`" :class="message.role">
+                <strong>{{ message.role === "assistant" ? "PPT Agent" : "你" }}</strong>
+                <p>{{ message.content }}</p>
+              </article>
+            </div>
+            <small v-if="store.outlineDirty" class="ppt-agent-outline-warning">本地大纲尚未同步，请通过 Agent 消息修订或恢复服务端版本。</small>
+            <div class="ppt-agent-input">
+              <textarea
+                v-model="agentSessionPrompt"
+                :disabled="agentSessionBusy || isBusy || !store.prompt.trim()"
+                placeholder="继续补充要求，例如：把大纲改成面向管理层的结论式表达"
+                title="PPT Agent 消息"
+                aria-label="PPT Agent 消息"
+                @keydown.enter.exact.prevent="sendAgentSessionMessage"
+              ></textarea>
+              <button
+                type="button"
+                :disabled="agentSessionBusy || isBusy || !store.prompt.trim() || !agentSessionPrompt.trim()"
+                :aria-busy="agentSessionBusy ? 'true' : undefined"
+                title="发送给 PPT Agent"
+                aria-label="发送给 PPT Agent"
+                @click="sendAgentSessionMessage"
+              >
+                {{ agentSessionBusy ? "发送中" : "发送" }}
+              </button>
+            </div>
+          </section>
+
           <PptErrorState
             v-if="store.error"
             class="ppt-workspace-error"
@@ -2181,7 +2224,7 @@
                         v-for="prompt in presentationAgentQuickPrompts"
                         :key="prompt"
                         type="button"
-                        :disabled="presentationAgentBusy || !store.currentSlide"
+                        :disabled="presentationAgentBusy || !store.currentSlide || store.agentStage !== 'READY'"
                         :title="`发送快捷要求：${prompt}`"
                         :aria-label="`发送快捷要求：${prompt}`"
                         @click="runPresentationAgentPrompt(prompt)"
@@ -2209,12 +2252,12 @@
                         placeholder="告诉 PPT 助手你想怎么改当前页..."
                         title="PPT 助手编辑要求"
                         aria-label="PPT 助手编辑要求"
-                        :disabled="presentationAgentBusy"
+                        :disabled="presentationAgentBusy || store.agentStage !== 'READY'"
                         @keydown.enter.exact.prevent="runPresentationAgentPrompt()"
                       ></textarea>
                       <button
                         type="button"
-                        :disabled="presentationAgentBusy || !presentationAgentPrompt.trim() || !store.currentSlide"
+                        :disabled="presentationAgentBusy || !presentationAgentPrompt.trim() || !store.currentSlide || store.agentStage !== 'READY'"
                         :title="presentationAgentBusy ? 'PPT 助手处理中' : '发送给 PPT 助手'"
                         :aria-label="presentationAgentBusy ? 'PPT 助手处理中' : '发送给 PPT 助手'"
                         :aria-busy="presentationAgentBusy ? 'true' : undefined"
@@ -2224,16 +2267,6 @@
                         <span>{{ presentationAgentBusy ? "处理中" : "发送" }}</span>
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      class="ppt-agent-apply"
-                      :disabled="!latestAgentSuggestion || !store.currentSlide"
-                      title="应用上一条建议到当前页"
-                      aria-label="应用上一条建议到当前页"
-                      @click="applyLatestAgentSuggestion"
-                    >
-                      应用上一条建议到当前页
-                    </button>
                   </section>
                   <section v-else-if="presentationRightPanel === 'elements'" class="ppt-panel-section">
                     <div v-if="filteredPresentationElementBlocks.length" class="ppt-insert-grid is-two-column">
@@ -3591,6 +3624,8 @@ const presentationTypographyScale = ref<PresentationTypographyScale>("medium");
 const presentationIconSearchQuery = ref("");
 const presentationIconSearchInputRef = ref<HTMLInputElement | null>(null);
 const presentationSlideIcons = ref<Record<string, string>>({});
+const agentSessionPrompt = ref("");
+const agentSessionBusy = ref(false);
 const presentationAgentPrompt = ref("");
 const presentationAgentBusy = ref(false);
 const presentationAgentMessages = ref<PresentationAgentMessage[]>([
@@ -4699,10 +4734,6 @@ const filteredPresentationIconOptions = computed(() => {
     item.keywords.some(keyword => keyword.toLowerCase().includes(query))
   ));
 });
-const latestAgentSuggestion = computed(() => {
-  const latest = [...presentationAgentMessages.value].reverse().find(message => message.role === "assistant" && message.content.includes("建议："));
-  return latest?.content || "";
-});
 const currentSpeakerNotes = computed(() => store.currentSlide?.speakerNotes || "");
 const speakerNotesCharCount = computed(() => currentSpeakerNotes.value.trim().length);
 const speakerNotesReadMinutes = computed(() => Math.max(1, Math.ceil(speakerNotesCharCount.value / 260)));
@@ -5649,9 +5680,25 @@ async function handleWorkspacePrimaryAction() {
     await store.generateOutlineFlow();
     return;
   }
+  if (store.agentStage === "FAILED" || store.agentStage === "CANCELLED" || store.agentStage === "READY") {
+    await store.generateOutlineFlow();
+    return;
+  }
   await store.confirmOutlineAndGeneratePpt();
   if (store.status === "success") {
     await openPresentationWorkspace(store.taskId || activeGenerationId.value);
+  }
+}
+
+async function sendAgentSessionMessage() {
+  const message = agentSessionPrompt.value.trim();
+  if (!message || agentSessionBusy.value || isBusy.value || !store.prompt.trim()) return;
+  agentSessionBusy.value = true;
+  agentSessionPrompt.value = "";
+  try {
+    await store.sendAgentMessage(message);
+  } finally {
+    agentSessionBusy.value = false;
   }
 }
 
@@ -5821,6 +5868,11 @@ function resetComposer() {
   store.status = "idle";
   store.progress = 0;
   store.currentPage = 0;
+  store.agentStage = null;
+  store.agentMessages = [];
+  store.agentClientRequestId = "";
+  store.outlineDirty = false;
+  agentSessionPrompt.value = "";
   showConfig.value = false;
   showSlideCountMenu.value = false;
   showFormatMenu.value = false;
@@ -5840,6 +5892,11 @@ function prepareGenerationSetup() {
   store.status = "idle";
   store.progress = 0;
   store.currentPage = 0;
+  store.agentStage = null;
+  store.agentMessages = [];
+  store.agentClientRequestId = "";
+  store.outlineDirty = false;
+  agentSessionPrompt.value = "";
   store.imageSearchResults = [];
   store.imageSearchKeyword = "";
   store.imageGenerating = false;
@@ -5873,6 +5930,7 @@ function handleCreateNewFromLibrary() {
 function updateOutlineTitle(title: string) {
   if (!store.outline) return;
   store.outline.title = title;
+  store.outlineDirty = Boolean(store.agentStage);
 }
 
 function handlePresentationTitleInput(event: Event) {
@@ -6140,24 +6198,6 @@ function removeCurrentSlideIcon() {
   ElMessage.success("已移除当前页图标");
 }
 
-function buildPresentationAgentSuggestion(prompt: string, slide: PptSlide) {
-  const cleanPrompt = prompt.replace(/\s+/g, " ").trim();
-  const baseTitle = slide.title.replace(/\s+/g, " ").trim();
-  if (/标题|文案|优化/.test(cleanPrompt)) {
-    return `建议：把「${baseTitle}」改成更清晰的结论式表达，并在正文里先讲背景、再讲价值、最后讲下一步。`;
-  }
-  if (/路演|融资|项目/.test(cleanPrompt)) {
-    return `建议：当前页可强化为路演页，标题突出商业结果，正文补充市场机会，三条要点分别对应痛点、方案和增长空间。`;
-  }
-  if (/要点|补充|说服/.test(cleanPrompt)) {
-    return `建议：新增三条要点：核心问题是什么、为什么现在解决、采用该方案后能带来什么可量化变化。`;
-  }
-  if (/视觉|布局|版式/.test(cleanPrompt)) {
-    return `建议：使用左文右图布局，左侧保留一句结论和三条要点，右侧放产品截图、流程图或关键数字卡片。`;
-  }
-  return `建议：围绕「${baseTitle}」压缩正文长度，保留一个核心判断、三个支撑要点和一个明确行动。`;
-}
-
 async function runPresentationAgentPrompt(prompt?: string) {
   const slide = store.currentSlide;
   const userPrompt = (prompt || presentationAgentPrompt.value).trim();
@@ -6168,29 +6208,21 @@ async function runPresentationAgentPrompt(prompt?: string) {
   ];
   presentationAgentPrompt.value = "";
   presentationAgentBusy.value = true;
-  await new Promise(resolve => window.setTimeout(resolve, 520));
-  presentationAgentMessages.value = [
-    ...presentationAgentMessages.value,
-    { role: "assistant", content: buildPresentationAgentSuggestion(userPrompt, slide) }
-  ];
-  presentationAgentBusy.value = false;
-}
-
-function applyLatestAgentSuggestion() {
-  const slide = store.currentSlide;
-  if (!slide || !latestAgentSuggestion.value) return;
-  rememberPresentationSnapshot();
-  const suggestion = latestAgentSuggestion.value.replace(/^建议：/, "");
-  const nextBullets = [...slide.bulletPoints];
-  const newPoint = suggestion.length > 34 ? `${suggestion.slice(0, 34)}...` : suggestion;
-  if (!nextBullets.includes(newPoint)) {
-    nextBullets.unshift(newPoint);
+  try {
+    const revised = await store.reviseCurrentSlide(userPrompt);
+    presentationAgentMessages.value = [
+      ...presentationAgentMessages.value,
+      { role: "assistant", content: `已按要求更新当前页：${revised?.title || slide.title}` }
+    ];
+    ElMessage.success("当前页已由 PPT Agent 更新");
+  } catch (error) {
+    presentationAgentMessages.value = [
+      ...presentationAgentMessages.value,
+      { role: "assistant", content: store.error?.message || (error instanceof Error ? error.message : "单页修订失败，请稍后重试") }
+    ];
+  } finally {
+    presentationAgentBusy.value = false;
   }
-  store.updateSlide(store.currentSlideIndex, {
-    content: `${slide.content.replace(/\s+$/, "")}\n\nAI建议：${suggestion}`,
-    bulletPoints: nextBullets.slice(0, 5)
-  });
-  ElMessage.success("已把 AI 建议应用到当前页");
 }
 
 function replaceLastOccurrence(value: string, previous: string, next: string) {
@@ -8626,6 +8658,58 @@ async function handleDeleteHistory(item: PptHistoryItem) {
 .ppt-workspace-error,
 .ppt-workspace-progress {
   margin: 0;
+}
+
+.ppt-agent-session-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #262626;
+  border-radius: 14px;
+  background: #0d0d0d;
+}
+
+.ppt-agent-session-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ppt-agent-session-heading > div,
+.ppt-agent-session-heading label {
+  display: grid;
+  gap: 5px;
+}
+
+.ppt-agent-session-heading strong {
+  color: #f4f4f5;
+  font-size: 14px;
+}
+
+.ppt-agent-session-heading small,
+.ppt-agent-session-heading span {
+  color: #8d8d93;
+  font-size: 11px;
+}
+
+.ppt-agent-session-heading select {
+  min-width: 160px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #f4f4f5;
+  background: #151515;
+}
+
+.ppt-agent-session-messages {
+  max-height: 220px;
+}
+
+.ppt-agent-outline-warning {
+  color: #fbbf24;
+  line-height: 1.5;
 }
 
 .ppt-generation-settings {

@@ -16,6 +16,7 @@ import {
   mockUpsertPptDraft
 } from "./ppt.mock";
 import type {
+  PptCreateSessionRequest,
   PptGenerateOutlineRequest,
   PptGenerateImageRequest,
   PptGenerateRequest,
@@ -26,12 +27,16 @@ import type {
   PptOutline,
   PptRegenerateVisualRequest,
   PptRegenerateVisualResponse,
+  PptSkill,
   PptSlide,
   PptTaskResponse
 } from "../types/ppt";
 
 export type {
   PptCreateMode,
+  PptCreateSessionRequest,
+  PptAgentMessage,
+  PptAgentStage,
   PptGenerateOutlineRequest,
   PptGenerateImageRequest,
   PptGenerateRequest,
@@ -52,9 +57,60 @@ export type {
   PptTextContent,
   PptAudience,
   PptScenario,
+  PptSkill,
+  PptSlideBlock,
   PptTone,
   PptWorkflowStatus
 } from "../types/ppt";
+
+export async function getPptSkills(): Promise<PptSkill[]> {
+  return adminRequest<PptSkill[]>({
+    method: "GET",
+    url: "/ppt/skills"
+  });
+}
+
+export async function createPptSession(request: PptCreateSessionRequest): Promise<PptTaskResponse> {
+  return adminRequest<PptTaskResponse>({
+    method: "POST",
+    url: "/ppt/sessions",
+    data: request
+  });
+}
+
+export async function postPptSessionMessage(taskId: string, message: string, idempotencyKey: string): Promise<PptTaskResponse> {
+  return adminRequest<PptTaskResponse>({
+    method: "POST",
+    url: `/ppt/sessions/${encodeURIComponent(taskId)}/messages`,
+    headers: { "Idempotency-Key": idempotencyKey },
+    data: { message }
+  });
+}
+
+export async function confirmPptSessionOutline(taskId: string, idempotencyKey: string): Promise<PptTaskResponse> {
+  return adminRequest<PptTaskResponse>({
+    method: "POST",
+    url: `/ppt/sessions/${encodeURIComponent(taskId)}/confirm-outline`,
+    headers: { "Idempotency-Key": idempotencyKey },
+    data: {}
+  });
+}
+
+export async function getPptAgentTask(taskId: string): Promise<PptTaskResponse> {
+  return adminRequest<PptTaskResponse>({
+    method: "GET",
+    url: `/ppt/tasks/${encodeURIComponent(taskId)}`
+  });
+}
+
+export async function revisePptSessionSlide(taskId: string, slideId: string, instruction: string, idempotencyKey: string): Promise<PptTaskResponse> {
+  return adminRequest<PptTaskResponse>({
+    method: "POST",
+    url: `/ppt/sessions/${encodeURIComponent(taskId)}/revise-slide`,
+    headers: { "Idempotency-Key": idempotencyKey },
+    data: { slideId, instruction }
+  });
+}
 
 export async function generatePptOutline(request: PptGenerateOutlineRequest): Promise<PptOutline> {
   try {

@@ -1,24 +1,31 @@
 import { defineStore } from "pinia";
 import {
+  confirmPptSessionOutline,
+  createPptSession,
   createPptTask,
   deletePptSlideVisual,
   deletePptTask,
   exportPdf,
   exportPpt,
   generatePptImage,
-  generatePptOutline,
+  getPptAgentTask,
   getPptHistory,
   getPptImageModels,
   getPptTaskStatus,
+  getPptSkills,
   getPptTextModels,
   regeneratePptSlide,
   regeneratePptSlideVisual,
+  revisePptSessionSlide,
   restorePptSlideVisual,
   searchPptImages,
+  postPptSessionMessage,
   updatePptOutline,
   upsertPptDraft
 } from "../api/ppt";
 import type {
+  PptAgentMessage,
+  PptAgentStage,
   PptCreateMode,
   PptErrorInfo,
   PptGenerationAspectRatio,
@@ -31,7 +38,9 @@ import type {
   PptOutlineSlide,
   PptAudience,
   PptScenario,
+  PptSkill,
   PptSlide,
+  PptTaskResponse,
   PptTextContent,
   PptTheme,
   PptTone,
@@ -79,6 +88,12 @@ interface PptState {
   error: PptErrorInfo | null;
   initialized: boolean;
   historyLoadedAt: number;
+  skillCode: string;
+  skills: PptSkill[];
+  agentStage: PptAgentStage | null;
+  agentMessages: PptAgentMessage[];
+  agentClientRequestId: string;
+  outlineDirty: boolean;
 }
 
 let pptInitializePromise: Promise<void> | null = null;
@@ -122,7 +137,13 @@ export const usePptStore = defineStore("ppt", {
     visualOperationStatus: "idle",
     error: null,
     initialized: false,
-    historyLoadedAt: 0
+    historyLoadedAt: 0,
+    skillCode: "general",
+    skills: [],
+    agentStage: null,
+    agentMessages: [],
+    agentClientRequestId: "",
+    outlineDirty: false
   }),
   getters: {
     canGenerateOutline: (state) => state.createMode === "ai" && Boolean(state.prompt.trim()) && state.status !== "outlining" && state.status !== "generating" && state.status !== "rendering",
@@ -137,7 +158,8 @@ export const usePptStore = defineStore("ppt", {
         generating: "正在生成PPT",
         rendering: "正在渲染页面",
         success: "生成成功",
-        failed: "生成失败"
+        failed: "生成失败",
+        cancelled: "生成已取消"
       };
       return map[state.status];
     }
@@ -146,7 +168,7 @@ export const usePptStore = defineStore("ppt", {
     async initialize(options: { force?: boolean } = {}) {
       if (this.initialized && !options.force) return;
       if (pptInitializePromise && !options.force) return pptInitializePromise;
-      pptInitializePromise = Promise.all([this.loadModels(options), this.loadHistory(options)])
+      pptInitializePromise = Promise.all([this.loadModels(options), this.loadHistory(options), this.loadSkills(options)])
         .then(() => {
           this.initialized = true;
         })
@@ -171,6 +193,18 @@ export const usePptStore = defineStore("ppt", {
       } catch (error) {
         console.error("[ppt] load history failed", error);
         this.error = { title: "历史记录加载失败", message: error instanceof Error ? error.message : "请稍后重试" };
+      }
+    },
+    async loadSkills(options: { force?: boolean } = {}) {
+      if (!options.force && this.skills.length) return;
+      try {
+        this.skills = await getPptSkills();
+        if (!this.skills.some(skill => skill.code === this.skillCode)) {
+          this.skillCode = this.skills.find(skill => skill.code === "general")?.code || this.skills[0]?.code || "general";
+        }
+      } catch (error) {
+        console.error("[ppt] load skills failed", error);
+        this.error = { title: "PPT Skill 加载失败", message: error instanceof Error ? error.message : "请稍后重试" };
       }
     },
     async saveDraft(taskId = "") {
@@ -248,36 +282,98 @@ export const usePptStore = defineStore("ppt", {
       this.status = "success";
       this.progress = 100;
     },
+    applyAgentTask(task: PptTaskResponse) {
+      if (!task.stage) {
+        throw new Error("PPT Agent 任务未返回有效阶段");
+      }
+      this.taskId = task.taskId;
+      this.agentStage = task.stage;
+      if (task.stage !== "FAILED" && task.stage !== "CANCELLED") {
+        this.error = null;
+      }
+      this.skillCode = task.skillCode || this.skillCode;
+      this.progress = task.progress ?? 0;
+      this.currentPage = task.currentPage ?? 0;
+      this.agentMessages = task.agentMessages ? [...task.agentMessages] : this.agentMessages;
+      if (task.outline) {
+        this.outline = normalizeOutline(task.outline);
+        this.slideCount = this.outline.slides.length || task.slideCount || this.slideCount;
+      }
+      if (task.slides?.length) {
+        this.slides = task.slides.map(cloneSlide);
+        this.slideCount = task.slideCount || this.slides.length || this.slideCount;
+        this.currentSlideIndex = Math.min(this.currentSlideIndex, Math.max(0, this.slides.length - 1));
+      } else if (task.stage === "OUTLINE_READY" && this.outline) {
+        this.slides = this.outlineToSlides(this.outline);
+        this.currentSlideIndex = 0;
+      }
+      this.outlineDirty = false;
+      switch (task.stage) {
+        case "DRAFT":
+          this.status = "idle";
+          break;
+        case "OUTLINE_READY":
+          this.status = "outline_ready";
+          break;
+        case "GENERATING":
+          this.status = "generating";
+          break;
+        case "READY":
+          this.status = "success";
+          break;
+        case "FAILED":
+          this.status = "failed";
+          this.error = { title: "PPT生成失败", message: task.errorMessage || "请稍后重试" };
+          break;
+        case "CANCELLED":
+          this.status = "cancelled";
+          this.error = { title: "PPT生成已取消", message: "当前任务已取消，不会作为成功结果。" };
+          break;
+      }
+    },
     async generateOutlineFlow() {
       if (!this.prompt.trim()) {
         this.error = { title: "请输入主题", message: "填写 PPT 主题后才能生成大纲。" };
         return;
       }
+      await this.sendAgentMessage(`请根据主题生成 ${this.slideCount} 页演示大纲：${this.prompt.trim()}`);
+    },
+    async sendAgentMessage(message: string) {
+      const cleanMessage = message.trim();
+      if (!cleanMessage) return;
       this.status = "outlining";
       this.progress = 20;
       this.currentPage = 0;
       this.error = null;
       try {
-        const outline = await generatePptOutline({
-          prompt: this.prompt.trim(),
-          slideCount: this.slideCount,
-          language: this.language,
-          tone: this.tone,
-          textContent: this.textContent,
-          audience: this.audience,
-          scenario: this.scenario,
-          generationAspectRatio: this.generationAspectRatio,
-          autoThemeEnabled: this.autoThemeEnabled,
-          enableWebSearch: this.enableWebSearch,
-          textModel: this.textModel,
-          imageSource: this.imageSource,
-          imageModel: this.imageModel
-        });
-        this.outline = normalizeOutline(outline);
-        this.slides = this.outlineToSlides(this.outline);
-        this.status = "outline_ready";
-        this.progress = 30;
-        await this.saveDraft(this.taskId);
+        const draftTaskId = this.taskId.startsWith("draft_") ? this.taskId : "";
+        const needsSession = !this.taskId || draftTaskId || !this.agentStage || ["READY", "FAILED", "CANCELLED"].includes(this.agentStage);
+        if (needsSession) {
+          this.agentClientRequestId = createAgentRequestId("session");
+          const created = await createPptSession({
+            prompt: this.prompt.trim(),
+            skillCode: this.skillCode,
+            slideCount: this.slideCount,
+            language: this.language,
+            audience: this.audience,
+            clientRequestId: this.agentClientRequestId
+          });
+          this.outline = null;
+          this.slides = [];
+          this.outlineDirty = false;
+          this.applyAgentTask(created);
+          if (draftTaskId) {
+            await deletePptTask(draftTaskId).catch(() => undefined);
+            this.history = this.history.filter(item => item.taskId !== draftTaskId);
+          }
+        }
+        this.status = "outlining";
+        const updated = await postPptSessionMessage(
+          this.taskId,
+          cleanMessage,
+          createAgentRequestId("message")
+        );
+        this.applyAgentTask(updated);
       } catch (error) {
         console.error("[ppt] generate outline failed", error);
         this.status = "failed";
@@ -289,6 +385,7 @@ export const usePptStore = defineStore("ppt", {
       this.outline.slides[index] = { ...this.outline.slides[index], ...patch };
       this.outline.slides = normalizeSlidePages(this.outline.slides);
       this.slides = this.outlineToSlides(this.outline);
+      this.outlineDirty = Boolean(this.agentStage);
     },
     addOutlineSlide() {
       if (!this.outline) return;
@@ -302,6 +399,7 @@ export const usePptStore = defineStore("ppt", {
       this.outline.slides = normalizeSlidePages(this.outline.slides);
       this.slideCount = this.outline.slides.length;
       this.slides = this.outlineToSlides(this.outline);
+      this.outlineDirty = Boolean(this.agentStage);
     },
     deleteOutlineSlide(index: number) {
       if (!this.outline || this.outline.slides.length <= 1) return;
@@ -309,6 +407,7 @@ export const usePptStore = defineStore("ppt", {
       this.outline.slides = normalizeSlidePages(this.outline.slides);
       this.slideCount = this.outline.slides.length;
       this.slides = this.outlineToSlides(this.outline);
+      this.outlineDirty = Boolean(this.agentStage);
     },
     moveOutlineSlide(index: number, direction: -1 | 1) {
       if (!this.outline) return;
@@ -318,6 +417,7 @@ export const usePptStore = defineStore("ppt", {
       this.outline.slides.splice(next, 0, item);
       this.outline.slides = normalizeSlidePages(this.outline.slides);
       this.slides = this.outlineToSlides(this.outline);
+      this.outlineDirty = Boolean(this.agentStage);
     },
     async regenerateOutlineSlide(index: number) {
       if (!this.outline?.slides[index]) return;
@@ -332,6 +432,15 @@ export const usePptStore = defineStore("ppt", {
     },
     async saveOutline() {
       if (!this.outline) return;
+      if (this.agentStage) {
+        if (this.outlineDirty) {
+          this.error = {
+            title: "大纲尚未同步",
+            message: "请通过 Agent 消息修订大纲或恢复服务端版本"
+          };
+        }
+        return;
+      }
       try {
         this.outline = await updatePptOutline(this.outline);
       } catch (error) {
@@ -344,11 +453,31 @@ export const usePptStore = defineStore("ppt", {
         this.error = { title: "缺少大纲", message: "请先生成或创建 PPT 大纲。" };
         return;
       }
+      if (this.agentStage && this.outlineDirty) {
+        this.error = {
+          title: "大纲尚未同步",
+          message: "请通过 Agent 消息修订大纲或恢复服务端版本"
+        };
+        return;
+      }
       this.status = "pending";
       this.progress = 0;
       this.error = null;
       const draftTaskId = this.taskId.startsWith("draft_") ? this.taskId : "";
       try {
+        if (this.agentStage) {
+          const confirmed = await confirmPptSessionOutline(this.taskId, createAgentRequestId("confirm"));
+          this.applyAgentTask(confirmed);
+          if (confirmed.stage === "GENERATING") {
+            await this.pollAgentTask(this.taskId);
+          } else if (!isTerminalAgentStage(confirmed.stage)) {
+            this.error = { title: "PPT确认失败", message: "服务端未进入生成阶段，请重试" };
+          }
+          if (this.agentStage === "READY") {
+            await this.loadHistory({ force: true });
+          }
+          return;
+        }
         const created = await createPptTask({
           prompt: this.prompt.trim() || this.outline.title,
           slideCount: this.outline.slides.length,
@@ -376,45 +505,50 @@ export const usePptStore = defineStore("ppt", {
           await deletePptTask(draftTaskId).catch(() => undefined);
           this.history = this.history.filter(item => item.taskId !== draftTaskId);
         }
-        await this.runMockProgress(created.taskId);
+        await this.pollLegacyTask(created.taskId);
       } catch (error) {
         console.error("[ppt] generate ppt failed", error);
         this.status = "failed";
         this.error = { title: "PPT生成失败", message: error instanceof Error ? error.message : "请稍后重试" };
       }
     },
-    async runMockProgress(taskId: string) {
-      const steps: Array<{ status: PptWorkflowStatus; progress: number; currentPage: number; delay: number }> = [
-        { status: "pending", progress: 0, currentPage: 0, delay: 180 },
-        { status: "generating", progress: 40, currentPage: 1, delay: 700 },
-        { status: "generating", progress: 70, currentPage: Math.max(1, Math.ceil(this.slideCount * 0.55)), delay: 700 },
-        { status: "rendering", progress: 90, currentPage: this.slideCount, delay: 700 }
-      ];
-      for (const step of steps) {
-        this.status = step.status;
-        this.progress = step.progress;
-        this.currentPage = step.currentPage;
-        await wait(step.delay);
+    async pollAgentTask(taskId: string) {
+      while (this.agentStage === "GENERATING") {
+        await wait(1_500);
+        const task = await getPptAgentTask(taskId);
+        this.applyAgentTask(task);
       }
-      const task = await getPptTaskStatus(taskId);
-      this.slides = task.slides?.length ? task.slides : this.outlineToSlides(this.outline);
-      this.currentSlideIndex = 0;
-      if (this.shouldPollGeneratedImages()) {
-        this.status = "rendering";
-        this.progress = 92;
-        await this.pollGeneratedImages(taskId, {
-          timeoutMs: Math.min(180_000, Math.max(95_000, this.slides.length * 60_000))
-        });
+    },
+    async pollLegacyTask(taskId: string) {
+      while (["pending", "processing", "generating", "rendering"].includes(this.status)) {
+        await wait(1_500);
+        const task = await getPptTaskStatus(taskId);
+        this.progress = task.progress ?? this.progress;
+        this.currentPage = task.currentPage ?? this.currentPage;
+        this.slides = task.slides?.length ? task.slides.map(cloneSlide) : this.slides;
+        if (task.status === "success") {
+          this.status = "success";
+          this.progress = 100;
+          await this.loadHistory({ force: true });
+          return;
+        }
+        if (task.status === "failed" || task.status === "cancelled") {
+          this.status = task.status;
+          this.error = {
+            title: task.status === "cancelled" ? "PPT生成已取消" : "PPT生成失败",
+            message: task.errorMessage || (task.status === "cancelled" ? "当前任务已取消，不会作为成功结果。" : "请稍后重试")
+          };
+          return;
+        }
+        if (task.status === "processing") {
+          this.status = "generating";
+        } else if (task.status === "pending" || task.status === "generating" || task.status === "rendering") {
+          this.status = task.status;
+        } else if (task.status === "draft") {
+          this.status = "idle";
+          return;
+        }
       }
-      this.status = "success";
-      this.progress = 100;
-      this.currentPage = this.outline?.slides.length || this.slideCount;
-      if (this.shouldPollGeneratedImages() && realSlideImageCount(this.slides) < this.slides.length) {
-        void this.pollGeneratedImages(taskId, {
-          timeoutMs: Math.min(900_000, Math.max(180_000, this.slides.length * 70_000))
-        });
-      }
-      await this.loadHistory();
     },
     shouldPollGeneratedImages() {
       const model = this.imageModel.trim();
@@ -465,6 +599,34 @@ export const usePptStore = defineStore("ppt", {
       if (!slide) return;
       const next = await regeneratePptSlide(slide);
       this.updateSlide(this.currentSlideIndex, next);
+    },
+    async reviseCurrentSlide(instruction: string) {
+      const slide = this.currentSlide;
+      const cleanInstruction = instruction.trim();
+      if (!slide || !cleanInstruction || !this.taskId || this.taskId.startsWith("draft_") || this.agentStage !== "READY") {
+        throw new Error("当前页尚未进入可修订的 Agent 成功状态");
+      }
+      this.error = null;
+      try {
+        const updated = await revisePptSessionSlide(
+          this.taskId,
+          slide.id,
+          cleanInstruction,
+          createAgentRequestId("revise")
+        );
+        const revised = updated.slides?.find(item => item.id === slide.id);
+        if (!revised) {
+          throw new Error("服务端未返回目标幻灯片");
+        }
+        this.slides[this.currentSlideIndex] = cloneSlide(revised);
+        if (updated.agentMessages) {
+          this.agentMessages = [...updated.agentMessages];
+        }
+        return revised;
+      } catch (error) {
+        this.error = { title: "单页修订失败", message: error instanceof Error ? error.message : "请稍后重试" };
+        throw error;
+      }
     },
     async generateImageForCurrentSlide() {
       const slide = this.currentSlide;
@@ -593,6 +755,14 @@ export const usePptStore = defineStore("ppt", {
       this.imageLighting = item.imageLighting || this.imageLighting;
       this.imageComposition = item.imageComposition || this.imageComposition;
       this.enableWebSearch = Boolean(item.enableWebSearch);
+      this.skillCode = item.skillCode || this.skillCode;
+      if (item.stage) {
+        this.applyAgentTask(item);
+        return;
+      }
+      this.agentStage = null;
+      this.agentMessages = [];
+      this.outlineDirty = false;
       this.outline = item.outline || null;
       this.slides = item.slides?.length ? item.slides : this.outlineToSlides(this.outline);
       this.currentSlideIndex = 0;
@@ -602,6 +772,14 @@ export const usePptStore = defineStore("ppt", {
     },
     retry() {
       this.error = null;
+      if (this.agentStage === "GENERATING") {
+        void this.pollAgentTask(this.taskId);
+        return;
+      }
+      if (this.agentStage === "OUTLINE_READY") {
+        void this.confirmOutlineAndGeneratePpt();
+        return;
+      }
       if (this.outline) {
         void this.confirmOutlineAndGeneratePpt();
       } else {
@@ -645,6 +823,33 @@ function draftTitleFromPrompt(prompt: string) {
 
 function wait(ms: number) {
   return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+function createAgentRequestId(scope: string) {
+  const id = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `ppt-admin-${scope}-${id}`;
+}
+
+function isTerminalAgentStage(stage?: PptAgentStage) {
+  return stage === "READY" || stage === "FAILED" || stage === "CANCELLED";
+}
+
+function cloneSlide(slide: PptSlide): PptSlide {
+  return {
+    ...slide,
+    bulletPoints: [...slide.bulletPoints],
+    blocks: slide.blocks?.map(block => ({
+      ...block,
+      items: block.items ? [...block.items] : undefined
+    })),
+    visualPlan: slide.visualPlan ? {
+      ...slide.visualPlan,
+      objects: [...slide.visualPlan.objects]
+    } : undefined,
+    visualHistory: slide.visualHistory?.map(asset => ({ ...asset }))
+  };
 }
 
 function realSlideImageCount(slides: PptSlide[]) {

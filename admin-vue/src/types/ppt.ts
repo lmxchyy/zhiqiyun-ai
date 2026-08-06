@@ -55,8 +55,10 @@ export type PptWorkflowStatus =
   | "generating"
   | "rendering"
   | "success"
-  | "failed";
+  | "failed"
+  | "cancelled";
 export type PptTaskStatus = Exclude<PptWorkflowStatus, "idle" | "outline_ready" | "outlining"> | "processing" | "draft";
+export type PptAgentStage = "DRAFT" | "OUTLINE_READY" | "GENERATING" | "READY" | "FAILED" | "CANCELLED";
 export type PptSlideLayout = "cover" | "section" | "content" | "imageText" | "summary";
 export type PptSlideType = "cover" | "section" | "statement" | "text_image" | "case_study" | "product_showcase" | "industry_scene" | "agenda" | "feature_grid" | "process" | "timeline" | "comparison" | "data_chart" | "swot" | "matrix" | "organization" | "table";
 export type PptVisualType = "scene" | "illustration" | "product" | "office" | "icon" | "chart" | "diagram" | "none";
@@ -120,6 +122,29 @@ export interface PptOutline {
   updatedAt?: string;
 }
 
+export interface PptSkill {
+  code: string;
+  name: string;
+  description: string;
+  preferredLayouts?: string[];
+  maxSlides: number;
+}
+
+export interface PptAgentMessage {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export type PptSlideBlockType = "title" | "subtitle" | "paragraph" | "bullets" | "image" | "note";
+
+export interface PptSlideBlock {
+  type: PptSlideBlockType;
+  text?: string;
+  items?: string[];
+  imageRef?: string;
+}
+
 export interface PptSlide {
   id: string;
   page: number;
@@ -138,6 +163,17 @@ export interface PptSlide {
   visualCreatedAt?: string;
   visualStatus?: "planned" | "processing" | "success" | "failed" | string;
   visualError?: string;
+  blocks?: PptSlideBlock[];
+}
+
+export interface PptCreateSessionRequest {
+  prompt: string;
+  skillCode: string;
+  sourceFileIds?: string[];
+  slideCount: number;
+  language: PptLanguage;
+  audience: PptAudience;
+  clientRequestId: string;
 }
 
 export interface PptGenerateOutlineRequest {
@@ -202,8 +238,11 @@ export interface PptGenerateResponse {
 
 export interface PptTaskResponse {
   taskId: string;
+  sessionId?: string;
   type?: "ppt";
   mediaType?: "ppt";
+  skillCode?: string;
+  stage?: PptAgentStage;
   status: PptTaskStatus;
   title: string;
   prompt?: string;
@@ -227,8 +266,15 @@ export interface PptTaskResponse {
   enableWebSearch?: boolean;
   progress?: number;
   currentPage?: number;
+  visualProgress?: number;
   outline?: PptOutline;
   slides?: PptSlide[];
+  agentMessages?: PptAgentMessage[];
+  sourceFileIds?: string[];
+  outlineConfirmedAt?: string;
+  generationStartedAt?: string;
+  completedAt?: string;
+  errorCode?: string;
   pptUrl: string;
   pdfUrl: string;
   errorMessage: string;
