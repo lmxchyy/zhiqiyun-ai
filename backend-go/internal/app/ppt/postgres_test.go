@@ -2133,6 +2133,29 @@ func TestPostgresIndexMatcherRequiresUniqueWhenRequested(t *testing.T) {
 	}
 }
 
+func TestPostgresIndexMatcherNormalizesOnlyHarmlessVarcharPredicateCasts(t *testing.T) {
+	keys := []postgresSchemaIndexKey{{Column: "tenant_id"}, {Column: "user_id"}, {Column: "client_request_id"}}
+	index := postgresSchemaIndex{
+		valid: true, ready: true, unique: true, keys: keys,
+		predicate: "((client_request_id)::text <> ''::text)",
+	}
+	if !postgresIndexMatches(index, keys, "client_request_id <> ''", true) {
+		t.Fatalf("postgresIndexMatches rejected PostgreSQL 16 varchar predicate %q", index.predicate)
+	}
+
+	for _, predicate := range []string{
+		"((user_id)::text <> ''::text)",
+		"((client_request_id)::text = ''::text)",
+		"((client_request_id)::text <> 'not-empty'::text)",
+		"((client_request_id)::text <> ''::text) OR tenant_id IS NULL",
+	} {
+		index.predicate = predicate
+		if postgresIndexMatches(index, keys, "client_request_id <> ''", true) {
+			t.Errorf("postgresIndexMatches accepted different predicate %q", predicate)
+		}
+	}
+}
+
 func TestEnsurePostgresReadyPreservesCatalogQueryCause(t *testing.T) {
 	db, state := newPPTPostgresTestDB(t)
 	want := errors.New("catalog unavailable")

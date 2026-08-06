@@ -235,11 +235,37 @@ func postgresIndexMatches(index postgresSchemaIndex, expectedKeys []postgresSche
 
 func normalizePostgresCatalogPredicate(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
-	for strings.HasPrefix(value, "(") && strings.HasSuffix(value, ")") {
+	value = strings.ReplaceAll(value, "\"", "")
+	value = strings.Join(strings.Fields(value), "")
+	for postgresCatalogPredicateHasOuterParens(value) {
 		value = strings.TrimSpace(value[1 : len(value)-1])
 	}
-	value = strings.ReplaceAll(value, "\"", "")
-	return strings.Join(strings.Fields(value), "")
+	if value == "(client_request_id)::text<>''::text" {
+		return "client_request_id<>''"
+	}
+	return value
+}
+
+func postgresCatalogPredicateHasOuterParens(value string) bool {
+	if len(value) < 2 || value[0] != '(' || value[len(value)-1] != ')' {
+		return false
+	}
+	depth := 0
+	for index, char := range value {
+		switch char {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && index != len(value)-1 {
+				return false
+			}
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }
 
 func (s *Service) generatePostgres(req GenerateRequest, externalActive, limit int) (GenerateResponse, error) {
