@@ -593,6 +593,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Params["terminal"] = requestTerminal(r)
 	if err := enforceMiniProgramModelCompliance(data, &req); err != nil {
 		writeError(w, http.StatusForbidden, err)
 		return
@@ -897,7 +898,18 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 		return
 	}
+	stored := storagecenter.FileObject{}
+	if !strings.EqualFold(providerTaskString(prepared, "provider"), "local-mock-video") {
+		prepared, stored, err = a.persistConnectorVideo(ctx, taskID, prepared)
+		if err != nil {
+			_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+			return
+		}
+	}
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+		if stored.FileID != "" {
+			a.cleanupGeneratedFiles([]storagecenter.FileObject{stored})
+		}
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 	}
 }

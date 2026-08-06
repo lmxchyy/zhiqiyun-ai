@@ -99,6 +99,14 @@ func (s *Service) StoreObject(ctx context.Context, input UploadInitInput, source
 		_ = s.repo.MarkUploadFailed(ctx, file.TenantID, file.FileID, err.Error())
 		return FileObject{}, err
 	}
+	if strings.TrimSpace(completed.FileID) == "" {
+		const reason = "storage repository returned an empty file id after upload completion"
+		cleanupErr := s.PermanentDelete(ctx, AccessContext{TenantID: file.TenantID, UserID: file.UserID, IsAdmin: true}, file.FileID)
+		if cleanupErr != nil {
+			return FileObject{}, fmt.Errorf("%w: %s; cleanup failed: %v", ErrUploadConfirmFailed, reason, cleanupErr)
+		}
+		return FileObject{}, fmt.Errorf("%w: %s", ErrUploadConfirmFailed, reason)
+	}
 	return completed, nil
 }
 

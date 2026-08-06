@@ -355,6 +355,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/generation-tasks/:id/retry", wrapF(api.retryGenerationTask))
 	v1.POST("/generation-tasks/:id/cancel", wrapF(api.cancelGenerationTask))
 	v1.DELETE("/generation-tasks/:id", wrapF(api.deleteGenerationTask))
+	v1.POST("/generation-tasks/estimate", wrapF(api.estimateGenerationTaskCost))
 	v1.POST("/generation-tasks", wrapF(api.createGenerationTask))
 	v1.POST("/ppt/generate", wrapF(api.createPPTGenerationTask))
 	v1.POST("/ppt/estimate", wrapF(api.estimatePPTGenerationCost))

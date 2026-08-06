@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -14,14 +15,32 @@ type fakeProviderFactory struct {
 	last     Config
 }
 
+type contractViolatingEmptyFileIDRepository struct {
+	*MemoryRepository
+	originalFileID    string
+	originalObjectKey string
+}
+
+func (r *contractViolatingEmptyFileIDRepository) CompleteUpload(ctx context.Context, tenantID string, fileID string, metadata ObjectMetadata) (FileObject, error) {
+	file, err := r.MemoryRepository.CompleteUpload(ctx, tenantID, fileID, metadata)
+	if err != nil {
+		return FileObject{}, err
+	}
+	r.originalFileID = fileID
+	r.originalObjectKey = file.ObjectKey
+	file.FileID = ""
+	return file, nil
+}
+
 func (f *fakeProviderFactory) Build(config Config) (Provider, error) {
 	f.last = config
 	return f.provider, nil
 }
 
 type fakeProvider struct {
-	objects map[string]ObjectMetadata
-	deleted []string
+	objects   map[string]ObjectMetadata
+	deleted   []string
+	deleteErr error
 }
 
 func (p *fakeProvider) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
@@ -52,8 +71,11 @@ func (p *fakeProvider) HeadObject(_ context.Context, key string) (ObjectMetadata
 }
 
 func (p *fakeProvider) DeleteObject(_ context.Context, key string) error {
-	delete(p.objects, key)
 	p.deleted = append(p.deleted, key)
+	if p.deleteErr != nil {
+		return p.deleteErr
+	}
+	delete(p.objects, key)
 	return nil
 }
 
@@ -197,6 +219,74 @@ func TestStoreObjectCompletesServerSideUpload(t *testing.T) {
 	}
 	if quota.UsedBytes != 9 || quota.ReservedBytes != 0 || quota.FileCount != 1 {
 		t.Fatalf("unexpected quota after server-side upload: %+v", quota)
+	}
+}
+
+func TestStoreObjectRollsBackWhenRepositoryReturnsEmptyFileID(t *testing.T) {
+	baseRepo := NewMemoryRepository()
+	repo := &contractViolatingEmptyFileIDRepository{MemoryRepository: baseRepo}
+	provider := newFakeProvider()
+	service := NewService(repo, &fakeProviderFactory{provider: provider}, Options{
+		DefaultProvider: "minio", Endpoint: "http://minio:9000", AccessKey: "access", SecretKey: "secret", Bucket: "files",
+		DefaultQuotaBytes: 100, MaxUploadBytes: 1024, UploadURLTTL: time.Minute, AccessURLTTL: time.Minute, RecycleRetention: time.Hour,
+		MasterKey: "0123456789abcdef0123456789abcdef",
+	})
+
+	_, err := service.StoreObject(context.Background(), UploadInitInput{
+		TenantID: "tenant_a", UserID: "user_a", FileName: "generated.mp4", FileSize: 9,
+		MIMEType: "video/mp4", BusinessType: "generation_result", BusinessID: "task_contract_violation", Visibility: "PRIVATE",
+	}, strings.NewReader("generated"))
+	if !errors.Is(err, ErrUploadConfirmFailed) {
+		t.Errorf("StoreObject error = %v, want ErrUploadConfirmFailed", err)
+	}
+	if repo.originalFileID == "" || repo.originalObjectKey == "" {
+		t.Fatalf("repository did not capture the original file identity: %+v", repo)
+	}
+	stored, getErr := baseRepo.GetFile(context.Background(), "tenant_a", repo.originalFileID)
+	if getErr != nil {
+		t.Fatalf("GetFile(%q): %v", repo.originalFileID, getErr)
+	}
+	if stored.Status != StatusDeleted {
+		t.Errorf("original file status = %q, want %q", stored.Status, StatusDeleted)
+	}
+	quota, quotaErr := service.Quota(context.Background(), "tenant_a")
+	if quotaErr != nil {
+		t.Fatalf("Quota: %v", quotaErr)
+	}
+	if quota.UsedBytes != 0 || quota.ReservedBytes != 0 || quota.FileCount != 0 {
+		t.Errorf("quota after empty FileID rollback = %+v, want zero usage and file count", quota)
+	}
+	if len(provider.objects) != 0 {
+		t.Errorf("provider objects after empty FileID rollback = %v, want empty", provider.objects)
+	}
+	if len(provider.deleted) != 1 || provider.deleted[0] != repo.originalObjectKey {
+		t.Errorf("provider deleted keys = %v, want [%s]", provider.deleted, repo.originalObjectKey)
+	}
+}
+
+func TestStoreObjectEmptyFileIDPreservesCleanupFailure(t *testing.T) {
+	baseRepo := NewMemoryRepository()
+	repo := &contractViolatingEmptyFileIDRepository{MemoryRepository: baseRepo}
+	provider := newFakeProvider()
+	provider.deleteErr = errors.New("provider delete unavailable")
+	service := NewService(repo, &fakeProviderFactory{provider: provider}, Options{
+		DefaultProvider: "minio", Endpoint: "http://minio:9000", AccessKey: "access", SecretKey: "secret", Bucket: "files",
+		DefaultQuotaBytes: 100, MaxUploadBytes: 1024, UploadURLTTL: time.Minute, AccessURLTTL: time.Minute, RecycleRetention: time.Hour,
+		MasterKey: "0123456789abcdef0123456789abcdef",
+	})
+
+	_, err := service.StoreObject(context.Background(), UploadInitInput{
+		TenantID: "tenant_a", UserID: "user_a", FileName: "generated.mp4", FileSize: 9,
+		MIMEType: "video/mp4", BusinessType: "generation_result", BusinessID: "task_cleanup_failure", Visibility: "PRIVATE",
+	}, strings.NewReader("generated"))
+	if !errors.Is(err, ErrUploadConfirmFailed) {
+		t.Fatalf("StoreObject error = %v, want ErrUploadConfirmFailed", err)
+	}
+	if !strings.Contains(err.Error(), "provider delete unavailable") {
+		t.Fatalf("StoreObject error = %v, want cleanup failure detail", err)
+	}
+	if len(provider.deleted) != 1 || provider.deleted[0] != repo.originalObjectKey {
+		t.Fatalf("provider cleanup attempts = %v, want [%s]", provider.deleted, repo.originalObjectKey)
 	}
 }
 

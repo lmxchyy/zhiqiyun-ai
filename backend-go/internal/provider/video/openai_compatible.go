@@ -113,7 +113,11 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	if len(imageURLs) > 0 && !useSeedanceContentTaskProtocol(p.endpoint) {
 		body["image_urls"] = imageURLs
 		if len(imageURLs) == 1 {
-			body["input_reference"] = map[string]any{"image_url": imageURLs[0]}
+			if isDoubaoSeedance2Model(model) {
+				body["input_reference"] = imageURLs[0]
+			} else {
+				body["input_reference"] = map[string]any{"image_url": imageURLs[0]}
+			}
 		}
 	}
 	payload, err := json.Marshal(body)

@@ -1716,6 +1716,7 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 	width := previewImageWidth
 	height := previewImageHeight
 	thumbnailURL := imageURL
+	var duration any
 	if index < len(req.GeneratedImages) && req.GeneratedImages[index].URL != "" {
 		imageURL = req.GeneratedImages[index].URL
 		thumbnailURL = req.GeneratedImages[index].ThumbnailURL
@@ -1738,13 +1739,15 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 		thumbnailURL = imageURL
 	}
 	if isVideoGenerationType(req.Type) {
-		if videoURL := providerTaskString(req, "videoUrl"); videoURL != "" {
-			imageURL = videoURL
-			mediaType = "video"
-			contentType = "video/mp4"
-			source = firstNonEmptyString(providerTaskString(req, "provider"), "video-provider")
-			thumbnailURL = firstNonEmptyString(providerTaskString(req, "thumbnailUrl"), thumbnailURL)
-		}
+		providerTask := providerTaskPayload(req)
+		imageURL = providerTaskString(req, "videoUrl")
+		mediaType = "video"
+		contentType = "video/mp4"
+		source = firstNonEmptyString(providerTaskString(req, "provider"), "video-provider")
+		thumbnailURL = firstNonEmptyString(providerTaskString(req, "thumbnailUrl"), thumbnailURL)
+		width = intValue(providerTask["width"])
+		height = intValue(providerTask["height"])
+		duration = providerTask["duration"]
 	}
 	item := asset{
 		ID:             assetID,
@@ -1793,10 +1796,13 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 		item.Metadata["storageObjectKey"] = stringValue(stored["objectKey"])
 		item.Metadata["fileSize"] = int64Value(stored["fileSize"])
 		item.Metadata["fileSizeBytes"] = int64Value(stored["fileSize"])
-		if sourceURL := compactPersistedSourceURL(stringValue(stored["sourceUrl"])); sourceURL != "" {
+		if sourceURL := compactPersistedSourceURL(stringValue(stored["sourceUrl"])); mediaType != "video" && sourceURL != "" {
 			item.Metadata["sourceUrl"] = sourceURL
 		}
 		item.Metadata["storageManaged"] = true
+		if mediaType == "video" && item.Metadata["fileId"] != "" {
+			item.URL = ""
+		}
 		if item.Metadata["fileId"] != "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.URL)), "data:") {
 			// The managed file is the durable original. Do not duplicate the same
 			// multi-megabyte Data URL in the asset row.
@@ -1810,6 +1816,12 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 		if storedContentType := stringValue(stored["contentType"]); storedContentType != "" {
 			item.Metadata["contentType"] = storedContentType
 		}
+	}
+	if mediaType == "video" {
+		item.Metadata["duration"] = duration
+		item.Metadata["width"] = width
+		item.Metadata["height"] = height
+		item.Metadata["resolution"] = fmt.Sprintf("%dx%d", width, height)
 	}
 	copyGenerationComplianceMetadata(item.Metadata, req.Params, assetID, now)
 	return item

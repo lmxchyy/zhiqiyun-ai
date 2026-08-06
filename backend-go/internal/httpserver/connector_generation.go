@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	"xianzhi-ai/backend-go/internal/app/smartvideo"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -95,10 +96,10 @@ func (a api) estimateConnectorGeneration(ctx context.Context, userID string, ent
 	return req, int64(generationPointCostForRequest(req, data)), nil
 }
 
-func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
+func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, storagecenter.FileObject, error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
-		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
+		return generationTask{}, req, storagecenter.FileObject{}, err
 	}
 	req.UserID = user.ID
 	req.ModuleCode = moduleVideoGeneration
@@ -108,31 +109,34 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	connectorMetadata := takeConnectorMetadata(req.Params)
 	req, err = a.prepareConnectorGenerationRequest(data, user, enterpriseID, req)
 	if err != nil {
-		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("authorize connector video generation: %w", err)
+		return generationTask{}, req, storagecenter.FileObject{}, fmt.Errorf("authorize connector video generation: %w", err)
 	}
 	for key, value := range connectorMetadata {
 		req.Params[key] = value
 	}
 	service, err := a.connectorGenerationServiceForRequest(user, req)
 	if err != nil {
-		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
+		return generationTask{}, req, storagecenter.FileObject{}, err
 	}
 	task, err := a.store.CreatePendingGenerationTask(req)
 	if err != nil {
-		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("reserve connector video generation: %w", err)
+		return generationTask{}, req, storagecenter.FileObject{}, fmt.Errorf("reserve connector video generation: %w", err)
 	}
 	if strings.EqualFold(task.Status, "SUCCEEDED") {
-		return task, req, storagecenter.FileObject{}, nil, "", nil
+		return task, req, storagecenter.FileObject{}, nil
+	}
+	if strings.EqualFold(task.Status, "FAILED") || strings.EqualFold(task.Status, "CANCELLED") {
+		return task, req, storagecenter.FileObject{}, fmt.Errorf("generation task is %s", strings.ToLower(task.Status))
 	}
 	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
-		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("generate connector video: %w", err)
+		return task, req, storagecenter.FileObject{}, fmt.Errorf("generate connector video: %w", err)
 	}
-	prepared, stored, raw, contentType, err := a.persistConnectorVideo(ctx, task.ID, prepared)
+	prepared, stored, err := a.persistConnectorVideo(ctx, task.ID, prepared)
 	if err != nil {
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
-		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("persist connector video: %w", err)
+		return task, prepared, storagecenter.FileObject{}, fmt.Errorf("persist connector video: %w", err)
 	}
 	completed, err := a.store.CompleteGenerationTask(task.ID, prepared)
 	if err != nil {
@@ -140,9 +144,9 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 			a.cleanupGeneratedFiles([]storagecenter.FileObject{stored})
 		}
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
-		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("complete connector video: %w", err)
+		return task, prepared, storagecenter.FileObject{}, fmt.Errorf("complete connector video: %w", err)
 	}
-	return completed, prepared, stored, raw, contentType, nil
+	return completed, prepared, stored, nil
 }
 
 func takeConnectorMetadata(params map[string]any) map[string]any {
@@ -156,44 +160,108 @@ func takeConnectorMetadata(params map[string]any) map[string]any {
 	return metadata
 }
 
-func (a api) persistConnectorVideo(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
+var generatedVideoArtifactReader = readGeneratedVideoArtifact
+var generatedVideoMetadataProbe = probeGeneratedVideoArtifact
+var generatedVideoThumbnailExtractor = generatedVideoThumbnailDataURL
+
+func (a api) persistConnectorVideo(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, storagecenter.FileObject, error) {
 	videoURL := providerTaskString(req, "videoUrl")
 	if videoURL == "" {
-		return req, storagecenter.FileObject{}, nil, "", errors.New("video provider returned no video")
+		return req, storagecenter.FileObject{}, errors.New("video provider returned no video")
 	}
-	raw, contentType, extension, err := readGeneratedVideoArtifact(ctx, videoURL)
-	if err != nil {
-		return req, storagecenter.FileObject{}, nil, "", err
-	}
-	if contentType == "" {
-		contentType = "video/mp4"
+	if a.fileService == nil {
+		return req, storagecenter.FileObject{}, errors.New("generated video private storage is unavailable")
 	}
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
-	if a.fileService == nil {
-		return req, storagecenter.FileObject{}, raw, contentType, nil
-	}
 	tenantID := firstNonEmptyString(stringValue(req.Params["tenant_id"]), "tenant_default")
 	available, err := a.fileService.StorageAvailable(ctx, tenantID)
 	if err != nil {
-		return req, storagecenter.FileObject{}, nil, "", err
+		return req, storagecenter.FileObject{}, fmt.Errorf("resolve generated video private storage: %w", err)
 	}
 	if !available {
-		return req, storagecenter.FileObject{}, raw, contentType, nil
+		return req, storagecenter.FileObject{}, errors.New("generated video private storage is unavailable")
 	}
-	file, err := a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
-		TenantID: tenantID, UserID: req.UserID, FileName: fmt.Sprintf("%s.%s", taskID, extension),
-		FileSize: int64(len(raw)), MIMEType: contentType, BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE",
-	}, bytes.NewReader(raw))
+	var raw []byte
+	var contentType string
+	var extension string
+	var metadata smartvideo.VideoMetadata
+	var thumbnailURL string
+	var file storagecenter.FileObject
+	err = runGeneratedVideoProcess(ctx, func() error {
+		var err error
+		raw, contentType, extension, err = generatedVideoArtifactReader(ctx, videoURL)
+		if err != nil {
+			return err
+		}
+		metadata, err = generatedVideoMetadataProbe(ctx, raw, extension)
+		if err != nil {
+			return err
+		}
+		if metadata.DurationMS <= 0 {
+			return errors.New("generated video duration must be positive")
+		}
+		if metadata.Width <= 0 || metadata.Height <= 0 {
+			return errors.New("generated video dimensions must be positive")
+		}
+		if metadata.DurationMS > 16000 {
+			return errors.New("generated video duration exceeds 15 second business limit")
+		}
+		if metadata.Width > 4096 || metadata.Height > 4096 {
+			return errors.New("generated video dimensions exceed 4K side limit")
+		}
+		if int64(metadata.Width)*int64(metadata.Height) > 4096*2160 {
+			return errors.New("generated video dimensions exceed 4K pixel limit")
+		}
+		thumbnailURL, err = generatedVideoThumbnailExtractor(ctx, raw)
+		if err != nil {
+			return fmt.Errorf("extract generated video first frame: %w", err)
+		}
+		if err = validateGeneratedVideoThumbnailDataURL(thumbnailURL); err != nil {
+			return err
+		}
+		if contentType == "" {
+			contentType = "video/mp4"
+		}
+		providerTask := providerTaskPayload(req)
+		if providerTask == nil {
+			providerTask = map[string]any{}
+		}
+		durationSeconds := float64(metadata.DurationMS) / 1000
+		providerTask["thumbnailUrl"] = strings.TrimSpace(thumbnailURL)
+		providerTask["duration"] = durationSeconds
+		providerTask["width"] = metadata.Width
+		providerTask["height"] = metadata.Height
+		providerTask["resolution"] = fmt.Sprintf("%dx%d", metadata.Width, metadata.Height)
+		req.VideoTask = providerTask
+		req.Params["providerTask"] = providerTask
+		req.Params["duration"] = durationSeconds
+		req.Params["width"] = metadata.Width
+		req.Params["height"] = metadata.Height
+		req.Params["resolution"] = providerTask["resolution"]
+		file, err = a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
+			TenantID: tenantID, UserID: req.UserID, FileName: fmt.Sprintf("%s.%s", taskID, extension),
+			FileSize: int64(len(raw)), MIMEType: contentType, BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE",
+		}, bytes.NewReader(raw))
+		if err != nil {
+			return fmt.Errorf("store generated video: %w", err)
+		}
+		if strings.TrimSpace(file.FileID) == "" {
+			return errors.New("stored generated video has no file ID")
+		}
+		delete(providerTask, "videoUrl")
+		delete(providerTask, "sourceUrl")
+		req.Params[generatedStorageFilesParam] = []map[string]any{{
+			"fileId": file.FileID, "tenantId": file.TenantID, "provider": file.Provider, "bucket": file.Bucket,
+			"objectKey": file.ObjectKey, "fileSize": file.FileSize, "contentType": file.MIMEType,
+		}}
+		return nil
+	})
 	if err != nil {
-		return req, storagecenter.FileObject{}, nil, "", err
+		return req, storagecenter.FileObject{}, err
 	}
-	req.Params[generatedStorageFilesParam] = []map[string]any{{
-		"fileId": file.FileID, "tenantId": file.TenantID, "provider": file.Provider, "bucket": file.Bucket,
-		"objectKey": file.ObjectKey, "fileSize": file.FileSize, "contentType": file.MIMEType, "sourceUrl": videoURL,
-	}}
-	return req, file, raw, contentType, nil
+	return req, file, nil
 }
 
 func (a api) connectorUserAndCapabilityData(ctx context.Context, userID string) (adminUser, adminPlatformData, error) {

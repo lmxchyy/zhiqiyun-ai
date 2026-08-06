@@ -99,7 +99,7 @@ func TestVideoCapabilitiesExposeProviderSupportedParameters(t *testing.T) {
 	}
 }
 
-func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
+func TestVideoGenerationStripsProviderUnsupportedOptionalParameters(t *testing.T) {
 	tests := []struct {
 		name  string
 		key   string
@@ -113,8 +113,12 @@ func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
-			err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
-			requireVideoValidationCode(t, err, "VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED")
+			if err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities())); err != nil {
+				t.Fatalf("unsupported optional parameter should be stripped, got %v", err)
+			}
+			if _, exists := request.Params[tt.key]; exists {
+				t.Fatalf("unsupported optional parameter %s was retained: %+v", tt.key, request.Params)
+			}
 		})
 	}
 }
@@ -388,6 +392,25 @@ func TestVideoGenerationRejectsUnsupportedDuration(t *testing.T) {
 	}
 	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
 	requireVideoValidationCode(t, err, "VIDEO_DURATION_NOT_SUPPORTED")
+}
+
+func TestVideoGenerationKeepsCoreParametersStrict(t *testing.T) {
+	tests := []struct {
+		name   string
+		params map[string]any
+		code   string
+	}{
+		{name: "duration", params: map[string]any{"duration": float64(12)}, code: "VIDEO_DURATION_NOT_SUPPORTED"},
+		{name: "resolution", params: map[string]any{"resolution": "8k"}, code: "VIDEO_RESOLUTION_NOT_SUPPORTED"},
+		{name: "aspect ratio", params: map[string]any{"aspect_ratio": "2:1"}, code: "VIDEO_ASPECT_RATIO_NOT_SUPPORTED"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: tt.params}
+			err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
+			requireVideoValidationCode(t, err, tt.code)
+		})
+	}
 }
 
 func TestVideoGenerationValidationErrorResponseHasStableCode(t *testing.T) {

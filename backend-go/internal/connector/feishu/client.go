@@ -10,6 +10,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -156,14 +157,7 @@ func (c *Client) SendFile(ctx context.Context, target connector.MessageTarget, m
 	if message.File == nil {
 		return connector.SendResult{}, errors.New("Feishu file is required")
 	}
-	raw, err := io.ReadAll(io.LimitReader(message.File, maxMessageFileBytes+1))
-	if err != nil {
-		return connector.SendResult{}, err
-	}
-	if len(raw) == 0 || len(raw) > maxMessageFileBytes {
-		return connector.SendResult{}, errors.New("Feishu file size is invalid")
-	}
-	fileKey, err := c.uploadFile(ctx, raw, message.FileName, message.MIMEType)
+	fileKey, err := c.uploadFile(ctx, message.File, message.FileName, message.MIMEType)
 	if err != nil {
 		return connector.SendResult{}, err
 	}
@@ -235,30 +229,20 @@ func (c *Client) uploadImage(ctx context.Context, raw []byte, fileName string) (
 	return response.Data.ImageKey, nil
 }
 
-func (c *Client) uploadFile(ctx context.Context, raw []byte, fileName string, mimeType string) (string, error) {
+func (c *Client) uploadFile(ctx context.Context, source io.Reader, fileName string, mimeType string) (string, error) {
 	fileName = path.Base(strings.TrimSpace(fileName))
 	if fileName == "" || fileName == "." {
 		fileName = "generated.bin"
 	}
 	fileType := feishuFileType(fileName, mimeType)
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("file_type", fileType); err != nil {
-		return "", err
-	}
-	if err := writer.WriteField("file_name", fileName); err != nil {
-		return "", err
-	}
-	part, err := writer.CreateFormFile("file", fileName)
+	body, bodySize, contentType, err := spoolFileMultipart(ctx, source, fileName, fileType)
 	if err != nil {
 		return "", err
 	}
-	if _, err = part.Write(raw); err != nil {
-		return "", err
-	}
-	if err = writer.Close(); err != nil {
-		return "", err
-	}
+	defer func() {
+		_ = body.Close()
+		_ = os.Remove(body.Name())
+	}()
 	var response struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
@@ -266,13 +250,71 @@ func (c *Client) uploadFile(ctx context.Context, raw []byte, fileName string, mi
 			FileKey string `json:"file_key"`
 		} `json:"data"`
 	}
-	if err := c.doAuthorized(ctx, http.MethodPost, c.baseURL+"/im/v1/files", body.Bytes(), writer.FormDataContentType(), &response); err != nil {
+	if err := c.doAuthorizedFile(ctx, http.MethodPost, c.baseURL+"/im/v1/files", body, bodySize, contentType, &response); err != nil {
 		return "", err
 	}
 	if response.Code != 0 || strings.TrimSpace(response.Data.FileKey) == "" {
 		return "", mapError(response.Code, response.Msg, http.StatusOK)
 	}
 	return response.Data.FileKey, nil
+}
+
+type contextFileReader struct {
+	ctx    context.Context
+	source io.Reader
+}
+
+func (r contextFileReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.source.Read(p)
+	}
+}
+
+func spoolFileMultipart(ctx context.Context, source io.Reader, fileName string, fileType string) (*os.File, int64, string, error) {
+	body, err := os.CreateTemp("", "xianzhi-feishu-multipart-*")
+	if err != nil {
+		return nil, 0, "", err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = body.Close()
+			_ = os.Remove(body.Name())
+		}
+	}()
+	if err := body.Chmod(0o600); err != nil {
+		return nil, 0, "", err
+	}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("file_type", fileType); err != nil {
+		return nil, 0, "", err
+	}
+	if err := writer.WriteField("file_name", fileName); err != nil {
+		return nil, 0, "", err
+	}
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	written, err := io.Copy(part, io.LimitReader(contextFileReader{ctx: ctx, source: source}, maxMessageFileBytes+1))
+	if err != nil {
+		return nil, 0, "", err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, 0, "", err
+	}
+	if written == 0 || written > maxMessageFileBytes {
+		return nil, 0, "", errors.New("Feishu file size is invalid")
+	}
+	info, err := body.Stat()
+	if err != nil {
+		return nil, 0, "", err
+	}
+	cleanup = false
+	return body, info.Size(), writer.FormDataContentType(), nil
 }
 
 func feishuFileType(fileName string, mimeType string) string {
@@ -380,6 +422,72 @@ func (c *Client) doAuthorized(ctx context.Context, method string, endpoint strin
 		return c.doJSON(ctx, method, endpoint, payload, contentType, token, output)
 	}
 	return err
+}
+
+func (c *Client) doAuthorizedFile(ctx context.Context, method string, endpoint string, body *os.File, bodySize int64, contentType string, output any) error {
+	token, err := c.tenantAccessToken(ctx, false)
+	if err != nil {
+		return err
+	}
+	err = c.doFile(ctx, method, endpoint, body, bodySize, contentType, token, output)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && isTokenError(apiErr.Code, apiErr.HTTPStatus) {
+		c.invalidateToken(ctx)
+		token, tokenErr := c.tenantAccessToken(ctx, true)
+		if tokenErr != nil {
+			return tokenErr
+		}
+		return c.doFile(ctx, method, endpoint, body, bodySize, contentType, token, output)
+	}
+	return err
+}
+
+func (c *Client) doFile(ctx context.Context, method string, endpoint string, body *os.File, bodySize int64, contentType string, token string, output any) error {
+	var lastErr error
+	for attempt := 0; attempt <= c.retries; attempt++ {
+		requestBody := io.NewSectionReader(body, 0, bodySize)
+		req, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
+		if err != nil {
+			return err
+		}
+		req.ContentLength = bodySize
+		req.Header.Set("Content-Type", contentType)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		response, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+		} else {
+			responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+			response.Body.Close()
+			if readErr != nil {
+				lastErr = readErr
+			} else if response.StatusCode >= 200 && response.StatusCode < 300 {
+				if err := json.Unmarshal(responseBody, output); err != nil {
+					return fmt.Errorf("decode Feishu response: %w", err)
+				}
+				if code, message := responseError(output); code != 0 {
+					return mapError(code, message, response.StatusCode)
+				}
+				return nil
+			} else {
+				code, message := parseErrorResponse(responseBody)
+				lastErr = mapError(code, message, response.StatusCode)
+				if response.StatusCode != http.StatusTooManyRequests && response.StatusCode < 500 {
+					return lastErr
+				}
+			}
+		}
+		if attempt < c.retries {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 150 * time.Millisecond):
+			}
+		}
+	}
+	return lastErr
 }
 
 func (c *Client) doJSON(ctx context.Context, method string, endpoint string, payload []byte, contentType string, token string, output any) error {

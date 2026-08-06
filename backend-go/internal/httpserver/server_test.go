@@ -633,8 +633,8 @@ func TestNormalizeAICapabilityDefaultsMergesMissingBillingRules(t *testing.T) {
 			"resolution": "1080p",
 		},
 	}, data)
-	if cost != 360 {
-		t.Fatalf("doubao point cost = %d, want 360", cost)
+	if cost != 2400 {
+		t.Fatalf("doubao point cost = %d, want 2400", cost)
 	}
 	grokCost := generationPointCostForRequest(createGenerationTaskRequest{
 		ModuleCode: moduleVideoGeneration,

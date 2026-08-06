@@ -413,10 +413,7 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 	}
 	for _, key := range videoOptionalProviderParameters {
 		if _, exists := req.Params[key]; exists && !videoParameterSupported(capabilities.SupportedParameters, key) {
-			return newVideoGenerationValidationError(
-				"VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED",
-				fmt.Sprintf("当前视频 Provider 不支持参数 %s", key),
-			)
+			delete(req.Params, key)
 		}
 	}
 	return nil

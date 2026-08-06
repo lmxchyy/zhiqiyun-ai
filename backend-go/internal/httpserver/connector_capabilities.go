@@ -230,11 +230,11 @@ func executeConnectorVideoHandler(ctx context.Context, runtime *connectorCapabil
 	if prepared.Type == "" {
 		prepared = connectorVideoRequest(runtime, c, imageToVideo)
 	}
-	task, output, file, raw, contentType, err := runtime.api.generator.executeConnectorVideoGeneration(ctx, c.InternalUserID, c.EnterpriseID, prepared)
+	task, output, file, err := runtime.api.generator.executeConnectorVideoGeneration(ctx, c.InternalUserID, c.EnterpriseID, prepared)
 	if err != nil {
 		return connector.CapabilityResult{}, err
 	}
-	data := map[string]any{"generationRequest": output, "videoBytes": raw, "contentType": contentType, "file": file, "duration": c.Parameters["duration"], "aspectRatio": c.Parameters["aspect_ratio"], "resolution": c.Parameters["resolution"], "model": prepared.Model, "topic": c.Parameters["topic"]}
+	data := map[string]any{"generationRequest": output, "file": file, "duration": c.Parameters["duration"], "aspectRatio": c.Parameters["aspect_ratio"], "resolution": c.Parameters["resolution"], "model": prepared.Model, "topic": c.Parameters["topic"]}
 	return connector.CapabilityResult{InternalTaskID: task.ID, Status: "completed", Progress: 100, ActualCost: int64(task.PointCost), AssetIDs: task.ResultIDs, Data: data}, nil
 }
 
@@ -479,16 +479,13 @@ func (a *connectorAPI) deliverCapabilityResult(ctx context.Context, runtime *con
 			}
 		}
 	case connector.IntentVideoGenerate, connector.IntentVideoImageToVideo:
-		raw, _ := result.Data["videoBytes"].([]byte)
-		contentType := stringValue(result.Data["contentType"])
-		if len(raw) > 0 {
-			sent, err := runtime.client.SendFile(ctx, target, connector.OutgoingMessage{File: bytes.NewReader(raw), FileName: result.InternalTaskID + ".mp4", MIMEType: contentType})
-			if err == nil {
-				mediaSent = true
-				_ = a.repo.insertOutboundMessage(ctx, runtime.item, runtime.message.ExternalChatID, runtime.message.ExternalUserID, sent.ExternalMessageID, "file", map[string]any{"generationTaskId": result.InternalTaskID, "mediaType": "video"})
-			}
-		}
 		if file, ok := result.Data["file"].(storagecenter.FileObject); ok && file.FileID != "" {
+			sent, sendErr := sendConnectorStoredVideo(ctx, a.generator.fileService, runtime.client, target, command.InternalUserID, file)
+			if sendErr != nil {
+				return sendErr
+			}
+			mediaSent = true
+			_ = a.repo.insertOutboundMessage(ctx, runtime.item, runtime.message.ExternalChatID, runtime.message.ExternalUserID, sent.ExternalMessageID, "file", map[string]any{"generationTaskId": result.InternalTaskID, "mediaType": "video"})
 			if url, _, err := a.generator.connectorStoredFileURL(ctx, command.InternalUserID, file); err == nil {
 				result.Data["downloadURL"] = url
 			}
@@ -528,6 +525,25 @@ func (a *connectorAPI) deliverCapabilityResult(ctx context.Context, runtime *con
 	}
 	_ = a.repo.insertOutboundMessage(ctx, runtime.item, runtime.message.ExternalChatID, runtime.message.ExternalUserID, sent.ExternalMessageID, kind, map[string]any{"taskId": result.InternalTaskID, "mediaSent": mediaSent})
 	return nil
+}
+
+func sendConnectorStoredVideo(ctx context.Context, fileService *storagecenter.Service, client *feishuconnector.Client, target connector.MessageTarget, userID string, file storagecenter.FileObject) (connector.SendResult, error) {
+	if fileService == nil || client == nil || strings.TrimSpace(file.FileID) == "" {
+		return connector.SendResult{}, errors.New("generated video private delivery is unavailable")
+	}
+	var sent connector.SendResult
+	err := runGeneratedVideoProcess(ctx, func() error {
+		stored, stream, err := fileService.OpenObject(ctx, storagecenter.AccessContext{TenantID: file.TenantID, UserID: userID}, file.FileID)
+		if err != nil {
+			return fmt.Errorf("open generated video for connector delivery: %w", err)
+		}
+		defer stream.Close()
+		name := firstNonEmptyString(strings.TrimSpace(stored.OriginalName), strings.TrimSpace(file.OriginalName), file.FileID+".mp4")
+		mimeType := firstNonEmptyString(strings.TrimSpace(stored.MIMEType), strings.TrimSpace(file.MIMEType), "video/mp4")
+		sent, err = client.SendFile(ctx, target, connector.OutgoingMessage{File: stream, FileName: name, MIMEType: mimeType})
+		return err
+	})
+	return sent, err
 }
 
 func connectorCommandFromIntent(item enterpriseConnector, binding connectorUserBinding, message connectorMessageRecord, intent connector.Intent, prompt string) connector.AICommand {

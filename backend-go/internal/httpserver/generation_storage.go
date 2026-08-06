@@ -6,13 +6,17 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	"xianzhi-ai/backend-go/internal/app/smartvideo"
+	providermedia "xianzhi-ai/backend-go/internal/provider/media"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -20,7 +24,20 @@ const (
 	generatedStorageFilesParam = "generated_storage_files"
 	maxGeneratedArtifactBytes  = 64 << 20
 	maxGeneratedVideoBytes     = 100 << 20
+	maxGeneratedThumbnailBytes = 2 << 20
 )
+
+var generatedVideoProcessGate = make(chan struct{}, 2)
+
+func runGeneratedVideoProcess(ctx context.Context, process func() error) error {
+	select {
+	case generatedVideoProcessGate <- struct{}{}:
+		defer func() { <-generatedVideoProcessGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return process()
+}
 
 func (a api) persistGeneratedImages(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
 	req = applyGeneratedImageProviderMetadata(req)
@@ -267,6 +284,116 @@ func readGeneratedVideoArtifact(ctx context.Context, rawURL string) ([]byte, str
 		return nil, "", "", fmt.Errorf("unsupported generated video content type %q", contentType)
 	}
 	return raw, contentType, extension, nil
+}
+
+func probeGeneratedVideoArtifact(ctx context.Context, raw []byte, extension string) (smartvideo.VideoMetadata, error) {
+	if len(raw) == 0 {
+		return smartvideo.VideoMetadata{}, errors.New("generated video is empty")
+	}
+	extension = strings.ToLower(strings.TrimSpace(extension))
+	if extension != "mp4" && extension != "mov" && extension != "webm" {
+		return smartvideo.VideoMetadata{}, fmt.Errorf("unsupported generated video extension %q", extension)
+	}
+	input, err := os.CreateTemp("", "xianzhi-generated-video-*."+extension)
+	if err != nil {
+		return smartvideo.VideoMetadata{}, fmt.Errorf("create generated video probe input: %w", err)
+	}
+	inputPath := input.Name()
+	defer func() { _ = os.Remove(inputPath) }()
+	if _, err = input.Write(raw); err != nil {
+		_ = input.Close()
+		return smartvideo.VideoMetadata{}, fmt.Errorf("write generated video probe input: %w", err)
+	}
+	if err = input.Close(); err != nil {
+		return smartvideo.VideoMetadata{}, fmt.Errorf("close generated video probe input: %w", err)
+	}
+	metadata, _, err := generatedVideoFFmpegAdapter().ProbeVideo(ctx, smartvideo.LocalMedia{Path: inputPath, AssetType: smartvideo.AssetTypeVideo})
+	if err != nil {
+		return smartvideo.VideoMetadata{}, fmt.Errorf("validate generated video: %w", err)
+	}
+	return metadata, nil
+}
+
+func generatedVideoFFmpegAdapter() *providermedia.FFmpegAdapter {
+	return providermedia.NewFFmpegAdapter(
+		providermedia.ExecCommandRunner{},
+		"ffprobe",
+		"ffmpeg",
+		20*time.Second,
+		20*time.Second,
+	)
+}
+
+func generatedVideoThumbnailDataURL(ctx context.Context, raw []byte) (string, error) {
+	if len(raw) == 0 {
+		return "", errors.New("generated video is empty")
+	}
+	input, err := os.CreateTemp("", "xianzhi-generated-video-*.mp4")
+	if err != nil {
+		return "", fmt.Errorf("create generated video thumbnail input: %w", err)
+	}
+	inputPath := input.Name()
+	defer func() { _ = os.Remove(inputPath) }()
+	if _, err = input.Write(raw); err != nil {
+		_ = input.Close()
+		return "", fmt.Errorf("write generated video thumbnail input: %w", err)
+	}
+	if err = input.Close(); err != nil {
+		return "", fmt.Errorf("close generated video thumbnail input: %w", err)
+	}
+	output, err := os.CreateTemp("", "xianzhi-generated-video-thumbnail-*.jpg")
+	if err != nil {
+		return "", fmt.Errorf("create generated video thumbnail output: %w", err)
+	}
+	outputPath := output.Name()
+	defer func() { _ = os.Remove(outputPath) }()
+	if err = output.Close(); err != nil {
+		return "", fmt.Errorf("close generated video thumbnail output: %w", err)
+	}
+	if err = generatedVideoFFmpegAdapter().GenerateThumbnail(
+		ctx,
+		smartvideo.LocalMedia{Path: inputPath, AssetType: smartvideo.AssetTypeVideo},
+		outputPath,
+		smartvideo.ThumbnailOptions{MaxWidth: 420, MaxHeight: 420, Quality: 5},
+	); err != nil {
+		return "", fmt.Errorf("extract generated video thumbnail: %w", err)
+	}
+	thumbnail, err := os.Open(outputPath)
+	if err != nil {
+		return "", fmt.Errorf("open generated video thumbnail: %w", err)
+	}
+	defer thumbnail.Close()
+	encoded, err := io.ReadAll(io.LimitReader(thumbnail, maxGeneratedThumbnailBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read generated video thumbnail: %w", err)
+	}
+	if len(encoded) == 0 || len(encoded) > maxGeneratedThumbnailBytes {
+		return "", fmt.Errorf("generated video thumbnail has invalid size %d", len(encoded))
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(encoded), nil
+}
+
+func validateGeneratedVideoThumbnailDataURL(value string) error {
+	const prefix = "data:image/jpeg;base64,"
+	thumbnail := strings.TrimSpace(value)
+	if len(thumbnail) <= len(prefix) || !strings.EqualFold(thumbnail[:len(prefix)], prefix) {
+		return errors.New("generated video first frame must be a JPEG data URL")
+	}
+	raw, err := base64.StdEncoding.DecodeString(thumbnail[len(prefix):])
+	if err != nil {
+		return errors.New("generated video first frame has invalid base64 data")
+	}
+	if len(raw) == 0 || len(raw) > maxGeneratedThumbnailBytes {
+		return fmt.Errorf("generated video thumbnail has invalid size %d", len(raw))
+	}
+	if http.DetectContentType(raw) != "image/jpeg" {
+		return errors.New("generated video first frame is not JPEG data")
+	}
+	decoded, err := jpeg.Decode(bytes.NewReader(raw))
+	if err != nil || decoded.Bounds().Dx() <= 0 || decoded.Bounds().Dy() <= 0 {
+		return errors.New("generated video first frame is not a decodable JPEG")
+	}
+	return nil
 }
 
 func readGeneratedDataURL(value string, preferredContentType string) ([]byte, string, string, error) {

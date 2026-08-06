@@ -10,8 +10,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -20,6 +23,55 @@ import (
 
 	"xianzhi-ai/backend-go/internal/connector"
 )
+
+type countedFileSource struct {
+	reader *bytes.Reader
+	read   atomic.Int64
+}
+
+func newCountedFileSource(raw []byte) *countedFileSource {
+	return &countedFileSource{reader: bytes.NewReader(raw)}
+}
+
+func (r *countedFileSource) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.read.Add(int64(n))
+	return n, err
+}
+
+func privateMultipartTempPresent(t *testing.T, dir string) bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Errorf("read multipart temp dir: %v", err)
+		return false
+	}
+	if len(entries) != 1 {
+		t.Errorf("multipart temp entries=%d, want 1", len(entries))
+		return false
+	}
+	info, err := entries[0].Info()
+	if err != nil {
+		t.Errorf("stat multipart temp: %v", err)
+		return false
+	}
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
+		t.Errorf("multipart temp permissions=%#o, want 0600", got)
+		return false
+	}
+	return true
+}
+
+func requireMultipartTempRemoved(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("multipart temp files remain: %v", entries)
+	}
+}
 
 func TestEncryptedEventVerification(t *testing.T) {
 	encryptKey := "event-encrypt-key"
@@ -201,4 +253,164 @@ func TestSendFileUploadsPPTAndSendsMessage(t *testing.T) {
 	if err != nil || result.ExternalMessageID != "om-file" || !uploaded || !sent {
 		t.Fatalf("result=%#v uploaded=%v sent=%v err=%v", result, uploaded, sent, err)
 	}
+}
+
+func TestSendFileSpoolsPrivateMultipartAndReplaysAfterTokenRefreshAndRetry(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	t.Setenv("TMP", tempDir)
+	t.Setenv("TEMP", tempDir)
+	payload := []byte("one-pass-private-video")
+	source := newCountedFileSource(payload)
+	var tokenCalls atomic.Int32
+	var uploadCalls atomic.Int32
+	var sawPrivateTemp atomic.Bool
+	var firstBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/auth/v3/tenant_access_token/internal":
+			call := tokenCalls.Add(1)
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"token-` + strconv.Itoa(int(call)) + `","expire":3600}`))
+		case "/im/v1/files":
+			if privateMultipartTempPresent(t, tempDir) {
+				sawPrivateTemp.Store(true)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read upload body: %v", err)
+				return
+			}
+			call := uploadCalls.Add(1)
+			if call == 1 {
+				firstBody = append([]byte(nil), body...)
+			} else if !bytes.Equal(body, firstBody) {
+				t.Errorf("upload body %d was not fully replayed", call)
+			}
+			if !bytes.Contains(body, payload) {
+				t.Errorf("upload body %d missing source payload", call)
+			}
+			switch call {
+			case 1:
+				if r.Header.Get("Authorization") != "Bearer token-1" {
+					t.Errorf("first authorization=%q", r.Header.Get("Authorization"))
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"code":99991663,"msg":"token expired"}`))
+			case 2:
+				if r.Header.Get("Authorization") != "Bearer token-2" {
+					t.Errorf("refreshed authorization=%q", r.Header.Get("Authorization"))
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"code":500,"msg":"temporary"}`))
+			default:
+				_, _ = w.Write([]byte(`{"code":0,"data":{"file_key":"file-key"}}`))
+			}
+		case "/im/v1/messages":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"message_id":"om-file"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := New(Config{AppID: "app", AppSecret: "secret", BaseURL: server.URL, Retries: 1, HTTPClient: server.Client()})
+	result, err := client.SendFile(context.Background(), connector.MessageTarget{ChatID: "chat"}, connector.OutgoingMessage{
+		File: source, FileName: "video.mp4", MIMEType: "video/mp4",
+	})
+	if err != nil || result.ExternalMessageID != "om-file" {
+		t.Fatalf("send result=%#v err=%v", result, err)
+	}
+	if tokenCalls.Load() != 2 || uploadCalls.Load() != 3 {
+		t.Fatalf("token calls=%d upload calls=%d", tokenCalls.Load(), uploadCalls.Load())
+	}
+	if source.read.Load() != int64(len(payload)) {
+		t.Fatalf("source bytes read=%d, want %d", source.read.Load(), len(payload))
+	}
+	if !sawPrivateTemp.Load() {
+		t.Fatal("upload did not use a private file-backed multipart body")
+	}
+	requireMultipartTempRemoved(t, tempDir)
+}
+
+func TestSendFileRemovesMultipartTempAfterFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	t.Setenv("TMP", tempDir)
+	t.Setenv("TEMP", tempDir)
+	var sawPrivateTemp atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/auth/v3/tenant_access_token/internal" {
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"token","expire":3600}`))
+			return
+		}
+		if privateMultipartTempPresent(t, tempDir) {
+			sawPrivateTemp.Store(true)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"code":500,"msg":"upload failed"}`))
+	}))
+	defer server.Close()
+	client := New(Config{AppID: "app", AppSecret: "secret", BaseURL: server.URL, HTTPClient: server.Client()})
+	_, err := client.SendFile(context.Background(), connector.MessageTarget{ChatID: "chat"}, connector.OutgoingMessage{
+		File: bytes.NewReader([]byte("video")), FileName: "video.mp4", MIMEType: "video/mp4",
+	})
+	if err == nil || !strings.Contains(err.Error(), "upload failed") {
+		t.Fatalf("send error=%v, want upload failure", err)
+	}
+	if !sawPrivateTemp.Load() {
+		t.Fatal("failed upload did not use a private file-backed multipart body")
+	}
+	requireMultipartTempRemoved(t, tempDir)
+}
+
+func TestSendFileRemovesMultipartTempAfterCancellation(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	t.Setenv("TMP", tempDir)
+	t.Setenv("TEMP", tempDir)
+	requestEntered := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	var sawPrivateTemp atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/auth/v3/tenant_access_token/internal" {
+			_, _ = w.Write([]byte(`{"code":0,"tenant_access_token":"token","expire":3600}`))
+			return
+		}
+		if privateMultipartTempPresent(t, tempDir) {
+			sawPrivateTemp.Store(true)
+		}
+		close(requestEntered)
+		<-releaseRequest
+	}))
+	defer server.Close()
+	client := New(Config{AppID: "app", AppSecret: "secret", BaseURL: server.URL, HTTPClient: server.Client()})
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := client.SendFile(ctx, connector.MessageTarget{ChatID: "chat"}, connector.OutgoingMessage{
+			File: bytes.NewReader([]byte("video")), FileName: "video.mp4", MIMEType: "video/mp4",
+		})
+		resultCh <- err
+	}()
+	select {
+	case <-requestEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upload request did not start")
+	}
+	cancel()
+	close(releaseRequest)
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("send error=%v, want context canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled upload did not return")
+	}
+	if !sawPrivateTemp.Load() {
+		t.Fatal("cancelled upload did not use a private file-backed multipart body")
+	}
+	requireMultipartTempRemoved(t, tempDir)
 }

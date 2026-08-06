@@ -400,3 +400,39 @@ func TestGrokRejectsMultipleImagesBeforeCallingUpstream(t *testing.T) {
 		t.Fatalf("upstream was called %d times for an invalid request", requestCount)
 	}
 }
+
+func TestOpenAICompatibleSeedanceCanonicalFirstFrameUsesStringInputReference(t *testing.T) {
+	var requestPath string
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/videos/generations" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "task-seedance-first-frame", "status": "succeeded", "video_url": "https://cdn.example/video.mp4",
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "doubao-seedance-2.0", Models: []string{"doubao-seedance-2.0"}, Endpoint: "/v1/videos/generations",
+	})
+	_, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "IMAGE_TO_VIDEO", Model: "doubao-seedance-2.0", Prompt: "camera push in",
+		Params: map[string]any{"first_frame": "https://cdn.example/first.png"},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if requestPath != "/v1/videos/generations" {
+		t.Fatalf("request path = %q", requestPath)
+	}
+	if got := payload["input_reference"]; got != "https://cdn.example/first.png" {
+		t.Fatalf("input_reference payload = %#v, want URL string", got)
+	}
+}
