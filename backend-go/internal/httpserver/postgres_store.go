@@ -2144,7 +2144,7 @@ func applyRechargeSettlementForTx(ctx context.Context, tx *sql.Tx, order *adminO
 		TaskID:          order.ID,
 		MetricCode:      "compute.recharge",
 		Quantity:        points,
-		UnitAmountCents: 10,
+		UnitAmountCents: pointUnitAmountCents,
 		AmountCents:     orderAmount(*order),
 		PointCost:       -points,
 		BalanceBefore:   before,

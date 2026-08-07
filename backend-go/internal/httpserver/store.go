@@ -21,7 +21,7 @@ import (
 var errAssetNotFound = errors.New("asset not found")
 
 const (
-	pointUnitAmountCents       = 10
+	pointUnitAmountCents       = 1
 	billingMetricImageGenerate = "image.generations"
 	billingMetricVideoGenerate = "video.generations"
 	billingMetricPPTGenerate   = "ppt.generations"
@@ -2327,7 +2327,7 @@ func applyRechargeSettlement(data *adminPlatformData, order *adminOrder, now str
 		TaskID:          order.ID,
 		MetricCode:      "compute.recharge",
 		Quantity:        points,
-		UnitAmountCents: 10,
+		UnitAmountCents: pointUnitAmountCents,
 		AmountCents:     orderAmount(*order),
 		PointCost:       -points,
 		BalanceBefore:   before,
@@ -2510,10 +2510,10 @@ func rechargePointsForOrder(order adminOrder) int {
 }
 
 func rechargePointsForAmount(amountCents int) int {
-	if amountCents <= 0 {
+	if amountCents <= 0 || pointUnitAmountCents <= 0 {
 		return 0
 	}
-	return amountCents / 10
+	return amountCents / pointUnitAmountCents
 }
 
 func rechargeAgentForUser(users []adminUser, agents []adminChannelAgent, userID string) (adminChannelAgent, bool) {

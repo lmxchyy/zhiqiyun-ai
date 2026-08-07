@@ -161,7 +161,7 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 		}
 		_, err = store.UpdateAdminBillingRule(source.ID, adminBillingRuleMutation{
 			BillingType:         "per_second",
-			BasePrice:           20,
+			BasePrice:           100,
 			MinimumCharge:       1,
 			ParameterMultiplier: source.ParameterRules,
 			Status:              "DRAFT",
@@ -201,8 +201,8 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create new task: %v", err)
 		}
-		if newTask.QuotedPoints != 150 || newTask.BillingRuleVersionID != published.ID {
-			t.Fatalf("new task = quote %.0f version %s, want 150/%s", newTask.QuotedPoints, newTask.BillingRuleVersionID, published.ID)
+		if newTask.QuotedPoints != 750 || newTask.BillingRuleVersionID != published.ID {
+			t.Fatalf("new task = quote %.0f version %s, want 750/%s", newTask.QuotedPoints, newTask.BillingRuleVersionID, published.ID)
 		}
 	})
 }
