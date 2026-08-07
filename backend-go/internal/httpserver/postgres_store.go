@@ -1063,6 +1063,9 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		return generationTask{}, err
 	}
 	rule := billingRuleForRequest(req, capabilityData)
+	if err := requireGenerationBillingRule(req, rule); err != nil {
+		return generationTask{}, err
+	}
 	pointCost := generationPointCostForRequest(req, capabilityData)
 	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
@@ -1222,6 +1225,9 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		return generationTask{}, err
 	}
 	rule := billingRuleForRequest(req, capabilityData)
+	if err := requireGenerationBillingRule(req, rule); err != nil {
+		return generationTask{}, err
+	}
 	pointCost := generationPointCostForRequest(req, capabilityData)
 	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
@@ -1371,6 +1377,9 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 		return generationTask{}, err
 	}
 	rule := billingRuleForRequest(req, capabilityData)
+	if err := requireGenerationBillingRule(req, rule); err != nil {
+		return generationTask{}, err
+	}
 	if pointCost <= 0 {
 		pointCost = generationPointCostForRequest(req, capabilityData)
 	}

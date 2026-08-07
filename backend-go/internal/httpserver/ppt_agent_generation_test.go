@@ -373,7 +373,7 @@ func TestLegacyPPTGenerateUsesPersistedAgentStateAndSingleBillingLifecycle(t *te
 		"autoThemeEnabled":true,
 		"enableWebSearch":true,
 			"imageSource":"ai",
-			"textModel":"kimi-k2.6",
+			"textModel":"deepseek-v4-flash",
 			"imageModel":"gpt-image-2",
 		"imageStyle":"editorial isometric",
 		"peopleStyle":"natural professionals",
@@ -404,7 +404,7 @@ func TestLegacyPPTGenerateUsesPersistedAgentStateAndSingleBillingLifecycle(t *te
 	}
 	if ready.Tone != "pitch" || ready.TextContent != "detailed" || ready.Scenario != "analysis-report" ||
 		ready.GenerationAspectRatio != "16:9" || ready.Theme != "legacy-theme" || !ready.AutoThemeEnabled || !ready.EnableWebSearch ||
-		ready.ImageSource != "ai" || ready.TextModel != "kimi-k2.6" || ready.ImageModel != "gpt-image-2" ||
+		ready.ImageSource != "ai" || ready.TextModel != "deepseek-v4-flash" || ready.ImageModel != "gpt-image-2" ||
 		ready.ImageStyle != "editorial isometric" || ready.PeopleStyle != "natural professionals" ||
 		ready.ImageLighting != "warm studio" || ready.ImageComposition != "image_left" || ready.TextInImage {
 		t.Fatalf("legacy adapter lost canonical DeckSpec after generation: %#v", ready)

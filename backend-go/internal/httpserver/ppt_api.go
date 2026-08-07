@@ -110,33 +110,7 @@ type pptModelOption struct {
 }
 
 var pptTextModels = []pptModelOption{
-	{Label: "Kimi K2.6", Value: "kimi-k2.6", Provider: "Moonshot/Kimi", ProviderType: "openai", Group: "当前后台配置", Description: "通过后台 OpenAI 兼容网关生成 PPT 大纲"},
-	{Label: "GPT-4o-mini", Value: "gpt-4o-mini", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "快速生成日常演示草稿"},
-	{Label: "GPT-4o", Value: "gpt-4o", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "兼顾速度和质量的云模型"},
-	{Label: "GPT-4.1-mini", Value: "gpt-4.1-mini", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "适合结构化生成的轻量模型"},
-	{Label: "GPT-4.1-nano", Value: "gpt-4.1-nano", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "更快、更低成本的 GPT-4.1 模型"},
-	{Label: "GPT-4.1", Value: "gpt-4.1", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "复杂演示的高质量生成模型"},
-	{Label: "GPT-5.2", Value: "gpt-5.2", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "旗舰 GPT 模型"},
-	{Label: "GPT-5.2 Chat", Value: "gpt-5.2-chat-latest", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "ChatGPT 风格的 GPT-5.2 模型"},
-	{Label: "GPT-5.2 Pro", Value: "gpt-5.2-pro", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "适合更高难度任务的高算力模型"},
-	{Label: "GPT-5.1", Value: "gpt-5.1", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "支持复杂推理的旗舰模型"},
-	{Label: "GPT-5", Value: "gpt-5", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "上一代 GPT-5 推理模型"},
-	{Label: "GPT-5-mini", Value: "gpt-5-mini", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "更快、更经济的 GPT-5 模型"},
-	{Label: "GPT-5-nano", Value: "gpt-5-nano", Provider: "OpenAI", ProviderType: "openai", Group: "云模型", Description: "最快、最低成本的 GPT-5 模型"},
-	{Label: "DeepSeek-V3", Value: "deepseek-v3", Provider: "NewAPI", ProviderType: "newapi", Group: "平台模型", Description: "通过当前平台网关接入的 DeepSeek 文本模型"},
-	{Label: "Qwen-Max", Value: "qwen-max", Provider: "NewAPI", ProviderType: "newapi", Group: "平台模型", Description: "通过当前平台网关接入的通义文本模型"},
-	{Label: "Doubao Pro", Value: "doubao-pro", Provider: "NewAPI", ProviderType: "newapi", Group: "平台模型", Description: "通过当前平台网关接入的火山文本模型"},
-	{Label: "llama3.1:8b", Value: "ollama:llama3.1:8b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的本地模型建议，首次使用时可由后端拉取", Downloadable: true},
-	{Label: "llama3.1:70b", Value: "ollama:llama3.1:70b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的本地模型建议，适合更强本地推理", Downloadable: true},
-	{Label: "llama3.2:3b", Value: "ollama:llama3.2:3b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的轻量本地模型建议", Downloadable: true},
-	{Label: "llama3.2:8b", Value: "ollama:llama3.2:8b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的通用本地模型建议", Downloadable: true},
-	{Label: "mistral:7b", Value: "ollama:mistral:7b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的本地模型建议", Downloadable: true},
-	{Label: "codellama:7b", Value: "ollama:codellama:7b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的代码和结构化内容本地模型建议", Downloadable: true},
-	{Label: "qwen2.5:7b", Value: "ollama:qwen2.5:7b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的中文友好本地模型建议", Downloadable: true},
-	{Label: "gemma2:9b", Value: "ollama:gemma2:9b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的高性价比本地模型建议", Downloadable: true},
-	{Label: "phi3:3.8b", Value: "ollama:phi3:3.8b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的小尺寸本地模型建议", Downloadable: true},
-	{Label: "neural-chat:7b", Value: "ollama:neural-chat:7b", Provider: "Ollama", ProviderType: "ollama", Group: "可下载 Ollama 模型", Description: "参考项目的对话式本地模型建议", Downloadable: true},
-	{Label: "LM Studio 本地模型", Value: "lmstudio:local-model", Provider: "LM Studio", ProviderType: "lmstudio", Group: "本地 LM Studio 模型", Description: "后端接入本地模型发现接口后会替换为真实模型列表"},
+	{Label: "DeepSeek V4 Flash", Value: "deepseek-v4-flash", Provider: "NewAPI", ProviderType: "newapi", Group: "云模型", Description: "通过平台 OpenAI 兼容网关生成 PPT 大纲"},
 }
 
 var pptImageModels = []pptModelOption{
@@ -1540,28 +1514,7 @@ func (a api) pptProviderConfigured() bool {
 }
 
 func (a api) pptTextModelOptions() []pptModelOption {
-	models := append([]pptModelOption{}, pptTextModels...)
-	configured := strings.TrimSpace(a.cfg.PPTTextModel)
-	if configured == "" || pptModelOptionExists(models, configured) {
-		return models
-	}
-	return append([]pptModelOption{{
-		Label:        configured,
-		Value:        configured,
-		Provider:     "Configured",
-		ProviderType: "openai",
-		Group:        "当前后台配置",
-		Description:  "后台环境变量 PPT_TEXT_MODEL 当前配置的文本模型",
-	}}, models...)
-}
-
-func pptModelOptionExists(models []pptModelOption, value string) bool {
-	for _, item := range models {
-		if strings.EqualFold(strings.TrimSpace(item.Value), strings.TrimSpace(value)) {
-			return true
-		}
-	}
-	return false
+	return append([]pptModelOption(nil), pptTextModels...)
 }
 
 func outlineRequestFromGenerate(req pptapp.GenerateRequest) pptOutlineGenerateRequest {

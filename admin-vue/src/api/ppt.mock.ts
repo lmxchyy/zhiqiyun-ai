@@ -26,33 +26,7 @@ const mockImagePalettes = [
 ];
 
 export const mockTextModels: PptModelOption[] = [
-  { label: "Kimi K2.6", value: "kimi-k2.6", provider: "Moonshot/Kimi", providerType: "openai", group: "当前后台配置", description: "通过后台 OpenAI 兼容网关生成 PPT 大纲" },
-  { label: "GPT-4o-mini", value: "gpt-4o-mini", provider: "OpenAI", providerType: "openai", group: "云模型", description: "快速生成日常演示草稿" },
-  { label: "GPT-4o", value: "gpt-4o", provider: "OpenAI", providerType: "openai", group: "云模型", description: "兼顾速度和质量的云模型" },
-  { label: "GPT-4.1-mini", value: "gpt-4.1-mini", provider: "OpenAI", providerType: "openai", group: "云模型", description: "适合结构化生成的轻量模型" },
-  { label: "GPT-4.1-nano", value: "gpt-4.1-nano", provider: "OpenAI", providerType: "openai", group: "云模型", description: "更快、更低成本的 GPT-4.1 模型" },
-  { label: "GPT-4.1", value: "gpt-4.1", provider: "OpenAI", providerType: "openai", group: "云模型", description: "复杂演示的高质量生成模型" },
-  { label: "GPT-5.2", value: "gpt-5.2", provider: "OpenAI", providerType: "openai", group: "云模型", description: "旗舰 GPT 模型" },
-  { label: "GPT-5.2 Chat", value: "gpt-5.2-chat-latest", provider: "OpenAI", providerType: "openai", group: "云模型", description: "ChatGPT 风格的 GPT-5.2 模型" },
-  { label: "GPT-5.2 Pro", value: "gpt-5.2-pro", provider: "OpenAI", providerType: "openai", group: "云模型", description: "适合更高难度任务的高算力模型" },
-  { label: "GPT-5.1", value: "gpt-5.1", provider: "OpenAI", providerType: "openai", group: "云模型", description: "支持复杂推理的旗舰模型" },
-  { label: "GPT-5", value: "gpt-5", provider: "OpenAI", providerType: "openai", group: "云模型", description: "上一代 GPT-5 推理模型" },
-  { label: "GPT-5-mini", value: "gpt-5-mini", provider: "OpenAI", providerType: "openai", group: "云模型", description: "更快、更经济的 GPT-5 模型" },
-  { label: "GPT-5-nano", value: "gpt-5-nano", provider: "OpenAI", providerType: "openai", group: "云模型", description: "最快、最低成本的 GPT-5 模型" },
-  { label: "DeepSeek-V3", value: "deepseek-v3", provider: "NewAPI", providerType: "newapi", group: "平台模型", description: "通过当前平台网关接入的 DeepSeek 文本模型" },
-  { label: "Qwen-Max", value: "qwen-max", provider: "NewAPI", providerType: "newapi", group: "平台模型", description: "通过当前平台网关接入的通义文本模型" },
-  { label: "Doubao Pro", value: "doubao-pro", provider: "NewAPI", providerType: "newapi", group: "平台模型", description: "通过当前平台网关接入的火山文本模型" },
-  { label: "llama3.1:8b", value: "ollama:llama3.1:8b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的本地模型建议，首次使用时可由后端拉取", downloadable: true },
-  { label: "llama3.1:70b", value: "ollama:llama3.1:70b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的本地模型建议，适合更强本地推理", downloadable: true },
-  { label: "llama3.2:3b", value: "ollama:llama3.2:3b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的轻量本地模型建议", downloadable: true },
-  { label: "llama3.2:8b", value: "ollama:llama3.2:8b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的通用本地模型建议", downloadable: true },
-  { label: "mistral:7b", value: "ollama:mistral:7b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的本地模型建议", downloadable: true },
-  { label: "codellama:7b", value: "ollama:codellama:7b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的代码和结构化内容本地模型建议", downloadable: true },
-  { label: "qwen2.5:7b", value: "ollama:qwen2.5:7b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的中文友好本地模型建议", downloadable: true },
-  { label: "gemma2:9b", value: "ollama:gemma2:9b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的高性价比本地模型建议", downloadable: true },
-  { label: "phi3:3.8b", value: "ollama:phi3:3.8b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的小尺寸本地模型建议", downloadable: true },
-  { label: "neural-chat:7b", value: "ollama:neural-chat:7b", provider: "Ollama", providerType: "ollama", group: "可下载 Ollama 模型", description: "参考项目的对话式本地模型建议", downloadable: true },
-  { label: "LM Studio 本地模型", value: "lmstudio:local-model", provider: "LM Studio", providerType: "lmstudio", group: "本地 LM Studio 模型", description: "后端接入本地模型发现接口后会替换为真实模型列表" }
+  { label: "DeepSeek V4 Flash", value: "deepseek-v4-flash", provider: "NewAPI", providerType: "newapi", group: "当前后台配置", description: "通过后台 OpenAI 兼容网关生成 PPT 大纲" }
 ];
 
 export const mockImageModels: PptModelOption[] = [

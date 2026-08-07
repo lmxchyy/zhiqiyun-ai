@@ -1383,6 +1383,7 @@ func newPPTAgentHTTPHarness(t *testing.T) pptAgentHTTPHarness {
 	t.Helper()
 	dataPath := filepath.Join(t.TempDir(), "platform.json")
 	store := newJSONStore(dataPath)
+	seedDeepSeekPPTBillingRuleForTest(t, store)
 	authorizations := &pptAgentAuthorizationStore{
 		jsonStore: store,
 		authorization: modelCallAuthorization{
@@ -1404,6 +1405,7 @@ func newPPTAgentHTTPHarnessWithPersistedSecretTasks(t *testing.T) (pptAgentHTTPH
 	t.Helper()
 	dataPath := filepath.Join(t.TempDir(), "platform.json")
 	store := newJSONStore(dataPath)
+	seedDeepSeekPPTBillingRuleForTest(t, store)
 	data, err := store.AdminData()
 	if err != nil {
 		t.Fatal(err)

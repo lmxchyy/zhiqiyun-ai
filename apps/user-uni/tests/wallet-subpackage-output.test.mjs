@@ -80,3 +80,13 @@ test("existing native generation controls remain patched in generated output", (
     assert.match(studioWxml, new RegExp(handler));
   }
 });
+
+test("generated PPT entry points present the active DeepSeek V4 Flash text model", () => {
+  const workbenchJs = readOutput("components/MiniProgramRoleWorkbench.js");
+  const studioJs = readOutput("components/v531/V531StudioPage.js");
+
+  assert.match(workbenchJs, /deepseek-v4-flash/);
+  assert.match(studioJs, /deepseek-v4-flash/);
+  assert.doesNotMatch(workbenchJs, /Kimi K2\.6|DeepSeek V3|GPT-4o-mini/);
+  assert.doesNotMatch(studioJs, /Kimi K2\.6/);
+});

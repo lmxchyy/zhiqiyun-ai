@@ -113,7 +113,7 @@ export const usePptStore = defineStore("ppt", {
     autoThemeEnabled: true,
     enableWebSearch: false,
     imageSource: "ai",
-    textModel: "kimi-k2.6",
+    textModel: "deepseek-v4-flash",
     imageModel: "default-image",
     imageStyle: "modern enterprise illustration",
     peopleStyle: "professional natural people",

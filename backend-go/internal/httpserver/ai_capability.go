@@ -175,7 +175,7 @@ func defaultAIModules(now string) []adminAIModule {
 			ID: "ai_module_ppt_generation", ModuleCode: modulePPTGeneration, Name: "PPT文档生成",
 			Description: "统一管理 PPT 提纲、内容生成、配图和导出参数。",
 			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_month", "plan_pro", "plan_year"},
-			BoundModels: []string{"kimi-k2.6", "ppt-text-model"}, DefaultSchemaID: "schema_ppt_generation_default",
+			BoundModels: []string{"deepseek-v4-flash"}, DefaultSchemaID: "schema_ppt_generation_default",
 			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
 		},
 	}
@@ -188,8 +188,7 @@ func defaultAIModels(now string) []adminAIModel {
 		{ID: "ai_model_mock_video", ModelName: "mock-video", ModelType: "video", Provider: "Local", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_seedance_fast_20", ModelName: "seedance-fast-2.0", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_doubao_seedance_20", ModelName: "doubao-seedance-2.0", ModelType: "video", Provider: "移动云", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 30, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "ai_model_kimi_k26", ModelName: "kimi-k2.6", ModelType: "text", Provider: "NewAPI", CapabilityCode: []string{"ppt_outline", "ppt_content", "ppt_export"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", FallbackModel: "ppt-text-model", SortWeight: 10, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "ai_model_ppt_text", ModelName: "ppt-text-model", ModelType: "text", Provider: "Local", CapabilityCode: []string{"ppt_outline", "ppt_content"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", SortWeight: 20, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_deepseek_v4_flash", ModelName: "deepseek-v4-flash", ModelType: "text", Provider: "NewAPI", CapabilityCode: []string{"ppt_outline", "ppt_content", "ppt_export"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 	}
 }
 
@@ -225,7 +224,7 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
 		},
 		{
-			ID: "schema_ppt_generation_default", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6",
+			ID: "schema_ppt_generation_default", ModuleCode: modulePPTGeneration, ModelName: "deepseek-v4-flash",
 			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
 				{Key: "topic", Label: "PPT主题", Type: "textarea", Required: true, Placeholder: "输入演示文稿主题和要求", UserEditable: true, Visible: true},
 				{Key: "page_count", Label: "页数", Type: "number", Required: true, Default: float64(5), Min: floatPtr(1), Max: floatPtr(20), UserEditable: true, Visible: true},
@@ -246,7 +245,7 @@ func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
 	return []adminTenantModuleLimit{
 		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(15)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"kimi-k2.6", "ppt-text-model"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"deepseek-v4-flash"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_plan_free_image", TenantID: "default", PackageID: "plan_free", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard"}}, "n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
 }
@@ -259,7 +258,6 @@ func defaultBillingRules(now string) []adminBillingRule {
 		{ID: "billing_rule_video_grok_image", ModuleCode: moduleVideoGeneration, ModelName: "grok-video-image", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_seedance", ModuleCode: moduleVideoGeneration, ModelName: "seedance-fast-2.0", BillingType: "per_second", BasePrice: 80, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_doubao_seedance", ModuleCode: moduleVideoGeneration, ModelName: "doubao-seedance-2.0", BillingType: "per_second", BasePrice: 80, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2), "4k": float64(4)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "billing_rule_ppt_kimi", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6", BillingType: "per_page", BasePrice: 1, CostPrice: 0.4, CurrencyType: "credit", ParameterMultiplier: map[string]any{"with_images": map[string]any{"true": float64(1), "false": float64(1)}, "uploaded_file": map[string]any{"true": float64(1), "false": float64(1)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
 }
 
@@ -620,6 +618,9 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if modelName == "" {
 		modelName = defaultAllowedModelNameForModule(data, user, moduleCode)
 	}
+	if moduleCode == modulePPTGeneration && !strings.EqualFold(strings.TrimSpace(modelName), "deepseek-v4-flash") {
+		return resolvedModuleSchema{}, fmt.Errorf("PPT model must be deepseek-v4-flash, got %s", modelName)
+	}
 	model := findAIModel(data.AIModels, moduleCode, modelName)
 	if model.ID == "" {
 		return resolvedModuleSchema{}, fmt.Errorf("ai model %s is not configured for module %s", modelName, moduleCode)
@@ -640,6 +641,9 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	}
 	rule := selectBillingRule(data.BillingRules, moduleCode, model.ModelName)
 	if rule.ID == "" {
+		if moduleCode == modulePPTGeneration {
+			return resolvedModuleSchema{}, fmt.Errorf("billing rule is not configured for PPT model %s", model.ModelName)
+		}
 		rule = fallbackBillingRule(moduleCode, model.ModelName)
 	}
 	finalSchema := applyLimitToSchema(schema.SchemaJSON, limit.LimitJSON)
@@ -827,6 +831,9 @@ func generationPointCostForRequest(req createGenerationTaskRequest, data adminPl
 		if moduleCode == "" {
 			moduleCode = moduleCodeForType(req.Type)
 		}
+		if moduleCode == modulePPTGeneration {
+			return 0
+		}
 		if moduleCode == moduleImageGeneration || moduleCode == "" {
 			return imageCount(req.Params) * modelPointCost(req.Model)
 		}
@@ -853,9 +860,23 @@ func billingRuleForRequest(req createGenerationTaskRequest, data adminPlatformDa
 	}
 	rule := selectBillingRule(data.BillingRules, moduleCode, req.Model)
 	if rule.ID == "" {
+		if moduleCode == modulePPTGeneration {
+			return adminBillingRule{}
+		}
 		return fallbackBillingRule(moduleCode, req.Model)
 	}
 	return rule
+}
+
+func requireGenerationBillingRule(req createGenerationTaskRequest, rule adminBillingRule) error {
+	moduleCode := canonicalModuleCode(requestModuleCode(req))
+	if moduleCode == "" {
+		moduleCode = moduleCodeForType(req.Type)
+	}
+	if moduleCode == modulePPTGeneration && rule.ID == "" {
+		return fmt.Errorf("billing rule is not configured for PPT model %s", strings.TrimSpace(req.Model))
+	}
+	return nil
 }
 
 func adminDataFromPlatformData(data platformData) adminPlatformData {

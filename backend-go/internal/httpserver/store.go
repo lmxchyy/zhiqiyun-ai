@@ -3269,6 +3269,9 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
+		if err := requireGenerationBillingRule(req, rule); err != nil {
+			return err
+		}
 		count := generationOutputAssetCount(req)
 		pointCost := generationPointCostForRequest(req, adminData)
 		account, err := personalPointAccountForUserState(points.memory, userID)
@@ -3453,6 +3456,9 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
+		if err := requireGenerationBillingRule(req, rule); err != nil {
+			return err
+		}
 		pointCost := generationPointCostForRequest(req, adminData)
 		account, err := personalPointAccountForUserState(points.memory, userID)
 		if err != nil {
@@ -3551,6 +3557,9 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
+		if err := requireGenerationBillingRule(req, rule); err != nil {
+			return err
+		}
 		task.Status = "SUCCEEDED"
 		task.TaskStatus = taskStatusSucceeded
 		task.BillingStatus = billingStatusCaptured

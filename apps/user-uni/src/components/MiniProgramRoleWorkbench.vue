@@ -952,7 +952,7 @@ let generationPollRun = 0;
 const pptSlideCount = ref(10);
 const pptDynamic = ref(true);
 const pptLanguage = ref<"zh" | "en">("zh");
-const pptModel = ref("GPT-4o-mini");
+const pptModel = ref("deepseek-v4-flash");
 const assetFilter = ref<AssetFilter>("all");
 const assetSearch = ref("");
 const mineView = ref<MineView>(props.initialMineView);
@@ -1754,7 +1754,7 @@ function togglePptLanguage() {
 }
 
 function cyclePptModel() {
-  const models = ["GPT-4o-mini", "Kimi K2.6", "DeepSeek V3"];
+  const models = ["deepseek-v4-flash"];
   const index = models.indexOf(pptModel.value);
   pptModel.value = models[(index + 1) % models.length] || models[0];
 }

@@ -23,7 +23,7 @@ func TestJSONPPTAndRAGUsageConsumePersonalLotsAndReplayIsIdempotent(t *testing.T
 		{
 			name: "ppt",
 			record: func(store *jsonStore, userID string) error {
-				_, err := store.RecordPPTGenerationUsage(pptapp.Task{TaskID: "ppt-usage-one", UserID: userID, SlideCount: 1, TextModel: "ppt-text-model"})
+				_, err := store.RecordPPTGenerationUsage(pptapp.Task{TaskID: "ppt-usage-one", UserID: userID, SlideCount: 1, TextModel: "deepseek-v4-flash"})
 				return err
 			},
 		},
@@ -36,6 +36,9 @@ func TestJSONPPTAndRAGUsageConsumePersonalLotsAndReplayIsIdempotent(t *testing.T
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			store, accountID, userID := seedJSONPersonalUsageBalance(t, 10)
+			if testCase.name == "ppt" {
+				seedDeepSeekPPTBillingRuleForTest(t, store)
+			}
 			if err := testCase.record(store, userID); err != nil {
 				t.Fatal(err)
 			}

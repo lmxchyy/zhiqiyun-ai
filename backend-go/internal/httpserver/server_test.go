@@ -1084,6 +1084,7 @@ func TestFirstRechargeRequires996AgentPackage(t *testing.T) {
 func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	store := newJSONStore(dataPath)
+	seedDeepSeekPPTBillingRuleForTest(t, store)
 	grantPermanentTestPoints(t, store, "user_000002", 100)
 	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, &pptInMemoryCapabilityStore{jsonStore: store})
 	handler := server.Handler
@@ -1100,7 +1101,7 @@ func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	estimateResponse := authedRequest(t, handler, http.MethodPost, "/api/v1/ppt/estimate", bytes.NewBufferString(`{"prompt":"门店增长计划","slideCount":3,"textModel":"kimi-k2.6","imageSource":"none"}`), token)
+	estimateResponse := authedRequest(t, handler, http.MethodPost, "/api/v1/ppt/estimate", bytes.NewBufferString(`{"prompt":"门店增长计划","slideCount":3,"textModel":"deepseek-v4-flash","imageSource":"none"}`), token)
 	if estimateResponse.Code != http.StatusOK {
 		t.Fatalf("ppt estimate status = %d, body = %s", estimateResponse.Code, estimateResponse.Body.String())
 	}
@@ -1132,6 +1133,7 @@ func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	store := newJSONStore(dataPath)
+	seedDeepSeekPPTBillingRuleForTest(t, store)
 	grantPermanentTestPoints(t, store, "user_000002", 100)
 	handler, _ := newInMemoryPPTTestHandler(t, config.Config{
 		Addr:      ":0",
@@ -1159,7 +1161,7 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 		"tone":"education",
 		"theme":"medical",
 		"imageSource":"ai",
-		"textModel":"kimi-k2.6",
+		"textModel":"deepseek-v4-flash",
 		"outline":{
 			"title":"Diabetes diet education",
 			"slides":[
@@ -1222,7 +1224,7 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 	found := false
 	billingTaskID := ""
 	for _, item := range usage.Items {
-		if item.MetricCode != billingMetricPPTGenerate || item.Type != "PPT_GENERATION" || item.Model != "kimi-k2.6" {
+		if item.MetricCode != billingMetricPPTGenerate || item.Type != "PPT_GENERATION" || item.Model != "deepseek-v4-flash" {
 			continue
 		}
 		found = true

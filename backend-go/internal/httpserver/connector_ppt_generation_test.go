@@ -7,7 +7,7 @@ import (
 )
 
 func TestConnectorPPTBillingRequestUsesPreparedEnterpriseAuthorization(t *testing.T) {
-	data := withAdminDefaults(adminPlatformData{})
+	data := withDeepSeekPPTBillingRuleForTest(withAdminDefaults(adminPlatformData{}))
 	user := adminUser{ID: "connector-user", Role: "MEMBER", Status: "ACTIVE", PlanID: "plan_free"}
 	authorization := modelCallAuthorization{
 		ContextType: contextEnterprise, TenantID: "tenant-connector", OrganizationID: "organization-connector",

@@ -1,6 +1,7 @@
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../src/api/client.ts";
+import { mockTextModels } from "../src/api/ppt.mock.ts";
 import * as pptApi from "../src/api/ppt.ts";
 import { usePptStore } from "../src/stores/ppt.ts";
 
@@ -111,6 +112,20 @@ describe("PPT Agent admin API", () => {
 });
 
 describe("PPT Agent store", () => {
+  it("offers only the backend-supported DeepSeek V4 Flash model for new PPT sessions", () => {
+    const store = usePptStore();
+
+    expect(store.textModel).toBe("deepseek-v4-flash");
+    expect(mockTextModels).toEqual([
+      expect.objectContaining({
+        label: "DeepSeek V4 Flash",
+        value: "deepseek-v4-flash",
+        provider: "NewAPI",
+        providerType: "newapi"
+      })
+    ]);
+  });
+
   it.each([
     ["DRAFT", "idle"],
     ["OUTLINE_READY", "outline_ready"],
