@@ -211,6 +211,42 @@
             </view>
           </template>
 
+          <template v-else-if="creationMode === 'infographic'">
+            <FreeImageEditCreation
+              :image-path="creationReferencePaths[0] || ''"
+              :prompt="creationPrompt"
+              :busy="generationBusy"
+              :selecting-image="creationReferenceSelecting"
+              :error="creationError"
+              @back="returnToCreationHub"
+              @choose-image="chooseCreationReferenceImages"
+              @remove-image="removeCreationReference(0)"
+              @preview-image="previewCreationReference(0)"
+              @update:prompt="updateFreeImageEditPrompt"
+              @generate="guestAwareGenerateTap"
+            />
+            <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone]">
+              <image
+                v-if="latestGenerationTask.resultUrl && ['image', 'infographic'].includes(latestGenerationTask.resultType || '')"
+                class="v31-generation-result"
+                :src="latestGenerationTask.resultUrl"
+                mode="aspectFill"
+                @click="previewLatestGenerationResult"
+              />
+              <view class="v31-generation-summary">
+                <view class="v31-generation-title-row"><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text v-if="generationNoticePending" class="v31-live-badge">实时</text></view>
+                <text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ generationStatusLabel }}</text>
+                <view v-if="generationNoticePending" class="v31-generation-progress-track">
+                  <view :class="['v31-generation-progress-value', { indeterminate: !generationHasProgress }]" :style="generationProgressStyle" />
+                </view>
+                <text v-if="generationNoticePending" class="v31-generation-feedback">{{ generationFeedbackText }}</text>
+              </view>
+              <button v-if="latestGenerationTask.tone === 'success'" @click="openLatestGenerationResult">{{ latestGenerationTask.resultId ? "查看结果" : "查看作品" }}</button>
+              <button v-else-if="latestGenerationTask.tone === 'danger'" @click="handleGenerateTap">重新生成</button>
+              <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
+            </view>
+          </template>
+
           <template v-else>
             <view v-if="creationMode === 'video' && creationVideoModeSwitchVisible" class="v31-video-mode-switch">
               <button
@@ -688,6 +724,7 @@ import {
   readInspirationDraft,
   type InspirationCreationDraft,
 } from "../features/inspiration/draft";
+import { freeImageEditValidationMessage } from "../features/generation/freeImageEdit";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -699,6 +736,7 @@ import V531HomePage from "./v531/V531HomePage.vue";
 import V531ProfilePage from "./v531/V531ProfilePage.vue";
 import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
+import FreeImageEditCreation from "./creation/FreeImageEditCreation.vue";
 import { fetchAssetDetail } from "../features/assets/api";
 import { beginWorksPerformanceStep } from "../features/assets/performance";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
@@ -732,6 +770,22 @@ import type {
   MiniProgramTabId
 } from "../config/miniProgramPages";
 
+function updateFreeImageEditPrompt(prompt: string) {
+  creationPrompt.value = prompt;
+  creationError.value = "";
+}
+
+function validateFreeImageEditRequest() {
+  if (creationMode.value !== "infographic") return true;
+  const message = freeImageEditValidationMessage(
+    creationReferencePaths.value[0] || "",
+    creationPrompt.value,
+  );
+  creationError.value = message;
+  if (message) uni.showToast({ title: message, icon: "none" });
+  return !message;
+}
+
 function guestAwareGenerateTap() {
   if (!allowedCreationModes.value.includes(creationMode.value)) {
     uni.showToast({ title: "该能力暂未向小程序开放", icon: "none" });
@@ -745,6 +799,7 @@ function guestAwareGenerateTap() {
     return;
   }
   if (!validateActiveInspirationReferences()) return;
+  if (!validateFreeImageEditRequest()) return;
   trackLogin("guest_click_generate", { mode: creationMode.value });
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
@@ -996,6 +1051,8 @@ const creationReferenceEnabled = computed(
 const creationReferenceTitle = computed(() => creationMode.value === "video" ? "首帧图" : "参考图");
 const creationReferenceLimit = computed(() => creationMode.value === "video"
   ? Math.max(1, Math.min(1, videoModelCapabilities.value.maxReferenceImages || 1))
+  : creationMode.value === "infographic"
+  ? 1
   : inspirationReferenceLimit(activeInspirationDraft.value));
 const creationReferenceDescription = computed(() => {
   if (creationSourceLoading.value) return "正在载入原作品...";
@@ -1474,7 +1531,7 @@ function chooseCreationReferenceImages() {
     return;
   }
   const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
-  if (!remaining) {
+  if (!remaining && creationMode.value !== "infographic") {
     uni.showToast({ title: creationMode.value === "video" ? "首帧图最多 1 张" : `最多添加 ${creationReferenceLimit.value} 张参考图`, icon: "none" });
     return;
   }
@@ -1501,9 +1558,13 @@ function chooseCreationReferenceImages() {
 
 function appendCreationReferencePaths(paths: string[]) {
   if (!requestLogin("登录后可上传参考图片")) return;
-  creationReferencePaths.value = [...creationReferencePaths.value, ...paths]
-    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-    .slice(0, creationReferenceLimit.value);
+  if (creationMode.value === "infographic") {
+    creationReferencePaths.value = paths.filter(Boolean).slice(0, 1);
+  } else {
+    creationReferencePaths.value = [...creationReferencePaths.value, ...paths]
+      .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+      .slice(0, creationReferenceLimit.value);
+  }
   creationSourceError.value = "";
   creationError.value = "";
 }
@@ -2575,6 +2636,7 @@ async function resolvePptGenerationModels() {
 
 async function submitCreation(prompt: string) {
   if (!validateActiveInspirationReferences()) return;
+  if (!validateFreeImageEditRequest()) return;
   const startedAt = Date.now();
   generationSubmitting.value = true;
   generationProgress.value = 0;
