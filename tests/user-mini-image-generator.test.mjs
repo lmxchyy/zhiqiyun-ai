@@ -12,6 +12,7 @@ import {
 } from "../apps/user-uni/src/features/generation/imageCreation.ts";
 
 const componentURL = new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url);
+const workbenchURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url);
 
 test("image creation exposes approved defaults and options", () => {
   assert.equal(imageAspectOptions[0].value, "auto");
@@ -106,4 +107,38 @@ test("AI image generator preserves fixed-footer clearance at tablet widths", asy
     source,
     /@media \(min-width: 768px\) \{[\s\S]*?\.ai-image-generator__content\s*\{[\s\S]*?padding-bottom:\s*calc\(112px \+ env\(safe-area-inset-bottom\)\);/,
   );
+});
+
+test("workbench renders AI image generation as a full-page controlled component", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /import AiImageGenerator/);
+  assert.match(source, /isImageCreationPage/);
+  assert.match(source, /<AiImageGenerator/);
+  assert.match(source, /v-model:prompt="creationPrompt"/);
+  assert.match(source, /v-model:aspect-ratio="imageAspectRatio"/);
+  assert.match(source, /v-model:quality="imageQuality"/);
+  assert.match(source, /v-model:model="selectedImageModelCode"/);
+  assert.match(source, /v-model:count="imageCount"/);
+  assert.match(source, /@generate="guestAwareGenerateTap"/);
+});
+
+test("image controls feed the existing generation request", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /businessSdk\.models\.list/);
+  assert.match(source, /imageModelOptions/);
+  assert.match(source, /model:\s*generationConfig\.model/);
+  assert.match(source, /requestedQuality =[^;]*imageQuality\.value/s);
+  assert.match(source, /requestedSize =[^;]*imageAspectRatio\.value/s);
+  assert.match(source, /count:[^,]*imageCount\.value/s);
+  assert.match(source, /businessSdk\.generation\.createTask/);
+  assert.match(source, /uploadCreationReferenceImages/);
+});
+
+test("image integration preserves guest restore, inspiration drafts, and works routing", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /guestAwareGenerateTap/);
+  assert.match(source, /activeInspirationDraft/);
+  assert.match(source, /restoreCreationSource/);
+  assert.match(source, /openLatestGenerationResult/);
+  assert.match(source, /isGuest/);
 });

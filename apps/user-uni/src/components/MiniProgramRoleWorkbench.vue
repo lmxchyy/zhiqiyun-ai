@@ -1,6 +1,8 @@
 <template>
-  <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage }]" :style="miniWorkbenchSafeAreaStyle">
-    <view v-if="!isFreeImageEditPage" class="native-safe-note"></view>
+  <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage, 'ai-image-generator-shell': isImageCreationPage }]" :style="miniWorkbenchSafeAreaStyle">
+    <template v-if="!isImageCreationPage">
+      <view v-if="!isFreeImageEditPage" class="native-safe-note"></view>
+    </template>
 
     <view v-if="activeRole !== 'user' && !isUserMineDetail" class="business-header">
       <image class="business-logo" :src="loginLogo" mode="aspectFit" />
@@ -38,6 +40,33 @@
 
     <view v-else class="role-content">
       <template v-if="activeRole === 'user'">
+        <view v-if="isImageCreationPage" class="ai-image-generator-page">
+          <AiImageGenerator
+            v-model:prompt="creationPrompt"
+            v-model:aspect-ratio="imageAspectRatio"
+            v-model:quality="imageQuality"
+            v-model:model="selectedImageModelCode"
+            v-model:count="imageCount"
+            :models="imageModels"
+            :reference-images="creationReferencePaths"
+            :reference-limit="creationReferenceLimit"
+            :busy="generationBusy"
+            :selecting-reference="creationReferenceSelecting"
+            :models-loading="imageModelsLoading"
+            :disabled-reason="imageGeneratorDisabledReason"
+            :error="creationError"
+            :status-message="imageGeneratorStatusMessage"
+            :estimate-label="imageEstimateLabel"
+            @back="returnToCreationHub"
+            @help="showImageGeneratorHelp"
+            @choose-reference="chooseCreationReferenceImages"
+            @remove-reference="removeCreationReference"
+            @preview-reference="previewCreationReference"
+            @optimize="optimizeImagePrompt"
+            @generate="guestAwareGenerateTap"
+          />
+        </view>
+        <template v-else-if="isFreeImageEditPage">
         <view v-if="isFreeImageEditPage" class="free-image-edit-page">
           <FreeImageEditCreation
             :image-path="creationReferencePaths[0] || ''"
@@ -73,6 +102,7 @@
             <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
           </view>
         </view>
+        </template>
         <template v-else>
         <view v-if="isGuest && (activeTab === 'home' || activeTab === 'create')" class="guest-browse-banner">
           <view class="guest-browse-copy">
@@ -882,6 +912,14 @@ import {
   defaultFreeImageEditPrompt,
   freeImageEditValidationMessage,
 } from "../features/generation/freeImageEdit";
+import {
+  imageModelOptions,
+  imagePointEstimateLabel,
+  resolveImageModelCode,
+  type ImageAspectRatio,
+  type ImageGeneratorModelOption,
+  type ImageQuality,
+} from "../features/generation/imageCreation";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -893,6 +931,7 @@ import V531HomePage from "./v531/V531HomePage.vue";
 import V531ProfilePage from "./v531/V531ProfilePage.vue";
 import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
+import AiImageGenerator from "./creation/AiImageGenerator.vue";
 import FreeImageEditCreation from "./creation/FreeImageEditCreation.vue";
 import { fetchAssetDetail } from "../features/assets/api";
 import { beginWorksPerformanceStep } from "../features/assets/performance";
@@ -933,6 +972,21 @@ import type {
 function updateFreeImageEditPrompt(prompt: string) {
   creationPrompt.value = prompt;
   creationError.value = "";
+}
+
+function optimizeImagePrompt() {
+  const suffix = "，突出商品主体，商业摄影质感，留出清晰文案空间";
+  if (!creationPrompt.value.includes(suffix)) creationPrompt.value += suffix;
+  creationError.value = "";
+}
+
+function showImageGeneratorHelp() {
+  uni.showModal({
+    title: "AI 生图使用帮助",
+    content: "请描述画面主体、风格、颜色和用途；参考图片可帮助模型理解构图与视觉方向。",
+    showCancel: false,
+    confirmText: "知道了",
+  });
 }
 
 function ensureFreeImageEditDefaultPrompt() {
@@ -1130,6 +1184,13 @@ const userStore = useUserStore();
 const creationMode = ref<CreationMode>(props.initialCreationMode || "image");
 const creationPrompt = ref("");
 const creationReferencePaths = ref<string[]>([]);
+const imageAspectRatio = ref<ImageAspectRatio>("auto");
+const imageQuality = ref<ImageQuality>("1K");
+const imageCount = ref(1);
+const imageModels = ref<ImageGeneratorModelOption[]>([]);
+const selectedImageModelCode = ref("");
+const imageModelsLoading = ref(false);
+const imageModelsError = ref("");
 const creationLastFramePath = ref("");
 const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
 const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
@@ -1218,9 +1279,24 @@ const legacyActiveTab = computed<TabId>(() => activeTab.value);
 const isCreationDetail = computed(
   () => activeRole.value === "user" && activeTab.value === "create" && Boolean(props.initialCreationMode),
 );
+const isImageCreationPage = computed(
+  () => isCreationDetail.value && creationMode.value === "image",
+);
 const isFreeImageEditPage = computed(
   () => isCreationDetail.value && creationMode.value === "infographic",
 );
+const selectedImageModel = computed(
+  () => imageModels.value.find(model => model.code === selectedImageModelCode.value),
+);
+const imageEstimateLabel = computed(
+  () => imagePointEstimateLabel(selectedImageModel.value, imageCount.value),
+);
+const imageGeneratorDisabledReason = computed(() => {
+  if (imageModelsLoading.value) return "正在读取可用模型";
+  if (imageModelsError.value) return imageModelsError.value;
+  if (!selectedImageModelCode.value) return "暂无可用图片模型";
+  return "";
+});
 const isVideoCreationDetail = computed(() => isCreationDetail.value && creationMode.value === "video");
 const basicVideoSelectFields = computed(() => {
   const order = ["duration", "aspect_ratio", "resolution", "fps"];
@@ -1366,9 +1442,11 @@ const currentRoleMenuItems = computed(() => RoleMenuConfig[userStore.currentRole
 
 const activeCreation = computed(() => creationModules.value.find(item => item.id === creationMode.value) || creationModules.value[0] || allCreationModules[0]);
 const activeCreationName = computed(() => activeCreation.value.name);
-const activeCreationModel = computed(() => creationMode.value === "video" && selectedVideoModelCode.value
-  ? selectedVideoModelCode.value
-  : rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model);
+const activeCreationModel = computed(() => {
+  if (creationMode.value === "image" && selectedImageModelCode.value) return selectedImageModelCode.value;
+  if (creationMode.value === "video" && selectedVideoModelCode.value) return selectedVideoModelCode.value;
+  return rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model;
+});
 const activeCreationCost = computed(() => activeCreation.value.cost);
 const creationDetailSubtitle = computed(() => {
   if (creationMode.value !== "video") return "返回上一页不会丢失当前草稿";
@@ -1418,6 +1496,9 @@ const generationButtonLabel = computed(() => {
   const stage = generationStatusLabel.value || "生成中";
   return generationHasProgress.value ? `${stage} ${generationProgress.value}%` : `${stage}...`;
 });
+const imageGeneratorStatusMessage = computed(() => generationBusy.value
+  ? generationButtonLabel.value
+  : latestGenerationTask.value?.tone === "success" ? "生成完成，可前往作品中心查看" : "");
 const generationFeedbackText = computed(() => {
   const elapsed = generationElapsedSeconds.value > 0 ? `已等待 ${generationElapsedSeconds.value} 秒` : "刚刚提交";
   return generationHasProgress.value ? `后端进度 ${generationProgress.value}% · ${elapsed}` : `状态持续同步中 · ${elapsed}`;
@@ -1518,7 +1599,7 @@ watch(() => props.initialCreationMode, mode => {
 watch(
   () => [props.initialCreationAssetId, props.initialCreationIntent] as const,
   ([assetId, intent]) => {
-    if (assetId) void initializeCreationFromAsset(assetId, intent);
+    if (assetId) void restoreCreationSource(assetId, intent);
   },
   { immediate: true },
 );
@@ -1643,7 +1724,7 @@ function restoreActiveGeneration() {
   void pollGenerationTask(id, mode, startedAt, String(snapshot.prompt || creationPrompt.value));
 }
 
-async function initializeCreationFromAsset(assetId: string, intent: "edit" | "regenerate") {
+async function restoreCreationSource(assetId: string, intent: "edit" | "regenerate") {
   const normalizedId = String(assetId || "").trim();
   const requestKey = `${intent}:${normalizedId}`;
   if (!normalizedId || loadedCreationAssetKey.value === requestKey) return;
@@ -2433,6 +2514,10 @@ function selectCreationMode(mode: CreationMode) {
   creationPromptDrafts.value[creationMode.value] = creationPrompt.value;
   openStandalonePage(miniProgramCreationPages[mode]);
   void preloadCreationBackend(mode);
+  if (mode === "image") {
+    creationMode.value = mode;
+    void initializeImageModels();
+  }
 }
 
 function returnToCreationHub() {
@@ -3028,6 +3113,24 @@ async function initializeVideoModelForm() {
   await requestVideoModelSwitch(requested);
 }
 
+async function initializeImageModels() {
+  if (creationMode.value !== "image") return;
+  imageModelsLoading.value = true;
+  imageModelsError.value = "";
+  try {
+    imageModels.value = imageModelOptions(await businessSdk.models.list());
+    const requested = rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model;
+    selectedImageModelCode.value = resolveImageModelCode(imageModels.value, requested);
+    if (!selectedImageModelCode.value) imageModelsError.value = "暂无可用图片模型";
+  } catch {
+    imageModels.value = [];
+    selectedImageModelCode.value = "";
+    imageModelsError.value = "图片模型读取失败，请稍后重试";
+  } finally {
+    imageModelsLoading.value = false;
+  }
+}
+
 function clearVideoEstimateTimer() {
   if (videoEstimateTimer) {
     clearTimeout(videoEstimateTimer);
@@ -3172,10 +3275,10 @@ async function submitCreation(prompt: string) {
         : {};
       const requestedQuality = mode === "video"
         ? String(finalVideoParameters.resolution || "")
-        : restoredCreationString("quality", "imageQuality") || "standard";
+        : imageQuality.value;
       const requestedSize = mode === "video"
         ? String(finalVideoParameters.aspect_ratio || "")
-        : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
+        : imageAspectRatio.value;
       const finalVideoCapabilities = mode === "video"
         ? {
             ...generationConfig.videoCapabilities,
@@ -3193,7 +3296,9 @@ async function submitCreation(prompt: string) {
         quality: mode === "video"
           ? requestedQuality
           : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
-        count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
+        count: mode === "image" && imageCount.value
+          ? constrainedSchemaNumber(generationConfig.schema, "n", imageCount.value, 1)
+          : constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
         videoMode: mode === "video" ? videoGenerationMode.value : undefined,
         firstFrame: mode === "video" ? firstFrame : undefined,
@@ -3203,7 +3308,9 @@ async function submitCreation(prompt: string) {
         duration: mode === "video" && finalVideoParameters.duration !== undefined
           ? Number(finalVideoParameters.duration)
           : undefined,
-        parameters: mode === "video" ? finalVideoParameters : restoredCreationParams.value,
+        parameters: mode === "video"
+          ? finalVideoParameters
+          : { ...restoredCreationParams.value, aspect_ratio: imageAspectRatio.value },
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
@@ -3514,6 +3621,7 @@ onMounted(() => {
     ensureFreeImageEditDefaultPrompt();
   }
   if (creationMode.value === "video") void initializeVideoModelForm();
+  if (creationMode.value === "image") void initializeImageModels();
   void loadTerminalCapabilities();
   void refreshAll();
 });
@@ -3522,6 +3630,7 @@ watch(() => authStore.token, (nextToken, previousToken) => {
   if (nextToken === previousToken) return;
   if (!nextToken) clearAuthenticatedData();
   if (nextToken && creationMode.value === "video") void initializeVideoModelForm();
+  if (nextToken && creationMode.value === "image") void initializeImageModels();
   void refreshAll();
 });
 
@@ -3596,6 +3705,19 @@ onBackPress(() => {
   box-sizing: border-box;
   color: #111827;
   background: #f7f8fc;
+}
+
+.mini-workbench.ai-image-generator-shell {
+  padding: 0;
+  background: #f7f8fc;
+}
+
+.ai-image-generator-shell .role-content {
+  margin-top: 0;
+}
+
+.ai-image-generator-page {
+  min-height: 100vh;
 }
 
 .status-bar-spacer {
