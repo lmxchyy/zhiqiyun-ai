@@ -131,6 +131,7 @@ desktop.ini
 # Local working leftovers (do not push)
 # =========================
 .superpowers/
+.worktrees/
 artifacts/
 tools/tmp-*
 docs/superpowers/
