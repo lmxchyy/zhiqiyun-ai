@@ -78,6 +78,34 @@ func TestVideoGenerationEstimateMatchesFormalPointCostWithoutSideEffects(t *test
 	}
 }
 
+func TestVideoGenerationEstimateSeedanceDefaultMatches600(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	data, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := videoEstimateTestUser(t, data)
+	service := newAPI(store, config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, newLocalAuthSessions(), nil)
+	_, estimate, err := service.prepareVideoGenerationEstimate(data, user, generation.CreateRequest{
+		Type:   "TEXT_TO_VIDEO",
+		Prompt: "seedance default estimate",
+		Model:  "doubao-seedance-2.0",
+		Params: map[string]any{
+			"duration":   float64(5),
+			"resolution": "720p",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.EstimatedPoints != 600 {
+		t.Fatalf("seedance 5s 720p estimate=%d, want 600", estimate.EstimatedPoints)
+	}
+	if estimate.Model != "doubao-seedance-2.0" {
+		t.Fatalf("estimate model=%q, want doubao-seedance-2.0", estimate.Model)
+	}
+}
+
 func TestVideoGenerationEstimateHTTPIsReadOnly(t *testing.T) {
 	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
 	handler := newWithStore(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, store).Handler

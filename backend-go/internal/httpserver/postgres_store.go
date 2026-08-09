@@ -321,6 +321,12 @@ func (s *postgresStore) AdminData() (adminPlatformData, error) {
 	if data, err = s.applyAICapabilityConfig(ctx, data); err != nil {
 		return data, err
 	}
+	// Estimate and other AdminData callers must see the same published billing
+	// rules as CreatePendingGenerationTask (aiCapabilityAdminData), otherwise
+	// Seedance defaults to code BasePrice 12 (90 pts) instead of published 80 (600).
+	if data.BillingRuleVersions, err = s.listBillingRuleVersionsContext(ctx); err != nil {
+		return data, err
+	}
 	data = withAdminDefaults(data)
 	return data, nil
 }
