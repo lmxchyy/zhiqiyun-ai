@@ -99,3 +99,11 @@ test("AI image generator exposes fixed footer and visible interaction states", a
   assert.match(source, /role="status"/);
   assert.match(source, /ai-image-generator__success/);
 });
+
+test("AI image generator preserves fixed-footer clearance at tablet widths", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(
+    source,
+    /@media \(min-width: 768px\) \{[\s\S]*?\.ai-image-generator__content\s*\{[\s\S]*?padding-bottom:\s*calc\(112px \+ env\(safe-area-inset-bottom\)\);/,
+  );
+});

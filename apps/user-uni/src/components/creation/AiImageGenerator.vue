@@ -732,7 +732,12 @@ function onCountChange(event: { detail: { value: string | number } }) {
 }
 
 @media (min-width: 768px) {
-  .ai-image-generator__content { padding: 28px 36px; }
+  .ai-image-generator__content {
+    padding-top: 28px;
+    padding-right: 36px;
+    padding-bottom: calc(112px + env(safe-area-inset-bottom));
+    padding-left: 36px;
+  }
   .ai-image-generator__picker-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-image-generator__footer-content { padding-right: 36px; padding-left: 36px; }
 }
