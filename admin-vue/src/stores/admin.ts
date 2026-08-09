@@ -45,7 +45,17 @@ function usesAiImageSnapshot(moduleId: string) {
 }
 
 function usesInstantWorkspace(moduleId: string) {
-  return ["userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId);
+  return ["userDashboard", "userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId);
+}
+
+function moduleListQuery(moduleId: string): Record<string, number> | undefined {
+  if (moduleId === "userDashboard") {
+    return { taskLimit: 30, assetLimit: 30 };
+  }
+  if (["userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId)) {
+    return { taskLimit: 40, assetLimit: 40 };
+  }
+  return undefined;
 }
 
 function emptyOnlineWorkspaceData(): AdminRecord {
@@ -227,7 +237,11 @@ export const useAdminStore = defineStore("admin", {
         return;
       }
       try {
-        const data = await adminRequest<AdminRecord>({ method: "GET", url: endpoint });
+        const data = await adminRequest<AdminRecord>({
+          method: "GET",
+          url: endpoint,
+          params: moduleListQuery(moduleId)
+        });
         if (this.activeModuleId !== moduleId) return;
         this.data = data;
         this.dataByModule[moduleId] = data;

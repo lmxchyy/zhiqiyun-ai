@@ -2310,9 +2310,16 @@ func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// account.Total is lifetime (available + frozen + consumed). summary.Total is only
+	// available+frozen and would make the sidebar show identical available/total values.
+	totalUsed := account.Total - int(summary.Available) - int(summary.Frozen)
+	if totalUsed < 0 {
+		totalUsed = 0
+	}
 	accountView := map[string]any{
 		"id": account.ID, "userId": user.ID,
-		"available": summary.Available, "frozen": summary.Frozen, "total": summary.Total,
+		"available": summary.Available, "frozen": summary.Frozen, "total": account.Total,
+		"totalUsed": totalUsed, "totalGranted": account.Total,
 		"permanentAvailable": summary.PermanentAvailable, "expiringAvailable": summary.ExpiringAvailable,
 		"nextExpiryPoints": summary.NextExpiryPoints,
 	}
@@ -3694,22 +3701,59 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	tasks, err := a.generationTasksForUser(r, user.ID, maxUserContentListLimit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	// Homepage only renders ~30 recent items; avoid signing hundreds of asset URLs.
+	taskLimit := listLimitFromRequest(r, "taskLimit", 30)
+	assetLimit := listLimitFromRequest(r, "assetLimit", 30)
+	var tasks []generationTask
+	var assets []asset
+	var points pointAccount
+	var firstErr error
+	var errMu sync.Mutex
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
-	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		items, err := a.generationTasksForUser(r, user.ID, taskLimit)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		tasks = items
+	}()
+	go func() {
+		defer wg.Done()
+		items, err := a.assetsForUser(r, user.ID, assetLimit)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		assets = items
+	}()
+	go func() {
+		defer wg.Done()
+		item, err := a.store.PointAccount(user.ID)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		points = item
+	}()
+	wg.Wait()
+	if firstErr != nil {
+		writeError(w, http.StatusInternalServerError, firstErr)
 		return
 	}
 	tasks = attachAssetImagesToTasks(tasks, assets)
-	points, err := a.store.PointAccount(user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	succeeded := 0
 	totalPointCost := 0
 	for _, task := range tasks {
@@ -3721,6 +3765,7 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"summary": map[string]any{
 			"availablePoints":      points.Available,
+			"totalPoints":          points.Total,
 			"todayGenerations":     len(tasks),
 			"succeededGenerations": succeeded,
 			"assets":               len(assets),
@@ -3743,8 +3788,9 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	taskLimit := listLimitFromRequest(r, "taskLimit", defaultUserContentListLimit)
-	assetLimit := listLimitFromRequest(r, "assetLimit", defaultUserContentListLimit)
+	// Workspace first paint only needs a short recent list; clients can raise the limit.
+	taskLimit := listLimitFromRequest(r, "taskLimit", 40)
+	assetLimit := listLimitFromRequest(r, "assetLimit", 40)
 	var tasks []generationTask
 	var assets []asset
 	var points pointAccount
@@ -3859,6 +3905,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"summary": map[string]any{
 			"availablePoints":  points.Available,
+			"totalPoints":      points.Total,
 			"todayGenerations": len(tasks),
 			"queueTasks":       queued + running,
 			"apiPlatforms":     len(providers),

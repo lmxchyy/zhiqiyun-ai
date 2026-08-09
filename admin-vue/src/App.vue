@@ -7638,9 +7638,14 @@ const sidebarPlan = computed(() => {
   const account = (userAccountSnapshot.value || store.data?.account || {}) as Record<string, unknown>;
   const planId = String(currentAdmin.value?.planId || summary.planId || "plan_year");
   const rawAvailable = Number(account.available ?? summary.availablePoints ?? summary.pointsAvailable ?? store.data?.availablePoints ?? store.data?.pointsAvailable ?? 0);
-  const rawTotal = Number(account.total ?? summary.totalPoints ?? summary.pointsTotal ?? 0);
+  const frozen = Number(account.frozen || 0);
+  const used = Number(account.totalUsed ?? account.totalConsumed ?? 0);
+  // Prefer lifetime totals (granted / available+frozen+used). Fallbacks still avoid available===total.
+  const rawTotal = Number(
+    account.totalGranted ?? account.total ?? summary.totalPoints ?? summary.pointsTotal ?? 0
+  );
   const planNameMap: Record<string, string> = { plan_free: "体验版", plan_month: "Basic", plan_pro: "Pro", plan_year: "Ultimate", plan_enterprise: "企业版" };
-  const total = Math.max(rawAvailable + Number(account.frozen || 0), rawTotal || rawAvailable);
+  const total = Math.max(rawAvailable + frozen + used, rawTotal || rawAvailable + frozen + used);
   const expiresAt = String(currentAdmin.value?.subscriptionExpiresAt || summary.subscriptionExpiresAt || "2026-07-19").slice(0, 10);
   return {
     name: planNameMap[planId] || "Ultimate",
