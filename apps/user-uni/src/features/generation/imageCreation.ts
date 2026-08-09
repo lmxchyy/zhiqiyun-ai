@@ -22,7 +22,7 @@ export const imageCountOptions = [1, 2, 4] as const;
 
 export function imageModelOptions(models: ModelInfo[]): ImageGeneratorModelOption[] {
   return models
-    .filter(model => model.online !== false)
+    .filter(model => model.online === true)
     .filter(model => (model.capabilities || []).some(capability => {
       const value = String(capability).toUpperCase();
       return value === "TEXT_TO_IMAGE" || value === "IMAGE_TO_IMAGE" || value === "IMAGE_GENERATION";

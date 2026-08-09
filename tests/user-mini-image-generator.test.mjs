@@ -22,6 +22,7 @@ test("image model options keep only online image-capable models", () => {
     { code: "gpt-image-2", name: "GPT Image 2", capabilities: ["TEXT_TO_IMAGE"], online: true, pointCost: 10 },
     { code: "seedance", name: "Seedance", capabilities: ["TEXT_TO_VIDEO"], online: true },
     { code: "offline-image", name: "Offline", capabilities: ["IMAGE_TO_IMAGE"], online: false },
+    { code: "unknown-online-image", name: "Unknown online state", capabilities: ["IMAGE_TO_IMAGE"] },
   ]);
   assert.deepEqual(result, [{ code: "gpt-image-2", name: "GPT Image 2", pointCost: 10 }]);
 });
