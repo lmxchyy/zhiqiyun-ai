@@ -440,6 +440,7 @@ const heroToolsSource: Array<{
   tone: "blue" | "red" | "orange" | "green" | "purple";
 }> = [
   { label: "AI 设计", icon: "设", mode: "image", tone: "blue" },
+  { label: "自由P图", icon: "图", mode: "infographic", tone: "orange" },
   { label: "AI 视频", icon: "视", mode: "video", tone: "red" },
   { label: "PPT 生成", icon: "P", mode: "ppt", tone: "orange" },
   { label: "知识库", icon: "库", mode: "agent", tone: "green" },

@@ -324,6 +324,13 @@ export const v531Capabilities = [
     routeMode: "image",
   },
   {
+    id: "office",
+    title: "自由P图",
+    description: "杂志 · 修图",
+    slotKey: "home.capability.office",
+    routeMode: "infographic",
+  },
+  {
     id: "video",
     title: "AI视频",
     description: "宣传片 · 口播",
@@ -336,13 +343,6 @@ export const v531Capabilities = [
     description: "汇报 · 招商",
     slotKey: "home.capability.ppt",
     routeMode: "ppt",
-  },
-  {
-    id: "office",
-    title: "自由P图",
-    description: "杂志 · 修图",
-    slotKey: "home.capability.office",
-    routeMode: "infographic",
   },
   {
     id: "knowledge",

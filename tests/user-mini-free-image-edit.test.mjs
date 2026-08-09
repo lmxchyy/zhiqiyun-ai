@@ -151,4 +151,9 @@ test("home capability office entry uses 自由P图 copy instead of AI办公", as
   assert.match(source, /"自由P图"/);
   assert.doesNotMatch(source, /title: "AI办公"/);
   assert.doesNotMatch(source, /"AI 办公"/);
+  // Keep free-edit in the featured home pair (after AI设计).
+  assert.match(
+    source,
+    /title: "AI设计"[\s\S]*?title: "自由P图"[\s\S]*?title: "AI视频"/,
+  );
 });
