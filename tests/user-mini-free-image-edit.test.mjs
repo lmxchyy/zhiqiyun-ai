@@ -140,3 +140,15 @@ test("replaces the single free-image-edit source without changing other referenc
   assert.match(source, /creationMode\.value === "infographic"/);
   assert.match(source, /creationReferencePaths\.value = paths\.filter\(Boolean\)\.slice\(0, 1\)/);
 });
+
+const v531ConfigURL = new URL("../apps/user-uni/src/config/v531.ts", import.meta.url);
+
+test("home capability office entry uses 自由P图 copy instead of AI办公", async () => {
+  const source = await readFile(v531ConfigURL, "utf8");
+  assert.match(source, /slotKey: "home\.capability\.office"/);
+  assert.match(source, /routeMode: "infographic"/);
+  assert.match(source, /title: "自由P图"/);
+  assert.match(source, /"自由P图"/);
+  assert.doesNotMatch(source, /title: "AI办公"/);
+  assert.doesNotMatch(source, /"AI 办公"/);
+});

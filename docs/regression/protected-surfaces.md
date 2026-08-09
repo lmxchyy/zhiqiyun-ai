@@ -87,10 +87,10 @@
 
 ### M6. 自由P图全页与入口文案
 - **不可丢**：
-  - 创作中心 / 工作台 / 我的能力等入口文案为 **「自由P图」**，不得回退成「信息图」。
+  - 首页能力位 / 创作中心 / 工作台 / 我的能力等入口文案为 **「自由P图」**，不得回退成「信息图」或「AI办公」。
   - 进入后是独立全页：只保留返回 +「自由P图」标题 → 上传区 →「选择图片效果」→ 预设卡片 → 生成按钮。
   - 不得再叠外层返回栏、「返回不会丢失草稿」、studio 横幅、顶部安全区占位、游客条、合规提示等壳层。
-- **锚点**：`FreeImageEditCreation.vue`；`MiniProgramRoleWorkbench` 的 `isFreeImageEditPage` 全页壳；`V531StudioPage` / `V531ProfilePage` / `pages.json` 入口文案。
+- **锚点**：`FreeImageEditCreation.vue`；`MiniProgramRoleWorkbench` 的 `isFreeImageEditPage` 全页壳；`V531StudioPage` / `V531ProfilePage` / `pages.json` / `config/v531.ts`（`home.capability.office`）入口文案。
 - **说明**：小程序与 App 共用 uni-app 源码；改本面时两边一起核对。
 - **验证**：`node --test tests/user-mini-free-image-edit.test.mjs`
 - **核对**：`[ ]`

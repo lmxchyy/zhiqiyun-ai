@@ -77,7 +77,7 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "16:9",
     "cover",
     "default-capability",
-    "AI 办公",
+    "自由P图",
   ),
   slot(
     "home",
@@ -339,8 +339,8 @@ export const v531Capabilities = [
   },
   {
     id: "office",
-    title: "AI办公",
-    description: "文案 · 分析",
+    title: "自由P图",
+    description: "杂志 · 修图",
     slotKey: "home.capability.office",
     routeMode: "infographic",
   },
