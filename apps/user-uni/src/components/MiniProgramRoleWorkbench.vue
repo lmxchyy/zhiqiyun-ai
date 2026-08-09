@@ -878,7 +878,10 @@ import {
   readInspirationDraft,
   type InspirationCreationDraft,
 } from "../features/inspiration/draft";
-import { freeImageEditValidationMessage } from "../features/generation/freeImageEdit";
+import {
+  defaultFreeImageEditPrompt,
+  freeImageEditValidationMessage,
+} from "../features/generation/freeImageEdit";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -930,6 +933,12 @@ import type {
 function updateFreeImageEditPrompt(prompt: string) {
   creationPrompt.value = prompt;
   creationError.value = "";
+}
+
+function ensureFreeImageEditDefaultPrompt() {
+  if (creationMode.value !== "infographic") return;
+  if (String(creationPrompt.value || "").trim()) return;
+  creationPrompt.value = defaultFreeImageEditPrompt();
 }
 
 function validateFreeImageEditRequest() {
@@ -1504,6 +1513,7 @@ watch(() => props.initialTab, tab => { activeTab.value = tab; });
 watch(activeTab, tab => { const code = ({ home: "home", create: "studio", assets: "assets", mine: "profile" } as Partial<Record<TabId, AppPageCode>>)[tab]; if (code) void pageConfigStore.ensure(code); }, { immediate: true });
 watch(() => props.initialCreationMode, mode => {
   if (mode) creationMode.value = mode;
+  ensureFreeImageEditDefaultPrompt();
 });
 watch(
   () => [props.initialCreationAssetId, props.initialCreationIntent] as const,
@@ -3501,6 +3511,7 @@ onMounted(() => {
       uni.removeStorageSync("v532-studio-draft");
     }
     restoreActiveGeneration();
+    ensureFreeImageEditDefaultPrompt();
   }
   if (creationMode.value === "video") void initializeVideoModelForm();
   void loadTerminalCapabilities();

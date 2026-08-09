@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  defaultFreeImageEditPreset,
+  defaultFreeImageEditPrompt,
+  ensureFreeImageEditPrompt,
   freeImageEditPresets,
   freeImageEditValidationMessage,
   selectedFreeImageEditPresetId,
@@ -55,6 +58,13 @@ test("free image edit selects a preset only for an exact trimmed prompt", () => 
   assert.equal(selectedFreeImageEditPresetId(""), "");
 });
 
+test("free image edit defaults to the first magazine-cover prompt", () => {
+  assert.equal(defaultFreeImageEditPrompt(), expectedPresets[0].prompt);
+  assert.equal(defaultFreeImageEditPreset.id, "magazine-cover");
+  assert.equal(ensureFreeImageEditPrompt(""), expectedPresets[0].prompt);
+  assert.equal(ensureFreeImageEditPrompt(" 自定义效果 "), "自定义效果");
+});
+
 test("free image edit validates image before a missing prompt", () => {
   assert.equal(freeImageEditValidationMessage("", ""), "请先添加需要编辑的图片");
   assert.equal(freeImageEditValidationMessage("   ", "修改人物发型"), "请先添加需要编辑的图片");
@@ -80,6 +90,11 @@ test("renders the free-image-edit Figma structure and interactions", async () =>
   assert.match(source, /maxlength="3000"/);
   assert.match(source, /开始生成/);
   assert.match(source, /freeImageEditPresets/);
+  assert.match(source, /add-image-blue\.svg/);
+  assert.match(source, /defaultFreeImageEditPrompt/);
+  assert.match(source, /\{\{ localPrompt\.length \}\}\/3000/);
+  assert.match(source, /border: 1\.5px dashed #c6c6cc/);
+  assert.match(source, /background: #f0f4ff/);
   assert.match(source, /emit\(["']choose-image["']\)/);
   assert.match(source, /emit\(["']generate["']\)/);
 });
@@ -104,6 +119,8 @@ test("integrates free-image-edit without bypassing the existing generation chain
   assert.match(source, /<FreeImageEditCreation/);
   assert.match(source, /@generate="guestAwareGenerateTap"/);
   assert.match(source, /freeImageEditValidationMessage/);
+  assert.match(source, /ensureFreeImageEditDefaultPrompt/);
+  assert.match(source, /defaultFreeImageEditPrompt/);
   assert.match(source, /businessSdk\.generation\.createTask/);
   assert.match(source, /style:.*infographic/);
   assert.match(source, /name: "自由P图"/);

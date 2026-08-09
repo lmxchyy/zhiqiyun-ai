@@ -26,7 +26,7 @@
           </template>
           <template v-else>
             <view class="free-image-edit__upload-empty">
-              <image class="free-image-edit__upload-icon" src="/static/icons/edit-square.svg" mode="aspectFit" />
+              <image class="free-image-edit__upload-icon" src="/static/icons/add-image-blue.svg" mode="aspectFit" />
               <text class="free-image-edit__upload-hint">请添加图片</text>
             </view>
           </template>
@@ -37,7 +37,7 @@
       <view class="free-image-edit__section">
         <text class="free-image-edit__section-title">选择图片效果</text>
 
-        <view class="free-image-edit__prompt">
+        <view :class="['free-image-edit__prompt', { 'is-selected': Boolean(selectedPresetId) }]">
           <textarea
             v-model="localPrompt"
             class="free-image-edit__textarea"
@@ -46,9 +46,8 @@
             @input="onPromptInput"
           />
           <view class="free-image-edit__prompt-footer">
-            <text class="free-image-edit__counter">{{ localPrompt.length }} / 3000</text>
+            <text class="free-image-edit__counter">{{ localPrompt.length }}/3000</text>
             <button
-              v-if="localPrompt"
               class="free-image-edit__clear"
               type="button"
               @click="clearPrompt"
@@ -100,8 +99,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { freeImageEditPresets, selectedFreeImageEditPresetId } from "../../features/generation/freeImageEdit";
+import { computed, onMounted, ref, watch } from "vue";
+import {
+  defaultFreeImageEditPrompt,
+  freeImageEditPresets,
+  selectedFreeImageEditPresetId,
+} from "../../features/generation/freeImageEdit";
 
 const props = defineProps<{
   imagePath: string;
@@ -129,6 +132,12 @@ watch(() => props.prompt, (value) => {
 });
 
 const selectedPresetId = computed(() => selectedFreeImageEditPresetId(localPrompt.value));
+
+onMounted(() => {
+  if (!String(props.prompt || "").trim()) {
+    selectPreset(defaultFreeImageEditPrompt());
+  }
+});
 
 function onPromptInput() {
   emit("update:prompt", localPrompt.value);
@@ -163,7 +172,7 @@ function clearPrompt() {
   padding-right: var(--capsule-right-space, 0px);
   padding-left: 0;
   background: #fff;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid #e8e8ed;
   position: sticky;
   top: 0;
   z-index: 10;
@@ -224,7 +233,7 @@ function clearPrompt() {
 /* 上传区 */
 .free-image-edit__upload {
   min-height: 220px;
-  border: 1px solid #c6c6cc;
+  border: 1.5px dashed #c6c6cc;
   border-radius: 12px;
   background: #fff;
   display: flex;
@@ -236,19 +245,19 @@ function clearPrompt() {
 
 .free-image-edit__upload.has-image {
   display: block;
+  border-style: solid;
 }
 
 .free-image-edit__upload-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .free-image-edit__upload-icon {
-  width: 40px;
-  height: 40px;
-  opacity: 0.4;
+  width: 48px;
+  height: 48px;
 }
 
 .free-image-edit__upload-hint {
@@ -305,12 +314,18 @@ function clearPrompt() {
 /* 输入区 */
 .free-image-edit__prompt {
   min-height: 160px;
-  border: 1px solid #ddd;
+  border: 1px solid #e0e5f2;
   border-radius: 12px;
   background: #fff;
   padding: 12px;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+.free-image-edit__prompt.is-selected {
+  border: 1.5px solid #4a72ff;
+  background: #f0f4ff;
 }
 
 .free-image-edit__textarea {
@@ -320,26 +335,32 @@ function clearPrompt() {
   font-size: 14px;
   color: #202537;
   line-height: 1.6;
+  background: transparent;
 }
 
 .free-image-edit__prompt-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: 8px;
   padding-top: 8px;
 }
 
 .free-image-edit__counter {
   font-size: 12px;
-  color: #bbb;
+  color: #a0a7b8;
+  line-height: 1;
 }
 
 .free-image-edit__clear {
   font-size: 12px;
   color: #4a72ff;
-  background: none;
-  border: none;
-  padding: 0;
+  background: #fff;
+  border: 1px solid #d7dff7;
+  border-radius: 999px;
+  padding: 2px 10px;
+  line-height: 1.4;
+  margin: 0;
 }
 
 .free-image-edit__clear::after {
@@ -372,6 +393,7 @@ function clearPrompt() {
 
 .free-image-edit__preset.is-selected {
   border: 1.5px solid #4a72ff;
+  background: #f0f4ff;
 }
 
 .free-image-edit__preset-body {
@@ -393,7 +415,7 @@ function clearPrompt() {
 
 .free-image-edit__preset-desc {
   font-size: 12px;
-  color: #999;
+  color: #697085;
   line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 3;

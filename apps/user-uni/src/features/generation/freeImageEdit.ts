@@ -37,6 +37,16 @@ export const freeImageEditPresets: readonly FreeImageEditPreset[] = [
   },
 ];
 
+export const defaultFreeImageEditPreset = freeImageEditPresets[0];
+
+export function defaultFreeImageEditPrompt(): string {
+  return defaultFreeImageEditPreset.prompt;
+}
+
+export function ensureFreeImageEditPrompt(prompt: string): string {
+  return prompt.trim() || defaultFreeImageEditPrompt();
+}
+
 export function selectedFreeImageEditPresetId(prompt: string): string {
   const normalizedPrompt = prompt.trim();
   return freeImageEditPresets.find((preset) => preset.prompt === normalizedPrompt)?.id ?? "";
