@@ -2934,6 +2934,7 @@ import {
 } from "./utils/videoGeneration";
 import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
 import { isPersistentWebSession } from "./utils/webAuthSession";
+import { resolveSidebarPlanPoints } from "./utils/sidebarPlanPoints";
 
 function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
   ElMessage({
@@ -7637,23 +7638,16 @@ const sidebarPlan = computed(() => {
   const summary = (store.data?.summary || {}) as Record<string, unknown>;
   const account = (userAccountSnapshot.value || store.data?.account || {}) as Record<string, unknown>;
   const planId = String(currentAdmin.value?.planId || summary.planId || "plan_year");
-  const rawAvailable = Number(account.available ?? summary.availablePoints ?? summary.pointsAvailable ?? store.data?.availablePoints ?? store.data?.pointsAvailable ?? 0);
-  const frozen = Number(account.frozen || 0);
-  const used = Number(account.totalUsed ?? account.totalConsumed ?? 0);
-  // Prefer lifetime totals (granted / available+frozen+used). Fallbacks still avoid available===total.
-  const rawTotal = Number(
-    account.totalGranted ?? account.total ?? summary.totalPoints ?? summary.pointsTotal ?? 0
-  );
+  const points = resolveSidebarPlanPoints({ account, summary, moduleData: store.data });
   const planNameMap: Record<string, string> = { plan_free: "体验版", plan_month: "Basic", plan_pro: "Pro", plan_year: "Ultimate", plan_enterprise: "企业版" };
-  const total = Math.max(rawAvailable + frozen + used, rawTotal || rawAvailable + frozen + used);
   const expiresAt = String(currentAdmin.value?.subscriptionExpiresAt || summary.subscriptionExpiresAt || "2026-07-19").slice(0, 10);
   return {
     name: planNameMap[planId] || "Ultimate",
     status: "使用中",
     expiresAt,
-    availableText: formatNumber(rawAvailable),
-    totalText: formatNumber(total),
-    percent: Math.min(100, Math.max(4, Math.round((rawAvailable / Math.max(1, total)) * 100)))
+    availableText: formatNumber(points.available),
+    totalText: formatNumber(points.total),
+    percent: points.percent
   };
 });
 const currentAdmin = ref<AdminUser | null>(null);

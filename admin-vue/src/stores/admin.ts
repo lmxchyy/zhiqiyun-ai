@@ -1,6 +1,7 @@
 ﻿import { defineStore } from "pinia";
 import { adminRequest } from "../api/client";
 import { readAiImageSnapshot, writeAiImageSnapshot } from "../utils/aiImageDb";
+import { moduleListQuery, usesInstantWorkspace } from "../utils/userWorkspaceLoad";
 import { getWebAccessToken } from "../utils/webAuthSession";
 
 export interface AdminModule {
@@ -42,20 +43,6 @@ function hasRunningAiGenerationSnapshot(data: AdminRecord) {
 
 function usesAiImageSnapshot(moduleId: string) {
   return ["userAiImage", "userWirelessCanvas", "userWorks"].includes(moduleId);
-}
-
-function usesInstantWorkspace(moduleId: string) {
-  return ["userDashboard", "userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId);
-}
-
-function moduleListQuery(moduleId: string): Record<string, number> | undefined {
-  if (moduleId === "userDashboard") {
-    return { taskLimit: 30, assetLimit: 30 };
-  }
-  if (["userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId)) {
-    return { taskLimit: 40, assetLimit: 40 };
-  }
-  return undefined;
 }
 
 function emptyOnlineWorkspaceData(): AdminRecord {
