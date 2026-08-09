@@ -77,3 +77,25 @@ test("AI image generator locks the approved visual tokens", async () => {
   assert.match(source, /:focus-visible/);
   assert.match(source, /prefers-reduced-motion/);
 });
+
+test("AI image generator keeps brand selections and reference removal targets accessible", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(source, /\.ai-image-generator__aspect\.is-selected,[\s\S]*?border-color:\s*var\(--image-brand\);/);
+  assert.match(source, /\.ai-image-generator__aspect\.is-selected,[\s\S]*?color:\s*var\(--image-brand\);/);
+  assert.match(source, /\.ai-image-generator__check\s*\{[\s\S]*?background:\s*var\(--image-brand\);/);
+  assert.match(source, /\.ai-image-generator__reference-remove\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/);
+  assert.match(source, /ai-image-generator__reference-remove-glyph/);
+  assert.match(source, /border-radius:\s*var\(--image-radius\);/);
+});
+
+test("AI image generator exposes fixed footer and visible interaction states", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(source, /\.ai-image-generator__footer\s*\{[\s\S]*?position:\s*fixed;/);
+  assert.match(source, /padding-bottom:\s*calc\(112px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(source, /@media \(hover: hover\)/);
+  assert.match(source, /button:disabled/);
+  assert.match(source, /v-if="selectingReference"/);
+  assert.match(source, /ai-image-generator__reference-loading/);
+  assert.match(source, /role="status"/);
+  assert.match(source, /ai-image-generator__success/);
+});

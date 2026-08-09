@@ -51,7 +51,7 @@
                 type="button"
                 :aria-label="`移除第 ${index + 1} 张参考图`"
                 @click.stop='emit("remove-reference", index)'
-              >×</button>
+              ><text class="ai-image-generator__reference-remove-glyph" aria-hidden="true">×</text></button>
             </view>
             <button
               class="ai-image-generator__reference-add"
@@ -61,8 +61,14 @@
               hover-class="ai-image-generator__reference-add--pressed"
               @click='emit("choose-reference")'
             >
-              <text class="ai-image-generator__reference-plus">＋</text>
-              <text>添加参考</text>
+              <template v-if="selectingReference">
+                <text class="ai-image-generator__reference-loading" aria-hidden="true" />
+                <text>选择中…</text>
+              </template>
+              <template v-else>
+                <text class="ai-image-generator__reference-plus">＋</text>
+                <text>添加参考</text>
+              </template>
               <text>{{ referenceImages.length }}/{{ referenceLimit }}</text>
             </button>
           </view>
@@ -162,9 +168,9 @@
         </view>
 
         <view class="ai-image-generator__live-region" aria-live="polite" aria-atomic="true">
-          <text v-if="error" class="ai-image-generator__error">{{ error }}</text>
-          <text v-else-if="statusMessage" class="ai-image-generator__status">{{ statusMessage }}</text>
-          <text v-else-if="disabledReason" class="ai-image-generator__status">{{ disabledReason }}</text>
+          <text v-if="error" class="ai-image-generator__error" role="alert">{{ error }}</text>
+          <text v-else-if="statusMessage" class="ai-image-generator__success" role="status">{{ statusMessage }}</text>
+          <text v-else-if="disabledReason" class="ai-image-generator__status" role="status">{{ disabledReason }}</text>
         </view>
         <view class="ai-image-generator__scroll-spacer" />
       </view>
@@ -275,6 +281,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
   --image-action-pressed: #ed650a;
   --image-ink: #111827;
   --image-muted: #667085;
+  --image-success: #067647;
   --image-line: #e1e6f1;
   --image-page: #f7f8fc;
   --image-radius: 16px;
@@ -346,6 +353,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
   width: 100%;
   box-sizing: border-box;
   padding: 16px;
+  padding-bottom: calc(112px + env(safe-area-inset-bottom));
 }
 
 .ai-image-generator__helper {
@@ -358,7 +366,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
 }
 
 .ai-image-generator__helper-icon {
-  color: #4d5bf9;
+  color: var(--image-brand);
   font-size: 24px;
   line-height: 1;
 }
@@ -401,7 +409,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
   padding: 6px;
   overflow: hidden;
   border: 1px dashed #b7bdfd;
-  border-radius: 14px;
+  border-radius: var(--image-radius);
   color: var(--image-muted);
   background: #fafbff;
   font-size: 12px;
@@ -411,6 +419,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
 .ai-image-generator__reference {
   position: relative;
   border-style: solid;
+  overflow: visible;
 }
 
 .ai-image-generator__reference-preview {
@@ -431,27 +440,49 @@ function onCountChange(event: { detail: { value: string | number } }) {
 
 .ai-image-generator__reference-remove {
   position: absolute;
-  top: 2px;
-  right: 2px;
+  top: 0;
+  right: 0;
+  display: flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px !important;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 1;
+}
+
+.ai-image-generator__reference-remove-glyph {
   display: flex;
   width: 20px;
   height: 20px;
   align-items: center;
   justify-content: center;
-  min-height: 20px !important;
-  margin: 0;
-  padding: 0;
-  border: 0;
   border-radius: 50%;
   color: #fff;
   background: rgba(17, 24, 39, 0.7);
   font-size: 16px;
-  line-height: 1;
 }
 
 .ai-image-generator__reference-plus {
   font-size: 30px;
   line-height: 0.8;
+}
+
+.ai-image-generator__reference-loading {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(66, 52, 153, 0.24);
+  border-top-color: var(--image-brand);
+  border-radius: 50%;
+  animation: ai-image-generator-spin 0.7s linear infinite;
+}
+
+@keyframes ai-image-generator-spin {
+  to { transform: rotate(360deg); }
 }
 
 .ai-image-generator__textarea {
@@ -484,8 +515,8 @@ function onCountChange(event: { detail: { value: string | number } }) {
   margin: 0;
   padding: 0 14px;
   border: 1px solid #c7ceff;
-  border-radius: 12px;
-  color: #4d5bf9;
+  border-radius: var(--image-radius);
+  color: var(--image-brand);
   background: #fff;
   font-size: 14px;
 }
@@ -523,7 +554,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
   margin: 0;
   padding: 8px 2px;
   border: 1px solid var(--image-line);
-  border-radius: 14px;
+  border-radius: var(--image-radius);
   color: var(--image-muted);
   background: #fff;
   font-size: 13px;
@@ -531,8 +562,8 @@ function onCountChange(event: { detail: { value: string | number } }) {
 
 .ai-image-generator__aspect.is-selected,
 .ai-image-generator__quality-option.is-selected {
-  border-color: #4d5bf9;
-  color: #4d5bf9;
+  border-color: var(--image-brand);
+  color: var(--image-brand);
   background: #f4f3ff;
 }
 
@@ -559,7 +590,7 @@ function onCountChange(event: { detail: { value: string | number } }) {
   justify-content: center;
   border-radius: 50%;
   color: #fff;
-  background: #4d5bf9;
+  background: var(--image-brand);
   font-size: 12px;
 }
 
@@ -624,17 +655,21 @@ function onCountChange(event: { detail: { value: string | number } }) {
 }
 
 .ai-image-generator__error,
-.ai-image-generator__status {
+.ai-image-generator__status,
+.ai-image-generator__success {
   font-size: 13px;
 }
 
 .ai-image-generator__error { color: #d92d20; }
 .ai-image-generator__status { color: var(--image-muted); }
-.ai-image-generator__scroll-spacer { height: 92px; }
+.ai-image-generator__success { color: var(--image-success); }
+.ai-image-generator__scroll-spacer { display: none; }
 
 .ai-image-generator__footer {
-  position: sticky;
+  position: fixed;
+  right: 0;
   bottom: 0;
+  left: 0;
   z-index: 2;
   border-top: 1px solid var(--image-line);
   background: rgba(255, 255, 255, 0.96);
@@ -669,7 +704,26 @@ function onCountChange(event: { detail: { value: string | number } }) {
 }
 
 .ai-image-generator__generate--pressed { background: var(--image-action-pressed); }
-.ai-image-generator__generate[disabled] { opacity: 0.48; }
+.ai-image-generator button:disabled,
+.ai-image-generator picker[disabled] {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+@media (hover: hover) {
+  .ai-image-generator__icon-button:not([disabled]):hover,
+  .ai-image-generator__aspect:not([disabled]):hover,
+  .ai-image-generator__quality-option:not([disabled]):hover,
+  .ai-image-generator__reference-preview:not([disabled]):hover,
+  .ai-image-generator__reference-add:not([disabled]):hover,
+  .ai-image-generator__optimize:not([disabled]):hover {
+    opacity: 0.72;
+  }
+
+  .ai-image-generator__generate:not([disabled]):hover {
+    background: var(--image-action-pressed);
+  }
+}
 
 .ai-image-generator button:focus-visible,
 .ai-image-generator textarea:focus-visible {
