@@ -412,21 +412,6 @@
             </template>
 
             <template v-else>
-            <view v-if="creationMode === 'video' && creationVideoModeSwitchVisible" class="v31-video-mode-switch">
-              <button
-                class="v31-video-mode-button"
-                :class="{ 'is-active': videoGenerationMode === 'TEXT_TO_VIDEO' }"
-                type="button"
-                @click="switchVideoGenerationMode('TEXT_TO_VIDEO')"
-              >文生视频</button>
-              <button
-                class="v31-video-mode-button"
-                :class="{ 'is-active': videoGenerationMode === 'IMAGE_TO_VIDEO' }"
-                type="button"
-                @click="switchVideoGenerationMode('IMAGE_TO_VIDEO')"
-              >图生视频</button>
-            </view>
-
             <view v-if="creationReferenceEnabled" class="v31-reference-panel">
               <view class="v31-reference-head">
                 <view class="v31-reference-copy">
