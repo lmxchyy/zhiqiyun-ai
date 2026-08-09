@@ -22,3 +22,13 @@
 • 支付密钥只能通过环境变量或 Secret 注入，禁止写入源码、YAML、小程序包或 Git。
 • 小程序请求统一使用项目 API Client，页面禁止直接调用 uni.request，且不得引入 Axios。
 • 微信支付回调、官方查单补偿和后台人工补发必须共用统一的 GrantOrderEntitlements 服务。
+
+网页端防回归约束（平台首页 / AI 生图 / 侧边栏点数）：
+• `/points/account` 的 `total` / `totalGranted` 必须是终身口径（可用 + 冻结 + 已消耗），禁止再写成 `summary.Total = available + frozen`，否则冻结为 0 时侧边栏会显示「可用 = 总额」。
+• 侧边栏可用/总额计算必须走 `admin-vue/src/utils/sidebarPlanPoints.ts`；禁止在 `App.vue` 内重新散写一套点数换算。
+• `/user/dashboard` 默认 `taskLimit`/`assetLimit` ≤ 30；`/user/online-image` 默认 ≤ 40；禁止把首屏默认值改回 120/300 或更大而不改产品需求与回归测试。
+• 用户首页与 AI 生图/无线画布/作品/视频工作台必须保持即时壳（`usesInstantWorkspace`），首屏请求参数必须走 `admin-vue/src/utils/userWorkspaceLoad.ts` 的 `moduleListQuery`。
+• 改动上述接口或侧边栏点数时，必须同步跑通并保持绿：
+  - `backend-go`：`go test ./internal/httpserver/ -run 'TestPointAccountTotalIncludesConsumedPoints|TestUserDashboardDefaultPayloadStaysSmallAndExposesTotalPoints|TestUserOnlineImageDefaultListLimitsStayCapped'`
+  - `admin-vue`：`npm test -- tests/webWorkspacePointsRegression.spec.ts`
+• 生产机禁止长期保留未提交热修；发布只允许 Git 已推送提交，dirty tree 时不得强行绕过 `deploy.sh`。
