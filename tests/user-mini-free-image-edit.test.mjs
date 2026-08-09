@@ -99,12 +99,23 @@ const workbenchURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWor
 test("integrates free-image-edit without bypassing the existing generation chain", async () => {
   const source = await readFile(workbenchURL, "utf8");
   assert.match(source, /import FreeImageEditCreation/);
-  assert.match(source, /creationMode === ['"]infographic['"]/);
+  assert.match(source, /isFreeImageEditPage/);
+  assert.match(source, /creationMode\.value === "infographic"/);
   assert.match(source, /<FreeImageEditCreation/);
   assert.match(source, /@generate="guestAwareGenerateTap"/);
   assert.match(source, /freeImageEditValidationMessage/);
   assert.match(source, /businessSdk\.generation\.createTask/);
   assert.match(source, /style:.*infographic/);
+  assert.match(source, /name: "自由P图"/);
+  assert.match(source, /homeName: "自由P图"/);
+  assert.doesNotMatch(source, /name: "信息图"/);
+});
+
+test("renders free-image-edit as a full page without outer creation chrome", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /v-if="!isFreeImageEditPage" class="native-safe-note"/);
+  assert.match(source, /v-if="isFreeImageEditPage" class="free-image-edit-page"/);
+  assert.match(source, /free-image-edit-page__task/);
 });
 
 test("replaces the single free-image-edit source without changing other reference modes", async () => {

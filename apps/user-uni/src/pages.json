@@ -169,7 +169,7 @@
     {
       "path": "pages/user/UserInfographicCreationPage",
       "style": {
-        "navigationBarTitleText": "信息图",
+        "navigationBarTitleText": "自由P图",
         "navigationStyle": "custom"
       }
     },

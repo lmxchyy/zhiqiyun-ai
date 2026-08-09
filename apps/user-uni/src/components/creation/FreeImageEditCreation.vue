@@ -71,12 +71,9 @@
               <text class="free-image-edit__preset-title">{{ preset.title }}</text>
               <text class="free-image-edit__preset-desc">{{ preset.prompt }}</text>
             </view>
-            <image
-              v-if="selectedPresetId === preset.id"
-              class="free-image-edit__preset-check"
-              src="/static/icons/check.svg"
-              mode="aspectFit"
-            />
+            <view v-if="selectedPresetId === preset.id" class="free-image-edit__preset-check" aria-hidden="true">
+              <text class="free-image-edit__preset-check-mark">✓</text>
+            </view>
           </button>
         </view>
       </view>
@@ -358,14 +355,15 @@ function clearPrompt() {
 
 .free-image-edit__preset {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   background: #fff;
-  border: 1.5px solid #e8e8ed;
+  border: 1px solid #e8e8ed;
   border-radius: 12px;
-  padding: 14px;
+  padding: 14px 40px 14px 14px;
   text-align: left;
   width: 100%;
+  position: relative;
 }
 
 .free-image-edit__preset::after {
@@ -373,7 +371,7 @@ function clearPrompt() {
 }
 
 .free-image-edit__preset.is-selected {
-  border: 2px solid #4a72ff;
+  border: 1.5px solid #4a72ff;
 }
 
 .free-image-edit__preset-body {
@@ -398,18 +396,29 @@ function clearPrompt() {
   color: #999;
   line-height: 1.5;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
 .free-image-edit__preset-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
   width: 22px;
   height: 22px;
-  flex-shrink: 0;
-  margin-left: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #4a72ff;
   border-radius: 50%;
+}
+
+.free-image-edit__preset-check-mark {
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
 }
 
 /* 底部固定操作区 */

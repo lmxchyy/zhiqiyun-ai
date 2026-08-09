@@ -660,7 +660,7 @@ function submitPrompt() {
     return;
   }
   uni.setStorageSync("v531-creation-prompt", value);
-  const mode: CreationMode = /视频|短片|口播|分镜/.test(value) ? "video" : /ppt|演示|汇报|路演|方案/i.test(value) ? "ppt" : /智能体|agent|客服|销售助手|知识库/i.test(value) ? "agent" : /信息图|流程图|数据图|可视化/.test(value) ? "infographic" : "image";
+  const mode: CreationMode = /视频|短片|口播|分镜/.test(value) ? "video" : /ppt|演示|汇报|路演|方案/i.test(value) ? "ppt" : /智能体|agent|客服|销售助手|知识库/i.test(value) ? "agent" : /信息图|自由P图|流程图|数据图|可视化|修图|P图/.test(value) ? "infographic" : "image";
   uni.showToast({ title: "正在进入创作", icon: "none", duration: 700 });
   openCreationMode(mode);
 }

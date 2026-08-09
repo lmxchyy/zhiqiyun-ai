@@ -177,7 +177,7 @@ const recommendation = computed(() => {
   const value = prompt.value.toLowerCase();
   if (isModeAllowed("video") && /视频|短片|口播|分镜|video/.test(value)) return { mode: "video" as const, label: "AI 视频", model: "即梦视频 Pro", cost: "40～80 点" };
   if (isModeAllowed("ppt") && /ppt|演示|汇报|路演|方案/.test(value)) return { mode: "ppt" as const, label: "PPT 文档", model: "Kimi K2.6", cost: "60～100 点" };
-  if (/信息图|流程图|数据图|可视化/.test(value)) return { mode: "infographic" as const, label: "信息图", model: "豆包·通用 Pro", cost: "20～40 点" };
+  if (/信息图|自由P图|流程图|数据图|可视化|修图|P图/.test(value)) return { mode: "infographic" as const, label: "自由P图", model: "豆包·通用 Pro", cost: "20～40 点" };
   if (isModeAllowed("review") && /质检|审稿|校对|合规|审核/.test(value)) return { mode: "review" as const, label: "AI 质检", model: "豆包·通用 Pro", cost: "10～30 点" };
   if (isModeAllowed("agent") && /agent|智能体|销售助手|客服|数字员工/.test(value)) return { mode: "agent" as const, label: "AI Agent", model: "平台智能体", cost: "免费试用" };
   return { mode: "image" as const, label: "AI 生图", model: props.recentModel, cost: "20～40 点" };
@@ -188,7 +188,7 @@ const coreCapabilitiesSource = [
   { id: "video", icon: "视", title: "AI 视频", summary: "宣传片·短视频", tone: "blue", mode: "video", free: false },
   { id: "ppt", icon: "P", title: "PPT 文档", summary: "方案·路演", tone: "blue", mode: "ppt", free: false },
   { id: "agent", icon: "AI", title: "AI Agent", summary: "营销·销售", tone: "blue", mode: "agent", free: true },
-  { id: "infographic", icon: "图", title: "信息图", summary: "流程·数据", tone: "blue", mode: "infographic", free: false },
+  { id: "infographic", icon: "图", title: "自由P图", summary: "杂志·修图", tone: "blue", mode: "infographic", free: false },
   { id: "review", icon: "检", title: "AI 质检", summary: "审稿·合规", tone: "orange", mode: "review", free: false },
 ] as const satisfies ReadonlyArray<{
   id: string;

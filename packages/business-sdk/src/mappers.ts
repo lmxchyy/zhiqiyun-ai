@@ -381,14 +381,20 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
           }
         }
 
+        const supportedParameterKeys = capabilities.supportedParameters || [];
         const duration = draft.duration || Number(extraParameters.duration) || 5;
         const resolution = draft.quality || String(extraParameters.resolution || "") || "720p";
         const aspectRatio = draft.size || String(extraParameters.aspect_ratio || "") || "16:9";
-        validateSupportedVideoValue(duration, capabilities.supportedDurations, "VIDEO_DURATION_NOT_SUPPORTED", "视频时长");
-        validateSupportedVideoValue(resolution, capabilities.supportedResolutions, "VIDEO_RESOLUTION_NOT_SUPPORTED", "分辨率");
-        validateSupportedVideoValue(aspectRatio, capabilities.supportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "画面比例");
+        if (supportedParameterKeys.includes("duration")) {
+          validateSupportedVideoValue(duration, capabilities.supportedDurations, "VIDEO_DURATION_NOT_SUPPORTED", "视频时长");
+        }
+        if (supportedParameterKeys.includes("resolution")) {
+          validateSupportedVideoValue(resolution, capabilities.supportedResolutions, "VIDEO_RESOLUTION_NOT_SUPPORTED", "分辨率");
+        }
+        if (supportedParameterKeys.includes("aspect_ratio")) {
+          validateSupportedVideoValue(aspectRatio, capabilities.supportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "画面比例");
+        }
 
-        const supportedParameterKeys = capabilities.supportedParameters || [];
         const providerParameters = pickAllowedParameters(extraParameters, videoParameterKeys);
         for (const key in providerParameters) {
           if (!supportedParameterKeys.includes(key)) delete providerParameters[key];
@@ -396,9 +402,9 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
 
         return {
           ...providerParameters,
-          duration,
-          resolution,
-          aspect_ratio: aspectRatio,
+          ...(supportedParameterKeys.includes("duration") ? { duration } : {}),
+          ...(supportedParameterKeys.includes("resolution") ? { resolution } : {}),
+          ...(supportedParameterKeys.includes("aspect_ratio") ? { aspect_ratio: aspectRatio } : {}),
           ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" ? { first_frame: firstFrame } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),

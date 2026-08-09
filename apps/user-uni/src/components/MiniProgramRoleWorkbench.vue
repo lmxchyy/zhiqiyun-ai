@@ -1,6 +1,6 @@
 <template>
   <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage }]" :style="miniWorkbenchSafeAreaStyle">
-    <view class="native-safe-note"></view>
+    <view v-if="!isFreeImageEditPage" class="native-safe-note"></view>
 
     <view v-if="activeRole !== 'user' && !isUserMineDetail" class="business-header">
       <image class="business-logo" :src="loginLogo" mode="aspectFit" />
@@ -38,6 +38,42 @@
 
     <view v-else class="role-content">
       <template v-if="activeRole === 'user'">
+        <view v-if="isFreeImageEditPage" class="free-image-edit-page">
+          <FreeImageEditCreation
+            :image-path="creationReferencePaths[0] || ''"
+            :prompt="creationPrompt"
+            :busy="generationBusy"
+            :selecting-image="creationReferenceSelecting"
+            :error="creationError"
+            @back="returnToCreationHub"
+            @choose-image="chooseCreationReferenceImages"
+            @remove-image="removeCreationReference(0)"
+            @preview-image="previewCreationReference(0)"
+            @update:prompt="updateFreeImageEditPrompt"
+            @generate="guestAwareGenerateTap"
+          />
+          <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone, 'free-image-edit-page__task']">
+            <image
+              v-if="latestGenerationTask.resultUrl && ['image', 'infographic'].includes(latestGenerationTask.resultType || '')"
+              class="v31-generation-result"
+              :src="latestGenerationTask.resultUrl"
+              mode="aspectFill"
+              @click="previewLatestGenerationResult"
+            />
+            <view class="v31-generation-summary">
+              <view class="v31-generation-title-row"><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text v-if="generationNoticePending" class="v31-live-badge">实时</text></view>
+              <text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ generationStatusLabel }}</text>
+              <view v-if="generationNoticePending" class="v31-generation-progress-track">
+                <view :class="['v31-generation-progress-value', { indeterminate: !generationHasProgress }]" :style="generationProgressStyle" />
+              </view>
+              <text v-if="generationNoticePending" class="v31-generation-feedback">{{ generationFeedbackText }}</text>
+            </view>
+            <button v-if="latestGenerationTask.tone === 'success'" @click="openLatestGenerationResult">{{ latestGenerationTask.resultId ? "查看结果" : "查看作品" }}</button>
+            <button v-else-if="latestGenerationTask.tone === 'danger'" @click="handleGenerateTap">重新生成</button>
+            <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
+          </view>
+        </view>
+        <template v-else>
         <view v-if="isGuest && (activeTab === 'home' || activeTab === 'create')" class="guest-browse-banner">
           <view class="guest-browse-copy">
             <text class="guest-browse-title">欢迎先体验知启云 AI</text>
@@ -152,7 +188,7 @@
         </view>
 
         <view v-else-if="legacyActiveTab === 'create'" class="section-stack">
-          <view class="v31-subpage-nav">
+          <view :class="['v31-subpage-nav', { 'video-generation-nav': creationMode === 'video' }]">
             <button
               class="v31-back-button"
               aria-label="返回上一页"
@@ -161,7 +197,7 @@
             >‹</button>
             <view>
               <text class="v31-subpage-title">{{ creationDetailTitle }}</text>
-              <text class="v31-subpage-copy">返回上一页不会丢失当前草稿</text>
+              <text class="v31-subpage-copy">{{ creationDetailSubtitle }}</text>
             </view>
           </view>
           <RemoteCover v-if="creationMode !== 'agent'" class="v31-studio-banner" page-code="studio" slot-key="studio.banner" alt="AI 创作中心" width="100%" height="118px" :lazy-load="false" radius="16px" />
@@ -211,43 +247,171 @@
             </view>
           </template>
 
-          <template v-else-if="creationMode === 'infographic'">
-            <FreeImageEditCreation
-              :image-path="creationReferencePaths[0] || ''"
-              :prompt="creationPrompt"
-              :busy="generationBusy"
-              :selecting-image="creationReferenceSelecting"
-              :error="creationError"
-              @back="returnToCreationHub"
-              @choose-image="chooseCreationReferenceImages"
-              @remove-image="removeCreationReference(0)"
-              @preview-image="previewCreationReference(0)"
-              @update:prompt="updateFreeImageEditPrompt"
-              @generate="guestAwareGenerateTap"
-            />
-            <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone]">
-              <image
-                v-if="latestGenerationTask.resultUrl && ['image', 'infographic'].includes(latestGenerationTask.resultType || '')"
-                class="v31-generation-result"
-                :src="latestGenerationTask.resultUrl"
-                mode="aspectFill"
-                @click="previewLatestGenerationResult"
-              />
-              <view class="v31-generation-summary">
-                <view class="v31-generation-title-row"><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text v-if="generationNoticePending" class="v31-live-badge">实时</text></view>
-                <text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ generationStatusLabel }}</text>
-                <view v-if="generationNoticePending" class="v31-generation-progress-track">
-                  <view :class="['v31-generation-progress-value', { indeterminate: !generationHasProgress }]" :style="generationProgressStyle" />
-                </view>
-                <text v-if="generationNoticePending" class="v31-generation-feedback">{{ generationFeedbackText }}</text>
-              </view>
-              <button v-if="latestGenerationTask.tone === 'success'" @click="openLatestGenerationResult">{{ latestGenerationTask.resultId ? "查看结果" : "查看作品" }}</button>
-              <button v-else-if="latestGenerationTask.tone === 'danger'" @click="handleGenerateTap">重新生成</button>
-              <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
-            </view>
-          </template>
-
           <template v-else>
+            <template v-if="creationMode === 'video'">
+              <view class="video-safety-banner">
+                <image class="video-safety-icon" src="/static/icons/check.svg" mode="aspectFit" />
+                <text>请勿上传侵权、违法或含敏感信息的素材</text>
+              </view>
+
+              <view class="video-prompt-card">
+                <view class="video-card-heading">
+                  <text class="video-card-title">描述想生成的视频</text>
+                </view>
+                <textarea
+                  v-model="creationPrompt"
+                  class="video-prompt-input"
+                  maxlength="1000"
+                  placeholder="例如：清晨的海边公路，一辆银色跑车高速驶过，电影感运镜，光影自然"
+                  @input="creationError = ''"
+                />
+                <text class="video-prompt-count">{{ creationPrompt.length }} / 1000</text>
+              </view>
+
+              <view
+                class="video-reference-card"
+                :class="{ 'is-uploaded': creationReferencePaths.length, 'is-disabled': !videoModelCapabilities.supportsImageToVideo }"
+                role="button"
+                :aria-disabled="creationReferenceSelecting || creationSourceLoading || !videoModelCapabilities.supportsImageToVideo"
+                @click="!creationReferenceSelecting && !creationSourceLoading && videoModelCapabilities.supportsImageToVideo && chooseCreationReferenceImages()"
+              >
+                <image
+                  v-if="creationReferencePaths.length"
+                  class="video-reference-thumbnail"
+                  :src="creationReferencePaths[0]"
+                  mode="aspectFill"
+                />
+                <image v-else class="video-reference-icon" src="/static/icons/assets.svg" mode="aspectFit" />
+                <view class="video-reference-copy">
+                  <text class="video-reference-title">{{ creationReferencePaths.length ? '参考图已上传' : '上传参考图（可选）' }}</text>
+                  <text class="video-reference-description">{{ videoReferenceDescription }}</text>
+                </view>
+                <button
+                  v-if="creationReferencePaths.length"
+                  class="video-reference-delete"
+                  type="button"
+                  aria-label="删除参考图"
+                  @click.stop="removeCreationReference(0)"
+                >×</button>
+                <image v-else class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
+              </view>
+
+              <picker
+                v-if="videoModelOptions.length"
+                :range="videoModelOptions"
+                range-key="name"
+                :value="videoModelOptionIndex"
+                :disabled="videoModelSwitching"
+                @change="selectVideoModelByPicker"
+              >
+                <view class="video-model-row">
+                  <text class="video-row-label">生成模型</text>
+                  <view class="video-row-value">
+                    <text>{{ videoModelDisplayName }}</text>
+                    <image class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
+                  </view>
+                </view>
+              </picker>
+              <view v-else class="video-model-row">
+                <text class="video-row-label">生成模型</text>
+                <text class="video-row-value">{{ videoModelSwitching ? '载入中...' : videoModelError || '暂无可用视频模型' }}</text>
+              </view>
+
+              <view class="video-basic-card">
+                <view class="video-section-heading">
+                  <text class="video-section-title">基础参数</text>
+                  <text>选项随当前模型动态调整</text>
+                </view>
+                <view v-if="basicVideoSelectFields.length" class="video-basic-grid">
+                  <picker
+                    v-for="field in basicVideoSelectFields"
+                    :key="field.key"
+                    class="video-basic-picker"
+                    :range="field.options"
+                    :value="videoParameterOptionIndex(field)"
+                    @change="selectVideoParameterByPicker(field, $event)"
+                  >
+                    <view class="video-basic-tile">
+                      <text class="video-basic-label">{{ videoBasicFieldLabel(field) }}</text>
+                      <view class="video-basic-value">
+                        <text>{{ selectedVideoParameterLabel(field) }}</text>
+                        <image src="/static/icons/chevron-right.svg" mode="aspectFit" />
+                      </view>
+                    </view>
+                  </picker>
+                </view>
+                <text v-else class="video-parameter-empty">{{ videoModelError || '正在读取当前模型参数...' }}</text>
+                <view v-if="videoAudioField" class="video-audio-row">
+                  <view>
+                    <text class="video-audio-title">生成音频</text>
+                    <text class="video-audio-copy">为视频同步生成环境音</text>
+                  </view>
+                  <button
+                    type="button"
+                    :class="['video-audio-switch', { 'is-active': videoBooleanParameterValue('generate_audio') }]"
+                    :aria-label="`生成音频${videoBooleanLabel('generate_audio')}`"
+                    @click="toggleVideoParameter('generate_audio')"
+                  ><text /></button>
+                </view>
+              </view>
+
+              <view v-if="advancedVideoParameterFields.length" class="video-advanced-card">
+                <button type="button" class="video-advanced-heading" @click="videoAdvancedExpanded = !videoAdvancedExpanded">
+                  <text class="video-row-label">高级参数</text>
+                  <view class="video-row-value">
+                    <text>{{ videoAdvancedSummary }}</text>
+                    <image class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
+                  </view>
+                </button>
+                <view v-if="videoAdvancedExpanded" class="video-advanced-options">
+                  <picker
+                    v-for="field in advancedVideoParameterFields"
+                    :key="field.key"
+                    class="video-advanced-picker"
+                    :range="field.options"
+                    :value="videoParameterOptionIndex(field)"
+                    @change="selectVideoParameterByPicker(field, $event)"
+                  >
+                    <view><text>{{ field.label }}</text><text>{{ selectedVideoParameterLabel(field) }}</text></view>
+                  </picker>
+                </view>
+              </view>
+
+              <view class="video-generation-summary">
+                <view>
+                  <text class="video-summary-main">{{ videoGenerationSummary }}</text>
+                  <text class="video-summary-copy">预计生成约 1–3 分钟 · 预计消耗以试算为准</text>
+                </view>
+                <text class="video-cost-pill">{{ videoCostLabel }}</text>
+              </view>
+
+              <button
+                type="button"
+                :class="['video-primary-generate', { disabled: generationBusy }]"
+                :disabled="generationBusy"
+                @click.stop="guestAwareGenerateTap"
+              >
+                <image src="/static/icons/create.svg" mode="aspectFit" />
+                <text>{{ generationButtonLabel === '生成' ? '生成视频' : generationButtonLabel }}</text>
+              </button>
+              <text v-if="creationError" class="v31-generation-error video-generation-error">{{ creationError }}</text>
+
+              <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone]">
+                <view class="v31-generation-summary">
+                  <view class="v31-generation-title-row"><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text v-if="generationNoticePending" class="v31-live-badge">实时</text></view>
+                  <text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ generationStatusLabel }}</text>
+                  <view v-if="generationNoticePending" class="v31-generation-progress-track">
+                    <view :class="['v31-generation-progress-value', { indeterminate: !generationHasProgress }]" :style="generationProgressStyle" />
+                  </view>
+                  <text v-if="generationNoticePending" class="v31-generation-feedback">{{ generationFeedbackText }}</text>
+                </view>
+                <button v-if="latestGenerationTask.tone === 'success'" @click="openLatestGenerationResult">{{ latestGenerationTask.resultId ? "查看结果" : "查看作品" }}</button>
+                <button v-else-if="latestGenerationTask.tone === 'danger'" @click="handleGenerateTap">重新生成</button>
+                <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
+              </view>
+            </template>
+
+            <template v-else>
             <view v-if="creationMode === 'video' && creationVideoModeSwitchVisible" class="v31-video-mode-switch">
               <button
                 class="v31-video-mode-button"
@@ -384,6 +548,7 @@
               <text class="v31-workflow-copy">生成、对比、再创作在一个地方完成。</text>
               <view class="v31-workflow-tags"><text>复用参数</text><text>一键导出</text><text>继续编辑</text></view>
             </view>
+            </template>
           </template>
         </view>
 
@@ -447,6 +612,7 @@
           @export-usage="showUsageExportNotice"
           @poster="showPosterNotice"
         />
+        </template>
         </template>
       </template>
 
@@ -710,8 +876,11 @@ import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from
 import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
 import { ApiClientError } from "@xianzhi/api-client";
 import {
+  buildVideoSubmissionParameters,
   confirmResolvedVideoModel,
+  deriveEditableVideoFields,
   normalizeVideoModelCapabilities,
+  transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 
@@ -750,12 +919,14 @@ import { RoleMenuConfig, roleLabels } from "../config/permissions";
 import type { MinePurchaseOption, MineView } from "../types";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 import type {
+  EditableVideoField,
   ItemsResponse,
   MemberProfileResponse,
   OperationProfileResponse,
   RoleWalletResponse,
+  VideoGenerationEstimate,
 } from "@xianzhi/business-sdk";
-import type { VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
+import type { ModelInfo, VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
 import type { AppRole, Asset, AuthResponse, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
 import {
   miniProgramCreationPages,
@@ -935,7 +1106,7 @@ const allCreationModules = [
   { id: "ppt" as CreationMode, icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
   { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "doubao-seedance-2.0", cost: "约 80 点/条", tone: "green" },
   { id: "agent" as CreationMode, icon: "星", name: "AI Agent", homeName: "LOGO", description: "经营助手与知识库", model: "agent-workflow", cost: "按任务计费", tone: "blue" },
-  { id: "infographic" as CreationMode, icon: "表", name: "信息图", homeName: "信息图", description: "复杂信息一图讲清", model: "infographic", cost: "约 20 点/份", tone: "orange" },
+  { id: "infographic" as CreationMode, icon: "表", name: "自由P图", homeName: "自由P图", description: "杂志封面/去除路人/精致补妆", model: "infographic", cost: "约 20 点/份", tone: "orange" },
   { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
 ];
 
@@ -967,6 +1138,19 @@ const creationReferencePaths = ref<string[]>([]);
 const creationLastFramePath = ref("");
 const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
 const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
+const videoModelOptions = ref<ModelInfo[]>([]);
+const selectedVideoModelCode = ref("");
+const videoParameterFields = ref<EditableVideoField[]>([]);
+const videoParameterValues = ref<Record<string, unknown>>({});
+const videoModelSwitching = ref(false);
+const videoModelError = ref("");
+const videoEstimate = ref<VideoGenerationEstimate | null>(null);
+const videoEstimateLoading = ref(false);
+const videoEstimateError = ref("");
+const videoAdvancedExpanded = ref(false);
+let videoModelSwitchSequence = 0;
+let videoEstimateSequence = 0;
+let videoEstimateTimer: ReturnType<typeof setTimeout> | null = null;
 const creationSourceReferenceUrl = ref("");
 const creationSourceLoading = ref(false);
 const creationSourceError = ref("");
@@ -1038,6 +1222,23 @@ const isPrimaryRoleTab = computed(() => currentTabs.value.some(tab => tab.id ===
 const legacyActiveTab = computed<TabId>(() => activeTab.value);
 const isCreationDetail = computed(
   () => activeRole.value === "user" && activeTab.value === "create" && Boolean(props.initialCreationMode),
+);
+const isFreeImageEditPage = computed(
+  () => isCreationDetail.value && creationMode.value === "infographic",
+);
+const isVideoCreationDetail = computed(() => isCreationDetail.value && creationMode.value === "video");
+const basicVideoSelectFields = computed(() => {
+  const order = ["duration", "aspect_ratio", "resolution", "fps"];
+  return order.flatMap(key => {
+    const field = videoParameterFields.value.find(item => item.key === key && item.options.length > 0);
+    return field ? [field] : [];
+  });
+});
+const videoAudioField = computed(
+  () => videoParameterFields.value.find(field => field.key === "generate_audio" && ["boolean", "switch"].includes(field.type)) || null,
+);
+const advancedVideoParameterFields = computed(
+  () => videoParameterFields.value.filter(field => ["motion_strength", "camera_movement"].includes(field.key)),
 );
 const creationVideoModeSwitchVisible = computed(
   () => videoModelCapabilities.value.supportsTextToVideo && videoModelCapabilities.value.supportsImageToVideo,
@@ -1170,8 +1371,45 @@ const currentRoleMenuItems = computed(() => RoleMenuConfig[userStore.currentRole
 
 const activeCreation = computed(() => creationModules.value.find(item => item.id === creationMode.value) || creationModules.value[0] || allCreationModules[0]);
 const activeCreationName = computed(() => activeCreation.value.name);
-const activeCreationModel = computed(() => rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model);
+const activeCreationModel = computed(() => creationMode.value === "video" && selectedVideoModelCode.value
+  ? selectedVideoModelCode.value
+  : rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model);
 const activeCreationCost = computed(() => activeCreation.value.cost);
+const creationDetailSubtitle = computed(() => {
+  if (creationMode.value !== "video") return "返回上一页不会丢失当前草稿";
+  return creationReferencePaths.value.length
+    ? "参考图已上传，当前为图生视频"
+    : "上传参考图后自动切换为图生视频";
+});
+const videoReferenceDescription = computed(() => {
+  if (creationSourceLoading.value) return "正在读取当前作品并设置为参考图";
+  if (creationSourceError.value) return creationSourceError.value;
+  if (creationReferencePaths.value.length) return "点击图片可更换，或删除后切回文生视频";
+  if (!videoModelCapabilities.value.supportsImageToVideo) return "当前模型仅支持文生视频";
+  return "未上传为文生视频，上传后自动按图生视频生成";
+});
+const videoModelDisplayName = computed(() => {
+  const model = videoModelOptions.value.find(item => item.code === selectedVideoModelCode.value);
+  return model?.name || selectedVideoModelCode.value || activeCreationModel.value || "选择模型";
+});
+const videoModelOptionIndex = computed(() => Math.max(
+  0,
+  videoModelOptions.value.findIndex(item => item.code === selectedVideoModelCode.value),
+));
+const videoAdvancedSummary = computed(() => advancedVideoParameterFields.value
+  .map(field => `${field.key === "camera_movement" ? "镜头" : field.label}：${selectedVideoParameterLabel(field)}`)
+  .join(" · "));
+const videoGenerationSummary = computed(() => {
+  const parts = basicVideoSelectFields.value.map(field => selectedVideoParameterLabel(field));
+  if (videoGenerationMode.value === "IMAGE_TO_VIDEO") parts.unshift("图生视频");
+  return parts.join(" · ") || "参数由当前模型动态提供";
+});
+const videoCostLabel = computed(() => {
+  if (videoEstimateLoading.value) return "试算中";
+  if (videoEstimate.value) return `${videoEstimate.value.estimatedPoints} 积分`;
+  if (videoEstimateError.value) return "正式提交时以后端为准";
+  return activeCreationCost.value.replace("点", "积分").replace("/条", "");
+});
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
 const generationNoticePending = computed(() => latestGenerationTask.value?.tone === "pending");
 const generationHasProgress = computed(() => generationProgress.value > 0 && generationProgress.value < 100);
@@ -1496,6 +1734,7 @@ function switchVideoGenerationMode(mode: VideoGenerationMode) {
   creationReferencePaths.value = [];
   creationLastFramePath.value = "";
   creationError.value = "";
+  scheduleVideoEstimate();
 }
 
 function chooseCreationLastFrame() {
@@ -1510,6 +1749,7 @@ function chooseCreationLastFrame() {
         ? String(selectedPaths[0] || "")
         : String(selectedPaths || "");
       creationError.value = "";
+      scheduleVideoEstimate();
     },
     fail: error => {
       if (!String(error.errMsg || "").toLowerCase().includes("cancel")) {
@@ -1521,13 +1761,14 @@ function chooseCreationLastFrame() {
 
 function removeCreationLastFrame() {
   creationLastFramePath.value = "";
+  scheduleVideoEstimate();
 }
 
 function chooseCreationReferenceImages() {
   if (!requestLogin("登录后可上传参考图片")) return;
   if (creationReferenceSelecting.value) return;
-  if (creationMode.value === "video" && videoGenerationMode.value !== "IMAGE_TO_VIDEO") {
-    uni.showToast({ title: "文生视频模式不能上传图片", icon: "none" });
+  if (creationMode.value === "video" && !videoModelCapabilities.value.supportsImageToVideo) {
+    uni.showToast({ title: "当前模型不支持图生视频", icon: "none" });
     return;
   }
   const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
@@ -1537,7 +1778,7 @@ function chooseCreationReferenceImages() {
   }
   creationReferenceSelecting.value = true;
   uni.chooseImage({
-    count: remaining,
+    count: creationMode.value === "infographic" ? Math.max(1, remaining || 1) : remaining,
     sizeType: ["compressed"],
     sourceType: ["album", "camera"],
     success: result => {
@@ -1560,13 +1801,24 @@ function appendCreationReferencePaths(paths: string[]) {
   if (!requestLogin("登录后可上传参考图片")) return;
   if (creationMode.value === "infographic") {
     creationReferencePaths.value = paths.filter(Boolean).slice(0, 1);
-  } else {
-    creationReferencePaths.value = [...creationReferencePaths.value, ...paths]
-      .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-      .slice(0, creationReferenceLimit.value);
+    creationSourceError.value = "";
+    creationError.value = "";
+    return;
   }
+  const nextPaths = [...creationReferencePaths.value, ...paths]
+    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+    .slice(0, creationReferenceLimit.value);
+  if (creationMode.value === "video") {
+    if (!videoModelCapabilities.value.supportsImageToVideo) {
+      uni.showToast({ title: "当前模型不支持图生视频", icon: "none" });
+      return;
+    }
+    if (nextPaths.length) videoGenerationMode.value = "IMAGE_TO_VIDEO";
+  }
+  creationReferencePaths.value = nextPaths;
   creationSourceError.value = "";
   creationError.value = "";
+  if (creationMode.value === "video") scheduleVideoEstimate();
 }
 
 function setCreationReferenceSelecting(selecting: boolean) {
@@ -1581,6 +1833,12 @@ function previewCreationReference(index: number) {
 
 function removeCreationReference(index: number) {
   creationReferencePaths.value = creationReferencePaths.value.filter((_, itemIndex) => itemIndex !== index);
+  if (creationMode.value === "video") {
+    if (!creationReferencePaths.value.length && videoGenerationMode.value === "IMAGE_TO_VIDEO") {
+      videoGenerationMode.value = "TEXT_TO_VIDEO";
+    }
+    scheduleVideoEstimate();
+  }
 }
 
 function isToday(value: string) {
@@ -2597,26 +2855,223 @@ async function resolveBackendGenerationConfig(
         return { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
       }
     } catch {}
+    if (mode === "video") return null;
     return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
   }
 }
 
-let videoCapabilityLoadSequence = 0;
-watch(
-  () => [creationMode.value, activeCreationModel.value] as const,
-  async ([mode, model], previous) => {
-    if (mode !== "video") return;
-    const sequence = ++videoCapabilityLoadSequence;
-    const config = await resolveBackendGenerationConfig("video", model);
-    if (!config) return;
-    if (sequence !== videoCapabilityLoadSequence || creationMode.value !== "video") return;
-    if (config.model && config.model !== model) {
-      restoredCreationParams.value.model = config.model;
+function videoParameterValueEquals(key: string, option: unknown) {
+  const current = videoParameterValues.value[key];
+  if (typeof current === "number" || typeof option === "number") {
+    return Number(current) === Number(option);
+  }
+  return current === option;
+}
+
+function videoBooleanParameterValue(key: string) {
+  return videoParameterValues.value[key] === true;
+}
+
+function eventDetailValue(event: unknown) {
+  const row = event && typeof event === "object" ? event as AnyRecord : {};
+  const detail = row.detail && typeof row.detail === "object" ? row.detail as AnyRecord : {};
+  return detail.value;
+}
+
+function videoParameterOptionIndex(field: EditableVideoField) {
+  const current = videoParameterValues.value[field.key];
+  const index = field.options.findIndex(option => videoParameterValueEquals(field.key, option));
+  return current === undefined ? 0 : Math.max(0, index);
+}
+
+function selectVideoParameterByPicker(field: EditableVideoField, event: unknown) {
+  const index = Number(eventDetailValue(event));
+  const option = Number.isInteger(index) ? field.options[index] : undefined;
+  if (option !== undefined) setVideoParameterValue(field.key, option);
+}
+
+function selectVideoModelByPicker(event: unknown) {
+  const index = Number(eventDetailValue(event));
+  const model = Number.isInteger(index) ? videoModelOptions.value[index] : undefined;
+  if (model?.code) void requestVideoModelSwitch(model.code);
+}
+
+function selectedVideoParameterLabel(field: EditableVideoField) {
+  const value = videoParameterValues.value[field.key];
+  const translations: Record<string, Record<string, string>> = {
+    motion_strength: { low: "低", medium: "中", high: "高" },
+    camera_movement: { static: "固定", pan: "平移", push: "推进", pull: "拉远" },
+  };
+  const translated = translations[field.key]?.[String(value)];
+  if (translated) return translated;
+  if (field.key === "fps" && value !== undefined) return `${String(value)} FPS`;
+  return value === undefined ? "-" : `${String(value)}${field.unit || ""}`;
+}
+
+function videoBasicFieldLabel(field: EditableVideoField) {
+  if (field.key === "duration") return "时长";
+  if (field.key === "aspect_ratio") return "画面比例";
+  return field.label;
+}
+
+function toggleVideoParameter(key: string) {
+  setVideoParameterValue(key, !videoBooleanParameterValue(key));
+}
+
+function videoBooleanLabel(key: string) {
+  return videoBooleanParameterValue(key) ? "已开启" : "已关闭";
+}
+
+function syncVideoParameterDraft(values: Record<string, unknown>, model = selectedVideoModelCode.value) {
+  const next = { ...restoredCreationParams.value };
+  for (const key of [
+    "duration", "resolution", "aspect_ratio", "ratio", "fps", "generate_audio", "generateAudio",
+    "motion_strength", "camera_movement",
+  ]) delete next[key];
+  Object.assign(next, values);
+  if (model) next.model = model;
+  restoredCreationParams.value = next;
+}
+
+function setVideoParameterValue(key: string, value: unknown) {
+  const next = transitionVideoParameterValues(
+    { ...videoParameterValues.value, [key]: value },
+    videoParameterFields.value,
+  );
+  videoParameterValues.value = next;
+  syncVideoParameterDraft(next);
+  scheduleVideoEstimate();
+}
+
+function setVideoBooleanParameter(key: string, event: unknown) {
+  setVideoParameterValue(key, eventDetailValue(event) === true);
+}
+
+function setVideoNumberParameter(key: string, event: unknown) {
+  const value = Number(eventDetailValue(event));
+  if (Number.isFinite(value)) setVideoParameterValue(key, value);
+}
+
+function confirmVideoReferenceRemoval(): Promise<boolean> {
+  return new Promise(resolve => {
+    uni.showModal({
+      title: "切换视频模型",
+      content: "当前模型不支持参考图，切换后将移除已上传图片，是否继续？",
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    });
+  });
+}
+
+function videoConfigRemovesReferences(config: BackendGenerationConfig) {
+  if (!creationReferencePaths.value.length && !creationLastFramePath.value) return false;
+  if (creationReferencePaths.value.length && !config.videoCapabilities.supportsImageToVideo) return true;
+  return Boolean(creationLastFramePath.value && !config.videoCapabilities.supportsLastFrame);
+}
+
+function commitVideoModelConfig(config: BackendGenerationConfig) {
+  const fields = deriveEditableVideoFields(config.schema, config.videoCapabilities);
+  const previous = Object.keys(videoParameterValues.value).length
+    ? videoParameterValues.value
+    : restoredCreationParams.value;
+  const nextValues = transitionVideoParameterValues(previous, fields);
+  applyVideoModelCapabilities(config.videoCapabilities, Boolean(selectedVideoModelCode.value));
+  selectedVideoModelCode.value = config.model;
+  videoParameterFields.value = fields;
+  videoParameterValues.value = nextValues;
+  videoModelError.value = "";
+  syncVideoParameterDraft(nextValues, config.model);
+  scheduleVideoEstimate();
+}
+
+async function requestVideoModelSwitch(modelCode: string) {
+  const candidate = String(modelCode || "").trim();
+  if (!candidate || (candidate === selectedVideoModelCode.value && videoParameterFields.value.length)) return;
+  const sequence = ++videoModelSwitchSequence;
+  videoModelSwitching.value = true;
+  videoModelError.value = "";
+  try {
+    const config = await resolveBackendGenerationConfig("video", candidate);
+    if (sequence !== videoModelSwitchSequence || creationMode.value !== "video" || !config) {
+      if (!config && sequence === videoModelSwitchSequence) {
+        videoModelError.value = isGuest.value ? "登录后加载当前模型参数" : "当前模型参数加载失败";
+      }
+      return;
     }
-    applyVideoModelCapabilities(config.videoCapabilities, Boolean(previous && previous[1] !== model));
-  },
-  { immediate: true },
-);
+    if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval()) return;
+    if (sequence !== videoModelSwitchSequence) return;
+    commitVideoModelConfig(config);
+  } finally {
+    if (sequence === videoModelSwitchSequence) videoModelSwitching.value = false;
+  }
+}
+
+async function initializeVideoModelForm() {
+  if (creationMode.value !== "video") return;
+  try {
+    const models = await businessSdk.models.list();
+    videoModelOptions.value = models.filter(item => {
+      const capabilities = (item.capabilities || []).map(value => String(value).toUpperCase());
+      return capabilities.includes("TEXT_TO_VIDEO")
+        || capabilities.includes("IMAGE_TO_VIDEO")
+        || Boolean(item.videoCapabilities);
+    });
+  } catch {
+    videoModelOptions.value = [];
+  }
+  const requested = rowString(restoredCreationParams.value, "model", "modelName")
+    || activeCreation.value.model
+    || videoModelOptions.value[0]?.code
+    || "";
+  await requestVideoModelSwitch(requested);
+}
+
+function clearVideoEstimateTimer() {
+  if (videoEstimateTimer) {
+    clearTimeout(videoEstimateTimer);
+    videoEstimateTimer = null;
+  }
+}
+
+function scheduleVideoEstimate() {
+  clearVideoEstimateTimer();
+  const sequence = ++videoEstimateSequence;
+  videoEstimate.value = null;
+  videoEstimateError.value = "";
+  if (!selectedVideoModelCode.value || !videoParameterFields.value.length) return;
+  if (isGuest.value) {
+    videoEstimateError.value = "登录后可查看预计积分";
+    return;
+  }
+  videoEstimateTimer = setTimeout(async () => {
+    videoEstimateLoading.value = true;
+    try {
+      const params = buildVideoSubmissionParameters(
+        videoParameterValues.value,
+        videoParameterFields.value,
+      );
+      if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationReferencePaths.value[0]) {
+        params.first_frame = creationReferencePaths.value[0];
+      }
+      if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationLastFramePath.value) {
+        params.last_frame = creationLastFramePath.value;
+      }
+      const result = await businessSdk.generation.estimateVideo({
+        type: videoGenerationMode.value,
+        prompt: creationPrompt.value.trim(),
+        model: selectedVideoModelCode.value,
+        params,
+      });
+      if (sequence !== videoEstimateSequence) return;
+      videoEstimate.value = result;
+    } catch {
+      if (sequence !== videoEstimateSequence) return;
+      videoEstimateError.value = "暂无法试算";
+    } finally {
+      if (sequence === videoEstimateSequence) videoEstimateLoading.value = false;
+    }
+  }, 250);
+}
 
 async function resolvePptGenerationModels() {
   const [textResult, imageResult] = await Promise.allSettled([
@@ -2690,7 +3145,10 @@ async function submitCreation(prompt: string) {
       if (!generationConfig) throw new Error("已取消切换模型");
       const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
       if (mode === "video") {
-        applyVideoModelCapabilities(generationConfig.videoCapabilities, true);
+        if (videoConfigRemovesReferences(generationConfig) && !await confirmVideoReferenceRemoval()) {
+          throw new Error("已取消切换模型");
+        }
+        commitVideoModelConfig(generationConfig);
         if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && referenceCountBeforeCapabilityCheck > 1) {
           throw new Error("旧草稿包含多张视频参考图，请重新选择 1 张首帧图");
         }
@@ -2707,26 +3165,43 @@ async function submitCreation(prompt: string) {
       const lastFrame = mode === "video" && creationLastFrameEnabled.value && creationLastFramePath.value
         ? (await uploadCreationReferenceImages([creationLastFramePath.value]))[0] || ""
         : "";
-      const requestedQuality = restoredCreationString("quality", "imageQuality") || (mode === "video" ? "720p" : "standard");
-      const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || (mode === "video" ? "16:9" : "1024x1024");
+      const finalVideoParameters = mode === "video"
+        ? buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value)
+        : {};
+      const requestedQuality = mode === "video"
+        ? String(finalVideoParameters.resolution || "")
+        : restoredCreationString("quality", "imageQuality") || "standard";
+      const requestedSize = mode === "video"
+        ? String(finalVideoParameters.aspect_ratio || "")
+        : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
+      const finalVideoCapabilities = mode === "video"
+        ? {
+            ...generationConfig.videoCapabilities,
+            supportedParameters: videoParameterFields.value.map(field => field.key),
+          }
+        : undefined;
       const result = await businessSdk.generation.createTask({
         mode,
         prompt,
         model: generationConfig.model,
         style: restoredCreationString("style", "stylePreset") || (mode === "video" ? "cinematic" : creationMode.value === "infographic" ? "infographic" : "commercial"),
-        size: constrainedSchemaString(generationConfig.schema, mode === "video" ? "aspect_ratio" : "size", requestedSize, mode === "video" ? "16:9" : "1024x1024"),
-        quality: constrainedSchemaString(generationConfig.schema, mode === "video" ? "resolution" : "quality", requestedQuality, mode === "video" ? "720p" : "standard"),
+        size: mode === "video"
+          ? requestedSize
+          : constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
+        quality: mode === "video"
+          ? requestedQuality
+          : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
         videoMode: mode === "video" ? videoGenerationMode.value : undefined,
         firstFrame: mode === "video" ? firstFrame : undefined,
         lastFrame: mode === "video" ? lastFrame : undefined,
-        videoCapabilities: mode === "video" ? generationConfig.videoCapabilities : undefined,
+        videoCapabilities: finalVideoCapabilities,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
-        duration: mode === "video"
-          ? constrainedSchemaNumber(generationConfig.schema, "duration", rowNumber(restoredCreationParams.value, "duration"), 5)
+        duration: mode === "video" && finalVideoParameters.duration !== undefined
+          ? Number(finalVideoParameters.duration)
           : undefined,
-        parameters: restoredCreationParams.value,
+        parameters: mode === "video" ? finalVideoParameters : restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
@@ -3035,6 +3510,7 @@ onMounted(() => {
     }
     restoreActiveGeneration();
   }
+  if (creationMode.value === "video") void initializeVideoModelForm();
   void loadTerminalCapabilities();
   void refreshAll();
 });
@@ -3042,6 +3518,7 @@ onMounted(() => {
 watch(() => authStore.token, (nextToken, previousToken) => {
   if (nextToken === previousToken) return;
   if (!nextToken) clearAuthenticatedData();
+  if (nextToken && creationMode.value === "video") void initializeVideoModelForm();
   void refreshAll();
 });
 
@@ -3060,6 +3537,9 @@ async function loadTerminalCapabilities() {
 
 onBeforeUnmount(() => {
   uni.$off("legal-acceptance-completed", handleLegalAcceptanceCompleted);
+  clearVideoEstimateTimer();
+  videoModelSwitchSequence += 1;
+  videoEstimateSequence += 1;
   generationPollRun += 1;
   stopGenerationFeedback(false);
   const bridge = globalThis as NativeGenerateBridge;
@@ -3906,6 +4386,15 @@ onBackPress(() => {
   background: #f7f8fc;
 }
 
+.free-image-edit-page {
+  min-height: 100vh;
+  background: #f8fafc;
+}
+
+.free-image-edit-page__task {
+  margin: 0 16px 16px;
+}
+
 .user-v531-shell .native-safe-note {
   height: var(--header-height, 64px);
   min-height: 0;
@@ -4749,4 +5238,77 @@ onBackPress(() => {
   .v31-hero-row { grid-template-columns: 1fr 1fr; }
   .v31-orange-button { grid-column: 1 / -1; }
 }
+.video-safety-banner,
+.video-prompt-card,
+.video-reference-card,
+.video-model-row,
+.video-basic-card,
+.video-advanced-card,
+.video-generation-summary { box-sizing: border-box; border: 1px solid #e4e8f2; border-radius: 14px; background: #fff; }
+.video-safety-banner { display: flex; min-height: 40px; padding: 10px 12px; align-items: center; gap: 9px; border-color: #dce5ff; color: #596784; background: #f2f5ff; font-size: 11px; }
+.video-safety-icon { width: 20px; height: 20px; padding: 4px; box-sizing: border-box; border-radius: 50%; background: #6175e7; }
+
+.video-prompt-card { position: relative; padding: 15px 14px 12px; }
+.video-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.video-card-title { color: #111827; font-size: 15px; font-weight: 700; }
+.video-prompt-input { width: 100%; height: 108px; margin-top: 12px; padding: 12px; box-sizing: border-box; border: 1px solid #e2e6ef; border-radius: 11px; color: #202738; background: #fbfcfe; font-size: 12px; line-height: 1.55; }
+.video-prompt-count { display: block; margin-top: 7px; color: #a0a8b8; font-size: 9px; text-align: right; }
+
+.video-reference-card { display: flex; min-height: 76px; padding: 12px; align-items: center; gap: 11px; color: #1f2937; text-align: left; }
+.video-reference-card.is-uploaded { border-color: #9eafff; background: #f4f6ff; }
+.video-reference-card.is-disabled { opacity: 0.64; }
+.video-reference-icon,
+.video-reference-thumbnail { width: 46px; height: 46px; flex: 0 0 46px; border-radius: 10px; }
+.video-reference-icon { padding: 11px; box-sizing: border-box; background: #eef2ff; }
+.video-reference-thumbnail { border: 1px solid #d8def2; }
+.video-reference-copy { min-width: 0; flex: 1; }
+.video-reference-title { display: block; font-size: 13px; font-weight: 700; }
+.video-reference-description { display: block; margin-top: 5px; overflow: hidden; color: #778195; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.video-reference-delete { width: 26px; min-width: 26px; height: 26px; margin: 0; padding: 0; border: 0; border-radius: 50%; color: #68738a; background: #e8ecf8; font-size: 17px; line-height: 24px; }
+.video-reference-delete::after { display: none; }
+.video-row-chevron { width: 16px; height: 16px; flex: 0 0 16px; }
+
+.video-model-row,
+.video-advanced-heading { display: flex; min-height: 54px; padding: 0 14px; align-items: center; justify-content: space-between; gap: 12px; }
+.video-row-label { color: #202738; font-size: 13px; font-weight: 700; }
+.video-row-value { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 5px; color: #6f7890; font-size: 11px; }
+.video-row-value > text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.video-basic-card { padding: 15px 12px 0; }
+.video-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.video-section-title { color: #111827; font-size: 15px; font-weight: 700; }
+.video-section-heading > text:last-child { color: #9199aa; font-size: 9px; }
+.video-basic-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 13px; }
+.video-basic-picker { min-width: 0; }
+.video-basic-tile { min-width: 0; padding: 10px 7px; border: 1px solid #e4e8f1; border-radius: 10px; background: #fafbfe; }
+.video-basic-label { display: block; overflow: hidden; color: #8a93a6; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.video-basic-value { display: flex; min-width: 0; margin-top: 7px; align-items: center; justify-content: space-between; gap: 2px; color: #263048; font-size: 10px; font-weight: 700; }
+.video-basic-value text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-basic-value image { width: 11px; height: 11px; flex: 0 0 11px; }
+.video-parameter-empty { display: block; padding: 18px 0; color: #9199aa; font-size: 10px; text-align: center; }
+.video-audio-row { display: flex; min-height: 62px; margin-top: 13px; padding: 0 2px; align-items: center; justify-content: space-between; border-top: 1px solid #edf0f5; }
+.video-audio-title { display: block; color: #283147; font-size: 12px; font-weight: 700; }
+.video-audio-copy { display: block; margin-top: 3px; color: #9098aa; font-size: 9px; }
+.video-audio-switch { position: relative; width: 42px; min-width: 42px; height: 24px; margin: 0; padding: 2px; border: 0; border-radius: 999px; background: #cbd2df; }
+.video-audio-switch text { display: block; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(31, 41, 55, 0.2); transition: transform 0.18s ease; }
+.video-audio-switch.is-active { background: #5369e8; }
+.video-audio-switch.is-active text { transform: translateX(18px); }
+.video-audio-switch::after { display: none; }
+
+.video-advanced-card { overflow: hidden; }
+.video-advanced-heading { width: 100%; margin: 0; border: 0; border-radius: 0; background: transparent; line-height: normal; }
+.video-advanced-heading::after { display: none; }
+.video-advanced-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0 12px 12px; }
+.video-advanced-picker > view { display: flex; padding: 10px; align-items: center; justify-content: space-between; gap: 6px; border: 1px solid #e5e9f2; border-radius: 9px; color: #697386; background: #fafbfe; font-size: 10px; }
+.video-advanced-picker > view text:last-child { color: #33405c; font-weight: 700; }
+
+.video-generation-summary { display: flex; min-height: 62px; padding: 12px 14px; align-items: center; justify-content: space-between; gap: 10px; }
+.video-summary-main { display: block; color: #283147; font-size: 11px; font-weight: 700; }
+.video-summary-copy { display: block; margin-top: 5px; color: #929aac; font-size: 9px; }
+.video-cost-pill { flex: 0 0 auto; padding: 6px 10px; border-radius: 999px; color: #f16620; background: #fff1e8; font-size: 10px; font-weight: 700; }
+.video-primary-generate { display: flex; width: 100%; min-height: 48px; margin: 0; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 14px; color: #fff; background: #5369e8; font-size: 15px; font-weight: 700; line-height: 48px; box-shadow: 0 8px 18px rgba(83, 105, 232, 0.2); }
+.video-primary-generate image { width: 18px; height: 18px; filter: brightness(0) invert(1); }
+.video-primary-generate::after { display: none; }
+.video-primary-generate.disabled { opacity: 0.62; box-shadow: none; }
+.video-generation-error { margin: -5px 4px 0; }
 </style>
