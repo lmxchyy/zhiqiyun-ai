@@ -897,6 +897,7 @@ import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
 import { useAuthStore } from "../stores/auth";
 import { useUserStore } from "../stores/user";
 import { requireAuth as requireProtectedAction } from "../features/auth/gate";
+import { acceptGuestBrowse, hasAcceptedGuestBrowse, isLoginPromptSuppressed, suppressLoginPrompt } from "../features/auth/guestBrowse";
 import { trackLogin } from "../features/auth/analytics";
 import { ensureWechatMiniProgramSession } from "../features/auth/wechatSession";
 import { reviewModeHides } from "../features/reviewMode";
@@ -1930,6 +1931,8 @@ function readAuth() {
 
 function requestLogin(reason = "登录后可继续使用此功能") {
   if (!isGuest.value) return true;
+  if (isLoginPromptSuppressed()) return false;
+  if (!hasAcceptedGuestBrowse()) acceptGuestBrowse();
   uni.showModal({
     title: "登录后使用",
     content: `${reason}。你也可以取消并继续浏览。`,
@@ -1937,7 +1940,11 @@ function requestLogin(reason = "登录后可继续使用此功能") {
     cancelText: "继续浏览",
     confirmColor: "#4A6BFF",
     success: result => {
-      if (!result.confirm) return;
+      if (!result.confirm) {
+        acceptGuestBrowse();
+        suppressLoginPrompt();
+        return;
+      }
       const pages = getCurrentPages();
       const current = pages[pages.length - 1] as { route?: string } | undefined;
       const redirectPath = current?.route ? `/${String(current.route).replace(/^\/+/, "")}` : "/pages/user/UserHomePage";

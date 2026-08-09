@@ -4,6 +4,7 @@ import { workspaceFromAuth, type AuthStatus, type PendingActionInput } from "@xi
 import type { AuthResponse, WorkspaceRole } from "../types";
 import { useUserStore } from "./user";
 import { requireAuth as requireProtectedAction, resumePendingAction } from "../features/auth/gate";
+import { acceptGuestBrowse } from "../features/auth/guestBrowse";
 
 interface AuthState {
   status: AuthStatus;
@@ -77,6 +78,7 @@ export const useAuthStore = defineStore("auth", {
       this.token = "";
       this.refreshToken = "";
       authService.storage.clearSession();
+      acceptGuestBrowse();
     },
     logout() {
       this.status = "guest";
@@ -89,6 +91,7 @@ export const useAuthStore = defineStore("auth", {
       this.loginMethod = "";
       useUserStore().reset();
       authService.storage.clear();
+      acceptGuestBrowse();
     }
   }
 });

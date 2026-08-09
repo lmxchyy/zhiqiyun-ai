@@ -7,10 +7,10 @@
 
 防回归：
 • 主提示：`.ai/CodexPrompt.md`（只做当前事、别整页重写、做完确认旧功能还在并勾选保护面）
-• 不能丢的功能清单：`docs/regression/protected-surfaces.md`（含网页侧边栏点数、首页/生图首屏、小程序首页模板/视频选择/作品列表等）
+• 不能丢的功能清单：`docs/regression/protected-surfaces.md`（含网页侧边栏点数、首页/生图首屏、小程序首页模板、登录落用户首页、游客浏览入口、视频模型/参数/预估积分、自由P图全页、作品列表等）
 • 改页面遵守：`.ai/前端工人CodexPrompt.md`
 • 发版遵守：`.ai/发版经理CodexPrompt.md`
-• 触及 protected-surfaces 中 W1–W3 时，必须保持对应 Go / Vitest 回归绿；禁止把 `/points/account` 的 `total` 退回 `available+frozen`，禁止把首页/生图首屏默认 limit 改回 120/300。
+• 触及 protected-surfaces 中 W1–W3 / M1 / M2 / M6 时，必须保持对应 Go / Node 回归绿；禁止把 `/points/account` 的 `total` 退回 `available+frozen`，禁止把首页/生图首屏默认 limit 改回 120/300；禁止 Seedance 默认预估退回约 90（应对齐 5s/720p=600）；禁止自由P图入口回退「信息图」或再叠外层壳；禁止登录默认跳代理商页；禁止「暂不登录」入口退化成灰色弱链。
 • 生产机禁止长期未提交热修；dirty tree 不得绕过 `deploy.sh`。
 
 企业 Connector 约束：

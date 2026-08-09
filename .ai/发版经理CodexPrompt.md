@@ -21,5 +21,5 @@
 
 1. 发布前 commit / 发布后运行版本
 2. 备份位置（若清理过生产 dirty tree）
-3. `protected-surfaces` 核对（至少 P1、P2；触及前端则加上 W1–W3 / 相关 M*）
+3. `protected-surfaces` 核对（至少 P1、P2；触及前端则加上 W1–W3 / 相关 M*；触及视频预估或自由P图则必须勾 M2 / M6）
 4. 健康检查结果与遗留风险

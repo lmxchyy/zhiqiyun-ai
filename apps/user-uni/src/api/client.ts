@@ -2,6 +2,7 @@ import { configureApiClient, toChineseApiErrorMessage } from '@xianzhi/api-clien
 import { createBusinessSdk } from '@xianzhi/business-sdk'
 import { createUniPlatformAdapter, type AdapterDownloadFileResponse } from '@xianzhi/platform-adapter'
 import { createAuthService, createAuthStorage } from '@xianzhi/shared-auth'
+import { hasAcceptedGuestBrowse } from '../features/auth/guestBrowse'
 
 const tokenKey = 'token'
 const refreshTokenKey = 'refreshToken'
@@ -152,6 +153,7 @@ function normalizeBody(body: RequestInit['body']) {
 
 function redirectToLogin() {
   if (unauthorizedRedirecting) return
+  if (!authStorage.getToken() && hasAcceptedGuestBrowse()) return
   unauthorizedRedirecting = true
   // #ifdef MP-WEIXIN || APP-PLUS
   const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
@@ -179,7 +181,8 @@ function redirectToLogin() {
 }
 
 async function handleUnauthorized(context: { path?: string; statusCode?: number; requestId?: string; payload?: unknown; retryAttempt?: number; authMode?: "none" | "optional" | "required" } = {}) {
-  const shouldOpenLogin = context.authMode === "required"
+  const guestBrowse = !authStorage.getToken() && hasAcceptedGuestBrowse()
+  const shouldOpenLogin = context.authMode === "required" && !guestBrowse
   if ((context.retryAttempt || 0) > 0) {
     authStorage.clear()
     if (shouldOpenLogin) redirectToLogin()
