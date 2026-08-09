@@ -1390,10 +1390,10 @@ const videoGenerationSummary = computed(() => {
   return parts.join(" · ") || "参数由当前模型动态提供";
 });
 const videoCostLabel = computed(() => {
-  if (videoEstimateLoading.value) return "试算中";
-  if (videoEstimate.value) return `${videoEstimate.value.estimatedPoints} 积分`;
-  if (videoEstimateError.value) return "正式提交时以后端为准";
-  return activeCreationCost.value.replace("点", "积分").replace("/条", "");
+  if (videoEstimateLoading.value) return "试算中…";
+  if (videoEstimate.value) return `预计 ${videoEstimate.value.estimatedPoints} 积分`;
+  if (videoEstimateError.value) return videoEstimateError.value;
+  return "切换模型后自动试算";
 });
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
 const generationNoticePending = computed(() => latestGenerationTask.value?.tone === "pending");
@@ -3051,7 +3051,7 @@ function scheduleVideoEstimate() {
       videoEstimate.value = result;
     } catch {
       if (sequence !== videoEstimateSequence) return;
-      videoEstimateError.value = "暂无法试算";
+      videoEstimateError.value = "暂无法试算，正式提交时以后端为准";
     } finally {
       if (sequence === videoEstimateSequence) videoEstimateLoading.value = false;
     }

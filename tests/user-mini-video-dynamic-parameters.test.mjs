@@ -41,6 +41,7 @@ test("model and parameter changes refresh a guarded point estimate", () => {
   assert.ok(source.includes("scheduleVideoEstimate"));
   assert.ok(source.includes("businessSdk.generation.estimateVideo"));
   assert.ok(source.includes("预计消耗"));
+  assert.match(source, /预计 \$\{videoEstimate\.value\.estimatedPoints\} 积分/);
   assert.ok(source.includes("正式提交时以后端为准"));
 });
 
