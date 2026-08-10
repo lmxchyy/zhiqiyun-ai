@@ -931,6 +931,7 @@ import {
   imageRequestOutcomeForError,
   initialImageSelection,
   nextImageClientRequestKey,
+  resolveImageReferenceUploads,
   resolveImageModelCode,
   resolveImageSchemaFetchResult,
   restoreImageInspirationSelection,
@@ -941,6 +942,7 @@ import {
   type ImageClientRequestKeyState,
   type ImageGeneratorStatusTone,
   type ImageGeneratorModelOption,
+  type ImageReferenceUploadCache,
   type ImageRequestPreviousOutcome,
   type ImageSchemaLoadStatus,
 } from "../features/generation/imageCreation";
@@ -1249,6 +1251,7 @@ const imageInspirationError = ref("");
 const pendingImageSelection = ref<CanonicalImageSelection | null>(null);
 const imageClientRequestKey = ref<ImageClientRequestKeyState>();
 const imageRequestPreviousOutcome = ref<ImageRequestPreviousOutcome>();
+const imageReferenceUploadCache = ref<ImageReferenceUploadCache>();
 let imageModelsRequestSequence = 0;
 let imageSchemaRequestSequence = 0;
 const creationLastFramePath = ref("");
@@ -3479,7 +3482,13 @@ async function submitCreation(prompt: string) {
       ) {
         throw new Error(imageSchemaMessage.value || "当前模型参数尚未就绪");
       }
-      const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
+      const resolvedReferences = await resolveImageReferenceUploads({
+        sourceReferences: creationReferencePaths.value,
+        cache: imageReferenceUploadCache.value,
+        previousOutcome: imageRequestPreviousOutcome.value,
+      }, uploadCreationReferenceImages);
+      imageReferenceUploadCache.value = resolvedReferences.cache;
+      const referenceImages = resolvedReferences.referenceImages;
       const draft = buildCanonicalImageDraft({
         contract,
         selection: {

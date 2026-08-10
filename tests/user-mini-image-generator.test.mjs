@@ -551,6 +551,192 @@ test("network-uncertain retry reuses the existing key for an identical canonical
   assert.equal(factoryCalls, 0);
 });
 
+function canonicalDraftWithUploadedReferences(referenceImages) {
+  const buildCanonicalImageDraft = requiredFunction("buildCanonicalImageDraft");
+  return buildCanonicalImageDraft({
+    contract: availableContract(enumerableCountSchema()),
+    selection: { size: "1536x1024", quality: "high", count: 2 },
+    prompt: "生成带参考图的水果海报",
+    model: "gpt-image-2",
+    style: "commercial",
+    referenceImages,
+    negativePrompt: "watermark",
+    parameters: { seed: 42 },
+  });
+}
+
+async function resolveReferenceSubmission({
+  sourceReferences,
+  cache,
+  previousOutcome,
+  existing,
+  uuid,
+  upload,
+}) {
+  const resolveImageReferenceUploads = requiredFunction("resolveImageReferenceUploads");
+  const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
+  const resolved = await resolveImageReferenceUploads({
+    sourceReferences,
+    cache,
+    previousOutcome,
+  }, upload);
+  const draft = canonicalDraftWithUploadedReferences(resolved.referenceImages);
+  const requestSnapshot = taskRequestFromDraft(draft);
+  const fingerprint = fingerprintOf(requestSnapshot);
+  const requestKey = nextImageClientRequestKey({
+    fingerprint,
+    existing,
+    previousOutcome,
+  }, () => uuid);
+  return {
+    ...resolved,
+    fingerprint,
+    requestKey,
+    requestSnapshot,
+    finalRequest: taskRequestFromDraft({ ...draft, clientRequestId: requestKey.clientRequestId }),
+  };
+}
+
+test("network-uncertain retry reuses uploaded URLs so the request fingerprint and key stay identical", async () => {
+  const uploadCalls = [];
+  const upload = async references => {
+    uploadCalls.push([...references]);
+    const batch = uploadCalls.length;
+    return references.map((_, index) => `https://uploads.test/batch-${batch}-${index + 1}.png`);
+  };
+  const sourceReferences = ["wxfile://reference-a.png", "wxfile://reference-b.png"];
+
+  const first = await resolveReferenceSubmission({
+    sourceReferences,
+    uuid: "first",
+    upload,
+  });
+  const retry = await resolveReferenceSubmission({
+    sourceReferences,
+    cache: first.cache,
+    previousOutcome: "network-uncertain",
+    existing: first.requestKey,
+    uuid: "must-not-rotate",
+    upload,
+  });
+
+  assert.deepEqual(uploadCalls, [sourceReferences]);
+  assert.equal(first.reused, false);
+  assert.equal(retry.reused, true);
+  assert.deepEqual(retry.referenceImages, [
+    "https://uploads.test/batch-1-1.png",
+    "https://uploads.test/batch-1-2.png",
+  ]);
+  assert.deepEqual(retry.requestSnapshot, first.requestSnapshot);
+  assert.equal(retry.fingerprint, first.fingerprint);
+  assert.deepEqual(retry.requestKey, first.requestKey);
+  assert.deepEqual(retry.finalRequest, first.finalRequest);
+});
+
+test("changed reference values upload again and create a new canonical request key", async () => {
+  const uploadCalls = [];
+  const upload = async references => {
+    uploadCalls.push([...references]);
+    const batch = uploadCalls.length;
+    return references.map((_, index) => `https://uploads.test/batch-${batch}-${index + 1}.png`);
+  };
+  const firstSources = ["wxfile://reference-a.png", "wxfile://reference-b.png"];
+  const changedSources = ["wxfile://reference-a.png", "wxfile://reference-c.png"];
+
+  const first = await resolveReferenceSubmission({ sourceReferences: firstSources, uuid: "first", upload });
+  const changed = await resolveReferenceSubmission({
+    sourceReferences: changedSources,
+    cache: first.cache,
+    previousOutcome: "network-uncertain",
+    existing: first.requestKey,
+    uuid: "changed",
+    upload,
+  });
+
+  assert.deepEqual(uploadCalls, [firstSources, changedSources]);
+  assert.equal(changed.reused, false);
+  assert.notEqual(changed.fingerprint, first.fingerprint);
+  assert.equal(changed.requestKey.clientRequestId, "image_changed");
+  assert.notDeepEqual(changed.finalRequest, first.finalRequest);
+});
+
+test("changed reference order is a new source snapshot and uploads again", async () => {
+  const uploadCalls = [];
+  const upload = async references => {
+    uploadCalls.push([...references]);
+    return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
+  };
+  const firstSources = ["wxfile://reference-a.png", "wxfile://reference-b.png"];
+  const reorderedSources = ["wxfile://reference-b.png", "wxfile://reference-a.png"];
+
+  const first = await resolveReferenceSubmission({ sourceReferences: firstSources, uuid: "first", upload });
+  const reordered = await resolveReferenceSubmission({
+    sourceReferences: reorderedSources,
+    cache: first.cache,
+    previousOutcome: "network-uncertain",
+    existing: first.requestKey,
+    uuid: "reordered",
+    upload,
+  });
+
+  assert.deepEqual(uploadCalls, [firstSources, reorderedSources]);
+  assert.equal(reordered.reused, false);
+  assert.notEqual(reordered.fingerprint, first.fingerprint);
+  assert.equal(reordered.requestKey.clientRequestId, "image_reordered");
+});
+
+test("terminal retry uploads normally and creates a new key even when uploaded URLs are stable", async () => {
+  const uploadCalls = [];
+  const upload = async references => {
+    uploadCalls.push([...references]);
+    return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
+  };
+  const sourceReferences = ["wxfile://reference-a.png"];
+
+  const first = await resolveReferenceSubmission({ sourceReferences, uuid: "first", upload });
+  const terminalRetry = await resolveReferenceSubmission({
+    sourceReferences,
+    cache: first.cache,
+    previousOutcome: "terminal-failure",
+    existing: first.requestKey,
+    uuid: "terminal-retry",
+    upload,
+  });
+
+  assert.deepEqual(uploadCalls, [sourceReferences, sourceReferences]);
+  assert.equal(terminalRetry.reused, false);
+  assert.deepEqual(terminalRetry.requestSnapshot, first.requestSnapshot);
+  assert.equal(terminalRetry.fingerprint, first.fingerprint);
+  assert.equal(terminalRetry.requestKey.clientRequestId, "image_terminal-retry");
+  assert.notEqual(terminalRetry.requestKey.clientRequestId, first.requestKey.clientRequestId);
+});
+
+test("failed reference upload produces no cache entry", async () => {
+  const resolveImageReferenceUploads = requiredFunction("resolveImageReferenceUploads");
+  const sourceReferences = ["wxfile://reference-a.png"];
+  let cache;
+  let uploadCalls = 0;
+
+  await assert.rejects(async () => {
+    const resolved = await resolveImageReferenceUploads({ sourceReferences }, async () => {
+      uploadCalls += 1;
+      throw new Error("upload failed");
+    });
+    cache = resolved.cache;
+  }, /upload failed/);
+
+  assert.equal(cache, undefined);
+  const recovered = await resolveImageReferenceUploads({ sourceReferences, cache }, async () => {
+    uploadCalls += 1;
+    return ["https://uploads.test/reference-a.png"];
+  });
+  assert.equal(uploadCalls, 2);
+  assert.deepEqual(recovered.cache, {
+    sourceSnapshot: sourceReferences,
+    uploadedURLs: ["https://uploads.test/reference-a.png"],
+  });
+});
+
 test("every complete canonical request semantic changes the fingerprint", () => {
   const baseFingerprint = fingerprintOf(canonicalFingerprintRequest());
   const mutations = [
@@ -934,6 +1120,8 @@ test("workbench wires exact image schema, canonical draft, and retry helpers wit
   assert.match(source, /taskRequestFromDraft/);
   assert.match(source, /imageRequestFingerprint/);
   assert.match(source, /nextImageClientRequestKey/);
+  assert.match(source, /resolveImageReferenceUploads/);
+  assert.match(source, /imageReferenceUploadCache/);
   assert.match(source, /clientRequestId/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
   assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);

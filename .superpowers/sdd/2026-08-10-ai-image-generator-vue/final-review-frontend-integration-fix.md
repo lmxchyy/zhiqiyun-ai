@@ -71,3 +71,55 @@ Because the patcher stopped before the remaining transformations, the resulting 
 - Exact final MAIN / `pages/user-creation` / TOTAL bytes are therefore **not available and are intentionally not claimed**. A separate build-script fix must rerun `build:mp-weixin:local`, wallet 4/4, package bytes, and click E2E.
 
 The known production H5 route exclusion and temporary-route DCloud slot bug were not changed or wrapped in a compatibility layer.
+
+## Follow-up review fix: uncertain reference upload reuse
+
+The integration review found one important retry gap: a network-uncertain task submission retried the local reference uploads before computing the real SDK request snapshot. If the upload service returned different remote URLs, the request fingerprint and `clientRequestId` changed even though the user's inputs had not.
+
+The fix adds a small ordered source-reference/uploaded-URL cache at the image submission boundary:
+
+- A retry reuses the uploaded URLs only when the preceding task request outcome was `network-uncertain` and the ordered local source-reference snapshot is identical.
+- First attempts, changed reference values, changed reference order, explicit terminal request failures, and terminal task retries follow the normal upload path.
+- Upload failures create no cache entry.
+- The cached URLs enter the existing canonical draft, real compiled `taskRequestFromDraft` request snapshot, fingerprint, and idempotency-key flow. No request-shape fallback or compatibility alias was added.
+
+### Follow-up TDD evidence
+
+RED command:
+
+```text
+node --test --test-name-pattern "uploaded URLs|reference values|reference order|terminal retry|failed reference upload|workbench wires" tests/user-mini-image-generator.test.mjs
+```
+
+RED result: **7 tests, 1 passed / 6 failed**. Five behavior tests failed because `resolveImageReferenceUploads` did not exist, and the Workbench integration assertion failed because the cache helper was not wired.
+
+GREEN result for the same command: **7/7 passed**. The behavior tests use the real compiled Business SDK `taskRequestFromDraft`, canonical request fingerprint, and request-key state machine. They prove:
+
+- same ordered local references plus a network-uncertain retry call the uploader once and preserve the uploaded URLs, SDK request snapshot, fingerprint, final request, and `clientRequestId`;
+- changed reference values and changed order call the uploader again and rotate the fingerprint/key;
+- terminal retry calls the uploader normally and uses a new key;
+- a rejected upload is not cached.
+
+### Follow-up verification
+
+| Command | Result |
+| --- | --- |
+| `node --test tests/user-mini-image-generator.test.mjs` | PASS, **37/37** |
+| M1/M2/M4/M6 aggregate Node command | PASS, **75/75** |
+| `npm.cmd run typecheck:packages` | PASS |
+| `npm.cmd run typecheck` in `apps/user-uni` | PASS |
+| `npm.cmd run build:h5` in `apps/user-uni` | PASS; existing dynamic/static import warning and local `os - Alias not found.` shell noise only |
+| first `npm.cmd run build:mp-weixin:local` | PASS |
+| first `npm.cmd run test:wallet-build` | PASS, **4/4** |
+| second `npm.cmd run build:mp-weixin:local` | PASS |
+| second `npm.cmd run test:wallet-build` | PASS, **4/4** |
+
+The two fresh WeChat builds were byte-identical after upload filtering:
+
+| Package | First build | Second build |
+| --- | ---: | ---: |
+| MAIN | 1,535,642 B | 1,535,642 B |
+| `pages/user-creation` | 141,194 B | 141,194 B |
+| TOTAL | 2,380,145 B | 2,380,145 B |
+
+The earlier post-build limitation above was historical evidence from C2 before the separate build matcher correction in `7cbc8c28f`. This follow-up did not change that build script; both fresh post-correction builds and wallet checks now complete successfully.

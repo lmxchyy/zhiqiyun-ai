@@ -79,6 +79,23 @@ export interface NextImageClientRequestKeyInput {
   previousOutcome?: ImageRequestPreviousOutcome;
 }
 
+export interface ImageReferenceUploadCache {
+  sourceSnapshot: string[];
+  uploadedURLs: string[];
+}
+
+export interface ResolveImageReferenceUploadsInput {
+  sourceReferences: string[];
+  cache?: ImageReferenceUploadCache;
+  previousOutcome?: ImageRequestPreviousOutcome;
+}
+
+export interface ResolvedImageReferenceUploads {
+  referenceImages: string[];
+  cache: ImageReferenceUploadCache;
+  reused: boolean;
+}
+
 export type ImageSchemaLoadStatus = "idle" | "loading" | "ready" | "error";
 
 export type ImageSchemaFetchResult =
@@ -529,6 +546,40 @@ export function imageRequestOutcomeForError(error: unknown): ImageRequestPreviou
   return name === "TypeError" && /network|fetch|网络|timeout|timed out|ECONN|ERR_NETWORK/i.test(message)
     ? "network-uncertain"
     : "terminal-failure";
+}
+
+function sameReferenceSnapshot(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export async function resolveImageReferenceUploads(
+  input: ResolveImageReferenceUploadsInput,
+  upload: (sourceReferences: string[]) => Promise<string[]>,
+): Promise<ResolvedImageReferenceUploads> {
+  const sourceSnapshot = [...input.sourceReferences];
+  const cached = input.cache;
+  if (
+    input.previousOutcome === "network-uncertain"
+    && cached
+    && sameReferenceSnapshot(cached.sourceSnapshot, sourceSnapshot)
+    && cached.uploadedURLs.length === sourceSnapshot.length
+  ) {
+    return {
+      referenceImages: [...cached.uploadedURLs],
+      cache: {
+        sourceSnapshot: [...cached.sourceSnapshot],
+        uploadedURLs: [...cached.uploadedURLs],
+      },
+      reused: true,
+    };
+  }
+
+  const uploadedURLs = await upload([...sourceSnapshot]);
+  const cache: ImageReferenceUploadCache = {
+    sourceSnapshot,
+    uploadedURLs: [...uploadedURLs],
+  };
+  return { referenceImages: [...uploadedURLs], cache, reused: false };
 }
 
 function stableRequestSnapshot(value: unknown): unknown {
