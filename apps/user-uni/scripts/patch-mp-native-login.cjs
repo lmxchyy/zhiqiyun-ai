@@ -1407,6 +1407,17 @@ function relocateGeneratedModule(sourceRelativePath, targetRelativePath, transfo
   fs.rmSync(sourcePath);
 }
 
+function replaceGeneratedReference(source, oldReference, newReference, label) {
+  if (!source.includes(oldReference)) {
+    throw new Error(`Generated ${label} reference was not found: ${oldReference}`);
+  }
+  const updated = source.split(oldReference).join(newReference);
+  if (!updated.includes(newReference)) {
+    throw new Error(`Generated ${label} reference was not rewritten: ${newReference}`);
+  }
+  return updated;
+}
+
 const relocatedUserRoutes = new Map();
 for (const subPackage of relocatedUserSubPackages) {
   for (const pageName of subPackage.pages) {
@@ -2051,6 +2062,53 @@ for (const pageName of ["UserMembershipDetailPage", "UserAgentDetailPage"]) {
   if (updatedJson === originalJson) throw new Error(`Commerce detail component JSON reference was not rewritten: ${pageName}`);
   fs.writeFileSync(pageJsonPath, updatedJson);
 }
+
+for (const extension of ["js", "json", "wxml", "wxss"]) {
+  relocateGeneratedModule(
+    `components/PptDocumentGeneration.${extension}`,
+    `pages/user-creation/components/PptDocumentGeneration.${extension}`,
+    extension === "js"
+      ? (source) => [
+          ['require("../common/', 'require("../../../common/', "PPT component common module"],
+          ['require("../api/', 'require("../../../api/', "PPT component API module"],
+          ['require("../features/', 'require("../../../features/', "PPT component feature module"],
+          [
+            '"./compliance/AiGeneratedContentNotice.js"',
+            '"../../../components/compliance/AiGeneratedContentNotice.js"',
+            "PPT compliance component factory",
+          ],
+        ].reduce(
+          (updated, [oldReference, newReference, label]) =>
+            replaceGeneratedReference(updated, oldReference, newReference, label),
+          source,
+        )
+      : extension === "json"
+        ? (source) => replaceGeneratedReference(
+            source,
+            '"./compliance/AiGeneratedContentNotice"',
+            '"../../../components/compliance/AiGeneratedContentNotice"',
+            "PPT compliance component JSON",
+          )
+        : undefined,
+  );
+}
+
+const pptEditorPageJsPath = assertGeneratedPath(path.resolve(outputRoot, "pages/user-creation/UserPptEditorPage.js"));
+const pptEditorPageJsonPath = assertGeneratedPath(path.resolve(outputRoot, "pages/user-creation/UserPptEditorPage.json"));
+const pptEditorPageJs = replaceGeneratedReference(
+  fs.readFileSync(pptEditorPageJsPath, "utf8"),
+  '"../../components/PptDocumentGeneration.js"',
+  '"./components/PptDocumentGeneration.js"',
+  "PPT editor page JS",
+);
+fs.writeFileSync(pptEditorPageJsPath, pptEditorPageJs);
+const pptEditorPageJson = replaceGeneratedReference(
+  fs.readFileSync(pptEditorPageJsonPath, "utf8"),
+  '"../../components/PptDocumentGeneration"',
+  '"./components/PptDocumentGeneration"',
+  "PPT editor page JSON",
+);
+fs.writeFileSync(pptEditorPageJsonPath, pptEditorPageJson);
 
 rewriteGeneratedUserRoutes(outputRoot);
 console.log("Preserved the generated login page and patched mp-weixin generation controls.");
