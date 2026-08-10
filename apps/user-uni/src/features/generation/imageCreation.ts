@@ -64,12 +64,7 @@ export interface IncompatibleImageInspiration {
 
 export type ImageInspirationRestoreResult = CompatibleImageInspiration | IncompatibleImageInspiration;
 
-export interface ImageRequestFingerprintInput {
-  model: string;
-  prompt: string;
-  referenceImages?: readonly string[];
-  selection: CanonicalImageSelection;
-}
+export type CanonicalImageRequestSnapshot = object;
 
 export interface ImageClientRequestKeyState {
   fingerprint: string;
@@ -357,17 +352,28 @@ export function restoreImageInspirationSelection(
   };
 }
 
-export function imageRequestFingerprint(input: ImageRequestFingerprintInput): string {
-  return JSON.stringify({
-    model: input.model,
-    prompt: input.prompt,
-    referenceImages: [...(input.referenceImages || [])],
-    selection: {
-      ...(input.selection.size !== undefined ? { size: input.selection.size } : {}),
-      ...(input.selection.quality !== undefined ? { quality: input.selection.quality } : {}),
-      ...(input.selection.count !== undefined ? { count: input.selection.count } : {}),
-    },
-  });
+function stableRequestSnapshot(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableRequestSnapshot);
+  const record = recordValue(value);
+  if (!record) return value;
+
+  const sorted: UnknownRecord = {};
+  for (const key of Object.keys(record).sort()) {
+    sorted[key] = stableRequestSnapshot(record[key]);
+  }
+  return sorted;
+}
+
+export function imageRequestFingerprint(requestSnapshot: CanonicalImageRequestSnapshot): string {
+  const request = recordValue(requestSnapshot);
+  if (!request) throw new Error("图片 canonical request 必须是对象");
+
+  const semanticRequest: UnknownRecord = {};
+  for (const [key, value] of Object.entries(request)) {
+    if (key === "clientRequestId") continue;
+    semanticRequest[key] = value;
+  }
+  return JSON.stringify(stableRequestSnapshot(semanticRequest));
 }
 
 export function nextImageClientRequestKey(

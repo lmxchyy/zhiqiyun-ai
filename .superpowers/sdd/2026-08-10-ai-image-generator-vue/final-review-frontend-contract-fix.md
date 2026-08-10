@@ -93,3 +93,42 @@ git diff --check
 - [x] P2 相关回归测试（focused、M2、M4、M6、typecheck 与 diff check 均通过）
 
 说明：实际代码范围仅为 `apps/user-uni/src/features/generation/imageCreation.ts` 和 `tests/user-mini-image-generator.test.mjs`；另新增本报告。
+
+## Important review 修复：完整 request fingerprint
+
+已处理 `final-review-frontend-contract-review.md` 的唯一 Important：旧 fingerprint 只编码 `model/prompt/referenceImages/size/quality/count`，遗漏最终 body 中的 `negative_prompt`、任意 schema custom parameter 和 source provenance。
+
+修复后的 `imageRequestFingerprint` 直接接受即将提交的完整 canonical create-task request：
+
+- 顶层只移除纯幂等元数据 `clientRequestId`；当前 request 没有其他需要排除的幂等字段。
+- 不维护任何图片业务字段白名单。最终 request 新增字段会自动进入 fingerprint。
+- 所有对象键递归排序后序列化；对象插入顺序不影响 fingerprint。
+- 数组顺序和值原样保留，因此 reference image 顺序或内容变化会生成新 fingerprint。
+- `negative_prompt`、任意 custom/seed、`sourceReferenceAssetId` 或 `sourceReferenceTaskId` 任一变化都会生成新 fingerprint；网络结果不确定时因此不会误复用旧 key。
+
+追加 TDD 证据：
+
+```text
+RED: node --test tests/user-mini-image-generator.test.mjs
+     15 pass / 7 fail
+     失败均为旧 helper 拒绝 compiled taskRequestFromDraft 的完整 request。
+
+GREEN: node --test tests/user-mini-image-generator.test.mjs
+       22 pass / 0 fail
+```
+
+追加验证：
+
+```text
+npm.cmd run typecheck  # apps/user-uni
+# PASS
+
+node --test tests/user-mini-video-dynamic-parameters.test.mjs tests/video-generation-estimate-sdk.test.mjs tests/video-model-parameters.test.mjs
+# PASS 15/15
+
+node --test tests/inspiration-photo-restoration.test.mjs tests/user-mini-free-image-edit.test.mjs
+# PASS 15/15
+
+git diff --check
+# PASS
+```

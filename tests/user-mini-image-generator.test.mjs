@@ -323,19 +323,55 @@ test("image estimate copy never multiplies client-side point cost", () => {
   assert.equal(imageCreation.imagePointEstimateLabel(undefined, 1), "以生成时结算为准");
 });
 
-function canonicalFingerprintInput(count = 2) {
-  return {
+function canonicalFingerprintRequest(overrides = {}) {
+  const parameters = {
+    seed: 42,
+    custom_schema_parameter: "warm-light",
+    sourceAssetId: "asset-source-1",
+    sourceTaskId: "task-source-1",
+    ...(overrides.parameters || {}),
+  };
+  return taskRequestFromDraft({
+    mode: "image",
     model: "gpt-image-2",
     prompt: "生成橙色系水果店开业海报",
-    referenceImages: ["https://example.test/reference.png"],
-    selection: { size: "1536x1024", quality: "high", count },
-  };
+    style: "commercial",
+    size: "1536x1024",
+    quality: "high",
+    count: 2,
+    negativePrompt: "watermark",
+    referenceImages: [
+      "https://example.test/reference-a.png",
+      "https://example.test/reference-b.png",
+    ],
+    clientRequestId: "image_request_a",
+    ...overrides,
+    parameters,
+  });
+}
+
+function reverseObjectKeyInsertion(value) {
+  if (Array.isArray(value)) return value.map(reverseObjectKeyInsertion);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .reverse()
+      .map(([key, nested]) => [key, reverseObjectKeyInsertion(nested)]),
+  );
+}
+
+function fingerprintOf(request) {
+  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
+  try {
+    return imageRequestFingerprint(request);
+  } catch (error) {
+    assert.fail(`imageRequestFingerprint must accept a complete canonical request: ${error}`);
+  }
 }
 
 test("first image attempt creates an image-prefixed client request key", () => {
-  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
   const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
-  const fingerprint = imageRequestFingerprint(canonicalFingerprintInput());
+  const fingerprint = fingerprintOf(canonicalFingerprintRequest());
 
   assert.deepEqual(
     nextImageClientRequestKey({ fingerprint }, () => "uuid-first"),
@@ -344,9 +380,8 @@ test("first image attempt creates an image-prefixed client request key", () => {
 });
 
 test("network-uncertain retry reuses the existing key for an identical canonical fingerprint", () => {
-  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
   const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
-  const fingerprint = imageRequestFingerprint(canonicalFingerprintInput());
+  const fingerprint = fingerprintOf(canonicalFingerprintRequest());
   const existing = { fingerprint, clientRequestId: "image_uuid-existing" };
   let factoryCalls = 0;
 
@@ -362,11 +397,78 @@ test("network-uncertain retry reuses the existing key for an identical canonical
   assert.equal(factoryCalls, 0);
 });
 
-test("changed canonical input creates a new key even after a network-uncertain result", () => {
-  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
+test("every complete canonical request semantic changes the fingerprint", () => {
+  const baseFingerprint = fingerprintOf(canonicalFingerprintRequest());
+  const mutations = [
+    {
+      name: "negative_prompt",
+      request: canonicalFingerprintRequest({ negativePrompt: "text" }),
+    },
+    {
+      name: "arbitrary custom parameter",
+      request: canonicalFingerprintRequest({ parameters: { custom_schema_parameter: "cool-light" } }),
+    },
+    {
+      name: "seed custom parameter",
+      request: canonicalFingerprintRequest({ parameters: { seed: 99 } }),
+    },
+    {
+      name: "reference image order",
+      request: canonicalFingerprintRequest({
+        referenceImages: [
+          "https://example.test/reference-b.png",
+          "https://example.test/reference-a.png",
+        ],
+      }),
+    },
+    {
+      name: "reference image value",
+      request: canonicalFingerprintRequest({
+        referenceImages: [
+          "https://example.test/reference-a.png",
+          "https://example.test/reference-c.png",
+        ],
+      }),
+    },
+    {
+      name: "source asset provenance",
+      request: canonicalFingerprintRequest({ parameters: { sourceAssetId: "asset-source-2" } }),
+    },
+    {
+      name: "source task provenance",
+      request: canonicalFingerprintRequest({ parameters: { sourceTaskId: "task-source-2" } }),
+    },
+  ];
+
+  for (const mutation of mutations) {
+    assert.notEqual(
+      fingerprintOf(mutation.request),
+      baseFingerprint,
+      `${mutation.name} must produce a new fingerprint`,
+    );
+  }
+});
+
+test("recursive object key insertion order does not change the fingerprint", () => {
+  const request = canonicalFingerprintRequest();
+
+  assert.equal(
+    fingerprintOf(reverseObjectKeyInsertion(request)),
+    fingerprintOf(request),
+  );
+});
+
+test("client request id is pure idempotency metadata and does not change the fingerprint", () => {
+  assert.equal(
+    fingerprintOf(canonicalFingerprintRequest({ clientRequestId: "image_request_a" })),
+    fingerprintOf(canonicalFingerprintRequest({ clientRequestId: "image_request_b" })),
+  );
+});
+
+test("changed negative prompt creates a new key after a network-uncertain result", () => {
   const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
-  const oldFingerprint = imageRequestFingerprint(canonicalFingerprintInput(1));
-  const nextFingerprint = imageRequestFingerprint(canonicalFingerprintInput(2));
+  const oldFingerprint = fingerprintOf(canonicalFingerprintRequest({ negativePrompt: "watermark" }));
+  const nextFingerprint = fingerprintOf(canonicalFingerprintRequest({ negativePrompt: "text" }));
 
   assert.deepEqual(
     nextImageClientRequestKey({
@@ -379,9 +481,8 @@ test("changed canonical input creates a new key even after a network-uncertain r
 });
 
 test("retry after terminal failure creates a new key for the same canonical input", () => {
-  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
   const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
-  const fingerprint = imageRequestFingerprint(canonicalFingerprintInput());
+  const fingerprint = fingerprintOf(canonicalFingerprintRequest());
 
   assert.deepEqual(
     nextImageClientRequestKey({
