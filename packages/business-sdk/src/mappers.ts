@@ -432,13 +432,14 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   };
 }
 
-export async function confirmResolvedVideoModel(
+export function confirmResolvedVideoModel(
   requestedModel: string,
   resolvedModel: string,
   confirmSwitch: (message: string) => Promise<boolean>,
-): Promise<string | null> {
+): string | Promise<string | null> {
   if (!resolvedModel || resolvedModel === requestedModel) return resolvedModel || requestedModel;
-  return await confirmSwitch(`当前模型不可用，是否切换为 ${resolvedModel}？`) ? resolvedModel : null;
+  return confirmSwitch(`当前模型不可用，是否切换为 ${resolvedModel}？`)
+    .then(confirmed => confirmed ? resolvedModel : null);
 }
 
 export function profileFromAuth(auth: AuthResponse, points = 0): UserProfile {

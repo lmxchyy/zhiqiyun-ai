@@ -310,29 +310,36 @@ export function apiRequestTask<T = unknown, TBody = unknown>(
   return { promise, abort: () => requestTask?.abort() }
 }
 
-export async function uploadApiFile<T = unknown>(
+export function uploadApiFile<T = unknown>(
   path: string,
   options: { filePath: string; name?: string; formData?: Record<string, unknown>; headers?: Record<string, string>; timeout?: number; auth?: boolean; retriedAfterRefresh?: boolean },
-) {
-  if (!adapter.uploadFile) throw new Error('当前运行环境不支持文件上传')
+): Promise<T> {
+  if (!adapter.uploadFile) return Promise.reject(new Error('当前运行环境不支持文件上传'))
   const usesSession = options.auth ?? trustedApiURL(path)
-  const response = await adapter.uploadFile<T>({
+  return adapter.uploadFile<T>({
     url: resolveApiURL(path),
     filePath: options.filePath,
     name: options.name || 'file',
     formData: options.formData,
     header: clientTransportHeaders(options.headers, usesSession),
     timeout: options.timeout || requestTimeout,
+  }).then(response => {
+    if (usesSession && response.statusCode === 401) {
+      const retryAttempt = options.retriedAfterRefresh ? 1 : 0
+      return handleUnauthorized({ path, statusCode: response.statusCode, payload: response.data, retryAttempt })
+        .then(recovered => {
+          if (recovered && retryAttempt === 0) return uploadApiFile<T>(path, { ...options, retriedAfterRefresh: true })
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            throw new Error(responsePayloadMessage(response.data, `文件上传失败 (${response.statusCode})`, response.statusCode))
+          }
+          return unwrapTransportPayload<T>(response.data)
+        })
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new Error(responsePayloadMessage(response.data, `文件上传失败 (${response.statusCode})`, response.statusCode))
+    }
+    return unwrapTransportPayload<T>(response.data)
   })
-  if (usesSession && response.statusCode === 401) {
-    const retryAttempt = options.retriedAfterRefresh ? 1 : 0
-    const recovered = await handleUnauthorized({ path, statusCode: response.statusCode, payload: response.data, retryAttempt })
-    if (recovered && retryAttempt === 0) return uploadApiFile(path, { ...options, retriedAfterRefresh: true })
-  }
-  if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(responsePayloadMessage(response.data, `文件上传失败 (${response.statusCode})`, response.statusCode))
-  }
-  return unwrapTransportPayload<T>(response.data)
 }
 
 export async function downloadApiFile<T = unknown>(
@@ -357,7 +364,7 @@ export async function downloadApiFile<T = unknown>(
   return response
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return sharedApiClient.request<T>(path, {
     method: init.method || 'GET',
     headers: normalizeHeaders(init.headers),

@@ -1,1 +1,1 @@
-{"description":"知启云AI 2.0.57：新增 Grok 按秒视频与多参考图，阻止登录续期跨账号，并包含自由P图首页调整","previousVersion":"2.0.56","publishedBaseline":"2.0.56","version":"2.0.57"}
+{"description":"知启云AI 2.0.58：修复真机端 Grok 图生视频提交后无响应，并保持按秒计费与多参考图能力","previousVersion":"2.0.57","publishedBaseline":"2.0.57","version":"2.0.58"}

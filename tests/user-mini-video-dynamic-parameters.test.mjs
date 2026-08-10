@@ -52,14 +52,17 @@ test("model and parameter changes refresh a guarded point estimate", () => {
 });
 
 test("video submission uses only the final editable parameter contract", () => {
-  assert.match(source, /buildVideoSubmissionParameters\(\s*videoParameterValues\.value,\s*videoParameterFields\.value/);
-  assert.ok(!source.includes("parameters: restoredCreationParams.value"));
+  const taskStart = source.indexOf("function createVideoGenerationTask");
+  const taskEnd = source.indexOf("function submitVideoCreationAfterSession", taskStart);
+  const taskBody = source.slice(taskStart, taskEnd);
+  assert.match(taskBody, /buildVideoSubmissionParameters\(videoParameterValues\.value, videoParameterFields\.value\)/);
+  assert.ok(!taskBody.includes("parameters: restoredCreationParams.value"));
 });
 
 test("video estimate and submission carry every selected reference image", () => {
   assert.match(source, /params\.image_urls = \[\.\.\.creationReferencePaths\.value\]/);
   assert.match(source, /uploadCreationReferenceImages\(creationReferencePaths\.value\)/);
-  assert.match(source, /referenceImages:\s*mode === "video" \? uploadedVideoReferences : referenceImages/);
+  assert.match(source, /referenceImages:\s*uploadedVideoReferences/);
 });
 
 test("reference upload visibility remains tied to real image-to-video support", () => {

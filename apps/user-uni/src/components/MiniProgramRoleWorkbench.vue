@@ -2830,7 +2830,7 @@ function confirmVideoModelSwitch(message: string): Promise<boolean> {
   });
 }
 
-async function resolveBackendGenerationConfig(
+function resolveBackendGenerationConfig(
   mode: "image" | "video",
   fallback: string,
 ): Promise<BackendGenerationConfig | null> {
@@ -2838,33 +2838,27 @@ async function resolveBackendGenerationConfig(
   const loadSchema = (modelName = "") => api<AnyRecord>(
     `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
   );
-  try {
-    const schema = await loadSchema(fallback);
+  const configFromSchema = (schema: AnyRecord): BackendGenerationConfig | null | Promise<BackendGenerationConfig | null> => {
     const resolvedModel = rowString(schema, "model_name", "modelName") || fallback;
-    const model = mode === "video"
-      ? await confirmResolvedVideoModel(fallback, resolvedModel, confirmVideoModelSwitch)
+    const resolved = mode === "video"
+      ? confirmResolvedVideoModel(fallback, resolvedModel, confirmVideoModelSwitch)
       : resolvedModel;
-    if (!model) return null;
-    return {
-      model,
-      schema,
-      videoCapabilities: moduleSchemaVideoCapabilities(schema),
-    };
-  } catch {
-    try {
-      const schema = await loadSchema();
-      const availableModel = rowString(schema, "model_name", "modelName");
-      if (availableModel) {
-        const model = mode === "video"
-          ? await confirmResolvedVideoModel(fallback, availableModel, confirmVideoModelSwitch)
-          : availableModel;
-        if (!model) return null;
-        return { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
-      }
-    } catch {}
-    if (mode === "video") return null;
-    return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
-  }
+    const createConfig = (model: string | null): BackendGenerationConfig | null => model
+      ? { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) }
+      : null;
+    return typeof resolved === "string" || resolved === null
+      ? createConfig(resolved)
+      : resolved.then(createConfig);
+  };
+  const unavailableConfig = (): BackendGenerationConfig | null => mode === "video"
+    ? null
+    : { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
+
+  return loadSchema(fallback)
+    .then(configFromSchema)
+    .catch(() => loadSchema()
+      .then(schema => rowString(schema, "model_name", "modelName") ? configFromSchema(schema) : unavailableConfig())
+      .catch(unavailableConfig));
 }
 
 function videoParameterValueEquals(key: string, option: unknown) {
@@ -3106,7 +3100,7 @@ async function resolvePptGenerationModels() {
   };
 }
 
-async function submitCreation(prompt: string) {
+function submitCreation(prompt: string) {
   if (!validateActiveInspirationReferences()) return;
   if (!validateFreeImageEditRequest()) return;
   const startedAt = Date.now();
@@ -3121,15 +3115,169 @@ async function submitCreation(prompt: string) {
     progress: 0,
     resultType: creationMode.value,
   };
+  // #ifdef MP-WEIXIN
+  // Continue directly from the WeChat callbacks. Awaiting this bridge leaves the
+  // generation event handler pending in the mini-program runtime.
+  ensureWechatMiniProgramSession({
+    success: () => { continueCreationAfterSession(prompt, startedAt); },
+    fail: () => {
+      continueCreationAfterSession(
+        prompt,
+        startedAt,
+        new Error("内容安全检测暂不可用，请稍后重试"),
+      );
+    },
+  });
+  return;
+  // #endif
+  // #ifndef MP-WEIXIN
+  continueCreationAfterSession(prompt, startedAt);
+  // #endif
+}
+
+function continueCreationAfterSession(prompt: string, startedAt: number, preflightError?: Error) {
+  if (creationMode.value === "video") {
+    submitVideoCreationAfterSession(prompt, startedAt, preflightError);
+    return;
+  }
+  void submitCreationAfterSession(prompt, startedAt, preflightError);
+}
+
+function completeCreationSubmission(
+  taskId: string,
+  taskStatus: string,
+  taskProgress: number,
+  prompt: string,
+  startedAt: number,
+) {
+  generationProgress.value = taskProgress;
+  latestGenerationTask.value = {
+    id: taskId,
+    title: `${activeCreationName.value}生成中`,
+    status: taskStatus,
+    tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending",
+    progress: taskProgress,
+    resultType: creationMode.value,
+  };
+  persistActiveGeneration({
+    id: taskId,
+    mode: creationMode.value,
+    prompt,
+    status: taskStatus,
+    progress: taskProgress,
+    startedAt,
+    inspirationTemplateId: activeInspirationTemplateId.value,
+  });
+  uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
+  void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
+}
+
+function handleCreationSubmissionError(error: unknown, prompt: string) {
+  generationPollRun += 1;
+  stopGenerationFeedback();
+  generationProgress.value = 0;
+  const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
+  if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
+    pendingLegalGenerationPrompt = prompt;
+    creationError.value = "首次生成前，请先阅读并确认用户协议、隐私政策和 AI 生成内容使用规范";
+    uni.showToast({ title: "请先确认必要协议，返回后将保留当前创作内容", icon: "none" });
+    setTimeout(() => uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" }), 300);
+    return;
+  }
+  const message = rawMessage.includes("所发布内容含违规信息")
+    ? "所发布内容含违规信息"
+    : rawMessage.includes("内容安全检测暂不可用")
+      ? "内容安全检测暂不可用，请稍后重试"
+      : rawMessage;
+  creationError.value = message;
+  latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
+  const toastTitle =
+    message === "所发布内容含违规信息" || message.includes("内容安全检测")
+      ? message
+      : "生成失败，请重试";
+  uni.showToast({ title: toastTitle, icon: "none" });
+}
+
+function createVideoGenerationTask(prompt: string, generationConfig: BackendGenerationConfig, uploadedVideoReferences: string[]) {
+  const submitTask = (lastFrameReferences: string[]) => {
+    const finalVideoParameters = buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value);
+    const requestedQuality = String(finalVideoParameters.resolution || "");
+    const requestedSize = String(finalVideoParameters.aspect_ratio || "");
+    const finalVideoCapabilities = {
+      ...generationConfig.videoCapabilities,
+      supportedParameters: videoParameterFields.value.map(field => field.key),
+    };
+    return businessSdk.generation.createTask({
+      mode: "video",
+      prompt,
+      model: generationConfig.model,
+      style: restoredCreationString("style", "stylePreset") || "cinematic",
+      size: requestedSize,
+      quality: requestedQuality,
+      count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
+      referenceImages: uploadedVideoReferences,
+      videoMode: videoGenerationMode.value,
+      firstFrame: uploadedVideoReferences[0] || "",
+      lastFrame: lastFrameReferences[0] || "",
+      videoCapabilities: finalVideoCapabilities,
+      negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
+      duration: finalVideoParameters.duration !== undefined
+        ? Number(finalVideoParameters.duration)
+        : undefined,
+      parameters: finalVideoParameters,
+    });
+  };
+  const lastFrameReferences = creationLastFrameEnabled.value && creationLastFramePath.value
+    ? uploadCreationReferenceImages([creationLastFramePath.value])
+    : [];
+  return Array.isArray(lastFrameReferences)
+    ? submitTask(lastFrameReferences)
+    : lastFrameReferences.then(submitTask);
+}
+
+function submitVideoCreationAfterSession(prompt: string, startedAt: number, preflightError?: Error) {
+  if (preflightError) {
+    handleCreationSubmissionError(preflightError, prompt);
+    generationSubmitting.value = false;
+    return;
+  }
+  resolveBackendGenerationConfig("video", activeCreationModel.value)
+    .then(generationConfig => {
+      if (!generationConfig) throw new Error("已取消切换模型");
+      if (!videoConfigRemovesReferences(generationConfig)) return generationConfig;
+      return confirmVideoReferenceRemoval(generationConfig).then(confirmed => {
+        if (!confirmed) throw new Error("已取消切换模型");
+        return generationConfig;
+      });
+    })
+    .then(generationConfig => {
+      commitVideoModelConfig(generationConfig);
+      if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && !creationReferencePaths.value[0]) {
+        throw new Error("图生视频模式必须上传首帧图");
+      }
+      const uploadedVideoReferences = videoGenerationMode.value === "IMAGE_TO_VIDEO"
+        ? uploadCreationReferenceImages(creationReferencePaths.value)
+        : [];
+      return Array.isArray(uploadedVideoReferences)
+        ? createVideoGenerationTask(prompt, generationConfig, uploadedVideoReferences)
+        : uploadedVideoReferences.then(references => createVideoGenerationTask(prompt, generationConfig, references));
+    })
+    .then(result => {
+      completeCreationSubmission(
+        String(result.id || "generation-task"),
+        String(result.status || "PENDING").toUpperCase(),
+        clampGenerationProgress(result.progress),
+        prompt,
+        startedAt,
+      );
+    })
+    .catch(error => { handleCreationSubmissionError(error, prompt); })
+    .finally(() => { generationSubmitting.value = false; });
+}
+
+async function submitCreationAfterSession(prompt: string, startedAt: number, preflightError?: Error) {
   try {
-    // #ifdef MP-WEIXIN
-    // Password/SMS login is fine; silently refresh device openid for WeChat content security only.
-    try {
-      await ensureWechatMiniProgramSession();
-    } catch {
-      throw new Error("内容安全检测暂不可用，请稍后重试");
-    }
-    // #endif
+    if (preflightError) throw preflightError;
     let taskId = "";
     let taskStatus = "PENDING";
     let taskProgress = 0;
@@ -3154,138 +3302,52 @@ async function submitCreation(prompt: string) {
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
     } else {
-      const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
+      const mode = "image" as const;
       const generationConfig = await resolveBackendGenerationConfig(
         mode,
         activeCreationModel.value,
       );
       if (!generationConfig) throw new Error("已取消切换模型");
-      if (mode === "video") {
-        if (videoConfigRemovesReferences(generationConfig) && !await confirmVideoReferenceRemoval(generationConfig)) {
-          throw new Error("已取消切换模型");
-        }
-        commitVideoModelConfig(generationConfig);
-        if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && !creationReferencePaths.value[0]) {
-          throw new Error("图生视频模式必须上传首帧图");
-        }
-      }
-      const referenceImages = mode === "image"
-        ? await uploadCreationReferenceImages(creationReferencePaths.value)
-        : [];
-      const uploadedVideoReferences = mode === "video" && videoGenerationMode.value === "IMAGE_TO_VIDEO"
-        ? await uploadCreationReferenceImages(creationReferencePaths.value)
-        : [];
-      const firstFrame = mode === "video" && videoGenerationMode.value === "IMAGE_TO_VIDEO"
-        ? uploadedVideoReferences[0] || ""
-        : "";
-      const lastFrame = mode === "video" && creationLastFrameEnabled.value && creationLastFramePath.value
-        ? (await uploadCreationReferenceImages([creationLastFramePath.value]))[0] || ""
-        : "";
-      const finalVideoParameters = mode === "video"
-        ? buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value)
-        : {};
-      const requestedQuality = mode === "video"
-        ? String(finalVideoParameters.resolution || "")
-        : restoredCreationString("quality", "imageQuality") || "standard";
-      const requestedSize = mode === "video"
-        ? String(finalVideoParameters.aspect_ratio || "")
-        : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
-      const finalVideoCapabilities = mode === "video"
-        ? {
-            ...generationConfig.videoCapabilities,
-            supportedParameters: videoParameterFields.value.map(field => field.key),
-          }
-        : undefined;
+      const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
+      const requestedQuality = restoredCreationString("quality", "imageQuality") || "standard";
+      const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
       const result = await businessSdk.generation.createTask({
         mode,
         prompt,
         model: generationConfig.model,
-        style: restoredCreationString("style", "stylePreset") || (mode === "video" ? "cinematic" : creationMode.value === "infographic" ? "infographic" : "commercial"),
-        size: mode === "video"
-          ? requestedSize
-          : constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
-        quality: mode === "video"
-          ? requestedQuality
-          : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
+        style: restoredCreationString("style", "stylePreset") || (creationMode.value === "infographic" ? "infographic" : "commercial"),
+        size: constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
+        quality: constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
-        referenceImages: mode === "video" ? uploadedVideoReferences : referenceImages,
-        videoMode: mode === "video" ? videoGenerationMode.value : undefined,
-        firstFrame: mode === "video" ? firstFrame : undefined,
-        lastFrame: mode === "video" ? lastFrame : undefined,
-        videoCapabilities: finalVideoCapabilities,
+        referenceImages,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
-        duration: mode === "video" && finalVideoParameters.duration !== undefined
-          ? Number(finalVideoParameters.duration)
-          : undefined,
-        parameters: mode === "video" ? finalVideoParameters : restoredCreationParams.value,
+        parameters: restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
     }
 
-    generationProgress.value = taskProgress;
-    latestGenerationTask.value = {
-      id: taskId,
-      title: `${activeCreationName.value}生成中`,
-      status: taskStatus,
-      tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending",
-      progress: taskProgress,
-      resultType: creationMode.value,
-    };
-    persistActiveGeneration({
-      id: taskId,
-      mode: creationMode.value,
-      prompt,
-      status: taskStatus,
-      progress: taskProgress,
-      startedAt,
-      inspirationTemplateId: activeInspirationTemplateId.value,
-    });
-    uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
-    void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
+    completeCreationSubmission(taskId, taskStatus, taskProgress, prompt, startedAt);
   } catch (error) {
-    generationPollRun += 1;
-    stopGenerationFeedback();
-    generationProgress.value = 0;
-    const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
-    if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
-      pendingLegalGenerationPrompt = prompt;
-      creationError.value = "首次生成前，请先阅读并确认用户协议、隐私政策和 AI 生成内容使用规范";
-      uni.showToast({ title: "请先确认必要协议，返回后将保留当前创作内容", icon: "none" });
-      setTimeout(() => uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" }), 300);
-      return;
-    }
-    const message = rawMessage.includes("所发布内容含违规信息")
-      ? "所发布内容含违规信息"
-      : rawMessage.includes("内容安全检测暂不可用")
-        ? "内容安全检测暂不可用，请稍后重试"
-        : rawMessage;
-    creationError.value = message;
-    latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
-    const toastTitle =
-      message === "所发布内容含违规信息" || message.includes("内容安全检测")
-        ? message
-        : "生成失败，请重试";
-    uni.showToast({ title: toastTitle, icon: "none" });
+    handleCreationSubmissionError(error, prompt);
   } finally {
     generationSubmitting.value = false;
   }
 }
 
-async function uploadCreationReferenceImage(filePath: string, index: number) {
-  try {
-    return await uploadReferenceImage(filePath);
-  } catch (error) {
+function uploadCreationReferenceImage(filePath: string, index: number) {
+  return uploadReferenceImage(filePath).catch(error => {
     const message = error instanceof Error ? error.message : "参考图上传失败";
     if (message.includes("所发布内容含违规信息")) throw new Error("所发布内容含违规信息");
     throw new Error(`第 ${index + 1} 张参考图上传失败：${message}`);
-  }
+  });
 }
 
-async function uploadCreationReferenceImages(paths: string[]) {
+function uploadCreationReferenceImages(paths: string[]): string[] | Promise<string[]> {
   if (!paths.length || creationMode.value === "ppt") return [];
   const localPaths = paths.filter(path => !/^https?:\/\//i.test(path));
+  if (!localPaths.length) return [...paths];
   if (localPaths.length) uni.showToast({ title: "正在上传参考图", icon: "loading", duration: 2000 });
   return Promise.all(paths.map((path, index) => /^https?:\/\//i.test(path) ? Promise.resolve(path) : uploadCreationReferenceImage(path, index)));
 }
