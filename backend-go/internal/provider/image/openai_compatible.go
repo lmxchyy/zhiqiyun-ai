@@ -179,7 +179,10 @@ func (p OpenAICompatible) generate(ctx context.Context, req generation.CreateReq
 		}
 		return nil, fmt.Errorf("参考图生图失败: edits error: %w; generation fallback: %v", err, fallbackErr)
 	}
-	count := imageCount(req.Params)
+	count, err := openAIImageCount(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	size, width, height := imageSize(req.Params)
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -297,7 +300,10 @@ func addOptionalImageGenerationFields(body map[string]any, params map[string]any
 }
 
 func (p OpenAICompatible) edit(ctx context.Context, req generation.CreateRequest, references []referenceImage) ([]generation.GeneratedImage, error) {
-	count := imageCount(req.Params)
+	count, err := openAIImageCount(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	size, width, height := imageSize(req.Params)
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -371,7 +377,10 @@ func (p OpenAICompatible) edit(ctx context.Context, req generation.CreateRequest
 }
 
 func (p OpenAICompatible) generateWithReferences(ctx context.Context, req generation.CreateRequest, references []referenceImage, width int, height int) ([]generation.GeneratedImage, error) {
-	count := imageCount(req.Params)
+	count, err := openAIImageCount(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	size, _, _ := imageSize(req.Params)
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -1305,33 +1314,32 @@ func validateOpenAIImageParameters(params map[string]any) error {
 	quality := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["quality"])))
 	switch quality {
 	case "", "<nil>", "standard", "high":
-		return nil
 	default:
 		return fmt.Errorf("unsupported OpenAI image quality %q; supported qualities: standard, high", quality)
 	}
+	_, err := openAIImageCount(params)
+	return err
 }
 
-func imageCount(params map[string]any) int {
+func openAIImageCount(params map[string]any) (int, error) {
 	value, ok := params["n"]
 	if !ok {
-		return 1
+		return 1, nil
 	}
-	var count int
 	switch typed := value.(type) {
 	case float64:
-		count = int(math.Floor(typed))
+		if typed < 1 || typed > 8 || math.Trunc(typed) != typed {
+			return 0, fmt.Errorf("unsupported OpenAI image count %v; expected an integer from 1 to 8", typed)
+		}
+		return int(typed), nil
 	case int:
-		count = typed
-	case string:
-		_, _ = fmt.Sscanf(typed, "%d", &count)
+		if typed < 1 || typed > 8 {
+			return 0, fmt.Errorf("unsupported OpenAI image count %d; expected an integer from 1 to 8", typed)
+		}
+		return typed, nil
+	default:
+		return 0, fmt.Errorf("unsupported OpenAI image count %v; expected an integer from 1 to 8", value)
 	}
-	if count < 1 {
-		return 1
-	}
-	if count > 8 {
-		return 8
-	}
-	return count
 }
 
 func nonEmptyStrings(values ...string) []string {

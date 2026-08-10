@@ -1610,6 +1610,10 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 				if code == "" || seen[key] {
 					continue
 				}
+				configuredModel := findAIModel(data.AIModels, moduleImageGeneration, code)
+				if configuredModel.ID == "" || !isActiveLike(configuredModel.Status) {
+					continue
+				}
 				if findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, code).ID == "" {
 					continue
 				}

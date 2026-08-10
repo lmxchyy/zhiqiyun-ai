@@ -127,6 +127,89 @@ func TestPublicModelsDoNotInventImageRatiosOrExposeSchemaLessModels(t *testing.T
 	}
 }
 
+func TestPublicCloudBaseModelsRequireConfiguredAIModelAndResolveExactSchema(t *testing.T) {
+	t.Setenv("CLOUDBASE_ENABLED", "true")
+	t.Setenv("CLOUDBASE_API_KEY", "test-key")
+	t.Setenv("CLOUDBASE_IMAGE_FUNCTION_URL", "https://cloudbase.example.test/image")
+	t.Setenv("MODEL_PROVIDER_URL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("MODEL_PROVIDER_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	cloudBaseModels := map[string]bool{
+		"HY-Image-3.0-Plus-4090-Tob-v1.0": true,
+		"HY-Image-v3.0-I2I-ToB-v1.0.1":    true,
+	}
+	tests := []struct {
+		name          string
+		storedModels  []string
+		wantCloudBase bool
+	}{
+		{name: "default models include routable CloudBase models", wantCloudBase: true},
+		{name: "nonempty stored models do not gain channel-only CloudBase models", storedModels: []string{"mock-standard"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+			if len(tt.storedModels) > 0 {
+				if err := store.updateAdmin(func(data *adminPlatformData) error {
+					models := make([]adminAIModel, 0, len(tt.storedModels))
+					for _, modelName := range tt.storedModels {
+						model := findAIModel(data.AIModels, moduleImageGeneration, modelName)
+						if model.ID == "" {
+							t.Fatalf("seed model %s not found", modelName)
+						}
+						models = append(models, model)
+					}
+					data.AIModels = models
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			res := httptest.NewRecorder()
+			(api{store: store}).models(res, httptest.NewRequest(http.MethodGet, "/api/v1/models", nil))
+			if res.Code != http.StatusOK {
+				t.Fatalf("models status = %d, body = %s", res.Code, res.Body.String())
+			}
+			var items []map[string]any
+			if err := json.NewDecoder(res.Body).Decode(&items); err != nil {
+				t.Fatal(err)
+			}
+			data, err := store.AdminData()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = normalizeAICapabilityDefaults(data)
+			user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+			seenCloudBase := 0
+			for _, item := range items {
+				code, _ := item["code"].(string)
+				if findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, code).ID == "" {
+					continue
+				}
+				resolved, err := resolveModuleSchema(data, user, moduleImageGeneration, code)
+				if err != nil {
+					t.Fatalf("public image model %s cannot resolve module schema: %v", code, err)
+				}
+				if got := moduleSchemaResponse(resolved, user)["model_name"]; got != code {
+					t.Fatalf("public model %s resolved model_name = %v", code, got)
+				}
+				if cloudBaseModels[code] {
+					seenCloudBase++
+				}
+			}
+			if tt.wantCloudBase && seenCloudBase != len(cloudBaseModels) {
+				t.Fatalf("public CloudBase models = %d, want %d: %#v", seenCloudBase, len(cloudBaseModels), items)
+			}
+			if !tt.wantCloudBase && seenCloudBase != 0 {
+				t.Fatalf("channel-only CloudBase models were exposed: %#v", items)
+			}
+		})
+	}
+}
+
 func TestBuiltInImageInspirationSeedsUseCanonicalParameters(t *testing.T) {
 	repository := newMemoryInspirationRepository()
 	tests := []struct {

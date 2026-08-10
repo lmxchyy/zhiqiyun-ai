@@ -77,3 +77,17 @@ go test ./internal/provider/... ./internal/httpserver/...
 - [ ] M6 自由P图全页与入口文案（未触及）
 - [ ] P1 发布门禁（未发版）
 - [x] P2 相关回归测试（图片/PPT/M2 定向通过；完整 httpserver 的既有失败如上）
+
+## Important 审查项追加修复（2026-08-10）
+
+只处理 `final-review-backend-review.md` 指出的两项 Important：
+
+1. OpenAI-compatible 的 canonical `n` 现在只接受数值整数 `1..8`。缺省仍明确使用 `1`；`0`、`9`、`1.5`、数字字符串和非数字字符串均在 transport 前失败，不再 floor、clamp 或字符串转换。合法 `n=2` 的最终 provider body 快照保持通过。
+2. `/models` 的 channel 图片模型除 exact image schema 外，还必须存在同名、`ACTIVE`、属于 `image_generation` 的 `AIModel`。默认完整模型集下两个 CloudBase 模型仍公开且能用相同 code 解析 module-schema；存量 `AIModels` 非空但缺少 CloudBase 模型时，不再仅因 runtime channel/schema 存在而暴露。
+
+追加 TDD 证据：
+
+- RED：五种非法 `n` 均错误地请求成功；存量仅有 `mock-standard` 时，`/models` 暴露 CloudBase 模型，而 `resolveModuleSchema` 返回 `ai model ... is not configured`。
+- GREEN：`go test ./internal/provider/... -count=1` 通过。
+- GREEN：图片 schema/models/PPT/inspiration 相关 httpserver 定向回归通过。
+- GREEN：`go test ./internal/httpserver -run 'TestVideoGenerationEstimate|TestBillingCenterV1Acceptance|TestNormalizeAICapabilityDefaultsMergesMissingBillingRules' -count=1` 通过。

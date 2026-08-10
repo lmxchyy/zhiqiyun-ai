@@ -277,6 +277,11 @@ func TestOpenAICompatibleRejectsUnsupportedImageParametersBeforeRequest(t *testi
 		{name: "missing canonical size", params: map[string]any{"imageRatio": "16:9", "quality": "standard", "n": 1}},
 		{name: "unsupported size", params: map[string]any{"size": "1280x720", "quality": "standard", "n": 1}},
 		{name: "unsupported quality", params: map[string]any{"size": "1024x1024", "quality": "ultra", "n": 1}},
+		{name: "zero count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 0}},
+		{name: "count above maximum", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 9}},
+		{name: "fractional count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 1.5}},
+		{name: "numeric string count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": "2"}},
+		{name: "non numeric string count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": "many"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
