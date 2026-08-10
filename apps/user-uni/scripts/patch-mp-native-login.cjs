@@ -1601,7 +1601,7 @@ if (!homeComponentWxml.includes('bindinput="nativeHomePromptInput"') || !homeCom
 fs.writeFileSync(homeComponentWxmlPath, homeComponentWxml);
 
 let homeComponentJs = fs.readFileSync(homeComponentJsPath, "utf8");
-const homeComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
+const homeComponentPattern = /wx\.createComponent\(([A-Za-z_$][A-Za-z0-9_$]*)\);\s*$/;
 if (!homeComponentPattern.test(homeComponentJs)) {
   throw new Error("V531HomePage component registration not found");
 }
@@ -1655,7 +1655,7 @@ fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
 
 const workbenchJsPath = path.resolve(outputRoot, "components", "MiniProgramRoleWorkbench.js");
 let workbenchJs = fs.readFileSync(workbenchJsPath, "utf8");
-const createComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
+const createComponentPattern = /wx\.createComponent\(([A-Za-z_$][A-Za-z0-9_$]*)\);\s*$/;
 if (!createComponentPattern.test(workbenchJs)) {
   throw new Error("MiniProgramRoleWorkbench component registration not found");
 }
