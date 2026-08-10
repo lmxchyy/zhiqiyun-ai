@@ -14,6 +14,14 @@ import {
 const componentURL = new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url);
 const workbenchURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url);
 
+function sourceBetween(source, start, end) {
+  const startIndex = source.indexOf(start);
+  const endIndex = source.indexOf(end, startIndex + start.length);
+  assert.notEqual(startIndex, -1, `missing start marker: ${start}`);
+  assert.notEqual(endIndex, -1, `missing end marker: ${end}`);
+  return source.slice(startIndex, endIndex);
+}
+
 test("image creation exposes approved defaults and options", () => {
   assert.equal(imageAspectOptions[0].value, "auto");
   assert.deepEqual(imageAspectOptions.map(item => item.value), ["auto", "1:1", "16:9", "9:16", "4:3"]);
@@ -141,4 +149,57 @@ test("image integration preserves guest restore, inspiration drafts, and works r
   assert.match(source, /restoreCreationSource/);
   assert.match(source, /openLatestGenerationResult/);
   assert.match(source, /isGuest/);
+});
+
+test("image request controls stay isolated from free image edit requests", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  const submitSource = sourceBetween(source, "async function submitCreation", "async function uploadCreationReferenceImages");
+  assert.match(submitSource, /const isImageGeneratorRequest = creationMode\.value === "image";/);
+  assert.match(submitSource, /requestedQuality =[\s\S]*?isImageGeneratorRequest[\s\S]*?imageQuality\.value[\s\S]*?restoredCreationString\("quality", "imageQuality"\) \|\| "standard";/);
+  assert.match(submitSource, /requestedSize =[\s\S]*?isImageGeneratorRequest[\s\S]*?imageAspectRatio\.value[\s\S]*?restoredCreationString\("size", "aspectRatio", "aspect_ratio"\) \|\| "1024x1024";/);
+  assert.match(submitSource, /count: isImageGeneratorRequest[\s\S]*?imageCount\.value[\s\S]*?restoredCreationCount\(\)/);
+  assert.match(submitSource, /parameters: mode === "video"[\s\S]*?isImageGeneratorRequest[\s\S]*?aspect_ratio: imageAspectRatio\.value[\s\S]*?: restoredCreationParams\.value/);
+});
+
+test("image success state opens the generated work from the image branch", async () => {
+  const [componentSource, workbenchSource] = await Promise.all([
+    readFile(componentURL, "utf8"),
+    readFile(workbenchURL, "utf8"),
+  ]);
+  assert.match(componentSource, /"view-result": \[\]/);
+  assert.match(componentSource, /ai-image-generator__view-result/);
+  assert.match(componentSource, /@click='emit\("view-result"\)'/);
+  const imageBranch = sourceBetween(
+    workbenchSource,
+    '<view v-if="isImageCreationPage" class="ai-image-generator-page">',
+    '<template v-else-if="isFreeImageEditPage">',
+  );
+  assert.match(imageBranch, /@view-result="openLatestGenerationResult"/);
+});
+
+test("image header uses shared custom-navigation safe-area variables", async () => {
+  const source = await readFile(componentURL, "utf8");
+  const headerStyles = sourceBetween(source, ".ai-image-generator__header {", ".ai-image-generator__icon-button {");
+  assert.match(headerStyles, /min-height:\s*var\(--header-height,\s*64px\);/);
+  assert.match(headerStyles, /padding-top:\s*var\(--header-padding-top,\s*0px\);/);
+  assert.match(headerStyles, /padding-right:\s*var\(--capsule-right-space,\s*0px\);/);
+});
+
+test("image controls persist for guest login and restore only approved values", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  const guestFlow = sourceBetween(source, "function guestAwareGenerateTap", "type NativeGenerateBridge");
+  assert.match(guestFlow, /creationMode\.value === "image"[\s\S]*?aspectRatio: imageAspectRatio\.value[\s\S]*?quality: imageQuality\.value[\s\S]*?count: imageCount\.value/);
+
+  const restoreControls = sourceBetween(source, "function restoreImageGeneratorControls", "const currentPageTitle");
+  assert.match(restoreControls, /imageAspectOptions\.some/);
+  assert.match(restoreControls, /imageQualityOptions\.includes/);
+  assert.match(restoreControls, /imageCountOptions\.includes/);
+  assert.match(restoreControls, /:\s*"auto"/);
+  assert.match(restoreControls, /:\s*"1K"/);
+  assert.match(restoreControls, /:\s*1;/);
+
+  const sourceRestore = sourceBetween(source, "async function restoreCreationSource", "function applyVideoModelCapabilities");
+  assert.match(sourceRestore, /restoreImageGeneratorControls\(restoredCreationParams\.value\)/);
+  const mountedRestore = sourceBetween(source, "onMounted(() =>", "watch(() => authStore.token");
+  assert.match(mountedRestore, /restoredCreationParams\.value =[\s\S]*?restoreImageGeneratorControls\(restoredCreationParams\.value\)/);
 });

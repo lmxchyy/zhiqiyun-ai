@@ -64,6 +64,7 @@
             @preview-reference="previewCreationReference"
             @optimize="optimizeImagePrompt"
             @generate="guestAwareGenerateTap"
+            @view-result="openLatestGenerationResult"
           />
         </view>
         <template v-else-if="isFreeImageEditPage">
@@ -913,8 +914,11 @@ import {
   freeImageEditValidationMessage,
 } from "../features/generation/freeImageEdit";
 import {
+  imageAspectOptions,
+  imageCountOptions,
   imageModelOptions,
   imagePointEstimateLabel,
+  imageQualityOptions,
   resolveImageModelCode,
   type ImageAspectRatio,
   type ImageGeneratorModelOption,
@@ -1024,6 +1028,11 @@ function guestAwareGenerateTap() {
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
     referencePaths: creationReferencePaths.value, restoredParams: restoredCreationParams.value,
+    ...(creationMode.value === "image" ? {
+      aspectRatio: imageAspectRatio.value,
+      quality: imageQuality.value,
+      count: imageCount.value,
+    } : {}),
     videoMode: creationMode.value === "video" ? videoGenerationMode.value : undefined,
     lastFrame: creationMode.value === "video" ? creationLastFramePath.value : undefined,
     slideCount: pptSlideCount.value, language: pptLanguage.value, dynamic: pptDynamic.value,
@@ -1526,6 +1535,22 @@ function restoredCreationCount() {
   return Number.isFinite(parsed) && parsed >= 1 ? Math.min(4, Math.floor(parsed)) : 1;
 }
 
+function restoreImageGeneratorControls(params: AnyRecord) {
+  if (creationMode.value !== "image") return;
+  const requestedAspectRatio = rowString(params, "aspectRatio", "aspect_ratio");
+  imageAspectRatio.value = imageAspectOptions.some(option => option.value === requestedAspectRatio)
+    ? requestedAspectRatio as ImageAspectRatio
+    : "auto";
+  const requestedQuality = rowString(params, "quality", "imageQuality");
+  imageQuality.value = imageQualityOptions.includes(requestedQuality as ImageQuality)
+    ? requestedQuality as ImageQuality
+    : "1K";
+  const requestedCount = Number(params.count ?? params.generationCount ?? params.imageCount);
+  imageCount.value = imageCountOptions.includes(requestedCount as typeof imageCountOptions[number])
+    ? requestedCount
+    : 1;
+}
+
 const currentPageTitle = computed(() => {
   if (activeRole.value === "agent") return "代理工作台";
   if (activeRole.value === "operation") return "运营中心";
@@ -1756,6 +1781,7 @@ async function restoreCreationSource(assetId: string, intent: "edit" | "regenera
       aspectRatio: sourceAsset.aspectRatio || metadata.aspectRatio,
       seed: sourceAsset.seed ?? metadata.seed,
     };
+    restoreImageGeneratorControls(restoredCreationParams.value);
   } catch (error) {
     const message = error instanceof Error ? error.message : "原作品载入失败";
     creationSourceError.value = message;
@@ -3273,12 +3299,17 @@ async function submitCreation(prompt: string) {
       const finalVideoParameters = mode === "video"
         ? buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value)
         : {};
+      const isImageGeneratorRequest = creationMode.value === "image";
       const requestedQuality = mode === "video"
         ? String(finalVideoParameters.resolution || "")
-        : imageQuality.value;
+        : isImageGeneratorRequest
+          ? imageQuality.value
+          : restoredCreationString("quality", "imageQuality") || "standard";
       const requestedSize = mode === "video"
         ? String(finalVideoParameters.aspect_ratio || "")
-        : imageAspectRatio.value;
+        : isImageGeneratorRequest
+          ? imageAspectRatio.value
+          : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
       const finalVideoCapabilities = mode === "video"
         ? {
             ...generationConfig.videoCapabilities,
@@ -3296,7 +3327,7 @@ async function submitCreation(prompt: string) {
         quality: mode === "video"
           ? requestedQuality
           : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
-        count: mode === "image" && imageCount.value
+        count: isImageGeneratorRequest && imageCount.value
           ? constrainedSchemaNumber(generationConfig.schema, "n", imageCount.value, 1)
           : constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
@@ -3310,7 +3341,9 @@ async function submitCreation(prompt: string) {
           : undefined,
         parameters: mode === "video"
           ? finalVideoParameters
-          : { ...restoredCreationParams.value, aspect_ratio: imageAspectRatio.value },
+          : isImageGeneratorRequest
+            ? { ...restoredCreationParams.value, aspect_ratio: imageAspectRatio.value }
+            : restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
@@ -3614,6 +3647,7 @@ onMounted(() => {
     restoredCreationParams.value = draftMatchesMode ? studioDraft : {
       model: rowString(studioDraft, "model", "modelId", "modelName"),
     };
+    restoreImageGeneratorControls(restoredCreationParams.value);
     if (draftMatchesMode) {
       uni.removeStorageSync("v532-studio-draft");
     }

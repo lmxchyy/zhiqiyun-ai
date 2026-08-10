@@ -169,7 +169,15 @@
 
         <view class="ai-image-generator__live-region" aria-live="polite" aria-atomic="true">
           <text v-if="error" class="ai-image-generator__error" role="alert">{{ error }}</text>
-          <text v-else-if="statusMessage" class="ai-image-generator__success" role="status">{{ statusMessage }}</text>
+          <view v-else-if="statusMessage" class="ai-image-generator__success">
+            <text role="status">{{ statusMessage }}</text>
+            <button
+              v-if="!busy"
+              class="ai-image-generator__view-result"
+              type="button"
+              @click='emit("view-result")'
+            >查看结果</button>
+          </view>
           <text v-else-if="disabledReason" class="ai-image-generator__status" role="status">{{ disabledReason }}</text>
         </view>
         <view class="ai-image-generator__scroll-spacer" />
@@ -239,6 +247,7 @@ const emit = defineEmits<{
   "preview-reference": [index: number];
   optimize: [];
   generate: [];
+  "view-result": [];
   "update:prompt": [value: string];
   "update:aspectRatio": [value: ImageAspectRatio];
   "update:quality": [value: ImageQuality];
@@ -313,8 +322,11 @@ function onCountChange(event: { detail: { value: string | number } }) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 64px;
-  padding: max(8px, env(safe-area-inset-top, 0px)) 16px 8px;
+  min-height: var(--header-height, 64px);
+  padding-top: var(--header-padding-top, 0px);
+  padding-right: var(--capsule-right-space, 0px);
+  padding-bottom: 8px;
+  padding-left: 16px;
   background: #fff;
 }
 
@@ -662,7 +674,24 @@ function onCountChange(event: { detail: { value: string | number } }) {
 
 .ai-image-generator__error { color: #d92d20; }
 .ai-image-generator__status { color: var(--image-muted); }
-.ai-image-generator__success { color: var(--image-success); }
+.ai-image-generator__success {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--image-success);
+}
+
+.ai-image-generator__view-result {
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--image-success);
+  background: transparent;
+  font-size: 13px;
+  line-height: 42px;
+}
 .ai-image-generator__scroll-spacer { display: none; }
 
 .ai-image-generator__footer {
