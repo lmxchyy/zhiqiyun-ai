@@ -4,12 +4,32 @@ import { createRequire } from "node:module";
 import test from "node:test";
 
 import { taskRequestFromDraft } from "../packages/business-sdk/dist/mappers.js";
-import * as imageCreation from "../apps/user-uni/src/features/generation/imageCreation.ts";
 
 const requireFromUserUni = createRequire(new URL("../apps/user-uni/package.json", import.meta.url));
 const vueRuntime = requireFromUserUni("vue");
 const vueCompiler = requireFromUserUni("@vue/compiler-sfc");
 const typescript = requireFromUserUni("typescript");
+
+function loadImageCreationModule() {
+  const moduleURL = new URL("../apps/user-uni/src/features/generation/imageCreation.ts", import.meta.url);
+  const compiled = typescript.transpileModule(readFileSync(moduleURL, "utf8"), {
+    compilerOptions: {
+      module: typescript.ModuleKind.CommonJS,
+      target: typescript.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const module = { exports: {} };
+  const localRequire = specifier => {
+    if (specifier === "@xianzhi/business-sdk") return { taskRequestFromDraft };
+    throw new Error(`unexpected image creation dependency ${specifier}`);
+  };
+  // eslint-disable-next-line no-new-func
+  new Function("require", "module", "exports", compiled)(localRequire, module, module.exports);
+  return module.exports;
+}
+
+const imageCreation = loadImageCreationModule();
 
 function loadAiImageGeneratorComponent() {
   const componentURL = new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url);
@@ -551,190 +571,228 @@ test("network-uncertain retry reuses the existing key for an identical canonical
   assert.equal(factoryCalls, 0);
 });
 
-function canonicalDraftWithUploadedReferences(referenceImages) {
-  const buildCanonicalImageDraft = requiredFunction("buildCanonicalImageDraft");
-  return buildCanonicalImageDraft({
+function imageTaskSubmissionInput(overrides = {}) {
+  return {
     contract: availableContract(enumerableCountSchema()),
     selection: { size: "1536x1024", quality: "high", count: 2 },
-    prompt: "生成带参考图的水果海报",
+    prompt: "fruit poster with references",
     model: "gpt-image-2",
     style: "commercial",
-    referenceImages,
+    sourceReferences: ["wxfile://reference-a.png", "wxfile://reference-b.png"],
     negativePrompt: "watermark",
     parameters: { seed: 42 },
-  });
+    ...overrides,
+  };
 }
 
-async function resolveReferenceSubmission({
-  sourceReferences,
-  cache,
-  previousOutcome,
-  existing,
-  uuid,
-  upload,
-}) {
-  const resolveImageReferenceUploads = requiredFunction("resolveImageReferenceUploads");
-  const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
-  const resolved = await resolveImageReferenceUploads({
-    sourceReferences,
-    cache,
-    previousOutcome,
-  }, upload);
-  const draft = canonicalDraftWithUploadedReferences(resolved.referenceImages);
-  const requestSnapshot = taskRequestFromDraft(draft);
-  const fingerprint = fingerprintOf(requestSnapshot);
-  const requestKey = nextImageClientRequestKey({
-    fingerprint,
-    existing,
-    previousOutcome,
-  }, () => uuid);
+function imageTask(id, status = "PENDING") {
   return {
-    ...resolved,
-    fingerprint,
-    requestKey,
-    requestSnapshot,
-    finalRequest: taskRequestFromDraft({ ...draft, clientRequestId: requestKey.clientRequestId }),
+    id,
+    type: "IMAGE_TO_IMAGE",
+    status,
+    progress: 0,
+    prompt: "fruit poster with references",
+    model: "gpt-image-2",
+    pointCost: 12,
+    resultIds: [],
+    params: {},
   };
 }
 
-test("network-uncertain retry reuses uploaded URLs so the request fingerprint and key stay identical", async () => {
-  const uploadCalls = [];
-  const upload = async references => {
-    uploadCalls.push([...references]);
-    const batch = uploadCalls.length;
-    return references.map((_, index) => `https://uploads.test/batch-${batch}-${index + 1}.png`);
+function expectedImageRequest(clientRequestId, referenceImages) {
+  return {
+    type: "IMAGE_TO_IMAGE",
+    clientRequestId,
+    moduleCode: "image_generation",
+    prompt: "fruit poster with references",
+    model: "gpt-image-2",
+    params: {
+      seed: 42,
+      size: "1536x1024",
+      quality: "high",
+      n: 2,
+      negative_prompt: "watermark",
+      reference_image: referenceImages[0],
+      referenceImages: referenceImages.map((url, index) => ({ url, name: `reference-${index + 1}` })),
+    },
   };
-  const sourceReferences = ["wxfile://reference-a.png", "wxfile://reference-b.png"];
+}
 
-  const first = await resolveReferenceSubmission({
-    sourceReferences,
-    uuid: "first",
-    upload,
-  });
-  const retry = await resolveReferenceSubmission({
-    sourceReferences,
-    cache: first.cache,
-    previousOutcome: "network-uncertain",
-    existing: first.requestKey,
-    uuid: "must-not-rotate",
-    upload,
-  });
+test("production image task orchestration reuses uploaded URLs, fingerprint, request, and key after an uncertain create", async () => {
+  const submitCanonicalImageTask = requiredFunction("submitCanonicalImageTask");
+  const uploadCalls = [];
+  const createdDrafts = [];
+  let createCalls = 0;
+  const clientIds = ["first", "must-not-rotate"];
+  const dependencies = {
+    uploadReferences: async references => {
+      uploadCalls.push([...references]);
+      return references.map((_, index) => `https://uploads.test/batch-1-${index + 1}.png`);
+    },
+    createTask: async draft => {
+      createdDrafts.push(draft);
+      createCalls += 1;
+      if (createCalls === 1) throw Object.assign(new Error("network request failed"), { statusCode: 0 });
+      return imageTask("task-success");
+    },
+    clientIdFactory: () => clientIds.shift(),
+  };
+  const input = imageTaskSubmissionInput();
 
-  assert.deepEqual(uploadCalls, [sourceReferences]);
-  assert.equal(first.reused, false);
-  assert.equal(retry.reused, true);
-  assert.deepEqual(retry.referenceImages, [
+  const first = await submitCanonicalImageTask(input, dependencies);
+  assert.equal(first.ok, false);
+  assert.equal(first.state.previousOutcome, "network-uncertain");
+  const retry = await submitCanonicalImageTask({ ...input, ...first.state }, dependencies);
+
+  const uploadedURLs = [
     "https://uploads.test/batch-1-1.png",
     "https://uploads.test/batch-1-2.png",
-  ]);
-  assert.deepEqual(retry.requestSnapshot, first.requestSnapshot);
-  assert.equal(retry.fingerprint, first.fingerprint);
-  assert.deepEqual(retry.requestKey, first.requestKey);
+  ];
+  assert.equal(retry.ok, true);
+  assert.deepEqual(uploadCalls, [input.sourceReferences]);
+  assert.equal(createCalls, 2);
+  assert.deepEqual(createdDrafts.map(draft => draft.clientRequestId), ["image_first", "image_first"]);
+  assert.deepEqual(createdDrafts.map(draft => draft.referenceImages), [uploadedURLs, uploadedURLs]);
+  assert.equal(first.fingerprint, retry.fingerprint);
+  assert.deepEqual(first.requestSnapshot, retry.requestSnapshot);
+  assert.deepEqual(first.finalRequest, expectedImageRequest("image_first", uploadedURLs));
   assert.deepEqual(retry.finalRequest, first.finalRequest);
+  assert.deepEqual(retry.state.requestKey, first.state.requestKey);
 });
 
-test("changed reference values upload again and create a new canonical request key", async () => {
+test("production image task orchestration treats changed reference values and order as new requests", async () => {
+  const submitCanonicalImageTask = requiredFunction("submitCanonicalImageTask");
+  const cases = [
+    {
+      name: "value",
+      initial: ["wxfile://reference-a.png", "wxfile://reference-b.png"],
+      changed: ["wxfile://reference-a.png", "wxfile://reference-c.png"],
+    },
+    {
+      name: "order",
+      initial: ["wxfile://reference-a.png", "wxfile://reference-b.png"],
+      changed: ["wxfile://reference-b.png", "wxfile://reference-a.png"],
+    },
+  ];
+
+  for (const item of cases) {
+    const uploadCalls = [];
+    let createCalls = 0;
+    const clientIds = [`${item.name}-first`, `${item.name}-changed`];
+    const dependencies = {
+      uploadReferences: async references => {
+        uploadCalls.push([...references]);
+        return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
+      },
+      createTask: async () => {
+        createCalls += 1;
+        if (createCalls === 1) throw Object.assign(new Error("network request failed"), { statusCode: 0 });
+        return imageTask(`task-${item.name}`);
+      },
+      clientIdFactory: () => clientIds.shift(),
+    };
+    const initialInput = imageTaskSubmissionInput({ sourceReferences: item.initial });
+    const first = await submitCanonicalImageTask(initialInput, dependencies);
+    const changed = await submitCanonicalImageTask({
+      ...imageTaskSubmissionInput({ sourceReferences: item.changed }),
+      ...first.state,
+    }, dependencies);
+
+    assert.equal(first.ok, false, item.name);
+    assert.equal(changed.ok, true, item.name);
+    assert.deepEqual(uploadCalls, [item.initial, item.changed], item.name);
+    assert.equal(createCalls, 2, item.name);
+    assert.notEqual(changed.fingerprint, first.fingerprint, item.name);
+    assert.equal(changed.state.requestKey.clientRequestId, `image_${item.name}-changed`, item.name);
+    assert.notDeepEqual(changed.finalRequest, first.finalRequest, item.name);
+  }
+});
+
+test("production image task orchestration retransmits references and rotates the key after a terminal task", async () => {
+  const submitCanonicalImageTask = requiredFunction("submitCanonicalImageTask");
   const uploadCalls = [];
-  const upload = async references => {
-    uploadCalls.push([...references]);
-    const batch = uploadCalls.length;
-    return references.map((_, index) => `https://uploads.test/batch-${batch}-${index + 1}.png`);
+  const createdDrafts = [];
+  const clientIds = ["first", "terminal-retry"];
+  const dependencies = {
+    uploadReferences: async references => {
+      uploadCalls.push([...references]);
+      return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
+    },
+    createTask: async draft => {
+      createdDrafts.push(draft);
+      return imageTask(`task-${createdDrafts.length}`, createdDrafts.length === 1 ? "FAILED" : "PENDING");
+    },
+    clientIdFactory: () => clientIds.shift(),
   };
-  const firstSources = ["wxfile://reference-a.png", "wxfile://reference-b.png"];
-  const changedSources = ["wxfile://reference-a.png", "wxfile://reference-c.png"];
+  const input = imageTaskSubmissionInput({ sourceReferences: ["wxfile://reference-a.png"] });
 
-  const first = await resolveReferenceSubmission({ sourceReferences: firstSources, uuid: "first", upload });
-  const changed = await resolveReferenceSubmission({
-    sourceReferences: changedSources,
-    cache: first.cache,
-    previousOutcome: "network-uncertain",
-    existing: first.requestKey,
-    uuid: "changed",
-    upload,
-  });
+  const terminal = await submitCanonicalImageTask(input, dependencies);
+  const retry = await submitCanonicalImageTask({ ...input, ...terminal.state }, dependencies);
 
-  assert.deepEqual(uploadCalls, [firstSources, changedSources]);
-  assert.equal(changed.reused, false);
-  assert.notEqual(changed.fingerprint, first.fingerprint);
-  assert.equal(changed.requestKey.clientRequestId, "image_changed");
-  assert.notDeepEqual(changed.finalRequest, first.finalRequest);
+  assert.equal(terminal.ok, true);
+  assert.equal(terminal.state.previousOutcome, "terminal-failure");
+  assert.equal(retry.ok, true);
+  assert.deepEqual(uploadCalls, [input.sourceReferences, input.sourceReferences]);
+  assert.deepEqual(createdDrafts.map(draft => draft.clientRequestId), ["image_first", "image_terminal-retry"]);
+  assert.equal(retry.fingerprint, terminal.fingerprint);
+  assert.notEqual(retry.state.requestKey.clientRequestId, terminal.state.requestKey.clientRequestId);
 });
 
-test("changed reference order is a new source snapshot and uploads again", async () => {
+test("production image task orchestration does not create a task or update cache after upload failure", async () => {
+  const submitCanonicalImageTask = requiredFunction("submitCanonicalImageTask");
+  const uploadError = new Error("upload failed");
+  let createCalls = 0;
+  const input = imageTaskSubmissionInput({ sourceReferences: ["wxfile://reference-a.png"] });
+
+  const result = await submitCanonicalImageTask(input, {
+    uploadReferences: async () => { throw uploadError; },
+    createTask: async () => {
+      createCalls += 1;
+      return imageTask("must-not-create");
+    },
+    clientIdFactory: () => "must-not-create",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, uploadError);
+  assert.equal(createCalls, 0);
+  assert.equal(result.state.uploadCache, undefined);
+  assert.equal(result.state.requestKey, undefined);
+  assert.equal(result.state.previousOutcome, undefined);
+  assert.equal(result.draft, undefined);
+});
+
+test("production image task orchestration retransmits and rotates the key after an explicit 4xx", async () => {
+  const submitCanonicalImageTask = requiredFunction("submitCanonicalImageTask");
   const uploadCalls = [];
-  const upload = async references => {
-    uploadCalls.push([...references]);
-    return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
+  const createdDrafts = [];
+  let createCalls = 0;
+  const clientIds = ["first", "after-4xx"];
+  const dependencies = {
+    uploadReferences: async references => {
+      uploadCalls.push([...references]);
+      return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
+    },
+    createTask: async draft => {
+      createdDrafts.push(draft);
+      createCalls += 1;
+      if (createCalls === 1) throw Object.assign(new Error("bad request"), { statusCode: 400 });
+      return imageTask("task-after-4xx");
+    },
+    clientIdFactory: () => clientIds.shift(),
   };
-  const firstSources = ["wxfile://reference-a.png", "wxfile://reference-b.png"];
-  const reorderedSources = ["wxfile://reference-b.png", "wxfile://reference-a.png"];
+  const input = imageTaskSubmissionInput({ sourceReferences: ["wxfile://reference-a.png"] });
 
-  const first = await resolveReferenceSubmission({ sourceReferences: firstSources, uuid: "first", upload });
-  const reordered = await resolveReferenceSubmission({
-    sourceReferences: reorderedSources,
-    cache: first.cache,
-    previousOutcome: "network-uncertain",
-    existing: first.requestKey,
-    uuid: "reordered",
-    upload,
-  });
+  const failed = await submitCanonicalImageTask(input, dependencies);
+  const retry = await submitCanonicalImageTask({ ...input, ...failed.state }, dependencies);
 
-  assert.deepEqual(uploadCalls, [firstSources, reorderedSources]);
-  assert.equal(reordered.reused, false);
-  assert.notEqual(reordered.fingerprint, first.fingerprint);
-  assert.equal(reordered.requestKey.clientRequestId, "image_reordered");
-});
-
-test("terminal retry uploads normally and creates a new key even when uploaded URLs are stable", async () => {
-  const uploadCalls = [];
-  const upload = async references => {
-    uploadCalls.push([...references]);
-    return references.map(reference => `https://uploads.test/${reference.slice("wxfile://".length)}`);
-  };
-  const sourceReferences = ["wxfile://reference-a.png"];
-
-  const first = await resolveReferenceSubmission({ sourceReferences, uuid: "first", upload });
-  const terminalRetry = await resolveReferenceSubmission({
-    sourceReferences,
-    cache: first.cache,
-    previousOutcome: "terminal-failure",
-    existing: first.requestKey,
-    uuid: "terminal-retry",
-    upload,
-  });
-
-  assert.deepEqual(uploadCalls, [sourceReferences, sourceReferences]);
-  assert.equal(terminalRetry.reused, false);
-  assert.deepEqual(terminalRetry.requestSnapshot, first.requestSnapshot);
-  assert.equal(terminalRetry.fingerprint, first.fingerprint);
-  assert.equal(terminalRetry.requestKey.clientRequestId, "image_terminal-retry");
-  assert.notEqual(terminalRetry.requestKey.clientRequestId, first.requestKey.clientRequestId);
-});
-
-test("failed reference upload produces no cache entry", async () => {
-  const resolveImageReferenceUploads = requiredFunction("resolveImageReferenceUploads");
-  const sourceReferences = ["wxfile://reference-a.png"];
-  let cache;
-  let uploadCalls = 0;
-
-  await assert.rejects(async () => {
-    const resolved = await resolveImageReferenceUploads({ sourceReferences }, async () => {
-      uploadCalls += 1;
-      throw new Error("upload failed");
-    });
-    cache = resolved.cache;
-  }, /upload failed/);
-
-  assert.equal(cache, undefined);
-  const recovered = await resolveImageReferenceUploads({ sourceReferences, cache }, async () => {
-    uploadCalls += 1;
-    return ["https://uploads.test/reference-a.png"];
-  });
-  assert.equal(uploadCalls, 2);
-  assert.deepEqual(recovered.cache, {
-    sourceSnapshot: sourceReferences,
-    uploadedURLs: ["https://uploads.test/reference-a.png"],
-  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.state.previousOutcome, "terminal-failure");
+  assert.equal(retry.ok, true);
+  assert.deepEqual(uploadCalls, [input.sourceReferences, input.sourceReferences]);
+  assert.deepEqual(createdDrafts.map(draft => draft.clientRequestId), ["image_first", "image_after-4xx"]);
+  assert.equal(retry.fingerprint, failed.fingerprint);
+  assert.notEqual(retry.state.requestKey.clientRequestId, failed.state.requestKey.clientRequestId);
 });
 
 test("every complete canonical request semantic changes the fingerprint", () => {
@@ -1101,7 +1159,7 @@ test("mounted image component renders only exact dynamic schema controls", () =>
   }
 });
 
-test("workbench wires exact image schema, canonical draft, and retry helpers without legacy controls", () => {
+test("workbench wires exact image schema and delegates image submission to the production orchestrator", () => {
   const source = readFileSync(
     new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url),
     "utf8",
@@ -1116,13 +1174,8 @@ test("workbench wires exact image schema, canonical draft, and retry helpers wit
   assert.match(source, /module-schema\?module_code=.*model_name=/);
   assert.match(source, /resolveImageSchemaFetchResult/);
   assert.match(source, /restoreImageInspirationSelection/);
-  assert.match(source, /buildCanonicalImageDraft/);
-  assert.match(source, /taskRequestFromDraft/);
-  assert.match(source, /imageRequestFingerprint/);
-  assert.match(source, /nextImageClientRequestKey/);
-  assert.match(source, /resolveImageReferenceUploads/);
+  assert.match(source, /await submitCanonicalImageTask\(/);
   assert.match(source, /imageReferenceUploadCache/);
-  assert.match(source, /clientRequestId/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
   assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);
 });

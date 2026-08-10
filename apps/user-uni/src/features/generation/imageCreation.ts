@@ -1,4 +1,9 @@
-import type { ModelInfo } from "@xianzhi/shared-types";
+import { taskRequestFromDraft } from "@xianzhi/business-sdk";
+import type {
+  CreateDraft,
+  CreateGenerationTaskRequest,
+  ModelInfo,
+} from "@xianzhi/shared-types";
 
 export type CanonicalImageQuality = "standard" | "high";
 
@@ -96,6 +101,12 @@ export interface ResolvedImageReferenceUploads {
   reused: boolean;
 }
 
+export interface ImageTaskSubmissionState {
+  uploadCache?: ImageReferenceUploadCache;
+  requestKey?: ImageClientRequestKeyState;
+  previousOutcome?: ImageRequestPreviousOutcome;
+}
+
 export type ImageSchemaLoadStatus = "idle" | "loading" | "ready" | "error";
 
 export type ImageSchemaFetchResult =
@@ -156,6 +167,38 @@ export interface CanonicalImageDraftInput {
   parameters?: Record<string, unknown>;
   clientRequestId?: string;
 }
+
+export type SubmitCanonicalImageTaskInput = Omit<
+  CanonicalImageDraftInput,
+  "referenceImages" | "clientRequestId"
+> & ImageTaskSubmissionState & {
+  sourceReferences: string[];
+};
+
+export interface SubmitCanonicalImageTaskDependencies<Task> {
+  uploadReferences: (sourceReferences: string[]) => Promise<string[]>;
+  createTask: (draft: CreateDraft) => Promise<Task>;
+  clientIdFactory: () => string;
+}
+
+interface ImageTaskSubmissionRequestEvidence {
+  draft: CreateDraft;
+  requestSnapshot: CreateGenerationTaskRequest;
+  finalRequest: CreateGenerationTaskRequest;
+  fingerprint: string;
+}
+
+export type ImageTaskSubmissionResult<Task> =
+  | ({
+      ok: true;
+      task: Task;
+      state: ImageTaskSubmissionState;
+    } & ImageTaskSubmissionRequestEvidence)
+  | ({
+      ok: false;
+      error: unknown;
+      state: ImageTaskSubmissionState;
+    } & Partial<ImageTaskSubmissionRequestEvidence>);
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -580,6 +623,84 @@ export async function resolveImageReferenceUploads(
     uploadedURLs: [...uploadedURLs],
   };
   return { referenceImages: [...uploadedURLs], cache, reused: false };
+}
+
+export async function submitCanonicalImageTask<Task>(
+  input: SubmitCanonicalImageTaskInput,
+  dependencies: SubmitCanonicalImageTaskDependencies<Task>,
+): Promise<ImageTaskSubmissionResult<Task>> {
+  const state: ImageTaskSubmissionState = {
+    uploadCache: input.uploadCache
+      ? {
+          sourceSnapshot: [...input.uploadCache.sourceSnapshot],
+          uploadedURLs: [...input.uploadCache.uploadedURLs],
+        }
+      : undefined,
+    requestKey: input.requestKey ? { ...input.requestKey } : undefined,
+    previousOutcome: input.previousOutcome,
+  };
+  let draft: CreateDraft | undefined;
+  let requestSnapshot: CreateGenerationTaskRequest | undefined;
+  let finalRequest: CreateGenerationTaskRequest | undefined;
+  let fingerprint: string | undefined;
+  let createTaskStarted = false;
+
+  try {
+    const references = await resolveImageReferenceUploads({
+      sourceReferences: input.sourceReferences,
+      cache: input.uploadCache,
+      previousOutcome: input.previousOutcome,
+    }, dependencies.uploadReferences);
+    state.uploadCache = references.cache;
+
+    const canonicalDraft = buildCanonicalImageDraft({
+      contract: input.contract,
+      selection: input.selection,
+      prompt: input.prompt,
+      model: input.model,
+      style: input.style,
+      referenceImages: references.referenceImages,
+      negativePrompt: input.negativePrompt,
+      parameters: input.parameters,
+    });
+    requestSnapshot = taskRequestFromDraft(canonicalDraft);
+    fingerprint = imageRequestFingerprint(requestSnapshot);
+    const requestKey = nextImageClientRequestKey({
+      fingerprint,
+      existing: input.requestKey,
+      previousOutcome: input.previousOutcome,
+    }, dependencies.clientIdFactory);
+    state.requestKey = requestKey;
+    draft = { ...canonicalDraft, clientRequestId: requestKey.clientRequestId };
+    finalRequest = taskRequestFromDraft(draft);
+
+    createTaskStarted = true;
+    const task = await dependencies.createTask(draft);
+    const status = String(recordValue(task)?.status || "").toUpperCase();
+    state.previousOutcome = ["FAILED", "ERROR"].includes(status)
+      ? "terminal-failure"
+      : undefined;
+    return {
+      ok: true,
+      task,
+      state,
+      draft,
+      requestSnapshot,
+      finalRequest,
+      fingerprint,
+    };
+  } catch (error) {
+    if (createTaskStarted) state.previousOutcome = imageRequestOutcomeForError(error);
+    return {
+      ok: false,
+      error,
+      state,
+      draft,
+      requestSnapshot,
+      finalRequest,
+      fingerprint,
+    };
+  }
 }
 
 function stableRequestSnapshot(value: unknown): unknown {

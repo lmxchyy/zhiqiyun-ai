@@ -904,7 +904,6 @@ import {
   confirmResolvedVideoModel,
   deriveEditableVideoFields,
   normalizeVideoModelCapabilities,
-  taskRequestFromDraft,
   transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
@@ -927,14 +926,11 @@ import {
   canonicalImageParameters,
   imageModelOptions,
   imagePointEstimateLabel,
-  imageRequestFingerprint,
-  imageRequestOutcomeForError,
   initialImageSelection,
-  nextImageClientRequestKey,
-  resolveImageReferenceUploads,
   resolveImageModelCode,
   resolveImageSchemaFetchResult,
   restoreImageInspirationSelection,
+  submitCanonicalImageTask,
   toCanonicalImageSelection,
   type AvailableImageCreationContract,
   type CanonicalImageQuality,
@@ -3439,7 +3435,6 @@ async function submitCreation(prompt: string) {
     progress: 0,
     resultType: creationMode.value,
   };
-  let imageRequestAttempted = false;
   try {
     // #ifdef MP-WEIXIN
     // Password/SMS login is fine; silently refresh device openid for WeChat content security only.
@@ -3482,14 +3477,7 @@ async function submitCreation(prompt: string) {
       ) {
         throw new Error(imageSchemaMessage.value || "当前模型参数尚未就绪");
       }
-      const resolvedReferences = await resolveImageReferenceUploads({
-        sourceReferences: creationReferencePaths.value,
-        cache: imageReferenceUploadCache.value,
-        previousOutcome: imageRequestPreviousOutcome.value,
-      }, uploadCreationReferenceImages);
-      imageReferenceUploadCache.value = resolvedReferences.cache;
-      const referenceImages = resolvedReferences.referenceImages;
-      const draft = buildCanonicalImageDraft({
+      const submission = await submitCanonicalImageTask({
         contract,
         selection: {
           size: imageSize.value,
@@ -3499,30 +3487,26 @@ async function submitCreation(prompt: string) {
         prompt,
         model: selectedImageModelCode.value,
         style: restoredCreationString("style") || "commercial",
-        referenceImages,
+        sourceReferences: creationReferencePaths.value,
         negativePrompt: restoredCreationString("negativePrompt"),
         parameters: canonicalImageParameters(restoredCreationParams.value),
-      });
-      const requestSnapshot = taskRequestFromDraft(draft);
-      const fingerprint = imageRequestFingerprint(requestSnapshot);
-      const requestKey = nextImageClientRequestKey({
-        fingerprint,
-        existing: imageClientRequestKey.value,
+        uploadCache: imageReferenceUploadCache.value,
+        requestKey: imageClientRequestKey.value,
         previousOutcome: imageRequestPreviousOutcome.value,
-      }, createImageRequestUUID);
-      imageClientRequestKey.value = requestKey;
-      imageRequestAttempted = true;
-      const result = await businessSdk.generation.createTask({
-        ...draft,
-        clientRequestId: requestKey.clientRequestId,
+      }, {
+        uploadReferences: uploadCreationReferenceImages,
+        createTask: draft => businessSdk.generation.createTask(draft),
+        clientIdFactory: createImageRequestUUID,
       });
+      imageReferenceUploadCache.value = submission.state.uploadCache;
+      imageClientRequestKey.value = submission.state.requestKey;
+      imageRequestPreviousOutcome.value = submission.state.previousOutcome;
+      if (!submission.ok) throw submission.error;
+      const result = submission.task;
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
       taskPointCost = Number.isFinite(result.pointCost) ? result.pointCost : undefined;
-      imageRequestPreviousOutcome.value = ["FAILED", "ERROR"].includes(taskStatus)
-        ? "terminal-failure"
-        : undefined;
     } else {
       const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
       const generationConfig = await resolveBackendGenerationConfig(
@@ -3621,9 +3605,6 @@ async function submitCreation(prompt: string) {
     generationPollRun += 1;
     stopGenerationFeedback();
     generationProgress.value = 0;
-    if (creationMode.value === "image" && imageRequestAttempted) {
-      imageRequestPreviousOutcome.value = imageRequestOutcomeForError(error);
-    }
     const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
     if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
       pendingLegalGenerationPrompt = prompt;

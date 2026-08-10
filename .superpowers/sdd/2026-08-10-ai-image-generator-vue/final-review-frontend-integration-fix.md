@@ -123,3 +123,58 @@ The two fresh WeChat builds were byte-identical after upload filtering:
 | TOTAL | 2,380,145 B | 2,380,145 B |
 
 The earlier post-build limitation above was historical evidence from C2 before the separate build matcher correction in `7cbc8c28f`. This follow-up did not change that build script; both fresh post-correction builds and wallet checks now complete successfully.
+
+## Follow-up test-gap fix: production retry orchestration
+
+The upload-reuse behavior was previously covered by a test-owned composition of the individual helpers. That proved each primitive could produce the desired result, but it did not execute the same orchestration that `MiniProgramRoleWorkbench.submitCreation` used in production.
+
+The image submission sequence now has one production entry point, `submitCanonicalImageTask`. It receives canonical draft inputs and injected upload, task-create, and client-ID dependencies, then performs the actual sequence:
+
+1. resolve or reuse the ordered reference upload snapshot;
+2. build the canonical image draft;
+3. map it through the public Business SDK `taskRequestFromDraft`;
+4. fingerprint that request and resolve the `image_` idempotency key;
+5. map the final keyed draft and call `createTask`;
+6. return success or error together with the exact upload/key/outcome state required by the next attempt.
+
+The Workbench image branch calls this entry point directly and no longer duplicates that sequence. It rethrows the original task error after applying the returned retry state, preserving existing `ApiClientError` handling such as the agreement-required 428 flow.
+
+### Orchestration TDD evidence
+
+RED command:
+
+```text
+node --test --test-name-pattern "production image task orchestration|delegates image submission" tests/user-mini-image-generator.test.mjs
+```
+
+RED result: **6 tests, 0 passed / 6 failed**. Five behavior tests failed because `submitCanonicalImageTask` was not exported; the auxiliary Workbench contract failed because `submitCreation` did not call it.
+
+GREEN result for the same command: **6/6 passed**. The old test-owned orchestration was deleted. The new tests execute the production helper twice and use the real compiled public SDK mapper while mocking only the external upload/task-create boundaries. They cover:
+
+- status-code-zero uncertainty followed by success: one upload, two task creates, and identical keyed drafts, final mapped requests, fingerprints, and `clientRequestId` values;
+- changed reference values and changed reference order: a second upload and a new fingerprint/key;
+- a terminal task response: normal retransmission and a new key;
+- upload failure: zero task creates and no cache update;
+- an explicit 4xx: normal retransmission and a new key on the next attempt.
+
+### Orchestration verification
+
+| Command | Result |
+| --- | --- |
+| `node --test tests/user-mini-image-generator.test.mjs` | PASS, **37/37** |
+| M1/M2/M4/M6 aggregate Node command | PASS, **75/75** |
+| `npm.cmd run typecheck:packages` | PASS |
+| `npm.cmd run typecheck` in `apps/user-uni` | PASS |
+| `npm.cmd run build:h5` in `apps/user-uni` | PASS; the existing dynamic/static import warning and local `os - Alias not found.` shell noise remain |
+| first `npm.cmd run build:mp-weixin:local` | PASS |
+| first `npm.cmd run test:wallet-build` | PASS, **4/4** |
+| second `npm.cmd run build:mp-weixin:local` | PASS |
+| second `npm.cmd run test:wallet-build` | PASS, **4/4** |
+
+The two fresh WeChat builds were byte-identical after upload filtering:
+
+| Package | First build | Second build |
+| --- | ---: | ---: |
+| MAIN | 1,536,531 B | 1,536,531 B |
+| `pages/user-creation` | 141,194 B | 141,194 B |
+| TOTAL | 2,381,034 B | 2,381,034 B |
