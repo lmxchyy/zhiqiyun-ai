@@ -1105,32 +1105,36 @@ func pptImageGenerationCreateRequest(user adminUser, req pptImageGenerateRequest
 	if visualPlan != nil {
 		negativePrompt = visualPlan.NegativePrompt
 	}
+	imageSize := "1536x1024"
+	imageParams := map[string]any{
+		"module_code":    moduleImageGeneration,
+		"n":              1,
+		"size":           imageSize,
+		"quality":        "standard",
+		"purpose":        "ppt_slide_illustration",
+		"sourceModule":   "ppt-generation",
+		"pptTaskId":      strings.TrimSpace(pptTaskID),
+		"theme":          strings.TrimSpace(req.Theme),
+		"language":       strings.TrimSpace(req.Language),
+		"deckTitle":      strings.TrimSpace(req.DeckTitle),
+		"slideId":        strings.TrimSpace(req.Slide.ID),
+		"slidePage":      req.Slide.Page,
+		"negativePrompt": negativePrompt,
+		"visualPlan":     visualPlan,
+		"seed":           time.Now().UnixNano(),
+		"retryAttempt":   req.RetryAttempt,
+	}
+	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") {
+		imageParams["size"] = "1920x1080"
+		delete(imageParams, "quality")
+	}
 	return generation.CreateRequest{
 		Type:       "TEXT_TO_IMAGE",
 		ModuleCode: moduleImageGeneration,
 		UserID:     user.ID,
 		Prompt:     pptImagePrompt(req),
 		Model:      model,
-		Params: map[string]any{
-			"module_code":    moduleImageGeneration,
-			"count":          1,
-			"n":              1,
-			"imageRatio":     "16:9",
-			"size":           "1536x1024",
-			"quality":        "standard",
-			"purpose":        "ppt_slide_illustration",
-			"sourceModule":   "ppt-generation",
-			"pptTaskId":      strings.TrimSpace(pptTaskID),
-			"theme":          strings.TrimSpace(req.Theme),
-			"language":       strings.TrimSpace(req.Language),
-			"deckTitle":      strings.TrimSpace(req.DeckTitle),
-			"slideId":        strings.TrimSpace(req.Slide.ID),
-			"slidePage":      req.Slide.Page,
-			"negativePrompt": negativePrompt,
-			"visualPlan":     visualPlan,
-			"seed":           time.Now().UnixNano(),
-			"retryAttempt":   req.RetryAttempt,
-		},
+		Params:     imageParams,
 	}
 }
 

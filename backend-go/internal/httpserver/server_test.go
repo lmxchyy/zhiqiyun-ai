@@ -437,18 +437,9 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if err := setTestPlan("plan_free"); err != nil {
 		t.Fatalf("set demo plan: %v", err)
 	}
-	fallbackSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
-	if fallbackSchemaRes.Code != http.StatusOK {
-		t.Fatalf("fallback module schema status = %d, body = %s", fallbackSchemaRes.Code, fallbackSchemaRes.Body.String())
-	}
-	var fallbackSchemaPayload struct {
-		ModelName string `json:"model_name"`
-	}
-	if err := json.NewDecoder(fallbackSchemaRes.Body).Decode(&fallbackSchemaPayload); err != nil {
-		t.Fatal(err)
-	}
-	if fallbackSchemaPayload.ModelName != "mock-standard" {
-		t.Fatalf("fallback model = %s, want mock-standard", fallbackSchemaPayload.ModelName)
+	gptSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
+	if gptSchemaRes.Code != http.StatusBadRequest || !strings.Contains(gptSchemaRes.Body.String(), "not allowed") {
+		t.Fatalf("disallowed model schema status = %d, body = %s", gptSchemaRes.Code, gptSchemaRes.Body.String())
 	}
 	if err := setTestPlan("plan_month"); err != nil {
 		t.Fatalf("restore demo plan: %v", err)

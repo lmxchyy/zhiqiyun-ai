@@ -106,6 +106,10 @@ func (p CloudBaseFunction) Generate(ctx context.Context, req generation.CreateRe
 	if len([]rune(prompt)) > 500 {
 		return nil, errors.New("cloudbase image prompt exceeds the official 500 character limit")
 	}
+	size, err := cloudBaseImageSize(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	references := cloudBaseReferenceURLs(req.Params)
 	imageToImage := model == "HY-Image-v3.0-I2I-ToB-v1.0.1"
 	if imageToImage && len(references) != 1 {
@@ -119,7 +123,7 @@ func (p CloudBaseFunction) Generate(ctx context.Context, req generation.CreateRe
 		"type":            strings.TrimSpace(req.Type),
 		"model":           model,
 		"prompt":          prompt,
-		"size":            cloudBaseImageSize(req.Params),
+		"size":            size,
 		"revise":          true,
 		"footnote":        p.watermarkText,
 		"referenceImages": references,
@@ -254,23 +258,13 @@ func cloudBaseReferenceURLs(params map[string]any) []string {
 	return urls
 }
 
-func cloudBaseImageSize(params map[string]any) string {
-	value := ""
-	if params != nil {
-		value = strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
-		if value == "" || value == "<nil>" {
-			value = strings.ToLower(strings.TrimSpace(fmt.Sprint(params["aspect_ratio"])))
-		}
-	}
+func cloudBaseImageSize(params map[string]any) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
 	switch value {
-	case "1280x720", "16:9":
-		return "1280x720"
-	case "720x1280", "9:16":
-		return "720x1280"
-	case "1280x1280":
-		return "1280x1280"
+	case "1024x1024", "1280x1280", "1280x720", "720x1280":
+		return value, nil
 	default:
-		return "1024x1024"
+		return "", fmt.Errorf("unsupported CloudBase image size %q; supported sizes: 1024x1024, 1280x1280, 1280x720, 720x1280", value)
 	}
 }
 

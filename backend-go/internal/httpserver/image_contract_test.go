@@ -1,0 +1,159 @@
+package httpserver
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"xianzhi-ai/backend-go/internal/config"
+)
+
+func TestDefaultImageSchemasMatchBuiltInProviderCapabilities(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	schemas := defaultAIParameterSchemas(now)
+	tests := []struct {
+		model        string
+		sizes        []any
+		qualities    []any
+		expectsCount bool
+	}{
+		{model: "mock-standard", sizes: []any{"1920x1080"}, expectsCount: true},
+		{model: "gpt-image-2", sizes: []any{"1024x1024", "1024x1536", "1536x1024"}, qualities: []any{"standard", "high"}, expectsCount: true},
+		{model: "HY-Image-3.0-Plus-4090-Tob-v1.0", sizes: []any{"1024x1024", "1280x1280", "1280x720", "720x1280"}},
+		{model: "HY-Image-v3.0-I2I-ToB-v1.0.1", sizes: []any{"1024x1024", "1280x1280", "1280x720", "720x1280"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			schema := findAIParameterSchema(schemas, moduleImageGeneration, tt.model)
+			if schema.ID == "" || schema.ModelName != tt.model {
+				t.Fatalf("schema = %+v, want exact model %s", schema, tt.model)
+			}
+			fields := imageContractFields(schema.SchemaJSON.Fields)
+			if !reflect.DeepEqual(fields["size"].Options, tt.sizes) {
+				t.Fatalf("size options = %#v, want %#v", fields["size"].Options, tt.sizes)
+			}
+			if !reflect.DeepEqual(fields["quality"].Options, tt.qualities) {
+				t.Fatalf("quality options = %#v, want %#v", fields["quality"].Options, tt.qualities)
+			}
+			_, hasCount := fields["n"]
+			if hasCount != tt.expectsCount {
+				t.Fatalf("n field present = %v, want %v", hasCount, tt.expectsCount)
+			}
+		})
+	}
+}
+
+func TestNormalizeAICapabilityDefaultsReplacesStaleBuiltInImageSchema(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	stale := defaultAIParameterSchemas(now)[0]
+	stale.SchemaJSON.Fields = []adminAIParameterField{
+		{Key: "prompt", Type: "textarea", Required: true},
+		{Key: "size", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024")},
+		{Key: "quality", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high")},
+	}
+	data := normalizeAICapabilityDefaults(adminPlatformData{
+		AIModules: defaultAIModules(now), AIModels: defaultAIModels(now),
+		AIParameterSchemas: []adminAIParameterSchema{stale},
+		TenantModuleLimits: defaultTenantModuleLimits(now), BillingRules: defaultBillingRules(now),
+	})
+	schema := findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, "mock-standard")
+	fields := imageContractFields(schema.SchemaJSON.Fields)
+	if !reflect.DeepEqual(fields["size"].Options, []any{"1920x1080"}) {
+		t.Fatalf("normalized mock size options = %#v", fields["size"].Options)
+	}
+	if _, ok := fields["quality"]; ok {
+		t.Fatalf("stale mock quality survived normalization: %+v", schema.SchemaJSON.Fields)
+	}
+	if _, ok := fields["n"]; !ok {
+		t.Fatalf("authoritative mock count field missing: %+v", schema.SchemaJSON.Fields)
+	}
+}
+
+func TestImageModuleSchemaDoesNotFallbackToAnotherModel(t *testing.T) {
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	data.AIModels = append(data.AIModels, adminAIModel{
+		ID: "ai_model_no_schema", ModelName: "no-schema-image", ModelType: "image", Provider: "test",
+		CapabilityCode: []string{"text_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE",
+		FallbackModel: "mock-standard", AllowFallbackSwitch: true,
+	})
+	_, err := resolveClientModuleSchema(data, adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}, moduleImageGeneration, "no-schema-image")
+	if err == nil || !strings.Contains(err.Error(), "parameter schema") {
+		t.Fatalf("resolveClientModuleSchema() error = %v, want missing model-specific schema", err)
+	}
+}
+
+func TestModuleSchemaResponseIdentifiesEachBuiltInImageModel(t *testing.T) {
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+	for _, model := range []string{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"} {
+		resolved, err := resolveModuleSchema(data, user, moduleImageGeneration, model)
+		if err != nil {
+			t.Fatalf("resolve %s: %v", model, err)
+		}
+		response := moduleSchemaResponse(resolved, user)
+		if response["model_name"] != model || resolved.Schema.ModelName != model {
+			t.Fatalf("model %s response/schema = %#v/%q", model, response["model_name"], resolved.Schema.ModelName)
+		}
+	}
+}
+
+func TestPublicModelsDoNotInventImageRatiosOrExposeSchemaLessModels(t *testing.T) {
+	t.Setenv("MODEL_PROVIDER_URL", "https://provider.example.test/v1")
+	t.Setenv("MODEL_PROVIDER_API_KEY", "test-key")
+	t.Setenv("MODEL_PROVIDER_IMAGE_MODEL", "no-schema-image")
+	handler := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()}).Handler
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/models", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("models status = %d, body = %s", res.Code, res.Body.String())
+	}
+	var items []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if _, ok := item["supportedRatios"]; ok {
+			t.Fatalf("model invented supportedRatios: %#v", item)
+		}
+		if item["code"] == "no-schema-image" {
+			t.Fatalf("schema-less image model was exposed: %#v", item)
+		}
+	}
+}
+
+func TestBuiltInImageInspirationSeedsUseCanonicalParameters(t *testing.T) {
+	repository := newMemoryInspirationRepository()
+	tests := []struct {
+		id    string
+		ratio string
+	}{
+		{id: "inspiration-product-clean", ratio: "1:1"},
+		{id: "inspiration-poster-brand", ratio: "2:3"},
+		{id: "inspiration-portrait-office", ratio: "2:3"},
+		{id: "inspiration-brand-identity", ratio: "3:2"},
+	}
+	for _, tt := range tests {
+		item, err := repository.GetTemplate(context.Background(), "default", "", tt.id, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{"ratio": tt.ratio, "quality": "high", "count": 1}
+		if !reflect.DeepEqual(item.Parameters, want) {
+			t.Fatalf("%s parameters = %#v, want %#v", tt.id, item.Parameters, want)
+		}
+	}
+}
+
+func imageContractFields(fields []adminAIParameterField) map[string]adminAIParameterField {
+	result := make(map[string]adminAIParameterField, len(fields))
+	for _, field := range fields {
+		result[field.Key] = field
+	}
+	return result
+}

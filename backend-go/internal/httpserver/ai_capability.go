@@ -133,10 +133,16 @@ func mergeDefaultAIParameterSchemaFields(current []adminAIParameterSchema, defau
 	result := make([]adminAIParameterSchema, len(current))
 	copy(result, current)
 	for _, fallback := range defaults {
+		matched := false
 		for index := range result {
 			if !strings.EqualFold(strings.TrimSpace(result[index].ModuleCode), strings.TrimSpace(fallback.ModuleCode)) ||
 				!strings.EqualFold(strings.TrimSpace(result[index].ModelName), strings.TrimSpace(fallback.ModelName)) {
 				continue
+			}
+			matched = true
+			if canonicalModuleCode(fallback.ModuleCode) == moduleImageGeneration {
+				result[index].SchemaJSON = fallback.SchemaJSON
+				break
 			}
 			known := map[string]bool{}
 			for _, field := range result[index].SchemaJSON.Fields {
@@ -151,6 +157,9 @@ func mergeDefaultAIParameterSchemaFields(current []adminAIParameterSchema, defau
 			}
 			break
 		}
+		if !matched {
+			result = append(result, fallback)
+		}
 	}
 	return result
 }
@@ -161,7 +170,7 @@ func defaultAIModules(now string) []adminAIModule {
 			ID: "ai_module_image_generation", ModuleCode: moduleImageGeneration, Name: "AI生图",
 			Description: "统一管理文生图、图生图、图片编辑的模型、参数和调用策略。",
 			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_free", "plan_month", "plan_basic_single", "plan_pro", "plan_year"},
-			BoundModels: []string{"mock-standard", "gpt-image-2"}, DefaultSchemaID: "schema_image_generation_default",
+			BoundModels: []string{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"}, DefaultSchemaID: "schema_image_generation_default",
 			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
 		},
 		{
@@ -185,6 +194,8 @@ func defaultAIModels(now string) []adminAIModel {
 	return []adminAIModel{
 		{ID: "ai_model_mock_standard", ModelName: "mock-standard", ModelType: "image", Provider: "Local", CapabilityCode: []string{"text_to_image", "image_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_gpt_image_2", ModelName: "gpt-image-2", ModelType: "image", Provider: "NewAPI", CapabilityCode: []string{"text_to_image", "image_to_image", "image_edit"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", FallbackModel: "mock-standard", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_cloudbase_hy_image", ModelName: "HY-Image-3.0-Plus-4090-Tob-v1.0", ModelType: "image", Provider: "CloudBase", CapabilityCode: []string{"text_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 30, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_cloudbase_hy_image_i2i", ModelName: "HY-Image-v3.0-I2I-ToB-v1.0.1", ModelType: "image", Provider: "CloudBase", CapabilityCode: []string{"image_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 40, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_mock_video", ModelName: "mock-video", ModelType: "video", Provider: "Local", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_seedance_fast_20", ModelName: "seedance-fast-2.0", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_doubao_seedance_20", ModelName: "doubao-seedance-2.0", ModelType: "video", Provider: "移动云", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 30, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
@@ -199,8 +210,7 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			ID: "schema_image_generation_default", ModuleCode: moduleImageGeneration, ModelName: "mock-standard",
 			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
 				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
-				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024"), UserEditable: true, Visible: true},
-				{Key: "quality", Label: "图片质量", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high"), UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1920x1080", Options: anyOptions("1920x1080"), UserEditable: true, Visible: true},
 				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Min: floatPtr(1), Max: floatPtr(8), UserEditable: true, Visible: true},
 				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "seed", Label: "种子值", Type: "number", UserEditable: true, Visible: true},
@@ -239,12 +249,42 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			}},
 			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
 		},
+		{
+			ID: "schema_image_generation_gpt_image_2", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024"), UserEditable: true, Visible: true},
+				{Key: "quality", Label: "图片质量", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high"), UserEditable: true, Visible: true},
+				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Min: floatPtr(1), Max: floatPtr(8), UserEditable: true, Visible: true},
+				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
+				{Key: "seed", Label: "种子值", Type: "number", UserEditable: true, Visible: true},
+				{Key: "negative_prompt", Label: "负面提示词", Type: "textarea", UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "schema_image_generation_cloudbase_hy_image", ModuleCode: moduleImageGeneration, ModelName: "HY-Image-3.0-Plus-4090-Tob-v1.0",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1280x1280", "1280x720", "720x1280"), UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "schema_image_generation_cloudbase_hy_image_i2i", ModuleCode: moduleImageGeneration, ModelName: "HY-Image-v3.0-I2I-ToB-v1.0.1",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1280x1280", "1280x720", "720x1280"), UserEditable: true, Visible: true},
+				{Key: "reference_image", Label: "参考图", Type: "image_upload", Required: true, UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
 	}
 }
 
 func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
 	return []adminTenantModuleLimit{
-		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(15)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"kimi-k2.6", "ppt-text-model"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_plan_free_image", TenantID: "default", PackageID: "plan_free", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard"}}, "n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
@@ -300,7 +340,7 @@ func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
 
 func resolveClientModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {
 	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
-	if err == nil || strings.TrimSpace(modelName) == "" {
+	if err == nil || strings.TrimSpace(modelName) == "" || canonicalModuleCode(moduleCode) == moduleImageGeneration {
 		return resolved, err
 	}
 	requestedModel := findAIModel(data.AIModels, moduleCode, modelName)
@@ -627,12 +667,17 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if !isActiveLike(model.Status) {
 		return resolvedModuleSchema{}, fmt.Errorf("ai model is disabled: %s", model.ModelName)
 	}
-	schema := findAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
-	if schema.ID == "" {
+	var schema adminAIParameterSchema
+	if moduleCode == moduleImageGeneration {
+		schema = findExactAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
+	} else {
+		schema = findAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
+	}
+	if schema.ID == "" && moduleCode != moduleImageGeneration {
 		schema = findAIParameterSchema(data.AIParameterSchemas, moduleCode, "")
 	}
 	if schema.ID == "" {
-		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for module %s", moduleCode)
+		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for model %s in module %s", model.ModelName, moduleCode)
 	}
 	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, model.ModelName)
 	if err := validateModelAllowedByLimit(model.ModelName, limit.LimitJSON); err != nil {
@@ -1256,6 +1301,21 @@ func findAIParameterSchema(items []adminAIParameterSchema, moduleCode string, mo
 		}
 	}
 	return fallback
+}
+
+func findExactAIParameterSchema(items []adminAIParameterSchema, moduleCode string, modelName string) adminAIParameterSchema {
+	for _, item := range items {
+		if canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel)) != moduleCode || !isActiveLike(item.Status) {
+			continue
+		}
+		if strings.EqualFold(firstNonEmptyString(item.ModelName, item.ModelNameCamel), modelName) {
+			if item.ModelName == "" {
+				item.ModelName = item.ModelNameCamel
+			}
+			return item
+		}
+	}
+	return adminAIParameterSchema{}
 }
 
 func defaultModelNameForModule(data adminPlatformData, moduleCode string) string {
