@@ -1,8 +1,162 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 import { taskRequestFromDraft } from "../packages/business-sdk/dist/mappers.js";
 import * as imageCreation from "../apps/user-uni/src/features/generation/imageCreation.ts";
+
+const requireFromUserUni = createRequire(new URL("../apps/user-uni/package.json", import.meta.url));
+const vueRuntime = requireFromUserUni("vue");
+const vueCompiler = requireFromUserUni("@vue/compiler-sfc");
+const typescript = requireFromUserUni("typescript");
+
+function loadAiImageGeneratorComponent() {
+  const componentURL = new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url);
+  const source = readFileSync(componentURL, "utf8");
+  const { descriptor, errors } = vueCompiler.parse(source, { filename: componentURL.pathname });
+  assert.deepEqual(errors, []);
+  const script = vueCompiler.compileScript(descriptor, {
+    id: "user-mini-ai-image-generator-test",
+    inlineTemplate: true,
+    templateOptions: {
+      compilerOptions: {
+        isCustomElement: tag => ["view", "text", "image", "button", "picker", "textarea", "scroll-view"].includes(tag),
+      },
+    },
+  });
+  const compiled = typescript.transpileModule(script.content, {
+    compilerOptions: {
+      module: typescript.ModuleKind.CommonJS,
+      target: typescript.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const module = { exports: {} };
+  const localRequire = specifier => {
+    if (specifier === "vue") return vueRuntime;
+    if (specifier.includes("features/generation/imageCreation")) return imageCreation;
+    throw new Error(`unexpected component dependency ${specifier}`);
+  };
+  // eslint-disable-next-line no-new-func
+  new Function("require", "module", "exports", compiled)(localRequire, module, module.exports);
+  return module.exports.default;
+}
+
+function createHostNode(type, text = "") {
+  return { type, text, props: {}, children: [], parent: null };
+}
+
+function insertHostNode(child, parent, anchor = null) {
+  child.parent = parent;
+  const index = anchor ? parent.children.indexOf(anchor) : -1;
+  if (index >= 0) parent.children.splice(index, 0, child);
+  else parent.children.push(child);
+}
+
+function mountAiImageGenerator(props) {
+  const emitted = [];
+  const renderer = vueRuntime.createRenderer({
+    patchProp(node, key, _previous, value) { node.props[key] = value; },
+    insert: insertHostNode,
+    remove(node) {
+      if (!node.parent) return;
+      const index = node.parent.children.indexOf(node);
+      if (index >= 0) node.parent.children.splice(index, 1);
+      node.parent = null;
+    },
+    createElement: type => createHostNode(type),
+    createText: text => createHostNode("#text", text),
+    createComment: text => createHostNode("#comment", text),
+    setText(node, text) { node.text = text; },
+    setElementText(node, text) {
+      const child = createHostNode("#text", text);
+      child.parent = node;
+      node.children = [child];
+    },
+    parentNode: node => node.parent,
+    nextSibling(node) {
+      if (!node.parent) return null;
+      const index = node.parent.children.indexOf(node);
+      return node.parent.children[index + 1] || null;
+    },
+    querySelector: () => null,
+    setScopeId(node, id) { node.props[id] = ""; },
+    cloneNode: node => ({ ...node, props: { ...node.props }, children: [...node.children], parent: null }),
+    insertStaticContent(content, parent, anchor) {
+      const node = createHostNode("#static", content);
+      insertHostNode(node, parent, anchor);
+      return [node, node];
+    },
+  });
+  const component = loadAiImageGeneratorComponent();
+  const root = createHostNode("#root");
+  const app = renderer.createApp({
+    render() {
+      return vueRuntime.h(component, {
+        ...props,
+        onGenerate: () => emitted.push("generate"),
+        onRetry: () => emitted.push("retry"),
+      });
+    },
+  });
+  for (const name of ["picker", "scroll-view"]) {
+    app.component(name, {
+      inheritAttrs: false,
+      setup(_componentProps, context) {
+        return () => vueRuntime.h(`${name}-host`, context.attrs, context.slots.default?.());
+      },
+    });
+  }
+  app.mount(root);
+  return { root, emitted, unmount: () => app.unmount() };
+}
+
+function hostNodes(node) {
+  return [node, ...node.children.flatMap(hostNodes)];
+}
+
+function hostClass(node) {
+  const value = node.props.class;
+  return Array.isArray(value) ? value.flat(Infinity).filter(Boolean).join(" ") : String(value || "");
+}
+
+function findHostByClass(root, className) {
+  return hostNodes(root).find(node => hostClass(node).split(/\s+/).includes(className));
+}
+
+function hostText(node) {
+  if (node.type === "#comment") return "";
+  return `${node.text || ""}${node.children.map(hostText).join("")}`;
+}
+
+function imageComponentProps(overrides = {}) {
+  return {
+    prompt: "生成橙色系水果店海报",
+    size: "1024x1024",
+    sizeOptions: [{ value: "1024x1024", label: "1:1" }],
+    quality: "standard",
+    qualityOptions: [{ value: "standard", label: "标准" }],
+    model: "gpt-image-2",
+    models: [{ code: "gpt-image-2", name: "GPT Image 2" }],
+    count: 1,
+    countOptions: [{ value: 1, label: "1" }],
+    referenceImages: [],
+    referenceLimit: 3,
+    busy: false,
+    selectingReference: false,
+    modelsLoading: false,
+    schemaStatus: "ready",
+    schemaMessage: "图片参数已就绪",
+    disabledReason: "",
+    error: "",
+    statusMessage: "",
+    statusTone: "idle",
+    retryAvailable: false,
+    estimateLabel: "以生成时结算为准",
+    ...overrides,
+  };
+}
 
 function exactImageSchema(modelName, fields) {
   return {
@@ -492,4 +646,295 @@ test("retry after terminal failure creates a new key for the same canonical inpu
     }, () => "uuid-retry"),
     { fingerprint, clientRequestId: "image_uuid-retry" },
   );
+});
+
+test("schema fetch applies only the latest response for the still-selected exact model", () => {
+  const resolveImageSchemaFetchResult = requiredFunction("resolveImageSchemaFetchResult");
+
+  assert.deepEqual(resolveImageSchemaFetchResult({
+    requestedModel: "gpt-image-2",
+    currentModel: "cloudbase-image",
+    requestSequence: 1,
+    latestSequence: 2,
+    response: gptImageSchema(),
+  }), { applied: false });
+
+  const mismatch = resolveImageSchemaFetchResult({
+    requestedModel: "gpt-image-2",
+    currentModel: "gpt-image-2",
+    requestSequence: 3,
+    latestSequence: 3,
+    response: gptImageSchema({ modelName: "mock-standard" }),
+  });
+  assert.equal(mismatch.applied, true);
+  assert.equal(mismatch.status, "error");
+  assert.match(mismatch.message, /与所选模型不一致/);
+
+  const ready = resolveImageSchemaFetchResult({
+    requestedModel: "gpt-image-2",
+    currentModel: "gpt-image-2",
+    requestSequence: 4,
+    latestSequence: 4,
+    response: gptImageSchema(),
+  });
+  assert.equal(ready.applied, true);
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.contract.modelName, "gpt-image-2");
+});
+
+test("model schema reset uses declared defaults and otherwise the first canonical option", () => {
+  const initialImageSelection = requiredFunction("initialImageSelection");
+  const contract = availableContract(exactImageSchema("gpt-image-2", [
+    {
+      key: "size",
+      type: "select",
+      required: true,
+      options: ["1536x1024", "1024x1024"],
+    },
+    {
+      key: "quality",
+      type: "select",
+      required: false,
+      default: "high",
+      options: ["standard", "high"],
+    },
+    {
+      key: "n",
+      type: "select",
+      required: false,
+      options: [2, 4],
+      min: 1,
+      max: 4,
+    },
+  ]));
+
+  assert.deepEqual(initialImageSelection(contract), {
+    size: "1536x1024",
+    quality: "high",
+    count: 2,
+  });
+});
+
+test("production image draft reaches the compiled SDK with canonical top-level fields only", () => {
+  const buildCanonicalImageDraft = requiredFunction("buildCanonicalImageDraft");
+  const contract = availableContract(enumerableCountSchema());
+  const draft = buildCanonicalImageDraft({
+    contract,
+    selection: { size: "1024x1536", quality: "high", count: 2 },
+    prompt: "生成纵向水果促销海报",
+    model: "gpt-image-2",
+    style: "commercial",
+    referenceImages: ["https://example.test/reference.png"],
+    negativePrompt: "watermark",
+    parameters: {
+      ratio: "4:3",
+      aspectRatio: "16:9",
+      aspect_ratio: "16:9",
+      imageRatio: "auto",
+      imageQuality: "2K",
+      size: "1024x1024",
+      quality: "standard",
+      count: 4,
+      n: 4,
+      prompt: "旧草稿提示词",
+      model: "old-model",
+      modelName: "old-model-name",
+      mode: "image",
+      contentType: "image",
+      referenceImages: ["https://example.test/old-reference.png"],
+      referencePaths: ["/tmp/old-reference.png"],
+      negativePrompt: "old-negative",
+      negative_prompt: "old-negative-alias",
+      style: "old-style",
+      stylePreset: "old-style-preset",
+      seed: 42,
+      sourceAssetId: "asset-source-1",
+    },
+  });
+
+  assert.deepEqual(draft.parameters, {
+    seed: 42,
+    sourceAssetId: "asset-source-1",
+  });
+
+  assert.deepEqual(taskRequestFromDraft(draft), {
+    type: "IMAGE_TO_IMAGE",
+    moduleCode: "image_generation",
+    prompt: "生成纵向水果促销海报",
+    model: "gpt-image-2",
+    params: {
+      size: "1024x1536",
+      quality: "high",
+      n: 2,
+      negative_prompt: "watermark",
+      reference_image: "https://example.test/reference.png",
+      referenceImages: [
+        { url: "https://example.test/reference.png", name: "reference-1" },
+      ],
+      seed: 42,
+      sourceReferenceAssetId: "asset-source-1",
+    },
+  });
+});
+
+test("image generator view state exposes empty, loading, and terminal retry behavior", () => {
+  const imageGeneratorViewState = requiredFunction("imageGeneratorViewState");
+
+  assert.deepEqual(imageGeneratorViewState({
+    prompt: "   ",
+    busy: false,
+    disabledReason: "",
+    statusTone: "idle",
+    statusMessage: "",
+    error: "",
+    retryAvailable: false,
+  }), {
+    canSubmit: false,
+    disabledReason: "请先描述想生成的图片",
+    primaryAction: "generate",
+    primaryLabel: "生成图片",
+    showSpinner: false,
+    showRetry: false,
+    tone: "idle",
+    liveMessage: "请先描述想生成的图片",
+  });
+
+  const loading = imageGeneratorViewState({
+    prompt: "生成海报",
+    busy: true,
+    disabledReason: "",
+    statusTone: "loading",
+    statusMessage: "生成中…",
+    error: "",
+    retryAvailable: false,
+  });
+  assert.equal(loading.canSubmit, false);
+  assert.equal(loading.primaryLabel, "图片生成中…");
+  assert.equal(loading.showSpinner, true);
+  assert.equal(loading.tone, "loading");
+
+  const failed = imageGeneratorViewState({
+    prompt: "生成海报",
+    busy: false,
+    disabledReason: "",
+    statusTone: "error",
+    statusMessage: "",
+    error: "模型生成失败，请调整描述后重试",
+    retryAvailable: true,
+  });
+  assert.equal(failed.canSubmit, true);
+  assert.equal(failed.primaryAction, "retry");
+  assert.equal(failed.primaryLabel, "重新生成");
+  assert.equal(failed.showRetry, true);
+  assert.equal(failed.tone, "error");
+  assert.equal(failed.liveMessage, "模型生成失败，请调整描述后重试");
+});
+
+test("network-uncertain errors reuse a key while explicit HTTP failures rotate it", () => {
+  const imageRequestOutcomeForError = requiredFunction("imageRequestOutcomeForError");
+  assert.equal(imageRequestOutcomeForError({ statusCode: 0 }), "network-uncertain");
+  assert.equal(imageRequestOutcomeForError(new TypeError("Network request failed")), "network-uncertain");
+  assert.equal(imageRequestOutcomeForError({ statusCode: 400 }), "terminal-failure");
+  assert.equal(imageRequestOutcomeForError(new Error("validation failed")), "terminal-failure");
+});
+
+test("mounted image component exposes the empty prompt reason and suppresses generate", () => {
+  const mounted = mountAiImageGenerator(imageComponentProps({ prompt: "   " }));
+  try {
+    const generate = findHostByClass(mounted.root, "ai-image-generator__generate");
+    assert.ok(generate);
+    assert.equal(generate.props.disabled, true);
+    assert.equal(generate.props["aria-describedby"], "image-generator-disabled-reason");
+    const reason = hostNodes(mounted.root).find(node => node.props.id === "image-generator-disabled-reason");
+    assert.ok(reason);
+    assert.equal(hostText(reason), "请先描述想生成的图片");
+    generate.props.onClick();
+    assert.deepEqual(mounted.emitted, []);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("mounted image component renders loading tone and a reduced-motion-safe spinner", () => {
+  const mounted = mountAiImageGenerator(imageComponentProps({
+    busy: true,
+    statusTone: "loading",
+    statusMessage: "生成中…",
+  }));
+  try {
+    const live = findHostByClass(mounted.root, "ai-image-generator__live-region");
+    const generate = findHostByClass(mounted.root, "ai-image-generator__generate");
+    assert.ok(live);
+    assert.ok(hostClass(live).includes("is-loading"));
+    assert.equal(hostText(generate), "图片生成中…");
+    assert.ok(findHostByClass(generate, "ai-image-generator__generate-spinner"));
+    assert.equal(generate.props.disabled, true);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("mounted terminal failure uses error tone and emits retry instead of generate", () => {
+  const mounted = mountAiImageGenerator(imageComponentProps({
+    statusTone: "error",
+    error: "模型生成失败，请调整描述后重试",
+    retryAvailable: true,
+  }));
+  try {
+    const live = findHostByClass(mounted.root, "ai-image-generator__live-region");
+    const generate = findHostByClass(mounted.root, "ai-image-generator__generate");
+    assert.ok(hostClass(live).includes("is-error"));
+    assert.match(hostText(live), /模型生成失败，请调整描述后重试/);
+    assert.equal(hostText(generate), "重新生成");
+    generate.props.onClick();
+    assert.deepEqual(mounted.emitted, ["retry"]);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("mounted image component renders only exact dynamic schema controls", () => {
+  const mounted = mountAiImageGenerator(imageComponentProps({
+    size: "1536x1024",
+    sizeOptions: [
+      { value: "1024x1024", label: "1:1" },
+      { value: "1536x1024", label: "3:2" },
+    ],
+    quality: undefined,
+    qualityOptions: [],
+    count: undefined,
+    countOptions: [],
+  }));
+  try {
+    const sizeButtons = hostNodes(mounted.root)
+      .filter(node => hostClass(node).split(/\s+/).includes("ai-image-generator__aspect"));
+    assert.deepEqual(sizeButtons.map(hostText), ["1:1", "3:2✓"]);
+    assert.doesNotMatch(hostText(mounted.root), /图片清晰度|张数|auto|1K|2K|4:3/);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("workbench wires exact image schema, canonical draft, and retry helpers without legacy controls", () => {
+  const source = readFileSync(
+    new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /v-model:size="imageSize"/);
+  assert.match(source, /:size-options="imageSizeOptions"/);
+  assert.match(source, /:quality-options="imageQualityOptions"/);
+  assert.match(source, /:count-options="imageCountOptions"/);
+  assert.match(source, /:status-tone="imageGeneratorStatusTone"/);
+  assert.match(source, /@retry="retryImageGeneration"/);
+  assert.match(source, /module-schema\?module_code=.*model_name=/);
+  assert.match(source, /resolveImageSchemaFetchResult/);
+  assert.match(source, /restoreImageInspirationSelection/);
+  assert.match(source, /buildCanonicalImageDraft/);
+  assert.match(source, /taskRequestFromDraft/);
+  assert.match(source, /imageRequestFingerprint/);
+  assert.match(source, /nextImageClientRequestKey/);
+  assert.match(source, /clientRequestId/);
+  assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
+  assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);
 });

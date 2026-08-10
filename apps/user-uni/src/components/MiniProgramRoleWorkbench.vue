@@ -43,19 +43,26 @@
         <view v-if="isImageCreationPage" class="ai-image-generator-page">
           <AiImageGenerator
             v-model:prompt="creationPrompt"
-            v-model:aspect-ratio="imageAspectRatio"
+            v-model:size="imageSize"
             v-model:quality="imageQuality"
             v-model:model="selectedImageModelCode"
             v-model:count="imageCount"
+            :size-options="imageSizeOptions"
+            :quality-options="imageQualityOptions"
+            :count-options="imageCountOptions"
             :models="imageModels"
             :reference-images="creationReferencePaths"
             :reference-limit="creationReferenceLimit"
             :busy="generationBusy"
             :selecting-reference="creationReferenceSelecting"
             :models-loading="imageModelsLoading"
+            :schema-status="imageSchemaStatus"
+            :schema-message="imageSchemaMessage"
             :disabled-reason="imageGeneratorDisabledReason"
             :error="creationError"
             :status-message="imageGeneratorStatusMessage"
+            :status-tone="imageGeneratorStatusTone"
+            :retry-available="imageRetryAvailable"
             :estimate-label="imageEstimateLabel"
             @back="returnToCreationHub"
             @help="showImageGeneratorHelp"
@@ -64,6 +71,7 @@
             @preview-reference="previewCreationReference"
             @optimize="optimizeImagePrompt"
             @generate="guestAwareGenerateTap"
+            @retry="retryImageGeneration"
             @view-result="openLatestGenerationResult"
           />
         </view>
@@ -896,6 +904,7 @@ import {
   confirmResolvedVideoModel,
   deriveEditableVideoFields,
   normalizeVideoModelCapabilities,
+  taskRequestFromDraft,
   transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
@@ -914,15 +923,26 @@ import {
   freeImageEditValidationMessage,
 } from "../features/generation/freeImageEdit";
 import {
-  imageAspectOptions,
-  imageCountOptions,
+  buildCanonicalImageDraft,
+  canonicalImageParameters,
   imageModelOptions,
   imagePointEstimateLabel,
-  imageQualityOptions,
+  imageRequestFingerprint,
+  imageRequestOutcomeForError,
+  initialImageSelection,
+  nextImageClientRequestKey,
   resolveImageModelCode,
-  type ImageAspectRatio,
+  resolveImageSchemaFetchResult,
+  restoreImageInspirationSelection,
+  toCanonicalImageSelection,
+  type AvailableImageCreationContract,
+  type CanonicalImageQuality,
+  type CanonicalImageSelection,
+  type ImageClientRequestKeyState,
+  type ImageGeneratorStatusTone,
   type ImageGeneratorModelOption,
-  type ImageQuality,
+  type ImageRequestPreviousOutcome,
+  type ImageSchemaLoadStatus,
 } from "../features/generation/imageCreation";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
@@ -1018,21 +1038,42 @@ function guestAwareGenerateTap() {
   if (!isGuest.value) return handleGenerateTap();
   const prompt = String(creationPrompt.value || "").trim();
   if (!prompt) {
-    creationError.value = "\u8bf7\u5148\u8f93\u5165\u521b\u4f5c\u9700\u6c42";
+    creationError.value = creationMode.value === "image"
+      ? "请先描述想生成的图片"
+      : "\u8bf7\u5148\u8f93\u5165\u521b\u4f5c\u9700\u6c42";
+    uni.showToast({ title: creationError.value, icon: "none" });
+    return;
+  }
+  if (creationMode.value === "image" && imageGeneratorDisabledReason.value) {
+    creationError.value = imageGeneratorDisabledReason.value;
     uni.showToast({ title: creationError.value, icon: "none" });
     return;
   }
   if (!validateActiveInspirationReferences()) return;
   if (!validateFreeImageEditRequest()) return;
   trackLogin("guest_click_generate", { mode: creationMode.value });
+  const imageDraft = creationMode.value === "image" && imageCreationContract.value
+    ? buildCanonicalImageDraft({
+        contract: imageCreationContract.value,
+        selection: { size: imageSize.value, quality: imageQuality.value, count: imageCount.value },
+        prompt,
+        model: selectedImageModelCode.value,
+        style: restoredCreationString("style", "stylePreset") || "commercial",
+        referenceImages: creationReferencePaths.value,
+        negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
+        parameters: canonicalImageParameters(restoredCreationParams.value),
+      })
+    : null;
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
-    referencePaths: creationReferencePaths.value, restoredParams: restoredCreationParams.value,
-    ...(creationMode.value === "image" ? {
-      aspectRatio: imageAspectRatio.value,
-      quality: imageQuality.value,
-      count: imageCount.value,
-    } : {}),
+    referencePaths: creationReferencePaths.value,
+    ...(imageDraft ? {
+      size: imageDraft.size,
+      quality: imageDraft.quality,
+      count: imageDraft.count,
+      negativePrompt: imageDraft.negativePrompt,
+      parameters: imageDraft.parameters,
+    } : { restoredParams: restoredCreationParams.value }),
     videoMode: creationMode.value === "video" ? videoGenerationMode.value : undefined,
     lastFrame: creationMode.value === "video" ? creationLastFramePath.value : undefined,
     slideCount: pptSlideCount.value, language: pptLanguage.value, dynamic: pptDynamic.value,
@@ -1118,6 +1159,7 @@ interface GenerationNotice {
   resultUrl?: string;
   resultType?: CreationMode;
   progress?: number;
+  pointCost?: number;
 }
 
 interface ActiveGenerationSnapshot {
@@ -1193,13 +1235,22 @@ const userStore = useUserStore();
 const creationMode = ref<CreationMode>(props.initialCreationMode || "image");
 const creationPrompt = ref("");
 const creationReferencePaths = ref<string[]>([]);
-const imageAspectRatio = ref<ImageAspectRatio>("auto");
-const imageQuality = ref<ImageQuality>("1K");
-const imageCount = ref(1);
+const imageSize = ref("");
+const imageQuality = ref<CanonicalImageQuality>();
+const imageCount = ref<number>();
 const imageModels = ref<ImageGeneratorModelOption[]>([]);
 const selectedImageModelCode = ref("");
 const imageModelsLoading = ref(false);
 const imageModelsError = ref("");
+const imageCreationContract = ref<AvailableImageCreationContract | null>(null);
+const imageSchemaStatus = ref<ImageSchemaLoadStatus>("idle");
+const imageSchemaMessage = ref("请选择图片模型");
+const imageInspirationError = ref("");
+const pendingImageSelection = ref<CanonicalImageSelection | null>(null);
+const imageClientRequestKey = ref<ImageClientRequestKeyState>();
+const imageRequestPreviousOutcome = ref<ImageRequestPreviousOutcome>();
+let imageModelsRequestSequence = 0;
+let imageSchemaRequestSequence = 0;
 const creationLastFramePath = ref("");
 const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
 const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
@@ -1297,15 +1348,26 @@ const isFreeImageEditPage = computed(
 const selectedImageModel = computed(
   () => imageModels.value.find(model => model.code === selectedImageModelCode.value),
 );
+const imageSizeOptions = computed(() => imageCreationContract.value?.sizeOptions || []);
+const imageQualityOptions = computed(() => imageCreationContract.value?.qualityOptions || []);
+const imageCountOptions = computed(() => imageCreationContract.value?.countOptions || []);
 const imageEstimateLabel = computed(
-  () => imagePointEstimateLabel(selectedImageModel.value, imageCount.value),
+  () => imagePointEstimateLabel(selectedImageModel.value, imageCount.value || 1),
 );
 const imageGeneratorDisabledReason = computed(() => {
   if (imageModelsLoading.value) return "正在读取可用模型";
   if (imageModelsError.value) return imageModelsError.value;
   if (!selectedImageModelCode.value) return "暂无可用图片模型";
+  if (imageSchemaStatus.value === "loading") return "正在读取当前模型参数";
+  if (imageSchemaStatus.value === "error") return imageSchemaMessage.value;
+  if (imageSchemaStatus.value !== "ready" || !imageCreationContract.value) return "当前模型参数尚未就绪";
+  if (imageInspirationError.value) return imageInspirationError.value;
+  if (!imageSize.value) return "请选择图片尺寸";
   return "";
 });
+const imageRetryAvailable = computed(
+  () => !generationBusy.value && latestGenerationTask.value?.tone === "danger",
+);
 const isVideoCreationDetail = computed(() => isCreationDetail.value && creationMode.value === "video");
 const basicVideoSelectFields = computed(() => {
   const order = ["duration", "aspect_ratio", "resolution", "fps"];
@@ -1505,9 +1567,24 @@ const generationButtonLabel = computed(() => {
   const stage = generationStatusLabel.value || "生成中";
   return generationHasProgress.value ? `${stage} ${generationProgress.value}%` : `${stage}...`;
 });
-const imageGeneratorStatusMessage = computed(() => generationBusy.value
-  ? generationButtonLabel.value
-  : latestGenerationTask.value?.tone === "success" ? "生成完成，可前往作品中心查看" : "");
+const imageGeneratorStatusTone = computed<ImageGeneratorStatusTone>(() => {
+  if (generationBusy.value) return "loading";
+  if (latestGenerationTask.value?.tone === "success") return "success";
+  if (latestGenerationTask.value?.tone === "danger" || creationError.value) return "error";
+  return "idle";
+});
+const imageGeneratorStatusMessage = computed(() => {
+  if (generationBusy.value) return generationButtonLabel.value;
+  if (latestGenerationTask.value?.tone === "success") {
+    return typeof latestGenerationTask.value.pointCost === "number"
+      ? `生成完成，本次实际结算 ${latestGenerationTask.value.pointCost} 积分，可前往作品中心查看`
+      : "生成完成，可前往作品中心查看";
+  }
+  if (latestGenerationTask.value?.tone === "danger") {
+    return creationError.value || latestGenerationTask.value.status || "生成失败，请重试";
+  }
+  return "";
+});
 const generationFeedbackText = computed(() => {
   const elapsed = generationElapsedSeconds.value > 0 ? `已等待 ${generationElapsedSeconds.value} 秒` : "刚刚提交";
   return generationHasProgress.value ? `后端进度 ${generationProgress.value}% · ${elapsed}` : `状态持续同步中 · ${elapsed}`;
@@ -1535,20 +1612,45 @@ function restoredCreationCount() {
   return Number.isFinite(parsed) && parsed >= 1 ? Math.min(4, Math.floor(parsed)) : 1;
 }
 
-function restoreImageGeneratorControls(params: AnyRecord) {
-  if (creationMode.value !== "image") return;
-  const requestedAspectRatio = rowString(params, "aspectRatio", "aspect_ratio");
-  imageAspectRatio.value = imageAspectOptions.some(option => option.value === requestedAspectRatio)
-    ? requestedAspectRatio as ImageAspectRatio
-    : "auto";
-  const requestedQuality = rowString(params, "quality", "imageQuality");
-  imageQuality.value = imageQualityOptions.includes(requestedQuality as ImageQuality)
-    ? requestedQuality as ImageQuality
-    : "1K";
-  const requestedCount = Number(params.count ?? params.generationCount ?? params.imageCount);
-  imageCount.value = imageCountOptions.includes(requestedCount as typeof imageCountOptions[number])
-    ? requestedCount
-    : 1;
+function canonicalImageSelectionFromDraft(params: AnyRecord): CanonicalImageSelection | null {
+  if (typeof params.size !== "string" || !params.size.trim()) return null;
+  const selection: CanonicalImageSelection = { size: params.size.trim() };
+  if (params.quality === "standard" || params.quality === "high") selection.quality = params.quality;
+  if (typeof params.count === "number" && Number.isInteger(params.count) && params.count > 0) {
+    selection.count = params.count;
+  }
+  return selection;
+}
+
+function applyImageSelection(selection: CanonicalImageSelection) {
+  imageSize.value = selection.size || "";
+  imageQuality.value = selection.quality;
+  imageCount.value = selection.count;
+}
+
+function resetImageSelectionFromContract(contract: AvailableImageCreationContract) {
+  imageInspirationError.value = "";
+  let selection = initialImageSelection(contract);
+  if (activeInspirationDraft.value) {
+    const restored = restoreImageInspirationSelection(
+      contract,
+      activeInspirationDraft.value.parameters,
+    );
+    if (!restored.compatible) {
+      imageInspirationError.value = restored.reason;
+    } else {
+      selection = restored.selection;
+    }
+  } else if (pendingImageSelection.value) {
+    const pending = pendingImageSelection.value;
+    pendingImageSelection.value = null;
+    try {
+      selection = toCanonicalImageSelection(contract, pending);
+    } catch {
+      imageInspirationError.value = "当前草稿图片参数与模型不兼容，请重新选择";
+    }
+  }
+  applyImageSelection(selection);
 }
 
 const currentPageTitle = computed(() => {
@@ -1629,6 +1731,11 @@ watch(
   { immediate: true },
 );
 watch(() => props.initialMineView, view => { mineView.value = view; });
+watch(selectedImageModelCode, (modelCode, previousModelCode) => {
+  if (modelCode === previousModelCode || creationMode.value !== "image") return;
+  creationError.value = "";
+  void loadImageSchemaForModel(modelCode);
+});
 
 onShareAppMessage(() => ({
   title: "知启云 AI 邀请你一起创作",
@@ -1773,15 +1880,23 @@ async function restoreCreationSource(assetId: string, intent: "edit" | "regenera
     creationReferencePaths.value = references;
     creationPrompt.value = sourceAsset.prompt || "";
     restoredCreationParams.value = {
-      ...metadata,
+      ...canonicalImageParameters(metadata),
       sourceAssetId: sourceAsset.id,
       sourceTaskId: sourceAsset.taskId || "",
       intent,
       model: sourceAsset.model || metadata.model,
-      aspectRatio: sourceAsset.aspectRatio || metadata.aspectRatio,
+      size: rowString(metadata, "size"),
+      quality: rowString(metadata, "quality"),
+      count: typeof metadata.count === "number" ? metadata.count : undefined,
       seed: sourceAsset.seed ?? metadata.seed,
     };
-    restoreImageGeneratorControls(restoredCreationParams.value);
+    pendingImageSelection.value = canonicalImageSelectionFromDraft(restoredCreationParams.value);
+    if (
+      imageCreationContract.value
+      && imageCreationContract.value.modelName === selectedImageModelCode.value
+    ) {
+      resetImageSelectionFromContract(imageCreationContract.value);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "原作品载入失败";
     creationSourceError.value = message;
@@ -2854,7 +2969,16 @@ function handleGenerateTap() {
   const prompt = String(creationPrompt.value || "").trim();
   creationError.value = "";
   if (!prompt) {
-    creationError.value = creationMode.value === "ppt" ? "请先输入演示文稿主题" : "请先输入创作需求";
+    creationError.value = creationMode.value === "ppt"
+      ? "请先输入演示文稿主题"
+      : creationMode.value === "image"
+        ? "请先描述想生成的图片"
+        : "请先输入创作需求";
+    uni.showToast({ title: creationError.value, icon: "none" });
+    return;
+  }
+  if (creationMode.value === "image" && imageGeneratorDisabledReason.value) {
+    creationError.value = imageGeneratorDisabledReason.value;
     uni.showToast({ title: creationError.value, icon: "none" });
     return;
   }
@@ -2866,6 +2990,11 @@ function handleGenerateTap() {
   }
 
   void submitCreation(prompt);
+}
+
+function retryImageGeneration() {
+  if (creationMode.value !== "image" || generationBusy.value) return;
+  guestAwareGenerateTap();
 }
 
 let pendingLegalGenerationPrompt = "";
@@ -3141,19 +3270,85 @@ async function initializeVideoModelForm() {
 
 async function initializeImageModels() {
   if (creationMode.value !== "image") return;
+  const sequence = ++imageModelsRequestSequence;
   imageModelsLoading.value = true;
   imageModelsError.value = "";
   try {
-    imageModels.value = imageModelOptions(await businessSdk.models.list());
+    const models = imageModelOptions(await businessSdk.models.list());
+    if (sequence !== imageModelsRequestSequence || creationMode.value !== "image") return;
+    imageModels.value = models;
     const requested = rowString(restoredCreationParams.value, "model", "modelName") || activeCreation.value.model;
-    selectedImageModelCode.value = resolveImageModelCode(imageModels.value, requested);
-    if (!selectedImageModelCode.value) imageModelsError.value = "暂无可用图片模型";
+    const selected = resolveImageModelCode(models, requested);
+    const changed = selected !== selectedImageModelCode.value;
+    selectedImageModelCode.value = selected;
+    if (!selected) {
+      imageModelsError.value = requested
+        ? `所选图片模型 ${requested} 当前不可用`
+        : "暂无可用图片模型";
+      imageCreationContract.value = null;
+      imageSchemaStatus.value = "error";
+      imageSchemaMessage.value = imageModelsError.value;
+    } else if (!changed) {
+      await loadImageSchemaForModel(selected);
+    }
   } catch {
+    if (sequence !== imageModelsRequestSequence) return;
     imageModels.value = [];
     selectedImageModelCode.value = "";
     imageModelsError.value = "图片模型读取失败，请稍后重试";
+    imageCreationContract.value = null;
+    imageSchemaStatus.value = "error";
+    imageSchemaMessage.value = imageModelsError.value;
   } finally {
-    imageModelsLoading.value = false;
+    if (sequence === imageModelsRequestSequence) imageModelsLoading.value = false;
+  }
+}
+
+async function loadImageSchemaForModel(modelCode: string) {
+  const requestedModel = String(modelCode || "").trim();
+  const requestSequence = ++imageSchemaRequestSequence;
+  imageCreationContract.value = null;
+  imageInspirationError.value = "";
+  applyImageSelection({});
+  if (!requestedModel) {
+    imageSchemaStatus.value = "idle";
+    imageSchemaMessage.value = "请选择图片模型";
+    return;
+  }
+
+  imageSchemaStatus.value = "loading";
+  imageSchemaMessage.value = "正在读取当前模型参数";
+  try {
+    const response = await api<unknown>(
+      `/api/v1/module-schema?module_code=image_generation&model_name=${encodeURIComponent(requestedModel)}`,
+    );
+    if (creationMode.value !== "image") return;
+    const resolved = resolveImageSchemaFetchResult({
+      requestedModel,
+      currentModel: selectedImageModelCode.value,
+      requestSequence,
+      latestSequence: imageSchemaRequestSequence,
+      response,
+    });
+    if (!resolved.applied) return;
+    imageSchemaStatus.value = resolved.status;
+    imageSchemaMessage.value = resolved.message;
+    if (resolved.status === "ready") {
+      imageCreationContract.value = resolved.contract;
+      resetImageSelectionFromContract(resolved.contract);
+    }
+  } catch (error) {
+    if (creationMode.value !== "image") return;
+    const resolved = resolveImageSchemaFetchResult({
+      requestedModel,
+      currentModel: selectedImageModelCode.value,
+      requestSequence,
+      latestSequence: imageSchemaRequestSequence,
+      error,
+    });
+    if (!resolved.applied) return;
+    imageSchemaStatus.value = resolved.status;
+    imageSchemaMessage.value = resolved.message;
   }
 }
 
@@ -3220,6 +3415,12 @@ async function resolvePptGenerationModels() {
   };
 }
 
+function createImageRequestUUID() {
+  const cryptoRuntime = globalThis.crypto;
+  if (cryptoRuntime?.randomUUID) return cryptoRuntime.randomUUID();
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function submitCreation(prompt: string) {
   if (!validateActiveInspirationReferences()) return;
   if (!validateFreeImageEditRequest()) return;
@@ -3235,6 +3436,7 @@ async function submitCreation(prompt: string) {
     progress: 0,
     resultType: creationMode.value,
   };
+  let imageRequestAttempted = false;
   try {
     // #ifdef MP-WEIXIN
     // Password/SMS login is fine; silently refresh device openid for WeChat content security only.
@@ -3247,6 +3449,7 @@ async function submitCreation(prompt: string) {
     let taskId = "";
     let taskStatus = "PENDING";
     let taskProgress = 0;
+    let taskPointCost: number | undefined;
     if (creationMode.value === "ppt") {
       const models = await resolvePptGenerationModels();
       const result = await api<{ taskId?: string; id?: string; status?: string; progress?: number }>("/api/v1/ppt/generate", {
@@ -3267,6 +3470,50 @@ async function submitCreation(prompt: string) {
       taskId = String(result.taskId || result.id || "ppt-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
+    } else if (creationMode.value === "image") {
+      const contract = imageCreationContract.value;
+      if (
+        imageSchemaStatus.value !== "ready"
+        || !contract
+        || contract.modelName !== selectedImageModelCode.value
+      ) {
+        throw new Error(imageSchemaMessage.value || "当前模型参数尚未就绪");
+      }
+      const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
+      const draft = buildCanonicalImageDraft({
+        contract,
+        selection: {
+          size: imageSize.value,
+          quality: imageQuality.value,
+          count: imageCount.value,
+        },
+        prompt,
+        model: selectedImageModelCode.value,
+        style: restoredCreationString("style") || "commercial",
+        referenceImages,
+        negativePrompt: restoredCreationString("negativePrompt"),
+        parameters: canonicalImageParameters(restoredCreationParams.value),
+      });
+      const requestSnapshot = taskRequestFromDraft(draft);
+      const fingerprint = imageRequestFingerprint(requestSnapshot);
+      const requestKey = nextImageClientRequestKey({
+        fingerprint,
+        existing: imageClientRequestKey.value,
+        previousOutcome: imageRequestPreviousOutcome.value,
+      }, createImageRequestUUID);
+      imageClientRequestKey.value = requestKey;
+      imageRequestAttempted = true;
+      const result = await businessSdk.generation.createTask({
+        ...draft,
+        clientRequestId: requestKey.clientRequestId,
+      });
+      taskId = String(result.id || "generation-task");
+      taskStatus = String(result.status || "PENDING").toUpperCase();
+      taskProgress = clampGenerationProgress(result.progress);
+      taskPointCost = Number.isFinite(result.pointCost) ? result.pointCost : undefined;
+      imageRequestPreviousOutcome.value = ["FAILED", "ERROR"].includes(taskStatus)
+        ? "terminal-failure"
+        : undefined;
     } else {
       const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
       const generationConfig = await resolveBackendGenerationConfig(
@@ -3299,17 +3546,12 @@ async function submitCreation(prompt: string) {
       const finalVideoParameters = mode === "video"
         ? buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value)
         : {};
-      const isImageGeneratorRequest = creationMode.value === "image";
       const requestedQuality = mode === "video"
         ? String(finalVideoParameters.resolution || "")
-        : isImageGeneratorRequest
-          ? imageQuality.value
-          : restoredCreationString("quality", "imageQuality") || "standard";
+        : restoredCreationString("quality", "imageQuality") || "standard";
       const requestedSize = mode === "video"
         ? String(finalVideoParameters.aspect_ratio || "")
-        : isImageGeneratorRequest
-          ? imageAspectRatio.value
-          : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
+        : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
       const finalVideoCapabilities = mode === "video"
         ? {
             ...generationConfig.videoCapabilities,
@@ -3327,9 +3569,7 @@ async function submitCreation(prompt: string) {
         quality: mode === "video"
           ? requestedQuality
           : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
-        count: isImageGeneratorRequest && imageCount.value
-          ? constrainedSchemaNumber(generationConfig.schema, "n", imageCount.value, 1)
-          : constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
+        count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
         videoMode: mode === "video" ? videoGenerationMode.value : undefined,
         firstFrame: mode === "video" ? firstFrame : undefined,
@@ -3339,15 +3579,12 @@ async function submitCreation(prompt: string) {
         duration: mode === "video" && finalVideoParameters.duration !== undefined
           ? Number(finalVideoParameters.duration)
           : undefined,
-        parameters: mode === "video"
-          ? finalVideoParameters
-          : isImageGeneratorRequest
-            ? { ...restoredCreationParams.value, aspect_ratio: imageAspectRatio.value }
-            : restoredCreationParams.value,
+        parameters: mode === "video" ? finalVideoParameters : restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
+      taskPointCost = Number.isFinite(result.pointCost) ? result.pointCost : undefined;
     }
 
     generationProgress.value = taskProgress;
@@ -3358,6 +3595,7 @@ async function submitCreation(prompt: string) {
       tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending",
       progress: taskProgress,
       resultType: creationMode.value,
+      pointCost: taskPointCost,
     };
     persistActiveGeneration({
       id: taskId,
@@ -3374,6 +3612,9 @@ async function submitCreation(prompt: string) {
     generationPollRun += 1;
     stopGenerationFeedback();
     generationProgress.value = 0;
+    if (creationMode.value === "image" && imageRequestAttempted) {
+      imageRequestPreviousOutcome.value = imageRequestOutcomeForError(error);
+    }
     const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
     if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
       pendingLegalGenerationPrompt = prompt;
@@ -3437,6 +3678,8 @@ async function pollGenerationTask(
       let progress = generationProgress.value;
       let resultId = "";
       let resultUrl = "";
+      let pointCost: number | undefined;
+      let failureReason = "";
 
       if (mode === "ppt") {
         const task = await api<AnyRecord>(`/api/v1/ppt/tasks/${encodeURIComponent(taskId)}`);
@@ -3446,6 +3689,7 @@ async function pollGenerationTask(
         progress = backendProgress || progress;
         resultId = rowString(task, "assetId", "resultId", "documentId");
         resultUrl = rowString(task, "outputUrl", "resultUrl", "downloadUrl");
+        failureReason = rowString(task, "failureReason", "failure_reason", "errorMessage");
       } else {
         const task = await api<GenerationTask>(`/api/v1/generation-tasks/${encodeURIComponent(taskId)}`);
         if (pollRun !== generationPollRun) return;
@@ -3458,12 +3702,23 @@ async function pollGenerationTask(
           : [];
         resultId = resultIds[0] || rowString(taskRecord, "resultId", "assetId");
         resultUrl = rowString(taskRecord, "outputUrl", "resultUrl", "imageUrl", "thumbnailUrl");
+        pointCost = Number.isFinite(task.pointCost) ? task.pointCost : undefined;
+        const taskError = taskRecord.error && typeof taskRecord.error === "object"
+          && !Array.isArray(taskRecord.error)
+          ? taskRecord.error as AnyRecord
+          : {};
+        failureReason = rowString(taskRecord, "failureReason", "failure_reason", "errorMessage")
+          || rowString(taskError, "message", "error")
+          || (typeof taskRecord.error === "string" ? taskRecord.error : "");
       }
 
       consecutiveErrors = 0;
-      creationError.value = "";
       const succeeded = ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status);
       const failed = ["FAILED", "ERROR"].includes(status);
+      creationError.value = failed
+        ? failureReason ? `生成失败：${failureReason}` : "生成失败，请调整描述后重试"
+        : "";
+      if (mode === "image" && failed) imageRequestPreviousOutcome.value = "terminal-failure";
       if (succeeded) progress = 100;
       generationProgress.value = progress;
       latestGenerationTask.value = {
@@ -3475,6 +3730,7 @@ async function pollGenerationTask(
         resultId,
         resultUrl,
         resultType: mode,
+        pointCost,
       };
 
       if (succeeded || failed) {
@@ -3644,10 +3900,34 @@ onMounted(() => {
     } else if (draftMatchesMode && normalizedDraftReferences.length) {
       creationReferencePaths.value = normalizedDraftReferences.slice(0, 3);
     }
-    restoredCreationParams.value = draftMatchesMode ? studioDraft : {
-      model: rowString(studioDraft, "model", "modelId", "modelName"),
-    };
-    restoreImageGeneratorControls(restoredCreationParams.value);
+    if (creationMode.value === "image") {
+      const nestedParameters = studioDraft.parameters && typeof studioDraft.parameters === "object"
+        && !Array.isArray(studioDraft.parameters)
+        ? studioDraft.parameters
+        : activeInspirationDraft.value?.parameters;
+      const draftQuality = studioDraft.quality === "standard" || studioDraft.quality === "high"
+        ? studioDraft.quality
+        : undefined;
+      const draftCount = typeof studioDraft.count === "number"
+        && Number.isInteger(studioDraft.count)
+        && studioDraft.count > 0
+        ? studioDraft.count
+        : undefined;
+      restoredCreationParams.value = {
+        ...canonicalImageParameters(draftMatchesMode ? nestedParameters : undefined),
+        model: rowString(studioDraft, "model"),
+        size: draftMatchesMode ? rowString(studioDraft, "size") : "",
+        quality: draftMatchesMode ? draftQuality : undefined,
+        count: draftMatchesMode ? draftCount : undefined,
+        style: draftMatchesMode ? rowString(studioDraft, "style") : "",
+        negativePrompt: draftMatchesMode ? rowString(studioDraft, "negativePrompt") : "",
+      };
+      pendingImageSelection.value = canonicalImageSelectionFromDraft(restoredCreationParams.value);
+    } else {
+      restoredCreationParams.value = draftMatchesMode ? studioDraft : {
+        model: rowString(studioDraft, "model", "modelId", "modelName"),
+      };
+    }
     if (draftMatchesMode) {
       uni.removeStorageSync("v532-studio-draft");
     }
@@ -3684,6 +3964,8 @@ async function loadTerminalCapabilities() {
 onBeforeUnmount(() => {
   uni.$off("legal-acceptance-completed", handleLegalAcceptanceCompleted);
   clearVideoEstimateTimer();
+  imageModelsRequestSequence += 1;
+  imageSchemaRequestSequence += 1;
   videoModelSwitchSequence += 1;
   videoEstimateSequence += 1;
   generationPollRun += 1;

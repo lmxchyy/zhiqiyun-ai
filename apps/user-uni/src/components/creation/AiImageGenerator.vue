@@ -98,38 +98,49 @@
         <view class="ai-image-generator__settings">
           <text class="ai-image-generator__settings-title">生成设置</text>
 
+          <view
+            :class="['ai-image-generator__schema-status', `is-${schemaStatus}`]"
+            role="status"
+            aria-live="polite"
+          >
+            <text v-if="schemaStatus === 'loading'" class="ai-image-generator__schema-spinner" aria-hidden="true" />
+            <text>{{ schemaMessage || schemaStatusLabel }}</text>
+          </view>
+
           <text class="ai-image-generator__label">画幅比例</text>
           <view class="ai-image-generator__aspect-list">
             <button
-              v-for="option in imageAspectOptions"
+              v-for="option in sizeOptions"
               :key="option.value"
-              :class="['ai-image-generator__aspect', { 'is-selected': aspectRatio === option.value }]"
+              :class="['ai-image-generator__aspect', { 'is-selected': size === option.value }]"
               type="button"
-              :aria-pressed="aspectRatio === option.value"
+              :aria-pressed="size === option.value"
               hover-class="ai-image-generator__aspect--pressed"
-              @click='emit("update:aspectRatio", option.value)'
+              @click='emit("update:size", option.value)'
             >
-              <text class="ai-image-generator__aspect-shape" :class="`is-${option.value.replace(':', '-')}`" />
-              <text>{{ option.value === 'auto' ? '自动比例' : option.label }}</text>
-              <text v-if="aspectRatio === option.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
+              <text class="ai-image-generator__aspect-shape" :style="sizeShapeStyle(option.value)" />
+              <text>{{ option.label }}</text>
+              <text v-if="size === option.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
             </button>
           </view>
 
-          <text class="ai-image-generator__label">图片清晰度</text>
-          <view class="ai-image-generator__quality" role="group" aria-label="图片清晰度">
-            <button
-              v-for="option in imageQualityOptions"
-              :key="option"
-              :class="['ai-image-generator__quality-option', { 'is-selected': quality === option }]"
-              type="button"
-              :aria-pressed="quality === option"
-              hover-class="ai-image-generator__quality-option--pressed"
-              @click='emit("update:quality", option)'
-            >
-              <text>{{ option }}</text>
-              <text v-if="quality === option" class="ai-image-generator__check" aria-hidden="true">✓</text>
-            </button>
-          </view>
+          <template v-if="qualityOptions.length">
+            <text class="ai-image-generator__label">图片清晰度</text>
+            <view class="ai-image-generator__quality" role="group" aria-label="图片清晰度">
+              <button
+                v-for="option in qualityOptions"
+                :key="option.value"
+                :class="['ai-image-generator__quality-option', { 'is-selected': quality === option.value }]"
+                type="button"
+                :aria-pressed="quality === option.value"
+                hover-class="ai-image-generator__quality-option--pressed"
+                @click='emit("update:quality", option.value)'
+              >
+                <text>{{ option.label }}</text>
+                <text v-if="quality === option.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
+              </button>
+            </view>
+          </template>
 
           <view class="ai-image-generator__picker-row">
             <view class="ai-image-generator__picker-field">
@@ -149,17 +160,18 @@
               </picker>
             </view>
 
-            <view class="ai-image-generator__picker-field">
+            <view v-if="countOptions.length" class="ai-image-generator__picker-field">
               <text class="ai-image-generator__picker-label">张数</text>
               <picker
                 class="ai-image-generator__picker"
-                :range="imageCountOptions"
+                :range="countOptions"
+                range-key="label"
                 :value="selectedCountIndex"
                 :disabled="busy"
                 @change="onCountChange"
               >
                 <view class="ai-image-generator__picker-value">
-                  <text>{{ count }}张</text>
+                  <text>{{ count || countOptions[0]?.value }}张</text>
                   <text aria-hidden="true">⌄</text>
                 </view>
               </picker>
@@ -167,18 +179,20 @@
           </view>
         </view>
 
-        <view class="ai-image-generator__live-region" aria-live="polite" aria-atomic="true">
-          <text v-if="error" class="ai-image-generator__error" role="alert">{{ error }}</text>
-          <view v-else-if="statusMessage" class="ai-image-generator__success">
-            <text role="status">{{ statusMessage }}</text>
+        <view
+          :class="['ai-image-generator__live-region', `is-${viewState.tone}`]"
+          :aria-live="viewState.tone === 'error' ? 'assertive' : 'polite'"
+          aria-atomic="true"
+        >
+          <view v-if="viewState.liveMessage" class="ai-image-generator__live-message">
+            <text :role="viewState.tone === 'error' ? 'alert' : 'status'">{{ viewState.liveMessage }}</text>
             <button
-              v-if="!busy"
+              v-if="viewState.tone === 'success' && !busy"
               class="ai-image-generator__view-result"
               type="button"
               @click='emit("view-result")'
             >查看结果</button>
           </view>
-          <text v-else-if="disabledReason" class="ai-image-generator__status" role="status">{{ disabledReason }}</text>
         </view>
         <view class="ai-image-generator__scroll-spacer" />
       </view>
@@ -186,17 +200,26 @@
 
     <view class="ai-image-generator__footer">
       <view class="ai-image-generator__footer-content">
-        <text class="ai-image-generator__estimate">{{ estimateLabel }}</text>
+        <view class="ai-image-generator__footer-copy">
+          <text class="ai-image-generator__estimate">{{ estimateLabel }}</text>
+          <text
+            v-if="viewState.disabledReason"
+            id="image-generator-disabled-reason"
+            class="ai-image-generator__disabled-reason"
+          >{{ viewState.disabledReason }}</text>
+        </view>
         <button
           class="ai-image-generator__generate"
           type="button"
-          :disabled="!canGenerate"
-          :aria-disabled="!canGenerate"
-          :aria-label="disabledReason || (busy ? '图片生成中…' : '生成图片')"
+          :disabled="!viewState.canSubmit"
+          :aria-disabled="!viewState.canSubmit"
+          :aria-describedby="viewState.disabledReason ? 'image-generator-disabled-reason' : undefined"
+          :aria-label="viewState.disabledReason || viewState.primaryLabel"
           hover-class="ai-image-generator__generate--pressed"
-          @click="onGenerate"
+          @click="onPrimaryAction"
         >
-          <text>{{ busy ? "图片生成中…" : "生成图片" }}</text>
+          <text v-if="viewState.showSpinner" class="ai-image-generator__generate-spinner" aria-hidden="true" />
+          <text>{{ viewState.primaryLabel }}</text>
         </button>
       </view>
     </view>
@@ -206,38 +229,49 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import {
-  imageAspectOptions,
-  imageCountOptions,
-  imageQualityOptions,
-  type ImageAspectRatio,
+  imageGeneratorViewState,
+  type CanonicalImageQuality,
+  type ImageControlOption,
   type ImageGeneratorModelOption,
-  type ImageQuality,
+  type ImageGeneratorStatusTone,
+  type ImageSchemaLoadStatus,
 } from "../../features/generation/imageCreation";
 
 const props = withDefaults(defineProps<{
   prompt: string;
-  aspectRatio: ImageAspectRatio;
-  quality: ImageQuality;
+  size: string;
+  sizeOptions: Array<ImageControlOption<string>>;
+  quality?: CanonicalImageQuality;
+  qualityOptions: Array<ImageControlOption<CanonicalImageQuality>>;
   model: string;
   models: ImageGeneratorModelOption[];
-  count: number;
+  count?: number;
+  countOptions: Array<ImageControlOption<number>>;
   referenceImages: string[];
   referenceLimit?: number;
   busy?: boolean;
   selectingReference?: boolean;
   modelsLoading?: boolean;
+  schemaStatus?: ImageSchemaLoadStatus;
+  schemaMessage?: string;
   disabledReason?: string;
   error?: string;
   statusMessage?: string;
+  statusTone?: ImageGeneratorStatusTone;
+  retryAvailable?: boolean;
   estimateLabel: string;
 }>(), {
   referenceLimit: 3,
   busy: false,
   selectingReference: false,
   modelsLoading: false,
+  schemaStatus: "idle",
+  schemaMessage: "",
   disabledReason: "",
   error: "",
   statusMessage: "",
+  statusTone: "idle",
+  retryAvailable: false,
 });
 
 const emit = defineEmits<{
@@ -248,18 +282,33 @@ const emit = defineEmits<{
   "preview-reference": [index: number];
   optimize: [];
   generate: [];
+  retry: [];
   "view-result": [];
   "update:prompt": [value: string];
-  "update:aspectRatio": [value: ImageAspectRatio];
-  "update:quality": [value: ImageQuality];
+  "update:size": [value: string];
+  "update:quality": [value: CanonicalImageQuality];
   "update:model": [value: string];
   "update:count": [value: number];
 }>();
 
-const canGenerate = computed(() => Boolean(props.prompt.trim()) && !props.busy && !props.disabledReason);
+const viewState = computed(() => imageGeneratorViewState({
+  prompt: props.prompt,
+  busy: props.busy,
+  disabledReason: props.disabledReason,
+  statusTone: props.statusTone,
+  statusMessage: props.statusMessage,
+  error: props.error,
+  retryAvailable: props.retryAvailable,
+}));
 const selectedModelIndex = computed(() => Math.max(0, props.models.findIndex(item => item.code === props.model)));
 const selectedModelName = computed(() => props.models[selectedModelIndex.value]?.name || "请选择模型");
-const selectedCountIndex = computed(() => Math.max(0, imageCountOptions.indexOf(props.count as typeof imageCountOptions[number])));
+const selectedCountIndex = computed(() => Math.max(0, props.countOptions.findIndex(option => option.value === props.count)));
+const schemaStatusLabel = computed(() => {
+  if (props.schemaStatus === "loading") return "正在读取当前模型参数";
+  if (props.schemaStatus === "ready") return "图片参数已就绪";
+  if (props.schemaStatus === "error") return "当前模型参数不可用";
+  return "请选择图片模型";
+});
 
 function onPromptInput(event: Event | { detail: { value: string } }) {
   const detail = "detail" in event ? event.detail : undefined;
@@ -278,13 +327,26 @@ function onModelChange(event: { detail: { value: string | number } }) {
 }
 
 function onCountChange(event: { detail: { value: string | number } }) {
-  const selected = imageCountOptions[Number(event.detail.value)];
-  if (selected) emit("update:count", selected);
+  const selected = props.countOptions[Number(event.detail.value)];
+  if (selected) emit("update:count", selected.value);
 }
 
-function onGenerate() {
-  if (!canGenerate.value) return;
-  emit("generate");
+function sizeShapeStyle(value: string) {
+  const match = value.match(/^([1-9]\d*)x([1-9]\d*)$/);
+  if (!match) return undefined;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const scale = Math.min(42 / width, 42 / height);
+  return {
+    width: `${Math.max(18, Math.round(width * scale))}px`,
+    height: `${Math.max(18, Math.round(height * scale))}px`,
+  };
+}
+
+function onPrimaryAction() {
+  if (!viewState.value.canSubmit) return;
+  if (viewState.value.primaryAction === "retry") emit("retry");
+  else emit("generate");
 }
 </script>
 
@@ -547,6 +609,38 @@ function onGenerate() {
   font-size: 20px;
 }
 
+.ai-image-generator__schema-status {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--image-line);
+  border-radius: 12px;
+  color: var(--image-muted);
+  background: #fff;
+  font-size: 13px;
+}
+
+.ai-image-generator__schema-status.is-ready { color: var(--image-success); }
+.ai-image-generator__schema-status.is-error {
+  border-color: #fecdca;
+  color: #b42318;
+  background: #fffbfa;
+}
+
+.ai-image-generator__schema-spinner,
+.ai-image-generator__generate-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border: 2px solid rgba(66, 52, 153, 0.22);
+  border-top-color: var(--image-brand);
+  border-radius: 50%;
+  animation: ai-image-generator-spin 0.7s linear infinite;
+}
+
 .ai-image-generator__label {
   display: block;
   margin: 22px 0 10px;
@@ -587,15 +681,10 @@ function onGenerate() {
 
 .ai-image-generator__aspect-shape {
   display: block;
-  width: 34px;
-  height: 30px;
+  box-sizing: border-box;
   border: 2px solid currentColor;
   border-radius: 5px;
 }
-
-.ai-image-generator__aspect-shape.is-16-9 { width: 42px; height: 24px; }
-.ai-image-generator__aspect-shape.is-9-16 { width: 24px; height: 42px; }
-.ai-image-generator__aspect-shape.is-4-3 { width: 40px; height: 30px; }
 
 .ai-image-generator__check {
   position: absolute;
@@ -614,7 +703,7 @@ function onGenerate() {
 
 .ai-image-generator__quality {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   overflow: hidden;
   border: 1px solid var(--image-line);
   border-radius: var(--image-radius);
@@ -672,21 +761,18 @@ function onGenerate() {
   text-align: center;
 }
 
-.ai-image-generator__error,
-.ai-image-generator__status,
-.ai-image-generator__success {
-  font-size: 13px;
-}
-
-.ai-image-generator__error { color: #d92d20; }
-.ai-image-generator__status { color: var(--image-muted); }
-.ai-image-generator__success {
+.ai-image-generator__live-message {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--image-success);
+  font-size: 13px;
 }
+
+.ai-image-generator__live-region.is-idle { color: var(--image-muted); }
+.ai-image-generator__live-region.is-loading { color: var(--image-brand); }
+.ai-image-generator__live-region.is-success { color: var(--image-success); }
+.ai-image-generator__live-region.is-error { color: #b42318; }
 
 .ai-image-generator__view-result {
   margin: 0;
@@ -719,13 +805,30 @@ function onGenerate() {
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 
-.ai-image-generator__estimate {
+.ai-image-generator__footer-copy {
+  display: flex;
+  min-width: 0;
   flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-image-generator__estimate {
   color: var(--image-ink);
   font-size: 14px;
 }
 
+.ai-image-generator__disabled-reason {
+  color: #b42318;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .ai-image-generator__generate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-width: 150px;
   min-height: 52px;
   margin: 0;
@@ -792,5 +895,8 @@ function onGenerate() {
 
 @media (prefers-reduced-motion: reduce) {
   .ai-image-generator * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  .ai-image-generator__reference-loading,
+  .ai-image-generator__schema-spinner,
+  .ai-image-generator__generate-spinner { animation: none !important; }
 }
 </style>

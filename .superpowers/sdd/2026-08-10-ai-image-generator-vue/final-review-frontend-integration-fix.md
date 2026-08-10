@@ -1,0 +1,73 @@
+# Frontend C2 final integration fix
+
+## Outcome
+
+Frontend C2 is implemented on `b4c1cb79e096dffc09f7585fff48d3261cefe865` without changing backend, SDK, package metadata, lockfiles, build scripts, generated artifacts, or the existing `node_modules.shared-junction` entry.
+
+- The image page now loads the exact selected model schema through the project API client at `/api/v1/module-schema?module_code=image_generation&model_name=...`. The backend handler in this revision accepts `module_code=image_generation`; it does not expose the proposed `module=image` query shape.
+- Only a response whose `model_name` matches the requested and still-selected model can update the controls. Stale requests, mismatches, missing schemas, loading, and errors have explicit states; no other model or fixed client option is borrowed.
+- Size, quality, and count are schema-derived canonical values. Schema-undeclared quality/count controls and request fields are omitted. Model changes reset to a declared default or first exact option.
+- Formal inspiration restore reads only `parameters.ratio`, `parameters.quality`, and `parameters.count` after the exact schema arrives. Exact 1:1, 2:3, and 3:2 matches restore; unsupported 4:3 remains visibly incompatible and generation-disabled.
+- Image draft persistence and task creation use top-level canonical `size`, `quality`, and `count`. Deprecated aliases are removed before the real compiled `taskRequestFromDraft` mapping. The old fixed option shim, exports, imports, and calls were deleted.
+- The image request fingerprint is computed from the real `taskRequestFromDraft` request snapshot. First/terminal attempts get a new `image_` key; a status-zero or equivalent network-uncertain retry with identical input reuses it; changed input rotates it. Once a task is returned, only task polling continues.
+- Terminal `FAILED`/`ERROR` polling preserves a visible Chinese error and error tone. The component exposes “重新生成” through a retry event; terminal retry rotates the request key. Returned task `pointCost` is shown only as actual settlement evidence.
+- Empty prompt, loading spinner, reduced motion, focus/hover/pressed guards, aria association/live regions, and idle/loading/success/error tones are covered by mounted component tests. The estimate remains “以生成时结算为准”.
+- Video and free-image-edit submission stay on their existing independent configuration paths; free-image-edit copy, full-page structure, and `#ff6b00` action remain unchanged.
+
+## TDD evidence
+
+RED was recorded before each implementation group:
+
+| Group | RED evidence |
+| --- | --- |
+| schema/canonical/view/retry helpers | `27` tests: `22` passed, `5` failed because the new helpers were absent |
+| mounted component states | `31` tests: `27` passed, `4` failed for empty/loading/error-retry/dynamic-control behavior |
+| Workbench integration | `32` tests: `31` passed, `1` failed because no canonical `clientRequestId` submit chain existed |
+| equivalent uncertain network error | focused `1` test failed: `TypeError("Network request failed")` was incorrectly terminal |
+
+GREEN:
+
+- `node --test tests/user-mini-image-generator.test.mjs`: **32/32 passed**.
+- The payload assertion invokes the real compiled Business SDK mapper and deep-compares the resulting generation-task request body; it is not inferred from source regex.
+- Mounted Vue SFC tests execute empty prompt, loading, terminal retry emit, status tone, and dynamic schema control behavior.
+
+## Verification
+
+| Command | Result |
+| --- | --- |
+| `node --test tests/user-mini-image-generator.test.mjs` | PASS, **32/32** |
+| M1/M2/M4/M6 aggregate Node command (image, guest/login, video dynamic/fallback/estimate, inspiration, free edit, auth gate) | PASS, **70/70** on the fresh rerun |
+| `node --test tests/video-model-parameters.test.mjs` | PASS, **7/7** |
+| `npm.cmd run typecheck:packages` | PASS |
+| `npm.cmd run typecheck` in `apps/user-uni` | PASS |
+| `go test ./internal/httpserver -run TestVideoGenerationEstimate -count=1` | PASS |
+| focused generation reserve/refund/double-charge Go tests | PASS |
+| `npm.cmd run build:h5` in `apps/user-uni` | PASS; existing dynamic/static import warning and local `os - Alias not found.` shell noise only |
+| `git diff --check` | PASS |
+| old fixed option/shim symbol scan in the three production files | PASS, no matches |
+
+## WeChat post-build limitation
+
+`npm.cmd run build:mp-weixin:local` completed the uni-app WeChat compilation, then failed inside the existing post-build patcher before its relocation/size stages:
+
+```text
+Error: MiniProgramRoleWorkbench component registration not found
+apps/user-uni/scripts/patch-mp-native-login.cjs:1660
+```
+
+The generated component and all page registrations exist. Its valid final registration is:
+
+```js
+wx.createComponent($);
+```
+
+The unchanged patcher accepts only `wx.createComponent((\w+))`; JavaScript `$` is a valid identifier but is excluded by `\w`. This is an out-of-scope build-script matcher defect, not a missing Workbench build artifact. Per task boundary, no build-script change or source-level minifier-name workaround was made.
+
+Because the patcher stopped before the remaining transformations, the resulting artifact is not trustworthy for package-size or click verification:
+
+- `test:wallet-build`: **2/4 passed, 2/4 failed** on the incomplete artifact.
+- `verify:user-mini-clicks`: failed on expected missing post-patch native bindings.
+- Click E2E was not run against that incomplete artifact.
+- Exact final MAIN / `pages/user-creation` / TOTAL bytes are therefore **not available and are intentionally not claimed**. A separate build-script fix must rerun `build:mp-weixin:local`, wallet 4/4, package bytes, and click E2E.
+
+The known production H5 route exclusion and temporary-route DCloud slot bug were not changed or wrapped in a compatibility layer.

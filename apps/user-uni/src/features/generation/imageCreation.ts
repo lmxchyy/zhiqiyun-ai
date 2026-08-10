@@ -79,18 +79,68 @@ export interface NextImageClientRequestKeyInput {
   previousOutcome?: ImageRequestPreviousOutcome;
 }
 
-type UnknownRecord = Record<string, unknown>;
+export type ImageSchemaLoadStatus = "idle" | "loading" | "ready" | "error";
 
-/**
- * Compile-only compatibility for the not-yet-migrated Vue component. These
- * exports are intentionally empty: controls must come from an exact schema,
- * never from client-side fallback values.
- */
-export type ImageAspectRatio = string;
-export type ImageQuality = string;
-export const imageAspectOptions: Array<ImageControlOption<ImageAspectRatio>> = [];
-export const imageQualityOptions: ImageQuality[] = [];
-export const imageCountOptions: number[] = [];
+export type ImageSchemaFetchResult =
+  | { applied: false }
+  | {
+      applied: true;
+      status: "ready";
+      message: string;
+      contract: AvailableImageCreationContract;
+    }
+  | {
+      applied: true;
+      status: "error";
+      message: string;
+      contract: UnavailableImageCreationContract;
+    };
+
+export interface ImageSchemaFetchInput {
+  requestedModel: string;
+  currentModel: string;
+  requestSequence: number;
+  latestSequence: number;
+  response?: unknown;
+  error?: unknown;
+}
+
+export type ImageGeneratorStatusTone = "idle" | "loading" | "success" | "error";
+
+export interface ImageGeneratorViewStateInput {
+  prompt: string;
+  busy: boolean;
+  disabledReason: string;
+  statusTone: ImageGeneratorStatusTone;
+  statusMessage: string;
+  error: string;
+  retryAvailable: boolean;
+}
+
+export interface ImageGeneratorViewState {
+  canSubmit: boolean;
+  disabledReason: string;
+  primaryAction: "generate" | "retry";
+  primaryLabel: string;
+  showSpinner: boolean;
+  showRetry: boolean;
+  tone: ImageGeneratorStatusTone;
+  liveMessage: string;
+}
+
+export interface CanonicalImageDraftInput {
+  contract: AvailableImageCreationContract;
+  selection: ImageCreationSelection;
+  prompt: string;
+  model: string;
+  style: string;
+  referenceImages?: string[];
+  negativePrompt?: string;
+  parameters?: Record<string, unknown>;
+  clientRequestId?: string;
+}
+
+type UnknownRecord = Record<string, unknown>;
 
 export function imageModelOptions(models: ModelInfo[]): ImageGeneratorModelOption[] {
   return models
@@ -251,6 +301,46 @@ export function deriveImageCreationContract(
   };
 }
 
+export function initialImageSelection(
+  contract: AvailableImageCreationContract,
+): CanonicalImageSelection {
+  const selection: CanonicalImageSelection = {
+    size: contract.defaultSelection.size || contract.sizeOptions[0]?.value,
+  };
+  if (contract.declared.quality) {
+    selection.quality = contract.defaultSelection.quality || contract.qualityOptions[0]?.value;
+  }
+  if (contract.declared.count) {
+    selection.count = contract.defaultSelection.count || contract.countOptions[0]?.value;
+  }
+  return toCanonicalImageSelection(contract, selection);
+}
+
+export function resolveImageSchemaFetchResult(
+  input: ImageSchemaFetchInput,
+): ImageSchemaFetchResult {
+  if (
+    input.requestSequence !== input.latestSequence
+    || input.currentModel !== input.requestedModel
+  ) {
+    return { applied: false };
+  }
+
+  if (input.error !== undefined) {
+    const contract: UnavailableImageCreationContract = {
+      available: false,
+      reason: "图片参数读取失败，请稍后重试",
+    };
+    return { applied: true, status: "error", message: contract.reason, contract };
+  }
+
+  const contract = deriveImageCreationContract(input.requestedModel, input.response);
+  if (!contract.available) {
+    return { applied: true, status: "error", message: contract.reason, contract };
+  }
+  return { applied: true, status: "ready", message: "图片参数已就绪", contract };
+}
+
 export function toCanonicalImageSelection(
   contract: AvailableImageCreationContract,
   rawSelection: ImageCreationSelection,
@@ -350,6 +440,95 @@ export function restoreImageInspirationSelection(
     selection,
     canonical: toCanonicalImageSelection(contract, selection),
   };
+}
+
+const imageDraftSelectionKeys = new Set([
+  "ratio",
+  "aspectRatio",
+  "aspect_ratio",
+  "imageRatio",
+  "imageQuality",
+  "size",
+  "quality",
+  "count",
+  "n",
+  "generationCount",
+  "imageCount",
+  "prompt",
+  "model",
+  "modelName",
+  "mode",
+  "contentType",
+  "referenceImages",
+  "referencePaths",
+  "negativePrompt",
+  "negative_prompt",
+  "style",
+  "stylePreset",
+]);
+
+export function canonicalImageParameters(rawParameters: unknown): Record<string, unknown> {
+  const parameters: Record<string, unknown> = {};
+  const raw = recordValue(rawParameters) || {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!imageDraftSelectionKeys.has(key)) parameters[key] = value;
+  }
+  return parameters;
+}
+
+export function buildCanonicalImageDraft(input: CanonicalImageDraftInput) {
+  if (input.contract.modelName !== input.model) {
+    throw new Error(`图片参数配置与所选模型不一致：期望 ${input.model}，实际 ${input.contract.modelName}`);
+  }
+  const canonical = toCanonicalImageSelection(input.contract, input.selection);
+  const parameters = canonicalImageParameters(input.parameters);
+
+  return {
+    mode: "image" as const,
+    prompt: input.prompt,
+    model: input.model,
+    style: input.style,
+    referenceImages: [...(input.referenceImages || [])],
+    negativePrompt: input.negativePrompt,
+    parameters,
+    clientRequestId: input.clientRequestId,
+    ...canonical,
+  };
+}
+
+export function imageGeneratorViewState(
+  input: ImageGeneratorViewStateInput,
+): ImageGeneratorViewState {
+  const emptyPromptReason = input.prompt.trim() ? "" : "请先描述想生成的图片";
+  const disabledReason = emptyPromptReason || input.disabledReason;
+  const tone = input.busy ? "loading" : input.statusTone;
+  const showRetry = !input.busy
+    && !disabledReason
+    && tone === "error"
+    && input.retryAvailable;
+  return {
+    canSubmit: !input.busy && !disabledReason,
+    disabledReason,
+    primaryAction: showRetry ? "retry" : "generate",
+    primaryLabel: input.busy ? "图片生成中…" : showRetry ? "重新生成" : "生成图片",
+    showSpinner: input.busy,
+    showRetry,
+    tone,
+    liveMessage: input.error || input.statusMessage || disabledReason,
+  };
+}
+
+export function imageRequestOutcomeForError(error: unknown): ImageRequestPreviousOutcome {
+  const record = recordValue(error);
+  const statusCode = Number(record?.statusCode ?? record?.status);
+  if (statusCode === 0) return "network-uncertain";
+  if (Number.isFinite(statusCode)) return "terminal-failure";
+
+  const name = error instanceof Error ? error.name : String(record?.name || "");
+  const message = error instanceof Error ? error.message : String(record?.message || "");
+  return name === "TypeError" && /network|fetch|网络|timeout|timed out|ECONN|ERR_NETWORK/i.test(message)
+    ? "network-uncertain"
+    : "terminal-failure";
 }
 
 function stableRequestSnapshot(value: unknown): unknown {
