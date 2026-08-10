@@ -106,13 +106,16 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 			return nil, errors.New("Grok Video 1.5 supports exactly one reference image")
 		}
 	}
+	if isGrokImagine15VideoModel(model) && len(imageURLs) > 7 {
+		return nil, errors.New("Grok Imagine Video 1.5 supports at most seven reference images")
+	}
 	if p.shouldUseSeedanceBridge(model) {
 		return p.createWithSeedanceBridge(ctx, model, req)
 	}
 	body := videoRequestBodyForEndpoint(model, req, p.endpoint, imageURLs)
 	if len(imageURLs) > 0 && !useSeedanceContentTaskProtocol(p.endpoint) {
 		body["image_urls"] = imageURLs
-		if len(imageURLs) == 1 {
+		if len(imageURLs) == 1 && !isGrokImagine15VideoModel(model) {
 			body["input_reference"] = map[string]any{"image_url": imageURLs[0]}
 		}
 	}
@@ -179,6 +182,15 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 }
 
 func videoRequestBody(model string, req generation.CreateRequest) map[string]any {
+	if isGrokImagine15VideoModel(model) {
+		return map[string]any{
+			"model":    model,
+			"prompt":   req.Prompt,
+			"duration": videoSeconds(req.Params),
+			"size":     videoAspectRatio(req.Params),
+			"quality":  videoResolution(req.Params),
+		}
+	}
 	if isDoubaoSeedance2Model(model) {
 		return map[string]any{
 			"model":      model,
@@ -259,6 +271,12 @@ func isGrokVideo15Model(model string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	normalized = strings.ReplaceAll(normalized, "_", "-")
 	return normalized == "grok-video-1.5"
+}
+
+func isGrokImagine15VideoModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	return normalized == "grok-imagine-1.5-video"
 }
 
 func isDoubaoSeedance2Model(model string) bool {
@@ -477,7 +495,9 @@ func videoProviderEndpointForModel(baseURL string, configuredPath string, model 
 	base := strings.TrimRight(baseURL, "/")
 	path := strings.TrimSpace(configuredPath)
 	defaultRoute := "video/generations"
-	if isDoubaoSeedance2Model(model) {
+	if isGrokImagine15VideoModel(model) {
+		defaultRoute = "videos"
+	} else if isDoubaoSeedance2Model(model) {
 		defaultRoute = "videos/generations"
 	}
 	if path == "" {

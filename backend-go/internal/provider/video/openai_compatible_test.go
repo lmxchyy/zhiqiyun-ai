@@ -400,3 +400,151 @@ func TestGrokRejectsMultipleImagesBeforeCallingUpstream(t *testing.T) {
 		t.Fatalf("upstream was called %d times for an invalid request", requestCount)
 	}
 }
+
+func TestGrokImagine15VideoUsesDocumentedCreateContract(t *testing.T) {
+	imageURLs := make([]any, 0, 7)
+	for index := 1; index <= 7; index++ {
+		imageURLs = append(imageURLs, fmt.Sprintf("https://cdn.example/reference-%d.png", index))
+	}
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/videos" {
+			t.Fatalf("request path = %q, want /v1/videos", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "task-grok-imagine-15",
+			"status": "completed",
+			"data": map[string]any{"result": map[string]any{"videos": []any{
+				map[string]any{"url": "https://cdn.example/grok-imagine-15.mp4"},
+			}}},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL + "/v1", APIKey: "sk-test", Model: "grok-imagine-1.5-video", Models: []string{"grok-imagine-1.5-video"},
+	})
+	result, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "IMAGE_TO_VIDEO", Model: "grok-imagine-1.5-video", Prompt: "camera push in",
+		Params: map[string]any{
+			"duration": float64(30), "aspect_ratio": "2:3", "resolution": "720p", "image_urls": imageURLs,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	resultMap, ok := result.(map[string]any)
+	if !ok || resultMap["videoUrl"] != "https://cdn.example/grok-imagine-15.mp4" {
+		t.Fatalf("result = %#v", result)
+	}
+	if payload["model"] != "grok-imagine-1.5-video" || payload["prompt"] != "camera push in" {
+		t.Fatalf("model/prompt payload = %#v", payload)
+	}
+	if payload["duration"] != float64(30) || payload["size"] != "2:3" || payload["quality"] != "720p" {
+		t.Fatalf("documented parameters = %#v", payload)
+	}
+	if got, ok := payload["image_urls"].([]any); !ok || len(got) != 7 {
+		t.Fatalf("image_urls payload = %#v", payload["image_urls"])
+	}
+	for _, legacyKey := range []string{"seconds", "aspect_ratio", "resolution", "input_reference"} {
+		if _, exists := payload[legacyKey]; exists {
+			t.Fatalf("legacy field %q must not be sent: %#v", legacyKey, payload)
+		}
+	}
+}
+
+func TestGrokImagine15VideoAllowsTextToVideoWithoutReferences(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "task-text", "status": "completed", "video_url": "https://cdn.example/text.mp4",
+		})
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "grok-imagine-1.5-video", Models: []string{"grok-imagine-1.5-video"},
+	})
+	_, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "TEXT_TO_VIDEO", Model: "grok-imagine-1.5-video", Prompt: "a sunrise",
+		Params: map[string]any{"duration": 6, "aspect_ratio": "16:9", "resolution": "480p"},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if _, exists := payload["image_urls"]; exists {
+		t.Fatalf("text-to-video payload must omit image_urls: %#v", payload)
+	}
+}
+
+func TestGrokImagine15VideoRejectsMoreThanSevenReferences(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL, APIKey: "sk-test", Model: "grok-imagine-1.5-video", Models: []string{"grok-imagine-1.5-video"},
+	})
+	images := make([]any, 0, 8)
+	for index := 1; index <= 8; index++ {
+		images = append(images, fmt.Sprintf("https://cdn.example/reference-%d.png", index))
+	}
+	_, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "IMAGE_TO_VIDEO", Model: "grok-imagine-1.5-video", Prompt: "camera push in",
+		Params: map[string]any{"image_urls": images},
+	})
+	if err == nil {
+		t.Fatal("eight images were accepted")
+	}
+	if requestCount != 0 {
+		t.Fatalf("upstream was called %d times for an invalid request", requestCount)
+	}
+}
+
+func TestGrokImagine15VideoPollsDocumentedTaskEndpoint(t *testing.T) {
+	pollCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/videos":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "task-poll", "status": "queued"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/videos/task-poll":
+			pollCount++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "task-poll", "status": "completed",
+				"data": map[string]any{"result": map[string]any{"videos": []any{
+					map[string]any{"url": "https://cdn.example/polled.mp4"},
+				}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+		BaseURL: server.URL + "/v1", APIKey: "sk-test", Model: "grok-imagine-1.5-video", Models: []string{"grok-imagine-1.5-video"},
+	})
+	result, err := provider.Create(context.Background(), generation.CreateRequest{
+		Type: "TEXT_TO_VIDEO", Model: "grok-imagine-1.5-video", Prompt: "a sunrise",
+		Params: map[string]any{"duration": 6, "aspect_ratio": "16:9", "resolution": "480p"},
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	resultMap, ok := result.(map[string]any)
+	if !ok || resultMap["videoUrl"] != "https://cdn.example/polled.mp4" {
+		t.Fatalf("result = %#v", result)
+	}
+	if pollCount != 1 {
+		t.Fatalf("poll count = %d, want 1", pollCount)
+	}
+}

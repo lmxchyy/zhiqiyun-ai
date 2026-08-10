@@ -897,6 +897,10 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 		return
 	}
+	if provider := providerTaskString(prepared, "provider"); provider != "" {
+		prepared.Params["provider"] = provider
+		prepared.Params["provider_channel"] = provider
+	}
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 	}

@@ -3562,7 +3562,7 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		task.WorkerFinishedAt = now
 		task.ResultIDs = []string{}
 		applyGenerationTaskCapabilitySnapshot(&task, req, rule)
-		task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+		task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]), task.ProviderChannel)
 		applyTaskSupplierCost(&task, adminData.ProviderCosts)
 		count := imageCount(req.Params)
 		for i := 0; i < count; i++ {

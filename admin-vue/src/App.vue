@@ -2543,11 +2543,11 @@
                 <div class="video-composer-input-row">
                   <div class="video-upload-actions">
                     <div class="video-upload-native">
-                      <input type="file" accept="image/*" @change="handleVideoImageFile" />
+                      <input type="file" accept="image/*" :multiple="videoReferenceLimit > 1" @change="handleVideoImageFile" />
                       <button
                         type="button"
                         :class="['video-circle-tool', { active: videoStudioMode === 'image' || Boolean(videoImagePreview) }]"
-                        :title="videoImagePreview ? '清除图片' : '上传图片生成视频'"
+                        :title="videoImagePreview ? `已选择 ${videoReferenceCount} 张，点击清除` : `最多上传 ${videoReferenceLimit} 张图片生成视频`"
                         @click="videoImagePreview ? clearVideoImageUpload() : undefined"
                       >
                         <img v-if="videoImagePreview" :src="videoImagePreview" alt="" />
@@ -2557,6 +2557,7 @@
                           <polyline points="21 15 16 10 5 21" />
                         </svg>
                       </button>
+                      <span v-if="videoReferenceCount > 1" class="video-reference-count">{{ videoReferenceCount }}</span>
                     </div>
                     <div class="video-upload-native">
                       <input type="file" accept="video/*" @change="handleVideoSourceFile" />
@@ -2689,6 +2690,7 @@
                       </div>
                     </div>
                     <button
+                      v-if="videoModelSupportsAudio"
                       type="button"
                       :class="['video-control-button', { active: videoGenerateAudio }]"
                       :title="videoGenerateAudio ? '配音已开启' : '配音已关闭'"
@@ -2919,8 +2921,10 @@ import {
   videoInputImageUrlsFromTask,
   videoModeFromTask,
   videoModelId,
+  videoModelMaxReferenceImages,
   videoModelOptions,
   videoModelParameterOptions,
+  videoModelRequiresReferenceImage,
   videoNumberOrString,
   videoRatioOptions,
   videoResolutionOptions,
@@ -3056,7 +3060,8 @@ const videoGenerateAudio = ref(true);
 const videoSubmitting = ref(false);
 const videoResultTask = ref<AdminRecord | null>(null);
 const openVideoDropdown = ref<"" | "model" | "ratio" | "duration" | "resolution">("");
-const videoImagePreview = ref("");
+const videoImagePreviews = ref<string[]>([]);
+const videoImagePreview = computed(() => videoImagePreviews.value[0] || "");
 const videoSourcePreview = ref("");
 const videoHistory = ref<VideoHistoryEntry[]>([]);
 const videoHiddenHistoryIds = ref<string[]>([]);
@@ -3079,9 +3084,9 @@ let videoHistoryHydrated = false;
 let videoHistorySaveTimer: number | null = null;
 let videoInputDraftSaveTimer: number | null = null;
 let videoHistoryPollTimer: number | null = null;
-let videoImageObjectUrl = "";
+let videoImageObjectUrls: string[] = [];
 let videoSourceObjectUrl = "";
-let videoImageFile: File | null = null;
+let videoImageFiles: File[] = [];
 const filteredVideoModelOptions = computed(() => {
   const keyword = videoModelSearch.value.trim().toLowerCase();
   if (!keyword) return videoModelOptions;
@@ -3095,6 +3100,9 @@ const filteredVideoToolOptions = computed(() => {
 const availableVideoDurationOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.durations ?? videoDurationOptions);
 const availableVideoRatioOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.ratios ?? videoRatioOptions);
 const availableVideoResolutionOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.resolutions ?? videoResolutionOptions);
+const videoReferenceLimit = computed(() => videoModelMaxReferenceImages(selectedVideoModel.value));
+const videoReferenceCount = computed(() => videoImageFiles.length);
+const videoModelSupportsAudio = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.supportsAudio !== false);
 
 function syncVideoModelParameters() {
   const durations = availableVideoDurationOptions.value;
@@ -3316,18 +3324,18 @@ async function submitVideoGeneration() {
     ElMessage.error("请输入视频提示词");
     return false;
   }
-  if (videoImageFile && videoImagePreview.value) videoStudioMode.value = "image";
-  if (selectedVideoModel.value === "Grok Video 1.5" && !videoImageFile) {
-    ElMessage.error("Grok Video 1.5 必须上传 1 张参考图");
+  if (videoImageFiles.length && videoImagePreview.value) videoStudioMode.value = "image";
+  if (videoModelRequiresReferenceImage(selectedVideoModel.value) && videoImageFiles.length !== 1) {
+    ElMessage.error(`${selectedVideoModel.value} 必须上传 1 张参考图`);
     return false;
   }
-  if (videoStudioMode.value === "image" && !videoImageFile) {
+  if (videoStudioMode.value === "image" && !videoImageFiles.length) {
     ElMessage.error("请先上传 1 张参考图");
     return false;
   }
   if (!ensureWorkspaceAuth("generate_video", "userVideoGeneration")) return false;
   const clientRequestId = createGenerationClientRequestId("video");
-  let videoReferenceImageUrl = "";
+  let videoReferenceImageUrls: string[] = [];
   const snapshotId = `video-local-${Date.now()}`;
   const snapshotCreatedAt = new Date().toISOString();
   const snapshotMode: VideoHistoryEntry["mode"] = videoStudioMode.value === "image" ? "image-to-video" : videoStudioMode.value === "video" ? "video-to-video" : "text-to-video";
@@ -3340,7 +3348,7 @@ async function submitVideoGeneration() {
     aspect_ratio: videoRatio.value,
     duration: videoDuration.value,
     resolution: videoResolution.value,
-    inputImageUrls: videoImagePreview.value ? [videoImagePreview.value] : [],
+    inputImageUrls: [...videoImagePreviews.value],
     inputVideoUrl: videoSourcePreview.value,
     createdAt: snapshotCreatedAt,
     status: "generating",
@@ -3350,7 +3358,7 @@ async function submitVideoGeneration() {
   try {
     const type = videoStudioMode.value === "image" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
     if (type === "IMAGE_TO_VIDEO") {
-      videoReferenceImageUrl = await blobToDataUrl(videoImageFile as File);
+      videoReferenceImageUrls = await Promise.all(videoImageFiles.map(file => blobToDataUrl(file)));
     }
     const createdTask = await adminRequest<AdminRecord>({
       method: "POST",
@@ -3367,15 +3375,18 @@ async function submitVideoGeneration() {
           duration: videoDuration.value,
           ratio: videoRatio.value,
           resolution: videoResolution.value,
-          generate_audio: videoGenerateAudio.value,
-          generateAudio: videoGenerateAudio.value,
+          ...(videoModelSupportsAudio.value ? {
+            generate_audio: videoGenerateAudio.value,
+            generateAudio: videoGenerateAudio.value,
+          } : {}),
           sourceModule: "video-generation",
           inputMode: videoStudioMode.value,
           hasInputImage: Boolean(videoImagePreview.value),
           hasInputVideo: Boolean(videoSourcePreview.value),
-          ...(videoReferenceImageUrl ? {
-            image_urls: [videoReferenceImageUrl],
-            referenceImages: [{ name: videoImageFile?.name || "video-reference-image", url: videoReferenceImageUrl }]
+          ...(videoReferenceImageUrls.length ? {
+            first_frame: videoReferenceImageUrls[0],
+            image_urls: videoReferenceImageUrls,
+            referenceImages: videoReferenceImageUrls.map((url, index) => ({ name: videoImageFiles[index]?.name || `video-reference-image-${index + 1}`, url }))
           } : {})
         }
       }
@@ -3401,7 +3412,7 @@ async function submitVideoGeneration() {
       aspect_ratio: videoRatio.value,
       duration: videoDuration.value,
       resolution: videoResolution.value,
-      inputImageUrls: videoImagePreview.value ? [videoImagePreview.value] : [],
+      inputImageUrls: [...videoImagePreviews.value],
       inputVideoUrl: videoSourcePreview.value,
       createdAt: snapshotCreatedAt,
       status: "failed",
@@ -3611,14 +3622,17 @@ async function deleteVideoHistoryEntry(entry: VideoHistoryEntry) {
 
 function handleVideoImageFile(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
+  const files = Array.from(input.files || []);
   input.value = "";
-  if (!file) return;
+  if (!files.length) return;
   clearVideoImageUpload();
   videoStudioMode.value = "image";
-  videoImageFile = file;
-  videoImageObjectUrl = URL.createObjectURL(file);
-  videoImagePreview.value = videoImageObjectUrl;
+  videoImageFiles = files.slice(0, videoReferenceLimit.value);
+  videoImageObjectUrls = videoImageFiles.map(file => URL.createObjectURL(file));
+  videoImagePreviews.value = [...videoImageObjectUrls];
+  if (files.length > videoReferenceLimit.value) {
+    ElMessage.warning(`当前模型最多支持 ${videoReferenceLimit.value} 张参考图`);
+  }
 }
 
 function handleVideoSourceFile(event: Event) {
@@ -3633,11 +3647,21 @@ function handleVideoSourceFile(event: Event) {
 }
 
 function clearVideoImageUpload() {
-  if (videoImageObjectUrl) URL.revokeObjectURL(videoImageObjectUrl);
-  videoImageObjectUrl = "";
-  videoImageFile = null;
-  videoImagePreview.value = "";
+  for (const objectUrl of videoImageObjectUrls) URL.revokeObjectURL(objectUrl);
+  videoImageObjectUrls = [];
+  videoImageFiles = [];
+  videoImagePreviews.value = [];
   if (videoStudioMode.value === "image") videoStudioMode.value = videoSourcePreview.value ? "video" : "text";
+}
+
+function trimVideoImageUploadsToModelLimit() {
+  const limit = videoReferenceLimit.value;
+  if (videoImageFiles.length <= limit) return;
+  for (const objectUrl of videoImageObjectUrls.slice(limit)) URL.revokeObjectURL(objectUrl);
+  videoImageFiles = videoImageFiles.slice(0, limit);
+  videoImageObjectUrls = videoImageObjectUrls.slice(0, limit);
+  videoImagePreviews.value = videoImagePreviews.value.slice(0, limit);
+  ElMessage.warning(`当前模型最多支持 ${limit} 张参考图，已保留前 ${limit} 张`);
 }
 
 function clearVideoSourceUpload() {
@@ -3654,6 +3678,7 @@ function toggleVideoDropdown(type: "model" | "ratio" | "duration" | "resolution"
 function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", value: string | number) {
   if (type === "model") {
     selectedVideoModel.value = String(value);
+    trimVideoImageUploadsToModelLimit();
     videoStudioMode.value = videoImagePreview.value ? "image" : videoToolOptions.some((tool) => tool.name === value) ? "video" : "text";
     syncVideoModelParameters();
     openVideoDropdown.value = "";

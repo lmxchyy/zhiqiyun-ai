@@ -407,6 +407,9 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
           ...(supportedParameterKeys.includes("aspect_ratio") ? { aspect_ratio: aspectRatio } : {}),
           ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" ? { first_frame: firstFrame } : {}),
+          ...(videoMode === "IMAGE_TO_VIDEO" && capabilities.maxReferenceImages > 1 && !capabilities.supportsLastFrame
+            ? { image_urls: allImageURLs }
+            : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),
         };
       })()

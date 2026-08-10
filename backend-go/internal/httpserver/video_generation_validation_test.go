@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -281,6 +282,42 @@ func TestVideoModelCapabilitiesLegacyDefaultsAreSafe(t *testing.T) {
 	}
 }
 
+func TestGrokImagine15VideoLegacyDataResolvesExactCapabilities(t *testing.T) {
+	model := adminAIModel{
+		ModelName: "grok-imagine-1.5-video", ModelType: "video", ModuleCode: moduleVideoGeneration,
+		CapabilityCode: []string{"text_to_video", "image_to_video"},
+	}
+	got := resolveVideoModelCapabilities(model, adminAIParameterSchemaJSON{})
+	if !got.SupportsTextToVideo || !got.SupportsImageToVideo || !got.SupportsFirstFrame || got.SupportsLastFrame {
+		t.Fatalf("unexpected Grok Imagine 1.5 modes: %+v", got)
+	}
+	if got.MaxReferenceImages != 7 {
+		t.Fatalf("max references = %d, want 7", got.MaxReferenceImages)
+	}
+	if len(got.SupportedDurations) != 25 || got.SupportedDurations[0] != 6 || got.SupportedDurations[24] != 30 {
+		t.Fatalf("supported durations = %#v", got.SupportedDurations)
+	}
+	wantResolutions := []string{"480p", "720p"}
+	if !equalVideoStringSlices(got.SupportedResolutions, wantResolutions) {
+		t.Fatalf("supported resolutions = %#v, want %#v", got.SupportedResolutions, wantResolutions)
+	}
+	wantRatios := []string{"16:9", "9:16", "1:1", "3:2", "2:3"}
+	if !equalVideoStringSlices(got.SupportedAspectRatios, wantRatios) {
+		t.Fatalf("supported ratios = %#v, want %#v", got.SupportedAspectRatios, wantRatios)
+	}
+}
+
+func TestGrokImaginePreviewLegacyDataRemainsSingleImageOnly(t *testing.T) {
+	model := adminAIModel{
+		ModelName: "grok-imagine-video-1.5-preview", ModelType: "video", ModuleCode: moduleVideoGeneration,
+		CapabilityCode: []string{"image_to_video"},
+	}
+	got := resolveVideoModelCapabilities(model, adminAIParameterSchemaJSON{})
+	if got.SupportsTextToVideo || !got.SupportsImageToVideo || got.MaxReferenceImages != 1 {
+		t.Fatalf("preview capabilities changed: %+v", got)
+	}
+}
+
 func TestVideoGenerationTextModeRejectsImageFields(t *testing.T) {
 	request := generation.CreateRequest{
 		Type: "TEXT_TO_VIDEO",
@@ -349,6 +386,51 @@ func TestVideoGenerationRejectsMultipleDistinctImages(t *testing.T) {
 	}
 	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
 	requireVideoValidationCode(t, err, "VIDEO_IMAGE_LIMIT_EXCEEDED")
+}
+
+func TestVideoGenerationPreservesSevenCanonicalReferenceImages(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.MaxReferenceImages = 7
+	images := []any{
+		"https://example.test/1.png", "https://example.test/2.png", "https://example.test/3.png",
+		"https://example.test/4.png", "https://example.test/5.png", "https://example.test/6.png",
+		"https://example.test/7.png",
+	}
+	request := generation.CreateRequest{Type: "IMAGE_TO_VIDEO", Params: map[string]any{"image_urls": images}}
+	if err := validateVideoGenerationRequest(&request, videoValidationTestResolved(capabilities)); err != nil {
+		t.Fatalf("seven references were rejected: %v", err)
+	}
+	if request.Params["first_frame"] != images[0] {
+		t.Fatalf("first_frame = %#v, want %#v", request.Params["first_frame"], images[0])
+	}
+	got, ok := request.Params["image_urls"].([]string)
+	if !ok || len(got) != 7 {
+		t.Fatalf("canonical image_urls = %#v", request.Params["image_urls"])
+	}
+}
+
+func TestVideoGenerationRejectsEighthReferenceImage(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.MaxReferenceImages = 7
+	images := make([]any, 0, 8)
+	for index := 1; index <= 8; index++ {
+		images = append(images, fmt.Sprintf("https://example.test/%d.png", index))
+	}
+	request := generation.CreateRequest{Type: "IMAGE_TO_VIDEO", Params: map[string]any{"image_urls": images}}
+	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(capabilities))
+	requireVideoValidationCode(t, err, "VIDEO_IMAGE_LIMIT_EXCEEDED")
+}
+
+func equalVideoStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestVideoGenerationRejectsUnsupportedLastFrame(t *testing.T) {

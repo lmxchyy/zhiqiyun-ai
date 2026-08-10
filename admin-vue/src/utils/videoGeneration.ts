@@ -2,12 +2,20 @@ import type { AdminRecord } from "../stores/admin";
 
 export type VideoModelOption = { name: string; family: string; desc: string };
 
-export type VideoModelParameterOption = { durations: number[]; ratios?: string[]; resolutions?: string[] };
+export type VideoModelParameterOption = {
+  durations: number[];
+  ratios?: string[];
+  resolutions?: string[];
+  maxReferenceImages?: number;
+  requiresReferenceImage?: boolean;
+  supportsAudio?: boolean;
+};
 
 export const videoModelOptions: VideoModelOption[] = [
   { name: "Mock Video", family: "tool", desc: "本地联调视频模型" },
   { name: "Grok Image Video", family: "grok", desc: "Grok 文生/图生视频" },
-  { name: "Grok Video 1.5", family: "grok", desc: "Grok 单图生视频" },
+  { name: "Grok Imagine Video 1.5 Preview", family: "grok", desc: "按次计费 · 单图生视频" },
+  { name: "Grok Imagine Video 1.5", family: "grok", desc: "15 积分/秒 · 文生/多图生视频" },
   { name: "Veo 3", family: "veo", desc: "Google 视频生成" },
   { name: "Kling 2.1", family: "kling", desc: "可灵标准视频" },
   { name: "Seedance 2.0", family: "seedance", desc: "Seedance 文生视频" },
@@ -28,7 +36,8 @@ export const videoResolutionOptions = ["480p", "720p", "1080p"];
 export const videoModelParameterOptions: Record<string, VideoModelParameterOption> = {
   "Mock Video": { durations: [4], ratios: ["16:9"], resolutions: ["480p"] },
   "Grok Image Video": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"], resolutions: ["480p", "720p"] },
-  "Grok Video 1.5": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16"], resolutions: ["480p", "720p"] },
+  "Grok Imagine Video 1.5 Preview": { durations: [4, 6, 8, 10, 12, 15], ratios: ["16:9", "9:16"], resolutions: ["480p", "720p"], maxReferenceImages: 1, requiresReferenceImage: true, supportsAudio: false },
+  "Grok Imagine Video 1.5": { durations: Array.from({ length: 25 }, (_, index) => index + 6), ratios: ["16:9", "9:16", "1:1", "3:2", "2:3"], resolutions: ["480p", "720p"], maxReferenceImages: 7, supportsAudio: false },
   "Veo 3": { durations: [8], ratios: ["16:9", "9:16"], resolutions: ["720p", "1080p"] },
   "Kling 2.1": { durations: [5, 10], ratios: ["16:9", "9:16", "1:1"], resolutions: ["720p", "1080p"] },
   "Seedance 2.0": { durations: [5, 10, 15], ratios: ["16:9", "9:16", "4:3", "3:4"], resolutions: ["480p", "720p", "1080p"] },
@@ -43,7 +52,8 @@ export function videoModelId(modelName: string) {
   const mapping: Record<string, string> = {
     "Mock Video": "mock-video",
     "Grok Image Video": "grok-image-video",
-    "Grok Video 1.5": "grok-video-1.5",
+    "Grok Imagine Video 1.5 Preview": "grok-imagine-video-1.5-preview",
+    "Grok Imagine Video 1.5": "grok-imagine-1.5-video",
     "Veo 3": "veo3",
     "Kling 2.1": "kling-2.1",
     "Seedance 2.0": "seedance-2.0",
@@ -52,6 +62,14 @@ export function videoModelId(modelName: string) {
     "Sora 2": "sora-2"
   };
   return mapping[modelName] || modelName;
+}
+
+export function videoModelMaxReferenceImages(modelName: string) {
+  return Math.max(1, Math.min(7, videoModelParameterOptions[modelName]?.maxReferenceImages || 1));
+}
+
+export function videoModelRequiresReferenceImage(modelName: string) {
+  return videoModelParameterOptions[modelName]?.requiresReferenceImage === true;
 }
 
 export type VideoHistoryStatus = "success" | "generating" | "failed";

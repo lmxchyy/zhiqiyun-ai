@@ -455,7 +455,7 @@
                 <text class="v31-reference-empty-icon">＋</text>
                 <view>
                   <text class="v31-reference-empty-title">{{ creationReferenceSelecting ? "正在打开图片..." : "添加" + creationReferenceTitle }}</text>
-                  <text class="v31-reference-empty-copy">最多 {{ creationReferenceLimit }} 张，视频首帧必填</text>
+                  <text class="v31-reference-empty-copy">最多 {{ creationReferenceLimit }} 张，第一张作为起始图</text>
                 </view>
               </button>
             </view>
@@ -1244,9 +1244,11 @@ const creationReferenceEnabled = computed(
       && videoGenerationMode.value === "IMAGE_TO_VIDEO"
       && videoModelCapabilities.value.supportsImageToVideo),
 );
-const creationReferenceTitle = computed(() => creationMode.value === "video" ? "首帧图" : "参考图");
+const creationReferenceTitle = computed(() => creationMode.value === "video"
+  ? creationReferenceLimit.value > 1 ? "参考图" : "首帧图"
+  : "参考图");
 const creationReferenceLimit = computed(() => creationMode.value === "video"
-  ? Math.max(1, Math.min(1, videoModelCapabilities.value.maxReferenceImages || 1))
+  ? Math.max(1, Math.min(7, videoModelCapabilities.value.maxReferenceImages || 1))
   : creationMode.value === "infographic"
   ? 1
   : inspirationReferenceLimit(activeInspirationDraft.value));
@@ -1254,8 +1256,10 @@ const creationReferenceDescription = computed(() => {
   if (creationSourceLoading.value) return "正在载入原作品...";
   if (creationSourceError.value) return creationSourceError.value;
   if (creationMode.value === "video") return creationReferencePaths.value.length
-    ? "首帧图已就绪"
-    : "请上传 1 张首帧图";
+    ? `已添加 ${creationReferencePaths.value.length}/${creationReferenceLimit.value} 张，第一张作为起始图`
+    : creationReferenceLimit.value > 1
+      ? `可上传 1–${creationReferenceLimit.value} 张参考图`
+      : "请上传 1 张首帧图";
   return creationReferencePaths.value.length
     ? "已添加参考图"
     : "可添加参考图";
@@ -1266,7 +1270,7 @@ const creationLastFrameEnabled = computed(
     && videoModelCapabilities.value.supportsLastFrame,
 );
 const creationReferenceModeLabel = computed(
-  () => `${creationReferencePaths.value.length} 张 · ${creationMode.value === "video" ? "首帧图" : "图生图模式"}`,
+  () => `${creationReferencePaths.value.length} 张 · ${creationMode.value === "video" ? "图生视频" : "图生图模式"}`,
 );
 const roleLabel = computed(() => roleNames[activeRole.value]);
 const isUserMineDetail = computed(() => activeRole.value === "user" && activeTab.value === "mine" && mineView.value !== "overview");
@@ -1698,7 +1702,8 @@ function applyVideoModelCapabilities(raw: unknown, notify = false) {
     creationReferencePaths.value = [];
     creationLastFramePath.value = "";
   } else {
-    creationReferencePaths.value = creationReferencePaths.value.slice(0, 1);
+    const referenceLimit = Math.max(1, Math.min(7, nextCapabilities.maxReferenceImages || 1));
+    creationReferencePaths.value = creationReferencePaths.value.slice(0, referenceLimit);
     if (!nextCapabilities.supportsLastFrame) creationLastFramePath.value = "";
   }
   const cleanParameters = { ...restoredCreationParams.value };
@@ -1769,7 +1774,7 @@ function chooseCreationReferenceImages() {
   }
   const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
   if (!remaining && creationMode.value !== "infographic") {
-    uni.showToast({ title: creationMode.value === "video" ? "首帧图最多 1 张" : `最多添加 ${creationReferenceLimit.value} 张参考图`, icon: "none" });
+    uni.showToast({ title: creationMode.value === "video" ? `最多添加 ${creationReferenceLimit.value} 张视频参考图` : `最多添加 ${creationReferenceLimit.value} 张参考图`, icon: "none" });
     return;
   }
   creationReferenceSelecting.value = true;
@@ -1830,7 +1835,7 @@ function previewCreationReference(index: number) {
 function removeCreationReference(index: number) {
   creationReferencePaths.value = creationReferencePaths.value.filter((_, itemIndex) => itemIndex !== index);
   if (creationMode.value === "video") {
-    if (!creationReferencePaths.value.length && videoGenerationMode.value === "IMAGE_TO_VIDEO") {
+    if (!creationReferencePaths.value.length && videoGenerationMode.value === "IMAGE_TO_VIDEO" && videoModelCapabilities.value.supportsTextToVideo) {
       videoGenerationMode.value = "TEXT_TO_VIDEO";
     }
     scheduleVideoEstimate();
@@ -2954,11 +2959,17 @@ function setVideoNumberParameter(key: string, event: unknown) {
   if (Number.isFinite(value)) setVideoParameterValue(key, value);
 }
 
-function confirmVideoReferenceRemoval(): Promise<boolean> {
+function confirmVideoReferenceRemoval(config: BackendGenerationConfig): Promise<boolean> {
+  const targetLimit = Math.max(1, Math.min(7, config.videoCapabilities.maxReferenceImages || 1));
+  const content = creationReferencePaths.value.length && !config.videoCapabilities.supportsImageToVideo
+    ? "当前模型不支持参考图，切换后将移除已上传图片，是否继续？"
+    : creationReferencePaths.value.length > targetLimit
+      ? `当前已上传 ${creationReferencePaths.value.length} 张参考图，切换后只保留前 ${targetLimit} 张，是否继续？`
+      : "当前模型不支持尾帧图，切换后将移除已上传尾帧，是否继续？";
   return new Promise(resolve => {
     uni.showModal({
       title: "切换视频模型",
-      content: "当前模型不支持参考图，切换后将移除已上传图片，是否继续？",
+      content,
       success: result => resolve(result.confirm),
       fail: () => resolve(false),
     });
@@ -2968,6 +2979,7 @@ function confirmVideoReferenceRemoval(): Promise<boolean> {
 function videoConfigRemovesReferences(config: BackendGenerationConfig) {
   if (!creationReferencePaths.value.length && !creationLastFramePath.value) return false;
   if (creationReferencePaths.value.length && !config.videoCapabilities.supportsImageToVideo) return true;
+  if (creationReferencePaths.value.length > Math.max(1, Math.min(7, config.videoCapabilities.maxReferenceImages || 1))) return true;
   return Boolean(creationLastFramePath.value && !config.videoCapabilities.supportsLastFrame);
 }
 
@@ -3000,7 +3012,7 @@ async function requestVideoModelSwitch(modelCode: string) {
       }
       return;
     }
-    if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval()) return;
+    if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval(config)) return;
     if (sequence !== videoModelSwitchSequence) return;
     commitVideoModelConfig(config);
   } finally {
@@ -3054,6 +3066,9 @@ function scheduleVideoEstimate() {
       );
       if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationReferencePaths.value[0]) {
         params.first_frame = creationReferencePaths.value[0];
+        if (videoModelCapabilities.value.maxReferenceImages > 1) {
+          params.image_urls = [...creationReferencePaths.value];
+        }
       }
       if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationLastFramePath.value) {
         params.last_frame = creationLastFramePath.value;
@@ -3145,15 +3160,11 @@ async function submitCreation(prompt: string) {
         activeCreationModel.value,
       );
       if (!generationConfig) throw new Error("已取消切换模型");
-      const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
       if (mode === "video") {
-        if (videoConfigRemovesReferences(generationConfig) && !await confirmVideoReferenceRemoval()) {
+        if (videoConfigRemovesReferences(generationConfig) && !await confirmVideoReferenceRemoval(generationConfig)) {
           throw new Error("已取消切换模型");
         }
         commitVideoModelConfig(generationConfig);
-        if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && referenceCountBeforeCapabilityCheck > 1) {
-          throw new Error("旧草稿包含多张视频参考图，请重新选择 1 张首帧图");
-        }
         if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && !creationReferencePaths.value[0]) {
           throw new Error("图生视频模式必须上传首帧图");
         }
@@ -3161,8 +3172,11 @@ async function submitCreation(prompt: string) {
       const referenceImages = mode === "image"
         ? await uploadCreationReferenceImages(creationReferencePaths.value)
         : [];
+      const uploadedVideoReferences = mode === "video" && videoGenerationMode.value === "IMAGE_TO_VIDEO"
+        ? await uploadCreationReferenceImages(creationReferencePaths.value)
+        : [];
       const firstFrame = mode === "video" && videoGenerationMode.value === "IMAGE_TO_VIDEO"
-        ? (await uploadCreationReferenceImages(creationReferencePaths.value.slice(0, 1)))[0] || ""
+        ? uploadedVideoReferences[0] || ""
         : "";
       const lastFrame = mode === "video" && creationLastFrameEnabled.value && creationLastFramePath.value
         ? (await uploadCreationReferenceImages([creationLastFramePath.value]))[0] || ""
@@ -3194,7 +3208,7 @@ async function submitCreation(prompt: string) {
           ? requestedQuality
           : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
-        referenceImages,
+        referenceImages: mode === "video" ? uploadedVideoReferences : referenceImages,
         videoMode: mode === "video" ? videoGenerationMode.value : undefined,
         firstFrame: mode === "video" ? firstFrame : undefined,
         lastFrame: mode === "video" ? lastFrame : undefined,
