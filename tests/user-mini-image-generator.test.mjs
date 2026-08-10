@@ -1,218 +1,394 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import {
-  imageAspectOptions,
-  imageCountOptions,
-  imageModelOptions,
-  imagePointEstimateLabel,
-  imageQualityOptions,
-  resolveImageModelCode,
-} from "../apps/user-uni/src/features/generation/imageCreation.ts";
+import { taskRequestFromDraft } from "../packages/business-sdk/dist/mappers.js";
+import * as imageCreation from "../apps/user-uni/src/features/generation/imageCreation.ts";
 
-const componentURL = new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url);
-const workbenchURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url);
-
-function sourceBetween(source, start, end) {
-  const startIndex = source.indexOf(start);
-  const endIndex = source.indexOf(end, startIndex + start.length);
-  assert.notEqual(startIndex, -1, `missing start marker: ${start}`);
-  assert.notEqual(endIndex, -1, `missing end marker: ${end}`);
-  return source.slice(startIndex, endIndex);
+function exactImageSchema(modelName, fields) {
+  return {
+    module_code: "image_generation",
+    model_name: modelName,
+    schema: { fields },
+    fields,
+  };
 }
 
-test("image creation exposes approved defaults and options", () => {
-  assert.equal(imageAspectOptions[0].value, "auto");
-  assert.deepEqual(imageAspectOptions.map(item => item.value), ["auto", "1:1", "16:9", "9:16", "4:3"]);
-  assert.deepEqual(imageQualityOptions, ["1K", "2K"]);
-  assert.deepEqual(imageCountOptions, [1, 2, 4]);
-});
+function gptImageSchema(overrides = {}) {
+  const fields = overrides.fields || [
+    { key: "prompt", type: "textarea", required: true },
+    {
+      key: "size",
+      type: "select",
+      required: true,
+      default: "1024x1024",
+      options: ["1024x1024", "1536x1024", "1024x1536"],
+    },
+    {
+      key: "quality",
+      type: "select",
+      required: true,
+      default: "standard",
+      options: ["standard", "high"],
+    },
+    { key: "n", type: "number", required: true, default: 1, min: 1, max: 8 },
+  ];
+  return exactImageSchema(overrides.modelName || "gpt-image-2", fields);
+}
 
-test("image model options keep only online image-capable models", () => {
-  const result = imageModelOptions([
+function enumerableCountSchema() {
+  return gptImageSchema({
+    fields: [
+      {
+        key: "size",
+        type: "select",
+        required: true,
+        default: "1024x1024",
+        options: ["1024x1024", "1536x1024", "1024x1536"],
+      },
+      {
+        key: "quality",
+        type: "select",
+        required: true,
+        default: "standard",
+        options: ["standard", "high"],
+      },
+      {
+        key: "n",
+        type: "select",
+        required: true,
+        default: 1,
+        options: [1, 2, 4],
+        min: 1,
+        max: 4,
+      },
+    ],
+  });
+}
+
+function requiredFunction(name) {
+  assert.equal(typeof imageCreation[name], "function", `${name} must be exported`);
+  return imageCreation[name];
+}
+
+function availableContract(schema = gptImageSchema()) {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const contract = deriveImageCreationContract("gpt-image-2", schema);
+  assert.equal(contract.available, true, contract.reason);
+  return contract;
+}
+
+test("image model options keep only explicitly online image-capable models", () => {
+  const result = imageCreation.imageModelOptions([
     { code: "gpt-image-2", name: "GPT Image 2", capabilities: ["TEXT_TO_IMAGE"], online: true, pointCost: 10 },
     { code: "seedance", name: "Seedance", capabilities: ["TEXT_TO_VIDEO"], online: true },
     { code: "offline-image", name: "Offline", capabilities: ["IMAGE_TO_IMAGE"], online: false },
     { code: "unknown-online-image", name: "Unknown online state", capabilities: ["IMAGE_TO_IMAGE"] },
   ]);
+
   assert.deepEqual(result, [{ code: "gpt-image-2", name: "GPT Image 2", pointCost: 10 }]);
 });
 
-test("image model selection preserves an available request and otherwise uses the first model", () => {
+test("image model selection never switches an unavailable requested model", () => {
   const models = [
     { code: "gpt-image-2", name: "GPT Image 2", pointCost: 10 },
     { code: "seedream-4", name: "Seedream 4.0", pointCost: 12 },
   ];
-  assert.equal(resolveImageModelCode(models, "seedream-4"), "seedream-4");
-  assert.equal(resolveImageModelCode(models, "removed-model"), "gpt-image-2");
-  assert.equal(resolveImageModelCode([], "removed-model"), "");
+
+  assert.equal(imageCreation.resolveImageModelCode(models, "seedream-4"), "seedream-4");
+  assert.equal(imageCreation.resolveImageModelCode(models, "removed-model"), "");
+  assert.equal(imageCreation.resolveImageModelCode([], "removed-model"), "");
 });
 
-test("image estimate never invents a missing price", () => {
-  assert.equal(imagePointEstimateLabel({ code: "gpt-image-2", name: "GPT Image 2", pointCost: 10 }, 2), "预计 20 积分");
-  assert.equal(imagePointEstimateLabel(undefined, 1), "以生成时结算为准");
+test("exact image schema derives real size ratios, canonical qualities, and schema count default", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema());
+
+  assert.deepEqual(contract, {
+    available: true,
+    modelName: "gpt-image-2",
+    sizeOptions: [
+      { value: "1024x1024", label: "1:1" },
+      { value: "1536x1024", label: "3:2" },
+      { value: "1024x1536", label: "2:3" },
+    ],
+    qualityOptions: [
+      { value: "standard", label: "standard" },
+      { value: "high", label: "high" },
+    ],
+    countOptions: [{ value: 1, label: "1" }],
+    defaultSelection: { size: "1024x1024", quality: "standard", count: 1 },
+    declared: { size: true, quality: true, count: true },
+    required: { size: true, quality: true, count: true },
+  });
 });
 
-test("AI image generator renders the approved structure and defaults", async () => {
-  const source = await readFile(componentURL, "utf8");
-  for (const text of ["AI生图", "今天想生成什么？", "添加参考", "画幅比例", "图片清晰度", "模型", "张数", "生成图片"]) {
-    assert.ok(source.includes(text), `missing copy: ${text}`);
-  }
-  assert.match(source, /例如：生成一张水果店开业促销海报，橙色系，高级感/);
-  assert.match(source, /imageAspectOptions/);
-  assert.match(source, /imageQualityOptions/);
-  assert.match(source, /imageCountOptions/);
-});
+test("schema option derivation filters malformed dimensions, unsupported qualities, and non-positive counts", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const contract = deriveImageCreationContract("schema-model", exactImageSchema("schema-model", [
+    {
+      key: "size",
+      required: true,
+      default: "1280x720",
+      options: ["1280x720", "720x1280", "0x720", "1280x0", "4:3", "1280.5x720"],
+    },
+    {
+      key: "quality",
+      required: true,
+      default: "high",
+      options: ["standard", "ultra", "high", "2K"],
+    },
+    {
+      key: "n",
+      required: true,
+      default: 1,
+      options: [1, 2, 4, 0, -1, 1.5, "2"],
+      min: 1,
+      max: 4,
+    },
+  ]));
 
-test("AI image generator exposes controlled interactions and accessibility states", async () => {
-  const source = await readFile(componentURL, "utf8");
-  for (const event of ["back", "choose-reference", "remove-reference", "preview-reference", "optimize", "generate", "update:prompt", "update:aspectRatio", "update:quality", "update:model", "update:count"]) {
-    assert.ok(source.includes(`"${event}"`), `missing emit: ${event}`);
-  }
-  assert.match(source, /aria-pressed/);
-  assert.match(source, /aria-live="polite"/);
-  assert.match(source, /disabledReason/);
-  assert.match(source, /env\(safe-area-inset-bottom\)/);
-});
-
-test("AI image generator exposes a semantic model-error disable and guards generation", async () => {
-  const source = await readFile(componentURL, "utf8");
-  assert.match(source, /:aria-disabled="!canGenerate"/);
-  assert.match(source, /@click="onGenerate"/);
-  assert.match(source, /function onGenerate\(\)\s*\{[\s\S]*?if \(!canGenerate\.value\) return;[\s\S]*?emit\("generate"\);/);
-  assert.match(source, /\.ai-image-generator__generate\[aria-disabled="true"\]\s*\{[\s\S]*?opacity:\s*0\.48;[\s\S]*?cursor:\s*not-allowed;/);
-});
-
-test("AI image generator targets the real H5 textarea for a visible keyboard focus ring", async () => {
-  const source = await readFile(componentURL, "utf8");
-  assert.match(source, /:deep\(\.uni-textarea-textarea:focus-visible\)/);
-});
-
-test("AI image generator locks the approved visual tokens", async () => {
-  const source = await readFile(componentURL, "utf8");
-  assert.match(source, /--image-brand:\s*#423499/);
-  assert.match(source, /--image-action:\s*#ff771b/i);
-  assert.match(source, /--image-radius:\s*16px/);
-  assert.match(source, /color:\s*#231000/);
-  assert.match(source, /min-height:\s*44px/);
-  assert.match(source, /:focus-visible/);
-  assert.match(source, /prefers-reduced-motion/);
-});
-
-test("AI image generator keeps brand selections and reference removal targets accessible", async () => {
-  const source = await readFile(componentURL, "utf8");
-  assert.match(source, /\.ai-image-generator__aspect\.is-selected,[\s\S]*?border-color:\s*var\(--image-brand\);/);
-  assert.match(source, /\.ai-image-generator__aspect\.is-selected,[\s\S]*?color:\s*var\(--image-brand\);/);
-  assert.match(source, /\.ai-image-generator__check\s*\{[\s\S]*?background:\s*var\(--image-brand\);/);
-  assert.match(source, /\.ai-image-generator__reference-remove\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/);
-  assert.match(source, /ai-image-generator__reference-remove-glyph/);
-  assert.match(source, /border-radius:\s*var\(--image-radius\);/);
-});
-
-test("AI image generator exposes fixed footer and visible interaction states", async () => {
-  const source = await readFile(componentURL, "utf8");
-  assert.match(source, /\.ai-image-generator__footer\s*\{[\s\S]*?position:\s*fixed;/);
-  assert.match(source, /padding-bottom:\s*calc\(112px \+ env\(safe-area-inset-bottom\)\)/);
-  assert.match(source, /@media \(hover: hover\)/);
-  assert.match(source, /button:disabled/);
-  assert.match(source, /v-if="selectingReference"/);
-  assert.match(source, /ai-image-generator__reference-loading/);
-  assert.match(source, /role="status"/);
-  assert.match(source, /ai-image-generator__success/);
-});
-
-test("AI image generator preserves fixed-footer clearance at tablet widths", async () => {
-  const source = await readFile(componentURL, "utf8");
-  assert.match(
-    source,
-    /@media \(min-width: 768px\) \{[\s\S]*?\.ai-image-generator__content\s*\{[\s\S]*?padding-bottom:\s*calc\(112px \+ env\(safe-area-inset-bottom\)\);/,
-  );
-});
-
-test("workbench renders AI image generation as a full-page controlled component", async () => {
-  const source = await readFile(workbenchURL, "utf8");
-  assert.match(source, /import AiImageGenerator/);
-  assert.match(source, /isImageCreationPage/);
-  assert.match(source, /<AiImageGenerator/);
-  assert.match(source, /v-model:prompt="creationPrompt"/);
-  assert.match(source, /v-model:aspect-ratio="imageAspectRatio"/);
-  assert.match(source, /v-model:quality="imageQuality"/);
-  assert.match(source, /v-model:model="selectedImageModelCode"/);
-  assert.match(source, /v-model:count="imageCount"/);
-  assert.match(source, /@generate="guestAwareGenerateTap"/);
-});
-
-test("image controls feed the existing generation request", async () => {
-  const source = await readFile(workbenchURL, "utf8");
-  assert.match(source, /businessSdk\.models\.list/);
-  assert.match(source, /imageModelOptions/);
-  assert.match(source, /model:\s*generationConfig\.model/);
-  assert.match(source, /requestedQuality =[^;]*imageQuality\.value/s);
-  assert.match(source, /requestedSize =[^;]*imageAspectRatio\.value/s);
-  assert.match(source, /count:[^,]*imageCount\.value/s);
-  assert.match(source, /businessSdk\.generation\.createTask/);
-  assert.match(source, /uploadCreationReferenceImages/);
-});
-
-test("image integration preserves guest restore, inspiration drafts, and works routing", async () => {
-  const source = await readFile(workbenchURL, "utf8");
-  assert.match(source, /guestAwareGenerateTap/);
-  assert.match(source, /activeInspirationDraft/);
-  assert.match(source, /restoreCreationSource/);
-  assert.match(source, /openLatestGenerationResult/);
-  assert.match(source, /isGuest/);
-});
-
-test("image request controls stay isolated from free image edit requests", async () => {
-  const source = await readFile(workbenchURL, "utf8");
-  const submitSource = sourceBetween(source, "async function submitCreation", "async function uploadCreationReferenceImages");
-  assert.match(submitSource, /const isImageGeneratorRequest = creationMode\.value === "image";/);
-  assert.match(submitSource, /requestedQuality =[\s\S]*?isImageGeneratorRequest[\s\S]*?imageQuality\.value[\s\S]*?restoredCreationString\("quality", "imageQuality"\) \|\| "standard";/);
-  assert.match(submitSource, /requestedSize =[\s\S]*?isImageGeneratorRequest[\s\S]*?imageAspectRatio\.value[\s\S]*?restoredCreationString\("size", "aspectRatio", "aspect_ratio"\) \|\| "1024x1024";/);
-  assert.match(submitSource, /count: isImageGeneratorRequest[\s\S]*?imageCount\.value[\s\S]*?restoredCreationCount\(\)/);
-  assert.match(submitSource, /parameters: mode === "video"[\s\S]*?isImageGeneratorRequest[\s\S]*?aspect_ratio: imageAspectRatio\.value[\s\S]*?: restoredCreationParams\.value/);
-});
-
-test("image success state opens the generated work from the image branch", async () => {
-  const [componentSource, workbenchSource] = await Promise.all([
-    readFile(componentURL, "utf8"),
-    readFile(workbenchURL, "utf8"),
+  assert.equal(contract.available, true, contract.reason);
+  assert.deepEqual(contract.sizeOptions, [
+    { value: "1280x720", label: "16:9" },
+    { value: "720x1280", label: "9:16" },
   ]);
-  assert.match(componentSource, /"view-result": \[\]/);
-  assert.match(componentSource, /ai-image-generator__view-result/);
-  assert.match(componentSource, /@click='emit\("view-result"\)'/);
-  const imageBranch = sourceBetween(
-    workbenchSource,
-    '<view v-if="isImageCreationPage" class="ai-image-generator-page">',
-    '<template v-else-if="isFreeImageEditPage">',
+  assert.deepEqual(contract.qualityOptions.map(option => option.value), ["standard", "high"]);
+  assert.deepEqual(contract.countOptions.map(option => option.value), [1, 2, 4]);
+});
+
+test("missing exact schema returns a Chinese unavailable reason", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const contract = deriveImageCreationContract("gpt-image-2", undefined);
+
+  assert.equal(contract.available, false);
+  assert.match(contract.reason, /当前模型.*图片参数配置/);
+});
+
+test("mismatched schema model returns a Chinese unavailable reason instead of switching models", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema({ modelName: "mock-standard" }));
+
+  assert.equal(contract.available, false);
+  assert.match(contract.reason, /与所选模型不一致/);
+  assert.match(contract.reason, /gpt-image-2/);
+  assert.match(contract.reason, /mock-standard/);
+});
+
+test("schema without a valid size enum is unavailable and never invents an option", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const contract = deriveImageCreationContract("broken-image", exactImageSchema("broken-image", [
+    { key: "size", required: true, default: "auto", options: ["auto", "4:3", "0x1024"] },
+  ]));
+
+  assert.deepEqual(contract, {
+    available: false,
+    reason: "当前模型没有可用的图片尺寸选项",
+  });
+});
+
+test("selection becomes canonical image fields only when each value is declared and supported", () => {
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  const contract = availableContract(enumerableCountSchema());
+
+  assert.deepEqual(
+    toCanonicalImageSelection(contract, { size: "1536x1024", quality: "high", count: 2 }),
+    { size: "1536x1024", quality: "high", count: 2 },
   );
-  assert.match(imageBranch, /@view-result="openLatestGenerationResult"/);
 });
 
-test("image header uses shared custom-navigation safe-area variables", async () => {
-  const source = await readFile(componentURL, "utf8");
-  const headerStyles = sourceBetween(source, ".ai-image-generator__header {", ".ai-image-generator__icon-button {");
-  assert.match(headerStyles, /min-height:\s*var\(--header-height,\s*64px\);/);
-  assert.match(headerStyles, /padding-top:\s*var\(--header-padding-top,\s*0px\);/);
-  assert.match(headerStyles, /padding-right:\s*var\(--capsule-right-space,\s*0px\);/);
+test("selection omits schema-undeclared quality and count", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  const contract = deriveImageCreationContract("cloudbase-image", exactImageSchema("cloudbase-image", [
+    { key: "size", required: true, default: "1280x720", options: ["1024x1024", "1280x720"] },
+  ]));
+  assert.equal(contract.available, true, contract.reason);
+
+  assert.deepEqual(toCanonicalImageSelection(contract, { size: "1280x720" }), { size: "1280x720" });
 });
 
-test("image controls persist for guest login and restore only approved values", async () => {
-  const source = await readFile(workbenchURL, "utf8");
-  const guestFlow = sourceBetween(source, "function guestAwareGenerateTap", "type NativeGenerateBridge");
-  assert.match(guestFlow, /creationMode\.value === "image"[\s\S]*?aspectRatio: imageAspectRatio\.value[\s\S]*?quality: imageQuality\.value[\s\S]*?count: imageCount\.value/);
+test("selection fails fast for unsupported, undeclared, missing, and alias values", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  const fullContract = availableContract(enumerableCountSchema());
+  const sizeOnlyContract = deriveImageCreationContract("cloudbase-image", exactImageSchema("cloudbase-image", [
+    { key: "size", required: true, default: "1280x720", options: ["1280x720"] },
+  ]));
+  assert.equal(sizeOnlyContract.available, true, sizeOnlyContract.reason);
 
-  const restoreControls = sourceBetween(source, "function restoreImageGeneratorControls", "const currentPageTitle");
-  assert.match(restoreControls, /imageAspectOptions\.some/);
-  assert.match(restoreControls, /imageQualityOptions\.includes/);
-  assert.match(restoreControls, /imageCountOptions\.includes/);
-  assert.match(restoreControls, /:\s*"auto"/);
-  assert.match(restoreControls, /:\s*"1K"/);
-  assert.match(restoreControls, /:\s*1;/);
+  const cases = [
+    { contract: fullContract, selection: { size: "4:3", quality: "high", count: 2 }, message: /不支持图片尺寸/ },
+    { contract: fullContract, selection: { size: "1536x1024", quality: "2K", count: 2 }, message: /不支持图片质量/ },
+    { contract: fullContract, selection: { size: "1536x1024", quality: "high", count: 3 }, message: /不支持生成数量/ },
+    { contract: fullContract, selection: { quality: "high", count: 2 }, message: /必须选择图片尺寸/ },
+    { contract: sizeOnlyContract, selection: { size: "1280x720", quality: "high" }, message: /未声明图片质量/ },
+    { contract: fullContract, selection: { size: "1536x1024", quality: "high", count: 2, aspect_ratio: "3:2" }, message: /不支持字段 aspect_ratio/ },
+  ];
 
-  const sourceRestore = sourceBetween(source, "async function restoreCreationSource", "function applyVideoModelCapabilities");
-  assert.match(sourceRestore, /restoreImageGeneratorControls\(restoredCreationParams\.value\)/);
-  const mountedRestore = sourceBetween(source, "onMounted(() =>", "watch(() => authStore.token");
-  assert.match(mountedRestore, /restoredCreationParams\.value =[\s\S]*?restoreImageGeneratorControls\(restoredCreationParams\.value\)/);
+  for (const item of cases) {
+    assert.throws(() => toCanonicalImageSelection(item.contract, item.selection), item.message);
+  }
+});
+
+test("formal inspiration ratios restore only exact reduced schema ratios", () => {
+  const restoreImageInspirationSelection = requiredFunction("restoreImageInspirationSelection");
+  const contract = availableContract();
+  const cases = [
+    { ratio: "1:1", size: "1024x1024" },
+    { ratio: "2:3", size: "1024x1536" },
+    { ratio: "3:2", size: "1536x1024" },
+  ];
+
+  for (const item of cases) {
+    assert.deepEqual(
+      restoreImageInspirationSelection(contract, { ratio: item.ratio, quality: "high", count: 1 }),
+      {
+        compatible: true,
+        selection: { size: item.size, quality: "high", count: 1 },
+        canonical: { size: item.size, quality: "high", count: 1 },
+      },
+    );
+  }
+});
+
+test("unsupported inspiration ratio returns a Chinese reason and no requestable canonical data", () => {
+  const restoreImageInspirationSelection = requiredFunction("restoreImageInspirationSelection");
+  const result = restoreImageInspirationSelection(availableContract(), {
+    ratio: "4:3",
+    quality: "high",
+    count: 1,
+  });
+
+  assert.equal(result.compatible, false);
+  assert.match(result.reason, /当前模型不支持灵感比例 4:3/);
+  assert.equal("canonical" in result, false);
+});
+
+test("inspiration restore reads only ratio, quality, and count rather than deprecated aliases", () => {
+  const restoreImageInspirationSelection = requiredFunction("restoreImageInspirationSelection");
+  const result = restoreImageInspirationSelection(availableContract(), {
+    aspectRatio: "1:1",
+    aspect_ratio: "1:1",
+    imageRatio: "1:1",
+    imageQuality: "high",
+    count: 1,
+  });
+
+  assert.equal(result.compatible, false);
+  assert.match(result.reason, /灵感缺少有效的 ratio/);
+  assert.equal("canonical" in result, false);
+});
+
+test("canonical helper output reaches the compiled business SDK body without aliases", () => {
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  const canonical = toCanonicalImageSelection(availableContract(enumerableCountSchema()), {
+    size: "1536x1024",
+    quality: "high",
+    count: 2,
+  });
+  const request = taskRequestFromDraft({
+    mode: "image",
+    prompt: "生成橙色系水果店开业海报",
+    model: "gpt-image-2",
+    style: "commercial",
+    referenceImages: [],
+    ...canonical,
+    parameters: {
+      ratio: "4:3",
+      aspectRatio: "16:9",
+      aspect_ratio: "16:9",
+      imageRatio: "auto",
+      imageQuality: "2K",
+    },
+  });
+
+  assert.deepEqual(request, {
+    type: "TEXT_TO_IMAGE",
+    moduleCode: "image_generation",
+    prompt: "生成橙色系水果店开业海报",
+    model: "gpt-image-2",
+    params: {
+      size: "1536x1024",
+      quality: "high",
+      n: 2,
+    },
+  });
+});
+
+test("image estimate copy never multiplies client-side point cost", () => {
+  assert.equal(
+    imageCreation.imagePointEstimateLabel({ code: "gpt-image-2", name: "GPT Image 2", pointCost: 10 }, 4),
+    "以生成时结算为准",
+  );
+  assert.equal(imageCreation.imagePointEstimateLabel(undefined, 1), "以生成时结算为准");
+});
+
+function canonicalFingerprintInput(count = 2) {
+  return {
+    model: "gpt-image-2",
+    prompt: "生成橙色系水果店开业海报",
+    referenceImages: ["https://example.test/reference.png"],
+    selection: { size: "1536x1024", quality: "high", count },
+  };
+}
+
+test("first image attempt creates an image-prefixed client request key", () => {
+  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
+  const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
+  const fingerprint = imageRequestFingerprint(canonicalFingerprintInput());
+
+  assert.deepEqual(
+    nextImageClientRequestKey({ fingerprint }, () => "uuid-first"),
+    { fingerprint, clientRequestId: "image_uuid-first" },
+  );
+});
+
+test("network-uncertain retry reuses the existing key for an identical canonical fingerprint", () => {
+  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
+  const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
+  const fingerprint = imageRequestFingerprint(canonicalFingerprintInput());
+  const existing = { fingerprint, clientRequestId: "image_uuid-existing" };
+  let factoryCalls = 0;
+
+  const result = nextImageClientRequestKey(
+    { fingerprint, existing, previousOutcome: "network-uncertain" },
+    () => {
+      factoryCalls += 1;
+      return "must-not-be-used";
+    },
+  );
+
+  assert.deepEqual(result, existing);
+  assert.equal(factoryCalls, 0);
+});
+
+test("changed canonical input creates a new key even after a network-uncertain result", () => {
+  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
+  const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
+  const oldFingerprint = imageRequestFingerprint(canonicalFingerprintInput(1));
+  const nextFingerprint = imageRequestFingerprint(canonicalFingerprintInput(2));
+
+  assert.deepEqual(
+    nextImageClientRequestKey({
+      fingerprint: nextFingerprint,
+      existing: { fingerprint: oldFingerprint, clientRequestId: "image_uuid-existing" },
+      previousOutcome: "network-uncertain",
+    }, () => "uuid-changed"),
+    { fingerprint: nextFingerprint, clientRequestId: "image_uuid-changed" },
+  );
+});
+
+test("retry after terminal failure creates a new key for the same canonical input", () => {
+  const imageRequestFingerprint = requiredFunction("imageRequestFingerprint");
+  const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
+  const fingerprint = imageRequestFingerprint(canonicalFingerprintInput());
+
+  assert.deepEqual(
+    nextImageClientRequestKey({
+      fingerprint,
+      existing: { fingerprint, clientRequestId: "image_uuid-existing" },
+      previousOutcome: "terminal-failure",
+    }, () => "uuid-retry"),
+    { fingerprint, clientRequestId: "image_uuid-retry" },
+  );
 });
