@@ -8,11 +8,11 @@
 
 - OpenAI-compatible 只接受 canonical `params.size`：`1024x1024`、`1024x1536`、`1536x1024`；`standard` 表示 provider 默认质量，`high` 原样发送，其他 quality 在发出 HTTP 请求前失败；数量只读 canonical `n`。
 - CloudBase 两个官方模型只接受 `1024x1024`、`1280x1280`、`1280x720`、`720x1280`；不再读取 `aspect_ratio`，非法/缺失 size 在发出 HTTP 请求前失败；请求体不发送 `quality` 或 `n`。
-- `mock-standard`、`gpt-image-2` 和两个 CloudBase 模型使用各自独立的图片 schema。mock 固定 `1920x1080` 且无 quality；GPT 使用三个真实尺寸及 `standard/high`；CloudBase 使用四个真实尺寸且无 quality/n。
+- `mock-standard`、`gpt-image-2` 和两个 CloudBase 模型使用各自独立的图片 schema。mock 固定 `1920x1080` 且无 quality/n；GPT 使用三个真实尺寸、`standard/high` 与离散数量 `1/2/4`；CloudBase 使用四个真实尺寸且无 quality/n。
 - 内置图片 schema 是 provider 契约的权威定义；已有数据中的旧内置图片 schema 会被直接替换，不保留过时选项。视频/PPT schema 仍沿用原有缺失字段合并逻辑。
 - 图片 module-schema 不再切换 fallback model，也不借用其他模型或通用 schema；响应继续返回精确 `model_name`。`/models` 不再伪造 `supportedRatios`，无专属图片 schema 的动态模型不再暴露。
 - 正式图片灵感 seed 统一为 `ratio/quality/count`；纵向 `3:4` 改为 GPT 真实 `2:3`，横向 `16:9` 改为 `3:2`。
-- PPT 配图的 `mock-standard` 请求改为 canonical `1920x1080`，不发送 quality；同时移除该调用方的 `imageRatio/count` alias。
+- PPT 配图的 `mock-standard` 请求改为 canonical `1920x1080`，不发送 quality/n；同时移除该调用方的 `imageRatio/count` alias。
 
 ## 代码证据与架构核对
 
@@ -82,7 +82,7 @@ go test ./internal/provider/... ./internal/httpserver/...
 
 只处理 `final-review-backend-review.md` 指出的两项 Important：
 
-1. OpenAI-compatible 的 canonical `n` 现在只接受数值整数 `1..8`。缺省仍明确使用 `1`；`0`、`9`、`1.5`、数字字符串和非数字字符串均在 transport 前失败，不再 floor、clamp 或字符串转换。合法 `n=2` 的最终 provider body 快照保持通过。
+1. OpenAI-compatible 的 canonical `n` 只接受 schema 发布的数值整数 `1/2/4`。缺省仍明确使用 `1`；其他整数、小数、数字字符串和非数字字符串均在 transport 前失败，不再 floor、clamp 或字符串转换。合法 `n=2/4` 的最终 provider body 快照均通过。
 2. `/models` 的 channel 图片模型除 exact image schema 外，还必须存在同名、`ACTIVE`、属于 `image_generation` 的 `AIModel`。默认完整模型集下两个 CloudBase 模型仍公开且能用相同 code 解析 module-schema；存量 `AIModels` 非空但缺少 CloudBase 模型时，不再仅因 runtime channel/schema 存在而暴露。
 
 追加 TDD 证据：
@@ -91,3 +91,11 @@ go test ./internal/provider/... ./internal/httpserver/...
 - GREEN：`go test ./internal/provider/... -count=1` 通过。
 - GREEN：图片 schema/models/PPT/inspiration 相关 httpserver 定向回归通过。
 - GREEN：`go test ./internal/httpserver -run 'TestVideoGenerationEstimate|TestBillingCenterV1Acceptance|TestNormalizeAICapabilityDefaultsMergesMissingBillingRules' -count=1` 通过。
+
+## 最终总审图片数量契约修复
+
+- RED：权威 mock schema 与 module-schema 响应仍声明 `n`；GPT schema 的 `n.options` 为 nil；OpenAI provider 对未发布的 `n=3/8` 仍请求成功。
+- GREEN：GPT exact schema 与 module-schema 响应的 `n.options` 深比较为 `[1,2,4]`，默认值为 1、范围为 1..4；mock 和两个 CloudBase schema/响应均无 `n`。
+- GREEN：OpenAI provider 仅接受 1/2/4，2/4 的最终 JSON body 保留原值；3/8 以及既有的 0/9/小数/字符串用例均在 transport 前失败。
+- GREEN：`/models` 返回的图片项继续以同名 `model_name` 闭合到 exact module-schema；PPT mock 调用方同步不再发送 `n`。
+- 回归：provider 全包、图片相关 httpserver、M2 定向、`node --test tests/user-mini-image-generator.test.mjs`（37/37）、packages typecheck、uni-app typecheck 均通过。

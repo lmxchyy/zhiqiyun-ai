@@ -211,7 +211,6 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
 				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
 				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1920x1080", Options: anyOptions("1920x1080"), UserEditable: true, Visible: true},
-				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Min: floatPtr(1), Max: floatPtr(8), UserEditable: true, Visible: true},
 				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "seed", Label: "种子值", Type: "number", UserEditable: true, Visible: true},
 				{Key: "negative_prompt", Label: "负面提示词", Type: "textarea", UserEditable: true, Visible: true},
@@ -255,7 +254,7 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
 				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024"), UserEditable: true, Visible: true},
 				{Key: "quality", Label: "图片质量", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high"), UserEditable: true, Visible: true},
-				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Min: floatPtr(1), Max: floatPtr(8), UserEditable: true, Visible: true},
+				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Options: anyOptions(float64(1), float64(2), float64(4)), Min: floatPtr(1), Max: floatPtr(4), UserEditable: true, Visible: true},
 				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "seed", Label: "种子值", Type: "number", UserEditable: true, Visible: true},
 				{Key: "negative_prompt", Label: "负面提示词", Type: "textarea", UserEditable: true, Visible: true},

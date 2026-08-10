@@ -114,12 +114,12 @@ func TestGenerationEndpointReturnsTooManyRequestsAtConcurrencyLimit(t *testing.T
 	if _, err := store.CreatePendingGenerationTask(generation.CreateRequest{
 		UserID: "user_000010", Type: "TEXT_TO_IMAGE", ModuleCode: moduleImageGeneration,
 		Prompt: "occupy package concurrency", Model: "mock-standard",
-		Params: map[string]any{"n": float64(1), "size": "1920x1080"},
+		Params: map[string]any{"size": "1920x1080"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	server := newWithStoreAndSessions(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store, sessions)
-	response := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"type":"TEXT_TO_IMAGE","moduleCode":"image_generation","prompt":"should be throttled","model":"mock-standard","params":{"n":1,"size":"1920x1080"}}`), "limited-token")
+	response := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"type":"TEXT_TO_IMAGE","moduleCode":"image_generation","prompt":"should be throttled","model":"mock-standard","params":{"size":"1920x1080"}}`), "limited-token")
 	if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), "concurrency limit reached") {
 		t.Fatalf("concurrency limit should return 429: %d %s", response.Code, response.Body.String())
 	}

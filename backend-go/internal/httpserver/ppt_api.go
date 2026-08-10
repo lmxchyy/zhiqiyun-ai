@@ -1127,6 +1127,7 @@ func pptImageGenerationCreateRequest(user adminUser, req pptImageGenerateRequest
 	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") {
 		imageParams["size"] = "1920x1080"
 		delete(imageParams, "quality")
+		delete(imageParams, "n")
 	}
 	return generation.CreateRequest{
 		Type:       "TEXT_TO_IMAGE",

@@ -1328,17 +1328,17 @@ func openAIImageCount(params map[string]any) (int, error) {
 	}
 	switch typed := value.(type) {
 	case float64:
-		if typed < 1 || typed > 8 || math.Trunc(typed) != typed {
-			return 0, fmt.Errorf("unsupported OpenAI image count %v; expected an integer from 1 to 8", typed)
+		if typed != 1 && typed != 2 && typed != 4 {
+			return 0, fmt.Errorf("unsupported OpenAI image count %v; expected one of 1, 2, 4", typed)
 		}
 		return int(typed), nil
 	case int:
-		if typed < 1 || typed > 8 {
-			return 0, fmt.Errorf("unsupported OpenAI image count %d; expected an integer from 1 to 8", typed)
+		if typed != 1 && typed != 2 && typed != 4 {
+			return 0, fmt.Errorf("unsupported OpenAI image count %d; expected one of 1, 2, 4", typed)
 		}
 		return typed, nil
 	default:
-		return 0, fmt.Errorf("unsupported OpenAI image count %v; expected an integer from 1 to 8", value)
+		return 0, fmt.Errorf("unsupported OpenAI image count %v; expected one of 1, 2, 4", value)
 	}
 }
 

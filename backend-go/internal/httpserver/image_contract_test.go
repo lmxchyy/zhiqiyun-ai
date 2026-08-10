@@ -21,10 +21,10 @@ func TestDefaultImageSchemasMatchBuiltInProviderCapabilities(t *testing.T) {
 		model        string
 		sizes        []any
 		qualities    []any
-		expectsCount bool
+		countOptions []any
 	}{
-		{model: "mock-standard", sizes: []any{"1920x1080"}, expectsCount: true},
-		{model: "gpt-image-2", sizes: []any{"1024x1024", "1024x1536", "1536x1024"}, qualities: []any{"standard", "high"}, expectsCount: true},
+		{model: "mock-standard", sizes: []any{"1920x1080"}},
+		{model: "gpt-image-2", sizes: []any{"1024x1024", "1024x1536", "1536x1024"}, qualities: []any{"standard", "high"}, countOptions: []any{float64(1), float64(2), float64(4)}},
 		{model: "HY-Image-3.0-Plus-4090-Tob-v1.0", sizes: []any{"1024x1024", "1280x1280", "1280x720", "720x1280"}},
 		{model: "HY-Image-v3.0-I2I-ToB-v1.0.1", sizes: []any{"1024x1024", "1280x1280", "1280x720", "720x1280"}},
 	}
@@ -41,9 +41,13 @@ func TestDefaultImageSchemasMatchBuiltInProviderCapabilities(t *testing.T) {
 			if !reflect.DeepEqual(fields["quality"].Options, tt.qualities) {
 				t.Fatalf("quality options = %#v, want %#v", fields["quality"].Options, tt.qualities)
 			}
-			_, hasCount := fields["n"]
-			if hasCount != tt.expectsCount {
-				t.Fatalf("n field present = %v, want %v", hasCount, tt.expectsCount)
+			countField, hasCount := fields["n"]
+			if tt.countOptions == nil {
+				if hasCount {
+					t.Fatalf("unsupported n field was declared: %+v", countField)
+				}
+			} else if !hasCount || !reflect.DeepEqual(countField.Options, tt.countOptions) {
+				t.Fatalf("n options = %#v, want %#v", countField.Options, tt.countOptions)
 			}
 		})
 	}
@@ -70,8 +74,8 @@ func TestNormalizeAICapabilityDefaultsReplacesStaleBuiltInImageSchema(t *testing
 	if _, ok := fields["quality"]; ok {
 		t.Fatalf("stale mock quality survived normalization: %+v", schema.SchemaJSON.Fields)
 	}
-	if _, ok := fields["n"]; !ok {
-		t.Fatalf("authoritative mock count field missing: %+v", schema.SchemaJSON.Fields)
+	if _, ok := fields["n"]; ok {
+		t.Fatalf("stale mock count survived normalization: %+v", schema.SchemaJSON.Fields)
 	}
 }
 
@@ -91,6 +95,7 @@ func TestImageModuleSchemaDoesNotFallbackToAnotherModel(t *testing.T) {
 func TestModuleSchemaResponseIdentifiesEachBuiltInImageModel(t *testing.T) {
 	data := normalizeAICapabilityDefaults(adminPlatformData{})
 	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+	gptCountOptions := []any{float64(1), float64(2), float64(4)}
 	for _, model := range []string{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"} {
 		resolved, err := resolveModuleSchema(data, user, moduleImageGeneration, model)
 		if err != nil {
@@ -99,6 +104,18 @@ func TestModuleSchemaResponseIdentifiesEachBuiltInImageModel(t *testing.T) {
 		response := moduleSchemaResponse(resolved, user)
 		if response["model_name"] != model || resolved.Schema.ModelName != model {
 			t.Fatalf("model %s response/schema = %#v/%q", model, response["model_name"], resolved.Schema.ModelName)
+		}
+		responseSchema, ok := response["schema"].(adminAIParameterSchemaJSON)
+		if !ok {
+			t.Fatalf("model %s response schema type = %T", model, response["schema"])
+		}
+		countField, hasCount := imageContractFields(responseSchema.Fields)["n"]
+		if model == "gpt-image-2" {
+			if !hasCount || !reflect.DeepEqual(countField.Options, gptCountOptions) {
+				t.Fatalf("model %s response n options = %#v, want %#v", model, countField.Options, gptCountOptions)
+			}
+		} else if hasCount {
+			t.Fatalf("model %s response declared unsupported n field: %+v", model, countField)
 		}
 	}
 }

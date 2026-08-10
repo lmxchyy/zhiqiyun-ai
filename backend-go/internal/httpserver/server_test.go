@@ -419,7 +419,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	for _, field := range schemaPayload.Fields {
 		fieldKeys[field.Key] = true
 	}
-	if schemaPayload.ModuleCode != moduleImageGeneration || schemaPayload.ModelName != "mock-standard" || !fieldKeys["prompt"] || !fieldKeys["n"] || fieldKeys["duration"] {
+	if schemaPayload.ModuleCode != moduleImageGeneration || schemaPayload.ModelName != "mock-standard" || !fieldKeys["prompt"] || fieldKeys["n"] || fieldKeys["duration"] {
 		t.Fatalf("unexpected image schema payload: %+v", schemaPayload)
 	}
 
@@ -455,7 +455,6 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		"prompt":"edit an existing asset",
 		"model":"mock-standard",
 		"params":{
-			"n":1,
 			"index":0,
 			"providerRevisedPrompt":"legacy provider output",
 			"provider_revised_prompt":"legacy provider output",
@@ -493,7 +492,6 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		"prompt":"image prompt with internal metadata",
 		"model":"mock-standard",
 		"params":{
-			"n":1,
 			"imageRatio":"4:3",
 			"sourceModule":"ai-image",
 			"apiMode":"responses",
@@ -546,7 +544,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("video task snapshot parameters changed: %+v", videoTask.Params)
 	}
 
-	create := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"n":2}}`), token)
+	create := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"size":"1920x1080"}}`), token)
 	if create.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
 	}
@@ -554,7 +552,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if err := json.NewDecoder(create.Body).Decode(&task); err != nil {
 		t.Fatal(err)
 	}
-	if task.ModuleCode != moduleImageGeneration || task.BillingType != "per_image" || task.PointCost != 2 || len(task.ResultIDs) != 2 || task.FinalSchemaSnapshot == nil || task.LimitSnapshot == nil {
+	if task.ModuleCode != moduleImageGeneration || task.BillingType != "per_image" || task.PointCost != 1 || len(task.ResultIDs) != 1 || task.FinalSchemaSnapshot == nil || task.LimitSnapshot == nil {
 		t.Fatalf("task missing ai capability snapshot: %+v", task)
 	}
 

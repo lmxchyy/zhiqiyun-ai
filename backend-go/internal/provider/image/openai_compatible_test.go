@@ -242,30 +242,34 @@ func TestAddOptionalImageEditFields(t *testing.T) {
 }
 
 func TestOpenAICompatibleGenerateUsesCanonicalImageParameters(t *testing.T) {
-	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-			t.Fatal(err)
-		}
-		writeImageAPIResponse(w)
-	}))
-	defer server.Close()
+	for _, count := range []int{2, 4} {
+		t.Run(fmt.Sprintf("n=%d", count), func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+					t.Fatal(err)
+				}
+				writeImageAPIResponse(w)
+			}))
+			defer server.Close()
 
-	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
-		BaseURL: server.URL + "/v1", APIKey: "test-key", ImageModel: "gpt-image-2", TimeoutMS: 5000,
-	})
-	_, err := provider.Generate(t.Context(), generation.CreateRequest{
-		Type: "TEXT_TO_IMAGE", Prompt: "wide product photo", Model: "gpt-image-2",
-		Params: map[string]any{
-			"size": "1536x1024", "quality": "high", "n": 2,
-			"imageRatio": "3:4", "imageQuality": "draft",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if captured["size"] != "1536x1024" || captured["quality"] != "high" || captured["n"] != float64(2) {
-		t.Fatalf("provider body = %#v, want canonical size/quality/n", captured)
+			provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+				BaseURL: server.URL + "/v1", APIKey: "test-key", ImageModel: "gpt-image-2", TimeoutMS: 5000,
+			})
+			_, err := provider.Generate(t.Context(), generation.CreateRequest{
+				Type: "TEXT_TO_IMAGE", Prompt: "wide product photo", Model: "gpt-image-2",
+				Params: map[string]any{
+					"size": "1536x1024", "quality": "high", "n": count,
+					"imageRatio": "3:4", "imageQuality": "draft",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if captured["size"] != "1536x1024" || captured["quality"] != "high" || captured["n"] != float64(count) {
+				t.Fatalf("provider body = %#v, want canonical size/quality/n=%d", captured, count)
+			}
+		})
 	}
 }
 
@@ -278,6 +282,8 @@ func TestOpenAICompatibleRejectsUnsupportedImageParametersBeforeRequest(t *testi
 		{name: "unsupported size", params: map[string]any{"size": "1280x720", "quality": "standard", "n": 1}},
 		{name: "unsupported quality", params: map[string]any{"size": "1024x1024", "quality": "ultra", "n": 1}},
 		{name: "zero count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 0}},
+		{name: "unsupported integer count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 3}},
+		{name: "unsupported larger integer count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 8}},
 		{name: "count above maximum", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 9}},
 		{name: "fractional count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 1.5}},
 		{name: "numeric string count", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": "2"}},
