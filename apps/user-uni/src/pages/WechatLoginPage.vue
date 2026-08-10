@@ -422,6 +422,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
   if (destroyed || version !== requestVersion) return;
   if (!auth.accessToken) throw new Error("TOKEN_SAVE_FAILED");
   try {
+    uni.removeStorageSync("xianzhiMiniProgramAuth");
     authStorage.setToken(auth.accessToken);
     authStorage.setRefreshToken(auth.refreshToken || "");
     authStorage.setAuth(auth);

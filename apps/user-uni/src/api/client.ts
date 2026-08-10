@@ -1,7 +1,7 @@
 import { configureApiClient, toChineseApiErrorMessage } from '@xianzhi/api-client'
 import { createBusinessSdk } from '@xianzhi/business-sdk'
 import { createUniPlatformAdapter, type AdapterDownloadFileResponse } from '@xianzhi/platform-adapter'
-import { createAuthService, createAuthStorage } from '@xianzhi/shared-auth'
+import { AuthAccountMismatchError, createAuthService, createAuthStorage } from '@xianzhi/shared-auth'
 import { hasAcceptedGuestBrowse } from '../features/auth/guestBrowse'
 
 const tokenKey = 'token'
@@ -196,8 +196,12 @@ async function handleUnauthorized(context: { path?: string; statusCode?: number;
   if (!unauthorizedRefreshPromise) {
     unauthorizedRefreshPromise = authService.refresh()
       .then(() => true)
-      .catch(() => {
+      .catch(error => {
         authStorage.clear()
+        if (error instanceof AuthAccountMismatchError || (error as { code?: unknown })?.code === 'AUTH_ACCOUNT_MISMATCH') {
+          uni.removeStorageSync('xianzhiMiniProgramAuth')
+          redirectToLogin()
+        }
         return false
       })
       .finally(() => {
