@@ -204,39 +204,17 @@ function gptImageSchema(overrides = {}) {
       default: "standard",
       options: ["standard", "high"],
     },
-    { key: "n", type: "number", required: true, default: 1, min: 1, max: 8 },
+    {
+      key: "n",
+      type: "number",
+      required: true,
+      default: 1,
+      options: [1, 2, 4],
+      min: 1,
+      max: 4,
+    },
   ];
   return exactImageSchema(overrides.modelName || "gpt-image-2", fields);
-}
-
-function enumerableCountSchema() {
-  return gptImageSchema({
-    fields: [
-      {
-        key: "size",
-        type: "select",
-        required: true,
-        default: "1024x1024",
-        options: ["1024x1024", "1536x1024", "1024x1536"],
-      },
-      {
-        key: "quality",
-        type: "select",
-        required: true,
-        default: "standard",
-        options: ["standard", "high"],
-      },
-      {
-        key: "n",
-        type: "select",
-        required: true,
-        default: 1,
-        options: [1, 2, 4],
-        min: 1,
-        max: 4,
-      },
-    ],
-  });
 }
 
 function requiredFunction(name) {
@@ -273,7 +251,7 @@ test("image model selection never switches an unavailable requested model", () =
   assert.equal(imageCreation.resolveImageModelCode([], "removed-model"), "");
 });
 
-test("exact image schema derives real size ratios, canonical qualities, and schema count default", () => {
+test("exact image schema derives real size ratios, canonical qualities, and count options", () => {
   const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
   const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema());
 
@@ -289,7 +267,11 @@ test("exact image schema derives real size ratios, canonical qualities, and sche
       { value: "standard", label: "standard" },
       { value: "high", label: "high" },
     ],
-    countOptions: [{ value: 1, label: "1" }],
+    countOptions: [
+      { value: 1, label: "1" },
+      { value: 2, label: "2" },
+      { value: 4, label: "4" },
+    ],
     defaultSelection: { size: "1024x1024", quality: "standard", count: 1 },
     declared: { size: true, quality: true, count: true },
     required: { size: true, quality: true, count: true },
@@ -362,7 +344,7 @@ test("schema without a valid size enum is unavailable and never invents an optio
 
 test("selection becomes canonical image fields only when each value is declared and supported", () => {
   const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
-  const contract = availableContract(enumerableCountSchema());
+  const contract = availableContract(gptImageSchema());
 
   assert.deepEqual(
     toCanonicalImageSelection(contract, { size: "1536x1024", quality: "high", count: 2 }),
@@ -384,7 +366,7 @@ test("selection omits schema-undeclared quality and count", () => {
 test("selection fails fast for unsupported, undeclared, missing, and alias values", () => {
   const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
   const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
-  const fullContract = availableContract(enumerableCountSchema());
+  const fullContract = availableContract(gptImageSchema());
   const sizeOnlyContract = deriveImageCreationContract("cloudbase-image", exactImageSchema("cloudbase-image", [
     { key: "size", required: true, default: "1280x720", options: ["1280x720"] },
   ]));
@@ -455,7 +437,7 @@ test("inspiration restore reads only ratio, quality, and count rather than depre
 
 test("canonical helper output reaches the compiled business SDK body without aliases", () => {
   const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
-  const canonical = toCanonicalImageSelection(availableContract(enumerableCountSchema()), {
+  const canonical = toCanonicalImageSelection(availableContract(gptImageSchema()), {
     size: "1536x1024",
     quality: "high",
     count: 2,
@@ -573,7 +555,7 @@ test("network-uncertain retry reuses the existing key for an identical canonical
 
 function imageTaskSubmissionInput(overrides = {}) {
   return {
-    contract: availableContract(enumerableCountSchema()),
+    contract: availableContract(gptImageSchema()),
     selection: { size: "1536x1024", quality: "high", count: 2 },
     prompt: "fruit poster with references",
     model: "gpt-image-2",
@@ -961,7 +943,7 @@ test("model schema reset uses declared defaults and otherwise the first canonica
 
 test("production image draft reaches the compiled SDK with canonical top-level fields only", () => {
   const buildCanonicalImageDraft = requiredFunction("buildCanonicalImageDraft");
-  const contract = availableContract(enumerableCountSchema());
+  const contract = availableContract(gptImageSchema());
   const draft = buildCanonicalImageDraft({
     contract,
     selection: { size: "1024x1536", quality: "high", count: 2 },
