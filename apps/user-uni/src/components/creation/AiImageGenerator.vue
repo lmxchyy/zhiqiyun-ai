@@ -191,9 +191,10 @@
           class="ai-image-generator__generate"
           type="button"
           :disabled="!canGenerate"
+          :aria-disabled="!canGenerate"
           :aria-label="disabledReason || (busy ? '图片生成中…' : '生成图片')"
           hover-class="ai-image-generator__generate--pressed"
-          @click='emit("generate")'
+          @click="onGenerate"
         >
           <text>{{ busy ? "图片生成中…" : "生成图片" }}</text>
         </button>
@@ -279,6 +280,11 @@ function onModelChange(event: { detail: { value: string | number } }) {
 function onCountChange(event: { detail: { value: string | number } }) {
   const selected = imageCountOptions[Number(event.detail.value)];
   if (selected) emit("update:count", selected);
+}
+
+function onGenerate() {
+  if (!canGenerate.value) return;
+  emit("generate");
 }
 </script>
 
@@ -739,6 +745,12 @@ function onCountChange(event: { detail: { value: string | number } }) {
   opacity: 0.48;
 }
 
+.ai-image-generator__generate[aria-disabled="true"] {
+  opacity: 0.48;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 @media (hover: hover) {
   .ai-image-generator__icon-button:not([disabled]):hover,
   .ai-image-generator__aspect:not([disabled]):hover,
@@ -755,7 +767,8 @@ function onCountChange(event: { detail: { value: string | number } }) {
 }
 
 .ai-image-generator button:focus-visible,
-.ai-image-generator textarea:focus-visible {
+.ai-image-generator textarea:focus-visible,
+.ai-image-generator :deep(.uni-textarea-textarea:focus-visible) {
   outline: 3px solid rgba(66, 52, 153, 0.32);
   outline-offset: 2px;
 }

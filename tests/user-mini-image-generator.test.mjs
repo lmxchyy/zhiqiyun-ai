@@ -76,6 +76,19 @@ test("AI image generator exposes controlled interactions and accessibility state
   assert.match(source, /env\(safe-area-inset-bottom\)/);
 });
 
+test("AI image generator exposes a semantic model-error disable and guards generation", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(source, /:aria-disabled="!canGenerate"/);
+  assert.match(source, /@click="onGenerate"/);
+  assert.match(source, /function onGenerate\(\)\s*\{[\s\S]*?if \(!canGenerate\.value\) return;[\s\S]*?emit\("generate"\);/);
+  assert.match(source, /\.ai-image-generator__generate\[aria-disabled="true"\]\s*\{[\s\S]*?opacity:\s*0\.48;[\s\S]*?cursor:\s*not-allowed;/);
+});
+
+test("AI image generator targets the real H5 textarea for a visible keyboard focus ring", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(source, /:deep\(\.uni-textarea-textarea:focus-visible\)/);
+});
+
 test("AI image generator locks the approved visual tokens", async () => {
   const source = await readFile(componentURL, "utf8");
   assert.match(source, /--image-brand:\s*#423499/);
