@@ -5044,7 +5044,7 @@ const userWorkCards = computed(() => {
       const type = String(task.type || task.sourceType || "").toUpperCase();
       return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE";
     })
-    .map((task) => {
+    .map((task): AdminRecord => {
       const resultId = Array.isArray(task.resultIds) ? String(task.resultIds[0] || "") : "";
       const linkedAsset = resultId
         ? onlineAssets.value.find((asset) => String(asset.id || "") === resultId)
@@ -5063,7 +5063,7 @@ const userWorkCards = computed(() => {
       };
     });
   const seen = new Set<string>();
-  const mineSource = [...montageWorkCards.value, ...montageFromTasks, ...onlineImageTasks.value].filter((task) => {
+  const mineSource: AdminRecord[] = [...montageWorkCards.value, ...montageFromTasks, ...onlineImageTasks.value].filter((task) => {
     const id = aiTaskId(task);
     if (!id || seen.has(id)) return false;
     seen.add(id);
