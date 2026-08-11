@@ -67,6 +67,20 @@ func (*processorProvider) CreatePresignedDownloadURL(context.Context, string, ti
 	return "https://storage.invalid/download", nil
 }
 
+func (*processorProvider) CreateMultipartUpload(_ context.Context, key, _ string) (string, error) {
+	return "processor-mpu-" + key, nil
+}
+
+func (*processorProvider) PresignUploadPart(_ context.Context, key, uploadID string, partNumber int, _ time.Duration) (string, error) {
+	return "https://storage.invalid/multipart/" + key + "/" + uploadID + "/" + string(rune('0'+partNumber%10)), nil
+}
+
+func (*processorProvider) CompleteMultipartUpload(_ context.Context, key, _ string, _ []storagecenter.CompletedPart) (storagecenter.ObjectMetadata, error) {
+	return storagecenter.ObjectMetadata{Size: 0, ContentType: "application/octet-stream", ETag: "processor-multipart"}, nil
+}
+
+func (*processorProvider) AbortMultipartUpload(context.Context, string, string) error { return nil }
+
 func (*processorProvider) TestConnection(context.Context) error { return nil }
 
 type processorProviderFactory struct{ provider storagecenter.Provider }

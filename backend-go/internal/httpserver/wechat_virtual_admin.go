@@ -72,6 +72,25 @@ func (a virtualPaymentAPI) adminUpdateMapping(w http.ResponseWriter, r *http.Req
 	if !a.available(w) {
 		return
 	}
+	var managed bool
+	if err := a.service.db.QueryRowContext(r.Context(), `
+		select exists(
+			select 1
+			from xz_wechat_virtual_product_mappings mapping
+			join xz_plans plan on plan.id=mapping.plan_id
+			join xz_plan_versions version on version.plan_id=plan.id
+			where mapping.id=$1
+			  and ((plan.plan_type='MEMBER_PACKAGE' and version.business_type='MEMBER')
+			    or (plan.plan_type='AGENT_JOIN_PACKAGE' and version.business_type='AGENT'))
+		)
+	`, r.PathValue("id")).Scan(&managed); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if managed {
+		writeBusinessPlanAdminError(w, newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PAYMENT_BINDING", "V2 managed plan must use the price-plan payment binding API"))
+		return
+	}
 	var request struct {
 		OfferID         *string `json:"offerId"`
 		WeChatProductID *string `json:"wechatProductId"`
@@ -213,6 +232,31 @@ func (a virtualPaymentAPI) adminGrantOrder(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, map[string]any{"item": item, "message": "权益发放已完成或已幂等确认"})
+}
+
+func (a virtualPaymentAPI) adminNotifyProvideGoods(w http.ResponseWriter, r *http.Request) {
+	if !a.available(w) {
+		return
+	}
+	orderNo := strings.TrimSpace(r.PathValue("orderNo"))
+	if orderNo == "" {
+		writeError(w, http.StatusBadRequest, errors.New("orderNo is required"))
+		return
+	}
+	if err := a.service.notifyProvideGoodsForOrder(r.Context(), orderNo); err != nil {
+		writeVirtualPaymentError(w, err)
+		return
+	}
+	item, _, _, err := a.service.orderView(r.Context(), orderNo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"item":    item,
+		"orderNo": orderNo,
+		"message": "发货确认已提交或已幂等确认（不重复发放权益）",
+	})
 }
 
 func virtualAdminListLimit(r *http.Request) int {

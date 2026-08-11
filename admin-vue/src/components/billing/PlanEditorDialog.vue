@@ -1,5 +1,32 @@
 <template>
-  <el-dialog :model-value="modelValue" title="编辑套餐配置" width="860px" destroy-on-close @close="close">
+  <el-dialog
+    :model-value="modelValue"
+    title="编辑套餐配置"
+    width="860px"
+    destroy-on-close
+    :close-on-click-modal="!saving"
+    :close-on-press-escape="!saving"
+    :show-close="!saving"
+    @close="close"
+  >
+    <section v-if="gate.status === 'CHECKING'" class="plan-editor-gate-state" aria-live="polite">
+      <el-skeleton :rows="5" animated />
+      <p>正在向服务端确认该套餐是否由 V2 权益版本与价格方案托管。</p>
+    </section>
+    <section v-else-if="gate.status !== 'LEGACY'" class="plan-editor-gate-state">
+      <el-alert
+        :type="gate.status === 'MANAGED' ? 'warning' : 'error'"
+        :title="gate.status === 'MANAGED' ? '该套餐已由 V2 配置托管' : '无法确认旧编辑入口安全'"
+        :description="gate.message"
+        :closable="false"
+        show-icon
+      />
+      <dl class="plan-editor-gate-summary">
+        <dt>套餐 ID</dt><dd><code>{{ gate.planId || String(plan?.id || '') }}</code></dd>
+        <dt>套餐编码</dt><dd><code>{{ String(plan?.code || plan?.id || '') }}</code></dd>
+      </dl>
+    </section>
+    <template v-else-if="gate.status === 'LEGACY'">
     <el-alert
       v-if="isNewcomerPlan"
       type="success"
@@ -115,9 +142,17 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+    </template>
     <template #footer>
-      <el-button @click="close">取消</el-button>
-      <el-button type="primary" :loading="saving || capabilitiesLoading" @click="submit">保存并立即生效</el-button>
+      <template v-if="gate.status === 'LEGACY'">
+        <el-button :disabled="saving" @click="close">取消</el-button>
+        <el-button type="primary" :loading="saving || capabilitiesLoading" @click="submit">保存并立即生效</el-button>
+      </template>
+      <template v-else>
+        <el-button :disabled="saving" @click="close">关闭</el-button>
+        <el-button v-if="gate.status === 'BLOCKED'" type="primary" plain @click="emit('retry-gate')">重新检查</el-button>
+        <el-button v-if="gate.status === 'MANAGED'" type="primary" @click="emit('managed-handoff')">前往套餐与价格配置</el-button>
+      </template>
     </template>
   </el-dialog>
 </template>
@@ -126,6 +161,7 @@
 import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index";
 import { adminRequest } from "../../api/client";
+import { legacyPlanEditorAllowsIO, type LegacyPlanEditorGate } from "../../domain/pricePlanGovernance";
 
 type PlanRecord = Record<string, unknown>;
 type CapabilityModule = {
@@ -145,12 +181,15 @@ type PlanSavePayload = {
 const props = defineProps<{
   modelValue: boolean;
   plan: PlanRecord | null;
+  gate: LegacyPlanEditorGate;
   saving?: boolean;
 }>();
 
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   save: [payload: PlanSavePayload];
+  "retry-gate": [];
+  "managed-handoff": [];
 }>();
 
 const name = ref("");
@@ -167,13 +206,20 @@ const activeTab = ref("basic");
 const capabilitiesLoading = ref(false);
 const capabilityModules = ref<CapabilityModule[]>([]);
 const videoResolutions = ["480p", "720p", "1080p", "4k"];
+let capabilityRequestSequence = 0;
 
 const isNewcomerPlan = computed(() => props.plan?.id === "plan_free" || String(props.plan?.code || "").toLowerCase() === "trial");
 
 watch(
-  () => [props.modelValue, props.plan] as const,
+  () => [props.modelValue, props.plan, props.gate.status, props.gate.planId] as const,
   ([visible, plan]) => {
-    if (!visible || !plan) return;
+    const planId = String(plan?.id || "");
+    if (!visible || !plan || !legacyPlanEditorAllowsIO(props.gate.status) || props.gate.planId !== planId) {
+      capabilityRequestSequence += 1;
+      capabilitiesLoading.value = false;
+      capabilityModules.value = [];
+      return;
+    }
     const entitlements = plan.entitlements && typeof plan.entitlements === "object"
       ? { ...(plan.entitlements as Record<string, unknown>) }
       : {};
@@ -188,17 +234,19 @@ watch(
     validityText.value = String(entitlements.validityText || "");
     audience.value = String(entitlements.audience || "");
     entitlementsText.value = JSON.stringify(entitlements, null, 2);
-    void loadCapabilities(String(plan.id || ""));
+    void loadCapabilities(planId);
   },
   { immediate: true }
 );
 
 async function loadCapabilities(planId: string) {
   capabilityModules.value = [];
-  if (!planId) return;
+  if (!planId || !legacyPlanEditorAllowsIO(props.gate.status) || props.gate.planId !== planId) return;
+  const requestSequence = ++capabilityRequestSequence;
   capabilitiesLoading.value = true;
   try {
     const response = await adminRequest<{ items?: CapabilityModule[] }>({ url: `/admin/plans/${planId}/capabilities` });
+    if (requestSequence !== capabilityRequestSequence || !legacyPlanEditorAllowsIO(props.gate.status) || props.gate.planId !== planId) return;
     capabilityModules.value = Array.isArray(response.items)
       ? response.items.map((item) => ({
         ...item,
@@ -208,9 +256,10 @@ async function loadCapabilities(planId: string) {
       }))
       : [];
   } catch (error) {
+    if (requestSequence !== capabilityRequestSequence) return;
     ElMessage.error(error instanceof Error ? `产品能力加载失败：${error.message}` : "产品能力加载失败");
   } finally {
-    capabilitiesLoading.value = false;
+    if (requestSequence === capabilityRequestSequence) capabilitiesLoading.value = false;
   }
 }
 
@@ -262,10 +311,16 @@ function cloneJSONRecord(value: unknown): Record<string, unknown> {
 }
 
 function close() {
-  if (!props.saving && !capabilitiesLoading.value) emit("update:modelValue", false);
+  if (props.saving) return;
+  if (capabilitiesLoading.value) return;
+  emit("update:modelValue", false);
 }
 
 function submit() {
+  if (!legacyPlanEditorAllowsIO(props.gate.status) || props.gate.planId !== String(props.plan?.id || "")) {
+    ElMessage.error("套餐托管状态未通过安全检查，旧编辑器已阻止保存");
+    return;
+  }
   if (!name.value.trim()) {
     activeTab.value = "basic";
     ElMessage.warning("请填写套餐名称");
@@ -332,6 +387,11 @@ function submit() {
 </script>
 
 <style scoped>
+.plan-editor-gate-state { min-height: 260px; display: grid; align-content: center; gap: 18px; }
+.plan-editor-gate-state > p { margin: 0; color: var(--admin-text-muted, var(--el-text-color-secondary)); text-align: center; }
+.plan-editor-gate-summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 16px; margin: 0; padding: 16px; border: 1px solid var(--admin-border, var(--el-border-color-lighter)); border-radius: 12px; background: var(--admin-surface-muted, var(--el-fill-color-light)); }
+.plan-editor-gate-summary dt { color: var(--admin-text-muted, var(--el-text-color-secondary)); }
+.plan-editor-gate-summary dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .plan-editor-alert { margin-bottom: 12px; }
 .plan-editor-tabs { min-height: 520px; }
 .plan-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }

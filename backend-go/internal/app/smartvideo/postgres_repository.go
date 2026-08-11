@@ -21,13 +21,36 @@ func (r *PostgresRepository) CreateProject(ctx context.Context, p Project) (Proj
 
 func scanProject(scanner interface{ Scan(...any) error }) (Project, error) {
 	var p Project
+	var targetSpec []byte
+	var currentVersionID, confirmedVersionID, activeAnalysisTaskID, activePlanTaskID, errorStage sql.NullString
 	err := scanner.Scan(&p.ID, &p.TenantID, &p.UserID, &p.Title, &p.Requirement, &p.Status, &p.CurrentVersion,
-		&p.OutputAssetID, &p.ActiveRenderTaskID, &p.ErrorCode, &p.ErrorMessage, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt)
+		&targetSpec, &currentVersionID, &confirmedVersionID, &activeAnalysisTaskID, &activePlanTaskID,
+		&errorStage, &p.OutputAssetID, &p.ActiveRenderTaskID, &p.ErrorCode, &p.ErrorMessage,
+		&p.CreatedAt, &p.UpdatedAt, &p.DeletedAt)
+	if err == nil && len(targetSpec) > 0 {
+		_ = json.Unmarshal(targetSpec, &p.TargetSpec)
+	}
+	if currentVersionID.Valid {
+		p.CurrentVersionID = currentVersionID.String
+	}
+	if confirmedVersionID.Valid {
+		p.ConfirmedVersionID = confirmedVersionID.String
+	}
+	if activeAnalysisTaskID.Valid {
+		p.ActiveAnalysisTaskID = activeAnalysisTaskID.String
+	}
+	if activePlanTaskID.Valid {
+		p.ActivePlanTaskID = activePlanTaskID.String
+	}
+	if errorStage.Valid {
+		p.ErrorStage = errorStage.String
+	}
 	return p, err
 }
 
 const projectColumns = `id,tenant_id,user_id,title,requirement,status,current_version,
-	coalesce(output_asset_id,''),coalesce(active_render_task_id,''),coalesce(error_code,''),coalesce(error_message,''),
+	target_spec,current_version_id,confirmed_version_id,active_analysis_task_id,active_plan_task_id,
+	error_stage,coalesce(output_asset_id,''),coalesce(active_render_task_id,''),coalesce(error_code,''),coalesce(error_message,''),
 	created_at,updated_at,deleted_at`
 
 func (r *PostgresRepository) GetProject(ctx context.Context, access Access, id string) (Project, error) {
@@ -59,10 +82,13 @@ func (r *PostgresRepository) ListProjects(ctx context.Context, access Access) ([
 
 func (r *PostgresRepository) UpdateProject(ctx context.Context, p Project) (Project, error) {
 	result, err := r.db.ExecContext(ctx, `update video_projects set title=$1,requirement=$2,status=$3,current_version=$4,
-		output_asset_id=nullif($5,''),active_render_task_id=nullif($6,''),error_code=nullif($7,''),error_message=nullif($8,''),updated_at=$9
-		where id=$10 and tenant_id=$11 and user_id=$12 and deleted_at is null`,
+		output_asset_id=nullif($5,''),active_render_task_id=nullif($6,''),
+		active_analysis_task_id=nullif($7,''),active_plan_task_id=nullif($8,''),
+		error_stage=nullif($9,''),error_code=nullif($10,''),error_message=nullif($11,''),updated_at=$12
+		where id=$13 and tenant_id=$14 and user_id=$15 and deleted_at is null`,
 		p.Title, p.Requirement, p.Status, p.CurrentVersion, p.OutputAssetID, p.ActiveRenderTaskID,
-		p.ErrorCode, p.ErrorMessage, p.UpdatedAt, p.ID, p.TenantID, p.UserID)
+		p.ActiveAnalysisTaskID, p.ActivePlanTaskID, p.ErrorStage, p.ErrorCode, p.ErrorMessage, p.UpdatedAt,
+		p.ID, p.TenantID, p.UserID)
 	if err == nil {
 		if affected, _ := result.RowsAffected(); affected == 0 {
 			err = ErrNotFound
@@ -85,27 +111,48 @@ func (r *PostgresRepository) SoftDeleteProject(ctx context.Context, access Acces
 func (r *PostgresRepository) CreateAsset(ctx context.Context, a ProjectAsset) (ProjectAsset, error) {
 	metadata, _ := json.Marshal(a.Metadata)
 	err := r.db.QueryRowContext(ctx, `insert into video_project_assets
-		(id,project_id,tenant_id,user_id,file_id,storage_key,asset_type,sort_order,metadata,analysis_status,created_at,updated_at)
-		values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-		on conflict(project_id,file_id) do update set sort_order=excluded.sort_order,updated_at=excluded.updated_at
-		returning id`, a.ID, a.ProjectID, a.TenantID, a.UserID, a.FileID, a.StorageKey, a.AssetType, a.SortOrder,
-		metadata, AnalysisStatusPending, a.CreatedAt, a.UpdatedAt).Scan(&a.ID)
+		(id,project_id,tenant_id,user_id,file_id,storage_key,asset_type,kind,sort_order,order_index,metadata,analysis_status,duration_ms,created_at,updated_at)
+		values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		on conflict(project_id,file_id) do update set sort_order=excluded.sort_order,order_index=excluded.order_index,updated_at=excluded.updated_at
+		returning id`, a.ID, a.ProjectID, a.TenantID, a.UserID, a.FileID, a.StorageKey, a.AssetType,
+		toAssetKind(a.AssetType), a.SortOrder, a.SortOrder, metadata, AnalysisStatusPending, int64(0), a.CreatedAt, a.UpdatedAt).Scan(&a.ID)
 	return a, err
 }
 
-const assetColumns = `id,project_id,tenant_id,user_id,file_id,storage_key,asset_type,sort_order,metadata,
+func toAssetKind(assetType string) string {
+	if assetType == AssetTypeVideo {
+		return "video"
+	}
+	return "image"
+}
+
+const assetColumns = `id,project_id,tenant_id,user_id,file_id,storage_key,asset_type,
+	sort_order,order_index,kind,duration_ms,metadata,
 	analysis_status,source_fingerprint,coalesce(normalized_metadata,'null'::jsonb),
-	coalesce(filtered_probe_result,'null'::jsonb),coalesce(thumbnail_file_id,''),coalesce(proxy_file_id,''),
+	coalesce(filtered_probe_result,'null'::jsonb),coalesce(analysis_summary,'null'::jsonb),
+	coalesce(representative_frame_file_ids,'null'::jsonb),content_audit_status,
+	coalesce(thumbnail_file_id,''),coalesce(proxy_file_id,''),
 	attempt_count,coalesce(error_code,''),coalesce(sanitized_error_message,''),coalesce(analyzer_version,''),
 	analysis_started_at,analysis_finished_at,created_at,updated_at`
 
 func scanAsset(scanner interface{ Scan(...any) error }) (ProjectAsset, error) {
 	var a ProjectAsset
-	var metadata, normalized, filtered []byte
-	err := scanner.Scan(&a.ID, &a.ProjectID, &a.TenantID, &a.UserID, &a.FileID, &a.StorageKey,
-		&a.AssetType, &a.SortOrder, &metadata, &a.AnalysisStatus, &a.SourceFingerprint, &normalized, &filtered,
-		&a.ThumbnailFileID, &a.ProxyFileID, &a.AttemptCount, &a.ErrorCode, &a.SanitizedErrorMessage,
-		&a.AnalyzerVersion, &a.AnalysisStartedAt, &a.AnalysisFinishedAt, &a.CreatedAt, &a.UpdatedAt)
+	var metadata, normalized, filtered, analysisSummary, repFrames []byte
+	var kind string
+	var durationMs sql.NullInt64
+	// Must match assetColumns field count/order exactly (29 columns).
+	err := scanner.Scan(
+		&a.ID, &a.ProjectID, &a.TenantID, &a.UserID, &a.FileID, &a.StorageKey,
+		&a.AssetType, &a.SortOrder, &a.OrderIndex, &kind, &durationMs, &metadata,
+		&a.AnalysisStatus, &a.SourceFingerprint, &normalized, &filtered, &analysisSummary, &repFrames,
+		&a.ContentAuditStatus,
+		&a.ThumbnailFileID, &a.ProxyFileID,
+		&a.AttemptCount, &a.ErrorCode, &a.SanitizedErrorMessage, &a.AnalyzerVersion,
+		&a.AnalysisStartedAt, &a.AnalysisFinishedAt, &a.CreatedAt, &a.UpdatedAt,
+	)
+	_ = kind
+	_ = analysisSummary
+	_ = repFrames
 	if err == nil {
 		err = json.Unmarshal(metadata, &a.Metadata)
 	}
@@ -116,6 +163,9 @@ func scanAsset(scanner interface{ Scan(...any) error }) (ProjectAsset, error) {
 	if err == nil && string(filtered) != "null" {
 		a.FilteredProbeResult = &FilteredProbeResult{}
 		err = json.Unmarshal(filtered, a.FilteredProbeResult)
+	}
+	if durationMs.Valid {
+		a.DurationMS = durationMs.Int64
 	}
 	return a, err
 }
@@ -132,7 +182,7 @@ func (r *PostgresRepository) GetAsset(ctx context.Context, access Access, projec
 
 func (r *PostgresRepository) ListAssets(ctx context.Context, access Access, projectID string) ([]ProjectAsset, error) {
 	rows, err := r.db.QueryContext(ctx, `select `+assetColumns+`
-		from video_project_assets where project_id=$1 and tenant_id=$2 and user_id=$3 order by sort_order,created_at`,
+		from video_project_assets where project_id=$1 and tenant_id=$2 and user_id=$3 order by order_index,created_at`,
 		projectID, access.TenantID, access.UserID)
 	if err != nil {
 		return nil, err
@@ -156,7 +206,7 @@ func (r *PostgresRepository) ReorderAssets(ctx context.Context, access Access, p
 	}
 	defer func() { _ = tx.Rollback() }()
 	for index, id := range ids {
-		result, err := tx.ExecContext(ctx, `update video_project_assets set sort_order=$1,updated_at=now()
+		result, err := tx.ExecContext(ctx, `update video_project_assets set sort_order=$1,order_index=$1,updated_at=now()
 			where id=$2 and project_id=$3 and tenant_id=$4 and user_id=$5`, index, id, projectID, access.TenantID, access.UserID)
 		if err != nil {
 			return nil, err
@@ -186,35 +236,25 @@ func (r *PostgresRepository) CreateRenderTask(ctx context.Context, t RenderTask)
 	spec, _ := json.Marshal(t.Specification)
 	err := r.db.QueryRowContext(ctx, `insert into video_render_tasks
 		(id,project_id,version_id,tenant_id,user_id,client_request_id,status,progress,specification,
-		quoted_tokens,reserved_tokens,captured_tokens,released_tokens,created_at,updated_at)
-		values($1,$2,nullif($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		quoted_tokens,reserved_tokens,captured_tokens,released_tokens,
+		quoted_points,reserved_points,captured_points,released_points,
+		attempt,created_at,updated_at)
+		values($1,$2,nullif($3,''),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,1,$18,$19)
 		on conflict(tenant_id,user_id,client_request_id) do update set updated_at=video_render_tasks.updated_at
 		returning id`, t.ID, t.ProjectID, t.VersionID, t.TenantID, t.UserID, t.ClientRequestID, t.Status, t.Progress,
-		spec, t.QuotedTokens, t.ReservedTokens, t.CapturedTokens, t.ReleasedTokens, t.CreatedAt, t.UpdatedAt).Scan(&t.ID)
+		spec, t.QuotedTokens, t.ReservedTokens, t.CapturedTokens, t.ReleasedTokens,
+		t.QuotedPoints, t.ReservedPoints, t.CapturedPoints, t.ReleasedPoints,
+		t.CreatedAt, t.UpdatedAt).Scan(&t.ID)
 	if err != nil {
 		return RenderTask{}, err
 	}
 	return r.GetRenderTaskByClientRequestID(ctx, Access{TenantID: t.TenantID, UserID: t.UserID}, t.ClientRequestID)
 }
 
-func scanRenderTask(scanner interface{ Scan(...any) error }) (RenderTask, error) {
-	var t RenderTask
-	var spec []byte
-	err := scanner.Scan(&t.ID, &t.ProjectID, &t.VersionID, &t.TenantID, &t.UserID, &t.ClientRequestID,
-		&t.Status, &t.Progress, &spec, &t.QuotedTokens, &t.ReservedTokens, &t.CapturedTokens, &t.ReleasedTokens,
-		&t.OutputFileID, &t.OutputAssetID, &t.ErrorCode, &t.ErrorMessage, &t.CreatedAt, &t.UpdatedAt, &t.StartedAt, &t.FinishedAt)
-	if err == nil {
-		err = json.Unmarshal(spec, &t.Specification)
-	}
-	return t, err
-}
-
 func (r *PostgresRepository) GetRenderTaskByClientRequestID(ctx context.Context, access Access, key string) (RenderTask, error) {
-	t, err := scanRenderTask(r.db.QueryRowContext(ctx, `select id,project_id,coalesce(version_id,''),tenant_id,user_id,
-		client_request_id,status,progress,specification,quoted_tokens,reserved_tokens,captured_tokens,released_tokens,
-		coalesce(output_file_id,''),coalesce(output_asset_id,''),coalesce(error_code,''),coalesce(error_message,''),
-		created_at,updated_at,started_at,finished_at from video_render_tasks
-		where tenant_id=$1 and user_id=$2 and client_request_id=$3`, access.TenantID, access.UserID, key))
+	t, err := scanExtendedRenderTask(r.db.QueryRowContext(ctx, `select `+renderTaskColumns+`
+ from video_render_tasks where tenant_id=$1 and user_id=$2 and client_request_id=$3`,
+		access.TenantID, access.UserID, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RenderTask{}, ErrNotFound
 	}

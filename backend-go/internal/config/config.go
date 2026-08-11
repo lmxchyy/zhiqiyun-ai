@@ -77,6 +77,9 @@ type Config struct {
 	WeChatVirtualPaySandboxKey     string
 	WeChatVirtualPayNotifyToken    string
 	WeChatVirtualPayMode           string
+	PricePlanCreationEnabled       bool
+	PricePlanTestEntryEnabled      bool
+	SnapshotV2FulfillmentEnabled   bool
 	ModelProviderURL               string
 	ModelProviderAPIKey            string
 	ImageModel                     string
@@ -116,7 +119,11 @@ type Config struct {
 	SmartVideoProxyAudioBitrate    string
 	SmartVideoAnalysisMaxAttempts  string
 	SmartVideoWorkerConcurrency    string
+	SmartVideoPlanWorkerConcurrency string
+	SmartVideoRenderWorkerConcurrency string
+	SmartVideoOutboxEnabled        bool
 	SmartVideoTempDir              string
+	ShutdownTimeout                string
 }
 
 func Load() Config {
@@ -268,6 +275,9 @@ func Load() Config {
 		WeChatVirtualPaySandboxKey:     os.Getenv("WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY"),
 		WeChatVirtualPayNotifyToken:    os.Getenv("WECHAT_VIRTUAL_PAY_NOTIFY_TOKEN"),
 		WeChatVirtualPayMode:           os.Getenv("WECHAT_VIRTUAL_PAY_MODE"),
+		PricePlanCreationEnabled:       boolEnv(os.Getenv("PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED")),
+		PricePlanTestEntryEnabled:      boolEnv(os.Getenv("PRICE_PLAN_TEST_ENTRY_ENABLED")),
+		SnapshotV2FulfillmentEnabled:   boolEnv(os.Getenv("SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED")),
 		ModelProviderURL:               modelProviderURL,
 		ModelProviderAPIKey:            modelProviderAPIKey,
 		ImageModel:                     imageModel,
@@ -306,9 +316,21 @@ func Load() Config {
 		SmartVideoProxyVideoBitrate:    os.Getenv("SMARTVIDEO_PROXY_VIDEO_BITRATE"),
 		SmartVideoProxyAudioBitrate:    os.Getenv("SMARTVIDEO_PROXY_AUDIO_BITRATE"),
 		SmartVideoAnalysisMaxAttempts:  os.Getenv("SMARTVIDEO_ANALYSIS_MAX_ATTEMPTS"),
-		SmartVideoWorkerConcurrency:    os.Getenv("SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY"),
-		SmartVideoTempDir:              os.Getenv("SMARTVIDEO_TEMP_DIR"),
+		SmartVideoWorkerConcurrency:       os.Getenv("SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY"),
+		SmartVideoPlanWorkerConcurrency:   os.Getenv("SMARTVIDEO_PLAN_WORKER_CONCURRENCY"),
+		SmartVideoRenderWorkerConcurrency: os.Getenv("SMARTVIDEO_RENDER_CONCURRENCY"),
+		SmartVideoOutboxEnabled:           boolEnvDefaultTrue(os.Getenv("SMARTVIDEO_OUTBOX_ENABLED")),
+		SmartVideoTempDir:                 os.Getenv("SMARTVIDEO_TEMP_DIR"),
+		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
 	}
+}
+
+func (c Config) APIShutdownTimeout() time.Duration {
+	timeout, err := time.ParseDuration(strings.TrimSpace(c.ShutdownTimeout))
+	if err != nil || timeout <= 0 {
+		return 30 * time.Second
+	}
+	return timeout
 }
 
 func (c Config) FeishuHTTPTimeout() time.Duration {
@@ -353,6 +375,16 @@ func (c Config) SMSDailyLimits() (mobile, device, ip int64) {
 }
 
 func (c Config) ValidateProduction() error {
+	if c.PricePlanCreationEnabled && !c.SnapshotV2FulfillmentEnabled {
+		return fmt.Errorf("PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED requires SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED")
+	}
+	shutdownTimeout := strings.TrimSpace(c.ShutdownTimeout)
+	if shutdownTimeout == "" {
+		shutdownTimeout = "30s"
+	}
+	if timeout, err := time.ParseDuration(shutdownTimeout); err != nil || timeout <= 0 || timeout > 10*time.Minute {
+		return fmt.Errorf("XIANZHI_SHUTDOWN_TIMEOUT must be between 1ns and 10m")
+	}
 	if c.WeChatVirtualPayEnabled {
 		required := map[string]string{
 			"WECHAT_MINI_PROGRAM_APPID":       c.WeChatMiniProgramAppID,
@@ -486,5 +518,17 @@ func boolEnv(value string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func boolEnvDefaultTrue(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return true
 	}
 }

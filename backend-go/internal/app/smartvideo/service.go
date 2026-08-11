@@ -48,7 +48,11 @@ func (s *Service) UpdateProject(ctx context.Context, access Access, id string, i
 	if err != nil {
 		return Project{}, err
 	}
-	if project.Status != ProjectStatusDraft && project.Status != ProjectStatusFailed {
+	switch project.Status {
+	case ProjectStatusDraft, ProjectStatusFailed, ProjectStatusAnalyzing, ProjectStatusMaterialReady,
+		ProjectStatusStoryboardReady, ProjectStatusPlanning:
+		// allow metadata edits while project is still editable
+	default:
 		return Project{}, ErrInvalidStateTransition
 	}
 	if input.Title != nil {
@@ -80,7 +84,7 @@ func (s *Service) CreateAsset(ctx context.Context, access Access, projectID stri
 	if err != nil {
 		return ProjectAsset{}, err
 	}
-	if project.Status != ProjectStatusDraft && project.Status != ProjectStatusFailed {
+	if !CanEditAssets(project.Status) {
 		return ProjectAsset{}, ErrInvalidStateTransition
 	}
 	input.FileID = strings.TrimSpace(input.FileID)
@@ -98,11 +102,19 @@ func (s *Service) CreateAsset(ctx context.Context, access Access, projectID stri
 	if file.TenantID != access.TenantID || file.UserID != access.UserID || strings.TrimSpace(file.ObjectKey) == "" || strings.ToUpper(file.Status) != "ACTIVE" {
 		return ProjectAsset{}, ErrFileNotReady
 	}
+	existing, err := s.repository.ListAssets(ctx, access, project.ID)
+	if err != nil {
+		return ProjectAsset{}, err
+	}
+	if err := ValidateAssetQuota(existing, file, input.AssetType); err != nil {
+		return ProjectAsset{}, err
+	}
 	now := time.Now().UTC()
 	return s.repository.CreateAsset(ctx, ProjectAsset{
 		ID: newID("vpa"), ProjectID: project.ID, TenantID: access.TenantID, UserID: access.UserID,
 		FileID: file.FileID, StorageKey: file.ObjectKey, AssetType: input.AssetType,
-		SortOrder: input.SortOrder, Metadata: file.Metadata, AnalysisStatus: AnalysisStatusPending,
+		SortOrder: input.SortOrder, OrderIndex: input.SortOrder, Metadata: file.Metadata,
+		AnalysisStatus: AnalysisStatusPending, ContentAuditStatus: "pending",
 		CreatedAt: now, UpdatedAt: now,
 	})
 }
@@ -119,7 +131,7 @@ func (s *Service) ReorderAssets(ctx context.Context, access Access, projectID st
 	if err != nil {
 		return nil, err
 	}
-	if project.Status != ProjectStatusDraft && project.Status != ProjectStatusFailed {
+	if !CanEditAssets(project.Status) {
 		return nil, ErrInvalidStateTransition
 	}
 	if len(input.AssetIDs) == 0 {
@@ -133,75 +145,19 @@ func (s *Service) DeleteAsset(ctx context.Context, access Access, projectID, ass
 	if err != nil {
 		return err
 	}
-	if project.Status != ProjectStatusDraft && project.Status != ProjectStatusFailed {
+	if !CanEditAssets(project.Status) {
 		return ErrInvalidStateTransition
 	}
 	return s.repository.DeleteAsset(ctx, access, project.ID, strings.TrimSpace(assetID))
 }
 
 func (s *Service) CreateRenderTask(ctx context.Context, access Access, projectID string, input CreateRenderTaskInput) (RenderTask, error) {
-	input.ClientRequestID = strings.TrimSpace(input.ClientRequestID)
-	if input.ClientRequestID == "" {
-		return RenderTask{}, ErrIdempotencyKeyRequired
-	}
-	if existing, err := s.repository.GetRenderTaskByClientRequestID(ctx, access, input.ClientRequestID); err == nil {
-		if existing.ProjectID != strings.TrimSpace(projectID) ||
-			existing.VersionID != strings.TrimSpace(input.VersionID) ||
-			existing.Specification != input.Specification {
-			return RenderTask{}, ErrInvalidInput
-		}
-		if existing.Status == RenderStatusCreated && s.renderQueue != nil {
-			if err := s.renderQueue.Enqueue(ctx, RenderJob{TaskID: existing.ID}, 0); err != nil {
-				return RenderTask{}, err
-			}
-			if repository, ok := s.repository.(RenderRepository); ok {
-				_ = repository.MarkRenderQueued(ctx, existing.ID)
-			}
-		}
-		return existing, nil
-	} else if err != ErrNotFound {
-		return RenderTask{}, err
-	}
-	project, err := s.repository.GetProject(ctx, access, strings.TrimSpace(projectID))
-	if err != nil {
-		return RenderTask{}, err
-	}
-	if project.Status != ProjectStatusConfirmed {
-		return RenderTask{}, ErrProjectNotConfirmed
-	}
-	if input.Specification.Width <= 0 || input.Specification.Height <= 0 || input.Specification.FrameRate <= 0 {
-		return RenderTask{}, ErrInvalidInput
-	}
-	if s.renderQueue != nil && (input.Specification.Width != 1080 || input.Specification.Height != 1920 ||
-		input.Specification.FrameRate != 30 || input.Specification.DurationMS != 5000 ||
-		strings.ToLower(input.Specification.Format) != "mp4" ||
-		strings.ToLower(input.Specification.VideoCodec) != "h264" ||
-		strings.ToLower(input.Specification.AudioCodec) != "aac") {
-		return RenderTask{}, ErrInvalidInput
-	}
-	now := time.Now().UTC()
-	task, err := s.repository.CreateRenderTask(ctx, RenderTask{
-		ID: newID("vrt"), ProjectID: project.ID, VersionID: strings.TrimSpace(input.VersionID),
-		TenantID: access.TenantID, UserID: access.UserID, ClientRequestID: input.ClientRequestID,
-		Status: RenderStatusCreated, Step: "created", MaxAttempts: 3, RunAfter: now,
-		Specification: input.Specification, CreatedAt: now, UpdatedAt: now,
-	})
-	if err != nil {
-		return RenderTask{}, err
-	}
-	if s.renderQueue == nil {
-		return task, nil
-	}
-	if err = s.renderQueue.Enqueue(ctx, RenderJob{TaskID: task.ID}, 0); err != nil {
-		return RenderTask{}, err
-	}
-	if repository, ok := s.repository.(RenderRepository); ok {
-		if err = repository.MarkRenderQueued(ctx, task.ID); err != nil {
-			return RenderTask{}, err
-		}
-		return repository.GetRenderTask(ctx, access, project.ID, task.ID)
-	}
-	return task, nil
+	_ = ctx
+	_ = access
+	_ = projectID
+	_ = input
+	// Legacy smoke enqueue path is retired. Use ExportService.CreateExport (outbox + points).
+	return RenderTask{}, fmt.Errorf("%w: use ExportService.CreateExport", ErrExportNotReady)
 }
 
 func (s *Service) GetRenderTask(ctx context.Context, access Access, projectID, taskID string) (RenderTask, error) {
@@ -213,28 +169,23 @@ func (s *Service) GetRenderTask(ctx context.Context, access Access, projectID, t
 }
 
 func (s *Service) RetryRenderTask(ctx context.Context, access Access, projectID, taskID string) (RenderTask, error) {
-	repository, ok := s.repository.(RenderRepository)
-	if !ok || s.renderQueue == nil {
-		return RenderTask{}, ErrAnalysisNotReady
-	}
-	task, err := repository.RetryRenderTask(ctx, access, strings.TrimSpace(projectID), strings.TrimSpace(taskID))
-	if err != nil {
-		return RenderTask{}, err
-	}
-	if err = s.renderQueue.Enqueue(ctx, RenderJob{TaskID: task.ID}, 0); err != nil {
-		return RenderTask{}, err
-	}
-	return task, nil
+	_ = ctx
+	_ = access
+	_ = projectID
+	_ = taskID
+	return RenderTask{}, fmt.Errorf("%w: use ExportService.RetryExport", ErrExportNotReady)
 }
 
 func ValidateRenderTransition(from, to string) error {
 	from, to = strings.ToUpper(strings.TrimSpace(from)), strings.ToUpper(strings.TrimSpace(to))
 	allowed := map[string]map[string]bool{
-		RenderStatusCreated:    {RenderStatusQueued: true, RenderStatusCancelled: true, RenderStatusFailed: true},
-		RenderStatusQueued:     {RenderStatusProcessing: true, RenderStatusCancelled: true, RenderStatusFailed: true},
-		RenderStatusProcessing: {RenderStatusRendering: true, RenderStatusCancelled: true, RenderStatusFailed: true},
-		RenderStatusRendering:  {RenderStatusUploading: true, RenderStatusCancelled: true, RenderStatusFailed: true},
-		RenderStatusUploading:  {RenderStatusSucceeded: true, RenderStatusFailed: true},
+		RenderStatusCreated:      {RenderStatusQueued: true, RenderStatusCancelled: true, RenderStatusFailed: true},
+		RenderStatusQueued:       {RenderStatusProcessing: true, RenderStatusCancelled: true, RenderStatusFailed: true},
+		RenderStatusProcessing:   {RenderStatusSynthesizing: true, RenderStatusCancelled: true, RenderStatusFailed: true},
+		RenderStatusSynthesizing: {RenderStatusRendering: true, RenderStatusCancelled: true, RenderStatusFailed: true},
+		RenderStatusRendering:    {RenderStatusUploading: true, RenderStatusFailed: true},
+		RenderStatusUploading:    {RenderStatusPublishing: true, RenderStatusFailed: true},
+		RenderStatusPublishing:   {RenderStatusSucceeded: true, RenderStatusFailed: true},
 	}
 	if !allowed[from][to] {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidStateTransition, from, to)
@@ -246,11 +197,14 @@ func ValidateProjectTransition(from, to string) error {
 	from, to = strings.ToUpper(strings.TrimSpace(from)), strings.ToUpper(strings.TrimSpace(to))
 	allowed := map[string]map[string]bool{
 		ProjectStatusDraft:           {ProjectStatusAnalyzing: true},
-		ProjectStatusAnalyzing:       {ProjectStatusStoryboardReady: true, ProjectStatusFailed: true},
-		ProjectStatusStoryboardReady: {ProjectStatusConfirmed: true, ProjectStatusDraft: true},
-		ProjectStatusConfirmed:       {ProjectStatusRendering: true, ProjectStatusDraft: true},
+		ProjectStatusAnalyzing:       {ProjectStatusMaterialReady: true, ProjectStatusFailed: true},
+		ProjectStatusMaterialReady:   {ProjectStatusPlanning: true, ProjectStatusDraft: true},
+		ProjectStatusPlanning:        {ProjectStatusStoryboardReady: true, ProjectStatusFailed: true},
+		ProjectStatusStoryboardReady: {ProjectStatusConfirmed: true, ProjectStatusPlanning: true, ProjectStatusDraft: true},
+		ProjectStatusConfirmed:       {ProjectStatusRendering: true, ProjectStatusStoryboardReady: true, ProjectStatusDraft: true},
 		ProjectStatusRendering:       {ProjectStatusCompleted: true, ProjectStatusFailed: true},
-		ProjectStatusFailed:          {ProjectStatusDraft: true, ProjectStatusAnalyzing: true, ProjectStatusRendering: true},
+		ProjectStatusCompleted:       {ProjectStatusDraft: true},
+		ProjectStatusFailed:          {ProjectStatusDraft: true, ProjectStatusAnalyzing: true, ProjectStatusRendering: true, ProjectStatusPlanning: true},
 	}
 	if !allowed[from][to] {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidStateTransition, from, to)

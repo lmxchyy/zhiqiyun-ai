@@ -28,9 +28,19 @@ func TestSmartVideoRoutesAreRegisteredAndProtected(t *testing.T) {
 		{http.MethodPut, "/api/v1/video-projects/:id/assets/order"},
 		{http.MethodDelete, "/api/v1/video-projects/:id/assets/:assetId"},
 		{http.MethodPost, "/api/v1/video-projects/:id/render-tasks"},
+		{http.MethodGet, "/api/v1/video-projects/:id/render-tasks/:taskId"},
+		{http.MethodPost, "/api/v1/video-projects/:id/render-tasks/:taskId/cancel"},
+		{http.MethodPost, "/api/v1/video-projects/:id/render-tasks/:taskId/retry"},
 		{http.MethodPost, "/api/v1/video-projects/:id/analyze"},
 		{http.MethodGet, "/api/v1/video-projects/:id/analysis"},
 		{http.MethodPost, "/api/v1/video-projects/:id/assets/:assetId/retry-analysis"},
+		{http.MethodPost, "/api/v1/video-projects/:id/plan-tasks"},
+		{http.MethodGet, "/api/v1/video-projects/:id/plan-tasks/:taskId"},
+		{http.MethodGet, "/api/v1/video-projects/:id/versions"},
+		{http.MethodGet, "/api/v1/video-projects/:id/versions/:versionId"},
+		{http.MethodPost, "/api/v1/video-projects/:id/versions/:versionId/revisions"},
+		{http.MethodPost, "/api/v1/video-projects/:id/versions/:versionId/confirm"},
+		{http.MethodGet, "/api/v1/video-projects/:id/versions/:versionId/render-estimate"},
 	} {
 		if !hasGinRoute(t, engine, route.method, route.path) {
 			t.Fatalf("missing smart-video route %s %s", route.method, route.path)

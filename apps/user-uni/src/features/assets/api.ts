@@ -318,3 +318,7 @@ export async function cancelGenerationTask(id: string): Promise<GenerationTask> 
 export async function retryGenerationTask(id: string): Promise<GenerationTask> {
   return normalizeTask(await api<unknown>(`/api/v1/generation-tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }));
 }
+
+export async function deleteGenerationTask(id: string): Promise<{ ok: boolean; id: string }> {
+  return api<{ ok: boolean; id: string }>(`/api/v1/generation-tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
+}

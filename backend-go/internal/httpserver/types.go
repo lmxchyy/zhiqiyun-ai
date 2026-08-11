@@ -21,6 +21,8 @@ type platformData struct {
 	ProviderCosts          []providerCost           `json:"providerCosts,omitempty"`
 	BillingLifecycleEvents []billingLifecycleEvent  `json:"billingLifecycleEvents,omitempty"`
 	WalletLedger           []walletLedgerEntry      `json:"walletLedger,omitempty"`
+	PersonalPoints         personalPointState       `json:"personalPoints,omitempty"`
+	PersonalPointImport    personalPointImportState `json:"personalPointImport,omitempty"`
 	Withdrawals            []adminWithdrawal        `json:"withdrawals,omitempty"`
 	Presentations          []adminPresentation      `json:"presentations,omitempty"`
 	Agents                 []adminAgent             `json:"agents,omitempty"`
@@ -28,10 +30,20 @@ type platformData struct {
 	GeoBrands              []adminGeoBrand          `json:"geoBrands,omitempty"`
 	GeoTasks               []adminGeoTask           `json:"geoTasks,omitempty"`
 	AdminProducts          []adminProduct           `json:"adminProducts,omitempty"`
+	SystemSettings         adminSystemSettings      `json:"systemSettings,omitempty"`
+	APIChannels            []adminAPIChannel        `json:"apiChannels,omitempty"`
+	APIModels              []adminAPIModel          `json:"apiModels,omitempty"`
+	APIKeys                []adminAPIKey            `json:"apiKeys,omitempty"`
+	CustomerGroups         []adminCustomerGroup     `json:"customerGroups,omitempty"`
 	AIModules              []adminAIModule          `json:"aiModules,omitempty"`
 	AIModels               []adminAIModel           `json:"aiModels,omitempty"`
 	AIParameterSchemas     []adminAIParameterSchema `json:"aiParameterSchemas,omitempty"`
 	TenantModuleLimits     []adminTenantModuleLimit `json:"tenantModuleLimits,omitempty"`
+	Enterprise             enterpriseMemoryState    `json:"enterprise,omitempty"`
+	PromotionRecords       []promotionRecord        `json:"promotionRecords,omitempty"`
+	AuthMergeRequests      []adminAuthMergeRequest  `json:"authMergeRequests,omitempty"`
+	AdminExceptionCases    []adminExceptionCase     `json:"adminExceptionCases,omitempty"`
+	AdminExperienceEvents  []adminExperienceEvent   `json:"adminExperienceEvents,omitempty"`
 	GenerationTasks        []generationTask         `json:"generationTasks"`
 	Assets                 []asset                  `json:"assets"`
 	AIState                userAIState              `json:"aiState,omitempty"`
@@ -40,54 +52,57 @@ type platformData struct {
 }
 
 type generationTask struct {
-	ID                        string         `json:"id"`
-	ClientRequestID           string         `json:"clientRequestId,omitempty"`
-	UserID                    string         `json:"userId"`
-	TenantID                  string         `json:"tenantId,omitempty"`
-	OrganizationID            string         `json:"organizationId,omitempty"`
-	BillingAccountType        string         `json:"billingAccountType,omitempty"`
-	BillingAccountID          string         `json:"billingAccountId,omitempty"`
-	AgentID                   string         `json:"agentId,omitempty"`
-	OperationCenterID         string         `json:"operationCenterId,omitempty"`
-	ModuleCode                string         `json:"moduleCode,omitempty"`
-	Type                      string         `json:"type"`
-	Prompt                    string         `json:"prompt"`
-	Params                    map[string]any `json:"params"`
-	Model                     string         `json:"model"`
-	BillingType               string         `json:"billingType,omitempty"`
-	Status                    string         `json:"status"`
-	TaskStatus                string         `json:"taskStatus,omitempty"`
-	BillingStatus             string         `json:"billingStatus,omitempty"`
-	Progress                  int            `json:"progress"`
-	PointCost                 int            `json:"pointCost"`
-	BillingRuleVersionID      string         `json:"billingRuleVersionId,omitempty"`
-	QuotedPoints              float64        `json:"quotedPoints,omitempty"`
-	ReservedPoints            float64        `json:"reservedPoints,omitempty"`
-	CapturedPoints            float64        `json:"capturedPoints,omitempty"`
-	ReleasedPoints            float64        `json:"releasedPoints,omitempty"`
-	RefundedPoints            float64        `json:"refundedPoints,omitempty"`
-	SupplierCost              *float64       `json:"supplierCost,omitempty"`
-	EstimatedMargin           *float64       `json:"estimatedMargin,omitempty"`
-	ProviderChannel           string         `json:"providerChannel,omitempty"`
-	ResultIDs                 []string       `json:"resultIds"`
-	ImageURL                  string         `json:"imageUrl,omitempty"`
-	OutputURL                 string         `json:"outputUrl,omitempty"`
-	ResultURL                 string         `json:"resultUrl,omitempty"`
-	ThumbnailURL              string         `json:"thumbnailUrl,omitempty"`
-	FinalSchemaSnapshot       map[string]any `json:"finalSchemaSnapshot,omitempty"`
-	LimitSnapshot             map[string]any `json:"limitSnapshot,omitempty"`
-	UpstreamProvider          string         `json:"upstreamProvider,omitempty"`
-	UpstreamRequestID         string         `json:"upstreamRequestId,omitempty"`
-	UserChargeAmount          int            `json:"userChargeAmount,omitempty"`
-	UpstreamCost              int            `json:"upstreamCost,omitempty"`
-	PlatformProfit            int            `json:"platformProfit,omitempty"`
-	AgentCommission           int            `json:"agentCommission,omitempty"`
-	OperationCenterCommission int            `json:"operationCenterCommission,omitempty"`
-	FailureReason             string         `json:"failureReason,omitempty"`
-	Error                     any            `json:"error"`
-	CreatedAt                 string         `json:"createdAt"`
-	UpdatedAt                 string         `json:"updatedAt"`
-	WorkerFinishedAt          string         `json:"workerFinishedAt,omitempty"`
+	ID                         string         `json:"id"`
+	ClientRequestID            string         `json:"clientRequestId,omitempty"`
+	UserID                     string         `json:"userId"`
+	TenantID                   string         `json:"tenantId,omitempty"`
+	OrganizationID             string         `json:"organizationId,omitempty"`
+	BillingAccountType         string         `json:"billingAccountType,omitempty"`
+	BillingAccountID           string         `json:"billingAccountId,omitempty"`
+	AgentID                    string         `json:"agentId,omitempty"`
+	OperationCenterID          string         `json:"operationCenterId,omitempty"`
+	ModuleCode                 string         `json:"moduleCode,omitempty"`
+	Type                       string         `json:"type"`
+	Prompt                     string         `json:"prompt"`
+	Params                     map[string]any `json:"params"`
+	Model                      string         `json:"model"`
+	BillingType                string         `json:"billingType,omitempty"`
+	Status                     string         `json:"status"`
+	TaskStatus                 string         `json:"taskStatus,omitempty"`
+	BillingStatus              string         `json:"billingStatus,omitempty"`
+	BillingEngine              string         `json:"billingEngine,omitempty"`
+	PersonalPointAccountID     string         `json:"personalPointAccountId,omitempty"`
+	PersonalPointReservationID string         `json:"personalPointReservationId,omitempty"`
+	Progress                   int            `json:"progress"`
+	PointCost                  int            `json:"pointCost"`
+	BillingRuleVersionID       string         `json:"billingRuleVersionId,omitempty"`
+	QuotedPoints               float64        `json:"quotedPoints,omitempty"`
+	ReservedPoints             float64        `json:"reservedPoints,omitempty"`
+	CapturedPoints             float64        `json:"capturedPoints,omitempty"`
+	ReleasedPoints             float64        `json:"releasedPoints,omitempty"`
+	RefundedPoints             float64        `json:"refundedPoints,omitempty"`
+	SupplierCost               *float64       `json:"supplierCost,omitempty"`
+	EstimatedMargin            *float64       `json:"estimatedMargin,omitempty"`
+	ProviderChannel            string         `json:"providerChannel,omitempty"`
+	ResultIDs                  []string       `json:"resultIds"`
+	ImageURL                   string         `json:"imageUrl,omitempty"`
+	OutputURL                  string         `json:"outputUrl,omitempty"`
+	ResultURL                  string         `json:"resultUrl,omitempty"`
+	ThumbnailURL               string         `json:"thumbnailUrl,omitempty"`
+	FinalSchemaSnapshot        map[string]any `json:"finalSchemaSnapshot,omitempty"`
+	LimitSnapshot              map[string]any `json:"limitSnapshot,omitempty"`
+	UpstreamProvider           string         `json:"upstreamProvider,omitempty"`
+	UpstreamRequestID          string         `json:"upstreamRequestId,omitempty"`
+	UserChargeAmount           int            `json:"userChargeAmount,omitempty"`
+	UpstreamCost               int            `json:"upstreamCost,omitempty"`
+	PlatformProfit             int            `json:"platformProfit,omitempty"`
+	AgentCommission            int            `json:"agentCommission,omitempty"`
+	OperationCenterCommission  int            `json:"operationCenterCommission,omitempty"`
+	FailureReason              string         `json:"failureReason,omitempty"`
+	Error                      any            `json:"error"`
+	CreatedAt                  string         `json:"createdAt"`
+	UpdatedAt                  string         `json:"updatedAt"`
+	WorkerFinishedAt           string         `json:"workerFinishedAt,omitempty"`
 }
 
 type asset struct {

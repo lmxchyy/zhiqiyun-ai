@@ -2,7 +2,7 @@ package httpserver
 
 import (
 	"context"
-	"fmt"
+	"database/sql"
 	"strings"
 	"time"
 
@@ -15,34 +15,101 @@ func (s *jsonStore) RecordRAGUsage(_ context.Context, usage knowledgeapp.RAGBill
 	if usage.PointCost <= 0 {
 		return nil
 	}
-	return s.updateAdmin(func(data *adminPlatformData) error {
+	usage.UserID = strings.TrimSpace(usage.UserID)
+	usage.RunID = strings.TrimSpace(usage.RunID)
+	if usage.UserID == "" || usage.RunID == "" {
+		return ErrInvalidPointCommand
+	}
+	return s.updateWithPersonalPoints(context.Background(), func(data *platformData, points *JSONPersonalPointStore) error {
 		for _, item := range data.BillingEvents {
 			if item.TaskID == usage.RunID && strings.EqualFold(item.MetricCode, billingMetricKnowledgeRAG) {
 				return nil
 			}
 		}
-		available := pointsAvailableForAdminUser(*data, usage.UserID)
-		pointCost := int(usage.PointCost)
-		if available < pointCost {
-			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
-		}
-		walletTask := generationTask{ID: usage.RunID, UserID: usage.UserID, TenantID: usage.TenantID, ModuleCode: "knowledge_agent", Model: usage.Model}
-		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "RESERVE", pointCost, "RAG usage reserve"); err != nil {
+		available, after, err := chargeJSONPersonalPointUsage(context.Background(), points, personalPointUsageChargeCommand{
+			UserID: usage.UserID, BusinessType: "RAG_RUN", BusinessID: usage.RunID, Points: usage.PointCost, IdempotencyPrefix: "rag:" + usage.RunID,
+		})
+		if err != nil {
 			return err
 		}
-		if _, err := applyAdminJSONWalletEntryV1(data, walletTask, "CAPTURE", pointCost, "RAG usage capture"); err != nil {
-			return err
-		}
-		after := available - pointCost
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		data.BillingEvents = append(data.BillingEvents, ragBillingEvent(usage, available, after, now, uniqueAdminID("evt", billingEventIDs(data.BillingEvents))))
 		return nil
 	})
 }
 
+type personalPointUsageChargeCommand struct {
+	UserID, BusinessType, BusinessID, IdempotencyPrefix string
+	Points                                              int64
+}
+
+func chargeJSONPersonalPointUsage(ctx context.Context, points *JSONPersonalPointStore, cmd personalPointUsageChargeCommand) (int, int, error) {
+	if points == nil || strings.TrimSpace(cmd.UserID) == "" || strings.TrimSpace(cmd.BusinessType) == "" || strings.TrimSpace(cmd.BusinessID) == "" || strings.TrimSpace(cmd.IdempotencyPrefix) == "" || cmd.Points <= 0 {
+		return 0, 0, ErrInvalidPointCommand
+	}
+	account, err := personalPointAccountForUserState(points.memory, cmd.UserID)
+	if err != nil {
+		return 0, 0, err
+	}
+	before := account.AvailablePoints
+	reserved, err := points.reserve(ctx, PersonalPointReserveCommand{
+		AccountID: account.ID, UserID: cmd.UserID, BusinessType: cmd.BusinessType, BusinessID: cmd.BusinessID,
+		RequestedPoints: cmd.Points, IdempotencyKey: cmd.IdempotencyPrefix + ":reserve",
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := points.capture(ctx, PersonalPointCaptureCommand{
+		AccountID: account.ID, UserID: cmd.UserID, ReservationID: reserved.Reservation.ID,
+		Points: cmd.Points, IdempotencyKey: cmd.IdempotencyPrefix + ":capture",
+	}); err != nil {
+		return 0, 0, err
+	}
+	account, err = personalPointAccountForUserState(points.memory, cmd.UserID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(before), int(account.AvailablePoints), nil
+}
+
+func chargePostgresPersonalPointUsage(ctx context.Context, db *sql.DB, tx *sql.Tx, cmd personalPointUsageChargeCommand) (int, int, error) {
+	if db == nil || tx == nil || strings.TrimSpace(cmd.UserID) == "" || strings.TrimSpace(cmd.BusinessType) == "" || strings.TrimSpace(cmd.BusinessID) == "" || strings.TrimSpace(cmd.IdempotencyPrefix) == "" || cmd.Points <= 0 {
+		return 0, 0, ErrInvalidPointCommand
+	}
+	account, err := pgLoadPersonalAccountForUserTx(ctx, tx, cmd.UserID)
+	if err != nil {
+		return 0, 0, err
+	}
+	before := account.Available
+	points := NewPostgresPersonalPointStore(db)
+	reserved, err := points.reserveTx(ctx, tx, PersonalPointReserveCommand{
+		AccountID: account.ID, UserID: cmd.UserID, BusinessType: cmd.BusinessType, BusinessID: cmd.BusinessID,
+		RequestedPoints: cmd.Points, IdempotencyKey: cmd.IdempotencyPrefix + ":reserve",
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := points.captureTx(ctx, tx, PersonalPointCaptureCommand{
+		AccountID: account.ID, UserID: cmd.UserID, ReservationID: reserved.Reservation.ID,
+		Points: cmd.Points, IdempotencyKey: cmd.IdempotencyPrefix + ":capture",
+	}); err != nil {
+		return 0, 0, err
+	}
+	account, err = pgLoadPersonalAccountForUserTx(ctx, tx, cmd.UserID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return int(before), int(account.Available), nil
+}
+
 func (s *postgresStore) RecordRAGUsage(ctx context.Context, usage knowledgeapp.RAGBillingUsage) error {
 	if usage.PointCost <= 0 {
 		return nil
+	}
+	usage.UserID = strings.TrimSpace(usage.UserID)
+	usage.RunID = strings.TrimSpace(usage.RunID)
+	if usage.UserID == "" || usage.RunID == "" {
+		return ErrInvalidPointCommand
 	}
 	if err := s.ensureReady(ctx); err != nil {
 		return err
@@ -66,7 +133,6 @@ func (s *postgresStore) RecordRAGUsage(ctx context.Context, usage knowledgeapp.R
 	if authorization.ContextType == contextEnterprise && usage.TenantID != "" && usage.TenantID != authorization.TenantID {
 		return errForbidden
 	}
-	var account adminPointAccount
 	before, after := 0, 0
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "RAG_RUN", usage.RunID)
@@ -76,24 +142,13 @@ func (s *postgresStore) RecordRAGUsage(ctx context.Context, usage knowledgeapp.R
 		before, after = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
 		usage.TenantID = authorization.TenantID
 	} else {
-		account, err = pointAccountForUpdate(ctx, tx, usage.UserID)
+		before, after, err = chargePostgresPersonalPointUsage(ctx, s.db, tx, personalPointUsageChargeCommand{
+			UserID: usage.UserID, BusinessType: "RAG_RUN", BusinessID: usage.RunID,
+			Points: usage.PointCost, IdempotencyPrefix: "rag:" + usage.RunID,
+		})
 		if err != nil {
 			return err
 		}
-		if account.Available < pointCost {
-			return fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
-		}
-		before = account.Available
-		walletTask := generationTask{ID: usage.RunID, UserID: usage.UserID, TenantID: usage.TenantID, ModuleCode: "knowledge_agent", Model: usage.Model}
-		reserved, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, account, "RESERVE", pointCost, "RAG usage reserve")
-		if err != nil {
-			return err
-		}
-		captured, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, reserved, "CAPTURE", pointCost, "RAG usage capture")
-		if err != nil {
-			return err
-		}
-		after = captured.Available
 	}
 	eventID, err := nextTableID(ctx, tx, "xz_billing_events", "evt")
 	if err != nil {

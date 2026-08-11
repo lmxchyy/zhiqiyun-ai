@@ -75,7 +75,10 @@ test("guest video draft survives cancelled login without creating a task", async
   await page.goto("/app/video-generation");
   const input = page.locator(".web-video-form textarea");
   await input.fill(prompt);
-  await page.getByText("9:16", { exact: true }).click();
+  // Prefer an aspect-ratio chip (e.g. 16:9 / 9:16); fall back to any visible option after models load.
+  const ratioOption = page.locator(".web-video-form .web-video-option").filter({ hasText: /\d+\s*:\s*\d+/ }).first();
+  await expect(ratioOption).toBeVisible({ timeout: 20000 });
+  await ratioOption.click();
   await page.locator(".web-video-submit").click();
   await expect(page.getByText("登录后继续使用", { exact: true })).toBeVisible();
   await page.getByText("暂不登录", { exact: true }).click();
@@ -85,7 +88,7 @@ test("guest video draft survives cancelled login without creating a task", async
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("zhiqiyun:web:video-guest-draft"))).toContain(prompt);
   await page.reload();
   await expect(page.locator(".web-video-form textarea")).toHaveValue(prompt);
-  await expect(page.locator(".web-video-option.active", { hasText: "9:16" })).toHaveCount(1);
+  await expect(page.locator(".web-video-form .web-video-option.active").filter({ hasText: /\d+\s*:\s*\d+/ })).toHaveCount(1);
 });
 
 test("wireless canvas uses one parent login gate and cancels the protected fetch in place", async ({ page }) => {

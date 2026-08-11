@@ -16,12 +16,37 @@ import (
 
 type CommissionHook func(context.Context, *sql.Tx, Order) error
 
+type PersonalPointGrantRequest struct {
+	UserID, TenantID, Source, ReferenceType, ReferenceID, IdempotencyKey string
+	Points                                                               int64
+	GrantedAt                                                            time.Time
+}
+
+type PersonalPointGrantResult struct {
+	AccountID, UserID string
+	AvailableBefore   int64
+	AvailableAfter    int64
+	FrozenBefore      int64
+	FrozenAfter       int64
+}
+
+type PersonalPointGrantHook func(context.Context, *sql.Tx, PersonalPointGrantRequest) (PersonalPointGrantResult, error)
+
+var ErrPersonalPointGrantHookUnavailable = errors.New("personal point grant hook is unavailable")
+
+type ServiceOption func(*Service)
+
+func WithPersonalPointGrantHook(hook PersonalPointGrantHook) ServiceOption {
+	return func(service *Service) { service.personalPointGrant = hook }
+}
+
 type Service struct {
-	db         *sql.DB
-	providers  map[string]PaymentProvider
-	commission CommissionHook
-	logger     func(string, ...any)
-	now        func() time.Time
+	db                 *sql.DB
+	providers          map[string]PaymentProvider
+	commission         CommissionHook
+	personalPointGrant PersonalPointGrantHook
+	logger             func(string, ...any)
+	now                func() time.Time
 }
 
 type CreateOrderResult struct {
@@ -30,17 +55,23 @@ type CreateOrderResult struct {
 	PaymentParams map[string]any `json:"paymentParams"`
 }
 
-func NewService(db *sql.DB, providers []PaymentProvider, commission CommissionHook) *Service {
+func NewService(db *sql.DB, providers []PaymentProvider, commission CommissionHook, options ...ServiceOption) *Service {
 	registry := make(map[string]PaymentProvider, len(providers))
 	for _, provider := range providers {
 		if provider != nil {
 			registry[strings.ToLower(provider.GetProviderName())] = provider
 		}
 	}
-	return &Service{
+	service := &Service{
 		db: db, providers: registry, commission: commission,
 		logger: log.Printf, now: func() time.Time { return time.Now().UTC() },
 	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func (s *Service) Ready() bool { return s != nil && s.db != nil }
@@ -307,7 +338,7 @@ func (s *Service) handlePaymentSuccessTx(ctx context.Context, notification Payme
 	if err := upsertFulfillmentProcessingTx(ctx, tx, order); err != nil {
 		return err
 	}
-	handler := fulfillmentHandler(order.FulfillmentType)
+	handler := fulfillmentHandler(order.FulfillmentType, s.personalPointGrant)
 	if handler == nil {
 		return E(CodeFulfillmentUnsupported, fmt.Sprintf("fulfillment type %s is not supported in phase 1", order.FulfillmentType))
 	}
@@ -548,16 +579,16 @@ func lockOrderAndPaymentTx(ctx context.Context, tx *sql.Tx, orderNo string) (Ord
 	return order, paymentNo, err
 }
 
-func fulfillmentHandler(kind string) FulfillmentHandler {
+func fulfillmentHandler(kind string, personalPointGrant PersonalPointGrantHook) FulfillmentHandler {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "grant_token":
-		return GrantTokenHandler{}
+		return GrantTokenHandler{PersonalPointGrant: personalPointGrant}
 	default:
 		return nil
 	}
 }
 
-func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order) error {
+func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order, personalPointGrant PersonalPointGrantHook) error {
 	var payload struct {
 		TokenAmount int64 `json:"tokenAmount"`
 	}
@@ -567,6 +598,9 @@ func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order) error {
 	if payload.TokenAmount <= 0 {
 		return errors.New("token fulfillment payload is invalid")
 	}
+	if personalPointGrant == nil {
+		return ErrPersonalPointGrantHookUnavailable
+	}
 	idempotencyKey := "unified-payment:" + order.OrderNo + ":grant_token"
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM xz_token_records WHERE idempotency_key=$1)`, idempotencyKey).Scan(&exists); err != nil {
@@ -575,70 +609,29 @@ func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order) error {
 	if exists {
 		return nil
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "payment-token:"+order.UserID); err != nil {
-		return err
-	}
-	accountID := "points:" + order.UserID
-	var storedID string
-	var before, frozen int64
-	err := tx.QueryRowContext(ctx, `SELECT id,available,frozen FROM xz_point_accounts WHERE user_id=$1 FOR UPDATE`, order.UserID).
-		Scan(&storedID, &before, &frozen)
-	if errors.Is(err, sql.ErrNoRows) {
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO xz_point_accounts(id,user_id,available,frozen,raw)
-			VALUES ($1,$2,0,0,jsonb_build_object('id',$1::text,'userId',$2::text,'available',0,'frozen',0,'total',0))
-			ON CONFLICT (id) DO NOTHING
-		`, accountID, order.UserID)
-		if err == nil {
-			err = tx.QueryRowContext(ctx, `SELECT id,available,frozen FROM xz_point_accounts WHERE user_id=$1 FOR UPDATE`, order.UserID).
-				Scan(&storedID, &before, &frozen)
-		}
-	}
+	grantedAt := time.Now().UTC()
+	grant, err := personalPointGrant(ctx, tx, PersonalPointGrantRequest{
+		UserID: order.UserID, TenantID: order.TenantID, Source: "UNIFIED_PAYMENT_GRANT", Points: payload.TokenAmount,
+		ReferenceType: "UNIFIED_PAYMENT_ORDER", ReferenceID: order.OrderNo, IdempotencyKey: idempotencyKey, GrantedAt: grantedAt,
+	})
 	if err != nil {
 		return err
 	}
-	after, err := checkedAdd(before, payload.TokenAmount)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		UPDATE xz_point_accounts SET available=$2,
-		  raw=coalesce(raw,'{}'::jsonb)||jsonb_build_object('available',$2::bigint,'frozen',$3::bigint,'total',$2::bigint+$3::bigint)
-		WHERE id=$1
-	`, storedID, after, frozen)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO xz_user_wallets(user_id,token_balance,frozen_token,total_token_granted,total_token_used,updated_at,raw)
-		VALUES ($1,$2,0,$2,0,now(),jsonb_build_object('userId',$1::text,'tokenBalance',$2::bigint,'frozenToken',0,'totalTokenGranted',$2::bigint,'totalTokenUsed',0))
-		ON CONFLICT (user_id) DO UPDATE SET token_balance=xz_user_wallets.token_balance+$2,
-		  total_token_granted=xz_user_wallets.total_token_granted+$2,updated_at=now(),
-		  raw=coalesce(xz_user_wallets.raw,'{}'::jsonb)||jsonb_build_object(
-		    'tokenBalance',xz_user_wallets.token_balance+$2,'totalTokenGranted',xz_user_wallets.total_token_granted+$2)
-	`, order.UserID, payload.TokenAmount)
-	if err != nil {
-		return err
+	if grant.UserID != order.UserID || grant.AccountID == "" || grant.AvailableAfter-grant.AvailableBefore != payload.TokenAmount {
+		return errors.New("personal point grant hook returned an invalid result")
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO xz_token_records(
 		  id,user_id,order_id,change_type,amount,balance_before,balance_after,remark,
 		  created_at,tenant_id,idempotency_key,source_order_no,raw
 		) VALUES ($1,$2,$3,'UNIFIED_PAYMENT_GRANT',$4,$5,$6,'unified_payment_grant_token',$7,$8,$9,$3,$10::jsonb)
-	`, "token_"+randomHex(16), order.UserID, order.OrderNo, payload.TokenAmount, before, after,
-		time.Now().UTC().Format(time.RFC3339Nano), order.TenantID, idempotencyKey,
-		mustJSON(map[string]any{"orderNo": order.OrderNo, "amount": payload.TokenAmount, "balanceBefore": before, "balanceAfter": after}))
+	`, "token_"+randomHex(16), order.UserID, order.OrderNo, payload.TokenAmount, grant.AvailableBefore, grant.AvailableAfter,
+		grantedAt.Format(time.RFC3339Nano), order.TenantID, idempotencyKey,
+		mustJSON(map[string]any{"orderNo": order.OrderNo, "amount": payload.TokenAmount, "balanceBefore": grant.AvailableBefore, "balanceAfter": grant.AvailableAfter}))
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO xz_wallet_ledger(
-		  id,account_id,user_id,tenant_id,entry_type,points,available_before,available_after,
-		  frozen_before,frozen_after,idempotency_key,reference_type,reference_id,remark,metadata
-		) VALUES ($1,$2,$3,$4,'RECHARGE',$5,$6,$7,$8,$8,$9,'UNIFIED_PAYMENT_ORDER',$10,'Unified payment token grant',$11::jsonb)
-	`, "wallet_"+randomHex(16), storedID, order.UserID, order.TenantID, payload.TokenAmount,
-		before, after, frozen, idempotencyKey, order.OrderNo, mustJSON(map[string]any{"productCode": order.ProductCode}))
-	return err
+	return nil
 }
 
 func upsertFulfillmentProcessingTx(ctx context.Context, tx *sql.Tx, order Order) error {

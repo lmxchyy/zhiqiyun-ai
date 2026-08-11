@@ -1,0 +1,11 @@
+=== #8 RETRY binding bump 2026-07-29 09:57:37 +0800 ===
+PP=price_plan_20260728212634000000000_049a91b1 BIND=payment_binding_20260728212634000000000_23904db9 BIND_ORIG=100 PLAN_ORIG=100 GOOD_ORIG=100
+UPDATE 1
+BIND_NOW=101
+TEST quote binding+1 -> 409
+code= PRICE_PLAN_WECHAT_PRICE_MISMATCH error= 价格方案与微信道具价格不一致，已禁止下单: quote=100 pricePlan=100 binding=101 wechatGood=100
+UPDATE 1
+RESTORED binding=100
+TEST quote after restore -> 201
+VERDICT_#8=PASS (PRICE_PLAN_WECHAT_PRICE_MISMATCH on +1 fen chain drift; restored; quote 201)
+health status= None blocked= None

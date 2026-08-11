@@ -245,7 +245,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -256,7 +256,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -870,9 +870,16 @@
               </div>
 
               <div v-else class="user-works-empty">
-                <strong>暂无匹配作品</strong>
-                <span>调整筛选条件，或先去 AI 生图创建新作品。</span>
-                <button type="button" @click="selectAdminModule('userAiImage')">去创作</button>
+                <strong>{{ worksSourceTab === 'mine' ? '我的作品里还没有匹配项' : '暂无匹配作品' }}</strong>
+                <span v-if="worksSourceTab === 'mine'">
+                  混剪成片会出现在「我的作品」。请点刷新；若仍没有，确认当前登录账号就是导出时使用的账号。
+                </span>
+                <span v-else>请先切换到「我的作品」，或调整筛选条件。</span>
+                <div class="user-works-empty-actions">
+                  <button v-if="worksSourceTab !== 'mine'" type="button" @click="openMyWorks">查看我的作品</button>
+                  <button type="button" @click="refreshWorksCenter">刷新作品</button>
+                  <button type="button" @click="selectAdminModule('userAiImage')">去创作</button>
+                </div>
               </div>
             </section>
           </section>
@@ -1183,10 +1190,10 @@
               </div>
             </section>
             <teleport to="body">
-              <div v-if="aiDetailTask && aiTaskDisplayImageUrl(aiDetailTask)" class="ai-detail-overlay" @click="closeAiDetailModal">
+              <div v-if="aiDetailTask" class="ai-detail-overlay" @click="closeAiDetailModal">
                 <section class="ai-detail-modal" @click.stop>
                   <div class="ai-detail-preview">
-                    <button type="button" class="ai-detail-download" aria-label="下载图片" @click.stop="downloadAiTask(aiDetailTask)">
+                    <button type="button" class="ai-detail-download" aria-label="下载图片" :disabled="!aiTaskCanDownload(aiDetailTask)" @click.stop="downloadAiTask(aiDetailTask)">
                       <el-icon><Download /></el-icon>
                     </button>
                     <div class="ai-detail-badges">
@@ -1194,12 +1201,23 @@
                       <span>{{ aiTaskDisplayResolutionLabel(aiDetailTask) }}</span>
                     </div>
                     <img
+                      v-if="aiTaskDisplayImageUrl(aiDetailTask)"
                       :src="aiTaskDisplayImageUrl(aiDetailTask)"
+                      :class="{ 'is-placeholder': isAiDetailShowingPlaceholder(aiDetailTask) }"
                       alt="生成图片详情预览"
                       @load="handleAiDetailImageLoad($event, aiDetailTask)"
+                      @error="handleAiDetailImageError(aiDetailTask)"
                       @click.stop="openAiDetailImageLightbox(aiDetailTask)"
                       @contextmenu.prevent.stop="openAiImageContextMenu($event, aiDetailTask)"
                     />
+                    <div v-if="isAiOriginalImageLoading(aiDetailTask)" class="ai-detail-image-status">正在加载原图…</div>
+                    <div v-else-if="aiOriginalImageErrorMessage(aiDetailTask)" class="ai-detail-image-status is-error">
+                      <p>{{ aiOriginalImageErrorMessage(aiDetailTask) }}</p>
+                      <button type="button" @click.stop="retryAiOriginalImageLoad(aiDetailTask)">重试</button>
+                    </div>
+                    <div v-else-if="!aiTaskDisplayImageUrl(aiDetailTask)" class="ai-detail-image-status is-error">
+                      <p>暂无可预览图片</p>
+                    </div>
                   </div>
                   <aside class="ai-detail-info">
                     <button type="button" class="ai-detail-close" aria-label="关闭详情" @click="closeAiDetailModal">×</button>
@@ -1264,14 +1282,14 @@
               </div>
             </teleport>
             <teleport to="body">
-              <div v-if="aiLightboxTask && aiTaskDisplayImageUrl(aiLightboxTask)" class="ai-lightbox" @click="closeAiLightbox" @wheel.prevent="handleAiLightboxWheel">
+              <div v-if="aiLightboxTask" class="ai-lightbox" @click="closeAiLightbox" @wheel.prevent="handleAiLightboxWheel">
                 <div class="ai-lightbox-backdrop"></div>
                 <div class="ai-lightbox-toolbar" @click.stop>
                   <span class="ai-lightbox-zoom">{{ aiLightboxZoomText }}</span>
                   <button type="button" aria-label="缩小图片" @click="zoomAiLightboxBy(1 / 1.25)"><span>−</span></button>
                   <button type="button" aria-label="放大图片" @click="zoomAiLightboxBy(1.25)"><span>+</span></button>
                   <button type="button" aria-label="适配窗口" @click="resetAiLightboxTransform"><span>适配</span></button>
-                  <button type="button" aria-label="下载图片" @click="downloadAiTask(aiLightboxTask)"><el-icon><Download /></el-icon></button>
+                  <button type="button" aria-label="下载图片" :disabled="!aiTaskCanDownload(aiLightboxTask)" @click="downloadAiTask(aiLightboxTask)"><el-icon><Download /></el-icon></button>
                   <button type="button" aria-label="关闭预览" @click="closeAiLightbox"><span>×</span></button>
                 </div>
                 <button v-if="aiLightboxTotal > 1" type="button" class="ai-lightbox-nav prev" aria-label="上一张" @click.stop="moveAiLightbox(-1)">‹</button>
@@ -1292,12 +1310,20 @@
                       <span>{{ aiTaskDisplayResolutionLabel(aiLightboxTask) }}</span>
                     </div>
                     <img
+                      v-if="aiTaskDisplayImageUrl(aiLightboxTask)"
                       :src="aiTaskDisplayImageUrl(aiLightboxTask)"
+                      :class="{ 'is-placeholder': isAiDetailShowingPlaceholder(aiLightboxTask) }"
                       alt="生成图片预览"
                       draggable="false"
                       @load="handleAiDetailImageLoad($event, aiLightboxTask)"
+                      @error="handleAiDetailImageError(aiLightboxTask)"
                       @contextmenu.prevent.stop="openAiImageContextMenu($event, aiLightboxTask)"
                     />
+                    <div v-if="isAiOriginalImageLoading(aiLightboxTask)" class="ai-detail-image-status">正在加载原图…</div>
+                    <div v-else-if="aiOriginalImageErrorMessage(aiLightboxTask)" class="ai-detail-image-status is-error">
+                      <p>{{ aiOriginalImageErrorMessage(aiLightboxTask) }}</p>
+                      <button type="button" @click.stop="retryAiOriginalImageLoad(aiLightboxTask)">重试</button>
+                    </div>
                   </figure>
                 </div>
                 <button v-if="aiLightboxTotal > 1" type="button" class="ai-lightbox-nav next" aria-label="下一张" @click.stop="moveAiLightbox(1)">›</button>
@@ -2121,6 +2147,16 @@
               <el-empty v-else description="暂无订单明细记录" />
             </section>
           </section>
+          <PricePlanGovernance
+            v-else-if="store.activeModuleId === 'pricePlanGovernance'"
+            :current-role="String(currentAdmin?.role || '')"
+            :current-permissions="currentPermissions"
+          />
+          <PersonalPointsGovernance
+            v-else-if="store.activeModuleId === 'personalPointsGovernance'"
+            :role="String(currentAdmin?.role || '')"
+            :permissions="currentPermissions"
+          />
           <BillingDomain v-else-if="billingModuleIds.includes(store.activeModuleId)" :module-id="store.activeModuleId" />
           <section v-else-if="store.activeModuleId === 'apiSettings'" class="api-settings-admin">
             <section class="api-settings-titlebar">
@@ -2514,11 +2550,11 @@
                 <div class="video-composer-input-row">
                   <div class="video-upload-actions">
                     <div class="video-upload-native">
-                      <input type="file" accept="image/*" @change="handleVideoImageFile" />
+                      <input type="file" accept="image/*" :multiple="videoReferenceLimit > 1" @change="handleVideoImageFile" />
                       <button
                         type="button"
                         :class="['video-circle-tool', { active: videoStudioMode === 'image' || Boolean(videoImagePreview) }]"
-                        :title="videoImagePreview ? '清除图片' : '上传图片生成视频'"
+                        :title="videoImagePreview ? `已选择 ${videoReferenceCount} 张，点击清除` : `最多上传 ${videoReferenceLimit} 张图片生成视频`"
                         @click="videoImagePreview ? clearVideoImageUpload() : undefined"
                       >
                         <img v-if="videoImagePreview" :src="videoImagePreview" alt="" />
@@ -2528,6 +2564,7 @@
                           <polyline points="21 15 16 10 5 21" />
                         </svg>
                       </button>
+                      <span v-if="videoReferenceCount > 1" class="video-reference-count">{{ videoReferenceCount }}</span>
                     </div>
                     <div class="video-upload-native">
                       <input type="file" accept="video/*" @change="handleVideoSourceFile" />
@@ -2660,6 +2697,7 @@
                       </div>
                     </div>
                     <button
+                      v-if="videoModelSupportsAudio"
                       type="button"
                       :class="['video-control-button', { active: videoGenerateAudio }]"
                       :title="videoGenerateAudio ? '配音已开启' : '配音已关闭'"
@@ -2685,6 +2723,9 @@
           </section>
           <section v-else-if="store.activeModuleId === 'userPptGeneration'" class="ppt-doc-shell">
             <PptDocumentGeneration />
+          </section>
+          <section v-else-if="store.activeModuleId === 'userSmartVideo'" class="smart-video-shell">
+            <SmartVideoWorkbench />
           </section>
           <ChannelGrowthDomain
             v-else-if="channelGrowthModuleIds.includes(store.activeModuleId)"
@@ -2714,6 +2755,7 @@
             :saving="store.saving"
             :toolbar-actions="toolbarActions"
             :row-actions="rowActions"
+            :role="String(currentAdmin?.role || '')"
             :permissions="currentPermissions"
             :column-labels="columnLabels"
             :status-filter-options="statusFilterOptions"
@@ -2726,7 +2768,7 @@
             @run-action="runAction"
             @batch-action="runBatchAction"
           />
-          <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
+          <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
         </section>
       </el-main>
     </el-container>
@@ -2734,8 +2776,11 @@
   <PlanEditorDialog
     v-model="planEditorOpen"
     :plan="editingPlan"
-    :saving="store.saving"
+    :gate="planEditorGate"
+    :saving="store.saving || planEditorSaving"
     @save="savePlanConfiguration"
+    @retry-gate="retryPlanEditorGate"
+    @managed-handoff="goToManagedPlanGovernance"
   />
   <GlobalCommandPalette v-if="isUserConsole || isAgentConsole" v-model:open="commandPaletteOpen" v-model:query="globalSearchKeyword" :module-results="globalModuleResults" :record-results="currentRecordResults" :business-results="globalBusinessResults" @select-module="openGlobalModuleResult" @select-record="openCurrentRecordResult" @select-business="openGlobalBusinessResult" />
   <div v-if="apiModelPickerOpen" class="api-model-picker-overlay" @click.self="closeApiModelPicker">
@@ -2808,7 +2853,7 @@ import { safeInternalRedirect, type ProtectedAction } from "@xianzhi/shared-auth
 import { ElMessage } from "element-plus/es/components/message/index";
 import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import type { ComponentSize } from "element-plus";
-import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
+import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Film, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
 import { adminRequest } from "./api/client";
 import type { GlobalSearchItem } from "./api/adminWorkspaces";
 import { downloadAssetBlob, fetchResourceBlob, uploadReferenceImage } from "./api/resources";
@@ -2840,6 +2885,17 @@ import {
 import { modulePermission, resolveModuleIdFromPath, resolveModulePath } from "./config/moduleRegistry";
 import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { useWebAuthStore, type WebAuthResponse } from "./stores/auth";
+import {
+  canAccessAdminModule,
+  legacyPlanSaveContextIsCurrent,
+  legacyPlanEditorAllowsIO,
+  managedPlanHandoff,
+  revalidateLegacyPlanEditorForSave,
+  resolveAuthorizedAdminModule,
+  resolveLegacyPlanEditorGate,
+  type LegacyPlanEditorGate
+} from "./domain/pricePlanGovernance.ts";
+import { hasAnyPersonalPointsAdminPermission } from "./domain/personalPointsAdmin.ts";
 import { type AiSettingsDraft, useAiSettingsStore } from "./stores/aiSettings";
 import {
   agentCenterMetrics,
@@ -2875,8 +2931,12 @@ import {
   videoInputImageUrlsFromTask,
   videoModeFromTask,
   videoModelId,
-  videoModelOptions,
-  videoModelParameterOptions,
+  videoModelMaxReferenceImages,
+  pickDefaultVideoModelOption,
+  videoModelOptionsFromPublicModels,
+  DEFAULT_VIDEO_MODEL_NAME,
+  videoModelParameterOption,
+  videoModelRequiresReferenceImage,
   videoNumberOrString,
   videoRatioOptions,
   videoResolutionOptions,
@@ -2886,10 +2946,12 @@ import {
   videoTaskUrl,
   videoToolOptions,
   type VideoHistoryEntry,
-  type VideoHistoryStatus
+  type VideoHistoryStatus,
+  type VideoModelOption
 } from "./utils/videoGeneration";
 import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
 import { isPersistentWebSession } from "./utils/webAuthSession";
+import { resolveSidebarPlanPoints } from "./utils/sidebarPlanPoints";
 
 function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
   ElMessage({
@@ -2904,9 +2966,15 @@ function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", mes
 
 const store = useAdminStore();
 const authStore = useWebAuthStore();
+async function loadPricePlanAdminStore() {
+  const { usePricePlanAdminStore } = await import("./stores/pricePlanAdmin.ts");
+  return usePricePlanAdminStore();
+}
 const AdminDataTable = defineAsyncComponent(() => import("./components/admin/AdminDataTable.vue"));
 const Customer360Center = defineAsyncComponent(() => import("./components/admin/Customer360Center.vue"));
+const PersonalPointsGovernance = defineAsyncComponent(() => import("./components/admin/PersonalPointsGovernance.vue"));
 const BillingDomain = defineAsyncComponent(() => import("./components/billing/BillingDomain.vue"));
+const PricePlanGovernance = defineAsyncComponent(() => import("./components/billing/price-plan-admin/PricePlanGovernance.vue"));
 const CustomerAttributionOverview = defineAsyncComponent(() => import("./components/attribution/CustomerAttributionOverview.vue"));
 const AiCapabilityDomain = defineAsyncComponent(() => import("./components/ai/AiCapabilityDomain.vue"));
 const EnterpriseManagement = defineAsyncComponent(() => import("./components/enterprise/EnterpriseManagement.vue"));
@@ -2922,10 +2990,27 @@ const PlanEditorDialog = defineAsyncComponent(() => import("./components/billing
 const StorageCenter = defineAsyncComponent(() => import("./components/storage/StorageCenter.vue"));
 const planEditorOpen = ref(false);
 const editingPlan = ref<AdminRecord | null>(null);
+const planEditorGate = ref<LegacyPlanEditorGate>({ status: "BLOCKED", planId: "", message: "尚未检查套餐托管状态。" });
+const planEditorSaving = ref(false);
+let planEditorGateSequence = 0;
+let planEditorSaveSequence = 0;
+watch(planEditorOpen, (visible) => {
+  if (visible) return;
+  planEditorGateSequence += 1;
+  planEditorSaveSequence += 1;
+  planEditorSaving.value = false;
+  editingPlan.value = null;
+  planEditorGate.value = { status: "BLOCKED", planId: "", message: "尚未检查套餐托管状态。" };
+});
 const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
 const PptDocumentGeneration = defineAsyncComponent({
   loader: () => import("./components/PptDocumentGeneration.vue"),
+  delay: 0,
+  suspensible: false
+});
+const SmartVideoWorkbench = defineAsyncComponent({
+  loader: () => import("./components/SmartVideoWorkbench.vue"),
   delay: 0,
   suspensible: false
 });
@@ -2984,8 +3069,10 @@ const statusFilterOptions = computed(() => {
 
 const videoStudioMode = ref("text");
 const videoPrompt = ref("");
-const selectedVideoModel = ref("Grok Image Video");
+const selectedVideoModel = ref(DEFAULT_VIDEO_MODEL_NAME);
 const videoModelSearch = ref("");
+const wiredVideoModelOptions = ref<VideoModelOption[]>([]);
+const videoModelOptions = computed(() => wiredVideoModelOptions.value);
 const videoDuration = ref(5);
 const videoRatio = ref("16:9");
 const videoResolution = ref("720p");
@@ -2993,7 +3080,8 @@ const videoGenerateAudio = ref(true);
 const videoSubmitting = ref(false);
 const videoResultTask = ref<AdminRecord | null>(null);
 const openVideoDropdown = ref<"" | "model" | "ratio" | "duration" | "resolution">("");
-const videoImagePreview = ref("");
+const videoImagePreviews = ref<string[]>([]);
+const videoImagePreview = computed(() => videoImagePreviews.value[0] || "");
 const videoSourcePreview = ref("");
 const videoHistory = ref<VideoHistoryEntry[]>([]);
 const videoHiddenHistoryIds = ref<string[]>([]);
@@ -3016,22 +3104,27 @@ let videoHistoryHydrated = false;
 let videoHistorySaveTimer: number | null = null;
 let videoInputDraftSaveTimer: number | null = null;
 let videoHistoryPollTimer: number | null = null;
-let videoImageObjectUrl = "";
+let videoImageObjectUrls: string[] = [];
 let videoSourceObjectUrl = "";
-let videoImageFile: File | null = null;
+let videoImageFiles: File[] = [];
 const filteredVideoModelOptions = computed(() => {
   const keyword = videoModelSearch.value.trim().toLowerCase();
-  if (!keyword) return videoModelOptions;
-  return videoModelOptions.filter((model) => `${model.name} ${model.desc}`.toLowerCase().includes(keyword));
+  const source = videoModelOptions.value;
+  if (!keyword) return source;
+  return source.filter((model) => `${model.name} ${model.desc}`.toLowerCase().includes(keyword));
 });
 const filteredVideoToolOptions = computed(() => {
   const keyword = videoModelSearch.value.trim().toLowerCase();
   if (!keyword) return videoToolOptions;
   return videoToolOptions.filter((tool) => `${tool.name} ${tool.desc}`.toLowerCase().includes(keyword));
 });
-const availableVideoDurationOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.durations ?? videoDurationOptions);
-const availableVideoRatioOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.ratios ?? videoRatioOptions);
-const availableVideoResolutionOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.resolutions ?? videoResolutionOptions);
+const selectedVideoModelParams = computed(() => videoModelParameterOption(selectedVideoModel.value));
+const availableVideoDurationOptions = computed(() => selectedVideoModelParams.value?.durations ?? videoDurationOptions);
+const availableVideoRatioOptions = computed(() => selectedVideoModelParams.value?.ratios ?? videoRatioOptions);
+const availableVideoResolutionOptions = computed(() => selectedVideoModelParams.value?.resolutions ?? videoResolutionOptions);
+const videoReferenceLimit = computed(() => videoModelMaxReferenceImages(selectedVideoModel.value));
+const videoReferenceCount = computed(() => videoImageFiles.length);
+const videoModelSupportsAudio = computed(() => selectedVideoModelParams.value?.supportsAudio === true);
 
 function syncVideoModelParameters() {
   const durations = availableVideoDurationOptions.value;
@@ -3067,7 +3160,7 @@ function normalizeVideoHistoryEntry(entry: Partial<VideoHistoryEntry> | null | u
     createdAt: entry.createdAt || new Date(timestamp).toISOString(),
     timestamp,
     status: entry.status || (entry.url ? "success" : "generating"),
-    errorMessage: entry.errorMessage ? String(entry.errorMessage) : "",
+    errorMessage: entry.errorMessage ? videoErrorMessage(entry.errorMessage) : "",
     userId: entry.userId ? String(entry.userId) : undefined
   };
 }
@@ -3253,18 +3346,18 @@ async function submitVideoGeneration() {
     ElMessage.error("请输入视频提示词");
     return false;
   }
-  if (videoImageFile && videoImagePreview.value) videoStudioMode.value = "image";
-  if (selectedVideoModel.value === "Grok Video 1.5" && !videoImageFile) {
-    ElMessage.error("Grok Video 1.5 必须上传 1 张参考图");
+  if (videoImageFiles.length && videoImagePreview.value) videoStudioMode.value = "image";
+  if (videoModelRequiresReferenceImage(selectedVideoModel.value) && videoImageFiles.length !== 1) {
+    ElMessage.error(`${selectedVideoModel.value} 必须上传 1 张参考图`);
     return false;
   }
-  if (videoStudioMode.value === "image" && !videoImageFile) {
+  if (videoStudioMode.value === "image" && !videoImageFiles.length) {
     ElMessage.error("请先上传 1 张参考图");
     return false;
   }
   if (!ensureWorkspaceAuth("generate_video", "userVideoGeneration")) return false;
   const clientRequestId = createGenerationClientRequestId("video");
-  let videoReferenceImageUrl = "";
+  let videoReferenceImageUrls: string[] = [];
   const snapshotId = `video-local-${Date.now()}`;
   const snapshotCreatedAt = new Date().toISOString();
   const snapshotMode: VideoHistoryEntry["mode"] = videoStudioMode.value === "image" ? "image-to-video" : videoStudioMode.value === "video" ? "video-to-video" : "text-to-video";
@@ -3277,7 +3370,7 @@ async function submitVideoGeneration() {
     aspect_ratio: videoRatio.value,
     duration: videoDuration.value,
     resolution: videoResolution.value,
-    inputImageUrls: videoImagePreview.value ? [videoImagePreview.value] : [],
+    inputImageUrls: [...videoImagePreviews.value],
     inputVideoUrl: videoSourcePreview.value,
     createdAt: snapshotCreatedAt,
     status: "generating",
@@ -3287,7 +3380,7 @@ async function submitVideoGeneration() {
   try {
     const type = videoStudioMode.value === "image" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
     if (type === "IMAGE_TO_VIDEO") {
-      videoReferenceImageUrl = await blobToDataUrl(videoImageFile as File);
+      videoReferenceImageUrls = await Promise.all(videoImageFiles.map(file => blobToDataUrl(file)));
     }
     const createdTask = await adminRequest<AdminRecord>({
       method: "POST",
@@ -3304,15 +3397,18 @@ async function submitVideoGeneration() {
           duration: videoDuration.value,
           ratio: videoRatio.value,
           resolution: videoResolution.value,
-          generate_audio: videoGenerateAudio.value,
-          generateAudio: videoGenerateAudio.value,
+          ...(videoModelSupportsAudio.value ? {
+            generate_audio: videoGenerateAudio.value,
+            generateAudio: videoGenerateAudio.value,
+          } : {}),
           sourceModule: "video-generation",
           inputMode: videoStudioMode.value,
           hasInputImage: Boolean(videoImagePreview.value),
           hasInputVideo: Boolean(videoSourcePreview.value),
-          ...(videoReferenceImageUrl ? {
-            image_urls: [videoReferenceImageUrl],
-            referenceImages: [{ name: videoImageFile?.name || "video-reference-image", url: videoReferenceImageUrl }]
+          ...(videoReferenceImageUrls.length ? {
+            first_frame: videoReferenceImageUrls[0],
+            image_urls: videoReferenceImageUrls,
+            referenceImages: videoReferenceImageUrls.map((url, index) => ({ name: videoImageFiles[index]?.name || `video-reference-image-${index + 1}`, url }))
           } : {})
         }
       }
@@ -3338,14 +3434,14 @@ async function submitVideoGeneration() {
       aspect_ratio: videoRatio.value,
       duration: videoDuration.value,
       resolution: videoResolution.value,
-      inputImageUrls: videoImagePreview.value ? [videoImagePreview.value] : [],
+      inputImageUrls: [...videoImagePreviews.value],
       inputVideoUrl: videoSourcePreview.value,
       createdAt: snapshotCreatedAt,
       status: "failed",
-      errorMessage: error instanceof Error ? error.message : "视频生成失败",
+      errorMessage: videoErrorMessage(error instanceof Error ? error.message : "视频生成失败"),
       userId: String(currentAdmin.value?.id || "")
     }, snapshotId);
-    ElMessage.error(error instanceof Error ? error.message : "视频生成失败");
+    ElMessage.error(videoErrorMessage(error instanceof Error ? error.message : "视频生成失败"));
     return false;
   } finally {
     videoSubmitting.value = false;
@@ -3548,14 +3644,17 @@ async function deleteVideoHistoryEntry(entry: VideoHistoryEntry) {
 
 function handleVideoImageFile(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
+  const files = Array.from(input.files || []);
   input.value = "";
-  if (!file) return;
+  if (!files.length) return;
   clearVideoImageUpload();
   videoStudioMode.value = "image";
-  videoImageFile = file;
-  videoImageObjectUrl = URL.createObjectURL(file);
-  videoImagePreview.value = videoImageObjectUrl;
+  videoImageFiles = files.slice(0, videoReferenceLimit.value);
+  videoImageObjectUrls = videoImageFiles.map(file => URL.createObjectURL(file));
+  videoImagePreviews.value = [...videoImageObjectUrls];
+  if (files.length > videoReferenceLimit.value) {
+    ElMessage.warning(`当前模型最多支持 ${videoReferenceLimit.value} 张参考图`);
+  }
 }
 
 function handleVideoSourceFile(event: Event) {
@@ -3570,11 +3669,21 @@ function handleVideoSourceFile(event: Event) {
 }
 
 function clearVideoImageUpload() {
-  if (videoImageObjectUrl) URL.revokeObjectURL(videoImageObjectUrl);
-  videoImageObjectUrl = "";
-  videoImageFile = null;
-  videoImagePreview.value = "";
+  for (const objectUrl of videoImageObjectUrls) URL.revokeObjectURL(objectUrl);
+  videoImageObjectUrls = [];
+  videoImageFiles = [];
+  videoImagePreviews.value = [];
   if (videoStudioMode.value === "image") videoStudioMode.value = videoSourcePreview.value ? "video" : "text";
+}
+
+function trimVideoImageUploadsToModelLimit() {
+  const limit = videoReferenceLimit.value;
+  if (videoImageFiles.length <= limit) return;
+  for (const objectUrl of videoImageObjectUrls.slice(limit)) URL.revokeObjectURL(objectUrl);
+  videoImageFiles = videoImageFiles.slice(0, limit);
+  videoImageObjectUrls = videoImageObjectUrls.slice(0, limit);
+  videoImagePreviews.value = videoImagePreviews.value.slice(0, limit);
+  ElMessage.warning(`当前模型最多支持 ${limit} 张参考图，已保留前 ${limit} 张`);
 }
 
 function clearVideoSourceUpload() {
@@ -3591,6 +3700,7 @@ function toggleVideoDropdown(type: "model" | "ratio" | "duration" | "resolution"
 function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", value: string | number) {
   if (type === "model") {
     selectedVideoModel.value = String(value);
+    trimVideoImageUploadsToModelLimit();
     videoStudioMode.value = videoImagePreview.value ? "image" : videoToolOptions.some((tool) => tool.name === value) ? "video" : "text";
     syncVideoModelParameters();
     openVideoDropdown.value = "";
@@ -3608,6 +3718,26 @@ function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", 
   }
   videoResolution.value = String(value);
   openVideoDropdown.value = "";
+}
+
+async function loadWiredVideoModelOptions() {
+  try {
+    const items = await adminRequest<Array<Record<string, unknown>>>({
+      url: "/models",
+      method: "GET",
+      authMode: "none"
+    });
+    const options = videoModelOptionsFromPublicModels(items || []);
+    wiredVideoModelOptions.value = options;
+    const isTool = videoToolOptions.some((tool) => tool.name === selectedVideoModel.value);
+    if (!isTool && options.length && !options.some((model) => model.name === selectedVideoModel.value)) {
+      selectedVideoModel.value = pickDefaultVideoModelOption(options)?.name || options[0].name;
+      trimVideoImageUploadsToModelLimit();
+    }
+    if (!isTool && options.length) syncVideoModelParameters();
+  } catch {
+    wiredVideoModelOptions.value = [];
+  }
 }
 
 const adminNavigationIcons: Record<AdminNavigationIconKey, Component> = {
@@ -3637,7 +3767,7 @@ const agentModuleGroups = [
 ];
 const userModuleGroups = [
   { id: "userHome", title: "用户后台", icon: House, items: modules.filter((item) => ["userDashboard"].includes(item.id)) },
-  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"].includes(item.id)) },
+  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userWorks"].includes(item.id)) },
   { id: "userOperationCenter", title: "运营中心", icon: Connection, items: modules.filter((item) => operationCenterModuleIds.includes(item.id)) },
   { id: "userBilling", title: "身份/充值/订阅", icon: Wallet, items: modules.filter((item) => ["userMembership"].includes(item.id)) },
   { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders"].includes(item.id)) }
@@ -3649,6 +3779,7 @@ const userFlatMenuDefs = [
   { id: "userVideoGeneration", targetId: "userVideoGeneration", title: "视频生成", icon: Monitor },
   { id: "userWirelessCanvas", targetId: "userWirelessCanvas", title: "无限画布", icon: Collection },
   { id: "userPptGeneration", targetId: "userPptGeneration", title: "PPT 文档生成", icon: Document },
+  { id: "userSmartVideo", targetId: "userSmartVideo", title: "AI 自动混剪", icon: Film },
   { id: "userAgentCenter", targetId: "userAgentCenter", title: "智能体中心", icon: Cpu },
   { id: "userWorks", targetId: "userWorks", title: "作品中心", icon: Collection },
   { id: "userMembership", targetId: "userMembership", title: "身份充值订阅", icon: Tickets },
@@ -3692,6 +3823,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userWirelessCanvas: { badge: "源码复刻", description: "直接承载 hero8152/Infinite-Canvas 智能画布源码，保留节点、资产库、工作流、快捷键、日志和底部生成器布局。" },
   userVideoGeneration: { badge: "视频生成", description: "参考 Open-Generative-AI Video Studio，提供文生视频、图生视频和基础参数的轻量生成入口。" },
   userPptGeneration: { badge: "PPT文档生成", description: "输入主题生成演示文稿，预留 Presenton 或自研 PPT 生成服务接入。" },
+  userSmartVideo: { badge: "AI自动混剪", description: "上传素材、生成可编辑分镜并导出成片。" },
   userWorks: { badge: "作品中心", description: "集中查看生成资产、缩略图、下载和编辑入口。" },
   userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
@@ -3879,6 +4011,7 @@ const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "海报 Agent", desc: "活动、节日、招商", icon: Collection, targetId: "userAiImage", mode: "agent", prompt: "设计一张高转化活动海报，突出标题、卖点和橙色 CTA。" },
   { title: "IP / 角色", desc: "角色设定、形象定制", icon: User, targetId: "userAiImage", mode: "image", prompt: "创建一个适合品牌传播的 IP 角色，风格年轻、干净、有记忆点。" },
   { title: "视频 Agent", desc: "短片、封面、分镜", icon: Monitor, targetId: "userVideoGeneration", mode: "video", prompt: "策划一条 15 秒产品短视频，包含镜头节奏、画面风格和字幕建议。" },
+  { title: "自动混剪", desc: "素材分析、分镜、成片", icon: Film, targetId: "userSmartVideo", mode: "video", prompt: "用门店实拍素材剪一条 15 秒开业短视频，旁白口语化，字幕简洁。" },
   { title: "PPT Agent", desc: "提纲、页面、配图", icon: Document, targetId: "userPptGeneration", mode: "ppt", prompt: "生成一份商业计划书 PPT，包含封面、目录、市场、产品和财务页。" },
   { title: "商品图 Agent", desc: "白底图、场景图", icon: Goods, targetId: "userAiImage", mode: "image", prompt: "为产品生成一组干净白底主图和浅色高级场景图。" },
   { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
@@ -4115,6 +4248,7 @@ const userHomeTemplates: UserHomeEntry[] = [
   { title: "商品主图", desc: "电商主图、白底图", targetId: "userAiImage", mode: "image", coverClass: "is-product-main", coverText: "PRODUCT" },
   { title: "详情长图", desc: "产品详情、长图文案", targetId: "userAiImage", mode: "image", coverClass: "is-detail", coverText: "DETAIL" },
   { title: "短视频封面", desc: "爆款封面、吸睛标题", targetId: "userVideoGeneration", mode: "video", coverClass: "is-video", coverText: "PLAY" },
+  { title: "AI 自动混剪", desc: "上传素材一键成片", targetId: "userSmartVideo", mode: "video", coverClass: "is-video", coverText: "MONTAGE" },
   { title: "PPT 文档", desc: "汇报、演示、课件", targetId: "userPptGeneration", mode: "ppt", coverClass: "is-doc", coverText: "BUSINESS PLAN" },
   { title: "朋友圈海报", desc: "节日、日签、营销海报", targetId: "userAiImage", mode: "image", coverClass: "is-moments", coverText: "Good Morning" },
   { title: "企业宣传图", desc: "企业介绍、宣传物料", targetId: "userAiImage", mode: "image", coverClass: "is-corporate", coverText: "COMPANY" }
@@ -4224,6 +4358,8 @@ const aiReferenceImages = ref<AiReferenceImage[]>([]);
 const aiDetailTaskId = ref("");
 const aiDetailImageMeta = ref<Record<string, { width: number; height: number }>>({});
 const aiOriginalImageCache = ref<Record<string, string>>({});
+const aiOriginalImageLoadState = ref<Record<string, "idle" | "loading" | "ready" | "error">>({});
+const aiOriginalImageLoadError = ref<Record<string, string>>({});
 const aiRawUrlsTaskId = ref("");
 const aiRawResponseTaskId = ref("");
 const aiLightboxTaskId = ref("");
@@ -4262,6 +4398,7 @@ let aiImageDraftHydrated = false;
 let aiImageDraftSaveTimer: ReturnType<typeof window.setTimeout> | null = null;
 let aiTaskLongPressTimer: ReturnType<typeof window.setTimeout> | null = null;
 const aiOriginalImageCachePending = new Set<string>();
+const aiOriginalImageCacheWaiters = new Map<string, Promise<boolean>>();
 let aiLightboxPointerStart: { id: number; x: number; y: number; baseX: number; baseY: number; moved: boolean; startedAt: number } | null = null;
 let aiLightboxPinchStart: { distance: number; scale: number; tx: number; ty: number; midX: number; midY: number } | null = null;
 let aiLightboxLastTap = { time: 0, x: 0, y: 0 };
@@ -4509,6 +4646,71 @@ const onlineRecentTasks = computed<AdminRecord[]>(() => {
   return [...pendingTasks, ...serverTasks];
 });
 const onlineImageTasks = computed<AdminRecord[]>(() => onlineRecentTasks.value.filter((task) => !isVideoGenerationTask(task)));
+
+function isMontageWorkAsset(asset: AdminRecord) {
+  const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
+  const type = String(metadata.type || asset.type || asset.sourceType || "").toUpperCase();
+  const mediaType = String(asset.mediaType || metadata.mediaType || "").toLowerCase();
+  const name = String(asset.name || "");
+  const taskId = String(asset.taskId || metadata.renderTaskId || "");
+  if (type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE") return true;
+  if (mediaType === "video" && type.includes("MONTAGE")) return true;
+  if (mediaType === "video" && (name.includes("混剪") || taskId.startsWith("svrender_"))) return true;
+  return false;
+}
+
+function isVideoWorkAsset(asset: AdminRecord) {
+  const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
+  const mediaType = String(asset.mediaType || metadata.mediaType || "").toLowerCase();
+  if (mediaType === "video") return true;
+  return isMontageWorkAsset(asset);
+}
+
+function isMontageWorkCard(task: AdminRecord) {
+  const type = String(task.type || task.sourceType || "").toUpperCase();
+  return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE" || Boolean(task.montageWork);
+}
+
+function montageAssetToWorkCard(asset: AdminRecord): AdminRecord {
+  const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
+  const url = String(asset.url || "");
+  const thumb = String(asset.thumbnailUrl || url);
+  const montage = isMontageWorkAsset(asset);
+  return {
+    id: asset.id,
+    name: asset.name || (montage ? "AI自动混剪成片" : "视频作品"),
+    status: "SUCCEEDED",
+    mediaType: asset.mediaType || "video",
+    type: metadata.type || (montage ? "SMART_VIDEO_MONTAGE" : "VIDEO_ASSET"),
+    montageWork: true,
+    outputUrl: url,
+    resultUrl: url,
+    imageUrl: url,
+    thumbnailUrl: thumb,
+    pointCost: Number(metadata.pointCost || metadata.capturedPoints || 0),
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt || asset.createdAt,
+    prompt: montage ? "AI自动混剪成片" : String(asset.name || "视频作品"),
+    model: montage ? "AI自动混剪" : String(metadata.model || asset.model || "视频"),
+    taskId: asset.taskId,
+    resultIds: asset.id ? [asset.id] : [],
+    width: metadata.width,
+    height: metadata.height
+  };
+}
+
+const montageWorkCards = computed<AdminRecord[]>(() => {
+  const seen = new Set<string>();
+  return onlineAssets.value
+    .filter((asset) => isVideoWorkAsset(asset))
+    .map((asset) => montageAssetToWorkCard(asset))
+    .filter((card) => {
+      const id = aiTaskId(card);
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+});
 const onlineRecentTasksVideoSignature = computed(() => onlineRecentTasks.value.map((task) => [
   String(task.id || ""),
   String(task.status || ""),
@@ -4822,7 +5024,7 @@ watch(
   () => syncOnlineProviderForModel()
 );
 const onlinePreviewTask = computed(() => onlineImageTasks.value.find((task) => String(task.status || "").toUpperCase() === "SUCCEEDED") || onlineImageTasks.value[0]);
-const onlinePreviewImage = computed(() => onlinePreviewTask.value ? aiTaskImageUrl(onlinePreviewTask.value) : "");
+const onlinePreviewImage = computed(() => onlinePreviewTask.value ? aiTaskDisplayImageUrl(onlinePreviewTask.value) : "");
 const imageWorkspaceTitle = computed(() => {
   return "AI Image Playground";
 });
@@ -4837,7 +5039,37 @@ const onlineHistoryItems = computed(() => onlineImageTasks.value.slice(0, 8));
 const userWorkCards = computed(() => {
   const keyword = worksSearchKeyword.value.trim().toLowerCase();
   const statusFilter = worksStatusFilter.value;
-  const source = worksSourceTab.value === "official" ? publicOfficialCases.value : onlineImageTasks.value;
+  const montageFromTasks = onlineRecentTasks.value
+    .filter((task) => {
+      const type = String(task.type || task.sourceType || "").toUpperCase();
+      return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE";
+    })
+    .map((task): AdminRecord => {
+      const resultId = Array.isArray(task.resultIds) ? String(task.resultIds[0] || "") : "";
+      const linkedAsset = resultId
+        ? onlineAssets.value.find((asset) => String(asset.id || "") === resultId)
+        : undefined;
+      const url = String(task.outputUrl || task.resultUrl || task.imageUrl || linkedAsset?.url || "");
+      const thumb = String(task.thumbnailUrl || linkedAsset?.thumbnailUrl || url);
+      return {
+        ...task,
+        name: task.name || task.prompt || "AI自动混剪成片",
+        mediaType: task.mediaType || "video",
+        montageWork: true,
+        outputUrl: url,
+        resultUrl: url,
+        imageUrl: url,
+        thumbnailUrl: thumb
+      };
+    });
+  const seen = new Set<string>();
+  const mineSource: AdminRecord[] = [...montageWorkCards.value, ...montageFromTasks, ...onlineImageTasks.value].filter((task) => {
+    const id = aiTaskId(task);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  const source = worksSourceTab.value === "official" ? publicOfficialCases.value : mineSource;
   return source
     .filter((task) => {
       const taskId = aiTaskId(task);
@@ -4863,12 +5095,12 @@ const userWorkSummaryCards = computed(() => {
       { label: "作品同步", value: isGuestUser.value ? "未登录" : "已开启", hint: "不会公开你的私人作品" }
     ];
   }
-  const total = onlineImageTasks.value.filter((task) => !aiHiddenTaskIds.value.includes(aiTaskId(task))).length;
-  const done = onlineImageTasks.value.filter(isAiTaskSucceeded).length;
+  const total = [...montageWorkCards.value, ...onlineImageTasks.value].filter((task) => !aiHiddenTaskIds.value.includes(aiTaskId(task))).length;
+  const done = [...montageWorkCards.value, ...onlineImageTasks.value].filter(isAiTaskSucceeded).length;
   const favorites = onlineImageTasks.value.filter(isAiTaskFavorite).length;
-  const points = onlineImageTasks.value.reduce((sum, task) => sum + Number(task.pointCost || 0), 0);
+  const points = [...montageWorkCards.value, ...onlineImageTasks.value].reduce((sum, task) => sum + Number(task.pointCost || 0), 0);
   return [
-    { label: "全部作品", value: String(total), hint: "含图片任务与收藏记录" },
+    { label: "全部作品", value: String(total), hint: "含生图与混剪成片" },
     { label: "已完成", value: String(done), hint: "可预览、下载、复用" },
     { label: "收藏作品", value: String(favorites), hint: "已加入收藏夹" },
     { label: "消耗点数", value: formatNumber(points), hint: "按当前任务汇总" }
@@ -5303,7 +5535,9 @@ function aiTaskAsset(task: AdminRecord) {
   return onlineAssets.value.find((item) => {
     const assetId = String(item.id || "");
     const assetTaskId = String(item.taskId || "");
-    return (taskId && assetTaskId === taskId) || (assetId && resultIds.includes(assetId));
+    return (taskId && assetId === taskId)
+      || (taskId && assetTaskId === taskId)
+      || (assetId && resultIds.includes(assetId));
   });
 }
 
@@ -5339,6 +5573,30 @@ function aiTaskOriginalCacheId(task: AdminRecord) {
   return String(asset?.id || task.id || task.resultUrl || task.outputUrl || task.imageUrl || "");
 }
 
+function isBrowserReachableMediaUrl(url: string) {
+  const value = String(url || "").trim();
+  if (!value) return false;
+  if (value.startsWith("data:") || value.startsWith("blob:") || value.startsWith("/")) return true;
+  try {
+    const parsed = new URL(value, typeof window !== "undefined" ? window.location.origin : "https://local.invalid");
+    const host = parsed.hostname.toLowerCase();
+    if (!host || host === "minio" || host === "localhost" || host === "127.0.0.1" || host.endsWith(".internal") || host.endsWith(".local")) {
+      return false;
+    }
+    // Docker service hostnames (e.g. minio) have no dot and are not browser-reachable.
+    if (!host.includes(".")) return false;
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (ipv4) {
+      const a = Number(ipv4[1]);
+      const b = Number(ipv4[2]);
+      if (a === 10 || a === 127 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function aiTaskImageUrl(task: AdminRecord) {
   const directUrl = String(task.outputUrl || task.resultUrl || task.imageUrl || "");
   if (directUrl) return directUrl;
@@ -5372,9 +5630,80 @@ function markAiTaskThumbnailFailed(task: AdminRecord) {
   aiBrokenThumbnailKeys.value = [...aiBrokenThumbnailKeys.value, key];
 }
 
+function aiTaskAssetId(task: AdminRecord) {
+  return String(aiTaskAsset(task)?.id || "");
+}
+
+function aiTaskCanDownload(task: AdminRecord) {
+  return Boolean(aiTaskAssetId(task) || aiTaskImageUrl(task));
+}
+
+function aiTaskSafePlaceholderUrl(task: AdminRecord) {
+  const thumbUrl = aiTaskThumbnailUrl(task);
+  return isBrowserReachableMediaUrl(thumbUrl) ? thumbUrl : "";
+}
+
 function aiTaskDisplayImageUrl(task: AdminRecord) {
   const cacheId = aiTaskOriginalCacheId(task);
-  return (cacheId && aiOriginalImageCache.value[cacheId]) || aiTaskImageUrl(task);
+  const cached = cacheId ? aiOriginalImageCache.value[cacheId] : "";
+  if (cached) return cached;
+  // 有 assetId 时绝不把内网 MinIO 签名 URL 直接塞进 <img src>，优先缩略图占位。
+  if (aiTaskAssetId(task)) return aiTaskSafePlaceholderUrl(task);
+  const fullUrl = aiTaskImageUrl(task);
+  if (isBrowserReachableMediaUrl(fullUrl)) return fullUrl;
+  return aiTaskSafePlaceholderUrl(task);
+}
+
+function isAiDetailShowingPlaceholder(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (cacheId && aiOriginalImageCache.value[cacheId]) return false;
+  const display = aiTaskDisplayImageUrl(task);
+  const direct = aiTaskImageUrl(task);
+  return Boolean(display && display !== direct);
+}
+
+function isAiOriginalImageLoading(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!cacheId || aiOriginalImageCache.value[cacheId]) return false;
+  return aiOriginalImageLoadState.value[cacheId] === "loading" || aiOriginalImageCachePending.has(cacheId);
+}
+
+function aiOriginalImageErrorMessage(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!cacheId || aiOriginalImageCache.value[cacheId]) return "";
+  if (aiOriginalImageLoadState.value[cacheId] !== "error") return "";
+  return aiOriginalImageLoadError.value[cacheId] || "原图加载失败，请稍后重试";
+}
+
+function setAiOriginalImageLoadState(cacheId: string, state: "idle" | "loading" | "ready" | "error", message = "") {
+  if (!cacheId) return;
+  aiOriginalImageLoadState.value = { ...aiOriginalImageLoadState.value, [cacheId]: state };
+  if (state === "error") {
+    aiOriginalImageLoadError.value = { ...aiOriginalImageLoadError.value, [cacheId]: message || "原图加载失败，请稍后重试" };
+    return;
+  }
+  if (aiOriginalImageLoadError.value[cacheId]) {
+    const next = { ...aiOriginalImageLoadError.value };
+    delete next[cacheId];
+    aiOriginalImageLoadError.value = next;
+  }
+}
+
+function handleAiDetailImageError(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (!cacheId || aiOriginalImageCache.value[cacheId] || isAiOriginalImageLoading(task)) return;
+  setAiOriginalImageLoadState(cacheId, "error", "图片预览失败，请重试加载原图");
+}
+
+async function retryAiOriginalImageLoad(task: AdminRecord) {
+  const cacheId = aiTaskOriginalCacheId(task);
+  if (cacheId) {
+    aiOriginalImageCacheWaiters.delete(cacheId);
+    aiOriginalImageCachePending.delete(cacheId);
+    setAiOriginalImageLoadState(cacheId, "loading");
+  }
+  const ok = await ensureAiOriginalImageCached(task, { force: true });
+  if (!ok) ElMessage.error(aiOriginalImageErrorMessage(task) || "原图加载失败");
 }
 
 function aiTaskRawImageUrls(task: AdminRecord) {
@@ -5440,40 +5769,65 @@ function blobToDataUrl(blob: Blob) {
 }
 
 async function fetchAiOriginalImageDataUrl(task: AdminRecord) {
-  const asset = aiTaskAsset(task);
-  const assetId = String(asset?.id || "");
+  const assetId = aiTaskAssetId(task);
   const directUrl = aiTaskImageUrl(task);
+  if (assetId) {
+    const blob = await downloadAssetBlob(assetId);
+    return blobToDataUrl(blob);
+  }
   if (!directUrl) return "";
   if (directUrl.startsWith("data:image/")) return directUrl;
-  let blob: Blob;
-  if (assetId) {
-    blob = await downloadAssetBlob(assetId);
-  } else {
-    blob = await fetchResourceBlob(directUrl, { auth: false });
+  if (!isBrowserReachableMediaUrl(directUrl)) {
+    throw new Error("原图地址浏览器不可达，且缺少可鉴权下载的作品 ID");
   }
+  const blob = await fetchResourceBlob(directUrl, { auth: directUrl.startsWith("/") });
   return blobToDataUrl(blob);
 }
 
-async function ensureAiOriginalImageCached(task: AdminRecord) {
+async function ensureAiOriginalImageCached(task: AdminRecord, options: { force?: boolean } = {}) {
   const cacheId = aiTaskOriginalCacheId(task);
-  if (!cacheId || aiOriginalImageCache.value[cacheId] || aiOriginalImageCachePending.has(cacheId)) return;
-  aiOriginalImageCachePending.add(cacheId);
-  try {
-    const sourceUrl = aiTaskImageUrl(task);
-    const cached = await readCachedOriginalImage(cacheId);
-    if (cached?.dataUrl && cached.version === 2 && cached.sourceUrl === sourceUrl) {
-      aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: cached.dataUrl };
-      return;
-    }
-    const dataUrl = await fetchAiOriginalImageDataUrl(task);
-    if (!dataUrl) return;
-    aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: dataUrl };
-    await writeCachedOriginalImage({ id: cacheId, dataUrl, sourceUrl, version: 2 });
-  } catch (error) {
-    console.warn("AI original image cache skipped", error);
-  } finally {
-    aiOriginalImageCachePending.delete(cacheId);
+  if (!cacheId) return false;
+  if (!options.force && aiOriginalImageCache.value[cacheId]) {
+    setAiOriginalImageLoadState(cacheId, "ready");
+    return true;
   }
+  const existing = aiOriginalImageCacheWaiters.get(cacheId);
+  if (existing && !options.force) return existing;
+
+  const run = (async () => {
+    setAiOriginalImageLoadState(cacheId, "loading");
+    aiOriginalImageCachePending.add(cacheId);
+    try {
+      const sourceUrl = aiTaskImageUrl(task);
+      if (!options.force) {
+        const cached = await readCachedOriginalImage(cacheId);
+        if (cached?.dataUrl && cached.version === 2 && cached.sourceUrl === sourceUrl) {
+          aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: cached.dataUrl };
+          setAiOriginalImageLoadState(cacheId, "ready");
+          return true;
+        }
+      }
+      const dataUrl = await fetchAiOriginalImageDataUrl(task);
+      if (!dataUrl) {
+        setAiOriginalImageLoadState(cacheId, "error", "未获取到原图数据");
+        return false;
+      }
+      aiOriginalImageCache.value = { ...aiOriginalImageCache.value, [cacheId]: dataUrl };
+      setAiOriginalImageLoadState(cacheId, "ready");
+      await writeCachedOriginalImage({ id: cacheId, dataUrl, sourceUrl, version: 2 });
+      return true;
+    } catch (error) {
+      console.warn("AI original image cache skipped", error);
+      setAiOriginalImageLoadState(cacheId, "error", error instanceof Error ? error.message : "原图加载失败，请稍后重试");
+      return false;
+    } finally {
+      aiOriginalImageCachePending.delete(cacheId);
+      aiOriginalImageCacheWaiters.delete(cacheId);
+    }
+  })();
+
+  aiOriginalImageCacheWaiters.set(cacheId, run);
+  return run;
 }
 
 function prefetchAiOriginalImage(task: AdminRecord) {
@@ -5643,10 +5997,12 @@ function aiTaskModelLabel(task: AdminRecord) {
 
 function aiTaskErrorMessage(task: AdminRecord) {
   const failureReason = String(task.failureReason || task.failure_reason || "").trim();
-  if (failureReason) return failureReason;
+  if (failureReason) return videoErrorMessage(failureReason);
   const error = task.error;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) return String((error as { message?: unknown }).message || "生成失败");
+  if (typeof error === "string") return videoErrorMessage(error);
+  if (error && typeof error === "object" && "message" in error) {
+    return videoErrorMessage(String((error as { message?: unknown }).message || "生成失败"));
+  }
   return "生成失败，可复用配置后重试";
 }
 
@@ -6409,6 +6765,11 @@ function reuseAiTask(task: AdminRecord, options: { notify?: boolean } = {}) {
 }
 
 function reuseUserWorkTask(task: AdminRecord) {
+  if (isMontageWorkCard(task)) {
+    ElMessage.success("已打开 AI 自动混剪");
+    void selectAdminModule("userSmartVideo");
+    return;
+  }
   reuseAiTask(task);
   void selectAdminModule("userAiImage");
 }
@@ -6429,11 +6790,21 @@ function normalizeAiImageQuality(value: unknown) {
 }
 
 function previewAiTask(task: AdminRecord) {
+  if (isMontageWorkCard(task)) {
+    const videoUrl = aiTaskImageUrl(task);
+    if (videoUrl && isBrowserReachableMediaUrl(videoUrl)) {
+      window.open(videoUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    ElMessage.warning("成片地址暂不可用，请尝试下载");
+    return;
+  }
   const imageUrl = aiTaskImageUrl(task);
-  if (imageUrl) {
+  const placeholder = aiTaskSafePlaceholderUrl(task);
+  if (imageUrl || placeholder) {
     aiDetailTaskId.value = aiTaskId(task);
-    void ensureAiOriginalImageCached(task);
     closeAiImageContextMenu();
+    void ensureAiOriginalImageCached(task);
     return;
   }
   reuseAiTask(task);
@@ -6445,7 +6816,7 @@ function closeAiDetailModal() {
 }
 
 function openAiDetailImageLightbox(task: AdminRecord) {
-  if (!aiTaskImageUrl(task)) return;
+  if (!aiTaskImageUrl(task) && !aiTaskDisplayImageUrl(task)) return;
   aiLightboxTaskId.value = aiTaskId(task);
   void ensureAiOriginalImageCached(task);
   resetAiLightboxTransform();
@@ -6836,15 +7207,33 @@ async function downloadAiTask(task?: AdminRecord) {
     return;
   }
   const imageUrl = aiTaskImageUrl(target);
-  if (!imageUrl) {
-    ElMessage.warning("当前任务还没有生成图片");
+  const assetId = aiTaskAssetId(target);
+  if (!imageUrl && !assetId) {
+    ElMessage.warning(isMontageWorkCard(target) ? "当前任务还没有生成成片" : "当前任务还没有生成图片");
     return;
   }
-  if (!ensureWorkspaceAuth("download_work", "userAiImage", { mediaKind: "image", taskId: aiTaskId(target) })) return;
-  const fileName = `ai-image-${aiTaskId(target) || Date.now()}.png`;
+  if (!ensureWorkspaceAuth("download_work", isMontageWorkCard(target) ? "userWorks" : "userAiImage", {
+    mediaKind: isMontageWorkCard(target) ? "video" : "image",
+    taskId: aiTaskId(target)
+  })) return;
+  const fileName = isMontageWorkCard(target)
+    ? `ai-montage-${aiTaskId(target) || Date.now()}.mp4`
+    : `ai-image-${aiTaskId(target) || Date.now()}.png`;
   try {
-    const assetId = String(aiTaskAsset(target)?.id || "");
-    await downloadUrl(imageUrl, fileName, assetId);
+    if (assetId) {
+      await downloadUrl(imageUrl || assetId, fileName, assetId);
+    } else {
+      const cached = aiOriginalImageCache.value[aiTaskOriginalCacheId(target)];
+      if (cached?.startsWith("data:")) {
+        await downloadUrl(cached, fileName);
+      } else if (imageUrl && isBrowserReachableMediaUrl(imageUrl)) {
+        await downloadUrl(imageUrl, fileName);
+      } else {
+        const dataUrl = await fetchAiOriginalImageDataUrl(target);
+        if (!dataUrl) throw new Error("未获取到可下载的原图");
+        await downloadUrl(dataUrl, fileName);
+      }
+    }
     ElMessage.success("已开始下载");
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "下载失败，请稍后重试");
@@ -7438,18 +7827,16 @@ const sidebarPlan = computed(() => {
   const summary = (store.data?.summary || {}) as Record<string, unknown>;
   const account = (userAccountSnapshot.value || store.data?.account || {}) as Record<string, unknown>;
   const planId = String(currentAdmin.value?.planId || summary.planId || "plan_year");
-  const rawAvailable = Number(account.available ?? summary.availablePoints ?? summary.pointsAvailable ?? store.data?.availablePoints ?? store.data?.pointsAvailable ?? 0);
-  const rawTotal = Number(account.total ?? summary.totalPoints ?? summary.pointsTotal ?? 0);
+  const points = resolveSidebarPlanPoints({ account, summary, moduleData: store.data });
   const planNameMap: Record<string, string> = { plan_free: "体验版", plan_month: "Basic", plan_pro: "Pro", plan_year: "Ultimate", plan_enterprise: "企业版" };
-  const total = Math.max(rawAvailable + Number(account.frozen || 0), rawTotal || rawAvailable);
   const expiresAt = String(currentAdmin.value?.subscriptionExpiresAt || summary.subscriptionExpiresAt || "2026-07-19").slice(0, 10);
   return {
     name: planNameMap[planId] || "Ultimate",
     status: "使用中",
     expiresAt,
-    availableText: formatNumber(rawAvailable),
-    totalText: formatNumber(total),
-    percent: Math.min(100, Math.max(4, Math.round((rawAvailable / Math.max(1, total)) * 100)))
+    availableText: formatNumber(points.available),
+    totalText: formatNumber(points.total),
+    percent: points.percent
   };
 });
 const currentAdmin = ref<AdminUser | null>(null);
@@ -7462,9 +7849,25 @@ const canViewEnterpriseManagement = computed(() => {
 });
 function canNavigateToModule(moduleId: string) {
   const permission = modulePermission(moduleId);
-  if (!permission) return true;
-  const role = String(currentAdmin.value?.role || "").toUpperCase();
-  return role === "SUPER_ADMIN" || currentPermissions.value.includes("admin.full") || currentPermissions.value.includes(permission);
+  return canAccessAdminModule({
+    role: String(currentAdmin.value?.role || ""),
+    permissions: currentPermissions.value
+  }, permission);
+}
+function authorizedAdminModuleId(requestedModuleId: string, fallbackModuleId = defaultOpenTabIds[0]) {
+  return resolveAuthorizedAdminModule({
+    requestedModuleId,
+    fallbackModuleId,
+    allowedModuleIds,
+    modulePermissions: {
+      [requestedModuleId]: modulePermission(requestedModuleId),
+      [fallbackModuleId]: modulePermission(fallbackModuleId)
+    },
+    principal: {
+      role: String(currentAdmin.value?.role || ""),
+      permissions: currentPermissions.value
+    }
+  });
 }
 const hasAgentIdentity = computed(() => {
   return currentPermissions.value.some((permission) => String(permission).startsWith("agent:"));
@@ -7862,7 +8265,7 @@ const isGuestUser = computed(() => {
   void authSessionVersion.value;
   return isUserConsole.value && !hasAuthToken();
 });
-const guestVisibleModuleIds = new Set(["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"]);
+const guestVisibleModuleIds = new Set(["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userWorks"]);
 const workspaceGuestDraftKey = "zhiqiyun.pc.workspace.pending-draft.v1";
 function openWorkspaceLogin() {
   authStore.openLogin({ redirectUrl: currentWorkspaceRoute() });
@@ -7909,6 +8312,7 @@ function applyWorkspaceDraft(draft: Record<string, unknown>) {
   if (typeof draft.videoDuration === "number") videoDuration.value = draft.videoDuration;
   if (typeof draft.videoRatio === "string") videoRatio.value = draft.videoRatio;
   if (typeof draft.videoResolution === "string") videoResolution.value = draft.videoResolution;
+  syncVideoModelParameters();
   if (typeof draft.videoGenerateAudio === "boolean") videoGenerateAudio.value = draft.videoGenerateAudio;
   if (typeof draft.rechargeAmount === "number") selectedRechargeAmount.value = draft.rechargeAmount;
   if (typeof draft.customRechargeAmount === "string") customRechargeAmount.value = draft.customRechargeAmount;
@@ -7979,6 +8383,8 @@ async function loadGuestPublicCases() {
 async function openMyWorks() {
   if (!ensureWorkspaceAuth("save_work", "userWorks", { openMine: true })) return;
   worksSourceTab.value = "mine";
+  worksStatusFilter.value = "all";
+  worksSearchKeyword.value = "";
   await store.loadActiveModule({ preferCache: false });
 }
 
@@ -7988,8 +8394,21 @@ async function refreshWorksCenter() {
     await loadGuestPublicCases();
     return;
   }
+  worksSourceTab.value = "mine";
   await store.loadActiveModule({ preferCache: false });
 }
+
+watch(
+  () => [store.activeModuleId, store.pendingWorksSourceTab] as const,
+  ([moduleId, pendingTab]) => {
+    if (moduleId !== "userWorks" || isGuestUser.value || !pendingTab) return;
+    worksSourceTab.value = pendingTab === "official" ? "official" : "mine";
+    worksStatusFilter.value = "all";
+    worksSearchKeyword.value = "";
+    store.pendingWorksSourceTab = "";
+    syncAdminModulePath("userWorks");
+  },
+);
 const authPath = ref(typeof window !== "undefined" ? window.location.pathname.replace(/\/$/, "") || "/" : "");
 const authConsolePrefix = computed(() => authPath.value.startsWith("/agent") ? "/agent" : authPath.value.startsWith("/admin") ? "/admin" : "");
 const authLoginHref = computed(() => `${authConsolePrefix.value}/login` || "/login");
@@ -8067,6 +8486,15 @@ function syncAdminModulePath(moduleId: string) {
   if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = nextPath;
 }
 
+function replaceAdminModulePath(moduleId: string) {
+  if (typeof window === "undefined" || isUserConsole.value || isAgentConsole.value) return;
+  const enterpriseId = window.location.pathname.match(/^\/admin\/enterprises\/([^/]+)/)?.[1];
+  const nextPath = resolveModulePath(moduleId, { enterpriseId });
+  if (!nextPath || window.location.pathname.replace(/\/$/, "") === nextPath) return;
+  window.history.replaceState({}, "", nextPath);
+  if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = nextPath;
+}
+
 async function navigateEnterpriseRoute(payload: { path: string; moduleId: string }) {
   if (typeof window !== "undefined") {
     const current = `${window.location.pathname}${window.location.search}`;
@@ -8081,9 +8509,17 @@ function handleAdminEnterpriseHistoryPopState() {
   const moduleId = resolveModuleIdFromPath(canonicalUserConsolePath(window.location.pathname));
   if (!moduleId) return;
   if (!allowedModuleIds.includes(moduleId)) return;
-  if (enterpriseModuleIds.includes(moduleId)) enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
-  ensureOpenTab(moduleId);
-  void store.selectModule(moduleId);
+  const authorizedModuleId = isUserConsole.value || isAgentConsole.value
+    ? moduleId
+    : authorizedAdminModuleId(moduleId);
+  if (!authorizedModuleId) return;
+  if (authorizedModuleId !== moduleId) {
+    replaceAdminModulePath(authorizedModuleId);
+    ElMessage.warning("当前角色没有访问该模块的权限，已返回可访问页面");
+  } else if (enterpriseModuleIds.includes(moduleId)) {
+    enterpriseRoutePath.value = `${window.location.pathname}${window.location.search}`;
+  }
+  void selectAdminModule(authorizedModuleId);
 }
 
 function initialActiveModuleId() {
@@ -8164,6 +8600,28 @@ function resolveOpenTabs() {
 
 const openTabs = ref(resolveOpenTabs());
 
+function pruneUnauthorizedAdminTabs() {
+  if (isUserConsole.value || isAgentConsole.value) return;
+  openTabs.value = openTabs.value.filter((tab) => allowedModuleIds.includes(tab.id) && canNavigateToModule(tab.id));
+  const fallbackModuleId = authorizedAdminModuleId(store.activeModuleId);
+  if (fallbackModuleId) ensureOpenTab(fallbackModuleId);
+}
+
+function enforceActiveAdminModuleAccess() {
+  if (isUserConsole.value || isAgentConsole.value) return true;
+  const requestedModuleId = store.activeModuleId;
+  const authorizedModuleId = authorizedAdminModuleId(requestedModuleId);
+  if (!authorizedModuleId) return false;
+  pruneUnauthorizedAdminTabs();
+  ensureOpenTab(authorizedModuleId);
+  if (authorizedModuleId !== requestedModuleId) {
+    store.activeModuleId = authorizedModuleId;
+    if (typeof window !== "undefined") window.localStorage.setItem(activeTabStorageKey, authorizedModuleId);
+    replaceAdminModulePath(authorizedModuleId);
+  }
+  return true;
+}
+
 const iconMap = {
   enterpriseList: Goods,
   enterpriseDetail: Goods,
@@ -8238,6 +8696,7 @@ const iconMap = {
   userWirelessCanvas: Collection,
   userVideoGeneration: Monitor,
   userPptGeneration: Document,
+  userSmartVideo: Film,
   userWorks: Collection,
   userUsage: DataAnalysis,
   userMembership: Tickets,
@@ -9761,7 +10220,7 @@ const visibleModuleGroups = computed(() => {
   return adminModuleGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => !item.requiresEnterpriseManagement || canViewEnterpriseManagement.value)
+      items: group.items.filter((item) => (!item.requiresEnterpriseManagement || canViewEnterpriseManagement.value) && canNavigateToModule(item.id))
     }))
     .filter((group) => group.items.length > 0);
 });
@@ -9795,6 +10254,7 @@ function scrollOpenTabs(direction: -1 | 1) {
 
 function ensureOpenTab(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
+  if (!canNavigateToModule(moduleId)) return;
   if (agentModuleIds.includes(moduleId) && !hasAgentIdentity.value) return;
   if (operationCenterModuleIds.includes(moduleId) && !hasOperationCenterIdentity.value) return;
   const module = modules.find((item) => item.id === moduleId);
@@ -9858,11 +10318,19 @@ async function selectAdminModule(moduleId: string) {
     store.activeModuleId = moduleId;
     store.data = {};
     store.error = "";
-    if (["userAiImage", "userVideoGeneration", "userPptGeneration", "userAgentCenter", "userWirelessCanvas"].includes(moduleId)) {
+    if (["userAiImage", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userAgentCenter", "userWirelessCanvas"].includes(moduleId)) {
       trackWebGuestExperience("guest_open_creator", moduleId, { module: moduleId });
     }
   } else {
     await store.selectModule(moduleId);
+  }
+  if (moduleId === "userWorks" && !isGuestUser.value) {
+    const pendingTab = store.pendingWorksSourceTab;
+    store.pendingWorksSourceTab = "";
+    worksSourceTab.value = pendingTab === "official" ? "official" : "mine";
+    worksStatusFilter.value = "all";
+    worksSearchKeyword.value = "";
+    await store.loadActiveModule({ preferCache: false });
   }
   trackAdminExperience("MODULE_VIEW", moduleId, "", { fromModuleId: previousModuleId });
 }
@@ -9889,15 +10357,14 @@ function isDefaultTab(moduleId: string) {
 }
 
 async function activateTabAfterPrune(preferredId = store.activeModuleId) {
+  if (!isUserConsole.value && !isAgentConsole.value) pruneUnauthorizedAdminTabs();
   if (!openTabs.value.length) {
-    openTabs.value = modules.filter((item) => defaultOpenTabIds.includes(item.id));
+    openTabs.value = modules.filter((item) => defaultOpenTabIds.includes(item.id) && canNavigateToModule(item.id));
   }
-  const next = openTabs.value.find((item) => item.id === preferredId) || openTabs.value[0];
+  const next = openTabs.value.find((item) => item.id === preferredId && canNavigateToModule(item.id))
+    || openTabs.value.find((item) => canNavigateToModule(item.id));
   if (!next) return;
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(activeTabStorageKey, next.id);
-  }
-  await store.selectModule(next.id);
+  await selectAdminModule(next.id);
 }
 
 async function closeOtherTabs() {
@@ -9942,10 +10409,7 @@ async function closeOpenTab(moduleId: string) {
   openTabs.value = openTabs.value.filter((item) => item.id !== moduleId);
   if (closingActive) {
     const next = openTabs.value[Math.max(0, index - 1)] || openTabs.value[0];
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(activeTabStorageKey, next.id);
-    }
-    await store.selectModule(next.id);
+    if (next) await selectAdminModule(next.id);
   }
 }
 
@@ -10431,6 +10895,11 @@ async function createAIModel() {
 async function editAIModel(row: AdminRecord) {
   const isCreate = !row.id;
   const existingModelType = aiText(row, "model_type", "modelType") || "image";
+  const existingVideoCapabilities = aiObject(row, "video_capabilities", "videoCapabilities");
+  const videoCapabilityBoolean = (key: string, fallback: boolean) =>
+    Object.prototype.hasOwnProperty.call(existingVideoCapabilities, key)
+      ? Boolean(existingVideoCapabilities[key])
+      : fallback;
   const form = {
     modelName: aiText(row, "model_name", "modelName"),
     modelType: existingModelType,
@@ -10454,6 +10923,14 @@ async function editAIModel(row: AdminRecord) {
     miniprogramEnabled: Boolean(aiValue(row, "miniprogram_enabled")),
     complianceRemark: aiText(row, "compliance_remark"),
     modelVersion: aiText(row, "model_version"),
+    videoSupportsTextToVideo: videoCapabilityBoolean("supports_text_to_video", true),
+    videoSupportsImageToVideo: videoCapabilityBoolean("supports_image_to_video", false),
+    videoSupportsFirstFrame: videoCapabilityBoolean("supports_first_frame", false),
+    videoSupportsLastFrame: videoCapabilityBoolean("supports_last_frame", false),
+    videoMaxReferenceImages: String(Number(existingVideoCapabilities.max_reference_images || 0)),
+    videoSupportedDurations: aiList(existingVideoCapabilities, "supported_durations").join(","),
+    videoSupportedResolutions: aiList(existingVideoCapabilities, "supported_resolutions").join(","),
+    videoSupportedAspectRatios: aiList(existingVideoCapabilities, "supported_aspect_ratios").join(","),
     status: String(row.status || "ACTIVE")
   };
   const field = (label: string, key: keyof typeof form, placeholder = "") => h("label", { class: "channel-dialog-field" }, [
@@ -10476,6 +10953,16 @@ async function editAIModel(row: AdminRecord) {
         (form[key] as string) = (event.target as HTMLSelectElement).value;
       }
     }, options.map((option) => h("option", { value: option.value }, option.label)))
+  ]);
+  const checkbox = (label: string, key: keyof typeof form) => h("label", { class: "channel-dialog-check" }, [
+    h("input", {
+      type: "checkbox",
+      checked: Boolean(form[key]),
+      onChange: (event: Event) => {
+        (form[key] as boolean) = (event.target as HTMLInputElement).checked;
+      }
+    }),
+    h("span", null, label)
   ]);
   if (!form.channelId && form.modelName) {
     const matchedChannel = aiChannels.value.find(channel => aiList(channel, "models").some(modelName => modelName.toLowerCase() === form.modelName.toLowerCase()));
@@ -10533,6 +11020,15 @@ async function editAIModel(row: AdminRecord) {
       field("允许能力", "allowedCapabilities", "text,image,video"),
       field("模型版本", "modelVersion"),
       field("合规备注", "complianceRemark"),
+      h("div", { class: "channel-dialog-section-title" }, "视频生成能力（仅视频模型生效）"),
+      checkbox("支持文生视频", "videoSupportsTextToVideo"),
+      checkbox("支持图生视频", "videoSupportsImageToVideo"),
+      checkbox("支持首帧图", "videoSupportsFirstFrame"),
+      checkbox("支持尾帧图", "videoSupportsLastFrame"),
+      field("视频输入图片上限", "videoMaxReferenceImages", "文生视频为 0，首帧为 1，首尾帧为 2"),
+      field("支持时长（秒）", "videoSupportedDurations", "例如 5,10,15"),
+      field("支持分辨率", "videoSupportedResolutions", "例如 720p,1080p"),
+      field("支持画面比例", "videoSupportedAspectRatios", "例如 16:9,9:16,1:1"),
       select("状态", "status", [
         { label: "启用", value: "ACTIVE" },
         { label: "停用", value: "DISABLED" }
@@ -10568,6 +11064,29 @@ async function editAIModel(row: AdminRecord) {
       if (!Number.isFinite(sortWeight) || sortWeight <= 0) {
         ElMessage.error("排序权重必须是大于 0 的数字");
         return;
+      }
+      const isVideoModel = form.moduleCode === "video_generation" || form.modelType === "video";
+      const videoMaxReferenceImages = Number(form.videoMaxReferenceImages);
+      const videoSupportedDurations = uniqueNonEmptyStrings(form.videoSupportedDurations.split(/[,，]/))
+        .map(value => Number(value))
+        .filter(value => Number.isInteger(value) && value > 0);
+      if (isVideoModel) {
+        if (!form.videoSupportsTextToVideo && !form.videoSupportsImageToVideo) {
+          ElMessage.error("视频模型至少需要支持文生视频或图生视频");
+          return;
+        }
+        if (form.videoSupportsImageToVideo && (!form.videoSupportsFirstFrame || videoMaxReferenceImages < 1)) {
+          ElMessage.error("图生视频必须支持首帧图，且视频输入图片上限至少为 1");
+          return;
+        }
+        if (form.videoSupportsLastFrame && (!form.videoSupportsImageToVideo || videoMaxReferenceImages < 2)) {
+          ElMessage.error("尾帧图仅能用于图生视频，且图片上限至少为 2");
+          return;
+        }
+        if (!Number.isInteger(videoMaxReferenceImages) || videoMaxReferenceImages < 0 || videoMaxReferenceImages > 2) {
+          ElMessage.error("视频输入图片上限只能是 0、1 或 2");
+          return;
+        }
       }
       const selectedChannel = aiChannels.value.find(channel => String(channel.id || "") === form.channelId);
       if (selectedChannel && !aiList(selectedChannel, "models").some(item => item.toLowerCase() === modelName.toLowerCase())) {
@@ -10621,7 +11140,17 @@ async function editAIModel(row: AdminRecord) {
           allowed_capabilities: uniqueNonEmptyStrings(form.allowedCapabilities.split(/[,，]/)),
           miniprogram_enabled: form.miniprogramEnabled,
           compliance_remark: form.complianceRemark.trim(),
-          model_version: form.modelVersion.trim()
+          model_version: form.modelVersion.trim(),
+          video_capabilities: isVideoModel ? {
+            supports_text_to_video: form.videoSupportsTextToVideo,
+            supports_image_to_video: form.videoSupportsImageToVideo,
+            supports_first_frame: form.videoSupportsFirstFrame,
+            supports_last_frame: form.videoSupportsLastFrame,
+            max_reference_images: videoMaxReferenceImages,
+            supported_durations: videoSupportedDurations,
+            supported_resolutions: uniqueNonEmptyStrings(form.videoSupportedResolutions.split(/[,，]/)),
+            supported_aspect_ratios: uniqueNonEmptyStrings(form.videoSupportedAspectRatios.split(/[,，]/))
+          } : undefined
         };
         if (isCreate) {
           await store.mutate("POST", "/admin/ai/models", payload);
@@ -12850,18 +13379,88 @@ function apiChannelMutationPayload(channel: AdminRecord) {
   };
 }
 
-function openPlanEditor(row: AdminRecord) {
+async function openPlanEditor(row: AdminRecord) {
+  if (planEditorSaving.value) {
+    ElMessage.warning("套餐配置正在保存，请等待当前操作完成");
+    return;
+  }
+  const planId = String(row.id || "").trim();
   editingPlan.value = { ...row };
   planEditorOpen.value = true;
+  await checkPlanEditorGate(planId);
+}
+
+async function checkPlanEditorGate(planId: string) {
+  planEditorGate.value = { status: "CHECKING", planId, message: "正在确认套餐是否由 V2 配置托管。" };
+  const requestSequence = ++planEditorGateSequence;
+  const gate = await resolveLegacyPlanEditorGate(planId, async (lookupPlanId: string) => {
+    const pricingAdminStore = await loadPricePlanAdminStore();
+    return { item: await pricingAdminStore.loadBusinessPlan(lookupPlanId) };
+  });
+  if (requestSequence !== planEditorGateSequence) return;
+  planEditorGate.value = gate;
+}
+
+function retryPlanEditorGate() {
+  const planId = String(editingPlan.value?.id || "").trim();
+  if (planId) void checkPlanEditorGate(planId);
+}
+
+async function goToManagedPlanGovernance() {
+  const target = managedPlanHandoff(planEditorGate.value);
+  if (!target) return;
+  const pricingAdminStore = await loadPricePlanAdminStore();
+  const currentTarget = managedPlanHandoff(planEditorGate.value);
+  if (!currentTarget || currentTarget.planId !== target.planId || currentTarget.moduleId !== target.moduleId) return;
+  pricingAdminStore.setSelection(target.planId);
+  planEditorOpen.value = false;
+  editingPlan.value = null;
+  await selectAdminModule(target.moduleId);
 }
 
 async function savePlanConfiguration(payload: AdminRecord) {
+  if (planEditorSaving.value) return;
   const planId = String(editingPlan.value?.id || "");
   if (!planId) {
     ElMessage.error("套餐 ID 不存在");
     return;
   }
+  if (!legacyPlanEditorAllowsIO(planEditorGate.value.status) || planEditorGate.value.planId !== planId) {
+    planEditorOpen.value = false;
+    planEditorGate.value = {
+      status: "BLOCKED",
+      planId,
+      message: "套餐托管状态未通过安全检查，旧编辑器已阻止保存。"
+    };
+    planEditorOpen.value = true;
+    ElMessage.error("套餐托管状态未通过安全检查，已阻止保存");
+    return;
+  }
+  const saveSequence = ++planEditorSaveSequence;
+  planEditorSaving.value = true;
   try {
+    const openedGate = planEditorGate.value;
+    planEditorGate.value = { status: "CHECKING", planId, message: "保存前正在重新确认套餐托管状态。" };
+    const verifiedGate = await revalidateLegacyPlanEditorForSave(openedGate, planId, async (lookupPlanId: string) => {
+      const pricingAdminStore = await loadPricePlanAdminStore();
+      return { item: await pricingAdminStore.loadBusinessPlan(lookupPlanId) };
+    });
+    if (saveSequence !== planEditorSaveSequence || !planEditorOpen.value || String(editingPlan.value?.id || "") !== planId) return;
+    planEditorGate.value = verifiedGate;
+    if (!legacyPlanEditorAllowsIO(verifiedGate.status) || verifiedGate.planId !== planId) {
+      ElMessage.error(verifiedGate.status === "MANAGED"
+        ? "该套餐已转为 V2 托管，旧编辑器已阻止保存"
+        : "无法确认套餐托管状态，旧编辑器已阻止保存");
+      return;
+    }
+    if (!legacyPlanSaveContextIsCurrent({
+      saveSequence,
+      currentSequence: planEditorSaveSequence,
+      dialogOpen: planEditorOpen.value,
+      expectedPlanId: planId,
+      currentPlanId: String(editingPlan.value?.id || ""),
+      gate: planEditorGate.value
+    })) return;
     const planPayload = payload.plan && typeof payload.plan === "object" ? payload.plan as AdminRecord : payload;
     const capabilitiesPayload = payload.capabilities && typeof payload.capabilities === "object"
       ? payload.capabilities as AdminRecord
@@ -12872,7 +13471,11 @@ async function savePlanConfiguration(payload: AdminRecord) {
     editingPlan.value = null;
     ElMessage.success("套餐配置已保存并立即生效");
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : "套餐保存失败");
+    if (saveSequence === planEditorSaveSequence) {
+      ElMessage.error(error instanceof Error ? error.message : "套餐保存失败");
+    }
+  } finally {
+    if (saveSequence === planEditorSaveSequence) planEditorSaving.value = false;
   }
 }
 
@@ -12925,7 +13528,7 @@ async function runAction(action: string, row: AdminRecord = {}) {
       const name = await ask("产品名称", String(row.name || ""));
       await store.mutate("PATCH", `/admin/products/${row.id}`, { name, type: row.type, status, entitlements: Array.isArray(row.entitlements) ? row.entitlements : [] });
     } else if (action === "editPlan") {
-      openPlanEditor(row);
+      await openPlanEditor(row);
       return;
     } else if (action === "createOrder") {
       const userId = await ask("客户 userId", "user_000002");
@@ -13312,13 +13915,20 @@ async function loadCurrentAdmin() {
       return false;
     }
     const platformAdminRoles = ["SUPER_ADMIN", "ENTERPRISE_OPERATOR", "CERTIFICATION_REVIEWER", "FINANCE", "RISK_MANAGER", "CUSTOMER_SERVICE"];
-    const isPlatformAdmin = role.includes("ADMIN") || platformAdminRoles.includes(role) || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:"));
+    const isPlatformAdmin = role.includes("ADMIN")
+      || platformAdminRoles.includes(role)
+      || currentPermissions.value.some((permission) => String(permission).startsWith("enterprise:") || String(permission).startsWith("pricing:"))
+      || hasAnyPersonalPointsAdminPermission(currentPermissions.value);
     if (!isAgentConsole.value && !isUserConsole.value && !isPlatformAdmin && !role.startsWith("AGENT")) {
       window.location.href = "/";
       return false;
     }
     if (!isAgentConsole.value && !isUserConsole.value && role.startsWith("AGENT")) {
       window.location.href = "/agent/";
+      return false;
+    }
+    if (!enforceActiveAdminModuleAccess()) {
+      ElMessage.error("当前账号没有可访问的后台模块");
       return false;
     }
     authReady.value = true;
@@ -13448,6 +14058,7 @@ onMounted(async () => {
     window.addEventListener("resize", adjustVideoPromptHeight);
   }
   await authStore.initializeAuth();
+  void loadWiredVideoModelOptions();
   if (!authStore.isAuthenticated && isUserConsole.value) {
     trackWebGuestExperience("guest_open_app", store.activeModuleId || "userDashboard", { route: currentWorkspaceRoute() });
     trackWebGuestExperience("guest_view_home", "userDashboard", { route: currentWorkspaceRoute() });
@@ -13466,6 +14077,7 @@ onMounted(async () => {
       const routeModuleId = moduleIdFromLocationPath();
       const savedActiveTab = window.localStorage.getItem(activeTabStorageKey);
       const canUseModule = (moduleId: string) => allowedModuleIds.includes(moduleId)
+        && canNavigateToModule(moduleId)
         && (!isGuestUser.value || guestVisibleModuleIds.has(moduleId))
         && (!agentModuleIds.includes(moduleId) || hasAgentIdentity.value)
         && (!operationCenterModuleIds.includes(moduleId) || hasOperationCenterIdentity.value);
@@ -14515,6 +15127,13 @@ onMounted(async () => {
   min-height: 260px;
   color: #667085;
   text-align: center;
+}
+
+.user-works-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
 }
 
 .user-works-empty strong {

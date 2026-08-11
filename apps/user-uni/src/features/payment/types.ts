@@ -50,6 +50,20 @@ export interface VirtualPaymentOrderParams {
   mode: string
 }
 
+export interface PricePlanQuote {
+  quoteId: string
+  planId: string
+  planVersionId: string
+  pricePlanId: string
+  name: string
+  amountCent: number
+  originalAmountCent: number
+  environment: 'PRODUCTION' | 'SANDBOX' | string
+  expiresAt: string
+  entitlements: Record<string, unknown>
+  testOnly: boolean
+}
+
 export interface VirtualPaymentOrderStatus {
   orderNo: string
   orderStatus: string

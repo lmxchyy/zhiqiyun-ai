@@ -71,7 +71,9 @@ def _image_items(image_urls):
     items = []
     if not isinstance(image_urls, list):
         return items
-    for url in image_urls:
+    if len(image_urls) > 2:
+        raise ValueError("video frame image count must not exceed 2")
+    for index, url in enumerate(image_urls):
         text = _text(url)
         if not text:
             continue
@@ -79,7 +81,7 @@ def _image_items(image_urls):
             {
                 "type": "image_url",
                 "image_url": {"url": text},
-                "role": "reference_image",
+                "role": "first_frame" if index == 0 else "last_frame",
             }
         )
     return items
@@ -140,7 +142,20 @@ def main() -> int:
     _quiet_call(client.set_video_file_encrypt_key, str(public_key_path), str(private_key_path))
 
     content = [{"type": "text", "text": prompt}]
-    content.extend(_image_items(req.get("imageUrls")))
+    first_frame = _text(req.get("firstFrame"))
+    last_frame = _text(req.get("lastFrame"))
+    if first_frame:
+        content.extend(_image_items([first_frame]))
+    if last_frame:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": last_frame},
+                "role": "last_frame",
+            }
+        )
+    if not first_frame and not last_frame:
+        content.extend(_image_items(req.get("imageUrls")))
     request_data = {
         "content": content,
         "generate_audio": generate_audio,

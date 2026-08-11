@@ -1,0 +1,4 @@
+ table_name | conname | contype | convalidated 
+------------+---------+---------+--------------
+(0 rows)
+

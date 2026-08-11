@@ -180,7 +180,8 @@ export interface AgentInvitePoster {
 }
 
 export interface PromotionReferral {
-  inviteCode: string;
+  inviteCode?: string;
+  inviteToken?: string;
   templateId: PromotionTemplateId;
   activityId: string;
   source: string;

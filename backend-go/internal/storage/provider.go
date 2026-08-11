@@ -21,6 +21,10 @@ type Provider interface {
 	CopyObject(context.Context, string, string) error
 	CreatePresignedUploadURL(context.Context, string, string, time.Duration) (string, error)
 	CreatePresignedDownloadURL(context.Context, string, time.Duration) (string, error)
+	CreateMultipartUpload(context.Context, string, string) (string, error)
+	PresignUploadPart(context.Context, string, string, int, time.Duration) (string, error)
+	CompleteMultipartUpload(context.Context, string, string, []CompletedPart) (ObjectMetadata, error)
+	AbortMultipartUpload(context.Context, string, string) error
 	TestConnection(context.Context) error
 }
 
@@ -189,6 +193,64 @@ func (p *s3Provider) CreatePresignedDownloadURL(ctx context.Context, objectKey s
 		return "", err
 	}
 	return signed.String(), nil
+}
+
+func (p *s3Provider) CreateMultipartUpload(ctx context.Context, objectKey, contentType string) (string, error) {
+	if err := p.ensureBucket(ctx); err != nil {
+		return "", err
+	}
+	opts := minio.PutObjectOptions{}
+	if strings.TrimSpace(contentType) != "" {
+		opts.ContentType = contentType
+	}
+	uploadID, err := minio.Core{Client: p.client}.NewMultipartUpload(ctx, p.bucket, objectKey, opts)
+	if err != nil {
+		return "", err
+	}
+	return uploadID, nil
+}
+
+func (p *s3Provider) PresignUploadPart(ctx context.Context, objectKey, uploadID string, partNumber int, ttl time.Duration) (string, error) {
+	if err := p.ensureBucket(ctx); err != nil {
+		return "", err
+	}
+	if partNumber < 1 {
+		return "", fmt.Errorf("%w: invalid part number", ErrInvalidMultipartPart)
+	}
+	params := url.Values{}
+	params.Set("uploadId", uploadID)
+	params.Set("partNumber", fmt.Sprintf("%d", partNumber))
+	signed, err := p.signer.Presign(ctx, http.MethodPut, p.bucket, objectKey, ttl, params)
+	if err != nil {
+		return "", err
+	}
+	return signed.String(), nil
+}
+
+func (p *s3Provider) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []CompletedPart) (ObjectMetadata, error) {
+	if err := p.ensureBucket(ctx); err != nil {
+		return ObjectMetadata{}, err
+	}
+	completeParts := make([]minio.CompletePart, 0, len(parts))
+	for _, part := range parts {
+		completeParts = append(completeParts, minio.CompletePart{
+			PartNumber: part.PartNumber,
+			ETag:       strings.Trim(part.ETag, `"`),
+		})
+	}
+	info, err := minio.Core{Client: p.client}.CompleteMultipartUpload(ctx, p.bucket, objectKey, uploadID, completeParts, minio.PutObjectOptions{})
+	if err != nil {
+		return ObjectMetadata{}, err
+	}
+	meta, headErr := p.HeadObject(ctx, objectKey)
+	if headErr == nil {
+		return meta, nil
+	}
+	return ObjectMetadata{Size: info.Size, ETag: info.ETag}, nil
+}
+
+func (p *s3Provider) AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
+	return minio.Core{Client: p.client}.AbortMultipartUpload(ctx, p.bucket, objectKey, uploadID)
 }
 
 func (p *s3Provider) TestConnection(ctx context.Context) error {

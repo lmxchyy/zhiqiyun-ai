@@ -44,8 +44,8 @@ export const promotionAPI = {
   analytics: (days = 7) => api<PromotionAnalytics>(`/api/v1/promotion/analytics?days=${days}`),
   shareCopy: (templateId: PromotionTemplateId) => api<PromotionShareCopy>(`/api/v1/promotion/share-copy?templateId=${encodeURIComponent(templateId)}`),
   renderConfig: (templateId: PromotionTemplateId, activityId = "") => api<Record<string, unknown>>("/api/v1/promotion/poster/render", { method: "POST", body: JSON.stringify({ templateId, activityId }) }),
-  visit: (input: { inviteCode: string; templateId: PromotionTemplateId; activityId?: string; source?: string }) => api("/api/v1/promotion/visit", { method: "POST", body: JSON.stringify(input) }),
-  bind: (input: { inviteCode: string; templateId: PromotionTemplateId; activityId?: string; source?: string }) => api("/api/v1/promotion/bind", { method: "POST", body: JSON.stringify(input) }),
+  visit: (input: { inviteCode?: string; inviteToken?: string; templateId: PromotionTemplateId; activityId?: string; source?: string }) => api("/api/v1/promotion/visit", { method: "POST", body: JSON.stringify(input) }),
+  bind: (input: { inviteCode?: string; inviteToken?: string; templateId: PromotionTemplateId; activityId?: string; source?: string }) => api("/api/v1/promotion/bind", { method: "POST", body: JSON.stringify(input) }),
   agentInviteProfile: () => api<AgentInviteProfile>("/api/v1/agent/invite/profile"),
   agentPoster: () => api<AgentInvitePoster>("/api/v1/agent/invite/poster", { method: "POST", body: JSON.stringify({}) }),
 };

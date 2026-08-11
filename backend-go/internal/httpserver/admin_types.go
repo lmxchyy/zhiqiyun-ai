@@ -19,6 +19,8 @@ type adminPlatformData struct {
 	ProviderCosts          []providerCost           `json:"providerCosts,omitempty"`
 	BillingLifecycleEvents []billingLifecycleEvent  `json:"billingLifecycleEvents,omitempty"`
 	WalletLedger           []walletLedgerEntry      `json:"walletLedger,omitempty"`
+	PersonalPoints         personalPointState       `json:"personalPoints,omitempty"`
+	PersonalPointImport    personalPointImportState `json:"personalPointImport,omitempty"`
 	Withdrawals            []adminWithdrawal        `json:"withdrawals"`
 	Presentations          []adminPresentation      `json:"presentations"`
 	Agents                 []adminAgent             `json:"agents"`
@@ -511,12 +513,13 @@ type adminPlanMutation struct {
 }
 
 type adminOrderMutation struct {
-	UserID         string `json:"userId"`
-	PlanID         string `json:"planId"`
-	AmountCents    int    `json:"amountCents"`
-	Status         string `json:"status"`
-	PaymentMethod  string `json:"paymentMethod"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	UserID             string `json:"userId"`
+	PlanID             string `json:"planId"`
+	AmountCents        int    `json:"amountCents"`
+	Status             string `json:"status"`
+	PaymentMethod      string `json:"paymentMethod"`
+	IdempotencyKey     string `json:"idempotencyKey"`
+	PaymentEnvironment string `json:"-"`
 }
 
 type adminDeliveryMutation struct {
@@ -612,41 +615,42 @@ type adminAIModule struct {
 }
 
 type adminAIModel struct {
-	ID                       string     `json:"id"`
-	ModelName                string     `json:"model_name"`
-	ModelNameCamel           string     `json:"modelName,omitempty"`
-	ModelType                string     `json:"model_type"`
-	ModelTypeCamel           string     `json:"modelType,omitempty"`
-	Provider                 string     `json:"provider"`
-	ChannelID                string     `json:"channel_id,omitempty"`
-	ChannelIDCamel           string     `json:"channelId,omitempty"`
-	CapabilityCode           []string   `json:"capability_code"`
-	CapabilityCodeCamel      []string   `json:"capabilityCode,omitempty"`
-	ModuleCode               string     `json:"module_code"`
-	ModuleCodeCamel          string     `json:"moduleCode,omitempty"`
-	Status                   string     `json:"status"`
-	FallbackModel            string     `json:"fallback_model"`
-	FallbackModelCamel       string     `json:"fallbackModel,omitempty"`
-	SortWeight               int        `json:"sort_weight"`
-	SortWeightCamel          int        `json:"sortWeight,omitempty"`
-	AllowFallbackSwitch      bool       `json:"allow_fallback_switch"`
-	AllowFallbackSwitchCamel bool       `json:"allowFallbackSwitch,omitempty"`
-	CreatedAt                string     `json:"created_at,omitempty"`
-	UpdatedAt                string     `json:"updated_at,omitempty"`
-	ProviderName             string     `json:"provider_name,omitempty"`
-	ProviderCompany          string     `json:"provider_company,omitempty"`
-	AlgorithmName            string     `json:"algorithm_name,omitempty"`
-	AlgorithmFilingNo        string     `json:"algorithm_filing_no,omitempty"`
-	AlgorithmType            string     `json:"algorithm_type,omitempty"`
-	ContractStatus           string     `json:"contract_status,omitempty"`
-	ContractExpireAt         string     `json:"contract_expire_at,omitempty"`
-	ComplianceStatus         string     `json:"compliance_status,omitempty"`
-	AllowedTerminals         []string   `json:"allowed_terminals,omitempty"`
-	AllowedCapabilities      []string   `json:"allowed_capabilities,omitempty"`
-	MiniProgramEnabled       bool       `json:"miniprogram_enabled"`
-	ComplianceRemark         string     `json:"compliance_remark,omitempty"`
-	ModelVersion             string     `json:"model_version,omitempty"`
-	VideoCapabilities        *videoCaps `json:"video_capabilities,omitempty"`
+	ID                       string   `json:"id"`
+	ModelName                string   `json:"model_name"`
+	ModelNameCamel           string   `json:"modelName,omitempty"`
+	ModelType                string   `json:"model_type"`
+	ModelTypeCamel           string   `json:"modelType,omitempty"`
+	Provider                 string   `json:"provider"`
+	ChannelID                string   `json:"channel_id,omitempty"`
+	ChannelIDCamel           string   `json:"channelId,omitempty"`
+	CapabilityCode           []string `json:"capability_code"`
+	CapabilityCodeCamel      []string `json:"capabilityCode,omitempty"`
+	ModuleCode               string   `json:"module_code"`
+	ModuleCodeCamel          string   `json:"moduleCode,omitempty"`
+	Status                   string   `json:"status"`
+	FallbackModel            string   `json:"fallback_model"`
+	FallbackModelCamel       string   `json:"fallbackModel,omitempty"`
+	SortWeight               int      `json:"sort_weight"`
+	SortWeightCamel          int      `json:"sortWeight,omitempty"`
+	AllowFallbackSwitch      bool     `json:"allow_fallback_switch"`
+	AllowFallbackSwitchCamel bool     `json:"allowFallbackSwitch,omitempty"`
+	CreatedAt                string   `json:"created_at,omitempty"`
+	UpdatedAt                string   `json:"updated_at,omitempty"`
+	ProviderName             string   `json:"provider_name,omitempty"`
+	ProviderCompany          string   `json:"provider_company,omitempty"`
+	AlgorithmName            string   `json:"algorithm_name,omitempty"`
+	AlgorithmFilingNo        string   `json:"algorithm_filing_no,omitempty"`
+	AlgorithmType            string   `json:"algorithm_type,omitempty"`
+	ContractStatus           string   `json:"contract_status,omitempty"`
+	ContractExpireAt         string   `json:"contract_expire_at,omitempty"`
+	ComplianceStatus         string   `json:"compliance_status,omitempty"`
+	AllowedTerminals         []string `json:"allowed_terminals,omitempty"`
+	AllowedCapabilities      []string `json:"allowed_capabilities,omitempty"`
+	MiniProgramEnabled       bool     `json:"miniprogram_enabled"`
+	ComplianceRemark         string   `json:"compliance_remark,omitempty"`
+	ModelVersion             string   `json:"model_version,omitempty"`
+
+	VideoCapabilities *videoCaps `json:"video_capabilities,omitempty"`
 }
 
 type adminVideoModelCapabilities struct {
@@ -728,30 +732,31 @@ type adminAIModuleMutation struct {
 }
 
 type adminAIModelMutation struct {
-	ModelName           string     `json:"model_name"`
-	ModelType           string     `json:"model_type"`
-	Provider            string     `json:"provider"`
-	ChannelID           *string    `json:"channel_id"`
-	CapabilityCode      []string   `json:"capability_code"`
-	ModuleCode          string     `json:"module_code"`
-	Status              string     `json:"status"`
-	FallbackModel       *string    `json:"fallback_model"`
-	SortWeight          int        `json:"sort_weight"`
-	AllowFallbackSwitch *bool      `json:"allow_fallback_switch"`
-	ProviderName        string     `json:"provider_name"`
-	ProviderCompany     string     `json:"provider_company"`
-	AlgorithmName       string     `json:"algorithm_name"`
-	AlgorithmFilingNo   string     `json:"algorithm_filing_no"`
-	AlgorithmType       string     `json:"algorithm_type"`
-	ContractStatus      string     `json:"contract_status"`
-	ContractExpireAt    string     `json:"contract_expire_at"`
-	ComplianceStatus    string     `json:"compliance_status"`
-	AllowedTerminals    []string   `json:"allowed_terminals"`
-	AllowedCapabilities []string   `json:"allowed_capabilities"`
-	MiniProgramEnabled  *bool      `json:"miniprogram_enabled"`
-	ComplianceRemark    string     `json:"compliance_remark"`
-	ModelVersion        string     `json:"model_version"`
-	VideoCapabilities   *videoCaps `json:"video_capabilities"`
+	ModelName           string   `json:"model_name"`
+	ModelType           string   `json:"model_type"`
+	Provider            string   `json:"provider"`
+	ChannelID           *string  `json:"channel_id"`
+	CapabilityCode      []string `json:"capability_code"`
+	ModuleCode          string   `json:"module_code"`
+	Status              string   `json:"status"`
+	FallbackModel       *string  `json:"fallback_model"`
+	SortWeight          int      `json:"sort_weight"`
+	AllowFallbackSwitch *bool    `json:"allow_fallback_switch"`
+	ProviderName        string   `json:"provider_name"`
+	ProviderCompany     string   `json:"provider_company"`
+	AlgorithmName       string   `json:"algorithm_name"`
+	AlgorithmFilingNo   string   `json:"algorithm_filing_no"`
+	AlgorithmType       string   `json:"algorithm_type"`
+	ContractStatus      string   `json:"contract_status"`
+	ContractExpireAt    string   `json:"contract_expire_at"`
+	ComplianceStatus    string   `json:"compliance_status"`
+	AllowedTerminals    []string `json:"allowed_terminals"`
+	AllowedCapabilities []string `json:"allowed_capabilities"`
+	MiniProgramEnabled  *bool    `json:"miniprogram_enabled"`
+	ComplianceRemark    string   `json:"compliance_remark"`
+	ModelVersion        string   `json:"model_version"`
+
+	VideoCapabilities *videoCaps `json:"video_capabilities"`
 }
 
 type adminAIParameterSchemaMutation struct {

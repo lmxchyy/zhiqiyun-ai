@@ -5,7 +5,11 @@
     "type":  "module",
     "scripts":  {
                     "typecheck":  "vue-tsc --noEmit",
-                    "build:h5":  "uni build -p h5 --mode production",
+                    "dev":  "uni -p h5",
+                    "preview":  "node scripts/preview-h5.mjs",
+                    "test:wallet":  "node --test tests/personal-points-wallet.test.ts tests/personal-points-wallet-coordinator.test.ts",
+                    "test:wallet-build":  "node --test tests/wallet-subpackage-output.test.mjs",
+                    "build:h5":  "uni build -p h5 --mode production && node scripts/copy-h5-static.mjs",
                     "build:mp-weixin":  "node scripts/build-mp-weixin-release.cjs",
                     "build:mp-weixin:local":  "uni build -p mp-weixin && node scripts/patch-mp-native-login.cjs && node scripts/check-mp-package-size.cjs",
                     "check:mp-weixin-package":  "node scripts/check-mp-package-size.cjs",

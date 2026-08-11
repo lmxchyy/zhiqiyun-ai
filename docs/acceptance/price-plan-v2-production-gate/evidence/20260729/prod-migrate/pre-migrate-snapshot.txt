@@ -1,0 +1,12 @@
+PROD_MIGRATE_START 2026-07-29T05:19:11+0800
+releaseCommit=e8f191805ca1d6c9a4b214ee91312aeb796c0b10
+db=zhiqiyun user=zhiqiyun_prod
+flags_before:
+FULFILLMENT=false
+CREATION=false
+TEST=false
+baseline_before:
+orders=51
+plans=24
+amount_sum=3484992
+xz_price_plans=NULL

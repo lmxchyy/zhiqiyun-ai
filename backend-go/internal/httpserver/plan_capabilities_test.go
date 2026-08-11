@@ -20,7 +20,7 @@ func TestResolveModuleSchemaEnforcesPackageCapability(t *testing.T) {
 	if _, err := resolveModuleSchema(data, freeUser, moduleImageGeneration, "mock-standard"); err != nil {
 		t.Fatalf("free image capability should remain available: %v", err)
 	}
-	if _, err := resolveModuleSchema(data, freeUser, moduleVideoGeneration, "mock-video"); err == nil || !strings.Contains(err.Error(), "not included in package") {
+	if _, err := resolveModuleSchema(data, freeUser, moduleVideoGeneration, "mock-video"); err == nil || !strings.Contains(err.Error(), "当前套餐不支持视频生成") {
 		t.Fatalf("free video capability should be rejected, got: %v", err)
 	}
 }
@@ -33,7 +33,7 @@ func TestPPTOutlineEndpointEnforcesPackageCapability(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "platform.json")
 	server := newWithStoreAndSessions(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, newJSONStore(dataPath), sessions)
 	response := authedRequest(t, server.Handler, http.MethodPost, "/api/v1/ppt/outline/generate", bytes.NewBufferString(`{"prompt":"free plan ppt","slideCount":5,"textModel":"kimi-k2.6"}`), "free-ppt-token")
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "not included in package") {
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "当前套餐不支持该能力") {
 		t.Fatalf("free PPT outline should be rejected by package capability: %d %s", response.Code, response.Body.String())
 	}
 }
@@ -169,8 +169,16 @@ func TestApplyAdminPlanCapabilitiesPersistsAccessModelsAndLimits(t *testing.T) {
 			break
 		}
 	}
-	if !video.Enabled || len(video.AllowedModels) != 1 || video.AllowedModels[0] != "mock-video" {
+	if !video.Enabled || !stringListContains(video.AllowedModels, "mock-video") {
 		t.Fatalf("unexpected video capability: %+v", video)
+	}
+	for _, modelName := range []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"} {
+		if !stringListContains(video.AllowedModels, modelName) {
+			t.Fatalf("protected video model %s must remain on package allowlist, got: %+v", modelName, video.AllowedModels)
+		}
+	}
+	if stringListContains(video.AllowedModels, "seedance-fast-2.0") {
+		t.Fatalf("package allowlist should not force-open seedance-fast-2.0, got: %+v", video.AllowedModels)
 	}
 
 	freeUser := adminUser{ID: "user_free", Role: "MEMBER", PlanID: "plan_free"}

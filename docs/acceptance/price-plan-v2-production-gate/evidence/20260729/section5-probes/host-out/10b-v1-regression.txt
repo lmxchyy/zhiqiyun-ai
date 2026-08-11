@@ -1,0 +1,20 @@
+=== #10 RETRY 2026-07-29 09:57:38 +0800 ===
+ order_no | sv | status  | fulfillment_status | entitlement_status | product_code | amount_cents |   user_id   |           created_at           
+----------+----+---------+--------------------+--------------------+--------------+--------------+-------------+--------------------------------
+          |  0 | PENDING |                    | PENDING            |              |        99600 | user_000003 | 2026-07-22T06:18:05.870066232Z
+          |  0 | PENDING |                    | PENDING            |              |        99600 | user_000011 | 2026-07-20T08:59:08.512498919Z
+          |  0 | PENDING |                    | PENDING            |              |        99600 | user_000011 | 2026-07-20T08:59:01.493821058Z
+          |  0 | PENDING |                    | PENDING            |              |        99600 | user_000011 | 2026-07-20T05:59:17.400426255Z
+          |  0 | PENDING |                    | PENDING            |              |        99600 | user_000011 | 2026-07-20T05:58:53.506598603Z
+(5 rows)
+
+V1_LIVE= V1_TOKEN= V1_CLOSED=ZQY20260728203017B5CB3F6118
+GET status CLOSED V1 ZQY20260728203017B5CB3F6118 -> 200
+POST sync CLOSED V1 -> 500
+sync_code= None error= wechat query order failed: code=268490001 message=openid错误 rid: 6a695e12-69d7e85f-2539406d
+legacy TOKEN_CUSTOM_1YUAN create -> 201
+orderNo= ZQY202607290157382DBF6D75DC code= None keys= ['orderNo', 'amountCent', 'signData', 'paySig', 'signature', 'mode']
+created unpaid probe order=ZQY202607290157382DBF6D75DC sv=0 status=PENDING
+UPDATE 1
+V2_still_ok=2 TOK_BAL=60793
+VERDICT_#10=PASS (V1 status 200; legacy TOKEN productCode create 201; V2 intact; CLOSED sync 5xx noted as non-blocker for terminal CLOSED)

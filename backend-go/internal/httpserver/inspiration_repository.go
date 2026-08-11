@@ -68,20 +68,21 @@ type inspirationTemplate struct {
 }
 
 type inspirationListFilter struct {
-	TenantID    string
-	UserID      string
-	Category    string
-	ContentType string
-	Query       string
-	Platform    string
-	Featured    bool
-	Hot         bool
-	Published   bool
-	Status      string
-	AuditStatus string
-	Limit       int
-	Offset      int
-	Seed        int
+	TenantID            string
+	UserID              string
+	Category            string
+	ContentType         string
+	ExcludeContentTypes []string
+	Query               string
+	Platform            string
+	Featured            bool
+	Hot                 bool
+	Published           bool
+	Status              string
+	AuditStatus         string
+	Limit               int
+	Offset              int
+	Seed                int
 }
 
 type inspirationVersion struct {
@@ -223,6 +224,13 @@ func inspirationVisible(item inspirationTemplate, filter inspirationListFilter) 
 	}
 	if filter.ContentType != "" && item.ContentType != filter.ContentType {
 		return false
+	}
+	if len(filter.ExcludeContentTypes) > 0 {
+		for _, excluded := range filter.ExcludeContentTypes {
+			if strings.EqualFold(strings.TrimSpace(item.ContentType), strings.TrimSpace(excluded)) {
+				return false
+			}
+		}
 	}
 	if filter.Category != "" && filter.Category != "recommend" && item.CategoryID != filter.Category && item.CategoryCode != filter.Category {
 		return false
@@ -515,6 +523,21 @@ func (p postgresInspirationRepository) ListTemplates(ctx context.Context, f insp
 	}
 	if f.ContentType != "" {
 		add("t.content_type=$%d", f.ContentType)
+	}
+	if len(f.ExcludeContentTypes) > 0 {
+		excluded := make([]string, 0, len(f.ExcludeContentTypes))
+		for _, item := range f.ExcludeContentTypes {
+			value := strings.ToLower(strings.TrimSpace(item))
+			if value != "" {
+				excluded = append(excluded, value)
+			}
+		}
+		if len(excluded) == 1 {
+			add("lower(t.content_type)<>$%d", excluded[0])
+		} else if len(excluded) > 1 {
+			args = append(args, excluded)
+			where = append(where, fmt.Sprintf("NOT (lower(t.content_type) = ANY($%d))", len(args)))
+		}
 	}
 	if f.Category != "" && f.Category != "recommend" {
 		args = append(args, f.Category)

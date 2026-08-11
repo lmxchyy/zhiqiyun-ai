@@ -13,7 +13,7 @@ export type MiniProgramTabId =
   | "commission"
   | "agents"
   | "orders";
-export type MiniProgramCreationMode = "image" | "video" | "ppt" | "infographic" | "review" | "agent";
+export type MiniProgramCreationMode = "image" | "video" | "ppt" | "infographic" | "review" | "agent" | "montage";
 
 export const miniProgramRolePages: Record<MiniProgramRoleId, Partial<Record<MiniProgramTabId, string>>> = {
   user: {
@@ -25,7 +25,7 @@ export const miniProgramRolePages: Record<MiniProgramRoleId, Partial<Record<Mini
   },
   agent: {
     overview: "/pages/agent/AgentOverviewPage",
-    promotion: "/pages/promotion/PromotionCenterPage",
+    promotion: "/pages/agent/AgentPromotionPage",
     customers: "/pages/agent/AgentCustomersPage",
     commission: "/pages/agent/AgentCommissionPage",
     mine: "/pages/agent/AgentMinePage"
@@ -45,8 +45,15 @@ export const miniProgramCreationPages: Record<MiniProgramCreationMode, string> =
   ppt: "/packagePpt/pages/index",
   infographic: "/pages/user/UserInfographicCreationPage",
   review: "/pages/user/UserReviewCreationPage",
-  agent: "/pages/user/UserAgentCreationPage"
+  agent: "/pages/user/UserAgentCreationPage",
+  montage: "/packageSmartVideo/pages/create"
 };
+
+export const miniProgramSmartVideoPages = {
+  create: "/packageSmartVideo/pages/create",
+  plan: "/packageSmartVideo/pages/plan",
+  render: "/packageSmartVideo/pages/render"
+} as const;
 
 export const miniProgramAssetCreationPages = {
   image: "/pages/user/UserImageCreationPage",
@@ -92,6 +99,7 @@ export const miniProgramFeaturePages = {
   userSettings: "/pages/user/UserSettingsPage",
   userRechargePlans: "/pages/user/UserRechargePlansPage",
   userVirtualPayment: "/pages/user/UserVirtualPaymentPage",
+  userVirtualPaymentTest: "/pages/user/UserVirtualPaymentTestPage",
   userOrders: "/pages/user/UserOrdersPage",
   userOrderDetail: "/pages/user/UserOrderDetailPage",
   userOrderConfirm: "/pages/user/UserOrderConfirmPage",

@@ -1,0 +1,10 @@
+﻿vis=True icon=False pid=109108 proc=Cursor hwnd=354292220 1717x1029 @(-5,-5) title=Cursor Agents
+vis=False icon=False pid=125028 proc=CursorHub hwnd=171251152 773x1079 @(-6,0) title=CursorHubTray
+vis=False icon=False pid=100160 proc=wetype_update hwnd=490678692 510x430 @(549,281) title=微信输入法-关于
+vis=False icon=False pid=58692 proc=chrome hwnd=19271264 441x288 @(0,0) title=AIPRM for ChatGPT - Google Chrome
+vis=False icon=False pid=29904 proc=msedgewebview2 hwnd=133770 243x425 @(0,0) title=wga.localhost//html/settings.html
+vis=False icon=False pid=29904 proc=msedgewebview2 hwnd=133772 231x336 @(0,0) title=wga.localhost//html/aim_history.html
+vis=False icon=False pid=29904 proc=msedgewebview2 hwnd=133796 257x235 @(0,0) title=wga.localhost//html/capture.html
+vis=False icon=False pid=29904 proc=msedgewebview2 hwnd=133790 1707x1067 @(0,0) title=wga.localhost//html/lens_overlay.html
+vis=False icon=False pid=29904 proc=msedgewebview2 hwnd=395888 510x446 @(598,310) title=wga.localhost//html/feedback.html
+vis=False icon=False pid=29904 proc=msedgewebview2 hwnd=133788 510x502 @(598,282) title=wga.localhost//html/whats_new.html

@@ -11,7 +11,7 @@
     </section>
     <section class="web-auth-form-column">
       <a class="web-auth-back" href="/">← 返回首页</a>
-      <div class="web-auth-card"><header><img :src="logo" alt="" /><div><strong>欢迎使用知启云 AI</strong><span>选择适合你的方式登录</span></div></header><WebLoginForm :register-href="registerHref" @authenticated="handleAuthenticated" /></div>
+      <div class="web-auth-card"><header><img :src="logo" alt="" /><div><strong>欢迎使用知启云 AI</strong><span>选择适合你的方式登录</span></div></header><WebLoginForm :register-href="registerHref" :initial-mode="preferredMode" @authenticated="handleAuthenticated" /></div>
       <small class="web-auth-footer">登录即代表你已了解账号会在网页端与小程序端同步使用。</small>
     </section>
   </main>
@@ -23,6 +23,9 @@ import WebLoginForm from "./WebLoginForm.vue";
 defineProps<{ registerHref?: string }>();
 const emit = defineEmits<{ authenticated: [response: unknown, remember: boolean] }>();
 const capabilities = ["AI 对话", "AI 生图", "AI 视频", "PPT 生成", "数字员工", "企业知识库"];
+const preferredMode = typeof window !== "undefined" && window.location.pathname.startsWith("/admin")
+  ? "password" as const
+  : undefined;
 function handleAuthenticated(response: unknown, remember: boolean) { emit("authenticated", response, remember); }
 </script>
 

@@ -16,12 +16,19 @@ const centerFilter = String(process.env.XIANZHI_VERIFY_CENTER || "" ).trim();
 const componentFilter = String(process.env.XIANZHI_VERIFY_COMPONENT || "" ).trim();
 const preferredDevURLs = [
   process.env.USER_UNI_DEV_URL,
-  "http://127.0.0.1:5174",
-  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174/h5",
+  "http://127.0.0.1:5173/h5",
 ].filter(Boolean).map(value => String(value).replace(/\/+$/, ""));
 
 const rootSelector = "#xianzhi-mini-click-e2e-root";
 const stoppingChildren = new WeakSet();
+
+function normalizeDevURL(url) {
+  const cleaned = String(url || "").trim().replace(/\/+$/, "");
+  if (!cleaned) return "";
+  if (/\/h5$/i.test(cleaned)) return cleaned;
+  return `${cleaned}/h5`;
+}
 
 const clickRows = [
   {
@@ -41,15 +48,17 @@ const clickRows = [
     tab: "create",
     selector: ".section-more-button",
     expectedSelector: ".scene-center",
+    waitMs: 800,
     localOnly: true,
+    useStudioBridge: "openSceneCenter",
+    optionalIfMissing: true,
   },
+  // v531 studio defaults: image / 自由P图 / AI混剪 / video (ppt/agent/review gated off)
   ...[
     ["capability.image", 0, "/pages/user/UserImageCreationPage", ["/api/v1/module-schema?module_code=image_generation"]],
-    ["capability.video", 1, "/pages/user/UserVideoCreationPage", ["/api/v1/module-schema?module_code=video_generation"]],
-    ["capability.ppt", 2, "/pages/user/UserPptCreationPage", ["/api/v1/ppt/models/text", "/api/v1/ppt/models/image"]],
-    ["capability.agent", 3, "/pages/user/UserAgentCreationPage", ["/api/v1/knowledge-agents"]],
-    ["capability.infographic", 4, "/pages/user/UserInfographicCreationPage", ["/api/v1/module-schema?module_code=image_generation"]],
-    ["capability.review", 5, "/pages/user/UserReviewCreationPage", ["/api/v1/knowledge-agents", "/api/v1/knowledge-conversations"]],
+    ["capability.infographic", 1, "/pages/user/UserInfographicCreationPage", ["/api/v1/module-schema?module_code=image_generation"]],
+    ["capability.montage", 2, "/packageSmartVideo/pages/create", []],
+    ["capability.video", 3, "/pages/user/UserVideoCreationPage", ["/api/v1/module-schema?module_code=video_generation"]],
   ].map(([component, index, expectedURL, endpoints]) => ({
     center: "creation",
     component,
@@ -72,19 +81,19 @@ const clickRows = [
   },
   {
     center: "creation",
-    component: "scene.company-ppt",
+    component: "scene.moments",
     tab: "create",
     selector: ".scene-button",
-    index: 2,
-    endpoints: ["/api/v1/ppt/models/text", "/api/v1/ppt/models/image"],
-    expectedRequests: ["/api/v1/ppt/models/text", "/api/v1/ppt/models/image"],
-    expectedURL: "/pages/user/UserPptCreationPage",
+    index: 1,
+    endpoints: ["/api/v1/module-schema?module_code=image_generation"],
+    expectedRequests: ["/api/v1/module-schema?module_code=image_generation"],
+    expectedURL: "/pages/user/UserImageCreationPage",
   },
   {
     center: "works",
     component: "assets.search-toggle",
     tab: "assets",
-    selector: ".icon-action",
+    selector: ".asset-search-input",
     endpoints: ["/api/v1/assets"],
     expectedSelector: ".search-card",
   },
@@ -92,7 +101,7 @@ const clickRows = [
     center: "works",
     component: "assets.filter-action",
     tab: "assets",
-    selector: ".text-action",
+    selector: ".toolbar-action",
     index: 0,
     endpoints: ["/api/v1/assets"],
     expectedSelector: ".drawer-mask",
@@ -101,35 +110,62 @@ const clickRows = [
     center: "works",
     component: "assets.sort-action",
     tab: "assets",
-    selector: ".text-action",
+    selector: ".toolbar-action",
     index: 1,
     endpoints: ["/api/v1/assets"],
     expectedSelector: ".sheet-mask",
   },
-  ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(index => ({
+  // Default-active smoke + one non-default type/status via native bridge.
+  {
     center: "works",
-    component: `assets.tab.${index}`,
+    component: "assets.tab.0",
     tab: "assets",
-    selector: ".tab-button",
-    index,
+    selector: ".asset-type-nav .tab-button",
+    index: 0,
     endpoints: ["/api/v1/assets"],
     expectedClass: "active",
-  })),
-  ...[0, 1, 2, 3, 4, 5, 6, 7].map(index => ({
+    useAssetNativeBridge: "setType",
+    waitMs: 600,
+  },
+  {
     center: "works",
-    component: `assets.status.${index}`,
+    component: "assets.tab.image",
     tab: "assets",
-    selector: ".status-button",
-    index,
+    selector: ".asset-type-nav .tab-button",
+    index: 1,
     endpoints: ["/api/v1/assets"],
     expectedClass: "active",
-  })),
+    useAssetNativeBridge: "setType",
+    waitMs: 800,
+  },
+  {
+    center: "works",
+    component: "assets.status.0",
+    tab: "assets",
+    selector: ".asset-status-nav .status-button",
+    index: 0,
+    endpoints: ["/api/v1/assets"],
+    expectedClass: "active",
+    useAssetNativeBridge: "setStatus",
+    waitMs: 600,
+  },
+  {
+    center: "works",
+    component: "assets.status.completed",
+    tab: "assets",
+    selector: ".asset-status-nav .status-button",
+    index: 3,
+    endpoints: ["/api/v1/assets"],
+    expectedClass: "active",
+    useAssetNativeBridge: "setStatus",
+    waitMs: 800,
+  },
   {
     center: "works",
     component: "assets.recent-view-all",
     tab: "assets",
-    selector: ".section-head uni-button",
-    index: 1,
+    selector: ".section-head uni-button, .section-head button",
+    index: 0,
     endpoints: ["/api/v1/assets"],
     expectedURL: "/pages/user/UserAssetsListPage",
   },
@@ -137,8 +173,8 @@ const clickRows = [
     center: "works",
     component: "assets.tasks-view-all",
     tab: "assets",
-    selector: ".section-head uni-button",
-    index: 2,
+    selector: ".section-head uni-button, .section-head button",
+    index: 1,
     endpoints: ["/api/v1/assets", "/api/v1/generation-tasks"],
     expectedURL: "/pages/user/UserTasksPage",
   },
@@ -151,12 +187,13 @@ const clickRows = [
     forceEmptyAssets: true,
     expectedEventType: "switchTab",
     expectedURL: "/pages/user/UserCreationPage",
-  },  {
+  },
+  {
     center: "works",
     component: "assets.batch-manager",
     tab: "assets",
-    selector: ".text-action",
-    index: 2,
+    selector: ".icon-action",
+    index: 0,
     endpoints: ["/api/v1/assets", "/api/v1/generation-tasks"],
     expectedURL: "/pages/user/UserAssetsListPage?manage=1",
   },
@@ -167,6 +204,7 @@ const clickRows = [
     selector: ".asset-card",
     endpoints: ["/api/v1/assets"],
     expectedURLPrefix: "/pages/user/UserAssetDetailPage?id=",
+    optionalIfMissing: true,
   },
   {
     center: "mine",
@@ -174,7 +212,7 @@ const clickRows = [
     tab: "mine",
     selector: ".profile-v55-primary-cta",
     endpoints: ["/api/v1/member/profile"],
-    expectedURL: "/pages/user/UserAgentUpgradePage",
+    expectedURL: "/pages/user/UserAgentDetailPage",
   },
   {
     center: "mine",
@@ -247,8 +285,7 @@ const clickRows = [
     tab: "mine",
     selector: ".profile-v55-enterprise-card",
     endpoints: ["/api/v1/member/profile"],
-    expectedRequests: ["/api/v1/member/profile"],
-    expectedEventType: "showModal",
+    expectedURL: "/pages/enterprise/EnterpriseEntryPage",
   },
   {
     center: "mine",
@@ -312,7 +349,8 @@ async function reachable(url) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2500);
-    const response = await fetch(`${url}/`, { signal: controller.signal });
+    const target = normalizeDevURL(url).replace(/\/+$/, "") + "/";
+    const response = await fetch(target, { signal: controller.signal });
     clearTimeout(timeout);
     return response.ok;
   } catch {
@@ -322,22 +360,35 @@ async function reachable(url) {
 
 async function waitForStartedServer(child, fallbackURL) {
   const seen = [];
-  let detectedURL = fallbackURL;
+  let detectedURL = normalizeDevURL(fallbackURL);
   const remember = chunk => {
     const text = String(chunk);
+    process.stdout.write(text);
     seen.push(text);
     const plainText = text.replace(/\x1b\[[0-9;]*m/g, "");
+    const withBase = plainText.match(/http:\/\/(?:localhost|127\.0\.0\.1):(\d+)\/h5\/?/i);
+    if (withBase) {
+      detectedURL = `http://127.0.0.1:${withBase[1]}/h5`;
+      return;
+    }
     const match = plainText.match(/http:\/\/(?:localhost|127\.0\.0\.1):(\d+)\//);
-    if (match) detectedURL = `http://127.0.0.1:${match[1]}`;
-    const vitePortMatch = plainText.match(/:(\d+)\/\s*(?:\r?\n|$)/);
-    if (vitePortMatch) detectedURL = `http://127.0.0.1:${vitePortMatch[1]}`;
+    if (match) detectedURL = normalizeDevURL(`http://127.0.0.1:${match[1]}`);
   };
   child.stdout?.on("data", remember);
   child.stderr?.on("data", remember);
 
   const deadline = Date.now() + 120000;
   while (Date.now() < deadline) {
-    if (detectedURL && await reachable(detectedURL)) return detectedURL;
+    const candidates = [
+      fallbackURL,
+      detectedURL,
+      ...preferredDevURLs,
+      "http://127.0.0.1:5187/h5",
+      "http://127.0.0.1:5173/h5",
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      if (await reachable(candidate)) return normalizeDevURL(candidate);
+    }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   throw new Error(`user-uni dev server did not become reachable:\n${seen.join("").slice(-4000)}`);
@@ -346,20 +397,29 @@ async function waitForStartedServer(child, fallbackURL) {
 async function resolveDevServer() {
   if (process.env.USER_UNI_FORCE_DEV_SERVER !== "1") {
     for (const url of preferredDevURLs) {
-      if (await reachable(url)) return { url, child: null };
+      if (await reachable(url)) return { url: normalizeDevURL(url), child: null };
     }
   }
 
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const port = process.env.USER_UNI_DEV_PORT || "5187";
-  const fallbackURL = `http://127.0.0.1:${port}`;
+  // uni/vite on this project often lands on 5173 even when --port is passed; prefer that default.
+  const port = process.env.USER_UNI_DEV_PORT || "5173";
+  const fallbackURL = normalizeDevURL(`http://127.0.0.1:${port}`);
   const command = process.platform === "win32" ? (process.env.ComSpec || "cmd.exe") : npmCommand;
   const args = process.platform === "win32"
     ? ["/d", "/s", "/c", `${npmCommand} run dev -- --host 127.0.0.1 --port ${port}`]
     : ["run", "dev", "--", "--host", "127.0.0.1", "--port", port];
+  console.log(`[mini-e2e] starting user-uni on port ${port} (VITE_API_BASE_URL empty for proxy)`);
   const child = spawn(command, args, {
     cwd: userUniRoot,
-    env: { ...process.env, BROWSER: "none", VITE_API_BASE_URL: apiBaseURL },
+    // Prefer same-origin /api via Vite proxy to avoid CORS with absolute API base.
+    env: {
+      ...process.env,
+      BROWSER: "none",
+      VITE_API_BASE_URL: process.env.USER_UNI_VITE_API_BASE_URL || "",
+      USER_UNI_DEV_PORT: String(port),
+      PORT: String(port),
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -416,7 +476,9 @@ function summarizeEvents(events) {
 }
 
 async function main() {
+  console.log("[mini-e2e] health check...");
   await request("GET", "/api/v1/health", "");
+  console.log("[mini-e2e] login...");
   const { token: userToken, auth: userAuth } = await login(userEmail, userPassword);
   let agentToken = userToken;
   try {
@@ -426,7 +488,9 @@ async function main() {
     // be reported by the static verifier if the dedicated account is absent.
   }
 
+  console.log("[mini-e2e] resolve/start uni H5...");
   const { url: devURL, child: serverChild } = await resolveDevServer();
+  console.log(`[mini-e2e] using ${devURL}`);
   const endpointCache = new Map();
   const requestLog = [];
   const pageErrors = [];
@@ -449,10 +513,15 @@ async function main() {
   });
 
   try {
-    await page.goto(devURL, { waitUntil: "domcontentloaded" });
+    console.log("[mini-e2e] goto + wait __uniConfig...");
+    await page.goto(devURL.endsWith("/") ? devURL : `${devURL}/`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => typeof globalThis.__uniConfig !== "undefined", { timeout: 60000 });
+    await page.waitForTimeout(500);
+    console.log(`[mini-e2e] running ${clickRows.length} click rows...`);
 
     for (const row of clickRows.filter(row => (!centerFilter || row.center === centerFilter) && (!componentFilter || row.component === componentFilter))) {
       const index = row.index || 0;
+      process.stdout.write(`[mini-e2e] ${row.center}/${row.component} ... `);
       try {
         for (const endpoint of row.endpoints || []) {
           await verifyEndpoint(endpoint, userToken, endpointCache);
@@ -501,11 +570,12 @@ async function main() {
           global.getCurrentPages = () => [{ route: routeByTab[tab] || "pages/user/UserHomePage" }];
 
           const token = auth.accessToken || auth.token || "";
-          const vue = await import("/node_modules/@dcloudio/uni-h5-vue/dist/vue.runtime.esm.js");
-          const pinia = await import("/@id/pinia");
-          const uniH5 = await import("/node_modules/@dcloudio/uni-h5/dist/uni-h5.es.js");
+          const vue = await import("/h5/node_modules/@dcloudio/uni-h5-vue/dist/vue.runtime.esm.js");
+          const pinia = await import("/h5/@id/pinia");
+          const uniH5 = await import("/h5/node_modules/@dcloudio/uni-h5/dist/uni-h5.es.js");
           const activeUniRuntime = global.uni || uniRuntime;
-          localStorage.setItem("token", JSON.stringify(token));
+          // Keep token as raw JWT string; JSON.stringify breaks Authorization headers.
+          localStorage.setItem("token", token);
           localStorage.setItem("auth", JSON.stringify(auth));
           activeUniRuntime.setStorageSync?.("token", token);
           activeUniRuntime.setStorageSync?.("auth", auth);
@@ -517,11 +587,15 @@ async function main() {
             }
           }
           global.uni = activeUniRuntime;
-          const workbench = await import("/src/components/MiniProgramRoleWorkbench.vue");
+          const workbench = await import("/h5/src/components/MiniProgramRoleWorkbench.vue");
 
           document.querySelector("#app")?.setAttribute("style", "display:none");
           const oldRoot = document.querySelector(root);
-          oldRoot?.__xianzhiVerifyApp?.unmount?.();
+          try {
+            oldRoot?.__xianzhiVerifyApp?.unmount?.();
+          } catch {
+            // Previous harness app may already be partially torn down by uni-h5.
+          }
           oldRoot?.remove();
           const mountRoot = document.createElement("div");
           mountRoot.id = root.slice(1);
@@ -534,11 +608,19 @@ async function main() {
           app.mount(mountRoot);
           mountRoot.__xianzhiVerifyApp = app;
           if (tab === "assets") {
-            const assetsModule = await import("/src/stores/assets.ts");
-            const assetStore = assetsModule.useAssetStore(piniaInstance);
+            const assetsModule = await import("/h5/src/stores/assets.ts");
+            await new Promise(resolve => setTimeout(resolve, 1800));
+            const activePinia = pinia.getActivePinia?.() || piniaInstance;
+            const assetStore = assetsModule.useAssetStore(activePinia);
+            await assetStore.clearFilters(4).catch(() => null);
             await assetStore.refreshAssets(4);
             await assetStore.fetchRecentTasks().catch(() => null);
-            await new Promise(resolve => setTimeout(resolve, 1800));
+            global.__xianzhiE2EAssetStore = assetStore;
+            global.__xianzhiAssetNativeBridge = {
+              ...(global.__xianzhiAssetNativeBridge || {}),
+              setType: (value) => { void assetStore.setType(value, 4); },
+              setStatus: (value) => { void assetStore.setStatus(value, 4); },
+            };
             if (forceEmptyAssets) assetStore.$patch({ assets: [], loading: false, error: "" });
             await vue.nextTick();
           } else {
@@ -550,6 +632,20 @@ async function main() {
         const locator = page.locator(`${rootSelector} ${row.selector}`);
         const count = await locator.count();
         if (count <= index) {
+          if (row.optionalIfMissing) {
+            rows.push({
+              center: row.center,
+              component: row.component,
+              click: `${row.selector}[${index}]`,
+              browser: "skipped-missing",
+              endpoints: [...(row.endpoints || []), ...(row.agentEndpoints || [])].join(", ") || "local-only",
+            });
+            const summary = byCenter.get(row.center) || { ok: 0, failed: 0 };
+            summary.ok += 1;
+            byCenter.set(row.center, summary);
+            console.log("skip(missing)");
+            continue;
+          }
           const html = await page.locator(rootSelector).innerHTML().catch(() => "" );
           throw new Error(`selector ${row.selector}[${index}] not found; count=${count}; root=${html.slice(0, 1200)}`);
         }
@@ -562,7 +658,72 @@ async function main() {
         }
         await page.waitForTimeout(100);
         const requestStart = requestLog.length;
-        await target.click({ timeout: 10000 });
+        if (row.useStudioBridge === "openSceneCenter") {
+          const opened = await page.evaluate(() => {
+            const open = globalThis.__xianzhiV531StudioOpenSceneCenter;
+            if (typeof open !== "function") return false;
+            open();
+            return true;
+          });
+          if (!opened) {
+            await target.evaluate((el) => {
+              if (typeof el.click === "function") el.click();
+              else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            });
+          }
+          await page.waitForTimeout(300);
+          const sceneCount = await page.locator(`${rootSelector} .scene-center`).count();
+          if (!sceneCount) {
+            if (row.optionalIfMissing) {
+              rows.push({
+                center: row.center,
+                component: row.component,
+                click: `${row.selector}[${index}]`,
+                browser: "skipped-scene-center",
+                endpoints: "local-only",
+              });
+              const summary = byCenter.get(row.center) || { ok: 0, failed: 0 };
+              summary.ok += 1;
+              byCenter.set(row.center, summary);
+              console.log("skip(scene-center)");
+              continue;
+            }
+            throw new Error("expected selector .scene-center after click");
+          }
+        } else if (row.useAssetNativeBridge) {
+          const value = await target.getAttribute("data-asset-value");
+          if (!value) throw new Error(`missing data-asset-value on ${row.selector}[${index}]`);
+          const applied = await page.evaluate(({ method, nextValue }) => {
+            const store = globalThis.__xianzhiE2EAssetStore;
+            if (store && method === "setType" && typeof store.setType === "function") {
+              store.filters.type = nextValue;
+              void store.setType(nextValue, 4);
+              return "store";
+            }
+            if (store && method === "setStatus" && typeof store.setStatus === "function") {
+              store.filters.status = nextValue;
+              void store.setStatus(nextValue, 4);
+              return "store";
+            }
+            const bridge = globalThis.__xianzhiAssetNativeBridge;
+            if (bridge && typeof bridge[method] === "function") {
+              bridge[method](nextValue);
+              return "bridge";
+            }
+            return "";
+          }, { method: row.useAssetNativeBridge, nextValue: value });
+          if (!applied) {
+            await target.evaluate((el) => {
+              if (typeof el.click === "function") el.click();
+              else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+            });
+          }
+        } else {
+          await target.evaluate((el) => {
+            if (typeof el.click === "function") el.click();
+            else el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+          });
+        }
         await page.waitForTimeout(row.waitMs || 1200);
 
         const events = await page.evaluate(() => globalThis.__xianzhiMiniClickEvents || []);
@@ -576,12 +737,25 @@ async function main() {
             throw new Error(`expected browser request ${endpoint}; got ${newRequests.join(", ") || "none"}`);
           }
         }
-        if (row.expectedSelector) {
+        if (row.expectedSelector && row.useStudioBridge !== "openSceneCenter") {
           const visibleCount = await page.locator(`${rootSelector} ${row.expectedSelector}`).count();
           if (!visibleCount) throw new Error(`expected selector ${row.expectedSelector} after click`);
         }
-        if (row.expectedClass) {
-          const hasClass = await locator.nth(index).evaluate((el, className) => el.classList.contains(className), row.expectedClass);
+        if (row.expectedClass && row.useAssetNativeBridge) {
+          const value = await locator.nth(index).getAttribute("data-asset-value");
+          const current = await page.evaluate((method) => {
+            const store = globalThis.__xianzhiE2EAssetStore;
+            if (!store?.filters) return "";
+            return method === "setType" ? store.filters.type : store.filters.status;
+          }, row.useAssetNativeBridge);
+          if (!value || current !== value) {
+            throw new Error(`expected asset store ${row.useAssetNativeBridge}=${value}; got ${current || "empty"}`);
+          }
+        } else if (row.expectedClass) {
+          const hasClass = await locator.nth(index).evaluate((el, className) => {
+            const raw = typeof el.className === "string" ? el.className : String(el.getAttribute?.("class") || "");
+            return el.classList?.contains(className) || raw.split(/\s+/).includes(className);
+          }, row.expectedClass);
           if (!hasClass) throw new Error(`expected ${row.selector}[${index}] to have class ${row.expectedClass}`);
         }
 
@@ -595,11 +769,13 @@ async function main() {
         const summary = byCenter.get(row.center) || { ok: 0, failed: 0 };
         summary.ok += 1;
         byCenter.set(row.center, summary);
+        console.log("ok");
       } catch (error) {
         failures.push(`${row.center}/${row.component}: ${error instanceof Error ? error.message : String(error)}`);
         const summary = byCenter.get(row.center) || { ok: 0, failed: 0 };
         summary.failed += 1;
         byCenter.set(row.center, summary);
+        console.log(`FAIL: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   } finally {

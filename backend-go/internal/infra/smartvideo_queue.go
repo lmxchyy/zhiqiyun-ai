@@ -150,3 +150,27 @@ func (q *SmartVideoAnalysisQueue) promoteDelayed(ctx context.Context, limit int6
 		log.Printf("smartvideo_queue operation=promote_delayed result=failed")
 	}
 }
+
+type SmartVideoQueueDepth struct {
+	Pending int64
+	Working int64
+	Delayed int64
+	Dead    int64
+}
+
+func (q *SmartVideoAnalysisQueue) Depth(ctx context.Context) (SmartVideoQueueDepth, error) {
+	if q == nil || q.client == nil {
+		return SmartVideoQueueDepth{}, smartvideo.ErrAnalysisNotReady
+	}
+	pipe := q.client.Pipeline()
+	pending := pipe.LLen(ctx, q.pendingKey)
+	working := pipe.LLen(ctx, q.workingKey)
+	delayed := pipe.ZCard(ctx, q.delayedKey)
+	dead := pipe.LLen(ctx, q.deadKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return SmartVideoQueueDepth{}, err
+	}
+	return SmartVideoQueueDepth{
+		Pending: pending.Val(), Working: working.Val(), Delayed: delayed.Val(), Dead: dead.Val(),
+	}, nil
+}

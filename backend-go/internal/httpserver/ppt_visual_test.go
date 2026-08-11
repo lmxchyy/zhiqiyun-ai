@@ -21,7 +21,10 @@ import (
 )
 
 func TestPPTVisualHTTPDisablePreservesContentAndEnforcesOwnership(t *testing.T) {
-	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir(), PPTAutoImageMode: "disabled"})
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir(), PPTAutoImageMode: "disabled"}, store)
 	handler := server.Handler
 	ownerToken := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 	otherToken := loginToken(t, handler, "agent1@xianzhi.ai", "Agent123!")

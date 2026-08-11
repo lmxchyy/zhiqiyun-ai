@@ -340,6 +340,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/points/expiry-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminPointExpiryPolicy"];
+        put: operations["updateAdminPointExpiryPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/customers/{id}/point-lots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminCustomerPointLots"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/customers/{id}/point-gifts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["grantAdminCustomerPointGift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/customers/{id}/point-corrections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["correctAdminCustomerPointBalance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channel/me": {
         parameters: {
             query?: never;
@@ -589,6 +653,83 @@ export interface components {
             available: number;
             frozen: number;
             total?: number;
+            permanentAvailable?: number;
+            expiringAvailable?: number;
+            /** Format: date-time */
+            nextExpiryAt?: string;
+            nextExpiryPoints?: number;
+        };
+        PointExpiryPolicy: {
+            id: string;
+            version: number;
+            revision: number;
+            enabled: boolean;
+            duration_value: number;
+            /** @enum {string} */
+            duration_unit: "CALENDAR_MONTH";
+            time_zone: string;
+            readonly source_types: string[];
+            /** Format: date-time */
+            effective_from: string;
+            /** Format: date-time */
+            effective_to?: string;
+            status: string;
+            created_by?: string;
+            change_reason?: string;
+        };
+        PointExpiryPolicyResponse: {
+            item: components["schemas"]["PointExpiryPolicy"];
+        };
+        UpdatePointExpiryPolicyRequest: {
+            revision: number;
+            enabled: boolean;
+            durationValue: number;
+            changeReason: string;
+        };
+        PersonalPointLot: {
+            id: string;
+            account_id: string;
+            user_id: string;
+            source_type: string;
+            reference_type: string;
+            reference_id: string;
+            original_points: number;
+            available_points: number;
+            reserved_points: number;
+            consumed_points: number;
+            expired_points: number;
+            reversed_points: number;
+            /** Format: date-time */
+            granted_at: string;
+            /** Format: date-time */
+            expires_at?: string;
+            policy_version_id?: string;
+            idempotency_key: string;
+            status: string;
+        };
+        PersonalPointLotsResponse: {
+            items: components["schemas"]["PersonalPointLot"][];
+        };
+        AdminPointMutationRequest: {
+            points: number;
+            reason: string;
+            idempotencyKey: string;
+        };
+        AdminPointGiftResponse: {
+            item: components["schemas"]["PersonalPointLot"];
+            idempotent: boolean;
+        };
+        AdminPointCorrectionResponse: {
+            balance: {
+                account_id: string;
+                user_id: string;
+                available: number;
+                frozen: number;
+                total: number;
+            };
+            lot?: components["schemas"]["PersonalPointLot"];
+            points: number;
+            idempotent: boolean;
         };
         PointAccountResponse: {
             account: components["schemas"]["PointAccount"];
@@ -1233,6 +1374,139 @@ export interface operations {
         responses: {
             200: components["responses"]["PointAccountResponse"];
             401: components["responses"]["ErrorResponse"];
+        };
+    };
+    getAdminPointExpiryPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current personal point expiry policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PointExpiryPolicyResponse"];
+                };
+            };
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
+        };
+    };
+    updateAdminPointExpiryPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePointExpiryPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Published personal point expiry policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PointExpiryPolicyResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    listAdminCustomerPointLots: {
+        parameters: {
+            query?: {
+                source?: string;
+                status?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Customer point lots */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonalPointLotsResponse"];
+                };
+            };
+            401: components["responses"]["ErrorResponse"];
+            403: components["responses"]["ErrorResponse"];
+        };
+    };
+    grantAdminCustomerPointGift: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminPointMutationRequest"];
+            };
+        };
+        responses: {
+            /** @description Server-derived ADMIN_GIFT lot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPointGiftResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    correctAdminCustomerPointBalance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminPointMutationRequest"];
+            };
+        };
+        responses: {
+            /** @description Audited permanent point correction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPointCorrectionResponse"];
+                };
+            };
+            400: components["responses"]["ErrorResponse"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     getChannelCenter: {

@@ -38,6 +38,11 @@ func (a adminAPI) updatePlanCapabilities(w http.ResponseWriter, r *http.Request)
 	}
 	planID := strings.TrimSpace(r.PathValue("id"))
 	if err := a.store.UpdateAdminPlanCapabilities(planID, req); err != nil {
+		var businessErr *businessPlanAdminError
+		if errors.As(err, &businessErr) {
+			writeBusinessPlanAdminError(w, err)
+			return
+		}
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}

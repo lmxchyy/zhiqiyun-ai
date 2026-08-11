@@ -1,0 +1,156 @@
+﻿CHECKED_AT=2026-07-29 06:23:00 +0800
+ORDER=ZQY20260728221656E339AB7A54 TXN=4500000301202607297737425043
+=== flags ===
+true
+true
+true
+production
+
+=== order summary ===
+-[ RECORD 1 ]--------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+id                               | ZQY20260728221656E339AB7A54
+user_id                          | user_000002
+status                           | PAID
+fulfillment_status               | FULFILLED
+entitlement_status               | SUCCESS
+amount_cents                     | 100
+transaction_price_cents          | 100
+wechat_goods_price_cents         | 100
+wechat_product_id_snapshot       | AGENT_TEST_1YUAN
+snapshot_version                 | 2
+payment_environment              | PRODUCTION
+wechat_transaction_id            | 4500000301202607297737425043
+price_plan_id                    | price_plan_20260728212634000000000_2ec1c485
+price_quote_id                   | quote_cf9092a39f600f9694868f5d
+plan_version_id                  | plan_version_agent_996_v1
+product_code                     | agent_join_996
+product_type                     | IDENTITY
+payment_mode                     | short_series_goods
+token_amount                     | 20000
+token_grant_amount               | 20000
+paid_at                          | 2026-07-28T22:17:06Z
+fulfilled_at                     | 2026-07-28T22:19:48.708988475Z
+entitlement_granted_at           | 2026-07-28 22:19:48.708988+00
+created_at                       | 2026-07-28T22:16:56.063749987Z
+rights_snapshot                  | {"agentLevel": "AGENT", "tokenAmount": 20000, "durationDays": 0, "pointsAmount": 0, "baseTokenAmount": 20000, "basePointsAmount": 0, "tokenGrantAmount": 20000, "pricePlanGiftPoints": 0, "pricePlanGiftTokens": 0}
+commission_rule_version_snapshot | COMMISSION_996_STANDARD
+
+
+=== payment events ===
+                   id                   |    event_type    |                event_id                | status  | processing_status |        transaction_id        | amount_cents | verified |          created_at           |         processed_at          
+----------------------------------------+------------------+----------------------------------------+---------+-------------------+------------------------------+--------------+----------+-------------------------------+-------------------------------
+ payment_event_f5723d1058090355793388c3 | query_order_paid | query:ZQY20260728221656E339AB7A54:paid | SUCCESS | SUCCESS           | 4500000301202607297737425043 |          100 | t        | 2026-07-28 22:19:48.666445+00 | 2026-07-28 22:19:48.666445+00
+(1 row)
+
+
+=== payment records ===
+-[ RECORD 1 ]---------+-----------------------------
+payment_no            | PAY2026072822165632770ADC7B
+order_no              | ZQY20260728221656E339AB7A54
+prepay_status         | PAID
+amount_cents          | 100
+wechat_order_id       | VPO260729061656022982037
+wechat_transaction_id | 4500000301202607297737425043
+paid_at               | 2026-07-28 22:17:06+00
+callback_payload      | {}
+notify_payload        | {}
+
+
+=== quote ===
+-[ RECORD 1 ]-----------+------------------------------------------------------
+id                      | quote_cf9092a39f600f9694868f5d
+user_id                 | user_000002
+plan_id                 | plan_agent_join_996
+price_plan_id           | price_plan_20260728212634000000000_2ec1c485
+entry_type              | TEST
+status                  | CONSUMED
+transaction_price_cents | 100
+wechat_product_id       | AGENT_TEST_1YUAN
+environment             | PRODUCTION
+offer_id                | 1450579876
+payment_mode            | short_series_goods
+whitelist_entry_id      | price_plan_whitelist_20260728214350000000000_557f3354
+created_at              | 2026-07-28 22:16:52.227322+00
+consumed_at             | 2026-07-28 22:16:56.063749+00
+consumed_order_no       | ZQY20260728221656E339AB7A54
+
+
+=== user ===
+-[ RECORD 1 ]-----------+----------------------------
+id                      | user_000002
+name                    | 婕旂ず鐢ㄦ埛
+role                    | MEMBER
+member_level            | PRO
+agent_status            | ACTIVE
+plan_id                 | plan_ai_creator_996
+subscription_expires_at | 2027-07-28T21:59:58Z
+updated_at              | 2026-07-28T22:19:48.675951Z
+
+
+=== identities ===
+                     id                      | identity_type | identity_status | commission_enabled |  source_type   |       source_order_id       |         effective_at          | expires_at | ended_at |          created_at           
+---------------------------------------------+---------------+-----------------+--------------------+----------------+-----------------------------+-------------------------------+------------+----------+-------------------------------
+ business_identity_user_35f2c887f048807c338d | USER          | ACTIVE          | f                  | MIGRATION      |                             | 2026-07-22 08:10:09.027318+00 |            |          | 2026-07-22 08:10:09.027318+00
+ business_identity_ad492b9cad29e95dd0cef1ba  | AGENT         | ACTIVE          | t                  | COMMERCE_ORDER | ZQY20260728221656E339AB7A54 | 2026-07-28 22:19:48.675951+00 |            |          | 2026-07-28 22:19:48.675951+00
+(2 rows)
+
+
+=== channel agent ===
+-[ RECORD 1 ]-------+----------------------------
+id                  | channel_000002
+user_id             | user_000002
+level               | 2
+status              | ACTIVE
+join_order_id       | ZQY20260728221656E339AB7A54
+invite_code         | 145FB817D639
+token_rights_amount | 20000
+created_at          | 2026-07-28T22:19:48.675951Z
+updated_at          | 2026-07-28T22:19:48.675951Z
+
+
+=== agent profile ===
+-[ RECORD 1 ]-------+----------------------------
+id                  | channel_000002
+user_id             | user_000002
+level               | 2
+status              | ACTIVE
+join_order_id       | ZQY20260728221656E339AB7A54
+token_rights_amount | 20000
+created_at          | 2026-07-28T22:19:48.675951Z
+
+
+=== token grant ===
+       id       |   user_id   |          order_id           |   change_type    | amount | balance_before | balance_after |        remark        |      created_at      
+----------------+-------------+-----------------------------+------------------+--------+----------------+---------------+----------------------+----------------------
+ token_IN_GRANT | user_000002 | ZQY20260728221656E339AB7A54 | AGENT_JOIN_GRANT |  20000 |              0 |         60793 | commerce_order_grant | 2026-07-28T22:17:06Z
+(1 row)
+
+
+=== wallet ===
+   user_id   | token_balance | total_token_granted | total_token_used |          updated_at           
+-------------+---------------+---------------------+------------------+-------------------------------
+ user_000002 |         60793 |               60000 |                0 | 2026-07-28 22:19:48.666445+00
+(1 row)
+
+
+=== commissions ===
+         id          |          order_id           | agent_id | amount_cents | rate |  status  |      created_at      
+---------------------+-----------------------------+----------+--------------+------+----------+----------------------
+ commission_platform | ZQY20260728221656E339AB7A54 |          |          100 |    0 | RECORDED | 2026-07-28T22:17:06Z
+(1 row)
+
+
+=== event types 2d ===
+    event_type    | count 
+------------------+-------
+ query_order_paid |     2
+(1 row)
+
+
+=== MEMBER+AGENT TEST orders ===
+             id              | status | fulfillment_status | entitlement_status | wechat_product_id_snapshot | amount_cents | snapshot_version |    wechat_transaction_id     |       paid_at        |          fulfilled_at          
+-----------------------------+--------+--------------------+--------------------+----------------------------+--------------+------------------+------------------------------+----------------------+--------------------------------
+ ZQY202607282159389857812495 | PAID   | FULFILLED          | SUCCESS            | MEMBER_TEST_1YUAN          |          100 |                2 | 4500000265202607293548593890 | 2026-07-28T21:59:58Z | 2026-07-28T22:01:48.144161072Z
+ ZQY20260728221656E339AB7A54 | PAID   | FULFILLED          | SUCCESS            | AGENT_TEST_1YUAN           |          100 |                2 | 4500000301202607297737425043 | 2026-07-28T22:17:06Z | 2026-07-28T22:19:48.708988475Z
+(2 rows)
+

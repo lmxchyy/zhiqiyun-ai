@@ -1,0 +1,26 @@
+{
+  "quoteId": "sha256:1d0a1d32765e4a36",
+  "planId": "plan_agent_join_996",
+  "planVersionId": "plan_version_agent_996_v1",
+  "pricePlanId": "price_plan_20260728233422000000000_b489661c",
+  "name": "代理沙箱1元测试",
+  "amountCent": 100,
+  "originalAmountCent": 100,
+  "currency": "CNY",
+  "giftPoints": 0,
+  "giftTokens": 0,
+  "environment": "SANDBOX",
+  "expiresAt": "2026-07-28T23:39:44.356683676Z",
+  "entitlements": {
+    "agentLevel": "AGENT",
+    "basePointsAmount": 0,
+    "baseTokenAmount": 20000,
+    "durationDays": 0,
+    "pointsAmount": 0,
+    "pricePlanGiftPoints": 0,
+    "pricePlanGiftTokens": 0,
+    "tokenAmount": 20000,
+    "tokenGrantAmount": 20000
+  },
+  "testOnly": true
+}

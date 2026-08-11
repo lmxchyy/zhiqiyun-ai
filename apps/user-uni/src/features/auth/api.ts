@@ -52,6 +52,13 @@ export const loginAPI = {
     );
   },
 
+  validateInviteToken(inviteToken: string) {
+    return apiClient.request<InviteValidationResponse & { inviteCode?: string; inviteToken?: string }>(
+      `/api/v1/invite/resolve?inviteToken=${encodeURIComponent(inviteToken)}`,
+      { timeout: 10000, auth: false },
+    );
+  },
+
   security() {
     return apiClient.request<AccountSecurityResponse>("/api/v1/auth/security");
   },
@@ -70,6 +77,17 @@ export const loginAPI = {
       body: { wxLoginCode },
       timeout: 15000,
     });
+  },
+
+  refreshWechatSession(wxLoginCode: string) {
+    return apiClient.request<{ sessionReady: boolean; linked: boolean; userId: string; boundToOther?: boolean }>(
+      "/api/v1/auth/wechat-mini-program/session",
+      {
+        method: "POST",
+        body: { wxLoginCode },
+        timeout: 15000,
+      },
+    );
   },
 
   changePassword(currentPassword: string, newPassword: string) {

@@ -56,7 +56,43 @@ func paymentFixture(t *testing.T) (*Service, *MockPaymentProvider, *sql.DB, stri
 		_, _ = db.ExecContext(ctx, `DELETE FROM xz_users WHERE id=$1`, userID)
 	})
 	mock := NewMockPaymentProvider("test")
-	return NewService(db, []PaymentProvider{mock}, nil), mock, db, userID
+	return NewService(db, []PaymentProvider{mock}, nil, WithPersonalPointGrantHook(paymentTestPersonalPointGrant)), mock, db, userID
+}
+
+func paymentTestPersonalPointGrant(ctx context.Context, tx *sql.Tx, request PersonalPointGrantRequest) (PersonalPointGrantResult, error) {
+	var accountID string
+	var availableBefore, frozen int64
+	err := tx.QueryRowContext(ctx, `SELECT id,available,frozen FROM xz_point_accounts WHERE user_id=$1 FOR UPDATE`, request.UserID).
+		Scan(&accountID, &availableBefore, &frozen)
+	if errors.Is(err, sql.ErrNoRows) {
+		accountID = "payment_points_" + randomHex(12)
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO xz_point_accounts(id,user_id,available,frozen,raw)
+			VALUES ($1,$2,0,0,jsonb_build_object('id',$1::text,'userId',$2::text,'available',0,'frozen',0))
+		`, accountID, request.UserID)
+		availableBefore = 0
+		frozen = 0
+	}
+	if err != nil {
+		return PersonalPointGrantResult{}, err
+	}
+	availableAfter, err := checkedAdd(availableBefore, request.Points)
+	if err != nil {
+		return PersonalPointGrantResult{}, err
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE xz_point_accounts
+		SET available=$2,raw=jsonb_set(coalesce(raw,'{}'::jsonb),'{available}',to_jsonb($2::bigint),true)
+		WHERE id=$1
+	`, accountID, availableAfter)
+	if err != nil {
+		return PersonalPointGrantResult{}, err
+	}
+	return PersonalPointGrantResult{
+		AccountID: accountID, UserID: request.UserID,
+		AvailableBefore: availableBefore, AvailableAfter: availableAfter,
+		FrozenBefore: frozen, FrozenAfter: frozen,
+	}, nil
 }
 
 func createTokenOrder(t *testing.T, service *Service, userID, key string) CreateOrderResult {

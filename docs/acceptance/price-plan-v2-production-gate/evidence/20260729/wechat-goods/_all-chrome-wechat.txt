@@ -1,0 +1,6 @@
+﻿msedge	pid=152708	vis=False	483x297	(69,20)	
+chrome	pid=146256	vis=False	768x745	(-6,230)	
+WeChatAppEx	pid=47580	vis=False	644x433	(15,0)	
+WeChatAppEx	pid=47580	vis=False	765x481	(-6,237)	
+chrome	pid=58692	vis=False	441x288	(0,0)	AIPRM for ChatGPT - Google Chrome
+chrome	pid=58692	vis=False	758x685	(-6,0)	

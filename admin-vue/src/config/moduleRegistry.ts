@@ -31,6 +31,9 @@ export function resolveModuleIdFromPath(pathname: string) {
   if (normalized.startsWith("/app/ppt-generation/generate/") || normalized.startsWith("/app/ppt-generation/presentation/")) {
     return "userPptGeneration";
   }
+  if (normalized.startsWith("/app/smart-video/")) {
+    return "userSmartVideo";
+  }
   const direct = adminModules.find((module) => module.path === normalized || module.aliases?.includes(normalized));
   if (direct) return direct.id;
   const enterpriseMatch = normalized.match(/^\/admin\/enterprises\/([^/]+)(?:\/([^/]+))?$/);

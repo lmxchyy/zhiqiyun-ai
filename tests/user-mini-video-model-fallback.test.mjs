@@ -47,3 +47,13 @@ test("unchanged model does not open a confirmation dialog", async () => {
   assert.equal(model, "seedance-fast-2.0");
   assert.equal(prompts, 0);
 });
+
+test("unchanged model returns synchronously without wrapping a Promise", () => {
+  const result = fallbackModule.confirmResolvedVideoModel(
+    "grok-imagine-1.5-video",
+    "grok-imagine-1.5-video",
+    async () => true,
+  );
+
+  assert.equal(result, "grok-imagine-1.5-video");
+});

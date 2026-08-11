@@ -9,9 +9,16 @@ export async function imageDataUrlToLocalPath(dataUrl: string, cacheKey: string)
   // #ifdef MP-WEIXIN
   const wxApi = (globalThis as unknown as { wx: { env: { USER_DATA_PATH: string }; getFileSystemManager: () => { writeFile: (options: Record<string, unknown>) => void } } }).wx;
   const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-  const filePath = `${wxApi.env.USER_DATA_PATH}/promotion-code-${cacheKey || Date.now()}.png`;
+  const ext = dataUrl.startsWith("data:image/jpeg") || dataUrl.startsWith("data:image/jpg") ? "jpg" : "png";
+  const filePath = `${wxApi.env.USER_DATA_PATH}/promotion-code-${cacheKey || Date.now()}.${ext}`;
   await withTimeout(new Promise<void>((resolve, reject) => {
-    wxApi.getFileSystemManager().writeFile({ filePath, data: base64, encoding: "base64", success: () => resolve(), fail: reject });
+    wxApi.getFileSystemManager().writeFile({
+      filePath,
+      data: base64,
+      encoding: "base64",
+      success: () => resolve(),
+      fail: (error: { errMsg?: string }) => reject(new Error(error?.errMsg || "小程序码写入失败")),
+    });
   }), "小程序码写入超时");
   return filePath;
   // #endif

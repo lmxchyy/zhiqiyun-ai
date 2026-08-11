@@ -36,12 +36,13 @@ export const adminNavigationGroups: AdminNavigationGroup[] = [
     { id: "management-overview", title: "管理总览", primaryModuleId: "analysis", moduleIds: ["analysis", "workbench", "dashboard"] }
   ] },
   { id: "customers-enterprises", title: "客户与企业", icon: "customers", sections: [
-    { id: "customers", title: "客户中心", primaryModuleId: "customers", moduleIds: ["customers"] },
+    { id: "customers", title: "客户中心", primaryModuleId: "customers", moduleIds: ["customers", "personalPointsGovernance"] },
     { id: "enterprises", title: "企业中心", primaryModuleId: "enterpriseList", moduleIds: enterpriseModuleIds, tabModuleIds: ["enterpriseList", "enterpriseCertifications"], requiresEnterpriseManagement: true },
     { id: "attribution", title: "归属关系", primaryModuleId: "customerAttributions", moduleIds: ["customerAttributions"] }
   ] },
   { id: "products-billing", title: "商品与计费", icon: "commercial", sections: [
     { id: "catalog", title: "商品与权益", primaryModuleId: "products", moduleIds: ["products", "plans", "billingProducts", "billingSubscriptions"] },
+    { id: "price-plan-governance", title: "套餐与价格配置", primaryModuleId: "pricePlanGovernance", moduleIds: ["pricePlanGovernance"] },
     { id: "orders-payments", title: "订单与支付", primaryModuleId: "orders", moduleIds: ["orders", "billingPaymentRequests", "billingPayments", "billingInvoices", "billingCreditNotes"] },
     { id: "pricing-costs", title: "定价与成本", primaryModuleId: "billingRules", moduleIds: ["billingRules", "billingProviderCosts"] },
     { id: "accounting", title: "账务与对账", primaryModuleId: "billingOverview", moduleIds: ["billingOverview", "billingEvents", "billingReconciliation", "billingWalletLedger", "billingCustomers", "usage", "tokenRecords"] },

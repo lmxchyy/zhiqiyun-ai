@@ -1,0 +1,6 @@
+                          id                           |                price_plan_id                |   user_id   | enabled |                                        reason                                        | revision | effective_at | expires_at |          created_at           
+-------------------------------------------------------+---------------------------------------------+-------------+---------+--------------------------------------------------------------------------------------+----------+--------------+------------+-------------------------------
+ price_plan_whitelist_20260728214350000000000_3fb9334c | price_plan_20260728212634000000000_049a91b1 | user_000002 | t       | production-gate TEST whitelist: existing demo payment tester user_000002 (演示用户); |        1 |              |            | 2026-07-28 21:43:50.218114+00
+ price_plan_whitelist_20260728214350000000000_557f3354 | price_plan_20260728212634000000000_2ec1c485 | user_000002 | t       | production-gate TEST whitelist: existing demo payment tester user_000002 (演示用户); |        1 |              |            | 2026-07-28 21:43:50.235937+00
+(2 rows)
+

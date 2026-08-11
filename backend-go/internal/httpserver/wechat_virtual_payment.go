@@ -60,14 +60,17 @@ var (
 )
 
 type virtualPaymentConfig struct {
-	Enabled     bool
-	Env         int
-	OfferID     string
-	AppKey      string
-	NotifyToken string
-	Mode        string
-	AppID       string
-	AppSecret   string
+	Enabled                      bool
+	Env                          int
+	OfferID                      string
+	AppKey                       string
+	NotifyToken                  string
+	Mode                         string
+	AppID                        string
+	AppSecret                    string
+	PricePlanCreationEnabled     bool
+	PricePlanTestEntryEnabled    bool
+	SnapshotV2FulfillmentEnabled bool
 }
 
 func virtualPaymentConfigFromApp(cfg config.Config) virtualPaymentConfig {
@@ -84,14 +87,17 @@ func virtualPaymentConfigFromApp(cfg config.Config) virtualPaymentConfig {
 		mode = "short_series_goods"
 	}
 	return virtualPaymentConfig{
-		Enabled:     cfg.WeChatVirtualPayEnabled,
-		Env:         env,
-		OfferID:     strings.TrimSpace(cfg.WeChatVirtualPayOfferID),
-		AppKey:      appKey,
-		NotifyToken: strings.TrimSpace(cfg.WeChatVirtualPayNotifyToken),
-		Mode:        mode,
-		AppID:       strings.TrimSpace(cfg.WeChatMiniProgramAppID),
-		AppSecret:   strings.TrimSpace(cfg.WeChatMiniProgramSecret),
+		Enabled:                      cfg.WeChatVirtualPayEnabled,
+		Env:                          env,
+		OfferID:                      strings.TrimSpace(cfg.WeChatVirtualPayOfferID),
+		AppKey:                       appKey,
+		NotifyToken:                  strings.TrimSpace(cfg.WeChatVirtualPayNotifyToken),
+		Mode:                         mode,
+		AppID:                        strings.TrimSpace(cfg.WeChatMiniProgramAppID),
+		AppSecret:                    strings.TrimSpace(cfg.WeChatMiniProgramSecret),
+		PricePlanCreationEnabled:     cfg.PricePlanCreationEnabled,
+		PricePlanTestEntryEnabled:    cfg.PricePlanTestEntryEnabled,
+		SnapshotV2FulfillmentEnabled: cfg.SnapshotV2FulfillmentEnabled,
 	}
 }
 
@@ -124,6 +130,20 @@ type virtualPaymentProduct struct {
 }
 
 type virtualOrderSnapshot struct {
+	SnapshotVersion            int                      `json:"snapshotVersion,omitempty"`
+	PlanID                     string                   `json:"planId,omitempty"`
+	PlanVersionID              string                   `json:"planVersionId,omitempty"`
+	PricePlanID                string                   `json:"pricePlanId,omitempty"`
+	Currency                   string                   `json:"currency,omitempty"`
+	PricePlanGiftPoints        int64                    `json:"pricePlanGiftPoints,omitempty"`
+	PricePlanGiftTokens        int64                    `json:"pricePlanGiftTokens,omitempty"`
+	TransactionPriceCents      int64                    `json:"transactionPriceCents,omitempty"`
+	WeChatGoodsPriceCents      int64                    `json:"wechatGoodsPriceCents,omitempty"`
+	PaymentChannel             string                   `json:"paymentChannel,omitempty"`
+	PaymentEnvironment         string                   `json:"paymentEnvironment,omitempty"`
+	Rights                     map[string]any           `json:"rights,omitempty"`
+	CommissionRuleVersion      string                   `json:"commissionRuleVersion,omitempty"`
+	CommissionSnapshotV2       map[string]any           `json:"commissionSnapshotV2,omitempty"`
 	ProductCode                string                   `json:"productCode"`
 	ProductName                string                   `json:"productName"`
 	ProductType                string                   `json:"productType"`
@@ -133,6 +153,7 @@ type virtualOrderSnapshot struct {
 	AgentLevel                 string                   `json:"agentLevel,omitempty"`
 	MemberDays                 int64                    `json:"memberDays,omitempty"`
 	CreditUnits                int64                    `json:"creditUnits,omitempty"`
+	PointUnits                 int64                    `json:"pointUnits,omitempty"`
 	ImageQuota                 int64                    `json:"imageQuota,omitempty"`
 	BuyQuantity                int64                    `json:"buyQuantity"`
 	UnitPriceCents             int64                    `json:"unitPriceCents"`
@@ -324,6 +345,7 @@ func (a virtualPaymentAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
+		QuoteID     string `json:"quoteId"`
 		ProductCode string `json:"productCode"`
 		Quantity    int64  `json:"quantity"`
 		CouponCode  string `json:"couponCode"`
@@ -365,12 +387,55 @@ func (a virtualPaymentAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 		user = updated
 		paymentSession = &session
 	}
-	result, err := a.service.createOrderWithCouponAndSession(
-		r.Context(), user, strings.TrimSpace(r.Header.Get("X-Tenant-Id")),
-		request.ProductCode, request.Quantity, request.CouponCode, paymentSession,
-	)
+	var result createVirtualOrderResponse
+	quoteID := strings.TrimSpace(request.QuoteID)
+	usePricePlanV2 := a.service.cfg.PricePlanCreationEnabled && quoteID != ""
+	productCode := strings.TrimSpace(request.ProductCode)
+	if quoteID == "" && productCode != "" {
+		managed, managedErr := a.service.isManagedMemberAgentPlanRef(r.Context(), productCode)
+		if managedErr != nil {
+			writePricePlanError(w, managedErr)
+			return
+		}
+		if managed && !a.service.cfg.PricePlanCreationEnabled {
+			writePricePlanError(w, errPricePlanCreationDisabled)
+			return
+		}
+		if managed || a.service.cfg.PricePlanCreationEnabled {
+			quote, quoteErr := a.service.issuePriceQuote(r.Context(), user, strings.TrimSpace(r.Header.Get("X-Tenant-Id")), productCode, "", "LEGACY_PRODUCT_CODE")
+			if quoteErr != nil {
+				if managed {
+					writePricePlanError(w, quoteErr)
+					return
+				}
+				if _, legacyErr := a.service.productByCode(r.Context(), productCode); legacyErr != nil {
+					writePricePlanError(w, quoteErr)
+					return
+				}
+			} else {
+				quoteID = quote.QuoteID
+				usePricePlanV2 = true
+			}
+		}
+	}
+	if a.service.cfg.PricePlanCreationEnabled && quoteID == "" && strings.TrimSpace(request.ProductCode) == "" {
+		writePricePlanError(w, errPriceQuoteRequired)
+		return
+	}
+	if usePricePlanV2 {
+		result, err = a.service.createOrderFromPriceQuote(r.Context(), user, strings.TrimSpace(r.Header.Get("X-Tenant-Id")), quoteID, paymentSession)
+	} else {
+		result, err = a.service.createOrderWithCouponAndSession(
+			r.Context(), user, strings.TrimSpace(r.Header.Get("X-Tenant-Id")),
+			request.ProductCode, request.Quantity, request.CouponCode, paymentSession,
+		)
+	}
 	if err != nil {
-		writeVirtualPaymentError(w, err)
+		if usePricePlanV2 || errors.Is(err, errPriceQuoteRequired) || errors.Is(err, errPricePlanCreationDisabled) {
+			writePricePlanError(w, err)
+		} else {
+			writeVirtualPaymentError(w, err)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
@@ -574,13 +639,71 @@ func (s *virtualPaymentService) listProducts(ctx context.Context) ([]virtualPaym
 		       lower(coalesce(plan.entitlements->>'customQuantity', 'false')) = 'true',
 		       case when coalesce(plan.entitlements->>'minQuantity', '') ~ '^[0-9]+$' then (plan.entitlements->>'minQuantity')::bigint else 1 end,
 		       case when coalesce(plan.entitlements->>'maxQuantity', '') ~ '^[0-9]+$' then (plan.entitlements->>'maxQuantity')::bigint else 1 end,
-		       coalesce(mapping.offer_id, ''), mapping.wechat_product_id, mapping.mode, mapping.env, plan.active and mapping.enabled
+		       coalesce(nullif(mapping.offer_id, ''), nullif($2::text, ''), ''), mapping.wechat_product_id,
+		       coalesce(nullif(mapping.mode, ''), nullif($3::text, ''), 'short_series_goods'), mapping.env,
+		       plan.active and mapping.enabled
 		from xz_plans plan
 		join xz_wechat_virtual_product_mappings mapping on mapping.plan_id = plan.id and mapping.env = $1
 		where coalesce(plan.payment_product_code, '') <> ''
 		  and ($1 <> 0 or lower(coalesce(plan.entitlements->>'testOnly', plan.raw->>'testOnly', 'false')) <> 'true')
-		order by plan.price_cents, plan.id
-	`, s.cfg.Env)
+		  and not exists(
+			select 1
+			from xz_plan_versions managed_version
+			join xz_price_plans managed_price on managed_price.plan_id=plan.id
+			  and managed_price.plan_version_id=managed_version.id
+			join xz_price_plan_payment_bindings managed_binding on managed_binding.price_plan_id=managed_price.id
+			where managed_version.plan_id=plan.id
+			  and ((plan.plan_type='MEMBER_PACKAGE' and managed_version.business_type='MEMBER')
+			    or (plan.plan_type='AGENT_JOIN_PACKAGE' and managed_version.business_type='AGENT'))
+			  and managed_price.channel='WECHAT_VIRTUAL'
+			  and managed_price.environment=case when $1::integer=1 then 'SANDBOX' else 'PRODUCTION' end
+			  and managed_price.price_type<>'TEST' and managed_price.is_visible=true
+			  and (
+				(managed_price.is_default=true and (
+					(managed_price.enabled_at is not null and managed_binding.enabled_at is not null)
+					or (managed_price.enabled=true and managed_price.status='ACTIVE' and managed_binding.enabled=true and managed_binding.status='ACTIVE')
+				))
+				or exists(select 1 from xz_order_price_quotes managed_quote where managed_quote.payment_binding_id=managed_binding.id)
+				or exists(select 1 from xz_orders managed_order where managed_order.price_plan_id=managed_price.id and managed_order.snapshot_version=2)
+			  )
+		  )
+		union all
+		select plan.id, plan.code, plan.name,
+		       case pv.business_type when 'MEMBER' then 'MEMBERSHIP' else 'IDENTITY' end,
+		       plan.plan_type, pp.sale_price_cents, coalesce(pv.member_level,''), coalesce(pv.agent_level,''),
+		       pv.duration_days, pv.token_amount + pp.bonus_tokens,
+		       case when coalesce(pv.rights_snapshot->>'imageQuota','') ~ '^[0-9]+$'
+		              then (pv.rights_snapshot->>'imageQuota')::bigint else 0 end,
+		       false, 1::bigint, 1::bigint, g.offer_id, g.product_id, g.mode,
+		       case pp.environment when 'SANDBOX' then 1 else 0 end,
+		       plan.active and pp.enabled and b.enabled and g.enabled and g.published
+		from xz_plans plan
+		join xz_plan_versions pv on pv.plan_id=plan.id
+		join xz_price_plans pp on pp.plan_id=plan.id and pp.plan_version_id=pv.id
+		join xz_price_plan_payment_bindings b on b.price_plan_id=pp.id
+		join xz_wechat_virtual_goods g on g.id=b.wechat_good_id
+		where plan.active=true and pv.status='ACTIVE'
+		  and ((plan.plan_type='MEMBER_PACKAGE' and pv.business_type='MEMBER')
+		    or (plan.plan_type='AGENT_JOIN_PACKAGE' and pv.business_type='AGENT'))
+		  and (pv.effective_at is null or pv.effective_at<=now())
+		  and (pv.expires_at is null or pv.expires_at>now())
+		  and pp.channel='WECHAT_VIRTUAL'
+		  and pp.environment=case when $1::integer=1 then 'SANDBOX' else 'PRODUCTION' end
+		  and pp.price_type<>'TEST' and pp.is_default=true and pp.is_visible=true
+		  and pp.audience_type='PUBLIC' and pp.currency='CNY'
+		  and pp.enabled=true and pp.status='ACTIVE'
+		  and (pp.effective_at is null or pp.effective_at<=now())
+		  and (pp.expires_at is null or pp.expires_at>now())
+		  and b.enabled=true and b.status='ACTIVE'
+		  and g.enabled=true and g.published=true and g.status='PUBLISHED'
+		  and g.verification_status='MANUALLY_CONFIRMED_PUBLISHED'
+		  and (g.verification_expires_at is null or g.verification_expires_at>now())
+		  and pp.sale_price_cents=b.provider_price_snapshot_cents
+		  and pp.sale_price_cents=g.platform_price_cents
+		  and pp.channel=b.channel and pp.channel=g.channel
+		  and pp.environment=b.environment and pp.environment=g.environment
+		order by 6,1
+	`, s.cfg.Env, strings.TrimSpace(s.cfg.OfferID), strings.TrimSpace(s.cfg.Mode))
 	if err != nil {
 		return nil, err
 	}
@@ -596,8 +719,8 @@ func (s *virtualPaymentService) listProducts(ctx context.Context) ([]virtualPaym
 		}
 		item.ProductType = strings.ToUpper(strings.TrimSpace(item.ProductType))
 		item.PlanType = normalizePlanTypeString(item.PlanType)
-		item.OfferID = firstNonEmptyString(s.cfg.OfferID, item.OfferID)
-		item.Mode = firstNonEmptyString(s.cfg.Mode, item.Mode, "short_series_goods")
+		item.OfferID = strings.TrimSpace(item.OfferID)
+		item.Mode = firstNonEmptyString(item.Mode, s.cfg.Mode, "short_series_goods")
 		switch item.ProductType {
 		case "TOKEN_ONLY":
 			if item.CustomQuantity {
@@ -740,9 +863,29 @@ func (s *virtualPaymentService) createOrderWithCouponAndSession(ctx context.Cont
 	if !s.cfg.ready() {
 		return createVirtualOrderResponse{}, errVirtualPaymentUnavailable
 	}
+	managed, err := s.isManagedMemberAgentPlanRef(ctx, productCode)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	if managed {
+		if !s.cfg.PricePlanCreationEnabled {
+			return createVirtualOrderResponse{}, errPricePlanCreationDisabled
+		}
+		return createVirtualOrderResponse{}, errPriceQuoteRequired
+	}
 	product, err := s.productByCode(ctx, productCode)
 	if err != nil {
 		return createVirtualOrderResponse{}, err
+	}
+	managed, err = s.isManagedMemberAgentPlanRef(ctx, product.PlanID)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	if managed {
+		if !s.cfg.PricePlanCreationEnabled {
+			return createVirtualOrderResponse{}, errPricePlanCreationDisabled
+		}
+		return createVirtualOrderResponse{}, errPriceQuoteRequired
 	}
 	if strings.EqualFold(product.ProductType, "TOKEN_ONLY") {
 		eligible, eligibilityErr := s.pointRechargeEligible(ctx, user.ID)
@@ -809,6 +952,17 @@ func (s *virtualPaymentService) createOrderWithCouponAndSession(ctx context.Cont
 		return createVirtualOrderResponse{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	environment := map[int]string{0: "PRODUCTION", 1: "SANDBOX"}[s.cfg.Env]
+	managed, err = legacyOrderManagedV2Tx(ctx, tx, product.PlanID, environment)
+	if err != nil {
+		return createVirtualOrderResponse{}, err
+	}
+	if managed {
+		if !s.cfg.PricePlanCreationEnabled {
+			return createVirtualOrderResponse{}, errPricePlanCreationDisabled
+		}
+		return createVirtualOrderResponse{}, errPriceQuoteRequired
+	}
 	plan, ok := planCatalogByID(product.PlanID)
 	if !ok {
 		return createVirtualOrderResponse{}, fmt.Errorf("virtual commerce plan not found: %s", product.PlanID)
@@ -1214,6 +1368,7 @@ type wechatQueryOrderResponse struct {
 		WxOrderID      string `json:"wx_order_id"`
 		ChannelOrderID string `json:"channel_order_id"`
 		WxPayOrderID   string `json:"wxpay_order_id"`
+		WxRefundID     string `json:"wx_refund_id"`
 		EnvType        int    `json:"env_type"`
 	} `json:"order"`
 }

@@ -10231,6 +10231,61 @@ body {
   cursor: zoom-in;
 }
 
+.ai-detail-preview img.is-placeholder {
+  filter: saturate(0.92);
+  opacity: 0.92;
+}
+
+.ai-detail-image-status {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  z-index: 3;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-width: 180px;
+  max-width: calc(100% - 48px);
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.72);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+  backdrop-filter: blur(8px);
+}
+
+.ai-detail-image-status.is-error {
+  background: rgba(127, 29, 29, 0.82);
+}
+
+.ai-detail-image-status p {
+  margin: 0;
+}
+
+.ai-detail-image-status button {
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  padding: 6px 12px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ai-detail-download:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ai-lightbox-figure .ai-detail-image-status {
+  bottom: 18px;
+}
+
 .ai-detail-badges {
   position: absolute;
   top: 16px;

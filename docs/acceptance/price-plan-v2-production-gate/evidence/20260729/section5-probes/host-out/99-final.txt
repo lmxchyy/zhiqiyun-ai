@@ -1,0 +1,6 @@
+=== FINAL FLAGS 2026-07-29 09:56:43 +0800 ===
+true
+true
+true
+production
+WL_OK=1 GOOD_OK=100 IDEM=1 WL7=1 MM8=0 V10=0

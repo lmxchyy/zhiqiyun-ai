@@ -1,0 +1,9 @@
+BEGIN
+INSERT 0 1
+INSERT 0 1
+             id             |       plan_id       | business_type | status | version_no | member_level | agent_level | token_amount | points_amount | duration_days 
+----------------------------+---------------------+---------------+--------+------------+--------------+-------------+--------------+---------------+---------------
+ plan_version_agent_996_v1  | plan_agent_join_996 | AGENT         | ACTIVE |          1 |              | AGENT       |        20000 |             0 |             0
+ plan_version_member_996_v1 | plan_ai_creator_996 | MEMBER        | ACTIVE |          1 | PRO          |             |        40000 |             0 |           365
+(2 rows)
+COMMIT

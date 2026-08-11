@@ -1,0 +1,14 @@
+source-*/
+*.tar
+rehearsal/restore.log
+rehearsal/restore-second.log
+rehearsal/migrate.log
+rehearsal/validate.log
+rehearsal/validate2.log
+rehearsal/validate-fk.log
+
+# P0: never re-commit unredacted docker inspect dumps
+repo-digest/host-out/container-inspect.raw.json
+repo-digest/host-out/image-inspect.raw.json
+**/container-inspect.unredacted.json
+**/image-inspect.unredacted.json

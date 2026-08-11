@@ -152,15 +152,6 @@
       >
         <text>{{ busy ? "正在登录…" : agreementAccepted ? "登录" : "同意协议并登录" }}</text>
       </view>
-      <button
-        class="auth-guest-enter-button"
-        hover-class="auth-guest-enter-pressed"
-        :disabled="busy"
-        @click="enterGuestBrowse()"
-      >
-        <text>暂不登录，进入首页</text>
-      </button>
-      <text class="auth-guest-hint">可先浏览功能，需要创作时再登录</text>
       <SecondaryLoginEntry label="使用手机号验证码登录" @activate="switchMode('sms')" />
       <!-- #ifdef MP-WEIXIN -->
       <SecondaryLoginEntry label="返回手机号快捷登录" muted @activate="switchMode('wechat')" />
@@ -179,6 +170,15 @@
           <text class="auth-password-agreement-link" @click.stop="openAgreement('privacy')">《隐私政策》</text>
         </view>
       </view>
+      <button
+        class="auth-guest-enter-button"
+        hover-class="auth-guest-enter-pressed"
+        :disabled="busy"
+        @click="enterGuestBrowse()"
+      >
+        <text>暂不登录，进入首页</text>
+      </button>
+      <text class="auth-guest-hint">可先浏览功能，需要创作时再登录</text>
     </LoginCard>
 
     <BottomSheet
@@ -323,6 +323,7 @@ const agreementSheetVisible = ref(false);
 const agreementSheetTitle = ref("");
 const agreementSheetContent = ref("");
 const pendingInviteCode = ref("");
+const pendingInviteToken = ref("");
 const inviteDraft = ref("");
 const inviteStatus = ref<InviteStatus>("empty");
 const inviteValidating = ref(false);
@@ -339,7 +340,7 @@ let agreementTimer: ReturnType<typeof setTimeout> | null = null;
 let requestVersion = 0;
 let destroyed = false;
 let sourceParams: LoginSourceParams = {
-  inviteCode: "", inviteSource: "none", sceneCode: "", promoterCode: "", campaignCode: "", channel: "", sourcePage: "",
+  inviteCode: "", inviteToken: "", inviteSource: "none", sceneCode: "", promoterCode: "", campaignCode: "", channel: "", sourcePage: "",
 };
 let redirectInfo: LoginRedirectInfo = { path: "", query: {}, action: "", sourcePage: "" };
 
@@ -400,6 +401,7 @@ function nextIdempotencyKey(method: LoginMode): string {
 function attribution(method: LoginMode) {
   return {
     inviteCode: pendingInviteCode.value || undefined,
+    inviteToken: pendingInviteToken.value || sourceParams.inviteToken || undefined,
     scene: sourceParams.sceneCode || undefined,
     promoterCode: sourceParams.promoterCode || undefined,
     campaignCode: sourceParams.campaignCode || undefined,
@@ -409,8 +411,10 @@ function attribution(method: LoginMode) {
 }
 
 function defaultRole(roles: AppRole[] | undefined): AppRole {
-  if (roles?.includes("OPERATION")) return "OPERATION";
+  // Consumer home is the default product surface. Agent/operation are entered via explicit role switch.
+  if (roles?.includes("USER")) return "USER";
   if (roles?.includes("AGENT")) return "AGENT";
+  if (roles?.includes("OPERATION")) return "OPERATION";
   return "USER";
 }
 
@@ -418,6 +422,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
   if (destroyed || version !== requestVersion) return;
   if (!auth.accessToken) throw new Error("TOKEN_SAVE_FAILED");
   try {
+    uni.removeStorageSync("xianzhiMiniProgramAuth");
     authStorage.setToken(auth.accessToken);
     authStorage.setRefreshToken(auth.refreshToken || "");
     authStorage.setAuth(auth);
@@ -432,6 +437,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
   const targetRole = defaultRole(auth.roles);
   if (userStore.currentRole !== targetRole) await userStore.switchRole(targetRole);
   pendingInviteCode.value = "";
+  pendingInviteToken.value = "";
   inviteStatus.value = "empty";
   uni.removeStorageSync("zhiqiyun.promotion.pending-referral.v1");
   trackLogin(auth.isNewUser ? "register_success" : "login_success", { method: mode.value, isNewUser: Boolean(auth.isNewUser) });
@@ -443,7 +449,7 @@ async function completeAuth(auth: AuthFlowResponse, version: number) {
     viewState.value = "success";
     return;
   }
-  if (auth.inviteBindStatus === "ignored_existing" && sourceParams.inviteCode) {
+  if (auth.inviteBindStatus === "ignored_existing" && (sourceParams.inviteCode || sourceParams.inviteToken)) {
     showToast("当前账号已注册，邀请码仅适用于新用户");
   }
   loadingStep.value = "entering";
@@ -579,11 +585,6 @@ function useSmsAfterAuthorizationFailure() {
   switchMode("sms");
 }
 
-function closeAuthorizationSheet() {
-  authorizationSheetVisible.value = false;
-  trackLogin("phone_auth_sheet_close");
-}
-
 async function sendSmsCode() {
   if (smsSending.value || countdown.value > 0 || busy.value) return;
   mobile.value = normalizeMobile(mobile.value);
@@ -683,6 +684,39 @@ function inviteStatusMessage(status: InviteStatus): string {
   return messages[status] || "邀请码校验失败，不影响正常登录注册";
 }
 
+async function validateInviteToken(token: string, carried: boolean) {
+  inviteValidating.value = true;
+  inviteStatus.value = "resolving";
+  try {
+    const result = await loginAPI.validateInviteToken(token);
+    if (result.valid) {
+      pendingInviteToken.value = token;
+      pendingInviteCode.value = String(result.inviteCode || "").toUpperCase();
+      sourceParams.inviteToken = token;
+      if (pendingInviteCode.value) sourceParams.inviteCode = pendingInviteCode.value;
+      inviteStatus.value = carried ? "carried" : "filled";
+      inviteMessage.value = "邀请码有效";
+      inviteMessageTone.value = "success";
+      trackLogin("invite_validate_success", { source: carried ? sourceParams.inviteSource : "scene" });
+      return true;
+    }
+    pendingInviteToken.value = token;
+    inviteStatus.value = result.status || "invalid";
+    inviteMessage.value = result.message || inviteStatusMessage(inviteStatus.value);
+    inviteMessageTone.value = "error";
+    trackLogin("invite_validate_failed", { status: inviteStatus.value });
+    return false;
+  } catch {
+    pendingInviteToken.value = token;
+    inviteStatus.value = "invalid";
+    inviteMessage.value = "邀请码暂时无法校验，不影响正常登录注册";
+    inviteMessageTone.value = "error";
+    return false;
+  } finally {
+    inviteValidating.value = false;
+  }
+}
+
 async function validateInvite(code: string, carried: boolean) {
   inviteValidating.value = true;
   inviteStatus.value = "resolving";
@@ -723,9 +757,11 @@ async function confirmInvite() {
 
 function removeInvite() {
   pendingInviteCode.value = "";
+  pendingInviteToken.value = "";
   inviteDraft.value = "";
   inviteStatus.value = "empty";
   sourceParams.inviteCode = "";
+  sourceParams.inviteToken = "";
   closeInviteSheet();
 }
 
@@ -789,6 +825,11 @@ function enterGuestBrowse() {
   enterGuestBrowseHome();
 }
 
+function closeAuthorizationSheet() {
+  authorizationSheetVisible.value = false;
+  trackLogin("phone_auth_sheet_close");
+}
+
 const keyboardHandler = (result: { height?: number }) => {
   keyboardHeight.value = Math.max(0, Number(result.height || 0));
   if (keyboardHeight.value > 0) {
@@ -802,8 +843,11 @@ onLoad(async options => {
   const query = (options || {}) as Record<string, unknown>;
   sourceParams = parseLoginSource(query);
   redirectInfo = parseRedirectInfo(query);
-  trackLogin("login_page_view", { hasInvite: Boolean(sourceParams.inviteCode), source: sourceParams.inviteSource });
-  if (sourceParams.inviteCode) {
+  trackLogin("login_page_view", { hasInvite: Boolean(sourceParams.inviteCode || sourceParams.inviteToken), source: sourceParams.inviteSource });
+  if (sourceParams.inviteToken) {
+    pendingInviteToken.value = sourceParams.inviteToken;
+    await validateInviteToken(sourceParams.inviteToken, true);
+  } else if (sourceParams.inviteCode) {
     pendingInviteCode.value = sourceParams.inviteCode;
     await validateInvite(sourceParams.inviteCode, true);
   }
@@ -838,6 +882,7 @@ onUnload(() => {
 .auth-agreement-spacing.password { margin-top: 11px; }
 .auth-help-spacing { margin-top: 22px; }
 .auth-help-spacing.sms { margin-top: 7px; }
+.auth-permission-guest-button { margin-top: 14px; }
 .auth-mode-back { margin: 7px 0 5px; }
 .auth-field-block { margin-bottom: 12px; }
 .auth-field-label { display: block; margin-bottom: 6px; color: #181c28; font-size: 12px; line-height: 20px; font-weight: 500; }
@@ -877,7 +922,6 @@ onUnload(() => {
 .auth-permission-title { color: #181c28; font-size: 21px; line-height: 32px; font-weight: 700; }
 .auth-permission-copy { margin: 8px 0 24px; color: #697085; font-size: 13px; line-height: 24px; }
 .auth-retry-authorization { margin-top: 14px; color: #4a6bff !important; border: 1px solid #e0e5f2 !important; background: #fff !important; box-shadow: none !important; }
-.auth-permission-guest-button { margin-top: 14px; }
 .auth-agreement-document { max-height: 220px; margin-bottom: 22px; color: #697085; font-size: 13px; line-height: 24px; }
 @media (max-width: 340px) {
   .auth-auto-register { font-size: 10px; }

@@ -57,6 +57,11 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 			Mode: "short_series_goods", AppID: "test-appid", AppSecret: "test-secret",
 		},
 	}
+	service.accessToken = "mock-access-token"
+	service.accessTokenExp = time.Now().Add(time.Hour)
+	service.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"errcode":0,"errmsg":"ok"}`))}, nil
+	})}
 
 	t.Run("server product controls amount and session is required", func(t *testing.T) {
 		created, err := service.createOrder(ctx, adminUser{ID: userID}, "", "MEMBER_PRO_YEAR_996")
@@ -136,6 +141,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if membershipCount != 1 || tokenCount != 1 || !expires.Equal(initialExpiry.AddDate(0, 0, 365)) {
 			t.Fatalf("membership idempotency mismatch: memberships=%d tokens=%d expires=%s", membershipCount, tokenCount, expires)
 		}
+		assertPersonalPointGrantRows(t, ctx, db, userID, orderNo, PointSourceMemberPackageGrant, int64(beforeCredits+40000), 1)
 	})
 
 	t.Run("ten-cent custom recharge completes the full signed callback flow", func(t *testing.T) {
@@ -188,6 +194,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 			t.Fatalf("ten-cent flow mismatch: before=%d after=%d order=%s entitlement=%s payment=%s ledger=%d events=%d quantity=%d tokens=%d", beforeCredits, afterCredits, orderStatus, entitlementStatus, paymentStatus, ledgerCount, eventCount, snapshotQuantity, snapshotTokens)
 		}
 		t.Logf("simulated ten-cent flow: amount=10 quantity=%d tokens=+%d order=%s entitlement=%s payment=%s walletLedger=%d billingEvents=%d", snapshotQuantity, afterCredits-beforeCredits, orderStatus, entitlementStatus, paymentStatus, ledgerCount, eventCount)
+		assertPersonalPointGrantRows(t, ctx, db, userID, created.OrderNo, PointSourceRecharge, int64(afterCredits), 1)
 	})
 
 	t.Run("coupon bonus and commercial billing records follow the paid order", func(t *testing.T) {
@@ -238,6 +245,8 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if afterCredits-beforeCredits != 35 || redemptionStatus != "APPLIED" || invoiceCount != 1 || invoiceStatus != "PAID" || requestCount != 1 || requestStatus != "SUCCEEDED" {
 			t.Fatalf("commercial coupon flow mismatch: credits=%d redemption=%s invoices=%d/%s requests=%d/%s", afterCredits-beforeCredits, redemptionStatus, invoiceCount, invoiceStatus, requestCount, requestStatus)
 		}
+		assertPersonalPointGrantRows(t, ctx, db, userID, created.OrderNo, PointSourceRecharge, int64(afterCredits), 1)
+		assertPersonalPointGrantRows(t, ctx, db, userID, created.OrderNo, PointSourceWechatVirtualCoupon, int64(afterCredits), 1)
 	})
 
 	t.Run("TOKEN_ONLY recharge grants the configured token amount once", func(t *testing.T) {
@@ -266,6 +275,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if afterCredits-beforeCredits != 10000 || eventCount != 1 || ledgerCount != 1 {
 			t.Fatalf("TOKEN_ONLY idempotency mismatch: before=%d after=%d events=%d ledger=%d", beforeCredits, afterCredits, eventCount, ledgerCount)
 		}
+		assertPersonalPointGrantRows(t, ctx, db, userID, orderNo, PointSourceRecharge, int64(afterCredits), 1)
 	})
 
 	t.Run("IDENTITY grants points and agent identity atomically", func(t *testing.T) {
@@ -302,6 +312,7 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		if afterCredits-beforeCredits != 20000 || agentStatus != agentStatusActive || channelCount != 1 || profileCount != 1 || tokenCount != 1 {
 			t.Fatalf("IDENTITY mismatch: before=%d after=%d status=%s channel=%d profile=%d tokens=%d", beforeCredits, afterCredits, agentStatus, channelCount, profileCount, tokenCount)
 		}
+		assertPersonalPointGrantRows(t, ctx, db, userID, orderNo, PointSourceAgentJoinGrant, int64(afterCredits), 1)
 	})
 
 	t.Run("active agent can purchase membership without losing agent identity", func(t *testing.T) {
@@ -384,6 +395,9 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		service.accessToken = "mock-access-token"
 		service.accessTokenExp = time.Now().Add(time.Hour)
 		service.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path == "/xpay/notify_provide_goods" {
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"errcode":0,"errmsg":"ok"}`))}, nil
+			}
 			if request.URL.Path != "/xpay/query_order" || request.URL.Query().Get("pay_sig") == "" {
 				t.Fatalf("unexpected query request: %s", request.URL.String())
 			}
@@ -442,6 +456,13 @@ func TestWechatVirtualPaymentPostgresLifecycle(t *testing.T) {
 		_ = db.QueryRowContext(ctx, `select count(*) from xz_token_records where source_order_no = $1`, orderNo).Scan(&tokenCount)
 		if beforeExpiry != afterExpiry || membershipCount != 0 || tokenCount != 0 {
 			t.Fatalf("partial entitlement escaped rollback: before=%s after=%s memberships=%d tokens=%d", beforeExpiry, afterExpiry, membershipCount, tokenCount)
+		}
+		var lotCount int
+		if err := db.QueryRowContext(ctx, `select count(*) from xz_personal_point_lots where user_id=$1 and reference_id=$2`, userID, orderNo).Scan(&lotCount); err != nil {
+			t.Fatal(err)
+		}
+		if lotCount != 0 {
+			t.Fatalf("partial entitlement escaped rollback into %d point lots", lotCount)
 		}
 	})
 
@@ -571,6 +592,8 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	cleanupImmutableCommissionTestRows(t, ctx, db, prefix)
+	cleanupImmutableIdentityChangeTestRows(t, ctx, db, userIDs)
+	cleanupVirtualPersonalPointTestRows(t, ctx, db, userIDs)
 	statements := []string{
 		`delete from xz_billing_dunning_events where payment_request_id in (select id from xz_billing_payment_requests where order_no like $1)`,
 		`delete from xz_billing_credit_notes where order_no like $1`,
@@ -599,6 +622,8 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 			`delete from xz_image_quota_accounts where user_id = $1`,
 			`delete from xz_agent_wallets where user_id = $1`,
 			`delete from xz_agent_profiles where user_id = $1`,
+			`delete from xz_user_relationships where user_id = $1`,
+			`delete from xz_user_business_identities where user_id = $1`,
 			`delete from xz_channel_agents where user_id = $1`,
 			`delete from xz_user_wallets where user_id = $1`,
 			`delete from xz_point_accounts where user_id = $1`,
@@ -608,6 +633,36 @@ func cleanupVirtualPaymentTest(t *testing.T, db *sql.DB, prefix string, userIDs 
 				t.Logf("cleanup failed: %v", err)
 			}
 		}
+	}
+}
+
+func cleanupVirtualPersonalPointTestRows(t *testing.T, ctx context.Context, db *sql.DB, userIDs []string) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Errorf("personal point cleanup transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `set local session_replication_role = replica`); err != nil {
+		t.Errorf("personal point cleanup trigger isolation: %v", err)
+		return
+	}
+	for _, userID := range userIDs {
+		for _, statement := range []string{
+			`delete from xz_personal_point_lot_movements where user_id=$1`,
+			`delete from xz_personal_point_reservation_allocations where user_id=$1`,
+			`delete from xz_personal_point_reservations where user_id=$1`,
+			`delete from xz_personal_point_lots where user_id=$1`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement, userID); err != nil {
+				t.Errorf("personal point cleanup: %v", err)
+				return
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Errorf("personal point cleanup commit: %v", err)
 	}
 }
 
@@ -657,5 +712,28 @@ func cleanupImmutableCommissionTestRows(t *testing.T, ctx context.Context, db *s
 	}
 	if err := tx.Commit(); err != nil {
 		t.Errorf("commission cleanup commit: %v", err)
+	}
+}
+
+func cleanupImmutableIdentityChangeTestRows(t *testing.T, ctx context.Context, db *sql.DB, userIDs []string) {
+	t.Helper()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Errorf("identity change cleanup transaction: %v", err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `set local session_replication_role = replica`); err != nil {
+		t.Errorf("identity change cleanup trigger isolation: %v", err)
+		return
+	}
+	for _, userID := range userIDs {
+		if _, err := tx.ExecContext(ctx, `delete from xz_identity_change_records where user_id=$1`, userID); err != nil {
+			t.Errorf("identity change cleanup: %v", err)
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Errorf("identity change cleanup commit: %v", err)
 	}
 }

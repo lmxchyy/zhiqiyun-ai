@@ -104,6 +104,7 @@ import {
   type PublicInviteInfo,
 } from "../../features/invite/api";
 
+const miniProgramNavigationStyle = ref<Record<string, string>>({});
 const inviteCode = ref("");
 const invite = ref<PublicInviteInfo | null>(null);
 const loading = ref(true);

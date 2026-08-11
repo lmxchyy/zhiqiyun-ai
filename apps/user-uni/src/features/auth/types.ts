@@ -34,6 +34,7 @@ export type LoginErrorState =
 
 export interface LoginSourceParams {
   inviteCode: string;
+  inviteToken: string;
   inviteSource: InviteSource;
   sceneCode: string;
   promoterCode: string;
@@ -94,6 +95,7 @@ export interface BindMobileResponse {
 
 export interface AuthAttributionInput {
   inviteCode?: string;
+  inviteToken?: string;
   scene?: string;
   promoterCode?: string;
   campaignCode?: string;

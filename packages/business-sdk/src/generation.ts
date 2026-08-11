@@ -19,7 +19,7 @@ export function listTaskPage(api: ApiClient, options: TaskPageOptions = {}) {
 
 export function createGenerationSdk(api: ApiClient): BusinessSdk["generation"] {
   return {
-    async createTask(draft: CreateDraft) {
+    createTask(draft: CreateDraft) {
       if (draft.mode === "ppt") {
         return api.request<GenerationTask, Record<string, unknown>>("/api/v1/ppt/generate", {
           method: "POST",

@@ -444,11 +444,14 @@ func writeStorageError(w http.ResponseWriter, err error) {
 		status = http.StatusUnauthorized
 	case errors.Is(err, storagecenter.ErrFileForbidden):
 		status = http.StatusForbidden
-	case errors.Is(err, storagecenter.ErrFileNotFound), errors.Is(err, storagecenter.ErrConfigNotFound):
+	case errors.Is(err, storagecenter.ErrFileNotFound), errors.Is(err, storagecenter.ErrConfigNotFound),
+		errors.Is(err, storagecenter.ErrMultipartNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, storagecenter.ErrQuotaExceeded):
 		status = http.StatusInsufficientStorage
-	case errors.Is(err, storagecenter.ErrInvalidFileType), errors.Is(err, storagecenter.ErrInvalidFileSize), errors.Is(err, storagecenter.ErrUploadConfirmFailed):
+	case errors.Is(err, storagecenter.ErrInvalidFileType), errors.Is(err, storagecenter.ErrInvalidFileSize),
+		errors.Is(err, storagecenter.ErrUploadConfirmFailed), errors.Is(err, storagecenter.ErrInvalidMultipartPart),
+		errors.Is(err, storagecenter.ErrMultipartExpired), errors.Is(err, storagecenter.ErrMultipartState):
 		status = http.StatusBadRequest
 	case errors.Is(err, storagecenter.ErrDeleteFailed), errors.Is(err, storagecenter.ErrConfigDisabled):
 		status = http.StatusConflict
@@ -465,6 +468,7 @@ func storageErrorCode(err error) string {
 		"STORAGE_CONFIG_NOT_FOUND", "STORAGE_CONFIG_DISABLED", "STORAGE_PROVIDER_UNSUPPORTED", "STORAGE_CONNECTION_FAILED",
 		"STORAGE_FILE_NOT_FOUND", "STORAGE_FILE_FORBIDDEN", "STORAGE_FILE_EXPIRED", "STORAGE_FILE_QUARANTINED",
 		"STORAGE_QUOTA_EXCEEDED", "STORAGE_INVALID_FILE_TYPE", "STORAGE_INVALID_FILE_SIZE", "STORAGE_UPLOAD_CONFIRM_FAILED", "STORAGE_DELETE_FAILED",
+		"STORAGE_INVALID_MULTIPART_PART", "STORAGE_MULTIPART_NOT_FOUND", "STORAGE_MULTIPART_EXPIRED", "STORAGE_MULTIPART_INVALID_STATE", "STORAGE_MULTIPART_INIT_FAILED",
 	} {
 		if strings.Contains(err.Error(), code) {
 			return code

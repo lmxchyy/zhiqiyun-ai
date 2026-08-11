@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"xianzhi-ai/backend-go/internal/config"
@@ -11,16 +15,22 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		panic(err)
+	}
+}
+
+func run() error {
 	cfg := config.Load()
 	if err := cfg.ValidateProduction(); err != nil {
-		log.Fatalf("invalid production config: %v", err)
+		return fmt.Errorf("invalid production config: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	clients, err := infra.Open(ctx, cfg)
 	cancel()
 	if err != nil {
 		if cfg.IsProduction() {
-			log.Fatalf("production infrastructure unavailable: %v", err)
+			return fmt.Errorf("production infrastructure unavailable: %w", err)
 		}
 		log.Printf("infrastructure clients disabled: %v", err)
 	} else {
@@ -31,17 +41,19 @@ func main() {
 		}()
 	}
 	if cfg.IsProduction() && (clients == nil || clients.DB == nil || clients.Redis == nil) {
-		log.Fatal("production requires PostgreSQL and Redis infrastructure")
+		return fmt.Errorf("production requires PostgreSQL and Redis infrastructure")
 	}
 	var server = httpserver.New(cfg)
+	stopWorker := func() {}
 	if clients != nil {
 		server = httpserver.NewWithInfrastructure(cfg, clients.DB, clients.Redis)
-		workerCtx, stopWorker := context.WithCancel(context.Background())
-		defer stopWorker()
+		workerCtx, cancelWorker := context.WithCancel(context.Background())
+		stopWorker = cancelWorker
 		httpserver.StartIdentityDowngradeWorker(workerCtx, clients.DB, time.Minute)
 	}
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
 	log.Printf("xianzhi-ai go gin api listening on %s", cfg.Addr)
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatal(err)
-	}
+	return serveAPIUntilShutdown(server, signals, cfg.APIShutdownTimeout(), stopWorker, log.Default())
 }

@@ -15,9 +15,16 @@ import (
 )
 
 const (
-	moduleImageGeneration = "image_generation"
-	moduleVideoGeneration = "video_generation"
-	modulePPTGeneration   = "ppt_generation"
+	moduleImageGeneration     = "image_generation"
+	moduleVideoGeneration     = "video_generation"
+	modulePPTGeneration       = "ppt_generation"
+	moduleSmartVideoEditing   = "smart_video_editing"
+
+	capabilitySmartVideoPlan  = "smart_video_plan"
+	capabilitySpeechSynthesis = "speech_synthesis"
+
+	modelSmartVideoStandard = "smart-video-standard"
+	modelSmartVideoSpeech   = "smart-video-speech"
 )
 
 type adminAICapabilityConfig struct {
@@ -41,10 +48,16 @@ func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if len(data.AIModules) == 0 {
 		data.AIModules = defaultAIModules(now)
+	} else {
+		data.AIModules = mergeDefaultAIModules(data.AIModules, defaultAIModules(now))
 	}
 	if len(data.AIModels) == 0 {
 		data.AIModels = defaultAIModels(now)
+	} else {
+		data.AIModels = mergeDefaultAIModels(data.AIModels, defaultAIModels(now))
 	}
+	data = mergeDefaultVideoBoundModels(data)
+	data = normalizeVideoModelCapabilityData(data)
 	if len(data.AIParameterSchemas) == 0 {
 		data.AIParameterSchemas = defaultAIParameterSchemas(now)
 	} else {
@@ -52,6 +65,8 @@ func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
 	}
 	if len(data.TenantModuleLimits) == 0 {
 		data.TenantModuleLimits = defaultTenantModuleLimits(now)
+	} else {
+		data.TenantModuleLimits = ensureSmartVideoTenantLimit(data.TenantModuleLimits, defaultTenantModuleLimits(now))
 	}
 	if len(data.BillingRules) == 0 {
 		data.BillingRules = defaultBillingRules(now)
@@ -128,6 +143,179 @@ func mergeDefaultBillingRules(current []adminBillingRule, defaults []adminBillin
 	return result
 }
 
+func mergeDefaultAIModels(current []adminAIModel, defaults []adminAIModel) []adminAIModel {
+	result := make([]adminAIModel, len(current))
+	copy(result, current)
+	known := map[string]bool{}
+	for _, model := range result {
+		known[strings.ToLower(strings.TrimSpace(model.ModelName))] = true
+	}
+	for _, fallback := range defaults {
+		key := strings.ToLower(strings.TrimSpace(fallback.ModelName))
+		if key == "" || known[key] {
+			continue
+		}
+		result = append(result, fallback)
+		known[key] = true
+	}
+	return result
+}
+
+func mergeDefaultAIModules(current []adminAIModule, defaults []adminAIModule) []adminAIModule {
+	result := make([]adminAIModule, len(current))
+	copy(result, current)
+	known := map[string]bool{}
+	for _, module := range result {
+		known[canonicalModuleCode(module.ModuleCode)] = true
+	}
+	for _, fallback := range defaults {
+		key := canonicalModuleCode(fallback.ModuleCode)
+		if key == "" || known[key] {
+			continue
+		}
+		result = append(result, fallback)
+		known[key] = true
+	}
+	return result
+}
+
+func mergeDefaultTenantModuleLimits(current []adminTenantModuleLimit, defaults []adminTenantModuleLimit) []adminTenantModuleLimit {
+	result := make([]adminTenantModuleLimit, len(current))
+	copy(result, current)
+	known := map[string]bool{}
+	for _, limit := range result {
+		key := canonicalModuleCode(firstNonEmptyString(limit.ModuleCode, limit.ModuleCodeCamel)) + "\x00" +
+			strings.ToLower(strings.TrimSpace(limit.TenantID)) + "\x00" +
+			strings.ToLower(strings.TrimSpace(limit.PackageID))
+		known[key] = true
+	}
+	for _, fallback := range defaults {
+		key := canonicalModuleCode(firstNonEmptyString(fallback.ModuleCode, fallback.ModuleCodeCamel)) + "\x00" +
+			strings.ToLower(strings.TrimSpace(fallback.TenantID)) + "\x00" +
+			strings.ToLower(strings.TrimSpace(fallback.PackageID))
+		if known[key] {
+			continue
+		}
+		result = append(result, fallback)
+		known[key] = true
+	}
+	return result
+}
+
+func ensureSmartVideoTenantLimit(current []adminTenantModuleLimit, defaults []adminTenantModuleLimit) []adminTenantModuleLimit {
+	for _, limit := range current {
+		if canonicalModuleCode(firstNonEmptyString(limit.ModuleCode, limit.ModuleCodeCamel)) == moduleSmartVideoEditing &&
+			strings.EqualFold(strings.TrimSpace(limit.TenantID), "default") &&
+			strings.TrimSpace(limit.PackageID) == "" {
+			return current
+		}
+	}
+	for _, fallback := range defaults {
+		if canonicalModuleCode(firstNonEmptyString(fallback.ModuleCode, fallback.ModuleCodeCamel)) == moduleSmartVideoEditing {
+			return append(append([]adminTenantModuleLimit{}, current...), fallback)
+		}
+	}
+	return current
+}
+
+func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
+	wanted := []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"}
+	for index := range data.AIModules {
+		if canonicalModuleCode(data.AIModules[index].ModuleCode) != moduleVideoGeneration {
+			continue
+		}
+		known := map[string]bool{}
+		for _, modelName := range data.AIModules[index].BoundModels {
+			known[strings.ToLower(strings.TrimSpace(modelName))] = true
+		}
+		for _, modelName := range wanted {
+			key := strings.ToLower(strings.TrimSpace(modelName))
+			if known[key] {
+				continue
+			}
+			data.AIModules[index].BoundModels = append(data.AIModules[index].BoundModels, modelName)
+			known[key] = true
+		}
+	}
+	for index := range data.TenantModuleLimits {
+		limit := &data.TenantModuleLimits[index]
+		if canonicalModuleCode(firstNonEmptyString(limit.ModuleCode, limit.ModuleCodeCamel)) != moduleVideoGeneration {
+			continue
+		}
+		if limit.LimitJSON == nil {
+			limit.LimitJSON = firstNonNilMap(limit.LimitJSONCamel)
+		}
+		if limit.LimitJSON == nil {
+			continue
+		}
+		models, ok := mapValue(limit.LimitJSON["models"])
+		if !ok {
+			continue
+		}
+		allowed := stringSliceFromAny(models["allowed"])
+		known := map[string]bool{}
+		for _, modelName := range allowed {
+			known[strings.ToLower(strings.TrimSpace(modelName))] = true
+		}
+		changed := false
+		for _, modelName := range wanted {
+			key := strings.ToLower(strings.TrimSpace(modelName))
+			if known[key] {
+				continue
+			}
+			allowed = append(allowed, modelName)
+			known[key] = true
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		next := map[string]any{}
+		for key, value := range models {
+			next[key] = value
+		}
+		allowedAny := make([]any, 0, len(allowed))
+		for _, modelName := range allowed {
+			allowedAny = append(allowedAny, modelName)
+		}
+		next["allowed"] = allowedAny
+		limit.LimitJSON["models"] = next
+	}
+	data = mergeDefaultVideoChannelModels(data)
+	return data
+}
+
+func mergeDefaultVideoChannelModels(data adminPlatformData) adminPlatformData {
+	wantedByChannel := map[string][]string{
+		"channel_newapi_gateway": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "doubao-seedance-2.0", "seedance-fast-2.0"},
+		"channel_newapi_grok_imagine": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"},
+	}
+	for index := range data.APIChannels {
+		channel := &data.APIChannels[index]
+		wanted, ok := wantedByChannel[strings.TrimSpace(channel.ID)]
+		if !ok {
+			baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
+			if !strings.Contains(baseURL, "newapi") {
+				continue
+			}
+			wanted = []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"}
+		}
+		known := map[string]bool{}
+		for _, modelName := range channel.Models {
+			known[strings.ToLower(strings.TrimSpace(modelName))] = true
+		}
+		for _, modelName := range wanted {
+			key := strings.ToLower(strings.TrimSpace(modelName))
+			if key == "" || known[key] {
+				continue
+			}
+			channel.Models = append(channel.Models, modelName)
+			known[key] = true
+		}
+	}
+	return data
+}
+
 func mergeDefaultAIParameterSchemaFields(current []adminAIParameterSchema, defaults []adminAIParameterSchema) []adminAIParameterSchema {
 	result := make([]adminAIParameterSchema, len(current))
 	copy(result, current)
@@ -167,7 +355,7 @@ func defaultAIModules(now string) []adminAIModule {
 			ID: "ai_module_video_generation", ModuleCode: moduleVideoGeneration, Name: "视频生成",
 			Description: "统一管理文生视频、图生视频、首尾帧视频的模型、参数和调用策略。",
 			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_month", "plan_pro", "plan_year"},
-			BoundModels: []string{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}, DefaultSchemaID: "schema_video_generation_default",
+			BoundModels: []string{"mock-video", "grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"}, DefaultSchemaID: "schema_video_generation_default",
 			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
 		},
 		{
@@ -177,6 +365,17 @@ func defaultAIModules(now string) []adminAIModule {
 			BoundModels: []string{"kimi-k2.6", "ppt-text-model"}, DefaultSchemaID: "schema_ppt_generation_default",
 			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
 		},
+		{
+			ID: "ai_module_smart_video_editing", ModuleCode: moduleSmartVideoEditing, Name: "AI自动混剪",
+			Description: "素材理解、镜头规划、配音字幕与时间线导出。用户选择成片规格，内部能力由服务端解析。",
+			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_month", "plan_pro", "plan_year"},
+			BoundModels: []string{modelSmartVideoStandard}, DefaultSchemaID: "schema_smart_video_editing_default",
+			AllowAgents: false, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
+			Config: map[string]any{
+				"internalCapabilities": []any{capabilitySmartVideoPlan, capabilitySpeechSynthesis},
+				"publicWorkflowModel":  modelSmartVideoStandard,
+			},
+		},
 	}
 }
 
@@ -185,10 +384,14 @@ func defaultAIModels(now string) []adminAIModel {
 		{ID: "ai_model_mock_standard", ModelName: "mock-standard", ModelType: "image", Provider: "Local", CapabilityCode: []string{"text_to_image", "image_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_gpt_image_2", ModelName: "gpt-image-2", ModelType: "image", Provider: "NewAPI", CapabilityCode: []string{"text_to_image", "image_to_image", "image_edit"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", FallbackModel: "mock-standard", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_mock_video", ModelName: "mock-video", ModelType: "video", Provider: "Local", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_grok_imagine_video_15_preview", ModelName: "grok-imagine-video-1.5-preview", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 14, VideoCapabilities: grokImagine15VideoPreviewCapabilitiesPtr(), CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_grok_imagine_15_video", ModelName: "grok-imagine-1.5-video", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 15, VideoCapabilities: grokImagine15VideoCapabilitiesPtr(), CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_seedance_fast_20", ModelName: "seedance-fast-2.0", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "ai_model_doubao_seedance_20", ModelName: "doubao-seedance-2.0", ModelType: "video", Provider: "移动云", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 30, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_doubao_seedance_20", ModelName: "doubao-seedance-2.0", ModelType: "video", Provider: "NewAPI", ChannelID: "channel_newapi_gateway", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", FallbackModel: "mock-video", SortWeight: 30, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_kimi_k26", ModelName: "kimi-k2.6", ModelType: "text", Provider: "NewAPI", CapabilityCode: []string{"ppt_outline", "ppt_content", "ppt_export"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", FallbackModel: "ppt-text-model", SortWeight: 10, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_ppt_text", ModelName: "ppt-text-model", ModelType: "text", Provider: "Local", CapabilityCode: []string{"ppt_outline", "ppt_content"}, ModuleCode: modulePPTGeneration, Status: "ACTIVE", SortWeight: 20, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_smart_video_standard", ModelName: modelSmartVideoStandard, ModelType: "workflow", Provider: "Local", CapabilityCode: []string{capabilitySmartVideoPlan, capabilitySpeechSynthesis}, ModuleCode: moduleSmartVideoEditing, Status: "ACTIVE", SortWeight: 10, AllowedCapabilities: []string{capabilitySmartVideoPlan, capabilitySpeechSynthesis}, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_smart_video_speech", ModelName: modelSmartVideoSpeech, ModelType: "speech", Provider: "NewAPI", CapabilityCode: []string{capabilitySpeechSynthesis}, ModuleCode: moduleSmartVideoEditing, Status: "ACTIVE", SortWeight: 90, AllowedCapabilities: []string{capabilitySpeechSynthesis}, MiniProgramEnabled: false, CreatedAt: now, UpdatedAt: now},
 	}
 }
 
@@ -218,7 +421,6 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 				{Key: "motion_strength", Label: "运动强度", Type: "select", Options: anyOptions("low", "medium", "high"), UserEditable: true, Visible: true},
 				{Key: "camera_movement", Label: "镜头运动", Type: "select", Options: anyOptions("static", "pan", "push", "pull"), UserEditable: true, Visible: true},
 				{Key: "generate_audio", Label: "生成音频", Type: "boolean", Default: true, UserEditable: true, Visible: true},
-				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "first_frame", Label: "首帧图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "last_frame", Label: "尾帧图", Type: "image_upload", UserEditable: true, Visible: true},
 			}},
@@ -239,14 +441,27 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			}},
 			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
 		},
+		{
+			ID: "schema_smart_video_editing_default", ModuleCode: moduleSmartVideoEditing, ModelName: modelSmartVideoStandard,
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "requirement", Label: "成片需求", Type: "textarea", Required: true, Placeholder: "用一句话描述想要的成片", UserEditable: true, Visible: true},
+				{Key: "aspect_ratio", Label: "画幅", Type: "select", Required: true, Default: "9:16", Options: anyOptions("9:16", "16:9"), UserEditable: true, Visible: true},
+				{Key: "resolution", Label: "清晰度", Type: "select", Required: true, Default: "720p", Options: anyOptions("720p", "1080p"), UserEditable: true, Visible: true},
+				{Key: "duration_ms", Label: "成片时长", Type: "number", Required: true, Default: float64(30000), Min: floatPtr(15000), Max: floatPtr(60000), Unit: "毫秒", UserEditable: true, Visible: true},
+				{Key: "voice_enabled", Label: "AI配音", Type: "switch", Default: true, UserEditable: true, Visible: true},
+				{Key: "subtitle_enabled", Label: "配音字幕", Type: "switch", Default: true, UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
 	}
 }
 
 func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
 	return []adminTenantModuleLimit{
 		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(15)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(30)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"kimi-k2.6", "ppt-text-model"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_smart_video", TenantID: "default", ModuleCode: moduleSmartVideoEditing, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{modelSmartVideoStandard}}, "resolution": map[string]any{"allowed": []any{"720p", "1080p"}}, "duration_ms": map[string]any{"min": float64(15000), "max": float64(60000)}, "plan_per_day": map[string]any{"max": float64(20)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_plan_free_image", TenantID: "default", PackageID: "plan_free", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard"}}, "n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
 }
@@ -257,9 +472,12 @@ func defaultBillingRules(now string) []adminBillingRule {
 		{ID: "billing_rule_image_gpt", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2", BillingType: "per_image", BasePrice: 10, CostPrice: 6, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"standard": float64(1), "high": float64(1.5)}, "size": map[string]any{"1024x1024": float64(1), "1024x1536": float64(1.2), "1536x1024": float64(1.2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_mock", ModuleCode: moduleVideoGeneration, ModelName: "mock-video", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_grok_image", ModuleCode: moduleVideoGeneration, ModelName: "grok-video-image", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "billing_rule_video_seedance", ModuleCode: moduleVideoGeneration, ModelName: "seedance-fast-2.0", BillingType: "per_second", BasePrice: 12, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "billing_rule_video_doubao_seedance", ModuleCode: moduleVideoGeneration, ModelName: "doubao-seedance-2.0", BillingType: "per_second", BasePrice: 12, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2), "4k": float64(4)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_grok_imagine_15_preview", ModuleCode: moduleVideoGeneration, ModelName: "grok-imagine-video-1.5-preview", BillingType: "per_request", BasePrice: 100, MinimumCharge: 100, CostPrice: 80, CurrencyType: "credit", ParameterMultiplier: map[string]any{}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_grok_imagine_15", ModuleCode: moduleVideoGeneration, ModelName: "grok-imagine-1.5-video", BillingType: "per_second", BasePrice: 15, MinimumCharge: 15, CostPrice: 13, CurrencyType: "credit", ParameterMultiplier: map[string]any{}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_seedance", ModuleCode: moduleVideoGeneration, ModelName: "seedance-fast-2.0", BillingType: "per_second", BasePrice: 80, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_video_doubao_seedance", ModuleCode: moduleVideoGeneration, ModelName: "doubao-seedance-2.0", BillingType: "per_second", BasePrice: 80, CostPrice: 8, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.5), "1080p": float64(2), "4k": float64(4)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_ppt_kimi", ModuleCode: modulePPTGeneration, ModelName: "kimi-k2.6", BillingType: "per_page", BasePrice: 1, CostPrice: 0.4, CurrencyType: "credit", ParameterMultiplier: map[string]any{"with_images": map[string]any{"true": float64(1), "false": float64(1)}, "uploaded_file": map[string]any{"true": float64(1), "false": float64(1)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "billing_rule_smart_video_standard", ModuleCode: moduleSmartVideoEditing, ModelName: modelSmartVideoStandard, BillingType: "per_second", BasePrice: 2, CostPrice: 0.5, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"720p": float64(1), "1080p": float64(1.5)}, "voice_enabled": map[string]any{"true": float64(1.2), "false": float64(1)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
 }
 
@@ -460,6 +678,9 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if moduleCode == modulePPTGeneration {
 		return req, errors.New("ppt_generation must use /api/v1/ppt/generate")
 	}
+	if moduleCode == moduleSmartVideoEditing {
+		return req, errors.New("smart_video_editing must use /video-projects APIs")
+	}
 	if req.Type == "" {
 		req.Type = defaultTaskTypeForModule(moduleCode)
 	}
@@ -496,6 +717,11 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	resolved, err := resolveModuleSchema(data, user, moduleCode, req.Model)
 	if err != nil {
 		return req, err
+	}
+	if moduleCode == moduleVideoGeneration {
+		if err := validateVideoGenerationRequest(&req, resolved); err != nil {
+			return req, err
+		}
 	}
 	removeLegacyGenerationMetadata(&req, resolved)
 	normalizeGenerationQualityForLimit(&req, resolved)
@@ -597,7 +823,10 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 		}
 	}
 	if !enterpriseContext && !stringListContains(module.OpenPackageIDs, user.PlanID) {
-		return resolvedModuleSchema{}, fmt.Errorf("module %s is not included in package %s", moduleCode, user.PlanID)
+		if moduleCode == moduleVideoGeneration {
+			return resolvedModuleSchema{}, fmt.Errorf("当前套餐不支持视频生成，请升级后重试")
+		}
+		return resolvedModuleSchema{}, fmt.Errorf("当前套餐不支持该能力，请升级后重试")
 	}
 	if enterpriseContext && len(module.OpenTenantIDs) > 0 && !stringListContains(module.OpenTenantIDs, effectiveTenantID(user)) {
 		return resolvedModuleSchema{}, fmt.Errorf("module %s is not open to tenant %s", moduleCode, effectiveTenantID(user))
@@ -665,14 +894,15 @@ func resolveVideoProviderSupportedParameters(data adminPlatformData, model admin
 
 func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[string]any {
 	return map[string]any{
-		"module_code":  resolved.Module.ModuleCode,
-		"model_name":   resolved.Model.ModelName,
-		"schema":       resolved.FinalSchema,
-		"fields":       resolved.FinalSchema.Fields,
-		"limit_json":   resolved.Limit.LimitJSON,
-		"module":       resolved.Module,
-		"model":        resolved.Model,
-		"billing_rule": resolved.BillingRule,
+		"module_code":        resolved.Module.ModuleCode,
+		"model_name":         resolved.Model.ModelName,
+		"schema":             resolved.FinalSchema,
+		"fields":             resolved.FinalSchema.Fields,
+		"limit_json":         resolved.Limit.LimitJSON,
+		"module":             resolved.Module,
+		"model":              resolved.Model,
+		"video_capabilities": resolved.Model.VideoCapabilities,
+		"billing_rule":       resolved.BillingRule,
 		"context": map[string]any{
 			"user_id": user.ID, "tenant_id": effectiveTenantID(user), "agent_id": user.ReferredBy, "package_id": user.PlanID,
 		},
@@ -854,7 +1084,13 @@ func adminDataFromPlatformData(data platformData) adminPlatformData {
 		Users:                  data.Users,
 		Plans:                  data.Plans,
 		PointAccounts:          data.PointAccounts,
+		TokenRecords:           data.TokenRecords,
+		Orders:                 data.Orders,
+		Payments:               data.Payments,
+		PaymentEvents:          data.PaymentEvents,
 		ChannelAgents:          data.ChannelAgents,
+		OperationCenters:       data.OperationCenters,
+		CustomerRelations:      data.CustomerRelations,
 		Commissions:            data.Commissions,
 		CommissionRules:        data.CommissionRules,
 		BillingRules:           data.BillingRules,
@@ -863,17 +1099,87 @@ func adminDataFromPlatformData(data platformData) adminPlatformData {
 		ProviderCosts:          data.ProviderCosts,
 		BillingLifecycleEvents: data.BillingLifecycleEvents,
 		WalletLedger:           data.WalletLedger,
+		PersonalPoints:         data.PersonalPoints,
+		PersonalPointImport:    data.PersonalPointImport,
 		Withdrawals:            data.Withdrawals,
+		Presentations:          data.Presentations,
+		Agents:                 data.Agents,
+		AgentCalls:             data.AgentCalls,
+		GeoBrands:              data.GeoBrands,
+		GeoTasks:               data.GeoTasks,
 		AdminProducts:          data.AdminProducts,
+		SystemSettings:         data.SystemSettings,
+		APIChannels:            data.APIChannels,
+		APIModels:              data.APIModels,
+		APIKeys:                data.APIKeys,
+		CustomerGroups:         data.CustomerGroups,
 		AIModules:              data.AIModules,
 		AIModels:               data.AIModels,
 		AIParameterSchemas:     data.AIParameterSchemas,
 		TenantModuleLimits:     data.TenantModuleLimits,
+		Enterprise:             data.Enterprise,
+		PromotionRecords:       data.PromotionRecords,
+		AuthMergeRequests:      data.AuthMergeRequests,
+		AdminExceptionCases:    data.AdminExceptionCases,
+		AdminExperienceEvents:  data.AdminExperienceEvents,
 		GenerationTasks:        data.GenerationTasks,
 		Assets:                 data.Assets,
+		AIState:                data.AIState,
 		Counters:               data.Counters,
 		PointsAvailable:        data.PointsAvailable,
 	}))
+}
+
+func applyAdminDataToPlatformData(data *platformData, admin adminPlatformData) {
+	if data == nil {
+		return
+	}
+	data.Users = admin.Users
+	data.Plans = admin.Plans
+	data.PointAccounts = admin.PointAccounts
+	data.TokenRecords = admin.TokenRecords
+	data.Orders = admin.Orders
+	data.Payments = admin.Payments
+	data.PaymentEvents = admin.PaymentEvents
+	data.ChannelAgents = admin.ChannelAgents
+	data.OperationCenters = admin.OperationCenters
+	data.CustomerRelations = admin.CustomerRelations
+	data.Commissions = admin.Commissions
+	data.CommissionRules = admin.CommissionRules
+	data.BillingRules = admin.BillingRules
+	data.BillingEvents = admin.BillingEvents
+	data.BillingRuleVersions = admin.BillingRuleVersions
+	data.ProviderCosts = admin.ProviderCosts
+	data.BillingLifecycleEvents = admin.BillingLifecycleEvents
+	data.WalletLedger = admin.WalletLedger
+	data.PersonalPoints = admin.PersonalPoints
+	data.PersonalPointImport = admin.PersonalPointImport
+	data.Withdrawals = admin.Withdrawals
+	data.Presentations = admin.Presentations
+	data.Agents = admin.Agents
+	data.AgentCalls = admin.AgentCalls
+	data.GeoBrands = admin.GeoBrands
+	data.GeoTasks = admin.GeoTasks
+	data.AdminProducts = admin.AdminProducts
+	data.SystemSettings = admin.SystemSettings
+	data.APIChannels = admin.APIChannels
+	data.APIModels = admin.APIModels
+	data.APIKeys = admin.APIKeys
+	data.CustomerGroups = admin.CustomerGroups
+	data.AIModules = admin.AIModules
+	data.AIModels = admin.AIModels
+	data.AIParameterSchemas = admin.AIParameterSchemas
+	data.TenantModuleLimits = admin.TenantModuleLimits
+	data.Enterprise = admin.Enterprise
+	data.PromotionRecords = admin.PromotionRecords
+	data.AuthMergeRequests = admin.AuthMergeRequests
+	data.AdminExceptionCases = admin.AdminExceptionCases
+	data.AdminExperienceEvents = admin.AdminExperienceEvents
+	data.GenerationTasks = admin.GenerationTasks
+	data.Assets = admin.Assets
+	data.AIState = admin.AIState
+	data.Counters = admin.Counters
+	data.PointsAvailable = admin.PointsAvailable
 }
 
 func billingQuantity(billingType string, req createGenerationTaskRequest) float64 {
@@ -1017,6 +1323,8 @@ func moduleCodeForType(taskType string) string {
 		return moduleVideoGeneration
 	case "PPT_GENERATION":
 		return modulePPTGeneration
+	case "SMART_VIDEO_EDITING", "AI_AUTO_MONTAGE":
+		return moduleSmartVideoEditing
 	default:
 		return ""
 	}
@@ -1032,6 +1340,8 @@ func canonicalModuleCode(value string) string {
 		return moduleVideoGeneration
 	case "ppt", "ppt_generation", "presentation", "presentation_generation":
 		return modulePPTGeneration
+	case "smart_video", "smart_video_editing", "ai_auto_montage", "auto_montage":
+		return moduleSmartVideoEditing
 	default:
 		return ""
 	}
@@ -1043,6 +1353,8 @@ func defaultTaskTypeForModule(moduleCode string) string {
 		return "TEXT_TO_VIDEO"
 	case modulePPTGeneration:
 		return "PPT_GENERATION"
+	case moduleSmartVideoEditing:
+		return "SMART_VIDEO_EDITING"
 	default:
 		return "TEXT_TO_IMAGE"
 	}
@@ -1054,6 +1366,8 @@ func defaultAIModelTypeForModule(moduleCode string) string {
 		return "video"
 	case modulePPTGeneration:
 		return "text"
+	case moduleSmartVideoEditing:
+		return "workflow"
 	default:
 		return "image"
 	}
@@ -1062,9 +1376,11 @@ func defaultAIModelTypeForModule(moduleCode string) string {
 func defaultAICapabilitiesForModule(moduleCode string) []string {
 	switch canonicalModuleCode(moduleCode) {
 	case moduleVideoGeneration:
-		return []string{"text_to_video", "image_to_video"}
+		return []string{"text_to_video"}
 	case modulePPTGeneration:
 		return []string{"ppt_outline", "ppt_content"}
+	case moduleSmartVideoEditing:
+		return []string{capabilitySmartVideoPlan, capabilitySpeechSynthesis}
 	default:
 		return []string{"text_to_image"}
 	}

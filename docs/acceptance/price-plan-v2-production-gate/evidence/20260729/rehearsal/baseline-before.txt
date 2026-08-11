@@ -1,0 +1,3 @@
+orders=47
+plans=24
+amount_sum=3285592

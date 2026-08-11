@@ -1,0 +1,21 @@
+=== #5 IDEMPOTENCY BEFORE 2026-07-29 09:55:24 +0800 ===
+          order_no           |      product      | memb_n | memb_keys | tok_n | tok_keys | ident_n | qop_n | npg_n | fulfillment_status | entitlement_status | snapshot_version 
+-----------------------------+-------------------+--------+-----------+-------+----------+---------+-------+-------+--------------------+--------------------+------------------
+ ZQY202607282159389857812495 | MEMBER_TEST_1YUAN |      1 |         1 |     1 |        0 |       0 |     1 |     1 | FULFILLED          | SUCCESS            |                2
+ ZQY20260728221656E339AB7A54 | AGENT_TEST_1YUAN  |      0 |         0 |     1 |        0 |       1 |     1 |     1 | FULFILLED          | SUCCESS            |                2
+(2 rows)
+
+TOK_BEFORE=60793 MEMB_M=1 MEMB_A=0 TOK_M=1 TOK_A=1
+POST sync ZQY202607282159389857812495 -> 200
+POST sync2 ZQY202607282159389857812495 -> 200
+POST sync ZQY20260728221656E339AB7A54 -> 200
+POST sync2 ZQY20260728221656E339AB7A54 -> 200
+=== #5 IDEMPOTENCY AFTER 2026-07-29 09:55:25 +0800 ===
+          order_no           | memb_n | tok_n | qop_n | fulfillment_status | entitlement_status | token_bal 
+-----------------------------+--------+-------+-------+--------------------+--------------------+-----------
+ ZQY202607282159389857812495 |      1 |     1 |     1 | FULFILLED          | SUCCESS            |     60793
+ ZQY20260728221656E339AB7A54 |      0 |     1 |     1 | FULFILLED          | SUCCESS            |     60793
+(2 rows)
+
+TOK_AFTER=60793 MEMB_M2=1 MEMB_A2=0 TOK_M2=1 TOK_A2=1
+VERDICT_#5=PASS (re-sync×2 no double grant; MEMBER memb=1/tok=1; AGENT memb=0/tok=1)

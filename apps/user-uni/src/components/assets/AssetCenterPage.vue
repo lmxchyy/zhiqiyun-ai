@@ -55,7 +55,7 @@
 
     <view class="section-head task-section"><text>最近任务</text><button @click="openAllTasks">查看全部 ›</button></view>
     <view v-if="store.recentTasks.length" class="task-list">
-      <GenerationTaskItem v-for="task in store.recentTasks.slice(0,5)" :key="task.id" :task="task" @open="openTask" @cancel="confirmCancelTask" @retry="retryTask" @result="openTaskResult" />
+      <GenerationTaskItem v-for="task in store.recentTasks.slice(0,5)" :key="task.id" :task="task" @open="openTask" @cancel="confirmCancelTask" @retry="retryTask" @delete="deleteTask" @result="openTaskResult" />
     </view>
     <view v-else-if="store.tasksLoading" class="task-state"><text>正在同步生成任务...</text></view>
     <AssetErrorState v-else-if="store.taskError" compact title="任务加载失败" :description="store.taskError" @retry="store.fetchRecentTasks" />
@@ -76,6 +76,7 @@ import { useAssetStore } from "../../stores/assets";
 import type { AssetFilter,AssetItem,AssetSort,AssetStatus,AssetType,GenerationTask } from "../../features/assets/types";
 import { recordWorksPerformance,worksTabClickStartedAt } from "../../features/assets/performance";
 import { downloadAssetFile,shareAsset } from "../../features/assets/platform";
+import { confirmDeleteFailedTask,confirmRetryFailedTask,openFailedTaskActions } from "../../features/assets/failedTaskActions";
 import { miniProgramAssetCreationPages,miniProgramFeaturePages,miniProgramRolePages } from "../../config/miniProgramPages";
 import { registerAssetNativeBridge } from "../../features/assets/nativeBridge";
 import AssetActionSheet from "./AssetActionSheet.vue";
@@ -130,6 +131,7 @@ const disposeNativeBridge=registerAssetNativeBridge({
   openTask:id=>{const task=recentTaskById(id);if(task)openTask(task);},
   cancelTask:id=>confirmCancelTask(recentTaskById(id)),
   retryTask:id=>{const task=recentTaskById(id);if(task)retryTask(task);},
+  deleteTask:id=>{const task=recentTaskById(id);if(task)deleteTask(task);},
   openTaskResult:id=>{const task=recentTaskById(id);if(task)openTaskResult(task);},
   openAsset:id=>{const asset=store.assets.find(item=>item.id===id);if(asset)openAsset(asset);},
   favoriteAsset:id=>{const asset=store.assets.find(item=>item.id===id);if(asset)void toggleFavorite(asset);},
@@ -144,10 +146,13 @@ function confirmPermanent(asset:AssetItem){uni.showModal({title:"彻底删除",c
 function rename(asset:AssetItem){uni.showModal({title:"重命名作品",editable:true,placeholderText:asset.name,content:asset.name,success:result=>{const name=String(result.content||"").trim();if(result.confirm&&name)void store.renameAsset(asset.id,name);}});}
 async function move(asset:AssetItem){await store.loadProjects();uni.showActionSheet({itemList:["新建项目并加入","从项目移出",...store.projects.map(item=>item.name)],success:result=>{if(result.tapIndex===0){createProjectForAsset(asset);return;}const project=result.tapIndex===1?null:store.projects[result.tapIndex-2];void store.moveToProject(asset.id,project?.id||"",project?.name||"");}});}
 function createProjectForAsset(asset:AssetItem){uni.showModal({title:"新建项目",editable:true,placeholderText:"输入项目名称",success:result=>{const name=String(result.content||"").trim();if(result.confirm&&name)void store.moveToProject(asset.id,`project_${Date.now()}`,name);}});}
-async function handleAssetAction(action:string,asset:AssetItem){try{if(action==="detail")openDetail(asset);else if(action==="edit")continueEditing(asset);else if(action==="download")await downloadAssetFile(asset);else if(action==="share")shareAsset(asset);else if(action==="favorite")await store.toggleFavorite(asset.id);else if(action==="move")await move(asset);else if(action==="rename")rename(asset);else if(action==="archive")await store.archiveAsset(asset.id);else if(action==="delete")confirmDelete(asset);else if(action==="restore")await store.restoreAsset(asset.id);else if(action==="permanent")confirmPermanent(asset);else if(action==="retry"&&asset.taskId)await store.retryTask(asset.taskId);else if(action==="cancel"&&asset.taskId)confirmCancelTask(store.recentTasks.find(item=>item.id===asset.taskId));}catch(error){uni.showToast({title:error instanceof Error?error.message:"操作失败",icon:"none"});}}
-function openTask(task:GenerationTask){if(task.status==="completed")openTaskResult(task);else uni.showModal({title:task.name,content:task.status==="failed"?(task.failureReason||"生成失败"):task.status==="cancelled"?"任务已取消":`当前进度 ${task.progress}%`,showCancel:false});}
+async function handleAssetAction(action:string,asset:AssetItem){try{if(action==="detail")openDetail(asset);else if(action==="edit")continueEditing(asset);else if(action==="download")await downloadAssetFile(asset);else if(action==="share")shareAsset(asset);else if(action==="favorite")await store.toggleFavorite(asset.id);else if(action==="move")await move(asset);else if(action==="rename")rename(asset);else if(action==="archive")await store.archiveAsset(asset.id);else if(action==="delete")confirmDelete(asset);else if(action==="restore")await store.restoreAsset(asset.id);else if(action==="permanent")confirmPermanent(asset);else if(action==="retry"&&asset.taskId){const task=store.recentTasks.find(item=>item.id===asset.taskId);if(task)retryTask(task);else await store.retryTask(asset.taskId);}else if(action==="cancel"&&asset.taskId)confirmCancelTask(store.recentTasks.find(item=>item.id===asset.taskId));}catch(error){uni.showToast({title:error instanceof Error?error.message:"操作失败",icon:"none"});}}
+function openTask(task:GenerationTask){if(task.status==="completed")openTaskResult(task);else if(task.status==="failed")openFailedTaskActions(task,executeRetryTask,executeDeleteTask);else if(task.status==="cancelled")confirmDeleteFailedTask(task,executeDeleteTask);else uni.showModal({title:task.name,content:`当前进度 ${task.progress}%`,showCancel:false});}
 function openTaskResult(task:GenerationTask){const id=task.resultIds[0];if(id)uni.navigateTo({url:`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(id)}`});else uni.showToast({title:"任务暂未生成结果",icon:"none"});}
-async function retryTask(task:GenerationTask){uni.showLoading({title:"正在重新提交",mask:true});try{await store.retryTask(task.id);uni.hideLoading();uni.showToast({title:"已重新提交",icon:"success"});}catch(error){uni.hideLoading();uni.showToast({title:error instanceof Error?error.message:"重试失败",icon:"none"});}}
+async function executeRetryTask(task:GenerationTask){uni.showLoading({title:"正在重新提交",mask:true});try{await store.retryTask(task.id);uni.hideLoading();uni.showToast({title:"已重新提交",icon:"success"});}catch(error){uni.hideLoading();uni.showToast({title:error instanceof Error?error.message:"重试失败",icon:"none"});}}
+async function executeDeleteTask(task:GenerationTask){uni.showLoading({title:"正在删除",mask:true});try{await store.deleteTask(task.id);uni.hideLoading();uni.showToast({title:"已删除",icon:"success"});}catch(error){uni.hideLoading();uni.showToast({title:error instanceof Error?error.message:"删除失败",icon:"none"});}}
+function retryTask(task:GenerationTask){confirmRetryFailedTask(task,executeRetryTask);}
+function deleteTask(task:GenerationTask){confirmDeleteFailedTask(task,executeDeleteTask);}
 function confirmCancelTask(task?:GenerationTask){if(!task)return;uni.showModal({title:"取消生成任务",content:"取消后将停止生成，已预扣点数按后端规则退回。",confirmColor:"#ff771b",success:result=>{if(result.confirm)void store.cancelTask(task.id);}});}
 
 </script>
