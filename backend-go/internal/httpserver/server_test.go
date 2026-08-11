@@ -340,6 +340,42 @@ func TestGenerationErrorMessageExtractsProviderMessage(t *testing.T) {
 	}
 }
 
+func TestGenerationErrorMessageLocalizesEnglishTechnicalErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  string
+		want string
+	}{
+		{
+			name: "input_reference unmarshal",
+			err:  `json: cannot unmarshal object into Go struct field .Alias.input_reference of type string`,
+			want: "视频参考图参数格式错误，请重新上传首帧图后重试",
+		},
+		{
+			name: "seconds unmarshal",
+			err:  `json: cannot unmarshal number into Go struct field .Alias.seconds of type string`,
+			want: "视频时长参数格式错误，请重新选择时长后重试",
+		},
+		{
+			name: "generic english technical",
+			err:  `video provider returned unexpected payload`,
+			want: "生成失败，请稍后重试。若持续失败请检查模型、参数或上游通道配置",
+		},
+		{
+			name: "storage master key",
+			err:  `resolve generated artifact storage: STORAGE_MASTER_KEY is required to manage storage credentials`,
+			want: "对象存储密钥未配置，请检查 STORAGE_MASTER_KEY 后重试",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := generationErrorMessage(errors.New(tt.err)); got != tt.want {
+				t.Fatalf("generationErrorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
 	err := errors.New("image provider returned 429: Upstream rate limit exceeded")
 	if !shouldFallbackImageGeneration(err) {

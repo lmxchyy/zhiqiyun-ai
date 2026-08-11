@@ -2992,6 +2992,14 @@ func defaultSystemSettings() adminSystemSettings {
 func defaultAPIChannels() []adminAPIChannel {
 	items := []adminAPIChannel{
 		{
+			ID: "channel_newapi_gateway", Name: "NewAPI Gateway", BaseURL: "https://newapi.zs-kjhn.cn", Protocol: "openai",
+			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
+			VideoGenerationEndpoint: "/v1/video/generations",
+			FetchModelsPath:         "/models",
+			Notes:                   "NewAPI unified gateway - all models routed through zhiqiyun-ai token (vip group)",
+			Status:                  "CONFIGURABLE", Priority: 5, Models: []string{"doubao-seedance-2.0", "seedance-fast-2.0", "gpt-image-2", "grok-imagine-1.5-video", "grok-imagine-video-1.5-preview"},
+		},
+		{
 			ID: "channel_apimart", Name: "APIMart 生图聚合", BaseURL: "https://api.apimart.ai", Protocol: "apimart",
 			ImageRequestMode: "openai-json", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
 			FetchModelsPath: "/v1/models", APIKeyEnv: "APIMART_API_KEY", Notes: "参考 Infinite-Canvas 推荐平台，适合聚合图片、视频和 LLM 模型。",
@@ -3002,7 +3010,7 @@ func defaultAPIChannels() []adminAPIChannel {
 			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
 			VideoGenerationEndpoint: "contents/generations/tasks",
 			FetchModelsPath:         "/models", APIKeyEnv: "CME_CLOUD_API_KEY", Notes: "Doubao Seedance 2.0 video generation channel. Save the API Key in admin API keys or set CME_CLOUD_API_KEY.",
-			Status: "CONFIGURABLE", Priority: 15, Models: []string{"doubao-seedance-2.0"},
+			Status: "CONFIGURABLE", Priority: 15, Models: []string{"doubao-seedance-2.0", "seedance-fast-2.0"},
 		},
 		{
 			ID: "channel_openai", Name: "OpenAI 官方", BaseURL: "https://api.openai.com/v1", Protocol: "openai",
