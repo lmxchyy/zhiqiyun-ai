@@ -50,7 +50,7 @@ func (s *AnalysisService) RequestProjectAnalysis(ctx context.Context, access Acc
 		return AnalysisSummary{}, err
 	}
 	if len(assets) < MinProjectAssets {
-		return AnalysisSummary{}, fmt.Errorf("%w: need at least %d assets", ErrInvalidInput, MinProjectAssets)
+		return AnalysisSummary{}, fmt.Errorf("%w: 分析至少需要 %d 个已成功素材，当前仅有 %d 个", ErrInvalidInput, MinProjectAssets, len(assets))
 	}
 	if project.Status == ProjectStatusDraft || project.Status == ProjectStatusFailed || project.Status == ProjectStatusMaterialReady {
 		project.Status = ProjectStatusAnalyzing

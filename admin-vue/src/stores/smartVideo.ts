@@ -437,7 +437,15 @@ export const useSmartVideoStore = defineStore("smartVideo", {
         if (!this.project) return;
       }
       if (!this.assets.length) {
-        this.errorMessage = "请先上传至少一个素材";
+        this.errorMessage = "请先上传素材；分析至少需要 2 个已成功入库的素材";
+        return;
+      }
+      if (this.assets.length < 2) {
+        this.errorMessage = `当前仅有 ${this.assets.length} 个已成功素材，分析至少需要 2 个。请去掉上传失败项后，再补传图片或视频。`;
+        return;
+      }
+      if (this.uploads.some((item) => item.status === "uploading" || item.status === "queued" || item.status === "paused")) {
+        this.errorMessage = "仍有素材正在上传，请等待完成或取消失败项后再分析";
         return;
       }
       this.busy = true;

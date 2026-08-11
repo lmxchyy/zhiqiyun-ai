@@ -135,14 +135,21 @@ const assetColumns = `id,project_id,tenant_id,user_id,file_id,storage_key,asset_
 func scanAsset(scanner interface{ Scan(...any) error }) (ProjectAsset, error) {
 	var a ProjectAsset
 	var metadata, normalized, filtered, analysisSummary, repFrames []byte
-	var analysisSum, repFile sql.NullString
+	var kind string
 	var durationMs sql.NullInt64
-	err := scanner.Scan(&a.ID, &a.ProjectID, &a.TenantID, &a.UserID, &a.FileID, &a.StorageKey,
-		&a.AssetType, &a.SortOrder, &a.OrderIndex, &a.AssetType, &durationMs, &metadata,
-		&a.AnalysisStatus, &a.SourceFingerprint, &normalized, &filtered, &analysisSum, &analysisSummary,
-		&repFile, &repFrames, &a.ContentAuditStatus,
-		&a.ThumbnailFileID, &a.ProxyFileID, &a.AttemptCount, &a.ErrorCode, &a.SanitizedErrorMessage,
-		&a.AnalyzerVersion, &a.AnalysisStartedAt, &a.AnalysisFinishedAt, &a.CreatedAt, &a.UpdatedAt)
+	// Must match assetColumns field count/order exactly (29 columns).
+	err := scanner.Scan(
+		&a.ID, &a.ProjectID, &a.TenantID, &a.UserID, &a.FileID, &a.StorageKey,
+		&a.AssetType, &a.SortOrder, &a.OrderIndex, &kind, &durationMs, &metadata,
+		&a.AnalysisStatus, &a.SourceFingerprint, &normalized, &filtered, &analysisSummary, &repFrames,
+		&a.ContentAuditStatus,
+		&a.ThumbnailFileID, &a.ProxyFileID,
+		&a.AttemptCount, &a.ErrorCode, &a.SanitizedErrorMessage, &a.AnalyzerVersion,
+		&a.AnalysisStartedAt, &a.AnalysisFinishedAt, &a.CreatedAt, &a.UpdatedAt,
+	)
+	_ = kind
+	_ = analysisSummary
+	_ = repFrames
 	if err == nil {
 		err = json.Unmarshal(metadata, &a.Metadata)
 	}
