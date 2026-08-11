@@ -4639,6 +4639,58 @@ const onlineRecentTasks = computed<AdminRecord[]>(() => {
   return [...pendingTasks, ...serverTasks];
 });
 const onlineImageTasks = computed<AdminRecord[]>(() => onlineRecentTasks.value.filter((task) => !isVideoGenerationTask(task)));
+
+function isMontageWorkAsset(asset: AdminRecord) {
+  const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
+  const type = String(metadata.type || asset.type || asset.sourceType || "").toUpperCase();
+  const mediaType = String(asset.mediaType || metadata.mediaType || "").toLowerCase();
+  return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE" || (mediaType === "video" && type.includes("MONTAGE"));
+}
+
+function isMontageWorkCard(task: AdminRecord) {
+  const type = String(task.type || task.sourceType || "").toUpperCase();
+  return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE" || Boolean(task.montageWork);
+}
+
+function montageAssetToWorkCard(asset: AdminRecord): AdminRecord {
+  const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
+  const url = String(asset.url || "");
+  const thumb = String(asset.thumbnailUrl || url);
+  return {
+    id: asset.id,
+    name: asset.name || "AI自动混剪成片",
+    status: "SUCCEEDED",
+    mediaType: asset.mediaType || "video",
+    type: metadata.type || "SMART_VIDEO_MONTAGE",
+    montageWork: true,
+    outputUrl: url,
+    resultUrl: url,
+    imageUrl: url,
+    thumbnailUrl: thumb,
+    pointCost: Number(metadata.pointCost || metadata.capturedPoints || 0),
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt || asset.createdAt,
+    prompt: "AI自动混剪成片",
+    model: "AI自动混剪",
+    taskId: asset.taskId,
+    resultIds: asset.id ? [asset.id] : [],
+    width: metadata.width,
+    height: metadata.height
+  };
+}
+
+const montageWorkCards = computed<AdminRecord[]>(() => {
+  const seen = new Set<string>();
+  return onlineAssets.value
+    .filter((asset) => isMontageWorkAsset(asset))
+    .map((asset) => montageAssetToWorkCard(asset))
+    .filter((card) => {
+      const id = aiTaskId(card);
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+});
 const onlineRecentTasksVideoSignature = computed(() => onlineRecentTasks.value.map((task) => [
   String(task.id || ""),
   String(task.status || ""),
@@ -4967,7 +5019,8 @@ const onlineHistoryItems = computed(() => onlineImageTasks.value.slice(0, 8));
 const userWorkCards = computed(() => {
   const keyword = worksSearchKeyword.value.trim().toLowerCase();
   const statusFilter = worksStatusFilter.value;
-  const source = worksSourceTab.value === "official" ? publicOfficialCases.value : onlineImageTasks.value;
+  const mineSource = [...montageWorkCards.value, ...onlineImageTasks.value];
+  const source = worksSourceTab.value === "official" ? publicOfficialCases.value : mineSource;
   return source
     .filter((task) => {
       const taskId = aiTaskId(task);
@@ -4993,12 +5046,12 @@ const userWorkSummaryCards = computed(() => {
       { label: "作品同步", value: isGuestUser.value ? "未登录" : "已开启", hint: "不会公开你的私人作品" }
     ];
   }
-  const total = onlineImageTasks.value.filter((task) => !aiHiddenTaskIds.value.includes(aiTaskId(task))).length;
-  const done = onlineImageTasks.value.filter(isAiTaskSucceeded).length;
+  const total = [...montageWorkCards.value, ...onlineImageTasks.value].filter((task) => !aiHiddenTaskIds.value.includes(aiTaskId(task))).length;
+  const done = [...montageWorkCards.value, ...onlineImageTasks.value].filter(isAiTaskSucceeded).length;
   const favorites = onlineImageTasks.value.filter(isAiTaskFavorite).length;
-  const points = onlineImageTasks.value.reduce((sum, task) => sum + Number(task.pointCost || 0), 0);
+  const points = [...montageWorkCards.value, ...onlineImageTasks.value].reduce((sum, task) => sum + Number(task.pointCost || 0), 0);
   return [
-    { label: "全部作品", value: String(total), hint: "含图片任务与收藏记录" },
+    { label: "全部作品", value: String(total), hint: "含生图与混剪成片" },
     { label: "已完成", value: String(done), hint: "可预览、下载、复用" },
     { label: "收藏作品", value: String(favorites), hint: "已加入收藏夹" },
     { label: "消耗点数", value: formatNumber(points), hint: "按当前任务汇总" }
@@ -5433,7 +5486,9 @@ function aiTaskAsset(task: AdminRecord) {
   return onlineAssets.value.find((item) => {
     const assetId = String(item.id || "");
     const assetTaskId = String(item.taskId || "");
-    return (taskId && assetTaskId === taskId) || (assetId && resultIds.includes(assetId));
+    return (taskId && assetId === taskId)
+      || (taskId && assetTaskId === taskId)
+      || (assetId && resultIds.includes(assetId));
   });
 }
 
@@ -6661,6 +6716,11 @@ function reuseAiTask(task: AdminRecord, options: { notify?: boolean } = {}) {
 }
 
 function reuseUserWorkTask(task: AdminRecord) {
+  if (isMontageWorkCard(task)) {
+    ElMessage.success("已打开 AI 自动混剪");
+    void selectAdminModule("userSmartVideo");
+    return;
+  }
   reuseAiTask(task);
   void selectAdminModule("userAiImage");
 }
@@ -6681,6 +6741,15 @@ function normalizeAiImageQuality(value: unknown) {
 }
 
 function previewAiTask(task: AdminRecord) {
+  if (isMontageWorkCard(task)) {
+    const videoUrl = aiTaskImageUrl(task);
+    if (videoUrl && isBrowserReachableMediaUrl(videoUrl)) {
+      window.open(videoUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    ElMessage.warning("成片地址暂不可用，请尝试下载");
+    return;
+  }
   const imageUrl = aiTaskImageUrl(task);
   const placeholder = aiTaskSafePlaceholderUrl(task);
   if (imageUrl || placeholder) {
@@ -7091,11 +7160,16 @@ async function downloadAiTask(task?: AdminRecord) {
   const imageUrl = aiTaskImageUrl(target);
   const assetId = aiTaskAssetId(target);
   if (!imageUrl && !assetId) {
-    ElMessage.warning("当前任务还没有生成图片");
+    ElMessage.warning(isMontageWorkCard(target) ? "当前任务还没有生成成片" : "当前任务还没有生成图片");
     return;
   }
-  if (!ensureWorkspaceAuth("download_work", "userAiImage", { mediaKind: "image", taskId: aiTaskId(target) })) return;
-  const fileName = `ai-image-${aiTaskId(target) || Date.now()}.png`;
+  if (!ensureWorkspaceAuth("download_work", isMontageWorkCard(target) ? "userWorks" : "userAiImage", {
+    mediaKind: isMontageWorkCard(target) ? "video" : "image",
+    taskId: aiTaskId(target)
+  })) return;
+  const fileName = isMontageWorkCard(target)
+    ? `ai-montage-${aiTaskId(target) || Date.now()}.mp4`
+    : `ai-image-${aiTaskId(target) || Date.now()}.png`;
   try {
     if (assetId) {
       await downloadUrl(imageUrl || assetId, fileName, assetId);

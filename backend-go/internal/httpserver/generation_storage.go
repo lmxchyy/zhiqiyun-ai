@@ -148,26 +148,47 @@ func (a api) signStoredAssetURLs(ctx context.Context, userID string, items []ass
 	for index := range result {
 		originalURL := result[index].URL
 		originalThumbnailURL := result[index].ThumbnailURL
-		fileID := firstNonEmptyString(stringValue(result[index].Metadata["fileId"]), stringValue(result[index].Metadata["storageFileId"]))
-		if fileID == "" {
-			continue
-		}
 		tenantID := firstNonEmptyString(result[index].TenantID, stringValue(result[index].Metadata["storageTenantId"]), "tenant_default")
-		ticket, err := a.fileService.AccessURL(ctx, storagecenter.AccessContext{
-			TenantID: tenantID,
-			UserID:   userID,
-		}, fileID, false)
-		if err != nil {
-			continue
+		access := storagecenter.AccessContext{TenantID: tenantID, UserID: userID}
+
+		fileID := firstNonEmptyString(
+			stringValue(result[index].Metadata["fileId"]),
+			stringValue(result[index].Metadata["storageFileId"]),
+			storageFileIDFromRef(originalURL),
+		)
+		if fileID != "" {
+			if ticket, err := a.fileService.AccessURL(ctx, access, fileID, false); err == nil {
+				result[index].URL = ticket.URL
+				if originalThumbnailURL == "" || originalThumbnailURL == originalURL || strings.HasPrefix(strings.ToLower(originalThumbnailURL), "storage://") {
+					result[index].ThumbnailURL = ticket.URL
+				}
+			}
 		}
-		result[index].URL = ticket.URL
-		if originalThumbnailURL == "" || originalThumbnailURL == originalURL {
-			result[index].ThumbnailURL = ticket.URL
-		} else {
-			result[index].ThumbnailURL = originalThumbnailURL
+
+		coverID := firstNonEmptyString(
+			stringValue(result[index].Metadata["coverFileId"]),
+			stringValue(result[index].Metadata["thumbnailFileId"]),
+			storageFileIDFromRef(originalThumbnailURL),
+		)
+		if coverID != "" && coverID != fileID {
+			if ticket, err := a.fileService.AccessURL(ctx, access, coverID, false); err == nil {
+				result[index].ThumbnailURL = ticket.URL
+			}
 		}
 	}
 	return result
+}
+
+func storageFileIDFromRef(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, "storage://") {
+		return strings.TrimSpace(value[len("storage://"):])
+	}
+	return ""
 }
 
 func generatedStorageRecord(params map[string]any, index int) (map[string]any, bool) {
