@@ -171,6 +171,29 @@ type AnalysisResult struct {
 	ThumbnailFileID     string                  `json:"thumbnailFileId,omitempty"`
 	ProxyFileID         string                  `json:"proxyFileId,omitempty"`
 	AnalyzerVersion     string                  `json:"analyzerVersion"`
+	Summary             *AssetAnalysisSummary   `json:"summary,omitempty"`
+}
+
+// AssetAnalysisSummary is the planner-facing normalized summary persisted on each asset.
+type AssetAnalysisSummary struct {
+	Kind              string            `json:"kind"`
+	DurationMs        int64             `json:"durationMs"`
+	Width             int               `json:"width,omitempty"`
+	Height            int               `json:"height,omitempty"`
+	MIMEType          string            `json:"mimeType,omitempty"`
+	HasAudio          bool              `json:"hasAudio,omitempty"`
+	SceneHints        []string          `json:"sceneHints,omitempty"`
+	ColorHints        []string          `json:"colorHints,omitempty"`
+	CompositionHints  []string          `json:"compositionHints,omitempty"`
+	CandidateClips    []CandidateClip   `json:"candidateClips,omitempty"`
+	RepresentativeFrames []string       `json:"representativeFrameFileIds,omitempty"`
+}
+
+type CandidateClip struct {
+	StartMs    int64  `json:"startMs"`
+	EndMs      int64  `json:"endMs"`
+	Confidence float64 `json:"confidence"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 type AnalysisAssetStatus struct {
@@ -206,8 +229,16 @@ type AnalysisJob struct {
 	AssetID   string `json:"assetId"`
 }
 
+type PlanJob struct {
+	TaskID string `json:"taskId"`
+}
+
 type AnalysisQueue interface {
 	Enqueue(context.Context, AnalysisJob, time.Duration) error
+}
+
+type PlanQueue interface {
+	Enqueue(context.Context, PlanJob, time.Duration) error
 }
 
 type QueueDecision struct {
@@ -218,6 +249,15 @@ type QueueDecision struct {
 type AnalysisWorkerQueue interface {
 	AnalysisQueue
 	Run(context.Context, func(context.Context, AnalysisJob) QueueDecision) error
+}
+
+type PlanWorkerQueue interface {
+	PlanQueue
+	Run(context.Context, func(context.Context, PlanJob) QueueDecision) error
+}
+
+type TaskQueue interface {
+	Publish(context.Context, string) error
 }
 
 type AnalysisTaskProcessor interface {

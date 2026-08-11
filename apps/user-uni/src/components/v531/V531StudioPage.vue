@@ -121,7 +121,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import V532SceneCenter from "./V532SceneCenter.vue";
 
-type CreationMode = "image" | "video" | "ppt" | "infographic" | "review" | "agent";
+type CreationMode = "image" | "video" | "ppt" | "infographic" | "review" | "agent" | "montage";
 type NativeStudioBridge = typeof globalThis & {
   __xianzhiV531StudioGenerate?: () => void;
   __xianzhiV531StudioOpenMode?: (mode: string) => void;
@@ -140,7 +140,7 @@ const props = withDefaults(defineProps<{
   pointBalance: 0,
   planName: "普通用户",
   recentModel: "豆包·通用 Pro",
-  allowedCreationModes: () => ["image", "infographic", "video"],
+  allowedCreationModes: () => ["image", "infographic", "video", "montage"],
 });
 
 const emit = defineEmits<{
@@ -185,10 +185,11 @@ const recommendation = computed(() => {
 
 const coreCapabilitiesSource = [
   { id: "image", icon: "图", title: "AI 生图", summary: "海报·商品图", tone: "blue", mode: "image", free: false },
+  { id: "infographic", icon: "图", title: "自由P图", summary: "杂志·修图", tone: "blue", mode: "infographic", free: false },
+  { id: "montage", icon: "剪", title: "AI混剪", summary: "素材自动成片", tone: "blue", mode: "montage", free: false },
   { id: "video", icon: "视", title: "AI 视频", summary: "宣传片·短视频", tone: "blue", mode: "video", free: false },
   { id: "ppt", icon: "P", title: "PPT 文档", summary: "方案·路演", tone: "blue", mode: "ppt", free: false },
   { id: "agent", icon: "AI", title: "AI Agent", summary: "营销·销售", tone: "blue", mode: "agent", free: true },
-  { id: "infographic", icon: "图", title: "自由P图", summary: "杂志·修图", tone: "blue", mode: "infographic", free: false },
   { id: "review", icon: "检", title: "AI 质检", summary: "审稿·合规", tone: "orange", mode: "review", free: false },
 ] as const satisfies ReadonlyArray<{
   id: string;
@@ -264,7 +265,7 @@ onMounted(() => {
   const bridge = globalThis as NativeStudioBridge;
   bridge.__xianzhiV531StudioGenerate = startCreation;
   bridge.__xianzhiV531StudioOpenMode = (mode) => {
-    if (["image", "video", "ppt", "infographic", "review", "agent"].includes(mode)) {
+    if (["image", "video", "ppt", "infographic", "review", "agent", "montage"].includes(mode)) {
       openMode(mode as CreationMode);
     }
   };

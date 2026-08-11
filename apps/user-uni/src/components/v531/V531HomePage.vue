@@ -388,7 +388,7 @@ const props = defineProps<{
   allowedCreationModes?: CreationMode[];
 }>();
 type CreationMode =
-  "image" | "video" | "ppt" | "infographic" | "review" | "agent";
+  "image" | "video" | "ppt" | "infographic" | "review" | "agent" | "montage";
 type CompactCapabilityTone =
   "blue" | "red" | "orange" | "green" | "purple" | "dark";
 type CompactCapability = {
@@ -423,7 +423,7 @@ const greeting = computed(() => {
         : "晚上好";
 });
 const isModeAllowed = (mode: CreationMode) =>
-  (props.allowedCreationModes || ["image", "infographic", "video"]).includes(mode);
+  (props.allowedCreationModes || ["image", "infographic", "video", "montage"]).includes(mode);
 const quickActionsSource = [
   { label: "宣传海报", mode: "image" },
   { label: "招商PPT", mode: "ppt" },
@@ -1270,6 +1270,14 @@ function showVoiceInputLimit() {
 .secondary-icon.office {
   color: #19b86d;
   background: #eafaf2;
+}
+.secondary-icon.montage {
+  color: #4a6bff;
+  background: #eef2ff;
+}
+.secondary-icon.video {
+  color: #e35d2b;
+  background: #fff1eb;
 }
 .secondary-copy,
 .compact-copy {

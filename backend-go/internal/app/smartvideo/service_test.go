@@ -23,7 +23,12 @@ func newTestService() (*Service, *MemoryRepository, Access) {
 		"file_1": {
 			FileID: "file_1", TenantID: access.TenantID, UserID: access.UserID,
 			ObjectKey: "tenant_a/user_a/video.mp4", Status: "ACTIVE",
-			Metadata: AssetMetadata{OriginalName: "video.mp4", MIMEType: "video/mp4", DurationMS: 1000},
+			Metadata: AssetMetadata{OriginalName: "video.mp4", MIMEType: "video/mp4", FileSize: 1024, DurationMS: 1000},
+		},
+		"file_2": {
+			FileID: "file_2", TenantID: access.TenantID, UserID: access.UserID,
+			ObjectKey: "tenant_a/user_a/image.png", Status: "ACTIVE",
+			Metadata: AssetMetadata{OriginalName: "image.png", MIMEType: "image/png", FileSize: 512},
 		},
 		"file_other_tenant": {
 			FileID: "file_other_tenant", TenantID: "tenant_b", UserID: access.UserID,
@@ -115,7 +120,7 @@ func TestInvalidProjectStateTransitionRejected(t *testing.T) {
 	}
 }
 
-func TestRenderTaskCreationIsIdempotent(t *testing.T) {
+func TestLegacyCreateRenderTaskIsDisabled(t *testing.T) {
 	service, repository, access := newTestService()
 	project, err := service.CreateProject(context.Background(), access, CreateProjectInput{Title: "Project"})
 	if err != nil {
@@ -125,46 +130,21 @@ func TestRenderTaskCreationIsIdempotent(t *testing.T) {
 	if _, err := repository.UpdateProject(context.Background(), project); err != nil {
 		t.Fatal(err)
 	}
-	input := CreateRenderTaskInput{
-		ClientRequestID: "request_1",
-		Specification: RenderSpecification{
-			Width: 1920, Height: 1080, FrameRate: 30, Format: "mp4",
-		},
-	}
-	first, err := service.CreateRenderTask(context.Background(), access, project.ID, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := service.CreateRenderTask(context.Background(), access, project.ID, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.ID != second.ID {
-		t.Fatalf("duplicate request created different tasks: %s != %s", first.ID, second.ID)
-	}
-	if _, err := service.CreateRenderTask(context.Background(), access, project.ID, CreateRenderTaskInput{
-		ClientRequestID: "request_1",
-		Specification: RenderSpecification{
-			Width: 1280, Height: 720, FrameRate: 30, Format: "mp4",
-		},
-	}); !errors.Is(err, ErrInvalidInput) {
-		t.Fatalf("idempotency payload mismatch error = %v", err)
-	}
-}
-
-func TestRenderTaskRequiresConfirmedProject(t *testing.T) {
-	service, _, access := newTestService()
-	project, err := service.CreateProject(context.Background(), access, CreateProjectInput{Title: "Project"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, err = service.CreateRenderTask(context.Background(), access, project.ID, CreateRenderTaskInput{
 		ClientRequestID: "request_1",
 		Specification: RenderSpecification{
 			Width: 1920, Height: 1080, FrameRate: 30, Format: "mp4",
 		},
 	})
-	if !errors.Is(err, ErrProjectNotConfirmed) {
-		t.Fatalf("error = %v, want ErrProjectNotConfirmed", err)
+	if !errors.Is(err, ErrExportNotReady) {
+		t.Fatalf("error = %v, want ErrExportNotReady", err)
+	}
+}
+
+func TestLegacyRetryRenderTaskIsDisabled(t *testing.T) {
+	service, _, access := newTestService()
+	_, err := service.RetryRenderTask(context.Background(), access, "proj", "task")
+	if !errors.Is(err, ErrExportNotReady) {
+		t.Fatalf("error = %v, want ErrExportNotReady", err)
 	}
 }

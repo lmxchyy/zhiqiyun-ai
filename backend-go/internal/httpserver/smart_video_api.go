@@ -16,11 +16,13 @@ import (
 type smartVideoAPI struct {
 	service  *smartvideo.Service
 	analysis *smartvideo.AnalysisService
+	plans    *smartvideo.PlanService
+	exports  *smartvideo.ExportService
 	files    fileCenterAPI
 }
 
-func newSmartVideoAPI(service *smartvideo.Service, analysis *smartvideo.AnalysisService, files fileCenterAPI) smartVideoAPI {
-	return smartVideoAPI{service: service, analysis: analysis, files: files}
+func newSmartVideoAPI(service *smartvideo.Service, analysis *smartvideo.AnalysisService, plans *smartvideo.PlanService, exports *smartvideo.ExportService, files fileCenterAPI) smartVideoAPI {
+	return smartVideoAPI{service: service, analysis: analysis, plans: plans, exports: exports, files: files}
 }
 
 type smartVideoFileResolver struct{ service *storagecenter.Service }
@@ -186,15 +188,19 @@ func (a smartVideoAPI) createRenderTask(w http.ResponseWriter, r *http.Request) 
 		writeSmartVideoError(w, err)
 		return
 	}
-	var input smartvideo.CreateRenderTaskInput
+	if a.exports == nil {
+		writeSmartVideoError(w, smartvideo.ErrExportNotReady)
+		return
+	}
+	var input smartvideo.ExportCreateInput
 	if err := decodeSmartVideoJSON(w, r, &input); err != nil {
 		writeSmartVideoError(w, err)
 		return
 	}
-	if input.ClientRequestID == "" {
-		input.ClientRequestID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if input.IdempotencyKey == "" {
+		input.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
-	task, err := a.service.CreateRenderTask(r.Context(), access, r.PathValue("id"), input)
+	task, err := a.exports.CreateExport(r.Context(), access, r.PathValue("id"), input)
 	if err != nil {
 		writeSmartVideoError(w, err)
 		return
@@ -226,13 +232,35 @@ func (a smartVideoAPI) renderTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, task)
 }
 
+func (a smartVideoAPI) cancelRenderTask(w http.ResponseWriter, r *http.Request) {
+	access, err := a.access(r)
+	if err != nil {
+		writeSmartVideoError(w, err)
+		return
+	}
+	if a.exports == nil {
+		writeSmartVideoError(w, smartvideo.ErrExportNotReady)
+		return
+	}
+	task, err := a.exports.CancelExport(r.Context(), access, r.PathValue("id"), r.PathValue("taskId"))
+	if err != nil {
+		writeSmartVideoError(w, err)
+		return
+	}
+	writeJSON(w, task)
+}
+
 func (a smartVideoAPI) retryRenderTask(w http.ResponseWriter, r *http.Request) {
 	access, err := a.access(r)
 	if err != nil {
 		writeSmartVideoError(w, err)
 		return
 	}
-	task, err := a.service.RetryRenderTask(r.Context(), access, r.PathValue("id"), r.PathValue("taskId"))
+	if a.exports == nil {
+		writeSmartVideoError(w, smartvideo.ErrExportNotReady)
+		return
+	}
+	task, err := a.exports.RetryExport(r.Context(), access, r.PathValue("id"), r.PathValue("taskId"))
 	if err != nil {
 		writeSmartVideoError(w, err)
 		return
@@ -324,16 +352,29 @@ func writeSmartVideoError(w http.ResponseWriter, err error) {
 		status = http.StatusForbidden
 	case errors.Is(err, smartvideo.ErrInvalidInput), errors.Is(err, smartvideo.ErrIdempotencyKeyRequired):
 		status = http.StatusBadRequest
-	case errors.Is(err, smartvideo.ErrInvalidStateTransition), errors.Is(err, smartvideo.ErrProjectNotConfirmed):
+	case errors.Is(err, smartvideo.ErrContentSafetyRejected):
+		status = http.StatusUnprocessableEntity
+	case errors.Is(err, smartvideo.ErrInvalidStateTransition), errors.Is(err, smartvideo.ErrProjectNotConfirmed), errors.Is(err, smartvideo.ErrVersionImmutable),
+		errors.Is(err, smartvideo.ErrRenderNotCancellable), errors.Is(err, smartvideo.ErrQuoteExpired):
 		status = http.StatusConflict
+	case errors.Is(err, smartvideo.ErrInsufficientPoints):
+		status = http.StatusPaymentRequired
 	case errors.Is(err, smartvideo.ErrFileNotReady),
 		errors.Is(err, storagecenter.ErrFileNotFound),
 		errors.Is(err, storagecenter.ErrFileForbidden):
 		status = http.StatusUnprocessableEntity
-	case errors.Is(err, smartvideo.ErrAnalysisDisabled), errors.Is(err, smartvideo.ErrAnalysisNotReady):
+	case errors.Is(err, smartvideo.ErrAnalysisDisabled), errors.Is(err, smartvideo.ErrAnalysisNotReady), errors.Is(err, smartvideo.ErrPlanNotReady),
+		errors.Is(err, smartvideo.ErrExportNotReady):
 		status = http.StatusServiceUnavailable
-	case errors.Is(err, smartvideo.ErrAnalysisNotFailed):
+	case errors.Is(err, smartvideo.ErrAnalysisNotFailed), errors.Is(err, smartvideo.ErrPlanDailyLimitExceeded):
 		status = http.StatusConflict
+	case isEditPlanValidationError(err):
+		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)
+}
+
+func isEditPlanValidationError(err error) bool {
+	var validation *smartvideo.EditPlanValidationError
+	return errors.As(err, &validation)
 }

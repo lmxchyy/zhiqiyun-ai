@@ -656,6 +656,14 @@
         { "path": "pages/desktop", "style": { "navigationBarTitleText": "在电脑继续", "navigationStyle": "custom" } },
         { "path": "pages/error", "style": { "navigationBarTitleText": "操作失败", "navigationStyle": "custom" } }
       ]
+    },
+    {
+      "root": "packageSmartVideo",
+      "pages": [
+        { "path": "pages/create", "style": { "navigationBarTitleText": "AI混剪", "navigationStyle": "custom" } },
+        { "path": "pages/plan", "style": { "navigationBarTitleText": "混剪方案", "navigationStyle": "custom" } },
+        { "path": "pages/render", "style": { "navigationBarTitleText": "导出成片", "navigationStyle": "custom" } }
+      ]
     }
   ],
   "globalStyle": {

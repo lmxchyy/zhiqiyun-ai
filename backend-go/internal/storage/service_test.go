@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -20,8 +21,9 @@ func (f *fakeProviderFactory) Build(config Config) (Provider, error) {
 }
 
 type fakeProvider struct {
-	objects map[string]ObjectMetadata
-	deleted []string
+	objects   map[string]ObjectMetadata
+	deleted   []string
+	multipart map[string]string
 }
 
 func (p *fakeProvider) OpenObject(_ context.Context, key string) (io.ReadCloser, error) {
@@ -68,6 +70,33 @@ func (p *fakeProvider) CreatePresignedUploadURL(_ context.Context, key, _ string
 
 func (p *fakeProvider) CreatePresignedDownloadURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://storage.example/download/" + key, nil
+}
+
+func (p *fakeProvider) CreateMultipartUpload(_ context.Context, key, _ string) (string, error) {
+	if p.multipart == nil {
+		p.multipart = map[string]string{}
+	}
+	uploadID := "provider-upload-" + key
+	p.multipart[key] = uploadID
+	return uploadID, nil
+}
+
+func (p *fakeProvider) PresignUploadPart(_ context.Context, key, uploadID string, partNumber int, _ time.Duration) (string, error) {
+	return fmt.Sprintf("https://storage.example/multipart/%s/%s/%d", key, uploadID, partNumber), nil
+}
+
+func (p *fakeProvider) CompleteMultipartUpload(_ context.Context, key, uploadID string, parts []CompletedPart) (ObjectMetadata, error) {
+	object := ObjectMetadata{Size: 0, ContentType: "application/octet-stream", ETag: "etag-multipart-" + uploadID}
+	p.objects[key] = object
+	_ = parts
+	return object, nil
+}
+
+func (p *fakeProvider) AbortMultipartUpload(_ context.Context, key, _ string) error {
+	if p.multipart != nil {
+		delete(p.multipart, key)
+	}
+	return nil
 }
 
 func (p *fakeProvider) TestConnection(context.Context) error { return nil }
@@ -231,5 +260,107 @@ func TestStorageConfigCredentialsAreEncryptedAndHydratedOnlyForProvider(t *testi
 	}
 	if strings.Contains(string(encoded), "tenant-secret") {
 		t.Fatal("secret leaked through config JSON")
+	}
+}
+
+func TestMultipartUploadLifecycle(t *testing.T) {
+	const totalSize int64 = 12 << 20 // 12 MiB → 2 parts at 8 MiB default
+	repo := NewMemoryRepository()
+	provider := newFakeProvider()
+	factory := &fakeProviderFactory{provider: provider}
+	service := NewService(repo, factory, Options{
+		DefaultProvider: "minio", Endpoint: "http://minio:9000", AccessKey: "access", SecretKey: "secret", Bucket: "files",
+		DefaultQuotaBytes: totalSize * 2, MaxUploadBytes: totalSize * 2, UploadURLTTL: time.Hour, AccessURLTTL: time.Hour,
+		MasterKey: "0123456789abcdef0123456789abcdef",
+	})
+	ctx := context.Background()
+	access := AccessContext{TenantID: "tenant_a", UserID: "user_a"}
+
+	session, err := service.InitMultipartUpload(ctx, MultipartInitInput{
+		UploadInitInput: UploadInitInput{
+			TenantID: access.TenantID, UserID: access.UserID, FileName: "clip.mp4", FileSize: totalSize,
+			MIMEType: "video/mp4", BusinessType: "smart_video", Visibility: "private",
+		},
+		IdempotencyKey: "mpu-key-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.UploadID == "" || session.FileID == "" || session.TotalParts != 2 || session.PartSize != DefaultMultipartPartSize {
+		t.Fatalf("unexpected session: %+v", session)
+	}
+	again, err := service.InitMultipartUpload(ctx, MultipartInitInput{
+		UploadInitInput: UploadInitInput{
+			TenantID: access.TenantID, UserID: access.UserID, FileName: "clip.mp4", FileSize: totalSize,
+			MIMEType: "video/mp4", BusinessType: "smart_video",
+		},
+		IdempotencyKey: "mpu-key-1",
+	})
+	if err != nil || again.UploadID != session.UploadID {
+		t.Fatalf("idempotent init failed: %+v err=%v", again, err)
+	}
+
+	part1, err := service.PresignMultipartPart(ctx, access, session.UploadID, 1)
+	if err != nil || !strings.Contains(part1.UploadURL, "/1") {
+		t.Fatalf("presign part1 = %+v err=%v", part1, err)
+	}
+	part2, err := service.PresignMultipartPart(ctx, access, session.UploadID, 2)
+	if err != nil || !strings.Contains(part2.UploadURL, "/2") {
+		t.Fatalf("presign part2 = %+v err=%v", part2, err)
+	}
+	if _, err = service.PresignMultipartPart(ctx, access, session.UploadID, 3); err != ErrInvalidMultipartPart {
+		t.Fatalf("out-of-range part error = %v", err)
+	}
+
+	file, err := service.CompleteMultipartUpload(ctx, access, session.UploadID, []CompletedPart{
+		{PartNumber: 2, ETag: `"etag-2"`},
+		{PartNumber: 1, ETag: `"etag-1"`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Status != StatusActive || file.FileSize != totalSize {
+		t.Fatalf("unexpected completed file: %+v", file)
+	}
+	if err := service.AbortMultipartUpload(ctx, access, session.UploadID); err != nil {
+		t.Fatalf("abort after complete should be no-op: %v", err)
+	}
+}
+
+func TestMultipartAbortReleasesPending(t *testing.T) {
+	const totalSize int64 = MinMultipartPartSize
+	repo := NewMemoryRepository()
+	provider := newFakeProvider()
+	service := NewService(repo, &fakeProviderFactory{provider: provider}, Options{
+		DefaultProvider: "minio", Endpoint: "http://minio:9000", AccessKey: "access", SecretKey: "secret", Bucket: "files",
+		DefaultQuotaBytes: totalSize * 2, MaxUploadBytes: totalSize * 2, UploadURLTTL: time.Minute,
+		MasterKey: "0123456789abcdef0123456789abcdef",
+	})
+	ctx := context.Background()
+	access := AccessContext{TenantID: "tenant_a", UserID: "user_a"}
+	session, err := service.InitMultipartUpload(ctx, MultipartInitInput{
+		UploadInitInput: UploadInitInput{
+			TenantID: access.TenantID, UserID: access.UserID, FileName: "clip.mp4", FileSize: totalSize,
+			MIMEType: "video/mp4", BusinessType: "smart_video",
+		},
+		PartSize: MinMultipartPartSize,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quota, err := service.Quota(ctx, access.TenantID)
+	if err != nil || quota.ReservedBytes < totalSize {
+		t.Fatalf("quota before abort: %+v err=%v", quota, err)
+	}
+	if err := service.AbortMultipartUpload(ctx, access, session.UploadID); err != nil {
+		t.Fatal(err)
+	}
+	quota, err = service.Quota(ctx, access.TenantID)
+	if err != nil || quota.ReservedBytes != 0 {
+		t.Fatalf("quota after abort: %+v err=%v", quota, err)
+	}
+	stored, err := repo.GetMultipartSession(ctx, access.TenantID, access.UserID, session.UploadID)
+	if err != nil || stored.State != MultipartStateAborted {
+		t.Fatalf("session state = %+v err=%v", stored, err)
 	}
 }

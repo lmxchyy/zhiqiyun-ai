@@ -171,6 +171,79 @@ func (p *huaweiOBSProvider) CreatePresignedDownloadURL(ctx context.Context, obje
 	return p.createSignedURL(ctx, huaweiobs.HttpMethodGet, objectKey, ttl, nil)
 }
 
+func (p *huaweiOBSProvider) CreateMultipartUpload(ctx context.Context, objectKey, contentType string) (string, error) {
+	if err := p.ensureBucket(ctx); err != nil {
+		return "", err
+	}
+	input := &huaweiobs.InitiateMultipartUploadInput{}
+	input.Bucket = p.bucket
+	input.Key = objectKey
+	if value := strings.TrimSpace(contentType); value != "" {
+		input.ContentType = value
+	}
+	output, err := p.client.InitiateMultipartUpload(input)
+	if err != nil {
+		return "", err
+	}
+	return output.UploadId, nil
+}
+
+func (p *huaweiOBSProvider) PresignUploadPart(ctx context.Context, objectKey, uploadID string, partNumber int, ttl time.Duration) (string, error) {
+	if err := p.ensureBucket(ctx); err != nil {
+		return "", err
+	}
+	if partNumber < 1 {
+		return "", fmt.Errorf("%w: invalid part number", ErrInvalidMultipartPart)
+	}
+	expires := int(ttl / time.Second)
+	if expires < 1 {
+		expires = 1
+	}
+	output, err := p.signer.CreateSignedUrl(&huaweiobs.CreateSignedUrlInput{
+		Method: huaweiobs.HttpMethodPut, Bucket: p.bucket, Key: objectKey, Expires: expires,
+		QueryParams: map[string]string{
+			"uploadId":   uploadID,
+			"partNumber": fmt.Sprintf("%d", partNumber),
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return output.SignedUrl, nil
+}
+
+func (p *huaweiOBSProvider) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []CompletedPart) (ObjectMetadata, error) {
+	if err := p.ensureBucket(ctx); err != nil {
+		return ObjectMetadata{}, err
+	}
+	obsParts := make([]huaweiobs.Part, 0, len(parts))
+	for _, part := range parts {
+		obsParts = append(obsParts, huaweiobs.Part{
+			PartNumber: part.PartNumber,
+			ETag:       strings.Trim(part.ETag, `"`),
+		})
+	}
+	input := &huaweiobs.CompleteMultipartUploadInput{}
+	input.Bucket = p.bucket
+	input.Key = objectKey
+	input.UploadId = uploadID
+	input.Parts = obsParts
+	_, err := p.client.CompleteMultipartUpload(input)
+	if err != nil {
+		return ObjectMetadata{}, err
+	}
+	return p.HeadObject(ctx, objectKey)
+}
+
+func (p *huaweiOBSProvider) AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
+	input := &huaweiobs.AbortMultipartUploadInput{}
+	input.Bucket = p.bucket
+	input.Key = objectKey
+	input.UploadId = uploadID
+	_, err := p.client.AbortMultipartUpload(input)
+	return err
+}
+
 func (p *huaweiOBSProvider) createSignedURL(ctx context.Context, method huaweiobs.HttpMethodType, objectKey string, ttl time.Duration, headers map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

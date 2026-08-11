@@ -193,6 +193,7 @@
       SMARTVIDEO_RENDER_MAX_OUTPUT_BYTES: "${SMARTVIDEO_RENDER_MAX_OUTPUT_BYTES:-536870912}"
       SMARTVIDEO_RENDER_FONT_PATH: "${SMARTVIDEO_RENDER_FONT_PATH:-/usr/share/fonts/noto/NotoSansCJK-Regular.ttc}"
       SMARTVIDEO_TEMP_DIR: "/tmp/smartvideo"
+      SMARTVIDEO_OUTBOX_ENABLED: "${SMARTVIDEO_OUTBOX_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/smartvideo/worker.healthy"]
       interval: 10s

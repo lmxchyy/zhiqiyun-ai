@@ -169,8 +169,16 @@ func TestApplyAdminPlanCapabilitiesPersistsAccessModelsAndLimits(t *testing.T) {
 			break
 		}
 	}
-	if !video.Enabled || len(video.AllowedModels) != 1 || video.AllowedModels[0] != "mock-video" {
+	if !video.Enabled || !stringListContains(video.AllowedModels, "mock-video") {
 		t.Fatalf("unexpected video capability: %+v", video)
+	}
+	for _, modelName := range []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"} {
+		if !stringListContains(video.AllowedModels, modelName) {
+			t.Fatalf("protected video model %s must remain on package allowlist, got: %+v", modelName, video.AllowedModels)
+		}
+	}
+	if stringListContains(video.AllowedModels, "seedance-fast-2.0") {
+		t.Fatalf("package allowlist should not force-open seedance-fast-2.0, got: %+v", video.AllowedModels)
 	}
 
 	freeUser := adminUser{ID: "user_free", Role: "MEMBER", PlanID: "plan_free"}

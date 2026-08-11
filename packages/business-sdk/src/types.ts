@@ -192,4 +192,5 @@ export interface BusinessSdk {
     operationOrders(): Promise<ItemsResponse>;
     operationCommissions(): Promise<ItemsResponse>;
   };
+  smartVideo: import("./smart-video").SmartVideoSdk;
 }

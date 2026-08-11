@@ -66,6 +66,7 @@ export const adminModules: AdminModule[] = [
   { id: "userWirelessCanvas", title: "无线画布", endpoint: "/user/online-image", surface: "user", path: "/app/wireless-canvas" },
   { id: "userVideoGeneration", title: "视频生成", endpoint: "/user/online-image", surface: "user", path: "/app/video-generation" },
   { id: "userPptGeneration", title: "PPT文档生成", endpoint: "", surface: "user", path: "/app/ppt-generation", aliases: ["/app/ai-ppt"] },
+  { id: "userSmartVideo", title: "AI自动混剪", endpoint: "", surface: "user", path: "/app/smart-video", aliases: ["/app/ai-montage", "/app/auto-montage"] },
   { id: "userWorks", title: "作品中心", endpoint: "/user/online-image", surface: "user", path: "/app/works" },
   { id: "userUsage", title: "使用记录", endpoint: "/user/usage", surface: "user", path: "/app/usage" },
   { id: "userMembership", title: "身份/充值/订阅", endpoint: "/member/wallet", surface: "user", path: "/app/membership" },

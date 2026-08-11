@@ -23,6 +23,7 @@
     "build:packages": "tsc -b tsconfig.packages.json",
     "typecheck:packages": "tsc -b tsconfig.packages.json --pretty false",
     "typecheck:user-core": "npm run typecheck:packages && npm --prefix apps/user-uni run typecheck",
+    "build:user-h5": "npm --prefix apps/user-uni run build:h5",
     "build:user-mp-weixin": "npm --prefix apps/user-uni run build:mp-weixin",
     "build:user-app-plus": "npm --prefix apps/user-uni run build:app-plus",
     "check:user-app-release": "npm --prefix apps/user-uni run check:app-release",

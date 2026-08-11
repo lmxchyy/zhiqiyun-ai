@@ -1779,7 +1779,7 @@ const newApiProviderTemplateId = ref(apiProviderTemplates[0].id);
 const apiSettingsMode = ref<"edit" | "add" | "recommend">("edit");
 const newApiProviderDraft = ref<ApiProviderForm>(createApiProviderForm(apiProviderTemplates[0].provider));
 const selectedBillingCycle = ref<BillingCycleId>("monthly");
-const wirelessCanvasSrc = "/static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi";
+const wirelessCanvasSrc = `${String(import.meta.env.BASE_URL || "/").replace(/\/?$/, "/") }static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi`;
 const wirelessCanvasFrameSrc = ref("");
 const wirelessCanvasFrame = ref<HTMLIFrameElement | null>(null);
 const wirelessCanvasFrameLoaded = ref(false);

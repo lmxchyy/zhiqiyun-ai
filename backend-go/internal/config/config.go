@@ -118,6 +118,9 @@ type Config struct {
 	SmartVideoProxyAudioBitrate    string
 	SmartVideoAnalysisMaxAttempts  string
 	SmartVideoWorkerConcurrency    string
+	SmartVideoPlanWorkerConcurrency string
+	SmartVideoRenderWorkerConcurrency string
+	SmartVideoOutboxEnabled        bool
 	SmartVideoTempDir              string
 	ShutdownTimeout                string
 }
@@ -311,9 +314,12 @@ func Load() Config {
 		SmartVideoProxyVideoBitrate:    os.Getenv("SMARTVIDEO_PROXY_VIDEO_BITRATE"),
 		SmartVideoProxyAudioBitrate:    os.Getenv("SMARTVIDEO_PROXY_AUDIO_BITRATE"),
 		SmartVideoAnalysisMaxAttempts:  os.Getenv("SMARTVIDEO_ANALYSIS_MAX_ATTEMPTS"),
-		SmartVideoWorkerConcurrency:    os.Getenv("SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY"),
-		SmartVideoTempDir:              os.Getenv("SMARTVIDEO_TEMP_DIR"),
-		ShutdownTimeout:                stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
+		SmartVideoWorkerConcurrency:       os.Getenv("SMARTVIDEO_ANALYSIS_WORKER_CONCURRENCY"),
+		SmartVideoPlanWorkerConcurrency:   os.Getenv("SMARTVIDEO_PLAN_WORKER_CONCURRENCY"),
+		SmartVideoRenderWorkerConcurrency: os.Getenv("SMARTVIDEO_RENDER_CONCURRENCY"),
+		SmartVideoOutboxEnabled:           boolEnvDefaultTrue(os.Getenv("SMARTVIDEO_OUTBOX_ENABLED")),
+		SmartVideoTempDir:                 os.Getenv("SMARTVIDEO_TEMP_DIR"),
+		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
 	}
 }
 
@@ -510,5 +516,17 @@ func boolEnv(value string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func boolEnvDefaultTrue(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return true
 	}
 }

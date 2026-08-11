@@ -19,6 +19,8 @@ type RenderWorker struct {
 	queue      RenderWorkerQueue
 	renderer   RenderProcessor
 	publisher  RenderOutputPublisher
+	speech     *SpeechPrepService
+	settle     *SettleService
 	options    RenderWorkerOptions
 }
 
@@ -33,6 +35,16 @@ func NewRenderWorker(repository RenderRepository, queue RenderWorkerQueue, rende
 		options.HeartbeatEvery = options.LeaseDuration / 3
 	}
 	return &RenderWorker{repository: repository, queue: queue, renderer: renderer, publisher: publisher, options: options}
+}
+
+func (w *RenderWorker) SetSpeechPrep(speech *SpeechPrepService) *RenderWorker {
+	w.speech = speech
+	return w
+}
+
+func (w *RenderWorker) SetSettleService(settle *SettleService) *RenderWorker {
+	w.settle = settle
+	return w
 }
 
 func (w *RenderWorker) Run(ctx context.Context) error { return w.queue.Run(ctx, w.handle) }
@@ -55,7 +67,26 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 		return w.fail(parent, task, "SMARTVIDEO_RENDER_TEMP_FAILED", "无法创建隔离临时目录", true)
 	}
 	defer os.RemoveAll(workDir)
-	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusProcessing, RenderStatusRendering, "rendering", 30); err != nil {
+
+	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusProcessing, RenderStatusSynthesizing, "synthesizing", 20); err != nil {
+		return QueueDecision{RetryAfter: 5 * time.Second}
+	}
+	if w.speech != nil {
+		access := Access{TenantID: task.TenantID, UserID: task.UserID}
+		artifacts, prepErr := w.speech.Prepare(ctx, access, task)
+		if prepErr != nil {
+			return w.fail(parent, task, "SMARTVIDEO_SPEECH_FAILED", safeSpeechMessage(prepErr), true)
+		}
+		if !artifacts.Skipped {
+			if err = w.repository.AttachVoiceCaptionArtifacts(parent, task.ID, w.options.WorkerID, artifacts.VoiceFileID, artifacts.CaptionFileID); err != nil {
+				return QueueDecision{RetryAfter: 5 * time.Second}
+			}
+			task.VoiceFileID = artifacts.VoiceFileID
+			task.CaptionFileID = artifacts.CaptionFileID
+		}
+	}
+
+	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusSynthesizing, RenderStatusRendering, "rendering", 40); err != nil {
 		return QueueDecision{RetryAfter: 5 * time.Second}
 	}
 	artifact, err := w.renderer.Render(ctx, task, workDir)
@@ -65,11 +96,31 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusRendering, RenderStatusUploading, "uploading", 80); err != nil {
 		return QueueDecision{RetryAfter: 5 * time.Second}
 	}
-	output, err := w.publisher.Publish(ctx, task, artifact)
-	if err != nil {
-		return w.fail(parent, task, "SMARTVIDEO_RENDER_UPLOAD_FAILED", "视频结果上传失败", true)
+	var output RenderOutput
+	if task.OutputFileID != "" {
+		output = RenderOutput{
+			VideoFileID: task.OutputFileID, CoverFileID: task.CoverFileID,
+			DurationMS: task.Output.DurationMS, Width: task.Output.Width, Height: task.Output.Height,
+			FrameRate: task.Output.FrameRate, FileSize: task.Output.FileSize,
+			VideoCodec: task.Output.VideoCodec, AudioCodec: task.Output.AudioCodec, PixelFormat: task.Output.PixelFormat,
+		}
+		if output.DurationMS == 0 {
+			output.DurationMS = artifact.DurationMS
+			output.Width, output.Height, output.FrameRate = artifact.Width, artifact.Height, artifact.FrameRate
+			output.FileSize, output.VideoCodec, output.AudioCodec, output.PixelFormat =
+				artifact.FileSize, artifact.VideoCodec, artifact.AudioCodec, artifact.PixelFormat
+		}
+	} else {
+		output, err = w.publisher.Publish(ctx, task, artifact)
+		if err != nil {
+			return w.fail(parent, task, "SMARTVIDEO_RENDER_UPLOAD_FAILED", "视频结果上传失败", true)
+		}
 	}
-	if _, err = w.repository.CompleteRenderTask(parent, task.ID, w.options.WorkerID, output); err != nil {
+	if w.settle != nil {
+		if _, err = w.settle.SettleSuccess(parent, task, output); err != nil {
+			return w.fail(parent, task, "SMARTVIDEO_RENDER_PUBLISH_FAILED", "作品登记或积分结算失败", true)
+		}
+	} else if _, err = w.repository.CompleteRenderTask(parent, task.ID, w.options.WorkerID, output); err != nil {
 		return w.fail(parent, task, "SMARTVIDEO_RENDER_PUBLISH_FAILED", "作品登记失败", true)
 	}
 	log.Printf("smartvideo_render operation=complete task_id=%s result=succeeded", task.ID)
@@ -80,6 +131,9 @@ func (w *RenderWorker) fail(ctx context.Context, task RenderTask, code, message 
 	delay := renderBackoff(task.AttemptCount)
 	retry := retryable && task.AttemptCount < task.MaxAttempts
 	_ = w.repository.FailRenderTask(ctx, task.ID, w.options.WorkerID, code, message, time.Now().Add(delay), retry)
+	if !retry && w.settle != nil {
+		_ = w.settle.SettleFinalFailure(ctx, task)
+	}
 	if !retry {
 		return QueueDecision{Dead: true}
 	}
@@ -122,4 +176,14 @@ func safeRenderMessage(err error) string {
 		return mediaErr.Message
 	}
 	return "FFmpeg 视频渲染失败"
+}
+
+func safeSpeechMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "配音生成超时"
+	}
+	if errors.Is(err, ErrSpeechNotReady) {
+		return "配音服务未就绪"
+	}
+	return "配音或字幕生成失败"
 }

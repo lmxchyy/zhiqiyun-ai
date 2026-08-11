@@ -522,3 +522,6 @@ export interface ChannelCenterResponse {
   children: ChannelAgent[];
 }
 
+export * from "./smart-video";
+
+

@@ -1140,7 +1140,7 @@ const allCreationModules = [
   { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
 ];
 
-const allowedCreationModes = ref<CreationMode[]>(["image", "infographic", "video"]);
+const allowedCreationModes = ref<CreationMode[]>(["image", "infographic", "video", "montage"]);
 const creationModules = computed(() => allCreationModules.filter(item => allowedCreationModes.value.includes(item.id)));
 
 const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"];
@@ -1207,7 +1207,8 @@ const creationPromptDrafts = ref<Record<CreationMode, string>>({
   ppt: "",
   infographic: "",
   review: "",
-  agent: ""
+  agent: "",
+  montage: ""
 });
 const creationError = ref("");
 const generationSubmitting = ref(false);
@@ -2120,8 +2121,8 @@ function cyclePptModel() {
   pptModel.value = models[(index + 1) % models.length] || models[0];
 }
 
-function homeModuleSlot(mode: CreationMode) { return ({ image: "home.quick.poster", ppt: "home.quick.ppt", video: "home.quick.video", agent: "home.quick.knowledge", infographic: "home.capability.office", review: "home.capability.employee" } as Record<CreationMode, string>)[mode]; }
-function studioModuleSlot(mode: CreationMode) { return ({ image: "studio.template.poster", ppt: "studio.template.ppt", video: "studio.template.video", agent: "studio.template.knowledge", infographic: "studio.template.office", review: "studio.template.employee" } as Record<CreationMode, string>)[mode]; }
+function homeModuleSlot(mode: CreationMode) { return ({ image: "home.quick.poster", ppt: "home.quick.ppt", video: "home.quick.video", agent: "home.quick.knowledge", infographic: "home.capability.office", review: "home.capability.employee", montage: "home.capability.montage" } as Record<CreationMode, string>)[mode]; }
+function studioModuleSlot(mode: CreationMode) { return ({ image: "studio.template.poster", ppt: "studio.template.ppt", video: "studio.template.video", agent: "studio.template.knowledge", infographic: "studio.template.office", review: "studio.template.employee", montage: "home.capability.montage" } as Record<CreationMode, string>)[mode]; }
 function assetDefaultSlot(mediaType: string) { if (mediaType === "image") return "assets.default.image"; if (mediaType === "video") return "assets.default.video"; if (mediaType === "document") return "assets.default.document"; return "assets.default.other"; }
 
 function selectUserTab(tab: TabId) {
@@ -3693,12 +3694,15 @@ async function loadTerminalCapabilities() {
   try {
     const result = await api<{ creationModes?: string[] }>("/api/v1/public/terminal-capabilities");
     const allowed = (result.creationModes || []).filter((item): item is CreationMode =>
-      (["image", "video", "ppt", "agent", "infographic", "review"] as string[]).includes(item),
+      (["image", "video", "ppt", "agent", "infographic", "review", "montage"] as string[]).includes(item),
     );
-    allowedCreationModes.value = allowed.length ? allowed : ["image"];
+    allowedCreationModes.value = allowed.length ? allowed : ["image", "infographic", "video", "montage"];
+    if (!allowedCreationModes.value.includes("montage")) {
+      allowedCreationModes.value = [...allowedCreationModes.value, "montage"];
+    }
     if (!allowedCreationModes.value.includes(creationMode.value)) creationMode.value = "image";
   } catch {
-    allowedCreationModes.value = ["image", "infographic", "video"];
+    allowedCreationModes.value = ["image", "infographic", "video", "montage"];
   }
 }
 

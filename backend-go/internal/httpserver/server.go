@@ -141,8 +141,16 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	connectors := newConnectorAPI(cfg, store, enterprise, api, redisClient)
 	files := newFileCenterAPI(fileService, store, sessions)
 	var smartVideoRepository smartvideo.Repository = smartvideo.NewMemoryRepository()
+	var smartVideoPlanService *smartvideo.PlanService
+	var smartVideoExportService *smartvideo.ExportService
 	if pgStore, ok := store.(*postgresStore); ok {
-		smartVideoRepository = smartvideo.NewPostgresRepository(pgStore.db)
+		pgRepo := smartvideo.NewPostgresRepository(pgStore.db)
+		smartVideoRepository = pgRepo
+		smartVideoPlanService = smartvideo.NewPlanService(pgRepo, pgRepo, pgRepo, nil)
+		smartVideoExportService = smartvideo.NewExportService(pgRepo, pgRepo, pgRepo, newSmartVideoPointsLifecycle(store))
+	} else if mem, ok := smartVideoRepository.(*smartvideo.MemoryRepository); ok {
+		smartVideoPlanService = smartvideo.NewPlanService(mem, nil, mem, nil)
+		smartVideoExportService = smartvideo.NewExportService(mem, mem, mem, newSmartVideoPointsLifecycle(store))
 	}
 	var smartVideoAnalysisQueue smartvideo.AnalysisQueue
 	if redisClient != nil {
@@ -155,6 +163,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	smartVideos := newSmartVideoAPI(
 		smartvideo.NewService(smartVideoRepository, smartVideoFileResolver{service: fileService}).SetRenderQueue(smartVideoRenderQueue),
 		smartvideo.NewAnalysisService(smartVideoRepository, smartVideoAnalysisQueue, smartVideoAnalysisOptions(cfg)),
+		smartVideoPlanService,
+		smartVideoExportService,
 		files,
 	)
 	gin.SetMode(gin.ReleaseMode)
@@ -396,6 +406,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.DELETE("/assets/:id", wrapF(api.deleteAsset))
 	v1.POST("/files/upload/init", wrapF(files.initUpload))
 	v1.POST("/files/upload/complete", wrapF(files.completeUpload))
+	v1.POST("/files/upload/multipart/init", wrapF(files.initMultipartUpload))
+	v1.POST("/files/upload/multipart/:uploadId/parts/:partNumber", wrapF(files.presignMultipartPart))
+	v1.POST("/files/upload/multipart/:uploadId/complete", wrapF(files.completeMultipartUpload))
+	v1.POST("/files/upload/multipart/:uploadId/abort", wrapF(files.abortMultipartUpload))
 	v1.GET("/files/:fileId", wrapF(files.getFile))
 	v1.GET("/files/:fileId/access-url", wrapF(files.accessURL(false)))
 	v1.GET("/files/:fileId/download-url", wrapF(files.accessURL(true)))
@@ -414,8 +428,16 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/video-projects/:id/analyze", wrapF(smartVideos.analyze))
 	v1.GET("/video-projects/:id/analysis", wrapF(smartVideos.analysisStatus))
 	v1.POST("/video-projects/:id/assets/:assetId/retry-analysis", wrapF(smartVideos.retryAnalysis))
+	v1.POST("/video-projects/:id/plan-tasks", wrapF(smartVideos.planTasks))
+	v1.GET("/video-projects/:id/plan-tasks/:taskId", wrapF(smartVideos.planTask))
+	v1.GET("/video-projects/:id/versions", wrapF(smartVideos.versions))
+	v1.GET("/video-projects/:id/versions/:versionId", wrapF(smartVideos.version))
+	v1.POST("/video-projects/:id/versions/:versionId/revisions", wrapF(smartVideos.reviseVersion))
+	v1.POST("/video-projects/:id/versions/:versionId/confirm", wrapF(smartVideos.confirmVersion))
+	v1.GET("/video-projects/:id/versions/:versionId/render-estimate", wrapF(smartVideos.renderEstimate))
 	v1.POST("/video-projects/:id/render-tasks", wrapF(smartVideos.createRenderTask))
 	v1.GET("/video-projects/:id/render-tasks/:taskId", wrapF(smartVideos.renderTask))
+	v1.POST("/video-projects/:id/render-tasks/:taskId/cancel", wrapF(smartVideos.cancelRenderTask))
 	v1.POST("/video-projects/:id/render-tasks/:taskId/retry", wrapF(smartVideos.retryRenderTask))
 	v1.POST("/reference-images", wrapF(api.uploadReferenceImage))
 	v1.GET("/reference-images/:name", wrapF(api.serveReferenceImage))

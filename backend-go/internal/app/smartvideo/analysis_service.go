@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +33,7 @@ func (s *AnalysisService) RequestProjectAnalysis(ctx context.Context, access Acc
 	if !s.options.Enabled {
 		return AnalysisSummary{}, ErrAnalysisDisabled
 	}
-	if s.queue == nil {
+	if s.repository == nil {
 		return AnalysisSummary{}, ErrAnalysisNotReady
 	}
 	projectID = strings.TrimSpace(projectID)
@@ -39,12 +41,23 @@ func (s *AnalysisService) RequestProjectAnalysis(ctx context.Context, access Acc
 	if clientRequestID == "" {
 		return AnalysisSummary{}, ErrIdempotencyKeyRequired
 	}
-	if _, err := s.repository.GetProject(ctx, access, projectID); err != nil {
+	project, err := s.repository.GetProject(ctx, access, projectID)
+	if err != nil {
 		return AnalysisSummary{}, err
 	}
 	assets, err := s.repository.ListAssets(ctx, access, projectID)
 	if err != nil {
 		return AnalysisSummary{}, err
+	}
+	if len(assets) < MinProjectAssets {
+		return AnalysisSummary{}, fmt.Errorf("%w: need at least %d assets", ErrInvalidInput, MinProjectAssets)
+	}
+	if project.Status == ProjectStatusDraft || project.Status == ProjectStatusFailed || project.Status == ProjectStatusMaterialReady {
+		project.Status = ProjectStatusAnalyzing
+		project.UpdatedAt = time.Now().UTC()
+		if _, err := s.repository.UpdateProject(ctx, project); err != nil {
+			return AnalysisSummary{}, err
+		}
 	}
 	for _, asset := range assets {
 		fingerprint := SourceFingerprint(asset)
@@ -55,13 +68,16 @@ func (s *AnalysisService) RequestProjectAnalysis(ctx context.Context, access Acc
 		if err != nil {
 			return AnalysisSummary{}, err
 		}
-		if task.Status == AnalysisStatusRunning || task.Status == AnalysisStatusSucceeded || task.Status == AnalysisStatusFailed {
+		if task.Status == AnalysisStatusQueued || task.Status == AnalysisStatusRunning || task.Status == AnalysisStatusSucceeded || task.Status == AnalysisStatusFailed {
 			continue
 		}
-		if err := s.queue.Enqueue(ctx, AnalysisJob{TaskID: task.ID, ProjectID: task.ProjectID, AssetID: task.AssetID}, 0); err != nil {
-			return AnalysisSummary{}, err
-		}
-		if err := s.repository.MarkAnalysisQueued(ctx, task.ID); err != nil {
+		payload, _ := json.Marshal(map[string]string{
+			"taskId": task.ID, "projectId": task.ProjectID, "assetId": task.AssetID,
+		})
+		if err := s.repository.EnqueueAnalysisTaskWithOutbox(ctx, task, OutboxEvent{
+			TenantID: task.TenantID, AggregateType: "analysis", AggregateID: task.ID,
+			EventType: "enqueue_requested", Payload: payload,
+		}); err != nil {
 			return AnalysisSummary{}, err
 		}
 	}
@@ -112,17 +128,20 @@ func (s *AnalysisService) RetryAsset(ctx context.Context, access Access, project
 	if !s.options.Enabled {
 		return AnalysisSummary{}, ErrAnalysisDisabled
 	}
-	if s.queue == nil {
+	if s.repository == nil {
 		return AnalysisSummary{}, ErrAnalysisNotReady
 	}
 	task, err := s.repository.RetryAnalysisTask(ctx, access, strings.TrimSpace(projectID), strings.TrimSpace(assetID))
 	if err != nil {
 		return AnalysisSummary{}, err
 	}
-	if err := s.queue.Enqueue(ctx, AnalysisJob{TaskID: task.ID, ProjectID: task.ProjectID, AssetID: task.AssetID}, 0); err != nil {
-		return AnalysisSummary{}, err
-	}
-	if err := s.repository.MarkAnalysisQueued(ctx, task.ID); err != nil {
+	payload, _ := json.Marshal(map[string]string{
+		"taskId": task.ID, "projectId": task.ProjectID, "assetId": task.AssetID,
+	})
+	if err := s.repository.EnqueueAnalysisTaskWithOutbox(ctx, task, OutboxEvent{
+		TenantID: task.TenantID, AggregateType: "analysis", AggregateID: task.ID,
+		EventType: "enqueue_requested", Payload: payload,
+	}); err != nil {
 		return AnalysisSummary{}, err
 	}
 	return s.GetProjectAnalysis(ctx, access, projectID)

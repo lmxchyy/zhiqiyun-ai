@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -78,6 +79,27 @@ func (p *generatedStorageTestProvider) CreatePresignedUploadURL(_ context.Contex
 
 func (p *generatedStorageTestProvider) CreatePresignedDownloadURL(_ context.Context, key string, _ time.Duration) (string, error) {
 	return "https://storage.example/download/" + key, nil
+}
+
+func (p *generatedStorageTestProvider) CreateMultipartUpload(_ context.Context, key, _ string) (string, error) {
+	return "generated-mpu-" + key, nil
+}
+
+func (p *generatedStorageTestProvider) PresignUploadPart(_ context.Context, key, uploadID string, partNumber int, _ time.Duration) (string, error) {
+	return fmt.Sprintf("https://storage.example/multipart/%s/%s/%d", key, uploadID, partNumber), nil
+}
+
+func (p *generatedStorageTestProvider) CompleteMultipartUpload(_ context.Context, key, _ string, _ []storagecenter.CompletedPart) (storagecenter.ObjectMetadata, error) {
+	item, ok := p.objects[key]
+	if !ok {
+		item = storagecenter.ObjectMetadata{Size: 0, ContentType: "application/octet-stream", ETag: "generated-multipart"}
+		p.objects[key] = item
+	}
+	return item, nil
+}
+
+func (p *generatedStorageTestProvider) AbortMultipartUpload(_ context.Context, key, _ string) error {
+	return nil
 }
 
 func (p *generatedStorageTestProvider) TestConnection(context.Context) error { return nil }

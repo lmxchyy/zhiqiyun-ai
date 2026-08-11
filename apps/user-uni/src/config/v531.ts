@@ -81,6 +81,14 @@ export const v531AssetSlots: V531AssetSlot[] = [
   ),
   slot(
     "home",
+    "home.capability.montage",
+    "16:9",
+    "cover",
+    "capability-ai-video",
+    "AI混剪",
+  ),
+  slot(
+    "home",
     "home.capability.knowledge",
     "16:9",
     "cover",
@@ -329,6 +337,13 @@ export const v531Capabilities = [
     description: "杂志 · 修图",
     slotKey: "home.capability.office",
     routeMode: "infographic",
+  },
+  {
+    id: "montage",
+    title: "AI混剪",
+    description: "素材 · 旁白",
+    slotKey: "home.capability.montage",
+    routeMode: "montage",
   },
   {
     id: "video",

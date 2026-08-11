@@ -245,7 +245,7 @@
               </article>
             </div>
           </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
+          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
             <div>
               <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
               <h2>{{ store.activeModule.title }}</h2>
@@ -256,7 +256,7 @@
               <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
             </div>
           </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
+          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
             <article v-for="metric in metrics" :key="metric.label" class="metric-card">
               <span>{{ metric.label }}</span>
               <strong>{{ metric.value }}</strong>
@@ -2717,6 +2717,9 @@
           <section v-else-if="store.activeModuleId === 'userPptGeneration'" class="ppt-doc-shell">
             <PptDocumentGeneration />
           </section>
+          <section v-else-if="store.activeModuleId === 'userSmartVideo'" class="smart-video-shell">
+            <SmartVideoWorkbench />
+          </section>
           <ChannelGrowthDomain
             v-else-if="channelGrowthModuleIds.includes(store.activeModuleId)"
             :module-title="store.activeModule.title"
@@ -2758,7 +2761,7 @@
             @run-action="runAction"
             @batch-action="runBatchAction"
           />
-          <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
+          <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
         </section>
       </el-main>
     </el-container>
@@ -2843,7 +2846,7 @@ import { safeInternalRedirect, type ProtectedAction } from "@xianzhi/shared-auth
 import { ElMessage } from "element-plus/es/components/message/index";
 import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import type { ComponentSize } from "element-plus";
-import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
+import { ArrowDown, Check, Clock, Collection, Connection, CopyDocument, Cpu, Crop, DataAnalysis, Delete, Document, Download, EditPen, Film, Goods, Grid, House, Key, Link, Lock, Money, Monitor, Operation, Plus, QuestionFilled, Refresh, Search, Setting, Star, StarFilled, SwitchButton, Tickets, User, UserFilled, Wallet } from "@element-plus/icons-vue";
 import { adminRequest } from "./api/client";
 import type { GlobalSearchItem } from "./api/adminWorkspaces";
 import { downloadAssetBlob, fetchResourceBlob, uploadReferenceImage } from "./api/resources";
@@ -2996,6 +2999,11 @@ const aiSettingsStore = useAiSettingsStore();
 const modules = adminModules;
 const PptDocumentGeneration = defineAsyncComponent({
   loader: () => import("./components/PptDocumentGeneration.vue"),
+  delay: 0,
+  suspensible: false
+});
+const SmartVideoWorkbench = defineAsyncComponent({
+  loader: () => import("./components/SmartVideoWorkbench.vue"),
   delay: 0,
   suspensible: false
 });
@@ -3752,7 +3760,7 @@ const agentModuleGroups = [
 ];
 const userModuleGroups = [
   { id: "userHome", title: "用户后台", icon: House, items: modules.filter((item) => ["userDashboard"].includes(item.id)) },
-  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"].includes(item.id)) },
+  { id: "userCreation", title: "创作中心", icon: Collection, items: modules.filter((item) => ["userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userWorks"].includes(item.id)) },
   { id: "userOperationCenter", title: "运营中心", icon: Connection, items: modules.filter((item) => operationCenterModuleIds.includes(item.id)) },
   { id: "userBilling", title: "身份/充值/订阅", icon: Wallet, items: modules.filter((item) => ["userMembership"].includes(item.id)) },
   { id: "userData", title: "数据记录", icon: DataAnalysis, items: modules.filter((item) => ["userUsage", "userOrders"].includes(item.id)) }
@@ -3764,6 +3772,7 @@ const userFlatMenuDefs = [
   { id: "userVideoGeneration", targetId: "userVideoGeneration", title: "视频生成", icon: Monitor },
   { id: "userWirelessCanvas", targetId: "userWirelessCanvas", title: "无限画布", icon: Collection },
   { id: "userPptGeneration", targetId: "userPptGeneration", title: "PPT 文档生成", icon: Document },
+  { id: "userSmartVideo", targetId: "userSmartVideo", title: "AI 自动混剪", icon: Film },
   { id: "userAgentCenter", targetId: "userAgentCenter", title: "智能体中心", icon: Cpu },
   { id: "userWorks", targetId: "userWorks", title: "作品中心", icon: Collection },
   { id: "userMembership", targetId: "userMembership", title: "身份充值订阅", icon: Tickets },
@@ -3807,6 +3816,7 @@ const pageMeta: Record<string, { badge: string; description: string }> = {
   userWirelessCanvas: { badge: "源码复刻", description: "直接承载 hero8152/Infinite-Canvas 智能画布源码，保留节点、资产库、工作流、快捷键、日志和底部生成器布局。" },
   userVideoGeneration: { badge: "视频生成", description: "参考 Open-Generative-AI Video Studio，提供文生视频、图生视频和基础参数的轻量生成入口。" },
   userPptGeneration: { badge: "PPT文档生成", description: "输入主题生成演示文稿，预留 Presenton 或自研 PPT 生成服务接入。" },
+  userSmartVideo: { badge: "AI自动混剪", description: "上传素材、生成可编辑分镜并导出成片。" },
   userWorks: { badge: "作品中心", description: "集中查看生成资产、缩略图、下载和编辑入口。" },
   userUsage: { badge: "使用记录", description: "按任务、模型、扣点和余额变化查看正式使用流水，和主控计费口径保持一致。" },
   userMembership: { badge: "身份/充值/订阅", description: "先开通会员、代理商或运营中心身份，再完成点数充值、套餐订阅和支付方式选择。" },
@@ -3994,6 +4004,7 @@ const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "海报 Agent", desc: "活动、节日、招商", icon: Collection, targetId: "userAiImage", mode: "agent", prompt: "设计一张高转化活动海报，突出标题、卖点和橙色 CTA。" },
   { title: "IP / 角色", desc: "角色设定、形象定制", icon: User, targetId: "userAiImage", mode: "image", prompt: "创建一个适合品牌传播的 IP 角色，风格年轻、干净、有记忆点。" },
   { title: "视频 Agent", desc: "短片、封面、分镜", icon: Monitor, targetId: "userVideoGeneration", mode: "video", prompt: "策划一条 15 秒产品短视频，包含镜头节奏、画面风格和字幕建议。" },
+  { title: "自动混剪", desc: "素材分析、分镜、成片", icon: Film, targetId: "userSmartVideo", mode: "video", prompt: "用门店实拍素材剪一条 15 秒开业短视频，旁白口语化，字幕简洁。" },
   { title: "PPT Agent", desc: "提纲、页面、配图", icon: Document, targetId: "userPptGeneration", mode: "ppt", prompt: "生成一份商业计划书 PPT，包含封面、目录、市场、产品和财务页。" },
   { title: "商品图 Agent", desc: "白底图、场景图", icon: Goods, targetId: "userAiImage", mode: "image", prompt: "为产品生成一组干净白底主图和浅色高级场景图。" },
   { title: "朋友圈海报 Agent", desc: "日签、营销海报", icon: Tickets, targetId: "userAiImage", mode: "image", prompt: "生成一张适合朋友圈发布的轻营销海报，画面真实、留白干净。" }
@@ -4230,6 +4241,7 @@ const userHomeTemplates: UserHomeEntry[] = [
   { title: "商品主图", desc: "电商主图、白底图", targetId: "userAiImage", mode: "image", coverClass: "is-product-main", coverText: "PRODUCT" },
   { title: "详情长图", desc: "产品详情、长图文案", targetId: "userAiImage", mode: "image", coverClass: "is-detail", coverText: "DETAIL" },
   { title: "短视频封面", desc: "爆款封面、吸睛标题", targetId: "userVideoGeneration", mode: "video", coverClass: "is-video", coverText: "PLAY" },
+  { title: "AI 自动混剪", desc: "上传素材一键成片", targetId: "userSmartVideo", mode: "video", coverClass: "is-video", coverText: "MONTAGE" },
   { title: "PPT 文档", desc: "汇报、演示、课件", targetId: "userPptGeneration", mode: "ppt", coverClass: "is-doc", coverText: "BUSINESS PLAN" },
   { title: "朋友圈海报", desc: "节日、日签、营销海报", targetId: "userAiImage", mode: "image", coverClass: "is-moments", coverText: "Good Morning" },
   { title: "企业宣传图", desc: "企业介绍、宣传物料", targetId: "userAiImage", mode: "image", coverClass: "is-corporate", coverText: "COMPANY" }
@@ -8130,7 +8142,7 @@ const isGuestUser = computed(() => {
   void authSessionVersion.value;
   return isUserConsole.value && !hasAuthToken();
 });
-const guestVisibleModuleIds = new Set(["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userWorks"]);
+const guestVisibleModuleIds = new Set(["userDashboard", "userAiImage", "userAgentCenter", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userWorks"]);
 const workspaceGuestDraftKey = "zhiqiyun.pc.workspace.pending-draft.v1";
 function openWorkspaceLogin() {
   authStore.openLogin({ redirectUrl: currentWorkspaceRoute() });
@@ -8546,6 +8558,7 @@ const iconMap = {
   userWirelessCanvas: Collection,
   userVideoGeneration: Monitor,
   userPptGeneration: Document,
+  userSmartVideo: Film,
   userWorks: Collection,
   userUsage: DataAnalysis,
   userMembership: Tickets,
@@ -10167,7 +10180,7 @@ async function selectAdminModule(moduleId: string) {
     store.activeModuleId = moduleId;
     store.data = {};
     store.error = "";
-    if (["userAiImage", "userVideoGeneration", "userPptGeneration", "userAgentCenter", "userWirelessCanvas"].includes(moduleId)) {
+    if (["userAiImage", "userVideoGeneration", "userPptGeneration", "userSmartVideo", "userAgentCenter", "userWirelessCanvas"].includes(moduleId)) {
       trackWebGuestExperience("guest_open_creator", moduleId, { module: moduleId });
     }
   } else {

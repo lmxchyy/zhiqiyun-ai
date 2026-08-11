@@ -147,6 +147,22 @@
 - **验证**：`node --test tests/user-mini-free-image-edit.test.mjs`
 - **核对**：`[ ]`
 
+### M8. AI 自动混剪（Web + 小程序）
+- **不可丢**：
+  - 导出走 `ExportService` + Outbox + `PersonalPointService`（`SMART_VIDEO_RENDER`）；禁止 Smoke Redis 直入队。
+  - 报价只由服务端 `EstimateRenderQuote` 决定，客户端不算价、不上传金额。
+  - Web 模块 `userSmartVideo` 与小程序 `packageSmartVideo`（create/plan/render）保持主路径；页面禁止 `uni.request` / Axios。
+  - 小程序首页插入「AI混剪」时，**不得挤掉** M6 featured 前两项「AI设计」「自由P图」。
+- **锚点**：
+  - 后端：`export_service.go`、`personal_points_lifecycle.go`、`smartvideo_points_bridge.go`、`analysis_service.go` Outbox、`compose.prod.yml` `smartvideo-worker`
+  - Web：`admin-vue` `userSmartVideo` / `SmartVideoWorkbench`
+  - 小程序：`packageSmartVideo`、`config/v531.ts`（`montage`）、`api/smart-video.ts`
+- **验证**：
+  - `node --test tests/ai-auto-montage-api.test.mjs tests/ai-auto-montage-web.test.mjs tests/ai-auto-montage-mini.test.mjs`
+  - `node --test tests/user-mini-smart-video-montage.test.mjs`
+  - `go test ./internal/app/smartvideo ./internal/httpserver -run 'SmartVideo|Montage|BillingPublish|PointAccount'`
+- **核对**：`[ ]`
+
 ---
 
 ## 发布与生产
@@ -176,6 +192,7 @@
 - [ ] M5 钱包积分展示
 - [ ] M6 自由P图全页/首页主能力文案（禁回「信息图」「AI办公」）/默认预设/#ff6b00
 - [ ] M7 小程序视频灵感临时下架（类目审核）
+- [ ] M8 AI 自动混剪（ExportService/Outbox/真实积分；M6 featured 不被挤掉）
 - [ ] P1 发布门禁
 - [ ] P2 相关回归测试
 说明：本次实际改动范围 = …
