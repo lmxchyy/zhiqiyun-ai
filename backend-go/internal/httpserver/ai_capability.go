@@ -171,10 +171,13 @@ func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
 	}
 	for index := range data.TenantModuleLimits {
 		limit := &data.TenantModuleLimits[index]
-		if canonicalModuleCode(limit.ModuleCode) != moduleVideoGeneration {
+		if canonicalModuleCode(firstNonEmptyString(limit.ModuleCode, limit.ModuleCodeCamel)) != moduleVideoGeneration {
 			continue
 		}
-		if strings.TrimSpace(limit.PackageID) != "" {
+		if limit.LimitJSON == nil {
+			limit.LimitJSON = firstNonNilMap(limit.LimitJSONCamel)
+		}
+		if limit.LimitJSON == nil {
 			continue
 		}
 		models, ok := mapValue(limit.LimitJSON["models"])
@@ -209,6 +212,38 @@ func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
 		}
 		next["allowed"] = allowedAny
 		limit.LimitJSON["models"] = next
+	}
+	data = mergeDefaultVideoChannelModels(data)
+	return data
+}
+
+func mergeDefaultVideoChannelModels(data adminPlatformData) adminPlatformData {
+	wantedByChannel := map[string][]string{
+		"channel_newapi_gateway":     {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "doubao-seedance-2.0", "seedance-fast-2.0"},
+		"channel_newapi_grok_imagine": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"},
+	}
+	for index := range data.APIChannels {
+		channel := &data.APIChannels[index]
+		wanted, ok := wantedByChannel[strings.TrimSpace(channel.ID)]
+		if !ok {
+			baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
+			if !strings.Contains(baseURL, "newapi") {
+				continue
+			}
+			wanted = []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"}
+		}
+		known := map[string]bool{}
+		for _, modelName := range channel.Models {
+			known[strings.ToLower(strings.TrimSpace(modelName))] = true
+		}
+		for _, modelName := range wanted {
+			key := strings.ToLower(strings.TrimSpace(modelName))
+			if key == "" || known[key] {
+				continue
+			}
+			channel.Models = append(channel.Models, modelName)
+			known[key] = true
+		}
 	}
 	return data
 }

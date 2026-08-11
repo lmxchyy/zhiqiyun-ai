@@ -1025,6 +1025,8 @@ func localizeGenerationErrorMessage(message, lower string) string {
 	switch {
 	case strings.Contains(lower, "price not configured"), strings.Contains(lower, "价格未配置"):
 		return "上游 NewAPI 未配置该模型价格。请在 NewAPI「系统设置 → 分组与模型定价」为 grok-imagine-video-1.5-preview 设置按次价格后重试"
+	case strings.Contains(lower, "not allowed by tenant/package limit"), strings.Contains(lower, "no models are allowed by tenant/package limit"):
+		return "当前套餐未开放该视频模型，请更换模型或联系管理员开通"
 	case strings.Contains(lower, "input_reference") && strings.Contains(lower, "unmarshal"):
 		return "视频参考图参数格式错误，请重新上传首帧图后重试"
 	case strings.Contains(lower, "cannot unmarshal") && strings.Contains(lower, "seconds"):

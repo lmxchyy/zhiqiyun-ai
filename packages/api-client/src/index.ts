@@ -95,6 +95,9 @@ function knownEnglishMessage(value: string) {
   if (/not included in package|module .+ is not included/.test(normalized)) {
     return "当前套餐不支持该能力，请升级后重试";
   }
+  if (/not allowed by tenant\/package limit|no models are allowed by tenant\/package limit/.test(normalized)) {
+    return "当前套餐未开放该视频模型，请更换模型或联系管理员开通";
+  }
   if (/not allowed by schema|parameter .+ is required|exceeds tenant\/package|is not in schema options/.test(normalized)) {
     return "提交的信息不符合要求，请检查后重试";
   }

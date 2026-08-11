@@ -3194,8 +3194,8 @@ function handleCreationSubmissionError(error: unknown, prompt: string) {
   const toastTitle =
     message === "所发布内容含违规信息" || message.includes("内容安全检测")
       ? message
-      : "生成失败，请重试";
-  uni.showToast({ title: toastTitle, icon: "none" });
+      : (message && message !== "生成任务创建失败" ? message : "生成失败，请重试");
+  uni.showToast({ title: toastTitle.slice(0, 40), icon: "none", duration: 3500 });
 }
 
 function createVideoGenerationTask(prompt: string, generationConfig: BackendGenerationConfig, uploadedVideoReferences: string[]) {
