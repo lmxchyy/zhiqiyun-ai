@@ -21,6 +21,22 @@ func TestInspirationPublicSummaryDetailAndAuthGate(t *testing.T) {
 	if strings.Contains(featured.Body.String(), `"prompt":"`) {
 		t.Fatalf("featured list leaked full prompt: %s", featured.Body.String())
 	}
+	if strings.Contains(featured.Body.String(), `"contentType":"video"`) {
+		t.Fatalf("featured list still exposes video inspiration on miniprogram: %s", featured.Body.String())
+	}
+
+	categories := request(t, handler, http.MethodGet, "/api/v1/inspirations/categories?platform=miniprogram", nil)
+	if categories.Code != http.StatusOK {
+		t.Fatalf("categories = %d %s", categories.Code, categories.Body.String())
+	}
+	if strings.Contains(categories.Body.String(), `"AI视频"`) || strings.Contains(categories.Body.String(), `"code":"video"`) {
+		t.Fatalf("categories still expose AI视频 on miniprogram: %s", categories.Body.String())
+	}
+
+	videoDetail := request(t, handler, http.MethodGet, "/api/v1/inspirations/inspiration-video-product?platform=miniprogram", nil)
+	if videoDetail.Code != http.StatusNotFound {
+		t.Fatalf("video detail should be hidden on miniprogram, got %d %s", videoDetail.Code, videoDetail.Body.String())
+	}
 
 	detail := request(t, handler, http.MethodGet, "/api/v1/inspirations/inspiration-product-clean?platform=miniprogram", nil)
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"prompt":"`) || !strings.Contains(detail.Body.String(), `"aiGenerated":true`) {

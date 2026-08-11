@@ -536,7 +536,7 @@ const employeeItems = computed(() =>
 const inspirationCategories = ref<InspirationCategory[]>([]);
 const inspirationTabs = computed(() => [
   { id: "recommend", code: "", name: "推荐", sort: 999 },
-  ...inspirationCategories.value.filter((item) => item.code !== "recommend"),
+  ...inspirationCategories.value.filter((item) => item.code !== "recommend" && item.code !== "video" && item.name !== "AI视频"),
 ]);
 const activeInspirationTab = ref("");
 const inspirationOffset = ref(0);
