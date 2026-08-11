@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_VIDEO_MODEL_CODE,
   estimateFormalVideoPoints,
+  pickDefaultVideoModelCode,
   sortVideoModelsByListPrice,
   videoModelSubtitle,
 } from "../apps/user-uni/src/features/generation/videoModelPricing.ts";
@@ -53,4 +55,20 @@ test("local formal estimate matches published rules", () => {
   assert.equal(estimateFormalVideoPoints("grok-imagine-1.5-video", 6, "720p"), 90);
   assert.equal(estimateFormalVideoPoints("seedance-fast-2.0", 5, "720p"), 600);
   assert.equal(estimateFormalVideoPoints("doubao-seedance-2.0", 5, "720p"), 600);
+});
+
+test("default video model prefers grok-imagine-1.5-video over cheapest list item", () => {
+  assert.equal(DEFAULT_VIDEO_MODEL_CODE, "grok-imagine-1.5-video");
+  assert.equal(
+    pickDefaultVideoModelCode([
+      "grok-imagine-video-1.5-preview",
+      "grok-imagine-1.5-video",
+      "seedance-fast-2.0",
+    ]),
+    "grok-imagine-1.5-video",
+  );
+  assert.equal(
+    pickDefaultVideoModelCode(["seedance-fast-2.0", "doubao-seedance-2.0"]),
+    "seedance-fast-2.0",
+  );
 });

@@ -2922,7 +2922,9 @@ import {
   videoModeFromTask,
   videoModelId,
   videoModelMaxReferenceImages,
+  pickDefaultVideoModelOption,
   videoModelOptionsFromPublicModels,
+  DEFAULT_VIDEO_MODEL_NAME,
   videoModelParameterOption,
   videoModelRequiresReferenceImage,
   videoNumberOrString,
@@ -3052,7 +3054,7 @@ const statusFilterOptions = computed(() => {
 
 const videoStudioMode = ref("text");
 const videoPrompt = ref("");
-const selectedVideoModel = ref("Grok Imagine Video 1.5");
+const selectedVideoModel = ref(DEFAULT_VIDEO_MODEL_NAME);
 const videoModelSearch = ref("");
 const wiredVideoModelOptions = ref<VideoModelOption[]>([]);
 const videoModelOptions = computed(() => wiredVideoModelOptions.value);
@@ -3714,10 +3716,10 @@ async function loadWiredVideoModelOptions() {
     wiredVideoModelOptions.value = options;
     const isTool = videoToolOptions.some((tool) => tool.name === selectedVideoModel.value);
     if (!isTool && options.length && !options.some((model) => model.name === selectedVideoModel.value)) {
-      selectedVideoModel.value = options[0].name;
+      selectedVideoModel.value = pickDefaultVideoModelOption(options)?.name || options[0].name;
       trimVideoImageUploadsToModelLimit();
-      syncVideoModelParameters();
     }
+    if (!isTool && options.length) syncVideoModelParameters();
   } catch {
     wiredVideoModelOptions.value = [];
   }

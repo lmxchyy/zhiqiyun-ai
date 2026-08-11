@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { videoModelOptionsFromPublicModels } from "../admin-vue/src/utils/videoGeneration.ts";
+import {
+  pickDefaultVideoModelOption,
+  videoModelOptionsFromPublicModels,
+} from "../admin-vue/src/utils/videoGeneration.ts";
 
 test("web video model options map API title and price/capability subtitle", () => {
   const options = videoModelOptionsFromPublicModels([
@@ -44,4 +47,29 @@ test("web video model options map API title and price/capability subtitle", () =
   assert.equal(options[0].desc, "15 积分/秒 · 文生/图生 · 6–30s · 最多7图");
   assert.equal(options[1].desc, "100 积分/次 · 仅图生 · 10/15s · 需1张参考图");
   assert.equal(options[2].listPricePoints, 480);
+});
+
+test("web video default selection prefers grok-imagine-1.5-video over cheapest list item", () => {
+  const options = videoModelOptionsFromPublicModels([
+    {
+      code: "grok-imagine-video-1.5-preview",
+      displayName: "Grok Imagine Video 1.5 Preview",
+      capabilities: ["IMAGE_TO_VIDEO"],
+      listPricePoints: 100,
+    },
+    {
+      code: "grok-imagine-1.5-video",
+      displayName: "Grok Imagine Video 1.5",
+      capabilities: ["TEXT_TO_VIDEO", "IMAGE_TO_VIDEO"],
+      listPricePoints: 108,
+    },
+    {
+      code: "seedance-fast-2.0",
+      displayName: "Seedance 2.0",
+      capabilities: ["TEXT_TO_VIDEO"],
+      listPricePoints: 600,
+    },
+  ]);
+  assert.equal(options[0].code, "grok-imagine-video-1.5-preview");
+  assert.equal(pickDefaultVideoModelOption(options)?.code, "grok-imagine-1.5-video");
 });

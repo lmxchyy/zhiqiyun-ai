@@ -138,6 +138,18 @@ export function videoModelOptionsFromPublicModels(items: PublicVideoModelRow[]):
     });
 }
 
+/** Default picker selection — independent of price-asc list order. */
+export const DEFAULT_VIDEO_MODEL_CODE = "grok-imagine-1.5-video";
+export const DEFAULT_VIDEO_MODEL_NAME = "Grok Imagine Video 1.5";
+
+export function pickDefaultVideoModelOption(options: VideoModelOption[]) {
+  const preferred = options.find((item) => {
+    const code = String(item.code || videoModelId(item.name) || "").trim();
+    return code === DEFAULT_VIDEO_MODEL_CODE || item.name === DEFAULT_VIDEO_MODEL_NAME;
+  });
+  return preferred || options[0] || null;
+}
+
 export function videoModelParameterOption(modelName: string) {
   const normalized = String(modelName || "").trim();
   if (!normalized) return undefined;

@@ -57,6 +57,7 @@
 - **不可丢**：
   - 视频页可选模型与按模型能力的参数（时长、分辨率、画幅等），能力配置下架时有兼容回退，不白屏。
   - **模型列表按价升序**：`GET /api/v1/models` 中视频模型须带 `listPricePoints` / `priceHint` / `capabilityHint` / `priceLabel`，并按 `listPricePoints` 从低到高排序（可比价=最短支持时长 + 有则 720p）；小程序 / App 用半屏两行列表（标题 + 价格·能力副文案），网页下拉同结构；收起态只显示模型名；精确扣费仍在生成旁试算。
+  - **默认选中模型**：生视频页默认选中 `grok-imagine-1.5-video`（不因按价升序把 Preview 或其它更靠前项当成默认）；无该模型时再回退列表首项；用户草稿/已选模型仍优先保留。
   - 登录后切换模型/参数须显示预估扣费（「试算中…」→「预计 N 积分」），不得静默消失。
   - Seedance（`doubao-seedance-2.0` / `seedance-fast-2.0`）默认 **5s + 720p** 预估与正式扣费一致，为 **600 积分**（单价 80/秒 × 5 × 1.5）；不得退回代码默认 12/秒（会变成约 90）。
   - **正式接线视频模型**（不得从默认绑定 / 套餐限额 / NewAPI 通道模型列表里悄悄删掉）：
@@ -77,6 +78,7 @@
   - 把 Preview 改成文生视频，或把其时长改回非 10/15、计费改回按秒。
   - 把套餐拒模英文错误退回通用「暂无权限」且不经中文本地化。
   - 视频模型选择列表改回按配置乱序 / 静态未接线模型压过已接线廉价模型。
+  - 把生视频页默认选中从 `grok-imagine-1.5-video` 改回按价升序首项（如 Preview）或 Seedance。
 - **验证**：
   - `node --test tests/user-mini-video-dynamic-parameters.test.mjs tests/video-generation-estimate-sdk.test.mjs tests/video-model-parameters.test.mjs`
   - `go test ./internal/httpserver/ -run "TestVideoGenerationEstimate|TestBillingCenterV1Acceptance|TestNormalizeAICapabilityDefaultsMergesMissingBillingRules|TestVideoModelListPrice|TestSortPublicModelsVideo|TestFormalVideoModelsListPrice"`
@@ -168,7 +170,7 @@
 - [ ] W3 生图等工作台首屏
 - [ ] W4 首页摘要
 - [ ] M1 首页模板/灵感/登录落用户首页/游客浏览入口
-- [ ] M2 视频模型/参数/预估积分（Seedance 默认 600；Grok Preview 套餐与通道；中文错误；模型列表按价升序）
+- [ ] M2 视频模型/参数/预估积分（Seedance 默认 600；Grok Preview 套餐与通道；中文错误；模型列表按价升序；默认选中 `grok-imagine-1.5-video`）
 - [ ] M3 作品列表 / 视频下载强制 mp4（禁原样 m4v）
 - [ ] M4 灵感草稿带入
 - [ ] M5 钱包积分展示

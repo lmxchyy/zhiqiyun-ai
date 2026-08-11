@@ -1143,6 +1143,8 @@ import { openLegalDocument } from "../features/legal/navigation";
 import { pendingActions, requireAuth, resumePendingAction } from "../features/auth/gate";
 import { trackLogin } from "../features/auth/analytics";
 import {
+  DEFAULT_VIDEO_MODEL_CODE,
+  pickDefaultVideoModelCode,
   sortVideoModelsByListPrice,
   videoModelSubtitle as formatVideoModelSubtitle,
 } from "../features/generation/videoModelPricing";
@@ -1697,7 +1699,9 @@ watch(webVideoModels, available => {
     videoModel.value = "";
     return;
   }
-  if (!available.some(item => item.code === videoModel.value)) videoModel.value = available[0].code;
+  if (!available.some(item => item.code === videoModel.value)) {
+    videoModel.value = pickDefaultVideoModelCode(available.map(item => item.code), DEFAULT_VIDEO_MODEL_CODE);
+  }
 }, { immediate: true });
 
 watch(

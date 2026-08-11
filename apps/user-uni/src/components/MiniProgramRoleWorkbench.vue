@@ -910,7 +910,9 @@ import {
   freeImageEditValidationMessage,
 } from "../features/generation/freeImageEdit";
 import {
+  DEFAULT_VIDEO_MODEL_CODE,
   estimateFormalVideoPoints,
+  pickDefaultVideoModelCode,
   sortVideoModelsByListPrice,
   videoModelSubtitle as formatVideoModelSubtitle,
 } from "../features/generation/videoModelPricing";
@@ -1132,7 +1134,7 @@ const roleNames: Record<RoleId, string> = {
 const allCreationModules = [
   { id: "image" as CreationMode, icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "约 10 点/张", tone: "orange" },
   { id: "ppt" as CreationMode, icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
-  { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "doubao-seedance-2.0", cost: "约 80 点/条", tone: "green" },
+  { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "grok-imagine-1.5-video", cost: "约 15 积分/秒", tone: "green" },
   { id: "agent" as CreationMode, icon: "星", name: "AI Agent", homeName: "LOGO", description: "经营助手与知识库", model: "agent-workflow", cost: "按任务计费", tone: "blue" },
   { id: "infographic" as CreationMode, icon: "表", name: "自由P图", homeName: "自由P图", description: "杂志封面/去除路人/精致补妆", model: "infographic", cost: "约 20 点/份", tone: "orange" },
   { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
@@ -3081,9 +3083,11 @@ async function initializeVideoModelForm() {
   } catch {
     videoModelOptions.value = [];
   }
-  const requested = rowString(restoredCreationParams.value, "model", "modelName")
-    || activeCreation.value.model
-    || videoModelOptions.value[0]?.code
+  const availableCodes = videoModelOptions.value.map((item) => item.code);
+  const restored = rowString(restoredCreationParams.value, "model", "modelName");
+  const requested = (restored && availableCodes.includes(restored) ? restored : "")
+    || (availableCodes.includes(activeCreation.value.model) ? activeCreation.value.model : "")
+    || pickDefaultVideoModelCode(availableCodes, DEFAULT_VIDEO_MODEL_CODE)
     || "";
   await requestVideoModelSwitch(requested);
 }

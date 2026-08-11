@@ -94,6 +94,18 @@ export function sortVideoModelsByListPrice<T extends VideoModelPriceSortable>(it
   });
 }
 
+/** Default picker selection — independent of price-asc list order. */
+export const DEFAULT_VIDEO_MODEL_CODE = "grok-imagine-1.5-video";
+
+export function pickDefaultVideoModelCode(
+  codes: Array<string | null | undefined>,
+  preferred = DEFAULT_VIDEO_MODEL_CODE,
+) {
+  const available = codes.map((code) => String(code || "").trim()).filter(Boolean);
+  if (preferred && available.includes(preferred)) return preferred;
+  return available[0] || "";
+}
+
 /** Local fallback estimate aligned with published formal rules. */
 export function estimateFormalVideoPoints(model: string, duration: number, resolution: string) {
   const code = String(model || "").trim();
