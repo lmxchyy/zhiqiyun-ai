@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -80,9 +81,13 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 		access := Access{TenantID: task.TenantID, UserID: task.UserID}
 		artifacts, prepErr := w.speech.Prepare(ctx, access, task)
 		if prepErr != nil {
-			return w.fail(parent, task, "SMARTVIDEO_SPEECH_FAILED", safeSpeechMessage(prepErr), true)
-		}
-		if !artifacts.Skipped {
+			// NewAPI may not expose TTS yet; skip narration instead of failing the whole export.
+			if isSkippableSpeechError(prepErr) {
+				log.Printf("smartvideo_render operation=speech task_id=%s result=skip err=%v", task.ID, prepErr)
+			} else {
+				return w.fail(parent, task, "SMARTVIDEO_SPEECH_FAILED", safeSpeechMessage(prepErr), true)
+			}
+		} else if !artifacts.Skipped {
 			if err = w.repository.AttachVoiceCaptionArtifacts(parent, task.ID, w.options.WorkerID, artifacts.VoiceFileID, artifacts.CaptionFileID); err != nil {
 				return QueueDecision{RetryAfter: 5 * time.Second}
 			}
@@ -193,4 +198,30 @@ func safeSpeechMessage(err error) string {
 		return "配音服务未就绪"
 	}
 	return "配音或字幕生成失败"
+}
+
+func isSkippableSpeechError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, ErrSpeechNotReady) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, token := range []string{
+		"provider_unavailable",
+		"invalid_model",
+		"invalid_voice",
+		"model_not_found",
+		"no available channel",
+		"smart_video_speech_not_ready",
+	} {
+		if strings.Contains(msg, token) {
+			return true
+		}
+	}
+	return false
 }

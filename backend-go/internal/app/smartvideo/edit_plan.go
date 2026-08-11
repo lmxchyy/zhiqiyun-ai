@@ -167,12 +167,8 @@ func NormalizeEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset)
 	}
 
 	if plan.Voice.Enabled {
-		if strings.TrimSpace(plan.Voice.ModelKey) == "" {
-			plan.Voice.ModelKey = "tts-1"
-		}
-		if strings.TrimSpace(plan.Voice.VoiceKey) == "" {
-			plan.Voice.VoiceKey = "alloy"
-		}
+		plan.Voice.ModelKey = NormalizeSpeechModelKey(plan.Voice.ModelKey)
+		plan.Voice.VoiceKey = NormalizeSpeechVoiceKey(plan.Voice.VoiceKey)
 		if plan.Voice.Speed == 0 {
 			plan.Voice.Speed = 1
 		} else if plan.Voice.Speed < MinSpeed {
@@ -514,4 +510,39 @@ func ValidatePlanTransition(from, to string) error {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidStateTransition, from, to)
 	}
 	return nil
+}
+
+// NormalizeSpeechModelKey maps planner aliases onto OpenAI-compatible TTS models.
+func NormalizeSpeechModelKey(modelKey string) string {
+	switch strings.ToLower(strings.TrimSpace(modelKey)) {
+	case "", "default", "auto", "smart-video-speech", "smart_video_speech", "smart-video-tts":
+		return "tts-1"
+	default:
+		return strings.TrimSpace(modelKey)
+	}
+}
+
+// NormalizeSpeechVoiceKey maps Azure/Edge neural voices onto OpenAI TTS voices.
+func NormalizeSpeechVoiceKey(voiceKey string) string {
+	voice := strings.TrimSpace(voiceKey)
+	if voice == "" {
+		return "alloy"
+	}
+	lower := strings.ToLower(voice)
+	switch lower {
+	case "alloy", "echo", "fable", "onyx", "nova", "shimmer":
+		return lower
+	}
+	// Prefer male OpenAI voices for common male neural aliases.
+	if strings.Contains(lower, "yunxi") || strings.Contains(lower, "yunyang") ||
+		strings.Contains(lower, "yunjian") || strings.Contains(lower, "male") ||
+		strings.Contains(lower, "onyx") {
+		return "onyx"
+	}
+	// Chinese female neural defaults (Xiaoxiao/Xiaoyi/...) → nova.
+	if strings.Contains(lower, "xiao") || strings.Contains(lower, "female") ||
+		strings.Contains(lower, "zh-cn") || strings.Contains(lower, "neural") {
+		return "nova"
+	}
+	return "alloy"
 }
