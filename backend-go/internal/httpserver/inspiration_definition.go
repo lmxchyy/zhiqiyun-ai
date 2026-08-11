@@ -692,7 +692,7 @@ func projectPublicTemplateDefinition(definition InternalTemplateDefinition) Publ
 	for index, input := range definition.Inputs {
 		options := make([]PublicTemplateInputOption, len(input.Options))
 		for optionIndex, option := range input.Options {
-			options[optionIndex] = PublicTemplateInputOption{Label: option.Label, Value: cloneJSONValue(option.Value)}
+			options[optionIndex] = PublicTemplateInputOption{Label: option.Label, Value: sanitizePublicTemplateValue(option.Value)}
 		}
 		validation := PublicTemplateInputValidation{
 			MinLength: input.Validation.MinLength, MaxLength: input.Validation.MaxLength,
@@ -704,20 +704,64 @@ func projectPublicTemplateDefinition(definition InternalTemplateDefinition) Publ
 		if input.VisibleWhen != nil {
 			visibleWhen = &PublicTemplateVisibilityCondition{
 				InputKey: input.VisibleWhen.InputKey, Operator: input.VisibleWhen.Operator,
-				Value: cloneJSONValue(input.VisibleWhen.Value),
+				Value: sanitizePublicTemplateValue(input.VisibleWhen.Value),
 			}
 		}
 		inputs[index] = PublicTemplateInput{
 			Key: input.Key, Type: input.Type, Label: input.Label, Required: input.Required,
-			HelpText: input.HelpText, Placeholder: input.Placeholder, Default: cloneJSONValue(input.Default),
+			HelpText: input.HelpText, Placeholder: input.Placeholder, Default: sanitizePublicTemplateValue(input.Default),
 			Options: options, Validation: validation, VisibleWhen: visibleWhen,
 		}
 	}
 	return PublicTemplateDefinition{
-		Inputs: inputs, Presentation: cloneTemplateMap(definition.Presentation),
-		Presets: PublicTemplatePresets{InputDefaults: cloneTemplateMap(definition.Presets.InputDefaults)},
+		Inputs: inputs, Presentation: sanitizePublicTemplateMap(definition.Presentation),
+		Presets: PublicTemplatePresets{InputDefaults: sanitizePublicTemplateInputDefaults(definition.Presets.InputDefaults)},
 		Handoff: PublicTemplateHandoff{TargetType: definition.Handoff.TargetType},
 	}
+}
+
+func sanitizePublicTemplateInputDefaults(source map[string]any) map[string]any {
+	result := make(map[string]any, len(source))
+	for key, value := range source {
+		result[key] = sanitizePublicTemplateValue(value)
+	}
+	return result
+}
+
+func sanitizePublicTemplateMap(source map[string]any) map[string]any {
+	result := make(map[string]any, len(source))
+	for key, value := range source {
+		if publicTemplateInternalKey(key) {
+			continue
+		}
+		result[key] = sanitizePublicTemplateValue(value)
+	}
+	return result
+}
+
+func sanitizePublicTemplateValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return sanitizePublicTemplateMap(typed)
+	case []any:
+		items := make([]any, len(typed))
+		for index := range typed {
+			items[index] = sanitizePublicTemplateValue(typed[index])
+		}
+		return items
+	default:
+		return cloneJSONValue(value)
+	}
+}
+
+func publicTemplateInternalKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(key), "_", ""), "-", ""))
+	for _, forbidden := range []string{"prompt", "composer", "binding", "model", "provider", "executor", "workflow", "failurepolicy", "apikey", "secret", "token", "capability"} {
+		if strings.Contains(normalized, forbidden) {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyTemplateValue(value any) bool {

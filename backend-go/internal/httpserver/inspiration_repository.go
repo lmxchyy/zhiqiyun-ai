@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-var errInspirationNotFound = errors.New("inspiration template not found")
+var (
+	errInspirationNotFound        = errors.New("inspiration template not found")
+	errInspirationVersionConflict = errors.New("inspiration template version conflict")
+)
 
 type inspirationCategory struct {
 	ID        string `json:"id"`
@@ -24,51 +27,44 @@ type inspirationCategory struct {
 }
 
 type inspirationTemplate struct {
-	ID                  string         `json:"id"`
-	TenantID            string         `json:"tenantId"`
-	Title               string         `json:"title"`
-	Description         string         `json:"description"`
-	ContentType         string         `json:"contentType"`
-	CategoryID          string         `json:"categoryId"`
-	CategoryCode        string         `json:"categoryCode,omitempty"`
-	CategoryName        string         `json:"categoryName,omitempty"`
-	CoverURL            string         `json:"coverUrl"`
-	ThumbnailURL        string         `json:"thumbnailUrl,omitempty"`
-	ResultURL           string         `json:"resultUrl,omitempty"`
-	Prompt              string         `json:"prompt,omitempty"`
-	NegativePrompt      string         `json:"negativePrompt,omitempty"`
-	ModelID             string         `json:"modelId,omitempty"`
-	ScenarioCode        string         `json:"scenarioCode,omitempty"`
-	DisplayConfig       map[string]any `json:"displayConfig,omitempty"`
-	InputRequirements   map[string]any `json:"inputRequirements,omitempty"`
-	PresetConfig        map[string]any `json:"presetConfig,omitempty"`
-	Parameters          map[string]any `json:"parameters"`
-	ReferenceAssets     []any          `json:"referenceAssets"`
-	Platforms           []string       `json:"platforms"`
-	Tags                []string       `json:"tags"`
-	ApplicableTenantIDs []string       `json:"applicableTenantIds"`
-	Featured            bool           `json:"featured"`
-	Hot                 bool           `json:"hot"`
-	Pinned              bool           `json:"pinned"`
-	SortOrder           int            `json:"sort"`
-	Status              string         `json:"status"`
-	AuditStatus         string         `json:"auditStatus"`
-	AuditNote           string         `json:"auditNote,omitempty"`
-	StartTime           string         `json:"startTime,omitempty"`
-	EndTime             string         `json:"endTime,omitempty"`
-	Version             int            `json:"version"`
-	SourceAssetID       string         `json:"sourceAssetId,omitempty"`
-	SourceAuthorized    bool           `json:"sourceAuthorized"`
-	CreatedBy           string         `json:"createdBy,omitempty"`
-	UpdatedBy           string         `json:"updatedBy,omitempty"`
-	CreatedAt           string         `json:"createdAt"`
-	UpdatedAt           string         `json:"updatedAt"`
-	Favorite            bool           `json:"favorite"`
-	ViewCount           int64          `json:"viewCount"`
-	CopyCount           int64          `json:"copyCount"`
-	FavoriteCount       int64          `json:"favoriteCount"`
-	UseCount            int64          `json:"useCount"`
-	GenerateCount       int64          `json:"generateCount"`
+	ID                  string                     `json:"id"`
+	Slug                string                     `json:"slug"`
+	TenantID            string                     `json:"tenantId"`
+	Title               string                     `json:"title"`
+	Description         string                     `json:"description"`
+	ContentType         string                     `json:"contentType"`
+	CategoryID          string                     `json:"categoryId"`
+	CategoryCode        string                     `json:"categoryCode,omitempty"`
+	CategoryName        string                     `json:"categoryName,omitempty"`
+	CoverURL            string                     `json:"coverUrl"`
+	ThumbnailURL        string                     `json:"thumbnailUrl,omitempty"`
+	ResultURL           string                     `json:"resultUrl,omitempty"`
+	Definition          InternalTemplateDefinition `json:"definition"`
+	Platforms           []string                   `json:"platforms"`
+	Tags                []string                   `json:"tags"`
+	ApplicableTenantIDs []string                   `json:"applicableTenantIds"`
+	Featured            bool                       `json:"featured"`
+	Hot                 bool                       `json:"hot"`
+	Pinned              bool                       `json:"pinned"`
+	SortOrder           int                        `json:"sort"`
+	Status              string                     `json:"status"`
+	AuditStatus         string                     `json:"auditStatus"`
+	AuditNote           string                     `json:"auditNote,omitempty"`
+	StartTime           string                     `json:"startTime,omitempty"`
+	EndTime             string                     `json:"endTime,omitempty"`
+	Version             int                        `json:"version"`
+	SourceAssetID       string                     `json:"sourceAssetId,omitempty"`
+	SourceAuthorized    bool                       `json:"sourceAuthorized"`
+	CreatedBy           string                     `json:"createdBy,omitempty"`
+	UpdatedBy           string                     `json:"updatedBy,omitempty"`
+	CreatedAt           string                     `json:"createdAt"`
+	UpdatedAt           string                     `json:"updatedAt"`
+	Favorite            bool                       `json:"favorite"`
+	ViewCount           int64                      `json:"viewCount"`
+	CopyCount           int64                      `json:"copyCount"`
+	FavoriteCount       int64                      `json:"favoriteCount"`
+	UseCount            int64                      `json:"useCount"`
+	GenerateCount       int64                      `json:"generateCount"`
 }
 
 type inspirationListFilter struct {
@@ -104,6 +100,8 @@ type inspirationRepository interface {
 	SaveCategory(context.Context, inspirationCategory) (inspirationCategory, error)
 	ListTemplates(context.Context, inspirationListFilter) ([]inspirationTemplate, int, error)
 	GetTemplate(context.Context, string, string, string, bool) (inspirationTemplate, error)
+	GetTemplateBySlug(context.Context, string, string, string, bool) (inspirationTemplate, error)
+	GetTemplateVersionBySlug(context.Context, string, string, string, int) (inspirationTemplate, error)
 	SaveTemplate(context.Context, inspirationTemplate, string) (inspirationTemplate, error)
 	DeleteTemplate(context.Context, string, string, string) error
 	SetFavorite(context.Context, string, string, string, bool) error
@@ -133,7 +131,7 @@ func newMemoryInspirationRepository() inspirationRepository {
 		{ID: "inspiration-category-ppt", TenantID: "default", Code: "ppt", Name: "PPT方案", SortOrder: 40, Status: "ACTIVE"},
 	}
 	makeTemplate := func(id, title, description, contentType, categoryID, cover, prompt, negative, model string, params map[string]any, sortOrder int) inspirationTemplate {
-		return inspirationTemplate{ID: id, TenantID: "default", Title: title, Description: description, ContentType: contentType, CategoryID: categoryID, CoverURL: cover, ThumbnailURL: cover, ResultURL: cover, Prompt: prompt, NegativePrompt: negative, ModelID: model, Parameters: params, ReferenceAssets: []any{}, Platforms: []string{"miniprogram", "h5", "app", "pc"}, Tags: []string{"AI生成示例"}, Featured: true, Hot: sortOrder >= 60, SortOrder: sortOrder, Status: "PUBLISHED", AuditStatus: "APPROVED", SourceAuthorized: true, Version: 1, CreatedBy: "system", UpdatedBy: "system", CreatedAt: now, UpdatedAt: now}
+		return inspirationTemplate{ID: id, Slug: id, TenantID: "default", Title: title, Description: description, ContentType: contentType, CategoryID: categoryID, CoverURL: cover, ThumbnailURL: cover, ResultURL: cover, Definition: staticInspirationDefinition(contentType, prompt, negative, model, params), Platforms: []string{"miniprogram", "h5", "app", "pc"}, Tags: []string{"AI生成示例"}, Featured: true, Hot: sortOrder >= 60, SortOrder: sortOrder, Status: "PUBLISHED", AuditStatus: "APPROVED", SourceAuthorized: true, Version: 1, CreatedBy: "system", UpdatedBy: "system", CreatedAt: now, UpdatedAt: now}
 	}
 	templates := []inspirationTemplate{
 		makeTemplate("inspiration-product-clean", "极简科技商品主图", "干净背景与商业级产品光影", "image", categories[1].ID, "/static/fallbacks/inspiration-ecommerce.jpg", "高端科技产品商业摄影，产品居中，柔和轮廓光，干净渐变背景，细节清晰，电商主图构图", "文字，水印，低清晰度，畸变，杂乱背景", "gpt-image-2", map[string]any{"ratio": "1:1", "quality": "high"}, 100),
@@ -144,6 +142,26 @@ func newMemoryInspirationRepository() inspirationRepository {
 		makeTemplate("inspiration-ppt-roadshow", "科技项目招商路演", "十页结构化招商与项目介绍方案", "ppt", categories[6].ID, "/static/fallbacks/inspiration-ppt.jpg", "为科技创新项目制作招商路演PPT，包含市场机会、产品方案、竞争优势、商业模式、落地计划和合作诉求，数据表达清晰", "", "kimi-k2.6", map[string]any{"pageCount": 10, "scenario": "roadshow", "style": "technology", "withImages": true, "language": "zh"}, 50),
 	}
 	return &memoryInspirationRepository{categories: categories, templates: templates, favorites: map[string]bool{}}
+}
+
+func staticInspirationDefinition(contentType, prompt, negative, model string, parameters map[string]any) InternalTemplateDefinition {
+	contracts := map[string]struct{ targetType, targetKey, capabilityKey string }{
+		"image": {"IMAGE_CREATION", "image.create", "image_generation"},
+		"video": {"VIDEO_CREATION", "video.create", "video_generation"},
+		"ppt":   {"PPT_CREATION", "ppt.create", "ppt_generation"},
+	}
+	contract := contracts[contentType]
+	return InternalTemplateDefinition{
+		SchemaVersion: currentTemplateSchemaVersion,
+		Inputs:        []TemplateInputDefinition{},
+		Prompt: TemplatePromptDefinition{Template: prompt, NegativeTemplate: negative,
+			Composer: TemplateComposerDefinition{Key: "deterministic-template", Version: 1}},
+		Bindings:     []TemplateBindingDefinition{},
+		Presets:      TemplatePresetsDefinition{InputDefaults: map[string]any{}, GenerationDefaults: cloneTemplateMap(parameters)},
+		Presentation: map[string]any{},
+		Handoff:      TemplateHandoffDefinition{TargetType: contract.targetType, TargetKey: contract.targetKey},
+		Capability:   TemplateCapabilityDefinition{CapabilityKey: contract.capabilityKey, ModelHint: model},
+	}
 }
 
 func (m *memoryInspirationRepository) ListCategories(_ context.Context, tenantID string, admin bool) ([]inspirationCategory, error) {
@@ -290,9 +308,58 @@ func (m *memoryInspirationRepository) GetTemplate(_ context.Context, tenantID, u
 	return inspirationTemplate{}, errInspirationNotFound
 }
 
+func (m *memoryInspirationRepository) GetTemplateBySlug(_ context.Context, tenantID, userID, slug string, admin bool) (inspirationTemplate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for index := len(m.templates) - 1; index >= 0; index-- {
+		item := m.templates[index]
+		publicVisible := inspirationVisible(item, inspirationListFilter{TenantID: tenantID, Published: true})
+		if item.Slug == slug && (item.TenantID == "default" || item.TenantID == tenantID) && (admin || publicVisible) {
+			return m.decorate(item, userID), nil
+		}
+	}
+	return inspirationTemplate{}, errInspirationNotFound
+}
+
+func (m *memoryInspirationRepository) GetTemplateVersionBySlug(_ context.Context, tenantID, userID, slug string, version int) (inspirationTemplate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var current *inspirationTemplate
+	for index := range m.templates {
+		item := m.templates[index]
+		if item.Slug == slug && (item.TenantID == "default" || item.TenantID == tenantID) {
+			candidate := item
+			current = &candidate
+			if item.TenantID == tenantID {
+				break
+			}
+		}
+	}
+	if current == nil {
+		return inspirationTemplate{}, errInspirationNotFound
+	}
+	if current.Version == version {
+		if !inspirationVisible(*current, inspirationListFilter{TenantID: tenantID, Published: true}) {
+			return inspirationTemplate{}, errInspirationVersionConflict
+		}
+		return m.decorate(*current, userID), nil
+	}
+	for _, historical := range m.versions {
+		if historical.TemplateID == current.ID && historical.Version == version && inspirationVisible(historical.Snapshot, inspirationListFilter{TenantID: tenantID, Published: true}) {
+			return m.decorate(historical.Snapshot, userID), nil
+		}
+	}
+	return inspirationTemplate{}, errInspirationVersionConflict
+}
+
 func (m *memoryInspirationRepository) SaveTemplate(_ context.Context, item inspirationTemplate, note string) (inspirationTemplate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.templates {
+		if existing.ID != item.ID && existing.TenantID == item.TenantID && existing.Slug == item.Slug {
+			return inspirationTemplate{}, errors.New("inspiration template slug already exists in tenant")
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	item.UpdatedAt = now
 	for i := range m.templates {
@@ -350,6 +417,9 @@ func (m *memoryInspirationRepository) Rollback(ctx context.Context, tenantID, id
 	for _, v := range versions {
 		if v.Version == version {
 			item := v.Snapshot
+			item.Status = "DRAFT"
+			item.AuditStatus = "PENDING"
+			item.AuditNote = ""
 			item.UpdatedBy = actor
 			return m.SaveTemplate(ctx, item, fmt.Sprintf("rollback to version %d", version))
 		}
@@ -359,7 +429,7 @@ func (m *memoryInspirationRepository) Rollback(ctx context.Context, tenantID, id
 
 type postgresInspirationRepository struct{ db *sql.DB }
 
-const inspirationTemplateSelect = `SELECT t.id,t.tenant_id,t.title,t.description,t.content_type,t.category_id,coalesce(c.code,''),coalesce(c.name,''),t.cover_url,t.thumbnail_url,t.result_url,t.prompt,t.negative_prompt,t.model_id,t.scenario_code,t.display_config_json,t.input_requirements_json,t.preset_config_json,t.parameters_json,t.reference_assets_json,t.platforms_json,t.tags_json,t.applicable_tenant_ids_json,t.featured,t.hot,t.pinned,t.sort_order,t.status,t.audit_status,t.audit_note,t.start_time,t.end_time,t.version,coalesce(t.source_asset_id,''),t.source_authorized,t.created_by,t.updated_by,t.created_at,t.updated_at,
+const inspirationTemplateSelect = `SELECT t.id,t.slug,t.tenant_id,t.title,t.description,t.content_type,t.category_id,coalesce(c.code,''),coalesce(c.name,''),t.cover_url,t.thumbnail_url,t.result_url,t.definition_json,t.platforms_json,t.tags_json,t.applicable_tenant_ids_json,t.featured,t.hot,t.pinned,t.sort_order,t.status,t.audit_status,t.audit_note,t.start_time,t.end_time,t.version,coalesce(t.source_asset_id,''),t.source_authorized,t.created_by,t.updated_by,t.created_at,t.updated_at,
 EXISTS(SELECT 1 FROM inspiration_favorites f WHERE f.template_id=t.id AND f.user_id=$2),
 (SELECT count(*) FROM inspiration_events e WHERE e.template_id=t.id AND e.event_type='view'),
 (SELECT count(*) FROM inspiration_events e WHERE e.template_id=t.id AND e.event_type='copy_prompt'),
@@ -370,36 +440,20 @@ FROM inspiration_templates t LEFT JOIN inspiration_categories c ON c.id=t.catego
 
 func scanInspirationTemplate(scanner interface{ Scan(...any) error }) (inspirationTemplate, error) {
 	var item inspirationTemplate
-	var display, requirements, preset, params, refs, platforms, tags, tenants []byte
+	var definition, platforms, tags, tenants []byte
 	var start, end sql.NullTime
 	var created, updated time.Time
-	err := scanner.Scan(&item.ID, &item.TenantID, &item.Title, &item.Description, &item.ContentType, &item.CategoryID, &item.CategoryCode, &item.CategoryName, &item.CoverURL, &item.ThumbnailURL, &item.ResultURL, &item.Prompt, &item.NegativePrompt, &item.ModelID, &item.ScenarioCode, &display, &requirements, &preset, &params, &refs, &platforms, &tags, &tenants, &item.Featured, &item.Hot, &item.Pinned, &item.SortOrder, &item.Status, &item.AuditStatus, &item.AuditNote, &start, &end, &item.Version, &item.SourceAssetID, &item.SourceAuthorized, &item.CreatedBy, &item.UpdatedBy, &created, &updated, &item.Favorite, &item.ViewCount, &item.CopyCount, &item.FavoriteCount, &item.UseCount, &item.GenerateCount)
+	err := scanner.Scan(&item.ID, &item.Slug, &item.TenantID, &item.Title, &item.Description, &item.ContentType, &item.CategoryID, &item.CategoryCode, &item.CategoryName, &item.CoverURL, &item.ThumbnailURL, &item.ResultURL, &definition, &platforms, &tags, &tenants, &item.Featured, &item.Hot, &item.Pinned, &item.SortOrder, &item.Status, &item.AuditStatus, &item.AuditNote, &start, &end, &item.Version, &item.SourceAssetID, &item.SourceAuthorized, &item.CreatedBy, &item.UpdatedBy, &created, &updated, &item.Favorite, &item.ViewCount, &item.CopyCount, &item.FavoriteCount, &item.UseCount, &item.GenerateCount)
 	if err != nil {
 		return item, err
 	}
-	_ = json.Unmarshal(display, &item.DisplayConfig)
-	_ = json.Unmarshal(requirements, &item.InputRequirements)
-	_ = json.Unmarshal(preset, &item.PresetConfig)
-	_ = json.Unmarshal(params, &item.Parameters)
-	_ = json.Unmarshal(refs, &item.ReferenceAssets)
+	item.Definition, err = decodeInternalTemplateDefinition(definition)
+	if err != nil {
+		return item, fmt.Errorf("decode inspiration template %s definition: %w", item.ID, err)
+	}
 	_ = json.Unmarshal(platforms, &item.Platforms)
 	_ = json.Unmarshal(tags, &item.Tags)
 	_ = json.Unmarshal(tenants, &item.ApplicableTenantIDs)
-	if item.DisplayConfig == nil {
-		item.DisplayConfig = map[string]any{}
-	}
-	if item.InputRequirements == nil {
-		item.InputRequirements = map[string]any{}
-	}
-	if item.PresetConfig == nil {
-		item.PresetConfig = map[string]any{}
-	}
-	if item.Parameters == nil {
-		item.Parameters = map[string]any{}
-	}
-	if item.ReferenceAssets == nil {
-		item.ReferenceAssets = []any{}
-	}
 	item.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 	item.UpdatedAt = updated.UTC().Format(time.RFC3339Nano)
 	if start.Valid {
@@ -513,6 +567,42 @@ func (p postgresInspirationRepository) GetTemplate(ctx context.Context, tenantID
 	return item, err
 }
 
+func (p postgresInspirationRepository) GetTemplateBySlug(ctx context.Context, tenantID, userID, slug string, admin bool) (inspirationTemplate, error) {
+	where := " WHERE t.slug=$3 AND t.deleted_at IS NULL AND (t.tenant_id='default' OR t.tenant_id=$1)"
+	if !admin {
+		where += " AND t.status='PUBLISHED' AND t.audit_status='APPROVED' AND (t.start_time IS NULL OR t.start_time<=now()) AND (t.end_time IS NULL OR t.end_time>now()) AND (jsonb_array_length(t.applicable_tenant_ids_json)=0 OR t.applicable_tenant_ids_json ? $1)"
+	}
+	where += " ORDER BY (t.tenant_id=$1) DESC LIMIT 1"
+	item, err := scanInspirationTemplate(p.db.QueryRowContext(ctx, inspirationTemplateSelect+where, tenantID, userID, slug))
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, errInspirationNotFound
+	}
+	return item, err
+}
+
+func (p postgresInspirationRepository) GetTemplateVersionBySlug(ctx context.Context, tenantID, userID, slug string, version int) (inspirationTemplate, error) {
+	current, err := p.GetTemplateBySlug(ctx, tenantID, userID, slug, true)
+	if err != nil {
+		return inspirationTemplate{}, err
+	}
+	if current.Version == version {
+		if !inspirationVisible(current, inspirationListFilter{TenantID: tenantID, Published: true}) {
+			return inspirationTemplate{}, errInspirationVersionConflict
+		}
+		return current, nil
+	}
+	versions, err := p.ListVersions(ctx, tenantID, current.ID)
+	if err != nil {
+		return inspirationTemplate{}, err
+	}
+	for _, historical := range versions {
+		if historical.Version == version && inspirationVisible(historical.Snapshot, inspirationListFilter{TenantID: tenantID, Published: true}) {
+			return historical.Snapshot, nil
+		}
+	}
+	return inspirationTemplate{}, errInspirationVersionConflict
+}
+
 func inspirationJSON(value any) []byte { raw, _ := json.Marshal(value); return raw }
 func inspirationTime(value string) *time.Time {
 	if strings.TrimSpace(value) == "" {
@@ -547,7 +637,7 @@ func (p postgresInspirationRepository) SaveTemplate(ctx context.Context, item in
 	} else {
 		item.Version = 1
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO inspiration_templates(id,tenant_id,title,description,content_type,category_id,cover_url,thumbnail_url,result_url,prompt,negative_prompt,model_id,scenario_code,display_config_json,input_requirements_json,preset_config_json,parameters_json,reference_assets_json,platforms_json,tags_json,applicable_tenant_ids_json,featured,hot,pinned,sort_order,status,audit_status,audit_note,start_time,end_time,version,source_asset_id,source_authorized,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,NULLIF($32,''),$33,$34,$35) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,content_type=excluded.content_type,category_id=excluded.category_id,cover_url=excluded.cover_url,thumbnail_url=excluded.thumbnail_url,result_url=excluded.result_url,prompt=excluded.prompt,negative_prompt=excluded.negative_prompt,model_id=excluded.model_id,scenario_code=excluded.scenario_code,display_config_json=excluded.display_config_json,input_requirements_json=excluded.input_requirements_json,preset_config_json=excluded.preset_config_json,parameters_json=excluded.parameters_json,reference_assets_json=excluded.reference_assets_json,platforms_json=excluded.platforms_json,tags_json=excluded.tags_json,applicable_tenant_ids_json=excluded.applicable_tenant_ids_json,featured=excluded.featured,hot=excluded.hot,pinned=excluded.pinned,sort_order=excluded.sort_order,status=excluded.status,audit_status=excluded.audit_status,audit_note=excluded.audit_note,start_time=excluded.start_time,end_time=excluded.end_time,version=excluded.version,source_asset_id=excluded.source_asset_id,source_authorized=excluded.source_authorized,updated_by=excluded.updated_by,updated_at=now()`, item.ID, item.TenantID, item.Title, item.Description, item.ContentType, item.CategoryID, item.CoverURL, item.ThumbnailURL, item.ResultURL, item.Prompt, item.NegativePrompt, item.ModelID, item.ScenarioCode, inspirationJSON(item.DisplayConfig), inspirationJSON(item.InputRequirements), inspirationJSON(item.PresetConfig), inspirationJSON(item.Parameters), inspirationJSON(item.ReferenceAssets), inspirationJSON(item.Platforms), inspirationJSON(item.Tags), inspirationJSON(item.ApplicableTenantIDs), item.Featured, item.Hot, item.Pinned, item.SortOrder, item.Status, item.AuditStatus, item.AuditNote, inspirationTime(item.StartTime), inspirationTime(item.EndTime), item.Version, item.SourceAssetID, item.SourceAuthorized, item.CreatedBy, item.UpdatedBy)
+	_, err = tx.ExecContext(ctx, `INSERT INTO inspiration_templates(id,slug,tenant_id,title,description,content_type,category_id,cover_url,thumbnail_url,result_url,prompt,definition_json,platforms_json,tags_json,applicable_tenant_ids_json,featured,hot,pinned,sort_order,status,audit_status,audit_note,start_time,end_time,version,source_asset_id,source_authorized,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NULLIF($25,''),$26,$27,$28) ON CONFLICT(id) DO UPDATE SET slug=excluded.slug,title=excluded.title,description=excluded.description,content_type=excluded.content_type,category_id=excluded.category_id,cover_url=excluded.cover_url,thumbnail_url=excluded.thumbnail_url,result_url=excluded.result_url,definition_json=excluded.definition_json,platforms_json=excluded.platforms_json,tags_json=excluded.tags_json,applicable_tenant_ids_json=excluded.applicable_tenant_ids_json,featured=excluded.featured,hot=excluded.hot,pinned=excluded.pinned,sort_order=excluded.sort_order,status=excluded.status,audit_status=excluded.audit_status,audit_note=excluded.audit_note,start_time=excluded.start_time,end_time=excluded.end_time,version=excluded.version,source_asset_id=excluded.source_asset_id,source_authorized=excluded.source_authorized,updated_by=excluded.updated_by,updated_at=now()`, item.ID, item.Slug, item.TenantID, item.Title, item.Description, item.ContentType, item.CategoryID, item.CoverURL, item.ThumbnailURL, item.ResultURL, inspirationJSON(item.Definition), inspirationJSON(item.Platforms), inspirationJSON(item.Tags), inspirationJSON(item.ApplicableTenantIDs), item.Featured, item.Hot, item.Pinned, item.SortOrder, item.Status, item.AuditStatus, item.AuditNote, inspirationTime(item.StartTime), inspirationTime(item.EndTime), item.Version, item.SourceAssetID, item.SourceAuthorized, item.CreatedBy, item.UpdatedBy)
 	if err != nil {
 		return item, err
 	}
@@ -626,6 +716,9 @@ func (p postgresInspirationRepository) Rollback(ctx context.Context, tenantID, i
 		return item, err
 	}
 	item.ID = id
+	item.Status = "DRAFT"
+	item.AuditStatus = "PENDING"
+	item.AuditNote = ""
 	item.UpdatedBy = actor
 	return p.SaveTemplate(ctx, item, fmt.Sprintf("rollback to version %d", version))
 }

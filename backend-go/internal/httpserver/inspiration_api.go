@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,13 +11,14 @@ import (
 )
 
 type inspirationAPI struct {
-	repo     inspirationRepository
-	store    platformStore
-	sessions authSessionStore
+	repo        inspirationRepository
+	store       platformStore
+	sessions    authSessionStore
+	draftSigner inspirationDraftSigner
 }
 
-func newInspirationAPI(repo inspirationRepository, store platformStore, sessions authSessionStore) inspirationAPI {
-	return inspirationAPI{repo: repo, store: store, sessions: sessions}
+func newInspirationAPI(repo inspirationRepository, store platformStore, sessions authSessionStore, draftHMACSecret string) inspirationAPI {
+	return inspirationAPI{repo: repo, store: store, sessions: sessions, draftSigner: newInspirationDraftSigner([]byte(draftHMACSecret), 30*time.Minute, time.Now)}
 }
 
 func (a inspirationAPI) optionalIdentity(r *http.Request) (string, string) {
@@ -64,16 +66,48 @@ func inspirationPageParams(r *http.Request, fallback int) (int, int) {
 	return page, pageSize
 }
 
-func publicInspirationSummary(item inspirationTemplate) inspirationTemplate {
-	item.Prompt = ""
-	item.NegativePrompt = ""
-	item.Parameters = nil
-	item.ReferenceAssets = nil
-	item.ApplicableTenantIDs = nil
-	item.AuditNote = ""
-	item.CreatedBy = ""
-	item.UpdatedBy = ""
-	return item
+type PublicInspirationSummaryDTO struct {
+	ID              string   `json:"id"`
+	Slug            string   `json:"slug"`
+	Title           string   `json:"title"`
+	Description     string   `json:"description"`
+	ContentType     string   `json:"contentType"`
+	CategoryID      string   `json:"categoryId"`
+	CategoryCode    string   `json:"categoryCode,omitempty"`
+	CategoryName    string   `json:"categoryName,omitempty"`
+	CoverURL        string   `json:"coverUrl"`
+	ThumbnailURL    string   `json:"thumbnailUrl,omitempty"`
+	ResultURL       string   `json:"resultUrl,omitempty"`
+	Platforms       []string `json:"platforms"`
+	Tags            []string `json:"tags"`
+	Featured        bool     `json:"featured"`
+	Hot             bool     `json:"hot"`
+	Pinned          bool     `json:"pinned"`
+	SortOrder       int      `json:"sort"`
+	TemplateVersion int      `json:"templateVersion"`
+	Favorite        bool     `json:"favorite"`
+	ViewCount       int64    `json:"viewCount"`
+	CopyCount       int64    `json:"copyCount"`
+	FavoriteCount   int64    `json:"favoriteCount"`
+	UseCount        int64    `json:"useCount"`
+	GenerateCount   int64    `json:"generateCount"`
+}
+
+type PublicTemplateDetailDTO struct {
+	PublicInspirationSummaryDTO
+	Schema PublicTemplateDefinition `json:"schema"`
+}
+
+func publicInspirationSummary(item inspirationTemplate) PublicInspirationSummaryDTO {
+	return PublicInspirationSummaryDTO{
+		ID: item.ID, Slug: item.Slug, Title: item.Title, Description: item.Description,
+		ContentType: item.ContentType, CategoryID: item.CategoryID, CategoryCode: item.CategoryCode,
+		CategoryName: item.CategoryName, CoverURL: item.CoverURL, ThumbnailURL: item.ThumbnailURL,
+		ResultURL: item.ResultURL, Platforms: append([]string(nil), item.Platforms...), Tags: append([]string(nil), item.Tags...),
+		Featured: item.Featured, Hot: item.Hot, Pinned: item.Pinned, SortOrder: item.SortOrder,
+		TemplateVersion: item.Version, Favorite: item.Favorite, ViewCount: item.ViewCount, CopyCount: item.CopyCount,
+		FavoriteCount: item.FavoriteCount, UseCount: item.UseCount, GenerateCount: item.GenerateCount,
+	}
 }
 
 func (a inspirationAPI) categories(w http.ResponseWriter, r *http.Request) {
@@ -101,10 +135,11 @@ func (a inspirationAPI) featured(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	publicItems := make([]PublicInspirationSummaryDTO, len(items))
 	for index := range items {
-		items[index] = publicInspirationSummary(items[index])
+		publicItems[index] = publicInspirationSummary(items[index])
 	}
-	writeJSON(w, map[string]any{"items": items, "total": total, "seed": seed})
+	writeJSON(w, map[string]any{"items": publicItems, "total": total, "seed": seed})
 }
 
 func (a inspirationAPI) list(w http.ResponseWriter, r *http.Request) {
@@ -115,59 +150,16 @@ func (a inspirationAPI) list(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	publicItems := make([]PublicInspirationSummaryDTO, len(items))
 	for index := range items {
-		items[index] = publicInspirationSummary(items[index])
+		publicItems[index] = publicInspirationSummary(items[index])
 	}
-	writeJSON(w, map[string]any{"items": items, "total": total, "page": page, "pageSize": pageSize, "hasMore": page*pageSize < total})
-}
-
-func modelModuleForContentType(contentType string) string {
-	switch contentType {
-	case "video":
-		return moduleVideoGeneration
-	case "ppt":
-		return modulePPTGeneration
-	default:
-		return moduleImageGeneration
-	}
-}
-
-func (a inspirationAPI) modelResolution(item inspirationTemplate) (bool, string) {
-	data, err := a.store.AdminData()
-	if err != nil {
-		return true, item.ModelID
-	}
-	moduleCode := modelModuleForContentType(item.ContentType)
-	fallback := ""
-	for _, model := range data.AIModels {
-		name := firstNonEmptyString(model.ModelName, model.ModelNameCamel)
-		modelModule := canonicalModuleCode(firstNonEmptyString(model.ModuleCode, model.ModuleCodeCamel))
-		if modelModule != canonicalModuleCode(moduleCode) || !strings.EqualFold(model.Status, "ACTIVE") {
-			continue
-		}
-		if fallback == "" {
-			fallback = name
-		}
-		if strings.EqualFold(name, item.ModelID) {
-			return true, name
-		}
-	}
-	if fallback == "" {
-		for _, model := range data.APIModels {
-			if strings.EqualFold(model.Status, "ACTIVE") && fallback == "" {
-				fallback = model.Model
-			}
-			if strings.EqualFold(model.Model, item.ModelID) && strings.EqualFold(model.Status, "ACTIVE") {
-				return true, model.Model
-			}
-		}
-	}
-	return false, fallback
+	writeJSON(w, map[string]any{"items": publicItems, "total": total, "page": page, "pageSize": pageSize, "hasMore": page*pageSize < total})
 }
 
 func (a inspirationAPI) detail(w http.ResponseWriter, r *http.Request) {
 	userID, tenantID := a.optionalIdentity(r)
-	item, err := a.repo.GetTemplate(r.Context(), tenantID, userID, r.PathValue("id"), false)
+	item, err := a.repo.GetTemplateBySlug(r.Context(), tenantID, userID, r.PathValue("slug"), false)
 	if err != nil {
 		writeInspirationError(w, err)
 		return
@@ -177,9 +169,8 @@ func (a inspirationAPI) detail(w http.ResponseWriter, r *http.Request) {
 		writeInspirationError(w, errInspirationNotFound)
 		return
 	}
-	available, compatible := a.modelResolution(item)
 	_ = a.repo.RecordEvent(r.Context(), tenantID, userID, item.ID, "view", "", platform, map[string]any{"requestId": strings.TrimSpace(r.Header.Get("X-Request-Id"))})
-	writeJSON(w, map[string]any{"item": item, "modelAvailable": available, "compatibleModelId": compatible, "aiGenerated": true})
+	writeJSON(w, map[string]any{"item": PublicTemplateDetailDTO{PublicInspirationSummaryDTO: publicInspirationSummary(item), Schema: projectPublicTemplateDefinition(item.Definition)}, "aiGenerated": true})
 }
 
 var inspirationEventTypes = map[string]bool{"view": true, "copy_prompt": true, "use_template": true, "generate_success": true}
@@ -205,7 +196,8 @@ func (a inspirationAPI) event(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errUnauthorized)
 		return
 	}
-	if _, err := a.repo.GetTemplate(r.Context(), tenantID, userID, r.PathValue("id"), false); err != nil {
+	item, err := a.repo.GetTemplateBySlug(r.Context(), tenantID, userID, r.PathValue("slug"), false)
+	if err != nil {
 		writeInspirationError(w, err)
 		return
 	}
@@ -213,7 +205,7 @@ func (a inspirationAPI) event(w http.ResponseWriter, r *http.Request) {
 		req.Metadata = map[string]any{}
 	}
 	req.Metadata["requestId"] = strings.TrimSpace(r.Header.Get("X-Request-Id"))
-	if err := a.repo.RecordEvent(r.Context(), tenantID, userID, r.PathValue("id"), req.EventType, strings.TrimSpace(req.GenerationTaskID), firstNonEmptyString(strings.TrimSpace(req.Platform), requestTerminal(r)), req.Metadata); err != nil {
+	if err := a.repo.RecordEvent(r.Context(), tenantID, userID, item.ID, req.EventType, strings.TrimSpace(req.GenerationTaskID), firstNonEmptyString(strings.TrimSpace(req.Platform), requestTerminal(r)), req.Metadata); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -227,11 +219,12 @@ func (a inspirationAPI) favorite(favorite bool) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, err)
 			return
 		}
-		if _, err = a.repo.GetTemplate(r.Context(), tenantID, userID, r.PathValue("id"), false); err != nil {
-			writeInspirationError(w, err)
+		item, getErr := a.repo.GetTemplateBySlug(r.Context(), tenantID, userID, r.PathValue("slug"), false)
+		if getErr != nil {
+			writeInspirationError(w, getErr)
 			return
 		}
-		if err = a.repo.SetFavorite(r.Context(), tenantID, userID, r.PathValue("id"), favorite); err != nil {
+		if err = a.repo.SetFavorite(r.Context(), tenantID, userID, item.ID, favorite); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -260,44 +253,22 @@ func (a inspirationAPI) adminList(w http.ResponseWriter, r *http.Request) {
 }
 
 func normalizeInspirationTemplate(item *inspirationTemplate, tenantID, actor string, creating bool) error {
+	item.Slug = strings.ToLower(strings.TrimSpace(item.Slug))
 	item.Title = strings.TrimSpace(item.Title)
 	item.Description = strings.TrimSpace(item.Description)
 	item.ContentType = strings.ToLower(strings.TrimSpace(item.ContentType))
 	item.CategoryID = strings.TrimSpace(item.CategoryID)
 	item.CoverURL = strings.TrimSpace(item.CoverURL)
-	item.Prompt = strings.TrimSpace(item.Prompt)
-	item.ModelID = strings.TrimSpace(item.ModelID)
-	item.ScenarioCode = strings.ToLower(strings.TrimSpace(item.ScenarioCode))
-	if item.Title == "" || item.CategoryID == "" || item.CoverURL == "" || item.Prompt == "" {
-		return errors.New("title, categoryId, coverUrl and prompt are required")
+	if item.Slug == "" || item.Title == "" || item.CategoryID == "" || item.CoverURL == "" {
+		return errors.New("slug, title, categoryId and coverUrl are required")
 	}
-	if item.ContentType != "image" && item.ContentType != "video" && item.ContentType != "ppt" {
-		return errors.New("contentType must be image, video or ppt")
-	}
-	if item.Parameters == nil {
-		item.Parameters = map[string]any{}
-	}
-	if item.DisplayConfig == nil {
-		item.DisplayConfig = map[string]any{}
-	}
-	if item.InputRequirements == nil {
-		item.InputRequirements = map[string]any{}
-	}
-	if item.PresetConfig == nil {
-		item.PresetConfig = map[string]any{}
-	}
-	if item.ScenarioCode != "" {
-		for _, char := range item.ScenarioCode {
-			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' && char != '-' {
-				return errors.New("scenarioCode must contain only lowercase letters, numbers, underscore or hyphen")
-			}
+	for _, char := range item.Slug {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+			return errors.New("slug must contain only lowercase letters, numbers or hyphen")
 		}
 	}
-	if err := normalizeInspirationInputRequirements(item); err != nil {
-		return err
-	}
-	if item.ReferenceAssets == nil {
-		item.ReferenceAssets = []any{}
+	if issues := validateTemplateDefinition(item.ContentType, item.Definition); len(issues) > 0 {
+		return fmt.Errorf("invalid template definition at %s: %s", issues[0].Path, issues[0].Message)
 	}
 	if len(item.Platforms) == 0 {
 		item.Platforms = []string{"miniprogram"}
@@ -325,52 +296,41 @@ func normalizeInspirationTemplate(item *inspirationTemplate, tenantID, actor str
 	return nil
 }
 
-func inspirationConfigInt(config map[string]any, key string) (int, bool) {
-	value, found := config[key]
-	if !found || value == nil {
-		return 0, false
+func (a inspirationAPI) validateInspirationCapability(item inspirationTemplate, publishing bool) error {
+	data, err := a.store.AdminData()
+	if err != nil {
+		return fmt.Errorf("load platform capabilities: %w", err)
 	}
-	switch number := value.(type) {
-	case float64:
-		return int(number), number == float64(int(number))
-	case int:
-		return number, true
-	case int64:
-		return int(number), true
-	default:
-		return 0, false
-	}
-}
-
-func normalizeInspirationInputRequirements(item *inspirationTemplate) error {
-	required, _ := item.InputRequirements["referenceImageRequired"].(bool)
-	minimum, hasMinimum := inspirationConfigInt(item.InputRequirements, "referenceImageMin")
-	maximum, hasMaximum := inspirationConfigInt(item.InputRequirements, "referenceImageMax")
-	if required {
-		if !hasMinimum {
-			minimum = 1
-		}
-		if !hasMaximum {
-			maximum = minimum
+	capabilityKey := canonicalModuleCode(strings.TrimSpace(item.Definition.Capability.CapabilityKey))
+	activeCapability := false
+	for _, module := range data.AIModules {
+		if canonicalModuleCode(firstNonEmptyString(module.ModuleCode, module.ModuleCodeCamel)) == capabilityKey && strings.EqualFold(module.Status, "ACTIVE") {
+			activeCapability = true
+			break
 		}
 	}
-	if minimum < 0 || maximum < 0 || minimum > 3 || maximum > 3 || maximum < minimum {
-		return errors.New("reference image range must be between 0 and 3 and max must be greater than or equal to min")
+	modelHint := strings.TrimSpace(item.Definition.Capability.ModelHint)
+	if modelHint != "" {
+		validModel := false
+		for _, model := range data.AIModels {
+			name := firstNonEmptyString(model.ModelName, model.ModelNameCamel)
+			modelCapability := canonicalModuleCode(firstNonEmptyString(model.ModuleCode, model.ModuleCodeCamel))
+			if strings.EqualFold(name, modelHint) && modelCapability == capabilityKey && strings.EqualFold(model.Status, "ACTIVE") {
+				validModel = true
+				break
+			}
+		}
+		if !validModel {
+			return errors.New("capability.modelHint must reference an active compatible model")
+		}
 	}
-	if required && minimum < 1 {
-		return errors.New("referenceImageMin must be at least 1 when a reference image is required")
-	}
-	if hasMinimum || required {
-		item.InputRequirements["referenceImageMin"] = minimum
-	}
-	if hasMaximum || required {
-		item.InputRequirements["referenceImageMax"] = maximum
-	}
-	if required && item.ContentType != "image" {
-		return errors.New("required reference images are currently supported only for image templates")
-	}
-	if required && item.ScenarioCode == "photo_restoration" {
-		item.ReferenceAssets = []any{}
+	if publishing {
+		if strings.EqualFold(item.ContentType, "workflow") {
+			return errors.New("workflow template cannot be published without an available executor")
+		}
+		if !activeCapability {
+			return errors.New("template capability is not available for publication")
+		}
 	}
 	return nil
 }
@@ -379,22 +339,42 @@ func (a inspirationAPI) adminSave(create bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, tenantID := a.adminScope(r)
 		var item inspirationTemplate
-		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+		var current inspirationTemplate
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&item); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 		if !create {
-			current, err := a.repo.GetTemplate(r.Context(), tenantID, "", r.PathValue("id"), true)
+			var err error
+			current, err = a.repo.GetTemplate(r.Context(), tenantID, "", r.PathValue("id"), true)
 			if err != nil {
 				writeInspirationError(w, err)
 				return
 			}
 			item.ID = current.ID
 			item.CreatedBy = current.CreatedBy
+			item.Status = current.Status
+			item.AuditStatus = current.AuditStatus
+			item.AuditNote = current.AuditNote
 		}
 		if err := normalizeInspirationTemplate(&item, tenantID, actor, create); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		if err := a.validateInspirationCapability(item, false); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if create {
+			item.Status = "DRAFT"
+			item.AuditStatus = "PENDING"
+			item.AuditNote = ""
+		} else if current.Status == "PUBLISHED" {
+			item.Status = "DRAFT"
+			item.AuditStatus = "PENDING"
+			item.AuditNote = ""
 		}
 		saved, err := a.repo.SaveTemplate(r.Context(), item, "admin save")
 		if err != nil {
@@ -441,6 +421,10 @@ func (a inspirationAPI) adminTransition(action string) http.HandlerFunc {
 				writeError(w, http.StatusConflict, errors.New("source asset publication authorization is required"))
 				return
 			}
+			if err := a.validateInspirationCapability(item, true); err != nil {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
 			item.Status = "PUBLISHED"
 		case "withdraw":
 			item.Status = "WITHDRAWN"
@@ -467,6 +451,7 @@ func (a inspirationAPI) adminCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item.ID = newInspirationID("template")
+	item.Slug = copyInspirationSlug(item.Slug)
 	item.Title += " - 副本"
 	item.Status = "DRAFT"
 	item.AuditStatus = "PENDING"
@@ -480,6 +465,15 @@ func (a inspirationAPI) adminCopy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"item": saved})
+}
+
+func copyInspirationSlug(source string) string {
+	suffix := fmt.Sprintf("-copy-%d", time.Now().UTC().UnixNano())
+	maximumSourceLength := 160 - len(suffix)
+	if len(source) > maximumSourceLength {
+		source = source[:maximumSourceLength]
+	}
+	return source + suffix
 }
 
 func (a inspirationAPI) adminCategories(w http.ResponseWriter, r *http.Request) {
