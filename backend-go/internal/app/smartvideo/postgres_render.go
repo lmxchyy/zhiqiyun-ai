@@ -175,8 +175,9 @@ func (r *PostgresRepository) AdvanceRenderTask(ctx context.Context, taskID, work
 	if err := ValidateRenderTransition(from, to); err != nil {
 		return err
 	}
-	result, err := r.db.ExecContext(ctx, `update video_render_tasks set status=$4,stage=$5,step=$5,progress=$6,updated_at=now()
- where id=$1 and ($2='' or lease_owner=$2) and status=$3`, taskID, workerID, from, to, stage, progress)
+	// stage is varchar, step is text — reuse of one $N param causes PG "inconsistent types".
+	result, err := r.db.ExecContext(ctx, `update video_render_tasks set status=$4,stage=$5,step=$6,progress=$7,updated_at=now()
+ where id=$1 and ($2='' or lease_owner=$2) and status=$3`, taskID, workerID, from, to, stage, stage, progress)
 	if err == nil {
 		if affected, _ := result.RowsAffected(); affected == 0 {
 			err = ErrInvalidStateTransition

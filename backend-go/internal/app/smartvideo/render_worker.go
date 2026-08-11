@@ -73,6 +73,7 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 	defer os.RemoveAll(workDir)
 
 	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusProcessing, RenderStatusSynthesizing, "synthesizing", 20); err != nil {
+		log.Printf("smartvideo_render operation=advance task_id=%s from=%s to=%s err=%v", task.ID, RenderStatusProcessing, RenderStatusSynthesizing, err)
 		return QueueDecision{RetryAfter: 5 * time.Second}
 	}
 	if w.speech != nil {
@@ -91,6 +92,7 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 	}
 
 	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusSynthesizing, RenderStatusRendering, "rendering", 40); err != nil {
+		log.Printf("smartvideo_render operation=advance task_id=%s from=%s to=%s err=%v", task.ID, RenderStatusSynthesizing, RenderStatusRendering, err)
 		return QueueDecision{RetryAfter: 5 * time.Second}
 	}
 	artifact, err := w.renderer.Render(ctx, task, workDir)
@@ -98,6 +100,7 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 		return w.fail(parent, task, "SMARTVIDEO_RENDER_FFMPEG_FAILED", safeRenderMessage(err), true)
 	}
 	if err = w.repository.AdvanceRenderTask(parent, task.ID, w.options.WorkerID, RenderStatusRendering, RenderStatusUploading, "uploading", 80); err != nil {
+		log.Printf("smartvideo_render operation=advance task_id=%s from=%s to=%s err=%v", task.ID, RenderStatusRendering, RenderStatusUploading, err)
 		return QueueDecision{RetryAfter: 5 * time.Second}
 	}
 	var output RenderOutput
