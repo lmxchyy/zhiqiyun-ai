@@ -278,7 +278,7 @@ func configuredMiniProgramCreationModes() []string {
 	allowed := map[string]bool{"image": true, "infographic": true, "video": true, "ppt": true, "agent": true, "review": true}
 	raw := strings.TrimSpace(os.Getenv("MINIPROGRAM_CREATION_MODES"))
 	if raw == "" {
-		return []string{"image", "infographic", "video"}
+		return []string{"image", "infographic"}
 	}
 	result := []string{}
 	for _, item := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '，' || r == ';' }) {

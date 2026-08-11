@@ -1702,7 +1702,7 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 			}
 			if miniProgram {
 				allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC())
-				if !allowed {
+				if !allowed && !miniProgramVideoComplianceBypassAllows(model) {
 					continue
 				}
 			}
