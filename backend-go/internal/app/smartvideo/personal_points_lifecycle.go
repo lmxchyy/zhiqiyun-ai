@@ -19,6 +19,11 @@ type PersonalPointLedger interface {
 	Release(ctx context.Context, accountID, userID, reservationID string, points int64, idempotencyKey string) error
 }
 
+// PersonalReservationLoader reloads freeze state across API/worker process boundaries.
+type PersonalReservationLoader interface {
+	LoadByBusinessID(ctx context.Context, businessType, businessID string) (accountID, userID, reservationID string, reservedPoints int64, status string, err error)
+}
+
 // AccountIDResolver maps a user to their personal point account.
 type AccountIDResolver interface {
 	ResolvePersonalPointAccountID(ctx context.Context, userID string) (string, error)
@@ -37,9 +42,10 @@ type personalPointTaskState struct {
 type PersonalPointsLifecycle struct {
 	ledger  PersonalPointLedger
 	accounts AccountIDResolver
+	loader  PersonalReservationLoader
 	now     func() time.Time
 
-	mu    sync.Mutex
+	mu     sync.Mutex
 	byTask map[string]personalPointTaskState
 }
 
@@ -49,6 +55,13 @@ func NewPersonalPointsLifecycle(ledger PersonalPointLedger, accounts AccountIDRe
 		now:    func() time.Time { return time.Now().UTC() },
 		byTask: map[string]personalPointTaskState{},
 	}
+}
+
+func (p *PersonalPointsLifecycle) SetReservationLoader(loader PersonalReservationLoader) *PersonalPointsLifecycle {
+	if p != nil {
+		p.loader = loader
+	}
+	return p
 }
 
 func (p *PersonalPointsLifecycle) Quote(_ context.Context, input RenderQuoteInput) (RenderQuote, error) {
@@ -96,7 +109,7 @@ func (p *PersonalPointsLifecycle) Reserve(ctx context.Context, access Access, ta
 }
 
 func (p *PersonalPointsLifecycle) Capture(ctx context.Context, access Access, taskID string) error {
-	state, err := p.lookupTask(taskID)
+	state, err := p.lookupTask(ctx, access, taskID)
 	if err != nil {
 		return err
 	}
@@ -120,7 +133,7 @@ func (p *PersonalPointsLifecycle) Capture(ctx context.Context, access Access, ta
 }
 
 func (p *PersonalPointsLifecycle) Release(ctx context.Context, access Access, taskID, _ string) error {
-	state, err := p.lookupTask(taskID)
+	state, err := p.lookupTask(ctx, access, taskID)
 	if err != nil {
 		return err
 	}
@@ -143,16 +156,36 @@ func (p *PersonalPointsLifecycle) Release(ctx context.Context, access Access, ta
 	return nil
 }
 
-func (p *PersonalPointsLifecycle) lookupTask(taskID string) (personalPointTaskState, error) {
+func (p *PersonalPointsLifecycle) lookupTask(ctx context.Context, access Access, taskID string) (personalPointTaskState, error) {
 	if p == nil {
 		return personalPointTaskState{}, ErrExportNotReady
 	}
+	taskID = strings.TrimSpace(taskID)
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	state, ok := p.byTask[strings.TrimSpace(taskID)]
-	if !ok || state.ReservationID == "" {
+	state, ok := p.byTask[taskID]
+	p.mu.Unlock()
+	if ok && state.ReservationID != "" {
+		return state, nil
+	}
+	if p.loader == nil {
 		return personalPointTaskState{}, ErrNotFound
 	}
+	accountID, userID, reservationID, points, status, err := p.loader.LoadByBusinessID(ctx, PersonalPointBusinessType, taskID)
+	if err != nil {
+		return personalPointTaskState{}, err
+	}
+	status = strings.ToUpper(strings.TrimSpace(status))
+	state = personalPointTaskState{
+		AccountID: accountID, UserID: firstNonEmpty(userID, access.UserID),
+		ReservationID: reservationID, Points: points,
+		Captured: status == "CAPTURED", Released: status == "RELEASED" || status == "EXPIRED",
+	}
+	if state.ReservationID == "" {
+		return personalPointTaskState{}, ErrNotFound
+	}
+	p.mu.Lock()
+	p.byTask[taskID] = state
+	p.mu.Unlock()
 	return state, nil
 }
 

@@ -41,6 +41,7 @@ func (p *PostgresWorkPublisher) PublishPrivateWork(ctx context.Context, input Wo
 	}
 
 	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
 	id := newID("asset")
 	name := fmt.Sprintf("AI自动混剪-%s.mp4", input.RenderTaskID)
 	metadata := map[string]any{
@@ -59,7 +60,7 @@ func (p *PostgresWorkPublisher) PublishPrivateWork(ctx context.Context, input Wo
 		"taskId": input.RenderTaskID, "name": name, "mediaType": "video",
 		"url": "storage://" + input.VideoFileID, "thumbnailUrl": coverRef(input.CoverFileID),
 		"favorite": false, "metadata": metadata,
-		"createdAt": now.Format(time.RFC3339Nano), "updatedAt": now.Format(time.RFC3339Nano),
+		"createdAt": nowText, "updatedAt": nowText,
 	})
 	_, err = p.DB.ExecContext(ctx, `
 		insert into xz_assets
@@ -67,7 +68,7 @@ func (p *PostgresWorkPublisher) PublishPrivateWork(ctx context.Context, input Wo
 		 values ($1,$2,nullif($3,''),null,$4,$5,'video',$6,$7,false,$8::jsonb,null,$9,$9,$10::jsonb)
 		 on conflict (id) do nothing`,
 		id, input.Access.UserID, input.Access.TenantID, input.RenderTaskID, name,
-		"storage://"+input.VideoFileID, coverRef(input.CoverFileID), metaRaw, now, raw)
+		"storage://"+input.VideoFileID, coverRef(input.CoverFileID), metaRaw, nowText, raw)
 	if err != nil {
 		return "", err
 	}

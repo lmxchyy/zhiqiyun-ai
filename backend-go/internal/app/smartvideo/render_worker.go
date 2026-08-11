@@ -130,9 +130,11 @@ func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecisi
 	}
 	if w.settle != nil {
 		if _, err = w.settle.SettleSuccess(parent, task, output); err != nil {
+			log.Printf("smartvideo_render operation=settle task_id=%s result=failed err=%v", task.ID, err)
 			return w.fail(parent, task, "SMARTVIDEO_RENDER_PUBLISH_FAILED", "作品登记或积分结算失败", true)
 		}
 	} else if _, err = w.repository.CompleteRenderTask(parent, task.ID, w.options.WorkerID, output); err != nil {
+		log.Printf("smartvideo_render operation=complete task_id=%s result=failed err=%v", task.ID, err)
 		return w.fail(parent, task, "SMARTVIDEO_RENDER_PUBLISH_FAILED", "作品登记失败", true)
 	}
 	log.Printf("smartvideo_render operation=complete task_id=%s result=succeeded", task.ID)

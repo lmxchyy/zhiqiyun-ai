@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -85,7 +86,7 @@ func NewSmartVideoPointsLifecycleFromDB(db *sql.DB) smartvideo.PointsLifecycle {
 	return smartvideo.NewPersonalPointsLifecycle(
 		personalPointLedgerAdapter{service: NewPersonalPointService(NewPostgresPersonalPointStore(db))},
 		postgresPersonalPointAccountResolver{db: db},
-	)
+	).SetReservationLoader(postgresPersonalReservationLoader{db: db})
 }
 
 type postgresPersonalPointAccountResolver struct {
@@ -103,4 +104,30 @@ func (r postgresPersonalPointAccountResolver) ResolvePersonalPointAccountID(ctx 
 		return "", err
 	}
 	return accountID, nil
+}
+
+type postgresPersonalReservationLoader struct {
+	db *sql.DB
+}
+
+func (l postgresPersonalReservationLoader) LoadByBusinessID(ctx context.Context, businessType, businessID string) (accountID, userID, reservationID string, reservedPoints int64, status string, err error) {
+	if l.db == nil {
+		return "", "", "", 0, "", smartvideo.ErrNotFound
+	}
+	businessType = strings.TrimSpace(businessType)
+	businessID = strings.TrimSpace(businessID)
+	if businessType == "" || businessID == "" {
+		return "", "", "", 0, "", smartvideo.ErrNotFound
+	}
+	err = l.db.QueryRowContext(ctx, `
+		select id, account_id, user_id, reserved_points, status
+		  from xz_personal_point_reservations
+		 where business_type=$1 and business_id=$2
+		 order by created_at desc
+		 limit 1`, businessType, businessID).
+		Scan(&reservationID, &accountID, &userID, &reservedPoints, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", 0, "", smartvideo.ErrNotFound
+	}
+	return accountID, userID, reservationID, reservedPoints, status, err
 }

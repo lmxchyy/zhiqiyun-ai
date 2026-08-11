@@ -48,6 +48,25 @@ func (s *SettleService) SettleSuccess(ctx context.Context, task RenderTask, outp
 		if s.works == nil {
 			return RenderTask{}, ErrSettleNotReady
 		}
+		if current.Status != RenderStatusPublishing && current.Status != RenderStatusSucceeded {
+			if current.Status == RenderStatusUploading {
+				if err := s.repo.AdvanceRenderTask(ctx, current.ID, "", RenderStatusUploading, RenderStatusPublishing, "publishing", 95); err != nil {
+					return RenderTask{}, fmt.Errorf("advance publishing: %w", err)
+				}
+			} else if current.OutputFileID != "" {
+				if _, err := s.repo.PersistRenderOutput(ctx, current.ID, "", RenderOutput{
+					VideoFileID: current.OutputFileID, CoverFileID: current.CoverFileID,
+					DurationMS: output.DurationMS, Width: output.Width, Height: output.Height,
+					FrameRate: output.FrameRate, FileSize: output.FileSize,
+					VideoCodec: output.VideoCodec, AudioCodec: output.AudioCodec, PixelFormat: output.PixelFormat,
+				}); err != nil {
+					return RenderTask{}, fmt.Errorf("persist for publishing: %w", err)
+				}
+			} else {
+				return RenderTask{}, fmt.Errorf("%w: render output missing before publish", ErrInvalidStateTransition)
+			}
+			current.Status = RenderStatusPublishing
+		}
 		workID, err := s.works.PublishPrivateWork(ctx, WorkPublishInput{
 			Access: access,
 			VideoFileID: firstNonEmpty(current.OutputFileID, output.VideoFileID),
@@ -61,7 +80,7 @@ func (s *SettleService) SettleSuccess(ctx context.Context, task RenderTask, outp
 			return RenderTask{}, fmt.Errorf("work publish: %w", err)
 		}
 		if err := s.repo.MarkRenderWorkPublished(ctx, current.ID, "", workID); err != nil {
-			return RenderTask{}, err
+			return RenderTask{}, fmt.Errorf("mark work published: %w", err)
 		}
 		current.WorkID = workID
 		current.OutputAssetID = workID
@@ -75,14 +94,18 @@ func (s *SettleService) SettleSuccess(ctx context.Context, task RenderTask, outp
 			return RenderTask{}, fmt.Errorf("points capture: %w", err)
 		}
 		if err := s.repo.MarkPointsCaptured(ctx, current.ID, current.ReservedPoints); err != nil {
-			return RenderTask{}, err
+			return RenderTask{}, fmt.Errorf("mark points captured: %w", err)
 		}
 		current.CapturedPoints = current.ReservedPoints
 	}
 
 	output.VideoFileID = firstNonEmpty(output.VideoFileID, current.OutputFileID)
 	output.CoverFileID = firstNonEmpty(output.CoverFileID, current.CoverFileID)
-	return s.repo.CompleteRenderTask(ctx, current.ID, "", output)
+	completed, err := s.repo.CompleteRenderTask(ctx, current.ID, "", output)
+	if err != nil {
+		return RenderTask{}, fmt.Errorf("complete render: %w", err)
+	}
+	return completed, nil
 }
 
 func (s *SettleService) SettleFinalFailure(ctx context.Context, task RenderTask) error {
