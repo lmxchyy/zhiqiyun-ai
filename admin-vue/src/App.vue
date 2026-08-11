@@ -2937,7 +2937,6 @@ import {
   type VideoHistoryStatus,
   type VideoModelOption
 } from "./utils/videoGeneration";
-import { adminRequest } from "./api/client";
 import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
 import { isPersistentWebSession } from "./utils/webAuthSession";
 import { resolveSidebarPlanPoints } from "./utils/sidebarPlanPoints";
