@@ -141,16 +141,33 @@ func New(cfg config.Config, db *sql.DB, redisClient *redis.Client) (*Runtime, er
 	planConcurrency := intValue(cfg.SmartVideoPlanWorkerConcurrency, 1, 1, 8)
 	planWorkers := make([]*smartvideo.PlanWorker, 0, planConcurrency)
 	planModel := resolveSmartVideoPlanModel(cfg)
-	plannerClient := smartvideoplan.NewClient(chatprovider.NewOpenAICompatibleForModel(cfg, planModel), smartvideoplan.Options{
+	planTimeout := durationValue(os.Getenv("SMARTVIDEO_PLAN_TIMEOUT"), 180*time.Second)
+	planHTTPTimeoutMS := int(planTimeout / time.Millisecond)
+	if parsed, err := strconv.Atoi(strings.TrimSpace(cfg.ModelTimeoutMS)); err == nil && parsed > planHTTPTimeoutMS {
+		planHTTPTimeoutMS = parsed
+	}
+	if planHTTPTimeoutMS <= 0 {
+		planHTTPTimeoutMS = 180000
+	}
+	plannerChat := chatprovider.NewOpenAICompatibleWithOptions(chatprovider.OpenAICompatibleOptions{
+		Code:            "openai-compatible-chat",
+		BaseURL:         firstNonEmpty(cfg.PPTProviderURL, cfg.ModelProviderURL),
+		APIKey:          firstNonEmpty(cfg.PPTProviderAPIKey, cfg.ModelProviderAPIKey),
+		Model:           planModel,
+		Models:          []string{planModel},
+		DisableThinking: cfg.PPTDisableThinking,
+		TimeoutMS:       planHTTPTimeoutMS,
+	})
+	plannerClient := smartvideoplan.NewClient(plannerChat, smartvideoplan.Options{
 		ModelKey: planModel,
-		Timeout:  durationValue(os.Getenv("SMARTVIDEO_PLAN_TIMEOUT"), 90*time.Second),
+		Timeout:  planTimeout,
 	})
 	planner := smartvideoplan.DomainAdapter{Client: plannerClient}
 	planReady := strings.TrimSpace(firstNonEmpty(cfg.ModelProviderURL, cfg.PPTProviderURL, os.Getenv("SMARTVIDEO_PLAN_BASE_URL"))) != ""
 	for index := 0; index < planConcurrency; index++ {
 		planWorkers = append(planWorkers, smartvideo.NewPlanWorker(repository, repository, planQueue, planner, smartvideo.PlanWorkerOptions{
 			WorkerID: fmt.Sprintf("plan_%d_%d", os.Getpid(), index+1),
-			LeaseDuration: 2 * time.Minute, TaskTimeout: durationValue(os.Getenv("SMARTVIDEO_PLAN_TIMEOUT"), 90*time.Second), HeartbeatEvery: 20 * time.Second,
+			LeaseDuration: 2 * time.Minute, TaskTimeout: planTimeout, HeartbeatEvery: 20 * time.Second,
 		}))
 	}
 	var outboxPublisher *infra.OutboxPublisher

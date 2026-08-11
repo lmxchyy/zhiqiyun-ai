@@ -52,7 +52,8 @@ export function chineseAdminErrorMessage(message: unknown, status = 0, fallback 
   if (/[\u3400-\u9fff]/.test(source)) return source;
   const normalized = source.toLowerCase();
   if (/network error|failed to fetch|network request failed|connection (?:refused|reset)/.test(normalized)) return "网络连接失败，请检查网络后重试";
-  if (/timeout|timed out/.test(normalized)) return "请求超时，请稍后重试";
+  if (/timeout|timed out|deadline exceeded/.test(normalized)) return "请求超时，请稍后重试";
+  if (/provider_unavailable|chat provider/.test(normalized)) return "方案生成服务暂时不可用，请稍后重试";
   if (/invalid (?:username|email|mobile|phone|account|password|credentials)|incorrect password|bad credentials/.test(normalized)) return "账号或密码不正确";
   if (/token.*(?:expired|invalid)|(?:expired|invalid).*token|session.*expired/.test(normalized)) return "登录状态已失效，请重新登录";
   if (/unauthorized|authentication required|not authenticated|please log in/.test(normalized)) return "请先登录后再继续";
