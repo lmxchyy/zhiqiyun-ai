@@ -99,7 +99,7 @@ func (r *PostgresRepository) AcquireRenderTask(ctx context.Context, taskID, work
  lease_owner=$2,lease_expires_at=now()+($3 * interval '1 millisecond'),heartbeat_at=now(),
  started_at=coalesce(started_at,now()),updated_at=now(),error_code=null,error_message=null
  where id=$1 and attempt_count < max_attempts and run_after <= now()
- and (status='QUEUED' or (status in ('PROCESSING','SYNTHESIZING','RENDERING','UPLOADING','PUBLISHING') and lease_expires_at < now()))
+ and (status in ('CREATED','QUEUED') or (status in ('PROCESSING','SYNTHESIZING','RENDERING','UPLOADING','PUBLISHING') and lease_expires_at < now()))
  returning `+renderTaskColumns, taskID, workerID, lease.Milliseconds()))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RenderTask{}, ErrNotFound

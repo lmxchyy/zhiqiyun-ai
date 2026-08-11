@@ -12,8 +12,13 @@
         <button type="button" class="sv-btn" :disabled="store.busy || !store.draftPlan?.scenes?.length || !store.planDirty" @click="store.saveRevision()">
           保存为新版本
         </button>
-        <button type="button" class="sv-btn primary" :disabled="store.busy || !store.currentVersion" @click="store.confirmCurrentVersion()">
-          确认方案
+        <button
+          type="button"
+          class="sv-btn primary"
+          :disabled="store.busy || !store.currentVersion || store.project?.confirmedVersionId === store.currentVersion?.id"
+          @click="store.confirmCurrentVersion()"
+        >
+          {{ store.project?.confirmedVersionId === store.currentVersion?.id ? "已确认" : "确认方案" }}
         </button>
       </div>
     </div>

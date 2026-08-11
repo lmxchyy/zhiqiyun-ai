@@ -15,6 +15,10 @@
       {{ store.errorMessage }}
       <button type="button" class="sv-link" @click="store.clearError()">关闭</button>
     </p>
+    <p v-if="store.successMessage" class="sv-success-banner" role="status">
+      {{ store.successMessage }}
+      <button type="button" class="sv-link" @click="store.clearSuccess()">关闭</button>
+    </p>
 
     <div v-if="store.phase === 'list'" class="sv-panel">
       <div class="sv-panel-head">
@@ -183,6 +187,18 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   background: rgba(255, 80, 80, 0.12);
   border: 1px solid rgba(255, 80, 80, 0.35);
+}
+
+.sv-success-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(61, 180, 110, 0.14);
+  border: 1px solid rgba(61, 180, 110, 0.4);
+  color: #b8f5c8;
 }
 
 .sv-panel,

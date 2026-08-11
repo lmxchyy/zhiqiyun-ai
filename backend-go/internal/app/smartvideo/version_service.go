@@ -101,6 +101,16 @@ func (s *PlanService) ConfirmPlan(ctx context.Context, access Access, projectID,
 	}
 	switch project.Status {
 	case ProjectStatusStoryboardReady, ProjectStatusConfirmed:
+	case ProjectStatusRendering, ProjectStatusCompleted:
+		// Confirm is idempotent once the version is already locked.
+		if strings.TrimSpace(project.ConfirmedVersionID) == versionID {
+			version, err := s.versions.GetVersion(ctx, access, projectID, versionID)
+			if err != nil {
+				return Project{}, ProjectVersion{}, err
+			}
+			return project, version, nil
+		}
+		return Project{}, ProjectVersion{}, fmt.Errorf("%w: project status %s cannot confirm", ErrInvalidStateTransition, project.Status)
 	default:
 		return Project{}, ProjectVersion{}, fmt.Errorf("%w: project status %s cannot confirm", ErrInvalidStateTransition, project.Status)
 	}

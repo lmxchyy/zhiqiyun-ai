@@ -84,6 +84,7 @@ interface SmartVideoState {
   instruction: string;
   busy: boolean;
   errorMessage: string;
+  successMessage: string;
   initialized: boolean;
   pollTimers: number[];
   activeUpload: MultipartUploadHandle | null;
@@ -137,6 +138,7 @@ export const useSmartVideoStore = defineStore("smartVideo", {
     instruction: "",
     busy: false,
     errorMessage: "",
+    successMessage: "",
     initialized: false,
     pollTimers: [],
     activeUpload: null
@@ -177,7 +179,12 @@ export const useSmartVideoStore = defineStore("smartVideo", {
       this.errorMessage = "";
     },
 
+    clearSuccess() {
+      this.successMessage = "";
+    },
+
     setError(error: unknown) {
+      this.successMessage = "";
       this.errorMessage = toErrorMessage(error);
       this.phase = this.phase === "list" ? "list" : "failed";
     },
@@ -213,6 +220,7 @@ export const useSmartVideoStore = defineStore("smartVideo", {
       this.activeUpload = null;
       this.busy = false;
       this.errorMessage = "";
+      this.successMessage = "";
       this.phase = "list";
     },
 
@@ -613,12 +621,26 @@ export const useSmartVideoStore = defineStore("smartVideo", {
         this.errorMessage = "请先成功生成方案后再确认";
         return;
       }
+      if (this.project.confirmedVersionId === this.currentVersion.id) {
+        this.clearError();
+        this.successMessage = "方案已确认，请下滑到「导出」估算积分并提交成片";
+        this.phase = this.resolvePhaseFromProject(this.project);
+        if (!this.quote) {
+          try {
+            await this.loadQuote();
+          } catch {
+            // keep confirm success even if quote temporarily fails
+          }
+        }
+        return;
+      }
       if (this.planDirty) {
         await this.saveRevision("确认前自动保存");
         if (this.planDirty) return;
       }
       this.busy = true;
       this.clearError();
+      this.clearSuccess();
       try {
         const result = await confirmSmartVideoVersion(this.project.id, this.currentVersion.id);
         this.project = result.project;
@@ -627,6 +649,12 @@ export const useSmartVideoStore = defineStore("smartVideo", {
         this.planDirty = false;
         this.versions = await listSmartVideoVersions(this.project.id);
         this.phase = "confirmed";
+        this.successMessage = "方案已确认，请下滑到「导出」估算积分并提交成片";
+        try {
+          await this.loadQuote();
+        } catch {
+          // confirm already succeeded
+        }
       } catch (error) {
         this.setError(error);
       } finally {
@@ -635,29 +663,46 @@ export const useSmartVideoStore = defineStore("smartVideo", {
     },
 
     async loadQuote() {
-      if (!this.project || !this.currentVersion) return;
-      this.busy = true;
+      if (!this.project || !this.currentVersion) {
+        this.errorMessage = "请先确认方案后再估算积分";
+        return;
+      }
+      const nestedBusy = this.busy;
+      if (!nestedBusy) this.busy = true;
       this.clearError();
-      this.phase = "quoting";
+      if (this.phase === "confirmed" || this.phase === "storyboard") {
+        this.phase = "quoting";
+      }
       try {
         this.quote = await estimateSmartVideoRender(this.project.id, this.currentVersion.id);
+        if (this.phase === "quoting") this.phase = "confirmed";
       } catch (error) {
         this.setError(error);
       } finally {
-        this.busy = false;
+        if (!nestedBusy) this.busy = false;
       }
     },
 
     async startExport() {
-      if (!this.project || !this.currentVersion) return;
+      if (!this.project || !this.currentVersion) {
+        this.errorMessage = "请先确认方案后再提交导出";
+        return;
+      }
+      if (this.project.confirmedVersionId !== this.currentVersion.id) {
+        this.errorMessage = "请先点击「确认方案」后再提交导出";
+        return;
+      }
       if (!this.quote) await this.loadQuote();
+      if (!this.quote) return;
       this.busy = true;
       this.clearError();
+      this.clearSuccess();
       this.phase = "rendering";
       try {
         this.renderTask = await createSmartVideoExport(this.project.id, {
           versionId: this.currentVersion.id
         });
+        this.successMessage = "导出任务已提交，正在渲染成片";
         this.schedulePoll(() => this.pollRenderTask(this.renderTask!.id), 1500);
       } catch (error) {
         this.setError(error);
