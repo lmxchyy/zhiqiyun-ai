@@ -140,8 +140,9 @@ func New(cfg config.Config, db *sql.DB, redisClient *redis.Client) (*Runtime, er
 	}
 	planConcurrency := intValue(cfg.SmartVideoPlanWorkerConcurrency, 1, 1, 8)
 	planWorkers := make([]*smartvideo.PlanWorker, 0, planConcurrency)
-	plannerClient := smartvideoplan.NewClient(chatprovider.NewOpenAICompatible(cfg), smartvideoplan.Options{
-		ModelKey: firstNonEmpty(os.Getenv("SMARTVIDEO_PLAN_MODEL"), "smart-video-standard"),
+	planModel := resolveSmartVideoPlanModel(cfg)
+	plannerClient := smartvideoplan.NewClient(chatprovider.NewOpenAICompatibleForModel(cfg, planModel), smartvideoplan.Options{
+		ModelKey: planModel,
 		Timeout:  durationValue(os.Getenv("SMARTVIDEO_PLAN_TIMEOUT"), 90*time.Second),
 	})
 	planner := smartvideoplan.DomainAdapter{Client: plannerClient}
@@ -366,6 +367,19 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveSmartVideoPlanModel maps the logical montage planner alias onto a real
+// upstream chat model that the configured OpenAI-compatible provider accepts.
+func resolveSmartVideoPlanModel(cfg config.Config) string {
+	requested := firstNonEmpty(os.Getenv("SMARTVIDEO_PLAN_MODEL"), "smart-video-standard")
+	real := firstNonEmpty(cfg.PPTTextModel, os.Getenv("MODEL_PROVIDER_TEXT_MODEL"), os.Getenv("PPT_TEXT_MODEL"), "gpt-4o-mini")
+	switch strings.ToLower(strings.TrimSpace(requested)) {
+	case "", "smart-video-standard", "smart_video_standard", "smart-video-plan":
+		return real
+	default:
+		return requested
+	}
 }
 
 func newPersonalPointsLifecycle(db *sql.DB) smartvideo.PointsLifecycle {

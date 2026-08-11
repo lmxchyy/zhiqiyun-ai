@@ -1,18 +1,45 @@
 <template>
   <section v-if="store.analysis" class="sv-analysis" aria-live="polite">
-    <strong>分析状态：{{ store.analysis.status }}</strong>
+    <strong>分析状态：{{ statusLabel }}</strong>
     <span>
-      就绪 {{ store.analysis.readyCount || 0 }} /
-      失败 {{ store.analysis.failedCount || 0 }} /
-      总计 {{ store.analysis.totalCount || store.assets.length }}
+      就绪 {{ succeededCount }} /
+      失败 {{ failedCount }} /
+      总计 {{ totalCount }}
     </span>
   </section>
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useSmartVideoStore } from "../../stores/smartVideo";
 
 const store = useSmartVideoStore();
+
+const succeededCount = computed(() => Number(store.analysis?.succeededCount || store.analysis?.readyCount || 0));
+const failedCount = computed(() => Number(store.analysis?.failedCount || 0));
+const totalCount = computed(() => Number(store.analysis?.totalAssets || store.analysis?.totalCount || store.assets.length || 0));
+
+const statusLabel = computed(() => {
+  const raw = String(store.analysis?.overallStatus || store.analysis?.status || "").toUpperCase();
+  switch (raw) {
+    case "SUCCEEDED":
+    case "READY":
+    case "COMPLETED":
+    case "MATERIAL_READY":
+      return "已完成";
+    case "RUNNING":
+    case "ANALYZING":
+      return "分析中";
+    case "FAILED":
+    case "PARTIAL_FAILED":
+      return "失败";
+    case "QUEUED":
+    case "PENDING":
+      return "排队中";
+    default:
+      return raw || "未知";
+  }
+});
 </script>
 
 <style scoped>

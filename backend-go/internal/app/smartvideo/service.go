@@ -48,7 +48,11 @@ func (s *Service) UpdateProject(ctx context.Context, access Access, id string, i
 	if err != nil {
 		return Project{}, err
 	}
-	if project.Status != ProjectStatusDraft && project.Status != ProjectStatusFailed {
+	switch project.Status {
+	case ProjectStatusDraft, ProjectStatusFailed, ProjectStatusAnalyzing, ProjectStatusMaterialReady,
+		ProjectStatusStoryboardReady, ProjectStatusPlanning:
+		// allow metadata edits while project is still editable
+	default:
 		return Project{}, ErrInvalidStateTransition
 	}
 	if input.Title != nil {

@@ -81,12 +81,20 @@ func (s *AnalysisService) RequestProjectAnalysis(ctx context.Context, access Acc
 			return AnalysisSummary{}, err
 		}
 	}
-	return s.GetProjectAnalysis(ctx, access, projectID)
+	summary, err := s.GetProjectAnalysis(ctx, access, projectID)
+	if err != nil {
+		return AnalysisSummary{}, err
+	}
+	if err := s.reconcileMaterialReady(ctx, access, projectID, summary); err != nil {
+		return AnalysisSummary{}, err
+	}
+	return summary, nil
 }
 
 func (s *AnalysisService) GetProjectAnalysis(ctx context.Context, access Access, projectID string) (AnalysisSummary, error) {
 	projectID = strings.TrimSpace(projectID)
-	if _, err := s.repository.GetProject(ctx, access, projectID); err != nil {
+	project, err := s.repository.GetProject(ctx, access, projectID)
+	if err != nil {
 		return AnalysisSummary{}, err
 	}
 	assets, err := s.repository.ListAssets(ctx, access, projectID)
@@ -121,7 +129,31 @@ func (s *AnalysisService) GetProjectAnalysis(ctx context.Context, access Access,
 		}
 	}
 	summary.OverallStatus = overallAnalysisStatus(summary)
+	_ = s.reconcileMaterialReady(ctx, access, project.ID, summary)
 	return summary, nil
+}
+
+func (s *AnalysisService) reconcileMaterialReady(ctx context.Context, access Access, projectID string, summary AnalysisSummary) error {
+	if summary.OverallStatus != AnalysisStatusSucceeded || summary.TotalAssets == 0 {
+		return nil
+	}
+	project, err := s.repository.GetProject(ctx, access, projectID)
+	if err != nil {
+		return err
+	}
+	switch project.Status {
+	case ProjectStatusAnalyzing, ProjectStatusDraft, ProjectStatusFailed:
+	default:
+		return nil
+	}
+	project.Status = ProjectStatusMaterialReady
+	project.ActiveAnalysisTaskID = ""
+	project.ErrorStage = ""
+	project.ErrorCode = ""
+	project.ErrorMessage = ""
+	project.UpdatedAt = time.Now().UTC()
+	_, err = s.repository.UpdateProject(ctx, project)
+	return err
 }
 
 func (s *AnalysisService) RetryAsset(ctx context.Context, access Access, projectID, assetID string) (AnalysisSummary, error) {

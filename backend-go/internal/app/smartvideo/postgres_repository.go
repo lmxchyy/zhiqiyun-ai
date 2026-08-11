@@ -82,10 +82,13 @@ func (r *PostgresRepository) ListProjects(ctx context.Context, access Access) ([
 
 func (r *PostgresRepository) UpdateProject(ctx context.Context, p Project) (Project, error) {
 	result, err := r.db.ExecContext(ctx, `update video_projects set title=$1,requirement=$2,status=$3,current_version=$4,
-		output_asset_id=nullif($5,''),active_render_task_id=nullif($6,''),error_code=nullif($7,''),error_message=nullif($8,''),updated_at=$9
-		where id=$10 and tenant_id=$11 and user_id=$12 and deleted_at is null`,
+		output_asset_id=nullif($5,''),active_render_task_id=nullif($6,''),
+		active_analysis_task_id=nullif($7,''),active_plan_task_id=nullif($8,''),
+		error_stage=nullif($9,''),error_code=nullif($10,''),error_message=nullif($11,''),updated_at=$12
+		where id=$13 and tenant_id=$14 and user_id=$15 and deleted_at is null`,
 		p.Title, p.Requirement, p.Status, p.CurrentVersion, p.OutputAssetID, p.ActiveRenderTaskID,
-		p.ErrorCode, p.ErrorMessage, p.UpdatedAt, p.ID, p.TenantID, p.UserID)
+		p.ActiveAnalysisTaskID, p.ActivePlanTaskID, p.ErrorStage, p.ErrorCode, p.ErrorMessage, p.UpdatedAt,
+		p.ID, p.TenantID, p.UserID)
 	if err == nil {
 		if affected, _ := result.RowsAffected(); affected == 0 {
 			err = ErrNotFound

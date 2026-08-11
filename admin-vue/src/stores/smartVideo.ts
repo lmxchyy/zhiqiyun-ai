@@ -505,10 +505,22 @@ export const useSmartVideoStore = defineStore("smartVideo", {
         await this.saveProjectMeta();
         if (!this.project) return;
       }
+      if (this.assets.length < 2) {
+        this.errorMessage = `生成方案至少需要 2 个已成功素材，当前仅有 ${this.assets.length} 个`;
+        return;
+      }
+      const succeeded = this.assets.filter((item) => String(item.analysisStatus || "").toUpperCase() === "SUCCEEDED").length;
+      if (succeeded < 2) {
+        this.errorMessage = "请先完成素材分析（至少 2 个就绪）后再生成方案";
+        return;
+      }
       this.busy = true;
       this.clearError();
       this.phase = "planning";
       try {
+        // Refresh analysis to reconcile MATERIAL_READY before planning.
+        await this.refreshAnalysis();
+        this.project = await getSmartVideoProject(this.project.id);
         this.planTask = await createSmartVideoPlanTask(this.project.id, {
           instruction: this.instruction.trim() || this.requirement.trim()
         });
