@@ -52,7 +52,8 @@ func (s *PlanService) RevisePlan(ctx context.Context, access Access, projectID, 
 	if err != nil {
 		return ProjectVersion{}, err
 	}
-	if err := requireOwnedPlan(input.Plan, assets); err != nil {
+	plan := input.Plan
+	if err := requireOwnedPlan(&plan, assets); err != nil {
 		return ProjectVersion{}, err
 	}
 	if err := ValidateChangeNote(input.ChangeNote); err != nil {
@@ -64,7 +65,7 @@ func (s *PlanService) RevisePlan(ctx context.Context, access Access, projectID, 
 		ID: newID("svv"), ProjectID: project.ID, TenantID: project.TenantID,
 		VersionNumber: project.CurrentVersion + 1, Source: VersionSourceUser,
 		ParentVersionID: parent.ID, PlanSchemaVersion: EditPlanSchemaVersion,
-		PlanSnapshot: input.Plan, ChangeNote: strings.TrimSpace(input.ChangeNote),
+		PlanSnapshot: plan, ChangeNote: strings.TrimSpace(input.ChangeNote),
 		Requirement: project.Requirement, Status: "GENERATED",
 		CreatedBy: access.UserID, CreatedAt: now,
 	}
@@ -111,9 +112,11 @@ func (s *PlanService) ConfirmPlan(ctx context.Context, access Access, projectID,
 	if err != nil {
 		return Project{}, ProjectVersion{}, err
 	}
-	if err := requireOwnedPlan(version.PlanSnapshot, assets); err != nil {
+	plan := version.PlanSnapshot
+	if err := requireOwnedPlan(&plan, assets); err != nil {
 		return Project{}, ProjectVersion{}, err
 	}
+	version.PlanSnapshot = plan
 	manifest, err := CompileRenderManifest(RenderManifestInput{Version: version, Assets: assets})
 	if err != nil {
 		return Project{}, ProjectVersion{}, err

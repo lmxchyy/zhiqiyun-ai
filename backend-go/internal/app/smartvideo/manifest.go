@@ -29,6 +29,7 @@ func CompileRenderManifest(input RenderManifestInput) (RenderManifestV1, error) 
 	for _, asset := range input.Assets {
 		owned[asset.ID] = asset
 	}
+	plan = NormalizeEditPlanV1(plan, owned)
 	if err := ValidateEditPlanV1(plan, owned); err != nil {
 		return RenderManifestV1{}, err
 	}
@@ -320,11 +321,16 @@ func ownedAssetMap(assets []ProjectAsset) map[string]ProjectAsset {
 	return out
 }
 
-func requireOwnedPlan(plan EditPlanV1, assets []ProjectAsset) error {
-	if err := ValidateEditPlanV1(plan, ownedAssetMap(assets)); err != nil {
+func requireOwnedPlan(plan *EditPlanV1, assets []ProjectAsset) error {
+	if plan == nil {
+		return &EditPlanValidationError{Code: "missing_plan", Message: "plan is required"}
+	}
+	owned := ownedAssetMap(assets)
+	*plan = NormalizeEditPlanV1(*plan, owned)
+	if err := ValidateEditPlanV1(*plan, owned); err != nil {
 		return err
 	}
-	if err := ValidateEditPlanContent(plan); err != nil {
+	if err := ValidateEditPlanContent(*plan); err != nil {
 		return err
 	}
 	return nil

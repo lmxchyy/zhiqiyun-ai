@@ -137,13 +137,12 @@ func TestValidateEditPlanV1_ImageWithSourceBounds(t *testing.T) {
 	plan.Scenes[1].Clips[0].AssetType = "image"
 	plan.Scenes[1].Clips[0].SourceInMs = 1000
 	plan.Scenes[1].Clips[0].SourceOutMs = 5000
-	err := ValidateEditPlanV1(plan, ownedAssets())
-	if err == nil {
-		t.Fatal("expected error for image with source bounds")
+	plan = NormalizeEditPlanV1(plan, ownedAssets())
+	if plan.Scenes[1].Clips[0].SourceInMs != 0 || plan.Scenes[1].Clips[0].SourceOutMs != 0 {
+		t.Fatalf("expected image source bounds normalized to 0, got in=%d out=%d", plan.Scenes[1].Clips[0].SourceInMs, plan.Scenes[1].Clips[0].SourceOutMs)
 	}
-	ve, ok := err.(*EditPlanValidationError)
-	if !ok || ve.Code != "image_source_bounds" {
-		t.Fatalf("expected image_source_bounds, got %v", err)
+	if err := ValidateEditPlanV1(plan, ownedAssets()); err != nil {
+		t.Fatalf("expected normalized image plan to pass validation, got %v", err)
 	}
 }
 

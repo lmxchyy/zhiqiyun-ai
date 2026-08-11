@@ -110,6 +110,7 @@ func (c *Client) Plan(ctx context.Context, request smartvideo.PlanRequest) (smar
 	if err != nil {
 		return smartvideo.EditPlanV1{}, usage, err
 	}
+	plan = smartvideo.NormalizeEditPlanV1(plan, owned)
 	if err := smartvideo.ValidateEditPlanV1(plan, owned); err != nil {
 		return smartvideo.EditPlanV1{}, usage, fmt.Errorf("%w: %v", ErrInvalidJSON, err)
 	}
@@ -121,10 +122,12 @@ func planSystemPrompt() string {
 你是 AI 自动混剪规划器。只能输出符合 EditPlanV1 JSON Schema 的 JSON 对象。
 约束：
 1. schemaVersion 必须为 1
-2. 只能引用用户提供的 assetId
-3. 目标时长必须在 15000..60000 毫秒
-4. 转场仅允许 cut/fade/dissolve/wipeleft/wiperight/slideleft/slideright
-5. 不要输出 Markdown，不要解释
+2. 只能引用用户提供的 assetId；assetType 必须与素材一致，且只能是小写 image 或 video
+3. image 素材的 sourceInMs 与 sourceOutMs 必须都为 0；只用 displayDurationMs 控制展示时长
+4. video 素材的 sourceOutMs 必须大于 sourceInMs，且不超过素材 durationMs
+5. 目标时长必须在 15000..60000 毫秒；各场景有效时长之和需匹配 target.durationMs
+6. 转场仅允许 cut/fade/dissolve/wipeleft/wiperight/slideleft/slideright
+7. 不要输出 Markdown，不要解释
 `)
 }
 

@@ -144,6 +144,33 @@ func (e *EditPlanValidationError) Error() string {
 	return fmt.Sprintf("invalid_plan: %s: %s", e.Code, e.Message)
 }
 
+// NormalizeEditPlanV1 repairs common planner mistakes so validation can accept
+// otherwise-usable plans (e.g. image clips with non-zero source bounds).
+func NormalizeEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset) EditPlanV1 {
+	for i := range plan.Scenes {
+		for j := range plan.Scenes[i].Clips {
+			clip := &plan.Scenes[i].Clips[j]
+			if asset, ok := ownedAssetIDs[clip.AssetID]; ok {
+				switch strings.ToUpper(strings.TrimSpace(asset.AssetType)) {
+				case AssetTypeImage:
+					clip.AssetType = "image"
+					clip.SourceInMs = 0
+					clip.SourceOutMs = 0
+					continue
+				case AssetTypeVideo:
+					clip.AssetType = "video"
+				}
+			}
+			if strings.EqualFold(strings.TrimSpace(clip.AssetType), "image") {
+				clip.AssetType = "image"
+				clip.SourceInMs = 0
+				clip.SourceOutMs = 0
+			}
+		}
+	}
+	return plan
+}
+
 func ValidateEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset) error {
 	if plan.SchemaVersion != EditPlanSchemaVersion {
 		return &EditPlanValidationError{Code: "invalid_schema_version", Message: fmt.Sprintf("expected %d got %d", EditPlanSchemaVersion, plan.SchemaVersion)}
