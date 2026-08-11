@@ -145,20 +145,117 @@ func (e *EditPlanValidationError) Error() string {
 }
 
 // NormalizeEditPlanV1 repairs common planner mistakes so validation can accept
-// otherwise-usable plans (e.g. image clips with non-zero source bounds).
+// otherwise-usable plans (image source bounds, duration drift, missing voice keys).
 func NormalizeEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset) EditPlanV1 {
+	if plan.SchemaVersion == 0 {
+		plan.SchemaVersion = EditPlanSchemaVersion
+	}
+	if strings.TrimSpace(plan.Language) == "" {
+		plan.Language = "zh-CN"
+	}
+	if plan.Target.AspectRatio == "" {
+		plan.Target.AspectRatio = TargetAspectRatio9x16
+	}
+	if plan.Target.Resolution == "" {
+		plan.Target.Resolution = TargetResolution1080p
+	}
+	if plan.Target.DurationMs < MinMontageDurationMs {
+		plan.Target.DurationMs = MinMontageDurationMs
+	}
+	if plan.Target.DurationMs > MaxMontageDurationMs {
+		plan.Target.DurationMs = MaxMontageDurationMs
+	}
+
+	if plan.Voice.Enabled {
+		if strings.TrimSpace(plan.Voice.ModelKey) == "" {
+			plan.Voice.ModelKey = "smart-video-speech"
+		}
+		if strings.TrimSpace(plan.Voice.VoiceKey) == "" {
+			plan.Voice.VoiceKey = "alloy"
+		}
+		if plan.Voice.Speed == 0 {
+			plan.Voice.Speed = 1
+		} else if plan.Voice.Speed < MinSpeed {
+			plan.Voice.Speed = MinSpeed
+		} else if plan.Voice.Speed > MaxSpeed {
+			plan.Voice.Speed = MaxSpeed
+		}
+	}
+	if plan.Subtitles.Enabled {
+		if !validSubtitlePresets[plan.Subtitles.Preset] {
+			plan.Subtitles.Preset = SubtitlePresetClean
+		}
+		if !validSubtitlePositions[plan.Subtitles.Position] {
+			plan.Subtitles.Position = SubtitlePositionBottom
+		}
+	}
+	if plan.Audio.SourceGain < 0 {
+		plan.Audio.SourceGain = 0
+	} else if plan.Audio.SourceGain > 1 {
+		plan.Audio.SourceGain = 1
+	}
+	if plan.Audio.VoiceGain < 0 {
+		plan.Audio.VoiceGain = 0
+	} else if plan.Audio.VoiceGain > 1 {
+		plan.Audio.VoiceGain = 1
+	} else if plan.Audio.VoiceGain == 0 && plan.Voice.Enabled {
+		plan.Audio.VoiceGain = 1
+	}
+
 	for i := range plan.Scenes {
-		for j := range plan.Scenes[i].Clips {
-			clip := &plan.Scenes[i].Clips[j]
+		scene := &plan.Scenes[i]
+		if scene.Index < 0 {
+			scene.Index = i
+		}
+		if strings.TrimSpace(scene.Title) == "" {
+			scene.Title = fmt.Sprintf("场景 %d", i+1)
+		}
+		if scene.Transition.Type == "" || !validTransitions[scene.Transition.Type] {
+			scene.Transition.Type = TransitionTypeCut
+			scene.Transition.DurationMs = 0
+		}
+		if scene.Transition.DurationMs < 0 {
+			scene.Transition.DurationMs = 0
+		}
+		if scene.Transition.DurationMs > MaxTransitionDurationMs {
+			scene.Transition.DurationMs = MaxTransitionDurationMs
+		}
+		if scene.Transition.Type == TransitionTypeCut {
+			scene.Transition.DurationMs = 0
+		}
+		for j := range scene.Clips {
+			clip := &scene.Clips[j]
 			if asset, ok := ownedAssetIDs[clip.AssetID]; ok {
 				switch strings.ToUpper(strings.TrimSpace(asset.AssetType)) {
 				case AssetTypeImage:
 					clip.AssetType = "image"
 					clip.SourceInMs = 0
 					clip.SourceOutMs = 0
-					continue
 				case AssetTypeVideo:
 					clip.AssetType = "video"
+					assetMaxDuration := int64(0)
+					if asset.NormalizedMetadata != nil && asset.NormalizedMetadata.Video != nil {
+						assetMaxDuration = asset.NormalizedMetadata.Video.DurationMS
+					}
+					if assetMaxDuration <= 0 {
+						assetMaxDuration = asset.DurationMS
+					}
+					if clip.SourceOutMs <= clip.SourceInMs {
+						clip.SourceInMs = 0
+						if assetMaxDuration > 0 {
+							clip.SourceOutMs = assetMaxDuration
+						} else if clip.DisplayDurationMs > 0 {
+							clip.SourceOutMs = clip.DisplayDurationMs
+						} else {
+							clip.SourceOutMs = 1000
+						}
+					}
+					if assetMaxDuration > 0 && clip.SourceOutMs > assetMaxDuration {
+						clip.SourceOutMs = assetMaxDuration
+						if clip.SourceInMs >= clip.SourceOutMs {
+							clip.SourceInMs = 0
+						}
+					}
 				}
 			}
 			if strings.EqualFold(strings.TrimSpace(clip.AssetType), "image") {
@@ -166,9 +263,61 @@ func NormalizeEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset)
 				clip.SourceInMs = 0
 				clip.SourceOutMs = 0
 			}
+			if !validFitModes[clip.FitMode] {
+				clip.FitMode = FitModeCover
+			}
+			if !validMotions[clip.Motion] {
+				clip.Motion = MotionStatic
+			}
+			if clip.OriginalAudioGain < 0 {
+				clip.OriginalAudioGain = 0
+			} else if clip.OriginalAudioGain > 1 {
+				clip.OriginalAudioGain = 1
+			}
+			if clip.DisplayDurationMs <= 0 && scene.DurationMs > 0 {
+				clip.DisplayDurationMs = scene.DurationMs
+			}
 		}
 	}
+
+	reconcileSceneDurations(&plan)
 	return plan
+}
+
+func planEffectiveDurationMs(scenes []SceneV1) int64 {
+	var total int64
+	for i, scene := range scenes {
+		effective := scene.DurationMs
+		if i < len(scenes)-1 {
+			effective -= scene.Transition.DurationMs
+		}
+		total += effective
+	}
+	return total
+}
+
+func reconcileSceneDurations(plan *EditPlanV1) {
+	if plan == nil || len(plan.Scenes) == 0 || plan.Target.DurationMs <= 0 {
+		return
+	}
+	diff := plan.Target.DurationMs - planEffectiveDurationMs(plan.Scenes)
+	if diff == 0 {
+		return
+	}
+	last := &plan.Scenes[len(plan.Scenes)-1]
+	last.DurationMs += diff
+	if last.DurationMs < 1 {
+		last.DurationMs = 1
+	}
+	if len(last.Clips) == 1 {
+		last.Clips[0].DisplayDurationMs = last.DurationMs
+	} else if len(last.Clips) > 0 {
+		clip := &last.Clips[len(last.Clips)-1]
+		clip.DisplayDurationMs += diff
+		if clip.DisplayDurationMs < 1 {
+			clip.DisplayDurationMs = 1
+		}
+	}
 }
 
 func ValidateEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset) error {

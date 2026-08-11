@@ -243,6 +243,34 @@ func TestValidateEditPlanV1_DurationMismatch(t *testing.T) {
 	}
 }
 
+func TestNormalizeEditPlanV1_DurationMismatchFixes(t *testing.T) {
+	plan := makeValidEditPlanV1()
+	plan.Target.DurationMs = 30000
+	// Simulate planner drift: scenes total 27500 against 30000 target.
+	plan.Scenes[len(plan.Scenes)-1].DurationMs -= 2500
+	plan = NormalizeEditPlanV1(plan, ownedAssets())
+	if got := planEffectiveDurationMs(plan.Scenes); got != 30000 {
+		t.Fatalf("effective duration = %d, want 30000", got)
+	}
+	if err := ValidateEditPlanV1(plan, ownedAssets()); err != nil {
+		t.Fatalf("expected normalized duration plan to pass, got %v", err)
+	}
+}
+
+func TestNormalizeEditPlanV1_FillsVoiceDefaults(t *testing.T) {
+	plan := makeValidEditPlanV1()
+	plan.Voice.ModelKey = ""
+	plan.Voice.VoiceKey = ""
+	plan.Voice.Speed = 0
+	plan = NormalizeEditPlanV1(plan, ownedAssets())
+	if plan.Voice.ModelKey == "" || plan.Voice.VoiceKey == "" || plan.Voice.Speed != 1 {
+		t.Fatalf("voice defaults not applied: %+v", plan.Voice)
+	}
+	if err := ValidateEditPlanV1(plan, ownedAssets()); err != nil {
+		t.Fatalf("expected voice defaults to pass validation, got %v", err)
+	}
+}
+
 func TestValidateEditPlanV1_InvalidVoiceSpeed(t *testing.T) {
 	plan := makeValidEditPlanV1()
 	plan.Voice.Speed = 2.0
