@@ -2464,7 +2464,9 @@ async function submitWebVideoGeneration() {
       videoCapabilities: selectedVideoCapabilities.value,
       clientRequestId,
       parameters: {
-        generate_audio: true,
+        ...(selectedVideoCapabilities.value.supportedParameters?.includes("generate_audio")
+          ? { generate_audio: true }
+          : {}),
       },
     });
     videoTask.value = task;

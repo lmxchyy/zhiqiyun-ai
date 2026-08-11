@@ -100,7 +100,7 @@ func TestVideoCapabilitiesExposeProviderSupportedParameters(t *testing.T) {
 	}
 }
 
-func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
+func TestVideoGenerationStripsProviderUnsupportedParameters(t *testing.T) {
 	tests := []struct {
 		name  string
 		key   string
@@ -113,9 +113,15 @@ func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
-			err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
-			requireVideoValidationCode(t, err, "VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED")
+			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{
+				"duration": float64(5), "resolution": "720p", "aspect_ratio": "16:9", tt.key: tt.value,
+			}}
+			if err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities())); err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+			if _, exists := request.Params[tt.key]; exists {
+				t.Fatalf("unsupported parameter %s was not stripped: %+v", tt.key, request.Params)
+			}
 		})
 	}
 }
@@ -315,6 +321,23 @@ func TestGrokImaginePreviewLegacyDataRemainsSingleImageOnly(t *testing.T) {
 	got := resolveVideoModelCapabilities(model, adminAIParameterSchemaJSON{})
 	if got.SupportsTextToVideo || !got.SupportsImageToVideo || got.MaxReferenceImages != 1 {
 		t.Fatalf("preview capabilities changed: %+v", got)
+	}
+	wantDurations := []int{10, 15}
+	if len(got.SupportedDurations) != len(wantDurations) {
+		t.Fatalf("supported durations = %#v, want %#v", got.SupportedDurations, wantDurations)
+	}
+	for index := range wantDurations {
+		if got.SupportedDurations[index] != wantDurations[index] {
+			t.Fatalf("supported durations = %#v, want %#v", got.SupportedDurations, wantDurations)
+		}
+	}
+	wantResolutions := []string{"480p", "720p"}
+	if !equalVideoStringSlices(got.SupportedResolutions, wantResolutions) {
+		t.Fatalf("supported resolutions = %#v, want %#v", got.SupportedResolutions, wantResolutions)
+	}
+	wantRatios := []string{"16:9", "9:16"}
+	if !equalVideoStringSlices(got.SupportedAspectRatios, wantRatios) {
+		t.Fatalf("supported ratios = %#v, want %#v", got.SupportedAspectRatios, wantRatios)
 	}
 }
 

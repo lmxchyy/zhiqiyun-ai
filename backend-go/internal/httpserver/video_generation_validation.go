@@ -49,12 +49,7 @@ func legacyVideoModelCapabilities(model adminAIModel) adminVideoModelCapabilitie
 	case "grok-imagine-1.5-video":
 		return grokImagine15VideoCapabilities()
 	case "grok-imagine-video-1.5-preview":
-		return normalizeVideoModelCapabilities(adminVideoModelCapabilities{
-			SupportsImageToVideo: true,
-			SupportsFirstFrame:   true,
-			MaxReferenceImages:   1,
-			SupportedParameters:  append([]string(nil), videoCoreParameters...),
-		})
+		return grokImagine15VideoPreviewCapabilities()
 	}
 	capabilities := safeVideoModelCapabilities()
 	hasExplicitVideoCode := false
@@ -94,6 +89,24 @@ func grokImagine15VideoCapabilities() adminVideoModelCapabilities {
 
 func grokImagine15VideoCapabilitiesPtr() *adminVideoModelCapabilities {
 	capabilities := grokImagine15VideoCapabilities()
+	return &capabilities
+}
+
+func grokImagine15VideoPreviewCapabilities() adminVideoModelCapabilities {
+	return adminVideoModelCapabilities{
+		SupportsTextToVideo:   false,
+		SupportsImageToVideo:  true,
+		SupportsFirstFrame:    true,
+		MaxReferenceImages:    1,
+		SupportedDurations:    []int{10, 15},
+		SupportedResolutions:  []string{"480p", "720p"},
+		SupportedAspectRatios: []string{"16:9", "9:16"},
+		SupportedParameters:   append([]string(nil), videoCoreParameters...),
+	}
+}
+
+func grokImagine15VideoPreviewCapabilitiesPtr() *adminVideoModelCapabilities {
+	capabilities := grokImagine15VideoPreviewCapabilities()
 	return &capabilities
 }
 
@@ -443,14 +456,16 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 	if err := validateVideoParameterOption(req.Params, "aspect_ratio", capabilities.SupportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "所选模型不支持该视频比例"); err != nil {
 		return err
 	}
+	// Drop optional provider params the selected upstream protocol cannot forward.
+	// Clients may still send stale toggles (for example generate_audio) after a
+	// channel/protocol change; rejecting the whole task after the user clicked
+	// generate is worse than silently ignoring unsupported extras.
 	for _, key := range videoOptionalProviderParameters {
 		if _, exists := req.Params[key]; exists && !videoParameterSupported(capabilities.SupportedParameters, key) {
-			return newVideoGenerationValidationError(
-				"VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED",
-				fmt.Sprintf("当前视频 Provider 不支持参数 %s", key),
-			)
+			delete(req.Params, key)
 		}
 	}
+	delete(req.Params, "generateAudio")
 	return nil
 }
 

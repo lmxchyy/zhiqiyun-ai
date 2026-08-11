@@ -609,6 +609,11 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if ok {
 		service = routeService
+	} else if memberService, ok, err := a.generationServiceForMemberLevel(user, req.Model); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	} else if ok {
+		service = memberService
 	} else if providerID := selectedGenerationProvider(req.Params); providerID != "" {
 		dynamicService, err := a.generationServiceForProvider(providerID, req)
 		if err != nil {
@@ -1004,6 +1009,9 @@ func compactGenerationErrorMessage(message string) string {
 	if strings.Contains(lower, "create_video_generation_task returned empty task id") && strings.Contains(lower, "seedance") {
 		return "移动云 Seedance 创建任务失败，请检查模型资费包、API Key 和模型权限"
 	}
+	if localized := localizeGenerationErrorMessage(message, lower); localized != "" {
+		return localized
+	}
 	message = strings.Join(strings.Fields(message), " ")
 	const maxMessageLen = 240
 	if len([]rune(message)) <= maxMessageLen {
@@ -1011,6 +1019,79 @@ func compactGenerationErrorMessage(message string) string {
 	}
 	runes := []rune(message)
 	return strings.TrimSpace(string(runes[:maxMessageLen])) + "..."
+}
+
+func localizeGenerationErrorMessage(message, lower string) string {
+	switch {
+	case strings.Contains(lower, "price not configured"), strings.Contains(lower, "价格未配置"):
+		return "上游 NewAPI 未配置该模型价格。请在 NewAPI「系统设置 → 分组与模型定价」为 grok-imagine-video-1.5-preview 设置按次价格后重试"
+	case strings.Contains(lower, "input_reference") && strings.Contains(lower, "unmarshal"):
+		return "视频参考图参数格式错误，请重新上传首帧图后重试"
+	case strings.Contains(lower, "cannot unmarshal") && strings.Contains(lower, "seconds"):
+		return "视频时长参数格式错误，请重新选择时长后重试"
+	case strings.Contains(lower, "cannot unmarshal"):
+		return "上游视频接口返回格式异常，请稍后重试或切换模型"
+	case strings.Contains(lower, "video provider does not support parameter"):
+		return "当前视频通道不支持该参数，请调整参数后重试"
+	case strings.Contains(lower, "video provider requires base url and api key"):
+		return "视频上游未配置，请检查通道地址和 API Key"
+	case strings.Contains(lower, "video model is required"):
+		return "请选择视频模型"
+	case strings.Contains(lower, "does not support model"):
+		return "当前视频通道不支持所选模型，请切换模型或通道"
+	case strings.Contains(lower, "requires exactly one reference image"):
+		return "该视频模型需要且仅支持 1 张参考图"
+	case strings.Contains(lower, "supports exactly one reference image"):
+		return "该视频模型仅支持 1 张参考图"
+	case strings.Contains(lower, "supports at most seven reference images"):
+		return "该视频模型最多支持 7 张参考图"
+	case strings.Contains(lower, "video provider returned no video"), strings.Contains(lower, "no result_url"), strings.Contains(lower, "still processing"):
+		return "视频仍在生成中或上游未返回结果，请稍后在历史中查看"
+	case strings.Contains(lower, "video generation failed"):
+		return "视频生成失败，请稍后重试"
+	case strings.Contains(lower, "context deadline exceeded"), strings.Contains(lower, "client.timeout"), strings.Contains(lower, "timeout awaiting response"):
+		return "生成超时，请稍后重试"
+	case strings.Contains(lower, "http 401"), strings.Contains(lower, "invalid api key"), strings.Contains(lower, "incorrect api key"):
+		return "上游 API Key 无效，请检查通道密钥配置"
+	case strings.Contains(lower, "http 404"):
+		return "上游接口不存在，请检查视频通道地址和路径"
+	case strings.Contains(lower, "only http/https urls"), strings.Contains(lower, "invalid format for image_urls"), strings.Contains(lower, "asset://"):
+		return "参考图地址不被上游接受，请重新上传图片后重试"
+	case strings.Contains(lower, "http 400"):
+		return "视频请求参数不被上游接受，请检查提示词、参考图和模型参数"
+	case strings.Contains(lower, "dial tcp"), strings.Contains(lower, "i/o timeout"):
+		return "无法连接视频上游服务，请检查网络或通道地址"
+	case strings.Contains(lower, "storage_master_key"):
+		return "对象存储密钥未配置，请检查 STORAGE_MASTER_KEY 后重试"
+	case strings.Contains(lower, "resolve generated artifact storage"):
+		return "生成结果入库失败，请检查对象存储配置后重试"
+	case strings.Contains(lower, "unrecognized message"), strings.Contains(lower, "upstream returned unrecognized"):
+		return "上游视频通道返回无法识别的结果，请稍后重试或检查 Seedance 通道配置"
+	}
+	if looksLikeEnglishTechnicalError(message) {
+		return "生成失败，请稍后重试。若持续失败请检查模型、参数或上游通道配置"
+	}
+	return ""
+}
+
+func looksLikeEnglishTechnicalError(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return false
+	}
+	for _, r := range trimmed {
+		if r >= 0x4e00 && r <= 0x9fff {
+			return false
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	markers := []string{"json:", "http", "error", "failed", "unmarshal", "invalid", "provider", "timeout", "denied", "unsupported"}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectedGenerationProvider(params map[string]any) string {
@@ -1059,6 +1140,51 @@ func (a api) generationServiceForUserRoute(user adminUser, model string) (genera
 	}
 	service, err := a.generationServiceForChannelWithRouteKey(data, channel, route)
 	return service, err == nil, err
+}
+
+func (a api) generationServiceForMemberLevel(user adminUser, model string) (generation.Service, bool, error) {
+	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") || strings.EqualFold(strings.TrimSpace(model), "mock-video") {
+		return generation.Service{}, false, nil
+	}
+	data, err := a.onlineGenerationSettings()
+	if err != nil {
+		return generation.Service{}, false, err
+	}
+	channel, ok := findAPIChannelByID(data.APIChannels, "channel_newapi_gateway")
+	if !ok || !apiChannelUsableForGeneration(channel) {
+		return generation.Service{}, false, nil
+	}
+	route := adminUserModelRoute{
+		ID:        "route_newapi_gateway",
+		Provider:  "newapi",
+		ChannelID: channel.ID,
+		GroupName: memberLevelGroup(user.MemberLevel),
+		Models:    channel.Models,
+		APIKeyID:  "key_1786355644836388321",
+		Status:    "ACTIVE",
+	}
+	service, err := a.generationServiceForChannelWithRouteKey(data, channel, route)
+	return service, err == nil, err
+}
+
+func memberLevelGroup(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "svip":
+		return "svip"
+	case "vip":
+		return "vip"
+	default:
+		return "default"
+	}
+}
+
+func findAPIChannelByID(channels []adminAPIChannel, id string) (adminAPIChannel, bool) {
+	for _, channel := range channels {
+		if channel.ID == id && apiChannelUsableForGeneration(channel) {
+			return channel, true
+		}
+	}
+	return adminAPIChannel{}, false
 }
 
 func channelForNewAPIRoute(data adminPlatformData, route adminUserModelRoute) (adminAPIChannel, bool) {

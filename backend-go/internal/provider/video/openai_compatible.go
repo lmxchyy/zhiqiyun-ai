@@ -3,11 +3,15 @@ package video
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"os/exec"
@@ -112,11 +116,25 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	if p.shouldUseSeedanceBridge(model) {
 		return p.createWithSeedanceBridge(ctx, model, req)
 	}
+	if isGrokImagine15VideoModel(model) && len(imageURLs) > 0 && hasDataImageURL(imageURLs) {
+		return p.createGrokImagineMultipart(ctx, model, req, imageURLs)
+	}
 	body := videoRequestBodyForEndpoint(model, req, p.endpoint, imageURLs)
 	if len(imageURLs) > 0 && !useSeedanceContentTaskProtocol(p.endpoint) {
-		body["image_urls"] = imageURLs
-		if len(imageURLs) == 1 && !isGrokImagine15VideoModel(model) {
-			body["input_reference"] = map[string]any{"image_url": imageURLs[0]}
+		if isGrokImagine15VideoModel(model) {
+			// Grok Imagine / NewAPI reject data: URLs and treat `images` like Sora file ids.
+			// Keep only public http(s) image_urls for the JSON contract.
+			body["image_urls"] = imageURLs
+		} else {
+			body["images"] = imageURLs
+			body["image_urls"] = imageURLs
+			if len(imageURLs) == 1 {
+				// NewAPI / OpenAI-compatible video gateways decode input_reference as a
+				// plain URL/file-id string. Sending {"image_url":"..."} triggers:
+				// cannot unmarshal object into Go struct field .Alias.input_reference of type string
+				body["input_reference"] = imageURLs[0]
+				body["image"] = imageURLs[0]
+			}
 		}
 	}
 	payload, err := json.Marshal(body)
@@ -129,6 +147,59 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
+	return p.finishVideoCreate(ctx, httpReq, model, req)
+}
+
+func (p OpenAICompatible) createGrokImagineMultipart(ctx context.Context, model string, req generation.CreateRequest, imageURLs []string) (any, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fields := map[string]string{
+		"model":         model,
+		"prompt":        req.Prompt,
+		"duration":      strconv.Itoa(videoSeconds(req.Params)),
+		"size":          grokImagineVideoSize(req.Params),
+		"quality":       videoResolution(req.Params),
+		"aspect_ratio":  videoAspectRatio(req.Params),
+		"resolution":    videoResolution(req.Params),
+	}
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			return nil, err
+		}
+	}
+	for index, imageURL := range imageURLs {
+		raw, contentType, extension, err := decodeVideoReferenceImage(imageURL)
+		if err != nil {
+			return nil, fmt.Errorf("decode grok reference image %d: %w", index+1, err)
+		}
+		fieldName := "images"
+		if len(imageURLs) == 1 {
+			fieldName = "input_reference"
+		}
+		header := make(textproto.MIMEHeader)
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, fmt.Sprintf("reference-%d.%s", index+1, extension)))
+		header.Set("Content-Type", contentType)
+		part, err := writer.CreatePart(header)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := part.Write(raw); err != nil {
+			return nil, err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, videoProviderEndpointForModel(p.baseURL, p.endpoint, model), &body)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+	return p.finishVideoCreate(ctx, httpReq, model, req)
+}
+
+func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.Request, model string, req generation.CreateRequest) (any, error) {
 	res, err := p.client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -143,25 +214,30 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 		return nil, fmt.Errorf("decode video provider response: %w", err)
 	}
 	decoded = p.pollVideoResult(ctx, decoded, model)
-	videoURL := firstStringByKeys(decoded, "videoUrl", "video_url", "url", "output_url")
-	if videoURL == "" {
-		videoURL = firstStringByKeys(decoded, "result_url")
-	}
+	videoURL := extractPlayableVideoURL(decoded)
 	thumbnailURL := firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster", "image_url")
 	status := normalizeVideoStatus(firstNonEmptyString(firstStringByKeys(decoded, "status", "state"), "SUCCEEDED"))
-	if status == "FAILED" {
-		reason := firstStringByKeys(decoded, "fail_reason", "error", "message")
-		if reason == "" {
-			reason = "video generation failed"
+	if status == "FAILED" || videoURL == "" {
+		reason := firstNonEmptyString(
+			firstStringByKeys(decoded, "fail_reason", "error", "message"),
+			firstStringByKeys(decoded, "url"),
+		)
+		if status == "FAILED" || looksLikeVideoProviderErrorText(reason) {
+			if reason == "" {
+				reason = "video generation failed"
+			}
+			return nil, errors.New(reason)
 		}
-		return nil, errors.New(reason)
 	}
 	if videoURL == "" && strings.Contains(status, "PROCESS") {
 		status = "PROCESSING"
 	}
 	taskID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), "video-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 	if videoURL == "" && strings.EqualFold(status, "SUCCEEDED") && taskID != "" {
-		videoURL = videoContentEndpointForModel(p.baseURL, p.endpoint, taskID, model)
+		candidate := videoContentEndpointForModel(p.baseURL, p.endpoint, taskID, model)
+		if isPlayableVideoURL(candidate) {
+			videoURL = candidate
+		}
 	}
 	if videoURL == "" {
 		return nil, fmt.Errorf("video task %s is still processing; no result_url returned yet", taskID)
@@ -183,21 +259,36 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 
 func videoRequestBody(model string, req generation.CreateRequest) map[string]any {
 	if isGrokImagine15VideoModel(model) {
+		ratio := videoAspectRatio(req.Params)
+		resolution := videoResolution(req.Params)
 		return map[string]any{
-			"model":    model,
-			"prompt":   req.Prompt,
-			"duration": videoSeconds(req.Params),
-			"size":     videoAspectRatio(req.Params),
-			"quality":  videoResolution(req.Params),
+			"model":        model,
+			"prompt":       req.Prompt,
+			"duration":     videoSeconds(req.Params),
+			"size":         grokImagineVideoSize(req.Params),
+			"quality":      resolution,
+			"aspect_ratio": ratio,
+			"resolution":   resolution,
 		}
 	}
 	if isDoubaoSeedance2Model(model) {
+		seconds := videoSeconds(req.Params)
+		ratio := videoAspectRatio(req.Params)
+		resolution := videoResolution(req.Params)
 		return map[string]any{
 			"model":      model,
 			"prompt":     req.Prompt,
-			"duration":   videoSeconds(req.Params),
-			"size":       videoAspectRatio(req.Params),
-			"resolution": videoResolution(req.Params),
+			"duration":   seconds,
+			"seconds":    strconv.Itoa(seconds),
+			"size":       ratio,
+			"resolution": resolution,
+			// NewAPI Doubao adaptor reads ratio/resolution from metadata and duration from seconds.
+			"metadata": map[string]any{
+				"ratio":       ratio,
+				"resolution":  resolution,
+				"watermark":   false,
+				"duration":    seconds,
+			},
 		}
 	}
 	return map[string]any{
@@ -276,7 +367,12 @@ func isGrokVideo15Model(model string) bool {
 func isGrokImagine15VideoModel(model string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	normalized = strings.ReplaceAll(normalized, "_", "-")
-	return normalized == "grok-imagine-1.5-video"
+	switch normalized {
+	case "grok-imagine-1.5-video", "grok-imagine-video-1.5-preview":
+		return true
+	default:
+		return false
+	}
 }
 
 func isDoubaoSeedance2Model(model string) bool {
@@ -313,13 +409,16 @@ func containsVideoParameter(parameters []string, key string) bool {
 }
 
 func validateVideoProviderParameters(params map[string]any, supported []string) error {
+	if params == nil {
+		return nil
+	}
 	for _, key := range videoOptionalProviderParameterKeys {
 		if _, exists := params[key]; exists && !containsVideoParameter(supported, key) {
-			return fmt.Errorf("video provider does not support parameter %s", key)
+			delete(params, key)
 		}
 	}
 	if _, exists := params["generateAudio"]; exists && !containsVideoParameter(supported, "generate_audio") {
-		return errors.New("video provider does not support parameter generate_audio")
+		delete(params, "generateAudio")
 	}
 	return nil
 }
@@ -392,8 +491,9 @@ func (p OpenAICompatible) createWithSeedanceBridge(ctx context.Context, model st
 		return nil, errors.New(reason)
 	}
 	videoURL := firstStringByKeys(result, "videoUrl", "video_url", "url", "output_url")
-	if videoURL == "" {
-		return nil, errors.New("CMECloud Seedance bridge did not return a playable video URL")
+	if !isPlayableVideoURL(videoURL) {
+		reason := firstNonEmptyString(firstStringByKeys(result, "error", "message", "errorMessage"), videoURL, "CMECloud Seedance bridge did not return a playable video URL")
+		return nil, errors.New(reason)
 	}
 	taskID := firstNonEmptyString(firstStringByKeys(result, "providerTaskId", "taskId", "task_id", "id"), "video-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 	actualModel := firstStringByKeys(result, "actualModel", "providerModel")
@@ -494,6 +594,11 @@ func videoProviderEndpoint(baseURL string, configuredPath string) string {
 func videoProviderEndpointForModel(baseURL string, configuredPath string, model string) string {
 	base := strings.TrimRight(baseURL, "/")
 	path := strings.TrimSpace(configuredPath)
+	// Grok Imagine uses OpenAI Videos API (/v1/videos). Ignore channel defaults that
+	// point Seedance/Sora traffic at /v1/video/generations.
+	if isGrokImagine15VideoModel(model) {
+		path = ""
+	}
 	defaultRoute := "video/generations"
 	if isGrokImagine15VideoModel(model) {
 		defaultRoute = "videos"
@@ -543,7 +648,7 @@ func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[strin
 		return initial
 	}
 	status := normalizeVideoStatus(firstStringByKeys(initial, "status", "state"))
-	if firstStringByKeys(initial, "result_url", "videoUrl", "video_url", "url", "output_url") != "" || status == "FAILED" {
+	if extractPlayableVideoURL(initial) != "" || status == "FAILED" || looksLikeVideoProviderErrorText(firstStringByKeys(initial, "url", "fail_reason", "error", "message")) {
 		return initial
 	}
 	deadline := time.Now().Add(5 * time.Minute)
@@ -559,11 +664,172 @@ func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[strin
 		}
 		initial = mergeMaps(initial, polled)
 		status = normalizeVideoStatus(firstStringByKeys(initial, "status", "state"))
-		if firstStringByKeys(initial, "result_url", "videoUrl", "video_url", "url", "output_url") != "" || status == "FAILED" {
+		if extractPlayableVideoURL(initial) != "" || status == "FAILED" || looksLikeVideoProviderErrorText(firstStringByKeys(initial, "url", "fail_reason", "error", "message")) {
 			return initial
 		}
 	}
 	return initial
+}
+
+func extractPlayableVideoURL(decoded map[string]any) string {
+	if decoded == nil {
+		return ""
+	}
+	if content, ok := decoded["content"].(map[string]any); ok {
+		if url := firstTextValue(content["video_url"]); isPlayableVideoURL(url) {
+			return url
+		}
+		if url := firstTextValue(content["url"]); isPlayableVideoURL(url) {
+			return url
+		}
+	}
+	if metadata, ok := decoded["metadata"].(map[string]any); ok {
+		if url := firstTextValue(metadata["url"]); isPlayableVideoURL(url) {
+			return url
+		}
+		if url := firstTextValue(metadata["video_url"]); isPlayableVideoURL(url) {
+			return url
+		}
+	}
+	if data, ok := decoded["data"].(map[string]any); ok {
+		if url := extractPlayableVideoURL(data); url != "" {
+			return url
+		}
+	}
+	for _, key := range []string{"videoUrl", "video_url", "output_url", "result_url", "url"} {
+		if url := firstStringByKeys(decoded, key); isPlayableVideoURL(url) {
+			return url
+		}
+	}
+	return ""
+}
+
+func isPlayableVideoURL(value string) bool {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return false
+	}
+	lower := strings.ToLower(text)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return true
+	}
+	return strings.HasPrefix(lower, "/api/v1/generated-media/")
+}
+
+func hasDataImageURL(imageURLs []string) bool {
+	for _, imageURL := range imageURLs {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(imageURL)), "data:image/") {
+			return true
+		}
+	}
+	return false
+}
+
+func decodeVideoReferenceImage(value string) ([]byte, string, string, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return nil, "", "", errors.New("empty reference image")
+	}
+	if strings.HasPrefix(strings.ToLower(text), "data:") {
+		comma := strings.IndexByte(text, ',')
+		if comma <= len("data:") || !strings.Contains(strings.ToLower(text[:comma]), ";base64") {
+			return nil, "", "", errors.New("reference data URL must be base64 encoded")
+		}
+		raw, err := base64.StdEncoding.DecodeString(text[comma+1:])
+		if err != nil {
+			return nil, "", "", fmt.Errorf("decode reference data URL: %w", err)
+		}
+		if len(raw) == 0 {
+			return nil, "", "", errors.New("reference data URL is empty")
+		}
+		declared := strings.TrimSpace(strings.Split(strings.TrimPrefix(text[:comma], "data:"), ";")[0])
+		contentType := strings.ToLower(declared)
+		if contentType == "" {
+			contentType = http.DetectContentType(raw)
+		}
+		if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+			contentType = parsed
+		}
+		extension := "jpg"
+		switch contentType {
+		case "image/png":
+			extension = "png"
+		case "image/webp":
+			extension = "webp"
+		case "image/gif":
+			extension = "gif"
+		case "image/jpeg", "image/jpg":
+			extension = "jpg"
+			contentType = "image/jpeg"
+		default:
+			if !strings.HasPrefix(contentType, "image/") {
+				return nil, "", "", fmt.Errorf("unsupported reference image type %q", contentType)
+			}
+		}
+		return raw, contentType, extension, nil
+	}
+	if !strings.HasPrefix(strings.ToLower(text), "http://") && !strings.HasPrefix(strings.ToLower(text), "https://") {
+		return nil, "", "", fmt.Errorf("unsupported reference image URL %q", text)
+	}
+	res, err := http.Get(text)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, "", "", fmt.Errorf("download reference image returned HTTP %d", res.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 12<<20))
+	if err != nil {
+		return nil, "", "", err
+	}
+	contentType := strings.ToLower(strings.TrimSpace(res.Header.Get("Content-Type")))
+	if parsed, _, err := mime.ParseMediaType(contentType); err == nil {
+		contentType = parsed
+	}
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = http.DetectContentType(raw)
+	}
+	extension := "jpg"
+	switch contentType {
+	case "image/png":
+		extension = "png"
+	case "image/webp":
+		extension = "webp"
+	case "image/gif":
+		extension = "gif"
+	default:
+		contentType = "image/jpeg"
+		extension = "jpg"
+	}
+	return raw, contentType, extension, nil
+}
+
+func looksLikeVideoProviderErrorText(value string) bool {
+	text := strings.TrimSpace(value)
+	if text == "" || isPlayableVideoURL(text) {
+		return false
+	}
+	lower := strings.ToLower(text)
+	markers := []string{
+		"unrecognized message",
+		"upstream returned",
+		"failed",
+		"error",
+		"invalid",
+		"denied",
+		"timeout",
+		"not found",
+		"无法",
+		"失败",
+		"错误",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model string) (map[string]any, error) {
@@ -663,6 +929,58 @@ func videoAspectRatio(params map[string]any) string {
 		}
 	}
 	return "16:9"
+}
+
+// grokImagineVideoSize maps ratio+resolution to OpenAI-compatible WxH size.
+// NewAPI /v1/videos treats `size` as pixels (e.g. 1280x720). Sending "16:9"
+// is ignored, so image-to-video falls back to the reference image orientation.
+func grokImagineVideoSize(params map[string]any) string {
+	return grokImagineVideoSizeFor(videoAspectRatio(params), videoResolution(params))
+}
+
+func grokImagineVideoSizeFor(aspectRatio, resolution string) string {
+	ratio := strings.TrimSpace(aspectRatio)
+	switch strings.ToLower(strings.TrimSpace(resolution)) {
+	case "1080p", "1080", "4k", "2160p", "2160":
+		switch ratio {
+		case "9:16":
+			return "1080x1920"
+		case "1:1":
+			return "1080x1080"
+		case "3:2":
+			return "1620x1080"
+		case "2:3":
+			return "1080x1620"
+		default:
+			return "1920x1080"
+		}
+	case "480p", "480":
+		switch ratio {
+		case "9:16":
+			return "480x854"
+		case "1:1":
+			return "544x544"
+		case "3:2":
+			return "720x480"
+		case "2:3":
+			return "480x720"
+		default:
+			return "854x480"
+		}
+	default: // 720p
+		switch ratio {
+		case "9:16":
+			return "720x1280"
+		case "1:1":
+			return "960x960"
+		case "3:2":
+			return "1080x720"
+		case "2:3":
+			return "720x1080"
+		default:
+			return "1280x720"
+		}
+	}
 }
 
 func videoResolution(params map[string]any) string {

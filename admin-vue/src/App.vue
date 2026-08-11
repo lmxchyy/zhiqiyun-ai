@@ -2923,7 +2923,7 @@ import {
   videoModelId,
   videoModelMaxReferenceImages,
   videoModelOptions,
-  videoModelParameterOptions,
+  videoModelParameterOption,
   videoModelRequiresReferenceImage,
   videoNumberOrString,
   videoRatioOptions,
@@ -3097,12 +3097,13 @@ const filteredVideoToolOptions = computed(() => {
   if (!keyword) return videoToolOptions;
   return videoToolOptions.filter((tool) => `${tool.name} ${tool.desc}`.toLowerCase().includes(keyword));
 });
-const availableVideoDurationOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.durations ?? videoDurationOptions);
-const availableVideoRatioOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.ratios ?? videoRatioOptions);
-const availableVideoResolutionOptions = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.resolutions ?? videoResolutionOptions);
+const selectedVideoModelParams = computed(() => videoModelParameterOption(selectedVideoModel.value));
+const availableVideoDurationOptions = computed(() => selectedVideoModelParams.value?.durations ?? videoDurationOptions);
+const availableVideoRatioOptions = computed(() => selectedVideoModelParams.value?.ratios ?? videoRatioOptions);
+const availableVideoResolutionOptions = computed(() => selectedVideoModelParams.value?.resolutions ?? videoResolutionOptions);
 const videoReferenceLimit = computed(() => videoModelMaxReferenceImages(selectedVideoModel.value));
 const videoReferenceCount = computed(() => videoImageFiles.length);
-const videoModelSupportsAudio = computed(() => videoModelParameterOptions[selectedVideoModel.value]?.supportsAudio !== false);
+const videoModelSupportsAudio = computed(() => selectedVideoModelParams.value?.supportsAudio === true);
 
 function syncVideoModelParameters() {
   const durations = availableVideoDurationOptions.value;
@@ -3138,7 +3139,7 @@ function normalizeVideoHistoryEntry(entry: Partial<VideoHistoryEntry> | null | u
     createdAt: entry.createdAt || new Date(timestamp).toISOString(),
     timestamp,
     status: entry.status || (entry.url ? "success" : "generating"),
-    errorMessage: entry.errorMessage ? String(entry.errorMessage) : "",
+    errorMessage: entry.errorMessage ? videoErrorMessage(entry.errorMessage) : "",
     userId: entry.userId ? String(entry.userId) : undefined
   };
 }
@@ -3416,10 +3417,10 @@ async function submitVideoGeneration() {
       inputVideoUrl: videoSourcePreview.value,
       createdAt: snapshotCreatedAt,
       status: "failed",
-      errorMessage: error instanceof Error ? error.message : "视频生成失败",
+      errorMessage: videoErrorMessage(error instanceof Error ? error.message : "视频生成失败"),
       userId: String(currentAdmin.value?.id || "")
     }, snapshotId);
-    ElMessage.error(error instanceof Error ? error.message : "视频生成失败");
+    ElMessage.error(videoErrorMessage(error instanceof Error ? error.message : "视频生成失败"));
     return false;
   } finally {
     videoSubmitting.value = false;
@@ -5854,10 +5855,12 @@ function aiTaskModelLabel(task: AdminRecord) {
 
 function aiTaskErrorMessage(task: AdminRecord) {
   const failureReason = String(task.failureReason || task.failure_reason || "").trim();
-  if (failureReason) return failureReason;
+  if (failureReason) return videoErrorMessage(failureReason);
   const error = task.error;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) return String((error as { message?: unknown }).message || "生成失败");
+  if (typeof error === "string") return videoErrorMessage(error);
+  if (error && typeof error === "object" && "message" in error) {
+    return videoErrorMessage(String((error as { message?: unknown }).message || "生成失败"));
+  }
   return "生成失败，可复用配置后重试";
 }
 
@@ -8148,6 +8151,7 @@ function applyWorkspaceDraft(draft: Record<string, unknown>) {
   if (typeof draft.videoDuration === "number") videoDuration.value = draft.videoDuration;
   if (typeof draft.videoRatio === "string") videoRatio.value = draft.videoRatio;
   if (typeof draft.videoResolution === "string") videoResolution.value = draft.videoResolution;
+  syncVideoModelParameters();
   if (typeof draft.videoGenerateAudio === "boolean") videoGenerateAudio.value = draft.videoGenerateAudio;
   if (typeof draft.rechargeAmount === "number") selectedRechargeAmount.value = draft.rechargeAmount;
   if (typeof draft.customRechargeAmount === "string") customRechargeAmount.value = draft.customRechargeAmount;
