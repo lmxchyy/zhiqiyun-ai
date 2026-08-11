@@ -219,8 +219,8 @@ func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
 
 func mergeDefaultVideoChannelModels(data adminPlatformData) adminPlatformData {
 	wantedByChannel := map[string][]string{
-		"channel_newapi_gateway":     {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "doubao-seedance-2.0", "seedance-fast-2.0"},
-		"channel_newapi_grok_imagine": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"},
+		"channel_newapi_gateway": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "doubao-seedance-2.0", "seedance-fast-2.0"},
+		"channel_newapi_grok_imagine": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"},
 	}
 	for index := range data.APIChannels {
 		channel := &data.APIChannels[index]
@@ -230,7 +230,7 @@ func mergeDefaultVideoChannelModels(data adminPlatformData) adminPlatformData {
 			if !strings.Contains(baseURL, "newapi") {
 				continue
 			}
-			wanted = []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video"}
+			wanted = []string{"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"}
 		}
 		known := map[string]bool{}
 		for _, modelName := range channel.Models {
