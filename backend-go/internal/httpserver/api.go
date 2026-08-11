@@ -1721,6 +1721,7 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 				videoCapabilities := resolveVideoModelCapabilities(model, schema.SchemaJSON)
 				item["videoCapabilities"] = videoCapabilities
 				item["video_capabilities"] = videoCapabilities
+				attachVideoModelPublicPricing(item, data, code, videoCapabilities)
 			}
 			items = append(items, item)
 		}
@@ -1751,8 +1752,12 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, item := range items {
 		item["id"] = item["code"]
-		item["displayName"] = item["name"]
-		item["description"] = ""
+		if _, ok := item["displayName"]; !ok {
+			item["displayName"] = item["name"]
+		}
+		if _, ok := item["description"]; !ok {
+			item["description"] = ""
+		}
 		item["supportedRatios"] = []string{"1:1", "4:3", "3:4", "16:9", "9:16"}
 		item["enabled"] = item["online"]
 		// Public model discovery must not reveal upstream routing or vendor identity.
@@ -1760,7 +1765,7 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 		delete(item, "providerName")
 		delete(item, "provider")
 	}
-	writeJSON(w, items)
+	writeJSON(w, sortPublicModelsVideoByListPrice(items))
 }
 func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 	user, err := a.currentUser(r)

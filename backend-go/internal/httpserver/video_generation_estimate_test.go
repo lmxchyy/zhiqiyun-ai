@@ -161,6 +161,32 @@ func TestGrokImagine15VideoDefaultProviderCostIsThirteenCentsPerSecond(t *testin
 	t.Fatal("Grok Imagine 1.5 provider cost is missing")
 }
 
+func TestGrokImaginePreviewEstimateWorksWithoutUploadedImage(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	data, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := videoEstimateTestUser(t, data)
+	service := newAPI(store, config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, newLocalAuthSessions(), nil)
+	_, estimate, err := service.prepareVideoGenerationEstimate(data, user, generation.CreateRequest{
+		Type:   "IMAGE_TO_VIDEO",
+		Prompt: "preview estimate without image",
+		Model:  "grok-imagine-video-1.5-preview",
+		Params: map[string]any{
+			"duration":     float64(10),
+			"resolution":   "720p",
+			"aspect_ratio": "16:9",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.EstimatedPoints != 100 {
+		t.Fatalf("preview estimate=%d, want 100", estimate.EstimatedPoints)
+	}
+}
+
 func TestVideoGenerationEstimateHTTPIsReadOnly(t *testing.T) {
 	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
 	handler := newWithStore(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, store).Handler

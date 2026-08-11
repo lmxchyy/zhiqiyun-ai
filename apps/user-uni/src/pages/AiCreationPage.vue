@@ -412,7 +412,7 @@
               </view>
               <label v-if="videoMode === 'IMAGE_TO_VIDEO'"><text>首帧图 URL（必填）</text><input v-model.trim="videoFirstFrame" placeholder="请输入 1 张首帧图 URL" /></label>
               <label v-if="videoMode === 'IMAGE_TO_VIDEO' && selectedVideoCapabilities.supportsLastFrame"><text>尾帧图 URL（可选）</text><input v-model.trim="videoLastFrame" placeholder="当前模型支持尾帧图" /></label>
-              <view><text>模型</text><view class="web-video-options"><button v-for="item in webVideoModels" :key="item.code" :class="['web-video-option', { active: videoModel === item.code }]" @click="videoModel = item.code">{{ item.name || item.code }}</button></view></view>
+              <view><text>模型</text><view class="web-video-options"><button v-for="item in webVideoModels" :key="item.code" :class="['web-video-option', { active: videoModel === item.code }]" @click="videoModel = item.code">{{ videoModelOptionLabel(item) }}</button></view></view>
               <view><text>画面比例</text><view class="web-video-options"><button v-for="item in videoRatioOptions" :key="item" :class="['web-video-option', { active: videoRatio === item }]" @click="videoRatio = item">{{ item }}</button></view></view>
               <view><text>分辨率</text><view class="web-video-options"><button v-for="item in videoResolutionOptions" :key="item" :class="['web-video-option', { active: videoResolution === item }]" @click="videoResolution = item">{{ item }}</button></view></view>
               <view><text>时长</text><view class="web-video-options"><button v-for="item in videoDurationOptions" :key="item" :class="['web-video-option', { active: videoDuration === item }]" @click="videoDuration = item">{{ item }} 秒</button></view></view>
@@ -1142,6 +1142,10 @@ import type { VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/share
 import { openLegalDocument } from "../features/legal/navigation";
 import { pendingActions, requireAuth, resumePendingAction } from "../features/auth/gate";
 import { trackLogin } from "../features/auth/analytics";
+import {
+  sortVideoModelsByListPrice,
+  videoModelSubtitle as formatVideoModelSubtitle,
+} from "../features/generation/videoModelPricing";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 
@@ -1605,15 +1609,20 @@ const videoError = ref(legacyVideoDraftHadImages ? "旧视频草稿未记录生�
 let videoPromptTracked = false;
 let videoGenerationResumedAfterLogin = false;
 const webVideoModels = computed(() => {
-  return models.value.filter(item => {
+  return sortVideoModelsByListPrice(models.value.filter(item => {
     const capabilities = Array.isArray(item.capabilities)
       ? item.capabilities.map(value => String(value).toUpperCase())
       : [];
     return capabilities.includes("TEXT_TO_VIDEO")
       || capabilities.includes("IMAGE_TO_VIDEO")
       || Boolean(item.videoCapabilities);
-  });
+  }));
 });
+function videoModelOptionLabel(item: ModelInfo) {
+  const title = String(item.displayName || item.name || item.code || "").trim() || "视频模型";
+  const subtitle = formatVideoModelSubtitle(item);
+  return subtitle ? `${title} · ${subtitle}` : title;
+}
 const selectedVideoModel = computed(() => webVideoModels.value.find(item => item.code === videoModel.value));
 const selectedVideoCapabilities = computed<VideoModelCapabilities>(() => {
   const item = selectedVideoModel.value as (ModelInfo & { video_capabilities?: unknown }) | undefined;

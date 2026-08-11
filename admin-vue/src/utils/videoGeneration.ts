@@ -1,6 +1,12 @@
 import type { AdminRecord } from "../stores/admin";
 
-export type VideoModelOption = { name: string; family: string; desc: string };
+export type VideoModelOption = {
+  name: string;
+  family: string;
+  desc: string;
+  code?: string;
+  listPricePoints?: number;
+};
 
 export type VideoModelParameterOption = {
   durations: number[];
@@ -11,17 +17,18 @@ export type VideoModelParameterOption = {
   supportsAudio?: boolean;
 };
 
+/** Static catalog kept for parameter metadata / fallback labels. Prefer API-wired options for the picker. */
 export const videoModelOptions: VideoModelOption[] = [
-  { name: "Mock Video", family: "tool", desc: "本地联调视频模型" },
-  { name: "Grok Image Video", family: "grok", desc: "Grok 文生/图生视频" },
-  { name: "Grok Imagine Video 1.5 Preview", family: "grok", desc: "100 积分/次 · 单图生视频 · 10/15 秒" },
-  { name: "Grok Imagine Video 1.5", family: "grok", desc: "15 积分/秒 · 文生/多图生视频" },
-  { name: "Veo 3", family: "veo", desc: "Google 视频生成" },
-  { name: "Kling 2.1", family: "kling", desc: "可灵标准视频" },
-  { name: "Seedance 2.0", family: "seedance", desc: "80 积分/秒 · 5/10/15 秒" },
-  { name: "Doubao Seedance 2.0", family: "seedance", desc: "80 积分/秒 · 5/8/10/12/15 秒" },
-  { name: "Wan 2.2", family: "wan", desc: "Wan 系列视频" },
-  { name: "Sora 2", family: "sora", desc: "OpenAI 视频模型" }
+  { name: "Mock Video", family: "tool", desc: "本地联调视频模型", code: "mock-video" },
+  { name: "Grok Image Video", family: "grok", desc: "Grok 文生/图生视频", code: "grok-image-video" },
+  { name: "Grok Imagine Video 1.5 Preview", family: "grok", desc: "100 积分/次 · 单图生视频 · 10/15 秒", code: "grok-imagine-video-1.5-preview" },
+  { name: "Grok Imagine Video 1.5", family: "grok", desc: "15 积分/秒 · 文生/多图生视频", code: "grok-imagine-1.5-video" },
+  { name: "Veo 3", family: "veo", desc: "Google 视频生成", code: "veo3" },
+  { name: "Kling 2.1", family: "kling", desc: "可灵标准视频", code: "kling-2.1" },
+  { name: "Seedance 2.0", family: "seedance", desc: "80 积分/秒 · 5/10/15 秒", code: "seedance-fast-2.0" },
+  { name: "Doubao Seedance 2.0", family: "seedance", desc: "80 积分/秒 · 5/8/10/12/15 秒", code: "doubao-seedance-2.0" },
+  { name: "Wan 2.2", family: "wan", desc: "Wan 系列视频", code: "wan-2.2" },
+  { name: "Sora 2", family: "sora", desc: "OpenAI 视频模型", code: "sora-2" }
 ];
 
 export const videoToolOptions: VideoModelOption[] = [
@@ -65,6 +72,71 @@ const videoModelIdAliases: Record<string, string> = {
   "seedance-2.0": "seedance-fast-2.0",
   "grok-video-image": "grok-image-video"
 };
+
+const videoModelCodeToName = Object.fromEntries(
+  Object.entries(videoModelIdMapping).map(([name, code]) => [code, name])
+) as Record<string, string>;
+
+export type PublicVideoModelRow = {
+  code?: string;
+  name?: string;
+  displayName?: string;
+  capabilities?: string[];
+  videoCapabilities?: unknown;
+  video_capabilities?: unknown;
+  listPricePoints?: number;
+  priceHint?: string;
+  capabilityHint?: string;
+  priceLabel?: string;
+  description?: string;
+  pointCost?: number;
+};
+
+function isPublicVideoModelRow(item: PublicVideoModelRow) {
+  const capabilities = Array.isArray(item.capabilities)
+    ? item.capabilities.map((value) => String(value).toUpperCase())
+    : [];
+  return capabilities.includes("TEXT_TO_VIDEO")
+    || capabilities.includes("IMAGE_TO_VIDEO")
+    || Boolean(item.videoCapabilities || item.video_capabilities);
+}
+
+function familyForVideoModelName(name: string) {
+  const matched = videoModelOptions.find((item) => item.name === name);
+  if (matched) return matched.family;
+  const lower = name.toLowerCase();
+  if (lower.includes("grok")) return "grok";
+  if (lower.includes("seedance") || lower.includes("doubao")) return "seedance";
+  if (lower.includes("mock")) return "tool";
+  return "video";
+}
+
+function publicVideoModelSubtitle(item: PublicVideoModelRow) {
+  const parts = [item.priceHint, item.capabilityHint]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (parts.length) return parts.join(" · ");
+  return String(item.priceLabel || item.description || "").trim();
+}
+
+/** Build picker options from `/api/v1/models` (already price-sorted by backend). */
+export function videoModelOptionsFromPublicModels(items: PublicVideoModelRow[]): VideoModelOption[] {
+  return (Array.isArray(items) ? items : [])
+    .filter(isPublicVideoModelRow)
+    .map((item) => {
+      const code = String(item.code || "").trim();
+      const name = String(item.displayName || item.name || videoModelCodeToName[code] || code).trim() || code;
+      const desc = publicVideoModelSubtitle(item);
+      const listPricePoints = Number(item.listPricePoints ?? item.pointCost ?? 0);
+      return {
+        name,
+        family: familyForVideoModelName(name),
+        desc,
+        code,
+        listPricePoints: Number.isFinite(listPricePoints) ? listPricePoints : undefined
+      };
+    });
+}
 
 export function videoModelParameterOption(modelName: string) {
   const normalized = String(modelName || "").trim();

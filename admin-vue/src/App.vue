@@ -2922,7 +2922,7 @@ import {
   videoModeFromTask,
   videoModelId,
   videoModelMaxReferenceImages,
-  videoModelOptions,
+  videoModelOptionsFromPublicModels,
   videoModelParameterOption,
   videoModelRequiresReferenceImage,
   videoNumberOrString,
@@ -2934,8 +2934,10 @@ import {
   videoTaskUrl,
   videoToolOptions,
   type VideoHistoryEntry,
-  type VideoHistoryStatus
+  type VideoHistoryStatus,
+  type VideoModelOption
 } from "./utils/videoGeneration";
+import { adminRequest } from "./api/client";
 import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
 import { isPersistentWebSession } from "./utils/webAuthSession";
 import { resolveSidebarPlanPoints } from "./utils/sidebarPlanPoints";
@@ -3051,8 +3053,10 @@ const statusFilterOptions = computed(() => {
 
 const videoStudioMode = ref("text");
 const videoPrompt = ref("");
-const selectedVideoModel = ref("Grok Image Video");
+const selectedVideoModel = ref("Grok Imagine Video 1.5");
 const videoModelSearch = ref("");
+const wiredVideoModelOptions = ref<VideoModelOption[]>([]);
+const videoModelOptions = computed(() => wiredVideoModelOptions.value);
 const videoDuration = ref(5);
 const videoRatio = ref("16:9");
 const videoResolution = ref("720p");
@@ -3089,8 +3093,9 @@ let videoSourceObjectUrl = "";
 let videoImageFiles: File[] = [];
 const filteredVideoModelOptions = computed(() => {
   const keyword = videoModelSearch.value.trim().toLowerCase();
-  if (!keyword) return videoModelOptions;
-  return videoModelOptions.filter((model) => `${model.name} ${model.desc}`.toLowerCase().includes(keyword));
+  const source = videoModelOptions.value;
+  if (!keyword) return source;
+  return source.filter((model) => `${model.name} ${model.desc}`.toLowerCase().includes(keyword));
 });
 const filteredVideoToolOptions = computed(() => {
   const keyword = videoModelSearch.value.trim().toLowerCase();
@@ -3697,6 +3702,26 @@ function selectVideoOption(type: "model" | "ratio" | "duration" | "resolution", 
   }
   videoResolution.value = String(value);
   openVideoDropdown.value = "";
+}
+
+async function loadWiredVideoModelOptions() {
+  try {
+    const items = await adminRequest<Array<Record<string, unknown>>>({
+      url: "/models",
+      method: "GET",
+      authMode: "none"
+    });
+    const options = videoModelOptionsFromPublicModels(items || []);
+    wiredVideoModelOptions.value = options;
+    const isTool = videoToolOptions.some((tool) => tool.name === selectedVideoModel.value);
+    if (!isTool && options.length && !options.some((model) => model.name === selectedVideoModel.value)) {
+      selectedVideoModel.value = options[0].name;
+      trimVideoImageUploadsToModelLimit();
+      syncVideoModelParameters();
+    }
+  } catch {
+    wiredVideoModelOptions.value = [];
+  }
 }
 
 const adminNavigationIcons: Record<AdminNavigationIconKey, Component> = {
@@ -13873,6 +13898,7 @@ onMounted(async () => {
     window.addEventListener("resize", adjustVideoPromptHeight);
   }
   await authStore.initializeAuth();
+  void loadWiredVideoModelOptions();
   if (!authStore.isAuthenticated && isUserConsole.value) {
     trackWebGuestExperience("guest_open_app", store.activeModuleId || "userDashboard", { route: currentWorkspaceRoute() });
     trackWebGuestExperience("guest_view_home", "userDashboard", { route: currentWorkspaceRoute() });

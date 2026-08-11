@@ -1,5 +1,14 @@
 <template>
-  <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage }]" :style="miniWorkbenchSafeAreaStyle">
+  <view
+    :class="[
+      'mini-workbench',
+      {
+        'user-v531-shell': isV531PrimaryPage,
+        'free-image-edit-shell': isFreeImageEditPage,
+      },
+    ]"
+    :style="miniWorkbenchSafeAreaStyle"
+  >
     <view v-if="!isFreeImageEditPage" class="native-safe-note"></view>
 
     <view v-if="activeRole !== 'user' && !isUserMineDetail" class="business-header">
@@ -296,22 +305,17 @@
                 <image v-else class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
               </view>
 
-              <picker
+              <view
                 v-if="videoModelOptions.length"
-                :range="videoModelOptions"
-                range-key="name"
-                :value="videoModelOptionIndex"
-                :disabled="videoModelSwitching"
-                @change="selectVideoModelByPicker"
+                class="video-model-row"
+                @click="openVideoModelSheet"
               >
-                <view class="video-model-row">
-                  <text class="video-row-label">生成模型</text>
-                  <view class="video-row-value">
-                    <text>{{ videoModelDisplayName }}</text>
-                    <image class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
-                  </view>
+                <text class="video-row-label">生成模型</text>
+                <view class="video-row-value">
+                  <text>{{ videoModelDisplayName }}</text>
+                  <image class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
                 </view>
-              </picker>
+              </view>
               <view v-else class="video-model-row">
                 <text class="video-row-label">生成模型</text>
                 <text class="video-row-value">{{ videoModelSwitching ? '载入中...' : videoModelError || '暂无可用视频模型' }}</text>
@@ -853,6 +857,29 @@
     <!-- #endif -->
     <!-- #endif -->
   </view>
+
+  <BottomSheet
+    :visible="videoModelSheetVisible"
+    title="选择生成模型"
+    @close="closeVideoModelSheet"
+  >
+    <scroll-view scroll-y class="video-model-sheet-list">
+      <button
+        v-for="item in videoModelOptions"
+        :key="item.code"
+        type="button"
+        :class="['video-model-sheet-item', { active: item.code === selectedVideoModelCode }]"
+        :disabled="videoModelSwitching"
+        @click="selectVideoModelFromSheet(item.code)"
+      >
+        <view class="video-model-sheet-copy">
+          <text class="video-model-sheet-title">{{ videoModelTitle(item) }}</text>
+          <text class="video-model-sheet-subtitle">{{ videoModelSubtitle(item) }}</text>
+        </view>
+        <text v-if="item.code === selectedVideoModelCode" class="video-model-sheet-check">✓</text>
+      </button>
+    </scroll-view>
+  </BottomSheet>
 </template>
 
 <script setup lang="ts">
@@ -882,6 +909,11 @@ import {
   defaultFreeImageEditPrompt,
   freeImageEditValidationMessage,
 } from "../features/generation/freeImageEdit";
+import {
+  estimateFormalVideoPoints,
+  sortVideoModelsByListPrice,
+  videoModelSubtitle as formatVideoModelSubtitle,
+} from "../features/generation/videoModelPricing";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -894,6 +926,7 @@ import V531ProfilePage from "./v531/V531ProfilePage.vue";
 import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
 import FreeImageEditCreation from "./creation/FreeImageEditCreation.vue";
+import BottomSheet from "./auth/BottomSheet.vue";
 import { fetchAssetDetail } from "../features/assets/api";
 import { beginWorksPerformanceStep } from "../features/assets/performance";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
@@ -1135,6 +1168,7 @@ const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
 const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
 const videoModelOptions = ref<ModelInfo[]>([]);
 const selectedVideoModelCode = ref("");
+const videoModelSheetVisible = ref(false);
 const videoParameterFields = ref<EditableVideoField[]>([]);
 const videoParameterValues = ref<Record<string, unknown>>({});
 const videoModelSwitching = ref(false);
@@ -1389,12 +1423,8 @@ const videoReferenceDescription = computed(() => {
 });
 const videoModelDisplayName = computed(() => {
   const model = videoModelOptions.value.find(item => item.code === selectedVideoModelCode.value);
-  return model?.name || selectedVideoModelCode.value || activeCreationModel.value || "选择模型";
+  return videoModelTitle(model) || selectedVideoModelCode.value || activeCreationModel.value || "选择模型";
 });
-const videoModelOptionIndex = computed(() => Math.max(
-  0,
-  videoModelOptions.value.findIndex(item => item.code === selectedVideoModelCode.value),
-));
 const videoAdvancedSummary = computed(() => advancedVideoParameterFields.value
   .map(field => `${field.key === "camera_movement" ? "镜头" : field.label}：${selectedVideoParameterLabel(field)}`)
   .join(" · "));
@@ -1407,6 +1437,9 @@ const videoCostLabel = computed(() => {
   if (videoEstimateLoading.value) return "试算中…";
   if (videoEstimate.value) return `预计 ${videoEstimate.value.estimatedPoints} 积分`;
   if (videoEstimateError.value) return videoEstimateError.value;
+  const selected = videoModelOptions.value.find(item => item.code === selectedVideoModelCode.value);
+  if (selected?.priceHint) return selected.priceHint;
+  if (selected?.priceLabel) return selected.priceLabel;
   return "切换模型后自动试算";
 });
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
@@ -2891,10 +2924,31 @@ function selectVideoParameterByPicker(field: EditableVideoField, event: unknown)
   if (option !== undefined) setVideoParameterValue(field.key, option);
 }
 
-function selectVideoModelByPicker(event: unknown) {
-  const index = Number(eventDetailValue(event));
-  const model = Number.isInteger(index) ? videoModelOptions.value[index] : undefined;
-  if (model?.code) void requestVideoModelSwitch(model.code);
+function openVideoModelSheet() {
+  if (videoModelSwitching.value || !videoModelOptions.value.length) return;
+  videoModelSheetVisible.value = true;
+}
+
+function closeVideoModelSheet() {
+  videoModelSheetVisible.value = false;
+}
+
+function selectVideoModelFromSheet(code: string) {
+  const next = String(code || "").trim();
+  if (!next) return;
+  videoModelSheetVisible.value = false;
+  if (next !== selectedVideoModelCode.value) void requestVideoModelSwitch(next);
+}
+
+function videoModelTitle(item?: ModelInfo | null) {
+  if (!item) return "";
+  const code = String(item.code || "").trim();
+  return String(item.displayName || item.name || videoModelFriendlyName(code) || code).trim();
+}
+
+function videoModelSubtitle(item?: ModelInfo | null) {
+  if (!item) return "按价格从低到高";
+  return formatVideoModelSubtitle(item) || "参数随模型动态调整";
 }
 
 function selectedVideoParameterLabel(field: EditableVideoField) {
@@ -3018,12 +3072,12 @@ async function initializeVideoModelForm() {
   if (creationMode.value !== "video") return;
   try {
     const models = await businessSdk.models.list();
-    videoModelOptions.value = models.filter(item => {
+    videoModelOptions.value = sortVideoModelsByListPrice(models.filter(item => {
       const capabilities = (item.capabilities || []).map(value => String(value).toUpperCase());
       return capabilities.includes("TEXT_TO_VIDEO")
         || capabilities.includes("IMAGE_TO_VIDEO")
         || Boolean(item.videoCapabilities);
-    });
+    }));
   } catch {
     videoModelOptions.value = [];
   }
@@ -3032,6 +3086,18 @@ async function initializeVideoModelForm() {
     || videoModelOptions.value[0]?.code
     || "";
   await requestVideoModelSwitch(requested);
+}
+
+function videoModelFriendlyName(code: string) {
+  const names: Record<string, string> = {
+    "mock-video": "本地演示视频",
+    "grok-image-video": "Grok Image Video",
+    "grok-imagine-video-1.5-preview": "Grok Imagine Video 1.5 Preview",
+    "grok-imagine-1.5-video": "Grok Imagine Video 1.5",
+    "seedance-fast-2.0": "Seedance 2.0",
+    "doubao-seedance-2.0": "Doubao Seedance 2.0",
+  };
+  return names[String(code || "").trim()] || "";
 }
 
 function clearVideoEstimateTimer() {
@@ -3069,15 +3135,33 @@ function scheduleVideoEstimate() {
       }
       const result = await businessSdk.generation.estimateVideo({
         type: videoGenerationMode.value,
-        prompt: creationPrompt.value.trim(),
+        prompt: creationPrompt.value.trim() || "video generation estimate",
         model: selectedVideoModelCode.value,
         params,
       });
       if (sequence !== videoEstimateSequence) return;
       videoEstimate.value = result;
-    } catch {
+    } catch (error) {
       if (sequence !== videoEstimateSequence) return;
-      videoEstimateError.value = "暂无法试算，正式提交时以后端为准";
+      const duration = Number(videoParameterValues.value.duration);
+      const resolution = String(videoParameterValues.value.resolution || "720p");
+      const fallbackPoints = estimateFormalVideoPoints(selectedVideoModelCode.value, duration, resolution);
+      if (fallbackPoints > 0) {
+        videoEstimate.value = {
+          model: selectedVideoModelCode.value,
+          estimatedPoints: fallbackPoints,
+          billingType: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? "per_request" : "per_second",
+          quantityField: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? "request" : "duration",
+          quantity: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? 1 : duration,
+          note: "本地按正式计价规则估算，正式提交时以后端为准。",
+        };
+        videoEstimateError.value = "";
+        return;
+      }
+      const message = error instanceof Error ? error.message : "";
+      videoEstimateError.value = /首帧|参考图|IMAGE_TO_VIDEO|first.?frame/i.test(message)
+        ? "上传参考图后可试算积分"
+        : "暂无法试算，正式提交时以后端为准";
     } finally {
       if (sequence === videoEstimateSequence) videoEstimateLoading.value = false;
     }
@@ -4465,6 +4549,12 @@ onBackPress(() => {
   background: #f7f8fc;
 }
 
+.mini-workbench.free-image-edit-shell {
+  min-height: 100vh;
+  padding: 0;
+  background: #f7f8fc;
+}
+
 .free-image-edit-page {
   min-height: 100vh;
   background: #f8fafc;
@@ -4480,6 +4570,10 @@ onBackPress(() => {
 }
 
 .user-v531-shell .role-content {
+  margin-top: 0;
+}
+
+.free-image-edit-shell .role-content {
   margin-top: 0;
 }
 
@@ -5390,4 +5484,46 @@ onBackPress(() => {
 .video-primary-generate::after { display: none; }
 .video-primary-generate.disabled { opacity: 0.62; box-shadow: none; }
 .video-generation-error { margin: -5px 4px 0; }
+
+.video-model-sheet-list { max-height: 58vh; }
+.video-model-sheet-item {
+  display: flex;
+  width: 100%;
+  min-height: 64px;
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e5e9f3;
+  border-radius: 14px;
+  background: #fbfcfe;
+  text-align: left;
+  line-height: normal;
+}
+.video-model-sheet-item::after { display: none; }
+.video-model-sheet-item.active {
+  border-color: #9eb0ff;
+  background: #f3f5ff;
+}
+.video-model-sheet-copy { min-width: 0; flex: 1; }
+.video-model-sheet-title {
+  display: block;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+}
+.video-model-sheet-subtitle {
+  display: block;
+  margin-top: 6px;
+  color: #7a8499;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.video-model-sheet-check {
+  flex: 0 0 auto;
+  color: #5369e8;
+  font-size: 16px;
+  font-weight: 700;
+}
 </style>

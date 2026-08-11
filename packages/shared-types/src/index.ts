@@ -238,8 +238,14 @@ export interface ReferenceImage {
 export interface ModelInfo {
   code: string;
   name: string;
+  displayName?: string;
   capabilities?: string[];
   pointCost?: number;
+  listPricePoints?: number;
+  priceHint?: string;
+  capabilityHint?: string;
+  priceLabel?: string;
+  description?: string;
   fixedQuota?: number;
   providerId?: string;
   providerName?: string;
