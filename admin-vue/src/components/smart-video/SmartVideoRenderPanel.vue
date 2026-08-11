@@ -63,7 +63,7 @@ function formatTime(value?: string) {
 }
 
 function goWorks() {
-  admin.selectModule("userWorks");
+  void admin.openWorksMine();
 }
 </script>
 

@@ -870,9 +870,16 @@
               </div>
 
               <div v-else class="user-works-empty">
-                <strong>暂无匹配作品</strong>
-                <span>调整筛选条件，或先去 AI 生图创建新作品。</span>
-                <button type="button" @click="selectAdminModule('userAiImage')">去创作</button>
+                <strong>{{ worksSourceTab === 'mine' ? '我的作品里还没有匹配项' : '暂无匹配作品' }}</strong>
+                <span v-if="worksSourceTab === 'mine'">
+                  混剪成片会出现在「我的作品」。请点刷新；若仍没有，确认当前登录账号就是导出时使用的账号。
+                </span>
+                <span v-else>请先切换到「我的作品」，或调整筛选条件。</span>
+                <div class="user-works-empty-actions">
+                  <button v-if="worksSourceTab !== 'mine'" type="button" @click="openMyWorks">查看我的作品</button>
+                  <button type="button" @click="refreshWorksCenter">刷新作品</button>
+                  <button type="button" @click="selectAdminModule('userAiImage')">去创作</button>
+                </div>
               </div>
             </section>
           </section>
@@ -4644,7 +4651,19 @@ function isMontageWorkAsset(asset: AdminRecord) {
   const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
   const type = String(metadata.type || asset.type || asset.sourceType || "").toUpperCase();
   const mediaType = String(asset.mediaType || metadata.mediaType || "").toLowerCase();
-  return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE" || (mediaType === "video" && type.includes("MONTAGE"));
+  const name = String(asset.name || "");
+  const taskId = String(asset.taskId || metadata.renderTaskId || "");
+  if (type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE") return true;
+  if (mediaType === "video" && type.includes("MONTAGE")) return true;
+  if (mediaType === "video" && (name.includes("混剪") || taskId.startsWith("svrender_"))) return true;
+  return false;
+}
+
+function isVideoWorkAsset(asset: AdminRecord) {
+  const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
+  const mediaType = String(asset.mediaType || metadata.mediaType || "").toLowerCase();
+  if (mediaType === "video") return true;
+  return isMontageWorkAsset(asset);
 }
 
 function isMontageWorkCard(task: AdminRecord) {
@@ -4656,12 +4675,13 @@ function montageAssetToWorkCard(asset: AdminRecord): AdminRecord {
   const metadata = asset.metadata && typeof asset.metadata === "object" ? asset.metadata as AdminRecord : {};
   const url = String(asset.url || "");
   const thumb = String(asset.thumbnailUrl || url);
+  const montage = isMontageWorkAsset(asset);
   return {
     id: asset.id,
-    name: asset.name || "AI自动混剪成片",
+    name: asset.name || (montage ? "AI自动混剪成片" : "视频作品"),
     status: "SUCCEEDED",
     mediaType: asset.mediaType || "video",
-    type: metadata.type || "SMART_VIDEO_MONTAGE",
+    type: metadata.type || (montage ? "SMART_VIDEO_MONTAGE" : "VIDEO_ASSET"),
     montageWork: true,
     outputUrl: url,
     resultUrl: url,
@@ -4670,8 +4690,8 @@ function montageAssetToWorkCard(asset: AdminRecord): AdminRecord {
     pointCost: Number(metadata.pointCost || metadata.capturedPoints || 0),
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt || asset.createdAt,
-    prompt: "AI自动混剪成片",
-    model: "AI自动混剪",
+    prompt: montage ? "AI自动混剪成片" : String(asset.name || "视频作品"),
+    model: montage ? "AI自动混剪" : String(metadata.model || asset.model || "视频"),
     taskId: asset.taskId,
     resultIds: asset.id ? [asset.id] : [],
     width: metadata.width,
@@ -4682,7 +4702,7 @@ function montageAssetToWorkCard(asset: AdminRecord): AdminRecord {
 const montageWorkCards = computed<AdminRecord[]>(() => {
   const seen = new Set<string>();
   return onlineAssets.value
-    .filter((asset) => isMontageWorkAsset(asset))
+    .filter((asset) => isVideoWorkAsset(asset))
     .map((asset) => montageAssetToWorkCard(asset))
     .filter((card) => {
       const id = aiTaskId(card);
@@ -5019,7 +5039,36 @@ const onlineHistoryItems = computed(() => onlineImageTasks.value.slice(0, 8));
 const userWorkCards = computed(() => {
   const keyword = worksSearchKeyword.value.trim().toLowerCase();
   const statusFilter = worksStatusFilter.value;
-  const mineSource = [...montageWorkCards.value, ...onlineImageTasks.value];
+  const montageFromTasks = onlineRecentTasks.value
+    .filter((task) => {
+      const type = String(task.type || task.sourceType || "").toUpperCase();
+      return type === "SMART_VIDEO_MONTAGE" || type === "AI_AUTO_MONTAGE";
+    })
+    .map((task) => {
+      const resultId = Array.isArray(task.resultIds) ? String(task.resultIds[0] || "") : "";
+      const linkedAsset = resultId
+        ? onlineAssets.value.find((asset) => String(asset.id || "") === resultId)
+        : undefined;
+      const url = String(task.outputUrl || task.resultUrl || task.imageUrl || linkedAsset?.url || "");
+      const thumb = String(task.thumbnailUrl || linkedAsset?.thumbnailUrl || url);
+      return {
+        ...task,
+        name: task.name || task.prompt || "AI自动混剪成片",
+        mediaType: task.mediaType || "video",
+        montageWork: true,
+        outputUrl: url,
+        resultUrl: url,
+        imageUrl: url,
+        thumbnailUrl: thumb
+      };
+    });
+  const seen = new Set<string>();
+  const mineSource = [...montageWorkCards.value, ...montageFromTasks, ...onlineImageTasks.value].filter((task) => {
+    const id = aiTaskId(task);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   const source = worksSourceTab.value === "official" ? publicOfficialCases.value : mineSource;
   return source
     .filter((task) => {
@@ -8334,6 +8383,8 @@ async function loadGuestPublicCases() {
 async function openMyWorks() {
   if (!ensureWorkspaceAuth("save_work", "userWorks", { openMine: true })) return;
   worksSourceTab.value = "mine";
+  worksStatusFilter.value = "all";
+  worksSearchKeyword.value = "";
   await store.loadActiveModule({ preferCache: false });
 }
 
@@ -8343,8 +8394,21 @@ async function refreshWorksCenter() {
     await loadGuestPublicCases();
     return;
   }
+  worksSourceTab.value = "mine";
   await store.loadActiveModule({ preferCache: false });
 }
+
+watch(
+  () => [store.activeModuleId, store.pendingWorksSourceTab] as const,
+  ([moduleId, pendingTab]) => {
+    if (moduleId !== "userWorks" || isGuestUser.value || !pendingTab) return;
+    worksSourceTab.value = pendingTab === "official" ? "official" : "mine";
+    worksStatusFilter.value = "all";
+    worksSearchKeyword.value = "";
+    store.pendingWorksSourceTab = "";
+    syncAdminModulePath("userWorks");
+  },
+);
 const authPath = ref(typeof window !== "undefined" ? window.location.pathname.replace(/\/$/, "") || "/" : "");
 const authConsolePrefix = computed(() => authPath.value.startsWith("/agent") ? "/agent" : authPath.value.startsWith("/admin") ? "/admin" : "");
 const authLoginHref = computed(() => `${authConsolePrefix.value}/login` || "/login");
@@ -10259,6 +10323,14 @@ async function selectAdminModule(moduleId: string) {
     }
   } else {
     await store.selectModule(moduleId);
+  }
+  if (moduleId === "userWorks" && !isGuestUser.value) {
+    const pendingTab = store.pendingWorksSourceTab;
+    store.pendingWorksSourceTab = "";
+    worksSourceTab.value = pendingTab === "official" ? "official" : "mine";
+    worksStatusFilter.value = "all";
+    worksSearchKeyword.value = "";
+    await store.loadActiveModule({ preferCache: false });
   }
   trackAdminExperience("MODULE_VIEW", moduleId, "", { fromModuleId: previousModuleId });
 }
@@ -15055,6 +15127,13 @@ onMounted(async () => {
   min-height: 260px;
   color: #667085;
   text-align: center;
+}
+
+.user-works-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
 }
 
 .user-works-empty strong {

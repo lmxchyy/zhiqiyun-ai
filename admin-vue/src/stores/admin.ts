@@ -42,7 +42,9 @@ function hasRunningAiGenerationSnapshot(data: AdminRecord) {
 }
 
 function usesAiImageSnapshot(moduleId: string) {
-  return ["userAiImage", "userWirelessCanvas", "userWorks"].includes(moduleId);
+  // Works center must not reuse the AI-image IndexedDB snapshot, otherwise
+  // newly published montage assets can stay invisible after export.
+  return ["userAiImage", "userWirelessCanvas"].includes(moduleId);
 }
 
 function emptyOnlineWorkspaceData(): AdminRecord {
@@ -168,15 +170,21 @@ export const useAdminStore = defineStore("admin", {
     error: "",
     data: {} as AdminRecord,
     dataByModule: {} as Record<string, AdminRecord>,
-    dataByEndpoint: {} as Record<string, AdminRecord>
+    dataByEndpoint: {} as Record<string, AdminRecord>,
+    /** App.vue opens works center on this tab when set (e.g. from smart-video). */
+    pendingWorksSourceTab: "" as "" | "mine" | "official"
   }),
   getters: {
     activeModule: (state) => adminModules.find((item) => item.id === state.activeModuleId) || adminModules[0]
   },
   actions: {
+    openWorksMine() {
+      this.pendingWorksSourceTab = "mine";
+      return this.selectModule("userWorks");
+    },
     async selectModule(moduleId: string) {
       this.activeModuleId = moduleId;
-      await this.loadActiveModule();
+      await this.loadActiveModule(moduleId === "userWorks" ? { preferCache: false } : {});
     },
     async loadActiveModule(options: { preferCache?: boolean; silent?: boolean } = {}) {
       const moduleId = this.activeModuleId;
@@ -193,6 +201,10 @@ export const useAdminStore = defineStore("admin", {
       let hasCachedModuleData = false;
       const shouldUseAiImageSnapshot = usesAiImageSnapshot(moduleId);
       const shouldRenderInstantly = usesInstantWorkspace(moduleId);
+      if (moduleId === "userWorks" && !preferCache && endpoint) {
+        delete this.dataByModule[moduleId];
+        delete this.dataByEndpoint[endpoint];
+      }
       if (shouldUseAiImageSnapshot && preferCache) {
         try {
           const cached = await readAiImageSnapshot();
