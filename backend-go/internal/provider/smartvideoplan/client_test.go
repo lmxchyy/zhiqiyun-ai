@@ -54,7 +54,7 @@ func validPlanJSON() string {
 }`
 }
 
-func TestPlanClientForcesJSONSchemaAndParsesPlan(t *testing.T) {
+func TestPlanClientForcesJSONObjectAndParsesPlan(t *testing.T) {
 	stub := &stubChat{response: chat.Response{
 		Model: "planner-x",
 		Message: chat.Message{Role: "assistant", Content: validPlanJSON()},
@@ -79,7 +79,7 @@ func TestPlanClientForcesJSONSchemaAndParsesPlan(t *testing.T) {
 		t.Fatalf("usage = %+v", usage)
 	}
 	format, _ := stub.lastReq.Params["response_format"].(map[string]any)
-	if format["type"] != "json_schema" {
+	if format["type"] != "json_object" {
 		t.Fatalf("response_format = %+v", stub.lastReq.Params["response_format"])
 	}
 }

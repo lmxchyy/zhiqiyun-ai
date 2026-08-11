@@ -543,7 +543,10 @@ export const useSmartVideoStore = defineStore("smartVideo", {
           return;
         }
         if (state === "FAILED") {
-          this.errorMessage = this.planTask.errorMessage || "方案生成失败";
+          this.errorMessage = toErrorMessage(createAdminApiError({
+            error: this.planTask.errorMessage || "方案生成失败",
+            code: this.planTask.errorCode || "provider_unavailable"
+          }));
           this.phase = "failed";
           return;
         }
@@ -605,7 +608,11 @@ export const useSmartVideoStore = defineStore("smartVideo", {
     },
 
     async confirmCurrentVersion() {
-      if (!this.project || !this.currentVersion) return;
+      if (!this.project) return;
+      if (!this.currentVersion) {
+        this.errorMessage = "请先成功生成方案后再确认";
+        return;
+      }
       if (this.planDirty) {
         await this.saveRevision("确认前自动保存");
         if (this.planDirty) return;

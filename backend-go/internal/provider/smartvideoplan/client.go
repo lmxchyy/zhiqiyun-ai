@@ -74,13 +74,11 @@ func (c *Client) Plan(ctx context.Context, request smartvideo.PlanRequest) (smar
 		Params: map[string]any{
 			"temperature": 0.2,
 			"max_tokens":  8192,
+			// Many OpenAI-compatible gateways (incl. DeepSeek via newapi) reject
+			// json_schema / strict response_format. json_object is widely supported
+			// and we still validate/normalize the decoded EditPlanV1 locally.
 			"response_format": map[string]any{
-				"type": "json_schema",
-				"json_schema": map[string]any{
-					"name":   "edit_plan_v1",
-					"strict": true,
-					"schema": editPlanJSONSchema(),
-				},
+				"type": "json_object",
 			},
 			"messages": []chat.Message{
 				{Role: "system", Content: planSystemPrompt()},
@@ -149,6 +147,8 @@ func buildPlanPrompt(request smartvideo.PlanRequest) string {
 		}
 		b.WriteByte('\n')
 	}
+	b.WriteString("请严格按以下 JSON Schema 输出单个 JSON 对象：\n")
+	_ = json.NewEncoder(&b).Encode(editPlanJSONSchema())
 	return b.String()
 }
 

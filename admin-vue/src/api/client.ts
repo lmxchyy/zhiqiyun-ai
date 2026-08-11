@@ -53,6 +53,7 @@ export function chineseAdminErrorMessage(message: unknown, status = 0, fallback 
   const normalized = source.toLowerCase();
   if (/network error|failed to fetch|network request failed|connection (?:refused|reset)/.test(normalized)) return "网络连接失败，请检查网络后重试";
   if (/timeout|timed out|deadline exceeded/.test(normalized)) return "请求超时，请稍后重试";
+  if (/response_format|json_schema|invalid_request_error/.test(normalized)) return "方案生成模型参数不兼容，请稍后重试或联系管理员";
   if (/provider_invalid_json|invalid_plan|image_source_bounds/.test(normalized)) return "方案内容格式有误，系统将自动修正后请重试生成";
   if (/provider_unavailable|chat provider/.test(normalized)) return "方案生成服务暂时不可用，请稍后重试";
   if (/invalid (?:username|email|mobile|phone|account|password|credentials)|incorrect password|bad credentials/.test(normalized)) return "账号或密码不正确";
