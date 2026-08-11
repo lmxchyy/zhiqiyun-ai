@@ -115,6 +115,7 @@ type RenderRepository interface {
 	GetRenderTask(context.Context, Access, string, string) (RenderTask, error)
 	MarkRenderQueued(context.Context, string) error
 	AcquireRenderTask(context.Context, string, string, time.Duration) (RenderTask, error)
+	RecoverExpiredRenderTasks(context.Context, int) ([]string, error)
 	HeartbeatRenderTask(context.Context, string, string, time.Duration) error
 	AdvanceRenderTask(context.Context, string, string, string, string, string, int) error
 	AttachVoiceCaptionArtifacts(context.Context, string, string, string, string) error

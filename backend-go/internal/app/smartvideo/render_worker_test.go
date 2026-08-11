@@ -26,6 +26,9 @@ func (r *memoryRenderRepo) GetRenderTask(_ context.Context, access Access, proje
 	return task, nil
 }
 func (r *memoryRenderRepo) MarkRenderQueued(context.Context, string) error { return nil }
+func (r *memoryRenderRepo) RecoverExpiredRenderTasks(context.Context, int) ([]string, error) {
+	return nil, nil
+}
 func (r *memoryRenderRepo) AcquireRenderTask(_ context.Context, taskID, workerID string, _ time.Duration) (RenderTask, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

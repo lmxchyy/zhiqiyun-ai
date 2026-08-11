@@ -52,11 +52,15 @@ func (w *RenderWorker) Run(ctx context.Context) error { return w.queue.Run(ctx, 
 func (w *RenderWorker) handle(parent context.Context, job RenderJob) QueueDecision {
 	task, err := w.repository.AcquireRenderTask(parent, job.TaskID, w.options.WorkerID, w.options.LeaseDuration)
 	if errors.Is(err, ErrNotFound) {
-		return QueueDecision{}
+		// Another worker may still hold a fresh lease after a crash/restart. Retry
+		// instead of silently ACKing the Redis job, otherwise the task becomes orphaned.
+		log.Printf("smartvideo_render operation=acquire task_id=%s result=not_found retry=20s", job.TaskID)
+		return QueueDecision{RetryAfter: 20 * time.Second}
 	}
 	if err != nil {
 		return QueueDecision{RetryAfter: 5 * time.Second}
 	}
+	log.Printf("smartvideo_render operation=acquired task_id=%s worker=%s status=%s", task.ID, w.options.WorkerID, task.Status)
 	ctx, cancel := context.WithTimeout(parent, w.options.TaskTimeout)
 	defer cancel()
 	stop := make(chan struct{})

@@ -168,7 +168,7 @@ func NormalizeEditPlanV1(plan EditPlanV1, ownedAssetIDs map[string]ProjectAsset)
 
 	if plan.Voice.Enabled {
 		if strings.TrimSpace(plan.Voice.ModelKey) == "" {
-			plan.Voice.ModelKey = "smart-video-speech"
+			plan.Voice.ModelKey = "tts-1"
 		}
 		if strings.TrimSpace(plan.Voice.VoiceKey) == "" {
 			plan.Voice.VoiceKey = "alloy"

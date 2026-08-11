@@ -99,12 +99,63 @@ func (r *PostgresRepository) AcquireRenderTask(ctx context.Context, taskID, work
  lease_owner=$2,lease_expires_at=now()+($3 * interval '1 millisecond'),heartbeat_at=now(),
  started_at=coalesce(started_at,now()),updated_at=now(),error_code=null,error_message=null
  where id=$1 and attempt_count < max_attempts and run_after <= now()
- and (status in ('CREATED','QUEUED') or (status in ('PROCESSING','SYNTHESIZING','RENDERING','UPLOADING','PUBLISHING') and lease_expires_at < now()))
+ and (
+   status in ('CREATED','QUEUED')
+   or (status in ('PROCESSING','SYNTHESIZING','RENDERING','UPLOADING','PUBLISHING') and lease_expires_at < now())
+   or (status in ('PROCESSING','SYNTHESIZING','RENDERING','UPLOADING','PUBLISHING') and lease_owner=$2)
+ )
  returning `+renderTaskColumns, taskID, workerID, lease.Milliseconds()))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RenderTask{}, ErrNotFound
 	}
 	return task, err
+}
+
+// RecoverExpiredRenderTasks resets abandoned in-flight renders so workers can reclaim them.
+func (r *PostgresRepository) RecoverExpiredRenderTasks(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		with stuck as (
+			select id from video_render_tasks
+			where finished_at is null
+			  and status in ('CREATED','QUEUED','PROCESSING','SYNTHESIZING','RENDERING','UPLOADING')
+			  and (
+			    status in ('CREATED','QUEUED')
+			    or lease_expires_at is null
+			    or lease_expires_at < now()
+			  )
+			  and updated_at < now() - interval '30 seconds'
+			order by updated_at asc
+			limit $1
+			for update skip locked
+		)
+		update video_render_tasks t set
+			status='QUEUED',
+			stage='queued',
+			step='queued',
+			progress=case when t.progress < 5 then 5 else t.progress end,
+			lease_owner=null,
+			lease_expires_at=null,
+			run_after=now(),
+			updated_at=now()
+		from stuck
+		where t.id=stuck.id
+		returning t.id`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return ids, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (r *PostgresRepository) HeartbeatRenderTask(ctx context.Context, taskID, workerID string, lease time.Duration) error {

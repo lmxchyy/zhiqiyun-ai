@@ -20,8 +20,13 @@ func (a SpeechClientAdapter) SynthesizeAudio(ctx context.Context, req smartvideo
 		return smartvideo.SpeechAudio{}, smartvideo.ErrSpeechNotReady
 	}
 	format := "wav"
+	modelKey := strings.TrimSpace(req.ModelKey)
+	switch strings.ToLower(modelKey) {
+	case "", "smart-video-speech", "smart_video_speech", "smart-video-tts":
+		modelKey = "tts-1"
+	}
 	result, err := a.Client.Synthesize(ctx, speech.Request{
-		Text: req.Text, ModelKey: req.ModelKey, VoiceKey: req.VoiceKey, Speed: req.Speed, Format: format,
+		Text: req.Text, ModelKey: modelKey, VoiceKey: req.VoiceKey, Speed: req.Speed, Format: format,
 	})
 	if err != nil {
 		return smartvideo.SpeechAudio{}, err

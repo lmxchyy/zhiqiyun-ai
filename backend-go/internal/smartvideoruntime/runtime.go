@@ -303,6 +303,7 @@ func (r *Runtime) runHealthAndMetrics(ctx context.Context) {
 }
 
 func (r *Runtime) emitMetrics(ctx context.Context) {
+	r.recoverStuckRenders(ctx)
 	analysisDepth, analysisErr := r.analysisQueue.Depth(ctx)
 	planDepth, planErr := r.planQueue.Depth(ctx)
 	renderDepth, renderErr := r.renderQueue.Depth(ctx)
@@ -318,6 +319,25 @@ func (r *Runtime) emitMetrics(ctx context.Context) {
 		renderDepth.Pending, renderDepth.Working, renderDepth.Delayed, renderDepth.Dead,
 		outboxPending, oldestAgeMS, r.planReady, r.speechReady,
 	)
+}
+
+func (r *Runtime) recoverStuckRenders(ctx context.Context) {
+	if r == nil || r.db == nil || r.renderQueue == nil {
+		return
+	}
+	repo := smartvideo.NewPostgresRepository(r.db)
+	ids, err := repo.RecoverExpiredRenderTasks(ctx, 20)
+	if err != nil {
+		log.Printf("smartvideo_render operation=recover result=failed err=%v", err)
+		return
+	}
+	for _, id := range ids {
+		if err := r.renderQueue.Enqueue(ctx, smartvideo.RenderJob{TaskID: id}, 0); err != nil {
+			log.Printf("smartvideo_render operation=requeue task_id=%s result=failed err=%v", id, err)
+			continue
+		}
+		log.Printf("smartvideo_render operation=requeue task_id=%s result=ok", id)
+	}
 }
 
 func countPendingOutbox(ctx context.Context, db *sql.DB) (int64, error) {

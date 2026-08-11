@@ -796,6 +796,29 @@ func (r *MemoryRepository) AcquireRenderTask(_ context.Context, taskID, workerID
 	return task, nil
 }
 
+func (r *MemoryRepository) RecoverExpiredRenderTasks(_ context.Context, limit int) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if limit <= 0 {
+		limit = 20
+	}
+	ids := make([]string, 0)
+	for id, task := range r.tasks {
+		switch task.Status {
+		case RenderStatusCreated, RenderStatusQueued, RenderStatusProcessing, RenderStatusSynthesizing, RenderStatusRendering, RenderStatusUploading:
+			task.Status = RenderStatusQueued
+			task.Stage = "queued"
+			task.UpdatedAt = time.Now().UTC()
+			r.tasks[id] = task
+			ids = append(ids, id)
+			if len(ids) >= limit {
+				return ids, nil
+			}
+		}
+	}
+	return ids, nil
+}
+
 func (r *MemoryRepository) HeartbeatRenderTask(context.Context, string, string, time.Duration) error {
 	return nil
 }

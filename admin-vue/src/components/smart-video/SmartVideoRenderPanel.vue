@@ -7,11 +7,22 @@
       </div>
       <div class="sv-inline">
         <button type="button" class="sv-btn" :disabled="store.busy || !store.currentVersion" @click="store.loadQuote()">估算积分</button>
-        <button type="button" class="sv-btn primary" :disabled="store.busy || store.phase === 'rendering'" @click="store.startExport()">提交导出</button>
+        <button
+          type="button"
+          class="sv-btn primary"
+          :disabled="store.busy || (store.phase === 'rendering' && !isRenderFailed)"
+          @click="store.startExport()"
+        >
+          {{ store.phase === 'rendering' && !isRenderFailed ? '导出中…' : '提交导出' }}
+        </button>
         <button v-if="store.phase === 'rendering'" type="button" class="sv-btn ghost" :disabled="store.busy" @click="store.cancelExport()">取消</button>
-        <button v-if="store.renderTask && ['FAILED'].includes(String(store.renderTask.status).toUpperCase())" type="button" class="sv-btn" @click="store.retryExport()">重试</button>
+        <button v-if="isRenderFailed" type="button" class="sv-btn" @click="store.retryExport()">重试</button>
       </div>
     </div>
+
+    <p v-if="store.phase === 'rendering' && !isRenderFailed" class="sv-muted">
+      正在导出成片，按钮暂时不可点属正常；可点「取消」后重新提交。
+    </p>
 
     <div v-if="store.quote" class="sv-quote">
       <strong>{{ store.quote.points }} 积分</strong>
@@ -35,11 +46,14 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import { useAdminStore } from "../../stores/admin";
 import { useSmartVideoStore } from "../../stores/smartVideo";
 
 const store = useSmartVideoStore();
 const admin = useAdminStore();
+
+const isRenderFailed = computed(() => ["FAILED"].includes(String(store.renderTask?.status || "").toUpperCase()));
 
 function formatTime(value?: string) {
   if (!value) return "-";
