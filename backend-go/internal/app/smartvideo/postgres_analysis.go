@@ -113,6 +113,55 @@ func (r *PostgresRepository) MarkAnalysisQueued(ctx context.Context, id string) 
 	return err
 }
 
+func (r *PostgresRepository) EnqueueAnalysisTaskWithOutbox(ctx context.Context, task AnalysisTask, outbox OutboxEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `with changed as (
+		update video_asset_analysis_tasks set status='QUEUED',updated_at=now()
+		where id=$1 and status='PENDING' returning asset_id
+	)
+	update video_project_assets set analysis_status='QUEUED',updated_at=now()
+	where id in (select asset_id from changed)`, task.ID)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		// Already queued/running — still ensure outbox exists for recovery.
+	}
+	payload := []byte("{}")
+	if len(outbox.Payload) > 0 {
+		payload = outbox.Payload
+	}
+	aggregateType := outbox.AggregateType
+	if aggregateType == "" {
+		aggregateType = "analysis"
+	}
+	eventType := outbox.EventType
+	if eventType == "" {
+		eventType = "enqueue_requested"
+	}
+	aggregateID := outbox.AggregateID
+	if aggregateID == "" {
+		aggregateID = task.ID
+	}
+	tenantID := outbox.TenantID
+	if tenantID == "" {
+		tenantID = task.TenantID
+	}
+	_, err = tx.ExecContext(ctx, `insert into video_task_outbox
+		(tenant_id,aggregate_type,aggregate_id,event_type,payload,state)
+		values($1,$2,$3,$4,$5,'pending')
+		on conflict(aggregate_type,aggregate_id,event_type) do nothing`,
+		tenantID, aggregateType, aggregateID, eventType, payload)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (r *PostgresRepository) AcquireAnalysisTask(ctx context.Context, id, workerID string, lease time.Duration) (AnalysisTask, ProjectAsset, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
@@ -191,17 +240,28 @@ func (r *PostgresRepository) CompleteAnalysisTask(ctx context.Context, id, worke
 	if err != nil {
 		return err
 	}
+	summary := result.Summary
+	if summary == nil {
+		built := BuildAssetAnalysisSummary(result.Metadata, result.ThumbnailFileID)
+		summary = &built
+	}
+	summaryRaw, err := json.Marshal(summary)
+	if err != nil {
+		return err
+	}
+	frameIDs, _ := json.Marshal(summary.RepresentativeFrames)
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var assetID string
+	var assetID, projectID, tenantID string
 	err = tx.QueryRowContext(ctx, `update video_asset_analysis_tasks set status='SUCCEEDED',
 		analyzer_version=$3,error_code=null,sanitized_error_message=null,lease_owner=null,
 		lease_expires_at=null,heartbeat_at=null,finished_at=now(),updated_at=now()
-		where id=$1 and status='RUNNING' and lease_owner=$2 returning asset_id`,
-		id, workerID, result.AnalyzerVersion).Scan(&assetID)
+		where id=$1 and status='RUNNING' and lease_owner=$2
+		returning asset_id,project_id,tenant_id`,
+		id, workerID, result.AnalyzerVersion).Scan(&assetID, &projectID, &tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrAnalysisLeaseLost
 	}
@@ -209,11 +269,30 @@ func (r *PostgresRepository) CompleteAnalysisTask(ctx context.Context, id, worke
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `update video_project_assets set analysis_status='SUCCEEDED',
-		normalized_metadata=$1,filtered_probe_result=$2,thumbnail_file_id=nullif($3,''),
-		proxy_file_id=nullif($4,''),analyzer_version=$5,error_code=null,sanitized_error_message=null,
-		analysis_finished_at=now(),updated_at=now() where id=$6`,
-		metadata, filtered, result.ThumbnailFileID, result.ProxyFileID, result.AnalyzerVersion, assetID); err != nil {
+		normalized_metadata=$1::jsonb,filtered_probe_result=$2::jsonb,analysis_summary=$3::jsonb,
+		representative_frame_file_ids=$4::jsonb,duration_ms=$5,
+		thumbnail_file_id=nullif($6,''),proxy_file_id=nullif($7,''),analyzer_version=$8,
+		error_code=null,sanitized_error_message=null,analysis_finished_at=now(),updated_at=now()
+		where id=$9`,
+		metadata, filtered, summaryRaw, frameIDs, summary.DurationMs,
+		result.ThumbnailFileID, result.ProxyFileID, result.AnalyzerVersion, assetID); err != nil {
 		return err
+	}
+
+	var pending int
+	if err := tx.QueryRowContext(ctx, `select count(*) from video_project_assets
+		where project_id=$1 and tenant_id=$2 and deleted_at is null
+		  and coalesce(analysis_status,'') <> 'SUCCEEDED'`, projectID, tenantID).Scan(&pending); err != nil {
+		return err
+	}
+	if pending == 0 {
+		if _, err := tx.ExecContext(ctx, `update video_projects set
+			status='MATERIAL_READY',active_analysis_task_id=null,error_stage=null,
+			error_code=null,error_message=null,updated_at=now()
+			where id=$1 and tenant_id=$2 and status in ('DRAFT','ANALYZING','FAILED')`,
+			projectID, tenantID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

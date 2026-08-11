@@ -137,11 +137,13 @@ func TestPublicGuestExperienceEventsAreWhitelistedAndSanitized(t *testing.T) {
 
 func TestGenerationTaskLifecycle(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 
 	assertStatus(t, handler, http.MethodGet, "/api/v1/health", nil, http.StatusOK)
@@ -194,7 +196,10 @@ func TestGenerationTaskLifecycle(t *testing.T) {
 }
 
 func TestUserContentPagedResponses(t *testing.T) {
-	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -260,11 +265,13 @@ func TestGenerationTaskPrioritySort(t *testing.T) {
 
 func TestVideoGenerationReturnsPendingAndCompletesAsync(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -358,6 +365,42 @@ func TestGenerationErrorMessageExtractsProviderMessage(t *testing.T) {
 	}
 }
 
+func TestGenerationErrorMessageLocalizesEnglishTechnicalErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  string
+		want string
+	}{
+		{
+			name: "input_reference unmarshal",
+			err:  `json: cannot unmarshal object into Go struct field .Alias.input_reference of type string`,
+			want: "视频参考图参数格式错误，请重新上传首帧图后重试",
+		},
+		{
+			name: "seconds unmarshal",
+			err:  `json: cannot unmarshal number into Go struct field .Alias.seconds of type string`,
+			want: "视频时长参数格式错误，请重新选择时长后重试",
+		},
+		{
+			name: "generic english technical",
+			err:  `video provider returned unexpected payload`,
+			want: "生成失败，请稍后重试。若持续失败请检查模型、参数或上游通道配置",
+		},
+		{
+			name: "storage master key",
+			err:  `resolve generated artifact storage: STORAGE_MASTER_KEY is required to manage storage credentials`,
+			want: "对象存储密钥未配置，请检查 STORAGE_MASTER_KEY 后重试",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := generationErrorMessage(errors.New(tt.err)); got != tt.want {
+				t.Fatalf("generationErrorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
 	err := errors.New("image provider returned 429: Upstream rate limit exceeded")
 	if !shouldFallbackImageGeneration(err) {
@@ -409,6 +452,7 @@ func TestImageEditLineageParametersAreAllowedInternalParameters(t *testing.T) {
 func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	testStore := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, testStore, "user_000002", 100)
 	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
@@ -650,8 +694,8 @@ func TestNormalizeAICapabilityDefaultsMergesMissingBillingRules(t *testing.T) {
 			"resolution": "1080p",
 		},
 	}, data)
-	if cost != 360 {
-		t.Fatalf("doubao point cost = %d, want 360", cost)
+	if cost != 2400 {
+		t.Fatalf("doubao point cost = %d, want 2400", cost)
 	}
 	grokCost := generationPointCostForRequest(createGenerationTaskRequest{
 		ModuleCode: moduleVideoGeneration,
@@ -908,8 +952,12 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
 	pointsBefore := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
-	if pointsBefore.Code != http.StatusOK || !strings.Contains(pointsBefore.Body.String(), `"available":959`) {
+	if pointsBefore.Code != http.StatusOK || !strings.Contains(pointsBefore.Body.String(), `"available":0`) {
 		t.Fatalf("initial points response = %d %s", pointsBefore.Code, pointsBefore.Body.String())
+	}
+	grant := authedRequest(t, handler, http.MethodPost, "/api/v1/admin/customers/user_000002/point-gifts", bytes.NewBufferString(`{"points":10,"reason":"generation closed-loop fixture","idempotencyKey":"generation-closed-loop-gift"}`), adminToken)
+	if grant.Code != http.StatusOK {
+		t.Fatalf("grant test points status = %d, body = %s", grant.Code, grant.Body.String())
 	}
 
 	createBody := bytes.NewBufferString(`{"type":"TEXT_TO_IMAGE","prompt":"闭环测试图片","model":"mock-standard","params":{"count":2}}`)
@@ -926,7 +974,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	}
 
 	pointsAfter := authedRequest(t, handler, http.MethodGet, "/api/v1/points/account", nil, token)
-	if pointsAfter.Code != http.StatusOK || !strings.Contains(pointsAfter.Body.String(), `"available":957`) {
+	if pointsAfter.Code != http.StatusOK || !strings.Contains(pointsAfter.Body.String(), `"available":8`) {
 		t.Fatalf("deducted points response = %d %s", pointsAfter.Code, pointsAfter.Body.String())
 	}
 
@@ -936,7 +984,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	}
 
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if customers.Code != http.StatusOK || !strings.Contains(customers.Body.String(), `"pointsAvailable":957`) || !strings.Contains(customers.Body.String(), "演示用户") {
+	if customers.Code != http.StatusOK || !strings.Contains(customers.Body.String(), `"pointsAvailable":8`) || !strings.Contains(customers.Body.String(), "演示用户") {
 		t.Fatalf("admin customers did not reflect deducted points: %d %s", customers.Code, customers.Body.String())
 	}
 
@@ -958,7 +1006,7 @@ func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 
 	billing := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/billing/events", nil, adminToken)
 	billingBody := billing.Body.String()
-	if billing.Code != http.StatusOK || !strings.Contains(billingBody, task.ID) || !strings.Contains(billingBody, `"balanceBefore":959`) || !strings.Contains(billingBody, `"balanceAfter":957`) {
+	if billing.Code != http.StatusOK || !strings.Contains(billingBody, task.ID) || !strings.Contains(billingBody, `"balanceBefore":10`) || !strings.Contains(billingBody, `"balanceAfter":8`) {
 		t.Fatalf("billing events missing generation task: %d %s", billing.Code, billingBody)
 	}
 
@@ -1042,7 +1090,9 @@ func TestFirstRechargeRequires996AgentPackage(t *testing.T) {
 
 func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()})
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -1088,11 +1138,13 @@ func TestPPTEstimateUsesBillingRulesWithoutDeductingPoints(t *testing.T) {
 
 func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -1198,11 +1250,13 @@ func TestPPTGenerationCreatesUsageEvent(t *testing.T) {
 
 func TestPPTImageGenerationCreatesImageUsageEvent(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -1318,7 +1372,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	raw := `{
 		"users":[
 			{"id":"user_000001","email":"admin@xianzhi.ai","name":"平台管理员","role":"SUPER_ADMIN","status":"ACTIVE","planId":"plan_free"},
-			{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month","referredBy":"user_000003"},
+			{"id":"user_000002","email":"demo@xianzhi.ai","name":"演示用户","role":"MEMBER","status":"ACTIVE","planId":"plan_month"},
 			{"id":"user_000003","email":"agent1@xianzhi.ai","name":"华东推广员","role":"AGENT_L1","status":"ACTIVE","planId":"plan_free"},
 			{"id":"user_000004","email":"agent2@xianzhi.ai","name":"华东初级代理商","role":"AGENT_L2","status":"ACTIVE","planId":"plan_free"}
 		],
@@ -1365,7 +1419,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	body := res.Body.String()
-	if res.Code != http.StatusOK || !strings.Contains(body, `"directCustomers":1`) || !strings.Contains(body, `"childAgents":1`) || !strings.Contains(body, `"totalCommission":990`) || !strings.Contains(body, "演示用户") || !strings.Contains(body, `"inviteLink":"http://localhost:3100/register?invite=EAST001"`) {
+	if res.Code != http.StatusOK || !strings.Contains(body, `"directCustomers":0`) || !strings.Contains(body, `"childAgents":1`) || !strings.Contains(body, `"totalCommission":990`) || strings.Contains(body, "演示用户") || !strings.Contains(body, `"inviteLink":"http://localhost:3100/register?invite=EAST001"`) {
 		t.Fatalf("channel center response = %d %s", res.Code, body)
 	}
 
@@ -1382,7 +1436,7 @@ func TestAgentLoginAndChannelCenter(t *testing.T) {
 	reqAfterRegister.Header.Set("Authorization", "Bearer "+loginBody.AccessToken)
 	resAfterRegister := httptest.NewRecorder()
 	handler.ServeHTTP(resAfterRegister, reqAfterRegister)
-	if resAfterRegister.Code != http.StatusOK || !strings.Contains(resAfterRegister.Body.String(), "邀请注册用户") || !strings.Contains(resAfterRegister.Body.String(), `"directCustomers":2`) {
+	if resAfterRegister.Code != http.StatusOK || !strings.Contains(resAfterRegister.Body.String(), "邀请注册用户") || !strings.Contains(resAfterRegister.Body.String(), `"directCustomers":1`) {
 		t.Fatalf("channel center after register = %d %s", resAfterRegister.Code, resAfterRegister.Body.String())
 	}
 	adminCustomers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
@@ -2303,7 +2357,7 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 	}
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
 	customerBody := customers.Body.String()
-	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":10959`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
+	if customers.Code != http.StatusOK || !strings.Contains(customerBody, `"pointsAvailable":10000`) || !strings.Contains(customerBody, `"modelGroup":"生图备份"`) || !strings.Contains(customerBody, `"modelApiKeyId":"key_user_000002"`) {
 		t.Fatalf("recharge points not reflected: %d %s", customers.Code, customers.Body.String())
 	}
 	commissions := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
@@ -2316,7 +2370,7 @@ func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 		t.Fatalf("repeat mark paid status = %d, body = %s", markPaidAgain.Code, markPaidAgain.Body.String())
 	}
 	customersAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":10959`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":20959`) {
+	if strings.Count(customersAfterRepeat.Body.String(), `"pointsAvailable":10000`) == 0 || strings.Contains(customersAfterRepeat.Body.String(), `"pointsAvailable":20000`) {
 		t.Fatalf("repeat mark paid was not idempotent: %s", customersAfterRepeat.Body.String())
 	}
 	commissionsAfterRepeat := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/commissions", nil, adminToken)
@@ -2414,7 +2468,7 @@ func TestPaymentCallbackRequiresSecretAndValidatesAmount(t *testing.T) {
 		t.Fatalf("repeat callback status = %d, body = %s", repeat.Code, repeat.Body.String())
 	}
 	customers := authedRequest(t, handler, http.MethodGet, "/api/v1/admin/customers", nil, adminToken)
-	if strings.Contains(customers.Body.String(), `"pointsAvailable":2959`) {
+	if !strings.Contains(customers.Body.String(), `"pointsAvailable":1000`) || strings.Contains(customers.Body.String(), `"pointsAvailable":2000`) {
 		t.Fatalf("repeat callback duplicated point grant: %s", customers.Body.String())
 	}
 	data, err = newJSONStore(dataPath).AdminData()
@@ -2963,11 +3017,13 @@ func TestAdminUsageAndCommissionOperations(t *testing.T) {
 
 func TestConcurrentGenerationTaskCreatesKeepUniqueIDs(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 

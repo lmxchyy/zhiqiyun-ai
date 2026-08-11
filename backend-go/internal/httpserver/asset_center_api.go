@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,7 @@ type assetCenterDataStore interface {
 
 type generationTaskControlStore interface {
 	CancelGenerationTaskForUser(userID string, id string) (generationTask, error)
+	DeleteGenerationTaskForUser(userID string, id string) error
 }
 
 func assetCenterQueryFromRequest(r *http.Request) assetCenterListQuery {
@@ -88,15 +90,16 @@ func splitAssetCenterValues(value string) []string {
 	return items
 }
 
-func (a api) assetsForCenter(userID string, query assetCenterListQuery) ([]asset, int, error) {
+func (a api) assetsForCenter(userID string, tenantID string, query assetCenterListQuery) ([]asset, int, error) {
 	if store, ok := a.store.(assetCenterDataStore); ok {
 		return store.ListAssetsForCenter(userID, query)
 	}
+	tenantID = strings.TrimSpace(tenantID)
 	items, err := a.store.ListAssets()
 	if err != nil {
 		return nil, 0, err
 	}
-	items = filterAssetCenterItems(items, userID, query)
+	items = filterAssetCenterItems(items, userID, tenantID, query)
 	total := len(items)
 	start := query.Offset
 	if start > total {
@@ -325,6 +328,29 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, task)
 }
 
+func (a api) deleteGenerationTask(w http.ResponseWriter, r *http.Request) {
+	user, err := a.currentUser(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("id"))
+	store, ok := a.store.(generationTaskControlStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, errors.New("generation task deletion is unavailable"))
+		return
+	}
+	if err := store.DeleteGenerationTaskForUser(user.ID, id); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "id": id})
+}
+
 func (a api) registerGenerationTaskCancel(id string, cancel context.CancelFunc) {
 	if a.taskCancels != nil && strings.TrimSpace(id) != "" && cancel != nil {
 		a.taskCancels.Store(id, cancel)
@@ -465,11 +491,17 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 	return task, nil
 }
 
-func filterAssetCenterItems(items []asset, userID string, query assetCenterListQuery) []asset {
+func filterAssetCenterItems(items []asset, userID string, tenantID string, query assetCenterListQuery) []asset {
 	filtered := make([]asset, 0, len(items))
 	for _, item := range items {
 		if item.UserID != userID || !assetMatchesCenterQuery(item, query) {
 			continue
+		}
+		if tenantID != "" {
+			itemTenantID := strings.TrimSpace(item.TenantID)
+			if itemTenantID != "" && itemTenantID != tenantID {
+				continue
+			}
 		}
 		filtered = append(filtered, item)
 	}
@@ -621,7 +653,7 @@ func (s *jsonStore) ListAssetsForCenter(userID string, query assetCenterListQuer
 	if err != nil {
 		return nil, 0, err
 	}
-	items := filterAssetCenterItems(data.Assets, userID, query)
+	items := filterAssetCenterItems(data.Assets, userID, "", query)
 	total := len(items)
 	start := query.Offset
 	if start > total {
@@ -693,42 +725,57 @@ func assetCenterProjectsFromItems(items []asset, userID string) []map[string]any
 }
 
 func (s *jsonStore) CancelGenerationTaskForUser(userID string, id string) (generationTask, error) {
-	task, found, err := func() (generationTask, bool, error) {
-		tasks, err := s.ListGenerationTasks()
-		if err != nil {
-			return generationTask{}, false, err
-		}
-		for _, item := range tasks {
-			if item.ID == id && item.UserID == userID {
-				return item, true, nil
+	var task generationTask
+	err := s.updateWithPersonalPoints(context.Background(), func(data *platformData, points *JSONPersonalPointStore) error {
+		found := false
+		for _, item := range data.GenerationTasks {
+			if item.ID != id || item.UserID != userID {
+				continue
 			}
-		}
-		return generationTask{}, false, nil
-	}()
-	if err != nil || !found {
-		if err == nil {
-			err = errors.New("generation task not found")
-		}
-		return generationTask{}, err
-	}
-	if task.Status != "PENDING" && task.Status != "QUEUED" && task.Status != "RUNNING" && task.Status != "PROCESSING" && task.Status != "RETRYING" {
-		return generationTask{}, errors.New("only active tasks can be cancelled")
-	}
-	task, err = s.FailGenerationTask(id, "用户取消生成")
-	if err != nil {
-		return generationTask{}, err
-	}
-	err = s.update(func(data *platformData) error {
-		for index := range data.GenerationTasks {
-			if data.GenerationTasks[index].ID == id && data.GenerationTasks[index].UserID == userID {
-				data.GenerationTasks[index].Status = "CANCELLED"
-				task = data.GenerationTasks[index]
+			found = true
+			if upperTrim(item.Status) == "CANCELLED" {
+				task = item
 				return nil
 			}
+			if !activeGenerationTaskStatus(item.Status) {
+				return errors.New("only active tasks can be cancelled")
+			}
+			break
+		}
+		if !found {
+			return errors.New("generation task not found")
+		}
+		var err error
+		task, err = mutateJSONGenerationFailure(data, points, userID, id, "用户取消生成", "CANCELLED", taskStatusCancelled)
+		return err
+	})
+	return task, err
+}
+
+func generationTaskDeletable(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "FAILED", "ERROR", "CANCELLED", "CANCELED", "REJECTED":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *jsonStore) DeleteGenerationTaskForUser(userID string, id string) error {
+	return s.update(func(data *platformData) error {
+		for index := range data.GenerationTasks {
+			item := data.GenerationTasks[index]
+			if item.ID != id || item.UserID != userID {
+				continue
+			}
+			if !generationTaskDeletable(item.Status) {
+				return errors.New("only failed or cancelled tasks can be deleted")
+			}
+			data.GenerationTasks = append(data.GenerationTasks[:index], data.GenerationTasks[index+1:]...)
+			return nil
 		}
 		return errors.New("generation task not found")
 	})
-	return task, err
 }
 
 func (s *postgresStore) ListAssetsForCenter(userID string, query assetCenterListQuery) ([]asset, int, error) {
@@ -916,27 +963,68 @@ func (s *postgresStore) ListAssetProjectsForUser(userID string) ([]map[string]an
 }
 
 func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (generationTask, error) {
-	task, found, err := s.GetGenerationTaskForUser(userID, id)
-	if err != nil || !found {
-		if err == nil {
-			err = errors.New("generation task not found")
-		}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
 		return generationTask{}, err
 	}
-	if task.Status != "PENDING" && task.Status != "QUEUED" && task.Status != "RUNNING" && task.Status != "PROCESSING" && task.Status != "RETRYING" {
-		return generationTask{}, errors.New("only active tasks can be cancelled")
-	}
-	task, err = s.FailGenerationTask(id, "用户取消生成")
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return generationTask{}, err
 	}
-	ctx, cancel := s.withTimeout()
-	defer cancel()
-	task.Status = "CANCELLED"
-	if _, err := s.db.ExecContext(ctx, `update xz_generation_tasks set status='CANCELLED', raw=jsonb_set(coalesce(raw,'{}'::jsonb),'{status}','"CANCELLED"'::jsonb,true) where id=$1 and user_id=$2`, id, userID); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	task, err := generationTaskForUpdate(ctx, tx, id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && task.UserID != userID) {
+		return generationTask{}, errors.New("generation task not found")
+	}
+	if err != nil {
 		return generationTask{}, err
 	}
-	return task, nil
+	if upperTrim(task.Status) == "CANCELLED" {
+		return task, tx.Commit()
+	}
+	if !activeGenerationTaskStatus(task.Status) {
+		return generationTask{}, errors.New("only active tasks can be cancelled")
+	}
+	task, refunded, _, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, "用户取消生成", "CANCELLED", taskStatusCancelled)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.cancel", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
+		return generationTask{}, err
+	}
+	return task, tx.Commit()
+}
+
+func (s *postgresStore) DeleteGenerationTaskForUser(userID string, id string) error {
+	task, found, err := s.GetGenerationTaskForUser(userID, id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("generation task not found")
+	}
+	if !generationTaskDeletable(task.Status) {
+		return errors.New("only failed or cancelled tasks can be deleted")
+	}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	result, err := s.db.ExecContext(ctx, `
+		delete from xz_generation_tasks
+		where id = $1 and user_id = $2
+		  and upper(coalesce(status, '')) in ('FAILED', 'ERROR', 'CANCELLED', 'CANCELED', 'REJECTED')
+	`, id, userID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return errors.New("generation task not found")
+	}
+	return nil
 }
 
 var _ assetCenterDataStore = (*jsonStore)(nil)

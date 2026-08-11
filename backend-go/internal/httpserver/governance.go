@@ -1,10 +1,13 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -20,6 +23,24 @@ const (
 	actorIDContextKey   actorContextKey = "admin-actor-id"
 	actorRoleContextKey actorContextKey = "admin-actor-role"
 )
+
+var pricingPermissionCodes = []string{
+	"pricing:plan:view",
+	"pricing:entitlement:manage",
+	"pricing:price-plan:manage",
+	"pricing:price-plan:default",
+	"pricing:wechat-good:manage",
+	"pricing:test-whitelist:manage",
+	"pricing:audit:view",
+}
+
+var pointsAdminPermissionCodes = []string{
+	"points:gift-policy:view",
+	"points:gift-policy:manage",
+	"points:gift:grant",
+	"points:balance:correct",
+	"points:lot:view",
+}
 
 func (s *postgresStore) auditMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -40,7 +61,7 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 	return func(c *gin.Context) {
 		userID, err := authenticatedUserID(c.Request, auth.sessions)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			abortAdminAuthenticationRequired(c, err)
 			return
 		}
 		user, found, err := s.GetActiveUser(userID)
@@ -49,12 +70,12 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 			return
 		}
 		if !found {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": errUnauthorized.Error()})
+			abortAdminAuthenticationRequired(c, errUnauthorized)
 			return
 		}
 		if !rbacEnforced() && !strings.HasPrefix(permission, "enterprise:") {
 			if user.Role != "SUPER_ADMIN" {
-				c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{"error": errForbidden.Error()})
+				abortAdminPermissionDenied(c)
 				return
 			}
 			c.Set("actorID", user.ID)
@@ -63,20 +84,50 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 			c.Next()
 			return
 		}
-		ok, err := s.roleHasPermission(c.Request.Context(), user.Role, permission)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if !ok {
-			c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{"error": errForbidden.Error()})
-			return
+		for _, required := range adminPermissionsForRequest(c.Request, permission) {
+			ok, err := s.roleHasPermission(c.Request.Context(), user.Role, required)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if !ok {
+				abortAdminPermissionDenied(c)
+				return
+			}
 		}
 		c.Set("actorID", user.ID)
 		c.Set("actorRole", user.Role)
 		c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
 		c.Next()
 	}
+}
+
+func adminPermissionsForRequest(r *http.Request, primary string) []string {
+	permissions := []string{primary}
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	isCustomerCreate := r.Method == http.MethodPost && path == "/customers"
+	isCustomerPatch := r.Method == http.MethodPatch && strings.HasPrefix(path, "/customers/") && strings.Count(strings.Trim(path, "/"), "/") == 1
+	if (isCustomerCreate || isCustomerPatch) && requestJSONHasField(r, "available") && primary != "points:balance:correct" {
+		permissions = append(permissions, "points:balance:correct")
+	}
+	return permissions
+}
+
+func requestJSONHasField(r *http.Request, field string) bool {
+	if r == nil || r.Body == nil {
+		return false
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var submitted map[string]json.RawMessage
+	if json.Unmarshal(body, &submitted) != nil {
+		return false
+	}
+	_, exists := submitted[field]
+	return exists
 }
 
 func superAdminMiddleware(auth authAPI) gin.HandlerFunc {
@@ -88,11 +139,11 @@ func superAdminMiddleware(auth authAPI) gin.HandlerFunc {
 		}
 		user, err := auth.authenticatedUser(c.Request, data)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			abortAdminAuthenticationRequired(c, err)
 			return
 		}
 		if user.Role != "SUPER_ADMIN" {
-			c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{"error": errForbidden.Error()})
+			abortAdminPermissionDenied(c)
 			return
 		}
 		c.Set("actorID", user.ID)
@@ -100,6 +151,26 @@ func superAdminMiddleware(auth authAPI) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
 		c.Next()
 	}
+}
+
+func abortAdminAuthenticationRequired(c *gin.Context, err error) {
+	errorMessage := errUnauthorized.Error()
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		errorMessage = err.Error()
+	}
+	c.AbortWithStatusJSON(http.StatusUnauthorized, map[string]string{
+		"code":    "ADMIN_AUTHENTICATION_REQUIRED",
+		"message": "admin authentication required",
+		"error":   errorMessage,
+	})
+}
+
+func abortAdminPermissionDenied(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusForbidden, map[string]string{
+		"code":    "ADMIN_PERMISSION_DENIED",
+		"message": "admin permission denied",
+		"error":   errForbidden.Error(),
+	})
 }
 
 func actorFromRequest(r *http.Request) (string, string) {
@@ -110,6 +181,88 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if path == "/points/expiry-policy" {
+		if r.Method == http.MethodGet {
+			return "points:gift-policy:view"
+		}
+		return "points:gift-policy:manage"
+	}
+	if strings.HasPrefix(path, "/customers/") && strings.HasSuffix(path, "/point-gifts") {
+		return "points:gift:grant"
+	}
+	if strings.HasPrefix(path, "/customers/") && strings.HasSuffix(path, "/point-corrections") {
+		return "points:balance:correct"
+	}
+	if strings.HasPrefix(path, "/customers/") && strings.HasSuffix(path, "/point-lots") {
+		return "points:lot:view"
+	}
+	if path == "/pricing-health" && r.Method == http.MethodGet {
+		return "pricing:plan:view"
+	}
+	if strings.HasPrefix(path, "/pricing-audit-logs") && r.Method == http.MethodGet {
+		return "pricing:audit:view"
+	}
+	if strings.HasPrefix(path, "/price-plans/") && strings.Contains(path, "/whitelist") {
+		if r.Method == http.MethodGet {
+			return "pricing:plan:view"
+		}
+		return "pricing:test-whitelist:manage"
+	}
+	if strings.HasPrefix(path, "/payment-bindings/") ||
+		(strings.HasPrefix(path, "/price-plans/") && strings.Contains(path, "/payment-bindings")) {
+		if r.Method == http.MethodGet {
+			return "pricing:plan:view"
+		}
+		return "pricing:price-plan:manage"
+	}
+	if strings.HasPrefix(path, "/wechat-virtual-goods") {
+		if r.Method == http.MethodGet {
+			return "pricing:plan:view"
+		}
+		return "pricing:wechat-good:manage"
+	}
+	if strings.HasPrefix(path, "/business-plans") {
+		if r.Method == http.MethodGet {
+			return "pricing:plan:view"
+		}
+		if strings.Contains(path, "/price-plans") {
+			return "pricing:price-plan:manage"
+		}
+		return "pricing:entitlement:manage"
+	}
+	if strings.HasPrefix(path, "/plan-versions/") {
+		if r.Method == http.MethodGet {
+			return "pricing:plan:view"
+		}
+		return "pricing:entitlement:manage"
+	}
+	if strings.HasPrefix(path, "/price-plans/") {
+		if strings.HasSuffix(path, "/make-default") {
+			return "pricing:price-plan:default"
+		}
+		if r.Method == http.MethodGet {
+			return "pricing:plan:view"
+		}
+		return "pricing:price-plan:manage"
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/refunds") {
+		switch {
+		case strings.HasSuffix(path, "/manual-submit"):
+			return "channel:operation-center:refund-manual-submit"
+		case strings.HasSuffix(path, "/manual-approve"):
+			return "channel:operation-center:refund-manual-approve"
+		case strings.HasSuffix(path, "/retry"):
+			return "channel:operation-center:refund-retry"
+		default:
+			return "channel:operation-center:refund-view"
+		}
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/operation-centers/") && strings.HasSuffix(path, "/refunds") {
+		return "channel:operation-center:refund-request"
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/operation-centers/") {
+		return "channel:operation-center:review"
+	}
 	if path == "/identity-consistency" {
 		return "identity:consistency:view"
 	}
@@ -157,6 +310,15 @@ func adminPermissionForRequest(r *http.Request) string {
 		return "finance:commission-rule:manage"
 	}
 	if strings.HasPrefix(path, "/commission-rules/") && r.Method == http.MethodPut {
+		return "finance:commission-rule:manage"
+	}
+	if strings.HasPrefix(path, "/channel-ecosystem/shadow-differences") && r.Method == http.MethodGet {
+		return "finance:commission-rule:view"
+	}
+	if path == "/channel-ecosystem/rollout-config" && r.Method == http.MethodGet {
+		return "finance:commission-rule:view"
+	}
+	if path == "/channel-ecosystem/rollout-config" && r.Method == http.MethodPut {
 		return "finance:commission-rule:manage"
 	}
 	if strings.HasPrefix(path, "/storage/") {
@@ -275,14 +437,84 @@ func (s *postgresStore) roleHasPermission(ctx context.Context, role string, perm
 	if role == "SUPER_ADMIN" {
 		return true, nil
 	}
+	trimmedPermission := strings.TrimSpace(permission)
+	allowLegacyAdminFull := !strings.HasPrefix(trimmedPermission, "pricing:") && !strings.HasPrefix(trimmedPermission, "points:")
 	var ok bool
 	err := s.db.QueryRowContext(ctx, `
 		select exists (
 			select 1 from xz_role_permissions
-			where role = $1 and (permission = $2 or permission = 'admin.full')
+			where role = $1 and (permission = $2 or ($3 and permission = 'admin.full'))
 		)
-	`, role, permission).Scan(&ok)
+	`, role, permission, allowLegacyAdminFull).Scan(&ok)
 	return ok, err
+}
+
+func (s *postgresStore) PricingPermissionsForRole(ctx context.Context, role string) ([]string, error) {
+	role = strings.TrimSpace(role)
+	if strings.EqualFold(role, "SUPER_ADMIN") {
+		return append([]string{}, pricingPermissionCodes...), nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select permission
+		from xz_role_permissions
+		where role = $1 and permission like 'pricing:%'
+		order by permission
+	`, role)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	permissions := make([]string, 0)
+	for rows.Next() {
+		var permission string
+		if err := rows.Scan(&permission); err != nil {
+			return nil, err
+		}
+		permission = strings.TrimSpace(permission)
+		if permission != "" {
+			permissions = append(permissions, permission)
+		}
+	}
+	return permissions, rows.Err()
+}
+
+func (s *postgresStore) AuthPermissionsForRole(ctx context.Context, role string) ([]string, error) {
+	role = strings.TrimSpace(role)
+	if strings.EqualFold(role, "SUPER_ADMIN") {
+		permissions := append([]string{}, pricingPermissionCodes...)
+		return append(permissions, pointsAdminPermissionCodes...), nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select permission
+		from xz_role_permissions
+		where role = $1 and (
+			permission like 'pricing:%'
+			or permission in ($2, $3, $4, $5, $6)
+		)
+		order by permission
+	`, role,
+		pointsAdminPermissionCodes[0],
+		pointsAdminPermissionCodes[1],
+		pointsAdminPermissionCodes[2],
+		pointsAdminPermissionCodes[3],
+		pointsAdminPermissionCodes[4],
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	permissions := make([]string, 0)
+	for rows.Next() {
+		var permission string
+		if err := rows.Scan(&permission); err != nil {
+			return nil, err
+		}
+		permission = strings.TrimSpace(permission)
+		if permission != "" {
+			permissions = append(permissions, permission)
+		}
+	}
+	return permissions, rows.Err()
 }
 
 func insertAuditDirect(ctx context.Context, db *sql.DB, actorID string, actorRole string, action string, resource string, resourceID string, method string, path string, status int, metadata map[string]any) error {

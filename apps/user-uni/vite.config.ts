@@ -18,9 +18,20 @@ export default defineConfig({
     }
   },
   server: {
-    port: 5173,
+    host: "127.0.0.1",
+    port: (() => {
+      const argvPort = process.argv.find((arg, i, arr) => arg === "--port" && arr[i + 1]) 
+        ? Number(process.argv[process.argv.indexOf("--port") + 1])
+        : Number(process.argv.find(arg => /^--port=\d+$/.test(arg))?.split("=")[1] || NaN);
+      return Number(process.env.USER_UNI_DEV_PORT || process.env.PORT || argvPort || 5173);
+    })(),
+    strictPort: true,
     proxy: {
-      "/api": "http://localhost:3100"
-    }
+      "/api": "http://127.0.0.1:3100",
+      "/h5/api": {
+        target: "http://127.0.0.1:3100",
+        rewrite: (p) => p.replace(/^\/h5/, ""),
+      },
+    },
   }
 });

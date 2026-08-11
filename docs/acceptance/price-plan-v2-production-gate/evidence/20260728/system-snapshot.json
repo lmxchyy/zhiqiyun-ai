@@ -1,0 +1,88 @@
+{
+  "snapshotAt": "2026-07-28T23:24:00+08:00",
+  "overallStatus": "NO-GO",
+  "probeMethod": "ssh+docker-exec-readonly",
+  "host": "ai.zs-kjhn.cn",
+  "worktree": {
+    "head": "81315774436cbe540f8e5c0891c89e03669bc044",
+    "tree": "3a3f69cdf45699670b507d77625b857739eb13e1",
+    "dirtyEntriesApprox": 134,
+    "migrations097to100GitStatus": "untracked"
+  },
+  "productionRuntime": {
+    "container": "zhiqiyun-ai-prod-xianzhi-ai-1",
+    "imageRef": "local/xianzhi-ai-platform:ccad94057",
+    "imageId": "sha256:71f110f7123b34387881f84b8cc66edec964e921cb146c2053c93dc1eb26af66",
+    "repoDigests": [],
+    "composeProject": "zhiqiyun-ai-prod",
+    "workingDir": "/opt/zhiqiyun-ai",
+    "health": "healthy"
+  },
+  "v2Flags": {
+    "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": { "container": "UNSET", "effective": false },
+    "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": { "container": "UNSET", "effective": false },
+    "PRICE_PLAN_TEST_ENTRY_ENABLED": { "container": "UNSET", "effective": false }
+  },
+  "wechatVirtualPay": {
+    "enabled": true,
+    "env": "production",
+    "mode": "short_series_goods",
+    "offerId": "1450579876",
+    "appKeyFingerprint": "len=32:Fde***Fxh",
+    "sandboxAppKeyFingerprint": "len=32:r5l***EtZ",
+    "notifyToken": "configured:len=6",
+    "miniProgramAppId": "wx42428e761551a7fb"
+  },
+  "migrations097to100": {
+    "appliedOnProduction": false,
+    "v2TablesPresent": false,
+    "orderV2ColumnsPresent": false,
+    "has098VerificationStatus": false,
+    "has099Currency": false,
+    "has100LifecycleStatus": false,
+    "markerObjects097to100": 0,
+    "schemaMigrationsTable": "none",
+    "hostMigrationFiles097to100": false,
+    "MIGRATION_FILES_env": ""
+  },
+  "blockers": {
+    "v132CanaryEnabledRealSwitchRows": 0,
+    "enabledGiftPointsPricePlans": null,
+    "enabledGiftPointsNote": "xz_price_plans missing; gate N/A until 097"
+  },
+  "v1MemberAgentBaseline": {
+    "member": {
+      "planId": "plan_ai_creator_996",
+      "code": "ai_creator_996",
+      "paymentProductCode": "MEMBER_PRO_YEAR_996",
+      "salePriceCents": 99600,
+      "wechatProductId": "MEMBER_YEAR_996",
+      "mode": "short_series_goods",
+      "pricePlanId": null,
+      "kind": null,
+      "giftPoints": null
+    },
+    "agent": {
+      "planId": "plan_agent_join_996",
+      "code": "agent_join_996",
+      "paymentProductCode": "AGENT_STANDARD_996",
+      "salePriceCents": 100,
+      "salePriceCentsNote": "production DB read=100; design baseline historically 99600; needs price owner confirmation",
+      "wechatProductId": "AGENT_JOIN_996",
+      "mode": "short_series_goods",
+      "pricePlanId": null,
+      "kind": null,
+      "giftPoints": null
+    },
+    "mappingOfferIdInDb": "",
+    "runtimeOfferId": "1450579876",
+    "v2PaymentBindings": "absent",
+    "v2WechatGoods": "absent"
+  },
+  "worktreeMigrationSha256ReferenceOnly": {
+    "097": "FF49625A52D8EB7F36EC9602C007CDDDC36D10A3446E87EB3DF49F1A5CC9504A",
+    "098": "E0D183F34084E1663B7EF5488A42A9E91D77C7C8E8497F3458AED175FCD85047",
+    "099": "EE004036214D44830BC89A52A6B38136061384D27A76C8852127344706FF1735",
+    "100": "B1BA89180D283BAB6AF41D829ED395229D8EB7897B3388886AE8B99A89E63833"
+  }
+}

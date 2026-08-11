@@ -1,0 +1,64 @@
+{
+  "checkedAt": "2026-07-29T06:23:00+08:00",
+  "verdict": {
+    "userPayment": "PASS",
+    "internalV2Fulfillment": "PASS",
+    "agentEntitlement": "PASS",
+    "wechatDeliverNotify": "MISSING",
+    "wechatConsoleUnshipped": "FLAG",
+    "memberTest": "PASS",
+    "agentTest": "PASS_INTERNAL",
+    "section5Overall": "PARTIAL"
+  },
+  "order": {
+    "orderNo": "ZQY20260728221656E339AB7A54",
+    "userId": "user_000002",
+    "wechatTransactionId": "4500000301202607297737425043",
+    "wechatOrderId": "VPO260729061656022982037",
+    "openidPriorConsole": "oCTyT7ZlaHEPWG2bPDm0d0Ok6Q5Y",
+    "productId": "AGENT_TEST_1YUAN",
+    "pricePlanId": "price_plan_20260728212634000000000_2ec1c485",
+    "priceQuoteId": "quote_cf9092a39f600f9694868f5d",
+    "amountCents": 100,
+    "status": "PAID",
+    "fulfillmentStatus": "FULFILLED",
+    "entitlementStatus": "SUCCESS",
+    "snapshotVersion": 2,
+    "paymentEnvironment": "PRODUCTION",
+    "paidAt": "2026-07-28T22:17:06Z",
+    "fulfilledAt": "2026-07-28T22:19:48.708988475Z"
+  },
+  "paymentConfirmationPath": "query_order_paid",
+  "pushDeliverNotifyPresent": false,
+  "notifyProvideGoodsCalled": false,
+  "codeGap": "backend has no /xpay/notify_provide_goods caller; query compensation grants locally without WeChat ship ack",
+  "entitlements": {
+    "agentStatus": "ACTIVE",
+    "agentIdentityStatus": "ACTIVE",
+    "channelAgentId": "channel_000002",
+    "channelAgentLevel": 2,
+    "tokenGrant": 20000,
+    "tokenBalanceAfter": 60793,
+    "totalTokenGranted": 60000,
+    "memberLevelUnchanged": "PRO"
+  },
+  "pairedMemberOrder": {
+    "orderNo": "ZQY202607282159389857812495",
+    "productId": "MEMBER_TEST_1YUAN",
+    "status": "PAID",
+    "fulfillmentStatus": "FULFILLED"
+  },
+  "v2FlagsUnchanged": {
+    "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": true,
+    "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": true,
+    "PRICE_PLAN_TEST_ENTRY_ENABLED": true,
+    "WECHAT_VIRTUAL_PAY_ENV": "production"
+  },
+  "remaining": [
+    "NORMAL_996_real_device",
+    "sandbox_runtime",
+    "idempotent_callback",
+    "notify_provide_goods_remediation",
+    "RepoDigest"
+  ]
+}

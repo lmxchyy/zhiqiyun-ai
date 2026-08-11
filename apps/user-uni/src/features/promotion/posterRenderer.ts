@@ -34,22 +34,27 @@ function roundedRect(ctx: CanvasContext, x: number, y: number, width: number, he
 }
 
 function text(ctx: CanvasContext, value: string, x: number, y: number, size: number, color: string, weight = "normal", align: "left" | "center" | "right" = "left") {
+  const content = String(value || "");
+  if (!content) return;
   setFill(ctx, color);
   ctx.setFontSize(size);
   ctx.setTextAlign(align);
-  ctx.setTextBaseline("top");
+  if (typeof ctx.setTextBaseline === "function") ctx.setTextBaseline("top");
   (ctx as unknown as { font: string }).font = `${weight} ${size}px sans-serif`;
-  ctx.fillText(value, x, y);
+  ctx.fillText(content, x, y);
 }
 
 function wrapText(ctx: CanvasContext, value: string, x: number, y: number, maxWidth: number, lineHeight: number, size: number, color: string, maxLines = 3, weight = "normal") {
+  const content = String(value || "");
+  if (!content) return;
   ctx.setFontSize(size);
-  const chars = [...value];
+  const chars = [...content];
   const lines: string[] = [];
   let current = "";
   chars.forEach(char => {
     const next = current + char;
-    if (ctx.measureText(next).width > maxWidth && current) { lines.push(current); current = char; }
+    const measured = typeof ctx.measureText === "function" ? Number(ctx.measureText(next)?.width || 0) : next.length * size * 0.6;
+    if (measured > maxWidth && current) { lines.push(current); current = char; }
     else current = next;
   });
   if (current) lines.push(current);

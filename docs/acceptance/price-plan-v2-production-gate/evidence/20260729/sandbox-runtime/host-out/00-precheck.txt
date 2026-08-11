@@ -1,0 +1,6 @@
+=== PRECHECK 2026-07-29 07:34:31 +0800 ===
+true
+true
+true
+production
+WECHAT_VIRTUAL_PAY_ENV=production

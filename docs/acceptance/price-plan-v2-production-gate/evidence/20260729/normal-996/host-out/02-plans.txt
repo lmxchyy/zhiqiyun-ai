@@ -1,0 +1,8 @@
+=== PRODUCTION NORMAL defaults ===
+                     id                      |           code            |       plan_id       | environment | price_type | sale_price_cents | is_default | enabled | status | bonus_points 
+---------------------------------------------+---------------------------+---------------------+-------------+------------+------------------+------------+---------+--------+--------------
+ price_plan_20260728212620000000000_1ae3da1d | pp_agent_normal_prod_996  | plan_agent_join_996 | PRODUCTION  | NORMAL     |            99600 | t          | t       | ACTIVE |            0
+ price_plan_20260728212620000000000_a2443d26 | pp_member_normal_prod_996 | plan_ai_creator_996 | PRODUCTION  | NORMAL     |            99600 | t          | t       | ACTIVE |            0
+(2 rows)
+
+PP_MEMBER=price_plan_20260728212620000000000_a2443d26 PP_AGENT=price_plan_20260728212620000000000_1ae3da1d

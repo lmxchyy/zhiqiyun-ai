@@ -18,7 +18,11 @@ func preparedAnalysisService(t *testing.T) (*AnalysisService, *MemoryRepository,
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.CreateAsset(context.Background(), access, project.ID, CreateAssetInput{FileID: "file_2", AssetType: AssetTypeImage, SortOrder: 1}); err != nil {
+		t.Fatal(err)
+	}
 	queue := NewMemoryAnalysisQueue()
+	repository.SetAnalysisQueue(queue)
 	return NewAnalysisService(repository, queue, AnalysisOptions{Enabled: true, MaxAttempts: 2}), repository, queue, access, project, asset
 }
 
@@ -33,8 +37,8 @@ func TestAnalysisRequestIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 || len(queue.Jobs()) != 1 {
-		t.Fatalf("tasks=%d jobs=%d, want one each", len(tasks), len(queue.Jobs()))
+	if len(tasks) != 2 || len(queue.Jobs()) != 2 {
+		t.Fatalf("tasks=%d jobs=%d, want two each", len(tasks), len(queue.Jobs()))
 	}
 }
 
@@ -61,7 +65,7 @@ func TestRunningAnalysisCannotBeAcquiredOrSubmittedTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 	tasks, _ := repository.ListAnalysisTasks(context.Background(), access, project.ID)
-	if len(tasks) != 1 {
+	if len(tasks) != 2 {
 		t.Fatalf("running resubmit created %d tasks", len(tasks))
 	}
 }
@@ -71,15 +75,23 @@ func TestSucceededUnchangedAssetIsNotAnalyzedAgain(t *testing.T) {
 	if _, err := service.RequestProjectAnalysis(context.Background(), access, project.ID, "request_1"); err != nil {
 		t.Fatal(err)
 	}
-	job := queue.Jobs()[0]
-	task, _, err := repository.AcquireAnalysisTask(context.Background(), job.TaskID, "worker_1", time.Minute)
-	if err != nil {
-		t.Fatal(err)
+	for _, job := range queue.Jobs() {
+		task, asset, err := repository.AcquireAnalysisTask(context.Background(), job.TaskID, "worker_1", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta := NormalizedMediaMetadata{Kind: "IMAGE", Image: &ImageMetadata{Format: "png", Width: 100, Height: 100}}
+		if asset.AssetType == AssetTypeVideo {
+			meta = NormalizedMediaMetadata{Kind: "VIDEO", Video: &VideoMetadata{Format: "mp4", DurationMS: 1000}}
+		}
+		if err := repository.CompleteAnalysisTask(context.Background(), task.ID, "worker_1", AnalysisResult{
+			Metadata: meta, AnalyzerVersion: "test",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := repository.CompleteAnalysisTask(context.Background(), task.ID, "worker_1", AnalysisResult{
-		Metadata:        NormalizedMediaMetadata{Kind: "VIDEO", Video: &VideoMetadata{Format: "mp4"}},
-		AnalyzerVersion: "test",
-	}); err != nil {
+	before, err := repository.ListAnalysisTasks(context.Background(), access, project.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.RequestProjectAnalysis(context.Background(), access, project.ID, "request_2"); err != nil {
@@ -89,8 +101,8 @@ func TestSucceededUnchangedAssetIsNotAnalyzedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("unchanged successful asset created %d tasks", len(tasks))
+	if len(tasks) != len(before) {
+		t.Fatalf("unchanged successful assets created %d tasks, before=%d", len(tasks), len(before))
 	}
 }
 

@@ -1,0 +1,49 @@
+{
+  "checkedAt": "2026-07-29T06:37:00+08:00",
+  "consoleConfirmedAt": "2026-07-29",
+  "verdict": "API_ACK_PASS_CONSOLE_OPERATOR_CONFIRMED",
+  "deployCommit": "a39485ef159dabf348a71059a0e922af4894ab5a",
+  "imageTag": "a39485ef1",
+  "v2Flags": {
+    "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": true,
+    "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": true,
+    "PRICE_PLAN_TEST_ENTRY_ENABLED": true
+  },
+  "payEnv": "production",
+  "orders": [
+    {
+      "orderNo": "ZQY202607282159389857812495",
+      "role": "MEMBER_TEST",
+      "wechatTransactionId": "4500000265202607293548593890",
+      "wechatOrderId": "VPO260729055939046718422",
+      "localStatus": "PAID",
+      "entitlementStatus": "SUCCESS",
+      "notifyProvideGoods": { "ok": true, "errcode": 0, "errmsg": "OK" },
+      "wechatConsoleShipState": "已发货"
+    },
+    {
+      "orderNo": "ZQY20260728221656E339AB7A54",
+      "role": "AGENT_TEST",
+      "wechatTransactionId": "4500000301202607297737425043",
+      "wechatOrderId": "VPO260729061656022982037",
+      "localStatus": "PAID",
+      "entitlementStatus": "SUCCESS",
+      "notifyProvideGoods": { "ok": true, "errcode": 0, "errmsg": "OK" },
+      "wechatConsoleShipState": "已发货"
+    }
+  ],
+  "queryOrderStatus4": "NOT_VERIFIED_OPENID_ERROR",
+  "wechatConsoleUnshippedCleared": "CLOSED_OPERATOR_TEXT_CONFIRM",
+  "wechatConsoleScreenshot": "NONE",
+  "operatorConfirmEvidence": "operator-console-confirm.txt",
+  "codeChanges": [
+    "backend-go/internal/httpserver/wechat_virtual_deliver_notify.go",
+    "POST /api/v1/admin/payment/virtual/orders/:orderNo/notify-provide-goods",
+    "tools/notify-provide-goods-oneshot.sh"
+  ],
+  "remaining": [
+    "NORMAL_996_real_device",
+    "sandbox_runtime",
+    "RepoDigest"
+  ]
+}

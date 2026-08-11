@@ -150,6 +150,43 @@ test("concurrent 401 responses share one refresh and replay only safe requests",
   assert.deepEqual([...endpointCalls.values()], [2, 2, 2]);
 });
 
+test("refresh rejects a token that resolves to a different stored account", async () => {
+  const adapter = storageAdapter(async options => {
+    if (!options.url.endsWith("/api/v1/auth/refresh")) {
+      return { statusCode: 404, data: { message: "not found" } };
+    }
+    return {
+      statusCode: 200,
+      data: {
+        accessToken: "account-135-access-token",
+        refreshToken: "account-135-refresh-token",
+        user: { id: "user-135" },
+      },
+    };
+  });
+  const client = createApiClient({ adapter });
+  const auth = createAuthService({
+    adapter,
+    api: client,
+    tokenKey: "token",
+    refreshTokenKey: "refreshToken",
+    authKey: "auth",
+  });
+  auth.storage.setToken("expired-account-180-access-token");
+  auth.storage.setRefreshToken("stale-account-135-refresh-token");
+  auth.storage.setAuth({ user: { id: "user-180" } });
+
+  await assert.rejects(
+    auth.refresh(),
+    error => error?.code === "AUTH_ACCOUNT_MISMATCH"
+      && error?.expectedUserId === "user-180"
+      && error?.actualUserId === "user-135",
+  );
+  assert.equal(auth.storage.getToken(), "");
+  assert.equal(auth.storage.getRefreshToken(), "");
+  assert.equal(auth.storage.getAuth(), null);
+});
+
 test("unsafe required POST is not automatically retried after 401", async () => {
   let calls = 0;
   const client = createApiClient({

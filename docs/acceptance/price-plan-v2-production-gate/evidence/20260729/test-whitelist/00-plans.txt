@@ -1,0 +1,6 @@
+                     id                      |       plan_id       |           code            | environment | enabled | is_default | sale_price_cents | price_type | audience_type | status 
+---------------------------------------------+---------------------+---------------------------+-------------+---------+------------+------------------+------------+---------------+--------
+ price_plan_20260728212634000000000_049a91b1 | plan_ai_creator_996 | pp_member_test_prod_entry | PRODUCTION  | t       | f          |              100 | TEST       | TEST          | ACTIVE
+ price_plan_20260728212634000000000_2ec1c485 | plan_agent_join_996 | pp_agent_test_prod_entry  | PRODUCTION  | t       | f          |              100 | TEST       | TEST          | ACTIVE
+(2 rows)
+

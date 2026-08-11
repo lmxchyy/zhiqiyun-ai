@@ -1,0 +1,6 @@
+=== DEMO USER ===
+     id      |      email      |   name   | member_level | agent_status |       expires        
+-------------+-----------------+----------+--------------+--------------+----------------------
+ user_000002 | demo@xianzhi.ai | 演示用户 | PRO          | ACTIVE       | 2027-07-28T21:59:58Z
+(1 row)
+

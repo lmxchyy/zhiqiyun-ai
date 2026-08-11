@@ -11,12 +11,12 @@ type FulfillmentHandler interface {
 	Fulfill(context.Context, *sql.Tx, Order) error
 }
 
-type GrantTokenHandler struct{}
+type GrantTokenHandler struct{ PersonalPointGrant PersonalPointGrantHook }
 
 func (GrantTokenHandler) GetFulfillmentType() string { return "grant_token" }
 
-func (GrantTokenHandler) Fulfill(ctx context.Context, tx *sql.Tx, order Order) error {
-	return grantTokenTx(ctx, tx, order)
+func (h GrantTokenHandler) Fulfill(ctx context.Context, tx *sql.Tx, order Order) error {
+	return grantTokenTx(ctx, tx, order, h.PersonalPointGrant)
 }
 
 // Reserved fulfillment contracts intentionally have no phase-1 handler.

@@ -12,13 +12,13 @@ import (
 )
 
 const (
-	videoModeText  = "TEXT_TO_VIDEO"
-	videoModeImage = "IMAGE_TO_VIDEO"
+	videoModeText           = "TEXT_TO_VIDEO"
+	videoModeImage          = "IMAGE_TO_VIDEO"
+	maxVideoReferenceImages = 7
 )
 
 var videoCoreParameters = []string{"duration", "resolution", "aspect_ratio"}
 var videoOptionalProviderParameters = []string{"fps", "generate_audio", "motion_strength", "camera_movement"}
-var videoUserParameterWhitelist = append(append([]string(nil), videoCoreParameters...), videoOptionalProviderParameters...)
 
 type videoGenerationValidationError struct {
 	code    string
@@ -45,6 +45,12 @@ func safeVideoModelCapabilities() adminVideoModelCapabilities {
 }
 
 func legacyVideoModelCapabilities(model adminAIModel) adminVideoModelCapabilities {
+	switch strings.ToLower(strings.TrimSpace(model.ModelName)) {
+	case "grok-imagine-1.5-video":
+		return grokImagine15VideoCapabilities()
+	case "grok-imagine-video-1.5-preview":
+		return grokImagine15VideoPreviewCapabilities()
+	}
 	capabilities := safeVideoModelCapabilities()
 	hasExplicitVideoCode := false
 	for _, capability := range model.CapabilityCode {
@@ -62,6 +68,46 @@ func legacyVideoModelCapabilities(model adminAIModel) adminVideoModelCapabilitie
 		return safeVideoModelCapabilities()
 	}
 	return capabilities
+}
+
+func grokImagine15VideoCapabilities() adminVideoModelCapabilities {
+	durations := make([]int, 0, 25)
+	for seconds := 6; seconds <= 30; seconds++ {
+		durations = append(durations, seconds)
+	}
+	return adminVideoModelCapabilities{
+		SupportsTextToVideo:   true,
+		SupportsImageToVideo:  true,
+		SupportsFirstFrame:    true,
+		MaxReferenceImages:    7,
+		SupportedDurations:    durations,
+		SupportedResolutions:  []string{"480p", "720p"},
+		SupportedAspectRatios: []string{"16:9", "9:16", "1:1", "3:2", "2:3"},
+		SupportedParameters:   append([]string(nil), videoCoreParameters...),
+	}
+}
+
+func grokImagine15VideoCapabilitiesPtr() *adminVideoModelCapabilities {
+	capabilities := grokImagine15VideoCapabilities()
+	return &capabilities
+}
+
+func grokImagine15VideoPreviewCapabilities() adminVideoModelCapabilities {
+	return adminVideoModelCapabilities{
+		SupportsTextToVideo:   false,
+		SupportsImageToVideo:  true,
+		SupportsFirstFrame:    true,
+		MaxReferenceImages:    1,
+		SupportedDurations:    []int{10, 15},
+		SupportedResolutions:  []string{"480p", "720p"},
+		SupportedAspectRatios: []string{"16:9", "9:16"},
+		SupportedParameters:   append([]string(nil), videoCoreParameters...),
+	}
+}
+
+func grokImagine15VideoPreviewCapabilitiesPtr() *adminVideoModelCapabilities {
+	capabilities := grokImagine15VideoPreviewCapabilities()
+	return &capabilities
 }
 
 func normalizeVideoModelCapabilities(capabilities adminVideoModelCapabilities) adminVideoModelCapabilities {
@@ -85,11 +131,8 @@ func normalizeVideoModelCapabilities(capabilities adminVideoModelCapabilities) a
 	if capabilities.SupportsLastFrame && capabilities.MaxReferenceImages < 2 {
 		capabilities.MaxReferenceImages = 2
 	}
-	if !capabilities.SupportsLastFrame && capabilities.MaxReferenceImages > 1 {
-		capabilities.MaxReferenceImages = 1
-	}
-	if capabilities.MaxReferenceImages > 2 {
-		capabilities.MaxReferenceImages = 2
+	if capabilities.MaxReferenceImages > maxVideoReferenceImages {
+		capabilities.MaxReferenceImages = maxVideoReferenceImages
 	}
 	return capabilities
 }
@@ -263,16 +306,7 @@ func applyAIModelVideoCapabilitiesMutation(model *adminAIModel, mutation adminAI
 func applyVideoCapabilitiesToSchema(schema adminAIParameterSchemaJSON, capabilities adminVideoModelCapabilities) adminAIParameterSchemaJSON {
 	filtered := make([]adminAIParameterField, 0, len(schema.Fields))
 	for _, field := range schema.Fields {
-		key := strings.ToLower(strings.TrimSpace(field.Key))
-		if key == "ratio" {
-			key = "aspect_ratio"
-			field.Key = key
-		}
-		if videoParameterSupported(videoUserParameterWhitelist, key) &&
-			(!field.Visible || !field.UserEditable || !videoParameterSupported(capabilities.SupportedParameters, key)) {
-			continue
-		}
-		switch key {
+		switch strings.ToLower(strings.TrimSpace(field.Key)) {
 		case "reference_image", "reference_images", "image", "image_url", "image_urls":
 			continue
 		case "first_frame":
@@ -294,9 +328,14 @@ func applyVideoCapabilitiesToSchema(schema adminAIParameterSchemaJSON, capabilit
 			if len(capabilities.SupportedResolutions) > 0 {
 				field.Options = stringOptionsToAny(capabilities.SupportedResolutions)
 			}
-		case "aspect_ratio":
+		case "ratio", "aspect_ratio":
+			field.Key = "aspect_ratio"
 			if len(capabilities.SupportedAspectRatios) > 0 {
 				field.Options = stringOptionsToAny(capabilities.SupportedAspectRatios)
+			}
+		case "fps", "generate_audio", "motion_strength", "camera_movement":
+			if !videoParameterSupported(capabilities.SupportedParameters, field.Key) {
+				continue
 			}
 		}
 		filtered = append(filtered, field)
@@ -360,9 +399,6 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 		return newVideoGenerationValidationError("VIDEO_MODE_INVALID", "视频生成模式无效，请选择文生视频或图生视频")
 	}
 	capabilities := resolveVideoModelCapabilities(resolved.Model, resolved.Schema.SchemaJSON)
-	if err := validateEditableVideoParameters(req.Params, resolved, capabilities); err != nil {
-		return err
-	}
 	images := collectVideoImageParameters(req.Params)
 	firstFrame := strings.TrimSpace(parameterString(req.Params, "first_frame"))
 	lastFrame := strings.TrimSpace(parameterString(req.Params, "last_frame"))
@@ -381,30 +417,31 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 		if lastFrame != "" && !capabilities.SupportsLastFrame {
 			return newVideoGenerationValidationError("VIDEO_LAST_FRAME_NOT_SUPPORTED", "所选模型不支持尾帧图")
 		}
-		if firstFrame == "" {
-			legacy := legacyVideoImageValues(req.Params)
-			if len(legacy) == 1 {
-				firstFrame = legacy[0]
-				if req.Params == nil {
-					req.Params = map[string]any{}
-				}
-				req.Params["first_frame"] = firstFrame
-			} else if len(legacy) > 1 {
-				return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", "图生视频首帧图最多只能上传 1 张")
+		legacyImages := legacyVideoImageValues(req.Params)
+		if firstFrame == "" && len(legacyImages) > 0 {
+			firstFrame = legacyImages[0]
+			if req.Params == nil {
+				req.Params = map[string]any{}
 			}
+			req.Params["first_frame"] = firstFrame
 		}
 		if firstFrame == "" {
 			return newVideoGenerationValidationError("VIDEO_FIRST_FRAME_REQUIRED", "图生视频必须上传首帧图")
 		}
-		for _, legacyImage := range legacyVideoImageValues(req.Params) {
-			if legacyImage != firstFrame && legacyImage != lastFrame {
-				return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", "旧视频图片字段与首帧图或尾帧图不一致，请重新选择图片")
+		if capabilities.MaxReferenceImages <= 1 {
+			for _, legacyImage := range legacyImages {
+				if legacyImage != firstFrame && legacyImage != lastFrame {
+					return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", "所选模型最多支持 1 张视频输入图片")
+				}
 			}
 		}
 		if len(images) > capabilities.MaxReferenceImages {
-			return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", fmt.Sprintf("所选模型最多支持 %d 张视频帧图片", capabilities.MaxReferenceImages))
+			return newVideoGenerationValidationError("VIDEO_IMAGE_LIMIT_EXCEEDED", fmt.Sprintf("所选模型最多支持 %d 张视频输入图片", capabilities.MaxReferenceImages))
 		}
 		clearLegacyVideoImageParameters(req.Params)
+		if capabilities.MaxReferenceImages > 1 {
+			req.Params["image_urls"] = uniqueImageValues(append([]string{firstFrame}, legacyImages...))
+		}
 	}
 
 	if err := validateVideoDurationOption(req.Params, capabilities.SupportedDurations); err != nil {
@@ -419,52 +456,16 @@ func validateVideoGenerationRequest(req *generation.CreateRequest, resolved reso
 	if err := validateVideoParameterOption(req.Params, "aspect_ratio", capabilities.SupportedAspectRatios, "VIDEO_ASPECT_RATIO_NOT_SUPPORTED", "所选模型不支持该视频比例"); err != nil {
 		return err
 	}
+	// Drop optional provider params the selected upstream protocol cannot forward.
+	// Clients may still send stale toggles (for example generate_audio) after a
+	// channel/protocol change; rejecting the whole task after the user clicked
+	// generate is worse than silently ignoring unsupported extras.
 	for _, key := range videoOptionalProviderParameters {
 		if _, exists := req.Params[key]; exists && !videoParameterSupported(capabilities.SupportedParameters, key) {
-			return newVideoGenerationValidationError(
-				"VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED",
-				fmt.Sprintf("当前视频 Provider 不支持参数 %s", key),
-			)
+			delete(req.Params, key)
 		}
 	}
-	return nil
-}
-
-func validateEditableVideoParameters(parameters map[string]any, resolved resolvedModuleSchema, capabilities adminVideoModelCapabilities) error {
-	if len(parameters) == 0 {
-		return nil
-	}
-	editable := map[string]bool{}
-	for _, field := range resolved.FinalSchema.Fields {
-		key := strings.ToLower(strings.TrimSpace(field.Key))
-		if key == "ratio" {
-			key = "aspect_ratio"
-		}
-		if videoParameterSupported(videoUserParameterWhitelist, key) &&
-			field.Visible && field.UserEditable &&
-			videoParameterSupported(capabilities.SupportedParameters, key) {
-			editable[key] = true
-		}
-	}
-	for key := range parameters {
-		canonical := strings.ToLower(strings.TrimSpace(key))
-		if canonical == "ratio" {
-			canonical = "aspect_ratio"
-		}
-		if !videoParameterSupported(videoUserParameterWhitelist, canonical) || editable[canonical] {
-			continue
-		}
-		if videoParameterSupported(capabilities.SupportedParameters, canonical) {
-			return newVideoGenerationValidationError(
-				"VIDEO_PARAMETER_NOT_EDITABLE",
-				fmt.Sprintf("当前模型不允许用户配置参数 %s", canonical),
-			)
-		}
-		return newVideoGenerationValidationError(
-			"VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED",
-			fmt.Sprintf("当前视频 Provider 不支持参数 %s", canonical),
-		)
-	}
+	delete(req.Params, "generateAudio")
 	return nil
 }
 

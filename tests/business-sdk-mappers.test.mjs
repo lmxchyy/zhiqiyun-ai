@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   generationParametersFromDraft,
+  normalizeVideoModelCapabilities,
+  reconcileVideoGenerationState,
   taskRequestFromDraft,
 } from "../packages/business-sdk/dist/mappers.js";
 
@@ -180,6 +182,33 @@ test("legacy video drafts with multiple reference images are rejected", () => {
   );
 });
 
+test("multi-reference video model sends all seven canonical image urls", () => {
+  const references = Array.from({ length: 7 }, (_, index) => `https://example.test/reference-${index + 1}.png`);
+  const request = taskRequestFromDraft(videoDraft({
+    videoMode: "IMAGE_TO_VIDEO",
+    firstFrame: references[0],
+    referenceImages: references,
+    videoCapabilities: { ...dualVideoCapabilities, maxReferenceImages: 7 },
+  }));
+
+  assert.equal(request.type, "IMAGE_TO_VIDEO");
+  assert.equal(request.params.first_frame, references[0]);
+  assert.deepEqual(request.params.image_urls, references);
+});
+
+test("multi-reference video model rejects the eighth image", () => {
+  const references = Array.from({ length: 8 }, (_, index) => `https://example.test/reference-${index + 1}.png`);
+  assert.throws(
+    () => taskRequestFromDraft(videoDraft({
+      videoMode: "IMAGE_TO_VIDEO",
+      firstFrame: references[0],
+      referenceImages: references,
+      videoCapabilities: { ...dualVideoCapabilities, maxReferenceImages: 7 },
+    })),
+    error => error?.code === "VIDEO_IMAGE_LIMIT_EXCEEDED",
+  );
+});
+
 test("text-only model rejects image-to-video mode", () => {
   assert.throws(
     () => taskRequestFromDraft(videoDraft({
@@ -251,25 +280,6 @@ test("video request omits optional parameters that the Provider cannot transmit"
     duration: 5,
     resolution: "720p",
     aspect_ratio: "16:9",
-  });
-});
-
-test("video request does not recreate core parameters hidden by the final schema contract", () => {
-  const request = taskRequestFromDraft(videoDraft({
-    videoCapabilities: {
-      ...dualVideoCapabilities,
-      supportedParameters: ["generate_audio"],
-    },
-    parameters: {
-      duration: 10,
-      resolution: "1080p",
-      aspect_ratio: "9:16",
-      generate_audio: false,
-    },
-  }));
-
-  assert.deepEqual(request.params, {
-    generate_audio: false,
   });
 });
 

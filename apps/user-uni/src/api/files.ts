@@ -19,15 +19,16 @@ export function absoluteApiURL(value: string) {
   return `${base}${value.startsWith('/') ? value : `/${value}`}`
 }
 
-export async function uploadReferenceImage(filePath: string) {
-  const payload = await uploadApiFile<ReferenceImagePayload>('/api/v1/reference-images', {
+export function uploadReferenceImage(filePath: string) {
+  return uploadApiFile<ReferenceImagePayload>('/api/v1/reference-images', {
     filePath,
     name: 'file',
+  }).then(payload => {
+    const item = payload.item || payload
+    const url = String(item.url || item.path || '').trim()
+    if (!url) throw new Error('上传接口未返回文件地址')
+    return absoluteApiURL(url)
   })
-  const item = payload.item || payload
-  const url = String(item.url || item.path || '').trim()
-  if (!url) throw new Error('上传接口未返回文件地址')
-  return absoluteApiURL(url)
 }
 
 export async function uploadReferenceAsset(filePath: string): Promise<ReferenceAssetUploadResult> {

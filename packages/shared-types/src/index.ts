@@ -238,8 +238,14 @@ export interface ReferenceImage {
 export interface ModelInfo {
   code: string;
   name: string;
+  displayName?: string;
   capabilities?: string[];
   pointCost?: number;
+  listPricePoints?: number;
+  priceHint?: string;
+  capabilityHint?: string;
+  priceLabel?: string;
+  description?: string;
   fixedQuota?: number;
   providerId?: string;
   providerName?: string;
@@ -253,6 +259,88 @@ export interface PointAccount {
   available: number;
   frozen: number;
   total?: number;
+  permanentAvailable?: number;
+  expiringAvailable?: number;
+  nextExpiryAt?: string;
+  nextExpiryPoints?: number;
+}
+
+export type PersonalPointSource =
+  | "REGISTRATION_GIFT"
+  | "ACTIVITY_GIFT"
+  | "ADMIN_GIFT"
+  | "ADMIN_CORRECTION"
+  | "RECHARGE"
+  | "MEMBERSHIP_GRANT"
+  | "MEMBER_PACKAGE_GRANT"
+  | "AGENT_GRANT"
+  | "AGENT_JOIN_GRANT"
+  | "OPERATION_CENTER_GRANT"
+  | "ORDER_GRANT"
+  | "COMMERCE_ORDER"
+  | "UNIFIED_PAYMENT_GRANT"
+  | "WECHAT_VIRTUAL_ORDER"
+  | "WECHAT_VIRTUAL_COUPON"
+  | "COUPON_GRANT"
+  | "LEGACY"
+  | string;
+
+export interface PointExpiryPolicy {
+  id: string;
+  version: number;
+  revision: number;
+  enabled: boolean;
+  duration_value: number;
+  duration_unit: "CALENDAR_MONTH";
+  time_zone: string;
+  source_types: PersonalPointSource[];
+  effective_from: string;
+  effective_to?: string;
+  status: string;
+  created_by?: string;
+  change_reason?: string;
+}
+
+export interface PointExpiryPolicyResponse { item: PointExpiryPolicy; }
+export interface UpdatePointExpiryPolicyRequest {
+  revision: number;
+  enabled: boolean;
+  durationValue: number;
+  changeReason: string;
+}
+
+export interface PersonalPointLot {
+  id: string;
+  account_id: string;
+  user_id: string;
+  source_type: PersonalPointSource;
+  reference_type: string;
+  reference_id: string;
+  original_points: number;
+  available_points: number;
+  reserved_points: number;
+  consumed_points: number;
+  expired_points: number;
+  reversed_points: number;
+  granted_at: string;
+  expires_at?: string;
+  policy_version_id?: string;
+  idempotency_key: string;
+  status: string;
+}
+
+export interface PersonalPointLotsResponse { items: PersonalPointLot[]; }
+export interface AdminPointMutationRequest {
+  points: number;
+  reason: string;
+  idempotencyKey: string;
+}
+export interface AdminPointGiftResponse { item: PersonalPointLot; idempotent: boolean; }
+export interface AdminPointCorrectionResponse {
+  balance: { account_id: string; user_id: string; available: number; frozen: number; total: number };
+  lot?: PersonalPointLot;
+  points: number;
+  idempotent: boolean;
 }
 
 export interface PointAccountResponse {
@@ -433,4 +521,7 @@ export interface ChannelCenterResponse {
   withdrawals: ChannelWithdrawal[];
   children: ChannelAgent[];
 }
+
+export * from "./smart-video";
+
 

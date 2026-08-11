@@ -1,0 +1,9 @@
+MIGRATE_START 097-member-agent-price-plan-v2.sql 2026-07-28T20:04:25Z
+MIGRATE_END 097-member-agent-price-plan-v2.sql EXIT=0 SEC=0
+MIGRATE_START 098-price-plan-admin-governance.sql 2026-07-28T20:04:25Z
+MIGRATE_END 098-price-plan-admin-governance.sql EXIT=0 SEC=0
+MIGRATE_START 099-price-plan-default-switch.sql 2026-07-28T20:04:25Z
+MIGRATE_END 099-price-plan-default-switch.sql EXIT=0 SEC=0
+MIGRATE_START 100-price-plan-test-whitelist-audit.sql 2026-07-28T20:04:25Z
+MIGRATE_END 100-price-plan-test-whitelist-audit.sql EXIT=0 SEC=0
+VALIDATE_EXIT=0 SEC=0

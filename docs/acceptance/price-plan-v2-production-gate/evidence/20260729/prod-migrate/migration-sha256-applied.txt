@@ -1,0 +1,5 @@
+=== FREEZE SHA VERIFY ===
+784e6d2a3556ca0ea8b07287b5719d14f3dedf76dd0228443a1c791fb87bb9e7  097-member-agent-price-plan-v2.sql
+ad68192e66e026ce138283caddc6fb066e60865926dcd46f2ce6ba304e8cf8e2  098-price-plan-admin-governance.sql
+1d12cad4d7927a851b72b267f6cc354edb8fcf1b90a7ef963c8d3fd17b01c3a9  099-price-plan-default-switch.sql
+8646a68650838b4f501f8b8410d2d888deb9661942f3da927c85f9e202c68649  100-price-plan-test-whitelist-audit.sql

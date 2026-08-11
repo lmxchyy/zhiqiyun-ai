@@ -158,6 +158,8 @@
       </button>
     </view>
 
+    <slot name="extra" />
+
     <view class="profile-v55-settings-card">
       <button type="button" class="profile-v55-settings-row" hover-class="profile-v55-pressed" @click="$emit('service', 'settings')">
         <text class="profile-v55-settings-icon">设</text>
@@ -307,7 +309,7 @@ const aiCapabilities = [
   { id: "ai-ppt", label: "PPT", status: "已开通", tone: "success" },
   { id: "ai-agent", label: "AI Agent", status: "已开通", tone: "success" },
   { id: "ai-knowledge", label: "知识库", status: "试用", tone: "trial" },
-  { id: "ai-infographic", label: "信息图", status: "试用", tone: "trial" },
+  { id: "ai-infographic", label: "自由P图", status: "试用", tone: "trial" },
 ];
 
 const workbenchItems = [

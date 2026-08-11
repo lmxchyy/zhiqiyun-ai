@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -36,6 +37,15 @@ func (a api) prepareVideoGenerationEstimate(
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
 		req.Prompt = "video generation estimate"
+	}
+	// Cost quotes should not require uploaded images. Inject a placeholder so
+	// IMAGE_TO_VIDEO models (e.g. Preview) can still return list/price estimates
+	// before the user picks a reference frame.
+	if strings.EqualFold(strings.TrimSpace(req.Type), videoModeImage) {
+		firstFrame := strings.TrimSpace(fmt.Sprint(req.Params["first_frame"]))
+		if firstFrame == "" || firstFrame == "<nil>" {
+			req.Params["first_frame"] = "estimate://placeholder"
+		}
 	}
 	prepared, err := a.prepareGenerationRequest(data, user, req)
 	if err != nil {

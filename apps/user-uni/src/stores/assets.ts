@@ -4,6 +4,7 @@ import {
   batchAssets,
   cancelGenerationTask,
   deleteAsset as deleteAssetRequest,
+  deleteGenerationTask,
   fetchAssetDetail,
   fetchAssetOverview,
   fetchAssetPage,
@@ -611,6 +612,16 @@ export const useAssetStore = defineStore("assets", {
       const listIndex = this.tasks.findIndex(item => item.id === id);
       if (listIndex >= 0) this.tasks.splice(listIndex, 1, task);
       return task;
+    },
+    async deleteTask(id: string) {
+      await deleteGenerationTask(id);
+      this.recentTasks = this.recentTasks.filter(item => item.id !== id);
+      this.tasks = this.tasks.filter(item => item.id !== id);
+      this.taskPagination = {
+        ...this.taskPagination,
+        total: Math.max(0, this.taskPagination.total - 1),
+      };
+      return true;
     },
     async loadProjects() {
       try {

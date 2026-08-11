@@ -314,15 +314,13 @@ func grantVirtualCouponCreditsTx(ctx context.Context, tx *sql.Tx, order lockedVi
 	if account.Available < 0 || amount > int64(math.MaxInt-account.Available) {
 		return errors.New("coupon credit would overflow wallet")
 	}
-	before := account.Available
-	account.Available += int(amount)
-	account.TotalGranted += int(amount)
-	if err := insertPointAccount(ctx, tx, account); err != nil {
+	grant, err := grantPermanentPersonalPointsTx(ctx, tx, order.UserID, PointSourceWechatVirtualCoupon, int(amount),
+		"WECHAT_VIRTUAL_COUPON", order.OrderNo, key, now)
+	if err != nil {
 		return err
 	}
-	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "GRANT", int(amount), before, account.Available, "WECHAT_VIRTUAL_COUPON", order.OrderNo, "WeChat virtual payment coupon bonus"); err != nil {
-		return err
-	}
+	before := grant.AvailableBefore
+	account = grant.Account
 	raw, _ := json.Marshal(map[string]any{"couponCode": order.Snapshot.CouponCode, "productCode": order.ProductCode})
 	_, err = tx.ExecContext(ctx, `
 		insert into xz_token_records(id,user_id,order_id,change_type,amount,balance_before,balance_after,remark,created_at,tenant_id,idempotency_key,source_order_no,raw)

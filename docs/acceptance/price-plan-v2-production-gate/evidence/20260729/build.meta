@@ -1,0 +1,18 @@
+﻿TARGET=3d0c0e032d79a61611b83771874be91df3715e7a SHORT=3d0c0e032
+## codex/channel-ecosystem-v132-phase3
+?? compose.oc009.override.yml
+BUILD_START 2026-07-28T20:29:32Z
+BUILD_END 2026-07-28T20:30:22Z
+IMAGE_REF=local/xianzhi-ai-platform:git-3d0c0e032
+IMAGE_ID=sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331
+LABEL_REVISION=3d0c0e032d79a61611b83771874be91df3715e7a
+REPO_DIGESTS=[]
+XIANZHI_IMAGE=local/xianzhi-ai-platform
+IMAGE_TAG=3d0c0e032
+SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED=false
+PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED=false
+PRICE_PLAN_TEST_ENTRY_ENABLED=false
+CONTAINER=zhiqiyun-ai-prod-xianzhi-ai-1 IMAGE=local/xianzhi-ai-platform:3d0c0e032 STATUS=healthy
+SWITCHES_IN_CONTAINER=false,false,false
+NOTE=local image only; RepoDigests empty (not pushed to registry)
+DONE

@@ -1,0 +1,108 @@
+[2026-07-28T21:26:04Z] === flags before ===
+[2026-07-28T21:26:04Z] inject redis session for user_000001
+[2026-07-28T21:26:04Z] === ensure entitlement versions ===
+[2026-07-28T21:26:04Z] OK list-versions-member http=200
+[2026-07-28T21:26:04Z] reuse ACTIVE version plan_version_member_996_v1 for plan_ai_creator_996
+[2026-07-28T21:26:04Z] OK list-versions-agent http=200
+[2026-07-28T21:26:04Z] reuse ACTIVE version plan_version_agent_996_v1 for plan_agent_join_996
+[2026-07-28T21:26:04Z] MEMBER_VERSION=plan_version_member_996_v1 AGENT_VERSION=plan_version_agent_996_v1
+[2026-07-28T21:26:04Z] === ensure wechat goods ===
+[2026-07-28T21:26:04Z] OK list-goods-PRODUCTION-MEMBER_YEAR_996 http=200
+[2026-07-28T21:26:04Z] OK create-good-member-normal http=201
+[2026-07-28T21:26:04Z] OK confirm-good-member-normal http=200
+[2026-07-28T21:26:04Z] OK list-goods-PRODUCTION-AGENT_JOIN_996 http=200
+[2026-07-28T21:26:04Z] OK create-good-agent-normal http=201
+[2026-07-28T21:26:04Z] OK confirm-good-agent-normal http=200
+[2026-07-28T21:26:04Z] OK list-goods-PRODUCTION-MEMBER_TEST_1YUAN http=200
+[2026-07-28T21:26:04Z] OK create-good-member-test http=201
+[2026-07-28T21:26:05Z] OK confirm-good-member-test http=200
+[2026-07-28T21:26:05Z] OK list-goods-PRODUCTION-AGENT_TEST_1YUAN http=200
+[2026-07-28T21:26:05Z] OK create-good-agent-test http=201
+[2026-07-28T21:26:05Z] OK confirm-good-agent-test http=200
+[2026-07-28T21:26:05Z] === ensure price plans ===
+[2026-07-28T21:26:05Z] OK list-price-plans-plan_ai_creator_996 http=200
+[2026-07-28T21:26:05Z] FAIL create-price-member-normal http=400 body={"error":"EOF"}
+[2026-07-28T21:26:19Z] === flags before ===
+[2026-07-28T21:26:19Z] inject redis session for user_000001
+[2026-07-28T21:26:19Z] === ensure entitlement versions ===
+[2026-07-28T21:26:19Z] OK list-versions-member http=200
+[2026-07-28T21:26:19Z] reuse ACTIVE version plan_version_member_996_v1 for plan_ai_creator_996
+[2026-07-28T21:26:19Z] OK list-versions-agent http=200
+[2026-07-28T21:26:19Z] reuse ACTIVE version plan_version_agent_996_v1 for plan_agent_join_996
+[2026-07-28T21:26:19Z] MEMBER_VERSION=plan_version_member_996_v1 AGENT_VERSION=plan_version_agent_996_v1
+[2026-07-28T21:26:19Z] === ensure wechat goods ===
+[2026-07-28T21:26:19Z] OK list-goods-PRODUCTION-MEMBER_YEAR_996 http=200
+[2026-07-28T21:26:19Z] reuse good wechat_good_20260728212604000000000_ee3e62c6 product=MEMBER_YEAR_996
+[2026-07-28T21:26:19Z] OK get-good-member-normal http=200
+[2026-07-28T21:26:19Z] OK list-goods-PRODUCTION-AGENT_JOIN_996 http=200
+[2026-07-28T21:26:19Z] reuse good wechat_good_20260728212604000000000_3c11d01c product=AGENT_JOIN_996
+[2026-07-28T21:26:19Z] OK get-good-agent-normal http=200
+[2026-07-28T21:26:19Z] OK list-goods-PRODUCTION-MEMBER_TEST_1YUAN http=200
+[2026-07-28T21:26:19Z] reuse good wechat_good_20260728212604000000000_49523b0e product=MEMBER_TEST_1YUAN
+[2026-07-28T21:26:19Z] OK get-good-member-test http=200
+[2026-07-28T21:26:20Z] OK list-goods-PRODUCTION-AGENT_TEST_1YUAN http=200
+[2026-07-28T21:26:20Z] reuse good wechat_good_20260728212605000000000_4d2fb356 product=AGENT_TEST_1YUAN
+[2026-07-28T21:26:20Z] OK get-good-agent-test http=200
+[2026-07-28T21:26:20Z] === ensure price plans ===
+[2026-07-28T21:26:20Z] OK list-price-plans-plan_ai_creator_996 http=200
+[2026-07-28T21:26:20Z] OK create-price-member-normal http=201
+[2026-07-28T21:26:20Z] OK list-price-plans-plan_agent_join_996 http=200
+[2026-07-28T21:26:20Z] OK create-price-agent-normal http=201
+[2026-07-28T21:26:20Z] OK list-price-plans-plan_ai_creator_996 http=200
+[2026-07-28T21:26:20Z] FAIL create-price-member-test http=400 body={"code":"PRICE_PLAN_CODE_HAS_PRICE","error":"code cannot contain explicit price semantics","message":"code cannot contain explicit price semantics"}
+[2026-07-28T21:26:33Z] === flags before ===
+[2026-07-28T21:26:33Z] inject redis session for user_000001
+[2026-07-28T21:26:33Z] === ensure entitlement versions ===
+[2026-07-28T21:26:33Z] OK list-versions-member http=200
+[2026-07-28T21:26:33Z] reuse ACTIVE version plan_version_member_996_v1 for plan_ai_creator_996
+[2026-07-28T21:26:33Z] OK list-versions-agent http=200
+[2026-07-28T21:26:33Z] reuse ACTIVE version plan_version_agent_996_v1 for plan_agent_join_996
+[2026-07-28T21:26:33Z] MEMBER_VERSION=plan_version_member_996_v1 AGENT_VERSION=plan_version_agent_996_v1
+[2026-07-28T21:26:33Z] === ensure wechat goods ===
+[2026-07-28T21:26:33Z] OK list-goods-PRODUCTION-MEMBER_YEAR_996 http=200
+[2026-07-28T21:26:33Z] reuse good wechat_good_20260728212604000000000_ee3e62c6 product=MEMBER_YEAR_996
+[2026-07-28T21:26:33Z] OK get-good-member-normal http=200
+[2026-07-28T21:26:33Z] OK list-goods-PRODUCTION-AGENT_JOIN_996 http=200
+[2026-07-28T21:26:33Z] reuse good wechat_good_20260728212604000000000_3c11d01c product=AGENT_JOIN_996
+[2026-07-28T21:26:33Z] OK get-good-agent-normal http=200
+[2026-07-28T21:26:33Z] OK list-goods-PRODUCTION-MEMBER_TEST_1YUAN http=200
+[2026-07-28T21:26:33Z] reuse good wechat_good_20260728212604000000000_49523b0e product=MEMBER_TEST_1YUAN
+[2026-07-28T21:26:33Z] OK get-good-member-test http=200
+[2026-07-28T21:26:33Z] OK list-goods-PRODUCTION-AGENT_TEST_1YUAN http=200
+[2026-07-28T21:26:33Z] reuse good wechat_good_20260728212605000000000_4d2fb356 product=AGENT_TEST_1YUAN
+[2026-07-28T21:26:33Z] OK get-good-agent-test http=200
+[2026-07-28T21:26:33Z] === ensure price plans ===
+[2026-07-28T21:26:33Z] OK list-price-plans-plan_ai_creator_996 http=200
+[2026-07-28T21:26:33Z] reuse price plan price_plan_20260728212620000000000_a2443d26 code=pp_member_normal_prod_996
+[2026-07-28T21:26:33Z] OK list-price-plans-plan_agent_join_996 http=200
+[2026-07-28T21:26:34Z] reuse price plan price_plan_20260728212620000000000_1ae3da1d code=pp_agent_normal_prod_996
+[2026-07-28T21:26:34Z] OK list-price-plans-plan_ai_creator_996 http=200
+[2026-07-28T21:26:34Z] OK create-price-member-test http=201
+[2026-07-28T21:26:34Z] OK list-price-plans-plan_agent_join_996 http=200
+[2026-07-28T21:26:34Z] OK create-price-agent-test http=201
+[2026-07-28T21:26:34Z] === ensure bindings ===
+[2026-07-28T21:26:34Z] OK list-bindings-member-normal http=200
+[2026-07-28T21:26:34Z] OK create-binding-member-normal http=201
+[2026-07-28T21:26:34Z] OK activate-binding-member-normal http=200
+[2026-07-28T21:26:34Z] OK list-bindings-agent-normal http=200
+[2026-07-28T21:26:34Z] OK create-binding-agent-normal http=201
+[2026-07-28T21:26:34Z] OK activate-binding-agent-normal http=200
+[2026-07-28T21:26:34Z] OK list-bindings-member-test http=200
+[2026-07-28T21:26:34Z] OK create-binding-member-test http=201
+[2026-07-28T21:26:34Z] OK activate-binding-member-test http=200
+[2026-07-28T21:26:34Z] OK list-bindings-agent-test http=200
+[2026-07-28T21:26:34Z] OK create-binding-agent-test http=201
+[2026-07-28T21:26:34Z] OK activate-binding-agent-test http=200
+[2026-07-28T21:26:34Z] === enable + default NORMAL only ===
+[2026-07-28T21:26:34Z] OK get-price-member-normal http=200
+[2026-07-28T21:26:34Z] OK enable-price-member-normal http=200
+[2026-07-28T21:26:34Z] OK default-price-member-normal http=200
+[2026-07-28T21:26:34Z] OK get-price-agent-normal http=200
+[2026-07-28T21:26:35Z] OK enable-price-agent-normal http=200
+[2026-07-28T21:26:35Z] OK default-price-agent-normal http=200
+[2026-07-28T21:26:35Z] OK get-price-member-test http=200
+[2026-07-28T21:26:35Z] OK enable-price-member-test http=200
+[2026-07-28T21:26:35Z] OK get-price-agent-test http=200
+[2026-07-28T21:26:35Z] OK enable-price-agent-test http=200
+[2026-07-28T21:26:35Z] === flags after ===
+[2026-07-28T21:26:35Z] DONE

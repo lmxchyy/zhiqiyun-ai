@@ -24,12 +24,24 @@ async function cached<T>(key: string, ttl: number, loader: () => Promise<T>) {
 }
 
 export const inspirationAPI = {
-  categories: () => cached("categories", 10 * 60 * 1000, () => api<{ items: InspirationCategory[] }>("/api/v1/inspirations/categories")),
-  featured: (category = "", seed = 0, limit = 8) => cached(`featured:${category}:${seed}:${limit}`, 2 * 60 * 1000, () => api<{ items: InspirationTemplate[]; total: number; seed: number }>(`/api/v1/inspirations/featured${queryString({ category, seed, limit, platform: "miniprogram" })}`)),
-  list: (input: { page: number; pageSize?: number; category?: string; contentType?: string; q?: string }) => api<{ items: InspirationTemplate[]; total: number; page: number; pageSize: number; hasMore: boolean }>(`/api/v1/inspirations${queryString({ ...input, platform: "miniprogram" })}`),
-  detail: async (slug: string): Promise<InspirationDetailResponse> => normalizePublicTemplateDetailResponse(
-    await api<unknown>(`/api/v1/inspirations/${encodeURIComponent(slug)}?platform=miniprogram`),
-  ),
+  categories: () => cached("categories:miniprogram", 10 * 60 * 1000, () => api<{ items: InspirationCategory[] }>("/api/v1/inspirations/categories?platform=miniprogram")),
+  featured: (category = "", seed = 0, limit = 8) => cached(`featured:${category}:${seed}:${limit}`, 2 * 60 * 1000, () => api<{ items: InspirationTemplate[]; total: number; seed: number }>(`/api/v1/inspirations/featured${queryString({ category, seed, limit, platform: "miniprogram" })}`).then((result) => ({
+    ...result,
+    items: (result.items || []).filter((item) => item.contentType !== "video"),
+  }))),
+  list: (input: { page: number; pageSize?: number; category?: string; contentType?: string; q?: string }) => api<{ items: InspirationTemplate[]; total: number; page: number; pageSize: number; hasMore: boolean }>(`/api/v1/inspirations${queryString({ ...input, platform: "miniprogram" })}`).then((result) => ({
+    ...result,
+    items: (result.items || []).filter((item) => item.contentType !== "video"),
+  })),
+  detail: async (slug: string): Promise<InspirationDetailResponse> => {
+    const result = normalizePublicTemplateDetailResponse(
+      await api<unknown>(`/api/v1/inspirations/${encodeURIComponent(slug)}?platform=miniprogram`),
+    );
+    if (result?.item?.contentType === "video") {
+      throw new Error("该灵感模板暂不可用");
+    }
+    return result;
+  },
   compose: (slug: string, body: InspirationComposeRequest) => api<InspirationComposeResponse>(`/api/v1/inspirations/${encodeURIComponent(slug)}/compose`, {
     method: "POST",
     body: JSON.stringify(body),

@@ -1,4 +1,189 @@
-<template><view class="task-item" role="button" :data-task-id="task.id" @click="$emit('open',task)"><view :class="['task-icon',task.status]"><text>{{ symbol }}</text></view><view class="task-main"><view class="task-head"><text class="task-name">{{ task.name }}</text><AssetStatusBadge :status="task.status"/></view><text class="task-meta">{{ typeLabel }} · {{ timeLabel }}</text><view v-if="task.status==='generating'" class="progress-track"><view class="progress-value" :style="{width:`${task.progress}%`}"/></view><text v-if="task.status==='failed'&&task.failureReason" class="failure-reason">{{ task.failureReason }}</text></view><view class="task-actions"><button v-if="task.status==='queued'||task.status==='generating'" :data-task-id="task.id" @click.stop="$emit('cancel',task)">取消</button><button v-else-if="task.status==='failed'" :data-task-id="task.id" @click.stop="$emit('retry',task)">重试</button><button v-else-if="task.status==='completed'" :data-task-id="task.id" @click.stop="$emit('result',task)">结果</button><text>›</text></view></view></template>
-<script setup lang="ts">import { computed } from "vue";import type { GenerationTask } from "../../features/assets/types";import AssetStatusBadge from "./AssetStatusBadge.vue";const props=defineProps<{task:GenerationTask}>();defineEmits<{open:[task:GenerationTask];cancel:[task:GenerationTask];retry:[task:GenerationTask];result:[task:GenerationTask]}>();const symbol=computed(()=>({image:"图",video:"视",ppt:"P",document:"文",agent:"A",infographic:"表",knowledge:"知",prompt:"{ }",template:"模"}as Record<string,string>)[props.task.type]||"生");const typeLabel=computed(()=>({image:"AI 图片",video:"AI 视频",ppt:"PPT",document:"文档",agent:"Agent",infographic:"信息图",knowledge:"知识库",prompt:"Prompt",template:"模板"}as Record<string,string>)[props.task.type]||"生成任务");const timeLabel=computed(()=>{const date=new Date(props.task.createdAt);if(Number.isNaN(date.getTime()))return"刚刚";return`${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")} ${String(date.getHours()).padStart(2,"0")}:${String(date.getMinutes()).padStart(2,"0")}`});</script>
-<style scoped>.task-item{display:flex;min-height:78px;box-sizing:border-box;padding:12px;align-items:center;gap:10px;border:1px solid #e7e9f1;border-radius:16px;background:#fff}.task-icon{display:flex;width:42px;height:42px;flex:0 0 42px;align-items:center;justify-content:center;border-radius:13px;color:#5a4db2;background:#eeedff;font-size:12px;font-weight:700}.task-icon.completed{color:#18805b;background:#e8f7f0}.task-icon.failed{color:#d35c2d;background:#fff0e8}.task-icon.cancelled{color:#747b8f;background:#f0f1f4}.task-main{min-width:0;flex:1}.task-head{display:flex;align-items:center;gap:7px}.task-name{min-width:0;flex:1;overflow:hidden;color:#2a2f3e;font-size:12px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}.task-meta,.failure-reason{display:block;margin-top:4px;overflow:hidden;color:#8c92a3;font-size:9px;text-overflow:ellipsis;white-space:nowrap}.failure-reason{color:#d35c2d}.progress-track{height:4px;margin-top:7px;overflow:hidden;border-radius:4px;background:#eceef4}.progress-value{height:100%;border-radius:4px;background:#7d8df6}.task-actions{display:flex;align-items:center;gap:6px}.task-actions button{width:auto;height:30px;margin:0;padding:0 9px;border:0;border-radius:10px;color:#5a4db2;background:#efeffd;font-size:9px}.task-actions button::after{display:none}.task-actions>text{color:#9298a8;font-size:20px}
+<template>
+  <view class="task-item" role="button" :data-task-id="task.id" @click="$emit('open', task)">
+    <view :class="['task-icon', task.status]"><text>{{ symbol }}</text></view>
+    <view class="task-main">
+      <view class="task-head">
+        <text class="task-name">{{ task.name }}</text>
+        <AssetStatusBadge :status="task.status" />
+      </view>
+      <text class="task-meta">{{ typeLabel }} · {{ timeLabel }}</text>
+      <view v-if="task.status === 'generating'" class="progress-track">
+        <view class="progress-value" :style="{ width: `${task.progress}%` }" />
+      </view>
+      <text v-if="task.status === 'failed' && task.failureReason" class="failure-reason">{{ task.failureReason }}</text>
+    </view>
+    <view class="task-actions">
+      <button v-if="task.status === 'queued' || task.status === 'generating'" :data-task-id="task.id" @click.stop="$emit('cancel', task)">取消</button>
+      <template v-else-if="task.status === 'failed'">
+        <button :data-task-id="task.id" @click.stop="$emit('retry', task)">重试</button>
+        <button class="danger" :data-task-id="task.id" @click.stop="$emit('delete', task)">删除</button>
+      </template>
+      <template v-else-if="task.status === 'cancelled'">
+        <button class="danger" :data-task-id="task.id" @click.stop="$emit('delete', task)">删除</button>
+      </template>
+      <button v-else-if="task.status === 'completed'" :data-task-id="task.id" @click.stop="$emit('result', task)">结果</button>
+      <text>›</text>
+    </view>
+  </view>
+</template>
+<script setup lang="ts">
+import { computed } from "vue";
+import type { GenerationTask } from "../../features/assets/types";
+import AssetStatusBadge from "./AssetStatusBadge.vue";
+
+const props = defineProps<{ task: GenerationTask }>();
+defineEmits<{
+  open: [task: GenerationTask];
+  cancel: [task: GenerationTask];
+  retry: [task: GenerationTask];
+  delete: [task: GenerationTask];
+  result: [task: GenerationTask];
+}>();
+
+const symbol = computed(
+  () =>
+    (
+      {
+        image: "图",
+        video: "视",
+        ppt: "P",
+        document: "文",
+        agent: "A",
+        infographic: "表",
+        knowledge: "知",
+        prompt: "{ }",
+        template: "模",
+      } as Record<string, string>
+    )[props.task.type] || "生",
+);
+const typeLabel = computed(
+  () =>
+    (
+      {
+        image: "AI 图片",
+        video: "AI 视频",
+        ppt: "PPT",
+        document: "文档",
+        agent: "Agent",
+        infographic: "信息图",
+        knowledge: "知识库",
+        prompt: "Prompt",
+        template: "模板",
+      } as Record<string, string>
+    )[props.task.type] || "生成任务",
+);
+const timeLabel = computed(() => {
+  const date = new Date(props.task.createdAt);
+  if (Number.isNaN(date.getTime())) return "刚刚";
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+});
+</script>
+<style scoped>
+.task-item {
+  display: flex;
+  min-height: 78px;
+  box-sizing: border-box;
+  padding: 12px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e7e9f1;
+  border-radius: 16px;
+  background: #fff;
+}
+.task-icon {
+  display: flex;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 13px;
+  color: #5a4db2;
+  background: #eeedff;
+  font-size: 12px;
+  font-weight: 700;
+}
+.task-icon.completed {
+  color: #18805b;
+  background: #e8f7f0;
+}
+.task-icon.failed {
+  color: #d35c2d;
+  background: #fff0e8;
+}
+.task-icon.cancelled {
+  color: #747b8f;
+  background: #f0f1f4;
+}
+.task-main {
+  min-width: 0;
+  flex: 1;
+}
+.task-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.task-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #2a2f3e;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-meta,
+.failure-reason {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #8c92a3;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.failure-reason {
+  color: #d35c2d;
+}
+.progress-track {
+  height: 4px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #eceef4;
+}
+.progress-value {
+  height: 100%;
+  border-radius: 4px;
+  background: #7d8df6;
+}
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.task-actions button {
+  width: auto;
+  height: 30px;
+  margin: 0;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 10px;
+  color: #5a4db2;
+  background: #efeffd;
+  font-size: 9px;
+}
+.task-actions button.danger {
+  color: #d35c2d;
+  background: #fff0e8;
+}
+.task-actions button::after {
+  display: none;
+}
+.task-actions > text {
+  color: #9298a8;
+  font-size: 20px;
+}
 </style>

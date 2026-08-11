@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -18,8 +19,9 @@ import (
 )
 
 var (
-	errContentSecurityRejected    = errors.New("所发布内容含违规信息")
-	errContentSecurityUnavailable = errors.New("内容安全检测暂不可用，请稍后重试")
+	errContentSecurityRejected       = errors.New("所发布内容含违规信息")
+	errContentSecurityUnavailable    = errors.New("内容安全检测暂不可用，请稍后重试")
+	errContentSecurityOpenIDRequired = errors.New("内容安全检测暂不可用，请稍后重试")
 )
 
 type wechatContentSecurityChecker interface {
@@ -141,6 +143,7 @@ func contentSecurityResult(response wechatSecurityResponse) error {
 		return errContentSecurityRejected
 	}
 	if response.ErrCode != 0 {
+		log.Printf("wechat content security api errcode=%d errmsg=%s", response.ErrCode, strings.TrimSpace(response.ErrMsg))
 		return errContentSecurityUnavailable
 	}
 	switch strings.ToLower(strings.TrimSpace(response.Result.Suggest)) {
@@ -267,13 +270,19 @@ func (a api) checkMiniProgramText(ctx context.Context, r *http.Request, user adm
 	}
 	openIDs := a.miniProgramOpenIDs(ctx, user)
 	if len(openIDs) == 0 {
-		return errContentSecurityUnavailable
+		log.Printf("wechat content security skipped openid missing user_id=%s", strings.TrimSpace(user.ID))
+		return errContentSecurityOpenIDRequired
 	}
+	var lastErr error
 	for _, openID := range openIDs {
 		err := a.contentSecurity.CheckText(ctx, content, openID)
 		if err == nil || errors.Is(err, errContentSecurityRejected) {
 			return err
 		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		log.Printf("wechat content security unavailable user_id=%s openid_count=%d err=%v", strings.TrimSpace(user.ID), len(openIDs), lastErr)
 	}
 	return errContentSecurityUnavailable
 }

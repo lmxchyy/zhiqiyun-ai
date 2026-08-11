@@ -96,6 +96,52 @@ func TestSMSLoginCreatesOnceAndInvalidInviteDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestSMSLoginRejectsInvalidOpaqueInviteToken(t *testing.T) {
+	t.Setenv("XIANZHI_ENV", "development")
+	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")
+	handler := newAuthFlowTestServer(t, filepath.Join(t.TempDir(), "store.json"))
+	sendTestSMS(t, handler, "13800009999")
+
+	response := request(t, handler, http.MethodPost, "/api/v1/auth/sms/login", bytes.NewBufferString(`{"mobile":"13800009999","smsCode":"123456","inviteToken":"inv_a0000000000000000","idempotencyKey":"invalid-token"}`))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "INVITE_TOKEN_INVALID") || !strings.Contains(response.Body.String(), "邀请链接无效") {
+		t.Fatalf("invalid opaque invite token response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSMSLoginBindsNewUserByOpaqueInviteToken(t *testing.T) {
+	t.Setenv("XIANZHI_ENV", "development")
+	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")
+	t.Setenv("WECHAT_MINI_PROGRAM_APPID", "")
+	t.Setenv("WECHAT_MINI_PROGRAM_SECRET", "")
+	handler := newPromotionAPITestHandler(t)
+	agentToken := loginToken(t, handler, "agent@example.com", "Agent123!")
+	switchRole := authedRequest(t, handler, http.MethodPost, "/api/v1/user/current-role", bytes.NewBufferString(`{"role":"AGENT"}`), agentToken)
+	if switchRole.Code != http.StatusOK {
+		t.Fatalf("switch AGENT = %d %s", switchRole.Code, switchRole.Body.String())
+	}
+	code := authedRequest(t, handler, http.MethodPost, "/api/v1/promotion/miniprogram-code", bytes.NewBufferString(`{"templateId":"poster.brand.simple"}`), agentToken)
+	var codePayload struct {
+		InviteToken string `json:"inviteToken"`
+	}
+	decodePromotionResponse(t, code.Body, &codePayload)
+	if codePayload.InviteToken == "" {
+		t.Fatalf("invite token missing: %s", code.Body.String())
+	}
+
+	sendTestSMS(t, handler, "13800008888")
+	response := request(t, handler, http.MethodPost, "/api/v1/auth/sms/login", bytes.NewBufferString(`{"mobile":"13800008888","smsCode":"123456","inviteToken":"`+codePayload.InviteToken+`","idempotencyKey":"valid-token"}`))
+	if response.Code != http.StatusOK {
+		t.Fatalf("token registration = %d %s", response.Code, response.Body.String())
+	}
+	var login authFlowTestResponse
+	if err := json.NewDecoder(response.Body).Decode(&login); err != nil {
+		t.Fatal(err)
+	}
+	if !login.IsNewUser || login.InviteBindStatus != "bound" {
+		t.Fatalf("token registration did not bind inviter: %+v", login)
+	}
+}
+
 func TestSMSCodeUsesSharedSessionStoreAcrossAuthAPIInstances(t *testing.T) {
 	t.Setenv("XIANZHI_ENV", "development")
 	t.Setenv("XIANZHI_SMS_DEV_CODE", "123456")

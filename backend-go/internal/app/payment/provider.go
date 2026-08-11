@@ -39,18 +39,60 @@ type RefundPaymentRequest struct {
 	Description string
 }
 
+type RefundOutcome string
+
+const (
+	RefundSuccess          RefundOutcome = "SUCCESS"
+	RefundTemporaryFailure RefundOutcome = "TEMPORARY_FAILURE"
+	RefundUnsupported      RefundOutcome = "UNSUPPORTED"
+	RefundUnknown          RefundOutcome = "UNKNOWN"
+)
+
+type QueryRefundOutcome string
+
+const (
+	QueryRefundSucceeded   QueryRefundOutcome = "SUCCEEDED"
+	QueryRefundNotFound    QueryRefundOutcome = "NOT_FOUND"
+	QueryRefundProcessing  QueryRefundOutcome = "PROCESSING"
+	QueryRefundFailed      QueryRefundOutcome = "FAILED"
+	QueryRefundUnsupported QueryRefundOutcome = "UNSUPPORTED"
+	QueryRefundUnknown     QueryRefundOutcome = "UNKNOWN"
+)
+
+type ProviderResponseSummary map[string]any
+
 type RefundPaymentResult struct {
-	ProviderRefundID string        `json:"providerRefundId"`
-	Status           PaymentStatus `json:"status"`
+	ProviderRefundID string                  `json:"providerRefundId"`
+	Status           PaymentStatus           `json:"status"`
+	Outcome          RefundOutcome           `json:"outcome"`
+	CompletedAt      *time.Time              `json:"completedAt,omitempty"`
+	ResponseSummary  ProviderResponseSummary `json:"responseSummary,omitempty"`
+}
+
+type QueryRefundRequest struct {
+	OrderNo, PaymentNo, RefundNo string
+	ProviderRefundID, PayerID    string
+}
+
+type QueryRefundResult struct {
+	ProviderRefundID string                  `json:"providerRefundId"`
+	Outcome          QueryRefundOutcome      `json:"outcome"`
+	CompletedAt      *time.Time              `json:"completedAt,omitempty"`
+	ResponseSummary  ProviderResponseSummary `json:"responseSummary,omitempty"`
+}
+
+type RefundProvider interface {
+	RefundPayment(context.Context, RefundPaymentRequest) (RefundPaymentResult, error)
+	QueryRefund(context.Context, QueryRefundRequest) (QueryRefundResult, error)
+	GetProviderName() string
 }
 
 type PaymentProvider interface {
+	RefundProvider
 	CreatePayment(context.Context, CreatePaymentRequest) (CreatePaymentResult, error)
 	QueryPayment(context.Context, QueryPaymentRequest) (PaymentStatus, error)
 	ClosePayment(context.Context, QueryPaymentRequest) error
-	RefundPayment(context.Context, RefundPaymentRequest) (RefundPaymentResult, error)
 	VerifyNotification(context.Context, []byte, map[string]string) (PaymentNotification, error)
-	GetProviderName() string
 }
 
 type MockScenario string
@@ -71,11 +113,12 @@ type MockPaymentProvider struct {
 	mu       sync.Mutex
 	enabled  bool
 	payments map[string]*mockPayment
+	refunds  map[string]RefundPaymentResult
 }
 
 func NewMockPaymentProvider(environment string) *MockPaymentProvider {
 	env := strings.ToLower(strings.TrimSpace(environment))
-	return &MockPaymentProvider{enabled: env != "production" && env != "prod", payments: map[string]*mockPayment{}}
+	return &MockPaymentProvider{enabled: env != "production" && env != "prod", payments: map[string]*mockPayment{}, refunds: map[string]RefundPaymentResult{}}
 }
 
 func (p *MockPaymentProvider) ensureEnabled() error {
@@ -134,12 +177,31 @@ func (p *MockPaymentProvider) RefundPayment(_ context.Context, req RefundPayment
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if existing, ok := p.refunds[req.RefundNo]; ok {
+		return existing, nil
+	}
 	item := p.payments[req.OrderNo]
 	if item == nil || item.Status != PaymentSuccess {
 		return RefundPaymentResult{}, errors.New("mock payment is not refundable")
 	}
 	item.Status = PaymentRefunded
-	return RefundPaymentResult{ProviderRefundID: "mock_refund_" + req.RefundNo, Status: PaymentRefunded}, nil
+	now := time.Now().UTC()
+	result := RefundPaymentResult{ProviderRefundID: "mock_refund_" + req.RefundNo, Status: PaymentRefunded, Outcome: RefundSuccess, CompletedAt: &now, ResponseSummary: ProviderResponseSummary{"provider": "mock", "status": "REFUNDED"}}
+	p.refunds[req.RefundNo] = result
+	return result, nil
+}
+
+func (p *MockPaymentProvider) QueryRefund(_ context.Context, req QueryRefundRequest) (QueryRefundResult, error) {
+	if err := p.ensureEnabled(); err != nil {
+		return QueryRefundResult{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	item, ok := p.refunds[req.RefundNo]
+	if !ok {
+		return QueryRefundResult{Outcome: QueryRefundNotFound, ResponseSummary: ProviderResponseSummary{"provider": "mock", "status": "NOT_FOUND"}}, nil
+	}
+	return QueryRefundResult{ProviderRefundID: item.ProviderRefundID, Outcome: QueryRefundSucceeded, CompletedAt: item.CompletedAt, ResponseSummary: ProviderResponseSummary{"provider": "mock", "status": "SUCCEEDED"}}, nil
 }
 
 func (p *MockPaymentProvider) VerifyNotification(_ context.Context, body []byte, _ map[string]string) (PaymentNotification, error) {

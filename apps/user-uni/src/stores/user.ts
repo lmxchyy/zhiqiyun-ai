@@ -114,11 +114,17 @@ export const useUserStore = defineStore("user", {
       this.applyProfile(profile);
       return profile;
     },
-    async loadEnterpriseContexts() {
-      const payload = await api<EnterpriseContextsResponse>("/api/v1/user/enterprise-contexts");
+    async fetchEnterpriseContexts() {
+      return api<EnterpriseContextsResponse>("/api/v1/user/enterprise-contexts");
+    },
+    applyEnterpriseContexts(payload: EnterpriseContextsResponse) {
       this.enterpriseContexts = Array.isArray(payload.contexts) ? payload.contexts : [];
       this.currentContext = payload.current || this.enterpriseContexts.find(item => item.current) || null;
       return payload;
+    },
+    async loadEnterpriseContexts() {
+      const payload = await this.fetchEnterpriseContexts();
+      return this.applyEnterpriseContexts(payload);
     },
     async switchContext(input: CurrentContextRequest) {
       const previousContext = this.currentContext;

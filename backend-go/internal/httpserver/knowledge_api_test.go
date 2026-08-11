@@ -54,7 +54,10 @@ func TestKnowledgeAccessFallsBackFromStaleTenantHeader(t *testing.T) {
 }
 
 func TestKnowledgeAgentHTTPVerticalFlow(t *testing.T) {
-	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 

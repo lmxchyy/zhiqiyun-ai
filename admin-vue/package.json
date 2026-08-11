@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5174",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4174"
   },
@@ -20,6 +22,9 @@
     "vue-tsc": "^2.2.10"
   },
   "devDependencies": {
-    "unplugin-vue-components": "^32.1.0"
+    "@vue/test-utils": "^2.4.11",
+    "happy-dom": "^20.11.1",
+    "unplugin-vue-components": "^32.1.0",
+    "vitest": "^4.1.10"
   }
 }

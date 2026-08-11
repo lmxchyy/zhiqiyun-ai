@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	operationcenter "xianzhi-ai/backend-go/internal/app/operationcenter"
 
+	commissionapp "xianzhi-ai/backend-go/internal/app/commission"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 )
 
@@ -316,6 +319,12 @@ func (s *postgresStore) AdminData() (adminPlatformData, error) {
 		return data, err
 	}
 	if data, err = s.applyAICapabilityConfig(ctx, data); err != nil {
+		return data, err
+	}
+	// Estimate and other AdminData callers must see the same published billing
+	// rules as CreatePendingGenerationTask (aiCapabilityAdminData), otherwise
+	// Seedance defaults to code BasePrice 12 (90 pts) instead of published 80 (600).
+	if data.BillingRuleVersions, err = s.listBillingRuleVersionsContext(ctx); err != nil {
 		return data, err
 	}
 	data = withAdminDefaults(data)
@@ -1039,7 +1048,7 @@ func (s *postgresStore) PointAccount(userID string) (pointAccount, error) {
 		where user_id = $1
 	`, userID).Scan(&item.ID, &item.UserID, &item.Available, &item.Frozen)
 	if errors.Is(err, sql.ErrNoRows) {
-		item = pointAccount{ID: "points_" + shortID(userID), UserID: userID, Available: defaultPointsAvailable}
+		item = pointAccount{ID: "points_" + shortID(userID), UserID: userID, Available: 0}
 	} else if err != nil {
 		return item, err
 	}
@@ -1092,13 +1101,13 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	req.Params["organization_id"] = authorization.OrganizationID
 	req.Params["billing_scope"] = authorization.BillingScope
 	req.Params["billing_account_id"] = authorization.BillingAccountID
-	var account adminPointAccount
+	var account pgPointAccount
 	if authorization.ContextType != contextEnterprise {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		account, err = pgLoadPersonalAccountForUserTx(ctx, tx, userID)
 		if err != nil {
 			return generationTask{}, err
 		}
-		if account.Available < pointCost {
+		if account.Available < int64(pointCost) {
 			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 		}
 	}
@@ -1128,10 +1137,14 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		UpdatedAt:        now,
 		WorkerFinishedAt: now,
 	}
+	if authorization.ContextType != contextEnterprise {
+		task.BillingEngine = personalLotBillingEngine
+		task.PersonalPointAccountID = account.ID
+	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
-	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
+	balanceBefore, balanceAfter := int(account.Available), int(account.Available)-pointCost
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
 		if err != nil {
@@ -1157,11 +1170,13 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结")
+		pointStore := NewPostgresPersonalPointStore(s.db)
+		reserved, err := pointStore.reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
 		if err != nil {
 			return generationTask{}, err
 		}
-		if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, reservedAccount, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+		task.PersonalPointReservationID = reserved.Reservation.ID
+		if _, err := pointStore.captureTx(ctx, tx, PersonalPointCaptureCommand{AccountID: account.ID, UserID: userID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:capture:" + task.ID}); err != nil {
 			return generationTask{}, err
 		}
 	} else {
@@ -1245,13 +1260,13 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	req.Params["organization_id"] = authorization.OrganizationID
 	req.Params["billing_scope"] = authorization.BillingScope
 	req.Params["billing_account_id"] = authorization.BillingAccountID
-	var account adminPointAccount
+	var account pgPointAccount
 	if authorization.ContextType != contextEnterprise {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		account, err = pgLoadPersonalAccountForUserTx(ctx, tx, userID)
 		if err != nil {
 			return generationTask{}, err
 		}
-		if account.Available < pointCost {
+		if account.Available < int64(pointCost) {
 			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
 		}
 	}
@@ -1260,7 +1275,7 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if err != nil {
 		return generationTask{}, err
 	}
-	balanceBefore, balanceAfter := account.Available, account.Available-pointCost
+	balanceBefore, balanceAfter := int(account.Available), int(account.Available)-pointCost
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", taskID)
 		if err != nil {
@@ -1290,6 +1305,10 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+	if authorization.ContextType != contextEnterprise {
+		task.BillingEngine = personalLotBillingEngine
+		task.PersonalPointAccountID = account.ID
+	}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
@@ -1297,9 +1316,11 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结"); err != nil {
+		reserved, err := NewPostgresPersonalPointStore(s.db).reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
+		if err != nil {
 			return generationTask{}, err
 		}
+		task.PersonalPointReservationID = reserved.Reservation.ID
 	} else {
 		if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RESERVE", pointCost, balanceBefore, balanceAfter, 0, pointCost, "生成任务冻结"); err != nil {
 			return generationTask{}, err
@@ -1339,13 +1360,21 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if userID == "" {
 		userID = strings.TrimSpace(req.UserID)
 	}
+	usesPersonalPoints, err := generationTaskUsesPersonalPoints(task)
+	if err != nil {
+		return generationTask{}, err
+	}
 	authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, true)
 	if err != nil {
 		return generationTask{}, err
 	}
-	var account adminPointAccount
-	if authorization.ContextType != contextEnterprise {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+	if usesPersonalPoints != (authorization.ContextType != contextEnterprise) {
+		return generationTask{}, ErrPersonalPointContextMismatch
+	}
+	var account pgPointAccount
+	personalPointCost := 0
+	if usesPersonalPoints {
+		account, personalPointCost, err = validatePostgresGenerationPersonalLotMarkerTx(ctx, tx, task)
 		if err != nil {
 			return generationTask{}, err
 		}
@@ -1372,9 +1401,15 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 		pointCost = generationPointCostForRequest(req, capabilityData)
 	}
 	pointCost = generationTaskReservedPointCost(task, pointCost)
+	if usesPersonalPoints {
+		if pointCost != personalPointCost {
+			return generationTask{}, ErrPersonalPointImportConflict
+		}
+		pointCost = personalPointCost
+	}
 	reserved := generationTaskReservedAndActive(task)
-	if authorization.ContextType != contextEnterprise && !reserved && account.Available < pointCost {
-		return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+	if usesPersonalPoints && !reserved {
+		return generationTask{}, ErrPersonalPointReservationMarkerMissing
 	}
 	task.Status = "SUCCEEDED"
 	task.TaskStatus = taskStatusSucceeded
@@ -1387,7 +1422,7 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	task.WorkerFinishedAt = now
 	task.ResultIDs = []string{}
 	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
-	task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]))
+	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]), task.ProviderChannel)
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
 	count := imageCount(req.Params)
 	for i := 0; i < count; i++ {
@@ -1401,30 +1436,33 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			return generationTask{}, err
 		}
 	}
-	balanceBefore := account.Available
-	balanceAfter := account.Available - pointCost
+	balanceBefore := int(account.Available)
+	balanceAfter := int(account.Available) - pointCost
 	if reserved {
-		fallbackBalance := account.Available
-		if authorization.ContextType == contextEnterprise {
+		fallbackBalance := int(account.Available)
+		if !usesPersonalPoints {
 			fallbackBalance = intValue(task.Params[generationBillingReservationBalanceAfterKey])
 		}
 		balanceBefore, balanceAfter = generationTaskReservationBalances(task, fallbackBalance, pointCost)
-		if authorization.ContextType == contextEnterprise {
+		if !usesPersonalPoints {
 			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "CAPTURE", pointCost, balanceAfter, balanceAfter, pointCost, 0, "生成任务确认扣费"); err != nil {
 				return generationTask{}, err
 			}
 		} else {
-			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
+			if _, err := NewPostgresPersonalPointStore(s.db).captureTx(ctx, tx, PersonalPointCaptureCommand{AccountID: task.PersonalPointAccountID, UserID: userID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:capture:" + task.ID}); err != nil {
 				return generationTask{}, err
 			}
 		}
 	} else {
+		if usesPersonalPoints {
+			return generationTask{}, ErrPersonalPointReservationMarkerMissing
+		}
 		task.QuotedPoints = float64(pointCost)
 		task.ReservedPoints = float64(pointCost)
 		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "QUOTE", float64(pointCost), map[string]any{"modelCode": task.Model}); err != nil {
 			return generationTask{}, err
 		}
-		if authorization.ContextType == contextEnterprise {
+		if !usesPersonalPoints {
 			reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID)
 			if err != nil {
 				return generationTask{}, err
@@ -1434,14 +1472,6 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 				return generationTask{}, err
 			}
 			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "CAPTURE", pointCost, balanceAfter, balanceAfter, pointCost, 0, "生成任务确认扣费"); err != nil {
-				return generationTask{}, err
-			}
-		} else {
-			reservedAccount, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RESERVE", pointCost, "生成任务冻结")
-			if err != nil {
-				return generationTask{}, err
-			}
-			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, reservedAccount, "CAPTURE", pointCost, "生成任务确认扣费"); err != nil {
 				return generationTask{}, err
 			}
 		}
@@ -1479,6 +1509,13 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBillingEvent, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
+	userID := strings.TrimSpace(task.UserID)
+	taskID := strings.TrimSpace(task.TaskID)
+	if userID == "" || taskID == "" {
+		return adminBillingEvent{}, ErrInvalidPointCommand
+	}
+	task.UserID = userID
+	task.TaskID = taskID
 	if err := s.ensureReady(ctx); err != nil {
 		return adminBillingEvent{}, err
 	}
@@ -1488,11 +1525,6 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	userID := strings.TrimSpace(task.UserID)
-	if userID == "" {
-		userID = "user_000002"
-	}
-	task.UserID = userID
 	if event, ok, err := billingEventForTaskMetricTx(ctx, tx, task.TaskID, billingMetricPPTGenerate); err != nil || ok {
 		if err != nil {
 			return adminBillingEvent{}, err
@@ -1509,7 +1541,6 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 	if err != nil {
 		return adminBillingEvent{}, err
 	}
-	var account adminPointAccount
 	balanceBefore, balanceAfter := 0, 0
 	if authorization.ContextType == contextEnterprise {
 		reservation, err := s.reserveEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "PPT_TASK", task.TaskID)
@@ -1518,24 +1549,13 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 		}
 		balanceBefore, balanceAfter = int(reservation.BalanceBefore), int(reservation.BalanceAfter)
 	} else {
-		account, err = pointAccountForUpdate(ctx, tx, userID)
+		balanceBefore, balanceAfter, err = chargePostgresPersonalPointUsage(ctx, s.db, tx, personalPointUsageChargeCommand{
+			UserID: userID, BusinessType: "PPT_TASK", BusinessID: task.TaskID,
+			Points: int64(pointCost), IdempotencyPrefix: "ppt:" + task.TaskID,
+		})
 		if err != nil {
 			return adminBillingEvent{}, err
 		}
-		if account.Available < pointCost {
-			return adminBillingEvent{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
-		}
-		balanceBefore = account.Available
-		walletTask := generationTask{ID: task.TaskID, UserID: userID, TenantID: authorization.TenantID, ModuleCode: modulePPTGeneration, Model: firstNonEmptyString(task.TextModel, "ppt-text-model")}
-		reserved, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, account, "RESERVE", pointCost, "PPT generation reserve")
-		if err != nil {
-			return adminBillingEvent{}, err
-		}
-		captured, _, err := applyPersonalWalletEntryV1(ctx, tx, walletTask, reserved, "CAPTURE", pointCost, "PPT generation capture")
-		if err != nil {
-			return adminBillingEvent{}, err
-		}
-		balanceAfter = captured.Available
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1586,54 +1606,110 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 	if err != nil {
 		return generationTask{}, err
 	}
-	if task.Status == "SUCCEEDED" {
-		return task, tx.Commit()
+	task, refunded, changed, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, message, "FAILED", taskStatusFailed)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if changed {
+		if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.fail", "generation_task", task.ID, "", "", 502, map[string]any{"error": message, "pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
+			return generationTask{}, err
+		}
+	}
+	return task, tx.Commit()
+}
+
+func validatePostgresGenerationPersonalLotMarkerTx(ctx context.Context, tx *sql.Tx, task generationTask) (pgPointAccount, int, error) {
+	if task.BillingEngine != personalLotBillingEngine || strings.TrimSpace(task.PersonalPointAccountID) == "" || strings.TrimSpace(task.PersonalPointReservationID) == "" {
+		return pgPointAccount{}, 0, ErrPersonalPointReservationMarkerMissing
+	}
+	pointCost, err := generationTaskExactReservationPointCost(task)
+	if err != nil {
+		return pgPointAccount{}, 0, err
+	}
+	account, ok, err := pgLoadAccount(ctx, tx, task.PersonalPointAccountID, task.UserID, true)
+	if err != nil {
+		return pgPointAccount{}, 0, err
+	}
+	if !ok {
+		return pgPointAccount{}, 0, ErrPersonalPointReservationMarkerMissing
+	}
+	reservation, err := pgScanReservation(tx.QueryRowContext(ctx, `SELECT `+pgReservationColumns+` FROM xz_personal_point_reservations WHERE id=$1 FOR UPDATE`, task.PersonalPointReservationID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return pgPointAccount{}, 0, ErrPersonalPointReservationMarkerMissing
+	}
+	if err != nil {
+		return pgPointAccount{}, 0, err
+	}
+	if reservation.AccountID != account.ID || reservation.UserID != task.UserID {
+		return pgPointAccount{}, 0, ErrPointOwnership
+	}
+	if reservation.BusinessType != "GENERATION_TASK" || reservation.BusinessID != task.ID {
+		return pgPointAccount{}, 0, ErrPersonalPointImportConflict
+	}
+	allocations, err := pgLoadAllocations(ctx, tx, reservation.ID, account.ID, task.UserID, true)
+	if err != nil {
+		return pgPointAccount{}, 0, err
+	}
+	if err := validatePersonalGenerationReservationState(reservation, allocations, pointCost); err != nil {
+		return pgPointAccount{}, 0, err
+	}
+	return account, int(pointCost), nil
+}
+
+func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, tx *sql.Tx, task generationTask, message, terminalStatus, terminalTaskStatus string) (generationTask, bool, bool, error) {
+	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+		return task, false, false, nil
+	}
+	usesPersonalPoints, err := generationTaskUsesPersonalPoints(task)
+	if err != nil {
+		return generationTask{}, false, false, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	pointCost := generationTaskReservedPointCost(task, task.PointCost)
 	refunded := false
-	if generationTaskReservedAndActive(task) && pointCost > 0 {
+	if pointCost > 0 {
 		authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, false)
 		if err != nil {
-			return generationTask{}, err
+			return generationTask{}, false, false, err
 		}
-		if authorization.ContextType == contextEnterprise {
+		if usesPersonalPoints != (authorization.ContextType != contextEnterprise) {
+			return generationTask{}, false, false, ErrPersonalPointContextMismatch
+		}
+		if usesPersonalPoints {
+			account, validatedPointCost, err := validatePostgresGenerationPersonalLotMarkerTx(ctx, tx, task)
+			if err != nil {
+				return generationTask{}, false, false, err
+			}
+			if validatedPointCost != pointCost {
+				return generationTask{}, false, false, ErrPersonalPointImportConflict
+			}
+			nextAvailable := int(account.Available) + validatedPointCost
+			if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(validatedPointCost), IdempotencyKey: "generation:release:" + task.ID}); err != nil {
+				return generationTask{}, false, false, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, int(account.Available), nextAvailable)
+			refunded = true
+		} else if generationTaskReservedAndActive(task) {
 			before := int64(intValue(task.Params[generationBillingReservationBalanceAfterKey]))
 			if err := s.reverseEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID); err != nil {
-				return generationTask{}, err
+				return generationTask{}, false, false, err
 			}
 			task.Params = generationBillingRefundParams(task.Params, now, int(before), int(before)+pointCost)
 			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RELEASE", pointCost, int(before), int(before)+pointCost, pointCost, 0, "生成失败解冻"); err != nil {
-				return generationTask{}, err
+				return generationTask{}, false, false, err
 			}
-		} else {
-			account, err := pointAccountForUpdate(ctx, tx, task.UserID)
-			if err != nil {
-				return generationTask{}, err
-			}
-			nextAvailable := account.Available + pointCost
-			if _, _, err := applyPersonalWalletEntryV1(ctx, tx, task, account, "RELEASE", pointCost, "生成失败解冻"); err != nil {
-				return generationTask{}, err
-			}
-			task.Params = generationBillingRefundParams(task.Params, now, account.Available, nextAvailable)
+			refunded = true
 		}
-		task.BillingStatus = billingStatusReleased
-		task.ReleasedPoints = float64(pointCost)
-		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RELEASE", float64(pointCost), nil); err != nil {
-			return generationTask{}, err
-		}
-		refunded = true
-	}
-	if task.Status == "FAILED" || task.Status == "CANCELLED" {
 		if refunded {
-			if err := insertGenerationTask(ctx, tx, task); err != nil {
-				return generationTask{}, err
+			task.BillingStatus = billingStatusReleased
+			task.ReleasedPoints = float64(pointCost)
+			if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RELEASE", float64(pointCost), nil); err != nil {
+				return generationTask{}, false, false, err
 			}
 		}
-		return task, tx.Commit()
 	}
-	task.Status = "FAILED"
-	task.TaskStatus = taskStatusFailed
+	task.Status = terminalStatus
+	task.TaskStatus = terminalTaskStatus
 	if task.BillingStatus == "" {
 		task.BillingStatus = billingStatusBillingFailed
 	}
@@ -1643,12 +1719,9 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 	task.UpdatedAt = now
 	task.WorkerFinishedAt = now
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
-		return generationTask{}, err
+		return generationTask{}, false, false, err
 	}
-	if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.fail", "generation_task", task.ID, "", "", 502, map[string]any{"error": message, "pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
-		return generationTask{}, err
-	}
-	return task, tx.Commit()
+	return task, refunded, true, nil
 }
 
 func generatedAssetForRequest(req createGenerationTaskRequest, userID string, taskID string, assetID string, index int, now string) asset {
@@ -1779,6 +1852,13 @@ func (s *postgresStore) CreateAdminOrder(req adminOrderMutation) (adminOrder, er
 		return adminOrder{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	managedV2, err := legacyOrderManagedV2Tx(ctx, tx, req.PlanID, req.PaymentEnvironment)
+	if err != nil {
+		return adminOrder{}, err
+	}
+	if managedV2 {
+		return adminOrder{}, newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PRICE_QUOTE", "V2 managed member and agent plans must be ordered with a server-issued price quote")
+	}
 	id, err := nextTableID(ctx, tx, "xz_orders", "order")
 	if err != nil {
 		return adminOrder{}, err
@@ -1876,7 +1956,7 @@ func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any
 	}
 	mergeOrderPaymentMetadata(&item, metadata...)
 	if strings.EqualFold(item.Status, "PAID") {
-		if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &item); err != nil {
+		if err := applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &item); err != nil {
 			return adminOrder{}, err
 		}
 		if err := insertOrder(ctx, tx, item); err != nil {
@@ -1889,7 +1969,7 @@ func (s *postgresStore) MarkAdminOrderPaid(id string, metadata ...map[string]any
 	}
 	item.Status = "PAID"
 	item.PaidAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, &item); err != nil {
+	if err := applyCommerceOrderFulfillmentForTx(ctx, tx, s.db, &item); err != nil {
 		return adminOrder{}, err
 	}
 	if isRechargeOrder(item) {
@@ -2034,18 +2114,12 @@ func applyRechargeSettlementForTx(ctx context.Context, tx *sql.Tx, order *adminO
 	} else {
 		order.PriceSnapshot["newapiSyncStatus"] = "PENDING"
 	}
-	account, err := pointAccountForUpdate(ctx, tx, order.UserID)
+	grant, err := grantPermanentPersonalPointsTx(ctx, tx, order.UserID, PointSourceRecharge, points,
+		"RECHARGE_ORDER", order.ID, "recharge:"+order.ID, pointGrantedAt(now))
 	if err != nil {
 		return err
 	}
-	before := account.Available
-	account.Available += points
-	if err := insertPointAccount(ctx, tx, account); err != nil {
-		return err
-	}
-	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "RECHARGE", points, before, account.Available, "RECHARGE_ORDER", order.ID, "订单充值入账"); err != nil {
-		return err
-	}
+	account, before := grant.Account, grant.AvailableBefore
 	if route.ID != "" && account.Available > route.QuotaLimit {
 		route, err = ensureRechargeImageBackupRouteTx(ctx, tx, order.UserID, account.Available, now)
 		if err != nil {
@@ -2107,7 +2181,7 @@ func applyRechargeSettlementForTx(ctx context.Context, tx *sql.Tx, order *adminO
 	return nil
 }
 
-func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *adminOrder) error {
+func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, db *sql.DB, order *adminOrder) error {
 	if order == nil {
 		return nil
 	}
@@ -2128,17 +2202,36 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	if !ok {
 		return nil
 	}
+	return applyCommerceOrderFulfillmentWithPlanForTx(ctx, tx, db, order, plan)
+}
+
+func applyCommerceOrderFulfillmentWithPlanForTx(ctx context.Context, tx *sql.Tx, db *sql.DB, order *adminOrder, plan adminPlan) error {
 	planType := planBusinessType(plan)
 	switch planType {
 	case planTypeMemberPackage, planTypeAgentJoinPackage, planTypeOperationCenterPackage:
 	default:
 		return nil
 	}
+	if planType == planTypeOperationCenterPackage {
+		return applyOperationCenterPaymentSucceededForTx(ctx, tx, db, order)
+	}
 	commerceCtx, err := commerceContextForOrderTx(ctx, tx, *order, plan)
 	if err != nil {
 		return err
 	}
-	engineResult, err := generateCommissionRecordsForCommerceOrderTx(ctx, tx, *order, plan, commerceCtx)
+	settlementDecision, err := resolveOrderSettlementDecisionTx(ctx, tx, order, plan)
+	if err != nil {
+		return err
+	}
+	if err := claimSettlementWriteSourceTx(ctx, tx, settlementDecision); err != nil {
+		return err
+	}
+	var engineResult commissionapp.CalculationResult
+	if settlementDecision.SettlementEngine == settlementEngineV132 {
+		engineResult, err = generateV132CommissionRecordsForCommerceOrderTx(ctx, tx, order, plan, commerceCtx, settlementDecision)
+	} else {
+		engineResult, err = generateCommissionRecordsForCommerceOrderTx(ctx, tx, *order, plan, commerceCtx)
+	}
 	if err != nil {
 		return err
 	}
@@ -2146,15 +2239,24 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	if err != nil {
 		return err
 	}
+	shadowLegacyResult := result
+	if settlementDecision.SettlementEngine == settlementEngineV132 {
+		if preview, previewErr := calculateCommissionSettlement(commerceCtx); previewErr == nil {
+			shadowLegacyResult = preview
+		}
+	}
+	recordCommerceShadowDifferenceTx(ctx, tx, *order, plan, commerceCtx, shadowLegacyResult)
 	applySettlementToOrder(order, commerceCtx, result, planType)
 	if result.TokenGrantAmount > 0 {
 		if err := grantTokensToUserTx(ctx, tx, order.UserID, order.ID, tokenChangeTypeForPlan(planType), result.TokenGrantAmount, result.TokenGrantValueCents, nowForOrder(*order)); err != nil {
 			return err
 		}
 	}
-	for _, commission := range settlementCommissionRecords(commerceCtx, result, nowForOrder(*order)) {
-		if err := insertCommission(ctx, tx, commission); err != nil {
-			return err
+	if shouldWriteLegacyCommissionProjection(*order) {
+		for _, commission := range settlementCommissionRecords(commerceCtx, result, nowForOrder(*order)) {
+			if err := insertCommission(ctx, tx, commission); err != nil {
+				return err
+			}
 		}
 	}
 	if err := fulfillIdentityForOrderTx(ctx, tx, order, plan, result, nowForOrder(*order)); err != nil {
@@ -2162,6 +2264,104 @@ func applyCommerceOrderFulfillmentForTx(ctx context.Context, tx *sql.Tx, order *
 	}
 	markOrderFulfilled(order, result.OrderType, nowForOrder(*order))
 	return nil
+}
+
+func applyOperationCenterPaymentSucceededForTx(ctx context.Context, tx *sql.Tx, db *sql.DB, order *adminOrder) error {
+	if tx == nil || db == nil || order == nil {
+		return operationcenter.ErrTransactionRequired
+	}
+	if order.PriceSnapshot == nil {
+		order.PriceSnapshot = map[string]any{}
+	}
+	paymentRecordID, err := operationCenterPaymentRecordIDForTx(ctx, tx, order)
+	if err != nil {
+		return err
+	}
+	paidAt := nowForOrder(*order)
+	providerTransactionID := firstOperationCenterCallbackValue(order.PriceSnapshot, "providerTransactionId", "transactionId")
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE xz_payment_records
+		SET payment_status='SUCCESS',
+		    paid_at=coalesce(paid_at,$3::timestamptz),
+		    provider_transaction_id=coalesce(nullif(provider_transaction_id,''),nullif($4,''))
+		WHERE id=$1 AND order_id=$2 AND amount_cents=$5
+		  AND upper(coalesce(payment_status,prepay_status,'')) IN ('PENDING','SIGNED','SUCCESS','PAID')
+	`, paymentRecordID, order.ID, paidAt, providerTransactionID, orderAmount(*order)); err != nil {
+		return err
+	}
+	order.Status = "PAID"
+	order.OrderType = "OPERATION_CENTER_SERVICE"
+	order.BusinessOrderType = "OPERATION_CENTER_SERVICE"
+	order.FulfillmentStatus = string(operationcenter.OperationCenterServiceReviewRequired)
+	order.FulfilledAt = ""
+	order.PriceSnapshot["orderType"] = order.OrderType
+	order.PriceSnapshot["businessOrderType"] = order.BusinessOrderType
+	order.PriceSnapshot["fulfillmentStatus"] = order.FulfillmentStatus
+	delete(order.PriceSnapshot, "fulfilledAt")
+	priceSnapshot, err := json.Marshal(order.PriceSnapshot)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE xz_orders
+		SET status='PAID',order_status='PAID',paid_at=$2::timestamptz,
+		    fulfillment_status=$3,fulfilled_at=NULL,order_type=$4,business_order_type=$5,
+		    price_snapshot=$6::jsonb,updated_at=clock_timestamp()
+		WHERE id=$1
+	`, order.ID, paidAt, order.FulfillmentStatus, order.OrderType, order.BusinessOrderType, string(priceSnapshot)); err != nil {
+		return err
+	}
+	workflow, err := operationcenter.NewWorkflowService(db, operationcenter.WorkflowOptions{})
+	if err != nil {
+		return err
+	}
+	result, err := workflow.RecordPaymentSucceededForTx(ctx, tx, operationcenter.PaymentSucceededCommand{
+		OrderID: order.ID, PaymentRecordID: paymentRecordID,
+	})
+	if err != nil {
+		return err
+	}
+	order.PriceSnapshot["operationCenterServiceOrderId"] = result.ServiceOrder.ID
+	order.PriceSnapshot["operationCenterServiceStatus"] = string(result.ServiceOrder.Status)
+	return nil
+}
+
+func operationCenterPaymentRecordIDForTx(ctx context.Context, tx *sql.Tx, order *adminOrder) (string, error) {
+	var paymentRecordID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT coalesce(metadata->>'paymentRecordId','')
+		FROM xz_operation_center_service_orders
+		WHERE order_id=$1
+		FOR UPDATE
+	`, order.ID).Scan(&paymentRecordID)
+	if err == nil && strings.TrimSpace(paymentRecordID) != "" {
+		return paymentRecordID, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	err = tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM xz_payment_records
+		WHERE order_id=$1 AND amount_cents=$2
+		ORDER BY CASE WHEN upper(coalesce(payment_status,prepay_status,'')) IN ('SUCCESS','PAID') THEN 0 ELSE 1 END,
+		         created_at,id
+		LIMIT 1
+		FOR UPDATE
+	`, order.ID, orderAmount(*order)).Scan(&paymentRecordID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", operationcenter.ErrPaymentNotSuccessful
+	}
+	return paymentRecordID, err
+}
+
+func firstOperationCenterCallbackValue(snapshot map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(stringValue(snapshot[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func commerceContextForOrderTx(ctx context.Context, tx *sql.Tx, order adminOrder, plan adminPlan) (commissionOrderContext, error) {
@@ -2266,19 +2466,12 @@ func grantTokensToUserTx(ctx context.Context, tx *sql.Tx, userID string, orderID
 	if err != nil || exists {
 		return err
 	}
-	account, err := pointAccountForUpdate(ctx, tx, userID)
+	grant, err := grantPermanentPersonalPointsTx(ctx, tx, userID, paidPointSourceForChangeType(changeType), amount,
+		"COMMERCE_ORDER", orderID, "commerce:"+orderID+":"+strings.ToUpper(changeType), pointGrantedAt(now))
 	if err != nil {
 		return err
 	}
-	before := account.Available
-	account.Available += amount
-	account.TotalGranted += amount
-	if err := insertPointAccount(ctx, tx, account); err != nil {
-		return err
-	}
-	if err := insertAccountBalanceLedgerV1(ctx, tx, account, "GRANT", amount, before, account.Available, "COMMERCE_ORDER", orderID+":"+changeType, "商业订单权益发放"); err != nil {
-		return err
-	}
+	account, before := grant.Account, grant.AvailableBefore
 	record := adminTokenRecord{
 		ID:           "token_" + shortID(orderID+"_"+changeType),
 		UserID:       userID,
@@ -2448,6 +2641,13 @@ func (s *postgresStore) RenewAdminOrder(id string) (adminOrder, error) {
 	source, err := getOrderForUpdate(ctx, tx, id)
 	if err != nil {
 		return adminOrder{}, err
+	}
+	managedV2, err := legacyOrderManagedV2Tx(ctx, tx, source.PlanID, "")
+	if err != nil {
+		return adminOrder{}, err
+	}
+	if managedV2 {
+		return adminOrder{}, newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PRICE_QUOTE", "V2 managed member and agent plans cannot renew a legacy order without a new price quote")
 	}
 	nextID, err := nextTableID(ctx, tx, "xz_orders", "order")
 	if err != nil {
@@ -2827,6 +3027,54 @@ func (s *postgresStore) CreateAdminCustomer(req adminCustomerMutation) (adminUse
 	return item, tx.Commit()
 }
 
+func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, grantPoints int) (adminUser, error) {
+	if grantPoints <= 0 {
+		return adminUser{}, ErrInvalidPointCommand
+	}
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return adminUser{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return adminUser{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UTC()
+	userID, err := nextTableID(ctx, tx, "xz_users", "user")
+	if err != nil {
+		return adminUser{}, err
+	}
+	item := adminUser{
+		ID: userID, Email: req.Email, Mobile: strings.TrimSpace(req.Mobile), WeChatOpenIDs: appendUniqueString(nil, req.WeChatOpenID),
+		WeChatUnionID: strings.TrimSpace(req.WeChatUnionID), RegistrationSource: cloneStringMap(req.RegistrationSource), Name: req.Name,
+		Role: fallback(req.Role, "MEMBER"), Status: fallback(req.Status, "ACTIVE"), PlanID: fallback(req.PlanID, "plan_free"),
+		ReferredBy: strings.TrimSpace(req.ReferredBy), SubscriptionExpiresAt: strings.TrimSpace(req.SubscriptionExpiresAt),
+		CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano),
+	}
+	if err := insertUser(ctx, tx, item); err != nil {
+		return adminUser{}, err
+	}
+	if err := upsertPointAccountByUser(ctx, tx, item.ID, 0); err != nil {
+		return adminUser{}, err
+	}
+	account, err := pgLoadPersonalAccountForUserTx(ctx, tx, item.ID)
+	if err != nil {
+		return adminUser{}, err
+	}
+	if _, err := NewPostgresPersonalPointStore(s.db).grantTx(ctx, tx, PersonalPointGrantCommand{
+		AccountID: account.ID, UserID: item.ID, Source: PointSourceRegistrationGift, Points: int64(grantPoints),
+		ReferenceType: "PLAN", ReferenceID: item.PlanID, IdempotencyKey: "registration:" + item.ID, GrantedAt: now,
+	}); err != nil {
+		return adminUser{}, err
+	}
+	if err := insertAuditLog(ctx, tx, item.ID, item.Role, "auth.registration", "user", item.ID, "", "", 201, map[string]any{"planId": item.PlanID, "grantPoints": grantPoints, "source": PointSourceRegistrationGift}); err != nil {
+		return adminUser{}, err
+	}
+	return item, tx.Commit()
+}
+
 func (s *postgresStore) UpdateAdminCustomer(id string, req adminCustomerMutation) (adminUser, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -3119,15 +3367,58 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
-	updated, result, err := executeAdminAuthMergeRequestOnData(&data, id, req)
-	if err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	lockedRequest, err := lockAdminAuthMergeRequestTx(ctx, tx, id)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	targetUserID := strings.TrimSpace(req.TargetUserID)
+	if targetUserID == "" {
+		targetUserID = lockedRequest.PrimaryUserID
+	}
+	sourceUserID := lockedRequest.SecondaryUserID
+	if targetUserID == lockedRequest.SecondaryUserID {
+		sourceUserID = lockedRequest.PrimaryUserID
+	}
+	lockedUsers, err := lockAdminAuthMergeUsersTx(ctx, tx, targetUserID, sourceUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	requestIndex := adminAuthMergeRequestIndex(data.AuthMergeRequests, id)
+	if requestIndex < 0 {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, fmt.Errorf("auth merge request not found: %s", id)
+	}
+	data.AuthMergeRequests[requestIndex] = lockedRequest
+	for userID, locked := range lockedUsers {
+		found := false
+		for i := range data.Users {
+			if data.Users[i].ID == userID {
+				data.Users[i] = locked
+				found = true
+				break
+			}
+		}
+		if !found {
+			return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, fmt.Errorf("user not found: %s", userID)
+		}
+	}
+	_, _, _, _, sourceUserID, err = resolveAdminAuthMergeUsers(&data, id, req.TargetUserID)
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
+	sourceOrderIDs := adminAuthMergeOrderIDs(data.Orders, sourceUserID)
+	pointStore := NewPostgresPersonalPointStore(s.db)
+	updated, result, err := executeAdminAuthMergeRequestOnDataWithPointMerge(&data, id, req, func(targetID, sourceID string) (int, error) {
+		merged, mergeErr := pointStore.mergeTx(ctx, tx, targetID, sourceID, id, time.Now().UTC())
+		return merged.AccountsMoved, mergeErr
+	})
+	if err != nil {
+		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
+	}
 	target, source, err := usersForMergeResult(data.Users, result)
 	if err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
@@ -3145,25 +3436,6 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 	if _, err := tx.ExecContext(ctx, `delete from xz_user_model_routes where user_id = $1`, result.SourceUserID); err != nil {
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `delete from xz_point_accounts where user_id = $1`, result.SourceUserID); err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
-	var walletTableExists bool
-	if err := tx.QueryRowContext(ctx, `select to_regclass('public.xz_user_wallets') is not null`).Scan(&walletTableExists); err != nil {
-		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-	}
-	if walletTableExists {
-		if _, err := tx.ExecContext(ctx, `delete from xz_user_wallets where user_id = $1`, result.SourceUserID); err != nil {
-			return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-		}
-	}
-	for _, item := range data.PointAccounts {
-		if item.UserID == result.TargetUserID {
-			if err := insertPointAccount(ctx, tx, item); err != nil {
-				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
-			}
-		}
-	}
 	for _, item := range data.TokenRecords {
 		if item.UserID == result.TargetUserID {
 			if err := insertTokenRecord(ctx, tx, item); err != nil {
@@ -3172,7 +3444,7 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 		}
 	}
 	for _, item := range data.Orders {
-		if item.UserID == result.TargetUserID || item.BuyerUserID == result.TargetUserID {
+		if sourceOrderIDs[item.ID] {
 			if err := insertOrder(ctx, tx, item); err != nil {
 				return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 			}
@@ -3246,6 +3518,71 @@ func (s *postgresStore) ExecuteAdminAuthMergeRequest(id string, req adminAuthMer
 		return adminAuthMergeRequest{}, adminAuthMergeExecuteResult{}, err
 	}
 	return updated, result, tx.Commit()
+}
+
+func lockAdminAuthMergeRequestTx(ctx context.Context, tx *sql.Tx, id string) (adminAuthMergeRequest, error) {
+	var item adminAuthMergeRequest
+	err := tx.QueryRowContext(ctx, `SELECT raw FROM xz_auth_account_merge_requests WHERE id=$1 FOR UPDATE`, strings.TrimSpace(id)).Scan(rawScanner(&item))
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, fmt.Errorf("auth merge request not found: %s", id)
+	}
+	return item, err
+}
+
+func lockAdminAuthMergeUsersTx(ctx context.Context, tx *sql.Tx, targetUserID, sourceUserID string) (map[string]adminUser, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,raw FROM xz_users WHERE id IN($1,$2) ORDER BY id FOR UPDATE`, targetUserID, sourceUserID)
+	if err != nil {
+		return nil, err
+	}
+	users := map[string]adminUser{}
+	for rows.Next() {
+		var id string
+		var user adminUser
+		if err := rows.Scan(&id, rawScanner(&user)); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		user.ID = id
+		users[id] = user
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(users) != 2 {
+		return nil, errors.New("target or source user not found")
+	}
+	routeRows, err := tx.QueryContext(ctx, `SELECT user_id,raw FROM xz_user_model_routes WHERE user_id IN($1,$2) ORDER BY user_id,id FOR UPDATE`, targetUserID, sourceUserID)
+	if err != nil {
+		return nil, err
+	}
+	for routeRows.Next() {
+		var userID string
+		var route adminUserModelRoute
+		if err := routeRows.Scan(&userID, rawScanner(&route)); err != nil {
+			_ = routeRows.Close()
+			return nil, err
+		}
+		user := users[userID]
+		user.ModelRoutes = mergeUserModelRoutes(user.ModelRoutes, []adminUserModelRoute{route})
+		users[userID] = user
+	}
+	if err := routeRows.Close(); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+func adminAuthMergeOrderIDs(items []adminOrder, userID string) map[string]bool {
+	result := map[string]bool{}
+	for _, item := range items {
+		if item.ID == "" {
+			continue
+		}
+		if item.UserID == userID || item.BuyerUserID == userID || (item.PriceSnapshot != nil && stringValue(item.PriceSnapshot["buyerUserId"]) == userID) {
+			result[item.ID] = true
+		}
+	}
+	return result
 }
 
 func mergeUserAIStateForAdminAuthMerge(ctx context.Context, tx *sql.Tx, targetID string, sourceID string) (int, error) {
@@ -3652,6 +3989,18 @@ func (s *postgresStore) UpdateAdminPlan(id string, req adminPlanMutation) (admin
 	if err := tx.QueryRowContext(ctx, `select raw from xz_plans where id = $1 for update`, id).Scan(rawScanner(&item)); err != nil {
 		return adminPlan{}, err
 	}
+	var managed bool
+	if err := tx.QueryRowContext(ctx, `
+		select exists(
+			select 1 from xz_plan_versions
+			where plan_id=$1 and business_type in('MEMBER','AGENT')
+		)
+	`, id).Scan(&managed); err != nil {
+		return adminPlan{}, err
+	}
+	if managed {
+		return adminPlan{}, managedPlanRequiresVersionError()
+	}
 	if req.Name != "" {
 		item.Name = req.Name
 	}
@@ -3772,7 +4121,11 @@ func (s *postgresStore) aiCapabilityAdminData(ctx context.Context) (adminPlatfor
 	return applyPublishedBillingRulesV1(data), nil
 }
 
-func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data adminPlatformData) error {
+type contextSQLExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func saveAICapabilityAdminDataWithExecutor(ctx context.Context, executor contextSQLExecer, data adminPlatformData) error {
 	data = normalizeAICapabilityDefaults(data)
 	cfg := adminAICapabilityConfig{
 		AIModules:          data.AIModules,
@@ -3782,12 +4135,16 @@ func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data admi
 		BillingRules:       data.BillingRules,
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
+	_, err := executor.ExecContext(ctx, `
 		insert into xz_system_settings (id, raw, updated_at)
 		values ($1, $2::jsonb, $3)
 		on conflict (id) do update set raw=excluded.raw, updated_at=excluded.updated_at
 	`, aiCapabilitySettingsID, jsonProjection(cfg), now)
 	return err
+}
+
+func (s *postgresStore) saveAICapabilityAdminData(ctx context.Context, data adminPlatformData) error {
+	return saveAICapabilityAdminDataWithExecutor(ctx, s.db, data)
 }
 
 func (s *postgresStore) updateAICapabilityAdminData(mutator func(*adminPlatformData) error) error {
@@ -4161,6 +4518,9 @@ func (s *postgresStore) CreateAdminAIModel(req adminAIModelMutation) (adminAIMod
 		if len(created.CapabilityCode) == 0 {
 			created.CapabilityCode = defaultAICapabilitiesForModule(moduleCode)
 		}
+		if err := applyAIModelVideoCapabilitiesMutation(&created, req); err != nil {
+			return err
+		}
 		data.AIModels = append(data.AIModels, created)
 		bindAIModelToModule(data, moduleCode, modelName)
 		return nil
@@ -4213,6 +4573,9 @@ func (s *postgresStore) UpdateAdminAIModel(id string, req adminAIModelMutation) 
 			}
 			if req.AllowFallbackSwitch != nil {
 				data.AIModels[i].AllowFallbackSwitch = *req.AllowFallbackSwitch
+			}
+			if err := applyAIModelVideoCapabilitiesMutation(&data.AIModels[i], req); err != nil {
+				return err
 			}
 			applyAIModelComplianceMutation(&data.AIModels[i], req)
 			if err := validateAIModelMiniProgramEnable(data.AIModels[i]); err != nil {
@@ -4284,9 +4647,46 @@ func (s *postgresStore) UpdateAdminTenantModuleLimit(id string, req adminTenantM
 }
 
 func (s *postgresStore) UpdateAdminPlanCapabilities(planID string, req adminPlanCapabilitiesMutation) error {
-	return s.updateAICapabilityAdminData(func(data *adminPlatformData) error {
-		return applyAdminPlanCapabilities(data, planID, req)
-	})
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var lockedPlanID string
+	if err := tx.QueryRowContext(ctx, `select id from xz_plans where id=$1 for update`, strings.TrimSpace(planID)).Scan(&lockedPlanID); err != nil {
+		return err
+	}
+	var managed bool
+	if err := tx.QueryRowContext(ctx, `
+		select exists(
+			select 1 from xz_plan_versions
+			where plan_id=$1 and business_type in('MEMBER','AGENT')
+		)
+	`, lockedPlanID).Scan(&managed); err != nil {
+		return err
+	}
+	if managed {
+		return managedPlanRequiresVersionError()
+	}
+
+	data, err := s.aiCapabilityAdminData(ctx)
+	if err != nil {
+		return err
+	}
+	data = normalizeAICapabilityDefaults(data)
+	if err := applyAdminPlanCapabilities(&data, lockedPlanID, req); err != nil {
+		return err
+	}
+	if err := saveAICapabilityAdminDataWithExecutor(ctx, tx, data); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *postgresStore) UpdateAdminBillingRule(id string, req adminBillingRuleMutation) (adminBillingRule, error) {
@@ -5533,11 +5933,8 @@ func pointAccountForUpdate(ctx context.Context, tx *sql.Tx, userID string) (admi
 		if idErr != nil {
 			return adminPointAccount{}, idErr
 		}
-		item = adminPointAccount{ID: id, UserID: userID, Available: defaultPointsAvailable}
+		item = adminPointAccount{ID: id, UserID: userID, Available: 0}
 		if err := insertPointAccount(ctx, tx, item); err != nil {
-			return adminPointAccount{}, err
-		}
-		if err := insertAccountBalanceLedgerV1(ctx, tx, item, "GRANT", defaultPointsAvailable, 0, defaultPointsAvailable, "SYSTEM_DEFAULT", userID, "系统默认点数赠送"); err != nil {
 			return adminPointAccount{}, err
 		}
 		return item, nil
@@ -5997,6 +6394,11 @@ func nextTableID(ctx context.Context, tx *sql.Tx, table string, prefix string) (
 }
 
 func insertAuditLog(ctx context.Context, tx *sql.Tx, actorID string, actorRole string, action string, resource string, resourceID string, method string, path string, status int, metadata map[string]any) error {
+	if isPricingAuditAction(action) {
+		return insertPricingAuditLog(ctx, tx, pricingAuditMutationFromLegacy(
+			actorID, actorRole, action, resource, resourceID, method, path, status, metadata,
+		))
+	}
 	id := newAuditID()
 	_, err := tx.ExecContext(ctx, `
 		insert into xz_audit_logs (id, actor_id, actor_role, action, resource, resource_id, method, path, status, metadata)

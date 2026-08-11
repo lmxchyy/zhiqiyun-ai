@@ -42,6 +42,21 @@
           @agent="openAgentCommerce()"
         />
       </template>
+      <template #extra>
+        <view class="mine-test-card">
+          <text class="mine-test-heading">测试</text>
+          <button type="button" class="mine-test-row" hover-class="mine-test-pressed" @click="openPaymentTest('member')">
+            <text class="mine-test-icon">测</text>
+            <text class="mine-test-label">支付测试 · 会员 ¥1</text>
+            <text class="mine-test-chevron">›</text>
+          </button>
+          <button type="button" class="mine-test-row" hover-class="mine-test-pressed" @click="openPaymentTest('agent')">
+            <text class="mine-test-icon">测</text>
+            <text class="mine-test-label">支付测试 · 代理 ¥1</text>
+            <text class="mine-test-chevron">›</text>
+          </button>
+        </view>
+      </template>
     </V531ProfilePage>
 
     <view v-if="loadError" class="mine-load-note" role="alert">
@@ -287,6 +302,25 @@ function openAgentCommerce() {
     return;
   }
   openPage(miniProgramFeaturePages.userAgentDetail);
+}
+
+/** Hidden TEST ¥1 quotes — whitelist enforced by backend; formal ¥996 commerce paths untouched. */
+const paymentTestTargets = {
+  member: {
+    planId: "plan_ai_creator_996",
+    pricePlanId: "price_plan_20260728212634000000000_049a91b1",
+  },
+  agent: {
+    planId: "plan_agent_join_996",
+    pricePlanId: "price_plan_20260728212634000000000_2ec1c485",
+  },
+} as const;
+
+function openPaymentTest(kind: keyof typeof paymentTestTargets) {
+  const target = paymentTestTargets[kind];
+  openPage(
+    `${miniProgramFeaturePages.userVirtualPaymentTest}?planId=${encodeURIComponent(target.planId)}&pricePlanId=${encodeURIComponent(target.pricePlanId)}`,
+  );
 }
 
 async function handleRoleChange(payload: unknown) {
@@ -645,4 +679,68 @@ page { background: #f7f8fc; }
 }
 
 .mine-load-note button::after { display: none; }
+
+.mine-test-card {
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid #edf0f7;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.mine-test-heading {
+  display: block;
+  padding: 12px 16px 4px;
+  color: #98a2b3;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.mine-test-row {
+  display: flex;
+  width: 100%;
+  min-height: 56px;
+  margin: 0;
+  padding: 0 16px !important;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  line-height: normal;
+}
+
+.mine-test-row::after { display: none; }
+
+.mine-test-pressed { opacity: .78; transform: scale(.985); }
+
+.mine-test-icon {
+  display: grid;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  color: #9a3412;
+  background: #ffedd5;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mine-test-label {
+  min-width: 0;
+  flex: 1;
+  color: #171c29;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mine-test-chevron {
+  color: #98a2b3;
+  font-size: 18px;
+  line-height: 1;
+}
 </style>

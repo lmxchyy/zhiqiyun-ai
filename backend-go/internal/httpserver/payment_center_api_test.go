@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -116,6 +117,89 @@ func TestAdminCannotMarkUnifiedPaymentOrderPaidPostgres(t *testing.T) {
 	adminAPI{store: &postgresStore{db: db, ready: true}}.markOrderPaid(recorder, request)
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUnifiedPaymentPersonalPointGrantHookUsesCallerTransactionPostgres(t *testing.T) {
+	dsn := os.Getenv("PAYMENT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("PAYMENT_TEST_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	userID := "unified_point_hook_" + suffix
+	insertVirtualTestUser(t, ctx, db, userID, time.Time{})
+	insertVirtualTestPointAccount(t, ctx, db, userID)
+	defer cleanupVirtualPaymentTest(t, db, "UNIFIEDPOINT"+suffix, userID)
+	hook := newUnifiedPaymentPersonalPointGrantHook(db)
+	request := paymentapp.PersonalPointGrantRequest{
+		UserID: userID, TenantID: "personal:" + userID, Source: string(PointSourceUnifiedPaymentGrant), Points: 100,
+		ReferenceType: "UNIFIED_PAYMENT_ORDER", ReferenceID: "UNIFIEDPOINT" + suffix,
+		IdempotencyKey: "unified-payment-test:" + suffix, GrantedAt: time.Now().UTC(),
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := hook(ctx, tx, request)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if grant.AvailableAfter-grant.AvailableBefore != 100 {
+		_ = tx.Rollback()
+		t.Fatalf("grant delta = %d", grant.AvailableAfter-grant.AvailableBefore)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertPersonalPointGrantRows(t, ctx, db, userID, request.ReferenceID, PointSourceUnifiedPaymentGrant, 0, 0)
+
+	tx, err = db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hook(ctx, tx, request); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	assertPersonalPointGrantRows(t, ctx, db, userID, request.ReferenceID, PointSourceUnifiedPaymentGrant, 100, 1)
+}
+
+func assertPersonalPointGrantRows(t *testing.T, ctx context.Context, db *sql.DB, userID, referenceID string, source PointSource, wantBalance int64, wantLots int) {
+	t.Helper()
+	var balance int64
+	if err := db.QueryRowContext(ctx, `SELECT available FROM xz_point_accounts WHERE user_id=$1`, userID).Scan(&balance); err != nil {
+		t.Fatal(err)
+	}
+	var lots int
+	if err := db.QueryRowContext(ctx, `
+		SELECT count(*) FROM xz_personal_point_lots
+		WHERE user_id=$1 AND reference_id=$2 AND source_type=$3 AND expires_at IS NULL
+	`, userID, referenceID, source).Scan(&lots); err != nil {
+		t.Fatal(err)
+	}
+	if balance != wantBalance || lots != wantLots {
+		var observed string
+		_ = db.QueryRowContext(ctx, `
+			SELECT coalesce(string_agg(source_type || ':' || reference_type || ':' || reference_id || ':' || coalesce(expires_at::text,'PERMANENT'), ',' ORDER BY granted_at), '')
+			FROM xz_personal_point_lots WHERE user_id=$1
+		`, userID).Scan(&observed)
+		t.Fatalf("personal point rows: balance=%d lots=%d want_balance=%d want_lots=%d observed=%s", balance, lots, wantBalance, wantLots, observed)
 	}
 }
 

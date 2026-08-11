@@ -34,6 +34,22 @@ export interface WechatMiniProgramPhoneLoginInput {
   idempotencyKey?: string;
 }
 
+export class AuthAccountMismatchError extends Error {
+  readonly code = "AUTH_ACCOUNT_MISMATCH";
+
+  constructor(
+    readonly expectedUserId: string,
+    readonly actualUserId: string,
+  ) {
+    super("refreshed authentication belongs to a different account");
+    this.name = "AuthAccountMismatchError";
+  }
+}
+
+function authUserId(auth: AuthResponse | null) {
+  return String(auth?.user?.id || "").trim();
+}
+
 function persistAuth(storage: ReturnType<typeof createAuthStorage>, auth: AuthResponse) {
   storage.setToken(auth.accessToken || "");
   if (Object.prototype.hasOwnProperty.call(auth, "refreshToken")) {
@@ -126,11 +142,19 @@ export function createAuthService(options: AuthServiceOptions) {
       if (refreshPromise) return refreshPromise;
       const refreshToken = storage.getRefreshToken();
       if (!refreshToken) throw new Error("refresh token is missing");
+      const expectedUserId = authUserId(storage.getAuth());
       refreshPromise = options.api.request<AuthResponse, { refreshToken: string }>("/api/v1/auth/refresh", {
         method: "POST",
         body: { refreshToken },
         auth: false
-      }).then(auth => persistAuth(storage, auth)).finally(() => { refreshPromise = null; });
+      }).then(auth => {
+        const actualUserId = authUserId(auth);
+        if (expectedUserId && actualUserId && expectedUserId !== actualUserId) {
+          storage.clear();
+          throw new AuthAccountMismatchError(expectedUserId, actualUserId);
+        }
+        return persistAuth(storage, auth);
+      }).finally(() => { refreshPromise = null; });
       return refreshPromise;
     },
     async restore() {

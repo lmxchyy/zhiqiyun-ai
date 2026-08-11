@@ -1,6 +1,7 @@
 ﻿import { defineStore } from "pinia";
 import { adminRequest } from "../api/client";
 import { readAiImageSnapshot, writeAiImageSnapshot } from "../utils/aiImageDb";
+import { moduleListQuery, usesInstantWorkspace } from "../utils/userWorkspaceLoad";
 import { getWebAccessToken } from "../utils/webAuthSession";
 
 export interface AdminModule {
@@ -41,11 +42,9 @@ function hasRunningAiGenerationSnapshot(data: AdminRecord) {
 }
 
 function usesAiImageSnapshot(moduleId: string) {
-  return ["userAiImage", "userWirelessCanvas", "userWorks"].includes(moduleId);
-}
-
-function usesInstantWorkspace(moduleId: string) {
-  return ["userAiImage", "userWirelessCanvas", "userWorks", "userVideoGeneration"].includes(moduleId);
+  // Works center must not reuse the AI-image IndexedDB snapshot, otherwise
+  // newly published montage assets can stay invisible after export.
+  return ["userAiImage", "userWirelessCanvas"].includes(moduleId);
 }
 
 function emptyOnlineWorkspaceData(): AdminRecord {
@@ -69,6 +68,7 @@ export const adminModules: AdminModule[] = [
   { id: "userWirelessCanvas", title: "无线画布", endpoint: "/user/online-image", surface: "user", path: "/app/wireless-canvas" },
   { id: "userVideoGeneration", title: "视频生成", endpoint: "/user/online-image", surface: "user", path: "/app/video-generation" },
   { id: "userPptGeneration", title: "PPT文档生成", endpoint: "", surface: "user", path: "/app/ppt-generation", aliases: ["/app/ai-ppt"] },
+  { id: "userSmartVideo", title: "AI自动混剪", endpoint: "", surface: "user", path: "/app/smart-video", aliases: ["/app/ai-montage", "/app/auto-montage"] },
   { id: "userWorks", title: "作品中心", endpoint: "/user/online-image", surface: "user", path: "/app/works" },
   { id: "userUsage", title: "使用记录", endpoint: "/user/usage", surface: "user", path: "/app/usage" },
   { id: "userMembership", title: "身份/充值/订阅", endpoint: "/member/wallet", surface: "user", path: "/app/membership" },
@@ -105,11 +105,13 @@ export const adminModules: AdminModule[] = [
   { id: "workbench", title: "工作台", endpoint: "/admin/overview", path: "/admin/workbench" },
   { id: "dashboard", title: "数据中心", endpoint: "/admin/overview", path: "/admin/dashboard" },
   { id: "customers", title: "客户中心", endpoint: "/admin/customers", path: "/admin/customers" },
+  { id: "personalPointsGovernance", title: "赠送积分到期策略", endpoint: "", path: "/admin/customers/point-expiry", permission: "points:gift-policy:view" },
   { id: "customerAttributions", title: "客户归属总览", endpoint: "", path: "/admin/customers/attributions" },
   { id: "channels", title: "代理商中心", endpoint: "/admin/channel-agents/tree", path: "/admin/channels/agents" },
   { id: "operationCenters", title: "运营中心", endpoint: "/admin/operation-centers", path: "/admin/channels/operation-centers" },
   { id: "products", title: "产品目录", endpoint: "/admin/products", path: "/admin/catalog/products" },
   { id: "plans", title: "套餐权益", endpoint: "/admin/plans", path: "/admin/catalog/plans" },
+  { id: "pricePlanGovernance", title: "套餐与价格配置", endpoint: "", path: "/admin/catalog/price-plans", permission: "pricing:plan:view" },
   { id: "orders", title: "订单中心", endpoint: "/admin/orders", path: "/admin/orders" },
   { id: "usage", title: "用量中心", endpoint: "/admin/usage", path: "/admin/usage" },
   { id: "tokenRecords", title: "Token 流水", endpoint: "/admin/token-records", path: "/admin/usage/token-records" },
@@ -168,15 +170,21 @@ export const useAdminStore = defineStore("admin", {
     error: "",
     data: {} as AdminRecord,
     dataByModule: {} as Record<string, AdminRecord>,
-    dataByEndpoint: {} as Record<string, AdminRecord>
+    dataByEndpoint: {} as Record<string, AdminRecord>,
+    /** App.vue opens works center on this tab when set (e.g. from smart-video). */
+    pendingWorksSourceTab: "" as "" | "mine" | "official"
   }),
   getters: {
     activeModule: (state) => adminModules.find((item) => item.id === state.activeModuleId) || adminModules[0]
   },
   actions: {
+    openWorksMine() {
+      this.pendingWorksSourceTab = "mine";
+      return this.selectModule("userWorks");
+    },
     async selectModule(moduleId: string) {
       this.activeModuleId = moduleId;
-      await this.loadActiveModule();
+      await this.loadActiveModule(moduleId === "userWorks" ? { preferCache: false } : {});
     },
     async loadActiveModule(options: { preferCache?: boolean; silent?: boolean } = {}) {
       const moduleId = this.activeModuleId;
@@ -193,6 +201,10 @@ export const useAdminStore = defineStore("admin", {
       let hasCachedModuleData = false;
       const shouldUseAiImageSnapshot = usesAiImageSnapshot(moduleId);
       const shouldRenderInstantly = usesInstantWorkspace(moduleId);
+      if (moduleId === "userWorks" && !preferCache && endpoint) {
+        delete this.dataByModule[moduleId];
+        delete this.dataByEndpoint[endpoint];
+      }
       if (shouldUseAiImageSnapshot && preferCache) {
         try {
           const cached = await readAiImageSnapshot();
@@ -225,7 +237,11 @@ export const useAdminStore = defineStore("admin", {
         return;
       }
       try {
-        const data = await adminRequest<AdminRecord>({ method: "GET", url: endpoint });
+        const data = await adminRequest<AdminRecord>({
+          method: "GET",
+          url: endpoint,
+          params: moduleListQuery(moduleId)
+        });
         if (this.activeModuleId !== moduleId) return;
         this.data = data;
         this.dataByModule[moduleId] = data;

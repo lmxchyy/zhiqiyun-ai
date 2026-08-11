@@ -77,7 +77,15 @@ export const v531AssetSlots: V531AssetSlot[] = [
     "16:9",
     "cover",
     "default-capability",
-    "AI 办公",
+    "自由P图",
+  ),
+  slot(
+    "home",
+    "home.capability.montage",
+    "16:9",
+    "cover",
+    "capability-ai-video",
+    "AI混剪",
   ),
   slot(
     "home",
@@ -324,6 +332,20 @@ export const v531Capabilities = [
     routeMode: "image",
   },
   {
+    id: "office",
+    title: "自由P图",
+    description: "杂志 · 修图",
+    slotKey: "home.capability.office",
+    routeMode: "infographic",
+  },
+  {
+    id: "montage",
+    title: "AI混剪",
+    description: "素材 · 旁白",
+    slotKey: "home.capability.montage",
+    routeMode: "montage",
+  },
+  {
     id: "video",
     title: "AI视频",
     description: "宣传片 · 口播",
@@ -336,13 +358,6 @@ export const v531Capabilities = [
     description: "汇报 · 招商",
     slotKey: "home.capability.ppt",
     routeMode: "ppt",
-  },
-  {
-    id: "office",
-    title: "AI办公",
-    description: "文案 · 分析",
-    slotKey: "home.capability.office",
-    routeMode: "infographic",
   },
   {
     id: "knowledge",

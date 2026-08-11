@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,9 +27,19 @@ func TestPendingGenerationTaskReservesAndRefundsPoints(t *testing.T) {
 	if task.PointCost != 2 {
 		t.Fatalf("pending task point cost = %d, want 2", task.PointCost)
 	}
+	if task.BillingEngine != personalLotBillingEngine || task.PersonalPointReservationID == "" || task.PersonalPointAccountID == "" {
+		t.Fatalf("pending task personal lot marker = engine:%q reservation:%q account:%q", task.BillingEngine, task.PersonalPointReservationID, task.PersonalPointAccountID)
+	}
 	account := generationBillingPointAccount(t, store, "user_billing")
 	if account.Available != 0 {
 		t.Fatalf("available points after pending = %d, want 0", account.Available)
+	}
+	state, err := store.PersonalPointService().repo.(*JSONPersonalPointStore).readState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Reservations) != 1 || state.Reservations[0].ReservedPoints != 2 {
+		t.Fatalf("pending lot reservation = %+v", state.Reservations)
 	}
 
 	_, err = store.CreatePendingGenerationTask(req)
@@ -47,6 +58,13 @@ func TestPendingGenerationTaskReservesAndRefundsPoints(t *testing.T) {
 	if account.Available != 2 {
 		t.Fatalf("available points after fail refund = %d, want 2", account.Available)
 	}
+	state, err = store.PersonalPointService().repo.(*JSONPersonalPointStore).readState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Reservations[0].ReleasedPoints != 2 || state.Accounts[0].FrozenPoints != 0 {
+		t.Fatalf("failed task lot release = reservation:%+v account:%+v", state.Reservations[0], state.Accounts[0])
+	}
 
 	if _, err := store.FailGenerationTask(task.ID, "duplicate failure"); err != nil {
 		t.Fatalf("repeat fail generation task: %v", err)
@@ -54,6 +72,45 @@ func TestPendingGenerationTaskReservesAndRefundsPoints(t *testing.T) {
 	account = generationBillingPointAccount(t, store, "user_billing")
 	if account.Available != 2 {
 		t.Fatalf("available points after repeat fail = %d, want 2", account.Available)
+	}
+}
+
+func TestJSONGenerationRejectsClientEnterpriseScopeWithoutConsumingPersonalLots(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	writeGenerationBillingPointSeed(t, dataPath, "enterprise-isolation-user", 3)
+	store := newJSONStore(dataPath)
+	req := generationBillingTestRequest("enterprise-isolation-user", 1)
+	req.Params["billing_scope"] = contextEnterprise
+	if _, err := store.CreatePendingGenerationTask(req); !errors.Is(err, ErrPersonalPointContextMismatch) {
+		t.Fatalf("enterprise scope generation error=%v, want context mismatch", err)
+	}
+	account := generationBillingPointAccount(t, store, "enterprise-isolation-user")
+	if account.Available != 3 || account.Frozen != 0 {
+		t.Fatalf("enterprise attempt consumed personal points: %+v", account)
+	}
+}
+
+func TestJSONGenerationLotMarkerMissingReservationFailsClosed(t *testing.T) {
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	writeGenerationBillingPointSeed(t, dataPath, "marker-user", 2)
+	store := newJSONStore(dataPath)
+	task, err := store.CreatePendingGenerationTask(generationBillingTestRequest("marker-user", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(data *platformData) error {
+		for i := range data.GenerationTasks {
+			if data.GenerationTasks[i].ID == task.ID {
+				data.GenerationTasks[i].PersonalPointReservationID = ""
+				return nil
+			}
+		}
+		return errors.New("task missing")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteGenerationTask(task.ID, createGenerationTaskRequest{}); !errors.Is(err, ErrPersonalPointReservationMarkerMissing) {
+		t.Fatalf("missing reservation marker complete error=%v", err)
 	}
 }
 

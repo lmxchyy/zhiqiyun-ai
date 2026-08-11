@@ -14,7 +14,10 @@ import (
 )
 
 func TestAssetCenterLifecycle(t *testing.T) {
-	server := New(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "store.json"), StaticDir: t.TempDir()})
+	dataPath := filepath.Join(t.TempDir(), "store.json")
+	store := newJSONStore(dataPath)
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	server := newWithStore(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 
@@ -73,6 +76,7 @@ func TestAssetCenterLifecycle(t *testing.T) {
 
 func TestAssetCenterTaskCancellation(t *testing.T) {
 	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	grantPermanentTestPoints(t, store, "user_000002", 100)
 	task, err := store.CreatePendingGenerationTask(generation.CreateRequest{
 		UserID: "user_000002",
 		Type:   "TEXT_TO_IMAGE",
@@ -89,6 +93,41 @@ func TestAssetCenterTaskCancellation(t *testing.T) {
 	}
 	if cancelled.Status != "CANCELLED" {
 		t.Fatalf("cancelled status = %q, want CANCELLED", cancelled.Status)
+	}
+	if err := store.DeleteGenerationTaskForUser(task.UserID, task.ID); err != nil {
+		t.Fatalf("delete cancelled task: %v", err)
+	}
+	if _, found, err := func() (generationTask, bool, error) {
+		tasks, listErr := store.ListGenerationTasks()
+		if listErr != nil {
+			return generationTask{}, false, listErr
+		}
+		for _, item := range tasks {
+			if item.ID == task.ID {
+				return item, true, nil
+			}
+		}
+		return generationTask{}, false, nil
+	}(); err != nil || found {
+		t.Fatalf("deleted task still present found=%v err=%v", found, err)
+	}
+}
+
+func TestAssetCenterTaskDeletionRejectsActive(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	grantPermanentTestPoints(t, store, "user_000002", 100)
+	task, err := store.CreatePendingGenerationTask(generation.CreateRequest{
+		UserID: "user_000002",
+		Type:   "TEXT_TO_IMAGE",
+		Prompt: "active task",
+		Model:  "mock-standard",
+		Params: map[string]any{"count": 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteGenerationTaskForUser(task.UserID, task.ID); err == nil {
+		t.Fatal("expected active task delete to fail")
 	}
 }
 

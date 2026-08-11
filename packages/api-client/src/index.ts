@@ -92,6 +92,18 @@ function knownEnglishMessage(value: string) {
   if (/unauthorized|authentication required|not authenticated|please log in/.test(normalized)) {
     return "请先登录后再继续";
   }
+  if (/not included in package|module .+ is not included/.test(normalized)) {
+    return "当前套餐不支持该能力，请升级后重试";
+  }
+  if (/not allowed by tenant\/package limit|no models are allowed by tenant\/package limit/.test(normalized)) {
+    return "当前套餐未开放该视频模型，请更换模型或联系管理员开通";
+  }
+  if (/not allowed by schema|parameter .+ is required|exceeds tenant\/package|is not in schema options/.test(normalized)) {
+    return "提交的信息不符合要求，请检查后重试";
+  }
+  if (/upstream|api (?:provider|channel|配置)|not bound to an api provider|does not support this model/.test(normalized)) {
+    return "视频模型上游渠道未启用，请先在主控后台完成 API 配置";
+  }
   if (/forbidden|permission denied|access denied|not allowed/.test(normalized)) {
     return "暂无权限执行此操作";
   }

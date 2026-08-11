@@ -1,0 +1,12 @@
+﻿NOTE: WORKTREE ONLY — NOT a frozen release manifest. Recompute from git archive after release commit.
+filledAt: 2026-07-28T23:18+08:00
+filledBy: coordinator-assist (Codex)
+baseHEAD: 81315774436cbe540f8e5c0891c89e03669bc044
+baseTree: 3a3f69cdf45699670b507d77625b857739eb13e1
+workingTreeDirtyEntries: 134
+migrationsGitStatus: untracked (??)
+
+097  FF49625A52D8EB7F36EC9602C007CDDDC36D10A3446E87EB3DF49F1A5CC9504A  database/migrations/097-member-agent-price-plan-v2.sql
+098  E0D183F34084E1663B7EF5488A42A9E91D77C7C8E8497F3458AED175FCD85047  database/migrations/098-price-plan-admin-governance.sql
+099  EE004036214D44830BC89A52A6B38136061384D27A76C8852127344706FF1735  database/migrations/099-price-plan-default-switch.sql
+100  B1BA89180D283BAB6AF41D829ED395229D8EB7897B3388886AE8B99A89E63833  database/migrations/100-price-plan-test-whitelist-audit.sql

@@ -1,0 +1,226 @@
+{
+    "filledAt": "2026-07-29T10:58:00+08:00",
+    "filledBy": "operational GO after P0-P6 closed; user verbatim P5 reuse + GO; docs-only (no deploy/flag/price change)",
+    "status": "GO",
+    "notes": "OPS-GO-20260729-P0-P6-CLOSED. Truth: OPERATIONAL-GO-SIGNATURE.md. P0 CLOSED-WITH-ACCEPTED-RESIDUAL (no key rotation). P1 three SHAs documented. P2 PASS live reconcile. P3/P4 PASS user一致. P5 ACCEPTED reuse. P6 SIGNED GO. runtimeImageGitSha=a39485ef159dabf348a71059a0e922af4894ab5a IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32; docsGoCommit=719f898c5ca160348ca5d597f9644901d0a60242 NOT image build; evidenceRepoHeadAtAmend=cd9b88abcdf79227d9e65333049dd6f97e0fdb8a. Do not mix SHAs. Do not compose up --build. Do not rerun 097-100 blindly.",
+    "identitySplit": {
+        "runtimeImageGitSha": "a39485ef159dabf348a71059a0e922af4894ab5a",
+        "docsGoCommit": "719f898c5ca160348ca5d597f9644901d0a60242",
+        "evidenceRepoHeadAtAmend": "cd9b88abcdf79227d9e65333049dd6f97e0fdb8a",
+        "docsGoCommitIsNotImageBuild": true,
+        "mustNotMix": true
+    },
+    "securityHardBlock": {
+        "code": "TRACKED_CONTAINER_INSPECT_SECRETS",
+        "path": "evidence/20260729/repo-digest/host-out/container-inspect.json",
+        "access": "RESTRICT_HISTORY_COPIES",
+        "valuesPrinted": false,
+        "status": "CLOSED-WITH-ACCEPTED-RESIDUAL",
+        "closedAt": "2026-07-29T10:40:00+08:00",
+        "keyRotation": "DECLINED",
+        "worktreeRedacted": true,
+        "exportScriptHardened": true,
+        "gitHistoryMayStillContainPlaintext": true,
+        "evidence": "evidence/20260729/P0-SECRETS-REDACTION.md",
+        "blocksRedeploy": false,
+        "blocksEvidenceRedistribution": true,
+        "blocksUnredactedHistoryCopies": true
+    },
+    "agentPricingLocalConclusion": {
+        "choice": "A",
+        "normal": {
+            "channel": "AGENT",
+            "productId": "AGENT_JOIN_996",
+            "yuan": 996,
+            "cents": 99600
+        },
+        "test": {
+            "channel": "AGENT",
+            "productId": "AGENT_TEST_1YUAN",
+            "yuan": 1,
+            "cents": 100
+        },
+        "humanDualSignStillRequiredIfSoD": true
+    },
+    "prodMigrate": {
+        "appliedAt": "2026-07-29T05:19:00+08:00",
+        "order": [
+            "097",
+            "098",
+            "099",
+            "100"
+        ],
+        "exitCodes": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "validateStillNotValid097_100": 0,
+        "evidence": "evidence/20260729/prod-migrate/",
+        "baselineBefore": {
+            "orders": 51,
+            "plans": 24,
+            "amountSum": 3484992
+        },
+        "baselineAfter": {
+            "orders": 51,
+            "plans": 24,
+            "amountSum": 3484992,
+            "pricePlans": 0,
+            "goods": 0,
+            "bindings": 0
+        },
+        "v2SwitchesAfter": {
+            "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": false,
+            "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": false,
+            "PRICE_PLAN_TEST_ENTRY_ENABLED": false
+        }
+    },
+    "v2Seed": {
+        "appliedAt": "2026-07-29T05:26:00+08:00",
+        "evidence": "evidence/20260729/v2-seed/",
+        "inventory": "evidence/20260729/v2-seed/created-inventory.json",
+        "counts": {
+            "planVersionsActive": 2,
+            "pricePlans": 4,
+            "goods": 4,
+            "bindings": 4
+        },
+        "staticForceEqualityBlockers": 0,
+        "missingMatrixRows": 0,
+        "quoteForceEquality": "BLOCKED",
+        "v2SwitchesAfter": {
+            "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": false,
+            "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": false,
+            "PRICE_PLAN_TEST_ENTRY_ENABLED": false
+        }
+    },
+    "releaseCommit": "e8f191805ca1d6c9a4b214ee91312aeb796c0b10",
+    "releaseTree": "c0bf56a2ddc51dd2c77e4918b157e1ab15178db2",
+    "deployCommit": "3d0c0e032d79a61611b83771874be91df3715e7a",
+    "deployTree": "a0a260d6099a3edb42e2765d617acc7d46619082",
+    "branch": "codex/channel-ecosystem-v132-phase3",
+    "imageRef": "local/xianzhi-ai-platform:git-3d0c0e032",
+    "imageTags": [
+        "local/xianzhi-ai-platform:git-3d0c0e032",
+        "local/xianzhi-ai-platform:3d0c0e032"
+    ],
+    "imageId": "sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331",
+    "repoDigest": null,
+    "v2Switches": {
+        "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": true,
+        "PRICE_PLAN_TEST_ENTRY_ENABLED": true,
+        "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": true
+    },
+    "migrations": [
+        {
+            "file": "database/migrations/097-member-agent-price-plan-v2.sql",
+            "sha256": "784E6D2A3556CA0EA8B07287B5719D14F3DEDF76DD0228443A1C791FB87BB9E7"
+        },
+        {
+            "file": "database/migrations/098-price-plan-admin-governance.sql",
+            "sha256": "AD68192E66E026CE138283CADDC6FB066E60865926DCD46F2CE6BA304E8CF8E2"
+        },
+        {
+            "file": "database/migrations/099-price-plan-default-switch.sql",
+            "sha256": "1D12CAD4D7927A851B72B267F6CC354EDB8FCF1B90A7EF963C8D3FD17B01C3A9"
+        },
+        {
+            "file": "database/migrations/100-price-plan-test-whitelist-audit.sql",
+            "sha256": "8646A68650838B4F501F8B8410D2D888DEB9661942F3DA927C85F9E202C68649"
+        }
+    ],
+    "dbaPreflight": {
+        "log": "evidence/20260729/dba-preflight.log",
+        "sha256": "256ff4b463cada4defff50bb0eb07bdafa4b93c30233f6e8d5015a14b6b98433",
+        "transactionReadOnly": "on",
+        "v132BlockerRows": 0,
+        "schemaBlockerRows": 0,
+        "conclusion": "PASS"
+    },
+    "rehearsal": {
+        "backup": "/opt/zhiqiyun-ai/backups/postgres/db_2026-07-25_231939.sql",
+        "backupSha256": "eb768b008896911f40d91a7d32afcb84143869d5eab881df7f8e5257252d3abe",
+        "engine": "pgvector/pgvector:pg16 container priceplan-rehearsal-pg",
+        "database": "zhiqiyun_rehearsal_202607290400",
+        "restoreSec": 10,
+        "restoreAclErrors": 275,
+        "migrateSec": {
+            "097": "<1",
+            "098": "<1",
+            "099": "<1",
+            "100": "<1"
+        },
+        "baselineBefore": {
+            "orders": 47,
+            "plans": 24,
+            "amountSum": 3285592
+        },
+        "baselineAfter": {
+            "orders": 47,
+            "plans": 24,
+            "amountSum": 3285592,
+            "pricePlans": 0,
+            "goods": 0
+        },
+        "notValidRemaining": 0,
+        "secondRestoreSec": 10,
+        "conclusion": "PASS"
+    },
+    "currentDeploy": {
+        "filledAt": "2026-07-29T09:46:00+08:00",
+        "imageRef": "local/xianzhi-ai-platform:a39485ef1",
+        "imageTags": [
+            "local/xianzhi-ai-platform:a39485ef1",
+            "local/xianzhi-ai-platform:git-a39485ef1"
+        ],
+        "imageId": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
+        "gitSha": "a39485ef159dabf348a71059a0e922af4894ab5a",
+        "repoDigests": [],
+        "imageIdVerifyBefore": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
+        "imageIdVerifyAfter": "sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32",
+        "imageIdMatch": "EXACT",
+        "wechatVirtualPayEnv": "production",
+        "v2Flags": true,
+        "section1Status": "PASS-WITH-LOCAL-IMMUTABLE",
+        "section1PoAccept": "ACCEPTED",
+        "section1PoAcceptAt": "2026-07-29T09:44:00+08:00",
+        "section4Status": "PASS",
+        "section5Status": "PASS-WITH-SUBSTITUTIONS",
+        "section5ProbesAt": "2026-07-29T09:57:39+08:00",
+        "section5Evidence": "evidence/20260729/section5-probes/",
+        "overallStatus": "GO",
+        "overallBlocker": null,
+        "overallGoAt": "2026-07-29T10:58:00+08:00",
+        "overallGoEvidence": "evidence/20260729/OPERATIONAL-GO-SIGNATURE.md",
+        "forbiddenOps": [
+            "docker compose up -d --build",
+            "retag or rebuild overwrite of an already-used image tag",
+            "invent repository@sha256 RepoDigest"
+        ],
+        "registryLongTermStandard": true,
+        "localImmutableIsNotLongTermPolicy": true,
+        "currentImageTar": "/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar",
+        "currentImageTarSha256": "4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09",
+        "previousImageRef": "local/xianzhi-ai-platform:3d0c0e032",
+        "previousImageId": "sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331",
+        "previousImageTar": "/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar",
+        "previousImageTarSha256": "4c08c51a41d6fc527e854c4e4c64988a35e9773622b5506433eb4d5a76f9a9ee",
+        "previousStatus": "EXPORTED",
+        "evidence": "evidence/20260729/repo-digest/"
+    },
+    "policyNoReal996": {
+        "section1Status": "PASS-WITH-LOCAL-IMMUTABLE",
+        "section1Evidence": "evidence/20260729/repo-digest/",
+        "sandboxRuntime": "evidence/20260729/sandbox-runtime/",
+        "normalSubstitute": "evidence/20260729/normal-996/",
+        "paymentAcceptedOrders": [
+            "ZQY202607282159389857812495",
+            "ZQY20260728221656E339AB7A54"
+        ],
+        "evidence": "evidence/20260729/POLICY-NO-REAL-996.md",
+        "status": "WAIVED",
+        "section1Amendment": "evidence/20260729/repo-digest/AMENDMENT-LOCAL-IMMUTABLE.md"
+    }
+}

@@ -192,10 +192,41 @@ func (a adminAPI) createCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("available points cannot be negative"))
 		return
 	}
+	requestedAvailable := req.Available
+	if requestedAvailable != nil {
+		req.Available = nil
+	}
 	user, err := a.store.CreateAdminCustomer(req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if requestedAvailable != nil && *requestedAvailable > 0 {
+		account, accountErr := a.store.PointAccount(user.ID)
+		if accountErr != nil {
+			writeError(w, http.StatusInternalServerError, accountErr)
+			return
+		}
+		service, serviceErr := personalPointServiceForStore(a.store)
+		if serviceErr != nil {
+			writeError(w, http.StatusServiceUnavailable, serviceErr)
+			return
+		}
+		actorID, actorRole := actorFromRequest(r)
+		_, correctionErr := service.Correct(r.Context(), PersonalPointCorrectionCommand{
+			AccountID: account.ID, UserID: user.ID, Points: int64(*requestedAvailable), Reason: "legacy customer create available compatibility", IdempotencyKey: "legacy-create:" + user.ID + ":" + strconv.Itoa(*requestedAvailable),
+			Audit: PersonalPointAudit{ActorID: actorID, ActorRole: actorRole, Action: "personal_points.legacy_absolute_correction", Method: r.Method, Path: r.URL.Path, RequestID: requestIDFromPointMutation(r, "legacy-create:"+user.ID)},
+		})
+		if correctionErr != nil {
+			writeError(w, http.StatusInternalServerError, correctionErr)
+			return
+		}
+		user, err = a.adminCustomerByIDValue(user.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		setLegacyPointMutationHeaders(w, user.ID)
 	}
 	writeJSON(w, map[string]any{"item": user})
 }
@@ -231,12 +262,57 @@ func (a adminAPI) updateCustomer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("available points cannot be negative"))
 		return
 	}
+	if req.Available != nil {
+		current, err := a.store.PointAccount(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		delta := int64(*req.Available) - int64(current.Available)
+		if delta != 0 {
+			service, serviceErr := personalPointServiceForStore(a.store)
+			if serviceErr != nil {
+				writeError(w, http.StatusServiceUnavailable, serviceErr)
+				return
+			}
+			actorID, actorRole := actorFromRequest(r)
+			_, grantErr := service.Correct(r.Context(), PersonalPointCorrectionCommand{
+				AccountID: current.ID, UserID: r.PathValue("id"), Points: delta, Reason: "legacy customer available compatibility", IdempotencyKey: "legacy-absolute:" + r.PathValue("id") + ":" + strconv.Itoa(*req.Available),
+				Audit: PersonalPointAudit{ActorID: actorID, ActorRole: actorRole, Action: "personal_points.legacy_absolute_correction", Method: r.Method, Path: r.URL.Path, RequestID: requestIDFromPointMutation(r, "legacy-absolute:"+r.PathValue("id")+":"+strconv.Itoa(*req.Available))},
+			})
+			if grantErr != nil {
+				writeError(w, http.StatusInternalServerError, grantErr)
+				return
+			}
+		}
+		req.Available = nil
+		setLegacyPointMutationHeaders(w, r.PathValue("id"))
+	}
 	user, err := a.store.UpdateAdminCustomer(r.PathValue("id"), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": user})
+}
+
+func setLegacyPointMutationHeaders(w http.ResponseWriter, userID string) {
+	w.Header().Set("Deprecation", "true")
+	w.Header().Set("Sunset", "Wed, 31 Dec 2026 23:59:59 GMT")
+	w.Header().Set("Link", `</api/v1/admin/customers/`+userID+`/point-corrections>; rel="successor-version"`)
+}
+
+func (a adminAPI) adminCustomerByIDValue(userID string) (adminUser, error) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		return adminUser{}, err
+	}
+	for _, item := range data.Users {
+		if item.ID == userID {
+			return item, nil
+		}
+	}
+	return adminUser{}, ErrPointNotFound
 }
 
 func (a adminAPI) auditRejectedCustomerFields(r *http.Request, userID string, fields []string) {
@@ -780,7 +856,7 @@ func (a adminAPI) updatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	plan, err := a.store.UpdateAdminPlan(r.PathValue("id"), req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeBusinessPlanAdminError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": plan})
@@ -813,7 +889,7 @@ func (a adminAPI) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := a.store.CreateAdminOrder(req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeAdminOrderMutationError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": order})
@@ -848,10 +924,19 @@ func (a adminAPI) markOrderPaid(w http.ResponseWriter, r *http.Request) {
 func (a adminAPI) renewOrder(w http.ResponseWriter, r *http.Request) {
 	order, err := a.store.RenewAdminOrder(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeAdminOrderMutationError(w, err)
 		return
 	}
 	writeJSON(w, map[string]any{"item": order})
+}
+
+func writeAdminOrderMutationError(w http.ResponseWriter, err error) {
+	var businessErr *businessPlanAdminError
+	if errors.As(err, &businessErr) {
+		writeBusinessPlanAdminError(w, businessErr)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err)
 }
 
 func (a adminAPI) deliveryProjects(w http.ResponseWriter, _ *http.Request) {
@@ -2787,7 +2872,7 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.Users) == 0 {
 		data.Users = []adminUser{
 			{ID: "user_000001", Email: "admin@xianzhi.ai", Name: "平台管理员", Role: "SUPER_ADMIN", MemberLevel: memberLevelEnterprise, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_free"},
-			{ID: "user_000002", Email: "demo@xianzhi.ai", Name: "演示用户", Role: "MEMBER", MemberLevel: memberLevelBasic, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_month", ReferredBy: "user_000003"},
+			{ID: "user_000002", Email: "demo@xianzhi.ai", Name: "演示用户", Role: "MEMBER", MemberLevel: memberLevelBasic, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_month"},
 			{ID: "user_000003", Email: "agent1@xianzhi.ai", Name: "华东推广员", Role: "AGENT_L1", MemberLevel: memberLevelFree, AgentStatus: agentStatusActive, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_free"},
 			{ID: "user_000004", Email: "operation@xianzhi.ai", Name: "华东运营中心", Role: "OPERATION_CENTER", MemberLevel: memberLevelFree, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusActive, Status: "ACTIVE", PlanID: "plan_free"},
 			{ID: "user_000010", Email: "demo2@xianzhi.ai", Name: "demo2", Role: "MEMBER", MemberLevel: memberLevelFree, AgentStatus: agentStatusNone, OperationCenterStatus: operationStatusNone, Status: "ACTIVE", PlanID: "plan_free"},
@@ -2801,7 +2886,7 @@ func withAdminDefaults(data adminPlatformData) adminPlatformData {
 	if len(data.PointAccounts) == 0 {
 		data.PointAccounts = []adminPointAccount{
 			{ID: "points_000001", UserID: "user_000001", Available: 100000},
-			{ID: "points_000002", UserID: "user_000002", Available: 959},
+			{ID: "points_000002", UserID: "user_000002", Available: 0},
 			{ID: "points_000003", UserID: "user_000003", Available: 5000},
 			{ID: "points_000010", UserID: "user_000010", Available: 100},
 		}
@@ -2907,6 +2992,14 @@ func defaultSystemSettings() adminSystemSettings {
 func defaultAPIChannels() []adminAPIChannel {
 	items := []adminAPIChannel{
 		{
+			ID: "channel_newapi_gateway", Name: "NewAPI Gateway", BaseURL: "https://newapi.zs-kjhn.cn", Protocol: "openai",
+			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
+			VideoGenerationEndpoint: "/v1/video/generations",
+			FetchModelsPath:         "/models",
+			Notes:                   "NewAPI unified gateway - all models routed through zhiqiyun-ai token (vip group)",
+			Status:                  "CONFIGURABLE", Priority: 5, Models: []string{"doubao-seedance-2.0", "seedance-fast-2.0", "gpt-image-2", "grok-imagine-1.5-video", "grok-imagine-video-1.5-preview"},
+		},
+		{
 			ID: "channel_apimart", Name: "APIMart 生图聚合", BaseURL: "https://api.apimart.ai", Protocol: "apimart",
 			ImageRequestMode: "openai-json", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
 			FetchModelsPath: "/v1/models", APIKeyEnv: "APIMART_API_KEY", Notes: "参考 Infinite-Canvas 推荐平台，适合聚合图片、视频和 LLM 模型。",
@@ -2917,7 +3010,7 @@ func defaultAPIChannels() []adminAPIChannel {
 			ImageRequestMode: "openai", ImageGenerationEndpoint: "/v1/images/generations", ImageEditEndpoint: "/v1/images/edits",
 			VideoGenerationEndpoint: "contents/generations/tasks",
 			FetchModelsPath:         "/models", APIKeyEnv: "CME_CLOUD_API_KEY", Notes: "Doubao Seedance 2.0 video generation channel. Save the API Key in admin API keys or set CME_CLOUD_API_KEY.",
-			Status: "CONFIGURABLE", Priority: 15, Models: []string{"doubao-seedance-2.0"},
+			Status: "CONFIGURABLE", Priority: 15, Models: []string{"doubao-seedance-2.0", "seedance-fast-2.0"},
 		},
 		{
 			ID: "channel_openai", Name: "OpenAI 官方", BaseURL: "https://api.openai.com/v1", Protocol: "openai",

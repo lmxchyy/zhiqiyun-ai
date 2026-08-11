@@ -1,0 +1,20 @@
+---
+description: 网页端首页/生图/侧边栏点数防回归约束
+globs: admin-vue/src/App.vue,admin-vue/src/stores/admin.ts,admin-vue/src/utils/sidebarPlanPoints.ts,admin-vue/src/utils/userWorkspaceLoad.ts,admin-vue/tests/webWorkspacePointsRegression.spec.ts,backend-go/internal/httpserver/api.go,backend-go/internal/httpserver/web_workspace_points_regression_test.go
+alwaysApply: false
+---
+
+# 网页端点数与首屏加载防回归
+
+改这些文件时必须遵守：
+
+- `AGENTS.md`「防回归」
+- `.ai/CodexPrompt.md`
+- `docs/regression/protected-surfaces.md` 中的 **W1 / W2 / W3 / P2**
+
+要点：
+
+- `/points/account` 的 `total` 是终身口径（可用+冻结+已消耗），禁止退回 `available+frozen`
+- 侧边栏点数只改 `sidebarPlanPoints.ts`
+- dashboard 默认 limit ≤30，online-image 默认 ≤40；首屏参数走 `userWorkspaceLoad.ts`
+- 做完在交付里勾选 protected-surfaces，并跑绿对应 Go / Vitest

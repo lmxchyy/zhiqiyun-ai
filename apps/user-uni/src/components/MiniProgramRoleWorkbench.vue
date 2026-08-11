@@ -1,6 +1,15 @@
 <template>
-  <view :class="['mini-workbench', { 'user-v531-shell': isV531PrimaryPage, 'video-generation-screen': isVideoCreationDetail }]" :style="miniWorkbenchSafeAreaStyle">
-    <view class="native-safe-note"></view>
+  <view
+    :class="[
+      'mini-workbench',
+      {
+        'user-v531-shell': isV531PrimaryPage,
+        'free-image-edit-shell': isFreeImageEditPage,
+      },
+    ]"
+    :style="miniWorkbenchSafeAreaStyle"
+  >
+    <view v-if="!isFreeImageEditPage" class="native-safe-note"></view>
 
     <view v-if="activeRole !== 'user' && !isUserMineDetail" class="business-header">
       <image class="business-logo" :src="loginLogo" mode="aspectFit" />
@@ -38,6 +47,42 @@
 
     <view v-else class="role-content">
       <template v-if="activeRole === 'user'">
+        <view v-if="isFreeImageEditPage" class="free-image-edit-page">
+          <FreeImageEditCreation
+            :image-path="creationReferencePaths[0] || ''"
+            :prompt="creationPrompt"
+            :busy="generationBusy"
+            :selecting-image="creationReferenceSelecting"
+            :error="creationError"
+            @back="returnToCreationHub"
+            @choose-image="chooseCreationReferenceImages"
+            @remove-image="removeCreationReference(0)"
+            @preview-image="previewCreationReference(0)"
+            @update:prompt="updateFreeImageEditPrompt"
+            @generate="guestAwareGenerateTap"
+          />
+          <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone, 'free-image-edit-page__task']">
+            <image
+              v-if="latestGenerationTask.resultUrl && ['image', 'infographic'].includes(latestGenerationTask.resultType || '')"
+              class="v31-generation-result"
+              :src="latestGenerationTask.resultUrl"
+              mode="aspectFill"
+              @click="previewLatestGenerationResult"
+            />
+            <view class="v31-generation-summary">
+              <view class="v31-generation-title-row"><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text v-if="generationNoticePending" class="v31-live-badge">实时</text></view>
+              <text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ generationStatusLabel }}</text>
+              <view v-if="generationNoticePending" class="v31-generation-progress-track">
+                <view :class="['v31-generation-progress-value', { indeterminate: !generationHasProgress }]" :style="generationProgressStyle" />
+              </view>
+              <text v-if="generationNoticePending" class="v31-generation-feedback">{{ generationFeedbackText }}</text>
+            </view>
+            <button v-if="latestGenerationTask.tone === 'success'" @click="openLatestGenerationResult">{{ latestGenerationTask.resultId ? "查看结果" : "查看作品" }}</button>
+            <button v-else-if="latestGenerationTask.tone === 'danger'" @click="handleGenerateTap">重新生成</button>
+            <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
+          </view>
+        </view>
+        <template v-else>
         <view v-if="isGuest && (activeTab === 'home' || activeTab === 'create')" class="guest-browse-banner">
           <view class="guest-browse-copy">
             <text class="guest-browse-title">欢迎先体验知启云 AI</text>
@@ -164,7 +209,7 @@
               <text class="v31-subpage-copy">{{ creationDetailSubtitle }}</text>
             </view>
           </view>
-          <RemoteCover v-if="!['agent', 'video'].includes(creationMode)" class="v31-studio-banner" page-code="studio" slot-key="studio.banner" alt="AI 创作中心" width="100%" height="118px" :lazy-load="false" radius="16px" />
+          <RemoteCover v-if="creationMode !== 'agent'" class="v31-studio-banner" page-code="studio" slot-key="studio.banner" alt="AI 创作中心" width="100%" height="118px" :lazy-load="false" radius="16px" />
           <template v-if="creationMode === 'agent'">
             <KnowledgeMiniChat embedded @close="returnToCreationHub" />
           </template>
@@ -260,22 +305,17 @@
                 <image v-else class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
               </view>
 
-              <picker
+              <view
                 v-if="videoModelOptions.length"
-                :range="videoModelOptions"
-                range-key="name"
-                :value="videoModelOptionIndex"
-                :disabled="videoModelSwitching"
-                @change="selectVideoModelByPicker"
+                class="video-model-row"
+                @click="openVideoModelSheet"
               >
-                <view class="video-model-row">
-                  <text class="video-row-label">生成模型</text>
-                  <view class="video-row-value">
-                    <text>{{ videoModelDisplayName }}</text>
-                    <image class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
-                  </view>
+                <text class="video-row-label">生成模型</text>
+                <view class="video-row-value">
+                  <text>{{ videoModelDisplayName }}</text>
+                  <image class="video-row-chevron" src="/static/icons/chevron-right.svg" mode="aspectFit" />
                 </view>
-              </picker>
+              </view>
               <view v-else class="video-model-row">
                 <text class="video-row-label">生成模型</text>
                 <text class="video-row-value">{{ videoModelSwitching ? '载入中...' : videoModelError || '暂无可用视频模型' }}</text>
@@ -419,7 +459,7 @@
                 <text class="v31-reference-empty-icon">＋</text>
                 <view>
                   <text class="v31-reference-empty-title">{{ creationReferenceSelecting ? "正在打开图片..." : "添加" + creationReferenceTitle }}</text>
-                  <text class="v31-reference-empty-copy">最多 {{ creationReferenceLimit }} 张，视频首帧必填</text>
+                  <text class="v31-reference-empty-copy">最多 {{ creationReferenceLimit }} 张，第一张作为起始图</text>
                 </view>
               </button>
             </view>
@@ -525,63 +565,6 @@
           </view>
         </view>
 
-        <view v-else-if="activeTab === 'wallet'" class="section-stack">
-          <view class="v31-subpage-nav">
-            <button
-              class="v31-back-button"
-              aria-label="返回上一页"
-              data-return-fallback="/pages/user/UserHomePage"
-              @click="returnToPreviousPage('/pages/user/UserHomePage')"
-            >‹</button>
-            <view>
-              <text class="v31-subpage-title">钱包与点数</text>
-              <text class="v31-subpage-copy">余额、充值与积分消耗记录</text>
-            </view>
-          </view>
-          <view class="wallet-card">
-            <text class="wallet-label">钱包余额</text>
-            <text class="wallet-value">{{ formatNumber(pointBalance) }}</text>
-            <text class="wallet-copy">冻结 {{ formatNumber(pointFrozen) }} 点 · 订单 {{ userOrders.length }} 笔</text>
-          </view>
-          <view class="v31-batch-actions"><button class="active" @click="openFeaturePage(miniProgramFeaturePages.userRechargePlans)">全部充值方案</button><button @click="openFeaturePage(miniProgramFeaturePages.userOrders)">我的订单</button></view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">点数充值</text>
-              <text class="soft-tag">微信支付</text>
-            </view>
-            <view class="recharge-grid">
-              <button
-                v-for="pack in rechargePackages"
-                :key="rowString(pack, 'id')"
-                type="button"
-                class="recharge-card"
-                @click="openFeaturePage(miniProgramFeaturePages.userRechargePlans)"
-              >
-                <text class="recharge-points">{{ formatNumber(rowNumber(pack, 'grantPoints') || rowNumber(pack, 'points') || rowNumber(pack, 'tokenAmount')) }} 点</text>
-                <text class="recharge-price">{{ formatCurrency(rowNumber(pack, 'priceCents') || rowNumber(pack, 'amountCents')) }}</text>
-              </button>
-            </view>
-          </view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">积分消耗</text>
-              <text class="soft-tag">{{ tokenRecords.length || userTransactions.length }} 条</text>
-            </view>
-            <view v-if="walletRecords.length" class="list-stack">
-              <view v-for="record in walletRecords.slice(0, 6)" :key="rowKey(record)" class="list-item" @click="openUsageRecordDetail(record)">
-                <view>
-                  <text class="list-title">{{ usageTitle(record) }}</text>
-                  <text class="list-meta">{{ formatDate(rowDate(record)) }}</text>
-                </view>
-                <text class="cost-text">-{{ formatNumber(rowPointCost(record)) }}</text>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无消耗记录。</text>
-          </view>
-        </view>
-
         <MiniProgramMineExperience
           v-else
           :view="mineView"
@@ -619,6 +602,7 @@
           @poster="showPosterNotice"
         />
         </template>
+        </template>
       </template>
 
       <template v-else-if="activeRole === 'agent'">
@@ -639,39 +623,13 @@
           <button class="agent-v4-cta" @click="selectAgentTab('promotion')">查看推广数据</button>
         </view>
 
-        <view v-else-if="activeTab === 'promotion'" class="section-stack">
-          <view class="promo-card">
-            <PromotionQrCode
-              class="share-code-box"
-              :value="promotionQrPayload"
-              :size="168"
-              label="微信推广二维码"
-              @error="handlePromotionQrError"
-            />
-            <text class="section-title">微信小程序推广</text>
-            <text class="body-copy">微信内使用原生分享；H5 推广链接用于朋友圈海报、社群文案和客服转发。</text>
-            <view class="invite-code">
-              <text>{{ inviteCode }}</text>
-            </view>
-            <button type="button" class="primary-button" open-type="share">微信分享</button>
-            <button type="button" class="outline-button" @click="copyInviteLink">复制推广链接</button>
-            <button type="button" class="outline-button" @click="openFeaturePage(miniProgramFeaturePages.agentInviteRecords)">查看邀请记录</button>
-          </view>
-
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">推广路径</text>
-              <text class="soft-tag">自动带 invite</text>
-            </view>
-            <view class="config-row">
-              <text>小程序路径</text>
-              <text>{{ sharePath }}</text>
-            </view>
-            <view class="config-row">
-              <text>H5 链接</text>
-              <text>{{ inviteLink || '后端暂未生成推广链接' }}</text>
-            </view>
-          </view>
+        <view v-else-if="activeTab === 'promotion'" class="agent-promotion-embed">
+          <PromotionCenterScreen
+            embedded
+            :show-header="false"
+            :show-back="false"
+            :active="activeTab === 'promotion'"
+          />
         </view>
 
         <view v-else-if="activeTab === 'customers'" class="section-stack">
@@ -899,6 +857,29 @@
     <!-- #endif -->
     <!-- #endif -->
   </view>
+
+  <BottomSheet
+    :visible="videoModelSheetVisible"
+    title="选择生成模型"
+    @close="closeVideoModelSheet"
+  >
+    <scroll-view scroll-y class="video-model-sheet-list">
+      <button
+        v-for="item in videoModelOptions"
+        :key="item.code"
+        type="button"
+        :class="['video-model-sheet-item', { active: item.code === selectedVideoModelCode }]"
+        :disabled="videoModelSwitching"
+        @click="selectVideoModelFromSheet(item.code)"
+      >
+        <view class="video-model-sheet-copy">
+          <text class="video-model-sheet-title">{{ videoModelTitle(item) }}</text>
+          <text class="video-model-sheet-subtitle">{{ videoModelSubtitle(item) }}</text>
+        </view>
+        <text v-if="item.code === selectedVideoModelCode" class="video-model-sheet-check">✓</text>
+      </button>
+    </scroll-view>
+  </BottomSheet>
 </template>
 
 <script setup lang="ts">
@@ -925,10 +906,21 @@ import {
   resolveInspirationDraftMaterialURLs,
 } from "../features/inspiration/draft";
 import type { InspirationCreationDraft } from "../features/inspiration/types";
+import {
+  defaultFreeImageEditPrompt,
+  freeImageEditValidationMessage,
+} from "../features/generation/freeImageEdit";
+import {
+  DEFAULT_VIDEO_MODEL_CODE,
+  estimateFormalVideoPoints,
+  pickDefaultVideoModelCode,
+  sortVideoModelsByListPrice,
+  videoModelSubtitle as formatVideoModelSubtitle,
+} from "../features/generation/videoModelPricing";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
-import PromotionQrCode from "./PromotionQrCode.vue";
+import PromotionCenterScreen from "./promotion/PromotionCenterScreen.vue";
 import AppImage from "./AppImage.vue";
 import RemoteCover from "./RemoteCover.vue";
 import AssetCenterPage from "./assets/AssetCenterPage.vue";
@@ -936,6 +928,8 @@ import V531HomePage from "./v531/V531HomePage.vue";
 import V531ProfilePage from "./v531/V531ProfilePage.vue";
 import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
+import FreeImageEditCreation from "./creation/FreeImageEditCreation.vue";
+import BottomSheet from "./auth/BottomSheet.vue";
 import { fetchAssetDetail } from "../features/assets/api";
 import { beginWorksPerformanceStep } from "../features/assets/performance";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
@@ -944,6 +938,7 @@ import { useUserStore } from "../stores/user";
 import { requireAuth as requireProtectedAction } from "../features/auth/gate";
 import { acceptGuestBrowse, hasAcceptedGuestBrowse, isLoginPromptSuppressed, suppressLoginPrompt } from "../features/auth/guestBrowse";
 import { trackLogin } from "../features/auth/analytics";
+import { ensureWechatMiniProgramSession } from "../features/auth/wechatSession";
 import { reviewModeHides } from "../features/reviewMode";
 import { RoleMenuConfig, roleLabels } from "../config/permissions";
 import type { MinePurchaseOption, MineView } from "../types";
@@ -956,8 +951,7 @@ import type {
   RoleWalletResponse,
   VideoGenerationEstimate,
 } from "@xianzhi/business-sdk";
-import type { VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
-import type { ModelInfo } from "@xianzhi/shared-types";
+import type { ModelInfo, VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
 import type { AppRole, Asset, AuthResponse, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
 import {
   miniProgramCreationPages,
@@ -972,6 +966,28 @@ import type {
   MiniProgramTabId
 } from "../config/miniProgramPages";
 
+function updateFreeImageEditPrompt(prompt: string) {
+  creationPrompt.value = prompt;
+  creationError.value = "";
+}
+
+function ensureFreeImageEditDefaultPrompt() {
+  if (creationMode.value !== "infographic") return;
+  if (String(creationPrompt.value || "").trim()) return;
+  creationPrompt.value = defaultFreeImageEditPrompt();
+}
+
+function validateFreeImageEditRequest() {
+  if (creationMode.value !== "infographic") return true;
+  const message = freeImageEditValidationMessage(
+    creationReferencePaths.value[0] || "",
+    creationPrompt.value,
+  );
+  creationError.value = message;
+  if (message) uni.showToast({ title: message, icon: "none" });
+  return !message;
+}
+
 function guestAwareGenerateTap() {
   if (!allowedCreationModes.value.includes(creationMode.value)) {
     uni.showToast({ title: "该能力暂未向小程序开放", icon: "none" });
@@ -985,6 +1001,7 @@ function guestAwareGenerateTap() {
     return;
   }
   if (!validateActiveInspirationReferences()) return;
+  if (!validateFreeImageEditRequest()) return;
   trackLogin("guest_click_generate", { mode: creationMode.value });
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
@@ -1118,13 +1135,13 @@ const roleNames: Record<RoleId, string> = {
 const allCreationModules = [
   { id: "image" as CreationMode, icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "约 10 点/张", tone: "orange" },
   { id: "ppt" as CreationMode, icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
-  { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "doubao-seedance-2.0", cost: "约 80 点/条", tone: "green" },
+  { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "grok-imagine-1.5-video", cost: "约 15 积分/秒", tone: "green" },
   { id: "agent" as CreationMode, icon: "星", name: "AI Agent", homeName: "LOGO", description: "经营助手与知识库", model: "agent-workflow", cost: "按任务计费", tone: "blue" },
-  { id: "infographic" as CreationMode, icon: "表", name: "信息图", homeName: "信息图", description: "复杂信息一图讲清", model: "infographic", cost: "约 20 点/份", tone: "orange" },
+  { id: "infographic" as CreationMode, icon: "表", name: "自由P图", homeName: "自由P图", description: "杂志封面/去除路人/精致补妆", model: "infographic", cost: "约 20 点/份", tone: "orange" },
   { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
 ];
 
-const allowedCreationModes = ref<CreationMode[]>(["image", "infographic", "video"]);
+const allowedCreationModes = ref<CreationMode[]>(["image", "infographic", "video", "montage"]);
 const creationModules = computed(() => allCreationModules.filter(item => allowedCreationModes.value.includes(item.id)));
 
 const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"];
@@ -1154,6 +1171,7 @@ const videoGenerationMode = ref<VideoGenerationMode>("TEXT_TO_VIDEO");
 const videoModelCapabilities = ref<VideoModelCapabilities>(normalizeVideoModelCapabilities(undefined));
 const videoModelOptions = ref<ModelInfo[]>([]);
 const selectedVideoModelCode = ref("");
+const videoModelSheetVisible = ref(false);
 const videoParameterFields = ref<EditableVideoField[]>([]);
 const videoParameterValues = ref<Record<string, unknown>>({});
 const videoModelSwitching = ref(false);
@@ -1190,7 +1208,8 @@ const creationPromptDrafts = ref<Record<CreationMode, string>>({
   ppt: "",
   infographic: "",
   review: "",
-  agent: ""
+  agent: "",
+  montage: ""
 });
 const creationError = ref("");
 const generationSubmitting = ref(false);
@@ -1222,7 +1241,6 @@ const assetTotal = ref(0);
 const assetMonthTotal = ref(0);
 const assetFavoriteTotal = ref(0);
 const assetStorageBytes = ref(0);
-const rechargePackages = ref<AnyRecord[]>([]);
 const assetsLoading = ref(false);
 const assetsError = ref("");
 
@@ -1237,6 +1255,9 @@ const isPrimaryRoleTab = computed(() => currentTabs.value.some(tab => tab.id ===
 const legacyActiveTab = computed<TabId>(() => activeTab.value);
 const isCreationDetail = computed(
   () => activeRole.value === "user" && activeTab.value === "create" && Boolean(props.initialCreationMode),
+);
+const isFreeImageEditPage = computed(
+  () => isCreationDetail.value && creationMode.value === "infographic",
 );
 const isVideoCreationDetail = computed(() => isCreationDetail.value && creationMode.value === "video");
 const basicVideoSelectFields = computed(() => {
@@ -1261,16 +1282,22 @@ const creationReferenceEnabled = computed(
       && videoGenerationMode.value === "IMAGE_TO_VIDEO"
       && videoModelCapabilities.value.supportsImageToVideo),
 );
-const creationReferenceTitle = computed(() => creationMode.value === "video" ? "首帧图" : "参考图");
+const creationReferenceTitle = computed(() => creationMode.value === "video"
+  ? creationReferenceLimit.value > 1 ? "参考图" : "首帧图"
+  : "参考图");
 const creationReferenceLimit = computed(() => creationMode.value === "video"
-  ? Math.max(1, Math.min(1, videoModelCapabilities.value.maxReferenceImages || 1))
+  ? Math.max(1, Math.min(7, videoModelCapabilities.value.maxReferenceImages || 1))
+  : creationMode.value === "infographic"
+  ? 1
   : inspirationReferenceLimit(activeInspirationDraft.value));
 const creationReferenceDescription = computed(() => {
   if (creationSourceLoading.value) return "正在载入原作品...";
   if (creationSourceError.value) return creationSourceError.value;
   if (creationMode.value === "video") return creationReferencePaths.value.length
-    ? "首帧图已就绪"
-    : "请上传 1 张首帧图";
+    ? `已添加 ${creationReferencePaths.value.length}/${creationReferenceLimit.value} 张，第一张作为起始图`
+    : creationReferenceLimit.value > 1
+      ? `可上传 1–${creationReferenceLimit.value} 张参考图`
+      : "请上传 1 张首帧图";
   return creationReferencePaths.value.length
     ? "已添加参考图"
     : "可添加参考图";
@@ -1281,7 +1308,7 @@ const creationLastFrameEnabled = computed(
     && videoModelCapabilities.value.supportsLastFrame,
 );
 const creationReferenceModeLabel = computed(
-  () => `${creationReferencePaths.value.length} 张 · ${creationMode.value === "video" ? "首帧图" : "图生图模式"}`,
+  () => `${creationReferencePaths.value.length} 张 · ${creationMode.value === "video" ? "图生视频" : "图生图模式"}`,
 );
 const roleLabel = computed(() => roleNames[activeRole.value]);
 const isUserMineDetail = computed(() => activeRole.value === "user" && activeTab.value === "mine" && mineView.value !== "overview");
@@ -1317,7 +1344,6 @@ const profileSubscriptionExpiresAt = computed(
 
 const pointAccount = computed(() => wallet.value?.account || pointAccountResponse.value?.account || profile.value?.account || null);
 const pointBalance = computed(() => asNumber(pointAccount.value?.available));
-const pointFrozen = computed(() => asNumber(pointAccount.value?.frozen));
 const userOrders = computed(() => listOf(wallet.value?.orders || pointAccountResponse.value?.orders));
 const userTransactions = computed(() => listOf(wallet.value?.transactions || pointAccountResponse.value?.transactions));
 const tokenRecords = computed(() => listOf(wallet.value?.tokenRecords));
@@ -1401,12 +1427,8 @@ const videoReferenceDescription = computed(() => {
 });
 const videoModelDisplayName = computed(() => {
   const model = videoModelOptions.value.find(item => item.code === selectedVideoModelCode.value);
-  return model?.name || selectedVideoModelCode.value || activeCreationModel.value || "选择模型";
+  return videoModelTitle(model) || selectedVideoModelCode.value || activeCreationModel.value || "选择模型";
 });
-const videoModelOptionIndex = computed(() => Math.max(
-  0,
-  videoModelOptions.value.findIndex(item => item.code === selectedVideoModelCode.value),
-));
 const videoAdvancedSummary = computed(() => advancedVideoParameterFields.value
   .map(field => `${field.key === "camera_movement" ? "镜头" : field.label}：${selectedVideoParameterLabel(field)}`)
   .join(" · "));
@@ -1416,10 +1438,13 @@ const videoGenerationSummary = computed(() => {
   return parts.join(" · ") || "参数由当前模型动态提供";
 });
 const videoCostLabel = computed(() => {
-  if (videoEstimateLoading.value) return "试算中";
-  if (videoEstimate.value) return `${videoEstimate.value.estimatedPoints} 积分`;
-  if (videoEstimateError.value) return "正式提交时以后端为准";
-  return activeCreationCost.value.replace("点", "积分").replace("/条", "");
+  if (videoEstimateLoading.value) return "试算中…";
+  if (videoEstimate.value) return `预计 ${videoEstimate.value.estimatedPoints} 积分`;
+  if (videoEstimateError.value) return videoEstimateError.value;
+  const selected = videoModelOptions.value.find(item => item.code === selectedVideoModelCode.value);
+  if (selected?.priceHint) return selected.priceHint;
+  if (selected?.priceLabel) return selected.priceLabel;
+  return "切换模型后自动试算";
 });
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
 const generationNoticePending = computed(() => latestGenerationTask.value?.tone === "pending");
@@ -1496,10 +1521,6 @@ const promotionInfo = computed<PromotionInfo>(() => (channelCenter.value as unkn
 const inviteCode = computed(() => promotionInfo.value.inviteCode || currentAgent.value?.inviteCode || rowString(currentAgent.value || {}, "inviteCode") || "未生成");
 const inviteLink = computed(() => promotionInfo.value.inviteLink || promotionInfo.value.landingURL || rowString(currentAgent.value || {}, "inviteLink"));
 const sharePath = computed(() => `/pages/WechatLoginPage?invite=${encodeURIComponent(inviteCode.value)}`);
-const promotionQrPayload = computed(() => {
-  if (!inviteCode.value || inviteCode.value === "未生成") return "";
-  return inviteLink.value || sharePath.value;
-});
 const conversionRate = computed(() => {
   const visits = summaryNumber(channelSummary.value, "visits");
   const orders = summaryNumber(channelSummary.value, "orders");
@@ -1533,7 +1554,7 @@ watch(() => props.initialTab, tab => { activeTab.value = tab; });
 watch(activeTab, tab => { const code = ({ home: "home", create: "studio", assets: "assets", mine: "profile" } as Partial<Record<TabId, AppPageCode>>)[tab]; if (code) void pageConfigStore.ensure(code); }, { immediate: true });
 watch(() => props.initialCreationMode, mode => {
   if (mode) creationMode.value = mode;
-  if (mode === "video") void initializeVideoModelForm();
+  ensureFreeImageEditDefaultPrompt();
 });
 watch(
   () => [props.initialCreationAssetId, props.initialCreationIntent] as const,
@@ -1718,7 +1739,8 @@ function applyVideoModelCapabilities(raw: unknown, notify = false) {
     creationReferencePaths.value = [];
     creationLastFramePath.value = "";
   } else {
-    creationReferencePaths.value = creationReferencePaths.value.slice(0, 1);
+    const referenceLimit = Math.max(1, Math.min(7, nextCapabilities.maxReferenceImages || 1));
+    creationReferencePaths.value = creationReferencePaths.value.slice(0, referenceLimit);
     if (!nextCapabilities.supportsLastFrame) creationLastFramePath.value = "";
   }
   const cleanParameters = { ...restoredCreationParams.value };
@@ -1788,13 +1810,13 @@ function chooseCreationReferenceImages() {
     return;
   }
   const remaining = Math.max(0, creationReferenceLimit.value - creationReferencePaths.value.length);
-  if (!remaining) {
-    uni.showToast({ title: creationMode.value === "video" ? "首帧图最多 1 张" : `最多添加 ${creationReferenceLimit.value} 张参考图`, icon: "none" });
+  if (!remaining && creationMode.value !== "infographic") {
+    uni.showToast({ title: creationMode.value === "video" ? `最多添加 ${creationReferenceLimit.value} 张视频参考图` : `最多添加 ${creationReferenceLimit.value} 张参考图`, icon: "none" });
     return;
   }
   creationReferenceSelecting.value = true;
   uni.chooseImage({
-    count: remaining,
+    count: creationMode.value === "infographic" ? Math.max(1, remaining || 1) : remaining,
     sizeType: ["compressed"],
     sourceType: ["album", "camera"],
     success: result => {
@@ -1815,6 +1837,12 @@ function chooseCreationReferenceImages() {
 
 function appendCreationReferencePaths(paths: string[]) {
   if (!requestLogin("登录后可上传参考图片")) return;
+  if (creationMode.value === "infographic") {
+    creationReferencePaths.value = paths.filter(Boolean).slice(0, 1);
+    creationSourceError.value = "";
+    creationError.value = "";
+    return;
+  }
   const nextPaths = [...creationReferencePaths.value, ...paths]
     .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
     .slice(0, creationReferenceLimit.value);
@@ -1843,7 +1871,12 @@ function previewCreationReference(index: number) {
 
 function removeCreationReference(index: number) {
   creationReferencePaths.value = creationReferencePaths.value.filter((_, itemIndex) => itemIndex !== index);
-  if (creationMode.value === "video") scheduleVideoEstimate();
+  if (creationMode.value === "video") {
+    if (!creationReferencePaths.value.length && videoGenerationMode.value === "IMAGE_TO_VIDEO" && videoModelCapabilities.value.supportsTextToVideo) {
+      videoGenerationMode.value = "TEXT_TO_VIDEO";
+    }
+    scheduleVideoEstimate();
+  }
 }
 
 function isToday(value: string) {
@@ -1956,10 +1989,11 @@ function requestLogin(reason = "登录后可继续使用此功能") {
     title: "登录后使用",
     content: `${reason}。你也可以取消并继续浏览。`,
     confirmText: "去登录",
-    cancelText: "暂不登录",
+    cancelText: "继续浏览",
     confirmColor: "#4A6BFF",
     success: result => {
       if (!result.confirm) {
+        acceptGuestBrowse();
         suppressLoginPrompt();
         return;
       }
@@ -2088,13 +2122,12 @@ function cyclePptModel() {
   pptModel.value = models[(index + 1) % models.length] || models[0];
 }
 
-function homeModuleSlot(mode: CreationMode) { return ({ image: "home.quick.poster", ppt: "home.quick.ppt", video: "home.quick.video", agent: "home.quick.knowledge", infographic: "home.capability.office", review: "home.capability.employee" } as Record<CreationMode, string>)[mode]; }
-function studioModuleSlot(mode: CreationMode) { return ({ image: "studio.template.poster", ppt: "studio.template.ppt", video: "studio.template.video", agent: "studio.template.knowledge", infographic: "studio.template.office", review: "studio.template.employee" } as Record<CreationMode, string>)[mode]; }
+function homeModuleSlot(mode: CreationMode) { return ({ image: "home.quick.poster", ppt: "home.quick.ppt", video: "home.quick.video", agent: "home.quick.knowledge", infographic: "home.capability.office", review: "home.capability.employee", montage: "home.capability.montage" } as Record<CreationMode, string>)[mode]; }
+function studioModuleSlot(mode: CreationMode) { return ({ image: "studio.template.poster", ppt: "studio.template.ppt", video: "studio.template.video", agent: "studio.template.knowledge", infographic: "studio.template.office", review: "studio.template.employee", montage: "home.capability.montage" } as Record<CreationMode, string>)[mode]; }
 function assetDefaultSlot(mediaType: string) { if (mediaType === "image") return "assets.default.image"; if (mediaType === "video") return "assets.default.video"; if (mediaType === "document") return "assets.default.document"; return "assets.default.other"; }
 
 function selectUserTab(tab: TabId) {
-  const guestBrowsableTabs = new Set<TabId>(["home", "create", "assets", "mine"]);
-  if (!guestBrowsableTabs.has(tab) && !requestLogin("登录后可查看账户与权益")) return;
+  if (!["home", "create"].includes(tab) && !requestLogin("登录后可查看作品、账户与权益")) return;
   replacePage(rolePage("user", tab));
 }
 
@@ -2164,10 +2197,6 @@ async function showUsageExportNotice() {
 function showPosterNotice() {
   if (hasAgentRole.value) replacePage(rolePage("agent", "promotion"));
   else uni.showToast({ title: "请先成为代理商", icon: "none" });
-}
-
-function handlePromotionQrError(message: string) {
-  console.error("promotion qrcode render failed", message);
 }
 
 async function showNotifications() {
@@ -2568,14 +2597,12 @@ async function loadMemberProfile() {
 }
 
 async function loadWallet() {
-  const [walletResult, pointsResult, plansResult] = await Promise.allSettled([
+  const [walletResult, pointsResult] = await Promise.allSettled([
     businessSdk.roleWorkbench.wallet(),
-    businessSdk.roleWorkbench.pointsAccount(),
-    api<AnyRecord[] | { items?: AnyRecord[] }>("/api/v1/plans?planType=recharge")
+    businessSdk.roleWorkbench.pointsAccount()
   ]);
   if (walletResult.status === "fulfilled") wallet.value = walletResult.value;
   if (pointsResult.status === "fulfilled") pointAccountResponse.value = pointsResult.value;
-  if (plansResult.status === "fulfilled") rechargePackages.value = Array.isArray(plansResult.value) ? plansResult.value : listOf(plansResult.value.items);
 }
 
 async function loadAssets(showLoading = true) {
@@ -2840,7 +2867,7 @@ function confirmVideoModelSwitch(message: string): Promise<boolean> {
   });
 }
 
-async function resolveBackendGenerationConfig(
+function resolveBackendGenerationConfig(
   mode: "image" | "video",
   fallback: string,
 ): Promise<BackendGenerationConfig | null> {
@@ -2848,33 +2875,27 @@ async function resolveBackendGenerationConfig(
   const loadSchema = (modelName = "") => api<AnyRecord>(
     `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
   );
-  try {
-    const schema = await loadSchema(fallback);
+  const configFromSchema = (schema: AnyRecord): BackendGenerationConfig | null | Promise<BackendGenerationConfig | null> => {
     const resolvedModel = rowString(schema, "model_name", "modelName") || fallback;
-    const model = mode === "video"
-      ? await confirmResolvedVideoModel(fallback, resolvedModel, confirmVideoModelSwitch)
+    const resolved = mode === "video"
+      ? confirmResolvedVideoModel(fallback, resolvedModel, confirmVideoModelSwitch)
       : resolvedModel;
-    if (!model) return null;
-    return {
-      model,
-      schema,
-      videoCapabilities: moduleSchemaVideoCapabilities(schema),
-    };
-  } catch {
-    try {
-      const schema = await loadSchema();
-      const availableModel = rowString(schema, "model_name", "modelName");
-      if (availableModel) {
-        const model = mode === "video"
-          ? await confirmResolvedVideoModel(fallback, availableModel, confirmVideoModelSwitch)
-          : availableModel;
-        if (!model) return null;
-        return { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) };
-      }
-    } catch {}
-    if (mode === "video") return null;
-    return { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
-  }
+    const createConfig = (model: string | null): BackendGenerationConfig | null => model
+      ? { model, schema, videoCapabilities: moduleSchemaVideoCapabilities(schema) }
+      : null;
+    return typeof resolved === "string" || resolved === null
+      ? createConfig(resolved)
+      : resolved.then(createConfig);
+  };
+  const unavailableConfig = (): BackendGenerationConfig | null => mode === "video"
+    ? null
+    : { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
+
+  return loadSchema(fallback)
+    .then(configFromSchema)
+    .catch(() => loadSchema()
+      .then(schema => rowString(schema, "model_name", "modelName") ? configFromSchema(schema) : unavailableConfig())
+      .catch(unavailableConfig));
 }
 
 function videoParameterValueEquals(key: string, option: unknown) {
@@ -2907,10 +2928,31 @@ function selectVideoParameterByPicker(field: EditableVideoField, event: unknown)
   if (option !== undefined) setVideoParameterValue(field.key, option);
 }
 
-function selectVideoModelByPicker(event: unknown) {
-  const index = Number(eventDetailValue(event));
-  const model = Number.isInteger(index) ? videoModelOptions.value[index] : undefined;
-  if (model?.code) void requestVideoModelSwitch(model.code);
+function openVideoModelSheet() {
+  if (videoModelSwitching.value || !videoModelOptions.value.length) return;
+  videoModelSheetVisible.value = true;
+}
+
+function closeVideoModelSheet() {
+  videoModelSheetVisible.value = false;
+}
+
+function selectVideoModelFromSheet(code: string) {
+  const next = String(code || "").trim();
+  if (!next) return;
+  videoModelSheetVisible.value = false;
+  if (next !== selectedVideoModelCode.value) void requestVideoModelSwitch(next);
+}
+
+function videoModelTitle(item?: ModelInfo | null) {
+  if (!item) return "";
+  const code = String(item.code || "").trim();
+  return String(item.displayName || item.name || videoModelFriendlyName(code) || code).trim();
+}
+
+function videoModelSubtitle(item?: ModelInfo | null) {
+  if (!item) return "按价格从低到高";
+  return formatVideoModelSubtitle(item) || "参数随模型动态调整";
 }
 
 function selectedVideoParameterLabel(field: EditableVideoField) {
@@ -2969,11 +3011,17 @@ function setVideoNumberParameter(key: string, event: unknown) {
   if (Number.isFinite(value)) setVideoParameterValue(key, value);
 }
 
-function confirmVideoReferenceRemoval(): Promise<boolean> {
+function confirmVideoReferenceRemoval(config: BackendGenerationConfig): Promise<boolean> {
+  const targetLimit = Math.max(1, Math.min(7, config.videoCapabilities.maxReferenceImages || 1));
+  const content = creationReferencePaths.value.length && !config.videoCapabilities.supportsImageToVideo
+    ? "当前模型不支持参考图，切换后将移除已上传图片，是否继续？"
+    : creationReferencePaths.value.length > targetLimit
+      ? `当前已上传 ${creationReferencePaths.value.length} 张参考图，切换后只保留前 ${targetLimit} 张，是否继续？`
+      : "当前模型不支持尾帧图，切换后将移除已上传尾帧，是否继续？";
   return new Promise(resolve => {
     uni.showModal({
       title: "切换视频模型",
-      content: "当前模型不支持参考图，切换后将移除已上传图片，是否继续？",
+      content,
       success: result => resolve(result.confirm),
       fail: () => resolve(false),
     });
@@ -2983,6 +3031,7 @@ function confirmVideoReferenceRemoval(): Promise<boolean> {
 function videoConfigRemovesReferences(config: BackendGenerationConfig) {
   if (!creationReferencePaths.value.length && !creationLastFramePath.value) return false;
   if (creationReferencePaths.value.length && !config.videoCapabilities.supportsImageToVideo) return true;
+  if (creationReferencePaths.value.length > Math.max(1, Math.min(7, config.videoCapabilities.maxReferenceImages || 1))) return true;
   return Boolean(creationLastFramePath.value && !config.videoCapabilities.supportsLastFrame);
 }
 
@@ -3015,7 +3064,7 @@ async function requestVideoModelSwitch(modelCode: string) {
       }
       return;
     }
-    if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval()) return;
+    if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval(config)) return;
     if (sequence !== videoModelSwitchSequence) return;
     commitVideoModelConfig(config);
   } finally {
@@ -3027,20 +3076,34 @@ async function initializeVideoModelForm() {
   if (creationMode.value !== "video") return;
   try {
     const models = await businessSdk.models.list();
-    videoModelOptions.value = models.filter(item => {
+    videoModelOptions.value = sortVideoModelsByListPrice(models.filter(item => {
       const capabilities = (item.capabilities || []).map(value => String(value).toUpperCase());
       return capabilities.includes("TEXT_TO_VIDEO")
         || capabilities.includes("IMAGE_TO_VIDEO")
         || Boolean(item.videoCapabilities);
-    });
+    }));
   } catch {
     videoModelOptions.value = [];
   }
-  const requested = rowString(restoredCreationParams.value, "model", "modelName")
-    || activeCreation.value.model
-    || videoModelOptions.value[0]?.code
+  const availableCodes = videoModelOptions.value.map((item) => item.code);
+  const restored = rowString(restoredCreationParams.value, "model", "modelName");
+  const requested = (restored && availableCodes.includes(restored) ? restored : "")
+    || (availableCodes.includes(activeCreation.value.model) ? activeCreation.value.model : "")
+    || pickDefaultVideoModelCode(availableCodes, DEFAULT_VIDEO_MODEL_CODE)
     || "";
   await requestVideoModelSwitch(requested);
+}
+
+function videoModelFriendlyName(code: string) {
+  const names: Record<string, string> = {
+    "mock-video": "本地演示视频",
+    "grok-image-video": "Grok Image Video",
+    "grok-imagine-video-1.5-preview": "Grok Imagine Video 1.5 Preview",
+    "grok-imagine-1.5-video": "Grok Imagine Video 1.5",
+    "seedance-fast-2.0": "Seedance 2.0",
+    "doubao-seedance-2.0": "Doubao Seedance 2.0",
+  };
+  return names[String(code || "").trim()] || "";
 }
 
 function clearVideoEstimateTimer() {
@@ -3069,21 +3132,42 @@ function scheduleVideoEstimate() {
       );
       if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationReferencePaths.value[0]) {
         params.first_frame = creationReferencePaths.value[0];
+        if (videoModelCapabilities.value.maxReferenceImages > 1) {
+          params.image_urls = [...creationReferencePaths.value];
+        }
       }
       if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationLastFramePath.value) {
         params.last_frame = creationLastFramePath.value;
       }
       const result = await businessSdk.generation.estimateVideo({
         type: videoGenerationMode.value,
-        prompt: creationPrompt.value.trim(),
+        prompt: creationPrompt.value.trim() || "video generation estimate",
         model: selectedVideoModelCode.value,
         params,
       });
       if (sequence !== videoEstimateSequence) return;
       videoEstimate.value = result;
-    } catch {
+    } catch (error) {
       if (sequence !== videoEstimateSequence) return;
-      videoEstimateError.value = "暂无法试算";
+      const duration = Number(videoParameterValues.value.duration);
+      const resolution = String(videoParameterValues.value.resolution || "720p");
+      const fallbackPoints = estimateFormalVideoPoints(selectedVideoModelCode.value, duration, resolution);
+      if (fallbackPoints > 0) {
+        videoEstimate.value = {
+          model: selectedVideoModelCode.value,
+          estimatedPoints: fallbackPoints,
+          billingType: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? "per_request" : "per_second",
+          quantityField: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? "request" : "duration",
+          quantity: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? 1 : duration,
+          note: "本地按正式计价规则估算，正式提交时以后端为准。",
+        };
+        videoEstimateError.value = "";
+        return;
+      }
+      const message = error instanceof Error ? error.message : "";
+      videoEstimateError.value = /首帧|参考图|IMAGE_TO_VIDEO|first.?frame/i.test(message)
+        ? "上传参考图后可试算积分"
+        : "暂无法试算，正式提交时以后端为准";
     } finally {
       if (sequence === videoEstimateSequence) videoEstimateLoading.value = false;
     }
@@ -3106,8 +3190,9 @@ async function resolvePptGenerationModels() {
   };
 }
 
-async function submitCreation(prompt: string) {
+function submitCreation(prompt: string) {
   if (!validateActiveInspirationReferences()) return;
+  if (!validateFreeImageEditRequest()) return;
   const startedAt = Date.now();
   generationSubmitting.value = true;
   generationProgress.value = 0;
@@ -3120,7 +3205,169 @@ async function submitCreation(prompt: string) {
     progress: 0,
     resultType: creationMode.value,
   };
+  // #ifdef MP-WEIXIN
+  // Continue directly from the WeChat callbacks. Awaiting this bridge leaves the
+  // generation event handler pending in the mini-program runtime.
+  ensureWechatMiniProgramSession({
+    success: () => { continueCreationAfterSession(prompt, startedAt); },
+    fail: () => {
+      continueCreationAfterSession(
+        prompt,
+        startedAt,
+        new Error("内容安全检测暂不可用，请稍后重试"),
+      );
+    },
+  });
+  return;
+  // #endif
+  // #ifndef MP-WEIXIN
+  continueCreationAfterSession(prompt, startedAt);
+  // #endif
+}
+
+function continueCreationAfterSession(prompt: string, startedAt: number, preflightError?: Error) {
+  if (creationMode.value === "video") {
+    submitVideoCreationAfterSession(prompt, startedAt, preflightError);
+    return;
+  }
+  void submitCreationAfterSession(prompt, startedAt, preflightError);
+}
+
+function completeCreationSubmission(
+  taskId: string,
+  taskStatus: string,
+  taskProgress: number,
+  prompt: string,
+  startedAt: number,
+) {
+  generationProgress.value = taskProgress;
+  latestGenerationTask.value = {
+    id: taskId,
+    title: `${activeCreationName.value}生成中`,
+    status: taskStatus,
+    tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending",
+    progress: taskProgress,
+    resultType: creationMode.value,
+  };
+  persistActiveGeneration({
+    id: taskId,
+    mode: creationMode.value,
+    prompt,
+    status: taskStatus,
+    progress: taskProgress,
+    startedAt,
+    inspirationTemplateSlug: activeInspirationTemplateSlug.value,
+  });
+  uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
+  void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
+}
+
+function handleCreationSubmissionError(error: unknown, prompt: string) {
+  generationPollRun += 1;
+  stopGenerationFeedback();
+  generationProgress.value = 0;
+  const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
+  if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
+    pendingLegalGenerationPrompt = prompt;
+    creationError.value = "首次生成前，请先阅读并确认用户协议、隐私政策和 AI 生成内容使用规范";
+    uni.showToast({ title: "请先确认必要协议，返回后将保留当前创作内容", icon: "none" });
+    setTimeout(() => uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" }), 300);
+    return;
+  }
+  const message = rawMessage.includes("所发布内容含违规信息")
+    ? "所发布内容含违规信息"
+    : rawMessage.includes("内容安全检测暂不可用")
+      ? "内容安全检测暂不可用，请稍后重试"
+      : rawMessage;
+  creationError.value = message;
+  latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
+  const toastTitle =
+    message === "所发布内容含违规信息" || message.includes("内容安全检测")
+      ? message
+      : (message && message !== "生成任务创建失败" ? message : "生成失败，请重试");
+  uni.showToast({ title: toastTitle.slice(0, 40), icon: "none", duration: 3500 });
+}
+
+function createVideoGenerationTask(prompt: string, generationConfig: BackendGenerationConfig, uploadedVideoReferences: string[]) {
+  const submitTask = (lastFrameReferences: string[]) => {
+    const finalVideoParameters = buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value);
+    const requestedQuality = String(finalVideoParameters.resolution || "");
+    const requestedSize = String(finalVideoParameters.aspect_ratio || "");
+    const finalVideoCapabilities = {
+      ...generationConfig.videoCapabilities,
+      supportedParameters: videoParameterFields.value.map(field => field.key),
+    };
+    return businessSdk.generation.createTask({
+      mode: "video",
+      prompt,
+      model: generationConfig.model,
+      style: restoredCreationString("style", "stylePreset") || "cinematic",
+      size: requestedSize,
+      quality: requestedQuality,
+      count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
+      referenceImages: uploadedVideoReferences,
+      videoMode: videoGenerationMode.value,
+      firstFrame: uploadedVideoReferences[0] || "",
+      lastFrame: lastFrameReferences[0] || "",
+      videoCapabilities: finalVideoCapabilities,
+      negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
+      duration: finalVideoParameters.duration !== undefined
+        ? Number(finalVideoParameters.duration)
+        : undefined,
+      parameters: finalVideoParameters,
+    });
+  };
+  const lastFrameReferences = creationLastFrameEnabled.value && creationLastFramePath.value
+    ? uploadCreationReferenceImages([creationLastFramePath.value])
+    : [];
+  return Array.isArray(lastFrameReferences)
+    ? submitTask(lastFrameReferences)
+    : lastFrameReferences.then(submitTask);
+}
+
+function submitVideoCreationAfterSession(prompt: string, startedAt: number, preflightError?: Error) {
+  if (preflightError) {
+    handleCreationSubmissionError(preflightError, prompt);
+    generationSubmitting.value = false;
+    return;
+  }
+  resolveBackendGenerationConfig("video", activeCreationModel.value)
+    .then(generationConfig => {
+      if (!generationConfig) throw new Error("已取消切换模型");
+      if (!videoConfigRemovesReferences(generationConfig)) return generationConfig;
+      return confirmVideoReferenceRemoval(generationConfig).then(confirmed => {
+        if (!confirmed) throw new Error("已取消切换模型");
+        return generationConfig;
+      });
+    })
+    .then(generationConfig => {
+      commitVideoModelConfig(generationConfig);
+      if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && !creationReferencePaths.value[0]) {
+        throw new Error("图生视频模式必须上传首帧图");
+      }
+      const uploadedVideoReferences = videoGenerationMode.value === "IMAGE_TO_VIDEO"
+        ? uploadCreationReferenceImages(creationReferencePaths.value)
+        : [];
+      return Array.isArray(uploadedVideoReferences)
+        ? createVideoGenerationTask(prompt, generationConfig, uploadedVideoReferences)
+        : uploadedVideoReferences.then(references => createVideoGenerationTask(prompt, generationConfig, references));
+    })
+    .then(result => {
+      completeCreationSubmission(
+        String(result.id || "generation-task"),
+        String(result.status || "PENDING").toUpperCase(),
+        clampGenerationProgress(result.progress),
+        prompt,
+        startedAt,
+      );
+    })
+    .catch(error => { handleCreationSubmissionError(error, prompt); })
+    .finally(() => { generationSubmitting.value = false; });
+}
+
+async function submitCreationAfterSession(prompt: string, startedAt: number, preflightError?: Error) {
   try {
+    if (preflightError) throw preflightError;
     let taskId = "";
     let taskStatus = "PENDING";
     let taskProgress = 0;
@@ -3145,139 +3392,52 @@ async function submitCreation(prompt: string) {
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
     } else {
-      const mode: "image" | "video" = creationMode.value === "video" ? "video" : "image";
+      const mode = "image" as const;
       const generationConfig = await resolveBackendGenerationConfig(
         mode,
         activeCreationModel.value,
       );
       if (!generationConfig) throw new Error("已取消切换模型");
-      const referenceCountBeforeCapabilityCheck = creationReferencePaths.value.filter(Boolean).length;
-      if (mode === "video") {
-        if (videoConfigRemovesReferences(generationConfig) && !await confirmVideoReferenceRemoval()) {
-          throw new Error("已取消切换模型");
-        }
-        commitVideoModelConfig(generationConfig);
-        if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && referenceCountBeforeCapabilityCheck > 1) {
-          throw new Error("旧草稿包含多张视频参考图，请重新选择 1 张首帧图");
-        }
-        if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && !creationReferencePaths.value[0]) {
-          throw new Error("图生视频模式必须上传首帧图");
-        }
-      }
-      const referenceImages = mode === "image"
-        ? await uploadCreationReferenceImages(creationReferencePaths.value)
-        : [];
-      const firstFrame = mode === "video" && videoGenerationMode.value === "IMAGE_TO_VIDEO"
-        ? (await uploadCreationReferenceImages(creationReferencePaths.value.slice(0, 1)))[0] || ""
-        : "";
-      const lastFrame = mode === "video" && creationLastFrameEnabled.value && creationLastFramePath.value
-        ? (await uploadCreationReferenceImages([creationLastFramePath.value]))[0] || ""
-        : "";
-      const finalVideoParameters = mode === "video"
-        ? buildVideoSubmissionParameters(videoParameterValues.value, videoParameterFields.value)
-        : {};
-      const requestedQuality = mode === "video"
-        ? String(finalVideoParameters.resolution || "")
-        : restoredCreationString("quality", "imageQuality") || "standard";
-      const requestedSize = mode === "video"
-        ? String(finalVideoParameters.aspect_ratio || "")
-        : restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
-      const finalVideoCapabilities = mode === "video"
-        ? {
-            ...generationConfig.videoCapabilities,
-            supportedParameters: videoParameterFields.value.map(field => field.key),
-          }
-        : undefined;
+      const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
+      const requestedQuality = restoredCreationString("quality", "imageQuality") || "standard";
+      const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
       const result = await businessSdk.generation.createTask({
         mode,
         prompt,
         model: generationConfig.model,
-        style: restoredCreationString("style", "stylePreset") || (mode === "video" ? "cinematic" : creationMode.value === "infographic" ? "infographic" : "commercial"),
-        size: mode === "video"
-          ? requestedSize
-          : constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
-        quality: mode === "video"
-          ? requestedQuality
-          : constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
+        style: restoredCreationString("style", "stylePreset") || (creationMode.value === "infographic" ? "infographic" : "commercial"),
+        size: constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
+        quality: constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
-        videoMode: mode === "video" ? videoGenerationMode.value : undefined,
-        firstFrame: mode === "video" ? firstFrame : undefined,
-        lastFrame: mode === "video" ? lastFrame : undefined,
-        videoCapabilities: finalVideoCapabilities,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
-        duration: mode === "video" && finalVideoParameters.duration !== undefined
-          ? Number(finalVideoParameters.duration)
-          : undefined,
-        parameters: mode === "video" ? finalVideoParameters : restoredCreationParams.value,
+        parameters: restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
       taskStatus = String(result.status || "PENDING").toUpperCase();
       taskProgress = clampGenerationProgress(result.progress);
     }
 
-    generationProgress.value = taskProgress;
-    latestGenerationTask.value = {
-      id: taskId,
-      title: `${activeCreationName.value}生成中`,
-      status: taskStatus,
-      tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending",
-      progress: taskProgress,
-      resultType: creationMode.value,
-    };
-    persistActiveGeneration({
-      id: taskId,
-      mode: creationMode.value,
-      prompt,
-      status: taskStatus,
-      progress: taskProgress,
-      startedAt,
-      inspirationTemplateSlug: activeInspirationTemplateSlug.value,
-    });
-    uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
-    void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
+    completeCreationSubmission(taskId, taskStatus, taskProgress, prompt, startedAt);
   } catch (error) {
-    generationPollRun += 1;
-    stopGenerationFeedback();
-    generationProgress.value = 0;
-    const rawMessage = error instanceof Error ? error.message : "生成任务创建失败";
-    if ((error instanceof ApiClientError && error.statusCode === 428) || rawMessage.includes("请先确认最新版本")) {
-      pendingLegalGenerationPrompt = prompt;
-      creationError.value = "首次生成前，请先阅读并确认用户协议、隐私政策和 AI 生成内容使用规范";
-      uni.showToast({ title: "请先确认必要协议，返回后将保留当前创作内容", icon: "none" });
-      setTimeout(() => uni.navigateTo({ url: "/pages/user/ComplianceCenterPage" }), 300);
-      return;
-    }
-    const message = rawMessage.includes("所发布内容含违规信息")
-      ? "所发布内容含违规信息"
-      : rawMessage.includes("内容安全检测暂不可用")
-        ? "内容安全检测暂不可用，请稍后重试"
-        : rawMessage;
-    creationError.value = message;
-    latestGenerationTask.value = { id: "-", title: "任务创建失败", status: message, tone: "danger" };
-    const toastTitle =
-      message === "所发布内容含违规信息" || message.includes("内容安全检测")
-        ? message
-        : "生成失败，请重试";
-    uni.showToast({ title: toastTitle, icon: "none" });
+    handleCreationSubmissionError(error, prompt);
   } finally {
     generationSubmitting.value = false;
   }
 }
 
-async function uploadCreationReferenceImage(filePath: string, index: number) {
-  try {
-    return await uploadReferenceImage(filePath);
-  } catch (error) {
+function uploadCreationReferenceImage(filePath: string, index: number) {
+  return uploadReferenceImage(filePath).catch(error => {
     const message = error instanceof Error ? error.message : "参考图上传失败";
     if (message.includes("所发布内容含违规信息")) throw new Error("所发布内容含违规信息");
     throw new Error(`第 ${index + 1} 张参考图上传失败：${message}`);
-  }
+  });
 }
 
-async function uploadCreationReferenceImages(paths: string[]) {
+function uploadCreationReferenceImages(paths: string[]): string[] | Promise<string[]> {
   if (!paths.length || creationMode.value === "ppt") return [];
   const localPaths = paths.filter(path => !/^https?:\/\//i.test(path));
+  if (!localPaths.length) return [...paths];
   if (localPaths.length) uni.showToast({ title: "正在上传参考图", icon: "loading", duration: 2000 });
   return Promise.all(paths.map((path, index) => /^https?:\/\//i.test(path) ? Promise.resolve(path) : uploadCreationReferenceImage(path, index)));
 }
@@ -3533,6 +3693,7 @@ onMounted(async () => {
       uni.removeStorageSync("v532-studio-draft");
     }
     restoreActiveGeneration();
+    ensureFreeImageEditDefaultPrompt();
   }
   if (creationMode.value === "video") void initializeVideoModelForm();
   void loadTerminalCapabilities();
@@ -3550,12 +3711,15 @@ async function loadTerminalCapabilities() {
   try {
     const result = await api<{ creationModes?: string[] }>("/api/v1/public/terminal-capabilities");
     const allowed = (result.creationModes || []).filter((item): item is CreationMode =>
-      (["image", "video", "ppt", "agent", "infographic", "review"] as string[]).includes(item),
+      (["image", "video", "ppt", "agent", "infographic", "review", "montage"] as string[]).includes(item),
     );
-    allowedCreationModes.value = allowed.length ? allowed : ["image"];
+    allowedCreationModes.value = allowed.length ? allowed : ["image", "infographic", "video", "montage"];
+    if (!allowedCreationModes.value.includes("montage")) {
+      allowedCreationModes.value = [...allowedCreationModes.value, "montage"];
+    }
     if (!allowedCreationModes.value.includes(creationMode.value)) creationMode.value = "image";
   } catch {
-    allowedCreationModes.value = ["image", "infographic", "video"];
+    allowedCreationModes.value = ["image", "infographic", "video", "montage"];
   }
 }
 
@@ -4410,12 +4574,31 @@ onBackPress(() => {
   background: #f7f8fc;
 }
 
+.mini-workbench.free-image-edit-shell {
+  min-height: 100vh;
+  padding: 0;
+  background: #f7f8fc;
+}
+
+.free-image-edit-page {
+  min-height: 100vh;
+  background: #f8fafc;
+}
+
+.free-image-edit-page__task {
+  margin: 0 16px 16px;
+}
+
 .user-v531-shell .native-safe-note {
   height: var(--header-height, 64px);
   min-height: 0;
 }
 
 .user-v531-shell .role-content {
+  margin-top: 0;
+}
+
+.free-image-edit-shell .role-content {
   margin-top: 0;
 }
 
@@ -4826,78 +5009,6 @@ onBackPress(() => {
 .v31-chip.orange { color: #ff6b1a; border-color: #ffd0b3; background: #fff2e8; }
 .v31-chip.green { color: #168a54; border-color: #bdeecd; background: #eafbf2; }
 .v31-link { color: #5b55d6; font-size: 10px; }
-
-.v31-video-parameter-panel {
-  padding: 15px;
-  border: 1px solid #d9e0ff;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 8px 20px rgba(23, 28, 56, 0.06);
-}
-
-.v31-video-parameter-head,
-.v31-video-parameter-label,
-.v31-video-model-row,
-.v31-video-option-row {
-  display: flex;
-  align-items: center;
-}
-
-.v31-video-parameter-head,
-.v31-video-parameter-label {
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.v31-video-parameter-title,
-.v31-video-parameter-copy,
-.v31-video-parameter-error,
-.v31-video-estimate {
-  display: block;
-}
-
-.v31-video-parameter-title { color: #111827; font-size: 15px; font-weight: 700; }
-.v31-video-parameter-copy { margin-top: 4px; color: #697386; font-size: 10px; }
-.v31-video-parameter-status { color: #13795b; font-size: 10px; }
-.v31-video-parameter-error { margin-top: 10px; color: #c2413b; font-size: 11px; }
-.v31-video-model-scroll { width: 100%; margin-top: 12px; white-space: nowrap; }
-.v31-video-model-row { display: inline-flex; padding-right: 4px; gap: 8px; }
-
-.v31-video-model-button,
-.v31-video-option-button {
-  width: auto;
-  min-width: 64px;
-  margin: 0;
-  padding: 0 12px;
-  border: 1px solid #d9e0ff;
-  border-radius: 9px;
-  color: #4b5563;
-  background: #f8f9ff;
-  font-size: 11px;
-  line-height: 32px;
-}
-
-.v31-video-model-button::after,
-.v31-video-option-button::after { border: 0; }
-.v31-video-model-button.is-active,
-.v31-video-option-button.is-active { color: #ffffff; border-color: #13795b; background: #13795b; }
-.v31-video-parameter-field { margin-top: 14px; }
-.v31-video-parameter-label { margin-bottom: 8px; color: #374151; font-size: 12px; font-weight: 600; }
-.v31-video-option-row { flex-wrap: wrap; gap: 8px; }
-
-.v31-video-number-input {
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid #d9e0ff;
-  border-radius: 9px;
-  color: #111827;
-  background: #f8f9ff;
-  font-size: 12px;
-}
-
-.v31-video-estimate { margin-top: 13px; color: #697386; font-size: 11px; }
-.v31-video-estimate.strong { color: #13795b; font-weight: 700; }
-.v31-video-estimate.error { color: #c2413b; }
 
 .v31-video-mode-switch {
   display: flex;
@@ -5320,14 +5431,11 @@ onBackPress(() => {
 .guest-browse-button { flex: 0 0 auto; min-width: 92px; margin: 0; padding: 0 12px; border: 0; border-radius: 10px; color: #fff; background: #4a6bff; font-size: 12px; line-height: 36px; }
 .guest-browse-button::after { display: none; }
 
-.mini-workbench.video-generation-screen { min-height: 100vh; padding: 8px 12px calc(30px + env(safe-area-inset-bottom)); background: #f5f7fb; }
-.video-generation-screen .role-content { margin-top: 10px; }
-.video-generation-screen .section-stack { gap: 12px; }
-.video-generation-screen .video-generation-nav { min-height: 54px; padding-right: var(--capsule-right-space, 0px); box-sizing: border-box; }
-.video-generation-screen .v31-back-button { width: 38px; min-width: 38px; height: 38px; border-color: #e3e7f0; background: #fff; }
-.video-generation-screen .v31-subpage-title { font-size: 18px; }
-.video-generation-screen .v31-subpage-copy { margin-top: 2px; color: #7c8497; font-size: 10px; }
-
+@media (max-width: 340px) {
+  .v31-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .v31-hero-row { grid-template-columns: 1fr 1fr; }
+  .v31-orange-button { grid-column: 1 / -1; }
+}
 .video-safety-banner,
 .video-prompt-card,
 .video-reference-card,
@@ -5402,11 +5510,45 @@ onBackPress(() => {
 .video-primary-generate.disabled { opacity: 0.62; box-shadow: none; }
 .video-generation-error { margin: -5px 4px 0; }
 
-@media (max-width: 340px) {
-  .v31-tool-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .v31-hero-row { grid-template-columns: 1fr 1fr; }
-  .v31-orange-button { grid-column: 1 / -1; }
-  .video-basic-grid { gap: 4px; }
-  .video-basic-tile { padding-right: 5px; padding-left: 5px; }
+.video-model-sheet-list { max-height: 58vh; }
+.video-model-sheet-item {
+  display: flex;
+  width: 100%;
+  min-height: 64px;
+  margin: 0 0 10px;
+  padding: 12px 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e5e9f3;
+  border-radius: 14px;
+  background: #fbfcfe;
+  text-align: left;
+  line-height: normal;
+}
+.video-model-sheet-item::after { display: none; }
+.video-model-sheet-item.active {
+  border-color: #9eb0ff;
+  background: #f3f5ff;
+}
+.video-model-sheet-copy { min-width: 0; flex: 1; }
+.video-model-sheet-title {
+  display: block;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+}
+.video-model-sheet-subtitle {
+  display: block;
+  margin-top: 6px;
+  color: #7a8499;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.video-model-sheet-check {
+  flex: 0 0 auto;
+  color: #5369e8;
+  font-size: 16px;
+  font-weight: 700;
 }
 </style>

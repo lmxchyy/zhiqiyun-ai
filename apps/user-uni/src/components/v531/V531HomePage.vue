@@ -388,7 +388,7 @@ const props = defineProps<{
   allowedCreationModes?: CreationMode[];
 }>();
 type CreationMode =
-  "image" | "video" | "ppt" | "infographic" | "review" | "agent";
+  "image" | "video" | "ppt" | "infographic" | "review" | "agent" | "montage";
 type CompactCapabilityTone =
   "blue" | "red" | "orange" | "green" | "purple" | "dark";
 type CompactCapability = {
@@ -423,7 +423,7 @@ const greeting = computed(() => {
         : "晚上好";
 });
 const isModeAllowed = (mode: CreationMode) =>
-  (props.allowedCreationModes || ["image", "infographic"]).includes(mode);
+  (props.allowedCreationModes || ["image", "infographic", "video", "montage"]).includes(mode);
 const quickActionsSource = [
   { label: "宣传海报", mode: "image" },
   { label: "招商PPT", mode: "ppt" },
@@ -440,6 +440,7 @@ const heroToolsSource: Array<{
   tone: "blue" | "red" | "orange" | "green" | "purple";
 }> = [
   { label: "AI 设计", icon: "设", mode: "image", tone: "blue" },
+  { label: "自由P图", icon: "图", mode: "infographic", tone: "orange" },
   { label: "AI 视频", icon: "视", mode: "video", tone: "red" },
   { label: "PPT 生成", icon: "P", mode: "ppt", tone: "orange" },
   { label: "知识库", icon: "库", mode: "agent", tone: "green" },
@@ -535,7 +536,7 @@ const employeeItems = computed(() =>
 const inspirationCategories = ref<InspirationCategory[]>([]);
 const inspirationTabs = computed(() => [
   { id: "recommend", code: "", name: "推荐", sort: 999 },
-  ...inspirationCategories.value.filter((item) => item.code !== "recommend"),
+  ...inspirationCategories.value.filter((item) => item.code !== "recommend" && item.code !== "video" && item.name !== "AI视频"),
 ]);
 const activeInspirationTab = ref("");
 const inspirationOffset = ref(0);
@@ -660,7 +661,7 @@ function submitPrompt() {
     return;
   }
   uni.setStorageSync("v531-creation-prompt", value);
-  const mode: CreationMode = /视频|短片|口播|分镜/.test(value) ? "video" : /ppt|演示|汇报|路演|方案/i.test(value) ? "ppt" : /智能体|agent|客服|销售助手|知识库/i.test(value) ? "agent" : /信息图|流程图|数据图|可视化/.test(value) ? "infographic" : "image";
+  const mode: CreationMode = /视频|短片|口播|分镜/.test(value) ? "video" : /ppt|演示|汇报|路演|方案/i.test(value) ? "ppt" : /智能体|agent|客服|销售助手|知识库/i.test(value) ? "agent" : /信息图|自由P图|流程图|数据图|可视化|修图|P图/.test(value) ? "infographic" : "image";
   uni.showToast({ title: "正在进入创作", icon: "none", duration: 700 });
   openCreationMode(mode);
 }
@@ -1269,6 +1270,14 @@ function showVoiceInputLimit() {
 .secondary-icon.office {
   color: #19b86d;
   background: #eafaf2;
+}
+.secondary-icon.montage {
+  color: #4a6bff;
+  background: #eef2ff;
+}
+.secondary-icon.video {
+  color: #e35d2b;
+  background: #fff1eb;
 }
 .secondary-copy,
 .compact-copy {

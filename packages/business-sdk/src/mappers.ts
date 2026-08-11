@@ -124,6 +124,9 @@ const draftOnlyParameterKeys = new Set([
   "restoredParams",
   "slideCount",
   "dynamic",
+  "language",
+	"n",
+  "ratio",
 ]);
 
 const videoParameterKeys = new Set([
@@ -313,12 +316,16 @@ export function generationParametersFromDraft(parameters?: Record<string, unknow
   };
   const sourceAssetId = result.sourceAssetId;
   const sourceTaskId = result.sourceTaskId;
+  const ratio = result.ratio;
   for (const key of draftOnlyParameterKeys) delete result[key];
   if (typeof sourceAssetId === "string" && sourceAssetId.trim()) {
     result.sourceReferenceAssetId = sourceAssetId.trim();
   }
   if (typeof sourceTaskId === "string" && sourceTaskId.trim()) {
     result.sourceReferenceTaskId = sourceTaskId.trim();
+  }
+  if (result.aspect_ratio === undefined && typeof ratio === "string" && ratio.trim()) {
+    result.aspect_ratio = ratio.trim();
   }
   for (const [key, value] of Object.entries(result)) {
     if (value === undefined) delete result[key];
@@ -400,6 +407,9 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
           ...(supportedParameterKeys.includes("aspect_ratio") ? { aspect_ratio: aspectRatio } : {}),
           ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" ? { first_frame: firstFrame } : {}),
+          ...(videoMode === "IMAGE_TO_VIDEO" && capabilities.maxReferenceImages > 1 && !capabilities.supportsLastFrame
+            ? { image_urls: allImageURLs }
+            : {}),
           ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),
         };
       })()
@@ -422,13 +432,14 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
   };
 }
 
-export async function confirmResolvedVideoModel(
+export function confirmResolvedVideoModel(
   requestedModel: string,
   resolvedModel: string,
   confirmSwitch: (message: string) => Promise<boolean>,
-): Promise<string | null> {
+): string | Promise<string | null> {
   if (!resolvedModel || resolvedModel === requestedModel) return resolvedModel || requestedModel;
-  return await confirmSwitch(`当前模型不可用，是否切换为 ${resolvedModel}？`) ? resolvedModel : null;
+  return confirmSwitch(`当前模型不可用，是否切换为 ${resolvedModel}？`)
+    .then(confirmed => confirmed ? resolvedModel : null);
 }
 
 export function profileFromAuth(auth: AuthResponse, points = 0): UserProfile {

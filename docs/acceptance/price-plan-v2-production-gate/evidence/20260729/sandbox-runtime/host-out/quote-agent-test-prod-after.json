@@ -1,0 +1,26 @@
+{
+  "quoteId": "sha256:8b2c2f83ee5cb03d",
+  "planId": "plan_agent_join_996",
+  "planVersionId": "plan_version_agent_996_v1",
+  "pricePlanId": "price_plan_20260728212634000000000_2ec1c485",
+  "name": "代理1元测试",
+  "amountCent": 100,
+  "originalAmountCent": 100,
+  "currency": "CNY",
+  "giftPoints": 0,
+  "giftTokens": 0,
+  "environment": "PRODUCTION",
+  "expiresAt": "2026-07-28T23:39:56.223641201Z",
+  "entitlements": {
+    "agentLevel": "AGENT",
+    "basePointsAmount": 0,
+    "baseTokenAmount": 20000,
+    "durationDays": 0,
+    "pointsAmount": 0,
+    "pricePlanGiftPoints": 0,
+    "pricePlanGiftTokens": 0,
+    "tokenAmount": 20000,
+    "tokenGrantAmount": 20000
+  },
+  "testOnly": true
+}

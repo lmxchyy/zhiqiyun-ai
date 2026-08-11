@@ -1,0 +1,22 @@
+﻿{
+  "step": "I",
+  "checkedAt": "2026-07-26T21:17:31Z",
+  "changeRequest": "CR-2026-OC-008",
+  "host": "ai.zs-kjhn.cn",
+  "database": "zhiqiyun",
+  "conclusion": "WINDOW_EXECUTED_PREFLIGHT_PASS",
+  "preflightPassed": true,
+  "appUpdated": false,
+  "rolloutStillShadow": true,
+  "schedulersEnabled": false,
+  "detail": "Approved production window completed: pre-migrate backup, migrations 079-096, publish seed, finance dual-control. Production readonly Preflight all checks passed. Application was not restarted or upgraded. Canary/whitelist/schedulers/real payments remain out of scope.",
+  "windowLogDir": "/root/cr-2026-oc-008-20260726T211654Z",
+  "preMigrateBackupSha256": "9f135f8059d0a0e3d8b50edb9aedf026bd616b829ef22cc7e0d2222179a1d254",
+  "financeSubmitterId": "98b945ba-878d-4c40-ae28-20ea3da1a6a5",
+  "financeApproverId": "e7af2217-3e0b-4ce8-b29c-7f74a1a4091f",
+  "artifacts": {
+    "preflight": "E:\\xianzhi-rehearsal\\reports\\step-g-post-window-preflight.json",
+    "applyLog": "E:\\xianzhi-rehearsal\\reports\\prod-window-apply.log",
+    "checklist": "docs/分润规则/知启云AI渠道生态中心V1.3.2_第8批生产解阻准备清单.md"
+  }
+}

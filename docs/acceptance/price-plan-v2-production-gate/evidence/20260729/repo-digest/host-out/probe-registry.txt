@@ -1,0 +1,79 @@
+CID=6d6f6a5ae48d
+CONTAINER_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+CONFIG_IMAGE=local/xianzhi-ai-platform:a39485ef1
+=== IMAGE INSPECT ===
+Id=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+RepoTags=["local/xianzhi-ai-platform:a39485ef1","local/xianzhi-ai-platform:git-a39485ef1"]
+RepoDigests=[]
+Created=2026-07-29T06:36:31.939995297+08:00
+Architecture=amd64
+Os=linux
+=== FLAGS ===
+true
+true
+true
+production
+=== ENV IMAGE ===
+XIANZHI_IMAGE=local/xianzhi-ai-platform
+IMAGE_TAG=a39485ef1
+=== DOCKER AUTH ===
+NO_DOCKER_CONFIG
+=== LOCAL TAGS ===
+local/xianzhi-ai-platform:a39485ef1	1bd6777d671b	<none>
+local/xianzhi-ai-platform:git-a39485ef1	1bd6777d671b	<none>
+local/xianzhi-ai-platform:f8a7632b5	428182fcb9f9	<none>
+local/xianzhi-ai-platform:git-f8a7632b5	428182fcb9f9	<none>
+local/xianzhi-ai-platform:3d0c0e032	ead396384418	<none>
+local/xianzhi-ai-platform:git-3d0c0e032	ead396384418	<none>
+local/xianzhi-ai-platform:ccad94057	71f110f7123b	<none>
+local/xianzhi-ai-platform:27dde3b4	234807478f1e	<none>
+local/xianzhi-ai-platform:7695c8ae	234807478f1e	<none>
+local/xianzhi-ai-platform:0649ca7b	a0f23af10062	<none>
+local/xianzhi-ai-platform:fd0da940	27c9f202af2a	<none>
+local/xianzhi-ai-platform:09053f04	ba349b1a8630	<none>
+local/xianzhi-ai-platform:b6503627	07bf9be5b7bd	<none>
+local/xianzhi-ai-platform:8d293637	c036ff9b0d6f	<none>
+local/xianzhi-ai-platform:9d946e1e	5e094ba88920	<none>
+local/xianzhi-ai-platform:2b5930dc	9108757219e4	<none>
+local/xianzhi-ai-platform:cb57087c	2d3490d933eb	<none>
+local/xianzhi-ai-platform:cb57087c-r092521	2d3490d933eb	<none>
+local/xianzhi-ai-platform:dbec02ff	f0bfbe1e5898	<none>
+local/xianzhi-ai-platform:e3051c9d	f0bfbe1e5898	<none>
+local/xianzhi-ai-platform:cb5e465f	504899246db5	<none>
+local/xianzhi-ai-platform:2a7e26d0	99eaa579bf3f	<none>
+local/xianzhi-ai-platform:8c3ea795	d452c89c50ed	<none>
+local/xianzhi-ai-platform:ddba59dd	d452c89c50ed	<none>
+local/xianzhi-ai-platform:2f794ef1	cfca6fa4d3de	<none>
+local/xianzhi-ai-platform:29061479	60a80b0b223a	<none>
+local/xianzhi-ai-platform:422c8d00	8bb711eba5d6	<none>
+local/xianzhi-ai-platform:69fce2e1	5fdd81c4252d	<none>
+local/xianzhi-ai-platform:04c95568	35d1280ef985	<none>
+local/xianzhi-ai-platform:d7846328	2d031ec2a9f5	<none>
+local/xianzhi-ai-platform:40ab226d	d757f8a951bd	<none>
+local/xianzhi-ai-platform:8334ee71	d757f8a951bd	<none>
+local/xianzhi-ai-platform:abb2c95b	67f9ba897227	<none>
+local/xianzhi-ai-platform:3886e3d9	1cadf12ac9e8	<none>
+local/xianzhi-ai-platform:pre-93fae2f5	1cadf12ac9e8	<none>
+local/xianzhi-ai-platform:09e143ed	7dd19a0f0a06	<none>
+local/xianzhi-ai-platform:88531403	fca5311b9968	<none>
+local/xianzhi-ai-platform:cf129f35	ad75e2609f91	<none>
+local/xianzhi-ai-platform:fcec149b	9cf611cea7c9	<none>
+local/xianzhi-ai-platform:3e4765fe	ad84c698a159	<none>
+=== GIT ===
+a39485ef159dabf348a71059a0e922af4894ab5a
+a39485e fix(payment): make deliver-notify oneshot run on Python 3.6
+=== COMPOSE IMAGE LINE ===
+14:    image: ${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}
+=== SANDBOX KEYS ===
+WECHAT_VIRTUAL_PAY_ENV=***
+WECHAT_VIRTUAL_PAY_OFFER_ID=***
+WECHAT_VIRTUAL_PAY_MODE=***
+WECHAT_VIRTUAL_PAY_APP_KEY=PRESENT
+WECHAT_VIRTUAL_PAY_SANDBOX_APP_KEY=PRESENT
+OFFER_ID= 1450579876
+PROD_APP_KEY_LEN= 32
+PROD_APP_KEY_EMPTY= False
+SANDBOX_APP_KEY_LEN= 32
+SANDBOX_APP_KEY_EMPTY= False
+MODE= short_series_goods
+=== DONE ===

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view v-if="!isLoggedIn && isRegisterRoute" class="login-shell register-shell">
     <view class="login-card">
       <image class="login-logo" :src="loginLogo" mode="aspectFit" />
@@ -406,12 +406,16 @@
             <view class="web-video-hero"><text>AI 视频创作</text><text>游客可先填写完整参数，提交生成时再登录。</text></view>
             <view class="web-video-form">
               <label><text>视频描述</text><textarea v-model="videoPrompt" maxlength="1000" placeholder="描述画面主体、动作、镜头运动、光线与风格" /></label>
-              <label><text>首帧图片 URL（可选）</text><input v-model.trim="videoFirstFrame" placeholder="https://..." /></label>
-              <label><text>尾帧图片 URL（可选）</text><input v-model.trim="videoLastFrame" placeholder="https://..." /></label>
-              <view><text>模型</text><view class="web-video-options"><button v-for="item in webVideoModels" :key="item" :class="['web-video-option', { active: videoModel === item }]" @click="videoModel = item">{{ item }}</button></view></view>
-              <view><text>画面比例</text><view class="web-video-options"><button v-for="item in ['16:9','9:16','1:1']" :key="item" :class="['web-video-option', { active: videoRatio === item }]" @click="videoRatio = item">{{ item }}</button></view></view>
-              <view><text>分辨率</text><view class="web-video-options"><button v-for="item in ['480p','720p','1080p']" :key="item" :class="['web-video-option', { active: videoResolution === item }]" @click="videoResolution = item">{{ item }}</button></view></view>
-              <view><text>时长</text><view class="web-video-options"><button v-for="item in [5,10,15]" :key="item" :class="['web-video-option', { active: videoDuration === item }]" @click="videoDuration = item">{{ item }} 秒</button></view></view>
+              <view v-if="videoModeSwitchVisible" class="video-mode-switch">
+                <button type="button" :class="{ active: videoMode === 'TEXT_TO_VIDEO' }" @click="switchVideoMode('TEXT_TO_VIDEO')">文生视频</button>
+                <button type="button" :class="{ active: videoMode === 'IMAGE_TO_VIDEO' }" @click="switchVideoMode('IMAGE_TO_VIDEO')">图生视频</button>
+              </view>
+              <label v-if="videoMode === 'IMAGE_TO_VIDEO'"><text>首帧图 URL（必填）</text><input v-model.trim="videoFirstFrame" placeholder="请输入 1 张首帧图 URL" /></label>
+              <label v-if="videoMode === 'IMAGE_TO_VIDEO' && selectedVideoCapabilities.supportsLastFrame"><text>尾帧图 URL（可选）</text><input v-model.trim="videoLastFrame" placeholder="当前模型支持尾帧图" /></label>
+              <view><text>模型</text><view class="web-video-options"><button v-for="item in webVideoModels" :key="item.code" :class="['web-video-option', { active: videoModel === item.code }]" @click="videoModel = item.code">{{ videoModelOptionLabel(item) }}</button></view></view>
+              <view><text>画面比例</text><view class="web-video-options"><button v-for="item in videoRatioOptions" :key="item" :class="['web-video-option', { active: videoRatio === item }]" @click="videoRatio = item">{{ item }}</button></view></view>
+              <view><text>分辨率</text><view class="web-video-options"><button v-for="item in videoResolutionOptions" :key="item" :class="['web-video-option', { active: videoResolution === item }]" @click="videoResolution = item">{{ item }}</button></view></view>
+              <view><text>时长</text><view class="web-video-options"><button v-for="item in videoDurationOptions" :key="item" :class="['web-video-option', { active: videoDuration === item }]" @click="videoDuration = item">{{ item }} 秒</button></view></view>
               <button class="web-video-submit" :disabled="videoSubmitting || !videoPrompt.trim()" @click="submitWebVideoGeneration">{{ videoSubmitting ? '正在提交…' : '生成视频' }}</button>
               <text v-if="videoError" class="web-video-error">{{ videoError }}</text>
             </view>
@@ -821,7 +825,7 @@
           <view class="membership-head">
             <view>
               <text class="membership-title">选择身份、充值与订阅</text>
-              <text class="membership-subtitle">身份包独立于充值和订阅，积分有效期为 2 年</text>
+              <text class="membership-subtitle">身份包独立于充值和订阅，积分有效期以钱包记录为准</text>
             </view>
             <view class="current-subscription-card">
               <view class="current-subscription-copy">
@@ -1133,9 +1137,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, apiClient, authService, businessSdk } from "../api/client";
+import { normalizeVideoModelCapabilities } from "@xianzhi/business-sdk";
+import type { VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
 import { openLegalDocument } from "../features/legal/navigation";
 import { pendingActions, requireAuth, resumePendingAction } from "../features/auth/gate";
 import { trackLogin } from "../features/auth/analytics";
+import {
+  DEFAULT_VIDEO_MODEL_CODE,
+  pickDefaultVideoModelCode,
+  sortVideoModelsByListPrice,
+  videoModelSubtitle as formatVideoModelSubtitle,
+} from "../features/generation/videoModelPricing";
 import xianzhiLogo from "../assets/xianzhi-ai-logo.png";
 import loginLogo from "../assets/zhiqiyun-logo-transparent.png";
 
@@ -1549,6 +1561,7 @@ const webVideoDraftKey = "zhiqiyun:web:video-guest-draft";
 const webVideoDraftLifetime = 30 * 60 * 1000;
 
 interface WebVideoDraft {
+  videoMode: VideoGenerationMode;
   prompt: string;
   firstFrame: string;
   lastFrame: string;
@@ -1581,28 +1594,125 @@ function readWebVideoDraft(): Partial<WebVideoDraft> {
 }
 
 const initialWebVideoDraft = readWebVideoDraft();
+const initialVideoMode = String(initialWebVideoDraft.videoMode || "").toUpperCase();
+const legacyVideoDraftHadImages = !initialVideoMode && Boolean(initialWebVideoDraft.firstFrame || initialWebVideoDraft.lastFrame);
 const videoPrompt = ref(String(initialWebVideoDraft.prompt || ""));
-const videoFirstFrame = ref(String(initialWebVideoDraft.firstFrame || ""));
-const videoLastFrame = ref(String(initialWebVideoDraft.lastFrame || ""));
-const videoModel = ref(String(initialWebVideoDraft.model || "mock-video"));
+const videoMode = ref<VideoGenerationMode>(initialVideoMode === "IMAGE_TO_VIDEO" ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO");
+const videoFirstFrame = ref(initialVideoMode === "IMAGE_TO_VIDEO" ? String(initialWebVideoDraft.firstFrame || "") : "");
+const videoLastFrame = ref(initialVideoMode === "IMAGE_TO_VIDEO" ? String(initialWebVideoDraft.lastFrame || "") : "");
+const videoModel = ref(String(initialWebVideoDraft.model || ""));
 const videoRatio = ref(String(initialWebVideoDraft.ratio || "16:9"));
 const videoResolution = ref(String(initialWebVideoDraft.resolution || "720p"));
 const videoDuration = ref(Number(initialWebVideoDraft.duration || 5));
 const videoClientRequestId = ref(String(initialWebVideoDraft.clientRequestId || createVideoClientRequestId()));
 const videoTask = ref<GenerationTask | null>(null);
 const videoSubmitting = ref(false);
-const videoError = ref("");
+const videoError = ref(legacyVideoDraftHadImages ? "旧视频草稿未记录生成模式，已按文生视频安全加载，历史图片未提交" : "");
 let videoPromptTracked = false;
 let videoGenerationResumedAfterLogin = false;
 const webVideoModels = computed(() => {
-  const available = models.value
-    .map(item => item.code)
-    .filter(code => /video|seedance|veo|sora|wan/i.test(code));
-  return available.length ? available : ["mock-video", "seedance-fast-2.0", "doubao-seedance-2.0"];
+  return sortVideoModelsByListPrice(models.value.filter(item => {
+    const capabilities = Array.isArray(item.capabilities)
+      ? item.capabilities.map(value => String(value).toUpperCase())
+      : [];
+    return capabilities.includes("TEXT_TO_VIDEO")
+      || capabilities.includes("IMAGE_TO_VIDEO")
+      || Boolean(item.videoCapabilities);
+  }));
 });
+function videoModelOptionLabel(item: ModelInfo) {
+  const title = String(item.displayName || item.name || item.code || "").trim() || "视频模型";
+  const subtitle = formatVideoModelSubtitle(item);
+  return subtitle ? `${title} · ${subtitle}` : title;
+}
+const selectedVideoModel = computed(() => webVideoModels.value.find(item => item.code === videoModel.value));
+const selectedVideoCapabilities = computed<VideoModelCapabilities>(() => {
+  const item = selectedVideoModel.value as (ModelInfo & { video_capabilities?: unknown }) | undefined;
+  return normalizeVideoModelCapabilities(item?.videoCapabilities || item?.video_capabilities);
+});
+const videoModeSwitchVisible = computed(
+  () => selectedVideoCapabilities.value.supportsTextToVideo && selectedVideoCapabilities.value.supportsImageToVideo,
+);
+const videoRatioOptions = computed(() => selectedVideoCapabilities.value.supportedAspectRatios.length
+  ? selectedVideoCapabilities.value.supportedAspectRatios
+  : [videoRatio.value]);
+const videoResolutionOptions = computed(() => selectedVideoCapabilities.value.supportedResolutions.length
+  ? selectedVideoCapabilities.value.supportedResolutions
+  : [videoResolution.value]);
+const videoDurationOptions = computed(() => {
+  const values = selectedVideoCapabilities.value.supportedDurations
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value > 0);
+  return values.length ? values : [videoDuration.value];
+});
+
+function applySelectedVideoCapabilities(capabilities: VideoModelCapabilities, notify: boolean) {
+  const previousMode = videoMode.value;
+  if (previousMode === "TEXT_TO_VIDEO" && !capabilities.supportsTextToVideo) {
+    videoMode.value = capabilities.supportsImageToVideo ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO";
+  } else if (previousMode === "IMAGE_TO_VIDEO" && !capabilities.supportsImageToVideo) {
+    videoMode.value = capabilities.supportsTextToVideo ? "TEXT_TO_VIDEO" : "IMAGE_TO_VIDEO";
+  }
+  if (videoMode.value === "TEXT_TO_VIDEO") {
+    videoFirstFrame.value = "";
+    videoLastFrame.value = "";
+  } else if (!capabilities.supportsLastFrame) {
+    videoLastFrame.value = "";
+  }
+  if (capabilities.supportedAspectRatios.length && !capabilities.supportedAspectRatios.includes(videoRatio.value)) {
+    videoRatio.value = capabilities.supportedAspectRatios[0];
+  }
+  if (capabilities.supportedResolutions.length && !capabilities.supportedResolutions.includes(videoResolution.value)) {
+    videoResolution.value = capabilities.supportedResolutions[0];
+  }
+  const durations = capabilities.supportedDurations.map(Number).filter(value => Number.isFinite(value) && value > 0);
+  if (durations.length && !durations.includes(videoDuration.value)) videoDuration.value = durations[0];
+  if (notify && previousMode !== videoMode.value) {
+    const message = videoMode.value === "TEXT_TO_VIDEO"
+      ? "当前模型不支持图生视频，已切换为文生视频"
+      : "当前模型不支持文生视频，已切换为图生视频";
+    videoError.value = message;
+    uni.showToast({ title: message, icon: "none" });
+  }
+}
+
+function switchVideoMode(mode: VideoGenerationMode) {
+  const capabilities = selectedVideoCapabilities.value;
+  const supported = mode === "TEXT_TO_VIDEO"
+    ? capabilities.supportsTextToVideo
+    : capabilities.supportsImageToVideo;
+  if (!supported) {
+    const message = mode === "TEXT_TO_VIDEO" ? "当前模型不支持文生视频" : "当前模型不支持图生视频";
+    videoError.value = message;
+    uni.showToast({ title: message, icon: "none" });
+    return;
+  }
+  if (videoMode.value === mode) return;
+  videoMode.value = mode;
+  videoFirstFrame.value = "";
+  videoLastFrame.value = "";
+  videoError.value = "";
+}
+
+watch(webVideoModels, available => {
+  if (!available.length) {
+    videoModel.value = "";
+    return;
+  }
+  if (!available.some(item => item.code === videoModel.value)) {
+    videoModel.value = pickDefaultVideoModelCode(available.map(item => item.code), DEFAULT_VIDEO_MODEL_CODE);
+  }
+}, { immediate: true });
+
+watch(
+  [videoModel, selectedVideoCapabilities],
+  ([model, capabilities], previous) => applySelectedVideoCapabilities(capabilities, Boolean(model && previous?.[0] && previous[0] !== model)),
+  { deep: true, immediate: true },
+);
 
 function persistWebVideoDraft() {
   const draft: WebVideoDraft = {
+    videoMode: videoMode.value,
     prompt: videoPrompt.value,
     firstFrame: videoFirstFrame.value,
     lastFrame: videoLastFrame.value,
@@ -1629,7 +1739,7 @@ function clearWebVideoDraft() {
 }
 
 watch(
-  [videoPrompt, videoFirstFrame, videoLastFrame, videoModel, videoRatio, videoResolution, videoDuration],
+  [videoPrompt, videoMode, videoFirstFrame, videoLastFrame, videoModel, videoRatio, videoResolution, videoDuration],
   persistWebVideoDraft,
 );
 watch(videoPrompt, value => {
@@ -1669,7 +1779,8 @@ const newApiProviderTemplateId = ref(apiProviderTemplates[0].id);
 const apiSettingsMode = ref<"edit" | "add" | "recommend">("edit");
 const newApiProviderDraft = ref<ApiProviderForm>(createApiProviderForm(apiProviderTemplates[0].provider));
 const selectedBillingCycle = ref<BillingCycleId>("monthly");
-const wirelessCanvasSrc = "/static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi";
+const wirelessCanvasBaseURL = String((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/").replace(/\/?$/, "/");
+const wirelessCanvasSrc = `${wirelessCanvasBaseURL}static/smart-canvas.html?id=xianzhi-wireless-canvas&project=xianzhi`;
 const wirelessCanvasFrameSrc = ref("");
 const wirelessCanvasFrame = ref<HTMLIFrameElement | null>(null);
 const wirelessCanvasFrameLoaded = ref(false);
@@ -2318,6 +2429,7 @@ async function submitWebVideoGeneration() {
       action: "generate_video",
       route: "/app/video-generation",
       payload: {
+        videoMode: videoMode.value,
         model: videoModel.value,
         ratio: videoRatio.value,
         resolution: videoResolution.value,
@@ -2340,29 +2452,35 @@ async function submitWebVideoGeneration() {
   try {
     const firstFrame = videoFirstFrame.value.trim();
     const lastFrame = videoLastFrame.value.trim();
-    const task = await apiClient.request<GenerationTask, Record<string, unknown>>("/api/v1/generation-tasks", {
-      method: "POST",
-      auth: "required",
-      retryOnUnauthorized: false,
-      headers: { "Idempotency-Key": clientRequestId },
-      body: {
-        clientRequestId,
-        module_code: "video_generation",
-        type: firstFrame ? "IMAGE_TO_VIDEO" : "TEXT_TO_VIDEO",
-        prompt,
-        model: videoModel.value || "mock-video",
-        params: {
-          duration: videoDuration.value,
-          resolution: videoResolution.value,
-          aspect_ratio: videoRatio.value,
-          ...(firstFrame ? {
-            image_url: firstFrame,
-            image_urls: [firstFrame],
-            first_frame: firstFrame,
-            referenceImages: [{ name: "first-frame", url: firstFrame }],
-          } : {}),
-          ...(lastFrame ? { last_frame: lastFrame } : {}),
-        },
+    if (!selectedVideoModel.value) throw new Error("请选择后端已配置的视频模型");
+    if (videoMode.value === "TEXT_TO_VIDEO" && (firstFrame || lastFrame)) {
+      throw new Error("文生视频模式不能携带首帧图或尾帧图");
+    }
+    if (videoMode.value === "IMAGE_TO_VIDEO" && !firstFrame) {
+      throw new Error("图生视频模式必须填写首帧图");
+    }
+    if (lastFrame && !selectedVideoCapabilities.value.supportsLastFrame) {
+      throw new Error("当前模型不支持尾帧图");
+    }
+    const task = await businessSdk.generation.createTask({
+      mode: "video",
+      videoMode: videoMode.value,
+      prompt,
+      model: selectedVideoModel.value.code,
+      style: "cinematic",
+      size: videoRatio.value,
+      quality: videoResolution.value,
+      count: 1,
+      duration: videoDuration.value,
+      referenceImages: [],
+      firstFrame: videoMode.value === "IMAGE_TO_VIDEO" ? firstFrame : undefined,
+      lastFrame: videoMode.value === "IMAGE_TO_VIDEO" ? lastFrame : undefined,
+      videoCapabilities: selectedVideoCapabilities.value,
+      clientRequestId,
+      parameters: {
+        ...(selectedVideoCapabilities.value.supportedParameters?.includes("generate_audio")
+          ? { generate_audio: true }
+          : {}),
       },
     });
     videoTask.value = task;
@@ -3689,6 +3807,31 @@ async function loginWithWechatPhoneNumber(event: unknown) {
   border-radius: 20px;
   background: #fff;
   box-shadow: 0 18px 50px rgba(15, 23, 42, .07);
+}
+
+.video-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid #cfe6d9;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #eef8f1, #fff8e8);
+}
+
+.video-mode-switch button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #315a4a;
+  font-weight: 800;
+}
+
+.video-mode-switch button.active {
+  background: linear-gradient(135deg, #13795b, #1ba978);
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(19, 121, 91, .22);
 }
 
 .web-video-form label,
