@@ -7,3 +7,5 @@
 * 所有请求统一封装 API Client，页面不直接散写 `uni.request`
 
 一次一个模块，一次一个组件，不改无关代码，完成后输出变更说明。
+
+防回归：遵守 `.ai/CodexPrompt.md` 与 `docs/regression/protected-surfaces.md`；改页面用 `.ai/前端工人CodexPrompt.md`，发版用 `.ai/发版经理CodexPrompt.md`；做完勾选 protected-surfaces。

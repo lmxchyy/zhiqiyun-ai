@@ -1,0 +1,7 @@
+=== PRECHECK 2026-07-29 05:34:50 +0800 ===
+health=healthy status=running
+false
+false
+false
+production
+WECHAT_VIRTUAL_PAY_ENV=production

@@ -5,6 +5,14 @@
 • 请求统一走 API Client，页面禁止直接散写 uni.request
 后续开发和代码评审默认按此执行，除非你明确调整。
 
+防回归：
+• 主提示：`.ai/CodexPrompt.md`（只做当前事、别整页重写、做完确认旧功能还在并勾选保护面）
+• 不能丢的功能清单：`docs/regression/protected-surfaces.md`（含网页侧边栏点数、首页/生图首屏、小程序首页模板、登录落用户首页、游客浏览入口、视频模型/参数/预估积分/Grok Preview 套餐与通道/中文错误、视频下载强制可分享 mp4、自由P图首页主能力文案与全页、小程序视频灵感临时下架、作品列表等）
+• 改页面遵守：`.ai/前端工人CodexPrompt.md`
+• 发版遵守：`.ai/发版经理CodexPrompt.md`
+• 触及 protected-surfaces 中 W1–W3 / M1 / M2 / M3 / M6 / M7 时，必须保持对应 Go / Node 回归绿；禁止把 `/points/account` 的 `total` 退回 `available+frozen`，禁止把首页/生图首屏默认 limit 改回 120/300；禁止 Seedance 默认预估退回约 90（应对齐 5s/720p=600）；禁止从套餐/通道去掉 `grok-imagine-video-1.5-preview` 或 `seedance-fast-2.0`；禁止视频下载原样下发 `.m4v`；禁止视频模型选择列表改回非按价升序或用未接线静态模型压过已接线廉价模型；禁止把生视频默认选中从 `grok-imagine-1.5-video` 改回按价首项/Seedance；禁止自由P图入口回退「信息图」/「AI办公」、移出首页主能力区、或再叠外层壳；禁止改掉「开始生成」`#ff6b00`；禁止登录默认跳代理商页；禁止「暂不登录」入口退化成灰色弱链；禁止在未恢复类目资质前把小程序视频灵感详情播放器重新开回去。
+• 生产机禁止长期未提交热修；dirty tree 不得绕过 `deploy.sh`。
+
 企业 Connector 约束：
 • 飞书、后续钉钉和企业微信必须通过统一 Connector 抽象接入，禁止把平台 SDK 类型写入生图、视频或 PPT 核心业务。
 • 外部消息只能通过 connector_key 解析企业，禁止接受消息体传入的 tenant_id 或 enterprise_id 作为租户依据。

@@ -1,0 +1,11 @@
+{
+  "_redaction": {
+    "at": "2026-07-29T02:39:44.653Z",
+    "policy": "P0-NO-KEY-ROTATION",
+    "note": "All Config/ContainerConfig Env values replaced with ***REDACTED***; original plaintext removed from working tree. Git history may still contain prior plaintext until history purge.",
+    "envEntriesSeen": 134,
+    "sensitiveKeyNamesSeen": 25,
+    "valuesPrinted": false,
+    "keyRotation": "DECLINED_BY_OWNER"
+  }
+}

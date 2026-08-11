@@ -162,9 +162,12 @@ sequenceDiagram
 - `GET /api/v1/admin/payment/virtual/wallet-ledger`
 - `GET /api/v1/admin/payment/virtual/failures`
 - `POST /api/v1/admin/payment/virtual/orders/:orderNo/grant`
+- `POST /api/v1/admin/payment/virtual/orders/:orderNo/notify-provide-goods`
 - `GET /api/v1/admin/payment/virtual/refunds`
 
 概览接口只返回“是否已配置”，任何管理接口都不会返回完整 AppKey、沙箱 AppKey、session_key 或小程序 Secret。人工补发只调用统一权益服务，不能直接改余额。
+
+`notify-provide-goods` 仅调用微信 `/xpay/notify_provide_goods` 将已 `PAID`+`SUCCESS` 的现金单标为已发货；不发放、不重发权益。查单补偿履约成功后也会自动调用（`xpay_goods_deliver_notify` 推送成功路径不需要）。运维一次性回补可用 `tools/notify-provide-goods-oneshot.sh`。
 
 ## 6. 环境变量
 

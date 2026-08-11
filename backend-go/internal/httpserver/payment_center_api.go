@@ -36,9 +36,31 @@ func newPaymentCenterAPI(cfg config.Config, store platformStore, sessions authSe
 	mock := paymentapp.NewMockPaymentProvider(cfg.Environment)
 	result.db = pgStore.db
 	result.mock = mock
-	result.service = paymentapp.NewService(pgStore.db, []paymentapp.PaymentProvider{mock}, unifiedPaymentCommissionHook)
+	result.service = paymentapp.NewService(pgStore.db, []paymentapp.PaymentProvider{mock}, unifiedPaymentCommissionHook,
+		paymentapp.WithPersonalPointGrantHook(newUnifiedPaymentPersonalPointGrantHook(pgStore.db)))
 	result.success = paymentapp.NewPaymentSuccessHandler(result.service)
 	return result
+}
+
+func newUnifiedPaymentPersonalPointGrantHook(db *sql.DB) paymentapp.PersonalPointGrantHook {
+	return func(ctx context.Context, tx *sql.Tx, request paymentapp.PersonalPointGrantRequest) (paymentapp.PersonalPointGrantResult, error) {
+		if tx == nil || db == nil {
+			return paymentapp.PersonalPointGrantResult{}, errors.New("personal point transaction is unavailable")
+		}
+		tenantID := strings.TrimSpace(request.TenantID)
+		if tenantID != "" && !strings.EqualFold(tenantID, "default") && !strings.EqualFold(tenantID, "tenant_default") && !strings.HasPrefix(strings.ToLower(tenantID), "personal:") {
+			return paymentapp.PersonalPointGrantResult{}, ErrPersonalPointContextMismatch
+		}
+		grant, err := grantPermanentPersonalPointsTx(ctx, tx, request.UserID, PointSource(request.Source), int(request.Points),
+			request.ReferenceType, request.ReferenceID, request.IdempotencyKey, request.GrantedAt)
+		if err != nil {
+			return paymentapp.PersonalPointGrantResult{}, err
+		}
+		return paymentapp.PersonalPointGrantResult{
+			AccountID: grant.Account.ID, UserID: grant.Account.UserID, AvailableBefore: int64(grant.AvailableBefore), AvailableAfter: int64(grant.AvailableAfter),
+			FrozenBefore: int64(grant.Account.Frozen), FrozenAfter: int64(grant.Account.Frozen),
+		}, nil
+	}
 }
 
 func unifiedPaymentCommissionHook(ctx context.Context, tx *sql.Tx, order paymentapp.Order) error {

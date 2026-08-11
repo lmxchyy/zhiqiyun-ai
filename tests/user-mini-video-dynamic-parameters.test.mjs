@@ -27,13 +27,19 @@ test("mini-program video page derives controls from model schema contract", () =
   assert.match(source, /videoBooleanParameterValue\('generate_audio'\)/);
 });
 
-test("model switch confirms before clearing an existing reference image", () => {
-  assert.ok(source.includes("当前模型不支持参考图，切换后将移除已上传图片，是否继续？"));
+test("model switch confirms before clearing or truncating reference images", () => {
+  assert.ok(source.includes("切换后只保留前"));
   const switchStart = source.indexOf("async function requestVideoModelSwitch");
   const switchEnd = source.indexOf("\n}", switchStart);
   const switchBody = source.slice(switchStart, switchEnd);
-  assert.ok(switchBody.includes("confirmVideoReferenceRemoval"));
+  assert.ok(switchBody.includes("confirmVideoReferenceRemoval(config)"));
   assert.ok(switchBody.indexOf("confirmVideoReferenceRemoval") < switchBody.indexOf("commitVideoModelConfig"));
+});
+
+test("video reference limit is model driven up to seven images", () => {
+  assert.match(source, /Math\.min\(7,\s*videoModelCapabilities\.value\.maxReferenceImages/);
+  assert.match(source, /creationReferencePaths\.value\.slice\(0,\s*referenceLimit\)/);
+  assert.match(source, /最多添加 \$\{creationReferenceLimit\.value\} 张视频参考图/);
 });
 
 test("model and parameter changes refresh a guarded point estimate", () => {
@@ -41,12 +47,22 @@ test("model and parameter changes refresh a guarded point estimate", () => {
   assert.ok(source.includes("scheduleVideoEstimate"));
   assert.ok(source.includes("businessSdk.generation.estimateVideo"));
   assert.ok(source.includes("预计消耗"));
+  assert.match(source, /预计 \$\{videoEstimate\.value\.estimatedPoints\} 积分/);
   assert.ok(source.includes("正式提交时以后端为准"));
 });
 
 test("video submission uses only the final editable parameter contract", () => {
-  assert.match(source, /buildVideoSubmissionParameters\(\s*videoParameterValues\.value,\s*videoParameterFields\.value/);
-  assert.ok(!source.includes("parameters: restoredCreationParams.value"));
+  const taskStart = source.indexOf("function createVideoGenerationTask");
+  const taskEnd = source.indexOf("function submitVideoCreationAfterSession", taskStart);
+  const taskBody = source.slice(taskStart, taskEnd);
+  assert.match(taskBody, /buildVideoSubmissionParameters\(videoParameterValues\.value, videoParameterFields\.value\)/);
+  assert.ok(!taskBody.includes("parameters: restoredCreationParams.value"));
+});
+
+test("video estimate and submission carry every selected reference image", () => {
+  assert.match(source, /params\.image_urls = \[\.\.\.creationReferencePaths\.value\]/);
+  assert.match(source, /uploadCreationReferenceImages\(creationReferencePaths\.value\)/);
+  assert.match(source, /referenceImages:\s*uploadedVideoReferences/);
 });
 
 test("reference upload visibility remains tied to real image-to-video support", () => {

@@ -76,14 +76,42 @@ func publicInspirationSummary(item inspirationTemplate) inspirationTemplate {
 	return item
 }
 
+// Mini program review currently lacks the 文娱-其他视频 category, so hide
+// video inspiration templates and the AI视频 category from that terminal.
+func inspirationHidesVideoContent(platform string) bool {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "", "miniprogram", "mp-weixin", "weixin", "wechat":
+		return true
+	default:
+		return false
+	}
+}
+
+func filterInspirationCategoriesForPlatform(items []inspirationCategory, platform string) []inspirationCategory {
+	if !inspirationHidesVideoContent(platform) {
+		return items
+	}
+	filtered := make([]inspirationCategory, 0, len(items))
+	for _, item := range items {
+		code := strings.ToLower(strings.TrimSpace(item.Code))
+		name := strings.TrimSpace(item.Name)
+		if code == "video" || name == "AI视频" {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 func (a inspirationAPI) categories(w http.ResponseWriter, r *http.Request) {
 	_, tenantID := a.optionalIdentity(r)
+	platform := firstNonEmptyString(strings.TrimSpace(r.URL.Query().Get("platform")), requestTerminal(r), "miniprogram")
 	items, err := a.repo.ListCategories(r.Context(), tenantID, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, map[string]any{"items": items})
+	writeJSON(w, map[string]any{"items": filterInspirationCategoriesForPlatform(items, platform)})
 }
 
 func (a inspirationAPI) featured(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +124,12 @@ func (a inspirationAPI) featured(w http.ResponseWriter, r *http.Request) {
 		limit = 10
 	}
 	seed, _ := strconv.Atoi(r.URL.Query().Get("seed"))
-	items, total, err := a.repo.ListTemplates(r.Context(), inspirationListFilter{TenantID: tenantID, UserID: userID, Category: strings.TrimSpace(r.URL.Query().Get("category")), Platform: firstNonEmptyString(strings.TrimSpace(r.URL.Query().Get("platform")), "miniprogram"), Featured: true, Published: true, Limit: limit, Seed: seed})
+	platform := firstNonEmptyString(strings.TrimSpace(r.URL.Query().Get("platform")), "miniprogram")
+	filter := inspirationListFilter{TenantID: tenantID, UserID: userID, Category: strings.TrimSpace(r.URL.Query().Get("category")), Platform: platform, Featured: true, Published: true, Limit: limit, Seed: seed}
+	if inspirationHidesVideoContent(platform) {
+		filter.ExcludeContentTypes = []string{"video"}
+	}
+	items, total, err := a.repo.ListTemplates(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -110,7 +143,17 @@ func (a inspirationAPI) featured(w http.ResponseWriter, r *http.Request) {
 func (a inspirationAPI) list(w http.ResponseWriter, r *http.Request) {
 	userID, tenantID := a.optionalIdentity(r)
 	page, pageSize := inspirationPageParams(r, 12)
-	items, total, err := a.repo.ListTemplates(r.Context(), inspirationListFilter{TenantID: tenantID, UserID: userID, Category: strings.TrimSpace(r.URL.Query().Get("category")), ContentType: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("contentType"))), Query: strings.TrimSpace(r.URL.Query().Get("q")), Platform: firstNonEmptyString(strings.TrimSpace(r.URL.Query().Get("platform")), "miniprogram"), Hot: strings.EqualFold(r.URL.Query().Get("hot"), "true"), Published: true, Limit: pageSize, Offset: (page - 1) * pageSize})
+	platform := firstNonEmptyString(strings.TrimSpace(r.URL.Query().Get("platform")), "miniprogram")
+	contentType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("contentType")))
+	if inspirationHidesVideoContent(platform) && contentType == "video" {
+		writeJSON(w, map[string]any{"items": []inspirationTemplate{}, "total": 0, "page": page, "pageSize": pageSize, "hasMore": false})
+		return
+	}
+	filter := inspirationListFilter{TenantID: tenantID, UserID: userID, Category: strings.TrimSpace(r.URL.Query().Get("category")), ContentType: contentType, Query: strings.TrimSpace(r.URL.Query().Get("q")), Platform: platform, Hot: strings.EqualFold(r.URL.Query().Get("hot"), "true"), Published: true, Limit: pageSize, Offset: (page - 1) * pageSize}
+	if inspirationHidesVideoContent(platform) {
+		filter.ExcludeContentTypes = []string{"video"}
+	}
+	items, total, err := a.repo.ListTemplates(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -174,6 +217,10 @@ func (a inspirationAPI) detail(w http.ResponseWriter, r *http.Request) {
 	}
 	platform := firstNonEmptyString(strings.TrimSpace(r.URL.Query().Get("platform")), requestTerminal(r), "miniprogram")
 	if len(item.Platforms) > 0 && !stringListContains(item.Platforms, platform) {
+		writeInspirationError(w, errInspirationNotFound)
+		return
+	}
+	if inspirationHidesVideoContent(platform) && strings.EqualFold(strings.TrimSpace(item.ContentType), "video") {
 		writeInspirationError(w, errInspirationNotFound)
 		return
 	}

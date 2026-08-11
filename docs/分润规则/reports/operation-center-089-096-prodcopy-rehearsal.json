@@ -1,0 +1,432 @@
+{
+  "startedAt": "2026-07-26T21:08:01.4376022Z",
+  "finishedAt": "2026-07-26T21:08:03.0979899Z",
+  "databaseName": "xz_rehearsal_prodcopy",
+  "inferredSchemaVersion": "088",
+  "backupReference": "prod-live-sanitized-20260726T210342Z",
+  "passed": true,
+  "checks": [
+    {
+      "name": "pre_migration_signatures",
+      "passed": true,
+      "detail": "089=false 090=false 091=false 092=false 093=false 094=false 095=false 096=false"
+    },
+    {
+      "name": "disk_space",
+      "passed": true,
+      "detail": "database_bytes=236698647 available_bytes=2879847370752 required_bytes=473397294"
+    },
+    {
+      "name": "required_extensions",
+      "passed": true,
+      "detail": "vector=0.8.5 pgcrypto=1.3"
+    },
+    {
+      "name": "transaction_and_lock_preflight",
+      "passed": true,
+      "detail": "long_transactions=0 waiting_locks=0"
+    },
+    {
+      "name": "backup_reference",
+      "passed": true,
+      "detail": "backup reference recorded"
+    },
+    {
+      "name": "post_migration_signatures",
+      "passed": true,
+      "detail": "089=true 090=true 091=true 092=true 093=true 094=true 095=true 096=true"
+    },
+    {
+      "name": "rollout_configuration_unchanged",
+      "passed": true,
+      "detail": "before=3b3335d9894758f546cfc57b86f63929 after=3b3335d9894758f546cfc57b86f63929"
+    },
+    {
+      "name": "commercial_rules_unchanged",
+      "passed": true,
+      "detail": "before=bd25237351734bd853046ca52a2a60ad after=bd25237351734bd853046ca52a2a60ad"
+    },
+    {
+      "name": "historical_orders_compatible",
+      "passed": true,
+      "detail": "before=47 after=47"
+    },
+    {
+      "name": "database_contracts",
+      "passed": true,
+      "detail": "checks=323 foreign_keys=75 triggers=16 runtime_projection=1"
+    }
+  ],
+  "migrations": [
+    {
+      "migration": "089-operation-center-lifecycle-refund-saga.sql",
+      "durationMillis": 731,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "090-operation-center-referral-eligibility.sql",
+      "durationMillis": 124,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "091-operation-center-referral-reward-grant.sql",
+      "durationMillis": 109,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "092-operation-center-referral-reward-release.sql",
+      "durationMillis": 24,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "093-operation-center-referral-reward-reversal.sql",
+      "durationMillis": 45,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "094-operation-center-refund-saga-orchestrator.sql",
+      "durationMillis": 15,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "095-payment-refund-adapter-query-verification.sql",
+      "durationMillis": 19,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    },
+    {
+      "migration": "096-operation-center-refund-management.sql",
+      "durationMillis": 136,
+      "waitingLocksBefore": 0,
+      "waitingLocksAfter": 0,
+      "lockRisk": "LOW"
+    }
+  ],
+  "relationSizesBefore": [
+    {
+      "relation": "xz_commission_wallet_accounts",
+      "bytes": 24576
+    },
+    {
+      "relation": "xz_commission_wallet_accounts_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_commission_wallet_accounts_tenant_id_beneficiary_type_be_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_commission_wallet_ledger",
+      "bytes": 40960
+    },
+    {
+      "relation": "xz_commission_wallet_ledger_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_commission_wallet_ledger_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_service_orders",
+      "bytes": 40960
+    },
+    {
+      "relation": "xz_operation_center_service_orders_order_id_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_service_orders_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_service_orders_tenant_id_order_no_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_centers",
+      "bytes": 81920
+    },
+    {
+      "relation": "xz_operation_centers_invite_code_key",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_operation_centers_pkey",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_operation_centers_user_id_key",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_referral_events",
+      "bytes": 40960
+    },
+    {
+      "relation": "xz_referral_events_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_events_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_events_source_order_id_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_reward_rule_version_tenant_id_rule_code_version_key",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_referral_reward_rule_versions",
+      "bytes": 65536
+    },
+    {
+      "relation": "xz_referral_reward_rule_versions_pkey",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_referral_rewards",
+      "bytes": 49152
+    },
+    {
+      "relation": "xz_referral_rewards_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_rewards_pkey",
+      "bytes": 8192
+    }
+  ],
+  "relationSizesAfter": [
+    {
+      "relation": "xz_commission_wallet_accounts",
+      "bytes": 24576
+    },
+    {
+      "relation": "xz_commission_wallet_accounts_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_commission_wallet_accounts_tenant_id_beneficiary_type_be_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_commission_wallet_ledger",
+      "bytes": 106496
+    },
+    {
+      "relation": "xz_commission_wallet_ledger_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_commission_wallet_ledger_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_manual_refund_events",
+      "bytes": 32768
+    },
+    {
+      "relation": "xz_operation_center_manual_refund_events_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_manual_refund_tenant_id_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_manual_refunds",
+      "bytes": 40960
+    },
+    {
+      "relation": "xz_operation_center_manual_refunds_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_refund_re_service_order_id_refund_task__key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_refund_reques_tenant_id_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_refund_request_events",
+      "bytes": 40960
+    },
+    {
+      "relation": "xz_operation_center_refund_request_events_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_refund_ta_service_order_id_refund_scope_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_refund_tasks",
+      "bytes": 106496
+    },
+    {
+      "relation": "xz_operation_center_refund_tasks_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_refund_tasks_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_review_ev_service_order_id_idempotency__key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_review_events",
+      "bytes": 49152
+    },
+    {
+      "relation": "xz_operation_center_review_events_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_review_events_tenant_id_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_service_orders",
+      "bytes": 81920
+    },
+    {
+      "relation": "xz_operation_center_service_orders_order_id_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_service_orders_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_service_orders_tenant_id_order_no_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_state_tra_entity_type_entity_id_idempot_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_center_state_transitions",
+      "bytes": 49152
+    },
+    {
+      "relation": "xz_operation_center_state_transitions_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_operation_centers",
+      "bytes": 81920
+    },
+    {
+      "relation": "xz_operation_centers_invite_code_key",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_operation_centers_pkey",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_operation_centers_user_id_key",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_referral_eligibilities",
+      "bytes": 65536
+    },
+    {
+      "relation": "xz_referral_eligibilities_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_eligibilities_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_eligibilities_referral_event_id_referral_rule_v_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_events",
+      "bytes": 40960
+    },
+    {
+      "relation": "xz_referral_events_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_events_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_events_source_order_id_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_reward_release_tasks",
+      "bytes": 57344
+    },
+    {
+      "relation": "xz_referral_reward_release_tasks_pkey",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_reward_release_tasks_referral_reward_id_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_reward_release_tasks_tenant_id_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_reward_rule_version_tenant_id_rule_code_version_key",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_referral_reward_rule_versions",
+      "bytes": 65536
+    },
+    {
+      "relation": "xz_referral_reward_rule_versions_pkey",
+      "bytes": 16384
+    },
+    {
+      "relation": "xz_referral_rewards",
+      "bytes": 90112
+    },
+    {
+      "relation": "xz_referral_rewards_idempotency_key_key",
+      "bytes": 8192
+    },
+    {
+      "relation": "xz_referral_rewards_pkey",
+      "bytes": 8192
+    }
+  ],
+  "rolloutFingerprintBefore": "3b3335d9894758f546cfc57b86f63929",
+  "rolloutFingerprintAfter": "3b3335d9894758f546cfc57b86f63929",
+  "ruleFingerprintBefore": "bd25237351734bd853046ca52a2a60ad",
+  "ruleFingerprintAfter": "bd25237351734bd853046ca52a2a60ad",
+  "historicalOrdersBefore": 47,
+  "historicalOrdersAfter": 47
+}

@@ -35,6 +35,14 @@ const errors = [];
 const groupIds = new Set();
 const sectionIds = new Set();
 const registeredPaths = new Map();
+const pricingModule = modules.find((module) => module.id === "pricePlanGovernance");
+if (!pricingModule) {
+  errors.push("缺少套餐与价格配置模块 pricePlanGovernance");
+} else {
+  if (pricingModule.path !== "/admin/catalog/price-plans") errors.push("pricePlanGovernance 浏览器路径必须为 /admin/catalog/price-plans");
+  if (pricingModule.permission !== "pricing:plan:view") errors.push("pricePlanGovernance 必须使用精确权限 pricing:plan:view");
+  if (pricingModule.domain) errors.push("pricePlanGovernance 不得归入 billing 或其他旧 domain");
+}
 const requiredArchitectureFiles = [
   "admin-vue/src/components/admin/AdminDataTable.vue",
   "admin-vue/src/components/admin/Customer360Center.vue",
@@ -53,6 +61,14 @@ for (const relativePath of requiredArchitectureFiles) {
 const appSource = fs.readFileSync(appPath, "utf8");
 for (const componentName of ["AdminDataTable", "Customer360Center", "OrderFulfillmentCenter", "GlobalCommandPalette"]) {
   if (!appSource.includes(componentName)) errors.push(`App.vue 尚未接入 ${componentName}`);
+}
+for (const pricingNavigationGuard of [
+  "canAccessAdminModule",
+  "authorizedAdminModuleId(moduleId)",
+  "enforceActiveAdminModuleAccess()",
+  "canNavigateToModule(moduleId)"
+]) {
+  if (!appSource.includes(pricingNavigationGuard)) errors.push(`套餐与价格配置缺少权限导航防线: ${pricingNavigationGuard}`);
 }
 const dataTableSource = fs.readFileSync(path.join(root, "admin-vue/src/components/admin/AdminDataTable.vue"), "utf8");
 for (const capability of ["保存当前视图", "列配置", "批量操作", "导出当前结果"]) {
@@ -102,6 +118,13 @@ for (const group of registry.adminNavigationGroups) {
       assigned.set(moduleId, section.id);
     }
   }
+}
+
+const pricingNavigation = registry.adminNavigationSectionForModule("pricePlanGovernance");
+if (!pricingNavigation) {
+  errors.push("pricePlanGovernance 缺少独立导航区块");
+} else if (pricingNavigation.section.moduleIds.length !== 1 || pricingNavigation.section.moduleIds[0] !== "pricePlanGovernance") {
+  errors.push("pricePlanGovernance 必须位于只包含自身的独立导航区块");
 }
 
 for (const moduleId of expectedAdminIds) {

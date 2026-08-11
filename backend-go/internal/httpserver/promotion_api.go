@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,14 +49,18 @@ type promotionCodeResponse struct {
 	IsPlaceholder bool   `json:"isPlaceholder"`
 	CacheKey      string `json:"cacheKey"`
 	ExpiresAt     string `json:"expiresAt"`
+	InviteToken   string `json:"inviteToken"`
+	InviterName   string `json:"inviterName"`
+	IdentityType  string `json:"identityType"`
 }
 
 type promotionContext struct {
-	Access     userRoleAccess
-	Data       adminPlatformData
-	User       adminUser
-	InviteCode string
-	RoleLabel  string
+	Access      userRoleAccess
+	Data        adminPlatformData
+	User        adminUser
+	InviteCode  string
+	InviteToken string
+	RoleLabel   string
 }
 
 func newPromotionAPI(store platformStore, sessions authSessionStore, rbac *userRBACAPI, cfg config.Config) *promotionAPI {
@@ -152,23 +157,30 @@ func (a *promotionAPI) miniProgramCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid mini program page"))
 		return
 	}
-	cacheKey := strings.Join([]string{ctx.Access.UserID, ctx.Access.TenantID, ctx.Access.CurrentRole, ctx.InviteCode, req.TemplateID, req.ActivityID}, "|")
+	cacheKey := strings.Join([]string{ctx.Access.UserID, ctx.Access.TenantID, ctx.Access.CurrentRole, ctx.InviteToken, req.TemplateID, req.ActivityID}, "|")
 	if !req.Invalidate {
 		if cached, ok := a.cachedCode(cacheKey); ok {
 			writeJSON(w, cached)
 			return
 		}
 	}
-	scene := promotionScene(ctx.InviteCode, req.TemplateID, req.ActivityID)
-	png, placeholder, err := a.miniCode.Generate(scene, req.Page)
+	scene := ctx.InviteToken
+	image, placeholder, err := a.miniCode.Generate(scene, req.Page)
 	if err != nil {
+		log.Printf("promotion mini program code failed stage=wechat_code request_id=%s user_id=%s error=%v", strings.TrimSpace(r.Header.Get("X-Request-Id")), ctx.Access.UserID, err)
 		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	mediaType := promotionMiniProgramImageMediaType(image)
+	if mediaType == "" {
+		writeError(w, http.StatusServiceUnavailable, errors.New("official mini program code failed: unsupported image format"))
 		return
 	}
 	expiresAt := time.Now().UTC().Add(6 * time.Hour)
 	response := promotionCodeResponse{
-		ImageDataURL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), Scene: scene, Page: req.Page,
+		ImageDataURL: "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(image), Scene: scene, Page: req.Page,
 		IsPlaceholder: placeholder, CacheKey: shortStableHash(cacheKey, 20), ExpiresAt: expiresAt.Format(time.RFC3339),
+		InviteToken: ctx.InviteToken, InviterName: ctx.User.Name, IdentityType: promotionInviteIdentityType(ctx.Access.CurrentRole),
 	}
 	a.storeCode(cacheKey, response, expiresAt)
 	writeJSON(w, response)
@@ -271,7 +283,8 @@ func (a *promotionAPI) shareCopy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"title": template.Title, "description": template.Subtitle,
 		"text": fmt.Sprintf("%s 邀请你体验知启云AI，微信扫码即可开始。邀请码：%s", ctx.User.Name, ctx.InviteCode),
-		"path": "/" + defaultPromotionPage + "?invite=" + url.QueryEscape(ctx.InviteCode) + "&templateId=" + url.QueryEscape(templateID),
+		"path": "/" + defaultPromotionPage + "?inviteToken=" + url.QueryEscape(ctx.InviteToken) + "&templateId=" + url.QueryEscape(templateID),
+		"h5Path": "/i/" + url.PathEscape(ctx.InviteToken),
 	})
 }
 
@@ -282,20 +295,22 @@ func (a *promotionAPI) visit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		InviteCode string `json:"inviteCode"`
-		Source     string `json:"source"`
-		TemplateID string `json:"templateId"`
-		ActivityID string `json:"activityId"`
+		InviteCode  string `json:"inviteCode"`
+		InviteToken string `json:"inviteToken"`
+		Source      string `json:"source"`
+		TemplateID  string `json:"templateId"`
+		ActivityID  string `json:"activityId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	inviter, tenantID, _, err := promotionInviterByCode(ctx.Data, req.InviteCode)
+	invitation, err := resolvePromotionInvitation(r.Context(), a.store, ctx.Data, req.InviteToken, req.InviteCode)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	inviter, tenantID := userMap(ctx.Data.Users)[invitation.InviterUserID], invitation.TenantID
 	if inviter.ID == ctx.User.ID {
 		writeError(w, http.StatusConflict, errPromotionSelfInvite)
 		return
@@ -310,7 +325,7 @@ func (a *promotionAPI) visit(w http.ResponseWriter, r *http.Request) {
 	item, err := store.RecordPromotionVisit(promotionVisitInput{
 		ID:       "promotion_visit_" + shortStableHash(inviter.ID+"|"+ctx.User.ID+"|"+dayKey+"|"+req.TemplateID+"|"+req.ActivityID, 24),
 		TenantID: tenantID, InviterUserID: inviter.ID, VisitorID: ctx.User.ID, VisitorName: ctx.User.Name,
-		MaskedMobile: maskPromotionAccount(ctx.User.Email), InviteCode: strings.ToUpper(strings.TrimSpace(req.InviteCode)),
+		MaskedMobile: maskPromotionAccount(ctx.User.Email), InviteCode: invitation.InviteCode,
 		Source: normalizePromotionSource(req.Source), TemplateID: firstNonEmptyString(req.TemplateID, defaultPromotionTemplateID),
 		ActivityID: strings.TrimSpace(req.ActivityID), VisitedAt: now,
 	})
@@ -328,20 +343,22 @@ func (a *promotionAPI) bind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		InviteCode string `json:"inviteCode"`
-		Source     string `json:"source"`
-		TemplateID string `json:"templateId"`
-		ActivityID string `json:"activityId"`
+		InviteCode  string `json:"inviteCode"`
+		InviteToken string `json:"inviteToken"`
+		Source      string `json:"source"`
+		TemplateID  string `json:"templateId"`
+		ActivityID  string `json:"activityId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	inviter, tenantID, _, err := promotionInviterByCode(ctx.Data, req.InviteCode)
+	invitation, err := resolvePromotionInvitation(r.Context(), a.store, ctx.Data, req.InviteToken, req.InviteCode)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	inviter, tenantID := userMap(ctx.Data.Users)[invitation.InviterUserID], invitation.TenantID
 	store, ok := a.store.(promotionDataStore)
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, errors.New("promotion persistence is unavailable"))
@@ -349,7 +366,7 @@ func (a *promotionAPI) bind(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := store.BindPromotionInvite(promotionBindInput{
 		TenantID: tenantID, InviterUserID: inviter.ID, InviteeUserID: ctx.User.ID,
-		InviteCode: strings.ToUpper(strings.TrimSpace(req.InviteCode)), Source: normalizePromotionSource(req.Source),
+		InviteCode: invitation.InviteCode, Source: normalizePromotionSource(req.Source),
 		TemplateID: firstNonEmptyString(req.TemplateID, defaultPromotionTemplateID), ActivityID: strings.TrimSpace(req.ActivityID), BoundAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -383,7 +400,11 @@ func (a *promotionAPI) currentContext(r *http.Request) (promotionContext, error)
 	access.TenantID = firstNonEmptyString(user.TenantID, access.TenantID, "tenant_default")
 	access.OrganizationID = firstNonEmptyString(user.OrganizationID, access.OrganizationID, "organization_default")
 	code := promotionInviteCode(data, user, access.CurrentRole)
-	return promotionContext{Access: access, Data: data, User: user, InviteCode: code, RoleLabel: promotionRoleLabel(access.CurrentRole)}, nil
+	token, err := ensurePromotionInviteToken(r.Context(), a.store, user.ID, access.CurrentRole, code)
+	if err != nil {
+		return promotionContext{}, err
+	}
+	return promotionContext{Access: access, Data: data, User: user, InviteCode: code, InviteToken: token, RoleLabel: promotionRoleLabel(access.CurrentRole)}, nil
 }
 
 func (a *promotionAPI) profilePayload(ctx promotionContext, records []promotionRecord) map[string]any {
@@ -392,7 +413,7 @@ func (a *promotionAPI) profilePayload(ctx promotionContext, records []promotionR
 	return map[string]any{
 		"userId": ctx.Access.UserID, "tenantId": ctx.Access.TenantID, "organizationId": ctx.Access.OrganizationID,
 		"name": name, "avatarUrl": "", "companyName": brandName, "currentRole": ctx.Access.CurrentRole,
-		"roleLabel": ctx.RoleLabel, "roles": ctx.Access.Roles, "inviteCode": ctx.InviteCode,
+		"roleLabel": ctx.RoleLabel, "roles": ctx.Access.Roles, "inviteCode": ctx.InviteCode, "inviteToken": ctx.InviteToken,
 		"summary": promotionSummary(records),
 	}
 }
@@ -413,11 +434,11 @@ func (a *promotionAPI) recordsForContext(ctx promotionContext) ([]promotionRecor
 		}
 	}
 	for _, user := range ctx.Data.Users {
-		if user.ReferredBy != ctx.Access.UserID || seenInvitees[user.ID] {
+		createdAt := strings.TrimSpace(user.CreatedAt)
+		if user.ReferredBy != ctx.Access.UserID || seenInvitees[user.ID] || createdAt == "" {
 			continue
 		}
 		status, paidAt := promotionUserStatus(ctx.Data.Orders, user)
-		createdAt := firstNonEmptyString(user.CreatedAt, time.Now().UTC().Format(time.RFC3339))
 		items = append(items, promotionRecord{
 			ID: "promotion_legacy_" + shortStableHash(user.ID, 20), TenantID: ctx.Access.TenantID,
 			InviterUserID: ctx.Access.UserID, InviteeUserID: user.ID, VisitorID: user.ID, VisitorName: user.Name,
@@ -813,7 +834,21 @@ func (s *wechatMiniProgramCodeService) Generate(scene, page string) ([]byte, boo
 		_ = json.Unmarshal(body, &apiError)
 		return nil, false, fmt.Errorf("official mini program code failed (%d): %s", apiError.ErrCode, firstNonEmptyString(apiError.ErrMsg, response.Status))
 	}
+	if promotionMiniProgramImageMediaType(body) == "" {
+		return nil, false, errors.New("official mini program code failed: response is not a supported image")
+	}
 	return body, false, nil
+}
+
+func promotionMiniProgramImageMediaType(body []byte) string {
+	switch {
+	case len(body) >= 8 && bytes.Equal(body[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}):
+		return "image/png"
+	case len(body) >= 3 && body[0] == 0xff && body[1] == 0xd8 && body[2] == 0xff:
+		return "image/jpeg"
+	default:
+		return ""
+	}
 }
 
 func (s *wechatMiniProgramCodeService) accessToken(appID, secret string) (string, error) {

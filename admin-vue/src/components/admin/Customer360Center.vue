@@ -43,6 +43,15 @@
         <article><span>生成任务</span><strong>{{ formatNumber(detail.summary?.generationTasks) }}</strong><small>积分流水 {{ formatNumber(detail.summary?.tokenRecords) }}</small></article>
       </div>
       <el-tabs v-model="activeTab">
+        <el-tab-pane v-if="canAccessPoints" label="赠送积分与批次" name="personal-points">
+          <CustomerPointActions
+            v-if="selectedCustomer?.id"
+            :user-id="String(selectedCustomer.id)"
+            :user-name="String(detail.profile?.name || selectedCustomer?.name || '')"
+            :role="role"
+            :permissions="permissions || []"
+          />
+        </el-tab-pane>
         <el-tab-pane label="身份与权益" name="business-identity">
           <IdentityEntitlementsPanel
             v-if="selectedCustomer?.id"
@@ -67,13 +76,15 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { adminWorkspaceApi, type Customer360Response, type WorkspaceRecord } from "../../api/adminWorkspaces";
+import { canAccessCustomerPointActions } from "../../domain/personalPointsAdmin.ts";
 import AdminDataTable from "./AdminDataTable.vue";
+import CustomerPointActions from "./CustomerPointActions.vue";
 import IdentityEntitlementsPanel from "./IdentityEntitlementsPanel.vue";
 
 type Action = { action: string; label: string };
-const props = defineProps<{ rows: WorkspaceRecord[]; saving: boolean; toolbarActions: Action[]; rowActions: Action[]; permissions?: string[]; columnLabels: Record<string, string>; statusFilterOptions: Array<{ label: string; value: string }>; isStatusColumn: (column: string) => boolean; statusType: (value: unknown) => any; statusLabel: (value: unknown) => string; formatCell: (value: unknown, column: string) => unknown; visibleRowActions: (row: WorkspaceRecord) => Action[]; labelForRowAction: (action: Action, row: WorkspaceRecord) => string }>();
+const props = defineProps<{ rows: WorkspaceRecord[]; saving: boolean; toolbarActions: Action[]; rowActions: Action[]; role: string; permissions?: string[]; columnLabels: Record<string, string>; statusFilterOptions: Array<{ label: string; value: string }>; isStatusColumn: (column: string) => boolean; statusType: (value: unknown) => any; statusLabel: (value: unknown) => string; formatCell: (value: unknown, column: string) => unknown; visibleRowActions: (row: WorkspaceRecord) => Action[]; labelForRowAction: (action: Action, row: WorkspaceRecord) => string }>();
 defineEmits<{ "run-action": [action: string, row?: WorkspaceRecord]; "batch-action": [action: string, rows: WorkspaceRecord[]] }>();
 
 const customerColumns = ["name", "email", "mobile", "plan", "pointsAvailable", "sourceAgentName", "status", "createdAt"];
@@ -85,6 +96,7 @@ const errorMessage = ref("");
 const activeTab = ref("overview");
 const selectedCustomer = ref<WorkspaceRecord | null>(null);
 const detail = reactive<Partial<Customer360Response>>({});
+const canAccessPoints = computed(() => canAccessCustomerPointActions({ role: props.role, permissions: props.permissions || [] }));
 
 async function openCustomer(row: WorkspaceRecord) {
   selectedCustomer.value = row;

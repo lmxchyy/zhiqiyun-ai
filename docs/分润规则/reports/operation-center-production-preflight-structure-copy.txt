@@ -1,0 +1,3 @@
+﻿SUPERSEDED
+This intermediate report was superseded after the provider_outcome schema-contract correction.
+Use operation-center-production-preflight-structure-copy.json as the release-gate evidence.

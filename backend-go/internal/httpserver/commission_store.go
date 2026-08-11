@@ -31,8 +31,17 @@ type commissionRuleSnapshot struct {
 	CalculationType   commissionapp.CalculationType `json:"calculationType"`
 	FixedAmountCents  commissionapp.AmountCents     `json:"fixedAmountCents"`
 	PercentageBPS     commissionapp.PercentageBPS   `json:"percentageBps"`
+	CalculationConfig json.RawMessage               `json:"calculationConfig,omitempty"`
+	Priority          *int                          `json:"priority,omitempty"`
 	FreezeDays        int                           `json:"freezeDays"`
 	RefundPolicy      string                        `json:"refundPolicy"`
+}
+
+type commissionRuleSnapshotContext struct {
+	TenantID    string
+	ProductType string
+	ProductID   string
+	PaidAt      time.Time
 }
 
 type commissionRuleRepository interface {
@@ -41,7 +50,10 @@ type commissionRuleRepository interface {
 	VersionCommissionRule(context.Context, string, string, commissionapp.CommissionRule) (commissionapp.CommissionRule, error)
 }
 
-var errCommissionRuleNotFound = errors.New("commission rule not found")
+var (
+	errCommissionRuleNotFound           = errors.New("commission rule not found")
+	errCommissionRuleSnapshotIncomplete = errors.New("commission rule snapshot is incomplete")
+)
 
 func (s *postgresStore) ListCommissionRules(ctx context.Context, query commissionRuleQuery) ([]commissionapp.CommissionRule, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -284,35 +296,54 @@ func generateCommissionRecordsForCommerceOrderTx(ctx context.Context, tx *sql.Tx
 	tenantID := commissionTenantID(order.TenantID)
 	productType := planBusinessType(plan)
 	var rules []commissionapp.CommissionRule
-	if order.CommissionSnapshotCaptured {
-		rules, err = loadSnapshottedCommissionRulesTx(ctx, tx, tenantID, order.CommissionRuleSnapshot)
+	immutableV2Snapshot := order.CommissionSnapshotCaptured && intValue(order.PriceSnapshot["snapshotVersion"]) == 2
+	if immutableV2Snapshot {
+		rules, err = rebuildCommissionRulesFromSnapshot(commissionRuleSnapshotContext{
+			TenantID: tenantID, ProductType: productType, ProductID: plan.ID, PaidAt: paidAt,
+		}, order.CommissionRuleSnapshot)
+	} else if order.CommissionSnapshotCaptured {
+		rules, err = loadLegacySnapshottedCommissionRulesTx(ctx, tx, tenantID, order.CommissionRuleSnapshot)
 	} else {
 		rules, err = loadEffectiveCommissionRulesTx(ctx, tx, tenantID, productType, plan.ID, commissionTemplateCode(plan), paidAt)
 	}
 	if err != nil {
 		return commissionapp.CalculationResult{}, err
 	}
+	if order.CommissionSnapshotCaptured && len(rules) == 0 {
+		return commissionapp.CalculationResult{
+			Records:             []commissionapp.CommissionRecord{},
+			PlatformIncomeCents: commissionapp.AmountCents(orderAmount(order)),
+		}, nil
+	}
 	agentIDs := map[int]string{}
 	if commerceCtx.DirectAgentID != "" {
-		eligible, eligibilityErr := commissionBeneficiaryEligibleTx(ctx, tx, "AGENT", commerceCtx.DirectAgentID)
-		if eligibilityErr != nil {
-			return commissionapp.CalculationResult{}, eligibilityErr
+		eligible := true
+		if !immutableV2Snapshot {
+			var eligibilityErr error
+			eligible, eligibilityErr = commissionBeneficiaryEligibleTx(ctx, tx, "AGENT", commerceCtx.DirectAgentID)
+			if eligibilityErr != nil {
+				return commissionapp.CalculationResult{}, eligibilityErr
+			}
 		}
 		if eligible {
 			agentIDs[1] = commerceCtx.DirectAgentID
 		}
 	}
 	if commerceCtx.ParentAgentID != "" {
-		eligible, eligibilityErr := commissionBeneficiaryEligibleTx(ctx, tx, "AGENT", commerceCtx.ParentAgentID)
-		if eligibilityErr != nil {
-			return commissionapp.CalculationResult{}, eligibilityErr
+		eligible := true
+		if !immutableV2Snapshot {
+			var eligibilityErr error
+			eligible, eligibilityErr = commissionBeneficiaryEligibleTx(ctx, tx, "AGENT", commerceCtx.ParentAgentID)
+			if eligibilityErr != nil {
+				return commissionapp.CalculationResult{}, eligibilityErr
+			}
 		}
 		if eligible {
 			agentIDs[2] = commerceCtx.ParentAgentID
 		}
 	}
 	operationCenterID := commerceCtx.OperationCenterID
-	if operationCenterID != "" {
+	if operationCenterID != "" && !immutableV2Snapshot {
 		eligible, eligibilityErr := commissionBeneficiaryEligibleTx(ctx, tx, "OPERATION_CENTER", operationCenterID)
 		if eligibilityErr != nil {
 			return commissionapp.CalculationResult{}, eligibilityErr
@@ -414,17 +445,75 @@ func commissionTemplateCode(plan adminPlan) string {
 func snapshotCommissionRules(rules []commissionapp.CommissionRule) []commissionRuleSnapshot {
 	items := make([]commissionRuleSnapshot, 0, len(rules))
 	for _, rule := range rules {
+		priority := rule.Priority
 		items = append(items, commissionRuleSnapshot{
 			ID: rule.ID, Code: rule.Code, Name: rule.Name, Version: rule.Version,
 			BeneficiaryRole: rule.BeneficiaryRole, RelationshipLevel: rule.RelationshipLevel,
 			CalculationType: rule.CalculationType, FixedAmountCents: rule.FixedAmountCents,
-			PercentageBPS: rule.PercentageBPS, FreezeDays: rule.FreezeDays, RefundPolicy: rule.RefundPolicy,
+			PercentageBPS: rule.PercentageBPS, CalculationConfig: append(json.RawMessage(nil), rule.CalculationConfig...),
+			Priority: &priority, FreezeDays: rule.FreezeDays, RefundPolicy: rule.RefundPolicy,
 		})
 	}
 	return items
 }
 
-func loadSnapshottedCommissionRulesTx(ctx context.Context, tx *sql.Tx, tenantID string, snapshots []commissionRuleSnapshot) ([]commissionapp.CommissionRule, error) {
+func rebuildCommissionRulesFromSnapshot(snapshotContext commissionRuleSnapshotContext, snapshots []commissionRuleSnapshot) ([]commissionapp.CommissionRule, error) {
+	tenantID := strings.TrimSpace(snapshotContext.TenantID)
+	productType := strings.TrimSpace(snapshotContext.ProductType)
+	productID := strings.TrimSpace(snapshotContext.ProductID)
+	if tenantID == "" || productType == "" || productID == "" || snapshotContext.PaidAt.IsZero() {
+		return nil, fmt.Errorf("%w: tenant, product and paid time context are required", errCommissionRuleSnapshotIncomplete)
+	}
+	items := make([]commissionapp.CommissionRule, 0, len(snapshots))
+	seenRuleIDs := make(map[string]struct{}, len(snapshots))
+	for index, snapshot := range snapshots {
+		ruleID := strings.TrimSpace(snapshot.ID)
+		if ruleID == "" {
+			return nil, fmt.Errorf("%w: rule at index %d has no id", errCommissionRuleSnapshotIncomplete, index)
+		}
+		if _, exists := seenRuleIDs[ruleID]; exists {
+			return nil, fmt.Errorf("%w: duplicate rule id %s", errCommissionRuleSnapshotIncomplete, ruleID)
+		}
+		seenRuleIDs[ruleID] = struct{}{}
+		if strings.TrimSpace(snapshot.RefundPolicy) == "" {
+			return nil, fmt.Errorf("%w: rule %s has no refundPolicy", errCommissionRuleSnapshotIncomplete, ruleID)
+		}
+		if snapshot.CalculationType == commissionapp.CalculationTiered && len(snapshot.CalculationConfig) == 0 {
+			return nil, fmt.Errorf("%w: tiered rule %s has no calculationConfig", errCommissionRuleSnapshotIncomplete, ruleID)
+		}
+		priority := index
+		if snapshot.Priority != nil {
+			if *snapshot.Priority < 0 {
+				return nil, fmt.Errorf("%w: rule %s has a negative priority", errCommissionRuleSnapshotIncomplete, ruleID)
+			}
+			priority = *snapshot.Priority
+		}
+		code := strings.TrimSpace(snapshot.Code)
+		name := strings.TrimSpace(snapshot.Name)
+		if name == "" {
+			// Older snapshots always carried code; name is descriptive rather than economic.
+			name = code
+		}
+		rule := commissionapp.CommissionRule{
+			ID: ruleID, TenantID: tenantID, Code: code, Name: name,
+			ProductType: productType, ProductID: productID,
+			BeneficiaryRole: snapshot.BeneficiaryRole, RelationshipLevel: snapshot.RelationshipLevel,
+			CalculationType: snapshot.CalculationType, FixedAmountCents: snapshot.FixedAmountCents,
+			PercentageBPS:     snapshot.PercentageBPS,
+			CalculationConfig: append(json.RawMessage(nil), snapshot.CalculationConfig...),
+			Priority:          priority, FreezeDays: snapshot.FreezeDays, RefundPolicy: strings.TrimSpace(snapshot.RefundPolicy),
+			EffectiveStartAt: snapshotContext.PaidAt, Version: snapshot.Version, Status: "ACTIVE",
+			CreatedAt: snapshotContext.PaidAt, UpdatedAt: snapshotContext.PaidAt,
+		}
+		if err := rule.Validate(); err != nil {
+			return nil, fmt.Errorf("%w: rule %s is invalid: %v", errCommissionRuleSnapshotIncomplete, ruleID, err)
+		}
+		items = append(items, rule)
+	}
+	return items, nil
+}
+
+func loadLegacySnapshottedCommissionRulesTx(ctx context.Context, tx *sql.Tx, tenantID string, snapshots []commissionRuleSnapshot) ([]commissionapp.CommissionRule, error) {
 	items := make([]commissionapp.CommissionRule, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		rule, err := scanCommissionRule(tx.QueryRowContext(ctx, `
@@ -435,13 +524,13 @@ func loadSnapshottedCommissionRulesTx(ctx context.Context, tx *sql.Tx, tenantID 
 			FROM xz_commission_rules WHERE id=$1 AND tenant_id IN ($2, 'tenant_default')
 		`, snapshot.ID, tenantID))
 		if err != nil {
-			return nil, fmt.Errorf("load snapshotted commission rule %s: %w", snapshot.ID, err)
+			return nil, fmt.Errorf("load legacy snapshotted commission rule %s: %w", snapshot.ID, err)
 		}
 		if rule.Version != snapshot.Version || rule.Code != snapshot.Code || rule.BeneficiaryRole != snapshot.BeneficiaryRole ||
 			rule.RelationshipLevel != snapshot.RelationshipLevel || rule.CalculationType != snapshot.CalculationType ||
 			rule.FixedAmountCents != snapshot.FixedAmountCents || rule.PercentageBPS != snapshot.PercentageBPS ||
 			rule.FreezeDays != snapshot.FreezeDays || rule.RefundPolicy != snapshot.RefundPolicy {
-			return nil, fmt.Errorf("snapshotted commission rule %s changed unexpectedly", snapshot.ID)
+			return nil, fmt.Errorf("legacy snapshotted commission rule %s changed unexpectedly", snapshot.ID)
 		}
 		items = append(items, rule)
 	}
@@ -449,6 +538,17 @@ func loadSnapshottedCommissionRulesTx(ctx context.Context, tx *sql.Tx, tenantID 
 }
 
 func reverseCommissionRecordsForOrderTx(ctx context.Context, tx *sql.Tx, orderID, orderNo string, now time.Time) error {
+	v132Settlement, err := isV132SettlementOrderTx(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+	commercialSnapshot := map[string]any{}
+	if v132Settlement {
+		commercialSnapshot, err = loadV132OrderCommercialSnapshotTx(ctx, tx, orderID)
+		if err != nil {
+			return err
+		}
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id,tenant_id,beneficiary_type,beneficiary_id,source_user_id,rule_id,rule_version,
 		       amount_cents,currency,status
@@ -478,6 +578,27 @@ func reverseCommissionRecordsForOrderTx(ctx context.Context, tx *sql.Tx, orderID
 		return err
 	}
 	for _, item := range earnings {
+		if v132Settlement {
+			key := "commission-refund:" + item.id
+			reversal := commissionapp.CommissionRecord{
+				ID: "commission_reversal_" + shortID(key), TenantID: item.tenantID, OrderID: orderID, OrderNo: orderNo,
+				BeneficiaryType: commissionapp.BeneficiaryType(item.beneficiaryType), BeneficiaryID: item.beneficiaryID,
+				SourceUserID: item.sourceUserID, RuleID: item.ruleID, RuleVersion: item.ruleVersion,
+				AmountCents: -item.amount, Currency: item.currency, RecordType: commissionapp.RecordReversal,
+				Status: commissionapp.CommissionReversed, ReversalOfID: item.id, IdempotencyKey: key,
+				CreatedAt: now, UpdatedAt: now,
+			}
+			if err := insertImmutableCommissionRecordTx(ctx, tx, reversal, commissionapp.CommissionRule{Code: "REFUND_REVERSAL", RefundPolicy: "REVERSE_OR_RECOVER"}, adminPlan{}); err != nil {
+				return err
+			}
+			if err := reverseV132CommissionWalletTx(ctx, tx, item.id, reversal.ID, item.tenantID, item.beneficiaryType, item.beneficiaryID, orderID, orderNo, item.ruleID, item.ruleVersion, item.status, int64(item.amount), now, commercialSnapshot); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE xz_commission_records SET status='REVERSED', updated_at=$2 WHERE id=$1`, item.id, now); err != nil {
+				return err
+			}
+			continue
+		}
 		if item.status == string(commissionapp.CommissionExpected) || item.status == string(commissionapp.CommissionFrozen) || item.status == string(commissionapp.CommissionAvailable) {
 			if _, err := tx.ExecContext(ctx, `UPDATE xz_commission_records SET status='CANCELLED', updated_at=$2 WHERE id=$1`, item.id, now); err != nil {
 				return err
@@ -552,6 +673,13 @@ func compatibilitySettlementResult(ctx commissionOrderContext, result commission
 	legacy := commissionSettlementResult{
 		OrderType: ctx.OrderType, TokenGrantAmount: ctx.TokenGrantAmount,
 		TokenGrantValueCents: ctx.TokenGrantValueCents,
+	}
+	if len(result.Records) == 0 {
+		platformIncome, err := commissionAmountToInt(result.PlatformIncomeCents)
+		if err != nil {
+			return commissionSettlementResult{}, err
+		}
+		legacy.PlatformIncomeCents = platformIncome
 	}
 	for _, record := range result.Records {
 		amount, err := commissionAmountToInt(record.AmountCents)

@@ -65,13 +65,18 @@ const items = computed(() => navigationItems[props.role]);
 function selectTab(tab: MiniProgramTabId) {
   if (tab === props.active || navigating.value) return;
   // #ifdef MP-WEIXIN
-  navigating.value = true;
-  const navigate = props.role === "user" ? uni.switchTab : uni.reLaunch;
-  navigate({
-    url: rolePage(props.role, tab),
-    fail: () => uni.showToast({ title: "页面切换失败，请重试", icon: "none" }),
-    complete: () => { navigating.value = false; },
-  });
+  // User native tabs must switchTab. Agent/operation share one workbench instance —
+  // emit to parent so overview/customers/commission can switch in-place without reLaunch.
+  if (props.role === "user") {
+    navigating.value = true;
+    uni.switchTab({
+      url: rolePage(props.role, tab),
+      fail: () => uni.showToast({ title: "页面切换失败，请重试", icon: "none" }),
+      complete: () => { navigating.value = false; },
+    });
+    return;
+  }
+  emit("change", tab);
   // #endif
   // #ifndef MP-WEIXIN
   emit("change", tab);

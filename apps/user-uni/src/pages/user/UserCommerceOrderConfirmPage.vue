@@ -45,8 +45,9 @@ import { computed, ref } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { getClientPlatform } from '../../api/client'
 import {
-  createUnifiedPaymentOrder,
-  createVirtualPaymentOrder,
+	createUnifiedPaymentOrder,
+	createPublicPriceQuote,
+	createVirtualPaymentOrderFromQuote,
   getPaymentCapability,
   getUnifiedPaymentOrder,
   getVirtualPaymentOrderStatus,
@@ -161,7 +162,8 @@ async function payWithWechatVirtual() {
   actionLabel.value = '正在刷新微信登录态...'
   const wxLoginCode = await getWeChatVirtualPaymentLoginCode()
   actionLabel.value = '正在创建订单...'
-  const order = await createVirtualPaymentOrder(product.value!.productCode, 1, '', wxLoginCode)
+	const quote = await createPublicPriceQuote(product.value!.id)
+	const order = await createVirtualPaymentOrderFromQuote(quote.quoteId, wxLoginCode)
   orderNo.value = order.orderNo
   actionLabel.value = '等待微信支付...'
   await requestWeChatVirtualPayment(order)

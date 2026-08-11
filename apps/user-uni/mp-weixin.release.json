@@ -1,5 +1,1 @@
-{
-  "version": "2.0.41",
-  "previousVersion": "2.0.40",
-  "description": "修复视频参考图上传并自动切换图生视频"
-}
+{"description":"知启云AI 2.0.61：生视频默认选中 grok-imagine-1.5-video，列表仍按价升序","previousVersion":"2.0.60","publishedBaseline":"2.0.60","version":"2.0.61"}

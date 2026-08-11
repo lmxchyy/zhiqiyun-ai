@@ -2,8 +2,8 @@
     "name" : "知启云 AI",
     "appid" : "__UNI__F1BEA6A",
     "description" : "知启云 AI 一站式内容生产与代理商运营平台",
-    "versionName" : "0.2.4",
-    "versionCode" : "24",
+    "versionName" : "0.2.8",
+    "versionCode" : "28",
     "transformPx" : false,
     "app-plus" : {
         "screenOrientation" : [ "portrait-primary" ],

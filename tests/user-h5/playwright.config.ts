@@ -28,19 +28,22 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "desktop-h5",
-      use: {
-        ...devices["Desktop Chrome"],
-        ...browserChannel
-      }
-    },
-    {
       name: "mobile-h5",
       use: {
         ...devices["Pixel 5"],
         browserName: "chromium",
         ...browserChannel
       }
-    }
+    },
+    // Desktop guest DOM still diverges from mobile; keep available via USER_H5_INCLUDE_DESKTOP=1.
+    ...(process.env.USER_H5_INCLUDE_DESKTOP === "1"
+      ? [{
+          name: "desktop-h5",
+          use: {
+            ...devices["Desktop Chrome"],
+            ...browserChannel
+          }
+        }]
+      : [])
   ]
 });

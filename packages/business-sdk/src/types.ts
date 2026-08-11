@@ -18,6 +18,12 @@ import type {
   ModelInfo,
   PointAccount,
   PointAccountResponse,
+  PointExpiryPolicyResponse,
+  UpdatePointExpiryPolicyRequest,
+  PersonalPointLotsResponse,
+  AdminPointMutationRequest,
+  AdminPointGiftResponse,
+  AdminPointCorrectionResponse,
   UserProfile,
   WorkItem
 } from "@xianzhi/shared-types";
@@ -142,6 +148,12 @@ export interface BusinessSdk {
   };
   points: {
     account(): Promise<PointAccountResponse>;
+    expirySummary(): Promise<PointAccountResponse>;
+    adminPolicy(): Promise<PointExpiryPolicyResponse>;
+    updateAdminPolicy(input: UpdatePointExpiryPolicyRequest): Promise<PointExpiryPolicyResponse>;
+    adminLots(userId: string, options?: { source?: string; status?: string; limit?: number; offset?: number }): Promise<PersonalPointLotsResponse>;
+    grantAdminGift(userId: string, input: AdminPointMutationRequest): Promise<AdminPointGiftResponse>;
+    correctAdminBalance(userId: string, input: AdminPointMutationRequest): Promise<AdminPointCorrectionResponse>;
   };
   membership: {
     plans(): Promise<MembershipPlan[]>;
@@ -180,4 +192,5 @@ export interface BusinessSdk {
     operationOrders(): Promise<ItemsResponse>;
     operationCommissions(): Promise<ItemsResponse>;
   };
+  smartVideo: import("./smart-video").SmartVideoSdk;
 }

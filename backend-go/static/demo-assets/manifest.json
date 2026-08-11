@@ -2,7 +2,7 @@
   {"id":"demo_ai_design","name":"AI设计封面","slotKey":"home.capability.ai_design","categoryId":"media_cat_ai_capability","from":"#6D5DFB","to":"#B76CFD"},
   {"id":"demo_ai_video","name":"AI视频封面","slotKey":"home.capability.ai_video","categoryId":"media_cat_ai_capability","from":"#0F766E","to":"#2DD4BF"},
   {"id":"demo_ppt","name":"PPT方案封面","slotKey":"home.capability.ppt","categoryId":"media_cat_ai_capability","from":"#7C3AED","to":"#F97316"},
-  {"id":"demo_office","name":"AI办公封面","slotKey":"home.capability.office","categoryId":"media_cat_ai_capability","from":"#2563EB","to":"#38BDF8"},
+  {"id":"demo_office","name":"自由P图封面","slotKey":"home.capability.office","categoryId":"media_cat_ai_capability","from":"#2563EB","to":"#38BDF8"},
   {"id":"demo_knowledge","name":"知识库封面","slotKey":"home.capability.knowledge","categoryId":"media_cat_ai_capability","from":"#334155","to":"#64748B"},
   {"id":"demo_employee","name":"AI员工封面","slotKey":"home.capability.employee","categoryId":"media_cat_ai_employee","from":"#DB2777","to":"#FB7185"},
   {"id":"demo_designer","name":"AI设计师头像","slotKey":"home.employee.designer","categoryId":"media_cat_ai_employee","from":"#7C3AED","to":"#C084FC"},

@@ -69,12 +69,121 @@ func TestVideoGenerationEstimateMatchesFormalPointCostWithoutSideEffects(t *test
 		t.Fatalf("estimate changed points: before=%d after=%d", beforePoints, got)
 	}
 
-	pending, err := store.CreatePendingGenerationTask(prepared)
+	formal := generationPointCostForRequest(prepared, data)
+	if estimate.EstimatedPoints != formal {
+		t.Fatalf("estimate=%d formal=%d", estimate.EstimatedPoints, formal)
+	}
+	if estimate.EstimatedPoints <= 0 || estimate.Model == "" || estimate.BillingType == "" {
+		t.Fatalf("invalid estimate payload: %+v", estimate)
+	}
+}
+
+func TestVideoGenerationEstimateSeedanceDefaultMatches600(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	data, err := store.AdminData()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if estimate.EstimatedPoints != pending.PointCost {
-		t.Fatalf("estimate=%d formal=%d", estimate.EstimatedPoints, pending.PointCost)
+	user := videoEstimateTestUser(t, data)
+	service := newAPI(store, config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, newLocalAuthSessions(), nil)
+	_, estimate, err := service.prepareVideoGenerationEstimate(data, user, generation.CreateRequest{
+		Type:   "TEXT_TO_VIDEO",
+		Prompt: "seedance default estimate",
+		Model:  "doubao-seedance-2.0",
+		Params: map[string]any{
+			"duration":   float64(5),
+			"resolution": "720p",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.EstimatedPoints != 600 {
+		t.Fatalf("seedance 5s 720p estimate=%d, want 600", estimate.EstimatedPoints)
+	}
+	if estimate.Model != "doubao-seedance-2.0" {
+		t.Fatalf("estimate model=%q, want doubao-seedance-2.0", estimate.Model)
+	}
+}
+
+func TestGrokImagine15VideoEstimateIsFlatFifteenPointsPerSecond(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	data, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := videoEstimateTestUser(t, data)
+	service := newAPI(store, config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, newLocalAuthSessions(), nil)
+	tests := []struct {
+		name       string
+		duration   float64
+		resolution string
+		want       int
+	}{
+		{name: "6s 480p", duration: 6, resolution: "480p", want: 90},
+		{name: "6s 720p", duration: 6, resolution: "720p", want: 90},
+		{name: "30s 480p", duration: 30, resolution: "480p", want: 450},
+		{name: "30s 720p", duration: 30, resolution: "720p", want: 450},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prepared, estimate, err := service.prepareVideoGenerationEstimate(data, user, generation.CreateRequest{
+				Type: "TEXT_TO_VIDEO", Prompt: "a cinematic sunrise", Model: "grok-imagine-1.5-video",
+				Params: map[string]any{"duration": tt.duration, "resolution": tt.resolution, "aspect_ratio": "16:9"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if estimate.EstimatedPoints != tt.want {
+				t.Fatalf("estimate=%d, want %d", estimate.EstimatedPoints, tt.want)
+			}
+			if got := generationPointCostForRequest(prepared, data); got != tt.want {
+				t.Fatalf("formal point cost=%d, want %d", got, tt.want)
+			}
+			if estimate.BillingType != "per_second" {
+				t.Fatalf("billing type=%q, want per_second", estimate.BillingType)
+			}
+		})
+	}
+}
+
+func TestGrokImagine15VideoDefaultProviderCostIsThirteenCentsPerSecond(t *testing.T) {
+	costs := defaultProviderCosts("2026-08-10T00:00:00Z")
+	for _, cost := range costs {
+		if cost.PlatformModelCode != "grok-imagine-1.5-video" {
+			continue
+		}
+		if cost.BillingUnit != "PER_SECOND" || cost.UnitCost != 0.13 || cost.Currency != "CNY" {
+			t.Fatalf("provider cost = %+v", cost)
+		}
+		return
+	}
+	t.Fatal("Grok Imagine 1.5 provider cost is missing")
+}
+
+func TestGrokImaginePreviewEstimateWorksWithoutUploadedImage(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	data, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := videoEstimateTestUser(t, data)
+	service := newAPI(store, config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, newLocalAuthSessions(), nil)
+	_, estimate, err := service.prepareVideoGenerationEstimate(data, user, generation.CreateRequest{
+		Type:   "IMAGE_TO_VIDEO",
+		Prompt: "preview estimate without image",
+		Model:  "grok-imagine-video-1.5-preview",
+		Params: map[string]any{
+			"duration":     float64(10),
+			"resolution":   "720p",
+			"aspect_ratio": "16:9",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if estimate.EstimatedPoints != 100 {
+		t.Fatalf("preview estimate=%d, want 100", estimate.EstimatedPoints)
 	}
 }
 

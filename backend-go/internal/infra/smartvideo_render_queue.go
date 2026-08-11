@@ -84,3 +84,20 @@ func (q *SmartVideoRenderQueue) Run(ctx context.Context, handler func(context.Co
 	}
 	return ctx.Err()
 }
+
+func (q *SmartVideoRenderQueue) Depth(ctx context.Context) (SmartVideoQueueDepth, error) {
+	if q == nil || q.client == nil {
+		return SmartVideoQueueDepth{}, smartvideo.ErrAnalysisNotReady
+	}
+	pipe := q.client.Pipeline()
+	pending := pipe.LLen(ctx, q.pendingKey)
+	working := pipe.LLen(ctx, q.workingKey)
+	delayed := pipe.ZCard(ctx, q.delayedKey)
+	dead := pipe.LLen(ctx, q.deadKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return SmartVideoQueueDepth{}, err
+	}
+	return SmartVideoQueueDepth{
+		Pending: pending.Val(), Working: working.Val(), Delayed: delayed.Val(), Dead: dead.Val(),
+	}, nil
+}

@@ -1,0 +1,71 @@
+=== price plan columns/rows ===
+                              Table "public.xz_price_plans"
+        Column        |           Type           | Collation | Nullable |    Default     
+----------------------+--------------------------+-----------+----------+----------------
+ id                   | text                     |           | not null | 
+ plan_id              | text                     |           | not null | 
+ plan_version_id      | text                     |           | not null | 
+ code                 | text                     |           | not null | 
+ name                 | text                     |           | not null | 
+ price_type           | text                     |           | not null | 
+ channel              | text                     |           | not null | 
+ environment          | text                     |           | not null | 
+ sale_price_cents     | bigint                   |           | not null | 
+ original_price_cents | bigint                   |           | not null | 
+ bonus_points         | bigint                   |           | not null | 0
+ bonus_tokens         | bigint                   |           | not null | 0
+ audience_rule        | jsonb                    |           | not null | '{}'::jsonb
+ is_default           | boolean                  |           | not null | false
+ is_visible           | boolean                  |           | not null | true
+ enabled              | boolean                  |           | not null | false
+ status               | text                     |           | not null | 'DRAFT'::text
+ effective_at         | timestamp with time zone |           |          | 
+ expires_at           | timestamp with time zone |           |          | 
+ created_at           | timestamp with time zone |           | not null | now()
+ updated_at           | timestamp with time zone |           | not null | now()
+ revision             | bigint                   |           | not null | 1
+ created_by           | text                     |           |          | 
+ updated_by           | text                     |           |          | 
+ enabled_by           | text                     |           |          | 
+ enabled_at           | timestamp with time zone |           |          | 
+ disabled_by          | text                     |           |          | 
+ disabled_at          | timestamp with time zone |           |          | 
+ change_reason        | text                     |           | not null | ''::text
+ currency             | character(3)             |           | not null | 'CNY'::bpchar
+ audience_type        | text                     |           | not null | 'PUBLIC'::text
+Indexes:
+    "xz_price_plans_pkey" PRIMARY KEY, btree (id)
+    "idx_xz_price_plans_admin_098" btree (plan_id, channel, environment, status, enabled, updated_at DESC)
+    "idx_xz_price_plans_public_resolve_099" btree (plan_id, channel, environment, currency, updated_at DESC) WHERE is_default = true AND enabled = true AND status = 'ACTIVE'::text
+    "idx_xz_price_plans_resolve_097" btree (plan_id, channel, environment, price_type, enabled, status, effective_at, expires_at)
+    "ux_xz_price_plans_default_097" UNIQUE, btree (plan_id, channel, environment) WHERE is_default = true
+    "ux_xz_price_plans_default_currency_099" UNIQUE, btree (plan_id, channel, environment, currency) WHERE is_default = true
+    "xz_price_plans_code_key" UNIQUE CONSTRAINT, btree (code)
+Check constraints:
+    "ck_xz_price_plans_audience_099" CHECK (audience_type = ANY (ARRAY['PUBLIC'::text, 'RULE'::text, 'WHITELIST'::text, 'INVITE'::text, 'TEST'::text]))
+    "ck_xz_price_plans_audience_rule_099" CHECK (jsonb_typeof(audience_rule) = 'object'::text)
+    "ck_xz_price_plans_code_format_099" CHECK (code ~ '^[a-z][a-z0-9_]{1,62}[a-z0-9]$'::text)
+    "ck_xz_price_plans_currency_099" CHECK (currency ~ '^[A-Z]{3}$'::text)
+    "ck_xz_price_plans_default_state_099" CHECK (is_default = false OR price_type <> 'TEST'::text AND enabled = true AND status = 'ACTIVE'::text AND is_visible = true AND audience_type = 'PUBLIC'::text)
+    "ck_xz_price_plans_test_scope_099" CHECK (price_type <> 'TEST'::text OR is_default = false AND is_visible = false AND (audience_type <> 'PUBLIC'::text OR created_by IS NULL))
+    "xz_price_plans_bonus_points_check" CHECK (bonus_points >= 0)
+    "xz_price_plans_bonus_tokens_check" CHECK (bonus_tokens >= 0)
+    "xz_price_plans_check" CHECK (original_price_cents >= sale_price_cents)
+    "xz_price_plans_check1" CHECK (expires_at IS NULL OR effective_at IS NULL OR expires_at > effective_at)
+    "xz_price_plans_check2" CHECK (price_type <> 'TEST'::text OR is_default = false AND is_visible = false)
+    "xz_price_plans_environment_check" CHECK (environment = ANY (ARRAY['PRODUCTION'::text, 'SANDBOX'::text]))
+    "xz_price_plans_price_type_check" CHECK (price_type = ANY (ARRAY['NORMAL'::text, 'ACTIVITY'::text, 'GRAY'::text, 'TEST'::text]))
+    "xz_price_plans_sale_price_cents_check" CHECK (sale_price_cents > 0)
+    "xz_price_plans_status_check" CHECK (status = ANY (ARRAY['DRAFT'::text, 'ACTIVE'::text, 'INACTIVE'::text, 'EXPIRED'::text]))
+Foreign-key constraints:
+    "xz_price_plans_plan_id_fkey" FOREIGN KEY (plan_id) REFERENCES xz_plans(id)
+    "xz_price_plans_plan_version_id_fkey" FOREIGN KEY (plan_version_id) REFERENCES xz_plan_versions(id)
+Referenced by:
+    TABLE "xz_orders" CONSTRAINT "fk_xz_orders_price_plan_097" FOREIGN KEY (price_plan_id) REFERENCES xz_price_plans(id)
+    TABLE "xz_order_price_quotes" CONSTRAINT "xz_order_price_quotes_price_plan_id_fkey" FOREIGN KEY (price_plan_id) REFERENCES xz_price_plans(id)
+    TABLE "xz_price_plan_payment_bindings" CONSTRAINT "xz_price_plan_payment_bindings_price_plan_id_fkey" FOREIGN KEY (price_plan_id) REFERENCES xz_price_plans(id)
+    TABLE "xz_price_plan_user_whitelist" CONSTRAINT "xz_price_plan_user_whitelist_price_plan_id_fkey" FOREIGN KEY (price_plan_id) REFERENCES xz_price_plans(id)
+Triggers:
+    trg_xz_price_plans_guard_099 BEFORE DELETE OR UPDATE ON xz_price_plans FOR EACH ROW EXECUTE FUNCTION xz_guard_price_plan_099()
+    trg_xz_price_plans_touch_098 BEFORE UPDATE ON xz_price_plans FOR EACH ROW EXECUTE FUNCTION xz_touch_price_plan_admin_record_098()
+

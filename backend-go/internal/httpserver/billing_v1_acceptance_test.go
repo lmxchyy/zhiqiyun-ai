@@ -14,7 +14,7 @@ func newBillingAcceptanceStore(t *testing.T) *jsonStore {
 		data.PointAccounts = []adminPointAccount{{
 			ID:        "points_billing_acceptance",
 			UserID:    billingAcceptanceUserID,
-			Available: 500,
+			Available: 2000,
 			Frozen:    0,
 		}}
 		return nil
@@ -41,34 +41,34 @@ func videoAcceptanceRequest(clientRequestID string) createGenerationTaskRequest 
 }
 
 func TestBillingCenterV1Acceptance(t *testing.T) {
-	t.Run("5s 720p success quotes reserves and captures 90", func(t *testing.T) {
+	t.Run("5s 720p success quotes reserves and captures 600", func(t *testing.T) {
 		store := newBillingAcceptanceStore(t)
 		req := videoAcceptanceRequest("accept-success")
 		pending, err := store.CreatePendingGenerationTask(req)
 		if err != nil {
 			t.Fatalf("create pending task: %v", err)
 		}
-		if pending.QuotedPoints != 90 || pending.ReservedPoints != 90 || pending.BillingStatus != billingStatusReserved {
-			t.Fatalf("pending billing snapshot = quoted %.0f reserved %.0f status %s, want 90/90/RESERVED", pending.QuotedPoints, pending.ReservedPoints, pending.BillingStatus)
+		if pending.QuotedPoints != 600 || pending.ReservedPoints != 600 || pending.BillingStatus != billingStatusReserved {
+			t.Fatalf("pending billing snapshot = quoted %.0f reserved %.0f status %s, want 600/600/RESERVED", pending.QuotedPoints, pending.ReservedPoints, pending.BillingStatus)
 		}
 		account, err := store.PointAccount(billingAcceptanceUserID)
 		if err != nil {
 			t.Fatalf("point account after reserve: %v", err)
 		}
-		if account.Available != 410 || account.Frozen != 90 {
-			t.Fatalf("account after reserve = available %d frozen %d, want 410/90", account.Available, account.Frozen)
+		if account.Available != 1400 || account.Frozen != 600 {
+			t.Fatalf("account after reserve = available %d frozen %d, want 1400/600", account.Available, account.Frozen)
 		}
 
 		completed, err := store.CompleteGenerationTask(pending.ID, req)
 		if err != nil {
 			t.Fatalf("complete task: %v", err)
 		}
-		if completed.TaskStatus != taskStatusSucceeded || completed.BillingStatus != billingStatusCaptured || completed.CapturedPoints != 90 {
+		if completed.TaskStatus != taskStatusSucceeded || completed.BillingStatus != billingStatusCaptured || completed.CapturedPoints != 600 {
 			t.Fatalf("completed task = taskStatus %s billingStatus %s captured %.0f", completed.TaskStatus, completed.BillingStatus, completed.CapturedPoints)
 		}
 		account, _ = store.PointAccount(billingAcceptanceUserID)
-		if account.Available != 410 || account.Frozen != 0 {
-			t.Fatalf("account after capture = available %d frozen %d, want 410/0", account.Available, account.Frozen)
+		if account.Available != 1400 || account.Frozen != 0 {
+			t.Fatalf("account after capture = available %d frozen %d, want 1400/0", account.Available, account.Frozen)
 		}
 		events, err := store.ListBillingLifecycleEvents()
 		if err != nil || countTaskEvents(events, pending.ID, "QUOTE", "RESERVE", "CAPTURE") != 3 {
@@ -80,7 +80,7 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 		}
 	})
 
-	t.Run("upstream failure releases 90 and restores balance", func(t *testing.T) {
+	t.Run("upstream failure releases 600 and restores balance", func(t *testing.T) {
 		store := newBillingAcceptanceStore(t)
 		pending, err := store.CreatePendingGenerationTask(videoAcceptanceRequest("accept-failure"))
 		if err != nil {
@@ -90,12 +90,12 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fail task: %v", err)
 		}
-		if failed.TaskStatus != taskStatusFailed || failed.BillingStatus != billingStatusReleased || failed.ReleasedPoints != 90 {
+		if failed.TaskStatus != taskStatusFailed || failed.BillingStatus != billingStatusReleased || failed.ReleasedPoints != 600 {
 			t.Fatalf("failed task = taskStatus %s billingStatus %s released %.0f", failed.TaskStatus, failed.BillingStatus, failed.ReleasedPoints)
 		}
 		account, _ := store.PointAccount(billingAcceptanceUserID)
-		if account.Available != 500 || account.Frozen != 0 {
-			t.Fatalf("account after release = available %d frozen %d, want 500/0", account.Available, account.Frozen)
+		if account.Available != 2000 || account.Frozen != 0 {
+			t.Fatalf("account after release = available %d frozen %d, want 2000/0", account.Available, account.Frozen)
 		}
 		events, _ := store.ListBillingLifecycleEvents()
 		if countTaskEvents(events, pending.ID, "QUOTE", "RESERVE", "RELEASE") != 3 {
@@ -130,7 +130,7 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 			t.Fatalf("reserve ledger count is not 1: %v", ledger)
 		}
 		account, _ := store.PointAccount(billingAcceptanceUserID)
-		if account.Available != 410 || account.Frozen != 90 {
+		if account.Available != 1400 || account.Frozen != 600 {
 			t.Fatalf("duplicate reserve changed account twice: available %d frozen %d", account.Available, account.Frozen)
 		}
 	})
@@ -141,7 +141,7 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create old task: %v", err)
 		}
-		if oldTask.QuotedPoints != 90 || oldTask.BillingRuleVersionID == "" {
+		if oldTask.QuotedPoints != 600 || oldTask.BillingRuleVersionID == "" {
 			t.Fatalf("old task snapshot = quote %.0f version %q", oldTask.QuotedPoints, oldTask.BillingRuleVersionID)
 		}
 
@@ -193,7 +193,7 @@ func TestBillingCenterV1Acceptance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("complete old task: %v", err)
 		}
-		if completedOld.CapturedPoints != 90 || completedOld.BillingRuleVersionID != oldTask.BillingRuleVersionID {
+		if completedOld.CapturedPoints != 600 || completedOld.BillingRuleVersionID != oldTask.BillingRuleVersionID {
 			t.Fatalf("old task changed price/version: captured %.0f version %s", completedOld.CapturedPoints, completedOld.BillingRuleVersionID)
 		}
 

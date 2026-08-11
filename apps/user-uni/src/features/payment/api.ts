@@ -1,6 +1,7 @@
 import { api } from '../../api/client'
 import type {
   PaymentCapabilityResponse,
+  PricePlanQuote,
   UnifiedPaymentOrderParams,
   UnifiedPaymentOrderStatus,
   VirtualPaymentOrderParams,
@@ -22,6 +23,30 @@ export function createVirtualPaymentOrder(productCode: string, quantity = 1, cou
     method: 'POST',
     headers: { 'X-Tenant-Id': '' },
     body: JSON.stringify({ productCode, quantity, couponCode, wxLoginCode }),
+  })
+}
+
+export function createPublicPriceQuote(planId: string) {
+  return api<PricePlanQuote>('/api/v1/payment/price-quotes', {
+    method: 'POST',
+    headers: { 'X-Tenant-Id': '' },
+    body: JSON.stringify({ planId }),
+  })
+}
+
+export function createTestPriceQuote(planId: string, pricePlanId = '') {
+  return api<PricePlanQuote>('/api/v1/payment/test-price-quotes', {
+    method: 'POST',
+    headers: { 'X-Tenant-Id': '' },
+    body: JSON.stringify({ planId, pricePlanId }),
+  })
+}
+
+export function createVirtualPaymentOrderFromQuote(quoteId: string, wxLoginCode = '') {
+  return api<VirtualPaymentOrderParams>('/api/v1/payment/wechat-virtual/orders', {
+    method: 'POST',
+    headers: { 'X-Tenant-Id': '' },
+    body: JSON.stringify({ quoteId, wxLoginCode }),
   })
 }
 

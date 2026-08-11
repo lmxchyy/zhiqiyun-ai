@@ -1,0 +1,47 @@
+{
+  "checkedAt": "2026-07-29T06:05:07+08:00",
+  "verdict": {
+    "userPayment": "PASS",
+    "internalV2Fulfillment": "PASS",
+    "membershipEntitlement": "PASS",
+    "wechatDeliverNotify": "MISSING",
+    "wechatConsoleUnshipped": "FLAG",
+    "agentTest": "NOT_RUN",
+    "section5Overall": "PARTIAL"
+  },
+  "order": {
+    "orderNo": "ZQY202607282159389857812495",
+    "userId": "user_000002",
+    "wechatTransactionId": "4500000265202607293548593890",
+    "wechatOrderId": "VPO260729055939046718422",
+    "openidFromConsole": "oCTyT7ZlaHEPWG2bPDm0d0Ok6Q5Y",
+    "productId": "MEMBER_TEST_1YUAN",
+    "pricePlanId": "price_plan_20260728212634000000000_049a91b1",
+    "priceQuoteId": "quote_cc2367c46d222553b85a53c5",
+    "amountCents": 100,
+    "status": "PAID",
+    "fulfillmentStatus": "FULFILLED",
+    "entitlementStatus": "SUCCESS",
+    "snapshotVersion": 2,
+    "paymentEnvironment": "PRODUCTION",
+    "paidAt": "2026-07-28T21:59:58Z",
+    "fulfilledAt": "2026-07-28T22:01:48.144161072Z"
+  },
+  "paymentConfirmationPath": "query_order_paid",
+  "pushDeliverNotifyPresent": false,
+  "notifyProvideGoodsCalled": false,
+  "codeGap": "backend has no /xpay/notify_provide_goods caller; query compensation grants locally without WeChat ship ack",
+  "entitlements": {
+    "memberLevel": "PRO",
+    "membershipExpiresAt": "2027-07-28T21:59:58Z",
+    "tokenGrant": 40000,
+    "tokenBalanceAfter": 40793
+  },
+  "v2FlagsUnchanged": {
+    "SNAPSHOT_V2_MEMBER_AGENT_FULFILLMENT_ENABLED": true,
+    "PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED": true,
+    "PRICE_PLAN_TEST_ENTRY_ENABLED": true,
+    "WECHAT_VIRTUAL_PAY_ENV": "production"
+  },
+  "remaining": ["AGENT_TEST_1YUAN", "NORMAL_996_real_device", "idempotent_callback", "notify_provide_goods_remediation"]
+}

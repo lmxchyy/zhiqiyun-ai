@@ -16,6 +16,7 @@ export interface AssetNativeBridgeHandlers {
   openTask?: (id: string) => void;
   cancelTask?: (id: string) => void;
   retryTask?: (id: string) => void;
+  deleteTask?: (id: string) => void;
   openTaskResult?: (id: string) => void;
   openAsset?: (id: string) => void;
   favoriteAsset?: (id: string) => void;

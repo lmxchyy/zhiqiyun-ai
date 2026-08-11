@@ -558,6 +558,22 @@ type authAPI struct {
 	config   config.Config
 }
 
+type registeredCustomerStore interface {
+	CreateRegisteredCustomer(adminCustomerMutation, int) (adminUser, error)
+}
+
+func createRegisteredCustomer(store platformStore, req adminCustomerMutation, grantPoints int) (adminUser, error) {
+	registrationStore, ok := store.(registeredCustomerStore)
+	if !ok {
+		return adminUser{}, errors.New("registration point grant service is unavailable")
+	}
+	if grantPoints <= 0 {
+		return adminUser{}, ErrInvalidPointCommand
+	}
+	req.Available = nil
+	return registrationStore.CreateRegisteredCustomer(req, grantPoints)
+}
+
 type loginRequest struct {
 	Account  string `json:"account"`
 	Email    string `json:"email"`
@@ -571,6 +587,7 @@ type wechatMiniProgramLoginRequest struct {
 	WxLoginCode    string `json:"wxLoginCode"`
 	PhoneCode      string `json:"phoneCode"`
 	InviteCode     string `json:"inviteCode"`
+	InviteToken    string `json:"inviteToken"`
 	Scene          string `json:"scene"`
 	PromoterCode   string `json:"promoterCode"`
 	CampaignCode   string `json:"campaignCode"`
@@ -589,6 +606,7 @@ type registerRequest struct {
 	Password        string `json:"password"`
 	ConfirmPassword string `json:"confirmPassword"`
 	InviteCode      string `json:"inviteCode"`
+	InviteToken     string `json:"inviteToken"`
 }
 
 type changePasswordRequest struct {
@@ -716,7 +734,7 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			data, user, isNewUser, inviteBindStatus, err = a.userForPhoneIdentity(mobile, session, authRegistrationInput{
-				InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
+				Context: r.Context(), InviteToken: req.InviteToken, InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
 				CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
 			})
 			if err != nil {
@@ -814,6 +832,81 @@ func (a authAPI) linkWeChatMiniProgram(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"linked": true, "userId": updated.ID})
 }
 
+// refreshWeChatMiniProgramSession stores the current device WeChat openid on the
+// authenticated user's session so mini-program content security (and payment)
+// can resolve an openid even when the account was opened via email/SMS, or when
+// the same WeChat identity is already bound to another account.
+func (a authAPI) refreshWeChatMiniProgramSession(w http.ResponseWriter, r *http.Request) {
+	var req wechatMiniProgramLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	code := strings.TrimSpace(firstNonEmptyString(req.WxLoginCode, req.Code))
+	if code == "" {
+		writeError(w, http.StatusBadRequest, errors.New("wechat mini program code is required"))
+		return
+	}
+	if isWeChatMiniProgramMockCodeValue(code) {
+		writeAuthFlowError(w, http.StatusBadRequest, "WECHAT_REAL_CODE_REQUIRED", "real wechat login code is required")
+		return
+	}
+
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	target, err := a.authenticatedUser(r, data)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	session, err := exchangeWeChatMiniProgramCode(r.Context(), code)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	wechatSessions, ok := a.sessions.(wechatMiniProgramSessionStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+	if err := wechatSessions.PutWeChatSession(r.Context(), target.ID, session, authSessionTTL); err != nil {
+		writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
+		return
+	}
+
+	linked := false
+	if existing, found := findUserByWechatIdentity(data.Users, session); found && existing.ID != target.ID {
+		writeJSON(w, map[string]any{
+			"sessionReady": true,
+			"linked":       false,
+			"userId":       target.ID,
+			"boundToOther": true,
+		})
+		return
+	}
+	if !containsFold(target.WeChatOpenIDs, session.OpenID) || (session.UnionID != "" && target.WeChatUnionID != session.UnionID) {
+		if updated, updateErr := a.store.UpdateAdminCustomer(target.ID, adminCustomerMutation{
+			WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID,
+		}); updateErr != nil {
+			log.Printf("wechat mini program session ready but identity bind failed user=%s err=%v", target.ID, updateErr)
+		} else {
+			target = updated
+			linked = true
+		}
+	} else {
+		linked = len(target.WeChatOpenIDs) > 0 || target.WeChatUnionID != ""
+	}
+	writeJSON(w, map[string]any{
+		"sessionReady": true,
+		"linked":       linked,
+		"userId":       target.ID,
+		"boundToOther": false,
+	})
+}
+
 func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -856,7 +949,7 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	newcomerPlan := configuredNewcomerPlan(data.Plans)
-	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+	created, err := createRegisteredCustomer(a.store, adminCustomerMutation{
 		Name:                  req.Username,
 		Email:                 req.Email,
 		Role:                  "MEMBER",
@@ -864,8 +957,7 @@ func (a authAPI) register(w http.ResponseWriter, r *http.Request) {
 		PlanID:                newcomerPlan.ID,
 		ReferredBy:            referredBy,
 		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
-		Available:             pointBalancePointer(planPoints(newcomerPlan)),
-	})
+	}, planPoints(newcomerPlan))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -926,7 +1018,12 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 				identityData.OperationCenters = []adminOperationCenter{center}
 			}
 		}
-		writeJSON(w, authResponse(identityData, user, false))
+		response, err := a.authResponseWithRolePermissions(r.Context(), identityData, user, false)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, response)
 		return
 	}
 	data, err := a.store.AdminData()
@@ -939,7 +1036,31 @@ func (a authAPI) me(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	writeJSON(w, authResponse(data, user, false))
+	response, err := a.authResponseWithRolePermissions(r.Context(), data, user, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, response)
+}
+
+func (a authAPI) authResponseWithRolePermissions(ctx context.Context, data adminPlatformData, user adminUser, includeToken bool) (map[string]any, error) {
+	response := authResponse(data, user, includeToken)
+	var rolePermissions []string
+	var err error
+	if permissionStore, ok := a.store.(authRolePermissionStore); ok {
+		rolePermissions, err = permissionStore.AuthPermissionsForRole(ctx, user.Role)
+	} else if permissionStore, ok := a.store.(authPricingPermissionStore); ok {
+		rolePermissions, err = permissionStore.PricingPermissionsForRole(ctx, user.Role)
+	} else {
+		return response, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	permissions, _ := response["permissions"].([]string)
+	response["permissions"] = appendUnique(permissions, rolePermissions...)
+	return response, nil
 }
 
 func (a authAPI) refresh(w http.ResponseWriter, r *http.Request) {
@@ -1100,7 +1221,10 @@ func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adm
 }
 
 func (a authAPI) authResponseWithToken(ctx context.Context, data adminPlatformData, user adminUser) (map[string]any, error) {
-	response := authResponse(data, user, false)
+	response, err := a.authResponseWithRolePermissions(ctx, data, user, false)
+	if err != nil {
+		return nil, err
+	}
 	if a.sessions == nil {
 		if !devAuthFallbackEnabled() {
 			return nil, errAuthSessionUnavailable
@@ -1181,7 +1305,7 @@ func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session
 	}
 
 	newcomerPlan := configuredNewcomerPlan(data.Plans)
-	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+	created, err := createRegisteredCustomer(a.store, adminCustomerMutation{
 		Name:                  "WeChat User",
 		Email:                 email,
 		WeChatOpenID:          session.OpenID,
@@ -1190,8 +1314,7 @@ func (a authAPI) userForWeChatMiniProgramSession(data adminPlatformData, session
 		Status:                "ACTIVE",
 		PlanID:                newcomerPlan.ID,
 		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
-		Available:             pointBalancePointer(planPoints(newcomerPlan)),
-	})
+	}, planPoints(newcomerPlan))
 	if err != nil {
 		return data, adminUser{}, err
 	}

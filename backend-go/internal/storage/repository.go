@@ -25,17 +25,26 @@ type Repository interface {
 	GetQuota(context.Context, string, int64) (Quota, error)
 	UpdateQuota(context.Context, Quota) (Quota, error)
 	Overview(context.Context, string) (Overview, error)
+	CreateMultipartSession(context.Context, MultipartUploadRecord) error
+	GetMultipartSession(context.Context, string, string, string) (MultipartUploadRecord, error)
+	GetMultipartSessionByIdempotency(context.Context, string, string, string) (MultipartUploadRecord, error)
+	SaveMultipartPart(context.Context, string, CompletedPart) error
+	UpdateMultipartState(context.Context, string, string, string, *time.Time) error
 }
 
 type MemoryRepository struct {
-	mu      sync.Mutex
-	configs map[string]Config
-	files   map[string]FileObject
-	quotas  map[string]Quota
+	mu         sync.Mutex
+	configs    map[string]Config
+	files      map[string]FileObject
+	quotas     map[string]Quota
+	multiparts map[string]MultipartUploadRecord
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{configs: map[string]Config{}, files: map[string]FileObject{}, quotas: map[string]Quota{}}
+	return &MemoryRepository{
+		configs: map[string]Config{}, files: map[string]FileObject{}, quotas: map[string]Quota{},
+		multiparts: map[string]MultipartUploadRecord{},
+	}
 }
 
 func (r *MemoryRepository) ListConfigs(_ context.Context, tenantID string, includePlatform bool) ([]Config, error) {
@@ -362,6 +371,88 @@ func (r *MemoryRepository) Overview(_ context.Context, tenantID string) (Overvie
 		}
 	}
 	return overview, nil
+}
+
+func (r *MemoryRepository) CreateMultipartSession(_ context.Context, session MultipartUploadRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.multiparts[session.ID]; exists {
+		return ErrUploadConfirmFailed
+	}
+	if session.Parts == nil {
+		session.Parts = map[int]CompletedPart{}
+	}
+	r.multiparts[session.ID] = cloneMultipart(session)
+	return nil
+}
+
+func (r *MemoryRepository) GetMultipartSession(_ context.Context, tenantID, userID, uploadID string) (MultipartUploadRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, ok := r.multiparts[uploadID]
+	if !ok || session.TenantID != tenantID || session.OwnerUserID != userID {
+		return MultipartUploadRecord{}, ErrMultipartNotFound
+	}
+	return cloneMultipart(session), nil
+}
+
+func (r *MemoryRepository) GetMultipartSessionByIdempotency(_ context.Context, tenantID, userID, key string) (MultipartUploadRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return MultipartUploadRecord{}, ErrMultipartNotFound
+	}
+	for _, session := range r.multiparts {
+		if session.TenantID == tenantID && session.OwnerUserID == userID && session.IdempotencyKey == key {
+			return cloneMultipart(session), nil
+		}
+	}
+	return MultipartUploadRecord{}, ErrMultipartNotFound
+}
+
+func (r *MemoryRepository) SaveMultipartPart(_ context.Context, uploadID string, part CompletedPart) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, ok := r.multiparts[uploadID]
+	if !ok {
+		return ErrMultipartNotFound
+	}
+	if session.Parts == nil {
+		session.Parts = map[int]CompletedPart{}
+	}
+	session.Parts[part.PartNumber] = part
+	if session.State == MultipartStateInitialized {
+		session.State = MultipartStateUploading
+	}
+	r.multiparts[uploadID] = session
+	return nil
+}
+
+func (r *MemoryRepository) UpdateMultipartState(_ context.Context, tenantID, uploadID, state string, completedAt *time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	session, ok := r.multiparts[uploadID]
+	if !ok || (tenantID != "" && session.TenantID != tenantID) {
+		return ErrMultipartNotFound
+	}
+	session.State = state
+	if completedAt != nil {
+		session.CompletedAt = completedAt
+	}
+	r.multiparts[uploadID] = session
+	return nil
+}
+
+func cloneMultipart(session MultipartUploadRecord) MultipartUploadRecord {
+	copy := session
+	if session.Parts != nil {
+		copy.Parts = make(map[int]CompletedPart, len(session.Parts))
+		for key, value := range session.Parts {
+			copy.Parts[key] = value
+		}
+	}
+	return copy
 }
 
 func cloneFile(file FileObject) FileObject {

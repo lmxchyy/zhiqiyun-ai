@@ -1,0 +1,40 @@
+{
+  "changeRequest": "CR-2026-OC-009",
+  "conclusion": "APP_RELEASE_DONE_SMOKE_PASS_SAFE_STATE_HELD",
+  "stopped": true,
+  "firstWhitelistOpened": false,
+  "canaryOpened": false,
+  "readyToApplyFirstSingleOrderCanaryChangeRequest": true,
+  "version": "v1.3.2-rc1",
+  "gitTag": "v1.3.2-rc1",
+  "gitCommit": "ccad9405728a2007d608fca363559a52c1710838",
+  "archive": "xianzhi-v1.3.2-rc1-ccad94057.tar.gz",
+  "archiveSha256": "367c728253eb839f995430c2f619c95bd2a6b5d21c66d6f94e2222ac941e71fd",
+  "deployImage": "local/xianzhi-ai-platform:ccad94057",
+  "deployImageIdSha256": "7d078f47a8c65c589f71f1fd844ed48444f13131716246e9aefa859e18b1104f",
+  "deployNode": "ai.zs-kjhn.cn",
+  "deployContainer": "zhiqiyun-ai-prod-xianzhi-ai-1",
+  "deployStartUtc": "2026-07-26T21:46:15Z",
+  "deployEndUtc": "2026-07-26T21:47:04Z",
+  "logDir": "/root/cr-2026-oc-009-20260726T214615Z",
+  "rolloutFingerprint": "SHADOW|false|false|0|[]|[]|[]|[]",
+  "schedulers": {
+    "refund_retry": false,
+    "refund_verification": false,
+    "referral_reward_release": false,
+    "manual_refund_auto_approval": false
+  },
+  "providerMappings": {
+    "WECHAT_VIRTUAL": "MANUAL"
+  },
+  "httpSmoke": {
+    "health": "PASS",
+    "adminQueryUnauth": "401",
+    "writeUnauth": "401",
+    "refundTaskCountUnchanged": true
+  },
+  "rollbackImage": "local/xianzhi-ai-platform:27dde3b4",
+  "rollbackImageIdSha256": "234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535",
+  "migrationExecuted": false,
+  "logAnomalies": []
+}

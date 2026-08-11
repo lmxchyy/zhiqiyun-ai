@@ -278,7 +278,7 @@ func configuredMiniProgramCreationModes() []string {
 	allowed := map[string]bool{"image": true, "infographic": true, "video": true, "ppt": true, "agent": true, "review": true}
 	raw := strings.TrimSpace(os.Getenv("MINIPROGRAM_CREATION_MODES"))
 	if raw == "" {
-		return []string{"image", "infographic"}
+		return []string{"image", "infographic", "video"}
 	}
 	result := []string{}
 	for _, item := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '，' || r == ';' }) {
@@ -690,17 +690,30 @@ func (a api) writeCompliantAssetDownload(w http.ResponseWriter, r *http.Request,
 		_, _ = w.Write([]byte(body))
 		return true
 	}
-	raw, contentType, _, err := readGeneratedArtifact(r.Context(), item.URL, item.MediaType)
-	if err == nil && (strings.EqualFold(contentType, "image/png") || strings.EqualFold(contentType, "image/jpeg")) {
-		marked, markErr := renderRasterAILabel(raw, contentType, a.aiLabelSetting())
-		if markErr == nil {
-			a.recordInlineDownloadDerivative(item)
-			writeAttachmentHeaders(w, contentType, downloadAssetName(item, contentType))
-			w.Header().Set("X-AI-Generated", "true")
-			w.Header().Set("X-AI-Derivative-Of", item.ID)
-			_, _ = w.Write(marked)
-			return true
+	raw, contentType, err := func() ([]byte, string, error) {
+		if stored, storedType, ok := a.readStoredAssetBytes(r.Context(), item); ok {
+			return stored, firstNonEmptyString(storedType, item.MediaType), nil
 		}
+		payload, mediaType, _, readErr := readGeneratedArtifact(r.Context(), item.URL, item.MediaType)
+		return payload, mediaType, readErr
+	}()
+	if err == nil && len(raw) > 0 {
+		if strings.EqualFold(contentType, "image/png") || strings.EqualFold(contentType, "image/jpeg") {
+			if marked, markErr := renderRasterAILabel(raw, contentType, a.aiLabelSetting()); markErr == nil {
+				a.recordInlineDownloadDerivative(item)
+				writeAttachmentHeaders(w, contentType, downloadAssetName(item, contentType))
+				w.Header().Set("X-AI-Generated", "true")
+				w.Header().Set("X-AI-Derivative-Of", item.ID)
+				_, _ = w.Write(marked)
+				return true
+			}
+		}
+		// Private object storage URLs are not browser-reachable; still serve the
+		// original bytes so web detail/preview can load when watermarking fails.
+		writeAttachmentHeaders(w, firstNonEmptyString(contentType, "application/octet-stream"), downloadAssetName(item, contentType))
+		w.Header().Set("X-AI-Generated", "true")
+		_, _ = w.Write(raw)
+		return true
 	}
 	writeError(w, http.StatusServiceUnavailable, errors.New("带AI标识的下载文件尚未生成，请稍后重试"))
 	return true

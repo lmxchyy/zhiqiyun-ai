@@ -51,6 +51,8 @@ func normalizeBillingV1Defaults(data adminPlatformData) adminPlatformData {
 func defaultProviderCosts(now string) []providerCost {
 	return []providerCost{
 		{ID: "pcost_openai_gpt_image_2", Provider: "OPENAI", Channel: "channel_openai", PlatformModelCode: "gpt-image-2", UpstreamModelName: "gpt-image-2", BillingUnit: "PER_IMAGE", ParameterRange: map[string]any{"quality": []any{"standard", "high"}}, UnitCost: 0.6, Currency: "CNY", EffectiveFrom: now, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "pcost_newapi_grok_imagine_15_video", Provider: "NEWAPI", Channel: "channel_runtime_env", PlatformModelCode: "grok-imagine-1.5-video", UpstreamModelName: "grok-imagine-1.5-video", BillingUnit: "PER_SECOND", ParameterRange: map[string]any{"duration": map[string]any{"min": float64(6), "max": float64(30)}, "resolution": []any{"480p", "720p"}}, UnitCost: 0.13, Currency: "CNY", EffectiveFrom: now, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "pcost_newapi_grok_imagine_video_15_preview", Provider: "NEWAPI", Channel: "channel_newapi_gateway", PlatformModelCode: "grok-imagine-video-1.5-preview", UpstreamModelName: "grok-imagine-video-1.5-preview", BillingUnit: "PER_REQUEST", ParameterRange: map[string]any{}, UnitCost: 0.8, Currency: "CNY", EffectiveFrom: now, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "pcost_seedance_fast_720", Provider: "CME_CLOUD", Channel: "channel_cmecloud_seedance", PlatformModelCode: "seedance-fast-2.0", UpstreamModelName: "seedance-fast-2.0", BillingUnit: "PER_SECOND", ParameterRange: map[string]any{"resolution": []any{"720p"}}, UnitCost: 0.8, Currency: "CNY", EffectiveFrom: now, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "pcost_doubao_seedance_720", Provider: "CME_CLOUD", Channel: "channel_cmecloud_seedance", PlatformModelCode: "doubao-seedance-2.0", UpstreamModelName: "doubao-seedance-2.0", BillingUnit: "PER_SECOND", ParameterRange: map[string]any{"resolution": []any{"720p"}}, UnitCost: 0.8, Currency: "CNY", EffectiveFrom: now, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 	}
@@ -774,28 +776,7 @@ func applyAdminJSONWalletEntryV1(data *adminPlatformData, task generationTask, e
 			return item, nil
 		}
 	}
-	accountExisted := false
-	for _, item := range data.PointAccounts {
-		if item.UserID == task.UserID {
-			accountExisted = true
-			break
-		}
-	}
-	defaultAvailable := 0
-	if !accountExisted {
-		defaultAvailable = pointsAvailableForAdminUser(*data, task.UserID)
-	}
 	account, index := adminPointAccountV1(data, task.UserID)
-	if !accountExisted {
-		available := defaultAvailable
-		if available > 0 {
-			next := account
-			next.Available = available
-			appendAdminWalletLedgerV1(data, account, next, "GRANT", available, "SYSTEM_DEFAULT", task.UserID, "system default points grant", nil)
-			account = next
-			data.PointAccounts[index] = next
-		}
-	}
 	next := account
 	switch entryType {
 	case "RESERVE":

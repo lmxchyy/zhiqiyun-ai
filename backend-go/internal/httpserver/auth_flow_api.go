@@ -51,6 +51,8 @@ type authFlowError struct {
 func (e *authFlowError) Error() string { return e.message }
 
 type authRegistrationInput struct {
+	Context        context.Context
+	InviteToken    string
 	InviteCode     string
 	Scene          string
 	PromoterCode   string
@@ -68,6 +70,7 @@ type smsLoginRequest struct {
 	Mobile         string `json:"mobile"`
 	SMSCode        string `json:"smsCode"`
 	InviteCode     string `json:"inviteCode"`
+	InviteToken    string `json:"inviteToken"`
 	Scene          string `json:"scene"`
 	PromoterCode   string `json:"promoterCode"`
 	CampaignCode   string `json:"campaignCode"`
@@ -469,7 +472,7 @@ func (a authAPI) smsLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input := authRegistrationInput{
-		InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
+		Context: r.Context(), InviteToken: req.InviteToken, InviteCode: req.InviteCode, Scene: req.Scene, PromoterCode: req.PromoterCode,
 		CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
 	}
 	data, user, isNewUser, inviteStatus, err := a.userForPhoneIdentity(mobile, wechatMiniProgramSession{}, input)
@@ -542,15 +545,31 @@ func registrationSource(input authRegistrationInput) map[string]string {
 	})
 }
 
-func inviteBinding(data adminPlatformData, inviteCode string) (string, string) {
-	code := strings.ToUpper(strings.TrimSpace(inviteCode))
+func (a authAPI) inviteBinding(data adminPlatformData, input authRegistrationInput) (string, string, error) {
+	if strings.TrimSpace(input.InviteToken) != "" {
+		ctx := input.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		invitation, err := resolvePromotionInvitation(ctx, a.store, data, input.InviteToken, "")
+		if err != nil {
+			return "", "invalid", &authFlowError{status: http.StatusBadRequest, code: "INVITE_TOKEN_INVALID", message: err.Error()}
+		}
+		return invitation.InviterUserID, "bound", nil
+	}
+	code := strings.ToUpper(strings.TrimSpace(input.InviteCode))
 	if code == "" {
-		return "", "not_provided"
+		return "", "not_provided", nil
 	}
 	if agent, ok := channelAgentForInviteCode(data.ChannelAgents, code); ok {
-		return agent.UserID, "bound"
+		return agent.UserID, "bound", nil
 	}
-	return "", "ignored_invalid"
+	for _, center := range data.OperationCenters {
+		if strings.EqualFold(strings.TrimSpace(center.InviteCode), code) && strings.EqualFold(center.Status, "ACTIVE") {
+			return center.UserID, "bound", nil
+		}
+	}
+	return "", "ignored_invalid", nil
 }
 
 func phoneSyntheticEmail(mobile string) string {
@@ -652,19 +671,22 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 			return data, adminUser{}, false, "", updateErr
 		}
 		status := "not_applicable"
-		if strings.TrimSpace(input.InviteCode) != "" {
+		if strings.TrimSpace(input.InviteCode) != "" || strings.TrimSpace(input.InviteToken) != "" {
 			status = "ignored_existing"
 		}
 		return dataWithUpdatedUser(data, updated), updated, false, status, nil
 	}
-	referredBy, inviteStatus := inviteBinding(data, input.InviteCode)
+	referredBy, inviteStatus, bindErr := a.inviteBinding(data, input)
+	if bindErr != nil {
+		return data, adminUser{}, false, "", bindErr
+	}
 	newcomerPlan := configuredNewcomerPlan(data.Plans)
-	created, err := a.store.CreateAdminCustomer(adminCustomerMutation{
+	created, err := createRegisteredCustomer(a.store, adminCustomerMutation{
 		Name: "用户 " + maskedMobile(mobile), Email: phoneSyntheticEmail(mobile), Mobile: mobile,
 		WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID, RegistrationSource: registrationSource(input),
 		Role: "MEMBER", Status: "ACTIVE", PlanID: newcomerPlan.ID, ReferredBy: referredBy,
-		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()), Available: pointBalancePointer(planPoints(newcomerPlan)),
-	})
+		SubscriptionExpiresAt: newcomerPlanExpiresAt(newcomerPlan, time.Now()),
+	}, planPoints(newcomerPlan))
 	if err != nil {
 		// A database-level mobile/UnionID unique constraint is the final guard when
 		// multiple API instances race to register the same real-world identity.
@@ -680,7 +702,7 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 				})
 				if updateErr == nil {
 					inviteStatus := "not_applicable"
-					if strings.TrimSpace(input.InviteCode) != "" {
+					if strings.TrimSpace(input.InviteCode) != "" || strings.TrimSpace(input.InviteToken) != "" {
 						inviteStatus = "ignored_existing"
 					}
 					return dataWithUpdatedUser(refreshed, updated), updated, false, inviteStatus, nil

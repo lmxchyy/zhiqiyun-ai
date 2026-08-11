@@ -1,0 +1,15 @@
+=== ENABLE PRICE_PLAN_MEMBER_AGENT_CREATION_ENABLED 2026-07-29 05:35:11 +0800 ===
+WECHAT_VIRTUAL_PAY_ENV=production
+FLIP_AT=2026-07-29 05:35:11 +0800
+wait_1 health=starting 2026-07-29 05:35:12 +0800
+wait_2 health=starting 2026-07-29 05:35:14 +0800
+wait_3 health=starting 2026-07-29 05:35:16 +0800
+wait_4 health=starting 2026-07-29 05:35:18 +0800
+wait_5 health=starting 2026-07-29 05:35:20 +0800
+wait_6 health=healthy 2026-07-29 05:35:22 +0800
+health=healthy status=running
+true
+true
+false
+production
+VERIFY_OK fulfillment+creation FLIP_AT=2026-07-29 05:35:11 +0800

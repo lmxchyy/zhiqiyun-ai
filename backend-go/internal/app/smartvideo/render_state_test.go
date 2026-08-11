@@ -6,9 +6,11 @@ func TestRenderStateMachine(t *testing.T) {
 	allowed := [][2]string{
 		{RenderStatusCreated, RenderStatusQueued},
 		{RenderStatusQueued, RenderStatusProcessing},
-		{RenderStatusProcessing, RenderStatusRendering},
+		{RenderStatusProcessing, RenderStatusSynthesizing},
+		{RenderStatusSynthesizing, RenderStatusRendering},
 		{RenderStatusRendering, RenderStatusUploading},
-		{RenderStatusUploading, RenderStatusSucceeded},
+		{RenderStatusUploading, RenderStatusPublishing},
+		{RenderStatusPublishing, RenderStatusSucceeded},
 	}
 	for _, transition := range allowed {
 		if err := ValidateRenderTransition(transition[0], transition[1]); err != nil {
@@ -19,6 +21,8 @@ func TestRenderStateMachine(t *testing.T) {
 		{RenderStatusCreated, RenderStatusSucceeded},
 		{RenderStatusUploading, RenderStatusRendering},
 		{RenderStatusSucceeded, RenderStatusQueued},
+		{RenderStatusProcessing, RenderStatusRendering},
+		{RenderStatusRendering, RenderStatusCancelled},
 	} {
 		if err := ValidateRenderTransition(transition[0], transition[1]); err == nil {
 			t.Fatalf("unexpected transition %s -> %s", transition[0], transition[1])

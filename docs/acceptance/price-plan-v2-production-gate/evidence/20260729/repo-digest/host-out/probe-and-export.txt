@@ -1,0 +1,214 @@
+=== PROBE START 2026-07-29T09:45:26+0800 ===
+HOSTNAME=VM-0-11-centos
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda1       118G   40G   74G  36% /
+/dev/vda1       118G   40G   74G  36% /
+/dev/vda1       118G   40G   74G  36% /
+
+CID=decf56063eb4
+CONTAINER_IMAGE_FIELD=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+
+=== CONTAINER SUMMARY ===
+Id=decf56063eb4020edae0b6763dffa9614142ab0574c32f7f4bf583c2e522857b
+Name=/zhiqiyun-ai-prod-xianzhi-ai-1
+Image=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+Config.Image=local/xianzhi-ai-platform:a39485ef1
+
+=== IMAGE SUMMARY (FULL, no truncate) ===
+Id=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+RepoTags=["local/xianzhi-ai-platform:a39485ef1","local/xianzhi-ai-platform:git-a39485ef1"]
+RepoDigests=[]
+Created=2026-07-29T06:36:31.939995297+08:00
+
+=== LABELS ===
+org.opencontainers.image.revision=a39485ef159dabf348a71059a0e922af4894ab5a
+
+
+RUNNING_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+EXPECTED_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+VERIFY_BEFORE: running IMAGE_ID == recorded EXPECTED_IMAGE_ID EXACT MATCH
+
+=== ALL local/xianzhi-ai-platform IMAGES (no-trunc) ===
+REPOSITORY                  TAG                IMAGE ID                                                                  CREATED        SIZE
+local/xianzhi-ai-platform   a39485ef1          sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32   3 hours ago    373MB
+local/xianzhi-ai-platform   git-a39485ef1      sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32   3 hours ago    373MB
+local/xianzhi-ai-platform   f8a7632b5          sha256:428182fcb9f9815ed4438481be03f9f0c4065f6b9bf8b69957145111257b9ff7   3 hours ago    372MB
+local/xianzhi-ai-platform   git-f8a7632b5      sha256:428182fcb9f9815ed4438481be03f9f0c4065f6b9bf8b69957145111257b9ff7   3 hours ago    372MB
+local/xianzhi-ai-platform   3d0c0e032          sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331   5 hours ago    373MB
+local/xianzhi-ai-platform   git-3d0c0e032      sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331   5 hours ago    373MB
+local/xianzhi-ai-platform   ccad94057          sha256:71f110f7123b34387881f84b8cc66edec964e921cb146c2053c93dc1eb26af66   26 hours ago   372MB
+local/xianzhi-ai-platform   27dde3b4           sha256:234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535   3 days ago     371MB
+local/xianzhi-ai-platform   7695c8ae           sha256:234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535   3 days ago     371MB
+local/xianzhi-ai-platform   0649ca7b           sha256:a0f23af1006245915070939885ee8f765c1ce6affef23e2b1b31e2be5553890a   4 days ago     129MB
+local/xianzhi-ai-platform   fd0da940           sha256:27c9f202af2a33d7b63dde0329e7e1979ab3ecbd76ecee5cf3219cab544ceb27   5 days ago     129MB
+local/xianzhi-ai-platform   09053f04           sha256:ba349b1a8630d94fbb52ee1c66b53283760a473dedd375bfe8682ce57a968efc   5 days ago     129MB
+local/xianzhi-ai-platform   b6503627           sha256:07bf9be5b7bdb7a89aae3d1e28216d1010e793591e157aabd78e90ccd3031f31   5 days ago     129MB
+local/xianzhi-ai-platform   8d293637           sha256:c036ff9b0d6f6021907703575a47edc482d5d3c272d947bcb43e677c266855a0   5 days ago     129MB
+local/xianzhi-ai-platform   9d946e1e           sha256:5e094ba88920c7db39f81abb5785d93e928a8975aecee25d2da60ed609860a7f   5 days ago     129MB
+local/xianzhi-ai-platform   2b5930dc           sha256:9108757219e459bfb9d87e58d529ec4e19e75b91bdf7f0eb567fb85b594f870f   5 days ago     129MB
+local/xianzhi-ai-platform   cb57087c           sha256:2d3490d933ebae35f569ee692f41e64b0d7343809a15ec0ef34fdb711231532d   6 days ago     129MB
+local/xianzhi-ai-platform   cb57087c-r092521   sha256:2d3490d933ebae35f569ee692f41e64b0d7343809a15ec0ef34fdb711231532d   6 days ago     129MB
+local/xianzhi-ai-platform   dbec02ff           sha256:f0bfbe1e5898dcd5d362c8a472075afcc69954fc94c7d443b4adf96b077946dd   6 days ago     129MB
+local/xianzhi-ai-platform   e3051c9d           sha256:f0bfbe1e5898dcd5d362c8a472075afcc69954fc94c7d443b4adf96b077946dd   6 days ago     129MB
+local/xianzhi-ai-platform   cb5e465f           sha256:504899246db58f86bb5b95cde2d068bec2d37171b9d7c635dfff350767f39084   6 days ago     129MB
+local/xianzhi-ai-platform   2a7e26d0           sha256:99eaa579bf3fc1cd72040a5fcbe8ebbda1b6523375b54da80afda9abe55914d3   6 days ago     129MB
+local/xianzhi-ai-platform   8c3ea795           sha256:d452c89c50ed193f609cef59b55bce37e3945476bf6e44667b2e1cfaa0289753   6 days ago     129MB
+local/xianzhi-ai-platform   ddba59dd           sha256:d452c89c50ed193f609cef59b55bce37e3945476bf6e44667b2e1cfaa0289753   6 days ago     129MB
+local/xianzhi-ai-platform   2f794ef1           sha256:cfca6fa4d3de6e7b9be60b142f6517dd4bc3ca2c0ca72b8e445dcda2605a87f9   6 days ago     129MB
+local/xianzhi-ai-platform   29061479           sha256:60a80b0b223a0df511101dc03950d8b4a8f11741728f64c36ef6eee8e95936cf   6 days ago     129MB
+local/xianzhi-ai-platform   422c8d00           sha256:8bb711eba5d608c2957042ba1247e67cfe172703d003ce6d1359dd5d9ba34f69   6 days ago     128MB
+local/xianzhi-ai-platform   69fce2e1           sha256:5fdd81c4252df490ef83b4d4513ca5d34c814265f27644c9c37edd4266c388f0   6 days ago     128MB
+local/xianzhi-ai-platform   04c95568           sha256:35d1280ef985ef87a8d63df2cc7e6e13667148c6415d8b0231e50d92fdfc7d6a   6 days ago     128MB
+local/xianzhi-ai-platform   d7846328           sha256:2d031ec2a9f5a5dc0d7b6776ba92568d8572491839e390a64e4d2eb4033e936a   7 days ago     128MB
+local/xianzhi-ai-platform   40ab226d           sha256:d757f8a951bd55724db0e3b3554c7cbd29a9e48ee893a23999c171b645312dc1   7 days ago     128MB
+local/xianzhi-ai-platform   8334ee71           sha256:d757f8a951bd55724db0e3b3554c7cbd29a9e48ee893a23999c171b645312dc1   7 days ago     128MB
+local/xianzhi-ai-platform   abb2c95b           sha256:67f9ba897227736894fddf11f79cf5470a4b0af6632dc432393b885ba40b402e   7 days ago     128MB
+local/xianzhi-ai-platform   3886e3d9           sha256:1cadf12ac9e85b9d6a12cc33961b67bd77d8026475b2eea4ed88038c1f8b98ca   8 days ago     128MB
+local/xianzhi-ai-platform   pre-93fae2f5       sha256:1cadf12ac9e85b9d6a12cc33961b67bd77d8026475b2eea4ed88038c1f8b98ca   8 days ago     128MB
+local/xianzhi-ai-platform   09e143ed           sha256:7dd19a0f0a0641c6242790c7b79265c5153feabbf4755cda4a75d3dba8a35ccf   9 days ago     128MB
+local/xianzhi-ai-platform   88531403           sha256:fca5311b996870f4d934d1a85be2476a1bb42e08910115164c0cb0e54d8c465a   9 days ago     128MB
+local/xianzhi-ai-platform   cf129f35           sha256:ad75e2609f91713a2a68978f9d626d1a116cec70174ed4212d960a9763d6826e   9 days ago     128MB
+local/xianzhi-ai-platform   fcec149b           sha256:9cf611cea7c92d1191e9cdcd710abe6847aa89cb9453c517039f2857e737f80c   9 days ago     127MB
+local/xianzhi-ai-platform   3e4765fe           sha256:ad84c698a159d6a205422194014fb973efeb423ee821075062406f717a6ec40b   9 days ago     127MB
+local/xianzhi-ai-platform   49e4048            sha256:c378a3bd849c60e535af15b84fb0b0cd0f6dec53b7da1f9206f85030f148ec39   9 days ago     127MB
+local/xianzhi-ai-platform   58a07c5            sha256:eb5ac0b5f25fec02925ac02980b4566890b641ec4e23d17b5d97ca783baa3463   9 days ago     127MB
+sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32	local/xianzhi-ai-platform:a39485ef1	2026-07-29 06:36:31 +0800 CST	373MB
+sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32	local/xianzhi-ai-platform:git-a39485ef1	2026-07-29 06:36:31 +0800 CST	373MB
+sha256:428182fcb9f9815ed4438481be03f9f0c4065f6b9bf8b69957145111257b9ff7	local/xianzhi-ai-platform:f8a7632b5	2026-07-29 06:34:39 +0800 CST	372MB
+sha256:428182fcb9f9815ed4438481be03f9f0c4065f6b9bf8b69957145111257b9ff7	local/xianzhi-ai-platform:git-f8a7632b5	2026-07-29 06:34:39 +0800 CST	372MB
+sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331	local/xianzhi-ai-platform:3d0c0e032	2026-07-29 04:30:21 +0800 CST	373MB
+sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331	local/xianzhi-ai-platform:git-3d0c0e032	2026-07-29 04:30:21 +0800 CST	373MB
+sha256:71f110f7123b34387881f84b8cc66edec964e921cb146c2053c93dc1eb26af66	local/xianzhi-ai-platform:ccad94057	2026-07-28 08:05:09 +0800 CST	372MB
+sha256:234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535	local/xianzhi-ai-platform:27dde3b4	2026-07-25 20:11:49 +0800 CST	371MB
+sha256:234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535	local/xianzhi-ai-platform:7695c8ae	2026-07-25 20:11:49 +0800 CST	371MB
+sha256:a0f23af1006245915070939885ee8f765c1ce6affef23e2b1b31e2be5553890a	local/xianzhi-ai-platform:0649ca7b	2026-07-24 14:42:43 +0800 CST	129MB
+sha256:27c9f202af2a33d7b63dde0329e7e1979ab3ecbd76ecee5cf3219cab544ceb27	local/xianzhi-ai-platform:fd0da940	2026-07-23 17:58:32 +0800 CST	129MB
+sha256:ba349b1a8630d94fbb52ee1c66b53283760a473dedd375bfe8682ce57a968efc	local/xianzhi-ai-platform:09053f04	2026-07-23 16:06:59 +0800 CST	129MB
+sha256:07bf9be5b7bdb7a89aae3d1e28216d1010e793591e157aabd78e90ccd3031f31	local/xianzhi-ai-platform:b6503627	2026-07-23 14:51:20 +0800 CST	129MB
+sha256:c036ff9b0d6f6021907703575a47edc482d5d3c272d947bcb43e677c266855a0	local/xianzhi-ai-platform:8d293637	2026-07-23 12:18:23 +0800 CST	129MB
+sha256:5e094ba88920c7db39f81abb5785d93e928a8975aecee25d2da60ed609860a7f	local/xianzhi-ai-platform:9d946e1e	2026-07-23 12:08:14 +0800 CST	129MB
+sha256:9108757219e459bfb9d87e58d529ec4e19e75b91bdf7f0eb567fb85b594f870f	local/xianzhi-ai-platform:2b5930dc	2026-07-23 10:36:07 +0800 CST	129MB
+sha256:2d3490d933ebae35f569ee692f41e64b0d7343809a15ec0ef34fdb711231532d	local/xianzhi-ai-platform:cb57087c	2026-07-23 03:29:21 +0800 CST	129MB
+sha256:2d3490d933ebae35f569ee692f41e64b0d7343809a15ec0ef34fdb711231532d	local/xianzhi-ai-platform:cb57087c-r092521	2026-07-23 03:29:21 +0800 CST	129MB
+sha256:f0bfbe1e5898dcd5d362c8a472075afcc69954fc94c7d443b4adf96b077946dd	local/xianzhi-ai-platform:dbec02ff	2026-07-22 22:38:37 +0800 CST	129MB
+sha256:f0bfbe1e5898dcd5d362c8a472075afcc69954fc94c7d443b4adf96b077946dd	local/xianzhi-ai-platform:e3051c9d	2026-07-22 22:38:37 +0800 CST	129MB
+sha256:504899246db58f86bb5b95cde2d068bec2d37171b9d7c635dfff350767f39084	local/xianzhi-ai-platform:cb5e465f	2026-07-22 22:20:05 +0800 CST	129MB
+sha256:99eaa579bf3fc1cd72040a5fcbe8ebbda1b6523375b54da80afda9abe55914d3	local/xianzhi-ai-platform:2a7e26d0	2026-07-22 21:51:38 +0800 CST	129MB
+sha256:d452c89c50ed193f609cef59b55bce37e3945476bf6e44667b2e1cfaa0289753	local/xianzhi-ai-platform:8c3ea795	2026-07-22 18:03:21 +0800 CST	129MB
+sha256:d452c89c50ed193f609cef59b55bce37e3945476bf6e44667b2e1cfaa0289753	local/xianzhi-ai-platform:ddba59dd	2026-07-22 18:03:21 +0800 CST	129MB
+sha256:cfca6fa4d3de6e7b9be60b142f6517dd4bc3ca2c0ca72b8e445dcda2605a87f9	local/xianzhi-ai-platform:2f794ef1	2026-07-22 17:35:00 +0800 CST	129MB
+sha256:60a80b0b223a0df511101dc03950d8b4a8f11741728f64c36ef6eee8e95936cf	local/xianzhi-ai-platform:29061479	2026-07-22 16:32:31 +0800 CST	129MB
+sha256:8bb711eba5d608c2957042ba1247e67cfe172703d003ce6d1359dd5d9ba34f69	local/xianzhi-ai-platform:422c8d00	2026-07-22 16:20:25 +0800 CST	128MB
+sha256:5fdd81c4252df490ef83b4d4513ca5d34c814265f27644c9c37edd4266c388f0	local/xianzhi-ai-platform:69fce2e1	2026-07-22 16:16:03 +0800 CST	128MB
+sha256:35d1280ef985ef87a8d63df2cc7e6e13667148c6415d8b0231e50d92fdfc7d6a	local/xianzhi-ai-platform:04c95568	2026-07-22 16:08:49 +0800 CST	128MB
+sha256:2d031ec2a9f5a5dc0d7b6776ba92568d8572491839e390a64e4d2eb4033e936a	local/xianzhi-ai-platform:d7846328	2026-07-21 22:38:53 +0800 CST	128MB
+sha256:d757f8a951bd55724db0e3b3554c7cbd29a9e48ee893a23999c171b645312dc1	local/xianzhi-ai-platform:40ab226d	2026-07-21 19:56:42 +0800 CST	128MB
+sha256:d757f8a951bd55724db0e3b3554c7cbd29a9e48ee893a23999c171b645312dc1	local/xianzhi-ai-platform:8334ee71	2026-07-21 19:56:42 +0800 CST	128MB
+sha256:67f9ba897227736894fddf11f79cf5470a4b0af6632dc432393b885ba40b402e	local/xianzhi-ai-platform:abb2c95b	2026-07-21 19:53:02 +0800 CST	128MB
+sha256:1cadf12ac9e85b9d6a12cc33961b67bd77d8026475b2eea4ed88038c1f8b98ca	local/xianzhi-ai-platform:3886e3d9	2026-07-20 15:23:17 +0800 CST	128MB
+sha256:1cadf12ac9e85b9d6a12cc33961b67bd77d8026475b2eea4ed88038c1f8b98ca	local/xianzhi-ai-platform:pre-93fae2f5	2026-07-20 15:23:17 +0800 CST	128MB
+sha256:7dd19a0f0a0641c6242790c7b79265c5153feabbf4755cda4a75d3dba8a35ccf	local/xianzhi-ai-platform:09e143ed	2026-07-20 08:51:13 +0800 CST	128MB
+sha256:fca5311b996870f4d934d1a85be2476a1bb42e08910115164c0cb0e54d8c465a	local/xianzhi-ai-platform:88531403	2026-07-20 08:43:25 +0800 CST	128MB
+sha256:ad75e2609f91713a2a68978f9d626d1a116cec70174ed4212d960a9763d6826e	local/xianzhi-ai-platform:cf129f35	2026-07-20 08:02:37 +0800 CST	128MB
+sha256:9cf611cea7c92d1191e9cdcd710abe6847aa89cb9453c517039f2857e737f80c	local/xianzhi-ai-platform:fcec149b	2026-07-20 05:00:03 +0800 CST	127MB
+sha256:ad84c698a159d6a205422194014fb973efeb423ee821075062406f717a6ec40b	local/xianzhi-ai-platform:3e4765fe	2026-07-20 04:50:25 +0800 CST	127MB
+sha256:c378a3bd849c60e535af15b84fb0b0cd0f6dec53b7da1f9206f85030f148ec39	local/xianzhi-ai-platform:49e4048	2026-07-19 23:59:06 +0800 CST	127MB
+sha256:eb5ac0b5f25fec02925ac02980b4566890b641ec4e23d17b5d97ca783baa3463	local/xianzhi-ai-platform:58a07c5	2026-07-19 23:08:28 +0800 CST	127MB
+sha256:eb5ac0b5f25fec02925ac02980b4566890b641ec4e23d17b5d97ca783baa3463	xianzhi-ai-platform:58a07c5	2026-07-19 23:08:28 +0800 CST	127MB
+sha256:b22c703851d8ade762932af5564f584916fdce7b467db8edd4490c4635dbe1a8	xianzhi-ai-platform:bc6340f	2026-07-19 21:29:11 +0800 CST	127MB
+
+=== .env IMAGE vars ===
+label org.opencontainers.image.revision=a39485ef159dabf348a71059a0e922af4894ab5a
+label git.commit=
+label com.xianzhi.git.sha=
+RELEASE_GIT_SHA=a39485ef159dabf348a71059a0e922af4894ab5a
+
+=== EXPORT CURRENT IMAGE ===
+TARGET_TAR=/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar
+4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09  /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar
+-rw------- 1 root root 360M Jul 29 09:45 /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar
+-rw-r--r-- 1 root root  173 Jul 29 09:45 /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar.sha256
+
+=== PREVIOUS IMAGE SEARCH ===
+sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32 local/xianzhi-ai-platform:a39485ef1
+sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32 local/xianzhi-ai-platform:git-a39485ef1
+sha256:428182fcb9f9815ed4438481be03f9f0c4065f6b9bf8b69957145111257b9ff7 local/xianzhi-ai-platform:f8a7632b5
+sha256:428182fcb9f9815ed4438481be03f9f0c4065f6b9bf8b69957145111257b9ff7 local/xianzhi-ai-platform:git-f8a7632b5
+sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331 local/xianzhi-ai-platform:3d0c0e032
+sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331 local/xianzhi-ai-platform:git-3d0c0e032
+sha256:71f110f7123b34387881f84b8cc66edec964e921cb146c2053c93dc1eb26af66 local/xianzhi-ai-platform:ccad94057
+sha256:234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535 local/xianzhi-ai-platform:27dde3b4
+sha256:234807478f1ecb4bc3bbf54022b0d48467971564dab8cd7676a40c1a04085535 local/xianzhi-ai-platform:7695c8ae
+sha256:a0f23af1006245915070939885ee8f765c1ce6affef23e2b1b31e2be5553890a local/xianzhi-ai-platform:0649ca7b
+sha256:27c9f202af2a33d7b63dde0329e7e1979ab3ecbd76ecee5cf3219cab544ceb27 local/xianzhi-ai-platform:fd0da940
+sha256:ba349b1a8630d94fbb52ee1c66b53283760a473dedd375bfe8682ce57a968efc local/xianzhi-ai-platform:09053f04
+sha256:07bf9be5b7bdb7a89aae3d1e28216d1010e793591e157aabd78e90ccd3031f31 local/xianzhi-ai-platform:b6503627
+sha256:c036ff9b0d6f6021907703575a47edc482d5d3c272d947bcb43e677c266855a0 local/xianzhi-ai-platform:8d293637
+sha256:5e094ba88920c7db39f81abb5785d93e928a8975aecee25d2da60ed609860a7f local/xianzhi-ai-platform:9d946e1e
+sha256:9108757219e459bfb9d87e58d529ec4e19e75b91bdf7f0eb567fb85b594f870f local/xianzhi-ai-platform:2b5930dc
+sha256:2d3490d933ebae35f569ee692f41e64b0d7343809a15ec0ef34fdb711231532d local/xianzhi-ai-platform:cb57087c
+sha256:2d3490d933ebae35f569ee692f41e64b0d7343809a15ec0ef34fdb711231532d local/xianzhi-ai-platform:cb57087c-r092521
+sha256:f0bfbe1e5898dcd5d362c8a472075afcc69954fc94c7d443b4adf96b077946dd local/xianzhi-ai-platform:dbec02ff
+sha256:f0bfbe1e5898dcd5d362c8a472075afcc69954fc94c7d443b4adf96b077946dd local/xianzhi-ai-platform:e3051c9d
+sha256:504899246db58f86bb5b95cde2d068bec2d37171b9d7c635dfff350767f39084 local/xianzhi-ai-platform:cb5e465f
+sha256:99eaa579bf3fc1cd72040a5fcbe8ebbda1b6523375b54da80afda9abe55914d3 local/xianzhi-ai-platform:2a7e26d0
+sha256:d452c89c50ed193f609cef59b55bce37e3945476bf6e44667b2e1cfaa0289753 local/xianzhi-ai-platform:8c3ea795
+sha256:d452c89c50ed193f609cef59b55bce37e3945476bf6e44667b2e1cfaa0289753 local/xianzhi-ai-platform:ddba59dd
+sha256:cfca6fa4d3de6e7b9be60b142f6517dd4bc3ca2c0ca72b8e445dcda2605a87f9 local/xianzhi-ai-platform:2f794ef1
+sha256:60a80b0b223a0df511101dc03950d8b4a8f11741728f64c36ef6eee8e95936cf local/xianzhi-ai-platform:29061479
+sha256:8bb711eba5d608c2957042ba1247e67cfe172703d003ce6d1359dd5d9ba34f69 local/xianzhi-ai-platform:422c8d00
+sha256:5fdd81c4252df490ef83b4d4513ca5d34c814265f27644c9c37edd4266c388f0 local/xianzhi-ai-platform:69fce2e1
+sha256:35d1280ef985ef87a8d63df2cc7e6e13667148c6415d8b0231e50d92fdfc7d6a local/xianzhi-ai-platform:04c95568
+sha256:2d031ec2a9f5a5dc0d7b6776ba92568d8572491839e390a64e4d2eb4033e936a local/xianzhi-ai-platform:d7846328
+sha256:d757f8a951bd55724db0e3b3554c7cbd29a9e48ee893a23999c171b645312dc1 local/xianzhi-ai-platform:40ab226d
+sha256:d757f8a951bd55724db0e3b3554c7cbd29a9e48ee893a23999c171b645312dc1 local/xianzhi-ai-platform:8334ee71
+sha256:67f9ba897227736894fddf11f79cf5470a4b0af6632dc432393b885ba40b402e local/xianzhi-ai-platform:abb2c95b
+sha256:1cadf12ac9e85b9d6a12cc33961b67bd77d8026475b2eea4ed88038c1f8b98ca local/xianzhi-ai-platform:3886e3d9
+sha256:1cadf12ac9e85b9d6a12cc33961b67bd77d8026475b2eea4ed88038c1f8b98ca local/xianzhi-ai-platform:pre-93fae2f5
+sha256:7dd19a0f0a0641c6242790c7b79265c5153feabbf4755cda4a75d3dba8a35ccf local/xianzhi-ai-platform:09e143ed
+sha256:fca5311b996870f4d934d1a85be2476a1bb42e08910115164c0cb0e54d8c465a local/xianzhi-ai-platform:88531403
+sha256:ad75e2609f91713a2a68978f9d626d1a116cec70174ed4212d960a9763d6826e local/xianzhi-ai-platform:cf129f35
+sha256:9cf611cea7c92d1191e9cdcd710abe6847aa89cb9453c517039f2857e737f80c local/xianzhi-ai-platform:fcec149b
+sha256:ad84c698a159d6a205422194014fb973efeb423ee821075062406f717a6ec40b local/xianzhi-ai-platform:3e4765fe
+sha256:c378a3bd849c60e535af15b84fb0b0cd0f6dec53b7da1f9206f85030f148ec39 local/xianzhi-ai-platform:49e4048
+sha256:eb5ac0b5f25fec02925ac02980b4566890b641ec4e23d17b5d97ca783baa3463 local/xianzhi-ai-platform:58a07c5
+PREV_ID=sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331
+PREV_TAG=local/xianzhi-ai-platform:3d0c0e032
+PREV_TAR=/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar
+AVAIL_KB=76549968 NEED_KB_approx=1413074
+4c08c51a41d6fc527e854c4e4c64988a35e9773622b5506433eb4d5a76f9a9ee  /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar
+-rw------- 1 root root 360M Jul 29 09:45 /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar
+-rw-r--r-- 1 root root  180 Jul 29 09:45 /opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar.sha256
+
+=== VERIFY AFTER EXPORT (container still same IMAGE_ID) ===
+AFTER_CONTAINER_IMAGE=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+VERIFY_AFTER: container Image == recorded RUNNING_IMAGE_ID EXACT MATCH
+
+=== SUMMARY ENV ===
+PO_ACCEPT_AT=2026-07-29T09:44:00+08:00
+SECTION1_STATUS=PASS-WITH-LOCAL-IMMUTABLE
+RELEASE_GIT_SHA=a39485ef159dabf348a71059a0e922af4894ab5a
+RUNNING_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+EXPECTED_IMAGE_ID=sha256:1bd6777d671bddbe0bab226bd2f508be3e1179e0a99f53076a408dd3c4bd7a32
+IMAGE_ID_MATCH=EXACT
+CONFIG_IMAGE=local/xianzhi-ai-platform:a39485ef1
+REPO_DIGESTS=[]
+CURRENT_TAR=/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar
+CURRENT_TAR_SHA256=4341d6b1cdac84d83fb2962729ac654684d2ec0ff90660f527da992016378d09
+PREV_STATUS=EXPORTED
+PREV_ID=sha256:ead3963844183429a30fc20f6a69eefaf264df882afa425c8e406502b242a331
+PREV_TAG=local/xianzhi-ai-platform:3d0c0e032
+PREV_TAR=/opt/zhiqiyun-ai/release-artifacts/images/xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar
+PREV_TAR_SHA256=4c08c51a41d6fc527e854c4e4c64988a35e9773622b5506433eb4d5a76f9a9ee
+FORBIDDEN_OPS=docker compose up -d --build; docker tag overwrite same tag rebuild; retag overwrite
+REGISTRY_LONG_TERM=YES — local-immutable is NOT long-term policy
+
+=== ARTIFACT DIR ===
+total 720M
+drwxr-xr-x 2 root root 4.0K Jul 29 09:45 .
+drwxr-xr-x 3 root root 4.0K Jul 29 09:45 ..
+-rw------- 1 root root 360M Jul 29 09:45 xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar
+-rw-r--r-- 1 root root  173 Jul 29 09:45 xianzhi-ai-platform-a39485ef159dabf348a71059a0e922af4894ab5a.tar.sha256
+-rw------- 1 root root 360M Jul 29 09:45 xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar
+-rw-r--r-- 1 root root  180 Jul 29 09:45 xianzhi-ai-platform-PREV-xianzhi-ai-platform-3d0c0e032-ead396384418.tar.sha256
+=== PROBE END 2026-07-29T09:45:31+0800 ===

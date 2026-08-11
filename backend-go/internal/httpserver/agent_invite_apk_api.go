@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -344,8 +345,8 @@ func (a *agentInviteAPI) poster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.SaveAgentInviteLanding(r.Context(), invite, link); err != nil {
-		writeAuthFlowError(w, http.StatusInternalServerError, "POSTER_SAVE_FAILED", "邀请海报信息保存失败")
-		return
+		// Landing persistence must not block QR delivery for poster rendering.
+		log.Printf("agent invite landing save failed agent=%s code=%s err=%v", invite.AgentID, invite.InviteCode, err)
 	}
 	writeJSON(w, map[string]any{
 		"inviteCode": invite.InviteCode, "inviteLink": link,
@@ -465,7 +466,8 @@ func (s *postgresStore) ResolveAgentInvite(ctx context.Context, code string) (ag
 		FROM xz_channel_agents agent
 		JOIN xz_users users ON users.id=agent.user_id
 		LEFT JOIN xz_marketing_invite_codes codes ON codes.agent_id=agent.id
-		WHERE upper(btrim(agent.invite_code))=$1
+		LEFT JOIN xz_agent_invite_code_migrations legacy ON legacy.agent_id=agent.id
+		WHERE (upper(btrim(agent.invite_code))=$1 OR upper(btrim(coalesce(legacy.old_code, '')))=$1)
 		  AND upper(coalesce(users.status, ''))='ACTIVE'
 		LIMIT 1
 	`, code).Scan(&item.AgentID, &item.InviterUserID, &item.TenantID, &item.InviteCode, &item.DisplayName, &item.AgentStatus, &item.ActivityIntro, &item.OperationCenter)
@@ -598,7 +600,21 @@ func (s *postgresStore) RegisterAgentInvite(ctx context.Context, invite agentInv
 	if err := insertUser(ctx, tx, user); err != nil {
 		return agentInviteRegistrationResult{}, err
 	}
-	if err := upsertPointAccountByUser(ctx, tx, user.ID, input.PlanPoints); err != nil {
+	if err := upsertPointAccountByUser(ctx, tx, user.ID, 0); err != nil {
+		return agentInviteRegistrationResult{}, err
+	}
+	if input.PlanPoints <= 0 {
+		return agentInviteRegistrationResult{}, ErrInvalidPointCommand
+	}
+	account, err := pgLoadPersonalAccountForUserTx(ctx, tx, user.ID)
+	if err != nil {
+		return agentInviteRegistrationResult{}, err
+	}
+	if _, err := NewPostgresPersonalPointStore(s.db).grantTx(ctx, tx, PersonalPointGrantCommand{
+		AccountID: account.ID, UserID: user.ID, Source: PointSourceRegistrationGift, Points: int64(input.PlanPoints),
+		ReferenceType: "AGENT_INVITE", ReferenceID: locked.InviteCode, IdempotencyKey: "agent-invite-registration:" + input.RegistrationEvent,
+		GrantedAt: time.Now().UTC(),
+	}); err != nil {
 		return agentInviteRegistrationResult{}, err
 	}
 	relationID := "user_relationship_invite_" + shortStableHash(user.ID+"|"+locked.AgentID, 20)

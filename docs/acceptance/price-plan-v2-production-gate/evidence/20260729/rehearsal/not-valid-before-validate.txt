@@ -1,0 +1,16 @@
+          table_name          |                  conname                   | convalidated 
+------------------------------+--------------------------------------------+--------------
+ xz_audit_logs                | ck_xz_audit_logs_pricing_required_100      | f
+ xz_audit_logs                | ck_xz_audit_logs_pricing_result_100        | f
+ xz_orders                    | ck_xz_orders_snapshot_v2_097               | f
+ xz_price_plans               | ck_xz_price_plans_audience_099             | f
+ xz_price_plans               | ck_xz_price_plans_audience_rule_099        | f
+ xz_price_plans               | ck_xz_price_plans_code_format_099          | f
+ xz_price_plans               | ck_xz_price_plans_currency_099             | f
+ xz_price_plans               | ck_xz_price_plans_default_state_099        | f
+ xz_price_plans               | ck_xz_price_plans_test_scope_099           | f
+ xz_price_plan_user_whitelist | ck_xz_price_plan_whitelist_enabled_100     | f
+ xz_price_plan_user_whitelist | ck_xz_price_plan_whitelist_lifecycle_100   | f
+ xz_order_price_quotes        | ck_xz_order_price_quotes_whitelist_pin_100 | f
+(12 rows)
+

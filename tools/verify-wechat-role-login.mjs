@@ -25,14 +25,15 @@ const allCases = [
     email: process.env.XIANZHI_VERIFY_AGENT_EMAIL || "agent1@xianzhi.ai",
     password: process.env.XIANZHI_VERIFY_AGENT_PASSWORD || "Agent123!",
     role: "AGENT",
-    landingPage: "pages/agent/AgentOverviewPage",
+    // Multi-role accounts default to consumer home; agent workbench is entered via role switch.
+    landingPage: "pages/user/UserHomePage",
   },
   {
     name: "operation",
     email: process.env.XIANZHI_VERIFY_OPERATION_EMAIL || "operation@xianzhi.ai",
     password: process.env.XIANZHI_VERIFY_OPERATION_PASSWORD || "Demo123!",
     role: "OPERATION",
-    landingPage: "pages/operation/OperationOverviewPage",
+    landingPage: "pages/user/UserHomePage",
   },
 ];
 const requestedCase = String(process.env.XIANZHI_VERIFY_LOGIN_CASE || "").trim().toLowerCase();
@@ -212,7 +213,8 @@ async function verifyCase(miniProgram, testCase) {
   miniProgram = routed.miniProgram;
   page = routed.page;
   const auth = await miniProgram.callWxMethod("getStorageSync", "auth");
-  assert(auth?.currentRole === testCase.role, `${testCase.name}: currentRole=${auth?.currentRole || "missing"}`);
+  const expectedCurrentRole = Array.isArray(auth?.roles) && auth.roles.includes("USER") ? "USER" : testCase.role;
+  assert(auth?.currentRole === expectedCurrentRole, `${testCase.name}: currentRole=${auth?.currentRole || "missing"}, want ${expectedCurrentRole}`);
   assert(Array.isArray(auth?.roles) && auth.roles.includes("USER") && auth.roles.includes(testCase.role), `${testCase.name}: roles=${JSON.stringify(auth?.roles)}`);
 
   if (testCase.role === "USER") {
@@ -220,13 +222,20 @@ async function verifyCase(miniProgram, testCase) {
       miniProgram,
       result: {
         account: testCase.email,
-        defaultRole: testCase.role,
+        defaultRole: expectedCurrentRole,
         landingPage: testCase.landingPage,
         roles: auth.roles,
       },
     };
   }
 
+  await miniProgram.reLaunch(testCase.role === "AGENT" ? "/pages/agent/AgentOverviewPage" : "/pages/operation/OperationOverviewPage");
+  routed = await waitForRoute(
+    miniProgram,
+    testCase.role === "AGENT" ? "pages/agent/AgentOverviewPage" : "pages/operation/OperationOverviewPage",
+  );
+  miniProgram = routed.miniProgram;
+  page = routed.page;
   const workbench = await page.$("mini-program-role-workbench");
   assert(workbench, `${testCase.name}: 未找到角色工作台`);
   const roleButtons = await workbench.$$(".role-pill");
@@ -241,7 +250,7 @@ async function verifyCase(miniProgram, testCase) {
     miniProgram,
     result: {
       account: testCase.email,
-      defaultRole: testCase.role,
+      defaultRole: expectedCurrentRole,
       landingPage: testCase.landingPage,
       roles: auth.roles,
       switchedToUserPage: "pages/user/UserMinePage",

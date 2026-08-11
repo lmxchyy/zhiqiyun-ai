@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,18 +15,6 @@ type businessCodeError interface {
 }
 
 func videoValidationTestResolved(capabilities adminVideoModelCapabilities) resolvedModuleSchema {
-	fields := []adminAIParameterField{
-		{Key: "duration", Type: "select", Options: []any{float64(4), float64(5), float64(10), float64(15)}, Visible: true, UserEditable: true},
-		{Key: "resolution", Type: "select", Options: []any{"480p", "720p", "1080p", "4k"}, Visible: true, UserEditable: true},
-		{Key: "aspect_ratio", Type: "select", Options: []any{"16:9", "9:16", "1:1"}, Visible: true, UserEditable: true},
-		{Key: "fps", Type: "select", Options: []any{float64(24), float64(30)}, Visible: true, UserEditable: true},
-		{Key: "generate_audio", Type: "switch", Visible: true, UserEditable: true},
-		{Key: "motion_strength", Type: "select", Options: []any{"low", "medium", "high"}, Visible: true, UserEditable: true},
-		{Key: "camera_movement", Type: "select", Options: []any{"static", "pan", "push", "pull"}, Visible: true, UserEditable: true},
-		{Key: "first_frame", Type: "image_upload", Visible: true, UserEditable: true},
-		{Key: "last_frame", Type: "image_upload", Visible: true, UserEditable: true},
-	}
-	schema := adminAIParameterSchemaJSON{Fields: fields}
 	return resolvedModuleSchema{
 		Module: adminAIModule{ModuleCode: moduleVideoGeneration},
 		Model: adminAIModel{
@@ -34,8 +23,17 @@ func videoValidationTestResolved(capabilities adminVideoModelCapabilities) resol
 			ModuleCode:        moduleVideoGeneration,
 			VideoCapabilities: &capabilities,
 		},
-		Schema:      adminAIParameterSchema{SchemaJSON: schema},
-		FinalSchema: applyVideoCapabilitiesToSchema(schema, capabilities),
+		Schema: adminAIParameterSchema{SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+			{Key: "duration", Type: "select", Options: []any{float64(4), float64(5), float64(10), float64(15)}},
+			{Key: "resolution", Type: "select", Options: []any{"480p", "720p", "1080p", "4k"}},
+			{Key: "aspect_ratio", Type: "select", Options: []any{"16:9", "9:16", "1:1"}},
+			{Key: "fps", Type: "select", Options: []any{float64(24), float64(30)}},
+			{Key: "generate_audio", Type: "switch"},
+			{Key: "motion_strength", Type: "select", Options: []any{"low", "medium", "high"}},
+			{Key: "camera_movement", Type: "select", Options: []any{"static", "pan", "push", "pull"}},
+			{Key: "first_frame", Type: "image_upload"},
+			{Key: "last_frame", Type: "image_upload"},
+		}}},
 	}
 }
 
@@ -102,7 +100,7 @@ func TestVideoCapabilitiesExposeProviderSupportedParameters(t *testing.T) {
 	}
 }
 
-func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
+func TestVideoGenerationStripsProviderUnsupportedParameters(t *testing.T) {
 	tests := []struct {
 		name  string
 		key   string
@@ -115,40 +113,15 @@ func TestVideoGenerationRejectsProviderUnsupportedParameters(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
-			err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
-			requireVideoValidationCode(t, err, "VIDEO_PROVIDER_PARAMETER_NOT_SUPPORTED")
-		})
-	}
-}
-
-func TestVideoGenerationRejectsSchemaHiddenOrNonEditableParameters(t *testing.T) {
-	tests := []struct {
-		name  string
-		key   string
-		value any
-		edit  func(*adminAIParameterField)
-	}{
-		{
-			name: "hidden resolution", key: "resolution", value: "720p",
-			edit: func(field *adminAIParameterField) { field.Visible = false },
-		},
-		{
-			name: "locked duration", key: "duration", value: float64(5),
-			edit: func(field *adminAIParameterField) { field.UserEditable = false },
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resolved := videoValidationTestResolved(videoValidationTestCapabilities())
-			for index := range resolved.FinalSchema.Fields {
-				if resolved.FinalSchema.Fields[index].Key == tt.key {
-					tt.edit(&resolved.FinalSchema.Fields[index])
-				}
+			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{
+				"duration": float64(5), "resolution": "720p", "aspect_ratio": "16:9", tt.key: tt.value,
+			}}
+			if err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities())); err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
 			}
-			request := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Params: map[string]any{tt.key: tt.value}}
-			err := validateVideoGenerationRequest(&request, resolved)
-			requireVideoValidationCode(t, err, "VIDEO_PARAMETER_NOT_EDITABLE")
+			if _, exists := request.Params[tt.key]; exists {
+				t.Fatalf("unsupported parameter %s was not stripped: %+v", tt.key, request.Params)
+			}
 		})
 	}
 }
@@ -266,7 +239,7 @@ func TestResolveModuleSchemaIntersectsSchemaWithRealProviderProtocol(t *testing.
 func TestLegacyVideoSchemaWritesCanonicalAspectRatioToTaskParams(t *testing.T) {
 	resolved := videoValidationTestResolved(videoValidationTestCapabilities())
 	resolved.Schema.SchemaJSON.Fields = []adminAIParameterField{
-		{Key: "ratio", Type: "select", Default: "9:16", Options: []any{"16:9", "9:16"}, Visible: true, UserEditable: true},
+		{Key: "ratio", Type: "select", Default: "9:16", Options: []any{"16:9", "9:16"}},
 	}
 	resolved.FinalSchema = applyVideoCapabilitiesToSchema(resolved.Schema.SchemaJSON, videoValidationTestCapabilities())
 	req := generation.CreateRequest{ModuleCode: moduleVideoGeneration, Params: map[string]any{}}
@@ -312,6 +285,59 @@ func TestVideoModelCapabilitiesLegacyDefaultsAreSafe(t *testing.T) {
 	}
 	if len(got.SupportedDurations) != 2 || len(got.SupportedResolutions) != 2 || len(got.SupportedAspectRatios) != 2 {
 		t.Fatalf("schema options were not exposed as supported values: %+v", got)
+	}
+}
+
+func TestGrokImagine15VideoLegacyDataResolvesExactCapabilities(t *testing.T) {
+	model := adminAIModel{
+		ModelName: "grok-imagine-1.5-video", ModelType: "video", ModuleCode: moduleVideoGeneration,
+		CapabilityCode: []string{"text_to_video", "image_to_video"},
+	}
+	got := resolveVideoModelCapabilities(model, adminAIParameterSchemaJSON{})
+	if !got.SupportsTextToVideo || !got.SupportsImageToVideo || !got.SupportsFirstFrame || got.SupportsLastFrame {
+		t.Fatalf("unexpected Grok Imagine 1.5 modes: %+v", got)
+	}
+	if got.MaxReferenceImages != 7 {
+		t.Fatalf("max references = %d, want 7", got.MaxReferenceImages)
+	}
+	if len(got.SupportedDurations) != 25 || got.SupportedDurations[0] != 6 || got.SupportedDurations[24] != 30 {
+		t.Fatalf("supported durations = %#v", got.SupportedDurations)
+	}
+	wantResolutions := []string{"480p", "720p"}
+	if !equalVideoStringSlices(got.SupportedResolutions, wantResolutions) {
+		t.Fatalf("supported resolutions = %#v, want %#v", got.SupportedResolutions, wantResolutions)
+	}
+	wantRatios := []string{"16:9", "9:16", "1:1", "3:2", "2:3"}
+	if !equalVideoStringSlices(got.SupportedAspectRatios, wantRatios) {
+		t.Fatalf("supported ratios = %#v, want %#v", got.SupportedAspectRatios, wantRatios)
+	}
+}
+
+func TestGrokImaginePreviewLegacyDataRemainsSingleImageOnly(t *testing.T) {
+	model := adminAIModel{
+		ModelName: "grok-imagine-video-1.5-preview", ModelType: "video", ModuleCode: moduleVideoGeneration,
+		CapabilityCode: []string{"image_to_video"},
+	}
+	got := resolveVideoModelCapabilities(model, adminAIParameterSchemaJSON{})
+	if got.SupportsTextToVideo || !got.SupportsImageToVideo || got.MaxReferenceImages != 1 {
+		t.Fatalf("preview capabilities changed: %+v", got)
+	}
+	wantDurations := []int{10, 15}
+	if len(got.SupportedDurations) != len(wantDurations) {
+		t.Fatalf("supported durations = %#v, want %#v", got.SupportedDurations, wantDurations)
+	}
+	for index := range wantDurations {
+		if got.SupportedDurations[index] != wantDurations[index] {
+			t.Fatalf("supported durations = %#v, want %#v", got.SupportedDurations, wantDurations)
+		}
+	}
+	wantResolutions := []string{"480p", "720p"}
+	if !equalVideoStringSlices(got.SupportedResolutions, wantResolutions) {
+		t.Fatalf("supported resolutions = %#v, want %#v", got.SupportedResolutions, wantResolutions)
+	}
+	wantRatios := []string{"16:9", "9:16"}
+	if !equalVideoStringSlices(got.SupportedAspectRatios, wantRatios) {
+		t.Fatalf("supported ratios = %#v, want %#v", got.SupportedAspectRatios, wantRatios)
 	}
 }
 
@@ -383,6 +409,51 @@ func TestVideoGenerationRejectsMultipleDistinctImages(t *testing.T) {
 	}
 	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(videoValidationTestCapabilities()))
 	requireVideoValidationCode(t, err, "VIDEO_IMAGE_LIMIT_EXCEEDED")
+}
+
+func TestVideoGenerationPreservesSevenCanonicalReferenceImages(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.MaxReferenceImages = 7
+	images := []any{
+		"https://example.test/1.png", "https://example.test/2.png", "https://example.test/3.png",
+		"https://example.test/4.png", "https://example.test/5.png", "https://example.test/6.png",
+		"https://example.test/7.png",
+	}
+	request := generation.CreateRequest{Type: "IMAGE_TO_VIDEO", Params: map[string]any{"image_urls": images}}
+	if err := validateVideoGenerationRequest(&request, videoValidationTestResolved(capabilities)); err != nil {
+		t.Fatalf("seven references were rejected: %v", err)
+	}
+	if request.Params["first_frame"] != images[0] {
+		t.Fatalf("first_frame = %#v, want %#v", request.Params["first_frame"], images[0])
+	}
+	got, ok := request.Params["image_urls"].([]string)
+	if !ok || len(got) != 7 {
+		t.Fatalf("canonical image_urls = %#v", request.Params["image_urls"])
+	}
+}
+
+func TestVideoGenerationRejectsEighthReferenceImage(t *testing.T) {
+	capabilities := videoValidationTestCapabilities()
+	capabilities.MaxReferenceImages = 7
+	images := make([]any, 0, 8)
+	for index := 1; index <= 8; index++ {
+		images = append(images, fmt.Sprintf("https://example.test/%d.png", index))
+	}
+	request := generation.CreateRequest{Type: "IMAGE_TO_VIDEO", Params: map[string]any{"image_urls": images}}
+	err := validateVideoGenerationRequest(&request, videoValidationTestResolved(capabilities))
+	requireVideoValidationCode(t, err, "VIDEO_IMAGE_LIMIT_EXCEEDED")
+}
+
+func equalVideoStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestVideoGenerationRejectsUnsupportedLastFrame(t *testing.T) {

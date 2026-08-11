@@ -132,6 +132,14 @@ type activeIdentityStore interface {
 	GetChannelAgentForUser(userID string) (adminChannelAgent, bool, error)
 }
 
+type authPricingPermissionStore interface {
+	PricingPermissionsForRole(ctx context.Context, role string) ([]string, error)
+}
+
+type authRolePermissionStore interface {
+	AuthPermissionsForRole(ctx context.Context, role string) ([]string, error)
+}
+
 type channelWorkbenchAccessStore interface {
 	GetChannelWorkbenchAgentForUser(userID string) (adminChannelAgent, bool, error)
 }
@@ -601,6 +609,11 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if ok {
 		service = routeService
+	} else if memberService, ok, err := a.generationServiceForMemberLevel(user, req.Model); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	} else if ok {
+		service = memberService
 	} else if providerID := selectedGenerationProvider(req.Params); providerID != "" {
 		dynamicService, err := a.generationServiceForProvider(providerID, req)
 		if err != nil {
@@ -889,6 +902,10 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 		return
 	}
+	if provider := providerTaskString(prepared, "provider"); provider != "" {
+		prepared.Params["provider"] = provider
+		prepared.Params["provider_channel"] = provider
+	}
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 	}
@@ -992,6 +1009,9 @@ func compactGenerationErrorMessage(message string) string {
 	if strings.Contains(lower, "create_video_generation_task returned empty task id") && strings.Contains(lower, "seedance") {
 		return "移动云 Seedance 创建任务失败，请检查模型资费包、API Key 和模型权限"
 	}
+	if localized := localizeGenerationErrorMessage(message, lower); localized != "" {
+		return localized
+	}
 	message = strings.Join(strings.Fields(message), " ")
 	const maxMessageLen = 240
 	if len([]rune(message)) <= maxMessageLen {
@@ -999,6 +1019,81 @@ func compactGenerationErrorMessage(message string) string {
 	}
 	runes := []rune(message)
 	return strings.TrimSpace(string(runes[:maxMessageLen])) + "..."
+}
+
+func localizeGenerationErrorMessage(message, lower string) string {
+	switch {
+	case strings.Contains(lower, "price not configured"), strings.Contains(lower, "价格未配置"):
+		return "上游 NewAPI 未配置该模型价格。请在 NewAPI「系统设置 → 分组与模型定价」为 grok-imagine-video-1.5-preview 设置按次价格后重试"
+	case strings.Contains(lower, "not allowed by tenant/package limit"), strings.Contains(lower, "no models are allowed by tenant/package limit"):
+		return "当前套餐未开放该视频模型，请更换模型或联系管理员开通"
+	case strings.Contains(lower, "input_reference") && strings.Contains(lower, "unmarshal"):
+		return "视频参考图参数格式错误，请重新上传首帧图后重试"
+	case strings.Contains(lower, "cannot unmarshal") && strings.Contains(lower, "seconds"):
+		return "视频时长参数格式错误，请重新选择时长后重试"
+	case strings.Contains(lower, "cannot unmarshal"):
+		return "上游视频接口返回格式异常，请稍后重试或切换模型"
+	case strings.Contains(lower, "video provider does not support parameter"):
+		return "当前视频通道不支持该参数，请调整参数后重试"
+	case strings.Contains(lower, "video provider requires base url and api key"):
+		return "视频上游未配置，请检查通道地址和 API Key"
+	case strings.Contains(lower, "video model is required"):
+		return "请选择视频模型"
+	case strings.Contains(lower, "does not support model"):
+		return "当前视频通道不支持所选模型，请切换模型或通道"
+	case strings.Contains(lower, "requires exactly one reference image"):
+		return "该视频模型需要且仅支持 1 张参考图"
+	case strings.Contains(lower, "supports exactly one reference image"):
+		return "该视频模型仅支持 1 张参考图"
+	case strings.Contains(lower, "supports at most seven reference images"):
+		return "该视频模型最多支持 7 张参考图"
+	case strings.Contains(lower, "video provider returned no video"), strings.Contains(lower, "no result_url"), strings.Contains(lower, "still processing"):
+		return "视频仍在生成中或上游未返回结果，请稍后在历史中查看"
+	case strings.Contains(lower, "video generation failed"):
+		return "视频生成失败，请稍后重试"
+	case strings.Contains(lower, "context deadline exceeded"), strings.Contains(lower, "client.timeout"), strings.Contains(lower, "timeout awaiting response"):
+		return "生成超时，请稍后重试"
+	case strings.Contains(lower, "http 401"), strings.Contains(lower, "invalid api key"), strings.Contains(lower, "incorrect api key"):
+		return "上游 API Key 无效，请检查通道密钥配置"
+	case strings.Contains(lower, "http 404"):
+		return "上游接口不存在，请检查视频通道地址和路径"
+	case strings.Contains(lower, "only http/https urls"), strings.Contains(lower, "invalid format for image_urls"), strings.Contains(lower, "asset://"):
+		return "参考图地址不被上游接受，请重新上传图片后重试"
+	case strings.Contains(lower, "http 400"):
+		return "视频请求参数不被上游接受，请检查提示词、参考图和模型参数"
+	case strings.Contains(lower, "dial tcp"), strings.Contains(lower, "i/o timeout"):
+		return "无法连接视频上游服务，请检查网络或通道地址"
+	case strings.Contains(lower, "storage_master_key"):
+		return "对象存储密钥未配置，请检查 STORAGE_MASTER_KEY 后重试"
+	case strings.Contains(lower, "resolve generated artifact storage"):
+		return "生成结果入库失败，请检查对象存储配置后重试"
+	case strings.Contains(lower, "unrecognized message"), strings.Contains(lower, "upstream returned unrecognized"):
+		return "上游视频通道返回无法识别的结果，请稍后重试或检查 Seedance 通道配置"
+	}
+	if looksLikeEnglishTechnicalError(message) {
+		return "生成失败，请稍后重试。若持续失败请检查模型、参数或上游通道配置"
+	}
+	return ""
+}
+
+func looksLikeEnglishTechnicalError(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return false
+	}
+	for _, r := range trimmed {
+		if r >= 0x4e00 && r <= 0x9fff {
+			return false
+		}
+	}
+	lower := strings.ToLower(trimmed)
+	markers := []string{"json:", "http", "error", "failed", "unmarshal", "invalid", "provider", "timeout", "denied", "unsupported"}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectedGenerationProvider(params map[string]any) string {
@@ -1047,6 +1142,51 @@ func (a api) generationServiceForUserRoute(user adminUser, model string) (genera
 	}
 	service, err := a.generationServiceForChannelWithRouteKey(data, channel, route)
 	return service, err == nil, err
+}
+
+func (a api) generationServiceForMemberLevel(user adminUser, model string) (generation.Service, bool, error) {
+	if strings.EqualFold(strings.TrimSpace(model), "mock-standard") || strings.EqualFold(strings.TrimSpace(model), "mock-video") {
+		return generation.Service{}, false, nil
+	}
+	data, err := a.onlineGenerationSettings()
+	if err != nil {
+		return generation.Service{}, false, err
+	}
+	channel, ok := findAPIChannelByID(data.APIChannels, "channel_newapi_gateway")
+	if !ok || !apiChannelUsableForGeneration(channel) {
+		return generation.Service{}, false, nil
+	}
+	route := adminUserModelRoute{
+		ID:        "route_newapi_gateway",
+		Provider:  "newapi",
+		ChannelID: channel.ID,
+		GroupName: memberLevelGroup(user.MemberLevel),
+		Models:    channel.Models,
+		APIKeyID:  "key_1786355644836388321",
+		Status:    "ACTIVE",
+	}
+	service, err := a.generationServiceForChannelWithRouteKey(data, channel, route)
+	return service, err == nil, err
+}
+
+func memberLevelGroup(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "svip":
+		return "svip"
+	case "vip":
+		return "vip"
+	default:
+		return "default"
+	}
+}
+
+func findAPIChannelByID(channels []adminAPIChannel, id string) (adminAPIChannel, bool) {
+	for _, channel := range channels {
+		if channel.ID == id && apiChannelUsableForGeneration(channel) {
+			return channel, true
+		}
+	}
+	return adminAPIChannel{}, false
 }
 
 func channelForNewAPIRoute(data adminPlatformData, route adminUserModelRoute) (adminAPIChannel, bool) {
@@ -1562,7 +1702,7 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 			}
 			if miniProgram {
 				allowed, _ := modelAllowedForMiniProgram(model, time.Now().UTC())
-				if !allowed && !miniProgramVideoComplianceBypassAllows(model) {
+				if !allowed {
 					continue
 				}
 			}
@@ -1581,6 +1721,7 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 				videoCapabilities := resolveVideoModelCapabilities(model, schema.SchemaJSON)
 				item["videoCapabilities"] = videoCapabilities
 				item["video_capabilities"] = videoCapabilities
+				attachVideoModelPublicPricing(item, data, code, videoCapabilities)
 			}
 			items = append(items, item)
 		}
@@ -1611,8 +1752,12 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, item := range items {
 		item["id"] = item["code"]
-		item["displayName"] = item["name"]
-		item["description"] = ""
+		if _, ok := item["displayName"]; !ok {
+			item["displayName"] = item["name"]
+		}
+		if _, ok := item["description"]; !ok {
+			item["description"] = ""
+		}
 		item["supportedRatios"] = []string{"1:1", "4:3", "3:4", "16:9", "9:16"}
 		item["enabled"] = item["online"]
 		// Public model discovery must not reveal upstream routing or vendor identity.
@@ -1620,7 +1765,7 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 		delete(item, "providerName")
 		delete(item, "provider")
 	}
-	writeJSON(w, items)
+	writeJSON(w, sortPublicModelsVideoByListPrice(items))
 }
 func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 	user, err := a.currentUser(r)
@@ -1631,7 +1776,7 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 	query := assetCenterQueryFromRequest(r)
 	limit := query.Limit
 	offset := query.Offset
-	assets, total, err := a.assetsForCenter(user.ID, query)
+	assets, total, err := a.assetsForCenter(user.ID, firstNonEmptyString(user.TenantID, "tenant_default"), query)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1781,7 +1926,7 @@ func (a api) downloadAsset(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, errAssetNotFound)
 			return
 		}
-		if item.URL == "" {
+		if strings.TrimSpace(item.URL) == "" && assetStorageFileID(item) == "" {
 			writeError(w, http.StatusNotFound, errAssetNotFound)
 			return
 		}
@@ -1822,7 +1967,7 @@ func (a api) downloadVideoByURL(w http.ResponseWriter, r *http.Request) {
 		filename = "video.mp4"
 	}
 	if _, ok := generatedMediaNameFromURL(rawURL); ok {
-		a.writeGeneratedMediaDownload(w, rawURL, filename)
+		a.writeGeneratedMediaDownload(w, r.Context(), rawURL, filename)
 		return
 	}
 	parsedURL, err := url.Parse(rawURL)
@@ -1834,7 +1979,7 @@ func (a api) downloadVideoByURL(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("unsupported video url scheme"))
 		return
 	}
-	a.writeRemoteDownload(w, r, rawURL, "video/mp4", filename)
+	a.writeNormalizedVideoDownload(w, r, rawURL, filename)
 }
 
 func videoURLBelongsToUser(rawURL string, tasks []generationTask, assets []asset) bool {
@@ -1860,21 +2005,31 @@ func videoURLsEqual(left string, right string) bool {
 	return leftOK && rightOK && leftName == rightName
 }
 
-func sanitizeVideoDownloadFilename(filename string) string {
-	name := strings.TrimSpace(filename)
-	name = regexp.MustCompile(`[\\/:*?"<>|]+`).ReplaceAllString(name, "-")
-	name = strings.Trim(name, ". ")
-	if name == "" {
-		return ""
-	}
-	if !strings.HasSuffix(strings.ToLower(name), ".mp4") {
-		name += ".mp4"
-	}
-	return name
-}
-
 func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item asset) {
+	if isVideoAsset(item) {
+		filename := sanitizeVideoDownloadFilename(downloadAssetName(item, "video/mp4"))
+		if a.writeCompliantVideoDownload(w, r, item, filename) {
+			return
+		}
+		if raw, _, ok := a.readStoredAssetBytes(r.Context(), item); ok {
+			a.writeShareableVideoBytes(w, r.Context(), raw, item.URL, filename, false)
+			return
+		}
+		if _, ok := generatedMediaNameFromURL(item.URL); ok {
+			a.writeGeneratedMediaDownload(w, r.Context(), item.URL, filename)
+			return
+		}
+		if strings.TrimSpace(item.URL) == "" {
+			writeError(w, http.StatusNotFound, errAssetNotFound)
+			return
+		}
+		a.writeNormalizedVideoDownload(w, r, item.URL, filename)
+		return
+	}
 	if a.writeCompliantAssetDownload(w, r, item) {
+		return
+	}
+	if a.writeStoredAssetDownload(w, r, item) {
 		return
 	}
 	contentType := stringMetadataValue(item, "contentType")
@@ -1882,7 +2037,7 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 		contentType = "application/octet-stream"
 	}
 	if _, ok := generatedMediaNameFromURL(item.URL); ok {
-		a.writeGeneratedMediaDownload(w, item.URL, downloadAssetName(item, "video/mp4"))
+		a.writeGeneratedMediaDownload(w, r.Context(), item.URL, downloadAssetName(item, "video/mp4"))
 		return
 	}
 	if strings.HasPrefix(item.URL, "data:") {
@@ -1908,7 +2063,54 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 		_, _ = w.Write(raw)
 		return
 	}
+	if strings.TrimSpace(item.URL) == "" {
+		writeError(w, http.StatusNotFound, errAssetNotFound)
+		return
+	}
 	a.writeRemoteDownload(w, r, item.URL, contentType, downloadAssetName(item, contentType))
+}
+
+func assetStorageFileID(item asset) string {
+	return firstNonEmptyString(stringValue(item.Metadata["fileId"]), stringValue(item.Metadata["storageFileId"]))
+}
+
+func (a api) writeStoredAssetDownload(w http.ResponseWriter, r *http.Request, item asset) bool {
+	raw, contentType, ok := a.readStoredAssetBytes(r.Context(), item)
+	if !ok {
+		return false
+	}
+	if contentType == "" {
+		contentType = firstNonEmptyString(stringMetadataValue(item, "contentType"), "application/octet-stream")
+	}
+	writeAttachmentHeaders(w, contentType, downloadAssetName(item, contentType))
+	_, _ = w.Write(raw)
+	return true
+}
+
+func (a api) readStoredAssetBytes(ctx context.Context, item asset) ([]byte, string, bool) {
+	if a.fileService == nil {
+		return nil, "", false
+	}
+	fileID := firstNonEmptyString(stringValue(item.Metadata["fileId"]), stringValue(item.Metadata["storageFileId"]))
+	if fileID == "" {
+		return nil, "", false
+	}
+	tenantID := firstNonEmptyString(item.TenantID, stringValue(item.Metadata["storageTenantId"]), "tenant_default")
+	userID := firstNonEmptyString(item.UserID)
+	file, stream, err := a.fileService.OpenObject(ctx, storagecenter.AccessContext{
+		TenantID: tenantID,
+		UserID:   userID,
+	}, fileID)
+	if err != nil {
+		return nil, "", false
+	}
+	defer stream.Close()
+	raw, err := io.ReadAll(io.LimitReader(stream, 512<<20))
+	if err != nil || len(raw) == 0 {
+		return nil, "", false
+	}
+	contentType := firstNonEmptyString(file.MIMEType, stringMetadataValue(item, "contentType"), item.MediaType)
+	return raw, contentType, true
 }
 
 func (a api) serveGeneratedMedia(w http.ResponseWriter, r *http.Request) {
@@ -1926,7 +2128,7 @@ func (a api) serveGeneratedMedia(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
-func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, rawURL string, filename string) {
+func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, ctx context.Context, rawURL string, filename string) {
 	name, ok := generatedMediaNameFromURL(rawURL)
 	if !ok {
 		writeError(w, http.StatusBadRequest, errors.New("invalid generated media url"))
@@ -1938,11 +2140,83 @@ func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, rawURL string, f
 		return
 	}
 	defer file.Close()
-	if info, err := file.Stat(); err == nil {
-		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	raw, err := io.ReadAll(io.LimitReader(file, maxShareVideoNormalizeBytes+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxShareVideoNormalizeBytes {
+		writeError(w, http.StatusBadGateway, errors.New("generated media read failed"))
+		return
+	}
+	a.writeShareableVideoBytes(w, ctx, raw, rawURL, filename, false)
+}
+
+func (a api) writeNormalizedVideoDownload(w http.ResponseWriter, r *http.Request, rawURL string, filename string) {
+	remoteURL, err := validateRemoteDownloadURL(rawURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res, err := remoteDownloadHTTPClient().Do(req)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("asset download returned %d", res.StatusCode))
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxShareVideoNormalizeBytes+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxShareVideoNormalizeBytes {
+		writeError(w, http.StatusBadGateway, errors.New("video download payload invalid"))
+		return
+	}
+	a.writeShareableVideoBytes(w, r.Context(), raw, rawURL, filename, false)
+}
+
+func (a api) writeShareableVideoBytes(w http.ResponseWriter, ctx context.Context, raw []byte, sourceURL string, filename string, aiGenerated bool) {
+	filename = sanitizeVideoDownloadFilename(filename)
+	normalized, err := normalizeVideoBytesForShare(ctx, raw, sourceURL)
+	if err != nil || len(normalized) == 0 {
+		normalized = raw
 	}
 	writeAttachmentHeaders(w, "video/mp4", filename)
-	_, _ = io.Copy(w, file)
+	w.Header().Set("Content-Length", strconv.Itoa(len(normalized)))
+	w.Header().Set("X-Video-Share-Format", "mp4")
+	if aiGenerated {
+		w.Header().Set("X-AI-Generated", "true")
+	}
+	_, _ = w.Write(normalized)
+}
+
+func (a api) writeCompliantVideoDownload(w http.ResponseWriter, r *http.Request, item asset, filename string) bool {
+	if !boolValue(item.Metadata["ai_generated"]) {
+		return false
+	}
+	if !strings.EqualFold(stringMetadataValue(item, "output_audit_status"), auditApproved) {
+		writeError(w, http.StatusUnprocessableEntity, errOutputAuditRejected)
+		return true
+	}
+	if markedURL := strings.TrimSpace(stringMetadataValue(item, "download_marked_url")); markedURL != "" {
+		a.writeNormalizedVideoDownload(w, r, markedURL, filename)
+		return true
+	}
+	raw, _, err := func() ([]byte, string, error) {
+		if stored, storedType, ok := a.readStoredAssetBytes(r.Context(), item); ok {
+			return stored, firstNonEmptyString(storedType, item.MediaType), nil
+		}
+		payload, mediaType, _, readErr := readGeneratedArtifact(r.Context(), item.URL, item.MediaType)
+		return payload, mediaType, readErr
+	}()
+	if err == nil && len(raw) > 0 {
+		a.writeShareableVideoBytes(w, r.Context(), raw, item.URL, filename, true)
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, errors.New("带AI标识的下载文件尚未生成，请稍后重试"))
+	return true
 }
 
 func (a api) writeRemoteDownload(w http.ResponseWriter, r *http.Request, rawURL string, contentType string, filename string) {
@@ -2146,12 +2420,13 @@ func downloadAssetName(item asset, contentType string) string {
 	if name == "" {
 		name = item.ID
 	}
+	if strings.Contains(strings.ToLower(contentType), "video") || strings.EqualFold(item.MediaType, "video") {
+		return sanitizeVideoDownloadFilename(name)
+	}
 	if regexp.MustCompile(`(?i)\.(png|jpe?g|webp|gif|svg|mp4)$`).MatchString(name) {
 		return name
 	}
 	switch {
-	case strings.Contains(contentType, "video"):
-		return name + ".mp4"
 	case strings.Contains(contentType, "svg"):
 		return name + ".svg"
 	case strings.Contains(contentType, "jpeg"), strings.Contains(contentType, "jpg"):
@@ -2242,6 +2517,32 @@ func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	pointService, err := personalPointServiceForStore(a.store)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	summary, err := pointService.Summary(r.Context(), account.ID, user.ID, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// account.Total is lifetime (available + frozen + consumed). summary.Total is only
+	// available+frozen and would make the sidebar show identical available/total values.
+	totalUsed := account.Total - int(summary.Available) - int(summary.Frozen)
+	if totalUsed < 0 {
+		totalUsed = 0
+	}
+	accountView := map[string]any{
+		"id": account.ID, "userId": user.ID,
+		"available": summary.Available, "frozen": summary.Frozen, "total": account.Total,
+		"totalUsed": totalUsed, "totalGranted": account.Total,
+		"permanentAvailable": summary.PermanentAvailable, "expiringAvailable": summary.ExpiringAvailable,
+		"nextExpiryPoints": summary.NextExpiryPoints,
+	}
+	if !summary.NextExpiryAt.IsZero() {
+		accountView["nextExpiryAt"] = summary.NextExpiryAt.UTC().Format(time.RFC3339Nano)
+	}
 	data, err := a.userAccountData(user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -2249,7 +2550,7 @@ func (a api) pointAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	orders := userMembershipOrders(data, user.ID)
 	writeJSON(w, map[string]any{
-		"account":      account,
+		"account":      accountView,
 		"orders":       orders,
 		"transactions": userPointTransactions(data.BillingEvents, user.ID),
 	})
@@ -2313,6 +2614,10 @@ func (a api) createCommerceOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := a.rejectManagedV2LegacyOrder(r.Context(), req.PlanID); err != nil {
+		writeBusinessPlanAdminError(w, err)
+		return
+	}
 	plan, ok := commercePlanByID(data, req.PlanID)
 	if !ok || !commercePlanVisible(plan) {
 		writeError(w, http.StatusBadRequest, errors.New("valid planId is required"))
@@ -2320,7 +2625,7 @@ func (a api) createCommerceOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := a.createOrderForPlan(user, plan, req.AmountCents, req.PaymentMethod, req.IdempotencyKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeCommerceOrderCreationError(w, err)
 		return
 	}
 	writeJSON(w, commerceOrderResponse(order, plan))
@@ -2348,6 +2653,10 @@ func (a api) createAgentJoinOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	planID := firstNonEmptyString(req.PlanID, "plan_agent_join_996")
+	if err := a.rejectManagedV2LegacyOrder(r.Context(), planID); err != nil {
+		writeBusinessPlanAdminError(w, err)
+		return
+	}
 	plan, ok := commercePlanByID(data, planID)
 	if !ok || planBusinessType(plan) != planTypeAgentJoinPackage {
 		writeError(w, http.StatusBadRequest, errors.New("valid agent join plan is required"))
@@ -2355,10 +2664,35 @@ func (a api) createAgentJoinOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := a.createOrderForPlan(user, plan, 0, req.PaymentMethod, req.IdempotencyKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeCommerceOrderCreationError(w, err)
 		return
 	}
 	writeJSON(w, commerceOrderResponse(order, plan))
+}
+
+func (a api) rejectManagedV2LegacyOrder(ctx context.Context, planRef string) error {
+	postgres, ok := a.store.(*postgresStore)
+	if !ok || postgres == nil || postgres.db == nil || strings.TrimSpace(planRef) == "" {
+		return nil
+	}
+	service := virtualPaymentService{db: postgres.db, cfg: virtualPaymentConfigFromApp(a.cfg)}
+	managed, err := service.isManagedMemberAgentPlanRef(ctx, planRef)
+	if err != nil {
+		return err
+	}
+	if !managed {
+		return nil
+	}
+	return newBusinessPlanAdminError(http.StatusConflict, "MANAGED_PLAN_REQUIRES_PRICE_QUOTE", "V2 managed member and agent plans must be ordered with a server-issued price quote")
+}
+
+func writeCommerceOrderCreationError(w http.ResponseWriter, err error) {
+	var businessErr *businessPlanAdminError
+	if errors.As(err, &businessErr) {
+		writeBusinessPlanAdminError(w, businessErr)
+		return
+	}
+	writeError(w, http.StatusBadRequest, err)
 }
 
 func (a api) createOperationCenterJoinOrder(w http.ResponseWriter, r *http.Request) {
@@ -3347,12 +3681,13 @@ func (a api) createOrderForPlan(user adminUser, plan adminPlan, requestedAmountC
 		}
 	}
 	return a.store.CreateAdminOrder(adminOrderMutation{
-		UserID:         user.ID,
-		PlanID:         plan.ID,
-		AmountCents:    amountCents,
-		Status:         "PENDING",
-		PaymentMethod:  paymentMethod,
-		IdempotencyKey: idempotencyKey,
+		UserID:             user.ID,
+		PlanID:             plan.ID,
+		AmountCents:        amountCents,
+		Status:             "PENDING",
+		PaymentMethod:      paymentMethod,
+		IdempotencyKey:     idempotencyKey,
+		PaymentEnvironment: map[int]string{0: "PRODUCTION", 1: "SANDBOX"}[virtualPaymentConfigFromApp(a.cfg).Env],
 	})
 }
 
@@ -3583,22 +3918,59 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	tasks, err := a.generationTasksForUser(r, user.ID, maxUserContentListLimit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	// Homepage only renders ~30 recent items; avoid signing hundreds of asset URLs.
+	taskLimit := listLimitFromRequest(r, "taskLimit", 30)
+	assetLimit := listLimitFromRequest(r, "assetLimit", 30)
+	var tasks []generationTask
+	var assets []asset
+	var points pointAccount
+	var firstErr error
+	var errMu sync.Mutex
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
-	assets, err := a.assetsForUser(r, user.ID, maxUserContentListLimit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		items, err := a.generationTasksForUser(r, user.ID, taskLimit)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		tasks = items
+	}()
+	go func() {
+		defer wg.Done()
+		items, err := a.assetsForUser(r, user.ID, assetLimit)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		assets = items
+	}()
+	go func() {
+		defer wg.Done()
+		item, err := a.store.PointAccount(user.ID)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		points = item
+	}()
+	wg.Wait()
+	if firstErr != nil {
+		writeError(w, http.StatusInternalServerError, firstErr)
 		return
 	}
 	tasks = attachAssetImagesToTasks(tasks, assets)
-	points, err := a.store.PointAccount(user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	succeeded := 0
 	totalPointCost := 0
 	for _, task := range tasks {
@@ -3610,6 +3982,7 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"summary": map[string]any{
 			"availablePoints":      points.Available,
+			"totalPoints":          points.Total,
 			"todayGenerations":     len(tasks),
 			"succeededGenerations": succeeded,
 			"assets":               len(assets),
@@ -3632,8 +4005,9 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
-	taskLimit := listLimitFromRequest(r, "taskLimit", defaultUserContentListLimit)
-	assetLimit := listLimitFromRequest(r, "assetLimit", defaultUserContentListLimit)
+	// Workspace first paint only needs a short recent list; clients can raise the limit.
+	taskLimit := listLimitFromRequest(r, "taskLimit", 40)
+	assetLimit := listLimitFromRequest(r, "assetLimit", 40)
 	var tasks []generationTask
 	var assets []asset
 	var points pointAccount
@@ -3748,6 +4122,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"summary": map[string]any{
 			"availablePoints":  points.Available,
+			"totalPoints":      points.Total,
 			"todayGenerations": len(tasks),
 			"queueTasks":       queued + running,
 			"apiPlatforms":     len(providers),
@@ -4128,7 +4503,9 @@ func securePublicMediaURL(rawURL string) string {
 		return rawURL
 	}
 	host := strings.ToLower(strings.Trim(parsed.Hostname(), "[]"))
-	if host == "localhost" {
+	// Keep internal docker / loopback endpoints untouched; upgrading them to https
+	// makes browser detail previews fail harder (e.g. https://minio:9000/...).
+	if host == "localhost" || host == "minio" || !strings.Contains(host, ".") {
 		return rawURL
 	}
 	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()) {

@@ -1,0 +1,122 @@
+Pager usage is off.
+Timing is on.
+BEGIN
+Time: 0.113 ms
+SET
+Time: 0.062 ms
+SET
+Time: 0.021 ms
+=== A. Database identity: DBA must confirm every value ===
+ database_name | database_user | schema_name | server_address | server_port | is_replica | transaction_read_only |        postgres_version         
+---------------+---------------+-------------+----------------+-------------+------------+-----------------------+---------------------------------
+ zhiqiyun      | zhiqiyun_prod | public      |                |             | f          | on                    | 16.14 (Debian 16.14-1.pgdg12+1)
+(1 row)
+
+Time: 0.493 ms
+=== B. Long transactions and lock waits: returned rows require review ===
+ pid | usename | application_name | client_addr | state | wait_event_type | wait_event | transaction_age 
+-----+---------+------------------+-------------+-------+-----------------+------------+-----------------
+(0 rows)
+
+Time: 2.129 ms
+ waiting_lock_count 
+--------------------
+                  0
+(1 row)
+
+Time: 0.332 ms
+=== C. Required pre-097 schema: every returned row is a blocker ===
+ table_name | column_name 
+------------+-------------
+(0 rows)
+
+Time: 8.390 ms
+=== D. 097 table state: present_count must be 0 or 6, never 1-5 ===
+ present_count | missing_count 
+---------------+---------------
+             0 |             6
+(1 row)
+
+Time: 0.351 ms
+=== D2. 097 order-column state: present_count must be 0 or 11, never 1-10 ===
+ present_count | missing_count 
+---------------+---------------
+             0 |            11
+(1 row)
+
+Time: 3.428 ms
+=== D3. Migration marker objects: first application expects zero rows ===
+ schema_name | object_name | object_kind 
+-------------+-------------+-------------
+(0 rows)
+
+Time: 2.138 ms
+=== D4. Critical 097 constraint-name collisions: first application expects zero rows ===
+ schema_name | table_name | conname 
+-------------+------------+---------
+(0 rows)
+
+Time: 2.790 ms
+=== E. Plan codes: duplicate_code must return zero rows ===
+ duplicate_code | duplicate_count 
+----------------+-----------------
+(0 rows)
+
+Time: 0.532 ms
+=== F. Historical code warnings: these rows must not be newly onboarded to V2 ===
+ id | code 
+----+------
+(0 rows)
+
+Time: 0.225 ms
+=== G. Production sizing estimates; exact count/sum belongs in the isolated copy ===
+     table_name      | estimated_live_rows | total_bytes | total_size 
+---------------------+---------------------+-------------+------------
+ xz_audit_logs       |                1682 |      622592 | 608 kB
+ xz_orders           |                  49 |      393216 | 384 kB
+ xz_plans            |                  24 |      139264 | 136 kB
+ xz_role_permissions |                 229 |       98304 | 96 kB
+(4 rows)
+
+Time: 2.064 ms
+Time: 0.138 ms
+Time: 1.588 ms
+Time: 1.541 ms
+Time: 0.102 ms
+=== L. V132 compatibility gate: returned rows are blockers ===
+ tenant_id | mode | enabled | real_switch_enabled 
+-----------+------+---------+---------------------
+(0 rows)
+
+Time: 0.383 ms
+Time: 1.490 ms
+=== O. Actual pricing grants: every non-SUPER_ADMIN row needs approval ===
+ role | pricing_permissions 
+------+---------------------
+(0 rows)
+
+Time: 0.346 ms
+ role | status | account_count 
+------+--------+---------------
+(0 rows)
+
+Time: 0.538 ms
+=== P. 097-100 NOT VALID status: preserve output for validation approval ===
+ table_name | conname | contype | convalidated | definition 
+------------+---------+---------+--------------+------------
+(0 rows)
+
+Time: 1.755 ms
+=== Q. V2 order/quote rollback inventory ===
+=== R. Relevant table sizes for lock-window rehearsal ===
+       relname       | total_bytes | total_size 
+---------------------+-------------+------------
+ xz_audit_logs       |      622592 | 608 kB
+ xz_orders           |      393216 | 384 kB
+ xz_plans            |      139264 | 136 kB
+ xz_role_permissions |       98304 | 96 kB
+(4 rows)
+
+Time: 0.509 ms
+ROLLBACK
+Time: 0.078 ms

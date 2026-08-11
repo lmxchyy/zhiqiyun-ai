@@ -1,5 +1,5 @@
 import axios, { type AxiosRequestConfig } from "axios";
-import { clearWebAuthSession, getWebAccessToken, hasPersistentWebSessionMarker, hasWebSessionMarker, isPersistentWebSession, persistWebAccessToken } from "../utils/webAuthSession";
+import { clearWebAuthSession, getWebAccessToken, hasPersistentWebSessionMarker, hasWebSessionMarker, isPersistentWebSession, persistWebAccessToken } from "../utils/webAuthSession.ts";
 
 export type WebApiAuthMode = "none" | "optional" | "required";
 
@@ -7,6 +7,27 @@ export interface WebApiRequestConfig extends AxiosRequestConfig {
   authMode?: WebApiAuthMode;
   retryOnUnauthorized?: boolean;
   _authRetry?: boolean;
+}
+
+export interface AdminApiErrorPayload {
+  code?: string;
+  error?: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export class AdminApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly payload: unknown;
+
+  constructor(message: string, status = 0, code = "", payload: unknown = undefined) {
+    super(message);
+    this.name = "AdminApiError";
+    this.status = status;
+    this.code = code;
+    this.payload = payload;
+  }
 }
 
 let refreshPromise: Promise<string> | null = null;
@@ -31,10 +52,17 @@ export function chineseAdminErrorMessage(message: unknown, status = 0, fallback 
   if (/[\u3400-\u9fff]/.test(source)) return source;
   const normalized = source.toLowerCase();
   if (/network error|failed to fetch|network request failed|connection (?:refused|reset)/.test(normalized)) return "网络连接失败，请检查网络后重试";
-  if (/timeout|timed out/.test(normalized)) return "请求超时，请稍后重试";
+  if (/timeout|timed out|deadline exceeded/.test(normalized)) return "请求超时，请稍后重试";
+  if (/response_format|json_schema|invalid_request_error/.test(normalized)) return "方案生成模型参数不兼容，请稍后重试或联系管理员";
+  if (/provider_invalid_json|invalid_plan|image_source_bounds|duration_mismatch/.test(normalized)) return "方案内容格式有偏差，已增强自动修正，请再点一次生成方案";
+  if (/provider_unavailable|chat provider/.test(normalized)) return "方案生成服务暂时不可用，请稍后重试";
   if (/invalid (?:username|email|mobile|phone|account|password|credentials)|incorrect password|bad credentials/.test(normalized)) return "账号或密码不正确";
   if (/token.*(?:expired|invalid)|(?:expired|invalid).*token|session.*expired/.test(normalized)) return "登录状态已失效，请重新登录";
   if (/unauthorized|authentication required|not authenticated|please log in/.test(normalized)) return "请先登录后再继续";
+  if (/not included in package|module .+ is not included/.test(normalized)) return "当前套餐不支持该能力，请升级后重试";
+  if (/not allowed by tenant\/package limit|no models are allowed by tenant\/package limit/.test(normalized)) return "当前套餐未开放该视频模型，请更换模型或联系管理员开通";
+  if (/not allowed by schema|parameter .+ is required|exceeds tenant\/package|is not in schema options/.test(normalized)) return "提交的信息不符合要求，请检查后重试";
+  if (/upstream|api (?:provider|channel)|not bound to an api provider|does not support this model/.test(normalized)) return "视频模型上游渠道未启用，请先在主控后台完成 API 配置";
   if (/forbidden|permission denied|access denied|not allowed/.test(normalized)) return "暂无权限执行此操作";
   if (/too many requests|rate limit/.test(normalized)) return "操作过于频繁，请稍后重试";
   if (/already exists|duplicate|conflict/.test(normalized)) return "该数据已存在，请勿重复提交";
@@ -44,6 +72,15 @@ export function chineseAdminErrorMessage(message: unknown, status = 0, fallback 
   if (status >= 500) return "服务器处理失败，请稍后重试";
   if (status >= 400) return "请求失败，请检查后重试";
   return /[\u3400-\u9fff]/.test(fallback) ? fallback : "请求失败，请稍后重试";
+}
+
+export function createAdminApiError(payload: unknown, status = 0, fallback = "请求失败，请稍后重试"): AdminApiError {
+  const record = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as AdminApiErrorPayload
+    : {};
+  const source = record.error || record.message || payload;
+  const code = typeof record.code === "string" ? record.code.trim() : "";
+  return new AdminApiError(chineseAdminErrorMessage(source, status, fallback), status, code, payload);
 }
 
 function requestAuthMode(config: WebApiRequestConfig): WebApiAuthMode {
@@ -141,8 +178,8 @@ apiClient.interceptors.response.use(
         // refreshWebAuthSession already cleared the invalid local session.
       }
     }
-    const message = error.response?.data?.error || error.response?.data?.message || error.message;
-    return Promise.reject(new Error(chineseAdminErrorMessage(message, status)));
+    const payload = error.response?.data ?? error.message;
+    return Promise.reject(createAdminApiError(payload, status));
   }
 );
 

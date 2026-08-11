@@ -15,6 +15,7 @@ const authenticatedPages = new Set([
   "/pages/user/UserAssetDetailPage",
   "/pages/user/UserOrderConfirmPage",
   "/pages/user/UserVirtualPaymentPage",
+  "/pages/user/UserVirtualPaymentTestPage",
 ]);
 
 export function pageAccessFor(url: string): PageAccess {

@@ -169,7 +169,7 @@
     {
       "path": "pages/user/UserInfographicCreationPage",
       "style": {
-        "navigationBarTitleText": "信息图",
+        "navigationBarTitleText": "自由P图",
         "navigationStyle": "custom"
       }
     },
@@ -392,6 +392,13 @@
       "path": "pages/user/UserVirtualPaymentPage",
       "style": {
         "navigationBarTitleText": "微信虚拟支付",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/user/UserVirtualPaymentTestPage",
+      "style": {
+        "navigationBarTitleText": "支付测试",
         "navigationStyle": "custom"
       }
     },
@@ -648,6 +655,14 @@
         { "path": "pages/export", "style": { "navigationBarTitleText": "导出演示文稿", "navigationStyle": "custom" } },
         { "path": "pages/desktop", "style": { "navigationBarTitleText": "在电脑继续", "navigationStyle": "custom" } },
         { "path": "pages/error", "style": { "navigationBarTitleText": "操作失败", "navigationStyle": "custom" } }
+      ]
+    },
+    {
+      "root": "packageSmartVideo",
+      "pages": [
+        { "path": "pages/create", "style": { "navigationBarTitleText": "AI混剪", "navigationStyle": "custom" } },
+        { "path": "pages/plan", "style": { "navigationBarTitleText": "混剪方案", "navigationStyle": "custom" } },
+        { "path": "pages/render", "style": { "navigationBarTitleText": "导出成片", "navigationStyle": "custom" } }
       ]
     }
   ],

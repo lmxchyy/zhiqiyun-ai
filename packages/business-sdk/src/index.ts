@@ -10,9 +10,11 @@ import { createMembershipSdk } from "./membership";
 import { createModelsSdk } from "./models";
 import { createPointsSdk } from "./points";
 import { createRoleWorkbenchSdk } from "./role-workbench";
+import { createSmartVideoSdk } from "./smart-video";
 import type { BusinessSdk } from "./types";
 
 export * from "./files";
+export * from "./smart-video";
 export {
   VIDEO_PARAMETER_KEYS,
   buildVideoSubmissionParameters,
@@ -60,6 +62,7 @@ export function createBusinessSdk(api: ApiClient): BusinessSdk {
     billing: createBillingSdk(api),
     agents: createAgentsSdk(api),
     enterprise: createEnterpriseSdk(api),
-    roleWorkbench: createRoleWorkbenchSdk(api)
+    roleWorkbench: createRoleWorkbenchSdk(api),
+    smartVideo: createSmartVideoSdk(api)
   };
 }

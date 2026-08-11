@@ -1,0 +1,57 @@
+{
+  "env": 0,
+  "orders": [
+    {
+      "orderNo": "ZQY202607282159389857812495",
+      "errcode": 268490001,
+      "errmsg": "openid错误 rid: 6a692e2d-0fb4714b-17b647eb",
+      "status": null,
+      "statusLabel": "None",
+      "provide_time": null,
+      "wx_order_id": null,
+      "wxpay_order_id": null,
+      "shipped": false
+    },
+    {
+      "orderNo": "ZQY20260728221656E339AB7A54",
+      "errcode": 268490001,
+      "errmsg": "openid错误 rid: 6a692e2d-7c99d11a-0bb998eb",
+      "status": null,
+      "statusLabel": "None",
+      "provide_time": null,
+      "wx_order_id": null,
+      "wxpay_order_id": null,
+      "shipped": false
+    }
+  ],
+  "events": [
+    {
+      "order_id": "ZQY202607282159389857812495",
+      "event_type": "query_order_paid",
+      "processing_status": "SUCCESS",
+      "error_message": "",
+      "processed_at": "2026-07-28 22:01:48.098921+00"
+    },
+    {
+      "order_id": "ZQY20260728221656E339AB7A54",
+      "event_type": "query_order_paid",
+      "processing_status": "SUCCESS",
+      "error_message": "",
+      "processed_at": "2026-07-28 22:19:48.666445+00"
+    },
+    {
+      "order_id": "ZQY202607282159389857812495",
+      "event_type": "notify_provide_goods",
+      "processing_status": "SUCCESS",
+      "error_message": "",
+      "processed_at": "2026-07-28 22:32:31.514173+00"
+    },
+    {
+      "order_id": "ZQY20260728221656E339AB7A54",
+      "event_type": "notify_provide_goods",
+      "processing_status": "SUCCESS",
+      "error_message": "",
+      "processed_at": "2026-07-28 22:32:32.223415+00"
+    }
+  ]
+}

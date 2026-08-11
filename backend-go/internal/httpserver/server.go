@@ -2,10 +2,12 @@ package httpserver
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -17,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	operationcenter "xianzhi-ai/backend-go/internal/app/operationcenter"
 	paymentapp "xianzhi-ai/backend-go/internal/app/payment"
 	"xianzhi-ai/backend-go/internal/app/smartvideo"
 	"xianzhi-ai/backend-go/internal/config"
@@ -71,6 +74,27 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		knowledge.rag.SetBillingRecorder(store)
 	}
 	admin := newAdminAPI(store, sessions)
+	businessPlans := newBusinessPlanAdminAPI(store)
+	pricePlans := newPricePlanAdminAPI(store)
+	pricePlanTestWhitelist := newPricePlanTestWhitelistAdminAPI(store)
+	pricingAudit := newPricingAuditAdminAPI(store)
+	pricingHealth := newPricingHealthAdminAPI(store, cfg)
+	wechatGoods := newWechatVirtualGoodsAdminAPI(store)
+	operationCenterReviews := newOperationCenterReviewAPI(nil)
+	operationCenterRefunds := newOperationCenterRefundAPI(nil, nil)
+	var operationCenterRefundManagement *operationcenter.RefundManagementService
+	var operationCenterRuntime *operationcenter.OperationCenterRuntime
+	if pgStore, ok := store.(*postgresStore); ok {
+		workflow, workflowErr := operationcenter.NewWorkflowService(pgStore.db, operationcenter.WorkflowOptions{})
+		if workflowErr == nil {
+			operationCenterReviews = newOperationCenterReviewAPI(workflow)
+		}
+		management, managementErr := operationcenter.NewRefundManagementService(pgStore.db)
+		if managementErr == nil {
+			operationCenterRefundManagement = management
+			operationCenterRefunds = newOperationCenterRefundAPI(management, nil)
+		}
+	}
 	identityQueries := newIdentityQueryAPI(store)
 	identityChanges := newIdentityChangeAPI(store)
 	identityDowngrades := newIdentityDowngradeAPI(store)
@@ -101,12 +125,32 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	publicCatalog := publicCatalogAPI{store: store}
 	api.pptVisualLocker = newRedisPPTVisualLocker(redisClient)
 	virtualPayment := newVirtualPaymentAPI(cfg, store, sessions, redisClient)
+	if pgStore, ok := store.(*postgresStore); ok && operationCenterRefundManagement != nil {
+		var runtimeErr error
+		operationCenterRuntime, runtimeErr = newOperationCenterRuntime(pgStore.db, cfg.Environment, virtualPayment.service)
+		if runtimeErr == nil {
+			operationCenterRefunds = newOperationCenterRefundAPI(operationCenterRefundManagement, operationCenterRuntime)
+		} else {
+			slog.Error("operation center runtime unavailable", "environment", cfg.Environment, "error", runtimeErr)
+			if operationCenterProductionEnvironment(cfg.Environment) {
+				panic(runtimeErr)
+			}
+		}
+	}
 	paymentCenter := newPaymentCenterAPI(cfg, store, sessions, virtualPayment)
 	connectors := newConnectorAPI(cfg, store, enterprise, api, redisClient)
 	files := newFileCenterAPI(fileService, store, sessions)
 	var smartVideoRepository smartvideo.Repository = smartvideo.NewMemoryRepository()
+	var smartVideoPlanService *smartvideo.PlanService
+	var smartVideoExportService *smartvideo.ExportService
 	if pgStore, ok := store.(*postgresStore); ok {
-		smartVideoRepository = smartvideo.NewPostgresRepository(pgStore.db)
+		pgRepo := smartvideo.NewPostgresRepository(pgStore.db)
+		smartVideoRepository = pgRepo
+		smartVideoPlanService = smartvideo.NewPlanService(pgRepo, pgRepo, pgRepo, nil)
+		smartVideoExportService = smartvideo.NewExportService(pgRepo, pgRepo, pgRepo, newSmartVideoPointsLifecycle(store))
+	} else if mem, ok := smartVideoRepository.(*smartvideo.MemoryRepository); ok {
+		smartVideoPlanService = smartvideo.NewPlanService(mem, nil, mem, nil)
+		smartVideoExportService = smartvideo.NewExportService(mem, mem, mem, newSmartVideoPointsLifecycle(store))
 	}
 	var smartVideoAnalysisQueue smartvideo.AnalysisQueue
 	if redisClient != nil {
@@ -119,6 +163,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	smartVideos := newSmartVideoAPI(
 		smartvideo.NewService(smartVideoRepository, smartVideoFileResolver{service: fileService}).SetRenderQueue(smartVideoRenderQueue),
 		smartvideo.NewAnalysisService(smartVideoRepository, smartVideoAnalysisQueue, smartVideoAnalysisOptions(cfg)),
+		smartVideoPlanService,
+		smartVideoExportService,
 		files,
 	)
 	gin.SetMode(gin.ReleaseMode)
@@ -133,6 +179,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 
 	router.GET("/healthz", wrapF(health))
 	router.GET("/d/:inviteCode", wrapF(agentInviteH5Redirect))
+	router.GET("/i/:inviteToken", wrapF(promotionInviteTokenH5Redirect))
 	router.GET("/android/latest", wrapF(agentInvites.download))
 	router.POST("/api/open/connectors/feishu/events/:connectorKey", wrapF(connectors.event))
 	router.GET("/api/open/connectors/authorize/:ticket", wrapF(connectors.authorizationLanding))
@@ -144,6 +191,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/auth/login", wrapF(auth.login))
 	v1.POST("/auth/wechat-mini-program/login", wrapF(auth.wechatMiniProgramLogin))
 	v1.POST("/auth/wechat-mini-program/link", wrapF(auth.linkWeChatMiniProgram))
+	v1.POST("/auth/wechat-mini-program/session", wrapF(auth.refreshWeChatMiniProgramSession))
 	v1.POST("/auth/wechat/phone-login", wrapF(auth.wechatMiniProgramLogin))
 	v1.GET("/auth/wechat/qrcode", wrapF(auth.wechatWebQRCode))
 	v1.GET("/auth/wechat/status", wrapF(auth.wechatWebStatus))
@@ -160,6 +208,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/auth/change-password", wrapF(auth.changePassword))
 	v1.GET("/auth/security", wrapF(auth.security))
 	v1.GET("/invite/agent/resolve", wrapF(auth.resolveInvite))
+	v1.GET("/invite/resolve", wrapF(auth.resolvePromotionInvite))
 	v1.GET("/public/invites/:inviteCode", wrapF(agentInvites.invite))
 	v1.POST("/public/invites/:inviteCode/register", wrapF(agentInvites.register))
 	v1.GET("/public/app/releases/latest", wrapF(agentInvites.latestRelease))
@@ -287,6 +336,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/payment/orders", wrapF(paymentCenter.createOrder))
 	v1.GET("/payment/products", wrapF(virtualPayment.products))
 	v1.GET("/payment/coupons", wrapF(virtualPayment.coupons))
+	v1.POST("/payment/price-quotes", wrapF(virtualPayment.createPublicPriceQuote))
+	v1.POST("/payment/test-price-quotes", wrapF(virtualPayment.createTestPriceQuote))
 	v1.POST("/payment/wechat-virtual/orders", wrapF(virtualPayment.createOrder))
 	v1.GET("/payment/orders/:orderNo", wrapF(paymentCenter.order))
 	if !cfg.IsProduction() {
@@ -314,6 +365,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/generation-tasks/:id", wrapF(api.getGenerationTask))
 	v1.POST("/generation-tasks/:id/retry", wrapF(api.retryGenerationTask))
 	v1.POST("/generation-tasks/:id/cancel", wrapF(api.cancelGenerationTask))
+	v1.DELETE("/generation-tasks/:id", wrapF(api.deleteGenerationTask))
 	v1.POST("/generation-tasks", wrapF(api.createGenerationTask))
 	v1.POST("/ppt/generate", wrapF(api.createPPTGenerationTask))
 	v1.POST("/ppt/estimate", wrapF(api.estimatePPTGenerationCost))
@@ -354,6 +406,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.DELETE("/assets/:id", wrapF(api.deleteAsset))
 	v1.POST("/files/upload/init", wrapF(files.initUpload))
 	v1.POST("/files/upload/complete", wrapF(files.completeUpload))
+	v1.POST("/files/upload/multipart/init", wrapF(files.initMultipartUpload))
+	v1.POST("/files/upload/multipart/:uploadId/parts/:partNumber", wrapF(files.presignMultipartPart))
+	v1.POST("/files/upload/multipart/:uploadId/complete", wrapF(files.completeMultipartUpload))
+	v1.POST("/files/upload/multipart/:uploadId/abort", wrapF(files.abortMultipartUpload))
 	v1.GET("/files/:fileId", wrapF(files.getFile))
 	v1.GET("/files/:fileId/access-url", wrapF(files.accessURL(false)))
 	v1.GET("/files/:fileId/download-url", wrapF(files.accessURL(true)))
@@ -372,8 +428,16 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/video-projects/:id/analyze", wrapF(smartVideos.analyze))
 	v1.GET("/video-projects/:id/analysis", wrapF(smartVideos.analysisStatus))
 	v1.POST("/video-projects/:id/assets/:assetId/retry-analysis", wrapF(smartVideos.retryAnalysis))
+	v1.POST("/video-projects/:id/plan-tasks", wrapF(smartVideos.planTasks))
+	v1.GET("/video-projects/:id/plan-tasks/:taskId", wrapF(smartVideos.planTask))
+	v1.GET("/video-projects/:id/versions", wrapF(smartVideos.versions))
+	v1.GET("/video-projects/:id/versions/:versionId", wrapF(smartVideos.version))
+	v1.POST("/video-projects/:id/versions/:versionId/revisions", wrapF(smartVideos.reviseVersion))
+	v1.POST("/video-projects/:id/versions/:versionId/confirm", wrapF(smartVideos.confirmVersion))
+	v1.GET("/video-projects/:id/versions/:versionId/render-estimate", wrapF(smartVideos.renderEstimate))
 	v1.POST("/video-projects/:id/render-tasks", wrapF(smartVideos.createRenderTask))
 	v1.GET("/video-projects/:id/render-tasks/:taskId", wrapF(smartVideos.renderTask))
+	v1.POST("/video-projects/:id/render-tasks/:taskId/cancel", wrapF(smartVideos.cancelRenderTask))
 	v1.POST("/video-projects/:id/render-tasks/:taskId/retry", wrapF(smartVideos.retryRenderTask))
 	v1.POST("/reference-images", wrapF(api.uploadReferenceImage))
 	v1.GET("/reference-images/:name", wrapF(api.serveReferenceImage))
@@ -450,7 +514,25 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	} else {
 		adminPaymentGroup.Use(superAdminMiddleware(auth))
 	}
+	dashboardBillingGroup := router.Group("/v1/dashboard/billing")
+	if pgStore, ok := store.(*postgresStore); ok {
+		dashboardBillingGroup.Use(func(c *gin.Context) {
+			permission := adminPermissionForRequest(c.Request)
+			pgStore.rbacMiddleware(auth, permission)(c)
+		})
+	} else {
+		dashboardBillingGroup.Use(superAdminMiddleware(auth))
+	}
 	adminGroup.GET("/overview", wrapF(admin.overview))
+	adminGroup.GET("/channel-ecosystem/operation-centers/:id", wrapF(operationCenterReviews.status))
+	adminGroup.POST("/channel-ecosystem/operation-centers/:id/approve", wrapF(operationCenterReviews.approve))
+	adminGroup.POST("/channel-ecosystem/operation-centers/:id/reject", wrapF(operationCenterReviews.reject))
+	adminGroup.POST("/channel-ecosystem/operation-centers/:id/refunds", wrapF(operationCenterRefunds.requestActive))
+	adminGroup.GET("/channel-ecosystem/refunds/:refundTaskId", wrapF(operationCenterRefunds.get))
+	adminGroup.GET("/channel-ecosystem/refunds", wrapF(operationCenterRefunds.list))
+	adminGroup.POST("/channel-ecosystem/refunds/:refundTaskId/retry", wrapF(operationCenterRefunds.retry))
+	adminGroup.POST("/channel-ecosystem/refunds/:refundTaskId/manual-submit", wrapF(operationCenterRefunds.manualSubmit))
+	adminGroup.POST("/channel-ecosystem/refunds/:refundTaskId/manual-approve", wrapF(operationCenterRefunds.manualApprove))
 	adminGroup.GET("/search", wrapF(admin.globalSearch))
 	adminGroup.PATCH("/exceptions/:id", wrapF(admin.updateExceptionCase))
 	adminGroup.POST("/experience-events", wrapF(admin.recordExperienceEvent))
@@ -541,6 +623,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/knowledge/:resource", wrapF(knowledgeAPI.saveAdminProfile))
 	adminGroup.PATCH("/knowledge/:resource/:id", wrapF(knowledgeAPI.saveAdminProfile))
 	adminGroup.GET("/customer-attributions", wrapF(admin.customerAttributions))
+	adminGroup.GET("/points/expiry-policy", wrapF(admin.pointExpiryPolicy))
+	adminGroup.PUT("/points/expiry-policy", wrapF(admin.pointExpiryPolicy))
 	adminGroup.GET("/customers", wrapF(admin.customers))
 	adminGroup.GET("/customers/:id/360", wrapF(admin.customer360))
 	adminGroup.GET("/customers/:id/identity-profile", wrapF(identityQueries.profile))
@@ -560,6 +644,9 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/users/:id/identity-downgrade/requests/:requestId/reschedule", wrapF(identityDowngrades.reschedule))
 	adminGroup.POST("/customers", wrapF(admin.createCustomer))
 	adminGroup.PATCH("/customers/:id", wrapF(admin.updateCustomer))
+	adminGroup.POST("/customers/:id/point-gifts", wrapF(admin.customerPointGift))
+	adminGroup.POST("/customers/:id/point-corrections", wrapF(admin.customerPointCorrection))
+	adminGroup.GET("/customers/:id/point-lots", wrapF(admin.customerPointLots))
 	adminGroup.GET("/customers/:id/identities", wrapF(admin.customerIdentities))
 	adminGroup.GET("/customers/:id/account-merge-requests", wrapF(admin.customerAuthMergeRequests))
 	adminGroup.POST("/customers/:id/identities/mobile/unlink", wrapF(admin.unlinkCustomerMobile))
@@ -585,6 +672,38 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.PATCH("/plans/:id", wrapF(admin.updatePlan))
 	adminGroup.GET("/plans/:id/capabilities", wrapF(admin.planCapabilities))
 	adminGroup.PUT("/plans/:id/capabilities", wrapF(admin.updatePlanCapabilities))
+	adminGroup.GET("/business-plans", wrapF(businessPlans.plans))
+	adminGroup.GET("/business-plans/:planId", wrapF(businessPlans.plan))
+	adminGroup.GET("/business-plans/:planId/versions", wrapF(businessPlans.versions))
+	adminGroup.POST("/business-plans/:planId/versions", wrapF(businessPlans.createVersion))
+	adminGroup.PATCH("/plan-versions/:versionId", wrapF(businessPlans.updateVersion))
+	adminGroup.POST("/plan-versions/:versionId/activate", wrapF(businessPlans.activateVersion))
+	adminGroup.POST("/plan-versions/:versionId/retire", wrapF(businessPlans.retireVersion))
+	adminGroup.GET("/business-plans/:planId/price-plans", wrapF(pricePlans.plans))
+	adminGroup.POST("/business-plans/:planId/price-plans", wrapF(pricePlans.createPlan))
+	adminGroup.GET("/price-plans/:pricePlanId", wrapF(pricePlans.plan))
+	adminGroup.PATCH("/price-plans/:pricePlanId", wrapF(pricePlans.updatePlan))
+	adminGroup.POST("/price-plans/:pricePlanId/clone", wrapF(pricePlans.clonePlan))
+	adminGroup.GET("/price-plans/:pricePlanId/validation", wrapF(pricePlans.validation))
+	adminGroup.POST("/price-plans/:pricePlanId/enable", wrapF(pricePlans.enablePlan))
+	adminGroup.POST("/price-plans/:pricePlanId/disable", wrapF(pricePlans.disablePlan))
+	adminGroup.POST("/price-plans/:pricePlanId/make-default", wrapF(pricePlans.makeDefault))
+	adminGroup.GET("/price-plans/:pricePlanId/whitelist", wrapF(pricePlanTestWhitelist.list))
+	adminGroup.POST("/price-plans/:pricePlanId/whitelist", wrapF(pricePlanTestWhitelist.create))
+	adminGroup.PATCH("/price-plans/:pricePlanId/whitelist/:entryId", wrapF(pricePlanTestWhitelist.update))
+	adminGroup.POST("/price-plans/:pricePlanId/whitelist/:entryId/disable", wrapF(pricePlanTestWhitelist.disable))
+	adminGroup.GET("/pricing-audit-logs", wrapF(pricingAudit.list))
+	adminGroup.GET("/pricing-health", wrapF(pricingHealth.get))
+	adminGroup.GET("/wechat-virtual-goods", wrapF(wechatGoods.goods))
+	adminGroup.GET("/wechat-virtual-goods/:goodId", wrapF(wechatGoods.good))
+	adminGroup.GET("/wechat-virtual-goods/:goodId/references", wrapF(wechatGoods.references))
+	adminGroup.POST("/wechat-virtual-goods", wrapF(wechatGoods.createGood))
+	adminGroup.PATCH("/wechat-virtual-goods/:goodId", wrapF(wechatGoods.updateGood))
+	adminGroup.POST("/wechat-virtual-goods/:goodId/confirm-published", wrapF(wechatGoods.confirmGood))
+	adminGroup.POST("/wechat-virtual-goods/:goodId/disable", wrapF(wechatGoods.disableGood))
+	adminGroup.GET("/price-plans/:pricePlanId/payment-bindings", wrapF(wechatGoods.bindings))
+	adminGroup.POST("/price-plans/:pricePlanId/payment-bindings", wrapF(wechatGoods.createBinding))
+	adminGroup.PATCH("/payment-bindings/:bindingId", wrapF(wechatGoods.updateBinding))
 	adminGroup.GET("/orders", wrapF(admin.orders))
 	adminGroup.GET("/orders/:id/timeline", wrapF(admin.orderTimeline))
 	adminGroup.POST("/orders", wrapF(admin.createOrder))
@@ -611,6 +730,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/payment/virtual/refunds", wrapF(virtualPayment.adminList("refunds")))
 	adminGroup.GET("/payment/virtual/failures", wrapF(virtualPayment.adminList("failures")))
 	adminGroup.POST("/payment/virtual/orders/:orderNo/grant", wrapF(virtualPayment.adminGrantOrder))
+	adminGroup.POST("/payment/virtual/orders/:orderNo/notify-provide-goods", wrapF(virtualPayment.adminNotifyProvideGoods))
 	adminGroup.GET("/delivery-projects", wrapF(admin.deliveryProjects))
 	adminGroup.PATCH("/delivery-projects/:id", wrapF(admin.updateDeliveryProject))
 	adminGroup.GET("/generation-tasks", wrapF(admin.generationTasks))
@@ -633,6 +753,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/commission-rules", wrapF(admin.commissionRulesV2))
 	adminGroup.POST("/commission-rules", wrapF(admin.createCommissionRuleV2))
 	adminGroup.PUT("/commission-rules/:id", wrapF(admin.updateCommissionRuleV2))
+	adminGroup.GET("/channel-ecosystem/shadow-differences", wrapF(admin.commerceShadowDifferences))
+	adminGroup.GET("/channel-ecosystem/shadow-differences/:id", wrapF(admin.commerceShadowDifference))
+	adminGroup.GET("/channel-ecosystem/rollout-config", wrapF(admin.channelRolloutConfig))
+	adminGroup.PUT("/channel-ecosystem/rollout-config", wrapF(admin.updateChannelRolloutConfig))
 	adminGroup.POST("/commissions", wrapF(admin.createCommission))
 	adminGroup.POST("/commissions/:id/approve", wrapF(admin.approveCommission))
 	adminGroup.POST("/commissions/:id/reject", wrapF(admin.rejectCommission))
@@ -695,8 +819,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/billing/payments", wrapF(admin.billingPayments))
 	adminGroup.PATCH("/billing/subscriptions/:id", wrapF(admin.updateBillingSubscription))
 
-	router.GET("/v1/dashboard/billing/subscription", wrapF(admin.billingSubscription))
-	router.GET("/v1/dashboard/billing/usage", wrapF(admin.billingUsage))
+	dashboardBillingGroup.GET("/subscription", wrapF(admin.billingSubscription))
+	dashboardBillingGroup.GET("/usage", wrapF(admin.billingUsage))
 	registerWirelessCanvasCompatibilityRoutes(router, cfg)
 	router.GET("/", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
 	router.GET("/login", gin.WrapF(staticIndex(cfg.AdminStaticDir)))
@@ -720,7 +844,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router.GET("/user/*filepath", wrapF(notFound))
 	router.NoRoute(redirectUnknownWebToRoot)
 
-	return &http.Server{
+	server := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -728,11 +852,44 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
+	if operationCenterRuntime != nil {
+		schedulers, err := operationCenterRuntime.StartSchedulers(context.Background(), slog.Default())
+		if err != nil {
+			slog.Error("operation center scheduler startup rejected", "environment", cfg.Environment, "error", err)
+			if operationCenterProductionEnvironment(cfg.Environment) {
+				panic(err)
+			}
+		} else {
+			registerWaitableShutdownHook(server, schedulers.Stop)
+		}
+	}
+	if _, err := configurePersonalPointExpiryWorker(server, store, slog.Default()); err != nil {
+		slog.Error("personal point expiry worker disabled by invalid configuration", "error", err)
+	}
+	return server
+}
+
+func operationCenterProductionEnvironment(environment string) bool {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "production", "prod":
+		return true
+	default:
+		return false
+	}
 }
 
 const requestIDHeader = "X-Request-Id"
 const corsAllowedHeaders = "Authorization, Content-Type, Idempotency-Key, X-Request-Id, X-Client-Platform, X-Client-Name, X-Client-Version, X-Client-Language, X-Device-Id, X-Tenant-Id, X-Organization-Id"
 const corsAllowedMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+
+type requestIDContextKeyType struct{}
+
+var requestIDContextKey requestIDContextKeyType
+
+func requestIDFromContext(ctx context.Context) string {
+	requestID, _ := ctx.Value(requestIDContextKey).(string)
+	return strings.TrimSpace(requestID)
+}
 
 func requestContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -741,6 +898,7 @@ func requestContextMiddleware() gin.HandlerFunc {
 			requestID = newRequestID()
 		}
 		c.Set("request_id", requestID)
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), requestIDContextKey, requestID))
 		c.Header(requestIDHeader, requestID)
 		c.Header("Access-Control-Expose-Headers", requestIDHeader)
 		c.Next()

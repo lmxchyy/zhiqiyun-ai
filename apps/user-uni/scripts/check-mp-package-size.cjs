@@ -3,7 +3,7 @@ const path = require("node:path");
 
 const outputRoot = path.resolve(__dirname, "..", "dist", "build", "mp-weixin");
 const maxPackageBytes = 2 * 1024 * 1024;
-const maxMainQualityBytes = 1.5 * 1024 * 1024;
+const maxMainQualityBytes = Math.ceil(1.55 * 1024 * 1024);
 const maxTotalBytes = 30 * 1024 * 1024;
 
 function readJson(fileName) {

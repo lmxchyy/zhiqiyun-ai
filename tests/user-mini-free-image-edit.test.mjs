@@ -1,0 +1,159 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  defaultFreeImageEditPreset,
+  defaultFreeImageEditPrompt,
+  ensureFreeImageEditPrompt,
+  freeImageEditPresets,
+  freeImageEditValidationMessage,
+  selectedFreeImageEditPresetId,
+} from "../apps/user-uni/src/features/generation/freeImageEdit.ts";
+
+const expectedPresets = [
+  {
+    id: "magazine-cover",
+    title: "杂志封面",
+    prompt: "将照片转换为时尚杂志封面，保留人物身份特征，使用高级摄影棚光线和简洁排版。",
+  },
+  {
+    id: "remove-passersby",
+    title: "去除路人",
+    prompt: "去除主体人物之外的路人，保持主体人物、背景结构和画面光影自然。",
+  },
+  {
+    id: "refine-makeup",
+    title: "精致补妆",
+    prompt: "为照片中的人物补充自然精致的妆容，保留原有五官与肤质，避免过度磨皮。",
+  },
+  {
+    id: "restore-photo",
+    title: "老照片修复",
+    prompt: "修复照片的划痕、褪色和模糊区域，提升清晰度，同时保留原始人物特征和年代质感。",
+  },
+  {
+    id: "product-retouch",
+    title: "商品图精修",
+    prompt: "清理商品周围杂物和瑕疵，优化光影与质感，保持商品结构、颜色和标识准确。",
+  },
+  {
+    id: "change-hairstyle",
+    title: "更换发型",
+    prompt: "将人物发型改为自然的齐肩短发，保持脸型、五官、姿态和环境不变。",
+  },
+];
+
+test("free image edit exposes the six approved presets with unique ids and nonempty prompts", () => {
+  assert.deepEqual(freeImageEditPresets, expectedPresets);
+  assert.equal(new Set(freeImageEditPresets.map((preset) => preset.id)).size, 6);
+  assert.equal(freeImageEditPresets.every((preset) => preset.prompt.length > 0), true);
+});
+
+test("free image edit selects a preset only for an exact trimmed prompt", () => {
+  assert.equal(
+    selectedFreeImageEditPresetId(`  ${expectedPresets[0].prompt}  `),
+    "magazine-cover",
+  );
+  assert.equal(selectedFreeImageEditPresetId(`${expectedPresets[0].prompt}！`), "");
+  assert.equal(selectedFreeImageEditPresetId(""), "");
+});
+
+test("free image edit defaults to the first magazine-cover prompt", () => {
+  assert.equal(defaultFreeImageEditPrompt(), expectedPresets[0].prompt);
+  assert.equal(defaultFreeImageEditPreset.id, "magazine-cover");
+  assert.equal(ensureFreeImageEditPrompt(""), expectedPresets[0].prompt);
+  assert.equal(ensureFreeImageEditPrompt(" 自定义效果 "), "自定义效果");
+});
+
+test("free image edit validates image before a missing prompt", () => {
+  assert.equal(freeImageEditValidationMessage("", ""), "请先添加需要编辑的图片");
+  assert.equal(freeImageEditValidationMessage("   ", "修改人物发型"), "请先添加需要编辑的图片");
+});
+
+test("free image edit requires a prompt after an image is present", () => {
+  assert.equal(freeImageEditValidationMessage("/tmp/photo.png", ""), "请先选择图片效果或填写修改要求");
+  assert.equal(freeImageEditValidationMessage("/tmp/photo.png", "   "), "请先选择图片效果或填写修改要求");
+  assert.equal(freeImageEditValidationMessage("/tmp/photo.png", "修改人物发型"), "");
+});
+
+// === Task 2: FreeImageEditCreation.vue source-contract tests ===
+
+import { readFile } from "node:fs/promises";
+
+const componentURL = new URL("../apps/user-uni/src/components/creation/FreeImageEditCreation.vue", import.meta.url);
+
+test("renders the free-image-edit Figma structure and interactions", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(source, /自由P图/);
+  assert.match(source, /请添加图片/);
+  assert.match(source, /选择图片效果/);
+  assert.match(source, /maxlength="3000"/);
+  assert.match(source, /开始生成/);
+  assert.match(source, /freeImageEditPresets/);
+  assert.match(source, /add-image-blue\.svg/);
+  assert.match(source, /defaultFreeImageEditPrompt/);
+  assert.match(source, /\{\{ localPrompt\.length \}\}\/3000/);
+  assert.match(source, /border: 1\.5px dashed #c6c6cc/);
+  assert.match(source, /background: #f0f4ff/);
+  assert.match(source, /emit\(["']choose-image["']\)/);
+  assert.match(source, /emit\(["']generate["']\)/);
+});
+
+test("uses shared safe-area variables without inventing an App capsule", async () => {
+  const source = await readFile(componentURL, "utf8");
+  assert.match(source, /var\(--header-padding-top/);
+  assert.match(source, /var\(--capsule-right-space/);
+  assert.match(source, /env\(safe-area-inset-bottom/);
+  assert.doesNotMatch(source, /getMenuButtonBoundingClientRect/);
+});
+
+// === Task 3: MiniProgramRoleWorkbench integration tests ===
+
+const workbenchURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url);
+
+test("integrates free-image-edit without bypassing the existing generation chain", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /import FreeImageEditCreation/);
+  assert.match(source, /isFreeImageEditPage/);
+  assert.match(source, /creationMode\.value === "infographic"/);
+  assert.match(source, /<FreeImageEditCreation/);
+  assert.match(source, /@generate="guestAwareGenerateTap"/);
+  assert.match(source, /freeImageEditValidationMessage/);
+  assert.match(source, /ensureFreeImageEditDefaultPrompt/);
+  assert.match(source, /defaultFreeImageEditPrompt/);
+  assert.match(source, /businessSdk\.generation\.createTask/);
+  assert.match(source, /style:.*infographic/);
+  assert.match(source, /name: "自由P图"/);
+  assert.match(source, /homeName: "自由P图"/);
+  assert.doesNotMatch(source, /name: "信息图"/);
+});
+
+test("renders free-image-edit as a full page without outer creation chrome", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /v-if="!isFreeImageEditPage" class="native-safe-note"/);
+  assert.match(source, /v-if="isFreeImageEditPage" class="free-image-edit-page"/);
+  assert.match(source, /free-image-edit-page__task/);
+});
+
+test("replaces the single free-image-edit source without changing other reference modes", async () => {
+  const source = await readFile(workbenchURL, "utf8");
+  assert.match(source, /creationMode\.value === "infographic"/);
+  assert.match(source, /creationReferencePaths\.value = paths\.filter\(Boolean\)\.slice\(0, 1\)/);
+});
+
+const v531ConfigURL = new URL("../apps/user-uni/src/config/v531.ts", import.meta.url);
+
+test("home capability office entry uses 自由P图 copy instead of AI办公", async () => {
+  const source = await readFile(v531ConfigURL, "utf8");
+  assert.match(source, /slotKey: "home\.capability\.office"/);
+  assert.match(source, /routeMode: "infographic"/);
+  assert.match(source, /title: "自由P图"/);
+  assert.match(source, /"自由P图"/);
+  assert.doesNotMatch(source, /title: "AI办公"/);
+  assert.doesNotMatch(source, /"AI 办公"/);
+  // Keep free-edit in the featured home pair (after AI设计).
+  assert.match(
+    source,
+    /title: "AI设计"[\s\S]*?title: "自由P图"[\s\S]*?title: "AI视频"/,
+  );
+});

@@ -1,0 +1,4 @@
+default_member=99600
+default_agent=99600
+good_member=99600
+good_agent=99600
