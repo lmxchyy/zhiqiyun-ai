@@ -262,10 +262,13 @@ export interface SmartVideoRenderQuote {
 export interface SmartVideoAnalysisSummary {
   projectId: string;
   status: string;
+  overallStatus?: string;
   items?: Array<Record<string, unknown>>;
   readyCount?: number;
   failedCount?: number;
   totalCount?: number;
+  succeededCount?: number;
+  totalAssets?: number;
 }
 
 export interface CreateSmartVideoProjectInput {

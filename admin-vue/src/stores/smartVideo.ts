@@ -466,7 +466,7 @@ export const useSmartVideoStore = defineStore("smartVideo", {
       try {
         this.analysis = await getSmartVideoAnalysis(this.project.id);
         this.assets = await listSmartVideoAssets(this.project.id);
-        const status = String(this.analysis.status || "").toUpperCase();
+        const status = String(this.analysis.overallStatus || this.analysis.status || "").toUpperCase();
         if (["READY", "SUCCEEDED", "COMPLETED", "MATERIAL_READY"].includes(status)) {
           this.phase = "draft";
           return;
