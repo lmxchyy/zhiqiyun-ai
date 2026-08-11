@@ -1962,7 +1962,7 @@ func (a api) downloadVideoByURL(w http.ResponseWriter, r *http.Request) {
 		filename = "video.mp4"
 	}
 	if _, ok := generatedMediaNameFromURL(rawURL); ok {
-		a.writeGeneratedMediaDownload(w, rawURL, filename)
+		a.writeGeneratedMediaDownload(w, r.Context(), rawURL, filename)
 		return
 	}
 	parsedURL, err := url.Parse(rawURL)
@@ -1974,7 +1974,7 @@ func (a api) downloadVideoByURL(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("unsupported video url scheme"))
 		return
 	}
-	a.writeRemoteDownload(w, r, rawURL, "video/mp4", filename)
+	a.writeNormalizedVideoDownload(w, r, rawURL, filename)
 }
 
 func videoURLBelongsToUser(rawURL string, tasks []generationTask, assets []asset) bool {
@@ -2000,20 +2000,27 @@ func videoURLsEqual(left string, right string) bool {
 	return leftOK && rightOK && leftName == rightName
 }
 
-func sanitizeVideoDownloadFilename(filename string) string {
-	name := strings.TrimSpace(filename)
-	name = regexp.MustCompile(`[\\/:*?"<>|]+`).ReplaceAllString(name, "-")
-	name = strings.Trim(name, ". ")
-	if name == "" {
-		return ""
-	}
-	if !strings.HasSuffix(strings.ToLower(name), ".mp4") {
-		name += ".mp4"
-	}
-	return name
-}
-
 func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item asset) {
+	if isVideoAsset(item) {
+		filename := sanitizeVideoDownloadFilename(downloadAssetName(item, "video/mp4"))
+		if a.writeCompliantVideoDownload(w, r, item, filename) {
+			return
+		}
+		if raw, _, ok := a.readStoredAssetBytes(r.Context(), item); ok {
+			a.writeShareableVideoBytes(w, r.Context(), raw, item.URL, filename, false)
+			return
+		}
+		if _, ok := generatedMediaNameFromURL(item.URL); ok {
+			a.writeGeneratedMediaDownload(w, r.Context(), item.URL, filename)
+			return
+		}
+		if strings.TrimSpace(item.URL) == "" {
+			writeError(w, http.StatusNotFound, errAssetNotFound)
+			return
+		}
+		a.writeNormalizedVideoDownload(w, r, item.URL, filename)
+		return
+	}
 	if a.writeCompliantAssetDownload(w, r, item) {
 		return
 	}
@@ -2025,7 +2032,7 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 		contentType = "application/octet-stream"
 	}
 	if _, ok := generatedMediaNameFromURL(item.URL); ok {
-		a.writeGeneratedMediaDownload(w, item.URL, downloadAssetName(item, "video/mp4"))
+		a.writeGeneratedMediaDownload(w, r.Context(), item.URL, downloadAssetName(item, "video/mp4"))
 		return
 	}
 	if strings.HasPrefix(item.URL, "data:") {
@@ -2116,7 +2123,7 @@ func (a api) serveGeneratedMedia(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
-func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, rawURL string, filename string) {
+func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, ctx context.Context, rawURL string, filename string) {
 	name, ok := generatedMediaNameFromURL(rawURL)
 	if !ok {
 		writeError(w, http.StatusBadRequest, errors.New("invalid generated media url"))
@@ -2128,11 +2135,83 @@ func (a api) writeGeneratedMediaDownload(w http.ResponseWriter, rawURL string, f
 		return
 	}
 	defer file.Close()
-	if info, err := file.Stat(); err == nil {
-		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	raw, err := io.ReadAll(io.LimitReader(file, maxShareVideoNormalizeBytes+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxShareVideoNormalizeBytes {
+		writeError(w, http.StatusBadGateway, errors.New("generated media read failed"))
+		return
+	}
+	a.writeShareableVideoBytes(w, ctx, raw, rawURL, filename, false)
+}
+
+func (a api) writeNormalizedVideoDownload(w http.ResponseWriter, r *http.Request, rawURL string, filename string) {
+	remoteURL, err := validateRemoteDownloadURL(rawURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, remoteURL.String(), nil)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	res, err := remoteDownloadHTTPClient().Do(req)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("asset download returned %d", res.StatusCode))
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxShareVideoNormalizeBytes+1))
+	if err != nil || len(raw) == 0 || len(raw) > maxShareVideoNormalizeBytes {
+		writeError(w, http.StatusBadGateway, errors.New("video download payload invalid"))
+		return
+	}
+	a.writeShareableVideoBytes(w, r.Context(), raw, rawURL, filename, false)
+}
+
+func (a api) writeShareableVideoBytes(w http.ResponseWriter, ctx context.Context, raw []byte, sourceURL string, filename string, aiGenerated bool) {
+	filename = sanitizeVideoDownloadFilename(filename)
+	normalized, err := normalizeVideoBytesForShare(ctx, raw, sourceURL)
+	if err != nil || len(normalized) == 0 {
+		normalized = raw
 	}
 	writeAttachmentHeaders(w, "video/mp4", filename)
-	_, _ = io.Copy(w, file)
+	w.Header().Set("Content-Length", strconv.Itoa(len(normalized)))
+	w.Header().Set("X-Video-Share-Format", "mp4")
+	if aiGenerated {
+		w.Header().Set("X-AI-Generated", "true")
+	}
+	_, _ = w.Write(normalized)
+}
+
+func (a api) writeCompliantVideoDownload(w http.ResponseWriter, r *http.Request, item asset, filename string) bool {
+	if !boolValue(item.Metadata["ai_generated"]) {
+		return false
+	}
+	if !strings.EqualFold(stringMetadataValue(item, "output_audit_status"), auditApproved) {
+		writeError(w, http.StatusUnprocessableEntity, errOutputAuditRejected)
+		return true
+	}
+	if markedURL := strings.TrimSpace(stringMetadataValue(item, "download_marked_url")); markedURL != "" {
+		a.writeNormalizedVideoDownload(w, r, markedURL, filename)
+		return true
+	}
+	raw, _, err := func() ([]byte, string, error) {
+		if stored, storedType, ok := a.readStoredAssetBytes(r.Context(), item); ok {
+			return stored, firstNonEmptyString(storedType, item.MediaType), nil
+		}
+		payload, mediaType, _, readErr := readGeneratedArtifact(r.Context(), item.URL, item.MediaType)
+		return payload, mediaType, readErr
+	}()
+	if err == nil && len(raw) > 0 {
+		a.writeShareableVideoBytes(w, r.Context(), raw, item.URL, filename, true)
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable, errors.New("带AI标识的下载文件尚未生成，请稍后重试"))
+	return true
 }
 
 func (a api) writeRemoteDownload(w http.ResponseWriter, r *http.Request, rawURL string, contentType string, filename string) {
@@ -2336,12 +2415,13 @@ func downloadAssetName(item asset, contentType string) string {
 	if name == "" {
 		name = item.ID
 	}
+	if strings.Contains(strings.ToLower(contentType), "video") || strings.EqualFold(item.MediaType, "video") {
+		return sanitizeVideoDownloadFilename(name)
+	}
 	if regexp.MustCompile(`(?i)\.(png|jpe?g|webp|gif|svg|mp4)$`).MatchString(name) {
 		return name
 	}
 	switch {
-	case strings.Contains(contentType, "video"):
-		return name + ".mp4"
 	case strings.Contains(contentType, "svg"):
 		return name + ".svg"
 	case strings.Contains(contentType, "jpeg"), strings.Contains(contentType, "jpg"):

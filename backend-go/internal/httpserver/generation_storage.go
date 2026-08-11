@@ -261,10 +261,25 @@ func readGeneratedVideoArtifact(ctx context.Context, rawURL string) ([]byte, str
 	if contentType == "" || contentType == "application/octet-stream" {
 		contentType = strings.ToLower(http.DetectContentType(raw))
 	}
-	extensions := map[string]string{"video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm"}
+	pathHint := strings.ToLower(remoteURL.Path)
+	extensions := map[string]string{
+		"video/mp4":       "mp4",
+		"video/x-m4v":     "mp4",
+		"video/quicktime": "mp4",
+		"video/webm":      "webm",
+	}
 	extension, ok := extensions[contentType]
 	if !ok {
-		return nil, "", "", fmt.Errorf("unsupported generated video content type %q", contentType)
+		switch {
+		case strings.HasSuffix(pathHint, ".m4v"), strings.HasSuffix(pathHint, ".mp4"), strings.HasSuffix(pathHint, ".mov"):
+			contentType = "video/mp4"
+			extension = "mp4"
+		case strings.HasSuffix(pathHint, ".webm"):
+			contentType = "video/webm"
+			extension = "webm"
+		default:
+			return nil, "", "", fmt.Errorf("unsupported generated video content type %q", contentType)
+		}
 	}
 	return raw, contentType, extension, nil
 }

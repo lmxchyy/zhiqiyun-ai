@@ -80,9 +80,11 @@
   - `go test ./internal/httpserver/ -run "TestVideoGenerationEstimate|TestBillingCenterV1Acceptance|TestNormalizeAICapabilityDefaultsMergesMissingBillingRules"`
 - **核对**：`[ ]`
 
-### M3. 作品列表与详情
+### M3. 作品列表与详情 / 视频下载可分享
 - **不可丢**：作品列表可加载、筛选/多选删除提示、详情可返回列表。
-- **锚点**：`UserAssetsListPage`、`AssetDetailCenterPage`、作品中心 tab。
+- **视频下载（微信可发）**：网页/作品下载接口必须输出 **`Content-Type: video/mp4`** 且文件名以 **`.mp4`** 结尾；不得把上游 `.m4v` / `video/x-m4v` 原样传给浏览器导致微信群无法播放。有 ffmpeg 时应对 m4v/HEVC 等做 remux 或转 H.264+AAC。
+- **锚点**：`UserAssetsListPage`、`AssetDetailCenterPage`、作品中心 tab；`/api/v1/video/download`、`writeNormalizedVideoDownload` / `normalizeVideoBytesForShare`、`sanitizeVideoDownloadFilename`。
+- **验证**：`go test ./internal/httpserver/ -run "TestSanitizeVideoDownloadFilename|TestNormalizeVideoBytesForShare|TestDownloadAssetNameStripsM4V"`
 - **核对**：`[ ]`
 
 ### M4. 图片创作与灵感草稿带入
@@ -165,7 +167,7 @@
 - [ ] W4 首页摘要
 - [ ] M1 首页模板/灵感/登录落用户首页/游客浏览入口
 - [ ] M2 视频模型/参数/预估积分（Seedance 默认 600；Grok Preview 套餐与通道；中文错误）
-- [ ] M3 作品列表
+- [ ] M3 作品列表 / 视频下载强制 mp4（禁原样 m4v）
 - [ ] M4 灵感草稿带入
 - [ ] M5 钱包积分展示
 - [ ] M6 自由P图全页/首页主能力文案（禁回「信息图」「AI办公」）/默认预设/#ff6b00
