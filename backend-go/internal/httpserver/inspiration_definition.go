@@ -51,6 +51,7 @@ type InternalTemplateDefinition struct {
 type TemplateInputDefinition struct {
 	Key         string                       `json:"key"`
 	Type        TemplateInputType            `json:"type"`
+	Control     string                       `json:"control,omitempty"`
 	Label       string                       `json:"label"`
 	Required    bool                         `json:"required,omitempty"`
 	HelpText    string                       `json:"helpText,omitempty"`
@@ -59,6 +60,9 @@ type TemplateInputDefinition struct {
 	Options     []TemplateInputOption        `json:"options,omitempty"`
 	Validation  TemplateInputValidation      `json:"validation,omitempty"`
 	VisibleWhen *TemplateVisibilityCondition `json:"visibleWhen,omitempty"`
+	Section     string                       `json:"section,omitempty"`
+	Order       int                          `json:"order,omitempty"`
+	Advanced    bool                         `json:"advanced,omitempty"`
 }
 
 type TemplateInputOption struct {
@@ -191,6 +195,7 @@ type PublicTemplateDefinition struct {
 type PublicTemplateInput struct {
 	Key         string                             `json:"key"`
 	Type        TemplateInputType                  `json:"type"`
+	Control     string                             `json:"control,omitempty"`
 	Label       string                             `json:"label"`
 	Required    bool                               `json:"required,omitempty"`
 	HelpText    string                             `json:"helpText,omitempty"`
@@ -199,6 +204,9 @@ type PublicTemplateInput struct {
 	Options     []PublicTemplateInputOption        `json:"options,omitempty"`
 	Validation  PublicTemplateInputValidation      `json:"validation,omitempty"`
 	VisibleWhen *PublicTemplateVisibilityCondition `json:"visibleWhen,omitempty"`
+	Section     string                             `json:"section,omitempty"`
+	Order       int                                `json:"order,omitempty"`
+	Advanced    bool                               `json:"advanced,omitempty"`
 }
 
 type PublicTemplateInputOption struct {
@@ -253,6 +261,22 @@ func validateTemplateDefinition(contentType string, definition InternalTemplateD
 		TemplateInputSelect: true, TemplateInputMultiSelect: true, TemplateInputBoolean: true,
 		TemplateInputImage: true, TemplateInputVideo: true, TemplateInputFile: true,
 	}
+	compatibleControls := map[TemplateInputType]map[string]bool{
+		TemplateInputText:        {"TEXT": true},
+		TemplateInputTextarea:    {"TEXTAREA": true},
+		TemplateInputNumber:      {"NUMBER": true, "SLIDER": true},
+		TemplateInputSelect:      {"SELECT": true, "SEGMENTED": true},
+		TemplateInputMultiSelect: {"MULTI_SELECT": true},
+		TemplateInputBoolean:     {"BOOLEAN": true},
+		TemplateInputImage:       {"ASSET_UPLOAD": true},
+		TemplateInputVideo:       {"ASSET_UPLOAD": true},
+		TemplateInputFile:        {"ASSET_UPLOAD": true},
+	}
+	validSections := map[string]bool{"materials": true, "requirements": true, "preferences": true, "advanced": true}
+	validVisibilityOperators := map[string]bool{
+		"eq": true, "equals": true, "neq": true, "not_equals": true,
+		"in": true, "not_in": true, "truthy": true, "falsy": true,
+	}
 	for index, input := range definition.Inputs {
 		path := fmt.Sprintf("inputs[%d]", index)
 		if !templateKeyPattern.MatchString(input.Key) {
@@ -264,6 +288,12 @@ func validateTemplateDefinition(contentType string, definition InternalTemplateD
 		inputKeys[input.Key] = input
 		if !validInputTypes[input.Type] {
 			add("INPUT_TYPE_UNSUPPORTED", path+".type", "unsupported input type")
+		}
+		if control := strings.TrimSpace(input.Control); control != "" && !compatibleControls[input.Type][control] {
+			add("INPUT_CONTROL_INCOMPATIBLE", path+".control", "input control is incompatible with input type")
+		}
+		if section := strings.TrimSpace(input.Section); section != "" && !validSections[section] {
+			add("INPUT_SECTION_INVALID", path+".section", "input section is invalid")
 		}
 		if strings.TrimSpace(input.Label) == "" {
 			add("INPUT_LABEL_REQUIRED", path+".label", "input label is required")
@@ -284,6 +314,14 @@ func validateTemplateDefinition(contentType string, definition InternalTemplateD
 		}
 		if input.VisibleWhen != nil && input.VisibleWhen.InputKey == input.Key {
 			add("VISIBILITY_SELF_REFERENCE", path+".visibleWhen.inputKey", "input cannot control its own visibility")
+		}
+		if input.VisibleWhen != nil {
+			operator := strings.ToLower(strings.TrimSpace(input.VisibleWhen.Operator))
+			if !validVisibilityOperators[operator] {
+				add("VISIBILITY_OPERATOR_UNSUPPORTED", path+".visibleWhen.operator", "visibility operator is unsupported")
+			} else if (operator == "in" || operator == "not_in") && !templateArrayValue(input.VisibleWhen.Value) {
+				add("VISIBILITY_VALUE_INVALID", path+".visibleWhen.value", "in visibility operators require an array value")
+			}
 		}
 	}
 	for index, input := range definition.Inputs {
@@ -467,15 +505,37 @@ func composeTemplateDefinition(definition InternalTemplateDefinition, values map
 		normalized[key] = cloneJSONValue(value)
 	}
 	inputs := make(map[string]TemplateInputDefinition, len(definition.Inputs))
+	activeInputs := make(map[string]bool, len(definition.Inputs))
+	visibilityValues := cloneTemplateMap(normalized)
+	for _, input := range definition.Inputs {
+		inputs[input.Key] = input
+		visible, err := templateInputIsVisible(input, visibilityValues)
+		if err != nil {
+			return TemplateComposition{}, fmt.Errorf("input %s visibility: %w", input.Key, err)
+		}
+		activeInputs[input.Key] = visible
+	}
+	for _, input := range definition.Inputs {
+		if !activeInputs[input.Key] {
+			delete(normalized, input.Key)
+		}
+	}
+	effectiveMaterials := make([]TemplateComposeMaterial, 0, len(materials))
 	materialCounts := make(map[string]int)
 	for _, material := range materials {
 		if strings.TrimSpace(material.AssetID) == "" {
 			return TemplateComposition{}, fmt.Errorf("material %s has an empty assetId", material.InputKey)
 		}
+		if _, exists := inputs[material.InputKey]; exists && !activeInputs[material.InputKey] {
+			continue
+		}
+		effectiveMaterials = append(effectiveMaterials, material)
 		materialCounts[material.InputKey]++
 	}
 	for _, input := range definition.Inputs {
-		inputs[input.Key] = input
+		if !activeInputs[input.Key] {
+			continue
+		}
 		if templateMaterialInput(input.Type) {
 			count := materialCounts[input.Key]
 			minimum := 0
@@ -517,7 +577,20 @@ func composeTemplateDefinition(definition InternalTemplateDefinition, values map
 	promptVariables := map[string]string{}
 	parameters := cloneTemplateMap(definition.Presets.GenerationDefaults)
 	for _, binding := range definition.Bindings {
-		value, err := templateBindingSource(binding.Source, normalized, materials)
+		hiddenSource := false
+		if sourceKey, ok := strings.CutPrefix(binding.Source, "inputs."); ok {
+			hiddenSource = !activeInputs[sourceKey]
+		}
+		if sourceKey, ok := strings.CutPrefix(binding.Source, "materials."); ok {
+			hiddenSource = !activeInputs[sourceKey]
+		}
+		if hiddenSource {
+			if variable, ok := strings.CutPrefix(binding.Target, "prompt.variables."); ok {
+				promptVariables[variable] = ""
+			}
+			continue
+		}
+		value, err := templateBindingSource(binding.Source, normalized, effectiveMaterials)
 		if err != nil {
 			return TemplateComposition{}, err
 		}
@@ -545,8 +618,79 @@ func composeTemplateDefinition(definition InternalTemplateDefinition, values map
 	}
 	return TemplateComposition{
 		BasePrompt: strings.TrimSpace(basePrompt), NegativePrompt: strings.TrimSpace(negativePrompt),
-		Values: normalized, Parameters: parameters, Materials: append([]TemplateComposeMaterial(nil), materials...),
+		Values: normalized, Parameters: parameters, Materials: effectiveMaterials,
 	}, nil
+}
+
+func templateArrayValue(value any) bool {
+	_, ok := templateSlice(value)
+	return ok
+}
+
+func templateInputIsVisible(input TemplateInputDefinition, values map[string]any) (bool, error) {
+	condition := input.VisibleWhen
+	if condition == nil {
+		return true, nil
+	}
+	actual := values[condition.InputKey]
+	switch strings.ToLower(strings.TrimSpace(condition.Operator)) {
+	case "eq", "equals":
+		return templateValuesEqual(actual, condition.Value), nil
+	case "neq", "not_equals":
+		return !templateValuesEqual(actual, condition.Value), nil
+	case "in", "not_in":
+		items, ok := templateSlice(condition.Value)
+		if !ok {
+			return false, errors.New("in operator requires an array value")
+		}
+		contains := false
+		for _, item := range items {
+			if templateValuesEqual(actual, item) {
+				contains = true
+				break
+			}
+		}
+		if strings.EqualFold(condition.Operator, "not_in") {
+			return !contains, nil
+		}
+		return contains, nil
+	case "truthy":
+		return templateValueTruthy(actual), nil
+	case "falsy":
+		return !templateValueTruthy(actual), nil
+	default:
+		return false, fmt.Errorf("unsupported operator %s", condition.Operator)
+	}
+}
+
+func templateValuesEqual(left, right any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
+}
+
+func templateValueTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return typed != ""
+	case float64:
+		return typed != 0
+	case float32:
+		return typed != 0
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case json.Number:
+		number, err := typed.Float64()
+		return err == nil && number != 0
+	default:
+		return true
+	}
 }
 
 func decodeInternalTemplateDefinition(raw []byte) (InternalTemplateDefinition, error) {
@@ -708,9 +852,10 @@ func projectPublicTemplateDefinition(definition InternalTemplateDefinition) Publ
 			}
 		}
 		inputs[index] = PublicTemplateInput{
-			Key: input.Key, Type: input.Type, Label: input.Label, Required: input.Required,
+			Key: input.Key, Type: input.Type, Control: input.Control, Label: input.Label, Required: input.Required,
 			HelpText: input.HelpText, Placeholder: input.Placeholder, Default: sanitizePublicTemplateValue(input.Default),
 			Options: options, Validation: validation, VisibleWhen: visibleWhen,
+			Section: input.Section, Order: input.Order, Advanced: input.Advanced,
 		}
 	}
 	return PublicTemplateDefinition{

@@ -35,6 +35,7 @@ type CreationDraft struct {
 	CapabilityKey   string                    `json:"capabilityKey"`
 	ModelHint       string                    `json:"modelHint,omitempty"`
 	IntegrityToken  string                    `json:"integrityToken"`
+	CreatedAt       string                    `json:"createdAt"`
 	ExpiresAt       string                    `json:"expiresAt"`
 }
 
@@ -52,6 +53,7 @@ type inspirationDraftClaims struct {
 	ContentType     string `json:"contentType"`
 	CapabilityKey   string `json:"capabilityKey"`
 	InputDigest     string `json:"inputDigest"`
+	IssuedUnix      int64  `json:"iat"`
 	ExpiresUnix     int64  `json:"exp"`
 }
 
@@ -76,7 +78,9 @@ func (s inspirationDraftSigner) issue(draft *CreationDraft) error {
 	if draft == nil || len(s.secret) == 0 {
 		return errors.New("creation draft signer is unavailable")
 	}
-	expires := s.now().UTC().Add(s.ttl)
+	created := s.now().UTC()
+	expires := created.Add(s.ttl)
+	draft.CreatedAt = created.Format(time.RFC3339Nano)
 	draft.ExpiresAt = expires.Format(time.RFC3339Nano)
 	claims, err := creationDraftClaims(*draft, expires.Unix())
 	if err != nil {
@@ -125,6 +129,10 @@ func (s inspirationDraftSigner) trustedAttribution(draft CreationDraft) bool {
 }
 
 func creationDraftClaims(draft CreationDraft, expiresUnix int64) (inspirationDraftClaims, error) {
+	createdAt, err := time.Parse(time.RFC3339Nano, draft.CreatedAt)
+	if err != nil {
+		return inspirationDraftClaims{}, err
+	}
 	input, err := json.Marshal(struct {
 		Values    map[string]any            `json:"values"`
 		Materials []TemplateComposeMaterial `json:"materials"`
@@ -137,7 +145,7 @@ func creationDraftClaims(draft CreationDraft, expiresUnix int64) (inspirationDra
 		ContractVersion: draft.ContractVersion,
 		TemplateID:      draft.TemplateRef.ID, TemplateSlug: draft.TemplateRef.Slug, TemplateVersion: draft.TemplateRef.Version,
 		ContentType: draft.ContentType, CapabilityKey: draft.CapabilityKey,
-		InputDigest: hex.EncodeToString(digest[:]), ExpiresUnix: expiresUnix,
+		InputDigest: hex.EncodeToString(digest[:]), IssuedUnix: createdAt.Unix(), ExpiresUnix: expiresUnix,
 	}, nil
 }
 

@@ -558,7 +558,7 @@ async function loadInspirations(reset = false) {
 }
 function refreshInspirations() { inspirationOffset.value += 1; void loadInspirations(); }
 function selectInspirationCategory(code: string) { activeInspirationTab.value = code; inspirationOffset.value = 0; void loadInspirations(true); }
-function openInspirationDetail(item: InspirationTemplate) { uni.navigateTo({ url: `/pages/inspiration/InspirationDetailPage?templateId=${encodeURIComponent(item.id)}` }); }
+function openInspirationDetail(item: InspirationTemplate) { uni.navigateTo({ url: `/pages/inspiration/InspirationDetailPage?slug=${encodeURIComponent(item.slug)}` }); }
 function openInspirationSquare(category = activeInspirationTab.value) { uni.navigateTo({ url: `/pages/inspiration/InspirationSquarePage?category=${encodeURIComponent(category)}` }); }
 onMounted(async () => {
   try { inspirationCategories.value = (await inspirationAPI.categories()).items; } catch { inspirationCategories.value = []; }

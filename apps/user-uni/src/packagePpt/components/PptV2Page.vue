@@ -103,7 +103,7 @@ import { createPptGenerationTask, deletePptTask, downloadPptExport, estimatePptC
 import { uploadReferenceImage } from "../../api/files";
 import { usePptDraft } from "../../composables/usePptDraft";
 import { usePptTask } from "../../composables/usePptTask";
-import { inspirationAPI } from "../../features/inspiration/api";
+import { recordInspirationEvent } from "../../features/inspiration/events";
 import { readInspirationDraft } from "../../features/inspiration/draft";
 import AiGeneratedContentNotice from "../../components/compliance/AiGeneratedContentNotice.vue";
 import PptErrorView from "./PptErrorView.vue";
@@ -127,6 +127,7 @@ const bulletText=ref(""); const selectedColor=ref("#6140f7"); const layoutTab=re
 const exportFormat=ref<"pptx"|"pdf">("pptx"); const exportBusy=ref(false); const exportReady=ref(false);
 const errorTitle=ref("PPT生成失败"); const errorReason=ref("服务暂时无法完成本次操作"); const errorSuggestion=ref("请返回修改内容后重试，或稍后再试。");
 const inspirationTemplateId=ref("");
+const inspirationTemplateSlug=ref("");
 const taskId = computed(() => String(query().taskId || detail.value.taskId || ""));
 const slides = computed(() => detail.value.slides || []); const totalSlides=computed(()=>taskState.task.value?.slideCount || slides.value.length || form.value.pageCount);
 const taskProgress=computed(()=>Math.max(0,Math.min(100,taskState.progress.value || (taskState.task.value?.status === "processing" ? 30 : 0))));
@@ -179,8 +180,36 @@ function copyUnavailable(){showToast("临时分享链接接口尚未接入，未
 function setPageCount(e:any){form.value.pageCount=pageCounts[Number(e.detail.value)]||16;void refreshEstimate();} function setLanguage(e:any){form.value.language=languages[Number(e.detail.value)]?.value||"zh";} function setScenario(e:any){form.value.scenario=scenarios[Number(e.detail.value)]?.value||"business";} function setStyle(e:any){form.value.style=styles[Number(e.detail.value)]?.value||"business";} function setTemplate(e:any){form.value.templateId=templates[Number(e.detail.value)]?.id||"business";}
 
 watch(()=>form.value.topic,()=>{createError.value="";});
-watch(()=>pollingTask.value?.status,status=>{if(mode.value!=="progress"||!taskId.value)return;if(status==="success"){taskState.stop();if(inspirationTemplateId.value){void inspirationAPI.event(inspirationTemplateId.value,"generate_success",taskId.value);inspirationTemplateId.value="";}replaceRoute("detail",{taskId:taskId.value});}else if(status==="failed"){const reason=pollingTask.value?.errorMessage||"PPT生成失败，请稍后重试";taskState.stop();replaceRoute("error",{title:"PPT生成失败",reason});}});
-onMounted(async()=>{const q=query();inspirationTemplateId.value=String(q.templateId||"");if(mode.value==="index")await loadHistory();if(mode.value==="create"){const draft=readInspirationDraft(inspirationTemplateId.value);if(draft?.contentType==="ppt"){const params=draft.parameters||{};form.value.topic=draft.prompt;form.value.description=draft.negativePrompt;form.value.pageCount=Number(params.pageCount||form.value.pageCount);form.value.language=String(params.language||form.value.language) as typeof form.value.language;form.value.scenario=String(params.scenario||form.value.scenario);form.value.style=String(params.style||form.value.style);form.value.generateVisuals=params.withImages!==false;}else{if(q.topic)form.value.topic=q.topic;if(q.templateId)form.value.templateId=q.templateId;if(q.scenario)form.value.scenario=q.scenario;}await refreshEstimate();}if(mode.value==="outline"){outline.value=uni.getStorageSync("xianzhi:ppt:v2:outline")||outline.value;await refreshEstimate();}if(["detail","preview","edit-text","edit-visual","layout"].includes(mode.value))await loadSlide();if(mode.value==="progress"&&taskId.value)taskState.start(taskId.value);if(mode.value==="error"){errorTitle.value=query().title||errorTitle.value;errorReason.value=query().reason||errorReason.value;}});
+watch(()=>pollingTask.value?.status,status=>{if(mode.value!=="progress"||!taskId.value)return;if(status==="success"){taskState.stop();if(inspirationTemplateSlug.value){void recordInspirationEvent(inspirationTemplateSlug.value,"generate_success",taskId.value);inspirationTemplateSlug.value="";}replaceRoute("detail",{taskId:taskId.value});}else if(status==="failed"){const reason=pollingTask.value?.errorMessage||"PPT生成失败，请稍后重试";taskState.stop();replaceRoute("error",{title:"PPT生成失败",reason});}});
+onMounted(async()=>{
+  const q=query();
+  inspirationTemplateId.value=String(q.templateId||"");
+  const inspirationDraft=readInspirationDraft(inspirationTemplateId.value);
+  inspirationTemplateSlug.value=inspirationDraft?.templateRef.slug||"";
+  if(mode.value==="index")await loadHistory();
+  if(mode.value==="create"){
+    const draft=inspirationDraft;
+    if(draft?.contentType==="ppt"){
+      const params=draft.parameters||{};
+      form.value.topic=draft.basePrompt;
+      form.value.description=draft.negativePrompt||"";
+      form.value.pageCount=Number(params.pageCount||form.value.pageCount);
+      form.value.language=String(params.language||form.value.language) as typeof form.value.language;
+      form.value.scenario=String(params.scenario||form.value.scenario);
+      form.value.style=String(params.style||form.value.style);
+      form.value.generateVisuals=params.withImages!==false;
+    }else{
+      if(q.topic)form.value.topic=q.topic;
+      if(q.templateId)form.value.templateId=q.templateId;
+      if(q.scenario)form.value.scenario=q.scenario;
+    }
+    await refreshEstimate();
+  }
+  if(mode.value==="outline"){outline.value=uni.getStorageSync("xianzhi:ppt:v2:outline")||outline.value;await refreshEstimate();}
+  if(["detail","preview","edit-text","edit-visual","layout"].includes(mode.value))await loadSlide();
+  if(mode.value==="progress"&&taskId.value)taskState.start(taskId.value);
+  if(mode.value==="error"){errorTitle.value=query().title||errorTitle.value;errorReason.value=query().reason||errorReason.value;}
+});
 onShow(()=>{taskState.setVisible(true);});onHide(()=>taskState.setVisible(false));onUnload(()=>taskState.stop());
 </script>
 

@@ -50,6 +50,7 @@ type platformStore interface {
 	RecordPPTGenerationUsage(pptapp.Task) (adminBillingEvent, error)
 	RecordRAGUsage(context.Context, knowledgeapp.RAGBillingUsage) error
 	ListAssets() ([]asset, error)
+	SaveUploadedAsset(asset) (asset, error)
 	UserAIState(string) (userAIState, error)
 	UpdateUserAIState(string, userAIState) (userAIState, error)
 	UpdateAssetThumbnails(map[string]string) (int, error)
@@ -1673,7 +1674,7 @@ func (a api) listAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
-	_, _, err := a.authenticatedUser(r)
+	_, user, err := a.authenticatedUser(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
 		return
@@ -1735,9 +1736,23 @@ func (a api) uploadReferenceImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	assetID := strings.TrimSuffix(name, filepath.Ext(name))
+	item, err := a.store.SaveUploadedAsset(asset{
+		ID: assetID, UserID: user.ID, TenantID: effectiveTenantID(user),
+		Name: header.Filename, MediaType: "image", URL: "/api/v1/reference-images/" + name,
+		Metadata:  map[string]any{"contentType": contentType, "size": len(raw), "sourceType": "reference_upload"},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		_ = os.Remove(filepath.Join(dir, name))
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, map[string]any{
 		"item": map[string]any{
-			"id":          strings.TrimSuffix(name, filepath.Ext(name)),
+			"id":          item.ID,
+			"assetId":     item.ID,
 			"name":        header.Filename,
 			"storedName":  name,
 			"url":         "/api/v1/reference-images/" + name,
