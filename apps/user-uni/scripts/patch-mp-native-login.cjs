@@ -16,7 +16,7 @@ if (!fs.existsSync(pageRoot)) {
 const logoFile = fs.existsSync(assetRoot)
   ? fs.readdirSync(assetRoot).find((name) => /^zhiqiyun-logo-transparent\..+\.png$/.test(name))
   : "";
-const logoPath = "/static/brand/zhiqiyun-ai-logo.jpg";
+const logoPath = "/static/brand/zhiqiyun-ai-logo.png";
 
 function readEnvValue(filePath, key) {
   if (!fs.existsSync(filePath)) return "";
@@ -2050,6 +2050,106 @@ for (const pageName of ["UserMembershipDetailPage", "UserAgentDetailPage"]) {
     .join('"./components/commerce/UserCommerceProductDetail"');
   if (updatedJson === originalJson) throw new Error(`Commerce detail component JSON reference was not rewritten: ${pageName}`);
   fs.writeFileSync(pageJsonPath, updatedJson);
+}
+
+// Enterprise screens are only used by the enterprise subpackage. Keep them out of MAIN.
+const enterpriseComponentNames = [
+  "EnterpriseCenterScreen",
+  "EnterpriseMetricCard",
+  "EnterpriseOrganizationNode",
+  "EnterprisePageShell",
+  "EnterpriseStatePanel"
+];
+for (const componentName of enterpriseComponentNames) {
+  for (const extension of ["js", "json", "wxml", "wxss"]) {
+    const sourceRelativePath = `components/enterprise/${componentName}.${extension}`;
+    const sourcePath = path.resolve(outputRoot, sourceRelativePath);
+    if (!fs.existsSync(sourcePath)) continue;
+    relocateGeneratedModule(
+      sourceRelativePath,
+      `pages/enterprise/components/enterprise/${componentName}.${extension}`,
+      extension === "js"
+        ? (source) => source.replace(/require\("\.\.\/\.\.\//g, 'require("../../../../')
+        : undefined
+    );
+  }
+}
+const enterpriseComponentDir = assertGeneratedPath(path.resolve(outputRoot, "components", "enterprise"));
+if (fs.existsSync(enterpriseComponentDir) && fs.readdirSync(enterpriseComponentDir).length === 0) {
+  fs.rmSync(enterpriseComponentDir, { recursive: true, force: true });
+}
+for (const entry of fs.readdirSync(path.resolve(outputRoot, "pages", "enterprise"), { withFileTypes: true })) {
+  if (!entry.isFile()) continue;
+  const extension = path.extname(entry.name);
+  if (extension !== ".js" && extension !== ".json") continue;
+  const pagePath = assertGeneratedPath(path.resolve(outputRoot, "pages", "enterprise", entry.name));
+  const original = fs.readFileSync(pagePath, "utf8");
+  const updated = original
+    .split("../../components/enterprise/")
+    .join("./components/enterprise/");
+  if (updated !== original) fs.writeFileSync(pagePath, updated);
+}
+for (const componentName of enterpriseComponentNames) {
+  for (const extension of ["js", "json"]) {
+    const componentPath = assertGeneratedPath(
+      path.resolve(outputRoot, "pages", "enterprise", "components", "enterprise", `${componentName}.${extension}`)
+    );
+    if (!fs.existsSync(componentPath)) continue;
+    const original = fs.readFileSync(componentPath, "utf8");
+    if (original.includes("../../components/enterprise/")) {
+      throw new Error(`Enterprise component still references main-package path: ${componentName}.${extension}`);
+    }
+  }
+}
+
+// PPT editor lives in user-creation; keep the heavy editor component with that subpackage.
+for (const extension of ["js", "json", "wxml", "wxss"]) {
+  const sourceRelativePath = `components/PptDocumentGeneration.${extension}`;
+  const sourcePath = path.resolve(outputRoot, sourceRelativePath);
+  if (!fs.existsSync(sourcePath)) continue;
+  relocateGeneratedModule(
+    sourceRelativePath,
+    `pages/user-creation/components/PptDocumentGeneration.${extension}`,
+    extension === "js"
+      ? (source) => {
+          const updated = source
+            .replace(/require\("\.\.\//g, 'require("../../../')
+            .replace(
+              '()=>"./compliance/AiGeneratedContentNotice.js"',
+              '()=>"../../../components/compliance/AiGeneratedContentNotice.js"'
+            );
+          if (updated.includes("./compliance/AiGeneratedContentNotice")) {
+            throw new Error("PPT component still points at local compliance path after relocate");
+          }
+          return updated;
+        }
+      : extension === "json"
+        ? (source) => source.replace(
+            '"./compliance/AiGeneratedContentNotice"',
+            '"../../../components/compliance/AiGeneratedContentNotice"'
+          )
+        : undefined
+  );
+}
+{
+  const pptPageJsPath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-creation", "UserPptEditorPage.js"));
+  const pptPageJsonPath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-creation", "UserPptEditorPage.json"));
+  const originalJs = fs.readFileSync(pptPageJsPath, "utf8");
+  const updatedJs = originalJs
+    .split('"../../components/PptDocumentGeneration.js"')
+    .join('"./components/PptDocumentGeneration.js"');
+  if (updatedJs === originalJs) {
+    throw new Error("PPT editor page JS reference was not rewritten to user-creation subpackage");
+  }
+  fs.writeFileSync(pptPageJsPath, updatedJs);
+  const originalJson = fs.readFileSync(pptPageJsonPath, "utf8");
+  const updatedJson = originalJson
+    .split('"../../components/PptDocumentGeneration"')
+    .join('"./components/PptDocumentGeneration"');
+  if (updatedJson === originalJson) {
+    throw new Error("PPT editor page JSON reference was not rewritten to user-creation subpackage");
+  }
+  fs.writeFileSync(pptPageJsonPath, updatedJson);
 }
 
 rewriteGeneratedUserRoutes(outputRoot);
