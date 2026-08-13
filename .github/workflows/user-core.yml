@@ -69,6 +69,21 @@ jobs:
   backend-go:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: xianzhi_test
+          POSTGRES_USER: codex
+          POSTGRES_PASSWORD: codex
+        ports:
+          - 55441:5432
+        options: >-
+          --health-cmd "pg_isready -U codex -d xianzhi_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,6 +93,14 @@ jobs:
         with:
           go-version-file: backend-go/go.mod
           cache-dependency-path: backend-go/go.sum
+
+      - name: Initialize test database
+        run: |
+          docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < database/schema.sql
+          for file in database/migrations/*.sql; do
+            echo "Applying $file"
+            docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < "$file"
+          done
 
       - name: Test backend
         working-directory: backend-go

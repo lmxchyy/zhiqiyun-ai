@@ -158,7 +158,7 @@
 <script setup lang="ts">
 import CreationTaskStatusCard from "./CreationTaskStatusCard.vue";
 import type { EditableVideoField, ModelInfo } from "@xianzhi/business-sdk";
-import type { GenerationTask } from "../../../types";
+import type { GenerationNotice } from "./types";
 
 interface Props {
   prompt: string;
@@ -174,6 +174,7 @@ interface Props {
   modelError: string;
   basicFields: EditableVideoField[];
   advancedFields: EditableVideoField[];
+  parameterValues: Record<string, unknown>;
   advancedExpanded: boolean;
   audioField?: EditableVideoField | null;
   audioEnabled: boolean;
@@ -183,7 +184,7 @@ interface Props {
   costLabel: string;
   generateButtonLabel: string;
   generationBusy: boolean;
-  latestTask: GenerationTask | null;
+  latestTask: GenerationNotice | null;
   statusLabel: string;
   buttonLabel: string;
   feedbackText?: string;
@@ -220,6 +221,35 @@ function handleReferenceClick() {
   if (!props.referenceSelecting && !props.sourceLoading && props.supportsImageToVideo) {
     emit('choose-reference');
   }
+}
+
+function parameterOptionIndex(field: EditableVideoField) {
+  const current = props.parameterValues[field.key];
+  const index = field.options.findIndex(option => {
+    if (typeof current === "number" || typeof option === "number") {
+      return Number(current) === Number(option);
+    }
+    return current === option;
+  });
+  return current === undefined ? 0 : Math.max(0, index);
+}
+
+function fieldLabel(field: EditableVideoField) {
+  if (field.key === "duration") return "时长";
+  if (field.key === "aspect_ratio") return "画面比例";
+  return field.label;
+}
+
+function selectedLabel(field: EditableVideoField) {
+  const value = props.parameterValues[field.key];
+  const translations: Record<string, Record<string, string>> = {
+    motion_strength: { low: "低", medium: "中", high: "高" },
+    camera_movement: { static: "固定", pan: "平移", push: "推进", pull: "拉远" },
+  };
+  const translated = translations[field.key]?.[String(value)];
+  if (translated) return translated;
+  if (field.key === "fps" && value !== undefined) return `${String(value)} FPS`;
+  return value === undefined ? "-" : `${String(value)}${field.unit || ""}`;
 }
 </script>
 

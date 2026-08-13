@@ -23,14 +23,16 @@
 </template>
 
 <script setup lang="ts">
+type OrderRow = Record<string, unknown>;
+
 interface Props {
-  orders: unknown[];
+  orders: OrderRow[];
 }
 
 defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'open-detail', order: unknown): void;
+  (e: 'open-detail', order: OrderRow): void;
 }>();
 
 function rowKey(row: unknown) {

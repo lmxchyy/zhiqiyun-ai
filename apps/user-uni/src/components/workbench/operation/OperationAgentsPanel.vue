@@ -20,14 +20,16 @@
 </template>
 
 <script setup lang="ts">
+type AgentRow = Record<string, unknown>;
+
 interface Props {
-  agents: unknown[];
+  agents: AgentRow[];
 }
 
 defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'open-detail', agent: unknown): void;
+  (e: 'open-detail', agent: AgentRow): void;
 }>();
 
 function rowKey(row: unknown) {

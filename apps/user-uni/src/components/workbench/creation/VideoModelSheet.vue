@@ -22,6 +22,7 @@
 <script setup lang="ts">
 import BottomSheet from "../../auth/BottomSheet.vue";
 import type { ModelInfo } from "@xianzhi/business-sdk";
+import { videoModelSubtitle as formatVideoModelSubtitle } from "../../../features/generation/videoModelPricing";
 
 interface Props {
   visible: boolean;
@@ -42,7 +43,7 @@ function videoModelTitle(item?: ModelInfo | null) {
 }
 
 function videoModelSubtitle(item?: ModelInfo | null) {
-  return [item?.provider, item?.description].filter(Boolean).join(' · ') || '暂无说明';
+  return item ? formatVideoModelSubtitle(item) || '参数随模型动态调整' : '按价格从低到高';
 }
 </script>
 

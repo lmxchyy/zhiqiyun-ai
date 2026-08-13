@@ -23,16 +23,16 @@
 </template>
 
 <script setup lang="ts">
-import type { ChannelAgent } from "../../../types";
+import type { AuthUser } from "../../../types";
 
 interface Props {
-  customers: ChannelAgent[];
+  customers: AuthUser[];
 }
 
 defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'open-detail', customer: ChannelAgent): void;
+  (e: 'open-detail', customer: AuthUser): void;
 }>();
 
 function rowKey(row: unknown) {

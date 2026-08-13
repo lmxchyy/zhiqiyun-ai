@@ -2,6 +2,11 @@ import type { MiniProgramCreationMode, MiniProgramRoleId, MiniProgramTabId } fro
 
 export type WorkbenchAssetFilter = "all" | "image" | "video" | "document" | "favorite";
 
+export interface WorkbenchAssetFilterOption {
+  id: WorkbenchAssetFilter;
+  label: string;
+}
+
 export interface WorkbenchCreationModule {
   id: MiniProgramCreationMode;
   icon: string;
@@ -53,7 +58,7 @@ export const creationModules: WorkbenchCreationModule[] = [
 
 export const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"] as const;
 
-export const assetFilters: Array<{ id: WorkbenchAssetFilter; label: string }> = [
+export const assetFilters: WorkbenchAssetFilterOption[] = [
   { id: "all", label: "全部" },
   { id: "image", label: "图片" },
   { id: "video", label: "视频" },
@@ -88,7 +93,7 @@ export function studioModuleSlot(mode: MiniProgramCreationMode) {
   } as Record<MiniProgramCreationMode, string>)[mode];
 }
 
-export function assetDefaultSlot(mediaType: string) {
+export function assetDefaultSlot(mediaType?: string | null) {
   if (mediaType === "image") return "assets.default.image";
   if (mediaType === "video") return "assets.default.video";
   if (mediaType === "document") return "assets.default.document";

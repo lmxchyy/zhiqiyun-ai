@@ -28,7 +28,7 @@
       </view>
 
       <MineRechargeHistoryPanel
-        v-else-if="view === 'recharge-history'"
+        v-if="view === 'recharge-history'"
         :filtered-orders="filteredOrders"
         :active-filter="orderFilter"
         :history-range-label="historyRangeLabel"

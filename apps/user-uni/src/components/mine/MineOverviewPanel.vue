@@ -55,6 +55,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
 import AppImage from "../AppImage.vue";
 import type { AppRole } from "../../types";
 import type { MineView } from "../../types";

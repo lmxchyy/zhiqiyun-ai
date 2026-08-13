@@ -13,14 +13,16 @@
 </template>
 
 <script setup lang="ts">
+import type { MiniProgramRoleId } from "../../../config/miniProgramPages";
+
 export interface WorkbenchRoleOption {
-  id: string;
+  id: MiniProgramRoleId;
   label: string;
 }
 
 interface RoleSwitcherProps {
   roles: WorkbenchRoleOption[];
-  activeRole: string;
+  activeRole: MiniProgramRoleId;
   visible?: boolean;
 }
 
@@ -29,7 +31,7 @@ const props = withDefaults(defineProps<RoleSwitcherProps>(), {
 });
 
 const emit = defineEmits<{
-  (e: 'change', roleId: string): void;
+  (e: 'change', roleId: MiniProgramRoleId): void;
 }>();
 </script>
 

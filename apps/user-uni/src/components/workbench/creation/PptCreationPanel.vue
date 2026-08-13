@@ -52,7 +52,7 @@
 
 <script setup lang="ts">
 import CreationTaskStatusCard from "./CreationTaskStatusCard.vue";
-import type { GenerationTask } from "../../../types";
+import type { GenerationNotice } from "./types";
 
 interface Props {
   prompt: string;
@@ -63,7 +63,7 @@ interface Props {
   model: string;
   topics: string[];
   generationBusy: boolean;
-  latestTask: GenerationTask | null;
+  latestTask: GenerationNotice | null;
   statusLabel: string;
   buttonLabel: string;
   feedbackText?: string;

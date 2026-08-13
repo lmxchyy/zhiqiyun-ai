@@ -31,11 +31,13 @@
 </template>
 
 <script setup lang="ts">
+type CommissionRow = Record<string, unknown>;
+
 interface Props {
   availableToWithdraw: number;
   totalCommission: number;
   withdrawn: number;
-  commissions: unknown[];
+  commissions: CommissionRow[];
 }
 
 defineProps<Props>();
@@ -43,7 +45,7 @@ defineProps<Props>();
 const emit = defineEmits<{
   (e: 'withdraw'): void;
   (e: 'open-withdrawals'): void;
-  (e: 'open-detail', commission: unknown): void;
+  (e: 'open-detail', commission: CommissionRow): void;
 }>();
 
 function rowKey(row: unknown) {

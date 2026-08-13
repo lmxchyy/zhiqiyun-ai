@@ -65,12 +65,12 @@
 <script setup lang="ts">
 import AppImage from "../../AppImage.vue";
 import RemoteCover from "../../RemoteCover.vue";
-import type { WorkbenchAssetFilter } from "../../../features/workbench/catalog";
+import type { WorkbenchAssetFilter, WorkbenchAssetFilterOption } from "../../../features/workbench/catalog";
 import type { Asset } from "../../../types";
 
 interface Props {
-  filters: WorkbenchAssetFilter[];
-  activeFilter: string;
+  filters: WorkbenchAssetFilterOption[];
+  activeFilter: WorkbenchAssetFilter;
   search: string;
   loading: boolean;
   error: string;
@@ -82,7 +82,7 @@ interface Props {
 defineProps<Props>();
 
 const emit = defineEmits<{
-  (e: 'update:filter', filterId: string): void;
+  (e: 'update:filter', filterId: WorkbenchAssetFilter): void;
   (e: 'update:search', value: string): void;
   (e: 'open-asset', asset: Asset): void;
   (e: 'reset'): void;

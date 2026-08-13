@@ -774,6 +774,7 @@ import OperationOrdersPanel from "./workbench/operation/OperationOrdersPanel.vue
 import OperationCommissionPanel from "./workbench/operation/OperationCommissionPanel.vue";
 import OperationProfilePanel from "./workbench/operation/OperationProfilePanel.vue";
 import CreationModeGrid from "./workbench/creation/CreationModeGrid.vue";
+import type { GenerationNotice } from "./workbench/creation/types";
 import { fetchAssetDetail } from "../features/assets/api";
 import { beginWorksPerformanceStep } from "../features/assets/performance";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
@@ -796,7 +797,7 @@ import type {
   VideoGenerationEstimate,
 } from "@xianzhi/business-sdk";
 import type { ModelInfo, VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
-import type { AppRole, Asset, AuthResponse, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
+import type { AppRole, Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
 import {
   miniProgramCreationPages,
   miniProgramEnterprisePages,
@@ -809,7 +810,7 @@ import {
 } from "../config/miniProgramPages";
 
 const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
-const { replacePage, openStandalonePage, openFeaturePage, openMineView, openEnterprisePage, openRolePage } = createWorkbenchNavigation();
+const { replacePage, openStandalonePage } = createWorkbenchNavigation();
 
 function updateFreeImageEditPrompt(prompt: string) {
   creationPrompt.value = prompt;
@@ -891,7 +892,6 @@ type AnyRecord = Record<string, unknown>;
 type RoleId = MiniProgramRoleId;
 type TabId = MiniProgramTabId;
 type CreationMode = MiniProgramCreationMode;
-type AssetFilter = "all" | "image" | "video" | "document" | "favorite";
 
 const roleToAppRole: Record<RoleId, AppRole> = {
   user: "USER",
@@ -925,17 +925,6 @@ interface PromotionInfo {
   inviteCode?: string;
   inviteLink?: string;
   landingURL?: string;
-}
-
-interface GenerationNotice {
-  id: string;
-  title: string;
-  status: string;
-  tone: "pending" | "success" | "danger";
-  resultId?: string;
-  resultUrl?: string;
-  resultType?: CreationMode;
-  progress?: number;
 }
 
 interface ActiveGenerationSnapshot {
@@ -1027,7 +1016,7 @@ const pptSlideCount = ref(10);
 const pptDynamic = ref(true);
 const pptLanguage = ref<"zh" | "en">("zh");
 const pptModel = ref("GPT-4o-mini");
-const assetFilter = ref<AssetFilter>("all");
+const assetFilter = ref<WorkbenchAssetFilter>("all");
 const assetSearch = ref("");
 const mineView = ref<MineView>(props.initialMineView);
 const selectedMinePurchase = ref<MinePurchaseOption | null>(null);
@@ -1312,7 +1301,7 @@ const currentPageSubtitle = computed(() => {
 });
 
 const channelSummary = computed(() => (channelCenter.value?.summary || {}) as AnyRecord);
-const channelCustomers = computed(() => listOf(channelCenter.value?.customers));
+const channelCustomers = computed(() => channelCenter.value?.customers || []);
 const channelCommissions = computed(() => listOf(channelCenter.value?.commissions));
 const channelWithdrawals = computed(() => listOf(channelCenter.value?.withdrawals));
 const currentAgent = computed(() => (channelCenter.value?.agent || profile.value?.agent || auth.value?.agent || null) as (ChannelAgent & AnyRecord) | null);
@@ -2482,7 +2471,7 @@ function openFeaturePage(url: string) {
   openStandalonePage(url);
 }
 
-function openCustomerDetail(customer: AnyRecord) {
+function openCustomerDetail(customer: AuthUser) {
   const id = rowString(customer, "id") || rowString(customer, "userId");
   if (id) openFeaturePage(`${miniProgramFeaturePages.agentCustomerDetail}?id=${encodeURIComponent(id)}`);
 }

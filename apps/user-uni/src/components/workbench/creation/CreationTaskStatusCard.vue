@@ -25,10 +25,10 @@
 </template>
 
 <script setup lang="ts">
-import type { GenerationTask } from "../../../types";
+import type { GenerationNotice } from "./types";
 
 interface Props {
-  task: GenerationTask | null;
+  task: GenerationNotice | null;
   statusLabel: string;
   buttonLabel: string;
   feedbackText?: string;
