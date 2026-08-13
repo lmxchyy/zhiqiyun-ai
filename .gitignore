@@ -140,3 +140,4 @@ docs/CODEX-STAGE-MODES.md
 docs/acceptance/price-plan-v2-production-gate/evidence/**/_agent_*.sql
 docs/acceptance/price-plan-v2-production-gate/evidence/**/run-build-deploy-image.sh
 .local-verify/
+prototypes/zhiqi-image-generator-react/
