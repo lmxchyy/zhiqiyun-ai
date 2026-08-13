@@ -17,6 +17,11 @@ services:
     volumes:
       - app-data:/app/data
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     environment:
       PORT: "3100"
       XIANZHI_ENV: "production"
@@ -183,6 +188,11 @@ services:
     image: ${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}
     command: ["/app/smartvideo-worker"]
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     cpus: "${SMARTVIDEO_WORKER_CPUS:-2.0}"
     mem_limit: "${SMARTVIDEO_WORKER_MEM_LIMIT:-2g}"
     pids_limit: 256
@@ -258,6 +268,11 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     environment:
       POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
       POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
@@ -274,21 +289,49 @@ services:
   postgres-backup:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     environment:
       POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
       POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
       PGPASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
       BACKUP_INTERVAL_SECONDS: "${BACKUP_INTERVAL_SECONDS:-86400}"
+      BACKUP_RETENTION_DAYS: "${BACKUP_RETENTION_DAYS:-30}"
+      BACKUP_MIN_FREE_BYTES: "${BACKUP_MIN_FREE_BYTES:-10737418240}"
     volumes:
       - ./backups/postgres:/backups
     command:
       - sh
       - -c
       - |
+        set -eu
+        set -o pipefail
         while true; do
-          file="/backups/xianzhi-$$(date -u +%Y%m%dT%H%M%SZ).sql"
-          pg_dump -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" --clean --if-exists > "$$file"
-          echo "Created PostgreSQL backup: $$file"
+          available_kb="$$(df -Pk /backups | awk 'NR == 2 {print $$4}')"
+          available_bytes="$$((available_kb * 1024))"
+          if [ "$$available_bytes" -lt "$${BACKUP_MIN_FREE_BYTES}" ]; then
+            echo "Backup skipped: free space $$available_bytes is below minimum $${BACKUP_MIN_FREE_BYTES}."
+            sleep "$${BACKUP_INTERVAL_SECONDS}"
+            continue
+          fi
+
+          file="/backups/xianzhi-$$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+          temp_file="$$file.part"
+          if pg_dump -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" --clean --if-exists | gzip -c > "$$temp_file"; then
+            gzip -t "$$temp_file"
+            test -s "$$temp_file"
+            mv "$$temp_file" "$$file"
+            echo "Created PostgreSQL backup: $$file"
+          else
+            rm -f -- "$$temp_file"
+            echo "PostgreSQL backup failed."
+          fi
+
+          expired_backup_count="$$(find /backups -maxdepth 1 -type f \( -name 'xianzhi-*.sql' -o -name 'xianzhi-*.sql.gz' \) -mtime +"$${BACKUP_RETENTION_DAYS}" | wc -l)"
+          echo "expired_backup_count=$$expired_backup_count retention_days=$${BACKUP_RETENTION_DAYS}"
           sleep "$${BACKUP_INTERVAL_SECONDS}"
         done
     depends_on:
@@ -298,6 +341,11 @@ services:
   migrate:
     image: postgres:16-alpine
     restart: "no"
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     environment:
       POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
       POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
@@ -334,6 +382,11 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     environment:
       REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
     command: ["sh", "-c", "redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
@@ -348,11 +401,17 @@ services:
   rabbitmq:
     image: rabbitmq:3-management-alpine
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     environment:
       RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:?RABBITMQ_DEFAULT_USER is required}"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS is required}"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      - ./ops/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 8s
@@ -362,6 +421,11 @@ services:
   minio:
     image: "${MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}"
     restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}"
@@ -374,6 +438,32 @@ services:
       timeout: 3s
       retries: 10
 
+  disk-monitor:
+    image: alpine:3.20
+    restart: unless-stopped
+    logging:
+      driver: "local"
+      options:
+        max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+        max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+    environment:
+      DISK_WARN_PERCENT: "${DISK_WARN_PERCENT:-70}"
+      DISK_CRITICAL_PERCENT: "${DISK_CRITICAL_PERCENT:-80}"
+      DISK_EMERGENCY_PERCENT: "${DISK_EMERGENCY_PERCENT:-90}"
+      DISK_MIN_FREE_BYTES: "${DISK_MIN_FREE_BYTES:-10737418240}"
+      DISK_MONITOR_INTERVAL_SECONDS: "${DISK_MONITOR_INTERVAL_SECONDS:-60}"
+    volumes:
+      - disk-monitor-probe:/host-volume:ro
+      - ./ops/disk-guard.sh:/usr/local/bin/disk-guard.sh:ro
+      - ./ops/disk-monitor.sh:/usr/local/bin/disk-monitor.sh:ro
+    command: ["sh", "/usr/local/bin/disk-monitor.sh", "/host-volume"]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -Eq '^(OK|WARNING|CRITICAL)$' /tmp/disk-state"]
+      interval: 30s
+      timeout: 3s
+      retries: 2
+      start_period: 10s
+
 volumes:
   app-data:
   postgres-data:
@@ -381,3 +471,4 @@ volumes:
   rabbitmq-data:
   minio-data:
   smartvideo-tmp:
+  disk-monitor-probe:
