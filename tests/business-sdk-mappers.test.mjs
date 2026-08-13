@@ -51,6 +51,139 @@ function videoDraft(overrides = {}) {
   };
 }
 
+function imageDraft(overrides = {}) {
+  return {
+    mode: "image",
+    prompt: "generate a product image",
+    model: "gpt-image-2",
+    style: "commercial",
+    size: "1024x1024",
+    quality: "standard",
+    count: 1,
+    referenceImages: [],
+    ...overrides,
+  };
+}
+
+test("image request preserves explicit canonical schema parameters and client request id", () => {
+  const request = taskRequestFromDraft(imageDraft({
+    size: "1536x1024",
+    quality: "high",
+    count: 2,
+    clientRequestId: "image_request_01HXYZ",
+    parameters: {
+      seed: 42,
+      ratio: "4:3",
+      aspect_ratio: "16:9",
+      imageRatio: "auto",
+      imageQuality: "2K",
+    },
+  }));
+
+  assert.deepEqual(request, {
+    type: "TEXT_TO_IMAGE",
+    clientRequestId: "image_request_01HXYZ",
+    moduleCode: "image_generation",
+    prompt: "generate a product image",
+    model: "gpt-image-2",
+    params: {
+      seed: 42,
+      size: "1536x1024",
+      quality: "high",
+      n: 2,
+    },
+  });
+});
+
+test("image request omits canonical fields that the exact schema did not expose", () => {
+  const request = taskRequestFromDraft(imageDraft({
+    model: "HY-Image-3.0-Plus-4090-Tob-v1.0",
+    size: "1280x720",
+    quality: undefined,
+    count: undefined,
+    parameters: { seed: 7 },
+  }));
+
+  assert.deepEqual(request.params, {
+    seed: 7,
+    size: "1280x720",
+  });
+});
+
+test("image request rejects UI aliases used as canonical size or quality", () => {
+  const invalidCases = [
+    { field: "size", value: "auto", overrides: { size: "auto" } },
+    { field: "size", value: "4:3", overrides: { size: "4:3" } },
+    { field: "quality", value: "1K", overrides: { quality: "1K" } },
+    { field: "quality", value: "2K", overrides: { quality: "2K" } },
+    { field: "count", value: 0, overrides: { count: 0 } },
+    { field: "count", value: 1.5, overrides: { count: 1.5 } },
+  ];
+
+  for (const item of invalidCases) {
+    assert.throws(
+      () => taskRequestFromDraft(imageDraft(item.overrides)),
+      error => error instanceof Error && error.message.includes(item.field),
+      `${item.field}=${item.value} must fail before an invalid request is sent`,
+    );
+  }
+});
+
+test("free image edit keeps canonical params, references, and custom schema fields without aliases", () => {
+  const referenceURL = "https://example.test/free-edit-source.png";
+  const request = taskRequestFromDraft(imageDraft({
+    style: "infographic",
+    size: "1024x1024",
+    quality: "high",
+    count: 1,
+    referenceImages: [referenceURL],
+    parameters: {
+      seed: 9,
+      custom_schema_parameter: "preserved",
+      sourceAssetId: "asset-source-1",
+      sourceTaskId: "task-source-1",
+      ratio: "4:3",
+      aspect_ratio: "16:9",
+      imageRatio: "auto",
+      imageQuality: "2K",
+    },
+  }));
+
+  assert.deepEqual(request, {
+    type: "IMAGE_TO_IMAGE",
+    moduleCode: "image_generation",
+    prompt: "generate a product image",
+    model: "gpt-image-2",
+    params: {
+      seed: 9,
+      custom_schema_parameter: "preserved",
+      sourceReferenceAssetId: "asset-source-1",
+      sourceReferenceTaskId: "task-source-1",
+      size: "1024x1024",
+      quality: "high",
+      n: 1,
+      reference_image: referenceURL,
+      referenceImages: [{ url: referenceURL, name: "reference-1" }],
+    },
+  });
+});
+
+test("non-image mapper fallback remains unchanged when draft fields are absent", () => {
+  const request = taskRequestFromDraft({
+    mode: "ppt",
+    prompt: "quarterly strategy",
+    model: "kimi-k2.6",
+    style: "business",
+    referenceImages: [],
+  });
+
+  assert.deepEqual(request.params, {
+    size: "1024x1024",
+    quality: "standard",
+    n: 1,
+  });
+});
+
 test("home creation draft metadata is not sent as model parameters", () => {
   const request = taskRequestFromDraft({
     mode: "image",

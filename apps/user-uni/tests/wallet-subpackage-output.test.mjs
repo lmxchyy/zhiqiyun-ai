@@ -27,6 +27,32 @@ function assertRelativeRequiresResolve(relativePath) {
   }
 }
 
+function assertComponentReferenceResolves(fromRelativePath, componentReference) {
+  const basePath = path.resolve(path.dirname(outputFile(fromRelativePath)), componentReference);
+  for (const extension of [".js", ".json", ".wxml", ".wxss"]) {
+    assert.equal(
+      fs.existsSync(`${basePath}${extension}`),
+      true,
+      `${fromRelativePath} has unresolved component ${componentReference}${extension}`,
+    );
+  }
+}
+
+function listTextOutputFiles(directory = outputRoot) {
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listTextOutputFiles(entryPath));
+      continue;
+    }
+    if (entry.isFile() && [".js", ".json", ".wxml", ".wxss"].includes(path.extname(entry.name))) {
+      files.push(path.relative(outputRoot, entryPath).split(path.sep).join("/"));
+    }
+  }
+  return files;
+}
+
 test("personal wallet modules and rewritten imports stay inside user-account subpackage", () => {
   const page = "pages/user-account/UserWalletPage.js";
   const composable = "pages/user-account/composables/usePersonalPointsWallet.js";
@@ -46,6 +72,66 @@ test("personal wallet modules and rewritten imports stay inside user-account sub
   assertRelativeRequiresResolve(page);
   assertRelativeRequiresResolve(composable);
   assertRelativeRequiresResolve(domain);
+});
+
+test("PPT editor component stays inside user-creation subpackage", () => {
+  const mainComponent = "components/PptDocumentGeneration";
+  const subpackageComponent = "pages/user-creation/components/PptDocumentGeneration";
+  const pageJs = "pages/user-creation/UserPptEditorPage.js";
+  const pageJson = "pages/user-creation/UserPptEditorPage.json";
+
+  for (const extension of ["js", "json", "wxml", "wxss"]) {
+    assert.equal(fs.existsSync(outputFile(`${mainComponent}.${extension}`)), false);
+    assert.equal(fs.existsSync(outputFile(`${subpackageComponent}.${extension}`)), true);
+  }
+
+  const appJson = JSON.parse(readOutput("app.json"));
+  const userCreationPackage = appJson.subPackages.find(item => item.root === "pages/user-creation");
+  assert.ok(userCreationPackage);
+  assert.ok(userCreationPackage.pages.includes("UserPptEditorPage"));
+
+  assert.match(readOutput(pageJs), /"\.\/components\/PptDocumentGeneration\.js"/);
+  const pageConfig = JSON.parse(readOutput(pageJson));
+  assert.equal(
+    pageConfig.usingComponents["ppt-document-generation"],
+    "./components/PptDocumentGeneration",
+  );
+  assertComponentReferenceResolves(pageJson, pageConfig.usingComponents["ppt-document-generation"]);
+
+  const componentJs = readOutput(`${subpackageComponent}.js`);
+  for (const requiredModule of [
+    "../../../common/vendor.js",
+    "../../../api/files.js",
+    "../../../api/client.js",
+    "../../../features/auth/gate.js",
+    "../../../api/ppt.js",
+  ]) {
+    assert.match(componentJs, new RegExp(`require\\(["']${requiredModule.replaceAll(".", "\\.")}["']\\)`));
+  }
+  assert.match(
+    componentJs,
+    /["']\.\.\/\.\.\/\.\.\/components\/compliance\/AiGeneratedContentNotice\.js["']/,
+  );
+  assertRelativeRequiresResolve(`${subpackageComponent}.js`);
+
+  const componentConfig = JSON.parse(readOutput(`${subpackageComponent}.json`));
+  assert.equal(
+    componentConfig.usingComponents["ai-generated-content-notice"],
+    "../../../components/compliance/AiGeneratedContentNotice",
+  );
+  assertComponentReferenceResolves(
+    `${subpackageComponent}.json`,
+    componentConfig.usingComponents["ai-generated-content-notice"],
+  );
+
+  const componentOutputs = new Set(
+    ["js", "json", "wxml", "wxss"].map(extension => `${subpackageComponent}.${extension}`),
+  );
+  const references = listTextOutputFiles()
+    .filter(relativePath => !componentOutputs.has(relativePath))
+    .filter(relativePath => readOutput(relativePath).includes("PptDocumentGeneration"))
+    .sort();
+  assert.deepEqual(references, [pageJs, pageJson].sort());
 });
 
 test("generated login form remains preserved behind the lightweight login gate", () => {

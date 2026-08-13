@@ -435,9 +435,9 @@ export interface CreateDraft {
   prompt: string;
   model: string;
   style: string;
-  size: string;
-  quality: string;
-  count: number;
+  size?: string;
+  quality?: string;
+  count?: number;
   referenceImages: string[];
   videoMode?: VideoGenerationMode;
   firstFrame?: string;

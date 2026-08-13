@@ -333,6 +333,47 @@ export function generationParametersFromDraft(parameters?: Record<string, unknow
   return result;
 }
 
+function canonicalImageSize(value: unknown): string {
+  if (typeof value !== "string" || !/^[1-9]\d*x[1-9]\d*$/.test(value)) {
+    throw new Error(`image size must use canonical positive WIDTHxHEIGHT pixels, received ${String(value)}`);
+  }
+  return value;
+}
+
+function canonicalImageQuality(value: unknown): string {
+  if (value !== "standard" && value !== "high") {
+    throw new Error(`image quality must be standard or high, received ${String(value)}`);
+  }
+  return value;
+}
+
+function canonicalImageCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`image count must be a positive integer, received ${String(value)}`);
+  }
+  return value;
+}
+
+function imageParametersFromDraft(
+  draft: CreateDraft,
+  extraParameters: Record<string, unknown>,
+  referenceImage: string | undefined,
+  referencePayload: Array<{ url: string; name: string }>,
+): Record<string, unknown> {
+  const parameters = { ...extraParameters };
+  delete parameters.aspect_ratio;
+
+  return {
+    ...parameters,
+    ...(draft.size !== undefined ? { size: canonicalImageSize(draft.size) } : {}),
+    ...(draft.quality !== undefined ? { quality: canonicalImageQuality(draft.quality) } : {}),
+    ...(draft.count !== undefined ? { n: canonicalImageCount(draft.count) } : {}),
+    ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
+    ...(referenceImage ? { reference_image: referenceImage } : {}),
+    ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
+  };
+}
+
 export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRequest {
   const referenceImages = draft.referenceImages.filter(Boolean);
   const referenceImage = referenceImages[0];
@@ -413,15 +454,17 @@ export function taskRequestFromDraft(draft: CreateDraft): CreateGenerationTaskRe
           ...(videoMode === "IMAGE_TO_VIDEO" && lastFrame ? { last_frame: lastFrame } : {}),
         };
       })()
-    : {
-        ...extraParameters,
-        size: draft.size || "1024x1024",
-        quality: draft.quality || "standard",
-        n: draft.count || 1,
-        ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
-        ...(referenceImage ? { reference_image: referenceImage } : {}),
-        ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
-      };
+    : draft.mode === "image"
+      ? imageParametersFromDraft(draft, extraParameters, referenceImage, referencePayload)
+      : {
+          ...extraParameters,
+          size: draft.size || "1024x1024",
+          quality: draft.quality || "standard",
+          n: draft.count || 1,
+          ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
+          ...(referenceImage ? { reference_image: referenceImage } : {}),
+          ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
+        };
   return {
     type,
     ...(draft.clientRequestId ? { clientRequestId: draft.clientRequestId } : {}),

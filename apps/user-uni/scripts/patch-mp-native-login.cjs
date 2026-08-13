@@ -1407,6 +1407,17 @@ function relocateGeneratedModule(sourceRelativePath, targetRelativePath, transfo
   fs.rmSync(sourcePath);
 }
 
+function replaceGeneratedReference(source, oldReference, newReference, label) {
+  if (!source.includes(oldReference)) {
+    throw new Error(`Generated ${label} reference was not found: ${oldReference}`);
+  }
+  const updated = source.split(oldReference).join(newReference);
+  if (!updated.includes(newReference)) {
+    throw new Error(`Generated ${label} reference was not rewritten: ${newReference}`);
+  }
+  return updated;
+}
+
 const relocatedUserRoutes = new Map();
 for (const subPackage of relocatedUserSubPackages) {
   for (const pageName of subPackage.pages) {
@@ -1590,7 +1601,7 @@ if (!homeComponentWxml.includes('bindinput="nativeHomePromptInput"') || !homeCom
 fs.writeFileSync(homeComponentWxmlPath, homeComponentWxml);
 
 let homeComponentJs = fs.readFileSync(homeComponentJsPath, "utf8");
-const homeComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
+const homeComponentPattern = /wx\.createComponent\(([A-Za-z_$][A-Za-z0-9_$]*)\);\s*$/;
 if (!homeComponentPattern.test(homeComponentJs)) {
   throw new Error("V531HomePage component registration not found");
 }
@@ -1644,7 +1655,7 @@ fs.writeFileSync(workbenchWxmlPath, workbenchWxml);
 
 const workbenchJsPath = path.resolve(outputRoot, "components", "MiniProgramRoleWorkbench.js");
 let workbenchJs = fs.readFileSync(workbenchJsPath, "utf8");
-const createComponentPattern = /wx\.createComponent\((\w+)\);\s*$/;
+const createComponentPattern = /wx\.createComponent\(([A-Za-z_$][A-Za-z0-9_$]*)\);\s*$/;
 if (!createComponentPattern.test(workbenchJs)) {
   throw new Error("MiniProgramRoleWorkbench component registration not found");
 }
@@ -2104,53 +2115,51 @@ for (const componentName of enterpriseComponentNames) {
 
 // PPT editor lives in user-creation; keep the heavy editor component with that subpackage.
 for (const extension of ["js", "json", "wxml", "wxss"]) {
-  const sourceRelativePath = `components/PptDocumentGeneration.${extension}`;
-  const sourcePath = path.resolve(outputRoot, sourceRelativePath);
-  if (!fs.existsSync(sourcePath)) continue;
   relocateGeneratedModule(
-    sourceRelativePath,
+    `components/PptDocumentGeneration.${extension}`,
     `pages/user-creation/components/PptDocumentGeneration.${extension}`,
     extension === "js"
-      ? (source) => {
-          const updated = source
-            .replace(/require\("\.\.\//g, 'require("../../../')
-            .replace(
-              '()=>"./compliance/AiGeneratedContentNotice.js"',
-              '()=>"../../../components/compliance/AiGeneratedContentNotice.js"'
-            );
-          if (updated.includes("./compliance/AiGeneratedContentNotice")) {
-            throw new Error("PPT component still points at local compliance path after relocate");
-          }
-          return updated;
-        }
+      ? (source) => [
+          ['require("../common/', 'require("../../../common/', "PPT component common module"],
+          ['require("../api/', 'require("../../../api/', "PPT component API module"],
+          ['require("../features/', 'require("../../../features/', "PPT component feature module"],
+          [
+            '"./compliance/AiGeneratedContentNotice.js"',
+            '"../../../components/compliance/AiGeneratedContentNotice.js"',
+            "PPT compliance component factory",
+          ],
+        ].reduce(
+          (updated, [oldReference, newReference, label]) =>
+            replaceGeneratedReference(updated, oldReference, newReference, label),
+          source,
+        )
       : extension === "json"
-        ? (source) => source.replace(
+        ? (source) => replaceGeneratedReference(
+            source,
             '"./compliance/AiGeneratedContentNotice"',
-            '"../../../components/compliance/AiGeneratedContentNotice"'
+            '"../../../components/compliance/AiGeneratedContentNotice"',
+            "PPT compliance component JSON",
           )
-        : undefined
+        : undefined,
   );
 }
-{
-  const pptPageJsPath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-creation", "UserPptEditorPage.js"));
-  const pptPageJsonPath = assertGeneratedPath(path.resolve(outputRoot, "pages", "user-creation", "UserPptEditorPage.json"));
-  const originalJs = fs.readFileSync(pptPageJsPath, "utf8");
-  const updatedJs = originalJs
-    .split('"../../components/PptDocumentGeneration.js"')
-    .join('"./components/PptDocumentGeneration.js"');
-  if (updatedJs === originalJs) {
-    throw new Error("PPT editor page JS reference was not rewritten to user-creation subpackage");
-  }
-  fs.writeFileSync(pptPageJsPath, updatedJs);
-  const originalJson = fs.readFileSync(pptPageJsonPath, "utf8");
-  const updatedJson = originalJson
-    .split('"../../components/PptDocumentGeneration"')
-    .join('"./components/PptDocumentGeneration"');
-  if (updatedJson === originalJson) {
-    throw new Error("PPT editor page JSON reference was not rewritten to user-creation subpackage");
-  }
-  fs.writeFileSync(pptPageJsonPath, updatedJson);
-}
+
+const pptEditorPageJsPath = assertGeneratedPath(path.resolve(outputRoot, "pages/user-creation/UserPptEditorPage.js"));
+const pptEditorPageJsonPath = assertGeneratedPath(path.resolve(outputRoot, "pages/user-creation/UserPptEditorPage.json"));
+const pptEditorPageJs = replaceGeneratedReference(
+  fs.readFileSync(pptEditorPageJsPath, "utf8"),
+  '"../../components/PptDocumentGeneration.js"',
+  '"./components/PptDocumentGeneration.js"',
+  "PPT editor page JS",
+);
+fs.writeFileSync(pptEditorPageJsPath, pptEditorPageJs);
+const pptEditorPageJson = replaceGeneratedReference(
+  fs.readFileSync(pptEditorPageJsonPath, "utf8"),
+  '"../../components/PptDocumentGeneration"',
+  '"./components/PptDocumentGeneration"',
+  "PPT editor page JSON",
+);
+fs.writeFileSync(pptEditorPageJsonPath, pptEditorPageJson);
 
 rewriteGeneratedUserRoutes(outputRoot);
 console.log("Preserved the generated login page and patched mp-weixin generation controls.");

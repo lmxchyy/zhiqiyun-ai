@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -15,7 +16,7 @@ function posixPath(path) {
 }
 
 async function runDiskGuard(dfOutput, env) {
-  const directory = await mkdtemp(fileURLToPath(new URL("../.codex-tmp/disk-guard-test-", import.meta.url)));
+  const directory = await mkdtemp(join(tmpdir(), "xianzhi-disk-guard-test-"));
   const fakeBin = join(directory, "bin");
   await mkdir(fakeBin);
   await writeFile(join(fakeBin, "df"), `#!/bin/sh\nprintf '%b\\n' '${dfOutput}'\n`, { mode: 0o755 });
