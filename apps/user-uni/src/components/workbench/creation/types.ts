@@ -9,4 +9,5 @@ export interface GenerationNotice {
   resultUrl?: string;
   resultType?: MiniProgramCreationMode;
   progress?: number;
+  pointCost?: number;
 }

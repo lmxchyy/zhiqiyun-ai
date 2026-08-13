@@ -142,6 +142,9 @@ func (p OpenAICompatible) DefaultModel() string {
 }
 
 func (p OpenAICompatible) Generate(ctx context.Context, req generation.CreateRequest) ([]generation.GeneratedImage, error) {
+	if err := validateOpenAIImageParameters(req.Params); err != nil {
+		return nil, err
+	}
 	return p.generate(ctx, req)
 }
 
@@ -176,7 +179,10 @@ func (p OpenAICompatible) generate(ctx context.Context, req generation.CreateReq
 		}
 		return nil, fmt.Errorf("参考图生图失败: edits error: %w; generation fallback: %v", err, fallbackErr)
 	}
-	count := imageCount(req.Params)
+	count, err := openAIImageCount(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	size, width, height := imageSize(req.Params)
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -275,7 +281,7 @@ func (p OpenAICompatible) generateWithResponses(ctx context.Context, req generat
 }
 
 func addOptionalImageGenerationFields(body map[string]any, params map[string]any) {
-	if quality := normalizedImageQuality(firstStringParam(params, "quality", "imageQuality")); quality != "" {
+	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
 		body["quality"] = quality
 	}
 	for _, item := range []struct {
@@ -294,7 +300,10 @@ func addOptionalImageGenerationFields(body map[string]any, params map[string]any
 }
 
 func (p OpenAICompatible) edit(ctx context.Context, req generation.CreateRequest, references []referenceImage) ([]generation.GeneratedImage, error) {
-	count := imageCount(req.Params)
+	count, err := openAIImageCount(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	size, width, height := imageSize(req.Params)
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -368,7 +377,10 @@ func (p OpenAICompatible) edit(ctx context.Context, req generation.CreateRequest
 }
 
 func (p OpenAICompatible) generateWithReferences(ctx context.Context, req generation.CreateRequest, references []referenceImage, width int, height int) ([]generation.GeneratedImage, error) {
-	count := imageCount(req.Params)
+	count, err := openAIImageCount(req.Params)
+	if err != nil {
+		return nil, err
+	}
 	size, _, _ := imageSize(req.Params)
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -448,7 +460,7 @@ func addOptionalImageEditFields(fields map[string]string, params map[string]any,
 			fields[item.field] = value
 		}
 	}
-	if quality := normalizedImageQuality(firstStringParam(params, "quality", "imageQuality")); quality != "" {
+	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
 		fields["quality"] = quality
 	}
 	if value, ok := params["output_compression"]; ok && value != nil {
@@ -677,7 +689,7 @@ func responsesImageTool(params map[string]any, isEdit bool) map[string]any {
 	if size := normalizedResponsesImageSize(params); size != "" {
 		tool["size"] = size
 	}
-	if quality := normalizedImageQuality(firstStringParam(params, "quality", "imageQuality")); quality != "" {
+	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
 		tool["quality"] = quality
 	}
 	if outputFormat := firstStringParam(params, "output_format", "outputFormat"); outputFormat != "" {
@@ -702,8 +714,7 @@ func normalizedResponsesImageSize(params map[string]any) string {
 	case "1024x1024", "1024x1536", "1536x1024":
 		return size
 	default:
-		fallback, _, _ := imageSize(params)
-		return fallback
+		return ""
 	}
 }
 
@@ -1280,38 +1291,55 @@ func providerEndpoint(baseURL string, configuredPath string, defaultPath string)
 }
 
 func imageSize(params map[string]any) (string, int, int) {
-	ratio := strings.TrimSpace(fmt.Sprint(params["imageRatio"]))
-	switch ratio {
-	case "3:4", "9:16":
+	size := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
+	switch size {
+	case "1024x1536":
 		return "1024x1536", 1024, 1536
-	case "4:3", "16:9":
+	case "1536x1024":
 		return "1536x1024", 1536, 1024
-	default:
+	case "1024x1024":
 		return "1024x1024", 1024, 1024
+	default:
+		return "", 0, 0
 	}
 }
 
-func imageCount(params map[string]any) int {
-	value, ok := params["count"]
-	if !ok {
-		return 1
+func validateOpenAIImageParameters(params map[string]any) error {
+	size := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
+	switch size {
+	case "1024x1024", "1024x1536", "1536x1024":
+	default:
+		return fmt.Errorf("unsupported OpenAI image size %q; supported sizes: 1024x1024, 1024x1536, 1536x1024", size)
 	}
-	var count int
+	quality := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["quality"])))
+	switch quality {
+	case "", "<nil>", "standard", "high":
+	default:
+		return fmt.Errorf("unsupported OpenAI image quality %q; supported qualities: standard, high", quality)
+	}
+	_, err := openAIImageCount(params)
+	return err
+}
+
+func openAIImageCount(params map[string]any) (int, error) {
+	value, ok := params["n"]
+	if !ok {
+		return 1, nil
+	}
 	switch typed := value.(type) {
 	case float64:
-		count = int(math.Floor(typed))
+		if typed != 1 && typed != 2 && typed != 4 {
+			return 0, fmt.Errorf("unsupported OpenAI image count %v; expected one of 1, 2, 4", typed)
+		}
+		return int(typed), nil
 	case int:
-		count = typed
-	case string:
-		_, _ = fmt.Sscanf(typed, "%d", &count)
+		if typed != 1 && typed != 2 && typed != 4 {
+			return 0, fmt.Errorf("unsupported OpenAI image count %d; expected one of 1, 2, 4", typed)
+		}
+		return typed, nil
+	default:
+		return 0, fmt.Errorf("unsupported OpenAI image count %v; expected one of 1, 2, 4", value)
 	}
-	if count < 1 {
-		return 1
-	}
-	if count > 8 {
-		return 8
-	}
-	return count
 }
 
 func nonEmptyStrings(values ...string) []string {
