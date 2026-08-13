@@ -25,6 +25,7 @@ export type {
   EditableVideoField,
   VideoParameterKey,
 } from "./videoParameters";
+export type { ModelInfo } from "@xianzhi/shared-types";
 export {
   VideoGenerationValidationError,
   confirmResolvedVideoModel,

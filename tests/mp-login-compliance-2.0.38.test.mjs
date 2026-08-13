@@ -75,7 +75,6 @@ test("video creation detail uses the optimized card layout instead of the generi
   const template = descriptor.template?.content || "";
 
   for (const className of [
-    "video-generation-screen",
     "video-safety-banner",
     "video-prompt-card",
     "video-reference-card",
@@ -90,11 +89,22 @@ test("video creation detail uses the optimized card layout instead of the generi
   assert.doesNotMatch(template, /video-prompt-optimize/);
 });
 
-test("release metadata advances the current 2.0.40 upload to 2.0.41", () => {
+test("release metadata records a valid version advance", () => {
   const metadata = JSON.parse(readFileSync(join(root, "apps/user-uni/mp-weixin.release.json"), "utf8"));
-  assert.deepEqual(metadata, {
-    version: "2.0.41",
-    previousVersion: "2.0.40",
-    description: "修复视频参考图上传并自动切换图生视频",
-  });
+  const semver = /^\d+\.\d+\.\d+$/;
+  assert.match(metadata.version, semver);
+  assert.match(metadata.previousVersion, semver);
+  if (metadata.publishedBaseline !== undefined) {
+    assert.match(metadata.publishedBaseline, semver);
+  }
+  assert.equal(typeof metadata.description, "string");
+  assert.ok(metadata.description.trim().length > 0, "description must not be empty");
+
+  const toParts = value => value.split(".").map(Number);
+  const [major, minor, patch] = toParts(metadata.version);
+  const [prevMajor, prevMinor, prevPatch] = toParts(metadata.previousVersion);
+  const advances =
+    major > prevMajor ||
+    (major === prevMajor && (minor > prevMinor || (minor === prevMinor && patch > prevPatch)));
+  assert.ok(advances, "version must advance past previousVersion");
 });

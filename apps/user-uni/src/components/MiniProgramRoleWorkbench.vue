@@ -11,39 +11,39 @@
   >
     <view v-if="!isFreeImageEditPage" class="native-safe-note"></view>
 
-    <view v-if="activeRole !== 'user' && !isUserMineDetail" class="business-header">
-      <image class="business-logo" :src="loginLogo" mode="aspectFit" />
-      <view class="business-copy">
-        <text class="business-title">{{ currentPageTitle }}</text>
-        <text class="business-subtitle">{{ currentPageSubtitle }}</text>
-      </view>
-      <view v-if="availableRoles.length === 1" class="role-badge">{{ roleLabel }}</view>
-    </view>
+    <WorkbenchHeader
+      v-if="activeRole !== 'user' && !isUserMineDetail"
+      :logo-src="loginLogo"
+      :title="currentPageTitle"
+      :subtitle="currentPageSubtitle"
+      :role-label="roleLabel"
+      :show-role-badge="availableRoles.length === 1"
+    />
 
-    <view class="role-switcher" v-if="activeRole !== 'user' && availableRoles.length > 1 && !isUserMineDetail">
-      <button
-        v-for="role in availableRoles"
-        :key="role.id"
-        type="button"
-        :class="['role-pill', { active: activeRole === role.id }]"
-        @click="switchRole(role.id)"
-      >
-        <text>{{ role.label }}</text>
-      </button>
-    </view>
+    <RoleSwitcher
+      v-if="activeRole !== 'user' && availableRoles.length > 1 && !isUserMineDetail"
+      :roles="availableRoles"
+      :active-role="activeRole"
+      @change="switchRole"
+    />
 
-    <view v-if="pageLoading && activeRole !== 'user'" class="state-card">
-      <text>正在同步小程序工作台...</text>
-    </view>
-    <view v-if="pageError && !(activeRole === 'user' && !isGuest && userStore.currentRole !== 'USER')" class="state-card error runtime-error-banner">
-      <text>{{ pageError }}</text>
-      <button type="button" class="small-button" @click="refreshAll">重新加载</button>
-    </view>
-
-    <view v-if="activeRole === 'user' && !isGuest && userStore.currentRole !== 'USER'" class="state-card user-role-switch-state">
-      <text>{{ pageError || '正在切换到普通用户视图...' }}</text>
-      <button v-if="pageError" type="button" class="small-button" @click="refreshAll">重新加载</button>
-    </view>
+    <StateCard
+      v-if="pageLoading && activeRole !== 'user'"
+      message="正在同步小程序工作台..."
+    />
+    <StateCard
+      v-if="pageError && !(activeRole === 'user' && !isGuest && userStore.currentRole !== 'USER')"
+      :message="pageError"
+      error
+      action-label="重新加载"
+      :on-action="refreshAll"
+    />
+    <StateCard
+      v-if="activeRole === 'user' && !isGuest && userStore.currentRole !== 'USER'"
+      :message="pageError || '正在切换到普通用户视图...'"
+      :action-label="pageError ? '重新加载' : ''"
+      :on-action="pageError ? refreshAll : undefined"
+    />
 
     <view v-else class="role-content">
       <template v-if="activeRole === 'user'">
@@ -151,50 +151,15 @@
           @benefit="handleV531Benefit"
         />
         <template v-else>
-        <view v-if="legacyActiveTab === 'home'" class="section-stack">
-          <view class="v31-home-hero">
-            <RemoteCover class="v31-hero-cover" page-code="home" slot-key="home.hero.background" alt="知启云 AI 首页主视觉" width="100%" height="100%" :lazy-load="false" />
-            <text class="v31-kicker">一句话开始</text>
-            <text class="v31-hero-title">用 AI 完成设计、视频与 PPT</text>
-            <text class="v31-hero-copy">从创作到判断，一站式解决。</text>
-            <view class="v31-hero-row">
-              <button type="button" class="v31-mini-metric purple" @click="selectUserTab('wallet')">
-                <text class="v31-metric-value">{{ formatNumber(pointBalance) }}</text>
-                <text class="v31-metric-label">点数余额</text>
-              </button>
-              <button type="button" class="v31-mini-metric orange" @click="selectUserTab('assets')">
-                <text class="v31-metric-value">{{ recentAssets.length }}</text>
-                <text class="v31-metric-label">近期作品</text>
-              </button>
-              <button type="button" class="v31-orange-button" @click="selectUserTab('create')">去创作</button>
-            </view>
-          </view>
-
-          <text class="v31-section-title">常用工具</text>
-          <view class="v31-tool-grid">
-            <button v-for="module in creationModules" :key="`home-${module.id}`" class="v31-tool-card" @click="openCreation(module.id)">
-              <RemoteCover class="v31-tool-cover" page-code="home" :slot-key="homeModuleSlot(module.id)" :alt="module.name" width="36px" height="36px" radius="10px" />
-              <view class="v31-tool-copy">
-                <text class="v31-tool-name">{{ module.homeName || module.name }}</text>
-                <text class="v31-tool-desc">{{ module.description }}</text>
-              </view>
-            </button>
-          </view>
-
-          <text class="v31-section-title">灵感推荐</text>
-          <view class="v31-inspiration-grid">
-            <button class="v31-inspiration-card" @click="openCreation('image')">
-              <RemoteCover class="v31-preview" page-code="home" slot-key="home.inspiration.ecommerce" alt="水果电商主图" width="100%" height="86px" radius="12px" />
-              <text class="v31-inspiration-title">水果电商主图</text>
-              <view class="v31-card-footer"><text class="v31-chip orange">图片</text><text class="v31-link">继续改</text></view>
-            </button>
-            <button class="v31-inspiration-card" @click="openCreation('ppt')">
-              <RemoteCover class="v31-preview" page-code="home" slot-key="home.inspiration.ppt" alt="招商路演 PPT" width="100%" height="86px" radius="12px" />
-              <text class="v31-inspiration-title">招商路演PPT</text>
-              <view class="v31-card-footer"><text class="v31-chip purple">PPT</text><text class="v31-link">继续改</text></view>
-            </button>
-          </view>
-        </view>
+        <UserHomePanel
+          v-if="legacyActiveTab === 'home'"
+          :point-balance="pointBalance"
+          :recent-assets-count="recentAssets.length"
+          :creation-modules="creationModules"
+          :home-module-slot="catalogHomeModuleSlot"
+          @tab="selectUserTab"
+          @open-mode="openCreation"
+        />
 
         <view v-else-if="legacyActiveTab === 'create'" class="section-stack">
           <view :class="['v31-subpage-nav', { 'video-generation-nav': creationMode === 'video' }]">
@@ -235,19 +200,19 @@
             <view class="v31-example-grid">
               <button v-for="topic in pptTopics" :key="topic" @click="creationPrompt = topic; creationError = ''">{{ topic }}</button>
             </view>
-            <view v-if="latestGenerationTask" :class="['v31-generation-state', latestGenerationTask.tone]">
-              <view class="v31-generation-summary">
-                <view class="v31-generation-title-row"><text class="v31-generation-title">{{ latestGenerationTask.title }}</text><text v-if="generationNoticePending" class="v31-live-badge">实时</text></view>
-                <text class="v31-generation-meta">任务 {{ latestGenerationTask.id }} · {{ generationStatusLabel }}</text>
-                <view v-if="generationNoticePending" class="v31-generation-progress-track">
-                  <view :class="['v31-generation-progress-value', { indeterminate: !generationHasProgress }]" :style="generationProgressStyle" />
-                </view>
-                <text v-if="generationNoticePending" class="v31-generation-feedback">{{ generationFeedbackText }}</text>
-              </view>
-              <button v-if="latestGenerationTask.tone === 'success'" @click="openLatestGenerationResult">{{ latestGenerationTask.resultId ? "查看结果" : "查看作品" }}</button>
-              <button v-else-if="latestGenerationTask.tone === 'danger'" @click="handleGenerateTap">重新生成</button>
-              <text v-else class="v31-generation-running">{{ generationButtonLabel }}</text>
-            </view>
+            <CreationTaskStatusCard
+              :task="latestGenerationTask"
+              :status-label="generationStatusLabel"
+              :button-label="generationButtonLabel"
+              :feedback-text="generationFeedbackText"
+              :has-progress="generationHasProgress"
+              :progress-style="generationProgressStyle"
+              :show-pending-badge="generationNoticePending"
+              :show-result-image="false"
+              @preview="previewLatestGenerationResult"
+              @open="openLatestGenerationResult"
+              @retry="handleGenerateTap"
+            />
             <view class="v31-draft-card">
               <text class="v31-draft-title">未完成项目会保留在最近浏览</text>
               <text class="v31-draft-copy">选择文本内容、自定义主题后，即使返回首页，也能继续从草稿进入。</text>
@@ -526,12 +491,12 @@
             </view>
 
             <text class="v31-section-title">选择创作能力</text>
-            <view class="v31-mode-grid">
-              <button v-for="module in creationModules" :key="module.id" :class="['v31-mode-card', { active: creationMode === module.id }]" @click="selectCreationMode(module.id)">
-                <RemoteCover class="v31-tool-cover" page-code="studio" :slot-key="studioModuleSlot(module.id)" :alt="module.name" width="36px" height="36px" radius="10px" />
-                <view class="v31-tool-copy"><text class="v31-tool-name">{{ module.name }}</text><text class="v31-tool-desc">{{ module.description }}</text></view>
-              </button>
-            </view>
+            <CreationModeGrid
+              :creation-modules="creationModules"
+              :active-mode="creationMode"
+              :slot-key-for-mode="catalogStudioModuleSlot"
+              @select-mode="selectCreationMode"
+            />
             <view class="v31-workflow-card">
               <text class="v31-workflow-title">不满意？在结果上继续改</text>
               <text class="v31-workflow-copy">生成、对比、再创作在一个地方完成。</text>
@@ -541,29 +506,22 @@
           </template>
         </view>
 
-        <view v-else-if="legacyActiveTab === 'assets'" class="section-stack">
-          <view class="v31-filter-card">
-            <view class="v31-filter-row">
-              <button v-for="filter in assetFilters" :key="filter.id" :class="{ active: assetFilter === filter.id }" @click="assetFilter = filter.id">{{ filter.label }}</button>
-            </view>
-            <input v-model="assetSearch" class="v31-search-strip" placeholder="搜索作品名称" />
-          </view>
-          <view class="v31-works-card">
-            <text v-if="assetsLoading" class="empty-text">正在加载作品...</text>
-            <text v-else-if="assetsError" class="empty-text">{{ assetsError }}</text>
-            <view v-else-if="filteredAssets.length" class="v31-work-grid">
-              <button v-for="asset in filteredAssets" :key="asset.id" class="v31-work-card" @click="openAssetDetail(asset)">
-                <AppImage v-if="asset.thumbnailUrl" class="v31-work-preview" :src="asset.thumbnailUrl" :fallback="pageConfigStore.slot('assets', assetDefaultSlot(asset.mediaType))?.fallbackUrl" :alt="asset.name" width="100%" height="86px" radius="12px" />
-                <RemoteCover v-else class="v31-work-preview" page-code="assets" :slot-key="assetDefaultSlot(asset.mediaType)" :alt="asset.name" width="100%" height="86px" radius="12px" />
-                <text class="v31-work-title">{{ asset.name || asset.id }}</text>
-                <view class="v31-card-footer"><text :class="['v31-chip', asset.mediaType === 'video' ? 'green' : asset.mediaType === 'image' ? 'orange' : 'purple']">{{ asset.mediaType === "video" ? "视频" : asset.mediaType === "image" ? "图片" : "PPT" }}</text><text class="v31-link">继续改</text></view>
-              </button>
-            </view>
-            <view v-else class="v31-empty-state"><text>没有找到符合条件的作品</text><button @click="assetFilter = 'all'; assetSearch = ''">查看全部</button></view>
-            <text class="v31-works-note">每个作品保留生成参数、消耗点数、导出记录。</text>
-            <view class="v31-batch-actions"><button class="active" @click="selectUserTab('create')">继续创作</button></view>
-          </view>
-        </view>
+        <UserAssetsPanel
+          v-else-if="legacyActiveTab === 'assets'"
+          :filters="assetFilters"
+          :active-filter="assetFilter"
+          :search="assetSearch"
+          :loading="assetsLoading"
+          :error="assetsError"
+          :filtered-assets="filteredAssets"
+          :slot-key-for="catalogAssetDefaultSlot"
+          :fallback-slot-for="mediaType => pageConfigStore.slot('assets', catalogAssetDefaultSlot(mediaType))?.fallbackUrl"
+          @update:filter="assetFilter = $event"
+          @update:search="assetSearch = $event"
+          @open-asset="openAssetDetail"
+          @reset="assetFilter = 'all'; assetSearch = ''"
+          @continue-create="selectUserTab('create')"
+        />
 
         <MiniProgramMineExperience
           v-else
@@ -606,22 +564,19 @@
       </template>
 
       <template v-else-if="activeRole === 'agent'">
-        <view v-if="activeTab === 'overview'" class="section-stack">
-          <view class="agent-v4-hero">
-            <view class="agent-v4-hero-top"><view><text>本月预估分润</text><text>{{ formatCurrency(summaryNumber(channelSummary, "totalCommission")) }}</text></view><text>{{ agentLevelLabel }}</text></view>
-            <text class="agent-v4-copy">登录后优先查看推广增长、客户、订单与结算结果。</text>
-            <view class="agent-v4-metrics"><button @click="selectAgentTab('customers')"><text>{{ formatNumber(summaryNumber(channelSummary, "directCustomers")) }}</text><text>客户</text></button><button @click="openFeaturePage(miniProgramFeaturePages.agentTeam)"><text>{{ formatNumber(summaryNumber(channelSummary, "childAgents")) }}</text><text>团队</text></button><button @click="openFeaturePage(miniProgramFeaturePages.agentWithdrawals)"><text>{{ formatCurrency(summaryNumber(channelSummary, "availableToWithdraw")) }}</text><text>可提现</text></button></view>
-          </view>
-
-          <view class="agent-v4-entry-card">
-            <view class="section-header compact"><text class="section-title">经营入口</text><text class="soft-tag">{{ agentName }}</text></view>
-            <button @click="selectAgentTab('promotion')"><text class="agent-v4-icon green">推</text><view><text>推广中心</text><text>专属链接、小程序分享与邀请记录</text></view><text>{{ conversionRate }}% 转化</text></button>
-            <button @click="selectAgentTab('customers')"><text class="agent-v4-icon purple">客</text><view><text>客户管理</text><text>绑定客户与客户订单</text></view><text>{{ channelCustomers.length }} 人</text></button>
-            <button @click="selectAgentTab('commission')"><text class="agent-v4-icon green">润</text><view><text>分润中心</text><text>订单分润与提现记录</text></view><text>{{ formatCurrency(summaryNumber(channelSummary, "availableToWithdraw")) }}</text></button>
-            <button @click="openFeaturePage(miniProgramFeaturePages.agentTeam)"><text class="agent-v4-icon orange">队</text><view><text>团队管理</text><text>直属代理与成员业绩</text></view><text>{{ formatNumber(summaryNumber(channelSummary, "childAgents")) }} 人</text></button>
-          </view>
-          <button class="agent-v4-cta" @click="selectAgentTab('promotion')">查看推广数据</button>
-        </view>
+        <AgentOverviewPanel
+          v-if="activeTab === 'overview'"
+          :agent-name="agentName"
+          :agent-level-label="agentLevelLabel"
+          :total-commission="summaryNumber(channelSummary, 'totalCommission')"
+          :direct-customers="summaryNumber(channelSummary, 'directCustomers')"
+          :child-agents="summaryNumber(channelSummary, 'childAgents')"
+          :available-to-withdraw="summaryNumber(channelSummary, 'availableToWithdraw')"
+          :conversion-rate="conversionRate"
+          @tab="selectAgentTab"
+          @open-team="openFeaturePage(miniProgramFeaturePages.agentTeam)"
+          @open-withdrawals="openFeaturePage(miniProgramFeaturePages.agentWithdrawals)"
+        />
 
         <view v-else-if="activeTab === 'promotion'" class="agent-promotion-embed">
           <PromotionCenterScreen
@@ -632,201 +587,76 @@
           />
         </view>
 
-        <view v-else-if="activeTab === 'customers'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">拓展客户</text>
-              <text class="soft-tag">{{ channelCustomers.length }} 人</text>
-            </view>
-            <view v-if="channelCustomers.length" class="list-stack">
-              <view v-for="customer in channelCustomers" :key="rowKey(customer)" class="list-item" @click="openCustomerDetail(customer)">
-                <view>
-                  <text class="list-title">{{ customerName(customer) }}</text>
-                  <text class="list-meta">{{ customerEmail(customer) }}</text>
-                </view>
-                <view class="list-side">
-                  <text class="price-text">{{ formatNumber(rowNumber(customer, "pointsAvailable")) }} 点</text>
-                  <text class="status-tag success">{{ rowString(customer, "plan") || "客户" }}</text>
-                </view>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无客户，先分享小程序码或推广链接。</text>
-          </view>
-        </view>
+        <AgentCustomersPanel
+          v-else-if="activeTab === 'customers'"
+          :customers="channelCustomers"
+          @open-detail="openCustomerDetail"
+        />
 
-        <view v-else-if="activeTab === 'commission'" class="section-stack">
-          <view class="wallet-card agent">
-            <text class="wallet-label">可提现收益</text>
-            <text class="wallet-value">{{ formatCurrency(summaryNumber(channelSummary, "availableToWithdraw")) }}</text>
-            <text class="wallet-copy">累计 {{ formatCurrency(summaryNumber(channelSummary, "totalCommission")) }} · 已提现 {{ formatCurrency(summaryNumber(channelSummary, "withdrawn")) }}</text>
-            <button type="button" class="wallet-button" @click="requestWithdrawal">申请提现</button>
-          </view>
-          <button type="button" class="outline-button" @click="openFeaturePage(miniProgramFeaturePages.agentWithdrawals)">查看提现记录</button>
+        <AgentCommissionPanel
+          v-else-if="activeTab === 'commission'"
+          :available-to-withdraw="summaryNumber(channelSummary, 'availableToWithdraw')"
+          :total-commission="summaryNumber(channelSummary, 'totalCommission')"
+          :withdrawn="summaryNumber(channelSummary, 'withdrawn')"
+          :commissions="channelCommissions"
+          @withdraw="requestWithdrawal"
+          @open-withdrawals="openFeaturePage(miniProgramFeaturePages.agentWithdrawals)"
+          @open-detail="openAgentCommissionDetail"
+        />
 
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">分润明细</text>
-              <text class="soft-tag">{{ channelCommissions.length }} 条</text>
-            </view>
-            <view v-if="channelCommissions.length" class="list-stack">
-              <view v-for="commission in channelCommissions.slice(0, 8)" :key="rowKey(commission)" class="list-item" @click="openAgentCommissionDetail(commission)">
-                <view>
-                  <text class="list-title">订单 {{ rowString(commission, "orderId") || rowString(commission, "id") }}</text>
-                  <text class="list-meta">{{ formatDate(rowDate(commission)) }}</text>
-                </view>
-                <view class="list-side">
-                  <text class="price-text">{{ formatCurrency(rowAmount(commission)) }}</text>
-                  <text :class="['status-tag', statusTone(rowStatus(commission))]">{{ rowStatus(commission) }}</text>
-                </view>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无分润记录。</text>
-          </view>
-        </view>
-
-        <view v-else class="section-stack">
-          <view class="profile-card">
-            <image class="profile-logo" :src="loginLogo" mode="aspectFit" />
-            <view>
-              <text class="profile-name">{{ agentName }}</text>
-              <text class="profile-meta">{{ agentLevelLabel }} · {{ agentStatus }}</text>
-            </view>
-          </view>
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">代理权益</text>
-              <text class="soft-tag">已开通</text>
-            </view>
-            <view class="config-row">
-              <text>邀请码</text>
-              <text>{{ inviteCode }}</text>
-            </view>
-            <view class="config-row">
-              <text>开通条件</text>
-              <text>{{ agentCondition("openCondition") }}</text>
-            </view>
-            <view class="config-row">
-              <text>保级条件</text>
-              <text>{{ agentCondition("keepCondition") }}</text>
-            </view>
-            <button type="button" class="outline-button" @click="showChildAgentHint">拓展下级代理</button>
-            <view class="v31-batch-actions"><button class="active" @click="openFeaturePage(miniProgramFeaturePages.agentTeam)">团队成员</button><button @click="openFeaturePage(miniProgramFeaturePages.agentOrders)">客户订单</button></view>
-          </view>
-          <view class="section-card">
-            <view class="section-header compact"><text class="section-title">{{ roleLabels[userStore.currentRole] }}功能</text><text class="soft-tag">按权限展示</text></view>
-            <view class="v31-batch-actions"><button v-for="item in currentRoleMenuItems" :key="item.id" :class="{ active: item.primary }" @click="handleV531ProfileService(item.id)">{{ item.label }}</button></view>
-          </view>
-        </view>
+        <AgentProfilePanel
+          v-else
+          :logo="loginLogo"
+          :agent-name="agentName"
+          :agent-level-label="agentLevelLabel"
+          :agent-status="agentStatus"
+          :invite-code="inviteCode"
+          :open-condition="agentCondition('openCondition')"
+          :keep-condition="agentCondition('keepCondition')"
+          :role-label="roleLabels[userStore.currentRole]"
+          :menu-items="currentRoleMenuItems"
+          @expand-child-agents="showChildAgentHint"
+          @open-team="openFeaturePage(miniProgramFeaturePages.agentTeam)"
+          @open-orders="openFeaturePage(miniProgramFeaturePages.agentOrders)"
+          @menu="handleV531ProfileService"
+        />
       </template>
 
       <template v-else>
-        <view v-if="activeTab === 'overview'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header">
-              <view>
-                <text class="section-kicker">运营中心</text>
-                <text class="section-title">{{ operationName }}</text>
-              </view>
-              <text class="soft-tag">{{ operationStatus }}</text>
-            </view>
-            <view class="quick-grid">
-              <button class="quick-item" @click="selectTab('agents')">
-                <text class="quick-value">{{ operationAgents.length }}</text>
-                <text class="quick-label">代理商</text>
-              </button>
-              <button class="quick-item" @click="selectTab('orders')">
-                <text class="quick-value">{{ operationOrders.length }}</text>
-                <text class="quick-label">订单</text>
-              </button>
-              <button class="quick-item" @click="selectTab('commission')">
-                <text class="quick-value">{{ formatCurrency(operationCommissionTotal) }}</text>
-                <text class="quick-label">中心分润</text>
-              </button>
-            </view>
-          </view>
-        </view>
-
-        <view v-else-if="activeTab === 'agents'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">代理商团队</text>
-              <text class="soft-tag">{{ operationAgents.length }} 人</text>
-            </view>
-            <view v-if="operationAgents.length" class="list-stack">
-              <view v-for="agent in operationAgents" :key="rowKey(agent)" class="list-item" @click="openOperationAgentDetail(agent)">
-                <view>
-                  <text class="list-title">{{ customerName(agent) }}</text>
-                  <text class="list-meta">{{ rowString(agent, "levelLabel") || rowString(agent, "levelName") || "代理商" }}</text>
-                </view>
-                <text :class="['status-tag', statusTone(rowStatus(agent))]">{{ rowStatus(agent) }}</text>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无代理商数据。</text>
-          </view>
-        </view>
-
-        <view v-else-if="activeTab === 'orders'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">区域订单</text>
-              <text class="soft-tag">{{ operationOrders.length }} 笔</text>
-            </view>
-            <view v-if="operationOrders.length" class="list-stack">
-              <view v-for="order in operationOrders" :key="rowKey(order)" class="list-item" @click="openOperationOrderDetail(order)">
-                <view>
-                  <text class="list-title">{{ orderTitle(order) }}</text>
-                  <text class="list-meta">{{ formatDate(rowDate(order)) }}</text>
-                </view>
-                <view class="list-side">
-                  <text class="price-text">{{ formatCurrency(rowAmount(order)) }}</text>
-                  <text :class="['status-tag', statusTone(rowStatus(order))]">{{ rowStatus(order) }}</text>
-                </view>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无区域订单。</text>
-          </view>
-        </view>
-
-        <view v-else-if="activeTab === 'commission'" class="section-stack">
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">中心分润</text>
-              <text class="soft-tag">{{ operationCommissions.length }} 条</text>
-            </view>
-            <view v-if="operationCommissions.length" class="list-stack">
-              <view v-for="commission in operationCommissions" :key="rowKey(commission)" class="list-item" @click="openOperationCommissionDetail(commission)">
-                <view>
-                  <text class="list-title">{{ rowString(commission, "agentName") || "代理订单" }}</text>
-                  <text class="list-meta">{{ formatDate(rowDate(commission)) }}</text>
-                </view>
-                <text class="price-text">{{ formatCurrency(rowAmount(commission)) }}</text>
-              </view>
-            </view>
-            <text v-else class="empty-text">暂无中心分润。</text>
-          </view>
-        </view>
-
-        <view v-else class="section-stack">
-          <view class="profile-card">
-            <image class="profile-logo" :src="loginLogo" mode="aspectFit" />
-            <view>
-              <text class="profile-name">{{ operationName }}</text>
-              <text class="profile-meta">运营中心 · {{ operationStatus }}</text>
-            </view>
-          </view>
-          <view class="section-card">
-            <view class="section-header compact">
-              <text class="section-title">5000 运营中心开通包</text>
-              <text class="price-badge">5000 元</text>
-            </view>
-            <text class="body-copy">用于开通区域运营中心，承接代理商团队、订单和分润看板。</text>
-            <button type="button" class="outline-button" @click="createOperationOrder">创建运营中心订单</button>
-          </view>
-          <view class="section-card">
-            <view class="section-header compact"><text class="section-title">{{ roleLabels[userStore.currentRole] }}功能</text><text class="soft-tag">按权限展示</text></view>
-            <view class="v31-batch-actions"><button v-for="item in currentRoleMenuItems" :key="item.id" :class="{ active: item.primary }" @click="handleV531ProfileService(item.id)">{{ item.label }}</button></view>
-          </view>
-        </view>
+        <OperationOverviewPanel
+          v-if="activeTab === 'overview'"
+          :operation-name="operationName"
+          :operation-status="operationStatus"
+          :operation-commission-total="operationCommissionTotal"
+          :operation-agents="operationAgents"
+          :operation-orders="operationOrders"
+          @tab="selectTab"
+        />
+        <OperationAgentsPanel
+          v-else-if="activeTab === 'agents'"
+          :agents="operationAgents"
+          @open-detail="openOperationAgentDetail"
+        />
+        <OperationOrdersPanel
+          v-else-if="activeTab === 'orders'"
+          :orders="operationOrders"
+          @open-detail="openOperationOrderDetail"
+        />
+        <OperationCommissionPanel
+          v-else-if="activeTab === 'commission'"
+          :commissions="operationCommissions"
+          @open-detail="openOperationCommissionDetail"
+        />
+        <OperationProfilePanel
+          v-else
+          :logo="loginLogo"
+          :operation-name="operationName"
+          :operation-status="operationStatus"
+          :role-label="roleLabels[userStore.currentRole]"
+          :menu-items="currentRoleMenuItems"
+          @create-order="createOperationOrder"
+          @menu="handleV531ProfileService"
+        />
       </template>
     </view>
 
@@ -858,28 +688,14 @@
     <!-- #endif -->
   </view>
 
-  <BottomSheet
+  <VideoModelSheet
     :visible="videoModelSheetVisible"
-    title="选择生成模型"
+    :options="videoModelOptions"
+    :selected-code="selectedVideoModelCode"
+    :switching="videoModelSwitching"
     @close="closeVideoModelSheet"
-  >
-    <scroll-view scroll-y class="video-model-sheet-list">
-      <button
-        v-for="item in videoModelOptions"
-        :key="item.code"
-        type="button"
-        :class="['video-model-sheet-item', { active: item.code === selectedVideoModelCode }]"
-        :disabled="videoModelSwitching"
-        @click="selectVideoModelFromSheet(item.code)"
-      >
-        <view class="video-model-sheet-copy">
-          <text class="video-model-sheet-title">{{ videoModelTitle(item) }}</text>
-          <text class="video-model-sheet-subtitle">{{ videoModelSubtitle(item) }}</text>
-        </view>
-        <text v-if="item.code === selectedVideoModelCode" class="video-model-sheet-check">✓</text>
-      </button>
-    </scroll-view>
-  </BottomSheet>
+    @select="selectVideoModelFromSheet"
+  />
 </template>
 
 <script setup lang="ts">
@@ -895,8 +711,6 @@ import {
   transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
-
-const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
 import { uploadReferenceImage } from "../api/files";
 import { inspirationAPI } from "../features/inspiration/api";
 import {
@@ -916,6 +730,21 @@ import {
   sortVideoModelsByListPrice,
   videoModelSubtitle as formatVideoModelSubtitle,
 } from "../features/generation/videoModelPricing";
+import {
+  assetDefaultSlot as catalogAssetDefaultSlot,
+  assetFilters as catalogAssetFilters,
+  creationModules as catalogCreationModules,
+  homeModuleSlot as catalogHomeModuleSlot,
+  pptTopics as catalogPptTopics,
+  roleNames as catalogRoleNames,
+  roleTabs as catalogRoleTabs,
+  studioModuleSlot as catalogStudioModuleSlot,
+  agentWorkbenchTabs as catalogAgentWorkbenchTabs,
+  operationWorkbenchTabs as catalogOperationWorkbenchTabs,
+  type WorkbenchAssetFilter,
+  type WorkbenchCreationModule,
+} from "../features/workbench/catalog";
+import { createWorkbenchNavigation } from "../features/workbench/navigation";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
 import MiniProgramMineExperience from "./MiniProgramMineExperience.vue";
@@ -928,7 +757,24 @@ import V531ProfilePage from "./v531/V531ProfilePage.vue";
 import V531StudioPage from "./v531/V531StudioPage.vue";
 import V531TabBar from "./v531/V531TabBar.vue";
 import FreeImageEditCreation from "./creation/FreeImageEditCreation.vue";
+import VideoModelSheet from "./workbench/creation/VideoModelSheet.vue";
 import BottomSheet from "./auth/BottomSheet.vue";
+import WorkbenchHeader from "./workbench/common/WorkbenchHeader.vue";
+import RoleSwitcher from "./workbench/common/RoleSwitcher.vue";
+import StateCard from "./workbench/common/StateCard.vue";
+import UserHomePanel from "./workbench/user/UserHomePanel.vue";
+import UserAssetsPanel from "./workbench/user/UserAssetsPanel.vue";
+import AgentOverviewPanel from "./workbench/agent/AgentOverviewPanel.vue";
+import AgentCustomersPanel from "./workbench/agent/AgentCustomersPanel.vue";
+import AgentCommissionPanel from "./workbench/agent/AgentCommissionPanel.vue";
+import AgentProfilePanel from "./workbench/agent/AgentProfilePanel.vue";
+import OperationOverviewPanel from "./workbench/operation/OperationOverviewPanel.vue";
+import OperationAgentsPanel from "./workbench/operation/OperationAgentsPanel.vue";
+import OperationOrdersPanel from "./workbench/operation/OperationOrdersPanel.vue";
+import OperationCommissionPanel from "./workbench/operation/OperationCommissionPanel.vue";
+import OperationProfilePanel from "./workbench/operation/OperationProfilePanel.vue";
+import CreationModeGrid from "./workbench/creation/CreationModeGrid.vue";
+import type { GenerationNotice } from "./workbench/creation/types";
 import { fetchAssetDetail } from "../features/assets/api";
 import { beginWorksPerformanceStep } from "../features/assets/performance";
 import { usePageConfigStore, type AppPageCode } from "../stores/pageConfig";
@@ -951,19 +797,20 @@ import type {
   VideoGenerationEstimate,
 } from "@xianzhi/business-sdk";
 import type { ModelInfo, VideoGenerationMode, VideoModelCapabilities } from "@xianzhi/shared-types";
-import type { AppRole, Asset, AuthResponse, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
+import type { AppRole, Asset, AuthResponse, AuthUser, ChannelAgent, ChannelCenterResponse, GenerationTask } from "../types";
 import {
   miniProgramCreationPages,
   miniProgramEnterprisePages,
   miniProgramFeaturePages,
   miniProgramMinePages,
-  rolePage
+  rolePage,
+  type MiniProgramCreationMode,
+  type MiniProgramRoleId,
+  type MiniProgramTabId,
 } from "../config/miniProgramPages";
-import type {
-  MiniProgramCreationMode,
-  MiniProgramRoleId,
-  MiniProgramTabId
-} from "../config/miniProgramPages";
+
+const { navigationStyle: miniWorkbenchSafeAreaStyle } = useMiniProgramNavigation();
+const { replacePage, openStandalonePage } = createWorkbenchNavigation();
 
 function updateFreeImageEditPrompt(prompt: string) {
   creationPrompt.value = prompt;
@@ -1045,7 +892,6 @@ type AnyRecord = Record<string, unknown>;
 type RoleId = MiniProgramRoleId;
 type TabId = MiniProgramTabId;
 type CreationMode = MiniProgramCreationMode;
-type AssetFilter = "all" | "image" | "video" | "document" | "favorite";
 
 const roleToAppRole: Record<RoleId, AppRole> = {
   user: "USER",
@@ -1081,17 +927,6 @@ interface PromotionInfo {
   landingURL?: string;
 }
 
-interface GenerationNotice {
-  id: string;
-  title: string;
-  status: string;
-  tone: "pending" | "success" | "danger";
-  resultId?: string;
-  resultUrl?: string;
-  resultType?: CreationMode;
-  progress?: number;
-}
-
 interface ActiveGenerationSnapshot {
   id: string;
   mode: CreationMode;
@@ -1102,55 +937,12 @@ interface ActiveGenerationSnapshot {
   inspirationTemplateId?: string;
 }
 
-const roleTabs: Record<RoleId, Array<{ id: TabId; label: string; icon: string }>> = {
-  user: [
-    { id: "home", label: "首页", icon: "⌂" },
-    { id: "create", label: "创作", icon: "＋" },
-    { id: "assets", label: "作品", icon: "▣" },
-    { id: "mine", label: "我的", icon: "○" }
-  ],
-  agent: [
-    { id: "overview", label: "概览", icon: "总" },
-    { id: "promotion", label: "推广", icon: "推" },
-    { id: "customers", label: "客户", icon: "客" },
-    { id: "commission", label: "分润", icon: "润" },
-    { id: "mine", label: "我的", icon: "我" }
-  ],
-  operation: [
-    { id: "overview", label: "概览", icon: "总" },
-    { id: "agents", label: "代理", icon: "代" },
-    { id: "orders", label: "订单", icon: "单" },
-    { id: "commission", label: "分润", icon: "润" },
-    { id: "mine", label: "我的", icon: "我" }
-  ]
-};
-
-const roleNames: Record<RoleId, string> = {
-  user: "普通用户",
-  agent: "代理商",
-  operation: "运营中心"
-};
-
-const allCreationModules = [
-  { id: "image" as CreationMode, icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "约 10 点/张", tone: "orange" },
-  { id: "ppt" as CreationMode, icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
-  { id: "video" as CreationMode, icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "grok-imagine-1.5-video", cost: "约 15 积分/秒", tone: "green" },
-  { id: "agent" as CreationMode, icon: "星", name: "AI Agent", homeName: "LOGO", description: "经营助手与知识库", model: "agent-workflow", cost: "按任务计费", tone: "blue" },
-  { id: "infographic" as CreationMode, icon: "表", name: "自由P图", homeName: "自由P图", description: "杂志封面/去除路人/精致补妆", model: "infographic", cost: "约 20 点/份", tone: "orange" },
-  { id: "review" as CreationMode, icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" }
-];
-
-const allowedCreationModes = ref<CreationMode[]>(["image", "infographic", "video", "montage"]);
-const creationModules = computed(() => allCreationModules.filter(item => allowedCreationModes.value.includes(item.id)));
-
-const pptTopics = ["企业营销增长", "数字员工方案", "GEO品牌曝光", "短视频矩阵", "项目路演计划", "糖尿病患教"];
-const assetFilters: Array<{ id: AssetFilter; label: string }> = [
-  { id: "all", label: "全部" },
-  { id: "image", label: "图片" },
-  { id: "video", label: "视频" },
-  { id: "document", label: "PPT" },
-  { id: "favorite", label: "收藏" }
-];
+const allowedCreationModes = ref<MiniProgramCreationMode[]>(["image", "infographic", "video", "montage"]);
+const creationModules = computed(() => catalogCreationModules.filter(item => allowedCreationModes.value.includes(item.id)));
+const pptTopics = catalogPptTopics;
+const assetFilters = catalogAssetFilters;
+const roleTabs = catalogRoleTabs;
+const roleNames = catalogRoleNames;
 
 const auth = ref<AuthResponse | null>(null);
 const token = ref("");
@@ -1224,7 +1016,7 @@ const pptSlideCount = ref(10);
 const pptDynamic = ref(true);
 const pptLanguage = ref<"zh" | "en">("zh");
 const pptModel = ref("GPT-4o-mini");
-const assetFilter = ref<AssetFilter>("all");
+const assetFilter = ref<WorkbenchAssetFilter>("all");
 const assetSearch = ref("");
 const mineView = ref<MineView>(props.initialMineView);
 const selectedMinePurchase = ref<MinePurchaseOption | null>(null);
@@ -1405,7 +1197,7 @@ const currentRoleMenuItems = computed(() => RoleMenuConfig[userStore.currentRole
   .filter(item => !(item.id === "upgrade-agent" && reviewModeHides("hideAgentCenter")))
   .filter(item => !(item.id.includes("commission") && reviewModeHides("hideCommission"))));
 
-const activeCreation = computed(() => creationModules.value.find(item => item.id === creationMode.value) || creationModules.value[0] || allCreationModules[0]);
+const activeCreation = computed(() => creationModules.value.find(item => item.id === creationMode.value) || creationModules.value[0] || catalogCreationModules[0]);
 const activeCreationName = computed(() => activeCreation.value.name);
 const activeCreationModel = computed(() => creationMode.value === "video" && selectedVideoModelCode.value
   ? selectedVideoModelCode.value
@@ -1473,7 +1265,7 @@ function generationStatusText(status: string) {
 }
 
 function creationNameForMode(mode: CreationMode) {
-  return allCreationModules.find(item => item.id === mode)?.name || "AI 创作";
+  return catalogCreationModules.find(item => item.id === mode)?.name || "AI 创作";
 }
 
 function restoredCreationString(...keys: string[]) {
@@ -1495,7 +1287,7 @@ const currentPageTitle = computed(() => {
   return "知启云 AI";
 });
 const creationDetailTitle = computed(
-  () => allCreationModules.find(module => module.id === creationMode.value)?.name || "AI 创作",
+  () => catalogCreationModules.find(module => module.id === creationMode.value)?.name || "AI 创作", 
 );
 
 const currentPageSubtitle = computed(() => {
@@ -1509,7 +1301,7 @@ const currentPageSubtitle = computed(() => {
 });
 
 const channelSummary = computed(() => (channelCenter.value?.summary || {}) as AnyRecord);
-const channelCustomers = computed(() => listOf(channelCenter.value?.customers));
+const channelCustomers = computed(() => channelCenter.value?.customers || []);
 const channelCommissions = computed(() => listOf(channelCenter.value?.commissions));
 const channelWithdrawals = computed(() => listOf(channelCenter.value?.withdrawals));
 const currentAgent = computed(() => (channelCenter.value?.agent || profile.value?.agent || auth.value?.agent || null) as (ChannelAgent & AnyRecord) | null);
@@ -2009,64 +1801,6 @@ function requestLogin(reason = "登录后可继续使用此功能") {
   return false;
 }
 
-function replacePage(url: string) {
-  const pages = getCurrentPages();
-  const currentPage = pages[pages.length - 1] as { route?: string } | undefined;
-  const targetRoute = url.replace(/^\//, "").split("?")[0];
-  if (currentPage?.route === targetRoute) return;
-  const primaryTabRoutes = new Set(
-    (Object.keys(roleTabs) as RoleId[]).flatMap(role => roleTabs[role].map(tab => rolePage(role, tab.id).replace(/^\//, ""))),
-  );
-  const userNativeTabRoutes = new Set([
-    "pages/user/UserHomePage",
-    "pages/user/UserCreationPage",
-    "pages/user/UserAssetsPage",
-    "pages/user/UserMinePage",
-  ]);
-  if (userNativeTabRoutes.has(targetRoute)) {
-    uni.switchTab({
-      url,
-      fail: () => uni.reLaunch({ url }),
-    });
-    return;
-  }
-  if (primaryTabRoutes.has(targetRoute)) {
-    uni.reLaunch({ url });
-    return;
-  }
-  uni.redirectTo({
-    url,
-    fail: () => uni.reLaunch({ url })
-  });
-}
-
-function openStandalonePage(url: string) {
-  if (!url) {
-    uni.showToast({ title: "页面地址为空", icon: "none" });
-    return;
-  }
-  const pages = getCurrentPages();
-  const currentPage = pages[pages.length - 1] as { route?: string } | undefined;
-  const targetRoute = url.replace(/^\//, "").split("?")[0];
-  if (currentPage?.route === targetRoute) return;
-  uni.navigateTo({
-    url,
-    fail(navigateError: unknown) {
-      uni.redirectTo({
-        url,
-        fail(redirectError: unknown) {
-          uni.reLaunch({
-            url,
-            fail(relaunchError: unknown) {
-              console.warn("[xianzhi] failed to open standalone page", url, navigateError, redirectError, relaunchError);
-              uni.showToast({ title: "页面打开失败，请重试", icon: "none" });
-            }
-          });
-        }
-      });
-    }
-  });
-}
 
 async function switchRole(role: RoleId) {
   if (!requestLogin("登录后可切换工作台身份")) return;
@@ -2121,17 +1855,15 @@ function cyclePptModel() {
   pptModel.value = models[(index + 1) % models.length] || models[0];
 }
 
-function homeModuleSlot(mode: CreationMode) { return ({ image: "home.quick.poster", ppt: "home.quick.ppt", video: "home.quick.video", agent: "home.quick.knowledge", infographic: "home.capability.office", review: "home.capability.employee", montage: "home.capability.montage" } as Record<CreationMode, string>)[mode]; }
-function studioModuleSlot(mode: CreationMode) { return ({ image: "studio.template.poster", ppt: "studio.template.ppt", video: "studio.template.video", agent: "studio.template.knowledge", infographic: "studio.template.office", review: "studio.template.employee", montage: "home.capability.montage" } as Record<CreationMode, string>)[mode]; }
-function assetDefaultSlot(mediaType: string) { if (mediaType === "image") return "assets.default.image"; if (mediaType === "video") return "assets.default.video"; if (mediaType === "document") return "assets.default.document"; return "assets.default.other"; }
+
 
 function selectUserTab(tab: TabId) {
   if (!["home", "create"].includes(tab) && !requestLogin("登录后可查看作品、账户与权益")) return;
   replacePage(rolePage("user", tab));
 }
 
-const agentWorkbenchTabs = new Set<TabId>(["overview", "promotion", "customers", "commission", "mine"]);
-const operationWorkbenchTabs = new Set<TabId>(["overview", "agents", "orders", "commission", "mine"]);
+const agentWorkbenchTabs = catalogAgentWorkbenchTabs;
+const operationWorkbenchTabs = catalogOperationWorkbenchTabs;
 
 function selectTab(tab: TabId) {
   if (activeRole.value === "agent") {
@@ -2739,7 +2471,7 @@ function openFeaturePage(url: string) {
   openStandalonePage(url);
 }
 
-function openCustomerDetail(customer: AnyRecord) {
+function openCustomerDetail(customer: AuthUser) {
   const id = rowString(customer, "id") || rowString(customer, "userId");
   if (id) openFeaturePage(`${miniProgramFeaturePages.agentCustomerDetail}?id=${encodeURIComponent(id)}`);
 }

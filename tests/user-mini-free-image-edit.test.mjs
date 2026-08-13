@@ -110,9 +110,11 @@ test("uses shared safe-area variables without inventing an App capsule", async (
 // === Task 3: MiniProgramRoleWorkbench integration tests ===
 
 const workbenchURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url);
+const catalogURL = new URL("../apps/user-uni/src/features/workbench/catalog.ts", import.meta.url);
 
 test("integrates free-image-edit without bypassing the existing generation chain", async () => {
   const source = await readFile(workbenchURL, "utf8");
+  const catalogSource = await readFile(catalogURL, "utf8");
   assert.match(source, /import FreeImageEditCreation/);
   assert.match(source, /isFreeImageEditPage/);
   assert.match(source, /creationMode\.value === "infographic"/);
@@ -123,9 +125,9 @@ test("integrates free-image-edit without bypassing the existing generation chain
   assert.match(source, /defaultFreeImageEditPrompt/);
   assert.match(source, /businessSdk\.generation\.createTask/);
   assert.match(source, /style:.*infographic/);
-  assert.match(source, /name: "自由P图"/);
-  assert.match(source, /homeName: "自由P图"/);
-  assert.doesNotMatch(source, /name: "信息图"/);
+  assert.match(catalogSource, /name:\s*"自由P图"/);
+  assert.match(catalogSource, /homeName:\s*"自由P图"/);
+  assert.doesNotMatch(catalogSource, /name:\s*"信息图"/);
 });
 
 test("renders free-image-edit as a full page without outer creation chrome", async () => {

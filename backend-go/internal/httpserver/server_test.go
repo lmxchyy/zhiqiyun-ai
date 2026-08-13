@@ -29,6 +29,21 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 )
 
+func referDemoUserToDefaultAgent(t *testing.T, store *jsonStore) {
+	t.Helper()
+	if err := store.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.Users {
+			if data.Users[i].ID == "user_000002" {
+				data.Users[i].ReferredBy = "user_000003"
+				return nil
+			}
+		}
+		return errors.New("demo user not found")
+	}); err != nil {
+		t.Fatalf("refer demo user to default agent: %v", err)
+	}
+}
+
 func TestPublicModelsDoNotLeakProviderRouting(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	handler := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}).Handler
@@ -942,11 +957,13 @@ func TestGenerationAssetNameUsesTaskType(t *testing.T) {
 
 func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	referDemoUserToDefaultAgent(t, store)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
@@ -2327,11 +2344,13 @@ func TestAdminAuthMergePreviewBlocksChannelAgentConflict(t *testing.T) {
 
 func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	referDemoUserToDefaultAgent(t, store)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
@@ -2714,11 +2733,13 @@ func testEncryptWeChatPayResource(t *testing.T, key string, nonce string, associ
 
 func TestRechargeCommissionUsesUpdatedRuleRate(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	referDemoUserToDefaultAgent(t, store)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
