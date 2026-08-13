@@ -144,14 +144,13 @@ The `postgres-backup` service in `compose.prod.yml` also writes automatic backup
 ./backups/postgres:/backups
 ```
 
-Automatic backups are compressed and validated before an atomic rename. The
-default retention period is 30 days. At most one expired automatic
-`xianzhi-*.sql` or `xianzhi-*.sql.gz` file is removed after each successful
-backup; manual `db_*.sql` release backups are never selected by this rotation.
-Set `BACKUP_RETENTION_DAYS` to adjust the policy. When the backup filesystem
-has less than `BACKUP_MIN_FREE_BYTES` available (10 GiB by default), the
-automatic backup is skipped and an error is logged instead of consuming the
-remaining disk.
+Automatic backups are gzip-compressed, validated, and atomically renamed after
+success. `BACKUP_RETENTION_DAYS` defaults to 30 days, but the service only
+reports the number of expired automatic backups; it does not delete them.
+Review the reported list and remove files one at a time after confirming an
+off-host copy. Manual `db_*.sql` release backups are excluded. New automatic
+backups are skipped when free space falls below `BACKUP_MIN_FREE_BYTES`
+(10 GiB by default).
 
 If older backups already exist in the Docker volume `postgres-backups`, they will not be automatically migrated to `./backups/postgres`. Copy them manually first, verify the copied files, then clean the old volume only after confirmation.
 
@@ -188,20 +187,23 @@ PostgreSQL, Redis, RabbitMQ, and MinIO should not be exposed directly to the pub
 
 The current production file uses fixed versions for PostgreSQL, Redis, and RabbitMQ. MinIO is pinned by default through `MINIO_IMAGE`; update that value only after testing a new MinIO release.
 
-All production containers use Docker's `local` logging driver with bounded
-rotation (`DOCKER_LOG_MAX_SIZE=20m`, `DOCKER_LOG_MAX_FILE=5` by default).
-`disk-monitor` reports transitions at 70%, 80%, and 90% usage and becomes unhealthy
-at 90% usage or when free space falls below 10 GiB. `deploy.sh` enforces
-the same 10 GiB hard floor before it creates a Compose backup or starts a
-Docker build. RabbitMQ persists a 2 GiB disk alarm watermark by default; verify
-the effective value after deployment with:
+Production containers use Docker's bounded `local` log driver (20 MB × 5 files
+per container by default). The `disk-monitor` service reports state transitions
+at 70%, 80%, and 90% usage and becomes unhealthy at the emergency threshold or
+when free space falls below 10 GiB. `deploy.sh` applies the same 10 GiB hard
+floor before creating a Compose backup or starting a build. RabbitMQ keeps a
+2 GiB disk reserve. Verify these guardrails after a release with:
 
 ```bash
-docker compose -f compose.prod.yml --env-file .env.production exec -T rabbitmq \
-  rabbitmq-diagnostics -q environment | grep disk_free_limit
 docker compose -f compose.prod.yml --env-file .env.production ps disk-monitor
 docker compose -f compose.prod.yml --env-file .env.production logs --tail=20 disk-monitor
+docker compose -f compose.prod.yml --env-file .env.production exec -T rabbitmq \
+  rabbitmq-diagnostics -q check_alarms
 ```
+
+The MinIO service still uses one Docker volume on one host. These disk
+guardrails reduce recurrence risk but do not provide redundancy; synchronize
+important objects to independent storage and periodically test restoration.
 
 The Docker image does not install OfficeCLI by default. If you explicitly build with `INSTALL_OFFICECLI=true`, set `OFFICECLI_INSTALL_SHA256` to the reviewed installer script checksum; the build fails before execution when the checksum is missing or mismatched.
 

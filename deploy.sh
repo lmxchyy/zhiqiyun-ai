@@ -9,7 +9,6 @@ COMPOSE_FILE="${COMPOSE_FILE:-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 GIT_BRANCH="${GIT_BRANCH:-}"
-DEPLOY_MIN_FREE_BYTES_OVERRIDE="${DEPLOY_MIN_FREE_BYTES:-}"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 
 log() {
@@ -52,20 +51,12 @@ log "Docker platform: $TARGET_PLATFORM"
 [ -f "$ENV_FILE" ] || fail "$ENV_FILE does not exist. Create it and fill in the production values first."
 [ -f "$COMPOSE_FILE" ] || fail "$COMPOSE_FILE does not exist."
 
-DEPLOY_MIN_FREE_BYTES_FROM_FILE="$(sed -n 's/^[[:space:]]*DEPLOY_MIN_FREE_BYTES=//p' "$ENV_FILE" | tail -n 1)"
-DEPLOY_MIN_FREE_BYTES="${DEPLOY_MIN_FREE_BYTES_OVERRIDE:-${DEPLOY_MIN_FREE_BYTES_FROM_FILE:-10737418240}}"
-
-case "$DEPLOY_MIN_FREE_BYTES" in
-  ''|*[!0-9]*) fail "DEPLOY_MIN_FREE_BYTES must be a positive integer." ;;
-esac
-[ "$DEPLOY_MIN_FREE_BYTES" -gt 0 ] || fail "DEPLOY_MIN_FREE_BYTES must be greater than zero."
-
-AVAILABLE_KB="$(df -Pk "$SCRIPT_DIR" | awk 'NR == 2 {print $4}')"
-AVAILABLE_BYTES="$((AVAILABLE_KB * 1024))"
-log "Available deployment filesystem bytes: $AVAILABLE_BYTES"
-if [ "$AVAILABLE_BYTES" -lt "$DEPLOY_MIN_FREE_BYTES" ]; then
-  fail "Insufficient disk space: $AVAILABLE_BYTES bytes available, $DEPLOY_MIN_FREE_BYTES required."
-fi
+log "Checking deployment filesystem capacity..."
+DISK_WARN_PERCENT="${DISK_WARN_PERCENT:-70}" \
+DISK_CRITICAL_PERCENT="${DISK_CRITICAL_PERCENT:-80}" \
+DISK_EMERGENCY_PERCENT="${DISK_EMERGENCY_PERCENT:-90}" \
+DISK_MIN_FREE_BYTES="${DEPLOY_MIN_FREE_BYTES:-10737418240}" \
+  sh ops/disk-guard.sh "$SCRIPT_DIR" || fail "Insufficient disk space for a safe deployment."
 
 # 生产服务器不应保留未提交的源码修改，防止部署结果与 GitHub 不一致。
 if ! git diff --quiet || ! git diff --cached --quiet; then

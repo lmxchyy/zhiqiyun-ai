@@ -320,22 +320,18 @@ services:
 
           file="/backups/xianzhi-$$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
           temp_file="$$file.part"
-          if ! pg_dump -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" --clean --if-exists | gzip -c > "$$temp_file"; then
+          if pg_dump -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" --clean --if-exists | gzip -c > "$$temp_file"; then
+            gzip -t "$$temp_file"
+            test -s "$$temp_file"
+            mv "$$temp_file" "$$file"
+            echo "Created PostgreSQL backup: $$file"
+          else
             rm -f -- "$$temp_file"
             echo "PostgreSQL backup failed."
-            sleep "$${BACKUP_INTERVAL_SECONDS}"
-            continue
           fi
-          gzip -t "$$temp_file"
-          test -s "$$temp_file"
-          mv "$$temp_file" "$$file"
-          echo "Created PostgreSQL backup: $$file"
 
-          expired_file="$$(find /backups -maxdepth 1 -type f \( -name 'xianzhi-*.sql' -o -name 'xianzhi-*.sql.gz' \) -mtime +"$${BACKUP_RETENTION_DAYS}" -print -quit)"
-          if [ -n "$$expired_file" ]; then
-            echo "Removing one expired automatic backup: $$expired_file"
-            rm -f -- "$$expired_file"
-          fi
+          expired_backup_count="$$(find /backups -maxdepth 1 -type f \( -name 'xianzhi-*.sql' -o -name 'xianzhi-*.sql.gz' \) -mtime +"$${BACKUP_RETENTION_DAYS}" | wc -l)"
+          echo "expired_backup_count=$$expired_backup_count retention_days=$${BACKUP_RETENTION_DAYS}"
           sleep "$${BACKUP_INTERVAL_SECONDS}"
         done
     depends_on:
@@ -413,7 +409,6 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:?RABBITMQ_DEFAULT_USER is required}"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS is required}"
-      RABBITMQ_DISK_FREE_LIMIT: "${RABBITMQ_DISK_FREE_LIMIT:-2GB}"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./ops/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
@@ -459,33 +454,11 @@ services:
       DISK_MONITOR_INTERVAL_SECONDS: "${DISK_MONITOR_INTERVAL_SECONDS:-60}"
     volumes:
       - disk-monitor-probe:/host-volume:ro
-    command:
-      - sh
-      - -c
-      - |
-        set -eu
-        previous_state=""
-        while true; do
-          available_kb="$$(df -Pk /host-volume | awk 'NR == 2 {print $$4}')"
-          used_percent="$$(df -Pk /host-volume | awk 'NR == 2 {gsub("%", "", $$5); print $$5}')"
-          available_bytes="$$((available_kb * 1024))"
-          disk_state=OK
-          if [ "$$used_percent" -ge "$${DISK_EMERGENCY_PERCENT}" ] || [ "$$available_bytes" -le "$${DISK_MIN_FREE_BYTES}" ]; then
-            disk_state=EMERGENCY
-          elif [ "$$used_percent" -ge "$${DISK_CRITICAL_PERCENT}" ]; then
-            disk_state=CRITICAL
-          elif [ "$$used_percent" -ge "$${DISK_WARN_PERCENT}" ]; then
-            disk_state=WARNING
-          fi
-          printf '%s\n' "$$disk_state" > /tmp/disk-state
-          if [ "$$disk_state" != "$$previous_state" ]; then
-            echo "disk_state=$$disk_state used_percent=$$used_percent available_bytes=$$available_bytes"
-            previous_state="$$disk_state"
-          fi
-          sleep "$${DISK_MONITOR_INTERVAL_SECONDS}"
-        done
+      - ./ops/disk-guard.sh:/usr/local/bin/disk-guard.sh:ro
+      - ./ops/disk-monitor.sh:/usr/local/bin/disk-monitor.sh:ro
+    command: ["sh", "/usr/local/bin/disk-monitor.sh", "/host-volume"]
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/disk-state && test \"$$(cat /tmp/disk-state)\" != EMERGENCY"]
+      test: ["CMD-SHELL", "grep -Eq '^(OK|WARNING|CRITICAL)$' /tmp/disk-state"]
       interval: 30s
       timeout: 3s
       retries: 2
