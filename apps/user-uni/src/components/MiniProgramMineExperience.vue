@@ -1,54 +1,24 @@
 <template>
   <view class="mine-experience">
     <template v-if="view === 'overview'">
-      <view class="mine-v5-profile-card">
-        <AppImage v-if="headerBackground" class="mine-v5-header-background" :src="headerBackground" alt="个人中心背景" width="100%" height="100%" radius="12px" :lazy-load="false" />
-        <view class="mine-v5-avatar"><AppImage v-if="avatarUrl || avatarFallback" :src="avatarUrl" :fallback="avatarFallback" local-fallback="/static/fallbacks/default-avatar.jpg" :alt="displayName" width="58px" height="58px" radius="50%" :lazy-load="false" /><text v-else>{{ avatarText }}</text></view>
-        <view class="mine-v5-profile-copy">
-          <text class="mine-v5-profile-name">{{ displayName }}</text>
-          <text class="mine-v5-profile-type">微信用户</text>
-        </view>
-        <button class="mine-v5-edit" @click="openFeaturePage(miniProgramFeaturePages.userProfileEdit)">编辑资料 ›</button>
-      </view>
-
-      <button class="mine-v5-agent-entry" @click="hasAgentRole ? $emit('switch-agent') : $emit('navigate', 'agent-upgrade')">
-        <view class="mine-v5-agent-copy">
-          <text>{{ hasAgentRole ? "代理商角色已开通" : "代理商角色未开通" }}</text>
-          <text>{{ hasAgentRole ? "查看推广、客户与订单分润" : "推广客户并获得订单分润" }}</text>
-        </view>
-        <text class="mine-v5-agent-action">{{ hasAgentRole ? "进入工作台 ›" : "升级 ›" }}</text>
-      </button>
-
-      <view class="mine-v5-balance-card" @click="openWallet">
-        <AppImage v-if="memberBackground" class="mine-v5-member-background" :src="memberBackground" alt="会员背景" width="100%" height="100%" radius="12px" />
-        <text class="mine-v5-balance-title">我的剩余点数</text>
-        <view class="mine-v5-balance-value"><text>{{ formatNumber(pointBalance) }}</text><text>点</text></view>
-        <button class="mine-v5-recharge" @click.stop="openFeaturePage(miniProgramFeaturePages.userRechargePlans)">去充值</button>
-      </view>
-
-      <view class="mine-v5-menu-card">
-        <button class="mine-v5-menu-row" @click="openFeaturePage(miniProgramFeaturePages.userRechargePlans)">
-          <text class="mine-v5-menu-icon purple">充</text><text class="mine-v5-menu-label">充值中心</text><text class="mine-v5-chevron">›</text>
-        </button>
-        <button class="mine-v5-menu-row" @click="openTaskRecords">
-          <text class="mine-v5-menu-icon blue">任</text><text class="mine-v5-menu-label">任务记录</text><text class="mine-v5-chevron">›</text>
-        </button>
-        <button class="mine-v5-menu-row" @click="$emit('navigate', 'usage-details')">
-          <text class="mine-v5-menu-icon violet">点</text><text class="mine-v5-menu-label">点数明细</text><text class="mine-v5-chevron">›</text>
-        </button>
-        <button class="mine-v5-menu-row" @click="openFeaturePage(miniProgramFeaturePages.userOrders)">
-          <text class="mine-v5-menu-icon orange">单</text><text class="mine-v5-menu-label">我的订单</text><text class="mine-v5-chevron">›</text>
-        </button>
-        <button class="mine-v5-menu-row" @click="$emit('navigate', 'invite-promotion')">
-          <text class="mine-v5-menu-icon pink">邀</text><text class="mine-v5-menu-label">邀请与推广</text><text class="mine-v5-chevron">›</text>
-        </button>
-        <button class="mine-v5-menu-row" @click="$emit('navigate', 'role-permissions')">
-          <text class="mine-v5-menu-icon blue">权</text><text class="mine-v5-menu-label">角色与权限</text><text class="mine-v5-chevron">›</text>
-        </button>
-        <button class="mine-v5-menu-row" @click="openFeaturePage(miniProgramFeaturePages.userSettings)">
-          <text class="mine-v5-menu-icon slate">设</text><text class="mine-v5-menu-label">账户设置</text><text class="mine-v5-chevron">›</text>
-        </button>
-      </view>
+      <MineOverviewPanel
+        :display-name="displayName"
+        :avatar-url="avatarUrl"
+        :avatar-fallback="avatarFallback"
+        :header-background="headerBackground"
+        :member-background="memberBackground"
+        :point-balance="pointBalance"
+        :roles="roles"
+        :current-role="currentRole"
+        @navigate="$emit('navigate', $event)"
+        @edit-profile="openFeaturePage(miniProgramFeaturePages.userProfileEdit)"
+        @switch-agent="$emit('switch-agent')"
+        @open-wallet="openWallet"
+        @recharge="openFeaturePage(miniProgramFeaturePages.userRechargePlans)"
+        @open-task-records="openTaskRecords"
+        @open-orders="openFeaturePage(miniProgramFeaturePages.userOrders)"
+        @open-settings="openFeaturePage(miniProgramFeaturePages.userSettings)"
+      />
     </template>
 
     <template v-else>
@@ -57,81 +27,72 @@
         <view><text>{{ detailTitle }}</text><text>{{ detailSubtitle }}</text></view>
       </view>
 
-      <view v-if="view === 'recharge-history'" class="mine-detail-stack">
-        <view class="record-summary dark"><text>累计充值</text><text>{{ formatCurrency(totalRechargeCents) }}</text><text>累计到账 {{ formatNumber(totalRechargePoints) }} 点</text><button @click="$emit('invoice')">电子凭证</button></view>
-        <view class="filter-strip"><button :class="{ active: orderFilter === 'all' }" @click="orderFilter = 'all'">全部</button><button :class="{ active: orderFilter === 'success' }" @click="orderFilter = 'success'">成功</button><button :class="{ active: orderFilter === 'refund' }" @click="orderFilter = 'refund'">退款</button><text @click="cycleHistoryRange">{{ historyRangeLabel }}⌄</text></view>
-        <view class="record-list">
-          <view v-if="filteredOrders.length" v-for="order in filteredOrders.slice(0, 8)" :key="rowKey(order)" class="record-row" @click="openOrderDetail(order)">
-            <text :class="['record-icon', statusTone(order)]">{{ statusTone(order) === 'success' ? '✓' : '单' }}</text>
-            <view><text>{{ orderTitle(order) }}</text><text>{{ orderMeta(order) }}</text></view>
-            <text :class="['record-value', statusTone(order)]">{{ orderValue(order) }}</text>
-          </view>
-          <view v-else class="mine-empty"><text>暂无充值订单</text><text>完成充值后，到账与退款状态会显示在这里。</text></view>
-        </view>
-        <button class="secondary-action" @click="$emit('invoice')">查看电子凭证</button>
-      </view>
+      <MineRechargeHistoryPanel
+        v-else-if="view === 'recharge-history'"
+        :filtered-orders="filteredOrders"
+        :active-filter="orderFilter"
+        :history-range-label="historyRangeLabel"
+        :total-recharge-cents="totalRechargeCents"
+        :total-recharge-points="totalRechargePoints"
+        @invoice="$emit('invoice')"
+        @update:filter="orderFilter = $event"
+        @cycle-range="cycleHistoryRange"
+        @open-detail="openOrderDetail"
+      />
 
-      <view v-else-if="view === 'usage-details'" class="mine-detail-stack">
-        <view class="usage-summary">
-          <text>本月消耗</text><text>{{ formatNumber(monthlyPointCost) }} 点</text><text>当前余额 {{ formatNumber(pointBalance) }} 点</text>
-          <view v-for="item in usageBreakdown" :key="item.label" class="usage-bar-row"><text>{{ item.label }}</text><view><view :class="item.tone" :style="{ width: `${item.percent}%` }"></view></view></view>
-        </view>
-        <view class="filter-strip"><button class="active" @click="cycleUsageType">{{ usageFilterLabel }}</button><button :class="{ active: usageCurrentMonthOnly }" @click="usageCurrentMonthOnly = !usageCurrentMonthOnly">{{ usageCurrentMonthOnly ? "本月" : "全部时间" }}</button><text @click="$emit('export-usage')">导出明细</text></view>
-        <view class="record-list">
-          <view v-if="filteredUsageRecords.length" v-for="record in filteredUsageRecords.slice(0, 8)" :key="rowKey(record)" class="record-row" @click="openUsageRecordDetail(record)">
-            <text class="record-icon purple">{{ usageIcon(record) }}</text>
-            <view><text>{{ usageTitle(record) }}</text><text>{{ formatDate(rowDate(record)) }}</text></view>
-            <text class="record-value purple">-{{ formatNumber(rowPointCost(record)) }} 点</text>
-          </view>
-          <view v-else class="mine-empty"><text>暂无消耗明细</text><text>生成图片、视频或 PPT 后，将按模型记录扣点。</text></view>
-        </view>
-        <view class="billing-note"><text>计费规则</text><text>基础价 × 数量 × 参数倍率，最终点数向上取整。</text></view>
-      </view>
+      <MineUsageDetailsPanel
+        v-else-if="view === 'usage-details'"
+        :monthly-point-cost="monthlyPointCost"
+        :point-balance="pointBalance"
+        :usage-breakdown="usageBreakdown"
+        :usage-filter-label="usageFilterLabel"
+        :current-month-only="usageCurrentMonthOnly"
+        :filtered-usage-records="filteredUsageRecords"
+        @cycle-type="cycleUsageType"
+        @toggle-current-month="usageCurrentMonthOnly = !usageCurrentMonthOnly"
+        @export="$emit('export-usage')"
+        @open-detail="openUsageRecordDetail"
+      />
 
-      <view v-else-if="view === 'role-permissions'" class="mine-detail-stack">
-        <view class="role-hero"><text>当前角色</text><text>{{ currentRoleLabel }}</text><text>页面与操作按当前角色权限动态展示</text><text class="role-status">使用中</text><button v-if="!hasAgentRole" @click="$emit('navigate', 'agent-upgrade')">代理商角色未开通　去升级 ›</button><button v-else @click="$emit('switch-agent')">切换到代理商 ›</button></view>
-        <view class="mine-panel compact"><text class="mine-section-title">已授权角色</text><view v-for="role in roleRows" :key="role.id" class="role-row"><text class="mine-menu-icon green">✓</text><view><text>{{ role.label }}</text><text>{{ role.description }}</text></view><text :class="role.id === currentRole ? 'success-text' : 'muted-text'">{{ role.id === currentRole ? "当前" : "已启用" }}</text></view></view>
-        <view class="mine-panel compact"><text class="mine-section-title">当前角色权限</text><view v-for="permission in grantedPermissionRows" :key="permission" class="permission-row"><text>{{ permission }}</text><text class="success-text">可用</text></view></view>
-        <button v-if="!hasAgentRole" class="orange-action" @click="$emit('navigate', 'agent-upgrade')">成为代理商</button>
-        <button v-else class="primary-action" @click="$emit('switch-agent')">进入代理工作台</button>
-      </view>
+      <MineRolePermissionsPanel
+        v-else-if="view === 'role-permissions'"
+        :current-role="currentRole"
+        :current-role-label="currentRoleLabel"
+        :has-agent-role="hasAgentRole"
+        :role-rows="roleRows"
+        :granted-permission-rows="grantedPermissionRows"
+        @upgrade="$emit('navigate', 'agent-upgrade')"
+        @switch-agent="$emit('switch-agent')"
+      />
 
-      <view v-else class="mine-detail-stack">
-        <view class="invite-hero">
-          <text>我的推广码</text><text>{{ inviteCode }}</text><text class="agent-pill">{{ hasAgentRole ? agentLevelLabel : "待开通" }}</text>
-          <view class="invite-link"><text>{{ inviteLink }}</text><button @click="$emit('copy-invite')">复制</button></view>
-          <text>{{ hasAgentRole ? "客户通过链接注册后将自动绑定" : "成为代理商后可启用客户绑定与分润" }}</text>
-        </view>
-        <view class="promotion-stats"><view><text>{{ stat('visits') }}</text><text>访问</text></view><view><text>{{ stat('registrations') }}</text><text>注册</text></view><view><text>{{ stat('orders') }}</text><text>成交</text></view><view><text class="orange-text">{{ conversionRate }}%</text><text>转化率</text></view></view>
-        <view class="mine-panel compact"><text class="mine-section-title">选择分享方式</text><view class="share-grid"><button :disabled="!hasAgentRole" open-type="share"><text class="green">微</text><text>微信好友</text></button><button :disabled="!hasAgentRole" open-type="share"><text class="purple">圈</text><text>朋友圈</text></button><button :disabled="!hasAgentRole" @click="$emit('poster')"><text class="orange">图</text><text>生成海报</text></button></view></view>
-        <view class="mine-panel compact"><text class="mine-section-title">推广流程</text><view class="step-row four"><view v-for="(step, index) in promotionSteps" :key="step"><text :class="['step-index', { active: index === 0 }]">{{ index + 1 }}</text><text>{{ step }}</text></view></view></view>
-        <button v-if="hasAgentRole" class="primary-action" open-type="share">分享专属链接</button>
-        <button v-else class="orange-action" @click="$emit('navigate', 'agent-upgrade')">成为代理商后开启推广</button>
-      </view>
+      <MineInvitePromotionPanel
+        v-else
+        :invite-code="inviteCode"
+        :invite-link="inviteLink"
+        :has-agent-role="hasAgentRole"
+        :agent-level-label="agentLevelLabel"
+        :conversion-rate="conversionRate"
+        :stats="{ visits: stat('visits'), registrations: stat('registrations'), orders: stat('orders') }"
+        :promotion-steps="promotionSteps"
+        @copy-invite="$emit('copy-invite')"
+        @poster="$emit('poster')"
+        @upgrade="$emit('navigate', 'agent-upgrade')"
+      />
     </template>
 
-    <view v-if="purchase" class="mine-modal-layer" @click="$emit('close-purchase')">
-      <view class="mine-bottom-sheet" @click.stop>
-        <view class="sheet-handle"></view>
-        <view class="sheet-title-row"><view><text>{{ purchase.kind === 'agent' ? '开通代理套餐' : `充值 ${purchase.amountCents / 100} 元` }}</text><text>{{ purchase.kind === 'agent' ? '获得代理角色、推广工具与分润资格' : `支付成功后即时到账 ${formatNumber(purchase.points)} 点` }}</text></view><text v-if="purchase.recommended" class="recommend-tag">推荐</text></view>
-        <view :class="['purchase-summary', { agent: purchase.kind === 'agent' }]"><text>{{ purchase.kind === 'agent' ? '代理套餐' : '到账点数' }}</text><text>{{ purchase.kind === 'agent' ? '年度代理权益' : `${formatNumber(purchase.points)} 点` }}</text><text>{{ formatCurrency(purchase.amountCents) }}</text></view>
-        <view class="payment-method"><view><text>微信支付</text><text>推荐使用当前微信账户完成支付</text></view><text>✓</text></view>
-        <view class="purchase-note">
-          <text>{{ purchase.kind === 'agent' ? '开通即表示同意' : '充值即表示同意' }}</text>
-          <text class="purchase-note-link" @click="openPurchaseAgreement">《{{ purchase.kind === 'agent' ? '代理商服务协议' : '点数充值服务协议' }}》</text>
-        </view>
-        <button :class="['sheet-primary', { agent: purchase.kind === 'agent' }]" :disabled="purchaseSubmitting" @click="$emit('confirm-purchase')">{{ purchaseSubmitting ? "正在创建订单..." : purchase.kind === 'agent' ? `支付 ${formatCurrency(purchase.amountCents)} 并开通` : `确认支付 ${formatCurrency(purchase.amountCents)}` }}</button>
-      </view>
-    </view>
+    <MinePurchaseSheet
+      :purchase="purchase"
+      :submitting="purchaseSubmitting"
+      @close="$emit('close-purchase')"
+      @confirm="$emit('confirm-purchase')"
+      @open-agreement="openPurchaseAgreement"
+    />
 
-    <view v-if="logoutConfirm" class="mine-modal-layer" @click="$emit('close-logout')">
-      <view class="mine-bottom-sheet logout-sheet" @click.stop>
-        <view class="sheet-handle"></view>
-        <view class="logout-title-row"><text class="mine-menu-icon danger">退</text><view><text>退出当前账号？</text><text>退出后需要重新登录才能继续使用</text></view></view>
-        <view class="logout-notice"><text>本机登录状态将被清除</text><text>创作记录与钱包数据不会删除</text></view>
-        <view class="logout-actions"><button @click="$emit('close-logout')">取消</button><button class="danger-action" @click="$emit('confirm-logout')">退出登录</button></view>
-      </view>
-    </view>
+    <MineLogoutSheet
+      :visible="logoutConfirm"
+      @close="$emit('close-logout')"
+      @confirm="$emit('confirm-logout')"
+    />
   </view>
 </template>
 
@@ -142,7 +103,13 @@ import type { AppRole } from "../types";
 import { miniProgramFeaturePages, miniProgramRolePages } from "../config/miniProgramPages";
 import { roleLabels } from "../config/permissions";
 import { openLegalDocument } from "../features/legal/navigation";
-import AppImage from "./AppImage.vue";
+import MineOverviewPanel from "./mine/MineOverviewPanel.vue";
+import MineRechargeHistoryPanel from "./mine/MineRechargeHistoryPanel.vue";
+import MineUsageDetailsPanel from "./mine/MineUsageDetailsPanel.vue";
+import MineRolePermissionsPanel from "./mine/MineRolePermissionsPanel.vue";
+import MineInvitePromotionPanel from "./mine/MineInvitePromotionPanel.vue";
+import MinePurchaseSheet from "./mine/MinePurchaseSheet.vue";
+import MineLogoutSheet from "./mine/MineLogoutSheet.vue";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -185,14 +152,11 @@ defineEmits<{
   poster: [];
 }>();
 
-const recharge100: MinePurchaseOption = { kind: "recharge", id: "recharge_100", amountCents: 10000, points: 10000 };
-const recharge400: MinePurchaseOption = { kind: "recharge", id: "recharge_400", amountCents: 40000, points: 40000, recommended: true };
 const promotionSteps = ["分享链接", "客户注册", "完成订单", "获得分润"];
 const orderFilter = ref<"all" | "success" | "refund">("all");
 const historyRange = ref<30 | 90 | 0>(90);
 const usageType = ref<"all" | "image" | "video" | "ppt">("all");
 const usageCurrentMonthOnly = ref(true);
-const avatarText = computed(() => props.displayName.trim().slice(0, 1) || "知");
 const hasAgentRole = computed(() => props.roles.includes("AGENT"));
 const currentRoleLabel = computed(() => roleLabels[props.currentRole]);
 const roleDescriptions: Partial<Record<AppRole, string>> = {

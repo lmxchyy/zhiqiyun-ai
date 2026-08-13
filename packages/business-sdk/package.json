@@ -11,7 +11,7 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "src"],
+  "files": ["dist"],
   "dependencies": {
     "@xianzhi/api-client": "0.1.0",
     "@xianzhi/shared-types": "0.1.0"

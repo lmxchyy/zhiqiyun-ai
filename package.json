@@ -13,6 +13,7 @@
     "build:api": "cd backend-go && go build ./cmd/api",
     "build:admin": "cd admin-vue && npm run build",
     "test": "cd backend-go && go test ./...",
+    "test:regression": "node --test \"tests/*.test.mjs\"",
     "docker:up": "docker compose -f compose.yml up -d --build",
     "docker:ps": "docker compose -f compose.yml ps",
     "docker:logs": "docker compose -f compose.yml logs -f xianzhi-ai",

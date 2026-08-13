@@ -33,6 +33,12 @@ jobs:
       - name: Build shared packages
         run: npm.cmd run build:packages
 
+      - name: Node regression tests (protected surfaces)
+        run: npm.cmd run test:regression
+
+      - name: Admin unit tests (protected surfaces)
+        run: npm.cmd --prefix admin-vue test
+
       - name: Typecheck user core
         run: npm.cmd run typecheck:user-core
 
