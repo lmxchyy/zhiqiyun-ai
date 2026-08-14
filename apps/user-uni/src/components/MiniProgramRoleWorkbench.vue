@@ -763,6 +763,7 @@ import {
   defaultFreeImageEditPrompt,
   freeImageEditValidationMessage,
 } from "../features/generation/freeImageEdit";
+import { exactModuleSchemaPath } from "../features/generation/moduleSchema";
 import {
   DEFAULT_VIDEO_MODEL_CODE,
   estimateFormalVideoPoints,
@@ -2842,9 +2843,6 @@ function resolveBackendGenerationConfig(
   fallback: string,
 ): Promise<BackendGenerationConfig | null> {
   const moduleCode = mode === "video" ? "video_generation" : "image_generation";
-  const loadSchema = (modelName = "") => api<AnyRecord>(
-    `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}${modelName ? `&model_name=${encodeURIComponent(modelName)}` : ""}`,
-  );
   const configFromSchema = (schema: AnyRecord): BackendGenerationConfig | null | Promise<BackendGenerationConfig | null> => {
     const resolvedModel = rowString(schema, "model_name", "modelName") || fallback;
     const resolved = mode === "video"
@@ -2857,15 +2855,8 @@ function resolveBackendGenerationConfig(
       ? createConfig(resolved)
       : resolved.then(createConfig);
   };
-  const unavailableConfig = (): BackendGenerationConfig | null => mode === "video"
-    ? null
-    : { model: fallback, schema: {}, videoCapabilities: normalizeVideoModelCapabilities(undefined) };
-
-  return loadSchema(fallback)
-    .then(configFromSchema)
-    .catch(() => loadSchema()
-      .then(schema => rowString(schema, "model_name", "modelName") ? configFromSchema(schema) : unavailableConfig())
-      .catch(unavailableConfig));
+  return api<AnyRecord>(exactModuleSchemaPath(moduleCode, fallback, isGuest.value))
+    .then(configFromSchema);
 }
 
 function videoParameterValueEquals(key: string, option: unknown) {
@@ -3037,6 +3028,10 @@ async function requestVideoModelSwitch(modelCode: string) {
     if (videoConfigRemovesReferences(config) && !await confirmVideoReferenceRemoval(config)) return;
     if (sequence !== videoModelSwitchSequence) return;
     commitVideoModelConfig(config);
+  } catch (error) {
+    if (sequence !== videoModelSwitchSequence || creationMode.value !== "video") return;
+    const message = error instanceof Error ? error.message.trim() : "";
+    videoModelError.value = message || "当前模型参数加载失败，请稍后重试";
   } finally {
     if (sequence === videoModelSwitchSequence) videoModelSwitching.value = false;
   }
@@ -3128,7 +3123,7 @@ async function loadImageSchemaForModel(modelCode: string) {
   imageSchemaMessage.value = "正在读取当前模型参数";
   try {
     const response = await api<unknown>(
-      `/api/v1/module-schema?module_code=image_generation&model_name=${encodeURIComponent(requestedModel)}`,
+      exactModuleSchemaPath("image_generation", requestedModel, isGuest.value),
     );
     if (creationMode.value !== "image") return;
     const resolved = resolveImageSchemaFetchResult({

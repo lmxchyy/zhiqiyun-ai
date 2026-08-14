@@ -41,6 +41,10 @@ if (process.platform === "win32") {
 }
 
 run(process.execPath, [path.join(__dirname, "patch-mp-native-login.cjs")]);
-run(process.execPath, ["--test", path.join(appRoot, "tests", "wallet-subpackage-output.test.mjs")]);
+run(process.execPath, [
+  "--test",
+  path.join(appRoot, "tests", "wallet-subpackage-output.test.mjs"),
+  path.join(appRoot, "tests", "mp-startup-runtime.test.mjs"),
+]);
 run(process.execPath, [path.join(__dirname, "check-mp-package-size.cjs")]);
 console.log(`Release API base URL: ${productionApiBaseURL}`);
