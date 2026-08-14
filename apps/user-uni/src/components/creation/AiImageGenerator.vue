@@ -1,5 +1,5 @@
 <template>
-  <view class="ai-image-generator">
+  <view class="ai-image-generator" :style="navigationStyle">
     <view class="ai-image-generator__header">
       <button
         class="ai-image-generator__icon-button"
@@ -228,6 +228,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { useMiniProgramNavigation } from "../../composables/useMiniProgramNavigation";
 import {
   imageGeneratorViewState,
   type CanonicalImageQuality,
@@ -236,6 +237,8 @@ import {
   type ImageGeneratorStatusTone,
   type ImageSchemaLoadStatus,
 } from "../../features/generation/imageCreation";
+
+const { navigationStyle } = useMiniProgramNavigation();
 
 const props = withDefaults(defineProps<{
   prompt: string;
@@ -390,9 +393,10 @@ function onPrimaryAction() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  box-sizing: border-box;
   min-height: var(--header-height, 64px);
   padding-top: var(--header-padding-top, 0px);
-  padding-right: var(--capsule-right-space, 0px);
+  padding-right: max(16px, var(--capsule-right-space, 0px));
   padding-bottom: 8px;
   padding-left: 16px;
   background: #fff;
@@ -622,7 +626,13 @@ function onPrimaryAction() {
   font-size: 13px;
 }
 
-.ai-image-generator__schema-status.is-ready { color: var(--image-success); }
+.ai-image-generator__schema-status.is-ready {
+  min-height: 32px;
+  padding: 0;
+  border-color: transparent;
+  color: var(--image-success);
+  background: transparent;
+}
 .ai-image-generator__schema-status.is-error {
   border-color: #fecdca;
   color: #b42318;
@@ -769,12 +779,20 @@ function onPrimaryAction() {
   font-size: 13px;
 }
 
+.ai-image-generator__live-message > text {
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+
 .ai-image-generator__live-region.is-idle { color: var(--image-muted); }
 .ai-image-generator__live-region.is-loading { color: var(--image-brand); }
 .ai-image-generator__live-region.is-success { color: var(--image-success); }
 .ai-image-generator__live-region.is-error { color: #b42318; }
 
 .ai-image-generator__view-result {
+  min-width: 88px;
+  flex: 0 0 auto;
   margin: 0;
   padding: 0 12px;
   border: 1px solid currentColor;
@@ -783,6 +801,7 @@ function onPrimaryAction() {
   background: transparent;
   font-size: 13px;
   line-height: 42px;
+  white-space: nowrap;
 }
 .ai-image-generator__scroll-spacer { display: none; }
 
@@ -829,6 +848,7 @@ function onPrimaryAction() {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  flex: 0 0 auto;
   min-width: 150px;
   min-height: 52px;
   margin: 0;
@@ -839,6 +859,7 @@ function onPrimaryAction() {
   background: var(--image-action);
   font-size: 18px;
   font-weight: 800;
+  white-space: nowrap;
 }
 
 .ai-image-generator__generate--pressed { background: var(--image-action-pressed); }
@@ -894,7 +915,6 @@ function onPrimaryAction() {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ai-image-generator * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
   .ai-image-generator__reference-loading,
   .ai-image-generator__schema-spinner,
   .ai-image-generator__generate-spinner { animation: none !important; }

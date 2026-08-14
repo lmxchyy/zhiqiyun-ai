@@ -558,6 +558,35 @@ func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, moduleSchemaResponse(resolved, user))
 }
 
+func (a api) publicModuleSchema(w http.ResponseWriter, r *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	data = normalizeAICapabilityDefaults(data)
+	moduleCode := canonicalModuleCode(firstNonEmptyString(
+		r.URL.Query().Get("module_code"),
+		r.URL.Query().Get("moduleCode"),
+	))
+	modelName := strings.TrimSpace(firstNonEmptyString(
+		r.URL.Query().Get("model_name"),
+		r.URL.Query().Get("modelName"),
+	))
+	resolved, err := resolvePublicModuleSchema(data, moduleCode, modelName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if isWeChatMiniProgramRequest(r) {
+		if err := validateExactMiniProgramModuleSchema(resolved); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+	}
+	writeJSON(w, publicModuleSchemaResponse(resolved))
+}
+
 func resolveClientModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {
 	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
 	if err == nil || strings.TrimSpace(modelName) == "" || canonicalModuleCode(moduleCode) == moduleImageGeneration {
@@ -890,6 +919,45 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if !isActiveLike(model.Status) {
 		return resolvedModuleSchema{}, fmt.Errorf("ai model is disabled: %s", model.ModelName)
 	}
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, model.ModelName)
+	return resolveConfiguredModuleSchema(data, module, model, limit)
+}
+
+func resolvePublicModuleSchema(data adminPlatformData, moduleCode string, modelName string) (resolvedModuleSchema, error) {
+	moduleCode = canonicalModuleCode(moduleCode)
+	if moduleCode == "" {
+		return resolvedModuleSchema{}, errors.New("module_code is required")
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return resolvedModuleSchema{}, errors.New("model_name is required")
+	}
+	module := findAIModule(data.AIModules, moduleCode)
+	if module.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("ai module not found: %s", moduleCode)
+	}
+	if !isActiveLike(module.Status) {
+		return resolvedModuleSchema{}, fmt.Errorf("ai module is disabled: %s", moduleCode)
+	}
+	model := findAIModel(data.AIModels, moduleCode, modelName)
+	if model.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("ai model %s is not configured for module %s", modelName, moduleCode)
+	}
+	if !isActiveLike(model.Status) {
+		return resolvedModuleSchema{}, fmt.Errorf("ai model is disabled: %s", model.ModelName)
+	}
+	publicContext := adminUser{TenantID: "default"}
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, publicContext, moduleCode, model.ModelName)
+	return resolveConfiguredModuleSchema(data, module, model, limit)
+}
+
+func resolveConfiguredModuleSchema(
+	data adminPlatformData,
+	module adminAIModule,
+	model adminAIModel,
+	limit adminTenantModuleLimit,
+) (resolvedModuleSchema, error) {
+	moduleCode := canonicalModuleCode(module.ModuleCode)
 	var schema adminAIParameterSchema
 	if moduleCode == moduleImageGeneration {
 		schema = findExactAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
@@ -902,7 +970,6 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if schema.ID == "" {
 		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for model %s in module %s", model.ModelName, moduleCode)
 	}
-	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, model.ModelName)
 	if err := validateModelAllowedByLimit(model.ModelName, limit.LimitJSON); err != nil {
 		return resolvedModuleSchema{}, err
 	}
@@ -953,6 +1020,16 @@ func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[str
 		"context": map[string]any{
 			"user_id": user.ID, "tenant_id": effectiveTenantID(user), "agent_id": user.ReferredBy, "package_id": user.PlanID,
 		},
+	}
+}
+
+func publicModuleSchemaResponse(resolved resolvedModuleSchema) map[string]any {
+	return map[string]any{
+		"module_code":        resolved.Module.ModuleCode,
+		"model_name":         resolved.Model.ModelName,
+		"schema":             resolved.FinalSchema,
+		"fields":             resolved.FinalSchema.Fields,
+		"video_capabilities": resolved.Model.VideoCapabilities,
 	}
 }
 

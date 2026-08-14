@@ -292,6 +292,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/public/templates", wrapF(publicCatalog.templates))
 	v1.GET("/public/agents", wrapF(publicCatalog.agents))
 	v1.GET("/public/models", wrapF(api.models))
+	v1.GET("/public/module-schema", wrapF(api.publicModuleSchema))
 	v1.GET("/public/legal-documents", wrapF(api.publicLegalDocuments))
 	v1.GET("/public/terminal-capabilities", wrapF(api.publicTerminalCapabilities))
 	v1.GET("/inspirations/categories", wrapF(inspirations.categories))

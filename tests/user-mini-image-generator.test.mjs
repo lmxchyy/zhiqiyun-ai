@@ -56,6 +56,13 @@ function loadAiImageGeneratorComponent() {
   const localRequire = specifier => {
     if (specifier === "vue") return vueRuntime;
     if (specifier.includes("features/generation/imageCreation")) return imageCreation;
+    if (specifier === "../../composables/useMiniProgramNavigation") {
+      return {
+        useMiniProgramNavigation: () => ({
+          navigationStyle: vueRuntime.computed(() => ({})),
+        }),
+      };
+    }
     throw new Error(`unexpected component dependency ${specifier}`);
   };
   // eslint-disable-next-line no-new-func
@@ -1153,11 +1160,86 @@ test("workbench wires exact image schema and delegates image submission to the p
   assert.match(source, /:count-options="imageCountOptions"/);
   assert.match(source, /:status-tone="imageGeneratorStatusTone"/);
   assert.match(source, /@retry="retryImageGeneration"/);
-  assert.match(source, /module-schema\?module_code=.*model_name=/);
+  assert.match(source, /exactModuleSchemaPath\("image_generation", requestedModel, isGuest\.value\)/);
   assert.match(source, /resolveImageSchemaFetchResult/);
   assert.match(source, /restoreImageInspirationSelection/);
   assert.match(source, /await submitCanonicalImageTask\(/);
   assert.match(source, /imageReferenceUploadCache/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
   assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);
+});
+
+function loadVideoModelSwitchHarness(rejection) {
+  const componentURL = new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url);
+  const source = readFileSync(componentURL, "utf8");
+  const start = source.indexOf("async function requestVideoModelSwitch");
+  const end = source.indexOf("\nasync function initializeVideoModelForm", start);
+  assert.notEqual(start, -1, "requestVideoModelSwitch must exist");
+  assert.notEqual(end, -1, "initializeVideoModelForm must follow requestVideoModelSwitch");
+
+  const compiled = typescript.transpileModule(
+    `${source.slice(start, end)}\nmodule.exports = requestVideoModelSwitch;`,
+    {
+      compilerOptions: {
+        module: typescript.ModuleKind.CommonJS,
+        target: typescript.ScriptTarget.ES2022,
+      },
+    },
+  ).outputText;
+  const selectedVideoModelCode = { value: "current-video-model" };
+  const videoParameterFields = { value: [{ key: "duration" }] };
+  const videoModelSwitching = { value: false };
+  const videoModelError = { value: "" };
+  const creationMode = { value: "video" };
+  const isGuest = { value: true };
+  let commitCount = 0;
+  const dependencies = {
+    selectedVideoModelCode,
+    videoParameterFields,
+    videoModelSwitchSequence: 0,
+    videoModelSwitching,
+    videoModelError,
+    resolveBackendGenerationConfig: async () => { throw rejection; },
+    creationMode,
+    isGuest,
+    videoConfigRemovesReferences: () => false,
+    confirmVideoReferenceRemoval: async () => true,
+    commitVideoModelConfig: config => {
+      commitCount += 1;
+      selectedVideoModelCode.value = config.model;
+    },
+  };
+  const module = { exports: {} };
+  // eslint-disable-next-line no-new-func
+  new Function(...Object.keys(dependencies), "module", "exports", compiled)(
+    ...Object.values(dependencies),
+    module,
+    module.exports,
+  );
+  return {
+    requestVideoModelSwitch: module.exports,
+    selectedVideoModelCode,
+    videoModelSwitching,
+    videoModelError,
+    commitCount: () => commitCount,
+  };
+}
+
+test("video model switch reports schema request failures without rejecting or switching models", async t => {
+  const failures = [
+    Object.assign(new Error("该模型尚未完成小程序上线合规审核"), { statusCode: 403 }),
+    Object.assign(new Error("网络连接失败，请检查网络后重试"), { statusCode: 0 }),
+  ];
+
+  for (const failure of failures) {
+    await t.test(failure.statusCode === 403 ? "403 compliance rejection" : "network failure", async () => {
+      const harness = loadVideoModelSwitchHarness(failure);
+
+      await assert.doesNotReject(() => harness.requestVideoModelSwitch("requested-video-model"));
+      assert.equal(harness.videoModelError.value, failure.message);
+      assert.equal(harness.videoModelSwitching.value, false);
+      assert.equal(harness.selectedVideoModelCode.value, "current-video-model");
+      assert.equal(harness.commitCount(), 0);
+    });
+  }
 });
