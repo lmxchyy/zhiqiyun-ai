@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -402,9 +403,34 @@ func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testin
 	if approved.Job.Status != GenerationJobQueued || approved.Job.Stage != GenerationStageOutlineApproved || approved.ApprovedOutline == nil || approved.ApprovedOutline.Revision != 2 {
 		t.Fatalf("postgres approved state mismatch: %+v", approved)
 	}
+	var approvedAtBeforeReplay time.Time
+	var revisionCountBeforeReplay, transitionCountBeforeReplay int
+	if err := db.QueryRowContext(t.Context(), `select approved_at from xz_ppt_v2_outline_revisions where generation_job_id=$1 and revision=$2`, jobID, 2).Scan(&approvedAtBeforeReplay); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_outline_revisions where generation_job_id=$1`, jobID).Scan(&revisionCountBeforeReplay); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_generation_transitions where generation_job_id=$1 and to_stage=$2`, jobID, GenerationStageOutlineApproved).Scan(&transitionCountBeforeReplay); err != nil {
+		t.Fatal(err)
+	}
 	replayed, err := restartedService.ApproveOutline(t.Context(), scope, jobID, 2, now.Add(64*time.Minute))
-	if err != nil || replayed.ApprovedOutline == nil || !replayed.ApprovedOutline.ApprovedAt.Equal(approved.ApprovedOutline.ApprovedAt) {
+	if err != nil || !reflect.DeepEqual(replayed, approved) {
 		t.Fatalf("postgres duplicate approval is not idempotent: state=%+v err=%v", replayed, err)
+	}
+	var approvedAtAfterReplay time.Time
+	var revisionCountAfterReplay, transitionCountAfterReplay int
+	if err := db.QueryRowContext(t.Context(), `select approved_at from xz_ppt_v2_outline_revisions where generation_job_id=$1 and revision=$2`, jobID, 2).Scan(&approvedAtAfterReplay); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_outline_revisions where generation_job_id=$1`, jobID).Scan(&revisionCountAfterReplay); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_generation_transitions where generation_job_id=$1 and to_stage=$2`, jobID, GenerationStageOutlineApproved).Scan(&transitionCountAfterReplay); err != nil {
+		t.Fatal(err)
+	}
+	if !approvedAtAfterReplay.Equal(approvedAtBeforeReplay) || revisionCountAfterReplay != revisionCountBeforeReplay || transitionCountAfterReplay != transitionCountBeforeReplay {
+		t.Fatalf("postgres duplicate approval mutated persistence: approvedAt=%s->%s revisions=%d->%d transitions=%d->%d", approvedAtBeforeReplay, approvedAtAfterReplay, revisionCountBeforeReplay, revisionCountAfterReplay, transitionCountBeforeReplay, transitionCountAfterReplay)
 	}
 	if _, err := restartedService.UpdateOutline(t.Context(), scope, jobID, 2, []OutlineEditCommand{{Type: OutlineCommandDeleteSlide, SlideID: approved.Outline.Slides[1].SlideID}}, now.Add(65*time.Minute)); !errors.Is(err, ErrOutlinePlanApproved) {
 		t.Fatalf("postgres approved outline was mutable: %v", err)

@@ -296,7 +296,7 @@ where generation_job_id=$1 and current_outline_revision=$2 and approved_outline_
 	if err := tx.Commit(); err != nil {
 		return AgentPlanningState{}, err
 	}
-	return agentPlanningState(job, record), nil
+	return s.GetAgentPlanning(ctx, scope, job.ID)
 }
 
 func (s *PostgresGenerationJobStore) savePostgresAgentStage(ctx context.Context, lease GenerationLease, expectedStage, nextStage string, completedWorkUnits int, now time.Time, write func(*sql.Tx, GenerationJob) error) (GenerationLease, error) {
