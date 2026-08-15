@@ -33,7 +33,30 @@ jobs:
       - name: Build shared packages
         run: npm.cmd run build:packages
 
+      - name: Install OfficeCLI 1.0.144
+        shell: pwsh
+        env:
+          OFFICECLI_VERSION: "1.0.144"
+          OFFICECLI_SHA256: E780CC6A5385F84B4D54D71B0C179904ED534125EC33FE39B1A8711FA80E387E
+        run: |
+          $officeCliDirectory = Join-Path $env:RUNNER_TEMP "officecli"
+          New-Item -ItemType Directory -Force -Path $officeCliDirectory | Out-Null
+          $officeCliPath = Join-Path $officeCliDirectory "officecli.exe"
+          $officeCliUrl = "https://github.com/iOfficeAI/OfficeCLI/releases/download/v$env:OFFICECLI_VERSION/officecli-win-x64.exe"
+          Invoke-WebRequest -Uri $officeCliUrl -OutFile $officeCliPath -TimeoutSec 300
+          $actualHash = (Get-FileHash -Algorithm SHA256 -Path $officeCliPath).Hash
+          if ($actualHash -ne $env:OFFICECLI_SHA256) {
+            throw "OfficeCLI checksum mismatch: expected $env:OFFICECLI_SHA256, got $actualHash"
+          }
+          $actualVersion = (& $officeCliPath --version).Trim()
+          if ($actualVersion -ne $env:OFFICECLI_VERSION) {
+            throw "OfficeCLI version mismatch: expected $env:OFFICECLI_VERSION, got $actualVersion"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $officeCliDirectory -Encoding utf8
+
       - name: Node regression tests (protected surfaces)
+        env:
+          OFFICECLI_SKIP_UPDATE: "1"
         run: npm.cmd run test:regression
 
       - name: Admin unit tests (protected surfaces)
