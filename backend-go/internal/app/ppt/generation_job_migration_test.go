@@ -32,3 +32,28 @@ func TestPhase2GenerationMigrationContainsDurabilityConstraints(t *testing.T) {
 		}
 	}
 }
+
+func TestPhase3SliceAPlanningMigrationContainsDurableApprovalSchema(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve migration test path")
+	}
+	path := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "database", "migrations", "110-ppt-v2-agent-outline-approval.sql"))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := strings.ToLower(string(raw))
+	required := []string{
+		"workflow_type", "agent_outline", "waiting_for_outline_approval",
+		"intent_resolved", "researched", "storyline_planned", "outline_planned", "outline_approved",
+		"xz_ppt_v2_agent_plans", "xz_ppt_v2_outline_revisions",
+		"current_outline_revision", "approved_outline_revision", "research_execution_count",
+		"unique(generation_job_id,revision)",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("Phase 3 Slice A migration is missing %q", fragment)
+		}
+	}
+}

@@ -12,20 +12,29 @@ import (
 )
 
 const (
-	GenerationJobQueued    = "QUEUED"
-	GenerationJobRunning   = "RUNNING"
-	GenerationJobRetryWait = "RETRY_WAIT"
-	GenerationJobSucceeded = "SUCCEEDED"
-	GenerationJobFailed    = "FAILED"
-	GenerationJobCancelled = "CANCELLED"
+	GenerationJobQueued                    = "QUEUED"
+	GenerationJobRunning                   = "RUNNING"
+	GenerationJobRetryWait                 = "RETRY_WAIT"
+	GenerationJobSucceeded                 = "SUCCEEDED"
+	GenerationJobFailed                    = "FAILED"
+	GenerationJobCancelled                 = "CANCELLED"
+	GenerationJobWaitingForOutlineApproval = "WAITING_FOR_OUTLINE_APPROVAL"
 
-	GenerationStageCreated      = "CREATED"
-	GenerationStageTaskLoaded   = "TASK_LOADED"
-	GenerationStageRendered     = "RENDERED"
-	GenerationStageFileStored   = "FILE_STORED"
-	GenerationStageAssetCreated = "ASSET_CREATED"
-	GenerationStageTaskRelated  = "TASK_RELATED"
-	GenerationStageCompleted    = "COMPLETED"
+	GenerationWorkflowRender       = "RENDER"
+	GenerationWorkflowAgentOutline = "AGENT_OUTLINE"
+
+	GenerationStageCreated          = "CREATED"
+	GenerationStageTaskLoaded       = "TASK_LOADED"
+	GenerationStageRendered         = "RENDERED"
+	GenerationStageFileStored       = "FILE_STORED"
+	GenerationStageAssetCreated     = "ASSET_CREATED"
+	GenerationStageTaskRelated      = "TASK_RELATED"
+	GenerationStageCompleted        = "COMPLETED"
+	GenerationStageIntentResolved   = "INTENT_RESOLVED"
+	GenerationStageResearched       = "RESEARCHED"
+	GenerationStageStorylinePlanned = "STORYLINE_PLANNED"
+	GenerationStageOutlinePlanned   = "OUTLINE_PLANNED"
+	GenerationStageOutlineApproved  = "OUTLINE_APPROVED"
 
 	GenerationChildPending   = "PENDING"
 	GenerationChildRunning   = "RUNNING"
@@ -43,15 +52,17 @@ const (
 )
 
 var (
-	ErrGenerationJobNotFound            = errors.New("ppt v2 generation job not found")
-	ErrGenerationJobIdempotencyConflict = errors.New("ppt v2 generation job idempotency conflict")
-	ErrGenerationJobTerminal            = errors.New("ppt v2 generation job is terminal")
-	ErrGenerationJobTransition          = errors.New("ppt v2 generation job transition is invalid")
-	ErrGenerationJobLeaseHeld           = errors.New("ppt v2 generation job lease is held")
-	ErrGenerationJobLeaseLost           = errors.New("ppt v2 generation job lease is lost")
-	ErrGenerationJobNotReady            = errors.New("ppt v2 generation job retry is not ready")
-	ErrGenerationJobCancelled           = errors.New("ppt v2 generation job is cancelled")
-	ErrGenerationJobInvalid             = errors.New("ppt v2 generation job is invalid")
+	ErrGenerationJobNotFound                = errors.New("ppt v2 generation job not found")
+	ErrGenerationJobIdempotencyConflict     = errors.New("ppt v2 generation job idempotency conflict")
+	ErrGenerationJobTerminal                = errors.New("ppt v2 generation job is terminal")
+	ErrGenerationJobTransition              = errors.New("ppt v2 generation job transition is invalid")
+	ErrGenerationJobLeaseHeld               = errors.New("ppt v2 generation job lease is held")
+	ErrGenerationJobLeaseLost               = errors.New("ppt v2 generation job lease is lost")
+	ErrGenerationJobNotReady                = errors.New("ppt v2 generation job retry is not ready")
+	ErrGenerationJobCancelled               = errors.New("ppt v2 generation job is cancelled")
+	ErrGenerationJobInvalid                 = errors.New("ppt v2 generation job is invalid")
+	ErrGenerationJobAwaitingOutlineApproval = errors.New("ppt v2 generation job is awaiting outline approval")
+	ErrStaleOutlineRevision                 = errors.New("ppt v2 outline revision is stale")
 )
 
 type GenerationJobScope struct {
@@ -69,6 +80,7 @@ type CreateGenerationJobInput struct {
 	IdempotencyKey  string
 	MaxAttempts     int
 	SlideCount      int
+	WorkflowType    string
 	Now             time.Time
 }
 
@@ -83,6 +95,7 @@ type GenerationJobError struct {
 
 type GenerationJob struct {
 	ID                 string
+	WorkflowType       string
 	TenantID           string
 	UserID             string
 	OrganizationID     string
@@ -234,13 +247,27 @@ func NormalizeCreateGenerationJob(input CreateGenerationJobInput) (GenerationJob
 	input.ExistingTaskID = strings.TrimSpace(input.ExistingTaskID)
 	input.ClientRequestID = strings.TrimSpace(input.ClientRequestID)
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
-	if input.TenantID == "" || input.UserID == "" || input.ExistingTaskID == "" || input.IdempotencyKey == "" {
+	input.WorkflowType = strings.TrimSpace(input.WorkflowType)
+	if input.WorkflowType == "" {
+		input.WorkflowType = GenerationWorkflowRender
+	}
+	if input.TenantID == "" || input.UserID == "" || input.IdempotencyKey == "" {
 		return GenerationJob{}, DeckJob{}, nil, ErrGenerationJobInvalid
 	}
 	if input.MaxAttempts <= 0 {
 		input.MaxAttempts = 3
 	}
 	if input.MaxAttempts > 20 || input.SlideCount <= 0 {
+		return GenerationJob{}, DeckJob{}, nil, ErrGenerationJobInvalid
+	}
+	if input.WorkflowType == GenerationWorkflowRender && input.ExistingTaskID == "" {
+		return GenerationJob{}, DeckJob{}, nil, ErrGenerationJobInvalid
+	}
+	if input.WorkflowType == GenerationWorkflowAgentOutline {
+		if input.ExistingTaskID != "" || input.SlideCount < AgentMinimumPageCount || input.SlideCount > AgentMaximumPageCount {
+			return GenerationJob{}, DeckJob{}, nil, ErrGenerationJobInvalid
+		}
+	} else if input.WorkflowType != GenerationWorkflowRender {
 		return GenerationJob{}, DeckJob{}, nil, ErrGenerationJobInvalid
 	}
 	if input.Now.IsZero() {
@@ -251,13 +278,22 @@ func NormalizeCreateGenerationJob(input CreateGenerationJobInput) (GenerationJob
 	if input.JobID == "" {
 		input.JobID = newGenerationJobID()
 	}
-	deckJobID := input.JobID + ":deck"
+	deckJobID := ""
+	totalWorkUnits := GenerationTotalWorkUnits
+	if input.WorkflowType == GenerationWorkflowRender {
+		deckJobID = input.JobID + ":deck"
+	} else {
+		totalWorkUnits = 3
+	}
 	job := GenerationJob{
-		ID: input.JobID, TenantID: input.TenantID, UserID: input.UserID, OrganizationID: input.OrganizationID,
+		ID: input.JobID, WorkflowType: input.WorkflowType, TenantID: input.TenantID, UserID: input.UserID, OrganizationID: input.OrganizationID,
 		ExistingTaskID: input.ExistingTaskID, ClientRequestID: input.ClientRequestID, IdempotencyKey: input.IdempotencyKey,
 		Status: GenerationJobQueued, Stage: GenerationStageCreated, MaxAttempts: input.MaxAttempts,
-		RunAfter: input.Now, TotalWorkUnits: GenerationTotalWorkUnits, DeckJobID: deckJobID,
+		RunAfter: input.Now, TotalWorkUnits: totalWorkUnits, DeckJobID: deckJobID,
 		SlideCount: input.SlideCount, CreatedAt: input.Now, UpdatedAt: input.Now,
+	}
+	if input.WorkflowType == GenerationWorkflowAgentOutline {
+		return job, DeckJob{}, nil, nil
 	}
 	deck := DeckJob{ID: deckJobID, GenerationJobID: input.JobID, Status: GenerationChildPending, CreatedAt: input.Now, UpdatedAt: input.Now}
 	slides := make([]SlideJob, 0, input.SlideCount)
@@ -400,12 +436,13 @@ type MemoryGenerationJobStore struct {
 	slides      map[string][]SlideJob
 	attempts    map[string][]GenerationAttempt
 	transitions map[string][]GenerationTransition
+	agentPlans  map[string]AgentPlanningRecord
 }
 
 func NewMemoryGenerationJobStore() *MemoryGenerationJobStore {
 	return &MemoryGenerationJobStore{
 		jobs: map[string]GenerationJob{}, byKey: map[string]string{}, byTask: map[string]string{}, decks: map[string]DeckJob{},
-		slides: map[string][]SlideJob{}, attempts: map[string][]GenerationAttempt{}, transitions: map[string][]GenerationTransition{},
+		slides: map[string][]SlideJob{}, attempts: map[string][]GenerationAttempt{}, transitions: map[string][]GenerationTransition{}, agentPlans: map[string]AgentPlanningRecord{},
 	}
 }
 
@@ -423,19 +460,24 @@ func (s *MemoryGenerationJobStore) Create(_ context.Context, input CreateGenerat
 	key := generationIdempotencyMapKey(job.TenantID, job.UserID, job.IdempotencyKey)
 	if existingID := s.byKey[key]; existingID != "" {
 		existing := s.jobs[existingID]
-		if existing.ExistingTaskID != job.ExistingTaskID || existing.OrganizationID != job.OrganizationID || existing.SlideCount != job.SlideCount {
+		if existing.WorkflowType != job.WorkflowType || existing.ExistingTaskID != job.ExistingTaskID || existing.OrganizationID != job.OrganizationID || existing.SlideCount != job.SlideCount ||
+			(job.WorkflowType == GenerationWorkflowAgentOutline && existing.ClientRequestID != job.ClientRequestID) {
 			return GenerationJob{}, false, ErrGenerationJobIdempotencyConflict
 		}
 		return cloneGenerationJob(existing), false, nil
 	}
-	if existingID := s.byTask[job.ExistingTaskID]; existingID != "" {
+	if job.ExistingTaskID != "" && s.byTask[job.ExistingTaskID] != "" {
 		return GenerationJob{}, false, ErrGenerationJobIdempotencyConflict
 	}
 	s.jobs[job.ID] = job
 	s.byKey[key] = job.ID
-	s.byTask[job.ExistingTaskID] = job.ID
-	s.decks[job.ID] = deck
-	s.slides[job.ID] = append([]SlideJob(nil), slides...)
+	if job.ExistingTaskID != "" {
+		s.byTask[job.ExistingTaskID] = job.ID
+	}
+	if deck.ID != "" {
+		s.decks[job.ID] = deck
+		s.slides[job.ID] = append([]SlideJob(nil), slides...)
+	}
 	s.transitions[job.ID] = []GenerationTransition{{JobID: job.ID, FromStage: "", ToStage: GenerationStageCreated, Checkpoint: map[string]any{"completedWorkUnits": 0}, CreatedAt: job.CreatedAt}}
 	return cloneGenerationJob(job), true, nil
 }
@@ -479,6 +521,9 @@ func (s *MemoryGenerationJobStore) Claim(_ context.Context, scope GenerationJobS
 		}
 		return GenerationLease{}, ErrGenerationJobTerminal
 	}
+	if job.Status == GenerationJobWaitingForOutlineApproval {
+		return GenerationLease{}, ErrGenerationJobAwaitingOutlineApproval
+	}
 	if job.Status == GenerationJobRunning && job.LeaseExpiresAt.After(now) {
 		return GenerationLease{}, ErrGenerationJobLeaseHeld
 	}
@@ -513,10 +558,12 @@ func (s *MemoryGenerationJobStore) Claim(_ context.Context, scope GenerationJobS
 		WorkerID: workerID, FencingToken: job.FencingToken, Status: GenerationAttemptRunning, StartedAt: now,
 	}
 	s.attempts[job.ID] = append(s.attempts[job.ID], attempt)
-	deck := s.decks[job.ID]
-	deck.Status = GenerationChildRunning
-	deck.UpdatedAt = now
-	s.decks[job.ID] = deck
+	if job.DeckJobID != "" {
+		deck := s.decks[job.ID]
+		deck.Status = GenerationChildRunning
+		deck.UpdatedAt = now
+		s.decks[job.ID] = deck
+	}
 	s.jobs[job.ID] = job
 	return GenerationLease{JobID: job.ID, TenantID: job.TenantID, UserID: job.UserID, WorkerID: workerID, AttemptID: attempt.ID, FencingToken: job.FencingToken, LeaseExpiresAt: job.LeaseExpiresAt, Job: cloneGenerationJob(job)}, nil
 }
@@ -597,10 +644,12 @@ func (s *MemoryGenerationJobStore) Fail(_ context.Context, lease GenerationLease
 	} else {
 		job.Status = GenerationJobFailed
 		job.FinishedAt = now
-		deck := s.decks[job.ID]
-		deck.Status = GenerationChildFailed
-		deck.UpdatedAt = now
-		s.decks[job.ID] = deck
+		if job.DeckJobID != "" {
+			deck := s.decks[job.ID]
+			deck.Status = GenerationChildFailed
+			deck.UpdatedAt = now
+			s.decks[job.ID] = deck
+		}
 		s.finishAttemptLocked(job.ID, lease.AttemptID, GenerationAttemptFailed, &failure, now)
 	}
 	s.jobs[job.ID] = job
@@ -624,11 +673,13 @@ func (s *MemoryGenerationJobStore) Cancel(_ context.Context, scope GenerationJob
 	job.UpdatedAt = now
 	job.LeaseOwner = ""
 	job.LeaseExpiresAt = time.Time{}
-	deck := s.decks[job.ID]
-	if deck.Status != GenerationChildSucceeded {
-		deck.Status = GenerationChildCancelled
-		deck.UpdatedAt = now
-		s.decks[job.ID] = deck
+	if job.DeckJobID != "" {
+		deck := s.decks[job.ID]
+		if deck.Status != GenerationChildSucceeded {
+			deck.Status = GenerationChildCancelled
+			deck.UpdatedAt = now
+			s.decks[job.ID] = deck
+		}
 	}
 	slides := s.slides[job.ID]
 	for index := range slides {

@@ -6,7 +6,7 @@ const DRAFT_KEY = "xianzhi:ppt:v2:draft";
 const defaults: PptCreateForm = {
   topic: "",
   description: "",
-  pageCount: 16,
+  pageCount: 10,
   language: "zh",
   scenario: "education",
   style: "business",

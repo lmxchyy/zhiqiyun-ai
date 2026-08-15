@@ -44,15 +44,18 @@ func applyPhase2GenerationMigration(t *testing.T, db *sql.DB) {
 	if !ok {
 		t.Fatal("resolve integration test path")
 	}
-	path := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "database", "migrations", "109-ppt-v2-durable-generation.sql"))
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if _, err := db.ExecContext(ctx, string(raw)); err != nil {
-		t.Fatalf("apply Phase 2 migration: %v", err)
+	for _, migration := range []string{"109-ppt-v2-durable-generation.sql", "110-ppt-v2-agent-outline-approval.sql"} {
+		path := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "database", "migrations", migration))
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if _, err := db.ExecContext(ctx, string(raw)); err != nil {
+			cancel()
+			t.Fatalf("apply %s: %v", migration, err)
+		}
+		cancel()
 	}
 }
 
@@ -308,5 +311,118 @@ func TestPostgresGenerationJobRetryAndAtomicTaskRelation(t *testing.T) {
 	}
 	if _, err := store.RelateTaskArtifact(t.Context(), second, V2ArtifactRelation{DeckID: "other", Revision: 1, PPTXAssetID: "other"}, now.Add(9*time.Second)); !errors.Is(err, ErrGenerationJobTerminal) {
 		t.Fatalf("terminal relation rewrite error = %v", err)
+	}
+}
+
+func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testing.T) {
+	db := phase2PostgresDatabase(t)
+	applyPhase2GenerationMigration(t, db)
+	now := time.Now().UTC()
+	suffix := now.Format("20060102150405.000000000")
+	store, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProvider := &countingResearchProvider{pack: agentResearchFixture(t)}
+	service, err := NewAgentPlanningService(store, firstProvider, AgentPlanningOptions{WorkerID: "postgres_agent_planner_1", LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := GuideAgentRequest{
+		TenantID: "pptv2_agent_tenant_" + suffix, UserID: "pptv2_agent_user_" + suffix,
+		OrganizationID: "pptv2_agent_org_" + suffix, IdempotencyKey: "pptv2_agent_guide_" + suffix,
+		Request: IntentRequest{Text: "帮我做一份10页的新能源汽车行业分析，给公司管理层汇报。"}, Now: now,
+	}
+	guided, err := service.Guide(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if guided.State == nil || guided.State.Job.Status != GenerationJobWaitingForOutlineApproval || guided.State.Job.Stage != GenerationStageOutlinePlanned || len(guided.State.Outline.Slides) != 10 {
+		t.Fatalf("postgres planning did not reach approval gate: %+v", guided)
+	}
+	jobID := guided.State.Job.ID
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = db.ExecContext(ctx, `delete from xz_ppt_v2_generation_jobs where id=$1`, jobID)
+	})
+	if firstProvider.calls != 1 || guided.State.ResearchExecutionCount != 1 {
+		t.Fatalf("initial research execution mismatch: provider=%d persisted=%d", firstProvider.calls, guided.State.ResearchExecutionCount)
+	}
+	if _, err := store.Claim(t.Context(), GenerationJobScope{TenantID: request.TenantID, UserID: request.UserID}, jobID, "premature_slide_worker", now.Add(time.Second), time.Minute); !errors.Is(err, ErrGenerationJobAwaitingOutlineApproval) {
+		t.Fatalf("postgres approval gate allowed generation to continue: %v", err)
+	}
+
+	restartedStore, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedProvider := &countingResearchProvider{pack: agentResearchFixture(t)}
+	restartedService, err := NewAgentPlanningService(restartedStore, restartedProvider, AgentPlanningOptions{WorkerID: "postgres_agent_planner_2", LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Now = now.Add(time.Hour)
+	restored, err := restartedService.Guide(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.State == nil || restored.State.Job.ID != jobID || restored.State.Outline.ID != guided.State.Outline.ID || restored.State.Outline.Revision != guided.State.Outline.Revision {
+		t.Fatalf("restart did not restore the same outline: first=%+v restored=%+v", guided.State, restored.State)
+	}
+	if restartedProvider.calls != 0 || restored.State.ResearchExecutionCount != 1 {
+		t.Fatalf("restart repeated research: provider=%d persisted=%d", restartedProvider.calls, restored.State.ResearchExecutionCount)
+	}
+	wrongScope := GenerationJobScope{TenantID: "other_tenant", UserID: request.UserID}
+	if _, err := restartedService.Get(t.Context(), wrongScope, jobID); !errors.Is(err, ErrGenerationJobNotFound) {
+		t.Fatalf("cross-tenant planning read error = %v", err)
+	}
+	if _, err := restartedService.UpdateOutline(t.Context(), wrongScope, jobID, 1, []OutlineEditCommand{{
+		Type: OutlineCommandMoveSlide, SlideID: restored.State.Outline.Slides[2].SlideID, ToIndex: 2,
+	}}, now.Add(60*time.Minute)); !errors.Is(err, ErrGenerationJobNotFound) {
+		t.Fatalf("cross-tenant planning update error = %v", err)
+	}
+	if _, err := restartedService.ApproveOutline(t.Context(), wrongScope, jobID, 1, now.Add(60*time.Minute)); !errors.Is(err, ErrGenerationJobNotFound) {
+		t.Fatalf("cross-tenant planning approve error = %v", err)
+	}
+	scope := GenerationJobScope{TenantID: request.TenantID, UserID: request.UserID}
+	updated, err := restartedService.UpdateOutline(t.Context(), scope, jobID, 1, []OutlineEditCommand{{
+		Type: OutlineCommandMoveSlide, SlideID: restored.State.Outline.Slides[2].SlideID, ToIndex: 2,
+	}}, now.Add(61*time.Minute))
+	if err != nil || updated.Outline.Revision != 2 {
+		t.Fatalf("postgres outline update failed: state=%+v err=%v", updated, err)
+	}
+	if _, err := restartedService.ApproveOutline(t.Context(), scope, jobID, 1, now.Add(62*time.Minute)); !errors.Is(err, ErrStaleOutlineRevision) {
+		t.Fatalf("postgres stale approval error = %v", err)
+	}
+	approved, err := restartedService.ApproveOutline(t.Context(), scope, jobID, 2, now.Add(63*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Job.Status != GenerationJobQueued || approved.Job.Stage != GenerationStageOutlineApproved || approved.ApprovedOutline == nil || approved.ApprovedOutline.Revision != 2 {
+		t.Fatalf("postgres approved state mismatch: %+v", approved)
+	}
+	replayed, err := restartedService.ApproveOutline(t.Context(), scope, jobID, 2, now.Add(64*time.Minute))
+	if err != nil || replayed.ApprovedOutline == nil || !replayed.ApprovedOutline.ApprovedAt.Equal(approved.ApprovedOutline.ApprovedAt) {
+		t.Fatalf("postgres duplicate approval is not idempotent: state=%+v err=%v", replayed, err)
+	}
+	if _, err := restartedService.UpdateOutline(t.Context(), scope, jobID, 2, []OutlineEditCommand{{Type: OutlineCommandDeleteSlide, SlideID: approved.Outline.Slides[1].SlideID}}, now.Add(65*time.Minute)); !errors.Is(err, ErrOutlinePlanApproved) {
+		t.Fatalf("postgres approved outline was mutable: %v", err)
+	}
+	var planCount, revisionCount, deckCount, slideCount int
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_agent_plans where generation_job_id=$1`, jobID).Scan(&planCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_outline_revisions where generation_job_id=$1`, jobID).Scan(&revisionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_deck_jobs where generation_job_id=$1`, jobID).Scan(&deckCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_slide_jobs where generation_job_id=$1`, jobID).Scan(&slideCount); err != nil {
+		t.Fatal(err)
+	}
+	if planCount != 1 || revisionCount != 2 || deckCount != 0 || slideCount != 0 {
+		t.Fatalf("Slice A postgres persistence mismatch: plans=%d revisions=%d decks=%d slides=%d", planCount, revisionCount, deckCount, slideCount)
 	}
 }

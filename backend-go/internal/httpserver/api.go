@@ -35,6 +35,7 @@ import (
 
 	"xianzhi-ai/backend-go/internal/config"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
+	pptresearch "xianzhi-ai/backend-go/internal/provider/pptresearch"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
@@ -170,6 +171,7 @@ type api struct {
 	// Production leaves it nil and uses the same configured model routing as all users.
 	connectorGenerationService *generation.Service
 	pptService                 *pptapp.Service
+	pptAgentService            *pptapp.AgentPlanningService
 	cfg                        config.Config
 	sessions                   authSessionStore
 	taskCancels                *sync.Map
@@ -205,11 +207,15 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 		},
 	})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+	var pptAgentService *pptapp.AgentPlanningService
 	if pgStore, ok := store.(*postgresStore); ok {
 		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+		if jobStore, err := pptapp.NewPostgresGenerationJobStore(pgStore.db); err == nil {
+			pptAgentService, _ = pptapp.NewAgentPlanningService(jobStore, pptresearch.NewWikipediaResearchProvider(nil), pptapp.AgentPlanningOptions{})
+		}
 	}
 	imageTimeout := cfg.ImageGenerationTimeout()
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
+	api := api{store: store, generationService: service, pptService: pptService, pptAgentService: pptAgentService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
 	go api.repairStaleGenerationTasks(imageTimeout)
 	return api
 }
