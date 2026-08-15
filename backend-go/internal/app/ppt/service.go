@@ -22,15 +22,18 @@ const (
 )
 
 var (
-	ErrInvalidPrompt             = errors.New("ppt prompt is required")
-	ErrTaskNotFound              = errors.New("ppt task not found")
-	ErrVisualNotFound            = errors.New("ppt visual history item not found")
-	ErrConcurrency               = errors.New("ppt generation concurrency limit reached")
-	ErrInvalidV2ArtifactRelation = errors.New("ppt v2 artifact relation is invalid")
+	ErrInvalidPrompt              = errors.New("ppt prompt is required")
+	ErrTaskNotFound               = errors.New("ppt task not found")
+	ErrVisualNotFound             = errors.New("ppt visual history item not found")
+	ErrConcurrency                = errors.New("ppt generation concurrency limit reached")
+	ErrInvalidV2ArtifactRelation  = errors.New("ppt v2 artifact relation is invalid")
+	ErrV2ArtifactRelationConflict = errors.New("ppt v2 artifact relation conflicts with the existing relation")
 )
 
 type GenerateRequest struct {
 	UserID                string   `json:"-"`
+	TenantID              string   `json:"-"`
+	OrganizationID        string   `json:"-"`
 	ClientRequestID       string   `json:"-"`
 	Prompt                string   `json:"prompt"`
 	SlideCount            int      `json:"slideCount"`
@@ -62,6 +65,8 @@ type GenerateResponse struct {
 type Task struct {
 	TaskID                string   `json:"taskId"`
 	UserID                string   `json:"-"`
+	TenantID              string   `json:"tenantId,omitempty"`
+	OrganizationID        string   `json:"organizationId,omitempty"`
 	ClientRequestID       string   `json:"clientRequestId,omitempty"`
 	Type                  string   `json:"type,omitempty"`
 	MediaType             string   `json:"mediaType,omitempty"`
@@ -337,6 +342,12 @@ func (s *Service) AttachV2Artifact(userID string, taskID string, relation V2Arti
 	}
 	previous := task
 	task = cloneTask(task)
+	if task.V2DeckID != "" || task.V2Revision != 0 || task.PPTXAssetID != "" {
+		if task.V2DeckID == relation.DeckID && task.V2Revision == relation.Revision && task.PPTXAssetID == relation.PPTXAssetID {
+			return task, nil
+		}
+		return Task{}, ErrV2ArtifactRelationConflict
+	}
 	task.V2DeckID = relation.DeckID
 	task.V2Revision = relation.Revision
 	task.PPTXAssetID = relation.PPTXAssetID
@@ -724,6 +735,8 @@ func materializeTask(task Task) Task {
 
 func normalizeRequest(req GenerateRequest) GenerateRequest {
 	req.UserID = strings.TrimSpace(req.UserID)
+	req.TenantID = strings.TrimSpace(req.TenantID)
+	req.OrganizationID = strings.TrimSpace(req.OrganizationID)
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.SlideCount <= 0 {
 		req.SlideCount = 5
