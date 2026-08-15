@@ -244,6 +244,15 @@ func (s *Service) updateSlideImagePostgres(userID, taskID, slideID, imageURL str
 	})
 }
 
+func (s *Service) attachV2ArtifactPostgres(userID, taskID string, relation V2ArtifactRelation) (Task, error) {
+	return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+		task.V2DeckID = relation.DeckID
+		task.V2Revision = relation.Revision
+		task.PPTXAssetID = relation.PPTXAssetID
+		return nil
+	})
+}
+
 func (s *Service) updateSlideContentPostgres(userID, taskID, slideID string, update Slide) (Task, error) {
 	return s.updatePostgresTask(userID, taskID, func(task *Task) error {
 		return applySlideContentUpdate(task, slideID, update)

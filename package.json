@@ -14,6 +14,8 @@
     "build:admin": "cd admin-vue && npm run build",
     "test": "cd backend-go && go test ./...",
     "test:regression": "node --test \"tests/*.test.mjs\"",
+    "test:ppt-v2": "node --test tests/ppt-v2-*.test.mjs",
+    "render:ppt-v2:golden": "node packages/ppt-v2/src/cli.mjs artifacts/ppt-v2/golden-1-professional-business.pptx contracts/ppt-v2/fixtures/golden-1-professional-business.legacy.json",
     "docker:up": "docker compose -f compose.yml up -d --build",
     "docker:ps": "docker compose -f compose.yml ps",
     "docker:logs": "docker compose -f compose.yml logs -f xianzhi-ai",
@@ -51,7 +53,10 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "ajv": "8.20.0",
+    "jszip": "3.10.1",
     "openapi-typescript": "^7.13.0",
+    "pptxgenjs": "4.0.1",
     "typescript": "^5.8.3"
   }
 }

@@ -1,0 +1,78 @@
+[
+  {
+    "id": "slide_ppt_legacy_001_cover",
+    "sequence": 1,
+    "role": "cover",
+    "layoutId": "layout_cover_v1",
+    "backgroundToken": "primary",
+    "speakerNotes": "Introduce 2027 年企业增长计划 and establish the presentation context.",
+    "elements": [
+      {
+        "id": "element_ppt_legacy_001_cover_accent",
+        "type": "shape",
+        "slot": "accent",
+        "shapeType": "rect",
+        "styleRole": "coverAccent"
+      },
+      {
+        "id": "element_ppt_legacy_001_cover_title",
+        "type": "text",
+        "slot": "title",
+        "content": { "kind": "plain", "text": "2027 年企业增长计划" },
+        "styleRole": "coverTitle"
+      },
+      {
+        "id": "element_ppt_legacy_001_cover_subtitle",
+        "type": "text",
+        "slot": "subtitle",
+        "content": { "kind": "plain", "text": "从共识到执行" },
+        "styleRole": "coverSubtitle"
+      },
+      {
+        "id": "element_ppt_legacy_001_cover_footer",
+        "type": "text",
+        "slot": "footer",
+        "content": { "kind": "plain", "text": "Xianzhi AI · Phase 1" },
+        "styleRole": "coverFooter"
+      }
+    ]
+  },
+  {
+    "id": "slide_ppt_legacy_001_content",
+    "sequence": 2,
+    "role": "content",
+    "layoutId": "layout_standard_content_v1",
+    "backgroundToken": "background",
+    "speakerNotes": "说明三个支柱如何在同一经营节奏中协同。",
+    "elements": [
+      {
+        "id": "element_ppt_legacy_001_content_panel",
+        "type": "shape",
+        "slot": "panel",
+        "shapeType": "roundRect",
+        "styleRole": "contentPanel"
+      },
+      {
+        "id": "element_ppt_legacy_001_content_title",
+        "type": "text",
+        "slot": "title",
+        "content": { "kind": "plain", "text": "三个增长支柱形成闭环" },
+        "styleRole": "contentTitle"
+      },
+      {
+        "id": "element_ppt_legacy_001_content_body",
+        "type": "text",
+        "slot": "body",
+        "content": {
+          "kind": "bullets",
+          "items": [
+            "产品：聚焦高价值场景",
+            "渠道：建立可复制打法",
+            "客户成功：提升续费与扩容"
+          ]
+        },
+        "styleRole": "contentBody"
+      }
+    ]
+  }
+]

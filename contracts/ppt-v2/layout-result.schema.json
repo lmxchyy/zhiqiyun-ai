@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xianzhi.ai/contracts/ppt/v2.1/layout-result.schema.json",
+  "title": "Xianzhi PPT Generation V2.1 LayoutResult",
+  "$defs": {
+    "elementLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["elementId", "x", "y", "width", "height", "zIndex", "resolvedStyle", "diagnostics"],
+      "properties": {
+        "elementId": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+        "x": { "type": "number", "minimum": 0 },
+        "y": { "type": "number", "minimum": 0 },
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "zIndex": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "resolvedStyle": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/resolvedStyle" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/diagnostic" }
+        }
+      }
+    },
+    "slideLayout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slideId", "layoutId", "backgroundColor", "elements", "diagnostics"],
+      "properties": {
+        "slideId": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+        "layoutId": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+        "backgroundColor": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/hexColor" },
+        "elements": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/elementLayout" }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/diagnostic" }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "deckId", "revision", "canvas", "slides", "diagnostics"],
+  "properties": {
+    "contractVersion": { "const": "2.1" },
+    "deckId": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "canvas": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/canvas" },
+    "slides": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/slideLayout" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/diagnostic" }
+    }
+  }
+}

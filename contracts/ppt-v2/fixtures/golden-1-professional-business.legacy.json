@@ -1,0 +1,55 @@
+{
+  "generateRequest": {
+    "prompt": "2027 年企业增长计划",
+    "slideCount": 12,
+    "language": "zh-CN",
+    "tone": "professional",
+    "textContent": "聚焦产品、渠道与客户成功三个增长支柱。",
+    "audience": "管理层",
+    "scenario": "年度经营会",
+    "generationAspectRatio": "16:9",
+    "theme": "technology",
+    "autoThemeEnabled": true,
+    "enableWebSearch": false,
+    "imageSource": "none",
+    "textModel": "legacy-text-model",
+    "imageModel": "legacy-image-model",
+    "textInImage": false
+  },
+  "outline": {
+    "title": "2027 年企业增长计划",
+    "updatedAt": "2026-08-15T01:02:03Z",
+    "slides": [
+      {
+        "page": 1,
+        "title": "2027 年企业增长计划",
+        "summary": "从共识到执行",
+        "bulletPoints": [],
+        "layout": "cover",
+        "slideType": "cover"
+      },
+      {
+        "page": 2,
+        "title": "三个增长支柱形成闭环",
+        "summary": "产品建立价值，渠道放大触达，客户成功驱动续费。",
+        "bulletPoints": [
+          "产品：聚焦高价值场景",
+          "渠道：建立可复制打法",
+          "客户成功：提升续费与扩容"
+        ],
+        "layout": "content",
+        "slideType": "text_image"
+      }
+    ]
+  },
+  "taskContext": {
+    "taskId": "ppt_legacy_001",
+    "userId": "user_001",
+    "clientRequestId": "request_001",
+    "status": "success",
+    "title": "2027 年企业增长计划",
+    "speakerNotesByPage": {
+      "2": "说明三个支柱如何在同一经营节奏中协同。"
+    }
+  }
+}
