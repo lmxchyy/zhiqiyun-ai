@@ -162,7 +162,7 @@ func requirePostgresUniqueConstraint(t *testing.T, err error, constraint string)
 func TestPostgresGenerationJobArtifactConstraintsAndTransactionRollback(t *testing.T) {
 	db := phase2PostgresDatabase(t)
 	suffix := fmt.Sprintf("%d", time.Now().UTC().UnixNano())
-	service, task := phase2PostgresTask(t, db, "constraints_"+suffix)
+	_, task := phase2PostgresTask(t, db, "constraints_"+suffix)
 	applyPhase2GenerationMigration(t, db)
 	cleanupPhase2Postgres(t, db, task)
 	store, err := NewPostgresGenerationJobStore(db)
@@ -221,16 +221,47 @@ func TestPostgresGenerationJobArtifactConstraintsAndTransactionRollback(t *testi
 	if _, err := db.ExecContext(t.Context(), fmt.Sprintf(`create trigger %s before update on xz_ppt_tasks for each row execute function %s('%s')`, triggerName, functionName, taskIDLiteral)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RelateTaskArtifact(t.Context(), lease, V2ArtifactRelation{DeckID: "deck_phase2", Revision: 1, PPTXAssetID: "asset_phase2"}, now.Add(5*time.Second)); err == nil {
-		t.Fatal("forced Task relation failure unexpectedly committed")
+	_, mutationErr := store.RelateTaskArtifact(t.Context(), lease, V2ArtifactRelation{DeckID: "deck_phase2", Revision: 1, PPTXAssetID: "asset_phase2"}, now.Add(5*time.Second))
+	var mutationPGError *pgconn.PgError
+	if !errors.As(mutationErr, &mutationPGError) || mutationPGError.Code != "P0001" || !strings.Contains(mutationPGError.Message, "forced Phase 2 relation rollback") {
+		t.Fatalf("forced Task relation rollback error = %v", mutationErr)
 	}
-	bundle, err := store.Get(t.Context(), scope, job.ID)
-	if err != nil || bundle.Job.Stage != GenerationStageAssetCreated || bundle.Job.CompletedWorkUnits != 4 {
-		t.Fatalf("Task relation rollback leaked job checkpoint: bundle=%+v err=%v", bundle, err)
+
+	verifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	verifyTx, err := db.BeginTx(verifyCtx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("begin rollback verification transaction: %v", err)
 	}
-	persisted, err := service.GetTask(task.UserID, task.TaskID)
-	if err != nil || persisted.V2DeckID != "" || persisted.V2Revision != 0 || persisted.PPTXAssetID != "" {
-		t.Fatalf("Task relation rollback leaked relation: task=%+v err=%v", persisted, err)
+	defer func() { _ = verifyTx.Rollback() }()
+	var persistedRaw []byte
+	if err := verifyTx.QueryRowContext(verifyCtx, `select raw from xz_ppt_tasks where task_id=$1 and user_id=$2`, task.TaskID, task.UserID).Scan(&persistedRaw); err != nil {
+		t.Fatalf("read Task after forced rollback: %v", err)
+	}
+	persisted, err := taskFromPostgresRaw(persistedRaw, task.UserID)
+	if err != nil {
+		t.Fatalf("decode Task after forced rollback: %v", err)
+	}
+	if persisted.V2DeckID != "" || persisted.V2Revision != 0 || persisted.PPTXAssetID != "" {
+		t.Fatalf("Task relation rollback leaked relation: task=%+v", persisted)
+	}
+	var persistedStage string
+	var persistedWorkUnits int
+	if err := verifyTx.QueryRowContext(verifyCtx, `select stage,completed_work_units from xz_ppt_v2_generation_jobs where id=$1`, job.ID).Scan(&persistedStage, &persistedWorkUnits); err != nil {
+		t.Fatalf("read GenerationJob after forced rollback: %v", err)
+	}
+	if persistedStage != GenerationStageAssetCreated || persistedWorkUnits != 4 {
+		t.Fatalf("Task relation rollback leaked job checkpoint: stage=%s workUnits=%d", persistedStage, persistedWorkUnits)
+	}
+	var taskRelatedTransitions int
+	if err := verifyTx.QueryRowContext(verifyCtx, `select count(*) from xz_ppt_v2_generation_transitions where generation_job_id=$1 and to_stage=$2`, job.ID, GenerationStageTaskRelated).Scan(&taskRelatedTransitions); err != nil {
+		t.Fatalf("read Task relation transitions after forced rollback: %v", err)
+	}
+	if taskRelatedTransitions != 0 {
+		t.Fatalf("Task relation rollback leaked %d TASK_RELATED transition(s)", taskRelatedTransitions)
+	}
+	if err := verifyTx.Commit(); err != nil {
+		t.Fatalf("commit rollback verification transaction: %v", err)
 	}
 }
 
