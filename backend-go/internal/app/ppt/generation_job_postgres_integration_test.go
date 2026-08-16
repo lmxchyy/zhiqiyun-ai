@@ -325,7 +325,8 @@ func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testin
 		t.Fatal(err)
 	}
 	firstProvider := &countingResearchProvider{pack: agentResearchFixture(t)}
-	service, err := NewAgentPlanningService(store, firstProvider, AgentPlanningOptions{WorkerID: "postgres_agent_planner_1", LeaseDuration: time.Minute})
+	firstPlanning := &semanticPlanningFixture{}
+	service, err := NewAgentPlanningService(store, firstProvider, firstPlanning, firstPlanning, AgentPlanningOptions{WorkerID: "postgres_agent_planner_1", LeaseDuration: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,6 +339,14 @@ func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := service.ProcessReady(t.Context(), now.Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.Get(t.Context(), GenerationJobScope{TenantID: request.TenantID, UserID: request.UserID}, guided.State.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guided.State = &state
 	if guided.State == nil || guided.State.Job.Status != GenerationJobWaitingForOutlineApproval || guided.State.Job.Stage != GenerationStageOutlinePlanned || len(guided.State.Outline.Slides) != 10 {
 		t.Fatalf("postgres planning did not reach approval gate: %+v", guided)
 	}
@@ -359,7 +368,8 @@ func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testin
 		t.Fatal(err)
 	}
 	restartedProvider := &countingResearchProvider{pack: agentResearchFixture(t)}
-	restartedService, err := NewAgentPlanningService(restartedStore, restartedProvider, AgentPlanningOptions{WorkerID: "postgres_agent_planner_2", LeaseDuration: time.Minute})
+	restartedPlanning := &semanticPlanningFixture{}
+	restartedService, err := NewAgentPlanningService(restartedStore, restartedProvider, restartedPlanning, restartedPlanning, AgentPlanningOptions{WorkerID: "postgres_agent_planner_2", LeaseDuration: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,5 +460,155 @@ func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testin
 	}
 	if planCount != 1 || revisionCount != 2 || deckCount != 0 || slideCount != 0 {
 		t.Fatalf("Slice A postgres persistence mismatch: plans=%d revisions=%d decks=%d slides=%d", planCount, revisionCount, deckCount, slideCount)
+	}
+}
+
+func TestPostgresGenerationJobAgentPlanningWorkerRecoveryRetryAndFencing(t *testing.T) {
+	db := phase2PostgresDatabase(t)
+	applyPhase2GenerationMigration(t, db)
+	now := time.Now().UTC()
+	suffix := now.Format("20060102150405.000000000")
+	store, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	research := &countingResearchProvider{pack: agentResearchFixture(t)}
+	firstPlanning := &semanticPlanningFixture{storylineErrs: []error{
+		NewAgentWorkflowError(PlanningProviderUnavailable, "Planning service is temporarily unavailable.", true, errors.New("fixture outage")),
+	}}
+	firstService, err := NewAgentPlanningService(store, research, firstPlanning, firstPlanning, AgentPlanningOptions{
+		WorkerID: "postgres_a1_first", LeaseDuration: time.Minute, RetryDelay: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := GuideAgentRequest{
+		TenantID: "pptv2_a1_tenant_" + suffix, UserID: "pptv2_a1_user_" + suffix,
+		OrganizationID: "pptv2_a1_org_" + suffix, IdempotencyKey: "pptv2_a1_guide_" + suffix,
+		Request: IntentRequest{Text: "Create a 10-page electric vehicle industry analysis for company management.", PageCount: 10, Language: "en"}, Now: now,
+	}
+	created, err := firstService.Guide(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := created.State.Job.ID
+	jobIDs := []string{jobID}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, cleanupJobID := range jobIDs {
+			_, _ = db.ExecContext(ctx, `delete from xz_ppt_v2_generation_jobs where id=$1`, cleanupJobID)
+		}
+	})
+	if created.State.Job.Stage != GenerationStageCreated || created.State.Job.Status != GenerationJobQueued {
+		t.Fatalf("guide did not persist CREATED: %+v", created.State.Job)
+	}
+	if err := firstService.ProcessReady(t.Context(), now.Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	scope := GenerationJobScope{TenantID: request.TenantID, UserID: request.UserID}
+	afterStorylineFailure, err := firstService.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterStorylineFailure.Job.Stage != GenerationStageResearched || afterStorylineFailure.Job.Status != GenerationJobRetryWait || afterStorylineFailure.Job.Error == nil || afterStorylineFailure.Job.Error.Code != PlanningProviderUnavailable {
+		t.Fatalf("storyline failure was not durable: %+v", afterStorylineFailure.Job)
+	}
+	if research.calls != 1 || afterStorylineFailure.ResearchExecutionCount != 1 {
+		t.Fatalf("research checkpoint mismatch: provider=%d persisted=%d", research.calls, afterStorylineFailure.ResearchExecutionCount)
+	}
+
+	restartedStore, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedResearch := &countingResearchProvider{pack: agentResearchFixture(t)}
+	secondPlanning := &semanticPlanningFixture{outlineErrs: []error{
+		NewAgentWorkflowError(PlanningInvalidOutput, "Planning provider returned an invalid response.", true, errors.New("invalid json")),
+	}}
+	secondService, err := NewAgentPlanningService(restartedStore, restartedResearch, secondPlanning, secondPlanning, AgentPlanningOptions{
+		WorkerID: "postgres_a1_second", LeaseDuration: time.Minute, RetryDelay: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secondService.Retry(t.Context(), scope, jobID, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondService.ProcessReady(t.Context(), now.Add(3*time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	afterOutlineFailure, err := secondService.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterOutlineFailure.Job.Stage != GenerationStageStorylinePlanned || afterOutlineFailure.Job.Status != GenerationJobRetryWait || afterOutlineFailure.Job.Error == nil || afterOutlineFailure.Job.Error.Code != PlanningInvalidOutput {
+		t.Fatalf("outline failure was not durable: %+v", afterOutlineFailure.Job)
+	}
+	if restartedResearch.calls != 0 || secondPlanning.storylineCalls != 1 || secondPlanning.outlineCalls != 1 {
+		t.Fatalf("restart repeated checkpointed work: research=%d storyline=%d outline=%d", restartedResearch.calls, secondPlanning.storylineCalls, secondPlanning.outlineCalls)
+	}
+
+	finalStore, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalResearch := &countingResearchProvider{pack: agentResearchFixture(t)}
+	finalPlanning := &semanticPlanningFixture{}
+	finalService, err := NewAgentPlanningService(finalStore, finalResearch, finalPlanning, finalPlanning, AgentPlanningOptions{
+		WorkerID: "postgres_a1_final", LeaseDuration: time.Minute, RetryDelay: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := finalService.Retry(t.Context(), scope, jobID, now.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := finalService.ProcessReady(t.Context(), now.Add(5*time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := finalService.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Job.Stage != GenerationStageOutlinePlanned || completed.Job.Status != GenerationJobWaitingForOutlineApproval {
+		t.Fatalf("worker did not resume at outline checkpoint: %+v", completed.Job)
+	}
+	if finalResearch.calls != 0 || finalPlanning.storylineCalls != 0 || finalPlanning.outlineCalls != 1 || completed.ResearchExecutionCount != 1 {
+		t.Fatalf("final restart repeated checkpointed work: research=%d storyline=%d outline=%d persistedResearch=%d", finalResearch.calls, finalPlanning.storylineCalls, finalPlanning.outlineCalls, completed.ResearchExecutionCount)
+	}
+	for _, stage := range []string{GenerationStageIntentResolved, GenerationStageResearched, GenerationStageStorylinePlanned, GenerationStageOutlinePlanned} {
+		var count int
+		if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_generation_transitions where generation_job_id=$1 and to_stage=$2`, jobID, stage).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("durable stage %s transition count=%d", stage, count)
+		}
+	}
+
+	staleRequest := request
+	staleRequest.IdempotencyKey += "_fence"
+	staleRequest.Request.Text = "Create a separate 10-page market analysis for management."
+	staleRequest.Now = now.Add(10 * time.Second)
+	staleCreated, err := finalService.Guide(t.Context(), staleRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobIDs = append(jobIDs, staleCreated.State.Job.ID)
+	staleScope := GenerationJobScope{TenantID: staleRequest.TenantID, UserID: staleRequest.UserID}
+	firstLease, err := finalStore.Claim(t.Context(), staleScope, staleCreated.State.Job.ID, "stale_worker", now.Add(11*time.Second), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := finalStore.Claim(t.Context(), staleScope, staleCreated.State.Job.ID, "replacement_worker", now.Add(13*time.Second), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := finalStore.SaveAgentIntent(t.Context(), firstLease, staleCreated.State.Intent, now.Add(13*time.Second)); !errors.Is(err, ErrGenerationJobLeaseLost) {
+		t.Fatalf("stale worker output was not fenced: %v", err)
+	}
+	if _, err := finalStore.SaveAgentIntent(t.Context(), secondLease, staleCreated.State.Intent, now.Add(13*time.Second)); err != nil {
+		t.Fatalf("replacement worker could not checkpoint: %v", err)
 	}
 }

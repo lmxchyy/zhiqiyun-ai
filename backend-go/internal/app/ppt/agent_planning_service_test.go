@@ -21,8 +21,9 @@ func newAgentPlanningServiceFixture(t *testing.T) (*MemoryGenerationJobStore, *A
 	t.Helper()
 	store := NewMemoryGenerationJobStore()
 	provider := &countingResearchProvider{pack: agentResearchFixture(t)}
+	planning := &semanticPlanningFixture{}
 	now := time.Date(2026, 8, 16, 3, 0, 0, 0, time.UTC)
-	service, err := NewAgentPlanningService(store, provider, AgentPlanningOptions{WorkerID: "agent_planner_test", LeaseDuration: time.Minute})
+	service, err := NewAgentPlanningService(store, provider, planning, planning, AgentPlanningOptions{WorkerID: "agent_planner_test", LeaseDuration: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,14 @@ func TestAgentPlanningServiceStopsAtDurableOutlineApprovalGate(t *testing.T) {
 	if len(result.ClarificationQuestions) != 0 || result.State == nil {
 		t.Fatalf("unexpected guide result: %+v", result)
 	}
-	state := result.State
+	if err := service.ProcessReady(t.Context(), now.Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	stateValue, err := service.Get(t.Context(), GenerationJobScope{TenantID: "tenant_a", UserID: "user_a"}, result.State.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := &stateValue
 	if state.Job.WorkflowType != GenerationWorkflowAgentOutline || state.Job.Status != GenerationJobWaitingForOutlineApproval || state.Job.Stage != GenerationStageOutlinePlanned {
 		t.Fatalf("job did not stop at approval: %+v", state.Job)
 	}
@@ -73,6 +81,14 @@ func TestAgentPlanningGuideReplayRestoresSameOutlineWithoutRepeatingResearch(t *
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := service.ProcessReady(t.Context(), now.Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	firstState, err := service.Get(t.Context(), GenerationJobScope{TenantID: "tenant_a", UserID: "user_a"}, first.State.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.State = &firstState
 	request.Now = now.Add(time.Hour)
 	replayed, err := service.Guide(t.Context(), request)
 	if err != nil {
@@ -95,11 +111,19 @@ func TestAgentPlanningOutlineApprovalIsOptimisticImmutableAndIdempotent(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := service.ProcessReady(t.Context(), now.Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	guidedState, err := service.Get(t.Context(), GenerationJobScope{TenantID: "tenant_a", UserID: "user_a"}, guided.State.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guided.State = &guidedState
 	scope := GenerationJobScope{TenantID: "tenant_a", UserID: "user_a"}
 	jobID := guided.State.Job.ID
 	updated, err := service.UpdateOutline(t.Context(), scope, jobID, 1, []OutlineEditCommand{{
 		Type: OutlineCommandUpdateSlideObjective, SlideID: guided.State.Outline.Slides[1].SlideID,
-		Objective: &SlideObjective{Title: "市场变化", Purpose: "说明市场变化", KeyMessage: "需求、技术和政策共同改变竞争格局。", EvidenceRefs: []string{"claim_1"}, VisualIntent: "三因素结构", ExpectedElementTypes: []string{"TEXT", "SHAPE"}},
+		Objective: &SlideObjective{Title: "市场变化", Purpose: "说明市场变化", KeyMessage: "需求、技术和政策共同改变竞争格局。", EvidenceRequired: true, EvidenceRefs: []string{"claim_1"}, Evidence: []EvidenceAssignment{{ClaimID: "claim_1", Rationale: "该事实支持市场变化判断。"}}, VisualIntent: "三因素结构", ExpectedElementTypes: []string{"TEXT", "SHAPE"}},
 	}}, now.Add(time.Minute))
 	if err != nil || updated.Outline.Revision != 2 {
 		t.Fatalf("outline update failed: state=%+v err=%v", updated, err)
@@ -138,6 +162,14 @@ func TestAgentPlanningTenantIsolationAndCriticalClarification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := service.ProcessReady(t.Context(), now.Add(2*time.Minute), 10); err != nil {
+		t.Fatal(err)
+	}
+	guidedState, err := service.Get(t.Context(), GenerationJobScope{TenantID: "tenant_a", UserID: "user_a"}, guided.State.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guided.State = &guidedState
 	wrongScope := GenerationJobScope{TenantID: "tenant_b", UserID: "user_a"}
 	if _, err := service.Get(t.Context(), wrongScope, guided.State.Job.ID); !errors.Is(err, ErrGenerationJobNotFound) {
 		t.Fatalf("cross-tenant read error = %v", err)

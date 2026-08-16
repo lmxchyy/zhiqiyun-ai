@@ -376,6 +376,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/ppt/agent/jobs/:jobId", wrapF(api.getPPTAgentState))
 	v1.PATCH("/ppt/agent/jobs/:jobId/outline", wrapF(api.updatePPTAgentOutline))
 	v1.POST("/ppt/agent/jobs/:jobId/outline/approve", wrapF(api.approvePPTAgentOutline))
+	v1.POST("/ppt/agent/jobs/:jobId/retry", wrapF(api.retryPPTAgentPlanning))
 	v1.GET("/ppt/tasks/:taskId", wrapF(api.getPPTTask))
 	v1.GET("/ppt/history", wrapF(api.listPPTHistory))
 	v1.DELETE("/ppt/tasks/:taskId", wrapF(api.deletePPTTask))

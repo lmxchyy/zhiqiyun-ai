@@ -71,9 +71,16 @@ func scanPostgresGenerationJob(row generationJobScanner) (GenerationJob, error) 
 }
 
 func (s *PostgresGenerationJobStore) Create(ctx context.Context, input CreateGenerationJobInput) (GenerationJob, bool, error) {
+	return s.createGenerationJob(ctx, input, nil)
+}
+
+func (s *PostgresGenerationJobStore) createGenerationJob(ctx context.Context, input CreateGenerationJobInput, intent *IntentSpec) (GenerationJob, bool, error) {
 	job, deck, slides, err := NormalizeCreateGenerationJob(input)
 	if err != nil {
 		return GenerationJob{}, false, err
+	}
+	if intent != nil && (job.WorkflowType != GenerationWorkflowAgentOutline || len(job.InputSnapshot) == 0 || strings.TrimSpace(intent.Topic) == "") {
+		return GenerationJob{}, false, ErrGenerationJobInvalid
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -96,12 +103,12 @@ func (s *PostgresGenerationJobStore) Create(ctx context.Context, input CreateGen
 	_, err = tx.ExecContext(ctx, `
 insert into xz_ppt_v2_generation_jobs(
   id,workflow_type,tenant_id,user_id,organization_id,existing_task_id,client_request_id,idempotency_key,status,stage,
-  attempt_count,max_attempts,run_after,fencing_token,completed_work_units,total_work_units,deck_job_id,slide_count,
+  attempt_count,max_attempts,run_after,fencing_token,completed_work_units,total_work_units,deck_job_id,input_snapshot,slide_count,
   created_at,updated_at
-) values($1,$2,$3,$4,$5,nullif($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,nullif($17,''),$18,$19,$19)
+) values($1,$2,$3,$4,$5,nullif($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,nullif($17,''),$18::jsonb,$19,$20,$20)
 `, job.ID, job.WorkflowType, job.TenantID, job.UserID, job.OrganizationID, job.ExistingTaskID, job.ClientRequestID, job.IdempotencyKey,
 		job.Status, job.Stage, job.AttemptCount, job.MaxAttempts, job.RunAfter, job.FencingToken, job.CompletedWorkUnits,
-		job.TotalWorkUnits, job.DeckJobID, job.SlideCount, job.CreatedAt)
+		job.TotalWorkUnits, job.DeckJobID, nullableJSON(job.InputSnapshot), job.SlideCount, job.CreatedAt)
 	if err != nil {
 		_ = tx.Rollback()
 		existing, getErr := s.getByIdempotency(ctx, job.TenantID, job.UserID, job.IdempotencyKey)
@@ -131,6 +138,15 @@ insert into xz_ppt_v2_generation_jobs(
 	}
 	if _, err := tx.ExecContext(ctx, `insert into xz_ppt_v2_generation_transitions(generation_job_id,from_stage,to_stage,fencing_token,checkpoint,created_at) values($1,null,$2,0,'{"completedWorkUnits":0}'::jsonb,$3)`, job.ID, GenerationStageCreated, job.CreatedAt); err != nil {
 		return GenerationJob{}, false, err
+	}
+	if intent != nil {
+		rawIntent, err := json.Marshal(intent)
+		if err != nil {
+			return GenerationJob{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `insert into xz_ppt_v2_agent_plans(generation_job_id,intent,created_at,updated_at) values($1,$2::jsonb,$3,$3)`, job.ID, string(rawIntent), job.CreatedAt); err != nil {
+			return GenerationJob{}, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return GenerationJob{}, false, err

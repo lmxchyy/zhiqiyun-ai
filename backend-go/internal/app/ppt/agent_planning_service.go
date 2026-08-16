@@ -34,17 +34,19 @@ type AgentPlanningState struct {
 }
 
 type AgentPlanningJob struct {
-	ID                 string    `json:"id"`
-	WorkflowType       string    `json:"workflowType"`
-	TenantID           string    `json:"tenantId"`
-	UserID             string    `json:"userId"`
-	OrganizationID     string    `json:"organizationId"`
-	Status             string    `json:"status"`
-	Stage              string    `json:"stage"`
-	CompletedWorkUnits int       `json:"completedWorkUnits"`
-	TotalWorkUnits     int       `json:"totalWorkUnits"`
-	SlideCount         int       `json:"slideCount"`
-	UpdatedAt          time.Time `json:"updatedAt"`
+	ID                 string              `json:"id"`
+	WorkflowType       string              `json:"workflowType"`
+	TenantID           string              `json:"tenantId"`
+	UserID             string              `json:"userId"`
+	OrganizationID     string              `json:"organizationId"`
+	Status             string              `json:"status"`
+	Stage              string              `json:"stage"`
+	CompletedWorkUnits int                 `json:"completedWorkUnits"`
+	TotalWorkUnits     int                 `json:"totalWorkUnits"`
+	SlideCount         int                 `json:"slideCount"`
+	RunAfter           time.Time           `json:"runAfter"`
+	Error              *GenerationJobError `json:"error,omitempty"`
+	UpdatedAt          time.Time           `json:"updatedAt"`
 }
 
 func (j AgentPlanningJob) Progress() int {
@@ -63,6 +65,9 @@ func (j AgentPlanningJob) Progress() int {
 
 type AgentPlanningStore interface {
 	GenerationJobStore
+	CreateAgentPlanning(context.Context, CreateGenerationJobInput, IntentSpec) (GenerationJob, bool, error)
+	ListReadyAgentPlanning(context.Context, time.Time, int) ([]GenerationJob, error)
+	RetryAgentPlanning(context.Context, GenerationJobScope, string, time.Time) (GenerationJob, error)
 	SaveAgentIntent(context.Context, GenerationLease, IntentSpec, time.Time) (GenerationLease, error)
 	SaveAgentResearch(context.Context, GenerationLease, ResearchPack, time.Time) (GenerationLease, error)
 	SaveAgentStoryline(context.Context, GenerationLease, Storyline, time.Time) (GenerationLease, error)
@@ -75,13 +80,22 @@ type AgentPlanningStore interface {
 type AgentPlanningOptions struct {
 	WorkerID      string
 	LeaseDuration time.Duration
+	RetryDelay    time.Duration
+	ScanInterval  time.Duration
+	WorkerLimit   int
 }
 
 type AgentPlanningService struct {
 	store         AgentPlanningStore
 	research      ResearchProvider
+	storyline     StorylinePlanningPort
+	outline       OutlinePlanningPort
 	workerID      string
 	leaseDuration time.Duration
+	retryDelay    time.Duration
+	scanInterval  time.Duration
+	workerLimit   int
+	wake          chan struct{}
 }
 
 type GuideAgentRequest struct {
@@ -98,18 +112,31 @@ type AgentGuideResult struct {
 	State                  *AgentPlanningState `json:"state,omitempty"`
 }
 
-func NewAgentPlanningService(store AgentPlanningStore, research ResearchProvider, options AgentPlanningOptions) (*AgentPlanningService, error) {
-	if store == nil || research == nil {
+func NewAgentPlanningService(store AgentPlanningStore, research ResearchProvider, storyline StorylinePlanningPort, outline OutlinePlanningPort, options AgentPlanningOptions) (*AgentPlanningService, error) {
+	if store == nil {
 		return nil, ErrGenerationJobInvalid
 	}
 	options.WorkerID = strings.TrimSpace(options.WorkerID)
 	if options.WorkerID == "" {
-		options.WorkerID = "ppt_v2_agent_planner"
+		options.WorkerID = "ppt_v2_agent_planner:" + newGenerationJobID()
 	}
 	if options.LeaseDuration <= 0 {
 		options.LeaseDuration = time.Minute
 	}
-	return &AgentPlanningService{store: store, research: research, workerID: options.WorkerID, leaseDuration: options.LeaseDuration}, nil
+	if options.RetryDelay <= 0 {
+		options.RetryDelay = 5 * time.Second
+	}
+	if options.ScanInterval <= 0 {
+		options.ScanInterval = 2 * time.Second
+	}
+	if options.WorkerLimit <= 0 {
+		options.WorkerLimit = 2
+	}
+	return &AgentPlanningService{
+		store: store, research: research, storyline: storyline, outline: outline,
+		workerID: options.WorkerID, leaseDuration: options.LeaseDuration, retryDelay: options.RetryDelay,
+		scanInterval: options.ScanInterval, workerLimit: options.WorkerLimit, wake: make(chan struct{}, 1),
+	}, nil
 }
 
 func (s *AgentPlanningService) Guide(ctx context.Context, request GuideAgentRequest) (AgentGuideResult, error) {
@@ -123,79 +150,28 @@ func (s *AgentPlanningService) Guide(ctx context.Context, request GuideAgentRequ
 	now := normalizedAgentTime(request.Now)
 	intent := *resolution.Intent
 	pageCount := plannedAgentPageCount(intent)
-	job, created, err := s.store.Create(ctx, CreateGenerationJobInput{
+	inputSnapshot, err := json.Marshal(struct {
+		Version int           `json:"version"`
+		Request IntentRequest `json:"request"`
+		Intent  IntentSpec    `json:"intent"`
+	}{Version: 1, Request: request.Request, Intent: intent})
+	if err != nil {
+		return AgentGuideResult{}, err
+	}
+	job, _, err := s.store.CreateAgentPlanning(ctx, CreateGenerationJobInput{
 		TenantID: request.TenantID, UserID: request.UserID, OrganizationID: request.OrganizationID,
 		ClientRequestID: agentGuideRequestIdentity(request.Request), IdempotencyKey: request.IdempotencyKey,
-		SlideCount: pageCount, WorkflowType: GenerationWorkflowAgentOutline, Now: now,
-	})
+		SlideCount: pageCount, WorkflowType: GenerationWorkflowAgentOutline, InputSnapshot: inputSnapshot, Now: now,
+	}, intent)
 	if err != nil {
 		return AgentGuideResult{}, err
 	}
 	scope := GenerationJobScope{TenantID: job.TenantID, UserID: job.UserID}
-	if !created && (job.Status == GenerationJobWaitingForOutlineApproval || job.Stage == GenerationStageOutlineApproved) {
-		state, err := s.store.GetAgentPlanning(ctx, scope, job.ID)
-		if err != nil {
-			return AgentGuideResult{}, err
-		}
-		return AgentGuideResult{State: &state}, nil
-	}
-	lease, err := s.store.Claim(ctx, scope, job.ID, s.workerID, now, s.leaseDuration)
-	if err != nil {
-		return AgentGuideResult{}, err
-	}
-	if lease.Job.Stage == GenerationStageCreated {
-		lease, err = s.store.SaveAgentIntent(ctx, lease, intent, now)
-		if err != nil {
-			return AgentGuideResult{}, err
-		}
-	}
-	if lease.Job.Stage == GenerationStageIntentResolved {
-		var research ResearchPack
-		if intent.ResearchRequired {
-			lease, err = s.store.Renew(ctx, lease, now, s.leaseDuration)
-			if err != nil {
-				return AgentGuideResult{}, err
-			}
-			research, err = s.research.Research(ctx, intent)
-			if err != nil {
-				_, _ = s.store.Fail(ctx, lease, GenerationJobError{Code: "RESEARCH_FAILED", Message: err.Error(), Retryable: true}, now, time.Minute)
-				return AgentGuideResult{}, err
-			}
-		}
-		research, err = NormalizeResearchPack(research)
-		if err != nil {
-			return AgentGuideResult{}, err
-		}
-		lease, err = s.store.SaveAgentResearch(ctx, lease, research, now)
-		if err != nil {
-			return AgentGuideResult{}, err
-		}
-	}
 	state, err := s.store.GetAgentPlanning(ctx, scope, job.ID)
 	if err != nil {
 		return AgentGuideResult{}, err
 	}
-	if lease.Job.Stage == GenerationStageResearched {
-		storyline, buildErr := BuildProfessionalStoryline(state.Intent, state.Research)
-		if buildErr != nil {
-			return AgentGuideResult{}, buildErr
-		}
-		lease, err = s.store.SaveAgentStoryline(ctx, lease, storyline, now)
-		if err != nil {
-			return AgentGuideResult{}, err
-		}
-		state.Storyline = storyline
-	}
-	if lease.Job.Stage == GenerationStageStorylinePlanned {
-		outline, buildErr := BuildDynamicOutlinePlan(job.ID, state.Intent, state.Research, state.Storyline, now)
-		if buildErr != nil {
-			return AgentGuideResult{}, buildErr
-		}
-		state, err = s.store.SaveAgentOutline(ctx, lease, outline, now)
-		if err != nil {
-			return AgentGuideResult{}, err
-		}
-	}
+	s.Wake()
 	return AgentGuideResult{State: &state}, nil
 }
 
@@ -217,10 +193,23 @@ func (s *AgentPlanningService) ApproveOutline(ctx context.Context, scope Generat
 	return s.store.ApproveAgentOutline(ctx, scope, jobID, expectedRevision, normalizedAgentTime(now))
 }
 
+func (s *AgentPlanningService) Retry(ctx context.Context, scope GenerationJobScope, jobID string, now time.Time) (AgentPlanningState, error) {
+	job, err := s.store.RetryAgentPlanning(ctx, scope, jobID, normalizedAgentTime(now))
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	state, err := s.store.GetAgentPlanning(ctx, scope, job.ID)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	s.Wake()
+	return state, nil
+}
+
 func plannedAgentPageCount(intent IntentSpec) int {
 	pageCount := intent.PageCount.Preferred
 	if !intent.PageCount.Explicit || pageCount == 0 {
-		pageCount = len(professionalStorylineDefinitions(intent.Goal)) + 2
+		return AgentMinimumPageCount
 	}
 	if pageCount < AgentMinimumPageCount {
 		return AgentMinimumPageCount
@@ -292,7 +281,7 @@ func agentPlanningState(job GenerationJob, record AgentPlanningRecord) AgentPlan
 			ID: job.ID, WorkflowType: job.WorkflowType, TenantID: job.TenantID, UserID: job.UserID,
 			OrganizationID: job.OrganizationID, Status: job.Status, Stage: job.Stage,
 			CompletedWorkUnits: job.CompletedWorkUnits, TotalWorkUnits: job.TotalWorkUnits,
-			SlideCount: job.SlideCount, UpdatedAt: job.UpdatedAt,
+			SlideCount: job.SlideCount, RunAfter: job.RunAfter, Error: cloneGenerationError(job.LastError), UpdatedAt: job.UpdatedAt,
 		}, Intent: record.Intent, Research: record.Research,
 		Storyline: record.Storyline, Outline: record.Outline, ApprovedOutline: record.ApprovedOutline,
 		ResearchExecutionCount: record.ResearchExecutionCount,
@@ -321,10 +310,10 @@ func (s *MemoryGenerationJobStore) SaveAgentResearch(_ context.Context, lease Ge
 }
 
 func (s *MemoryGenerationJobStore) SaveAgentStoryline(_ context.Context, lease GenerationLease, storyline Storyline, now time.Time) (GenerationLease, error) {
-	if strings.TrimSpace(storyline.Thesis) == "" || len(storyline.Sections) == 0 || strings.TrimSpace(storyline.ClosingAction) == "" {
-		return GenerationLease{}, ErrInvalidStoryline
-	}
 	return s.saveAgentPlanningStage(lease, GenerationStageResearched, GenerationStageStorylinePlanned, 2, now, func(record *AgentPlanningRecord) error {
+		if err := ValidateStoryline(storyline, record.Intent, record.Research); err != nil {
+			return err
+		}
 		record.Storyline = cloneStoryline(storyline)
 		return nil
 	})
@@ -351,6 +340,7 @@ func (s *MemoryGenerationJobStore) SaveAgentOutline(_ context.Context, lease Gen
 	job.Stage = GenerationStageOutlinePlanned
 	job.Status = GenerationJobWaitingForOutlineApproval
 	job.CompletedWorkUnits = job.TotalWorkUnits
+	job.SlideCount = outline.PageCount
 	job.LeaseOwner = ""
 	job.LeaseExpiresAt = time.Time{}
 	job.UpdatedAt = now

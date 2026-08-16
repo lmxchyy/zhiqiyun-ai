@@ -34,7 +34,9 @@ import (
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 
 	"xianzhi-ai/backend-go/internal/config"
+	chatprovider "xianzhi-ai/backend-go/internal/provider/chat"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
+	pptplanning "xianzhi-ai/backend-go/internal/provider/pptplanning"
 	pptresearch "xianzhi-ai/backend-go/internal/provider/pptresearch"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
@@ -211,7 +213,11 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 	if pgStore, ok := store.(*postgresStore); ok {
 		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
 		if jobStore, err := pptapp.NewPostgresGenerationJobStore(pgStore.db); err == nil {
-			pptAgentService, _ = pptapp.NewAgentPlanningService(jobStore, pptresearch.NewWikipediaResearchProvider(nil), pptapp.AgentPlanningOptions{})
+			planningProvider := pptplanning.NewClient(chatprovider.NewOpenAICompatible(cfg), pptplanning.Options{Model: cfg.PPTTextModel})
+			pptAgentService, _ = pptapp.NewAgentPlanningService(jobStore, pptresearch.NewWikipediaResearchProvider(nil), planningProvider, planningProvider, pptapp.AgentPlanningOptions{})
+			if pptAgentService != nil {
+				pptAgentService.Start(context.Background())
+			}
 		}
 	}
 	imageTimeout := cfg.ImageGenerationTimeout()

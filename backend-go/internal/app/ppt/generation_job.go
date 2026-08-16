@@ -81,16 +81,20 @@ type CreateGenerationJobInput struct {
 	MaxAttempts     int
 	SlideCount      int
 	WorkflowType    string
+	InputSnapshot   []byte
 	Now             time.Time
 }
 
 type GenerationJobError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Stage     string `json:"stage"`
-	Retryable bool   `json:"retryable"`
-	AttemptID string `json:"attemptId,omitempty"`
-	UsageID   string `json:"usageIdentity,omitempty"`
+	Code              string    `json:"code"`
+	Message           string    `json:"message"`
+	Stage             string    `json:"stage"`
+	Retryable         bool      `json:"retryable"`
+	AttemptID         string    `json:"attemptId,omitempty"`
+	UsageID           string    `json:"usageIdentity,omitempty"`
+	Provider          string    `json:"provider,omitempty"`
+	ProviderRequestID string    `json:"providerRequestId,omitempty"`
+	OccurredAt        time.Time `json:"occurredAt,omitempty"`
 }
 
 type GenerationJob struct {
@@ -290,7 +294,8 @@ func NormalizeCreateGenerationJob(input CreateGenerationJobInput) (GenerationJob
 		ExistingTaskID: input.ExistingTaskID, ClientRequestID: input.ClientRequestID, IdempotencyKey: input.IdempotencyKey,
 		Status: GenerationJobQueued, Stage: GenerationStageCreated, MaxAttempts: input.MaxAttempts,
 		RunAfter: input.Now, TotalWorkUnits: totalWorkUnits, DeckJobID: deckJobID,
-		SlideCount: input.SlideCount, CreatedAt: input.Now, UpdatedAt: input.Now,
+		InputSnapshot: append([]byte(nil), input.InputSnapshot...),
+		SlideCount:    input.SlideCount, CreatedAt: input.Now, UpdatedAt: input.Now,
 	}
 	if input.WorkflowType == GenerationWorkflowAgentOutline {
 		return job, DeckJob{}, nil, nil
@@ -457,6 +462,10 @@ func (s *MemoryGenerationJobStore) Create(_ context.Context, input CreateGenerat
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createNormalizedLocked(job, deck, slides)
+}
+
+func (s *MemoryGenerationJobStore) createNormalizedLocked(job GenerationJob, deck DeckJob, slides []SlideJob) (GenerationJob, bool, error) {
 	key := generationIdempotencyMapKey(job.TenantID, job.UserID, job.IdempotencyKey)
 	if existingID := s.byKey[key]; existingID != "" {
 		existing := s.jobs[existingID]

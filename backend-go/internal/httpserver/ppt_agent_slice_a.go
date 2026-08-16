@@ -121,6 +121,22 @@ func (a api) approvePPTAgentOutline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, state)
 }
 
+func (a api) retryPPTAgentPlanning(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.pptAgentUser(w, r)
+	if !ok {
+		return
+	}
+	state, err := a.pptAgentService.Retry(
+		r.Context(), pptapp.GenerationJobScope{TenantID: effectiveTenantID(user), UserID: user.ID},
+		r.PathValue("jobId"), time.Now().UTC(),
+	)
+	if err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	writeJSON(w, state)
+}
+
 func (a api) pptAgentUser(w http.ResponseWriter, r *http.Request) (adminUser, bool) {
 	user, err := a.currentUser(r)
 	if err != nil {
@@ -138,7 +154,7 @@ func writePPTAgentError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pptapp.ErrGenerationJobNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, pptapp.ErrStaleOutlineRevision), errors.Is(err, pptapp.ErrOutlinePlanApproved), errors.Is(err, pptapp.ErrGenerationJobTransition), errors.Is(err, pptapp.ErrGenerationJobIdempotencyConflict):
+	case errors.Is(err, pptapp.ErrStaleOutlineRevision), errors.Is(err, pptapp.ErrOutlinePlanApproved), errors.Is(err, pptapp.ErrGenerationJobTransition), errors.Is(err, pptapp.ErrGenerationJobIdempotencyConflict), errors.Is(err, pptapp.ErrGenerationJobTerminal):
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, pptapp.ErrGenerationJobInvalid), errors.Is(err, pptapp.ErrInvalidResearchPack), errors.Is(err, pptapp.ErrInvalidStoryline), errors.Is(err, pptapp.ErrInvalidOutlinePlan), errors.Is(err, pptapp.ErrOutlineSlideNotFound):
 		writeError(w, http.StatusBadRequest, err)

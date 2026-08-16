@@ -13,6 +13,91 @@ type agentPlanningQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+func (s *PostgresGenerationJobStore) CreateAgentPlanning(ctx context.Context, input CreateGenerationJobInput, intent IntentSpec) (GenerationJob, bool, error) {
+	return s.createGenerationJob(ctx, input, &intent)
+}
+
+func (s *PostgresGenerationJobStore) ListReadyAgentPlanning(ctx context.Context, now time.Time, limit int) ([]GenerationJob, error) {
+	if limit <= 0 {
+		return nil, ErrGenerationJobInvalid
+	}
+	now = normalizedAgentTime(now)
+	rows, err := s.db.QueryContext(ctx, `
+select `+generationJobColumns+`
+from xz_ppt_v2_generation_jobs
+where workflow_type='AGENT_OUTLINE'
+  and stage in ('CREATED','INTENT_RESOLVED','RESEARCHED','STORYLINE_PLANNED')
+  and (
+    (status in ('QUEUED','RETRY_WAIT') and run_after <= $1)
+    or (status='RUNNING' and lease_expires_at <= $1)
+  )
+order by run_after,created_at,id
+limit $2
+`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]GenerationJob, 0, limit)
+	for rows.Next() {
+		job, err := scanPostgresGenerationJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *PostgresGenerationJobStore) RetryAgentPlanning(ctx context.Context, scope GenerationJobScope, jobID string, now time.Time) (GenerationJob, error) {
+	now = normalizedAgentTime(now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, err := loadGenerationJobForUpdate(ctx, tx, scope, jobID)
+	if err != nil {
+		return GenerationJob{}, err
+	}
+	if job.WorkflowType != GenerationWorkflowAgentOutline {
+		return GenerationJob{}, ErrGenerationJobNotFound
+	}
+	switch job.Status {
+	case GenerationJobQueued, GenerationJobRunning:
+		if err := tx.Commit(); err != nil {
+			return GenerationJob{}, err
+		}
+		return job, nil
+	case GenerationJobRetryWait:
+		job.Status = GenerationJobQueued
+		job.RunAfter = now
+		job.LastError = nil
+		job.UpdatedAt = now
+	case GenerationJobFailed:
+		if job.LastError == nil || !job.LastError.Retryable || job.AttemptCount >= 20 {
+			return GenerationJob{}, ErrGenerationJobTerminal
+		}
+		job.Status = GenerationJobQueued
+		job.MaxAttempts = job.AttemptCount + 1
+		job.RunAfter = now
+		job.LastError = nil
+		job.FinishedAt = time.Time{}
+		job.UpdatedAt = now
+	default:
+		return GenerationJob{}, ErrGenerationJobTransition
+	}
+	job.LeaseOwner = ""
+	job.LeaseExpiresAt = time.Time{}
+	if err := persistGenerationJob(ctx, tx, job); err != nil {
+		return GenerationJob{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return GenerationJob{}, err
+	}
+	return job, nil
+}
+
 func (s *PostgresGenerationJobStore) SaveAgentIntent(ctx context.Context, lease GenerationLease, intent IntentSpec, now time.Time) (GenerationLease, error) {
 	if strings.TrimSpace(intent.Topic) == "" {
 		return GenerationLease{}, ErrGenerationJobInvalid
@@ -22,11 +107,14 @@ func (s *PostgresGenerationJobStore) SaveAgentIntent(ctx context.Context, lease 
 		return GenerationLease{}, err
 	}
 	return s.savePostgresAgentStage(ctx, lease, GenerationStageCreated, GenerationStageIntentResolved, 1, now, func(tx *sql.Tx, job GenerationJob) error {
-		_, err := tx.ExecContext(ctx, `
-insert into xz_ppt_v2_agent_plans(generation_job_id,intent,created_at,updated_at)
-values($1,$2::jsonb,$3,$3)
+		result, err := tx.ExecContext(ctx, `
+update xz_ppt_v2_agent_plans set intent=$2::jsonb,updated_at=$3
+where generation_job_id=$1 and intent=$2::jsonb
 `, job.ID, string(raw), normalizedAgentTime(now))
-		return err
+		if err != nil {
+			return err
+		}
+		return requireSingleAgentPlanRow(result)
 	})
 }
 
@@ -52,14 +140,18 @@ where generation_job_id=$1 and research is null
 }
 
 func (s *PostgresGenerationJobStore) SaveAgentStoryline(ctx context.Context, lease GenerationLease, storyline Storyline, now time.Time) (GenerationLease, error) {
-	if strings.TrimSpace(storyline.Thesis) == "" || len(storyline.Sections) == 0 || strings.TrimSpace(storyline.ClosingAction) == "" {
-		return GenerationLease{}, ErrInvalidStoryline
-	}
 	raw, err := json.Marshal(storyline)
 	if err != nil {
 		return GenerationLease{}, err
 	}
 	return s.savePostgresAgentStage(ctx, lease, GenerationStageResearched, GenerationStageStorylinePlanned, 2, now, func(tx *sql.Tx, job GenerationJob) error {
+		record, err := loadPostgresAgentRecord(ctx, tx, job.ID, true)
+		if err != nil {
+			return err
+		}
+		if err := ValidateStoryline(storyline, record.Intent, record.Research); err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `
 update xz_ppt_v2_agent_plans set storyline=$2::jsonb,updated_at=$3
 where generation_job_id=$1 and storyline is null
@@ -119,6 +211,7 @@ where generation_job_id=$1 and current_outline_revision is null
 	job.Stage = GenerationStageOutlinePlanned
 	job.Status = GenerationJobWaitingForOutlineApproval
 	job.CompletedWorkUnits = job.TotalWorkUnits
+	job.SlideCount = outline.PageCount
 	job.LeaseOwner = ""
 	job.LeaseExpiresAt = time.Time{}
 	job.UpdatedAt = now

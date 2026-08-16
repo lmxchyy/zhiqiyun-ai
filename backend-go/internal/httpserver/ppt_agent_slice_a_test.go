@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,7 +24,46 @@ func (p *pptAgentHTTPResearchProvider) Research(context.Context, pptapp.IntentSp
 	return p.pack, nil
 }
 
-func pptAgentHTTPFixture(t *testing.T) (api, string, *pptapp.MemoryGenerationJobStore, *pptAgentHTTPResearchProvider) {
+type pptAgentHTTPPlanningPort struct{}
+
+func (pptAgentHTTPPlanningPort) PlanStoryline(_ context.Context, input pptapp.StorylinePlanningInput) (pptapp.StorylinePlanningOutput, error) {
+	claimID := input.Research.Claims[0].ID
+	return pptapp.StorylinePlanningOutput{
+		Draft: pptapp.StorylineDraft{
+			Language: input.Intent.Language, Thesis: "The market shift requires a focused management response.",
+			AudienceTakeaway: "Management should prioritize the highest-confidence opportunities.",
+			NarrativeArc:     []string{"context", "evidence", "action"},
+			Sections: []pptapp.StorylineSectionDraft{
+				{Key: "context", Title: "Market context", Objective: "Frame the decision."},
+				{Key: "evidence", Title: "Evidence", Objective: "Assess the verified market signal.", EvidenceRefs: []string{claimID}},
+				{Key: "action", Title: "Action", Objective: "Define management priorities."},
+			},
+			ClosingAction: "Confirm the priority actions and owners.",
+		},
+		Provenance: pptapp.PlanningProvenance{Mode: pptapp.PlanningModeDeterministicTest, Provider: "http-test", Model: "semantic-fixture"},
+	}, nil
+}
+
+func (pptAgentHTTPPlanningPort) PlanOutline(_ context.Context, input pptapp.OutlinePlanningInput) (pptapp.OutlinePlanningOutput, error) {
+	claimID := input.Research.Claims[0].ID
+	slides := make([]pptapp.SlideObjectiveDraft, input.Intent.PageCount.Preferred)
+	for index := range slides {
+		slides[index] = pptapp.SlideObjectiveDraft{
+			Title: "Management decision " + strconv.Itoa(index+1), Purpose: "Advance the storyline for management.",
+			KeyMessage: "A focused response is required at this point in the narrative.", VisualIntent: "Professional evidence-led layout", ExpectedElementTypes: []string{"TEXT"},
+		}
+		if index > 0 && index < len(slides)-1 {
+			slides[index].EvidenceRequired = true
+			slides[index].Evidence = []pptapp.EvidenceAssignment{{ClaimID: claimID, Rationale: "This verified market claim supports the management decision on this page."}}
+		}
+	}
+	return pptapp.OutlinePlanningOutput{
+		Draft:      pptapp.OutlinePlanDraft{Language: input.Intent.Language, Slides: slides},
+		Provenance: pptapp.PlanningProvenance{Mode: pptapp.PlanningModeDeterministicTest, Provider: "http-test", Model: "semantic-fixture"},
+	}, nil
+}
+
+func pptAgentHTTPFixtureWithPlanning(t *testing.T, planning pptapp.StorylinePlanningPort, outline pptapp.OutlinePlanningPort) (api, string, *pptapp.MemoryGenerationJobStore, *pptAgentHTTPResearchProvider) {
 	t.Helper()
 	store := newJSONStore(filepath.Join(t.TempDir(), "platform.json"))
 	user, err := store.CreateAdminCustomer(adminCustomerMutation{Name: "PPT Agent User", Email: "ppt-agent@example.test"})
@@ -47,11 +87,15 @@ func pptAgentHTTPFixture(t *testing.T) (api, string, *pptapp.MemoryGenerationJob
 	}
 	provider := &pptAgentHTTPResearchProvider{pack: pack}
 	jobs := pptapp.NewMemoryGenerationJobStore()
-	service, err := pptapp.NewAgentPlanningService(jobs, provider, pptapp.AgentPlanningOptions{WorkerID: "ppt_agent_http_test", LeaseDuration: time.Minute})
+	service, err := pptapp.NewAgentPlanningService(jobs, provider, planning, outline, pptapp.AgentPlanningOptions{WorkerID: "ppt_agent_http_test", LeaseDuration: time.Minute, RetryDelay: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return api{store: store, sessions: sessions, pptAgentService: service}, "ppt-agent-token", jobs, provider
+}
+
+func pptAgentHTTPFixture(t *testing.T) (api, string, *pptapp.MemoryGenerationJobStore, *pptAgentHTTPResearchProvider) {
+	return pptAgentHTTPFixtureWithPlanning(t, pptAgentHTTPPlanningPort{}, pptAgentHTTPPlanningPort{})
 }
 
 func pptAgentHTTPRequest(t *testing.T, token, method, path string, body []byte) *http.Request {
@@ -73,8 +117,19 @@ func TestPPTAgentSliceAHTTPStopsAtApprovedOutlinePlan(t *testing.T) {
 	if err := json.Unmarshal(guideResponse.Body.Bytes(), &guided); err != nil {
 		t.Fatal(err)
 	}
-	if guided.State == nil || guided.State.Job.Status != pptapp.GenerationJobWaitingForOutlineApproval || guided.State.Outline.Revision != 1 || len(guided.State.Outline.Slides) != 10 || provider.calls != 1 {
+	if guided.State == nil || guided.State.Job.Status != pptapp.GenerationJobQueued || guided.State.Job.Stage != pptapp.GenerationStageCreated || provider.calls != 0 {
 		t.Fatalf("guide result mismatch: result=%+v calls=%d", guided, provider.calls)
+	}
+	if err := a.pptAgentService.ProcessReady(t.Context(), time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	state, err := a.pptAgentService.Get(t.Context(), pptapp.GenerationJobScope{TenantID: guided.State.Job.TenantID, UserID: guided.State.Job.UserID}, guided.State.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guided.State = &state
+	if guided.State.Job.Status != pptapp.GenerationJobWaitingForOutlineApproval || guided.State.Outline.Revision != 1 || len(guided.State.Outline.Slides) != 10 || provider.calls != 1 {
+		t.Fatalf("planning result mismatch: result=%+v calls=%d", guided, provider.calls)
 	}
 	bundle, err := jobs.Get(t.Context(), pptapp.GenerationJobScope{TenantID: guided.State.Job.TenantID, UserID: guided.State.Job.UserID}, guided.State.Job.ID)
 	if err != nil || bundle.Deck.ID != "" || len(bundle.Slides) != 0 {
@@ -130,6 +185,34 @@ func TestPPTAgentSliceAHTTPStopsAtApprovedOutlinePlan(t *testing.T) {
 	a.getPPTAgentState(getResponse, getRequest)
 	if getResponse.Code != http.StatusOK || !bytes.Contains(getResponse.Body.Bytes(), []byte(`"approvedOutline"`)) {
 		t.Fatalf("get approved state=%d body=%s", getResponse.Code, getResponse.Body.String())
+	}
+}
+
+func TestPPTAgentSliceA1HTTPRetriesDurablePlanningFailure(t *testing.T) {
+	a, token, _, _ := pptAgentHTTPFixtureWithPlanning(t, nil, nil)
+	guideResponse := httptest.NewRecorder()
+	a.guidePPTAgent(guideResponse, pptAgentHTTPRequest(t, token, http.MethodPost, "/api/v1/ppt/agent/guide", []byte(`{"idempotencyKey":"http-guide-retry","text":"Create a 10-page market analysis for management.","pageCount":10,"language":"en"}`)))
+	var guided pptapp.AgentGuideResult
+	if err := json.Unmarshal(guideResponse.Body.Bytes(), &guided); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.pptAgentService.ProcessReady(t.Context(), time.Now().UTC().Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	jobID := guided.State.Job.ID
+	retryRequest := pptAgentHTTPRequest(t, token, http.MethodPost, "/api/v1/ppt/agent/jobs/"+jobID+"/retry", nil)
+	retryRequest.SetPathValue("jobId", jobID)
+	retryResponse := httptest.NewRecorder()
+	a.retryPPTAgentPlanning(retryResponse, retryRequest)
+	if retryResponse.Code != http.StatusOK {
+		t.Fatalf("retry status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
+	}
+	var retried pptapp.AgentPlanningState
+	if err := json.Unmarshal(retryResponse.Body.Bytes(), &retried); err != nil {
+		t.Fatal(err)
+	}
+	if retried.Job.Status != pptapp.GenerationJobQueued || retried.Job.Stage != pptapp.GenerationStageResearched || retried.Job.Error != nil {
+		t.Fatalf("retry did not resume failed stage: %+v", retried.Job)
 	}
 }
 

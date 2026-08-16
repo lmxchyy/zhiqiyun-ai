@@ -119,32 +119,43 @@ type StorylineSection struct {
 
 type Storyline struct {
 	ID               string             `json:"id"`
+	Language         string             `json:"language"`
 	Thesis           string             `json:"thesis"`
 	AudienceTakeaway string             `json:"audienceTakeaway"`
 	NarrativeArc     []string           `json:"narrativeArc"`
 	Sections         []StorylineSection `json:"sections"`
 	ClosingAction    string             `json:"closingAction"`
+	Provenance       PlanningProvenance `json:"provenance"`
+}
+
+type EvidenceAssignment struct {
+	ClaimID   string `json:"claimId"`
+	Rationale string `json:"rationale"`
 }
 
 type SlideObjective struct {
-	SlideID              string   `json:"slideId"`
-	Title                string   `json:"title"`
-	Purpose              string   `json:"purpose"`
-	KeyMessage           string   `json:"keyMessage"`
-	EvidenceRefs         []string `json:"evidenceRefs"`
-	VisualIntent         string   `json:"visualIntent"`
-	ExpectedElementTypes []string `json:"expectedElementTypes"`
+	SlideID              string               `json:"slideId"`
+	Title                string               `json:"title"`
+	Purpose              string               `json:"purpose"`
+	KeyMessage           string               `json:"keyMessage"`
+	EvidenceRequired     bool                 `json:"evidenceRequired"`
+	EvidenceRefs         []string             `json:"evidenceRefs"`
+	Evidence             []EvidenceAssignment `json:"evidence"`
+	VisualIntent         string               `json:"visualIntent"`
+	ExpectedElementTypes []string             `json:"expectedElementTypes"`
 }
 
 type OutlinePlan struct {
-	ID                string           `json:"id"`
-	Revision          int              `json:"revision"`
-	Topic             string           `json:"topic"`
-	PageCount         int              `json:"pageCount"`
-	NextSlideSequence int              `json:"nextSlideSequence"`
-	Slides            []SlideObjective `json:"slides"`
-	CreatedAt         time.Time        `json:"createdAt"`
-	ApprovedAt        time.Time        `json:"approvedAt,omitempty"`
+	ID                string             `json:"id"`
+	Revision          int                `json:"revision"`
+	Topic             string             `json:"topic"`
+	Language          string             `json:"language"`
+	PageCount         int                `json:"pageCount"`
+	NextSlideSequence int                `json:"nextSlideSequence"`
+	Slides            []SlideObjective   `json:"slides"`
+	CreatedAt         time.Time          `json:"createdAt"`
+	ApprovedAt        time.Time          `json:"approvedAt,omitempty"`
+	Provenance        PlanningProvenance `json:"provenance"`
 }
 
 type OutlineEditCommand struct {
@@ -153,117 +164,6 @@ type OutlineEditCommand struct {
 	AfterSlideID string          `json:"afterSlideId,omitempty"`
 	ToIndex      int             `json:"toIndex,omitempty"`
 	Objective    *SlideObjective `json:"objective,omitempty"`
-}
-
-func BuildProfessionalStoryline(intent IntentSpec, research ResearchPack) (Storyline, error) {
-	if strings.TrimSpace(intent.Topic) == "" || strings.TrimSpace(intent.Audience) == "" {
-		return Storyline{}, ErrInvalidStoryline
-	}
-	if err := ValidateResearchPack(research); err != nil {
-		return Storyline{}, err
-	}
-	definitions := professionalStorylineDefinitions(intent.Goal)
-	claimIDs := make([]string, 0, len(research.Claims))
-	for _, claim := range research.Claims {
-		claimIDs = append(claimIDs, claim.ID)
-	}
-	sections := make([]StorylineSection, 0, len(definitions))
-	arc := make([]string, 0, len(definitions))
-	for index, definition := range definitions {
-		section := StorylineSection{
-			ID:        "section_" + strconv.Itoa(index+1),
-			Title:     definition[0],
-			Objective: strings.ReplaceAll(definition[1], "{topic}", intent.Topic),
-		}
-		if len(claimIDs) > 0 && index < len(definitions)-1 {
-			section.EvidenceRefs = []string{claimIDs[index%len(claimIDs)]}
-		}
-		sections = append(sections, section)
-		arc = append(arc, section.ID)
-	}
-	storyline := Storyline{
-		ID:               "storyline_" + shortStableID(intent.Topic+"\x00"+intent.Audience),
-		Thesis:           intent.Topic + "正在形成值得" + intent.Audience + "现在关注并采取行动的结构性机会。",
-		AudienceTakeaway: intent.Audience + "应理解关键变化、证据、风险与可执行选择。",
-		NarrativeArc:     arc,
-		Sections:         sections,
-		ClosingAction:    "基于证据确定优先级、负责人和下一步验证动作。",
-	}
-	return storyline, nil
-}
-
-func professionalStorylineDefinitions(goal string) [][2]string {
-	if goal == "industry-analysis" || goal == "decision-support" {
-		return [][2]string{
-			{"现状与变化", "说明{topic}正在发生什么变化。"},
-			{"为什么是现在", "解释当前时间窗口与关键驱动。"},
-			{"市场与需求", "用事实说明需求结构和发展空间。"},
-			{"竞争格局", "识别主要参与者与差异化位置。"},
-			{"机会与选择", "比较可进入的机会及其价值。"},
-			{"风险与行动", "明确风险、判断条件和行动建议。"},
-		}
-	}
-	return [][2]string{
-		{"背景与需求", "说明{topic}服务的背景与核心需求。"},
-		{"价值主张", "明确{topic}为受众创造的价值。"},
-		{"方案与能力", "解释核心方案、能力与使用方式。"},
-		{"证明与行动", "用证据收束判断并提出下一步行动。"},
-	}
-}
-
-func BuildDynamicOutlinePlan(jobID string, intent IntentSpec, research ResearchPack, storyline Storyline, now time.Time) (OutlinePlan, error) {
-	jobID = strings.TrimSpace(jobID)
-	if jobID == "" || len(storyline.Sections) == 0 || len(storyline.NarrativeArc) != len(storyline.Sections) {
-		return OutlinePlan{}, ErrInvalidOutlinePlan
-	}
-	if err := ValidateResearchPack(research); err != nil {
-		return OutlinePlan{}, err
-	}
-	pageCount := intent.PageCount.Preferred
-	if !intent.PageCount.Explicit || pageCount == 0 {
-		pageCount = len(storyline.Sections) + 2
-	}
-	if pageCount < AgentMinimumPageCount {
-		pageCount = AgentMinimumPageCount
-	}
-	if pageCount > AgentMaximumPageCount {
-		pageCount = AgentMaximumPageCount
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	} else {
-		now = now.UTC()
-	}
-	plan := OutlinePlan{
-		ID: jobID + ":outline", Revision: 1, Topic: intent.Topic, PageCount: pageCount,
-		NextSlideSequence: pageCount + 1, CreatedAt: now,
-	}
-	plan.Slides = append(plan.Slides, SlideObjective{
-		SlideID: jobID + ":objective:1", Title: intent.Topic, Purpose: "建立主题、受众与汇报目标。",
-		KeyMessage: "本次汇报将围绕“" + intent.Topic + "”形成可供决策的专业判断。", VisualIntent: "简洁专业封面",
-		ExpectedElementTypes: []string{"TEXT", "SHAPE"},
-	})
-	contentSlides := pageCount - 2
-	for index := 0; index < contentSlides; index++ {
-		section := storyline.Sections[index%len(storyline.Sections)]
-		title := section.Title
-		if index >= len(storyline.Sections) {
-			title += "：关键证据"
-		}
-		plan.Slides = append(plan.Slides, SlideObjective{
-			SlideID: jobID + ":objective:" + strconv.Itoa(index+2), Title: title, Purpose: section.Objective,
-			KeyMessage: section.Objective, EvidenceRefs: append([]string(nil), section.EvidenceRefs...),
-			VisualIntent: "用层次清晰的商务结构表达“" + title + "”", ExpectedElementTypes: []string{"TEXT", "SHAPE"},
-		})
-	}
-	plan.Slides = append(plan.Slides, SlideObjective{
-		SlideID: jobID + ":objective:" + strconv.Itoa(pageCount), Title: "结论与下一步行动", Purpose: "收束全篇并推动行动。",
-		KeyMessage: storyline.ClosingAction, VisualIntent: "行动优先级与责任清单", ExpectedElementTypes: []string{"TEXT", "SHAPE"},
-	})
-	if err := ValidateOutlinePlan(plan, research); err != nil {
-		return OutlinePlan{}, err
-	}
-	return plan, nil
 }
 
 func ApplyOutlineCommands(current OutlinePlan, commands []OutlineEditCommand, research ResearchPack) (OutlinePlan, error) {
@@ -338,7 +238,7 @@ func ApplyOutlineCommands(current OutlinePlan, commands []OutlineEditCommand, re
 }
 
 func ValidateOutlinePlan(plan OutlinePlan, research ResearchPack) error {
-	if plan.ID == "" || plan.Revision <= 0 || plan.Topic == "" || plan.PageCount != len(plan.Slides) || plan.PageCount < AgentMinimumPageCount || plan.PageCount > AgentMaximumPageCount || plan.NextSlideSequence <= plan.PageCount || plan.CreatedAt.IsZero() {
+	if plan.ID == "" || plan.Revision <= 0 || plan.Topic == "" || plan.Language == "" || plan.PageCount != len(plan.Slides) || plan.PageCount < AgentMinimumPageCount || plan.PageCount > AgentMaximumPageCount || plan.NextSlideSequence <= plan.PageCount || plan.CreatedAt.IsZero() || !validPlanningProvenance(plan.Provenance) {
 		return ErrInvalidOutlinePlan
 	}
 	claimIDs := map[string]struct{}{}
@@ -354,10 +254,29 @@ func ValidateOutlinePlan(plan OutlinePlan, research ResearchPack) error {
 			return ErrInvalidOutlinePlan
 		}
 		seen[slide.SlideID] = struct{}{}
+		if slide.EvidenceRequired && len(slide.Evidence) == 0 {
+			return ErrInvalidEvidenceMapping
+		}
+		assigned := make(map[string]string, len(slide.Evidence))
+		for _, evidence := range slide.Evidence {
+			if strings.TrimSpace(evidence.ClaimID) == "" || strings.TrimSpace(evidence.Rationale) == "" {
+				return ErrInvalidEvidenceMapping
+			}
+			if _, exists := claimIDs[evidence.ClaimID]; !exists {
+				return ErrInvalidEvidenceMapping
+			}
+			assigned[evidence.ClaimID] = evidence.Rationale
+		}
 		for _, evidenceRef := range slide.EvidenceRefs {
 			if _, exists := claimIDs[evidenceRef]; !exists {
-				return ErrInvalidOutlinePlan
+				return ErrInvalidEvidenceMapping
 			}
+			if _, exists := assigned[evidenceRef]; !exists {
+				return ErrInvalidEvidenceMapping
+			}
+		}
+		if len(assigned) != len(slide.EvidenceRefs) {
+			return ErrInvalidEvidenceMapping
 		}
 	}
 	return nil
@@ -373,6 +292,7 @@ func cloneOutlinePlan(input OutlinePlan) OutlinePlan {
 
 func cloneSlideObjective(input SlideObjective) SlideObjective {
 	input.EvidenceRefs = append([]string(nil), input.EvidenceRefs...)
+	input.Evidence = append([]EvidenceAssignment(nil), input.Evidence...)
 	input.ExpectedElementTypes = append([]string(nil), input.ExpectedElementTypes...)
 	return input
 }
@@ -577,6 +497,8 @@ func InterpretAgentIntent(request IntentRequest) IntentResolution {
 	language := strings.TrimSpace(request.Language)
 	if language == "" {
 		language = agentLanguage(text)
+	} else {
+		language = canonicalAgentLanguage(language, text)
 	}
 	style := strings.TrimSpace(request.ProfessionalStyle)
 	if style == "" {
@@ -592,6 +514,18 @@ func InterpretAgentIntent(request IntentRequest) IntentResolution {
 		ResearchRequired: researchRequired,
 	}
 	return IntentResolution{Intent: &intent}
+}
+
+func canonicalAgentLanguage(language, text string) string {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(language), "_", "-"))
+	switch {
+	case normalized == "zh" || strings.HasPrefix(normalized, "zh-"):
+		return "zh-CN"
+	case normalized == "en" || strings.HasPrefix(normalized, "en-"):
+		return "en-US"
+	default:
+		return agentLanguage(text)
+	}
 }
 
 func criticalTopicClarification() IntentResolution {
