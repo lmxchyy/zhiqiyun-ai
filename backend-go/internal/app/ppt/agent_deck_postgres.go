@@ -197,7 +197,8 @@ func (s *PostgresGenerationJobStore) EnqueueAgentEdit(ctx context.Context, scope
 	}
 	job.Status, job.Stage, job.RunAfter, job.LastError = GenerationJobQueued, GenerationStageOutlineApproved, now, nil
 	job.LeaseOwner, job.LeaseExpiresAt = "", time.Time{}
-	job.FinishedAt = time.Time{}
+	job.AttemptCount, job.CompletedWorkUnits = 0, 0
+	job.StartedAt, job.FinishedAt = time.Time{}, time.Time{}
 	job.UpdatedAt = now
 	if err := persistGenerationJob(ctx, tx, job); err != nil {
 		return AgentPlanningState{}, err
