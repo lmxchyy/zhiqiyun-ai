@@ -209,7 +209,10 @@ func (s *MemoryGenerationJobStore) EnqueueAgentEdit(_ context.Context, scope Gen
 	record.DeckGeneration.PendingEdit = &request
 	job.Status, job.Stage, job.RunAfter, job.LastError = GenerationJobQueued, GenerationStageOutlineApproved, now, nil
 	job.LeaseOwner, job.LeaseExpiresAt = "", time.Time{}
-	job.AttemptCount, job.CompletedWorkUnits = 0, 0
+	if job.AttemptCount >= job.MaxAttempts {
+		job.MaxAttempts = job.AttemptCount + 1
+	}
+	job.CompletedWorkUnits = 0
 	job.StartedAt, job.FinishedAt = time.Time{}, time.Time{}
 	job.UpdatedAt = now
 	job.FinishedAt = time.Time{}
