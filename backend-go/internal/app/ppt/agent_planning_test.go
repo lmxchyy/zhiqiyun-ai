@@ -43,6 +43,13 @@ func TestInterpretAgentIntentNormalizesExplicitLanguageForPlanningContract(t *te
 	}
 }
 
+func TestInterpretAgentIntentRequiresResearchForEnglishIndustryAnalysis(t *testing.T) {
+	result := InterpretAgentIntent(IntentRequest{Text: "Create a 10-page electric vehicle industry analysis for company management.", Language: "en"})
+	if result.Intent == nil || !result.Intent.ResearchRequired {
+		t.Fatalf("English industry analysis did not require research: %+v", result)
+	}
+}
+
 func TestInterpretAgentIntentPreservesExplicitPageCountRange(t *testing.T) {
 	result := InterpretAgentIntent(IntentRequest{Text: "帮我做一份8～10页的AI Agent行业趋势分析，给公司管理层汇报。"})
 	if result.Intent == nil || !result.Intent.PageCount.Explicit || result.Intent.PageCount.Min != 8 || result.Intent.PageCount.Max != 10 || result.Intent.PageCount.Preferred != 9 {

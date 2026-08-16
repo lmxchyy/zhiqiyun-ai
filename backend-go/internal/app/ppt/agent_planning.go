@@ -649,7 +649,7 @@ func agentProfessionalStyle(text string) string {
 
 func agentResearchRequired(text string) bool {
 	value := strings.ToLower(text)
-	for _, marker := range []string{"行业", "市场", "趋势", "分析", "数据", "投资", "研究", "research", "market", "trend", "data"} {
+	for _, marker := range []string{"行业", "市场", "趋势", "分析", "数据", "投资", "研究", "research", "industry", "market", "trend", "analysis", "data", "investment"} {
 		if strings.Contains(value, marker) {
 			return true
 		}
