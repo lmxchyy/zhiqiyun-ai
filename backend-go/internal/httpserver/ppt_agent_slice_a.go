@@ -11,6 +11,11 @@ import (
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
+type pptAgentEditRequest struct {
+	Message string              `json:"message,omitempty"`
+	Command *pptapp.EditCommand `json:"command,omitempty"`
+}
+
 type pptAgentGuideRequest struct {
 	IdempotencyKey    string `json:"idempotencyKey"`
 	Text              string `json:"text"`
@@ -164,6 +169,41 @@ func (a api) retryPPTAgentPlanning(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, state)
 }
 
+func (a api) editPPTAgentDeck(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.pptAgentUser(w, r)
+	if !ok {
+		return
+	}
+	var request pptAgentEditRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	command := pptapp.EditCommand{}
+	if request.Command != nil {
+		command = *request.Command
+	}
+	state, err := a.pptAgentService.ApplyEdit(r.Context(), pptapp.GenerationJobScope{TenantID: effectiveTenantID(user), UserID: user.ID}, r.PathValue("jobId"), command, strings.TrimSpace(request.Message), time.Now().UTC())
+	if err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	writeJSON(w, state)
+}
+
+func (a api) undoPPTAgentDeck(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.pptAgentUser(w, r)
+	if !ok {
+		return
+	}
+	state, err := a.pptAgentService.UndoEdit(r.Context(), pptapp.GenerationJobScope{TenantID: effectiveTenantID(user), UserID: user.ID}, r.PathValue("jobId"), time.Now().UTC())
+	if err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	writeJSON(w, state)
+}
+
 func (a api) pptAgentUser(w http.ResponseWriter, r *http.Request) (adminUser, bool) {
 	user, err := a.currentUser(r)
 	if err != nil {
@@ -181,9 +221,9 @@ func writePPTAgentError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pptapp.ErrGenerationJobNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, pptapp.ErrStaleOutlineRevision), errors.Is(err, pptapp.ErrOutlinePlanApproved), errors.Is(err, pptapp.ErrGenerationJobTransition), errors.Is(err, pptapp.ErrGenerationJobIdempotencyConflict), errors.Is(err, pptapp.ErrGenerationJobTerminal), errors.Is(err, pptapp.ErrGenerationJobNotReady):
+	case errors.Is(err, pptapp.ErrStaleOutlineRevision), errors.Is(err, pptapp.ErrEditStaleRevision), errors.Is(err, pptapp.ErrEditNoUndo), errors.Is(err, pptapp.ErrOutlinePlanApproved), errors.Is(err, pptapp.ErrGenerationJobTransition), errors.Is(err, pptapp.ErrGenerationJobIdempotencyConflict), errors.Is(err, pptapp.ErrGenerationJobTerminal), errors.Is(err, pptapp.ErrGenerationJobNotReady):
 		writeError(w, http.StatusConflict, err)
-	case errors.Is(err, pptapp.ErrGenerationJobInvalid), errors.Is(err, pptapp.ErrInvalidResearchPack), errors.Is(err, pptapp.ErrInvalidStoryline), errors.Is(err, pptapp.ErrInvalidOutlinePlan), errors.Is(err, pptapp.ErrOutlineSlideNotFound):
+	case errors.Is(err, pptapp.ErrGenerationJobInvalid), errors.Is(err, pptapp.ErrEditInvalidCommand), errors.Is(err, pptapp.ErrEditTargetNotFound), errors.Is(err, pptapp.ErrEditUnsupported), errors.Is(err, pptapp.ErrEditProviderUnavailable), errors.Is(err, pptapp.ErrInvalidResearchPack), errors.Is(err, pptapp.ErrInvalidStoryline), errors.Is(err, pptapp.ErrInvalidOutlinePlan), errors.Is(err, pptapp.ErrOutlineSlideNotFound):
 		writeError(w, http.StatusBadRequest, err)
 	default:
 		writeError(w, http.StatusBadGateway, err)

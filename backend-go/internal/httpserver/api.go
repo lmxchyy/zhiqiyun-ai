@@ -221,6 +221,7 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 				artifactStore, _ := any(pgStore).(pptV2DurableArtifactStore)
 				relations, _ := any(jobStore).(pptapp.GenerationTaskRelationStore)
 				_ = pptAgentService.ConfigureDeckGeneration(planningProvider, imageAssets, compiler, pptV2AgentArtifacts{ppt: pptService, files: fileService, assets: artifactStore, jobs: jobStore, relations: relations})
+				_ = pptAgentService.ConfigureEditPlanning(planningProvider)
 				pptAgentService.Start(context.Background())
 			}
 		}

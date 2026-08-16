@@ -3,6 +3,7 @@ package ppt
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -100,6 +101,51 @@ func (s *PostgresGenerationJobStore) SaveAgentDeckCheckpoint(ctx context.Context
 	}
 	lease.Job = job
 	return lease, nil
+}
+
+func (s *PostgresGenerationJobStore) SaveAgentEdit(ctx context.Context, scope GenerationJobScope, jobID string, deckState AgentDeckGenerationState, renderBytes []byte, fileID string, now time.Time) (AgentPlanningState, error) {
+	now = normalizedAgentTime(now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	job, err := loadGenerationJobForUpdate(ctx, tx, scope, jobID)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if job.Status != GenerationJobSucceeded || job.Stage != GenerationStageCompleted || deckState.Compilation == nil || deckState.CurrentRevision <= job.Revision || deckState.Compilation.Revision != deckState.CurrentRevision {
+		return AgentPlanningState{}, ErrEditStaleRevision
+	}
+	rawState, err := json.Marshal(deckState)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	result, err := tx.ExecContext(ctx, `update xz_ppt_v2_agent_plans set deck_state=$2::jsonb,updated_at=$3 where generation_job_id=$1`, job.ID, string(rawState), now)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if err := requireSingleAgentPlanRow(result); err != nil {
+		return AgentPlanningState{}, err
+	}
+	job.Revision = deckState.CurrentRevision
+	job.UpdatedAt = now
+	if len(renderBytes) > 0 {
+		job.RenderBytes = append([]byte(nil), renderBytes...)
+	}
+	if strings.TrimSpace(fileID) != "" {
+		job.FileID = strings.TrimSpace(fileID)
+	}
+	if err := persistGenerationJob(ctx, tx, job); err != nil {
+		return AgentPlanningState{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `update xz_ppt_v2_deck_jobs set revision=$2,updated_at=$3 where generation_job_id=$1`, job.ID, job.Revision, now); err != nil {
+		return AgentPlanningState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AgentPlanningState{}, err
+	}
+	return s.GetAgentPlanning(ctx, scope, job.ID)
 }
 
 var _ AgentPlanningStore = (*PostgresGenerationJobStore)(nil)

@@ -76,6 +76,14 @@
     </div>
     <div v-else class="ppt-agent-preview-state is-error" role="alert">预览数据不可用，请重新加载。</div>
   </section>
+      <section v-if="projection && currentSlide && currentLayout" class="ppt-agent-edit-panel" aria-label="对话式修改">
+        <label for="ppt-agent-edit-request">告诉 Agent 要修改什么</label>
+        <textarea id="ppt-agent-edit-request" v-model="editText" rows="2" placeholder="例如：把当前页标题精简一下" :disabled="busy"></textarea>
+        <div class="ppt-agent-edit-actions">
+          <button type="button" :disabled="busy || !editText.trim()" @click="submitTextEdit">发送修改</button>
+          <button type="button" :disabled="busy" @click="emit('undo')">撤销上次修改</button>
+        </div>
+      </section>
 </template>
 
 <script setup lang="ts">
@@ -90,8 +98,9 @@ const props = defineProps<{
   error: string;
   busy: boolean;
 }>();
-const emit = defineEmits<{ retry: []; download: []; "asset-expired": [assetId: string] }>();
+const emit = defineEmits<{ retry: []; download: []; "asset-expired": [assetId: string]; "edit-message": [message: string]; undo: [] }>();
 const currentSlideID = ref("");
+const editText = ref("");
 const reportedAssetFailures = new Set<string>();
 
 watch(() => props.projection, projection => {
@@ -146,9 +155,22 @@ function handleAssetError(assetId: string) {
   reportedAssetFailures.add(assetId);
   emit("asset-expired", assetId);
 }
+
+function submitTextEdit() {
+  const projection = props.projection;
+  const slide = currentSlide.value;
+  if (!projection || !slide || !editText.value.trim()) return;
+  emit("edit-message", editText.value.trim());
+  editText.value = "";
+}
 </script>
 
 <style scoped>
+.ppt-agent-edit-panel { display: grid; gap: 10px; padding: 18px 20px; border: 1px solid #e1e6ef; border-radius: 16px; background: #fff; }
+.ppt-agent-edit-panel textarea { width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid #ccd4e0; border-radius: 9px; padding: 10px; font: inherit; }
+.ppt-agent-edit-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.ppt-agent-edit-actions button { border: 0; border-radius: 9px; padding: 9px 14px; background: #172033; color: #fff; cursor: pointer; }
+.ppt-agent-edit-actions button:last-child { background: #eef1f6; color: #172033; }
 .ppt-agent-deck-preview { outline: none; }
 .ppt-agent-preview-state { min-height: 260px; display: grid; place-content: center; gap: 10px; padding: 28px; text-align: center; border: 1px solid #e1e6ef; border-radius: 18px; background: #fff; color: #526071; }
 .ppt-agent-preview-state.is-error { color: #8f3030; border-color: #eccaca; background: #fff8f8; }

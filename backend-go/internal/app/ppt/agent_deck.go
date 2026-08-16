@@ -114,13 +114,15 @@ type DeckCompilation struct {
 }
 
 type AgentDeckGenerationState struct {
-	Contents          []SlideContent      `json:"contents"`
-	Assets            []ResolvedDeckAsset `json:"assets"`
-	Compilation       *DeckCompilation    `json:"compilation,omitempty"`
-	ContentExecutions int                 `json:"contentExecutions"`
-	AssetExecutions   int                 `json:"assetExecutions"`
-	LayoutExecutions  int                 `json:"layoutExecutions"`
-	RenderExecutions  int                 `json:"renderExecutions"`
+	Contents          []SlideContent         `json:"contents"`
+	Assets            []ResolvedDeckAsset    `json:"assets"`
+	Compilation       *DeckCompilation       `json:"compilation,omitempty"`
+	CurrentRevision   int                    `json:"currentRevision,omitempty"`
+	Revisions         []DeckRevisionSnapshot `json:"revisions,omitempty"`
+	ContentExecutions int                    `json:"contentExecutions"`
+	AssetExecutions   int                    `json:"assetExecutions"`
+	LayoutExecutions  int                    `json:"layoutExecutions"`
+	RenderExecutions  int                    `json:"renderExecutions"`
 }
 
 type DeckBuildInput struct {
@@ -332,12 +334,15 @@ func cloneAgentDeckGenerationState(input AgentDeckGenerationState) AgentDeckGene
 	}
 	input.Assets = append([]ResolvedDeckAsset(nil), input.Assets...)
 	if input.Compilation != nil {
-		copyValue := *input.Compilation
-		copyValue.Deck = append(json.RawMessage(nil), copyValue.Deck...)
-		copyValue.LayoutResult = append(json.RawMessage(nil), copyValue.LayoutResult...)
-		copyValue.RenderInput = append(json.RawMessage(nil), copyValue.RenderInput...)
-		copyValue.QualityIssues = append([]string(nil), copyValue.QualityIssues...)
+		copyValue := cloneDeckCompilation(*input.Compilation)
 		input.Compilation = &copyValue
+	}
+	input.Revisions = append([]DeckRevisionSnapshot(nil), input.Revisions...)
+	for index := range input.Revisions {
+		input.Revisions[index].Commands = append([]EditCommand(nil), input.Revisions[index].Commands...)
+		input.Revisions[index].AffectedSlideIDs = append([]string(nil), input.Revisions[index].AffectedSlideIDs...)
+		input.Revisions[index].Compilation = cloneDeckCompilation(input.Revisions[index].Compilation)
+		input.Revisions[index].RenderBytes = append([]byte(nil), input.Revisions[index].RenderBytes...)
 	}
 	return input
 }

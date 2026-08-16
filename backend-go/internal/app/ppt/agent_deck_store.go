@@ -143,4 +143,37 @@ func (s *MemoryGenerationJobStore) SaveAgentDeckCheckpoint(_ context.Context, le
 	return lease, nil
 }
 
+func (s *MemoryGenerationJobStore) SaveAgentEdit(_ context.Context, scope GenerationJobScope, jobID string, deckState AgentDeckGenerationState, renderBytes []byte, fileID string, now time.Time) (AgentPlanningState, error) {
+	now = normalizedAgentTime(now)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[strings.TrimSpace(jobID)]
+	if !ok || job.WorkflowType != GenerationWorkflowAgentOutline || job.TenantID != strings.TrimSpace(scope.TenantID) || job.UserID != strings.TrimSpace(scope.UserID) {
+		return AgentPlanningState{}, ErrGenerationJobNotFound
+	}
+	if job.Status != GenerationJobSucceeded || job.Stage != GenerationStageCompleted || deckState.Compilation == nil || deckState.CurrentRevision <= 0 {
+		return AgentPlanningState{}, ErrGenerationJobNotReady
+	}
+	if deckState.Compilation.Revision != deckState.CurrentRevision || deckState.CurrentRevision <= job.Revision {
+		return AgentPlanningState{}, ErrEditStaleRevision
+	}
+	record := cloneAgentPlanningRecord(s.agentPlans[job.ID])
+	record.DeckGeneration = cloneAgentDeckGenerationState(deckState)
+	job.Revision = deckState.CurrentRevision
+	if len(renderBytes) > 0 {
+		job.RenderBytes = append([]byte(nil), renderBytes...)
+	}
+	if strings.TrimSpace(fileID) != "" {
+		job.FileID = strings.TrimSpace(fileID)
+	}
+	job.UpdatedAt = now
+	deck := s.decks[job.ID]
+	deck.Revision = job.Revision
+	deck.UpdatedAt = now
+	s.decks[job.ID] = deck
+	s.agentPlans[job.ID] = record
+	s.jobs[job.ID] = job
+	return agentPlanningState(job, record), nil
+}
+
 var _ AgentPlanningStore = (*MemoryGenerationJobStore)(nil)

@@ -44,6 +44,8 @@
       @retry="agent.loadPreview(true)"
       @asset-expired="agent.refreshPreviewAssets"
       @download="agent.download"
+      @edit-message="agent.editMessage"
+      @undo="agent.undo"
     />
 
     <PptAgentOutlineReview

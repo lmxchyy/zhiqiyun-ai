@@ -150,6 +150,19 @@ export interface AgentPlanningState {
   researchExecutionCount: number;
 }
 
+export type PptAgentEditCommandType = "UPDATE_TEXT" | "REGENERATE_SLIDE" | "CHANGE_LAYOUT" | "REPLACE_IMAGE" | "MOVE_SLIDE" | "ADD_SLIDE" | "DELETE_SLIDE";
+
+export interface PptAgentEditCommand {
+  commandId: string;
+  commandType: PptAgentEditCommandType;
+  deckId: string;
+  baseRevision: number;
+  targetSlideId: string;
+  targetElementId?: string;
+  payload: Record<string, string>;
+  userIntentSummary: string;
+}
+
 export interface PptPreviewTextContent {
   kind: "plain" | "bullets";
   text?: string;

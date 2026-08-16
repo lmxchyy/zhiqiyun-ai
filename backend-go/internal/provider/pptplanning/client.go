@@ -94,6 +94,17 @@ func (c *Client) PlanSlideContent(ctx context.Context, input pptapp.SlideContent
 	return pptapp.SlideContentPlanningOutput{Draft: draft, Provenance: planningProvenance(response)}, nil
 }
 
+func (c *Client) PlanEdit(ctx context.Context, input pptapp.EditPlanningInput) (pptapp.EditCommandDraft, error) {
+	if c == nil || c.chat == nil || c.model == "" { return pptapp.EditCommandDraft{}, errors.New(pptapp.ErrEditProviderUnavailable.Error()) }
+	payload, err := json.Marshal(struct{ Message string `json:"message"`; State pptapp.AgentPlanningState `json:"state"` }{input.Message, input.State})
+	if err != nil { return pptapp.EditCommandDraft{}, err }
+	response, err := c.call(ctx, "You are a controlled presentation editing planner. Return one strict JSON object and no Markdown. Never emit JSON Patch or arbitrary fields.", fmt.Sprintf(`Translate the user's edit request into one validated command. Only use UPDATE_TEXT, REGENERATE_SLIDE, CHANGE_LAYOUT, REPLACE_IMAGE, MOVE_SLIDE, ADD_SLIDE, DELETE_SLIDE. Use only slide and element identities present in the supplied state. Keep deckId and baseRevision from state. Return exactly {"command":{"commandId":"model-draft","commandType":"UPDATE_TEXT","deckId":"...","baseRevision":1,"targetSlideId":"...","targetElementId":"...","payload":{"text":"..."},"userIntentSummary":"..."}}. User request and authoritative state: %s`, payload))
+	if err != nil { return pptapp.EditCommandDraft{}, err }
+	var draft pptapp.EditCommandDraft
+	if err := decodeStrictJSON(response.Message.Content, &draft); err != nil { return pptapp.EditCommandDraft{}, planningError(pptapp.PlanningInvalidOutput, "修改规划结果无法解析，请重试。", err) }
+	return draft, nil
+}
+
 func (c *Client) call(ctx context.Context, systemPrompt, prompt string) (chat.Response, error) {
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -228,3 +239,4 @@ func planningError(code, message string, cause error) *pptapp.AgentWorkflowError
 var _ pptapp.StorylinePlanningPort = (*Client)(nil)
 var _ pptapp.OutlinePlanningPort = (*Client)(nil)
 var _ pptapp.SlideContentPlanningPort = (*Client)(nil)
+var _ pptapp.EditPlanningPort = (*Client)(nil)

@@ -29,7 +29,7 @@ import type {
   PptSlide,
   PptTaskResponse
 } from "../types/ppt";
-import type { AgentGuideRequest, AgentGuideResult, AgentPlanningState, OutlineEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
+import type { AgentGuideRequest, AgentGuideResult, AgentPlanningState, OutlineEditCommand, PptAgentEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
 
 export type {
   PptCreateMode,
@@ -313,6 +313,18 @@ export function getPptAgentPreview(jobId: string, revision: number): Promise<Ppt
     url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/preview`,
     params: { revision }
   });
+}
+
+export function editPptAgentDeck(jobId: string, command: PptAgentEditCommand): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/edit`, data: { command } });
+}
+
+export function editPptAgentMessage(jobId: string, message: string): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/edit`, data: { message } });
+}
+
+export function undoPptAgentDeck(jobId: string): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/undo` });
 }
 
 export function updatePptAgentOutline(jobId: string, expectedRevision: number, commands: OutlineEditCommand[]): Promise<AgentPlanningState> {

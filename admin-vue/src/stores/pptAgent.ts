@@ -2,13 +2,16 @@ import { defineStore } from "pinia";
 import {
   approvePptAgentOutline,
   downloadPptAgentDeck,
+  editPptAgentDeck,
+  editPptAgentMessage,
   getPptAgentPreview,
   getPptAgentState,
   guidePptAgent,
   retryPptAgentPlanning,
+  undoPptAgentDeck,
   updatePptAgentOutline
 } from "../api/ppt";
-import type { AgentGuideRequest, AgentPlanningStage, AgentPlanningState, OutlineEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
+import type { AgentGuideRequest, AgentPlanningStage, AgentPlanningState, OutlineEditCommand, PptAgentEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
 
 const activePlanningStorageKey = "xianzhi_ppt_agent_planning_job";
 let pollingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -188,6 +191,47 @@ export const usePptAgentStore = defineStore("pptAgent", {
     },
     async refreshPreviewAssets() {
       await this.loadPreview(true);
+    },
+    async edit(command: PptAgentEditCommand) {
+      if (!this.state?.job.id || !this.isCompleted) return;
+      this.busy = true;
+      this.requestError = "";
+      try {
+        this.state = await editPptAgentDeck(this.state.job.id, command);
+        await this.loadPreview(true);
+      } catch (error) {
+        this.requestError = error instanceof Error ? error.message : "修改未完成，请刷新后重试。";
+        await this.refresh();
+      } finally {
+        this.busy = false;
+      }
+    },
+    async editMessage(message: string) {
+      if (!this.state?.job.id || !this.isCompleted || !message.trim()) return;
+      this.busy = true;
+      this.requestError = "";
+      try {
+        this.state = await editPptAgentMessage(this.state.job.id, message.trim());
+        await this.loadPreview(true);
+      } catch (error) {
+        this.requestError = error instanceof Error ? error.message : "修改未完成，请刷新后重试。";
+        await this.refresh();
+      } finally {
+        this.busy = false;
+      }
+    },
+    async undo() {
+      if (!this.state?.job.id || !this.isCompleted) return;
+      this.busy = true;
+      this.requestError = "";
+      try {
+        this.state = await undoPptAgentDeck(this.state.job.id);
+        await this.loadPreview(true);
+      } catch (error) {
+        this.requestError = error instanceof Error ? error.message : "撤销未完成，请刷新后重试。";
+      } finally {
+        this.busy = false;
+      }
     },
     async applyCommands(commands: OutlineEditCommand[]) {
       if (!this.state || !commands.length) return;

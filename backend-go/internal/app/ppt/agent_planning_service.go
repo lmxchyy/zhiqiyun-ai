@@ -83,6 +83,7 @@ type AgentPlanningStore interface {
 	GetAgentPlanning(context.Context, GenerationJobScope, string) (AgentPlanningState, error)
 	UpdateAgentOutline(context.Context, GenerationJobScope, string, int, []OutlineEditCommand, time.Time) (AgentPlanningState, error)
 	ApproveAgentOutline(context.Context, GenerationJobScope, string, int, time.Time) (AgentPlanningState, error)
+	SaveAgentEdit(context.Context, GenerationJobScope, string, AgentDeckGenerationState, []byte, string, time.Time) (AgentPlanningState, error)
 	SaveAgentDeckCheckpoint(context.Context, GenerationLease, AgentDeckCheckpoint) (GenerationLease, error)
 }
 
@@ -103,6 +104,7 @@ type AgentPlanningService struct {
 	assets        AgentDeckAssetPort
 	compiler      AgentDeckCompilerPort
 	artifacts     AgentDeckArtifactPort
+	editPlanner   EditPlanningPort
 	workerID      string
 	leaseDuration time.Duration
 	retryDelay    time.Duration
@@ -119,6 +121,14 @@ func (s *AgentPlanningService) ConfigureDeckGeneration(content SlideContentPlann
 	s.assets = assets
 	s.compiler = compiler
 	s.artifacts = artifacts
+	return nil
+}
+
+func (s *AgentPlanningService) ConfigureEditPlanning(planner EditPlanningPort) error {
+	if s == nil || planner == nil {
+		return ErrEditProviderUnavailable
+	}
+	s.editPlanner = planner
 	return nil
 }
 
@@ -219,6 +229,100 @@ func (s *AgentPlanningService) ApproveOutline(ctx context.Context, scope Generat
 		s.Wake()
 	}
 	return state, err
+}
+
+func (s *AgentPlanningService) ApplyEdit(ctx context.Context, scope GenerationJobScope, jobID string, command EditCommand, message string, now time.Time) (AgentPlanningState, error) {
+	state, err := s.store.GetAgentPlanning(ctx, scope, jobID)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if state.Job.Status != GenerationJobSucceeded || state.Job.Stage != GenerationStageCompleted || state.DeckGeneration == nil || state.DeckGeneration.Compilation == nil {
+		return AgentPlanningState{}, ErrGenerationJobNotReady
+	}
+	if strings.TrimSpace(message) != "" {
+		if s.editPlanner == nil {
+			return AgentPlanningState{}, ErrEditProviderUnavailable
+		}
+		draft, planErr := s.editPlanner.PlanEdit(ctx, EditPlanningInput{Message: strings.TrimSpace(message), State: state})
+		if planErr != nil {
+			return AgentPlanningState{}, NewAgentWorkflowError("edit_provider_unavailable", "修改规划服务暂时不可用，请重试。", true, planErr)
+		}
+		command = draft.Command
+		command.CommandID = "edit_" + newGenerationJobID()
+		command.DeckID = state.Job.DeckID
+		command.BaseRevision = state.Job.Revision
+		command.UserIntentSummary = strings.TrimSpace(message)
+	}
+	updated, err := ApplyEditCommand(*state.DeckGeneration, command, normalizedAgentTime(now))
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if updated.CurrentRevision == state.DeckGeneration.CurrentRevision {
+		return state, nil
+	}
+	var renderBytes []byte
+	var fileID string
+	if len(updated.Revisions) > 0 {
+		updated.Revisions[0].FileID = state.Job.FileID
+	}
+	if s.compiler == nil || s.artifacts == nil {
+		return AgentPlanningState{}, ErrEditUnsupported
+	}
+	rendered, err := s.compiler.Render(ctx, *updated.Compilation, updated.Assets)
+	if err != nil || len(rendered.PPTX) == 0 {
+		return AgentPlanningState{}, NewAgentWorkflowError("edit_render_failed", "新版 PPT 生成失败，请重试。", true, err)
+	}
+	renderBytes = rendered.PPTX
+	fileID, err = s.artifacts.StorePPTX(ctx, scope, jobID, state.Job.TaskID, renderBytes)
+	if err != nil {
+		return AgentPlanningState{}, NewAgentWorkflowError("edit_asset_failed", "新版 PPT 保存失败，请重试。", true, err)
+	}
+	if len(updated.Revisions) > 0 {
+		last := len(updated.Revisions) - 1
+		updated.Revisions[last].FileID = fileID
+		updated.Revisions[last].RenderBytes = append([]byte(nil), renderBytes...)
+	}
+	return s.store.SaveAgentEdit(ctx, scope, jobID, updated, renderBytes, fileID, normalizedAgentTime(now))
+}
+
+func (s *AgentPlanningService) UndoEdit(ctx context.Context, scope GenerationJobScope, jobID string, now time.Time) (AgentPlanningState, error) {
+	state, err := s.store.GetAgentPlanning(ctx, scope, jobID)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if state.DeckGeneration == nil {
+		return AgentPlanningState{}, ErrGenerationJobNotReady
+	}
+	updated, err := UndoLastEdit(*state.DeckGeneration)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	var fileID string
+	var parentCompilation *DeckCompilation
+	for _, revision := range updated.Revisions {
+		if revision.Revision == updated.CurrentRevision {
+			fileID = revision.FileID
+			compilation := cloneDeckCompilation(revision.Compilation)
+			parentCompilation = &compilation
+			break
+		}
+	}
+	if parentCompilation == nil || s.compiler == nil || s.artifacts == nil {
+		return AgentPlanningState{}, ErrEditNoUndo
+	}
+	rendered, renderErr := s.compiler.Render(ctx, *parentCompilation, updated.Assets)
+	if renderErr != nil || len(rendered.PPTX) == 0 {
+		return AgentPlanningState{}, NewAgentWorkflowError("edit_render_failed", "撤销后的 PPT 生成失败，请重试。", true, renderErr)
+	}
+	renderBytes := rendered.PPTX
+	if fileID == "" {
+		fileID = state.Job.FileID
+	}
+	fileID, err = s.artifacts.StorePPTX(ctx, scope, jobID, state.Job.TaskID, renderBytes)
+	if err != nil {
+		return AgentPlanningState{}, NewAgentWorkflowError("edit_asset_failed", "撤销后的 PPT 保存失败，请重试。", true, err)
+	}
+	return s.store.SaveAgentEdit(ctx, scope, jobID, updated, renderBytes, fileID, normalizedAgentTime(now))
 }
 
 func (s *AgentPlanningService) Retry(ctx context.Context, scope GenerationJobScope, jobID string, now time.Time) (AgentPlanningState, error) {
