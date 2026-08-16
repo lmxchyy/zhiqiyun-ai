@@ -72,10 +72,45 @@ export function validateDeckRevision(deck) {
     const errors = [
       ...duplicates(value.slides.map((slide) => slide.id), "slide id"),
       ...duplicates(value.slides.flatMap((slide) => slide.elements.map((item) => item.id)), "element id"),
+      ...duplicates(value.assetManifest.map((asset) => asset.id), "asset id"),
     ];
+    const assetIDs = new Set(value.assetManifest.map((asset) => asset.id));
+    const provenance = value.provenance;
+    const claimIDs = new Set(provenance?.claims.map((claim) => claim.id) ?? []);
+    const citationIDs = new Set(provenance?.citations.map((citation) => citation.id) ?? []);
+    const sourceIDs = new Set(provenance?.sources.map((source) => source.id) ?? []);
+    const citationByID = new Map(provenance?.citations.map((citation) => [citation.id, citation]) ?? []);
+    if (provenance) {
+      errors.push(
+        ...duplicates(provenance.sources.map((source) => source.id), "source id"),
+        ...duplicates(provenance.citations.map((citation) => citation.id), "citation id"),
+        ...duplicates(provenance.claims.map((claim) => claim.id), "claim id"),
+      );
+      for (const citation of provenance.citations) {
+        if (!sourceIDs.has(citation.sourceId)) errors.push(`citation ${citation.id} references unknown source ${citation.sourceId}`);
+      }
+      for (const claim of provenance.claims) {
+        if (!sourceIDs.has(claim.sourceId)) errors.push(`claim ${claim.id} references unknown source ${claim.sourceId}`);
+        for (const citationRef of claim.citationRefs) {
+          if (!citationIDs.has(citationRef)) errors.push(`claim ${claim.id} references unknown citation ${citationRef}`);
+          else if (citationByID.get(citationRef).sourceId !== claim.sourceId) errors.push(`claim ${claim.id} citation ${citationRef} belongs to another source`);
+        }
+      }
+    }
     value.slides.forEach((slide, index) => {
       if (slide.sequence !== index + 1) {
         errors.push(`slide ${slide.id} sequence ${slide.sequence} does not match position ${index + 1}`);
+      }
+      for (const claimRef of slide.citationRefs ?? []) {
+        if (!claimIDs.has(claimRef)) errors.push(`slide ${slide.id} references unknown claim ${claimRef}`);
+      }
+      for (const element of slide.elements) {
+        if (element.type === "image" && !assetIDs.has(element.assetRef)) {
+          errors.push(`image ${element.id} references unknown asset ${element.assetRef}`);
+        }
+        for (const claimRef of element.citationRefs ?? []) {
+          if (!claimIDs.has(claimRef)) errors.push(`element ${element.id} references unknown claim ${claimRef}`);
+        }
       }
     });
     return errors;
@@ -100,6 +135,7 @@ export function validateLayoutResult(layoutResult) {
 export function validateRenderInput(renderInput) {
   return validate(validators.renderInput, renderInput, (value) => {
     const errors = [];
+    const assetIDs = new Set(value.assetManifest.map((asset) => asset.id));
     const layoutBySlide = new Map(value.layoutResults.map((item) => [item.slideId, item]));
     for (const slide of value.slides) {
       const layout = layoutBySlide.get(slide.id);
@@ -111,6 +147,9 @@ export function validateRenderInput(renderInput) {
       for (const element of slide.elements) {
         if (!layoutElements.has(element.id)) {
           errors.push(`missing layout element for ${element.id}`);
+        }
+        if (element.type === "image" && !assetIDs.has(element.assetRef)) {
+          errors.push(`image ${element.id} references unknown asset ${element.assetRef}`);
         }
       }
       const slideElements = new Set(slide.elements.map((item) => item.id));

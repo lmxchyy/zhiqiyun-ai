@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import {
   approvePptAgentOutline,
+  downloadPptAgentDeck,
   getPptAgentState,
   guidePptAgent,
   retryPptAgentPlanning,
@@ -17,7 +18,16 @@ const stageLabels: Record<AgentPlanningStage, string> = {
   RESEARCHED: "正在规划叙事",
   STORYLINE_PLANNED: "正在生成大纲",
   OUTLINE_PLANNED: "大纲已生成，请确认",
-  OUTLINE_APPROVED: "方案已确认，大纲已经安全保存"
+  OUTLINE_APPROVED: "正在生成内容",
+  CONTENT_READY: "正在准备图片",
+  ASSETS_READY: "正在排版",
+  LAYOUT_COMPILED: "正在检查",
+  QUALITY_CHECKED: "正在生成 PPTX",
+  RENDERED: "正在保存文件",
+  FILE_STORED: "正在创建作品",
+  ASSET_CREATED: "正在关联项目",
+  TASK_RELATED: "即将完成",
+  COMPLETED: "演示文稿已完成"
 };
 
 const structuredFailureMessages: Record<string, string> = {
@@ -29,7 +39,21 @@ const structuredFailureMessages: Record<string, string> = {
   research_provider_unavailable: "研究服务暂时不可用，请稍后重试。",
   research_timeout: "研究资料请求超时，请重试。",
   research_invalid_result: "没有获得可验证的研究结论，请重试。",
-  research_contract_validation_failed: "研究资料未通过结构校验，请重试。"
+  research_contract_validation_failed: "研究资料未通过结构校验，请重试。",
+  content_provider_unavailable: "内容生成服务暂时不可用，请稍后重试。",
+  content_timeout: "页面内容生成超时，请重试。",
+  content_invalid_output: "页面内容格式不正确，请重试。",
+  content_contract_validation_failed: "页面内容未通过质量校验，请重试。",
+  content_evidence_mapping_invalid: "页面内容与已批准证据不一致，请重试。",
+  image_provider_unavailable: "图片服务暂时不可用，请稍后重试。",
+  image_timeout: "图片生成超时，请重试。",
+  image_invalid_result: "图片结果无效，请重试。",
+  image_storage_failed: "图片保存失败，请重试。",
+  layout_compilation_failed: "演示文稿排版失败，请重试。",
+  quality_gate_failed: "演示文稿存在阻断问题，暂时无法导出。",
+  pptx_render_failed: "PPTX 生成失败，请重试。",
+  artifact_storage_failed: "演示文稿保存失败，请重试。",
+  artifact_relation_failed: "演示文稿作品关联失败，请重试。"
 };
 
 export function planningStageLabel(stage: AgentPlanningStage | string) {
@@ -37,7 +61,7 @@ export function planningStageLabel(stage: AgentPlanningStage | string) {
 }
 
 export function planningProductMessage(stage: AgentPlanningStage | string) {
-  return stage === "OUTLINE_APPROVED" ? stageLabels.OUTLINE_APPROVED : planningStageLabel(stage);
+  return planningStageLabel(stage);
 }
 
 export function planningFailureMessage(state: AgentPlanningState | null) {
@@ -77,7 +101,8 @@ export const usePptAgentStore = defineStore("pptAgent", {
     stageLabel: state => planningStageLabel(state.state?.job.stage || ""),
     isPlanning: state => ["QUEUED", "RUNNING"].includes(state.state?.job.status || ""),
     isWaitingForApproval: state => state.state?.job.status === "WAITING_FOR_OUTLINE_APPROVAL",
-    isApproved: state => state.state?.job.stage === "OUTLINE_APPROVED",
+    isApproved: state => Boolean(state.state?.approvedOutline),
+    isCompleted: state => state.state?.job.status === "SUCCEEDED" && state.state?.job.stage === "COMPLETED",
     canRetry: state => Boolean(state.state?.job.error?.retryable && ["RETRY_WAIT", "FAILED"].includes(state.state.job.status)),
     failureMessage: state => planningFailureMessage(state.state)
   },
@@ -156,7 +181,7 @@ export const usePptAgentStore = defineStore("pptAgent", {
       this.requestError = "";
       try {
         this.state = await approvePptAgentOutline(this.state.job.id, this.state.outline.revision);
-        this.stopPolling();
+        this.startPolling();
       } catch (error) {
         this.requestError = error instanceof Error ? error.message : "确认大纲失败，请刷新后重试。";
         await this.refresh();
@@ -175,6 +200,16 @@ export const usePptAgentStore = defineStore("pptAgent", {
         this.requestError = error instanceof Error ? error.message : "重试失败，请稍后再试。";
       } finally {
         this.busy = false;
+      }
+    },
+    async download() {
+      if (!this.state?.job.id || !this.isCompleted) return;
+      this.requestError = "";
+      try {
+        const ticket = await downloadPptAgentDeck(this.state.job.id);
+        window.location.assign(ticket.url);
+      } catch (error) {
+        this.requestError = error instanceof Error ? error.message : "暂时无法下载 PPTX，请稍后重试。";
       }
     }
   }

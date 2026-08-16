@@ -57,3 +57,26 @@ func TestPhase3SliceAPlanningMigrationContainsDurableApprovalSchema(t *testing.T
 		}
 	}
 }
+
+func TestPhase3SliceBMigrationContainsDurableDeckGenerationSchema(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve migration test path")
+	}
+	path := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "database", "migrations", "111-ppt-v2-agent-deck-generation.sql"))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := strings.ToLower(string(raw))
+	required := []string{
+		"deck_state", "content_ready", "assets_ready", "layout_compiled", "quality_checked",
+		"rendered", "file_stored", "asset_created", "task_related", "completed",
+		"uq_ppt_v2_image_asset_per_intent", "ppt_v2_image_asset",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(sqlText, fragment) {
+			t.Fatalf("Phase 3 Slice B migration is missing %q", fragment)
+		}
+	}
+}

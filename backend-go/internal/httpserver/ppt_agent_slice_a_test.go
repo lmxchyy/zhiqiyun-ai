@@ -56,6 +56,10 @@ func (pptAgentHTTPPlanningPort) PlanOutline(_ context.Context, input pptapp.Outl
 			slides[index].EvidenceRequired = true
 			slides[index].Evidence = []pptapp.EvidenceAssignment{{ClaimID: claimID, Rationale: "This verified market claim supports the management decision on this page."}}
 		}
+		if index == 2 {
+			slides[index].ExpectedElementTypes = []string{"TEXT", "IMAGE"}
+			slides[index].VisualIntent = "Professional evidence-led layout with one relevant market image"
+		}
 	}
 	return pptapp.OutlinePlanningOutput{
 		Draft:      pptapp.OutlinePlanDraft{Language: input.Intent.Language, Slides: slides},

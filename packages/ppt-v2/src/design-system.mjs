@@ -35,6 +35,30 @@ export function professionalBusinessDesignSystem() {
         fontRole: "body", fontSizePt: 22, colorToken: "text", bold: false,
         italic: false, align: "left", verticalAlign: "middle", marginPt: 8,
       },
+      professionalEyebrow: {
+        fontRole: "body", fontSizePt: 13, colorToken: "accent", bold: true,
+        italic: false, align: "left", verticalAlign: "middle", marginPt: 0,
+      },
+      professionalTitle: {
+        fontRole: "heading", fontSizePt: 30, colorToken: "primary", bold: true,
+        italic: false, align: "left", verticalAlign: "middle", marginPt: 0,
+      },
+      professionalKeyMessage: {
+        fontRole: "body", fontSizePt: 17, colorToken: "muted", bold: false,
+        italic: false, align: "left", verticalAlign: "middle", marginPt: 0,
+      },
+      professionalBody: {
+        fontRole: "body", fontSizePt: 18, colorToken: "text", bold: false,
+        italic: false, align: "left", verticalAlign: "top", marginPt: 6,
+      },
+      professionalMetric: {
+        fontRole: "heading", fontSizePt: 54, colorToken: "accent", bold: true,
+        italic: false, align: "left", verticalAlign: "middle", marginPt: 0,
+      },
+      professionalMetricLabel: {
+        fontRole: "body", fontSizePt: 16, colorToken: "muted", bold: true,
+        italic: false, align: "left", verticalAlign: "middle", marginPt: 0,
+      },
     },
     shapeStyles: {
       coverAccent: {

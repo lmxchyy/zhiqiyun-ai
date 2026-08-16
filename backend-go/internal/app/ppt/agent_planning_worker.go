@@ -2,6 +2,8 @@ package ppt
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -156,10 +158,206 @@ func (s *AgentPlanningService) processClaimedPlanningJob(ctx context.Context, le
 			}
 			_, err = s.store.SaveAgentOutline(ctx, lease, outline, now)
 			return err
+		case GenerationStageOutlineApproved, GenerationStageContentReady, GenerationStageAssetsReady,
+			GenerationStageLayoutCompiled, GenerationStageQualityChecked, GenerationStageRendered,
+			GenerationStageFileStored, GenerationStageAssetCreated, GenerationStageTaskRelated:
+			lease, err = s.processClaimedDeckStage(providerCtx, lease, state, now)
+			if err != nil {
+				return err
+			}
+			if lease.JobID == "" {
+				return nil
+			}
+			if lease.Job.Stage == GenerationStageCompleted {
+				return nil
+			}
 		default:
 			return nil
 		}
 	}
+}
+
+func (s *AgentPlanningService) processClaimedDeckStage(ctx context.Context, lease GenerationLease, planning AgentPlanningState, now time.Time) (GenerationLease, error) {
+	if planning.ApprovedOutline == nil {
+		return GenerationLease{}, ErrGenerationJobTransition
+	}
+	deck := AgentDeckGenerationState{}
+	if planning.DeckGeneration != nil {
+		deck = cloneAgentDeckGenerationState(*planning.DeckGeneration)
+	}
+	outline := *planning.ApprovedOutline
+	contentBase := 3
+	assetBase := contentBase + len(outline.Slides)
+	layoutBase := assetBase + agentDeckImageCount(outline)
+	qualityWork := layoutBase + len(outline.Slides) + 1
+	renderWork := qualityWork + 1
+	fileWork := renderWork + 1
+	artifactWork := fileWork + 1
+	totalWork := artifactWork + 1
+	checkpoint := func(next string, completed int) (GenerationLease, error) {
+		return s.store.SaveAgentDeckCheckpoint(ctx, lease, AgentDeckCheckpoint{ExpectedStage: lease.Job.Stage, NextStage: next, State: deck, CompletedWorkUnits: completed, Now: normalizedAgentTime(now)})
+	}
+
+	switch lease.Job.Stage {
+	case GenerationStageOutlineApproved:
+		if s.content == nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ContentProviderUnavailable, "内容生成服务暂时不可用，请稍后重试。", true, nil), now)
+		}
+		existing := map[string]struct{}{}
+		for _, item := range deck.Contents {
+			existing[item.SlideID] = struct{}{}
+		}
+		for _, objective := range outline.Slides {
+			if _, ok := existing[objective.SlideID]; ok {
+				continue
+			}
+			output, err := s.content.PlanSlideContent(ctx, SlideContentPlanningInput{Intent: planning.Intent, Research: planning.Research, Storyline: planning.Storyline, ApprovedOutline: outline, Objective: objective})
+			if err != nil {
+				return GenerationLease{}, s.failPlanningLease(ctx, lease, normalizeContentError(err), now)
+			}
+			content, err := MaterializeSlideContent(SlideContentPlanningInput{Intent: planning.Intent, Research: planning.Research, Storyline: planning.Storyline, ApprovedOutline: outline, Objective: objective}, output)
+			if err != nil {
+				code := ContentContractValidationFailed
+				if errors.Is(err, ErrInvalidSlideContentEvidence) {
+					code = ContentEvidenceMappingInvalid
+				}
+				return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(code, "页面内容未通过校验，请重试。", true, err), now)
+			}
+			deck.Contents = append(deck.Contents, content)
+			deck.ContentExecutions++
+			lease, err = s.store.SaveAgentDeckCheckpoint(ctx, lease, AgentDeckCheckpoint{ExpectedStage: GenerationStageOutlineApproved, NextStage: GenerationStageOutlineApproved, State: deck, CompletedWorkUnits: contentBase + len(deck.Contents), Now: normalizedAgentTime(now)})
+			if err != nil {
+				return GenerationLease{}, err
+			}
+		}
+		return checkpoint(GenerationStageContentReady, assetBase)
+	case GenerationStageContentReady:
+		if s.assets == nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ImageProviderUnavailable, "图片服务暂时不可用，请稍后重试。", true, nil), now)
+		}
+		existing := map[string]struct{}{}
+		for _, asset := range deck.Assets {
+			existing[asset.IntentID] = struct{}{}
+		}
+		for _, content := range deck.Contents {
+			for _, intent := range content.AssetIntents {
+				if _, ok := existing[intent.StableID]; ok {
+					continue
+				}
+				asset, err := s.assets.ResolveImage(ctx, GenerationJobScope{TenantID: lease.TenantID, UserID: lease.UserID}, lease.JobID, content.SlideID, intent)
+				if err != nil {
+					return GenerationLease{}, s.failPlanningLease(ctx, lease, normalizeImageError(err), now)
+				}
+				if err := validateResolvedDeckAsset(asset, GenerationJobScope{TenantID: lease.TenantID, UserID: lease.UserID}, content.SlideID, intent); err != nil {
+					return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ImageInvalidResult, "图片结果无效，请重试。", true, err), now)
+				}
+				deck.Assets = append(deck.Assets, asset)
+				deck.AssetExecutions++
+				lease, err = s.store.SaveAgentDeckCheckpoint(ctx, lease, AgentDeckCheckpoint{ExpectedStage: GenerationStageContentReady, NextStage: GenerationStageContentReady, State: deck, CompletedWorkUnits: assetBase + len(deck.Assets), Now: normalizedAgentTime(now)})
+				if err != nil {
+					return GenerationLease{}, err
+				}
+			}
+		}
+		return checkpoint(GenerationStageAssetsReady, layoutBase)
+	case GenerationStageAssetsReady:
+		if s.compiler == nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(LayoutCompilationFailed, "排版服务暂时不可用，请稍后重试。", true, nil), now)
+		}
+		compiled, err := s.compiler.Compile(ctx, DeckBuildInput{GenerationJobID: lease.JobID, Revision: outline.Revision, Intent: planning.Intent, Research: planning.Research, Storyline: planning.Storyline, ApprovedOutline: outline, SlideContents: deck.Contents, Assets: deck.Assets})
+		if err != nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(LayoutCompilationFailed, "演示文稿排版失败，请重试。", true, err), now)
+		}
+		deck.Compilation = &compiled
+		deck.LayoutExecutions++
+		return checkpoint(GenerationStageLayoutCompiled, layoutBase+len(outline.Slides))
+	case GenerationStageLayoutCompiled:
+		if deck.Compilation == nil || !deck.Compilation.QualityValid || len(deck.Compilation.QualityIssues) > 0 {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(QualityGateFailed, "演示文稿存在阻断问题，暂时无法导出。", false, nil), now)
+		}
+		return checkpoint(GenerationStageQualityChecked, qualityWork)
+	case GenerationStageQualityChecked:
+		if s.compiler == nil || deck.Compilation == nil {
+			return GenerationLease{}, ErrGenerationJobTransition
+		}
+		rendered, err := s.compiler.Render(ctx, *deck.Compilation, deck.Assets)
+		if err != nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(PPTXRenderFailed, "PPTX 生成失败，请重试。", true, err), now)
+		}
+		if rendered.DeckID != deck.Compilation.DeckID || rendered.Revision != deck.Compilation.Revision || rendered.SlideCount != len(outline.Slides) || len(rendered.PPTX) < 2 || string(rendered.PPTX[:2]) != "PK" {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(PPTXRenderFailed, "PPTX 结果无效，请重试。", true, nil), now)
+		}
+		deck.RenderExecutions++
+		digest := sha256.Sum256(rendered.PPTX)
+		return s.store.SaveAgentDeckCheckpoint(ctx, lease, AgentDeckCheckpoint{ExpectedStage: GenerationStageQualityChecked, NextStage: GenerationStageRendered, State: deck, CompletedWorkUnits: renderWork, DeckID: rendered.DeckID, Revision: rendered.Revision, RenderSHA256: hex.EncodeToString(digest[:]), RenderBytes: rendered.PPTX, Now: normalizedAgentTime(now)})
+	case GenerationStageRendered:
+		if s.artifacts == nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ArtifactStorageFailed, "文件存储暂时不可用，请稍后重试。", true, nil), now)
+		}
+		scope := GenerationJobScope{TenantID: lease.TenantID, UserID: lease.UserID}
+		taskID, err := s.artifacts.EnsureTask(ctx, scope, lease.JobID, planning.Intent, outline, deck.Contents)
+		if err != nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ArtifactStorageFailed, "演示文稿项目创建失败，请重试。", true, err), now)
+		}
+		fileID, err := s.artifacts.StorePPTX(ctx, scope, lease.JobID, planning.Intent.Topic, lease.Job.RenderBytes)
+		if err != nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ArtifactStorageFailed, "PPTX 保存失败，请重试。", true, err), now)
+		}
+		return s.store.SaveAgentDeckCheckpoint(ctx, lease, AgentDeckCheckpoint{ExpectedStage: GenerationStageRendered, NextStage: GenerationStageFileStored, State: deck, CompletedWorkUnits: fileWork, ExistingTaskID: taskID, FileID: fileID, Now: normalizedAgentTime(now)})
+	case GenerationStageFileStored:
+		assetID, assetJob, err := s.artifacts.EnsureArtifact(ctx, lease, lease.Job.ExistingTaskID, lease.Job.FileID, lease.Job.DeckID, lease.Job.Revision)
+		if err != nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ArtifactStorageFailed, "作品保存失败，请重试。", true, err), now)
+		}
+		if assetID == "" || assetJob.Stage != GenerationStageAssetCreated || assetJob.AssetID != assetID || assetJob.CompletedWorkUnits != artifactWork {
+			return GenerationLease{}, ErrGenerationJobTransition
+		}
+		lease.Job = assetJob
+		return lease, nil
+	case GenerationStageAssetCreated:
+		related, err := s.artifacts.RelateTask(ctx, lease, lease.Job.ExistingTaskID, V2ArtifactRelation{DeckID: lease.Job.DeckID, Revision: lease.Job.Revision, PPTXAssetID: lease.Job.AssetID})
+		if err != nil {
+			return GenerationLease{}, s.failPlanningLease(ctx, lease, NewAgentWorkflowError(ArtifactRelationFailed, "作品关联失败，请重试。", true, err), now)
+		}
+		if related.Stage != GenerationStageTaskRelated || related.CompletedWorkUnits != totalWork {
+			return GenerationLease{}, ErrGenerationJobTransition
+		}
+		lease.Job = related
+		return lease, nil
+	case GenerationStageTaskRelated:
+		return checkpoint(GenerationStageCompleted, totalWork)
+	default:
+		return GenerationLease{}, ErrGenerationJobTransition
+	}
+}
+
+func normalizeContentError(err error) *AgentWorkflowError {
+	var workflowErr *AgentWorkflowError
+	if errors.As(err, &workflowErr) {
+		return workflowErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return NewAgentWorkflowError(ContentTimeout, "页面内容生成超时，请重试。", true, err)
+	}
+	return NewAgentWorkflowError(ContentProviderUnavailable, "内容生成服务暂时不可用，请稍后重试。", true, err)
+}
+
+func normalizeImageError(err error) *AgentWorkflowError {
+	var workflowErr *AgentWorkflowError
+	if errors.As(err, &workflowErr) {
+		return workflowErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return NewAgentWorkflowError(ImageTimeout, "图片生成超时，请重试。", true, err)
+	}
+	return NewAgentWorkflowError(ImageProviderUnavailable, "图片服务暂时不可用，请稍后重试。", true, err)
+}
+
+func validateResolvedDeckAsset(asset ResolvedDeckAsset, scope GenerationJobScope, slideID string, intent SlideAssetIntent) error {
+	if asset.ID == "" || asset.TenantID != scope.TenantID || asset.UserID != scope.UserID || asset.IntentID != intent.StableID || asset.SlideID != slideID || asset.MIMEType == "" || !strings.HasPrefix(asset.URI, "asset://") || len(asset.SHA256) != 64 || asset.FileID == "" || asset.AltText == "" {
+		return ErrGenerationJobInvalid
+	}
+	return nil
 }
 
 func (s *AgentPlanningService) executeResearch(ctx context.Context, intent IntentSpec) (ResearchPack, *AgentWorkflowError) {
@@ -322,7 +520,9 @@ func (s *MemoryGenerationJobStore) RetryAgentPlanning(_ context.Context, scope G
 
 func readyAgentPlanningJob(job GenerationJob, now time.Time) bool {
 	switch job.Stage {
-	case GenerationStageCreated, GenerationStageIntentResolved, GenerationStageResearched, GenerationStageStorylinePlanned:
+	case GenerationStageCreated, GenerationStageIntentResolved, GenerationStageResearched, GenerationStageStorylinePlanned,
+		GenerationStageOutlineApproved, GenerationStageContentReady, GenerationStageAssetsReady, GenerationStageLayoutCompiled,
+		GenerationStageQualityChecked, GenerationStageRendered, GenerationStageFileStored, GenerationStageAssetCreated, GenerationStageTaskRelated:
 	default:
 		return false
 	}

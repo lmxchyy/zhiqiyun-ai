@@ -150,10 +150,20 @@
         "transparency": { "type": "integer", "minimum": 0, "maximum": 100 }
       }
     },
+    "resolvedImageStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "fit"],
+      "properties": {
+        "kind": { "const": "image" },
+        "fit": { "enum": ["cover", "contain"] }
+      }
+    },
     "resolvedStyle": {
       "oneOf": [
         { "$ref": "#/$defs/resolvedTextStyle" },
-        { "$ref": "#/$defs/resolvedShapeStyle" }
+        { "$ref": "#/$defs/resolvedShapeStyle" },
+        { "$ref": "#/$defs/resolvedImageStyle" }
       ]
     }
   }

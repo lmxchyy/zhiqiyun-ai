@@ -55,10 +55,29 @@
         "styleRole": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" }
       }
     },
+    "imageElement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "slot", "assetRef", "fit", "altText"],
+      "properties": {
+        "id": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+        "type": { "const": "image" },
+        "slot": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "assetRef": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+        "fit": { "enum": ["cover", "contain"] },
+        "altText": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "citationRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" }
+        }
+      }
+    },
     "element": {
       "oneOf": [
         { "$ref": "#/$defs/textElement" },
-        { "$ref": "#/$defs/shapeElement" }
+        { "$ref": "#/$defs/shapeElement" },
+        { "$ref": "#/$defs/imageElement" }
       ]
     }
   },
@@ -72,6 +91,14 @@
     "layoutId": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
     "backgroundToken": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/colorToken" },
     "speakerNotes": { "type": "string", "minLength": 1, "maxLength": 5000 },
+    "objectiveId": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" },
+    "keyMessage": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "evidenceRequired": { "type": "boolean" },
+    "citationRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "https://xianzhi.ai/contracts/ppt/v2.1/common.schema.json#/$defs/id" }
+    },
     "elements": {
       "type": "array",
       "minItems": 1,

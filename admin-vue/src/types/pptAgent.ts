@@ -4,9 +4,18 @@ export type AgentPlanningStage =
   | "RESEARCHED"
   | "STORYLINE_PLANNED"
   | "OUTLINE_PLANNED"
-  | "OUTLINE_APPROVED";
+  | "OUTLINE_APPROVED"
+  | "CONTENT_READY"
+  | "ASSETS_READY"
+  | "LAYOUT_COMPILED"
+  | "QUALITY_CHECKED"
+  | "RENDERED"
+  | "FILE_STORED"
+  | "ASSET_CREATED"
+  | "TASK_RELATED"
+  | "COMPLETED";
 
-export type AgentPlanningStatus = "QUEUED" | "RUNNING" | "RETRY_WAIT" | "FAILED" | "CANCELLED" | "WAITING_FOR_OUTLINE_APPROVAL";
+export type AgentPlanningStatus = "QUEUED" | "RUNNING" | "RETRY_WAIT" | "FAILED" | "CANCELLED" | "WAITING_FOR_OUTLINE_APPROVAL" | "SUCCEEDED";
 
 export interface AgentPlanningError {
   code: string;
@@ -32,6 +41,11 @@ export interface AgentPlanningJob {
   runAfter: string;
   error?: AgentPlanningError;
   updatedAt: string;
+  deckId?: string;
+  revision?: number;
+  fileId?: string;
+  assetId?: string;
+  taskId?: string;
 }
 
 export interface AgentIntentSpec {

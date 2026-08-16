@@ -8,6 +8,7 @@ import (
 	"time"
 
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 type pptAgentGuideRequest struct {
@@ -77,6 +78,32 @@ func (a api) getPPTAgentState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, state)
+}
+
+func (a api) downloadPPTAgentDeck(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.pptAgentUser(w, r)
+	if !ok {
+		return
+	}
+	state, err := a.pptAgentService.Get(r.Context(), pptapp.GenerationJobScope{TenantID: effectiveTenantID(user), UserID: user.ID}, r.PathValue("jobId"))
+	if err != nil {
+		writePPTAgentError(w, err)
+		return
+	}
+	if state.Job.Status != pptapp.GenerationJobSucceeded || state.Job.Stage != pptapp.GenerationStageCompleted || state.Job.FileID == "" {
+		writePPTAgentError(w, pptapp.ErrGenerationJobNotReady)
+		return
+	}
+	if a.fileService == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("private file storage is unavailable"))
+		return
+	}
+	ticket, err := a.fileService.AccessURL(r.Context(), storagecenter.AccessContext{TenantID: effectiveTenantID(user), UserID: user.ID}, state.Job.FileID, true)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, map[string]any{"url": ticket.URL, "expiresIn": ticket.ExpiresIn, "fileId": ticket.File.FileID})
 }
 
 func (a api) updatePPTAgentOutline(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +181,7 @@ func writePPTAgentError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pptapp.ErrGenerationJobNotFound):
 		writeError(w, http.StatusNotFound, err)
-	case errors.Is(err, pptapp.ErrStaleOutlineRevision), errors.Is(err, pptapp.ErrOutlinePlanApproved), errors.Is(err, pptapp.ErrGenerationJobTransition), errors.Is(err, pptapp.ErrGenerationJobIdempotencyConflict), errors.Is(err, pptapp.ErrGenerationJobTerminal):
+	case errors.Is(err, pptapp.ErrStaleOutlineRevision), errors.Is(err, pptapp.ErrOutlinePlanApproved), errors.Is(err, pptapp.ErrGenerationJobTransition), errors.Is(err, pptapp.ErrGenerationJobIdempotencyConflict), errors.Is(err, pptapp.ErrGenerationJobTerminal), errors.Is(err, pptapp.ErrGenerationJobNotReady):
 		writeError(w, http.StatusConflict, err)
 	case errors.Is(err, pptapp.ErrGenerationJobInvalid), errors.Is(err, pptapp.ErrInvalidResearchPack), errors.Is(err, pptapp.ErrInvalidStoryline), errors.Is(err, pptapp.ErrInvalidOutlinePlan), errors.Is(err, pptapp.ErrOutlineSlideNotFound):
 		writeError(w, http.StatusBadRequest, err)

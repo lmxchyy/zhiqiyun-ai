@@ -159,10 +159,11 @@ func (s *postgresStore) EnsurePPTV2DurableArtifactFenced(ctx context.Context, in
 		return asset{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var status, stage, leaseOwner string
+	var status, stage, leaseOwner, workflowType string
 	var leaseExpiresAt time.Time
 	var fencingToken int64
-	err = tx.QueryRowContext(ctx, `select status,stage,coalesce(lease_owner,''),lease_expires_at,fencing_token from xz_ppt_v2_generation_jobs where id=$1 and tenant_id=$2 and user_id=$3 for update`, lease.JobID, lease.TenantID, lease.UserID).Scan(&status, &stage, &leaseOwner, &leaseExpiresAt, &fencingToken)
+	var totalWorkUnits int
+	err = tx.QueryRowContext(ctx, `select status,stage,coalesce(lease_owner,''),lease_expires_at,fencing_token,workflow_type,total_work_units from xz_ppt_v2_generation_jobs where id=$1 and tenant_id=$2 and user_id=$3 for update`, lease.JobID, lease.TenantID, lease.UserID).Scan(&status, &stage, &leaseOwner, &leaseExpiresAt, &fencingToken, &workflowType, &totalWorkUnits)
 	if errors.Is(err, sql.ErrNoRows) {
 		return asset{}, false, pptapp.ErrGenerationJobNotFound
 	}
@@ -196,14 +197,18 @@ func (s *postgresStore) EnsurePPTV2DurableArtifactFenced(ctx context.Context, in
 		createdNow = true
 	}
 	now := time.Now().UTC()
-	result, err := tx.ExecContext(ctx, `update xz_ppt_v2_generation_jobs set stage=$2,completed_work_units=4,asset_id=$3,updated_at=$4 where id=$1 and status='RUNNING' and stage='FILE_STORED' and lease_owner=$5 and fencing_token=$6 and lease_expires_at>$4`, lease.JobID, pptapp.GenerationStageAssetCreated, existing.ID, now, lease.WorkerID, lease.FencingToken)
+	completedWorkUnits := 4
+	if workflowType == pptapp.GenerationWorkflowAgentOutline {
+		completedWorkUnits = totalWorkUnits - 1
+	}
+	result, err := tx.ExecContext(ctx, `update xz_ppt_v2_generation_jobs set stage=$2,completed_work_units=$7,asset_id=$3,updated_at=$4 where id=$1 and status='RUNNING' and stage='FILE_STORED' and lease_owner=$5 and fencing_token=$6 and lease_expires_at>$4`, lease.JobID, pptapp.GenerationStageAssetCreated, existing.ID, now, lease.WorkerID, lease.FencingToken, completedWorkUnits)
 	if err != nil {
 		return asset{}, false, err
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return asset{}, false, pptapp.ErrGenerationJobLeaseLost
 	}
-	checkpoint, _ := json.Marshal(map[string]any{"completedWorkUnits": 4, "assetId": existing.ID})
+	checkpoint, _ := json.Marshal(map[string]any{"completedWorkUnits": completedWorkUnits, "assetId": existing.ID})
 	if _, err := tx.ExecContext(ctx, `insert into xz_ppt_v2_generation_transitions(generation_job_id,attempt_id,from_stage,to_stage,fencing_token,checkpoint,created_at) values($1,$2,$3,$4,$5,$6::jsonb,$7)`, lease.JobID, lease.AttemptID, pptapp.GenerationStageFileStored, pptapp.GenerationStageAssetCreated, lease.FencingToken, string(checkpoint), now); err != nil {
 		return asset{}, false, err
 	}

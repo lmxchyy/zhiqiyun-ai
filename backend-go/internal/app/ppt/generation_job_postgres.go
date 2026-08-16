@@ -576,6 +576,9 @@ func (s *PostgresGenerationJobStore) RelateTaskArtifact(ctx context.Context, lea
 	fromStage := job.Stage
 	job.Stage = GenerationStageTaskRelated
 	job.CompletedWorkUnits = generationStageWorkUnits(GenerationStageTaskRelated)
+	if job.WorkflowType == GenerationWorkflowAgentOutline {
+		job.CompletedWorkUnits = job.TotalWorkUnits
+	}
 	job.UpdatedAt = now
 	if err := persistGenerationJob(ctx, tx, job); err != nil {
 		return GenerationJob{}, err
@@ -626,12 +629,13 @@ update xz_ppt_v2_generation_jobs set
   status=$2,stage=$3,attempt_count=$4,max_attempts=$5,run_after=$6,lease_owner=nullif($7,''),lease_expires_at=$8,
   fencing_token=$9,completed_work_units=$10,total_work_units=$11,input_snapshot=$12::jsonb,deck_id=nullif($13,''),
   revision=nullif($14,0),slide_count=$15,render_sha256=nullif($16,''),render_bytes=$17,file_id=nullif($18,''),
-  asset_id=nullif($19,''),error=$20::jsonb,updated_at=$21,started_at=$22,finished_at=$23,cancel_requested_at=$24
+  asset_id=nullif($19,''),error=$20::jsonb,updated_at=$21,started_at=$22,finished_at=$23,cancel_requested_at=$24,
+  existing_task_id=nullif($25,''),deck_job_id=nullif($26,'')
 where id=$1
 `, job.ID, job.Status, job.Stage, job.AttemptCount, job.MaxAttempts, job.RunAfter, job.LeaseOwner, nullableTime(job.LeaseExpiresAt),
 		job.FencingToken, job.CompletedWorkUnits, job.TotalWorkUnits, inputSnapshot, job.DeckID, job.Revision, job.SlideCount,
 		job.RenderSHA256, nullableBytes(job.RenderBytes), job.FileID, job.AssetID, rawError, job.UpdatedAt,
-		nullableTime(job.StartedAt), nullableTime(job.FinishedAt), nullableTime(job.CancelRequestedAt))
+		nullableTime(job.StartedAt), nullableTime(job.FinishedAt), nullableTime(job.CancelRequestedAt), job.ExistingTaskID, job.DeckJobID)
 	return err
 }
 

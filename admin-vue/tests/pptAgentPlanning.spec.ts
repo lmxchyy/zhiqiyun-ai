@@ -32,7 +32,7 @@ function planningState(): AgentPlanningState {
       closingAction: "明确优先市场和负责人。", provenance: { mode: "AI", provider: "chat", model: "model" }
     },
     outline: {
-      id: "job_1:outline", revision: 1, topic: "新能源汽车行业", language: "zh-CN", pageCount: 10, nextSlideSequence: 11,
+      id: "job_1_outline", revision: 1, topic: "新能源汽车行业", language: "zh-CN", pageCount: 10, nextSlideSequence: 11,
       createdAt: "2026-08-16T00:00:00Z", provenance: { mode: "AI", provider: "chat", model: "model" },
       slides: Array.from({ length: 10 }, (_, index) => ({
         slideId: `slide_${index + 1}`, title: `第 ${index + 1} 页`, purpose: "支持管理层决策", keyMessage: "需要聚焦高置信度机会。",
@@ -52,7 +52,12 @@ describe("PPT Agent durable planning UX", () => {
     expect(planningStageLabel("RESEARCHED")).toBe("正在规划叙事");
     expect(planningStageLabel("STORYLINE_PLANNED")).toBe("正在生成大纲");
     expect(planningStageLabel("OUTLINE_PLANNED")).toBe("大纲已生成，请确认");
-    expect(planningProductMessage("OUTLINE_APPROVED")).toBe("方案已确认，大纲已经安全保存");
+    expect(planningProductMessage("OUTLINE_APPROVED")).toBe("正在生成内容");
+    expect(planningStageLabel("CONTENT_READY")).toBe("正在准备图片");
+    expect(planningStageLabel("ASSETS_READY")).toBe("正在排版");
+    expect(planningStageLabel("LAYOUT_COMPILED")).toBe("正在检查");
+    expect(planningStageLabel("QUALITY_CHECKED")).toBe("正在生成 PPTX");
+    expect(planningStageLabel("COMPLETED")).toBe("演示文稿已完成");
   });
 
   it("shows complete evidence provenance and the slide it supports", () => {

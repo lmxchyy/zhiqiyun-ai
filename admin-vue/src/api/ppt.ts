@@ -326,3 +326,7 @@ export function approvePptAgentOutline(jobId: string, expectedRevision: number):
 export function retryPptAgentPlanning(jobId: string): Promise<AgentPlanningState> {
   return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/retry` });
 }
+
+export function downloadPptAgentDeck(jobId: string): Promise<{ url: string; expiresIn: number; fileId: string }> {
+  return adminRequest({ method: "GET", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/download` });
+}

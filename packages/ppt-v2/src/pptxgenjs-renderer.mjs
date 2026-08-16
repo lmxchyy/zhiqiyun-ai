@@ -81,6 +81,22 @@ function renderText(slide, element, layout) {
   slide.addText(content.text, textOptions(layout));
 }
 
+async function renderImage(slide, element, layout, asset, resolveAsset) {
+  if (typeof resolveAsset !== "function") {
+    throw new Error(`PPT V2 asset ${asset.id} was not resolved from private storage`);
+  }
+  const resolved = await resolveAsset(asset);
+  if (!resolved || typeof resolved.data !== "string" || !resolved.data.startsWith("data:")) {
+    throw new Error(`PPT V2 asset ${asset.id} was not resolved to image data`);
+  }
+  slide.addImage({
+    data: resolved.data,
+    ...position(layout),
+    objectName: layout.elementId,
+    altText: element.altText,
+  });
+}
+
 function normalizePresentationXml(xml) {
   const notesMaster = xml.match(/<p:notesMasterIdLst>[\s\S]*?<\/p:notesMasterIdLst>/)?.[0];
   if (!notesMaster) {
@@ -121,6 +137,11 @@ async function normalizeOpenXmlPackage(buffer) {
 }
 
 export class PptxGenJSRenderer extends PptxRenderer {
+  constructor(options = {}) {
+    super();
+    this.resolveAsset = options.resolveAsset;
+  }
+
   async render(renderInput) {
     assertValidRenderInput(renderInput);
     const presentation = new PptxGenJS();
@@ -129,7 +150,7 @@ export class PptxGenJSRenderer extends PptxRenderer {
     presentation.layout = layoutName;
     presentation.author = renderInput.deckRevision.author;
     presentation.company = "Xianzhi AI";
-    presentation.subject = "PPT Generation V2 Phase 1";
+    presentation.subject = "PPT Generation V2";
     presentation.title = renderInput.deckRevision.title;
     presentation.lang = renderInput.deckRevision.language;
     presentation.theme = {
@@ -139,6 +160,7 @@ export class PptxGenJSRenderer extends PptxRenderer {
     };
 
     const layoutBySlide = new Map(renderInput.layoutResults.map((item) => [item.slideId, item]));
+    const assetByID = new Map(renderInput.assetManifest.map((item) => [item.id, item]));
     for (const slideIR of renderInput.slides) {
       const slideLayout = layoutBySlide.get(slideIR.id);
       const slide = presentation.addSlide();
@@ -153,6 +175,8 @@ export class PptxGenJSRenderer extends PptxRenderer {
         const element = elementById.get(elementLayout.elementId);
         if (element.type === "shape") {
           renderShape(slide, presentation, elementLayout);
+        } else if (element.type === "image") {
+          await renderImage(slide, element, elementLayout, assetByID.get(element.assetRef), this.resolveAsset);
         } else {
           renderText(slide, element, elementLayout);
         }

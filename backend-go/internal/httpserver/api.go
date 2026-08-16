@@ -216,6 +216,11 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 			planningProvider := pptplanning.NewClient(chatprovider.NewOpenAICompatible(cfg), pptplanning.Options{Model: cfg.PPTTextModel})
 			pptAgentService, _ = pptapp.NewAgentPlanningService(jobStore, pptresearch.NewWikipediaResearchProvider(nil), planningProvider, planningProvider, pptapp.AgentPlanningOptions{})
 			if pptAgentService != nil {
+				imageAssets := pptV2AgentImageAssets{generation: service, files: fileService, store: store}
+				compiler := newConfiguredPPTV2AgentDeckCompiler(fileService)
+				artifactStore, _ := any(pgStore).(pptV2DurableArtifactStore)
+				relations, _ := any(jobStore).(pptapp.GenerationTaskRelationStore)
+				_ = pptAgentService.ConfigureDeckGeneration(planningProvider, imageAssets, compiler, pptV2AgentArtifacts{ppt: pptService, files: fileService, assets: artifactStore, jobs: jobStore, relations: relations})
 				pptAgentService.Start(context.Background())
 			}
 		}

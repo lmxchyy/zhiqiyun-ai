@@ -203,7 +203,7 @@ func TestDynamicOutlineRespectsExplicitCountAndValidEvidence(t *testing.T) {
 			}
 		}
 	}
-	if plan.Slides[0].SlideID != "pptv2_agent_job_1:objective:1" || plan.Slides[9].SlideID != "pptv2_agent_job_1:objective:10" {
+	if plan.Slides[0].SlideID != "pptv2_agent_job_1_objective_1" || plan.Slides[9].SlideID != "pptv2_agent_job_1_objective_10" {
 		t.Fatalf("stable slide IDs missing: %+v", plan.Slides)
 	}
 }
@@ -226,7 +226,7 @@ func TestOutlineCommandsAddDeleteMoveAndUpdateDeterministically(t *testing.T) {
 	added, err := ApplyOutlineCommands(plan, []OutlineEditCommand{{Type: OutlineCommandAddSlide, AfterSlideID: plan.Slides[1].SlideID, Objective: &SlideObjective{
 		Title: "补充市场证据", Purpose: "补充事实依据", KeyMessage: "市场判断必须建立在可追踪证据上。", EvidenceRequired: true, EvidenceRefs: []string{"claim_1"}, Evidence: []EvidenceAssignment{{ClaimID: "claim_1", Rationale: "该事实直接支持市场判断。"}}, VisualIntent: "关键证据卡片", ExpectedElementTypes: []string{"TEXT", "SHAPE"},
 	}}}, pack)
-	if err != nil || len(added.Slides) != 9 || added.Slides[2].SlideID != "pptv2_agent_job_edit:objective:9" {
+	if err != nil || len(added.Slides) != 9 || added.Slides[2].SlideID != "pptv2_agent_job_edit_objective_9" {
 		t.Fatalf("add slide failed: plan=%+v err=%v", added, err)
 	}
 
@@ -243,7 +243,7 @@ func TestOutlineCommandsAddDeleteMoveAndUpdateDeterministically(t *testing.T) {
 		t.Fatalf("update slide failed: plan=%+v err=%v", updated, err)
 	}
 
-	deleted, err := ApplyOutlineCommands(updated, []OutlineEditCommand{{Type: OutlineCommandDeleteSlide, SlideID: "pptv2_agent_job_edit:objective:9"}}, pack)
+	deleted, err := ApplyOutlineCommands(updated, []OutlineEditCommand{{Type: OutlineCommandDeleteSlide, SlideID: "pptv2_agent_job_edit_objective_9"}}, pack)
 	if err != nil || len(deleted.Slides) != 8 {
 		t.Fatalf("delete slide failed: plan=%+v err=%v", deleted, err)
 	}

@@ -45,7 +45,7 @@ func applyPhase2GenerationMigration(t *testing.T, db *sql.DB) {
 	if !ok {
 		t.Fatal("resolve integration test path")
 	}
-	for _, migration := range []string{"109-ppt-v2-durable-generation.sql", "110-ppt-v2-agent-outline-approval.sql"} {
+	for _, migration := range []string{"109-ppt-v2-durable-generation.sql", "110-ppt-v2-agent-outline-approval.sql", "111-ppt-v2-agent-deck-generation.sql"} {
 		path := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "database", "migrations", migration))
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -458,8 +458,159 @@ func TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation(t *testin
 	if err := db.QueryRowContext(t.Context(), `select count(*) from xz_ppt_v2_slide_jobs where generation_job_id=$1`, jobID).Scan(&slideCount); err != nil {
 		t.Fatal(err)
 	}
-	if planCount != 1 || revisionCount != 2 || deckCount != 0 || slideCount != 0 {
-		t.Fatalf("Slice A postgres persistence mismatch: plans=%d revisions=%d decks=%d slides=%d", planCount, revisionCount, deckCount, slideCount)
+	if planCount != 1 || revisionCount != 2 || deckCount != 1 || slideCount != 10 {
+		t.Fatalf("approved outline did not initialize Slice B deck jobs: plans=%d revisions=%d decks=%d slides=%d", planCount, revisionCount, deckCount, slideCount)
+	}
+}
+
+type postgresDeckArtifactFixture struct {
+	store                                           *PostgresGenerationJobStore
+	ppt                                             *Service
+	taskCalls, fileCalls, assetCalls, relationCalls int
+}
+
+func (f *postgresDeckArtifactFixture) EnsureTask(_ context.Context, scope GenerationJobScope, jobID string, intent IntentSpec, outline OutlinePlan, _ []SlideContent) (string, error) {
+	f.taskCalls++
+	bundle, err := f.store.Get(context.Background(), scope, jobID)
+	if err != nil {
+		return "", err
+	}
+	legacy := &Outline{Title: intent.Topic}
+	for index, objective := range outline.Slides {
+		legacy.Slides = append(legacy.Slides, OutlineSlide{Page: index + 1, Title: objective.Title, Summary: objective.KeyMessage, Layout: "content"})
+	}
+	created, err := f.ppt.Generate(GenerateRequest{UserID: scope.UserID, TenantID: scope.TenantID, OrganizationID: bundle.Job.OrganizationID, ClientRequestID: "ppt-v2-agent:" + jobID, Prompt: intent.Topic, SlideCount: len(outline.Slides), Language: intent.Language, Audience: intent.Audience, Scenario: intent.Scenario, Outline: legacy})
+	return created.TaskID, err
+}
+func (f *postgresDeckArtifactFixture) StorePPTX(_ context.Context, _ GenerationJobScope, jobID, _ string, _ []byte) (string, error) {
+	f.fileCalls++
+	return "file_" + shortStableID(jobID), nil
+}
+func (f *postgresDeckArtifactFixture) EnsureArtifact(ctx context.Context, lease GenerationLease, _, _, deckID string, _ int) (string, GenerationJob, error) {
+	f.assetCalls++
+	assetID := "asset_" + shortStableID(deckID)
+	state, err := f.store.GetAgentPlanning(ctx, GenerationJobScope{TenantID: lease.TenantID, UserID: lease.UserID}, lease.JobID)
+	if err != nil {
+		return "", GenerationJob{}, err
+	}
+	updated, err := f.store.SaveAgentDeckCheckpoint(ctx, lease, AgentDeckCheckpoint{ExpectedStage: GenerationStageFileStored, NextStage: GenerationStageAssetCreated, State: *state.DeckGeneration, CompletedWorkUnits: lease.Job.TotalWorkUnits - 1, AssetID: assetID, Now: lease.Job.UpdatedAt})
+	return assetID, updated.Job, err
+}
+func (f *postgresDeckArtifactFixture) RelateTask(ctx context.Context, lease GenerationLease, _ string, relation V2ArtifactRelation) (GenerationJob, error) {
+	f.relationCalls++
+	return f.store.RelateTaskArtifact(ctx, lease, relation, lease.Job.UpdatedAt)
+}
+
+func TestPostgresGenerationJobAgentDeckGenerationRecoveryFencingAndArtifact(t *testing.T) {
+	db := phase2PostgresDatabase(t)
+	applyPhase2GenerationMigration(t, db)
+	now := time.Now().UTC()
+	suffix := now.Format("20060102150405.000000000")
+	store, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planning := &semanticPlanningFixture{}
+	service, err := NewAgentPlanningService(store, &countingResearchProvider{pack: agentResearchFixture(t)}, planning, planning, AgentPlanningOptions{WorkerID: "postgres_deck_1", LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := &deckContentFixture{}
+	assets := &deckAssetFixture{}
+	compiler := &deckCompilerFixture{}
+	artifact := &postgresDeckArtifactFixture{store: store, ppt: NewPostgresService(db, "")}
+	if err := service.ConfigureDeckGeneration(content, assets, compiler, artifact); err != nil {
+		t.Fatal(err)
+	}
+	scope := GenerationJobScope{TenantID: "pptv2_deck_tenant_" + suffix, UserID: "pptv2_deck_user_" + suffix}
+	guided, err := service.Guide(t.Context(), GuideAgentRequest{TenantID: scope.TenantID, UserID: scope.UserID, OrganizationID: "pptv2_deck_org_" + suffix, IdempotencyKey: "pptv2_deck_" + suffix, Request: IntentRequest{Text: "做一份8页的新能源汽车行业分析，给公司管理层汇报。"}, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := guided.State.Job.ID
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		var taskID sql.NullString
+		_ = db.QueryRowContext(ctx, `select existing_task_id from xz_ppt_v2_generation_jobs where id=$1`, jobID).Scan(&taskID)
+		_, _ = db.ExecContext(ctx, `delete from xz_ppt_v2_generation_jobs where id=$1`, jobID)
+		if taskID.Valid {
+			_, _ = db.ExecContext(ctx, `delete from xz_ppt_tasks where task_id=$1`, taskID.String)
+		}
+	})
+	if err := service.ProcessReady(t.Context(), now.Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	planned, err := service.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageObjective := cloneSlideObjective(planned.Outline.Slides[2])
+	imageObjective.ExpectedElementTypes = append(imageObjective.ExpectedElementTypes, "IMAGE")
+	updated, err := service.UpdateOutline(t.Context(), scope, jobID, planned.Outline.Revision, []OutlineEditCommand{{Type: OutlineCommandUpdateSlideObjective, SlideID: imageObjective.SlideID, Objective: &imageObjective}}, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.ApproveOutline(t.Context(), scope, jobID, updated.Outline.Revision, now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content.failOnceSlide = approved.ApprovedOutline.Slides[1].SlideID
+	if err := service.ProcessReady(t.Context(), now.Add(4*time.Minute), 10); err != nil {
+		t.Fatal(err)
+	}
+	partial, err := service.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partial.Job.Status != GenerationJobRetryWait || len(partial.DeckGeneration.Contents) != 1 {
+		t.Fatalf("postgres content checkpoint missing: %+v", partial)
+	}
+
+	restartedStore, err := NewPostgresGenerationJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedContent := &deckContentFixture{}
+	restartedAssets := &deckAssetFixture{}
+	restartedCompiler := &deckCompilerFixture{}
+	restartedArtifact := &postgresDeckArtifactFixture{store: restartedStore, ppt: NewPostgresService(db, "")}
+	restarted, err := NewAgentPlanningService(restartedStore, &countingResearchProvider{pack: agentResearchFixture(t)}, planning, planning, AgentPlanningOptions{WorkerID: "postgres_deck_2", LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ConfigureDeckGeneration(restartedContent, restartedAssets, restartedCompiler, restartedArtifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Retry(t.Context(), scope, jobID, now.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ProcessReady(t.Context(), now.Add(5*time.Minute), 10); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := restarted.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Job.Status != GenerationJobSucceeded || completed.Job.Stage != GenerationStageCompleted || completed.Job.Progress() != 100 || len(completed.DeckGeneration.Contents) != 8 || len(completed.DeckGeneration.Assets) != 1 {
+		t.Fatalf("postgres deck did not complete: %+v", completed)
+	}
+	if completed.DeckGeneration.ContentExecutions != 8 || restartedContent.calls[partial.ApprovedOutline.Slides[0].SlideID] != 0 || restartedCompiler.compileCalls != 1 || restartedCompiler.renderCalls != 1 || restartedArtifact.assetCalls != 1 || restartedArtifact.relationCalls != 1 {
+		t.Fatalf("restart repeated checkpointed work: state=%+v content=%v", completed.DeckGeneration, restartedContent.calls)
+	}
+	if _, err := restarted.Get(t.Context(), GenerationJobScope{TenantID: "other", UserID: scope.UserID}, jobID); !errors.Is(err, ErrGenerationJobNotFound) {
+		t.Fatalf("cross-tenant deck read was allowed: %v", err)
+	}
+	bundle, err := restartedStore.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Deck.Status != GenerationChildSucceeded || len(bundle.Slides) != 8 {
+		t.Fatalf("postgres DeckJob/SlideJobs incomplete: %+v", bundle)
+	}
+	task, err := restartedArtifact.ppt.GetTask(scope.UserID, completed.Job.TaskID)
+	if err != nil || task.V2DeckID != completed.Job.DeckID || task.PPTXAssetID != completed.Job.AssetID {
+		t.Fatalf("atomic task relation missing: task=%+v err=%v", task, err)
 	}
 }
 

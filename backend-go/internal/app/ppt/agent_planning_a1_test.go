@@ -101,6 +101,10 @@ func (p *semanticPlanningFixture) PlanOutline(_ context.Context, input OutlinePl
 			draft.KeyMessage = "Management should use evidence to choose the priority market."
 			draft.VisualIntent = "A clear professional decision structure"
 		}
+		if index == 2 {
+			draft.ExpectedElementTypes = []string{"TEXT", "SHAPE", "IMAGE"}
+			draft.VisualIntent += " with one relevant market image"
+		}
 		if index > 0 && index < pageCount-1 && claimOne != "" {
 			claimID := claimOne
 			if index == 2 {

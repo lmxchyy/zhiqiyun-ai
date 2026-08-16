@@ -58,7 +58,7 @@ func TestClientPlansStorylineAndOutlineFromIntentAndClaims(t *testing.T) {
 		},
 		{
 			ProviderCode: "openai-compatible-chat", Model: "planning-model",
-			Message:  chat.Message{Role: "assistant", Content: `{"language":"en-US","slides":[{"title":"EV market decision","purpose":"Frame the management question","keyMessage":"Management must choose where to compete.","evidenceRequired":false,"evidence":[],"visualIntent":"Professional cover","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Sales momentum","purpose":"Explain verified demand momentum","keyMessage":"EV sales growth supports continued market attention.","evidenceRequired":true,"evidence":[{"claimId":"claim_ev_sales","rationale":"The verified sales claim directly supports the demand momentum conclusion."}],"visualIntent":"Evidence-led trend summary","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Management action","purpose":"Close with a decision","keyMessage":"Assign an owner and validate the priority market.","evidenceRequired":false,"evidence":[],"visualIntent":"Action checklist","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Decision criteria","purpose":"Define criteria","keyMessage":"Use evidence and risk to rank options.","evidenceRequired":true,"evidence":[{"claimId":"claim_ev_sales","rationale":"Demand momentum is one explicit decision criterion."}],"visualIntent":"Decision matrix","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Risk","purpose":"Describe risk","keyMessage":"Growth does not remove execution risk.","evidenceRequired":true,"evidence":[{"claimId":"claim_ev_sales","rationale":"The growth claim provides the market context against which execution risk is assessed."}],"visualIntent":"Risk cards","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Next step","purpose":"Commit action","keyMessage":"Start a focused validation sprint.","evidenceRequired":false,"evidence":[],"visualIntent":"Action roadmap","expectedElementTypes":["TEXT","SHAPE"]}]}`},
+			Message:  chat.Message{Role: "assistant", Content: `{"language":"en-US","slides":[{"title":"EV market decision","purpose":"Frame the management question","keyMessage":"Management must choose where to compete.","evidenceRequired":false,"evidence":[],"visualIntent":"Professional cover","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Sales momentum","purpose":"Explain verified demand momentum","keyMessage":"EV sales growth supports continued market attention.","evidenceRequired":true,"evidence":[{"claimId":"claim_ev_sales","rationale":"The verified sales claim directly supports the demand momentum conclusion."}],"visualIntent":"Evidence-led trend summary with a market image","expectedElementTypes":["TEXT","SHAPE","IMAGE"]},{"title":"Management action","purpose":"Close with a decision","keyMessage":"Assign an owner and validate the priority market.","evidenceRequired":false,"evidence":[],"visualIntent":"Action checklist","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Decision criteria","purpose":"Define criteria","keyMessage":"Use evidence and risk to rank options.","evidenceRequired":true,"evidence":[{"claimId":"claim_ev_sales","rationale":"Demand momentum is one explicit decision criterion."}],"visualIntent":"Decision matrix","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Risk","purpose":"Describe risk","keyMessage":"Growth does not remove execution risk.","evidenceRequired":true,"evidence":[{"claimId":"claim_ev_sales","rationale":"The growth claim provides the market context against which execution risk is assessed."}],"visualIntent":"Risk cards","expectedElementTypes":["TEXT","SHAPE"]},{"title":"Next step","purpose":"Commit action","keyMessage":"Start a focused validation sprint.","evidenceRequired":false,"evidence":[],"visualIntent":"Action roadmap","expectedElementTypes":["TEXT","SHAPE"]}]}`},
 			Metadata: map[string]any{"id": "outline-provider-request"},
 		},
 	}}
@@ -123,6 +123,39 @@ func TestClientRejectsUnknownJSONFields(t *testing.T) {
 	var workflowErr *pptapp.AgentWorkflowError
 	if !errors.As(err, &workflowErr) || workflowErr.Code != pptapp.PlanningInvalidOutput {
 		t.Fatalf("unknown field was accepted: %v", err)
+	}
+}
+
+func TestClientPlansSlideContentFromApprovedObjectiveAndEvidence(t *testing.T) {
+	fixture := &planningChatFixture{responses: []chat.Response{{
+		ProviderCode: "openai-compatible-chat", Model: "planning-model",
+		Message:  chat.Message{Role: "assistant", Content: `{"language":"en-US","title":"Sales momentum","subtitle":"","bodyBlocks":[{"heading":"Finding","text":"Verified demand continues to grow."}],"bullets":["Demand is expanding","Management action is required"],"supportingText":"EV sales growth supports continued market attention.","speakerNotes":"Source: EV market report.","assetIntents":[{"id":"hero","kind":"image","prompt":"Professional electric vehicle market photograph","altText":"Electric vehicle market"}],"citationRefs":["claim_ev_sales"],"layoutHint":"text-image"}`},
+		Metadata: map[string]any{"id": "content-provider-request"},
+	}}}
+	client := NewClient(fixture, Options{Model: "planning-model"})
+	input := pptapp.SlideContentPlanningInput{
+		Intent:    pptapp.IntentSpec{Topic: "EV market", Goal: "industry-analysis", Audience: "management", Scenario: "management-report", Language: "en-US"},
+		Research:  planningResearchFixture(t),
+		Objective: pptapp.SlideObjective{SlideID: "slide_ev", Title: "Sales momentum", Purpose: "Explain demand", KeyMessage: "EV sales growth supports continued market attention.", EvidenceRequired: true, EvidenceRefs: []string{"claim_ev_sales"}, VisualIntent: "Evidence and image", ExpectedElementTypes: []string{"TEXT", "IMAGE"}},
+	}
+	output, err := client.PlanSlideContent(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Draft.Language != "en-US" || output.Draft.LayoutHint != "text-image" || len(output.Draft.AssetIntents) != 1 || output.Provenance.ProviderRequestID != "content-provider-request" {
+		t.Fatalf("content output lost provider semantics: %+v", output)
+	}
+	if !strings.Contains(fixture.requests[0].Prompt, "claim_ev_sales") || !strings.Contains(fixture.requests[0].Prompt, "Sales momentum") {
+		t.Fatalf("content prompt omitted approved evidence/objective: %s", fixture.requests[0].Prompt)
+	}
+}
+
+func TestClientClassifiesSlideContentInvalidOutput(t *testing.T) {
+	client := NewClient(&planningChatFixture{responses: []chat.Response{{Message: chat.Message{Content: "not-json"}}}}, Options{Model: "planning-model"})
+	_, err := client.PlanSlideContent(t.Context(), pptapp.SlideContentPlanningInput{Intent: pptapp.IntentSpec{Language: "en-US"}})
+	var workflowErr *pptapp.AgentWorkflowError
+	if !errors.As(err, &workflowErr) || workflowErr.Code != pptapp.ContentInvalidOutput {
+		t.Fatalf("content invalid output was not classified: %v", err)
 	}
 }
 

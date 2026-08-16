@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,7 +27,7 @@ func (s *PostgresGenerationJobStore) ListReadyAgentPlanning(ctx context.Context,
 select `+generationJobColumns+`
 from xz_ppt_v2_generation_jobs
 where workflow_type='AGENT_OUTLINE'
-  and stage in ('CREATED','INTENT_RESOLVED','RESEARCHED','STORYLINE_PLANNED')
+  and stage in ('CREATED','INTENT_RESOLVED','RESEARCHED','STORYLINE_PLANNED','OUTLINE_APPROVED','CONTENT_READY','ASSETS_READY','LAYOUT_COMPILED','QUALITY_CHECKED','RENDERED','FILE_STORED','ASSET_CREATED','TASK_RELATED')
   and (
     (status in ('QUEUED','RETRY_WAIT') and run_after <= $1)
     or (status='RUNNING' and lease_expires_at <= $1)
@@ -377,8 +378,19 @@ where generation_job_id=$1 and current_outline_revision=$2 and approved_outline_
 	record.ApprovedOutline = &approved
 	job.Status = GenerationJobQueued
 	job.Stage = GenerationStageOutlineApproved
+	job.TotalWorkUnits = agentDeckTotalWorkUnits(approved)
+	job.CompletedWorkUnits = 3
+	job.DeckJobID = job.ID + ":deck"
 	job.RunAfter = now
 	job.UpdatedAt = now
+	if _, err := tx.ExecContext(ctx, `insert into xz_ppt_v2_deck_jobs(id,generation_job_id,status,created_at,updated_at) values($1,$2,$3,$4,$4)`, job.DeckJobID, job.ID, GenerationChildPending, now); err != nil {
+		return AgentPlanningState{}, err
+	}
+	for index, objective := range approved.Slides {
+		if _, err := tx.ExecContext(ctx, `insert into xz_ppt_v2_slide_jobs(id,generation_job_id,deck_job_id,slide_index,source_slide_id,status,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7,$7)`, job.ID+":slide:"+strconv.Itoa(index+1), job.ID, job.DeckJobID, index+1, objective.SlideID, GenerationChildPending, now); err != nil {
+			return AgentPlanningState{}, err
+		}
+	}
 	if err := persistGenerationJob(ctx, tx, job); err != nil {
 		return AgentPlanningState{}, err
 	}
@@ -435,13 +447,13 @@ func loadPostgresAgentRecord(ctx context.Context, query agentPlanningQuerier, jo
 	if forUpdate {
 		suffix = " for update"
 	}
-	var rawIntent, rawResearch, rawStoryline []byte
+	var rawIntent, rawResearch, rawStoryline, rawDeckState []byte
 	var currentRevision, approvedRevision sql.NullInt64
 	var record AgentPlanningRecord
 	err := query.QueryRowContext(ctx, `
-select intent,research,storyline,current_outline_revision,approved_outline_revision,research_execution_count
+select intent,research,storyline,deck_state,current_outline_revision,approved_outline_revision,research_execution_count
 from xz_ppt_v2_agent_plans where generation_job_id=$1`+suffix, jobID).Scan(
-		&rawIntent, &rawResearch, &rawStoryline, &currentRevision, &approvedRevision, &record.ResearchExecutionCount,
+		&rawIntent, &rawResearch, &rawStoryline, &rawDeckState, &currentRevision, &approvedRevision, &record.ResearchExecutionCount,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AgentPlanningRecord{}, ErrGenerationJobNotFound
@@ -461,6 +473,11 @@ from xz_ppt_v2_agent_plans where generation_job_id=$1`+suffix, jobID).Scan(
 	}
 	if len(rawStoryline) > 0 {
 		if err := json.Unmarshal(rawStoryline, &record.Storyline); err != nil {
+			return AgentPlanningRecord{}, err
+		}
+	}
+	if len(rawDeckState) > 0 {
+		if err := json.Unmarshal(rawDeckState, &record.DeckGeneration); err != nil {
 			return AgentPlanningRecord{}, err
 		}
 	}

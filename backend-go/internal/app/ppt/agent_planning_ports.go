@@ -189,7 +189,7 @@ func MaterializeOutlinePlan(jobID string, intent IntentSpec, research ResearchPa
 		now = now.UTC()
 	}
 	plan := OutlinePlan{
-		ID: jobID + ":outline", Revision: 1, Topic: intent.Topic, Language: intent.Language,
+		ID: jobID + "_outline", Revision: 1, Topic: intent.Topic, Language: intent.Language,
 		PageCount: len(output.Draft.Slides), NextSlideSequence: len(output.Draft.Slides) + 1,
 		CreatedAt: now, Provenance: output.Provenance,
 	}
@@ -202,7 +202,7 @@ func MaterializeOutlinePlan(jobID string, intent IntentSpec, research ResearchPa
 			refs = append(refs, evidence[evidenceIndex].ClaimID)
 		}
 		plan.Slides = append(plan.Slides, SlideObjective{
-			SlideID: fmt.Sprintf("%s:objective:%d", jobID, index+1), Title: strings.TrimSpace(draft.Title),
+			SlideID: fmt.Sprintf("%s_objective_%d", jobID, index+1), Title: strings.TrimSpace(draft.Title),
 			Purpose: strings.TrimSpace(draft.Purpose), KeyMessage: strings.TrimSpace(draft.KeyMessage),
 			EvidenceRequired: draft.EvidenceRequired, EvidenceRefs: normalizedUniqueStrings(refs), Evidence: evidence,
 			VisualIntent: strings.TrimSpace(draft.VisualIntent), ExpectedElementTypes: normalizedUniqueStrings(draft.ExpectedElementTypes),

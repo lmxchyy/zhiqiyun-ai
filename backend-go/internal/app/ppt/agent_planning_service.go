@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -21,16 +22,18 @@ type AgentPlanningRecord struct {
 	ApprovedOutline        *OutlinePlan
 	ResearchExecutionCount int
 	Revisions              map[int]OutlinePlan
+	DeckGeneration         AgentDeckGenerationState
 }
 
 type AgentPlanningState struct {
-	Job                    AgentPlanningJob `json:"job"`
-	Intent                 IntentSpec       `json:"intent"`
-	Research               ResearchPack     `json:"research"`
-	Storyline              Storyline        `json:"storyline"`
-	Outline                OutlinePlan      `json:"outline"`
-	ApprovedOutline        *OutlinePlan     `json:"approvedOutline,omitempty"`
-	ResearchExecutionCount int              `json:"researchExecutionCount"`
+	Job                    AgentPlanningJob          `json:"job"`
+	Intent                 IntentSpec                `json:"intent"`
+	Research               ResearchPack              `json:"research"`
+	Storyline              Storyline                 `json:"storyline"`
+	Outline                OutlinePlan               `json:"outline"`
+	ApprovedOutline        *OutlinePlan              `json:"approvedOutline,omitempty"`
+	ResearchExecutionCount int                       `json:"researchExecutionCount"`
+	DeckGeneration         *AgentDeckGenerationState `json:"deckGeneration,omitempty"`
 }
 
 type AgentPlanningJob struct {
@@ -47,6 +50,11 @@ type AgentPlanningJob struct {
 	RunAfter           time.Time           `json:"runAfter"`
 	Error              *GenerationJobError `json:"error,omitempty"`
 	UpdatedAt          time.Time           `json:"updatedAt"`
+	DeckID             string              `json:"deckId,omitempty"`
+	Revision           int                 `json:"revision,omitempty"`
+	FileID             string              `json:"fileId,omitempty"`
+	AssetID            string              `json:"assetId,omitempty"`
+	TaskID             string              `json:"taskId,omitempty"`
 }
 
 func (j AgentPlanningJob) Progress() int {
@@ -75,6 +83,7 @@ type AgentPlanningStore interface {
 	GetAgentPlanning(context.Context, GenerationJobScope, string) (AgentPlanningState, error)
 	UpdateAgentOutline(context.Context, GenerationJobScope, string, int, []OutlineEditCommand, time.Time) (AgentPlanningState, error)
 	ApproveAgentOutline(context.Context, GenerationJobScope, string, int, time.Time) (AgentPlanningState, error)
+	SaveAgentDeckCheckpoint(context.Context, GenerationLease, AgentDeckCheckpoint) (GenerationLease, error)
 }
 
 type AgentPlanningOptions struct {
@@ -90,12 +99,27 @@ type AgentPlanningService struct {
 	research      ResearchProvider
 	storyline     StorylinePlanningPort
 	outline       OutlinePlanningPort
+	content       SlideContentPlanningPort
+	assets        AgentDeckAssetPort
+	compiler      AgentDeckCompilerPort
+	artifacts     AgentDeckArtifactPort
 	workerID      string
 	leaseDuration time.Duration
 	retryDelay    time.Duration
 	scanInterval  time.Duration
 	workerLimit   int
 	wake          chan struct{}
+}
+
+func (s *AgentPlanningService) ConfigureDeckGeneration(content SlideContentPlanningPort, assets AgentDeckAssetPort, compiler AgentDeckCompilerPort, artifacts AgentDeckArtifactPort) error {
+	if s == nil || content == nil || assets == nil || compiler == nil || artifacts == nil {
+		return ErrGenerationJobInvalid
+	}
+	s.content = content
+	s.assets = assets
+	s.compiler = compiler
+	s.artifacts = artifacts
+	return nil
 }
 
 type GuideAgentRequest struct {
@@ -190,7 +214,11 @@ func (s *AgentPlanningService) ApproveOutline(ctx context.Context, scope Generat
 	if expectedRevision <= 0 {
 		return AgentPlanningState{}, ErrInvalidOutlinePlan
 	}
-	return s.store.ApproveAgentOutline(ctx, scope, jobID, expectedRevision, normalizedAgentTime(now))
+	state, err := s.store.ApproveAgentOutline(ctx, scope, jobID, expectedRevision, normalizedAgentTime(now))
+	if err == nil {
+		s.Wake()
+	}
+	return state, err
 }
 
 func (s *AgentPlanningService) Retry(ctx context.Context, scope GenerationJobScope, jobID string, now time.Time) (AgentPlanningState, error) {
@@ -248,6 +276,7 @@ func cloneAgentPlanningRecord(input AgentPlanningRecord) AgentPlanningRecord {
 		}
 		input.Revisions = revisions
 	}
+	input.DeckGeneration = cloneAgentDeckGenerationState(input.DeckGeneration)
 	return input
 }
 
@@ -282,9 +311,11 @@ func agentPlanningState(job GenerationJob, record AgentPlanningRecord) AgentPlan
 			OrganizationID: job.OrganizationID, Status: job.Status, Stage: job.Stage,
 			CompletedWorkUnits: job.CompletedWorkUnits, TotalWorkUnits: job.TotalWorkUnits,
 			SlideCount: job.SlideCount, RunAfter: job.RunAfter, Error: cloneGenerationError(job.LastError), UpdatedAt: job.UpdatedAt,
+			DeckID: job.DeckID, Revision: job.Revision, FileID: job.FileID, AssetID: job.AssetID, TaskID: job.ExistingTaskID,
 		}, Intent: record.Intent, Research: record.Research,
 		Storyline: record.Storyline, Outline: record.Outline, ApprovedOutline: record.ApprovedOutline,
 		ResearchExecutionCount: record.ResearchExecutionCount,
+		DeckGeneration:         &record.DeckGeneration,
 	}
 }
 
@@ -416,9 +447,17 @@ func (s *MemoryGenerationJobStore) ApproveAgentOutline(_ context.Context, scope 
 	record.Revisions[approved.Revision] = cloneOutlinePlan(approved)
 	job.Status = GenerationJobQueued
 	job.Stage = GenerationStageOutlineApproved
+	job.TotalWorkUnits = agentDeckTotalWorkUnits(approved)
+	job.CompletedWorkUnits = 3
+	job.DeckJobID = job.ID + ":deck"
 	job.RunAfter = approved.ApprovedAt
 	job.UpdatedAt = approved.ApprovedAt
 	s.agentPlans[job.ID] = record
+	s.decks[job.ID] = DeckJob{ID: job.DeckJobID, GenerationJobID: job.ID, Status: GenerationChildPending, CreatedAt: approved.ApprovedAt, UpdatedAt: approved.ApprovedAt}
+	s.slides[job.ID] = make([]SlideJob, 0, len(approved.Slides))
+	for index, objective := range approved.Slides {
+		s.slides[job.ID] = append(s.slides[job.ID], SlideJob{ID: fmt.Sprintf("%s:slide:%d", job.ID, index+1), GenerationJobID: job.ID, DeckJobID: job.DeckJobID, SlideIndex: index + 1, SourceSlideID: objective.SlideID, Status: GenerationChildPending, CreatedAt: approved.ApprovedAt, UpdatedAt: approved.ApprovedAt})
+	}
 	s.jobs[job.ID] = job
 	s.transitions[job.ID] = append(s.transitions[job.ID], GenerationTransition{
 		JobID: job.ID, FromStage: GenerationStageOutlinePlanned, ToStage: GenerationStageOutlineApproved,

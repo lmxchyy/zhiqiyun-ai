@@ -35,6 +35,10 @@ const (
 	GenerationStageStorylinePlanned = "STORYLINE_PLANNED"
 	GenerationStageOutlinePlanned   = "OUTLINE_PLANNED"
 	GenerationStageOutlineApproved  = "OUTLINE_APPROVED"
+	GenerationStageContentReady     = "CONTENT_READY"
+	GenerationStageAssetsReady      = "ASSETS_READY"
+	GenerationStageLayoutCompiled   = "LAYOUT_COMPILED"
+	GenerationStageQualityChecked   = "QUALITY_CHECKED"
 
 	GenerationChildPending   = "PENDING"
 	GenerationChildRunning   = "RUNNING"

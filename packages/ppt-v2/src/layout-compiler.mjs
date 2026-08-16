@@ -8,6 +8,10 @@ export { COVER_LAYOUT_ID, STANDARD_CONTENT_LAYOUT_ID };
 const CANVAS = Object.freeze({ unit: "pt", width: 960, height: 540 });
 const SAFE_AREA = Object.freeze({ left: 48, top: 36, right: 48, bottom: 36 });
 
+function slot(x, y, width, height, zIndex, characterThreshold = 0) {
+  return { x, y, width, height, zIndex, characterThreshold };
+}
+
 export const phase1LayoutDefinitions = {
   [COVER_LAYOUT_ID]: {
     safeArea: SAFE_AREA,
@@ -26,6 +30,92 @@ export const phase1LayoutDefinitions = {
       body: { x: 108, y: 190, width: 744, height: 204, zIndex: 2, characterThreshold: 500 },
     },
   },
+};
+
+export const professionalLayoutDefinitions = {
+  layout_professional_cover_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      eyebrow: slot(72, 72, 816, 24, 0, 80),
+      title: slot(72, 132, 816, 112, 1, 100),
+      subtitle: slot(72, 270, 744, 74, 2, 180),
+      footer: slot(72, 452, 816, 24, 3, 100),
+    },
+  },
+  layout_professional_section_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      eyebrow: slot(72, 92, 816, 24, 0, 80),
+      title: slot(72, 154, 816, 86, 1, 100),
+      body: slot(72, 282, 720, 104, 2, 280),
+    },
+  },
+  layout_professional_title_body_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      title: slot(72, 52, 816, 52, 0, 100),
+      "key-message": slot(72, 116, 816, 42, 1, 180),
+      body: slot(72, 188, 816, 278, 2, 700),
+    },
+  },
+  layout_professional_title_bullets_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      title: slot(72, 52, 816, 52, 0, 100),
+      "key-message": slot(72, 116, 816, 42, 1, 180),
+      bullets: slot(90, 188, 780, 278, 2, 520),
+    },
+  },
+  layout_professional_two_column_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      title: slot(72, 52, 816, 52, 0, 100),
+      "key-message": slot(72, 116, 816, 42, 1, 180),
+      left: slot(72, 188, 378, 278, 2, 340),
+      right: slot(486, 188, 402, 278, 3, 340),
+    },
+  },
+  layout_professional_text_image_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      title: slot(72, 52, 816, 52, 0, 100),
+      "key-message": slot(72, 116, 816, 42, 1, 180),
+      body: slot(72, 188, 372, 278, 2, 360),
+      image: slot(480, 188, 408, 278, 3),
+    },
+  },
+  layout_professional_image_text_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      title: slot(72, 52, 816, 52, 0, 100),
+      "key-message": slot(72, 116, 816, 42, 1, 180),
+      image: slot(72, 188, 408, 278, 2),
+      body: slot(516, 188, 372, 278, 3, 360),
+    },
+  },
+  layout_professional_key_metric_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      title: slot(72, 52, 816, 52, 0, 100),
+      metric: slot(72, 166, 330, 104, 1, 24),
+      "metric-label": slot(72, 282, 330, 38, 2, 100),
+      body: slot(450, 166, 438, 222, 3, 420),
+    },
+  },
+  layout_professional_closing_action_v1: {
+    safeArea: SAFE_AREA,
+    slots: {
+      eyebrow: slot(72, 88, 816, 24, 0, 80),
+      title: slot(72, 142, 816, 78, 1, 100),
+      "key-message": slot(72, 246, 816, 54, 2, 180),
+      body: slot(72, 342, 744, 112, 3, 260),
+    },
+  },
+};
+
+export const allLayoutDefinitions = {
+  ...phase1LayoutDefinitions,
+  ...professionalLayoutDefinitions,
 };
 
 function diagnostic(code, severity, message, slideId, elementId) {
@@ -62,6 +152,9 @@ function resolveStyle(element, designSystem) {
       verticalAlign: style.verticalAlign,
       marginPt: style.marginPt,
     };
+  }
+  if (element.type === "image") {
+    return { kind: "image", fit: element.fit };
   }
   const style = designSystem.shapeStyles[element.styleRole];
   if (!style) {
@@ -133,7 +226,7 @@ function geometryDiagnostics(slide, element, slot, safeArea) {
 }
 
 export function compileDeckLayout(deck, options = {}) {
-  const definitions = options.definitions ?? phase1LayoutDefinitions;
+  const definitions = options.definitions ?? allLayoutDefinitions;
   const slides = [];
   const allDiagnostics = [];
 

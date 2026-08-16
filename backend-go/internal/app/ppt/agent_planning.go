@@ -246,6 +246,7 @@ func ValidateOutlinePlan(plan OutlinePlan, research ResearchPack) error {
 		claimIDs[claim.ID] = struct{}{}
 	}
 	seen := map[string]struct{}{}
+	hasImage := false
 	for _, slide := range plan.Slides {
 		if slide.SlideID == "" || slide.Title == "" || slide.Purpose == "" || slide.KeyMessage == "" || slide.VisualIntent == "" || len(slide.ExpectedElementTypes) == 0 {
 			return ErrInvalidOutlinePlan
@@ -254,6 +255,9 @@ func ValidateOutlinePlan(plan OutlinePlan, research ResearchPack) error {
 			return ErrInvalidOutlinePlan
 		}
 		seen[slide.SlideID] = struct{}{}
+		if containsString(slide.ExpectedElementTypes, "IMAGE") {
+			hasImage = true
+		}
 		if slide.EvidenceRequired && len(slide.Evidence) == 0 {
 			return ErrInvalidEvidenceMapping
 		}
@@ -279,6 +283,9 @@ func ValidateOutlinePlan(plan OutlinePlan, research ResearchPack) error {
 			return ErrInvalidEvidenceMapping
 		}
 	}
+	if !hasImage {
+		return ErrInvalidOutlinePlan
+	}
 	return nil
 }
 
@@ -298,8 +305,8 @@ func cloneSlideObjective(input SlideObjective) SlideObjective {
 }
 
 func outlineSlideID(outlineID string, sequence int) string {
-	jobID := strings.TrimSuffix(outlineID, ":outline")
-	return jobID + ":objective:" + strconv.Itoa(sequence)
+	jobID := strings.TrimSuffix(outlineID, "_outline")
+	return jobID + "_objective_" + strconv.Itoa(sequence)
 }
 
 func outlineSlideIndex(slides []SlideObjective, slideID string) int {
