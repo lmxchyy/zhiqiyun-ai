@@ -29,7 +29,7 @@ import type {
   PptSlide,
   PptTaskResponse
 } from "../types/ppt";
-import type { AgentGuideRequest, AgentGuideResult, AgentPlanningState, OutlineEditCommand } from "../types/pptAgent";
+import type { AgentGuideRequest, AgentGuideResult, AgentPlanningState, OutlineEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
 
 export type {
   PptCreateMode,
@@ -305,6 +305,14 @@ export function guidePptAgent(request: AgentGuideRequest): Promise<AgentGuideRes
 
 export function getPptAgentState(jobId: string): Promise<AgentPlanningState> {
   return adminRequest<AgentPlanningState>({ method: "GET", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}` });
+}
+
+export function getPptAgentPreview(jobId: string, revision: number): Promise<PptAgentPreviewProjection> {
+  return adminRequest<PptAgentPreviewProjection>({
+    method: "GET",
+    url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/preview`,
+    params: { revision }
+  });
 }
 
 export function updatePptAgentOutline(jobId: string, expectedRevision: number, commands: OutlineEditCommand[]): Promise<AgentPlanningState> {

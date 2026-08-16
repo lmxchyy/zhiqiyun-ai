@@ -34,11 +34,17 @@
       <button type="button" :disabled="agent.busy" @click="agent.retry">重试当前阶段</button>
     </section>
 
-    <section v-else-if="agent.isCompleted" class="ppt-agent-approved" role="status">
-      <strong>演示文稿已完成</strong>
-      <p>完整 PPTX 已保存到私有作品空间，可以下载并继续在 PowerPoint 中编辑。</p>
-      <button type="button" :disabled="agent.busy" @click="agent.download">下载 PPTX</button>
-    </section>
+    <PptAgentDeckPreview
+      v-else-if="agent.isCompleted && agent.state"
+      :projection="agent.preview"
+      :approved-outline="agent.state.approvedOutline || agent.state.outline"
+      :loading="agent.previewLoading"
+      :error="agent.previewError"
+      :busy="agent.busy"
+      @retry="agent.loadPreview(true)"
+      @asset-expired="agent.refreshPreviewAssets"
+      @download="agent.download"
+    />
 
     <PptAgentOutlineReview
       v-else-if="agent.isWaitingForApproval && agent.state"
@@ -66,6 +72,7 @@
 import { computed, onBeforeUnmount, onMounted } from "vue";
 import { planningStageLabel, usePptAgentStore } from "../../stores/pptAgent";
 import type { AgentGuideRequest, AgentPlanningStage } from "../../types/pptAgent";
+import PptAgentDeckPreview from "./PptAgentDeckPreview.vue";
 import PptAgentOutlineReview from "./PptAgentOutlineReview.vue";
 
 const props = defineProps<{

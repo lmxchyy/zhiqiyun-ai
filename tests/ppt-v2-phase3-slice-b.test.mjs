@@ -178,6 +178,16 @@ test("approved IMAGE objectives cannot be silently rendered with a text-only lay
   assert.throws(() => buildProfessionalDeck(input), /image layout does not match approved objective/);
 });
 
+test("key metric content uses only the slots declared by its Professional layout", () => {
+  const input = sliceBInput();
+  input.slideContents[4].layoutHint = "key-metric";
+  input.slideContents[4].bodyBlocks = [{ heading: "42%", text: "Verified market signal" }];
+  const result = buildProfessionalDeck(input);
+  const slide = result.deck.slides[4];
+  assert.deepEqual(slide.elements.map((element) => element.slot), ["title", "metric", "metric-label", "body"]);
+  assert.equal(result.layoutResult.slides[4].diagnostics.length, 0);
+});
+
 test("multi-page renderer emits native text and shapes plus resolved images", async () => {
   const result = buildProfessionalDeck(sliceBInput());
   const renderer = new PptxGenJSRenderer({

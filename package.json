@@ -15,6 +15,7 @@
     "test": "cd backend-go && go test ./...",
     "test:regression": "node --test \"tests/*.test.mjs\"",
     "test:ppt-v2": "node --test tests/ppt-v2-*.test.mjs",
+    "test:ppt-v2-preview": "playwright test -c tests/ppt-preview/playwright.config.ts",
     "render:ppt-v2:golden": "node packages/ppt-v2/src/cli.mjs artifacts/ppt-v2/golden-1-professional-business.pptx contracts/ppt-v2/fixtures/golden-1-professional-business.legacy.json",
     "docker:up": "docker compose -f compose.yml up -d --build",
     "docker:ps": "docker compose -f compose.yml ps",

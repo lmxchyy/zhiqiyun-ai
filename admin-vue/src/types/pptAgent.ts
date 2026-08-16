@@ -150,6 +150,100 @@ export interface AgentPlanningState {
   researchExecutionCount: number;
 }
 
+export interface PptPreviewTextContent {
+  kind: "plain" | "bullets";
+  text?: string;
+  items?: string[];
+}
+
+export interface PptPreviewSlideElement {
+  id: string;
+  type: "text" | "shape" | "image";
+  slot: string;
+  content?: PptPreviewTextContent;
+  styleRole?: string;
+  shapeType?: "rect" | "roundRect" | "ellipse";
+  assetRef?: string;
+  fit?: "cover" | "contain";
+  altText?: string;
+  citationRefs?: string[];
+}
+
+export interface PptPreviewSlide {
+  id: string;
+  sequence: number;
+  role: string;
+  layoutId: string;
+  backgroundToken: string;
+  speakerNotes: string;
+  objectiveId: string;
+  keyMessage: string;
+  evidenceRequired: boolean;
+  citationRefs: string[];
+  elements: PptPreviewSlideElement[];
+}
+
+export interface PptPreviewResolvedStyle {
+  kind: "text" | "shape" | "image";
+  fontFace?: string;
+  fontSizePt?: number;
+  color?: string;
+  bold?: boolean;
+  italic?: boolean;
+  align?: "left" | "center" | "right" | "justify";
+  verticalAlign?: "top" | "middle" | "bottom";
+  marginPt?: number;
+  shapeType?: "rect" | "roundRect" | "ellipse";
+  fillColor?: string;
+  lineColor?: string;
+  lineWidthPt?: number;
+  transparency?: number;
+  fit?: "cover" | "contain";
+}
+
+export interface PptPreviewLayoutElement {
+  elementId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  resolvedStyle: PptPreviewResolvedStyle;
+}
+
+export interface PptPreviewLayoutSlide {
+  slideId: string;
+  layoutId: string;
+  backgroundColor: string;
+  elements: PptPreviewLayoutElement[];
+}
+
+export interface PptAgentPreviewProjection {
+  deckId: string;
+  revision: number;
+  deck: {
+    contractVersion: string;
+    deckId: string;
+    revision: number;
+    deckSpec: { title: string; language: string; author?: string; audience?: string; scenario?: string };
+    assetManifest: Array<{ id: string; type: string; mimeType: string; uri: string; sha256: string }>;
+    provenance: {
+      sources: Array<{ id: string; title: string; type: string; locator: string }>;
+      citations: Array<{ id: string; sourceId: string; locator: string }>;
+      claims: Array<{ id: string; sourceId: string; citationRefs: string[]; text: string; verificationStatus: string }>;
+    };
+    slides: PptPreviewSlide[];
+  };
+  layoutResult: {
+    contractVersion: string;
+    deckId: string;
+    revision: number;
+    canvas: { unit: "pt"; width: number; height: number };
+    slides: PptPreviewLayoutSlide[];
+  };
+  assets: Array<{ assetId: string; url: string; expiresIn: number; mimeType: string; altText: string }>;
+}
+
 export interface AgentGuideRequest {
   idempotencyKey: string;
   text: string;

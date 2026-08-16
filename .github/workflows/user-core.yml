@@ -62,6 +62,9 @@ jobs:
       - name: Admin unit tests (protected surfaces)
         run: npm.cmd --prefix admin-vue test
 
+      - name: Golden 2 PPT preview visual regression
+        run: npm.cmd run test:ppt-v2-preview
+
       - name: Typecheck user core
         run: npm.cmd run typecheck:user-core
 

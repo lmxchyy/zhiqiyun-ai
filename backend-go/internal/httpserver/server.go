@@ -374,6 +374,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/ppt/outline/save", wrapF(api.savePPTOutline))
 	v1.POST("/ppt/agent/guide", wrapF(api.guidePPTAgent))
 	v1.GET("/ppt/agent/jobs/:jobId", wrapF(api.getPPTAgentState))
+	v1.GET("/ppt/agent/jobs/:jobId/preview", wrapF(api.previewPPTAgentDeck))
 	v1.GET("/ppt/agent/jobs/:jobId/download", wrapF(api.downloadPPTAgentDeck))
 	v1.PATCH("/ppt/agent/jobs/:jobId/outline", wrapF(api.updatePPTAgentOutline))
 	v1.POST("/ppt/agent/jobs/:jobId/outline/approve", wrapF(api.approvePPTAgentOutline))

@@ -124,7 +124,9 @@ function contentElements(input, objective, content) {
   }
 
   elements.push(textElement(objective.slideId, "title", title, "professionalTitle"));
-  elements.push(textElement(objective.slideId, "key-message", keyMessage, "professionalKeyMessage"));
+  if (hint !== "key-metric") {
+    elements.push(textElement(objective.slideId, "key-message", keyMessage, "professionalKeyMessage"));
+  }
   if (hint === "title-bullets") {
     elements.push(textElement(objective.slideId, "bullets", content.bullets, "professionalBody"));
   } else if (hint === "two-column") {

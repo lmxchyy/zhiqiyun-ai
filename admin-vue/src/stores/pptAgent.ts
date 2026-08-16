@@ -2,12 +2,13 @@ import { defineStore } from "pinia";
 import {
   approvePptAgentOutline,
   downloadPptAgentDeck,
+  getPptAgentPreview,
   getPptAgentState,
   guidePptAgent,
   retryPptAgentPlanning,
   updatePptAgentOutline
 } from "../api/ppt";
-import type { AgentGuideRequest, AgentPlanningStage, AgentPlanningState, OutlineEditCommand } from "../types/pptAgent";
+import type { AgentGuideRequest, AgentPlanningStage, AgentPlanningState, OutlineEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
 
 const activePlanningStorageKey = "xianzhi_ppt_agent_planning_job";
 let pollingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -95,7 +96,10 @@ export const usePptAgentStore = defineStore("pptAgent", {
     prompt: "",
     clarificationQuestions: [] as string[],
     busy: false,
-    requestError: ""
+    requestError: "",
+    preview: null as PptAgentPreviewProjection | null,
+    previewLoading: false,
+    previewError: ""
   }),
   getters: {
     stageLabel: state => planningStageLabel(state.state?.job.stage || ""),
@@ -115,6 +119,7 @@ export const usePptAgentStore = defineStore("pptAgent", {
       if (jobId) {
         try {
           this.state = await getPptAgentState(jobId);
+          if (this.isCompleted) await this.loadPreview();
           this.startPolling();
           return;
         } catch {
@@ -127,12 +132,16 @@ export const usePptAgentStore = defineStore("pptAgent", {
       this.busy = true;
       this.requestError = "";
       this.clarificationQuestions = [];
+      this.state = null;
+      this.preview = null;
+      this.previewError = "";
       try {
         const result = await guidePptAgent(request);
         this.clarificationQuestions = result.clarificationQuestions || [];
         this.state = result.state || null;
         if (this.state) {
           saveStoredPlanning(this.state.job.id, request.text.trim());
+          if (this.isCompleted) await this.loadPreview();
           this.startPolling();
         }
       } catch (error) {
@@ -146,6 +155,7 @@ export const usePptAgentStore = defineStore("pptAgent", {
       try {
         this.state = await getPptAgentState(this.state.job.id);
         this.requestError = "";
+        if (this.isCompleted) await this.loadPreview();
       } catch (error) {
         this.requestError = error instanceof Error ? error.message : "无法读取规划状态，请稍后重试。";
         this.stopPolling();
@@ -161,6 +171,23 @@ export const usePptAgentStore = defineStore("pptAgent", {
     stopPolling() {
       if (pollingTimer) clearTimeout(pollingTimer);
       pollingTimer = undefined;
+    },
+    async loadPreview(force = false) {
+      const job = this.state?.job;
+      if (!job?.id || !this.isCompleted || !job.revision) return;
+      if (!force && this.preview?.deckId === job.deckId && this.preview?.revision === job.revision) return;
+      this.previewLoading = true;
+      this.previewError = "";
+      try {
+        this.preview = await getPptAgentPreview(job.id, job.revision);
+      } catch (error) {
+        this.previewError = error instanceof Error ? error.message : "预览暂时不可用，请稍后重试。";
+      } finally {
+        this.previewLoading = false;
+      }
+    },
+    async refreshPreviewAssets() {
+      await this.loadPreview(true);
     },
     async applyCommands(commands: OutlineEditCommand[]) {
       if (!this.state || !commands.length) return;
