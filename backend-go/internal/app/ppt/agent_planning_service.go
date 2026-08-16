@@ -84,6 +84,9 @@ type AgentPlanningStore interface {
 	UpdateAgentOutline(context.Context, GenerationJobScope, string, int, []OutlineEditCommand, time.Time) (AgentPlanningState, error)
 	ApproveAgentOutline(context.Context, GenerationJobScope, string, int, time.Time) (AgentPlanningState, error)
 	SaveAgentEdit(context.Context, GenerationJobScope, string, AgentDeckGenerationState, []byte, string, time.Time) (AgentPlanningState, error)
+	EnqueueAgentEdit(context.Context, GenerationJobScope, string, DurableEditCheckpoint, time.Time) (AgentPlanningState, error)
+	SaveAgentEditCheckpoint(context.Context, GenerationLease, AgentDeckGenerationState, time.Time) (GenerationLease, error)
+	CompleteAgentEdit(context.Context, GenerationLease, AgentDeckGenerationState, []byte, string, time.Time) (AgentPlanningState, error)
 	SaveAgentDeckCheckpoint(context.Context, GenerationLease, AgentDeckCheckpoint) (GenerationLease, error)
 }
 
@@ -283,6 +286,35 @@ func (s *AgentPlanningService) ApplyEdit(ctx context.Context, scope GenerationJo
 		updated.Revisions[last].RenderBytes = append([]byte(nil), renderBytes...)
 	}
 	return s.store.SaveAgentEdit(ctx, scope, jobID, updated, renderBytes, fileID, normalizedAgentTime(now))
+}
+
+// EnqueueEdit persists an edit request and lets the durable planning worker execute it.
+func (s *AgentPlanningService) EnqueueEdit(ctx context.Context, scope GenerationJobScope, jobID string, command EditCommand, message string, now time.Time) (AgentPlanningState, error) {
+	state, err := s.store.GetAgentPlanning(ctx, scope, jobID)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if state.Job.Status != GenerationJobSucceeded || state.Job.Stage != GenerationStageCompleted || state.DeckGeneration == nil || state.DeckGeneration.Compilation == nil {
+		return AgentPlanningState{}, ErrGenerationJobNotReady
+	}
+	if command.CommandID == "" {
+		command.CommandID = "edit_" + newGenerationJobID()
+	}
+	if command.DeckID == "" {
+		command.DeckID = state.Job.DeckID
+	}
+	if command.BaseRevision == 0 {
+		command.BaseRevision = state.Job.Revision
+	}
+	checkpoint := DurableEditCheckpoint{RequestID: command.CommandID, Message: strings.TrimSpace(message), BaseRevision: command.BaseRevision, Stage: EditStageAccepted}
+	if checkpoint.Message == "" {
+		checkpoint.Command = &command
+	}
+	queued, err := s.store.EnqueueAgentEdit(ctx, scope, jobID, checkpoint, normalizedAgentTime(now))
+	if err == nil {
+		s.Wake()
+	}
+	return queued, err
 }
 
 func (s *AgentPlanningService) UndoEdit(ctx context.Context, scope GenerationJobScope, jobID string, now time.Time) (AgentPlanningState, error) {

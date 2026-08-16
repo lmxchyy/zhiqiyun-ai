@@ -176,4 +176,82 @@ func (s *MemoryGenerationJobStore) SaveAgentEdit(_ context.Context, scope Genera
 	return agentPlanningState(job, record), nil
 }
 
+func (s *MemoryGenerationJobStore) EnqueueAgentEdit(_ context.Context, scope GenerationJobScope, jobID string, request DurableEditCheckpoint, now time.Time) (AgentPlanningState, error) {
+	now = normalizedAgentTime(now)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[strings.TrimSpace(jobID)]
+	if !ok || job.WorkflowType != GenerationWorkflowAgentOutline || job.TenantID != strings.TrimSpace(scope.TenantID) || job.UserID != strings.TrimSpace(scope.UserID) {
+		return AgentPlanningState{}, ErrGenerationJobNotFound
+	}
+	record := cloneAgentPlanningRecord(s.agentPlans[job.ID])
+	for _, revision := range record.DeckGeneration.Revisions {
+		for _, command := range revision.Commands {
+			if command.CommandID == request.RequestID {
+				return agentPlanningState(job, record), nil
+			}
+		}
+	}
+	if record.DeckGeneration.PendingEdit != nil {
+		if record.DeckGeneration.PendingEdit.RequestID == request.RequestID {
+			return agentPlanningState(job, record), nil
+		}
+		return AgentPlanningState{}, ErrEditStaleRevision
+	}
+	if job.Status != GenerationJobSucceeded || job.Stage != GenerationStageCompleted || request.BaseRevision != job.Revision {
+		return AgentPlanningState{}, ErrEditStaleRevision
+	}
+	if request.Command != nil {
+		if err := ValidateEditCommand(*request.Command, record.DeckGeneration); err != nil {
+			return AgentPlanningState{}, err
+		}
+	}
+	record.DeckGeneration.PendingEdit = &request
+	job.Status, job.Stage, job.RunAfter, job.LastError = GenerationJobQueued, GenerationStageOutlineApproved, now, nil
+	job.LeaseOwner, job.LeaseExpiresAt = "", time.Time{}
+	job.UpdatedAt = now
+	job.FinishedAt = time.Time{}
+	s.agentPlans[job.ID], s.jobs[job.ID] = record, job
+	return agentPlanningState(job, record), nil
+}
+
+func (s *MemoryGenerationJobStore) SaveAgentEditCheckpoint(_ context.Context, lease GenerationLease, state AgentDeckGenerationState, now time.Time) (GenerationLease, error) {
+	now = normalizedAgentTime(now)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, err := s.validLeaseLocked(lease, now)
+	if err != nil {
+		return GenerationLease{}, err
+	}
+	record := cloneAgentPlanningRecord(s.agentPlans[job.ID])
+	record.DeckGeneration = cloneAgentDeckGenerationState(state)
+	s.agentPlans[job.ID], s.jobs[job.ID] = record, job
+	lease.Job = cloneGenerationJob(job)
+	return lease, nil
+}
+
+func (s *MemoryGenerationJobStore) CompleteAgentEdit(_ context.Context, lease GenerationLease, state AgentDeckGenerationState, renderBytes []byte, fileID string, now time.Time) (AgentPlanningState, error) {
+	now = normalizedAgentTime(now)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, err := s.validLeaseLocked(lease, now)
+	if err != nil {
+		return AgentPlanningState{}, err
+	}
+	if state.Compilation == nil || state.CurrentRevision <= job.Revision {
+		return AgentPlanningState{}, ErrEditStaleRevision
+	}
+	record := cloneAgentPlanningRecord(s.agentPlans[job.ID])
+	state.PendingEdit = nil
+	record.DeckGeneration = cloneAgentDeckGenerationState(state)
+	job.Status, job.Stage, job.FinishedAt = GenerationJobSucceeded, GenerationStageCompleted, now
+	job.Revision = state.CurrentRevision
+	job.FileID = strings.TrimSpace(fileID)
+	job.RenderBytes = append([]byte(nil), renderBytes...)
+	job.LeaseOwner, job.LeaseExpiresAt = "", time.Time{}
+	job.UpdatedAt = now
+	s.agentPlans[job.ID], s.jobs[job.ID] = record, job
+	return agentPlanningState(job, record), nil
+}
+
 var _ AgentPlanningStore = (*MemoryGenerationJobStore)(nil)

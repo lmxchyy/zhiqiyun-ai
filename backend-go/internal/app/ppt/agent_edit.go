@@ -10,6 +10,28 @@ import (
 )
 
 const (
+	EditStageAccepted          = "EDIT_ACCEPTED"
+	EditStagePlanned           = "EDIT_PLANNED"
+	EditStageContentUpdated    = "CONTENT_UPDATED"
+	EditStageAssetsUpdated     = "ASSETS_UPDATED"
+	EditStageLayoutUpdated     = "LAYOUT_UPDATED"
+	EditStageQualityChecked    = "QUALITY_CHECKED"
+	EditStageRendered          = "RENDERED"
+	EditStageRevisionCommitted = "REVISION_COMMITTED"
+)
+
+type DurableEditCheckpoint struct {
+	RequestID    string          `json:"requestId"`
+	Message      string          `json:"message,omitempty"`
+	Command      *EditCommand    `json:"command,omitempty"`
+	BaseRevision int             `json:"baseRevision"`
+	Stage        string          `json:"stage"`
+	PreparedDeck json.RawMessage `json:"preparedDeck,omitempty"`
+	RenderBytes  []byte          `json:"renderBytes,omitempty"`
+	FileID       string          `json:"fileId,omitempty"`
+}
+
+const (
 	EditCommandUpdateText   = "UPDATE_TEXT"
 	EditCommandRegenerate   = "REGENERATE_SLIDE"
 	EditCommandChangeLayout = "CHANGE_LAYOUT"

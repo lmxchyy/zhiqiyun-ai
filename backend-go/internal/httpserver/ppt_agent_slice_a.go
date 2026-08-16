@@ -183,7 +183,7 @@ func (a api) editPPTAgentDeck(w http.ResponseWriter, r *http.Request) {
 	if request.Command != nil {
 		command = *request.Command
 	}
-	state, err := a.pptAgentService.ApplyEdit(r.Context(), pptapp.GenerationJobScope{TenantID: effectiveTenantID(user), UserID: user.ID}, r.PathValue("jobId"), command, strings.TrimSpace(request.Message), time.Now().UTC())
+	state, err := a.pptAgentService.EnqueueEdit(r.Context(), pptapp.GenerationJobScope{TenantID: effectiveTenantID(user), UserID: user.ID}, r.PathValue("jobId"), command, strings.TrimSpace(request.Message), time.Now().UTC())
 	if err != nil {
 		writePPTAgentError(w, err)
 		return

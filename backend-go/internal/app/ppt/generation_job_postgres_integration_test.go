@@ -3,6 +3,7 @@ package ppt
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -611,6 +612,41 @@ func TestPostgresGenerationJobAgentDeckGenerationRecoveryFencingAndArtifact(t *t
 	task, err := restartedArtifact.ppt.GetTask(scope.UserID, completed.Job.TaskID)
 	if err != nil || task.V2DeckID != completed.Job.DeckID || task.PPTXAssetID != completed.Job.AssetID {
 		t.Fatalf("atomic task relation missing: task=%+v err=%v", task, err)
+	}
+	var deck struct {
+		Slides []struct {
+			ID string `json:"id"`
+		} `json:"slides"`
+	}
+	if err := json.Unmarshal(completed.DeckGeneration.Compilation.Deck, &deck); err != nil || len(deck.Slides) == 0 {
+		t.Fatalf("completed deck is not editable: %v", err)
+	}
+	editCommand := EditCommand{CommandID: "postgres-edit-" + suffix, Type: EditCommandChangeLayout, DeckID: completed.Job.DeckID, BaseRevision: completed.Job.Revision, TargetSlideID: deck.Slides[0].ID, Payload: map[string]string{"layoutId": "two-column"}}
+	queued, err := restarted.EnqueueEdit(t.Context(), scope, jobID, editCommand, "", now.Add(6*time.Minute))
+	if err != nil || queued.Job.Status != GenerationJobQueued {
+		t.Fatalf("postgres edit was not queued: state=%+v err=%v", queued.Job, err)
+	}
+	if err := restarted.ProcessReady(t.Context(), now.Add(7*time.Minute), 10); err != nil {
+		t.Fatal(err)
+	}
+	edited, err := restarted.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Job.Revision != completed.Job.Revision+1 || edited.DeckGeneration.PendingEdit != nil || edited.Job.Status != GenerationJobSucceeded {
+		t.Fatalf("postgres edit worker did not commit revision: %+v", edited.Job)
+	}
+	if replay, err := restarted.EnqueueEdit(t.Context(), scope, jobID, editCommand, "", now.Add(8*time.Minute)); err != nil || replay.Job.Revision != edited.Job.Revision {
+		t.Fatalf("postgres duplicate edit was not idempotent: state=%+v err=%v", replay.Job, err)
+	}
+	staleEdit := editCommand
+	staleEdit.CommandID = "postgres-stale-" + suffix
+	staleEdit.BaseRevision = edited.Job.Revision - 1
+	if _, err := restarted.EnqueueEdit(t.Context(), scope, jobID, staleEdit, "", now.Add(9*time.Minute)); !errors.Is(err, ErrEditStaleRevision) {
+		t.Fatalf("postgres stale edit was accepted: %v", err)
+	}
+	if _, err := restarted.Get(t.Context(), GenerationJobScope{TenantID: "other", UserID: scope.UserID}, jobID); !errors.Is(err, ErrGenerationJobNotFound) {
+		t.Fatalf("cross-tenant edit read was allowed: %v", err)
 	}
 }
 

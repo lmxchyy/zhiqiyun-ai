@@ -123,6 +123,7 @@ type AgentDeckGenerationState struct {
 	AssetExecutions   int                    `json:"assetExecutions"`
 	LayoutExecutions  int                    `json:"layoutExecutions"`
 	RenderExecutions  int                    `json:"renderExecutions"`
+	PendingEdit       *DurableEditCheckpoint `json:"pendingEdit,omitempty"`
 }
 
 type DeckBuildInput struct {
@@ -338,6 +339,17 @@ func cloneAgentDeckGenerationState(input AgentDeckGenerationState) AgentDeckGene
 		input.Compilation = &copyValue
 	}
 	input.Revisions = append([]DeckRevisionSnapshot(nil), input.Revisions...)
+	if input.PendingEdit != nil {
+		pending := *input.PendingEdit
+		if pending.Command != nil {
+			command := *pending.Command
+			command.Payload = cloneStringStringMap(command.Payload)
+			pending.Command = &command
+		}
+		pending.PreparedDeck = append([]byte(nil), pending.PreparedDeck...)
+		pending.RenderBytes = append([]byte(nil), pending.RenderBytes...)
+		input.PendingEdit = &pending
+	}
 	for index := range input.Revisions {
 		input.Revisions[index].Commands = append([]EditCommand(nil), input.Revisions[index].Commands...)
 		input.Revisions[index].AffectedSlideIDs = append([]string(nil), input.Revisions[index].AffectedSlideIDs...)
@@ -345,4 +357,15 @@ func cloneAgentDeckGenerationState(input AgentDeckGenerationState) AgentDeckGene
 		input.Revisions[index].RenderBytes = append([]byte(nil), input.Revisions[index].RenderBytes...)
 	}
 	return input
+}
+
+func cloneStringStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }

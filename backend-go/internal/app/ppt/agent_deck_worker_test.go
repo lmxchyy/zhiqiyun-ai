@@ -2,6 +2,7 @@ package ppt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -58,7 +59,12 @@ type deckCompilerFixture struct {
 
 func (f *deckCompilerFixture) Compile(_ context.Context, input DeckBuildInput) (DeckCompilation, error) {
 	f.compileCalls++
-	compiled := DeckCompilation{DeckID: "deck_" + shortStableID(input.GenerationJobID), Revision: input.Revision, SlideCount: len(input.ApprovedOutline.Slides), Deck: []byte(`{"valid":true}`), LayoutResult: []byte(`{"valid":true}`), RenderInput: []byte(`{"valid":true}`), QualityValid: !f.failQuality}
+	slides := make([]map[string]any, 0, len(input.ApprovedOutline.Slides))
+	for _, objective := range input.ApprovedOutline.Slides {
+		slides = append(slides, map[string]any{"id": objective.SlideID, "elements": []any{map[string]any{"id": objective.SlideID + "_title", "type": "text", "text": objective.Title}}})
+	}
+	deckJSON, _ := json.Marshal(map[string]any{"slides": slides})
+	compiled := DeckCompilation{DeckID: "deck_" + shortStableID(input.GenerationJobID), Revision: input.Revision, SlideCount: len(input.ApprovedOutline.Slides), Deck: deckJSON, LayoutResult: []byte(`{"slides":[]}`), RenderInput: []byte(`{"slides":[]}`), QualityValid: !f.failQuality}
 	if f.failQuality {
 		compiled.QualityIssues = []string{"TEXT_OVERFLOW: fixture"}
 	}
@@ -138,6 +144,63 @@ func TestAgentDeckWorkerGeneratesApprovedMultiPageDeckDurably(t *testing.T) {
 	}
 	if bundle.Deck.Status != GenerationChildSucceeded || len(bundle.Slides) != 8 {
 		t.Fatalf("deck/slide jobs missing: %+v", bundle)
+	}
+}
+
+func TestAgentEditWorkerDurablePlanningCheckpointAndReplay(t *testing.T) {
+	store, service, _, now := newAgentPlanningServiceFixture(t)
+	compiler := &deckCompilerFixture{}
+	artifacts := &deckArtifactFixture{store: store}
+	if err := service.ConfigureDeckGeneration(&deckContentFixture{}, &deckAssetFixture{}, compiler, artifacts); err != nil {
+		t.Fatal(err)
+	}
+	scope, jobID := approvedDeckJobFixture(t, service, now)
+	if err := service.ProcessReady(t.Context(), now.Add(3*time.Minute), 10); err != nil {
+		t.Fatal(err)
+	}
+	state, err := service.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := state.DeckGeneration.Compilation
+	var deck struct {
+		Slides []struct {
+			ID string `json:"id"`
+		} `json:"slides"`
+	}
+	if err := json.Unmarshal(target.Deck, &deck); err != nil || len(deck.Slides) == 0 {
+		t.Fatalf("fixture deck invalid: %v", err)
+	}
+	command := EditCommand{CommandID: "edit-worker-1", Type: EditCommandChangeLayout, DeckID: state.Job.DeckID, BaseRevision: state.Job.Revision, TargetSlideID: deck.Slides[0].ID, Payload: map[string]string{"layoutId": "two-column"}}
+	queued, err := service.EnqueueEdit(t.Context(), scope, jobID, command, "", now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Job.Status != GenerationJobQueued || queued.DeckGeneration.PendingEdit == nil {
+		t.Fatalf("edit was not durably queued: %+v", queued.Job)
+	}
+	if err := service.ProcessReady(t.Context(), now.Add(5*time.Minute), 10); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := service.Get(t.Context(), scope, jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Job.Status != GenerationJobSucceeded || completed.Job.Revision != state.Job.Revision+1 || completed.DeckGeneration.PendingEdit != nil {
+		t.Fatalf("edit did not complete durably: %+v", completed.Job)
+	}
+	if len(completed.DeckGeneration.Revisions) == 0 || completed.DeckGeneration.Revisions[len(completed.DeckGeneration.Revisions)-1].Commands[0].CommandID != command.CommandID {
+		t.Fatalf("revision checkpoint missing: %+v", completed.DeckGeneration.Revisions)
+	}
+	replay, err := service.EnqueueEdit(t.Context(), scope, jobID, command, "", now.Add(6*time.Minute))
+	if err != nil || replay.Job.Revision != completed.Job.Revision {
+		t.Fatalf("duplicate edit replay was not idempotent: state=%+v err=%v", replay.Job, err)
+	}
+	stale := command
+	stale.CommandID = "edit-worker-stale"
+	stale.BaseRevision = completed.Job.Revision - 1
+	if _, err := service.EnqueueEdit(t.Context(), scope, jobID, stale, "", now.Add(7*time.Minute)); !errors.Is(err, ErrEditStaleRevision) {
+		t.Fatalf("stale edit accepted: %v", err)
 	}
 }
 

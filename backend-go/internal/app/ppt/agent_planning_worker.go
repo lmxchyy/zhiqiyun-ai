@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -107,6 +108,9 @@ func (s *AgentPlanningService) processClaimedPlanningJob(ctx context.Context, le
 		if err != nil {
 			return err
 		}
+		if state.DeckGeneration != nil && state.DeckGeneration.PendingEdit != nil {
+			return s.processClaimedEditJob(providerCtx, lease, state, now)
+		}
 		switch lease.Job.Stage {
 		case GenerationStageCreated:
 			lease, err = s.store.SaveAgentIntent(ctx, lease, state.Intent, now)
@@ -175,6 +179,102 @@ func (s *AgentPlanningService) processClaimedPlanningJob(ctx context.Context, le
 			return nil
 		}
 	}
+}
+
+func (s *AgentPlanningService) processClaimedEditJob(ctx context.Context, lease GenerationLease, planning AgentPlanningState, now time.Time) error {
+	if planning.DeckGeneration == nil || planning.DeckGeneration.PendingEdit == nil || planning.DeckGeneration.Compilation == nil {
+		return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_invalid_output", "修改任务状态无效，请重试", true, nil), now)
+	}
+	deck := cloneAgentDeckGenerationState(*planning.DeckGeneration)
+	pending := deck.PendingEdit
+	if len(pending.PreparedDeck) > 0 {
+		var prepared AgentDeckGenerationState
+		if err := json.Unmarshal(pending.PreparedDeck, &prepared); err != nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_invalid_output", "修改任务状态无效，请重试", true, err), now)
+		}
+		prepared.PendingEdit = pending
+		deck = prepared
+	}
+	if pending.Command == nil {
+		if s.editPlanner == nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_provider_unavailable", "修改规划服务暂时不可用，请重试", true, nil), now)
+		}
+		draft, err := s.editPlanner.PlanEdit(ctx, EditPlanningInput{Message: pending.Message, State: planning})
+		if err != nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_provider_unavailable", "修改规划服务暂时不可用，请重试", true, err), now)
+		}
+		command := draft.Command
+		command.CommandID, command.DeckID, command.BaseRevision = pending.RequestID, planning.Job.DeckID, pending.BaseRevision
+		command.UserIntentSummary = pending.Message
+		pending.Command = &command
+		pending.Stage = EditStagePlanned
+		deck.PendingEdit = pending
+		var saveErr error
+		lease, saveErr = s.store.SaveAgentEditCheckpoint(ctx, lease, deck, now)
+		if saveErr != nil {
+			return saveErr
+		}
+	}
+	if len(pending.PreparedDeck) == 0 {
+		updated, err := ApplyEditCommand(deck, *pending.Command, now)
+		if err != nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_contract_validation_failed", "修改内容未通过校验，请重试", false, err), now)
+		}
+		updated.PendingEdit = pending
+		pending.Stage = EditStageContentUpdated
+		updated.PendingEdit = pending
+		pending.Stage = EditStageAssetsUpdated
+		updated.PendingEdit = pending
+		pending.Stage = EditStageLayoutUpdated
+		updated.PendingEdit = pending
+		prepared, _ := json.Marshal(updated)
+		pending.PreparedDeck = prepared
+		deck = updated
+		lease, err = s.store.SaveAgentEditCheckpoint(ctx, lease, deck, now)
+		if err != nil {
+			return err
+		}
+	}
+	if len(pending.RenderBytes) == 0 {
+		if s.compiler == nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_render_failed", "新版 PPT 生成失败，请重试", true, nil), now)
+		}
+		rendered, err := s.compiler.Render(ctx, *deck.Compilation, deck.Assets)
+		if err != nil || len(rendered.PPTX) == 0 {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_render_failed", "新版 PPT 生成失败，请重试", true, err), now)
+		}
+		pending.RenderBytes = append([]byte(nil), rendered.PPTX...)
+		pending.Stage = EditStageRendered
+		deck.PendingEdit = pending
+		var saveErr error
+		lease, saveErr = s.store.SaveAgentEditCheckpoint(ctx, lease, deck, now)
+		if saveErr != nil {
+			return saveErr
+		}
+	}
+	if pending.FileID == "" {
+		if s.artifacts == nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_asset_failed", "新版 PPT 保存失败，请重试", true, nil), now)
+		}
+		fileID, err := s.artifacts.StorePPTX(ctx, GenerationJobScope{TenantID: lease.TenantID, UserID: lease.UserID}, lease.JobID, planning.Job.TaskID, pending.RenderBytes)
+		if err != nil {
+			return s.failPlanningLease(ctx, lease, NewAgentWorkflowError("edit_asset_failed", "新版 PPT 保存失败，请重试", true, err), now)
+		}
+		pending.FileID = fileID
+		pending.Stage = EditStageRevisionCommitted
+		deck.PendingEdit = pending
+		var saveErr error
+		lease, saveErr = s.store.SaveAgentEditCheckpoint(ctx, lease, deck, now)
+		if saveErr != nil {
+			return saveErr
+		}
+	}
+	if len(deck.Revisions) > 0 {
+		deck.Revisions[len(deck.Revisions)-1].FileID = pending.FileID
+		deck.Revisions[len(deck.Revisions)-1].RenderBytes = append([]byte(nil), pending.RenderBytes...)
+	}
+	_, err := s.store.CompleteAgentEdit(ctx, lease, deck, pending.RenderBytes, pending.FileID, now)
+	return err
 }
 
 func (s *AgentPlanningService) processClaimedDeckStage(ctx context.Context, lease GenerationLease, planning AgentPlanningState, now time.Time) (GenerationLease, error) {
