@@ -58,7 +58,7 @@ function imageDraft(overrides = {}) {
     model: "gpt-image-2",
     style: "commercial",
     size: "1024x1024",
-    quality: "standard",
+    quality: "auto",
     count: 1,
     referenceImages: [],
     ...overrides,
@@ -110,9 +110,36 @@ test("image request omits canonical fields that the exact schema did not expose"
   });
 });
 
+test("image request accepts official auto size and quality", () => {
+  const request = taskRequestFromDraft(imageDraft({
+    size: "auto",
+    quality: "auto",
+    count: 3,
+  }));
+  assert.deepEqual(request.params, {
+    size: "auto",
+    quality: "auto",
+    n: 3,
+  });
+});
+
+test("canonical n beats count alias when both are present", () => {
+  const request = taskRequestFromDraft(imageDraft({
+    size: "1024x1024",
+    quality: "low",
+    count: 4,
+    parameters: { n: 2, imageRatio: "1:1", imageQuality: "high" },
+  }));
+  assert.equal(request.params.size, "1024x1024");
+  assert.equal(request.params.quality, "low");
+  assert.equal(request.params.n, 2);
+  assert.equal(request.params.imageRatio, undefined);
+  assert.equal(request.params.imageQuality, undefined);
+  assert.equal(request.params.count, undefined);
+});
+
 test("image request rejects UI aliases used as canonical size or quality", () => {
   const invalidCases = [
-    { field: "size", value: "auto", overrides: { size: "auto" } },
     { field: "size", value: "4:3", overrides: { size: "4:3" } },
     { field: "quality", value: "1K", overrides: { quality: "1K" } },
     { field: "quality", value: "2K", overrides: { quality: "2K" } },
@@ -191,7 +218,7 @@ test("home creation draft metadata is not sent as model parameters", () => {
     model: "gpt-image-2",
     style: "commercial",
     size: "1024x1024",
-    quality: "standard",
+    quality: "auto",
     count: 1,
     referenceImages: [],
     parameters: {
@@ -204,7 +231,7 @@ test("home creation draft metadata is not sent as model parameters", () => {
 
   assert.deepEqual(request.params, {
     size: "1024x1024",
-    quality: "standard",
+    quality: "auto",
     n: 1,
   });
 });

@@ -11974,6 +11974,14 @@ body {
   padding: 12px;
 }
 
+.ai-size-picker-errors {
+  margin: 0;
+  padding-left: 18px;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .ai-size-picker-preview {
   border-radius: 18px;
   background: #f9fafb;

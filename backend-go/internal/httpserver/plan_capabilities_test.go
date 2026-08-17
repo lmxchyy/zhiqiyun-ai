@@ -54,7 +54,7 @@ func TestResolveModuleSchemaSelectsFirstPackageAllowedModel(t *testing.T) {
 	data := normalizeAICapabilityDefaults(seedAdminData())
 	if err := applyAdminPlanCapabilities(&data, "plan_free", adminPlanCapabilitiesMutation{Modules: []adminPlanCapabilityModule{{
 		ModuleCode: moduleImageGeneration, Enabled: true, AllowedModels: []string{"gpt-image-2"},
-		Limits: map[string]any{"n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}},
+		Limits: map[string]any{"n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"auto"}}},
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestNormalizeGenerationQualityForPackageLimit(t *testing.T) {
 	data := normalizeAICapabilityDefaults(seedAdminData())
 	if err := applyAdminPlanCapabilities(&data, "plan_free", adminPlanCapabilitiesMutation{Modules: []adminPlanCapabilityModule{{
 		ModuleCode: moduleImageGeneration, Enabled: true, AllowedModels: []string{"gpt-image-2"},
-		Limits: map[string]any{"n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"standard"}}},
+		Limits: map[string]any{"n": map[string]any{"max": float64(1)}, "quality": map[string]any{"allowed": []any{"auto"}}},
 	}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestNormalizeGenerationQualityForPackageLimit(t *testing.T) {
 		},
 	}
 	normalizeGenerationQualityForLimit(&request, resolved)
-	if request.Params["quality"] != "standard" {
+	if request.Params["quality"] != "auto" {
 		t.Fatalf("quality was not normalized to package option: %#v", request.Params["quality"])
 	}
 	if err := validateGenerationParams(request, resolved); err != nil {

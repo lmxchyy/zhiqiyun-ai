@@ -46,7 +46,7 @@ test("generation createTask returns the API request promise without wrapping it"
     model: "gpt-image-2",
     style: "commercial",
     size: "1024x1024",
-    quality: "standard",
+    quality: "auto",
     count: 1,
     referenceImages: [],
   });

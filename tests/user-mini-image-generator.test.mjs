@@ -162,8 +162,8 @@ function imageComponentProps(overrides = {}) {
     prompt: "生成橙色系水果店海报",
     size: "1024x1024",
     sizeOptions: [{ value: "1024x1024", label: "1:1" }],
-    quality: "standard",
-    qualityOptions: [{ value: "standard", label: "标准" }],
+    quality: "auto",
+    qualityOptions: [{ value: "auto", label: "自动" }],
     model: "gpt-image-2",
     models: [{ code: "gpt-image-2", name: "GPT Image 2" }],
     count: 1,
@@ -208,15 +208,15 @@ function gptImageSchema(overrides = {}) {
       key: "quality",
       type: "select",
       required: true,
-      default: "standard",
-      options: ["standard", "high"],
+      default: "auto",
+      options: ["auto", "low", "medium", "high"],
     },
     {
       key: "n",
       type: "number",
       required: true,
       default: 1,
-      options: [1, 2, 4],
+      options: [1, 2, 3, 4],
       min: 1,
       max: 4,
     },
@@ -271,18 +271,41 @@ test("exact image schema derives real size ratios, canonical qualities, and coun
       { value: "1024x1536", label: "2:3" },
     ],
     qualityOptions: [
-      { value: "standard", label: "standard" },
+      { value: "auto", label: "auto" },
+      { value: "low", label: "low" },
+      { value: "medium", label: "medium" },
       { value: "high", label: "high" },
     ],
     countOptions: [
       { value: 1, label: "1" },
       { value: 2, label: "2" },
+      { value: 3, label: "3" },
       { value: 4, label: "4" },
     ],
-    defaultSelection: { size: "1024x1024", quality: "standard", count: 1 },
+    defaultSelection: { size: "1024x1024", quality: "auto", count: 1 },
     declared: { size: true, quality: true, count: true },
     required: { size: true, quality: true, count: true },
   });
+});
+
+test("official gpt image schema default quality low and n 1", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const initialImageSelection = requiredFunction("initialImageSelection");
+  const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema({
+    fields: [
+      { key: "prompt", type: "textarea", required: true },
+      { key: "size", type: "select", required: false, default: "auto", options: ["auto", "1024x1024", "1536x1024", "1024x1536", "1280x720", "2048x2048", "3840x2160"] },
+      { key: "quality", type: "select", required: false, default: "low", options: ["auto", "low", "medium", "high"] },
+      { key: "n", type: "number", required: false, default: 1, options: [1, 2, 3, 4], min: 1, max: 4 },
+    ],
+  }));
+  assert.equal(contract.available, true);
+  if (!contract.available) return;
+  assert.equal(contract.defaultSelection.quality, "low");
+  assert.equal(contract.defaultSelection.count, 1);
+  const selection = initialImageSelection(contract);
+  assert.equal(selection.quality, "low");
+  assert.equal(selection.count, 1);
 });
 
 test("schema option derivation filters malformed dimensions, unsupported qualities, and non-positive counts", () => {
@@ -315,7 +338,7 @@ test("schema option derivation filters malformed dimensions, unsupported qualiti
     { value: "1280x720", label: "16:9" },
     { value: "720x1280", label: "9:16" },
   ]);
-  assert.deepEqual(contract.qualityOptions.map(option => option.value), ["standard", "high"]);
+  assert.deepEqual(contract.qualityOptions.map(option => option.value), ["high"]);
   assert.deepEqual(contract.countOptions.map(option => option.value), [1, 2, 4]);
 });
 
@@ -340,7 +363,7 @@ test("mismatched schema model returns a Chinese unavailable reason instead of sw
 test("schema without a valid size enum is unavailable and never invents an option", () => {
   const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
   const contract = deriveImageCreationContract("broken-image", exactImageSchema("broken-image", [
-    { key: "size", required: true, default: "auto", options: ["auto", "4:3", "0x1024"] },
+    { key: "size", required: true, default: "4:3", options: ["4:3", "0x1024"] },
   ]));
 
   assert.deepEqual(contract, {
@@ -356,6 +379,10 @@ test("selection becomes canonical image fields only when each value is declared 
   assert.deepEqual(
     toCanonicalImageSelection(contract, { size: "1536x1024", quality: "high", count: 2 }),
     { size: "1536x1024", quality: "high", count: 2 },
+  );
+  assert.deepEqual(
+    toCanonicalImageSelection(contract, { size: "1536x1024", quality: "low", count: 3 }),
+    { size: "1536x1024", quality: "low", count: 3 },
   );
 });
 
@@ -382,7 +409,7 @@ test("selection fails fast for unsupported, undeclared, missing, and alias value
   const cases = [
     { contract: fullContract, selection: { size: "4:3", quality: "high", count: 2 }, message: /不支持图片尺寸/ },
     { contract: fullContract, selection: { size: "1536x1024", quality: "2K", count: 2 }, message: /不支持图片质量/ },
-    { contract: fullContract, selection: { size: "1536x1024", quality: "high", count: 3 }, message: /不支持生成数量/ },
+    { contract: fullContract, selection: { size: "1536x1024", quality: "high", count: 5 }, message: /不支持生成数量/ },
     { contract: fullContract, selection: { quality: "high", count: 2 }, message: /必须选择图片尺寸/ },
     { contract: sizeOnlyContract, selection: { size: "1280x720", quality: "high" }, message: /未声明图片质量/ },
     { contract: fullContract, selection: { size: "1536x1024", quality: "high", count: 2, aspect_ratio: "3:2" }, message: /不支持字段 aspect_ratio/ },
@@ -929,7 +956,7 @@ test("model schema reset uses declared defaults and otherwise the first canonica
       type: "select",
       required: false,
       default: "high",
-      options: ["standard", "high"],
+      options: ["auto", "high"],
     },
     {
       key: "n",
@@ -966,7 +993,7 @@ test("production image draft reaches the compiled SDK with canonical top-level f
       imageRatio: "auto",
       imageQuality: "2K",
       size: "1024x1024",
-      quality: "standard",
+      quality: "auto",
       count: 4,
       n: 4,
       prompt: "旧草稿提示词",

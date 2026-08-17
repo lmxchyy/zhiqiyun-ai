@@ -125,7 +125,6 @@ const draftOnlyParameterKeys = new Set([
   "slideCount",
   "dynamic",
   "language",
-	"n",
   "ratio",
 ]);
 
@@ -334,15 +333,16 @@ export function generationParametersFromDraft(parameters?: Record<string, unknow
 }
 
 function canonicalImageSize(value: unknown): string {
+  if (value === "auto") return "auto";
   if (typeof value !== "string" || !/^[1-9]\d*x[1-9]\d*$/.test(value)) {
-    throw new Error(`image size must use canonical positive WIDTHxHEIGHT pixels, received ${String(value)}`);
+    throw new Error(`image size must use auto or canonical positive WIDTHxHEIGHT pixels, received ${String(value)}`);
   }
   return value;
 }
 
 function canonicalImageQuality(value: unknown): string {
-  if (value !== "standard" && value !== "high") {
-    throw new Error(`image quality must be standard or high, received ${String(value)}`);
+  if (value !== "auto" && value !== "low" && value !== "medium" && value !== "high") {
+    throw new Error(`image quality must be auto, low, medium or high, received ${String(value)}`);
   }
   return value;
 }
@@ -363,11 +363,24 @@ function imageParametersFromDraft(
   const parameters = { ...extraParameters };
   delete parameters.aspect_ratio;
 
+  const size = draft.size !== undefined
+    ? canonicalImageSize(draft.size)
+    : (parameters.size !== undefined ? canonicalImageSize(parameters.size) : undefined);
+  const quality = draft.quality !== undefined
+    ? canonicalImageQuality(draft.quality)
+    : (parameters.quality !== undefined ? canonicalImageQuality(parameters.quality) : undefined);
+  const n = parameters.n !== undefined
+    ? canonicalImageCount(parameters.n)
+    : (draft.count !== undefined ? canonicalImageCount(draft.count) : (parameters.count !== undefined ? canonicalImageCount(parameters.count) : undefined));
+  delete parameters.imageRatio;
+  delete parameters.imageQuality;
+  delete parameters.count;
+
   return {
     ...parameters,
-    ...(draft.size !== undefined ? { size: canonicalImageSize(draft.size) } : {}),
-    ...(draft.quality !== undefined ? { quality: canonicalImageQuality(draft.quality) } : {}),
-    ...(draft.count !== undefined ? { n: canonicalImageCount(draft.count) } : {}),
+    ...(size !== undefined ? { size } : {}),
+    ...(quality !== undefined ? { quality } : {}),
+    ...(n !== undefined ? { n } : {}),
     ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
     ...(referenceImage ? { reference_image: referenceImage } : {}),
     ...(referencePayload.length ? { referenceImages: referencePayload } : {}),

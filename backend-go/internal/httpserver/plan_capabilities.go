@@ -167,7 +167,7 @@ func validatePackageCapabilityLimits(moduleCode string, enabled bool, limits map
 		if err := validatePositiveCapabilityMaximum(limits, "n", 1); err != nil {
 			return err
 		}
-		return validateCapabilityAllowedValues(limits, "quality", []string{"standard", "high"})
+		return validateCapabilityAllowedValues(limits, "quality", []string{"auto", "low", "medium", "high"})
 	case moduleVideoGeneration:
 		if err := validatePositiveCapabilityMaximum(limits, "duration", 4); err != nil {
 			return err

@@ -792,6 +792,7 @@ import {
   imageModelOptions,
   imagePointEstimateLabel,
   initialImageSelection,
+  isCanonicalImageQuality,
   resolveImageModelCode,
   resolveImageSchemaFetchResult,
   restoreImageInspirationSelection,
@@ -1447,7 +1448,7 @@ function restoredCreationCount() {
 function canonicalImageSelectionFromDraft(params: AnyRecord): CanonicalImageSelection | null {
   if (typeof params.size !== "string" || !params.size.trim()) return null;
   const selection: CanonicalImageSelection = { size: params.size.trim() };
-  if (params.quality === "standard" || params.quality === "high") selection.quality = params.quality;
+  if (isCanonicalImageQuality(params.quality)) selection.quality = params.quality;
   if (typeof params.count === "number" && Number.isInteger(params.count) && params.count > 0) {
     selection.count = params.count;
   }
@@ -3496,7 +3497,7 @@ async function submitCreationAfterSession(prompt: string, startedAt: number, pre
       );
       if (!generationConfig) throw new Error("已取消切换模型");
       const referenceImages = await uploadCreationReferenceImages(creationReferencePaths.value);
-      const requestedQuality = restoredCreationString("quality", "imageQuality") || "standard";
+      const requestedQuality = restoredCreationString("quality", "imageQuality") || "auto";
       const requestedSize = restoredCreationString("size", "aspectRatio", "aspect_ratio") || "1024x1024";
       const result = await businessSdk.generation.createTask({
         mode,
@@ -3504,7 +3505,7 @@ async function submitCreationAfterSession(prompt: string, startedAt: number, pre
         model: generationConfig.model,
         style: restoredCreationString("style", "stylePreset") || (creationMode.value === "infographic" ? "infographic" : "commercial"),
         size: constrainedSchemaString(generationConfig.schema, "size", requestedSize, "1024x1024"),
-        quality: constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "standard"),
+        quality: constrainedSchemaString(generationConfig.schema, "quality", requestedQuality, "auto"),
         count: constrainedSchemaNumber(generationConfig.schema, "n", restoredCreationCount(), 1),
         referenceImages,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
@@ -3788,9 +3789,9 @@ onMounted(() => {
         && !Array.isArray(studioDraft.parameters)
         ? studioDraft.parameters
         : activeInspirationDraft.value?.parameters;
-      const draftQuality = studioDraft.quality === "standard" || studioDraft.quality === "high"
+      const draftQuality = isCanonicalImageQuality(studioDraft.quality)
         ? studioDraft.quality
-        : undefined;
+        : studioDraft.quality === "standard" ? "auto" : undefined;
       const draftCount = typeof studioDraft.count === "number"
         && Number.isInteger(studioDraft.count)
         && studioDraft.count > 0

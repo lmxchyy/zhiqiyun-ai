@@ -4340,9 +4340,9 @@ func totalPointsForUser(events []adminBillingEvent, userID string, available int
 }
 
 func imageCount(params map[string]any) int {
-	value, ok := params["count"]
+	value, ok := params["n"]
 	if !ok {
-		value, ok = params["n"]
+		value, ok = params["count"]
 	}
 	if !ok {
 		return 1
