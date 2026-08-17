@@ -5,7 +5,7 @@ import type {
   ModelInfo,
 } from "@xianzhi/shared-types";
 
-export type CanonicalImageQuality = "standard" | "high";
+export type CanonicalImageQuality = "auto" | "low" | "medium" | "high";
 
 export interface ImageGeneratorModelOption {
   code: string;
@@ -257,11 +257,20 @@ function canonicalSizeParts(value: unknown): [number, number] | undefined {
 }
 
 function reducedSizeLabel(value: string): string {
+  if (value === "auto") return "auto";
   const parts = canonicalSizeParts(value);
   if (!parts) throw new Error(`invalid canonical image size ${value}`);
   const [width, height] = parts;
   const divisor = greatestCommonDivisor(width, height);
   return `${width / divisor}:${height / divisor}`;
+}
+
+export function isCanonicalImageQuality(value: unknown): value is CanonicalImageQuality {
+  return value === "auto" || value === "low" || value === "medium" || value === "high";
+}
+
+export function isCanonicalImageSize(value: unknown): value is string {
+  return value === "auto" || Boolean(canonicalSizeParts(value));
 }
 
 function validCount(value: unknown, field: UnknownRecord): value is number {
@@ -299,7 +308,7 @@ export function deriveImageCreationContract(
   const sizeField = fieldByKey(fields, "size");
   const sizeValues = uniqueValues(
     (Array.isArray(sizeField?.options) ? sizeField.options : [])
-      .filter((value): value is string => typeof value === "string" && Boolean(canonicalSizeParts(value))),
+      .filter((value): value is string => typeof value === "string" && isCanonicalImageSize(value)),
   );
   if (!sizeField || sizeValues.length === 0) {
     return { available: false, reason: "当前模型没有可用的图片尺寸选项" };
@@ -308,7 +317,7 @@ export function deriveImageCreationContract(
   const qualityField = fieldByKey(fields, "quality");
   const qualityValues = uniqueValues(
     (Array.isArray(qualityField?.options) ? qualityField.options : [])
-      .filter((value): value is CanonicalImageQuality => value === "standard" || value === "high"),
+      .filter((value): value is CanonicalImageQuality => isCanonicalImageQuality(value)),
   );
   if (qualityField && qualityValues.length === 0) {
     return { available: false, reason: "当前模型没有可用的图片质量选项" };
@@ -332,7 +341,7 @@ export function deriveImageCreationContract(
   }
   if (
     qualityField
-    && (qualityField.default === "standard" || qualityField.default === "high")
+    && isCanonicalImageQuality(qualityField.default)
     && qualityValues.includes(qualityField.default)
   ) {
     defaultSelection.quality = qualityField.default;
@@ -416,7 +425,7 @@ export function toCanonicalImageSelection(
   const canonical: CanonicalImageSelection = {};
   if (selection.size !== undefined) {
     if (!contract.declared.size) throw new Error("当前模型未声明图片尺寸");
-    if (typeof selection.size !== "string" || !contract.sizeOptions.some(option => option.value === selection.size)) {
+    if (!isCanonicalImageSize(selection.size) || !contract.sizeOptions.some(option => option.value === selection.size)) {
       throw new Error(`当前模型不支持图片尺寸 ${String(selection.size)}`);
     }
     canonical.size = selection.size;
@@ -427,7 +436,7 @@ export function toCanonicalImageSelection(
   if (selection.quality !== undefined) {
     if (!contract.declared.quality) throw new Error("当前模型未声明图片质量");
     if (
-      (selection.quality !== "standard" && selection.quality !== "high")
+      !isCanonicalImageQuality(selection.quality)
       || !contract.qualityOptions.some(option => option.value === selection.quality)
     ) {
       throw new Error(`当前模型不支持图片质量 ${String(selection.quality)}`);
@@ -478,9 +487,9 @@ export function restoreImageInspirationSelection(
     return { compatible: false, reason: `灵感比例 ${ratio} 对应多个尺寸，无法确定生成尺寸` };
   }
 
-  const quality = parameters.quality;
-  if (quality !== "standard" && quality !== "high") {
-    return { compatible: false, reason: "灵感 quality 必须是 standard 或 high" };
+  const quality = parameters.quality === "standard" ? "auto" : parameters.quality;
+  if (!isCanonicalImageQuality(quality)) {
+    return { compatible: false, reason: "灵感 quality 必须是 auto、low、medium 或 high" };
   }
   if (!contract.declared.quality || !contract.qualityOptions.some(option => option.value === quality)) {
     return { compatible: false, reason: `当前模型不支持灵感图片质量 ${quality}` };

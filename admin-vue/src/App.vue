@@ -142,14 +142,14 @@
                 <div class="online-control-grid online-source-controls">
                   <label><span>平台</span><el-select v-model="onlineImageForm.provider"><el-option v-for="provider in onlineProviderOptions" :key="provider.value" :label="provider.label" :value="provider.value" /></el-select></label>
                   <label><span>模型</span><el-select v-model="onlineImageForm.model"><el-option v-for="model in onlineModelOptions" :key="model.value" :label="model.label" :value="model.value" /></el-select></label>
-                  <label><span>质量</span><el-select v-model="onlineImageForm.quality"><el-option label="标准" value="standard" /><el-option label="高清" value="high" /><el-option label="快速草稿" value="draft" /></el-select></label>
+                  <label><span>质量</span><el-select v-model="onlineImageForm.quality"><el-option label="自动" value="auto" /><el-option label="低" value="low" /><el-option label="中" value="medium" /><el-option label="高" value="high" /></el-select></label>
                   <label><span>数量</span><el-select v-model="onlineImageForm.count"><el-option v-for="count in onlineCountOptions" :key="count" :label="`×${count}`" :value="count" /></el-select></label>
                 </div>
 
-                <div class="online-section-title"><span>Size</span><small>支持 1K、2K、自定义尺寸和自定义比例</small></div>
+                <div class="online-section-title"><span>Size</span><small>官方尺寸：auto、1K、720p、2K、4K</small></div>
                 <div class="online-control-grid online-size-controls">
-                  <label><span>尺寸</span><el-select v-model="onlineImageForm.resolution"><el-option label="1K" value="1k" /><el-option label="2K" value="2k" /><el-option label="自定义尺寸" value="custom" /></el-select></label>
-                  <label><span>比例</span><el-select v-model="onlineImageForm.ratio"><el-option label="比例为空" value="" /><el-option label="1:1 方图" value="square" /><el-option label="16:9 横图" value="16:9" /><el-option label="9:16 竖图" value="9:16" /><el-option label="自定义比例" value="custom" /></el-select></label>
+                  <label><span>尺寸</span><el-select v-model="onlineImageForm.resolution"><el-option label="1K" value="1k" /><el-option label="2K" value="2k" /><el-option label="4K" value="4k" /><el-option label="自定义尺寸" value="custom" /></el-select></label>
+                  <label><span>比例</span><el-select v-model="onlineImageForm.ratio"><el-option label="比例为空" value="" /><el-option label="1:1 方图" value="square" /><el-option label="3:2 横图" value="3:2" /><el-option label="2:3 竖图" value="2:3" /><el-option label="16:9 横图" value="16:9" /><el-option label="9:16 竖图" value="9:16" /></el-select></label>
                   <label><span>宽度</span><el-input-number v-model="onlineImageForm.width" :min="64" :step="64" controls-position="right" /></label>
                   <label><span>高度</span><el-input-number v-model="onlineImageForm.height" :min="64" :step="64" controls-position="right" /></label>
                   <label><span>消耗点数预估</span><strong class="online-cost">{{ onlineEstimatedCost }} 点</strong></label>
@@ -628,10 +628,10 @@
                   <label>
                     <span>质量</span>
                     <el-select v-model="onlineImageForm.quality">
-                      <el-option label="auto" value="auto" />
-                      <el-option label="low" value="low" />
-                      <el-option label="medium" value="medium" />
-                      <el-option label="high" value="high" />
+                      <el-option label="自动" value="auto" />
+                      <el-option label="低" value="low" />
+                      <el-option label="中" value="medium" />
+                      <el-option label="高" value="high" />
                     </el-select>
                   </label>
                   <label>
@@ -1050,15 +1050,18 @@
                           <label><span>高度 (Height)</span><input v-model="aiCustomHeight" type="number" placeholder="例如 1024" /></label>
                         </div>
                       </section>
+                      <ul v-if="aiSizePickerErrors.length" class="ai-size-picker-errors">
+                        <li v-for="item in aiSizePickerErrors" :key="item">{{ item }}</li>
+                      </ul>
                       <div class="ai-size-picker-limit">
-                        由于模型限制，最终输出会自动规整到合法尺寸：宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。
+                        官方限制：宽高必须为整数且为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素 655360-8294400。
                       </div>
                     </template>
                   </div>
                   <div class="ai-size-picker-preview">
                     <span>将使用</span>
                     <strong>{{ aiSizePickerPreview || '尺寸无效' }}</strong>
-                    <small v-if="aiSizePickerClamped">已按模型限制自动规整</small>
+                    <small v-if="aiSizePickerBillingTier">计费档位：{{ aiSizePickerBillingTier }}</small>
                   </div>
                   <footer class="ai-size-picker-actions">
                     <button type="button" @click="closeAiSizePicker">取消</button>
@@ -3478,7 +3481,7 @@ const onlineImageForm = ref({
   provider: "",
   ratio: "square",
   size: "auto",
-  quality: "auto",
+  quality: "low",
   outputFormat: "png",
   transparentOutput: false,
   outputCompression: null as number | null,
@@ -3508,9 +3511,10 @@ const userHomeCreationModes: Array<{ id: UserHomeCreationMode; title: string; ic
 ];
 const userHomeRatioOptions = [
   { label: "1:1", value: "square" },
+  { label: "3:2", value: "3:2" },
+  { label: "2:3", value: "2:3" },
   { label: "16:9", value: "16:9" },
-  { label: "9:16", value: "9:16" },
-  { label: "自定义", value: "custom" }
+  { label: "9:16", value: "9:16" }
 ];
 const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "品牌 Agent", desc: "品牌视觉、VI、海报", icon: Star, targetId: "userAiImage", mode: "agent", prompt: "为新品牌设计一组高级视觉方向，包含 Logo 延展、主视觉和社媒海报。" },
@@ -3917,7 +3921,6 @@ const aiSizePickerVisible = ref(false);
 const aiSizePickerRef = ref<HTMLElement | null>(null);
 const aiSizePickerMouseDownTarget = ref<EventTarget | null>(null);
 const aiSizePickerMode = ref<"auto" | "ratio" | "resolution">("auto");
-const aiSizeTier = ref<"1K" | "2K" | "4K">("1K");
 const aiSizeRatio = ref("1:1");
 const aiCustomRatio = ref("16:9");
 const aiCustomWidth = ref("1024");
@@ -3931,15 +3934,13 @@ const aiSizePickerModes = [
   { label: "自定义宽高", value: "resolution" }
 ] as const;
 const aiSizeTiers = ["1K", "2K", "4K"] as const;
+const aiSizeTier = ref<(typeof aiSizeTiers)[number]>("1K");
 const aiSizeRatios = [
   { label: "1:1", value: "1:1" },
   { label: "3:2", value: "3:2" },
   { label: "2:3", value: "2:3" },
   { label: "16:9", value: "16:9" },
-  { label: "9:16", value: "9:16" },
-  { label: "4:3", value: "4:3" },
-  { label: "3:4", value: "3:4" },
-  { label: "21:9", value: "21:9" }
+  { label: "9:16", value: "9:16" }
 ];
 const selectedApiReferenceIndex = ref(0);
 const apiQuickKeys = ref<Record<string, string>>({});
@@ -4000,36 +4001,28 @@ const apiModelPickerTabs: Array<{ label: string; value: ApiModelPickerTab }> = [
   { label: "LLM", value: "chat" },
   { label: "视频", value: "video" }
 ];
+const gptImageOfficialSizes = ["auto", "1024x1024", "1024x1536", "1536x1024", "1280x720", "720x1280", "2048x1152", "2048x2048", "3840x2160", "2160x3840"] as const;
 const aiCommonSizePresets: Record<(typeof aiSizeTiers)[number], Record<string, string>> = {
   "1K": {
     "1:1": "1024x1024",
     "3:2": "1536x1024",
     "2:3": "1024x1536",
     "16:9": "1280x720",
-    "9:16": "720x1280",
-    "4:3": "1024x768",
-    "3:4": "768x1024",
-    "21:9": "1280x544"
+    "9:16": "720x1280"
   },
   "2K": {
     "1:1": "2048x2048",
-    "3:2": "2160x1440",
-    "2:3": "1440x2160",
-    "16:9": "2560x1440",
-    "9:16": "1440x2560",
-    "4:3": "2048x1536",
-    "3:4": "1536x2048",
-    "21:9": "2560x1088"
+    "3:2": "2048x1152",
+    "2:3": "1152x2048",
+    "16:9": "2048x1152",
+    "9:16": "1152x2048"
   },
   "4K": {
     "1:1": "2880x2880",
     "3:2": "3456x2304",
     "2:3": "2304x3456",
     "16:9": "3840x2160",
-    "9:16": "2160x3840",
-    "4:3": "3200x2400",
-    "3:4": "2400x3200",
-    "21:9": "3840x1600"
+    "9:16": "2160x3840"
   }
 };
 function aiSchemaFieldsFromResponse(response: AdminRecord | null) {
@@ -4768,16 +4761,15 @@ async function saveAiState() {
 }
 
 function fitOnlineImageSize() {
-  const ratio = onlineImageForm.value.ratio;
-  if (ratio === "16:9") {
-    onlineImageForm.value.width = 1344;
-    onlineImageForm.value.height = 768;
-  } else if (ratio === "9:16") {
-    onlineImageForm.value.width = 768;
-    onlineImageForm.value.height = 1344;
-  } else {
-    onlineImageForm.value.width = 1024;
-    onlineImageForm.value.height = 1024;
+  const form = onlineImageForm.value;
+  const tier = form.resolution === "2k" ? "2K" : form.resolution === "4k" ? "4K" : "1K";
+  const ratioKey = form.ratio === "square" ? "1:1" : form.ratio;
+  const size = (ratioKey && aiCommonSizePresets[tier]?.[ratioKey]) || calculateAiImageSize(tier, ratioKey || "1:1") || "1024x1024";
+  const parsed = size.match(/^(\d+)x(\d+)$/);
+  if (parsed) {
+    form.width = Number(parsed[1]);
+    form.height = Number(parsed[2]);
+    form.size = size;
   }
   ElMessage.success("已按当前比例适配尺寸");
 }
@@ -4799,6 +4791,47 @@ function roundToSizeMultiple(value: number, mode: "round" | "floor" | "ceil" = "
   const multiple = 16;
   const method = mode === "floor" ? Math.floor : mode === "ceil" ? Math.ceil : Math.round;
   return Math.max(multiple, method(value / multiple) * multiple);
+}
+
+function officialGptImageSizeErrors(width: number, height: number) {
+  const errors: string[] = [];
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    errors.push("宽和高必须为正整数");
+    return errors;
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    errors.push("宽和高必须是 16 的倍数");
+  }
+  if (width > 3840 || height > 3840) {
+    errors.push("最大边长不能超过 3840px");
+  }
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  if (shortEdge === 0 || longEdge > shortEdge * 3) {
+    errors.push("宽高比必须在 1:3 到 3:1 之间");
+  }
+  const pixels = width * height;
+  if (pixels < 655360 || pixels > 8294400) {
+    errors.push("总像素必须在 655360 到 8294400 之间");
+  }
+  return errors;
+}
+
+function gptImageBillingSizeTierLabel(size: string) {
+  const normalized = String(size || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "auto") return "AUTO";
+  const match = normalized.match(/^(\d+)x(\d+)$/);
+  if (!match) return "";
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (officialGptImageSizeErrors(width, height).length) return "";
+  const pixels = width * height;
+  const maxEdge = Math.max(width, height);
+  if (pixels <= 1280 * 720 && maxEdge <= 1280) return "720P";
+  if (pixels <= 1536 * 1024 && maxEdge <= 1536) return "1K";
+  if (pixels <= 2048 * 2048 && maxEdge <= 2048) return "2K";
+  return "4K";
 }
 
 function normalizeAiImageSize(size: string) {
@@ -4828,13 +4861,19 @@ function normalizeAiImageSize(size: string) {
 
 function aiRequestSizeParam(size: string) {
   const normalized = normalizeAiImageSize(size);
-  if (!normalized || normalized.toLowerCase() === "auto") return "";
-  return normalized;
+  if (!normalized) return "";
+  return normalized.toLowerCase() === "auto" ? "auto" : normalized;
 }
 
 function aiRequestQualityParam(value: string) {
   const normalized = normalizeAiImageQuality(value);
-  return normalized === "high" ? "high" : "";
+  if (normalized === "standard") return "auto";
+  if (normalized === "auto" || normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
+  return "";
+}
+
+function gptImageProductionSize(size: string) {
+  return aiRequestSizeParam(size) || "auto";
 }
 
 function parseAiRatio(ratio: string) {
@@ -4890,22 +4929,23 @@ function findAiSizePreset(size: string) {
   return null;
 }
 
-const displayAiImageSize = computed(() => normalizeAiImageSize(onlineImageForm.value.size) || "auto");
+const displayAiImageSize = computed(() => gptImageProductionSize(onlineImageForm.value.size) || "auto");
+const aiSizePickerErrors = computed(() => {
+  if (aiSizePickerMode.value !== "resolution") return [] as string[];
+  const width = Number(aiCustomWidth.value);
+  const height = Number(aiCustomHeight.value);
+  return officialGptImageSizeErrors(width, height);
+});
 const aiSizePickerPreview = computed(() => {
   if (aiSizePickerMode.value === "auto") return "auto";
   if (aiSizePickerMode.value === "ratio") {
     const activeRatio = aiSizeRatio.value === "custom" ? aiCustomRatio.value : aiSizeRatio.value;
-    return normalizeAiImageSize(calculateAiImageSize(aiSizeTier.value, activeRatio));
+    return gptImageProductionSize(calculateAiImageSize(aiSizeTier.value, activeRatio));
   }
-  const width = Number(aiCustomWidth.value);
-  const height = Number(aiCustomHeight.value);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "";
-  return normalizeAiImageSize(`${width}x${height}`);
+  if (aiSizePickerErrors.value.length) return "";
+  return `${Number(aiCustomWidth.value)}x${Number(aiCustomHeight.value)}`;
 });
-const aiSizePickerClamped = computed(() => {
-  if (aiSizePickerMode.value !== "resolution" || !aiSizePickerPreview.value) return false;
-  return `${Number(aiCustomWidth.value)}x${Number(aiCustomHeight.value)}` !== aiSizePickerPreview.value;
-});
+const aiSizePickerBillingTier = computed(() => gptImageBillingSizeTierLabel(aiSizePickerPreview.value));
 
 function ratioIconStyle(ratio: string) {
   const parsed = parseAiRatio(ratio);
@@ -4938,7 +4978,7 @@ async function loadAiImageModuleSchema(force = false) {
 }
 
 function selectAiSchemaSizeOption(size: string) {
-  const normalized = normalizeAiImageSize(size);
+  const normalized = gptImageProductionSize(size);
   if (!normalized || normalized.toLowerCase() === "auto") {
     aiSizePickerMode.value = "auto";
     return;
@@ -4959,12 +4999,12 @@ function selectAiSchemaSizeOption(size: string) {
 }
 
 function isAiSchemaSizeOptionActive(size: string) {
-  const normalized = normalizeAiImageSize(size);
+  const normalized = gptImageProductionSize(size);
   return normalized && normalized === aiSizePickerPreview.value;
 }
 
 function openAiSizePicker() {
-  const currentSize = onlineImageForm.value.size;
+  const currentSize = gptImageProductionSize(onlineImageForm.value.size);
   if (!currentSize || currentSize === "auto") {
     aiSizePickerMode.value = "auto";
   } else {
@@ -5004,7 +5044,7 @@ function handleAiSizePickerBackdropUp(event: MouseEvent) {
 
 function applyAiSizePicker() {
   if (!aiSizePickerPreview.value) return;
-  onlineImageForm.value.size = aiSizePickerPreview.value;
+  onlineImageForm.value.size = gptImageProductionSize(aiSizePickerPreview.value);
   if (aiSizePickerPreview.value !== "auto") {
     const [width, height] = aiSizePickerPreview.value.split("x").map((item) => Number(item));
     onlineImageForm.value.width = width;
@@ -7059,7 +7099,21 @@ async function submitOnlineImage() {
   const clientRequestId = createGenerationClientRequestId("online-image");
   onlineSubmitting.value = true;
   try {
-    const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
+    const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality) || "low";
+    const requestSize = gptImageProductionSize((() => {
+      const form = onlineImageForm.value;
+      if (form.size && form.size !== "auto") {
+        const normalized = aiRequestSizeParam(form.size);
+        if (normalized) return normalized;
+      }
+      const tier = form.resolution === "2k" ? "2K" : form.resolution === "4k" ? "4K" : form.resolution === "custom" ? "" : "1K";
+      const ratioKey = form.ratio === "square" ? "1:1" : form.ratio;
+      if (tier && ratioKey && aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets]?.[ratioKey]) {
+        return aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets][ratioKey];
+      }
+      if (form.width && form.height) return aiRequestSizeParam(`${form.width}x${form.height}`) || "auto";
+      return "auto";
+    })());
     const taskSnapshot = await createAiGenerationTaskSnapshot(prompt);
     const referenceImages = taskSnapshot.inputImagesSnapshot.slice(0, onlineReferenceSlots.length);
     if (onlineReferenceImages.value.length && !referenceImages.length) {
@@ -7075,9 +7129,12 @@ async function submitOnlineImage() {
         prompt,
         model: onlineImageForm.value.model,
         params: {
+          n: onlineImageForm.value.count,
           count: onlineImageForm.value.count,
+          size: requestSize,
+          quality: requestQuality,
           imageRatio: onlineImageForm.value.ratio,
-          ...(requestQuality ? { imageQuality: requestQuality } : {}),
+          imageQuality: requestQuality,
           provider: onlineImageForm.value.provider,
           resolution: onlineImageForm.value.resolution,
           width: onlineImageForm.value.width,
@@ -7143,7 +7200,7 @@ async function submitAiImage() {
     }
     const taskType = referenceImages.length > 0 ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
     const effectivePrompt = referenceImages.length ? effectiveAiPromptForReferences(prompt, referenceImages) : prompt;
-    const requestSize = aiRequestSizeParam(onlineImageForm.value.size);
+    const requestSize = gptImageProductionSize(aiRequestSizeParam(onlineImageForm.value.size));
     const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
     const requestParams = {
       n: onlineImageForm.value.count,

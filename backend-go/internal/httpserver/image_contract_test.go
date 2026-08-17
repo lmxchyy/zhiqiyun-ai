@@ -38,7 +38,7 @@ func TestDefaultImageSchemasMatchBuiltInProviderCapabilities(t *testing.T) {
 		countOptions []any
 	}{
 		{model: "mock-standard", sizes: []any{"1920x1080"}},
-		{model: "gpt-image-2", sizes: []any{"1024x1024", "1024x1536", "1536x1024"}, qualities: []any{"standard", "high"}, countOptions: []any{float64(1), float64(2), float64(4)}},
+		{model: "gpt-image-2", sizes: gptImage2SizeOptions(), qualities: []any{"auto", "low", "medium", "high"}, countOptions: []any{float64(1), float64(2), float64(3), float64(4)}},
 		{model: "HY-Image-3.0-Plus-4090-Tob-v1.0", sizes: []any{"1024x1024", "1280x1280", "1280x720", "720x1280"}},
 		{model: "HY-Image-v3.0-I2I-ToB-v1.0.1", sizes: []any{"1024x1024", "1280x1280", "1280x720", "720x1280"}},
 	}
@@ -67,29 +67,73 @@ func TestDefaultImageSchemasMatchBuiltInProviderCapabilities(t *testing.T) {
 	}
 }
 
-func TestNormalizeAICapabilityDefaultsReplacesStaleBuiltInImageSchema(t *testing.T) {
+func TestNormalizeAICapabilityDefaultsPreservesCustomImageSchemaAndAlignsGPTImage(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	stale := defaultAIParameterSchemas(now)[0]
-	stale.SchemaJSON.Fields = []adminAIParameterField{
+	staleMock := defaultAIParameterSchemas(now)[0]
+	staleMock.SchemaJSON.Fields = []adminAIParameterField{
+		{Key: "prompt", Type: "textarea", Required: true},
+		{Key: "size", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024")},
+		{Key: "custom_admin_field", Type: "text", UserEditable: true, Visible: true},
+	}
+	staleGPT := findAIParameterSchema(defaultAIParameterSchemas(now), moduleImageGeneration, "gpt-image-2")
+	staleGPT.SchemaJSON.Fields = []adminAIParameterField{
 		{Key: "prompt", Type: "textarea", Required: true},
 		{Key: "size", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024")},
 		{Key: "quality", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high")},
+		{Key: "n", Type: "number", Required: true, Default: float64(1), Options: anyOptions(float64(1), float64(2), float64(4))},
+		{Key: "seed", Type: "number", UserEditable: true, Visible: true},
+		{Key: "custom_admin_field", Type: "text", UserEditable: true, Visible: true},
 	}
 	data := normalizeAICapabilityDefaults(adminPlatformData{
 		AIModules: defaultAIModules(now), AIModels: defaultAIModels(now),
-		AIParameterSchemas: []adminAIParameterSchema{stale},
+		AIParameterSchemas: []adminAIParameterSchema{staleMock, staleGPT},
 		TenantModuleLimits: defaultTenantModuleLimits(now), BillingRules: defaultBillingRules(now),
 	})
-	schema := findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, "mock-standard")
-	fields := imageContractFields(schema.SchemaJSON.Fields)
-	if !reflect.DeepEqual(fields["size"].Options, []any{"1920x1080"}) {
-		t.Fatalf("normalized mock size options = %#v", fields["size"].Options)
+	mockFields := imageContractFields(findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, "mock-standard").SchemaJSON.Fields)
+	if !reflect.DeepEqual(mockFields["size"].Options, []any{"1024x1024", "1024x1536", "1536x1024"}) {
+		t.Fatalf("custom mock size options were overwritten: %#v", mockFields["size"].Options)
 	}
-	if _, ok := fields["quality"]; ok {
-		t.Fatalf("stale mock quality survived normalization: %+v", schema.SchemaJSON.Fields)
+	if _, ok := mockFields["custom_admin_field"]; !ok {
+		t.Fatal("custom mock admin field was dropped")
 	}
-	if _, ok := fields["n"]; ok {
-		t.Fatalf("stale mock count survived normalization: %+v", schema.SchemaJSON.Fields)
+	gptFields := imageContractFields(findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, "gpt-image-2").SchemaJSON.Fields)
+	if !reflect.DeepEqual(gptFields["size"].Options, gptImage2SizeOptions()) {
+		t.Fatalf("gpt size options = %#v", gptFields["size"].Options)
+	}
+	if !reflect.DeepEqual(gptFields["quality"].Options, []any{"auto", "low", "medium", "high"}) {
+		t.Fatalf("gpt quality options = %#v", gptFields["quality"].Options)
+	}
+	if !reflect.DeepEqual(gptFields["n"].Options, []any{float64(1), float64(2), float64(3), float64(4)}) {
+		t.Fatalf("gpt n options = %#v", gptFields["n"].Options)
+	}
+	if _, ok := gptFields["seed"]; ok {
+		t.Fatal("unsupported gpt seed field survived alignment")
+	}
+	if _, ok := gptFields["custom_admin_field"]; !ok {
+		t.Fatal("custom gpt admin field was dropped")
+	}
+}
+
+func TestNormalizeAICapabilityDefaultsAlignsStaleGPTImageQualityLimits(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	data := normalizeAICapabilityDefaults(adminPlatformData{
+		AIModules: defaultAIModules(now), AIModels: defaultAIModels(now),
+		AIParameterSchemas: defaultAIParameterSchemas(now),
+		TenantModuleLimits: []adminTenantModuleLimit{
+			{ID: "limit_stale_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE"},
+			{ID: "limit_plan_free_image", TenantID: "default", PackageID: "plan_free", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"quality": map[string]any{"allowed": []any{"standard"}}}, Status: "ACTIVE"},
+		},
+		BillingRules: defaultBillingRules(now),
+	})
+	defaultLimit := effectiveTenantModuleLimit(data.TenantModuleLimits, adminUser{PlanID: "plan_month"}, moduleImageGeneration, "gpt-image-2")
+	quality, _ := mapValue(defaultLimit.LimitJSON["quality"])
+	if !reflect.DeepEqual(quality["allowed"], []any{"auto", "low", "medium", "high"}) {
+		t.Fatalf("stale paid quality allowed = %#v", quality["allowed"])
+	}
+	freeLimit := effectiveTenantModuleLimit(data.TenantModuleLimits, adminUser{PlanID: "plan_free"}, moduleImageGeneration, "mock-standard")
+	freeQuality, _ := mapValue(freeLimit.LimitJSON["quality"])
+	if !reflect.DeepEqual(freeQuality["allowed"], []any{"standard"}) {
+		t.Fatalf("free mock quality allowed was rewritten: %#v", freeQuality["allowed"])
 	}
 }
 
@@ -109,7 +153,7 @@ func TestImageModuleSchemaDoesNotFallbackToAnotherModel(t *testing.T) {
 func TestModuleSchemaResponseIdentifiesEachBuiltInImageModel(t *testing.T) {
 	data := normalizeAICapabilityDefaults(adminPlatformData{})
 	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
-	gptCountOptions := []any{float64(1), float64(2), float64(4)}
+	gptCountOptions := []any{float64(1), float64(2), float64(3), float64(4)}
 	for _, model := range []string{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"} {
 		resolved, err := resolveModuleSchema(data, user, moduleImageGeneration, model)
 		if err != nil {
@@ -261,6 +305,132 @@ func TestBuiltInImageInspirationSeedsUseCanonicalParameters(t *testing.T) {
 		if !reflect.DeepEqual(item.Parameters, want) {
 			t.Fatalf("%s parameters = %#v, want %#v", tt.id, item.Parameters, want)
 		}
+	}
+}
+
+func TestValidateGenerationParamsAcceptsOfficialGPTImageSizesAndCount(t *testing.T) {
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+	resolved, err := resolveModuleSchema(data, user, moduleImageGeneration, "gpt-image-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range gptImage2SizeOptions() {
+		sizeValue, _ := size.(string)
+		req := generation.CreateRequest{
+			ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+			Params: map[string]any{"size": sizeValue, "quality": "high", "n": float64(3)},
+		}
+		if err := validateGenerationParams(req, resolved); err != nil {
+			t.Fatalf("size %s n=3 should pass: %v", sizeValue, err)
+		}
+	}
+	for _, count := range []float64{1, 2, 3, 4} {
+		req := generation.CreateRequest{
+			ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+			Params: map[string]any{"size": "1024x1024", "quality": "low", "n": count},
+		}
+		if err := validateGenerationParams(req, resolved); err != nil {
+			t.Fatalf("n=%v should pass: %v", count, err)
+		}
+	}
+	omitted := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+		Params: map[string]any{},
+	}
+	if err := validateGenerationParams(omitted, resolved); err != nil {
+		t.Fatalf("omitted params should fill official defaults: %v", err)
+	}
+	if omitted.Params["size"] != "auto" {
+		t.Fatalf("omitted size filled %v, want auto", omitted.Params["size"])
+	}
+	if omitted.Params["quality"] != "low" {
+		t.Fatalf("omitted quality filled %v, want low", omitted.Params["quality"])
+	}
+	if omitted.Params["n"] != float64(1) {
+		t.Fatalf("omitted n filled %v, want 1", omitted.Params["n"])
+	}
+	explicitAuto := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+		Params: map[string]any{"size": "auto", "quality": "auto"},
+	}
+	if err := validateGenerationParams(explicitAuto, resolved); err != nil {
+		t.Fatalf("explicit auto should pass: %v", err)
+	}
+	for _, size := range gptImage2DeferredProductionSizes() {
+		req := generation.CreateRequest{
+			ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+			Params: map[string]any{"size": size, "quality": "medium", "n": float64(1)},
+		}
+		if err := validateGenerationParams(req, resolved); err != nil {
+			t.Fatalf("deferred size %s should still pass provider validation: %v", size, err)
+		}
+	}
+	custom := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+		Params: map[string]any{"size": "1792x1024", "quality": "low", "n": float64(1)},
+	}
+	if err := validateGenerationParams(custom, resolved); err != nil {
+		t.Fatalf("custom legal size 1792x1024 should pass: %v", err)
+	}
+	illegal := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+		Params: map[string]any{"size": "100x100", "quality": "high", "n": float64(1)},
+	}
+	if err := validateGenerationParams(illegal, resolved); err == nil {
+		t.Fatal("illegal size 100x100 should fail")
+	}
+	illegalCount := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+		Params: map[string]any{"size": "1024x1024", "quality": "high", "n": float64(5)},
+	}
+	if err := validateGenerationParams(illegalCount, resolved); err == nil {
+		t.Fatal("n=5 should fail tenant/schema max 4")
+	}
+}
+
+func TestGPTImageCanonicalParamsBeatAliases(t *testing.T) {
+	req := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration,
+		Model:      "gpt-image-2",
+		Prompt:     "gpt image",
+		Params: map[string]any{
+			"size":         "1536x1024",
+			"imageRatio":   "1:1",
+			"quality":      "high",
+			"imageQuality": "low",
+			"n":            float64(2),
+			"count":        float64(4),
+		},
+	}
+	normalizeGPTImageCanonicalParams(&req)
+	if req.Params["size"] != "1536x1024" {
+		t.Fatalf("size = %v, want canonical 1536x1024", req.Params["size"])
+	}
+	if req.Params["quality"] != "high" {
+		t.Fatalf("quality = %v, want canonical high", req.Params["quality"])
+	}
+	if req.Params["n"] != float64(2) {
+		t.Fatalf("n = %v, want canonical 2", req.Params["n"])
+	}
+	if imageCount(req.Params) != 2 {
+		t.Fatalf("billing quantity used alias count: %d", imageCount(req.Params))
+	}
+
+	aliasOnly := generation.CreateRequest{
+		ModuleCode: moduleImageGeneration,
+		Model:      "gpt-image-2",
+		Params: map[string]any{
+			"imageQuality": "medium",
+			"count":        float64(3),
+		},
+	}
+	normalizeGPTImageCanonicalParams(&aliasOnly)
+	if aliasOnly.Params["quality"] != "medium" {
+		t.Fatalf("alias quality = %v, want medium", aliasOnly.Params["quality"])
+	}
+	if aliasOnly.Params["n"] != float64(3) {
+		t.Fatalf("alias n = %v, want 3", aliasOnly.Params["n"])
 	}
 }
 

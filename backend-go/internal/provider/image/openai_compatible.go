@@ -142,8 +142,14 @@ func (p OpenAICompatible) DefaultModel() string {
 }
 
 func (p OpenAICompatible) Generate(ctx context.Context, req generation.CreateRequest) ([]generation.GeneratedImage, error) {
-	if err := validateOpenAIImageParameters(req.Params); err != nil {
-		return nil, err
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = p.model
+	}
+	if model == "" || isGPTImage2Model(model) {
+		if err := validateOpenAIImageParameters(req.Params); err != nil {
+			return nil, err
+		}
 	}
 	return p.generate(ctx, req)
 }
@@ -281,7 +287,7 @@ func (p OpenAICompatible) generateWithResponses(ctx context.Context, req generat
 }
 
 func addOptionalImageGenerationFields(body map[string]any, params map[string]any) {
-	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
+	if quality := gptImageProviderQuality(params); quality != "" {
 		body["quality"] = quality
 	}
 	for _, item := range []struct {
@@ -460,7 +466,7 @@ func addOptionalImageEditFields(fields map[string]string, params map[string]any,
 			fields[item.field] = value
 		}
 	}
-	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
+	if quality := gptImageProviderQuality(params); quality != "" {
 		fields["quality"] = quality
 	}
 	if value, ok := params["output_compression"]; ok && value != nil {
@@ -689,7 +695,7 @@ func responsesImageTool(params map[string]any, isEdit bool) map[string]any {
 	if size := normalizedResponsesImageSize(params); size != "" {
 		tool["size"] = size
 	}
-	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
+	if quality := gptImageProviderQuality(params); quality != "" {
 		tool["quality"] = quality
 	}
 	if outputFormat := firstStringParam(params, "output_format", "outputFormat"); outputFormat != "" {
@@ -707,15 +713,8 @@ func responsesImageTool(params map[string]any, isEdit bool) map[string]any {
 }
 
 func normalizedResponsesImageSize(params map[string]any) string {
-	size := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
-	switch size {
-	case "", "<nil>", "auto":
-		return ""
-	case "1024x1024", "1024x1536", "1536x1024":
-		return size
-	default:
-		return ""
-	}
+	size, _, _ := imageSize(params)
+	return size
 }
 
 func responsesInput(prompt string, referenceURLs []string) []map[string]any {
@@ -761,13 +760,22 @@ func shouldTryResponsesFirst(params map[string]any) bool {
 
 func normalizedImageQuality(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "<nil>", "auto", "standard", "medium", "low", "draft":
-		return ""
-	case "high":
-		return "high"
+	case "auto", "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "standard":
+		return "auto"
+	case "draft":
+		return "low"
 	default:
 		return ""
 	}
+}
+
+func gptImageProviderQuality(params map[string]any) string {
+	if quality := normalizedImageQuality(firstStringParam(params, "quality")); quality != "" {
+		return quality
+	}
+	return "low"
 }
 
 func decodeGeneratedImages(raw []byte, width int, height int) ([]generation.GeneratedImage, error) {
@@ -1291,31 +1299,23 @@ func providerEndpoint(baseURL string, configuredPath string, defaultPath string)
 }
 
 func imageSize(params map[string]any) (string, int, int) {
-	size := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
-	switch size {
-	case "1024x1536":
-		return "1024x1536", 1024, 1536
-	case "1536x1024":
-		return "1536x1024", 1536, 1024
-	case "1024x1024":
-		return "1024x1024", 1024, 1024
-	default:
-		return "", 0, 0
+	raw := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
+	if raw == "" || raw == "<nil>" || raw == "auto" {
+		return "auto", 0, 0
 	}
+	width, height, ok := parseGPTImageSize(raw)
+	if !ok {
+		return raw, 0, 0
+	}
+	return fmt.Sprintf("%dx%d", width, height), width, height
 }
 
 func validateOpenAIImageParameters(params map[string]any) error {
-	size := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["size"])))
-	switch size {
-	case "1024x1024", "1024x1536", "1536x1024":
-	default:
-		return fmt.Errorf("unsupported OpenAI image size %q; supported sizes: 1024x1024, 1024x1536, 1536x1024", size)
+	if err := ValidateGPTImageSize(params["size"]); err != nil {
+		return err
 	}
-	quality := strings.ToLower(strings.TrimSpace(fmt.Sprint(params["quality"])))
-	switch quality {
-	case "", "<nil>", "standard", "high":
-	default:
-		return fmt.Errorf("unsupported OpenAI image quality %q; supported qualities: standard, high", quality)
+	if err := ValidateGPTImageQuality(params["quality"]); err != nil {
+		return err
 	}
 	_, err := openAIImageCount(params)
 	return err
@@ -1324,22 +1324,106 @@ func validateOpenAIImageParameters(params map[string]any) error {
 func openAIImageCount(params map[string]any) (int, error) {
 	value, ok := params["n"]
 	if !ok {
+		value, ok = params["count"]
+	}
+	if !ok {
 		return 1, nil
 	}
-	switch typed := value.(type) {
-	case float64:
-		if typed != 1 && typed != 2 && typed != 4 {
-			return 0, fmt.Errorf("unsupported OpenAI image count %v; expected one of 1, 2, 4", typed)
-		}
-		return int(typed), nil
-	case int:
-		if typed != 1 && typed != 2 && typed != 4 {
-			return 0, fmt.Errorf("unsupported OpenAI image count %d; expected one of 1, 2, 4", typed)
-		}
-		return typed, nil
-	default:
-		return 0, fmt.Errorf("unsupported OpenAI image count %v; expected one of 1, 2, 4", value)
+	return parseGPTImageCount(value)
+}
+
+const (
+	gptImageMinPixels    = 655360
+	gptImageMaxPixels    = 8294400
+	gptImageMaxEdge      = 3840
+	gptImageMaxAspect    = 3
+	gptImageMinCount     = 1
+	gptImageMaxCount     = 10
+	gptImageSizeMultiple = 16
+)
+
+func ValidateGPTImageSize(value any) error {
+	if value == nil {
+		return nil
 	}
+	size := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	if size == "" || size == "<nil>" || size == "auto" {
+		return nil
+	}
+	width, height, ok := parseGPTImageSize(size)
+	if !ok {
+		return fmt.Errorf("unsupported OpenAI image size %q; use auto or WIDTHxHEIGHT", size)
+	}
+	if width%gptImageSizeMultiple != 0 || height%gptImageSizeMultiple != 0 {
+		return fmt.Errorf("unsupported OpenAI image size %q; width and height must be multiples of 16", size)
+	}
+	if width > gptImageMaxEdge || height > gptImageMaxEdge {
+		return fmt.Errorf("unsupported OpenAI image size %q; each edge must be <= %d", size, gptImageMaxEdge)
+	}
+	longEdge, shortEdge := width, height
+	if height > width {
+		longEdge, shortEdge = height, width
+	}
+	if shortEdge == 0 || longEdge > shortEdge*gptImageMaxAspect {
+		return fmt.Errorf("unsupported OpenAI image size %q; aspect ratio must be between 1:3 and 3:1", size)
+	}
+	pixels := width * height
+	if pixels < gptImageMinPixels || pixels > gptImageMaxPixels {
+		return fmt.Errorf("unsupported OpenAI image size %q; pixel count must be between %d and %d", size, gptImageMinPixels, gptImageMaxPixels)
+	}
+	return nil
+}
+
+func ValidateGPTImageQuality(value any) error {
+	if value == nil {
+		return nil
+	}
+	quality := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	switch quality {
+	case "", "<nil>", "auto", "low", "medium", "high":
+		return nil
+	default:
+		return fmt.Errorf("unsupported OpenAI image quality %q; supported qualities: auto, low, medium, high", quality)
+	}
+}
+
+func parseGPTImageSize(size string) (int, int, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, err := strconv.Atoi(parts[0])
+	if err != nil || width <= 0 {
+		return 0, 0, false
+	}
+	height, err := strconv.Atoi(parts[1])
+	if err != nil || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func parseGPTImageCount(value any) (int, error) {
+	var count int
+	switch typed := value.(type) {
+	case int:
+		count = typed
+	case int32:
+		count = int(typed)
+	case int64:
+		count = int(typed)
+	case float64:
+		if typed != float64(int(typed)) {
+			return 0, fmt.Errorf("unsupported OpenAI image count %v; expected an integer from %d to %d", value, gptImageMinCount, gptImageMaxCount)
+		}
+		count = int(typed)
+	default:
+		return 0, fmt.Errorf("unsupported OpenAI image count %v; expected an integer from %d to %d", value, gptImageMinCount, gptImageMaxCount)
+	}
+	if count < gptImageMinCount || count > gptImageMaxCount {
+		return 0, fmt.Errorf("unsupported OpenAI image count %d; expected an integer from %d to %d", count, gptImageMinCount, gptImageMaxCount)
+	}
+	return count, nil
 }
 
 func nonEmptyStrings(values ...string) []string {

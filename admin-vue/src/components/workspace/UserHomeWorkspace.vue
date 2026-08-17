@@ -29,9 +29,10 @@
                 <el-option v-for="ratio in userHomeRatioOptions" :key="ratio.value" :label="ratio.label" :value="ratio.value" />
               </el-select>
               <el-select v-model="onlineImageForm.quality" class="user-home-select is-compact" size="default">
-                <el-option label="标准" value="standard" />
-                <el-option label="高清" value="hd" />
-                <el-option label="高质量" value="high" />
+                <el-option label="自动" value="auto" />
+                <el-option label="低" value="low" />
+                <el-option label="中" value="medium" />
+                <el-option label="高" value="high" />
               </el-select>
               <button type="button" class="user-home-generate" @click="launchUserHomeCreation">生成 <el-icon><Star /></el-icon></button>
             </div>
