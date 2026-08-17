@@ -68,6 +68,78 @@ export interface PptOutline {
   updatedAt?: string;
 }
 
+export type PptAgentOutlineCommandType = "ADD_SLIDE" | "DELETE_SLIDE" | "MOVE_SLIDE" | "UPDATE_SLIDE_OBJECTIVE";
+
+export interface PptAgentSlideObjective {
+  slideId: string;
+  title: string;
+  purpose: string;
+  keyMessage: string;
+  evidenceRefs: string[];
+  visualIntent: string;
+  expectedElementTypes: string[];
+}
+
+export interface PptAgentOutlinePlan {
+  id: string;
+  revision: number;
+  topic: string;
+  pageCount: number;
+  nextSlideSequence: number;
+  slides: PptAgentSlideObjective[];
+  createdAt: string;
+  approvedAt?: string;
+}
+
+export interface PptAgentPlanningState {
+  job: {
+    id: string;
+    workflowType: string;
+    status: string;
+    stage: string;
+    completedWorkUnits: number;
+    totalWorkUnits: number;
+    slideCount: number;
+    updatedAt: string;
+  };
+  intent: {
+    topic: string;
+    goal: string;
+    audience: string;
+    scenario: string;
+    language: string;
+    pageCount: { min: number; max: number; preferred?: number; explicit: boolean };
+    professionalStyle: string;
+    researchRequired: boolean;
+  };
+  research: {
+    sources: Array<{ id: string; title: string; type: string; locator: string }>;
+    claims: Array<{ id: string; sourceId: string; citationRefs: string[]; text: string; verificationStatus: string }>;
+    citations: Array<{ id: string; sourceId: string; locator: string }>;
+    datasets: Array<{ id: string; sourceId: string; title: string; locator: string; citationRefs: string[] }>;
+    verificationStatus: string;
+  };
+  storyline: {
+    id: string;
+    thesis: string;
+    audienceTakeaway: string;
+    narrativeArc: string[];
+    sections: Array<{ id: string; title: string; objective: string; evidenceRefs: string[] }>;
+    closingAction: string;
+  };
+  outline: PptAgentOutlinePlan;
+  approvedOutline?: PptAgentOutlinePlan;
+  researchExecutionCount: number;
+}
+
+export interface PptAgentOutlineCommand {
+  type: PptAgentOutlineCommandType;
+  slideId?: string;
+  afterSlideId?: string;
+  toIndex?: number;
+  objective?: Partial<PptAgentSlideObjective>;
+}
+
 export interface PptCostEstimate {
   pointCost: number;
   slideCount: number;
@@ -170,6 +242,10 @@ const pptEndpoints = {
   estimate: "/api/v1/ppt/estimate",
   outlineGenerate: "/api/v1/ppt/outline/generate",
   outlineSave: "/api/v1/ppt/outline/save",
+  agentGuide: "/api/v1/ppt/agent/guide",
+  agentState: (jobId: string) => `/api/v1/ppt/agent/jobs/${encodeURIComponent(jobId)}`,
+  agentOutline: (jobId: string) => `/api/v1/ppt/agent/jobs/${encodeURIComponent(jobId)}/outline`,
+  agentApprove: (jobId: string) => `/api/v1/ppt/agent/jobs/${encodeURIComponent(jobId)}/outline/approve`,
   task: (taskId: string) => `/api/v1/ppt/tasks/${encodeURIComponent(taskId)}`,
   history: "/api/v1/ppt/history",
   exportPptx: "/api/v1/ppt/export/pptx",
@@ -236,6 +312,37 @@ export async function generatePptOutline(request: PptGenerateRequest): Promise<P
 
 export async function savePptOutline(outline: PptOutline): Promise<PptOutline> {
   return api<PptOutline>(pptEndpoints.outlineSave, { method: "POST", body: JSON.stringify(outline) });
+}
+
+export async function guidePptAgent(request: {
+  idempotencyKey: string;
+  text: string;
+  audience?: string;
+  scenario?: string;
+  language?: string;
+  professionalStyle?: string;
+  pageCount?: number;
+  researchRequired?: boolean;
+}): Promise<{ clarificationQuestions?: string[]; state?: PptAgentPlanningState }> {
+  return api(pptEndpoints.agentGuide, { method: "POST", body: JSON.stringify(request) });
+}
+
+export async function getPptAgentState(jobId: string): Promise<PptAgentPlanningState> {
+  return api<PptAgentPlanningState>(pptEndpoints.agentState(jobId));
+}
+
+export async function updatePptAgentOutline(jobId: string, expectedRevision: number, commands: PptAgentOutlineCommand[]): Promise<PptAgentPlanningState> {
+  return api<PptAgentPlanningState>(pptEndpoints.agentOutline(jobId), {
+    method: "PATCH",
+    body: JSON.stringify({ expectedRevision, commands })
+  });
+}
+
+export async function approvePptAgentOutline(jobId: string, expectedRevision: number): Promise<PptAgentPlanningState> {
+  return api<PptAgentPlanningState>(pptEndpoints.agentApprove(jobId), {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision })
+  });
 }
 
 export async function updatePptSlide(taskId: string, slideId: string, slide: PptSlide): Promise<PptSlide> {

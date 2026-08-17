@@ -29,6 +29,8 @@ func (s *Service) ensurePostgresReady(ctx context.Context) error {
 create table if not exists xz_ppt_tasks (
   task_id varchar(128) primary key,
   user_id varchar(128) not null,
+	tenant_id text not null default 'tenant_default',
+	organization_id text not null default '',
 	client_request_id varchar(256) not null default '',
   status varchar(32) not null,
   created_at timestamptz not null,
@@ -36,8 +38,11 @@ create table if not exists xz_ppt_tasks (
   raw jsonb not null
 );
 alter table xz_ppt_tasks add column if not exists client_request_id varchar(256) not null default '';
+alter table xz_ppt_tasks add column if not exists tenant_id text not null default 'tenant_default';
+alter table xz_ppt_tasks add column if not exists organization_id text not null default '';
 create index if not exists idx_xz_ppt_tasks_user_created on xz_ppt_tasks(user_id, created_at desc);
 create index if not exists idx_xz_ppt_tasks_user_status on xz_ppt_tasks(user_id, status);
+create index if not exists idx_xz_ppt_tasks_tenant_user on xz_ppt_tasks(tenant_id,user_id,created_at desc);
 create unique index if not exists uk_xz_ppt_tasks_user_client_request on xz_ppt_tasks(user_id,client_request_id) where client_request_id<>'';
 `); err != nil {
 		return err
@@ -164,7 +169,8 @@ func (s *Service) generatePostgres(req GenerateRequest, externalActive, limit in
 func taskFromGenerateRequest(req GenerateRequest) Task {
 	now := time.Now().UTC()
 	return Task{
-		TaskID: fmt.Sprintf("ppt_%d", now.UnixNano()), UserID: req.UserID, ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
+		TaskID: fmt.Sprintf("ppt_%d", now.UnixNano()), UserID: req.UserID, TenantID: req.TenantID, OrganizationID: req.OrganizationID,
+		ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
 		Status: StatusPending, Title: titleFromPrompt(req.Prompt), Prompt: req.Prompt, SlideCount: req.SlideCount,
 		Language: req.Language, Tone: req.Tone, TextContent: req.TextContent, Audience: req.Audience, Scenario: req.Scenario,
 		GenerationAspectRatio: req.GenerationAspectRatio, Theme: req.Theme, AutoThemeEnabled: req.AutoThemeEnabled,
@@ -241,6 +247,21 @@ func (s *Service) updateSlideImagePostgres(userID, taskID, slideID, imageURL str
 			return nil
 		}
 		return ErrTaskNotFound
+	})
+}
+
+func (s *Service) attachV2ArtifactPostgres(userID, taskID string, relation V2ArtifactRelation) (Task, error) {
+	return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+		if task.V2DeckID != "" || task.V2Revision != 0 || task.PPTXAssetID != "" {
+			if task.V2DeckID == relation.DeckID && task.V2Revision == relation.Revision && task.PPTXAssetID == relation.PPTXAssetID {
+				return nil
+			}
+			return ErrV2ArtifactRelationConflict
+		}
+		task.V2DeckID = relation.DeckID
+		task.V2Revision = relation.Revision
+		task.PPTXAssetID = relation.PPTXAssetID
+		return nil
 	})
 }
 
@@ -395,10 +416,11 @@ func persistPostgresTask(ctx context.Context, tx *sql.Tx, task Task) error {
 	createdAt := parseTaskTime(task.CreatedAt)
 	updatedAt := parseTaskTime(task.UpdatedAt)
 	_, err = tx.ExecContext(ctx, `
-insert into xz_ppt_tasks(task_id,user_id,client_request_id,status,created_at,updated_at,raw)
-values($1,$2,$3,$4,$5,$6,$7::jsonb)
-on conflict(task_id) do update set user_id=excluded.user_id,client_request_id=excluded.client_request_id,status=excluded.status,updated_at=excluded.updated_at,raw=excluded.raw
-`, task.TaskID, task.UserID, task.ClientRequestID, task.Status, createdAt, updatedAt, string(raw))
+insert into xz_ppt_tasks(task_id,user_id,tenant_id,organization_id,client_request_id,status,created_at,updated_at,raw)
+values($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+on conflict(task_id) do update set user_id=excluded.user_id,tenant_id=excluded.tenant_id,organization_id=excluded.organization_id,
+client_request_id=excluded.client_request_id,status=excluded.status,updated_at=excluded.updated_at,raw=excluded.raw
+`, task.TaskID, task.UserID, task.TenantID, task.OrganizationID, task.ClientRequestID, task.Status, createdAt, updatedAt, string(raw))
 	return err
 }
 

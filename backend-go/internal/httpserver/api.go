@@ -34,7 +34,10 @@ import (
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 
 	"xianzhi-ai/backend-go/internal/config"
+	chatprovider "xianzhi-ai/backend-go/internal/provider/chat"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
+	pptplanning "xianzhi-ai/backend-go/internal/provider/pptplanning"
+	pptresearch "xianzhi-ai/backend-go/internal/provider/pptresearch"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
@@ -170,6 +173,7 @@ type api struct {
 	// Production leaves it nil and uses the same configured model routing as all users.
 	connectorGenerationService *generation.Service
 	pptService                 *pptapp.Service
+	pptAgentService            *pptapp.AgentPlanningService
 	cfg                        config.Config
 	sessions                   authSessionStore
 	taskCancels                *sync.Map
@@ -205,11 +209,25 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 		},
 	})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+	var pptAgentService *pptapp.AgentPlanningService
 	if pgStore, ok := store.(*postgresStore); ok {
 		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
+		if jobStore, err := pptapp.NewPostgresGenerationJobStore(pgStore.db); err == nil {
+			planningProvider := pptplanning.NewClient(chatprovider.NewOpenAICompatible(cfg), pptplanning.Options{Model: cfg.PPTTextModel})
+			pptAgentService, _ = pptapp.NewAgentPlanningService(jobStore, pptresearch.NewWikipediaResearchProvider(nil), planningProvider, planningProvider, pptapp.AgentPlanningOptions{})
+			if pptAgentService != nil {
+				imageAssets := pptV2AgentImageAssets{generation: service, files: fileService, store: store}
+				compiler := newConfiguredPPTV2AgentDeckCompiler(fileService)
+				artifactStore, _ := any(pgStore).(pptV2DurableArtifactStore)
+				relations, _ := any(jobStore).(pptapp.GenerationTaskRelationStore)
+				_ = pptAgentService.ConfigureDeckGeneration(planningProvider, imageAssets, compiler, pptV2AgentArtifacts{ppt: pptService, files: fileService, assets: artifactStore, jobs: jobStore, relations: relations})
+				_ = pptAgentService.ConfigureEditPlanning(planningProvider)
+				pptAgentService.Start(context.Background())
+			}
+		}
 	}
 	imageTimeout := cfg.ImageGenerationTimeout()
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
+	api := api{store: store, generationService: service, pptService: pptService, pptAgentService: pptAgentService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
 	go api.repairStaleGenerationTasks(imageTimeout)
 	return api
 }

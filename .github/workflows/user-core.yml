@@ -33,11 +33,37 @@ jobs:
       - name: Build shared packages
         run: npm.cmd run build:packages
 
+      - name: Install OfficeCLI 1.0.144
+        shell: pwsh
+        env:
+          OFFICECLI_VERSION: "1.0.144"
+          OFFICECLI_SHA256: E780CC6A5385F84B4D54D71B0C179904ED534125EC33FE39B1A8711FA80E387E
+        run: |
+          $officeCliDirectory = Join-Path $env:RUNNER_TEMP "officecli"
+          New-Item -ItemType Directory -Force -Path $officeCliDirectory | Out-Null
+          $officeCliPath = Join-Path $officeCliDirectory "officecli.exe"
+          $officeCliUrl = "https://github.com/iOfficeAI/OfficeCLI/releases/download/v$env:OFFICECLI_VERSION/officecli-win-x64.exe"
+          Invoke-WebRequest -Uri $officeCliUrl -OutFile $officeCliPath -TimeoutSec 300
+          $actualHash = (Get-FileHash -Algorithm SHA256 -Path $officeCliPath).Hash
+          if ($actualHash -ne $env:OFFICECLI_SHA256) {
+            throw "OfficeCLI checksum mismatch: expected $env:OFFICECLI_SHA256, got $actualHash"
+          }
+          $actualVersion = (& $officeCliPath --version).Trim()
+          if ($actualVersion -ne $env:OFFICECLI_VERSION) {
+            throw "OfficeCLI version mismatch: expected $env:OFFICECLI_VERSION, got $actualVersion"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $officeCliDirectory -Encoding utf8
+
       - name: Node regression tests (protected surfaces)
+        env:
+          OFFICECLI_SKIP_UPDATE: "1"
         run: npm.cmd run test:regression
 
       - name: Admin unit tests (protected surfaces)
         run: npm.cmd --prefix admin-vue test
+
+      - name: Golden 2 PPT preview visual regression
+        run: npm.cmd run test:ppt-v2-preview
 
       - name: Typecheck user core
         run: npm.cmd run typecheck:user-core
@@ -88,6 +114,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -101,6 +136,24 @@ jobs:
             echo "Applying $file"
             docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < "$file"
           done
+
+      - name: Test PPT V2 Phase 2, Slice A, Slice A.1, and Slice B PostgreSQL gates
+        working-directory: backend-go
+        env:
+          PPT_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
+        run: |
+          set -euo pipefail
+          test_names="$(go test ./internal/app/ppt -list '^TestPostgresGenerationJob')"
+          for required_test in \
+            TestPostgresGenerationJobLeaseFencingRestartCancelAndIsolation \
+            TestPostgresGenerationJobRetryAndAtomicTaskRelation \
+            TestPostgresGenerationJobArtifactConstraintsAndTransactionRollback \
+            TestPostgresGenerationJobAgentOutlineApprovalRecoveryAndIsolation \
+            TestPostgresGenerationJobAgentPlanningWorkerRecoveryRetryAndFencing \
+            TestPostgresGenerationJobAgentDeckGenerationRecoveryFencingAndArtifact; do
+            grep -Fxq "$required_test" <<< "$test_names"
+          done
+          go test ./internal/app/ppt -run '^TestPostgresGenerationJob' -count=1 -v
 
       - name: Test backend
         working-directory: backend-go

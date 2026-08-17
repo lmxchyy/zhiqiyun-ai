@@ -158,6 +158,8 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.UserID = user.ID
+	req.TenantID = effectiveTenantID(user)
+	req.OrganizationID = user.OrganizationID
 	if err := a.checkMiniProgramText(r.Context(), r, user, req.Prompt); err != nil {
 		writeContentSecurityError(w, err)
 		return

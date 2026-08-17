@@ -28,8 +28,8 @@
                   <button
                     type="button"
                     class="ppt-pill"
-                    :title="`选择幻灯片页数，当前 ${store.slideCount} 张`"
-                    :aria-label="`选择幻灯片页数，当前 ${store.slideCount} 张`"
+                    :title="agentPageCountOverride ? `选择幻灯片页数，当前 ${agentPageCountOverride} 张` : '页数由内容结构智能决定'"
+                    :aria-label="agentPageCountOverride ? `选择幻灯片页数，当前 ${agentPageCountOverride} 张` : '智能决定幻灯片页数'"
                     :aria-expanded="showSlideCountMenu"
                     aria-haspopup="menu"
                     @click="toggleSlideCountMenu"
@@ -39,7 +39,7 @@
                       <path d="M3 9h18" />
                       <path d="M9 21V9" />
                     </svg>
-                    <span>{{ store.slideCount }}张幻灯片</span>
+                    <span>{{ agentPageCountOverride ? `${agentPageCountOverride}张幻灯片` : "智能页数" }}</span>
                   </button>
                   <div v-if="showSlideCountMenu" class="ppt-pill-menu" role="menu" @keydown.esc="showSlideCountMenu = false">
                     <strong>幻灯片页数</strong>
@@ -48,14 +48,14 @@
                       :key="option"
                       type="button"
                       role="menuitemradio"
-                      :aria-checked="store.slideCount === option"
+                      :aria-checked="agentPageCountOverride === option"
                       :title="`生成 ${option} 张幻灯片`"
-                      :aria-label="`${option} 张幻灯片${store.slideCount === option ? '，已选' : ''}`"
-                      :class="{ active: store.slideCount === option }"
+                      :aria-label="`${option} 张幻灯片${agentPageCountOverride === option ? '，已选' : ''}`"
+                      :class="{ active: agentPageCountOverride === option }"
                       @click="selectSlideCount(option)"
                     >
                       <span>{{ option }}张幻灯片</span>
-                      <small v-if="store.slideCount === option">已选</small>
+                      <small v-if="agentPageCountOverride === option">已选</small>
                     </button>
                   </div>
                 </div>
@@ -380,6 +380,17 @@
             @retry="store.retry"
           />
         </section>
+
+        <PptAgentPlanningWorkspace
+          v-else-if="isGenerationWorkspace && store.createMode === 'ai'"
+          :prompt="store.prompt"
+          :page-count="agentPageCountOverride"
+          :language="store.language"
+          :audience="store.audience"
+          :scenario="store.scenario"
+          :research-required="store.enableWebSearch || undefined"
+          @back="handlePptHomeClick"
+        />
 
         <section
           v-else-if="isGenerationWorkspace"
@@ -3450,6 +3461,7 @@ const PptCreateModeSelector = defineAsyncComponent(() => import("./PptCreateMode
 const PptCreateThemeModal = defineAsyncComponent(() => import("./PptCreateThemeModal.vue"));
 const PptGenerationConfigPanel = defineAsyncComponent(() => import("./PptGenerationConfigPanel.vue"));
 const PptImageSourcePanel = defineAsyncComponent(() => import("./PptImageSourcePanel.vue"));
+const PptAgentPlanningWorkspace = defineAsyncComponent(() => import("./PptAgentPlanningWorkspace.vue"));
 const PptOutlineEditor = defineAsyncComponent(() => import("./PptOutlineEditor.vue"));
 const PptOutlineGenerator = defineAsyncComponent(() => import("./PptOutlineGenerator.vue"));
 const PptSlideEditor = defineAsyncComponent(() => import("./PptSlideEditor.vue"));
@@ -3561,6 +3573,7 @@ const historySearchInputRef = ref<HTMLInputElement | null>(null);
 const favoriteTaskIds = ref<string[]>([]);
 const pptInspirationPage = ref(0);
 const isGenerationWorkspace = ref(false);
+const agentPageCountOverride = ref<number | undefined>();
 const isGenerationSettingsExpanded = ref(false);
 const isPresentationWorkspace = ref(false);
 const activeGenerationId = ref("");
@@ -3654,7 +3667,7 @@ let presentationPanelLoadTimer: ReturnType<typeof window.setTimeout> | null = nu
 let generationDraftSaveTimer: ReturnType<typeof window.setTimeout> | null = null;
 const presentTapDistanceThreshold = 12;
 const presentSwipeDistanceThreshold = 56;
-const slideCountOptions = Array.from({ length: 12 }, (_, index) => index + 1);
+const slideCountOptions = Array.from({ length: 7 }, (_, index) => index + 6);
 const fitPresentationZoomValue = 0.92;
 const presentationZoomLevels = [
   { value: 1.8, label: "180%" },
@@ -5722,6 +5735,7 @@ function toggleSlideCountMenu() {
 
 function selectSlideCount(count: number) {
   store.slideCount = count;
+  agentPageCountOverride.value = count;
   showSlideCountMenu.value = false;
 }
 

@@ -1,0 +1,159 @@
+{
+  "contractVersion": "2.1",
+  "deckId": "deck_ppt_legacy_001",
+  "revision": 1,
+  "canvas": { "unit": "pt", "width": 960, "height": 540 },
+  "slides": [
+    {
+      "slideId": "slide_ppt_legacy_001_cover",
+      "layoutId": "layout_cover_v1",
+      "backgroundColor": "1E2761",
+      "elements": [
+        {
+          "elementId": "element_ppt_legacy_001_cover_accent",
+          "x": 72,
+          "y": 90,
+          "width": 96,
+          "height": 14,
+          "zIndex": 0,
+          "resolvedStyle": {
+            "kind": "shape",
+            "shapeType": "rect",
+            "fillColor": "F96167",
+            "lineColor": "none",
+            "lineWidthPt": 0,
+            "transparency": 0
+          },
+          "diagnostics": []
+        },
+        {
+          "elementId": "element_ppt_legacy_001_cover_title",
+          "x": 72,
+          "y": 150,
+          "width": 816,
+          "height": 96,
+          "zIndex": 1,
+          "resolvedStyle": {
+            "kind": "text",
+            "fontFace": "Microsoft YaHei",
+            "fontSizePt": 44,
+            "color": "FFFFFF",
+            "bold": true,
+            "italic": false,
+            "align": "left",
+            "verticalAlign": "middle",
+            "marginPt": 0
+          },
+          "diagnostics": []
+        },
+        {
+          "elementId": "element_ppt_legacy_001_cover_subtitle",
+          "x": 72,
+          "y": 260,
+          "width": 744,
+          "height": 72,
+          "zIndex": 2,
+          "resolvedStyle": {
+            "kind": "text",
+            "fontFace": "Microsoft YaHei",
+            "fontSizePt": 22,
+            "color": "CADCFC",
+            "bold": false,
+            "italic": false,
+            "align": "left",
+            "verticalAlign": "top",
+            "marginPt": 0
+          },
+          "diagnostics": []
+        },
+        {
+          "elementId": "element_ppt_legacy_001_cover_footer",
+          "x": 72,
+          "y": 450,
+          "width": 816,
+          "height": 24,
+          "zIndex": 3,
+          "resolvedStyle": {
+            "kind": "text",
+            "fontFace": "Microsoft YaHei",
+            "fontSizePt": 12,
+            "color": "CADCFC",
+            "bold": false,
+            "italic": false,
+            "align": "left",
+            "verticalAlign": "middle",
+            "marginPt": 0
+          },
+          "diagnostics": []
+        }
+      ],
+      "diagnostics": []
+    },
+    {
+      "slideId": "slide_ppt_legacy_001_content",
+      "layoutId": "layout_standard_content_v1",
+      "backgroundColor": "FFFFFF",
+      "elements": [
+        {
+          "elementId": "element_ppt_legacy_001_content_panel",
+          "x": 72,
+          "y": 154,
+          "width": 816,
+          "height": 280,
+          "zIndex": 0,
+          "resolvedStyle": {
+            "kind": "shape",
+            "shapeType": "roundRect",
+            "fillColor": "F3F6FA",
+            "lineColor": "CADCFC",
+            "lineWidthPt": 1,
+            "transparency": 0
+          },
+          "diagnostics": []
+        },
+        {
+          "elementId": "element_ppt_legacy_001_content_title",
+          "x": 72,
+          "y": 54,
+          "width": 816,
+          "height": 64,
+          "zIndex": 1,
+          "resolvedStyle": {
+            "kind": "text",
+            "fontFace": "Microsoft YaHei",
+            "fontSizePt": 36,
+            "color": "1E2761",
+            "bold": true,
+            "italic": false,
+            "align": "left",
+            "verticalAlign": "middle",
+            "marginPt": 0
+          },
+          "diagnostics": []
+        },
+        {
+          "elementId": "element_ppt_legacy_001_content_body",
+          "x": 108,
+          "y": 190,
+          "width": 744,
+          "height": 204,
+          "zIndex": 2,
+          "resolvedStyle": {
+            "kind": "text",
+            "fontFace": "Microsoft YaHei",
+            "fontSizePt": 22,
+            "color": "333333",
+            "bold": false,
+            "italic": false,
+            "align": "left",
+            "verticalAlign": "middle",
+            "marginPt": 8
+          },
+          "diagnostics": []
+        }
+      ],
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}

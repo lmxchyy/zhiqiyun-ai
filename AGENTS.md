@@ -5,6 +5,11 @@
 • 请求统一走 API Client，页面禁止直接散写 uni.request
 后续开发和代码评审默认按此执行，除非你明确调整。
 
+PPT Generation V2 开发工作区：
+• PPT Generation V2 的后续开发统一使用 `E:\code\work\ppt-v2` worktree 和 `codex/ppt-v2` 分支。
+• Phase 2、Phase 3 等 PPT V2 阶段仅作为里程碑，不再为每个 Phase 单独创建 PPT V2 分支或 worktree。
+• 此规则仅适用于 PPT V2 功能域，不限制仓库中其他功能创建和使用独立 feature/codex 分支及 worktree。
+
 防回归：
 • 主提示：`.ai/CodexPrompt.md`（只做当前事、别整页重写、做完确认旧功能还在并勾选保护面）
 • 不能丢的功能清单：`docs/regression/protected-surfaces.md`（含网页侧边栏点数、首页/生图首屏、小程序首页模板、登录落用户首页、游客浏览入口、视频模型/参数/预估积分/Grok Preview 套餐与通道/中文错误、视频下载强制可分享 mp4、自由P图首页主能力文案与全页、小程序视频灵感临时下架、作品列表等）

@@ -50,6 +50,8 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 		return connectorPPTExecution{}, err
 	}
 	req.UserID, req.ClientRequestID = user.ID, clientRequestID
+	req.TenantID = strings.TrimSpace(enterpriseID)
+	req.OrganizationID = user.OrganizationID
 	authorization, err := a.authorizeConnectorCapability(user.ID, enterpriseID, modulePPTGeneration)
 	if err != nil {
 		return connectorPPTExecution{}, err

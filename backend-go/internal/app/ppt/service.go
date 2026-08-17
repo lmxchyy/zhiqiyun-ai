@@ -22,14 +22,18 @@ const (
 )
 
 var (
-	ErrInvalidPrompt  = errors.New("ppt prompt is required")
-	ErrTaskNotFound   = errors.New("ppt task not found")
-	ErrVisualNotFound = errors.New("ppt visual history item not found")
-	ErrConcurrency    = errors.New("ppt generation concurrency limit reached")
+	ErrInvalidPrompt              = errors.New("ppt prompt is required")
+	ErrTaskNotFound               = errors.New("ppt task not found")
+	ErrVisualNotFound             = errors.New("ppt visual history item not found")
+	ErrConcurrency                = errors.New("ppt generation concurrency limit reached")
+	ErrInvalidV2ArtifactRelation  = errors.New("ppt v2 artifact relation is invalid")
+	ErrV2ArtifactRelationConflict = errors.New("ppt v2 artifact relation conflicts with the existing relation")
 )
 
 type GenerateRequest struct {
 	UserID                string   `json:"-"`
+	TenantID              string   `json:"-"`
+	OrganizationID        string   `json:"-"`
 	ClientRequestID       string   `json:"-"`
 	Prompt                string   `json:"prompt"`
 	SlideCount            int      `json:"slideCount"`
@@ -61,6 +65,8 @@ type GenerateResponse struct {
 type Task struct {
 	TaskID                string   `json:"taskId"`
 	UserID                string   `json:"-"`
+	TenantID              string   `json:"tenantId,omitempty"`
+	OrganizationID        string   `json:"organizationId,omitempty"`
 	ClientRequestID       string   `json:"clientRequestId,omitempty"`
 	Type                  string   `json:"type,omitempty"`
 	MediaType             string   `json:"mediaType,omitempty"`
@@ -91,9 +97,18 @@ type Task struct {
 	Slides                []Slide  `json:"slides,omitempty"`
 	PPTURL                string   `json:"pptUrl"`
 	PDFURL                string   `json:"pdfUrl"`
+	V2DeckID              string   `json:"v2DeckId,omitempty"`
+	V2Revision            int      `json:"v2Revision,omitempty"`
+	PPTXAssetID           string   `json:"pptxAssetId,omitempty"`
 	ErrorMessage          string   `json:"errorMessage"`
 	CreatedAt             string   `json:"createdAt,omitempty"`
 	UpdatedAt             string   `json:"updatedAt,omitempty"`
+}
+
+type V2ArtifactRelation struct {
+	DeckID      string
+	Revision    int
+	PPTXAssetID string
 }
 
 type Outline struct {
@@ -298,6 +313,44 @@ func (s *Service) UpdateSlideImage(userID string, taskID string, slideID string,
 	if !updated {
 		return Task{}, ErrTaskNotFound
 	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+// AttachV2Artifact stores only the V2 identity relation on the legacy task.
+// SlideIR and LayoutResult remain canonical V2 records and are never copied
+// into the legacy task JSON.
+func (s *Service) AttachV2Artifact(userID string, taskID string, relation V2ArtifactRelation) (Task, error) {
+	relation.DeckID = strings.TrimSpace(relation.DeckID)
+	relation.PPTXAssetID = strings.TrimSpace(relation.PPTXAssetID)
+	if relation.DeckID == "" || relation.Revision <= 0 || relation.PPTXAssetID == "" {
+		return Task{}, ErrInvalidV2ArtifactRelation
+	}
+	if s.db != nil {
+		return s.attachV2ArtifactPostgres(userID, taskID, relation)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[strings.TrimSpace(taskID)]
+	if !ok || task.UserID != strings.TrimSpace(userID) {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	if task.V2DeckID != "" || task.V2Revision != 0 || task.PPTXAssetID != "" {
+		if task.V2DeckID == relation.DeckID && task.V2Revision == relation.Revision && task.PPTXAssetID == relation.PPTXAssetID {
+			return task, nil
+		}
+		return Task{}, ErrV2ArtifactRelationConflict
+	}
+	task.V2DeckID = relation.DeckID
+	task.V2Revision = relation.Revision
+	task.PPTXAssetID = relation.PPTXAssetID
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.tasks[task.TaskID] = task
 	if err := s.saveLocked(); err != nil {
@@ -682,6 +735,8 @@ func materializeTask(task Task) Task {
 
 func normalizeRequest(req GenerateRequest) GenerateRequest {
 	req.UserID = strings.TrimSpace(req.UserID)
+	req.TenantID = strings.TrimSpace(req.TenantID)
+	req.OrganizationID = strings.TrimSpace(req.OrganizationID)
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.SlideCount <= 0 {
 		req.SlideCount = 5

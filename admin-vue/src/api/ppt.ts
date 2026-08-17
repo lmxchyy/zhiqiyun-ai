@@ -29,6 +29,7 @@ import type {
   PptSlide,
   PptTaskResponse
 } from "../types/ppt";
+import type { AgentGuideRequest, AgentGuideResult, AgentPlanningState, OutlineEditCommand, PptAgentEditCommand, PptAgentPreviewProjection } from "../types/pptAgent";
 
 export type {
   PptCreateMode,
@@ -296,4 +297,56 @@ export async function requestPptDownload(taskId: string): Promise<{ url: string 
     throw new Error("PPT 下载接口已预留，当前任务暂无下载地址");
   }
   return { url: task.pptUrl };
+}
+
+export function guidePptAgent(request: AgentGuideRequest): Promise<AgentGuideResult> {
+  return adminRequest<AgentGuideResult>({ method: "POST", url: "/ppt/agent/guide", data: request });
+}
+
+export function getPptAgentState(jobId: string): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "GET", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}` });
+}
+
+export function getPptAgentPreview(jobId: string, revision: number): Promise<PptAgentPreviewProjection> {
+  return adminRequest<PptAgentPreviewProjection>({
+    method: "GET",
+    url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/preview`,
+    params: { revision }
+  });
+}
+
+export function editPptAgentDeck(jobId: string, command: PptAgentEditCommand): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/edit`, data: { command } });
+}
+
+export function editPptAgentMessage(jobId: string, message: string): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/edit`, data: { message } });
+}
+
+export function undoPptAgentDeck(jobId: string): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/undo` });
+}
+
+export function updatePptAgentOutline(jobId: string, expectedRevision: number, commands: OutlineEditCommand[]): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({
+    method: "PATCH",
+    url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/outline`,
+    data: { expectedRevision, commands }
+  });
+}
+
+export function approvePptAgentOutline(jobId: string, expectedRevision: number): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({
+    method: "POST",
+    url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/outline/approve`,
+    data: { expectedRevision }
+  });
+}
+
+export function retryPptAgentPlanning(jobId: string): Promise<AgentPlanningState> {
+  return adminRequest<AgentPlanningState>({ method: "POST", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/retry` });
+}
+
+export function downloadPptAgentDeck(jobId: string): Promise<{ url: string; expiresIn: number; fileId: string }> {
+  return adminRequest({ method: "GET", url: `/ppt/agent/jobs/${encodeURIComponent(jobId)}/download` });
 }
