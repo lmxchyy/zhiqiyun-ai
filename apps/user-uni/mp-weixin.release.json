@@ -1,4 +1,6 @@
-{"description":"知启云AI 2.0.61：生视频默认选中 grok-imagine-1.5-video，列表仍按价升序",
-"previousVersion":"2.0.61",
-"publishedBaseline":"2.0.62",
-"version":"2.0.63"}
+{
+  "description": "知启云AI 2.0.65：GPT Image 官方 quality（auto/low/medium/high）不再改写 standard；支持合法 WxH 含 2048x2048；默认 quality=low、n=1",
+  "previousVersion": "2.0.64",
+  "publishedBaseline": "2.0.64",
+  "version": "2.0.65"
+}
