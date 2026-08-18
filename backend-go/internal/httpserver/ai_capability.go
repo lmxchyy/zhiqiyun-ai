@@ -223,42 +223,122 @@ func ensureSmartVideoTenantLimit(current []adminTenantModuleLimit, defaults []ad
 	return current
 }
 
+func gptImageOfficialQualityOptions() []any {
+	return []any{"auto", "low", "medium", "high"}
+}
+
+func mapGPTImagePlanQuality(value any) string {
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value))) {
+	case "auto", "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	case "standard":
+		return "low"
+	case "hd":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func qualityAllowedContainsLegacyGPTImageValue(allowed []any) bool {
+	for _, value := range allowed {
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value))) {
+		case "standard", "hd":
+			return true
+		}
+	}
+	return false
+}
+
+func limitExplicitlyAllowsGPTImage2(limit map[string]any) bool {
+	models, ok := mapValue(limit["models"])
+	if !ok {
+		return false
+	}
+	allowed, ok := anySlice(models["allowed"])
+	if !ok {
+		return false
+	}
+	for _, value := range allowed {
+		if isGPTImage2SchemaModel(fmt.Sprint(value)) {
+			return true
+		}
+	}
+	return false
+}
+
+func limitAppliesToGPTImage2(limit map[string]any) bool {
+	models, ok := mapValue(limit["models"])
+	if !ok {
+		return true
+	}
+	allowed, ok := anySlice(models["allowed"])
+	if !ok || len(allowed) == 0 {
+		return true
+	}
+	return limitExplicitlyAllowsGPTImage2(limit)
+}
+
+func shouldCanonicalizeGPTImageQualityLimit(item adminTenantModuleLimit, limit map[string]any) bool {
+	packageID := firstNonEmptyString(item.PackageID, item.PackageIDCamel)
+	if packageID == "plan_free" {
+		return limitExplicitlyAllowsGPTImage2(limit)
+	}
+	return limitAppliesToGPTImage2(limit)
+}
+
 func alignGPTImageTenantQualityLimits(limits []adminTenantModuleLimit) []adminTenantModuleLimit {
-	official := []any{"auto", "low", "medium", "high"}
 	for index := range limits {
 		if canonicalModuleCode(firstNonEmptyString(limits[index].ModuleCode, limits[index].ModuleCodeCamel)) != moduleImageGeneration {
 			continue
 		}
-		if firstNonEmptyString(limits[index].PackageID, limits[index].PackageIDCamel) == "plan_free" {
+		merged := firstNonNilMap(limits[index].LimitJSON, limits[index].LimitJSONCamel)
+		if merged == nil {
 			continue
 		}
-		limit, ok := mapValue(limits[index].LimitJSON)
-		if !ok {
+		if !shouldCanonicalizeGPTImageQualityLimit(limits[index], merged) {
+			limits[index].LimitJSON = merged
 			continue
 		}
-		quality, ok := mapValue(limit["quality"])
-		if !ok {
-			continue
-		}
-		allowed, ok := anySlice(quality["allowed"])
-		if !ok {
-			continue
-		}
-		needsAlign := false
-		for _, value := range allowed {
-			switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value))) {
-			case "standard", "hd":
-				needsAlign = true
-			}
-		}
-		if !needsAlign {
-			continue
-		}
-		quality["allowed"] = official
-		limit["quality"] = quality
-		limits[index].LimitJSON = limit
+		limits[index].LimitJSON = canonicalizeGPTImageQualityLimitJSON(merged)
 	}
 	return limits
+}
+
+func canonicalizeGPTImageQualityLimitJSON(limit map[string]any) map[string]any {
+	if limit == nil {
+		return nil
+	}
+	result := mergeMap(map[string]any{}, limit)
+	quality, ok := mapValue(result["quality"])
+	if !ok {
+		return result
+	}
+	allowed, ok := anySlice(quality["allowed"])
+	if !ok {
+		return result
+	}
+	if qualityAllowedContainsLegacyGPTImageValue(allowed) {
+		quality["allowed"] = gptImageOfficialQualityOptions()
+		result["quality"] = quality
+		return result
+	}
+	seen := map[string]bool{}
+	mapped := make([]any, 0, len(allowed))
+	for _, value := range allowed {
+		qualityName := mapGPTImagePlanQuality(value)
+		if qualityName == "" || seen[qualityName] {
+			continue
+		}
+		seen[qualityName] = true
+		mapped = append(mapped, qualityName)
+	}
+	if len(mapped) == 0 {
+		mapped = gptImageOfficialQualityOptions()
+	}
+	quality["allowed"] = mapped
+	result["quality"] = quality
+	return result
 }
 
 func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
@@ -995,6 +1075,14 @@ func normalizeGenerationQualityForLimit(req *generation.CreateRequest, resolved 
 	if !ok || !hasNonEmptyValue(value) {
 		return
 	}
+	if isGPTImage2SchemaModel(resolved.Model.ModelName) {
+		if mapped, mappedOK := canonicalGPTImageQualityValue(value); mappedOK {
+			req.Params["quality"] = mapped
+			return
+		}
+		req.Params["quality"] = gptImageQualitySchemaDefault(resolved)
+		return
+	}
 	var schemaField adminAIParameterField
 	var finalField adminAIParameterField
 	for _, field := range resolved.Schema.SchemaJSON.Fields {
@@ -1116,6 +1204,12 @@ func resolveConfiguredModuleSchema(
 	}
 	if schema.ID == "" {
 		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for model %s in module %s", model.ModelName, moduleCode)
+	}
+	if isGPTImage2SchemaModel(model.ModelName) {
+		if limit.LimitJSON == nil {
+			limit.LimitJSON = firstNonNilMap(limit.LimitJSONCamel)
+		}
+		limit.LimitJSON = canonicalizeGPTImageQualityLimitJSON(limit.LimitJSON)
 	}
 	if err := validateModelAllowedByLimit(model.ModelName, limit.LimitJSON); err != nil {
 		return resolvedModuleSchema{}, err
@@ -1745,12 +1839,27 @@ func canonicalGPTImageQualityValue(value any) (string, bool) {
 	case "auto", "low", "medium", "high":
 		return quality, true
 	case "standard":
-		return "auto", true
+		return "low", true
+	case "hd":
+		return "high", true
 	case "draft":
 		return "low", true
 	default:
 		return "", false
 	}
+}
+
+func gptImageQualitySchemaDefault(resolved resolvedModuleSchema) string {
+	for _, field := range resolved.Schema.SchemaJSON.Fields {
+		if field.Key != "quality" {
+			continue
+		}
+		if mapped, ok := canonicalGPTImageQualityValue(field.Default); ok {
+			return mapped
+		}
+		break
+	}
+	return "low"
 }
 
 func findAIModule(items []adminAIModule, moduleCode string) adminAIModule {

@@ -256,13 +256,35 @@ function canonicalSizeParts(value: unknown): [number, number] | undefined {
   return [width, height];
 }
 
-function reducedSizeLabel(value: string): string {
+function sizeAspectLabel(width: number, height: number): string {
+  const divisor = greatestCommonDivisor(width, height);
+  return `${width / divisor}:${height / divisor}`;
+}
+
+function sizeTierLabel(width: number, height: number): string {
+  const pixels = width * height;
+  const maxEdge = Math.max(width, height);
+  if (pixels <= 1280 * 720 && maxEdge <= 1280) return "720p";
+  if (pixels <= 1536 * 1024 && maxEdge <= 1536) return "1K";
+  if (pixels <= 2048 * 2048 && maxEdge <= 2048) return "2K";
+  return "4K";
+}
+
+const commonImageAspectLabels = new Set(["1:1", "16:9", "9:16", "3:2", "2:3"]);
+
+export function displayImageSizeLabel(value: string): string {
   if (value === "auto") return "auto";
   const parts = canonicalSizeParts(value);
   if (!parts) throw new Error(`invalid canonical image size ${value}`);
   const [width, height] = parts;
-  const divisor = greatestCommonDivisor(width, height);
-  return `${width / divisor}:${height / divisor}`;
+  const aspect = sizeAspectLabel(width, height);
+  const tier = sizeTierLabel(width, height);
+  if (commonImageAspectLabels.has(aspect)) return `${tier} · ${aspect}`;
+  return `${tier} · 自定义 · ${width}×${height}`;
+}
+
+function reducedSizeLabel(value: string): string {
+  return displayImageSizeLabel(value);
 }
 
 export function isCanonicalImageQuality(value: unknown): value is CanonicalImageQuality {
@@ -477,7 +499,7 @@ export function restoreImageInspirationSelection(
     return { compatible: false, reason: "灵感缺少有效的 ratio" };
   }
 
-  const matchingSizes = contract.sizeOptions.filter(option => option.label === ratio);
+  const matchingSizes = contract.sizeOptions.filter(option => sizeAspectLabelFromValue(option.value) === ratio);
   if (matchingSizes.length === 0) {
     return { compatible: false, reason: `当前模型不支持灵感比例 ${ratio}` };
   }
@@ -487,7 +509,9 @@ export function restoreImageInspirationSelection(
     return { compatible: false, reason: `灵感比例 ${ratio} 对应多个尺寸，无法确定生成尺寸` };
   }
 
-  const quality = parameters.quality === "standard" ? "auto" : parameters.quality;
+  const quality = parameters.quality === "standard" || parameters.quality === "hd"
+    ? (parameters.quality === "hd" ? "high" : "low")
+    : parameters.quality;
   if (!isCanonicalImageQuality(quality)) {
     return { compatible: false, reason: "灵感 quality 必须是 auto、low、medium 或 high" };
   }
@@ -509,6 +533,12 @@ export function restoreImageInspirationSelection(
     selection,
     canonical: toCanonicalImageSelection(contract, selection),
   };
+}
+
+function sizeAspectLabelFromValue(value: string): string | undefined {
+  const parts = canonicalSizeParts(value);
+  if (!parts) return undefined;
+  return sizeAspectLabel(parts[0], parts[1]);
 }
 
 const imageDraftSelectionKeys = new Set([

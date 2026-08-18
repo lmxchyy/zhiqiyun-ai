@@ -13,6 +13,7 @@ import (
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
+	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
 )
 
 func TestImageRequestCountDoesNotCreateUnsupportedSchemaParameter(t *testing.T) {
@@ -134,6 +135,85 @@ func TestNormalizeAICapabilityDefaultsAlignsStaleGPTImageQualityLimits(t *testin
 	freeQuality, _ := mapValue(freeLimit.LimitJSON["quality"])
 	if !reflect.DeepEqual(freeQuality["allowed"], []any{"standard"}) {
 		t.Fatalf("free mock quality allowed was rewritten: %#v", freeQuality["allowed"])
+	}
+}
+
+func TestStaleGPTImageQualityLimitDoesNotRewriteAutoToStandard(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	data := normalizeAICapabilityDefaults(adminPlatformData{
+		AIModules: defaultAIModules(now), AIModels: defaultAIModels(now),
+		AIParameterSchemas: defaultAIParameterSchemas(now),
+		TenantModuleLimits: []adminTenantModuleLimit{
+			{
+				ID: "limit_stale_camel", TenantID: "default", ModuleCode: moduleImageGeneration, Status: "ACTIVE",
+				LimitJSONCamel: map[string]any{
+					"models":  map[string]any{"allowed": []any{"gpt-image-2"}},
+					"quality": map[string]any{"allowed": []any{"standard", "high"}},
+					"n":       map[string]any{"max": float64(4)},
+				},
+			},
+		},
+		BillingRules: defaultBillingRules(now),
+	})
+	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+	service := api{}
+	for _, tc := range []struct {
+		size    string
+		quality string
+	}{
+		{"1024x1024", "auto"},
+		{"2048x2048", "auto"},
+		{"2048x2048", "low"},
+		{"2048x2048", "medium"},
+		{"2048x2048", "high"},
+	} {
+		prepared, err := service.prepareGenerationRequest(data, user, generation.CreateRequest{
+			Type: "TEXT_TO_IMAGE", ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+			Params: map[string]any{"size": tc.size, "quality": tc.quality, "n": float64(1)},
+		})
+		if err != nil {
+			t.Fatalf("%s %s prepare: %v", tc.size, tc.quality, err)
+		}
+		if prepared.Params["quality"] != tc.quality {
+			t.Fatalf("%s %s quality = %v, want unchanged", tc.size, tc.quality, prepared.Params["quality"])
+		}
+		if prepared.Params["size"] != tc.size {
+			t.Fatalf("%s size = %v", tc.size, prepared.Params["size"])
+		}
+		if err := imageprovider.ValidateGPTImageQuality(prepared.Params["quality"]); err != nil {
+			t.Fatalf("%s %s provider quality: %v", tc.size, tc.quality, err)
+		}
+		if err := imageprovider.ValidateGPTImageSize(prepared.Params["size"]); err != nil {
+			t.Fatalf("%s provider size: %v", tc.size, err)
+		}
+	}
+}
+
+func TestGPTImageQualityAliasesMapToOfficialVocabulary(t *testing.T) {
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+	service := api{}
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"standard", "low"},
+		{"hd", "high"},
+		{"ultra", "low"},
+	} {
+		prepared, err := service.prepareGenerationRequest(data, user, generation.CreateRequest{
+			Type: "TEXT_TO_IMAGE", ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+			Params: map[string]any{"size": "2048x2048", "quality": tc.input, "n": float64(1)},
+		})
+		if err != nil {
+			t.Fatalf("%s prepare: %v", tc.input, err)
+		}
+		if prepared.Params["quality"] != tc.want {
+			t.Fatalf("%s quality = %v, want %s", tc.input, prepared.Params["quality"], tc.want)
+		}
+		if err := imageprovider.ValidateGPTImageQuality(prepared.Params["quality"]); err != nil {
+			t.Fatalf("%s provider quality: %v", tc.input, err)
+		}
 	}
 }
 
