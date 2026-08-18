@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"xianzhi-ai/backend-go/internal/app/generation"
 )
 
 const creationDraftContractVersion = 1
@@ -212,6 +214,52 @@ func (a inspirationAPI) compose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"draft": draft})
+}
+
+func consumeInspirationDraftParam(params map[string]any) *CreationDraft {
+	if params == nil {
+		return nil
+	}
+	raw := params["inspirationDraft"]
+	for _, key := range []string{"inspirationDraft", "integrityToken", "inspirationTemplateRef", "capabilityKey"} {
+		delete(params, key)
+	}
+	if raw == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var draft CreationDraft
+	if err = json.Unmarshal(encoded, &draft); err != nil {
+		return nil
+	}
+	return &draft
+}
+
+func (a api) applyTrustedInspirationAttribution(req *generation.CreateRequest, draft *CreationDraft) {
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	for _, key := range []string{
+		"inspiration_source", "inspiration_trusted", "inspiration_template_id",
+		"inspiration_template_slug", "inspiration_template_version",
+	} {
+		delete(req.Params, key)
+	}
+	if draft == nil {
+		return
+	}
+	signer := newInspirationDraftSigner([]byte(a.cfg.InspirationDraftHMACSecret), 30*time.Minute, time.Now)
+	if !signer.trustedAttribution(*draft) {
+		return
+	}
+	req.Params["inspiration_source"] = "template"
+	req.Params["inspiration_trusted"] = true
+	req.Params["inspiration_template_id"] = draft.TemplateRef.ID
+	req.Params["inspiration_template_slug"] = draft.TemplateRef.Slug
+	req.Params["inspiration_template_version"] = draft.TemplateRef.Version
 }
 
 func writeInspirationComposeError(w http.ResponseWriter, status int, code string, err error) {
