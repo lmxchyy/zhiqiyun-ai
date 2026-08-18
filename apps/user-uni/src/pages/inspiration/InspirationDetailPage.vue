@@ -1,55 +1,204 @@
 <template>
-  <view class="mpb-page" :style="miniProgramNavigationStyle">
+  <view class="mpb-page detail-page" :style="miniProgramNavigationStyle">
     <view class="mpb-safe" />
     <view class="mpb-header">
       <button class="mpb-back" aria-label="返回" @click="back">‹</button>
       <image class="mpb-logo" :src="loginLogo" mode="aspectFit" />
-      <view class="mpb-header-copy"><text class="mpb-title">灵感详情</text><text class="mpb-subtitle">AI创作灵感</text></view>
-      <button class="share-button mpb-role" open-type="share">↗</button>
+      <view class="mpb-header-copy"><text class="mpb-title">灵感详情</text><text class="mpb-subtitle">从示例开始你的创作</text></view>
+      <button class="share-button mpb-role" open-type="share">分享</button>
     </view>
-    <view class="mpb-stack">
-    <view v-if="loading" class="detail-skeleton"><view/><text/><text/></view>
-    <view v-else-if="error" class="detail-state"><text>加载失败</text><small>{{ error }}</small><button @click="load">重试</button></view>
-    <template v-else-if="detail">
-      <view class="result-preview">
-        <view v-if="comparison" class="detail-comparison">
-          <view><AppImage :src="comparison.beforeUrl" :alt="`${item.title}修复前`" width="100%" height="100%" radius="0"/><text>修复前</text></view>
-          <view><AppImage :src="comparison.afterUrl" :alt="`${item.title}修复后`" width="100%" height="100%" radius="0"/><text>修复后</text></view>
-        </view>
-        <AppImage v-else :src="item.resultUrl||item.coverUrl" :fallback="item.coverUrl" :alt="item.title" width="100%" height="100%" radius="0"/>
-        <text class="ai-badge">AI生成示例</text>
+
+    <view class="mpb-stack detail-stack">
+      <view v-if="loading" class="detail-skeleton"><view /><text /><text /></view>
+      <view v-else-if="error" class="detail-state">
+        <text>模板暂时无法打开</text><small>{{ error }}</small><button @click="load">重新加载</button>
       </view>
-      <view class="content-card"><view class="title-row"><view><text class="type-label">{{ typeLabel }}</text><text class="title">{{ item.title }}</text></view><button :class="{active:item.favorite}" @click="toggleFavorite">{{ item.favorite?'♥':'♡' }} {{ item.favoriteCount }}</button></view><text class="description">{{ item.description }}</text><view class="usage-row"><text>浏览 {{ item.viewCount }}</text><text>使用 {{ item.useCount }}</text><text>生成 {{ item.generateCount }}</text></view></view>
-      <view v-if="guidedTemplate" class="content-card guided-card"><text class="card-title">使用方法</text><view class="guided-step"><strong>1</strong><text>上传一张需要修复的老照片</text></view><view class="guided-step"><strong>2</strong><text>系统自动加载修复要求和推荐模型</text></view><view class="guided-step"><strong>3</strong><text>确认预计积分后开始修复</text></view><small>可在创作页调整修复要求，复杂技术参数由系统自动处理。</small></view>
-      <view v-else class="content-card"><view class="card-head"><text>完整提示词</text><button @click="copyPrompt">复制</button></view><text class="prompt-text">{{ item.prompt }}</text><template v-if="item.negativePrompt"><text class="field-label">负面提示词</text><text class="negative-text">{{ item.negativePrompt }}</text></template></view>
-      <view v-if="!guidedTemplate" class="content-card"><text class="card-title">生成配置</text><view class="parameter-list"><view><text>模型</text><strong>{{ resolvedModel || '自动选择' }}</strong></view><view v-for="entry in parameterEntries" :key="entry[0]"><text>{{ parameterLabel(entry[0]) }}</text><strong>{{ entry[1] }}</strong></view></view><view v-if="!detail.modelAvailable" class="model-note">原模型已下架，生成时将自动切换为兼容模型 {{ detail.compatibleModelId || '系统默认模型' }}</view></view>
-      <view class="safe-space"/>
-      <view class="fixed-action" :class="{single:guidedTemplate}"><button v-if="!guidedTemplate" class="copy-action" @click="copyPrompt">复制提示词</button><button class="generate-action" :loading="using" @click="generateSame">{{ guidedTemplate ? '立即使用' : '生成同款' }}</button></view>
-    </template>
+      <template v-else-if="detail">
+        <view class="result-preview">
+          <video v-if="item.contentType === 'video'" :src="item.resultUrl || item.coverUrl" :poster="item.coverUrl" controls :autoplay="false" object-fit="cover" />
+          <AppImage v-else :src="item.resultUrl || item.coverUrl" :fallback="item.coverUrl" :alt="item.title" width="100%" height="100%" radius="0" />
+          <text class="preview-label">{{ previewLabel }}</text>
+        </view>
+
+        <view class="content-card summary-card">
+          <view class="title-row">
+            <view><text class="type-label">{{ typeLabel }}</text><text class="title">{{ item.title }}</text></view>
+            <button :class="{ active: item.favorite }" @click="toggleFavorite">{{ item.favorite ? "♥" : "♡" }} {{ item.favoriteCount }}</button>
+          </view>
+          <text class="description">{{ item.description }}</text>
+          <view v-if="item.tags?.length" class="tag-row"><text v-for="tag in item.tags" :key="tag">{{ tag }}</text></view>
+          <view class="usage-row"><text>浏览 {{ item.viewCount }}</text><text>使用 {{ item.useCount }}</text><text>生成 {{ item.generateCount }}</text></view>
+        </view>
+
+        <TemplateInputForm
+          :inputs="item.schema.inputs"
+          :values="values"
+          :assets="assets"
+          :errors="formErrors"
+          @update:values="values = $event"
+          @update:assets="assets = $event"
+        />
+
+        <view class="safe-space" />
+        <view class="fixed-action">
+          <view><text>{{ item.schema.inputs.length ? "填写完成后进入创作页确认" : "进入创作页继续设置" }}</text><small>模型、积分和生成将在下一步确认</small></view>
+          <button class="generate-action" :loading="using" :disabled="using" @click="useTemplate">{{ using ? "正在准备" : "使用此模板" }}</button>
+        </view>
+      </template>
     </view>
   </view>
 </template>
+
 <script setup lang="ts">
-import{computed,ref}from"vue";import{onLoad,onShareAppMessage}from"@dcloudio/uni-app";import AppImage from"../../components/AppImage.vue";
-import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";import{inspirationAPI}from"../../features/inspiration/api";import{saveInspirationDraft}from"../../features/inspiration/draft";import{inspirationComparisonSources,type InspirationDetailResponse}from"../../features/inspiration/types";import{hasValidToken,requireAuth}from"../../features/auth/gate";
-const templateId=ref(""),detail=ref<InspirationDetailResponse|null>(null),loading=ref(true),using=ref(false),error=ref("");const item=computed(()=>detail.value!.item),typeLabel=computed(()=>({image:"AI图片",video:"AI视频",ppt:"PPT方案"}[item.value.contentType])),resolvedModel=computed(()=>detail.value?.modelAvailable?item.value.modelId:detail.value?.compatibleModelId),parameterEntries=computed(()=>Object.entries(item.value.parameters||{}).filter(([,value])=>value!==undefined&&value!==null&&value!=="")),comparison=computed(()=>inspirationComparisonSources(item.value.displayConfig)),guidedTemplate=computed(()=>item.value.scenarioCode==="photo_restoration");
-async function load(){loading.value=true;error.value="";detail.value=null;try{const latest=await inspirationAPI.detail(templateId.value);if(latest?.item?.contentType==="video"){error.value="该灵感模板暂不可用";return}detail.value=latest}catch(reason){error.value=reason instanceof Error?reason.message:"请稍后重试"}finally{loading.value=false}}
-function parameterLabel(key:string){return({ratio:"画面比例",quality:"清晰度",duration:"视频时长",resolution:"分辨率",pageCount:"PPT页数",scenario:"使用场景",style:"视觉风格",language:"语言",withImages:"包含图片"}as Record<string,string>)[key]||key}
-async function ensureLogin(action:"copy"|"favorite"|"generate",resume:()=>void|Promise<void>){if(hasValidToken()){await resume();return true}const protectedAction=action==="generate"?(item.value.contentType==="video"?"generate_video":item.value.contentType==="ppt"?"generate_ppt":"generate_image"):"save_work";await requireAuth({action:protectedAction,route:"/pages/inspiration/InspirationDetailPage",payload:{templateId:templateId.value,action},resume});return false}
-async function copyPrompt(){await ensureLogin("copy",async()=>{await inspirationAPI.event(templateId.value,"copy_prompt");uni.setClipboardData({data:String(item.value.prompt||""),success:()=>uni.showToast({title:"提示词已复制",icon:"success"})})})}
-async function toggleFavorite(){await ensureLogin("favorite",async()=>{const next=!item.value.favorite;await inspirationAPI.favorite(templateId.value,next);item.value.favorite=next;item.value.favoriteCount=Math.max(0,item.value.favoriteCount+(next?1:-1));uni.showToast({title:next?"已收藏":"已取消收藏",icon:"success"})})}
-async function generateSame(){if(using.value)return;await ensureLogin("generate",async()=>{using.value=true;try{const latest=await inspirationAPI.detail(templateId.value);if(latest.item.contentType==="video"){throw new Error("该灵感模板暂不可用")}saveInspirationDraft(latest);await inspirationAPI.event(templateId.value,"use_template");if(!latest.modelAvailable)uni.showToast({title:"原模型已下架，已切换兼容模型",icon:"none",duration:2200});const route=latest.item.contentType==="ppt"?"/packagePpt/pages/create":"/pages/user/UserImageCreationPage";uni.navigateTo({url:`${route}?templateId=${encodeURIComponent(templateId.value)}`})}catch(reason){uni.showToast({title:reason instanceof Error?reason.message:"暂时无法使用该模板",icon:"none"})}finally{using.value=false}})}
-function back(){uni.navigateBack({fail:()=>uni.switchTab({url:"/pages/user/UserHomePage"})})}onLoad(options=>{templateId.value=String(options?.templateId||"").trim();if(!templateId.value){error.value="模板参数缺失";loading.value=false;return}void load()});onShareAppMessage(()=>({title:item.value?.title||"知启云AI创作灵感",path:`/pages/inspiration/InspirationDetailPage?templateId=${encodeURIComponent(templateId.value)}`,imageUrl:item.value?.coverUrl}));
+import { computed, ref } from "vue";
+import { onLoad, onShareAppMessage } from "@dcloudio/uni-app";
+import AppImage from "../../components/AppImage.vue";
+import TemplateInputForm from "./components/TemplateInputForm.vue";
+import loginLogo from "../../assets/zhiqiyun-logo-transparent.png";
+import { hasValidToken, requireAuth } from "../../features/auth/gate";
+import { inspirationAPI } from "../../features/inspiration/api";
+import {
+  buildInspirationComposeRequest,
+  inspirationComposeErrorAction,
+  templateInitialValues,
+  validateTemplateInputValues,
+} from "../../features/inspiration/contracts";
+import { saveInspirationDraft } from "../../features/inspiration/draft";
+import { completeInspirationHandoff } from "../../features/inspiration/handoff";
+import type { InspirationDetailResponse, TemplateAssetValues } from "../../features/inspiration/types";
+
+const slug = ref("");
+const detail = ref<InspirationDetailResponse | null>(null);
+const loading = ref(true);
+const using = ref(false);
+const error = ref("");
+const values = ref<Record<string, unknown>>({});
+const assets = ref<TemplateAssetValues>({});
+const formErrors = ref<Record<string, string>>({});
+const item = computed(() => detail.value!.item);
+const typeLabel = computed(() => ({ image: "AI 图片", video: "AI 视频", ppt: "PPT 方案", text: "AI 文本", agent: "AI Agent", workflow: "AI 工作流" }[item.value.contentType]));
+const previewLabel = computed(() => {
+  const label = item.value.schema.presentation.heroLabel;
+  return typeof label === "string" && label.trim() ? label : "AI 生成示例";
+});
+
+async function load() {
+  if (!slug.value) return;
+  loading.value = true;
+  error.value = "";
+  try {
+    detail.value = await inspirationAPI.detail(slug.value);
+    values.value = templateInitialValues(detail.value.item.schema.inputs, detail.value.item.schema.presets.inputDefaults);
+    assets.value = {};
+    formErrors.value = {};
+  } catch (reason) {
+    error.value = reason instanceof Error ? reason.message : "请稍后重试";
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function requestLogin(resume: () => void | Promise<void>) {
+  await requireAuth({
+    action: item.value.contentType === "video" ? "generate_video" : item.value.contentType === "ppt" ? "generate_ppt" : "generate_image",
+    route: "/pages/inspiration/InspirationDetailPage",
+    payload: { slug: slug.value },
+    resume,
+  });
+}
+
+async function toggleFavorite() {
+  if (!hasValidToken()) {
+    await requestLogin(toggleFavorite);
+    return;
+  }
+  try {
+    const next = !item.value.favorite;
+    await inspirationAPI.favorite(slug.value, next);
+    item.value.favorite = next;
+    item.value.favoriteCount = Math.max(0, item.value.favoriteCount + (next ? 1 : -1));
+  } catch (reason) {
+    uni.showToast({ title: reason instanceof Error ? reason.message : "收藏失败", icon: "none" });
+  }
+}
+
+async function handleComposeError(reason: unknown) {
+  const action = inspirationComposeErrorAction(reason);
+  if (action === "auth") {
+    await requestLogin(compose);
+    return;
+  }
+  if (action === "reload") {
+    uni.showModal({
+      title: "模板已更新",
+      content: "当前模板已有新版本，请重新加载后再填写。",
+      showCancel: false,
+      success: () => { void load(); },
+    });
+    return;
+  }
+  const fallback = action === "input" ? "请检查填写内容"
+    : action === "material" ? "请检查上传素材"
+      : action === "schema" ? "模板配置暂不可用"
+        : action === "network" ? "网络连接失败，请重试"
+          : "暂时无法使用此模板";
+  uni.showToast({ title: reason instanceof Error && reason.message ? reason.message : fallback, icon: "none", duration: 2400 });
+}
+
+async function compose() {
+  if (using.value || !detail.value) return;
+  formErrors.value = validateTemplateInputValues(item.value.schema.inputs, values.value, assets.value);
+  const firstError = Object.values(formErrors.value)[0];
+  if (firstError) {
+    uni.showToast({ title: firstError, icon: "none" });
+    return;
+  }
+  using.value = true;
+  try {
+    const body = buildInspirationComposeRequest(item.value.templateVersion, values.value, assets.value);
+    const response = await inspirationAPI.compose(slug.value, body);
+    await completeInspirationHandoff(response.draft, {
+      save: saveInspirationDraft,
+      recordUse: () => inspirationAPI.event(slug.value, "use_template"),
+      navigate: url => uni.navigateTo({ url }),
+    });
+  } catch (reason) {
+    await handleComposeError(reason);
+  } finally {
+    using.value = false;
+  }
+}
+
+async function useTemplate() {
+  if (!hasValidToken()) {
+    await requestLogin(compose);
+    return;
+  }
+  await compose();
+}
+
+function back() {
+  uni.navigateBack({ fail: () => uni.switchTab({ url: "/pages/user/UserHomePage" }) });
+}
+
+onLoad(options => {
+  slug.value = String(options?.slug || "").trim();
+  if (!slug.value) {
+    error.value = "模板参数缺失";
+    loading.value = false;
+    return;
+  }
+  void load();
+});
+
+onShareAppMessage(() => ({
+  title: item.value?.title || "知启云 AI 创作灵感",
+  path: `/pages/inspiration/InspirationDetailPage?slug=${encodeURIComponent(slug.value)}`,
+  imageUrl: item.value?.coverUrl,
+}));
 </script>
+
 <style scoped>
 @import "../../styles/mini-program-business.css";
-.mpb-page{min-height:100vh;color:#171c2d;background:#f5f6fa}
-.result-preview{position:relative;height:410px;background:#e9edf5}.detail-comparison{display:grid;width:100%;height:100%;grid-template-columns:1fr 1fr;gap:1px;background:#fff}.detail-comparison>view{position:relative;min-width:0;height:100%;overflow:hidden}.detail-comparison>view>text{position:absolute;z-index:3;right:12px;bottom:12px;padding:5px 8px;border-radius:5px;color:#fff;background:rgba(18,24,43,.72);font-size:10px}.ai-badge{position:absolute;z-index:4;right:14px;top:14px;bottom:auto;padding:6px 9px;border-radius:5px;color:#fff;background:rgba(18,24,43,.72);font-size:10px}
-.content-card{margin:12px 14px 0;padding:17px;border:1px solid #e8eaf1;border-radius:8px;background:#fff}.title-row,.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.type-label,.title,.description,.field-label,.prompt-text,.negative-text,.card-title{display:block}.type-label{color:#4a6cff;font-size:10px;font-weight:650}.title{margin-top:4px;font-size:20px;font-weight:750;line-height:28px}.title-row button{width:auto;height:36px;padding:0 11px;border-radius:18px;color:#727c91;background:#f3f5fa;font-size:12px}.title-row button.active{color:#f04e64;background:#fff0f2}.description{margin-top:10px;color:#737c90;font-size:12px;line-height:20px}.usage-row{display:flex;margin-top:14px;gap:18px;color:#9299aa;font-size:10px}.card-head text,.card-title{font-size:15px;font-weight:700}.card-head button{width:auto;color:#4a6cff;background:transparent;font-size:12px}.prompt-text,.negative-text{margin-top:13px;color:#384055;font-size:13px;line-height:22px;white-space:pre-wrap}.field-label{margin-top:18px;color:#7c8497;font-size:11px}.negative-text{margin-top:7px;color:#6e7689}.parameter-list{display:grid;margin-top:12px;grid-template-columns:1fr 1fr;gap:10px}.parameter-list view{padding:11px;border-radius:6px;background:#f7f8fb}.parameter-list text,.parameter-list strong{display:block}.parameter-list text{color:#8b93a5;font-size:9px}.parameter-list strong{margin-top:4px;font-size:12px;word-break:break-all}.model-note{margin-top:12px;padding:10px;border-radius:6px;color:#976500;background:#fff7df;font-size:10px;line-height:17px}
-.guided-card small{display:block;margin-top:14px;color:#828b9e;font-size:10px;line-height:18px}.guided-step{display:flex;margin-top:13px;align-items:center;gap:10px}.guided-step strong{display:grid;width:24px;height:24px;place-items:center;border-radius:50%;color:#fff;background:#5668e8;font-size:11px}.guided-step text{color:#3c4559;font-size:12px}.safe-space{height:96px}
-.fixed-action{position:fixed;z-index:12;right:0;bottom:0;left:0;display:grid;padding:11px 16px calc(11px + env(safe-area-inset-bottom));grid-template-columns:1fr 1.6fr;gap:10px;background:rgba(255,255,255,.97);box-shadow:0 -6px 22px rgba(25,32,57,.08)}
-.fixed-action.single{grid-template-columns:1fr}
-.fixed-action button{height:46px;border-radius:23px;font-size:14px;font-weight:650}
-.copy-action{color:#4a6cff;background:#edf1ff}.generate-action{color:#fff;background:#4a6cff}
-.detail-skeleton,.detail-state{display:flex;min-height:500px;align-items:center;justify-content:center;flex-direction:column}.detail-skeleton view{width:100%;height:360px;background:#e8ebf2}.detail-skeleton text{width:80%;height:18px;margin-top:16px;background:#e8ebf2}.detail-state small{margin-top:8px;color:#8b93a5}.detail-state button{width:auto;margin-top:16px;padding:0 18px;border-radius:18px;color:#fff;background:#4a6cff}
+.detail-page{min-height:100vh;color:#171c2d;background:#f5f6fa}.detail-stack{padding-bottom:0}.share-button{width:auto}.result-preview{position:relative;height:410px;overflow:hidden;background:#e9edf5}.result-preview video{width:100%;height:100%}.preview-label{position:absolute;z-index:4;right:14px;top:14px;padding:6px 9px;border-radius:6px;color:#fff;background:rgba(18,24,43,.72);font-size:10px}.content-card{margin:12px 0 0;padding:17px;border:1px solid #e8eaf1;border-radius:13px;background:#fff}.summary-card{margin-top:12px}.title-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.type-label,.title,.description{display:block}.type-label{color:#4a6cff;font-size:10px;font-weight:650}.title{margin-top:4px;font-size:20px;font-weight:750;line-height:28px}.title-row button{width:auto;height:36px;padding:0 11px;border-radius:18px;color:#727c91;background:#f3f5fa;font-size:12px}.title-row button.active{color:#f04e64;background:#fff0f2}.description{margin-top:10px;color:#737c90;font-size:12px;line-height:20px}.tag-row{display:flex;flex-wrap:wrap;margin-top:12px;gap:6px}.tag-row text{padding:4px 8px;border-radius:10px;color:#5f6a80;background:#f1f3f7;font-size:9px}.usage-row{display:flex;margin-top:14px;gap:18px;color:#9299aa;font-size:10px}.safe-space{height:105px}.fixed-action{position:fixed;z-index:12;right:0;bottom:0;left:0;display:grid;padding:11px 16px calc(11px + env(safe-area-inset-bottom));grid-template-columns:1fr 138px;align-items:center;gap:12px;background:rgba(255,255,255,.97);box-shadow:0 -6px 22px rgba(25,32,57,.08)}.fixed-action>view{display:flex;min-width:0;flex-direction:column}.fixed-action>view text{color:#424b5f;font-size:11px;font-weight:650}.fixed-action>view small{margin-top:3px;color:#9299a9;font-size:9px}.generate-action{height:46px;border-radius:23px;color:#fff;background:#4a6cff;font-size:14px;font-weight:650}.generate-action[disabled]{opacity:.65}.detail-skeleton,.detail-state{display:flex;min-height:500px;align-items:center;justify-content:center;flex-direction:column}.detail-skeleton view{width:100%;height:360px;background:#e8ebf2}.detail-skeleton text{width:80%;height:18px;margin-top:16px;background:#e8ebf2}.detail-state small{margin-top:8px;color:#8b93a5}.detail-state button{width:auto;margin-top:16px;padding:0 18px;border-radius:18px;color:#fff;background:#4a6cff}button:after{border:0}
 </style>

@@ -55,6 +55,7 @@ type Config struct {
 	StoragePublicDomain            string
 	StorageCDNDomain               string
 	PaymentCallbackSecret          string
+	InspirationDraftHMACSecret     string
 	WeChatMiniProgramAppID         string
 	WeChatMiniProgramSecret        string
 	WeChatOpenAppID                string
@@ -252,6 +253,7 @@ func Load() Config {
 		StoragePublicDomain:            os.Getenv("STORAGE_PUBLIC_DOMAIN"),
 		StorageCDNDomain:               os.Getenv("STORAGE_CDN_DOMAIN"),
 		PaymentCallbackSecret:          os.Getenv("PAYMENT_CALLBACK_SECRET"),
+		InspirationDraftHMACSecret:     os.Getenv("INSPIRATION_DRAFT_HMAC_SECRET"),
 		WeChatMiniProgramAppID:         os.Getenv("WECHAT_MINI_PROGRAM_APPID"),
 		WeChatMiniProgramSecret:        os.Getenv("WECHAT_MINI_PROGRAM_SECRET"),
 		WeChatOpenAppID:                os.Getenv("WECHAT_OPEN_APP_ID"),

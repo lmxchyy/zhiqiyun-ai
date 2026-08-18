@@ -751,14 +751,15 @@ import {
   transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
-import { uploadReferenceImage } from "../api/files";
-import { inspirationAPI } from "../features/inspiration/api";
+import { absoluteApiURL, uploadReferenceImage } from "../api/files";
+import { recordInspirationEvent } from "../features/inspiration/events";
 import {
   inspirationReferenceLimit,
   inspirationReferenceValidationMessage,
   readInspirationDraft,
-  type InspirationCreationDraft,
+  resolveInspirationDraftMaterialURLs,
 } from "../features/inspiration/draft";
+import type { InspirationCreationDraft } from "../features/inspiration/types";
 import {
   defaultFreeImageEditPrompt,
   freeImageEditValidationMessage,
@@ -1039,7 +1040,7 @@ interface ActiveGenerationSnapshot {
   status: string;
   progress: number;
   startedAt: number;
-  inspirationTemplateId?: string;
+  inspirationTemplateSlug?: string;
 }
 
 const allowedCreationModes = ref<MiniProgramCreationMode[]>(["image", "infographic", "video", "montage"]);
@@ -1102,7 +1103,7 @@ const creationSourceError = ref("");
 const creationReferenceSelecting = ref(false);
 const loadedCreationAssetKey = ref("");
 const restoredCreationParams = ref<AnyRecord>({});
-const activeInspirationTemplateId = ref("");
+const activeInspirationTemplateSlug = ref("");
 const activeInspirationDraft = ref<InspirationCreationDraft | null>(null);
 
 function validateActiveInspirationReferences() {
@@ -1675,7 +1676,7 @@ function restoreActiveGeneration() {
     return;
   }
   if (!creationPrompt.value && snapshot.prompt) creationPrompt.value = String(snapshot.prompt);
-  activeInspirationTemplateId.value = String(snapshot.inspirationTemplateId || "").trim();
+  activeInspirationTemplateSlug.value = String(snapshot.inspirationTemplateSlug || "").trim();
   generationProgress.value = clampGenerationProgress(snapshot.progress);
   latestGenerationTask.value = {
     id,
@@ -3314,7 +3315,7 @@ function completeCreationSubmission(
     status: taskStatus,
     progress: taskProgress,
     startedAt,
-    inspirationTemplateId: activeInspirationTemplateId.value,
+    inspirationTemplateSlug: activeInspirationTemplateSlug.value,
   });
   uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
   void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
@@ -3620,10 +3621,10 @@ async function pollGenerationTask(
       if (succeeded || failed) {
         stopGenerationFeedback();
         if (succeeded) {
-          const inspirationTemplateId = activeInspirationTemplateId.value;
-          if (inspirationTemplateId) {
-            activeInspirationTemplateId.value = "";
-            void inspirationAPI.event(inspirationTemplateId, "generate_success", taskId);
+          const inspirationTemplateSlug = activeInspirationTemplateSlug.value;
+          if (inspirationTemplateSlug) {
+            activeInspirationTemplateSlug.value = "";
+            void recordInspirationEvent(inspirationTemplateSlug, "generate_success", taskId);
           }
           await loadAssets(false);
           uni.showToast({ title: "生成完成", icon: "success" });
@@ -3633,7 +3634,7 @@ async function pollGenerationTask(
         return;
       }
 
-      persistActiveGeneration({ id: taskId, mode, prompt, status, progress, startedAt });
+      persistActiveGeneration({ id: taskId, mode, prompt, status, progress, startedAt, inspirationTemplateSlug: activeInspirationTemplateSlug.value });
     } catch (error) {
       if (pollRun !== generationPollRun) return;
       consecutiveErrors += 1;
@@ -3653,6 +3654,7 @@ async function pollGenerationTask(
         status: "RETRYING",
         progress: generationProgress.value,
         startedAt,
+        inspirationTemplateSlug: activeInspirationTemplateSlug.value,
       });
       if (consecutiveErrors === 1) {
         console.warn("[生成任务状态同步重试]", { taskId, message });
@@ -3677,6 +3679,7 @@ async function pollGenerationTask(
     status: "PROCESSING",
     progress: generationProgress.value,
     startedAt,
+    inspirationTemplateSlug: activeInspirationTemplateSlug.value,
   });
   generationRepollTimer = setTimeout(() => {
     void pollGenerationTask(taskId, mode, startedAt, prompt);
@@ -3727,7 +3730,7 @@ function confirmV531Logout() {
   });
 }
 
-onMounted(() => {
+onMounted(async () => {
   uni.$on("legal-acceptance-completed", handleLegalAcceptanceCompleted);
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramGenerate = guestAwareGenerateTap;
   (globalThis as NativeGenerateBridge).__xianzhiMiniProgramBackToCreation = returnToCreationHub;
@@ -3738,23 +3741,35 @@ onMounted(() => {
     const inspirationDraft = readInspirationDraft(props.initialInspirationTemplateId);
     const savedPrompt = String(uni.getStorageSync("v531-creation-prompt") || "").trim();
     const rawStudioDraft = uni.getStorageSync("v532-studio-draft");
+    let inspirationReferenceURLs: string[] = [];
+    if (inspirationDraft?.materials.length) {
+      creationSourceLoading.value = true;
+      try {
+        inspirationReferenceURLs = await resolveInspirationDraftMaterialURLs(inspirationDraft, fetchAssetDetail, absoluteApiURL);
+      } catch (reason) {
+        creationSourceError.value = reason instanceof Error ? reason.message : "模板素材读取失败";
+      } finally {
+        creationSourceLoading.value = false;
+      }
+    }
     const studioDraft = inspirationDraft
       ? {
           ...inspirationDraft.parameters,
-          prompt: inspirationDraft.prompt,
+          prompt: inspirationDraft.basePrompt,
           negativePrompt: inspirationDraft.negativePrompt,
-          model: inspirationDraft.modelId,
-          referenceImages: inspirationDraft.referenceAssets,
+          model: inspirationDraft.modelHint,
+          inspirationDraft,
+          referenceImages: inspirationReferenceURLs,
           mode: inspirationDraft.contentType,
         }
       : rawStudioDraft && typeof rawStudioDraft === "object" ? rawStudioDraft as AnyRecord : {};
     if (inspirationDraft) {
-      activeInspirationTemplateId.value = inspirationDraft.templateId;
+      activeInspirationTemplateSlug.value = inspirationDraft.templateRef.slug;
       activeInspirationDraft.value = inspirationDraft;
     }
     const draftPrompt = rowString(studioDraft, "prompt");
     if (savedPrompt || draftPrompt) {
-      creationPrompt.value = savedPrompt || draftPrompt;
+      creationPrompt.value = inspirationDraft ? draftPrompt : savedPrompt || draftPrompt;
       uni.removeStorageSync("v531-creation-prompt");
     }
     const draftMode = rowString(studioDraft, "mode", "contentType");
@@ -3799,6 +3814,7 @@ onMounted(() => {
         : undefined;
       restoredCreationParams.value = {
         ...canonicalImageParameters(draftMatchesMode ? nestedParameters : undefined),
+        ...(activeInspirationDraft.value ? { inspirationDraft: activeInspirationDraft.value } : {}),
         model: rowString(studioDraft, "model"),
         size: draftMatchesMode ? rowString(studioDraft, "size") : "",
         quality: draftMatchesMode ? draftQuality : undefined,

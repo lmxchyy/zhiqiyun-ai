@@ -581,6 +581,26 @@ func (s *postgresStore) ListAssets() ([]asset, error) {
 	return scanAssetSummaryRows(rows)
 }
 
+func (s *postgresStore) SaveUploadedAsset(item asset) (asset, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return asset{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return asset{}, err
+	}
+	defer tx.Rollback()
+	if err := insertAsset(ctx, tx, item); err != nil {
+		return asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return asset{}, err
+	}
+	return item, nil
+}
+
 const generationTaskSummarySelect = `
 	select
 		id,

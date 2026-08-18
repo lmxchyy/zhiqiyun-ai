@@ -963,6 +963,7 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	inspirationDraft := consumeInspirationDraftParam(req.Params)
 	moduleCode := requestModuleCode(req)
 	if moduleCode == "" {
 		moduleCode = moduleCodeForType(req.Type)
@@ -1026,6 +1027,7 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if err := validateGenerationParams(req, resolved); err != nil {
 		return req, err
 	}
+	a.applyTrustedInspirationAttribution(&req, inspirationDraft)
 	req.Model = resolved.Model.ModelName
 	req.Params["module_code"] = moduleCode
 	req.Params["model_name"] = req.Model
@@ -2157,7 +2159,8 @@ func allowedGenerationInternalParam(key string) bool {
 		"generate_audio", "generateAudio",
 		"image_url", "imageUrl", "image_urls", "imageUrls", "inputImageUrl", "input_image_url", "inputImageUrls",
 		"reference_images", "input_reference", "inputVideoUrl", "video_url", "videoUrl",
-		"purpose", "pptTaskId", "deckTitle", "slideId", "slidePage", "theme", "language", "visualPlan", "negativePrompt":
+		"purpose", "pptTaskId", "deckTitle", "slideId", "slidePage", "theme", "language", "visualPlan", "negativePrompt",
+		"inspiration_source", "inspiration_trusted", "inspiration_template_id", "inspiration_template_slug", "inspiration_template_version":
 		return true
 	default:
 		return false

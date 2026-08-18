@@ -1,14 +1,21 @@
 import { downloadApiFile, getApiBaseURL, uploadApiFile } from './client'
+import { referenceAssetFromPayload, type ReferenceAssetUploadResult } from '../features/inspiration/referenceAsset'
 
 type ReferenceImagePayload = {
-  item?: { url?: string; path?: string }
+  item?: { assetId?: string; id?: string; name?: string; contentType?: string; url?: string; path?: string }
+  assetId?: string
+  id?: string
+  name?: string
+  contentType?: string
   url?: string
   path?: string
 }
 
-function absoluteApiURL(value: string) {
+export function absoluteApiURL(value: string) {
   if (/^https?:\/\//i.test(value)) return value
-  const base = getApiBaseURL().replace(/\/+$/, '')
+  const browserOrigin = typeof window !== 'undefined' ? window.location.origin : ''
+  const base = (getApiBaseURL() || browserOrigin).replace(/\/+$/, '')
+  if (!base) return value
   return `${base}${value.startsWith('/') ? value : `/${value}`}`
 }
 
@@ -22,6 +29,15 @@ export function uploadReferenceImage(filePath: string) {
     if (!url) throw new Error('上传接口未返回文件地址')
     return absoluteApiURL(url)
   })
+}
+
+export async function uploadReferenceAsset(filePath: string): Promise<ReferenceAssetUploadResult> {
+  const payload = await uploadApiFile<ReferenceImagePayload>('/api/v1/reference-images', {
+    filePath,
+    name: 'file',
+  })
+  const asset = referenceAssetFromPayload(payload)
+  return { ...asset, previewUrl: absoluteApiURL(asset.previewUrl) }
 }
 
 export async function downloadTemporaryFile(url: string) {

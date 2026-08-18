@@ -115,7 +115,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	if pgStore, ok := store.(*postgresStore); ok {
 		inspirationRepo = postgresInspirationRepository{db: pgStore.db}
 	}
-	inspirations := newInspirationAPI(inspirationRepo, store, sessions)
+	inspirations := newInspirationAPI(inspirationRepo, store, sessions, cfg.InspirationDraftHMACSecret)
 	var fileRepository storagecenter.Repository = storagecenter.NewMemoryRepository()
 	if pgStore, ok := store.(*postgresStore); ok {
 		fileRepository = storagecenter.NewPostgresRepository(pgStore.db)
@@ -298,10 +298,11 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/inspirations/categories", wrapF(inspirations.categories))
 	v1.GET("/inspirations/featured", wrapF(inspirations.featured))
 	v1.GET("/inspirations", wrapF(inspirations.list))
-	v1.GET("/inspirations/:id", wrapF(inspirations.detail))
-	v1.POST("/inspirations/:id/events", wrapF(inspirations.event))
-	v1.PUT("/inspirations/:id/favorite", wrapF(inspirations.favorite(true)))
-	v1.DELETE("/inspirations/:id/favorite", wrapF(inspirations.favorite(false)))
+	v1.POST("/inspirations/:slug/compose", wrapF(inspirations.compose))
+	v1.GET("/inspirations/:slug", wrapF(inspirations.detail))
+	v1.POST("/inspirations/:slug/events", wrapF(inspirations.event))
+	v1.PUT("/inspirations/:slug/favorite", wrapF(inspirations.favorite(true)))
+	v1.DELETE("/inspirations/:slug/favorite", wrapF(inspirations.favorite(false)))
 	v1.GET("/legal/acceptance-status", wrapF(api.legalAcceptanceStatus))
 	v1.POST("/legal/acceptances", wrapF(api.acceptCurrentLegalDocuments))
 	v1.GET("/public/pricing", wrapF(api.plans))

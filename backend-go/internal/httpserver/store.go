@@ -318,6 +318,23 @@ func (s *jsonStore) ListAssets() ([]asset, error) {
 	return activeAssets(data.Assets), nil
 }
 
+func (s *jsonStore) SaveUploadedAsset(item asset) (asset, error) {
+	if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.UserID) == "" {
+		return asset{}, errors.New("uploaded asset identity is required")
+	}
+	err := s.update(func(data *platformData) error {
+		for index := range data.Assets {
+			if data.Assets[index].ID == item.ID {
+				data.Assets[index] = item
+				return nil
+			}
+		}
+		data.Assets = append(data.Assets, item)
+		return nil
+	})
+	return item, err
+}
+
 func (s *jsonStore) UserAIState(userID string) (userAIState, error) {
 	data, err := s.load()
 	if err != nil {

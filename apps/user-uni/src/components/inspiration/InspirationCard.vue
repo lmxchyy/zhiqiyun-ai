@@ -1,17 +1,7 @@
 <template>
   <button class="inspiration-card" @click="$emit('open', item)">
     <view class="cover-wrap" :class="`type-${item.contentType}`">
-      <view v-if="comparison" class="comparison-cover">
-        <view class="comparison-pane">
-          <AppImage :src="comparison.beforeUrl" :alt="`${item.title}修复前`" width="100%" height="100%" radius="7px 0 0 7px" />
-          <text class="comparison-label">修复前</text>
-        </view>
-        <view class="comparison-pane">
-          <AppImage :src="comparison.afterUrl" :alt="`${item.title}修复后`" width="100%" height="100%" radius="0 7px 7px 0" />
-          <text class="comparison-label">修复后</text>
-        </view>
-      </view>
-      <AppImage v-else :src="item.thumbnailUrl || item.coverUrl" :fallback="item.coverUrl" :alt="item.title" width="100%" height="100%" radius="7px" />
+      <AppImage :src="item.thumbnailUrl || item.coverUrl" :fallback="item.coverUrl" :alt="item.title" width="100%" height="100%" radius="7px" />
       <text v-if="item.hot" class="hot-mark">热门</text>
       <text v-else class="ai-mark">AI生成示例</text>
       <text class="type-mark">{{ typeLabel }}</text>
@@ -21,7 +11,7 @@
     <text class="prompt-summary">{{ item.description }}</text>
     <view class="card-foot">
       <text>♡ {{ item.favoriteCount }} · 使用 {{ item.useCount }}</text>
-      <text class="use-action">{{ item.scenarioCode === 'photo_restoration' ? '立即使用' : '生成同款' }}</text>
+      <text class="use-action">使用模板</text>
     </view>
   </button>
 </template>
@@ -29,12 +19,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import AppImage from "../AppImage.vue";
-import { inspirationComparisonSources, type InspirationTemplate } from "../../features/inspiration/types";
+import type { InspirationTemplate } from "../../features/inspiration/types";
 
 const props = defineProps<{ item: InspirationTemplate }>();
 defineEmits<{ open: [item: InspirationTemplate] }>();
-const typeLabel = computed(() => ({ image: "图片", video: "视频", ppt: "PPT" }[props.item.contentType]));
-const comparison = computed(() => inspirationComparisonSources(props.item.displayConfig));
+const typeLabel = computed(() => ({ image: "图片", video: "视频", ppt: "PPT", text: "文本", agent: "Agent", workflow: "工作流" }[props.item.contentType]));
 </script>
 
 <style scoped>
@@ -43,9 +32,6 @@ const comparison = computed(() => inspirationComparisonSources(props.item.displa
 .cover-wrap{position:relative;height:190px;overflow:hidden;border-radius:7px;background:#f1f3f8}
 .cover-wrap.type-video{height:150px}
 .cover-wrap.type-ppt{height:170px}
-.comparison-cover{display:grid;width:100%;height:100%;grid-template-columns:1fr 1fr;gap:1px;background:#fff}
-.comparison-pane{position:relative;min-width:0;height:100%;overflow:hidden}
-.comparison-label{position:absolute;z-index:2;right:6px;bottom:6px;padding:3px 6px;border-radius:4px;color:#fff;background:rgba(18,24,43,.72);font-size:8px}
 .ai-mark,.hot-mark,.type-mark{position:absolute;z-index:3;top:8px;padding:4px 7px;border-radius:4px;color:#fff;background:rgba(19,25,47,.72);font-size:8px}
 .ai-mark,.hot-mark{left:8px}
 .hot-mark{background:#f05a32}

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -387,9 +388,9 @@ func TestBuiltInImageInspirationSeedsUseCanonicalParameters(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]any{"ratio": tt.ratio, "quality": "high", "count": 1}
-		if !reflect.DeepEqual(item.Parameters, want) {
-			t.Fatalf("%s parameters = %#v, want %#v", tt.id, item.Parameters, want)
+		got := item.Definition.Presets.GenerationDefaults
+		if fmt.Sprint(got["ratio"]) != tt.ratio || fmt.Sprint(got["quality"]) != "high" || fmt.Sprint(got["count"]) != "1" {
+			t.Fatalf("%s generation defaults = %#v, want ratio=%s quality=high count=1", tt.id, got, tt.ratio)
 		}
 	}
 }

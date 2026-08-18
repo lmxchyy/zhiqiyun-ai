@@ -1,17 +1,53 @@
 import { adminRequest } from "./client";
 
-export type InspirationContentType = "image" | "video" | "ppt";
-export interface InspirationTemplate {
-  id: string; tenantId: string; title: string; description: string; contentType: InspirationContentType;
-  categoryId: string; categoryName?: string; coverUrl: string; thumbnailUrl?: string; resultUrl?: string;
-  prompt: string; negativePrompt: string; modelId: string; scenarioCode?: string;
-  displayConfig?: Record<string, unknown>; inputRequirements?: Record<string, unknown>; presetConfig?: Record<string, unknown>;
-  parameters: Record<string, unknown>;
-  referenceAssets: unknown[]; platforms: string[]; tags: string[]; applicableTenantIds: string[];
-  featured: boolean; hot: boolean; pinned: boolean; sort: number; status: string; auditStatus: string;
-  auditNote?: string; startTime?: string; endTime?: string; version: number; sourceAssetId?: string;
-  sourceAuthorized: boolean; viewCount: number; copyCount: number; favoriteCount: number; useCount: number; generateCount: number;
+export type InspirationContentType = "image" | "video" | "ppt" | "text" | "agent" | "workflow";
+
+export interface InspirationTemplateDefinition {
+  schemaVersion?: number;
+  inputs?: unknown[];
+  prompt?: { template?: string; negativeTemplate?: string; composer?: { key?: string; version?: number } };
+  bindings?: unknown[];
+  presets?: { inputDefaults?: Record<string, unknown>; generationDefaults?: Record<string, unknown>; materials?: unknown[] };
+  presentation?: Record<string, unknown>;
+  handoff?: { targetType?: string; targetKey?: string; intentKey?: string };
+  capability?: { capabilityKey?: string; modelHint?: string };
 }
+
+export interface InspirationTemplate {
+  id: string;
+  slug: string;
+  tenantId: string;
+  title: string;
+  description: string;
+  contentType: InspirationContentType;
+  categoryId: string;
+  categoryName?: string;
+  coverUrl: string;
+  thumbnailUrl?: string;
+  resultUrl?: string;
+  definition: InspirationTemplateDefinition;
+  platforms: string[];
+  tags: string[];
+  applicableTenantIds: string[];
+  featured: boolean;
+  hot: boolean;
+  pinned: boolean;
+  sort: number;
+  status: string;
+  auditStatus: string;
+  auditNote?: string;
+  startTime?: string;
+  endTime?: string;
+  version: number;
+  sourceAssetId?: string;
+  sourceAuthorized: boolean;
+  viewCount: number;
+  copyCount: number;
+  favoriteCount: number;
+  useCount: number;
+  generateCount: number;
+}
+
 export interface InspirationCategory { id: string; tenantId: string; code: string; name: string; sort: number; status: string }
 
 export const inspirationAdminAPI = {

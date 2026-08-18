@@ -478,6 +478,49 @@ test("formal inspiration ratios restore only exact reduced schema ratios", () =>
   }
 });
 
+test("inspiration draft restore maps schema-controlled size then builds existing generation request", () => {
+  const restoreImageInspirationSelection = requiredFunction("restoreImageInspirationSelection");
+  const canonicalImageParameters = requiredFunction("canonicalImageParameters");
+  const contract = availableContract();
+  const restored = restoreImageInspirationSelection(contract, { ratio: "1:1", quality: "high", count: 1 });
+  assert.equal(restored.compatible, true);
+  const draft = {
+    contractVersion: 1,
+    templateRef: { id: "template-image-1", slug: "product-hero", version: 3 },
+    contentType: "image",
+    handoff: { targetType: "IMAGE_CREATION" },
+    values: { subject: "白底" },
+    materials: [{ inputKey: "references", assetId: "asset-1" }],
+    basePrompt: "SERVER COMPOSED PROMPT",
+    parameters: { ratio: "1:1", quality: "high", count: 1 },
+    capabilityKey: "image_generation",
+    modelHint: "gpt-image-2",
+    integrityToken: "signed-token",
+    createdAt: "2026-08-12T00:00:00Z",
+    expiresAt: "2026-08-12T00:30:00Z",
+  };
+  const request = taskRequestFromDraft({
+    mode: "image",
+    prompt: draft.basePrompt,
+    model: "gpt-image-2",
+    style: "commercial",
+    size: restored.selection.size,
+    quality: restored.selection.quality,
+    count: restored.selection.count,
+    referenceImages: ["/owned.png"],
+    parameters: canonicalImageParameters({ ...draft.parameters, inspirationDraft: draft }),
+  });
+  assert.equal(request.prompt, "SERVER COMPOSED PROMPT");
+  assert.equal(request.model, "gpt-image-2");
+  assert.equal(request.moduleCode, "image_generation");
+  assert.equal(request.params.size, "1024x1024");
+  assert.equal(request.params.quality, "high");
+  assert.equal(request.params.n, 1);
+  assert.deepEqual(request.params.inspirationDraft.templateRef, draft.templateRef);
+  assert.equal("pointCost" in request, false);
+  assert.equal("billingType" in request, false);
+});
+
 test("unsupported inspiration ratio returns a Chinese reason and no requestable canonical data", () => {
   const restoreImageInspirationSelection = requiredFunction("restoreImageInspirationSelection");
   const result = restoreImageInspirationSelection(availableContract(), {
@@ -1273,6 +1316,7 @@ test("workbench wires exact image schema and delegates image submission to the p
   assert.match(source, /exactModuleSchemaPath\("image_generation", requestedModel, isGuest\.value\)/);
   assert.match(source, /resolveImageSchemaFetchResult/);
   assert.match(source, /restoreImageInspirationSelection/);
+  assert.match(source, /inspirationDraft: activeInspirationDraft.value/);
   assert.match(source, /await submitCanonicalImageTask\(/);
   assert.match(source, /watch\(selectedImageModelCode/);
   assert.match(source, /void loadImageSchemaForModel\(modelCode\)/);
