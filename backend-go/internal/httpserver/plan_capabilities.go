@@ -127,6 +127,9 @@ func applyAdminPlanCapabilities(data *adminPlatformData, planID string, req admi
 				return fmt.Errorf("model %s is not bound to module %s", model, moduleCode)
 			}
 		}
+		if moduleCode == moduleImageGeneration {
+			config.Limits = canonicalizeGPTImageQualityLimitJSON(config.Limits)
+		}
 		if err := validatePackageCapabilityLimits(moduleCode, config.Enabled, config.Limits); err != nil {
 			return err
 		}

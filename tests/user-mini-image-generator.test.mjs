@@ -83,6 +83,7 @@ function insertHostNode(child, parent, anchor = null) {
 
 function mountAiImageGenerator(props) {
   const emitted = [];
+  const { onUpdateSize, ...rest } = props || {};
   const renderer = vueRuntime.createRenderer({
     patchProp(node, key, _previous, value) { node.props[key] = value; },
     insert: insertHostNode,
@@ -121,7 +122,10 @@ function mountAiImageGenerator(props) {
   const app = renderer.createApp({
     render() {
       return vueRuntime.h(component, {
-        ...props,
+        ...rest,
+        "onUpdate:size": (value) => {
+          if (typeof onUpdateSize === "function") onUpdateSize(value);
+        },
         onGenerate: () => emitted.push("generate"),
         onRetry: () => emitted.push("retry"),
       });
@@ -161,7 +165,7 @@ function imageComponentProps(overrides = {}) {
   return {
     prompt: "生成橙色系水果店海报",
     size: "1024x1024",
-    sizeOptions: [{ value: "1024x1024", label: "1:1" }],
+    sizeOptions: [{ value: "1024x1024", label: "1K · 1:1" }],
     quality: "auto",
     qualityOptions: [{ value: "auto", label: "自动" }],
     model: "gpt-image-2",
@@ -266,9 +270,9 @@ test("exact image schema derives real size ratios, canonical qualities, and coun
     available: true,
     modelName: "gpt-image-2",
     sizeOptions: [
-      { value: "1024x1024", label: "1:1" },
-      { value: "1536x1024", label: "3:2" },
-      { value: "1024x1536", label: "2:3" },
+      { value: "1024x1024", label: "1K · 1:1" },
+      { value: "1536x1024", label: "1K · 3:2" },
+      { value: "1024x1536", label: "1K · 2:3" },
     ],
     qualityOptions: [
       { value: "auto", label: "auto" },
@@ -308,6 +312,39 @@ test("official gpt image schema default quality low and n 1", () => {
   assert.equal(selection.count, 1);
 });
 
+test("size labels distinguish 1K and 2K squares and keep submitting WxH", () => {
+  const displayImageSizeLabel = requiredFunction("displayImageSizeLabel");
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  assert.equal(displayImageSizeLabel("1024x1024"), "1K · 1:1");
+  assert.equal(displayImageSizeLabel("2048x2048"), "2K · 1:1");
+  assert.equal(displayImageSizeLabel("1280x720"), "720p · 16:9");
+  assert.equal(displayImageSizeLabel("3840x2160"), "4K · 16:9");
+  assert.equal(displayImageSizeLabel("1792x1024"), "2K · 自定义 · 1792×1024");
+
+  const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema({
+    fields: [
+      { key: "prompt", type: "textarea", required: true },
+      { key: "size", type: "select", required: false, default: "auto", options: ["auto", "1024x1024", "2048x2048"] },
+      { key: "quality", type: "select", required: false, default: "low", options: ["auto", "low", "medium", "high"] },
+      { key: "n", type: "number", required: false, default: 1, options: [1], min: 1, max: 4 },
+    ],
+  }));
+  assert.equal(contract.available, true);
+  if (!contract.available) return;
+  assert.deepEqual(contract.sizeOptions.map(option => option.label), ["auto", "1K · 1:1", "2K · 1:1"]);
+  assert.deepEqual(toCanonicalImageSelection(contract, { size: "2048x2048", quality: "auto", count: 1 }), {
+    size: "2048x2048",
+    quality: "auto",
+    count: 1,
+  });
+  assert.deepEqual(toCanonicalImageSelection(contract, { size: "1024x1024", quality: "low", count: 1 }), {
+    size: "1024x1024",
+    quality: "low",
+    count: 1,
+  });
+});
+
 test("schema option derivation filters malformed dimensions, unsupported qualities, and non-positive counts", () => {
   const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
   const contract = deriveImageCreationContract("schema-model", exactImageSchema("schema-model", [
@@ -335,8 +372,8 @@ test("schema option derivation filters malformed dimensions, unsupported qualiti
 
   assert.equal(contract.available, true, contract.reason);
   assert.deepEqual(contract.sizeOptions, [
-    { value: "1280x720", label: "16:9" },
-    { value: "720x1280", label: "9:16" },
+    { value: "1280x720", label: "720p · 16:9" },
+    { value: "720x1280", label: "720p · 9:16" },
   ]);
   assert.deepEqual(contract.qualityOptions.map(option => option.value), ["high"]);
   assert.deepEqual(contract.countOptions.map(option => option.value), [1, 2, 4]);
@@ -1200,8 +1237,8 @@ test("mounted image component renders only exact dynamic schema controls", () =>
   const mounted = mountAiImageGenerator(imageComponentProps({
     size: "1536x1024",
     sizeOptions: [
-      { value: "1024x1024", label: "1:1" },
-      { value: "1536x1024", label: "3:2" },
+      { value: "1024x1024", label: "1K · 1:1" },
+      { value: "1536x1024", label: "1K · 3:2" },
     ],
     quality: undefined,
     qualityOptions: [],
@@ -1211,11 +1248,57 @@ test("mounted image component renders only exact dynamic schema controls", () =>
   try {
     const sizeButtons = hostNodes(mounted.root)
       .filter(node => hostClass(node).split(/\s+/).includes("ai-image-generator__aspect"));
-    assert.deepEqual(sizeButtons.map(hostText), ["1:1", "3:2✓"]);
-    assert.doesNotMatch(hostText(mounted.root), /图片清晰度|张数|auto|1K|2K|4:3/);
+    assert.deepEqual(sizeButtons.map(hostText), ["1K · 1:1", "1K · 3:2✓"]);
+    assert.doesNotMatch(hostText(mounted.root), /图片清晰度|张数|auto|4:3/);
+    assert.match(hostText(mounted.root), /1K · 1:1/);
   } finally {
     mounted.unmount();
   }
+});
+
+test("mounted 2K square chip still submits WxH 2048x2048", () => {
+  const emitted = [];
+  const mounted = mountAiImageGenerator(imageComponentProps({
+    size: "1024x1024",
+    sizeOptions: [
+      { value: "1024x1024", label: "1K · 1:1" },
+      { value: "2048x2048", label: "2K · 1:1" },
+    ],
+    quality: "auto",
+    qualityOptions: [
+      { value: "auto", label: "auto" },
+      { value: "low", label: "low" },
+    ],
+    count: 1,
+    countOptions: [{ value: 1, label: "1" }],
+    onUpdateSize: (value) => emitted.push(value),
+  }));
+  try {
+    const sizeButtons = hostNodes(mounted.root)
+      .filter(node => hostClass(node).split(/\s+/).includes("ai-image-generator__aspect"));
+    assert.deepEqual(sizeButtons.map(hostText), ["1K · 1:1✓", "2K · 1:1"]);
+    sizeButtons[1].props.onClick();
+    assert.deepEqual(emitted, ["2048x2048"]);
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("web image workspace reloads schema on model switch and labels 1K vs 2K", () => {
+  const source = readFileSync(new URL("../admin-vue/src/App.vue", import.meta.url), "utf8");
+  assert.match(source, /loadAiImageModuleSchema\(true\)/);
+  assert.match(source, /applyOnlineImageFormToLoadedSchema\(\)/);
+  assert.match(source, /displayGptImageSizeLabel/);
+  const labelSource = readFileSync(new URL("../admin-vue/src/utils/gptImageSizeLabel.ts", import.meta.url), "utf8");
+  assert.match(labelSource, /1K/);
+  assert.match(labelSource, /2K/);
+  const editor = readFileSync(new URL("../admin-vue/src/components/billing/PlanEditorDialog.vue", import.meta.url), "utf8");
+  assert.match(editor, /value="auto"/);
+  assert.match(editor, /value="low"/);
+  assert.match(editor, /value="medium"/);
+  assert.doesNotMatch(editor, /value="standard"/);
+  assert.doesNotMatch(editor, /value="hd"/);
+  assert.match(editor, /canonicalizeImageQualityLimits/);
 });
 
 test("workbench wires exact image schema and delegates image submission to the production orchestrator", () => {
@@ -1235,6 +1318,9 @@ test("workbench wires exact image schema and delegates image submission to the p
   assert.match(source, /restoreImageInspirationSelection/);
   assert.match(source, /inspirationDraft: activeInspirationDraft.value/);
   assert.match(source, /await submitCanonicalImageTask\(/);
+  assert.match(source, /watch\(selectedImageModelCode/);
+  assert.match(source, /void loadImageSchemaForModel\(modelCode\)/);
+  assert.match(source, /toCanonicalImageSelection\(contract, pending\)/);
   assert.match(source, /imageReferenceUploadCache/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
   assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);
