@@ -1,0 +1,1637 @@
+{
+  "generatedAt": "2026-08-17T12:53:41.927Z",
+  "base": "https://newapi.zs-kjhn.cn",
+  "model": "gpt-image-2",
+  "samplingNote": "output_format=jpeg to avoid OpenResty 504 on large PNG b64; usage.output_tokens absent from Images API response",
+  "fx": {
+    "usdCny": 6.748651,
+    "source": "open.er-api.com",
+    "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+  },
+  "catalog": {
+    "model_name": "gpt-image-2",
+    "vendor_id": 4,
+    "quota_type": 1,
+    "model_ratio": 0,
+    "model_price": 0.1,
+    "owner_by": "",
+    "completion_ratio": 0,
+    "enable_groups": [
+      "default",
+      "vip"
+    ],
+    "supported_endpoint_types": [
+      "openai"
+    ]
+  },
+  "groupRatio": {
+    "default": 1,
+    "vip": 1
+  },
+  "rows": [
+    {
+      "label": "1k-1024x1024-low-n1",
+      "request": {
+        "label": "1k-1024x1024-low-n1",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1024x1024",
+        "quality": "low",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 22766,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171234039627112938268d9d6rJfSszAG"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 170534,
+          "decodedSize": "1024x1024"
+        }
+      ],
+      "outputSizeHint": "1024x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.006,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.040491906,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -5.748651,
+      "costUsd": 0.006,
+      "costCny": 0.040491906,
+      "costPoints": 4.0491906,
+      "sellPoints": 10,
+      "sellCny": 0.1,
+      "marginCny": 0.059508094000000004,
+      "marginRate": 0.59508094
+    },
+    {
+      "label": "1k-1024x1024-medium-n1",
+      "request": {
+        "label": "1k-1024x1024-medium-n1",
+        "size": "1024x1024",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1024x1024",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 56753,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171234274300970828268d9d6aRrY8tAW"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 158560,
+          "decodedSize": "1024x1024"
+        }
+      ],
+      "outputSizeHint": "1024x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.053,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.357678503,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": 0.053,
+      "costCny": 0.357678503,
+      "costPoints": 35.7678503,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": 0.19232149700000006,
+      "marginRate": 0.3496754490909092
+    },
+    {
+      "label": "1k-1024x1024-high-n1",
+      "request": {
+        "label": "1k-1024x1024-high-n1",
+        "size": "1024x1024",
+        "quality": "high",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1024x1024",
+        "quality": "high",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 504,
+      "latencyMs": 90868,
+      "headers": {},
+      "imageCount": null,
+      "imageMeta": [],
+      "outputSizeHint": null,
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "raw"
+      ],
+      "error": {
+        "raw": "<html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n<hr><center>openresty</center>\r\n</body>\r\n</html>\r\n"
+      },
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.211,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 1.4239653609999998,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": 0.6932431363636364,
+      "costUsd": 0.211,
+      "costCny": 1.4239653609999998,
+      "costPoints": 142.3965361,
+      "sellPoints": 220,
+      "sellCny": 2.2,
+      "marginCny": 0.7760346390000004,
+      "marginRate": 0.35274301772727285
+    },
+    {
+      "label": "1k-1024x1536-low-n1",
+      "request": {
+        "label": "1k-1024x1536-low-n1",
+        "size": "1024x1536",
+        "quality": "low",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1024x1536",
+        "quality": "low",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 22681,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171238255270984128268d9d6bFYU7PVc"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 209302,
+          "decodedSize": "1024x1536"
+        }
+      ],
+      "outputSizeHint": "1024x1536",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.005,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.033743255,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -5.748651,
+      "costUsd": 0.005,
+      "costCny": 0.033743255,
+      "costPoints": 3.3743255,
+      "sellPoints": 10,
+      "sellCny": 0.1,
+      "marginCny": 0.066256745,
+      "marginRate": 0.6625674500000001
+    },
+    {
+      "label": "1k-1024x1536-medium-n1",
+      "request": {
+        "label": "1k-1024x1536-medium-n1",
+        "size": "1024x1536",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1024x1536",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 39077,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171238482038614578268d9d6bOkCrRlC"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 208349,
+          "decodedSize": "1024x1536"
+        }
+      ],
+      "outputSizeHint": "1024x1536",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.041,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.276694691,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": 0.041,
+      "costCny": 0.276694691,
+      "costPoints": 27.6694691,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": 0.27330530900000005,
+      "marginRate": 0.4969187436363637
+    },
+    {
+      "label": "1k-1024x1536-high-n1",
+      "request": {
+        "label": "1k-1024x1536-high-n1",
+        "size": "1024x1536",
+        "quality": "high",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1024x1536",
+        "quality": "high",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 90111,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171239269739829008268d9d6r39g612A"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 248653,
+          "decodedSize": "1024x1536"
+        }
+      ],
+      "outputSizeHint": "1024x1536",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.165,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 1.113527415,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": 0.6932431363636364,
+      "costUsd": 0.165,
+      "costCny": 1.113527415,
+      "costPoints": 111.35274150000001,
+      "sellPoints": 220,
+      "sellCny": 2.2,
+      "marginCny": 1.086472585,
+      "marginRate": 0.49385117500000003
+    },
+    {
+      "label": "1k-1536x1024-low-n1",
+      "request": {
+        "label": "1k-1536x1024-low-n1",
+        "size": "1536x1024",
+        "quality": "low",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1536x1024",
+        "quality": "low",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 22010,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171240574161663658268d9d6MOSkvef0"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 224314,
+          "decodedSize": "1536x1024"
+        }
+      ],
+      "outputSizeHint": "1536x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.005,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.033743255,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -5.748651,
+      "costUsd": 0.005,
+      "costCny": 0.033743255,
+      "costPoints": 3.3743255,
+      "sellPoints": 10,
+      "sellCny": 0.1,
+      "marginCny": 0.066256745,
+      "marginRate": 0.6625674500000001
+    },
+    {
+      "label": "1k-1536x1024-medium-n1",
+      "request": {
+        "label": "1k-1536x1024-medium-n1",
+        "size": "1536x1024",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1536x1024",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 42996,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171241194312098378268d9d6ZPEChxOe"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 245913,
+          "decodedSize": "1536x1024"
+        }
+      ],
+      "outputSizeHint": "1536x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.041,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.276694691,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": 0.041,
+      "costCny": 0.276694691,
+      "costPoints": 27.6694691,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": 0.27330530900000005,
+      "marginRate": 0.4969187436363637
+    },
+    {
+      "label": "1k-1536x1024-high-n1",
+      "request": {
+        "label": "1k-1536x1024-high-n1",
+        "size": "1536x1024",
+        "quality": "high",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1536x1024",
+        "quality": "high",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 85377,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171242023661577808268d9d6pYRSZMv2"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 234275,
+          "decodedSize": "1536x1024"
+        }
+      ],
+      "outputSizeHint": "1536x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.165,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 1.113527415,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": 0.6932431363636364,
+      "costUsd": 0.165,
+      "costCny": 1.113527415,
+      "costPoints": 111.35274150000001,
+      "sellPoints": 220,
+      "sellCny": 2.2,
+      "marginCny": 1.086472585,
+      "marginRate": 0.49385117500000003
+    },
+    {
+      "label": "n-1024x1024-medium-n2",
+      "request": {
+        "label": "n-1024x1024-medium-n2",
+        "size": "1024x1024",
+        "quality": "medium",
+        "n": 2,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 2,
+        "size": "1024x1024",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 83672,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171243281932867648268d9d69Vf3zvUM"
+      },
+      "imageCount": 2,
+      "imageMeta": [
+        {
+          "b64Bytes": 157395,
+          "decodedSize": "1024x1024"
+        },
+        {
+          "b64Bytes": 175214,
+          "decodedSize": "1024x1024"
+        }
+      ],
+      "outputSizeHint": "1024x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.106,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 0.715357006,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.2,
+      "newapiCatalogCny": 1.3497302,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": 0.106,
+      "costCny": 0.715357006,
+      "costPoints": 71.5357006,
+      "sellPoints": 110,
+      "sellCny": 1.1,
+      "marginCny": 0.3846429940000001,
+      "marginRate": 0.3496754490909092
+    },
+    {
+      "label": "n-1024x1024-medium-n3",
+      "request": {
+        "label": "n-1024x1024-medium-n3",
+        "size": "1024x1024",
+        "quality": "medium",
+        "n": 3,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 3,
+        "size": "1024x1024",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 58851,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171244554087699638268d9d6RBNTMvSe"
+      },
+      "imageCount": 3,
+      "imageMeta": [
+        {
+          "b64Bytes": 170896,
+          "decodedSize": "1024x1024"
+        },
+        {
+          "b64Bytes": 176934,
+          "decodedSize": "1024x1024"
+        },
+        {
+          "b64Bytes": 164527,
+          "decodedSize": "1024x1024"
+        }
+      ],
+      "outputSizeHint": "1024x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.159,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 1.0730355089999999,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.30000000000000004,
+      "newapiCatalogCny": 2.0245953,
+      "catalogMarginRate": -0.22702745454545467,
+      "costUsd": 0.159,
+      "costCny": 1.0730355089999999,
+      "costPoints": 107.30355089999999,
+      "sellPoints": 165,
+      "sellCny": 1.65,
+      "marginCny": 0.576964491,
+      "marginRate": 0.34967544909090914
+    },
+    {
+      "label": "n-1024x1024-medium-n4",
+      "request": {
+        "label": "n-1024x1024-medium-n4",
+        "size": "1024x1024",
+        "quality": "medium",
+        "n": 4,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 4,
+        "size": "1024x1024",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 65395,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171245507784253908268d9d6rgvogpZK"
+      },
+      "imageCount": 4,
+      "imageMeta": [
+        {
+          "b64Bytes": 164515,
+          "decodedSize": "1024x1024"
+        },
+        {
+          "b64Bytes": 163811,
+          "decodedSize": "1024x1024"
+        },
+        {
+          "b64Bytes": 156137,
+          "decodedSize": "1024x1024"
+        },
+        {
+          "b64Bytes": 172006,
+          "decodedSize": "1024x1024"
+        }
+      ],
+      "outputSizeHint": "1024x1024",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": 0.212,
+      "officialSource": "openai-1k-calculator-estimate",
+      "officialCny": 1.430714012,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.4,
+      "newapiCatalogCny": 2.6994604,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": 0.212,
+      "costCny": 1.430714012,
+      "costPoints": 143.0714012,
+      "sellPoints": 220,
+      "sellCny": 2.2,
+      "marginCny": 0.7692859880000003,
+      "marginRate": 0.3496754490909092
+    },
+    {
+      "label": "auto-n1-sample-1",
+      "request": {
+        "label": "auto-n1-sample-1",
+        "size": "auto",
+        "quality": "auto",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 22022,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171246557113173708268d9d6BU5pePNh"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 234300,
+          "decodedSize": "1402x1122"
+        }
+      ],
+      "outputSizeHint": "1402x1122",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "auto-n1-sample-2",
+      "request": {
+        "label": "auto-n1-sample-2",
+        "size": "auto",
+        "quality": "auto",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 18535,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171247180448774338268d9d6mthP77L4"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 225751,
+          "decodedSize": "1402x1122"
+        }
+      ],
+      "outputSizeHint": "1402x1122",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "auto-n1-sample-3",
+      "request": {
+        "label": "auto-n1-sample-3",
+        "size": "auto",
+        "quality": "auto",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 21448,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171247379848251398268d9d6emOigkys"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 229294,
+          "decodedSize": "1402x1122"
+        }
+      ],
+      "outputSizeHint": "1402x1122",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "auto-n1-sample-4",
+      "request": {
+        "label": "auto-n1-sample-4",
+        "size": "auto",
+        "quality": "auto",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 22396,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171247579413334958268d9d6nmS7LmzM"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 238006,
+          "decodedSize": "1254x1254"
+        }
+      ],
+      "outputSizeHint": "1254x1254",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "auto-n1-sample-5",
+      "request": {
+        "label": "auto-n1-sample-5",
+        "size": "auto",
+        "quality": "auto",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "auto",
+        "quality": "auto",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 27782,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171248224487064458268d9d6vk3sKNhD"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 242707,
+          "decodedSize": "1402x1122"
+        }
+      ],
+      "outputSizeHint": "1402x1122",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "hidden-1280x720-medium-n1",
+      "request": {
+        "label": "hidden-1280x720-medium-n1",
+        "size": "1280x720",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "1280x720",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 42367,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171248480078218578268d9d6PdWfo4Ce"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 139526,
+          "decodedSize": "1280x720"
+        }
+      ],
+      "outputSizeHint": "1280x720",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "hidden-720x1280-medium-n1",
+      "request": {
+        "label": "hidden-720x1280-medium-n1",
+        "size": "720x1280",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "720x1280",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 37029,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171249301102149968268d9d6ukSQ8yOG"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 152777,
+          "decodedSize": "720x1280"
+        }
+      ],
+      "outputSizeHint": "720x1280",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "hidden-2048x1152-medium-n1",
+      "request": {
+        "label": "hidden-2048x1152-medium-n1",
+        "size": "2048x1152",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "2048x1152",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 40248,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171250072475702038268d9d6PYBdqg6B"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 280008,
+          "decodedSize": "2048x1152"
+        }
+      ],
+      "outputSizeHint": "2048x1152",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "hidden-2048x2048-medium-n1",
+      "request": {
+        "label": "hidden-2048x2048-medium-n1",
+        "size": "2048x2048",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "2048x2048",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 60640,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171250472302686218268d9d6s98UT2W9"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 463021,
+          "decodedSize": "2048x2048"
+        }
+      ],
+      "outputSizeHint": "2048x2048",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "hidden-3840x2160-medium-n1",
+      "request": {
+        "label": "hidden-3840x2160-medium-n1",
+        "size": "3840x2160",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "3840x2160",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 55602,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171251482538817628268d9d6IrxQqqwr"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 707945,
+          "decodedSize": "3840x2160"
+        }
+      ],
+      "outputSizeHint": "3840x2160",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    },
+    {
+      "label": "hidden-2160x3840-medium-n1",
+      "request": {
+        "label": "hidden-2160x3840-medium-n1",
+        "size": "2160x3840",
+        "quality": "medium",
+        "n": 1,
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "model": "gpt-image-2",
+        "output_format": "jpeg"
+      },
+      "providerPayload": {
+        "model": "gpt-image-2",
+        "prompt": "Phase 2.7 cost sample: a simple red ceramic mug on a white table, studio lighting, no text.",
+        "n": 1,
+        "size": "2160x3840",
+        "quality": "medium",
+        "output_format": "jpeg"
+      },
+      "endpoint": "images/generations",
+      "httpStatus": 200,
+      "latencyMs": 58872,
+      "headers": {
+        "x-new-api-version": "v1.0.0-rc.21",
+        "x-oneapi-request-id": "202608171252439047504328268d9d6QdBH5vK9"
+      },
+      "imageCount": 1,
+      "imageMeta": [
+        {
+          "b64Bytes": 684194,
+          "decodedSize": "2160x3840"
+        }
+      ],
+      "outputSizeHint": "2160x3840",
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "total_tokens": null,
+        "text_input_tokens": null,
+        "image_input_tokens": null,
+        "quota": null
+      },
+      "responseKeys": [
+        "created",
+        "data"
+      ],
+      "error": null,
+      "fallback": null,
+      "fx": {
+        "usdCny": 6.748651,
+        "source": "open.er-api.com",
+        "asOf": "Mon, 17 Aug 2026 00:02:31 +0000"
+      },
+      "officialUsd": null,
+      "officialSource": null,
+      "officialCny": null,
+      "newapiUsd": null,
+      "newapiNote": "Images API response has no usage/quota; NewAPI /api/pricing gpt-image-2 quota_type=1 model_price=0.1 (treated as USD per image * n, unconfirmed debit)",
+      "newapiCatalogUsd": 0.1,
+      "newapiCatalogCny": 0.6748651,
+      "catalogMarginRate": -0.22702745454545445,
+      "costUsd": null,
+      "costCny": null,
+      "costPoints": null,
+      "sellPoints": 55,
+      "sellCny": 0.55,
+      "marginCny": null,
+      "marginRate": null
+    }
+  ]
+}
