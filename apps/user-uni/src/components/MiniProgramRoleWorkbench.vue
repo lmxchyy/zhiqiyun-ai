@@ -3758,9 +3758,7 @@ onMounted(async () => {
           prompt: inspirationDraft.basePrompt,
           negativePrompt: inspirationDraft.negativePrompt,
           model: inspirationDraft.modelHint,
-          capabilityKey: inspirationDraft.capabilityKey,
-          integrityToken: inspirationDraft.integrityToken,
-          inspirationTemplateRef: inspirationDraft.templateRef,
+          inspirationDraft,
           referenceImages: inspirationReferenceURLs,
           mode: inspirationDraft.contentType,
         }
@@ -3816,6 +3814,7 @@ onMounted(async () => {
         : undefined;
       restoredCreationParams.value = {
         ...canonicalImageParameters(draftMatchesMode ? nestedParameters : undefined),
+        ...(activeInspirationDraft.value ? { inspirationDraft: activeInspirationDraft.value } : {}),
         model: rowString(studioDraft, "model"),
         size: draftMatchesMode ? rowString(studioDraft, "size") : "",
         quality: draftMatchesMode ? draftQuality : undefined,
