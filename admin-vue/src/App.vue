@@ -3,220 +3,70 @@
   <ConnectorAuthorizationCenter v-if="isConnectorAuthorizationRoute" />
   <FeishuConnectorSetup v-else-if="isFeishuConnectorSetupRoute" />
   <WebLoginPage v-else-if="isLoginRoute" :register-href="authRegisterHref" @authenticated="handleWebLoginAuthenticated" />
-  <section v-else-if="isRegisterRoute" class="admin-auth-shell">
-    <div class="admin-auth-card">
-      <div class="admin-auth-brand">
-        <img :src="xianzhiLogo" alt="知启云 AI" />
-        <div>
-          <strong>知启云 AI</strong>
-          <span>{{ isRegisterRoute ? "Invite Register" : "Unified Login" }}</span>
-        </div>
-      </div>
-      <div class="admin-auth-head">
-        <el-tag effect="dark" type="primary">{{ isRegisterRoute ? "邀请注册" : "统一入口" }}</el-tag>
-        <h1>{{ isRegisterRoute ? "注册知启云 AI" : "登录知启云 AI" }}</h1>
-        <p>{{ isRegisterRoute ? "通过代理商邀请注册后，账号会自动绑定来源渠道。" : "一个入口进入用户端、代理端和主控后台。" }}</p>
-      </div>
-
-      <form v-if="isRegisterRoute" class="admin-auth-form" @submit.prevent="submitRegister">
-        <label>
-          <span>用户名</span>
-          <input v-model.trim="registerForm.username" autocomplete="name" placeholder="请输入用户名" />
-        </label>
-        <label>
-          <span>邮箱</span>
-          <input v-model.trim="registerForm.email" autocomplete="email" placeholder="your@email.com" />
-        </label>
-        <label>
-          <span>密码</span>
-          <input v-model="registerForm.password" autocomplete="new-password" type="password" placeholder="至少 8 位" />
-        </label>
-        <label>
-          <span>确认密码</span>
-          <input v-model="registerForm.confirmPassword" autocomplete="new-password" type="password" placeholder="再次输入密码" />
-        </label>
-        <label>
-          <span>邀请码</span>
-          <input v-model.trim="registerForm.inviteCode" autocomplete="off" placeholder="可选，代理邀请链接会自动带入" />
-        </label>
-        <label class="admin-auth-check">
-          <input v-model="registerAgreementAccepted" type="checkbox" />
-          <span>我已阅读并同意《用户协议》和《隐私政策》</span>
-        </label>
-        <button class="admin-auth-submit" type="submit" :disabled="authSubmitting">{{ authSubmitting ? "注册中..." : "注册并进入工作台" }}</button>
-        <a class="admin-auth-link" :href="authLoginHref">已有账号，去登录</a>
-      </form>
-
-    </div>
-  </section>
-  <el-container v-else-if="authReady" :class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'user-agent-figma-shell': isUserConsole && store.activeModuleId === 'userAgentCenter', 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]">
-    <div v-if="mobileDrawerOpen" class="mobile-drawer-mask" @click="mobileDrawerOpen = false"></div>
-    <el-aside width="200px" class="admin-sidebar">
-      <div class="brand">
-        <button class="brand-home-button" type="button" :title="brandHomeTitle" :aria-label="brandHomeTitle" @click="goBrandHome">
-          <img class="brand-logo" :src="xianzhiLogo" alt="知启云 AI" />
-          <span class="brand-copy">
-            <strong>知启云 AI</strong>
-            <small>{{ isUserConsole ? "User Console" : isAgentConsole ? "Agent Console" : "Master SaaS Console" }}</small>
-          </span>
-        </button>
-      </div>
-      <div class="sidebar-section-label">{{ isUserConsole ? "用户导航" : isAgentConsole ? "代理导航" : "平台导航" }}</div>
-      <nav v-if="!isUserConsole" class="collapsed-icon-menu" aria-label="折叠模块导航">
-        <div v-for="group in visibleModuleGroups" :key="group.id" :class="['collapsed-icon-group', { 'is-active': isGroupActive(group) }]">
-          <button class="collapsed-icon-button" type="button" :aria-label="group.title" @click="selectAdminModule(group.items[0]?.id || store.activeModuleId)">
-            <el-icon><component :is="group.icon" /></el-icon>
-          </button>
-          <div class="collapsed-flyout" role="menu">
-            <strong>{{ group.title }}</strong>
-            <button v-for="item in group.items" :key="item.id" :class="{ 'is-active': item.id === activeSidebarModuleId }" type="button" role="menuitem" @click.stop="selectAdminModule(item.id)">
-              <el-icon><component :is="iconFor(item.id)" /></el-icon>
-              <span>{{ item.title }}</span>
-            </button>
-          </div>
-        </div>
-      </nav>
-      <el-menu v-if="isUserConsole" class="sidebar-menu user-flat-sidebar-menu" :default-active="activeUserMenuId" @select="selectUserFlatMenu">
-        <el-menu-item v-for="item in userFlatMenuItems" :key="item.id" :index="item.id" :aria-label="item.title" :title="desktopSidebarCollapsed ? item.title : undefined">
-          <el-tooltip :content="item.title" placement="right" :disabled="!desktopSidebarCollapsed" :show-after="120" :hide-after="0" popper-class="user-sidebar-tooltip">
-            <span class="user-sidebar-tooltip-target">
-              <el-icon><component :is="item.icon" /></el-icon>
-            </span>
-          </el-tooltip>
-          <span class="user-sidebar-menu-title">{{ item.title }}</span>
-        </el-menu-item>
-      </el-menu>
-      <el-menu v-else class="sidebar-menu" :default-active="activeSidebarModuleId" @select="selectAdminModule">
-        <el-sub-menu v-for="group in visibleModuleGroups" :key="group.id" :index="group.id">
-          <template #title>
-            <el-icon><component :is="group.icon" /></el-icon>
-            <span>{{ group.title }}</span>
-          </template>
-          <el-menu-item v-for="item in group.items" :key="item.id" :index="item.id">
-            <el-icon><component :is="iconFor(item.id)" /></el-icon>
-            <span>{{ item.title }}</span>
-          </el-menu-item>
-        </el-sub-menu>
-      </el-menu>
-
-      <aside v-if="isUserConsole" class="sidebar-plan-card">
-        <template v-if="isGuestUser">
-          <span>当前身份</span>
-          <div class="sidebar-plan-title"><strong>游客</strong><em>体验中</em></div>
-          <small>登录后查看会员、额度和创作记录</small>
-          <button type="button" @click="openWorkspaceLogin">登录后继续</button>
-        </template>
-        <template v-else>
-        <span>当前套餐</span>
-        <div class="sidebar-plan-title">
-          <strong>{{ sidebarPlan.name }}</strong>
-          <em>{{ sidebarPlan.status }}</em>
-        </div>
-        <small>有效期至：{{ sidebarPlan.expiresAt }}</small>
-        <div class="sidebar-plan-progress"><i :style="{ width: sidebarPlan.percent + '%' }"></i></div>
-        <span>可用点数</span>
-        <strong class="sidebar-plan-points">{{ sidebarPlan.availableText }} <small>/ {{ sidebarPlan.totalText }}</small></strong>
-        <button type="button" @click="selectAdminModule('userMembership')">去充值</button>
-        </template>
-      </aside>
-    </el-aside>
-    <el-container class="admin-workspace">
-      <div class="mobile-admin-bar">
-        <el-button class="mobile-collapse-button" :icon="Grid" aria-label="打开模块导航" @click="mobileDrawerOpen = true" />
-        <div class="mobile-admin-title">
-          <strong>{{ isUserConsole ? "用户后台" : isAgentConsole ? "代理商后台" : "主控 SaaS" }}</strong>
-          <small>{{ activeHeaderModuleTitle }}</small>
-        </div>
-        <div class="mobile-admin-actions">
-          <el-tag :type="store.error ? 'danger' : 'success'" effect="light">{{ store.error ? "API ERROR" : "API ONLINE" }}</el-tag>
-          <el-button v-if="isGuestUser" class="mobile-account-button" :icon="UserFilled" circle aria-label="登录" @click="openWorkspaceLogin" />
-          <el-dropdown v-else trigger="click" @command="handleAccountCommand">
-            <el-button class="mobile-account-button" :icon="UserFilled" circle aria-label="账号操作" />
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="profile"><el-icon><UserFilled /></el-icon><span>账号信息</span></el-dropdown-item>
-                <el-dropdown-item command="password"><el-icon><Lock /></el-icon><span>修改密码</span></el-dropdown-item>
-                <el-dropdown-item class="logout-dropdown-item" command="logout" divided><el-icon><SwitchButton /></el-icon><span>退出登录</span></el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </div>
-      <el-header class="admin-header">
-        <el-button class="admin-collapse-button" :icon="Grid" circle @click="toggleDesktopSidebar" />
-        <div class="header-title">
-          <div class="header-path">
-            <el-icon><component :is="activeGroupIcon" /></el-icon>
-            <span v-if="isUserConsole" class="header-single-title">{{ activeHeaderModuleTitle }}</span>
-            <el-breadcrumb v-else separator="/">
-              <el-breadcrumb-item>{{ activeGroupLabel }}</el-breadcrumb-item>
-              <el-breadcrumb-item>{{ activeHeaderModuleTitle }}</el-breadcrumb-item>
-            </el-breadcrumb>
-          </div>
-        </div>
-        <div class="header-actions">
-          <el-input v-if="!isUserConsole && !isAgentConsole" v-model="searchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="搜索当前模块" />
-          <el-input v-else v-model="globalSearchKeyword" class="header-search" :prefix-icon="Search" clearable placeholder="全局搜索菜单与业务记录（Ctrl K）" @focus="commandPaletteOpen = true" @keydown.enter="commandPaletteOpen = true" />
-          <el-button :icon="Refresh" circle :loading="store.loading" @click="() => store.loadActiveModule()" />
-          <el-dropdown trigger="click" @command="setElementSize">
-            <el-button class="size-button">
-              <span>{{ elementSizeLabel }}</span>
-              <el-icon><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item v-for="item in elementSizeOptions" :key="item.value" :command="item.value">{{ item.label }}</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-tag :type="store.error ? 'danger' : 'success'" effect="light">{{ store.error ? "API ERROR" : "API ONLINE" }}</el-tag>
-          <el-button v-if="isGuestUser" class="account-button" @click="openWorkspaceLogin">
-            <el-icon><UserFilled /></el-icon><span class="account-button-copy"><strong>游客</strong><small>点击登录</small></span>
-          </el-button>
-          <el-dropdown v-else trigger="click" @command="handleAccountCommand">
-            <el-button class="account-button">
-              <el-icon><UserFilled /></el-icon>
-              <span class="account-button-copy">
-                <strong>{{ currentAdmin?.name || "平台管理员" }}</strong>
-                <small v-if="currentAdmin?.email">{{ currentAdmin.email }}</small>
-              </span>
-              <el-icon><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="profile"><el-icon><UserFilled /></el-icon><span>账号信息</span></el-dropdown-item>
-                <el-dropdown-item command="password"><el-icon><Lock /></el-icon><span>修改密码</span></el-dropdown-item>
-                <el-dropdown-item class="logout-dropdown-item" command="logout" divided><el-icon><SwitchButton /></el-icon><span>退出登录</span></el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </el-header>
-      <nav v-if="!isUserConsole" class="admin-page-tabs" aria-label="已打开页面标签">
-        <button class="tabs-rail-button" type="button" aria-label="向左滚动标签" @click="scrollOpenTabs(-1)">«</button>
-        <div ref="tabsScrollRef" class="tabs-scroll">
-          <button v-for="tab in openTabs" :key="tab.id" :class="['page-tab', { 'is-active': tab.id === store.activeModuleId }]" type="button" @click="selectAdminModule(tab.id)">
-            <span>{{ tab.title }}</span>
-            <i v-if="openTabs.length > 1" role="button" aria-label="关闭标签" @click.stop="closeOpenTab(tab.id)">×</i>
-          </button>
-        </div>
-        <button class="tabs-rail-button" type="button" aria-label="向右滚动标签" @click="scrollOpenTabs(1)">»</button>
-        <button class="tabs-tool-button" type="button" aria-label="刷新当前页" @click="() => store.loadActiveModule()"><el-icon><Refresh /></el-icon></button>
-        <el-dropdown trigger="click" @command="handleTabsCommand">
-          <button class="tabs-tool-button" type="button" aria-label="标签页更多操作"><el-icon><Setting /></el-icon></button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="refresh"><el-icon><Refresh /></el-icon><span>刷新当前</span></el-dropdown-item>
-              <el-dropdown-item command="closeOthers"><span>关闭其它</span></el-dropdown-item>
-              <el-dropdown-item command="closeLeft"><span>关闭左侧</span></el-dropdown-item>
-              <el-dropdown-item command="closeRight"><span>关闭右侧</span></el-dropdown-item>
-              <el-dropdown-item command="closeAll" divided><span>关闭全部</span></el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </nav>
-      <el-main class="admin-main">
-        <el-alert v-if="store.error" :title="store.error" type="error" show-icon class="admin-alert" />
+  <AdminRegisterPage
+    v-else-if="isRegisterRoute"
+    :register-href="authLoginHref"
+    :register-form="registerForm"
+    :register-agreement-accepted="registerAgreementAccepted"
+    :submitting="authSubmitting"
+    @update:register-form="registerForm = $event"
+    @update:register-agreement-accepted="registerAgreementAccepted = $event"
+    @submit="submitRegister"
+  />
+  <AdminAuthenticatedShell
+    v-else-if="authReady"
+    :shell-class="['admin-shell', 'pure-admin-shell', { 'user-console-shell': isUserConsole, 'user-agent-figma-shell': isUserConsole && store.activeModuleId === 'userAgentCenter', 'mobile-drawer-open': mobileDrawerOpen, 'desktop-sidebar-collapsed': desktopSidebarCollapsed }]"
+    :mobile-drawer-open="mobileDrawerOpen"
+    :brand-home-title="brandHomeTitle"
+    :is-user-console="isUserConsole"
+    :is-agent-console="isAgentConsole"
+    :is-guest-user="isGuestUser"
+    :desktop-sidebar-collapsed="desktopSidebarCollapsed"
+    :visible-module-groups="visibleModuleGroups"
+    :active-sidebar-module-id="activeSidebarModuleId"
+    :user-flat-menu-items="userFlatMenuItems"
+    :active-user-menu-id="activeUserMenuId"
+    :sidebar-plan="sidebarPlan"
+    :icon-for="iconFor"
+    :is-group-active="isGroupActive"
+    :go-brand-home="goBrandHome"
+    :select-admin-module="selectAdminModule"
+    :select-user-flat-menu="selectUserFlatMenu"
+    :open-workspace-login="openWorkspaceLogin"
+    :header-title="isUserConsole ? '用户后台' : isAgentConsole ? '代理商后台' : '主控 SaaS'"
+    :active-header-module-title="activeHeaderModuleTitle"
+    :active-group-icon="activeGroupIcon"
+    :active-group-label="activeGroupLabel"
+    :api-error="Boolean(store.error)"
+    :loading="store.loading"
+    :search-keyword="searchKeyword"
+    :global-search-keyword="globalSearchKeyword"
+    :element-size-label="elementSizeLabel"
+    :element-size-options="elementSizeOptions"
+    :current-admin-name="currentAdmin?.name || '平台管理员'"
+    :current-admin-email="currentAdmin?.email || ''"
+    :grid-icon="Grid"
+    :search-icon="Search"
+    :refresh-icon="Refresh"
+    :arrow-down-icon="ArrowDown"
+    :user-filled-icon="UserFilled"
+    :lock-icon="Lock"
+    :switch-button-icon="SwitchButton"
+    :active-module-id="store.activeModuleId"
+    :open-tabs="openTabs"
+    @update:mobileDrawerOpen="mobileDrawerOpen = $event"
+    @toggle-desktop-sidebar="toggleDesktopSidebar"
+    @open-workspace-login="openWorkspaceLogin"
+    @open-command-palette="commandPaletteOpen = true"
+    @reload="store.loadActiveModule()"
+    @set-element-size="setElementSize"
+    @account-command="handleAccountCommand"
+    @update:searchKeyword="searchKeyword = $event"
+    @update:globalSearchKeyword="globalSearchKeyword = $event"
+    @select-module="selectAdminModule"
+    @close-tab="closeOpenTab"
+    @tabs-command="handleTabsCommand"
+  >        <el-alert v-if="store.error" :title="store.error" type="error" show-icon class="admin-alert" />
         <el-skeleton v-if="store.loading" :rows="10" animated />
         <section v-else class="page-stack">
           <AdminSectionTabs
@@ -227,119 +77,29 @@
             :tabs="activeAdminSectionTabs"
             @select="selectAdminModule"
           />
-          <section v-if="!isUserConsole && !isAgentConsole && searchKeyword.trim()" class="global-search-panel">
-            <div class="global-search-head">
-              <div><strong>搜索结果</strong><small>关键词：{{ searchKeyword.trim() }}</small></div>
-              <el-button size="small" @click="searchKeyword = ''">清空</el-button>
-            </div>
-            <div class="global-search-grid">
-              <article class="global-search-card">
-                <span>模块入口</span>
-                <button v-for="item in globalModuleResults" :key="item.id" type="button" @click="selectAdminModule(item.id)"><strong>{{ item.title }}</strong><small>{{ pageMeta[item.id]?.description || '进入模块查看详情' }}</small></button>
-                <el-empty v-if="!globalModuleResults.length" description="没有匹配模块" :image-size="56" />
-              </article>
-              <article class="global-search-card">
-                <span>当前模块数据</span>
-                <button v-for="item in currentRecordResults" :key="item.key" type="button" @click="openCurrentRecordResult(item)"><strong>{{ item.title }}</strong><small>{{ item.desc }}</small></button>
-                <el-empty v-if="!currentRecordResults.length" description="当前模块没有匹配记录" :image-size="56" />
-              </article>
-            </div>
-          </section>
-          <section v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="module-hero">
-            <div>
-              <el-tag effect="dark" type="primary">{{ activeModuleMeta.badge }}</el-tag>
-              <h2>{{ store.activeModule.title }}</h2>
-              <p>{{ activeModuleMeta.description }}</p>
-            </div>
-            <div class="module-hero-actions">
-              <el-button v-for="action in toolbarActions" :key="action.action" type="primary" :icon="Plus" @click="runAction(action.action)">{{ action.label }}</el-button>
-              <el-button :icon="Refresh" @click="() => store.loadActiveModule()">刷新数据</el-button>
-            </div>
-          </section>
-          <div v-if="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)" class="metric-grid">
-            <article v-for="metric in metrics" :key="metric.label" class="metric-card">
-              <span>{{ metric.label }}</span>
-              <strong>{{ metric.value }}</strong>
-              <small>{{ metricHint(metric.label) }}</small>
-            </article>
-          </div>
+          <AdminWorkspaceOverview
+            :search-keyword="searchKeyword"
+            :show-search-panel="!isUserConsole && !isAgentConsole && Boolean(searchKeyword.trim())"
+            :show-overview="!['analysis', 'workbench', 'partnerDashboard', 'operationCenterDashboard', 'userDashboard', 'userAgentCenter', 'knowledgeAdmin', 'storageCenter', 'pricePlanGovernance', 'personalPointsGovernance', ...mediaOperationModuleIds, ...imageWorkspaceModuleIds, 'userWirelessCanvas', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'userMembership', 'userOrders', ...aiCapabilityModuleIds, 'apiSettings', ...billingModuleIds, ...enterpriseModuleIds, ...customerAttributionModuleIds].includes(store.activeModuleId)"
+            :active-module-title="store.activeModule.title"
+            :active-module-meta="activeModuleMeta"
+            :global-module-results="globalModuleResults"
+            :current-record-results="currentRecordResults"
+            :metrics="metrics"
+            :toolbar-actions="toolbarActions"
+            :page-meta="pageMeta"
+            :plus-icon="Plus"
+            :refresh-icon="Refresh"
+            :metric-hint="metricHint"
+            :select-admin-module="selectAdminModule"
+            :open-current-record-result="openCurrentRecordResult"
+            :run-action="runAction"
+            :reload="() => store.loadActiveModule()"
+            @clear-search="searchKeyword = ''"
+          />
           <AiCapabilityDomain v-if="aiCapabilityModuleIds.includes(store.activeModuleId)" :model="aiCapabilityViewModel" />
           <!-- AI capability presentation moved to components/ai/AiCapabilityDomain.vue. -->
-          <section v-else-if="store.activeModuleId === 'userDashboard'" class="user-home-page">
-            <section class="user-home-layout">
-              <main class="user-home-main">
-                <section class="user-home-hero">
-                  <span class="user-home-shard user-home-shard-left"></span>
-                  <span class="user-home-shard user-home-shard-right"></span>
-                  <div class="user-home-title-block">
-                    <h2>专属 AI 视觉设计师已待命，<em>即刻开启创作</em></h2>
-                    <p>输入想法、上传参考图，或从下面的 Agent 入口开始一段创作。</p>
-                  </div>
-
-                  <div class="user-home-composer">
-                    <div class="user-home-mode-tabs">
-                      <button v-for="mode in userHomeCreationModes" :key="mode.id" type="button" :class="{ active: userHomeCreationMode === mode.id }" @click="selectUserHomeCreationMode(mode.id)">
-                        <el-icon><component :is="mode.icon" /></el-icon>
-                        <span>{{ mode.title }}</span>
-                      </button>
-                    </div>
-                    <el-input v-model="onlineImageForm.prompt" type="textarea" :rows="4" maxlength="2000" resize="none" placeholder="描述你想生成的画面、视频或文档..." />
-                    <div class="user-home-toolbar">
-                      <button type="button" @click="selectAdminModule('userAiImage')"><el-icon><Plus /></el-icon>上传参考图</button>
-                      <button type="button" @click="applyUserHomePrompt('润色')"><el-icon><EditPen /></el-icon>润色</button>
-                      <button type="button" @click="applyUserHomePrompt('爆款复刻')"><el-icon><Star /></el-icon>爆款复刻</button>
-                      <el-select v-model="onlineImageForm.model" class="user-home-select" size="default">
-                        <el-option v-for="model in onlineModelOptions" :key="model.value" :label="model.label" :value="model.value" />
-                      </el-select>
-                      <el-select v-model="onlineImageForm.ratio" class="user-home-select is-compact" size="default">
-                        <el-option v-for="ratio in userHomeRatioOptions" :key="ratio.value" :label="ratio.label" :value="ratio.value" />
-                      </el-select>
-                      <el-select v-model="onlineImageForm.quality" class="user-home-select is-compact" size="default">
-                        <el-option label="标准" value="standard" />
-                        <el-option label="高清" value="hd" />
-                        <el-option label="高质量" value="high" />
-                      </el-select>
-                      <button type="button" class="user-home-generate" @click="launchUserHomeCreation">生成 <el-icon><Star /></el-icon></button>
-                    </div>
-                  </div>
-                </section>
-
-                <section class="user-home-agent-row" aria-label="快捷 Agent">
-                  <button v-for="agent in userHomeAgentEntries" :key="agent.title" type="button" @click="openUserHomeEntry(agent)">
-                    <el-icon><component :is="agent.icon" /></el-icon>
-                    <span>{{ agent.title }}</span>
-                  </button>
-                </section>
-
-                <section class="user-home-template-section">
-                  <div class="user-home-section-head">
-                    <h3>模板广场</h3>
-                    <button type="button" @click="selectAdminModule('userAiImage')">查看全部</button>
-                  </div>
-                  <div class="user-home-template-grid">
-                    <button v-for="template in userHomeTemplates" :key="template.title" type="button" class="user-home-template-card" @click="openUserHomeEntry(template)">
-                      <span :class="['user-home-template-cover', template.coverClass]"><em>{{ template.coverText }}</em></span>
-                      <strong>{{ template.title }}</strong>
-                      <small>{{ template.desc }}</small>
-                    </button>
-                  </div>
-                </section>
-              </main>
-
-              <aside class="user-home-inspiration">
-                <div class="user-home-inspiration-head">
-                  <h3>灵感模板</h3>
-                </div>
-                <button v-for="item in userHomeInspirations" :key="item.title" type="button" class="user-home-inspiration-item" @click="openUserHomeEntry(item)">
-                  <span>
-                    <strong>{{ item.title }}</strong>
-                    <small>{{ item.desc }}</small>
-                  </span>
-                  <i :class="['user-home-inspiration-thumb', item.coverClass]"></i>
-                </button>
-              </aside>
-            </section>
-          </section>
+          <UserHomeWorkspace v-else-if="store.activeModuleId === 'userDashboard'" :user-home-creation-modes="userHomeCreationModes" :user-home-creation-mode="userHomeCreationMode" :online-image-form="onlineImageForm" :online-model-options="onlineModelOptions" :user-home-ratio-options="userHomeRatioOptions" :user-home-agent-entries="userHomeAgentEntries" :user-home-templates="userHomeTemplates" :user-home-inspirations="userHomeInspirations" :select-user-home-creation-mode="selectUserHomeCreationMode" :select-admin-module="selectAdminModule" :apply-user-home-prompt="applyUserHomePrompt" :launch-user-home-creation="launchUserHomeCreation" :open-user-home-entry="openUserHomeEntry" />
           <section v-else-if="false" class="online-image-page online-image-studio">
             <section class="online-studio-shell">
               <div class="online-studio-compose">
@@ -382,14 +142,14 @@
                 <div class="online-control-grid online-source-controls">
                   <label><span>平台</span><el-select v-model="onlineImageForm.provider"><el-option v-for="provider in onlineProviderOptions" :key="provider.value" :label="provider.label" :value="provider.value" /></el-select></label>
                   <label><span>模型</span><el-select v-model="onlineImageForm.model"><el-option v-for="model in onlineModelOptions" :key="model.value" :label="model.label" :value="model.value" /></el-select></label>
-                  <label><span>质量</span><el-select v-model="onlineImageForm.quality"><el-option label="标准" value="standard" /><el-option label="高清" value="high" /><el-option label="快速草稿" value="draft" /></el-select></label>
+                  <label><span>质量</span><el-select v-model="onlineImageForm.quality"><el-option label="自动" value="auto" /><el-option label="低" value="low" /><el-option label="中" value="medium" /><el-option label="高" value="high" /></el-select></label>
                   <label><span>数量</span><el-select v-model="onlineImageForm.count"><el-option v-for="count in onlineCountOptions" :key="count" :label="`×${count}`" :value="count" /></el-select></label>
                 </div>
 
-                <div class="online-section-title"><span>Size</span><small>支持 1K、2K、自定义尺寸和自定义比例</small></div>
+                <div class="online-section-title"><span>Size</span><small>官方尺寸：auto、1K、720p、2K、4K</small></div>
                 <div class="online-control-grid online-size-controls">
-                  <label><span>尺寸</span><el-select v-model="onlineImageForm.resolution"><el-option label="1K" value="1k" /><el-option label="2K" value="2k" /><el-option label="自定义尺寸" value="custom" /></el-select></label>
-                  <label><span>比例</span><el-select v-model="onlineImageForm.ratio"><el-option label="比例为空" value="" /><el-option label="1:1 方图" value="square" /><el-option label="16:9 横图" value="16:9" /><el-option label="9:16 竖图" value="9:16" /><el-option label="自定义比例" value="custom" /></el-select></label>
+                  <label><span>尺寸</span><el-select v-model="onlineImageForm.resolution"><el-option label="1K" value="1k" /><el-option label="2K" value="2k" /><el-option label="4K" value="4k" /><el-option label="自定义尺寸" value="custom" /></el-select></label>
+                  <label><span>比例</span><el-select v-model="onlineImageForm.ratio"><el-option label="比例为空" value="" /><el-option label="1:1 方图" value="square" /><el-option label="3:2 横图" value="3:2" /><el-option label="2:3 竖图" value="2:3" /><el-option label="16:9 横图" value="16:9" /><el-option label="9:16 竖图" value="9:16" /></el-select></label>
                   <label><span>宽度</span><el-input-number v-model="onlineImageForm.width" :min="64" :step="64" controls-position="right" /></label>
                   <label><span>高度</span><el-input-number v-model="onlineImageForm.height" :min="64" :step="64" controls-position="right" /></label>
                   <label><span>消耗点数预估</span><strong class="online-cost">{{ onlineEstimatedCost }} 点</strong></label>
@@ -458,306 +218,47 @@
               <el-empty v-else description="暂无在线生图任务" />
             </el-card>
           </section>
-          <section v-else-if="store.activeModuleId === 'userAgentCenter'" :class="['user-agent-center-page', { 'has-officecli-workspace': officeCLIWorkspaceOpen || agentCenterWorkspace, 'has-agent-workspace': officeCLIWorkspaceOpen || agentCenterWorkspace }]">
-            <div class="user-agent-desktop-view">
-              <section v-if="officeCLIWorkspaceOpen" class="user-agent-officecli-workspace">
-                <header class="officecli-workspace-head">
-                  <button type="button" @click="closeOfficeCLIWorkspace">返回智能体中心</button>
-                  <div>
-                    <span>OfficeCLI 文档智能体</span>
-                    <h2>文档生成工作台</h2>
-                    <p>选择 Word、Excel 或 PPT，输入需求后由后端 OfficeCLI 运行层生成可下载文件。</p>
-                  </div>
-                  <em :class="['officecli-status-badge', officeCLIStatusTone]">{{ officeCLIStatusLabel }}</em>
-                </header>
-
-                <section class="user-agent-officecli-workbench is-workspace">
-                  <header>
-                    <div>
-                      <span>文档生成控制台</span>
-                      <strong>输入需求，一键生成 Office 文件</strong>
-                    </div>
-                    <button type="button" :disabled="officeCLIDocumentGenerating" @click="submitOfficeCLIDocument">
-                      {{ officeCLIDocumentGenerating ? "生成中..." : "生成文档" }}
-                    </button>
-                  </header>
-                  <div class="officecli-workbench-body">
-                    <div class="officecli-form-column">
-                      <div class="officecli-format-switch" role="radiogroup" aria-label="选择文档格式">
-                        <button v-for="format in officeCLIFormatOptions" :key="format.value" type="button" :class="{ active: officeCLIForm.format === format.value }" @click="officeCLIForm.format = format.value">
-                          <b>{{ format.label }}</b>
-                          <span>{{ format.desc }}</span>
-                        </button>
-                      </div>
-                      <label class="officecli-field">
-                        <span>文档标题</span>
-                        <input v-model.trim="officeCLIForm.title" placeholder="例如：AI 产品周报" />
-                      </label>
-                      <label class="officecli-field">
-                        <span>生成需求</span>
-                        <textarea v-model.trim="officeCLIForm.prompt" rows="5" placeholder="描述你要生成的内容，例如：生成一份面向客户的 OfficeCLI 能力介绍，包含产品价值、适用场景和下一步计划。" />
-                      </label>
-                    </div>
-                    <aside class="officecli-result-card">
-                      <span>生成结果</span>
-                      <template v-if="officeCLIDocumentResult">
-                        <strong>{{ officeCLIDocumentResult.fileName }}</strong>
-                        <small>{{ officeCLIDocumentResult.format.toUpperCase() }} · {{ officeCLIDocumentSizeText }}</small>
-                        <button type="button" @click="downloadOfficeCLIDocument()">下载文件</button>
-                      </template>
-                      <template v-else>
-                        <strong>等待生成</strong>
-                        <small>生成后会在这里出现下载入口，并保存在后端容器数据目录。</small>
-                      </template>
-                    </aside>
-                  </div>
-                </section>
-              </section>
-
-              <KnowledgeAgentCenter v-else-if="agentCenterWorkspace?.agentKey === 'knowledge'" @close="closeAgentWorkspace" />
-              <section v-else-if="agentCenterWorkspace" class="user-agent-workspace">
-                <header class="agent-workspace-head">
-                  <button type="button" @click="closeAgentWorkspace">返回智能体中心</button>
-                  <span :class="['agent-workspace-avatar', agentCenterWorkspace.tone]">{{ agentCenterWorkspace.avatar }}</span>
-                  <div>
-                    <span>{{ agentCenterWorkspace.modeLabel }}</span>
-                    <h2>{{ agentCenterWorkspace.name }}</h2>
-                    <p>{{ agentCenterWorkspace.desc }}</p>
-                  </div>
-                  <em :class="['agent-workspace-status', { draft: agentCenterWorkspace.status === '草稿', disabled: agentCenterWorkspace.status === '已停用' }]">{{ agentCenterWorkspace.status }}</em>
-                </header>
-
-                <section class="agent-workspace-grid">
-                  <main class="agent-workspace-chat">
-                    <header>
-                      <div>
-                        <span>交互控制台</span>
-                        <strong>{{ agentCenterWorkspace.headline }}</strong>
-                      </div>
-                      <button type="button" @click="sendAgentWorkspaceMessage">发送测试</button>
-                    </header>
-                    <div class="agent-workspace-dialog">
-                      <article v-for="(message, index) in agentWorkspaceMessages" :key="`${message.role}-${index}`" :class="['agent-message', message.role]">
-                        <span>{{ message.role === 'user' ? '我' : agentCenterWorkspace.avatar }}</span>
-                        <p>{{ message.text }}</p>
-                      </article>
-                    </div>
-                    <label class="agent-workspace-input">
-                      <span>测试指令</span>
-                      <textarea v-model.trim="agentWorkspaceDraft" rows="5" placeholder="输入一条测试指令，检查这个智能体的回复风格与业务边界。" />
-                    </label>
-                  </main>
-
-                  <aside class="agent-workspace-config">
-                    <section class="agent-workspace-card">
-                      <strong>运行信息</strong>
-                      <div class="agent-workspace-meta-grid">
-                        <div><span>类型</span><b>{{ agentCenterWorkspace.type }}</b></div>
-                        <div><span>模型</span><b>{{ agentCenterWorkspace.model }}</b></div>
-                        <div><span>知识库</span><b>{{ agentCenterWorkspace.knowledge }}</b></div>
-                        <div><span>调用次数</span><b>{{ agentCenterWorkspace.calls }}</b></div>
-                      </div>
-                    </section>
-                    <section class="agent-workspace-card">
-                      <strong>能力配置</strong>
-                      <div class="agent-tool-tags">
-                        <span v-for="tag in agentCenterWorkspace.toolTags" :key="tag">{{ tag }}</span>
-                      </div>
-                    </section>
-                    <section class="agent-workspace-card">
-                      <strong>快捷动作</strong>
-                      <div class="agent-quick-actions">
-                        <button v-for="action in agentCenterWorkspace.quickActions" :key="action" type="button" @click="agentWorkspaceDraft = action">{{ action }}</button>
-                      </div>
-                    </section>
-                  </aside>
-                </section>
-              </section>
-
-              <section v-else class="user-agent-center-layout">
-                <main class="user-agent-main-column">
-                  <section class="user-agent-center-hero">
-                    <div>
-                      <span>AGENT CENTER</span>
-                      <h2>智能体中心</h2>
-                      <p>创建、调试与运行你的 AI 智能体，连接知识库、工具与业务流程。</p>
-                    </div>
-                    <div class="user-agent-hero-robot" aria-hidden="true">
-                      <i></i>
-                      <b></b>
-                      <em>AI</em>
-                      <strong>BOT</strong>
-                    </div>
-                  </section>
-
-                  <section class="user-agent-template-panel">
-                    <header>
-                      <strong>智能体模板</strong>
-                      <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
-                    </header>
-                    <div class="user-agent-template-grid">
-                      <article
-                        v-for="template in agentCenterTemplates"
-                        :key="template.name"
-                        :class="['user-agent-template-card', { 'is-featured': template.featured, 'is-clickable': true }]"
-                        tabindex="0"
-                        @click="handleAgentTemplateCardClick(template)"
-                        @keydown.enter.prevent="handleAgentTemplateCardClick(template)"
-                      >
-                        <div :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</div>
-                        <strong>{{ template.name }}</strong>
-                        <p>{{ template.desc }}</p>
-                        <button type="button" @click.stop="handleAgentTemplateAction(template)">{{ template.action || "进入" }}</button>
-                      </article>
-                    </div>
-                  </section>
-
-                  <main class="user-agent-list-panel">
-                    <header class="user-agent-list-head">
-                      <div class="user-agent-tabs">
-                        <button v-for="tab in agentCenterTabs" :key="tab.value" type="button" :class="{ active: agentCenterListTab === tab.value }" @click="agentCenterListTab = tab.value">{{ tab.label }}</button>
-                      </div>
-                      <div class="user-agent-list-tools">
-                        <label><el-icon><Search /></el-icon><input v-model.trim="agentCenterSearch" placeholder="搜索智能体..." /></label>
-                        <select v-model="agentCenterTypeFilter" aria-label="筛选智能体类型"><option value="all">全部类型</option><option v-for="type in agentCenterTypeOptions" :key="type" :value="type">{{ type }}</option></select>
-                        <button type="button" @click="selectAdminModule('userAgentCenter')">+ 创建智能体</button>
-                      </div>
-                    </header>
-                    <div class="user-agent-table">
-                      <div class="user-agent-table-head">
-                        <span>智能体名称</span><span>类型</span><span>状态</span><span>模型</span><span>知识库</span><span>调用次数</span><span>更新时间</span><span>操作</span>
-                      </div>
-                      <div
-                        v-for="agent in visibleAgentCenterRows"
-                        :key="agent.name"
-                        :class="['user-agent-table-row', { 'is-officecli': agent.officecli, 'is-clickable': true }]"
-                        tabindex="0"
-                        @click="handleAgentRowAction(agent)"
-                        @keydown.enter.prevent="handleAgentRowAction(agent)"
-                      >
-                        <div class="user-agent-name-cell">
-                          <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
-                          <div><strong>{{ agent.name }}</strong><small>{{ agent.desc }}</small></div>
-                        </div>
-                        <span :class="['user-agent-pill', agent.tone]">{{ agent.type }}</span>
-                        <span :class="['user-agent-status', { disabled: agent.status === '已停用', draft: agent.status === '草稿' }]">{{ agent.status }}</span>
-                        <span>{{ agent.model }}</span>
-                        <span>{{ agent.knowledge }}</span>
-                        <span>{{ agent.calls }}</span>
-                        <span>{{ agent.updated }}</span>
-                        <div class="user-agent-row-actions">
-                          <button type="button" class="is-wide" @click.stop="handleAgentRowAction(agent)">进入</button>
-                          <button type="button" title="编辑" aria-label="编辑智能体" @click.stop="openAgentWorkspace(agent)"><el-icon><EditPen /></el-icon></button>
-                          <button type="button" title="复制" aria-label="复制智能体配置" @click.stop="copyAgentCenterConfig(agent)"><el-icon><CopyDocument /></el-icon></button>
-                          <button type="button" :title="isAgentCenterFavorite(agent) ? '取消收藏' : '收藏'" :aria-label="isAgentCenterFavorite(agent) ? '取消收藏智能体' : '收藏智能体'" @click.stop="toggleAgentCenterFavorite(agent)"><el-icon><component :is="isAgentCenterFavorite(agent) ? StarFilled : Star" /></el-icon></button>
-                        </div>
-                      </div>
-                    </div>
-                  </main>
-
-                </main>
-
-                <aside class="user-agent-side-panel">
-                  <article class="user-agent-side-card is-metrics">
-                    <header><strong>智能体数据概览</strong><select v-model="agentCenterRange" aria-label="智能体数据时间范围"><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option></select></header>
-                    <div class="user-agent-metric-grid">
-                      <div v-for="metric in agentCenterMetrics" :key="metric.label">
-                        <span>{{ metric.label }}</span>
-                        <strong>{{ metric.value }}</strong>
-                        <small>↑ {{ metric.trend }}</small>
-                      </div>
-                    </div>
-                  </article>
-                  <article class="user-agent-side-card is-trend">
-                    <header><strong>使用趋势</strong><select v-model="agentCenterRange" aria-label="使用趋势时间范围"><option value="7">近 7 天</option><option value="30">近 30 天</option><option value="90">近 90 天</option></select></header>
-                    <div class="user-agent-trend">
-                      <span v-for="bar in agentCenterTrend" :key="bar.label"><i :style="{ height: bar.height }"></i><em>{{ bar.label }}</em></span>
-                    </div>
-                  </article>
-                  <article class="user-agent-side-card is-ranking">
-                    <strong>使用最多的智能体</strong>
-                    <ol class="user-agent-ranking">
-                      <li v-for="(item, index) in agentCenterRanking" :key="item.name"><span>{{ index + 1 }}</span><b>{{ item.name }}</b><em>{{ item.calls }}</em></li>
-                    </ol>
-                  </article>
-                  <article class="user-agent-side-card is-shortcuts">
-                    <strong>快速入口</strong>
-                    <div class="user-agent-shortcuts">
-                      <button v-for="item in agentCenterShortcuts" :key="item.label" type="button" @click="handleAgentCenterShortcut(item.label)"><span>{{ item.icon }}</span>{{ item.label }}</button>
-                    </div>
-                  </article>
-                </aside>
-              </section>
-            </div>
-
-            <div class="user-agent-mobile-view">
-              <div class="user-agent-mobile-status">
-                <span>9:41</span>
-                <span>5G ▰</span>
-              </div>
-              <header class="user-agent-mobile-top">
-                <div>
-                  <h2>智能体中心</h2>
-                  <p>创建、调试与发布你的 AI 智能体</p>
-                </div>
-                <button type="button" @click="selectAdminModule('userAgentCenter')">+</button>
-              </header>
-              <label class="user-agent-mobile-search"><i></i><input placeholder="搜索智能体名称或描述..." /></label>
-
-              <section class="user-agent-mobile-overview">
-                <div>
-                  <strong>本周智能体运行概览</strong>
-                  <p>7 个智能体正在服务业务流程</p>
-                </div>
-                <div class="user-agent-mobile-bot" aria-hidden="true">AI</div>
-                <div class="user-agent-mobile-metrics">
-                  <span>调用<strong>5,689</strong></span>
-                  <span>对话<strong>12,458</strong></span>
-                  <span>Token<strong>2.45M</strong></span>
-                </div>
-              </section>
-
-              <section class="user-agent-mobile-section-head">
-                <strong>智能体模板</strong>
-                <button type="button" @click="selectAdminModule('userAgentCenter')">全部模板 ></button>
-              </section>
-              <div class="user-agent-mobile-template-scroll">
-                <article
-                  v-for="template in agentCenterTemplates.slice(0, 4)"
-                  :key="template.name"
-                  class="user-agent-mobile-template-card is-clickable"
-                  @click="handleAgentTemplateCardClick(template)"
-                >
-                  <span :class="['user-agent-template-icon', template.tone]">{{ template.icon }}</span>
-                  <strong>{{ template.name.replace('智能体', '').replace('企业知识库', '知识库问答') }}</strong>
-                  <small>{{ template.desc.split('，')[0] }}</small>
-                </article>
-              </div>
-
-              <section class="user-agent-mobile-section-head">
-                <strong>我的智能体</strong>
-                <button type="button" @click="agentCenterTypeFilter = agentCenterTypeFilter === 'all' ? (agentCenterTypeOptions[0] || 'all') : 'all'">{{ agentCenterTypeFilter === 'all' ? '全部类型⌄' : `${agentCenterTypeFilter}⌄` }}</button>
-              </section>
-              <div class="user-agent-mobile-list">
-                <article v-for="agent in agentCenterMobileRows" :key="agent.name" class="user-agent-mobile-agent-card is-clickable" @click="handleAgentRowAction(agent)">
-                  <span :class="['user-agent-avatar', agent.tone]">{{ agent.avatar }}</span>
-                  <div>
-                    <strong>{{ agent.name }}</strong>
-                    <small>{{ agent.type }} · {{ agent.model }}</small>
-                  </div>
-                  <em>{{ agent.status }}</em>
-                  <b>{{ agent.calls }} 次</b>
-                </article>
-              </div>
-              <button class="user-agent-mobile-all" type="button" @click="selectAdminModule('userAgentCenter')">查看全部智能体 ></button>
-              <nav class="user-agent-mobile-bottom" aria-label="移动端导航">
-                <button v-for="item in agentMobileBottomNav" :key="item.label" type="button" :class="{ active: item.targetId === store.activeModuleId }" @click="selectAdminModule(item.targetId)">
-                  <span>{{ item.letter }}</span>
-                  <small>{{ item.label }}</small>
-                </button>
-              </nav>
-            </div>
-          </section>
+          <UserAgentWorkspace
+            v-else-if="store.activeModuleId === 'userAgentCenter'"
+            :office-cli-workspace-open="officeCLIWorkspaceOpen"
+            :office-cli-status-tone="officeCLIStatusTone"
+            :office-cli-status-label="officeCLIStatusLabel"
+            :office-cli-format-options="officeCLIFormatOptions"
+            :office-cli-form="officeCLIForm"
+            :office-cli-document-generating="officeCLIDocumentGenerating"
+            :office-cli-document-result="officeCLIDocumentResult"
+            :office-cli-document-size-text="officeCLIDocumentSizeText"
+            :agent-center-workspace="agentCenterWorkspace"
+            :agent-workspace-messages="agentWorkspaceMessages"
+            :agent-workspace-draft="agentWorkspaceDraft"
+            :agent-center-templates="agentCenterTemplates"
+            :agent-center-tabs="agentCenterTabs"
+            :agent-center-list-tab="agentCenterListTab"
+            :agent-center-search="agentCenterSearch"
+            :agent-center-type-filter="agentCenterTypeFilter"
+            :agent-center-range="agentCenterRange"
+            :agent-center-type-options="agentCenterTypeOptions"
+            :visible-agent-center-rows="visibleAgentCenterRows"
+            :agent-center-metrics="agentCenterMetrics"
+            :agent-center-trend="agentCenterTrend"
+            :agent-center-ranking="agentCenterRanking"
+            :agent-center-shortcuts="agentCenterShortcuts"
+            :agent-center-mobile-rows="agentCenterMobileRows"
+            :agent-mobile-bottom-nav="agentMobileBottomNav"
+            :close-office-cli-workspace="closeOfficeCLIWorkspace"
+            :submit-office-cli-document="submitOfficeCLIDocument"
+            :download-office-cli-document="downloadOfficeCLIDocument"
+            :close-agent-workspace="closeAgentWorkspace"
+            :send-agent-workspace-message="sendAgentWorkspaceMessage"
+            :handle-agent-template-card-click="handleAgentTemplateCardClick"
+            :handle-agent-template-action="handleAgentTemplateAction"
+            :handle-agent-row-action="handleAgentRowAction"
+            :open-agent-workspace="openAgentWorkspace"
+            :copy-agent-center-config="copyAgentCenterConfig"
+            :toggle-agent-center-favorite="toggleAgentCenterFavorite"
+            :is-agent-center-favorite="isAgentCenterFavorite"
+            :handle-agent-center-shortcut="handleAgentCenterShortcut"
+          />
 
           <section v-else-if="store.activeModuleId === 'userWorks'" class="user-works-page">
             <header class="user-works-hero">
@@ -1127,10 +628,10 @@
                   <label>
                     <span>质量</span>
                     <el-select v-model="onlineImageForm.quality">
-                      <el-option label="auto" value="auto" />
-                      <el-option label="low" value="low" />
-                      <el-option label="medium" value="medium" />
-                      <el-option label="high" value="high" />
+                      <el-option label="自动" value="auto" />
+                      <el-option label="低" value="low" />
+                      <el-option label="中" value="medium" />
+                      <el-option label="高" value="high" />
                     </el-select>
                   </label>
                   <label>
@@ -1549,15 +1050,18 @@
                           <label><span>高度 (Height)</span><input v-model="aiCustomHeight" type="number" placeholder="例如 1024" /></label>
                         </div>
                       </section>
+                      <ul v-if="aiSizePickerErrors.length" class="ai-size-picker-errors">
+                        <li v-for="item in aiSizePickerErrors" :key="item">{{ item }}</li>
+                      </ul>
                       <div class="ai-size-picker-limit">
-                        由于模型限制，最终输出会自动规整到合法尺寸：宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。
+                        官方限制：宽高必须为整数且为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素 655360-8294400。
                       </div>
                     </template>
                   </div>
                   <div class="ai-size-picker-preview">
                     <span>将使用</span>
                     <strong>{{ aiSizePickerPreview || '尺寸无效' }}</strong>
-                    <small v-if="aiSizePickerClamped">已按模型限制自动规整</small>
+                    <small v-if="aiSizePickerBillingTier">计费档位：{{ aiSizePickerBillingTier }}</small>
                   </div>
                   <footer class="ai-size-picker-actions">
                     <button type="button" @click="closeAiSizePicker">取消</button>
@@ -2770,9 +2274,7 @@
           />
           <AdminDataTable v-else-if="!['userDashboard', 'userAiImage', 'userAgentCenter', 'userWirelessCanvas', 'userWorks', 'userVideoGeneration', 'userPptGeneration', 'userSmartVideo', 'apiSettings'].includes(store.activeModuleId)" :title="store.activeModule.title" :persistence-key="store.activeModuleId" :rows="rows" :columns="columns" :column-labels="columnLabels" :toolbar-actions="toolbarActions" :row-actions="rowActions" :batch-actions="rowActions" v-model:search-keyword="searchKeyword" v-model:status-filter="statusFilter" :status-filter-options="statusFilterOptions" :loading="store.saving" :is-status-column="isStatusColumn" :status-type="statusType" :status-label="statusLabel" :format-cell="formatCell" :visible-row-actions="visibleRowActions" :label-for-row-action="labelForRowAction" @run-action="runAction" @batch-action="runBatchAction" />
         </section>
-      </el-main>
-    </el-container>
-  </el-container>
+  </AdminAuthenticatedShell>
   <PlanEditorDialog
     v-model="planEditorOpen"
     :plan="editingPlan"
@@ -2864,8 +2366,16 @@ import { useOfficeCLI } from "./composables/useOfficeCLI";
 import PromptEditable from "./components/PromptEditable.vue";
 import AuthModal from "./components/auth/AuthModal.vue";
 import WebLoginPage from "./components/auth/WebLoginPage.vue";
+import AdminRegisterPage from "./components/auth/AdminRegisterPage.vue";
 import AdminSectionTabs from "./components/navigation/AdminSectionTabs.vue";
 import GlobalCommandPalette from "./components/navigation/GlobalCommandPalette.vue";
+import AdminWorkspaceSidebar from "./components/workspace/AdminWorkspaceSidebar.vue";
+import AdminWorkspaceHeader from "./components/workspace/AdminWorkspaceHeader.vue";
+import AdminWorkspaceTabs from "./components/workspace/AdminWorkspaceTabs.vue";
+import AdminWorkspaceOverview from "./components/workspace/AdminWorkspaceOverview.vue";
+import UserHomeWorkspace from "./components/workspace/UserHomeWorkspace.vue";
+import UserAgentWorkspace from "./components/workspace/UserAgentWorkspace.vue";
+import AdminAuthenticatedShell from "./components/workspace/AdminAuthenticatedShell.vue";
 import {
   adminModuleById,
   adminNavigationGroups,
@@ -3971,7 +3481,7 @@ const onlineImageForm = ref({
   provider: "",
   ratio: "square",
   size: "auto",
-  quality: "auto",
+  quality: "low",
   outputFormat: "png",
   transparentOutput: false,
   outputCompression: null as number | null,
@@ -4001,9 +3511,10 @@ const userHomeCreationModes: Array<{ id: UserHomeCreationMode; title: string; ic
 ];
 const userHomeRatioOptions = [
   { label: "1:1", value: "square" },
+  { label: "3:2", value: "3:2" },
+  { label: "2:3", value: "2:3" },
   { label: "16:9", value: "16:9" },
-  { label: "9:16", value: "9:16" },
-  { label: "自定义", value: "custom" }
+  { label: "9:16", value: "9:16" }
 ];
 const userHomeAgentEntries: UserHomeEntry[] = [
   { title: "品牌 Agent", desc: "品牌视觉、VI、海报", icon: Star, targetId: "userAiImage", mode: "agent", prompt: "为新品牌设计一组高级视觉方向，包含 Logo 延展、主视觉和社媒海报。" },
@@ -4410,7 +3921,6 @@ const aiSizePickerVisible = ref(false);
 const aiSizePickerRef = ref<HTMLElement | null>(null);
 const aiSizePickerMouseDownTarget = ref<EventTarget | null>(null);
 const aiSizePickerMode = ref<"auto" | "ratio" | "resolution">("auto");
-const aiSizeTier = ref<"1K" | "2K" | "4K">("1K");
 const aiSizeRatio = ref("1:1");
 const aiCustomRatio = ref("16:9");
 const aiCustomWidth = ref("1024");
@@ -4424,15 +3934,13 @@ const aiSizePickerModes = [
   { label: "自定义宽高", value: "resolution" }
 ] as const;
 const aiSizeTiers = ["1K", "2K", "4K"] as const;
+const aiSizeTier = ref<(typeof aiSizeTiers)[number]>("1K");
 const aiSizeRatios = [
   { label: "1:1", value: "1:1" },
   { label: "3:2", value: "3:2" },
   { label: "2:3", value: "2:3" },
   { label: "16:9", value: "16:9" },
-  { label: "9:16", value: "9:16" },
-  { label: "4:3", value: "4:3" },
-  { label: "3:4", value: "3:4" },
-  { label: "21:9", value: "21:9" }
+  { label: "9:16", value: "9:16" }
 ];
 const selectedApiReferenceIndex = ref(0);
 const apiQuickKeys = ref<Record<string, string>>({});
@@ -4493,36 +4001,28 @@ const apiModelPickerTabs: Array<{ label: string; value: ApiModelPickerTab }> = [
   { label: "LLM", value: "chat" },
   { label: "视频", value: "video" }
 ];
+const gptImageOfficialSizes = ["auto", "1024x1024", "1024x1536", "1536x1024", "1280x720", "720x1280", "2048x1152", "2048x2048", "3840x2160", "2160x3840"] as const;
 const aiCommonSizePresets: Record<(typeof aiSizeTiers)[number], Record<string, string>> = {
   "1K": {
     "1:1": "1024x1024",
     "3:2": "1536x1024",
     "2:3": "1024x1536",
     "16:9": "1280x720",
-    "9:16": "720x1280",
-    "4:3": "1024x768",
-    "3:4": "768x1024",
-    "21:9": "1280x544"
+    "9:16": "720x1280"
   },
   "2K": {
     "1:1": "2048x2048",
-    "3:2": "2160x1440",
-    "2:3": "1440x2160",
-    "16:9": "2560x1440",
-    "9:16": "1440x2560",
-    "4:3": "2048x1536",
-    "3:4": "1536x2048",
-    "21:9": "2560x1088"
+    "3:2": "2048x1152",
+    "2:3": "1152x2048",
+    "16:9": "2048x1152",
+    "9:16": "1152x2048"
   },
   "4K": {
     "1:1": "2880x2880",
     "3:2": "3456x2304",
     "2:3": "2304x3456",
     "16:9": "3840x2160",
-    "9:16": "2160x3840",
-    "4:3": "3200x2400",
-    "3:4": "2400x3200",
-    "21:9": "3840x1600"
+    "9:16": "2160x3840"
   }
 };
 function aiSchemaFieldsFromResponse(response: AdminRecord | null) {
@@ -5261,16 +4761,15 @@ async function saveAiState() {
 }
 
 function fitOnlineImageSize() {
-  const ratio = onlineImageForm.value.ratio;
-  if (ratio === "16:9") {
-    onlineImageForm.value.width = 1344;
-    onlineImageForm.value.height = 768;
-  } else if (ratio === "9:16") {
-    onlineImageForm.value.width = 768;
-    onlineImageForm.value.height = 1344;
-  } else {
-    onlineImageForm.value.width = 1024;
-    onlineImageForm.value.height = 1024;
+  const form = onlineImageForm.value;
+  const tier = form.resolution === "2k" ? "2K" : form.resolution === "4k" ? "4K" : "1K";
+  const ratioKey = form.ratio === "square" ? "1:1" : form.ratio;
+  const size = (ratioKey && aiCommonSizePresets[tier]?.[ratioKey]) || calculateAiImageSize(tier, ratioKey || "1:1") || "1024x1024";
+  const parsed = size.match(/^(\d+)x(\d+)$/);
+  if (parsed) {
+    form.width = Number(parsed[1]);
+    form.height = Number(parsed[2]);
+    form.size = size;
   }
   ElMessage.success("已按当前比例适配尺寸");
 }
@@ -5292,6 +4791,47 @@ function roundToSizeMultiple(value: number, mode: "round" | "floor" | "ceil" = "
   const multiple = 16;
   const method = mode === "floor" ? Math.floor : mode === "ceil" ? Math.ceil : Math.round;
   return Math.max(multiple, method(value / multiple) * multiple);
+}
+
+function officialGptImageSizeErrors(width: number, height: number) {
+  const errors: string[] = [];
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    errors.push("宽和高必须为正整数");
+    return errors;
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    errors.push("宽和高必须是 16 的倍数");
+  }
+  if (width > 3840 || height > 3840) {
+    errors.push("最大边长不能超过 3840px");
+  }
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  if (shortEdge === 0 || longEdge > shortEdge * 3) {
+    errors.push("宽高比必须在 1:3 到 3:1 之间");
+  }
+  const pixels = width * height;
+  if (pixels < 655360 || pixels > 8294400) {
+    errors.push("总像素必须在 655360 到 8294400 之间");
+  }
+  return errors;
+}
+
+function gptImageBillingSizeTierLabel(size: string) {
+  const normalized = String(size || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized === "auto") return "AUTO";
+  const match = normalized.match(/^(\d+)x(\d+)$/);
+  if (!match) return "";
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (officialGptImageSizeErrors(width, height).length) return "";
+  const pixels = width * height;
+  const maxEdge = Math.max(width, height);
+  if (pixels <= 1280 * 720 && maxEdge <= 1280) return "720P";
+  if (pixels <= 1536 * 1024 && maxEdge <= 1536) return "1K";
+  if (pixels <= 2048 * 2048 && maxEdge <= 2048) return "2K";
+  return "4K";
 }
 
 function normalizeAiImageSize(size: string) {
@@ -5321,13 +4861,19 @@ function normalizeAiImageSize(size: string) {
 
 function aiRequestSizeParam(size: string) {
   const normalized = normalizeAiImageSize(size);
-  if (!normalized || normalized.toLowerCase() === "auto") return "";
-  return normalized;
+  if (!normalized) return "";
+  return normalized.toLowerCase() === "auto" ? "auto" : normalized;
 }
 
 function aiRequestQualityParam(value: string) {
   const normalized = normalizeAiImageQuality(value);
-  return normalized === "high" ? "high" : "";
+  if (normalized === "standard") return "auto";
+  if (normalized === "auto" || normalized === "low" || normalized === "medium" || normalized === "high") return normalized;
+  return "";
+}
+
+function gptImageProductionSize(size: string) {
+  return aiRequestSizeParam(size) || "auto";
 }
 
 function parseAiRatio(ratio: string) {
@@ -5383,22 +4929,23 @@ function findAiSizePreset(size: string) {
   return null;
 }
 
-const displayAiImageSize = computed(() => normalizeAiImageSize(onlineImageForm.value.size) || "auto");
+const displayAiImageSize = computed(() => gptImageProductionSize(onlineImageForm.value.size) || "auto");
+const aiSizePickerErrors = computed(() => {
+  if (aiSizePickerMode.value !== "resolution") return [] as string[];
+  const width = Number(aiCustomWidth.value);
+  const height = Number(aiCustomHeight.value);
+  return officialGptImageSizeErrors(width, height);
+});
 const aiSizePickerPreview = computed(() => {
   if (aiSizePickerMode.value === "auto") return "auto";
   if (aiSizePickerMode.value === "ratio") {
     const activeRatio = aiSizeRatio.value === "custom" ? aiCustomRatio.value : aiSizeRatio.value;
-    return normalizeAiImageSize(calculateAiImageSize(aiSizeTier.value, activeRatio));
+    return gptImageProductionSize(calculateAiImageSize(aiSizeTier.value, activeRatio));
   }
-  const width = Number(aiCustomWidth.value);
-  const height = Number(aiCustomHeight.value);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return "";
-  return normalizeAiImageSize(`${width}x${height}`);
+  if (aiSizePickerErrors.value.length) return "";
+  return `${Number(aiCustomWidth.value)}x${Number(aiCustomHeight.value)}`;
 });
-const aiSizePickerClamped = computed(() => {
-  if (aiSizePickerMode.value !== "resolution" || !aiSizePickerPreview.value) return false;
-  return `${Number(aiCustomWidth.value)}x${Number(aiCustomHeight.value)}` !== aiSizePickerPreview.value;
-});
+const aiSizePickerBillingTier = computed(() => gptImageBillingSizeTierLabel(aiSizePickerPreview.value));
 
 function ratioIconStyle(ratio: string) {
   const parsed = parseAiRatio(ratio);
@@ -5431,7 +4978,7 @@ async function loadAiImageModuleSchema(force = false) {
 }
 
 function selectAiSchemaSizeOption(size: string) {
-  const normalized = normalizeAiImageSize(size);
+  const normalized = gptImageProductionSize(size);
   if (!normalized || normalized.toLowerCase() === "auto") {
     aiSizePickerMode.value = "auto";
     return;
@@ -5452,12 +4999,12 @@ function selectAiSchemaSizeOption(size: string) {
 }
 
 function isAiSchemaSizeOptionActive(size: string) {
-  const normalized = normalizeAiImageSize(size);
+  const normalized = gptImageProductionSize(size);
   return normalized && normalized === aiSizePickerPreview.value;
 }
 
 function openAiSizePicker() {
-  const currentSize = onlineImageForm.value.size;
+  const currentSize = gptImageProductionSize(onlineImageForm.value.size);
   if (!currentSize || currentSize === "auto") {
     aiSizePickerMode.value = "auto";
   } else {
@@ -5497,7 +5044,7 @@ function handleAiSizePickerBackdropUp(event: MouseEvent) {
 
 function applyAiSizePicker() {
   if (!aiSizePickerPreview.value) return;
-  onlineImageForm.value.size = aiSizePickerPreview.value;
+  onlineImageForm.value.size = gptImageProductionSize(aiSizePickerPreview.value);
   if (aiSizePickerPreview.value !== "auto") {
     const [width, height] = aiSizePickerPreview.value.split("x").map((item) => Number(item));
     onlineImageForm.value.width = width;
@@ -7552,7 +7099,21 @@ async function submitOnlineImage() {
   const clientRequestId = createGenerationClientRequestId("online-image");
   onlineSubmitting.value = true;
   try {
-    const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
+    const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality) || "low";
+    const requestSize = gptImageProductionSize((() => {
+      const form = onlineImageForm.value;
+      if (form.size && form.size !== "auto") {
+        const normalized = aiRequestSizeParam(form.size);
+        if (normalized) return normalized;
+      }
+      const tier = form.resolution === "2k" ? "2K" : form.resolution === "4k" ? "4K" : form.resolution === "custom" ? "" : "1K";
+      const ratioKey = form.ratio === "square" ? "1:1" : form.ratio;
+      if (tier && ratioKey && aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets]?.[ratioKey]) {
+        return aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets][ratioKey];
+      }
+      if (form.width && form.height) return aiRequestSizeParam(`${form.width}x${form.height}`) || "auto";
+      return "auto";
+    })());
     const taskSnapshot = await createAiGenerationTaskSnapshot(prompt);
     const referenceImages = taskSnapshot.inputImagesSnapshot.slice(0, onlineReferenceSlots.length);
     if (onlineReferenceImages.value.length && !referenceImages.length) {
@@ -7568,9 +7129,12 @@ async function submitOnlineImage() {
         prompt,
         model: onlineImageForm.value.model,
         params: {
+          n: onlineImageForm.value.count,
           count: onlineImageForm.value.count,
+          size: requestSize,
+          quality: requestQuality,
           imageRatio: onlineImageForm.value.ratio,
-          ...(requestQuality ? { imageQuality: requestQuality } : {}),
+          imageQuality: requestQuality,
           provider: onlineImageForm.value.provider,
           resolution: onlineImageForm.value.resolution,
           width: onlineImageForm.value.width,
@@ -7636,7 +7200,7 @@ async function submitAiImage() {
     }
     const taskType = referenceImages.length > 0 ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE";
     const effectivePrompt = referenceImages.length ? effectiveAiPromptForReferences(prompt, referenceImages) : prompt;
-    const requestSize = aiRequestSizeParam(onlineImageForm.value.size);
+    const requestSize = gptImageProductionSize(aiRequestSizeParam(onlineImageForm.value.size));
     const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality);
     const requestParams = {
       n: onlineImageForm.value.count,
@@ -8428,7 +7992,6 @@ const registerAgreementAccepted = ref(false);
 const authSubmitting = ref(false);
 const mobileDrawerOpen = ref(false);
 const desktopSidebarCollapsed = ref(false);
-const tabsScrollRef = ref<HTMLElement | null>(null);
 const openTabStorageKey = isUserConsole.value ? "xianzhi-user-open-tabs" : isAgentConsole.value ? "xianzhi-agent-open-tabs" : "xianzhi-admin-open-tabs";
 const activeTabStorageKey = isUserConsole.value ? "xianzhi-user-active-tab" : isAgentConsole.value ? "xianzhi-agent-active-tab" : "xianzhi-admin-active-tab";
 const imageWorkspaceModuleIds = ["userAiImage"];
@@ -10248,10 +9811,6 @@ async function goBrandHome() {
   await selectAdminModule(moduleId);
 }
 
-function scrollOpenTabs(direction: -1 | 1) {
-  tabsScrollRef.value?.scrollBy({ left: direction * 260, behavior: "smooth" });
-}
-
 function ensureOpenTab(moduleId: string) {
   if (!allowedModuleIds.includes(moduleId)) return;
   if (!canNavigateToModule(moduleId)) return;
@@ -11702,12 +11261,16 @@ const currentRecordResults = computed(() => {
     });
 });
 
-function openCurrentRecordResult(item: { title: string; row: AdminRecord }) {
+function openCurrentRecordResult(item: { title: string; row?: AdminRecord }) {
   if (isUserConsole.value || isAgentConsole.value) {
     globalSearchKeyword.value = "";
     commandPaletteOpen.value = false;
   } else {
     searchKeyword.value = "";
+  }
+  if (!item.row) {
+    ElMessage.info(`已定位到「${item.title}」，当前模块没有可直接打开的记录详情`);
+    return;
   }
   const action = visibleRowActions(item.row)[0];
   if (action) {

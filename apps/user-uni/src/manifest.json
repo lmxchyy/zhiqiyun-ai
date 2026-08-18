@@ -100,6 +100,9 @@
     },
     "mp-weixin" : {
         "appid" : "wx42428e761551a7fb",
-        "libVersion" : "3.15.2"
+        "libVersion" : "3.15.2",
+        "uniStatistics" : {
+            "enable" : false
+        }
     }
 }

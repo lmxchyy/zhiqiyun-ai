@@ -1713,6 +1713,12 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[key] = true
 			schema := findAIParameterSchema(data.AIParameterSchemas, model.ModuleCode, model.ModelName)
+			if canonicalModuleCode(model.ModuleCode) == moduleImageGeneration {
+				schema = findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, model.ModelName)
+				if schema.ID == "" {
+					continue
+				}
+			}
 			capabilities := publicModelCapabilities(model, schema.SchemaJSON)
 			item := map[string]any{
 				"code": code, "name": code, "capabilities": capabilities,
@@ -1738,6 +1744,13 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 				if code == "" || seen[key] {
 					continue
 				}
+				configuredModel := findAIModel(data.AIModels, moduleImageGeneration, code)
+				if configuredModel.ID == "" || !isActiveLike(configuredModel.Status) {
+					continue
+				}
+				if findExactAIParameterSchema(data.AIParameterSchemas, moduleImageGeneration, code).ID == "" {
+					continue
+				}
 				seen[key] = true
 				items = append(items, map[string]any{
 					"code":         code,
@@ -1759,7 +1772,6 @@ func (a api) models(w http.ResponseWriter, r *http.Request) {
 		if _, ok := item["description"]; !ok {
 			item["description"] = ""
 		}
-		item["supportedRatios"] = []string{"1:1", "4:3", "3:4", "16:9", "9:16"}
 		item["enabled"] = item["online"]
 		// Public model discovery must not reveal upstream routing or vendor identity.
 		delete(item, "providerId")

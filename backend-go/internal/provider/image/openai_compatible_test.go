@@ -105,6 +105,7 @@ func TestImageEditTimeoutDoesNotStartDuplicateGenerationFallback(t *testing.T) {
 		Prompt: "add a logo",
 		Model:  "gpt-image-2",
 		Params: map[string]any{
+			"size": "1024x1024",
 			"referenceImages": []any{map[string]any{
 				"name": "reference.png",
 				"url":  tinyReferenceDataURL,
@@ -179,6 +180,7 @@ func TestOpenAICompatibleImageEditUsesImageArrayField(t *testing.T) {
 		Model:  "gpt-image-2",
 		Params: map[string]any{
 			"imageRequestMode": "openai",
+			"size":             "1024x1024",
 			"referenceImages":  []any{map[string]any{"name": "input.png", "url": tinyReferenceDataURL}},
 		},
 	})
@@ -239,16 +241,151 @@ func TestAddOptionalImageEditFields(t *testing.T) {
 	}
 }
 
-func TestResponsesImageToolOmitsAutoSizeAndQuality(t *testing.T) {
-	tool := responsesImageTool(map[string]any{
-		"size":         "auto",
-		"imageQuality": "auto",
-	}, false)
-	if _, ok := tool["size"]; ok {
-		t.Fatalf("size = %v, want omitted for auto", tool["size"])
+func TestOpenAICompatibleGenerateUsesCanonicalImageParameters(t *testing.T) {
+	for _, count := range []int{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("n=%d", count), func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+					t.Fatal(err)
+				}
+				writeImageAPIResponse(w)
+			}))
+			defer server.Close()
+
+			provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+				BaseURL: server.URL + "/v1", APIKey: "test-key", ImageModel: "gpt-image-2", TimeoutMS: 5000,
+			})
+			_, err := provider.Generate(t.Context(), generation.CreateRequest{
+				Type: "TEXT_TO_IMAGE", Prompt: "wide product photo", Model: "gpt-image-2",
+				Params: map[string]any{
+					"size": "1536x1024", "quality": "high", "n": count,
+					"imageRatio": "3:4", "imageQuality": "draft",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if captured["size"] != "1536x1024" || captured["quality"] != "high" || captured["n"] != float64(count) {
+				t.Fatalf("provider body = %#v, want canonical size/quality/n=%d", captured, count)
+			}
+		})
 	}
-	if _, ok := tool["quality"]; ok {
-		t.Fatalf("quality = %v, want omitted for auto", tool["quality"])
+}
+
+func TestOpenAICompatibleAcceptsOfficialGPTImageParameters(t *testing.T) {
+	officialSizes := []string{"auto", "1024x1024", "1024x1536", "1536x1024", "1280x720", "720x1280", "2048x2048", "2048x1152", "3840x2160", "2160x3840"}
+	tests := []struct {
+		name   string
+		params map[string]any
+		want   map[string]any
+	}{
+		{name: "default omitted size and quality", params: map[string]any{}, want: map[string]any{"size": "auto", "quality": "low", "n": float64(1)}},
+		{name: "explicit auto", params: map[string]any{"size": "auto", "quality": "auto"}, want: map[string]any{"size": "auto", "quality": "auto", "n": float64(1)}},
+		{name: "quality low", params: map[string]any{"size": "1024x1024", "quality": "low", "n": 1}, want: map[string]any{"size": "1024x1024", "quality": "low", "n": float64(1)}},
+		{name: "quality medium", params: map[string]any{"size": "1024x1024", "quality": "medium", "n": 1}, want: map[string]any{"size": "1024x1024", "quality": "medium", "n": float64(1)}},
+	}
+	for _, size := range officialSizes {
+		if size == "auto" {
+			continue
+		}
+		tests = append(tests, struct {
+			name   string
+			params map[string]any
+			want   map[string]any
+		}{
+			name:   "size " + size,
+			params: map[string]any{"size": size, "quality": "high", "n": 1},
+			want:   map[string]any{"size": size, "quality": "high", "n": float64(1)},
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+					t.Fatal(err)
+				}
+				writeImageAPIResponse(w)
+			}))
+			defer server.Close()
+			provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+				BaseURL: server.URL + "/v1", APIKey: "test-key", ImageModel: "gpt-image-2", TimeoutMS: 5000,
+			})
+			_, err := provider.Generate(t.Context(), generation.CreateRequest{
+				Type: "TEXT_TO_IMAGE", Prompt: "official gpt image params", Model: "gpt-image-2", Params: tt.params,
+			})
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			for key, want := range tt.want {
+				if captured[key] != want {
+					t.Fatalf("body[%s] = %#v, want %#v in %#v", key, captured[key], want, captured)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAICompatibleRejectsUnsupportedImageParametersBeforeRequest(t *testing.T) {
+	tests := []struct {
+		name   string
+		params map[string]any
+	}{
+		{name: "unsupported size 100x100", params: map[string]any{"size": "100x100", "quality": "high", "n": 1}},
+		{name: "unsupported size not multiple of 16", params: map[string]any{"size": "1000x1000", "quality": "high", "n": 1}},
+		{name: "unsupported size 512x512 below pixel floor", params: map[string]any{"size": "512x512", "quality": "high", "n": 1}},
+		{name: "ratio alias is not size", params: map[string]any{"size": "16:9", "quality": "high", "n": 1}},
+		{name: "unsupported quality ultra", params: map[string]any{"size": "1024x1024", "quality": "ultra", "n": 1}},
+		{name: "dalle quality standard", params: map[string]any{"size": "1024x1024", "quality": "standard", "n": 1}},
+		{name: "dalle quality hd", params: map[string]any{"size": "1024x1024", "quality": "hd", "n": 1}},
+		{name: "zero count", params: map[string]any{"size": "1024x1024", "quality": "high", "n": 0}},
+		{name: "count above official maximum", params: map[string]any{"size": "1024x1024", "quality": "high", "n": 11}},
+		{name: "fractional count", params: map[string]any{"size": "1024x1024", "quality": "high", "n": 1.5}},
+		{name: "numeric string count", params: map[string]any{"size": "1024x1024", "quality": "high", "n": "2"}},
+		{name: "non numeric string count", params: map[string]any{"size": "1024x1024", "quality": "high", "n": "many"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requestCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requestCount++
+				writeImageAPIResponse(w)
+			}))
+			defer server.Close()
+			provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{
+				BaseURL: server.URL + "/v1", APIKey: "test-key", ImageModel: "gpt-image-2", TimeoutMS: 5000,
+			})
+			_, err := provider.Generate(t.Context(), generation.CreateRequest{
+				Type: "TEXT_TO_IMAGE", Prompt: "contract test", Model: "gpt-image-2", Params: tt.params,
+			})
+			if err == nil {
+				t.Fatal("Generate() error = nil, want unsupported parameter error")
+			}
+			if requestCount != 0 {
+				t.Fatalf("provider requests = %d, want 0", requestCount)
+			}
+		})
+	}
+}
+
+func TestResponsesImageToolMapsStandardQualityToAuto(t *testing.T) {
+	tool := responsesImageTool(map[string]any{
+		"size":    "1024x1024",
+		"quality": "standard",
+	}, false)
+	if tool["size"] != "1024x1024" {
+		t.Fatalf("size = %v, want 1024x1024", tool["size"])
+	}
+	if got := tool["quality"]; got != "auto" {
+		t.Fatalf("quality = %v, want auto for standard alias", got)
+	}
+}
+
+func TestResponsesImageToolDefaultsOmittedQualityToLow(t *testing.T) {
+	tool := responsesImageTool(map[string]any{"size": "1024x1024"}, false)
+	if got := tool["quality"]; got != "low" {
+		t.Fatalf("quality = %v, want low", got)
 	}
 }
 
@@ -262,19 +399,6 @@ func TestResponsesImageToolKeepsValidSizeAndQuality(t *testing.T) {
 	}
 	if got := tool["quality"]; got != "high" {
 		t.Fatalf("quality = %v, want high", got)
-	}
-}
-
-func TestResponsesImageToolOmitsUnsupportedQuality(t *testing.T) {
-	for _, quality := range []string{"standard", "medium", "low", "draft"} {
-		t.Run(quality, func(t *testing.T) {
-			tool := responsesImageTool(map[string]any{
-				"quality": quality,
-			}, false)
-			if _, ok := tool["quality"]; ok {
-				t.Fatalf("quality = %v, want omitted", tool["quality"])
-			}
-		})
 	}
 }
 
@@ -296,8 +420,8 @@ func TestOpenAICompatibleGPTImage2UsesResponsesGenerate(t *testing.T) {
 		if !ok || tool["type"] != "image_generation" || tool["action"] != "generate" {
 			t.Fatalf("tool = %#v, want image_generation generate", tools[0])
 		}
-		if _, ok := tool["quality"]; ok {
-			t.Fatalf("tool quality = %v, want omitted for frontend low quality", tool["quality"])
+		if got := tool["quality"]; got != "auto" {
+			t.Fatalf("tool quality = %v, want auto", got)
 		}
 		input, ok := body["input"].([]any)
 		if !ok || len(input) != 1 {
@@ -331,9 +455,9 @@ func TestOpenAICompatibleGPTImage2UsesResponsesGenerate(t *testing.T) {
 		Prompt: "生成卖书的电商图",
 		Model:  "gpt-image-2",
 		Params: map[string]any{
-			"apiMode":      "responses",
-			"size":         "auto",
-			"imageQuality": "low",
+			"apiMode": "responses",
+			"size":    "1024x1024",
+			"quality": "auto",
 		},
 	})
 	if err != nil {
@@ -449,6 +573,7 @@ func TestOpenAICompatibleImageEditFallsBackToImageField(t *testing.T) {
 		Model:  "gpt-image-2",
 		Params: map[string]any{
 			"imageRequestMode": "openai",
+			"size":             "1024x1024",
 			"referenceImages":  []any{map[string]any{"name": "input.png", "url": tinyReferenceDataURL}},
 		},
 	})
@@ -478,11 +603,11 @@ func TestOpenAICompatibleGPTImage2UsesResponsesEdit(t *testing.T) {
 		if !ok || tool["type"] != "image_generation" || tool["action"] != "edit" {
 			t.Fatalf("tool = %#v, want image_generation edit", tools[0])
 		}
-		if _, ok := tool["size"]; ok {
-			t.Fatalf("tool size = %v, want omitted for frontend auto size", tool["size"])
+		if tool["size"] != "1024x1024" {
+			t.Fatalf("tool size = %v, want 1024x1024", tool["size"])
 		}
-		if _, ok := tool["quality"]; ok {
-			t.Fatalf("tool quality = %v, want omitted for frontend auto quality", tool["quality"])
+		if got := tool["quality"]; got != "auto" {
+			t.Fatalf("tool quality = %v, want auto", got)
 		}
 		input, ok := body["input"].([]any)
 		if !ok || len(input) != 1 {
@@ -517,8 +642,8 @@ func TestOpenAICompatibleGPTImage2UsesResponsesEdit(t *testing.T) {
 		Model:  "gpt-image-2",
 		Params: map[string]any{
 			"apiMode":         "responses",
-			"size":            "auto",
-			"imageQuality":    "auto",
+			"size":            "1024x1024",
+			"quality":         "auto",
 			"referenceImages": []any{map[string]any{"name": "input.png", "url": tinyReferenceDataURL}},
 		},
 	})
@@ -562,6 +687,7 @@ func TestOpenAICompatibleGPTImage2UsesImagesEditWhenFrontendApiModeIsImages(t *t
 		Model:  "gpt-image-2",
 		Params: map[string]any{
 			"apiMode":         "images",
+			"size":            "1024x1024",
 			"referenceImages": []any{map[string]any{"name": "input.png", "url": tinyReferenceDataURL}},
 		},
 	})
@@ -603,6 +729,7 @@ func TestOpenAICompatibleMultiReferenceUsesConfiguredImagesMode(t *testing.T) {
 		Model:  "gpt-image-2",
 		Params: map[string]any{
 			"apiMode": "images",
+			"size":    "1024x1024",
 			"referenceImages": []any{
 				map[string]any{"name": "product.png", "url": tinyReferenceDataURL},
 				map[string]any{"name": "logo-poster.png", "url": tinyReferenceDataURL},
@@ -617,13 +744,13 @@ func TestOpenAICompatibleMultiReferenceUsesConfiguredImagesMode(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleImageEditSkipsInvalidImageQuality(t *testing.T) {
+func TestOpenAICompatibleImageEditOmitsStandardQuality(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(2 << 20); err != nil {
 			t.Fatal(err)
 		}
-		if quality := r.FormValue("quality"); quality != "" {
-			t.Fatalf("quality = %q, want omitted for invalid imageQuality", quality)
+		if quality := r.FormValue("quality"); quality != "" && quality != "auto" {
+			t.Fatalf("quality = %q, want omitted or auto", quality)
 		}
 		writeImageAPIResponse(w)
 	}))
@@ -641,7 +768,8 @@ func TestOpenAICompatibleImageEditSkipsInvalidImageQuality(t *testing.T) {
 		Model:  "gpt-image-2",
 		Params: map[string]any{
 			"apiMode":         "images",
-			"imageQuality":    "1K",
+			"size":            "1024x1024",
+			"quality":         "auto",
 			"referenceImages": []any{map[string]any{"name": "input.png", "url": tinyReferenceDataURL}},
 		},
 	})

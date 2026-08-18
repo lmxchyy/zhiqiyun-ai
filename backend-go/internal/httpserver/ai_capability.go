@@ -11,14 +11,15 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 )
 
 const (
-	moduleImageGeneration     = "image_generation"
-	moduleVideoGeneration     = "video_generation"
-	modulePPTGeneration       = "ppt_generation"
-	moduleSmartVideoEditing   = "smart_video_editing"
+	moduleImageGeneration   = "image_generation"
+	moduleVideoGeneration   = "video_generation"
+	modulePPTGeneration     = "ppt_generation"
+	moduleSmartVideoEditing = "smart_video_editing"
 
 	capabilitySmartVideoPlan  = "smart_video_plan"
 	capabilitySpeechSynthesis = "speech_synthesis"
@@ -68,6 +69,7 @@ func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
 	} else {
 		data.TenantModuleLimits = ensureSmartVideoTenantLimit(data.TenantModuleLimits, defaultTenantModuleLimits(now))
 	}
+	data.TenantModuleLimits = alignGPTImageTenantQualityLimits(data.TenantModuleLimits)
 	if len(data.BillingRules) == 0 {
 		data.BillingRules = defaultBillingRules(now)
 	} else {
@@ -151,6 +153,9 @@ func mergeDefaultAIModels(current []adminAIModel, defaults []adminAIModel) []adm
 		known[strings.ToLower(strings.TrimSpace(model.ModelName))] = true
 	}
 	for _, fallback := range defaults {
+		if canonicalModuleCode(fallback.ModuleCode) == moduleImageGeneration {
+			continue
+		}
 		key := strings.ToLower(strings.TrimSpace(fallback.ModelName))
 		if key == "" || known[key] {
 			continue
@@ -216,6 +221,44 @@ func ensureSmartVideoTenantLimit(current []adminTenantModuleLimit, defaults []ad
 		}
 	}
 	return current
+}
+
+func alignGPTImageTenantQualityLimits(limits []adminTenantModuleLimit) []adminTenantModuleLimit {
+	official := []any{"auto", "low", "medium", "high"}
+	for index := range limits {
+		if canonicalModuleCode(firstNonEmptyString(limits[index].ModuleCode, limits[index].ModuleCodeCamel)) != moduleImageGeneration {
+			continue
+		}
+		if firstNonEmptyString(limits[index].PackageID, limits[index].PackageIDCamel) == "plan_free" {
+			continue
+		}
+		limit, ok := mapValue(limits[index].LimitJSON)
+		if !ok {
+			continue
+		}
+		quality, ok := mapValue(limit["quality"])
+		if !ok {
+			continue
+		}
+		allowed, ok := anySlice(quality["allowed"])
+		if !ok {
+			continue
+		}
+		needsAlign := false
+		for _, value := range allowed {
+			switch strings.ToLower(strings.TrimSpace(fmt.Sprint(value))) {
+			case "standard", "hd":
+				needsAlign = true
+			}
+		}
+		if !needsAlign {
+			continue
+		}
+		quality["allowed"] = official
+		limit["quality"] = quality
+		limits[index].LimitJSON = limit
+	}
+	return limits
 }
 
 func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
@@ -287,7 +330,7 @@ func mergeDefaultVideoBoundModels(data adminPlatformData) adminPlatformData {
 
 func mergeDefaultVideoChannelModels(data adminPlatformData) adminPlatformData {
 	wantedByChannel := map[string][]string{
-		"channel_newapi_gateway": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "doubao-seedance-2.0", "seedance-fast-2.0"},
+		"channel_newapi_gateway":      {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "doubao-seedance-2.0", "seedance-fast-2.0"},
 		"channel_newapi_grok_imagine": {"grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"},
 	}
 	for index := range data.APIChannels {
@@ -320,11 +363,13 @@ func mergeDefaultAIParameterSchemaFields(current []adminAIParameterSchema, defau
 	result := make([]adminAIParameterSchema, len(current))
 	copy(result, current)
 	for _, fallback := range defaults {
+		matched := false
 		for index := range result {
 			if !strings.EqualFold(strings.TrimSpace(result[index].ModuleCode), strings.TrimSpace(fallback.ModuleCode)) ||
 				!strings.EqualFold(strings.TrimSpace(result[index].ModelName), strings.TrimSpace(fallback.ModelName)) {
 				continue
 			}
+			matched = true
 			known := map[string]bool{}
 			for _, field := range result[index].SchemaJSON.Fields {
 				known[field.Key] = true
@@ -338,8 +383,119 @@ func mergeDefaultAIParameterSchemaFields(current []adminAIParameterSchema, defau
 			}
 			break
 		}
+		if !matched {
+			result = append(result, fallback)
+		}
 	}
-	return result
+	return alignGPTImageParameterSchemas(result)
+}
+
+func alignGPTImageParameterSchemas(schemas []adminAIParameterSchema) []adminAIParameterSchema {
+	official := gptImage2OfficialFields()
+	for index := range schemas {
+		if !isGPTImage2SchemaModel(schemas[index].ModelName) {
+			continue
+		}
+		fields := make([]adminAIParameterField, 0, len(schemas[index].SchemaJSON.Fields)+len(official))
+		replaced := map[string]bool{}
+		for _, field := range schemas[index].SchemaJSON.Fields {
+			key := strings.TrimSpace(field.Key)
+			if key == "seed" || key == "negative_prompt" {
+				continue
+			}
+			if officialField, ok := official[key]; ok {
+				fields = append(fields, officialField)
+				replaced[key] = true
+				continue
+			}
+			fields = append(fields, field)
+		}
+		for _, key := range []string{"prompt", "size", "quality", "n"} {
+			if replaced[key] {
+				continue
+			}
+			if field, ok := official[key]; ok {
+				fields = append(fields, field)
+			}
+		}
+		schemas[index].SchemaJSON.Fields = fields
+	}
+	return schemas
+}
+
+func isGPTImage2SchemaModel(modelName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	normalized = strings.ReplaceAll(normalized, "_", "-")
+	return strings.Contains(normalized, "gpt-image-2")
+}
+
+func gptImage2OfficialFields() map[string]adminAIParameterField {
+	return map[string]adminAIParameterField{
+		"prompt": {Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+		"size": {
+			Key: "size", Label: "图片尺寸", Type: "select", Required: false, Default: "auto",
+			Options: gptImage2SizeOptions(), UserEditable: true, Visible: true,
+		},
+		"quality": {
+			Key: "quality", Label: "图片质量", Type: "select", Required: false, Default: "low",
+			Options: anyOptions("auto", "low", "medium", "high"), UserEditable: true, Visible: true,
+		},
+		"n": {
+			Key: "n", Label: "生成数量", Type: "number", Required: false, Default: float64(1),
+			Options: anyOptions(float64(1), float64(2), float64(3), float64(4)), Min: floatPtr(1), Max: floatPtr(4),
+			UserEditable: true, Visible: true,
+		},
+	}
+}
+
+func gptImage2SizeOptions() []any {
+	// Official GPT Image sizes shown in production UI.
+	// Provider also accepts any other legal WxH; these are the listed SKUs.
+	return anyOptions(
+		"auto",
+		"1024x1024",
+		"1536x1024",
+		"1024x1536",
+		"1280x720",
+		"720x1280",
+		"2048x1152",
+		"2048x2048",
+		"3840x2160",
+		"2160x3840",
+	)
+}
+
+func gptImage2DeferredProductionSizes() []string {
+	return []string{"1280x720", "720x1280", "2048x1152", "2048x2048", "3840x2160", "2160x3840"}
+}
+
+const (
+	// gptImage2Phase1BasePrice is 10 credits per image at quality=low.
+	gptImage2Phase1BasePrice = 10
+	// gptImage2Phase1MinimumCharge matches one low-quality 1K image.
+	gptImage2Phase1MinimumCharge = 10
+)
+
+// gptImage2Phase1BillingParameterRules is the unpublished Phase-1 GPT Image
+// customer price. n is billed only via per_image quantity (no n multiplier).
+// quality=auto and size=auto are temporarily billed as 1K medium (55 credits).
+// Size keys are billing tiers, not provider WxH. Do not publish from this helper.
+func gptImage2Phase1BillingParameterRules() map[string]any {
+	return map[string]any{
+		"quality": map[string]any{
+			"low":    float64(1),
+			"medium": float64(5.5),
+			"high":   float64(22),
+			"auto":   float64(5.5),
+		},
+		"size": map[string]any{
+			"auto":      float64(1),
+			"tier_720p": float64(1),
+			"tier_1k":   float64(1),
+			"tier_2k":   float64(1.5),
+			"tier_4k":   float64(2),
+		},
+	}
 }
 
 func defaultAIModules(now string) []adminAIModule {
@@ -348,7 +504,7 @@ func defaultAIModules(now string) []adminAIModule {
 			ID: "ai_module_image_generation", ModuleCode: moduleImageGeneration, Name: "AI生图",
 			Description: "统一管理文生图、图生图、图片编辑的模型、参数和调用策略。",
 			Status:      "ACTIVE", OpenPackageIDs: []string{"plan_free", "plan_month", "plan_basic_single", "plan_pro", "plan_year"},
-			BoundModels: []string{"mock-standard", "gpt-image-2"}, DefaultSchemaID: "schema_image_generation_default",
+			BoundModels: []string{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"}, DefaultSchemaID: "schema_image_generation_default",
 			AllowAgents: true, AllowEndUsers: true, CreatedAt: now, UpdatedAt: now,
 		},
 		{
@@ -383,6 +539,8 @@ func defaultAIModels(now string) []adminAIModel {
 	return []adminAIModel{
 		{ID: "ai_model_mock_standard", ModelName: "mock-standard", ModelType: "image", Provider: "Local", CapabilityCode: []string{"text_to_image", "image_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_gpt_image_2", ModelName: "gpt-image-2", ModelType: "image", Provider: "NewAPI", CapabilityCode: []string{"text_to_image", "image_to_image", "image_edit"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", FallbackModel: "mock-standard", SortWeight: 20, AllowFallbackSwitch: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_cloudbase_hy_image", ModelName: "HY-Image-3.0-Plus-4090-Tob-v1.0", ModelType: "image", Provider: "CloudBase", CapabilityCode: []string{"text_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 30, CreatedAt: now, UpdatedAt: now},
+		{ID: "ai_model_cloudbase_hy_image_i2i", ModelName: "HY-Image-v3.0-I2I-ToB-v1.0.1", ModelType: "image", Provider: "CloudBase", CapabilityCode: []string{"image_to_image"}, ModuleCode: moduleImageGeneration, Status: "ACTIVE", SortWeight: 40, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_mock_video", ModelName: "mock-video", ModelType: "video", Provider: "Local", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 10, CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_grok_imagine_video_15_preview", ModelName: "grok-imagine-video-1.5-preview", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 14, VideoCapabilities: grokImagine15VideoPreviewCapabilitiesPtr(), CreatedAt: now, UpdatedAt: now},
 		{ID: "ai_model_grok_imagine_15_video", ModelName: "grok-imagine-1.5-video", ModelType: "video", Provider: "NewAPI", CapabilityCode: []string{"text_to_video", "image_to_video"}, ModuleCode: moduleVideoGeneration, Status: "ACTIVE", SortWeight: 15, VideoCapabilities: grokImagine15VideoCapabilitiesPtr(), CreatedAt: now, UpdatedAt: now},
@@ -401,9 +559,7 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			ID: "schema_image_generation_default", ModuleCode: moduleImageGeneration, ModelName: "mock-standard",
 			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
 				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
-				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1024x1536", "1536x1024"), UserEditable: true, Visible: true},
-				{Key: "quality", Label: "图片质量", Type: "select", Required: true, Default: "standard", Options: anyOptions("standard", "high"), UserEditable: true, Visible: true},
-				{Key: "n", Label: "生成数量", Type: "number", Required: true, Default: float64(1), Min: floatPtr(1), Max: floatPtr(8), UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1920x1080", Options: anyOptions("1920x1080"), UserEditable: true, Visible: true},
 				{Key: "reference_image", Label: "参考图", Type: "image_upload", UserEditable: true, Visible: true},
 				{Key: "seed", Label: "种子值", Type: "number", UserEditable: true, Visible: true},
 				{Key: "negative_prompt", Label: "负面提示词", Type: "textarea", UserEditable: true, Visible: true},
@@ -453,12 +609,39 @@ func defaultAIParameterSchemas(now string) []adminAIParameterSchema {
 			}},
 			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
 		},
+		{
+			ID: "schema_image_generation_gpt_image_2", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				gptImage2OfficialFields()["prompt"],
+				gptImage2OfficialFields()["size"],
+				gptImage2OfficialFields()["quality"],
+				gptImage2OfficialFields()["n"],
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "schema_image_generation_cloudbase_hy_image", ModuleCode: moduleImageGeneration, ModelName: "HY-Image-3.0-Plus-4090-Tob-v1.0",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1280x1280", "1280x720", "720x1280"), UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "schema_image_generation_cloudbase_hy_image_i2i", ModuleCode: moduleImageGeneration, ModelName: "HY-Image-v3.0-I2I-ToB-v1.0.1",
+			SchemaJSON: adminAIParameterSchemaJSON{Fields: []adminAIParameterField{
+				{Key: "prompt", Label: "图片提示词", Type: "textarea", Required: true, Placeholder: "描述你想生成的图片", UserEditable: true, Visible: true},
+				{Key: "size", Label: "图片尺寸", Type: "select", Required: true, Default: "1024x1024", Options: anyOptions("1024x1024", "1280x1280", "1280x720", "720x1280"), UserEditable: true, Visible: true},
+				{Key: "reference_image", Label: "参考图", Type: "image_upload", Required: true, UserEditable: true, Visible: true},
+			}},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
 	}
 }
 
 func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
 	return []adminTenantModuleLimit{
-		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"standard", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{ID: "limit_default_image", TenantID: "default", ModuleCode: moduleImageGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-standard", "gpt-image-2", "HY-Image-3.0-Plus-4090-Tob-v1.0", "HY-Image-v3.0-I2I-ToB-v1.0.1"}}, "n": map[string]any{"max": float64(4)}, "quality": map[string]any{"allowed": []any{"auto", "low", "medium", "high"}}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_video", TenantID: "default", ModuleCode: moduleVideoGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"mock-video", "grok-imagine-video-1.5-preview", "grok-imagine-1.5-video", "seedance-fast-2.0", "doubao-seedance-2.0"}}, "resolution": map[string]any{"allowed": []any{"480p", "720p", "1080p", "4k"}}, "duration": map[string]any{"max": float64(30)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_ppt", TenantID: "default", ModuleCode: modulePPTGeneration, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{"kimi-k2.6", "ppt-text-model"}}, "page_count": map[string]any{"max": float64(20)}, "uploaded_file": map[string]any{"enabled": true}, "with_images": map[string]any{"enabled": true}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "limit_default_smart_video", TenantID: "default", ModuleCode: moduleSmartVideoEditing, LimitJSON: map[string]any{"models": map[string]any{"allowed": []any{modelSmartVideoStandard}}, "resolution": map[string]any{"allowed": []any{"720p", "1080p"}}, "duration_ms": map[string]any{"min": float64(15000), "max": float64(60000)}, "plan_per_day": map[string]any{"max": float64(20)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
@@ -469,7 +652,11 @@ func defaultTenantModuleLimits(now string) []adminTenantModuleLimit {
 func defaultBillingRules(now string) []adminBillingRule {
 	return []adminBillingRule{
 		{ID: "billing_rule_image_mock", ModuleCode: moduleImageGeneration, ModelName: "mock-standard", BillingType: "per_image", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"standard": float64(1), "high": float64(1.5)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
-		{ID: "billing_rule_image_gpt", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2", BillingType: "per_image", BasePrice: 10, CostPrice: 6, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"standard": float64(1), "high": float64(1.5)}, "size": map[string]any{"1024x1024": float64(1), "1024x1536": float64(1.2), "1536x1024": float64(1.2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		// CODE_DEFAULT / local JSON auto-publish seed. Phase-1 customer SKU
+		// (low=10, medium=55, high=220, auto=55) lives in unpublished DRAFT
+		// created by TestGPTImageBillingRulePhase26Draft. Do not treat this
+		// seed as the published production price.
+		{ID: "billing_rule_image_gpt", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2", BillingType: "per_image", BasePrice: 10, CostPrice: 6, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"auto": float64(1), "low": float64(1), "medium": float64(1.2), "high": float64(1.5)}, "size": map[string]any{"auto": float64(1), "1024x1024": float64(1), "1024x1536": float64(1.2), "1536x1024": float64(1.2), "1280x720": float64(1), "720x1280": float64(1), "2048x2048": float64(1.5), "2048x1152": float64(1.5), "3840x2160": float64(2), "2160x3840": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_mock", ModuleCode: moduleVideoGeneration, ModelName: "mock-video", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_grok_image", ModuleCode: moduleVideoGeneration, ModelName: "grok-video-image", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_grok_imagine_15_preview", ModuleCode: moduleVideoGeneration, ModelName: "grok-imagine-video-1.5-preview", BillingType: "per_request", BasePrice: 100, MinimumCharge: 100, CostPrice: 80, CurrencyType: "credit", ParameterMultiplier: map[string]any{}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
@@ -516,9 +703,38 @@ func (a api) moduleSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, moduleSchemaResponse(resolved, user))
 }
 
+func (a api) publicModuleSchema(w http.ResponseWriter, r *http.Request) {
+	data, err := a.store.AdminData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	data = normalizeAICapabilityDefaults(data)
+	moduleCode := canonicalModuleCode(firstNonEmptyString(
+		r.URL.Query().Get("module_code"),
+		r.URL.Query().Get("moduleCode"),
+	))
+	modelName := strings.TrimSpace(firstNonEmptyString(
+		r.URL.Query().Get("model_name"),
+		r.URL.Query().Get("modelName"),
+	))
+	resolved, err := resolvePublicModuleSchema(data, moduleCode, modelName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if isWeChatMiniProgramRequest(r) {
+		if err := validateExactMiniProgramModuleSchema(resolved); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+	}
+	writeJSON(w, publicModuleSchemaResponse(resolved))
+}
+
 func resolveClientModuleSchema(data adminPlatformData, user adminUser, moduleCode string, modelName string) (resolvedModuleSchema, error) {
 	resolved, err := resolveModuleSchema(data, user, moduleCode, modelName)
-	if err == nil || strings.TrimSpace(modelName) == "" {
+	if err == nil || strings.TrimSpace(modelName) == "" || canonicalModuleCode(moduleCode) == moduleImageGeneration {
 		return resolved, err
 	}
 	requestedModel := findAIModel(data.AIModels, moduleCode, modelName)
@@ -718,6 +934,8 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if err != nil {
 		return req, err
 	}
+	req.Model = resolved.Model.ModelName
+	normalizeGPTImageCanonicalParams(&req)
 	if moduleCode == moduleVideoGeneration {
 		if err := validateVideoGenerationRequest(&req, resolved); err != nil {
 			return req, err
@@ -848,14 +1066,57 @@ func resolveModuleSchema(data adminPlatformData, user adminUser, moduleCode stri
 	if !isActiveLike(model.Status) {
 		return resolvedModuleSchema{}, fmt.Errorf("ai model is disabled: %s", model.ModelName)
 	}
-	schema := findAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
-	if schema.ID == "" {
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, model.ModelName)
+	return resolveConfiguredModuleSchema(data, module, model, limit)
+}
+
+func resolvePublicModuleSchema(data adminPlatformData, moduleCode string, modelName string) (resolvedModuleSchema, error) {
+	moduleCode = canonicalModuleCode(moduleCode)
+	if moduleCode == "" {
+		return resolvedModuleSchema{}, errors.New("module_code is required")
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return resolvedModuleSchema{}, errors.New("model_name is required")
+	}
+	module := findAIModule(data.AIModules, moduleCode)
+	if module.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("ai module not found: %s", moduleCode)
+	}
+	if !isActiveLike(module.Status) {
+		return resolvedModuleSchema{}, fmt.Errorf("ai module is disabled: %s", moduleCode)
+	}
+	model := findAIModel(data.AIModels, moduleCode, modelName)
+	if model.ID == "" {
+		return resolvedModuleSchema{}, fmt.Errorf("ai model %s is not configured for module %s", modelName, moduleCode)
+	}
+	if !isActiveLike(model.Status) {
+		return resolvedModuleSchema{}, fmt.Errorf("ai model is disabled: %s", model.ModelName)
+	}
+	publicContext := adminUser{TenantID: "default"}
+	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, publicContext, moduleCode, model.ModelName)
+	return resolveConfiguredModuleSchema(data, module, model, limit)
+}
+
+func resolveConfiguredModuleSchema(
+	data adminPlatformData,
+	module adminAIModule,
+	model adminAIModel,
+	limit adminTenantModuleLimit,
+) (resolvedModuleSchema, error) {
+	moduleCode := canonicalModuleCode(module.ModuleCode)
+	var schema adminAIParameterSchema
+	if moduleCode == moduleImageGeneration {
+		schema = findExactAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
+	} else {
+		schema = findAIParameterSchema(data.AIParameterSchemas, moduleCode, model.ModelName)
+	}
+	if schema.ID == "" && moduleCode != moduleImageGeneration {
 		schema = findAIParameterSchema(data.AIParameterSchemas, moduleCode, "")
 	}
 	if schema.ID == "" {
-		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for module %s", moduleCode)
+		return resolvedModuleSchema{}, fmt.Errorf("parameter schema not found for model %s in module %s", model.ModelName, moduleCode)
 	}
-	limit := effectiveTenantModuleLimit(data.TenantModuleLimits, user, moduleCode, model.ModelName)
 	if err := validateModelAllowedByLimit(model.ModelName, limit.LimitJSON); err != nil {
 		return resolvedModuleSchema{}, err
 	}
@@ -909,6 +1170,16 @@ func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[str
 	}
 }
 
+func publicModuleSchemaResponse(resolved resolvedModuleSchema) map[string]any {
+	return map[string]any{
+		"module_code":        resolved.Module.ModuleCode,
+		"model_name":         resolved.Model.ModelName,
+		"schema":             resolved.FinalSchema,
+		"fields":             resolved.FinalSchema.Fields,
+		"video_capabilities": resolved.Model.VideoCapabilities,
+	}
+}
+
 func validateGenerationParams(req generation.CreateRequest, resolved resolvedModuleSchema) error {
 	schema := resolved.Schema.SchemaJSON
 	if canonicalModuleCode(resolved.Module.ModuleCode) == moduleVideoGeneration {
@@ -939,7 +1210,15 @@ func validateGenerationParams(req generation.CreateRequest, resolved resolvedMod
 		if !ok || !hasNonEmptyValue(value) {
 			continue
 		}
-		if err := validateFieldValue(field, value); err != nil {
+		if isGPTImage2SchemaModel(resolved.Model.ModelName) && field.Key == "size" {
+			if err := imageprovider.ValidateGPTImageSize(value); err != nil {
+				return err
+			}
+		} else if isGPTImage2SchemaModel(resolved.Model.ModelName) && field.Key == "quality" {
+			if err := imageprovider.ValidateGPTImageQuality(value); err != nil {
+				return err
+			}
+		} else if err := validateFieldValue(field, value); err != nil {
 			return err
 		}
 		if err := validateLimitValue(field.Key, value, resolved.Limit.LimitJSON); err != nil {
@@ -1054,7 +1333,7 @@ func generationPointCostForRequest(req createGenerationTaskRequest, data adminPl
 		return 1
 	}
 	quantity := billingQuantity(rule.BillingType, req)
-	multiplier := billingMultiplier(rule.ParameterMultiplier, req.Params)
+	multiplier := billingMultiplier(rule.ParameterMultiplier, billingParamsForRequest(req.Model, req.Params, rule.ParameterMultiplier))
 	total := int(math.Ceil(rule.BasePrice * quantity * multiplier))
 	minimumCharge := int(math.Ceil(rule.MinimumCharge))
 	if total < minimumCharge {
@@ -1421,18 +1700,6 @@ func normalizeRequestParamAliases(req *generation.CreateRequest) {
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
-	if req.ModuleCode == moduleImageGeneration {
-		if _, ok := req.Params["n"]; !ok {
-			if count, exists := req.Params["count"]; exists {
-				req.Params["n"] = count
-			}
-		}
-		if _, ok := req.Params["count"]; !ok {
-			if n, exists := req.Params["n"]; exists {
-				req.Params["count"] = n
-			}
-		}
-	}
 	if req.ModuleCode == moduleVideoGeneration {
 		if _, ok := req.Params["aspect_ratio"]; !ok {
 			if ratio, exists := req.Params["ratio"]; exists {
@@ -1446,6 +1713,43 @@ func normalizeRequestParamAliases(req *generation.CreateRequest) {
 			}
 		}
 		delete(req.Params, "generateAudio")
+	}
+	normalizeGPTImageCanonicalParams(req)
+}
+
+func normalizeGPTImageCanonicalParams(req *generation.CreateRequest) {
+	if req == nil || req.Params == nil {
+		return
+	}
+	if !isGPTImage2SchemaModel(req.Model) {
+		return
+	}
+	if !hasNonEmptyValue(req.Params["quality"]) {
+		if alias, ok := canonicalGPTImageQualityValue(req.Params["imageQuality"]); ok {
+			req.Params["quality"] = alias
+		}
+	}
+	if _, ok := req.Params["n"]; !ok {
+		if count, exists := req.Params["count"]; exists {
+			req.Params["n"] = count
+		}
+	}
+}
+
+func canonicalGPTImageQualityValue(value any) (string, bool) {
+	if !hasNonEmptyValue(value) {
+		return "", false
+	}
+	quality := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	switch quality {
+	case "auto", "low", "medium", "high":
+		return quality, true
+	case "standard":
+		return "auto", true
+	case "draft":
+		return "low", true
+	default:
+		return "", false
 	}
 }
 
@@ -1487,6 +1791,21 @@ func findAIParameterSchema(items []adminAIParameterSchema, moduleCode string, mo
 		}
 	}
 	return fallback
+}
+
+func findExactAIParameterSchema(items []adminAIParameterSchema, moduleCode string, modelName string) adminAIParameterSchema {
+	for _, item := range items {
+		if canonicalModuleCode(firstNonEmptyString(item.ModuleCode, item.ModuleCodeCamel)) != moduleCode || !isActiveLike(item.Status) {
+			continue
+		}
+		if strings.EqualFold(firstNonEmptyString(item.ModelName, item.ModelNameCamel), modelName) {
+			if item.ModelName == "" {
+				item.ModelName = item.ModelNameCamel
+			}
+			return item
+		}
+	}
+	return adminAIParameterSchema{}
 }
 
 func defaultModelNameForModule(data adminPlatformData, moduleCode string) string {

@@ -274,6 +274,24 @@ func resolveMiniProgramCompliantModuleSchema(data adminPlatformData, user adminU
 	return resolvedModuleSchema{}, fmt.Errorf("%w: %s", errMiniProgramModelNotCompliant, reason)
 }
 
+func validateExactMiniProgramModuleSchema(resolved resolvedModuleSchema) error {
+	moduleCode := canonicalModuleCode(resolved.Module.ModuleCode)
+	if moduleCode == moduleVideoGeneration && miniProgramVideoComplianceBypassAllows(resolved.Model) {
+		return nil
+	}
+	allowed, reason := modelAllowedForMiniProgram(resolved.Model, time.Now().UTC())
+	if allowed && stringListContainsFold(resolved.Model.AllowedCapabilities, defaultAIModelTypeForModule(moduleCode)) {
+		return nil
+	}
+	if allowed {
+		reason = "capability_not_allowed"
+	}
+	if reason == "" {
+		reason = "model_not_allowed"
+	}
+	return fmt.Errorf("%w: %s", errMiniProgramModelNotCompliant, reason)
+}
+
 func configuredMiniProgramCreationModes() []string {
 	allowed := map[string]bool{"image": true, "infographic": true, "video": true, "ppt": true, "agent": true, "review": true}
 	raw := strings.TrimSpace(os.Getenv("MINIPROGRAM_CREATION_MODES"))

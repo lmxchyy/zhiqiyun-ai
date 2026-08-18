@@ -29,6 +29,21 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 )
 
+func referDemoUserToDefaultAgent(t *testing.T, store *jsonStore) {
+	t.Helper()
+	if err := store.updateAdmin(func(data *adminPlatformData) error {
+		for i := range data.Users {
+			if data.Users[i].ID == "user_000002" {
+				data.Users[i].ReferredBy = "user_000003"
+				return nil
+			}
+		}
+		return errors.New("demo user not found")
+	}); err != nil {
+		t.Fatalf("refer demo user to default agent: %v", err)
+	}
+}
+
 func TestPublicModelsDoNotLeakProviderRouting(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	handler := New(config.Config{Addr: ":0", DataPath: dataPath, StaticDir: t.TempDir()}).Handler
@@ -480,7 +495,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	for _, field := range schemaPayload.Fields {
 		fieldKeys[field.Key] = true
 	}
-	if schemaPayload.ModuleCode != moduleImageGeneration || schemaPayload.ModelName != "mock-standard" || !fieldKeys["prompt"] || !fieldKeys["n"] || fieldKeys["duration"] {
+	if schemaPayload.ModuleCode != moduleImageGeneration || schemaPayload.ModelName != "mock-standard" || !fieldKeys["prompt"] || fieldKeys["n"] || fieldKeys["duration"] {
 		t.Fatalf("unexpected image schema payload: %+v", schemaPayload)
 	}
 
@@ -498,18 +513,9 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if err := setTestPlan("plan_free"); err != nil {
 		t.Fatalf("set demo plan: %v", err)
 	}
-	fallbackSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
-	if fallbackSchemaRes.Code != http.StatusOK {
-		t.Fatalf("fallback module schema status = %d, body = %s", fallbackSchemaRes.Code, fallbackSchemaRes.Body.String())
-	}
-	var fallbackSchemaPayload struct {
-		ModelName string `json:"model_name"`
-	}
-	if err := json.NewDecoder(fallbackSchemaRes.Body).Decode(&fallbackSchemaPayload); err != nil {
-		t.Fatal(err)
-	}
-	if fallbackSchemaPayload.ModelName != "mock-standard" {
-		t.Fatalf("fallback model = %s, want mock-standard", fallbackSchemaPayload.ModelName)
+	gptSchemaRes := authedRequest(t, handler, http.MethodGet, "/api/v1/module-schema?module_code=image_generation&model_name=gpt-image-2", nil, token)
+	if gptSchemaRes.Code != http.StatusBadRequest || !strings.Contains(gptSchemaRes.Body.String(), "not allowed") {
+		t.Fatalf("disallowed model schema status = %d, body = %s", gptSchemaRes.Code, gptSchemaRes.Body.String())
 	}
 	if err := setTestPlan("plan_month"); err != nil {
 		t.Fatalf("restore demo plan: %v", err)
@@ -525,7 +531,6 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		"prompt":"edit an existing asset",
 		"model":"mock-standard",
 		"params":{
-			"n":1,
 			"index":0,
 			"providerRevisedPrompt":"legacy provider output",
 			"provider_revised_prompt":"legacy provider output",
@@ -563,7 +568,6 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		"prompt":"image prompt with internal metadata",
 		"model":"mock-standard",
 		"params":{
-			"n":1,
 			"imageRatio":"4:3",
 			"sourceModule":"ai-image",
 			"apiMode":"responses",
@@ -616,7 +620,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 		t.Fatalf("video task snapshot parameters changed: %+v", videoTask.Params)
 	}
 
-	create := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"n":2}}`), token)
+	create := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks", bytes.NewBufferString(`{"module_code":"image_generation","prompt":"image prompt","model":"mock-standard","params":{"size":"1920x1080"}}`), token)
 	if create.Code != http.StatusOK {
 		t.Fatalf("create status = %d, body = %s", create.Code, create.Body.String())
 	}
@@ -624,7 +628,7 @@ func TestAICapabilitySchemaValidationAndOverview(t *testing.T) {
 	if err := json.NewDecoder(create.Body).Decode(&task); err != nil {
 		t.Fatal(err)
 	}
-	if task.ModuleCode != moduleImageGeneration || task.BillingType != "per_image" || task.PointCost != 2 || len(task.ResultIDs) != 2 || task.FinalSchemaSnapshot == nil || task.LimitSnapshot == nil {
+	if task.ModuleCode != moduleImageGeneration || task.BillingType != "per_image" || task.PointCost != 1 || len(task.ResultIDs) != 1 || task.FinalSchemaSnapshot == nil || task.LimitSnapshot == nil {
 		t.Fatalf("task missing ai capability snapshot: %+v", task)
 	}
 
@@ -942,11 +946,13 @@ func TestGenerationAssetNameUsesTaskType(t *testing.T) {
 
 func TestUserGenerationAssetPointsAdminLoop(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	referDemoUserToDefaultAgent(t, store)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
@@ -2327,11 +2333,13 @@ func TestAdminAuthMergePreviewBlocksChannelAgentConflict(t *testing.T) {
 
 func TestRechargeOrderPaymentAddsPointsAndAgentCommission(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	referDemoUserToDefaultAgent(t, store)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
@@ -2714,11 +2722,13 @@ func testEncryptWeChatPayResource(t *testing.T, key string, nonce string, associ
 
 func TestRechargeCommissionUsesUpdatedRuleRate(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
-	server := New(config.Config{
+	store := newJSONStore(dataPath)
+	referDemoUserToDefaultAgent(t, store)
+	server := newWithStore(config.Config{
 		Addr:      ":0",
 		DataPath:  dataPath,
 		StaticDir: t.TempDir(),
-	})
+	}, store)
 	handler := server.Handler
 	adminToken := loginToken(t, handler, "admin@xianzhi.ai", "Admin123!")
 
