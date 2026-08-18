@@ -1078,9 +1078,31 @@ func normalizeGenerationQualityForLimit(req *generation.CreateRequest, resolved 
 	if isGPTImage2SchemaModel(resolved.Model.ModelName) {
 		if mapped, mappedOK := canonicalGPTImageQualityValue(value); mappedOK {
 			req.Params["quality"] = mapped
+			value = mapped
+		} else {
 			return
 		}
-		req.Params["quality"] = gptImageQualitySchemaDefault(resolved)
+		var schemaField adminAIParameterField
+		var finalField adminAIParameterField
+		for _, field := range resolved.Schema.SchemaJSON.Fields {
+			if field.Key == "quality" {
+				schemaField = field
+				break
+			}
+		}
+		for _, field := range resolved.FinalSchema.Fields {
+			if field.Key == "quality" {
+				finalField = field
+				break
+			}
+		}
+		if len(schemaField.Options) == 0 || !anyListContains(schemaField.Options, value) {
+			return
+		}
+		if len(finalField.Options) == 0 || anyListContains(finalField.Options, value) {
+			return
+		}
+		req.Params["quality"] = gptImageQualityForPackageLimit(finalField, resolved)
 		return
 	}
 	var schemaField adminAIParameterField
@@ -1860,6 +1882,18 @@ func gptImageQualitySchemaDefault(resolved resolvedModuleSchema) string {
 		break
 	}
 	return "low"
+}
+
+func gptImageQualityForPackageLimit(finalField adminAIParameterField, resolved resolvedModuleSchema) string {
+	if mapped, ok := canonicalGPTImageQualityValue(finalField.Default); ok && anyListContains(finalField.Options, mapped) {
+		return mapped
+	}
+	for _, option := range finalField.Options {
+		if mapped, ok := canonicalGPTImageQualityValue(option); ok && anyListContains(finalField.Options, mapped) {
+			return mapped
+		}
+	}
+	return gptImageQualitySchemaDefault(resolved)
 }
 
 func findAIModule(items []adminAIModule, moduleCode string) adminAIModule {

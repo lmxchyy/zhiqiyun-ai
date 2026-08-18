@@ -199,7 +199,6 @@ func TestGPTImageQualityAliasesMapToOfficialVocabulary(t *testing.T) {
 	}{
 		{"standard", "low"},
 		{"hd", "high"},
-		{"ultra", "low"},
 	} {
 		prepared, err := service.prepareGenerationRequest(data, user, generation.CreateRequest{
 			Type: "TEXT_TO_IMAGE", ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
@@ -214,6 +213,13 @@ func TestGPTImageQualityAliasesMapToOfficialVocabulary(t *testing.T) {
 		if err := imageprovider.ValidateGPTImageQuality(prepared.Params["quality"]); err != nil {
 			t.Fatalf("%s provider quality: %v", tc.input, err)
 		}
+	}
+	_, err := service.prepareGenerationRequest(data, user, generation.CreateRequest{
+		Type: "TEXT_TO_IMAGE", ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+		Params: map[string]any{"size": "2048x2048", "quality": "ultra", "n": float64(1)},
+	})
+	if err == nil {
+		t.Fatal("unsupported quality ultra should fail prepare")
 	}
 }
 
