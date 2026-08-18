@@ -417,6 +417,93 @@ function renderCanvasIcon(icon, size = 14) {
     return `<i data-lucide="${escapeHtml(icon)}" style="width:${size}px;height:${size}px"></i>`;
 }
 
+// GPT Image size options are schema-first. The legacy map is retained only
+// for non-GPT legacy nodes and never authorizes GPT Image sizes.
+let schemaSizeOptions = null;
+let schemaQualityOptions = null;
+let schemaSizeSourceModel = '';
+let schemaSizeRequestState = 'idle';
+
+async function fetchModuleSchema(moduleCode, modelName) {
+    const url = `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}&model_name=${encodeURIComponent(modelName)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+    if (!res.ok) throw new Error(`module-schema request failed: ${res.status}`);
+    return res.json();
+}
+
+function schemaSizeOptionsForModel(modelName) {
+    if (!schemaLoadedForModel(modelName)) return null;
+    return Array.isArray(schemaSizeOptions) ? schemaSizeOptions : null;
+}
+
+function schemaLoadedForModel(modelName) {
+    return schemaSizeSourceModel && resolveImageModel(schemaSizeSourceModel) === resolveImageModel(modelName);
+}
+
+function applySchemaSizeOptions(modelName, schemaResponse) {
+    schemaSizeSourceModel = resolveImageModel(modelName);
+    schemaSizeRequestState = 'loaded';
+    if (!schemaResponse || !schemaResponse.schema || !Array.isArray(schemaResponse.schema.fields)) {
+        schemaSizeOptions = null;
+        schemaQualityOptions = null;
+        schemaSizeRequestState = 'failed';
+        return;
+    }
+    const sizeField = schemaResponse.schema.fields.find(f => f.key === "size");
+    const qualityField = schemaResponse.schema.fields.find(f => f.key === "quality");
+    schemaSizeOptions = (sizeField && Array.isArray(sizeField.options))
+        ? sizeField.options.filter(v => typeof v === "string")
+        : null;
+    schemaQualityOptions = (qualityField && Array.isArray(qualityField.options))
+        ? qualityField.options.filter(v => typeof v === "string")
+        : null;
+}
+
+function clearSchemaSizeOptions(modelName) {
+    if (!modelName || schemaLoadedForModel(modelName) || schemaSizeSourceModel === resolveImageModel(modelName)) {
+        schemaSizeOptions = null;
+        schemaQualityOptions = null;
+        schemaSizeSourceModel = resolveImageModel(modelName || '');
+        schemaSizeRequestState = 'failed';
+    }
+}
+
+function loadGptImageSchema(modelName, onReady) {
+    const resolvedModel = resolveImageModel(modelName);
+    schemaSizeSourceModel = resolvedModel;
+    schemaSizeRequestState = 'loading';
+    return fetchModuleSchema('image_generation', resolvedModel)
+        .then(schema => {
+            applySchemaSizeOptions(resolvedModel, schema);
+            onReady?.();
+            return schema;
+        })
+        .catch(error => {
+            clearSchemaSizeOptions(resolvedModel);
+            onReady?.();
+            throw error;
+        });
+}
+
+const RATIO_KEY_TO_LABEL = {
+    '1:1': 'square', '2:3': 'portrait', '3:2': 'landscape',
+    '3:4': 'portrait43', '4:3': 'landscape43', '9:16': 'story', '16:9': 'wide'
+};
+const LABEL_TO_RATIO_KEY = {};
+for (const [ratio, key] of Object.entries(RATIO_KEY_TO_LABEL)) {
+    LABEL_TO_RATIO_KEY[key] = ratio;
+}
+
+function resolveSizeFromSchema(ratioValue, resolutionValue, modelName='') {
+    if (!window.ImageSizeUtils) return undefined;
+    const sizeOptions = schemaSizeOptionsForModel(modelName) || null;
+    if (!sizeOptions) return undefined;
+    if (resolutionValue === "auto" || ratioValue === "auto") return "auto";
+    const ratio = LABEL_TO_RATIO_KEY[ratioValue];
+    if (!ratio) return undefined;
+    return window.ImageSizeUtils.findSizeByRatioAndTier(sizeOptions, ratio, resolutionValue);
+}
+
 const SIZE_MAP = {
     square: { '1k':'1024x1024', '2k':'2048x2048', '4k':'4096x4096' },
     portrait: { '1k':'1024x1536', '2k':'1360x2048', '4k':'2352x3520' },
@@ -835,10 +922,19 @@ function ratioPartsFromDimensions(width, height){
     const g = gcdInt(best.width, best.height);
     return {width:best.width / g, height:best.height / g};
 }
-function apiImageSize(ratioValue, resolutionValue, customRatioValue = '', customSizeValue = ''){
+function apiImageSize(ratioValue, resolutionValue, customRatioValue = '', customSizeValue = '', modelName=''){
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
     const resolutionKey = resolutionValue || '1k';
+    const resolvedModel = resolveImageModel(modelName || currentImageModelForSchema());
+    const isGpt = isGptImageAutoSizeModel(resolvedModel);
+    const schemaSize = resolveSizeFromSchema(ratioValue, resolutionKey, resolvedModel);
+    if(schemaSize) return schemaSize;
+    if(isGpt){
+        if(ratioValue === 'auto') return 'auto';
+        // GPT Image after schema load must never invent schema-out-of-band sizes.
+        return '';
+    }
     if(ratioValue === 'custom' || ratioValue === 'source'){
         const parsed = parseRatioValue(customRatioValue);
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
@@ -862,7 +958,20 @@ function nearestFourKSizeFor(width, height){
     const w = Math.max(1, Number(width) || 1);
     const h = Math.max(1, Number(height) || 1);
     const ratio = w / h;
+    const schemaSizeOptionsLocal = schemaSizeOptionsForModel(currentImageModelForSchema()) || null;
     let best = null;
+    const candidates = schemaSizeOptionsLocal || [];
+    if(candidates.length){
+        candidates.forEach(sizeValue => {
+            const size = parseSizePair(sizeValue);
+            if(!size) return;
+            const score = Math.abs(Math.log(ratio / (size.width / size.height)));
+            if(!best || score < best.score || (score === best.score && (size.width * size.height) > (best.width * best.height))) {
+                best = {...size, key: sizeValue, score};
+            }
+        });
+        return best;
+    }
     Object.entries(SIZE_MAP).forEach(([key, values]) => {
         const size = parseSizePair(values?.['4k']);
         if(!size) return;
@@ -875,6 +984,20 @@ function exceedsFourKStandard(width, height){
     const standard = nearestFourKSizeFor(width, height);
     if(!standard) return false;
     return Number(width) > standard.width || Number(height) > standard.height;
+}
+function currentImageModelForSchema(){
+    return resolveImageModel(models.gpt || 'gpt-image-2');
+}
+function gptSchemaRatios(modelName){
+    const options = schemaSizeOptionsForModel(modelName);
+    if(!options || !window.ImageSizeUtils) return [];
+    return window.ImageSizeUtils.getAvailableRatios(options);
+}
+function gptSchemaTiers(modelName, ratioKey){
+    const options = schemaSizeOptionsForModel(modelName);
+    const ratio = LABEL_TO_RATIO_KEY[ratioKey];
+    if(!options || !ratio || !window.ImageSizeUtils) return [];
+    return window.ImageSizeUtils.getAvailableTiersForRatio(options, ratio).map(value => value.toLowerCase());
 }
 function normalizeApiNodeSizeChoice(node){
     if(!node) return;
@@ -7844,6 +7967,9 @@ function renderGeneratorBody(node){
     `;
     const providerSelect = wrap.querySelector('.provider-select');
     const modelSelect = wrap.querySelector('.model-select');
+    if(isGptImageAutoSizeModel(resolveImageModel(node.model))) {
+        loadGptImageSchema(node.model, () => syncSizeControls?.()).catch(() => {});
+    }
     providerSelect.onmousedown = e => e.stopPropagation();
     providerSelect.onclick = e => e.stopPropagation();
     providerSelect.onchange = e => {
@@ -7868,6 +7994,10 @@ function renderGeneratorBody(node){
         syncSizeControls();
         syncQualityControls();
         scheduleSave();
+        // Fetch module-schema for the new image model to get correct size/quality options.
+        fetchModuleSchema('image_generation', resolveImageModel(node.model))
+            .then(schema => applySchemaSizeOptions(resolveImageModel(node.model), schema))
+            .catch(() => clearSchemaSizeOptions(resolveImageModel(node.model)));
     };
     const ratioSelect = wrap.querySelector('.ratio');
     const resolutionSelect = wrap.querySelector('.resolution');
@@ -7928,15 +8058,32 @@ function renderGeneratorBody(node){
     };
     const syncSizeControls = () => {
         normalizeApiNodeSizeChoice(node);
+        const isGpt = isGptImageAutoSizeModel(resolveImageModel(node.model));
+        const schemaOptions = schemaSizeOptionsForModel(node.model);
         const autoOption = resolutionSelect.querySelector('option[value="auto"]');
-        if(autoOption) autoOption.disabled = !isGptImageAutoSizeModel(resolveImageModel(node.model));
-        const squareOption = ratioSelect.querySelector('option[value="square"]');
-        if(squareOption){
-            squareOption.disabled = false;
-            squareOption.title = '';
-        }
-        const ratioValue = node.ratio && [...ratioSelect.options].some(opt => opt.value === node.ratio) ? node.ratio : 'square';
+        if(autoOption) autoOption.disabled = !isGpt;
+        const allowedRatios = isGpt && schemaOptions && window.ImageSizeUtils
+            ? window.ImageSizeUtils.getAvailableRatios(schemaOptions).map(r => LABEL_TO_RATIO_KEY[r]).filter(Boolean)
+            : [];
+        [...ratioSelect.options].forEach(option => {
+            const isSpecial = ['source','custom'].includes(option.value);
+            option.hidden = isGpt && schemaOptions && !isSpecial && option.value !== 'square' && !allowedRatios.includes(option.value);
+            option.disabled = isGpt && schemaOptions && !isSpecial && option.value !== 'square' && !allowedRatios.includes(option.value);
+        });
+        const ratioValue = node.ratio && [...ratioSelect.options].some(opt => opt.value === node.ratio && !opt.disabled) ? node.ratio : (allowedRatios.includes('square') ? 'square' : allowedRatios[0] || 'square');
+        if(node.ratio !== ratioValue) node.ratio = ratioValue;
         ratioSelect.value = ratioValue;
+        if(isGpt && schemaOptions && window.ImageSizeUtils && ratioValue !== 'source' && ratioValue !== 'custom'){
+            const ratio = LABEL_TO_RATIO_KEY[ratioValue];
+            const tiers = ratio ? window.ImageSizeUtils.getAvailableTiersForRatio(schemaOptions, ratio).map(v => v.toLowerCase()) : [];
+            [...resolutionSelect.options].forEach(option => {
+                if(['auto','custom'].includes(option.value)) return;
+                option.hidden = !tiers.includes(option.value);
+                option.disabled = !tiers.includes(option.value);
+            });
+            if(ratioValue === 'square' && !tiers.includes('4k') && node.resolution === '4k') node.resolution = tiers.includes('2k') ? '2k' : tiers[0] || 'auto';
+            if(node.resolution !== 'auto' && node.resolution !== 'custom' && !tiers.includes(node.resolution)) node.resolution = tiers[0] || 'auto';
+        }
         resolutionSelect.value = node.resolution || defaultApiImageResolution(node.model);
         ratioSelect.disabled = node.resolution === 'custom' || node.resolution === 'auto';
         customRatioRow.style.display = (node.resolution !== 'auto' && (node.ratio === 'custom' || node.ratio === 'source')) ? 'flex' : 'none';

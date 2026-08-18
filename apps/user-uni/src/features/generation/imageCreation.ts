@@ -4,6 +4,24 @@ import type {
   CreateGenerationTaskRequest,
   ModelInfo,
 } from "@xianzhi/shared-types";
+import {
+  canonicalSizeParts as sharedCanonicalSizeParts,
+  deriveRatioFromSize as sharedDeriveRatioFromSize,
+  deriveTierFromSize as sharedDeriveTierFromSize,
+  deriveRatioFromSizeValue,
+  deriveTierFromSizeValue,
+  displayImageSizeLabel as sharedDisplayImageSizeLabel,
+  findSizeByRatioAndTier,
+  getAvailableRatios,
+  getAvailableTiersForRatio,
+  groupSizesByRatio,
+  hasAutoOption,
+  isCommonAspectRatio,
+  type ResolutionTier,
+  type RatioGroup,
+} from "@xianzhi/shared-image-utils";
+
+export type { ResolutionTier, RatioGroup };
 
 export type CanonicalImageQuality = "auto" | "low" | "medium" | "high";
 
@@ -236,51 +254,20 @@ function uniqueValues<T>(values: T[]): T[] {
   return values.filter((value, index) => values.indexOf(value) === index);
 }
 
-function greatestCommonDivisor(left: number, right: number): number {
-  let a = left;
-  let b = right;
-  while (b !== 0) {
-    const remainder = a % b;
-    a = b;
-    b = remainder;
-  }
-  return a;
-}
-
 function canonicalSizeParts(value: unknown): [number, number] | undefined {
-  if (typeof value !== "string" || !/^[1-9]\d*x[1-9]\d*$/.test(value)) return undefined;
-  const [width, height] = value.split("x").map(Number);
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
-    return undefined;
-  }
-  return [width, height];
+  return sharedCanonicalSizeParts(value);
 }
 
 function sizeAspectLabel(width: number, height: number): string {
-  const divisor = greatestCommonDivisor(width, height);
-  return `${width / divisor}:${height / divisor}`;
+  return sharedDeriveRatioFromSize(width, height);
 }
 
 function sizeTierLabel(width: number, height: number): string {
-  const pixels = width * height;
-  const maxEdge = Math.max(width, height);
-  if (pixels <= 1280 * 720 && maxEdge <= 1280) return "720p";
-  if (pixels <= 1536 * 1024 && maxEdge <= 1536) return "1K";
-  if (pixels <= 2048 * 2048 && maxEdge <= 2048) return "2K";
-  return "4K";
+  return sharedDeriveTierFromSize(width, height);
 }
 
-const commonImageAspectLabels = new Set(["1:1", "16:9", "9:16", "3:2", "2:3"]);
-
 export function displayImageSizeLabel(value: string): string {
-  if (value === "auto") return "auto";
-  const parts = canonicalSizeParts(value);
-  if (!parts) throw new Error(`invalid canonical image size ${value}`);
-  const [width, height] = parts;
-  const aspect = sizeAspectLabel(width, height);
-  const tier = sizeTierLabel(width, height);
-  if (commonImageAspectLabels.has(aspect)) return `${tier} · ${aspect}`;
-  return `${tier} · 自定义 · ${width}×${height}`;
+  return sharedDisplayImageSizeLabel(value);
 }
 
 function reducedSizeLabel(value: string): string {
@@ -292,7 +279,7 @@ export function isCanonicalImageQuality(value: unknown): value is CanonicalImage
 }
 
 export function isCanonicalImageSize(value: unknown): value is string {
-  return value === "auto" || Boolean(canonicalSizeParts(value));
+  return value === "auto" || Boolean(sharedCanonicalSizeParts(value));
 }
 
 function validCount(value: unknown, field: UnknownRecord): value is number {
@@ -792,4 +779,80 @@ export function imagePointEstimateLabel(
   _count: number,
 ): string {
   return "以生成时结算为准";
+}
+
+export {
+  deriveRatioFromSizeValue as deriveRatioFromSizeValueExport,
+  deriveTierFromSizeValue as deriveTierFromSizeValueExport,
+  findSizeByRatioAndTier as findSizeByRatioAndTierExport,
+  getAvailableRatios as getAvailableRatiosExport,
+  getAvailableTiersForRatio as getAvailableTiersForRatioExport,
+  groupSizesByRatio as groupSizesByRatioExport,
+  hasAutoOption as hasAutoOptionExport,
+  isCommonAspectRatio as isCommonAspectRatioExport,
+};
+
+export interface RatioTierSelection {
+  ratio: string;
+  tier: ResolutionTier;
+}
+
+export function deriveRatioTierFromSize(size: string): RatioTierSelection | undefined {
+  if (size === "auto") return undefined;
+  const ratio = deriveRatioFromSizeValue(size);
+  const tier = deriveTierFromSizeValue(size);
+  if (!ratio || tier === "auto") return undefined;
+  return { ratio, tier };
+}
+
+export function resolveSizeFromRatioTier(
+  sizeOptions: string[],
+  ratio: string,
+  tier: ResolutionTier,
+): string | undefined {
+  if (ratio === "auto") return "auto";
+  return findSizeByRatioAndTier(sizeOptions, ratio, tier);
+}
+
+export function availableRatiosForContract(
+  contract: AvailableImageCreationContract,
+): string[] {
+  const sizeValues = contract.sizeOptions.map(option => option.value);
+  return getAvailableRatios(sizeValues);
+}
+
+export function availableTiersForRatio(
+  contract: AvailableImageCreationContract,
+  ratio: string,
+): ResolutionTier[] {
+  const sizeValues = contract.sizeOptions.map(option => option.value);
+  return getAvailableTiersForRatio(sizeValues, ratio);
+}
+
+export function contractHasAuto(
+  contract: AvailableImageCreationContract,
+): boolean {
+  return hasAutoOption(contract.sizeOptions.map(option => option.value));
+}
+
+export function defaultRatioTierFromContract(
+  contract: AvailableImageCreationContract,
+): RatioTierSelection {
+  if (!contract.defaultSelection.size) {
+    const sizeValues = contract.sizeOptions.map(option => option.value);
+    if (hasAutoOption(sizeValues)) return { ratio: "auto", tier: "auto" };
+    const groups = groupSizesByRatio(sizeValues);
+    if (groups.length > 0 && groups[0].sizes.length > 0) {
+      return { ratio: groups[0].ratio, tier: groups[0].sizes[0].tier };
+    }
+  }
+  const derived = deriveRatioTierFromSize(contract.defaultSelection.size || "");
+  if (derived) return derived;
+  const sizeValues = contract.sizeOptions.map(option => option.value);
+  if (hasAutoOption(sizeValues)) return { ratio: "auto", tier: "auto" };
+  const groups = groupSizesByRatio(sizeValues);
+  if (groups.length > 0 && groups[0].sizes.length > 0) {
+    return { ratio: groups[0].ratio, tier: groups[0].sizes[0].tier };
+  }
+  return { ratio: "auto", tier: "auto" };
 }

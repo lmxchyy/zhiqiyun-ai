@@ -18,6 +18,7 @@
       "@xianzhi/design-token": ["../../packages/design-token/src"],
       "@xianzhi/platform-adapter": ["../../packages/platform-adapter/src"],
       "@xianzhi/shared-auth": ["../../packages/shared-auth/src"],
+      "@xianzhi/shared-image-utils": ["../../packages/shared-image-utils/src"],
       "@xianzhi/shared-types": ["../../packages/shared-types/src"]
     }
   },
