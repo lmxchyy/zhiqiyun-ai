@@ -109,8 +109,10 @@
                 </el-form-item>
                 <el-form-item label="可用质量">
                   <el-checkbox-group :model-value="limitStrings(module, 'quality', 'allowed')" @update:model-value="setLimitStrings(module, 'quality', 'allowed', $event)">
-                    <el-checkbox value="standard">标准</el-checkbox>
-                    <el-checkbox value="high">高清</el-checkbox>
+                    <el-checkbox value="auto">自动</el-checkbox>
+                    <el-checkbox value="low">低</el-checkbox>
+                    <el-checkbox value="medium">中</el-checkbox>
+                    <el-checkbox value="high">高</el-checkbox>
                   </el-checkbox-group>
                 </el-form-item>
               </div>
@@ -252,7 +254,7 @@ async function loadCapabilities(planId: string) {
         ...item,
         allowedModels: Array.isArray(item.allowedModels) ? [...item.allowedModels] : [],
         availableModels: Array.isArray(item.availableModels) ? [...item.availableModels] : [],
-        limits: cloneJSONRecord(item.limits)
+        limits: canonicalizeImageQualityLimits(cloneJSONRecord(item.limits))
       }))
       : [];
   } catch (error) {
@@ -310,6 +312,22 @@ function cloneJSONRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function canonicalizeImageQualityLimits(limits: Record<string, unknown>) {
+  const quality = limits.quality;
+  if (!quality || typeof quality !== "object" || Array.isArray(quality)) return limits;
+  const rule = quality as Record<string, unknown>;
+  if (!Array.isArray(rule.allowed)) return limits;
+  const mapped = Array.from(new Set(rule.allowed.map((item) => {
+    const value = String(item);
+    if (value === "standard") return "low";
+    if (value === "hd") return "high";
+    return value;
+  }).filter((item) => ["auto", "low", "medium", "high"].includes(item))));
+  rule.allowed = mapped.length ? mapped : ["auto", "low", "medium", "high"];
+  limits.quality = rule;
+  return limits;
+}
+
 function close() {
   if (props.saving) return;
   if (capabilitiesLoading.value) return;
@@ -359,12 +377,15 @@ function submit() {
   entitlements.audience = audience.value.trim();
   let modules: CapabilityModule[];
   try {
-    modules = capabilityModules.value.map((module) => ({
-      ...module,
-      allowedModels: [...module.allowedModels],
-      availableModels: [...module.availableModels],
-      limits: cloneJSONRecord(module.limits)
-    }));
+    modules = capabilityModules.value.map((module) => {
+      const limits = cloneJSONRecord(module.limits);
+      return {
+        ...module,
+        allowedModels: [...module.allowedModels],
+        availableModels: [...module.availableModels],
+        limits: module.moduleCode === "image_generation" ? canonicalizeImageQualityLimits(limits) : limits
+      };
+    });
   } catch (error) {
     ElMessage.error(error instanceof Error ? `产品能力配置读取失败：${error.message}` : "产品能力配置读取失败");
     return;

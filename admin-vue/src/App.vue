@@ -142,7 +142,7 @@
                 <div class="online-control-grid online-source-controls">
                   <label><span>平台</span><el-select v-model="onlineImageForm.provider"><el-option v-for="provider in onlineProviderOptions" :key="provider.value" :label="provider.label" :value="provider.value" /></el-select></label>
                   <label><span>模型</span><el-select v-model="onlineImageForm.model"><el-option v-for="model in onlineModelOptions" :key="model.value" :label="model.label" :value="model.value" /></el-select></label>
-                  <label><span>质量</span><el-select v-model="onlineImageForm.quality"><el-option label="自动" value="auto" /><el-option label="低" value="low" /><el-option label="中" value="medium" /><el-option label="高" value="high" /></el-select></label>
+                  <label><span>质量</span><el-select v-model="onlineImageForm.quality"><el-option v-for="quality in aiImageQualitySchemaOptions" :key="`top-${quality}`" :label="quality === 'auto' ? '自动' : quality === 'low' ? '低' : quality === 'medium' ? '中' : '高'" :value="quality" /></el-select></label>
                   <label><span>数量</span><el-select v-model="onlineImageForm.count"><el-option v-for="count in onlineCountOptions" :key="count" :label="`×${count}`" :value="count" /></el-select></label>
                 </div>
 
@@ -628,10 +628,7 @@
                   <label>
                     <span>质量</span>
                     <el-select v-model="onlineImageForm.quality">
-                      <el-option label="自动" value="auto" />
-                      <el-option label="低" value="low" />
-                      <el-option label="中" value="medium" />
-                      <el-option label="高" value="high" />
+                      <el-option v-for="quality in aiImageQualitySchemaOptions" :key="quality" :label="quality === 'auto' ? '自动' : quality === 'low' ? '低' : quality === 'medium' ? '中' : '高'" :value="quality" />
                     </el-select>
                   </label>
                   <label>
@@ -1009,7 +1006,7 @@
                           :class="{ active: isAiSchemaSizeOptionActive(option) }"
                           @click="selectAiSchemaSizeOption(option)"
                         >
-                          <strong>{{ option }}</strong>
+                          <strong>{{ displayGptImageSizeLabel(option) }}</strong>
                           <small v-if="option === aiImageSizeSchemaDefault">默认</small>
                         </button>
                       </div>
@@ -2462,6 +2459,7 @@ import {
 import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
 import { isPersistentWebSession } from "./utils/webAuthSession";
 import { resolveSidebarPlanPoints } from "./utils/sidebarPlanPoints";
+import { displayGptImageSizeLabel } from "./utils/gptImageSizeLabel";
 
 function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
   ElMessage({
@@ -4059,6 +4057,16 @@ const aiImageSizeSchemaOptions = computed(() => {
     .filter((item) => item && (item === "auto" || /^\d+x\d+$/.test(item)));
   return Array.from(new Set(values));
 });
+const aiImageQualitySchemaOptions = computed(() => {
+  const field = aiSchemaFieldsFromResponse(aiImageModuleSchema.value).find((item) => String(item.key || "") === "quality") || null;
+  const official = ["auto", "low", "medium", "high"];
+  if (!field) return official;
+  const sourceOptions = Array.isArray(field.options) ? field.options : [];
+  const values = sourceOptions
+    .map((item) => aiSchemaStringValue(item).toLowerCase())
+    .filter((item) => official.includes(item));
+  return values.length ? Array.from(new Set(values)) : official;
+});
 const aiSettingsVisible = ref(false);
 const aiSettingsTab = ref("api");
 const aiSettingsTabs = [
@@ -4517,7 +4525,11 @@ function syncOnlineProviderForModel() {
 }
 watch(
   () => onlineImageForm.value.model,
-  () => syncOnlineProviderForModel()
+  async () => {
+    syncOnlineProviderForModel();
+    await loadAiImageModuleSchema(true);
+    applyOnlineImageFormToLoadedSchema();
+  }
 );
 watch(
   onlineProviderModels,
@@ -4956,6 +4968,30 @@ function ratioIconStyle(ratio: string) {
   return { width: `${width}px`, height: `${height}px` };
 }
 
+function applyOnlineImageFormToLoadedSchema() {
+  const sizeOptions = aiImageSizeSchemaOptions.value;
+  const currentSize = gptImageProductionSize(onlineImageForm.value.size);
+  if (sizeOptions.length && currentSize && !sizeOptions.includes(currentSize)) {
+    const parsed = currentSize.match(/^(\d+)x(\d+)$/);
+    const customOk = Boolean(parsed) && officialGptImageSizeErrors(Number(parsed?.[1]), Number(parsed?.[2])).length === 0;
+    if (!customOk) {
+      onlineImageForm.value.size = gptImageProductionSize(aiImageSizeSchemaDefault.value || sizeOptions[0] || "auto");
+    }
+  }
+  const qualityOptions = aiImageQualitySchemaOptions.value;
+  if (qualityOptions.length && !qualityOptions.includes(onlineImageForm.value.quality)) {
+    onlineImageForm.value.quality = qualityOptions.includes("low") ? "low" : qualityOptions[0];
+  }
+  const countField = aiSchemaFieldsFromResponse(aiImageModuleSchema.value).find((field) => String(field.key || "") === "n") || null;
+  const countOptions = Array.isArray(countField?.options)
+    ? countField.options.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item > 0)
+    : [];
+  if (countOptions.length && !countOptions.includes(Number(onlineImageForm.value.count))) {
+    const fallback = Number(countField?.default);
+    onlineImageForm.value.count = countOptions.includes(fallback) ? fallback : countOptions[0];
+  }
+}
+
 async function loadAiImageModuleSchema(force = false) {
   const modelName = String(onlineImageForm.value.model || "").trim();
   const schemaKey = modelName || "default";
@@ -4966,6 +5002,7 @@ async function loadAiImageModuleSchema(force = false) {
     if (modelName) params.set("model_name", modelName);
     aiImageModuleSchema.value = await adminRequest<AdminRecord>({ method: "GET", url: `/module-schema?${params.toString()}` });
     aiImageModuleSchemaKey.value = schemaKey;
+    applyOnlineImageFormToLoadedSchema();
   } catch (error) {
     aiImageModuleSchema.value = null;
     aiImageModuleSchemaKey.value = "";

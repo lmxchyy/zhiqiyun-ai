@@ -81,7 +81,7 @@
       </div>
       <div class="ai-schema-explainer">
         <div><b>参数规则</b><span>定义字段名称、输入方式、默认值和模型支持范围</span></div>
-        <div><b>套餐限制</b><span>在“套餐与租户限制”中缩小可选范围，例如免费版仅允许 standard</span></div>
+        <div><b>套餐限制</b><span>在“套餐与租户限制”中缩小可选范围，例如免费版仅允许 low</span></div>
         <div><b>最终效果</b><span>用户端只显示两者交集，提交时后端再次校验</span></div>
       </div>
       <el-table v-if="model.schemas.length" :data="model.schemas" max-height="520" stripe>
