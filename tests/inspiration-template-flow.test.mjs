@@ -189,6 +189,8 @@ test("creation draft is saved verbatim and expires without client-side prompt co
   assert.equal(read("template-image-1", Date.parse("2026-08-12T00:29:59Z")).basePrompt, "SERVER COMPOSED PROMPT");
   assert.equal(read("template-image-1", Date.parse("2026-08-12T00:30:00Z")), null);
   assert.throws(() => save(draft, Date.parse("2026-08-12T00:30:00Z")), /已过期/);
+  stored = { ...draft, contractVersion: 2, basePrompt: "CLIENT FORGED" };
+  assert.equal(read("template-image-1", Date.parse("2026-08-12T00:10:00Z")), null);
 });
 
 test("image handoff restores server prompt, parameters and owned asset references", async () => {
