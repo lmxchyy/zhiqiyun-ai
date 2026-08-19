@@ -5,6 +5,7 @@
     { "path": "./packages/platform-adapter" },
     { "path": "./packages/api-client" },
     { "path": "./packages/shared-auth" },
+    { "path": "./packages/shared-image-utils" },
     { "path": "./packages/business-sdk" },
     { "path": "./packages/design-token" }
   ]

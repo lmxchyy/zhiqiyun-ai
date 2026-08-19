@@ -107,26 +107,46 @@
             <text>{{ schemaMessage || schemaStatusLabel }}</text>
           </view>
 
-          <text class="ai-image-generator__label">画幅比例</text>
-          <view class="ai-image-generator__aspect-list">
+          <text class="ai-image-generator__label">画面比例</text>
+          <view class="ai-image-generator__ratio-list">
             <button
-              v-for="option in sizeOptions"
-              :key="option.value"
-              :class="['ai-image-generator__aspect', { 'is-selected': size === option.value }]"
+              v-for="ratio in ratioOptions"
+              :key="ratio.value"
+              :class="['ai-image-generator__ratio-chip', { 'is-selected': selectedRatio === ratio.value }]"
               type="button"
-              :aria-pressed="size === option.value"
-              hover-class="ai-image-generator__aspect--pressed"
-              @click='emit("update:size", option.value)'
+              :aria-pressed="selectedRatio === ratio.value"
+              hover-class="ai-image-generator__ratio-chip--pressed"
+              @click='emit("update:selectedRatio", ratio.value)'
             >
-              <text class="ai-image-generator__aspect-shape" :style="sizeShapeStyle(option.value)" />
-              <text>{{ option.label }}</text>
-              <text v-if="size === option.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
+              <text v-if="ratio.value !== 'auto'" class="ai-image-generator__ratio-shape" :style="ratioShapeStyle(ratio.value)" />
+              <text>{{ ratio.label }}</text>
+              <text v-if="selectedRatio === ratio.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
             </button>
           </view>
 
-          <template v-if="qualityOptions.length">
+          <template v-if="selectedRatio !== 'auto' && tierOptions.length > 0">
             <text class="ai-image-generator__label">图片清晰度</text>
-            <view class="ai-image-generator__quality" role="group" aria-label="图片清晰度">
+            <view class="ai-image-generator__tier-list" role="group" aria-label="图片清晰度">
+              <button
+                v-for="tier in tierOptions"
+                :key="tier.value"
+                :class="['ai-image-generator__tier-chip', { 'is-selected': selectedTier === tier.value }]"
+                type="button"
+                :aria-pressed="selectedTier === tier.value"
+                hover-class="ai-image-generator__tier-chip--pressed"
+                @click='emit("update:selectedTier", tier.value)'
+              >
+                <text>{{ tier.label }}</text>
+                <text v-if="selectedTier === tier.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
+              </button>
+            </view>
+          </template>
+
+          <text v-if="size && size !== 'auto'" class="ai-image-generator__output-hint">当前输出 {{ size }}</text>
+
+          <template v-if="qualityOptions.length">
+            <text class="ai-image-generator__label">生成质量</text>
+            <view class="ai-image-generator__quality" role="group" aria-label="生成质量">
               <button
                 v-for="option in qualityOptions"
                 :key="option.value"
@@ -136,7 +156,7 @@
                 hover-class="ai-image-generator__quality-option--pressed"
                 @click='emit("update:quality", option.value)'
               >
-                <text>{{ option.label }}</text>
+                <text>{{ qualityLabel(option.value) }}</text>
                 <text v-if="quality === option.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
               </button>
             </view>
@@ -236,6 +256,7 @@ import {
   type ImageGeneratorModelOption,
   type ImageGeneratorStatusTone,
   type ImageSchemaLoadStatus,
+  type ResolutionTier,
 } from "../../features/generation/imageCreation";
 
 const { navigationStyle } = useMiniProgramNavigation();
@@ -244,6 +265,10 @@ const props = withDefaults(defineProps<{
   prompt: string;
   size: string;
   sizeOptions: Array<ImageControlOption<string>>;
+  selectedRatio: string;
+  selectedTier: ResolutionTier;
+  availableRatios: string[];
+  availableTiers: ResolutionTier[];
   quality?: CanonicalImageQuality;
   qualityOptions: Array<ImageControlOption<CanonicalImageQuality>>;
   model: string;
@@ -289,6 +314,8 @@ const emit = defineEmits<{
   "view-result": [];
   "update:prompt": [value: string];
   "update:size": [value: string];
+  "update:selectedRatio": [value: string];
+  "update:selectedTier": [value: ResolutionTier];
   "update:quality": [value: CanonicalImageQuality];
   "update:model": [value: string];
   "update:count": [value: number];
@@ -313,6 +340,58 @@ const schemaStatusLabel = computed(() => {
   return "请选择图片模型";
 });
 
+const ratioOptions = computed(() => {
+  const labels: Record<string, string> = {
+    "auto": "自动",
+    "1:1": "1:1",
+    "16:9": "16:9",
+    "9:16": "9:16",
+    "4:3": "4:3",
+    "3:4": "3:4",
+    "3:2": "3:2",
+    "2:3": "2:3",
+  };
+  return props.availableRatios.map(ratio => ({
+    value: ratio,
+    label: labels[ratio] || ratio,
+  }));
+});
+
+const tierOptions = computed(() => {
+  const labels: Record<string, string> = {
+    "720p": "720P",
+    "1K": "1K",
+    "2K": "2K",
+    "4K": "4K",
+  };
+  return props.availableTiers.map(tier => ({
+    value: tier,
+    label: labels[tier] || tier,
+  }));
+});
+
+function qualityLabel(value: CanonicalImageQuality): string {
+  const labels: Record<CanonicalImageQuality, string> = {
+    auto: "自动",
+    low: "低",
+    medium: "中",
+    high: "高",
+  };
+  return labels[value] || value;
+}
+
+function ratioShapeStyle(ratio: string) {
+  if (ratio === "auto") return undefined;
+  const parts = ratio.split(":").map(Number);
+  if (parts.length !== 2 || !parts.every(n => Number.isFinite(n) && n > 0)) return undefined;
+  const [w, h] = parts;
+  const scale = Math.min(42 / w, 42 / h);
+  return {
+    width: `${Math.max(18, Math.round(w * scale))}px`,
+    height: `${Math.max(18, Math.round(h * scale))}px`,
+  };
+}
+
 function onPromptInput(event: Event | { detail: { value: string } }) {
   const detail = "detail" in event ? event.detail : undefined;
   if (typeof detail === "object" && detail !== null && "value" in detail) {
@@ -332,18 +411,6 @@ function onModelChange(event: { detail: { value: string | number } }) {
 function onCountChange(event: { detail: { value: string | number } }) {
   const selected = props.countOptions[Number(event.detail.value)];
   if (selected) emit("update:count", selected.value);
-}
-
-function sizeShapeStyle(value: string) {
-  const match = value.match(/^([1-9]\d*)x([1-9]\d*)$/);
-  if (!match) return undefined;
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  const scale = Math.min(42 / width, 42 / height);
-  return {
-    width: `${Math.max(18, Math.round(width * scale))}px`,
-    height: `${Math.max(18, Math.round(height * scale))}px`,
-  };
 }
 
 function onPrimaryAction() {
@@ -380,7 +447,7 @@ function onPrimaryAction() {
 }
 
 .ai-image-generator button,
-.ai-image-generator__aspect,
+.ai-image-generator__ratio-chip,
 .ai-image-generator__reference-add {
   min-height: 44px;
 }
@@ -415,7 +482,8 @@ function onPrimaryAction() {
 }
 
 .ai-image-generator__icon-button--pressed,
-.ai-image-generator__aspect--pressed,
+.ai-image-generator__ratio-chip--pressed,
+.ai-image-generator__tier-chip--pressed,
 .ai-image-generator__quality-option--pressed,
 .ai-image-generator__reference--pressed,
 .ai-image-generator__reference-add--pressed,
@@ -658,13 +726,13 @@ function onPrimaryAction() {
   font-weight: 700;
 }
 
-.ai-image-generator__aspect-list {
+.ai-image-generator__ratio-list {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
 
-.ai-image-generator__aspect {
+.ai-image-generator__ratio-chip {
   position: relative;
   display: flex;
   min-width: 0;
@@ -682,18 +750,48 @@ function onPrimaryAction() {
   font-size: 13px;
 }
 
-.ai-image-generator__aspect.is-selected,
+.ai-image-generator__ratio-chip.is-selected,
+.ai-image-generator__tier-chip.is-selected,
 .ai-image-generator__quality-option.is-selected {
   border-color: var(--image-brand);
   color: var(--image-brand);
   background: #f4f3ff;
 }
 
-.ai-image-generator__aspect-shape {
+.ai-image-generator__ratio-shape {
   display: block;
   box-sizing: border-box;
   border: 2px solid currentColor;
   border-radius: 5px;
+}
+
+.ai-image-generator__tier-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-image-generator__tier-chip {
+  position: relative;
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0 20px;
+  border: 1px solid var(--image-line);
+  border-radius: var(--image-radius);
+  color: var(--image-muted);
+  background: #fff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ai-image-generator__output-hint {
+  display: block;
+  margin-top: 10px;
+  color: var(--image-muted);
+  font-size: 12px;
 }
 
 .ai-image-generator__check {
@@ -877,7 +975,8 @@ function onPrimaryAction() {
 
 @media (hover: hover) {
   .ai-image-generator__icon-button:not([disabled]):hover,
-  .ai-image-generator__aspect:not([disabled]):hover,
+  .ai-image-generator__ratio-chip:not([disabled]):hover,
+  .ai-image-generator__tier-chip:not([disabled]):hover,
   .ai-image-generator__quality-option:not([disabled]):hover,
   .ai-image-generator__reference-preview:not([disabled]):hover,
   .ai-image-generator__reference-add:not([disabled]):hover,

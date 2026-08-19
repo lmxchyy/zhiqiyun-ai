@@ -54,10 +54,14 @@
           <AiImageGenerator
             v-model:prompt="creationPrompt"
             v-model:size="imageSize"
+            v-model:selected-ratio="selectedRatio"
+            v-model:selected-tier="selectedTier"
             v-model:quality="imageQuality"
             v-model:model="selectedImageModelCode"
             v-model:count="imageCount"
             :size-options="imageSizeOptions"
+            :available-ratios="imageAvailableRatios"
+            :available-tiers="imageAvailableTiers"
             :quality-options="imageQualityOptions"
             :count-options="imageCountOptions"
             :models="imageModels"
@@ -799,6 +803,12 @@ import {
   restoreImageInspirationSelection,
   submitCanonicalImageTask,
   toCanonicalImageSelection,
+  availableRatiosForContract,
+  availableTiersForRatio,
+  contractHasAuto,
+  defaultRatioTierFromContract,
+  deriveRatioTierFromSize,
+  resolveSizeFromRatioTier,
   type AvailableImageCreationContract,
   type CanonicalImageQuality,
   type CanonicalImageSelection,
@@ -808,6 +818,7 @@ import {
   type ImageReferenceUploadCache,
   type ImageRequestPreviousOutcome,
   type ImageSchemaLoadStatus,
+  type ResolutionTier,
 } from "../features/generation/imageCreation";
 import KnowledgeMiniChat from "./KnowledgeMiniChat.vue";
 import AiGeneratedContentNotice from "./compliance/AiGeneratedContentNotice.vue";
@@ -1066,6 +1077,8 @@ const creationReferencePaths = ref<string[]>([]);
 const imageSize = ref("");
 const imageQuality = ref<CanonicalImageQuality>();
 const imageCount = ref<number>();
+const selectedRatio = ref<string>("auto");
+const selectedTier = ref<ResolutionTier>("auto");
 const imageModels = ref<ImageGeneratorModelOption[]>([]);
 const selectedImageModelCode = ref("");
 const imageModelsLoading = ref(false);
@@ -1182,6 +1195,22 @@ const selectedImageModel = computed(
 const imageSizeOptions = computed(() => imageCreationContract.value?.sizeOptions || []);
 const imageQualityOptions = computed(() => imageCreationContract.value?.qualityOptions || []);
 const imageCountOptions = computed(() => imageCreationContract.value?.countOptions || []);
+const imageAvailableRatios = computed(() => {
+  if (!imageCreationContract.value) return [];
+  const ratios = availableRatiosForContract(imageCreationContract.value);
+  if (contractHasAuto(imageCreationContract.value)) {
+    return ["auto", ...ratios];
+  }
+  return ratios;
+});
+const imageAvailableTiers = computed(() => {
+  if (!imageCreationContract.value) return [];
+  return availableTiersForRatio(imageCreationContract.value, selectedRatio.value);
+});
+const imageHasAuto = computed(() => {
+  if (!imageCreationContract.value) return false;
+  return contractHasAuto(imageCreationContract.value);
+});
 const imageEstimateLabel = computed(
   () => imagePointEstimateLabel(selectedImageModel.value, imageCount.value || 1),
 );
@@ -1460,6 +1489,18 @@ function applyImageSelection(selection: CanonicalImageSelection) {
   imageSize.value = selection.size || "";
   imageQuality.value = selection.quality;
   imageCount.value = selection.count;
+  if (selection.size) {
+    if (selection.size === "auto") {
+      selectedRatio.value = "auto";
+      selectedTier.value = "auto";
+    } else {
+      const derived = deriveRatioTierFromSize(selection.size);
+      if (derived) {
+        selectedRatio.value = derived.ratio;
+        selectedTier.value = derived.tier;
+      }
+    }
+  }
 }
 
 function resetImageSelectionFromContract(contract: AvailableImageCreationContract) {
@@ -1569,6 +1610,16 @@ watch(selectedImageModelCode, (modelCode, previousModelCode) => {
   if (modelCode === previousModelCode || creationMode.value !== "image") return;
   creationError.value = "";
   void loadImageSchemaForModel(modelCode);
+});
+watch([selectedRatio, selectedTier], ([ratio, tier]) => {
+  if (!imageCreationContract.value) return;
+  if (ratio === "auto") {
+    imageSize.value = "auto";
+    return;
+  }
+  const sizeValues = imageCreationContract.value.sizeOptions.map(option => option.value);
+  const resolved = resolveSizeFromRatioTier(sizeValues, ratio, tier);
+  if (resolved) imageSize.value = resolved;
 });
 
 onShareAppMessage(() => ({

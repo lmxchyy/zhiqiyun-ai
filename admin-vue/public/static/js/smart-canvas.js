@@ -358,6 +358,66 @@ const MS_GEN_MODELS = {
     klein_edit: { label:'Klein', modelId:'black-forest-labs/FLUX.2-klein-9B', supportsImage:true, endpoint:'/api/ms/generate' },
     custom: { label:tr('smart.custom') || '自定义', modelId:'', acceptsImage:true, endpoint:'/api/ms/generate' }
 };
+// GPT Image size options are schema-first. The legacy map is retained only
+// for non-GPT legacy nodes and must not authorize GPT Image schema-out-of-band sizes.
+let schemaSizeOptions = null;
+let schemaQualityOptions = null;
+let schemaSizeSourceModel = '';
+let schemaSizeRequestState = 'idle';
+
+async function fetchModuleSchema(moduleCode, modelName) {
+    const url = `/api/v1/module-schema?module_code=${encodeURIComponent(moduleCode)}&model_name=${encodeURIComponent(modelName)}`;
+    const res = await fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+    if (!res.ok) throw new Error(`module-schema request failed: ${res.status}`);
+    return res.json();
+}
+
+function schemaLoadedForModel(modelName) {
+    return schemaSizeSourceModel && resolveImageModel(schemaSizeSourceModel) === resolveImageModel(modelName);
+}
+
+function schemaSizeOptionsForModel(modelName) {
+    if (!schemaLoadedForModel(modelName)) return null;
+    return Array.isArray(schemaSizeOptions) ? schemaSizeOptions : null;
+}
+
+function applySchemaSizeOptions(modelName, schemaResponse) {
+    schemaSizeSourceModel = resolveImageModel(modelName);
+    schemaSizeRequestState = 'loaded';
+    if (!schemaResponse || !schemaResponse.schema || !Array.isArray(schemaResponse.schema.fields)) {
+        schemaSizeOptions = null;
+        schemaQualityOptions = null;
+        schemaSizeRequestState = 'failed';
+        return;
+    }
+    const sizeField = schemaResponse.schema.fields.find(f => f.key === "size");
+    const qualityField = schemaResponse.schema.fields.find(f => f.key === "quality");
+    schemaSizeOptions = (sizeField && Array.isArray(sizeField.options))
+        ? sizeField.options.filter(v => typeof v === "string")
+        : null;
+    schemaQualityOptions = (qualityField && Array.isArray(qualityField.options))
+        ? qualityField.options.filter(v => typeof v === "string")
+        : null;
+}
+
+function clearSchemaSizeOptions(modelName) {
+    if (!modelName || schemaLoadedForModel(modelName)) {
+        schemaSizeOptions = null;
+        schemaQualityOptions = null;
+        schemaSizeSourceModel = resolveImageModel(modelName || settings.model || '');
+        schemaSizeRequestState = 'failed';
+    }
+}
+
+const RATIO_KEY_TO_LABEL = {
+    '1:1': 'square', '2:3': 'portrait', '3:2': 'landscape',
+    '3:4': 'portrait43', '4:3': 'landscape43', '9:16': 'story', '16:9': 'wide'
+};
+const LABEL_TO_RATIO_KEY = {};
+for (const [ratio, key] of Object.entries(RATIO_KEY_TO_LABEL)) {
+    LABEL_TO_RATIO_KEY[key] = ratio;
+}
+
 const SIZE_MAP = {
     square: {'1k':'1024x1024','2k':'2048x2048','4k':'4096x4096'},
     portrait: {'1k':'1024x1536','2k':'1360x2048','4k':'2352x3520'},
@@ -2258,10 +2318,27 @@ function parseRatioValue(value){
     const h = Number(parts[1]);
     return w > 0 && h > 0 ? w / h : 0;
 }
-function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSizeValue=''){
+function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSizeValue='', modelName=''){
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
     const resolutionKey = resolutionValue || '1k';
+    const resolvedModel = resolveImageModel(modelName || settings.model || '');
+    const isGpt = isGptImageAutoSizeModel(resolvedModel);
+    const sizeOptions = schemaSizeOptionsForModel(resolvedModel);
+    if(sizeOptions && window.ImageSizeUtils){
+        if(ratioValue !== 'custom' && ratioValue !== 'source'){
+            const ratio = LABEL_TO_RATIO_KEY[ratioValue];
+            if(ratio){
+                const schemaSize = window.ImageSizeUtils.findSizeByRatioAndTier(sizeOptions, ratio, resolutionKey);
+                if(schemaSize) return schemaSize;
+            }
+        }
+        if(isGpt){
+            if(ratioValue === 'auto') return 'auto';
+            return '';
+        }
+    }
+    if(isGpt) return ratioValue === 'auto' ? 'auto' : '';
     if(ratioValue === 'custom' || ratioValue === 'source'){
         const parsed = parseRatioValue(customRatioValue);
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
@@ -2281,9 +2358,18 @@ function normalizeApiSizeSettings(prefix=''){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
     const resKey = prefix ? `${prefix}Resolution` : 'resolution';
     const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
+    const sizeOptions = !prefix && allowAuto ? schemaSizeOptionsForModel(settings.model) : null;
     if(!settings[resKey]) settings[resKey] = allowAuto ? 'auto' : '1k';
     if(!allowAuto && settings[resKey] === 'auto') settings[resKey] = '1k';
     if(settings[resKey] === 'auto' && !settings[ratioKey]) settings[ratioKey] = 'square';
+    if(allowAuto && sizeOptions && window.ImageSizeUtils){
+        const availableRatios = window.ImageSizeUtils.getAvailableRatios(sizeOptions).filter(Boolean);
+        if(settings[ratioKey] !== 'auto' && availableRatios.length && !availableRatios.includes(LABEL_TO_RATIO_KEY[settings[ratioKey]] || settings[ratioKey])){
+            settings[ratioKey] = 'square';
+            const availableTiers = window.ImageSizeUtils.getAvailableTiersForRatio(sizeOptions, '1:1');
+            if(availableTiers.length) settings[resKey] = availableTiers.includes('1K') ? '1k' : String(availableTiers[0]).toLowerCase();
+        }
+    }
 }
 async function ensureComfyWorkflow(name){
     if(!name) return null;
@@ -2364,7 +2450,13 @@ function renderDynamicParams(){
     syncApiKindToggleVisibility();
     if(settings.engine === 'api'){
         if(settings.apiKind === 'video') renderApiVideoParams();
-        else renderApiParams();
+        else {
+            if(isGptImageAutoSizeModel(settings.model)) {
+                loadGptImageSchema(settings.model, () => renderApiParams()).catch(() => renderApiParams());
+            } else {
+                renderApiParams();
+            }
+        }
     }
     else if(settings.engine === 'volcengine'){
         if(settings.apiKind === 'video') renderVolcengineVideoParams();
@@ -2772,6 +2864,7 @@ function renderResolutionControl(prefix=''){
     const options = (!prefix && settings.engine === 'api') ? ['auto','1k','2k','4k','custom'] : ['1k','2k','4k','custom'];
     const current = settings[resKey] || ((!prefix && settings.engine === 'api') ? defaultSmartApiResolution(settings.model) : '1k');
     const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
+    const schemaOptions = !prefix && allowAuto ? schemaSizeOptionsForModel(settings.model) : null;
     return `<div class="smart-control resolution-control">
         <button class="smart-pill" type="button"><i data-lucide="monitor"></i><span>${escapeHtml(resolutionLabel(prefix))}</span></button>
         <div class="smart-popover compact-popover">
@@ -2817,11 +2910,15 @@ function renderSizePickerControl(prefix='', includeSource=false){
     const currentRes = settings[resKey] || ((!prefix && settings.engine === 'api') ? defaultSmartApiResolution(settings.model) : '1k');
     const currentRatio = settings[ratioKey] || 'square';
     const allowAuto = !prefix && settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model);
-    const ratios = [
+    const schemaOptions = !prefix && allowAuto ? schemaSizeOptionsForModel(settings.model) : null;
+    const schemaRatios = schemaOptions && window.ImageSizeUtils
+        ? window.ImageSizeUtils.getAvailableRatios(schemaOptions).map(r => [LABEL_TO_RATIO_KEY[r], r, r]).filter(item => item[0])
+        : [];
+    const ratios = schemaOptions ? schemaRatios : [
         ['square','1:1','正方形'], ['portrait','2:3','竖图'], ['landscape','3:2','横图'], ['portrait43','3:4','竖图'], ['landscape43','4:3','横图'],
-        ['story','9:16','竖屏'], ['wide','16:9','宽屏'], ['ultrawide','21:9','超宽'], ['ultratall','9:21','超竖'],
-        ...(includeSource ? [['source', sourceImageRatioLabel(prefix) || '原图', '适配输入']] : [])
+        ['story','9:16','竖屏'], ['wide','16:9','宽屏']
     ];
+    if(includeSource) ratios.push(['source', sourceImageRatioLabel(prefix) || '原图', '适配输入']);
     const wKey = prefix ? `${prefix}CustomWidth` : 'customWidth';
     const hKey = prefix ? `${prefix}CustomHeight` : 'customHeight';
     return `<div class="smart-control size-picker-control ${scope === 'auto' ? 'auto-mode' : ''} ${scope === 'custom' ? 'custom-mode' : ''}">
@@ -3469,6 +3566,12 @@ function setDynamicSetting(key, value){
     settings[key] = numericKeys.has(key) && value !== '' ? Number(value) : value;
     if(key === 'provider_id') settings.model = '';
     if(key === 'videoProvider') settings.videoModel = '';
+    // Fetch module-schema when the image model changes to get correct size/quality options.
+    if(key === 'model' && settings.engine === 'api' && settings.apiKind !== 'video'){
+        fetchModuleSchema('image_generation', String(value || ''))
+            .then(schema => applySchemaSizeOptions(String(value || ''), schema))
+            .catch(() => clearSchemaSizeOptions(String(value || '')));
+    }
     if(key === 'videoMultimodal') settings._videoMultimodalUserSet = true;
     if(key === 'videoMultimodal' && settings.videoMultimodal) settings.videoUseFrameRoles = false;
     normalizeSmartVideoModeSettings(settings, key === 'videoUseFrameRoles');
@@ -3757,6 +3860,10 @@ async function loadConfig(){
         lastConfigRefreshAt = Date.now();
         sanitizeSmartApiSelection(settings);
         updateProviderModels();
+        if(settings.engine === 'api' && settings.apiKind !== 'video' && isGptImageAutoSizeModel(settings.model)){
+            const schema = await fetchModuleSchema('image_generation', resolveImageModel(settings.model)).catch(() => null);
+            applySchemaSizeOptions(settings.model, schema);
+        }
     } catch(e) {
         toast(tr('smart.toastApiSettingsFail'));
     }

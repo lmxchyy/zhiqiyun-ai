@@ -531,6 +531,8 @@ func gptImage2OfficialFields() map[string]adminAIParameterField {
 func gptImage2SizeOptions() []any {
 	// Official GPT Image sizes shown in production UI.
 	// Provider also accepts any other legal WxH; these are the listed SKUs.
+	// New entries cover 4:3, 3:4, 3:2, 2:3, and 9:16 at 2K/4K tiers
+	// so the UI can present a complete ratio × Resolution-Tier matrix.
 	return anyOptions(
 		"auto",
 		"1024x1024",
@@ -542,11 +544,30 @@ func gptImage2SizeOptions() []any {
 		"2048x2048",
 		"3840x2160",
 		"2160x3840",
+		"1344x1008",
+		"2048x1536",
+		"3264x2448",
+		"1008x1344",
+		"1536x2048",
+		"2448x3264",
+		"2048x1360",
+		"3520x2352",
+		"1360x2048",
+		"2352x3520",
+		"1152x2048",
 	)
 }
 
 func gptImage2DeferredProductionSizes() []string {
-	return []string{"1280x720", "720x1280", "2048x1152", "2048x2048", "3840x2160", "2160x3840"}
+	return []string{
+		"1280x720", "720x1280",
+		"2048x1152", "2048x2048", "3840x2160", "2160x3840",
+		"1344x1008", "2048x1536", "3264x2448",
+		"1008x1344", "1536x2048", "2448x3264",
+		"2048x1360", "3520x2352",
+		"1360x2048", "2352x3520",
+		"1152x2048",
+	}
 }
 
 const (
