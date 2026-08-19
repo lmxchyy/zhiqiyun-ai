@@ -38,6 +38,7 @@ export default defineConfig({
       "@xianzhi/api-client": path.resolve(process.cwd(), "../packages/api-client/src"),
       "@xianzhi/platform-adapter": path.resolve(process.cwd(), "../packages/platform-adapter/src"),
       "@xianzhi/shared-auth": path.resolve(process.cwd(), "../packages/shared-auth/src"),
+      "@xianzhi/shared-image-utils": path.resolve(process.cwd(), "../packages/shared-image-utils/src"),
       "@xianzhi/shared-types": path.resolve(process.cwd(), "../packages/shared-types/src")
     }
   },
