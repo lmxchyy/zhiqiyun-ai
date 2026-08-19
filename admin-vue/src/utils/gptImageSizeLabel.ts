@@ -1,5 +1,6 @@
 export {
   displayImageSizeLabel as displayGptImageSizeLabel,
+  classifyCommonAspectRatio,
   deriveRatioFromSize as deriveRatioFromSize,
   deriveTierFromSize as deriveTierFromSize,
   deriveRatioFromSizeValue as deriveRatioFromValue,
@@ -8,6 +9,7 @@ export {
   findSizeByRatioAndTier,
   getAvailableRatios,
   getAvailableTiersForRatio,
+  getVisibleTiersForRatio,
   hasAutoOption,
   isCanonicalImageSize,
   type ResolutionTier,

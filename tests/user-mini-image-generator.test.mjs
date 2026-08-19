@@ -349,6 +349,75 @@ test("official gpt image schema default quality low and n 1", () => {
   assert.equal(selection.count, 1);
 });
 
+test("initial image selection prefers quality low even when schema default is auto", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const initialImageSelection = requiredFunction("initialImageSelection");
+  const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema());
+  assert.equal(contract.available, true);
+  if (!contract.available) return;
+  assert.equal(contract.defaultSelection.quality, "auto");
+  const selection = initialImageSelection(contract);
+  assert.equal(selection.quality, "low");
+  assert.equal(selection.count, 1);
+});
+
+const GPT_IMAGE_NEAR_COMMON_SIZES = [
+  "auto",
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "1280x720",
+  "720x1280",
+  "2048x1152",
+  "2048x2048",
+  "3840x2160",
+  "2160x3840",
+  "1344x1008",
+  "2048x1536",
+  "3264x2448",
+  "1008x1344",
+  "1536x2048",
+  "2448x3264",
+  "2048x1360",
+  "3520x2352",
+  "1360x2048",
+  "2352x3520",
+  "1152x2048",
+];
+
+test("gpt image ratio grouping hides odd reduced ratios and maps near-common WxH", () => {
+  const getAvailableRatios = requiredFunction("getAvailableRatiosExport");
+  const findSizeByRatioAndTier = requiredFunction("findSizeByRatioAndTierExport");
+  const getAvailableTiersForRatio = requiredFunction("getAvailableTiersForRatioExport");
+  const resolveSizeFromRatioTier = requiredFunction("resolveSizeFromRatioTier");
+  const classifyCommonAspectRatio = requiredFunction("classifyCommonAspectRatioExport");
+
+  const ratios = getAvailableRatios(GPT_IMAGE_NEAR_COMMON_SIZES);
+  assert.deepEqual(ratios, ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
+  assert.ok(!ratios.includes("128:85"));
+  assert.ok(!ratios.includes("85:128"));
+  assert.ok(!ratios.includes("220:147"));
+  assert.ok(!ratios.includes("147:220"));
+
+  assert.equal(classifyCommonAspectRatio(2048, 1360), "3:2");
+  assert.equal(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "3:2", "2K"), "2048x1360");
+  assert.equal(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "3:2", "4K"), "3520x2352");
+  assert.equal(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "2:3", "2K"), "1360x2048");
+  assert.equal(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "2:3", "4K"), "2352x3520");
+  assert.equal(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "1:1", "4K"), undefined);
+  assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "auto", "auto"), "auto");
+  assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "auto", "1K"), "auto");
+  assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "auto", "2K"), "auto");
+  assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "auto", "4K"), "auto");
+  assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "3:2", "2K"), "2048x1360");
+  assert.ok(!GPT_IMAGE_NEAR_COMMON_SIZES.includes("3840x3840"));
+  assert.notEqual(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "1:1", "4K"), "3840x3840");
+
+  assert.deepEqual(getAvailableTiersForRatio(GPT_IMAGE_NEAR_COMMON_SIZES, "1:1"), ["1K", "2K"]);
+  assert.deepEqual(getAvailableTiersForRatio(GPT_IMAGE_NEAR_COMMON_SIZES, "3:2"), ["1K", "2K", "4K"]);
+  assert.ok(!getAvailableTiersForRatio(GPT_IMAGE_NEAR_COMMON_SIZES, "16:9").includes("720p"));
+});
+
 test("size labels distinguish 1K and 2K squares and keep submitting WxH", () => {
   const displayImageSizeLabel = requiredFunction("displayImageSizeLabel");
   const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
@@ -1092,6 +1161,64 @@ test("model schema reset uses declared defaults and otherwise the first canonica
   });
 });
 
+test("model switch rejects pending size missing from the new schema and keeps canonical WxH or auto", () => {
+  const deriveImageCreationContract = requiredFunction("deriveImageCreationContract");
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  const initialImageSelection = requiredFunction("initialImageSelection");
+  const findSizeByRatioAndTier = requiredFunction("findSizeByRatioAndTierExport");
+  const previousContract = deriveImageCreationContract("gpt-image-2", gptImageSchema({
+    fields: [
+      { key: "prompt", type: "textarea", required: true },
+      {
+        key: "size",
+        type: "select",
+        required: false,
+        default: "auto",
+        options: GPT_IMAGE_NEAR_COMMON_SIZES,
+      },
+      { key: "quality", type: "select", required: false, default: "low", options: ["auto", "low", "medium", "high"] },
+      { key: "n", type: "number", required: false, default: 1, options: [1], min: 1, max: 4 },
+    ],
+  }));
+  const nextContract = deriveImageCreationContract("gpt-image-2", gptImageSchema({
+    fields: [
+      { key: "prompt", type: "textarea", required: true },
+      {
+        key: "size",
+        type: "select",
+        required: false,
+        default: "auto",
+        options: ["auto", "1024x1024", "2048x2048"],
+      },
+      { key: "quality", type: "select", required: false, default: "low", options: ["auto", "low", "medium", "high"] },
+      { key: "n", type: "number", required: false, default: 1, options: [1], min: 1, max: 4 },
+    ],
+  }));
+  assert.equal(previousContract.available, true);
+  assert.equal(nextContract.available, true);
+  if (!previousContract.available || !nextContract.available) return;
+
+  assert.deepEqual(
+    toCanonicalImageSelection(previousContract, { size: "2048x1360", quality: "low", count: 1 }),
+    { size: "2048x1360", quality: "low", count: 1 },
+  );
+  assert.throws(
+    () => toCanonicalImageSelection(nextContract, { size: "2048x1360", quality: "low", count: 1 }),
+    /不支持图片尺寸 2048x1360/,
+  );
+  assert.throws(
+    () => toCanonicalImageSelection(nextContract, { size: "2K", quality: "low", count: 1 }),
+    /不支持图片尺寸 2K/,
+  );
+  assert.throws(
+    () => toCanonicalImageSelection(nextContract, { size: "3840x3840", quality: "low", count: 1 }),
+    /不支持图片尺寸 3840x3840/,
+  );
+  assert.equal(findSizeByRatioAndTier(nextContract.sizeOptions.map(option => option.value), "3:2", "2K"), undefined);
+  assert.equal(findSizeByRatioAndTier(nextContract.sizeOptions.map(option => option.value), "1:1", "4K"), undefined);
+  assert.deepEqual(initialImageSelection(nextContract), { size: "auto", quality: "low", count: 1 });
+});
+
 test("production image draft reaches the compiled SDK with canonical top-level fields only", () => {
   const buildCanonicalImageDraft = requiredFunction("buildCanonicalImageDraft");
   const contract = availableContract(gptImageSchema());
@@ -1341,6 +1468,62 @@ test("mounted 2K square chip still submits WxH 2048x2048", () => {
   }
 });
 
+test("auto ratio hides clarity row; concrete ratio shows 1K/2K/4K; quality stays internal", () => {
+  const autoMounted = mountAiImageGenerator(imageComponentProps({
+    selectedRatio: "auto",
+    selectedTier: "auto",
+    availableRatios: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "128:85", "85:128", "220:147", "147:220"],
+    availableTiers: ["1K", "2K", "4K"],
+    size: "auto",
+    quality: "low",
+    qualityOptions: [
+      { value: "auto", label: "auto" },
+      { value: "low", label: "low" },
+      { value: "medium", label: "medium" },
+      { value: "high", label: "high" },
+    ],
+  }));
+  try {
+    const ratioButtons = hostNodes(autoMounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__ratio-chip")));
+    assert.deepEqual(ratioButtons.map(hostText), ["自动✓", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
+    assert.doesNotMatch(hostText(autoMounted.root), /128:85|85:128|220:147|147:220/);
+    assert.doesNotMatch(hostText(autoMounted.root), /图片清晰度/);
+    assert.equal(
+      hostNodes(autoMounted.root).filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip"))).length,
+      0,
+    );
+    assert.doesNotMatch(hostText(autoMounted.root), /生成质量/);
+  } finally {
+    autoMounted.unmount();
+  }
+
+  const ratioMounted = mountAiImageGenerator(imageComponentProps({
+    selectedRatio: "3:2",
+    selectedTier: "2K",
+    availableRatios: ["auto", "1:1", "3:2", "2:3"],
+    availableTiers: ["720p", "1K", "2K", "4K"],
+    size: "2048x1360",
+    quality: "low",
+    qualityOptions: [
+      { value: "auto", label: "auto" },
+      { value: "low", label: "low" },
+    ],
+  }));
+  try {
+    assert.match(hostText(ratioMounted.root), /图片清晰度/);
+    const tierButtons = hostNodes(ratioMounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip")));
+    assert.deepEqual(tierButtons.map(hostText), ["1K", "2K✓", "4K"]);
+    assert.doesNotMatch(hostText(ratioMounted.root), /720P|720p/);
+    assert.match(hostText(ratioMounted.root), /当前输出 2048x1360/);
+    assert.doesNotMatch(hostText(ratioMounted.root), /生成质量/);
+    assert.doesNotMatch(hostText(ratioMounted.root), /3840x3840/);
+  } finally {
+    ratioMounted.unmount();
+  }
+});
+
 test("web image workspace reloads schema on model switch and labels 1K vs 2K", () => {
   const source = readFileSync(new URL("../admin-vue/src/App.vue", import.meta.url), "utf8");
   assert.match(source, /loadAiImageModuleSchema\(true\)/);
@@ -1379,8 +1562,14 @@ test("workbench wires exact image schema and delegates image submission to the p
   assert.match(source, /void loadImageSchemaForModel\(modelCode\)/);
   assert.match(source, /toCanonicalImageSelection\(contract, pending\)/);
   assert.match(source, /imageReferenceUploadCache/);
+  assert.match(source, /if \(ratio === "auto"\)/);
+  assert.match(source, /imageSize\.value = "auto"/);
+  assert.match(source, /selectedTier\.value = "auto"/);
+  assert.match(source, /imageSize\.value = resolved \|\| ""/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
   assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);
+  assert.doesNotMatch(source, /3840x3840/);
+  assert.doesNotMatch(source, /resolutionTier|params\.tier|"tier":\s*"2K"/);
 });
 
 function loadVideoModelSwitchHarness(rejection) {

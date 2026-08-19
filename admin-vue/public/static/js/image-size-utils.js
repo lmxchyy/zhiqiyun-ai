@@ -11,15 +11,21 @@
 (function (global) {
   "use strict";
 
-  var COMMON_ASPECT_LABELS = {
-    "1:1": true,
-    "16:9": true,
-    "9:16": true,
-    "3:2": true,
-    "2:3": true,
-    "4:3": true,
-    "3:4": true,
-  };
+  var COMMON_ASPECTS = [
+    { label: "1:1", width: 1, height: 1 },
+    { label: "16:9", width: 16, height: 9 },
+    { label: "9:16", width: 9, height: 16 },
+    { label: "4:3", width: 4, height: 3 },
+    { label: "3:4", width: 3, height: 4 },
+    { label: "3:2", width: 3, height: 2 },
+    { label: "2:3", width: 2, height: 3 },
+  ];
+  var COMMON_ASPECT_LABELS = {};
+  for (var ci = 0; ci < COMMON_ASPECTS.length; ci++) {
+    COMMON_ASPECT_LABELS[COMMON_ASPECTS[ci].label] = true;
+  }
+  var VISIBLE_RESOLUTION_TIERS = { "1K": true, "2K": true, "4K": true };
+  var TIER_ORDER = { "720p": 0, "1K": 1, "2K": 2, "4K": 3, auto: -1 };
 
   function gcd(a, b) {
     a = Math.abs(Math.round(a));
@@ -47,6 +53,33 @@
     return (width / d) + ":" + (height / d);
   }
 
+  function aspectLogDistance(width, height, ratioLabel) {
+    var target = null;
+    for (var i = 0; i < COMMON_ASPECTS.length; i++) {
+      if (COMMON_ASPECTS[i].label === ratioLabel) {
+        target = COMMON_ASPECTS[i];
+        break;
+      }
+    }
+    if (!target) return Infinity;
+    return Math.abs(Math.log(width / height) - Math.log(target.width / target.height));
+  }
+
+  function classifyCommonAspectRatio(width, height) {
+    var exact = deriveRatio(width, height);
+    if (COMMON_ASPECT_LABELS[exact]) return exact;
+    var bestLabel = COMMON_ASPECTS[0].label;
+    var bestDist = Infinity;
+    for (var i = 0; i < COMMON_ASPECTS.length; i++) {
+      var dist = aspectLogDistance(width, height, COMMON_ASPECTS[i].label);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestLabel = COMMON_ASPECTS[i].label;
+      }
+    }
+    return bestLabel;
+  }
+
   function deriveTier(width, height) {
     var pixels = width * height;
     var maxEdge = Math.max(width, height);
@@ -60,7 +93,7 @@
     if (value === "auto") return undefined;
     var p = parseSize(value);
     if (!p) return undefined;
-    return deriveRatio(p.width, p.height);
+    return classifyCommonAspectRatio(p.width, p.height);
   }
 
   function deriveTierFromValue(value) {
@@ -88,7 +121,7 @@
       if (value === "auto") continue;
       var p = parseSize(value);
       if (!p) continue;
-      var ratio = deriveRatio(p.width, p.height);
+      var ratio = classifyCommonAspectRatio(p.width, p.height);
       var tier = deriveTier(p.width, p.height);
       if (!groups[ratio]) {
         groups[ratio] = { ratio: ratio, sizes: [] };
@@ -96,9 +129,8 @@
       }
       groups[ratio].sizes.push({ value: value, tier: tier, width: p.width, height: p.height });
     }
-    var tierOrder = { "720p": 0, "1K": 1, "2K": 2, "4K": 3, auto: -1 };
     for (var j = 0; j < groupList.length; j++) {
-      groupList[j].sizes.sort(function (a, b) { return tierOrder[a.tier] - tierOrder[b.tier]; });
+      groupList[j].sizes.sort(function (a, b) { return TIER_ORDER[a.tier] - TIER_ORDER[b.tier]; });
     }
     var ratioOrder = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"];
     groupList.sort(function (a, b) {
@@ -113,21 +145,29 @@
   }
 
   function findSizeByRatioAndTier(sizeOptions, ratio, tier) {
+    var best;
+    var bestDist = Infinity;
     for (var i = 0; i < sizeOptions.length; i++) {
       var value = sizeOptions[i];
       if (value === "auto") continue;
       var p = parseSize(value);
       if (!p) continue;
-      var r = deriveRatio(p.width, p.height);
+      var r = classifyCommonAspectRatio(p.width, p.height);
       var t = deriveTier(p.width, p.height);
-      if (r === ratio && t === tier) return value;
+      if (r !== ratio || t !== tier) continue;
+      var dist = aspectLogDistance(p.width, p.height, ratio);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = value;
+      }
     }
-    return undefined;
+    return best;
   }
 
   function getAvailableRatios(sizeOptions) {
-    var groups = groupSizesByRatio(sizeOptions);
-    return groups.map(function (g) { return g.ratio; });
+    return groupSizesByRatio(sizeOptions)
+      .map(function (g) { return g.ratio; })
+      .filter(function (ratio) { return COMMON_ASPECT_LABELS[ratio]; });
   }
 
   function getAvailableTiersForRatio(sizeOptions, ratio) {
@@ -138,15 +178,20 @@
       if (value === "auto") continue;
       var p = parseSize(value);
       if (!p) continue;
-      var r = deriveRatio(p.width, p.height);
+      var r = classifyCommonAspectRatio(p.width, p.height);
       if (r === ratio) {
         var t = deriveTier(p.width, p.height);
         if (!tiers[t]) { tiers[t] = true; tierList.push(t); }
       }
     }
-    var tierOrder = { "720p": 0, "1K": 1, "2K": 2, "4K": 3, auto: -1 };
-    tierList.sort(function (a, b) { return tierOrder[a] - tierOrder[b]; });
+    tierList.sort(function (a, b) { return TIER_ORDER[a] - TIER_ORDER[b]; });
     return tierList;
+  }
+
+  function getVisibleTiersForRatio(sizeOptions, ratio) {
+    return getAvailableTiersForRatio(sizeOptions, ratio).filter(function (tier) {
+      return VISIBLE_RESOLUTION_TIERS[tier];
+    });
   }
 
   function hasAutoOption(sizeOptions) {
@@ -158,6 +203,7 @@
     parseSize: parseSize,
     isCanonicalImageSize: isCanonicalImageSize,
     deriveRatio: deriveRatio,
+    classifyCommonAspectRatio: classifyCommonAspectRatio,
     deriveTier: deriveTier,
     deriveRatioFromValue: deriveRatioFromValue,
     deriveTierFromValue: deriveTierFromValue,
@@ -166,6 +212,7 @@
     findSizeByRatioAndTier: findSizeByRatioAndTier,
     getAvailableRatios: getAvailableRatios,
     getAvailableTiersForRatio: getAvailableTiersForRatio,
+    getVisibleTiersForRatio: getVisibleTiersForRatio,
     hasAutoOption: hasAutoOption,
   };
 })(window);
