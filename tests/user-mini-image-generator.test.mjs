@@ -3,12 +3,42 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 
-import { taskRequestFromDraft } from "../packages/business-sdk/dist/mappers.js";
+function loadBusinessSdkModule() {
+  const moduleURL = new URL("../packages/business-sdk/src/mappers.ts", import.meta.url);
+  const compiled = typescript.transpileModule(readFileSync(moduleURL, "utf8"), {
+    compilerOptions: {
+      module: typescript.ModuleKind.CommonJS,
+      target: typescript.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const module = { exports: {} };
+  // eslint-disable-next-line no-new-func
+  new Function("module", "exports", compiled)(module, module.exports);
+  return module.exports;
+}
 
 const requireFromUserUni = createRequire(new URL("../apps/user-uni/package.json", import.meta.url));
 const vueRuntime = requireFromUserUni("vue");
 const vueCompiler = requireFromUserUni("@vue/compiler-sfc");
 const typescript = requireFromUserUni("typescript");
+const businessSdk = loadBusinessSdkModule();
+const { taskRequestFromDraft } = businessSdk;
+
+function loadSharedImageUtilsModule() {
+  const moduleURL = new URL("../packages/shared-image-utils/src/index.ts", import.meta.url);
+  const compiled = typescript.transpileModule(readFileSync(moduleURL, "utf8"), {
+    compilerOptions: {
+      module: typescript.ModuleKind.CommonJS,
+      target: typescript.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  const module = { exports: {} };
+  // eslint-disable-next-line no-new-func
+  new Function("module", "exports", compiled)(module, module.exports);
+  return module.exports;
+}
 
 function loadImageCreationModule() {
   const moduleURL = new URL("../apps/user-uni/src/features/generation/imageCreation.ts", import.meta.url);
@@ -19,9 +49,12 @@ function loadImageCreationModule() {
       esModuleInterop: true,
     },
   }).outputText;
+  const sharedImageUtils = loadSharedImageUtilsModule();
+  const businessSdk = loadBusinessSdkModule();
   const module = { exports: {} };
   const localRequire = specifier => {
-    if (specifier === "@xianzhi/business-sdk") return { taskRequestFromDraft };
+    if (specifier === "@xianzhi/business-sdk") return businessSdk;
+    if (specifier === "@xianzhi/shared-image-utils") return sharedImageUtils;
     throw new Error(`unexpected image creation dependency ${specifier}`);
   };
   // eslint-disable-next-line no-new-func
@@ -166,6 +199,10 @@ function imageComponentProps(overrides = {}) {
     prompt: "生成橙色系水果店海报",
     size: "1024x1024",
     sizeOptions: [{ value: "1024x1024", label: "1K · 1:1" }],
+    selectedRatio: "1:1",
+    selectedTier: "1K",
+    availableRatios: ["auto", "1:1"],
+    availableTiers: ["1K"],
     quality: "auto",
     qualityOptions: [{ value: "auto", label: "自动" }],
     model: "gpt-image-2",
@@ -320,7 +357,7 @@ test("size labels distinguish 1K and 2K squares and keep submitting WxH", () => 
   assert.equal(displayImageSizeLabel("2048x2048"), "2K · 1:1");
   assert.equal(displayImageSizeLabel("1280x720"), "720p · 16:9");
   assert.equal(displayImageSizeLabel("3840x2160"), "4K · 16:9");
-  assert.equal(displayImageSizeLabel("1792x1024"), "2K · 自定义 · 1792×1024");
+  assert.equal(displayImageSizeLabel("1792x1024"), "2K · 1792x1024");
 
   const contract = deriveImageCreationContract("gpt-image-2", gptImageSchema({
     fields: [
@@ -1235,6 +1272,10 @@ test("mounted terminal failure uses error tone and emits retry instead of genera
 
 test("mounted image component renders only exact dynamic schema controls", () => {
   const mounted = mountAiImageGenerator(imageComponentProps({
+    selectedRatio: "1:1",
+    selectedTier: "1K",
+    availableRatios: ["auto", "1:1"],
+    availableTiers: ["1K", "2K"],
     size: "1536x1024",
     sizeOptions: [
       { value: "1024x1024", label: "1K · 1:1" },
@@ -1246,19 +1287,28 @@ test("mounted image component renders only exact dynamic schema controls", () =>
     countOptions: [],
   }));
   try {
-    const sizeButtons = hostNodes(mounted.root)
-      .filter(node => hostClass(node).split(/\s+/).includes("ai-image-generator__aspect"));
-    assert.deepEqual(sizeButtons.map(hostText), ["1K · 1:1", "1K · 3:2✓"]);
-    assert.doesNotMatch(hostText(mounted.root), /图片清晰度|张数|auto|4:3/);
-    assert.match(hostText(mounted.root), /1K · 1:1/);
+    const ratioButtons = hostNodes(mounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__ratio-chip")));
+    assert.deepEqual(ratioButtons.map(hostText), ["自动", "1:1✓"]);
+    const tierButtons = hostNodes(mounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip")));
+    assert.deepEqual(tierButtons.map(hostText), ["1K✓", "2K"]);
+    assert.doesNotMatch(hostText(mounted.root), /standard|hd/);
+    assert.match(hostText(mounted.root), /1:1/);
   } finally {
     mounted.unmount();
   }
 });
 
 test("mounted 2K square chip still submits WxH 2048x2048", () => {
-  const emitted = [];
+  const emittedSize = [];
+  const emittedRatio = [];
+  const emittedTier = [];
   const mounted = mountAiImageGenerator(imageComponentProps({
+    selectedRatio: "1:1",
+    selectedTier: "1K",
+    availableRatios: ["auto", "1:1"],
+    availableTiers: ["1K", "2K"],
     size: "1024x1024",
     sizeOptions: [
       { value: "1024x1024", label: "1K · 1:1" },
@@ -1271,14 +1321,21 @@ test("mounted 2K square chip still submits WxH 2048x2048", () => {
     ],
     count: 1,
     countOptions: [{ value: 1, label: "1" }],
-    onUpdateSize: (value) => emitted.push(value),
+    onUpdateSize: (value) => emittedSize.push(value),
+    "onUpdate:selectedRatio": (value) => emittedRatio.push(value),
+    "onUpdate:selectedTier": (value) => emittedTier.push(value),
   }));
   try {
-    const sizeButtons = hostNodes(mounted.root)
-      .filter(node => hostClass(node).split(/\s+/).includes("ai-image-generator__aspect"));
-    assert.deepEqual(sizeButtons.map(hostText), ["1K · 1:1✓", "2K · 1:1"]);
-    sizeButtons[1].props.onClick();
-    assert.deepEqual(emitted, ["2048x2048"]);
+    const ratioButtons = hostNodes(mounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__ratio-chip")));
+    const tierButtons = hostNodes(mounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip")));
+    assert.deepEqual(ratioButtons.map(hostText), ["自动", "1:1✓"]);
+    assert.deepEqual(tierButtons.map(hostText), ["1K✓", "2K"]);
+    tierButtons[1].props.onClick();
+    assert.deepEqual(emittedRatio, []);
+    assert.deepEqual(emittedTier, ["2K"]);
+    assert.deepEqual(emittedSize, []);
   } finally {
     mounted.unmount();
   }
@@ -1290,8 +1347,8 @@ test("web image workspace reloads schema on model switch and labels 1K vs 2K", (
   assert.match(source, /applyOnlineImageFormToLoadedSchema\(\)/);
   assert.match(source, /displayGptImageSizeLabel/);
   const labelSource = readFileSync(new URL("../admin-vue/src/utils/gptImageSizeLabel.ts", import.meta.url), "utf8");
-  assert.match(labelSource, /1K/);
-  assert.match(labelSource, /2K/);
+  assert.match(labelSource, /shared-image-utils/);
+  assert.match(labelSource, /displayGptImageSizeLabel/);
   const editor = readFileSync(new URL("../admin-vue/src/components/billing/PlanEditorDialog.vue", import.meta.url), "utf8");
   assert.match(editor, /value="auto"/);
   assert.match(editor, /value="low"/);
