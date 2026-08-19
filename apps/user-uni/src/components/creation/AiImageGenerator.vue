@@ -144,24 +144,6 @@
 
           <text v-if="size && size !== 'auto'" class="ai-image-generator__output-hint">当前输出 {{ size }}</text>
 
-          <template v-if="qualityOptions.length">
-            <text class="ai-image-generator__label">生成质量</text>
-            <view class="ai-image-generator__quality" role="group" aria-label="生成质量">
-              <button
-                v-for="option in qualityOptions"
-                :key="option.value"
-                :class="['ai-image-generator__quality-option', { 'is-selected': quality === option.value }]"
-                type="button"
-                :aria-pressed="quality === option.value"
-                hover-class="ai-image-generator__quality-option--pressed"
-                @click='emit("update:quality", option.value)'
-              >
-                <text>{{ qualityLabel(option.value) }}</text>
-                <text v-if="quality === option.value" class="ai-image-generator__check" aria-hidden="true">✓</text>
-              </button>
-            </view>
-          </template>
-
           <view class="ai-image-generator__picker-row">
             <view class="ai-image-generator__picker-field">
               <text class="ai-image-generator__picker-label">模型</text>
@@ -340,6 +322,9 @@ const schemaStatusLabel = computed(() => {
   return "请选择图片模型";
 });
 
+const COMMON_RATIO_VALUES = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"];
+const VISIBLE_TIER_VALUES: ResolutionTier[] = ["1K", "2K", "4K"];
+
 const ratioOptions = computed(() => {
   const labels: Record<string, string> = {
     "auto": "自动",
@@ -351,34 +336,27 @@ const ratioOptions = computed(() => {
     "3:2": "3:2",
     "2:3": "2:3",
   };
-  return props.availableRatios.map(ratio => ({
-    value: ratio,
-    label: labels[ratio] || ratio,
-  }));
+  return props.availableRatios
+    .filter(ratio => COMMON_RATIO_VALUES.includes(ratio))
+    .map(ratio => ({
+      value: ratio,
+      label: labels[ratio] || ratio,
+    }));
 });
 
 const tierOptions = computed(() => {
   const labels: Record<string, string> = {
-    "720p": "720P",
     "1K": "1K",
     "2K": "2K",
     "4K": "4K",
   };
-  return props.availableTiers.map(tier => ({
-    value: tier,
-    label: labels[tier] || tier,
-  }));
+  return props.availableTiers
+    .filter(tier => VISIBLE_TIER_VALUES.includes(tier))
+    .map(tier => ({
+      value: tier,
+      label: labels[tier] || tier,
+    }));
 });
-
-function qualityLabel(value: CanonicalImageQuality): string {
-  const labels: Record<CanonicalImageQuality, string> = {
-    auto: "自动",
-    low: "低",
-    medium: "中",
-    high: "高",
-  };
-  return labels[value] || value;
-}
 
 function ratioShapeStyle(ratio: string) {
   if (ratio === "auto") return undefined;

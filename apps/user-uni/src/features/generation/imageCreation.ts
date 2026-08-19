@@ -6,14 +6,14 @@ import type {
 } from "@xianzhi/shared-types";
 import {
   canonicalSizeParts as sharedCanonicalSizeParts,
-  deriveRatioFromSize as sharedDeriveRatioFromSize,
+  classifyCommonAspectRatio,
   deriveTierFromSize as sharedDeriveTierFromSize,
   deriveRatioFromSizeValue,
   deriveTierFromSizeValue,
   displayImageSizeLabel as sharedDisplayImageSizeLabel,
   findSizeByRatioAndTier,
   getAvailableRatios,
-  getAvailableTiersForRatio,
+  getVisibleTiersForRatio,
   groupSizesByRatio,
   hasAutoOption,
   isCommonAspectRatio,
@@ -259,7 +259,7 @@ function canonicalSizeParts(value: unknown): [number, number] | undefined {
 }
 
 function sizeAspectLabel(width: number, height: number): string {
-  return sharedDeriveRatioFromSize(width, height);
+  return classifyCommonAspectRatio(width, height);
 }
 
 function sizeTierLabel(width: number, height: number): string {
@@ -386,7 +386,9 @@ export function initialImageSelection(
     size: contract.defaultSelection.size || contract.sizeOptions[0]?.value,
   };
   if (contract.declared.quality) {
-    selection.quality = contract.defaultSelection.quality || contract.qualityOptions[0]?.value;
+    selection.quality = contract.qualityOptions.some(option => option.value === "low")
+      ? "low"
+      : (contract.defaultSelection.quality || contract.qualityOptions[0]?.value);
   }
   if (contract.declared.count) {
     selection.count = contract.defaultSelection.count || contract.countOptions[0]?.value;
@@ -491,9 +493,14 @@ export function restoreImageInspirationSelection(
     return { compatible: false, reason: `当前模型不支持灵感比例 ${ratio}` };
   }
   const defaultMatch = matchingSizes.find(option => option.value === contract.defaultSelection.size);
-  const sizeOption = defaultMatch || (matchingSizes.length === 1 ? matchingSizes[0] : undefined);
+  const sizeOption = defaultMatch || matchingSizes.slice().sort((left, right) => {
+    const leftParts = canonicalSizeParts(left.value);
+    const rightParts = canonicalSizeParts(right.value);
+    if (!leftParts || !rightParts) return 0;
+    return sizeTierLabel(leftParts[0], leftParts[1]).localeCompare(sizeTierLabel(rightParts[0], rightParts[1]));
+  })[0];
   if (!sizeOption) {
-    return { compatible: false, reason: `灵感比例 ${ratio} 对应多个尺寸，无法确定生成尺寸` };
+    return { compatible: false, reason: `当前模型不支持灵感比例 ${ratio}` };
   }
 
   const quality = parameters.quality === "standard" || parameters.quality === "hd"
@@ -782,11 +789,12 @@ export function imagePointEstimateLabel(
 }
 
 export {
+  classifyCommonAspectRatio as classifyCommonAspectRatioExport,
   deriveRatioFromSizeValue as deriveRatioFromSizeValueExport,
   deriveTierFromSizeValue as deriveTierFromSizeValueExport,
   findSizeByRatioAndTier as findSizeByRatioAndTierExport,
   getAvailableRatios as getAvailableRatiosExport,
-  getAvailableTiersForRatio as getAvailableTiersForRatioExport,
+  getVisibleTiersForRatio as getAvailableTiersForRatioExport,
   groupSizesByRatio as groupSizesByRatioExport,
   hasAutoOption as hasAutoOptionExport,
   isCommonAspectRatio as isCommonAspectRatioExport,
@@ -826,7 +834,7 @@ export function availableTiersForRatio(
   ratio: string,
 ): ResolutionTier[] {
   const sizeValues = contract.sizeOptions.map(option => option.value);
-  return getAvailableTiersForRatio(sizeValues, ratio);
+  return getVisibleTiersForRatio(sizeValues, ratio);
 }
 
 export function contractHasAuto(

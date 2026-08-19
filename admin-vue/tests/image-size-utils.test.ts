@@ -104,3 +104,18 @@ test("Web G.3 displayImageSizeLabel matches shared package format", () => {
   assert.ok(label.includes("2K"));
   assert.ok(label.includes("16:9"));
 });
+
+test("Web H.1 3:2 / 2:3 near-common sizes match schema WxH", () => {
+  assert.equal(U.classifyCommonAspectRatio(2048, 1360), "3:2");
+  assert.equal(U.classifyCommonAspectRatio(3520, 2352), "3:2");
+  assert.equal(U.findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "3:2", "2K"), "2048x1360");
+  assert.equal(U.findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "3:2", "4K"), "3520x2352");
+  assert.equal(U.findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "2:3", "2K"), "1360x2048");
+  assert.equal(U.findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "2:3", "4K"), "2352x3520");
+  assert.equal(U.findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "1:1", "4K"), undefined);
+  const ratios = U.getAvailableRatios(FULL_SCHEMA_SIZES);
+  assert.ok(!ratios.includes("128:85"));
+  assert.ok(!ratios.includes("85:128"));
+  assert.ok(!ratios.includes("220:147"));
+  assert.ok(!ratios.includes("147:220"));
+});

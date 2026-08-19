@@ -1615,11 +1615,22 @@ watch([selectedRatio, selectedTier], ([ratio, tier]) => {
   if (!imageCreationContract.value) return;
   if (ratio === "auto") {
     imageSize.value = "auto";
+    if (tier !== "auto") selectedTier.value = "auto";
+    return;
+  }
+  const tiers = availableTiersForRatio(imageCreationContract.value, ratio);
+  const nextTier = tiers.includes(tier) ? tier : tiers[0];
+  if (!nextTier) {
+    imageSize.value = "";
+    return;
+  }
+  if (nextTier !== tier) {
+    selectedTier.value = nextTier;
     return;
   }
   const sizeValues = imageCreationContract.value.sizeOptions.map(option => option.value);
-  const resolved = resolveSizeFromRatioTier(sizeValues, ratio, tier);
-  if (resolved) imageSize.value = resolved;
+  const resolved = resolveSizeFromRatioTier(sizeValues, ratio, nextTier);
+  imageSize.value = resolved || "";
 });
 
 onShareAppMessage(() => ({

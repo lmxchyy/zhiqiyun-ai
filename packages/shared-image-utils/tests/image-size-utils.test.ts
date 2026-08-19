@@ -3,15 +3,16 @@ import test from "node:test";
 
 import {
   canonicalSizeParts,
+  classifyCommonAspectRatio,
   deriveRatioFromSize,
   deriveTierFromSize,
   deriveRatioFromSizeValue,
   deriveTierFromSizeValue,
   displayImageSizeLabel,
-  groupSizesByRatio,
   findSizeByRatioAndTier,
   getAvailableRatios,
   getAvailableTiersForRatio,
+  getVisibleTiersForRatio,
   hasAutoOption,
   isCanonicalImageSize,
 } from "../src/index.ts";
@@ -195,4 +196,42 @@ test("G.4 isCanonicalImageSize validates correctly", () => {
   assert.equal(isCanonicalImageSize("1024x1024"), true);
   assert.equal(isCanonicalImageSize("invalid"), false);
   assert.equal(isCanonicalImageSize(""), false);
+});
+
+test("H.1 near-common sizes classify to 3:2 / 2:3 instead of reduced odd ratios", () => {
+  assert.equal(deriveRatioFromSize(2048, 1360), "128:85");
+  assert.equal(deriveRatioFromSize(1360, 2048), "85:128");
+  assert.equal(deriveRatioFromSize(3520, 2352), "220:147");
+  assert.equal(deriveRatioFromSize(2352, 3520), "147:220");
+  assert.equal(classifyCommonAspectRatio(2048, 1360), "3:2");
+  assert.equal(classifyCommonAspectRatio(1360, 2048), "2:3");
+  assert.equal(classifyCommonAspectRatio(3520, 2352), "3:2");
+  assert.equal(classifyCommonAspectRatio(2352, 3520), "2:3");
+  assert.equal(deriveRatioFromSizeValue("2048x1360"), "3:2");
+  assert.equal(deriveRatioFromSizeValue("3520x2352"), "3:2");
+});
+
+test("H.2 common ratio list hides reduced odd ratios", () => {
+  const ratios = getAvailableRatios(FULL_SCHEMA_SIZES);
+  assert.deepEqual(ratios, ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
+  assert.ok(!ratios.includes("128:85"));
+  assert.ok(!ratios.includes("85:128"));
+  assert.ok(!ratios.includes("220:147"));
+  assert.ok(!ratios.includes("147:220"));
+});
+
+test("H.3 3:2 / 2:3 near-common sizes resolve to schema WxH, never invented 3840x3840", () => {
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "3:2", "1K"), "1536x1024");
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "3:2", "2K"), "2048x1360");
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "3:2", "4K"), "3520x2352");
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "2:3", "1K"), "1024x1536");
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "2:3", "2K"), "1360x2048");
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "2:3", "4K"), "2352x3520");
+  assert.equal(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "1:1", "4K"), undefined);
+  assert.ok(!FULL_SCHEMA_SIZES.includes("3840x3840"));
+  assert.notEqual(findSizeByRatioAndTier(FULL_SCHEMA_SIZES, "1:1", "4K"), "3840x3840");
+  assert.deepEqual(getAvailableTiersForRatio(FULL_SCHEMA_SIZES, "3:2"), ["1K", "2K", "4K"]);
+  assert.deepEqual(getAvailableTiersForRatio(FULL_SCHEMA_SIZES, "1:1"), ["1K", "2K"]);
+  assert.deepEqual(getVisibleTiersForRatio(FULL_SCHEMA_SIZES, "16:9"), ["2K", "4K"]);
+  assert.deepEqual(getVisibleTiersForRatio(FULL_SCHEMA_SIZES, "1:1"), ["1K", "2K"]);
 });

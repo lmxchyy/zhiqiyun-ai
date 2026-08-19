@@ -15,15 +15,29 @@ export interface RatioGroup {
   }>;
 }
 
-const COMMON_IMAGE_ASPECT_LABELS = new Set([
-  "1:1",
-  "16:9",
-  "9:16",
-  "3:2",
-  "2:3",
-  "4:3",
-  "3:4",
-]);
+const COMMON_IMAGE_ASPECTS: ReadonlyArray<{ label: string; width: number; height: number }> = [
+  { label: "1:1", width: 1, height: 1 },
+  { label: "16:9", width: 16, height: 9 },
+  { label: "9:16", width: 9, height: 16 },
+  { label: "4:3", width: 4, height: 3 },
+  { label: "3:4", width: 3, height: 4 },
+  { label: "3:2", width: 3, height: 2 },
+  { label: "2:3", width: 2, height: 3 },
+];
+
+const COMMON_IMAGE_ASPECT_LABELS = new Set<string>(
+  COMMON_IMAGE_ASPECTS.map(item => item.label),
+);
+
+export const VISIBLE_RESOLUTION_TIERS: ResolutionTier[] = ["1K", "2K", "4K"];
+
+const TIER_ORDER: Record<ResolutionTier, number> = {
+  "720p": 0,
+  "1K": 1,
+  "2K": 2,
+  "4K": 3,
+  auto: -1,
+};
 
 export function greatestCommonDivisor(left: number, right: number): number {
   let a = Math.abs(Math.round(left));
@@ -67,6 +81,28 @@ export function isCommonAspectRatio(ratio: string): boolean {
   return COMMON_IMAGE_ASPECT_LABELS.has(ratio);
 }
 
+function aspectLogDistance(width: number, height: number, ratioLabel: string): number {
+  const target = COMMON_IMAGE_ASPECTS.find(item => item.label === ratioLabel);
+  if (!target) return Number.POSITIVE_INFINITY;
+  return Math.abs(Math.log(width / height) - Math.log(target.width / target.height));
+}
+
+export function classifyCommonAspectRatio(width: number, height: number): string {
+  const exact = deriveRatioFromSize(width, height);
+  if (COMMON_IMAGE_ASPECT_LABELS.has(exact)) return exact;
+
+  let best = COMMON_IMAGE_ASPECTS[0];
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const candidate of COMMON_IMAGE_ASPECTS) {
+    const dist = aspectLogDistance(width, height, candidate.label);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = candidate;
+    }
+  }
+  return best.label;
+}
+
 export function deriveTierFromSize(width: number, height: number): ResolutionTier {
   const pixels = width * height;
   const maxEdge = Math.max(width, height);
@@ -86,7 +122,7 @@ export function deriveTierFromSizeValue(value: string): ResolutionTier {
 export function deriveRatioFromSizeValue(value: string): string | undefined {
   const parts = canonicalSizeParts(value);
   if (!parts) return undefined;
-  return deriveRatioFromSize(parts[0], parts[1]);
+  return classifyCommonAspectRatio(parts[0], parts[1]);
 }
 
 export function displayImageSizeLabel(value: string): string {
@@ -110,7 +146,7 @@ export function groupSizesByRatio(
     const parts = canonicalSizeParts(value);
     if (!parts) continue;
     const [width, height] = parts;
-    const ratio = deriveRatioFromSize(width, height);
+    const ratio = classifyCommonAspectRatio(width, height);
     const tier = deriveTierFromSize(width, height);
 
     if (!groups.has(ratio)) {
@@ -121,16 +157,7 @@ export function groupSizesByRatio(
 
   const result = Array.from(groups.values());
   for (const group of result) {
-    group.sizes.sort((a, b) => {
-      const tierOrder: Record<ResolutionTier, number> = {
-        "720p": 0,
-        "1K": 1,
-        "2K": 2,
-        "4K": 3,
-        auto: -1,
-      };
-      return tierOrder[a.tier] - tierOrder[b.tier];
-    });
+    group.sizes.sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);
   }
 
   const ratioOrder = [
@@ -159,16 +186,23 @@ export function findSizeByRatioAndTier(
   ratio: string,
   tier: ResolutionTier,
 ): string | undefined {
+  let best: string | undefined;
+  let bestDist = Number.POSITIVE_INFINITY;
   for (const value of sizeOptions) {
     if (value === "auto") continue;
     const parts = canonicalSizeParts(value);
     if (!parts) continue;
     const [width, height] = parts;
-    const derivedRatio = deriveRatioFromSize(width, height);
+    const derivedRatio = classifyCommonAspectRatio(width, height);
     const derivedTier = deriveTierFromSize(width, height);
-    if (derivedRatio === ratio && derivedTier === tier) return value;
+    if (derivedRatio !== ratio || derivedTier !== tier) continue;
+    const dist = aspectLogDistance(width, height, ratio);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = value;
+    }
   }
-  return undefined;
+  return best;
 }
 
 export function getAvailableTiersForRatio(
@@ -181,24 +215,26 @@ export function getAvailableTiersForRatio(
     const parts = canonicalSizeParts(value);
     if (!parts) continue;
     const [width, height] = parts;
-    const derivedRatio = deriveRatioFromSize(width, height);
+    const derivedRatio = classifyCommonAspectRatio(width, height);
     if (derivedRatio === ratio) {
       tiers.add(deriveTierFromSize(width, height));
     }
   }
-  const tierOrder: Record<ResolutionTier, number> = {
-    "720p": 0,
-    "1K": 1,
-    "2K": 2,
-    "4K": 3,
-    auto: -1,
-  };
-  return Array.from(tiers).sort((a, b) => tierOrder[a] - tierOrder[b]);
+  return Array.from(tiers).sort((a, b) => TIER_ORDER[a] - TIER_ORDER[b]);
+}
+
+export function getVisibleTiersForRatio(
+  sizeOptions: string[],
+  ratio: string,
+): ResolutionTier[] {
+  return getAvailableTiersForRatio(sizeOptions, ratio)
+    .filter((tier): tier is "1K" | "2K" | "4K" => VISIBLE_RESOLUTION_TIERS.includes(tier));
 }
 
 export function getAvailableRatios(sizeOptions: string[]): string[] {
-  const groups = groupSizesByRatio(sizeOptions);
-  return groups.map(g => g.ratio);
+  return groupSizesByRatio(sizeOptions)
+    .map(g => g.ratio)
+    .filter(ratio => COMMON_IMAGE_ASPECT_LABELS.has(ratio));
 }
 
 export function hasAutoOption(sizeOptions: string[]): boolean {
