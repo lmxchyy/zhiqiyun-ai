@@ -1,9 +1,9 @@
 export {
   displayImageSizeLabel as displayGptImageSizeLabel,
-  deriveRatio as deriveRatioFromSize,
-  deriveTier as deriveTierFromSize,
-  deriveRatioFromValue,
-  deriveTierFromValue,
+  deriveRatioFromSize as deriveRatioFromSize,
+  deriveTierFromSize as deriveTierFromSize,
+  deriveRatioFromSizeValue as deriveRatioFromValue,
+  deriveTierFromSizeValue as deriveTierFromValue,
   groupSizesByRatio,
   findSizeByRatioAndTier,
   getAvailableRatios,
