@@ -389,17 +389,9 @@ func (a api) generationTasksForUser(r *http.Request, userID string, limit int) (
 	return tasks, nil
 }
 
-func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, error) {
-	ctx := context.Background()
-	if r != nil {
-		ctx = r.Context()
-	}
+func (a api) loadAssetsForUser(userID string, limit int) ([]asset, error) {
 	if optimized, ok := a.store.(optimizedUserContentStore); ok {
-		assets, err := optimized.ListAssetsForUser(userID, limit)
-		if err != nil {
-			return nil, err
-		}
-		return a.signStoredAssetURLs(ctx, userID, assets), nil
+		return optimized.ListAssetsForUser(userID, limit)
 	}
 	assets, err := a.store.ListAssets()
 	if err != nil {
@@ -409,7 +401,61 @@ func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, 
 	if limit > 0 && len(assets) > limit {
 		assets = assets[:limit]
 	}
+	return assets, nil
+}
+
+func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, error) {
+	ctx := context.Background()
+	if r != nil {
+		ctx = r.Context()
+	}
+	assets, err := a.loadAssetsForUser(userID, limit)
+	if err != nil {
+		return nil, err
+	}
 	return a.signStoredAssetURLs(ctx, userID, assets), nil
+}
+
+// assetsForUserWorkspaceList is the first-paint path for homepage / AI image /
+// works center. It keeps compact thumbnails and skips serial original-URL
+// signing; detail and download still sign via /assets/:id.
+func (a api) assetsForUserWorkspaceList(userID string, limit int) ([]asset, error) {
+	assets, err := a.loadAssetsForUser(userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return prepareWorkspaceListAssets(assets), nil
+}
+
+func prepareWorkspaceListAssets(items []asset) []asset {
+	result := make([]asset, len(items))
+	copy(result, items)
+	for index := range result {
+		result[index].ThumbnailURL = compactListInlineMediaURL(result[index].ThumbnailURL)
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(result[index].ThumbnailURL)), "storage://") {
+			result[index].ThumbnailURL = ""
+		}
+		if workspaceAssetNeedsOriginalSigning(result[index]) {
+			// Asset grids render compact covers. The original is signed by
+			// the detail/download endpoint after the user opens a work.
+			result[index].URL = ""
+		}
+	}
+	return result
+}
+
+func workspaceAssetNeedsOriginalSigning(item asset) bool {
+	fileID := firstNonEmptyString(
+		stringValue(item.Metadata["fileId"]),
+		stringValue(item.Metadata["storageFileId"]),
+		storageFileIDFromRef(item.URL),
+	)
+	coverID := firstNonEmptyString(
+		stringValue(item.Metadata["coverFileId"]),
+		stringValue(item.Metadata["thumbnailFileId"]),
+		storageFileIDFromRef(item.ThumbnailURL),
+	)
+	return fileID != "" || coverID != ""
 }
 
 func (a api) assetForUser(r *http.Request, userID string, id string) (asset, bool, error) {
@@ -3976,7 +4022,7 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		items, err := a.assetsForUser(r, user.ID, assetLimit)
+		items, err := a.assetsForUserWorkspaceList(user.ID, assetLimit)
 		if err != nil {
 			recordErr(err)
 			return
@@ -4065,7 +4111,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		items, err := a.assetsForUser(r, user.ID, assetLimit)
+		items, err := a.assetsForUserWorkspaceList(user.ID, assetLimit)
 		if err != nil {
 			recordErr(err)
 			return
@@ -4480,6 +4526,9 @@ func attachAssetImagesToTasks(tasks []generationTask, assets []asset) []generati
 	items := make([]generationTask, 0, len(tasks))
 	for _, task := range tasks {
 		if item, ok := firstAssetForTask(task, assetByID, assetByTaskID); ok {
+			if task.ThumbnailURL == "" {
+				task.ThumbnailURL = item.ThumbnailURL
+			}
 			if task.ImageURL == "" {
 				task.ImageURL = item.URL
 			}

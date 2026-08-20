@@ -46,4 +46,9 @@ describe("web workspace first-paint load regression", () => {
     expect(moduleListQuery("userVideoGeneration")).toEqual({ taskLimit: 40, assetLimit: 40 });
     expect(moduleListQuery("userUsage")).toBeUndefined();
   });
+
+  it("sends the same capped query for AI image history and works center", () => {
+    expect(moduleListQuery("userWorks")).toEqual(moduleListQuery("userAiImage"));
+    expect(usesInstantWorkspace("userWorks")).toBe(true);
+  });
 });
