@@ -341,7 +341,7 @@
                   <footer class="user-work-actions">
                     <button type="button" @click.stop="previewAiTask(task)">预览</button>
                     <button type="button" @click.stop="reuseUserWorkTask(task)">复用</button>
-                    <button type="button" :disabled="!aiTaskImageUrl(task)" @click.stop="downloadAiTask(task)">下载</button>
+                    <button type="button" :disabled="!aiTaskCanDownload(task)" @click.stop="downloadAiTask(task)">下载</button>
                     <button type="button" @click.stop="openAiFavoritePicker([aiTaskId(task)])">收藏</button>
                   </footer>
                 </article>
@@ -365,7 +365,7 @@
                   <div class="user-works-row-actions">
                     <button type="button" @click="previewAiTask(task)">预览</button>
                     <button type="button" @click="reuseUserWorkTask(task)">复用</button>
-                    <button type="button" :disabled="!aiTaskImageUrl(task)" @click="downloadAiTask(task)">下载</button>
+                    <button type="button" :disabled="!aiTaskCanDownload(task)" @click="downloadAiTask(task)">下载</button>
                   </div>
                 </div>
               </div>
