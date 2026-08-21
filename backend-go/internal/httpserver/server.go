@@ -405,6 +405,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.POST("/assets/:id/move-project", wrapF(api.moveAssetProject))
 	v1.POST("/assets/thumbnail-backfill", wrapF(api.backfillAssetThumbnails))
 	v1.GET("/assets/:id/download", wrapF(api.downloadAsset))
+	v1.GET("/assets/:id/thumbnail", wrapF(api.assetThumbnail))
 	v1.DELETE("/assets/:id", wrapF(api.deleteAsset))
 	v1.POST("/files/upload/init", wrapF(files.initUpload))
 	v1.POST("/files/upload/complete", wrapF(files.completeUpload))

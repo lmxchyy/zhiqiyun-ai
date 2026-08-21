@@ -657,6 +657,27 @@ const assetSummarySelect = `
 	from xz_assets
 `
 
+// assetWorkspaceListSelect is the first-paint projection. It keeps the same
+// scan shape as assetSummarySelect but must not detoast thumbnail_url TEXT.
+const assetWorkspaceListSelect = `
+	select
+		id,
+		user_id,
+		coalesce(tenant_id, ''),
+		coalesce(organization_id, ''),
+		coalesce(task_id, ''),
+		coalesce(name, ''),
+		coalesce(media_type, ''),
+		coalesce(url, ''),
+		'' as thumbnail_url,
+		coalesce(favorite, false),
+		coalesce(metadata::text, '{}'),
+		coalesce(deleted_at::text, ''),
+		coalesce(created_at, ''),
+		coalesce(updated_at, '')
+	from xz_assets
+`
+
 func (s *postgresStore) ListGenerationTasksForUser(userID string, limit int) ([]generationTask, error) {
 	items, _, err := s.ListGenerationTasksPageForUser(userID, limit, 0, false)
 	return items, err
@@ -783,6 +804,39 @@ func (s *postgresStore) GetAssetForUser(userID string, id string) (asset, bool, 
 }
 
 func (s *postgresStore) ListAssetsPageForUser(userID string, limit int, offset int) ([]asset, int, error) {
+	return s.listAssetsPageForUserSelect(userID, limit, offset, assetSummarySelect)
+}
+
+func (s *postgresStore) ListAssetsForWorkspaceList(userID string, limit int) ([]asset, error) {
+	items, _, err := s.listAssetsPageForUserSelect(userID, limit, 0, assetWorkspaceListSelect)
+	return items, err
+}
+
+func (s *postgresStore) GetAssetByID(id string) (asset, bool, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	if err := s.ensureReady(ctx); err != nil {
+		return asset{}, false, err
+	}
+	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+		where id=$1 and deleted_at is null
+		limit 1
+	`, id)
+	if err != nil {
+		return asset{}, false, err
+	}
+	defer rows.Close()
+	items, err := scanAssetSummaryRows(rows)
+	if err != nil {
+		return asset{}, false, err
+	}
+	if len(items) == 0 {
+		return asset{}, false, nil
+	}
+	return items[0], true, nil
+}
+
+func (s *postgresStore) listAssetsPageForUserSelect(userID string, limit int, offset int, selectSQL string) ([]asset, int, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
@@ -805,7 +859,7 @@ func (s *postgresStore) ListAssetsPageForUser(userID string, limit int, offset i
 	`, userID, contextType, tenantID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.db.QueryContext(ctx, assetSummarySelect+`
+	rows, err := s.db.QueryContext(ctx, selectSQL+`
 		where user_id=$1 and deleted_at is null and (($4='ENTERPRISE' and tenant_id=$5) or ($4<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
 		order by created_at desc nulls last, id desc
 		limit $2 offset $3
