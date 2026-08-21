@@ -427,6 +427,8 @@ func (a api) assetsForUserWorkspaceList(userID string, limit int) ([]asset, erro
 	return prepareWorkspaceListAssets(assets), nil
 }
 
+const maxWorkspaceListInlineBytes = 4 << 10
+
 func prepareWorkspaceListAssets(items []asset) []asset {
 	result := make([]asset, len(items))
 	copy(result, items)
@@ -435,13 +437,96 @@ func prepareWorkspaceListAssets(items []asset) []asset {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(result[index].ThumbnailURL)), "storage://") {
 			result[index].ThumbnailURL = ""
 		}
-		if workspaceAssetNeedsOriginalSigning(result[index]) {
+		if workspaceAssetNeedsOriginalSigning(result[index]) || workspaceListOmitsInlineOriginal(result[index].URL) {
 			// Asset grids render compact covers. The original is signed by
 			// the detail/download endpoint after the user opens a work.
 			result[index].URL = ""
 		}
+		result[index].Metadata = compactWorkspaceListMetadata(result[index].Metadata)
 	}
 	return result
+}
+
+func compactWorkspaceListTasks(tasks []generationTask) []generationTask {
+	items := make([]generationTask, len(tasks))
+	copy(items, tasks)
+	for index := range items {
+		compacted := compactWorkspaceListValue(items[index].Params)
+		if asMap, ok := compacted.(map[string]any); ok {
+			items[index].Params = asMap
+		} else {
+			items[index].Params = map[string]any{}
+		}
+		if len(items[index].Prompt) > 8<<10 {
+			items[index].Prompt = items[index].Prompt[:8<<10]
+		}
+		if workspaceListOmitsInlineOriginal(items[index].ImageURL) {
+			items[index].ImageURL = ""
+		}
+		if workspaceListOmitsInlineOriginal(items[index].OutputURL) {
+			items[index].OutputURL = ""
+		}
+		if workspaceListOmitsInlineOriginal(items[index].ResultURL) {
+			items[index].ResultURL = ""
+		}
+	}
+	return items
+}
+
+func compactWorkspaceListMetadata(metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	compacted, _ := compactWorkspaceListValue(metadata).(map[string]any)
+	if compacted == nil {
+		compacted = map[string]any{}
+	}
+	delete(compacted, "sourceUrl")
+	delete(compacted, "thumbnailUrl")
+	return compacted
+}
+
+func compactWorkspaceListValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		if workspaceListOmitsInlineOriginal(typed) {
+			return nil
+		}
+		return typed
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			compacted := compactWorkspaceListValue(item)
+			if compacted == nil {
+				continue
+			}
+			out[key] = compacted
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			compacted := compactWorkspaceListValue(item)
+			if compacted == nil {
+				continue
+			}
+			out = append(out, compacted)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func workspaceListOmitsInlineOriginal(value string) bool {
+	text := strings.TrimSpace(value)
+	return strings.HasPrefix(strings.ToLower(text), "data:") || len(text) > maxWorkspaceListInlineBytes
 }
 
 func workspaceAssetNeedsOriginalSigning(item asset) bool {
@@ -4043,7 +4128,7 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, firstErr)
 		return
 	}
-	tasks = attachAssetImagesToTasks(tasks, assets)
+	tasks = compactWorkspaceListTasks(attachAssetImagesToTasks(tasks, assets))
 	succeeded := 0
 	totalPointCost := 0
 	for _, task := range tasks {
@@ -4156,7 +4241,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, firstErr)
 		return
 	}
-	tasks = attachAssetImagesToTasks(tasks, assets)
+	tasks = compactWorkspaceListTasks(attachAssetImagesToTasks(tasks, assets))
 	queued := 0
 	running := 0
 	completed := 0
