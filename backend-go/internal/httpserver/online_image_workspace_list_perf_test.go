@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"xianzhi-ai/backend-go/internal/config"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -55,7 +56,7 @@ func newWorkspaceListPerfFixture(t *testing.T, assetCount int, delay time.Durati
 	if err != nil {
 		t.Fatal(err)
 	}
-	thumb := "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wAAA=="
+	thumb, _ := testJPEGDataURL(t, 8)
 	assets := make([]asset, 0, assetCount)
 	tasks := make([]generationTask, 0, assetCount)
 	ctx := context.Background()
@@ -99,10 +100,15 @@ func newWorkspaceListPerfFixture(t *testing.T, assetCount int, delay time.Durati
 	if err := sessions.Put(ctx, token, created.ID, authSessionTTL); err != nil {
 		t.Fatal(err)
 	}
-	return api{store: store, sessions: sessions, fileService: service}, token, provider, assets
+	return api{
+		store:       store,
+		sessions:    sessions,
+		fileService: service,
+		cfg:         config.Config{InspirationDraftHMACSecret: "workspace-list-thumbnail-test-secret"},
+	}, token, provider, assets
 }
 
-func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndKeepsInlineThumbs(t *testing.T) {
+func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndInlineThumbs(t *testing.T) {
 	thumb := "data:image/jpeg;base64,abc"
 	hugeOriginal := "data:image/png;base64," + strings.Repeat("A", 256*1024)
 	items := prepareWorkspaceListAssets([]asset{
@@ -111,11 +117,11 @@ func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndKeepsInlineThumbs(t *
 		{ID: "a3", URL: "storage://file_3", ThumbnailURL: "storage://cover_3", Metadata: map[string]any{"fileId": "file_3", "coverFileId": "cover_3"}},
 		{ID: "a4", URL: hugeOriginal, ThumbnailURL: thumb, Metadata: map[string]any{"fileId": "file_4", "sourceUrl": hugeOriginal, "storageObjectKey": "tenants/t1/file_4.png", "fileSize": 1024, "projectId": "p1"}},
 	})
-	if items[0].URL != "" || items[0].ThumbnailURL != thumb {
-		t.Fatalf("storage original should be omitted and inline thumb kept: %+v", items[0])
+	if items[0].URL != "" || items[0].ThumbnailURL != "" {
+		t.Fatalf("storage original and inline thumb should be omitted from list DTO: %+v", items[0])
 	}
-	if items[1].URL != "https://cdn.example/public.png" {
-		t.Fatalf("public original without fileId should stay: %+v", items[1])
+	if items[1].URL != "https://cdn.example/public.png" || items[1].ThumbnailURL != "" {
+		t.Fatalf("public original without fileId should stay, inline thumb must be omitted: %+v", items[1])
 	}
 	if items[2].URL != "" || items[2].ThumbnailURL != "" {
 		t.Fatalf("storage thumbnails must not be returned unsigned: %+v", items[2])
@@ -173,9 +179,7 @@ func TestUserOnlineImageFirstPaintSkipsSerialAssetSigning(t *testing.T) {
 		if item.URL != "" {
 			t.Fatalf("workspace list leaked original URL for %s: %s", item.ID, item.URL)
 		}
-		if !strings.HasPrefix(item.ThumbnailURL, "data:image/") {
-			t.Fatalf("workspace list dropped inline thumbnail for %s: %s", item.ID, item.ThumbnailURL)
-		}
+		assertWorkspaceListTicketThumbnailURL(t, item)
 		if strings.Contains(item.ThumbnailURL, "/download/") {
 			t.Fatalf("workspace list signed thumbnail for %s: %s", item.ID, item.ThumbnailURL)
 		}
@@ -343,16 +347,14 @@ func TestUserOnlineImageWorkspaceListOmitsDuplicateTaskThumbnails(t *testing.T) 
 	if bytes.Contains(body, []byte(`"storageObjectKey"`)) {
 		t.Fatal("workspace list leaked storageObjectKey")
 	}
-	thumbBytes := itemCount * len(thumb)
-	duplicated := thumbBytes * 2
+	if bytes.Contains(body, []byte("data:image/")) {
+		t.Fatal("workspace list still inlined data thumbnails")
+	}
 	got := response.Body.Len()
-	if got >= duplicated {
-		t.Fatalf("payload still looks duplicated: got=%d duplicated=%d thumbOnce=%d", got, duplicated, thumbBytes)
+	if got >= 100*1024 {
+		t.Fatalf("ticket list payload still too large: got=%d", got)
 	}
-	if got < thumbBytes {
-		t.Fatalf("payload dropped asset thumbnails: got=%d thumbOnce=%d", got, thumbBytes)
-	}
-	t.Logf("online-image payload after task-thumbnail omit: %d bytes (one copy of covers ≈ %d, duplicated ≈ %d)", got, thumbBytes, duplicated)
+	t.Logf("online-image payload after thumbnail tickets: %d bytes for %d assets", got, itemCount)
 }
 
 func TestWorkspaceListDownloadStaysOwnerScoped(t *testing.T) {
@@ -434,12 +436,9 @@ func assertWorkspaceListThumbnailDedup(t *testing.T, body []byte, tasks []genera
 		}
 	}
 	for _, item := range assets {
-		if !strings.HasPrefix(item.ThumbnailURL, "data:image/") {
-			t.Fatalf("asset thumbnail missing for %s: %s", item.ID, item.ThumbnailURL)
-		}
+		assertWorkspaceListTicketThumbnailURL(t, item)
 		if item.TaskID == "" {
 			t.Fatalf("asset lost taskId: %+v", item)
 		}
 	}
 }
-

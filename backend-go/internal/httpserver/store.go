@@ -318,6 +318,36 @@ func (s *jsonStore) ListAssets() ([]asset, error) {
 	return activeAssets(data.Assets), nil
 }
 
+func (s *jsonStore) ListAssetsForWorkspaceList(userID string, limit int) ([]asset, error) {
+	assets, err := s.ListAssets()
+	if err != nil {
+		return nil, err
+	}
+	assets = filterAssetsForUser(assets, userID)
+	if limit > 0 && len(assets) > limit {
+		assets = assets[:limit]
+	}
+	items := make([]asset, len(assets))
+	copy(items, assets)
+	for index := range items {
+		items[index].ThumbnailURL = ""
+	}
+	return items, nil
+}
+
+func (s *jsonStore) GetAssetByID(id string) (asset, bool, error) {
+	assets, err := s.ListAssets()
+	if err != nil {
+		return asset{}, false, err
+	}
+	for _, item := range assets {
+		if item.ID == id {
+			return item, true, nil
+		}
+	}
+	return asset{}, false, nil
+}
+
 func (s *jsonStore) SaveUploadedAsset(item asset) (asset, error) {
 	if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.UserID) == "" {
 		return asset{}, errors.New("uploaded asset identity is required")

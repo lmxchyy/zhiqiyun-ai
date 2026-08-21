@@ -179,6 +179,7 @@ type api struct {
 	fileService                *storagecenter.Service
 	contentSecurity            wechatContentSecurityChecker
 	imageGenerationTimeout     time.Duration
+	thumbnailNow               func() time.Time
 }
 
 type generatedImageDecorator struct{}
@@ -417,14 +418,21 @@ func (a api) assetsForUser(r *http.Request, userID string, limit int) ([]asset, 
 }
 
 // assetsForUserWorkspaceList is the first-paint path for homepage / AI image /
-// works center. It keeps compact thumbnails and skips serial original-URL
+// works center. It emits HMAC thumbnail tickets and skips serial original-URL
 // signing; detail and download still sign via /assets/:id.
-func (a api) assetsForUserWorkspaceList(userID string, limit int) ([]asset, error) {
-	assets, err := a.loadAssetsForUser(userID, limit)
+func (a api) assetsForUserWorkspaceList(r *http.Request, userID string, limit int) ([]asset, error) {
+	assets, err := a.loadAssetsForWorkspaceList(userID, limit)
 	if err != nil {
 		return nil, err
 	}
-	return prepareWorkspaceListAssets(assets), nil
+	return a.attachWorkspaceListThumbnailTickets(r, userID, prepareWorkspaceListAssets(assets)), nil
+}
+
+func (a api) loadAssetsForWorkspaceList(userID string, limit int) ([]asset, error) {
+	if specialized, ok := a.store.(workspaceAssetListStore); ok {
+		return specialized.ListAssetsForWorkspaceList(userID, limit)
+	}
+	return a.loadAssetsForUser(userID, limit)
 }
 
 const maxWorkspaceListInlineBytes = 4 << 10
@@ -433,8 +441,8 @@ func prepareWorkspaceListAssets(items []asset) []asset {
 	result := make([]asset, len(items))
 	copy(result, items)
 	for index := range result {
-		result[index].ThumbnailURL = compactListInlineMediaURL(result[index].ThumbnailURL)
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(result[index].ThumbnailURL)), "storage://") {
+		thumb := strings.ToLower(strings.TrimSpace(result[index].ThumbnailURL))
+		if strings.HasPrefix(thumb, "data:") || strings.HasPrefix(thumb, "storage://") {
 			result[index].ThumbnailURL = ""
 		}
 		if workspaceAssetNeedsOriginalSigning(result[index]) || workspaceListOmitsInlineOriginal(result[index].URL) {
@@ -4111,7 +4119,7 @@ func (a api) userDashboard(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		items, err := a.assetsForUserWorkspaceList(user.ID, assetLimit)
+		items, err := a.assetsForUserWorkspaceList(r, user.ID, assetLimit)
 		if err != nil {
 			recordErr(err)
 			return
@@ -4200,7 +4208,7 @@ func (a api) userOnlineImage(w http.ResponseWriter, r *http.Request) {
 	}()
 	go func() {
 		defer wg.Done()
-		items, err := a.assetsForUserWorkspaceList(user.ID, assetLimit)
+		items, err := a.assetsForUserWorkspaceList(r, user.ID, assetLimit)
 		if err != nil {
 			recordErr(err)
 			return
