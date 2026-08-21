@@ -808,7 +808,7 @@ import {
   contractHasAuto,
   defaultRatioTierFromContract,
   deriveRatioTierFromSize,
-  resolveSizeFromRatioTier,
+  resolveCanonicalSubmitSize,
   type AvailableImageCreationContract,
   type CanonicalImageQuality,
   type CanonicalImageSelection,
@@ -948,17 +948,26 @@ function guestAwareGenerateTap() {
   if (!validateFreeImageEditRequest()) return;
   trackLogin("guest_click_generate", { mode: creationMode.value });
   const imageDraft = creationMode.value === "image" && imageCreationContract.value
-    ? buildCanonicalImageDraft({
+    ? (() => {
+      const size = resolvedImageSizeForSubmit();
+      if (!size) {
+        creationError.value = "请重新选择画面比例和清晰度";
+        uni.showToast({ title: creationError.value, icon: "none" });
+        return null;
+      }
+      return buildCanonicalImageDraft({
         contract: imageCreationContract.value,
-        selection: { size: imageSize.value, quality: imageQuality.value, count: imageCount.value },
+        selection: { size, quality: resolvedImageQualityForSubmit(), count: resolvedImageCountForSubmit() },
         prompt,
         model: selectedImageModelCode.value,
         style: restoredCreationString("style", "stylePreset") || "commercial",
         referenceImages: creationReferencePaths.value,
         negativePrompt: restoredCreationString("negativePrompt", "negative_prompt"),
         parameters: canonicalImageParameters(restoredCreationParams.value),
-      })
+      });
+    })()
     : null;
+  if (creationMode.value === "image" && imageCreationContract.value && !imageDraft) return;
   const payload = {
     prompt, mode: creationMode.value, model: activeCreationModel.value,
     referencePaths: creationReferencePaths.value,
@@ -1485,6 +1494,36 @@ function canonicalImageSelectionFromDraft(params: AnyRecord): CanonicalImageSele
   return selection;
 }
 
+function resolvedImageSizeForSubmit() {
+  if (!imageCreationContract.value) return "";
+  return resolveCanonicalSubmitSize(
+    imageCreationContract.value,
+    selectedRatio.value,
+    selectedTier.value,
+  ) || "";
+}
+
+function resolvedImageQualityForSubmit() {
+  const contract = imageCreationContract.value;
+  if (!contract?.declared.quality) return undefined;
+  if (imageQuality.value && contract.qualityOptions.some(option => option.value === imageQuality.value)) {
+    return imageQuality.value;
+  }
+  return initialImageSelection(contract).quality;
+}
+
+function resolvedImageCountForSubmit() {
+  const contract = imageCreationContract.value;
+  if (!contract?.declared.count) return undefined;
+  if (
+    typeof imageCount.value === "number"
+    && contract.countOptions.some(option => option.value === imageCount.value)
+  ) {
+    return imageCount.value;
+  }
+  return initialImageSelection(contract).count;
+}
+
 function applyImageSelection(selection: CanonicalImageSelection) {
   imageSize.value = selection.size || "";
   imageQuality.value = selection.quality;
@@ -1611,10 +1650,10 @@ watch(selectedImageModelCode, (modelCode, previousModelCode) => {
   creationError.value = "";
   void loadImageSchemaForModel(modelCode);
 });
-watch([selectedRatio, selectedTier], ([ratio, tier]) => {
+watch([selectedRatio, selectedTier, imageCreationContract], ([ratio, tier]) => {
   if (!imageCreationContract.value) return;
   if (ratio === "auto") {
-    imageSize.value = "auto";
+    imageSize.value = resolveCanonicalSubmitSize(imageCreationContract.value, "auto", "auto") || "auto";
     if (tier !== "auto") selectedTier.value = "auto";
     return;
   }
@@ -1628,9 +1667,7 @@ watch([selectedRatio, selectedTier], ([ratio, tier]) => {
     selectedTier.value = nextTier;
     return;
   }
-  const sizeValues = imageCreationContract.value.sizeOptions.map(option => option.value);
-  const resolved = resolveSizeFromRatioTier(sizeValues, ratio, nextTier);
-  imageSize.value = resolved || "";
+  imageSize.value = resolveCanonicalSubmitSize(imageCreationContract.value, ratio, nextTier) || "";
 });
 
 onShareAppMessage(() => ({
@@ -3522,12 +3559,16 @@ async function submitCreationAfterSession(prompt: string, startedAt: number, pre
       ) {
         throw new Error(imageSchemaMessage.value || "当前模型参数尚未就绪");
       }
+      const size = resolvedImageSizeForSubmit();
+      if (!size) {
+        throw new Error("请重新选择画面比例和清晰度");
+      }
       const submission = await submitCanonicalImageTask({
         contract,
         selection: {
-          size: imageSize.value,
-          quality: imageQuality.value,
-          count: imageCount.value,
+          size,
+          quality: resolvedImageQualityForSubmit(),
+          count: resolvedImageCountForSubmit(),
         },
         prompt,
         model: selectedImageModelCode.value,

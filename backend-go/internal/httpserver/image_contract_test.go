@@ -476,6 +476,43 @@ func TestValidateGenerationParamsAcceptsOfficialGPTImageSizesAndCount(t *testing
 	}
 }
 
+func TestGPTImagePrepareStripsUnsupportedExtrasForAutoAndOfficialSizes(t *testing.T) {
+	data := normalizeAICapabilityDefaults(adminPlatformData{})
+	user := adminUser{ID: "user", Role: "MEMBER", PlanID: "plan_month"}
+	service := api{}
+	sizes := []string{"auto", "1024x1024", "1536x1024", "1024x1536", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840"}
+	for _, size := range sizes {
+		prepared, err := service.prepareGenerationRequest(data, user, generation.CreateRequest{
+			Type: "TEXT_TO_IMAGE", ModuleCode: moduleImageGeneration, Model: "gpt-image-2", Prompt: "gpt image",
+			Params: map[string]any{
+				"size": size, "quality": "low", "n": float64(1),
+				"seed": 42, "intent": "edit", "imageRatio": "9:16", "resolution": "2K", "negative_prompt": "watermark",
+			},
+		})
+		if err != nil {
+			t.Fatalf("size %s with leftover extras should pass: %v", size, err)
+		}
+		if prepared.Params["size"] != size {
+			t.Fatalf("size %s kept %v", size, prepared.Params["size"])
+		}
+		if prepared.Params["quality"] != "low" {
+			t.Fatalf("size %s quality = %v, want low", size, prepared.Params["quality"])
+		}
+		if _, exists := prepared.Params["seed"]; exists {
+			t.Fatalf("size %s leaked seed: %#v", size, prepared.Params)
+		}
+		if _, exists := prepared.Params["intent"]; exists {
+			t.Fatalf("size %s leaked intent: %#v", size, prepared.Params)
+		}
+		if _, exists := prepared.Params["negative_prompt"]; exists {
+			t.Fatalf("size %s leaked negative_prompt: %#v", size, prepared.Params)
+		}
+		if _, exists := prepared.Params["resolution"]; exists {
+			t.Fatalf("size %s leaked resolution: %#v", size, prepared.Params)
+		}
+	}
+}
+
 func TestGPTImageCanonicalParamsBeatAliases(t *testing.T) {
 	req := generation.CreateRequest{
 		ModuleCode: moduleImageGeneration,

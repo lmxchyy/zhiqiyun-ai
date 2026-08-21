@@ -558,13 +558,33 @@ const imageDraftSelectionKeys = new Set([
   "negative_prompt",
   "style",
   "stylePreset",
+  "seed",
+  "intent",
+  "provider",
+  "resolution",
+  "width",
+  "height",
+  "taskSnapshot",
+]);
+
+const imageRequestPassthroughKeys = new Set([
+  "inspirationDraft",
+  "integrityToken",
+  "inspirationTemplateRef",
+  "capabilityKey",
+  "sourceAssetId",
+  "sourceTaskId",
+  "sourceReferenceAssetId",
+  "sourceReferenceTaskId",
 ]);
 
 export function canonicalImageParameters(rawParameters: unknown): Record<string, unknown> {
   const parameters: Record<string, unknown> = {};
   const raw = recordValue(rawParameters) || {};
   for (const [key, value] of Object.entries(raw)) {
-    if (!imageDraftSelectionKeys.has(key)) parameters[key] = value;
+    if (imageRequestPassthroughKeys.has(key) && !imageDraftSelectionKeys.has(key)) {
+      parameters[key] = value;
+    }
   }
   return parameters;
 }
@@ -820,6 +840,23 @@ export function resolveSizeFromRatioTier(
 ): string | undefined {
   if (ratio === "auto") return "auto";
   return findSizeByRatioAndTier(sizeOptions, ratio, tier);
+}
+
+export function resolveCanonicalSubmitSize(
+  contract: AvailableImageCreationContract,
+  ratio: string,
+  tier: ResolutionTier,
+): string | undefined {
+  if (ratio === "auto") {
+    if (contractHasAuto(contract)) return "auto";
+    const fallback = contract.defaultSelection.size;
+    return fallback && isCanonicalImageSize(fallback) ? fallback : undefined;
+  }
+  const sizeValues = contract.sizeOptions.map(option => option.value);
+  const resolved = findSizeByRatioAndTier(sizeValues, ratio, tier);
+  if (!resolved || !isCanonicalImageSize(resolved)) return undefined;
+  if (!contract.sizeOptions.some(option => option.value === resolved)) return undefined;
+  return resolved;
 }
 
 export function availableRatiosForContract(

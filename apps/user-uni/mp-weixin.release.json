@@ -1,6 +1,6 @@
 {
-  "description": "知启云AI 2.0.65：GPT Image 官方 quality（auto/low/medium/high）不再改写 standard；支持合法 WxH 含 2048x2048；默认 quality=low、n=1",
-  "previousVersion": "2.0.64",
-  "publishedBaseline": "2.0.64",
-  "version": "2.0.65"
+  "description": "知启云AI 2.0.67：GPT Image 生图提交只发官方 size/quality/n，自动与各比例不再因多余字段或非 WxH size 422",
+  "previousVersion": "2.0.66",
+  "publishedBaseline": "2.0.65",
+  "version": "2.0.67"
 }

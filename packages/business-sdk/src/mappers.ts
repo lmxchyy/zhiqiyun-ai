@@ -354,6 +354,19 @@ function canonicalImageCount(value: unknown): number {
   return value;
 }
 
+const gptImagePassthroughParameterKeys = new Set([
+  "inspirationDraft",
+  "integrityToken",
+  "inspirationTemplateRef",
+  "capabilityKey",
+  "sourceReferenceAssetId",
+  "sourceReferenceTaskId",
+]);
+
+function isGPTImage2Model(model: string) {
+  return String(model || "").toLowerCase().replace(/_/g, "-").includes("gpt-image-2");
+}
+
 function imageParametersFromDraft(
   draft: CreateDraft,
   extraParameters: Record<string, unknown>,
@@ -376,12 +389,18 @@ function imageParametersFromDraft(
   delete parameters.imageQuality;
   delete parameters.count;
 
+  if (isGPTImage2Model(draft.model)) {
+    for (const key of Object.keys(parameters)) {
+      if (!gptImagePassthroughParameterKeys.has(key)) delete parameters[key];
+    }
+  }
+
   return {
     ...parameters,
     ...(size !== undefined ? { size } : {}),
     ...(quality !== undefined ? { quality } : {}),
     ...(n !== undefined ? { n } : {}),
-    ...(draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
+    ...(!isGPTImage2Model(draft.model) && draft.negativePrompt ? { negative_prompt: draft.negativePrompt } : {}),
     ...(referenceImage ? { reference_image: referenceImage } : {}),
     ...(referencePayload.length ? { referenceImages: referencePayload } : {}),
   };
