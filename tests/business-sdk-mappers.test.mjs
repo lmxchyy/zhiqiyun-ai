@@ -87,7 +87,6 @@ test("image request preserves explicit canonical schema parameters and client re
     prompt: "generate a product image",
     model: "gpt-image-2",
     params: {
-      seed: 42,
       size: "1536x1024",
       quality: "high",
       n: 2,
@@ -156,7 +155,7 @@ test("image request rejects UI aliases used as canonical size or quality", () =>
   }
 });
 
-test("free image edit keeps canonical params, references, and custom schema fields without aliases", () => {
+test("free image edit keeps references and provenance without GPT Image extras", () => {
   const referenceURL = "https://example.test/free-edit-source.png";
   const request = taskRequestFromDraft(imageDraft({
     style: "infographic",
@@ -182,8 +181,6 @@ test("free image edit keeps canonical params, references, and custom schema fiel
     prompt: "generate a product image",
     model: "gpt-image-2",
     params: {
-      seed: 9,
-      custom_schema_parameter: "preserved",
       sourceReferenceAssetId: "asset-source-1",
       sourceReferenceTaskId: "task-source-1",
       size: "1024x1024",
