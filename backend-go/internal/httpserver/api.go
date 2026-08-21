@@ -469,6 +469,9 @@ func compactWorkspaceListTasks(tasks []generationTask) []generationTask {
 		if workspaceListOmitsInlineOriginal(items[index].ResultURL) {
 			items[index].ResultURL = ""
 		}
+		// Covers already live on assets[].thumbnailUrl in the same payload.
+		// Copying them onto recentTasks doubled the first-paint JSON.
+		items[index].ThumbnailURL = ""
 	}
 	return items
 }
@@ -483,6 +486,7 @@ func compactWorkspaceListMetadata(metadata map[string]any) map[string]any {
 	}
 	delete(compacted, "sourceUrl")
 	delete(compacted, "thumbnailUrl")
+	delete(compacted, "storageObjectKey")
 	return compacted
 }
 
