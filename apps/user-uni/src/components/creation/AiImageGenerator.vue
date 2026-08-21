@@ -124,7 +124,7 @@
             </button>
           </view>
 
-          <template v-if="selectedRatio !== 'auto' && tierOptions.length > 0">
+          <template v-if="tierOptions.length > 0">
             <text class="ai-image-generator__label">图片清晰度</text>
             <view class="ai-image-generator__tier-list" role="group" aria-label="图片清晰度">
               <button
@@ -323,7 +323,7 @@ const schemaStatusLabel = computed(() => {
 });
 
 const COMMON_RATIO_VALUES = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"];
-const VISIBLE_TIER_VALUES: ResolutionTier[] = ["1K", "2K", "4K"];
+const VISIBLE_TIER_VALUES: ResolutionTier[] = ["auto", "1K", "2K", "4K"];
 
 const ratioOptions = computed(() => {
   const labels: Record<string, string> = {
@@ -346,6 +346,7 @@ const ratioOptions = computed(() => {
 
 const tierOptions = computed(() => {
   const labels: Record<string, string> = {
+    auto: "自动",
     "1K": "1K",
     "2K": "2K",
     "4K": "4K",

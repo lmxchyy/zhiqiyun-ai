@@ -410,12 +410,166 @@ test("gpt image ratio grouping hides odd reduced ratios and maps near-common WxH
   assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "auto", "2K"), "auto");
   assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "auto", "4K"), "auto");
   assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "3:2", "2K"), "2048x1360");
+  assert.equal(resolveSizeFromRatioTier(GPT_IMAGE_NEAR_COMMON_SIZES, "9:16", "2K"), "1152x2048");
   assert.ok(!GPT_IMAGE_NEAR_COMMON_SIZES.includes("3840x3840"));
   assert.notEqual(findSizeByRatioAndTier(GPT_IMAGE_NEAR_COMMON_SIZES, "1:1", "4K"), "3840x3840");
 
   assert.deepEqual(getAvailableTiersForRatio(GPT_IMAGE_NEAR_COMMON_SIZES, "1:1"), ["1K", "2K"]);
   assert.deepEqual(getAvailableTiersForRatio(GPT_IMAGE_NEAR_COMMON_SIZES, "3:2"), ["1K", "2K", "4K"]);
   assert.ok(!getAvailableTiersForRatio(GPT_IMAGE_NEAR_COMMON_SIZES, "16:9").includes("720p"));
+});
+
+test("gpt image leftover extras never enter the request body", () => {
+  const canonicalImageParameters = requiredFunction("canonicalImageParameters");
+  assert.deepEqual(
+    canonicalImageParameters({
+      seed: 42,
+      intent: "edit",
+      provider: "openai",
+      resolution: "2K",
+      width: 1024,
+      height: 1024,
+      custom_schema_parameter: "warm-light",
+      sourceAssetId: "asset-source-1",
+      inspirationDraft: { templateRef: { id: "t1" } },
+    }),
+    {
+      sourceAssetId: "asset-source-1",
+      inspirationDraft: { templateRef: { id: "t1" } },
+    },
+  );
+
+  const request = taskRequestFromDraft({
+    mode: "image",
+    prompt: "自动比例海报",
+    model: "gpt-image-2",
+    style: "commercial",
+    size: "auto",
+    quality: "low",
+    count: 1,
+    referenceImages: [],
+    negativePrompt: "watermark",
+    parameters: {
+      seed: 42,
+      intent: "edit",
+      resolution: "2K",
+      imageRatio: "9:16",
+      sourceAssetId: "asset-source-1",
+    },
+  });
+  assert.deepEqual(Object.keys(request.params).sort(), ["n", "quality", "size", "sourceReferenceAssetId"]);
+  assert.equal(request.params.size, "auto");
+  assert.equal(request.params.quality, "low");
+  assert.equal(request.params.n, 1);
+  assert.equal(request.params.seed, undefined);
+  assert.equal(request.params.negative_prompt, undefined);
+  assert.equal(request.params.resolution, undefined);
+  assert.equal(request.params.intent, undefined);
+});
+
+test("auto and common ratio/tier combos submit WxH or auto, never 1K/2K/4K", async () => {
+  const resolveCanonicalSubmitSize = requiredFunction("resolveCanonicalSubmitSize");
+  const toCanonicalImageSelection = requiredFunction("toCanonicalImageSelection");
+  const submitCanonicalImageTask = requiredFunction("submitCanonicalImageTask");
+  const contract = availableContract(gptImageSchema({
+    fields: [
+      { key: "prompt", type: "textarea", required: true },
+      {
+        key: "size",
+        type: "select",
+        required: false,
+        default: "auto",
+        options: GPT_IMAGE_NEAR_COMMON_SIZES,
+      },
+      {
+        key: "quality",
+        type: "select",
+        required: false,
+        default: "low",
+        options: ["auto", "low", "medium", "high"],
+      },
+      {
+        key: "n",
+        type: "number",
+        required: false,
+        default: 1,
+        options: [1, 2, 3, 4],
+        min: 1,
+        max: 4,
+      },
+    ],
+  }));
+
+  assert.equal(resolveCanonicalSubmitSize(contract, "9:16", "2K"), "1152x2048");
+  assert.equal(resolveCanonicalSubmitSize(contract, "auto", "auto"), "auto");
+  assert.equal(resolveCanonicalSubmitSize(contract, "auto", "2K"), "2048x2048");
+  assert.equal(resolveCanonicalSubmitSize(contract, "1:1", "2K"), "2048x2048");
+  assert.equal(resolveCanonicalSubmitSize(contract, "9:16", "1K"), undefined);
+
+  const availableTiersForRatio = requiredFunction("availableTiersForRatio");
+  const availableRatiosForContract = requiredFunction("availableRatiosForContract");
+  const combos = [
+    ["auto", "auto"],
+    ...availableRatiosForContract(contract).flatMap(ratio => availableTiersForRatio(contract, ratio).map(tier => [ratio, tier])),
+  ];
+  assert.ok(combos.some(([ratio, tier]) => ratio === "1:1" && tier === "1K"));
+  assert.ok(combos.some(([ratio, tier]) => ratio === "9:16" && tier === "2K"));
+  assert.ok(combos.some(([ratio]) => ratio === "auto"));
+  for (const [ratio, tier] of combos) {
+    const size = resolveCanonicalSubmitSize(contract, ratio, tier);
+    assert.ok(size, `${ratio} + ${tier} must resolve to a canonical size`);
+    assert.ok(size === "auto" || /^\d+x\d+$/.test(size), `${ratio} + ${tier} resolved to ${size}`);
+    assert.ok(!["1K", "2K", "4K", "720p"].includes(size), `${ratio} + ${tier} leaked tier label ${size}`);
+    const request = taskRequestFromDraft({
+      mode: "image",
+      prompt: `${ratio} ${tier} 海报`,
+      model: "gpt-image-2",
+      style: "commercial",
+      size,
+      quality: "low",
+      count: 1,
+      referenceImages: [],
+      parameters: { seed: 7, resolution: tier, imageRatio: ratio },
+    });
+    assert.equal(request.params.size, size, `${ratio} + ${tier}`);
+    assert.equal(request.params.quality, "low");
+    assert.equal(request.params.n, 1);
+    assert.equal(request.params.seed, undefined, `${ratio} + ${tier} must not send seed`);
+    assert.equal(request.params.resolution, undefined, `${ratio} + ${tier} must not send resolution`);
+    assert.equal(request.params.imageRatio, undefined);
+  }
+
+  assert.throws(
+    () => toCanonicalImageSelection(contract, { size: "2K", quality: "low", count: 1 }),
+    /当前模型不支持图片尺寸 2K/,
+  );
+
+  const created = [];
+  const result = await submitCanonicalImageTask({
+    contract,
+    selection: {
+      size: resolveCanonicalSubmitSize(contract, "9:16", "2K"),
+      quality: "low",
+      count: 1,
+    },
+    prompt: "竖版 9:16 海报",
+    model: "gpt-image-2",
+    style: "commercial",
+    sourceReferences: [],
+  }, {
+    uploadReferences: async () => [],
+    createTask: async draft => {
+      created.push(draft);
+      return { id: "task-9-16-2k", status: "PENDING", progress: 0, prompt: draft.prompt, model: draft.model };
+    },
+    clientIdFactory: () => "ratio-submit",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(created[0].size, "1152x2048");
+  assert.equal(result.finalRequest.params.size, "1152x2048");
+  assert.notEqual(result.finalRequest.params.size, "2K");
+  assert.notEqual(result.finalRequest.params.quality, "2K");
 });
 
 test("size labels distinguish 1K and 2K squares and keep submitting WxH", () => {
@@ -809,11 +963,9 @@ function expectedImageRequest(clientRequestId, referenceImages) {
     prompt: "fruit poster with references",
     model: "gpt-image-2",
     params: {
-      seed: 42,
       size: "1536x1024",
       quality: "high",
       n: 2,
-      negative_prompt: "watermark",
       reference_image: referenceImages[0],
       referenceImages: referenceImages.map((url, index) => ({ url, name: `reference-${index + 1}` })),
     },
@@ -1001,16 +1153,12 @@ test("every complete canonical request semantic changes the fingerprint", () => 
   const baseFingerprint = fingerprintOf(canonicalFingerprintRequest());
   const mutations = [
     {
-      name: "negative_prompt",
-      request: canonicalFingerprintRequest({ negativePrompt: "text" }),
+      name: "size",
+      request: canonicalFingerprintRequest({ size: "1024x1024" }),
     },
     {
-      name: "arbitrary custom parameter",
-      request: canonicalFingerprintRequest({ parameters: { custom_schema_parameter: "cool-light" } }),
-    },
-    {
-      name: "seed custom parameter",
-      request: canonicalFingerprintRequest({ parameters: { seed: 99 } }),
+      name: "quality",
+      request: canonicalFingerprintRequest({ quality: "low" }),
     },
     {
       name: "reference image order",
@@ -1065,10 +1213,10 @@ test("client request id is pure idempotency metadata and does not change the fin
   );
 });
 
-test("changed negative prompt creates a new key after a network-uncertain result", () => {
+test("changed size creates a new key after a network-uncertain result", () => {
   const nextImageClientRequestKey = requiredFunction("nextImageClientRequestKey");
-  const oldFingerprint = fingerprintOf(canonicalFingerprintRequest({ negativePrompt: "watermark" }));
-  const nextFingerprint = fingerprintOf(canonicalFingerprintRequest({ negativePrompt: "text" }));
+  const oldFingerprint = fingerprintOf(canonicalFingerprintRequest({ size: "1536x1024" }));
+  const nextFingerprint = fingerprintOf(canonicalFingerprintRequest({ size: "1024x1024" }));
 
   assert.deepEqual(
     nextImageClientRequestKey({
@@ -1257,7 +1405,6 @@ test("production image draft reaches the compiled SDK with canonical top-level f
   });
 
   assert.deepEqual(draft.parameters, {
-    seed: 42,
     sourceAssetId: "asset-source-1",
   });
 
@@ -1270,12 +1417,10 @@ test("production image draft reaches the compiled SDK with canonical top-level f
       size: "1024x1536",
       quality: "high",
       n: 2,
-      negative_prompt: "watermark",
       reference_image: "https://example.test/reference.png",
       referenceImages: [
         { url: "https://example.test/reference.png", name: "reference-1" },
       ],
-      seed: 42,
       sourceReferenceAssetId: "asset-source-1",
     },
   });
@@ -1468,12 +1613,12 @@ test("mounted 2K square chip still submits WxH 2048x2048", () => {
   }
 });
 
-test("auto ratio hides clarity row; concrete ratio shows 1K/2K/4K; quality stays internal", () => {
+test("auto ratio shows 自动/1K/2K/4K clarity; concrete ratio shows 1K/2K/4K; quality stays internal", () => {
   const autoMounted = mountAiImageGenerator(imageComponentProps({
     selectedRatio: "auto",
     selectedTier: "auto",
     availableRatios: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "128:85", "85:128", "220:147", "147:220"],
-    availableTiers: ["1K", "2K", "4K"],
+    availableTiers: ["auto", "1K", "2K", "4K"],
     size: "auto",
     quality: "low",
     qualityOptions: [
@@ -1488,11 +1633,10 @@ test("auto ratio hides clarity row; concrete ratio shows 1K/2K/4K; quality stays
       .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__ratio-chip")));
     assert.deepEqual(ratioButtons.map(hostText), ["自动✓", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
     assert.doesNotMatch(hostText(autoMounted.root), /128:85|85:128|220:147|147:220/);
-    assert.doesNotMatch(hostText(autoMounted.root), /图片清晰度/);
-    assert.equal(
-      hostNodes(autoMounted.root).filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip"))).length,
-      0,
-    );
+    assert.match(hostText(autoMounted.root), /图片清晰度/);
+    const autoTierButtons = hostNodes(autoMounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip")));
+    assert.deepEqual(autoTierButtons.map(hostText), ["自动✓", "1K", "2K", "4K"]);
     assert.doesNotMatch(hostText(autoMounted.root), /生成质量/);
   } finally {
     autoMounted.unmount();
@@ -1562,10 +1706,14 @@ test("workbench wires exact image schema and delegates image submission to the p
   assert.match(source, /void loadImageSchemaForModel\(modelCode\)/);
   assert.match(source, /toCanonicalImageSelection\(contract, pending\)/);
   assert.match(source, /imageReferenceUploadCache/);
-  assert.match(source, /if \(ratio === "auto"\)/);
-  assert.match(source, /imageSize\.value = "auto"/);
-  assert.match(source, /selectedTier\.value = "auto"/);
-  assert.match(source, /imageSize\.value = resolved \|\| ""/);
+  assert.match(source, /resolveCanonicalSubmitSize/);
+  assert.match(source, /resolvedImageSizeForSubmit/);
+  assert.match(source, /resolvedImageQualityForSubmit/);
+  assert.match(source, /resolvedImageCountForSubmit/);
+  assert.match(source, /availableTiersForRatio\(imageCreationContract.value, ratio\)/);
+  assert.match(source, /ratio === "auto" && tiers.includes\("auto"\)/);
+  assert.match(source, /imageSize\.value = resolveCanonicalSubmitSize/);
+  assert.match(source, /请重新选择画面比例和清晰度/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);
   assert.doesNotMatch(source, /parameters:\s*\{[^}]*aspect_ratio/s);
   assert.doesNotMatch(source, /3840x3840/);

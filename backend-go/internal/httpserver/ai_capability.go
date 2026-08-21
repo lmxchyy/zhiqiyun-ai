@@ -1045,6 +1045,7 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	}
 	removeLegacyGenerationMetadata(&req, resolved)
 	normalizeGenerationQualityForLimit(&req, resolved)
+	stripUnsupportedGPTImageParams(&req, resolved)
 	if err := validateGenerationParams(req, resolved); err != nil {
 		return req, err
 	}
@@ -1087,6 +1088,22 @@ func removeLegacyGenerationMetadata(req *generation.CreateRequest, resolved reso
 		if !allowedFields[key] {
 			delete(req.Params, key)
 		}
+	}
+}
+
+func stripUnsupportedGPTImageParams(req *generation.CreateRequest, resolved resolvedModuleSchema) {
+	if req == nil || req.Params == nil || !isGPTImage2SchemaModel(resolved.Model.ModelName) {
+		return
+	}
+	allowedFields := map[string]bool{}
+	for _, field := range resolved.Schema.SchemaJSON.Fields {
+		allowedFields[canonicalGenerationSchemaField(resolved.Module.ModuleCode, field).Key] = true
+	}
+	for key := range req.Params {
+		if allowedFields[key] || allowedGenerationInternalParam(key) {
+			continue
+		}
+		delete(req.Params, key)
 	}
 }
 
