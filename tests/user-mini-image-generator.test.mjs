@@ -501,7 +501,8 @@ test("auto and common ratio/tier combos submit WxH or auto, never 1K/2K/4K", asy
   }));
 
   assert.equal(resolveCanonicalSubmitSize(contract, "9:16", "2K"), "1152x2048");
-  assert.equal(resolveCanonicalSubmitSize(contract, "auto", "2K"), "auto");
+  assert.equal(resolveCanonicalSubmitSize(contract, "auto", "auto"), "auto");
+  assert.equal(resolveCanonicalSubmitSize(contract, "auto", "2K"), "2048x2048");
   assert.equal(resolveCanonicalSubmitSize(contract, "1:1", "2K"), "2048x2048");
   assert.equal(resolveCanonicalSubmitSize(contract, "9:16", "1K"), undefined);
 
@@ -1612,12 +1613,12 @@ test("mounted 2K square chip still submits WxH 2048x2048", () => {
   }
 });
 
-test("auto ratio hides clarity row; concrete ratio shows 1K/2K/4K; quality stays internal", () => {
+test("auto ratio shows 自动/1K/2K/4K clarity; concrete ratio shows 1K/2K/4K; quality stays internal", () => {
   const autoMounted = mountAiImageGenerator(imageComponentProps({
     selectedRatio: "auto",
     selectedTier: "auto",
     availableRatios: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "128:85", "85:128", "220:147", "147:220"],
-    availableTiers: ["1K", "2K", "4K"],
+    availableTiers: ["auto", "1K", "2K", "4K"],
     size: "auto",
     quality: "low",
     qualityOptions: [
@@ -1632,11 +1633,10 @@ test("auto ratio hides clarity row; concrete ratio shows 1K/2K/4K; quality stays
       .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__ratio-chip")));
     assert.deepEqual(ratioButtons.map(hostText), ["自动✓", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
     assert.doesNotMatch(hostText(autoMounted.root), /128:85|85:128|220:147|147:220/);
-    assert.doesNotMatch(hostText(autoMounted.root), /图片清晰度/);
-    assert.equal(
-      hostNodes(autoMounted.root).filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip"))).length,
-      0,
-    );
+    assert.match(hostText(autoMounted.root), /图片清晰度/);
+    const autoTierButtons = hostNodes(autoMounted.root)
+      .filter(node => hostClass(node).split(/\s+/).some(token => token.includes("ai-image-generator__tier-chip")));
+    assert.deepEqual(autoTierButtons.map(hostText), ["自动✓", "1K", "2K", "4K"]);
     assert.doesNotMatch(hostText(autoMounted.root), /生成质量/);
   } finally {
     autoMounted.unmount();
@@ -1710,8 +1710,8 @@ test("workbench wires exact image schema and delegates image submission to the p
   assert.match(source, /resolvedImageSizeForSubmit/);
   assert.match(source, /resolvedImageQualityForSubmit/);
   assert.match(source, /resolvedImageCountForSubmit/);
-  assert.match(source, /if \(ratio === "auto"\)/);
-  assert.match(source, /selectedTier\.value = "auto"/);
+  assert.match(source, /availableTiersForRatio\(imageCreationContract.value, ratio\)/);
+  assert.match(source, /ratio === "auto" && tiers.includes\("auto"\)/);
   assert.match(source, /imageSize\.value = resolveCanonicalSubmitSize/);
   assert.match(source, /请重新选择画面比例和清晰度/);
   assert.doesNotMatch(source, /imageAspectOptions|imageAspectRatio|type ImageAspectRatio|type ImageQuality/);

@@ -847,12 +847,21 @@ export function resolveCanonicalSubmitSize(
   ratio: string,
   tier: ResolutionTier,
 ): string | undefined {
-  if (ratio === "auto") {
-    if (contractHasAuto(contract)) return "auto";
-    const fallback = contract.defaultSelection.size;
-    return fallback && isCanonicalImageSize(fallback) ? fallback : undefined;
-  }
   const sizeValues = contract.sizeOptions.map(option => option.value);
+  if (ratio === "auto") {
+    if (tier === "auto" || !tier) {
+      if (contractHasAuto(contract)) return "auto";
+      const fallback = contract.defaultSelection.size;
+      return fallback && isCanonicalImageSize(fallback) ? fallback : undefined;
+    }
+    const square = findSizeByRatioAndTier(sizeValues, "1:1", tier);
+    const resolved = square || availableRatiosForContract(contract)
+      .map(commonRatio => findSizeByRatioAndTier(sizeValues, commonRatio, tier))
+      .find((value): value is string => Boolean(value));
+    if (!resolved || !isCanonicalImageSize(resolved)) return undefined;
+    if (!contract.sizeOptions.some(option => option.value === resolved)) return undefined;
+    return resolved;
+  }
   const resolved = findSizeByRatioAndTier(sizeValues, ratio, tier);
   if (!resolved || !isCanonicalImageSize(resolved)) return undefined;
   if (!contract.sizeOptions.some(option => option.value === resolved)) return undefined;
@@ -871,6 +880,29 @@ export function availableTiersForRatio(
   ratio: string,
 ): ResolutionTier[] {
   const sizeValues = contract.sizeOptions.map(option => option.value);
+  if (ratio === "auto") {
+    const order: Record<ResolutionTier, number> = {
+      auto: -1,
+      "720p": 0,
+      "1K": 1,
+      "2K": 2,
+      "4K": 3,
+    };
+    const seen = new Set<ResolutionTier>();
+    const tiers: ResolutionTier[] = [];
+    if (hasAutoOption(sizeValues)) {
+      seen.add("auto");
+      tiers.push("auto");
+    }
+    for (const commonRatio of getAvailableRatios(sizeValues)) {
+      for (const tier of getVisibleTiersForRatio(sizeValues, commonRatio)) {
+        if (seen.has(tier)) continue;
+        seen.add(tier);
+        tiers.push(tier);
+      }
+    }
+    return tiers.sort((left, right) => order[left] - order[right]);
+  }
   return getVisibleTiersForRatio(sizeValues, ratio);
 }
 

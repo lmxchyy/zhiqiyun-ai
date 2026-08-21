@@ -1652,13 +1652,10 @@ watch(selectedImageModelCode, (modelCode, previousModelCode) => {
 });
 watch([selectedRatio, selectedTier, imageCreationContract], ([ratio, tier]) => {
   if (!imageCreationContract.value) return;
-  if (ratio === "auto") {
-    imageSize.value = resolveCanonicalSubmitSize(imageCreationContract.value, "auto", "auto") || "auto";
-    if (tier !== "auto") selectedTier.value = "auto";
-    return;
-  }
   const tiers = availableTiersForRatio(imageCreationContract.value, ratio);
-  const nextTier = tiers.includes(tier) ? tier : tiers[0];
+  const nextTier = tiers.includes(tier)
+    ? tier
+    : (ratio === "auto" && tiers.includes("auto") ? "auto" : tiers[0]);
   if (!nextTier) {
     imageSize.value = "";
     return;
