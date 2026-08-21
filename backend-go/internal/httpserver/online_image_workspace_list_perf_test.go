@@ -104,10 +104,12 @@ func newWorkspaceListPerfFixture(t *testing.T, assetCount int, delay time.Durati
 
 func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndKeepsInlineThumbs(t *testing.T) {
 	thumb := "data:image/jpeg;base64,abc"
+	hugeOriginal := "data:image/png;base64," + strings.Repeat("A", 256*1024)
 	items := prepareWorkspaceListAssets([]asset{
 		{ID: "a1", URL: "storage://file_1", ThumbnailURL: thumb, Metadata: map[string]any{"fileId": "file_1"}},
 		{ID: "a2", URL: "https://cdn.example/public.png", ThumbnailURL: thumb},
 		{ID: "a3", URL: "storage://file_3", ThumbnailURL: "storage://cover_3", Metadata: map[string]any{"fileId": "file_3", "coverFileId": "cover_3"}},
+		{ID: "a4", URL: hugeOriginal, ThumbnailURL: thumb, Metadata: map[string]any{"fileId": "file_4", "sourceUrl": hugeOriginal, "fileSize": 1024, "projectId": "p1"}},
 	})
 	if items[0].URL != "" || items[0].ThumbnailURL != thumb {
 		t.Fatalf("storage original should be omitted and inline thumb kept: %+v", items[0])
@@ -117,6 +119,15 @@ func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndKeepsInlineThumbs(t *
 	}
 	if items[2].URL != "" || items[2].ThumbnailURL != "" {
 		t.Fatalf("storage thumbnails must not be returned unsigned: %+v", items[2])
+	}
+	if items[3].URL != "" {
+		t.Fatalf("inline original URL must be omitted from workspace list: %+v", items[3])
+	}
+	if items[3].Metadata["sourceUrl"] != nil {
+		t.Fatalf("workspace list leaked sourceUrl: %+v", items[3].Metadata)
+	}
+	if items[3].Metadata["fileId"] != "file_4" || items[3].Metadata["projectId"] != "p1" {
+		t.Fatalf("workspace list dropped card metadata: %+v", items[3].Metadata)
 	}
 }
 
@@ -149,6 +160,12 @@ func TestUserOnlineImageFirstPaintSkipsSerialAssetSigning(t *testing.T) {
 	if len(payload.Assets) != assetCount || len(payload.RecentTasks) != assetCount {
 		t.Fatalf("first-paint counts tasks=%d assets=%d want %d", len(payload.RecentTasks), len(payload.Assets), assetCount)
 	}
+	if response.Body.Len() > 200*1024 {
+		t.Fatalf("first paint payload still too large: %d bytes", response.Body.Len())
+	}
+	if bytes.Contains(response.Body.Bytes(), []byte(`"sourceUrl"`)) {
+		t.Fatal("first paint leaked sourceUrl")
+	}
 	for _, item := range payload.Assets {
 		if item.URL != "" {
 			t.Fatalf("workspace list leaked original URL for %s: %s", item.ID, item.URL)
@@ -166,6 +183,82 @@ func TestUserOnlineImageFirstPaintSkipsSerialAssetSigning(t *testing.T) {
 		}
 		if strings.Contains(task.ImageURL, "/download/") || strings.HasPrefix(task.ImageURL, "storage://") {
 			t.Fatalf("task original should not be signed or leak storage refs: %+v", task)
+		}
+	}
+}
+
+func TestUserOnlineImageFirstPaintOmitsLegacyInlineOriginals(t *testing.T) {
+	handler, token, _, stored := newWorkspaceListPerfFixture(t, 8, 0)
+	hugeOriginal := "data:image/png;base64," + strings.Repeat("A", 256*1024)
+	store := handler.store.(*jsonStore)
+	if err := store.updateAdmin(func(data *adminPlatformData) error {
+		for index := range data.Assets {
+			if data.Assets[index].UserID != stored[0].UserID {
+				continue
+			}
+			if data.Assets[index].Metadata == nil {
+				data.Assets[index].Metadata = map[string]any{}
+			}
+			data.Assets[index].URL = hugeOriginal
+			data.Assets[index].Metadata["sourceUrl"] = hugeOriginal
+			data.Assets[index].Metadata["fileSize"] = 1024
+		}
+		for index := range data.GenerationTasks {
+			if data.GenerationTasks[index].UserID != stored[0].UserID {
+				continue
+			}
+			if data.GenerationTasks[index].Params == nil {
+				data.GenerationTasks[index].Params = map[string]any{}
+			}
+			data.GenerationTasks[index].Params["size"] = "1024x1024"
+			data.GenerationTasks[index].Params["quality"] = "low"
+			data.GenerationTasks[index].Params["referenceImages"] = []any{hugeOriginal}
+			data.GenerationTasks[index].Params["inputImagesSnapshot"] = []any{map[string]any{"url": hugeOriginal}}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/online-image?taskLimit=40&assetLimit=40", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.userOnlineImage(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response.Body.Len() > 200*1024 {
+		t.Fatalf("legacy inline originals still inflate first paint: %d bytes", response.Body.Len())
+	}
+	body := response.Body.Bytes()
+	for _, leaked := range []string{`"sourceUrl"`, hugeOriginal[:40], strings.Repeat("A", 64)} {
+		if bytes.Contains(body, []byte(leaked)) {
+			t.Fatalf("first paint leaked %q", leaked)
+		}
+	}
+	var payload struct {
+		RecentTasks []generationTask `json:"recentTasks"`
+		Assets      []asset          `json:"assets"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Assets) != 8 || len(payload.RecentTasks) != 8 {
+		t.Fatalf("counts assets=%d tasks=%d", len(payload.Assets), len(payload.RecentTasks))
+	}
+	for _, item := range payload.Assets {
+		if item.URL != "" || item.Metadata["sourceUrl"] != nil {
+			t.Fatalf("asset still carries original: %+v", item)
+		}
+		if item.Metadata["fileSize"] != float64(1024) && item.Metadata["fileSize"] != 1024 {
+			t.Fatalf("card metadata dropped fileSize: %+v", item.Metadata)
+		}
+	}
+	for _, task := range payload.RecentTasks {
+		if task.Params["size"] != "1024x1024" || task.Params["quality"] != "low" {
+			t.Fatalf("reuse params dropped: %+v", task.Params)
+		}
+		if _, ok := task.Params["referenceImages"]; ok {
+			t.Fatalf("task params still carry referenceImages: %+v", task.Params)
 		}
 	}
 }
