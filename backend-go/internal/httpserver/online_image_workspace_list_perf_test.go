@@ -109,7 +109,7 @@ func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndKeepsInlineThumbs(t *
 		{ID: "a1", URL: "storage://file_1", ThumbnailURL: thumb, Metadata: map[string]any{"fileId": "file_1"}},
 		{ID: "a2", URL: "https://cdn.example/public.png", ThumbnailURL: thumb},
 		{ID: "a3", URL: "storage://file_3", ThumbnailURL: "storage://cover_3", Metadata: map[string]any{"fileId": "file_3", "coverFileId": "cover_3"}},
-		{ID: "a4", URL: hugeOriginal, ThumbnailURL: thumb, Metadata: map[string]any{"fileId": "file_4", "sourceUrl": hugeOriginal, "fileSize": 1024, "projectId": "p1"}},
+		{ID: "a4", URL: hugeOriginal, ThumbnailURL: thumb, Metadata: map[string]any{"fileId": "file_4", "sourceUrl": hugeOriginal, "storageObjectKey": "tenants/t1/file_4.png", "fileSize": 1024, "projectId": "p1"}},
 	})
 	if items[0].URL != "" || items[0].ThumbnailURL != thumb {
 		t.Fatalf("storage original should be omitted and inline thumb kept: %+v", items[0])
@@ -125,6 +125,9 @@ func TestPrepareWorkspaceListAssetsOmitsStorageOriginalsAndKeepsInlineThumbs(t *
 	}
 	if items[3].Metadata["sourceUrl"] != nil {
 		t.Fatalf("workspace list leaked sourceUrl: %+v", items[3].Metadata)
+	}
+	if items[3].Metadata["storageObjectKey"] != nil {
+		t.Fatalf("workspace list leaked storageObjectKey: %+v", items[3].Metadata)
 	}
 	if items[3].Metadata["fileId"] != "file_4" || items[3].Metadata["projectId"] != "p1" {
 		t.Fatalf("workspace list dropped card metadata: %+v", items[3].Metadata)
@@ -177,10 +180,8 @@ func TestUserOnlineImageFirstPaintSkipsSerialAssetSigning(t *testing.T) {
 			t.Fatalf("workspace list signed thumbnail for %s: %s", item.ID, item.ThumbnailURL)
 		}
 	}
+	assertWorkspaceListThumbnailDedup(t, response.Body.Bytes(), payload.RecentTasks, payload.Assets)
 	for _, task := range payload.RecentTasks {
-		if task.ThumbnailURL == "" || strings.Contains(task.ThumbnailURL, "/download/") {
-			t.Fatalf("task thumbnail should be the inline cover: %+v", task)
-		}
 		if strings.Contains(task.ImageURL, "/download/") || strings.HasPrefix(task.ImageURL, "storage://") {
 			t.Fatalf("task original should not be signed or leak storage refs: %+v", task)
 		}
@@ -201,6 +202,7 @@ func TestUserOnlineImageFirstPaintOmitsLegacyInlineOriginals(t *testing.T) {
 			}
 			data.Assets[index].URL = hugeOriginal
 			data.Assets[index].Metadata["sourceUrl"] = hugeOriginal
+			data.Assets[index].Metadata["storageObjectKey"] = "tenants/t1/" + data.Assets[index].ID + ".png"
 			data.Assets[index].Metadata["fileSize"] = 1024
 		}
 		for index := range data.GenerationTasks {
@@ -230,7 +232,7 @@ func TestUserOnlineImageFirstPaintOmitsLegacyInlineOriginals(t *testing.T) {
 		t.Fatalf("legacy inline originals still inflate first paint: %d bytes", response.Body.Len())
 	}
 	body := response.Body.Bytes()
-	for _, leaked := range []string{`"sourceUrl"`, hugeOriginal[:40], strings.Repeat("A", 64)} {
+	for _, leaked := range []string{`"sourceUrl"`, `"storageObjectKey"`, hugeOriginal[:40], strings.Repeat("A", 64)} {
 		if bytes.Contains(body, []byte(leaked)) {
 			t.Fatalf("first paint leaked %q", leaked)
 		}
@@ -245,6 +247,7 @@ func TestUserOnlineImageFirstPaintOmitsLegacyInlineOriginals(t *testing.T) {
 	if len(payload.Assets) != 8 || len(payload.RecentTasks) != 8 {
 		t.Fatalf("counts assets=%d tasks=%d", len(payload.Assets), len(payload.RecentTasks))
 	}
+	assertWorkspaceListThumbnailDedup(t, body, payload.RecentTasks, payload.Assets)
 	for _, item := range payload.Assets {
 		if item.URL != "" || item.Metadata["sourceUrl"] != nil {
 			t.Fatalf("asset still carries original: %+v", item)
@@ -300,3 +303,143 @@ func TestUserOnlineImageDefaultLimitStillCapsFirstPaintCount(t *testing.T) {
 		t.Fatalf("online-image default payload too large: tasks=%d assets=%d", len(payload.RecentTasks), len(payload.Assets))
 	}
 }
+
+func TestUserOnlineImageWorkspaceListOmitsDuplicateTaskThumbnails(t *testing.T) {
+	const itemCount = 8
+	thumb := "data:image/jpeg;base64," + strings.Repeat("B", 32*1024)
+	handler, token, _, stored := newWorkspaceListPerfFixture(t, itemCount, 0)
+	store := handler.store.(*jsonStore)
+	if err := store.updateAdmin(func(data *adminPlatformData) error {
+		for index := range data.Assets {
+			if data.Assets[index].UserID != stored[0].UserID {
+				continue
+			}
+			data.Assets[index].ThumbnailURL = thumb
+			if data.Assets[index].Metadata == nil {
+				data.Assets[index].Metadata = map[string]any{}
+			}
+			data.Assets[index].Metadata["storageObjectKey"] = "tenants/t1/" + data.Assets[index].ID + ".png"
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/user/online-image?taskLimit=40&assetLimit=40", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.userOnlineImage(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.Bytes()
+	var payload struct {
+		RecentTasks []generationTask `json:"recentTasks"`
+		Assets      []asset          `json:"assets"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	assertWorkspaceListThumbnailDedup(t, body, payload.RecentTasks, payload.Assets)
+	if bytes.Contains(body, []byte(`"storageObjectKey"`)) {
+		t.Fatal("workspace list leaked storageObjectKey")
+	}
+	thumbBytes := itemCount * len(thumb)
+	duplicated := thumbBytes * 2
+	got := response.Body.Len()
+	if got >= duplicated {
+		t.Fatalf("payload still looks duplicated: got=%d duplicated=%d thumbOnce=%d", got, duplicated, thumbBytes)
+	}
+	if got < thumbBytes {
+		t.Fatalf("payload dropped asset thumbnails: got=%d thumbOnce=%d", got, thumbBytes)
+	}
+	t.Logf("online-image payload after task-thumbnail omit: %d bytes (one copy of covers ≈ %d, duplicated ≈ %d)", got, thumbBytes, duplicated)
+}
+
+func TestWorkspaceListDownloadStaysOwnerScoped(t *testing.T) {
+	handler, ownerToken, _, stored := newWorkspaceListPerfFixture(t, 2, 0)
+	assetID := stored[0].ID
+	ownerReq := httptest.NewRequest(http.MethodGet, "/api/v1/assets/"+assetID+"/download", nil)
+	ownerReq.SetPathValue("id", assetID)
+	ownerReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	ownerRes := httptest.NewRecorder()
+	handler.downloadAsset(ownerRes, ownerReq)
+	if ownerRes.Code != http.StatusOK {
+		t.Fatalf("owner download status=%d body=%s", ownerRes.Code, ownerRes.Body.String())
+	}
+	if ownerRes.Body.Len() == 0 {
+		t.Fatal("owner download returned empty body")
+	}
+
+	store := handler.store.(*jsonStore)
+	other, err := store.CreateAdminCustomer(adminCustomerMutation{Name: "Other User", Email: "other-download@example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken := "other-download-token"
+	if err := handler.sessions.Put(context.Background(), otherToken, other.ID, authSessionTTL); err != nil {
+		t.Fatal(err)
+	}
+	otherReq := httptest.NewRequest(http.MethodGet, "/api/v1/assets/"+assetID+"/download", nil)
+	otherReq.SetPathValue("id", assetID)
+	otherReq.Header.Set("Authorization", "Bearer "+otherToken)
+	otherRes := httptest.NewRecorder()
+	handler.downloadAsset(otherRes, otherReq)
+	if otherRes.Code != http.StatusNotFound {
+		t.Fatalf("non-owner download status=%d body=%s", otherRes.Code, otherRes.Body.String())
+	}
+}
+
+func assertWorkspaceListThumbnailDedup(t *testing.T, body []byte, tasks []generationTask, assets []asset) {
+	t.Helper()
+	var envelope struct {
+		RecentTasks []json.RawMessage `json:"recentTasks"`
+		Assets      []json.RawMessage `json:"assets"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.RecentTasks) == 0 || len(envelope.Assets) == 0 {
+		t.Fatalf("workspace list missing tasks or assets: tasks=%d assets=%d", len(envelope.RecentTasks), len(envelope.Assets))
+	}
+	for i, raw := range envelope.RecentTasks {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := obj["thumbnailUrl"]; ok {
+			t.Fatalf("recentTasks[%d] still has thumbnailUrl", i)
+		}
+		if _, ok := obj["resultIds"]; !ok {
+			t.Fatalf("recentTasks[%d] dropped resultIds association", i)
+		}
+	}
+	for i, raw := range envelope.Assets {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := obj["thumbnailUrl"]; !ok {
+			t.Fatalf("assets[%d] dropped thumbnailUrl", i)
+		}
+		if _, ok := obj["taskId"]; !ok {
+			t.Fatalf("assets[%d] dropped taskId association", i)
+		}
+	}
+	for _, task := range tasks {
+		if task.ThumbnailURL != "" {
+			t.Fatalf("decoded task still carries thumbnailUrl: %+v", task)
+		}
+		if len(task.ResultIDs) == 0 {
+			t.Fatalf("task lost resultIds: %+v", task)
+		}
+	}
+	for _, item := range assets {
+		if !strings.HasPrefix(item.ThumbnailURL, "data:image/") {
+			t.Fatalf("asset thumbnail missing for %s: %s", item.ID, item.ThumbnailURL)
+		}
+		if item.TaskID == "" {
+			t.Fatalf("asset lost taskId: %+v", item)
+		}
+	}
+}
+
