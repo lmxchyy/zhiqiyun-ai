@@ -11,13 +11,33 @@ BACKUP_DIR="backups/postgres"
 
 json_escape() {
   # Minimal JSON string escape without jq.
+  # Order matters: backslash first, then quotes/control chars.
   local s=$1
-  s=${s//\\/\\\\}
-  s=${s//\"/\\\"}
-  s=${s//$'\t'/\\t}
-  s=${s//$'\r'/\\r}
-  s=${s//$'\n'/\\n}
-  printf '%s' "$s"
+  local out="" i c hex
+  local -i i_len=${#s}
+  for ((i = 0; i < i_len; i++)); do
+    c=${s:i:1}
+    case "$c" in
+      \\) out+='\\' ;;
+      \") out+='\"' ;;
+      $'\b') out+='\b' ;;
+      $'\f') out+='\f' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      *)
+        # Escape other ASCII controls as \u00XX; pass through UTF-8 as-is.
+        printf -v ord '%d' "'$c"
+        if (( ord >= 0 && ord < 32 )); then
+          printf -v hex '%02x' "$ord"
+          out+="\\u00${hex}"
+        else
+          out+="$c"
+        fi
+        ;;
+    esac
+  done
+  printf '%s' "$out"
 }
 
 sha256_file() {
@@ -32,13 +52,65 @@ sha256_file() {
   fi
 }
 
+validate_meta_json() {
+  local meta=$1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$meta" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+required = [
+    "git_sha", "short_sha", "branch", "hostname",
+    "started_at", "completed_at", "backup_file", "bytes", "sha256",
+]
+missing = [k for k in required if k not in data]
+if missing:
+    raise SystemExit(f"missing keys: {missing}")
+if not isinstance(data["bytes"], int):
+    raise SystemExit("bytes must be int")
+if not isinstance(data["sha256"], str) or len(data["sha256"]) != 64:
+    raise SystemExit("sha256 must be 64-char hex string")
+PY
+    return
+  fi
+  # Fallback without python: basic structural checks.
+  test -s "$meta"
+  grep -q '"git_sha"' "$meta"
+  grep -q '"short_sha"' "$meta"
+  grep -q '"branch"' "$meta"
+  grep -q '"hostname"' "$meta"
+  grep -q '"backup_file"' "$meta"
+  grep -q '"bytes"' "$meta"
+  grep -q '"sha256"' "$meta"
+}
+
 PART_FILE=""
-cleanup_part() {
+META_PART_FILE=""
+BACKUP_FILE=""
+META_FILE=""
+BACKUP_COMMITTED=0
+
+cleanup_incomplete() {
+  local ec=$?
   if [ -n "${PART_FILE:-}" ] && [ -e "$PART_FILE" ]; then
     rm -f -- "$PART_FILE"
   fi
+  if [ -n "${META_PART_FILE:-}" ] && [ -e "$META_PART_FILE" ]; then
+    rm -f -- "$META_PART_FILE"
+  fi
+  # Never leave a final dump without its metadata sidecar.
+  if [ "${BACKUP_COMMITTED:-0}" -ne 1 ]; then
+    if [ -n "${BACKUP_FILE:-}" ] && [ -e "$BACKUP_FILE" ]; then
+      rm -f -- "$BACKUP_FILE"
+    fi
+    if [ -n "${META_FILE:-}" ] && [ -e "$META_FILE" ]; then
+      rm -f -- "$META_FILE"
+    fi
+  fi
+  exit "$ec"
 }
-trap cleanup_part EXIT
+trap cleanup_incomplete EXIT
 
 printf '[backup] Project directory: %s\n' "$SCRIPT_DIR"
 printf '[backup] Compose file: %s\n' "$COMPOSE_FILE"
@@ -85,7 +157,8 @@ BRANCH="$(git branch --show-current 2>/dev/null || true)"
 if [ -z "$BRANCH" ]; then
   BRANCH="HEAD/detached"
 fi
-HOSTNAME_VALUE="$(hostname 2>/dev/null || printf 'unknown')"
+# Optional override for tests / controlled metadata; unset in normal ops.
+HOSTNAME_VALUE="${BACKUP_HOSTNAME:-$(hostname 2>/dev/null || printf 'unknown')}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
@@ -100,7 +173,7 @@ mkdir -p "$BACKUP_DIR"
 echo "[backup] Creating PostgreSQL backup: $BACKUP_FILE"
 echo "[backup] Git SHA: $GIT_SHA ($SHORT_SHA) branch=$BRANCH"
 
-rm -f -- "$PART_FILE" "$META_PART_FILE"
+rm -f -- "$PART_FILE" "$META_PART_FILE" "$BACKUP_FILE" "$META_FILE"
 
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T \
   -e PGPASSWORD="$POSTGRES_PASSWORD" \
@@ -117,6 +190,12 @@ BYTES="$(wc -c <"$PART_FILE" | tr -d '[:space:]')"
 SHA256="$(sha256_file "$PART_FILE")"
 COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# Test-only fault injection: fail before metadata exists (no finals yet).
+if [ "${BACKUP_TEST_INJECT_META_FAIL:-0}" = "1" ]; then
+  echo "[backup] ERROR: injected metadata failure before meta write." >&2
+  exit 1
+fi
+
 {
   printf '{\n'
   printf '  "git_sha": "%s",\n' "$(json_escape "$GIT_SHA")"
@@ -131,9 +210,29 @@ COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '}\n'
 } >"$META_PART_FILE"
 
+test -s "$META_PART_FILE"
+validate_meta_json "$META_PART_FILE"
+
+# Both artifacts validated as .part — promote only after that.
 mv -- "$PART_FILE" "$BACKUP_FILE"
 PART_FILE=""
+
+# Test-only: fail after dump final exists but before meta final.
+if [ "${BACKUP_TEST_INJECT_AFTER_GZ_MV:-0}" = "1" ]; then
+  echo "[backup] ERROR: injected failure after dump rename (meta not committed)." >&2
+  exit 1
+fi
+
 mv -- "$META_PART_FILE" "$META_FILE"
+META_PART_FILE=""
+
+# Final consistency gate: both must exist before declaring success.
+test -f "$BACKUP_FILE"
+test -f "$META_FILE"
+test -s "$BACKUP_FILE"
+gzip -t "$BACKUP_FILE"
+validate_meta_json "$META_FILE"
+BACKUP_COMMITTED=1
 
 BACKUP_SIZE="$(ls -lh "$BACKUP_FILE" | awk '{print $5}')"
 echo "[backup] Backup created: $BACKUP_FILE ($BACKUP_SIZE)"

@@ -49,6 +49,9 @@ test("backup.sh hardens deploy snapshots (source + mode + behavior)", () => {
   assert.match(source, /test -s/, "must reject empty dumps");
   assert.match(source, /sha256/i, "must record sha256");
   assert.match(source, /meta\.json/, "must write metadata sidecar");
+  assert.match(source, /validate_meta_json/, "must validate metadata JSON before success");
+  assert.match(source, /BACKUP_COMMITTED/, "must gate success on dump+meta commit");
+  assert.match(source, /json_escape/, "must JSON-escape metadata strings");
   assert.match(source, /git rev-parse HEAD/, "must capture full git sha");
   assert.match(source, /--short=10/, "must capture short=10 git sha");
   assert.doesNotMatch(

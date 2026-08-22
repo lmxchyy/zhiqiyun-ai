@@ -215,7 +215,33 @@ set -e
 assert_eq "second_success_exit_0" "$KEEP_EC" "0"
 assert_true "historic_backup_preserved" test -f "$HISTORIC"
 
-echo "==== FAILURE FIXTURE ===="
+echo "==== JSON ESCAPE FIXTURE ===="
+find "$WORKDIR/backups/postgres" -maxdepth 1 -type f \( -name 'db_*.sql.gz' -o -name 'db_*.sql.gz.meta.json' -o -name '*.part' \) -delete
+SPECIAL_HOST='vm"quote\path'$'\t''host'
+set +e
+(
+  cd "$WORKDIR"
+  export BACKUP_HOSTNAME="$SPECIAL_HOST"
+  unset STUB_PG_DUMP_FAIL BACKUP_TEST_INJECT_META_FAIL BACKUP_TEST_INJECT_AFTER_GZ_MV
+  bash ./backup.sh
+)
+ESC_EC=$?
+set -e
+assert_eq "json_escape_exit_0" "$ESC_EC" "0"
+mapfile -t ESC_GZ < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name 'db_*.sql.gz' | sort)
+assert_eq "json_escape_one_gz" "${#ESC_GZ[@]}" "1"
+if [ "${#ESC_GZ[@]}" -eq 1 ] && command -v python3 >/dev/null 2>&1; then
+  ESC_META="${ESC_GZ[0]}.meta.json"
+  ESC_HOST="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["hostname"])' "$ESC_META")"
+  assert_eq "json_escape_hostname_roundtrip" "$ESC_HOST" "$SPECIAL_HOST"
+  python3 -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$ESC_META" \
+    && pass "json_escape_meta_parses" \
+    || fail "json_escape_meta_parses"
+else
+  fail "json_escape_hostname_roundtrip" "python3 or gz missing"
+fi
+
+echo "==== FAILURE FIXTURE (pg_dump) ===="
 # Clean generated gz/meta for failure isolation; keep historic.
 find "$WORKDIR/backups/postgres" -maxdepth 1 -type f \( -name 'db_*.sql.gz' -o -name 'db_*.sql.gz.meta.json' -o -name '*.part' \) -delete
 
@@ -223,6 +249,7 @@ set +e
 (
   cd "$WORKDIR"
   export STUB_PG_DUMP_FAIL=1
+  unset BACKUP_TEST_INJECT_META_FAIL BACKUP_TEST_INJECT_AFTER_GZ_MV
   bash ./backup.sh
 )
 FAIL_EC=$?
@@ -238,6 +265,46 @@ assert_eq "failure_no_final_gz" "${#GZ_AFTER_FAIL[@]}" "0"
 assert_eq "failure_no_part" "${#PART_AFTER_FAIL[@]}" "0"
 assert_eq "failure_no_meta" "${#META_AFTER_FAIL[@]}" "0"
 assert_true "failure_historic_still_there" test -f "$HISTORIC"
+
+echo "==== FAILURE FIXTURE (meta before finals) ===="
+find "$WORKDIR/backups/postgres" -maxdepth 1 -type f \( -name 'db_*.sql.gz' -o -name 'db_*.sql.gz.meta.json' -o -name '*.part' \) -delete
+set +e
+(
+  cd "$WORKDIR"
+  unset STUB_PG_DUMP_FAIL BACKUP_TEST_INJECT_AFTER_GZ_MV
+  export BACKUP_TEST_INJECT_META_FAIL=1
+  bash ./backup.sh
+)
+META_FAIL_EC=$?
+set -e
+assert_true "meta_fail_nonzero" test "$META_FAIL_EC" -ne 0
+mapfile -t GZ_META_FAIL < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name 'db_*.sql.gz' | sort)
+mapfile -t PART_META_FAIL < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name '*.part' | sort)
+mapfile -t META_META_FAIL < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name '*.meta.json' | sort)
+assert_eq "meta_fail_no_gz" "${#GZ_META_FAIL[@]}" "0"
+assert_eq "meta_fail_no_part" "${#PART_META_FAIL[@]}" "0"
+assert_eq "meta_fail_no_meta" "${#META_META_FAIL[@]}" "0"
+assert_true "meta_fail_historic_kept" test -f "$HISTORIC"
+
+echo "==== FAILURE FIXTURE (after gz mv, before meta commit) ===="
+find "$WORKDIR/backups/postgres" -maxdepth 1 -type f \( -name 'db_*.sql.gz' -o -name 'db_*.sql.gz.meta.json' -o -name '*.part' \) -delete
+set +e
+(
+  cd "$WORKDIR"
+  unset STUB_PG_DUMP_FAIL BACKUP_TEST_INJECT_META_FAIL
+  export BACKUP_TEST_INJECT_AFTER_GZ_MV=1
+  bash ./backup.sh
+)
+AFTER_GZ_EC=$?
+set -e
+assert_true "after_gz_fail_nonzero" test "$AFTER_GZ_EC" -ne 0
+mapfile -t GZ_AFTER_GZ < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name 'db_*.sql.gz' | sort)
+mapfile -t PART_AFTER_GZ < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name '*.part' | sort)
+mapfile -t META_AFTER_GZ < <(find "$WORKDIR/backups/postgres" -maxdepth 1 -type f -name '*.meta.json' | sort)
+assert_eq "after_gz_fail_no_orphan_gz" "${#GZ_AFTER_GZ[@]}" "0"
+assert_eq "after_gz_fail_no_part" "${#PART_AFTER_GZ[@]}" "0"
+assert_eq "after_gz_fail_no_meta" "${#META_AFTER_GZ[@]}" "0"
+assert_true "after_gz_fail_historic_kept" test -f "$HISTORIC"
 
 echo "==== SUMMARY pass=$PASS fail=$FAIL ===="
 if [ "$FAIL" -ne 0 ]; then
