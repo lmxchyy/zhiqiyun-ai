@@ -35,6 +35,32 @@ func TestAdminManualExpiryUsesExplicitDays(t *testing.T) {
 	}
 }
 
+func TestResolveAdminMembershipExpiryNeverShortensExistingMembership(t *testing.T) {
+	now := time.Date(2026, 8, 23, 3, 0, 0, 0, time.UTC)
+	longer := now.AddDate(0, 0, 730)
+	got, err := resolveAdminMembershipExpiry(now, longer.Format(time.RFC3339Nano), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(longer) {
+		t.Fatalf("expiry=%s want existing longer expiry=%s", got, longer)
+	}
+
+	shorter := now.AddDate(0, 0, 30)
+	got, err = resolveAdminMembershipExpiry(now, shorter.Format(time.RFC3339Nano), 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := now.AddDate(0, 0, 365)
+	if !got.Equal(want) {
+		t.Fatalf("expiry=%s want new grant expiry=%s", got, want)
+	}
+
+	if _, err := resolveAdminMembershipExpiry(now, "not-a-timestamp", 365); err == nil {
+		t.Fatal("malformed existing expiry must fail closed")
+	}
+}
+
 func TestFindAdminMembershipPlanAccepts996WithoutGrantingPoints(t *testing.T) {
 	plan, err := findAdminMembershipPlan(canonicalSubscriptionPlans(), "plan_ai_creator_996")
 	if err != nil {
