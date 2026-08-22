@@ -126,3 +126,49 @@ DELETE_CANDIDATE + offsite.verification == OFFSITE_VERIFIED
 otherwise
     -> LOCAL_ONLY_PROTECTED
 ```
+
+## Production one-shot container
+
+生产宿主机不需要安装 OBS SDK。`compose.prod.yml` 中的 `backup-uploader` 只启用
+`backup-uploader` profile，默认不会启动，也不属于业务服务。它使用固定的 Python
+3.11 镜像和锁定的 `esdk-obs-python` 版本，容器为 read-only，仅将
+`backups/postgres` 作为必要的 sidecar 输出目录挂载为可写。
+
+先在生产服务器以 root 创建权限为 600 的 secret env file，例如：
+
+```text
+/opt/zhiqiyun-ai/secrets/backup-obs.env
+```
+
+该文件只应包含专用 backup identity 的 OBS 变量，不应包含业务 storage credentials：
+
+```text
+BACKUP_OBJECT_PROVIDER=obs
+BACKUP_OBS_BUCKET=zhiqiyun-private
+BACKUP_OBS_ENDPOINT=https://obs.cn-north-9.myhuaweicloud.com
+BACKUP_OBS_REGION=cn-north-9
+BACKUP_OBS_SECURITY_PROVIDER=ECS
+```
+
+若使用 ENV 凭证，额外变量只放在该文件中：
+
+```text
+OBS_ACCESS_KEY_ID=...
+OBS_SECRET_ACCESS_KEY=...
+OBS_SECURITY_TOKEN=...
+```
+
+执行一次上传时，通过 `BACKUP_OBS_ENV_FILE` 指向该文件；不要把 secret 放在命令
+行或 Git tracked env 中：
+
+```bash
+BACKUP_OBS_ENV_FILE=/opt/zhiqiyun-ai/secrets/backup-obs.env \
+docker compose --env-file .env.production --profile backup-uploader \
+  run --rm backup-uploader \
+  --root /var/lib/zhiqiyun/backups/postgres \
+  --file /var/lib/zhiqiyun/backups/postgres/db_YYYYMMDD_HHMMSS_<sha>.sql.gz \
+  --provider obs --upload
+```
+
+该服务不是常驻服务，不扫描目录，也不启用删除能力；每次只传入一个明确的备份
+文件。没有 secret env file 时，OBS provider 应返回 `CONFIG_REQUIRED`。
