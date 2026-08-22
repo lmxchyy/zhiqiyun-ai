@@ -83,6 +83,11 @@ jobs:
           bash -n ops/backup-retention.sh
           node --test tests/backup-retention.test.mjs
 
+      - name: Test backup offsite uploader
+        run: |
+          bash -n ops/backup-upload-object-storage.sh
+          node --test tests/backup-offsite-upload.test.mjs
+
   backend-go:
     runs-on: ubuntu-latest
 
