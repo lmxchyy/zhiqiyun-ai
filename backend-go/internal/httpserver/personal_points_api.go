@@ -10,9 +10,11 @@ import (
 )
 
 type adminPointMutationRequest struct {
-	Points         int64  `json:"points"`
-	Reason         string `json:"reason"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	Points         int64                        `json:"points"`
+	Reason         string                       `json:"reason"`
+	IdempotencyKey string                       `json:"idempotencyKey"`
+	ValidityDays   int                          `json:"validityDays,omitempty"`
+	Membership     *adminMembershipGrantRequest `json:"membership,omitempty"`
 }
 
 func decodeAdminPointMutation(r *http.Request) (adminPointMutationRequest, error) {
@@ -30,7 +32,24 @@ func decodeAdminPointMutation(r *http.Request) (adminPointMutationRequest, error
 	}
 	request.Reason = strings.TrimSpace(request.Reason)
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
-	if request.Points == 0 || request.Reason == "" || request.IdempotencyKey == "" {
+	if request.Membership != nil {
+		request.Membership.Reason = strings.TrimSpace(request.Membership.Reason)
+		request.Membership.IdempotencyKey = strings.TrimSpace(request.Membership.IdempotencyKey)
+		request.Membership.PlanID = strings.TrimSpace(request.Membership.PlanID)
+		if request.Reason == "" {
+			request.Reason = request.Membership.Reason
+		}
+		if request.IdempotencyKey == "" {
+			request.IdempotencyKey = request.Membership.IdempotencyKey
+		}
+	}
+	if request.Reason == "" || request.IdempotencyKey == "" {
+		return request, ErrInvalidPointCommand
+	}
+	if request.ValidityDays < 0 || request.ValidityDays > adminManualMaxValidityDays {
+		return request, ErrInvalidPointCommand
+	}
+	if request.Points == 0 && request.Membership == nil {
 		return request, ErrInvalidPointCommand
 	}
 	return request, nil
@@ -38,11 +57,49 @@ func decodeAdminPointMutation(r *http.Request) (adminPointMutationRequest, error
 
 func (a adminAPI) customerPointGift(w http.ResponseWriter, r *http.Request) {
 	request, err := decodeAdminPointMutation(r)
-	if err != nil || request.Points <= 0 {
-		if err == nil {
-			err = ErrInvalidPointCommand
-		}
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if request.Membership != nil {
+		if request.Points != 0 || request.ValidityDays != 0 {
+			writeError(w, http.StatusBadRequest, errors.New("membership grant and point gift must be submitted separately"))
+			return
+		}
+		membership := *request.Membership
+		if membership.Reason == "" {
+			membership.Reason = request.Reason
+		}
+		if membership.IdempotencyKey == "" {
+			membership.IdempotencyKey = request.IdempotencyKey
+		}
+		actorID, actorRole := actorFromRequest(r)
+		result, grantErr := a.grantManualMembership(r.Context(), actorID, actorRole, strings.TrimSpace(r.PathValue("id")), membership)
+		if errors.Is(grantErr, ErrIdempotencyConflict) {
+			writeError(w, http.StatusConflict, grantErr)
+			return
+		}
+		if errors.Is(grantErr, errIdentityPermission) {
+			writeError(w, http.StatusForbidden, grantErr)
+			return
+		}
+		if errors.Is(grantErr, ErrInvalidPointCommand) {
+			writeError(w, http.StatusBadRequest, grantErr)
+			return
+		}
+		if errors.Is(grantErr, ErrPointNotFound) {
+			writeError(w, http.StatusNotFound, grantErr)
+			return
+		}
+		if grantErr != nil {
+			writeError(w, http.StatusInternalServerError, grantErr)
+			return
+		}
+		writeJSON(w, map[string]any{"membership": result, "idempotent": result.Idempotent})
+		return
+	}
+	if request.Points <= 0 {
+		writeError(w, http.StatusBadRequest, ErrInvalidPointCommand)
 		return
 	}
 	a.customerPointGrant(w, r, request, PointSourceAdminGift, "ADMIN_GIFT")
@@ -52,6 +109,10 @@ func (a adminAPI) customerPointCorrection(w http.ResponseWriter, r *http.Request
 	request, err := decodeAdminPointMutation(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if request.Membership != nil || request.ValidityDays != 0 {
+		writeError(w, http.StatusBadRequest, errors.New("membership and validityDays are only supported by point gifts"))
 		return
 	}
 	userID := strings.TrimSpace(r.PathValue("id"))
@@ -106,11 +167,17 @@ func (a adminAPI) customerPointGrant(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	actorID, actorRole := actorFromRequest(r)
-	result, err := service.Grant(r.Context(), PersonalPointGrantCommand{
+	command := PersonalPointGrantCommand{
 		AccountID: account.ID, UserID: userID, Source: source, Points: request.Points,
 		ReferenceType: referenceType, ReferenceID: request.IdempotencyKey, IdempotencyKey: request.IdempotencyKey, Reason: request.Reason,
 		Audit: PersonalPointAudit{ActorID: actorID, ActorRole: actorRole, Action: "personal_points.admin_gift", Method: r.Method, Path: r.URL.Path, RequestID: requestIDFromPointMutation(r, request.IdempotencyKey)},
-	})
+	}
+	var result PersonalPointGrantResult
+	if source == PointSourceAdminGift && request.ValidityDays > 0 {
+		result, err = grantAdminPointGiftWithValidity(r.Context(), service, command, request.ValidityDays)
+	} else {
+		result, err = service.Grant(r.Context(), command)
+	}
 	if errors.Is(err, ErrIdempotencyConflict) {
 		writeError(w, http.StatusConflict, err)
 		return
