@@ -601,6 +601,17 @@ func (s *postgresStore) SaveUploadedAsset(item asset) (asset, error) {
 	return item, nil
 }
 
+// generationTaskParamsListExpr drops list-path bloat before Postgres detoasts
+// TOAST values into Go. first_frame alone was ~5MB on the production sample.
+// Also drops tenant/billing bypass keys that already exist on the task row and
+// are unused by workspace reuse consumers.
+const generationTaskParamsListExpr = `(params - 'referenceImages' - 'reference_images' - 'image_urls' - 'imageUrls' - 'inputImageUrls' - 'inputImagesSnapshot' - 'maskDraft' - 'first_frame' - 'final_schema_snapshot' - 'limit_snapshot' - 'organization_id' - 'tenant_id' - 'billing_account_id' - 'billing_scope' - 'billing_type' - 'module_code' - 'model_name' - 'billingReservedAt' - 'billingReserved' - 'billingReservationBalanceBefore' - 'billingReservationBalanceAfter' - 'billingReservationPointCost')`
+
+// generationTaskParamsDetailExpr keeps first_frame / schema snapshots for the
+// single-task fetch path (video retry / admin detail) while still omitting
+// multi-image reference blobs.
+const generationTaskParamsDetailExpr = `(params - 'referenceImages' - 'reference_images' - 'image_urls' - 'imageUrls' - 'inputImageUrls' - 'inputImagesSnapshot' - 'maskDraft')`
+
 const generationTaskSummarySelect = `
 	select
 		id,
@@ -617,14 +628,53 @@ const generationTaskSummarySelect = `
 		coalesce(progress, 0),
 		coalesce(point_cost, 0),
 		coalesce(prompt, ''),
-		coalesce((params - 'referenceImages' - 'reference_images' - 'image_urls' - 'imageUrls' - 'inputImageUrls' - 'inputImagesSnapshot' - 'maskDraft')::text, '{}'),
+		coalesce(` + generationTaskParamsListExpr + `::text, '{}'),
 		coalesce(result_ids::text, '[]'),
 		coalesce(error::text, 'null'),
 		coalesce(created_at, ''),
 		coalesce(updated_at, ''),
 		coalesce(worker_finished_at, ''),
 		coalesce(client_request_id, ''),
-		coalesce(task_status, 'CREATED'),
+		coalesce(task_status, 'QUEUED'),
+		coalesce(billing_status, 'UNQUOTED'),
+		coalesce(billing_rule_version_id, ''),
+		coalesce(quoted_points, 0),
+		coalesce(reserved_points, 0),
+		coalesce(captured_points, 0),
+		coalesce(released_points, 0),
+		coalesce(refunded_points, 0),
+		supplier_cost,
+		estimated_margin,
+		coalesce(provider_channel, '')
+	from xz_generation_tasks
+`
+
+// generationTaskDetailSelect matches the summary scan shape but keeps
+// first_frame / schema snapshots for GetGenerationTaskForUser.
+const generationTaskDetailSelect = `
+	select
+		id,
+		user_id,
+		coalesce(tenant_id, ''),
+		coalesce(organization_id, ''),
+		coalesce(billing_account_type, 'PERSONAL'),
+		coalesce(billing_account_id, ''),
+		coalesce(module_code, ''),
+		coalesce(type, ''),
+		coalesce(model, ''),
+		coalesce(billing_type, ''),
+		coalesce(status, ''),
+		coalesce(progress, 0),
+		coalesce(point_cost, 0),
+		coalesce(prompt, ''),
+		coalesce(` + generationTaskParamsDetailExpr + `::text, '{}'),
+		coalesce(result_ids::text, '[]'),
+		coalesce(error::text, 'null'),
+		coalesce(created_at, ''),
+		coalesce(updated_at, ''),
+		coalesce(worker_finished_at, ''),
+		coalesce(client_request_id, ''),
+		coalesce(task_status, 'QUEUED'),
 		coalesce(billing_status, 'UNQUOTED'),
 		coalesce(billing_rule_version_id, ''),
 		coalesce(quoted_points, 0),
@@ -657,8 +707,13 @@ const assetSummarySelect = `
 	from xz_assets
 `
 
+// assetWorkspaceListMetadataExpr drops cover/storage internals before TOAST
+// reaches Go. Production samples still carried ~0.9MB metadata.thumbnailUrl.
+const assetWorkspaceListMetadataExpr = `(coalesce(metadata, '{}'::jsonb) - 'thumbnailUrl' - 'storageObjectKey' - 'sourceUrl')`
+
 // assetWorkspaceListSelect is the first-paint projection. It keeps the same
-// scan shape as assetSummarySelect but must not detoast thumbnail_url TEXT.
+// scan shape as assetSummarySelect but must not detoast thumbnail_url TEXT or
+// list-unused metadata blobs.
 const assetWorkspaceListSelect = `
 	select
 		id,
@@ -671,7 +726,7 @@ const assetWorkspaceListSelect = `
 		coalesce(url, ''),
 		'' as thumbnail_url,
 		coalesce(favorite, false),
-		coalesce(metadata::text, '{}'),
+		coalesce(` + assetWorkspaceListMetadataExpr + `::text, '{}'),
 		coalesce(deleted_at::text, ''),
 		coalesce(created_at, ''),
 		coalesce(updated_at, '')
@@ -751,7 +806,7 @@ func (s *postgresStore) GetGenerationTaskForUser(userID string, id string) (gene
 	if err != nil {
 		return generationTask{}, false, err
 	}
-	rows, err := s.db.QueryContext(ctx, generationTaskSummarySelect+`
+	rows, err := s.db.QueryContext(ctx, generationTaskDetailSelect+`
 		where user_id=$1 and id=$2 and (($3='ENTERPRISE' and tenant_id=$4) or ($3<>'ENTERPRISE' and (tenant_id is null or tenant_id='tenant_default')))
 		limit 1
 	`, userID, id, contextType, tenantID)
