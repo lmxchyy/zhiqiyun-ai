@@ -54,6 +54,29 @@ func adminManualExpiry(grantedAt time.Time, days int) (time.Time, error) {
 	return pointNow(grantedAt).AddDate(0, 0, days), nil
 }
 
+// resolveAdminMembershipExpiry guarantees an administrative grant never shortens
+// an already-longer membership. The grant means "valid for at least N days from
+// now", not "replace whatever expiry already exists".
+func resolveAdminMembershipExpiry(now time.Time, previousExpiry string, days int) (time.Time, error) {
+	candidate, err := adminManualExpiry(now, days)
+	if err != nil {
+		return time.Time{}, err
+	}
+	previousExpiry = strings.TrimSpace(previousExpiry)
+	if previousExpiry == "" {
+		return candidate, nil
+	}
+	previous, err := time.Parse(time.RFC3339Nano, previousExpiry)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid existing membership expiry: %w", err)
+	}
+	previous = previous.UTC()
+	if previous.After(candidate) {
+		return previous, nil
+	}
+	return candidate, nil
+}
+
 func findAdminMembershipPlan(plans []adminPlan, planID string) (adminPlan, error) {
 	planID = strings.TrimSpace(planID)
 	for _, plan := range plans {
@@ -83,46 +106,11 @@ func (a adminAPI) grantManualMembership(ctx context.Context, actorID, actorRole,
 	if pg, ok := a.store.(*postgresStore); ok && pg.db != nil {
 		return grantManualMembershipPostgres(ctx, pg.db, actorID, actorRole, userID, request)
 	}
-	js, ok := a.store.(*jsonStore)
-	if !ok {
-		return adminMembershipGrantResult{}, errors.New("manual membership grant requires a writable admin store")
-	}
-	return grantManualMembershipJSON(js, actorID, actorRole, userID, request)
-}
-
-func grantManualMembershipJSON(store *jsonStore, actorID, actorRole, userID string, request adminMembershipGrantRequest) (adminMembershipGrantResult, error) {
-	var result adminMembershipGrantResult
-	err := store.updateAdmin(func(data *adminPlatformData) error {
-		plan, err := findAdminMembershipPlan(data.Plans, request.PlanID)
-		if err != nil {
-			return err
-		}
-		days := request.DurationDays
-		if days == 0 {
-			days = plan.DurationDays
-		}
-		expiresAt, err := adminManualExpiry(time.Now().UTC(), days)
-		if err != nil {
-			return err
-		}
-		for i := range data.Users {
-			if data.Users[i].ID != userID {
-				continue
-			}
-			data.Users[i].PlanID = plan.ID
-			data.Users[i].MemberLevel = planMemberLevel(plan)
-			data.Users[i].SubscriptionExpiresAt = expiresAt.UTC().Format(time.RFC3339Nano)
-			data.Users[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			result = adminMembershipGrantResult{
-				UserID: userID, PlanID: plan.ID, MemberLevel: data.Users[i].MemberLevel,
-				EffectiveAt: time.Now().UTC().Format(time.RFC3339Nano), ExpiresAt: data.Users[i].SubscriptionExpiresAt,
-				DurationDays: days,
-			}
-			return nil
-		}
-		return ErrPointNotFound
-	})
-	return result, err
+	// This is a high-impact entitlement mutation. The JSON development store
+	// cannot provide the transactional entitlement/audit/subscription invariants
+	// required here, so fail closed instead of pretending to have equivalent
+	// semantics.
+	return adminMembershipGrantResult{}, errors.New("manual membership grant requires PostgreSQL-backed admin storage")
 }
 
 func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, actorRole, userID string, request adminMembershipGrantRequest) (adminMembershipGrantResult, error) {
@@ -173,16 +161,16 @@ func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, act
 		return adminMembershipGrantResult{}, existingErr
 	}
 
-	var previousPlanID, previousLevel, previousExpiry string
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(plan_id,''),coalesce(member_level,''),coalesce(subscription_expires_at,'') FROM xz_users WHERE id=$1 FOR UPDATE`, userID).
-		Scan(&previousPlanID, &previousLevel, &previousExpiry); err != nil {
+	var tenantID, previousPlanID, previousLevel, previousExpiry string
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(nullif(tenant_id,''),'tenant_default'),coalesce(plan_id,''),coalesce(member_level,''),coalesce(subscription_expires_at,'') FROM xz_users WHERE id=$1 FOR UPDATE`, userID).
+		Scan(&tenantID, &previousPlanID, &previousLevel, &previousExpiry); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return adminMembershipGrantResult{}, ErrPointNotFound
 		}
 		return adminMembershipGrantResult{}, err
 	}
 	now := time.Now().UTC()
-	expiresAt, err := adminManualExpiry(now, days)
+	expiresAt, err := resolveAdminMembershipExpiry(now, previousExpiry, days)
 	if err != nil {
 		return adminMembershipGrantResult{}, err
 	}
@@ -194,14 +182,40 @@ func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, act
 		"source": adminManualMembershipSource, "planId": plan.ID, "durationDays": days,
 		"reason": request.Reason, "actorId": actorID, "actorRole": actorRole,
 		"previousPlanId": previousPlanID, "previousMemberLevel": previousLevel, "previousExpiresAt": previousExpiry,
-		"automaticPointGrant": false,
+		"automaticPointGrant": false, "neverShortensExistingMembership": true,
 	}
 	metadataJSON, _ := json.Marshal(metadata)
 	grantID := "membership_admin_" + shortID(userID+":"+request.IdempotencyKey)
 	sourceOrderNo := "ADMIN-MEMBERSHIP-" + strings.ToUpper(shortID(request.IdempotencyKey))
-	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_membership_entitlement_records(id,tenant_id,user_id,member_level,effective_at,expires_at,source_order_no,idempotency_key,metadata) VALUES($1,'tenant_default',$2,$3,$4,$5,$6,$7,$8::jsonb)`, grantID, userID, plan.MemberLevel, now, expiresAt, sourceOrderNo, request.IdempotencyKey, metadataJSON); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_membership_entitlement_records(id,tenant_id,user_id,member_level,effective_at,expires_at,source_order_no,idempotency_key,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`, grantID, tenantID, userID, plan.MemberLevel, now, expiresAt, sourceOrderNo, request.IdempotencyKey, metadataJSON); err != nil {
 		return adminMembershipGrantResult{}, err
 	}
+
+	// xz_billing_subscriptions is the canonical admin subscription projection.
+	// Manual grants have no payment order, so migration 109 allows a NULL
+	// source_order_id while preserving source_order_no as the administrative
+	// provenance key. One stable manual projection per user is updated in place;
+	// immutable grant history remains in xz_membership_entitlement_records.
+	subscriptionID := "sub_admin_" + shortID(userID)
+	productCode := strings.TrimSpace(plan.Code)
+	if productCode == "" {
+		productCode = plan.ID
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO xz_billing_subscriptions(
+			id,tenant_id,user_id,plan_id,product_code,source_order_id,source_order_no,status,
+			starts_at,ends_at,entitlement_snapshot,created_at,updated_at
+		) VALUES($1,$2,$3,$4,$5,NULL,$6,'ACTIVE',$7,$8,$9::jsonb,$7,$7)
+		ON CONFLICT(id) DO UPDATE SET
+			tenant_id=excluded.tenant_id,user_id=excluded.user_id,plan_id=excluded.plan_id,
+			product_code=excluded.product_code,source_order_id=NULL,source_order_no=excluded.source_order_no,
+			status='ACTIVE',starts_at=LEAST(xz_billing_subscriptions.starts_at,excluded.starts_at),
+			ends_at=GREATEST(xz_billing_subscriptions.ends_at,excluded.ends_at),
+			entitlement_snapshot=excluded.entitlement_snapshot,updated_at=excluded.updated_at
+	`, subscriptionID, tenantID, userID, plan.ID, productCode, sourceOrderNo, now, expiresAt, metadataJSON); err != nil {
+		return adminMembershipGrantResult{}, err
+	}
+
 	if err := insertAuditLog(ctx, tx, actorID, actorRole, "admin.membership.manual_grant", "user_membership", userID, http.MethodPost, "/api/v1/admin/customers/"+userID+"/point-gifts", http.StatusOK, metadata); err != nil {
 		return adminMembershipGrantResult{}, err
 	}
