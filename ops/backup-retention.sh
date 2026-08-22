@@ -94,10 +94,24 @@ def parse_now(value):
         return int(dt.datetime.now(dt.timezone.utc).timestamp())
     if re.fullmatch(r"[0-9]+", value):
         return int(value)
-    text = value.replace("Z", "+00:00")
-    parsed = dt.datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2})(?:T| )(\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:?\d{2})?",
+        value,
+    )
+    if not match:
+        raise ValueError("invalid ISO timestamp: {}".format(value))
+    date_text, time_text, fraction, timezone = match.groups()
+    parsed = dt.datetime.strptime("{} {}".format(date_text, time_text), "%Y-%m-%d %H:%M:%S")
+    if fraction:
+        parsed = parsed.replace(microsecond=int(fraction.ljust(6, "0")))
+    if not timezone or timezone == "Z":
+        tzinfo = dt.timezone.utc
+    else:
+        sign = 1 if timezone[0] == "+" else -1
+        hours = int(timezone[1:3])
+        minutes = int(timezone[-2:])
+        tzinfo = dt.timezone(sign * dt.timedelta(hours=hours, minutes=minutes))
+    parsed = parsed.replace(tzinfo=tzinfo)
     return int(parsed.timestamp())
 
 now = parse_now(now_arg)
@@ -206,17 +220,21 @@ for file in daily_files:
         add_keep(file, "daily", "daily backup within 14 days")
 
 def week_key(epoch):
-    return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).isocalendar()[:2]
+    return iso_parts(dt.datetime.fromtimestamp(epoch, dt.timezone.utc))[:2]
+
+def iso_parts(value):
+    iso = value.isocalendar()
+    return iso[0], iso[1], iso[2]
 
 def month_key(epoch):
     value = dt.datetime.fromtimestamp(epoch, dt.timezone.utc)
     return value.year, value.month
 
-current_week = now_dt.isocalendar()
 weeks = []
 for offset in range(4):
     date = now_dt.date() - dt.timedelta(days=now_dt.weekday() + offset * 7)
-    weeks.append((date.isocalendar().year, date.isocalendar().week))
+    iso_year, iso_week, _ = iso_parts(date)
+    weeks.append((iso_year, iso_week))
 for week in weeks:
     candidates = sorted((f for f in pool if week_key(f["mtime"]) == week), key=lambda f: (-f["mtime"], f["relative_path"]))
     if candidates:
