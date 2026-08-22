@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const harnessPath = path.join(repoRoot, "tests", "backup-retention.harness.sh");
+const retentionScriptPath = path.join(repoRoot, "ops", "backup-retention.sh");
+const retentionSource = readFileSync(retentionScriptPath, "utf8");
 
 function findBash() {
   for (const candidate of [process.env.BASH_PATH, "C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash"]) {
@@ -34,6 +37,20 @@ function runHarnessRaw(scenario = "full", extraEnv = {}) {
 }
 
 function paths(items) { return new Set(items.map((item) => item.path)); }
+
+test("retention engine stays within the Python 3.6 compatibility contract", () => {
+  assert.doesNotMatch(retentionSource, /\.isocalendar\(\)\.(?:year|week|weekday)/);
+  assert.doesNotMatch(retentionSource, /datetime\.fromisoformat/);
+  assert.match(retentionSource, /def iso_parts\(value\):/);
+});
+
+test("weekly and monthly retention keep tuple-safe ISO calendar coverage", () => {
+  const report = runHarness();
+  const weeklyCoverage = new Set(report.keep.flatMap((item) => [...item.keep_reason.matchAll(/weekly coverage (\d{4}-W\d+)/g)].map((match) => match[1])));
+  const monthlyCoverage = new Set(report.keep.flatMap((item) => [...item.keep_reason.matchAll(/monthly coverage (\d{4}-\d{2})/g)].map((match) => match[1])));
+  assert.deepEqual([...weeklyCoverage].sort(), ["2026-W31", "2026-W32", "2026-W33", "2026-W34"]);
+  assert.deepEqual([...monthlyCoverage].sort(), ["2026-06", "2026-07", "2026-08"]);
+});
 
 test("retention inventory classifies and calculates the full policy without deleting", () => {
   const raw = runHarnessRaw();
