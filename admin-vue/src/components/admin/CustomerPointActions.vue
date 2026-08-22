@@ -1,6 +1,6 @@
 <template>
   <section class="customer-point-actions">
-    <el-alert v-if="!hasAnyAccess" title="暂无会员或积分管理权限" type="warning" :closable="false" show-icon />
+    <el-alert v-if="!hasAnyAccess" title="暂无积分管理权限" type="warning" :closable="false" show-icon />
     <template v-else>
       <header class="point-actions-head">
         <div><strong>会员与个人积分管理</strong><small>{{ userName || userId }}</small></div>
