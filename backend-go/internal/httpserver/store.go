@@ -557,8 +557,17 @@ func (s *jsonStore) CreateRegisteredCustomer(req adminCustomerMutation, grantPoi
 			AccountID: "points_" + shortID(created.ID), UserID: created.ID, PlanID: created.PlanID,
 			PlanGrantPoints: int64(grantPoints), IdempotencyKey: "registration:" + created.ID, GrantedAt: now,
 		})
-		return err
+		if err != nil {
+			return &authLoginStageError{stage: authLoginStageRegistrationGrant, err: err}
+		}
+		return nil
 	})
+	if err != nil {
+		var stageErr *authLoginStageError
+		if !errors.As(err, &stageErr) {
+			err = &authLoginStageError{stage: authLoginStageUserCreate, err: err}
+		}
+	}
 	return created, err
 }
 
