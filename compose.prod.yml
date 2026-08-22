@@ -464,6 +464,23 @@ services:
       retries: 2
       start_period: 10s
 
+  backup-uploader:
+    profiles: ["backup-uploader"]
+    build:
+      context: .
+      dockerfile: ops/backup-uploader/Dockerfile
+    image: ${BACKUP_UPLOADER_IMAGE:-xianzhi-backup-uploader}:${IMAGE_TAG:-prod}
+    env_file:
+      - "${BACKUP_OBS_ENV_FILE:-/dev/null}"
+    read_only: true
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev
+    volumes:
+      - ./backups/postgres:/var/lib/zhiqiyun/backups/postgres:rw
+
 volumes:
   app-data:
   postgres-data:

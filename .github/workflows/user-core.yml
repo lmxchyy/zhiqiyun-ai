@@ -86,7 +86,7 @@ jobs:
       - name: Test backup offsite uploader
         run: |
           bash -n ops/backup-upload-object-storage.sh
-          node --test tests/backup-offsite-upload.test.mjs
+          node --test tests/backup-offsite-upload.test.mjs tests/backup-uploader-container.test.mjs
 
   backup-offsite:
     runs-on: ubuntu-latest
@@ -103,7 +103,7 @@ jobs:
       - name: Test Huawei OBS provider contract
         run: |
           bash -n ops/backup-upload-object-storage.sh
-          node --test tests/backup-offsite-upload.test.mjs
+          node --test tests/backup-offsite-upload.test.mjs tests/backup-uploader-container.test.mjs
 
   backend-go:
     runs-on: ubuntu-latest
