@@ -44,7 +44,7 @@ test("valid backup dry-run produces a deterministic deploy object key without up
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const report = JSON.parse(result.stdout);
   assert.equal(report.status, "DRY_RUN");
-  assert.equal(report.object_key, "zhiqiyun-ai/postgres/deploy/2026/08/db_20260822_155244_abcdef1234.sql.gz");
+  assert.equal(report.object_key, "backups/postgres/deploy/2026/08/db_20260822_155244_abcdef1234.sql.gz");
   assert.equal(report.uploaded, false);
 });
 
@@ -117,4 +117,47 @@ test("spaces, brackets, and double hyphens remain safe in object keys", () => {
   assert.equal(report.status, "DRY_RUN");
   assert.match(report.object_key, /db_20260822_155244_abcdef \[x\] --\.sql\.gz$/);
   assert.doesNotMatch(report.object_key, /\.\./);
+});
+
+test("OBS fake provider uploads under the fixed postgres prefix", () => {
+  const result = runHarness("obs-valid-upload");
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.provider, "obs");
+  assert.equal(report.status, "OFFSITE_VERIFIED");
+  assert.match(report.object_key, /^backups\/postgres\/deploy\/2026\/08\//);
+  assert.equal(report.remote_sha256, report.local_sha256);
+});
+
+test("OBS callers cannot inject a business prefix", () => {
+  const result = runHarness("obs-prefix-injection");
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(JSON.parse(result.stdout).object_key, /^backups\/postgres\//);
+  assert.doesNotMatch(result.stdout, /images\//);
+});
+
+test("OBS idempotency and conflict protection are preserved", () => {
+  const identical = runHarness("obs-existing-identical");
+  assert.equal(identical.status, 0, `${identical.stdout}\n${identical.stderr}`);
+  assert.equal(JSON.parse(identical.stdout).status, "ALREADY_OFFSITE_VERIFIED");
+  expectFailure("obs-remote-conflict", /REMOTE_CONFLICT/);
+});
+
+for (const scenario of ["obs-auth-failure", "obs-timeout", "obs-network-failure", "obs-partial-upload", "obs-meta-failure", "obs-sha-failure"]) {
+  test(`OBS ${scenario} never verifies a partial upload`, () => {
+    expectFailure(scenario, /OFFSITE/);
+  });
+}
+
+test("OBS configuration failures are explicit", () => {
+  expectFailure("obs-config-missing", /CONFIG_REQUIRED/);
+  for (const scenario of ["obs-bucket-missing", "obs-endpoint-missing", "obs-region-missing"]) {
+    expectFailure(scenario, /CONFIG_REQUIRED/);
+  }
+});
+
+test("OBS provider errors redact credentials", () => {
+  const result = runHarness("obs-secret-redaction");
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /FAKE_ACCESS_KEY|FAKE_SECRET_KEY/);
 });

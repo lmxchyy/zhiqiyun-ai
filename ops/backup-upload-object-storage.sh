@@ -30,7 +30,7 @@ export OFFSITE_ROOT="$ROOT" OFFSITE_FILE="$FILE" OFFSITE_PROVIDER="$PROVIDER"
 export OFFSITE_FAKE_ROOT="$FAKE_ROOT" OFFSITE_MODE="$MODE" OFFSITE_JSON_OUTPUT="$JSON_OUTPUT"
 exec "$PYTHON_BIN" - <<'PY'
 from __future__ import print_function
-import datetime, gzip, hashlib, json, os, re, shutil, stat, sys
+import datetime, gzip, hashlib, io, json, os, re, shutil, stat, sys, tempfile
 
 def out(data, code=0):
     if os.environ.get("OFFSITE_JSON_OUTPUT") == "1":
@@ -112,8 +112,8 @@ def load_local():
     if not name or name in (".", "..") or "/" in name or "\\" in name or ".." in name or any(ord(ch) < 32 for ch in name):
         fail("LOCAL_BACKUP_INVALID", "unsafe backup filename")
     stamp = datetime.datetime.utcfromtimestamp(os.path.getmtime(path))
-    prefix = "postgres/" if category == "deploy" else ""
-    key = "zhiqiyun-ai/{}{}/{:04d}/{:02d}/{}".format(prefix, category, stamp.year, stamp.month, name)
+    prefix = "backups/postgres/"
+    key = "{}{}/{:04d}/{:02d}/{}".format(prefix, category, stamp.year, stamp.month, name)
     return {"root": root, "path": path, "meta": meta, "category": category, "object_key": key, "bytes": actual, "sha256": digest}
 
 class FakeProvider(object):
@@ -131,6 +131,9 @@ class FakeProvider(object):
     def info_path(self, key):
         return self.path(key) + ".object-meta.json"
     def head(self, key):
+        failure = os.environ.get("BACKUP_OBJECT_FAKE_FAILURE", "")
+        if failure in ("auth-failure", "timeout", "network-failure"):
+            fail("OFFSITE_UPLOAD_FAILED", "OBS request failed")
         target = self.path(key)
         if not os.path.isfile(target):
             return None
@@ -145,6 +148,9 @@ class FakeProvider(object):
             info["sha256"] = os.environ["BACKUP_OBJECT_FAKE_HEAD_SHA256"]
         return info
     def put(self, source, key, sha256_value, size):
+        failure = os.environ.get("BACKUP_OBJECT_FAKE_FAILURE", "")
+        if failure in ("partial-upload", "auth-failure", "timeout", "network-failure"):
+            fail("OFFSITE_UPLOAD_FAILED", "OBS upload failed")
         target = self.path(key)
         parent = os.path.dirname(target)
         if not os.path.isdir(parent):
@@ -153,6 +159,11 @@ class FakeProvider(object):
         with open(self.info_path(key), "w") as handle:
             json.dump({"size": size, "sha256": sha256_value, "etag": hashlib.md5(open(source, "rb").read()).hexdigest()}, handle)
     def put_text(self, content, key):
+        failure = os.environ.get("BACKUP_OBJECT_FAKE_FAILURE", "")
+        if failure == "meta-failure" and key.endswith(".meta.json"):
+            fail("OFFSITE_UPLOAD_FAILED", "OBS metadata upload failed")
+        if failure == "sha-failure" and key.endswith(".sha256"):
+            fail("OFFSITE_UPLOAD_FAILED", "OBS checksum sidecar upload failed")
         target = self.path(key)
         parent = os.path.dirname(target)
         if not os.path.isdir(parent):
@@ -161,6 +172,74 @@ class FakeProvider(object):
             handle.write(content)
         with open(self.info_path(key), "w") as handle:
             json.dump({"size": len(content.encode("utf-8")), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(), "etag": hashlib.md5(content.encode("utf-8")).hexdigest()}, handle)
+
+
+class ObsProvider(object):
+    def __init__(self):
+        bucket = os.environ.get("BACKUP_OBS_BUCKET", "")
+        endpoint = os.environ.get("BACKUP_OBS_ENDPOINT", "")
+        region = os.environ.get("BACKUP_OBS_REGION", "")
+        if not bucket or not endpoint or not region:
+            fail("CONFIG_REQUIRED", "OBS bucket, endpoint, and region are required")
+        try:
+            from obs import ObsClient
+        except ImportError:
+            fail("CONFIG_REQUIRED", "Huawei OBS Python SDK is not installed")
+        policy = os.environ.get("BACKUP_OBS_SECURITY_PROVIDER", "OBS_DEFAULT")
+        if policy == "ENV":
+            if not os.environ.get("OBS_ACCESS_KEY_ID") or not os.environ.get("OBS_SECRET_ACCESS_KEY"):
+                fail("CONFIG_REQUIRED", "OBS ENV credentials are required")
+        try:
+            self.client = ObsClient(server=endpoint, security_provider_policy=policy)
+        except Exception:
+            fail("CONFIG_REQUIRED", "OBS client configuration failed")
+        self.bucket = bucket
+
+    def close(self):
+        close = getattr(self.client, "close", None)
+        if close:
+            close()
+
+    def _response(self, response, operation):
+        status = int(getattr(response, "status", 0) or 0)
+        if status < 200 or status >= 300:
+            fail("OFFSITE_UPLOAD_FAILED", "OBS {} failed with status {}".format(operation, status))
+        return response
+
+    def head(self, key):
+        try:
+            response = self.client.getObjectMetadata(self.bucket, key)
+        except Exception:
+            fail("OFFSITE_UPLOAD_FAILED", "OBS HEAD request failed")
+        status = int(getattr(response, "status", 0) or 0)
+        if status == 404:
+            return None
+        self._response(response, "HEAD")
+        body = getattr(response, "body", None)
+        metadata = getattr(response, "metadata", None) or getattr(body, "metadata", None) or {}
+        normalized = {}
+        for name, value in metadata.items():
+            normalized[str(name).lower()] = value
+        return {"size": int(getattr(body, "contentLength", 0) or 0), "etag": str(getattr(body, "etag", "") or ""), "sha256": str(normalized.get("x-obs-meta-sha256", "") or "")}
+
+    def put(self, source, key, sha256_value, size):
+        metadata = {"x-obs-meta-sha256": sha256_value}
+        try:
+            if size > 5 * 1024 * 1024 * 1024:
+                checkpoint = os.path.join(tempfile.gettempdir(), "backup-obs-" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".checkpoint")
+                response = self.client.uploadFile(self.bucket, key, source, 100 * 1024 * 1024, 1, True, checkpoint, True, metadata=metadata)
+            else:
+                response = self.client.putFile(self.bucket, key, source, metadata=metadata)
+        except Exception:
+            fail("OFFSITE_UPLOAD_FAILED", "OBS object upload failed")
+        self._response(response, "PUT")
+
+    def put_text(self, content, key):
+        try:
+            response = self.client.putContent(self.bucket, key, io.BytesIO(content.encode("utf-8")), metadata={})
+        except Exception:
+            fail("OFFSITE_UPLOAD_FAILED", "OBS sidecar upload failed")
+        self._response(response, "PUT")
 
 def verify(provider, key, local):
     remote = provider.head(key)
@@ -176,11 +255,15 @@ local = load_local()
 provider_name = os.environ["OFFSITE_PROVIDER"]
 if os.environ["OFFSITE_MODE"] == "dry-run":
     out({"status": "DRY_RUN", "provider": provider_name, "object_key": local["object_key"], "uploaded": False, "local_bytes": local["bytes"], "local_sha256": local["sha256"]})
-if provider_name == "cos":
-    fail("UPLOAD_NOT_CONFIGURED", "COS provider is configuration-gated in Phase 3A")
-if provider_name != "fake":
+if provider_name == "fake":
+    provider = FakeProvider(os.environ.get("OFFSITE_FAKE_ROOT", ""))
+elif provider_name == "obs":
+    if os.environ.get("BACKUP_OBS_FAKE") == "1":
+        provider = FakeProvider(os.environ.get("OFFSITE_FAKE_ROOT", ""))
+    else:
+        provider = ObsProvider()
+else:
     fail("UPLOAD_NOT_CONFIGURED", "provider is not configured")
-provider = FakeProvider(os.environ.get("OFFSITE_FAKE_ROOT", ""))
 key = local["object_key"]
 remote = provider.head(key)
 if remote is not None:
@@ -202,11 +285,26 @@ provider.put_text(checksum_content, key + ".sha256")
 checksum_remote = provider.head(key + ".sha256")
 if checksum_remote is None or int(checksum_remote.get("size", -1)) != len(checksum_content.encode("utf-8")):
     fail("REMOTE_SIZE_MISMATCH", "remote sha256 object could not be verified")
+if checksum_remote.get("sha256") != hashlib.sha256(checksum_content.encode("utf-8")).hexdigest():
+    fail("REMOTE_CHECKSUM_MISMATCH", "remote sha256 object could not be verified")
 payload = {"version": 1, "provider": provider_name, "bucket": os.environ.get("BACKUP_OBJECT_BUCKET", "fake"), "object_key": key, "uploaded_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "local_bytes": local["bytes"], "local_sha256": local["sha256"], "remote_bytes": int(remote["size"]), "remote_etag": remote.get("etag", ""), "remote_sha256": remote["sha256"], "verification": "OFFSITE_VERIFIED"}
 offsite_path = local["path"] + ".offsite.json"
-with open(offsite_path, "w") as handle:
-    json.dump(payload, handle, sort_keys=True, indent=2)
-    handle.write("\n")
+temporary_path = offsite_path + ".part"
+try:
+    with open(temporary_path, "w") as handle:
+        json.dump(payload, handle, sort_keys=True, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_path, offsite_path)
+except Exception:
+    try:
+        os.unlink(temporary_path)
+    except OSError:
+        pass
+    fail("OFFSITE_UPLOAD_FAILED", "offsite verification sidecar write failed")
+if hasattr(provider, "close"):
+    provider.close()
 payload.update({"status": "OFFSITE_VERIFIED", "offsite_path": offsite_path, "uploaded": True})
 out(payload)
 PY
