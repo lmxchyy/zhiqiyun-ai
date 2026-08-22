@@ -172,3 +172,36 @@ docker compose --env-file .env.production --profile backup-uploader \
 
 该服务不是常驻服务，不扫描目录，也不启用删除能力；每次只传入一个明确的备份
 文件。没有 secret env file 时，OBS provider 应返回 `CONFIG_REQUIRED`。
+## Database-encrypted backup identity (preferred)
+
+The backup uploader must not use the tenant default storage configuration. A dedicated row in `xz_storage_configs` is selected by an explicit `storage-config-id` and must satisfy all of:
+
+```text
+purpose       = backup
+provider      = huawei_obs
+bucket        = zhiqiyun-private
+object_prefix = backups/postgres/
+is_default    = false
+status        = ENABLED
+```
+
+The access key, secret key, and optional session token remain encrypted with the existing `STORAGE_MASTER_KEY` AES-GCM mechanism. The one-shot Go uploader decrypts the selected row in process memory and passes it directly to the existing Huawei OBS provider; it never puts the decrypted OBS credential in an environment variable, command argument, log, metadata file, or sidecar.
+
+If the explicit config is missing, disabled, not a backup-purpose config, or has another prefix, the uploader fails closed with `BACKUP_STORAGE_CONFIG_NOT_FOUND`. It never falls back to `is_default=true`, tenant storage, MinIO, S3, or environment storage.
+
+The schema fields are additive: `purpose` and `object_prefix`. Existing business rows retain empty values and their current behavior. Creating or rotating a real backup identity is an IAM/production configuration action and is not performed by CI.
+
+### Preferred production invocation
+
+Pass only the non-secret storage config ID. The decrypted OBS credential stays inside the Go process and is never exported to the shell uploader.
+
+```bash
+docker compose --env-file .env.production --profile backup-uploader run --rm backup-uploader \
+  --root /var/lib/zhiqiyun/backups/postgres \
+  --file /var/lib/zhiqiyun/backups/postgres/db_YYYYMMDD_HHMMSS_<sha>.sql.gz \
+  --provider obs \
+  --storage-config-id <backup-config-id> \
+  --upload
+```
+
+Missing or invalid rows return `BACKUP_STORAGE_CONFIG_NOT_FOUND`; there is no tenant-default or environment fallback.

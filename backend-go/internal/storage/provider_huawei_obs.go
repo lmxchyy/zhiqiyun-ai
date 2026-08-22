@@ -88,12 +88,20 @@ func (p *huaweiOBSProvider) ensureBucket(ctx context.Context) error {
 }
 
 func (p *huaweiOBSProvider) PutObject(ctx context.Context, objectKey string, source io.Reader, size int64, contentType string) (ObjectMetadata, error) {
+	return p.putObject(ctx, objectKey, source, size, contentType, nil)
+}
+
+func (p *huaweiOBSProvider) PutObjectWithMetadata(ctx context.Context, objectKey string, source io.Reader, size int64, contentType string, metadata map[string]string) (ObjectMetadata, error) {
+	return p.putObject(ctx, objectKey, source, size, contentType, metadata)
+}
+
+func (p *huaweiOBSProvider) putObject(ctx context.Context, objectKey string, source io.Reader, size int64, contentType string, metadata map[string]string) (ObjectMetadata, error) {
 	if err := p.ensureBucket(ctx); err != nil {
 		return ObjectMetadata{}, err
 	}
 	output, err := p.client.PutObject(&huaweiobs.PutObjectInput{
 		PutObjectBasicInput: huaweiobs.PutObjectBasicInput{
-			ObjectOperationInput: huaweiobs.ObjectOperationInput{Bucket: p.bucket, Key: objectKey},
+			ObjectOperationInput: huaweiobs.ObjectOperationInput{Bucket: p.bucket, Key: objectKey, Metadata: metadata},
 			HttpHeader:           huaweiobs.HttpHeader{ContentType: contentType}, ContentLength: size,
 		},
 		Body: source,

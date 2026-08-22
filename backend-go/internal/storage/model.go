@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,7 @@ var (
 	ErrUploadConfirmFailed  = errors.New("STORAGE_UPLOAD_CONFIRM_FAILED")
 	ErrDeleteFailed         = errors.New("STORAGE_DELETE_FAILED")
 	ErrSecretCipherRequired = errors.New("STORAGE_MASTER_KEY is required to manage storage credentials")
+	ErrBackupConfigNotFound = errors.New("BACKUP_STORAGE_CONFIG_NOT_FOUND")
 	ErrInvalidMultipartPart = errors.New("STORAGE_INVALID_MULTIPART_PART")
 	ErrMultipartNotFound    = errors.New("STORAGE_MULTIPART_NOT_FOUND")
 	ErrMultipartExpired     = errors.New("STORAGE_MULTIPART_EXPIRED")
@@ -52,6 +54,27 @@ const (
 	MultipartSessionTTL      = 24 * time.Hour
 )
 
+const BackupObjectPrefix = "backups/postgres/"
+
+func ValidateBackupConfig(item Config) error {
+	if strings.ToLower(strings.TrimSpace(item.Purpose)) != "backup" {
+		return errors.New("backup purpose is required")
+	}
+	if !strings.EqualFold(strings.TrimSpace(item.Provider), "huawei_obs") {
+		return errors.New("backup provider must be huawei_obs")
+	}
+	if item.IsDefault {
+		return errors.New("backup config cannot be default")
+	}
+	if !strings.EqualFold(strings.TrimSpace(item.Status), "ENABLED") {
+		return errors.New("backup config must be enabled")
+	}
+	if strings.TrimSpace(item.ObjectPrefix) != BackupObjectPrefix {
+		return errors.New("backup prefix must be backups/postgres/")
+	}
+	return nil
+}
+
 type Options struct {
 	Environment       string
 	DefaultProvider   string
@@ -79,6 +102,8 @@ type Config struct {
 	ID                    string     `json:"id"`
 	TenantID              string     `json:"tenantId"`
 	Name                  string     `json:"name"`
+	Purpose               string     `json:"purpose,omitempty"`
+	ObjectPrefix          string     `json:"objectPrefix,omitempty"`
 	Provider              string     `json:"provider"`
 	Endpoint              string     `json:"endpoint"`
 	SigningEndpoint       string     `json:"signingEndpoint,omitempty"`
