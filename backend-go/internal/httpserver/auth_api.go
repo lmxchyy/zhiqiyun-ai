@@ -571,7 +571,14 @@ func createRegisteredCustomer(store platformStore, req adminCustomerMutation, gr
 		return adminUser{}, ErrInvalidPointCommand
 	}
 	req.Available = nil
-	return registrationStore.CreateRegisteredCustomer(req, grantPoints)
+	created, err := registrationStore.CreateRegisteredCustomer(req, grantPoints)
+	if err != nil {
+		var stageErr *authLoginStageError
+		if !errors.As(err, &stageErr) {
+			err = &authLoginStageError{stage: authLoginStageUserCreate, err: err}
+		}
+	}
+	return created, err
 }
 
 type loginRequest struct {
@@ -676,6 +683,7 @@ func (a authAPI) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	var req wechatMiniProgramLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -692,9 +700,13 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 	}
 	mockLogin := isWeChatMiniProgramMockCode(code)
 	log.Printf("wechat mini program login request mock=%t", mockLogin)
+	phoneAuthorizationRequired := strings.HasSuffix(strings.TrimSpace(r.URL.Path), "/auth/wechat/phone-login")
 
 	data, err := a.store.AdminData()
 	if err != nil {
+		if phoneAuthorizationRequired {
+			logAuthFlowFailure(r.Context(), authLoginStageUserLookup, err, started)
+		}
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -702,7 +714,6 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 	var wechatSession wechatMiniProgramSession
 	isNewUser := false
 	inviteBindStatus := "not_applicable"
-	phoneAuthorizationRequired := strings.HasSuffix(strings.TrimSpace(r.URL.Path), "/auth/wechat/phone-login")
 	if mockLogin {
 		var ok bool
 		user, ok = findActiveUserByEmail(data.Users, "demo@xianzhi.ai")
@@ -714,7 +725,11 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 	} else {
 		session, err := exchangeWeChatMiniProgramCode(r.Context(), code)
 		if err != nil {
-			log.Printf("wechat mini program code exchange failed: %v", err)
+			mapping := "HTTP_502"
+			if errors.Is(err, errWeChatMiniProgramLoginNotConfigured) {
+				mapping = "HTTP_501"
+			}
+			logAuthFlowFailureWithDetails(r.Context(), authLoginStageWechatCode2Session, err, started, mapping, "wechat", 0)
 			if errors.Is(err, errWeChatMiniProgramLoginNotConfigured) {
 				writeError(w, http.StatusNotImplemented, err)
 				return
@@ -730,6 +745,7 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 			}
 			mobile, err := exchangeWeChatPhoneCode(r.Context(), req.PhoneCode)
 			if err != nil {
+				logAuthFlowFailureWithDetails(r.Context(), authLoginStageWechatPhoneExchange, err, started, "WECHAT_PHONE_AUTH_FAILED", "wechat", 0)
 				writeAuthFlowError(w, http.StatusBadGateway, "WECHAT_PHONE_AUTH_FAILED", "未能验证微信手机号授权")
 				return
 			}
@@ -738,14 +754,14 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 				CampaignCode: req.CampaignCode, RedirectSource: req.RedirectSource, IdempotencyKey: req.IdempotencyKey,
 			})
 			if err != nil {
-				writeMappedAuthFlowError(w, err)
+				writeMappedAuthFlowErrorWithContext(w, r.Context(), authLoginStageUserLookup, err, started)
 				return
 			}
 		} else {
 			_, existed := findUserByEmail(data.Users, wechatMiniProgramSyntheticEmail(session.OpenID))
 			data, user, err = a.userForWeChatMiniProgramSession(data, session)
 			if err != nil {
-				writeMappedAuthFlowError(w, err)
+				writeMappedAuthFlowErrorWithContext(w, r.Context(), authLoginStageIdentityBind, err, started)
 				return
 			}
 			isNewUser = !existed
@@ -754,14 +770,14 @@ func (a authAPI) wechatMiniProgramLogin(w http.ResponseWriter, r *http.Request) 
 
 	response, err := a.authResponseWithToken(r.Context(), data, user)
 	if err != nil {
-		log.Printf("wechat mini program login token issue failed: %v", err)
+		logAuthFlowFailure(r.Context(), authLoginStageForError(err, authLoginStageTokenSession), err, started)
 		writeAuthTokenError(w, err)
 		return
 	}
 	if wechatSession.SessionKey != "" {
 		if sessions, ok := a.sessions.(wechatMiniProgramSessionStore); ok {
 			if err := sessions.PutWeChatSession(r.Context(), user.ID, wechatSession, authSessionTTL); err != nil {
-				log.Printf("wechat mini program session persistence failed")
+				logAuthFlowFailureWithDetails(r.Context(), authLoginStageTokenSession, err, started, "AUTH_SESSION_UNAVAILABLE", "", 0)
 				writeError(w, http.StatusServiceUnavailable, errAuthSessionUnavailable)
 				return
 			}
@@ -1223,28 +1239,28 @@ func (a authAPI) authenticatedUser(r *http.Request, data adminPlatformData) (adm
 func (a authAPI) authResponseWithToken(ctx context.Context, data adminPlatformData, user adminUser) (map[string]any, error) {
 	response, err := a.authResponseWithRolePermissions(ctx, data, user, false)
 	if err != nil {
-		return nil, err
+		return nil, &authLoginStageError{stage: authLoginStageResponseBuild, err: err}
 	}
 	if a.sessions == nil {
 		if !devAuthFallbackEnabled() {
-			return nil, errAuthSessionUnavailable
+			return nil, &authLoginStageError{stage: authLoginStageTokenSession, err: errAuthSessionUnavailable}
 		}
 		response["accessToken"] = encodeAuthToken(user.ID)
 		return response, nil
 	}
 	token, err := randomAuthToken()
 	if err != nil {
-		return nil, err
+		return nil, &authLoginStageError{stage: authLoginStageTokenSession, err: err}
 	}
 	refreshToken, err := randomAuthToken()
 	if err != nil {
-		return nil, err
+		return nil, &authLoginStageError{stage: authLoginStageTokenSession, err: err}
 	}
 	if err := a.sessions.Put(ctx, token, user.ID, authSessionTTL); err != nil {
-		return nil, fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)
+		return nil, &authLoginStageError{stage: authLoginStageTokenSession, err: fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)}
 	}
 	if err := a.sessions.Put(ctx, refreshSessionToken(refreshToken), user.ID, authRefreshSessionTTL); err != nil {
-		return nil, fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)
+		return nil, &authLoginStageError{stage: authLoginStageTokenSession, err: fmt.Errorf("%w: %v", errAuthSessionUnavailable, err)}
 	}
 	response["refreshToken"] = refreshToken
 	response["accessToken"] = token

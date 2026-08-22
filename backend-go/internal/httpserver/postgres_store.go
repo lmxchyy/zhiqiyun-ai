@@ -3136,7 +3136,13 @@ func (s *postgresStore) CreateAdminCustomer(req adminCustomerMutation) (adminUse
 	return item, tx.Commit()
 }
 
-func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, grantPoints int) (adminUser, error) {
+func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, grantPoints int) (item adminUser, returnErr error) {
+	stage := authLoginStageUserCreate
+	defer func() {
+		if returnErr != nil {
+			returnErr = &authLoginStageError{stage: stage, err: returnErr}
+		}
+	}()
 	if grantPoints <= 0 {
 		return adminUser{}, ErrInvalidPointCommand
 	}
@@ -3155,7 +3161,7 @@ func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, gran
 	if err != nil {
 		return adminUser{}, err
 	}
-	item := adminUser{
+	item = adminUser{
 		ID: userID, Email: req.Email, Mobile: strings.TrimSpace(req.Mobile), WeChatOpenIDs: appendUniqueString(nil, req.WeChatOpenID),
 		WeChatUnionID: strings.TrimSpace(req.WeChatUnionID), RegistrationSource: cloneStringMap(req.RegistrationSource), Name: req.Name,
 		Role: fallback(req.Role, "MEMBER"), Status: fallback(req.Status, "ACTIVE"), PlanID: fallback(req.PlanID, "plan_free"),
@@ -3165,6 +3171,7 @@ func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, gran
 	if err := insertUser(ctx, tx, item); err != nil {
 		return adminUser{}, err
 	}
+	stage = authLoginStagePointAccountInit
 	if err := upsertPointAccountByUser(ctx, tx, item.ID, 0); err != nil {
 		return adminUser{}, err
 	}
@@ -3172,6 +3179,7 @@ func (s *postgresStore) CreateRegisteredCustomer(req adminCustomerMutation, gran
 	if err != nil {
 		return adminUser{}, err
 	}
+	stage = authLoginStageRegistrationGrant
 	if _, err := NewPostgresPersonalPointStore(s.db).grantTx(ctx, tx, PersonalPointGrantCommand{
 		AccountID: account.ID, UserID: item.ID, Source: PointSourceRegistrationGift, Points: int64(grantPoints),
 		ReferenceType: "PLAN", ReferenceID: item.PlanID, IdempotencyKey: "registration:" + item.ID, GrantedAt: now,

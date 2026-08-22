@@ -139,6 +139,11 @@ func writeMappedAuthFlowError(w http.ResponseWriter, err error) {
 	writeAuthFlowError(w, http.StatusInternalServerError, "AUTH_INTERNAL_ERROR", "登录服务暂时不可用")
 }
 
+func writeMappedAuthFlowErrorWithContext(w http.ResponseWriter, ctx context.Context, stage authLoginStage, err error, started time.Time) {
+	logAuthFlowFailure(ctx, authLoginStageForError(err, stage), err, started)
+	writeMappedAuthFlowError(w, err)
+}
+
 func normalizeMainlandMobile(value string) string {
 	var builder strings.Builder
 	for _, char := range strings.TrimSpace(value) {
@@ -643,7 +648,7 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 			},
 		})
 		if mergeErr != nil {
-			return data, adminUser{}, false, "", mergeErr
+			return data, adminUser{}, false, "", &authLoginStageError{stage: authLoginStageIdentityBind, err: mergeErr}
 		}
 		return data, adminUser{}, false, "", &authFlowError{
 			status:  http.StatusConflict,
@@ -668,7 +673,7 @@ func (a authAPI) userForPhoneIdentity(mobile string, session wechatMiniProgramSe
 			Mobile: mobile, WeChatOpenID: session.OpenID, WeChatUnionID: session.UnionID,
 		})
 		if updateErr != nil {
-			return data, adminUser{}, false, "", updateErr
+			return data, adminUser{}, false, "", &authLoginStageError{stage: authLoginStageIdentityBind, err: updateErr}
 		}
 		status := "not_applicable"
 		if strings.TrimSpace(input.InviteCode) != "" || strings.TrimSpace(input.InviteToken) != "" {
