@@ -33,7 +33,7 @@
 
         <form v-if="actions.canGift" class="point-operation-card" @submit.prevent="submitGift">
           <strong>赠送积分</strong>
-          <p>可为本次赠送单独指定有效期；留空或填 0 时继续使用服务端全局赠送积分到期策略。</p>
+          <p>可为本次赠送单独指定有效期；填 0 时继续使用服务端全局赠送积分到期策略。</p>
           <label><span>赠送积分</span><input data-testid="gift-points" v-model.number="giftForm.points" type="number" min="1" step="1" /></label>
           <label><span>有效期（天）</span><input data-testid="gift-validity-days" v-model.number="giftForm.validityDays" type="number" min="0" max="3650" step="1" /></label>
           <label><span>原因</span><textarea data-testid="gift-reason" v-model.trim="giftForm.reason" rows="2" maxlength="500"></textarea></label>
@@ -103,7 +103,7 @@ const hasAnyAccess = computed(() => canGrantMembership.value || canAccessCustome
 const lotKey = computed(() => `lots:${props.userId}`);
 const lots = computed(() => store.lotsByUser[props.userId] || []);
 const summaries = computed(() => buildPointLotSummaries(lots.value));
-const giftForm = reactive({ points: 0, validityDays: 365, reason: "", confirmed: false, idempotencyKey: createIdempotencyKey("gift") });
+const giftForm = reactive({ points: 0, validityDays: 0, reason: "", confirmed: false, idempotencyKey: createIdempotencyKey("gift") });
 const correctionForm = reactive({ points: 0, reason: "", confirmed: false, idempotencyKey: createIdempotencyKey("correction") });
 const membershipForm = reactive({ planId: "plan_ai_creator_996", durationDays: 365, reason: "", confirmed: false, idempotencyKey: createIdempotencyKey("membership") });
 const membershipSaving = ref(false);
@@ -144,7 +144,7 @@ async function submitGift() {
     const payload = buildPointMutationPayload(giftForm, "GIFT");
     const result = await store.grantGift(props.userId, payload);
     successMessage.value = result.idempotent ? "该赠送请求已处理，本次未重复增加积分。" : "赠送积分已提交。";
-    giftForm.points = 0; giftForm.validityDays = 365; giftForm.reason = ""; giftForm.confirmed = false; giftForm.idempotencyKey = createIdempotencyKey("gift");
+    giftForm.points = 0; giftForm.validityDays = 0; giftForm.reason = ""; giftForm.confirmed = false; giftForm.idempotencyKey = createIdempotencyKey("gift");
     if (actions.value.canViewLots) void reloadLots();
   } catch (error) {
     localError.value = error instanceof Error ? error.message : "赠送积分失败";
