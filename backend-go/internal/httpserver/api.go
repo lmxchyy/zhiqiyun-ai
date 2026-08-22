@@ -465,6 +465,18 @@ func compactWorkspaceListTasks(tasks []generationTask) []generationTask {
 		} else {
 			items[index].Params = map[string]any{}
 		}
+		// Defense in depth for jsonStore / older SQL projections: these keys
+		// are list-unused and were the residual wire + TOAST amplifiers.
+		delete(items[index].Params, "first_frame")
+		delete(items[index].Params, "final_schema_snapshot")
+		delete(items[index].Params, "limit_snapshot")
+		for _, key := range []string{
+			"organization_id", "tenant_id", "billing_account_id", "billing_scope", "billing_type",
+			"module_code", "model_name", "billingReservedAt", "billingReserved",
+			"billingReservationBalanceBefore", "billingReservationBalanceAfter", "billingReservationPointCost",
+		} {
+			delete(items[index].Params, key)
+		}
 		if len(items[index].Prompt) > 8<<10 {
 			items[index].Prompt = items[index].Prompt[:8<<10]
 		}
