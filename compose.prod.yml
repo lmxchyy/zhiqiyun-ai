@@ -472,6 +472,10 @@ services:
     image: ${BACKUP_UPLOADER_IMAGE:-xianzhi-backup-uploader}:${IMAGE_TAG:-prod}
     env_file:
       - "${BACKUP_OBS_ENV_FILE:-/dev/null}"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      STORAGE_MASTER_KEY: ${STORAGE_MASTER_KEY:-}
+      BACKUP_STORAGE_CONFIG_ID: ${BACKUP_STORAGE_CONFIG_ID:-}
     read_only: true
     restart: "no"
     security_opt:

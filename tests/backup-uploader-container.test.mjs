@@ -15,6 +15,7 @@ test("production uploader packaging pins a non-host Python OBS runtime", () => {
   const requirementsText = readFileSync(requirements, "utf8");
   assert.match(dockerfileText, /^FROM python:3\.11-slim-bookworm$/m);
   assert.match(dockerfileText, /ops\/backup-upload-object-storage\.sh/);
+  assert.match(dockerfileText, /backup-uploader-db/);
   assert.match(requirementsText, /^esdk-obs-python==3\.26\.6$/m);
 });
 
@@ -24,6 +25,7 @@ test("production uploader is opt-in, one-shot, and isolated from business servic
   assert.match(compose, /read_only:\s*true/);
   assert.match(compose, /\.\/backups\/postgres:\/var\/lib\/zhiqiyun\/backups\/postgres:rw/);
   assert.match(compose, /BACKUP_OBS_ENV_FILE:-\/dev\/null/);
+  assert.match(compose, /BACKUP_STORAGE_CONFIG_ID/);
   assert.match(compose, /restart:\s*"no"/);
   assert.doesNotMatch(compose, /DeleteObject|DELETE_OBJECT/i);
 });

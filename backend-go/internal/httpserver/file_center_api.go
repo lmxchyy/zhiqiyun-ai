@@ -308,6 +308,8 @@ func (a fileCenterAPI) listConfigs(w http.ResponseWriter, r *http.Request) {
 type storageConfigRequest struct {
 	TenantID        string `json:"tenantId"`
 	Name            string `json:"name"`
+	Purpose         string `json:"purpose"`
+	ObjectPrefix    string `json:"objectPrefix"`
 	Provider        string `json:"provider"`
 	Endpoint        string `json:"endpoint"`
 	SigningEndpoint string `json:"signingEndpoint"`
@@ -345,7 +347,7 @@ func (a fileCenterAPI) saveConfig(create bool) http.HandlerFunc {
 			tenantID = storagecenter.PlatformTenantID
 		}
 		item, err := a.service.SaveConfig(r.Context(), storagecenter.Config{
-			ID: id, TenantID: tenantID, Name: request.Name, Provider: request.Provider, Endpoint: request.Endpoint, SigningEndpoint: request.SigningEndpoint,
+			ID: id, TenantID: tenantID, Name: request.Name, Purpose: request.Purpose, ObjectPrefix: request.ObjectPrefix, Provider: request.Provider, Endpoint: request.Endpoint, SigningEndpoint: request.SigningEndpoint,
 			Region: request.Region, Bucket: request.Bucket, PublicDomain: request.PublicDomain, CDNDomain: request.CDNDomain,
 			UseSSL: request.UseSSL, ForcePathStyle: request.ForcePathStyle, IsDefault: request.IsDefault,
 			Status: request.Status, CreatedBy: user.ID, UpdatedBy: user.ID,

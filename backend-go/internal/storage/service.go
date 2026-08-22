@@ -369,6 +369,8 @@ func (s *Service) SaveConfig(ctx context.Context, item Config, accessKey string,
 	}
 	existing, existingErr := s.repo.GetConfig(ctx, item.ID)
 	if existingErr == nil {
+		item.Purpose = firstNonEmpty(item.Purpose, existing.Purpose)
+		item.ObjectPrefix = firstNonEmpty(item.ObjectPrefix, existing.ObjectPrefix)
 		item.AccessKeyEncrypted = existing.AccessKeyEncrypted
 		item.SecretKeyEncrypted = existing.SecretKeyEncrypted
 		item.SessionTokenEncrypted = existing.SessionTokenEncrypted
@@ -376,6 +378,11 @@ func (s *Service) SaveConfig(ctx context.Context, item Config, accessKey string,
 		item.CreatedBy = firstNonEmpty(item.CreatedBy, existing.CreatedBy)
 	} else if !errors.Is(existingErr, ErrConfigNotFound) {
 		return Config{}, existingErr
+	}
+	if strings.EqualFold(item.Purpose, "backup") {
+		if err := ValidateBackupConfig(item); err != nil {
+			return Config{}, ErrBackupConfigNotFound
+		}
 	}
 	if accessKey != "" || secretKey != "" || sessionToken != "" {
 		if s.cipher == nil {
@@ -436,6 +443,19 @@ func (s *Service) TestConfig(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 	}
 	return nil
+}
+
+// BackupConfigByID resolves only the explicitly requested backup configuration.
+// It never consults tenant defaults or environment fallback.
+func (s *Service) BackupConfigByID(ctx context.Context, id string) (Config, error) {
+	config, err := s.configByID(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return Config{}, ErrBackupConfigNotFound
+	}
+	if err := ValidateBackupConfig(config); err != nil {
+		return Config{}, ErrBackupConfigNotFound
+	}
+	return config, nil
 }
 
 func (s *Service) resolveConfig(ctx context.Context, tenantID string, specificID string) (Config, error) {

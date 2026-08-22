@@ -26,7 +26,7 @@ func scanConfig(row rowScanner) (Config, error) {
 	var item Config
 	var lastTestAt sql.NullTime
 	err := row.Scan(
-		&item.ID, &item.TenantID, &item.Name, &item.Provider, &item.Endpoint, &item.SigningEndpoint, &item.Region, &item.Bucket,
+		&item.ID, &item.TenantID, &item.Name, &item.Purpose, &item.ObjectPrefix, &item.Provider, &item.Endpoint, &item.SigningEndpoint, &item.Region, &item.Bucket,
 		&item.AccessKeyEncrypted, &item.SecretKeyEncrypted, &item.SessionTokenEncrypted,
 		&item.PublicDomain, &item.CDNDomain, &item.UseSSL, &item.ForcePathStyle, &item.IsDefault, &item.IsSystem,
 		&item.Status, &item.LastTestStatus, &item.LastTestMessage, &lastTestAt,
@@ -47,7 +47,7 @@ func scanConfig(row rowScanner) (Config, error) {
 }
 
 const configColumns = `
-  id, tenant_id, name, provider, endpoint, coalesce(signing_endpoint,''), coalesce(region,''), bucket,
+  id, tenant_id, name, coalesce(purpose,''), coalesce(object_prefix,''), provider, endpoint, coalesce(signing_endpoint,''), coalesce(region,''), bucket,
   coalesce(access_key_encrypted,''), coalesce(secret_key_encrypted,''), coalesce(session_token_encrypted,''),
   coalesce(public_domain,''), coalesce(cdn_domain,''), use_ssl, force_path_style, is_default, is_system,
   status, coalesce(last_test_status,''), coalesce(last_test_message,''), last_test_at,
@@ -89,18 +89,18 @@ func (r *PostgresRepository) SaveConfig(ctx context.Context, item Config) (Confi
 	}
 	_, err = tx.ExecContext(ctx, `
     insert into xz_storage_configs (
-      id,tenant_id,name,provider,endpoint,signing_endpoint,region,bucket,access_key_encrypted,secret_key_encrypted,session_token_encrypted,
+      id,tenant_id,name,purpose,object_prefix,provider,endpoint,signing_endpoint,region,bucket,access_key_encrypted,secret_key_encrypted,session_token_encrypted,
       public_domain,cdn_domain,use_ssl,force_path_style,is_default,is_system,status,created_by,updated_by
-    ) values ($1,$2,$3,$4,$5,nullif($6,''),nullif($7,''),$8,nullif($9,''),nullif($10,''),nullif($11,''),nullif($12,''),nullif($13,''),$14,$15,$16,$17,$18,nullif($19,''),nullif($20,''))
+    ) values ($1,$2,$3,nullif($4,''),nullif($5,''),$6,$7,nullif($8,''),nullif($9,''),$10,nullif($11,''),nullif($12,''),nullif($13,''),nullif($14,''),$15,$16,$17,$18,$19,nullif($20,''),nullif($21,''),nullif($22,''))
     on conflict (id) do update set
-      name=excluded.name, provider=excluded.provider, endpoint=excluded.endpoint, signing_endpoint=excluded.signing_endpoint, region=excluded.region, bucket=excluded.bucket,
+      name=excluded.name, purpose=excluded.purpose, object_prefix=excluded.object_prefix, provider=excluded.provider, endpoint=excluded.endpoint, signing_endpoint=excluded.signing_endpoint, region=excluded.region, bucket=excluded.bucket,
       access_key_encrypted=coalesce(excluded.access_key_encrypted,xz_storage_configs.access_key_encrypted),
       secret_key_encrypted=coalesce(excluded.secret_key_encrypted,xz_storage_configs.secret_key_encrypted),
       session_token_encrypted=coalesce(excluded.session_token_encrypted,xz_storage_configs.session_token_encrypted),
       public_domain=excluded.public_domain, cdn_domain=excluded.cdn_domain, use_ssl=excluded.use_ssl,
       force_path_style=excluded.force_path_style, is_default=excluded.is_default, status=excluded.status,
       updated_by=excluded.updated_by, updated_at=now(), deleted_at=null
-	  `, item.ID, item.TenantID, item.Name, item.Provider, item.Endpoint, item.SigningEndpoint, item.Region, item.Bucket,
+	`, item.ID, item.TenantID, item.Name, item.Purpose, item.ObjectPrefix, item.Provider, item.Endpoint, item.SigningEndpoint, item.Region, item.Bucket,
 		item.AccessKeyEncrypted, item.SecretKeyEncrypted, item.SessionTokenEncrypted, item.PublicDomain, item.CDNDomain,
 		item.UseSSL, item.ForcePathStyle, item.IsDefault, item.IsSystem, item.Status, item.CreatedBy, item.UpdatedBy)
 	if err != nil {

@@ -161,3 +161,10 @@ test("OBS provider errors redact credentials", () => {
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /FAKE_ACCESS_KEY|FAKE_SECRET_KEY/);
 });
+
+test("database-backed backup config mode is explicit and fail-closed", () => {
+  assert.match(uploaderSource, /--storage-config-id/);
+  assert.match(uploaderSource, /BACKUP_STORAGE_CONFIG_NOT_FOUND/);
+  assert.match(uploaderSource, /backup-uploader-db/);
+  assert.match(uploaderSource, /PROVIDER.*obs/);
+});
