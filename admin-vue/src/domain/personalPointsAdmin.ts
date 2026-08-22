@@ -31,6 +31,10 @@ export const CUSTOMER_POINT_ACTION_PERMISSIONS = [
   PERSONAL_POINT_ADMIN_PERMISSION.viewLots
 ] as const;
 
+export interface AdminPointMutationInput extends AdminPointMutationRequest {
+  validityDays?: number;
+}
+
 export function hasAnyPersonalPointsAdminPermission(permissions: readonly string[]) {
   return PERSONAL_POINTS_ADMIN_PERMISSIONS.some((permission) => permissions.includes(permission));
 }
@@ -61,7 +65,7 @@ export function buildPolicyMutationPayload(input: UpdatePointExpiryPolicyRequest
   return { revision, enabled: input.enabled === true, durationValue, changeReason };
 }
 
-export function buildPointMutationPayload(input: AdminPointMutationRequest, kind: "GIFT" | "CORRECTION"): AdminPointMutationRequest {
+export function buildPointMutationPayload(input: AdminPointMutationInput, kind: "GIFT" | "CORRECTION"): AdminPointMutationInput {
   const points = Number(input?.points);
   const reason = String(input?.reason || "").trim();
   const idempotencyKey = String(input?.idempotencyKey || "").trim();
@@ -70,7 +74,12 @@ export function buildPointMutationPayload(input: AdminPointMutationRequest, kind
   }
   if (!reason) throw validationError("请输入操作原因", "POINT_MUTATION_REASON_REQUIRED");
   if (!idempotencyKey) throw validationError("缺少幂等键，请重新打开操作窗口", "POINT_MUTATION_IDEMPOTENCY_REQUIRED");
-  return { points, reason, idempotencyKey };
+  if (kind === "CORRECTION") return { points, reason, idempotencyKey };
+  const validityDays = Number(input?.validityDays || 0);
+  if (!Number.isSafeInteger(validityDays) || validityDays < 0 || validityDays > 3650) {
+    throw validationError("赠送积分有效期必须是 0 到 3650 天的整数", "POINT_MUTATION_VALIDITY_INVALID");
+  }
+  return { points, reason, idempotencyKey, ...(validityDays > 0 ? { validityDays } : {}) };
 }
 
 export function buildPointLotSummaries(lots: readonly PersonalPointLot[]): PointLotSummary[] {
