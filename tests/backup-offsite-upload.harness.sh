@@ -48,10 +48,18 @@ run_fake() {
   "$SCRIPT" --root "$BACKUP_ROOT" --provider fake --fake-root "$FAKE_ROOT" --file "$FILE" --json "$@"
 }
 
+run_obs_fake() {
+  BACKUP_OBS_FAKE=1 BACKUP_OBS_BUCKET=fake-bucket BACKUP_OBS_ENDPOINT=https://obs.example.invalid BACKUP_OBS_REGION=cn-north-4 \
+    BACKUP_OBJECT_FAKE_ROOT="$FAKE_ROOT" \
+    "$SCRIPT" --root "$BACKUP_ROOT" --provider obs --fake-root "$FAKE_ROOT" --file "$FILE" --json "$@"
+}
+
 expect_no_marker() {
-  local status markers
+  local runner status markers
+  runner="$1"
+  shift
   set +e
-  run_fake "$@"
+  "$runner" "$@"
   status=$?
   set -e
   markers="$(find "$BACKUP_ROOT" -type f -name '*.offsite.json' -print)"
@@ -78,19 +86,19 @@ case "$SCENARIO" in
     ;;
   remote-conflict)
     make_valid
-    object="$FAKE_ROOT/zhiqiyun-ai/postgres/deploy/2026/08/$(basename "$FILE")"
+    object="$FAKE_ROOT/backups/postgres/deploy/2026/08/$(basename "$FILE")"
     mkdir -p "$(dirname "$object")"
     printf 'conflicting remote object\n' >"$object"
     printf '{"size": 26, "sha256": "conflicting-checksum"}\n' >"$object.object-meta.json"
-    expect_no_marker --upload
+    expect_no_marker run_fake --upload
     ;;
   remote-size-mismatch)
     make_valid
-    BACKUP_OBJECT_FAKE_HEAD_SIZE_DELTA=1 expect_no_marker --upload
+    BACKUP_OBJECT_FAKE_HEAD_SIZE_DELTA=1 expect_no_marker run_fake --upload
     ;;
   remote-checksum-mismatch)
     make_valid
-    BACKUP_OBJECT_FAKE_HEAD_SHA256=remote-conflict expect_no_marker --upload
+    BACKUP_OBJECT_FAKE_HEAD_SHA256=remote-conflict expect_no_marker run_fake --upload
     ;;
   missing-meta)
     set_file "db_20260822_155244_abcdef1234.sql.gz"
@@ -136,6 +144,59 @@ case "$SCENARIO" in
     env -u BACKUP_OBJECT_ENDPOINT -u BACKUP_OBJECT_BUCKET -u BACKUP_OBJECT_REGION \
       -u TENCENTCLOUD_SECRET_ID -u TENCENTCLOUD_SECRET_KEY \
       "$SCRIPT" --root "$BACKUP_ROOT" --provider cos --file "$FILE" --json --upload
+    ;;
+  obs-valid-upload)
+    make_valid
+    run_obs_fake --upload
+    object_meta="$FAKE_ROOT/backups/postgres/deploy/2026/08/$(basename "$FILE").object-meta.json"
+    grep -q 'sha256' "$object_meta"
+    ;;
+  obs-prefix-injection)
+    make_valid
+    BACKUP_OBJECT_PREFIX=images/ run_obs_fake --upload
+    ;;
+  obs-existing-identical)
+    make_valid
+    run_obs_fake --upload >/dev/null
+    run_obs_fake --upload
+    ;;
+  obs-remote-conflict)
+    make_valid
+    object="$FAKE_ROOT/backups/postgres/deploy/2026/08/$(basename "$FILE")"
+    mkdir -p "$(dirname "$object")"
+    printf 'conflicting remote object\n' >"$object"
+    printf '{"size": 26, "sha256": "conflicting-checksum"}\n' >"$object.object-meta.json"
+    expect_no_marker run_obs_fake --upload
+    ;;
+  obs-auth-failure|obs-timeout|obs-network-failure|obs-partial-upload|obs-meta-failure|obs-sha-failure)
+    make_valid
+    BACKUP_OBJECT_FAKE_FAILURE="${SCENARIO#obs-}" expect_no_marker run_obs_fake --upload
+    ;;
+  obs-secret-redaction)
+    make_valid
+    FAKE_ACCESS_KEY=FAKE_ACCESS_KEY FAKE_SECRET_KEY=FAKE_SECRET_KEY \
+      BACKUP_OBJECT_FAKE_FAILURE=auth-failure expect_no_marker run_obs_fake --upload
+    ;;
+  obs-config-missing)
+    make_valid
+    env -u BACKUP_OBS_BUCKET -u BACKUP_OBS_ENDPOINT -u BACKUP_OBS_REGION \
+      -u OBS_ACCESS_KEY_ID -u OBS_SECRET_ACCESS_KEY -u OBS_SECURITY_TOKEN \
+      "$SCRIPT" --root "$BACKUP_ROOT" --provider obs --file "$FILE" --json --upload
+    ;;
+  obs-bucket-missing)
+    make_valid
+    env -u BACKUP_OBS_BUCKET BACKUP_OBS_ENDPOINT=https://obs.example.invalid BACKUP_OBS_REGION=cn-north-4 \
+      "$SCRIPT" --root "$BACKUP_ROOT" --provider obs --file "$FILE" --json --upload
+    ;;
+  obs-endpoint-missing)
+    make_valid
+    env -u BACKUP_OBS_ENDPOINT BACKUP_OBS_BUCKET=fake-bucket BACKUP_OBS_REGION=cn-north-4 \
+      "$SCRIPT" --root "$BACKUP_ROOT" --provider obs --file "$FILE" --json --upload
+    ;;
+  obs-region-missing)
+    make_valid
+    env -u BACKUP_OBS_REGION BACKUP_OBS_BUCKET=fake-bucket BACKUP_OBS_ENDPOINT=https://obs.example.invalid \
+      "$SCRIPT" --root "$BACKUP_ROOT" --provider obs --file "$FILE" --json --upload
     ;;
 filename-safe)
     if [[ "${OSTYPE:-}" == msys* ]]; then

@@ -88,6 +88,23 @@ jobs:
           bash -n ops/backup-upload-object-storage.sh
           node --test tests/backup-offsite-upload.test.mjs
 
+  backup-offsite:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test Huawei OBS provider contract
+        run: |
+          bash -n ops/backup-upload-object-storage.sh
+          node --test tests/backup-offsite-upload.test.mjs
+
   backend-go:
     runs-on: ubuntu-latest
 
