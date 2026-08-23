@@ -20,9 +20,11 @@ test("immutable deploy and rollback reject rebuild paths", async () => {
   assert.match(deploy, /IMMUTABLE_RELEASE/);
   assert.match(deploy, /--no-build/);
   assert.match(deploy, /RepoDigests/);
+  assert.match(deploy, /bash ops\/verify-release-manifest\.sh/);
   assert.match(rollback, /RELEASE_MANIFEST/);
   assert.match(rollback, /--no-build/);
   assert.match(rollback, /IMMUTABLE_RELEASE/);
+  assert.match(rollback, /bash ops\/verify-release-manifest\.sh/);
 });
 
 test("release manifest validator and CI workflow exist", async () => {
