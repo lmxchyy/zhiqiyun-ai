@@ -9,6 +9,8 @@ COMPOSE_FILE="${COMPOSE_FILE:-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 GIT_REMOTE="${GIT_REMOTE:-origin}"
 GIT_BRANCH="${GIT_BRANCH:-}"
+IMMUTABLE_RELEASE="${IMMUTABLE_RELEASE:-0}"
+RELEASE_MANIFEST="${RELEASE_MANIFEST:-}"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 
 log() {
@@ -81,6 +83,17 @@ log "Current commit: $(git rev-parse --short HEAD)"
 [ -f "$ENV_FILE" ] || fail "$ENV_FILE is missing after the Git update."
 [ -f "$COMPOSE_FILE" ] || fail "$COMPOSE_FILE is missing after the Git update."
 
+if [ "$IMMUTABLE_RELEASE" = "1" ]; then
+  [ -n "$RELEASE_MANIFEST" ] || fail "RELEASE_MANIFEST is required for immutable release."
+  [ -x ops/verify-release-manifest.sh ] || fail "ops/verify-release-manifest.sh must be executable."
+  export XIANZHI_IMAGE_REFERENCE="$(sh ops/verify-release-manifest.sh "$RELEASE_MANIFEST" "$(git rev-parse HEAD)")"
+  case "$XIANZHI_IMAGE_REFERENCE" in
+    *@sha256:*) ;;
+    *) fail "Release manifest did not provide a digest-pinned image reference." ;;
+  esac
+  log "Immutable image: $XIANZHI_IMAGE_REFERENCE"
+fi
+
 log "Validating Docker Compose configuration..."
 docker compose \
   -f "$COMPOSE_FILE" \
@@ -94,11 +107,25 @@ docker compose \
   --env-file "$ENV_FILE" \
   rm -f migrate >/dev/null 2>&1 || true
 
-log "Building and starting production services..."
-docker compose \
-  -f "$COMPOSE_FILE" \
-  --env-file "$ENV_FILE" \
-  up -d --build --remove-orphans
+if [ "$IMMUTABLE_RELEASE" = "1" ]; then
+  log "Pulling and starting immutable production services..."
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull xianzhi-ai smartvideo-worker
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-build --remove-orphans
+else
+  log "Building and starting production services..."
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build --remove-orphans
+fi
+
+if [ "$IMMUTABLE_RELEASE" = "1" ]; then
+  for service in xianzhi-ai smartvideo-worker; do
+    container_id="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q "$service")"
+    [ -n "$container_id" ] || fail "No running container found for $service."
+    repo_digests="$(docker inspect --format '{{join .RepoDigests "\\n"}}' "$container_id")"
+    printf '%s\n' "$repo_digests" | grep -Fqx -- "$XIANZHI_IMAGE_REFERENCE" \
+      || fail "$service is not running the manifest image digest."
+  done
+  log "Running services match the immutable release digest."
+fi
 
 log "Pruning dangling images..."
 docker image prune -f

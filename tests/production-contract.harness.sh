@@ -54,8 +54,12 @@ fi
 command -v docker >/dev/null 2>&1 || fail 'Docker is required for production contract replay'
 docker info >/dev/null 2>&1 || fail 'Docker daemon is unavailable'
 
-image="xianzhi-production-contract:${GITHUB_SHA:-local}"
-docker build --tag "$image" .
+image="${PRODUCTION_CONTRACT_IMAGE:-xianzhi-production-contract:${GITHUB_SHA:-local}}"
+if [ -n "${PRODUCTION_CONTRACT_IMAGE:-}" ]; then
+  printf '%s\n' "[production-contract] reusing prebuilt image: $image"
+else
+  docker build --tag "$image" .
+fi
 docker run --rm --entrypoint sh "$image" -ceu '
   test "$(id -u)" != "0"
   command -v curl >/dev/null

@@ -113,8 +113,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate production contract image and migration replay
-        env:
-          RUN_PRODUCTION_CONTRACT_DOCKER: "1"
         run: |
           bash -n tests/production-contract.harness.sh
           bash tests/production-contract.harness.sh
