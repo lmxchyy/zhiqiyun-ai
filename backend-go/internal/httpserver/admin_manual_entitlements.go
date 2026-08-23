@@ -266,13 +266,11 @@ func grantAdminPointGiftWithValidity(ctx context.Context, service *PersonalPoint
 		if err != nil {
 			return PersonalPointGrantResult{}, adminPointGiftStageError("resolve_expiry", err)
 		}
-		policySnapshot, _ := json.Marshal(map[string]any{"version": 0, "enabled": true, "durationValue": validityDays, "durationUnit": "DAY", "timeZone": "Asia/Shanghai", "adminOverride": true})
-		if _, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET expires_at=$2,policy_version_id=NULL,policy_snapshot=$3::jsonb WHERE id=$1`, result.Lot.ID, expiresAt, policySnapshot); err != nil {
+		policySnapshot := pgSnapshot(lotPolicy(result.Lot))
+		if _, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET expires_at=$2,policy_snapshot=$3::jsonb WHERE id=$1`, result.Lot.ID, expiresAt, policySnapshot); err != nil {
 			return PersonalPointGrantResult{}, adminPointGiftStageError("update_expiry", err)
 		}
 		result.Lot.ExpiresAt = expiresAt
-		result.Lot.PolicyVersionID = ""
-		result.Lot.PolicySnapshot = PointPolicySnapshot{Enabled: true, DurationValue: validityDays, DurationUnit: "DAY", TimeZone: "Asia/Shanghai"}
 		if err := tx.Commit(); err != nil {
 			return PersonalPointGrantResult{}, adminPointGiftStageError("commit", err)
 		}
@@ -292,8 +290,6 @@ func grantAdminPointGiftWithValidity(ctx context.Context, service *PersonalPoint
 					continue
 				}
 				state.Lots[i].ExpiresAt = expiresAt
-				state.Lots[i].PolicyVersionID = ""
-				state.Lots[i].PolicySnapshot = PointPolicySnapshot{Enabled: true, DurationValue: validityDays, DurationUnit: "DAY", TimeZone: "Asia/Shanghai"}
 				result.Lot = state.Lots[i]
 				return nil
 			}

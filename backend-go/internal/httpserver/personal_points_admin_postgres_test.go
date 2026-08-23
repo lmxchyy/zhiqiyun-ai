@@ -3,7 +3,9 @@ package httpserver
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,6 +99,52 @@ func TestPostgresAdminGiftUsesServerPolicyAndAtomicAudit(t *testing.T) {
 	}
 	if audits != 1 {
 		t.Fatalf("gift audit rows=%d", audits)
+	}
+}
+
+func TestPostgresAdminGiftWithExplicitValidityPreservesPolicyProvenance(t *testing.T) {
+	db, store, ctx := openPersonalPointFixRound1Postgres(t)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	accountID, userID := "admin-gift-validity-"+suffix, "user-admin-gift-validity-"+suffix
+	command := PersonalPointGrantCommand{
+		AccountID: accountID, UserID: userID, Source: PointSourceAdminGift, Points: 1000, Reason: "manual validity test", ReferenceType: "ADMIN_GIFT", ReferenceID: "gift-" + suffix, IdempotencyKey: "gift-validity-" + suffix,
+		Audit: PersonalPointAudit{ActorID: "admin-" + suffix, ActorRole: "SUPER_ADMIN", Action: "personal_points.admin_gift", Method: "POST", Path: "/api/v1/admin/customers/" + userID + "/point-gifts", RequestID: "request-gift-validity-" + suffix},
+	}
+
+	result, err := grantAdminPointGiftWithValidity(ctx, NewPersonalPointService(store), command, 365)
+	if err != nil {
+		t.Fatalf("gift with explicit validity failed: %v", err)
+	}
+	if result.Lot.PolicyVersionID == "" || result.Lot.ExpiresAt.IsZero() || result.Lot.AvailablePoints != 1000 {
+		t.Fatalf("unexpected gift result: %+v", result)
+	}
+
+	var policyVersionID string
+	var lotCount, walletCount, movementCount int
+	if err := db.QueryRowContext(ctx, `SELECT policy_version_id FROM xz_personal_point_lots WHERE id=$1`, result.Lot.ID).Scan(&policyVersionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_lots WHERE account_id=$1`, accountID).Scan(&lotCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_wallet_ledger WHERE account_id=$1`, accountID).Scan(&walletCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_lot_movements WHERE account_id=$1`, accountID).Scan(&movementCount); err != nil {
+		t.Fatal(err)
+	}
+	if policyVersionID == "" || lotCount != 1 || walletCount != 1 || movementCount != 1 {
+		t.Fatalf("policy/ledger provenance=%q lots/wallets/movements=%d/%d/%d", policyVersionID, lotCount, walletCount, movementCount)
+	}
+}
+
+func TestAdminGiftValidityUpdateDoesNotClearPolicyVersion(t *testing.T) {
+	source, err := os.ReadFile("admin_manual_entitlements.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(source), "policy_version_id=NULL") {
+		t.Fatal("explicit-validity ADMIN_GIFT must preserve the canonical policy_version_id")
 	}
 }
 
