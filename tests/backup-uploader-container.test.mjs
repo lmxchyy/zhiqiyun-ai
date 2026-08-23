@@ -16,6 +16,7 @@ test("production uploader packaging pins a non-host Python OBS runtime", () => {
   assert.match(dockerfileText, /^FROM python:3\.11-slim-bookworm$/m);
   assert.match(dockerfileText, /ops\/backup-upload-object-storage\.sh/);
   assert.match(dockerfileText, /backup-uploader-db/);
+  assert.match(dockerfileText, /backup-config-clone/);
   assert.match(requirementsText, /^esdk-obs-python==3\.26\.6$/m);
 });
 

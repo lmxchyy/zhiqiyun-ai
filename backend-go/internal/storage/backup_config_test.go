@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateBackupConfigRequiresDedicatedHuaweiPrefix(t *testing.T) {
@@ -49,5 +50,42 @@ func TestBackupConfigByIDDoesNotFallbackToBusinessOrEnvironmentConfig(t *testing
 	}
 	if _, err := service.BackupConfigByID(context.Background(), "business-default"); err != ErrBackupConfigNotFound {
 		t.Fatalf("business config error = %v, want ErrBackupConfigNotFound", err)
+	}
+}
+
+func TestCloneBackupConfigReencryptsSelectedBusinessCredential(t *testing.T) {
+	service, repo, _, _ := testService(100)
+	ctx := context.Background()
+	business, err := service.SaveConfig(ctx, Config{
+		ID: "business-default", TenantID: PlatformTenantID, Name: "Business OBS", Provider: "huawei_obs",
+		Endpoint: "https://obs.example", Region: "cn-north-9", Bucket: "zhiqiyun-private", IsDefault: true,
+		Status: "ENABLED", CreatedBy: "admin", UpdatedBy: "admin",
+	}, "business-access", "business-secret", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateConfigTest(ctx, business.ID, "SUCCESS", "ok", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := service.CloneBackupConfig(ctx, business.ID, "backup-config", "Temporary PostgreSQL Backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup.Purpose != "backup" || backup.ObjectPrefix != BackupObjectPrefix || backup.IsDefault || backup.Provider != "huawei_obs" {
+		t.Fatalf("unexpected backup config: %+v", backup)
+	}
+	raw, err := repo.GetConfig(ctx, backup.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw.AccessKeyEncrypted == "" || raw.SecretKeyEncrypted == "" || strings.Contains(raw.AccessKeyEncrypted, "business-access") || strings.Contains(raw.SecretKeyEncrypted, "business-secret") {
+		t.Fatal("backup credential was not kept encrypted")
+	}
+	if raw.AccessKeyEncrypted == business.AccessKeyEncrypted || raw.SecretKeyEncrypted == business.SecretKeyEncrypted {
+		t.Fatal("credential ciphertext must be re-encrypted under the backup config ID")
+	}
+	current, err := repo.GetConfig(ctx, business.ID)
+	if err != nil || !current.IsDefault {
+		t.Fatalf("business default changed: %+v err=%v", current, err)
 	}
 }

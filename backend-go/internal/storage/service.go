@@ -414,6 +414,37 @@ func (s *Service) SaveConfig(ctx context.Context, item Config, accessKey string,
 	return s.repo.SaveConfig(ctx, item)
 }
 
+// CloneBackupConfig creates a non-default backup config from an explicitly
+// selected enabled Huawei OBS config. Credentials are decrypted only inside
+// this service and immediately re-encrypted under the new config ID.
+func (s *Service) CloneBackupConfig(ctx context.Context, sourceID, targetID, name string) (Config, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	targetID = strings.TrimSpace(targetID)
+	name = strings.TrimSpace(name)
+	if sourceID == "" || targetID == "" || name == "" || sourceID == targetID {
+		return Config{}, ErrBackupConfigNotFound
+	}
+	if _, err := s.repo.GetConfig(ctx, targetID); err == nil {
+		return Config{}, ErrConfigAlreadyExists
+	} else if !errors.Is(err, ErrConfigNotFound) {
+		return Config{}, err
+	}
+	source, err := s.configByID(ctx, sourceID)
+	if err != nil {
+		return Config{}, err
+	}
+	if !strings.EqualFold(source.Provider, "huawei_obs") || !strings.EqualFold(source.Status, "ENABLED") || !strings.EqualFold(source.LastTestStatus, "SUCCESS") {
+		return Config{}, ErrBackupConfigNotFound
+	}
+	return s.SaveConfig(ctx, Config{
+		ID: targetID, TenantID: source.TenantID, Name: name, Purpose: "backup", ObjectPrefix: BackupObjectPrefix,
+		Provider: source.Provider, Endpoint: source.Endpoint, SigningEndpoint: source.SigningEndpoint, Region: source.Region,
+		Bucket: source.Bucket, PublicDomain: source.PublicDomain, CDNDomain: source.CDNDomain, UseSSL: source.UseSSL,
+		ForcePathStyle: source.ForcePathStyle, IsDefault: false, IsSystem: false, Status: "ENABLED",
+		CreatedBy: source.UpdatedBy, UpdatedBy: source.UpdatedBy,
+	}, source.AccessKey, source.SecretKey, source.SessionToken)
+}
+
 func (s *Service) DeleteConfig(ctx context.Context, id string) error {
 	if id == EnvConfigID {
 		return ErrFileForbidden

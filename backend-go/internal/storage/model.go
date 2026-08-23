@@ -22,6 +22,7 @@ var (
 	ErrDeleteFailed         = errors.New("STORAGE_DELETE_FAILED")
 	ErrSecretCipherRequired = errors.New("STORAGE_MASTER_KEY is required to manage storage credentials")
 	ErrBackupConfigNotFound = errors.New("BACKUP_STORAGE_CONFIG_NOT_FOUND")
+	ErrConfigAlreadyExists  = errors.New("STORAGE_CONFIG_ALREADY_EXISTS")
 	ErrInvalidMultipartPart = errors.New("STORAGE_INVALID_MULTIPART_PART")
 	ErrMultipartNotFound    = errors.New("STORAGE_MULTIPART_NOT_FOUND")
 	ErrMultipartExpired     = errors.New("STORAGE_MULTIPART_EXPIRED")
