@@ -4,6 +4,7 @@ COPY backend-go/go.mod backend-go/go.sum ./
 RUN go mod download
 COPY backend-go/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/backup-uploader-db ./cmd/backup-uploader
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/backup-config-clone ./cmd/backup-config-clone
 
 FROM python:3.11-slim-bookworm
 
@@ -20,6 +21,7 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check -r /tmp/req
 
 COPY ops/backup-upload-object-storage.sh /usr/local/bin/backup-upload-object-storage.sh
 COPY --from=backup-uploader-builder /out/backup-uploader-db /usr/local/bin/backup-uploader-db
+COPY --from=backup-uploader-builder /out/backup-config-clone /usr/local/bin/backup-config-clone
 RUN chmod 0755 /usr/local/bin/backup-upload-object-storage.sh
 RUN chmod 0755 /usr/local/bin/backup-uploader-db
 
