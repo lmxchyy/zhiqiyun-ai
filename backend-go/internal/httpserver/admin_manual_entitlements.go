@@ -14,7 +14,8 @@ import (
 
 const (
 	adminManualMembershipSource = "ADMIN_MANUAL_MEMBERSHIP"
-	adminManualMaxValidityDays   = 3650
+	adminManualMaxValidityDays  = 3650
+	adminMembershipTenantID     = "tenant_default"
 )
 
 type adminMembershipGrantRequest struct {
@@ -161,9 +162,13 @@ func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, act
 		return adminMembershipGrantResult{}, existingErr
 	}
 
-	var tenantID, previousPlanID, previousLevel, previousExpiry string
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(nullif(tenant_id,''),'tenant_default'),coalesce(plan_id,''),coalesce(member_level,''),coalesce(subscription_expires_at,'') FROM xz_users WHERE id=$1 FOR UPDATE`, userID).
-		Scan(&tenantID, &previousPlanID, &previousLevel, &previousExpiry); err != nil {
+	// xz_users is the global user projection and does not carry tenant_id.
+	// Membership entitlement records still require a tenant scope; admin
+	// customer grants use the canonical default tenant used by this projection.
+	tenantID := adminMembershipTenantID
+	var previousPlanID, previousLevel, previousExpiry string
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(plan_id,''),coalesce(member_level,''),coalesce(subscription_expires_at,'') FROM xz_users WHERE id=$1 FOR UPDATE`, userID).
+		Scan(&previousPlanID, &previousLevel, &previousExpiry); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return adminMembershipGrantResult{}, ErrPointNotFound
 		}
