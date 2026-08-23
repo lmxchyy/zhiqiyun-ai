@@ -36,7 +36,7 @@ fi
 if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   [ -x ops/verify-release-manifest.sh ] || { echo "[rollback] ERROR: manifest validator is not executable." >&2; exit 1; }
   [ -f "$RELEASE_MANIFEST" ] || { echo "[rollback] ERROR: release manifest does not exist." >&2; exit 1; }
-  XIANZHI_IMAGE_REFERENCE="$(sh ops/verify-release-manifest.sh "$RELEASE_MANIFEST")"
+  XIANZHI_IMAGE_REFERENCE="$(bash ops/verify-release-manifest.sh "$RELEASE_MANIFEST")"
   export XIANZHI_IMAGE_REFERENCE
   echo "[rollback] Pulling exact immutable image: $XIANZHI_IMAGE_REFERENCE"
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull xianzhi-ai smartvideo-worker

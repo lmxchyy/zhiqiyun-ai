@@ -86,7 +86,7 @@ log "Current commit: $(git rev-parse --short HEAD)"
 if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   [ -n "$RELEASE_MANIFEST" ] || fail "RELEASE_MANIFEST is required for immutable release."
   [ -x ops/verify-release-manifest.sh ] || fail "ops/verify-release-manifest.sh must be executable."
-  export XIANZHI_IMAGE_REFERENCE="$(sh ops/verify-release-manifest.sh "$RELEASE_MANIFEST" "$(git rev-parse HEAD)")"
+  export XIANZHI_IMAGE_REFERENCE="$(bash ops/verify-release-manifest.sh "$RELEASE_MANIFEST" "$(git rev-parse HEAD)")"
   case "$XIANZHI_IMAGE_REFERENCE" in
     *@sha256:*) ;;
     *) fail "Release manifest did not provide a digest-pinned image reference." ;;

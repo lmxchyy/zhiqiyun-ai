@@ -66,7 +66,7 @@ jobs:
               json.dump(manifest, handle, indent=2, sort_keys=True)
               handle.write("\n")
           PY
-          sh ops/verify-release-manifest.sh release-manifest.json "$GITHUB_SHA" "$IMAGE@$digest"
+          bash ops/verify-release-manifest.sh release-manifest.json "$GITHUB_SHA" "$IMAGE@$digest"
       - name: Upload release manifest
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
