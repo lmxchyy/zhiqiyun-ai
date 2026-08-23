@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -122,5 +123,12 @@ func TestAdminGiftReferenceIncludesValidityForIdempotencyFingerprint(t *testing.
 	}
 	if got := adminGiftReferenceID("gift-1", 0); got != "gift-1" {
 		t.Fatalf("unexpected default reference id: %s", got)
+	}
+}
+
+func TestAdminPointGiftStageErrorIncludesStageWithoutRequestPayload(t *testing.T) {
+	err := adminPointGiftStageError("grant_tx", errors.New("constraint violation"))
+	if err == nil || !strings.Contains(err.Error(), "stage=grant_tx") || strings.Contains(err.Error(), "points") {
+		t.Fatalf("unexpected diagnostic error: %v", err)
 	}
 }

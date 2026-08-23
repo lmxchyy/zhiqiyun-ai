@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -187,6 +188,7 @@ func (a adminAPI) customerPointGrant(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 	if err != nil {
+		log.Printf("admin point gift failed request_id=%s user_id=%s error=%v", requestIDFromPointMutation(r, request.IdempotencyKey), userID, err)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
