@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	adminManualMembershipSource = "ADMIN_MANUAL_MEMBERSHIP"
-	adminManualMaxValidityDays  = 3650
-	adminMembershipTenantID     = "tenant_default"
+	adminManualMembershipSource              = "ADMIN_MANUAL_MEMBERSHIP"
+	adminManualMaxValidityDays               = 3650
+	adminMembershipTenantID                  = "tenant_default"
+	adminMembershipUserProjectionUpdateQuery = `UPDATE xz_users SET plan_id=$2::text,member_level=$3::text,subscription_expires_at=$4::text,updated_at=$5::text,raw=coalesce(raw,'{}'::jsonb)||jsonb_build_object('planId',$2::text,'memberLevel',$3::text,'subscriptionExpiresAt',$4::text,'updatedAt',$5::text) WHERE id=$1::text`
 )
 
 type adminMembershipGrantRequest struct {
@@ -180,7 +181,7 @@ func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, act
 		return adminMembershipGrantResult{}, err
 	}
 	nowText, expiryText := now.Format(time.RFC3339Nano), expiresAt.UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `UPDATE xz_users SET plan_id=$2,member_level=$3,subscription_expires_at=$4,updated_at=$5,raw=coalesce(raw,'{}'::jsonb)||jsonb_build_object('planId',$2,'memberLevel',$3,'subscriptionExpiresAt',$4,'updatedAt',$5) WHERE id=$1`, userID, plan.ID, plan.MemberLevel, expiryText, nowText); err != nil {
+	if _, err := tx.ExecContext(ctx, adminMembershipUserProjectionUpdateQuery, userID, plan.ID, plan.MemberLevel, expiryText, nowText); err != nil {
 		return adminMembershipGrantResult{}, err
 	}
 	metadata := map[string]any{

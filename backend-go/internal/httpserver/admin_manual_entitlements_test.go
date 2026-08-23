@@ -80,6 +80,15 @@ func TestAdminMembershipUsesCanonicalDefaultTenant(t *testing.T) {
 	}
 }
 
+func TestAdminMembershipUserProjectionUpdateTypesParameters(t *testing.T) {
+	query := adminMembershipUserProjectionUpdateQuery
+	for _, cast := range []string{"$1::text", "$2::text", "$3::text", "$4::text", "$5::text"} {
+		if !strings.Contains(query, cast) {
+			t.Fatalf("membership projection update must explicitly type %s: %s", cast, query)
+		}
+	}
+}
+
 func TestDecodeAdminPointMutationAllowsExplicitGiftValidityAndMembershipEnvelope(t *testing.T) {
 	gift := httptest.NewRequest("POST", "/", strings.NewReader(`{"points":1000,"validityDays":365,"reason":"客户赠送","idempotencyKey":"gift-1"}`))
 	giftReq, err := decodeAdminPointMutation(gift)
