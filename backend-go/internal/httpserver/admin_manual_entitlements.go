@@ -255,26 +255,26 @@ func grantAdminPointGiftWithValidity(ctx context.Context, service *PersonalPoint
 	case *PostgresPersonalPointStore:
 		tx, err := repo.begin(ctx)
 		if err != nil {
-			return PersonalPointGrantResult{}, err
+			return PersonalPointGrantResult{}, adminPointGiftStageError("begin", err)
 		}
 		defer func() { _ = tx.Rollback() }()
 		result, err := repo.grantTx(ctx, tx, cmd)
 		if err != nil {
-			return PersonalPointGrantResult{}, err
+			return PersonalPointGrantResult{}, adminPointGiftStageError("grant_tx", err)
 		}
 		expiresAt, err := adminManualExpiry(result.Lot.GrantedAt, validityDays)
 		if err != nil {
-			return PersonalPointGrantResult{}, err
+			return PersonalPointGrantResult{}, adminPointGiftStageError("resolve_expiry", err)
 		}
 		policySnapshot, _ := json.Marshal(map[string]any{"version": 0, "enabled": true, "durationValue": validityDays, "durationUnit": "DAY", "timeZone": "Asia/Shanghai", "adminOverride": true})
 		if _, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET expires_at=$2,policy_version_id=NULL,policy_snapshot=$3::jsonb WHERE id=$1`, result.Lot.ID, expiresAt, policySnapshot); err != nil {
-			return PersonalPointGrantResult{}, err
+			return PersonalPointGrantResult{}, adminPointGiftStageError("update_expiry", err)
 		}
 		result.Lot.ExpiresAt = expiresAt
 		result.Lot.PolicyVersionID = ""
 		result.Lot.PolicySnapshot = PointPolicySnapshot{Enabled: true, DurationValue: validityDays, DurationUnit: "DAY", TimeZone: "Asia/Shanghai"}
 		if err := tx.Commit(); err != nil {
-			return PersonalPointGrantResult{}, err
+			return PersonalPointGrantResult{}, adminPointGiftStageError("commit", err)
 		}
 		return result, nil
 	case *JSONPersonalPointStore:
@@ -303,4 +303,11 @@ func grantAdminPointGiftWithValidity(ctx context.Context, service *PersonalPoint
 	default:
 		return PersonalPointGrantResult{}, ErrInvalidPointCommand
 	}
+}
+
+func adminPointGiftStageError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("admin point gift stage=%s: %w", stage, err)
 }
