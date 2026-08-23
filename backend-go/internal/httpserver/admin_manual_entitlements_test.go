@@ -36,6 +36,12 @@ func TestAdminManualExpiryUsesExplicitDays(t *testing.T) {
 	}
 }
 
+func TestAdminPointGiftPolicyTimezoneIsAvailable(t *testing.T) {
+	if _, err := time.LoadLocation("Asia/Shanghai"); err != nil {
+		t.Fatalf("production point-gift policy timezone must be available: %v", err)
+	}
+}
+
 func TestResolveAdminMembershipExpiryNeverShortensExistingMembership(t *testing.T) {
 	now := time.Date(2026, 8, 23, 3, 0, 0, 0, time.UTC)
 	longer := now.AddDate(0, 0, 730)
