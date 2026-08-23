@@ -130,6 +130,25 @@ Rollback to a commit:
 
 Important: code rollback is not database rollback. If the failed release already ran database schema migrations, confirm that the old code is compatible with the current database. If needed, restore PostgreSQL from `backups/postgres`.
 
+## 6.1 Immutable image release
+
+The preferred release path builds the application image once in GitHub Actions,
+runs the production-contract replay against that exact image, pushes it to the
+registry, and publishes a release manifest. Production then uses the manifest's
+full `image@sha256:digest`; it does not build application services locally.
+
+```bash
+IMMUTABLE_RELEASE=1 \
+RELEASE_MANIFEST=/opt/zhiqiyun-ai/release-manifest.json \
+bash ./deploy.sh
+```
+
+The deploy gate verifies the manifest Git SHA, pulls without build, and checks
+the running containers' `RepoDigests`. A mismatch fails the deployment. An
+immutable rollback uses a previously verified release manifest and never
+rebuilds the application image. Image rollback does not roll back the database
+schema.
+
 ## 7. Backups
 
 Manual backups are written to:

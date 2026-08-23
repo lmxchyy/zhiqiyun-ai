@@ -11,7 +11,7 @@ services:
         ALPINE_MIRROR: "${ALPINE_MIRROR:-https://mirrors.aliyun.com/alpine}"
         OFFICECLI_INSTALL_URL: "${OFFICECLI_INSTALL_URL:-https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh}"
         OFFICECLI_INSTALL_SHA256: "${OFFICECLI_INSTALL_SHA256:-}"
-    image: ${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}
+    image: ${XIANZHI_IMAGE_REFERENCE:-${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3100}:3100"
     volumes:
@@ -185,7 +185,7 @@ services:
 
   smartvideo-worker:
     platform: "${TARGET_PLATFORM:?请使用 ./deploy-auto.sh 启动，自动设置 TARGET_PLATFORM}"
-    image: ${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}
+    image: ${XIANZHI_IMAGE_REFERENCE:-${XIANZHI_IMAGE:-xianzhi-ai-platform}:${IMAGE_TAG:-prod}}
     command: ["/app/smartvideo-worker"]
     restart: unless-stopped
     logging:

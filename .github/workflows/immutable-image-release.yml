@@ -1,0 +1,76 @@
+name: immutable-image-release
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release-image:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      IMAGE_TAG: git-${{ github.sha }}
+      TARGET_PLATFORM: linux/amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set lowercase image name
+        shell: bash
+        run: |
+          echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
+          echo "PRODUCTION_CONTRACT_IMAGE=${IMAGE,,}:$IMAGE_TAG" >> "$GITHUB_ENV"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR for main releases
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build production image once
+        run: docker buildx build --platform "$TARGET_PLATFORM" --tag "$IMAGE:$IMAGE_TAG" --load .
+      - name: Run production contract against the built image
+        env:
+          RUN_PRODUCTION_CONTRACT_DOCKER: "1"
+        run: |
+          bash -n tests/production-contract.harness.sh
+          bash tests/production-contract.harness.sh
+      - name: Push the tested image and write release manifest
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker push "$IMAGE:$IMAGE_TAG"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$IMAGE_TAG" | sed 's#^.*@##')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          python3 - "$GITHUB_SHA" "$IMAGE" "$digest" <<'PY'
+          import datetime
+          import json
+          import sys
+          git_sha, image, digest = sys.argv[1:]
+          manifest = {
+              "git_sha": git_sha,
+              "image": image,
+              "digest": digest,
+              "image_reference": image + "@" + digest,
+              "built_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+              "production_contract": "passed",
+          }
+          with open("release-manifest.json", "w") as handle:
+              json.dump(manifest, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+          sh ops/verify-release-manifest.sh release-manifest.json "$GITHUB_SHA" "$IMAGE@$digest"
+      - name: Upload release manifest
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ github.sha }}
+          path: release-manifest.json
+          if-no-files-found: error
