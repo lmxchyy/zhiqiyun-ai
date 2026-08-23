@@ -74,6 +74,12 @@ func TestFindAdminMembershipPlanAccepts996WithoutGrantingPoints(t *testing.T) {
 	}
 }
 
+func TestAdminMembershipUsesCanonicalDefaultTenant(t *testing.T) {
+	if adminMembershipTenantID != "tenant_default" {
+		t.Fatalf("admin membership tenant = %q, want tenant_default", adminMembershipTenantID)
+	}
+}
+
 func TestDecodeAdminPointMutationAllowsExplicitGiftValidityAndMembershipEnvelope(t *testing.T) {
 	gift := httptest.NewRequest("POST", "/", strings.NewReader(`{"points":1000,"validityDays":365,"reason":"客户赠送","idempotencyKey":"gift-1"}`))
 	giftReq, err := decodeAdminPointMutation(gift)
