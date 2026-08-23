@@ -7,6 +7,27 @@ import type {
   PointLotFilters,
   UpdatePointExpiryPolicyRequest
 } from "../types/personalPointsAdmin.ts";
+import type { AdminPointMutationInput } from "../domain/personalPointsAdmin.ts";
+
+export interface ManualMembershipGrantRequest {
+  planId: string;
+  durationDays: number;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface ManualMembershipGrantResponse {
+  membership: {
+    userId: string;
+    planId: string;
+    memberLevel: string;
+    effectiveAt: string;
+    expiresAt: string;
+    durationDays: number;
+    idempotent: boolean;
+  };
+  idempotent: boolean;
+}
 
 export const personalPointsAdminApi = {
   getPolicy() {
@@ -29,8 +50,27 @@ export const personalPointsAdminApi = {
     if (Number.isSafeInteger(filters.offset) && Number(filters.offset) >= 0) params.offset = Number(filters.offset);
     return adminRequest<PersonalPointLotsResponse>({ method: "GET", url: customerPointPath(userId, "point-lots"), params });
   },
-  grantGift(userId: string, input: AdminPointMutationRequest) {
+  grantGift(userId: string, input: AdminPointMutationInput) {
     return adminRequest<AdminPointGiftResponse>({ method: "POST", url: customerPointPath(userId, "point-gifts"), data: buildPointMutationPayload(input, "GIFT"), retryOnUnauthorized: false });
+  },
+  grantMembership(userId: string, input: ManualMembershipGrantRequest) {
+    const planId = String(input?.planId || "").trim();
+    const reason = String(input?.reason || "").trim();
+    const idempotencyKey = String(input?.idempotencyKey || "").trim();
+    const durationDays = Number(input?.durationDays || 0);
+    if (!planId || !reason || !idempotencyKey) throw new Error("套餐、原因和幂等键不能为空");
+    if (!Number.isSafeInteger(durationDays) || durationDays <= 0 || durationDays > 3650) throw new Error("会员有效期必须是 1 到 3650 天的整数");
+    return adminRequest<ManualMembershipGrantResponse>({
+      method: "POST",
+      url: customerPointPath(userId, "point-gifts"),
+      data: {
+        points: 0,
+        reason,
+        idempotencyKey,
+        membership: { planId, durationDays, reason, idempotencyKey }
+      },
+      retryOnUnauthorized: false
+    });
   },
   correctBalance(userId: string, input: AdminPointMutationRequest) {
     return adminRequest<AdminPointCorrectionResponse>({ method: "POST", url: customerPointPath(userId, "point-corrections"), data: buildPointMutationPayload(input, "CORRECTION"), retryOnUnauthorized: false });
