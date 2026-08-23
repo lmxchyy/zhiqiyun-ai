@@ -105,6 +105,23 @@ jobs:
           bash -n ops/backup-upload-object-storage.sh
           node --test tests/backup-offsite-upload.test.mjs tests/backup-uploader-container.test.mjs
 
+  production-contract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate production contract image and migration replay
+        env:
+          RUN_PRODUCTION_CONTRACT_DOCKER: "1"
+        run: |
+          bash -n tests/production-contract.harness.sh
+          bash tests/production-contract.harness.sh
+
+      - name: Validate contract test entry point
+        run: node --test tests/production-contract.test.mjs tests/migration-release.test.mjs
+
   backend-go:
     runs-on: ubuntu-latest
 
