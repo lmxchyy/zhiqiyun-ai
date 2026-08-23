@@ -207,7 +207,19 @@ important objects to independent storage and periodically test restoration.
 
 The Docker image does not install OfficeCLI by default. If you explicitly build with `INSTALL_OFFICECLI=true`, set `OFFICECLI_INSTALL_SHA256` to the reviewed installer script checksum; the build fails before execution when the checksum is missing or mismatched.
 
-The migration service currently runs every SQL file in `database/migrations` during Compose startup. Before releases with schema changes, review whether migrations are idempotent. A later improvement is to add a migration history table or a dedicated migration tool.
+The migration service runs `ops/run-migrations.sh` before the API and worker. On the
+first run it uses the existing `MIGRATION_FILES` value as the already-deployed
+schema baseline and records only those explicitly named baseline files in
+`schema_migrations` without re-running them. Files below the baseline version are
+skipped but are not falsely inserted into history. After that bootstrap, it discovers numbered forward migrations in
+`database/migrations` in sorted order, skips files ending in `.down.sql`, applies
+only files absent from `schema_migrations`, and records each file only after
+`psql` succeeds. Migration output lists every baseline, skipped, and applied file.
+
+The API and worker depend on the migration service completing successfully. A
+migration error therefore stops `deploy.sh` before either application service
+starts. Do not add new migration names to `MIGRATION_FILES`; that variable is
+only the legacy bootstrap marker. Never run `.down.sql` files during deployment.
 
 ## 11. GitHub + Gitee deployment strategy
 

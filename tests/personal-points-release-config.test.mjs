@@ -24,12 +24,8 @@ test("production environment example declares explicit expiry worker settings", 
 
 test("migration one-off fails immediately when a selected SQL file fails", async () => {
   const compose = await readFile(new URL("compose.prod.yml", root), "utf8");
-  const normalizedCompose = compose.replaceAll("\r\n", "\n");
-  const migrateCommand = normalizedCompose.slice(
-    normalizedCompose.indexOf("\n  migrate:\n"),
-    normalizedCompose.indexOf("\n  redis:\n")
-  );
-  const failFastAt = migrateCommand.indexOf("set -eu");
-  const loopAt = migrateCommand.indexOf("for name in");
-  assert.ok(failFastAt >= 0 && failFastAt < loopAt, "migrate command must enable set -eu before the file loop");
+  const runner = await readFile(new URL("ops/run-migrations.sh", root), "utf8");
+  assert.match(runner, /^set -eu$/m, "migration runner must fail fast");
+  assert.match(runner, /\\\\i \$MIGRATION_DIR\/\$name/);
+  assert.match(compose, /condition:\s*service_completed_successfully/);
 });
