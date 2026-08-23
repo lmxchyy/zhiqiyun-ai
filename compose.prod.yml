@@ -350,31 +350,13 @@ services:
       POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
       POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
       PGPASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      PGHOST: "postgres"
       MIGRATION_FILES: "${MIGRATION_FILES:-}"
     volumes:
       - ./database/migrations:/migrations:ro
+      - ./ops/run-migrations.sh:/usr/local/bin/run-migrations.sh:ro
     command:
-      - sh
-      - -c
-      - |
-        set -eu
-        if [ -z "$${MIGRATION_FILES}" ]; then
-          echo "No migration files selected; skipping automatic migration."
-          exit 0
-        fi
-        for name in $${MIGRATION_FILES}; do
-          case "$${name}" in
-            [0-9][0-9][0-9]-*.sql) ;;
-            *) echo "Invalid migration filename: $${name}"; exit 2 ;;
-          esac
-          file="/migrations/$${name}"
-          if [ ! -f "$${file}" ]; then
-            echo "Migration file not found: $${name}"
-            exit 3
-          fi
-          echo "Applying $$file"
-          psql -h postgres -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" -v ON_ERROR_STOP=1 -f "$$file"
-        done
+      - /usr/local/bin/run-migrations.sh
     depends_on:
       postgres:
         condition: service_healthy
