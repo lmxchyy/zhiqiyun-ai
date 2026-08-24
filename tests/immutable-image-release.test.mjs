@@ -19,7 +19,8 @@ test("immutable deploy and rollback reject rebuild paths", async () => {
   const rollback = await source("rollback.sh");
   assert.match(deploy, /IMMUTABLE_RELEASE/);
   assert.match(deploy, /--no-build/);
-  assert.match(deploy, /RepoDigests/);
+  assert.match(deploy, /docker image inspect .*XIANZHI_IMAGE_REFERENCE/);
+  assert.match(deploy, /docker inspect --format '\{\{\.Image\}\}'/);
   assert.match(deploy, /bash ops\/verify-release-manifest\.sh/);
   assert.match(rollback, /RELEASE_MANIFEST/);
   assert.match(rollback, /--no-build/);
