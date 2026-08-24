@@ -74,3 +74,19 @@ HTTP/provider -> payment application -> billing entitlement contract
 The paid 996 path continues to grant its server-side snapshot amount exactly
 once. No schema, migration, public API, or production deployment behavior is
 changed by this slice.
+
+## Current slice: Points repository boundary
+
+The PostgreSQL point store now owns ADMIN_GIFT lot-expiry persistence through
+`UpdateLotExpiryTx`. The admin transport passes the existing transaction into
+the store; it no longer embeds point-lot SQL. This preserves the original
+atomic sequence and makes the transaction owner explicit:
+
+```text
+admin transport -> point application path -> PostgresPersonalPointStore
+                                      \-> caller-owned transaction -> Commit
+```
+
+The operation does not open or commit a nested transaction. Canonical policy
+version and snapshot data remain supplied by the existing grant operation and
+are preserved when the explicit validity period updates only `expires_at`.

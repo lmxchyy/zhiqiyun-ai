@@ -373,6 +373,16 @@ func (s *PostgresPersonalPointStore) grant(ctx context.Context, cmd PersonalPoin
 	return result, nil
 }
 
+// UpdateLotExpiryTx keeps point-lot persistence inside the Points repository
+// while allowing callers to keep ownership of an existing transaction.
+func (s *PostgresPersonalPointStore) UpdateLotExpiryTx(ctx context.Context, tx *sql.Tx, lotID string, expiresAt time.Time, policySnapshot []byte) error {
+	if tx == nil || strings.TrimSpace(lotID) == "" || len(policySnapshot) == 0 {
+		return ErrInvalidPointCommand
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET expires_at=$2,policy_snapshot=$3::jsonb WHERE id=$1`, lotID, expiresAt, policySnapshot)
+	return err
+}
+
 func (s *PostgresPersonalPointStore) grantTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointGrantCommand) (result PersonalPointGrantResult, err error) {
 	if tx == nil {
 		return result, ErrInvalidPointCommand
