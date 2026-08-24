@@ -75,6 +75,13 @@ The paid 996 path continues to grant its server-side snapshot amount exactly
 once. No schema, migration, public API, or production deployment behavior is
 changed by this slice.
 
+Paid fulfillment orchestration now enters through
+`billing.ApplyPaidPointFulfillment`. It performs the token-record idempotency
+check and paid entitlement projection inside the transaction supplied by the
+payment application, then delegates the actual point balance mutation through
+the Points hook. Billing does not open or commit a second transaction and does
+not directly write Points tables.
+
 ## Current slice: Points repository boundary
 
 The PostgreSQL point store now owns ADMIN_GIFT lot-expiry persistence through

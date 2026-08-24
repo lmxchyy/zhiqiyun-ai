@@ -34,7 +34,7 @@ type PersonalPointGrantResult struct {
 
 type PersonalPointGrantHook func(context.Context, *sql.Tx, PersonalPointGrantRequest) (PersonalPointGrantResult, error)
 
-var ErrPersonalPointGrantHookUnavailable = errors.New("personal point grant hook is unavailable")
+var ErrPersonalPointGrantHookUnavailable = billingdomain.ErrPointGrantHookUnavailable
 
 type ServiceOption func(*Service)
 
@@ -591,44 +591,18 @@ func fulfillmentHandler(kind string, personalPointGrant PersonalPointGrantHook) 
 }
 
 func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order, personalPointGrant PersonalPointGrantHook) error {
-	entitlement, err := billingdomain.ParsePaidPointEntitlement(safeJSON(order.FulfillmentPayload))
-	if err != nil {
-		return err
-	}
 	if personalPointGrant == nil {
 		return ErrPersonalPointGrantHookUnavailable
 	}
-	idempotencyKey := "unified-payment:" + order.OrderNo + ":grant_token"
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM xz_token_records WHERE idempotency_key=$1)`, idempotencyKey).Scan(&exists); err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	grantedAt := time.Now().UTC()
-	grant, err := personalPointGrant(ctx, tx, PersonalPointGrantRequest{
-		UserID: order.UserID, TenantID: order.TenantID, Source: "UNIFIED_PAYMENT_GRANT", Points: entitlement.Points,
-		ReferenceType: "UNIFIED_PAYMENT_ORDER", ReferenceID: order.OrderNo, IdempotencyKey: idempotencyKey, GrantedAt: grantedAt,
+	return billingdomain.ApplyPaidPointFulfillment(ctx, tx, billingdomain.PaidPointFulfillment{
+		OrderNo: order.OrderNo, UserID: order.UserID, TenantID: order.TenantID, Payload: safeJSON(order.FulfillmentPayload),
+	}, func(ctx context.Context, tx *sql.Tx, request billingdomain.PointGrantRequest) (billingdomain.PointGrantResult, error) {
+		grant, err := personalPointGrant(ctx, tx, PersonalPointGrantRequest{
+			UserID: request.UserID, TenantID: request.TenantID, Source: request.Source, Points: request.Points,
+			ReferenceType: request.ReferenceType, ReferenceID: request.ReferenceID, IdempotencyKey: request.IdempotencyKey, GrantedAt: time.Now().UTC(),
+		})
+		return billingdomain.PointGrantResult{AccountID: grant.AccountID, UserID: grant.UserID, AvailableBefore: grant.AvailableBefore, AvailableAfter: grant.AvailableAfter}, err
 	})
-	if err != nil {
-		return err
-	}
-	if grant.UserID != order.UserID || grant.AccountID == "" || grant.AvailableAfter-grant.AvailableBefore != entitlement.Points {
-		return errors.New("personal point grant hook returned an invalid result")
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO xz_token_records(
-		  id,user_id,order_id,change_type,amount,balance_before,balance_after,remark,
-		  created_at,tenant_id,idempotency_key,source_order_no,raw
-		) VALUES ($1,$2,$3,'UNIFIED_PAYMENT_GRANT',$4,$5,$6,'unified_payment_grant_token',$7,$8,$9,$3,$10::jsonb)
-	`, "token_"+randomHex(16), order.UserID, order.OrderNo, entitlement.Points, grant.AvailableBefore, grant.AvailableAfter,
-		grantedAt.Format(time.RFC3339Nano), order.TenantID, idempotencyKey,
-		mustJSON(map[string]any{"orderNo": order.OrderNo, "amount": entitlement.Points, "balanceBefore": grant.AvailableBefore, "balanceAfter": grant.AvailableAfter}))
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func upsertFulfillmentProcessingTx(ctx context.Context, tx *sql.Tx, order Order) error {
