@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	billingdomain "xianzhi-ai/backend-go/internal/billing"
 )
 
 type CommissionHook func(context.Context, *sql.Tx, Order) error
@@ -589,14 +591,9 @@ func fulfillmentHandler(kind string, personalPointGrant PersonalPointGrantHook) 
 }
 
 func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order, personalPointGrant PersonalPointGrantHook) error {
-	var payload struct {
-		TokenAmount int64 `json:"tokenAmount"`
-	}
-	if err := json.Unmarshal(safeJSON(order.FulfillmentPayload), &payload); err != nil {
+	entitlement, err := billingdomain.ParsePaidPointEntitlement(safeJSON(order.FulfillmentPayload))
+	if err != nil {
 		return err
-	}
-	if payload.TokenAmount <= 0 {
-		return errors.New("token fulfillment payload is invalid")
 	}
 	if personalPointGrant == nil {
 		return ErrPersonalPointGrantHookUnavailable
@@ -611,13 +608,13 @@ func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order, personalPointGra
 	}
 	grantedAt := time.Now().UTC()
 	grant, err := personalPointGrant(ctx, tx, PersonalPointGrantRequest{
-		UserID: order.UserID, TenantID: order.TenantID, Source: "UNIFIED_PAYMENT_GRANT", Points: payload.TokenAmount,
+		UserID: order.UserID, TenantID: order.TenantID, Source: "UNIFIED_PAYMENT_GRANT", Points: entitlement.Points,
 		ReferenceType: "UNIFIED_PAYMENT_ORDER", ReferenceID: order.OrderNo, IdempotencyKey: idempotencyKey, GrantedAt: grantedAt,
 	})
 	if err != nil {
 		return err
 	}
-	if grant.UserID != order.UserID || grant.AccountID == "" || grant.AvailableAfter-grant.AvailableBefore != payload.TokenAmount {
+	if grant.UserID != order.UserID || grant.AccountID == "" || grant.AvailableAfter-grant.AvailableBefore != entitlement.Points {
 		return errors.New("personal point grant hook returned an invalid result")
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -625,9 +622,9 @@ func grantTokenTx(ctx context.Context, tx *sql.Tx, order Order, personalPointGra
 		  id,user_id,order_id,change_type,amount,balance_before,balance_after,remark,
 		  created_at,tenant_id,idempotency_key,source_order_no,raw
 		) VALUES ($1,$2,$3,'UNIFIED_PAYMENT_GRANT',$4,$5,$6,'unified_payment_grant_token',$7,$8,$9,$3,$10::jsonb)
-	`, "token_"+randomHex(16), order.UserID, order.OrderNo, payload.TokenAmount, grant.AvailableBefore, grant.AvailableAfter,
+	`, "token_"+randomHex(16), order.UserID, order.OrderNo, entitlement.Points, grant.AvailableBefore, grant.AvailableAfter,
 		grantedAt.Format(time.RFC3339Nano), order.TenantID, idempotencyKey,
-		mustJSON(map[string]any{"orderNo": order.OrderNo, "amount": payload.TokenAmount, "balanceBefore": grant.AvailableBefore, "balanceAfter": grant.AvailableAfter}))
+		mustJSON(map[string]any{"orderNo": order.OrderNo, "amount": entitlement.Points, "balanceBefore": grant.AvailableBefore, "balanceAfter": grant.AvailableAfter}))
 	if err != nil {
 		return err
 	}

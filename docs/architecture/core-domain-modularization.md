@@ -49,3 +49,28 @@ The PostgreSQL application path remains the owner of the single transaction
 that updates the user projection, entitlement history, billing subscription
 projection, audit log, and operator log. Manual membership still never calls
 the Points application and never grants the paid-plan point entitlement.
+
+## Current slice: Billing entitlement boundary
+
+`backend-go/internal/app/payment` remains the application owner for payment
+orders, verified callbacks, fulfillment idempotency, provider interaction, and
+the caller-owned PostgreSQL transaction. `backend-go/internal/billing` now
+owns the transport-independent paid point-entitlement contract used by paid
+product fulfillment.
+
+`billing.ParsePaidPointEntitlement` validates the immutable product snapshot
+before payment invokes the Points application hook. Payment still owns the
+single transaction, payment state transitions, fulfillment records, audit, and
+idempotency key; this extraction does not introduce nested commits or direct
+Billing writes to Points tables.
+
+```text
+HTTP/provider -> payment application -> billing entitlement contract
+                              |
+                              v
+                    caller-owned transaction -> Points application hook
+```
+
+The paid 996 path continues to grant its server-side snapshot amount exactly
+once. No schema, migration, public API, or production deployment behavior is
+changed by this slice.
