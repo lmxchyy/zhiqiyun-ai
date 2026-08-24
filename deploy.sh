@@ -11,6 +11,7 @@ GIT_REMOTE="${GIT_REMOTE:-origin}"
 GIT_BRANCH="${GIT_BRANCH:-}"
 IMMUTABLE_RELEASE="${IMMUTABLE_RELEASE:-0}"
 RELEASE_MANIFEST="${RELEASE_MANIFEST:-}"
+RELEASE_REGISTRY="${RELEASE_REGISTRY:-}"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 
 log() {
@@ -86,7 +87,7 @@ log "Current commit: $(git rev-parse --short HEAD)"
 if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   [ -n "$RELEASE_MANIFEST" ] || fail "RELEASE_MANIFEST is required for immutable release."
   [ -x ops/verify-release-manifest.sh ] || fail "ops/verify-release-manifest.sh must be executable."
-  export XIANZHI_IMAGE_REFERENCE="$(bash ops/verify-release-manifest.sh "$RELEASE_MANIFEST" "$(git rev-parse HEAD)")"
+  export XIANZHI_IMAGE_REFERENCE="$(bash ops/verify-release-manifest.sh "$RELEASE_MANIFEST" "$(git rev-parse HEAD)" "" "$RELEASE_REGISTRY")"
   case "$XIANZHI_IMAGE_REFERENCE" in
     *@sha256:*) ;;
     *) fail "Release manifest did not provide a digest-pinned image reference." ;;

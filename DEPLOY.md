@@ -139,11 +139,13 @@ full `image@sha256:digest`; it does not build application services locally.
 
 ```bash
 IMMUTABLE_RELEASE=1 \
+RELEASE_REGISTRY=aliyun_acr \
 RELEASE_MANIFEST=/opt/zhiqiyun-ai/release-manifest.json \
 bash ./deploy.sh
 ```
 
-The deploy gate verifies the manifest Git SHA, pulls without build, and checks
+The deploy gate verifies the manifest Git SHA, selects the configured registry,
+pulls without build, and checks
 the running containers' `RepoDigests`. A mismatch fails the deployment. An
 immutable rollback uses a previously verified release manifest and never
 rebuilds the application image. Image rollback does not roll back the database

@@ -82,7 +82,8 @@ docker run -d --name "$pg_container" \
   pgvector/pgvector:pg16 >/dev/null
 
 for attempt in $(seq 1 30); do
-  if docker exec "$pg_container" pg_isready -U contract -d xianzhi_contract >/dev/null 2>&1; then
+  if docker exec "$pg_container" pg_isready -U contract -d xianzhi_contract >/dev/null 2>&1 \
+    && docker exec "$pg_container" psql -U contract -d xianzhi_contract -Atqc 'SELECT 1' >/dev/null 2>&1; then
     break
   fi
   [ "$attempt" -lt 30 ] || fail 'PostgreSQL did not become ready'

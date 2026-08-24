@@ -47,18 +47,63 @@ jobs:
         run: |
           set -Eeuo pipefail
           docker push "$IMAGE:$IMAGE_TAG"
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$IMAGE_TAG" | sed 's#^.*@##')"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          python3 - "$GITHUB_SHA" "$IMAGE" "$digest" <<'PY'
+          ghcr_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$IMAGE_TAG" | sed 's#^.*@##')"
+          [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          : "${ALIYUN_REGISTRY:?ALIYUN_REGISTRY secret is required}"
+          : "${ALIYUN_USERNAME:?ALIYUN_USERNAME secret is required}"
+          : "${ALIYUN_PASSWORD:?ALIYUN_PASSWORD secret is required}"
+          ACR_IMAGE="$ALIYUN_REGISTRY/zhiqiyun-ai/zhiqiyun-ai"
+          printf '%s' "$ALIYUN_PASSWORD" | docker login "$ALIYUN_REGISTRY" --username "$ALIYUN_USERNAME" --password-stdin >/dev/null
+          docker tag "$IMAGE:$IMAGE_TAG" "$ACR_IMAGE:$IMAGE_TAG"
+          docker push "$ACR_IMAGE:$IMAGE_TAG"
+          acr_digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$ACR_IMAGE:$IMAGE_TAG" | sed 's#^.*@##')"
+          [[ "$acr_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          ghcr_raw="$(mktemp)"
+          acr_raw="$(mktemp)"
+          trap 'rm -f "$ghcr_raw" "$acr_raw"' EXIT
+          docker buildx imagetools inspect "$IMAGE:$IMAGE_TAG" --raw > "$ghcr_raw"
+          docker buildx imagetools inspect "$ACR_IMAGE:$IMAGE_TAG" --raw > "$acr_raw"
+          python3 - "$ghcr_raw" "$acr_raw" <<'PY'
+          import json
+          import sys
+          def content(path):
+              data = json.load(open(path, "r"))
+              if "manifests" in data:
+                  manifests = data["manifests"]
+                  if len(manifests) != 1:
+                      raise SystemExit("expected one platform manifest")
+                  data = manifests[0]
+              return data.get("config", {}).get("digest"), tuple(item.get("digest") for item in data.get("layers", []))
+          if content(sys.argv[1]) != content(sys.argv[2]):
+              raise SystemExit("GHCR and ACR OCI config/layers differ")
+          print("registry_content_match=PASS")
+          PY
+
+          python3 - "$GITHUB_SHA" "$IMAGE" "$ghcr_digest" "$ACR_IMAGE" "$acr_digest" <<'PY'
           import datetime
           import json
           import sys
-          git_sha, image, digest = sys.argv[1:]
+          git_sha, image, digest, acr_image, acr_digest = sys.argv[1:]
           manifest = {
               "git_sha": git_sha,
               "image": image,
               "digest": digest,
               "image_reference": image + "@" + digest,
+              "preferred_registry": "aliyun_acr",
+              "registries": {
+                  "ghcr": {
+                      "image": image,
+                      "digest": digest,
+                      "image_reference": image + "@" + digest,
+                  },
+                  "aliyun_acr": {
+                      "image": acr_image,
+                      "digest": acr_digest,
+                      "image_reference": acr_image + "@" + acr_digest,
+                  },
+              },
               "built_at": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
               "production_contract": "passed",
           }
@@ -66,7 +111,12 @@ jobs:
               json.dump(manifest, handle, indent=2, sort_keys=True)
               handle.write("\n")
           PY
-          bash ops/verify-release-manifest.sh release-manifest.json "$GITHUB_SHA" "$IMAGE@$digest"
+          bash ops/verify-release-manifest.sh release-manifest.json "$GITHUB_SHA" "$IMAGE@$ghcr_digest"
+          bash ops/verify-release-manifest.sh release-manifest.json "$GITHUB_SHA" "$ACR_IMAGE@$acr_digest" aliyun_acr
+        env:
+          ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
       - name: Upload release manifest
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
