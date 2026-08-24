@@ -134,3 +134,18 @@ projection check itself.
 caller transaction -> Points application -> Points repository adapter
                                       \\-> reload projection -> caller commit
 ```
+
+## Current slice: Points PostgreSQL write ownership
+
+The write-side SQL for point accounts, lots, wallet ledger, lot movements,
+correction, reservation/capture/release, expiry, policy archival, and
+idempotency support is centralized in
+`backend-go/internal/points/repository/postgres_writes.go`. The legacy
+`httpserver` store remains a compatibility adapter for existing read models
+and domain types, but it no longer owns those write statements. Every write
+repository function receives the caller-owned `*sql.Tx` and never begins or
+commits a transaction.
+
+Architecture tests protect both directions: the legacy store cannot regain
+Points write SQL, and the Points write repository cannot introduce a nested
+transaction.

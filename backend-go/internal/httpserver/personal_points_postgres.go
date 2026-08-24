@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	pointsrepo "xianzhi-ai/backend-go/internal/points/repository"
 )
 
 // PostgresPersonalPointStore is the authoritative lot-aware repository.  Every
@@ -93,7 +95,7 @@ func (s *PostgresPersonalPointStore) publishPolicy(ctx context.Context, cmd Pers
 		return PointExpiryPolicy{}, err
 	}
 	sourceTypes, _ := json.Marshal(published.SourceTypes)
-	if _, err := tx.ExecContext(ctx, `UPDATE xz_point_expiry_policy_versions SET status='ARCHIVED',effective_to=$2,updated_at=$2 WHERE id=$1`, current.ID, now); err != nil {
+	if err := pointsrepo.ArchivePolicy(ctx, tx, current.ID, now); err != nil {
 		return PointExpiryPolicy{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_point_expiry_policy_versions(id,version,revision,enabled,duration_value,duration_unit,time_zone,source_types,effective_from,status,created_by,change_reason,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,'PUBLISHED',$10,$11,$9,$9)`, published.ID, published.Version, published.Revision, published.Enabled, published.DurationValue, published.DurationUnit, published.TimeZone, sourceTypes, now, published.CreatedBy, published.ChangeReason); err != nil {
@@ -179,7 +181,7 @@ func pgLoadPersonalAccountForUserTx(ctx context.Context, tx *sql.Tx, userID stri
 }
 
 func pgEnsureAccount(ctx context.Context, tx *sql.Tx, accountID, userID string) (pgPointAccount, error) {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_point_accounts(id,user_id,available,frozen,raw) VALUES($1,$2,0,0,'{}'::jsonb) ON CONFLICT (id) DO NOTHING`, accountID, userID); err != nil {
+	if err := pointsrepo.EnsureAccount(ctx, tx, accountID, userID); err != nil {
 		return pgPointAccount{}, err
 	}
 	account, ok, err := pgLoadAccount(ctx, tx, accountID, userID, true)
@@ -200,7 +202,7 @@ func pgUpdateAccount(ctx context.Context, tx *sql.Tx, account pgPointAccount) er
 	if lotAvailable != account.Available || lotReserved != account.Frozen {
 		return fmt.Errorf("personal point projection mismatch for account %s: account=(%d,%d) lots=(%d,%d)", account.ID, account.Available, account.Frozen, lotAvailable, lotReserved)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE xz_point_accounts SET available=$2::bigint, frozen=$3::bigint, raw=COALESCE(raw,'{}'::jsonb)||jsonb_build_object('id',$1::text,'userId',$4::text,'available',$2::bigint,'frozen',$3::bigint,'totalGranted',$5::bigint,'totalUsed',$6::bigint,'totalExpired',$7::bigint,'totalReversed',$8::bigint) WHERE id=$1::text AND user_id=$4::text`, account.ID, account.Available, account.Frozen, account.UserID, account.TotalGranted, account.TotalConsumed, account.TotalExpired, account.TotalReversed); err != nil {
+	if err := pointsrepo.UpdateAccount(ctx, tx, account.ID, account.Available, account.Frozen, account.UserID, account.TotalGranted, account.TotalConsumed, account.TotalExpired, account.TotalReversed); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `INSERT INTO xz_user_wallets(user_id,token_balance,cash_balance_cents,frozen_token,total_token_granted,total_token_used,updated_at,raw) VALUES($1::text,$2::bigint,0,$3::bigint,$4::bigint,$5::bigint,now(),jsonb_build_object('userId',$1::text,'tokenBalance',$2::bigint,'frozenToken',$3::bigint,'totalTokenGranted',$4::bigint,'totalTokenUsed',$5::bigint)) ON CONFLICT(user_id) DO UPDATE SET token_balance=excluded.token_balance,frozen_token=excluded.frozen_token,total_token_granted=excluded.total_token_granted,total_token_used=excluded.total_token_used,updated_at=now(),raw=COALESCE(xz_user_wallets.raw,'{}'::jsonb)||excluded.raw`, account.UserID, account.Available, account.Frozen, account.TotalGranted, account.TotalConsumed)
@@ -321,8 +323,7 @@ func pgSnapshot(policy PointExpiryPolicy) []byte {
 }
 
 func pgInsertMovement(ctx context.Context, tx *sql.Tx, lot PersonalPointLot, movementType string, points int64, before PersonalPointLot, reservationID, key string, now time.Time) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO xz_personal_point_lot_movements(id,lot_id,account_id,user_id,movement_type,points,available_before,available_after,reserved_before,reserved_after,consumed_before,consumed_after,expired_before,expired_after,reversed_before,reversed_after,reference_type,reference_id,reservation_id,idempotency_key,metadata,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULLIF($19,'')::text,$20,'{}'::jsonb,$21) ON CONFLICT (lot_id,idempotency_key) DO NOTHING`, stablePointID("movement", lot.AccountID, key), lot.ID, lot.AccountID, lot.UserID, movementType, points, before.AvailablePoints, lot.AvailablePoints, before.ReservedPoints, lot.ReservedPoints, before.ConsumedPoints, lot.ConsumedPoints, before.ExpiredPoints, lot.ExpiredPoints, before.ReversedPoints, lot.ReversedPoints, lot.ReferenceType, lot.ReferenceID, reservationID, key, now)
-	return err
+	return pointsrepo.InsertMovement(ctx, tx, stablePointID("movement", lot.AccountID, key), lot.ID, lot.AccountID, lot.UserID, movementType, points, before.AvailablePoints, lot.AvailablePoints, before.ReservedPoints, lot.ReservedPoints, before.ConsumedPoints, lot.ConsumedPoints, before.ExpiredPoints, lot.ExpiredPoints, before.ReversedPoints, lot.ReversedPoints, lot.ReferenceType, lot.ReferenceID, reservationID, key, now)
 }
 
 func pgInsertWallet(ctx context.Context, tx *sql.Tx, account pgPointAccount, entryType string, points int64, beforeAvailable, beforeFrozen int64, key, refType, refID string, now time.Time, metadata any) error {
@@ -331,8 +332,7 @@ func pgInsertWallet(ctx context.Context, tx *sql.Tx, account pgPointAccount, ent
 	if strings.EqualFold(strings.TrimSpace(refType), "GENERATION_TASK") {
 		taskID = strings.TrimSpace(refID)
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO xz_wallet_ledger(id,account_id,user_id,task_id,entry_type,points,available_before,available_after,frozen_before,frozen_after,idempotency_key,reference_type,reference_id,metadata,created_at) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (idempotency_key) DO NOTHING`, stablePointID("wallet", account.ID, key), account.ID, account.UserID, taskID, entryType, points, beforeAvailable, account.Available, beforeFrozen, account.Frozen, key, refType, refID, raw, now)
-	return err
+	return pointsrepo.InsertWallet(ctx, tx, stablePointID("wallet", account.ID, key), account.ID, account.UserID, taskID, entryType, points, beforeAvailable, account.Available, beforeFrozen, account.Frozen, key, refType, refID, raw, now)
 }
 
 func pgInsertPersonalPointAudit(ctx context.Context, tx *sql.Tx, audit PersonalPointAudit, accountID, userID, idempotencyKey, reason string, signedPoints int64, source PointSource) error {
@@ -379,8 +379,7 @@ func (s *PostgresPersonalPointStore) UpdateLotExpiryTx(ctx context.Context, tx *
 	if tx == nil || strings.TrimSpace(lotID) == "" || len(policySnapshot) == 0 {
 		return ErrInvalidPointCommand
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET expires_at=$2,policy_snapshot=$3::jsonb WHERE id=$1`, lotID, expiresAt, policySnapshot)
-	return err
+	return pointsrepo.UpdateLotExpiry(ctx, tx, lotID, expiresAt, policySnapshot)
 }
 
 func (s *PostgresPersonalPointStore) grantTx(ctx context.Context, tx *sql.Tx, cmd PersonalPointGrantCommand) (result PersonalPointGrantResult, err error) {
@@ -435,7 +434,7 @@ func (s *PostgresPersonalPointStore) grantTx(ctx context.Context, tx *sql.Tx, cm
 			}
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xz_personal_point_lots(id,account_id,user_id,source_type,reference_type,reference_id,original_points,available_points,reserved_points,consumed_points,expired_points,reversed_points,granted_at,expires_at,policy_version_id,policy_snapshot,idempotency_key,status) VALUES($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,0,$8,$9,NULLIF($10,'')::text,$11,$12,$13)`, lot.ID, lot.AccountID, lot.UserID, lot.SourceType, lot.ReferenceType, lot.ReferenceID, lot.OriginalPoints, lot.GrantedAt, nullTime(lot.ExpiresAt), lot.PolicyVersionID, pgSnapshot(lotPolicy(lot)), lot.IdempotencyKey, lot.Status); err != nil {
+	if err = pointsrepo.InsertLot(ctx, tx, lot.ID, lot.AccountID, lot.UserID, string(lot.SourceType), lot.ReferenceType, lot.ReferenceID, lot.OriginalPoints, lot.GrantedAt, nullTime(lot.ExpiresAt), lot.PolicyVersionID, pgSnapshot(lotPolicy(lot)), lot.IdempotencyKey, lot.Status); err != nil {
 		return result, err
 	}
 	beforeAvailable, beforeFrozen := account.Available, account.Frozen
@@ -499,7 +498,7 @@ func (s *PostgresPersonalPointStore) correct(ctx context.Context, cmd PersonalPo
 			return result, ErrInvalidPointCommand
 		}
 		lot := PersonalPointLot{ID: stablePointID("lot", cmd.AccountID, "correction:"+cmd.IdempotencyKey), AccountID: cmd.AccountID, UserID: cmd.UserID, SourceType: PointSourceAdminCorrection, ReferenceType: "ADMIN_CORRECTION", ReferenceID: cmd.IdempotencyKey, OriginalPoints: cmd.Points, AvailablePoints: cmd.Points, GrantedAt: cmd.CorrectedAt, IdempotencyKey: "correction:" + cmd.IdempotencyKey, Status: "ACTIVE"}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO xz_personal_point_lots(id,account_id,user_id,source_type,reference_type,reference_id,original_points,available_points,reserved_points,consumed_points,expired_points,reversed_points,granted_at,expires_at,policy_version_id,policy_snapshot,idempotency_key,status) VALUES($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,0,$8,NULL,NULL,'{}'::jsonb,$9,'ACTIVE')`, lot.ID, lot.AccountID, lot.UserID, lot.SourceType, lot.ReferenceType, lot.ReferenceID, lot.OriginalPoints, lot.GrantedAt, lot.IdempotencyKey); err != nil {
+		if err = pointsrepo.InsertPermanentLot(ctx, tx, lot.ID, lot.AccountID, lot.UserID, string(lot.SourceType), lot.ReferenceType, lot.ReferenceID, lot.OriginalPoints, lot.GrantedAt, lot.IdempotencyKey); err != nil {
 			return result, err
 		}
 		account.Available += cmd.Points
@@ -542,7 +541,7 @@ func (s *PostgresPersonalPointStore) correct(ctx context.Context, cmd PersonalPo
 			lot.AvailablePoints -= debit
 			lot.ReversedPoints += debit
 			lot.Status = pgStatusLot(&lot)
-			if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=$2,reversed_points=$3,status=$4,updated_at=$5 WHERE id=$1 AND account_id=$6 AND user_id=$7`, lot.ID, lot.AvailablePoints, lot.ReversedPoints, lot.Status, cmd.CorrectedAt, lot.AccountID, lot.UserID); err != nil {
+			if err = pointsrepo.UpdateCorrectionLot(ctx, tx, lot.ID, lot.AvailablePoints, lot.ReversedPoints, lot.Status, cmd.CorrectedAt, lot.AccountID, lot.UserID); err != nil {
 				return result, err
 			}
 			if err = pgInsertMovement(ctx, tx, lot, "REVERSE", debit, before, "", "correction:reverse:"+cmd.IdempotencyKey+":"+lot.ID, cmd.CorrectedAt); err != nil {
@@ -665,7 +664,7 @@ func (s *PostgresPersonalPointStore) mergeTx(ctx context.Context, tx *sql.Tx, ta
 		lot.AvailablePoints = 0
 		lot.ReversedPoints += amount
 		lot.Status = pgStatusLot(&lot)
-		if _, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=0,reversed_points=$2,status=$3,updated_at=$4 WHERE id=$1 AND account_id=$5 AND user_id=$6`, lot.ID, lot.ReversedPoints, lot.Status, now, source.ID, source.UserID); err != nil {
+		if err := pointsrepo.UpdateReversedLot(ctx, tx, lot.ID, lot.ReversedPoints, lot.Status, now, source.ID, source.UserID); err != nil {
 			return result, err
 		}
 		if err := pgInsertMovement(ctx, tx, lot, "REVERSE", amount, before, "", "auth-merge:reverse:"+mergeID+":"+lot.ID, now); err != nil {
@@ -688,7 +687,7 @@ func (s *PostgresPersonalPointStore) mergeTx(ctx context.Context, tx *sql.Tx, ta
 		if err != nil {
 			return result, err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO xz_personal_point_lots(id,account_id,user_id,source_type,reference_type,reference_id,original_points,available_points,reserved_points,consumed_points,expired_points,reversed_points,granted_at,expires_at,policy_version_id,policy_snapshot,idempotency_key,status,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7,0,0,0,0,$8,$9,NULLIF($10,'')::text,$11,$12,$13,$14)`, transferred.ID, transferred.AccountID, transferred.UserID, transferred.SourceType, transferred.ReferenceType, transferred.ReferenceID, amount, transferred.GrantedAt, nullTime(transferred.ExpiresAt), transferred.PolicyVersionID, policySnapshot, transferred.IdempotencyKey, transferred.Status, now); err != nil {
+		if err := pointsrepo.InsertTransferredLot(ctx, tx, transferred.ID, transferred.AccountID, transferred.UserID, string(transferred.SourceType), transferred.ReferenceType, transferred.ReferenceID, amount, transferred.GrantedAt, nullTime(transferred.ExpiresAt), transferred.PolicyVersionID, policySnapshot, transferred.IdempotencyKey, transferred.Status, now); err != nil {
 			return result, err
 		}
 		if err := pgInsertMovement(ctx, tx, transferred, "OPENING", amount, PersonalPointLot{}, "", "auth-merge:opening:"+mergeID+":"+lot.ID, now); err != nil {
@@ -948,7 +947,7 @@ func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, 
 		lot.AvailablePoints -= amount
 		lot.ReservedPoints += amount
 		lot.Status = pgStatusLot(&lot)
-		if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=$2,reserved_points=$3,status=$4,updated_at=$5 WHERE id=$1 AND account_id=$6 AND user_id=$7`, lot.ID, lot.AvailablePoints, lot.ReservedPoints, lot.Status, cmd.ReservedAt, lot.AccountID, lot.UserID); err != nil {
+		if err = pointsrepo.UpdateReservedLot(ctx, tx, lot.ID, lot.AvailablePoints, lot.ReservedPoints, lot.Status, cmd.ReservedAt, lot.AccountID, lot.UserID); err != nil {
 			return result, err
 		}
 		allocation := PersonalPointAllocation{ID: stablePointID("allocation", reservation.ID, lot.ID), ReservationID: reservation.ID, LotID: lot.ID, AccountID: cmd.AccountID, UserID: cmd.UserID, SourceType: lot.SourceType, AllocatedPoints: amount, ReservedPoints: amount, Status: "RESERVED"}
@@ -1059,13 +1058,13 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 		lot.ReservedPoints -= amount
 		lot.ConsumedPoints += amount
 		lot.Status = pgStatusLot(&lot)
-		if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET reserved_points=$2,consumed_points=$3,status=$4,updated_at=$5 WHERE id=$1`, lot.ID, lot.ReservedPoints, lot.ConsumedPoints, lot.Status, cmd.CapturedAt); err != nil {
+		if err = pointsrepo.UpdateCapturedLot(ctx, tx, lot.ID, lot.ReservedPoints, lot.ConsumedPoints, lot.Status, cmd.CapturedAt); err != nil {
 			return result, err
 		}
 		a.ReservedPoints -= amount
 		a.CapturedPoints += amount
 		a.Status = pgStatusAllocation(a)
-		if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_reservation_allocations SET reserved_points=$2,captured_points=$3,status=$4,updated_at=$5 WHERE id=$1`, a.ID, a.ReservedPoints, a.CapturedPoints, a.Status, cmd.CapturedAt); err != nil {
+		if err = pointsrepo.UpdateCapturedAllocation(ctx, tx, a.ID, a.ReservedPoints, a.CapturedPoints, a.Status, cmd.CapturedAt); err != nil {
 			return result, err
 		}
 		if err = pgInsertMovement(ctx, tx, lot, "CAPTURE", amount, before, reservation.ID, "capture:"+cmd.IdempotencyKey+":"+lot.ID, cmd.CapturedAt); err != nil {
@@ -1081,7 +1080,7 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 	reservation.CapturedPoints += cmd.Points
 	reservation.UpdatedAt = cmd.CapturedAt
 	reservation.Status = pgStatusReservation(&reservation)
-	if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_reservations SET reserved_points=$2,captured_points=$3,status=$4,updated_at=$5 WHERE id=$1`, reservation.ID, reservation.ReservedPoints, reservation.CapturedPoints, reservation.Status, reservation.UpdatedAt); err != nil {
+	if err = pointsrepo.UpdateCapturedReservation(ctx, tx, reservation.ID, reservation.ReservedPoints, reservation.CapturedPoints, reservation.Status, reservation.UpdatedAt); err != nil {
 		return result, err
 	}
 	account.Frozen -= cmd.Points
@@ -1203,13 +1202,13 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 			lot.Status = pgStatusLot(&lot)
 			expiredLots = append(expiredLots, expiredLot{lot: lot, amount: expireAmount})
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=$2,reserved_points=$3,expired_points=$4,status=$5,updated_at=$6 WHERE id=$1`, lot.ID, lot.AvailablePoints, lot.ReservedPoints, lot.ExpiredPoints, lot.Status, cmd.ReleasedAt); err != nil {
+		if err = pointsrepo.UpdateReleasedLot(ctx, tx, lot.ID, lot.AvailablePoints, lot.ReservedPoints, lot.ExpiredPoints, lot.Status, cmd.ReleasedAt); err != nil {
 			return result, err
 		}
 		a.ReservedPoints -= amount
 		a.ReleasedPoints += amount
 		a.Status = pgStatusAllocation(a)
-		if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_reservation_allocations SET reserved_points=$2,released_points=$3,status=$4,updated_at=$5 WHERE id=$1`, a.ID, a.ReservedPoints, a.ReleasedPoints, a.Status, cmd.ReleasedAt); err != nil {
+		if err = pointsrepo.UpdateReleasedAllocation(ctx, tx, a.ID, a.ReservedPoints, a.ReleasedPoints, a.Status, cmd.ReleasedAt); err != nil {
 			return result, err
 		}
 		if err = pgInsertMovement(ctx, tx, releaseLot, "RELEASE", amount, before, reservation.ID, "release:"+cmd.IdempotencyKey+":"+lot.ID, cmd.ReleasedAt); err != nil {
@@ -1230,7 +1229,7 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 	reservation.ReleasedPoints += amountTotal
 	reservation.UpdatedAt = cmd.ReleasedAt
 	reservation.Status = pgStatusReservation(&reservation)
-	if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_reservations SET reserved_points=$2,released_points=$3,status=$4,updated_at=$5 WHERE id=$1`, reservation.ID, reservation.ReservedPoints, reservation.ReleasedPoints, reservation.Status, reservation.UpdatedAt); err != nil {
+	if err = pointsrepo.UpdateReleasedReservation(ctx, tx, reservation.ID, reservation.ReservedPoints, reservation.ReleasedPoints, reservation.Status, reservation.UpdatedAt); err != nil {
 		return result, err
 	}
 	account.Frozen -= amountTotal
@@ -1298,7 +1297,7 @@ func pgExpireDueTx(ctx context.Context, tx *sql.Tx, account *pgPointAccount, acc
 			lot.AvailablePoints = 0
 			lot.ExpiredPoints += amount
 			lot.Status = pgStatusLot(&lot)
-			if _, err = tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET available_points=0,expired_points=$2,status=$3,updated_at=$4 WHERE id=$1`, lot.ID, lot.ExpiredPoints, lot.Status, now); err != nil {
+			if err = pointsrepo.UpdateExpiredLot(ctx, tx, lot.ID, lot.ExpiredPoints, lot.Status, now); err != nil {
 				return err
 			}
 			account.Available -= amount
