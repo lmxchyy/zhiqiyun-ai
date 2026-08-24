@@ -118,11 +118,15 @@ else
 fi
 
 if [ "$IMMUTABLE_RELEASE" = "1" ]; then
+  expected_image_id="$(docker image inspect "$XIANZHI_IMAGE_REFERENCE" --format '{{.Id}}')" \
+    || fail "Cannot inspect the manifest image locally."
+  [ -n "$expected_image_id" ] || fail "Manifest image has no local image ID."
   for service in xianzhi-ai smartvideo-worker; do
     container_id="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q "$service")"
     [ -n "$container_id" ] || fail "No running container found for $service."
-    repo_digests="$(docker inspect --format '{{join .RepoDigests "\\n"}}' "$container_id")"
-    printf '%s\n' "$repo_digests" | grep -Fqx -- "$XIANZHI_IMAGE_REFERENCE" \
+    running_image_id="$(docker inspect --format '{{.Image}}' "$container_id")" \
+      || fail "Cannot inspect the running image for $service."
+    [ "$running_image_id" = "$expected_image_id" ] \
       || fail "$service is not running the manifest image digest."
   done
   log "Running services match the immutable release digest."
