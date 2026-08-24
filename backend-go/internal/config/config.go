@@ -123,6 +123,7 @@ type Config struct {
 	SmartVideoRenderWorkerConcurrency string
 	SmartVideoOutboxEnabled        bool
 	SmartVideoTempDir              string
+	MetricsEnabled                 bool
 	ShutdownTimeout                string
 }
 
@@ -321,6 +322,7 @@ func Load() Config {
 		SmartVideoRenderWorkerConcurrency: os.Getenv("SMARTVIDEO_RENDER_CONCURRENCY"),
 		SmartVideoOutboxEnabled:           boolEnvDefaultTrue(os.Getenv("SMARTVIDEO_OUTBOX_ENABLED")),
 		SmartVideoTempDir:                 os.Getenv("SMARTVIDEO_TEMP_DIR"),
+		MetricsEnabled:                    boolEnvDefaultTrue(os.Getenv("XIANZHI_METRICS_ENABLED")),
 		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
 	}
 }

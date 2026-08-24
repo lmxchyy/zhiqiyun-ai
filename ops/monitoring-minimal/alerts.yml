@@ -1,0 +1,46 @@
+# Starter alert rules. Merge into your Prometheus rule_files directory.
+# Thresholds are intentionally conservative starting points — tighten after a
+# week of baseline data.
+groups:
+  - name: xianzhi-api-minimal
+    rules:
+      - alert: XianzhiAPIDown
+        expr: up{job="xianzhi-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "先知 API 抓取失联（{{ $labels.instance }}）"
+          description: "Prometheus 连续 2 分钟无法抓取 /metrics，实例可能宕机或网络受阻。"
+
+      - alert: XianzhiAPIHighErrorRate
+        expr: >
+          sum(rate(xianzhi_http_requests_total{job="xianzhi-api", status=~"5.."}[5m]))
+          /
+          sum(rate(xianzhi_http_requests_total{job="xianzhi-api"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "先知 API 5xx 占比超过 5%"
+          description: "按路由模板聚合的请求计数显示服务端错误率持续偏高。"
+
+      - alert: XianzhiAPILatencyDoubled
+        expr: >
+          (
+            sum(rate(xianzhi_http_request_duration_seconds_sum{job="xianzhi-api"}[10m]))
+            /
+            sum(rate(xianzhi_http_request_duration_seconds_count{job="xianzhi-api"}[10m]))
+          )
+          >
+          2 * (
+            sum(rate(xianzhi_http_request_duration_seconds_sum{job="xianzhi-api"} offset 1h))
+            /
+            sum(rate(xianzhi_http_request_duration_seconds_count{job="xianzhi-api"} offset 1h))
+          )
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "先知 API 平均时延较一小时前翻倍"
+          description: "全局平均时延持续高于基线，排查慢查询或上游模型超时。"
