@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	pointsdomain "xianzhi-ai/backend-go/internal/points"
 )
 
 // PointSource is a server-selected origin for a personal point lot.  The
@@ -493,45 +495,35 @@ func (s *PersonalPointService) Correct(ctx context.Context, cmd PersonalPointCor
 }
 
 func normalizePointCommand(cmd PersonalPointGrantCommand) error {
-	if strings.TrimSpace(cmd.AccountID) == "" || strings.TrimSpace(cmd.UserID) == "" || strings.TrimSpace(cmd.IdempotencyKey) == "" || cmd.Points <= 0 {
-		return ErrInvalidPointCommand
-	}
-	if !isKnownPointSource(cmd.Source) {
+	err := pointsdomain.ValidateGrantCommand(pointsdomain.GrantCommand{
+		AccountID: cmd.AccountID, UserID: cmd.UserID, Source: pointsdomain.Source(cmd.Source),
+		Points: cmd.Points, ReferenceType: cmd.ReferenceType, ReferenceID: cmd.ReferenceID,
+		IdempotencyKey: cmd.IdempotencyKey, Reason: cmd.Reason,
+	})
+	switch {
+	case errors.Is(err, pointsdomain.ErrUnknownSource):
 		return ErrUnknownPointSource
+	case errors.Is(err, pointsdomain.ErrInvalidGrant):
+		return ErrInvalidPointCommand
+	default:
+		return err
 	}
-	return nil
 }
 
 func isKnownPointSource(source PointSource) bool {
-	switch source {
-	case PointSourceRegistrationGift, PointSourceActivityGift, PointSourceAdminGift,
-		PointSourceRecharge, PointSourceCorrection, PointSourceAdminCorrection,
-		PointSourceMembershipGrant, PointSourceMemberPackageGrant, PointSourceAgentGrant,
-		PointSourceAgentJoinGrant, PointSourceOperationCenterGrant, PointSourceOrderGrant,
-		PointSourceCommerceOrder, PointSourceUnifiedPaymentGrant, PointSourceWechatVirtualOrder,
-		PointSourceWechatVirtualCoupon, PointSourceCouponGrant, PointSourceRefund,
-		PointSourceRelease, PointSourceAdjustment, PointSourceReversal,
-		PointSourceManual:
-		return true
-	default:
-		return false
-	}
+	return pointsdomain.IsKnownSource(pointsdomain.Source(source))
 }
 
 func validatePointExpiryPolicy(policy PointExpiryPolicy) error {
-	if strings.TrimSpace(policy.ID) == "" || policy.Version <= 0 || strings.TrimSpace(policy.TimeZone) == "" {
+	err := pointsdomain.ValidateExpiryPolicy(pointsdomain.ExpiryPolicy{
+		ID: policy.ID, Version: policy.Version, Enabled: policy.Enabled,
+		DurationValue: policy.DurationValue, DurationUnit: policy.DurationUnit,
+		TimeZone: policy.TimeZone,
+	})
+	if errors.Is(err, pointsdomain.ErrInvalidPolicy) {
 		return ErrInvalidPointCommand
 	}
-	if policy.DurationUnit != "CALENDAR_MONTH" {
-		return ErrInvalidPointCommand
-	}
-	if policy.Enabled && policy.DurationValue <= 0 {
-		return ErrInvalidPointCommand
-	}
-	if policy.DurationValue < 0 {
-		return ErrInvalidPointCommand
-	}
-	return nil
+	return err
 }
 
 func isGiftPointSource(source PointSource) bool {
