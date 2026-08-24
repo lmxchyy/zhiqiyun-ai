@@ -358,7 +358,10 @@ func TestAuthMeAndPricingRBACUseExactDatabaseRolePermissions(t *testing.T) {
 		if registered.User.ID == "" {
 			t.Fatal("register response missing user id")
 		}
-		t.Cleanup(func() { _, _ = db.Exec(`delete from xz_users where id=$1`, registered.User.ID) })
+		// Deliberately keep the registered user row instead of cleaning it up:
+		// deleting the row would let nextTableID recycle the same ID on a later
+		// run while the append-only registration point lot survives, tripping
+		// the grant idempotency key with "point idempotency conflict".
 		assertSamePricingAuthPermissions(t, "postgres register", registerPayload.Permissions, authPermissionsForToken(t, meRouter, registerPayload.AccessToken))
 	})
 }
