@@ -170,6 +170,10 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	metricsCollector := newHTTPMetricsCollector()
+	if cfg.MetricsEnabled {
+		router.Use(metricsCollector.middleware())
+	}
 	router.Use(requestContextMiddleware())
 	router.Use(corsMiddleware(cfg.CORSAllowedOrigins))
 	router.Use(gzipMiddleware())
@@ -178,6 +182,9 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	}
 
 	router.GET("/healthz", wrapF(health))
+	if cfg.MetricsEnabled {
+		router.GET("/metrics", wrapF(metricsCollector.handler))
+	}
 	router.GET("/d/:inviteCode", wrapF(agentInviteH5Redirect))
 	router.GET("/i/:inviteToken", wrapF(promotionInviteTokenH5Redirect))
 	router.GET("/android/latest", wrapF(agentInvites.download))
