@@ -10,6 +10,8 @@ const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" 
 
 test("production contract harness exists and passes", async () => {
   await access(harnessPath);
+  const harness = await readFile(harnessPath, "utf8");
+  assert.match(harness, /psql -U contract -d xianzhi_contract -Atqc 'SELECT 1'/);
   const output = execFileSync(bash, ["tests/production-contract.harness.sh"], {
     cwd: fileURLToPath(root),
     encoding: "utf8"
