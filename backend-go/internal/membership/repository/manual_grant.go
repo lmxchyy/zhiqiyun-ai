@@ -65,3 +65,15 @@ func InsertManualGrantOperationLogTx(ctx context.Context, tx *sql.Tx, id, actorI
 	_, err := tx.ExecContext(ctx, `INSERT INTO xz_operation_logs(id,actor_id,operation,target,target_id,before_state,after_state) VALUES($1,$2,'MANUAL_MEMBERSHIP_GRANT','user_membership',$3,$4::jsonb,$5::jsonb)`, id, actorID, userID, beforeState, afterState)
 	return err
 }
+
+func InsertManualGrantAuditTx(ctx context.Context, tx *sql.Tx, id, actorID, actorRole, userID, path string, metadata any) error {
+	if tx == nil || strings.TrimSpace(id) == "" || strings.TrimSpace(actorID) == "" || strings.TrimSpace(actorRole) == "" || strings.TrimSpace(userID) == "" {
+		return errors.New("invalid manual membership audit")
+	}
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO xz_audit_logs(id,actor_id,actor_role,action,resource,resource_id,method,path,status,metadata) VALUES($1,$2,$3,'admin.membership.manual_grant','user_membership',$4,'POST',$5,200,$6::jsonb) ON CONFLICT (id) DO NOTHING`, id, actorID, actorRole, userID, path, raw)
+	return err
+}

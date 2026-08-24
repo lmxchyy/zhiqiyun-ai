@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -210,7 +209,7 @@ func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, act
 		return adminMembershipGrantResult{}, err
 	}
 
-	if err := insertAuditLog(ctx, tx, actorID, actorRole, "admin.membership.manual_grant", "user_membership", userID, http.MethodPost, "/api/v1/admin/customers/"+userID+"/point-gifts", http.StatusOK, metadata); err != nil {
+	if err := membershiprepo.InsertManualGrantAuditTx(ctx, tx, "audit_"+shortID(grantID), actorID, actorRole, userID, "/api/v1/admin/customers/"+userID+"/point-gifts", metadata); err != nil {
 		return adminMembershipGrantResult{}, err
 	}
 	beforeState, _ := json.Marshal(map[string]any{"planId": previousPlanID, "memberLevel": previousLevel, "expiresAt": previousExpiry})

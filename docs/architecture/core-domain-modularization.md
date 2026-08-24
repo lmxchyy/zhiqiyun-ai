@@ -116,9 +116,9 @@ HTTP authorization/rules -> Membership repository operations
 ```
 
 The handler no longer owns manual-membership SQL for the user projection,
-entitlement history, or operation log. The transaction still commits exactly
-once after the audit and all membership projections succeed; a failure rolls
-back the complete manual grant.
+entitlement history, audit, or operation log. The transaction still commits
+exactly once after all membership projections succeed; a failure rolls back
+the complete manual grant.
 
 ## Current slice: Points application transaction boundary
 
