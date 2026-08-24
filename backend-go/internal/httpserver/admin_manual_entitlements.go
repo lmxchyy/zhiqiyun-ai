@@ -10,11 +10,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	membershipdomain "xianzhi-ai/backend-go/internal/membership"
 )
 
 const (
 	adminManualMembershipSource              = "ADMIN_MANUAL_MEMBERSHIP"
-	adminManualMaxValidityDays               = 3650
+	adminManualMaxValidityDays               = membershipdomain.MaxManualGrantDays
 	adminMembershipTenantID                  = "tenant_default"
 	adminMembershipUserProjectionUpdateQuery = `UPDATE xz_users SET plan_id=$2::text,member_level=$3::text,subscription_expires_at=$4::text,updated_at=$5::text,raw=coalesce(raw,'{}'::jsonb)||jsonb_build_object('planId',$2::text,'memberLevel',$3::text,'subscriptionExpiresAt',$4::text,'updatedAt',$5::text) WHERE id=$1::text`
 )
@@ -37,46 +39,41 @@ type adminMembershipGrantResult struct {
 }
 
 func normalizeAdminMembershipGrantRequest(req adminMembershipGrantRequest) (adminMembershipGrantRequest, error) {
-	req.PlanID = strings.TrimSpace(req.PlanID)
-	req.Reason = strings.TrimSpace(req.Reason)
-	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	if req.PlanID == "" || req.Reason == "" || req.IdempotencyKey == "" {
+	normalized, err := membershipdomain.NormalizeManualGrant(membershipdomain.ManualGrantRequest{
+		PlanID: req.PlanID, DurationDays: req.DurationDays, Reason: req.Reason, IdempotencyKey: req.IdempotencyKey,
+	})
+	if errors.Is(err, membershipdomain.ErrInvalidGrant) {
 		return req, ErrInvalidPointCommand
 	}
-	if req.DurationDays < 0 || req.DurationDays > adminManualMaxValidityDays {
-		return req, ErrInvalidPointCommand
-	}
-	return req, nil
+	req.PlanID, req.Reason, req.IdempotencyKey, req.DurationDays = normalized.PlanID, normalized.Reason, normalized.IdempotencyKey, normalized.DurationDays
+	return req, err
 }
 
 func adminManualExpiry(grantedAt time.Time, days int) (time.Time, error) {
-	if days <= 0 || days > adminManualMaxValidityDays {
+	expiresAt, err := membershipdomain.ResolveExpiry(pointNow(grantedAt), time.Time{}, days)
+	if errors.Is(err, membershipdomain.ErrInvalidGrant) {
 		return time.Time{}, ErrInvalidPointCommand
 	}
-	return pointNow(grantedAt).AddDate(0, 0, days), nil
+	return expiresAt, err
 }
 
 // resolveAdminMembershipExpiry guarantees an administrative grant never shortens
 // an already-longer membership. The grant means "valid for at least N days from
 // now", not "replace whatever expiry already exists".
 func resolveAdminMembershipExpiry(now time.Time, previousExpiry string, days int) (time.Time, error) {
-	candidate, err := adminManualExpiry(now, days)
-	if err != nil {
-		return time.Time{}, err
-	}
 	previousExpiry = strings.TrimSpace(previousExpiry)
 	if previousExpiry == "" {
-		return candidate, nil
+		return adminManualExpiry(now, days)
 	}
 	previous, err := time.Parse(time.RFC3339Nano, previousExpiry)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("invalid existing membership expiry: %w", err)
+		return time.Time{}, membershipdomain.InvalidExpiryError(err)
 	}
-	previous = previous.UTC()
-	if previous.After(candidate) {
-		return previous, nil
+	expiresAt, err := membershipdomain.ResolveExpiry(pointNow(now), previous.UTC(), days)
+	if errors.Is(err, membershipdomain.ErrInvalidGrant) {
+		return time.Time{}, ErrInvalidPointCommand
 	}
-	return candidate, nil
+	return expiresAt, err
 }
 
 func findAdminMembershipPlan(plans []adminPlan, planID string) (adminPlan, error) {
