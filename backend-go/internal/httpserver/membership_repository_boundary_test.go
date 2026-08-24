@@ -19,6 +19,7 @@ func TestManualMembershipHandlerDoesNotOwnSubscriptionProjectionSQL(t *testing.T
 		"UPDATE xz_users SET plan_id=",
 		"INSERT INTO xz_membership_entitlement_records",
 		"INSERT INTO xz_operation_logs",
+		"INSERT INTO xz_audit_logs",
 	} {
 		if strings.Contains(string(raw), sql) {
 			t.Fatalf("manual membership handler must delegate %q to membership repository", sql)
