@@ -97,3 +97,25 @@ admin transport -> point application path -> PostgresPersonalPointStore
 The operation does not open or commit a nested transaction. Canonical policy
 version and snapshot data remain supplied by the existing grant operation and
 are preserved when the explicit validity period updates only `expires_at`.
+
+## Current slice: Membership write repository boundary
+
+Manual membership persistence is now owned by
+`backend-go/internal/membership/repository`. The repository owns plan and user
+row locking, user projection updates, entitlement history inserts, and
+operator-log persistence. The HTTP layer retains transport authorization and
+membership-specific rule decisions, and passes the caller-owned transaction to
+the repository. Subscription projection writes continue through
+`UpsertSubscriptionTx` in the same transaction.
+
+```text
+HTTP authorization/rules -> Membership repository operations
+                                      |
+                                      v
+                              caller-owned transaction -> Commit
+```
+
+The handler no longer owns manual-membership SQL for the user projection,
+entitlement history, or operation log. The transaction still commits exactly
+once after the audit and all membership projections succeed; a failure rolls
+back the complete manual grant.
