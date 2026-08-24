@@ -264,7 +264,7 @@ func grantAdminPointGiftWithValidity(ctx context.Context, service *PersonalPoint
 			return PersonalPointGrantResult{}, adminPointGiftStageError("resolve_expiry", err)
 		}
 		policySnapshot := pgSnapshot(lotPolicy(result.Lot))
-		if _, err := tx.ExecContext(ctx, `UPDATE xz_personal_point_lots SET expires_at=$2,policy_snapshot=$3::jsonb WHERE id=$1`, result.Lot.ID, expiresAt, policySnapshot); err != nil {
+		if err := repo.UpdateLotExpiryTx(ctx, tx, result.Lot.ID, expiresAt, policySnapshot); err != nil {
 			return PersonalPointGrantResult{}, adminPointGiftStageError("update_expiry", err)
 		}
 		result.Lot.ExpiresAt = expiresAt
