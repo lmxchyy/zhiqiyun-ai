@@ -38,3 +38,14 @@ the existing regression suite.
 
 Further extraction is intentionally sequential: complete Points, then
 Membership, then Billing. No schema migration is required for this refactor.
+
+## Current slice: Membership domain boundary
+
+`backend-go/internal/membership` now owns the transport-independent manual
+grant request normalization and expiry rule. A manual grant is valid for at
+least the requested duration and never shortens an existing later expiry.
+
+The PostgreSQL application path remains the owner of the single transaction
+that updates the user projection, entitlement history, billing subscription
+projection, audit log, and operator log. Manual membership still never calls
+the Points application and never grants the paid-plan point entitlement.
