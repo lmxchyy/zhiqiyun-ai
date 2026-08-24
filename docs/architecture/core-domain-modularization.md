@@ -119,3 +119,18 @@ The handler no longer owns manual-membership SQL for the user projection,
 entitlement history, or operation log. The transaction still commits exactly
 once after the audit and all membership projections succeed; a failure rolls
 back the complete manual grant.
+
+## Current slice: Points application transaction boundary
+
+Permanent point inflow sequencing is now owned by
+`backend-go/internal/points/application`. `GrantPermanentTx` loads the account
+through an injected repository operation, invokes the repository grant inside
+the caller-owned transaction, reloads the projection, and verifies the
+expected balance delta before returning. The HTTP package only adapts its
+PostgreSQL store to that application contract; it does not sequence the
+projection check itself.
+
+```text
+caller transaction -> Points application -> Points repository adapter
+                                      \\-> reload projection -> caller commit
+```

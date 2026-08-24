@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	pointsapp "xianzhi-ai/backend-go/internal/points/application"
 )
 
 type personalPointInflowResult struct {
@@ -17,27 +19,28 @@ func grantPermanentPersonalPointsTx(ctx context.Context, tx *sql.Tx, userID stri
 	if tx == nil || strings.TrimSpace(userID) == "" || points <= 0 || isExpiringPersonalPointSource(source) {
 		return personalPointInflowResult{}, ErrInvalidPointCommand
 	}
-	account, err := pointAccountForUpdate(ctx, tx, userID)
-	if err != nil {
-		return personalPointInflowResult{}, err
-	}
-	before := account.Available
-	if _, err := NewPostgresPersonalPointStore(nil).grantTx(ctx, tx, PersonalPointGrantCommand{
-		AccountID: account.ID, UserID: userID, Source: source, Points: int64(points), ReferenceType: referenceType,
+	after, err := pointsapp.GrantPermanentTx(ctx, tx, pointsapp.PermanentGrantRequest{
+		UserID: userID, Source: string(source), Points: int64(points), ReferenceType: referenceType,
 		ReferenceID: referenceID, IdempotencyKey: idempotencyKey, GrantedAt: grantedAt,
-	}); err != nil {
-		return personalPointInflowResult{}, err
-	}
-	after, err := pgLoadPersonalAccountForUserTx(ctx, tx, userID)
+	}, func(ctx context.Context, tx *sql.Tx, userID string) (pointsapp.AccountSnapshot, error) {
+		account, err := pointAccountForUpdate(ctx, tx, userID)
+		if err != nil {
+			return pointsapp.AccountSnapshot{}, err
+		}
+		return pointsapp.AccountSnapshot{ID: account.ID, UserID: account.UserID, Available: int64(account.Available), Frozen: int64(account.Frozen), TotalGranted: int64(account.TotalGranted), TotalUsed: int64(account.TotalUsed)}, nil
+	}, func(ctx context.Context, tx *sql.Tx, request pointsapp.PermanentGrantRequest, accountID string) error {
+		_, err := NewPostgresPersonalPointStore(nil).grantTx(ctx, tx, PersonalPointGrantCommand{
+			AccountID: accountID, UserID: request.UserID, Source: PointSource(request.Source), Points: request.Points, ReferenceType: request.ReferenceType,
+			ReferenceID: request.ReferenceID, IdempotencyKey: request.IdempotencyKey, GrantedAt: request.GrantedAt,
+		})
+		return err
+	})
 	if err != nil {
 		return personalPointInflowResult{}, err
-	}
-	if after.Available-int64(before) != int64(points) {
-		return personalPointInflowResult{}, errors.New("personal point inflow projection mismatch")
 	}
 	return personalPointInflowResult{
-		Account:         adminPointAccount{ID: after.ID, UserID: after.UserID, Available: int(after.Available), Frozen: int(after.Frozen), TotalGranted: int(after.TotalGranted), TotalUsed: int(after.TotalConsumed)},
-		AvailableBefore: before, AvailableAfter: int(after.Available),
+		Account:         adminPointAccount{ID: after.ID, UserID: after.UserID, Available: int(after.Available), Frozen: int(after.Frozen), TotalGranted: int(after.TotalGranted), TotalUsed: int(after.TotalUsed)},
+		AvailableBefore: int(after.Available) - points, AvailableAfter: int(after.Available),
 	}, nil
 }
 
