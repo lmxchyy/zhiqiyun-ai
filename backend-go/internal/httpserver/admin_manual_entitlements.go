@@ -12,6 +12,7 @@ import (
 	"time"
 
 	membershipdomain "xianzhi-ai/backend-go/internal/membership"
+	membershiprepo "xianzhi-ai/backend-go/internal/membership/repository"
 )
 
 const (
@@ -204,18 +205,11 @@ func grantManualMembershipPostgres(ctx context.Context, db *sql.DB, actorID, act
 	if productCode == "" {
 		productCode = plan.ID
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO xz_billing_subscriptions(
-			id,tenant_id,user_id,plan_id,product_code,source_order_id,source_order_no,status,
-			starts_at,ends_at,entitlement_snapshot,created_at,updated_at
-		) VALUES($1,$2,$3,$4,$5,NULL,$6,'ACTIVE',$7,$8,$9::jsonb,$7,$7)
-		ON CONFLICT(id) DO UPDATE SET
-			tenant_id=excluded.tenant_id,user_id=excluded.user_id,plan_id=excluded.plan_id,
-			product_code=excluded.product_code,source_order_id=NULL,source_order_no=excluded.source_order_no,
-			status='ACTIVE',starts_at=LEAST(xz_billing_subscriptions.starts_at,excluded.starts_at),
-			ends_at=GREATEST(xz_billing_subscriptions.ends_at,excluded.ends_at),
-			entitlement_snapshot=excluded.entitlement_snapshot,updated_at=excluded.updated_at
-	`, subscriptionID, tenantID, userID, plan.ID, productCode, sourceOrderNo, now, expiresAt, metadataJSON); err != nil {
+	if err := membershiprepo.UpsertSubscriptionTx(ctx, tx, membershiprepo.SubscriptionProjection{
+		ID: subscriptionID, TenantID: tenantID, UserID: userID, PlanID: plan.ID,
+		ProductCode: productCode, SourceOrderNo: sourceOrderNo,
+		StartsAt: now.Format(time.RFC3339Nano), EndsAt: expiresAt.UTC().Format(time.RFC3339Nano), SnapshotJSON: string(metadataJSON),
+	}); err != nil {
 		return adminMembershipGrantResult{}, err
 	}
 
