@@ -35,3 +35,23 @@ test("release manifest validator and CI workflow exist", async () => {
   assert.match(workflow, /production-contract/);
   assert.match(workflow, /digest/);
 });
+
+test("main release pushes the tested image to GHCR and ACR without rebuilding", async () => {
+  const workflow = await source(".github/workflows/immutable-image-release.yml");
+  assert.match(workflow, /ALIYUN_REGISTRY/);
+  assert.match(workflow, /ALIYUN_USERNAME/);
+  assert.match(workflow, /ALIYUN_PASSWORD/);
+  assert.match(workflow, /docker login/);
+  assert.match(workflow, /docker tag \"\$IMAGE:\$IMAGE_TAG\"/);
+  assert.match(workflow, /docker push \"\$ACR_IMAGE:\$IMAGE_TAG\"/);
+  assert.match(workflow, /imagetools inspect/);
+  assert.match(workflow, /acr_digest/);
+  assert.equal((workflow.match(/docker buildx build/g) || []).length, 1);
+});
+
+test("immutable deploy supports an explicitly selected registry", async () => {
+  const deploy = await source("deploy.sh");
+  const manifest = await source("ops/verify-release-manifest.sh");
+  assert.match(deploy, /RELEASE_REGISTRY/);
+  assert.match(manifest, /preferred_registry|registries/);
+});

@@ -38,3 +38,26 @@ test("release manifest validator rejects mutable-only identity", () => {
     stdio: ["pipe", "pipe", "pipe"]
   }));
 });
+
+test("release manifest validator selects the ACR reference", () => {
+  const acrDigest = `sha256:${"b".repeat(64)}`;
+  const manifest = JSON.stringify({
+    git_sha: "97361d7fe4cfcd32cce644b153532be480ad721a",
+    image: "ghcr.io/lmxchyy/zhiqiyun-ai",
+    digest: `sha256:${"a".repeat(64)}`,
+    image_reference: `ghcr.io/lmxchyy/zhiqiyun-ai@sha256:${"a".repeat(64)}`,
+    registries: {
+      aliyun_acr: {
+        image: "crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai",
+        digest: acrDigest,
+        image_reference: `crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/zhiqiyun-ai@${acrDigest}`
+      }
+    },
+    built_at: "2026-08-24T00:00:00Z",
+    production_contract: "passed"
+  });
+  const output = execFileSync(bash, ["ops/verify-release-manifest.sh", "-", "97361d7fe4cfcd32cce644b153532be480ad721a", "", "aliyun_acr"], {
+    cwd: new URL("../", import.meta.url), input: manifest, encoding: "utf8"
+  });
+  assert.match(output, /crpi-kvtl7houjvj5ftba\.cn-hangzhou\.personal\.cr\.aliyuncs\.com/);
+});
