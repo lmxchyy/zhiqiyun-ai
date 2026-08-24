@@ -40,6 +40,7 @@
     "verify:admin-navigation": "node tools/verify-admin-navigation.mjs",
     "verify:admin-navigation:runtime": "node tools/verify-admin-navigation-runtime.mjs",
     "verify:admin-bundle-budget": "node tools/verify-admin-bundle-budget.mjs",
+    "verify:schema-consistency": "node tools/verify-schema-consistency.mjs",
     "verify:api-boundaries": "node tools/verify-api-client-boundaries.mjs",
     "verify:user-mini-clicks": "node tools/verify-user-mini-click-api.mjs",
     "verify:user-mini-clicks:e2e": "node tools/verify-user-mini-click-e2e.mjs",

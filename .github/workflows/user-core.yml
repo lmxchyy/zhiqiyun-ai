@@ -120,6 +120,11 @@ jobs:
       - name: Validate contract test entry point
         run: node --test tests/production-contract.test.mjs tests/migration-release.test.mjs
 
+      - name: Verify schema consistency across schema.sql, migrations, and runtime DDL
+        run: |
+          bash -n ops/run-migrations.sh
+          node --test tests/schema-consistency.test.mjs
+
   backend-go:
     runs-on: ubuntu-latest
 
