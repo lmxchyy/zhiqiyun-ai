@@ -104,7 +104,7 @@ function trustedApiURL(path: string) {
 function responsePayloadMessage(payload: unknown, fallback: string, statusCode = 0) {
   if (payload && typeof payload === 'object') {
     const record = payload as { code?: unknown; error?: unknown; message?: unknown }
-    return toChineseApiErrorMessage(record.error || record.message, { statusCode, apiCode: record.code, fallback })
+    return toChineseApiErrorMessage(record.error || record.message, { statusCode, apiCode: record.code, fallback, payload })
   }
   return toChineseApiErrorMessage(payload, { statusCode, fallback })
 }

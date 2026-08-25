@@ -860,7 +860,7 @@ func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, 
 		return result, err
 	}
 	if !ok {
-		return result, ErrInsufficientPoints
+		return result, newInsufficientPointsError(0, cmd.RequestedPoints)
 	}
 	walletKey := personalWalletKey(cmd.AccountID, "reserve", cmd.IdempotencyKey)
 	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
@@ -904,7 +904,7 @@ func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, 
 		return result, err
 	}
 	if account.Available < cmd.RequestedPoints {
-		return result, ErrInsufficientPoints
+		return result, newInsufficientPointsError(account.Available, cmd.RequestedPoints)
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT `+pgLotColumns+` FROM xz_personal_point_lots WHERE account_id=$1 AND user_id=$2 AND available_points>0 AND status IN ('ACTIVE','LEGACY') ORDER BY expires_at ASC NULLS LAST, granted_at ASC, id FOR UPDATE`, cmd.AccountID, cmd.UserID)
 	if err != nil {
@@ -934,7 +934,7 @@ func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, 
 	}
 	rows.Close()
 	if remaining != 0 {
-		return result, ErrInsufficientPoints
+		return result, newInsufficientPointsError(account.Available, cmd.RequestedPoints)
 	}
 	reservation := PersonalPointReservation{ID: stablePointID("reservation", cmd.AccountID, cmd.IdempotencyKey), AccountID: cmd.AccountID, UserID: cmd.UserID, BusinessType: cmd.BusinessType, BusinessID: cmd.BusinessID, RequestedPoints: cmd.RequestedPoints, ReservedPoints: cmd.RequestedPoints, IdempotencyKey: cmd.IdempotencyKey, Status: "RESERVED", CreatedAt: cmd.ReservedAt, UpdatedAt: cmd.ReservedAt}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO xz_personal_point_reservations(id,account_id,user_id,business_type,business_id,requested_points,reserved_points,captured_points,released_points,expired_points,idempotency_key,status,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6,0,0,0,$7,'RESERVED',$8,$8)`, reservation.ID, reservation.AccountID, reservation.UserID, reservation.BusinessType, reservation.BusinessID, reservation.RequestedPoints, reservation.IdempotencyKey, reservation.CreatedAt); err != nil {

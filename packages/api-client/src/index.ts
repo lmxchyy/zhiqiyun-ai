@@ -21,6 +21,13 @@ export interface ApiClientErrorOptions {
   cause?: unknown;
 }
 
+export interface ApiErrorMessageOptions {
+  statusCode?: number;
+  apiCode?: unknown;
+  fallback?: string;
+  payload?: unknown;
+}
+
 export class ApiClientError extends Error {
   readonly path: string;
   readonly statusCode: number;
@@ -69,6 +76,7 @@ const apiCodeMessageMap: Record<string, string> = {
   TOO_MANY_REQUESTS: "操作过于频繁，请稍后重试",
   INSUFFICIENT_BALANCE: "账户余额不足，请充值后重试",
   INSUFFICIENT_CREDITS: "可用额度不足，请充值或升级套餐",
+  INSUFFICIENT_POINTS: "当前积分不足，请充值或升级套餐后再试",
   VALIDATION_FAILED: "提交的信息不符合要求，请检查后重试",
 };
 
@@ -137,12 +145,21 @@ function knownEnglishMessage(value: string) {
  */
 export function toChineseApiErrorMessage(
   message: unknown,
-  options: { statusCode?: number; apiCode?: unknown; fallback?: string } = {},
+  options: ApiErrorMessageOptions = {},
 ) {
   const source = String(message || "").trim();
+  const apiCode = String(options.apiCode ?? "").trim().toUpperCase();
+  if (apiCode === "INSUFFICIENT_POINTS") {
+    const payload = options.payload && typeof options.payload === "object" ? options.payload as Record<string, unknown> : {};
+    const current = Number(payload.currentPoints);
+    const required = Number(payload.requiredPoints);
+    if (Number.isFinite(current) && Number.isFinite(required) && current >= 0 && required > 0) {
+      return `积分不足，当前 ${current} 积分，本次需要 ${required} 积分，还差 ${Math.max(0, required - current)} 积分。`;
+    }
+    return apiCodeMessageMap[apiCode];
+  }
   if (containsChinese(source)) return source;
 
-  const apiCode = String(options.apiCode ?? "").trim().toUpperCase();
   if (apiCode && apiCodeMessageMap[apiCode]) return apiCodeMessageMap[apiCode];
 
   const knownMessage = knownEnglishMessage(source);
@@ -319,11 +336,16 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         }
         if (response.statusCode < 200 || response.statusCode >= 300) {
           const message = isApiEnvelope<T>(payload) ? payload.message || payload.error : "";
-          throw new ApiClientError(toChineseApiErrorMessage(message, { statusCode: response.statusCode }), {
+          throw new ApiClientError(toChineseApiErrorMessage(message, {
+            statusCode: response.statusCode,
+            apiCode: isApiEnvelope<T>(payload) ? payload.code : undefined,
+            payload,
+          }), {
             path,
             statusCode: response.statusCode,
             requestId,
-            payload
+            payload,
+            apiCode: isApiEnvelope<T>(payload) ? payload.code : undefined,
           });
         }
 
@@ -348,6 +370,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
             throw new ApiClientError(toChineseApiErrorMessage(payload.message || payload.error, {
               statusCode: response.statusCode,
               apiCode: code,
+              payload,
             }), {
               path,
               statusCode: response.statusCode,

@@ -3333,7 +3333,7 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 		}
 		available := int(account.AvailablePoints)
 		if available < pointCost {
-			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
+			return newInsufficientPointsError(int64(available), int64(pointCost))
 		}
 		taskID := nextID(data.Counters, "task")
 		now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -3516,7 +3516,7 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 		}
 		available := int(account.AvailablePoints)
 		if available < pointCost {
-			return fmt.Errorf("insufficient remaining points: available %d, required %d", available, pointCost)
+			return newInsufficientPointsError(int64(available), int64(pointCost))
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		nextAvailable := available - pointCost

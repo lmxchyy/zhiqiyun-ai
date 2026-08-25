@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -43,8 +42,9 @@ func TestPendingGenerationTaskReservesAndRefundsPoints(t *testing.T) {
 	}
 
 	_, err = store.CreatePendingGenerationTask(req)
-	if err == nil || !strings.Contains(err.Error(), "insufficient remaining points") {
-		t.Fatalf("second pending task error = %v, want insufficient points", err)
+	var insufficient *InsufficientPointsError
+	if !errors.As(err, &insufficient) || insufficient.CurrentPoints != 0 || insufficient.RequiredPoints != 2 {
+		t.Fatalf("second pending task error = %T %v, want INSUFFICIENT_POINTS 0/2", err, err)
 	}
 
 	failed, err := store.FailGenerationTask(task.ID, "provider failed")

@@ -1217,7 +1217,7 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 			return generationTask{}, err
 		}
 		if account.Available < int64(pointCost) {
-			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+			return generationTask{}, newInsufficientPointsError(account.Available, int64(pointCost))
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -1376,7 +1376,7 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 			return generationTask{}, err
 		}
 		if account.Available < int64(pointCost) {
-			return generationTask{}, fmt.Errorf("insufficient remaining points: available %d, required %d", account.Available, pointCost)
+			return generationTask{}, newInsufficientPointsError(account.Available, int64(pointCost))
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)

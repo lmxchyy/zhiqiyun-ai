@@ -62,10 +62,34 @@ func defaultPersonalPointPolicy() PointExpiryPolicy {
 	}
 }
 
+func defaultRegistrationPointPolicy() PointExpiryPolicy {
+	return PointExpiryPolicy{
+		ID: "point_expiry_policy_registration_permanent", Version: 2, Revision: 2, Enabled: false,
+		DurationValue: 0, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai",
+		SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED",
+	}
+}
+
+func defaultPersonalPointPolicies() []PointExpiryPolicy {
+	return []PointExpiryPolicy{defaultPersonalPointPolicy(), defaultRegistrationPointPolicy()}
+}
+
+func ensureDefaultRegistrationPointPolicy(state *personalPointState) {
+	if state == nil {
+		return
+	}
+	for _, policy := range state.Policies {
+		if policy.ID == defaultRegistrationPointPolicy().ID {
+			return
+		}
+	}
+	state.Policies = append(state.Policies, defaultRegistrationPointPolicy())
+}
+
 func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 	state := personalPointState{}
 	if len(state.Policies) == 0 {
-		state.Policies = []PointExpiryPolicy{defaultPersonalPointPolicy()}
+		state.Policies = defaultPersonalPointPolicies()
 	}
 	state.WalletLedger = []PersonalPointWalletLedgerEntry{}
 	if s == nil {
@@ -114,8 +138,9 @@ func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 		state.Operations = []personalPointOperation{}
 	}
 	if state.Policies == nil || len(state.Policies) == 0 {
-		state.Policies = []PointExpiryPolicy{defaultPersonalPointPolicy()}
+		state.Policies = defaultPersonalPointPolicies()
 	}
+	ensureDefaultRegistrationPointPolicy(&state)
 	return state, nil
 }
 
@@ -477,9 +502,25 @@ func currentPublishedPersonalPointPolicy(state *personalPointState, now time.Tim
 		if err := validatePointExpiryPolicy(policy); err != nil {
 			continue
 		}
+		if !policyCoversAllGiftSources(policy) {
+			continue
+		}
 		return policy, nil
 	}
 	return PointExpiryPolicy{}, ErrPointNotFound
+}
+
+func policyCoversAllGiftSources(policy PointExpiryPolicy) bool {
+	allowed := make(map[string]struct{}, len(policy.SourceTypes))
+	for _, source := range policy.SourceTypes {
+		allowed[source] = struct{}{}
+	}
+	for _, source := range []PointSource{PointSourceRegistrationGift, PointSourceActivityGift, PointSourceAdminGift} {
+		if _, ok := allowed[string(source)]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *JSONPersonalPointStore) currentPolicy(ctx context.Context) (PointExpiryPolicy, error) {
@@ -717,8 +758,9 @@ func normalizePersonalPointState(state *personalPointState) {
 		state.Operations = []personalPointOperation{}
 	}
 	if len(state.Policies) == 0 {
-		state.Policies = []PointExpiryPolicy{defaultPersonalPointPolicy()}
+		state.Policies = defaultPersonalPointPolicies()
 	}
+	ensureDefaultRegistrationPointPolicy(state)
 }
 
 func clonePersonalPointState(state personalPointState) personalPointState {
@@ -1792,13 +1834,13 @@ func (s *JSONPersonalPointStore) reserve(ctx context.Context, cmd PersonalPointR
 			return accountErr
 		}
 		if account == nil {
-			return ErrInsufficientPoints
+			return newInsufficientPointsError(0, cmd.RequestedPoints)
 		}
 		if err := expirePersonalPointState(state, cmd.AccountID, cmd.UserID, cmd.ReservedAt); err != nil {
 			return err
 		}
 		if account.AvailablePoints < cmd.RequestedPoints {
-			return ErrInsufficientPoints
+			return newInsufficientPointsError(account.AvailablePoints, cmd.RequestedPoints)
 		}
 		reservation := PersonalPointReservation{ID: stablePointID("reservation", cmd.AccountID, cmd.IdempotencyKey), AccountID: cmd.AccountID, UserID: cmd.UserID, BusinessType: cmd.BusinessType, BusinessID: cmd.BusinessID, RequestedPoints: cmd.RequestedPoints, ReservedPoints: cmd.RequestedPoints, IdempotencyKey: cmd.IdempotencyKey, CreatedAt: cmd.ReservedAt, UpdatedAt: cmd.ReservedAt, Status: "RESERVED"}
 		remaining := cmd.RequestedPoints
@@ -1832,7 +1874,7 @@ func (s *JSONPersonalPointStore) reserve(ctx context.Context, cmd PersonalPointR
 			remaining -= amount
 		}
 		if remaining != 0 {
-			return ErrInsufficientPoints
+			return newInsufficientPointsError(account.AvailablePoints, cmd.RequestedPoints)
 		}
 		beforeAvailable, beforeFrozen := account.AvailablePoints, account.FrozenPoints
 		account.AvailablePoints -= cmd.RequestedPoints

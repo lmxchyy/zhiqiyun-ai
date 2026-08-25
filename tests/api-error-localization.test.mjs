@@ -41,3 +41,23 @@ test("business error codes receive Chinese display messages", async () => {
     message: "可用额度不足，请充值或升级套餐",
   });
 });
+
+test("insufficient points code survives non-2xx responses with actionable details", async () => {
+  const client = createApiClient({
+    adapter: adapter({
+      statusCode: 400,
+      data: {
+        code: "INSUFFICIENT_POINTS",
+        message: "积分不足",
+        currentPoints: 10,
+        requiredPoints: 80,
+        shortfall: 70,
+      },
+    }),
+  });
+  await assert.rejects(client.request("/generate"), error => {
+    assert.equal(error.message, "积分不足，当前 10 积分，本次需要 80 积分，还差 70 积分。");
+    assert.equal(error.apiCode, "INSUFFICIENT_POINTS");
+    return true;
+  });
+});
