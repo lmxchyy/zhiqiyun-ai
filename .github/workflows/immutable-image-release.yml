@@ -19,7 +19,7 @@ jobs:
   release-image:
     runs-on:
       - self-hosted
-      - linux
+      - xianzhi-linux
     env:
       IMAGE: ghcr.io/${{ github.repository }}
       RELEASE_SHA: ${{ inputs.target_sha || github.sha }}
