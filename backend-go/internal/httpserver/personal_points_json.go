@@ -62,28 +62,8 @@ func defaultPersonalPointPolicy() PointExpiryPolicy {
 	}
 }
 
-func defaultRegistrationPointPolicy() PointExpiryPolicy {
-	return PointExpiryPolicy{
-		ID: "point_expiry_policy_registration_permanent", Version: 2, Revision: 2, Enabled: false,
-		DurationValue: 0, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai",
-		SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED",
-	}
-}
-
 func defaultPersonalPointPolicies() []PointExpiryPolicy {
-	return []PointExpiryPolicy{defaultPersonalPointPolicy(), defaultRegistrationPointPolicy()}
-}
-
-func ensureDefaultRegistrationPointPolicy(state *personalPointState) {
-	if state == nil {
-		return
-	}
-	for _, policy := range state.Policies {
-		if policy.ID == defaultRegistrationPointPolicy().ID {
-			return
-		}
-	}
-	state.Policies = append(state.Policies, defaultRegistrationPointPolicy())
+	return []PointExpiryPolicy{defaultPersonalPointPolicy()}
 }
 
 func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
@@ -140,7 +120,6 @@ func (s *JSONPersonalPointStore) loadLocked() (personalPointState, error) {
 	if state.Policies == nil || len(state.Policies) == 0 {
 		state.Policies = defaultPersonalPointPolicies()
 	}
-	ensureDefaultRegistrationPointPolicy(&state)
 	return state, nil
 }
 
@@ -760,7 +739,6 @@ func normalizePersonalPointState(state *personalPointState) {
 	if len(state.Policies) == 0 {
 		state.Policies = defaultPersonalPointPolicies()
 	}
-	ensureDefaultRegistrationPointPolicy(state)
 }
 
 func clonePersonalPointState(state personalPointState) personalPointState {
@@ -1401,6 +1379,9 @@ func ensurePersonalAccount(state *personalPointState, accountID, userID string) 
 }
 
 func currentPersonalPointPolicy(state *personalPointState, source PointSource, now time.Time) (PointExpiryPolicy, error) {
+	if source == PointSourceRegistrationGift {
+		return registrationPermanentPointPolicy(), nil
+	}
 	policies := append([]PointExpiryPolicy(nil), state.Policies...)
 	sort.SliceStable(policies, func(i, j int) bool { return policies[i].Version > policies[j].Version })
 	now = pointNow(now)

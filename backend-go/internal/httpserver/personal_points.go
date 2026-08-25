@@ -559,6 +559,12 @@ func isGiftPointSource(source PointSource) bool {
 	return source == PointSourceRegistrationGift || source == PointSourceActivityGift || source == PointSourceAdminGift
 }
 
+func registrationPermanentPointPolicy() PointExpiryPolicy {
+	return PointExpiryPolicy{
+		SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PERMANENT",
+	}
+}
+
 func pointCommandFingerprint(v any) string {
 	raw, _ := json.Marshal(v)
 	hash := sha256.Sum256(raw)

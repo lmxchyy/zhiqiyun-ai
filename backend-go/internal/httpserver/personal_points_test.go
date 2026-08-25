@@ -98,8 +98,8 @@ func TestPersonalPointsGiftPolicySnapshotAndMonthEndClamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Lot.PolicyVersionID == "" || result.Lot.PolicySnapshot.Version != 2 || result.Lot.PolicySnapshot.Enabled || !result.Lot.Permanent() {
-		t.Fatalf("gift policy snapshot = %+v", result.Lot.PolicySnapshot)
+	if result.Lot.PolicyVersionID != "" || !result.Lot.Permanent() {
+		t.Fatalf("registration gift must be permanent without an expiry policy: lot = %+v", result.Lot)
 	}
 
 	for _, source := range []PointSource{PointSourceActivityGift, PointSourceAdminGift} {
