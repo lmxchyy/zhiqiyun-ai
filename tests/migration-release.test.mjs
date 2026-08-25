@@ -7,9 +7,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const harness = "tests/migration-release.harness.sh";
+// Pin Git Bash explicitly: bare "bash" resolves to the WSL launcher in System32
+// when tests execute under the Windows self-hosted runner service account.
+const bash = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "bash";
 
 test("release migration runner selects 109, excludes down files, and is idempotent", () => {
-  const output = execFileSync("bash", [harness], { cwd: root, encoding: "utf8" });
+  const output = execFileSync(bash, [harness], { cwd: root, encoding: "utf8" });
   assert.match(output, /migration harness PASS/);
 });
 
