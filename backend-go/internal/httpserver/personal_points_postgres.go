@@ -208,6 +208,9 @@ func pgUpdateAccount(ctx context.Context, tx *sql.Tx, account pgPointAccount) er
 }
 
 func pgPolicy(ctx context.Context, tx *sql.Tx, source PointSource, now time.Time) (PointExpiryPolicy, error) {
+	if source == PointSourceRegistrationGift {
+		return registrationPermanentPointPolicy(), nil
+	}
 	var policy PointExpiryPolicy
 	var sourceTypes []byte
 	var effectiveTo sql.NullTime

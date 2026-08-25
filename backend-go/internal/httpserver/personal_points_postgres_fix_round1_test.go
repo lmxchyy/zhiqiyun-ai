@@ -132,7 +132,7 @@ func TestPersonalPointsPostgresExpiryLeavesReservedAndExpiresReleasedPoints(t *t
 	expireAt := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
 
 	captureAccount := "pg-expiry-capture-" + suffix
-	if _, err := store.grant(ctx, PersonalPointGrantCommand{AccountID: captureAccount, UserID: "user-" + captureAccount, Source: PointSourceRegistrationGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
+	if _, err := store.grant(ctx, PersonalPointGrantCommand{AccountID: captureAccount, UserID: "user-" + captureAccount, Source: PointSourceActivityGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
 		t.Fatal(err)
 	}
 	reserved, err := store.reserve(ctx, PersonalPointReserveCommand{AccountID: captureAccount, UserID: "user-" + captureAccount, BusinessType: "IMAGE", BusinessID: "capture-task", RequestedPoints: 4, IdempotencyKey: "reserve", ReservedAt: reserveAt})
@@ -151,7 +151,7 @@ func TestPersonalPointsPostgresExpiryLeavesReservedAndExpiresReleasedPoints(t *t
 	}
 
 	releaseAccount := "pg-expiry-release-" + suffix
-	if _, err := store.grant(ctx, PersonalPointGrantCommand{AccountID: releaseAccount, UserID: "user-" + releaseAccount, Source: PointSourceRegistrationGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
+	if _, err := store.grant(ctx, PersonalPointGrantCommand{AccountID: releaseAccount, UserID: "user-" + releaseAccount, Source: PointSourceActivityGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
 		t.Fatal(err)
 	}
 	reserved, err = store.reserve(ctx, PersonalPointReserveCommand{AccountID: releaseAccount, UserID: "user-" + releaseAccount, BusinessType: "IMAGE", BusinessID: "release-task", RequestedPoints: 4, IdempotencyKey: "reserve", ReservedAt: reserveAt})
@@ -168,5 +168,26 @@ func TestPersonalPointsPostgresExpiryLeavesReservedAndExpiresReleasedPoints(t *t
 	}
 	if available != 0 || reservedPoints != 0 || expiredPoints != 4 || status != "EXPIRED" {
 		t.Fatalf("release-after-expiry lot=(%d,%d,%d,%s), want (0,0,4,EXPIRED)", available, reservedPoints, expiredPoints, status)
+	}
+}
+
+func TestPersonalPointsPostgresRegistrationGiftIsPermanent(t *testing.T) {
+	db, store, ctx := openPersonalPointFixRound1Postgres(t)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	accountID := "pg-registration-permanent-" + suffix
+	userID := "user-" + accountID
+	if _, err := store.grant(ctx, PersonalPointGrantCommand{
+		AccountID: accountID, UserID: userID, Source: PointSourceRegistrationGift,
+		Points: 10, ReferenceType: "PLAN", ReferenceID: "plan_free", IdempotencyKey: "registration", GrantedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var expiresAt sql.NullTime
+	var policyID sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT expires_at, policy_version_id FROM xz_personal_point_lots WHERE account_id=$1`, accountID).Scan(&expiresAt, &policyID); err != nil {
+		t.Fatal(err)
+	}
+	if expiresAt.Valid || policyID.Valid {
+		t.Fatalf("registration gift is not permanent: expires_at=%v policy_version_id=%v", expiresAt, policyID)
 	}
 }

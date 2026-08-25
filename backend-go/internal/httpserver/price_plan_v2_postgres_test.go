@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -392,7 +395,7 @@ func TestPricePlanV2PostgresOneYuanAgentFulfillmentIsSnapshotOnlyAndIdempotent(t
 	if _, err := db.ExecContext(ctx, `insert into xz_users(id,email,name,role,status,created_at,updated_at) values($1,$1||'@example.test',$1,'MEMBER','ACTIVE',$2,$2)`, userID, nowText); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into xz_point_accounts(id,user_id,available,frozen,raw) values($1,$2,0,0,'{}')`, "points_"+suffix, userID); err != nil {
+	if _, err := db.ExecContext(ctx, `insert into xz_point_accounts(id,user_id,available,frozen,raw) values($1,$2,0,0,jsonb_build_object('id',$1::text,'userId',$2::text,'available',0,'frozen',0))`, "points_"+suffix, userID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `insert into xz_plans(id,code,name,plan_type,active) values($1,$1,'agent','AGENT_JOIN_PACKAGE',true)`, planID); err != nil {
@@ -451,6 +454,11 @@ func TestPricePlanV2PostgresOneYuanAgentFulfillmentIsSnapshotOnlyAndIdempotent(t
 		PricePlanCreationEnabled: true, PricePlanTestEntryEnabled: true,
 		SnapshotV2FulfillmentEnabled: true,
 	}}
+	service.accessToken = "mock-access-token"
+	service.accessTokenExp = time.Now().Add(time.Hour)
+	service.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"errcode":0,"errmsg":"ok"}`))}, nil
+	})}
 	user := adminUser{ID: userID}
 	quote, err := service.issuePriceQuote(ctx, user, "", planID, priceID, pricePlanEntryTest)
 	if err != nil {
