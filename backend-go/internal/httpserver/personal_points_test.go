@@ -42,6 +42,29 @@ func TestPersonalPointsMissingAccountReadsZeroAndReserveDoesNotCreate(t *testing
 	}
 }
 
+func TestPersonalPointsInsufficientReserveExposesStableCodeAndDetails(t *testing.T) {
+	service, _ := newPersonalPointTestService(t)
+	ctx := context.Background()
+	if _, err := service.Grant(ctx, PersonalPointGrantCommand{
+		AccountID: "account-insufficient", UserID: "user-insufficient", Source: PointSourceRecharge,
+		Points: 10, IdempotencyKey: "grant-insufficient", GrantedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.Reserve(ctx, PersonalPointReserveCommand{
+		AccountID: "account-insufficient", UserID: "user-insufficient", BusinessType: "GENERATION_TASK",
+		BusinessID: "task-insufficient", RequestedPoints: 80, IdempotencyKey: "reserve-insufficient",
+	})
+	var insufficient *InsufficientPointsError
+	if !errors.As(err, &insufficient) || insufficient.CurrentPoints != 10 || insufficient.RequiredPoints != 80 {
+		t.Fatalf("reserve error = %T %v, want INSUFFICIENT_POINTS with 10/80 details", err, err)
+	}
+	if insufficient.BusinessCode() != "INSUFFICIENT_POINTS" || insufficient.ErrorDetails()["shortfall"] != int64(70) {
+		t.Fatalf("insufficient error details = %+v", insufficient.ErrorDetails())
+	}
+}
+
 func TestPersonalPointsRegistrationUsesCurrentPlanGrant(t *testing.T) {
 	service, store := newPersonalPointTestService(t)
 	plan := adminPlan{ID: "plan_free", GrantPoints: 321, Points: 7, DurationDays: 14, Active: true}
@@ -56,6 +79,9 @@ func TestPersonalPointsRegistrationUsesCurrentPlanGrant(t *testing.T) {
 	}
 	if result.Lot.OriginalPoints != 321 {
 		t.Fatalf("registration grant = %d, want current plan grant 321", result.Lot.OriginalPoints)
+	}
+	if !result.Lot.Permanent() || !result.Lot.ExpiresAt.IsZero() {
+		t.Fatalf("registration grant must be permanent, lot = %+v", result.Lot)
 	}
 	if got := store.AccountCount(); got != 1 {
 		t.Fatalf("account count = %d, want 1", got)
@@ -72,11 +98,8 @@ func TestPersonalPointsGiftPolicySnapshotAndMonthEndClamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Lot.PolicyVersionID == "" || result.Lot.PolicySnapshot.Version != 1 || !result.Lot.PolicySnapshot.Enabled {
+	if result.Lot.PolicyVersionID == "" || result.Lot.PolicySnapshot.Version != 2 || result.Lot.PolicySnapshot.Enabled || !result.Lot.Permanent() {
 		t.Fatalf("gift policy snapshot = %+v", result.Lot.PolicySnapshot)
-	}
-	if got, want := result.Lot.ExpiresAt.In(time.FixedZone("CST", 8*60*60)), time.Date(2024, 4, 30, 23, 45, 0, 0, time.FixedZone("CST", 8*60*60)); !got.Equal(want) {
-		t.Fatalf("gift expiry = %s, want Asia/Shanghai month-end clamp near %s", got, want)
 	}
 
 	for _, source := range []PointSource{PointSourceActivityGift, PointSourceAdminGift} {
@@ -89,6 +112,9 @@ func TestPersonalPointsGiftPolicySnapshotAndMonthEndClamp(t *testing.T) {
 		}
 		if lot.Lot.PolicyVersionID == "" || lot.Lot.PolicySnapshot.TimeZone != "Asia/Shanghai" {
 			t.Fatalf("%s snapshot = %+v", source, lot.Lot.PolicySnapshot)
+		}
+		if got, want := lot.Lot.ExpiresAt.In(time.FixedZone("CST", 8*60*60)), time.Date(2024, 4, 30, 23, 45, 0, 0, time.FixedZone("CST", 8*60*60)); !got.Equal(want) {
+			t.Fatalf("%s expiry = %s, want Asia/Shanghai month-end clamp near %s", source, got, want)
 		}
 	}
 
@@ -138,7 +164,7 @@ func TestPersonalPointsFEFOCaptureReleaseAndLazyExpiry(t *testing.T) {
 	service, _ := newPersonalPointTestService(t)
 	ctx := context.Background()
 	grantAt := time.Now().UTC()
-	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "account-fefo", UserID: "user-fefo", Source: PointSourceRegistrationGift, Points: 5, IdempotencyKey: "gift-fefo", GrantedAt: grantAt}); err != nil {
+	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "account-fefo", UserID: "user-fefo", Source: PointSourceActivityGift, Points: 5, IdempotencyKey: "gift-fefo", GrantedAt: grantAt}); err != nil {
 		t.Fatal(err)
 	}
 	permanent, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "account-fefo", UserID: "user-fefo", Source: PointSourceRecharge, Points: 7, IdempotencyKey: "paid-fefo", GrantedAt: grantAt})
@@ -175,7 +201,7 @@ func TestPersonalPointsFEFOCaptureReleaseAndLazyExpiry(t *testing.T) {
 	}
 
 	// A second account proves lazy expiry before reserve and immediate EXPIRE on the old lot.
-	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "account-expiry", UserID: "user-expiry", Source: PointSourceRegistrationGift, Points: 4, IdempotencyKey: "gift-expiry", GrantedAt: time.Date(2024, 1, 31, 15, 45, 0, 0, time.UTC)}); err != nil {
+	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "account-expiry", UserID: "user-expiry", Source: PointSourceActivityGift, Points: 4, IdempotencyKey: "gift-expiry", GrantedAt: time.Date(2024, 1, 31, 15, 45, 0, 0, time.UTC)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "account-expiry", UserID: "user-expiry", Source: PointSourceRecharge, Points: 2, IdempotencyKey: "paid-expiry", GrantedAt: grantAt}); err != nil {

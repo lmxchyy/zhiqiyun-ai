@@ -1028,6 +1028,11 @@ func writeError(w http.ResponseWriter, status int, err error) {
 		payload["code"] = coded.BusinessCode()
 		payload["message"] = err.Error()
 	}
+	if detailed, ok := err.(interface{ ErrorDetails() map[string]any }); ok {
+		for key, value := range detailed.ErrorDetails() {
+			payload[key] = value
+		}
+	}
 	_ = json.NewEncoder(w).Encode(payload)
 }
 

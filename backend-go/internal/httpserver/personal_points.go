@@ -59,6 +59,35 @@ var (
 	ErrPersonalPointMergeActiveReservation   = errors.New("personal point merge blocked by active reservation")
 )
 
+// InsufficientPointsError is the stable API error for a failed personal-point
+// reservation. It keeps the legacy sentinel for callers that use errors.Is,
+// while exposing enough data for clients to render an actionable message.
+type InsufficientPointsError struct {
+	CurrentPoints  int64
+	RequiredPoints int64
+}
+
+func (e *InsufficientPointsError) Error() string { return "积分不足" }
+
+func (e *InsufficientPointsError) Unwrap() error { return ErrInsufficientPoints }
+
+func (e *InsufficientPointsError) BusinessCode() string { return "INSUFFICIENT_POINTS" }
+
+func (e *InsufficientPointsError) ErrorDetails() map[string]any {
+	if e == nil || e.CurrentPoints < 0 || e.RequiredPoints <= 0 {
+		return nil
+	}
+	return map[string]any{
+		"currentPoints":  e.CurrentPoints,
+		"requiredPoints": e.RequiredPoints,
+		"shortfall":      e.RequiredPoints - e.CurrentPoints,
+	}
+}
+
+func newInsufficientPointsError(currentPoints, requiredPoints int64) error {
+	return &InsufficientPointsError{CurrentPoints: currentPoints, RequiredPoints: requiredPoints}
+}
+
 const personalLotBillingEngine = "PERSONAL_LOT_V1"
 
 type PointExpiryPolicy struct {

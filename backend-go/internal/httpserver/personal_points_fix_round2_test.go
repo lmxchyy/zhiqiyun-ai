@@ -16,14 +16,14 @@ func TestPersonalPointsJsonRejectsLowercaseCalendarMonthWithoutReplacingPolicy(t
 	if err := store.SetPolicy(PointExpiryPolicy{
 		ID: "lowercase-policy", Version: 2, Revision: 1, Enabled: true, DurationValue: 9,
 		DurationUnit: "calendar_month", TimeZone: "Asia/Shanghai",
-		SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED",
+		SourceTypes: []string{string(PointSourceActivityGift)}, Status: "PUBLISHED",
 		EffectiveFrom: time.Now().Add(-time.Hour),
 	}); !errors.Is(err, ErrInvalidPointCommand) {
 		t.Fatalf("lowercase duration unit error = %v, want fail closed", err)
 	}
 	result, err := NewPersonalPointService(store).Grant(ctx, PersonalPointGrantCommand{
 		AccountID: "lowercase-policy-account", UserID: "lowercase-policy-user",
-		Source: PointSourceRegistrationGift, Points: 1, IdempotencyKey: "grant",
+		Source: PointSourceActivityGift, Points: 1, IdempotencyKey: "grant",
 		GrantedAt: time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestPersonalPointsJsonWalletLedgerCoversMutationsAndIsIdempotent(t *testing
 	}
 
 	if _, err := service.Grant(ctx, PersonalPointGrantCommand{
-		AccountID: "ledger-release", UserID: "ledger-release-user", Source: PointSourceRegistrationGift,
+		AccountID: "ledger-release", UserID: "ledger-release-user", Source: PointSourceActivityGift,
 		Points: 4, IdempotencyKey: "gift", GrantedAt: time.Date(2024, 1, 31, 15, 45, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatal(err)

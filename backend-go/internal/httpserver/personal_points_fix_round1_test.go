@@ -13,7 +13,7 @@ func TestPersonalPointsExpiryDoesNotTouchReservedAndCaptureAfterDeadline(t *test
 	store := NewJSONPersonalPointStore(filepath.Join(t.TempDir(), "points.json"))
 	service := NewPersonalPointService(store)
 	grantAt := time.Date(2024, 1, 31, 15, 45, 0, 0, time.UTC)
-	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "expiry-reserved", UserID: "expiry-user", Source: PointSourceRegistrationGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
+	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "expiry-reserved", UserID: "expiry-user", Source: PointSourceActivityGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := service.Reserve(ctx, PersonalPointReserveCommand{AccountID: "expiry-reserved", UserID: "expiry-user", BusinessType: "IMAGE", BusinessID: "reserved-task", RequestedPoints: 4, IdempotencyKey: "reserve", ReservedAt: time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)})
@@ -44,7 +44,7 @@ func TestPersonalPointsReleaseAfterDeadlineThenExpiresSameLot(t *testing.T) {
 	store := NewJSONPersonalPointStore(filepath.Join(t.TempDir(), "points.json"))
 	service := NewPersonalPointService(store)
 	grantAt := time.Date(2024, 1, 31, 15, 45, 0, 0, time.UTC)
-	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "release-expiry", UserID: "release-user", Source: PointSourceRegistrationGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
+	if _, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "release-expiry", UserID: "release-user", Source: PointSourceActivityGift, Points: 4, IdempotencyKey: "gift", GrantedAt: grantAt}); err != nil {
 		t.Fatal(err)
 	}
 	reservation, err := service.Reserve(ctx, PersonalPointReserveCommand{AccountID: "release-expiry", UserID: "release-user", BusinessType: "IMAGE", BusinessID: "release-task", RequestedPoints: 4, IdempotencyKey: "reserve", ReservedAt: time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)})
@@ -86,10 +86,10 @@ func TestPersonalPointsPolicySelectsOnlyCurrentlyEffectivePublishedCalendarMonth
 	store := NewJSONPersonalPointStore(filepath.Join(t.TempDir(), "points.json"))
 	service := NewPersonalPointService(store)
 	now := time.Now().UTC()
-	if err := store.SetPolicy(PointExpiryPolicy{ID: "future", Version: 2, Revision: 1, Enabled: true, DurationValue: 9, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai", SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED", EffectiveFrom: now.Add(24 * time.Hour)}); err != nil {
+	if err := store.SetPolicy(PointExpiryPolicy{ID: "future", Version: 3, Revision: 1, Enabled: true, DurationValue: 9, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai", SourceTypes: []string{string(PointSourceActivityGift)}, Status: "PUBLISHED", EffectiveFrom: now.Add(24 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "policy-effective", UserID: "policy-user", Source: PointSourceRegistrationGift, Points: 1, IdempotencyKey: "future-policy", GrantedAt: now})
+	result, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "policy-effective", UserID: "policy-user", Source: PointSourceActivityGift, Points: 1, IdempotencyKey: "future-policy", GrantedAt: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestPersonalPointsJsonStatusAndPermanentUseExpiryOnly(t *testing.T) {
 	ctx := context.Background()
 	store := NewJSONPersonalPointStore(filepath.Join(t.TempDir(), "points.json"))
 	service := NewPersonalPointService(store)
-	if err := store.SetPolicy(PointExpiryPolicy{ID: "disabled", Version: 2, Revision: 1, Enabled: false, DurationValue: 1, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai", SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED", EffectiveFrom: time.Now().Add(-time.Hour)}); err != nil {
+	if err := store.SetPolicy(PointExpiryPolicy{ID: "disabled", Version: 3, Revision: 1, Enabled: false, DurationValue: 1, DurationUnit: "CALENDAR_MONTH", TimeZone: "Asia/Shanghai", SourceTypes: []string{string(PointSourceRegistrationGift)}, Status: "PUBLISHED", EffectiveFrom: time.Now().Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	grant, err := service.Grant(ctx, PersonalPointGrantCommand{AccountID: "status", UserID: "status-user", Source: PointSourceRegistrationGift, Points: 2, IdempotencyKey: "disabled-gift"})

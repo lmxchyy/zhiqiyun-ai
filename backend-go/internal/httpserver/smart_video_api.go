@@ -359,6 +359,9 @@ func writeSmartVideoError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, smartvideo.ErrInsufficientPoints):
 		status = http.StatusPaymentRequired
+		if _, ok := err.(*InsufficientPointsError); !ok {
+			err = newInsufficientPointsError(0, 0)
+		}
 	case errors.Is(err, smartvideo.ErrFileNotReady),
 		errors.Is(err, storagecenter.ErrFileNotFound),
 		errors.Is(err, storagecenter.ErrFileForbidden):
