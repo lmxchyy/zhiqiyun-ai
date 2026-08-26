@@ -48,12 +48,46 @@ func (s *postgresStore) pricingHealth(ctx context.Context, cfg config.Config) (p
 	if err := loadPricingHealthRollout(ctx, tx, &view); err != nil {
 		return pricingHealthView{}, err
 	}
+	if err := loadPricingHealthProviderCostIssues(ctx, tx, &view, checkedAt); err != nil {
+		return pricingHealthView{}, err
+	}
 	evaluatePricingHealth(&view, checkedAt)
 	finalizePricingHealth(&view)
 	if err := tx.Commit(); err != nil {
 		return pricingHealthView{}, err
 	}
 	return view, nil
+}
+
+func loadPricingHealthProviderCostIssues(ctx context.Context, tx *sql.Tx, view *pricingHealthView, now time.Time) error {
+	rows, err := tx.QueryContext(ctx, `
+		select id,provider,channel,platform_model_code,upstream_model_name,billing_unit,parameter_range,
+			unit_cost,currency,effective_from,effective_to,status,created_at,updated_at
+		from xz_provider_costs
+		where status = 'ACTIVE'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		cost, err := scanProviderCost(rows)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(strings.TrimSpace(cost.Currency), "CNY") || cost.UnitCost < 0 {
+			appendPricingHealthIssue(view, pricingHealthIssue{Code: pricingHealthIssueProviderCostInvalid, Severity: pricingHealthSeverityWarning, Scope: "GENERATION", Message: "provider cost has an unsupported currency or negative value"})
+		}
+		if !providerCostEffective(cost, now) {
+			appendPricingHealthIssue(view, pricingHealthIssue{Code: pricingHealthIssueProviderCostExpired, Severity: pricingHealthSeverityWarning, Scope: "GENERATION", Message: "active provider cost is outside its effective window"})
+		}
+		key := strings.Join([]string{cost.PlatformModelCode, cost.Channel, cost.EffectiveFrom, cost.CreatedAt}, "|")
+		if seen[key] {
+			appendPricingHealthIssue(view, pricingHealthIssue{Code: pricingHealthIssueProviderCostAmbiguous, Severity: pricingHealthSeverityWarning, Scope: "GENERATION", Message: "multiple active provider costs share the same precedence key"})
+		}
+		seen[key] = true
+	}
+	return rows.Err()
 }
 
 func assertPricingHealthTransaction(ctx context.Context, tx *sql.Tx) error {
