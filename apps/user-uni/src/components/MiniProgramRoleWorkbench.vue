@@ -754,6 +754,7 @@ import {
   normalizeVideoModelCapabilities,
   transitionVideoParameterValues,
 } from "@xianzhi/business-sdk";
+import type { GenerationQuote } from "@xianzhi/business-sdk";
 import { api, authStorage, businessSdk, setAuthToken } from "../api/client";
 import { absoluteApiURL, uploadReferenceImage } from "../api/files";
 import { recordInspirationEvent } from "../features/inspiration/events";
@@ -771,7 +772,6 @@ import {
 import { exactModuleSchemaPath } from "../features/generation/moduleSchema";
 import {
   DEFAULT_VIDEO_MODEL_CODE,
-  estimateFormalVideoPoints,
   pickDefaultVideoModelCode,
   sortVideoModelsByListPrice,
   videoModelSubtitle as formatVideoModelSubtitle,
@@ -795,7 +795,6 @@ import {
   buildCanonicalImageDraft,
   canonicalImageParameters,
   imageModelOptions,
-  imagePointEstimateLabel,
   initialImageSelection,
   isCanonicalImageQuality,
   resolveImageModelCode,
@@ -1100,6 +1099,11 @@ const pendingImageSelection = ref<CanonicalImageSelection | null>(null);
 const imageClientRequestKey = ref<ImageClientRequestKeyState>();
 const imageRequestPreviousOutcome = ref<ImageRequestPreviousOutcome>();
 const imageReferenceUploadCache = ref<ImageReferenceUploadCache>();
+const imageQuote = ref<GenerationQuote | null>(null);
+const imageQuoteLoading = ref(false);
+const imageQuoteError = ref("");
+let imageQuoteTimer: ReturnType<typeof setTimeout> | null = null;
+let imageQuoteSequence = 0;
 let imageModelsRequestSequence = 0;
 let imageSchemaRequestSequence = 0;
 const creationLastFramePath = ref("");
@@ -1220,9 +1224,12 @@ const imageHasAuto = computed(() => {
   if (!imageCreationContract.value) return false;
   return contractHasAuto(imageCreationContract.value);
 });
-const imageEstimateLabel = computed(
-  () => imagePointEstimateLabel(selectedImageModel.value, imageCount.value || 1),
-);
+const imageEstimateLabel = computed(() => {
+  if (imageQuoteLoading.value) return "试算中…";
+  if (imageQuote.value) return `预计 ${imageQuote.value.requiredPoints} 积分`;
+  if (imageQuoteError.value) return imageQuoteError.value;
+  return isGuest.value ? "登录后可查看预计积分" : "价格暂不可用";
+});
 const imageGeneratorDisabledReason = computed(() => {
   if (imageModelsLoading.value) return "正在读取可用模型";
   if (imageModelsError.value) return imageModelsError.value;
@@ -1421,10 +1428,7 @@ const videoCostLabel = computed(() => {
   if (videoEstimateLoading.value) return "试算中…";
   if (videoEstimate.value) return `预计 ${videoEstimate.value.estimatedPoints} 积分`;
   if (videoEstimateError.value) return videoEstimateError.value;
-  const selected = videoModelOptions.value.find(item => item.code === selectedVideoModelCode.value);
-  if (selected?.priceHint) return selected.priceHint;
-  if (selected?.priceLabel) return selected.priceLabel;
-  return "切换模型后自动试算";
+  return "价格暂不可用";
 });
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
 const generationNoticePending = computed(() => latestGenerationTask.value?.tone === "pending");
@@ -1649,6 +1653,7 @@ watch(selectedImageModelCode, (modelCode, previousModelCode) => {
   if (modelCode === previousModelCode || creationMode.value !== "image") return;
   creationError.value = "";
   void loadImageSchemaForModel(modelCode);
+  scheduleImageQuote();
 });
 watch([selectedRatio, selectedTier, imageCreationContract], ([ratio, tier]) => {
   if (!imageCreationContract.value) return;
@@ -1665,7 +1670,9 @@ watch([selectedRatio, selectedTier, imageCreationContract], ([ratio, tier]) => {
     return;
   }
   imageSize.value = resolveCanonicalSubmitSize(imageCreationContract.value, ratio, nextTier) || "";
+  scheduleImageQuote();
 });
+watch([imageQuality, imageCount], () => scheduleImageQuote());
 
 onShareAppMessage(() => ({
   title: "知启云 AI 邀请你一起创作",
@@ -1911,6 +1918,42 @@ function chooseCreationLastFrame() {
 function removeCreationLastFrame() {
   creationLastFramePath.value = "";
   scheduleVideoEstimate();
+}
+
+function clearImageQuoteTimer() {
+  if (imageQuoteTimer) {
+    clearTimeout(imageQuoteTimer);
+    imageQuoteTimer = null;
+  }
+}
+
+function scheduleImageQuote() {
+  clearImageQuoteTimer();
+  const sequence = ++imageQuoteSequence;
+  imageQuote.value = null;
+  imageQuoteError.value = "";
+  if (creationMode.value !== "image" || !selectedImageModelCode.value || !imageSize.value || isGuest.value) return;
+  imageQuoteTimer = setTimeout(async () => {
+    imageQuoteLoading.value = true;
+    try {
+      const result = await businessSdk.generation.quote({
+        type: "TEXT_TO_IMAGE",
+        prompt: creationPrompt.value.trim() || "image generation quote",
+        model: selectedImageModelCode.value,
+        params: {
+          size: imageSize.value,
+          quality: resolvedImageQualityForSubmit() || "auto",
+          n: resolvedImageCountForSubmit() || 1,
+          ...canonicalImageParameters(restoredCreationParams.value),
+        },
+      });
+      if (sequence === imageQuoteSequence) imageQuote.value = result;
+    } catch {
+      if (sequence === imageQuoteSequence) imageQuoteError.value = "价格暂不可用";
+    } finally {
+      if (sequence === imageQuoteSequence) imageQuoteLoading.value = false;
+    }
+  }, 250);
 }
 
 function chooseCreationReferenceImages() {
@@ -3237,6 +3280,7 @@ async function loadImageSchemaForModel(modelCode: string) {
     if (resolved.status === "ready") {
       imageCreationContract.value = resolved.contract;
       resetImageSelectionFromContract(resolved.contract);
+      scheduleImageQuote();
     }
   } catch (error) {
     if (creationMode.value !== "image") return;
@@ -3286,31 +3330,23 @@ function scheduleVideoEstimate() {
       if (videoGenerationMode.value === "IMAGE_TO_VIDEO" && creationLastFramePath.value) {
         params.last_frame = creationLastFramePath.value;
       }
-      const result = await businessSdk.generation.estimateVideo({
+      const result = await businessSdk.generation.quote({
         type: videoGenerationMode.value,
         prompt: creationPrompt.value.trim() || "video generation estimate",
         model: selectedVideoModelCode.value,
         params,
       });
       if (sequence !== videoEstimateSequence) return;
-      videoEstimate.value = result;
+      videoEstimate.value = {
+        model: result.model,
+        estimatedPoints: result.requiredPoints,
+        billingType: result.billingUnit.toLowerCase(),
+        quantityField: String(result.breakdown?.quantityField || "request"),
+        quantity: result.quantity,
+        note: "试算不冻结或扣除积分，正式提交时以后端重新计算结果为准。",
+      };
     } catch (error) {
       if (sequence !== videoEstimateSequence) return;
-      const duration = Number(videoParameterValues.value.duration);
-      const resolution = String(videoParameterValues.value.resolution || "720p");
-      const fallbackPoints = estimateFormalVideoPoints(selectedVideoModelCode.value, duration, resolution);
-      if (fallbackPoints > 0) {
-        videoEstimate.value = {
-          model: selectedVideoModelCode.value,
-          estimatedPoints: fallbackPoints,
-          billingType: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? "per_request" : "per_second",
-          quantityField: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? "request" : "duration",
-          quantity: selectedVideoModelCode.value === "grok-imagine-video-1.5-preview" ? 1 : duration,
-          note: "本地按正式计价规则估算，正式提交时以后端为准。",
-        };
-        videoEstimateError.value = "";
-        return;
-      }
       const message = error instanceof Error ? error.message : "";
       videoEstimateError.value = /首帧|参考图|IMAGE_TO_VIDEO|first.?frame/i.test(message)
         ? "上传参考图后可试算积分"
@@ -3966,6 +4002,7 @@ async function loadTerminalCapabilities() {
 
 onBeforeUnmount(() => {
   uni.$off("legal-acceptance-completed", handleLegalAcceptanceCompleted);
+  clearImageQuoteTimer();
   clearVideoEstimateTimer();
   imageModelsRequestSequence += 1;
   imageSchemaRequestSequence += 1;

@@ -84,6 +84,18 @@ export interface VideoGenerationEstimate {
   note: string;
 }
 
+export interface GenerationQuote {
+  model: string;
+  businessType: string;
+  requiredPoints: number;
+  pricingRuleId: string;
+  pricingRuleVersion: number;
+  billingUnit: string;
+  quantity: number;
+  breakdown: AnyRecord;
+  normalizedParameters: AnyRecord;
+}
+
 export interface PagedItems<T> {
   items: T[];
   total: number;
@@ -134,6 +146,7 @@ export interface BusinessSdk {
   };
   generation: {
     createTask(draft: CreateDraft): Promise<GenerationTask>;
+    quote(request: CreateGenerationTaskRequest): Promise<GenerationQuote>;
     estimateVideo(request: CreateGenerationTaskRequest): Promise<VideoGenerationEstimate>;
     listTasks(): Promise<GenerationTask[]>;
     listTaskPage(options?: TaskPageOptions): Promise<PagedItems<GenerationTask>>;

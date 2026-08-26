@@ -48,7 +48,8 @@ export type {
   RoleWalletResponse,
   SubscriptionOrderInput,
   TaskPageOptions,
-  VideoGenerationEstimate
+  VideoGenerationEstimate,
+  GenerationQuote
 } from "./types";
 
 export function createBusinessSdk(api: ApiClient): BusinessSdk {
