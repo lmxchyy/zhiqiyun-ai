@@ -375,11 +375,12 @@ func (s *jsonStore) ListBillingReconciliation() ([]billingReconciliationItem, er
 	if err != nil {
 		return nil, err
 	}
-	return buildBillingReconciliation(data.GenerationTasks, data.BillingLifecycleEvents, data.WalletLedger), nil
+	return buildBillingReconciliation(data.GenerationTasks, data.BillingLifecycleEvents, data.WalletLedger, data.ProviderCosts), nil
 }
 
 func validateBillingRuleVersionData(item billingRuleVersion, data adminPlatformData) billingRuleValidationResult {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339Nano)
 	issues := []billingRuleValidationIssue{}
 	add := func(code, field, severity, message string) {
 		issues = append(issues, billingRuleValidationIssue{Code: code, Field: field, Severity: severity, Message: message})
@@ -408,7 +409,7 @@ func validateBillingRuleVersionData(item billingRuleVersion, data adminPlatformD
 	}
 	matchingCosts := []providerCost{}
 	for _, cost := range data.ProviderCosts {
-		if upperTrim(cost.Status) == "ACTIVE" && strings.EqualFold(cost.PlatformModelCode, item.ModelCode) {
+		if upperTrim(cost.Status) == "ACTIVE" && strings.EqualFold(cost.PlatformModelCode, item.ModelCode) && providerCostEffective(cost, nowTime) && strings.EqualFold(strings.TrimSpace(cost.Currency), "CNY") {
 			matchingCosts = append(matchingCosts, cost)
 		}
 	}
@@ -561,7 +562,7 @@ func validateProviderCost(item providerCost) error {
 	return nil
 }
 
-func buildBillingReconciliation(tasks []generationTask, events []billingLifecycleEvent, ledger []walletLedgerEntry) []billingReconciliationItem {
+func buildBillingReconciliation(tasks []generationTask, events []billingLifecycleEvent, ledger []walletLedgerEntry, providerCosts ...[]providerCost) []billingReconciliationItem {
 	eventsByTask := map[string][]billingLifecycleEvent{}
 	ledgerByTask := map[string][]walletLedgerEntry{}
 	for _, event := range events {
@@ -572,14 +573,14 @@ func buildBillingReconciliation(tasks []generationTask, events []billingLifecycl
 	}
 	items := make([]billingReconciliationItem, 0, len(tasks))
 	for _, task := range tasks {
-		item := reconciliationItemForTask(task, eventsByTask[task.ID], ledgerByTask[task.ID])
+		item := reconciliationItemForTask(task, eventsByTask[task.ID], ledgerByTask[task.ID], providerCosts...)
 		items = append(items, item)
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
 	return items
 }
 
-func reconciliationItemForTask(task generationTask, events []billingLifecycleEvent, ledger []walletLedgerEntry) billingReconciliationItem {
+func reconciliationItemForTask(task generationTask, events []billingLifecycleEvent, ledger []walletLedgerEntry, providerCosts ...[]providerCost) billingReconciliationItem {
 	taskStatus := firstNonEmptyString(task.TaskStatus, canonicalTaskStatus(task.Status))
 	billingStatus := firstNonEmptyString(task.BillingStatus, legacyBillingStatus(task))
 	quoted := task.QuotedPoints
@@ -596,35 +597,57 @@ func reconciliationItemForTask(task generationTask, events []billingLifecycleEve
 		ClientRequestID: task.ClientRequestID, BillingEventCount: len(events), WalletLedgerCount: len(ledger),
 		Anomalies: []string{}, CreatedAt: task.CreatedAt,
 	}
-	if taskStatus == taskStatusSucceeded && billingStatus != billingStatusCaptured && billingStatus != billingStatusRefunded {
-		item.Anomalies = append(item.Anomalies, "TASK_SUCCEEDED_NOT_CAPTURED")
+	if taskStatus == taskStatusSucceeded && item.CapturedPoints <= 0 {
+		item.Anomalies = append(item.Anomalies, "SUCCESS_WITHOUT_CAPTURE")
 	}
-	if (taskStatus == taskStatusFailed || taskStatus == taskStatusCancelled) && item.ReservedPoints > item.ReleasedPoints && billingStatus != billingStatusRefunded {
-		item.Anomalies = append(item.Anomalies, "TASK_FAILED_NOT_RELEASED")
+	if (taskStatus == taskStatusFailed || taskStatus == taskStatusCancelled) && item.ReservedPoints > item.ReleasedPoints {
+		item.Anomalies = append(item.Anomalies, "FAILED_WITH_UNRELEASED_RESERVE")
 	}
-	if item.CapturedPoints > 0 && math.Abs(item.CapturedPoints-item.QuotedPoints) > 0.000001 {
-		item.Anomalies = append(item.Anomalies, "CAPTURED_NOT_EQUAL_QUOTED")
+	if item.QuotedPoints > 0 && math.Abs(item.QuotedPoints-item.ReservedPoints) > 0.000001 {
+		item.Anomalies = append(item.Anomalies, "QUOTE_RESERVE_MISMATCH")
 	}
-	if taskStatus == taskStatusSucceeded && item.SupplierCost == nil {
-		item.Anomalies = append(item.Anomalies, "MISSING_PROVIDER_COST")
+	if item.CapturedPoints > item.ReservedPoints {
+		item.Anomalies = append(item.Anomalies, "CAPTURE_EXCEEDS_RESERVE")
 	}
 	if item.QuotedPoints > 0 && len(events) == 0 {
 		item.Anomalies = append(item.Anomalies, "MISSING_BILLING_EVENT")
 	}
-	if (item.ReservedPoints > 0 || item.CapturedPoints > 0 || item.ReleasedPoints > 0 || item.RefundedPoints > 0) && len(ledger) == 0 {
-		item.Anomalies = append(item.Anomalies, "MISSING_WALLET_LEDGER")
-	}
-	captures := 0
+	reserveEntries, captureEntries, refundEntries := 0, 0, 0
 	for _, entry := range ledger {
-		if entry.EntryType == "CAPTURE" {
-			captures++
+		switch upperTrim(entry.EntryType) {
+		case "RESERVE":
+			reserveEntries++
+		case "CAPTURE":
+			captureEntries++
+		case "REFUND":
+			refundEntries++
 		}
 	}
-	if captures > 1 {
+	if item.ReservedPoints > 0 && reserveEntries == 0 {
+		item.Anomalies = append(item.Anomalies, "RESERVE_LEDGER_MISSING")
+	}
+	if item.CapturedPoints > 0 && captureEntries == 0 {
+		item.Anomalies = append(item.Anomalies, "CAPTURE_LEDGER_MISSING")
+	}
+	if captureEntries > 1 {
 		item.Anomalies = append(item.Anomalies, "DUPLICATE_CAPTURE")
 	}
+	if refundEntries > 1 {
+		item.Anomalies = append(item.Anomalies, "DUPLICATE_REFUND")
+	}
+	if taskStatus == taskStatusSucceeded && upperTrim(billingStatus) == billingStatusBillingFailed {
+		item.Anomalies = append(item.Anomalies, "PROVIDER_SUCCESS_BILLING_FAILED")
+	}
+	if len(providerCosts) > 0 && task.SupplierCost == nil {
+		selection := selectProviderCost(providerCosts[0], task, time.Now().UTC())
+		if selection.Issue == providerCostIssueAmbiguous || selection.Issue == providerCostIssueExpired || selection.Issue == providerCostIssueInvalid {
+			item.Anomalies = append(item.Anomalies, selection.Issue)
+		} else if !selection.Found || selection.Issue != "" {
+			item.Anomalies = append(item.Anomalies, providerCostIssueMissing)
+		}
+	}
 	if item.EstimatedMargin != nil && *item.EstimatedMargin < 0 {
-		item.Anomalies = append(item.Anomalies, "NEGATIVE_MARGIN")
+		item.Anomalies = append(item.Anomalies, marginIssueNegative)
 	}
 	return item
 }
@@ -815,11 +838,24 @@ func applyTaskSupplierCost(task *generationTask, costs []providerCost) {
 	if task == nil {
 		return
 	}
-	if cost, ok := providerCostForTask(costs, *task); ok {
+	if task.SupplierCost != nil {
+		return
+	}
+	selection := selectProviderCost(costs, *task, time.Now().UTC())
+	if selection.Found && selection.Issue == "" {
+		cost := selection.Cost
 		value := supplierCostForTask(cost, *task)
-		margin := float64(task.PointCost)*float64(pointUnitAmountCents)/100 - value
+		costCents, ok := providerCostCents(cost, *task)
+		if !ok {
+			return
+		}
+		chargeCents := int64(task.PointCost * pointUnitAmountCents)
+		marginCents := chargeCents - costCents
+		margin := float64(marginCents) / 100
 		task.SupplierCost = &value
 		task.EstimatedMargin = &margin
+		task.UpstreamCost = int(costCents)
+		task.PlatformProfit = int(marginCents)
 		task.ProviderChannel = firstNonEmptyString(task.ProviderChannel, cost.Channel)
 	}
 }

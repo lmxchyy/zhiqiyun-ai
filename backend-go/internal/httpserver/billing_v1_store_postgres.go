@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 )
@@ -399,7 +398,11 @@ func (s *postgresStore) ListBillingReconciliation() ([]billingReconciliationItem
 	if err != nil {
 		return nil, err
 	}
-	return buildBillingReconciliation(tasks, events, ledger), nil
+	costs, err := s.listProviderCostsContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return buildBillingReconciliation(tasks, events, ledger, costs), nil
 }
 
 func deterministicBillingID(prefix, key string) string {
@@ -523,48 +526,6 @@ func applyPersonalWalletEntryV1(ctx context.Context, tx *sql.Tx, task generation
 	entry := walletLedgerEntry{AccountID: account.ID, UserID: task.UserID, TenantID: task.TenantID, TaskID: task.ID, EntryType: entryType, Points: float64(points), AvailableBefore: float64(account.Available), AvailableAfter: float64(next.Available), FrozenBefore: float64(account.Frozen), FrozenAfter: float64(next.Frozen), IdempotencyKey: idempotencyKey, ReferenceType: "GENERATION_TASK", ReferenceID: task.ID, Remark: remark, Metadata: map[string]any{"modelCode": task.Model, "ruleVersionId": task.BillingRuleVersionID}}
 	entry, err := insertWalletLedgerEntryV1(ctx, tx, entry)
 	return next, entry, err
-}
-
-func providerCostForTask(costs []providerCost, task generationTask) (providerCost, bool) {
-	candidates := []providerCost{}
-	for _, cost := range costs {
-		if upperTrim(cost.Status) != "ACTIVE" || !strings.EqualFold(cost.PlatformModelCode, task.Model) {
-			continue
-		}
-		if task.ProviderChannel != "" && cost.Channel != task.ProviderChannel {
-			continue
-		}
-		if !providerCostParamsMatch(cost.ParameterRange, task.Params) {
-			continue
-		}
-		candidates = append(candidates, cost)
-	}
-	if len(candidates) == 0 {
-		return providerCost{}, false
-	}
-	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].EffectiveFrom > candidates[j].EffectiveFrom })
-	return candidates[0], true
-}
-
-func providerCostParamsMatch(ranges map[string]any, params map[string]any) bool {
-	for key, raw := range ranges {
-		values, ok := raw.([]any)
-		if !ok {
-			continue
-		}
-		actual := fmt.Sprint(firstPresent(params, key))
-		matched := false
-		for _, value := range values {
-			if strings.EqualFold(fmt.Sprint(value), actual) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-	return true
 }
 
 func supplierCostForTask(cost providerCost, task generationTask) float64 {

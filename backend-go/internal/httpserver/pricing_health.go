@@ -22,6 +22,13 @@ const (
 	pricingHealthIssueV132Blocked                = "V132_BLOCKED"
 	pricingHealthIssueGiftPointsUnavailable      = "PRICE_PLAN_GIFT_POINTS_FULFILLMENT_UNAVAILABLE"
 	pricingHealthIssueDisabled                   = "DISABLED"
+	pricingHealthIssueProviderCostMissing        = providerCostIssueMissing
+	pricingHealthIssueProviderCostExpired        = providerCostIssueExpired
+	pricingHealthIssueProviderCostAmbiguous      = providerCostIssueAmbiguous
+	pricingHealthIssueProviderCostInvalid        = providerCostIssueInvalid
+	pricingHealthIssueMarginInvalid              = marginIssueInvalid
+	pricingHealthIssueNegativeMargin             = marginIssueNegative
+	pricingHealthIssueMarginBelowTarget          = marginIssueBelowTarget
 )
 
 type pricingHealthView struct {
