@@ -1197,8 +1197,13 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	if err != nil {
 		return generationTask{}, err
 	}
+	quote, err := generationQuoteForRequest(req, capabilityData)
+	if err != nil {
+		return generationTask{}, err
+	}
 	rule := billingRuleForRequest(req, capabilityData)
-	pointCost := generationPointCostForRequest(req, capabilityData)
+	pointCost := quote.RequiredPoints
+	req.Params = addGenerationPricingSnapshot(req.Params, quote)
 	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
 		return generationTask{}, err
@@ -1356,8 +1361,13 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if err != nil {
 		return generationTask{}, err
 	}
+	quote, err := generationQuoteForRequest(req, capabilityData)
+	if err != nil {
+		return generationTask{}, err
+	}
 	rule := billingRuleForRequest(req, capabilityData)
-	pointCost := generationPointCostForRequest(req, capabilityData)
+	pointCost := quote.RequiredPoints
+	req.Params = addGenerationPricingSnapshot(req.Params, quote)
 	authorization, err := s.authorizeModelCallContext(ctx, tx, userID, requestModuleCode(req))
 	if err != nil {
 		return generationTask{}, err
@@ -1505,11 +1515,13 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if err != nil {
 		return generationTask{}, err
 	}
-	rule := billingRuleForRequest(req, capabilityData)
 	if pointCost <= 0 {
-		pointCost = generationPointCostForRequest(req, capabilityData)
+		return generationTask{}, errors.New("generation billing snapshot is missing point cost")
 	}
-	pointCost = generationTaskReservedPointCost(task, pointCost)
+	pointCost, err = generationTaskSnapshotPointCost(task)
+	if err != nil {
+		return generationTask{}, err
+	}
 	if usesPersonalPoints {
 		if pointCost != personalPointCost {
 			return generationTask{}, ErrPersonalPointImportConflict
@@ -1530,7 +1542,6 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	task.UpdatedAt = now
 	task.WorkerFinishedAt = now
 	task.ResultIDs = []string{}
-	applyGenerationTaskCapabilitySnapshot(&task, req, rule)
 	task.ProviderChannel = firstNonEmptyString(stringValue(req.Params["provider_channel"]), stringValue(req.Params["channel_id"]), task.ProviderChannel)
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
 	count := imageCount(req.Params)

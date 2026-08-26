@@ -3324,9 +3324,14 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 			return ErrPersonalPointContextMismatch
 		}
 		adminData := adminDataFromPlatformData(*data)
+		quote, err := generationQuoteForRequest(req, adminData)
+		if err != nil {
+			return err
+		}
 		rule := billingRuleForRequest(req, adminData)
 		count := imageCount(req.Params)
-		pointCost := generationPointCostForRequest(req, adminData)
+		pointCost := quote.RequiredPoints
+		req.Params = addGenerationPricingSnapshot(req.Params, quote)
 		account, err := personalPointAccountForUserState(points.memory, userID)
 		if err != nil {
 			return err
@@ -3508,8 +3513,13 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 			return ErrPersonalPointContextMismatch
 		}
 		adminData := adminDataFromPlatformData(*data)
+		quote, err := generationQuoteForRequest(req, adminData)
+		if err != nil {
+			return err
+		}
 		rule := billingRuleForRequest(req, adminData)
-		pointCost := generationPointCostForRequest(req, adminData)
+		pointCost := quote.RequiredPoints
+		req.Params = addGenerationPricingSnapshot(req.Params, quote)
 		account, err := personalPointAccountForUserState(points.memory, userID)
 		if err != nil {
 			return err

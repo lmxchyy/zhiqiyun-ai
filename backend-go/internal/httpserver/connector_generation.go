@@ -92,7 +92,11 @@ func (a api) estimateConnectorGeneration(ctx context.Context, userID string, ent
 	for key, value := range connectorMetadata {
 		req.Params[key] = value
 	}
-	return req, int64(generationPointCostForRequest(req, data)), nil
+	quote, err := generationQuoteForRequest(req, data)
+	if err != nil {
+		return req, 0, err
+	}
+	return req, int64(quote.RequiredPoints), nil
 }
 
 func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, storagecenter.FileObject, []byte, string, error) {
