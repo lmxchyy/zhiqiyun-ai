@@ -47,6 +47,9 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	if err != nil {
 		return generationTask{}, req, fmt.Errorf("reserve connector generation: %w", err)
 	}
+	if task.IdempotentReplay {
+		return task, req, nil
+	}
 	if strings.EqualFold(task.Status, "SUCCEEDED") {
 		return task, req, nil
 	}
@@ -124,6 +127,9 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	task, err := a.store.CreatePendingGenerationTask(req)
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("reserve connector video generation: %w", err)
+	}
+	if task.IdempotentReplay {
+		return task, req, storagecenter.FileObject{}, nil, "", nil
 	}
 	if strings.EqualFold(task.Status, "SUCCEEDED") {
 		return task, req, storagecenter.FileObject{}, nil, "", nil

@@ -1191,6 +1191,7 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	if existing, ok, err := generationTaskByClientRequestTx(ctx, tx, userID, req.ClientRequestID); err != nil {
 		return generationTask{}, err
 	} else if ok {
+		existing.IdempotentReplay = true
 		return existing, tx.Commit()
 	}
 	capabilityData, err := s.aiCapabilityAdminData(ctx)
@@ -1355,6 +1356,7 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	if existing, ok, err := generationTaskByClientRequestTx(ctx, tx, userID, req.ClientRequestID); err != nil {
 		return generationTask{}, err
 	} else if ok {
+		existing.IdempotentReplay = true
 		return existing, tx.Commit()
 	}
 	capabilityData, err := s.aiCapabilityAdminData(ctx)
