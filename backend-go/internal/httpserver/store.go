@@ -3314,6 +3314,7 @@ func (s *jsonStore) CreateGenerationTask(req createGenerationTaskRequest) (gener
 			req.Params = map[string]any{}
 		}
 		if existing, ok := findGenerationTaskByClientRequest(data.GenerationTasks, userID, req.ClientRequestID); ok {
+			existing.IdempotentReplay = true
 			task = existing
 			return nil
 		}
@@ -3503,6 +3504,7 @@ func (s *jsonStore) CreatePendingGenerationTask(req createGenerationTaskRequest)
 			req.Params = map[string]any{}
 		}
 		if existing, ok := findGenerationTaskByClientRequest(data.GenerationTasks, userID, req.ClientRequestID); ok {
+			existing.IdempotentReplay = true
 			task = existing
 			return nil
 		}

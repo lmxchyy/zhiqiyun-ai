@@ -462,6 +462,9 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 	if isVideoGenerationRequest(req.Type) {
 		task, err := a.store.CreatePendingGenerationTask(req)
 		if err == nil {
+			if task.IdempotentReplay {
+				return task, nil
+			}
 			go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 		}
 		return task, err
@@ -469,6 +472,9 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 	if isImageGenerationRequest(req.Type) && !strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
 		task, err := a.store.CreatePendingGenerationTask(req)
 		if err == nil {
+			if task.IdempotentReplay {
+				return task, nil
+			}
 			go a.runGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 		}
 		return task, err

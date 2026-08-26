@@ -799,6 +799,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		if task.IdempotentReplay {
+			writeJSON(w, task)
+			return
+		}
 		a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 		go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 		writeJSON(w, task)
@@ -834,6 +838,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if task.IdempotentReplay {
+		writeJSON(w, task)
 		return
 	}
 	a.recordContentAudit(task.ID, "input", "generation_request", "", req)

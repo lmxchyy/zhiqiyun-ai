@@ -54,6 +54,7 @@ type platformData struct {
 type generationTask struct {
 	ID                         string         `json:"id"`
 	ClientRequestID            string         `json:"clientRequestId,omitempty"`
+	IdempotentReplay           bool           `json:"-"`
 	UserID                     string         `json:"userId"`
 	TenantID                   string         `json:"tenantId,omitempty"`
 	OrganizationID             string         `json:"organizationId,omitempty"`
