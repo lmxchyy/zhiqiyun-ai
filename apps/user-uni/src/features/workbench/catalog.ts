@@ -48,9 +48,9 @@ export const roleNames: Record<MiniProgramRoleId, string> = {
 };
 
 export const creationModules: WorkbenchCreationModule[] = [
-  { id: "image", icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "约 10 点/张", tone: "orange" },
+  { id: "image", icon: "图", name: "AI生图", homeName: "轻易海报", description: "主图/海报/配图", model: "gpt-image-2", cost: "按后端试算", tone: "orange" },
   { id: "ppt", icon: "P", name: "PPT文档", homeName: "PPT文档", description: "方案/培训/路演", model: "ppt-generator", cost: "约 30 点/份", tone: "purple" },
-  { id: "video", icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "grok-imagine-1.5-video", cost: "约 15 积分/秒", tone: "green" },
+  { id: "video", icon: "视", name: "视频生成", homeName: "视频生成", description: "广告/口播/图生视频", model: "grok-imagine-1.5-video", cost: "按后端试算", tone: "green" },
   { id: "agent", icon: "星", name: "AI Agent", homeName: "LOGO", description: "经营助手与知识库", model: "agent-workflow", cost: "按任务计费", tone: "blue" },
   { id: "infographic", icon: "表", name: "自由P图", homeName: "自由P图", description: "杂志封面/去除路人/精致补妆", model: "infographic", cost: "约 20 点/份", tone: "orange" },
   { id: "review", icon: "查", name: "易找茬", homeName: "易共识", description: "多模型判断与风险", model: "multi-model", cost: "按模型计费", tone: "purple" },

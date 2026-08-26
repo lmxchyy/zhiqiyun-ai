@@ -10,10 +10,10 @@ import {
 
 test("formal video models sort cheap to expensive", () => {
   const sorted = sortVideoModelsByListPrice([
-    { code: "seedance-fast-2.0" },
-    { code: "doubao-seedance-2.0" },
-    { code: "grok-imagine-1.5-video" },
-    { code: "grok-imagine-video-1.5-preview" },
+    { code: "seedance-fast-2.0", listPricePoints: 600 },
+    { code: "doubao-seedance-2.0", listPricePoints: 480 },
+    { code: "grok-imagine-1.5-video", listPricePoints: 90 },
+    { code: "grok-imagine-video-1.5-preview", listPricePoints: 100 },
   ]);
   assert.deepEqual(sorted.map(item => item.code), [
     "grok-imagine-1.5-video",
@@ -23,7 +23,7 @@ test("formal video models sort cheap to expensive", () => {
   ]);
 });
 
-test("subtitle falls back to formal price and capability hints", () => {
+test("subtitle keeps capability hints without inventing a price", () => {
   assert.equal(
     videoModelSubtitle({
       code: "grok-imagine-1.5-video",
@@ -34,7 +34,7 @@ test("subtitle falls back to formal price and capability hints", () => {
         supportedDurations: [6, 7, 8, 9, 10, 15, 20, 30],
       },
     }),
-    "15 积分/秒 · 文生/图生 · 6–30s · 最多7图",
+    "文生/图生 · 6–30s · 最多7图",
   );
   assert.equal(
     videoModelSubtitle({
@@ -46,15 +46,15 @@ test("subtitle falls back to formal price and capability hints", () => {
         supportedDurations: [10, 15],
       },
     }),
-    "100 积分/次 · 仅图生 · 10/15s · 需1张参考图",
+    "仅图生 · 10/15s · 需1张参考图",
   );
 });
 
-test("local formal estimate matches published rules", () => {
-  assert.equal(estimateFormalVideoPoints("grok-imagine-video-1.5-preview", 10, "720p"), 100);
-  assert.equal(estimateFormalVideoPoints("grok-imagine-1.5-video", 6, "720p"), 90);
-  assert.equal(estimateFormalVideoPoints("seedance-fast-2.0", 5, "720p"), 600);
-  assert.equal(estimateFormalVideoPoints("doubao-seedance-2.0", 5, "720p"), 600);
+test("local estimate never invents a price when quote API is unavailable", () => {
+  assert.equal(estimateFormalVideoPoints("grok-imagine-video-1.5-preview", 10, "720p"), 0);
+  assert.equal(estimateFormalVideoPoints("grok-imagine-1.5-video", 6, "720p"), 0);
+  assert.equal(estimateFormalVideoPoints("seedance-fast-2.0", 5, "720p"), 0);
+  assert.equal(estimateFormalVideoPoints("doubao-seedance-2.0", 5, "720p"), 0);
 });
 
 test("default video model prefers grok-imagine-1.5-video over cheapest list item", () => {

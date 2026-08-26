@@ -1,7 +1,7 @@
 import type { ApiClient } from "@xianzhi/api-client";
 import type { CreateDraft, CreateGenerationTaskRequest, GenerationTask } from "@xianzhi/shared-types";
 import { taskRequestFromDraft } from "./mappers";
-import type { BusinessSdk, PagedItems, TaskPageOptions, VideoGenerationEstimate } from "./types";
+import type { BusinessSdk, GenerationQuote, PagedItems, TaskPageOptions, VideoGenerationEstimate } from "./types";
 
 export function listTasks(api: ApiClient) {
   return api.request<GenerationTask[]>("/api/v1/generation-tasks", { auth: "required" });
@@ -37,6 +37,14 @@ export function createGenerationSdk(api: ApiClient): BusinessSdk["generation"] {
       return api.request<GenerationTask, CreateGenerationTaskRequest>("/api/v1/generation-tasks", {
         method: "POST",
         body: taskRequestFromDraft(draft),
+        auth: "required",
+        retryOnUnauthorized: false
+      });
+    },
+    quote(request: CreateGenerationTaskRequest) {
+      return api.request<GenerationQuote, CreateGenerationTaskRequest>("/api/v1/generation-tasks/quote", {
+        method: "POST",
+        body: request,
         auth: "required",
         retryOnUnauthorized: false
       });
