@@ -36,7 +36,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build production image once
-        run: docker buildx build --platform "$TARGET_PLATFORM" --tag "$IMAGE:$IMAGE_TAG" --load .
+        # Self-hosted runner sits behind a system proxy that saturates under the
+        # concurrent multi-stage build, truncating apk downloads from dl-cdn
+        # (random "I/O error" during extraction). A CN mirror bypasses the tunnel.
+        run: docker buildx build --build-arg ALPINE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/alpine --platform "$TARGET_PLATFORM" --tag "$IMAGE:$IMAGE_TAG" --load .
       - name: Run production contract against the built image
         env:
           RUN_PRODUCTION_CONTRACT_DOCKER: "1"
