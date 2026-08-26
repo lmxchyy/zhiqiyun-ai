@@ -749,6 +749,12 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// Resolve the authoritative quote before selecting a provider or creating a
+	// task. Missing pricing must fail closed without any external side effect.
+	if _, err := generationQuoteForRequest(req, data); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if err := enforceMiniProgramModelCompliance(data, &req); err != nil {
 		writeError(w, http.StatusForbidden, err)
 		return

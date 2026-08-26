@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	pricingdomain "xianzhi-ai/backend-go/internal/pricing"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
 )
@@ -1477,28 +1478,125 @@ func applyLimitToSchema(schema adminAIParameterSchemaJSON, limit map[string]any)
 }
 
 func generationPointCostForRequest(req createGenerationTaskRequest, data adminPlatformData) int {
-	rule := billingRuleForRequest(req, data)
-	if rule.ID == "" {
+	quote, err := generationQuoteForRequest(req, data)
+	if err != nil {
 		moduleCode := canonicalModuleCode(requestModuleCode(req))
 		if moduleCode == "" {
 			moduleCode = moduleCodeForType(req.Type)
 		}
-		if moduleCode == moduleImageGeneration || moduleCode == "" {
-			return imageCount(req.Params) * modelPointCost(req.Model)
+		if moduleCode == moduleImageGeneration || moduleCode == moduleVideoGeneration {
+			return 0
 		}
-		return 1
+		rule := billingRuleForRequest(req, data)
+		quantity := billingQuantity(rule.BillingType, req)
+		multiplier := billingMultiplier(rule.ParameterMultiplier, billingParamsForRequest(req.Model, req.Params, rule.ParameterMultiplier))
+		total := int(math.Ceil(rule.BasePrice * quantity * multiplier))
+		minimumCharge := int(math.Ceil(rule.MinimumCharge))
+		if total < minimumCharge {
+			total = minimumCharge
+		}
+		if total < 1 {
+			total = 1
+		}
+		return total
 	}
-	quantity := billingQuantity(rule.BillingType, req)
-	multiplier := billingMultiplier(rule.ParameterMultiplier, billingParamsForRequest(req.Model, req.Params, rule.ParameterMultiplier))
-	total := int(math.Ceil(rule.BasePrice * quantity * multiplier))
-	minimumCharge := int(math.Ceil(rule.MinimumCharge))
-	if total < minimumCharge {
-		total = minimumCharge
+	return quote.RequiredPoints
+}
+
+type pricingRuleNotFoundError struct{ ModuleCode, Model string }
+
+func (e *pricingRuleNotFoundError) Error() string {
+	return fmt.Sprintf("no published pricing rule for %s/%s", e.ModuleCode, e.Model)
+}
+func (e *pricingRuleNotFoundError) BusinessCode() string { return "PRICING_RULE_NOT_FOUND" }
+func (e *pricingRuleNotFoundError) ErrorDetails() map[string]any {
+	return map[string]any{"moduleCode": e.ModuleCode, "model": e.Model}
+}
+func (e *pricingRuleNotFoundError) Unwrap() error { return pricingdomain.ErrRuleNotFound }
+
+func generationQuoteForRequest(req createGenerationTaskRequest, data adminPlatformData) (pricingdomain.Quote, error) {
+	moduleCode := canonicalModuleCode(requestModuleCode(req))
+	if moduleCode == "" {
+		moduleCode = moduleCodeForType(req.Type)
 	}
-	if total < 1 {
-		return 1
+	var rule adminBillingRule
+	if len(data.BillingRuleVersions) > 0 {
+		now := time.Now().UTC()
+		var selected billingRuleVersion
+		selectedPriority := -1
+		for _, version := range data.BillingRuleVersions {
+			if upperTrim(version.Status) != "PUBLISHED" || !billingRuleVersionEffective(version, now) {
+				continue
+			}
+			versionModule := canonicalModuleCode(version.ModuleCode)
+			versionModel := firstNonEmptyString(version.ModelCode, version.ModelName)
+			if versionModule != moduleCode || !strings.EqualFold(strings.TrimSpace(versionModel), strings.TrimSpace(req.Model)) {
+				continue
+			}
+			priority := billingRuleSourcePriority(version.RuleSource)
+			if rule.ID == "" || priority > selectedPriority || (priority == selectedPriority && version.Version > selected.Version) {
+				selected = version
+				selectedPriority = priority
+			}
+		}
+		if selected.ID != "" {
+			rule = billingRuleVersionProjection(selected)
+		}
+	} else {
+		rule = selectBillingRule(data.BillingRules, moduleCode, req.Model)
 	}
-	return total
+	if rule.ID == "" {
+		return pricingdomain.Quote{}, &pricingRuleNotFoundError{ModuleCode: moduleCode, Model: strings.TrimSpace(req.Model)}
+	}
+	parameterRules := rule.ParameterMultiplier
+	if len(parameterRules) == 0 {
+		parameterRules = rule.ParameterMultiplierCamel
+	}
+	basePrice := rule.BasePrice
+	if basePrice == 0 {
+		basePrice = rule.BasePriceCamel
+	}
+	return pricingdomain.Calculate(pricingdomain.Request{
+		BusinessType: moduleCode,
+		Model:        req.Model,
+		Parameters:   billingParamsForRequest(req.Model, req.Params, parameterRules),
+	}, pricingdomain.Rule{
+		ID: rule.ID, ModelCode: firstNonEmptyString(rule.ModelName, rule.ModelCode),
+		BillingUnit: firstNonEmptyString(rule.BillingUnit, rule.BillingType), BasePrice: basePrice,
+		MinimumCharge: rule.MinimumCharge, ParameterRules: parameterRules, Version: rule.Version,
+	})
+}
+
+func addGenerationPricingSnapshot(params map[string]any, quote pricingdomain.Quote) map[string]any {
+	next := cloneAnyMap(params)
+	if next == nil {
+		next = map[string]any{}
+	}
+	next["pricing_rule_id"] = quote.PricingRuleID
+	next["pricing_rule_version"] = quote.PricingRuleVersion
+	next["pricing_billing_unit"] = quote.BillingUnit
+	next["pricing_quantity"] = quote.Quantity
+	next["pricing_breakdown"] = quote.Breakdown
+	next["pricing_normalized_parameters"] = quote.NormalizedParameters
+	return next
+}
+
+func generationTaskSnapshotPointCost(task generationTask) (int, error) {
+	if task.PointCost <= 0 {
+		return 0, errors.New("generation billing snapshot is missing point cost")
+	}
+	for _, stored := range []struct {
+		name  string
+		value float64
+	}{
+		{name: "quotedPoints", value: task.QuotedPoints},
+		{name: "reservedPoints", value: task.ReservedPoints},
+	} {
+		if stored.value > 0 && int(math.Round(stored.value)) != task.PointCost {
+			return 0, fmt.Errorf("generation billing snapshot %s does not match point cost", stored.name)
+		}
+	}
+	return task.PointCost, nil
 }
 
 func billingRuleForRequest(req createGenerationTaskRequest, data adminPlatformData) adminBillingRule {
@@ -2189,7 +2287,7 @@ func allowedGenerationInternalParam(key string) bool {
 		"input_audit_status", "input_audit_service", "input_audit_request_id", "output_audit_status", "output_audit_service", "output_audit_request_id", "output_audit_reason",
 		"ai_generated", "ai_label_status", "ai_label_text", "generated_at", "download_derivative_required",
 		"modelRouteId", "modelGroup", "modelApiKeyId", "billing_type", "tenant_id", "organization_id", "billing_scope", "billing_account_id", "authorized_role", "billing_ledger_id", "billing_reserved", "agent_id", "package_id", "operation_center_id",
-		"final_schema_snapshot", "limit_snapshot", "sourceModule", "apiMode", "taskSnapshot", "referenceImages", "sourceReferenceAssetId", "sourceReferenceTaskId",
+		"final_schema_snapshot", "limit_snapshot", "pricing_rule_id", "pricing_rule_version", "pricing_billing_unit", "pricing_quantity", "pricing_breakdown", "pricing_normalized_parameters", "sourceModule", "apiMode", "taskSnapshot", "referenceImages", "sourceReferenceAssetId", "sourceReferenceTaskId",
 		"referenceImageCount", "referenceImageNames", "referenceImageOrder", "inputImageIds", "inputImagesSnapshot",
 		"maskDraft", "maskTargetImageId", "maskImageId", "imageQuality", "imageRatio", "output_format", "outputFormat",
 		"output_compression", "outputCompression", "transparent_output", "transparentOutput", "moderation", "ratio",
