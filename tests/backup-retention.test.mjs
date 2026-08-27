@@ -59,6 +59,8 @@ test("retention inventory classifies and calculates the full policy without dele
   assert.ok(report.summary.total_bytes > 0);
   assert.equal(report.summary.delete_candidates_count, report.delete_candidates.length);
   assert.equal(report.summary.delete_candidates_bytes, report.delete_candidates.reduce((n, item) => n + item.size, 0));
+  assert.equal(report.summary.delete_eligible_count, report.delete_eligible.length);
+  assert.equal(report.summary.delete_eligible_bytes, report.delete_eligible.reduce((n, item) => n + item.size, 0));
 
   const keep = paths(report.keep);
   const deletes = paths(report.delete_candidates);
@@ -66,6 +68,10 @@ test("retention inventory classifies and calculates the full policy without dele
   assert.equal([...keep].some((p) => p.includes("db_20260818")), true);
   assert.equal([...deletes].some((p) => p.includes("db_20260816")), true);
   assert.equal([...deletes].some((p) => p.endsWith("xianzhi-legacy.sql")), true);
+  assert.equal(report.delete_eligible.length, 1);
+  assert.equal(report.delete_eligible[0].path.includes("db_20260816"), true);
+  assert.equal(report.delete_eligible[0].offsite_status, "VERIFIED");
+  assert.equal(report.delete_candidates.filter((item) => item.offsite_status !== "VERIFIED").length, report.delete_candidates.length - 1);
   assert.equal(report.keep.filter((item) => item.category === "deploy").length, 5);
   assert.equal(report.delete_candidates.filter((item) => item.category === "deploy").length, 2);
   assert.equal([...keep].filter((p) => p.includes("compose.prod.yml")).length, 20);
@@ -124,6 +130,7 @@ test("JSON output is valid and deterministic", () => {
   assert.deepEqual(Object.keys(report).sort(), [
     "analyze_only",
     "delete_candidates",
+    "delete_eligible",
     "expected_reclaimed_bytes",
     "keep",
     "manual_review",

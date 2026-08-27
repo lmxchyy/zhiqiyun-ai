@@ -6,6 +6,9 @@ import test from "node:test";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const dockerfile = path.join(repoRoot, "ops", "backup-uploader", "Dockerfile");
 const requirements = path.join(repoRoot, "ops", "backup-uploader", "requirements.txt");
+const pendingUpload = path.join(repoRoot, "ops", "backup-offsite-upload-pending.sh");
+const gitignore = readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
+const releaseWorkflow = readFileSync(path.join(repoRoot, ".github", "workflows", "backup-uploader-image.yml"), "utf8");
 const compose = readFileSync(path.join(repoRoot, "compose.prod.yml"), "utf8");
 
 test("production uploader packaging pins a non-host Python OBS runtime", () => {
@@ -28,7 +31,18 @@ test("production uploader is opt-in, one-shot, and isolated from business servic
   assert.match(compose, /BACKUP_OBS_ENV_FILE:-\/dev\/null/);
   assert.match(compose, /BACKUP_STORAGE_CONFIG_ID/);
   assert.match(compose, /restart:\s*"no"/);
+  assert.doesNotMatch(compose.slice(compose.indexOf("  backup-uploader:")), /\n\s+build:/);
   assert.doesNotMatch(compose, /DeleteObject|DELETE_OBJECT/i);
+});
+
+test("backup creation emits local integrity metadata and pending upload requires an immutable image", () => {
+  assert.equal(existsSync(pendingUpload), true);
+  assert.match(compose, /sha256=\"\$\$\(sha256sum/);
+  assert.match(compose, /meta_file=\"\$\$file\.meta\.json\"/);
+  const wrapper = readFileSync(pendingUpload, "utf8");
+  assert.match(wrapper, /BACKUP_UPLOADER_IMAGE.*@sha256/);
+  assert.match(wrapper, /--no-deps backup-uploader/);
+  assert.doesNotMatch(wrapper, /docker compose.*--build/);
 });
 
 test("tracked packaging contains no credential values", () => {
@@ -38,4 +52,20 @@ test("tracked packaging contains no credential values", () => {
     assert.doesNotMatch(text, /FAKE_SECRET_KEY|AKIA[0-9A-Z]{16}/);
     assert.doesNotMatch(text, /OBS_SECRET_ACCESS_KEY\s*[:=]\s*[^$\s}]+/);
   }
+});
+
+test("production OBS secret filename is ignored while the example remains tracked", () => {
+  assert.match(gitignore, /\*\*\/backup-obs\.env/);
+  assert.equal(existsSync(path.join(repoRoot, "ops", "backup-uploader", "backup-obs.env.example")), true);
+});
+
+test("backup uploader release workflow binds image to source SHA and publishes digests only after main push", () => {
+  assert.match(releaseWorkflow, /pull_request:/);
+  assert.match(releaseWorkflow, /branches: \[main, master\]/);
+  assert.match(releaseWorkflow, /ops\/backup-uploader\/Dockerfile/);
+  assert.match(releaseWorkflow, /IMAGE_TAG: git-\$\{\{ github\.sha \}\}/);
+  assert.match(releaseWorkflow, /ghcr_digest/);
+  assert.match(releaseWorkflow, /acr_digest/);
+  assert.match(releaseWorkflow, /backup-uploader-release-manifest/);
+  assert.doesNotMatch(releaseWorkflow, /backup-uploader:latest/);
 });

@@ -27,7 +27,7 @@
 
 ## Runtime strategy
 
-生产宿主机仍是 Python 3.6.8。本阶段没有把 SDK 安装到宿主机，也没有修改生产 compose。推荐未来使用独立 backup-uploader container，固定 Python 与 `esdk-obs-python` 版本，并只挂载备份目录和必要的 secret。这样 SDK 升级不会污染 CentOS 宿主机。
+生产宿主机仍是 Python 3.6.8。本阶段没有把 SDK 安装到宿主机；使用独立 backup-uploader container，固定 Python 与 `esdk-obs-python` 版本，并只挂载备份目录和必要的 secret。这样 SDK 升级不会污染 CentOS 宿主机。
 
 当前脚本只在 `--provider obs --upload` 时 lazy-import `obs`；未安装 SDK 时返回 `CONFIG_REQUIRED`，不会 fallback 到 MinIO、S3 或其他业务 provider。fake provider 测试不需要 SDK。
 
@@ -130,9 +130,21 @@ otherwise
 ## Production one-shot container
 
 生产宿主机不需要安装 OBS SDK。`compose.prod.yml` 中的 `backup-uploader` 只启用
-`backup-uploader` profile，默认不会启动，也不属于业务服务。它使用固定的 Python
-3.11 镜像和锁定的 `esdk-obs-python` 版本，容器为 read-only，仅将
+`backup-uploader` profile，默认不会启动，也不属于业务服务。它必须使用由 CI 构建并发布的
+immutable image；生产 compose 不包含 build fallback，因此不会在生产现场触发 BuildKit/source build。
+启用 profile 前必须将 `BACKUP_UPLOADER_IMAGE` 覆盖为已由 CI 发布并验证过的 immutable digest 引用；默认值只用于本地 compose 兼容性，不作为生产发布凭据。
+它使用固定的 Python 3.11 镜像和锁定的 `esdk-obs-python` 版本，容器为 read-only，仅将
 `backups/postgres` 作为必要的 sidecar 输出目录挂载为可写。
+
+`postgres-backup` 在完成 gzip 校验后会先原子写入备份，再原子写入同名
+`.meta.json`（bytes + SHA256）。`ops/backup-offsite-upload-pending.sh` 只处理这些
+数据库文件，要求 `BACKUP_UPLOADER_IMAGE` 是 `@sha256:` immutable 引用，并通过
+`docker compose run --rm --no-deps` 调用一次性 uploader；它不删除本地文件，也不
+影响 PostgreSQL 服务。上传或验证失败时命令失败且本地备份保留。
+
+生产启用前的人工步骤：发布并验证 uploader image digest，创建权限为 600 的
+`backup-obs.env`，然后由受控 cron/systemd timer 调用该 wrapper。secret 通过 compose
+`env_file` 注入，不出现在命令参数或日志中。
 
 先在生产服务器以 root 创建权限为 600 的 secret env file，例如：
 

@@ -46,6 +46,7 @@ export RETENTION_NOW="$NOW"
 export RETENTION_JSON="$JSON"
 exec "$PYTHON_BIN" - "$ROOT" <<'PY'
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -164,6 +165,48 @@ while pending:
 def item(file, category, reason):
     stamp = dt.datetime.fromtimestamp(file["mtime"], dt.timezone.utc).isoformat()
     return {"path": file["relative_path"], "size": file["size"], "mtime": stamp, "category": category, "keep_reason": reason, "reason": reason}
+
+def offsite_verification(file):
+    """Validate sidecar evidence against the current local file."""
+    backup = root / file["relative_path"]
+    sidecar = pathlib.Path(str(backup) + ".offsite.json")
+    try:
+        name = backup.name
+        relative = file["relative_path"]
+        is_database_backup = (relative.startswith("postgres/") and name.startswith("db_")) or name.startswith("xianzhi-")
+        if not is_database_backup:
+            return "INVALID", "offsite verification is only supported for database backups"
+        sidecar_info = os.lstat(str(sidecar))
+        if stat.S_ISLNK(sidecar_info.st_mode) or not stat.S_ISREG(sidecar_info.st_mode):
+            return "INVALID", "offsite sidecar is not a regular file"
+        with sidecar.open("r") as handle:
+            evidence = json.load(handle)
+        if evidence.get("verification") != "OFFSITE_VERIFIED":
+            return "INVALID", "offsite sidecar is not verified"
+        object_key = str(evidence["object_key"])
+        uploaded_at = str(evidence["uploaded_at"])
+        if not object_key.startswith("backups/postgres/") or not object_key.endswith("/" + name) or ".." in object_key or not uploaded_at:
+            return "INVALID", "offsite object key or verification timestamp is not bound to backup"
+        local_bytes = int(evidence["local_bytes"])
+        remote_bytes = int(evidence["remote_bytes"])
+        local_sha = str(evidence["local_sha256"])
+        remote_sha = str(evidence["remote_sha256"])
+        if local_bytes != file["size"] or remote_bytes != file["size"]:
+            return "INVALID", "offsite size evidence does not match local file"
+        if not re.fullmatch(r"[0-9a-f]{64}", local_sha) or remote_sha != local_sha:
+            return "INVALID", "offsite sha256 evidence is invalid or inconsistent"
+        digest = hashlib.sha256()
+        with backup.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        if digest.hexdigest() != local_sha:
+            return "INVALID", "local file no longer matches offsite evidence"
+        return "VERIFIED", "remote size and sha256 match current local file"
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return "INVALID", "offsite sidecar is missing or malformed"
 
 deploy_re = re.compile(r"^db_.*\.sql(?:\.gz)?$")
 daily_re = re.compile(r"^xianzhi-.*\.sql(?:\.gz)?$")
@@ -293,6 +336,15 @@ manual_list = sorted(manual.values(), key=lambda x: x["path"])
 analyze_list = sorted(analyze.values(), key=lambda x: x["path"])
 out_scope_list = sorted(out_scope.values(), key=lambda x: x["path"])
 
+delete_eligible = []
+for entry in delete_list:
+    status, reason = offsite_verification(all_files[entry["path"]])
+    entry["offsite_status"] = status
+    entry["delete_eligible"] = status == "VERIFIED"
+    entry["eligibility_reason"] = reason
+    if entry["delete_eligible"]:
+        delete_eligible.append(entry)
+
 for path in set(keep) & set(delete):
     fail(f"path in KEEP and DELETE_CANDIDATE: {path}")
 for entry in delete_list:
@@ -327,6 +379,7 @@ summary = {
     "total_bytes": sum(f["size"] for f in files),
     "keep_count": len(keep_list), "keep_bytes": sum(x["size"] for x in keep_list),
     "delete_candidates_count": len(delete_list), "delete_candidates_bytes": sum(x["size"] for x in delete_list),
+    "delete_eligible_count": len(delete_eligible), "delete_eligible_bytes": sum(x["size"] for x in delete_eligible),
     "manual_review_count": len(manual_list), "manual_review_bytes": sum(x["size"] for x in manual_list),
     "analyze_only_count": len(analyze_list), "analyze_only_bytes": sum(x["size"] for x in analyze_list),
     "out_of_scope_count": len(out_scope_list), "out_of_scope_bytes": sum(x["size"] for x in out_scope_list),
@@ -335,6 +388,7 @@ report = {
     "summary": summary,
     "keep": keep_list,
     "delete_candidates": delete_list,
+    "delete_eligible": delete_eligible,
     "manual_review": manual_list,
     "analyze_only": analyze_list,
     "out_of_scope": out_scope_list,
@@ -354,7 +408,10 @@ else:
         print(f"{entry['path']}\t{entry['size']}\t{entry['mtime']}\t{entry['category']}\t{entry['keep_reason']}")
     print("\n## DELETE CANDIDATES\n")
     for entry in delete_list:
-        print(f"{entry['path']}\t{entry['size']}\t{entry['mtime']}\t{entry['category']}\t{entry['reason']}")
+        print(f"{entry['path']}\t{entry['size']}\t{entry['mtime']}\t{entry['category']}\t{entry['reason']}\t{entry['offsite_status']}\t{entry['eligibility_reason']}")
+    print("\n## DELETE ELIGIBLE\n")
+    for entry in delete_eligible:
+        print(f"{entry['path']}\t{entry['size']}\t{entry['offsite_status']}\t{entry['eligibility_reason']}")
     print("\n## MANUAL REVIEW\n")
     for entry in manual_list: print(entry["path"])
     print("\n## ANALYZE ONLY\n")

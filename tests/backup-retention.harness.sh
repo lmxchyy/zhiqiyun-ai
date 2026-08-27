@@ -17,6 +17,14 @@ touch_at() {
   touch -d "$timestamp" "$path"
 }
 
+write_offsite_evidence() {
+  local file="$1" bytes sha
+  bytes="$(wc -c <"$file" | tr -d '[:space:]')"
+  sha="$(sha256sum "$file" | awk '{print $1}')"
+  printf '{"verification":"OFFSITE_VERIFIED","uploaded_at":"2026-08-16T06:00:01Z","local_bytes":%s,"remote_bytes":%s,"local_sha256":"%s","remote_sha256":"%s","object_key":"backups/postgres/deploy/2026/08/%s"}\n' "$bytes" "$bytes" "$sha" "$sha" "${file##*/}" > "${file}.offsite.json"
+  touch -d '2026-08-16 14:00:01 +0800' "${file}.offsite.json"
+}
+
 mkdir -p "$BACKUP_ROOT/postgres"
 
 if [ "$SCENARIO" = "insufficient" ]; then
@@ -40,6 +48,7 @@ touch_at "$BACKUP_ROOT/postgres/db_20260819_214315_d2084b737b.sql.gz" '2026-08-1
 touch_at "$BACKUP_ROOT/postgres/db_20260818_214315_e2084b737b.sql.gz" '2026-08-18 14:00:00 +0800'
 touch_at "$BACKUP_ROOT/postgres/db_20260817_214315_f2084b737b.sql.gz" '2026-08-17 14:00:00 +0800'
 touch_at "$BACKUP_ROOT/postgres/db_20260816_214315_g2084b737b.sql" '2026-08-16 14:00:00 +0800'
+write_offsite_evidence "$BACKUP_ROOT/postgres/db_20260816_214315_g2084b737b.sql"
 
 # Daily: recent and old files, with overlap candidates for weekly/monthly.
 for day in 22 21 20 19 18 17 16 15 14 13 12 11 10 09; do

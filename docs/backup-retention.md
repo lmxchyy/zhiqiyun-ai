@@ -41,3 +41,18 @@ support COS and does not delete, migrate, recompress, or restore backups.
 
 The JSON report contains `summary`, `keep`, `delete_candidates`, `manual_review`,
 `analyze_only`, `out_of_scope`, `expected_reclaimed_bytes`, and `warnings`.
+
+## Off-site deletion gate
+
+`delete_candidates` is only the retention-policy result. Each candidate is also
+checked against its adjacent `.offsite.json` evidence and the current local
+file. `delete_eligible` contains only files whose evidence is exactly
+`OFFSITE_VERIFIED`, whose recorded remote size and SHA256 agree, and whose
+current local size and SHA256 still agree. The evidence must also contain a
+verification timestamp and an object key under `backups/postgres/` ending in
+the exact local backup filename. Missing, malformed, stale, or
+inconsistent evidence remains local-only and is never fail-open eligible.
+
+The retention command remains dry-run only. No backup is deleted by this
+script; a future apply implementation must consume `delete_eligible` and keep
+all other classifications.
