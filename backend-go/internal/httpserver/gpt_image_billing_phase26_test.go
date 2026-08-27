@@ -69,8 +69,18 @@ func TestGPTImageBillingRulePhase26Draft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validate draft: %v", err)
 	}
-	if !validation.Valid {
-		t.Fatalf("draft validation failed: %+v", validation.Issues)
+	if validation.Valid {
+		t.Fatal("draft validation unexpectedly passed; corrected point value should expose negative margin")
+	}
+	negativeMargin := false
+	for _, issue := range validation.Issues {
+		if issue.Code == "NEGATIVE_MARGIN" {
+			negativeMargin = true
+			break
+		}
+	}
+	if !negativeMargin {
+		t.Fatalf("draft validation issues = %+v, want NEGATIVE_MARGIN", validation.Issues)
 	}
 	draft, err = store.GetBillingRuleVersion(draft.ID)
 	if err != nil {

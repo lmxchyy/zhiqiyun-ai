@@ -416,7 +416,7 @@ func validateBillingRuleVersionData(item billingRuleVersion, data adminPlatformD
 	if len(matchingCosts) == 0 {
 		add("MISSING_PROVIDER_COST", "modelCode", "ERROR", "缺少生效中的供应商成本")
 	} else {
-		minimumRevenue := math.Max(item.BasePrice, item.MinimumCharge) * float64(pointUnitAmountCents) / 100
+		minimumRevenue := math.Max(item.BasePrice, item.MinimumCharge) * float64(pointNominalValueCents) / 100
 		for _, cost := range matchingCosts {
 			if upperTrim(cost.BillingUnit) == upperTrim(item.BillingUnit) && cost.UnitCost > minimumRevenue {
 				add("NEGATIVE_MARGIN", "basePrice", "ERROR", fmt.Sprintf("单位售价折算 %.2f CNY，低于供应商成本 %.2f CNY", minimumRevenue, cost.UnitCost))
@@ -849,7 +849,7 @@ func applyTaskSupplierCost(task *generationTask, costs []providerCost) {
 		if !ok {
 			return
 		}
-		chargeCents := int64(task.PointCost * pointUnitAmountCents)
+		chargeCents := int64(task.PointCost * pointNominalValueCents)
 		marginCents := chargeCents - costCents
 		margin := float64(marginCents) / 100
 		task.SupplierCost = &value

@@ -175,8 +175,8 @@ func ragBillingEvent(usage knowledgeapp.RAGBillingUsage, before int, after int, 
 	return adminBillingEvent{
 		ID: id, UserID: usage.UserID, AgentID: usage.AgentID, TenantID: usage.TenantID,
 		ModuleCode: "knowledge_agent", TaskID: usage.RunID, MetricCode: billingMetricKnowledgeRAG,
-		Quantity: usage.InputTokens + usage.OutputTokens, UnitAmountCents: pointUnitAmountCents,
-		AmountCents: int(usage.PointCost) * pointUnitAmountCents, PointCost: int(usage.PointCost),
+		Quantity: usage.InputTokens + usage.OutputTokens, UnitAmountCents: pointNominalValueCents,
+		AmountCents: int(usage.PointCost) * pointNominalValueCents, PointCost: int(usage.PointCost),
 		BalanceBefore: before, BalanceAfter: after, Model: usage.Model, Status: "SUCCEEDED", OccurredAt: now,
 		Metadata: map[string]any{"inputTokens": usage.InputTokens, "outputTokens": usage.OutputTokens, "billingUnit": "1000_tokens"},
 	}

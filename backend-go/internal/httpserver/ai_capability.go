@@ -1795,7 +1795,7 @@ func applyGenerationTaskCapabilitySnapshot(task *generationTask, req createGener
 	task.LimitSnapshot, _ = mapValue(req.Params["limit_snapshot"])
 	task.UpstreamProvider = firstNonEmptyString(stringValue(req.Params["provider"]), stringValue(req.Params["upstream_provider"]))
 	task.UpstreamRequestID = providerTaskString(req, "id")
-	task.UserChargeAmount = task.PointCost * pointUnitAmountCents
+	task.UserChargeAmount = task.PointCost * pointNominalValueCents
 	task.UpstreamCost = int(math.Ceil(rule.CostPrice * billingQuantity(rule.BillingType, req)))
 	task.PlatformProfit = task.UserChargeAmount - task.UpstreamCost
 }
