@@ -1,7 +1,7 @@
 # Image and Video Pricing Optimization Audit
 
-审计日期：2026-08-27  
-审计分支：`feat/image-video-price-optimization`  
+审计日期：2026-08-27
+审计分支：`feat/image-video-price-optimization`
 审计范围：AI 生图、AI 生视频；不涉及 PPT、RAG、Agent、订阅重构、企业定价或正式价格发布。
 
 ## Executive Summary
