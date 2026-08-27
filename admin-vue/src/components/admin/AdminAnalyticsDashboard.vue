@@ -7,68 +7,69 @@
         <div class="metrics-grid">
           <div class="metric-item">
             <label>日新增用户</label>
-            <value>{{ overviewData.NewUsersToday }}</value>
+          <value>{{ overviewData.newUsersToday }}</value>
           </div>
           <div class="metric-item">
-            <label>日活跃用户 (DAU)</label>
-            <value>{{ overviewData.DAU }}</value>
+            <label>日活跃用户 (dau)</label>
+          <value>{{ overviewData.dau }}</value>
           </div>
           <div class="metric-item">
-            <label>周活跃用户 (WAU)</label>
-            <value>{{ overviewData.WAU }}</value>
+            <label>周活跃用户 (wau)</label>
+          <value>{{ overviewData.wau }}</value>
           </div>
           <div class="metric-item">
-            <label>月活跃用户 (MAU)</label>
-            <value>{{ overviewData.MAU }}</value>
+            <label>月活跃用户 (mau)</label>
+          <value>{{ overviewData.mau }}</value>
           </div>
           <div class="metric-item">
             <label>今日AI用户</label>
-            <value>{{ overviewData.AIUsersToday }}</value>
+          <value>{{ overviewData.aiUsersToday }}</value>
           </div>
           <div class="metric-item">
             <label>今日图片生成</label>
-            <value>{{ overviewData.ImagesGenerated }}</value>
+          <value>{{ overviewData.imagesGenerated }}</value>
           </div>
           <div class="metric-item">
             <label>今日视频生成</label>
-            <value>{{ overviewData.VideosGenerated }}</value>
+          <value>{{ overviewData.videosGenerated }}</value>
           </div>
           <div class="metric-item">
             <label>今日积分消耗</label>
-            <value>{{ overviewData.PointsConsumed }}</value>
+          <value>{{ overviewData.pointsConsumed }}</value>
           </div>
           <div class="metric-item">
             <label>今日Token使用</label>
-            <value>{{ overviewData.TokensUsed }}</value>
+          <value>{{ overviewData.tokensUsed }}</value>
           </div>
           <div class="metric-item">
             <label>今日收入</label>
-            <value>{{ overviewData.RevenueTodayCents / 100 }}</value>
+          <value>{{ overviewData.revenueTodayCents / 100 }}</value>
             <unit>元</unit>
           </div>
           <div class="metric-item">
             <label>今日成本</label>
-            <value>{{ overviewData.CostTodayCents / 100 }}</value>
+          <value>{{ overviewData.costTodayCents / 100 }}</value>
             <unit>元</unit>
           </div>
           <div class="metric-item">
             <label>今日失败任务</label>
-            <value>{{ overviewData.FailedTasksToday }}</value>
+          <value>{{ overviewData.failedTasksToday }}</value>
           </div>
           <div class="metric-item">
             <label>今日成功率</label>
-            <value>{{ overviewData.SuccessRate.toFixed(1) }}%</value>
+          <value>{{ overviewData.successRate.toFixed(1) }}%</value>
           </div>
           <div class="metric-item">
             <label>今日平均延迟</label>
-            <value>{{ overviewData.AvgLatencyMs }}ms</value>
+          <value>{{ overviewData.avgLatencyMs }}ms</value>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Tabs for different sections -->
-    <div class="tabs-container" v-if="!loading">
+    <div class="error-state" v-if="requestError">分析数据加载失败，请稍后重试。</div>
+    <div class="tabs-container" v-if="!loading && !requestError">
       <div class="tab" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">概览</div>
       <div class="tab" :class="{ active: activeTab === 'trends' }" @click="activeTab = 'trends'">7日趋势</div>
       <div class="tab" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型排名</div>
@@ -85,109 +86,15 @@
 
       <div v-else-if="activeTab === 'trends'">
         <div class="section-title">7日趋势</div>
-        <div class="charts-grid" v-if="trendsData">
-          <!-- Trends charts will go here -->
-          <div class="chart-placeholder" v-for="key in trendKeys" :key="key">
-            <div class="chart-title">{{ trendLabels[key] }}</div>
-            <div class="chart-content">
-              <!-- In a real implementation, this would render ECharts -->
-              <div class="chart-box">
-                <template v-if="key === 'NewUsers'">
-                  <div v-for="point in trendsData.NewUsers" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'DAU'">
-                  <div v-for="point in trendsData.DAU" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'WAU'">
-                  <div v-for="point in trendsData.WAU" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'MAU'">
-                  <div v-for="point in trendsData.MAU" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'AIUsers'">
-                  <div v-for="point in trendsData.AIUsers" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Images'">
-                  <div v-for="point in trendsData.Images" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Videos'">
-                  <div v-for="point in trendsData.Videos" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Points'">
-                  <div v-for="point in trendsData.Points" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Tokens'">
-                  <div v-for="point in trendsData.Tokens" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Revenue'">
-                  <div v-for="point in trendsData.Revenue" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Cost'">
-                  <div v-for="point in trendsData.Cost" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Tasks'">
-                  <div v-for="point in trendsData.Tasks" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Success'">
-                  <div v-for="point in trendsData.Success" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Latency'">
-                  <div v-for="point in trendsData.Latency" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-                <template v-else-if="key === 'Failed'">
-                  <div v-for="point in trendsData.Failed" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
-                  </div>
-                </template>
-              </div>
-            </div>
+        <div class="charts-grid" v-if="trendsData && hasTrendData()">
+          <div class="chart-placeholder" v-for="key in chartKeys" :key="key">
+            <div class="chart-title">{{ chartLabels[key] }}</div>
+            <div class="chart-content" :ref="(element) => setChartElement(element, key)"></div>
           </div>
         </div>
+        <div class="empty-state" v-else-if="!trendsLoading">暂无趋势数据</div>
         <div class="loading-placeholder" v-else>
-          <div class="skeleton-loader" v-for="i in 6" :key="i"></div>
+          <div class="skeleton-loader" v-for="i in 5" :key="i"></div>
         </div>
       </div>
 
@@ -208,11 +115,11 @@
             <tbody>
               <tr v-for="(model, index) in modelsData" :key="index">
                 <td>{{ index + 1 }}</td>
-                <td>{{ model.ModelCode }}</td>
-                <td>{{ model.CallCount }}</td>
-                <td>{{ (model.SuccessRate || 0).toFixed(1) }}%</td>
-                <td>{{ model.AvgLatencyMs || 0 }}</td>
-                <td>{{ model.TotalCostCents || 0 }}</td>
+                <td>{{ model.modelCode }}</td>
+                <td>{{ model.callCount }}</td>
+                <td>{{ (model.successRate || 0).toFixed(1) }}%</td>
+                <td>{{ model.avgLatencyMs || 0 }}</td>
+                <td>{{ model.totalCostCents || 0 }}</td>
               </tr>
             </tbody>
           </table>
@@ -242,11 +149,11 @@
             <tbody>
               <tr v-for="(provider, index) in providersData" :key="index">
                 <td>{{ index + 1 }}</td>
-                <td>{{ provider.ProviderCode }}</td>
-                <td>{{ provider.CallCount }}</td>
-                <td>{{ (provider.SuccessRate || 0).toFixed(1) }}%</td>
-                <td>{{ provider.AvgLatencyMs || 0 }}</td>
-                <td>{{ provider.TotalCostCents || 0 }}</td>
+                <td>{{ provider.providerCode }}</td>
+                <td>{{ provider.callCount }}</td>
+                <td>{{ (provider.successRate || 0).toFixed(1) }}%</td>
+                <td>{{ provider.avgLatencyMs || 0 }}</td>
+                <td>{{ provider.totalCostCents || 0 }}</td>
               </tr>
             </tbody>
           </table>
@@ -265,20 +172,20 @@
           <div class="metrics-row">
             <div class="metric-card">
               <h4>今日使用量</h4>
-              <p>{{ tokensData.TokensToday }}</p>
+              <p>{{ tokensData.tokensToday }}</p>
             </div>
             <div class="metric-card">
               <h4>7日使用量</h4>
-              <p>{{ tokensData.Tokens7d }}</p>
+              <p>{{ tokensData.tokens7d }}</p>
             </div>
             <div class="metric-card">
               <h4>30日使用量</h4>
-              <p>{{ tokensData.Tokens30d }}</p>
+              <p>{{ tokensData.tokens30d }}</p>
             </div>
           </div>
           <div class="table-container">
             <h4>Top 用户 Token 使用量</h4>
-            <table class="analytics-table" v-if="tokensData.ByUser && tokensData.ByUser.length > 0">
+            <table class="analytics-table" v-if="tokensData.byUser && tokensData.byUser.length > 0">
               <thead>
                 <tr>
                   <th>排名</th>
@@ -288,15 +195,15 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(user, index) in tokensData.ByUser" :key="index">
+                <tr v-for="(user, index) in tokensData.byUser" :key="index">
                   <td>{{ index + 1 }}</td>
-                  <td>{{ user.UserID }}</td>
-                  <td>{{ user.UserName }}</td>
-                  <td>{{ user.Value }}</td>
+                  <td>{{ user.userId }}</td>
+                  <td>{{ user.userName }}</td>
+                  <td>{{ user.value }}</td>
                 </tr>
               </tbody>
             </table>
-            <div v-else-if="tokensData.ByUser && tokensData.ByUser.length === 0">
+            <div v-else-if="tokensData.byUser && tokensData.byUser.length === 0">
               <p class="empty-state">暂无用户数据</p>
             </div>
           </div>
@@ -312,30 +219,30 @@
           <div class="metrics-row">
             <div class="metric-card">
               <h4>今日消耗</h4>
-              <p>{{ pointsData.ConsumedToday }}</p>
+              <p>{{ pointsData.consumedToday }}</p>
             </div>
             <div class="metric-card">
               <h4>今日充值</h4>
-              <p>{{ pointsData.RechargedToday }}</p>
+              <p>{{ pointsData.rechargedToday }}</p>
             </div>
             <div class="metric-card">
               <h4>今日净变化</h4>
-              <p>{{ pointsData.NetChangeToday }}</p>
+              <p>{{ pointsData.netChangeToday }}</p>
             </div>
             <div class="metric-card">
               <h4>可用余额</h4>
-              <p>{{ pointsData.TotalAvailable }}</p>
+              <p>{{ pointsData.totalAvailable }}</p>
             </div>
           </div>
           <div class="table-container">
             <h4>积分趋势 (7日)</h4>
-            <div class="chart-placeholder" v-if="pointsData.ConsumedTrend">
+            <div class="chart-placeholder" v-if="pointsData.consumedTrend">
               <div class="chart-title">消耗趋势</div>
               <div class="chart-content">
                 <div class="chart-box">
-                  <div v-for="point in pointsData.ConsumedTrend" :key="point.Date" class="trend-point">
-                    <div class="point-date">{{ point.Date }}</div>
-                    <div class="point-value">{{ point.Value }}</div>
+                  <div v-for="point in pointsData.consumedTrend" :key="point.date" class="trend-point">
+                    <div class="point-date">{{ point.date }}</div>
+                    <div class="point-value">{{ point.value }}</div>
                   </div>
                 </div>
               </div>
@@ -351,88 +258,95 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import * as echarts from "echarts/core";
+import { LineChart } from "echarts/charts";
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { SVGRenderer } from "echarts/renderers";
 import { adminRequest } from "../../api/client";
+import { normalizeAnalyticsModelsResponse, normalizeAnalyticsProvidersResponse } from "./analyticsContract";
+
+echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, SVGRenderer]);
 
 interface OverviewData {
-  NewUsersToday: number;
-  DAU: number;
-  WAU: number;
-  MAU: number;
-  AIUsersToday: number;
-  ImagesGenerated: number;
-  VideosGenerated: number;
-  PointsConsumed: number;
-  TokensUsed: number;
-  RevenueTodayCents: number;
-  CostTodayCents: number;
-  FailedTasksToday: number;
-  SuccessRate: number;
-  AvgLatencyMs: number;
+  newUsersToday: number;
+  dau: number;
+  wau: number;
+  mau: number;
+  aiUsersToday: number;
+  imagesGenerated: number;
+  videosGenerated: number;
+  pointsConsumed: number;
+  tokensUsed: number;
+  revenueTodayCents: number;
+  costTodayCents: number;
+  failedTasksToday: number;
+  successRate: number;
+  avgLatencyMs: number;
 }
 
 interface TrendData {
-  NewUsers: Array<{ Date: string; Value: number }>;
-  DAU: Array<{ Date: string; Value: number }>;
-  WAU: Array<{ Date: string; Value: number }>;
-  MAU: Array<{ Date: string; Value: number }>;
-  AIUsers: Array<{ Date: string; Value: number }>;
-  Images: Array<{ Date: string; Value: number }>;
-  Videos: Array<{ Date: string; Value: number }>;
-  Points: Array<{ Date: string; Value: number }>;
-  Tokens: Array<{ Date: string; Value: number }>;
-  Revenue: Array<{ Date: string; Value: number }>;
-  Cost: Array<{ Date: string; Value: number }>;
-  Tasks: Array<{ Date: string; Value: number }>;
-  Success: Array<{ Date: string; Value: number }>;
-  Latency: Array<{ Date: string; Value: number }>;
-  Failed: Array<{ Date: string; Value: number }>;
+  newUsers: Array<{ date: string; value: number }>;
+  dau: Array<{ date: string; value: number }>;
+  wau: Array<{ date: string; value: number }>;
+  mau: Array<{ date: string; value: number }>;
+  aiUsers: Array<{ date: string; value: number }>;
+  images: Array<{ date: string; value: number }>;
+  videos: Array<{ date: string; value: number }>;
+  points: Array<{ date: string; value: number }>;
+  tokens: Array<{ date: string; value: number }>;
+  revenue: Array<{ date: string; value: number }>;
+  cost: Array<{ date: string; value: number }>;
+  tasks: Array<{ date: string; value: number }>;
+  success: Array<{ date: string; value: number }>;
+  latency: Array<{ date: string; value: number }>;
+  failed: Array<{ date: string; value: number }>;
 }
 
 interface ModelData {
-  ModelCode: string;
-  CallCount: number;
-  SuccessCount: number;
-  SuccessRate: number;
-  AvgLatencyMs: number;
-  TotalCostCents: number;
+  modelCode: string;
+  callCount: number;
+  successCount: number;
+  successRate: number;
+  avgLatencyMs: number;
+  totalCostCents: number;
 }
 
 interface ProviderData {
-  ProviderCode: string;
-  CallCount: number;
-  SuccessCount: number;
-  SuccessRate: number;
-  AvgLatencyMs: number;
-  TotalCostCents: number;
+  providerCode: string;
+  callCount: number;
+  successCount: number;
+  successRate: number;
+  avgLatencyMs: number;
+  totalCostCents: number;
 }
 
 interface TokenData {
-  TokensToday: number;
-  Tokens7d: number;
-  Tokens30d: number;
-  ByUser: Array<{
-    UserID: string;
-    UserName: string;
-    Value: number;
+  tokensToday: number;
+  tokens7d: number;
+  tokens30d: number;
+  byUser: Array<{
+    userId: string;
+    userName: string;
+    value: number;
   }>;
 }
 
 interface PointsData {
-  ConsumedToday: number;
-  RechargedToday: number;
-  GrantedToday: number;
-  FrozenToday: number;
-  ReleasedToday: number;
-  NetChangeToday: number;
-  TotalAvailable: number;
-  TotalFrozen: number;
-  ConsumedTrend: Array<{ Date: string; Value: number }>;
-  RechargedTrend: Array<{ Date: string; Value: number }>;
-  ByType: Array<{
-    Type: string;
-    Count: number;
-    Rate: number;
+  consumedToday: number;
+  rechargedToday: number;
+  grantedToday: number;
+  frozenToday: number;
+  releasedToday: number;
+  netChangeToday: number;
+  totalAvailable: number;
+  totalFrozen: number;
+  consumedTrend: Array<{ date: string; value: number }>;
+  rechargedTrend: Array<{ date: string; value: number }>;
+  byType: Array<{
+    type: string;
+    count: number;
+    rate: number;
   }>;
 }
 
@@ -446,6 +360,7 @@ const pointsData = ref<PointsData | null>(null);
 
 // Loading states
 const loading = ref(true);
+const requestError = ref(false);
 const overviewLoading = ref(true);
 const trendsLoading = ref(true);
 const modelsLoading = ref(true);
@@ -457,42 +372,62 @@ const pointsLoading = ref(true);
 const activeTab = ref<'overview' | 'trends' | 'models' | 'providers' | 'tokens' | 'points'>('overview');
 
 // Trend keys and labels for display
-type TrendKey = 'NewUsers' | 'DAU' | 'WAU' | 'MAU' | 'AIUsers' | 'Images' | 'Videos' | 'Points' | 'Tokens' | 'Revenue' | 'Cost' | 'Tasks' | 'Success' | 'Latency' | 'Failed';
-const trendKeys: TrendKey[] = [
-  'NewUsers',
-  'DAU',
-  'WAU',
-  'MAU',
-  'AIUsers',
-  'Images',
-  'Videos',
-  'Points',
-  'Tokens',
-  'Revenue',
-  'Cost',
-  'Tasks',
-  'Success',
-  'Latency',
-  'Failed'
+type TrendKey = 'newUsers' | 'dau' | 'aiUsers' | 'points' | 'tokens';
+const chartKeys: TrendKey[] = [
+  'newUsers',
+  'dau',
+  'aiUsers',
+  'points',
+  'tokens',
 ];
 
-const trendLabels: Record<TrendKey, string> = {
-  NewUsers: '新增用户趋势',
-  DAU: 'DAU趋势',
-  WAU: 'WAU趨勢',
-  MAU: 'MAU趋勢',
-  AIUsers: 'AI用戶趋势',
-  Images: '圖片生成趋势',
-  Videos: '視頻生成趋势',
-  Points: '積分消耗趋势',
-  Tokens: 'Token使用趋势',
-  Revenue: '收入趋势',
-  Cost: '成本趋势',
-  Tasks: '任务量趋势',
-  Success: '成功率趋势',
-  Latency: '平均延迟趋势',
-  Failed: '失败任务趋势'
+const chartLabels: Record<TrendKey, string> = {
+  newUsers: '新增用户趋势',
+  dau: 'DAU 趋势',
+  aiUsers: 'AI 用户趋势',
+  points: '积分消耗趋势',
+  tokens: 'Token使用趋势',
 };
+
+const chartElements = new Map<TrendKey, HTMLElement>();
+const chartInstances = new Map<TrendKey, echarts.ECharts>();
+
+function setChartElement(element: unknown, key: TrendKey) {
+  if (element instanceof HTMLElement) chartElements.set(key, element);
+}
+
+function renderCharts() {
+  if (!trendsData.value || activeTab.value !== 'trends') return;
+  for (const key of chartKeys) {
+    const element = chartElements.get(key);
+    if (!element) continue;
+    const chart = chartInstances.get(key) || echarts.init(element, undefined, { renderer: "svg" });
+    chartInstances.set(key, chart);
+    const points = trendsData.value[key] || [];
+    chart.setOption({
+      animation: false,
+      tooltip: { trigger: 'axis' },
+      grid: { left: 36, right: 18, top: 18, bottom: 28 },
+      xAxis: { type: 'category', data: points.map((point) => point.date) },
+      yAxis: { type: 'value' },
+      series: [{ type: 'line', smooth: true, data: points.map((point) => point.value), areaStyle: {} }]
+    });
+  }
+}
+
+function hasTrendData() {
+  return Boolean(trendsData.value && chartKeys.some((key) => trendsData.value?.[key]?.length));
+}
+
+function resizeCharts() {
+  chartInstances.forEach((chart) => chart.resize());
+}
+
+function disposeCharts() {
+  chartInstances.forEach((chart) => chart.dispose());
+  chartInstances.clear();
+  chartElements.clear();
+}
 
 // Fetch overview data (using store data via props would be ideal,
 // but for simplicity we'll fetch it directly here as well)
@@ -501,11 +436,12 @@ async function fetchOverviewData() {
     overviewLoading.value = true;
     const response = await adminRequest<OverviewData>({
       method: "GET",
-      url: "/api/admin/analytics/overview"
+      url: "/admin/analytics/overview"
     });
     overviewData.value = response;
   } catch (error) {
-    console.error("Failed to fetch overview data:", error);
+    console.error("failed to fetch overview data:", error);
+    requestError.value = true;
     overviewData.value = null;
   } finally {
     overviewLoading.value = false;
@@ -518,11 +454,12 @@ async function fetchTrendsData() {
     trendsLoading.value = true;
     const response = await adminRequest<TrendData>({
       method: "GET",
-      url: "/api/admin/analytics/trends?days=7"
+      url: "/admin/analytics/trends?days=7"
     });
     trendsData.value = response;
   } catch (error) {
-    console.error("Failed to fetch trends data:", error);
+    console.error("failed to fetch trends data:", error);
+    requestError.value = true;
     trendsData.value = null;
   } finally {
     trendsLoading.value = false;
@@ -533,13 +470,14 @@ async function fetchTrendsData() {
 async function fetchModelsData() {
   try {
     modelsLoading.value = true;
-    const response = await adminRequest<ModelData[]>({
+    const response = await adminRequest<{ models: ModelData[] }>({
       method: "GET",
-      url: "/api/admin/analytics/models"
+      url: "/admin/analytics/models"
     });
-    modelsData.value = response;
+    modelsData.value = normalizeAnalyticsModelsResponse(response);
   } catch (error) {
-    console.error("Failed to fetch models data:", error);
+    console.error("failed to fetch models data:", error);
+    requestError.value = true;
     modelsData.value = null;
   } finally {
     modelsLoading.value = false;
@@ -550,13 +488,14 @@ async function fetchModelsData() {
 async function fetchProvidersData() {
   try {
     providersLoading.value = true;
-    const response = await adminRequest<ProviderData[]>({
+    const response = await adminRequest<{ providers: ProviderData[] }>({
       method: "GET",
-      url: "/api/admin/analytics/providers"
+      url: "/admin/analytics/providers"
     });
-    providersData.value = response;
+    providersData.value = normalizeAnalyticsProvidersResponse(response);
   } catch (error) {
-    console.error("Failed to fetch providers data:", error);
+    console.error("failed to fetch providers data:", error);
+    requestError.value = true;
     providersData.value = null;
   } finally {
     providersLoading.value = false;
@@ -569,11 +508,12 @@ async function fetchTokensData() {
     tokensLoading.value = true;
     const response = await adminRequest<TokenData>({
       method: "GET",
-      url: "/api/admin/analytics/tokens"
+      url: "/admin/analytics/tokens"
     });
     tokensData.value = response;
   } catch (error) {
-    console.error("Failed to fetch tokens data:", error);
+    console.error("failed to fetch tokens data:", error);
+    requestError.value = true;
     tokensData.value = null;
   } finally {
     tokensLoading.value = false;
@@ -586,11 +526,12 @@ async function fetchPointsData() {
     pointsLoading.value = true;
     const response = await adminRequest<PointsData>({
       method: "GET",
-      url: "/api/admin/analytics/points"
+      url: "/admin/analytics/points"
     });
     pointsData.value = response;
   } catch (error) {
-    console.error("Failed to fetch points data:", error);
+    console.error("failed to fetch points data:", error);
+    requestError.value = true;
     pointsData.value = null;
   } finally {
     pointsLoading.value = false;
@@ -599,6 +540,7 @@ async function fetchPointsData() {
 
 // Fetch all data
 async function fetchAllData() {
+  requestError.value = false;
   await Promise.all([
     fetchOverviewData(),
     fetchTrendsData(),
@@ -620,6 +562,21 @@ async function fetchAllData() {
 // Lifecycle
 onMounted(() => {
   fetchAllData();
+  window.addEventListener("resize", resizeCharts);
+});
+
+watch([activeTab, trendsData], async () => {
+  if (activeTab.value === "trends") {
+    await nextTick();
+    renderCharts();
+  } else {
+    disposeCharts();
+  }
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", resizeCharts);
+  disposeCharts();
 });
 
 // Refresh function

@@ -4,12 +4,29 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"xianzhi-ai/backend-go/internal/config"
 )
+
+func TestParseAnalyticsQueryUsesDaysAsCalendarDays(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{"1", 1}, {"7", 7}, {"30", 30}, {"90", 90}, {"0", 1}, {"120", 90},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			got := parseAnalyticsQuery(url.Values{"days": []string{tc.value}})
+			if got.Days != tc.want {
+				t.Fatalf("days=%s parsed as %d, want %d", tc.value, got.Days, tc.want)
+			}
+		})
+	}
+}
 
 var analyticsEndpointPaths = []string{
 	"/api/v1/admin/analytics/overview",

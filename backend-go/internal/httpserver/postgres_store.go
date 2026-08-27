@@ -6638,7 +6638,7 @@ func ensureDualIdentityCommerceSchema(ctx context.Context, db *sql.DB) error {
 }
 
 // AnalyticsOverviewResponse 聚合概览：给首页 5-6 张核心卡片用
-func (s *postgresStore) AnalyticsOverview(ctx context.Context, params AnalyticsQueryParams) (AnalyticsOverviewResponse, error) {
+func (s *postgresStore) legacyAnalyticsOverview(ctx context.Context, params AnalyticsQueryParams) (AnalyticsOverviewResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -6832,7 +6832,7 @@ func (s *postgresStore) AnalyticsOverview(ctx context.Context, params AnalyticsQ
 }
 
 // AnalyticsUsers 用户分析
-func (s *postgresStore) AnalyticsUsers(ctx context.Context, params AnalyticsQueryParams) (AnalyticsUsersResponse, error) {
+func (s *postgresStore) legacyAnalyticsUsers(ctx context.Context, params AnalyticsQueryParams) (AnalyticsUsersResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -6936,7 +6936,7 @@ func (s *postgresStore) AnalyticsUsers(ctx context.Context, params AnalyticsQuer
 }
 
 // AnalyticsGeneration 生成任务分析
-func (s *postgresStore) AnalyticsGeneration(ctx context.Context, params AnalyticsQueryParams) (AnalyticsGenerationResponse, error) {
+func (s *postgresStore) legacyAnalyticsGeneration(ctx context.Context, params AnalyticsQueryParams) (AnalyticsGenerationResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -7082,7 +7082,7 @@ func (s *postgresStore) AnalyticsGeneration(ctx context.Context, params Analytic
 }
 
 // AnalyticsTokens Token分析
-func (s *postgresStore) AnalyticsTokens(ctx context.Context, params AnalyticsQueryParams) (AnalyticsTokensResponse, error) {
+func (s *postgresStore) legacyAnalyticsTokens(ctx context.Context, params AnalyticsQueryParams) (AnalyticsTokensResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -7153,7 +7153,7 @@ func (s *postgresStore) AnalyticsTokens(ctx context.Context, params AnalyticsQue
 }
 
 // AnalyticsPoints 积分分析
-func (s *postgresStore) AnalyticsPoints(ctx context.Context, params AnalyticsQueryParams) (AnalyticsPointsResponse, error) {
+func (s *postgresStore) legacyAnalyticsPoints(ctx context.Context, params AnalyticsQueryParams) (AnalyticsPointsResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -7286,7 +7286,7 @@ func (s *postgresStore) AnalyticsPoints(ctx context.Context, params AnalyticsQue
 }
 
 // AnalyticsModels 模型排名
-func (s *postgresStore) AnalyticsModels(ctx context.Context, params AnalyticsQueryParams) (AnalyticsModelsResponse, error) {
+func (s *postgresStore) legacyAnalyticsModels(ctx context.Context, params AnalyticsQueryParams) (AnalyticsModelsResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -7295,7 +7295,7 @@ func (s *postgresStore) AnalyticsModels(ctx context.Context, params AnalyticsQue
 }
 
 // AnalyticsProviders 供应商分析
-func (s *postgresStore) AnalyticsProviders(ctx context.Context, params AnalyticsQueryParams) (AnalyticsProvidersResponse, error) {
+func (s *postgresStore) legacyAnalyticsProviders(ctx context.Context, params AnalyticsQueryParams) (AnalyticsProvidersResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
@@ -7304,7 +7304,7 @@ func (s *postgresStore) AnalyticsProviders(ctx context.Context, params Analytics
 }
 
 // AnalyticsTrends 趋势分析
-func (s *postgresStore) AnalyticsTrends(ctx context.Context, params AnalyticsQueryParams) (AnalyticsTrendsResponse, error) {
+func (s *postgresStore) legacyAnalyticsTrends(ctx context.Context, params AnalyticsQueryParams) (AnalyticsTrendsResponse, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 
