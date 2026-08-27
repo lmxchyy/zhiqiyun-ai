@@ -21,7 +21,7 @@ import (
 var errAssetNotFound = errors.New("asset not found")
 
 const (
-	pointUnitAmountCents       = 10
+	pointNominalValueCents     = 1
 	billingMetricImageGenerate = "image.generations"
 	billingMetricVideoGenerate = "video.generations"
 	billingMetricPPTGenerate   = "ppt.generations"
@@ -2383,7 +2383,7 @@ func applyRechargeSettlement(data *adminPlatformData, order *adminOrder, now str
 		TaskID:          order.ID,
 		MetricCode:      "compute.recharge",
 		Quantity:        points,
-		UnitAmountCents: 10,
+		UnitAmountCents: pointNominalValueCents,
 		AmountCents:     orderAmount(*order),
 		PointCost:       -points,
 		BalanceBefore:   before,
@@ -3778,7 +3778,7 @@ func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointSt
 }
 
 func generationBillingEvent(task generationTask, before int, after int, now string, user adminUser, agent adminChannelAgent, hasAgent bool) adminBillingEvent {
-	amountCents := task.PointCost * pointUnitAmountCents
+	amountCents := task.PointCost * pointNominalValueCents
 	agentID := ""
 	if hasAgent {
 		agentID = agent.ID
@@ -3801,7 +3801,7 @@ func generationBillingEvent(task generationTask, before int, after int, now stri
 		AssetIDs:          task.ResultIDs,
 		MetricCode:        billingMetricForModule(moduleCode),
 		Quantity:          quantity,
-		UnitAmountCents:   pointUnitAmountCents,
+		UnitAmountCents:   pointNominalValueCents,
 		AmountCents:       amountCents,
 		PointCost:         task.PointCost,
 		BalanceBefore:     before,
@@ -3821,7 +3821,7 @@ func generationBillingEvent(task generationTask, before int, after int, now stri
 }
 
 func pptBillingEvent(task pptapp.Task, pointCost int, before int, after int, now string, user adminUser, agent adminChannelAgent, hasAgent bool) adminBillingEvent {
-	amountCents := pointCost * pointUnitAmountCents
+	amountCents := pointCost * pointNominalValueCents
 	agentID := ""
 	if hasAgent {
 		agentID = agent.ID
@@ -3841,7 +3841,7 @@ func pptBillingEvent(task pptapp.Task, pointCost int, before int, after int, now
 		AssetIDs:        []string{},
 		MetricCode:      billingMetricPPTGenerate,
 		Quantity:        pptSlideQuantity(task),
-		UnitAmountCents: pointUnitAmountCents,
+		UnitAmountCents: pointNominalValueCents,
 		AmountCents:     amountCents,
 		PointCost:       pointCost,
 		BalanceBefore:   before,

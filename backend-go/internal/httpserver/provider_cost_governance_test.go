@@ -43,13 +43,13 @@ func TestApplyTaskSupplierCostUsesCentsAndFreezesSnapshot(t *testing.T) {
 	if task.SupplierCost == nil || *task.SupplierCost != 0.60 {
 		t.Fatalf("supplier cost = %v, want 0.60 CNY", task.SupplierCost)
 	}
-	if task.UpstreamCost != 60 || task.PlatformProfit != 40 {
-		t.Fatalf("cost/profit cents = %d/%d, want 60/40", task.UpstreamCost, task.PlatformProfit)
+	if task.UpstreamCost != 60 || task.PlatformProfit != -50 {
+		t.Fatalf("cost/profit cents = %d/%d, want 60/-50", task.UpstreamCost, task.PlatformProfit)
 	}
 
 	updated := []providerCost{{ID: "cost-v2", PlatformModelCode: task.Model, BillingUnit: "PER_IMAGE", UnitCost: 0.90, Currency: "CNY", Status: "ACTIVE", EffectiveFrom: "2026-08-02T00:00:00Z"}}
 	applyTaskSupplierCost(&task, updated)
-	if *task.SupplierCost != 0.60 || task.UpstreamCost != 60 || task.PlatformProfit != 40 {
+	if *task.SupplierCost != 0.60 || task.UpstreamCost != 60 || task.PlatformProfit != -50 {
 		t.Fatalf("snapshot changed after cost update: supplier=%v upstream=%d profit=%d", *task.SupplierCost, task.UpstreamCost, task.PlatformProfit)
 	}
 }

@@ -398,3 +398,143 @@ Admin Analytics Dashboard（`feature/admin-analytics-dashboard`）建议未来�
 - 起始 HEAD：`4ade71e26332201db81f80b3f54d2e79c83bbd00`
 - `origin/main`：`4ade71e26332201db81f80b3f54d2e79c83bbd00`
 - 本阶段未发布价格、未部署、未合并、未 push。
+
+---
+
+# Phase 2 — Point Economics Audit and Safe Remediation
+
+## Executive Summary
+
+第一阶段发现的 P0 已完成单位追踪和最小修复。商业口径由商品配置、充值 SKU 和钱包配置共同证明：`100 points = ¥1`，即 `1 point = ¥0.01 = 1 CNY cent`。旧实现使用 `pointUnitAmountCents = 10`，把积分转人民币的 margin/revenue 计算放大约 10 倍。
+
+根因分类：`CONSTANT_BUG` + `MARGIN_ONLY_BUG`。没有证据表明历史上正式积分价值曾变更，因此不是 `HISTORICAL_SEMANTICS_DRIFT`；变量名本身表达的是 cents，故不是 `UNIT_NAMING_BUG`。用户实际扣积分不依赖该常量，结论为 `USER_CHARGE_UNAFFECTED`，不是 `BILLING_CRITICAL_BUG`。
+
+本阶段只修正 CNY cents 侧的统一常量和相关 margin/reporting 计算，未修改任何正式售价、quote、reserve、capture、release、积分账本或已发布 Billing Rule。当前不发布新价格。
+
+## UNIT TRACE
+
+| 层 | 位置/字段 | 实际单位 | 是否依赖 point value |
+|---|---|---|---|
+| 商品口径 | `xz_billing_config.CREDITS_PER_CNY_YUAN=100`；充值 SKU 100/10000、400/40000 | points / CNY | 证明 1 point=1 cent |
+| 售价计算 | `GenerationPricingEngine` / `PointCost` | points | 否；只产生应扣积分 |
+| Quote | quote response `pointCost` | points | 否 |
+| Reserve/Capture/Release | `RequestedPoints`、`Points`、wallet ledger | points | 否；不做人民币换算 |
+| 统一转换 | `backend-go/internal/httpserver/store.go` 的 `pointNominalValueCents` | CNY cents / point | 是；当前值 1 |
+| Generation/PPT/Recharge 事件 | `UnitAmountCents`、`AmountCents` | CNY cents | 是 |
+| Task snapshot | `UserChargeAmount`、`UpstreamCost`、`PlatformProfit` | CNY cents | 是（仅报告/快照侧） |
+| Task snapshot | `SupplierCost`、`EstimatedMargin` | decimal CNY | 通过 cents 计算后除以 100 |
+| Provider cost | `xz_provider_costs.unit_cost` | decimal CNY / billing unit | 不使用 point value；由 `providerCostCents` ×100 转 cents |
+| Admin/Reporting | `amountCents`、`minimumRevenue`、knowledge billing | CNY cents | 是 |
+| 数据库 | `supplier_cost`、`estimated_margin` numeric；`upstream_cost`/`platform_profit` cents | 如左 | snapshot 写入后不可变 |
+
+调用链核验：`generationQuoteForRequest → pricingdomain.Calculate → PointCost → reserve/capture/release` 全程使用 points；`pointNominalValueCents` 不在这条链上。旧的 `pointUnitAmountCents` 引用已统一替换，未建立第二套 Pricing Engine。
+
+## Point Value
+
+名义积分价值：`NOMINAL_POINT_VALUE = 1 CNY cent / point`。有效收入仍受赠送积分、套餐和折扣影响，第一阶段沿用已审计情景：`LOW ¥0.005`、`BASE ¥0.0066`、`HIGH ¥0.010` / point；生产购买、赠送、活动和企业额度的完整归因仍需只读生产数据验证。
+
+## Current Wrong Formula
+
+修复前实际公式为：
+
+```text
+revenue_cents = captured_points × 10
+gross_profit_cents = revenue_cents - supplier_cost_cents
+margin = gross_profit_cents / revenue_cents
+```
+
+同一错误常量还影响 `UserChargeAmount` 的 CNY 报告字段、Billing Center `minimumRevenue`、billing event、Admin amount 以及 knowledge billing。它没有影响 points 字段本身。
+
+## Correct Formula
+
+当前统一定义为：
+
+```text
+pointNominalValueCents = 1
+revenue_cents = captured_points × pointNominalValueCents
+gross_profit_cents = revenue_cents - supplier_cost_cents
+margin = gross_profit_cents / revenue_cents, when revenue_cents > 0
+```
+
+Provider cost 仍是 `xz_provider_costs.unit_cost` 的 decimal CNY；例如 5 秒 × ¥0.80/秒 = ¥4.00 = 400 cents。不存在把供应商成本当 points 的转换。
+
+## User Charge Impact
+
+`USER_PRICING: UNAFFECTED`、`QUOTE: UNAFFECTED`、`RESERVE: UNAFFECTED`、`CAPTURE: UNAFFECTED`、`RELEASE: UNAFFECTED`。证据是上述链路只传递 `PointCost`/`RequestedPoints`/`Points`，不会读取 `pointNominalValueCents`。因此 600 points 仍 reserve/capture/release 600 points；没有改变用户实际扣积分。
+
+## Ledger Impact
+
+`POINTS_LEDGER: UNAFFECTED`。账户余额、冻结余额、ledger entry 的 points 整数算法未修改；没有 migration、批量改账或生产数据库写入。
+
+## Margin Impact
+
+`MARGIN: AFFECTED`，`PROVIDER_COST: UNAFFECTED`（仅其进入 cents 计算的消费方受益）。修复后 1、10、100 points 分别对应 1、10、100 revenue cents；100 points + 60 cents 成本得到 40 cents gross profit、40% nominal margin。100 points + 400 cents 成本得到 -300 cents gross profit，margin 为 -300%。
+
+## Reconciliation Impact
+
+`RECONCILIATION: AFFECTED`，仅影响异常解释和新计算，不回写历史异常。`NEGATIVE_MARGIN` 的规则校验和任务 margin 读取过去可能因旧常量产生 false negative；例如 GPT Image 2 的 10-point base 在旧口径看似 100 cents、成本 60 cents，在正确口径是 10 cents、确实亏损。此前记录的 5 条 `NEGATIVE_MARGIN` 不自动更改，需标记为 legacy-unit interpretation，后续只读重放后再判断。
+
+## Historical Snapshot Impact
+
+`supplier_cost`、`estimated_margin`、pricing snapshot 和 provider cost snapshot 已按任务保存；Postgres upsert 对已有 supplier cost 使用保留旧值的逻辑，`applyTaskSupplierCost` 也不会覆盖非空快照。本修复不 UPDATE historical tasks、不批量重算历史任务。新口径从本修复 commit 生效；历史快照仍是历史事实，不能用新公式覆盖。
+
+## Affected Surface
+
+| Surface | Status | 说明 |
+|---|---|---|
+| USER_PRICING | UNAFFECTED | 正式 points 售价未改 |
+| POINTS_LEDGER | UNAFFECTED | 余额和账本未改 |
+| QUOTE | UNAFFECTED | PointCost 未改 |
+| RESERVE / CAPTURE | UNAFFECTED | 请求积分未改 |
+| PROVIDER_COST | UNAFFECTED | 成本来源和单位未改 |
+| MARGIN | AFFECTED | CNY cents 换算修正 |
+| RECONCILIATION | AFFECTED | 新异常解释使用正确口径 |
+| ADMIN_ANALYTICS | AFFECTED | amount/margin 展示计算修正 |
+| REPORTING | AFFECTED | billing event / knowledge billing 修正 |
+
+## Safe Remediation
+
+修改集中在既有 HTTP server billing/reporting consumers：`store.go`、`ai_capability.go`、`billing_v1_store_json.go`、`admin_api.go`、`knowledge_billing.go`、`postgres_store.go`。只将散落的 10 改为唯一明确语义的 `pointNominalValueCents = 1`，未重构 billing 模块，未修改 `GenerationPricingEngine`，因此 `NO_ENGINE_CHANGE_REQUIRED`。
+
+## Updated Pricing Simulation
+
+这是 shadow re-simulation，不是生产价格建议发布。成本输入为 GPT Image 2 ¥0.60、Grok 1.5 6 秒 × ¥0.13 = ¥0.78、Seedance/Doubao 5 秒 × ¥0.80 = ¥4.00。修复后的 nominal revenue 与目标 margin 所需 points 如下：
+
+| Cost | Effective point value | 20% | 30% | 40% | 50% | 60% |
+|---|---:|---:|---:|---:|---:|---:|
+| GPT ¥0.60 | LOW .005 | 150 | 172 | 200 | 240 | 300 |
+| GPT ¥0.60 | BASE .0066 | 114 | 130 | 152 | 182 | 228 |
+| GPT ¥0.60 | HIGH .010 | 75 | 86 | 100 | 120 | 150 |
+| Grok ¥0.78 | LOW .005 | 195 | 223 | 260 | 312 | 390 |
+| Grok ¥0.78 | BASE .0066 | 148 | 169 | 197 | 237 | 296 |
+| Grok ¥0.78 | HIGH .010 | 98 | 112 | 130 | 156 | 195 |
+| Seedance ¥4.00 | LOW .005 | 1000 | 1143 | 1334 | 1600 | 2000 |
+| Seedance ¥4.00 | BASE .0066 | 758 | 866 | 1011 | 1213 | 1516 |
+| Seedance ¥4.00 | HIGH .010 | 500 | 572 | 667 | 800 | 1000 |
+
+公式：`required_points = ceil(cost_cny / (effective_revenue_per_point × (1-target_margin)))`。视频成本先按现有 engine 的 PER_SECOND rounding 语义计算；本阶段不改变 rounding algorithm。旧报告中的 GPT `120–500`、Grok `240`、Seedance `1200` 只能作为简化 ladder 参考，不能直接沿用为新生产价格。
+
+## Tests
+
+新增 deterministic regression 覆盖 1、10、100 points，以及 provider cost ¥0.60 和 ¥4.00；验证 revenue cents、supplier cost cents、gross profit cents 和 margin 输入。既有 provider-cost 测试同步改为正确 1-cent 口径。目标测试通过：
+
+```text
+go test ./internal/httpserver -run 'Test(PointEconomics|BillingCenterV1Acceptance|GPTImageBillingRulePhase26Draft|ApplyTaskSupplierCostUsesCents|AssessMarginHealth)' -count=1
+ok   xianzhi-ai/backend-go/internal/httpserver  2.874s
+```
+
+修正后的 GPT draft 测试现在预期 `NEGATIVE_MARGIN`，因为正确口径揭示该 draft 的成本问题；没有发布该 draft。全包测试中仅剩需要本地 Postgres `127.0.0.1:55441` 的集成测试无法运行，属于环境缺失，不是本修复失败。
+
+## Remaining Data Gap
+
+保持 `PRODUCTION_USAGE_DATA_UNVERIFIED`。本地数据库最新任务为 2026-08-11，不能作为当前生产 7/30 天 usage。没有伪造 MOST_USED_CONFIGURATION、涨跌价任务比例或真实收入分布；后续应以只读生产 extraction 做 shadow replay。
+
+## Implementation / Versioning / Rollout
+
+未来若批准调价，只能新增 versioned Billing Rule：`DRAFT → VALIDATE → PUBLISH → EFFECTIVE → MONITOR`，保留旧版本和历史 task pricing snapshot；回滚通过重新发布前一个安全版本，不 UPDATE 历史规则或任务。本阶段 `NO_BILLING_RULE_PUBLISH`、`NO_PRODUCTION_MUTATION`、`NO_DEPLOY`。
+
+## Final Phase 2 Decision
+
+`POINT_ECONOMICS_REMEDIATION_READY`
+
+Point economics 已完成安全修复和回归；正式用户价格仍未改变，下一步仅能在生产只读 usage 数据和业务批准后进入独立的价格方案评审/发布流程。
