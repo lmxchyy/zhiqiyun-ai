@@ -137,6 +137,8 @@ jobs:
     runs-on:
       - self-hosted
       - linux
+    env:
+      XIANZHI_ANALYTICS_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55442/xianzhi_test?sslmode=disable
 
     services:
       postgres:
@@ -146,7 +148,7 @@ jobs:
           POSTGRES_USER: codex
           POSTGRES_PASSWORD: codex
         ports:
-          - 55441:5432
+          - 55442:5432
         options: >-
           --health-cmd "pg_isready -U codex -d xianzhi_test"
           --health-interval 5s

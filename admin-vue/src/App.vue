@@ -1364,6 +1364,7 @@
           </section>
           <StorageCenter v-else-if="store.activeModuleId === 'storageCenter'" />
           <InspirationManagement v-else-if="store.activeModuleId === 'inspirationManagement'" />
+          <AdminAnalyticsDashboard v-else-if="store.activeModuleId === 'analytics'" />
           <MediaCenter v-else-if="['mediaAssets', 'mediaCategories'].includes(store.activeModuleId)" />
           <PageDecoration v-else-if="mediaDecorationModuleIds.includes(store.activeModuleId)" :key="store.activeModuleId" :initial-page-code="decorationInitialPage" />
           <KnowledgeAdminCenter v-else-if="store.activeModuleId === 'knowledgeAdmin'" />
@@ -2496,6 +2497,7 @@ const MediaCenter = defineAsyncComponent(() => import("./components/media/MediaC
 const PageDecoration = defineAsyncComponent(() => import("./components/media/PageDecoration.vue"));
 const PlanEditorDialog = defineAsyncComponent(() => import("./components/billing/PlanEditorDialog.vue"));
 const StorageCenter = defineAsyncComponent(() => import("./components/storage/StorageCenter.vue"));
+const AdminAnalyticsDashboard = defineAsyncComponent(() => import("./components/admin/AdminAnalyticsDashboard.vue"));
 const planEditorOpen = ref(false);
 const editingPlan = ref<AdminRecord | null>(null);
 const planEditorGate = ref<LegacyPlanEditorGate>({ status: "BLOCKED", planId: "", message: "尚未检查套餐托管状态。" });

@@ -104,6 +104,7 @@ export const adminModules: AdminModule[] = [
   { id: "analysis", title: "分析页", endpoint: "/admin/overview", path: "/admin/overview", aliases: ["/admin"] },
   { id: "workbench", title: "工作台", endpoint: "/admin/overview", path: "/admin/workbench" },
   { id: "dashboard", title: "数据中心", endpoint: "/admin/overview", path: "/admin/dashboard" },
+  { id: "analytics", title: "分析仪表盘", endpoint: "/admin/analytics/overview", path: "/admin/analytics" },
   { id: "customers", title: "客户中心", endpoint: "/admin/customers", path: "/admin/customers" },
   { id: "personalPointsGovernance", title: "赠送积分到期策略", endpoint: "", path: "/admin/customers/point-expiry", permission: "points:gift-policy:view" },
   { id: "customerAttributions", title: "客户归属总览", endpoint: "", path: "/admin/customers/attributions" },

@@ -74,6 +74,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		knowledge.rag.SetBillingRecorder(store)
 	}
 	admin := newAdminAPI(store, sessions)
+	analytics := newAnalyticsAPI(store)
 	businessPlans := newBusinessPlanAdminAPI(store)
 	pricePlans := newPricePlanAdminAPI(store)
 	pricePlanTestWhitelist := newPricePlanTestWhitelistAdminAPI(store)
@@ -829,6 +830,17 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.POST("/billing/payment-requests/:id/dunning", wrapF(admin.recordBillingDunning))
 	adminGroup.GET("/billing/payments", wrapF(admin.billingPayments))
 	adminGroup.PATCH("/billing/subscriptions/:id", wrapF(admin.updateBillingSubscription))
+
+	// Analytics routes
+	analyticsGroup := adminGroup.Group("/analytics")
+	analyticsGroup.GET("/overview", wrapF(analytics.AnalyticsOverview))
+	analyticsGroup.GET("/users", wrapF(analytics.AnalyticsUsers))
+	analyticsGroup.GET("/generation", wrapF(analytics.AnalyticsGeneration))
+	analyticsGroup.GET("/tokens", wrapF(analytics.AnalyticsTokens))
+	analyticsGroup.GET("/points", wrapF(analytics.AnalyticsPoints))
+	analyticsGroup.GET("/models", wrapF(analytics.AnalyticsModels))
+	analyticsGroup.GET("/providers", wrapF(analytics.AnalyticsProviders))
+	analyticsGroup.GET("/trends", wrapF(analytics.AnalyticsTrends))
 
 	dashboardBillingGroup.GET("/subscription", wrapF(admin.billingSubscription))
 	dashboardBillingGroup.GET("/usage", wrapF(admin.billingUsage))

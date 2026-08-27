@@ -6636,3 +6636,914 @@ func ensureDualIdentityCommerceSchema(ctx context.Context, db *sql.DB) error {
 	`)
 	return err
 }
+
+// AnalyticsOverviewResponse 聚合概览：给首页 5-6 张核心卡片用
+func (s *postgresStore) legacyAnalyticsOverview(ctx context.Context, params AnalyticsQueryParams) (AnalyticsOverviewResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	// 解析时间范围
+	start, end, loc, err := s.parseAnalyticsTimeRange(params)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	var resp AnalyticsOverviewResponse
+
+	// 日新增用户 (今天)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM xz_users
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND role != 'SUPER_ADMIN'
+	`, loc.String()).Scan(&resp.NewUsersToday)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// DAU (今日活跃用户)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id)
+		FROM (
+			SELECT user_id FROM xz_generation_tasks WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE AND status = 'SUCCEEDED'
+			UNION
+			SELECT user_id FROM agent_call_logs WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+			UNION
+			SELECT user_id FROM xz_billing_events WHERE DATE(occurred_at AT TIME ZONE $1) = CURRENT_DATE
+		) u
+	`, loc.String()).Scan(&resp.DAU)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// WAU (最近7天活跃用户)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id)
+		FROM (
+			SELECT user_id FROM xz_generation_tasks WHERE created_at >= $1 AND created_at < $2 AND status = 'SUCCEEDED'
+			UNION
+			SELECT user_id FROM agent_call_logs WHERE created_at >= $1 AND created_at < $2
+			UNION
+			SELECT user_id FROM xz_billing_events WHERE occurred_at >= $1 AND occurred_at < $2
+		) u
+	`, start, end).Scan(&resp.WAU)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// MAU (最近30天活跃用户)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id)
+		FROM (
+			SELECT user_id FROM xz_generation_tasks WHERE created_at >= $1 AND created_at < $2 AND status = 'SUCCEEDED'
+			UNION
+			SELECT user_id FROM agent_call_logs WHERE created_at >= $1 AND created_at < $2
+			UNION
+			SELECT user_id FROM xz_billing_events WHERE occurred_at >= $1 AND occurred_at < $2
+		) u
+	`, start, end.Add(-time.Duration(params.Days-30)*24*time.Hour)).Scan(&resp.MAU)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日AI用户
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE AND status = 'SUCCEEDED' AND model IN (
+			SELECT model_code FROM xz_model_definitions WHERE is_ai_model = true
+		)
+	`, loc.String()).Scan(&resp.AIUsersToday)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日图片生成
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND type = 'TEXT_TO_IMAGE'
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&resp.ImagesGenerated)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日视频生成
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND type IN ('TEXT_TO_VIDEO', 'IMAGE_TO_VIDEO')
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&resp.VideosGenerated)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日积分消耗
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount < 0
+	`, loc.String()).Scan(&resp.PointsConsumed)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日Token使用
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(token_count), 0)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&resp.TokensUsed)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日收入 (简化版，实际可能需要更复杂的计算)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount > 0
+		  AND source IN ('recharge', 'purchase')
+	`, loc.String()).Scan(&resp.RevenueTodayCents)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日成本 (简化版)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(compute_cost_cents), 0)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&resp.CostTodayCents)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日失败任务
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'FAILED'
+	`, loc.String()).Scan(&resp.FailedTasksToday)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+
+	// 今日成功率
+	var totalToday, successToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) as total,
+			SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END) as success
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+	`, loc.String()).Scan(&totalToday, &successToday)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+	if totalToday > 0 {
+		resp.SuccessRate = float64(successToday) / float64(totalToday) * 100
+	}
+
+	// 今日平均延迟 (简化版)
+	var avgLatency int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(AVG(latency_ms), 0)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+		  AND latency_ms > 0
+	`, loc.String()).Scan(&avgLatency)
+	if err != nil {
+		return AnalyticsOverviewResponse{}, err
+	}
+	resp.AvgLatencyMs = int(avgLatency)
+
+	return resp, nil
+}
+
+// AnalyticsUsers 用户分析
+func (s *postgresStore) legacyAnalyticsUsers(ctx context.Context, params AnalyticsQueryParams) (AnalyticsUsersResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	var resp AnalyticsUsersResponse
+	loc, err := time.LoadLocation(params.Timezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600) // 默认亚洲上海时间
+	}
+
+	// 今日值
+	var newUsersToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_users
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND role != 'SUPER_ADMIN'
+	`, loc.String()).Scan(&newUsersToday)
+	if err != nil {
+		return AnalyticsUsersResponse{}, err
+	}
+	resp.NewUsersToday = int(newUsersToday)
+
+	var dau int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id)
+		FROM (
+			SELECT user_id, created_at FROM xz_generation_tasks WHERE status = 'SUCCEEDED'
+			UNION ALL
+			SELECT user_id, created_at FROM agent_call_logs
+			UNION ALL
+			SELECT user_id, occurred_at FROM xz_billing_events
+		) u
+		WHERE DATE(u.created_at AT TIME ZONE $1) = CURRENT_DATE
+	`, loc.String()).Scan(&dau)
+	if err != nil {
+		return AnalyticsUsersResponse{}, err
+	}
+	resp.DAU = int(dau)
+
+	var aiUsersToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT user_id)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+		  AND model IN (SELECT model_code FROM xz_model_definitions WHERE is_ai_model = true)
+	`, loc.String()).Scan(&aiUsersToday)
+	if err != nil {
+		return AnalyticsUsersResponse{}, err
+	}
+	resp.AIUsersToday = int(aiUsersToday)
+
+	// 趋势数据
+	if params.Days > 0 {
+		start, end := s.getDateRange(params.Days)
+		resp.NewUsersTrend = s.queryDailyMetrics(ctx, `
+			SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value
+			FROM xz_users
+			WHERE created_at >= $1 AND created_at < $2
+			  AND role != 'SUPER_ADMIN'
+			GROUP BY DATE(created_at AT TIME ZONE $3)
+			ORDER BY date
+		`, start, end, params.Timezone)
+
+		resp.DAUTrend = s.queryDailyMetrics(ctx, `
+			SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(DISTINCT user_id) as value
+			FROM (
+				SELECT user_id, created_at FROM xz_generation_tasks WHERE status = 'SUCCEEDED'
+				UNION ALL
+				SELECT user_id, created_at FROM agent_call_logs
+				UNION ALL
+				SELECT user_id, occurred_at FROM xz_billing_events
+			) u
+			WHERE u.created_at >= $1 AND u.created_at < $2
+			GROUP BY DATE(u.created_at AT TIME ZONE $3)
+			ORDER BY date
+		`, start, end, params.Timezone)
+
+		// WAU 和 MAU 趋势（简化处理 - 使用日活的近似值）
+		resp.WAU = resp.DAU // 简化处理
+		resp.MAU = resp.DAU // 简化处理
+		resp.AIUsersTrend = s.queryDailyMetrics(ctx, `
+			SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(DISTINCT user_id) as value
+			FROM xz_generation_tasks
+			WHERE created_at >= $1 AND created_at < $2
+			  AND status = 'SUCCEEDED'
+			  AND model IN (SELECT model_code FROM xz_model_definitions WHERE is_ai_model = true)
+			GROUP BY DATE(created_at AT TIME ZONE $3)
+			ORDER BY date
+		`, start, end, params.Timezone)
+	}
+
+	// 其他字段（简化处理）
+	resp.TotalUsers = 0             // 需要实现
+	resp.ActiveUsers7d = resp.DAU   // 简化处理
+	resp.ChurnedUsers7d = 0         // 需要实现
+	resp.WAUTrend = []DailyMetric{} // 需要实现
+	resp.MAUTrend = []DailyMetric{} // 需要实现
+
+	return resp, nil
+}
+
+// AnalyticsGeneration 生成任务分析
+func (s *postgresStore) legacyAnalyticsGeneration(ctx context.Context, params AnalyticsQueryParams) (AnalyticsGenerationResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	var resp AnalyticsGenerationResponse
+	loc, err := time.LoadLocation(params.Timezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600) // 默认亚洲上海时间
+	}
+
+	// 今日值
+	var imagesToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND type = 'TEXT_TO_IMAGE'
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&imagesToday)
+	if err != nil {
+		return AnalyticsGenerationResponse{}, err
+	}
+	resp.ImagesToday = int(imagesToday)
+
+	var videosToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND type IN ('TEXT_TO_VIDEO', 'IMAGE_TO_VIDEO')
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&videosToday)
+	if err != nil {
+		return AnalyticsGenerationResponse{}, err
+	}
+	resp.VideosToday = int(videosToday)
+
+	// 今日总任务数
+	var totalTasksToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&totalTasksToday)
+	if err != nil {
+		return AnalyticsGenerationResponse{}, err
+	}
+	resp.TotalTasksToday = int(totalTasksToday)
+
+	// 今日成功率
+	var totalToday, successToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) as total,
+			SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END) as success
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+	`, loc.String()).Scan(&totalToday, &successToday)
+	if err != nil {
+		return AnalyticsGenerationResponse{}, err
+	}
+	if totalToday > 0 {
+		resp.SuccessRate = float64(successToday) / float64(totalToday) * 100
+	}
+
+	// 今日平均延迟
+	var avgLatency int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(AVG(latency_ms), 0)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+		  AND latency_ms > 0
+	`, loc.String()).Scan(&avgLatency)
+	if err != nil {
+		return AnalyticsGenerationResponse{}, err
+	}
+	resp.AvgLatencyMs = int(avgLatency)
+
+	// 今日失败任务
+	var failedTasksToday int64
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'FAILED'
+	`, loc.String()).Scan(&failedTasksToday)
+	if err != nil {
+		return AnalyticsGenerationResponse{}, err
+	}
+	resp.FailedTasks = int(failedTasksToday)
+
+	// 按类型分布 (简化)
+	resp.ByType = []TypeMetric{
+		{Type: "图片生成", Count: 0, Rate: 0},
+		{Type: "视频生成", Count: 0, Rate: 0},
+		{Type: "对话", Count: 0, Rate: 0},
+		{Type: "其他", Count: 0, Rate: 0},
+	}
+
+	// 获取趋势数据
+	if params.Days > 0 {
+		start, end := s.getDateRange(params.Days)
+		resp.TasksTrend = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.SuccessTrend = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, 
+				   SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date
+	`,
+			start, end, params.Timezone)
+
+		resp.LatencyTrend = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, 
+				   COALESCE(AVG(latency_ms), 0) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			  AND latency_ms > 0 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date
+			`,
+			start, end, params.Timezone)
+	}
+
+	// 模型排名
+	resp.ByModel = s.queryModelMetrics(ctx, params.Days, params.Timezone)
+
+	// 供应商排名
+	resp.ByProvider = s.queryProviderMetrics(ctx, params.Days, params.Timezone)
+
+	return resp, nil
+}
+
+// AnalyticsTokens Token分析
+func (s *postgresStore) legacyAnalyticsTokens(ctx context.Context, params AnalyticsQueryParams) (AnalyticsTokensResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	var resp AnalyticsTokensResponse
+	loc, err := time.LoadLocation(params.Timezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600) // 默认亚洲上海时间
+	}
+
+	// 今日使用量
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(token_count), 0)
+		FROM xz_generation_tasks
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND status = 'SUCCEEDED'
+	`, loc.String()).Scan(&resp.TokensToday)
+	if err != nil {
+		return AnalyticsTokensResponse{}, err
+	}
+
+	// 7日使用量
+	if params.Days >= 7 {
+		start, end := s.getDateRange(7)
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(token_count), 0)
+			FROM xz_generation_tasks
+			WHERE created_at >= $1 AND created_at < $2
+			  AND status = 'SUCCEEDED'
+		`, start, end).Scan(&resp.Tokens7d)
+		if err != nil {
+			return AnalyticsTokensResponse{}, err
+		}
+	}
+
+	// 30日使用量
+	if params.Days >= 30 {
+		start, end := s.getDateRange(30)
+		err = s.db.QueryRowContext(ctx, `
+			SELECT COALESCE(SUM(token_count), 0)
+			FROM xz_generation_tasks
+			WHERE created_at >= $1 AND created_at < $2
+			  AND status = 'SUCCEEDED'
+		`, start, end).Scan(&resp.Tokens30d)
+		if err != nil {
+			return AnalyticsTokensResponse{}, err
+		}
+	}
+
+	// Token使用排名（简化）
+	resp.ByUser = []UserMetric{
+		{UserID: "", UserName: "", Value: 0},
+	}
+
+	// 趋势数据
+	if params.Days > 0 {
+		start, end := s.getDateRange(params.Days)
+		resp.TokensTrend = s.queryDailyMetrics(ctx, `
+			SELECT DATE(created_at AT TIME ZONE $3) as date, SUM(token_count) as value
+			FROM xz_generation_tasks
+			WHERE created_at >= $1 AND created_at < $2
+			  AND status = 'SUCCEEDED'
+			GROUP BY DATE(created_at AT TIME ZONE $3)
+			ORDER BY date
+		`, start, end, params.Timezone)
+	}
+
+	return resp, nil
+}
+
+// AnalyticsPoints 积分分析
+func (s *postgresStore) legacyAnalyticsPoints(ctx context.Context, params AnalyticsQueryParams) (AnalyticsPointsResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	var resp AnalyticsPointsResponse
+	loc, err := time.LoadLocation(params.Timezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600) // 默认亚洲上海时间
+	}
+
+	// 今日消耗
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(ABS(amount)), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount < 0
+	`, loc.String()).Scan(&resp.ConsumedToday)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 今日充值
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount > 0
+		  AND source IN ('recharge', 'purchase')
+	`, loc.String()).Scan(&resp.RechargedToday)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 今日赠送
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount > 0
+		  AND source = 'grant'
+	`, loc.String()).Scan(&resp.GrantedToday)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 今日冻结
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(ABS(amount)), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount < 0
+		  AND status = 'frozen'
+	`, loc.String()).Scan(&resp.FrozenToday)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 今日解冻
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(ABS(amount)), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+		  AND amount < 0
+		  AND status = 'released'
+	`, loc.String()).Scan(&resp.ReleasedToday)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 今日净变化
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(amount), 0)
+		FROM xz_point_transactions
+		WHERE DATE(created_at AT TIME ZONE $1) = CURRENT_DATE
+	`, loc.String()).Scan(&resp.NetChangeToday)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 可用余额
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(balance), 0)
+		FROM xz_user_wallets
+	`).Scan(&resp.TotalAvailable)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 冻结余额
+	err = s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(frozen_balance), 0)
+		FROM xz_user_wallets
+	`).Scan(&resp.TotalFrozen)
+	if err != nil {
+		return AnalyticsPointsResponse{}, err
+	}
+
+	// 按类型分布
+	resp.ByType = []TypeMetric{
+		{Type: "图片生成", Count: 0, Rate: 0},
+		{Type: "视频生成", Count: 0, Rate: 0},
+		{Type: "对话", Count: 0, Rate: 0},
+		{Type: "其他", Count: 0, Rate: 0},
+	}
+
+	// 消耗趋势
+	if params.Days > 0 {
+		start, end := s.getDateRange(params.Days)
+		resp.ConsumedTrend = s.queryDailyMetrics(ctx, `
+			SELECT DATE(created_at AT TIME ZONE $3) as date, COALESCE(SUM(ABS(amount)), 0) as value
+			FROM xz_point_transactions
+			WHERE created_at >= $1 AND created_at < $2
+			  AND amount < 0
+			GROUP BY DATE(created_at AT TIME ZONE $3)
+			ORDER BY date
+		`, start, end, params.Timezone)
+
+		// 充值趋势
+		resp.RechargedTrend = s.queryDailyMetrics(ctx, `
+			SELECT DATE(created_at AT TIME ZONE $3) as date, COALESCE(SUM(amount), 0) as value
+			FROM xz_point_transactions
+			WHERE created_at >= $1 AND created_at < $2
+			  AND amount > 0
+			  AND source IN ('recharge', 'purchase')
+			GROUP BY DATE(created_at AT TIME ZONE $3)
+			ORDER BY date
+		`, start, end, params.Timezone)
+	}
+
+	return resp, nil
+}
+
+// AnalyticsModels 模型排名
+func (s *postgresStore) legacyAnalyticsModels(ctx context.Context, params AnalyticsQueryParams) (AnalyticsModelsResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	models := s.queryModelMetrics(ctx, params.Days, params.Timezone)
+	return AnalyticsModelsResponse{Models: models}, nil
+}
+
+// AnalyticsProviders 供应商分析
+func (s *postgresStore) legacyAnalyticsProviders(ctx context.Context, params AnalyticsQueryParams) (AnalyticsProvidersResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	providers := s.queryProviderMetrics(ctx, params.Days, params.Timezone)
+	return AnalyticsProvidersResponse{Providers: providers}, nil
+}
+
+// AnalyticsTrends 趋势分析
+func (s *postgresStore) legacyAnalyticsTrends(ctx context.Context, params AnalyticsQueryParams) (AnalyticsTrendsResponse, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+
+	var resp AnalyticsTrendsResponse
+
+	if params.Days > 0 {
+		start, end := s.getDateRange(params.Days)
+		resp.NewUsers = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value
+			FROM xz_users
+			WHERE created_at >= $1 AND created_at < $2
+			  AND role != 'SUPER_ADMIN'
+			GROUP BY DATE(created_at AT TIME ZONE $3)
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.DAU = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(DISTINCT user_id) as value 
+			FROM ( 
+				SELECT user_id, created_at FROM xz_generation_tasks WHERE status = 'SUCCEEDED' 
+				UNION ALL 
+				SELECT user_id, created_at FROM agent_call_logs 
+				UNION ALL 
+				SELECT user_id, occurred_at FROM xz_billing_events 
+			) u 
+			WHERE u.created_at >= $1 AND u.created_at < $2 
+			GROUP BY DATE(u.created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.WAU = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(DISTINCT user_id) as value 
+			FROM ( 
+				SELECT user_id, created_at FROM xz_generation_tasks WHERE status = 'SUCCEEDED' 
+				UNION ALL 
+				SELECT user_id, created_at FROM agent_call_logs 
+				UNION ALL 
+				SELECT user_id, occurred_at FROM xz_billing_events 
+			) u 
+			WHERE u.created_at >= $1 AND u.created_at < $2 
+			GROUP BY DATE(u.created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.MAU = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(DISTINCT user_id) as value 
+			FROM ( 
+				SELECT user_id, created_at FROM xz_generation_tasks WHERE status = 'SUCCEEDED' 
+				UNION ALL 
+				SELECT user_id, created_at FROM agent_call_logs 
+				UNION ALL 
+				SELECT user_id, occurred_at FROM xz_billing_events 
+			) u 
+			WHERE u.created_at >= $1 AND u.created_at < $2 
+			GROUP BY DATE(u.created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.AIUsers = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(DISTINCT user_id) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			  AND model IN (SELECT model_code FROM xz_model_definitions WHERE is_ai_model = true) 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Images = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND type = 'TEXT_TO_IMAGE' 
+			  AND status = 'SUCCEEDED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Videos = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND type IN ('TEXT_TO_VIDEO', 'IMAGE_TO_VIDEO') 
+			  AND status = 'SUCCEEDED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Points = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COALESCE(SUM(ABS(amount)), 0) as value 
+			FROM xz_point_transactions 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND amount < 0 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Tokens = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, SUM(token_count) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Revenue = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COALESCE(SUM(amount), 0) as value 
+			FROM xz_point_transactions 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND amount > 0 
+			  AND source IN ('recharge', 'purchase') 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Cost = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COALESCE(SUM(compute_cost_cents), 0) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Tasks = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Success = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, 
+				   SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Latency = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, 
+				   COALESCE(AVG(latency_ms), 0) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'SUCCEEDED' 
+			  AND latency_ms > 0 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+
+		resp.Failed = s.queryDailyMetrics(ctx,
+			`SELECT DATE(created_at AT TIME ZONE $3) as date, COUNT(*) as value 
+			FROM xz_generation_tasks 
+			WHERE created_at >= $1 AND created_at < $2 
+			  AND status = 'FAILED' 
+			GROUP BY DATE(created_at AT TIME ZONE $3) 
+			ORDER BY date`,
+			start, end, params.Timezone)
+	}
+
+	return resp, nil
+}
+
+// 辅助方法：解析时间范围
+func (s *postgresStore) parseAnalyticsTimeRange(params AnalyticsQueryParams) (time.Time, time.Time, *time.Location, error) {
+	loc, err := time.LoadLocation(params.Timezone)
+	if err != nil {
+		loc = time.FixedZone("CST", 8*3600) // 默认亚洲上海时间
+	}
+	now := time.Now().In(loc)
+	var start time.Time
+	if params.Days > 0 {
+		start = now.AddDate(0, 0, -params.Days+1).Truncate(24 * time.Hour)
+	} else {
+		start = now.Truncate(24 * time.Hour)
+	}
+	end := now.Add(24 * time.Hour).Truncate(24 * time.Hour)
+	return start, end, loc, nil
+}
+
+// 辅助方法：获取日期范围
+func (s *postgresStore) getDateRange(days int) (time.Time, time.Time) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.FixedZone("CST", 8*3600)
+	}
+	now := time.Now().In(loc)
+	start := now.AddDate(0, 0, -days+1).Truncate(24 * time.Hour)
+	end := now.Add(24 * time.Hour).Truncate(24 * time.Hour)
+	return start, end
+}
+
+// 辅助方法：查询日度指标
+func (s *postgresStore) queryDailyMetrics(ctx context.Context, query string, start, end time.Time, timezone string) []DailyMetric {
+	rows, err := s.db.QueryContext(ctx, query, start, end, timezone)
+	if err != nil {
+		return []DailyMetric{}
+	}
+	defer rows.Close()
+
+	var results []DailyMetric
+	for rows.Next() {
+		var dateStr string
+		var value float64
+		if err := rows.Scan(&dateStr, &value); err != nil {
+			continue
+		}
+		results = append(results, DailyMetric{
+			Date:  dateStr,
+			Value: value,
+		})
+	}
+	return results
+}
+
+// 辅助方法：查询周度指标（简化实现）
+func (s *postgresStore) queryWeeklyMetrics(ctx context.Context, start, end time.Time, timezone string) []TypeMetric {
+	// 简化实现，实际应按周分组
+	return []TypeMetric{}
+}
+
+// 辅助方法：查询月度指标（简化实现）
+func (s *postgresStore) queryMonthlyMetrics(ctx context.Context, start, end time.Time, timezone string) []TypeMetric {
+	// 简化实现，实际应按月分组
+	return []TypeMetric{}
+}
+
+// 辅助方法：查询模型指标
+func (s *postgresStore) queryModelMetrics(ctx context.Context, days int, timezone string) []ModelMetric {
+	// 简化实现
+	return []ModelMetric{}
+}
+
+// 辅助方法：查询供应商指标
+func (s *postgresStore) queryProviderMetrics(ctx context.Context, days int, timezone string) []ProviderMetric {
+	// 简化实现
+	return []ProviderMetric{}
+}

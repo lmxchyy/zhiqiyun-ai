@@ -100,6 +100,16 @@ type platformStore interface {
 	CreateAdminWithdrawal(adminWithdrawalMutation) (adminWithdrawal, error)
 	ReviewAdminWithdrawal(string, string) (adminWithdrawal, error)
 	billingV1Store
+
+	// Analytics methods
+	AnalyticsOverview(context.Context, AnalyticsQueryParams) (AnalyticsOverviewResponse, error)
+	AnalyticsUsers(context.Context, AnalyticsQueryParams) (AnalyticsUsersResponse, error)
+	AnalyticsGeneration(context.Context, AnalyticsQueryParams) (AnalyticsGenerationResponse, error)
+	AnalyticsTokens(context.Context, AnalyticsQueryParams) (AnalyticsTokensResponse, error)
+	AnalyticsPoints(context.Context, AnalyticsQueryParams) (AnalyticsPointsResponse, error)
+	AnalyticsModels(context.Context, AnalyticsQueryParams) (AnalyticsModelsResponse, error)
+	AnalyticsProviders(context.Context, AnalyticsQueryParams) (AnalyticsProvidersResponse, error)
+	AnalyticsTrends(context.Context, AnalyticsQueryParams) (AnalyticsTrendsResponse, error)
 }
 
 type optimizedUserContentStore interface {
