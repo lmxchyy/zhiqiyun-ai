@@ -12,7 +12,7 @@ import (
 )
 
 func TestAnalyticsPostgresV1AggregatesControlledFixture(t *testing.T) {
-	dsn := os.Getenv("XIANZHI_TEST_DATABASE_URL")
+	dsn := os.Getenv("XIANZHI_ANALYTICS_TEST_DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable"
 	}
