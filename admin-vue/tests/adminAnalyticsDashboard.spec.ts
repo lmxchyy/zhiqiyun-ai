@@ -1,6 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAnalyticsModelsResponse, normalizeAnalyticsProvidersResponse, analyticsMetricValue } from "../src/components/admin/analyticsContract";
+import Dashboard from "../src/components/admin/AdminAnalyticsDashboard.vue";
 
 vi.mock("../src/api/client", () => ({
   adminRequest: vi.fn(async ({ url }: { url: string }) => {
@@ -25,7 +26,6 @@ describe("admin analytics dashboard contract", () => {
   });
 
   it("renders camelCase overview data from the backend contract", async () => {
-    const { default: Dashboard } = await import("../src/components/admin/AdminAnalyticsDashboard.vue");
     const wrapper = mount(Dashboard);
     await flushPromises();
     expect(wrapper.text()).toContain("7");
@@ -33,7 +33,6 @@ describe("admin analytics dashboard contract", () => {
   });
 
   it("renders five ECharts trend containers for the required metrics", async () => {
-    const { default: Dashboard } = await import("../src/components/admin/AdminAnalyticsDashboard.vue");
     const wrapper = mount(Dashboard);
     await flushPromises();
     await wrapper.get(".tab:nth-child(2)").trigger("click");
