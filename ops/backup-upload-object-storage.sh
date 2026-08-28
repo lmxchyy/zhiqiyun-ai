@@ -238,9 +238,11 @@ class ObsProvider(object):
     def put(self, source, key, sha256_value, size):
         metadata = {"x-obs-meta-sha256": sha256_value}
         try:
-            if size > 5 * 1024 * 1024 * 1024:
+            # Keep large uploads resumable and bounded. A single PUT of a
+            # database dump can stall behind an otherwise healthy OBS path.
+            if size >= 64 * 1024 * 1024:
                 checkpoint = os.path.join(tempfile.gettempdir(), "backup-obs-" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".checkpoint")
-                response = self.client.uploadFile(self.bucket, key, source, 100 * 1024 * 1024, 1, True, checkpoint, True, metadata=metadata)
+                response = self.client.uploadFile(self.bucket, key, source, 16 * 1024 * 1024, 1, True, checkpoint, True, metadata=metadata)
             else:
                 response = self.client.putFile(self.bucket, key, source, metadata=metadata)
         except Exception:
