@@ -324,6 +324,12 @@ services:
             gzip -t "$$temp_file"
             test -s "$$temp_file"
             mv "$$temp_file" "$$file"
+            bytes="$$(wc -c < "$$file" | tr -d '[:space:]')"
+            sha256="$$(sha256sum "$$file" | awk '{print $$1}')"
+            meta_file="$$file.meta.json"
+            meta_temp="$$meta_file.part"
+            printf '{"bytes":%s,"sha256":"%s","backup_file":"%s"}\n' "$$bytes" "$$sha256" "$$file" > "$$meta_temp"
+            mv "$$meta_temp" "$$meta_file"
             echo "Created PostgreSQL backup: $$file"
           else
             rm -f -- "$$temp_file"
@@ -448,10 +454,7 @@ services:
 
   backup-uploader:
     profiles: ["backup-uploader"]
-    build:
-      context: .
-      dockerfile: ops/backup-uploader/Dockerfile
-    image: ${BACKUP_UPLOADER_IMAGE:-xianzhi-backup-uploader}:${IMAGE_TAG:-prod}
+    image: ${BACKUP_UPLOADER_IMAGE:-xianzhi-backup-uploader:prod}
     env_file:
       - "${BACKUP_OBS_ENV_FILE:-/dev/null}"
     environment:
