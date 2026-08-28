@@ -41,7 +41,7 @@ const fullGood = {
   verificationReason: "人工核对微信后台",
   verificationEvidence: "ticket-100",
   verificationSnapshot: { productId: "wx-product-100", offerId: "offer-prod", environment: "PRODUCTION", platformPriceCents: 100 },
-  verificationExpiresAt: "2026-08-28T02:00:00Z",
+  verificationExpiresAt: "2099-12-31T23:59:59Z",
   revision: 4,
   createdAt: "2026-07-27T02:00:00Z",
   updatedAt: "2026-07-28T02:00:00Z"
