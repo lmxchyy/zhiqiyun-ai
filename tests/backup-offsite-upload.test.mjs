@@ -13,6 +13,11 @@ test("uploader source stays compatible with production Python 3.6", () => {
   assert.doesNotMatch(uploaderSource, /datetime\.fromisoformat|zoneinfo|dataclasses|capture_output|gzip\.BadGzipFile/);
 });
 
+test("large OBS backups use resumable multipart upload", () => {
+  assert.match(uploaderSource, /size >= 64 \* 1024 \* 1024/);
+  assert.match(uploaderSource, /uploadFile\(self\.bucket, key, source, 16 \* 1024 \* 1024, 1, True/);
+});
+
 function findBash() {
   for (const candidate of [process.env.BASH_PATH, "C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash"]) {
     if (!candidate) continue;
