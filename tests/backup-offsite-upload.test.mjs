@@ -25,6 +25,16 @@ test("OBS metadata extraction accepts SDK header mapping and preserves fail-clos
   assert.match(uploaderSource, /remote\.get\("sha256"\) != local\["sha256"\]/);
 });
 
+test("auxiliary objects use their own content checksums and repair only identical content", () => {
+  assert.match(uploaderSource, /digest = hashlib\.sha256\(content\.encode\("utf-8"\)\)\.hexdigest\(\)/);
+  assert.match(uploaderSource, /metadata=\{\"x-obs-meta-sha256\": digest\}/);
+  assert.match(uploaderSource, /current = self\.get_text\(key\)/);
+  assert.match(uploaderSource, /current != content/);
+  assert.match(uploaderSource, /fail\("REMOTE_CONFLICT", "OBS sidecar exists with different content"\)/);
+  assert.match(uploaderSource, /main_uploaded = False/);
+  assert.match(uploaderSource, /main_uploaded or meta_uploaded or checksum_uploaded/);
+});
+
 test("multipart diagnostics expose only safe lifecycle and part fields", () => {
   for (const event of [
     "MULTIPART_INIT_STARTED",
