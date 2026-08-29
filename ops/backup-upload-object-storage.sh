@@ -366,10 +366,18 @@ class ObsProvider(object):
             fail("OFFSITE_UPLOAD_FAILED", "OBS sidecar download failed")
         self._response(response, "GET")
         body = response_value(response, "body")
-        if hasattr(body, "read"):
-            body = body.read()
+        reader = getattr(body, "read", None)
+        if callable(reader):
+            body = reader()
+        elif reader is not None:
+            body = getattr(body, "content", None)
         if isinstance(body, bytes):
             return body.decode("utf-8")
+        if isinstance(body, str):
+            return body
+        if body is None:
+            fail("OFFSITE_UPLOAD_FAILED", "OBS sidecar response body is unavailable")
+        fail("OFFSITE_UPLOAD_FAILED", "OBS sidecar response body format is unsupported")
         return str(body or "")
 
 def verify(provider, key, local):
