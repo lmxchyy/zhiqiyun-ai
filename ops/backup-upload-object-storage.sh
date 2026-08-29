@@ -370,9 +370,10 @@ class ObsProvider(object):
         if callable(reader):
             body = reader()
         elif reader is not None or isinstance(body, dict):
-            body = response_value(body, "content")
-            if body is None:
-                body = response_value(body, "buffer")
+            content = response_value(body, "content")
+            if content is None:
+                content = response_value(body, "buffer")
+            body = content
         if isinstance(body, bytes):
             return body.decode("utf-8")
         if isinstance(body, str):
