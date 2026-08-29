@@ -369,7 +369,7 @@ class ObsProvider(object):
         reader = getattr(body, "read", None)
         if callable(reader):
             body = reader()
-        elif reader is not None:
+        elif reader is not None or isinstance(body, dict):
             body = response_value(body, "content")
             if body is None:
                 body = response_value(body, "buffer")
