@@ -177,6 +177,14 @@ class FakeProvider(object):
             fail("OFFSITE_UPLOAD_FAILED", "OBS metadata upload failed")
         if failure == "sha-failure" and key.endswith(".sha256"):
             fail("OFFSITE_UPLOAD_FAILED", "OBS checksum sidecar upload failed")
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        existing = self.head(key)
+        if existing is not None:
+            if int(existing.get("size", -1)) == len(content.encode("utf-8")) and existing.get("sha256") == digest:
+                return False
+            current = self.get_text(key)
+            if current != content:
+                fail("REMOTE_CONFLICT", "remote sidecar exists with different content")
         target = self.path(key)
         parent = os.path.dirname(target)
         if not os.path.isdir(parent):
@@ -184,7 +192,14 @@ class FakeProvider(object):
         with open(target, "w") as handle:
             handle.write(content)
         with open(self.info_path(key), "w") as handle:
-            json.dump({"size": len(content.encode("utf-8")), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(), "etag": hashlib.md5(content.encode("utf-8")).hexdigest()}, handle)
+            json.dump({"size": len(content.encode("utf-8")), "sha256": digest, "etag": hashlib.md5(content.encode("utf-8")).hexdigest()}, handle)
+        return True
+    def get_text(self, key):
+        target = self.path(key)
+        if not os.path.isfile(target):
+            return None
+        with open(target, "r") as handle:
+            return handle.read()
 
 
 def response_value(response, name, default=None):
@@ -328,11 +343,34 @@ class ObsProvider(object):
         self._response(response, "PUT")
 
     def put_text(self, content, key):
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        existing = self.head(key)
+        if existing is not None:
+            expected_size = len(content.encode("utf-8"))
+            if int(existing.get("size", -1)) == expected_size and existing.get("sha256") == digest:
+                return False
+            current = self.get_text(key)
+            if current != content:
+                fail("REMOTE_CONFLICT", "OBS sidecar exists with different content")
         try:
-            response = self.client.putContent(self.bucket, key, io.BytesIO(content.encode("utf-8")), metadata={})
+            response = self.client.putContent(self.bucket, key, io.BytesIO(content.encode("utf-8")), metadata={"x-obs-meta-sha256": digest})
         except Exception:
             fail("OFFSITE_UPLOAD_FAILED", "OBS sidecar upload failed")
         self._response(response, "PUT")
+        return True
+
+    def get_text(self, key):
+        try:
+            response = self.client.getObject(self.bucket, key, loadStreamInMemory=True)
+        except Exception:
+            fail("OFFSITE_UPLOAD_FAILED", "OBS sidecar download failed")
+        self._response(response, "GET")
+        body = response_value(response, "body")
+        if hasattr(body, "read"):
+            body = body.read()
+        if isinstance(body, bytes):
+            return body.decode("utf-8")
+        return str(body or "")
 
 def verify(provider, key, local):
     remote = provider.head(key)
@@ -361,20 +399,23 @@ key = local["object_key"]
 remote = provider.head(key)
 if remote is not None:
     if int(remote.get("size", -1)) == local["bytes"] and remote.get("sha256") == local["sha256"]:
-        out({"status": "ALREADY_OFFSITE_VERIFIED", "verification": "OFFSITE_VERIFIED", "object_key": key, "local_bytes": local["bytes"], "remote_bytes": int(remote["size"]), "local_sha256": local["sha256"], "remote_sha256": remote["sha256"]})
-    fail("REMOTE_CONFLICT", "remote object exists with different size or checksum")
-provider.put(local["path"], key, local["sha256"], local["bytes"])
+        main_uploaded = False
+    else:
+        fail("REMOTE_CONFLICT", "remote object exists with different size or checksum")
+else:
+    provider.put(local["path"], key, local["sha256"], local["bytes"])
+    main_uploaded = True
 remote = verify(provider, key, local)
 with open(local["meta"], "r") as handle:
     meta_content = handle.read()
-provider.put_text(meta_content, key + ".meta.json")
+meta_uploaded = provider.put_text(meta_content, key + ".meta.json")
 meta_remote = provider.head(key + ".meta.json")
 if meta_remote is None or int(meta_remote.get("size", -1)) != len(meta_content.encode("utf-8")):
     fail("REMOTE_SIZE_MISMATCH", "remote metadata object could not be verified")
 if meta_remote.get("sha256") != hashlib.sha256(meta_content.encode("utf-8")).hexdigest():
     fail("REMOTE_CHECKSUM_MISMATCH", "remote metadata checksum could not be verified")
 checksum_content = local["sha256"] + "  " + os.path.basename(local["path"]) + "\n"
-provider.put_text(checksum_content, key + ".sha256")
+checksum_uploaded = provider.put_text(checksum_content, key + ".sha256")
 checksum_remote = provider.head(key + ".sha256")
 if checksum_remote is None or int(checksum_remote.get("size", -1)) != len(checksum_content.encode("utf-8")):
     fail("REMOTE_SIZE_MISMATCH", "remote sha256 object could not be verified")
@@ -398,6 +439,6 @@ except Exception:
     fail("OFFSITE_UPLOAD_FAILED", "offsite verification sidecar write failed")
 if hasattr(provider, "close"):
     provider.close()
-payload.update({"status": "OFFSITE_VERIFIED", "offsite_path": offsite_path, "uploaded": True})
+payload.update({"status": "OFFSITE_VERIFIED" if main_uploaded or meta_uploaded or checksum_uploaded else "ALREADY_OFFSITE_VERIFIED", "offsite_path": offsite_path, "uploaded": bool(main_uploaded or meta_uploaded or checksum_uploaded)})
 out(payload)
 PY
