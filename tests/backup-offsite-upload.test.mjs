@@ -35,6 +35,14 @@ test("auxiliary objects use their own content checksums and repair only identica
   assert.match(uploaderSource, /main_uploaded or meta_uploaded or checksum_uploaded/);
 });
 
+test("OBS sidecar reads support callable and in-memory SDK body forms", () => {
+  assert.match(uploaderSource, /reader = getattr\(body, "read", None\)/);
+  assert.match(uploaderSource, /if callable\(reader\):/);
+  assert.match(uploaderSource, /body = reader\(\)/);
+  assert.match(uploaderSource, /body = getattr\(body, "content", None\)/);
+  assert.match(uploaderSource, /OBS sidecar response body format is unsupported/);
+});
+
 test("multipart diagnostics expose only safe lifecycle and part fields", () => {
   for (const event of [
     "MULTIPART_INIT_STARTED",
