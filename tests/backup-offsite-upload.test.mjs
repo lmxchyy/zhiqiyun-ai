@@ -18,6 +18,29 @@ test("large OBS backups use resumable multipart upload", () => {
   assert.match(uploaderSource, /uploadFile\(self\.bucket, key, source, 16 \* 1024 \* 1024, 1, True/);
 });
 
+test("OBS metadata extraction accepts SDK header mapping and preserves fail-closed checks", () => {
+  assert.match(uploaderSource, /def response_value\(response, name, default=None\)/);
+  assert.match(uploaderSource, /for name, value in mapping_items\(response_value\(response, "header", \[\]\)\)/);
+  assert.match(uploaderSource, /normalized_name in \("x-obs-meta-sha256", "sha256"\)/);
+  assert.match(uploaderSource, /remote\.get\("sha256"\) != local\["sha256"\]/);
+});
+
+test("multipart diagnostics expose only safe lifecycle and part fields", () => {
+  for (const event of [
+    "MULTIPART_INIT_STARTED",
+    "MULTIPART_INIT_COMPLETED",
+    "PART_STARTED",
+    "PART_COMPLETED",
+    "PART_FAILED",
+    "MULTIPART_COMPLETE_STARTED",
+    "MULTIPART_COMPLETE_COMPLETED",
+  ]) {
+    assert.match(uploaderSource, new RegExp(event));
+  }
+  assert.match(uploaderSource, /upload_id_hash/);
+  assert.doesNotMatch(uploaderSource, /print\(.*access_key|print\(.*secret_access_key/);
+});
+
 function findBash() {
   for (const candidate of [process.env.BASH_PATH, "C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Program Files\\Git\\usr\\bin\\bash.exe", "bash"]) {
     if (!candidate) continue;
