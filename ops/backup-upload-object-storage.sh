@@ -43,7 +43,7 @@ export OFFSITE_ROOT="$ROOT" OFFSITE_FILE="$FILE" OFFSITE_PROVIDER="$PROVIDER"
 export OFFSITE_FAKE_ROOT="$FAKE_ROOT" OFFSITE_MODE="$MODE" OFFSITE_JSON_OUTPUT="$JSON_OUTPUT"
 exec "$PYTHON_BIN" - <<'PY'
 from __future__ import print_function
-import datetime, gzip, hashlib, io, json, os, re, shutil, stat, sys, tempfile
+import datetime, gzip, hashlib, io, json, os, re, shutil, stat, sys, tempfile, time
 
 def out(data, code=0):
     if os.environ.get("OFFSITE_JSON_OUTPUT") == "1":
@@ -187,6 +187,24 @@ class FakeProvider(object):
             json.dump({"size": len(content.encode("utf-8")), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(), "etag": hashlib.md5(content.encode("utf-8")).hexdigest()}, handle)
 
 
+def response_value(response, name, default=None):
+    if response is None:
+        return default
+    if hasattr(response, "get"):
+        return response.get(name, default)
+    return getattr(response, name, default)
+
+
+def mapping_items(value):
+    if value is None:
+        return []
+    if hasattr(value, "items"):
+        return value.items()
+    if isinstance(value, (list, tuple)):
+        return value
+    return []
+
+
 class ObsProvider(object):
     def __init__(self):
         bucket = os.environ.get("BACKUP_OBS_BUCKET", "")
@@ -214,26 +232,85 @@ class ObsProvider(object):
             close()
 
     def _response(self, response, operation):
-        status = int(getattr(response, "status", 0) or 0)
+        status = int(response_value(response, "status", 0) or 0)
         if status < 200 or status >= 300:
             fail("OFFSITE_UPLOAD_FAILED", "OBS {} failed with status {}".format(operation, status))
         return response
+
+    def _log(self, event, **fields):
+        data = {"event": event}
+        data.update(fields)
+        sys.stderr.write("BACKUP_UPLOADER " + json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n")
+        sys.stderr.flush()
+
+    def _install_multipart_logging(self):
+        original_initiate = self.client.initiateMultipartUpload
+        original_part = self.client._uploadPartWithNotifier
+        original_complete = self.client.completeMultipartUpload
+
+        def initiate(*args, **kwargs):
+            started = time.time()
+            self._log("MULTIPART_INIT_STARTED")
+            try:
+                response = original_initiate(*args, **kwargs)
+            except Exception as exc:
+                self._log("MULTIPART_INIT_FAILED", duration=round(time.time() - started, 3), error_class=exc.__class__.__name__)
+                raise
+            body = response_value(response, "body")
+            upload_id = response_value(body, "uploadId", "")
+            upload_id_hash = hashlib.sha256(str(upload_id).encode("utf-8")).hexdigest()[:12] if upload_id else "missing"
+            self._log("MULTIPART_INIT_COMPLETED", duration=round(time.time() - started, 3), status=response_value(response, "status", 0), upload_id_hash=upload_id_hash)
+            return response
+
+        def upload_part(*args, **kwargs):
+            part_number = args[2] if len(args) > 2 else kwargs.get("partNumber", "unknown")
+            part_size = kwargs.get("partSize", args[6] if len(args) > 6 else "unknown")
+            started = time.time()
+            self._log("PART_STARTED", number=part_number, size=part_size)
+            try:
+                response = original_part(*args, **kwargs)
+            except Exception as exc:
+                self._log("PART_FAILED", number=part_number, size=part_size, duration=round(time.time() - started, 3), error_class=exc.__class__.__name__)
+                raise
+            body = response_value(response, "body")
+            etag = response_value(body, "etag", "")
+            self._log("PART_COMPLETED", number=part_number, size=part_size, duration=round(time.time() - started, 3), status=response_value(response, "status", 0), etag_present="yes" if etag else "no")
+            return response
+
+        def complete(*args, **kwargs):
+            started = time.time()
+            self._log("MULTIPART_COMPLETE_STARTED")
+            try:
+                response = original_complete(*args, **kwargs)
+            except Exception as exc:
+                self._log("MULTIPART_COMPLETE_FAILED", duration=round(time.time() - started, 3), error_class=exc.__class__.__name__)
+                raise
+            self._log("MULTIPART_COMPLETE_COMPLETED", duration=round(time.time() - started, 3), status=response_value(response, "status", 0))
+            return response
+
+        self.client.initiateMultipartUpload = initiate
+        self.client._uploadPartWithNotifier = upload_part
+        self.client.completeMultipartUpload = complete
 
     def head(self, key):
         try:
             response = self.client.getObjectMetadata(self.bucket, key)
         except Exception:
             fail("OFFSITE_UPLOAD_FAILED", "OBS HEAD request failed")
-        status = int(getattr(response, "status", 0) or 0)
+        status = int(response_value(response, "status", 0) or 0)
         if status == 404:
             return None
         self._response(response, "HEAD")
-        body = getattr(response, "body", None)
-        metadata = getattr(response, "metadata", None) or getattr(body, "metadata", None) or {}
-        normalized = {}
-        for name, value in metadata.items():
-            normalized[str(name).lower()] = value
-        return {"size": int(getattr(body, "contentLength", 0) or 0), "etag": str(getattr(body, "etag", "") or ""), "sha256": str(normalized.get("x-obs-meta-sha256", "") or "")}
+        body = response_value(response, "body")
+        metadata = {}
+        for source in (response_value(response, "metadata", {}), response_value(body, "metadata", {})):
+            for name, value in mapping_items(source):
+                metadata[str(name).strip().lower()] = value
+        for name, value in mapping_items(response_value(response, "header", [])):
+            normalized_name = str(name).strip().lower()
+            if normalized_name in ("x-obs-meta-sha256", "sha256"):
+                metadata["x-obs-meta-sha256"] = value
+        return {"size": int(response_value(body, "contentLength", 0) or 0), "etag": str(response_value(body, "etag", "") or ""), "sha256": str(metadata.get("x-obs-meta-sha256", "") or "").strip()}
 
     def put(self, source, key, sha256_value, size):
         metadata = {"x-obs-meta-sha256": sha256_value}
@@ -242,6 +319,7 @@ class ObsProvider(object):
             # database dump can stall behind an otherwise healthy OBS path.
             if size >= 64 * 1024 * 1024:
                 checkpoint = os.path.join(tempfile.gettempdir(), "backup-obs-" + hashlib.sha256(key.encode("utf-8")).hexdigest() + ".checkpoint")
+                self._install_multipart_logging()
                 response = self.client.uploadFile(self.bucket, key, source, 16 * 1024 * 1024, 1, True, checkpoint, True, metadata=metadata)
             else:
                 response = self.client.putFile(self.bucket, key, source, metadata=metadata)
