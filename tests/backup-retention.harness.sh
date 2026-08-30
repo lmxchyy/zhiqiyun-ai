@@ -98,6 +98,10 @@ else
 fi
 
 export BACKUP_ROOT
+if [[ "$SCENARIO" == apply-* ]]; then
+  export BACKUP_RETENTION_TEST_VERIFY=1
+  exec bash "$SCRIPT" --root "$BACKUP_ROOT" --now "$NOW" --apply --max-count "${RETENTION_MAX_COUNT:-5}" --max-bytes "${RETENTION_MAX_BYTES:-1073741824}" --json
+fi
 if [ "${BACKUP_RETENTION_JSON:-1}" = "1" ]; then
   exec bash "$SCRIPT" --root "$BACKUP_ROOT" --now "$NOW" --json
 fi

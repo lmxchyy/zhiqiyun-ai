@@ -7,6 +7,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const dockerfile = path.join(repoRoot, "ops", "backup-uploader", "Dockerfile");
 const requirements = path.join(repoRoot, "ops", "backup-uploader", "requirements.txt");
 const pendingUpload = path.join(repoRoot, "ops", "backup-offsite-upload-pending.sh");
+const retentionVerify = path.join(repoRoot, "ops", "backup-retention-verify-remote.sh");
 const gitignore = readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
 const releaseWorkflow = readFileSync(path.join(repoRoot, ".github", "workflows", "backup-uploader-image.yml"), "utf8");
 const compose = readFileSync(path.join(repoRoot, "compose.prod.yml"), "utf8");
@@ -43,6 +44,15 @@ test("backup creation emits local integrity metadata and pending upload requires
   assert.match(wrapper, /BACKUP_UPLOADER_IMAGE.*@sha256/);
   assert.match(wrapper, /--no-deps backup-uploader/);
   assert.doesNotMatch(wrapper, /docker compose.*--build/);
+});
+
+test("retention remote verification is read-only and uses the dedicated uploader", () => {
+  const wrapper = readFileSync(retentionVerify, "utf8");
+  assert.match(wrapper, /--verify-only/);
+  assert.match(wrapper, /--remote-key/);
+  assert.match(wrapper, /--expected-size/);
+  assert.match(wrapper, /--expected-sha256/);
+  assert.doesNotMatch(wrapper, /--upload|--download-to|DeleteObject|putObject|deleteObject/i);
 });
 
 test("tracked packaging contains no credential values", () => {

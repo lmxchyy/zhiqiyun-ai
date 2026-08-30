@@ -41,6 +41,17 @@ type result struct {
 	RemoteSHA256 string `json:"remote_sha256,omitempty"`
 	RemoteETag   string `json:"remote_etag,omitempty"`
 	Verification string `json:"verification,omitempty"`
+	Exists       bool   `json:"remote_exists,omitempty"`
+	SizeMatch    bool   `json:"remote_size_match,omitempty"`
+	SHA256Match  bool   `json:"remote_sha256_match,omitempty"`
+}
+
+type remoteVerification struct {
+	Status      string
+	Message     string
+	Exists      bool
+	SizeMatch   bool
+	SHA256Match bool
 }
 
 type metadataProvider interface {
@@ -72,13 +83,17 @@ func run() (result, int) {
 	downloadTo := flags.String("download-to", "", "optional isolated temporary download path")
 	upload := flags.Bool("upload", false, "upload exactly one backup")
 	jsonOutput := flags.Bool("json", false, "emit JSON")
+	verifyOnly := flags.Bool("verify-only", false, "perform read-only remote HEAD verification")
+	remoteKey := flags.String("remote-key", "", "remote object key for --verify-only")
+	expectedSize := flags.Int64("expected-size", -1, "expected remote object size for --verify-only")
+	expectedSHA256 := flags.String("expected-sha256", "", "expected remote SHA256 metadata for --verify-only")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return result{Status: "INVALID_ARGUMENT", Message: err.Error()}, 2
 	}
 	if *jsonOutput {
 		_ = os.Setenv("BACKUP_UPLOADER_JSON", "1")
 	}
-	if strings.TrimSpace(*file) == "" || strings.TrimSpace(*configID) == "" {
+	if strings.TrimSpace(*configID) == "" || (!*verifyOnly && strings.TrimSpace(*file) == "") || (*verifyOnly && (strings.TrimSpace(*remoteKey) == "" || *expectedSize < 0 || strings.TrimSpace(*expectedSHA256) == "")) {
 		return result{Status: "BACKUP_STORAGE_CONFIG_NOT_FOUND", Message: "--file and --storage-config-id are required"}, 1
 	}
 
@@ -88,6 +103,9 @@ func run() (result, int) {
 		return result{Status: statusForConfigError(err), Message: err.Error()}, 1
 	}
 	defer db.Close()
+	if *verifyOnly {
+		return verifyRemote(ctx, provider, *remoteKey, *expectedSize, *expectedSHA256)
+	}
 
 	artifact, err := loadArtifact(*root, *file, cfg)
 	if err != nil {
@@ -102,6 +120,35 @@ func run() (result, int) {
 		return result{Status: "CONFIG_REQUIRED", Message: "backup provider does not support checksum metadata"}, 1
 	}
 	return uploadArtifact(ctx, metadata, artifact, cfg, *downloadTo)
+}
+
+func verifyRemoteMetadata(remote storagecenter.ObjectMetadata, expectedSize int64, expectedSHA256 string) remoteVerification {
+	sha := metadataSHA(remote.Metadata)
+	check := remoteVerification{
+		Status:      "REMOTE_VERIFY_FAILED",
+		Exists:      true,
+		SizeMatch:   remote.Size == expectedSize,
+		SHA256Match: strings.EqualFold(strings.TrimSpace(sha), strings.TrimSpace(expectedSHA256)),
+	}
+	if check.SizeMatch && check.SHA256Match {
+		check.Status = "REMOTE_VERIFIED"
+	}
+	return check
+}
+
+func verifyRemote(ctx context.Context, provider storagecenter.Provider, key string, expectedSize int64, expectedSHA256 string) (result, int) {
+	remote, err := provider.HeadObject(ctx, key)
+	if err != nil {
+		if errors.Is(err, storagecenter.ErrFileNotFound) {
+			return result{Status: "REMOTE_VERIFY_FAILED", Message: "remote object is missing", ObjectKey: key}, 1
+		}
+		return result{Status: "REMOTE_VERIFY_FAILED", Message: "remote HEAD failed", ObjectKey: key}, 1
+	}
+	check := verifyRemoteMetadata(remote, expectedSize, expectedSHA256)
+	if !check.SizeMatch || !check.SHA256Match {
+		return result{Status: "REMOTE_VERIFY_FAILED", Message: "remote size or checksum metadata does not match", ObjectKey: key, RemoteBytes: remote.Size, RemoteSHA256: metadataSHA(remote.Metadata), Exists: true, SizeMatch: check.SizeMatch, SHA256Match: check.SHA256Match}, 1
+	}
+	return result{Status: check.Status, ObjectKey: key, RemoteBytes: remote.Size, RemoteSHA256: metadataSHA(remote.Metadata), Verification: "READ_ONLY_HEAD", Exists: true, SizeMatch: true, SHA256Match: true}, 0
 }
 
 func statusForConfigError(err error) string {
