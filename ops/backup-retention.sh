@@ -8,9 +8,13 @@ BACKUP_ROOT="${BACKUP_ROOT:-/opt/zhiqiyun-ai/backups}"
 NOW="${NOW_EPOCH:-}"
 JSON=0
 APPLY=0
+MAX_COUNT=0
+MAX_BYTES=0
+LOCK_PATH=""
+MANIFEST_PATH=""
 
 usage() {
-  printf '%s\n' 'Usage: backup-retention.sh [--root PATH] [--now EPOCH|ISO] [--json] [--dry-run] [--apply]' >&2
+  printf '%s\n' 'Usage: backup-retention.sh [--root PATH] [--now EPOCH|ISO] [--json] [--dry-run] [--apply --max-count N --max-bytes N]' >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -20,14 +24,29 @@ while [ "$#" -gt 0 ]; do
     --json) JSON=1; shift ;;
     --dry-run) shift ;;
     --apply) APPLY=1; shift ;;
+    --max-count) [ "$#" -ge 2 ] || { usage; exit 2; }; MAX_COUNT="$2"; shift 2 ;;
+    --max-bytes) [ "$#" -ge 2 ] || { usage; exit 2; }; MAX_BYTES="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
 done
 
 if [ "$APPLY" -eq 1 ]; then
-  printf '%s\n' 'APPLY_NOT_IMPLEMENTED' >&2
-  exit 2
+  case "$MAX_COUNT" in ''|*[!0-9]*) printf '%s\n' 'INVALID_MAX_COUNT' >&2; exit 2 ;; esac
+  case "$MAX_BYTES" in ''|*[!0-9]*) printf '%s\n' 'INVALID_MAX_BYTES' >&2; exit 2 ;; esac
+  [ "$MAX_COUNT" -gt 0 ] || { printf '%s\n' 'MAX_COUNT_MUST_BE_POSITIVE (--max-count is required)' >&2; exit 2; }
+  [ "$MAX_BYTES" -gt 0 ] || { printf '%s\n' 'MAX_BYTES_MUST_BE_POSITIVE (--max-bytes is required)' >&2; exit 2; }
+  if [ -z "${BACKUP_RETENTION_LOCK_PATH:-}" ]; then
+    if [ "${BACKUP_ROOT:-}" = "/opt/zhiqiyun-ai/backups" ]; then
+      LOCK_PATH="/var/lock/xianzhi-backup-retention.lock"
+    else
+      LOCK_PATH="${TMPDIR:-/tmp}/xianzhi-backup-retention.lock"
+    fi
+  else
+    LOCK_PATH="$BACKUP_RETENTION_LOCK_PATH"
+  fi
+  export BACKUP_RETENTION_LOCK_PATH="$LOCK_PATH"
+  export RETENTION_APPLY=1 RETENTION_MAX_COUNT="$MAX_COUNT" RETENTION_MAX_BYTES="$MAX_BYTES"
 fi
 
 PYTHON_BIN=""
@@ -44,6 +63,9 @@ fi
 export RETENTION_BACKUP_ROOT="$BACKUP_ROOT"
 export RETENTION_NOW="$NOW"
 export RETENTION_JSON="$JSON"
+if [ "$APPLY" -eq 1 ]; then
+  exec bash "$ROOT/ops/backup-retention-apply.sh" --root "$BACKUP_ROOT" --now "$NOW" --max-count "$MAX_COUNT" --max-bytes "$MAX_BYTES" --json
+fi
 exec "$PYTHON_BIN" - "$ROOT" <<'PY'
 import datetime as dt
 import hashlib
@@ -175,26 +197,26 @@ def offsite_verification(file):
         relative = file["relative_path"]
         is_database_backup = (relative.startswith("postgres/") and name.startswith("db_")) or name.startswith("xianzhi-")
         if not is_database_backup:
-            return "INVALID", "offsite verification is only supported for database backups"
+            return "INVALID", "offsite verification is only supported for database backups", {}
         sidecar_info = os.lstat(str(sidecar))
         if stat.S_ISLNK(sidecar_info.st_mode) or not stat.S_ISREG(sidecar_info.st_mode):
-            return "INVALID", "offsite sidecar is not a regular file"
+            return "INVALID", "offsite sidecar is not a regular file", {}
         with sidecar.open("r") as handle:
             evidence = json.load(handle)
         if evidence.get("verification") != "OFFSITE_VERIFIED":
-            return "INVALID", "offsite sidecar is not verified"
+            return "INVALID", "offsite sidecar is not verified", {}
         object_key = str(evidence["object_key"])
         uploaded_at = str(evidence["uploaded_at"])
         if not object_key.startswith("backups/postgres/") or not object_key.endswith("/" + name) or ".." in object_key or not uploaded_at:
-            return "INVALID", "offsite object key or verification timestamp is not bound to backup"
+            return "INVALID", "offsite object key or verification timestamp is not bound to backup", {}
         local_bytes = int(evidence["local_bytes"])
         remote_bytes = int(evidence["remote_bytes"])
         local_sha = str(evidence["local_sha256"])
         remote_sha = str(evidence["remote_sha256"])
         if local_bytes != file["size"] or remote_bytes != file["size"]:
-            return "INVALID", "offsite size evidence does not match local file"
+            return "INVALID", "offsite size evidence does not match local file", {}
         if not re.fullmatch(r"[0-9a-f]{64}", local_sha) or remote_sha != local_sha:
-            return "INVALID", "offsite sha256 evidence is invalid or inconsistent"
+            return "INVALID", "offsite sha256 evidence is invalid or inconsistent", {}
         digest = hashlib.sha256()
         with backup.open("rb") as handle:
             while True:
@@ -203,10 +225,21 @@ def offsite_verification(file):
                     break
                 digest.update(chunk)
         if digest.hexdigest() != local_sha:
-            return "INVALID", "local file no longer matches offsite evidence"
-        return "VERIFIED", "remote size and sha256 match current local file"
+            return "INVALID", "local file no longer matches offsite evidence", {}
+        return "VERIFIED", "remote size and sha256 match current local file", {
+            "sha256": local_sha,
+            "remote_key": object_key,
+            "offsite_verified": True,
+            "remote_main_exists": True,
+            "remote_size_match": True,
+            "remote_sha256_match": True,
+            "remote_meta_exists": True,
+            "remote_meta_verified": True,
+            "remote_sha_exists": True,
+            "remote_sha_verified": True,
+        }
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return "INVALID", "offsite sidecar is missing or malformed"
+        return "INVALID", "offsite sidecar is missing or malformed", {}
 
 deploy_re = re.compile(r"^db_.*\.sql(?:\.gz)?$")
 daily_re = re.compile(r"^xianzhi-.*\.sql(?:\.gz)?$")
@@ -338,12 +371,16 @@ out_scope_list = sorted(out_scope.values(), key=lambda x: x["path"])
 
 delete_eligible = []
 for entry in delete_list:
-    status, reason = offsite_verification(all_files[entry["path"]])
+    status, reason, details = offsite_verification(all_files[entry["path"]])
     entry["offsite_status"] = status
     entry["delete_eligible"] = status == "VERIFIED"
     entry["eligibility_reason"] = reason
+    entry["retention_reason"] = entry["reason"]
     if entry["delete_eligible"]:
-        delete_eligible.append(entry)
+        eligible_entry = dict(entry)
+        eligible_entry.update(details)
+        eligible_entry["absolute_path"] = str((root / entry["path"]).resolve())
+        delete_eligible.append(eligible_entry)
 
 for path in set(keep) & set(delete):
     fail(f"path in KEEP and DELETE_CANDIDATE: {path}")
@@ -389,6 +426,7 @@ report = {
     "keep": keep_list,
     "delete_candidates": delete_list,
     "delete_eligible": delete_eligible,
+    "delete_eligible_bytes": summary["delete_eligible_bytes"],
     "manual_review": manual_list,
     "analyze_only": analyze_list,
     "out_of_scope": out_scope_list,

@@ -85,6 +85,7 @@ jobs:
       - name: Test backup retention dry-run
         run: |
           bash -n ops/backup-retention.sh
+          bash -n ops/backup-retention-apply.sh
           node --test tests/backup-retention.test.mjs
 
       - name: Test backup offsite uploader

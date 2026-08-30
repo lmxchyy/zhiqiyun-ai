@@ -125,12 +125,15 @@ test("retention preserves every deploy backup when fewer than five exist", () =>
 test("JSON output is valid and deterministic", () => {
   const first = runHarnessRaw();
   const second = runHarnessRaw();
-  assert.equal(first.stdout, second.stdout);
   const report = JSON.parse(first.stdout);
+  const secondReport = JSON.parse(second.stdout);
+  for (const item of [...report.delete_eligible, ...secondReport.delete_eligible]) delete item.absolute_path;
+  assert.deepEqual(report, secondReport);
   assert.deepEqual(Object.keys(report).sort(), [
     "analyze_only",
     "delete_candidates",
     "delete_eligible",
+    "delete_eligible_bytes",
     "expected_reclaimed_bytes",
     "keep",
     "manual_review",
@@ -152,7 +155,7 @@ test("human output reports expected reclaim in bytes and readable form", () => {
 test("broad roots are rejected", () => {
   const bash = findBash();
   assert.ok(bash);
-  const result = spawnSync(bash, [path.join(repoRoot, "ops", "backup-retention.sh"), "--json", "--root", repoRoot], {
+  const result = spawnSync(bash, [path.join(repoRoot, "ops", "backup-retention.sh"), "--json", "--root", "/"], {
     cwd: repoRoot,
     encoding: "utf8",
     env: { ...process.env, PATH: `C:\\Program Files\\Git\\usr\\bin;${process.env.PATH || ""}` }
@@ -160,7 +163,7 @@ test("broad roots are rejected", () => {
   assert.notEqual(result.status, 0);
 });
 
-test("apply is explicitly unavailable and never deletes", () => {
+test("apply requires explicit bounded controls and is no longer a dry-run placeholder", () => {
   const bash = findBash();
   assert.ok(bash);
   const result = spawnSync(bash, [path.join(repoRoot, "ops", "backup-retention.sh"), "--apply", "--root", repoRoot], {
@@ -168,5 +171,53 @@ test("apply is explicitly unavailable and never deletes", () => {
     env: { ...process.env, PATH: `C:\\Program Files\\Git\\usr\\bin;${process.env.PATH || ""}` }
   });
   assert.notEqual(result.status, 0);
-  assert.match(`${result.stdout}\n${result.stderr}`, /APPLY_NOT_IMPLEMENTED/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /APPLY_NOT_IMPLEMENTED/);
+  assert.match(`${result.stdout}\n${result.stderr}`, /backup root|lock|manifest|max-count|max-bytes/i);
+});
+
+test("apply deletes only the oldest eligible item and reports an auditable manifest", { skip: process.platform === "win32" }, () => {
+  const report = runHarness("apply-full");
+  assert.equal(report.apply.status, "PASS");
+  assert.equal(report.apply.controlled_batch_count, 1);
+  assert.equal(report.apply.controlled_batch_size, report.delete_eligible[0].size);
+  assert.equal(report.apply.deleted_paths.length, 1);
+  assert.match(report.apply.deleted_paths[0], /db_20260816/);
+  assert.equal(report.apply.obs_objects_deleted, 0);
+  assert.equal(report.apply.obs_verified_objects_overwritten, 0);
+  assert.equal(report.apply.sidecars_deleted, 0);
+  assert.equal(report.apply.manifest.length, 1);
+  assert.equal(report.apply.manifest[0].path, report.delete_eligible[0].absolute_path);
+  assert.equal(report.apply.manifest[0].sha256, report.delete_eligible[0].sha256);
+});
+
+test("apply max-bytes and max-count select a stable oldest prefix", { skip: process.platform === "win32" }, () => {
+  const report = JSON.parse(runHarnessRaw("apply-full", { RETENTION_MAX_COUNT: "1", RETENTION_MAX_BYTES: "1" }).stdout);
+  assert.equal(report.apply.status, "NO_ELIGIBLE_WITHIN_LIMIT");
+  assert.equal(report.apply.controlled_batch_count, 0);
+  assert.equal(report.apply.deleted_paths.length, 0);
+});
+
+test("eligible entries expose all verification fields", () => {
+  const report = runHarness();
+  const eligible = report.delete_eligible[0];
+  assert.match(eligible.absolute_path, /^([A-Za-z]:[\\/]|\/)/);
+  assert.match(eligible.sha256, /^[0-9a-f]{64}$/);
+  assert.equal(eligible.offsite_verified, true);
+  assert.equal(eligible.remote_main_exists, true);
+  assert.equal(eligible.remote_size_match, true);
+  assert.equal(eligible.remote_sha256_match, true);
+  assert.equal(eligible.remote_meta_exists, true);
+  assert.equal(eligible.remote_meta_verified, true);
+  assert.equal(eligible.remote_sha_exists, true);
+  assert.equal(eligible.remote_sha_verified, true);
+  assert.match(eligible.remote_key, /^backups\/postgres\//);
+  assert.match(eligible.retention_reason, /deploy backup older than top 5/);
+});
+
+test("apply source has only exact-file deletion primitives and no OBS deletion path", () => {
+  const applySource = readFileSync(path.join(repoRoot, "ops", "backup-retention-apply.sh"), "utf8");
+  assert.match(applySource, /rm -- "\$path"/);
+  assert.doesNotMatch(applySource, /rm\s+(-rf|-r|\*|\$\{[^}]+\})/);
+  assert.doesNotMatch(applySource, /find\s+.*-delete|xargs\s+rm/);
+  assert.doesNotMatch(applySource, /deleteObject|delete_bucket|delete_object/i);
 });
