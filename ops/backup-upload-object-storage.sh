@@ -10,6 +10,9 @@ FAKE_ROOT="${BACKUP_OBJECT_FAKE_ROOT:-}"
 MODE=dry-run
 JSON_OUTPUT=0
 DOWNLOAD_TO=""
+VERIFY_REMOTE_KEY=""
+VERIFY_EXPECTED_SIZE=""
+VERIFY_EXPECTED_SHA256=""
 while (($#)); do
   case "$1" in
     --file) FILE="$2"; shift 2;;
@@ -20,16 +23,30 @@ while (($#)); do
     --fake-root) FAKE_ROOT="$2"; shift 2;;
     --dry-run) MODE=dry-run; shift;;
     --upload) MODE=upload; shift;;
+    --verify-only) MODE=verify-only; shift;;
+    --remote-key) VERIFY_REMOTE_KEY="$2"; shift 2;;
+    --expected-size) VERIFY_EXPECTED_SIZE="$2"; shift 2;;
+    --expected-sha256) VERIFY_EXPECTED_SHA256="$2"; shift 2;;
     --json) JSON_OUTPUT=1; shift;;
     -h|--help) echo "usage: $0 --file PATH [--dry-run|--upload] [--provider obs|cos|fake] [--storage-config-id ID] [--download-to PATH] [--root PATH] [--fake-root PATH] [--json]"; exit 0;;
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
-[[ -n "$FILE" ]] || { echo "missing --file" >&2; exit 2; }
+if [[ "$MODE" == "verify-only" ]]; then
+  [[ -n "$VERIFY_REMOTE_KEY" && -n "$VERIFY_EXPECTED_SIZE" && -n "$VERIFY_EXPECTED_SHA256" ]] || { echo "missing remote verification arguments" >&2; exit 2; }
+elif [[ -z "$FILE" ]]; then
+  echo "missing --file" >&2
+  exit 2
+fi
 if [[ -n "$STORAGE_CONFIG_ID" ]]; then
   [[ "$PROVIDER" == "obs" ]] || { echo "BACKUP_STORAGE_CONFIG_NOT_FOUND: database backup config requires --provider obs" >&2; exit 1; }
   DB_UPLOADER_BIN="${BACKUP_DB_UPLOADER_BIN:-/usr/local/bin/backup-uploader-db}"
-  DB_ARGS=(--root "$ROOT" --file "$FILE" --storage-config-id "$STORAGE_CONFIG_ID")
+  DB_ARGS=(--root "$ROOT" --storage-config-id "$STORAGE_CONFIG_ID")
+  if [[ "$MODE" == "verify-only" ]]; then
+    DB_ARGS+=(--verify-only --remote-key "$VERIFY_REMOTE_KEY" --expected-size "$VERIFY_EXPECTED_SIZE" --expected-sha256 "$VERIFY_EXPECTED_SHA256")
+  else
+    DB_ARGS+=(--file "$FILE")
+  fi
   [[ "$MODE" == "upload" ]] && DB_ARGS+=(--upload)
   [[ "$JSON_OUTPUT" == "1" ]] && DB_ARGS+=(--json)
   [[ -n "$DOWNLOAD_TO" ]] && DB_ARGS+=(--download-to "$DOWNLOAD_TO")

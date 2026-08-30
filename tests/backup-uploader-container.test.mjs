@@ -8,6 +8,7 @@ const dockerfile = path.join(repoRoot, "ops", "backup-uploader", "Dockerfile");
 const requirements = path.join(repoRoot, "ops", "backup-uploader", "requirements.txt");
 const pendingUpload = path.join(repoRoot, "ops", "backup-offsite-upload-pending.sh");
 const retentionVerify = path.join(repoRoot, "ops", "backup-retention-verify-remote.sh");
+const uploaderEntrypoint = path.join(repoRoot, "ops", "backup-upload-object-storage.sh");
 const gitignore = readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
 const releaseWorkflow = readFileSync(path.join(repoRoot, ".github", "workflows", "backup-uploader-image.yml"), "utf8");
 const compose = readFileSync(path.join(repoRoot, "compose.prod.yml"), "utf8");
@@ -53,6 +54,15 @@ test("retention remote verification is read-only and uses the dedicated uploader
   assert.match(wrapper, /--expected-size/);
   assert.match(wrapper, /--expected-sha256/);
   assert.doesNotMatch(wrapper, /--upload|--download-to|DeleteObject|putObject|deleteObject/i);
+});
+
+test("uploader entrypoint forwards verify-only arguments to the database-backed CLI", () => {
+  const source = readFileSync(uploaderEntrypoint, "utf8");
+  assert.match(source, /--verify-only/);
+  assert.match(source, /--remote-key/);
+  assert.match(source, /--expected-size/);
+  assert.match(source, /--expected-sha256/);
+  assert.match(source, /DB_ARGS.*--storage-config-id/);
 });
 
 test("tracked packaging contains no credential values", () => {
