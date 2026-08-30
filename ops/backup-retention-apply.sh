@@ -40,6 +40,7 @@ REPORT_PATH="$(mktemp "${TMPDIR:-/tmp}/retention-report.XXXXXX")"
 MANIFEST_PATH="$(mktemp "${TMPDIR:-/tmp}/retention-manifest.XXXXXX")"
 AUDIT_PATH="$(mktemp "${TMPDIR:-/tmp}/retention-audit.XXXXXX")"
 CURRENT_PATH=""
+VERIFY_REMOTE_SCRIPT="${BACKUP_RETENTION_VERIFY_REMOTE_SCRIPT:-$ROOT/ops/backup-retention-verify-remote.sh}"
 cleanup() {
   rm -f -- "$REPORT_PATH"
   rm -f -- "$MANIFEST_PATH"
@@ -103,11 +104,11 @@ import json
 import sys
 manifest = json.load(open(sys.argv[1], "r"))
 for item in manifest["items"]:
-    print("{}\t{}\t{}".format(item["path"], item["size"], item["sha256"]))
+    print("{}\t{}\t{}\t{}".format(item["path"], item["size"], item["sha256"], item["remote_key"]))
 PY
 
 DELETED_PATHS=()
-while IFS=$'\t' read -r path size sha256; do
+while IFS=$'\t' read -r path size sha256 remote_key; do
   [ -n "$path" ] || continue
   CURRENT_PATH="$(mktemp "${TMPDIR:-/tmp}/retention-current.XXXXXX")"
   bash "$ROOT/ops/backup-retention.sh" "${DRY_ARGS[@]}" >"$CURRENT_PATH"
@@ -125,6 +126,7 @@ if int(item.get("size", -1)) != int(size) or item.get("sha256") != sha256:
 PY
   rm -f -- "$CURRENT_PATH"
   CURRENT_PATH=""
+  "$VERIFY_REMOTE_SCRIPT" "$remote_key" "$size" "$sha256" >/dev/null
   [ -f "$path" ] && [ ! -L "$path" ] || { printf 'PRE_DELETE_LOCAL_INVALID=%s\n' "$path" >&2; exit 1; }
   current_size="$(stat -c '%s' -- "$path")"
   [ "$current_size" = "$size" ] || { printf 'PRE_DELETE_SIZE_MISMATCH=%s\n' "$path" >&2; exit 1; }
@@ -132,6 +134,7 @@ PY
   [ "$current_sha" = "$sha256" ] || { printf 'PRE_DELETE_SHA256_MISMATCH=%s\n' "$path" >&2; exit 1; }
   rm -- "$path"
   [ ! -e "$path" ] || { printf 'LOCAL_EXISTS_AFTER=%s\n' "$path" >&2; exit 1; }
+  "$VERIFY_REMOTE_SCRIPT" "$remote_key" "$size" "$sha256" >/dev/null
   DELETED_PATHS+=("$path")
 done <"$AUDIT_PATH"
 

@@ -6,6 +6,23 @@ import (
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
+func TestVerifyRemoteMetadataRequiresExactSizeAndSHA256(t *testing.T) {
+	got := verifyRemoteMetadata(storagecenter.ObjectMetadata{
+		Size:     42,
+		Metadata: map[string]string{"x-obs-meta-sha256": "abc123"},
+	}, 42, "abc123")
+	if got.Status != "REMOTE_VERIFIED" || !got.Exists || !got.SizeMatch || !got.SHA256Match {
+		t.Fatalf("verification = %#v", got)
+	}
+}
+
+func TestVerifyRemoteMetadataFailsClosedForMissingMetadata(t *testing.T) {
+	got := verifyRemoteMetadata(storagecenter.ObjectMetadata{Size: 42}, 42, "abc123")
+	if got.Status == "REMOTE_VERIFIED" || got.SHA256Match {
+		t.Fatalf("missing sha metadata was accepted: %#v", got)
+	}
+}
+
 func TestBackupObjectKeyUsesOnlyConfiguredBackupPrefix(t *testing.T) {
 	key, err := backupObjectKey(storagecenter.Config{ObjectPrefix: storagecenter.BackupObjectPrefix}, "deploy", "2026", "08", "db_test.sql.gz")
 	if err != nil {

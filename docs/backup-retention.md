@@ -60,9 +60,11 @@ inconsistent evidence remains local-only and is never fail-open eligible.
 The apply command consumes only a stable, oldest-first prefix of `delete_eligible`
 within both explicit limits. It writes an immutable manifest containing absolute
 path, byte count, SHA256, remote object key, and retention reason. Immediately
-before each deletion it rechecks the exact regular file, size, SHA256, and the
-current retention report; it then invokes one exact `rm -- <path>` and stops on
-the first failure. It never deletes `.meta.json`, `.sha256`, `.offsite.json`, or
-any OBS object. After the batch it runs another dry run and reports the audit
-record; sidecar cleanup remains a follow-up because sidecars are not defined as
-the local retention unit by this contract.
+before each deletion it rechecks the exact regular file, size, SHA256, current
+retention report, and a live read-only OBS HEAD through the dedicated uploader;
+it then invokes one exact `rm -- <path>` and stops on the first failure. A
+missing verifier configuration fails closed. The post-delete check repeats the
+same live HEAD. It never deletes `.meta.json`, `.sha256`, `.offsite.json`, or any
+OBS object. After the batch it runs another dry run and reports the audit record;
+sidecar cleanup remains a follow-up because sidecars are not defined as the local
+retention unit by this contract.

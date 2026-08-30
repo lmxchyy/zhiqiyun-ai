@@ -86,6 +86,8 @@ jobs:
         run: |
           bash -n ops/backup-retention.sh
           bash -n ops/backup-retention-apply.sh
+          bash -n ops/backup-retention-verify-remote.sh
+          (cd backend-go && go test ./cmd/backup-uploader)
           node --test tests/backup-retention.test.mjs
 
       - name: Test backup offsite uploader
