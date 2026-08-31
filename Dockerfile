@@ -25,6 +25,7 @@ RUN for i in 1 2 3 4 5; do go mod download && exit 0; echo "go mod download fail
 COPY backend-go ./
 RUN go build -o /out/xianzhi-api ./cmd/api
 RUN go build -o /out/smartvideo-worker ./cmd/smartvideo-worker
+RUN go build -o /out/generation-worker ./cmd/generation-worker
 
 FROM alpine:3.20
 WORKDIR /app
@@ -59,6 +60,7 @@ RUN if [ -n "$ALPINE_MIRROR" ]; then \
   fi
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
 COPY --from=api-build /out/smartvideo-worker /app/smartvideo-worker
+COPY --from=api-build /out/generation-worker /app/generation-worker
 COPY --from=admin-build /src/admin-vue/dist /app/admin-vue/dist
 COPY --from=user-h5-build /src/apps/user-uni/dist/build/h5 /app/user-h5
 COPY backend-go/internal/provider/video/seedance_bridge.py /app/seedance_bridge.py

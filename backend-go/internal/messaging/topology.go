@@ -71,12 +71,25 @@ func (tb *TopologyBuilder) Build() error {
 		return fmt.Errorf("declare dlx exchange: %w", err)
 	}
 
-	// Declare the canary queue.
+	// Retain the PR1 test queue and add the first formal Generation canary queue.
 	if err := declareQueue(ch, "x.ai.test.generation.canary", true, false, nil); err != nil {
-		return fmt.Errorf("declare canary queue: %w", err)
+		return fmt.Errorf("declare test canary queue: %w", err)
 	}
 	if err := bindQueue(ch, "x.ai.test.generation.canary", ExchangeEvents, MessagePrefix+"*", nil); err != nil {
-		return fmt.Errorf("bind canary queue: %w", err)
+		return fmt.Errorf("bind test canary queue: %w", err)
+	}
+	canaryArgs := map[string]interface{}{"x-dead-letter-exchange": ExchangeDLX}
+	if err := declareQueue(ch, "x.ai.generation.image.canary", true, false, canaryArgs); err != nil {
+		return fmt.Errorf("declare generation canary queue: %w", err)
+	}
+	if err := bindQueue(ch, "x.ai.generation.image.canary", ExchangeEvents, "x.ai.generation.image.canary.requested", nil); err != nil {
+		return fmt.Errorf("bind generation canary queue: %w", err)
+	}
+	if err := declareQueue(ch, "x.ai.generation.image.canary.dlq", true, false, nil); err != nil {
+		return fmt.Errorf("declare generation canary dlq: %w", err)
+	}
+	if err := bindQueue(ch, "x.ai.generation.image.canary.dlq", ExchangeDLX, "", nil); err != nil {
+		return fmt.Errorf("bind generation canary dlq: %w", err)
 	}
 
 	// Declare the dead letter queue.

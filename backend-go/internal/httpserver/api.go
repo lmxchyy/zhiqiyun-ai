@@ -42,6 +42,10 @@ import (
 
 const maxReferenceImageUploadBytes = 20 << 20
 
+type generationCanaryTaskStore interface {
+	CreatePendingGenerationTaskWithCanaryOutbox(createGenerationTaskRequest) (generationTask, error)
+}
+
 type platformStore interface {
 	ListGenerationTasks() ([]generationTask, error)
 	CreateGenerationTask(createGenerationTaskRequest) (generationTask, error)
@@ -843,6 +847,25 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, task)
 		return
 	}
+	if a.generationAsyncCanaryEligible(req) {
+		if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
+			req.Params["generation_async_canary"] = true
+			task, err := canaryStore.CreatePendingGenerationTaskWithCanaryOutbox(req)
+			if err != nil {
+				if errors.Is(err, errGenerationConcurrencyLimit) {
+					writeError(w, http.StatusTooManyRequests, err)
+					return
+				}
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if !task.IdempotentReplay {
+				a.recordContentAudit(task.ID, "input", "generation_request", "", req)
+			}
+			writeJSON(w, task)
+			return
+		}
+	}
 	task, err := a.store.CreatePendingGenerationTask(req)
 	if err != nil {
 		if errors.Is(err, errGenerationConcurrencyLimit) {
@@ -859,6 +882,19 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 	go a.runGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 	writeJSON(w, task)
+}
+
+func (a api) generationAsyncCanaryEligible(req generation.CreateRequest) bool {
+	if !a.cfg.AsyncMessagingEnabled || !a.cfg.GenerationAsyncCanaryEnabled || !a.cfg.ProviderExecutionSafetyEnabled || !isImageGenerationRequest(req.Type) || strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
+		return false
+	}
+	userID := strings.TrimSpace(req.UserID)
+	for _, allowed := range strings.Split(a.cfg.GenerationAsyncCanaryUsers, ",") {
+		if userID != "" && userID == strings.TrimSpace(allowed) {
+			return true
+		}
+	}
+	return false
 }
 
 func isImageGenerationRequest(taskType string) bool {

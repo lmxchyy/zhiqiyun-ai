@@ -36,6 +36,8 @@
       REDIS_URL: "redis://redis:6379"
       RABBITMQ_URL: "amqp://xianzhi:xianzhi@rabbitmq:5672"
       ASYNC_MESSAGING_ENABLED: "false"
+      GENERATION_ASYNC_CANARY_ENABLED: "false"
+      GENERATION_ASYNC_CANARY_USERS: "${GENERATION_ASYNC_CANARY_USERS:-}"
       PROVIDER_EXECUTION_SAFETY_ENABLED: "false"
       S3_ENDPOINT: "http://minio:9000"
       STORAGE_PUBLIC_ENDPOINT: "${STORAGE_PUBLIC_ENDPOINT:-http://localhost:9000}"
@@ -148,6 +150,36 @@
       rabbitmq:
         condition: service_healthy
       minio:
+        condition: service_healthy
+
+  generation-worker:
+    profiles: ["generation-canary"]
+    image: xianzhi-ai-platform:local
+    command: ["/app/generation-worker"]
+    restart: unless-stopped
+    environment:
+      XIANZHI_ENV: "development"
+      XIANZHI_DATA_PATH: "/app/data/store.json"
+      DATABASE_URL: "postgresql://xianzhi:xianzhi@postgres:5432/xianzhi"
+      REDIS_URL: "redis://redis:6379"
+      RABBITMQ_URL: "amqp://xianzhi:xianzhi@rabbitmq:5672"
+      ASYNC_MESSAGING_ENABLED: "true"
+      GENERATION_ASYNC_CANARY_ENABLED: "true"
+      GENERATION_ASYNC_CANARY_USERS: "${GENERATION_ASYNC_CANARY_USERS:-}"
+      PROVIDER_EXECUTION_SAFETY_ENABLED: "true"
+      MODEL_PROVIDER_URL: "${MODEL_PROVIDER_URL:-}"
+      MODEL_PROVIDER_API_KEY: "${MODEL_PROVIDER_API_KEY:-}"
+      MODEL_PROVIDER_KIND: "${MODEL_PROVIDER_KIND:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-https://api.openai.com}"
+      MODEL_PROVIDER_IMAGE_MODEL: "${MODEL_PROVIDER_IMAGE_MODEL:-gpt-image-2}"
+      MODEL_PROVIDERS_JSON: "${MODEL_PROVIDERS_JSON:-}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   smartvideo-worker:

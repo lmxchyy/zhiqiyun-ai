@@ -12,6 +12,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/httpserver"
 	"xianzhi-ai/backend-go/internal/infra"
+	"xianzhi-ai/backend-go/internal/messaging"
 )
 
 func main() {
@@ -55,6 +56,14 @@ func run() error {
 		workerCtx, cancelWorker := context.WithCancel(context.Background())
 		stopWorker = cancelWorker
 		httpserver.StartIdentityDowngradeWorker(workerCtx, clients.DB, time.Minute)
+		if cfg.AsyncMessagingEnabled && clients.DB != nil && clients.Messaging != nil {
+			publisher := &messaging.OutboxPublisher{Store: messaging.NewOutboxStore(clients.DB), Publisher: messaging.NewPublisher(clients.Messaging), BatchSize: 25, PollInterval: time.Second, Owner: "api-generation-outbox"}
+			go func() {
+				if err := publisher.Run(workerCtx); err != nil && workerCtx.Err() == nil {
+					log.Printf("generation outbox publisher stopped: %v", err)
+				}
+			}()
+		}
 	}
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
