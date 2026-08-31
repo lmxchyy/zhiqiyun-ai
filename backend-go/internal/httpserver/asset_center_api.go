@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	providerexecution "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type assetCenterListQuery struct {
@@ -406,6 +407,36 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("generation task not found"))
 		return
 	}
+	execution, hasExecution, err := providerExecutionForRetry(a.store, a.cfg, original.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if hasExecution && isVideoGenerationRequest(original.Type) && (execution.Status == providerexecution.Prepared || execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded)) {
+		req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: cloneAnyMap(original.Params), ModuleCode: original.ModuleCode}
+		if req.Params == nil {
+			req.Params = map[string]any{}
+		}
+		req.Params["retryOf"] = original.ID
+		service, serviceErr := a.retryGenerationService(user, req)
+		if serviceErr != nil {
+			writeError(w, http.StatusBadGateway, serviceErr)
+			return
+		}
+		go a.runVideoGenerationTask(original.ID, service, req)
+		writeJSON(w, original)
+		return
+	}
+	if hasExecution {
+		switch execution.Status {
+		case providerexecution.Unknown, providerexecution.Submitting:
+			writeError(w, http.StatusConflict, providerexecution.ErrUnknownResubmitBlocked)
+			return
+		case providerexecution.Prepared:
+			writeError(w, http.StatusConflict, errors.New("provider execution is prepared; retry must resume existing execution"))
+			return
+		}
+	}
 	if original.Status == "PENDING" || original.Status == "QUEUED" || original.Status == "RUNNING" || original.Status == "PROCESSING" || original.Status == "RETRYING" {
 		writeError(w, http.StatusConflict, errors.New("active generation tasks cannot be retried"))
 		return
@@ -442,22 +473,30 @@ func deleteGenerationBillingParams(params map[string]any) {
 	}
 }
 
-func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req generation.CreateRequest) (generationTask, error) {
+func (a api) retryGenerationService(user adminUser, req generation.CreateRequest) (generation.Service, error) {
 	service := a.generationService
 	if routeService, ok, err := a.generationServiceForUserRoute(user, req.Model); err != nil {
-		return generationTask{}, err
+		return generation.Service{}, err
 	} else if ok {
 		service = routeService
 	} else if providerID := selectedGenerationProvider(req.Params); providerID != "" {
 		dynamicService, err := a.generationServiceForProvider(providerID, req)
 		if err != nil {
-			return generationTask{}, err
+			return generation.Service{}, err
 		}
 		service = dynamicService
 	} else if configuredService, ok, err := a.generationServiceForConfiguredModel(req.Model); err != nil {
-		return generationTask{}, err
+		return generation.Service{}, err
 	} else if ok {
 		service = configuredService
+	}
+	return service, nil
+}
+
+func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req generation.CreateRequest) (generationTask, error) {
+	service, err := a.retryGenerationService(user, req)
+	if err != nil {
+		return generationTask{}, err
 	}
 	if isVideoGenerationRequest(req.Type) {
 		task, err := a.store.CreatePendingGenerationTask(req)

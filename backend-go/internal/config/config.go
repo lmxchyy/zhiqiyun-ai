@@ -126,6 +126,7 @@ type Config struct {
 	MetricsEnabled                 bool
 	ShutdownTimeout                string
 	AsyncMessagingEnabled          bool
+	ProviderExecutionSafetyEnabled bool
 }
 
 func Load() Config {
@@ -326,6 +327,7 @@ func Load() Config {
 		MetricsEnabled:                    boolEnvDefaultTrue(os.Getenv("XIANZHI_METRICS_ENABLED")),
 		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
 		AsyncMessagingEnabled:             boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
+		ProviderExecutionSafetyEnabled:    boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
 	}
 }
 

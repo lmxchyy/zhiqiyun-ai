@@ -36,6 +36,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
+	providerexecution "xianzhi-ai/backend-go/internal/providerexecution"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -212,6 +213,7 @@ func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, f
 		ImageProvider:  provider,
 		VideoProvider:  videoprovider.NewMockProvider(),
 		ImageDecorator: generatedImageDecorator{},
+		ExecutionHooks: providerExecutionHooks(store, cfg.ProviderExecutionSafetyEnabled),
 		CreateTask: func(req generation.CreateRequest) (any, error) {
 			return store.CreateGenerationTask(req)
 		},
@@ -943,6 +945,10 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 		a.unregisterGenerationTaskCancel(taskID)
 		cancel()
 	}()
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareImageTask(ctx, req)
 	if err != nil {
 		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
@@ -951,6 +957,7 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 			return
 		}
 	}
+	delete(prepared.Params, providerExecutionTaskParam)
 	if err := a.auditPreparedGeneratedOutput(ctx, &prepared); err != nil {
 		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 		a.failImageGenerationTask(taskID, "content_audit", startedAt, err)
@@ -1077,11 +1084,19 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		a.unregisterGenerationTaskCancel(taskID)
 		cancel()
 	}()
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
+		if errors.Is(err, providerexecution.ErrProviderStillProcessing) {
+			return
+		}
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 		return
 	}
+	delete(prepared.Params, providerExecutionTaskParam)
 	if provider := providerTaskString(prepared, "provider"); provider != "" {
 		prepared.Params["provider"] = provider
 		prepared.Params["provider_channel"] = provider
@@ -1552,6 +1567,7 @@ func (a api) generationServiceForChannelWithAPIKey(channel adminAPIChannel, apiK
 		ImageProvider:  imageProvider,
 		VideoProvider:  videoProvider,
 		ImageDecorator: generatedImageDecorator{},
+		ExecutionHooks: providerExecutionHooks(a.store, a.cfg.ProviderExecutionSafetyEnabled),
 		CreateTask: func(req generation.CreateRequest) (any, error) {
 			if req.Params == nil {
 				req.Params = map[string]any{}

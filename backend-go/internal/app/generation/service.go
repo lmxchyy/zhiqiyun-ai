@@ -45,6 +45,10 @@ type VideoProvider interface {
 	Create(context.Context, CreateRequest) (any, error)
 }
 
+type VideoQueryProvider interface {
+	Get(context.Context, string) (any, error)
+}
+
 type ChatProvider interface {
 	DefaultModel() string
 	Chat(context.Context, CreateRequest) (any, error)
@@ -62,6 +66,12 @@ type Service struct {
 	chatProvider   ChatProvider
 	imageDecorator ImageDecorator
 	createTask     TaskCreator
+	executionHooks ExecutionHooks
+}
+
+type ExecutionHooks struct {
+	Image func(context.Context, CreateRequest, ImageProvider) ([]GeneratedImage, error)
+	Video func(context.Context, CreateRequest, VideoProvider) (any, error)
 }
 
 type ServiceOptions struct {
@@ -70,6 +80,7 @@ type ServiceOptions struct {
 	ChatProvider   ChatProvider
 	ImageDecorator ImageDecorator
 	CreateTask     TaskCreator
+	ExecutionHooks ExecutionHooks
 }
 
 func NewService(provider ImageProvider, decorator ImageDecorator, createTask TaskCreator) Service {
@@ -83,6 +94,7 @@ func NewServiceWithOptions(opts ServiceOptions) Service {
 		chatProvider:   opts.ChatProvider,
 		imageDecorator: opts.ImageDecorator,
 		createTask:     opts.CreateTask,
+		executionHooks: opts.ExecutionHooks,
 	}
 }
 
@@ -126,7 +138,13 @@ func (s Service) PrepareImageTask(ctx context.Context, req CreateRequest) (Creat
 		req.Model = "mock-standard"
 	}
 	if req.Model != "mock-standard" && s.imageProvider != nil {
-		images, err := s.imageProvider.Generate(ctx, req)
+		var images []GeneratedImage
+		var err error
+		if s.executionHooks.Image != nil {
+			images, err = s.executionHooks.Image(ctx, req, s.imageProvider)
+		} else {
+			images, err = s.imageProvider.Generate(ctx, req)
+		}
 		if err != nil {
 			return CreateRequest{}, err
 		}
@@ -149,6 +167,14 @@ func (s Service) createVideoTask(ctx context.Context, req CreateRequest) (any, e
 	return s.createTask(prepared)
 }
 
+func (s Service) RecoverVideoTask(ctx context.Context, providerRequestID string) (any, error) {
+	provider, ok := s.videoProvider.(VideoQueryProvider)
+	if !ok {
+		return nil, errors.New("video provider does not support query recovery")
+	}
+	return provider.Get(ctx, providerRequestID)
+}
+
 func (s Service) PrepareVideoTask(ctx context.Context, req CreateRequest) (CreateRequest, error) {
 	if s.videoProvider == nil {
 		return CreateRequest{}, ErrUnsupportedCapability
@@ -159,7 +185,13 @@ func (s Service) PrepareVideoTask(ctx context.Context, req CreateRequest) (Creat
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
-	task, err := s.videoProvider.Create(ctx, req)
+	var task any
+	var err error
+	if s.executionHooks.Video != nil {
+		task, err = s.executionHooks.Video(ctx, req, s.videoProvider)
+	} else {
+		task, err = s.videoProvider.Create(ctx, req)
+	}
 	if err != nil {
 		return CreateRequest{}, err
 	}
