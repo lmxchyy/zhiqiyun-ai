@@ -68,3 +68,26 @@ same live HEAD. It never deletes `.meta.json`, `.sha256`, `.offsite.json`, or an
 OBS object. After the batch it runs another dry run and reports the audit record;
 sidecar cleanup remains a follow-up because sidecars are not defined as the local
 retention unit by this contract.
+
+## Scheduler automation contract
+
+`ops/backup-retention-scheduler.sh` is the orchestration entrypoint for a future
+scheduled retention phase. It runs the existing offsite upload/verification
+command first. A non-zero offsite result records `RETENTION_APPLY=NOT_RUN` and
+does not invoke retention. The retention phase delegates to the bounded apply
+implementation, which owns the fresh dry-run, immutable manifest, exact-file
+delete, read-only OBS HEAD checks, and post-delete verification.
+
+Automatic apply is disabled unless production explicitly sets
+`RETENTION_AUTO_APPLY_ENABLED=true`. The defaults are:
+
+```text
+RETENTION_AUTO_APPLY_ENABLED=false
+RETENTION_AUTO_MAX_COUNT=4
+RETENTION_AUTO_MAX_BYTES=1073741824
+```
+
+The wrapper rejects a count above five or a byte limit above 1 GiB. It also
+requires a non-blocking flock before either phase, so a normal backup/offsite
+run and retention cannot overlap. This change does not enable production
+automatic apply; production configuration remains an explicit release gate.
