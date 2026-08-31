@@ -59,19 +59,18 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	if err != nil || taskID == "" {
 		return p.Generate(ctx, req)
 	}
-	active, err := s.GetActiveByTask(ctx, taskID)
+	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
-		if active.Status == pe.Unknown || active.Status == pe.Submitting {
+		switch latest.Status {
+		case pe.Unknown, pe.Submitting, pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
-		}
-		if active.Status == pe.Succeeded {
+		case pe.Succeeded:
 			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
+		case pe.Failed:
+			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) { return nil, pe.ErrUnknownResubmitBlocked }
+			e.Attempt = latest.Attempt + 1
 		}
-		return nil, fmt.Errorf("provider execution already active: %s", active.Status)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
+	} else if !errors.Is(err, sql.ErrNoRows) { return nil, err }
 	e, err = s.CreatePrepared(ctx, e)
 	if err != nil {
 		return nil, err
@@ -101,22 +100,18 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	if err != nil || taskID == "" {
 		return p.Create(ctx, req)
 	}
-	active, err := s.GetActiveByTask(ctx, taskID)
+	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
-		if active.Status == pe.Unknown || active.Status == pe.Submitting {
+		switch latest.Status {
+		case pe.Unknown, pe.Submitting, pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
-		}
-		if active.Status == pe.Succeeded {
+		case pe.Succeeded:
 			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
+		case pe.Failed:
+			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) { return nil, pe.ErrUnknownResubmitBlocked }
+			e.Attempt = latest.Attempt + 1
 		}
-		if active.ProviderRequestID != nil {
-			return nil, fmt.Errorf("provider execution requires query recovery before create")
-		}
-		return nil, fmt.Errorf("provider execution already active: %s", active.Status)
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
+	} else if !errors.Is(err, sql.ErrNoRows) { return nil, err }
 	e, err = s.CreatePrepared(ctx, e)
 	if err != nil {
 		return nil, err
