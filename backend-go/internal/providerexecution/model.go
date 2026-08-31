@@ -2,6 +2,7 @@ package providerexecution
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -58,7 +59,7 @@ func CanTransition(from, to Status) bool {
 }
 func ValidateTransition(from, to Status) error {
 	if !CanTransition(from, to) {
-		return errors.New(ErrIllegalTransition.Error() + ": " + string(from) + " -> " + string(to))
+		return fmt.Errorf("%w: %s -> %s", ErrIllegalTransition, from, to)
 	}
 	return nil
 }

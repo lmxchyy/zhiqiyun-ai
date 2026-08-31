@@ -62,11 +62,14 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 }
 
 func (s *Service) Recover(ctx context.Context, e Execution, a Adapter) (Execution, error) {
-	if e.Status == Succeeded || e.Status == Failed {
+	if e.Status == Failed {
 		return e, nil
 	}
 	if e.ProviderRequestID == nil || *e.ProviderRequestID == "" {
-		return e, ErrUnknownResubmitBlocked
+		if e.Status == Submitting {
+			_ = s.Store.MarkUnknown(ctx, e.ID, ProviderUnknown, "submission outcome is unknown")
+		}
+		return s.Store.GetByID(ctx, e.ID)
 	}
 	q, err := a.Query(ctx, *e.ProviderRequestID)
 	if err != nil {
