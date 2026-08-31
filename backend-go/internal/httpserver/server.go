@@ -196,6 +196,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router.GET("/api/open/connectors/oauth/wechat/callback", wrapF(connectors.wechatOAuthCallback))
 	v1 := router.Group("/api/v1")
 	v1.GET("/health", wrapF(health))
+	v1.GET("/ready", wrapF(ready))
 	v1.POST("/auth/login", wrapF(auth.login))
 	v1.POST("/auth/wechat-mini-program/login", wrapF(auth.wechatMiniProgramLogin))
 	v1.POST("/auth/wechat-mini-program/link", wrapF(auth.linkWeChatMiniProgram))
@@ -1021,6 +1022,15 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"service": "xianzhi-ai-go-gin",
+	})
+}
+
+func ready(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"service": "xianzhi-ai-go-gin",
+		"ready":   "true",
 	})
 }
 

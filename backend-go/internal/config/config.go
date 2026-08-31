@@ -125,6 +125,7 @@ type Config struct {
 	SmartVideoTempDir              string
 	MetricsEnabled                 bool
 	ShutdownTimeout                string
+	AsyncMessagingEnabled          bool
 }
 
 func Load() Config {
@@ -324,6 +325,7 @@ func Load() Config {
 		SmartVideoTempDir:                 os.Getenv("SMARTVIDEO_TEMP_DIR"),
 		MetricsEnabled:                    boolEnvDefaultTrue(os.Getenv("XIANZHI_METRICS_ENABLED")),
 		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
+		AsyncMessagingEnabled:             boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
 	}
 }
 

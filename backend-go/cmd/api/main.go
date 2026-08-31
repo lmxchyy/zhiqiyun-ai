@@ -43,6 +43,11 @@ func run() error {
 	if cfg.IsProduction() && (clients == nil || clients.DB == nil || clients.Redis == nil) {
 		return fmt.Errorf("production requires PostgreSQL and Redis infrastructure")
 	}
+	// Start the messaging connection manager if available.
+	// PR1 phase: RabbitMQ failure does not block the API.
+	if clients.Messaging != nil {
+		clients.Messaging.Start()
+	}
 	var server = httpserver.New(cfg)
 	stopWorker := func() {}
 	if clients != nil {
