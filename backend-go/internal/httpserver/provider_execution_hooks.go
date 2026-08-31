@@ -67,10 +67,14 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 		case pe.Succeeded:
 			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
 		case pe.Failed:
-			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) { return nil, pe.ErrUnknownResubmitBlocked }
+			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
+				return nil, pe.ErrUnknownResubmitBlocked
+			}
 			e.Attempt = latest.Attempt + 1
 		}
-	} else if !errors.Is(err, sql.ErrNoRows) { return nil, err }
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	e, err = s.CreatePrepared(ctx, e)
 	if err != nil {
 		return nil, err
@@ -104,14 +108,33 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	if err == nil {
 		switch latest.Status {
 		case pe.Unknown, pe.Submitting, pe.Submitted, pe.Processing:
+			if latest.ProviderRequestID != nil {
+				if getter, ok := p.(interface {
+					Get(context.Context, string) (any, error)
+				}); ok {
+					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+					if queryErr == nil {
+						status := providerExecutionStatus(result)
+						if status == pe.Succeeded || status == pe.Failed {
+							_ = s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil)
+							return result, nil
+						}
+						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
+					}
+				}
+			}
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
 		case pe.Failed:
-			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) { return nil, pe.ErrUnknownResubmitBlocked }
+			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
+				return nil, pe.ErrUnknownResubmitBlocked
+			}
 			e.Attempt = latest.Attempt + 1
 		}
-	} else if !errors.Is(err, sql.ErrNoRows) { return nil, err }
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
 	e, err = s.CreatePrepared(ctx, e)
 	if err != nil {
 		return nil, err
@@ -133,6 +156,26 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	return result, nil
 }
+func providerExecutionStatus(v any) pe.Status {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return pe.Unknown
+	}
+	s, _ := m["status"].(string)
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "succeeded", "completed":
+		return pe.Succeeded
+	case "failed", "error":
+		return pe.Failed
+	case "processing", "running":
+		return pe.Processing
+	case "queued", "pending", "submitted":
+		return pe.Submitted
+	default:
+		return pe.Unknown
+	}
+}
+
 func providerTaskID(v any) string {
 	if m, ok := v.(map[string]any); ok {
 		for _, k := range []string{"providerTaskId", "provider_request_id", "providerRequestID", "task_id"} {

@@ -45,6 +45,10 @@ type VideoProvider interface {
 	Create(context.Context, CreateRequest) (any, error)
 }
 
+type VideoQueryProvider interface {
+	Get(context.Context, string) (any, error)
+}
+
 type ChatProvider interface {
 	DefaultModel() string
 	Chat(context.Context, CreateRequest) (any, error)
@@ -161,6 +165,14 @@ func (s Service) createVideoTask(ctx context.Context, req CreateRequest) (any, e
 		return nil, err
 	}
 	return s.createTask(prepared)
+}
+
+func (s Service) RecoverVideoTask(ctx context.Context, providerRequestID string) (any, error) {
+	provider, ok := s.videoProvider.(VideoQueryProvider)
+	if !ok {
+		return nil, errors.New("video provider does not support query recovery")
+	}
+	return provider.Get(ctx, providerRequestID)
 }
 
 func (s Service) PrepareVideoTask(ctx context.Context, req CreateRequest) (CreateRequest, error) {

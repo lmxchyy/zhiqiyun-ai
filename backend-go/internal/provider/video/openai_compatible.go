@@ -82,6 +82,38 @@ func (p OpenAICompatible) DefaultModel() string {
 	return p.model
 }
 
+// Get queries an existing provider task without creating a new task. It is
+// intentionally separate from Create so recovery callers can enforce Get-only
+// semantics after a process crash.
+func (p OpenAICompatible) Get(ctx context.Context, providerTaskID string) (any, error) {
+	if strings.TrimSpace(providerTaskID) == "" {
+		return nil, errors.New("provider task id is required")
+	}
+	model := p.model
+	endpoint := videoProviderEndpointForModel(p.baseURL, p.endpoint, model)
+	u := strings.TrimRight(endpoint, "/") + "/" + url.PathEscape(providerTaskID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	res, err := p.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 12<<20))
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, fmt.Errorf("video provider %s query HTTP %d", p.providerCode(), res.StatusCode)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, err
+	}
+	status := normalizeVideoStatus(firstNonEmptyString(firstStringByKeys(decoded, "status", "state"), "UNKNOWN"))
+	return map[string]any{"provider": p.providerCode(), "providerTaskId": providerTaskID, "status": status, "videoUrl": extractPlayableVideoURL(decoded), "thumbnailUrl": firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster")}, nil
+}
+
 func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateRequest) (any, error) {
 	if strings.TrimSpace(p.baseURL) == "" || strings.TrimSpace(p.apiKey) == "" {
 		return nil, errors.New("video provider requires base url and api key")
@@ -154,13 +186,13 @@ func (p OpenAICompatible) createGrokImagineMultipart(ctx context.Context, model 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	fields := map[string]string{
-		"model":         model,
-		"prompt":        req.Prompt,
-		"duration":      strconv.Itoa(videoSeconds(req.Params)),
-		"size":          grokImagineVideoSize(req.Params),
-		"quality":       videoResolution(req.Params),
-		"aspect_ratio":  videoAspectRatio(req.Params),
-		"resolution":    videoResolution(req.Params),
+		"model":        model,
+		"prompt":       req.Prompt,
+		"duration":     strconv.Itoa(videoSeconds(req.Params)),
+		"size":         grokImagineVideoSize(req.Params),
+		"quality":      videoResolution(req.Params),
+		"aspect_ratio": videoAspectRatio(req.Params),
+		"resolution":   videoResolution(req.Params),
 	}
 	for key, value := range fields {
 		if err := writer.WriteField(key, value); err != nil {
@@ -284,10 +316,10 @@ func videoRequestBody(model string, req generation.CreateRequest) map[string]any
 			"resolution": resolution,
 			// NewAPI Doubao adaptor reads ratio/resolution from metadata and duration from seconds.
 			"metadata": map[string]any{
-				"ratio":       ratio,
-				"resolution":  resolution,
-				"watermark":   false,
-				"duration":    seconds,
+				"ratio":      ratio,
+				"resolution": resolution,
+				"watermark":  false,
+				"duration":   seconds,
 			},
 		}
 	}
