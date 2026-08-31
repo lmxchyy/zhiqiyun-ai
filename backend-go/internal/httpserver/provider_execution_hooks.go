@@ -126,7 +126,23 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 			}
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
-			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
+			if latest.ProviderRequestID == nil {
+				return nil, fmt.Errorf("local recovery required for succeeded provider execution")
+			}
+			getter, ok := p.(interface {
+				Get(context.Context, string) (any, error)
+			})
+			if !ok {
+				return nil, fmt.Errorf("video provider does not support query recovery")
+			}
+			result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+			if queryErr != nil {
+				return nil, queryErr
+			}
+			if providerExecutionStatus(result) != pe.Succeeded {
+				return nil, pe.ErrProviderStillProcessing
+			}
+			return result, nil
 		case pe.Failed:
 			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
 				return nil, pe.ErrUnknownResubmitBlocked
