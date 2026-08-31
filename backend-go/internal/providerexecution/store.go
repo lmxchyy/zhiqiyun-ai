@@ -31,6 +31,10 @@ func (s *Store) GetByID(ctx context.Context, id int64) (Execution, error) {
 func (s *Store) GetActiveByTask(ctx context.Context, taskID string) (Execution, error) {
 	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_request_id,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 AND status NOT IN ('succeeded','failed') ORDER BY attempt DESC LIMIT 1`, taskID)
 }
+
+func (s *Store) GetLatestByTask(ctx context.Context, taskID string) (Execution, error) {
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_request_id,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1`, taskID)
+}
 func (s *Store) get(ctx context.Context, q string, arg any) (Execution, error) {
 	var e Execution
 	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderRequestID, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
