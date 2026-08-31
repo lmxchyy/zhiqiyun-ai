@@ -36,6 +36,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
 	videoprovider "xianzhi-ai/backend-go/internal/provider/video"
+	providerexecution "xianzhi-ai/backend-go/internal/providerexecution"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -1089,6 +1090,9 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
+		if errors.Is(err, providerexecution.ErrProviderStillProcessing) {
+			return
+		}
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
 		return
 	}

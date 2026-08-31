@@ -120,6 +120,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 							return result, nil
 						}
 						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
+						return nil, pe.ErrProviderStillProcessing
 					}
 				}
 			}
