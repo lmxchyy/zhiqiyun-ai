@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	providerexecution "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type assetCenterListQuery struct {
@@ -405,6 +406,25 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		writeError(w, http.StatusNotFound, errors.New("generation task not found"))
 		return
+	}
+	if execution, ok, err := providerExecutionForRetry(a.store, a.cfg, original.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	} else if ok {
+		switch execution.Status {
+		case providerexecution.Unknown, providerexecution.Submitting:
+			writeError(w, http.StatusConflict, providerexecution.ErrUnknownResubmitBlocked)
+			return
+		case providerexecution.Submitted, providerexecution.Processing:
+			writeError(w, http.StatusConflict, errors.New("provider execution recovery required before retry"))
+			return
+		case providerexecution.Succeeded:
+			writeError(w, http.StatusConflict, errors.New("local recovery required; provider execution already succeeded"))
+			return
+		case providerexecution.Prepared:
+			writeError(w, http.StatusConflict, errors.New("provider execution is prepared; retry must resume existing execution"))
+			return
+		}
 	}
 	if original.Status == "PENDING" || original.Status == "QUEUED" || original.Status == "RUNNING" || original.Status == "PROCESSING" || original.Status == "RETRYING" {
 		writeError(w, http.StatusConflict, errors.New("active generation tasks cannot be retried"))
