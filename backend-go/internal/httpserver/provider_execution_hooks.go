@@ -67,7 +67,28 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
 			}
 			return nil, pe.ErrUnknownResubmitBlocked
-		case pe.Unknown, pe.Submitted, pe.Processing:
+		case pe.Unknown:
+			if latest.ProviderRequestID != nil {
+				if getter, ok := p.(interface {
+					Get(context.Context, string) (any, error)
+				}); ok {
+					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+					if queryErr == nil {
+						status := providerExecutionStatus(result)
+						if status == pe.Succeeded || status == pe.Failed {
+							_ = s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil)
+							return result.([]generation.GeneratedImage), nil
+						}
+						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
+						return nil, pe.ErrProviderStillProcessing
+					}
+				}
+			}
+			if !pe.SafeToResubmitAfterProviderUnknown(providerName(req)) {
+				return nil, pe.ErrUnknownResubmitBlocked
+			}
+			return nil, pe.ErrUnknownResubmitBlocked
+		case pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
@@ -133,7 +154,28 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "video submission outcome unknown after crash")
 			}
 			return nil, pe.ErrUnknownResubmitBlocked
-		case pe.Unknown, pe.Submitted, pe.Processing:
+		case pe.Unknown:
+			if latest.ProviderRequestID != nil {
+				if getter, ok := p.(interface {
+					Get(context.Context, string) (any, error)
+				}); ok {
+					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+					if queryErr == nil {
+						status := providerExecutionStatus(result)
+						if status == pe.Succeeded || status == pe.Failed {
+							_ = s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil)
+							return result, nil
+						}
+						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
+						return nil, pe.ErrProviderStillProcessing
+					}
+				}
+			}
+			if !pe.SafeToResubmitAfterProviderUnknown(providerName(req)) {
+				return nil, pe.ErrUnknownResubmitBlocked
+			}
+			return nil, pe.ErrUnknownResubmitBlocked
+		case pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			if latest.ProviderRequestID == nil {
