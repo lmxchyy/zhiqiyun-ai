@@ -134,8 +134,13 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 			_ = s.Transition(ctx, e.ID, pe.Failed, nil, ptrString(string(class)), ptrString(callErr.Error()))
 		} else {
 			_ = s.MarkUnknown(ctx, e.ID, class, callErr.Error())
+			return nil, errors.Join(callErr, pe.ErrUnknownResubmitBlocked)
 		}
 		return nil, callErr
+	}
+	if len(images) == 0 {
+		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "image provider returned no images")
+		return nil, pe.ErrUnknownResubmitBlocked
 	}
 	if err := s.Transition(ctx, e.ID, pe.Succeeded, nil, ptrString(string(pe.ProviderSucceeded)), nil); err != nil {
 		return nil, err
@@ -233,13 +238,36 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	result, callErr := p.Create(ctx, req)
 	if callErr != nil {
-		_ = s.MarkUnknown(ctx, e.ID, pe.Classify(callErr), callErr.Error())
+		class := pe.Classify(callErr)
+		if class == pe.DefinitiveNotSubmitted || class == pe.RetryableBeforeSubmit {
+			_ = s.Transition(ctx, e.ID, pe.Failed, nil, ptrString(string(class)), ptrString(callErr.Error()))
+		} else {
+			_ = s.MarkUnknown(ctx, e.ID, class, callErr.Error())
+			return nil, errors.Join(callErr, pe.ErrUnknownResubmitBlocked)
+		}
 		return nil, callErr
 	}
+	status := providerExecutionStatus(result)
 	requestID := providerTaskID(result)
-	if requestID == "" {
-		_ = s.Transition(ctx, e.ID, pe.Succeeded, nil, ptrString(string(pe.ProviderSucceeded)), nil)
-	} else if err := s.Transition(ctx, e.ID, pe.Submitted, ptrString(requestID), nil, nil); err != nil {
+	var requestIDPtr *string
+	if requestID != "" {
+		requestIDPtr = ptrString(requestID)
+	}
+	if status == pe.Failed {
+		_ = s.Transition(ctx, e.ID, pe.Failed, requestIDPtr, ptrString(string(pe.ProviderUnknown)), ptrString("provider returned failed result"))
+		return nil, pe.ErrProviderExecutionFailed
+	}
+	if status == pe.Submitted || status == pe.Processing {
+		if err := s.Transition(ctx, e.ID, status, requestIDPtr, ptrString(string(pe.ProviderProcessing)), nil); err != nil {
+			return nil, err
+		}
+		return nil, pe.ErrProviderStillProcessing
+	}
+	if status != pe.Succeeded && !providerResultHasImmediateVideo(result) {
+		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "video provider returned no proven result")
+		return nil, pe.ErrUnknownResubmitBlocked
+	}
+	if err := s.Transition(ctx, e.ID, pe.Succeeded, requestIDPtr, ptrString(string(pe.ProviderSucceeded)), nil); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -262,6 +290,19 @@ func providerExecutionStatus(v any) pe.Status {
 	default:
 		return pe.Unknown
 	}
+}
+
+func providerResultHasImmediateVideo(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"videoUrl", "video_url", "url"} {
+		if value, ok := m[key].(string); ok && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func providerTaskID(v any) string {

@@ -97,7 +97,11 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	// provider hook performs Get-only recovery (or fails closed) without a
 	// second Create/Generate call; returning here would acknowledge a
 	// succeeded provider row while the generation task is still pending.
-	a.runGenerationTask(taskID, service, req)
+	if err := a.runGenerationTask(taskID, service, req); err != nil {
+		// Keep the inbox message retryable while the provider outcome is still
+		// queryable or explicitly blocked; no provider resubmission occurs.
+		return err
+	}
 
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
