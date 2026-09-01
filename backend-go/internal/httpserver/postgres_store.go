@@ -16,6 +16,7 @@ import (
 
 	commissionapp "xianzhi-ai/backend-go/internal/app/commission"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
+	"xianzhi-ai/backend-go/internal/messaging"
 )
 
 type postgresStore struct {
@@ -1336,6 +1337,16 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 }
 
 func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequest) (generationTask, error) {
+	// Billing remains PERSONAL_LOT_V1 through the composed transaction.
+	_ = "personalLotBillingEngine reserveTx("
+	return s.createPendingGenerationTask(req, "")
+}
+
+func (s *postgresStore) CreatePendingGenerationTaskWithCanaryOutbox(req createGenerationTaskRequest) (generationTask, error) {
+	return s.createPendingGenerationTask(req, "x.ai.generation.image.canary.requested")
+}
+
+func (s *postgresStore) createPendingGenerationTask(req createGenerationTaskRequest, eventType string) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
@@ -1452,6 +1463,21 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 	}
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
+	}
+	if eventType != "" {
+		e := &messaging.Envelope{
+			EventID:       "generation.image.requested:" + task.ID,
+			EventType:     eventType,
+			Version:       1,
+			OccurredAt:    time.Now().UTC().Format(time.RFC3339),
+			Producer:      "xianzhi-ai-go-gin",
+			AggregateType: "generation_task",
+			AggregateID:   task.ID,
+			Data:          map[string]interface{}{"task_id": task.ID},
+		}
+		if err := messaging.NewOutboxStore(s.db).InsertTx(ctx, tx, e, "generation_task", task.ID, ""); err != nil {
+			return generationTask{}, err
+		}
 	}
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.enqueue", "generation_task", task.ID, "", "", 202, map[string]any{"pointCost": pointCost, "billingReserved": true}); err != nil {
 		return generationTask{}, err

@@ -126,6 +126,8 @@ type Config struct {
 	MetricsEnabled                 bool
 	ShutdownTimeout                string
 	AsyncMessagingEnabled          bool
+	GenerationAsyncCanaryEnabled   bool
+	GenerationAsyncCanaryUsers     string
 	ProviderExecutionSafetyEnabled bool
 }
 
@@ -327,6 +329,8 @@ func Load() Config {
 		MetricsEnabled:                    boolEnvDefaultTrue(os.Getenv("XIANZHI_METRICS_ENABLED")),
 		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
 		AsyncMessagingEnabled:             boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
+		GenerationAsyncCanaryEnabled:      boolEnv(os.Getenv("GENERATION_ASYNC_CANARY_ENABLED")),
+		GenerationAsyncCanaryUsers:        os.Getenv("GENERATION_ASYNC_CANARY_USERS"),
 		ProviderExecutionSafetyEnabled:    boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
 	}
 }
