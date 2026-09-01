@@ -43,7 +43,9 @@ func executionIdentity(req generation.CreateRequest, capability, provider string
 	// operation. Keeping them out of the fingerprint lets a retry recover the
 	// same durable execution while still detecting real request drift.
 	delete(params, "retryAttempt")
-	delete(params, "seed")
+	if source, _ := params["sourceModule"].(string); strings.EqualFold(strings.TrimSpace(source), "ppt-generation") {
+		delete(params, "seed")
+	}
 	fp, err := pe.Fingerprint(taskID, provider, req.Model, capability, params)
 	if err != nil {
 		return pe.Execution{}, taskID, err
