@@ -141,6 +141,8 @@ jobs:
     runs-on:
       - self-hosted
       - linux
+      - X64
+      - xianzhi-linux
     env:
       XIANZHI_ANALYTICS_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
 
