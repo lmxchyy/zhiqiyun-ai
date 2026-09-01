@@ -2,11 +2,11 @@ package providerexecution
 
 // ProviderCapability describes the safety properties of a provider.
 type ProviderCapability struct {
-	Provider              string
-	Async                 bool
-	QuerySupported        bool
-	IdempotencySupported  bool
-	RecoveryClass         RecoveryClass
+	Provider             string
+	Async                bool
+	QuerySupported       bool
+	IdempotencySupported bool
+	RecoveryClass        RecoveryClass
 }
 
 // Canary provider capabilities for the generation async canary.
@@ -42,9 +42,6 @@ func GetProviderCapability(provider string) ProviderCapability {
 	}
 }
 
-// SafeToResubmitAfterProviderUnknown returns true only if the named provider
-// supports native idempotency or is a queryable async provider.
-func SafeToResubmitAfterProviderUnknown(provider string) bool {
-	c := GetProviderCapability(provider)
-	return c.IdempotencySupported || (c.QuerySupported && c.RecoveryClass == QueryableAsync)
-}
+// UnknownRecoveryPolicy is intentionally conservative for the canary path:
+// an unproven provider outcome never triggers an automatic new submission.
+const UnknownRecoveryPolicy = "BLOCK_AUTO_RESUBMIT"

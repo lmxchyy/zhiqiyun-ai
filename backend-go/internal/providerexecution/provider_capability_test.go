@@ -1,4 +1,3 @@
-
 package providerexecution
 
 import "testing"
@@ -18,11 +17,14 @@ func TestCanaryProviderCapabilities(t *testing.T) {
 	}
 }
 
-func TestSafeToResubmitAfterProviderUnknown(t *testing.T) {
-	if SafeToResubmitAfterProviderUnknown("grok-imagine-1.5") {
-		t.Fatal("non-queryable sync provider must not safely resubmit after unknown")
+func TestUnknownRecoveryPolicyBlocksAutomaticResubmit(t *testing.T) {
+	if UnknownRecoveryPolicy != "BLOCK_AUTO_RESUBMIT" {
+		t.Fatalf("unexpected unknown recovery policy: %s", UnknownRecoveryPolicy)
 	}
-	if SafeToResubmitAfterProviderUnknown("seedance-fast-2.0") {
-		t.Fatal("non-queryable sync provider must not safely resubmit after unknown")
+	for _, provider := range []string{"grok-imagine-1.5", "seedance-fast-2.0", "nonexistent-provider"} {
+		capability := GetProviderCapability(provider)
+		if capability.QuerySupported || capability.IdempotencySupported {
+			t.Fatalf("%s must not permit automatic replay after unknown: %+v", provider, capability)
+		}
 	}
 }

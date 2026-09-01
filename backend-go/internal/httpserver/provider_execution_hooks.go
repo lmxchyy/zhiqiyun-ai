@@ -76,17 +76,24 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
 						if status == pe.Succeeded || status == pe.Failed {
-							_ = s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil)
-							return result.([]generation.GeneratedImage), nil
+							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+								return nil, transitionErr
+							}
+							if status == pe.Failed {
+								return nil, pe.ErrProviderExecutionFailed
+							}
+							images, ok := result.([]generation.GeneratedImage)
+							if !ok {
+								return nil, fmt.Errorf("provider recovery returned invalid image result")
+							}
+							return images, nil
 						}
 						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
 						return nil, pe.ErrProviderStillProcessing
 					}
 				}
 			}
-			if !pe.SafeToResubmitAfterProviderUnknown(providerName(req)) {
-				return nil, pe.ErrUnknownResubmitBlocked
-			}
+			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
@@ -142,7 +149,12 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
 						if status == pe.Succeeded || status == pe.Failed {
-							_ = s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil)
+							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+								return nil, transitionErr
+							}
+							if status == pe.Failed {
+								return nil, pe.ErrProviderExecutionFailed
+							}
 							return result, nil
 						}
 						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
@@ -163,7 +175,12 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
 						if status == pe.Succeeded || status == pe.Failed {
-							_ = s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil)
+							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+								return nil, transitionErr
+							}
+							if status == pe.Failed {
+								return nil, pe.ErrProviderExecutionFailed
+							}
 							return result, nil
 						}
 						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
@@ -171,9 +188,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					}
 				}
 			}
-			if !pe.SafeToResubmitAfterProviderUnknown(providerName(req)) {
-				return nil, pe.ErrUnknownResubmitBlocked
-			}
+			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked

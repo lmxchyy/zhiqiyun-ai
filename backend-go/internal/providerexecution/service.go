@@ -85,7 +85,14 @@ func (s *Service) Recover(ctx context.Context, e Execution, a Adapter) (Executio
 	if err != nil {
 		return e, err
 	}
-	return s.Store.GetByID(ctx, e.ID)
+	recovered, err := s.Store.GetByID(ctx, e.ID)
+	if err != nil {
+		return e, err
+	}
+	if q.Status == Failed {
+		return recovered, ErrProviderExecutionFailed
+	}
+	return recovered, nil
 }
 
 func ClassifyError(err error) ErrorClass {

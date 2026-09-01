@@ -21,6 +21,7 @@ const (
 var ErrIllegalTransition = errors.New("illegal provider execution state transition")
 var ErrUnknownResubmitBlocked = errors.New("automatic resubmission is blocked for unknown execution")
 var ErrProviderStillProcessing = errors.New("provider execution is still processing")
+var ErrProviderExecutionFailed = errors.New("provider execution failed")
 
 type Execution struct {
 	ID                                                          int64

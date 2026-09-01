@@ -2,177 +2,250 @@ package providerexecution
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// crashCountingAdapter is a fake provider that counts Create and Get calls
-// to prove that a dangerous crash + redelivery never triggers a second
-// logical provider request.
+// crashProviderLedger represents provider-side state that survives a process
+// restart. Each adapter instance is process-local; the ledger is deliberately
+// shared so provider calls can be counted across the simulated processes.
+type crashProviderLedger struct {
+	creates atomic.Int32
+	gets    atomic.Int32
+	result  QueryResult
+}
+
 type crashCountingAdapter struct {
-	createCalls atomic.Int32
-	getCalls    atomic.Int32
-	result      QueryResult
+	ledger            *crashProviderLedger
+	providerRequestID string
 }
 
 func (a *crashCountingAdapter) Submit(context.Context) (Submission, error) {
-	a.createCalls.Add(1)
-	return Submission{ProviderRequestID: "provider-crash-test"}, nil
-}
-func (a *crashCountingAdapter) Query(context.Context, string) (QueryResult, error) {
-	a.getCalls.Add(1)
-	return a.result, nil
+	a.ledger.creates.Add(1)
+	return Submission{ProviderRequestID: a.providerRequestID}, nil
 }
 
-func TestCrashMatrixACrashBeforeProviderCall(t *testing.T) {
+func (a *crashCountingAdapter) Query(context.Context, string) (QueryResult, error) {
+	a.ledger.gets.Add(1)
+	return a.ledger.result, nil
+}
+
+func openCrashMatrixDB(t *testing.T) *sql.DB {
+	t.Helper()
 	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
 	}
-	db := openProviderExecutionTestDB(t, dsn)
-	defer db.Close()
-	s := NewStore(db)
-	ctx := context.Background()
-	prefix := "crash-a-" + time.Now().UTC().Format("20060102150405.000000000")
+	return openProviderExecutionTestDB(t, dsn)
+}
 
-	// CASE A: execution prepared committed → crash before Provider call → redelivery
-	// The provider call must happen exactly once.
-	adapter := &crashCountingAdapter{result: QueryResult{Status: Succeeded}}
-	e, err := (&Service{Store: s}).Execute(ctx, Execution{
-		TaskID:             prefix + "-a",
-		Provider:           "grok-imagine-1.5",
-		Capability:         "image",
-		RequestFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	}, adapter)
-	if err != nil || e.Attempt != 1 || adapter.createCalls.Load() != 1 {
-		t.Fatalf("case A: %+v createCalls=%d err=%v", e, adapter.createCalls.Load(), err)
+func deleteCrashMatrixExecution(t *testing.T, db *sql.DB, taskID string) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(), "DELETE FROM provider_executions WHERE task_id=$1", taskID); err != nil {
+		t.Logf("cleanup provider execution %s: %v", taskID, err)
+	}
+}
+
+func createAndClaimExecution(t *testing.T, store *Store, taskID, provider, capability, fingerprint string) Execution {
+	t.Helper()
+	created, err := store.CreatePrepared(context.Background(), Execution{
+		TaskID:             taskID,
+		Provider:           provider,
+		Capability:         capability,
+		RequestFingerprint: fingerprint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimPrepared(context.Background(), created.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return claimed
+}
+
+func TestCrashMatrixACrashBeforeProviderCall(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	taskID := "crash-a-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, taskID)
+
+	firstProcessStore := NewStore(db)
+	createAndClaimExecution(t, firstProcessStore, taskID, "grok-imagine-1.5", "image", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	// The first process crashes after the submitting claim and before calling
+	// the provider. A new process must not create a request from that row.
+	firstProcessStore = nil
+
+	secondProcessStore := NewStore(db)
+	latest, err := secondProcessStore.GetLatestByTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := &crashProviderLedger{}
+	recovered, err := (&Service{Store: secondProcessStore}).Recover(ctx, latest, &crashCountingAdapter{ledger: ledger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != Unknown || ledger.creates.Load() != 0 {
+		t.Fatalf("case A: status=%s creates=%d", recovered.Status, ledger.creates.Load())
 	}
 }
 
 func TestCrashMatrixCCrashBeforeSubmittedPersistence(t *testing.T) {
-	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
-	}
-	db := openProviderExecutionTestDB(t, dsn)
+	db := openCrashMatrixDB(t)
 	defer db.Close()
-	s := NewStore(db)
 	ctx := context.Background()
-	prefix := "crash-c-" + time.Now().UTC().Format("20060102150405.000000000")
+	taskID := "crash-c-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, taskID)
 
-	// CASE C (P0 core): execution submitting committed → Provider accepts request →
-	// process crashes BEFORE provider_request_id/submitted persistence → RabbitMQ redelivery
-	adapter := &crashCountingAdapter{result: QueryResult{Status: Succeeded}}
-	e, err := (&Service{Store: s}).Execute(ctx, Execution{
-		TaskID:             prefix + "-c",
-		Provider:           "seedance-fast-2.0",
-		Capability:         "video",
-		RequestFingerprint: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-	}, adapter)
-	if err != nil || e.Attempt != 1 || adapter.createCalls.Load() != 1 {
-		t.Fatalf("case C execute: %+v createCalls=%d err=%v", e, adapter.createCalls.Load(), err)
+	// First process: prepare and claim are durable, then the provider accepts
+	// the request. The process crashes before persisting provider_request_id.
+	firstProcessStore := NewStore(db)
+	createAndClaimExecution(t, firstProcessStore, taskID, "seedance-fast-2.0", "video", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	providerLedger := &crashProviderLedger{}
+	firstAdapter := &crashCountingAdapter{ledger: providerLedger, providerRequestID: "provider-c"}
+	accepted, err := firstAdapter.Submit(ctx)
+	if err != nil || accepted.ProviderRequestID == "" {
+		t.Fatalf("case C provider accept: requestID=%q err=%v", accepted.ProviderRequestID, err)
 	}
-	// Simulate crash: the execution is now in Submitting state with nil ProviderRequestID
-	// because the Transition to Submitted was not persisted.
-	latest, err := s.GetLatestByTask(ctx, prefix+"-c")
+	// Discard all first-process state. In particular, do not call Transition.
+	firstAdapter = nil
+	firstProcessStore = nil
+
+	// Second process / RabbitMQ redelivery: reload only from the durable store.
+	secondProcessStore := NewStore(db)
+	latest, err := secondProcessStore.GetLatestByTask(ctx, taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.Status != Submitted {
-		t.Fatalf("case C: expected Submitted after execute, got %s", latest.Status)
+	if latest.Status != Submitting || latest.ProviderRequestID != nil {
+		t.Fatalf("case C durable crash state: status=%s requestID=%v", latest.Status, latest.ProviderRequestID)
 	}
-	// On redelivery, Service.Recover should query the provider using the ProviderRequestID.
-	// CreateCalls must remain 1 (no second provider call).
-	recovered, err := (&Service{Store: s}).Recover(ctx, latest, adapter)
+	secondAdapter := &crashCountingAdapter{ledger: providerLedger, providerRequestID: "provider-c"}
+	recovered, err := (&Service{Store: secondProcessStore}).Recover(ctx, latest, secondAdapter)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Status != Succeeded || adapter.getCalls.Load() != 1 || adapter.createCalls.Load() != 1 {
-		t.Fatalf("case C recover: status=%s getCalls=%d createCalls=%d", recovered.Status, adapter.getCalls.Load(), adapter.createCalls.Load())
+	if recovered.Status != Unknown {
+		t.Fatalf("case C recovered status=%s, want unknown", recovered.Status)
+	}
+	if providerLedger.creates.Load() != 1 {
+		t.Fatalf("case C SECOND_BLIND_PROVIDER_SUBMISSION=YES: creates=%d", providerLedger.creates.Load())
+	}
+	if providerLedger.gets.Load() != 0 {
+		t.Fatalf("case C non-queryable execution unexpectedly queried provider: gets=%d", providerLedger.gets.Load())
 	}
 }
 
-func TestCrashMatrixDDangerousCrashNoSecondCreate(t *testing.T) {
-	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
-	}
-	db := openProviderExecutionTestDB(t, dsn)
+func TestCrashMatrixDSubmittedThenProcessRestartQueriesOnly(t *testing.T) {
+	db := openCrashMatrixDB(t)
 	defer db.Close()
-	s := NewStore(db)
 	ctx := context.Background()
-	prefix := "crash-d-" + time.Now().UTC().Format("20060102150405.000000000")
+	taskID := "crash-d-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, taskID)
 
-	// CASE C variant: Create is called, execution is ClaimPrepared, but the process
-	// crashes before the Transition to Submitted is persisted. The Store is left with
-	// status=Submitting and ProviderRequestID=nil. On redelivery, GuardedImage marks
-	// the execution as Unknown (no blind second Create/Generate).
-	adapter := &crashCountingAdapter{result: QueryResult{Status: Succeeded}}
-	e, err := (&Service{Store: s}).Execute(ctx, Execution{
-		TaskID:             prefix + "-d",
-		Provider:           "grok-imagine-1.5",
-		Capability:         "image",
-		RequestFingerprint: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-	}, adapter)
-	if err != nil || e.Attempt != 1 || adapter.createCalls.Load() != 1 {
-		t.Fatalf("case D execute: %+v createCalls=%d err=%v", e, adapter.createCalls.Load(), err)
+	// First process: provider accepts and the request ID is durably persisted.
+	firstProcessStore := NewStore(db)
+	claimed := createAndClaimExecution(t, firstProcessStore, taskID, "queryable-video", "video", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	providerLedger := &crashProviderLedger{result: QueryResult{Status: Succeeded, ProviderRequestID: "provider-d"}}
+	firstAdapter := &crashCountingAdapter{ledger: providerLedger, providerRequestID: "provider-d"}
+	if _, err := firstAdapter.Submit(ctx); err != nil {
+		t.Fatal(err)
 	}
-	// Verify the execution is in Succeeded state (image provider returns directly).
-	latest, err := s.GetLatestByTask(ctx, prefix+"-d")
+	if err := firstProcessStore.Transition(ctx, claimed.ID, Submitted, &firstAdapter.providerRequestID, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	firstAdapter = nil
+	firstProcessStore = nil
+
+	// Second process / redelivery must perform Get/Query only.
+	secondProcessStore := NewStore(db)
+	latest, err := secondProcessStore.GetLatestByTask(ctx, taskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if latest.Status != Succeeded {
-		t.Fatalf("case D: expected Succeeded, got %s", latest.Status)
+	secondAdapter := &crashCountingAdapter{ledger: providerLedger, providerRequestID: "provider-d"}
+	recovered, err := (&Service{Store: secondProcessStore}).Recover(ctx, latest, secondAdapter)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Redelivery must not call Create again.
-	redeliverCount := adapter.createCalls.Load()
-	if redeliverCount != 1 {
-		t.Fatalf("case D: redelivery created %d times, expected 1", redeliverCount)
+	if recovered.Status != Succeeded || providerLedger.creates.Load() != 1 || providerLedger.gets.Load() != 1 {
+		t.Fatalf("case D: status=%s creates=%d gets=%d", recovered.Status, providerLedger.creates.Load(), providerLedger.gets.Load())
 	}
 }
 
-func TestCrashMatrixGConcurrentDuplicateLogicalEvent(t *testing.T) {
-	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
-	}
-	db := openProviderExecutionTestDB(t, dsn)
+func TestCrashMatrixGConcurrentProcessClaimsOneExecution(t *testing.T) {
+	db := openCrashMatrixDB(t)
 	defer db.Close()
-	s := NewStore(db)
 	ctx := context.Background()
-	prefix := "crash-g-" + time.Now().UTC().Format("20060102150405.000000000")
+	taskID := "crash-g-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, taskID)
 
-	// CASE G: two consumers concurrently receive duplicate logical event.
-	// The DB execution claim guarantees one logical submission path.
-	adapter := &crashCountingAdapter{result: QueryResult{Status: Succeeded}}
-	fp := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	e1, err := (&Service{Store: s}).Execute(ctx, Execution{
-		TaskID:             prefix + "-g1",
+	providerLedger := &crashProviderLedger{}
+	execution := Execution{
+		TaskID:             taskID,
 		Provider:           "grok-imagine-1.5",
 		Capability:         "image",
-		RequestFingerprint: fp,
-	}, adapter)
-	if err != nil || e1.Attempt != 1 || adapter.createCalls.Load() != 1 {
-		t.Fatalf("case G1: %+v createCalls=%d err=%v", e1, adapter.createCalls.Load(), err)
+		RequestFingerprint: "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
 	}
-	// Second Execute with the same fingerprint should create a new execution
-	// (different task ID), not reuse the first one.
-	e2, err := (&Service{Store: s}).Execute(ctx, Execution{
-		TaskID:             prefix + "-g2",
-		Provider:           "grok-imagine-1.5",
-		Capability:         "image",
-		RequestFingerprint: fp,
-	}, adapter)
-	if err != nil || e2.Attempt != 1 || adapter.createCalls.Load() != 2 {
-		t.Fatalf("case G2: %+v createCalls=%d err=%v", e2, adapter.createCalls.Load(), err)
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			// Every goroutine represents a separate consumer process: it creates
+			// its own store and adapter and shares no mutex or local execution map.
+			processStore := NewStore(db)
+			adapter := &crashCountingAdapter{ledger: providerLedger, providerRequestID: "provider-g"}
+			_, err := (&Service{Store: processStore}).Execute(ctx, execution, adapter)
+			results <- err
+		}()
 	}
-	// But GetLatestByTask returns only one execution per task ID.
-	// Two different task IDs produce two separate provider executions.
-	// The duplicate logical event is handled by the inbox claim, not the provider execution.
-	if adapter.createCalls.Load() != 2 {
-		t.Fatalf("case G: expected 2 create calls for 2 different task IDs, got %d", adapter.createCalls.Load())
+
+	var successes int
+	var lastErr error
+	for i := 0; i < 2; i++ {
+		if err := <-results; err == nil {
+			successes++
+		} else {
+			lastErr = err
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("case G claim owners=%d lastErr=%v", successes, lastErr)
+	}
+	if providerLedger.creates.Load() != 1 {
+		t.Fatalf("case G BLIND_RESUBMIT_PATHS=FOUND: creates=%d", providerLedger.creates.Load())
 	}
 }
+
+func TestProviderGetFailedRecoveryReturnsExplicitFailure(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	taskID := "failed-recovery-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, taskID)
+
+	store := NewStore(db)
+	claimed := createAndClaimExecution(t, store, taskID, "queryable-video", "video", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	providerLedger := &crashProviderLedger{result: QueryResult{Status: Failed, ProviderRequestID: "provider-failed"}}
+	if err := store.Transition(ctx, claimed.ID, Submitted, stringPtr("provider-failed"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	latest, err := store.GetLatestByTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := (&Service{Store: NewStore(db)}).Recover(ctx, latest, &crashCountingAdapter{ledger: providerLedger, providerRequestID: "provider-failed"})
+	if !errors.Is(err, ErrProviderExecutionFailed) {
+		t.Fatalf("FAILED_PROVIDER_RECOVERY=FAIL: err=%v", err)
+	}
+	if recovered.Status != Failed || providerLedger.creates.Load() != 0 || providerLedger.gets.Load() != 1 {
+		t.Fatalf("failed recovery: status=%s creates=%d gets=%d", recovered.Status, providerLedger.creates.Load(), providerLedger.gets.Load())
+	}
+}
+
+func stringPtr(value string) *string { return &value }
