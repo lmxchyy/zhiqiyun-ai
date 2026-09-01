@@ -49,8 +49,18 @@ func (s *Store) Transition(ctx context.Context, id int64, to Status, providerReq
 	if err = ValidateTransition(e.Status, to); err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, `UPDATE provider_executions SET status=$1,provider_request_id=COALESCE($2,provider_request_id),error_class=$3,last_error=$4,submitted_at=CASE WHEN $1='submitted' THEN now() ELSE submitted_at END,processing_at=CASE WHEN $1='processing' THEN now() ELSE processing_at END,succeeded_at=CASE WHEN $1='succeeded' THEN now() ELSE succeeded_at END,failed_at=CASE WHEN $1='failed' THEN now() ELSE failed_at END,unknown_at=CASE WHEN $1='unknown' THEN now() ELSE unknown_at END,updated_at=now() WHERE id=$5`, to, providerRequestID, errorClass, lastError, id)
-	return err
+	result, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET status=$1,provider_request_id=COALESCE($2,provider_request_id),error_class=$3,last_error=$4,submitted_at=CASE WHEN $1='submitted' THEN now() ELSE submitted_at END,processing_at=CASE WHEN $1='processing' THEN now() ELSE processing_at END,succeeded_at=CASE WHEN $1='succeeded' THEN now() ELSE succeeded_at END,failed_at=CASE WHEN $1='failed' THEN now() ELSE failed_at END,unknown_at=CASE WHEN $1='unknown' THEN now() ELSE unknown_at END,updated_at=now() WHERE id=$5 AND status=$6`, to, providerRequestID, errorClass, lastError, id, e.Status)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrTransitionConflict
+	}
+	return nil
 }
 
 // ClaimPrepared changes exactly one prepared execution to submitting under a

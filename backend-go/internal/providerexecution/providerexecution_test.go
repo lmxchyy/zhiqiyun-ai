@@ -22,7 +22,7 @@ func TestFingerprintCanonicalAndExcludesOperationalFields(t *testing.T) {
 	}
 }
 func TestStateTransitions(t *testing.T) {
-	valid := [][2]Status{{Prepared, Submitting}, {Submitting, Submitted}, {Submitted, Processing}, {Processing, Succeeded}, {Submitting, Unknown}, {Unknown, Submitted}, {Unknown, Failed}}
+	valid := [][2]Status{{Prepared, Submitting}, {Submitting, Submitted}, {Submitted, Processing}, {Processing, Succeeded}, {Submitting, Unknown}, {Unknown, Submitted}, {Unknown, Succeeded}, {Unknown, Failed}}
 	for _, p := range valid {
 		if !CanTransition(p[0], p[1]) {
 			t.Errorf("expected %s -> %s", p[0], p[1])
