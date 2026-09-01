@@ -56,6 +56,10 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	if strings.EqualFold(task.Status, "FAILED") || strings.EqualFold(task.Status, "CANCELLED") {
 		return task, req, fmt.Errorf("generation task is %s", strings.ToLower(task.Status))
 	}
+	// The task is created before the synchronous provider call. Bind the
+	// durable execution identity now so a retry/restart cannot bypass the
+	// provider-execution guard.
+	req.Params[providerExecutionTaskParam] = task.ID
 	prepared, err := service.PrepareImageTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
 		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
