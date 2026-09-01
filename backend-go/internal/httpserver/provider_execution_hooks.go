@@ -62,7 +62,12 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
 		switch latest.Status {
-		case pe.Unknown, pe.Submitting, pe.Submitted, pe.Processing:
+		case pe.Submitting:
+			if latest.ProviderRequestID == nil {
+				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+			}
+			return nil, pe.ErrUnknownResubmitBlocked
+		case pe.Unknown, pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
@@ -107,7 +112,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
 		switch latest.Status {
-		case pe.Unknown, pe.Submitting, pe.Submitted, pe.Processing:
+		case pe.Submitting:
 			if latest.ProviderRequestID != nil {
 				if getter, ok := p.(interface {
 					Get(context.Context, string) (any, error)
@@ -124,6 +129,11 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					}
 				}
 			}
+			if latest.ProviderRequestID == nil {
+				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "video submission outcome unknown after crash")
+			}
+			return nil, pe.ErrUnknownResubmitBlocked
+		case pe.Unknown, pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			if latest.ProviderRequestID == nil {

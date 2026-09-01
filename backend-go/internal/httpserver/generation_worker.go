@@ -9,7 +9,9 @@ import (
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
+	"errors"
 	"xianzhi-ai/backend-go/internal/messaging"
+	pe "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 const generationImageCanaryConsumer = "generation-image-canary-worker"
@@ -88,6 +90,13 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err != nil {
 		return err
 	}
+	hasExecution, execErr := checkProviderExecutionState(a.pgDB(), taskID)
+	if execErr != nil {
+		return execErr
+	}
+	if hasExecution {
+		return nil
+	}
 	a.runGenerationTask(taskID, service, req)
 
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -109,4 +118,31 @@ func canaryTaskMarker(params map[string]any) bool {
 	value, ok := params["generation_async_canary"]
 	marked, okBool := value.(bool)
 	return ok && okBool && marked
+}
+
+func checkProviderExecutionState(db *sql.DB, taskID string) (bool, error) {
+	store := pe.NewStore(db)
+	latest, err := store.GetLatestByTask(context.Background(), taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	switch latest.Status {
+	case pe.Succeeded:
+		return true, nil
+	case pe.Submitting:
+		if latest.ProviderRequestID == nil {
+			_ = store.MarkUnknown(context.Background(), latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+		}
+		return false, pe.ErrUnknownResubmitBlocked
+	case pe.Unknown, pe.Submitted, pe.Processing:
+		return false, pe.ErrUnknownResubmitBlocked
+	case pe.Failed:
+		if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
+			return false, pe.ErrUnknownResubmitBlocked
+		}
+	}
+	return false, nil
 }

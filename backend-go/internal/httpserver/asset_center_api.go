@@ -430,6 +430,9 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 	if hasExecution {
 		switch execution.Status {
 		case providerexecution.Unknown, providerexecution.Submitting:
+			if execution.ProviderRequestID == nil {
+				_ = providerexecution.NewStore(a.pgDB()).MarkUnknown(context.Background(), execution.ID, providerexecution.ProviderUnknown, "submission outcome unknown after crash")
+			}
 			writeError(w, http.StatusConflict, providerexecution.ErrUnknownResubmitBlocked)
 			return
 		case providerexecution.Prepared:
