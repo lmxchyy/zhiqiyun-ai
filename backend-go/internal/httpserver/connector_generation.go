@@ -47,9 +47,6 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	if err != nil {
 		return generationTask{}, req, fmt.Errorf("reserve connector generation: %w", err)
 	}
-	if task.IdempotentReplay {
-		return task, req, nil
-	}
 	if strings.EqualFold(task.Status, "SUCCEEDED") {
 		return task, req, nil
 	}
@@ -132,12 +129,16 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("reserve connector video generation: %w", err)
 	}
-	if task.IdempotentReplay {
-		return task, req, storagecenter.FileObject{}, nil, "", nil
-	}
 	if strings.EqualFold(task.Status, "SUCCEEDED") {
 		return task, req, storagecenter.FileObject{}, nil, "", nil
 	}
+	if strings.EqualFold(task.Status, "FAILED") || strings.EqualFold(task.Status, "CANCELLED") {
+		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("generation task is %s", strings.ToLower(task.Status))
+	}
+	// The task is created before the synchronous provider call. Bind the
+	// durable execution identity now so a retry/restart cannot bypass the
+	// provider-execution guard.
+	req.Params[providerExecutionTaskParam] = task.ID
 	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))

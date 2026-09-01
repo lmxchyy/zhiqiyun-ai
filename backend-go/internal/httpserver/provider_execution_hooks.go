@@ -39,6 +39,11 @@ func executionIdentity(req generation.CreateRequest, capability, provider string
 	params := cloneAnyMap(req.Params)
 	delete(params, providerExecutionTaskParam)
 	delete(params, "terminal")
+	// These values describe a local retry attempt, not a new provider
+	// operation. Keeping them out of the fingerprint lets a retry recover the
+	// same durable execution while still detecting real request drift.
+	delete(params, "retryAttempt")
+	delete(params, "seed")
 	fp, err := pe.Fingerprint(taskID, provider, req.Model, capability, params)
 	if err != nil {
 		return pe.Execution{}, taskID, err
@@ -64,6 +69,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
+		if latest.RequestFingerprint != e.RequestFingerprint {
+			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
+		}
 		switch latest.Status {
 		case pe.Submitting:
 			if latest.ProviderRequestID == nil {
@@ -145,6 +153,9 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
+		if latest.RequestFingerprint != e.RequestFingerprint {
+			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
+		}
 		switch latest.Status {
 		case pe.Submitting, pe.Unknown, pe.Submitted, pe.Processing:
 			if latest.ProviderRequestID != nil {

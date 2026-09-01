@@ -54,12 +54,16 @@ func openProviderExecutionHookTestDB(t *testing.T) *sql.DB {
 func seedFailedRecoveryExecution(t *testing.T, store *pe.Store, taskID string, status pe.Status) {
 	t.Helper()
 	ctx := context.Background()
+	fingerprint, err := pe.Fingerprint(taskID, "queryable-video", "queryable-video", "video", map[string]any{"provider": "queryable-video"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	claimed, err := store.CreatePrepared(ctx, pe.Execution{
 		TaskID:             taskID,
 		Provider:           "queryable-video",
 		ProviderModel:      "queryable-video",
 		Capability:         "video",
-		RequestFingerprint: "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+		RequestFingerprint: fingerprint,
 	})
 	if err != nil {
 		t.Fatal(err)
