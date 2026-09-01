@@ -14,6 +14,7 @@ jobs:
     runs-on:
       - self-hosted
       - linux
+      - X64
       - xianzhi-linux
     env:
       IMAGE: ghcr.io/${{ github.repository }}
