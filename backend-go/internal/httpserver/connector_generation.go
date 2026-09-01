@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	pe "xianzhi-ai/backend-go/internal/providerexecution"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -62,6 +63,9 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
 	}
 	if err != nil {
+		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
+			return task, req, fmt.Errorf("connector image recovery deferred: %w", err)
+		}
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
 		return task, req, fmt.Errorf("generate connector image: %w", err)
 	}
@@ -141,6 +145,9 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	req.Params[providerExecutionTaskParam] = task.ID
 	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
+		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
+			return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("connector video recovery deferred: %w", err)
+		}
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
 		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("generate connector video: %w", err)
 	}

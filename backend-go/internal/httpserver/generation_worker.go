@@ -86,6 +86,13 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	}
 
 	req := generation.CreateRequest{UserID: task.UserID, Type: task.Type, Prompt: task.Prompt, Model: task.Model, Params: cloneAnyMap(task.Params), ModuleCode: stringValue(task.Params["moduleCode"])}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	// The internal execution identity is deliberately not persisted in the
+	// user-facing generation task params. Rebind it when reconstructing a
+	// canary request after a process restart.
+	req.Params[providerExecutionTaskParam] = taskID
 	service, err := a.retryGenerationService(adminUser{ID: task.UserID}, req)
 	if err != nil {
 		return err
