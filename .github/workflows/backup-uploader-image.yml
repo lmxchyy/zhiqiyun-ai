@@ -14,6 +14,8 @@ jobs:
     runs-on:
       - self-hosted
       - linux
+      - X64
+      - xianzhi-linux
     env:
       IMAGE: ghcr.io/${{ github.repository }}-backup-uploader
       IMAGE_TAG: git-${{ github.sha }}
@@ -30,6 +32,14 @@ jobs:
         run: echo "IMAGE=${IMAGE,,}" >> "$GITHUB_ENV"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            env.HTTP_PROXY=http://172.22.16.1:10809
+            env.HTTPS_PROXY=http://172.22.16.1:10809
+            env.NO_PROXY=127.0.0.1
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["docker.m.daocloud.io"]
       - name: Login to GHCR for main releases
         if: github.event_name == 'push'
         uses: docker/login-action@v3
