@@ -76,6 +76,9 @@ func (s *Service) Recover(ctx context.Context, e Execution, a Adapter) (Executio
 		_ = s.Store.MarkUnknown(ctx, e.ID, ProviderUnknown, err.Error())
 		return s.Store.GetByID(ctx, e.ID)
 	}
+	if q.Status == Failed && e.Status == Succeeded {
+		return e, ErrProviderExecutionFailed
+	}
 	switch q.Status {
 	case Submitted, Processing, Succeeded, Failed:
 		err = s.Store.Transition(ctx, e.ID, q.Status, ptr(q.ProviderRequestID), nil, nil)

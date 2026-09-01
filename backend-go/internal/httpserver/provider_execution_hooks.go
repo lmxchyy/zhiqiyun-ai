@@ -56,7 +56,10 @@ func providerName(req generation.CreateRequest) string {
 
 func guardedImage(ctx context.Context, req generation.CreateRequest, p generation.ImageProvider, s *pe.Store) ([]generation.GeneratedImage, error) {
 	e, taskID, err := executionIdentity(req, "image", providerName(req))
-	if err != nil || taskID == "" {
+	if err != nil {
+		return nil, fmt.Errorf("provider execution identity: %w", err)
+	}
+	if taskID == "" {
 		return p.Generate(ctx, req)
 	}
 	latest, err := s.GetLatestByTask(ctx, taskID)
@@ -134,13 +137,16 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 
 func guardedVideo(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider, s *pe.Store) (any, error) {
 	e, taskID, err := executionIdentity(req, "video", providerName(req))
-	if err != nil || taskID == "" {
+	if err != nil {
+		return nil, fmt.Errorf("provider execution identity: %w", err)
+	}
+	if taskID == "" {
 		return p.Create(ctx, req)
 	}
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
 		switch latest.Status {
-		case pe.Submitting:
+		case pe.Submitting, pe.Unknown, pe.Submitted, pe.Processing:
 			if latest.ProviderRequestID != nil {
 				if getter, ok := p.(interface {
 					Get(context.Context, string) (any, error)
@@ -148,7 +154,8 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
-						if status == pe.Succeeded || status == pe.Failed {
+						switch status {
+						case pe.Succeeded, pe.Failed:
 							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
 								return nil, transitionErr
 							}
@@ -156,41 +163,23 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 								return nil, pe.ErrProviderExecutionFailed
 							}
 							return result, nil
+						case pe.Submitted, pe.Processing:
+							target := status
+							if latest.Status == pe.Processing && target == pe.Submitted {
+								target = pe.Processing
+							}
+							if transitionErr := s.Transition(ctx, latest.ID, target, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil); transitionErr != nil {
+								return nil, transitionErr
+							}
+							return nil, pe.ErrProviderStillProcessing
 						}
-						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
-						return nil, pe.ErrProviderStillProcessing
 					}
 				}
 			}
-			if latest.ProviderRequestID == nil {
+			if latest.Status == pe.Submitting && latest.ProviderRequestID == nil {
 				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "video submission outcome unknown after crash")
 			}
-			return nil, pe.ErrUnknownResubmitBlocked
-		case pe.Unknown:
-			if latest.ProviderRequestID != nil {
-				if getter, ok := p.(interface {
-					Get(context.Context, string) (any, error)
-				}); ok {
-					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
-					if queryErr == nil {
-						status := providerExecutionStatus(result)
-						if status == pe.Succeeded || status == pe.Failed {
-							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
-								return nil, transitionErr
-							}
-							if status == pe.Failed {
-								return nil, pe.ErrProviderExecutionFailed
-							}
-							return result, nil
-						}
-						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
-						return nil, pe.ErrProviderStillProcessing
-					}
-				}
-			}
 			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
-			return nil, pe.ErrUnknownResubmitBlocked
-		case pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			if latest.ProviderRequestID == nil {
@@ -206,7 +195,11 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 			if queryErr != nil {
 				return nil, queryErr
 			}
-			if providerExecutionStatus(result) != pe.Succeeded {
+			status := providerExecutionStatus(result)
+			if status == pe.Failed {
+				return nil, pe.ErrProviderExecutionFailed
+			}
+			if status != pe.Succeeded {
 				return nil, pe.ErrProviderStillProcessing
 			}
 			return result, nil

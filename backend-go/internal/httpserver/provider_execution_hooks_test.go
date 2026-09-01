@@ -51,16 +51,9 @@ func openProviderExecutionHookTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
-	db := openProviderExecutionHookTestDB(t)
-	defer db.Close()
+func seedFailedRecoveryExecution(t *testing.T, store *pe.Store, taskID string, status pe.Status) {
+	t.Helper()
 	ctx := context.Background()
-	taskID := "hook-failed-recovery-" + time.Now().UTC().Format("20060102150405.000000000")
-	defer func() {
-		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskID)
-	}()
-
-	store := pe.NewStore(db)
 	claimed, err := store.CreatePrepared(ctx, pe.Execution{
 		TaskID:             taskID,
 		Provider:           "queryable-video",
@@ -78,10 +71,29 @@ func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
 	if err := store.Transition(ctx, claimed.ID, pe.Submitted, stringPtr("provider-failed"), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Transition(ctx, claimed.ID, pe.Unknown, nil, stringPtr(string(pe.ProviderUnknown)), stringPtr("process restarted")); err != nil {
-		t.Fatal(err)
+	if status == pe.Unknown {
+		if err := store.Transition(ctx, claimed.ID, pe.Unknown, nil, stringPtr(string(pe.ProviderUnknown)), stringPtr("process restarted")); err != nil {
+			t.Fatal(err)
+		}
 	}
+	if status == pe.Succeeded {
+		if err := store.Transition(ctx, claimed.ID, pe.Succeeded, nil, stringPtr(string(pe.ProviderSucceeded)), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
+func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	taskID := "hook-failed-recovery-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskID)
+	}()
+
+	store := pe.NewStore(db)
+	seedFailedRecoveryExecution(t, store, taskID, pe.Unknown)
 	provider := &failedRecoveryVideoProvider{}
 	result, err := guardedVideo(ctx, generation.CreateRequest{
 		Model: "queryable-video",
@@ -102,6 +114,33 @@ func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
 	}
 	if latest.Status != pe.Failed {
 		t.Fatalf("execution status=%s, want failed", latest.Status)
+	}
+}
+
+func TestGuardedVideoFailedGetForSucceededExecutionReturnsFailure(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	taskID := "hook-failed-succeeded-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskID)
+	}()
+
+	store := pe.NewStore(db)
+	seedFailedRecoveryExecution(t, store, taskID, pe.Succeeded)
+	provider := &failedRecoveryVideoProvider{}
+	result, err := guardedVideo(ctx, generation.CreateRequest{
+		Model: "queryable-video",
+		Params: map[string]any{
+			providerExecutionTaskParam: taskID,
+			"provider":                 "queryable-video",
+		},
+	}, provider, store)
+	if !errors.Is(err, pe.ErrProviderExecutionFailed) {
+		t.Fatalf("FAILED_PROVIDER_RECOVERY=FAIL for succeeded local state: err=%v", err)
+	}
+	if result != nil || provider.createCalls.Load() != 0 || provider.getCalls.Load() != 1 {
+		t.Fatalf("succeeded-state recovery result=%v creates=%d gets=%d", result, provider.createCalls.Load(), provider.getCalls.Load())
 	}
 }
 

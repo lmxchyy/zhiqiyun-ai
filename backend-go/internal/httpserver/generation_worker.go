@@ -90,13 +90,13 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err != nil {
 		return err
 	}
-	hasExecution, execErr := checkProviderExecutionState(a.pgDB(), taskID)
-	if execErr != nil {
+	if execErr := checkProviderExecutionState(a.pgDB(), taskID); execErr != nil {
 		return execErr
 	}
-	if hasExecution {
-		return nil
-	}
+	// Keep the local orchestration path running for a durable execution. The
+	// provider hook performs Get-only recovery (or fails closed) without a
+	// second Create/Generate call; returning here would acknowledge a
+	// succeeded provider row while the generation task is still pending.
 	a.runGenerationTask(taskID, service, req)
 
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -120,29 +120,31 @@ func canaryTaskMarker(params map[string]any) bool {
 	return ok && okBool && marked
 }
 
-func checkProviderExecutionState(db *sql.DB, taskID string) (bool, error) {
+func checkProviderExecutionState(db *sql.DB, taskID string) error {
 	store := pe.NewStore(db)
 	latest, err := store.GetLatestByTask(context.Background(), taskID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return nil
 	}
 	if err != nil {
-		return false, err
+		return err
 	}
 	switch latest.Status {
-	case pe.Succeeded:
-		return true, nil
+	case pe.Succeeded, pe.Unknown, pe.Submitted, pe.Processing:
+		// Let runGenerationTask invoke the guarded hook so a persisted provider
+		// request can be queried and local completion can be retried. A durable
+		// Succeeded row without local completion must not be silently acked.
+		return nil
 	case pe.Submitting:
-		if latest.ProviderRequestID == nil {
-			_ = store.MarkUnknown(context.Background(), latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+		if latest.ProviderRequestID != nil {
+			return nil
 		}
-		return false, pe.ErrUnknownResubmitBlocked
-	case pe.Unknown, pe.Submitted, pe.Processing:
-		return false, pe.ErrUnknownResubmitBlocked
+		_ = store.MarkUnknown(context.Background(), latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+		return pe.ErrUnknownResubmitBlocked
 	case pe.Failed:
 		if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
-			return false, pe.ErrUnknownResubmitBlocked
+			return pe.ErrUnknownResubmitBlocked
 		}
 	}
-	return false, nil
+	return nil
 }

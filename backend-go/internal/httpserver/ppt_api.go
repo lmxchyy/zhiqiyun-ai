@@ -1008,6 +1008,7 @@ func (a api) generateBillablePPTImage(ctx context.Context, user adminUser, servi
 	if err != nil {
 		return pptImageSearchResponse{}, err
 	}
+	createReq.Params[providerExecutionTaskParam] = pptProviderExecutionTaskID(pptTaskID, req.Slide.ID, task.ID)
 	log.Printf("ppt visual generation started presentationId=%s slideId=%s taskId=%s modelName=%s", pptTaskID, req.Slide.ID, task.ID, model)
 	prepared, err := service.PrepareImageTask(ctx, createReq)
 	if err != nil {
@@ -1097,6 +1098,15 @@ func pptOCRContainsReadableText(units []knowledgeapp.DocumentUnit) bool {
 		}
 	}
 	return false
+}
+
+func pptProviderExecutionTaskID(pptTaskID, slideID, fallbackTaskID string) string {
+	pptTaskID = strings.TrimSpace(pptTaskID)
+	slideID = strings.TrimSpace(slideID)
+	if pptTaskID == "" && slideID == "" {
+		return strings.TrimSpace(fallbackTaskID)
+	}
+	return "ppt:" + pptTaskID + ":" + slideID
 }
 
 func pptImageGenerationCreateRequest(user adminUser, req pptImageGenerateRequest, model string, pptTaskID string) generation.CreateRequest {
