@@ -2,7 +2,9 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"time"
 )
@@ -15,6 +17,7 @@ type OutboxPublisher struct {
 	BatchSize    int
 	PollInterval time.Duration
 	Owner        string
+	Retry        RetryStrategy
 }
 
 func (p *OutboxPublisher) Run(ctx context.Context) error {
@@ -39,8 +42,11 @@ func (p *OutboxPublisher) Run(ctx context.Context) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
-		if err := p.publishBatch(ctx, batch, owner); err != nil && ctx.Err() != nil {
-			return ctx.Err()
+		if err := p.publishBatch(ctx, batch, owner); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Printf("messaging outbox batch failed owner=%s: %v", owner, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -55,19 +61,30 @@ func (p *OutboxPublisher) publishBatch(ctx context.Context, batch int, owner str
 	if err != nil {
 		return err
 	}
+	retry := p.Retry
+	if retry.MaxAttempts <= 0 {
+		retry = DefaultRetry()
+	}
+	var failures []error
 	for _, row := range rows {
-		env, err := DecodeOutboxEnvelope(row.Data)
-		if err == nil {
-			err = p.Publisher.Publish(ctx, env, env.EventType)
+		env, publishErr := DecodeOutboxEnvelope(row.Data)
+		if publishErr == nil {
+			publishCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			publishErr = p.Publisher.Publish(publishCtx, env, env.EventType)
+			cancel()
 		}
-		if err == nil {
-			err = p.Store.MarkPublished(ctx, row.ID)
+		if publishErr == nil {
+			if markErr := p.Store.MarkPublished(ctx, row.ID); markErr != nil {
+				failures = append(failures, fmt.Errorf("mark outbox %d published: %w", row.ID, markErr))
+			}
+			continue
+		}
+		next := time.Now().UTC().Add(retry.NextDelay(row.AttemptCount + 1))
+		if markErr := p.Store.MarkFailure(ctx, row.ID, publishErr, retry.MaxAttempts, next); markErr != nil {
+			failures = append(failures, fmt.Errorf("outbox %d publish failed (%v), mark failure: %w", row.ID, publishErr, markErr))
 		} else {
-			_ = p.Store.MarkFailure(ctx, row.ID, err, DefaultRetry().MaxAttempts, time.Now().UTC().Add(DefaultRetry().NextDelay(row.AttemptCount+1)))
-		}
-		if err != nil {
-			return err
+			failures = append(failures, fmt.Errorf("outbox %d publish: %w", row.ID, publishErr))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

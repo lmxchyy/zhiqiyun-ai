@@ -2,7 +2,9 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,7 +37,8 @@ func (s ConnectionState) String() string {
 	}
 }
 
-// RabbitMQConfig holds the configuration for a RabbitMQ connection.
+// RabbitMQConfig holds the configuration for a RabbitMQ connection. Zero
+// durations mean "use the safe default"; negative durations are invalid.
 type RabbitMQConfig struct {
 	URL           string
 	Heartbeat     time.Duration
@@ -48,189 +51,343 @@ type RabbitMQConfig struct {
 	Password      string
 }
 
-// validate ensures the RabbitMQ config has required fields.
-func (c RabbitMQConfig) validate() error {
+const (
+	defaultHeartbeat     = 10 * time.Second
+	defaultReconnectBase = time.Second
+	defaultReconnectMax  = 30 * time.Second
+)
+
+func normalizeRabbitMQConfig(c RabbitMQConfig) (RabbitMQConfig, error) {
 	if c.URL == "" {
-		return fmt.Errorf("rabbitmq URL is required")
+		return c, fmt.Errorf("rabbitmq URL is required")
 	}
-	if c.Heartbeat <= 0 {
-		c.Heartbeat = 10 * time.Second
+	if c.Heartbeat < 0 {
+		return c, fmt.Errorf("heartbeat must not be negative")
 	}
-	if c.ReconnectBase <= 0 {
-		c.ReconnectBase = 1 * time.Second
+	if c.ReconnectBase < 0 {
+		return c, fmt.Errorf("reconnect base must not be negative")
 	}
-	if c.ReconnectMax <= 0 {
-		c.ReconnectMax = 60 * time.Second
+	if c.ReconnectMax < 0 {
+		return c, fmt.Errorf("reconnect max must not be negative")
 	}
-	return nil
+	if c.ChannelMax < 0 || c.ChannelMax > int(^uint16(0)) {
+		return c, fmt.Errorf("channel max must be between 0 and %d", ^uint16(0))
+	}
+	if c.FrameMax < 0 || c.ConnectionMax < 0 {
+		return c, fmt.Errorf("frame max and connection max must not be negative")
+	}
+	if c.Heartbeat == 0 {
+		c.Heartbeat = defaultHeartbeat
+	}
+	if c.ReconnectBase == 0 {
+		c.ReconnectBase = defaultReconnectBase
+	}
+	if c.ReconnectMax == 0 {
+		c.ReconnectMax = defaultReconnectMax
+	}
+	if c.ReconnectBase > c.ReconnectMax {
+		return c, fmt.Errorf("reconnect base %s exceeds reconnect max %s", c.ReconnectBase, c.ReconnectMax)
+	}
+	return c, nil
 }
 
-// ConnectionManager manages the RabbitMQ AMQP connection lifecycle.
-// It supports background reconnection and graceful shutdown.
+// ConnectionManager is the single owner of an AMQP connection. Publisher and
+// consumers obtain independent channels from it. It reconnects after initial
+// dial failures and broker NotifyClose events without blocking API startup.
 type ConnectionManager struct {
-	cfg             RabbitMQConfig
-	conn            atomic.Value // *amqp091.Connection
-	channel         atomic.Value // *amqp091.Channel
-	state           atomic.Value // ConnectionState
-	mu              sync.Mutex
-	ctx             context.Context
-	cancel          context.CancelFunc
-	reconnectTicker *time.Ticker
-	once            sync.Once
+	cfg RabbitMQConfig
+
+	mu      sync.RWMutex
+	conn    *amqp091.Connection
+	state   ConnectionState
+	changed chan struct{}
+
+	ctx       context.Context
+	cancel    context.CancelFunc
+	startOnce sync.Once
+	closeOnce sync.Once
+	wg        sync.WaitGroup
+	attempts  atomic.Int64
 }
 
-// NewConnectionManager creates a new ConnectionManager.
+// NewConnectionManager creates a manager with a fully normalized runtime config.
 func NewConnectionManager(cfg RabbitMQConfig) (*ConnectionManager, error) {
-	if err := cfg.validate(); err != nil {
+	normalized, err := normalizeRabbitMQConfig(cfg)
+	if err != nil {
 		return nil, fmt.Errorf("invalid rabbitmq config: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cm := &ConnectionManager{
-		cfg:             cfg,
-		ctx:             ctx,
-		cancel:          cancel,
-		reconnectTicker: time.NewTicker(cfg.ReconnectBase),
-	}
-	cm.state.Store(StateDisconnected)
-	cm.reconnectTicker.Stop()
-	return cm, nil
+	return &ConnectionManager{
+		cfg: normalized, state: StateDisconnected, changed: make(chan struct{}), ctx: ctx, cancel: cancel,
+	}, nil
 }
 
-// Start connects to RabbitMQ and starts the background reconnection loop.
-// It returns immediately; reconnection happens in the background.
-// RabbitMQ failure does not panic or block the caller.
+// Config returns the normalized immutable configuration.
+func (cm *ConnectionManager) Config() RabbitMQConfig { return cm.cfg }
+
+// Start starts exactly one connection owner and returns immediately.
 func (cm *ConnectionManager) Start() {
-	cm.once.Do(func() {
+	if cm == nil {
+		return
+	}
+	cm.startOnce.Do(func() {
+		cm.wg.Add(1)
 		go cm.run()
 	})
 }
 
 func (cm *ConnectionManager) run() {
-	if err := cm.connect(); err != nil {
-		cm.logError("initial connect failed, will retry: %v", err)
-	}
+	defer cm.wg.Done()
+	delay := time.Duration(0)
 	for {
+		if !waitContext(cm.ctx, delay) {
+			return
+		}
+		cm.setState(StateConnecting)
+		conn, err := cm.dialAndPrepare()
+		if err != nil {
+			if cm.ctx.Err() != nil {
+				return
+			}
+			cm.setState(StateDisconnected)
+			cm.logError("rabbitmq connect failed: %v", err)
+			delay = nextReconnectDelay(delay, cm.cfg.ReconnectBase, cm.cfg.ReconnectMax)
+			continue
+		}
+
+		delay = cm.cfg.ReconnectBase
+		if !cm.installConnection(conn) {
+			_ = conn.Close()
+			return
+		}
+		cm.logError("connected to rabbitmq")
+		closed := conn.NotifyClose(make(chan *amqp091.Error, 1))
 		select {
 		case <-cm.ctx.Done():
+			cm.clearConnection(conn, StateClosing)
+			_ = conn.Close()
 			return
-		case <-cm.reconnectTicker.C:
-			if cm.GetState() == StateConnected {
-				continue
-			}
-			if err := cm.connect(); err != nil {
-				cm.logError("reconnect failed: %v", err)
+		case closeErr := <-closed:
+			cm.clearConnection(conn, StateDisconnected)
+			if closeErr != nil {
+				cm.logError("rabbitmq connection closed: %v", closeErr)
 			}
 		}
 	}
 }
 
-func (cm *ConnectionManager) connect() error {
-	cm.setState(StateConnecting)
-	conn, err := amqp091.DialConfig(cm.cfg.URL, amqp091.Config{
+func (cm *ConnectionManager) dialAndPrepare() (*amqp091.Connection, error) {
+	cm.attempts.Add(1)
+	dialTimeout := cm.cfg.Heartbeat
+	if dialTimeout > 5*time.Second {
+		dialTimeout = 5 * time.Second
+	}
+	if dialTimeout <= 0 {
+		dialTimeout = 5 * time.Second
+	}
+	dialer := net.Dialer{Timeout: dialTimeout, KeepAlive: cm.cfg.Heartbeat}
+	amqpCfg := amqp091.Config{
 		Heartbeat:  cm.cfg.Heartbeat,
 		ChannelMax: uint16(cm.cfg.ChannelMax),
-	})
-	if err != nil {
-		cm.setState(StateDisconnected)
-		return fmt.Errorf("dial rabbitmq: %w", err)
+		Dial: func(network, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(cm.ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			// Bound TLS/AMQP handshaking; amqp091 clears this deadline after
+			// open completes, matching its DefaultDial contract.
+			if err := conn.SetDeadline(time.Now().Add(dialTimeout)); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+			return conn, nil
+		},
 	}
-	ch, err := conn.Channel()
-	if err != nil {
-		conn.Close()
-		cm.setState(StateDisconnected)
-		return fmt.Errorf("open channel: %w", err)
+	if cm.cfg.FrameMax > 0 {
+		amqpCfg.FrameSize = cm.cfg.FrameMax
 	}
-	if err := ch.Qos(1, 0, false); err != nil {
-		ch.Close()
-		conn.Close()
-		cm.setState(StateDisconnected)
-		return fmt.Errorf("set qos: %w", err)
+	conn, err := amqp091.DialConfig(cm.cfg.URL, amqpCfg)
+	if err != nil {
+		return nil, fmt.Errorf("dial rabbitmq: %w", err)
 	}
 	if err := EnsureTopology(conn); err != nil {
-		ch.Close()
-		conn.Close()
-		cm.setState(StateDisconnected)
-		return fmt.Errorf("declare topology: %w", err)
+		_ = conn.Close()
+		return nil, fmt.Errorf("declare topology: %w", err)
 	}
-	cm.conn.Store(conn)
-	cm.channel.Store(ch)
-	cm.setState(StateConnected)
-	cm.logError("connected to rabbitmq")
-	return nil
+	return conn, nil
 }
 
-// GetConnection returns the current AMQP connection, or nil if disconnected.
-func (cm *ConnectionManager) GetConnection() *amqp091.Connection {
-	v := cm.conn.Load()
-	if v == nil {
-		return nil
+func (cm *ConnectionManager) installConnection(conn *amqp091.Connection) bool {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.ctx.Err() != nil {
+		return false
 	}
-	if conn, ok := v.(*amqp091.Connection); ok {
-		return conn
-	}
-	return nil
+	cm.conn = conn
+	cm.state = StateConnected
+	cm.signalChangedLocked()
+	return true
 }
 
-// GetChannel returns the current AMQP channel, or nil if disconnected.
-func (cm *ConnectionManager) GetChannel() *amqp091.Channel {
-	v := cm.channel.Load()
-	if v == nil {
-		return nil
+func (cm *ConnectionManager) clearConnection(conn *amqp091.Connection, state ConnectionState) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.conn == conn {
+		cm.conn = nil
+		cm.state = state
+		cm.signalChangedLocked()
 	}
-	if ch, ok := v.(*amqp091.Channel); ok {
-		return ch
-	}
-	return nil
-}
-
-// GetState returns the current connection state.
-func (cm *ConnectionManager) GetState() ConnectionState {
-	v := cm.state.Load()
-	if v == nil {
-		return StateDisconnected
-	}
-	if s, ok := v.(ConnectionState); ok {
-		return s
-	}
-	return StateDisconnected
 }
 
 func (cm *ConnectionManager) setState(state ConnectionState) {
-	cm.state.Store(state)
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if cm.state != state {
+		cm.state = state
+		cm.signalChangedLocked()
+	}
 }
 
-// Close gracefully closes the connection and channel.
+func (cm *ConnectionManager) signalChangedLocked() {
+	close(cm.changed)
+	cm.changed = make(chan struct{})
+}
+
+// WaitForConnection waits interruptibly for the current live connection.
+func (cm *ConnectionManager) WaitForConnection(ctx context.Context) (*amqp091.Connection, error) {
+	if cm == nil {
+		return nil, fmt.Errorf("connection manager is nil")
+	}
+	for {
+		cm.mu.RLock()
+		conn, state, changed := cm.conn, cm.state, cm.changed
+		cm.mu.RUnlock()
+		if conn != nil && state == StateConnected && !conn.IsClosed() {
+			return conn, nil
+		}
+		if state == StateClosing || cm.ctx.Err() != nil {
+			return nil, fmt.Errorf("connection manager stopped")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-cm.ctx.Done():
+			return nil, fmt.Errorf("connection manager stopped")
+		case <-changed:
+		}
+	}
+}
+
+// OpenChannel returns a new caller-owned channel from the current connection.
+func (cm *ConnectionManager) OpenChannel(ctx context.Context) (*amqp091.Channel, error) {
+	conn, err := cm.WaitForConnection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("open rabbitmq channel: %w", err)
+	}
+	return ch, nil
+}
+
+// GetConnection returns the current connection for diagnostics only.
+func (cm *ConnectionManager) GetConnection() *amqp091.Connection {
+	if cm == nil {
+		return nil
+	}
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.conn
+}
+
+// GetChannel returns a fresh caller-owned channel when connected. Deprecated:
+// callers should use OpenChannel with a bounded context.
+func (cm *ConnectionManager) GetChannel() *amqp091.Channel {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ch, _ := cm.OpenChannel(ctx)
+	return ch
+}
+
+func (cm *ConnectionManager) GetState() ConnectionState {
+	if cm == nil {
+		return StateDisconnected
+	}
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return cm.state
+}
+
+// Close stops reconnects, closes the live connection, and waits for the owner.
 func (cm *ConnectionManager) Close() error {
-	cm.cancel()
-	cm.reconnectTicker.Stop()
-	var errs []error
-	ch := cm.GetChannel()
-	if ch != nil {
-		if err := ch.Close(); err != nil {
-			errs = append(errs, err)
+	if cm == nil {
+		return nil
+	}
+	var closeErr error
+	cm.closeOnce.Do(func() {
+		cm.setState(StateClosing)
+		cm.cancel()
+		cm.mu.RLock()
+		conn := cm.conn
+		cm.mu.RUnlock()
+		if conn != nil {
+			if err := conn.Close(); err != nil && !errors.Is(err, amqp091.ErrClosed) {
+				closeErr = err
+			}
 		}
-	}
-	conn := cm.GetConnection()
-	if conn != nil {
-		if err := conn.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	cm.setState(StateClosing)
-	cm.setState(StateDisconnected)
-	if len(errs) > 0 {
-		return fmt.Errorf("close errors: %v", errs)
-	}
-	return nil
+		cm.wg.Wait()
+		cm.mu.Lock()
+		cm.conn = nil
+		cm.state = StateDisconnected
+		cm.signalChangedLocked()
+		cm.mu.Unlock()
+	})
+	return closeErr
 }
 
-// IsConnected returns true if the connection is currently connected.
+// ConnectAttempts is a diagnostic counter used by health/tests.
+func (cm *ConnectionManager) ConnectAttempts() int64 {
+	if cm == nil {
+		return 0
+	}
+	return cm.attempts.Load()
+}
+
 func (cm *ConnectionManager) IsConnected() bool {
-	return cm.GetState() == StateConnected
+	conn := cm.GetConnection()
+	return cm.GetState() == StateConnected && conn != nil && !conn.IsClosed()
+}
+
+func nextReconnectDelay(previous, base, max time.Duration) time.Duration {
+	if previous < base {
+		return base
+	}
+	if previous >= max/2 {
+		return max
+	}
+	return previous * 2
+}
+
+func waitContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+			return true
+		}
+	}
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func (cm *ConnectionManager) logError(format string, args ...interface{}) {
-	// Use fmt.Printf for simplicity; in production, use a structured logger.
-	// The URL is sanitized: only the hostname and port are logged, never credentials.
 	fmt.Printf("[messaging] "+format+"\n", args...)
 }

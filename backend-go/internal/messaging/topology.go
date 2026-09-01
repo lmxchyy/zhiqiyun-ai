@@ -8,26 +8,34 @@ import (
 )
 
 const (
-	ExchangeEvents    = "x.ai.events"
-	ExchangeDLX       = "x.ai.dlx"
-	ExchangeType      = "topic"
-	DLXType           = "fanout"
-	MessagePrefix     = "x.ai."
-	DefaultPrefetch   = 1
-	MaxPublishRetries = 3
+	ExchangeEvents               = "x.ai.events"
+	ExchangeDLX                  = "x.ai.dlx"
+	ExchangeRetry                = "x.ai.retry"
+	ExchangeType                 = "topic"
+	DLXType                      = "fanout"
+	MessagePrefix                = "x.ai."
+	DefaultPrefetch              = 1
+	MaxPublishRetries            = 3
+	GenerationCanaryQueue        = "x.ai.generation.image.canary"
+	GenerationCanaryRetryQueue   = "x.ai.generation.image.canary.retry"
+	GenerationCanaryDLQ          = "x.ai.generation.image.canary.dlq"
+	GenerationCanaryRoutingKey   = "x.ai.generation.image.canary.requested"
+	GenerationCanaryRetryKey     = "x.ai.generation.image.canary.retry"
+	GenerationCanaryDeadKey      = "x.ai.generation.image.canary.dead"
+	DefaultConsumerMaxRetries    = 3
+	defaultRetryQueueDelayMillis = int32(1000)
 )
 
 // Declaration represents a single topology declaration.
 type Declaration struct {
 	Name       string
-	Kind       string // "exchange" or "queue"
+	Kind       string
 	Durable    bool
 	AutoDelete bool
 	Arguments  map[string]interface{}
-	Bindings   []Binding // for queues
+	Bindings   []Binding
 }
 
-// Binding represents a queue-to-exchange binding.
 type Binding struct {
 	QueueName    string
 	ExchangeName string
@@ -35,22 +43,13 @@ type Binding struct {
 	Arguments    map[string]interface{}
 }
 
-// TopologyBuilder declares all required exchanges and queues.
-type TopologyBuilder struct {
-	conn *amqp091.Connection
-}
+type TopologyBuilder struct{ conn *amqp091.Connection }
 
-// NewTopologyBuilder creates a builder bound to an existing connection.
 func NewTopologyBuilder(conn *amqp091.Connection) *TopologyBuilder {
 	return &TopologyBuilder{conn: conn}
 }
 
-// Build declares the minimal topology required for PR1.
-// It creates:
-//   - Exchange: x.ai.events (topic, durable)
-//   - Exchange: x.ai.dlx (fanout, durable)
-//   - Queue: x.ai.test.generation.canary (durable) bound to x.ai.events
-//   - Queue: x.ai.dlq (durable) bound to x.ai.dlx
+// Build recreates the durable business topology after every connection.
 func (tb *TopologyBuilder) Build() error {
 	if tb == nil || tb.conn == nil {
 		return fmt.Errorf("connection is nil")
@@ -61,67 +60,74 @@ func (tb *TopologyBuilder) Build() error {
 	}
 	defer ch.Close()
 
-	// Declare the events exchange.
-	if err := declareExchange(ch, ExchangeEvents, ExchangeType, true, false, nil); err != nil {
-		return fmt.Errorf("declare events exchange: %w", err)
+	for _, exchange := range []struct{ name, kind string }{
+		{ExchangeEvents, ExchangeType}, {ExchangeDLX, DLXType}, {ExchangeRetry, "direct"},
+	} {
+		if err := declareExchange(ch, exchange.name, exchange.kind, true, false, nil); err != nil {
+			return fmt.Errorf("declare exchange %s: %w", exchange.name, err)
+		}
 	}
 
-	// Declare the dead letter exchange.
-	if err := declareExchange(ch, ExchangeDLX, DLXType, true, false, nil); err != nil {
-		return fmt.Errorf("declare dlx exchange: %w", err)
-	}
-
-	// Retain the PR1 test queue and add the first formal Generation canary queue.
+	// Retain the foundation test queue with its original declaration. Durable
+	// queue arguments are immutable and changing them would break upgrades.
 	if err := declareQueue(ch, "x.ai.test.generation.canary", true, false, nil); err != nil {
 		return fmt.Errorf("declare test canary queue: %w", err)
 	}
 	if err := bindQueue(ch, "x.ai.test.generation.canary", ExchangeEvents, MessagePrefix+"*", nil); err != nil {
 		return fmt.Errorf("bind test canary queue: %w", err)
 	}
-	canaryArgs := map[string]interface{}{"x-dead-letter-exchange": ExchangeDLX}
-	if err := declareQueue(ch, "x.ai.generation.image.canary", true, false, canaryArgs); err != nil {
+
+	// Preserve the PR3 durable queue contract. x.ai.dlx is fanout, so rejected
+	// messages reach the durable canary DLQ without an unsafe queue redeclare.
+	canaryArgs := amqp091.Table{"x-dead-letter-exchange": ExchangeDLX}
+	if err := declareQueue(ch, GenerationCanaryQueue, true, false, canaryArgs); err != nil {
 		return fmt.Errorf("declare generation canary queue: %w", err)
 	}
-	if err := bindQueue(ch, "x.ai.generation.image.canary", ExchangeEvents, "x.ai.generation.image.canary.requested", nil); err != nil {
+	if err := bindQueue(ch, GenerationCanaryQueue, ExchangeEvents, GenerationCanaryRoutingKey, nil); err != nil {
 		return fmt.Errorf("bind generation canary queue: %w", err)
 	}
-	if err := declareQueue(ch, "x.ai.generation.image.canary.dlq", true, false, nil); err != nil {
+
+	// Transient failures are republished here. Queue TTL creates a bounded delay,
+	// then dead-letters the same body/event identity back to the business route.
+	retryArgs := amqp091.Table{
+		"x-message-ttl":             defaultRetryQueueDelayMillis,
+		"x-dead-letter-exchange":    ExchangeEvents,
+		"x-dead-letter-routing-key": GenerationCanaryRoutingKey,
+	}
+	if err := declareQueue(ch, GenerationCanaryRetryQueue, true, false, retryArgs); err != nil {
+		return fmt.Errorf("declare generation canary retry queue: %w", err)
+	}
+	if err := bindQueue(ch, GenerationCanaryRetryQueue, ExchangeRetry, GenerationCanaryRetryKey, nil); err != nil {
+		return fmt.Errorf("bind generation canary retry queue: %w", err)
+	}
+
+	if err := declareQueue(ch, GenerationCanaryDLQ, true, false, nil); err != nil {
 		return fmt.Errorf("declare generation canary dlq: %w", err)
 	}
-	if err := bindQueue(ch, "x.ai.generation.image.canary.dlq", ExchangeDLX, "", nil); err != nil {
+	if err := bindQueue(ch, GenerationCanaryDLQ, ExchangeDLX, "", nil); err != nil {
 		return fmt.Errorf("bind generation canary dlq: %w", err)
 	}
 
-	// Declare the dead letter queue.
+	// Keep the shared DLQ for non-business foundation routes.
 	if err := declareQueue(ch, "x.ai.dlq", true, false, nil); err != nil {
 		return fmt.Errorf("declare dlq queue: %w", err)
 	}
 	if err := bindQueue(ch, "x.ai.dlq", ExchangeDLX, "", nil); err != nil {
 		return fmt.Errorf("bind dlq queue: %w", err)
 	}
-
 	return nil
 }
 
-// declareExchange declares an exchange with the given properties.
 func declareExchange(ch *amqp091.Channel, name, kind string, durable, autoDelete bool, args map[string]interface{}) error {
-	err := ch.ExchangeDeclare(name, kind, durable, autoDelete, false, false, args)
-	return err
+	return ch.ExchangeDeclare(name, kind, durable, autoDelete, false, false, args)
 }
-
-// declareQueue declares a queue with the given properties.
 func declareQueue(ch *amqp091.Channel, name string, durable, autoDelete bool, args map[string]interface{}) error {
 	_, err := ch.QueueDeclare(name, durable, autoDelete, false, false, args)
 	return err
 }
-
-// bindQueue binds a queue to an exchange with the given routing key.
 func bindQueue(ch *amqp091.Channel, queue, exchange, routingKey string, args map[string]interface{}) error {
-	err := ch.QueueBind(queue, routingKey, exchange, false, args)
-	return err
+	return ch.QueueBind(queue, routingKey, exchange, false, args)
 }
-
-// ValidateRoutingKey validates that a routing key follows the x.ai.* convention.
 func ValidateRoutingKey(key string) error {
 	if !strings.HasPrefix(key, MessagePrefix) {
 		return fmt.Errorf("routing key %q must start with %q", key, MessagePrefix)
@@ -131,13 +137,9 @@ func ValidateRoutingKey(key string) error {
 	}
 	return nil
 }
-
-// EnsureTopology declares the topology if RabbitMQ is connected.
-// Returns nil if not connected (caller decides whether to treat as error).
 func EnsureTopology(conn *amqp091.Connection) error {
 	if conn == nil {
 		return fmt.Errorf("connection is nil")
 	}
-	tb := NewTopologyBuilder(conn)
-	return tb.Build()
+	return NewTopologyBuilder(conn).Build()
 }

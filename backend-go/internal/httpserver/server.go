@@ -36,6 +36,16 @@ func NewWithDatabase(cfg config.Config, db *sql.DB) *http.Server {
 }
 
 func NewWithInfrastructure(cfg config.Config, db *sql.DB, redisClient *redis.Client) *http.Server {
+	return newWithInfrastructureAndReadyStatus(cfg, db, redisClient, nil)
+}
+
+// NewWithInfrastructureAndReadyStatus adds optional async runtime diagnostics to
+// readiness JSON without changing process liveness or the HTTP status code.
+func NewWithInfrastructureAndReadyStatus(cfg config.Config, db *sql.DB, redisClient *redis.Client, readyStatus func() string) *http.Server {
+	return newWithInfrastructureAndReadyStatus(cfg, db, redisClient, readyStatus)
+}
+
+func newWithInfrastructureAndReadyStatus(cfg config.Config, db *sql.DB, redisClient *redis.Client, readyStatus func() string) *http.Server {
 	store := platformStore(newJSONStore(cfg.DataPath))
 	knowledge := newMemoryKnowledgeModule(cfg)
 	mediaRepo := mediaRepository(newMemoryMediaRepository())
@@ -44,7 +54,7 @@ func NewWithInfrastructure(cfg config.Config, db *sql.DB, redisClient *redis.Cli
 		knowledge = newPostgresKnowledgeModule(cfg, db)
 		mediaRepo = newPostgresMediaRepository(db)
 	}
-	return newWithStoreSessionsKnowledgeAndMedia(cfg, store, defaultAuthSessions(cfg, redisClient), knowledge, mediaRepo, redisClient)
+	return newWithStoreSessionsKnowledgeAndMedia(cfg, store, defaultAuthSessions(cfg, redisClient), knowledge, mediaRepo, redisClient, readyStatus)
 }
 
 func newWithStore(cfg config.Config, store platformStore) *http.Server {
@@ -66,10 +76,10 @@ func newWithStoreAndSessions(cfg config.Config, store platformStore, sessions au
 }
 
 func newWithStoreSessionsAndKnowledge(cfg config.Config, store platformStore, sessions authSessionStore, knowledge *knowledgeModule) *http.Server {
-	return newWithStoreSessionsKnowledgeAndMedia(cfg, store, sessions, knowledge, newMemoryMediaRepository(), nil)
+	return newWithStoreSessionsKnowledgeAndMedia(cfg, store, sessions, knowledge, newMemoryMediaRepository(), nil, nil)
 }
 
-func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStore, sessions authSessionStore, knowledge *knowledgeModule, mediaRepo mediaRepository, redisClient *redis.Client) *http.Server {
+func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStore, sessions authSessionStore, knowledge *knowledgeModule, mediaRepo mediaRepository, redisClient *redis.Client, readyStatus func() string) *http.Server {
 	if knowledge != nil && knowledge.rag != nil {
 		knowledge.rag.SetBillingRecorder(store)
 	}
@@ -196,7 +206,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router.GET("/api/open/connectors/oauth/wechat/callback", wrapF(connectors.wechatOAuthCallback))
 	v1 := router.Group("/api/v1")
 	v1.GET("/health", wrapF(health))
-	v1.GET("/ready", wrapF(ready))
+	v1.GET("/ready", wrapF(readyWithStatus(readyStatus)))
 	v1.POST("/auth/login", wrapF(auth.login))
 	v1.POST("/auth/wechat-mini-program/login", wrapF(auth.wechatMiniProgramLogin))
 	v1.POST("/auth/wechat-mini-program/link", wrapF(auth.linkWeChatMiniProgram))
@@ -1025,13 +1035,19 @@ func health(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func ready(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"service": "xianzhi-ai-go-gin",
-		"ready":   "true",
-	})
+func ready(w http.ResponseWriter, r *http.Request) { readyWithStatus(nil)(w, r) }
+
+func readyWithStatus(status func() string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		response := map[string]string{
+			"status": "ok", "service": "xianzhi-ai-go-gin", "ready": "true",
+		}
+		if status != nil {
+			response["asyncMessaging"] = status()
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}
 }
 
 func notFound(w http.ResponseWriter, r *http.Request) {

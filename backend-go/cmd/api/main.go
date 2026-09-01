@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/httpserver"
@@ -44,25 +47,25 @@ func run() error {
 	if cfg.IsProduction() && (clients == nil || clients.DB == nil || clients.Redis == nil) {
 		return fmt.Errorf("production requires PostgreSQL and Redis infrastructure")
 	}
-	// Start the messaging connection manager if available.
-	// PR1 phase: RabbitMQ failure does not block the API.
-	if clients.Messaging != nil {
-		clients.Messaging.Start()
-	}
-	var server = httpserver.New(cfg)
-	stopWorker := func() {}
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	var db *sql.DB
+	var redisClient *redis.Client
+	var messagingManager *messaging.ConnectionManager
 	if clients != nil {
-		server = httpserver.NewWithInfrastructure(cfg, clients.DB, clients.Redis)
-		workerCtx, cancelWorker := context.WithCancel(context.Background())
-		stopWorker = cancelWorker
+		db, redisClient, messagingManager = clients.DB, clients.Redis, clients.Messaging
+	}
+	runtime := newAsyncMessagingRuntime(cfg, db, messagingManager)
+	runtime.Start(workerCtx)
+	var server = httpserver.NewWithInfrastructureAndReadyStatus(cfg, db, redisClient, runtime.Status)
+	if clients != nil {
 		httpserver.StartIdentityDowngradeWorker(workerCtx, clients.DB, time.Minute)
-		if cfg.AsyncMessagingEnabled && clients.DB != nil && clients.Messaging != nil {
-			publisher := &messaging.OutboxPublisher{Store: messaging.NewOutboxStore(clients.DB), Publisher: messaging.NewPublisher(clients.Messaging), BatchSize: 25, PollInterval: time.Second, Owner: "api-generation-outbox"}
-			go func() {
-				if err := publisher.Run(workerCtx); err != nil && workerCtx.Err() == nil {
-					log.Printf("generation outbox publisher stopped: %v", err)
-				}
-			}()
+	}
+	stopWorker := func() {
+		cancelWorkers()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.APIShutdownTimeout())
+		defer cancel()
+		if err := runtime.Stop(shutdownCtx); err != nil {
+			log.Printf("stop async messaging runtime: %v", err)
 		}
 	}
 	signals := make(chan os.Signal, 2)
