@@ -11,27 +11,54 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 )
 
-// Publisher publishes envelope messages to RabbitMQ with publisher confirms.
-// It is safe for concurrent use by multiple goroutines.
+// Publisher owns one confirm-enabled channel. Publish is serialized so returns
+// and confirmations can be correlated without sharing a channel with consumers.
 type Publisher struct {
-	connManager  *ConnectionManager
-	retry        RetryStrategy
+	connManager *ConnectionManager
+	retry       RetryStrategy
+
+	mu      sync.Mutex
+	channel *amqp091.Channel
+	returns <-chan amqp091.Return
+	closed  <-chan *amqp091.Error
+	stopped bool
+
 	publishCount atomic.Int64
 	publishFail  atomic.Int64
-	mu           sync.Mutex
 }
 
-// NewPublisher creates a new Publisher.
 func NewPublisher(connManager *ConnectionManager) *Publisher {
-	return &Publisher{
-		connManager: connManager,
-		retry:       DefaultRetry(),
-	}
+	return NewPublisherWithRetry(connManager, RetryStrategy{InitialDelay: time.Second, MaxDelay: time.Second, Multiplier: 1, MaxAttempts: 1})
 }
 
-// Publish publishes an Envelope to the given routing key.
-// It waits for publisher confirm before returning.
-// Returns nil on success, or an error if publish fails after all retries.
+func NewPublisherWithRetry(connManager *ConnectionManager, retry RetryStrategy) *Publisher {
+	if retry.MaxAttempts <= 0 {
+		retry = RetryStrategy{InitialDelay: time.Second, MaxDelay: time.Second, Multiplier: 1, MaxAttempts: 1}
+	}
+	return &Publisher{connManager: connManager, retry: retry}
+}
+
+// Start eagerly creates the publisher channel. Publish also starts lazily.
+func (p *Publisher) Start(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		return fmt.Errorf("publisher stopped")
+	}
+	return p.ensureChannelLocked(ctx)
+}
+
+// Close is idempotent and prevents later publishes.
+func (p *Publisher) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopped = true
+	return p.resetChannelLocked()
+}
+
 func (p *Publisher) Publish(ctx context.Context, envelope *Envelope, routingKey string) error {
 	if envelope == nil {
 		return fmt.Errorf("envelope is nil")
@@ -39,24 +66,29 @@ func (p *Publisher) Publish(ctx context.Context, envelope *Envelope, routingKey 
 	if routingKey == "" {
 		routingKey = envelope.EventType
 	}
-
+	if err := ValidateRoutingKey(routingKey); err != nil {
+		return err
+	}
 	payload, err := envelope.Payload()
 	if err != nil {
 		return fmt.Errorf("encode envelope: %w", err)
 	}
 
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped {
+		return fmt.Errorf("publisher stopped")
+	}
 	var lastErr error
 	for attempt := 1; attempt <= p.retry.MaxAttempts; attempt++ {
-		if err := p.publishOnce(ctx, payload, routingKey); err != nil {
+		if err := p.publishOnceLocked(ctx, payload, routingKey); err != nil {
 			lastErr = err
 			p.publishFail.Add(1)
-			if attempt >= p.retry.MaxAttempts {
-				return fmt.Errorf("publish failed after %d attempts: %w", attempt, lastErr)
+			_ = p.resetChannelLocked()
+			if attempt == p.retry.MaxAttempts {
+				break
 			}
-			delay := p.retry.NextDelay(attempt)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
+			if !waitContext(ctx, p.retry.NextDelay(attempt)) {
 				return fmt.Errorf("publish cancelled: %w", ctx.Err())
 			}
 			continue
@@ -64,58 +96,97 @@ func (p *Publisher) Publish(ctx context.Context, envelope *Envelope, routingKey 
 		p.publishCount.Add(1)
 		return nil
 	}
-	return fmt.Errorf("publish exhausted retries: %w", lastErr)
+	return fmt.Errorf("publish failed after %d attempts: %w", p.retry.MaxAttempts, lastErr)
 }
 
-func (p *Publisher) publishOnce(ctx context.Context, payload []byte, routingKey string) error {
-	ch := p.connManager.GetChannel()
-	if ch == nil {
-		return fmt.Errorf("no rabbitmq channel available")
+func (p *Publisher) ensureChannelLocked(ctx context.Context) error {
+	if p.channel != nil {
+		select {
+		case <-p.closed:
+			_ = p.resetChannelLocked()
+		default:
+			return nil
+		}
 	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	// Enable publisher confirms before publishing; confirmations are ordered per channel.
+	if p.connManager == nil {
+		return fmt.Errorf("connection manager is required")
+	}
+	ch, err := p.connManager.OpenChannel(ctx)
+	if err != nil {
+		return err
+	}
 	if err := ch.Confirm(false); err != nil {
-		return fmt.Errorf("enable confirms: %w", err)
+		_ = ch.Close()
+		return fmt.Errorf("enable publisher confirms: %w", err)
 	}
+	p.channel = ch
+	p.returns = ch.NotifyReturn(make(chan amqp091.Return, 1))
+	p.closed = ch.NotifyClose(make(chan *amqp091.Error, 1))
+	return nil
+}
 
-	eventID := extractEventID(payload)
+func (p *Publisher) publishOnceLocked(ctx context.Context, payload []byte, routingKey string) error {
+	if err := p.ensureChannelLocked(ctx); err != nil {
+		return err
+	}
 	msg := amqp091.Publishing{
 		ContentType:  "application/json",
 		Body:         payload,
 		DeliveryMode: amqp091.Persistent,
-		Headers: map[string]interface{}{
-			"event_id":   eventID,
-			"event_type": routingKey,
-			"version":    1,
+		MessageId:    extractEventID(payload),
+		Timestamp:    time.Now().UTC(),
+		Headers: amqp091.Table{
+			"event_id": extractEventID(payload), "event_type": routingKey, "version": int32(1),
 		},
 	}
-
-	ackChan, nackChan := ch.NotifyConfirm(make(chan uint64, 1), make(chan uint64, 1))
-	returnChan := ch.NotifyReturn(make(chan amqp091.Return, 1))
-	if err := ch.PublishWithContext(ctx, ExchangeEvents, routingKey, false, true, msg); err != nil {
+	confirmation, err := p.channel.PublishWithDeferredConfirmWithContext(ctx, ExchangeEvents, routingKey, true, false, msg)
+	if err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
-
-	// Wait for confirm with timeout; mandatory unroutable messages are failures.
-
+	if confirmation == nil {
+		return fmt.Errorf("publisher confirmation unavailable")
+	}
 	confirmCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-
-	select {
-	case returned := <-returnChan:
-		return fmt.Errorf("message returned by broker: %s", returned.ReplyText)
-	case <-ackChan:
-		return nil
-	case <-nackChan:
-		return fmt.Errorf("publisher nack received")
-	case <-confirmCtx.Done():
-		return fmt.Errorf("confirm timeout: %w", confirmCtx.Err())
+	for {
+		select {
+		case returned, ok := <-p.returns:
+			if !ok {
+				return fmt.Errorf("publisher return channel closed")
+			}
+			return fmt.Errorf("message returned by broker: %s", returned.ReplyText)
+		case closeErr, ok := <-p.closed:
+			if ok && closeErr != nil {
+				return fmt.Errorf("publisher channel closed: %w", closeErr)
+			}
+			return fmt.Errorf("publisher channel closed")
+		case <-confirmation.Done():
+			if !confirmation.Acked() {
+				return fmt.Errorf("publisher nack received for delivery tag %d", confirmation.DeliveryTag)
+			}
+			// RabbitMQ sends basic.return before the confirm for a mandatory
+			// unroutable publish. Drain it before declaring success.
+			select {
+			case returned := <-p.returns:
+				return fmt.Errorf("message returned by broker: %s", returned.ReplyText)
+			default:
+				return nil
+			}
+		case <-confirmCtx.Done():
+			return fmt.Errorf("confirm timeout: %w", confirmCtx.Err())
+		}
 	}
 }
 
-// extractEventID parses the event_id from the JSON payload.
+func (p *Publisher) resetChannelLocked() error {
+	ch := p.channel
+	p.channel, p.returns, p.closed = nil, nil, nil
+	if ch == nil || ch.IsClosed() {
+		return nil
+	}
+	return ch.Close()
+}
+
 func extractEventID(payload []byte) string {
 	var env struct {
 		EventID string `json:"event_id"`
@@ -126,12 +197,5 @@ func extractEventID(payload []byte) string {
 	return ""
 }
 
-// PublishCount returns the total number of successful publishes.
-func (p *Publisher) PublishCount() int64 {
-	return p.publishCount.Load()
-}
-
-// PublishFailCount returns the total number of failed publishes.
-func (p *Publisher) PublishFailCount() int64 {
-	return p.publishFail.Load()
-}
+func (p *Publisher) PublishCount() int64     { return p.publishCount.Load() }
+func (p *Publisher) PublishFailCount() int64 { return p.publishFail.Load() }

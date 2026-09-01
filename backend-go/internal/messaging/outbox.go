@@ -65,8 +65,9 @@ func (s *OutboxStore) Claim(ctx context.Context, batch int, owner string) ([]Out
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id,event_id,event_type,event_version,occurred_at,trace_id,
-		'',aggregate_type,aggregate_id,payload,status,attempt_count,published_at,last_error,created_at,updated_at
+	rows, err := tx.QueryContext(ctx, `SELECT id,event_id,event_type,event_version,
+		COALESCE(NULLIF(payload->>'occurred_at','')::timestamptz,created_at),COALESCE(trace_id,''),
+		COALESCE(payload->>'producer',''),aggregate_type,aggregate_id,payload,status,attempt_count,published_at,last_error,created_at,updated_at
 		FROM outbox_events WHERE ((status='pending' AND next_attempt_at<=now())
 		 OR (status='publishing' AND claimed_at < now()-$1::interval))
 		ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $2`, fmt.Sprintf("%f seconds", lease.Seconds()), batch)
@@ -97,20 +98,35 @@ func (s *OutboxStore) Claim(ctx context.Context, batch int, owner string) ([]Out
 }
 
 func (s *OutboxStore) MarkPublished(ctx context.Context, id int64) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE outbox_events SET status='published',published_at=now(),claimed_at=NULL,claim_owner=NULL,updated_at=now() WHERE id=$1 AND status='publishing'`, id)
-	return err
+	result, err := s.DB.ExecContext(ctx, `UPDATE outbox_events SET status='published',published_at=now(),claimed_at=NULL,claim_owner=NULL,updated_at=now() WHERE id=$1 AND status='publishing'`, id)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("outbox event %d was not in publishing state", id)
+	}
+	return nil
 }
 func (s *OutboxStore) MarkFailure(ctx context.Context, id int64, publishErr error, maxAttempts int, next time.Time) error {
-	status := OutboxPending
-	if maxAttempts > 0 {
-		var attempts int
-		_ = s.DB.QueryRowContext(ctx, `SELECT attempt_count FROM outbox_events WHERE id=$1`, id).Scan(&attempts)
-		if attempts+1 >= maxAttempts {
-			status = OutboxFailed
-		}
+	if maxAttempts <= 0 {
+		maxAttempts = DefaultRetry().MaxAttempts
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE outbox_events SET status=$1,attempt_count=attempt_count+1,last_error=$2,next_attempt_at=$3,claimed_at=NULL,claim_owner=NULL,updated_at=now() WHERE id=$4 AND status='publishing'`, status, errorString(publishErr), next, id)
-	return err
+	result, err := s.DB.ExecContext(ctx, `UPDATE outbox_events SET
+		status=CASE WHEN attempt_count+1 >= $1 THEN 'failed' ELSE 'pending' END,
+		attempt_count=attempt_count+1,last_error=$2,next_attempt_at=$3,
+		claimed_at=NULL,claim_owner=NULL,updated_at=now()
+		WHERE id=$4 AND status='publishing'`, maxAttempts, errorString(publishErr), next, id)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("outbox event %d was not in publishing state", id)
+	}
+	return nil
 }
 func errorString(err error) string {
 	if err == nil {

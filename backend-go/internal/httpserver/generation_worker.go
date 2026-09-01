@@ -27,10 +27,16 @@ func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *
 	store := newPostgresPrimaryStore(db, cfg.DataPath)
 	a := newAPI(store, cfg, nil, nil)
 	inbox := messaging.NewInboxStore(db)
-	consumer := messaging.NewConsumer(manager, messaging.WithPrefetch(1), messaging.WithAutoAck(false), messaging.WithOnMessage(func(messageCtx context.Context, envelope *messaging.Envelope) error {
-		return a.processGenerationCanaryMessage(messageCtx, inbox, envelope)
-	}))
-	if err := consumer.Start(ctx, "x.ai.generation.image.canary"); err != nil {
+	consumer := messaging.NewConsumer(manager,
+		messaging.WithPrefetch(1),
+		messaging.WithMaxConcurrency(1),
+		messaging.WithAutoAck(false),
+		messaging.WithRetryPolicy(messaging.ExchangeRetry, messaging.GenerationCanaryRetryKey, messaging.DefaultConsumerMaxRetries),
+		messaging.WithOnMessage(func(messageCtx context.Context, envelope *messaging.Envelope) error {
+			return a.processGenerationCanaryMessage(messageCtx, inbox, envelope)
+		}),
+	)
+	if err := consumer.Start(ctx, messaging.GenerationCanaryQueue); err != nil {
 		return err
 	}
 	<-ctx.Done()
@@ -39,12 +45,12 @@ func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *
 }
 
 func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messaging.InboxStore, envelope *messaging.Envelope) error {
-	if envelope == nil || envelope.EventType != "x.ai.generation.image.canary.requested" || envelope.AggregateType != "generation_task" || envelope.AggregateID == "" {
-		return fmt.Errorf("invalid generation canary envelope")
+	if envelope == nil || envelope.EventType != messaging.GenerationCanaryRoutingKey || envelope.AggregateType != "generation_task" || envelope.AggregateID == "" {
+		return messaging.Permanent(fmt.Errorf("invalid generation canary envelope"))
 	}
 	taskID := envelope.AggregateID
 	if value, ok := envelope.Data["task_id"].(string); ok && strings.TrimSpace(value) != taskID {
-		return fmt.Errorf("generation canary task mismatch")
+		return messaging.Permanent(fmt.Errorf("generation canary task mismatch"))
 	}
 	shortCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -65,13 +71,13 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err != nil {
 		_ = tx.Rollback()
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("generation task %s not found", taskID)
+			return messaging.Permanent(fmt.Errorf("generation task %s not found", taskID))
 		}
 		return err
 	}
 	if !isImageGenerationRequest(task.Type) || !canaryTaskMarker(task.Params) {
 		_ = tx.Rollback()
-		return fmt.Errorf("generation task %s is not an image canary", taskID)
+		return messaging.Permanent(fmt.Errorf("generation task %s is not an image canary", taskID))
 	}
 	if err := tx.Commit(); err != nil {
 		return err

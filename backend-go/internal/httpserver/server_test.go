@@ -3218,7 +3218,7 @@ func TestProductionConfigValidationRequiresSecurityEnv(t *testing.T) {
 	if err == nil ||
 		!strings.Contains(err.Error(), "DATABASE_URL") ||
 		!strings.Contains(err.Error(), "REDIS_URL") ||
-		!strings.Contains(err.Error(), "RABBITMQ_URL") ||
+		strings.Contains(err.Error(), "RABBITMQ_URL") ||
 		!strings.Contains(err.Error(), "S3_ENDPOINT") ||
 		!strings.Contains(err.Error(), "STORAGE_PUBLIC_ENDPOINT") ||
 		!strings.Contains(err.Error(), "S3_ACCESS_KEY") ||
@@ -3227,6 +3227,10 @@ func TestProductionConfigValidationRequiresSecurityEnv(t *testing.T) {
 		!strings.Contains(err.Error(), "STORAGE_MASTER_KEY") ||
 		!strings.Contains(err.Error(), "PAYMENT_CALLBACK_SECRET") {
 		t.Fatalf("unexpected production validation error: %v", err)
+	}
+	asyncErr := (config.Config{Environment: "production", AsyncMessagingEnabled: true}).ValidateProduction()
+	if asyncErr == nil || !strings.Contains(asyncErr.Error(), "RABBITMQ_URL") {
+		t.Fatalf("enabled production messaging must require RabbitMQ: %v", asyncErr)
 	}
 	err = (config.Config{
 		Environment:           "production",

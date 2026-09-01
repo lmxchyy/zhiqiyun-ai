@@ -450,7 +450,7 @@ func (c Config) ValidateProduction() error {
 			}
 		}
 	}
-	if strings.TrimSpace(c.RabbitMQURL) == "" {
+	if c.AsyncMessagingEnabled && strings.TrimSpace(c.RabbitMQURL) == "" {
 		missing = append(missing, "RABBITMQ_URL")
 	}
 	if strings.TrimSpace(c.S3Endpoint) == "" {
