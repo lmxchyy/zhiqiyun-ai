@@ -7,9 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"errors"
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/messaging"
+	pe "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 const generationImageCanaryConsumer = "generation-image-canary-worker"
@@ -84,11 +86,29 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	}
 
 	req := generation.CreateRequest{UserID: task.UserID, Type: task.Type, Prompt: task.Prompt, Model: task.Model, Params: cloneAnyMap(task.Params), ModuleCode: stringValue(task.Params["moduleCode"])}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	// The internal execution identity is deliberately not persisted in the
+	// user-facing generation task params. Rebind it when reconstructing a
+	// canary request after a process restart.
+	req.Params[providerExecutionTaskParam] = taskID
 	service, err := a.retryGenerationService(adminUser{ID: task.UserID}, req)
 	if err != nil {
 		return err
 	}
-	a.runGenerationTask(taskID, service, req)
+	if execErr := checkProviderExecutionState(a.pgDB(), taskID); execErr != nil {
+		return execErr
+	}
+	// Keep the local orchestration path running for a durable execution. The
+	// provider hook performs Get-only recovery (or fails closed) without a
+	// second Create/Generate call; returning here would acknowledge a
+	// succeeded provider row while the generation task is still pending.
+	if err := a.runGenerationTask(taskID, service, req); err != nil {
+		// Keep the inbox message retryable while the provider outcome is still
+		// queryable or explicitly blocked; no provider resubmission occurs.
+		return err
+	}
 
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer finishCancel()
@@ -109,4 +129,33 @@ func canaryTaskMarker(params map[string]any) bool {
 	value, ok := params["generation_async_canary"]
 	marked, okBool := value.(bool)
 	return ok && okBool && marked
+}
+
+func checkProviderExecutionState(db *sql.DB, taskID string) error {
+	store := pe.NewStore(db)
+	latest, err := store.GetLatestByTask(context.Background(), taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch latest.Status {
+	case pe.Succeeded, pe.Unknown, pe.Submitted, pe.Processing:
+		// Let runGenerationTask invoke the guarded hook so a persisted provider
+		// request can be queried and local completion can be retried. A durable
+		// Succeeded row without local completion must not be silently acked.
+		return nil
+	case pe.Submitting:
+		if latest.ProviderRequestID != nil {
+			return nil
+		}
+		_ = store.MarkUnknown(context.Background(), latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+		return pe.ErrUnknownResubmitBlocked
+	case pe.Failed:
+		if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
+			return pe.ErrUnknownResubmitBlocked
+		}
+	}
+	return nil
 }

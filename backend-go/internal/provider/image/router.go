@@ -86,8 +86,7 @@ func isFallbackEligible(err error) bool {
 		strings.Contains(lower, "无权访问") ||
 		strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "no such host") ||
-		strings.Contains(lower, "network is unreachable") ||
-		strings.Contains(lower, "connection reset")
+		strings.Contains(lower, "network is unreachable")
 }
 
 type providersJSON struct {

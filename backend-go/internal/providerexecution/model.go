@@ -19,8 +19,10 @@ const (
 )
 
 var ErrIllegalTransition = errors.New("illegal provider execution state transition")
+var ErrTransitionConflict = errors.New("provider execution state changed concurrently")
 var ErrUnknownResubmitBlocked = errors.New("automatic resubmission is blocked for unknown execution")
 var ErrProviderStillProcessing = errors.New("provider execution is still processing")
+var ErrProviderExecutionFailed = errors.New("provider execution failed")
 
 type Execution struct {
 	ID                                                          int64
@@ -53,7 +55,7 @@ func CanTransition(from, to Status) bool {
 	case Processing:
 		return to == Succeeded || to == Failed || to == Unknown
 	case Unknown:
-		return to == Submitted || to == Processing || to == Failed
+		return to == Submitted || to == Processing || to == Succeeded || to == Failed
 	default:
 		return false
 	}

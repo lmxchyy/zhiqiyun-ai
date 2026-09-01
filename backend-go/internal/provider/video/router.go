@@ -2,7 +2,6 @@ package video
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
@@ -63,9 +62,8 @@ func (r Router) Get(ctx context.Context, providerTaskID string) (Task, error) {
 	return Task{}, ErrNoProvider
 }
 
-func isFallbackEligible(err error) bool {
-	if err == nil {
-		return false
-	}
-	return errors.Is(err, context.DeadlineExceeded)
+func isFallbackEligible(error) bool {
+	// A timeout is an unknown submission outcome. Falling through to another
+	// provider would blindly submit the same generation twice.
+	return false
 }

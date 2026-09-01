@@ -20,6 +20,17 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 )
 
+func TestPPTProviderExecutionTaskIDIsStableAcrossAutomaticRetries(t *testing.T) {
+	first := pptProviderExecutionTaskID("presentation-1", "slide-2", "generation-1")
+	second := pptProviderExecutionTaskID("presentation-1", "slide-2", "generation-2")
+	if first == "" || first != second {
+		t.Fatalf("provider execution task ID is not stable: first=%q second=%q", first, second)
+	}
+	if got := pptProviderExecutionTaskID("", "", "generation-3"); got != "generation-3" {
+		t.Fatalf("empty PPT identity fallback = %q", got)
+	}
+}
+
 func TestPPTVisualHTTPDisablePreservesContentAndEnforcesOwnership(t *testing.T) {
 	dataPath := filepath.Join(t.TempDir(), "store.json")
 	store := newJSONStore(dataPath)

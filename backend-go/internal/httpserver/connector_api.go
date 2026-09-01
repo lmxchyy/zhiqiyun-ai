@@ -20,6 +20,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/connector"
 	feishuconnector "xianzhi-ai/backend-go/internal/connector/feishu"
+	pe "xianzhi-ai/backend-go/internal/providerexecution"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
@@ -663,6 +664,11 @@ func (a *connectorAPI) processJob(parent context.Context, job connectorJob) erro
 	_ = a.repo.updateConnectorTaskState(ctx, task.ID, "processing", "processing", "processing", 15, "", 0, map[string]any{"estimatedPoints": estimated}, "", "")
 	capabilityResult, err := handler.Execute(ctx, command)
 	if err != nil {
+		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
+			// Keep the connector message/task retryable while the durable provider
+			// execution is being queried; failMessage would make recovery terminal.
+			return err
+		}
 		return a.failMessage(ctx, message, item, task, "GENERATION_FAILED", err)
 	}
 	resultPayload := connectorCapabilityResultPayload(capabilityResult, command)

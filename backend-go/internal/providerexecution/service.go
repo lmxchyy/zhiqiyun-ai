@@ -76,16 +76,34 @@ func (s *Service) Recover(ctx context.Context, e Execution, a Adapter) (Executio
 		_ = s.Store.MarkUnknown(ctx, e.ID, ProviderUnknown, err.Error())
 		return s.Store.GetByID(ctx, e.ID)
 	}
+	if q.Status == Failed && e.Status == Succeeded {
+		return e, ErrProviderExecutionFailed
+	}
+	providerRequestID := q.ProviderRequestID
+	if providerRequestID == "" && e.ProviderRequestID != nil {
+		providerRequestID = *e.ProviderRequestID
+	}
+	var providerRequestIDPtr *string
+	if providerRequestID != "" {
+		providerRequestIDPtr = ptr(providerRequestID)
+	}
 	switch q.Status {
 	case Submitted, Processing, Succeeded, Failed:
-		err = s.Store.Transition(ctx, e.ID, q.Status, ptr(q.ProviderRequestID), nil, nil)
+		err = s.Store.Transition(ctx, e.ID, q.Status, providerRequestIDPtr, nil, nil)
 	default:
 		err = s.Store.MarkUnknown(ctx, e.ID, ProviderUnknown, "provider returned unknown status")
 	}
 	if err != nil {
 		return e, err
 	}
-	return s.Store.GetByID(ctx, e.ID)
+	recovered, err := s.Store.GetByID(ctx, e.ID)
+	if err != nil {
+		return e, err
+	}
+	if q.Status == Failed {
+		return recovered, ErrProviderExecutionFailed
+	}
+	return recovered, nil
 }
 
 func ClassifyError(err error) ErrorClass {

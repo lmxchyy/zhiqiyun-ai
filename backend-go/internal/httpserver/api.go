@@ -971,7 +971,7 @@ type generationServiceCandidate struct {
 	channel adminAPIChannel
 }
 
-func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
+func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) error {
 	startedAt := time.Now()
 	taskTimeout := a.configuredImageGenerationTimeout()
 	log.Printf("generation task started task_id=%s type=%s model=%s timeout_ms=%d", taskID, req.Type, req.Model, taskTimeout.Milliseconds())
@@ -989,32 +989,36 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	if err != nil {
 		prepared, err = a.prepareImageTaskWithFallback(ctx, req, err)
 		if err != nil {
+			if errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) || errors.Is(err, providerexecution.ErrProviderStillProcessing) {
+				return err
+			}
 			a.failImageGenerationTask(taskID, "provider", startedAt, err)
-			return
+			return err
 		}
 	}
 	delete(prepared.Params, providerExecutionTaskParam)
 	if err := a.auditPreparedGeneratedOutput(ctx, &prepared); err != nil {
 		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 		a.failImageGenerationTask(taskID, "content_audit", startedAt, err)
-		return
+		return err
 	}
 	a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 	prepared, storedFiles, err := a.persistGeneratedImages(ctx, taskID, prepared)
 	if err != nil {
 		a.failImageGenerationTask(taskID, "persistence", startedAt, err)
-		return
+		return err
 	}
 	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
 	if err != nil {
 		a.cleanupGeneratedFiles(storedFiles)
 		a.failImageGenerationTask(taskID, "completion", startedAt, err)
-		return
+		return err
 	}
 	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
 		a.cleanupGeneratedFiles(storedFiles)
 	}
 	log.Printf("generation task finished task_id=%s status=%s elapsed_ms=%d", taskID, completed.Status, time.Since(startedAt).Milliseconds())
+	return nil
 }
 
 func (a api) configuredImageGenerationTimeout() time.Duration {
@@ -1031,6 +1035,12 @@ func (a api) failImageGenerationTask(taskID string, stage string, startedAt time
 }
 
 func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.CreateRequest, firstErr error) (generation.CreateRequest, error) {
+	// A provider error classified as unknown or still-processing may represent
+	// a submitted operation. Never send it to a fallback provider as a second
+	// blind submission.
+	if errors.Is(firstErr, providerexecution.ErrUnknownResubmitBlocked) || errors.Is(firstErr, providerexecution.ErrProviderStillProcessing) {
+		return generation.CreateRequest{}, firstErr
+	}
 	if !shouldFallbackImageGeneration(firstErr) {
 		return generation.CreateRequest{}, firstErr
 	}
