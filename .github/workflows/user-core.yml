@@ -186,6 +186,10 @@ jobs:
         working-directory: backend-go
         run: go test -count=1 -v ./internal/providerexecution ./internal/httpserver -run 'TestTEST_|TestCrashMatrix|TestGuarded'
 
+      - name: Test RabbitMQ integration (uncached)
+        working-directory: backend-go
+        run: go test -count=1 -v ./internal/messaging -run 'TestRabbitMQRuntimeRecoveryRetryDLQAndChannelRecreation'
+
       - name: Test backend
         working-directory: backend-go
         run: go test ./...
