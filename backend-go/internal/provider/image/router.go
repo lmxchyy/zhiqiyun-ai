@@ -10,6 +10,7 @@ import (
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
+	"xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type Router struct {
@@ -69,24 +70,11 @@ func isFallbackEligible(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err) {
+	var classified providerexecution.ClassifiedError
+	if !errors.As(err, &classified) {
 		return false
 	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "returned 429") ||
-		strings.Contains(lower, "returned 403") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "insufficient_quota") ||
-		strings.Contains(lower, "quota exceeded") ||
-		strings.Contains(lower, "no available image quota") ||
-		strings.Contains(lower, "forbidden") ||
-		strings.Contains(lower, "unauthorized") ||
-		strings.Contains(lower, "permission denied") ||
-		strings.Contains(lower, "无权访问") ||
-		strings.Contains(lower, "connection refused") ||
-		strings.Contains(lower, "no such host") ||
-		strings.Contains(lower, "network is unreachable")
+	return classified.Class == providerexecution.DefinitiveNotSubmitted || classified.Class == providerexecution.RetryableBeforeSubmit
 }
 
 type providersJSON struct {

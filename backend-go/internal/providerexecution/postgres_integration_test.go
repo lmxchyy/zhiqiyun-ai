@@ -6,6 +6,7 @@ import (
 	"errors"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +22,41 @@ func openProviderExecutionTestDB(t *testing.T, dsn string) *sql.DB {
 		db.Close()
 		t.Fatal(err)
 	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "database", "migrations", "114-provider-execution-safety.sql"))
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), string(raw)); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
 	return db
+}
+
+func TestProviderExecutionMigrationFreshAndReplayCompatible(t *testing.T) {
+	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
+	}
+	db := openProviderExecutionTestDB(t, dsn)
+	defer db.Close()
+	migrationPath := filepath.Join("..", "..", "..", "database", "migrations", "114-provider-execution-safety.sql")
+	raw, err := os.ReadFile(migrationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for replay := 0; replay < 2; replay++ {
+		if _, err := db.ExecContext(context.Background(), string(raw)); err != nil {
+			t.Fatalf("migration replay %d: %v", replay+1, err)
+		}
+	}
+	for _, column := range []string{"provider_operation_key", "result_metadata"} {
+		var exists bool
+		if err := db.QueryRowContext(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='provider_executions' AND column_name=$1)`, column).Scan(&exists); err != nil || !exists {
+			t.Fatalf("column %s exists=%v err=%v", column, exists, err)
+		}
+	}
 }
 
 func TestPostgresProviderExecutionStore(t *testing.T) {

@@ -34,7 +34,10 @@ func newImageProvider(cfg config.Config) imageProvider {
 		baseURL: strings.TrimSpace(cfg.ModelProviderURL),
 		apiKey:  strings.TrimSpace(cfg.ModelProviderAPIKey),
 		model:   strings.TrimSpace(cfg.ImageModel),
-		client:  &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
+		client: &http.Client{
+			Timeout:       time.Duration(timeoutMS) * time.Millisecond,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 
@@ -53,21 +56,7 @@ func (p imageProvider) generate(ctx context.Context, req createGenerationTaskReq
 		}
 		editCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
-		images, err := p.edit(editCtx, req, references)
-		if err == nil {
-			return images, nil
-		}
-		_, width, height := imageSize(req.Params)
-		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 90*time.Second)
-		defer fallbackCancel()
-		fallbackImages, fallbackErr := p.generateWithReferences(fallbackCtx, req, references, width, height)
-		if fallbackErr == nil {
-			return fallbackImages, nil
-		}
-		if isTimeoutError(err) {
-			return nil, fmt.Errorf("当前图片上游未响应参考图生图接口，且兼容参考图生成也失败: edits timeout: %w; generation fallback: %v", err, fallbackErr)
-		}
-		return nil, fmt.Errorf("参考图生图失败: edits error: %w; generation fallback: %v", err, fallbackErr)
+		return p.edit(editCtx, req, references)
 	}
 	count := imageCount(req.Params)
 	size, width, height := imageSize(req.Params)
@@ -85,27 +74,7 @@ func (p imageProvider) generate(ctx context.Context, req createGenerationTaskReq
 		"size":            size,
 		"response_format": "b64_json",
 	}
-	images, err := p.generateWithBody(ctx, body, width, height)
-	if err == nil {
-		return images, nil
-	}
-	if isTimeoutError(err) {
-		return nil, err
-	}
-	delete(body, "response_format")
-	images, retryErr := p.generateWithBody(ctx, body, width, height)
-	if retryErr == nil {
-		return images, nil
-	}
-	if isTimeoutError(retryErr) {
-		return nil, retryErr
-	}
-	body["response_format"] = "url"
-	images, urlErr := p.generateWithBody(ctx, body, width, height)
-	if urlErr == nil {
-		return images, nil
-	}
-	return nil, err
+	return p.generateWithBody(ctx, body, width, height)
 }
 
 func (p imageProvider) edit(ctx context.Context, req createGenerationTaskRequest, references []referenceImage) ([]generatedImage, error) {
@@ -133,33 +102,10 @@ func (p imageProvider) edit(ctx context.Context, req createGenerationTaskRequest
 		fields["response_format"] = "b64_json"
 	}
 	images, err := p.editWithCompatibleFields(ctx, fields, references, width, height)
-	if err == nil {
-		return images, nil
-	}
-	if isTimeoutError(err) {
-		return nil, err
-	}
-	if isGPTImage2Model(model) {
+	if err != nil && isGPTImage2Model(model) {
 		return nil, fmt.Errorf("GPT-Image-2 image edit failed: %w", err)
 	}
-	delete(fields, "response_format")
-	images, retryErr := p.editWithCompatibleFields(ctx, fields, references, width, height)
-	if retryErr == nil {
-		return images, nil
-	}
-	if isTimeoutError(retryErr) {
-		return nil, retryErr
-	}
-	fields["response_format"] = "url"
-	images, urlErr := p.editWithCompatibleFields(ctx, fields, references, width, height)
-	if urlErr == nil {
-		return images, nil
-	}
-	images, fallbackErr := p.generateWithReferences(ctx, req, references, width, height)
-	if fallbackErr == nil {
-		return images, nil
-	}
-	return nil, fmt.Errorf("image-to-image failed; edits error: %w; compatible generation fallback error: %v", err, fallbackErr)
+	return images, err
 }
 
 func (p imageProvider) generateWithReferences(ctx context.Context, req createGenerationTaskRequest, references []referenceImage, width int, height int) ([]generatedImage, error) {
@@ -189,39 +135,11 @@ func (p imageProvider) generateWithReferences(ctx context.Context, req createGen
 	if len(referenceURLs) > 0 {
 		body["image"] = referenceURLs[0]
 	}
-	images, err := p.generateWithBody(ctx, body, width, height)
-	if err == nil {
-		return images, nil
-	}
-	if isTimeoutError(err) {
-		return nil, err
-	}
-	delete(body, "response_format")
-	images, retryErr := p.generateWithBody(ctx, body, width, height)
-	if retryErr == nil {
-		return images, nil
-	}
-	if isTimeoutError(retryErr) {
-		return nil, retryErr
-	}
-	body["response_format"] = "url"
-	images, urlErr := p.generateWithBody(ctx, body, width, height)
-	if urlErr == nil {
-		return images, nil
-	}
-	return nil, err
+	return p.generateWithBody(ctx, body, width, height)
 }
 
 func (p imageProvider) editWithCompatibleFields(ctx context.Context, fields map[string]string, references []referenceImage, width int, height int) ([]generatedImage, error) {
-	images, err := p.editWithFields(ctx, fields, references, width, height, "image[]")
-	if err == nil || isTimeoutError(err) {
-		return images, err
-	}
-	fallbackImages, fallbackErr := p.editWithFields(ctx, fields, references, width, height, "image")
-	if fallbackErr == nil {
-		return fallbackImages, nil
-	}
-	return nil, fmt.Errorf("image[] edit error: %w; image edit fallback error: %v", err, fallbackErr)
+	return p.editWithFields(ctx, fields, references, width, height, "image[]")
 }
 
 func addOptionalImageEditFields(fields map[string]string, params map[string]any, count int) {
@@ -364,21 +282,8 @@ func (p imageProvider) generateWithBody(ctx context.Context, body map[string]any
 }
 
 func (p imageProvider) doJSONWithRetry(ctx context.Context, endpoint string, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt += 1 {
-		raw, status, err := p.doJSON(ctx, endpoint, payload)
-		if err == nil {
-			return raw, nil
-		}
-		lastErr = err
-		if !isTransientProviderStatus(status) || attempt == 2 {
-			return nil, err
-		}
-		if !sleepWithContext(ctx, time.Duration(attempt+1)*700*time.Millisecond) {
-			return nil, ctx.Err()
-		}
-	}
-	return nil, lastErr
+	raw, _, err := p.doJSON(ctx, endpoint, payload)
+	return raw, err
 }
 
 func (p imageProvider) doJSON(ctx context.Context, endpoint string, payload []byte) ([]byte, int, error) {

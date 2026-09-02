@@ -23,6 +23,8 @@ import (
 	"xianzhi-ai/backend-go/internal/app/generation"
 )
 
+type videoProviderOperationKeyContextKey struct{}
+
 type OpenAICompatible struct {
 	code          string
 	baseURL       string
@@ -69,12 +71,19 @@ func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatib
 		model:         model,
 		models:        models,
 		endpoint:      strings.TrimSpace(opts.Endpoint),
-		client:        &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
+		client:        videoGenerationHTTPClient(time.Duration(timeoutMS) * time.Millisecond),
 		timeoutMS:     timeoutMS,
 		outputDir:     strings.TrimSpace(opts.OutputDir),
 		publicURLBase: strings.TrimSpace(opts.PublicURLBase),
 		bridgeScript:  strings.TrimSpace(opts.BridgeScript),
 		bridgePython:  strings.TrimSpace(opts.BridgePython),
+	}
+}
+
+func videoGenerationHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
@@ -115,6 +124,9 @@ func (p OpenAICompatible) Get(ctx context.Context, providerTaskID string) (any, 
 }
 
 func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateRequest) (any, error) {
+	if key := strings.TrimSpace(req.ClientRequestID); key != "" && p.supportsNativeIdempotency() {
+		ctx = context.WithValue(ctx, videoProviderOperationKeyContextKey{}, key)
+	}
 	if strings.TrimSpace(p.baseURL) == "" || strings.TrimSpace(p.apiKey) == "" {
 		return nil, errors.New("video provider requires base url and api key")
 	}
@@ -179,6 +191,7 @@ func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateReque
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
+	p.setIdempotencyHeader(ctx, httpReq)
 	return p.finishVideoCreate(ctx, httpReq, model, req)
 }
 
@@ -228,7 +241,23 @@ func (p OpenAICompatible) createGrokImagineMultipart(ctx context.Context, model 
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+	p.setIdempotencyHeader(ctx, httpReq)
 	return p.finishVideoCreate(ctx, httpReq, model, req)
+}
+
+func (p OpenAICompatible) supportsNativeIdempotency() bool {
+	parsed, err := url.Parse(strings.TrimSpace(p.baseURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.com")
+}
+
+func (p OpenAICompatible) setIdempotencyHeader(ctx context.Context, req *http.Request) {
+	if key, _ := ctx.Value(videoProviderOperationKeyContextKey{}).(string); strings.TrimSpace(key) != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
 }
 
 func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.Request, model string, req generation.CreateRequest) (any, error) {
@@ -245,6 +274,9 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, fmt.Errorf("decode video provider response: %w", err)
 	}
+	// Polling is a GET-only operation and therefore cannot duplicate the
+	// generation submission. Preserve the existing synchronous video contract;
+	// guarded recovery still prevents a second Create after an ambiguous POST.
 	decoded = p.pollVideoResult(ctx, decoded, model)
 	videoURL := extractPlayableVideoURL(decoded)
 	thumbnailURL := firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster", "image_url")

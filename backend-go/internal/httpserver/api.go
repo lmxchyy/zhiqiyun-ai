@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -252,6 +253,20 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 		updatedTime, err := time.Parse(time.RFC3339Nano, updatedAt)
 		if err != nil || now.Sub(updatedTime.UTC()) < taskMaxAge {
 			continue
+		}
+		if execution, found, executionErr := providerExecutionForRetry(a.store, a.cfg, task.ID); executionErr != nil {
+			continue
+		} else if found {
+			switch execution.Status {
+			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
+				// Provider work may be in flight, ambiguous, or durably available for
+				// local completion. Never release its reservation as stale.
+				continue
+			case providerexecution.Failed:
+				if execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
+					continue
+				}
+			}
 		}
 		_, _ = a.store.FailGenerationTask(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
 	}
@@ -984,6 +999,15 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	terminal, err := a.generationTaskTerminal(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if terminal {
+		// A cancelled/failed task may have a queued goroutine or redelivered
+		// message. Never start provider work for a terminal local task.
+		return nil
+	}
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareImageTask(ctx, req)
 	if err != nil {
@@ -1005,13 +1029,14 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 	prepared, storedFiles, err := a.persistGeneratedImages(ctx, taskID, prepared)
 	if err != nil {
-		a.failImageGenerationTask(taskID, "persistence", startedAt, err)
+		// The provider result is durable. Preserve the reservation and let local
+		// recovery retry storage without another provider submission.
 		return err
 	}
 	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
 	if err != nil {
-		a.cleanupGeneratedFiles(storedFiles)
-		a.failImageGenerationTask(taskID, "completion", startedAt, err)
+		// Commit outcome may be ambiguous. Durable provider/local artifacts and
+		// the reservation must remain available for idempotent completion.
 		return err
 	}
 	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
@@ -1019,6 +1044,30 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	}
 	log.Printf("generation task finished task_id=%s status=%s elapsed_ms=%d", taskID, completed.Status, time.Since(startedAt).Milliseconds())
 	return nil
+}
+
+func (a api) generationTaskTerminal(ctx context.Context, taskID string) (bool, error) {
+	if pg, ok := a.store.(*postgresStore); ok && pg != nil && pg.db != nil {
+		var status string
+		err := pg.db.QueryRowContext(ctx, `SELECT status FROM xz_generation_tasks WHERE id=$1`, taskID).Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("generation task %s not found", taskID)
+		}
+		if err != nil {
+			return false, err
+		}
+		return !isRunningGenerationTaskStatus(status), nil
+	}
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		return false, err
+	}
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return !isRunningGenerationTaskStatus(task.Status), nil
+		}
+	}
+	return false, fmt.Errorf("generation task %s not found", taskID)
 }
 
 func (a api) configuredImageGenerationTimeout() time.Duration {
@@ -1133,10 +1182,14 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	terminal, err := a.generationTaskTerminal(ctx, taskID)
+	if err != nil || terminal {
+		return
+	}
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
-		if errors.Is(err, providerexecution.ErrProviderStillProcessing) {
+		if errors.Is(err, providerexecution.ErrProviderStillProcessing) || errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) {
 			return
 		}
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
@@ -1166,33 +1219,11 @@ func shouldFallbackImageGeneration(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	var classified providerexecution.ClassifiedError
+	if !errors.As(err, &classified) {
 		return false
 	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "returned 502") ||
-		strings.Contains(lower, "returned 503") ||
-		strings.Contains(lower, "returned 504") ||
-		strings.Contains(lower, "returned 429") ||
-		strings.Contains(lower, "returned 403") ||
-		strings.Contains(lower, "gateway time-out") ||
-		strings.Contains(lower, "gateway timeout") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "insufficient_quota") ||
-		strings.Contains(lower, "quota exceeded") ||
-		strings.Contains(lower, "no available image quota") ||
-		strings.Contains(lower, "forbidden") ||
-		strings.Contains(lower, "unauthorized") ||
-		strings.Contains(lower, "permission denied") ||
-		strings.Contains(lower, "无权访问") ||
-		strings.Contains(lower, "connection refused") ||
-		strings.Contains(lower, "no such host") ||
-		strings.Contains(lower, "network is unreachable") ||
-		strings.Contains(lower, "connection reset") ||
-		strings.Contains(lower, "context deadline exceeded") ||
-		strings.Contains(lower, "client.timeout") ||
-		strings.Contains(lower, "timeout awaiting response")
+	return classified.Class == providerexecution.DefinitiveNotSubmitted || classified.Class == providerexecution.RetryableBeforeSubmit
 }
 
 func compactGenerationErrorMessage(message string) string {

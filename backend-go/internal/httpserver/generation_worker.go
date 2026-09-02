@@ -81,6 +81,13 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 		_ = tx.Rollback()
 		return messaging.Permanent(fmt.Errorf("generation task %s is not an image canary", taskID))
 	}
+	if !isRunningGenerationTaskStatus(task.Status) {
+		if err := inbox.CompleteTx(shortCtx, tx, generationImageCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		return tx.Commit()
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -105,8 +112,16 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	// second Create/Generate call; returning here would acknowledge a
 	// succeeded provider row while the generation task is still pending.
 	if err := a.runGenerationTask(taskID, service, req); err != nil {
-		// Keep the inbox message retryable while the provider outcome is still
-		// queryable or explicitly blocked; no provider resubmission occurs.
+		// A definitive failure settles/releases the task. Ack it so broker
+		// redelivery cannot create another pre-submit provider attempt against a
+		// terminal task. Ambiguous/deferred states remain active and retryable.
+		terminal, checkErr := a.completeCanaryInboxIfTerminal(inbox, envelope.EventID, taskID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if terminal {
+			return nil
+		}
 		return err
 	}
 
@@ -121,6 +136,27 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 		return err
 	}
 	return finishTx.Commit()
+}
+
+func (a api) completeCanaryInboxIfTerminal(inbox *messaging.InboxStore, eventID, taskID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tx, err := a.pgDB().BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	task, err := generationTaskForUpdate(ctx, tx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if isRunningGenerationTaskStatus(task.Status) {
+		return false, nil
+	}
+	if err := inbox.CompleteTx(ctx, tx, generationImageCanaryConsumer, eventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 func (a api) pgDB() *sql.DB { return a.store.(*postgresStore).db }

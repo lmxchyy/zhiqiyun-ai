@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/config"
+	"xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 func referDemoUserToDefaultAgent(t *testing.T, store *jsonStore) {
@@ -416,10 +417,14 @@ func TestGenerationErrorMessageLocalizesEnglishTechnicalErrors(t *testing.T) {
 	}
 }
 
-func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
+func TestImageProviderFallbackRequiresDefinitivePreSubmitClassification(t *testing.T) {
 	err := errors.New("image provider returned 429: Upstream rate limit exceeded")
-	if !shouldFallbackImageGeneration(err) {
-		t.Fatal("HTTP 429 image provider errors should trigger fallback")
+	if shouldFallbackImageGeneration(err) {
+		t.Fatal("untyped HTTP 429 cannot prove that generation was not submitted")
+	}
+	preSubmit := providerexecution.ClassifiedError{Class: providerexecution.DefinitiveNotSubmitted, Err: err}
+	if !shouldFallbackImageGeneration(preSubmit) {
+		t.Fatal("definitive pre-submit failure should permit fallback")
 	}
 	want := "图像上游频率或额度受限，已尝试备用通道，请稍后重试或更换上游 API Key"
 	if got := generationErrorMessage(err); got != want {
@@ -427,8 +432,8 @@ func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
 	}
 
 	permissionErr := errors.New("image provider returned 403: 无权访问 生图备用 分组")
-	if !shouldFallbackImageGeneration(permissionErr) {
-		t.Fatal("HTTP 403 upstream permission errors should trigger fallback")
+	if shouldFallbackImageGeneration(permissionErr) {
+		t.Fatal("untyped HTTP 403 cannot prove pre-submit failure")
 	}
 	wantPermission := "图像上游权限或分组不可用，已尝试备用通道，请检查上游 API Key、分组和模型权限"
 	if got := generationErrorMessage(permissionErr); got != wantPermission {
@@ -436,8 +441,8 @@ func TestImageProviderRateLimitTriggersFallbackMessage(t *testing.T) {
 	}
 
 	networkErr := errors.New(`Post "http://localhost:8001/v1/images/generations": dial tcp [::1]:8001: connect: connection refused`)
-	if !shouldFallbackImageGeneration(networkErr) {
-		t.Fatal("connection refused errors should trigger fallback")
+	if shouldFallbackImageGeneration(networkErr) {
+		t.Fatal("untyped transport failure cannot prove pre-submit failure")
 	}
 	wantNetwork := "图像上游网络不可达，已尝试备用通道，请检查上游地址或本地代理服务"
 	if got := generationErrorMessage(networkErr); got != wantNetwork {

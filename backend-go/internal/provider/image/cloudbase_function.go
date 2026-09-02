@@ -69,7 +69,10 @@ func NewCloudBaseFunction(opts CloudBaseFunctionOptions) CloudBaseFunction {
 		defaultModel:  defaultModel,
 		models:        models,
 		watermarkText: watermark,
-		client:        &http.Client{Timeout: time.Duration(timeout) * time.Millisecond},
+		client: &http.Client{
+			Timeout:       time.Duration(timeout) * time.Millisecond,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 

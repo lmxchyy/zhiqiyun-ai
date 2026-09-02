@@ -18,7 +18,10 @@ func (s *Store) CreatePrepared(ctx context.Context, e Execution) (Execution, err
 		e.Attempt = 1
 	}
 	e.Status = Prepared
-	row := s.DB.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint)
+	if e.ProviderOperationKey == "" {
+		e.ProviderOperationKey = fmt.Sprintf("generation:%s:%d", e.TaskID, e.Attempt)
+	}
+	row := s.DB.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey)
 	if err := row.Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt); err != nil {
 		return Execution{}, err
 	}
@@ -26,19 +29,43 @@ func (s *Store) CreatePrepared(ctx context.Context, e Execution) (Execution, err
 }
 
 func (s *Store) GetByID(ctx context.Context, id int64) (Execution, error) {
-	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_request_id,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE id=$1`, id)
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE id=$1`, id)
 }
 func (s *Store) GetActiveByTask(ctx context.Context, taskID string) (Execution, error) {
-	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_request_id,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 AND status NOT IN ('succeeded','failed') ORDER BY attempt DESC LIMIT 1`, taskID)
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 AND status NOT IN ('succeeded','failed') ORDER BY attempt DESC LIMIT 1`, taskID)
 }
 
 func (s *Store) GetLatestByTask(ctx context.Context, taskID string) (Execution, error) {
-	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_request_id,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1`, taskID)
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1`, taskID)
 }
 func (s *Store) get(ctx context.Context, q string, arg any) (Execution, error) {
 	var e Execution
-	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderRequestID, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
+	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderOperationKey, &e.ProviderRequestID, &e.ResultMetadata, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
 	return e, err
+}
+
+// SaveSucceededResult durably records the minimum provider result before local
+// asset/task completion. A replay can rebuild local completion without Submit.
+func (s *Store) SaveSucceededResult(ctx context.Context, id int64, providerRequestID *string, metadata []byte) error {
+	e, err := s.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err = ValidateTransition(e.Status, Succeeded); err != nil {
+		return err
+	}
+	result, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET status='succeeded',provider_request_id=COALESCE($1,provider_request_id),result_metadata=$2::jsonb,error_class=$3,last_error=NULL,succeeded_at=now(),updated_at=now() WHERE id=$4 AND status=$5`, providerRequestID, string(metadata), string(ProviderSucceeded), id, e.Status)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrTransitionConflict
+	}
+	return nil
 }
 
 func (s *Store) Transition(ctx context.Context, id int64, to Status, providerRequestID *string, errorClass, lastError *string) error {
@@ -82,7 +109,17 @@ func (s *Store) ClaimPrepared(ctx context.Context, taskID string) (Execution, er
 	if err = tx.Commit(); err != nil {
 		return Execution{}, err
 	}
-	return s.GetByID(ctx, id)
+	e, err := s.GetByID(ctx, id)
+	if err != nil {
+		return Execution{}, err
+	}
+	if e.ProviderOperationKey == "" {
+		e.ProviderOperationKey = fmt.Sprintf("generation:%s:%d", e.TaskID, e.Attempt)
+		if _, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET provider_operation_key=$1,updated_at=now() WHERE id=$2 AND provider_operation_key=''`, e.ProviderOperationKey, e.ID); err != nil {
+			return Execution{}, err
+		}
+	}
+	return e, nil
 }
 func (s *Store) MarkUnknown(ctx context.Context, id int64, class ErrorClass, msg string) error {
 	e, err := s.GetByID(ctx, id)

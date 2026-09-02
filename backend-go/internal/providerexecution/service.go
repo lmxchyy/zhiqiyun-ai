@@ -2,6 +2,7 @@ package providerexecution
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -49,14 +50,21 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 		}
 		return s.Store.GetByID(ctx, current.ID)
 	}
-	if sub.ProviderRequestID != "" {
-		if err := s.Store.Transition(ctx, current.ID, Submitted, ptr(sub.ProviderRequestID), nil, nil); err != nil {
+	if sub.Succeeded || sub.ProviderRequestID == "" {
+		manifest, marshalErr := json.Marshal(sub.ResultMetadata)
+		if marshalErr != nil {
+			_ = s.Store.MarkUnknown(ctx, current.ID, ProviderUnknown, marshalErr.Error())
+			return current, marshalErr
+		}
+		var requestID *string
+		if sub.ProviderRequestID != "" {
+			requestID = ptr(sub.ProviderRequestID)
+		}
+		if err := s.Store.SaveSucceededResult(ctx, current.ID, requestID, manifest); err != nil {
 			return current, err
 		}
-	} else {
-		if err := s.Store.Transition(ctx, current.ID, Succeeded, nil, nil, nil); err != nil {
-			return current, err
-		}
+	} else if err := s.Store.Transition(ctx, current.ID, Submitted, ptr(sub.ProviderRequestID), nil, nil); err != nil {
+		return current, err
 	}
 	return s.Store.GetByID(ctx, current.ID)
 }
@@ -88,7 +96,13 @@ func (s *Service) Recover(ctx context.Context, e Execution, a Adapter) (Executio
 		providerRequestIDPtr = ptr(providerRequestID)
 	}
 	switch q.Status {
-	case Submitted, Processing, Succeeded, Failed:
+	case Succeeded:
+		var manifest []byte
+		manifest, err = json.Marshal(q.ResultMetadata)
+		if err == nil {
+			err = s.Store.SaveSucceededResult(ctx, e.ID, providerRequestIDPtr, manifest)
+		}
+	case Submitted, Processing, Failed:
 		err = s.Store.Transition(ctx, e.ID, q.Status, providerRequestIDPtr, nil, nil)
 	default:
 		err = s.Store.MarkUnknown(ctx, e.ID, ProviderUnknown, "provider returned unknown status")
