@@ -167,7 +167,7 @@ jobs:
         env:
           RABBITMQ_DEFAULT_USER: guest
           RABBITMQ_DEFAULT_PASS: guest
-          RABBITMQ_DEFAULT_VHOST: /ci
+          RABBITMQ_DEFAULT_VHOST: ci
         ports:
           - 5672:5672
         options: >-

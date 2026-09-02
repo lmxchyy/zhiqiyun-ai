@@ -40,7 +40,14 @@ func (s *Store) GetLatestByTask(ctx context.Context, taskID string) (Execution, 
 }
 func (s *Store) get(ctx context.Context, q string, arg any) (Execution, error) {
 	var e Execution
-	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderOperationKey, &e.ProviderRequestID, &e.ResultMetadata, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
+	// result_metadata is nullable. Scanning SQL NULL directly into
+	// *json.RawMessage is rejected by database/sql, so scan into []byte and
+	// preserve NULL as a nil RawMessage.
+	var resultMetadata []byte
+	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderOperationKey, &e.ProviderRequestID, &resultMetadata, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
+	if err == nil && resultMetadata != nil {
+		e.ResultMetadata = append(e.ResultMetadata[:0], resultMetadata...)
+	}
 	return e, err
 }
 

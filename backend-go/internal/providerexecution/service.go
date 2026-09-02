@@ -32,13 +32,25 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 	if s == nil || s.Store == nil || a == nil {
 		return Execution{}, fmt.Errorf("provider execution dependencies are required")
 	}
+	if e.Attempt <= 0 {
+		e.Attempt = 1
+	}
 	created, err := s.Store.CreatePrepared(ctx, e)
 	if err != nil {
-		return Execution{}, err
+		// A concurrent retry may have prepared the same task/attempt first.
+		// Re-read only when the durable row matches this request; never turn an
+		// unrelated database error or a different attempt into an idempotent hit.
+		existing, readErr := s.Store.GetLatestByTask(ctx, e.TaskID)
+		if readErr != nil || existing.Attempt != e.Attempt || existing.RequestFingerprint != e.RequestFingerprint {
+			return Execution{}, err
+		}
+		created = existing
 	}
 	current, err := s.Store.ClaimPrepared(ctx, created.TaskID)
 	if err != nil {
-		return created, err
+		// Another process owns the durable execution. Do not submit from this
+		// process, even if the owner has not persisted its provider request yet.
+		return created, ErrTransitionConflict
 	}
 	sub, err := a.Submit(ctx)
 	if err != nil {
