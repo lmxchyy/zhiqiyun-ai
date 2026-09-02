@@ -3800,13 +3800,19 @@ func mutateJSONGenerationDurableFailure(data *platformData, points *JSONPersonal
 			return task, nil
 		}
 		pointCost := generationTaskReservedPointCost(task, task.PointCost)
-		if pointCost > 0 && generationTaskReservedAndActive(task) {
+		if pointCost > 0 {
+			if !generationTaskReservedAndActive(task) {
+				return generationTask{}, ErrPersonalPointReservationMarkerMissing
+			}
 			if err := validateGenerationTaskPersonalLotMarker(points.memory, task); err != nil {
 				return generationTask{}, err
 			}
 			account, accountErr := findPersonalAccount(points.memory, task.PersonalPointAccountID, task.UserID)
-			if accountErr != nil || account == nil {
+			if accountErr != nil {
 				return generationTask{}, accountErr
+			}
+			if account == nil {
+				return generationTask{}, ErrPersonalPointReservationMarkerMissing
 			}
 			available := int(account.AvailablePoints)
 			nextAvailable := available + pointCost

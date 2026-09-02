@@ -1056,15 +1056,12 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 	if !activeGenerationTaskStatus(task.Status) {
 		return generationTask{}, errors.New("only active tasks can be cancelled")
 	}
-	if execution, executionErr := providerexecution.NewStore(s.db).GetLatestByTask(ctx, id); executionErr == nil {
-		switch execution.Status {
-		case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
-			// Cancellation must not release a reservation while provider work is
-			// in-flight, ambiguous, or durably succeeded. Local recovery owns it.
-			return generationTask{}, errors.New("generation task has provider work in progress; cancellation is deferred")
-		}
-	} else if !errors.Is(executionErr, sql.ErrNoRows) {
+	if blocked, executionErr := s.providerExecutionBlocksLocalFailureTx(ctx, tx, id); executionErr != nil {
 		return generationTask{}, executionErr
+	} else if blocked {
+		// Cancellation must not release a reservation while provider work is
+		// in-flight, ambiguous, or durably succeeded. Local recovery owns it.
+		return generationTask{}, errors.New("generation task has provider work in progress; cancellation is deferred")
 	}
 	task, refunded, _, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, "用户取消生成", "CANCELLED", taskStatusCancelled)
 	if err != nil {

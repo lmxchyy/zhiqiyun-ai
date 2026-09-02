@@ -182,6 +182,10 @@ jobs:
             docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < "$file"
           done < <(find database/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]-*.sql' ! -name '*.down.sql' -print | sort)
 
+      - name: Test Batch A provider recovery (uncached)
+        working-directory: backend-go
+        run: go test -count=1 -v ./internal/providerexecution ./internal/httpserver -run 'TestTEST_|TestCrashMatrix|TestGuarded'
+
       - name: Test backend
         working-directory: backend-go
         run: go test ./...

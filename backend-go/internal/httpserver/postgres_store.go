@@ -17,6 +17,7 @@ import (
 	commissionapp "xianzhi-ai/backend-go/internal/app/commission"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 	"xianzhi-ai/backend-go/internal/messaging"
+	providerexecution "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type postgresStore struct {
@@ -1872,6 +1873,25 @@ func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, t
 	return task, refunded, true, nil
 }
 
+// providerExecutionBlocksLocalFailureTx locks the latest execution while
+// deciding whether a local repair may release billing.
+func (s *postgresStore) providerExecutionBlocksLocalFailureTx(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) {
+	var status string
+	err := tx.QueryRowContext(ctx, `select status from provider_executions where task_id=$1 order by attempt desc limit 1 for update`, taskID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	switch providerexecution.Status(status) {
+	case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -1893,13 +1913,18 @@ func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (ge
 	if err != nil {
 		return generationTask{}, err
 	}
+	if blocked, err := s.providerExecutionBlocksLocalFailureTx(ctx, tx, task.ID); err != nil {
+		return generationTask{}, err
+	} else if blocked {
+		return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for durable failure", task.ID)
+	}
 	if pointCost > 0 && generationTaskReservedAndActive(task) {
 		authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, false)
 		if err != nil {
 			return generationTask{}, err
 		}
 		if usesPersonalPoints != (authorization.ContextType != contextEnterprise) {
-			return generationTask{}, err
+			return generationTask{}, ErrPersonalPointContextMismatch
 		}
 		if usesPersonalPoints {
 			account, validatedPointCost, err := validatePostgresGenerationPersonalLotMarkerTx(ctx, tx, task)
@@ -1907,7 +1932,7 @@ func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (ge
 				return generationTask{}, err
 			}
 			if validatedPointCost != pointCost {
-				return generationTask{}, err
+				return generationTask{}, ErrPersonalPointImportConflict
 			}
 			nextAvailable := int(account.Available) + validatedPointCost
 			if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(validatedPointCost), IdempotencyKey: "generation:durable-release:" + task.ID}); err != nil {

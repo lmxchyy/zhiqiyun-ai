@@ -28,7 +28,9 @@ func TestStateTransitions(t *testing.T) {
 			t.Errorf("expected %s -> %s", p[0], p[1])
 		}
 	}
-	invalid := [][2]Status{{Succeeded, Submitting}, {Failed, Processing}, {Unknown, Prepared}, {Prepared, Processing}}
+	// Terminal provider success/failure must never be reopened by stale repair
+	// or a retry, while ambiguous states remain query/recovery-only.
+	invalid := [][2]Status{{Succeeded, Submitting}, {Succeeded, Failed}, {Succeeded, Unknown}, {Failed, Processing}, {Unknown, Prepared}, {Prepared, Processing}}
 	for _, p := range invalid {
 		if CanTransition(p[0], p[1]) {
 			t.Errorf("unexpected %s -> %s", p[0], p[1])

@@ -54,47 +54,41 @@ func (s *Store) get(ctx context.Context, q string, arg any) (Execution, error) {
 // SaveSucceededResult durably records the minimum provider result before local
 // asset/task completion. A replay can rebuild local completion without Submit.
 func (s *Store) SaveSucceededResult(ctx context.Context, id int64, providerRequestID *string, metadata []byte) error {
-	e, err := s.GetByID(ctx, id)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if err = ValidateTransition(e.Status, Succeeded); err != nil {
+	defer tx.Rollback()
+	var status Status
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM provider_executions WHERE id=$1 FOR UPDATE`, id).Scan(&status); err != nil {
 		return err
 	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET status='succeeded',provider_request_id=COALESCE($1,provider_request_id),result_metadata=$2::jsonb,error_class=$3,last_error=NULL,succeeded_at=now(),updated_at=now() WHERE id=$4 AND status=$5`, providerRequestID, string(metadata), string(ProviderSucceeded), id, e.Status)
-	if err != nil {
+	if err = ValidateTransition(status, Succeeded); err != nil {
 		return err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status='succeeded',provider_request_id=COALESCE($1,provider_request_id),result_metadata=$2::jsonb,error_class=$3,last_error=NULL,succeeded_at=now(),updated_at=now() WHERE id=$4`, providerRequestID, string(metadata), string(ProviderSucceeded), id); err != nil {
 		return err
 	}
-	if rows != 1 {
-		return ErrTransitionConflict
-	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) Transition(ctx context.Context, id int64, to Status, providerRequestID *string, errorClass, lastError *string) error {
-	e, err := s.GetByID(ctx, id)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if err = ValidateTransition(e.Status, to); err != nil {
+	defer tx.Rollback()
+	var from Status
+	if err = tx.QueryRowContext(ctx, `SELECT status FROM provider_executions WHERE id=$1 FOR UPDATE`, id).Scan(&from); err != nil {
 		return err
 	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET status=$1,provider_request_id=COALESCE($2,provider_request_id),error_class=$3,last_error=$4,submitted_at=CASE WHEN $1='submitted' THEN now() ELSE submitted_at END,processing_at=CASE WHEN $1='processing' THEN now() ELSE processing_at END,succeeded_at=CASE WHEN $1='succeeded' THEN now() ELSE succeeded_at END,failed_at=CASE WHEN $1='failed' THEN now() ELSE failed_at END,unknown_at=CASE WHEN $1='unknown' THEN now() ELSE unknown_at END,updated_at=now() WHERE id=$5 AND status=$6`, to, providerRequestID, errorClass, lastError, id, e.Status)
-	if err != nil {
+	if err = ValidateTransition(from, to); err != nil {
 		return err
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status=$1,provider_request_id=COALESCE($2,provider_request_id),error_class=$3,last_error=$4,submitted_at=CASE WHEN $1='submitted' THEN now() ELSE submitted_at END,processing_at=CASE WHEN $1='processing' THEN now() ELSE processing_at END,succeeded_at=CASE WHEN $1='succeeded' THEN now() ELSE succeeded_at END,failed_at=CASE WHEN $1='failed' THEN now() ELSE failed_at END,unknown_at=CASE WHEN $1='unknown' THEN now() ELSE unknown_at END,updated_at=now() WHERE id=$5`, to, providerRequestID, errorClass, lastError, id); err != nil {
 		return err
 	}
-	if rows != 1 {
-		return ErrTransitionConflict
-	}
-	return nil
+	return tx.Commit()
 }
 
 // ClaimPrepared changes exactly one prepared execution to submitting under a

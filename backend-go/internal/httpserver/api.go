@@ -258,10 +258,20 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 		if execution, found, executionErr := providerExecutionForRetry(a.store, a.cfg, task.ID); executionErr != nil {
 			continue
 		} else if found {
+			if execution.Status == providerexecution.Succeeded && len(execution.ResultMetadata) > 0 {
+				// Provider success is a local-completion-only recovery path. The
+				// durable manifest is the result; never call Prepare/Create/Generate
+				// (or fallback) again. Completion is idempotent under the task lock.
+				if err := a.recoverSucceededGenerationTask(task, execution); err != nil {
+					// Keep the task and reservation recoverable for the next repair.
+					continue
+				}
+				continue
+			}
 			switch execution.Status {
 			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
-				// Provider work may be in flight, ambiguous, or durably available for
-				// local completion. Never release its reservation as stale.
+				// Provider work may be in flight, ambiguous, or durably available
+				// without a usable manifest. Never release its reservation as stale.
 				continue
 			case providerexecution.Failed:
 				if execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
@@ -269,7 +279,10 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 				}
 			}
 		}
-		_, _ = a.store.FailGenerationTask(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
+		// Durable failure re-checks and locks provider execution in the same
+		// PostgreSQL transaction. A provider success/ambiguity must remain
+		// recoverable and must not release its reservation as stale.
+		_, _ = a.store.FailGenerationTaskDurable(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
 	}
 }
 
@@ -1047,6 +1060,52 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	return nil
 }
 
+// recoverSucceededGenerationTask rebuilds only local state from the provider
+// execution's durable manifest. It intentionally has no provider/service call.
+func (a api) recoverSucceededGenerationTask(task generationTask, execution providerexecution.Execution) error {
+	var req generation.CreateRequest
+	req.UserID = task.UserID
+	req.Type = task.Type
+	req.Prompt = task.Prompt
+	req.Model = task.Model
+	req.ModuleCode = task.ModuleCode
+	req.Params = cloneAnyMap(task.Params)
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	if isImageGenerationRequest(task.Type) {
+		if err := json.Unmarshal(execution.ResultMetadata, &req.GeneratedImages); err != nil || len(req.GeneratedImages) == 0 {
+			if err == nil {
+				err = errors.New("durable image result is empty")
+			}
+			return fmt.Errorf("decode durable image result: %w", err)
+		}
+		prepared, _, err := a.persistGeneratedImages(context.Background(), task.ID, req)
+		if err != nil {
+			return err
+		}
+		if _, err := a.store.CompleteGenerationTask(task.ID, prepared); err != nil {
+			// Keep locally persisted artifacts as durable work for the next
+			// completion retry; they must not trigger another provider call.
+			return err
+		}
+		return nil
+	}
+	var result map[string]any
+	if err := json.Unmarshal(execution.ResultMetadata, &result); err != nil || len(result) == 0 {
+		if err == nil {
+			err = errors.New("durable video result is empty")
+		}
+		return fmt.Errorf("decode durable video result: %w", err)
+	}
+	req.VideoTask = result
+	req.Params["providerTask"] = result
+	if _, err := a.store.CompleteGenerationTask(task.ID, req); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (a api) generationTaskTerminal(ctx context.Context, taskID string) (bool, error) {
 	if pg, ok := a.store.(*postgresStore); ok && pg != nil && pg.db != nil {
 		var status string
@@ -1201,8 +1260,11 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		prepared.Params["provider"] = provider
 		prepared.Params["provider_channel"] = provider
 	}
+	// Completion is the billing settlement boundary. If it fails, the
+	// provider result may already be durable and the task must remain
+	// recoverable; failing here would incorrectly release the reservation.
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
 	}
 }
 
