@@ -132,12 +132,17 @@ func (s *Service) StoreObjectIdempotent(ctx context.Context, input UploadInitInp
 	if source == nil {
 		return FileObject{}, ErrInvalidFileSize
 	}
-	// Generated artifacts are bounded by the same upload validation as all
-	// server-owned files. Buffering here lets every replay derive the exact
-	// same content identity before claiming or uploading anything.
-	payload, err := io.ReadAll(source)
+	// Validate the declared shape before reading, then cap the actual stream so
+	// a malicious or misreported source cannot allocate unbounded memory.
+	if _, _, err := s.validateUpload(input.FileName, input.FileSize, input.MIMEType); err != nil {
+		return FileObject{}, err
+	}
+	payload, err := io.ReadAll(io.LimitReader(source, s.options.MaxUploadBytes+1))
 	if err != nil {
 		return FileObject{}, fmt.Errorf("read idempotent artifact: %w", err)
+	}
+	if int64(len(payload)) > s.options.MaxUploadBytes || int64(len(payload)) != input.FileSize {
+		return FileObject{}, ErrInvalidFileSize
 	}
 	digest := sha256.Sum256(payload)
 	contentHash := hex.EncodeToString(digest[:])

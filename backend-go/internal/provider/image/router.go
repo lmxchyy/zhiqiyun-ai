@@ -76,10 +76,10 @@ func isFallbackEligible(err error) bool {
 		return false
 	}
 	var classified providerexecution.ClassifiedError
-	if !errors.As(err, &classified) {
-		return false
+	if errors.As(err, &classified) {
+		return classified.Class == providerexecution.DefinitiveNotSubmitted || classified.Class == providerexecution.RetryableBeforeSubmit
 	}
-	return classified.Class == providerexecution.DefinitiveNotSubmitted || classified.Class == providerexecution.RetryableBeforeSubmit
+	return false
 }
 
 type providersJSON struct {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	"xianzhi-ai/backend-go/internal/providerexecution"
 
 	"xianzhi-ai/backend-go/internal/config"
 
@@ -503,7 +504,11 @@ func (p OpenAICompatible) doJSON(ctx context.Context, endpoint string, payload [
 		return nil, res.StatusCode, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, res.StatusCode, fmt.Errorf("image provider returned %d: %s", res.StatusCode, providerErrorText(raw))
+		err := fmt.Errorf("image provider returned %d: %s", res.StatusCode, providerErrorText(raw))
+		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusUnauthorized {
+			return nil, res.StatusCode, providerexecution.ClassifiedError{Class: providerexecution.DefinitiveNotSubmitted, Err: err}
+		}
+		return nil, res.StatusCode, err
 	}
 	return raw, res.StatusCode, nil
 }

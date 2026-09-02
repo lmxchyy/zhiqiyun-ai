@@ -204,7 +204,7 @@ func (a api) persistConnectorVideo(ctx context.Context, taskID string, req gener
 	if !available {
 		return req, storagecenter.FileObject{}, raw, contentType, nil
 	}
-	file, err := a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
+	file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
 		TenantID: tenantID, UserID: req.UserID, FileName: fmt.Sprintf("%s.%s", taskID, extension),
 		FileSize: int64(len(raw)), MIMEType: contentType, BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE",
 	}, bytes.NewReader(raw))

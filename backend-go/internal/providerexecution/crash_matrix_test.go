@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"os/exec"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,9 +39,54 @@ func openCrashMatrixDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is required in CI")
+		}
 		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
 	}
 	return openProviderExecutionTestDB(t, dsn)
+}
+
+func TestCrashMatrixCSubprocessRecovery(t *testing.T) {
+	if os.Getenv("XIANZHI_CRASH_MATRIX_CHILD") == "1" {
+		db := openProviderExecutionTestDB(t, os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL"))
+		defer db.Close()
+		taskID := os.Getenv("XIANZHI_CRASH_MATRIX_TASK_ID")
+		latest, err := NewStore(db).GetLatestByTask(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered, err := (&Service{Store: NewStore(db)}).Recover(context.Background(), latest, &crashCountingAdapter{ledger: &crashProviderLedger{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recovered.Status != Unknown {
+			t.Fatalf("subprocess recovered status=%s, want unknown", recovered.Status)
+		}
+		return
+	}
+	dsn := os.Getenv("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL")
+	if dsn == "" {
+		if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is required in CI")
+		}
+		t.Skip("XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL is not configured")
+	}
+	db := openProviderExecutionTestDB(t, dsn)
+	defer db.Close()
+	taskID := "crash-subprocess-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, taskID)
+	store := NewStore(db)
+	createAndClaimExecution(t, store, taskID, "seedance-fast-2.0", "video", "subprocess-crash-fingerprint")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCrashMatrixCSubprocessRecovery$")
+	cmd.Env = append(os.Environ(),
+		"XIANZHI_CRASH_MATRIX_CHILD=1",
+		"XIANZHI_CRASH_MATRIX_TASK_ID="+taskID,
+		"XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL="+dsn,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("subprocess recovery failed: %v\n%s", err, output)
+	}
 }
 
 func deleteCrashMatrixExecution(t *testing.T, db *sql.DB, taskID string) {
@@ -135,7 +181,7 @@ func TestCrashMatrixCCrashBeforeSubmittedPersistence(t *testing.T) {
 		t.Fatalf("case C recovered status=%s, want unknown", recovered.Status)
 	}
 	if providerLedger.creates.Load() != 1 {
-		t.Fatalf("case C SECOND_BLIND_PROVIDER_SUBMISSION=YES: creates=%d", providerLedger.creates.Load())
+		t.Fatalf("case C provider submissions=%d, want exactly one", providerLedger.creates.Load())
 	}
 	if providerLedger.gets.Load() != 0 {
 		t.Fatalf("case C non-queryable execution unexpectedly queried provider: gets=%d", providerLedger.gets.Load())
