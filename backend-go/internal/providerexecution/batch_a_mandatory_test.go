@@ -268,7 +268,7 @@ func TestTEST_H_ConcurrentDuplicateLocalRecoveryCaptureAtMostOnce(t *testing.T) 
 	task := "batch-h-concurrent-" + time.Now().UTC().Format("20060102150405.000000000")
 	defer deleteCrashMatrixExecution(t, db, task)
 	store := NewStore(db)
-	claimed := createAndClaimExecution(t, store, task, "mock", "image", "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh-concurrent")
+	claimed := createAndClaimExecution(t, store, task, "mock", "image", "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh")
 	if err := store.SaveSucceededResult(ctx, claimed.ID, stringPtr("h-concurrent"), []byte(`[{"url":"https://example.test/h-concurrent.png"}]`)); err != nil {
 		t.Fatal(err)
 	}
