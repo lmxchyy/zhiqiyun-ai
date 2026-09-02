@@ -256,3 +256,49 @@ func TestTEST_H_DuplicateLocalRecoveryCaptureAtMostOnce(t *testing.T) {
 		t.Fatalf("duplicate recovery PROVIDER_SUBMIT_COUNT=%d provider_query_count=%d POINT_CAPTURE_COUNT<=1", ledger.creates.Load(), ledger.gets.Load())
 	}
 }
+
+// TestTEST_H_ConcurrentDuplicateLocalRecoveryCaptureAtMostOnce proves that
+// duplicate redeliveries racing in separate consumer processes converge on the
+// same durable success. Both may query the provider, but neither may submit or
+// create a second billing-equivalent success transition.
+func TestTEST_H_ConcurrentDuplicateLocalRecoveryCaptureAtMostOnce(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	task := "batch-h-concurrent-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, task)
+	store := NewStore(db)
+	claimed := createAndClaimExecution(t, store, task, "mock", "image", "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh-concurrent")
+	if err := store.SaveSucceededResult(ctx, claimed.ID, stringPtr("h-concurrent"), []byte(`[{"url":"https://example.test/h-concurrent.png"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &crashProviderLedger{result: QueryResult{Status: Succeeded, ProviderRequestID: "h-concurrent"}}
+	latest, err := store.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, recoverErr := (&Service{Store: NewStore(db)}).Recover(ctx, latest, &crashCountingAdapter{ledger: ledger, providerRequestID: "h-concurrent"})
+			results <- recoverErr
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for recoverErr := range results {
+		if recoverErr != nil {
+			t.Fatalf("concurrent duplicate recovery failed: %v", recoverErr)
+		}
+	}
+	final, err := store.GetByID(ctx, claimed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != Succeeded || ledger.creates.Load() != 0 || ledger.gets.Load() != 2 {
+		t.Fatalf("concurrent duplicate recovery status=%s submits=%d queries=%d POINT_CAPTURE_COUNT<=1", final.Status, ledger.creates.Load(), ledger.gets.Load())
+	}
+}
