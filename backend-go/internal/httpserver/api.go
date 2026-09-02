@@ -1082,6 +1082,11 @@ func (a api) recoverSucceededGenerationTask(task generationTask, execution provi
 			}
 			return fmt.Errorf("decode durable image result: %w", err)
 		}
+		// Recovery must preserve the same output-audit gate as the original
+		// worker. A provider success never authorizes bypassing content safety.
+		if err := a.auditPreparedGeneratedOutput(context.Background(), &req); err != nil {
+			return err
+		}
 		prepared, _, err := a.persistGeneratedImages(context.Background(), task.ID, req)
 		if err != nil {
 			return err

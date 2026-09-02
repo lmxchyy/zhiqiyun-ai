@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type Submission struct {
@@ -62,7 +63,7 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 		}
 		return s.Store.GetByID(ctx, current.ID)
 	}
-	if sub.Succeeded || sub.ProviderRequestID == "" {
+	if sub.Succeeded {
 		manifest, marshalErr := json.Marshal(sub.ResultMetadata)
 		if marshalErr != nil {
 			_ = s.Store.MarkUnknown(ctx, current.ID, ProviderUnknown, marshalErr.Error())
@@ -73,6 +74,12 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 			requestID = ptr(sub.ProviderRequestID)
 		}
 		if err := s.Store.SaveSucceededResult(ctx, current.ID, requestID, manifest); err != nil {
+			return current, err
+		}
+	} else if strings.TrimSpace(sub.ProviderRequestID) == "" {
+		// A non-successful submission without a provider request ID has no
+		// proven outcome. It is ambiguous, never a durable success.
+		if err := s.Store.MarkUnknown(ctx, current.ID, ProviderUnknown, "provider submission returned no request id"); err != nil {
 			return current, err
 		}
 	} else if err := s.Store.Transition(ctx, current.ID, Submitted, ptr(sub.ProviderRequestID), nil, nil); err != nil {
