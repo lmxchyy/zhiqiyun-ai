@@ -418,8 +418,12 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 	}
 	originalActive := isRunningGenerationTaskStatus(original.Status) || strings.EqualFold(original.Status, "RETRYING")
 	if hasExecution && !originalActive {
-		writeError(w, http.StatusConflict, errors.New("terminal generation task cannot resume an existing provider execution"))
-		return
+		if execution.Status != providerexecution.Failed || execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
+			writeError(w, http.StatusConflict, errors.New("terminal generation task cannot resume an existing provider execution"))
+			return
+		}
+		// A failed execution is retryable only when the provider outcome is
+		// proven safe-before-submit. The new child below gets a new execution.
 	}
 	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded) {
 		req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: cloneAnyMap(original.Params), ModuleCode: original.ModuleCode}

@@ -73,7 +73,8 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
-		if latest.RequestFingerprint != e.RequestFingerprint {
+		// Only an explicitly safe pre-submit failure may switch provider identity.
+		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
 			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
 		}
 		switch latest.Status {
@@ -189,7 +190,8 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
-		if latest.RequestFingerprint != e.RequestFingerprint {
+		// Only an explicitly safe pre-submit failure may switch provider identity.
+		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
 			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
 		}
 		switch latest.Status {

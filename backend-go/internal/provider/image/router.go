@@ -56,7 +56,12 @@ func (r Router) Generate(ctx context.Context, req generation.CreateRequest) ([]g
 			return images, nil
 		}
 		lastErr = err
-		if !isFallbackEligible(err) {
+		// When the durable execution guard owns this logical submission, the
+		// outer channel fallback must decide whether a new execution attempt is
+		// safe. Do not let this router submit to a second provider under the
+		// same execution identity.
+		guardedTaskID, _ := req.Params["_provider_execution_task_id"].(string)
+		if strings.TrimSpace(guardedTaskID) != "" || !isFallbackEligible(err) {
 			return nil, err
 		}
 	}

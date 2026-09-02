@@ -102,6 +102,24 @@ func (s *Service) StoreObject(ctx context.Context, input UploadInitInput, source
 	return completed, nil
 }
 
+// FindActiveBusinessFile returns an existing generated artifact so recovery
+// can reuse the logical file instead of uploading a second object.
+func (s *Service) FindActiveBusinessFile(ctx context.Context, tenantID, businessType, businessID, originalName string) (FileObject, bool, error) {
+	// Narrow the repository query by the deterministic artifact name first;
+	// do not scan an arbitrary page of a tenant's files (which can miss the
+	// existing result once the tenant has more than the page limit).
+	files, _, err := s.repo.ListFiles(ctx, FileFilter{TenantID: tenantID, BusinessType: businessType, Status: StatusActive, Query: originalName, Limit: 200})
+	if err != nil {
+		return FileObject{}, false, err
+	}
+	for _, file := range files {
+		if file.BusinessID == businessID && strings.HasPrefix(file.OriginalName, originalName) && file.Status == StatusActive {
+			return file, true, nil
+		}
+	}
+	return FileObject{}, false, nil
+}
+
 // StorageAvailable reports whether a tenant can resolve an enabled default
 // storage configuration. A missing configuration is a normal disabled state;
 // malformed or undecryptable configurations remain visible as errors.

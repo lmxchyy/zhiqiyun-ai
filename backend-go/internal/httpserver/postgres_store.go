@@ -1575,9 +1575,15 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
 	count := imageCount(req.Params)
 	for i := 0; i < count; i++ {
-		assetID, err := nextTableID(ctx, tx, "xz_assets", "asset")
+		assetID, err := existingGenerationAssetID(ctx, tx, task.ID, i+1)
 		if err != nil {
 			return generationTask{}, err
+		}
+		if assetID == "" {
+			assetID, err = nextTableID(ctx, tx, "xz_assets", "asset")
+			if err != nil {
+				return generationTask{}, err
+			}
 		}
 		task.ResultIDs = append(task.ResultIDs, assetID)
 		item := generatedAssetForRequest(req, userID, task.ID, assetID, i, now)
@@ -6166,6 +6172,15 @@ func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (genera
 	var item generationTask
 	err := tx.QueryRowContext(ctx, `select raw,coalesce(client_request_id,''),task_status,billing_status,coalesce(billing_rule_version_id,''),quoted_points,reserved_points,captured_points,released_points,refunded_points,supplier_cost,estimated_margin,coalesce(provider_channel,'') from xz_generation_tasks where id = $1 for update`, id).Scan(rawScanner(&item), &item.ClientRequestID, &item.TaskStatus, &item.BillingStatus, &item.BillingRuleVersionID, &item.QuotedPoints, &item.ReservedPoints, &item.CapturedPoints, &item.ReleasedPoints, &item.RefundedPoints, &item.SupplierCost, &item.EstimatedMargin, &item.ProviderChannel)
 	return item, err
+}
+
+func existingGenerationAssetID(ctx context.Context, tx *sql.Tx, taskID string, index int) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `select id from xz_assets where task_id=$1 and deleted_at is null and metadata->>'index'=$2 order by created_at asc, id asc limit 1 for update`, taskID, strconv.Itoa(index)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 func insertAsset(ctx context.Context, tx *sql.Tx, item asset) error {
