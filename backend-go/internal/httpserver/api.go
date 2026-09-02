@@ -1037,7 +1037,9 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	delete(prepared.Params, providerExecutionTaskParam)
 	if err := a.auditPreparedGeneratedOutput(ctx, &prepared); err != nil {
 		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
-		a.failImageGenerationTask(taskID, "content_audit", startedAt, err)
+		// The provider result was already durably persisted by the execution
+		// hook. A local audit failure must remain recoverable and must not release
+		// the reservation as if the provider had failed.
 		return err
 	}
 	a.recordContentAudit(taskID, "output", "generated_image", "", prepared)

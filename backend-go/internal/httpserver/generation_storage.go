@@ -59,7 +59,7 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 			return req, nil, fmt.Errorf("download generated image %d: %w", index+1, err)
 		}
 		fileName = fmt.Sprintf("%s-%02d.%s", taskID, index+1, extension)
-		file, err := a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
+		file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
 			TenantID:     tenantID,
 			UserID:       req.UserID,
 			FileName:     fileName,

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,6 +23,8 @@ const (
 )
 
 var safeSegmentPattern = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+var idempotentObjectMu sync.Mutex
 
 type Service struct {
 	repo    Repository
@@ -118,6 +122,45 @@ func (s *Service) FindActiveBusinessFile(ctx context.Context, tenantID, business
 		}
 	}
 	return FileObject{}, false, nil
+}
+
+// StoreObjectIdempotent serializes generated-artifact creation by its durable
+// business identity. PostgreSQL uses an advisory transaction lock so two
+// recovery workers cannot both observe a missing artifact and upload it.
+func (s *Service) StoreObjectIdempotent(ctx context.Context, input UploadInitInput, source io.Reader) (FileObject, error) {
+	key := strings.Join([]string{input.TenantID, input.BusinessType, input.BusinessID, input.FileName}, "|")
+	if repo, ok := s.repo.(*PostgresRepository); ok && repo != nil && repo.db != nil && strings.TrimSpace(input.BusinessID) != "" {
+		tx, err := repo.db.BeginTx(ctx, nil)
+		if err != nil {
+			return FileObject{}, err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+			return FileObject{}, err
+		}
+		var existing FileObject
+		existing, err = scanFile(tx.QueryRowContext(ctx, `select `+fileColumns+` from xz_file_objects where tenant_id=$1 and business_type=$2 and business_id=$3 and original_name=$4 and status='ACTIVE' limit 1`, input.TenantID, input.BusinessType, input.BusinessID, input.FileName))
+		if err == nil {
+			if err := tx.Commit(); err != nil {
+				return FileObject{}, err
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return FileObject{}, err
+		}
+		file, err := s.StoreObject(ctx, input, source)
+		if err != nil {
+			return FileObject{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return FileObject{}, err
+		}
+		return file, nil
+	}
+	idempotentObjectMu.Lock()
+	defer idempotentObjectMu.Unlock()
+	return s.StoreObject(ctx, input, source)
 }
 
 // StorageAvailable reports whether a tenant can resolve an enabled default
