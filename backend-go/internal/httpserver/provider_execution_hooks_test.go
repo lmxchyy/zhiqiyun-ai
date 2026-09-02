@@ -110,7 +110,13 @@ func TestGuardedImageDurableSuccessReplayDoesNotGenerateAgain(t *testing.T) {
 	defer db.Close()
 	ctx := context.Background()
 	taskID := "hook-image-crash-" + time.Now().UTC().Format("20060102150405.000000000")
-	defer func() { _, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskID) }()
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE id=$1", taskID)
+	}()
+	if _, err := db.ExecContext(ctx, `INSERT INTO xz_generation_tasks (id,user_id,type,status,created_at,updated_at) VALUES ($1,'hook-user','image','PENDING',now()::text,now()::text)`, taskID); err != nil {
+		t.Fatal(err)
+	}
 	provider := &countingImageProvider{}
 	req := generation.CreateRequest{Model: "counting-image", Params: map[string]any{providerExecutionTaskParam: taskID, "provider": "counting-image"}}
 	first, err := guardedImage(ctx, req, provider, pe.NewStore(db))
