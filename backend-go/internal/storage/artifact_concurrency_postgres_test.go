@@ -20,6 +20,9 @@ func TestArtifactConcurrencyClaimIdentityPostgres(t *testing.T) {
 		dsn = os.Getenv("XIANZHI_TEST_DATABASE_URL")
 	}
 	if dsn == "" {
+		if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("XIANZHI_STORAGE_TEST_DATABASE_URL is required in CI")
+		}
 		t.Skip("XIANZHI_STORAGE_TEST_DATABASE_URL is not configured")
 	}
 	db, err := sql.Open("pgx", dsn)
@@ -40,9 +43,9 @@ func TestArtifactConcurrencyClaimIdentityPostgres(t *testing.T) {
 
 	base := FileObject{TenantID: tenant, UserID: "test-user", StorageConfigID: "test-config", Provider: "minio", Bucket: "test", ObjectKey: "tenants/test/artifacts/replay.png", OriginalName: "task-01.png", FileHash: "sha256-test", HashAlgorithm: "sha256", BusinessType: "generation_result", BusinessID: businessID, Visibility: "PRIVATE", Status: StatusPendingUpload, ReservedSize: 4, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	start := make(chan struct{})
-	errs := make(chan error, 2)
+	errs := make(chan error, 4)
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -65,7 +68,7 @@ func TestArtifactConcurrencyClaimIdentityPostgres(t *testing.T) {
 			t.Errorf("claim: %v", err)
 		}
 	}
-	if claimed != 1 || duplicates != 1 {
+	if claimed != 1 || duplicates != 3 {
 		t.Fatalf("claims=%d duplicates=%d", claimed, duplicates)
 	}
 	var count int

@@ -139,12 +139,12 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 		return nil, err
 	}
 	if !preparedExisting {
-		e, err = s.CreatePrepared(ctx, e)
+		e, err = s.CreatePreparedForGenerationTask(ctx, e)
 		if err != nil {
 			return nil, err
 		}
 	}
-	e, err = s.ClaimPrepared(ctx, taskID)
+	e, err = s.ClaimPreparedForGenerationTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,12 +285,12 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 		return nil, err
 	}
 	if !preparedExisting {
-		e, err = s.CreatePrepared(ctx, e)
+		e, err = s.CreatePreparedForGenerationTask(ctx, e)
 		if err != nil {
 			return nil, err
 		}
 	}
-	e, err = s.ClaimPrepared(ctx, taskID)
+	e, err = s.ClaimPreparedForGenerationTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}

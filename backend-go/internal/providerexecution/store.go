@@ -11,6 +11,17 @@ type Store struct{ DB *sql.DB }
 func NewStore(db *sql.DB) *Store { return &Store{DB: db} }
 
 func (s *Store) CreatePrepared(ctx context.Context, e Execution) (Execution, error) {
+	return s.createPrepared(ctx, e, false)
+}
+
+// CreatePreparedForGenerationTask establishes the task-row barrier before a
+// provider execution claim. Cancellation/stale repair use the same row lock;
+// therefore a terminal task can never acquire a new provider execution.
+func (s *Store) CreatePreparedForGenerationTask(ctx context.Context, e Execution) (Execution, error) {
+	return s.createPrepared(ctx, e, true)
+}
+
+func (s *Store) createPrepared(ctx context.Context, e Execution, lockTask bool) (Execution, error) {
 	if s == nil || s.DB == nil {
 		return Execution{}, fmt.Errorf("provider execution database is required")
 	}
@@ -20,6 +31,26 @@ func (s *Store) CreatePrepared(ctx context.Context, e Execution) (Execution, err
 	e.Status = Prepared
 	if e.ProviderOperationKey == "" {
 		e.ProviderOperationKey = fmt.Sprintf("generation:%s:%d", e.TaskID, e.Attempt)
+	}
+	if lockTask {
+		tx, err := s.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return Execution{}, err
+		}
+		defer tx.Rollback()
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, e.TaskID).Scan(&status); err != nil {
+			return Execution{}, err
+		}
+		switch status {
+		case "PENDING", "PROCESSING", "RUNNING", "QUEUED":
+		default:
+			return Execution{}, fmt.Errorf("generation task %s is terminal (%s)", e.TaskID, status)
+		}
+		if err := tx.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey).Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return Execution{}, err
+		}
+		return e, tx.Commit()
 	}
 	row := s.DB.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey)
 	if err := row.Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt); err != nil {
@@ -94,11 +125,32 @@ func (s *Store) Transition(ctx context.Context, id int64, to Status, providerReq
 // ClaimPrepared changes exactly one prepared execution to submitting under a
 // row lock. A crash in this window is intentionally recoverable as unknown.
 func (s *Store) ClaimPrepared(ctx context.Context, taskID string) (Execution, error) {
+	return s.claimPrepared(ctx, taskID, false)
+}
+
+// ClaimPreparedForGenerationTask locks the generation task and execution in a
+// single transaction. The lock is retained until submitting is durable.
+func (s *Store) ClaimPreparedForGenerationTask(ctx context.Context, taskID string) (Execution, error) {
+	return s.claimPrepared(ctx, taskID, true)
+}
+
+func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool) (Execution, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Execution{}, err
 	}
 	defer tx.Rollback()
+	if lockTask {
+		var status string
+		if err = tx.QueryRowContext(ctx, `SELECT status FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&status); err != nil {
+			return Execution{}, err
+		}
+		switch status {
+		case "PENDING", "PROCESSING", "RUNNING", "QUEUED":
+		default:
+			return Execution{}, fmt.Errorf("generation task %s is terminal (%s)", taskID, status)
+		}
+	}
 	var id int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM provider_executions WHERE task_id=$1 AND status='prepared' ORDER BY attempt FOR UPDATE SKIP LOCKED LIMIT 1`, taskID).Scan(&id)
 	if err != nil {

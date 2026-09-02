@@ -149,6 +149,62 @@ func TestTEST_E_ClaimPreparedVsStaleFailureRace(t *testing.T) {
 	}
 }
 
+func TestTEST_P0_CancelVsClaimBarrierNeverSubmitsAfterRelease(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	task := "p0-barrier-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, task)
+	if _, err := db.ExecContext(ctx, `insert into xz_generation_tasks (id,user_id,type,status,created_at,updated_at) values ($1,'p0','image','PENDING',now()::text,now()::text)`, task); err != nil {
+		t.Fatal(err)
+	}
+	defer db.ExecContext(ctx, `delete from xz_generation_tasks where id=$1`, task)
+	store := NewStore(db)
+	created, err := store.CreatePreparedForGenerationTask(ctx, Execution{TaskID: task, Provider: "mock", Capability: "image", RequestFingerprint: "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	claimed := make(chan error, 1)
+	cancelled := make(chan error, 1)
+	go func() { <-start; _, err := store.ClaimPreparedForGenerationTask(ctx, task); claimed <- err }()
+	go func() {
+		<-start
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			cancelled <- err
+			return
+		}
+		defer tx.Rollback()
+		var status, executionStatus string
+		if err = tx.QueryRowContext(ctx, `select status from xz_generation_tasks where id=$1 for update`, task).Scan(&status); err != nil {
+			cancelled <- err
+			return
+		}
+		_ = tx.QueryRowContext(ctx, `select status from provider_executions where task_id=$1 order by attempt desc limit 1 for update`, task).Scan(&executionStatus)
+		if executionStatus == "" {
+			_, err = tx.ExecContext(ctx, `update xz_generation_tasks set status='CANCELLED' where id=$1 and status='PENDING'`, task)
+		}
+		cancelled <- tx.Commit()
+	}()
+	close(start)
+	claimErr, cancelErr := <-claimed, <-cancelled
+	if claimErr != nil && cancelErr != nil {
+		t.Fatalf("both barrier writers failed: claim=%v cancel=%v", claimErr, cancelErr)
+	}
+	var status, executionStatus string
+	if err := db.QueryRowContext(ctx, `select status from xz_generation_tasks where id=$1`, task).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select status from provider_executions where id=$1`, created.ID).Scan(&executionStatus); err != nil {
+		t.Fatal(err)
+	}
+	if status == "CANCELLED" && executionStatus != string(Prepared) {
+		t.Fatalf("cancel released terminal task while execution=%s", executionStatus)
+	}
+	t.Logf("P0_CANCEL_CLAIM_BARRIER=PASS task=%s task_status=%s execution_status=%s", task, status, executionStatus)
+}
+
 func TestTEST_F_SucceededStaleRepairLocalOnlyRecoveryNoProviderCall(t *testing.T) {
 	db := openCrashMatrixDB(t)
 	defer db.Close()
