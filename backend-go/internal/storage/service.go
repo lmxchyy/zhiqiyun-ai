@@ -1,9 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
-	"database/sql"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,7 +25,7 @@ const (
 
 var safeSegmentPattern = regexp.MustCompile(`[^a-z0-9_-]+`)
 
-var idempotentObjectMu sync.Mutex
+var artifactUploadLocks sync.Map // deterministic object key -> *sync.Mutex
 
 type Service struct {
 	repo    Repository
@@ -124,43 +125,75 @@ func (s *Service) FindActiveBusinessFile(ctx context.Context, tenantID, business
 	return FileObject{}, false, nil
 }
 
-// StoreObjectIdempotent serializes generated-artifact creation by its durable
-// business identity. PostgreSQL uses an advisory transaction lock so two
-// recovery workers cannot both observe a missing artifact and upload it.
+// StoreObjectIdempotent implements claim -> upload -> finalize. Claims use the
+// durable identity unique index; no database transaction or advisory lock is
+// held while PutObject performs network I/O.
 func (s *Service) StoreObjectIdempotent(ctx context.Context, input UploadInitInput, source io.Reader) (FileObject, error) {
-	key := strings.Join([]string{input.TenantID, input.BusinessType, input.BusinessID, input.FileName}, "|")
-	if repo, ok := s.repo.(*PostgresRepository); ok && repo != nil && repo.db != nil && strings.TrimSpace(input.BusinessID) != "" {
-		tx, err := repo.db.BeginTx(ctx, nil)
-		if err != nil {
-			return FileObject{}, err
-		}
-		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
-			return FileObject{}, err
-		}
-		var existing FileObject
-		existing, err = scanFile(tx.QueryRowContext(ctx, `select `+fileColumns+` from xz_file_objects where tenant_id=$1 and business_type=$2 and business_id=$3 and original_name=$4 and status='ACTIVE' limit 1`, input.TenantID, input.BusinessType, input.BusinessID, input.FileName))
-		if err == nil {
-			if err := tx.Commit(); err != nil {
-				return FileObject{}, err
-			}
-			return existing, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return FileObject{}, err
-		}
-		file, err := s.StoreObject(ctx, input, source)
-		if err != nil {
-			return FileObject{}, err
-		}
-		if err := tx.Commit(); err != nil {
-			return FileObject{}, err
-		}
-		return file, nil
+	if source == nil {
+		return FileObject{}, ErrInvalidFileSize
 	}
-	idempotentObjectMu.Lock()
-	defer idempotentObjectMu.Unlock()
-	return s.StoreObject(ctx, input, source)
+	// Generated artifacts are bounded by the same upload validation as all
+	// server-owned files. Buffering here lets every replay derive the exact
+	// same content identity before claiming or uploading anything.
+	payload, err := io.ReadAll(source)
+	if err != nil {
+		return FileObject{}, fmt.Errorf("read idempotent artifact: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	contentHash := hex.EncodeToString(digest[:])
+	file, provider, err := s.preparePendingUpload(ctx, input, contentHash)
+	if err == nil {
+		return s.uploadAndFinalize(ctx, file, provider, bytes.NewReader(payload))
+	}
+	if !errors.Is(err, ErrArtifactAlreadyClaimed) {
+		return FileObject{}, err
+	}
+	files, _, listErr := s.repo.ListFiles(ctx, FileFilter{TenantID: input.TenantID, BusinessType: input.BusinessType, Query: input.FileName, Limit: 200})
+	if listErr != nil {
+		return FileObject{}, listErr
+	}
+	for _, existing := range files {
+		if existing.BusinessID == input.BusinessID && existing.OriginalName == input.FileName && (existing.Status == StatusPendingUpload || existing.Status == StatusActive) {
+			if existing.Status == StatusActive {
+				return existing, nil
+			}
+			if existing.Status == StatusPendingUpload {
+				provider, providerErr := s.providerForFile(ctx, existing)
+				if providerErr != nil {
+					return FileObject{}, providerErr
+				}
+				if strings.TrimSpace(existing.FileHash) != "" && existing.FileHash != contentHash {
+					return FileObject{}, fmt.Errorf("%w: artifact content identity mismatch", ErrArtifactAlreadyClaimed)
+				}
+				return s.uploadAndFinalize(ctx, existing, provider, bytes.NewReader(payload))
+			}
+		}
+	}
+	return FileObject{}, err
+}
+
+func (s *Service) uploadAndFinalize(ctx context.Context, file FileObject, provider Provider, source io.Reader) (FileObject, error) {
+	// Same-process recovery workers converge on one PUT. Cross-process workers
+	// use the deterministic content-addressed key and therefore converge on the
+	// same remote object even when both legitimately race outside the DB lock.
+	lockValue, _ := artifactUploadLocks.LoadOrStore(file.ObjectKey, &sync.Mutex{})
+	lock := lockValue.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+	if current, found, err := s.FindActiveBusinessFile(ctx, file.TenantID, file.BusinessType, file.BusinessID, file.OriginalName); err == nil && found {
+		return current, nil
+	}
+	metadata, err := provider.PutObject(ctx, file.ObjectKey, source, file.ReservedSize, file.MIMEType)
+	if err != nil {
+		return FileObject{}, fmt.Errorf("STORAGE_UPLOAD_FAILED: %w", err)
+	}
+	if metadata.Size != file.ReservedSize {
+		return FileObject{}, fmt.Errorf("%w: stored object size does not match reservation", ErrUploadConfirmFailed)
+	}
+	if strings.TrimSpace(metadata.ContentType) == "" {
+		metadata.ContentType = file.MIMEType
+	}
+	return s.repo.CompleteUpload(ctx, file.TenantID, file.FileID, metadata)
 }
 
 // StorageAvailable reports whether a tenant can resolve an enabled default
@@ -177,7 +210,7 @@ func (s *Service) StorageAvailable(ctx context.Context, tenantID string) (bool, 
 	return true, nil
 }
 
-func (s *Service) preparePendingUpload(ctx context.Context, input UploadInitInput) (FileObject, Provider, error) {
+func (s *Service) preparePendingUpload(ctx context.Context, input UploadInitInput, contentHash ...string) (FileObject, Provider, error) {
 	input.TenantID = strings.TrimSpace(input.TenantID)
 	input.UserID = strings.TrimSpace(input.UserID)
 	if input.TenantID == "" || input.UserID == "" {
@@ -196,10 +229,24 @@ func (s *Service) preparePendingUpload(ctx context.Context, input UploadInitInpu
 		return FileObject{}, nil, err
 	}
 	fileID := newID("file")
-	objectID := newID("")
 	businessType := safeSegment(firstNonEmpty(input.BusinessType, "uploads"))
+	// Generated artifacts must address the same object after a crash. The
+	// identity is durable in the database and this digest makes the object key
+	// stable across retries and independent workers.
+	objectID := newID("")
+	if strings.TrimSpace(input.BusinessID) != "" {
+		identity := strings.Join([]string{input.TenantID, businessType, input.BusinessID, fileName}, "|")
+		if len(contentHash) > 0 && strings.TrimSpace(contentHash[0]) != "" {
+			identity += "|" + strings.TrimSpace(contentHash[0])
+		}
+		digest := sha256.Sum256([]byte(identity))
+		objectID = hex.EncodeToString(digest[:16])
+	}
 	now := time.Now().UTC()
 	objectKey := fmt.Sprintf("tenants/%s/%s/%04d/%02d/%02d/%s.%s", safeSegment(input.TenantID), businessType, now.Year(), int(now.Month()), now.Day(), objectID, extension)
+	if strings.TrimSpace(input.BusinessID) != "" {
+		objectKey = fmt.Sprintf("tenants/%s/%s/artifacts/%s.%s", safeSegment(input.TenantID), businessType, objectID, extension)
+	}
 	visibility := strings.ToUpper(strings.TrimSpace(input.Visibility))
 	if visibility == "" {
 		visibility = "PRIVATE"
@@ -213,6 +260,17 @@ func (s *Service) preparePendingUpload(ctx context.Context, input UploadInitInpu
 		OriginalName: fileName, StoredName: path.Base(objectKey), Extension: extension,
 		MIMEType: normalizeMIME(input.MIMEType), ReservedSize: input.FileSize,
 		BusinessType: businessType, BusinessID: strings.TrimSpace(input.BusinessID), Visibility: visibility,
+		FileHash: func() string {
+			if len(contentHash) > 0 {
+				return strings.TrimSpace(contentHash[0])
+			}
+			return ""
+		}(), HashAlgorithm: func() string {
+			if len(contentHash) > 0 {
+				return "sha256"
+			}
+			return ""
+		}(),
 		Status: StatusPendingUpload, IsTemporary: input.IsTemporary, ExpiresAt: input.ExpiresAt,
 		Metadata:  map[string]any{"declaredSize": input.FileSize, "declaredMimeType": normalizeMIME(input.MIMEType)},
 		CreatedAt: now, UpdatedAt: now,

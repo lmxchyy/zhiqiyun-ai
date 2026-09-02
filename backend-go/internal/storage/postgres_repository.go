@@ -158,16 +158,20 @@ func (r *PostgresRepository) CreatePending(ctx context.Context, file FileObject,
 		return ErrQuotaExceeded
 	}
 	metadata, _ := json.Marshal(file.Metadata)
-	_, err = tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
     insert into xz_file_objects (
       file_id,tenant_id,user_id,storage_config_id,provider,bucket,object_key,original_name,stored_name,
-      extension,mime_type,file_size,reserved_size,business_type,business_id,visibility,status,is_temporary,expires_at,metadata
-    ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,''),$12,$13,$14,nullif($15,''),$16,$17,$18,$19,$20::jsonb)
+      extension,mime_type,file_size,reserved_size,file_hash,hash_algorithm,business_type,business_id,visibility,status,is_temporary,expires_at,metadata
+    ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,nullif($10,''),nullif($11,''),$12,$13,nullif($14,''),nullif($15,''),$16,nullif($17,''),$18,$19,$20,$21,$22::jsonb)
+    ON CONFLICT (tenant_id,business_type,business_id,original_name) WHERE business_id IS NOT NULL AND status IN ('PENDING_UPLOAD','ACTIVE') DO NOTHING
   `, file.FileID, file.TenantID, file.UserID, file.StorageConfigID, file.Provider, file.Bucket, file.ObjectKey,
 		file.OriginalName, file.StoredName, file.Extension, file.MIMEType, file.FileSize, file.ReservedSize,
-		file.BusinessType, file.BusinessID, file.Visibility, file.Status, file.IsTemporary, file.ExpiresAt, string(metadata))
+		file.FileHash, file.HashAlgorithm, file.BusinessType, file.BusinessID, file.Visibility, file.Status, file.IsTemporary, file.ExpiresAt, string(metadata))
 	if err != nil {
 		return err
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 0 {
+		return ErrArtifactAlreadyClaimed
 	}
 	if _, err = tx.ExecContext(ctx, `update xz_tenant_storage_quotas set reserved_bytes=reserved_bytes+$2,updated_at=now() where tenant_id=$1`, file.TenantID, file.ReservedSize); err != nil {
 		return err

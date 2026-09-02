@@ -134,6 +134,7 @@ jobs:
     env:
       XIANZHI_ANALYTICS_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
       XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
+      XIANZHI_MESSAGING_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
       XIANZHI_MESSAGING_TEST_RABBITMQ_URL: amqp://guest:guest@127.0.0.1:5672/ci
 
     services:
@@ -188,8 +189,16 @@ jobs:
 
       - name: Test RabbitMQ integration (uncached)
         working-directory: backend-go
-        run: go test -count=1 -v ./internal/messaging -run 'TestRabbitMQRuntimeRecoveryRetryDLQAndChannelRecreation'
+        run: go test -count=1 -v ./internal/messaging -run 'TestRabbitMQRuntimeRecoveryRetryDLQAndChannelRecreation|TestRabbitMQGenerationManualAckRedelivery'
 
-      - name: Test backend
+      - name: Test artifact claim concurrency (uncached)
         working-directory: backend-go
-        run: go test ./...
+        run: go test -count=1 -v ./internal/storage -run 'TestArtifactConcurrencyClaimIdentity|TestArtifactConcurrencyClaimIdentityPostgres'
+
+      - name: Build backend
+        working-directory: backend-go
+        run: go build ./...
+
+      - name: Test backend (uncached)
+        working-directory: backend-go
+        run: go test -count=1 ./...
