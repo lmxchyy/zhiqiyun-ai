@@ -22,13 +22,15 @@ func TestFingerprintCanonicalAndExcludesOperationalFields(t *testing.T) {
 	}
 }
 func TestStateTransitions(t *testing.T) {
-	valid := [][2]Status{{Prepared, Submitting}, {Submitting, Submitted}, {Submitted, Processing}, {Processing, Succeeded}, {Submitting, Unknown}, {Unknown, Submitted}, {Unknown, Succeeded}, {Unknown, Failed}}
+	valid := [][2]Status{{Prepared, Submitting}, {Submitting, Submitted}, {Submitting, Processing}, {Submitting, Succeeded}, {Submitted, Processing}, {Processing, Succeeded}, {Submitting, Unknown}, {Unknown, Submitted}, {Unknown, Succeeded}, {Unknown, Failed}}
 	for _, p := range valid {
 		if !CanTransition(p[0], p[1]) {
 			t.Errorf("expected %s -> %s", p[0], p[1])
 		}
 	}
-	invalid := [][2]Status{{Succeeded, Submitting}, {Failed, Processing}, {Unknown, Prepared}, {Prepared, Processing}}
+	// Terminal provider success/failure must never be reopened by stale repair
+	// or a retry, while ambiguous states remain query/recovery-only.
+	invalid := [][2]Status{{Succeeded, Submitting}, {Succeeded, Failed}, {Succeeded, Unknown}, {Failed, Processing}, {Unknown, Prepared}, {Prepared, Processing}}
 	for _, p := range invalid {
 		if CanTransition(p[0], p[1]) {
 			t.Errorf("unexpected %s -> %s", p[0], p[1])

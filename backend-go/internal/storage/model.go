@@ -19,6 +19,7 @@ var (
 	ErrInvalidFileType      = errors.New("STORAGE_INVALID_FILE_TYPE")
 	ErrInvalidFileSize      = errors.New("STORAGE_INVALID_FILE_SIZE")
 	ErrUploadConfirmFailed  = errors.New("STORAGE_UPLOAD_CONFIRM_FAILED")
+	ErrArtifactAlreadyClaimed = errors.New("STORAGE_ARTIFACT_ALREADY_CLAIMED")
 	ErrDeleteFailed         = errors.New("STORAGE_DELETE_FAILED")
 	ErrSecretCipherRequired = errors.New("STORAGE_MASTER_KEY is required to manage storage credentials")
 	ErrBackupConfigNotFound = errors.New("BACKUP_STORAGE_CONFIG_NOT_FOUND")

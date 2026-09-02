@@ -17,6 +17,7 @@ import (
 	commissionapp "xianzhi-ai/backend-go/internal/app/commission"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
 	"xianzhi-ai/backend-go/internal/messaging"
+	providerexecution "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type postgresStore struct {
@@ -1574,9 +1575,15 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	applyTaskSupplierCost(&task, capabilityData.ProviderCosts)
 	count := imageCount(req.Params)
 	for i := 0; i < count; i++ {
-		assetID, err := nextTableID(ctx, tx, "xz_assets", "asset")
+		assetID, err := existingGenerationAssetID(ctx, tx, task.ID, i+1)
 		if err != nil {
 			return generationTask{}, err
+		}
+		if assetID == "" {
+			assetID, err = nextTableID(ctx, tx, "xz_assets", "asset")
+			if err != nil {
+				return generationTask{}, err
+			}
 		}
 		task.ResultIDs = append(task.ResultIDs, assetID)
 		item := generatedAssetForRequest(req, userID, task.ID, assetID, i, now)
@@ -1870,6 +1877,101 @@ func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, t
 		return generationTask{}, false, false, err
 	}
 	return task, refunded, true, nil
+}
+
+// providerExecutionBlocksLocalFailureTx locks the latest execution while
+// deciding whether a local repair may release billing.
+func (s *postgresStore) providerExecutionBlocksLocalFailureTx(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) {
+	var status string
+	err := tx.QueryRowContext(ctx, `select status from provider_executions where task_id=$1 order by attempt desc limit 1 for update`, taskID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	switch providerexecution.Status(status) {
+	case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return generationTask{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	task, err := generationTaskForUpdate(ctx, tx, id)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+		return task, tx.Commit()
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	pointCost := generationTaskReservedPointCost(task, task.PointCost)
+	usesPersonalPoints, err := generationTaskUsesPersonalPoints(task)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if blocked, err := s.providerExecutionBlocksLocalFailureTx(ctx, tx, task.ID); err != nil {
+		return generationTask{}, err
+	} else if blocked {
+		return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for durable failure", task.ID)
+	}
+	if pointCost > 0 && generationTaskReservedAndActive(task) {
+		authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, false)
+		if err != nil {
+			return generationTask{}, err
+		}
+		if usesPersonalPoints != (authorization.ContextType != contextEnterprise) {
+			return generationTask{}, ErrPersonalPointContextMismatch
+		}
+		if usesPersonalPoints {
+			account, validatedPointCost, err := validatePostgresGenerationPersonalLotMarkerTx(ctx, tx, task)
+			if err != nil {
+				return generationTask{}, err
+			}
+			if validatedPointCost != pointCost {
+				return generationTask{}, ErrPersonalPointImportConflict
+			}
+			nextAvailable := int(account.Available) + validatedPointCost
+			if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(validatedPointCost), IdempotencyKey: "generation:durable-release:" + task.ID}); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, int(account.Available), nextAvailable)
+		} else {
+			before := int64(intValue(task.Params[generationBillingReservationBalanceAfterKey]))
+			if err := s.reverseEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, int(before), int(before)+pointCost)
+			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RELEASE", pointCost, int(before), int(before)+pointCost, pointCost, 0, "生成失败解冻"); err != nil {
+				return generationTask{}, err
+			}
+		}
+		task.BillingStatus = billingStatusReleased
+		task.ReleasedPoints = float64(pointCost)
+		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RELEASE", float64(pointCost), nil); err != nil {
+			return generationTask{}, err
+		}
+	}
+	task.Status = "FAILED"
+	task.TaskStatus = taskStatusFailed
+	task.Progress = 100
+	task.Error = map[string]any{"message": message}
+	task.FailureReason = message
+	task.UpdatedAt = now
+	task.WorkerFinishedAt = now
+	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
+	}
+	return task, tx.Commit()
 }
 
 func generatedAssetForRequest(req createGenerationTaskRequest, userID string, taskID string, assetID string, index int, now string) asset {
@@ -6070,6 +6172,15 @@ func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (genera
 	var item generationTask
 	err := tx.QueryRowContext(ctx, `select raw,coalesce(client_request_id,''),task_status,billing_status,coalesce(billing_rule_version_id,''),quoted_points,reserved_points,captured_points,released_points,refunded_points,supplier_cost,estimated_margin,coalesce(provider_channel,'') from xz_generation_tasks where id = $1 for update`, id).Scan(rawScanner(&item), &item.ClientRequestID, &item.TaskStatus, &item.BillingStatus, &item.BillingRuleVersionID, &item.QuotedPoints, &item.ReservedPoints, &item.CapturedPoints, &item.ReleasedPoints, &item.RefundedPoints, &item.SupplierCost, &item.EstimatedMargin, &item.ProviderChannel)
 	return item, err
+}
+
+func existingGenerationAssetID(ctx context.Context, tx *sql.Tx, taskID string, index int) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `select id from xz_assets where task_id=$1 and deleted_at is null and metadata->>'index'=$2 order by created_at asc, id asc limit 1 for update`, taskID, strconv.Itoa(index)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 func insertAsset(ctx context.Context, tx *sql.Tx, item asset) error {

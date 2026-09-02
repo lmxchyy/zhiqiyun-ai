@@ -16,6 +16,9 @@ func messagingIntegrationURL(t *testing.T) string {
 	t.Helper()
 	raw := os.Getenv("XIANZHI_MESSAGING_TEST_RABBITMQ_URL")
 	if raw == "" {
+		if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("XIANZHI_MESSAGING_TEST_RABBITMQ_URL is required in CI")
+		}
 		t.Skip("XIANZHI_MESSAGING_TEST_RABBITMQ_URL is not configured")
 	}
 	parsed, err := url.Parse(raw)

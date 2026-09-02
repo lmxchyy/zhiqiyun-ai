@@ -323,6 +323,10 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if task, err := a.store.FailGenerationTaskDurable(id, "用户取消生成"); err == nil {
+		writeJSON(w, task)
+		return
+	}
 	if cancel, ok := a.generationTaskCancel(id); ok {
 		cancel()
 	}
@@ -412,7 +416,16 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if hasExecution && isVideoGenerationRequest(original.Type) && (execution.Status == providerexecution.Prepared || execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded)) {
+	originalActive := isRunningGenerationTaskStatus(original.Status) || strings.EqualFold(original.Status, "RETRYING")
+	if hasExecution && !originalActive {
+		if execution.Status != providerexecution.Failed || execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
+			writeError(w, http.StatusConflict, errors.New("terminal generation task cannot resume an existing provider execution"))
+			return
+		}
+		// A failed execution is retryable only when the provider outcome is
+		// proven safe-before-submit. The new child below gets a new execution.
+	}
+	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded) {
 		req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: cloneAnyMap(original.Params), ModuleCode: original.ModuleCode}
 		if req.Params == nil {
 			req.Params = map[string]any{}
@@ -428,6 +441,10 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if hasExecution {
+		if execution.Status == providerexecution.Succeeded {
+			writeError(w, http.StatusConflict, errors.New("terminal durable provider success cannot be retried; local completion or recovery must continue"))
+			return
+		}
 		switch execution.Status {
 		case providerexecution.Unknown, providerexecution.Submitting:
 			if execution.ProviderRequestID == nil {
@@ -440,7 +457,7 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if original.Status == "PENDING" || original.Status == "QUEUED" || original.Status == "RUNNING" || original.Status == "PROCESSING" || original.Status == "RETRYING" {
+	if originalActive {
 		writeError(w, http.StatusConflict, errors.New("active generation tasks cannot be retried"))
 		return
 	}
@@ -458,6 +475,9 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Params["retryOf"] = original.ID
+	// One deterministic child identity makes duplicate/concurrent HTTP retries
+	// reuse the same task, reservation, and provider execution.
+	req.ClientRequestID = "generation:retry:" + original.ID
 	task, err := a.startRetriedGenerationTask(r.Context(), user, req)
 	if err != nil {
 		if errors.Is(err, errGenerationConcurrencyLimit) {
@@ -512,6 +532,12 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 		return task, err
 	}
 	if isImageGenerationRequest(req.Type) && !strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
+		if a.generationAsyncCanaryEligible(req) {
+			if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
+				req.Params["generation_async_canary"] = true
+				return canaryStore.CreatePendingGenerationTaskWithCanaryOutbox(req)
+			}
+		}
 		task, err := a.store.CreatePendingGenerationTask(req)
 		if err == nil {
 			if task.IdempotentReplay {
@@ -1033,6 +1059,13 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 	}
 	if !activeGenerationTaskStatus(task.Status) {
 		return generationTask{}, errors.New("only active tasks can be cancelled")
+	}
+	if blocked, executionErr := s.providerExecutionBlocksLocalFailureTx(ctx, tx, id); executionErr != nil {
+		return generationTask{}, executionErr
+	} else if blocked {
+		// Cancellation must not release a reservation while provider work is
+		// in-flight, ambiguous, or durably succeeded. Local recovery owns it.
+		return generationTask{}, errors.New("generation task has provider work in progress; cancellation is deferred")
 	}
 	task, refunded, _, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, "用户取消生成", "CANCELLED", taskStatusCancelled)
 	if err != nil {

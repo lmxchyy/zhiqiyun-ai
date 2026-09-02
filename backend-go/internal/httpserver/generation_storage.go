@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -42,15 +43,26 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 	stored := make([]storagecenter.FileObject, 0, len(req.GeneratedImages))
 	records := make([]map[string]any, 0, len(req.GeneratedImages))
 	for index, image := range req.GeneratedImages {
+		fileName := fmt.Sprintf("%s-%02d.%s", taskID, index+1, artifactExtension(image.ContentType, image.URL))
+		if existing, found, findErr := a.fileService.FindActiveBusinessFile(ctx, tenantID, "generation_result", taskID, fmt.Sprintf("%s-%02d.", taskID, index+1)); findErr != nil {
+			return req, nil, fmt.Errorf("find generated image %d: %w", index+1, findErr)
+		} else if found {
+			// Reused artifacts are already durable and owned by this task. Do not
+			// add them to the rollback list: a later recovery error must not delete
+			// the existing artifact that makes the next replay possible.
+			records = append(records, generatedStorageRecordForFile(existing, image))
+			continue
+		}
 		raw, contentType, extension, err := readGeneratedArtifact(ctx, image.URL, image.ContentType)
 		if err != nil {
 			a.cleanupGeneratedFiles(stored)
 			return req, nil, fmt.Errorf("download generated image %d: %w", index+1, err)
 		}
-		file, err := a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
+		fileName = fmt.Sprintf("%s-%02d.%s", taskID, index+1, extension)
+		file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
 			TenantID:     tenantID,
 			UserID:       req.UserID,
-			FileName:     fmt.Sprintf("%s-%02d.%s", taskID, index+1, extension),
+			FileName:     fileName,
 			FileSize:     int64(len(raw)),
 			MIMEType:     contentType,
 			BusinessType: "generation_result",
@@ -76,17 +88,8 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 			req.GeneratedImages[index].ThumbnailURL = image.URL
 		}
 		stored = append(stored, file)
-		record := map[string]any{
-			"fileId":         file.FileID,
-			"tenantId":       file.TenantID,
-			"provider":       file.Provider,
-			"bucket":         file.Bucket,
-			"objectKey":      file.ObjectKey,
-			"fileSize":       file.FileSize,
-			"contentType":    file.MIMEType,
-			"source":         image.Source,
-			"providerTaskId": image.ProviderTaskID,
-		}
+		record := generatedStorageRecordForFile(file, image)
+
 		if sourceURL := compactPersistedSourceURL(image.URL); sourceURL != "" {
 			record["sourceUrl"] = sourceURL
 		}
@@ -94,6 +97,30 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 	}
 	req.Params[generatedStorageFilesParam] = records
 	return req, stored, nil
+}
+
+func artifactExtension(contentType, rawURL string) string {
+	if ext := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(path.Ext(strings.Split(rawURL, "?")[0]))), "."); ext != "" && len(ext) <= 8 {
+		return ext
+	}
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg":
+		return "jpg"
+	case "image/webp":
+		return "webp"
+	case "image/gif":
+		return "gif"
+	default:
+		return "png"
+	}
+}
+
+func generatedStorageRecordForFile(file storagecenter.FileObject, image generation.GeneratedImage) map[string]any {
+	return map[string]any{
+		"fileId": file.FileID, "tenantId": file.TenantID, "provider": file.Provider,
+		"bucket": file.Bucket, "objectKey": file.ObjectKey, "fileSize": file.FileSize,
+		"contentType": file.MIMEType, "source": image.Source, "providerTaskId": image.ProviderTaskID,
+	}
 }
 
 func compactPersistedSourceURL(value string) string {

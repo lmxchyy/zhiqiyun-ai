@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	"xianzhi-ai/backend-go/internal/providerexecution"
 
 	"xianzhi-ai/backend-go/internal/config"
 
@@ -33,6 +34,8 @@ const (
 	maxCompatibleReferenceFieldBytes = 800 << 10
 	maxReferenceImageBytes           = 10 << 20
 )
+
+type providerOperationKeyContextKey struct{}
 
 type OpenAICompatible struct {
 	code               string
@@ -56,7 +59,7 @@ func NewOpenAICompatible(cfg config.Config) OpenAICompatible {
 		model:             model,
 		models:            nonEmptyStrings(model),
 		referenceImageDir: referenceImageDirFromDataPath(cfg.DataPath),
-		client:            &http.Client{Timeout: cfg.ImageProviderTimeout()},
+		client:            generationHTTPClient(cfg.ImageProviderTimeout()),
 	}
 }
 func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatible {
@@ -79,7 +82,7 @@ func NewOpenAICompatibleWithOptions(opts OpenAICompatibleOptions) OpenAICompatib
 		editEndpoint:       strings.TrimSpace(opts.ImageEditEndpoint),
 		responseEndpoint:   strings.TrimSpace(opts.ResponseEndpoint),
 		referenceImageDir:  strings.TrimSpace(opts.ReferenceImageDir),
-		client:             &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond},
+		client:             generationHTTPClient(time.Duration(timeoutMS) * time.Millisecond),
 	}
 }
 
@@ -94,6 +97,17 @@ type OpenAICompatibleOptions struct {
 	ResponseEndpoint        string
 	ReferenceImageDir       string
 	TimeoutMS               int
+}
+
+func generationHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			// 307/308 can replay a non-idempotent POST without the execution guard
+			// observing the intermediate response.
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 func referenceImageDirFromDataPath(dataPath string) string {
@@ -142,6 +156,11 @@ func (p OpenAICompatible) DefaultModel() string {
 }
 
 func (p OpenAICompatible) Generate(ctx context.Context, req generation.CreateRequest) ([]generation.GeneratedImage, error) {
+	if key := strings.TrimSpace(req.ClientRequestID); key != "" && p.usesOfficialOpenAIEndpoint() {
+		// OpenAI supports Idempotency-Key. Other compatible gateways are
+		// deliberately treated as having no verified native idempotency.
+		ctx = context.WithValue(ctx, providerOperationKeyContextKey{}, key)
+	}
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
 		model = p.model
@@ -168,22 +187,7 @@ func (p OpenAICompatible) generate(ctx context.Context, req generation.CreateReq
 			return nil, prepareErr
 		}
 		references = preparedReferences
-		images, err := p.edit(ctx, req, references)
-		if err == nil {
-			return images, nil
-		}
-		if isTimeoutError(err) {
-			return nil, err
-		}
-		_, width, height := imageSize(req.Params)
-		fallbackImages, fallbackErr := p.generateWithReferences(ctx, req, references, width, height)
-		if fallbackErr == nil {
-			return fallbackImages, nil
-		}
-		if isTimeoutError(err) {
-			return nil, fmt.Errorf("当前图片上游未响应参考图生图接口，且兼容参考图生成也失败: edits timeout: %w; generation fallback: %v", err, fallbackErr)
-		}
-		return nil, fmt.Errorf("参考图生图失败: edits error: %w; generation fallback: %v", err, fallbackErr)
+		return p.edit(ctx, req, references)
 	}
 	count, err := openAIImageCount(req.Params)
 	if err != nil {
@@ -197,15 +201,8 @@ func (p OpenAICompatible) generate(ctx context.Context, req generation.CreateReq
 	if model == "" {
 		model = "gpt-image-2"
 	}
-	triedResponsesFirst := shouldTryResponsesFirst(req.Params)
-	if triedResponsesFirst {
-		images, err := p.generateWithResponses(ctx, req, width, height)
-		if err == nil {
-			return images, nil
-		}
-		if isTimeoutError(err) {
-			return nil, err
-		}
+	if shouldTryResponsesFirst(req.Params) {
+		return p.generateWithResponses(ctx, req, width, height)
 	}
 	body := map[string]any{
 		"model":  model,
@@ -217,47 +214,7 @@ func (p OpenAICompatible) generate(ctx context.Context, req generation.CreateReq
 	if !isGPTImage2Model(model) {
 		body["response_format"] = "b64_json"
 	}
-	images, err := p.generateWithBody(ctx, body, width, height)
-	if err == nil {
-		return images, nil
-	}
-	if isTimeoutError(err) {
-		return nil, err
-	}
-	if isGPTImage2Model(model) {
-		if !triedResponsesFirst {
-			images, responseErr := p.generateWithResponses(ctx, req, width, height)
-			if responseErr == nil {
-				return images, nil
-			}
-			if isTimeoutError(responseErr) {
-				return nil, responseErr
-			}
-		}
-		body["response_format"] = "b64_json"
-		images, retryErr := p.generateWithBody(ctx, body, width, height)
-		if retryErr == nil {
-			return images, nil
-		}
-		if isTimeoutError(retryErr) {
-			return nil, retryErr
-		}
-		return nil, err
-	}
-	delete(body, "response_format")
-	images, retryErr := p.generateWithBody(ctx, body, width, height)
-	if retryErr == nil {
-		return images, nil
-	}
-	if isTimeoutError(retryErr) {
-		return nil, retryErr
-	}
-	body["response_format"] = "url"
-	images, urlErr := p.generateWithBody(ctx, body, width, height)
-	if urlErr == nil {
-		return images, nil
-	}
-	return nil, err
+	return p.generateWithBody(ctx, body, width, height)
 }
 
 func (p OpenAICompatible) generateWithResponses(ctx context.Context, req generation.CreateRequest, width int, height int) ([]generation.GeneratedImage, error) {
@@ -318,15 +275,8 @@ func (p OpenAICompatible) edit(ctx context.Context, req generation.CreateRequest
 	if model == "" {
 		model = "gpt-image-2"
 	}
-	triedResponsesFirst := shouldTryResponsesFirst(req.Params)
-	if triedResponsesFirst {
-		images, err := p.editWithResponses(ctx, req, references, width, height)
-		if err == nil {
-			return images, nil
-		}
-		if isTimeoutError(err) {
-			return nil, err
-		}
+	if shouldTryResponsesFirst(req.Params) {
+		return p.editWithResponses(ctx, req, references, width, height)
 	}
 	fields := map[string]string{
 		"model":  model,
@@ -342,44 +292,7 @@ func (p OpenAICompatible) edit(ctx context.Context, req generation.CreateRequest
 	if !isGPTImage2Model(model) {
 		fields["response_format"] = "b64_json"
 	}
-	images, err := p.editWithCompatibleFields(ctx, fields, references, width, height)
-	if err == nil {
-		return images, nil
-	}
-	if isTimeoutError(err) {
-		return nil, err
-	}
-	if isGPTImage2Model(model) {
-		if !triedResponsesFirst {
-			images, responseErr := p.editWithResponses(ctx, req, references, width, height)
-			if responseErr == nil {
-				return images, nil
-			}
-			if isTimeoutError(responseErr) {
-				return nil, responseErr
-			}
-			return nil, fmt.Errorf("GPT-Image-2 image edit failed: %w; responses fallback error: %v", err, responseErr)
-		}
-		return nil, fmt.Errorf("GPT-Image-2 image edit failed: %w", err)
-	}
-	delete(fields, "response_format")
-	images, retryErr := p.editWithCompatibleFields(ctx, fields, references, width, height)
-	if retryErr == nil {
-		return images, nil
-	}
-	if isTimeoutError(retryErr) {
-		return nil, retryErr
-	}
-	fields["response_format"] = "url"
-	images, urlErr := p.editWithCompatibleFields(ctx, fields, references, width, height)
-	if urlErr == nil {
-		return images, nil
-	}
-	images, fallbackErr := p.generateWithReferences(ctx, req, references, width, height)
-	if fallbackErr == nil {
-		return images, nil
-	}
-	return nil, fmt.Errorf("image-to-image failed; edits error: %w; compatible generation fallback error: %v", err, fallbackErr)
+	return p.editWithCompatibleFields(ctx, fields, references, width, height)
 }
 
 func (p OpenAICompatible) generateWithReferences(ctx context.Context, req generation.CreateRequest, references []referenceImage, width int, height int) ([]generation.GeneratedImage, error) {
@@ -412,27 +325,7 @@ func (p OpenAICompatible) generateWithReferences(ctx context.Context, req genera
 	if len(referenceURLs) > 0 {
 		body["image"] = referenceURLs[0]
 	}
-	images, err := p.generateWithBody(ctx, body, width, height)
-	if err == nil {
-		return images, nil
-	}
-	if isTimeoutError(err) {
-		return nil, err
-	}
-	delete(body, "response_format")
-	images, retryErr := p.generateWithBody(ctx, body, width, height)
-	if retryErr == nil {
-		return images, nil
-	}
-	if isTimeoutError(retryErr) {
-		return nil, retryErr
-	}
-	body["response_format"] = "url"
-	images, urlErr := p.generateWithBody(ctx, body, width, height)
-	if urlErr == nil {
-		return images, nil
-	}
-	return nil, err
+	return p.generateWithBody(ctx, body, width, height)
 }
 
 func (p OpenAICompatible) editWithCompatibleFields(ctx context.Context, fields map[string]string, references []referenceImage, width int, height int) ([]generation.GeneratedImage, error) {
@@ -440,15 +333,7 @@ func (p OpenAICompatible) editWithCompatibleFields(ctx context.Context, fields m
 	if !p.usesOfficialOpenAIEndpoint() {
 		imageAliases = append(imageAliases, "image")
 	}
-	images, err := p.editWithFields(ctx, fields, references, width, height, "image[]", imageAliases...)
-	if err == nil || isTimeoutError(err) {
-		return images, err
-	}
-	fallbackImages, fallbackErr := p.editWithFields(ctx, fields, references, width, height, "image")
-	if fallbackErr == nil {
-		return fallbackImages, nil
-	}
-	return nil, fmt.Errorf("image[] edit error: %w; image edit fallback error: %v", err, fallbackErr)
+	return p.editWithFields(ctx, fields, references, width, height, "image[]", imageAliases...)
 }
 
 func addOptionalImageEditFields(fields map[string]string, params map[string]any, count int) {
@@ -563,6 +448,7 @@ func (p OpenAICompatible) editWithFields(ctx context.Context, fields map[string]
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", writer.FormDataContentType())
 	httpReq.Header.Set("Accept", "application/json")
+	setImageIdempotencyHeader(ctx, httpReq)
 
 	res, err := p.client.Do(httpReq)
 	if err != nil {
@@ -592,21 +478,10 @@ func (p OpenAICompatible) generateWithBody(ctx context.Context, body map[string]
 }
 
 func (p OpenAICompatible) doJSONWithRetry(ctx context.Context, endpoint string, payload []byte) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt += 1 {
-		raw, status, err := p.doJSON(ctx, endpoint, payload)
-		if err == nil {
-			return raw, nil
-		}
-		lastErr = err
-		if !isRetryableProviderError(status, err) || attempt == 2 {
-			return nil, err
-		}
-		if !sleepWithContext(ctx, time.Duration(attempt+1)*700*time.Millisecond) {
-			return nil, ctx.Err()
-		}
-	}
-	return nil, lastErr
+	// Generation POSTs are not retried: any transport/HTTP response after Do
+	// starts is potentially an accepted operation at the provider.
+	raw, _, err := p.doJSON(ctx, endpoint, payload)
+	return raw, err
 }
 
 func (p OpenAICompatible) doJSON(ctx context.Context, endpoint string, payload []byte) ([]byte, int, error) {
@@ -617,6 +492,7 @@ func (p OpenAICompatible) doJSON(ctx context.Context, endpoint string, payload [
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	setImageIdempotencyHeader(ctx, httpReq)
 
 	res, err := p.client.Do(httpReq)
 	if err != nil {
@@ -628,7 +504,11 @@ func (p OpenAICompatible) doJSON(ctx context.Context, endpoint string, payload [
 		return nil, res.StatusCode, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, res.StatusCode, fmt.Errorf("image provider returned %d: %s", res.StatusCode, providerErrorText(raw))
+		err := fmt.Errorf("image provider returned %d: %s", res.StatusCode, providerErrorText(raw))
+		if res.StatusCode == http.StatusTooManyRequests || res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusUnauthorized {
+			return nil, res.StatusCode, providerexecution.ClassifiedError{Class: providerexecution.DefinitiveNotSubmitted, Err: err}
+		}
+		return nil, res.StatusCode, err
 	}
 	return raw, res.StatusCode, nil
 }
@@ -667,6 +547,7 @@ func (p OpenAICompatible) editWithResponses(ctx context.Context, req generation.
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	setImageIdempotencyHeader(ctx, httpReq)
 
 	res, err := p.client.Do(httpReq)
 	if err != nil {
@@ -681,6 +562,12 @@ func (p OpenAICompatible) editWithResponses(ctx context.Context, req generation.
 		return nil, fmt.Errorf("image provider responses edit returned %d: %s", res.StatusCode, string(raw))
 	}
 	return decodeResponsesGeneratedImages(raw, width, height)
+}
+
+func setImageIdempotencyHeader(ctx context.Context, req *http.Request) {
+	if key, _ := ctx.Value(providerOperationKeyContextKey{}).(string); strings.TrimSpace(key) != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
 }
 
 func responsesImageTool(params map[string]any, isEdit bool) map[string]any {
@@ -1206,9 +1093,8 @@ func isTransientProviderStatus(status int) bool {
 }
 
 func isRetryableProviderError(status int, err error) bool {
-	if isTransientProviderStatus(status) {
-		return true
-	}
+	// Retained for compatibility with focused tests/callers: generation POSTs
+	// are never generically retryable, including 429/502/503/504.
 	return false
 }
 

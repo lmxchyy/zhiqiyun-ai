@@ -140,6 +140,16 @@ func (r *MemoryRepository) CreatePending(_ context.Context, file FileObject, def
 	if _, exists := r.files[file.FileID]; exists {
 		return ErrUploadConfirmFailed
 	}
+	// SQL uses a partial unique index with business_id IS NOT NULL. Keep the
+	// in-memory repository's semantics identical: ordinary uploads (no durable
+	// business identity) are never accidentally coalesced.
+	if strings.TrimSpace(file.BusinessID) != "" {
+		for _, existing := range r.files {
+			if existing.TenantID == file.TenantID && existing.BusinessType == file.BusinessType && existing.BusinessID == file.BusinessID && existing.OriginalName == file.OriginalName && (existing.Status == StatusPendingUpload || existing.Status == StatusActive) {
+				return ErrArtifactAlreadyClaimed
+			}
+		}
+	}
 	quota := r.ensureQuota(file.TenantID, defaultQuota)
 	if quota.QuotaBytes > 0 && quota.UsedBytes+quota.ReservedBytes+file.ReservedSize > quota.QuotaBytes {
 		return ErrQuotaExceeded

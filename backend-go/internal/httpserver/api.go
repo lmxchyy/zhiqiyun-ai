@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -52,6 +53,7 @@ type platformStore interface {
 	CreatePendingGenerationTask(createGenerationTaskRequest) (generationTask, error)
 	CompleteGenerationTask(string, createGenerationTaskRequest) (generationTask, error)
 	FailGenerationTask(string, string) (generationTask, error)
+	FailGenerationTaskDurable(string, string) (generationTask, error)
 	RecordPPTGenerationUsage(pptapp.Task) (adminBillingEvent, error)
 	RecordRAGUsage(context.Context, knowledgeapp.RAGBillingUsage) error
 	ListAssets() ([]asset, error)
@@ -253,7 +255,34 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 		if err != nil || now.Sub(updatedTime.UTC()) < taskMaxAge {
 			continue
 		}
-		_, _ = a.store.FailGenerationTask(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
+		if execution, found, executionErr := providerExecutionForRetry(a.store, a.cfg, task.ID); executionErr != nil {
+			continue
+		} else if found {
+			if execution.Status == providerexecution.Succeeded && len(execution.ResultMetadata) > 0 {
+				// Provider success is a local-completion-only recovery path. The
+				// durable manifest is the result; never call Prepare/Create/Generate
+				// (or fallback) again. Completion is idempotent under the task lock.
+				if err := a.recoverSucceededGenerationTask(task, execution); err != nil {
+					// Keep the task and reservation recoverable for the next repair.
+					continue
+				}
+				continue
+			}
+			switch execution.Status {
+			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
+				// Provider work may be in flight, ambiguous, or durably available
+				// without a usable manifest. Never release its reservation as stale.
+				continue
+			case providerexecution.Failed:
+				if execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
+					continue
+				}
+			}
+		}
+		// Durable failure re-checks and locks provider execution in the same
+		// PostgreSQL transaction. A provider success/ambiguity must remain
+		// recoverable and must not release its reservation as stale.
+		_, _ = a.store.FailGenerationTaskDurable(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
 	}
 }
 
@@ -984,6 +1013,15 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	terminal, err := a.generationTaskTerminal(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if terminal {
+		// A cancelled/failed task may have a queued goroutine or redelivered
+		// message. Never start provider work for a terminal local task.
+		return nil
+	}
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareImageTask(ctx, req)
 	if err != nil {
@@ -999,19 +1037,22 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	delete(prepared.Params, providerExecutionTaskParam)
 	if err := a.auditPreparedGeneratedOutput(ctx, &prepared); err != nil {
 		a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
-		a.failImageGenerationTask(taskID, "content_audit", startedAt, err)
+		// The provider result was already durably persisted by the execution
+		// hook. A local audit failure must remain recoverable and must not release
+		// the reservation as if the provider had failed.
 		return err
 	}
 	a.recordContentAudit(taskID, "output", "generated_image", "", prepared)
 	prepared, storedFiles, err := a.persistGeneratedImages(ctx, taskID, prepared)
 	if err != nil {
-		a.failImageGenerationTask(taskID, "persistence", startedAt, err)
+		// The provider result is durable. Preserve the reservation and let local
+		// recovery retry storage without another provider submission.
 		return err
 	}
 	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
 	if err != nil {
-		a.cleanupGeneratedFiles(storedFiles)
-		a.failImageGenerationTask(taskID, "completion", startedAt, err)
+		// Commit outcome may be ambiguous. Durable provider/local artifacts and
+		// the reservation must remain available for idempotent completion.
 		return err
 	}
 	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
@@ -1019,6 +1060,81 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	}
 	log.Printf("generation task finished task_id=%s status=%s elapsed_ms=%d", taskID, completed.Status, time.Since(startedAt).Milliseconds())
 	return nil
+}
+
+// recoverSucceededGenerationTask rebuilds only local state from the provider
+// execution's durable manifest. It intentionally has no provider/service call.
+func (a api) recoverSucceededGenerationTask(task generationTask, execution providerexecution.Execution) error {
+	var req generation.CreateRequest
+	req.UserID = task.UserID
+	req.Type = task.Type
+	req.Prompt = task.Prompt
+	req.Model = task.Model
+	req.ModuleCode = task.ModuleCode
+	req.Params = cloneAnyMap(task.Params)
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	if isImageGenerationRequest(task.Type) {
+		if err := json.Unmarshal(execution.ResultMetadata, &req.GeneratedImages); err != nil || len(req.GeneratedImages) == 0 {
+			if err == nil {
+				err = errors.New("durable image result is empty")
+			}
+			return fmt.Errorf("decode durable image result: %w", err)
+		}
+		// Recovery must preserve the same output-audit gate as the original
+		// worker. A provider success never authorizes bypassing content safety.
+		if err := a.auditPreparedGeneratedOutput(context.Background(), &req); err != nil {
+			return err
+		}
+		prepared, _, err := a.persistGeneratedImages(context.Background(), task.ID, req)
+		if err != nil {
+			return err
+		}
+		if _, err := a.store.CompleteGenerationTask(task.ID, prepared); err != nil {
+			// Keep locally persisted artifacts as durable work for the next
+			// completion retry; they must not trigger another provider call.
+			return err
+		}
+		return nil
+	}
+	var result map[string]any
+	if err := json.Unmarshal(execution.ResultMetadata, &result); err != nil || len(result) == 0 {
+		if err == nil {
+			err = errors.New("durable video result is empty")
+		}
+		return fmt.Errorf("decode durable video result: %w", err)
+	}
+	req.VideoTask = result
+	req.Params["providerTask"] = result
+	if _, err := a.store.CompleteGenerationTask(task.ID, req); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a api) generationTaskTerminal(ctx context.Context, taskID string) (bool, error) {
+	if pg, ok := a.store.(*postgresStore); ok && pg != nil && pg.db != nil {
+		var status string
+		err := pg.db.QueryRowContext(ctx, `SELECT status FROM xz_generation_tasks WHERE id=$1`, taskID).Scan(&status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("generation task %s not found", taskID)
+		}
+		if err != nil {
+			return false, err
+		}
+		return !isRunningGenerationTaskStatus(status), nil
+	}
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		return false, err
+	}
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return !isRunningGenerationTaskStatus(task.Status), nil
+		}
+	}
+	return false, fmt.Errorf("generation task %s not found", taskID)
 }
 
 func (a api) configuredImageGenerationTimeout() time.Duration {
@@ -1133,10 +1249,14 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	terminal, err := a.generationTaskTerminal(ctx, taskID)
+	if err != nil || terminal {
+		return
+	}
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
-		if errors.Is(err, providerexecution.ErrProviderStillProcessing) {
+		if errors.Is(err, providerexecution.ErrProviderStillProcessing) || errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) {
 			return
 		}
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
@@ -1147,8 +1267,11 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		prepared.Params["provider"] = provider
 		prepared.Params["provider_channel"] = provider
 	}
+	// Completion is the billing settlement boundary. If it fails, the
+	// provider result may already be durable and the task must remain
+	// recoverable; failing here would incorrectly release the reservation.
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		return
 	}
 }
 
@@ -1166,33 +1289,11 @@ func shouldFallbackImageGeneration(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	var classified providerexecution.ClassifiedError
+	if !errors.As(err, &classified) {
 		return false
 	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "returned 502") ||
-		strings.Contains(lower, "returned 503") ||
-		strings.Contains(lower, "returned 504") ||
-		strings.Contains(lower, "returned 429") ||
-		strings.Contains(lower, "returned 403") ||
-		strings.Contains(lower, "gateway time-out") ||
-		strings.Contains(lower, "gateway timeout") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "insufficient_quota") ||
-		strings.Contains(lower, "quota exceeded") ||
-		strings.Contains(lower, "no available image quota") ||
-		strings.Contains(lower, "forbidden") ||
-		strings.Contains(lower, "unauthorized") ||
-		strings.Contains(lower, "permission denied") ||
-		strings.Contains(lower, "无权访问") ||
-		strings.Contains(lower, "connection refused") ||
-		strings.Contains(lower, "no such host") ||
-		strings.Contains(lower, "network is unreachable") ||
-		strings.Contains(lower, "connection reset") ||
-		strings.Contains(lower, "context deadline exceeded") ||
-		strings.Contains(lower, "client.timeout") ||
-		strings.Contains(lower, "timeout awaiting response")
+	return classified.Class == providerexecution.DefinitiveNotSubmitted || classified.Class == providerexecution.RetryableBeforeSubmit
 }
 
 func compactGenerationErrorMessage(message string) string {

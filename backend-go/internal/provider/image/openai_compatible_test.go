@@ -59,17 +59,17 @@ func TestRetryableProviderErrorDoesNotRetryAmbiguousNetworkTimeout(t *testing.T)
 	if isRetryableProviderError(0, timeoutProviderError{}) {
 		t.Fatal("network timeout must not retry a non-idempotent image request")
 	}
-	if !isRetryableProviderError(http.StatusTooManyRequests, errors.New("rate limited")) {
-		t.Fatal("HTTP 429 should be retried briefly before provider fallback")
+	if isRetryableProviderError(http.StatusTooManyRequests, errors.New("rate limited")) {
+		t.Fatal("HTTP 429 must not retry a generation POST")
 	}
-	if !isFallbackEligible(errors.New("image provider returned 429: Upstream rate limit")) {
-		t.Fatal("HTTP 429 should be eligible for router fallback")
-	}
-	if !isFallbackEligible(errors.New("image provider returned 403: forbidden")) {
-		t.Fatal("HTTP 403 should be eligible for router fallback")
-	}
-	if !isFallbackEligible(errors.New("dial tcp [::1]:8001: connect: connection refused")) {
-		t.Fatal("connection refused should be eligible for router fallback")
+	for _, err := range []error{
+		errors.New("image provider returned 429: Upstream rate limit"),
+		errors.New("image provider returned 403: forbidden"),
+		errors.New("dial tcp [::1]:8001: connect: connection refused"),
+	} {
+		if isFallbackEligible(err) {
+			t.Fatalf("untyped provider error must not prove pre-submit failure: %v", err)
+		}
 	}
 	if isRetryableProviderError(http.StatusBadRequest, timeoutProviderError{}) {
 		t.Fatal("HTTP 400 should not be retried even if error text is timeout-like")
@@ -471,7 +471,7 @@ func TestOpenAICompatibleGPTImage2UsesResponsesGenerate(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleGPTImage2FallsBackToResponsesGenerateAfterGeneration502(t *testing.T) {
+func TestOpenAICompatibleGPTImage2DoesNotFallbackAfterGeneration502(t *testing.T) {
 	imageGenerationCalls := 0
 	var sawResponsesGenerate bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -504,20 +504,13 @@ func TestOpenAICompatibleGPTImage2FallsBackToResponsesGenerateAfterGeneration502
 			"size":    "1024x1024",
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("502 must be returned without another generation POST")
 	}
-	if imageGenerationCalls != 3 {
-		t.Fatalf("imageGenerationCalls = %d, want 3 retry attempts", imageGenerationCalls)
-	}
-	if !sawResponsesGenerate {
-		t.Fatal("server did not receive responses fallback request")
-	}
-	if len(images) != 1 || !strings.HasPrefix(images[0].URL, "data:image/png;base64,") {
-		t.Fatalf("images = %#v, want one data URL image", images)
+	if images != nil || imageGenerationCalls != 1 || sawResponsesGenerate {
+		t.Fatalf("images=%v generation calls=%d responses fallback=%v", images, imageGenerationCalls, sawResponsesGenerate)
 	}
 }
-
 func TestProviderEndpointResolvesConfiguredPaths(t *testing.T) {
 	base := "https://api.example.com/v1"
 	tests := []struct {
@@ -540,7 +533,7 @@ func TestProviderEndpointResolvesConfiguredPaths(t *testing.T) {
 	}
 }
 
-func TestOpenAICompatibleImageEditFallsBackToImageField(t *testing.T) {
+func TestOpenAICompatibleImageEditDoesNotFallbackToImageField(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount += 1
@@ -577,11 +570,11 @@ func TestOpenAICompatibleImageEditFallsBackToImageField(t *testing.T) {
 			"referenceImages":  []any{map[string]any{"name": "input.png", "url": tinyReferenceDataURL}},
 		},
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("edit contract error must not trigger a second POST")
 	}
-	if requestCount != 2 {
-		t.Fatalf("requestCount = %d, want 2", requestCount)
+	if requestCount != 1 {
+		t.Fatalf("requestCount = %d, want 1", requestCount)
 	}
 }
 
@@ -775,6 +768,80 @@ func TestOpenAICompatibleImageEditOmitsStandardQuality(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOfficialOpenAIUsesStableProviderOperationKey(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/images/generations", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(t.Context(), providerOperationKeyContextKey{}, "generation:task-1:1")
+	setImageIdempotencyHeader(ctx, req)
+	if got := req.Header.Get("Idempotency-Key"); got != "generation:task-1:1" {
+		t.Fatalf("Idempotency-Key=%q", got)
+	}
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{BaseURL: "https://compatible.example/v1"})
+	if provider.usesOfficialOpenAIEndpoint() {
+		t.Fatal("compatible gateway must not claim verified native idempotency")
+	}
+}
+
+func TestGenerationPOSTIsNeverRetriedOrRedirectReplayed(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "502", handler: func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "bad gateway", http.StatusBadGateway) }},
+		{name: "malformed success", handler: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":`))
+		}},
+		{name: "empty success", handler: func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}},
+		{name: "307", handler: func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/replayed", http.StatusTemporaryRedirect)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path == "/replayed" {
+					t.Fatal("generation POST redirect was replayed")
+				}
+				tt.handler(w, r)
+			}))
+			defer server.Close()
+			provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{BaseURL: server.URL + "/v1", APIKey: "key", ImageModel: "gpt-image-2", TimeoutMS: 1000})
+			_, _ = provider.Generate(t.Context(), generation.CreateRequest{Type: "TEXT_TO_IMAGE", Prompt: "one", Model: "gpt-image-2", Params: map[string]any{"imageRequestMode": "images"}})
+			if calls != 1 {
+				t.Fatalf("POST calls=%d, want exactly 1", calls)
+			}
+		})
+	}
+}
+
+func TestAmbiguousResponsesAndEditDoNotTryAlternateEndpoint(t *testing.T) {
+	calls := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls[r.URL.Path]++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"broken":`))
+	}))
+	defer server.Close()
+	provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{BaseURL: server.URL + "/v1", APIKey: "key", ImageModel: "gpt-image-2", TimeoutMS: 1000})
+	_, _ = provider.Generate(t.Context(), generation.CreateRequest{Type: "TEXT_TO_IMAGE", Prompt: "one", Model: "gpt-image-2", Params: map[string]any{"imageRequestMode": "responses"}})
+	if calls["/v1/responses"] != 1 || calls["/v1/images/generations"] != 0 {
+		t.Fatalf("responses=%d images=%d", calls["/v1/responses"], calls["/v1/images/generations"])
+	}
+	calls = map[string]int{}
+	_, _ = provider.Generate(t.Context(), generation.CreateRequest{Type: "IMAGE_TO_IMAGE", Prompt: "edit", Model: "gpt-image-2", Params: map[string]any{"imageRequestMode": "images", "referenceImages": []any{map[string]any{"name": "in.png", "url": tinyReferenceDataURL}}}})
+	if calls["/v1/images/edits"] != 1 || calls["/v1/images/generations"] != 0 {
+		t.Fatalf("edits=%d generations=%d", calls["/v1/images/edits"], calls["/v1/images/generations"])
 	}
 }
 

@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS provider_executions (
     attempt INTEGER NOT NULL CHECK (attempt > 0),
     status TEXT NOT NULL CHECK (status IN ('prepared','submitting','submitted','processing','succeeded','failed','unknown')),
     request_fingerprint CHAR(64) NOT NULL,
+    provider_operation_key TEXT NOT NULL DEFAULT '',
     provider_request_id TEXT,
+    result_metadata JSONB,
     submitted_at TIMESTAMPTZ,
     processing_at TIMESTAMPTZ,
     succeeded_at TIMESTAMPTZ,
@@ -25,6 +27,10 @@ CREATE TABLE IF NOT EXISTS provider_executions (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT provider_executions_task_attempt_unique UNIQUE (task_id, attempt)
 );
+
+-- Keep this migration replayable for databases that ran an earlier PR6 draft.
+ALTER TABLE provider_executions ADD COLUMN IF NOT EXISTS provider_operation_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE provider_executions ADD COLUMN IF NOT EXISTS result_metadata JSONB;
 
 CREATE UNIQUE INDEX IF NOT EXISTS provider_executions_active_task_unique
  ON provider_executions(task_id)

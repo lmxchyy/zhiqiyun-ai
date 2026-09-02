@@ -69,15 +69,16 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
 		return task, req, fmt.Errorf("generate connector image: %w", err)
 	}
-	prepared, storedFiles, err := a.persistGeneratedImages(ctx, task.ID, prepared)
+	prepared, _, err = a.persistGeneratedImages(ctx, task.ID, prepared)
 	if err != nil {
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		// Provider success is already durable. Keep the task recoverable instead
+		// of releasing its reservation on a local storage failure.
 		return task, prepared, fmt.Errorf("persist connector image: %w", err)
 	}
 	completed, err := a.store.CompleteGenerationTask(task.ID, prepared)
 	if err != nil {
-		a.cleanupGeneratedFiles(storedFiles)
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		// Completion is the local settlement boundary; do not fail/release a
+		// task whose provider result can be replayed locally.
 		return task, prepared, fmt.Errorf("complete connector generation: %w", err)
 	}
 	return completed, prepared, nil
@@ -153,15 +154,14 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	}
 	prepared, stored, raw, contentType, err := a.persistConnectorVideo(ctx, task.ID, prepared)
 	if err != nil {
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		// Provider success is already durable. Keep the task recoverable instead
+		// of releasing its reservation on a local storage failure.
 		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("persist connector video: %w", err)
 	}
 	completed, err := a.store.CompleteGenerationTask(task.ID, prepared)
 	if err != nil {
-		if stored.FileID != "" {
-			a.cleanupGeneratedFiles([]storagecenter.FileObject{stored})
-		}
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		// Do not delete a durable artifact or fail/release the task. A later local
+		// recovery can reuse it and complete billing exactly once.
 		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("complete connector video: %w", err)
 	}
 	return completed, prepared, stored, raw, contentType, nil
@@ -204,7 +204,7 @@ func (a api) persistConnectorVideo(ctx context.Context, taskID string, req gener
 	if !available {
 		return req, storagecenter.FileObject{}, raw, contentType, nil
 	}
-	file, err := a.fileService.StoreObject(ctx, storagecenter.UploadInitInput{
+	file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
 		TenantID: tenantID, UserID: req.UserID, FileName: fmt.Sprintf("%s.%s", taskID, extension),
 		FileSize: int64(len(raw)), MIMEType: contentType, BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE",
 	}, bytes.NewReader(raw))

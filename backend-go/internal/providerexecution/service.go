@@ -2,7 +2,9 @@ package providerexecution
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type Submission struct {
@@ -31,13 +33,25 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 	if s == nil || s.Store == nil || a == nil {
 		return Execution{}, fmt.Errorf("provider execution dependencies are required")
 	}
+	if e.Attempt <= 0 {
+		e.Attempt = 1
+	}
 	created, err := s.Store.CreatePrepared(ctx, e)
 	if err != nil {
-		return Execution{}, err
+		// A concurrent retry may have prepared the same task/attempt first.
+		// Re-read only when the durable row matches this request; never turn an
+		// unrelated database error or a different attempt into an idempotent hit.
+		existing, readErr := s.Store.GetLatestByTask(ctx, e.TaskID)
+		if readErr != nil || existing.Attempt != e.Attempt || existing.RequestFingerprint != e.RequestFingerprint {
+			return Execution{}, err
+		}
+		created = existing
 	}
 	current, err := s.Store.ClaimPrepared(ctx, created.TaskID)
 	if err != nil {
-		return created, err
+		// Another process owns the durable execution. Do not submit from this
+		// process, even if the owner has not persisted its provider request yet.
+		return created, ErrTransitionConflict
 	}
 	sub, err := a.Submit(ctx)
 	if err != nil {
@@ -49,14 +63,27 @@ func (s *Service) Execute(ctx context.Context, e Execution, a Adapter) (Executio
 		}
 		return s.Store.GetByID(ctx, current.ID)
 	}
-	if sub.ProviderRequestID != "" {
-		if err := s.Store.Transition(ctx, current.ID, Submitted, ptr(sub.ProviderRequestID), nil, nil); err != nil {
+	if sub.Succeeded {
+		manifest, marshalErr := json.Marshal(sub.ResultMetadata)
+		if marshalErr != nil {
+			_ = s.Store.MarkUnknown(ctx, current.ID, ProviderUnknown, marshalErr.Error())
+			return current, marshalErr
+		}
+		var requestID *string
+		if sub.ProviderRequestID != "" {
+			requestID = ptr(sub.ProviderRequestID)
+		}
+		if err := s.Store.SaveSucceededResult(ctx, current.ID, requestID, manifest); err != nil {
 			return current, err
 		}
-	} else {
-		if err := s.Store.Transition(ctx, current.ID, Succeeded, nil, nil, nil); err != nil {
+	} else if strings.TrimSpace(sub.ProviderRequestID) == "" {
+		// A non-successful submission without a provider request ID has no
+		// proven outcome. It is ambiguous, never a durable success.
+		if err := s.Store.MarkUnknown(ctx, current.ID, ProviderUnknown, "provider submission returned no request id"); err != nil {
 			return current, err
 		}
+	} else if err := s.Store.Transition(ctx, current.ID, Submitted, ptr(sub.ProviderRequestID), nil, nil); err != nil {
+		return current, err
 	}
 	return s.Store.GetByID(ctx, current.ID)
 }
@@ -88,7 +115,13 @@ func (s *Service) Recover(ctx context.Context, e Execution, a Adapter) (Executio
 		providerRequestIDPtr = ptr(providerRequestID)
 	}
 	switch q.Status {
-	case Submitted, Processing, Succeeded, Failed:
+	case Succeeded:
+		var manifest []byte
+		manifest, err = json.Marshal(q.ResultMetadata)
+		if err == nil {
+			err = s.Store.SaveSucceededResult(ctx, e.ID, providerRequestIDPtr, manifest)
+		}
+	case Submitted, Processing, Failed:
 		err = s.Store.Transition(ctx, e.ID, q.Status, providerRequestIDPtr, nil, nil)
 	default:
 		err = s.Store.MarkUnknown(ctx, e.ID, ProviderUnknown, "provider returned unknown status")

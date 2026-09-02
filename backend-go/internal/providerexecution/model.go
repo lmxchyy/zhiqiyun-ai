@@ -1,6 +1,7 @@
 package providerexecution
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -34,7 +35,9 @@ type Execution struct {
 	Attempt                                                     int
 	Status                                                      Status
 	RequestFingerprint                                          string
+	ProviderOperationKey                                        string
 	ProviderRequestID                                           *string
+	ResultMetadata                                              json.RawMessage
 	SubmittedAt, ProcessingAt, SucceededAt, FailedAt, UnknownAt *time.Time
 	LastCheckedAt, NextCheckAt                                  *time.Time
 	ErrorCode, ErrorClass, LastError                            *string
@@ -49,7 +52,9 @@ func CanTransition(from, to Status) bool {
 	case Prepared:
 		return to == Submitting || to == Failed
 	case Submitting:
-		return to == Submitted || to == Failed || to == Unknown
+		// Synchronous providers can return the final artifact in the submit
+		// response, with no separate submitted state.
+		return to == Submitted || to == Processing || to == Succeeded || to == Failed || to == Unknown
 	case Submitted:
 		return to == Processing || to == Succeeded || to == Failed || to == Unknown
 	case Processing:

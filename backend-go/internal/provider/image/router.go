@@ -10,6 +10,7 @@ import (
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
+	"xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type Router struct {
@@ -55,7 +56,12 @@ func (r Router) Generate(ctx context.Context, req generation.CreateRequest) ([]g
 			return images, nil
 		}
 		lastErr = err
-		if !isFallbackEligible(err) {
+		// When the durable execution guard owns this logical submission, the
+		// outer channel fallback must decide whether a new execution attempt is
+		// safe. Do not let this router submit to a second provider under the
+		// same execution identity.
+		guardedTaskID, _ := req.Params["_provider_execution_task_id"].(string)
+		if strings.TrimSpace(guardedTaskID) != "" || !isFallbackEligible(err) {
 			return nil, err
 		}
 	}
@@ -69,24 +75,11 @@ func isFallbackEligible(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err) {
-		return false
+	var classified providerexecution.ClassifiedError
+	if errors.As(err, &classified) {
+		return classified.Class == providerexecution.DefinitiveNotSubmitted || classified.Class == providerexecution.RetryableBeforeSubmit
 	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "returned 429") ||
-		strings.Contains(lower, "returned 403") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "insufficient_quota") ||
-		strings.Contains(lower, "quota exceeded") ||
-		strings.Contains(lower, "no available image quota") ||
-		strings.Contains(lower, "forbidden") ||
-		strings.Contains(lower, "unauthorized") ||
-		strings.Contains(lower, "permission denied") ||
-		strings.Contains(lower, "无权访问") ||
-		strings.Contains(lower, "connection refused") ||
-		strings.Contains(lower, "no such host") ||
-		strings.Contains(lower, "network is unreachable")
+	return false
 }
 
 type providersJSON struct {

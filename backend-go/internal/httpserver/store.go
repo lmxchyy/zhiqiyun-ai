@@ -3720,6 +3720,18 @@ func (s *jsonStore) FailGenerationTask(id string, message string) (generationTas
 	return task, nil
 }
 
+func (s *jsonStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
+	var task generationTask
+	if err := s.updateWithPersonalPoints(context.Background(), func(data *platformData, points *JSONPersonalPointStore) error {
+		var err error
+		task, err = mutateJSONGenerationDurableFailure(data, points, id, message)
+		return err
+	}); err != nil {
+		return generationTask{}, err
+	}
+	return task, nil
+}
+
 func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointStore, expectedUserID, id, message, terminalStatus, terminalTaskStatus string) (generationTask, error) {
 	for i := range data.GenerationTasks {
 		if data.GenerationTasks[i].ID != id {
@@ -3766,6 +3778,55 @@ func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointSt
 		if task.BillingStatus == "" {
 			task.BillingStatus = billingStatusBillingFailed
 		}
+		task.Progress = 100
+		task.Error = map[string]any{"message": message}
+		task.FailureReason = message
+		task.UpdatedAt = now
+		task.WorkerFinishedAt = now
+		data.GenerationTasks[i] = task
+		return task, nil
+	}
+	return generationTask{}, fmt.Errorf("generation task not found: %s", id)
+}
+
+func mutateJSONGenerationDurableFailure(data *platformData, points *JSONPersonalPointStore, id, message string) (generationTask, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := range data.GenerationTasks {
+		if data.GenerationTasks[i].ID != id {
+			continue
+		}
+		task := data.GenerationTasks[i]
+		if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+			return task, nil
+		}
+		pointCost := generationTaskReservedPointCost(task, task.PointCost)
+		if pointCost > 0 {
+			if !generationTaskReservedAndActive(task) {
+				return generationTask{}, ErrPersonalPointReservationMarkerMissing
+			}
+			if err := validateGenerationTaskPersonalLotMarker(points.memory, task); err != nil {
+				return generationTask{}, err
+			}
+			account, accountErr := findPersonalAccount(points.memory, task.PersonalPointAccountID, task.UserID)
+			if accountErr != nil {
+				return generationTask{}, accountErr
+			}
+			if account == nil {
+				return generationTask{}, ErrPersonalPointReservationMarkerMissing
+			}
+			available := int(account.AvailablePoints)
+			nextAvailable := available + pointCost
+			releaseAt, _ := time.Parse(time.RFC3339Nano, now)
+			if _, err := points.release(context.Background(), PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:durable-release:" + task.ID, ReleasedAt: releaseAt}); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, available, nextAvailable)
+			task.BillingStatus = billingStatusReleased
+			task.ReleasedPoints = float64(pointCost)
+			appendBillingLifecycleEventJSON(data, task, "RELEASE", float64(pointCost), nil)
+		}
+		task.Status = "FAILED"
+		task.TaskStatus = taskStatusFailed
 		task.Progress = 100
 		task.Error = map[string]any{"message": message}
 		task.FailureReason = message

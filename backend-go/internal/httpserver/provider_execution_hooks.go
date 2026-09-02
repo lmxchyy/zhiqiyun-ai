@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -69,12 +70,17 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	if taskID == "" {
 		return p.Generate(ctx, req)
 	}
+	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
-		if latest.RequestFingerprint != e.RequestFingerprint {
+		// Only an explicitly safe pre-submit failure may switch provider identity.
+		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
 			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
 		}
 		switch latest.Status {
+		case pe.Prepared:
+			e = latest
+			preparedExisting = true
 		case pe.Submitting:
 			if latest.ProviderRequestID == nil {
 				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
@@ -88,16 +94,23 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
-						if status == pe.Succeeded || status == pe.Failed {
+						if status == pe.Failed {
 							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
 								return nil, transitionErr
 							}
-							if status == pe.Failed {
-								return nil, pe.ErrProviderExecutionFailed
-							}
+							return nil, pe.ErrProviderExecutionFailed
+						}
+						if status == pe.Succeeded {
 							images, ok := result.([]generation.GeneratedImage)
-							if !ok {
+							if !ok || len(images) == 0 {
 								return nil, fmt.Errorf("provider recovery returned invalid image result")
+							}
+							manifest, marshalErr := json.Marshal(durableGeneratedImages(images))
+							if marshalErr != nil {
+								return nil, marshalErr
+							}
+							if saveErr := s.SaveSucceededResult(ctx, latest.ID, latest.ProviderRequestID, manifest); saveErr != nil {
+								return nil, saveErr
 							}
 							return images, nil
 						}
@@ -111,7 +124,11 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 		case pe.Submitted, pe.Processing:
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
-			return nil, fmt.Errorf("local recovery required for succeeded provider execution")
+			var images []generation.GeneratedImage
+			if len(latest.ResultMetadata) == 0 || json.Unmarshal(latest.ResultMetadata, &images) != nil || len(images) == 0 {
+				return nil, pe.ErrUnknownResubmitBlocked
+			}
+			return images, nil
 		case pe.Failed:
 			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
 				return nil, pe.ErrUnknownResubmitBlocked
@@ -121,14 +138,17 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	e, err = s.CreatePrepared(ctx, e)
+	if !preparedExisting {
+		e, err = s.CreatePreparedForGenerationTask(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+	}
+	e, err = s.ClaimPreparedForGenerationTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	e, err = s.ClaimPrepared(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
+	req.ClientRequestID = e.ProviderOperationKey
 	images, callErr := p.Generate(ctx, req)
 	if callErr != nil {
 		class := pe.Classify(callErr)
@@ -144,7 +164,16 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "image provider returned no images")
 		return nil, pe.ErrUnknownResubmitBlocked
 	}
-	if err := s.Transition(ctx, e.ID, pe.Succeeded, nil, ptrString(string(pe.ProviderSucceeded)), nil); err != nil {
+	manifest, err := json.Marshal(durableGeneratedImages(images))
+	if err != nil {
+		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "encode provider image result: "+err.Error())
+		return nil, pe.ErrUnknownResubmitBlocked
+	}
+	var providerRequestID *string
+	if requestID := strings.TrimSpace(images[0].ProviderTaskID); requestID != "" {
+		providerRequestID = ptrString(requestID)
+	}
+	if err := s.SaveSucceededResult(ctx, e.ID, providerRequestID, manifest); err != nil {
 		return nil, err
 	}
 	return images, nil
@@ -158,12 +187,17 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	if taskID == "" {
 		return p.Create(ctx, req)
 	}
+	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
-		if latest.RequestFingerprint != e.RequestFingerprint {
+		// Only an explicitly safe pre-submit failure may switch provider identity.
+		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
 			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
 		}
 		switch latest.Status {
+		case pe.Prepared:
+			e = latest
+			preparedExisting = true
 		case pe.Submitting, pe.Unknown, pe.Submitted, pe.Processing:
 			if latest.ProviderRequestID != nil {
 				if getter, ok := p.(interface {
@@ -174,11 +208,18 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 						status := providerExecutionStatus(result)
 						switch status {
 						case pe.Succeeded, pe.Failed:
-							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
-								return nil, transitionErr
-							}
 							if status == pe.Failed {
+								if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+									return nil, transitionErr
+								}
 								return nil, pe.ErrProviderExecutionFailed
+							}
+							manifest, marshalErr := json.Marshal(durableVideoResult(result))
+							if marshalErr != nil {
+								return nil, marshalErr
+							}
+							if saveErr := s.SaveSucceededResult(ctx, latest.ID, latest.ProviderRequestID, manifest); saveErr != nil {
+								return nil, saveErr
 							}
 							return result, nil
 						case pe.Submitted, pe.Processing:
@@ -200,8 +241,14 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
+			if len(latest.ResultMetadata) > 0 {
+				var result any
+				if json.Unmarshal(latest.ResultMetadata, &result) == nil {
+					return result, nil
+				}
+			}
 			if latest.ProviderRequestID == nil {
-				return nil, fmt.Errorf("local recovery required for succeeded provider execution")
+				return nil, pe.ErrUnknownResubmitBlocked
 			}
 			getter, ok := p.(interface {
 				Get(context.Context, string) (any, error)
@@ -220,6 +267,13 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 			if status != pe.Succeeded {
 				return nil, pe.ErrProviderStillProcessing
 			}
+			manifest, marshalErr := json.Marshal(durableVideoResult(result))
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			if saveErr := s.SaveSucceededResult(ctx, latest.ID, latest.ProviderRequestID, manifest); saveErr != nil {
+				return nil, saveErr
+			}
 			return result, nil
 		case pe.Failed:
 			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
@@ -230,14 +284,17 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	e, err = s.CreatePrepared(ctx, e)
+	if !preparedExisting {
+		e, err = s.CreatePreparedForGenerationTask(ctx, e)
+		if err != nil {
+			return nil, err
+		}
+	}
+	e, err = s.ClaimPreparedForGenerationTask(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	e, err = s.ClaimPrepared(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
+	req.ClientRequestID = e.ProviderOperationKey
 	result, callErr := p.Create(ctx, req)
 	if callErr != nil {
 		class := pe.Classify(callErr)
@@ -269,11 +326,41 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "video provider returned no proven result")
 		return nil, pe.ErrUnknownResubmitBlocked
 	}
-	if err := s.Transition(ctx, e.ID, pe.Succeeded, requestIDPtr, ptrString(string(pe.ProviderSucceeded)), nil); err != nil {
+	manifest, err := json.Marshal(durableVideoResult(result))
+	if err != nil {
+		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "encode provider video result: "+err.Error())
+		return nil, pe.ErrUnknownResubmitBlocked
+	}
+	if err := s.SaveSucceededResult(ctx, e.ID, requestIDPtr, manifest); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
+func durableGeneratedImages(images []generation.GeneratedImage) []generation.GeneratedImage {
+	result := make([]generation.GeneratedImage, len(images))
+	for i := range images {
+		result[i] = images[i]
+		// Provider-specific raw metadata is not required for local completion and
+		// may contain unsafe/transient fields.
+		result[i].ProviderMetadata = nil
+	}
+	return result
+}
+
+func durableVideoResult(v any) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	result := map[string]any{}
+	for _, key := range []string{"provider", "providerTaskId", "provider_request_id", "providerRequestID", "task_id", "status", "videoUrl", "video_url", "url", "thumbnailUrl", "thumbnail_url", "metadata"} {
+		if value, exists := m[key]; exists {
+			result[key] = value
+		}
+	}
+	return result
+}
+
 func providerExecutionStatus(v any) pe.Status {
 	m, ok := v.(map[string]any)
 	if !ok {
