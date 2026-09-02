@@ -9,9 +9,7 @@ on:
 
 jobs:
   user-core:
-    runs-on:
-      - self-hosted
-      - windows
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -69,9 +67,7 @@ jobs:
         run: npm.cmd run build:user-mp-harmony
 
   backup-retention:
-    runs-on:
-      - self-hosted
-      - linux
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -97,9 +93,7 @@ jobs:
           node --test tests/backup-offsite-upload.test.mjs tests/backup-uploader-container.test.mjs
 
   backup-offsite:
-    runs-on:
-      - self-hosted
-      - linux
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -116,9 +110,7 @@ jobs:
           node --test tests/backup-offsite-upload.test.mjs tests/backup-uploader-container.test.mjs
 
   production-contract:
-    runs-on:
-      - self-hosted
-      - linux
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -138,13 +130,11 @@ jobs:
           node --test tests/schema-consistency.test.mjs
 
   backend-go:
-    runs-on:
-      - self-hosted
-      - linux
-      - X64
-      - xianzhi-linux
+    runs-on: ubuntu-latest
     env:
       XIANZHI_ANALYTICS_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
+      XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
+      XIANZHI_MESSAGING_TEST_RABBITMQ_URL: amqp://guest:guest@127.0.0.1:5672/ci
 
     services:
       postgres:
@@ -160,6 +150,19 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      rabbitmq:
+        image: rabbitmq:3.13-management
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+          RABBITMQ_DEFAULT_VHOST: ci
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
 
     steps:
       - name: Checkout
