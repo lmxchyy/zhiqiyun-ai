@@ -1872,6 +1872,77 @@ func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, t
 	return task, refunded, true, nil
 }
 
+func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
+	ctx, cancel := s.withTimeout()
+	defer cancel()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return generationTask{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	task, err := generationTaskForUpdate(ctx, tx, id)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+		return task, tx.Commit()
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	pointCost := generationTaskReservedPointCost(task, task.PointCost)
+	usesPersonalPoints, err := generationTaskUsesPersonalPoints(task)
+	if err != nil {
+		return generationTask{}, err
+	}
+	if pointCost > 0 && generationTaskReservedAndActive(task) {
+		authorization, err := s.authorizationForStoredTaskTx(ctx, tx, task, false)
+		if err != nil {
+			return generationTask{}, err
+		}
+		if usesPersonalPoints != (authorization.ContextType != contextEnterprise) {
+			return generationTask{}, err
+		}
+		if usesPersonalPoints {
+			account, validatedPointCost, err := validatePostgresGenerationPersonalLotMarkerTx(ctx, tx, task)
+			if err != nil {
+				return generationTask{}, err
+			}
+			if validatedPointCost != pointCost {
+				return generationTask{}, err
+			}
+			nextAvailable := int(account.Available) + validatedPointCost
+			if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(validatedPointCost), IdempotencyKey: "generation:durable-release:" + task.ID}); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, int(account.Available), nextAvailable)
+		} else {
+			before := int64(intValue(task.Params[generationBillingReservationBalanceAfterKey]))
+			if err := s.reverseEnterpriseComputeTx(ctx, tx, authorization, int64(pointCost), "GENERATION_TASK", task.ID); err != nil {
+				return generationTask{}, err
+			}
+			task.Params = generationBillingRefundParams(task.Params, now, int(before), int(before)+pointCost)
+			if _, err := insertScopedWalletEntryV1(ctx, tx, task, authorization.BillingAccountID, "RELEASE", pointCost, int(before), int(before)+pointCost, pointCost, 0, "生成失败解冻"); err != nil {
+				return generationTask{}, err
+			}
+		}
+		task.BillingStatus = billingStatusReleased
+		task.ReleasedPoints = float64(pointCost)
+		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RELEASE", float64(pointCost), nil); err != nil {
+			return generationTask{}, err
+		}
+	}
+	task.Status = "FAILED"
+	task.TaskStatus = taskStatusFailed
+	task.Progress = 100
+	task.Error = map[string]any{"message": message}
+	task.FailureReason = message
+	task.UpdatedAt = now
+	task.WorkerFinishedAt = now
+	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
+	}
+	return task, tx.Commit()
+}
+
 func generatedAssetForRequest(req createGenerationTaskRequest, userID string, taskID string, assetID string, index int, now string) asset {
 	referenceCount := 0
 	referenceImages := req.Params["referenceImages"]

@@ -323,6 +323,10 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if task, err := a.store.FailGenerationTaskDurable(id, "用户取消生成"); err == nil {
+		writeJSON(w, task)
+		return
+	}
 	if cancel, ok := a.generationTaskCancel(id); ok {
 		cancel()
 	}
@@ -413,11 +417,11 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	originalActive := isRunningGenerationTaskStatus(original.Status) || strings.EqualFold(original.Status, "RETRYING")
-	if hasExecution && !originalActive && (execution.Status == providerexecution.Prepared || execution.Status == providerexecution.Submitting || execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded) {
+	if hasExecution && !originalActive {
 		writeError(w, http.StatusConflict, errors.New("terminal generation task cannot resume an existing provider execution"))
 		return
 	}
-	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && (execution.Status == providerexecution.Prepared || execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded)) {
+	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded) {
 		req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: cloneAnyMap(original.Params), ModuleCode: original.ModuleCode}
 		if req.Params == nil {
 			req.Params = map[string]any{}
@@ -433,6 +437,10 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if hasExecution {
+		if execution.Status == providerexecution.Succeeded {
+			writeError(w, http.StatusConflict, errors.New("terminal durable provider success cannot be retried; local completion or recovery must continue"))
+			return
+		}
 		switch execution.Status {
 		case providerexecution.Unknown, providerexecution.Submitting:
 			if execution.ProviderRequestID == nil {

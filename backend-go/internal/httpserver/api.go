@@ -53,6 +53,7 @@ type platformStore interface {
 	CreatePendingGenerationTask(createGenerationTaskRequest) (generationTask, error)
 	CompleteGenerationTask(string, createGenerationTaskRequest) (generationTask, error)
 	FailGenerationTask(string, string) (generationTask, error)
+	FailGenerationTaskDurable(string, string) (generationTask, error)
 	RecordPPTGenerationUsage(pptapp.Task) (adminBillingEvent, error)
 	RecordRAGUsage(context.Context, knowledgeapp.RAGBillingUsage) error
 	ListAssets() ([]asset, error)
