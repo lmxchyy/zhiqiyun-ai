@@ -200,6 +200,24 @@ func (s Service) PrepareVideoTask(ctx context.Context, req CreateRequest) (Creat
 	return req, nil
 }
 
+type providerSubmissionListenerKey struct{}
+
+func WithProviderSubmissionListener(ctx context.Context, fn func(string)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, providerSubmissionListenerKey{}, fn)
+}
+
+func NotifyProviderSubmission(ctx context.Context, providerRequestID string) {
+	if ctx == nil || strings.TrimSpace(providerRequestID) == "" {
+		return
+	}
+	if fn, ok := ctx.Value(providerSubmissionListenerKey{}).(func(string)); ok && fn != nil {
+		fn(strings.TrimSpace(providerRequestID))
+	}
+}
+
 func (s Service) createChatTask(ctx context.Context, req CreateRequest) (any, error) {
 	if s.chatProvider == nil {
 		return nil, ErrUnsupportedCapability

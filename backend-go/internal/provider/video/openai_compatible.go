@@ -99,28 +99,26 @@ func (p OpenAICompatible) Get(ctx context.Context, providerTaskID string) (any, 
 		return nil, errors.New("provider task id is required")
 	}
 	model := p.model
-	endpoint := videoProviderEndpointForModel(p.baseURL, p.endpoint, model)
-	u := strings.TrimRight(endpoint, "/") + "/" + url.PathEscape(providerTaskID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	decoded, err := p.getVideoTask(ctx, providerTaskID, model)
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	res, err := p.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(res.Body, 12<<20))
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("video provider %s query HTTP %d", p.providerCode(), res.StatusCode)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, err
 	}
 	status := normalizeVideoStatus(firstNonEmptyString(firstStringByKeys(decoded, "status", "state"), "UNKNOWN"))
-	return map[string]any{"provider": p.providerCode(), "providerTaskId": providerTaskID, "status": status, "videoUrl": extractPlayableVideoURL(decoded), "thumbnailUrl": firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster")}, nil
+	videoURL := extractPlayableVideoURL(decoded)
+	if videoURL == "" && strings.EqualFold(status, "SUCCEEDED") && providerTaskID != "" {
+		candidate := videoContentEndpointForModel(p.baseURL, p.endpoint, providerTaskID, model)
+		if isPlayableVideoURL(candidate) {
+			videoURL = candidate
+		}
+	}
+	return map[string]any{
+		"provider":       p.providerCode(),
+		"providerTaskId": providerTaskID,
+		"status":         status,
+		"videoUrl":       videoURL,
+		"thumbnailUrl":   firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster"),
+		"raw":            decoded,
+	}, nil
 }
 
 func (p OpenAICompatible) Create(ctx context.Context, req generation.CreateRequest) (any, error) {
@@ -274,6 +272,9 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, fmt.Errorf("decode video provider response: %w", err)
 	}
+	if initialID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId")); initialID != "" {
+		generation.NotifyProviderSubmission(ctx, initialID)
+	}
 	// Polling is a GET-only operation and therefore cannot duplicate the
 	// generation submission. Preserve the existing synchronous video contract;
 	// guarded recovery still prevents a second Create after an ambiguous POST.
@@ -281,17 +282,15 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	videoURL := extractPlayableVideoURL(decoded)
 	thumbnailURL := firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster", "image_url")
 	status := normalizeVideoStatus(firstNonEmptyString(firstStringByKeys(decoded, "status", "state"), "SUCCEEDED"))
-	if status == "FAILED" || videoURL == "" {
-		reason := firstNonEmptyString(
-			firstStringByKeys(decoded, "fail_reason", "error", "message"),
-			firstStringByKeys(decoded, "url"),
-		)
-		if status == "FAILED" || looksLikeVideoProviderErrorText(reason) {
-			if reason == "" {
-				reason = "video generation failed"
-			}
-			return nil, errors.New(reason)
+	reason := firstNonEmptyString(
+		firstStringByKeys(decoded, "fail_reason", "error", "message"),
+		firstStringByKeys(decoded, "url"),
+	)
+	if status == "FAILED" || (videoURL == "" && looksLikeVideoProviderErrorText(reason)) {
+		if reason == "" {
+			reason = "video generation failed"
 		}
+		return nil, errors.New(reason)
 	}
 	if videoURL == "" && strings.Contains(status, "PROCESS") {
 		status = "PROCESSING"
@@ -304,7 +303,17 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 		}
 	}
 	if videoURL == "" {
-		return nil, fmt.Errorf("video task %s is still processing; no result_url returned yet", taskID)
+		return map[string]any{
+			"provider":       p.providerCode(),
+			"providerTaskId": taskID,
+			"status":         "PROCESSING",
+			"raw":            decoded,
+			"metadata": map[string]any{
+				"duration":     req.Params["duration"],
+				"aspect_ratio": videoAspectRatio(req.Params),
+				"resolution":   req.Params["resolution"],
+			},
+		}, nil
 	}
 	return map[string]any{
 		"provider":       p.providerCode(),
