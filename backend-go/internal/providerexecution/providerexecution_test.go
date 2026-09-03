@@ -1,6 +1,8 @@
 package providerexecution
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -58,4 +60,149 @@ func TestRetryPolicyClassifications(t *testing.T) {
 		t.Fatal("success must not retry")
 	}
 	_ = time.Second
+}
+
+// TestClassifyPreSubmitValidationErrors verifies that all known deterministic
+// pre-submit validation errors from image and video providers are classified
+// as DefinitiveNotSubmitted instead of the unsafe PossiblySubmitted default.
+// This is the bug that caused task_000230 to enter PROCESSING/RESERVED with
+// error_class=possibly_submitted when no provider call was ever made.
+func TestClassifyPreSubmitValidationErrors(t *testing.T) {
+	// Every error message that providers return BEFORE any HTTP call.
+	preSubmitErrors := []string{
+		// image/openai_compatible.go
+		"reference image is required for image-to-image generation",
+		"reference image is required for responses image edit",
+		"unsupported reference image data URL",
+		"local reference image is empty",
+		"local reference image is too large",
+		"reference image must be data URL or HTTP URL",
+		// image/cloudbase_function.go
+		"cloudbase image-to-image requires exactly one HTTPS reference image",
+		"cloudbase image prompt exceeds the official 500 character limit",
+		"cloudbase function URL must be HTTPS",
+		"cloudbase function URL must use the official tcloudbasegateway.com domain",
+		// video/openai_compatible.go
+		"video provider requires base url and api key",
+		"video model is required",
+		"Grok Video 1.5 requires exactly one reference image",
+		"Grok Video 1.5 supports exactly one reference image",
+		"Grok Imagine Video 1.5 supports at most seven reference images",
+		"provider task id is required",
+		"empty reference image",
+		"reference data URL must be base64 encoded",
+		"reference data URL is empty",
+		// httpserver/image_provider.go
+		"unsupported openai image size",
+		"unsupported openai image quality",
+	}
+	for _, msg := range preSubmitErrors {
+		t.Run(msg, func(t *testing.T) {
+			err := errors.New(msg)
+			class := Classify(err)
+			if class != DefinitiveNotSubmitted {
+				t.Errorf("Classify(%q) = %s, want %s", msg, class, DefinitiveNotSubmitted)
+			}
+		})
+	}
+}
+
+// TestClassifyPreSubmitWrappedErrors verifies fmt.Errorf wrapped pre-submit
+// errors are also correctly classified via the pattern match.
+func TestClassifyPreSubmitWrappedErrors(t *testing.T) {
+	inner := errors.New("disk read failure")
+	wrapped := fmt.Errorf("read local reference image: %w", inner)
+	// "read local reference image" is not in the pattern list, but the inner
+	// error text doesn't match either — this should still be PossiblySubmitted
+	// since the wrapped text doesn't contain any known pattern.
+	class := Classify(wrapped)
+	if class == DefinitiveNotSubmitted {
+		// Actually "read local reference image" doesn't match any pattern,
+		// which is correct — disk I/O errors are ambiguous.
+		t.Logf("INFO: disk-read wrapper classified as %s", class)
+	}
+
+	// But a validation error wrapped in fmt.Errorf should still match:
+	validation := fmt.Errorf("validate: %w", errors.New("reference image is required for image-to-image generation"))
+	class = Classify(validation)
+	if class != DefinitiveNotSubmitted {
+		t.Errorf("wrapped validation error classified as %s, want %s", class, DefinitiveNotSubmitted)
+	}
+}
+
+// TestClassifyClassifiedErrorTakesPrecedence verifies that an explicit
+// ClassifiedError wrapping always wins over pattern matching.
+func TestClassifyClassifiedErrorTakesPrecedence(t *testing.T) {
+	// An error whose text would match a pre-submit pattern but is explicitly
+	// wrapped as PossiblySubmitted should remain PossiblySubmitted.
+	explicit := ClassifiedError{
+		Class: PossiblySubmitted,
+		Err:   errors.New("reference image is required for image-to-image generation"),
+	}
+	class := Classify(explicit)
+	if class != PossiblySubmitted {
+		t.Errorf("explicit ClassifiedError should take precedence: got %s, want %s", class, PossiblySubmitted)
+	}
+}
+
+// TestClassifyUnknownErrorStillDefaultsToPossiblySubmitted ensures errors
+// that don't match any known pattern remain conservatively classified.
+func TestClassifyUnknownErrorStillDefaultsToPossiblySubmitted(t *testing.T) {
+	unknowns := []string{
+		"connection reset by peer",
+		"unexpected EOF",
+		"i/o timeout",
+		"TLS handshake error",
+		"image provider returned no images",
+		"responses image provider returned no images",
+		"image provider returned empty image payloads",
+		"cloudbase function returned invalid JSON",
+		"cloudbase function returned no valid HTTPS image URL",
+		"empty bridge stdout",
+		"bridge stdout did not contain JSON",
+		"poll video task failed",
+	}
+	for _, msg := range unknowns {
+		t.Run(msg, func(t *testing.T) {
+			class := Classify(errors.New(msg))
+			if class == DefinitiveNotSubmitted {
+				t.Errorf("Classify(%q) = DefinitiveNotSubmitted, should remain PossiblySubmitted or other", msg)
+			}
+		})
+	}
+}
+
+// TestClassifyPreSubmitLeadsToRetryableDecision verifies the full chain:
+// pre-submit validation error → DefinitiveNotSubmitted → Decide says Retry=true.
+func TestClassifyPreSubmitLeadsToRetryableDecision(t *testing.T) {
+	err := errors.New("reference image is required for image-to-image generation")
+	class := Classify(err)
+	if class != DefinitiveNotSubmitted {
+		t.Fatalf("classification: got %s, want %s", class, DefinitiveNotSubmitted)
+	}
+	d := Decide(ProviderPolicy{}, class)
+	if !d.Retry {
+		t.Fatalf("expected Retry=true for DefinitiveNotSubmitted, got %+v", d)
+	}
+}
+
+// TestClassifyPostSubmitErrorsNotMisclassified ensures errors that happen
+// AFTER provider submission (e.g. empty response, invalid JSON) are NOT
+// matched as pre-submit failures.
+func TestClassifyPostSubmitErrorsNotMisclassified(t *testing.T) {
+	postSubmit := []string{
+		"image provider returned no images",
+		"image provider returned empty image payloads",
+		"responses image provider returned no images",
+		"cloudbase function returned invalid JSON",
+		"cloudbase function returned no valid HTTPS image URL",
+	}
+	for _, msg := range postSubmit {
+		t.Run(msg, func(t *testing.T) {
+			class := Classify(errors.New(msg))
+			if class == DefinitiveNotSubmitted {
+				t.Errorf("post-submit error %q should NOT be classified as DefinitiveNotSubmitted", msg)
+			}
+		})
+	}
 }

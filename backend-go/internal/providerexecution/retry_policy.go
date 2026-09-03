@@ -3,6 +3,7 @@ package providerexecution
 import (
 	"errors"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -47,6 +48,9 @@ func Classify(err error) ErrorClass {
 	if errors.As(err, &ce) {
 		return ce.Class
 	}
+	if isDeterministicPreSubmitFailure(err) {
+		return DefinitiveNotSubmitted
+	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		return PossiblySubmitted
@@ -54,6 +58,39 @@ func Classify(err error) ErrorClass {
 	return PossiblySubmitted
 }
 
+func isDeterministicPreSubmitFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	patterns := []string{
+		"reference image is required",
+		"requires exactly one",
+		"supports exactly one",
+		"supports at most",
+		"requires base url and api key",
+		"model is required",
+		"provider task id is required",
+		"unsupported reference image data url",
+		"reference image must be data url or http url",
+		"local reference image is empty",
+		"local reference image is too large",
+		"empty reference image",
+		"reference data url must be base64",
+		"reference data url is empty",
+		"cloudbase image prompt exceeds",
+		"function url must be https",
+		"function url must use the official",
+		"unsupported openai image size",
+		"unsupported openai image quality",
+	}
+	for _, p := range patterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
 // Decide is deliberately conservative: transport uncertainty never becomes a
 // blind Create retry. Query-first is required whenever a provider can be queried.
 func Decide(policy ProviderPolicy, class ErrorClass) RetryDecision {
