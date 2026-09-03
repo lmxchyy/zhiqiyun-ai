@@ -930,7 +930,7 @@ func (a api) generationAsyncCanaryDecision(req generation.CreateRequest) (bool, 
 		recordAsyncCanaryDecision(canaryReasonRejectedType)
 		return false, canaryReasonRejectedType
 	}
-	if !csvAllowlistContains(a.cfg.GenerationAsyncCanaryUsers, req.UserID) {
+	if !userAllowlistContainsOrWildcard(a.cfg.GenerationAsyncCanaryUsers, req.UserID) {
 		recordAsyncCanaryDecision(canaryReasonRejectedUser)
 		return false, canaryReasonRejectedUser
 	}
@@ -944,6 +944,23 @@ func (a api) generationAsyncCanaryDecision(req generation.CreateRequest) (bool, 
 	}
 	recordAsyncCanaryDecision(canaryReasonSelected)
 	return true, canaryReasonSelected
+}
+
+func userAllowlistContainsOrWildcard(raw, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	for _, allowed := range strings.Split(raw, ",") {
+		token := strings.TrimSpace(allowed)
+		if token == "*" {
+			return true
+		}
+		if token != "" && strings.EqualFold(candidate, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func csvAllowlistContains(raw, candidate string) bool {

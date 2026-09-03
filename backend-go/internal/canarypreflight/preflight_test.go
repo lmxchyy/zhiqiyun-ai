@@ -99,3 +99,20 @@ func TestPreflightOutputContainsStableMachineReadableKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestPreflightUserAllowlistWildcardValid(t *testing.T) {
+	cfg := config.Config{
+		GenerationAsyncCanaryUsers: "*",
+	}
+	result := Run(context.Background(), cfg, nil)
+	if result.UserAllowlist != "PASS" {
+		t.Fatalf("expected UserAllowlist=PASS for wildcard: got %s", result.UserAllowlist)
+	}
+
+	cfg.GenerationAsyncCanaryUsers = ""
+	result = Run(context.Background(), cfg, nil)
+	if result.UserAllowlist != "FAIL" {
+		t.Fatalf("expected UserAllowlist=FAIL for empty users: got %s", result.UserAllowlist)
+	}
+}
+

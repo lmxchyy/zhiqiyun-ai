@@ -30,6 +30,31 @@ IDs. A denied user, type, provider, or model continues through the existing
 synchronous path; it does not fail the request. `configured` is the execution
 provider identity for the runtime-configured default route.
 
+### User eligibility and wildcard support
+
+Setting `GENERATION_ASYNC_CANARY_USERS=*` marks all users as eligible at the
+user eligibility gate.
+
+Important constraints:
+- `GENERATION_ASYNC_CANARY_USERS=*` only satisfies the user eligibility gate.
+- It does **not** bypass `GENERATION_ASYNC_CANARY_ENABLED` (the kill switch).
+- It does **not** bypass the provider allowlist (`GENERATION_ASYNC_CANARY_PROVIDER_ALLOWLIST`).
+- It does **not** bypass the model allowlist (`GENERATION_ASYNC_CANARY_MODEL_ALLOWLIST`).
+- It does **not** enable async for video, PPT, Connector commands, or any non-image workload.
+- An empty string `GENERATION_ASYNC_CANARY_USERS=""` continues to fail closed (rejects all users).
+- Mixed CSV lists containing `*` (e.g. `user_000002,*`) make all users eligible.
+- Only the exact token `*` is recognized as the wildcard; tokens like `ALL`, `all`, or `true` are treated as literal user IDs and do not act as wildcards.
+
+Example production configuration for full user rollout:
+```env
+ASYNC_MESSAGING_ENABLED=true
+GENERATION_ASYNC_CANARY_ENABLED=true
+GENERATION_ASYNC_CANARY_USERS=*
+GENERATION_ASYNC_CANARY_PROVIDER_ALLOWLIST=configured
+GENERATION_ASYNC_CANARY_MODEL_ALLOWLIST=gpt-image-2
+```
+
+
 ## Read-only preflight
 
 From `backend-go`:
