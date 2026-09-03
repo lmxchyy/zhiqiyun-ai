@@ -1517,6 +1517,9 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 		return generationTask{}, err
 	}
 	if usesPersonalPoints != (authorization.ContextType != contextEnterprise) {
+		if canaryTaskMarker(task.Params) {
+			generationCanaryMetrics.pointsSettlementConflicts.Add(1)
+		}
 		return generationTask{}, ErrPersonalPointContextMismatch
 	}
 	var account pgPointAccount
@@ -1553,12 +1556,18 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	}
 	if usesPersonalPoints {
 		if pointCost != personalPointCost {
+			if canaryTaskMarker(task.Params) {
+				generationCanaryMetrics.pointsSettlementConflicts.Add(1)
+			}
 			return generationTask{}, ErrPersonalPointImportConflict
 		}
 		pointCost = personalPointCost
 	}
 	reserved := generationTaskReservedAndActive(task)
 	if usesPersonalPoints && !reserved {
+		if canaryTaskMarker(task.Params) {
+			generationCanaryMetrics.pointsSettlementConflicts.Add(1)
+		}
 		return generationTask{}, ErrPersonalPointReservationMarkerMissing
 	}
 	task.Status = "SUCCEEDED"
@@ -1605,6 +1614,9 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			}
 		} else {
 			if _, err := NewPostgresPersonalPointStore(s.db).captureTx(ctx, tx, PersonalPointCaptureCommand{AccountID: task.PersonalPointAccountID, UserID: userID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:capture:" + task.ID}); err != nil {
+				if canaryTaskMarker(task.Params) {
+					generationCanaryMetrics.pointsCaptureFailures.Add(1)
+				}
 				return generationTask{}, err
 			}
 		}
@@ -1840,6 +1852,9 @@ func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, t
 			}
 			nextAvailable := int(account.Available) + validatedPointCost
 			if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(validatedPointCost), IdempotencyKey: "generation:release:" + task.ID}); err != nil {
+				if canaryTaskMarker(task.Params) {
+					generationCanaryMetrics.pointsReleaseFailures.Add(1)
+				}
 				return generationTask{}, false, false, err
 			}
 			task.Params = generationBillingRefundParams(task.Params, now, int(account.Available), nextAvailable)
@@ -1942,6 +1957,9 @@ func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (ge
 			}
 			nextAvailable := int(account.Available) + validatedPointCost
 			if _, err := NewPostgresPersonalPointStore(s.db).releaseTx(ctx, tx, PersonalPointReleaseCommand{AccountID: task.PersonalPointAccountID, UserID: task.UserID, ReservationID: task.PersonalPointReservationID, Points: int64(validatedPointCost), IdempotencyKey: "generation:durable-release:" + task.ID}); err != nil {
+				if canaryTaskMarker(task.Params) {
+					generationCanaryMetrics.pointsReleaseFailures.Add(1)
+				}
 				return generationTask{}, err
 			}
 			task.Params = generationBillingRefundParams(task.Params, now, int(account.Available), nextAvailable)

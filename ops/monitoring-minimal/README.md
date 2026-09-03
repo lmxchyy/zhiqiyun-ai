@@ -19,7 +19,7 @@
 ## 接入步骤
 
 1. **抓取**：把 `prometheus.yml` 中的 job 合入现有 Prometheus 配置；目标为 API 容器地址（compose 内网主机名 `api:3100` 或宿主 `127.0.0.1:3100`）。
-2. **告警**：将 `alerts.yml` 的三条起步规则合入规则目录：实例失联、5xx 占比突增、平均时延翻倍。
+2. **告警**：将 `alerts.yml` 的三条起步规则合入规则目录：实例失联、5xx 占比突增、平均时延翻倍。启用异步生图 Stage 0 前还必须加载 `async-canary-alerts.yml`；指标、阈倌和 kill-switch drain 流程见 `docs/operations/async-generation-canary-stage0.md`。
 3. **封锁公网**：`/metrics` 含内部运行信息，必须在反向代理/LB 层拒绝外部访问（nginx 示例见下）。仅内网或 VPN 网段放行。
 
 ```nginx

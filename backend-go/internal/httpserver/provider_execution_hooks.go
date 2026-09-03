@@ -39,6 +39,7 @@ func executionIdentity(req generation.CreateRequest, capability, provider string
 	}
 	params := cloneAnyMap(req.Params)
 	delete(params, providerExecutionTaskParam)
+	delete(params, "_async_canary_provider")
 	delete(params, "terminal")
 	// These values describe a local retry attempt, not a new provider
 	// operation. Keeping them out of the fingerprint lets a retry recover the
@@ -53,10 +54,19 @@ func executionIdentity(req generation.CreateRequest, capability, provider string
 	}
 	return pe.Execution{TaskID: taskID, Provider: provider, ProviderModel: req.Model, Capability: capability, RequestFingerprint: fp, Attempt: 1}, taskID, nil
 }
+func isAsyncCanaryRequest(req generation.CreateRequest) bool {
+	value, _ := req.Params["generation_async_canary"].(bool)
+	return value
+}
+
 func providerName(req generation.CreateRequest) string {
-	for _, k := range []string{"provider", "providerName", "channel"} {
+	for _, k := range []string{"_async_canary_provider", "provider", "providerName", "channel"} {
 		if v, ok := req.Params[k].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
+			provider := strings.TrimSpace(v)
+			if strings.EqualFold(provider, "channel_runtime_env") {
+				continue
+			}
+			return provider
 		}
 	}
 	return "configured"
@@ -73,6 +83,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
 	if err == nil {
+		if isAsyncCanaryRequest(req) {
+			generationCanaryMetrics.providerRecoveries.Add(1)
+		}
 		// Only an explicitly safe pre-submit failure may switch provider identity.
 		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
 			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
@@ -82,8 +95,14 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 			e = latest
 			preparedExisting = true
 		case pe.Submitting:
+			if isAsyncCanaryRequest(req) {
+				generationCanaryMetrics.preventedDuplicates.Add(1)
+			}
 			if latest.ProviderRequestID == nil {
 				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+				if isAsyncCanaryRequest(req) {
+					generationCanaryMetrics.unknownTransitions.Add(1)
+				}
 			}
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Unknown:
@@ -122,6 +141,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Submitted, pe.Processing:
+			if isAsyncCanaryRequest(req) {
+				generationCanaryMetrics.preventedDuplicates.Add(1)
+			}
 			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
 			var images []generation.GeneratedImage
@@ -149,6 +171,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 		return nil, err
 	}
 	req.ClientRequestID = e.ProviderOperationKey
+	if isAsyncCanaryRequest(req) {
+		generationCanaryMetrics.providerSubmissionAttempts.Add(1)
+	}
 	images, callErr := p.Generate(ctx, req)
 	if callErr != nil {
 		class := pe.Classify(callErr)
@@ -156,17 +181,26 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 			_ = s.Transition(ctx, e.ID, pe.Failed, nil, ptrString(string(class)), ptrString(callErr.Error()))
 		} else {
 			_ = s.MarkUnknown(ctx, e.ID, class, callErr.Error())
+			if isAsyncCanaryRequest(req) {
+				generationCanaryMetrics.unknownTransitions.Add(1)
+			}
 			return nil, errors.Join(callErr, pe.ErrUnknownResubmitBlocked)
 		}
 		return nil, callErr
 	}
 	if len(images) == 0 {
 		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "image provider returned no images")
+		if isAsyncCanaryRequest(req) {
+			generationCanaryMetrics.unknownTransitions.Add(1)
+		}
 		return nil, pe.ErrUnknownResubmitBlocked
 	}
 	manifest, err := json.Marshal(durableGeneratedImages(images))
 	if err != nil {
 		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "encode provider image result: "+err.Error())
+		if isAsyncCanaryRequest(req) {
+			generationCanaryMetrics.unknownTransitions.Add(1)
+		}
 		return nil, pe.ErrUnknownResubmitBlocked
 	}
 	var providerRequestID *string

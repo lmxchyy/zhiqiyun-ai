@@ -535,7 +535,11 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 		if a.generationAsyncCanaryEligible(req) {
 			if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
 				req.Params["generation_async_canary"] = true
-				return canaryStore.CreatePendingGenerationTaskWithCanaryOutbox(req)
+				task, err := canaryStore.CreatePendingGenerationTaskWithCanaryOutbox(req)
+				if err == nil && !task.IdempotentReplay {
+					generationCanaryMetrics.submitted.Add(1)
+				}
+				return task, err
 			}
 		}
 		task, err := a.store.CreatePendingGenerationTask(req)

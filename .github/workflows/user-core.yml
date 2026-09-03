@@ -197,6 +197,12 @@ jobs:
         working-directory: backend-go
         run: go test -count=1 -v ./internal/storage -run '^TestArtifactConcurrencyClaimIdentity(Postgres)?$'
 
+      - name: Test async canary operations readiness (uncached)
+        working-directory: backend-go
+        env:
+          PR83_CANARY_PREFLIGHT_SIDE_EFFECT_CHECK: "1"
+        run: go test -p 1 -count=1 -v ./internal/httpserver ./internal/canarypreflight -run '^(TestTEST_A_AllowedImageSelectsAsync|TestTEST_B_ProviderDeniedFallsBackSync|TestTEST_C_ModelDeniedFallsBackSync|TestTEST_D_UserDeniedFallsBackSync|TestTEST_E_EmptyProviderAllowlistFailsClosed|TestTEST_F_EmptyModelAllowlistFailsClosed|TestTEST_G_VideoNeverSelectedForStage0|TestTEST_H_UnsupportedGenerationTypesNeverSelected|TestTEST_I_MetricsRegisteredAndExposed|TestTEST_J_OutboxObservability|TestTEST_K_ProviderExecutionUnknownStaleObservability|TestTEST_L_PointsUnsettledObservability|TestTEST_M_ArtifactRecoveryFailureObservability|TestTEST_N_KillSwitchStopsNewAsyncPreservesDrain|TestTEST_O_PreflightRejectsMissingMigrations|TestTEST_P_PreflightRejectsRabbitMQFailure|TestTEST_Q_PreflightIsSideEffectFree|TestAsyncCanaryOperationalMetricsSampleDurablePostgresState|TestGenerationAsyncCanaryEligibilityIsServerControlled|TestPreflightOutputContainsStableMachineReadableKeys)$'
+
       - name: Build backend
         working-directory: backend-go
         run: go build ./...
