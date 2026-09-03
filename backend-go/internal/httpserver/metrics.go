@@ -20,9 +20,10 @@ import (
 // not request traffic. Enable with XIANZHI_METRICS_ENABLED (default on) and
 // block external access at the reverse proxy; see ops/monitoring-minimal/.
 type httpMetricsCollector struct {
-	mu       sync.Mutex
-	started  time.Time
-	requests map[httpMetricsKey]*httpMetricsSeries
+	mu          sync.Mutex
+	started     time.Time
+	requests    map[httpMetricsKey]*httpMetricsSeries
+	operational *asyncCanaryOperationalCollector
 }
 
 type httpMetricsKey struct {
@@ -41,6 +42,11 @@ func newHTTPMetricsCollector() *httpMetricsCollector {
 		started:  time.Now(),
 		requests: make(map[httpMetricsKey]*httpMetricsSeries),
 	}
+}
+
+func (m *httpMetricsCollector) withAsyncCanaryOperations(collector *asyncCanaryOperationalCollector) *httpMetricsCollector {
+	m.operational = collector
+	return m
 }
 
 func (m *httpMetricsCollector) middleware() gin.HandlerFunc {
@@ -127,6 +133,9 @@ func (m *httpMetricsCollector) handler(w http.ResponseWriter, _ *http.Request) {
 		writeMetricFamily(rendered, gauge.name, gauge.help, "gauge", func() {
 			fmt.Fprintf(rendered, "%s %s\n", gauge.name, metricsFormatFloat(gauge.value))
 		})
+	}
+	if m.operational != nil {
+		renderAsyncCanaryMetrics(rendered, m.operational.snapshot())
 	}
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

@@ -182,6 +182,11 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	router := gin.New()
 	router.Use(gin.Recovery())
 	metricsCollector := newHTTPMetricsCollector()
+	if pgStore, ok := store.(*postgresStore); ok {
+		metricsCollector.withAsyncCanaryOperations(&asyncCanaryOperationalCollector{db: pgStore.db, cfg: cfg, readyStatus: readyStatus})
+	} else {
+		metricsCollector.withAsyncCanaryOperations(&asyncCanaryOperationalCollector{cfg: cfg, readyStatus: readyStatus})
+	}
 	if cfg.MetricsEnabled {
 		router.Use(metricsCollector.middleware())
 	}

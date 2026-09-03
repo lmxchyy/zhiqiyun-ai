@@ -1,0 +1,86 @@
+# Stage 0 async generation canary alerts.
+# Defaults assume a very small internal cohort. Tune the numeric values in a
+# copied environment-specific rule file after recording a baseline; do not
+# weaken DLQ/outbox-failed checks during Stage 0.
+groups:
+  - name: xianzhi-async-canary-stage0
+    rules:
+      - alert: XianzhiAsyncCanaryDLQNotEmpty
+        expr: xianzhi_async_canary_rabbitmq_dlq_depth > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Async canary DLQ contains messages"
+          description: "Stop new canary selection and inspect existing durable work. Stage 0 default threshold: 0 messages."
+
+      - alert: XianzhiAsyncCanaryOutboxFailed
+        expr: xianzhi_async_canary_outbox_failed > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Async canary outbox has failed events"
+          description: "Stage 0 default threshold: 0 failed events."
+
+      - alert: XianzhiAsyncCanaryOutboxOldestPending
+        expr: xianzhi_async_canary_outbox_oldest_pending_age_seconds > 300
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Async canary outbox is not draining"
+          description: "Oldest pending event exceeds the documented Stage 0 default of 300 seconds."
+
+      - alert: XianzhiAsyncCanaryProviderUnknown
+        expr: xianzhi_async_canary_provider_execution_count{status="unknown"} > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Provider execution entered UNKNOWN"
+          description: "Stage 0 default threshold: 0 UNKNOWN executions; investigate without resubmitting."
+
+      - alert: XianzhiAsyncCanaryProviderSubmittingStale
+        expr: xianzhi_async_canary_provider_execution_count{status="submitting"} > 0 and xianzhi_async_canary_provider_execution_oldest_age_seconds{status="submitting"} > 300
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Provider execution is stale in submitting"
+          description: "Oldest submitting execution exceeds the Stage 0 default of 300 seconds."
+
+      - alert: XianzhiAsyncCanaryGenerationStuck
+        expr: xianzhi_async_canary_generation_stuck > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Async canary generation task is stuck"
+          description: "A canary task exceeded the application stale threshold (default 15 minutes)."
+
+      - alert: XianzhiAsyncCanaryReservedPointsUnsettled
+        expr: xianzhi_async_canary_points_reserved_unsettled > 0 and xianzhi_async_canary_points_oldest_unsettled_age_seconds > 900
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Canary points reservation remains unsettled"
+          description: "Oldest reserved canary task exceeds the Stage 0 default of 900 seconds."
+
+      - alert: XianzhiAsyncCanaryArtifactRecoveryFailure
+        expr: increase(xianzhi_async_canary_artifact_recovery_failures_total[5m]) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: "Generated artifact recovery failed"
+          description: "Any artifact recovery failure blocks Stage 0 expansion."
+
+      - alert: XianzhiAsyncCanaryProviderSubmissionAnomaly
+        expr: increase(xianzhi_async_canary_provider_submission_attempts_total[5m]) > 10 or increase(xianzhi_async_canary_provider_duplicate_submissions_prevented_total[5m]) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "Async canary provider submission anomaly"
+          description: "Stage 0 default allows at most 10 attempts per 5 minutes and no prevented duplicate submissions. Tune only after a measured baseline."
+
+      - alert: XianzhiAsyncCanaryOperationalMetricsUnavailable
+        expr: xianzhi_async_canary_database_scrape_success == 0 or xianzhi_async_canary_rabbitmq_scrape_success == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Async canary operational metrics source unavailable"
+          description: "Production canary must not run blind."

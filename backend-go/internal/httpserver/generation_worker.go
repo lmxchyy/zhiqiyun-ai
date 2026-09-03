@@ -16,6 +16,12 @@ import (
 
 const generationImageCanaryConsumer = "generation-image-canary-worker"
 
+// generationCanaryDrainEnabled is intentionally independent of the new-submit
+// canary flag. Operators can stop selection while existing durable work drains.
+func generationCanaryDrainEnabled(cfg config.Config) bool {
+	return cfg.AsyncMessagingEnabled && cfg.ProviderExecutionSafetyEnabled
+}
+
 // RunGenerationImageCanaryWorker consumes only the opt-in image canary queue.
 // Provider calls remain behind the same API ProviderExecution hook and local
 // completion is performed by runGenerationTask.
@@ -23,8 +29,8 @@ func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *
 	if db == nil || manager == nil {
 		return fmt.Errorf("generation worker dependencies are required")
 	}
-	if !cfg.ProviderExecutionSafetyEnabled {
-		return fmt.Errorf("PROVIDER_EXECUTION_SAFETY_ENABLED must be true")
+	if !generationCanaryDrainEnabled(cfg) {
+		return fmt.Errorf("ASYNC_MESSAGING_ENABLED and PROVIDER_EXECUTION_SAFETY_ENABLED must be true")
 	}
 	store := newPostgresPrimaryStore(db, cfg.DataPath)
 	a := newAPI(store, cfg, nil, nil)
@@ -104,6 +110,10 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err != nil {
 		return err
 	}
+	recovery := false
+	if latest, latestErr := pe.NewStore(a.pgDB()).GetLatestByTask(context.Background(), taskID); latestErr == nil {
+		recovery = latest.Status == pe.Succeeded || latest.Status == pe.Unknown || latest.Status == pe.Submitted || latest.Status == pe.Processing
+	}
 	if execErr := checkProviderExecutionState(a.pgDB(), taskID); execErr != nil {
 		return execErr
 	}
@@ -120,6 +130,7 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 			return checkErr
 		}
 		if terminal {
+			generationCanaryMetrics.failed.Add(1)
 			return nil
 		}
 		return err
@@ -135,7 +146,14 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 		_ = finishTx.Rollback()
 		return err
 	}
-	return finishTx.Commit()
+	if err := finishTx.Commit(); err != nil {
+		return err
+	}
+	generationCanaryMetrics.completed.Add(1)
+	if recovery {
+		generationCanaryMetrics.recovered.Add(1)
+	}
+	return nil
 }
 
 func (a api) completeCanaryInboxIfTerminal(inbox *messaging.InboxStore, eventID, taskID string) (bool, error) {

@@ -128,6 +128,8 @@ type Config struct {
 	AsyncMessagingEnabled          bool
 	GenerationAsyncCanaryEnabled   bool
 	GenerationAsyncCanaryUsers     string
+	GenerationAsyncCanaryProviderAllowlist string
+	GenerationAsyncCanaryModelAllowlist    string
 	ProviderExecutionSafetyEnabled bool
 }
 
@@ -331,6 +333,8 @@ func Load() Config {
 		AsyncMessagingEnabled:             boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
 		GenerationAsyncCanaryEnabled:      boolEnv(os.Getenv("GENERATION_ASYNC_CANARY_ENABLED")),
 		GenerationAsyncCanaryUsers:        os.Getenv("GENERATION_ASYNC_CANARY_USERS"),
+		GenerationAsyncCanaryProviderAllowlist: os.Getenv("GENERATION_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
+		GenerationAsyncCanaryModelAllowlist:    os.Getenv("GENERATION_ASYNC_CANARY_MODEL_ALLOWLIST"),
 		ProviderExecutionSafetyEnabled:    boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
 	}
 }

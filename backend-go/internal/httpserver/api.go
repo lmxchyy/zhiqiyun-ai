@@ -889,6 +889,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !task.IdempotentReplay {
+				generationCanaryMetrics.submitted.Add(1)
 				a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 			}
 			writeJSON(w, task)
@@ -914,12 +915,44 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a api) generationAsyncCanaryEligible(req generation.CreateRequest) bool {
-	if !a.cfg.AsyncMessagingEnabled || !a.cfg.GenerationAsyncCanaryEnabled || !a.cfg.ProviderExecutionSafetyEnabled || !isImageGenerationRequest(req.Type) || strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
+	selected, _ := a.generationAsyncCanaryDecision(req)
+	return selected
+}
+
+func (a api) generationAsyncCanaryDecision(req generation.CreateRequest) (bool, string) {
+	if !a.cfg.AsyncMessagingEnabled || !a.cfg.GenerationAsyncCanaryEnabled || !a.cfg.ProviderExecutionSafetyEnabled {
+		recordAsyncCanaryDecision(canaryReasonDisabled)
+		return false, canaryReasonDisabled
+	}
+	switch strings.ToUpper(strings.TrimSpace(req.Type)) {
+	case "TEXT_TO_IMAGE", "IMAGE_TO_IMAGE":
+	default:
+		recordAsyncCanaryDecision(canaryReasonRejectedType)
+		return false, canaryReasonRejectedType
+	}
+	if !csvAllowlistContains(a.cfg.GenerationAsyncCanaryUsers, req.UserID) {
+		recordAsyncCanaryDecision(canaryReasonRejectedUser)
+		return false, canaryReasonRejectedUser
+	}
+	if !csvAllowlistContains(a.cfg.GenerationAsyncCanaryProviderAllowlist, providerName(req)) {
+		recordAsyncCanaryDecision(canaryReasonRejectedProvider)
+		return false, canaryReasonRejectedProvider
+	}
+	if !csvAllowlistContains(a.cfg.GenerationAsyncCanaryModelAllowlist, req.Model) {
+		recordAsyncCanaryDecision(canaryReasonRejectedModel)
+		return false, canaryReasonRejectedModel
+	}
+	recordAsyncCanaryDecision(canaryReasonSelected)
+	return true, canaryReasonSelected
+}
+
+func csvAllowlistContains(raw, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
 		return false
 	}
-	userID := strings.TrimSpace(req.UserID)
-	for _, allowed := range strings.Split(a.cfg.GenerationAsyncCanaryUsers, ",") {
-		if userID != "" && userID == strings.TrimSpace(allowed) {
+	for _, allowed := range strings.Split(raw, ",") {
+		if strings.EqualFold(candidate, strings.TrimSpace(allowed)) && strings.TrimSpace(allowed) != "" {
 			return true
 		}
 	}
@@ -1064,7 +1097,16 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 
 // recoverSucceededGenerationTask rebuilds only local state from the provider
 // execution's durable manifest. It intentionally has no provider/service call.
-func (a api) recoverSucceededGenerationTask(task generationTask, execution providerexecution.Execution) error {
+func (a api) recoverSucceededGenerationTask(task generationTask, execution providerexecution.Execution) (returnErr error) {
+	isCanary := canaryTaskMarker(task.Params)
+	if isCanary {
+		generationCanaryMetrics.artifactRecoveryAttempts.Add(1)
+	}
+	defer func() {
+		if isCanary && returnErr != nil {
+			generationCanaryMetrics.artifactRecoveryFailures.Add(1)
+		}
+	}()
 	var req generation.CreateRequest
 	req.UserID = task.UserID
 	req.Type = task.Type
@@ -1166,6 +1208,9 @@ func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.Cr
 	}
 	providerErrs := []error{firstErr}
 	for _, candidate := range candidates {
+		if isAsyncCanaryRequest(req) {
+			generationCanaryMetrics.fallbackAttempts.Add(1)
+		}
 		fallbackReq := cloneGenerationCreateRequest(req)
 		if fallbackReq.Params == nil {
 			fallbackReq.Params = map[string]any{}
