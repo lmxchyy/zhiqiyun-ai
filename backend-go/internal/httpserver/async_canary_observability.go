@@ -126,18 +126,29 @@ func (c *asyncCanaryOperationalCollector) collectDatabase(ctx context.Context, s
 	queries := []struct {
 		query string
 		dest  []any
+		args  []any
 	}{
-		{`SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='failed'), COALESCE(EXTRACT(EPOCH FROM now()-min(CASE WHEN status='pending' THEN created_at END)),0), COALESCE(sum(attempt_count),0) FROM outbox_events`, []any{&s.outboxPending, &s.outboxFailed, &s.outboxOldestSeconds, &s.outboxPublishRetries}},
-		{`SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(updated_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false) AND COALESCE(NULLIF(updated_at,'')::timestamptz,now()) < now()-$1::interval`, []any{&s.generationStuckCount, &s.generationStuckAge}},
-		{`SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false)`, []any{&s.pointsUnsettledCount, &s.pointsUnsettledAge}},
-		{`SELECT count(*) FROM xz_file_objects WHERE business_type='generation_result' AND status='PENDING_UPLOAD' AND created_at < now()-$1::interval`, []any{&s.artifactStaleClaims}},
+		{
+			query: `SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='failed'), COALESCE(EXTRACT(EPOCH FROM now()-min(CASE WHEN status='pending' THEN created_at END)),0), COALESCE(sum(attempt_count),0) FROM outbox_events`,
+			dest:  []any{&s.outboxPending, &s.outboxFailed, &s.outboxOldestSeconds, &s.outboxPublishRetries},
+		},
+		{
+			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(updated_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false) AND COALESCE(NULLIF(updated_at,'')::timestamptz,now()) < now()-$1::interval`,
+			dest:  []any{&s.generationStuckCount, &s.generationStuckAge},
+			args:  []any{fmt.Sprintf("%f seconds", asyncCanaryStaleAfter.Seconds())},
+		},
+		{
+			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false)`,
+			dest:  []any{&s.pointsUnsettledCount, &s.pointsUnsettledAge},
+		},
+		{
+			query: `SELECT count(*) FROM xz_file_objects WHERE business_type='generation_result' AND status='PENDING_UPLOAD' AND created_at < now()-$1::interval`,
+			dest:  []any{&s.artifactStaleClaims},
+			args:  []any{fmt.Sprintf("%f seconds", asyncCanaryStaleAfter.Seconds())},
+		},
 	}
-	for index, item := range queries {
-		args := []any{}
-		if index > 0 {
-			args = append(args, fmt.Sprintf("%f seconds", asyncCanaryStaleAfter.Seconds()))
-		}
-		if err := c.db.QueryRowContext(ctx, item.query, args...).Scan(item.dest...); err != nil {
+	for _, item := range queries {
+		if err := c.db.QueryRowContext(ctx, item.query, item.args...).Scan(item.dest...); err != nil {
 			return err
 		}
 	}
