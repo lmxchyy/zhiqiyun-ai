@@ -127,7 +127,7 @@ func (c *asyncCanaryOperationalCollector) collectDatabase(ctx context.Context, s
 		query string
 		dest  []any
 	}{
-		{`SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='failed'), COALESCE(EXTRACT(EPOCH FROM now()-min(created_at)) FILTER (WHERE status='pending'),0), COALESCE(sum(attempt_count),0) FROM outbox_events`, []any{&s.outboxPending, &s.outboxFailed, &s.outboxOldestSeconds, &s.outboxPublishRetries}},
+		{`SELECT count(*) FILTER (WHERE status='pending'), count(*) FILTER (WHERE status='failed'), COALESCE(EXTRACT(EPOCH FROM now()-min(CASE WHEN status='pending' THEN created_at END)),0), COALESCE(sum(attempt_count),0) FROM outbox_events`, []any{&s.outboxPending, &s.outboxFailed, &s.outboxOldestSeconds, &s.outboxPublishRetries}},
 		{`SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(updated_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false) AND COALESCE(NULLIF(updated_at,'')::timestamptz,now()) < now()-$1::interval`, []any{&s.generationStuckCount, &s.generationStuckAge}},
 		{`SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false)`, []any{&s.pointsUnsettledCount, &s.pointsUnsettledAge}},
 		{`SELECT count(*) FROM xz_file_objects WHERE business_type='generation_result' AND status='PENDING_UPLOAD' AND created_at < now()-$1::interval`, []any{&s.artifactStaleClaims}},
