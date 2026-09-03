@@ -329,7 +329,15 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 		return nil, err
 	}
 	req.ClientRequestID = e.ProviderOperationKey
-	result, callErr := p.Create(ctx, req)
+	notifySubmission := func(requestID string) {
+		trimmed := strings.TrimSpace(requestID)
+		if trimmed == "" {
+			return
+		}
+		_ = s.Transition(ctx, e.ID, pe.Submitted, &trimmed, nil, nil)
+	}
+	ctxWithListener := generation.WithProviderSubmissionListener(ctx, notifySubmission)
+	result, callErr := p.Create(ctxWithListener, req)
 	if callErr != nil {
 		class := pe.Classify(callErr)
 		if class == pe.DefinitiveNotSubmitted || class == pe.RetryableBeforeSubmit {
