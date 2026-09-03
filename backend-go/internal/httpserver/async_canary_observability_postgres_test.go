@@ -30,7 +30,16 @@ func TestAsyncCanaryOperationalMetricsSampleDurablePostgresState(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO provider_executions(task_id,provider,provider_model,capability,attempt,status,request_fingerprint,updated_at) VALUES($1,'configured','gpt-image-2','image',1,'unknown',$2,now()-interval '20 minutes')`, taskID, strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := (&asyncCanaryOperationalCollector{db: db}).snapshot()
+	collector := &asyncCanaryOperationalCollector{db: db}
+	ctxCollect, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var s asyncCanaryOperationalSnapshot
+	s.providerCount = map[string]float64{}
+	s.providerAge = map[string]float64{}
+	if err := collector.collectDatabase(ctxCollect, &s); err != nil {
+		t.Fatalf("collectDatabase failed directly: %v", err)
+	}
+	snapshot := collector.snapshot()
 	if snapshot.dbScrapeOK != 1 || snapshot.outboxPending < 1 || snapshot.outboxPublishRetries < 2 {
 		t.Fatalf("outbox snapshot not updated: %+v", snapshot)
 	}

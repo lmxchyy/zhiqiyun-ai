@@ -103,8 +103,10 @@ func (c *asyncCanaryOperationalCollector) snapshot() asyncCanaryOperationalSnaps
 	if c.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if c.collectDatabase(ctx, &s) == nil {
+		if err := c.collectDatabase(ctx, &s); err == nil {
 			s.dbScrapeOK = 1
+		} else {
+			_ = err
 		}
 	}
 	if strings.TrimSpace(c.cfg.RabbitMQURL) != "" {
