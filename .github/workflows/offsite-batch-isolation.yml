@@ -1,0 +1,21 @@
+name: offsite-batch-isolation
+on:
+  pull_request:
+    paths:
+      - "ops/backup-offsite-upload-pending.sh"
+      - "tests/backup-offsite-batch."
+      - ".github/workflows/offsite-batch-isolation.yml"
+jobs:
+  offsite-batch-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate syntax
+        run: |
+          bash -n ops/backup-offsite-upload-pending.sh
+          bash -n tests/backup-offsite-batch.harness.sh
+      - name: Run batch tests
+        run: node --test tests/backup-offsite-batch.test.mjs
