@@ -13,6 +13,7 @@ def trigger_kill_switch(reason):
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     content = content.replace("GENERATION_ASYNC_CANARY_ENABLED=true", "GENERATION_ASYNC_CANARY_ENABLED=false")
+    content = content.replace("VIDEO_ASYNC_CANARY_ENABLED=true", "VIDEO_ASYNC_CANARY_ENABLED=false")
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     subprocess.run(
@@ -44,6 +45,8 @@ def check_metrics():
 
     if metrics.get("xianzhi_async_canary_rabbitmq_dlq_depth", 0) > 0:
         trigger_kill_switch("RabbitMQ DLQ depth > 0")
+    if metrics.get("xianzhi_async_canary_video_rabbitmq_dlq_depth", 0) > 0:
+        trigger_kill_switch("Video RabbitMQ DLQ depth > 0")
     if metrics.get("xianzhi_async_canary_outbox_failed", 0) > 0:
         trigger_kill_switch("Outbox failed count > 0")
     if metrics.get("xianzhi_async_canary_points_settlement_conflicts_total", 0) > 0:
@@ -52,6 +55,8 @@ def check_metrics():
         trigger_kill_switch("Artifact recovery failures > 0")
     if metrics.get("xianzhi_async_canary_generation_stuck", 0) > 0:
         trigger_kill_switch("Generation tasks stuck > 0")
+    if metrics.get("xianzhi_async_canary_video_generation_stuck", 0) > 0:
+        trigger_kill_switch("Video generation tasks stuck > 0")
 
     log("Metrics check PASS: all safety indicators normal.")
 

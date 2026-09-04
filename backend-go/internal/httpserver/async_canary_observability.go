@@ -81,10 +81,13 @@ type asyncCanaryOperationalSnapshot struct {
 	dbScrapeOK, rabbitScrapeOK                                             float64
 	outboxPending, outboxFailed, outboxOldestSeconds, outboxPublishRetries float64
 	rabbitQueueDepth, rabbitRetryDepth, rabbitDLQDepth, rabbitConsumers    float64
+	rabbitVideoQueueDepth, rabbitVideoRetryDepth, rabbitVideoDLQDepth, rabbitVideoConsumers float64
 	providerCount                                                          map[string]float64
 	providerAge                                                            map[string]float64
 	generationStuckCount, generationStuckAge                               float64
 	pointsUnsettledCount, pointsUnsettledAge                               float64
+	videoGenerationStuckCount, videoGenerationStuckAge                     float64
+	videoPointsUnsettledCount, videoPointsUnsettledAge                     float64
 	artifactStaleClaims                                                    float64
 	consumerReady                                                          float64
 }
@@ -93,6 +96,7 @@ func (c *asyncCanaryOperationalCollector) snapshot() asyncCanaryOperationalSnaps
 	s := asyncCanaryOperationalSnapshot{
 		providerCount: map[string]float64{}, providerAge: map[string]float64{},
 		rabbitQueueDepth: -1, rabbitRetryDepth: -1, rabbitDLQDepth: -1,
+		rabbitVideoQueueDepth: -1, rabbitVideoRetryDepth: -1, rabbitVideoDLQDepth: -1,
 	}
 	for _, status := range []string{"submitting", "submitted", "processing", "unknown", "failed"} {
 		s.providerCount[status], s.providerAge[status] = 0, 0
@@ -140,6 +144,15 @@ func (c *asyncCanaryOperationalCollector) collectDatabase(ctx context.Context, s
 		{
 			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND COALESCE((params->>'generation_async_canary')::boolean,false)`,
 			dest:  []any{&s.pointsUnsettledCount, &s.pointsUnsettledAge},
+		},
+		{
+			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(updated_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND type IN ('TEXT_TO_VIDEO','IMAGE_TO_VIDEO','VIDEO_TO_VIDEO') AND COALESCE((params->>'generation_async_canary')::boolean,false) AND COALESCE(NULLIF(updated_at,'')::timestamptz,now()) < now()-$1::interval`,
+			dest:  []any{&s.videoGenerationStuckCount, &s.videoGenerationStuckAge},
+			args:  []any{fmt.Sprintf("%f seconds", asyncCanaryStaleAfter.Seconds())},
+		},
+		{
+			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND type IN ('TEXT_TO_VIDEO','IMAGE_TO_VIDEO','VIDEO_TO_VIDEO') AND COALESCE((params->>'generation_async_canary')::boolean,false)`,
+			dest:  []any{&s.videoPointsUnsettledCount, &s.videoPointsUnsettledAge},
 		},
 		{
 			query: `SELECT count(*) FROM xz_file_objects WHERE business_type='generation_result' AND status='PENDING_UPLOAD' AND created_at < now()-$1::interval`,
@@ -192,6 +205,16 @@ func (c *asyncCanaryOperationalCollector) collectRabbit(ctx context.Context, s *
 	s.rabbitConsumers = float64(business.Consumers)
 	s.rabbitRetryDepth = float64(retry.Messages)
 	s.rabbitDLQDepth = float64(dlq.Messages)
+	if videoBusiness, err := ch.QueueInspect(messaging.GenerationVideoCanaryQueue); err == nil {
+		s.rabbitVideoQueueDepth = float64(videoBusiness.Messages)
+		s.rabbitVideoConsumers = float64(videoBusiness.Consumers)
+	}
+	if videoRetry, err := ch.QueueInspect(messaging.GenerationVideoCanaryRetryQueue); err == nil {
+		s.rabbitVideoRetryDepth = float64(videoRetry.Messages)
+	}
+	if videoDLQ, err := ch.QueueInspect(messaging.GenerationVideoCanaryDLQ); err == nil {
+		s.rabbitVideoDLQDepth = float64(videoDLQ.Messages)
+	}
 	return nil
 }
 
@@ -212,6 +235,10 @@ func renderAsyncCanaryMetrics(rendered *strings.Builder, snapshot asyncCanaryOpe
 	writeGauge("xianzhi_async_canary_rabbitmq_retry_queue_depth", "Generation canary retry queue depth.", snapshot.rabbitRetryDepth)
 	writeGauge("xianzhi_async_canary_rabbitmq_dlq_depth", "Generation canary dead-letter queue depth.", snapshot.rabbitDLQDepth)
 	writeGauge("xianzhi_async_canary_rabbitmq_consumers", "RabbitMQ consumers on the generation canary queue.", snapshot.rabbitConsumers)
+	writeGauge("xianzhi_async_canary_video_rabbitmq_queue_depth", "Generation video canary business queue depth.", snapshot.rabbitVideoQueueDepth)
+	writeGauge("xianzhi_async_canary_video_rabbitmq_retry_queue_depth", "Generation video canary retry queue depth.", snapshot.rabbitVideoRetryDepth)
+	writeGauge("xianzhi_async_canary_video_rabbitmq_dlq_depth", "Generation video canary dead-letter queue depth.", snapshot.rabbitVideoDLQDepth)
+	writeGauge("xianzhi_async_canary_video_rabbitmq_consumers", "RabbitMQ consumers on the generation video canary queue.", snapshot.rabbitVideoConsumers)
 	writeGauge("xianzhi_async_canary_consumer_ready", "Whether the embedded async runtime reports READY.", snapshot.consumerReady)
 	writeMetricFamily(rendered, "xianzhi_async_canary_provider_execution_count", "Provider executions by safety state.", "gauge", func() {
 		for _, status := range []string{"submitting", "submitted", "processing", "unknown", "failed"} {
@@ -227,6 +254,10 @@ func renderAsyncCanaryMetrics(rendered *strings.Builder, snapshot asyncCanaryOpe
 	writeGauge("xianzhi_async_canary_generation_oldest_stuck_age_seconds", "Age of the oldest stuck canary generation task.", snapshot.generationStuckAge)
 	writeGauge("xianzhi_async_canary_points_reserved_unsettled", "Canary point reservations not yet captured or released.", snapshot.pointsUnsettledCount)
 	writeGauge("xianzhi_async_canary_points_oldest_unsettled_age_seconds", "Age of the oldest unsettled canary point reservation.", snapshot.pointsUnsettledAge)
+	writeGauge("xianzhi_async_canary_video_generation_stuck", "Video canary generation tasks processing beyond stale threshold.", snapshot.videoGenerationStuckCount)
+	writeGauge("xianzhi_async_canary_video_generation_oldest_stuck_age_seconds", "Age of the oldest stuck video canary generation task.", snapshot.videoGenerationStuckAge)
+	writeGauge("xianzhi_async_canary_video_points_reserved_unsettled", "Video canary point reservations not yet captured or released.", snapshot.videoPointsUnsettledCount)
+	writeGauge("xianzhi_async_canary_video_points_oldest_unsettled_age_seconds", "Age of the oldest unsettled video canary point reservation.", snapshot.videoPointsUnsettledAge)
 	writeGauge("xianzhi_async_canary_artifact_stale_claims", "Stale generated-artifact upload claims.", snapshot.artifactStaleClaims)
 	writeMetricFamily(rendered, "xianzhi_async_canary_decisions_total", "Server-side async canary decisions by non-sensitive reason.", "counter", func() {
 		decisions := asyncCanaryDecisionSnapshot()
