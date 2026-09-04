@@ -8,7 +8,8 @@ import (
 
 // analyticsAPI handles analytics-related HTTP endpoints
 type analyticsAPI struct {
-	store platformStore
+	store    platformStore
+	sessions authSessionStore
 }
 
 func parseAnalyticsQuery(values url.Values) AnalyticsQueryParams {
@@ -21,6 +22,7 @@ func parseAnalyticsQuery(values url.Values) AnalyticsQueryParams {
 	if tz := values.Get("timezone"); tz != "" {
 		params.Timezone = tz
 	}
+	// Defensively ignore any tenant_id, agent_id, or operation_center_id supplied by the client
 	return params
 }
 
@@ -36,16 +38,26 @@ func parseAnalyticsDays(raw string) int {
 }
 
 // newAnalyticsAPI creates a new analyticsAPI instance
-func newAnalyticsAPI(store platformStore) analyticsAPI {
-	return analyticsAPI{store: store}
+func newAnalyticsAPI(store platformStore, sessions authSessionStore) analyticsAPI {
+	return analyticsAPI{store: store, sessions: sessions}
+}
+
+// resolveScope enforces server-side data visibility and fails closed.
+func (a analyticsAPI) resolveScope(r *http.Request) (AnalyticsScope, error) {
+	return resolveAnalyticsScope(r.Context(), a.store, r, a.sessions)
 }
 
 // AnalyticsOverview handles GET /api/admin/analytics/overview
 func (a analyticsAPI) AnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
 
-	// Parse query parameters
 	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsOverview(ctx, params)
 	if err != nil {
@@ -58,28 +70,14 @@ func (a analyticsAPI) AnalyticsOverview(w http.ResponseWriter, r *http.Request) 
 // AnalyticsUsers handles GET /api/admin/analytics/users
 func (a analyticsAPI) AnalyticsUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsUsers(ctx, params)
 	if err != nil {
@@ -92,28 +90,14 @@ func (a analyticsAPI) AnalyticsUsers(w http.ResponseWriter, r *http.Request) {
 // AnalyticsGeneration handles GET /api/admin/analytics/generation
 func (a analyticsAPI) AnalyticsGeneration(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsGeneration(ctx, params)
 	if err != nil {
@@ -126,28 +110,14 @@ func (a analyticsAPI) AnalyticsGeneration(w http.ResponseWriter, r *http.Request
 // AnalyticsTokens handles GET /api/admin/analytics/tokens
 func (a analyticsAPI) AnalyticsTokens(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsTokens(ctx, params)
 	if err != nil {
@@ -160,28 +130,14 @@ func (a analyticsAPI) AnalyticsTokens(w http.ResponseWriter, r *http.Request) {
 // AnalyticsPoints handles GET /api/admin/analytics/points
 func (a analyticsAPI) AnalyticsPoints(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsPoints(ctx, params)
 	if err != nil {
@@ -194,28 +150,14 @@ func (a analyticsAPI) AnalyticsPoints(w http.ResponseWriter, r *http.Request) {
 // AnalyticsModels handles GET /api/admin/analytics/models
 func (a analyticsAPI) AnalyticsModels(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsModels(ctx, params)
 	if err != nil {
@@ -228,28 +170,14 @@ func (a analyticsAPI) AnalyticsModels(w http.ResponseWriter, r *http.Request) {
 // AnalyticsProviders handles GET /api/admin/analytics/providers
 func (a analyticsAPI) AnalyticsProviders(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsProviders(ctx, params)
 	if err != nil {
@@ -262,28 +190,14 @@ func (a analyticsAPI) AnalyticsProviders(w http.ResponseWriter, r *http.Request)
 // AnalyticsTrends handles GET /api/admin/analytics/trends
 func (a analyticsAPI) AnalyticsTrends(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Parse query parameters
-	params := AnalyticsQueryParams{
-		Days:     7,
-		Timezone: "Asia/Shanghai",
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
 	}
 
-	if daysStr := r.URL.Query().Get("days"); daysStr != "" {
-		if _, err := strconv.Atoi(daysStr); err == nil {
-			params.Days = parseAnalyticsDays(daysStr)
-			if params.Days <= 0 {
-				params.Days = 1
-			}
-			if params.Days > 90 {
-				params.Days = 90
-			}
-		}
-	}
-
-	if tz := r.URL.Query().Get("timezone"); tz != "" {
-		params.Timezone = tz
-	}
+	params := parseAnalyticsQuery(r.URL.Query())
+	params.Scope = scope
 
 	data, err := a.store.AnalyticsTrends(ctx, params)
 	if err != nil {

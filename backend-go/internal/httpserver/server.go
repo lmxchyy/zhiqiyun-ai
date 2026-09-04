@@ -84,7 +84,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		knowledge.rag.SetBillingRecorder(store)
 	}
 	admin := newAdminAPI(store, sessions)
-	analytics := newAnalyticsAPI(store)
+	analytics := newAnalyticsAPI(store, sessions)
 	businessPlans := newBusinessPlanAdminAPI(store)
 	pricePlans := newPricePlanAdminAPI(store)
 	pricePlanTestWhitelist := newPricePlanTestWhitelistAdminAPI(store)

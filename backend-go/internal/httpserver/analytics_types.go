@@ -146,10 +146,11 @@ type UserMetric struct {
 
 // AnalyticsQueryParams 统一查询参数
 type AnalyticsQueryParams struct {
-	Days      int    `form:"days"`      // 默认 7，最大 90
-	Timezone  string `form:"timezone"`  // 默认 Asia/Shanghai
-	StartDate string `form:"startDate"` // 可选：显式起始日期 YYYY-MM-DD
-	EndDate   string `form:"endDate"`   // 可选：显式结束日期 YYYY-MM-DD
+	Days      int            `form:"days"`      // 默认 7，最大 90
+	Timezone  string         `form:"timezone"`  // 默认 Asia/Shanghai
+	StartDate string         `form:"startDate"` // 可选：显式起始日期 YYYY-MM-DD
+	EndDate   string         `form:"endDate"`   // 可选：显式结束日期 YYYY-MM-DD
+	Scope     AnalyticsScope `json:"-"`         // 服务端注入的数据范围，绝对禁止客户端直接覆盖
 }
 
 // 内部使用：解析后的时间范围
