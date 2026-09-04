@@ -73,7 +73,7 @@ func openProviderExecutionHookTestDB(t *testing.T) *sql.DB {
 func seedFailedRecoveryExecution(t *testing.T, store *pe.Store, taskID string, status pe.Status) {
 	t.Helper()
 	ctx := context.Background()
-	fingerprint, err := pe.Fingerprint(taskID, "queryable-video", "queryable-video", "video", map[string]any{"provider": "queryable-video"})
+	fingerprint, err := videoRequestFingerprint(taskID, "queryable-video", "video", "queryable-video", map[string]any{"provider": "queryable-video"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
 			providerExecutionTaskParam: taskID,
 			"provider":                 "queryable-video",
 		},
-	}, provider, store)
+	}, provider, store, nil)
 	if !errors.Is(err, pe.ErrProviderExecutionFailed) {
 		t.Fatalf("FAILED_PROVIDER_RECOVERY=FAIL: err=%v", err)
 	}
@@ -186,7 +186,7 @@ func TestGuardedVideoFailedGetForSucceededExecutionReturnsFailure(t *testing.T) 
 			providerExecutionTaskParam: taskID,
 			"provider":                 "queryable-video",
 		},
-	}, provider, store)
+	}, provider, store, nil)
 	if !errors.Is(err, pe.ErrProviderExecutionFailed) {
 		t.Fatalf("FAILED_PROVIDER_RECOVERY=FAIL for succeeded local state: err=%v", err)
 	}
@@ -243,7 +243,7 @@ func TestTEST_A_CrashBeforeSubmitting_RetryMaySubmitOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := pe.NewStore(db)
-	fp, _ := pe.Fingerprint(taskID, "mock-video", "mock-video", "video", map[string]any{"provider": "mock-video"})
+	fp, _ := videoRequestFingerprint(taskID, "mock-video", "video", "mock-video", map[string]any{"provider": "mock-video"})
 	_, err := store.CreatePrepared(ctx, pe.Execution{
 		TaskID:             taskID,
 		Provider:           "mock-video",
@@ -262,7 +262,7 @@ func TestTEST_A_CrashBeforeSubmitting_RetryMaySubmitOnce(t *testing.T) {
 			"provider":                 "mock-video",
 		},
 	}
-	res, err := guardedVideo(ctx, req, provider, store)
+	res, err := guardedVideo(ctx, req, provider, store, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestTEST_B_SubmittingCommitted_CrashBeforeIDPersisted_RedeliveryNeverCallsC
 		t.Fatal(err)
 	}
 	store := pe.NewStore(db)
-	fp, _ := pe.Fingerprint(taskID, "mock-video", "mock-video", "video", map[string]any{"provider": "mock-video"})
+	fp, _ := videoRequestFingerprint(taskID, "mock-video", "video", "mock-video", map[string]any{"provider": "mock-video"})
 	_, err := store.CreatePrepared(ctx, pe.Execution{
 		TaskID:             taskID,
 		Provider:           "mock-video",
@@ -311,7 +311,7 @@ func TestTEST_B_SubmittingCommitted_CrashBeforeIDPersisted_RedeliveryNeverCallsC
 			"provider":                 "mock-video",
 		},
 	}
-	_, err = guardedVideo(ctx, req, provider, store)
+	_, err = guardedVideo(ctx, req, provider, store, nil)
 	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("expected ErrUnknownResubmitBlocked, got: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestTEST_B_SubmittingCommitted_CrashBeforeIDPersisted_RedeliveryNeverCallsC
 		t.Fatalf("expected status Unknown, got %v", latest.Status)
 	}
 
-	_, err = guardedVideo(ctx, req, provider, store)
+	_, err = guardedVideo(ctx, req, provider, store, nil)
 	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("expected ErrUnknownResubmitBlocked on second redelivery, got: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestTEST_C_SubmittingWithDurableID_RedeliveryCallsGetNotCreate(t *testing.T
 		t.Fatal(err)
 	}
 	store := pe.NewStore(db)
-	fp, _ := pe.Fingerprint(taskID, "queryable-video", "queryable-video", "video", map[string]any{"provider": "queryable-video"})
+	fp, _ := videoRequestFingerprint(taskID, "queryable-video", "video", "queryable-video", map[string]any{"provider": "queryable-video"})
 	claimed, err := store.CreatePrepared(ctx, pe.Execution{
 		TaskID:             taskID,
 		Provider:           "queryable-video",
@@ -384,7 +384,7 @@ func TestTEST_C_SubmittingWithDurableID_RedeliveryCallsGetNotCreate(t *testing.T
 			"provider":                 "queryable-video",
 		},
 	}
-	res, err := guardedVideo(ctx, req, provider, store)
+	res, err := guardedVideo(ctx, req, provider, store, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestTEST_D_ProviderCreateDefinitivePreSubmitFailure_SafeRetry(t *testing.T)
 			"provider":                 "mock-video",
 		},
 	}
-	_, err := guardedVideo(ctx, req, provider, store)
+	_, err := guardedVideo(ctx, req, provider, store, nil)
 	if err == nil {
 		t.Fatal("expected error on first attempt")
 	}
@@ -450,7 +450,7 @@ func TestTEST_D_ProviderCreateDefinitivePreSubmitFailure_SafeRetry(t *testing.T)
 	}
 
 	shouldFail = false
-	res, err := guardedVideo(ctx, req, provider, store)
+	res, err := guardedVideo(ctx, req, provider, store, nil)
 	if err != nil {
 		t.Fatalf("attempt 2 should succeed, got: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestTEST_E_ProviderCreateNetworkAmbiguousError_NoBlindResubmit(t *testing.T
 			"provider":                 "mock-video",
 		},
 	}
-	_, err := guardedVideo(ctx, req, provider, store)
+	_, err := guardedVideo(ctx, req, provider, store, nil)
 	if err == nil || !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("expected ErrUnknownResubmitBlocked, got: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestTEST_E_ProviderCreateNetworkAmbiguousError_NoBlindResubmit(t *testing.T
 		t.Fatalf("expected status Unknown, got %v", latest.Status)
 	}
 
-	_, err = guardedVideo(ctx, req, provider, store)
+	_, err = guardedVideo(ctx, req, provider, store, nil)
 	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("expected ErrUnknownResubmitBlocked, got: %v", err)
 	}
@@ -537,7 +537,7 @@ func TestTEST_F_ProviderReturnsProviderRequestID_DurablePersistenceSucceedsExact
 			"provider":                 "mock-video",
 		},
 	}
-	res, err := guardedVideo(ctx, req, provider, store)
+	res, err := guardedVideo(ctx, req, provider, store, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestTEST_G_DuplicateInvocationSimulation_SameTaskAttemptNoSecondCreate(t *t
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
-			_, _ = guardedVideo(ctx, req, provider, store)
+			_, _ = guardedVideo(ctx, req, provider, store, nil)
 		}()
 	}
 	wg.Wait()
