@@ -17,6 +17,7 @@ const (
 	Succeeded  Status = "succeeded"
 	Failed     Status = "failed"
 	Unknown    Status = "unknown"
+	Created    Status = "created"
 )
 
 var ErrIllegalTransition = errors.New("illegal provider execution state transition")

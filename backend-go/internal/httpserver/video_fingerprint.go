@@ -128,24 +128,36 @@ type videoTaskParamsLookup interface {
 // When accepted, the caller proceeds to the normal Get-first recovery: the
 // provider is queried by the durable request id, and only a proven provider
 // success may finalize. Nothing is ever resubmitted on this path.
-func acceptLegacyVideoExecution(lookup videoTaskParamsLookup, taskID string, current pe.Execution, latest pe.Execution) bool {
+// Legacy rejection reasons. Stable strings for observability only; the accept
+// decision itself is unchanged.
+const (
+	legacyRejectNoLookup        = "no_lookup"
+	legacyRejectNoRequestID     = "no_request_id"
+	legacyRejectUnexpectedState = "unexpected_state"
+	legacyRejectAttemptMismatch = "attempt_mismatch"
+	legacyRejectParamsDrift     = "params_drift"
+	legacyRejectLookupFailed    = "lookup_failed"
+	legacyAcceptReason          = "accepted"
+)
+
+func acceptLegacyVideoExecution(lookup videoTaskParamsLookup, taskID string, current pe.Execution, latest pe.Execution) (bool, string) {
 	if lookup == nil {
-		return false
+		return false, legacyRejectNoLookup
 	}
 	if latest.ProviderRequestID == nil || strings.TrimSpace(*latest.ProviderRequestID) == "" {
-		return false
+		return false, legacyRejectNoRequestID
 	}
 	switch latest.Status {
 	case pe.Submitted, pe.Submitting, pe.Processing, pe.Unknown, pe.Succeeded:
 	default:
-		return false
+		return false, legacyRejectUnexpectedState
 	}
 	if latest.Attempt != current.Attempt {
-		return false
+		return false, legacyRejectAttemptMismatch
 	}
 	tasks, err := lookup.ListGenerationTasks()
 	if err != nil {
-		return false
+		return false, legacyRejectLookupFailed
 	}
 	for _, task := range tasks {
 		if task.ID != taskID {
@@ -153,9 +165,12 @@ func acceptLegacyVideoExecution(lookup videoTaskParamsLookup, taskID string, cur
 		}
 		expected, err := videoRequestFingerprint(taskID, current.Provider, current.Capability, current.ProviderModel, task.Params)
 		if err != nil {
-			return false
+			return false, legacyRejectLookupFailed
 		}
-		return expected == current.RequestFingerprint
+		if expected != current.RequestFingerprint {
+			return false, legacyRejectParamsDrift
+		}
+		return true, legacyAcceptReason
 	}
-	return false
+	return false, legacyRejectLookupFailed
 }

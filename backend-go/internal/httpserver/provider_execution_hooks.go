@@ -227,6 +227,7 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 func guardedVideo(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider, s *pe.Store, lookup videoTaskParamsLookup) (any, error) {
 	e, taskID, err := executionIdentity(req, "video", providerName(req))
 	if err != nil {
+		observeRecovery(RecoveryDiagnosis{Capability: "video", TaskID: taskID, Stage: RecoveryStageIdentity, Code: RecoveryCodeIdentityError})
 		return nil, fmt.Errorf("provider execution identity: %w", err)
 	}
 	if taskID == "" {
@@ -234,7 +235,10 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
+	diag := RecoveryDiagnosis{Capability: "video", TaskID: taskID, ExecutionFound: err == nil}
 	if err == nil {
+		diag.HasRequestID = latest.ProviderRequestID != nil && strings.TrimSpace(*latest.ProviderRequestID) != ""
+		diag.FingerprintMatch = latest.Status == pe.Failed || latest.RequestFingerprint == e.RequestFingerprint
 		// Only an explicitly safe pre-submit failure may switch provider identity.
 		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
 			// Pre-canonical executions carry fingerprints computed over params
@@ -242,9 +246,14 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 			// the narrow legacy rule (durable request id + same attempt +
 			// canonically identical to the task's own stored params); any
 			// semantic drift still mismatches here.
-			if !acceptLegacyVideoExecution(lookup, taskID, e, latest) {
-				return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
+			legacyOK, legacyReason := acceptLegacyVideoExecution(lookup, taskID, e, latest)
+			diag.LegacyEvaluated = true
+			diag.LegacyAccepted = legacyOK
+			diag.Detail = legacyReason
+			if !legacyOK {
+				return nil, wrapRecoveryError(RecoveryCodeFingerprintMismatch, RecoveryStageIdentity, diag, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID))
 			}
+			observeRecovery(withRecoveryCode(diag, RecoveryStageIdentity, RecoveryCodeLegacyAccepted))
 		}
 		switch latest.Status {
 		case pe.Prepared:
@@ -256,23 +265,32 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					Get(context.Context, string) (any, error)
 				}); ok {
 					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+					diag.ProviderGet = true
+					if queryErr != nil {
+						observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
+					}
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
 						switch status {
 						case pe.Succeeded, pe.Failed:
 							if status == pe.Failed {
 								if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+									observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeTransitionFailed))
 									return nil, transitionErr
 								}
-								return nil, pe.ErrProviderExecutionFailed
+								return nil, wrapRecoveryError(RecoveryCodeGetProviderFailed, RecoveryStageGet, diag, pe.ErrProviderExecutionFailed)
 							}
 							manifest, marshalErr := json.Marshal(durableVideoResult(result))
 							if marshalErr != nil {
+								observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 								return nil, marshalErr
 							}
 							if saveErr := s.SaveSucceededResult(ctx, latest.ID, latest.ProviderRequestID, manifest); saveErr != nil {
+								observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 								return nil, saveErr
 							}
+							diag.Finalization = true
+							observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeSaved))
 							return result, nil
 						case pe.Submitted, pe.Processing:
 							target := status
@@ -280,9 +298,10 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 								target = pe.Processing
 							}
 							if transitionErr := s.Transition(ctx, latest.ID, target, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil); transitionErr != nil {
+								observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeTransitionFailed))
 								return nil, transitionErr
 							}
-							return nil, pe.ErrProviderStillProcessing
+							return nil, wrapRecoveryError(RecoveryCodeGetProcessing, RecoveryStageGet, diag, pe.ErrProviderStillProcessing)
 						}
 					}
 				}
@@ -291,41 +310,51 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 				_ = s.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "video submission outcome unknown after crash")
 			}
 			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
-			return nil, pe.ErrUnknownResubmitBlocked
+			return nil, wrapRecoveryError(RecoveryCodeUnknownBlocked, RecoveryStageGet, diag, pe.ErrUnknownResubmitBlocked)
 		case pe.Succeeded:
 			if len(latest.ResultMetadata) > 0 {
 				var result any
 				if json.Unmarshal(latest.ResultMetadata, &result) == nil {
+					diag.Finalization = true
+					observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeResultReturned))
 					return result, nil
 				}
 			}
 			if latest.ProviderRequestID == nil {
-				return nil, pe.ErrUnknownResubmitBlocked
+				return nil, wrapRecoveryError(RecoveryCodeUnknownBlocked, RecoveryStageGet, diag, pe.ErrUnknownResubmitBlocked)
 			}
 			getter, ok := p.(interface {
 				Get(context.Context, string) (any, error)
 			})
 			if !ok {
+				diag.Detail = "no_query_support"
+				observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
 				return nil, fmt.Errorf("video provider does not support query recovery")
 			}
 			result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+			diag.ProviderGet = true
 			if queryErr != nil {
+				observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
 				return nil, queryErr
 			}
 			status := providerExecutionStatus(result)
 			if status == pe.Failed {
-				return nil, pe.ErrProviderExecutionFailed
+				return nil, wrapRecoveryError(RecoveryCodeGetProviderFailed, RecoveryStageGet, diag, pe.ErrProviderExecutionFailed)
 			}
 			if status != pe.Succeeded {
-				return nil, pe.ErrProviderStillProcessing
+				return nil, wrapRecoveryError(RecoveryCodeGetProcessing, RecoveryStageGet, diag, pe.ErrProviderStillProcessing)
 			}
 			manifest, marshalErr := json.Marshal(durableVideoResult(result))
 			if marshalErr != nil {
+				observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 				return nil, marshalErr
 			}
 			if saveErr := s.SaveSucceededResult(ctx, latest.ID, latest.ProviderRequestID, manifest); saveErr != nil {
+				observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 				return nil, saveErr
 			}
+			diag.Finalization = true
+			observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeSaved))
 			return result, nil
 		case pe.Failed:
 			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
@@ -344,6 +373,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	e, err = s.ClaimPreparedForGenerationTask(ctx, taskID)
 	if err != nil {
+		observeRecovery(withRecoveryCode(diag, RecoveryStageCreate, RecoveryCodeTransitionFailed))
 		return nil, err
 	}
 	req.ClientRequestID = e.ProviderOperationKey
@@ -357,15 +387,16 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	ctxWithListener := generation.WithProviderSubmissionListener(ctx, notifySubmission)
 	result, callErr := p.Create(ctxWithListener, req)
 	if callErr != nil {
+		diag.ProviderCreate = true
 		class := pe.Classify(callErr)
 		if class == pe.DefinitiveNotSubmitted || class == pe.RetryableBeforeSubmit {
 			_ = s.Transition(ctx, e.ID, pe.Failed, nil, ptrString(string(class)), ptrString(callErr.Error()))
-		} else {
-			_ = s.MarkUnknown(ctx, e.ID, class, callErr.Error())
-			return nil, errors.Join(callErr, pe.ErrUnknownResubmitBlocked)
+			return nil, wrapRecoveryError(RecoveryCodeCreateFailed, RecoveryStageCreate, diag, callErr)
 		}
-		return nil, callErr
+		_ = s.MarkUnknown(ctx, e.ID, class, callErr.Error())
+		return nil, errors.Join(callErr, pe.ErrUnknownResubmitBlocked)
 	}
+	diag.ProviderCreate = true
 	status := providerExecutionStatus(result)
 	requestID := providerTaskID(result)
 	var requestIDPtr *string
@@ -374,26 +405,31 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	if status == pe.Failed {
 		_ = s.Transition(ctx, e.ID, pe.Failed, requestIDPtr, ptrString(string(pe.ProviderUnknown)), ptrString("provider returned failed result"))
-		return nil, pe.ErrProviderExecutionFailed
+		return nil, wrapRecoveryError(RecoveryCodeGetProviderFailed, RecoveryStageCreate, diag, pe.ErrProviderExecutionFailed)
 	}
 	if status == pe.Submitted || status == pe.Processing {
 		if err := s.Transition(ctx, e.ID, status, requestIDPtr, ptrString(string(pe.ProviderProcessing)), nil); err != nil {
+			observeRecovery(withRecoveryCode(diag, RecoveryStageCreate, RecoveryCodeTransitionFailed))
 			return nil, err
 		}
-		return nil, pe.ErrProviderStillProcessing
+		return nil, wrapRecoveryError(RecoveryCodeGetProcessing, RecoveryStageCreate, diag, pe.ErrProviderStillProcessing)
 	}
 	if status != pe.Succeeded && !providerResultHasImmediateVideo(result) {
 		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "video provider returned no proven result")
-		return nil, pe.ErrUnknownResubmitBlocked
+		return nil, wrapRecoveryError(RecoveryCodeUnknownBlocked, RecoveryStageCreate, diag, pe.ErrUnknownResubmitBlocked)
 	}
+	diag.Finalization = true
 	manifest, err := json.Marshal(durableVideoResult(result))
 	if err != nil {
 		_ = s.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "encode provider video result: "+err.Error())
 		return nil, pe.ErrUnknownResubmitBlocked
 	}
 	if err := s.SaveSucceededResult(ctx, e.ID, requestIDPtr, manifest); err != nil {
+		observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 		return nil, err
 	}
+	diag.Finalization = true
+	observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeSaved))
 	return result, nil
 }
 func durableGeneratedImages(images []generation.GeneratedImage) []generation.GeneratedImage {
