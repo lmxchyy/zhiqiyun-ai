@@ -16,6 +16,8 @@ type AnalyticsOverviewResponse struct {
 	RevenueTodayCents int64   `json:"revenueTodayCents"` // 今日收入（分）
 	CostTodayCents    int64   `json:"costTodayCents"`    // 今日上游成本（分）
 	FailedTasksToday  int     `json:"failedTasksToday"`  // 今日失败任务数
+	ProcessingTasks   int     `json:"processingTasks"`   // 当前处理中任务数
+	ExceptionCount    int     `json:"exceptionCount"`    // 当前待处理/处理中异常任务数
 	SuccessRate       float64 `json:"successRate"`       // 今日整体成功率
 	AvgLatencyMs      int     `json:"avgLatencyMs"`      // 今日平均延迟(ms)
 }

@@ -1,76 +1,81 @@
 <template>
   <section class="analytics-dashboard">
-    <!-- Overview Cards -->
-    <div class="overview-cards">
-      <div class="overview-card" v-if="overviewData">
-        <h3>今日概览</h3>
-        <div class="metrics-grid">
-          <div class="metric-item">
-            <label>日新增用户</label>
-          <value>{{ overviewData.newUsersToday }}</value>
-          </div>
-          <div class="metric-item">
-            <label>日活跃用户 (dau)</label>
-          <value>{{ overviewData.dau }}</value>
-          </div>
-          <div class="metric-item">
-            <label>周活跃用户 (wau)</label>
-          <value>{{ overviewData.wau }}</value>
-          </div>
-          <div class="metric-item">
-            <label>月活跃用户 (mau)</label>
-          <value>{{ overviewData.mau }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日AI用户</label>
-          <value>{{ overviewData.aiUsersToday }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日图片生成</label>
-          <value>{{ overviewData.imagesGenerated }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日视频生成</label>
-          <value>{{ overviewData.videosGenerated }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日积分消耗</label>
-          <value>{{ overviewData.pointsConsumed }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日Token使用</label>
-          <value>{{ overviewData.tokensUsed }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日收入</label>
-          <value>{{ overviewData.revenueTodayCents / 100 }}</value>
-            <unit>元</unit>
-          </div>
-          <div class="metric-item">
-            <label>今日成本</label>
-          <value>{{ overviewData.costTodayCents / 100 }}</value>
-            <unit>元</unit>
-          </div>
-          <div class="metric-item">
-            <label>今日失败任务</label>
-          <value>{{ overviewData.failedTasksToday }}</value>
-          </div>
-          <div class="metric-item">
-            <label>今日成功率</label>
-          <value>{{ overviewData.successRate.toFixed(1) }}%</value>
-          </div>
-          <div class="metric-item">
-            <label>今日平均延迟</label>
-          <value>{{ overviewData.avgLatencyMs }}ms</value>
-          </div>
-        </div>
+    <!-- Header with 7/30 days switch -->
+    <header class="dashboard-header">
+      <div class="header-titles">
+        <h2>运营驾驶舱 V1</h2>
+        <span class="header-sub">平台级经营与系统运行状态看板（仅平台管理员可见）</span>
       </div>
+      <div class="header-actions">
+        <div class="time-range-segmented">
+          <button type="button" :class="{ active: selectedDays === 7 }" @click="selectDays(7)">最近 7 天</button>
+          <button type="button" :class="{ active: selectedDays === 30 }" @click="selectDays(30)">最近 30 天</button>
+        </div>
+        <button type="button" class="btn-refresh" :disabled="loading" @click="refreshAll">
+          {{ loading ? '刷新中...' : '刷新数据' }}
+        </button>
+      </div>
+    </header>
+
+    <div v-if="requestError" class="error-banner">
+      部分统计数据加载遇到异常，已自动降级展示可用指标。
     </div>
 
-    <!-- Tabs for different sections -->
-    <div class="error-state" v-if="requestError">分析数据加载失败，请稍后重试。</div>
-    <div class="tabs-container" v-if="!loading && !requestError">
-      <div class="tab" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">概览</div>
+    <!-- 1. Top 8 KPI Cards Grid -->
+    <section class="kpi-grid">
+      <!-- 1: New Users -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">今日新增用户</div>
+        <div class="kpi-card__val"><strong>{{ overviewData?.newUsersToday ?? 0 }}</strong><small>人</small></div>
+        <div class="kpi-card__foot">昨日: {{ yesterdayNewUsers ?? '-' }}</div>
+      </div>
+      <!-- 2: DAU -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">今日活跃用户 (DAU)</div>
+        <div class="kpi-card__val"><strong>{{ overviewData?.dau ?? 0 }}</strong><small>人</small></div>
+        <div class="kpi-card__foot">昨日: {{ yesterdayDau ?? '-' }}</div>
+      </div>
+      <!-- 3: Total AI Tasks -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">今日 AI 生成量</div>
+        <div class="kpi-card__val"><strong>{{ totalAITasksToday }}</strong><small>次</small></div>
+        <div class="kpi-card__foot">生图 {{ overviewData?.imagesGenerated ?? 0 }} · 视频 {{ overviewData?.videosGenerated ?? 0 }}</div>
+      </div>
+      <!-- 4: Success Rate -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">今日整体成功率</div>
+        <div class="kpi-card__val"><strong>{{ (overviewData?.successRate ?? 0).toFixed(1) }}%</strong></div>
+        <div class="kpi-card__foot">失败任务: {{ overviewData?.failedTasksToday ?? 0 }} 次</div>
+      </div>
+      <!-- 5: Points Consumed -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">今日积分消耗</div>
+        <div class="kpi-card__val"><strong>{{ overviewData?.pointsConsumed ?? 0 }}</strong><small>点</small></div>
+        <div class="kpi-card__foot">昨日: {{ yesterdayPoints ?? '-' }}</div>
+      </div>
+      <!-- 6: Revenue -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">今日充值收入</div>
+        <div class="kpi-card__val"><strong>{{ (revenueYuan).toFixed(2) }}</strong><small>元</small></div>
+        <div class="kpi-card__foot">昨日: {{ yesterdayRevenueYuan !== undefined ? yesterdayRevenueYuan.toFixed(2) + ' 元' : '-' }}</div>
+      </div>
+      <!-- 7: Processing Tasks -->
+      <div class="kpi-card">
+        <div class="kpi-card__title">当前处理中任务</div>
+        <div class="kpi-card__val"><strong>{{ overviewData?.processingTasks ?? 0 }}</strong><small>个</small></div>
+        <div class="kpi-card__foot">实时队列与 Worker 执行</div>
+      </div>
+      <!-- 8: Exception Cases -->
+      <div class="kpi-card" :class="{ 'is-alert': (overviewData?.exceptionCount ?? 0) > 0 }">
+        <div class="kpi-card__title">当前异常风险任务</div>
+        <div class="kpi-card__val"><strong class="danger-text">{{ overviewData?.exceptionCount ?? 0 }}</strong><small>条</small></div>
+        <div class="kpi-card__foot">待处置/处理中工单</div>
+      </div>
+    </section>
+
+    <!-- Tabs Container to keep 100% test contract compatibility -->
+    <div class="tabs-container">
+      <div class="tab" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">运营驾驶舱</div>
       <div class="tab" :class="{ active: activeTab === 'trends' }" @click="activeTab = 'trends'">7日趋势</div>
       <div class="tab" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型排名</div>
       <div class="tab" :class="{ active: activeTab === 'providers' }" @click="activeTab = 'providers'">供应商状态</div>
@@ -78,38 +83,72 @@
       <div class="tab" :class="{ active: activeTab === 'points' }" @click="activeTab = 'points'">积分分析</div>
     </div>
 
-    <!-- Tab Content -->
-    <div class="tab-content">
-      <div v-if="activeTab === 'overview'">
-        <!-- Overview already shown above -->
-      </div>
+    <!-- Tab: Overview (Main Cockpit View) -->
+    <div v-if="activeTab === 'overview'" class="cockpit-content">
+      <!-- AI Types & Financial Summary -->
+      <div class="split-row">
+        <!-- AI Applications breakdown -->
+        <div class="panel-box">
+          <div class="panel-box__head">
+            <strong>AI 应用类型分布</strong>
+            <small>今日调用量与占比</small>
+          </div>
+          <div class="type-list" v-if="generationData?.byType?.length">
+            <div v-for="t in generationData.byType" :key="t.type" class="type-item">
+              <div class="type-item__label">
+                <span>{{ formatTypeName(t.type) }}</span>
+                <span>{{ t.count }} 次 ({{ (t.rate || 0).toFixed(1) }}%)</span>
+              </div>
+              <div class="progress-track"><div class="progress-bar" :style="{ width: Math.min(100, Math.round(t.rate || 0)) + '%' }"></div></div>
+            </div>
+          </div>
+          <div v-else class="empty-state">今日暂无生成任务分类数据</div>
+        </div>
 
-      <div v-else-if="activeTab === 'trends'">
-        <div class="section-title">7日趋势</div>
-        <div class="charts-grid" v-if="trendsData && hasTrendData()">
-          <div class="chart-placeholder" v-for="key in chartKeys" :key="key">
-            <div class="chart-title">{{ chartLabels[key] }}</div>
-            <div class="chart-content" :ref="(element) => setChartElement(element, key)"></div>
+        <!-- Points & Revenue Summary -->
+        <div class="panel-box">
+          <div class="panel-box__head">
+            <strong>财务与积分水位</strong>
+            <small>平台可用与冻结资产</small>
+          </div>
+          <div class="points-grid">
+            <div class="point-col">
+              <label>今日充值总额</label>
+              <strong>{{ ((pointsData?.rechargedToday ?? 0) / 100).toFixed(2) }} 元</strong>
+            </div>
+            <div class="point-col">
+              <label>今日积分消耗</label>
+              <strong>{{ pointsData?.consumedToday ?? 0 }} 点</strong>
+            </div>
+            <div class="point-col">
+              <label>全平台可用余额</label>
+              <strong>{{ pointsData?.totalAvailable ?? 0 }} 点</strong>
+            </div>
+            <div class="point-col">
+              <label>全平台冻结余额</label>
+              <strong>{{ pointsData?.totalFrozen ?? 0 }} 点</strong>
+            </div>
           </div>
         </div>
-        <div class="empty-state" v-else-if="!trendsLoading">暂无趋势数据</div>
-        <div class="loading-placeholder" v-else>
-          <div class="skeleton-loader" v-for="i in 5" :key="i"></div>
-        </div>
       </div>
 
-      <div v-else-if="activeTab === 'models'">
-        <div class="section-title">模型排名</div>
-        <div class="table-container" v-if="modelsData && modelsData.length > 0">
-          <table class="analytics-table">
+      <!-- Model & Provider Status Tables -->
+      <div class="split-row">
+        <!-- Models -->
+        <div class="panel-box">
+          <div class="panel-box__head">
+            <strong>模型调用排行 (Top)</strong>
+            <small>按调用量排序</small>
+          </div>
+          <table class="analytics-table" v-if="modelsData && modelsData.length > 0">
             <thead>
               <tr>
                 <th>排名</th>
                 <th>模型</th>
                 <th>调用次数</th>
                 <th>成功率</th>
-                <th>平均延迟(ms)</th>
-                <th>总成本(分)</th>
+                <th>平均延迟</th>
+                <th>总成本</th>
               </tr>
             </thead>
             <tbody>
@@ -118,32 +157,28 @@
                 <td>{{ model.modelCode }}</td>
                 <td>{{ model.callCount }}</td>
                 <td>{{ (model.successRate || 0).toFixed(1) }}%</td>
-                <td>{{ model.avgLatencyMs || 0 }}</td>
-                <td>{{ model.totalCostCents || 0 }}</td>
+                <td>{{ model.avgLatencyMs || 0 }}ms</td>
+                <td>{{ (model.totalCostCents || 0) }}分</td>
               </tr>
             </tbody>
           </table>
+          <div v-else class="empty-state">暂无模型调用数据</div>
         </div>
-        <div v-else-if="modelsData && modelsData.length === 0">
-          <p class="empty-state">暂无模型数据</p>
-        </div>
-        <div class="loading-placeholder" v-else>
-          <div class="skeleton-loader" v-for="i in 4" :key="i"></div>
-        </div>
-      </div>
 
-      <div v-else-if="activeTab === 'providers'">
-        <div class="section-title">供应商状态</div>
-        <div class="table-container" v-if="providersData && providersData.length > 0">
-          <table class="analytics-table">
+        <!-- Providers -->
+        <div class="panel-box">
+          <div class="panel-box__head">
+            <strong>供应商状态</strong>
+            <small>上游可用性监控</small>
+          </div>
+          <table class="analytics-table" v-if="providersData && providersData.length > 0">
             <thead>
               <tr>
                 <th>排名</th>
                 <th>供应商</th>
                 <th>调用次数</th>
                 <th>成功率</th>
-                <th>平均延迟(ms)</th>
-                <th>总成本(分)</th>
+                <th>平均延迟</th>
               </tr>
             </thead>
             <tbody>
@@ -152,119 +187,181 @@
                 <td>{{ provider.providerCode }}</td>
                 <td>{{ provider.callCount }}</td>
                 <td>{{ (provider.successRate || 0).toFixed(1) }}%</td>
-                <td>{{ provider.avgLatencyMs || 0 }}</td>
-                <td>{{ provider.totalCostCents || 0 }}</td>
+                <td>{{ provider.avgLatencyMs || 0 }}ms</td>
               </tr>
             </tbody>
           </table>
-        </div>
-        <div v-else-if="providersData && providersData.length === 0">
-          <p class="empty-state">暂无供应商数据</p>
-        </div>
-        <div class="loading-placeholder" v-else>
-          <div class="skeleton-loader" v-for="i in 4" :key="i"></div>
+          <div v-else class="empty-state">暂无供应商数据</div>
         </div>
       </div>
 
-      <div v-else-if="activeTab === 'tokens'">
-        <div class="section-title">Token分析</div>
-        <div v-if="tokensData">
-          <div class="metrics-row">
-            <div class="metric-card">
-              <h4>今日使用量</h4>
-              <p>{{ tokensData.tokensToday }}</p>
-            </div>
-            <div class="metric-card">
-              <h4>7日使用量</h4>
-              <p>{{ tokensData.tokens7d }}</p>
-            </div>
-            <div class="metric-card">
-              <h4>30日使用量</h4>
-              <p>{{ tokensData.tokens30d }}</p>
-            </div>
-          </div>
-          <div class="table-container">
-            <h4>Top 用户 Token 使用量</h4>
-            <table class="analytics-table" v-if="tokensData.byUser && tokensData.byUser.length > 0">
-              <thead>
-                <tr>
-                  <th>排名</th>
-                  <th>用户ID</th>
-                  <th>用户名</th>
-                  <th>Token使用量</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(user, index) in tokensData.byUser" :key="index">
-                  <td>{{ index + 1 }}</td>
-                  <td>{{ user.userId }}</td>
-                  <td>{{ user.userName }}</td>
-                  <td>{{ user.value }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-else-if="tokensData.byUser && tokensData.byUser.length === 0">
-              <p class="empty-state">暂无用户数据</p>
-            </div>
-          </div>
+      <!-- Runtime Operational Panel -->
+      <div class="panel-box runtime-box">
+        <div class="panel-box__head">
+          <strong>系统运行状态</strong>
+          <small>异步队列、处理中任务与健康状态（仅平台管理员可见）</small>
         </div>
-        <div class="loading-placeholder" v-else>
-          <div class="skeleton-loader" v-for="i in 3" :key="i"></div>
+        <div class="runtime-items">
+          <div class="runtime-item">
+            <span>处理中任务 (PROCESSING)</span>
+            <strong>{{ overviewData?.processingTasks ?? 0 }} 个</strong>
+          </div>
+          <div class="runtime-item">
+            <span>异常处置工单</span>
+            <strong :class="{ 'danger-text': (overviewData?.exceptionCount ?? 0) > 0 }">{{ overviewData?.exceptionCount ?? 0 }} 条</strong>
+          </div>
+          <div class="runtime-item">
+            <span>今日失败任务数</span>
+            <strong>{{ overviewData?.failedTasksToday ?? 0 }} 次</strong>
+          </div>
+          <div class="runtime-item">
+            <span>今日平均延迟</span>
+            <strong>{{ overviewData?.avgLatencyMs ?? 0 }} ms</strong>
+          </div>
         </div>
       </div>
 
-      <div v-else-if="activeTab === 'points'">
-        <div class="section-title">积分分析</div>
-        <div v-if="pointsData">
-          <div class="metrics-row">
-            <div class="metric-card">
-              <h4>今日消耗</h4>
-              <p>{{ pointsData.consumedToday }}</p>
-            </div>
-            <div class="metric-card">
-              <h4>今日充值</h4>
-              <p>{{ pointsData.rechargedToday }}</p>
-            </div>
-            <div class="metric-card">
-              <h4>今日净变化</h4>
-              <p>{{ pointsData.netChangeToday }}</p>
-            </div>
-            <div class="metric-card">
-              <h4>可用余额</h4>
-              <p>{{ pointsData.totalAvailable }}</p>
-            </div>
-          </div>
-          <div class="table-container">
-            <h4>积分趋势 (7日)</h4>
-            <div class="chart-placeholder" v-if="pointsData.consumedTrend">
-              <div class="chart-title">消耗趋势</div>
-              <div class="chart-content">
-                <div class="chart-box">
-                  <div v-for="point in pointsData.consumedTrend" :key="point.date" class="trend-point">
-                    <div class="point-date">{{ point.date }}</div>
-                    <div class="point-value">{{ point.value }}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="loading-placeholder" v-else>
-          <div class="skeleton-loader" v-for="i in 3" :key="i"></div>
+      <!-- Exception Cases Integration -->
+      <div class="panel-box exception-box" v-if="exceptionCases.length > 0">
+        <AdminExceptionCenter :items="exceptionCases" @navigate="handleExceptionNavigate" @updated="handleExceptionUpdated" />
+      </div>
+    </div>
+
+    <!-- Tab: Trends -->
+    <div v-else-if="activeTab === 'trends'" class="tab-content-panel">
+      <div class="section-title">7日趋势分析</div>
+      <div class="charts-grid" v-if="trendsData && hasTrendData()">
+        <div class="chart-placeholder" v-for="key in chartKeys" :key="key">
+          <div class="chart-title">{{ chartLabels[key] }}</div>
+          <div class="chart-content" :ref="(element) => setChartElement(element, key)"></div>
         </div>
       </div>
+      <div class="empty-state" v-else-if="!trendsLoading">暂无趋势数据</div>
+      <div class="loading-placeholder" v-else>
+        <div class="skeleton-loader" v-for="i in 5" :key="i"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Models -->
+    <div v-else-if="activeTab === 'models'" class="tab-content-panel">
+      <div class="section-title">模型排名</div>
+      <div class="table-container" v-if="modelsData && modelsData.length > 0">
+        <table class="analytics-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>模型</th>
+              <th>调用次数</th>
+              <th>成功率</th>
+              <th>平均延迟(ms)</th>
+              <th>总成本(分)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(model, index) in modelsData" :key="index">
+              <td>{{ index + 1 }}</td>
+              <td>{{ model.modelCode }}</td>
+              <td>{{ model.callCount }}</td>
+              <td>{{ (model.successRate || 0).toFixed(1) }}%</td>
+              <td>{{ model.avgLatencyMs || 0 }}</td>
+              <td>{{ model.totalCostCents || 0 }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="empty-state">暂无模型数据</div>
+    </div>
+
+    <!-- Tab: Providers -->
+    <div v-else-if="activeTab === 'providers'" class="tab-content-panel">
+      <div class="section-title">供应商状态</div>
+      <div class="table-container" v-if="providersData && providersData.length > 0">
+        <table class="analytics-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>供应商</th>
+              <th>调用次数</th>
+              <th>成功率</th>
+              <th>平均延迟(ms)</th>
+              <th>总成本(分)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(provider, index) in providersData" :key="index">
+              <td>{{ index + 1 }}</td>
+              <td>{{ provider.providerCode }}</td>
+              <td>{{ provider.callCount }}</td>
+              <td>{{ (provider.successRate || 0).toFixed(1) }}%</td>
+              <td>{{ provider.avgLatencyMs || 0 }}</td>
+              <td>{{ provider.totalCostCents || 0 }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="empty-state">暂无供应商数据</div>
+    </div>
+
+    <!-- Tab: Tokens -->
+    <div v-else-if="activeTab === 'tokens'" class="tab-content-panel">
+      <div class="section-title">Token分析</div>
+      <div v-if="tokensData">
+        <div class="metrics-row">
+          <div class="metric-card">
+            <h4>今日使用量</h4>
+            <p>{{ tokensData.tokensToday }}</p>
+          </div>
+          <div class="metric-card">
+            <h4>7日使用量</h4>
+            <p>{{ tokensData.tokens7d }}</p>
+          </div>
+          <div class="metric-card">
+            <h4>30日使用量</h4>
+            <p>{{ tokensData.tokens30d }}</p>
+          </div>
+        </div>
+      </div>
+      <div v-else class="empty-state">暂无 Token 数据</div>
+    </div>
+
+    <!-- Tab: Points -->
+    <div v-else-if="activeTab === 'points'" class="tab-content-panel">
+      <div class="section-title">积分分析</div>
+      <div v-if="pointsData">
+        <div class="metrics-row">
+          <div class="metric-card">
+            <h4>今日消耗</h4>
+            <p>{{ pointsData.consumedToday }}</p>
+          </div>
+          <div class="metric-card">
+            <h4>今日充值</h4>
+            <p>{{ pointsData.rechargedToday }}</p>
+          </div>
+          <div class="metric-card">
+            <h4>今日净变化</h4>
+            <p>{{ pointsData.netChangeToday }}</p>
+          </div>
+          <div class="metric-card">
+            <h4>可用余额</h4>
+            <p>{{ pointsData.totalAvailable }}</p>
+          </div>
+        </div>
+      </div>
+      <div v-else class="empty-state">暂无积分数据</div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
 import { adminRequest } from "../../api/client";
 import { normalizeAnalyticsModelsResponse, normalizeAnalyticsProvidersResponse } from "./analyticsContract";
+import AdminExceptionCenter from "./AdminExceptionCenter.vue";
+import type { AdminExceptionCase } from "../../api/adminWorkspaces";
 
 echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, SVGRenderer]);
 
@@ -281,6 +378,8 @@ interface OverviewData {
   revenueTodayCents: number;
   costTodayCents: number;
   failedTasksToday: number;
+  processingTasks?: number;
+  exceptionCount?: number;
   successRate: number;
   avgLatencyMs: number;
 }
@@ -288,19 +387,23 @@ interface OverviewData {
 interface TrendData {
   newUsers: Array<{ date: string; value: number }>;
   dau: Array<{ date: string; value: number }>;
-  wau: Array<{ date: string; value: number }>;
-  mau: Array<{ date: string; value: number }>;
   aiUsers: Array<{ date: string; value: number }>;
-  images: Array<{ date: string; value: number }>;
-  videos: Array<{ date: string; value: number }>;
   points: Array<{ date: string; value: number }>;
   tokens: Array<{ date: string; value: number }>;
-  revenue: Array<{ date: string; value: number }>;
-  cost: Array<{ date: string; value: number }>;
-  tasks: Array<{ date: string; value: number }>;
-  success: Array<{ date: string; value: number }>;
-  latency: Array<{ date: string; value: number }>;
-  failed: Array<{ date: string; value: number }>;
+  revenue?: Array<{ date: string; value: number }>;
+  images?: Array<{ date: string; value: number }>;
+  videos?: Array<{ date: string; value: number }>;
+  success?: Array<{ date: string; value: number }>;
+}
+
+interface GenerationData {
+  imagesToday: number;
+  videosToday: number;
+  totalTasksToday: number;
+  successRate: number;
+  avgLatencyMs: number;
+  failedTasks: number;
+  byType?: Array<{ type: string; count: number; rate: number }>;
 }
 
 interface ModelData {
@@ -325,68 +428,74 @@ interface TokenData {
   tokensToday: number;
   tokens7d: number;
   tokens30d: number;
-  byUser: Array<{
-    userId: string;
-    userName: string;
-    value: number;
-  }>;
+  byUser: Array<{ userId: string; userName: string; value: number }>;
 }
 
 interface PointsData {
   consumedToday: number;
   rechargedToday: number;
-  grantedToday: number;
-  frozenToday: number;
-  releasedToday: number;
-  netChangeToday: number;
+  grantedToday?: number;
+  frozenToday?: number;
+  releasedToday?: number;
+  netChangeToday?: number;
   totalAvailable: number;
   totalFrozen: number;
-  consumedTrend: Array<{ date: string; value: number }>;
-  rechargedTrend: Array<{ date: string; value: number }>;
-  byType: Array<{
-    type: string;
-    count: number;
-    rate: number;
-  }>;
+  consumedTrend?: Array<{ date: string; value: number }>;
+  rechargedTrend?: Array<{ date: string; value: number }>;
+  byType?: Array<{ type: string; count: number; rate: number }>;
 }
 
-// Refs for data
-const overviewData = ref<OverviewData | null>(null);
-const trendsData = ref<TrendData | null>(null);
-const modelsData = ref<ModelData[] | null>(null);
-const providersData = ref<ProviderData[] | null>(null);
-const tokensData = ref<TokenData | null>(null);
-const pointsData = ref<PointsData | null>(null);
-
-// Loading states
-const loading = ref(true);
+const selectedDays = ref<number>(7);
+const loading = ref(false);
 const requestError = ref(false);
+const activeTab = ref<"overview" | "trends" | "models" | "providers" | "tokens" | "points">("overview");
+
 const overviewLoading = ref(true);
 const trendsLoading = ref(true);
+const generationLoading = ref(true);
 const modelsLoading = ref(true);
 const providersLoading = ref(true);
 const tokensLoading = ref(true);
 const pointsLoading = ref(true);
 
-// Tab state
-const activeTab = ref<'overview' | 'trends' | 'models' | 'providers' | 'tokens' | 'points'>('overview');
+const overviewData = ref<OverviewData | null>(null);
+const trendsData = ref<TrendData | null>(null);
+const generationData = ref<GenerationData | null>(null);
+const modelsData = ref<ModelData[] | null>(null);
+const providersData = ref<ProviderData[] | null>(null);
+const tokensData = ref<TokenData | null>(null);
+const pointsData = ref<PointsData | null>(null);
+const exceptionCases = ref<AdminExceptionCase[]>([]);
 
-// Trend keys and labels for display
-type TrendKey = 'newUsers' | 'dau' | 'aiUsers' | 'points' | 'tokens';
-const chartKeys: TrendKey[] = [
-  'newUsers',
-  'dau',
-  'aiUsers',
-  'points',
-  'tokens',
-];
+const totalAITasksToday = computed(() => {
+  return (overviewData.value?.imagesGenerated ?? 0) + (overviewData.value?.videosGenerated ?? 0);
+});
 
+const revenueYuan = computed(() => {
+  return (overviewData.value?.revenueTodayCents ?? 0) / 100;
+});
+
+function getYesterdayValue(series?: Array<{ date: string; value: number }>): number | undefined {
+  if (!series || series.length < 2) return undefined;
+  return series[series.length - 2].value;
+}
+
+const yesterdayNewUsers = computed(() => getYesterdayValue(trendsData.value?.newUsers));
+const yesterdayDau = computed(() => getYesterdayValue(trendsData.value?.dau));
+const yesterdayPoints = computed(() => getYesterdayValue(trendsData.value?.points));
+const yesterdayRevenueYuan = computed(() => {
+  const cents = getYesterdayValue(trendsData.value?.revenue);
+  return cents !== undefined ? cents / 100 : undefined;
+});
+
+type TrendKey = "newUsers" | "dau" | "aiUsers" | "points" | "tokens";
+const chartKeys: TrendKey[] = ["newUsers", "dau", "aiUsers", "points", "tokens"];
 const chartLabels: Record<TrendKey, string> = {
-  newUsers: '新增用户趋势',
-  dau: 'DAU 趋势',
-  aiUsers: 'AI 用户趋势',
-  points: '积分消耗趋势',
-  tokens: 'Token使用趋势',
+  newUsers: "新增用户趋势",
+  dau: "DAU 趋势",
+  aiUsers: "AI 用户趋势",
+  points: "积分消耗趋势",
+  tokens: "Token使用趋势",
 };
 
 const chartElements = new Map<TrendKey, HTMLElement>();
@@ -397,7 +506,7 @@ function setChartElement(element: unknown, key: TrendKey) {
 }
 
 function renderCharts() {
-  if (!trendsData.value || activeTab.value !== 'trends') return;
+  if (!trendsData.value || activeTab.value !== "trends") return;
   for (const key of chartKeys) {
     const element = chartElements.get(key);
     if (!element) continue;
@@ -406,11 +515,11 @@ function renderCharts() {
     const points = trendsData.value[key] || [];
     chart.setOption({
       animation: false,
-      tooltip: { trigger: 'axis' },
+      tooltip: { trigger: "axis" },
       grid: { left: 36, right: 18, top: 18, bottom: 28 },
-      xAxis: { type: 'category', data: points.map((point) => point.date) },
-      yAxis: { type: 'value' },
-      series: [{ type: 'line', smooth: true, data: points.map((point) => point.value), areaStyle: {} }]
+      xAxis: { type: "category", data: points.map((point) => point.date) },
+      yAxis: { type: "value" },
+      series: [{ type: "line", smooth: true, data: points.map((point) => point.value), areaStyle: {} }],
     });
   }
 }
@@ -429,139 +538,162 @@ function disposeCharts() {
   chartElements.clear();
 }
 
-// Fetch overview data (using store data via props would be ideal,
-// but for simplicity we'll fetch it directly here as well)
-async function fetchOverviewData() {
+function formatTypeName(raw: string): string {
+  const map: Record<string, string> = {
+    TEXT_TO_IMAGE: "文生图",
+    IMAGE_TO_IMAGE: "图生图",
+    TEXT_TO_VIDEO: "文生视频",
+    IMAGE_TO_VIDEO: "图生视频",
+    PPT: "AI 演示文稿 (PPT)",
+    AGENT: "AI 智能体",
+    KNOWLEDGE: "知识库问答",
+  };
+  return map[raw] || raw;
+}
+
+async function fetchOverview() {
   try {
     overviewLoading.value = true;
-    const response = await adminRequest<OverviewData>({
+    overviewData.value = await adminRequest<OverviewData>({
       method: "GET",
-      url: "/admin/analytics/overview"
+      url: "/admin/analytics/overview",
     });
-    overviewData.value = response;
-  } catch (error) {
-    console.error("failed to fetch overview data:", error);
+  } catch {
     requestError.value = true;
-    overviewData.value = null;
   } finally {
     overviewLoading.value = false;
   }
 }
 
-// Fetch trends data
-async function fetchTrendsData() {
+async function fetchTrends() {
   try {
     trendsLoading.value = true;
-    const response = await adminRequest<TrendData>({
+    trendsData.value = await adminRequest<TrendData>({
       method: "GET",
-      url: "/admin/analytics/trends?days=7"
+      url: `/admin/analytics/trends?days=${selectedDays.value}`,
     });
-    trendsData.value = response;
-  } catch (error) {
-    console.error("failed to fetch trends data:", error);
+  } catch {
     requestError.value = true;
-    trendsData.value = null;
   } finally {
     trendsLoading.value = false;
   }
 }
 
-// Fetch models data
-async function fetchModelsData() {
+async function fetchGeneration() {
+  try {
+    generationLoading.value = true;
+    generationData.value = await adminRequest<GenerationData>({
+      method: "GET",
+      url: `/admin/analytics/generation?days=${selectedDays.value}`,
+    });
+  } catch {
+    requestError.value = true;
+  } finally {
+    generationLoading.value = false;
+  }
+}
+
+async function fetchModels() {
   try {
     modelsLoading.value = true;
-    const response = await adminRequest<{ models: ModelData[] }>({
+    const res = await adminRequest<{ models: ModelData[] }>({
       method: "GET",
-      url: "/admin/analytics/models"
+      url: `/admin/analytics/models?days=${selectedDays.value}`,
     });
-    modelsData.value = normalizeAnalyticsModelsResponse(response);
-  } catch (error) {
-    console.error("failed to fetch models data:", error);
+    modelsData.value = normalizeAnalyticsModelsResponse(res);
+  } catch {
     requestError.value = true;
-    modelsData.value = null;
   } finally {
     modelsLoading.value = false;
   }
 }
 
-// Fetch providers data
-async function fetchProvidersData() {
+async function fetchProviders() {
   try {
     providersLoading.value = true;
-    const response = await adminRequest<{ providers: ProviderData[] }>({
+    const res = await adminRequest<{ providers: ProviderData[] }>({
       method: "GET",
-      url: "/admin/analytics/providers"
+      url: `/admin/analytics/providers?days=${selectedDays.value}`,
     });
-    providersData.value = normalizeAnalyticsProvidersResponse(response);
-  } catch (error) {
-    console.error("failed to fetch providers data:", error);
+    providersData.value = normalizeAnalyticsProvidersResponse(res);
+  } catch {
     requestError.value = true;
-    providersData.value = null;
   } finally {
     providersLoading.value = false;
   }
 }
 
-// Fetch tokens data
-async function fetchTokensData() {
+async function fetchTokens() {
   try {
     tokensLoading.value = true;
-    const response = await adminRequest<TokenData>({
+    tokensData.value = await adminRequest<TokenData>({
       method: "GET",
-      url: "/admin/analytics/tokens"
+      url: "/admin/analytics/tokens",
     });
-    tokensData.value = response;
-  } catch (error) {
-    console.error("failed to fetch tokens data:", error);
+  } catch {
     requestError.value = true;
-    tokensData.value = null;
   } finally {
     tokensLoading.value = false;
   }
 }
 
-// Fetch points data
-async function fetchPointsData() {
+async function fetchPoints() {
   try {
     pointsLoading.value = true;
-    const response = await adminRequest<PointsData>({
+    pointsData.value = await adminRequest<PointsData>({
       method: "GET",
-      url: "/admin/analytics/points"
+      url: `/admin/analytics/points?days=${selectedDays.value}`,
     });
-    pointsData.value = response;
-  } catch (error) {
-    console.error("failed to fetch points data:", error);
+  } catch {
     requestError.value = true;
-    pointsData.value = null;
   } finally {
     pointsLoading.value = false;
   }
 }
 
-// Fetch all data
-async function fetchAllData() {
-  requestError.value = false;
-  await Promise.all([
-    fetchOverviewData(),
-    fetchTrendsData(),
-    fetchModelsData(),
-    fetchProvidersData(),
-    fetchTokensData(),
-    fetchPointsData()
-  ]);
-
-  // Update overall loading state
-  loading.value = !(overviewData.value &&
-                   trendsData.value &&
-                   modelsData.value &&
-                   providersData.value &&
-                   tokensData.value &&
-                   pointsData.value);
+async function fetchExceptions() {
+  try {
+    const res = await adminRequest<{ adminExceptionCases?: AdminExceptionCase[] }>({
+      method: "GET",
+      url: "/admin/overview",
+    });
+    exceptionCases.value = res.adminExceptionCases || [];
+  } catch {
+    // Non-critical background fetch
+  }
 }
 
-// Lifecycle
+async function refreshAll() {
+  loading.value = true;
+  requestError.value = false;
+  await Promise.allSettled([
+    fetchOverview(),
+    fetchTrends(),
+    fetchGeneration(),
+    fetchModels(),
+    fetchProviders(),
+    fetchTokens(),
+    fetchPoints(),
+    fetchExceptions(),
+  ]);
+  loading.value = false;
+  await nextTick();
+  renderCharts();
+}
+
+function selectDays(days: number) {
+  selectedDays.value = days;
+  refreshAll();
+}
+
+function handleExceptionNavigate(_moduleId: string) {}
+function handleExceptionUpdated(updatedCase: AdminExceptionCase) {
+  const idx = exceptionCases.value.findIndex((c) => c.id === updatedCase.id);
+  if (idx >= 0) exceptionCases.value[idx] = updatedCase;
+}
+
 onMounted(() => {
-  fetchAllData();
+  refreshAll();
   window.addEventListener("resize", resizeCharts);
 });
 
@@ -578,255 +710,374 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", resizeCharts);
   disposeCharts();
 });
-
-// Refresh function
-function refreshData() {
-  fetchAllData();
-}
 </script>
 
 <style scoped>
 .analytics-dashboard {
   padding: 20px;
-  background: var(--admin-panel-color);
+  background: var(--admin-panel-color, #f4f6f9);
   border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.overview-cards {
-  margin-bottom: 24px;
-}
-
-.overview-card {
-  background: white;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-}
-
-.overview-card h3 {
-  margin: 0 0 16px 0;
-  color: var(--admin-text-color);
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
-.metric-item {
+.header-titles h2 {
+  margin: 0 0 4px 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--admin-text-color, #1e293b);
+}
+
+.header-sub {
+  font-size: 13px;
+  color: var(--admin-text-color-light, #64748b);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time-range-segmented {
+  display: inline-flex;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.time-range-segmented button {
+  padding: 6px 12px;
+  font-size: 12px;
+  border: none;
+  background: #ffffff;
+  cursor: pointer;
+  color: #64748b;
+}
+
+.time-range-segmented button.active {
+  background: #0284c7;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.btn-refresh {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: none;
+  background: #0284c7;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.error-banner {
+  padding: 8px 12px;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #b45309;
+}
+
+/* 8 KPI Cards Grid */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.kpi-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
 }
 
-.metric-item label {
+.kpi-card.is-alert {
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.kpi-card__title {
   font-size: 12px;
-  color: var(--admin-text-color-light);
-  margin-bottom: 4px;
+  color: #64748b;
+  margin-bottom: 6px;
 }
 
-.metric-item value {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--admin-text-color);
-  line-height: 1.2;
+.kpi-card__val {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  line-height: 1.1;
 }
 
-.metric-item unit {
+.kpi-card__val small {
   font-size: 12px;
-  color: var(--admin-text-color-light);
-  margin-left: 4px;
+  font-weight: normal;
+  color: #64748b;
 }
 
+.kpi-card__foot {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 8px;
+  border-top: 1px dashed #f1f5f9;
+  padding-top: 6px;
+}
+
+.danger-text {
+  color: #ef4444;
+}
+
+/* Tabs */
 .tabs-container {
   display: flex;
-  border-bottom: 1px solid var(--admin-border-color);
-  margin-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+  margin-top: 8px;
 }
 
 .tab {
-  padding: 12px 16px;
+  padding: 10px 16px;
   cursor: pointer;
-  color: var(--admin-text-color-light);
+  color: #64748b;
+  font-size: 14px;
   border-bottom: 2px solid transparent;
-  transition: all 0.2s ease;
-}
-
-.tab:hover {
-  color: var(--admin-text-color);
 }
 
 .tab.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
+  color: #0284c7;
+  border-bottom-color: #0284c7;
+  font-weight: 600;
 }
 
-.tab-content {
-  min-height: 300px;
+/* Cockpit View Layout */
+.cockpit-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.split-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .split-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel-box {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.panel-box__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.panel-box__head strong {
+  font-size: 15px;
+  color: #0f172a;
+}
+
+.panel-box__head small {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* AI Type List */
+.type-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.type-item__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #334155;
+  margin-bottom: 4px;
+}
+
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: #0284c7;
+  border-radius: 3px;
+}
+
+/* Points Summary */
+.points-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.point-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.point-col label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.point-col strong {
+  font-size: 18px;
+  color: #0f172a;
+}
+
+/* Tables */
+.analytics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.analytics-table th,
+.analytics-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.analytics-table th {
+  background-color: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+}
+
+/* Runtime Items */
+.runtime-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.runtime-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.runtime-item span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.runtime-item strong {
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 24px 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* Tab Panels */
+.tab-content-panel {
+  min-height: 280px;
 }
 
 .section-title {
   font-size: 16px;
   font-weight: 600;
-  color: var(--admin-text-color);
-  margin: 0 0 16px 0;
-  padding: 0 20px;
+  color: #0f172a;
+  margin-bottom: 12px;
 }
 
 .charts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 16px;
-  padding: 20px;
 }
 
 .chart-placeholder {
-  background: white;
+  background: #ffffff;
   border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+  padding: 14px;
+  border: 1px solid #e2e8f0;
 }
 
 .chart-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--admin-text-color);
-  margin: 0 0 12px 0;
+  color: #475569;
+  margin-bottom: 8px;
 }
 
 .chart-content {
-  min-height: 120px;
-}
-
-.chart-box {
-  border: 1px dashed var(--admin-border-color);
-  border-radius: 4px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--admin-text-color-light);
-  font-size: 12px;
-}
-
-.trend-point {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin: 4px 0;
-}
-
-.point-date {
-  font-size: 10px;
-  color: var(--admin-text-color-light);
-}
-
-.point-value {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--admin-text-color);
-}
-
-.table-container {
-  background: white;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-  margin: 0 20px;
-}
-
-.analytics-table {
+  height: 140px;
   width: 100%;
-  border-collapse: collapse;
-}
-
-.analytics-table th,
-.analytics-table td {
-  padding: 12px 16px;
-  text-align: left;
-  border-bottom: 1px solid var(--admin-border-color);
-}
-
-.analytics-table th {
-  background-color: var(--admin-background-color-light);
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--admin-text-color);
-}
-
-.analytics-table td {
-  font-size: 13px;
-  color: var(--admin-text-color);
-}
-
-.analytics-table tr:hover {
-  background-color: var(--admin-background-color-light);
-}
-
-.empty-state {
-  text-align: center;
-  padding: 32px 0;
-  color: var(--admin-text-color-light);
-  font-style: italic;
 }
 
 .metrics-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 16px;
-  margin-bottom: 24px;
 }
 
 .metric-card {
-  background: white;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 16px;
   text-align: center;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
 }
 
 .metric-card h4 {
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   font-size: 13px;
-  color: var(--admin-text-color-light);
-  font-weight: 600;
+  color: #64748b;
 }
 
 .metric-card p {
   margin: 0;
   font-size: 20px;
-  font-weight: 600;
-  color: var(--admin-text-color);
-}
-
-.loading-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 200px;
-}
-
-.skeleton-loader {
-  height: 4px;
-  background: var(--admin-border-color);
-  margin: 4px 0;
-  border-radius: 2px;
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0% {
-    opacity: 0.6;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.6;
-  }
+  font-weight: 700;
+  color: #0f172a;
 }
 </style>
