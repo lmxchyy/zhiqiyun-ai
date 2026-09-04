@@ -141,6 +141,12 @@ func observeRecovery(diag RecoveryDiagnosis) {
 	if recoveryObserveFunc == nil {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			// Observability emission must never affect business paths.
+			slog.Warn("recovery observation panicked", "code", diag.Code, "stage", diag.Stage, "recover", r)
+		}
+	}()
 	recoveryObserveFunc(diag)
 }
 

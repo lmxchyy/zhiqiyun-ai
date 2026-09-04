@@ -67,8 +67,6 @@ type generationTask struct {
 	Prompt                     string         `json:"prompt"`
 	Params                     map[string]any `json:"params"`
 	Model                      string         `json:"model"`
-	Provider                   string         `json:"-"`
-	ProviderModel              string         `json:"-"`
 	BillingType                string         `json:"billingType,omitempty"`
 	Status                     string         `json:"status"`
 	TaskStatus                 string         `json:"taskStatus,omitempty"`

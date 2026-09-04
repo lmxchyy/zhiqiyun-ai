@@ -83,6 +83,35 @@ func TestRecoveryErrorUnwrapAndCodeOf(t *testing.T) {
 	}
 }
 
+func TestRecoveryObservePanicDoesNotAffectBusiness(t *testing.T) {
+	resetRecoveryCountersForTest()
+	defer resetRecoveryCountersForTest()
+
+	called := false
+	recoveryObserveFunc = func(d RecoveryDiagnosis) {
+		called = true
+		panic("test panic")
+	}
+	defer func() { recoveryObserveFunc = defaultObserveRecovery }()
+
+	// observeRecovery must not panic; the panic is recovered internally.
+	base := errors.New("base")
+	err := wrapRecoveryError(RecoveryCodeFingerprintMismatch, RecoveryStageIdentity,
+		RecoveryDiagnosis{Capability: "video", TaskID: "task_panic"}, base)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if RecoveryCodeOf(err) != RecoveryCodeFingerprintMismatch {
+		t.Fatalf("expected code, got %q", RecoveryCodeOf(err))
+	}
+	if !errors.Is(err, base) {
+		t.Fatal("expected errors.Is to unwrap to base")
+	}
+	if !called {
+		t.Fatal("observeRecovery was called despite panic")
+	}
+}
+
 type fakeTaskLookup struct {
 	tasks map[string]map[string]any
 	err   error
@@ -94,7 +123,7 @@ func (f *fakeTaskLookup) ListGenerationTasks() ([]generationTask, error) {
 	}
 	out := make([]generationTask, 0, len(f.tasks))
 	for id, params := range f.tasks {
-		t := generationTask{ID: id, Params: params, Provider: "grok", ProviderModel: "model"}
+		t := generationTask{ID: id, Params: params}
 		out = append(out, t)
 	}
 	return out, nil
@@ -132,7 +161,7 @@ func TestLegacyVideoExecutionReturnsReason(t *testing.T) {
 			name:     "unexpected state rejects",
 			lookup:   tasks,
 			current:  func() pe.Execution { fp, _ := videoRequestFingerprint("task_test", "grok", "video", "model", stableVideoSemanticParams()); return pe.Execution{Attempt: 1, RequestFingerprint: fp, Provider: "grok", Capability: "video", ProviderModel: "model", ProviderChannel: "chan"} }(),
-			latest:   pe.Execution{Status: pe.Created, ProviderRequestID: strPtr("req"), Attempt: 1, Provider: "grok", Capability: "video", ProviderModel: "model", ProviderChannel: "chan"},
+			latest:   pe.Execution{Status: pe.Prepared, ProviderRequestID: strPtr("req"), Attempt: 1, Provider: "grok", Capability: "video", ProviderModel: "model", ProviderChannel: "chan"},
 			wantOK:   false,
 			wantCode: legacyRejectUnexpectedState,
 		},
