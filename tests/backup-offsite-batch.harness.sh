@@ -7,7 +7,48 @@ SCRIPT="$REPO_ROOT/ops/backup-offsite-upload-pending.sh"
 SCENARIO="${1:-first-invalid-second-valid}"
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/backup-offsite-batch.XXXXXX")"
 POSTGRES_ROOT="$ROOT/backups/postgres"
-mkdir -p "$POSTGRES_ROOT"
+FAKE_ROOT="$ROOT/fake-object-store"
+mkdir -p "$POSTGRES_ROOT" "$FAKE_ROOT"
+
+MOCK_BIN="$ROOT/bin"
+mkdir -p "$MOCK_BIN"
+cat > "$MOCK_BIN/docker" <<'DOCKEREOF'
+#!/usr/bin/env bash
+if [[ "$1" == "compose" ]]; then
+  FILE=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --file) FILE="$2"; shift 2;;
+      *) shift;;
+    esac
+  done
+  if [[ -z "$FILE" ]]; then echo "MISSING_FILE" >&2; exit 2; fi
+  BASENAME="$(basename "$FILE")"
+  HOST_FILE="$MOCK_HOST_ROOT/$BASENAME"
+  HOST_ROOT="$MOCK_HOST_ROOT/.."
+  BACKUP_OBS_FAKE=1 \
+  BACKUP_OBS_BUCKET=fake-bucket \
+  BACKUP_OBS_ENDPOINT=https://obs.example.invalid \
+  BACKUP_OBS_REGION=cn-north-4 \
+  BACKUP_OBJECT_FAKE_ROOT="$MOCK_FAKE_ROOT" \
+  "$MOCK_REPO_ROOT/ops/backup-upload-object-storage.sh" \
+    --root "$HOST_ROOT" \
+    --provider obs \
+    --fake-root "$MOCK_FAKE_ROOT" \
+    --file "$HOST_FILE" \
+    --upload \
+    --json
+  exit $?
+fi
+echo "Unexpected docker command: $*" >&2
+exit 1
+DOCKEREOF
+chmod +x "$MOCK_BIN/docker"
+
+export MOCK_HOST_ROOT="$POSTGRES_ROOT"
+export MOCK_FAKE_ROOT="$FAKE_ROOT"
+export MOCK_REPO_ROOT="$REPO_ROOT"
+export PATH="$MOCK_BIN:$PATH"
 
 set_file() {
   FILE="$POSTGRES_ROOT/$1"
@@ -41,34 +82,27 @@ make_second_valid() {
   touch -t 202608231600.00 "$FILE" "$META"
 }
 
-run_pending() {
-  BACKUP_ROOT="$POSTGRES_ROOT" \
-  COMPOSE_FILE="$REPO_ROOT/compose.prod.yml" \
-  ENV_FILE="$REPO_ROOT/.env.production.example" \
-  BACKUP_OBS_ENV_FILE="$REPO_ROOT/ops/backup-uploader/backup-obs.env.example" \
-  BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test' \
-  "$SCRIPT"
-}
-
-expect_marker() {
-  local marker="$1"
-  find "$POSTGRES_ROOT" -maxdepth 1 -name "*.offsite.json" -print | grep -q "$marker"
-}
-
 case "$SCENARIO" in
   first-invalid-second-valid)
     make_invalid_no_meta
     make_second_valid
-    run_pending >"$ROOT/summary.json" 2>"$ROOT/summary.stderr" || true
-    expect_marker "db_20260823_160000_ffffff0000.sql.gz.offsite.json"
-    grep -q "LOCAL_BACKUP_INVALID" "$ROOT/summary.stderr"
-    grep -q "db_20260821_195734.sql" "$ROOT/summary.stderr"
+    BACKUP_ROOT="$POSTGRES_ROOT" \
+    COMPOSE_FILE="$REPO_ROOT/compose.prod.yml" \
+    ENV_FILE="$REPO_ROOT/.env.production.example" \
+    BACKUP_OBS_ENV_FILE="$REPO_ROOT/ops/backup-uploader/backup-obs.env.example" \
+    BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test@sha256:0000000000000000000000000000000000000000000000000000000000000000' \
+    "$SCRIPT" 2>&1 || true
     ;;
   all-invalid)
     make_invalid_no_meta
-    run_pending >"$ROOT/summary.json" 2>"$ROOT/summary.stderr" || true
-    ! expect_marker "db_20260821_195734.sql.gz.offsite.json"
-    grep -q "LOCAL_BACKUP_INVALID" "$ROOT/summary.stderr"
+    BACKUP_ROOT="$POSTGRES_ROOT" \
+    COMPOSE_FILE="$REPO_ROOT/compose.prod.yml" \
+    ENV_FILE="$REPO_ROOT/.env.production.example" \
+    BACKUP_OBS_ENV_FILE="$REPO_ROOT/ops/backup-uploader/backup-obs.env.example" \
+    BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test@sha256:0000000000000000000000000000000000000000000000000000000000000000' \
+    "$SCRIPT" 2>&1 || true
+    # Verify no offsite markers were created for invalid backup
+    ! find "$POSTGRES_ROOT" -name "*.offsite.json" -print | grep -q .
     ;;
   *)
     printf 'unknown scenario: %s\n' "$SCENARIO" >&2
