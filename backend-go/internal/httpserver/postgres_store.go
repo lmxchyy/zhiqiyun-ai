@@ -1344,7 +1344,20 @@ func (s *postgresStore) CreatePendingGenerationTask(req createGenerationTaskRequ
 }
 
 func (s *postgresStore) CreatePendingGenerationTaskWithCanaryOutbox(req createGenerationTaskRequest) (generationTask, error) {
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params["generation_async_canary"] = true
 	return s.createPendingGenerationTask(req, "x.ai.generation.image.canary.requested")
+}
+
+func (s *postgresStore) CreatePendingGenerationTaskWithVideoCanaryOutbox(req createGenerationTaskRequest) (generationTask, error) {
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params["generation_video_async_canary"] = true
+	req.Params["generation_async_canary"] = true
+	return s.createPendingGenerationTask(req, messaging.GenerationVideoCanaryRoutingKey)
 }
 
 func (s *postgresStore) createPendingGenerationTask(req createGenerationTaskRequest, eventType string) (generationTask, error) {
@@ -1466,8 +1479,14 @@ func (s *postgresStore) createPendingGenerationTask(req createGenerationTaskRequ
 		return generationTask{}, err
 	}
 	if eventType != "" {
+		eventPrefix := "generation.requested:"
+		if strings.Contains(eventType, "image") {
+			eventPrefix = "generation.image.requested:"
+		} else if strings.Contains(eventType, "video") {
+			eventPrefix = "generation.video.requested:"
+		}
 		e := &messaging.Envelope{
-			EventID:       "generation.image.requested:" + task.ID,
+			EventID:       eventPrefix + task.ID,
 			EventType:     eventType,
 			Version:       1,
 			OccurredAt:    time.Now().UTC().Format(time.RFC3339),

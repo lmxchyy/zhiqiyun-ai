@@ -52,3 +52,15 @@ func TestInboxRequiresTransactionalHandler(t *testing.T) {
 		t.Fatal("expected transaction requirement")
 	}
 }
+
+func TestVideoCanaryRoutingKeyValidation(t *testing.T) {
+	if err := ValidateRoutingKey(GenerationVideoCanaryRoutingKey); err != nil {
+		t.Fatalf("GenerationVideoCanaryRoutingKey %q must be valid: %v", GenerationVideoCanaryRoutingKey, err)
+	}
+	if err := ValidateRoutingKey(GenerationVideoCanaryRetryKey); err != nil {
+		t.Fatalf("GenerationVideoCanaryRetryKey %q must be valid: %v", GenerationVideoCanaryRetryKey, err)
+	}
+	if GenerationVideoCanaryQueue == "" || GenerationVideoCanaryDLQ == "" {
+		t.Fatal("video queue names must not be empty")
+	}
+}

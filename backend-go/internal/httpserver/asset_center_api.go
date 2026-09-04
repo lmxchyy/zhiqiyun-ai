@@ -522,6 +522,17 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 		return generationTask{}, err
 	}
 	if isVideoGenerationRequest(req.Type) {
+		if a.videoAsyncCanaryEligible(req) {
+			if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
+				req.Params["generation_video_async_canary"] = true
+				req.Params["generation_async_canary"] = true
+				task, err := canaryStore.CreatePendingGenerationTaskWithVideoCanaryOutbox(req)
+				if err == nil && !task.IdempotentReplay {
+					generationCanaryMetrics.submitted.Add(1)
+				}
+				return task, err
+			}
+		}
 		task, err := a.store.CreatePendingGenerationTask(req)
 		if err == nil {
 			if task.IdempotentReplay {

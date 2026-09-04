@@ -125,12 +125,16 @@ type Config struct {
 	SmartVideoTempDir              string
 	MetricsEnabled                 bool
 	ShutdownTimeout                string
-	AsyncMessagingEnabled          bool
-	GenerationAsyncCanaryEnabled   bool
-	GenerationAsyncCanaryUsers     string
+	AsyncMessagingEnabled                  bool
+	GenerationAsyncCanaryEnabled           bool
+	GenerationAsyncCanaryUsers             string
 	GenerationAsyncCanaryProviderAllowlist string
 	GenerationAsyncCanaryModelAllowlist    string
-	ProviderExecutionSafetyEnabled bool
+	VideoAsyncCanaryEnabled                bool
+	VideoAsyncCanaryUsers                  string
+	VideoAsyncCanaryProviderAllowlist      string
+	VideoAsyncCanaryModelAllowlist         string
+	ProviderExecutionSafetyEnabled         bool
 }
 
 func Load() Config {
@@ -330,12 +334,16 @@ func Load() Config {
 		SmartVideoTempDir:                 os.Getenv("SMARTVIDEO_TEMP_DIR"),
 		MetricsEnabled:                    boolEnvDefaultTrue(os.Getenv("XIANZHI_METRICS_ENABLED")),
 		ShutdownTimeout:                   stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
-		AsyncMessagingEnabled:             boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
-		GenerationAsyncCanaryEnabled:      boolEnv(os.Getenv("GENERATION_ASYNC_CANARY_ENABLED")),
-		GenerationAsyncCanaryUsers:        os.Getenv("GENERATION_ASYNC_CANARY_USERS"),
+		AsyncMessagingEnabled:                  boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
+		GenerationAsyncCanaryEnabled:           boolEnv(os.Getenv("GENERATION_ASYNC_CANARY_ENABLED")),
+		GenerationAsyncCanaryUsers:             os.Getenv("GENERATION_ASYNC_CANARY_USERS"),
 		GenerationAsyncCanaryProviderAllowlist: os.Getenv("GENERATION_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
 		GenerationAsyncCanaryModelAllowlist:    os.Getenv("GENERATION_ASYNC_CANARY_MODEL_ALLOWLIST"),
-		ProviderExecutionSafetyEnabled:    boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
+		VideoAsyncCanaryEnabled:                boolEnv(os.Getenv("VIDEO_ASYNC_CANARY_ENABLED")),
+		VideoAsyncCanaryUsers:                  os.Getenv("VIDEO_ASYNC_CANARY_USERS"),
+		VideoAsyncCanaryProviderAllowlist:      os.Getenv("VIDEO_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
+		VideoAsyncCanaryModelAllowlist:         os.Getenv("VIDEO_ASYNC_CANARY_MODEL_ALLOWLIST"),
+		ProviderExecutionSafetyEnabled:         boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
 	}
 }
 
