@@ -62,6 +62,6 @@ printf 'TOTAL=%s\nUPLOADED=%s\nSKIPPED_ALREADY_VERIFIED=%s\nINVALID=%s\nFAILED=%
 
 # Return non-zero when any candidate was invalid or failed, but only after every
 # candidate has been scanned.
-if [[ "$found" -gt 0 && ("$invalid_count" -gt 0 || "$failed_count" -gt 0) ]]; then
+if [[ "$found" -gt 0 ]] && [[ "$invalid_count" -gt 0 || "$failed_count" -gt 0 ]]; then
   exit 1
 fi
