@@ -156,6 +156,15 @@ func (s *postgresStore) AnalyticsOverview(ctx context.Context, params AnalyticsQ
 		return out, err
 	}
 
+	// Token usage: only platform or uninitialized scopes see platform-wide token consumption
+	if scope.IsPlatform || scope.Level == "" {
+		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(sum(abs(amount)),0) FROM xz_token_records WHERE NULLIF(created_at,'')::timestamptz >= $1 AND NULLIF(created_at,'')::timestamptz < $2 AND upper(change_type) IN ('USE','USAGE','CONSUME','CONSUMPTION')`, dayStart, dayEnd).Scan(&out.TokensUsed); err != nil {
+			return out, err
+		}
+	} else {
+		out.TokensUsed = 0
+	}
+
 	// Supplier cost is confidential: only PLATFORM or uninitialized scope sees cost
 	if scope.IsPlatform || scope.Level == "" {
 		costQuery := fmt.Sprintf("SELECT coalesce(sum(supplier_cost),0)::bigint FROM xz_generation_tasks WHERE NULLIF(created_at,'')::timestamptz >= $1 AND NULLIF(created_at,'')::timestamptz < $2 AND upper(status)='SUCCEEDED' AND %s", genClause)
