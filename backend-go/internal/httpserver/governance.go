@@ -457,7 +457,11 @@ func (s *postgresStore) hasAnalyticsAccess(ctx context.Context, user adminUser) 
 			UNION ALL
 			SELECT 1 FROM xz_channel_agents WHERE user_id = $1 AND upper(coalesce(status,'ACTIVE')) = 'ACTIVE'
 			UNION ALL
-			SELECT 1 FROM xz_tenant_members WHERE user_id = $1 AND upper(coalesce(nullif(member_status,''),status,'ACTIVE')) = 'ACTIVE'
+			SELECT 1 FROM xz_tenant_members m
+			LEFT JOIN xz_tenants t ON t.id = m.tenant_id
+			WHERE m.user_id = $1
+			  AND upper(coalesce(nullif(m.member_status,''),m.status,'ACTIVE')) = 'ACTIVE'
+			  AND (upper(m.role) IN ('PLATFORM_ADMIN', 'ENTERPRISE_ADMIN') OR t.owner_user_id = $1)
 		)
 	`, user.ID).Scan(&hasAccess)
 	return err == nil && hasAccess

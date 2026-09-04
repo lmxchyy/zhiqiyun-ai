@@ -186,10 +186,13 @@ func resolveEntityScopesFromDB(ctx context.Context, db *sql.DB, userID string, r
 		IsPlatform: false,
 	}
 
-	// 1. Look up Tenant Memberships (Active only)
+	// 1. Look up Tenant Memberships (Active enterprise admin/owner only)
 	tenantRows, err := db.QueryContext(ctx, `
-		SELECT tenant_id FROM xz_tenant_members 
-		WHERE user_id = $1 AND upper(coalesce(nullif(member_status,''),status,'ACTIVE')) = 'ACTIVE'
+		SELECT m.tenant_id FROM xz_tenant_members m
+		LEFT JOIN xz_tenants t ON t.id = m.tenant_id
+		WHERE m.user_id = $1 
+		  AND upper(coalesce(nullif(m.member_status,''),m.status,'ACTIVE')) = 'ACTIVE'
+		  AND (upper(m.role) IN ('PLATFORM_ADMIN', 'ENTERPRISE_ADMIN') OR t.owner_user_id = $1)
 	`, userID)
 	if err == nil {
 		defer tenantRows.Close()
