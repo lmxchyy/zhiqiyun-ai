@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 IFS=$'\n\t'
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,6 +10,10 @@ POSTGRES_ROOT="$ROOT/backups/postgres"
 FAKE_ROOT="$ROOT/fake-object-store"
 mkdir -p "$POSTGRES_ROOT" "$FAKE_ROOT"
 
+# Create a mock docker that intercepts docker compose run backup-uploader
+# and calls the uploader directly with the fake provider, mapping container
+# paths to host paths. The heredoc uses single-quote delimiter so runtime
+# shell variables ($1, $?, etc.) are preserved inside the mock script.
 MOCK_BIN="$ROOT/bin"
 mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/docker" <<'DOCKEREOF'
@@ -31,6 +35,8 @@ if [[ "$1" == "compose" ]]; then
   BACKUP_OBS_ENDPOINT=https://obs.example.invalid \
   BACKUP_OBS_REGION=cn-north-4 \
   BACKUP_OBJECT_FAKE_ROOT="$MOCK_FAKE_ROOT" \
+  BACKUP_OBS_ENV_FILE="$MOCK_REPO_ROOT/ops/backup-uploader/backup-obs.env.example" \
+  CONNECTOR_SECRET_ENCRYPTION_KEY=test-connector-secret-key-32bytes \
   "$MOCK_REPO_ROOT/ops/backup-upload-object-storage.sh" \
     --root "$HOST_ROOT" \
     --provider obs \
@@ -45,9 +51,11 @@ exit 1
 DOCKEREOF
 chmod +x "$MOCK_BIN/docker"
 
+# Export paths for the mock docker script
 export MOCK_HOST_ROOT="$POSTGRES_ROOT"
 export MOCK_FAKE_ROOT="$FAKE_ROOT"
 export MOCK_REPO_ROOT="$REPO_ROOT"
+
 export PATH="$MOCK_BIN:$PATH"
 
 set_file() {
@@ -90,8 +98,14 @@ case "$SCENARIO" in
     COMPOSE_FILE="$REPO_ROOT/compose.prod.yml" \
     ENV_FILE="$REPO_ROOT/.env.production.example" \
     BACKUP_OBS_ENV_FILE="$REPO_ROOT/ops/backup-uploader/backup-obs.env.example" \
-    BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test@sha256:0000000000000000000000000000000000000000000000000000000000000000' \
-    "$SCRIPT" 2>&1 || true
+    BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test@sha256:000000000000000000000000000000000000000000000000000000000000' \
+    "$SCRIPT" >"$ROOT/output.txt" 2>&1 || true
+    cat "$ROOT/output.txt"
+    grep -q "LOCAL_BACKUP_INVALID" "$ROOT/output.txt" || { echo "MISSING_LOCAL_BACKUP_INVALID" >&2; exit 1; }
+    grep -q "db_20260821_195734.sql" "$ROOT/output.txt" || { echo "MISSING_INVALID_BACKUP_NAME" >&2; exit 1; }
+    grep -q "^TOTAL=" "$ROOT/output.txt" || { echo "MISSING_TOTAL" >&2; exit 1; }
+    grep -q "^INVALID=1" "$ROOT/output.txt" || { echo "MISSING_INVALID_COUNT" >&2; exit 1; }
+    grep -q "^UPLOADED=" "$ROOT/output.txt" || { echo "MISSING_UPLOADED" >&2; exit 1; }
     ;;
   all-invalid)
     make_invalid_no_meta
@@ -99,10 +113,20 @@ case "$SCENARIO" in
     COMPOSE_FILE="$REPO_ROOT/compose.prod.yml" \
     ENV_FILE="$REPO_ROOT/.env.production.example" \
     BACKUP_OBS_ENV_FILE="$REPO_ROOT/ops/backup-uploader/backup-obs.env.example" \
-    BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test@sha256:0000000000000000000000000000000000000000000000000000000000000000' \
-    "$SCRIPT" 2>&1 || true
-    # Verify no offsite markers were created for invalid backup
-    ! find "$POSTGRES_ROOT" -name "*.offsite.json" -print | grep -q .
+    BACKUP_UPLOADER_IMAGE='xianzhi-ai-platform:test@sha256:000000000000000000000000000000000000000000000000000000000000' \
+    "$SCRIPT" >"$ROOT/output.txt" 2>&1
+    rc=$?
+    cat "$ROOT/output.txt"
+    grep -q "LOCAL_BACKUP_INVALID" "$ROOT/output.txt" || { echo "MISSING_LOCAL_BACKUP_INVALID" >&2; exit 1; }
+    grep -q "^TOTAL=" "$ROOT/output.txt" || { echo "MISSING_TOTAL" >&2; exit 1; }
+    grep -q "^INVALID=" "$ROOT/output.txt" || { echo "MISSING_INVALID_COUNT" >&2; exit 1; }
+    # No offsite markers should exist for invalid backups
+    if find "$POSTGRES_ROOT" -name "*.offsite.json" -print | grep -q .; then
+      echo "UNEXPECTED_OFFSITE_MARKER_FOUND" >&2
+      exit 1
+    fi
+    # Propagate the wrapper's exit code (non-zero when invalid candidates exist)
+    exit "$rc"
     ;;
   *)
     printf 'unknown scenario: %s\n' "$SCENARIO" >&2
