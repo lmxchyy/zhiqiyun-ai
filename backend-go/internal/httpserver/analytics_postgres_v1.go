@@ -30,10 +30,10 @@ func (s *postgresStore) analyticsPostgresRange(params AnalyticsQueryParams) anal
 func analyticsStatusSQL() string { return "upper(status) IN ('SUCCESS','SUCCEEDED','COMPLETED')" }
 
 // buildScopedUserFilter produces a WHERE clause matching users belonging to the scope.
-// When scope is PLATFORM, matches all users except SUPER_ADMIN.
+// When scope is PLATFORM or uninitialized (legacy/store tests), matches all users except SUPER_ADMIN.
 // When scope is restricted, matches users who belong to the scoped tenants/agents.
 func buildScopedUserFilter(scope AnalyticsScope, currentArgIndex int) (string, []any, int) {
-	if scope.IsPlatform {
+	if scope.IsPlatform || scope.Level == "" {
 		return "role <> 'SUPER_ADMIN'", nil, currentArgIndex
 	}
 	if scope.IsFailClosed() {
@@ -156,8 +156,8 @@ func (s *postgresStore) AnalyticsOverview(ctx context.Context, params AnalyticsQ
 		return out, err
 	}
 
-	// Supplier cost is confidential: only PLATFORM scope sees nonzero cost
-	if scope.IsPlatform {
+	// Supplier cost is confidential: only PLATFORM or uninitialized scope sees cost
+	if scope.IsPlatform || scope.Level == "" {
 		costQuery := fmt.Sprintf("SELECT coalesce(sum(supplier_cost),0)::bigint FROM xz_generation_tasks WHERE NULLIF(created_at,'')::timestamptz >= $1 AND NULLIF(created_at,'')::timestamptz < $2 AND upper(status)='SUCCEEDED' AND %s", genClause)
 		costArgs := append([]any{dayStart, dayEnd}, genArgs...)
 		if err := s.db.QueryRowContext(ctx, costQuery, costArgs...).Scan(&out.CostTodayCents); err != nil {
@@ -211,7 +211,7 @@ func (s *postgresStore) AnalyticsModels(ctx context.Context, params AnalyticsQue
 			item.SuccessRate = float64(item.SuccessCount) / float64(item.CallCount) * 100
 		}
 		// Redact raw upstream cost for non-platform scopes
-		if !scope.IsPlatform {
+		if !scope.IsPlatform && scope.Level != "" {
 			item.TotalCostCents = 0
 		}
 		result.Models = append(result.Models, item)
@@ -222,8 +222,8 @@ func (s *postgresStore) AnalyticsModels(ctx context.Context, params AnalyticsQue
 func (s *postgresStore) AnalyticsProviders(ctx context.Context, params AnalyticsQueryParams) (AnalyticsProvidersResponse, error) {
 	r := s.analyticsPostgresRange(params)
 	scope := params.Scope
-	// Providers list contains confidential supplier topology: only PLATFORM scope allowed
-	if !scope.IsPlatform || scope.IsFailClosed() {
+	// Providers list contains confidential supplier topology: only PLATFORM or uninitialized scope allowed
+	if (!scope.IsPlatform && scope.Level != "") || scope.IsFailClosed() {
 		return AnalyticsProvidersResponse{Providers: []ProviderMetric{}}, nil
 	}
 
@@ -472,7 +472,7 @@ func (s *postgresStore) AnalyticsTokens(ctx context.Context, params AnalyticsQue
 
 	var out AnalyticsTokensResponse
 	// Token records are strictly tied to platform administration; non-platform scopes report 0
-	if !scope.IsPlatform {
+	if !scope.IsPlatform && scope.Level != "" {
 		return out, nil
 	}
 
@@ -517,7 +517,7 @@ func (s *postgresStore) AnalyticsPoints(ctx context.Context, params AnalyticsQue
 	out.NetChangeToday = out.RechargedToday - out.ConsumedToday
 
 	// Only platform admin sees total balances across the entire platform
-	if scope.IsPlatform {
+	if scope.IsPlatform || scope.Level == "" {
 		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(sum(token_balance),0), coalesce(sum(frozen_token),0) FROM xz_user_wallets`).Scan(&out.TotalAvailable, &out.TotalFrozen); err != nil {
 			return out, err
 		}

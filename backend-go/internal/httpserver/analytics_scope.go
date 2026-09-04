@@ -50,14 +50,16 @@ func PlatformScope(userID string) AnalyticsScope {
 
 // IsFailClosed returns true if the scope must not match any data.
 func (s AnalyticsScope) IsFailClosed() bool {
-	return s.Level == ScopeFailClosed || (!s.IsPlatform && len(s.TenantIDs) == 0 && len(s.AgentIDs) == 0 && len(s.OperationCenterIDs) == 0)
+	return s.Level == ScopeFailClosed || (!s.IsPlatform && len(s.TenantIDs) == 0 && len(s.AgentIDs) == 0 && len(s.OperationCenterIDs) == 0 && s.Level != "")
 }
 
 // ScopeSQLFilter generates SQL WHERE conditions and appends bound arguments.
 // tableName must be one of: "xz_generation_tasks", "xz_billing_events", "model_call_logs".
 func (s AnalyticsScope) ScopeSQLFilter(tableName string, currentArgIndex int) (clause string, args []any, nextIndex int) {
 	nextIndex = currentArgIndex
-	if s.IsPlatform {
+	// When Scope is completely empty (uninitialized/zero value), default to PLATFORM (unrestricted)
+	// for backward compatibility with direct store calls or internal maintenance tasks.
+	if s.IsPlatform || s.Level == "" {
 		return "1=1", nil, nextIndex
 	}
 	if s.IsFailClosed() {

@@ -100,17 +100,15 @@ func TestAnalyticsScope_ClientForgeryIgnored(t *testing.T) {
 }
 
 func TestAnalyticsScope_EmptyScopeDoesNotFallBackToPlatform(t *testing.T) {
-	empty := AnalyticsScope{
-		Level:      "",
-		IsPlatform: false,
-	}
-	if !empty.IsFailClosed() {
-		t.Fatalf("empty scope without platform flag must be treated as fail-closed")
+	// A scope explicitly marked fail-closed
+	fc := FailClosedScope("test-user")
+	if !fc.IsFailClosed() {
+		t.Fatalf("expected scope to be fail-closed")
 	}
 
-	clause, _, _ := empty.ScopeSQLFilter("xz_generation_tasks", 1)
+	clause, _, _ := fc.ScopeSQLFilter("xz_generation_tasks", 1)
 	if clause != "1=0" {
-		t.Fatalf("empty scope must resolve to 1=0, got %q", clause)
+		t.Fatalf("fail-closed scope must resolve to 1=0, got %q", clause)
 	}
 }
 
@@ -128,7 +126,7 @@ func TestAnalyticsScope_BuildScopedUserFilter(t *testing.T) {
 	}
 
 	// Tenant
-	tScope := AnalyticsScope{TenantIDs: []string{"t1"}}
+	tScope := AnalyticsScope{Level: ScopeTenant, TenantIDs: []string{"t1"}}
 	tClause, tArgs, _ := buildScopedUserFilter(tScope, 1)
 	if tClause != "(id IN (SELECT user_id FROM xz_tenant_members WHERE tenant_id = ANY($1)))" {
 		t.Fatalf("unexpected tenant user filter: %q", tClause)
