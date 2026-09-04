@@ -137,6 +137,7 @@ func (m *httpMetricsCollector) handler(w http.ResponseWriter, _ *http.Request) {
 	if m.operational != nil {
 		renderAsyncCanaryMetrics(rendered, m.operational.snapshot())
 	}
+	renderRecoveryMetrics(rendered)
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write([]byte(rendered.String()))
