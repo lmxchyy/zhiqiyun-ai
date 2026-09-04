@@ -33,7 +33,7 @@ export const userModuleIds = moduleIdsForSurface("user");
 
 export const adminNavigationGroups: AdminNavigationGroup[] = [
   { id: "overview", title: "管理总览", icon: "overview", sections: [
-    { id: "management-overview", title: "管理总览", primaryModuleId: "analysis", moduleIds: ["analysis", "workbench", "dashboard"] }
+    { id: "management-overview", title: "管理总览", primaryModuleId: "analytics", moduleIds: ["analytics", "analysis", "workbench", "dashboard"] }
   ] },
   { id: "customers-enterprises", title: "客户与企业", icon: "customers", sections: [
     { id: "customers", title: "客户中心", primaryModuleId: "customers", moduleIds: ["customers", "personalPointsGovernance"] },
