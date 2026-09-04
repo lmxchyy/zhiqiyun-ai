@@ -449,7 +449,7 @@ if checksum_remote is None or int(checksum_remote.get("size", -1)) != len(checks
     fail("REMOTE_SIZE_MISMATCH", "remote sha256 object could not be verified")
 if checksum_remote.get("sha256") != hashlib.sha256(checksum_content.encode("utf-8")).hexdigest():
     fail("REMOTE_CHECKSUM_MISMATCH", "remote sha256 object could not be verified")
-payload = {"version": 1, "provider": provider_name, "bucket": os.environ.get("BACKUP_OBJECT_BUCKET", "fake"), "object_key": key, "uploaded_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "local_bytes": local["bytes"], "local_sha256": local["sha256"], "remote_bytes": int(remote["size"]), "remote_etag": remote.get("etag", ""), "remote_sha256": remote["sha256"], "verification": "OFFSITE_VERIFIED"}
+payload = {"version": 1, "provider": provider_name, "bucket": os.environ.get("BACKUP_OBS_BUCKET", os.environ.get("BACKUP_OBJECT_BUCKET", "fake")), "object_key": key, "uploaded_at": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "local_bytes": local["bytes"], "local_sha256": local["sha256"], "remote_bytes": int(remote["size"]), "remote_etag": remote.get("etag", ""), "remote_sha256": remote["sha256"], "verification": "OFFSITE_VERIFIED"}
 offsite_path = local["path"] + ".offsite.json"
 temporary_path = offsite_path + ".part"
 try:

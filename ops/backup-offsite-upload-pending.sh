@@ -21,9 +21,13 @@ while IFS= read -r -d '' file; do
   found=1
   name="$(basename "$file")"
   echo "Uploading backup: $name"
+  # NOTE: --root must be the backups parent (not the postgres dir): the uploader
+  # derives the object key from the path relative to root and requires the
+  # `postgres/` prefix for db_ files. Pointing root at the postgres dir makes
+  # every db_ file fail with LOCAL_BACKUP_INVALID/unsupported backup category.
   docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile backup-uploader \
     run --rm --no-deps backup-uploader \
-    --root /var/lib/zhiqiyun/backups/postgres \
+    --root /var/lib/zhiqiyun/backups \
     --file "/var/lib/zhiqiyun/backups/postgres/$name" \
     --upload --json
 done < <(find "$BACKUP_ROOT" -maxdepth 1 -type f \( -name 'db_*.sql' -o -name 'db_*.sql.gz' -o -name 'xianzhi-*.sql' -o -name 'xianzhi-*.sql.gz' \) -print0 | sort -z)

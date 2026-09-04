@@ -67,6 +67,16 @@ fi
 # (TestVideoAsyncCanary_AllowlistsFailClosed,
 #  TestVideoAsyncCanary_DisabledConfigFallsBackSync).
 printf '%s\n' '[production-contract] video async canary env passthrough gates PASS'
+
+# Offsite backup wiring contract: the uploader derives the object key from the
+# path relative to --root and requires the postgres/ prefix for db_ files, so
+# the wrapper root and the compose mount must agree on the backups parent.
+grep_fixed '--root /var/lib/zhiqiyun/backups ' ops/backup-offsite-upload-pending.sh
+grep_fixed '--file "/var/lib/zhiqiyun/backups/postgres/$name"' ops/backup-offsite-upload-pending.sh
+grep_fixed '- ./backups:/var/lib/zhiqiyun/backups:rw' compose.prod.yml
+grep_fixed 'BACKUP_OBS_BUCKET' ops/backup-upload-object-storage.sh
+grep_fixed 'ExecStart=/usr/bin/flock -n /run/backup-offsite-upload.lock /usr/bin/env bash /opt/zhiqiyun-ai/ops/backup-offsite-upload-pending.sh' ops/systemd/backup-offsite-upload.service
+printf '%s\n' '[production-contract] offsite backup wiring gates PASS'
 printf '%s\n' "[production-contract] static runtime and startup gates PASS"
 
 if [ "${RUN_PRODUCTION_CONTRACT_DOCKER:-0}" != "1" ]; then
