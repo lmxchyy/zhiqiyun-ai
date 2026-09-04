@@ -75,3 +75,30 @@ func TestTEST_I_MetricsRegisteredAndExposed(t *testing.T) {
 		}
 	}
 }
+
+func TestVideoCanaryObservabilityMetrics(t *testing.T) {
+	output := renderOperationalForTest(asyncCanaryOperationalSnapshot{
+		rabbitVideoQueueDepth:     5,
+		rabbitVideoRetryDepth:     2,
+		rabbitVideoDLQDepth:       1,
+		rabbitVideoConsumers:      1,
+		videoGenerationStuckCount: 3,
+		videoGenerationStuckAge:   600,
+		videoPointsUnsettledCount: 2,
+		videoPointsUnsettledAge:   900,
+	})
+	for _, sample := range []string{
+		"xianzhi_async_canary_video_rabbitmq_queue_depth 5",
+		"xianzhi_async_canary_video_rabbitmq_retry_queue_depth 2",
+		"xianzhi_async_canary_video_rabbitmq_dlq_depth 1",
+		"xianzhi_async_canary_video_rabbitmq_consumers 1",
+		"xianzhi_async_canary_video_generation_stuck 3",
+		"xianzhi_async_canary_video_generation_oldest_stuck_age_seconds 600",
+		"xianzhi_async_canary_video_points_reserved_unsettled 2",
+		"xianzhi_async_canary_video_points_oldest_unsettled_age_seconds 900",
+	} {
+		if !strings.Contains(output, sample) {
+			t.Errorf("missing video canary metric %q", sample)
+		}
+	}
+}
