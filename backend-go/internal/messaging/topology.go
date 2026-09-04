@@ -19,10 +19,16 @@ const (
 	GenerationCanaryQueue        = "x.ai.generation.image.canary"
 	GenerationCanaryRetryQueue   = "x.ai.generation.image.canary.retry"
 	GenerationCanaryDLQ          = "x.ai.generation.image.canary.dlq"
-	GenerationCanaryRoutingKey   = "x.ai.generation.image.canary.requested"
-	GenerationCanaryRetryKey     = "x.ai.generation.image.canary.retry"
-	GenerationCanaryDeadKey      = "x.ai.generation.image.canary.dead"
-	DefaultConsumerMaxRetries    = 3
+	GenerationCanaryRoutingKey      = "x.ai.generation.image.canary.requested"
+	GenerationCanaryRetryKey        = "x.ai.generation.image.canary.retry"
+	GenerationCanaryDeadKey         = "x.ai.generation.image.canary.dead"
+	GenerationVideoCanaryQueue      = "x.ai.generation.video.canary"
+	GenerationVideoCanaryRetryQueue = "x.ai.generation.video.canary.retry"
+	GenerationVideoCanaryDLQ        = "x.ai.generation.video.canary.dlq"
+	GenerationVideoCanaryRoutingKey = "x.ai.generation.video.canary.requested"
+	GenerationVideoCanaryRetryKey   = "x.ai.generation.video.canary.retry"
+	GenerationVideoCanaryDeadKey    = "x.ai.generation.video.canary.dead"
+	DefaultConsumerMaxRetries       = 3
 	defaultRetryQueueDelayMillis = int32(1000)
 )
 
@@ -106,6 +112,33 @@ func (tb *TopologyBuilder) Build() error {
 	}
 	if err := bindQueue(ch, GenerationCanaryDLQ, ExchangeDLX, "", nil); err != nil {
 		return fmt.Errorf("bind generation canary dlq: %w", err)
+	}
+
+	videoCanaryArgs := amqp091.Table{"x-dead-letter-exchange": ExchangeDLX}
+	if err := declareQueue(ch, GenerationVideoCanaryQueue, true, false, videoCanaryArgs); err != nil {
+		return fmt.Errorf("declare generation video canary queue: %w", err)
+	}
+	if err := bindQueue(ch, GenerationVideoCanaryQueue, ExchangeEvents, GenerationVideoCanaryRoutingKey, nil); err != nil {
+		return fmt.Errorf("bind generation video canary queue: %w", err)
+	}
+
+	videoRetryArgs := amqp091.Table{
+		"x-message-ttl":             defaultRetryQueueDelayMillis,
+		"x-dead-letter-exchange":    ExchangeEvents,
+		"x-dead-letter-routing-key": GenerationVideoCanaryRoutingKey,
+	}
+	if err := declareQueue(ch, GenerationVideoCanaryRetryQueue, true, false, videoRetryArgs); err != nil {
+		return fmt.Errorf("declare generation video canary retry queue: %w", err)
+	}
+	if err := bindQueue(ch, GenerationVideoCanaryRetryQueue, ExchangeRetry, GenerationVideoCanaryRetryKey, nil); err != nil {
+		return fmt.Errorf("bind generation video canary retry queue: %w", err)
+	}
+
+	if err := declareQueue(ch, GenerationVideoCanaryDLQ, true, false, nil); err != nil {
+		return fmt.Errorf("declare generation video canary dlq: %w", err)
+	}
+	if err := bindQueue(ch, GenerationVideoCanaryDLQ, ExchangeDLX, "", nil); err != nil {
+		return fmt.Errorf("bind generation video canary dlq: %w", err)
 	}
 
 	// Keep the shared DLQ for non-business foundation routes.

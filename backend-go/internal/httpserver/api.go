@@ -45,6 +45,7 @@ const maxReferenceImageUploadBytes = 20 << 20
 
 type generationCanaryTaskStore interface {
 	CreatePendingGenerationTaskWithCanaryOutbox(createGenerationTaskRequest) (generationTask, error)
+	CreatePendingGenerationTaskWithVideoCanaryOutbox(createGenerationTaskRequest) (generationTask, error)
 }
 
 type platformStore interface {
@@ -835,6 +836,27 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		service = configuredService
 	}
 	if isVideoGenerationRequest(req.Type) {
+		if a.videoAsyncCanaryEligible(req) {
+			if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
+				req.Params["generation_video_async_canary"] = true
+				req.Params["generation_async_canary"] = true
+				task, err := canaryStore.CreatePendingGenerationTaskWithVideoCanaryOutbox(req)
+				if err != nil {
+					if errors.Is(err, errGenerationConcurrencyLimit) {
+						writeError(w, http.StatusTooManyRequests, err)
+						return
+					}
+					writeError(w, http.StatusBadRequest, err)
+					return
+				}
+				if !task.IdempotentReplay {
+					generationCanaryMetrics.submitted.Add(1)
+					a.recordContentAudit(task.ID, "input", "generation_request", "", req)
+				}
+				writeJSON(w, task)
+				return
+			}
+		}
 		task, err := a.store.CreatePendingGenerationTask(req)
 		if err != nil {
 			if errors.Is(err, errGenerationConcurrencyLimit) {
@@ -917,6 +939,38 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 func (a api) generationAsyncCanaryEligible(req generation.CreateRequest) bool {
 	selected, _ := a.generationAsyncCanaryDecision(req)
 	return selected
+}
+
+func (a api) videoAsyncCanaryEligible(req generation.CreateRequest) bool {
+	selected, _ := a.videoAsyncCanaryDecision(req)
+	return selected
+}
+
+func (a api) videoAsyncCanaryDecision(req generation.CreateRequest) (bool, string) {
+	if !a.cfg.AsyncMessagingEnabled || !a.cfg.VideoAsyncCanaryEnabled || !a.cfg.ProviderExecutionSafetyEnabled {
+		recordAsyncCanaryDecision(canaryReasonDisabled)
+		return false, canaryReasonDisabled
+	}
+	switch strings.ToUpper(strings.TrimSpace(req.Type)) {
+	case "TEXT_TO_VIDEO", "IMAGE_TO_VIDEO", "VIDEO_TO_VIDEO":
+	default:
+		recordAsyncCanaryDecision(canaryReasonRejectedType)
+		return false, canaryReasonRejectedType
+	}
+	if !userAllowlistContainsOrWildcard(a.cfg.VideoAsyncCanaryUsers, req.UserID) {
+		recordAsyncCanaryDecision(canaryReasonRejectedUser)
+		return false, canaryReasonRejectedUser
+	}
+	if !csvAllowlistContains(a.cfg.VideoAsyncCanaryProviderAllowlist, providerName(req)) {
+		recordAsyncCanaryDecision(canaryReasonRejectedProvider)
+		return false, canaryReasonRejectedProvider
+	}
+	if !csvAllowlistContains(a.cfg.VideoAsyncCanaryModelAllowlist, req.Model) {
+		recordAsyncCanaryDecision(canaryReasonRejectedModel)
+		return false, canaryReasonRejectedModel
+	}
+	recordAsyncCanaryDecision(canaryReasonSelected)
+	return true, canaryReasonSelected
 }
 
 func (a api) generationAsyncCanaryDecision(req generation.CreateRequest) (bool, string) {
@@ -1301,7 +1355,7 @@ func fallbackPreferredImageOrigin(data adminPlatformData) string {
 	return normalizedURLOrigin(os.Getenv("OPENAI_BASE_URL"))
 }
 
-func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) {
+func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), videoGenerationTimeout)
 	a.registerGenerationTaskCancel(taskID, cancel)
 	defer func() {
@@ -1313,16 +1367,16 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	}
 	terminal, err := a.generationTaskTerminal(ctx, taskID)
 	if err != nil || terminal {
-		return
+		return err
 	}
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
 		if errors.Is(err, providerexecution.ErrProviderStillProcessing) || errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) {
-			return
+			return err
 		}
 		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
-		return
+		return err
 	}
 	delete(prepared.Params, providerExecutionTaskParam)
 	if provider := providerTaskString(prepared, "provider"); provider != "" {
@@ -1333,8 +1387,9 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	// provider result may already be durable and the task must remain
 	// recoverable; failing here would incorrectly release the reservation.
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
-		return
+		return err
 	}
+	return nil
 }
 
 func generationErrorMessage(err error) string {
