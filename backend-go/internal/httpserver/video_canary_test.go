@@ -293,7 +293,7 @@ func TestVideoCanary_WorkerStillProcessingReturnsErrorForRetry(t *testing.T) {
 	apiInstance.generationService = genService
 
 	// Provider execution seeded in Submitted state with matching fingerprint
-	fp, err := pe.Fingerprint(taskID, "configured", "mock-video", "video", map[string]any{
+	fp, err := videoRequestFingerprint(taskID, "configured", "video", "mock-video", map[string]any{
 		"provider":                "channel_runtime_env",
 		"duration":                5,
 		"aspect_ratio":            "16:9",

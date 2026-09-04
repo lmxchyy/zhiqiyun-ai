@@ -27,7 +27,7 @@ func providerExecutionHooks(store platformStore, enabled bool) generation.Execut
 	return generation.ExecutionHooks{Image: func(ctx context.Context, req generation.CreateRequest, p generation.ImageProvider) ([]generation.GeneratedImage, error) {
 		return guardedImage(ctx, req, p, s)
 	}, Video: func(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider) (any, error) {
-		return guardedVideo(ctx, req, p, s)
+		return guardedVideo(ctx, req, p, s, store)
 	}}
 }
 
@@ -47,6 +47,17 @@ func executionIdentity(req generation.CreateRequest, capability, provider string
 	delete(params, "retryAttempt")
 	if source, _ := params["sourceModule"].(string); strings.EqualFold(strings.TrimSpace(source), "ppt-generation") {
 		delete(params, "seed")
+	}
+	if strings.EqualFold(strings.TrimSpace(capability), "video") {
+		// Video uses the stable canonical fingerprint: same logical provider
+		// attempt hashes identically across submit, restart, redelivery and
+		// retry. See video_fingerprint.go for the invariant. Image keeps the
+		// historical behavior byte-identical.
+		fp, err := videoRequestFingerprint(taskID, provider, capability, req.Model, params)
+		if err != nil {
+			return pe.Execution{}, taskID, err
+		}
+		return pe.Execution{TaskID: taskID, Provider: provider, ProviderModel: req.Model, Capability: capability, RequestFingerprint: fp, Attempt: 1}, taskID, nil
 	}
 	fp, err := pe.Fingerprint(taskID, provider, req.Model, capability, params)
 	if err != nil {
@@ -213,7 +224,7 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	return images, nil
 }
 
-func guardedVideo(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider, s *pe.Store) (any, error) {
+func guardedVideo(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider, s *pe.Store, lookup videoTaskParamsLookup) (any, error) {
 	e, taskID, err := executionIdentity(req, "video", providerName(req))
 	if err != nil {
 		return nil, fmt.Errorf("provider execution identity: %w", err)
@@ -226,7 +237,14 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	if err == nil {
 		// Only an explicitly safe pre-submit failure may switch provider identity.
 		if latest.Status != pe.Failed && latest.RequestFingerprint != e.RequestFingerprint {
-			return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
+			// Pre-canonical executions carry fingerprints computed over params
+			// snapshots that no longer exist. They may be forgiven only via
+			// the narrow legacy rule (durable request id + same attempt +
+			// canonically identical to the task's own stored params); any
+			// semantic drift still mismatches here.
+			if !acceptLegacyVideoExecution(lookup, taskID, e, latest) {
+				return nil, fmt.Errorf("provider execution fingerprint mismatch for task %s", taskID)
+			}
 		}
 		switch latest.Status {
 		case pe.Prepared:
