@@ -73,6 +73,17 @@ func (s *postgresStore) rbacMiddleware(auth authAPI, permission string) gin.Hand
 			abortAdminAuthenticationRequired(c, errUnauthorized)
 			return
 		}
+		if permission == "analytics:view" {
+			if !s.hasAnalyticsAccess(c.Request.Context(), user) {
+				abortAdminPermissionDenied(c)
+				return
+			}
+			c.Set("actorID", user.ID)
+			c.Set("actorRole", user.Role)
+			c.Request = c.Request.WithContext(context.WithValue(context.WithValue(c.Request.Context(), actorIDContextKey, user.ID), actorRoleContextKey, user.Role))
+			c.Next()
+			return
+		}
 		if !rbacEnforced() && !strings.HasPrefix(permission, "enterprise:") {
 			if user.Role != "SUPER_ADMIN" {
 				abortAdminPermissionDenied(c)
@@ -181,6 +192,9 @@ func actorFromRequest(r *http.Request) (string, string) {
 
 func adminPermissionForRequest(r *http.Request) string {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/admin")
+	if strings.HasPrefix(path, "/analytics/") || path == "/analytics" {
+		return "analytics:view"
+	}
 	if path == "/points/expiry-policy" {
 		if r.Method == http.MethodGet {
 			return "points:gift-policy:view"
@@ -427,6 +441,26 @@ func adminPermissionForRequest(r *http.Request) string {
 		return "admin.read"
 	}
 	return "admin.write"
+}
+
+func (s *postgresStore) hasAnalyticsAccess(ctx context.Context, user adminUser) bool {
+	if isPlatformAdminRole(user.Role) {
+		return true
+	}
+	if s.db == nil {
+		return false
+	}
+	var hasAccess bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM xz_operation_centers WHERE user_id = $1 AND upper(coalesce(status,'ACTIVE')) = 'ACTIVE'
+			UNION ALL
+			SELECT 1 FROM xz_channel_agents WHERE user_id = $1 AND upper(coalesce(status,'ACTIVE')) = 'ACTIVE'
+			UNION ALL
+			SELECT 1 FROM xz_tenant_members WHERE user_id = $1 AND upper(coalesce(nullif(member_status,''),status,'ACTIVE')) = 'ACTIVE'
+		)
+	`, user.ID).Scan(&hasAccess)
+	return err == nil && hasAccess
 }
 
 func rbacEnforced() bool {

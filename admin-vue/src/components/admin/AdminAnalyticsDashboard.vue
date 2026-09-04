@@ -3,8 +3,8 @@
     <!-- Header with 7/30 days switch -->
     <header class="dashboard-header">
       <div class="header-titles">
-        <h2>运营驾驶舱 V1</h2>
-        <span class="header-sub">平台级经营与系统运行状态看板（仅平台管理员可见）</span>
+        <h2>{{ dashboardTitle }}</h2>
+        <span class="header-sub">{{ dashboardSubTitle }}</span>
       </div>
       <div class="header-actions">
         <div class="time-range-segmented">
@@ -23,15 +23,15 @@
 
     <!-- 1. Top 8 KPI Cards Grid -->
     <section class="kpi-grid">
-      <!-- 1: New Users -->
+      <!-- 1: New Users / Customers / Members -->
       <div class="kpi-card">
-        <div class="kpi-card__title">今日新增用户</div>
+        <div class="kpi-card__title">{{ kpi1Title }}</div>
         <div class="kpi-card__val"><strong>{{ overviewData?.newUsersToday ?? 0 }}</strong><small>人</small></div>
         <div class="kpi-card__foot">昨日: {{ yesterdayNewUsers ?? '-' }}</div>
       </div>
-      <!-- 2: DAU -->
+      <!-- 2: DAU / Active Members -->
       <div class="kpi-card">
-        <div class="kpi-card__title">今日活跃用户 (DAU)</div>
+        <div class="kpi-card__title">{{ kpi2Title }}</div>
         <div class="kpi-card__val"><strong>{{ overviewData?.dau ?? 0 }}</strong><small>人</small></div>
         <div class="kpi-card__foot">昨日: {{ yesterdayDau ?? '-' }}</div>
       </div>
@@ -53,23 +53,30 @@
         <div class="kpi-card__val"><strong>{{ overviewData?.pointsConsumed ?? 0 }}</strong><small>点</small></div>
         <div class="kpi-card__foot">昨日: {{ yesterdayPoints ?? '-' }}</div>
       </div>
-      <!-- 6: Revenue -->
+      <!-- 6: Revenue / Available Points -->
       <div class="kpi-card">
-        <div class="kpi-card__title">今日充值收入</div>
-        <div class="kpi-card__val"><strong>{{ (revenueYuan).toFixed(2) }}</strong><small>元</small></div>
-        <div class="kpi-card__foot">昨日: {{ yesterdayRevenueYuan !== undefined ? yesterdayRevenueYuan.toFixed(2) + ' 元' : '-' }}</div>
+        <div class="kpi-card__title">{{ kpi6Title }}</div>
+        <div class="kpi-card__val">
+          <strong v-if="capabilities.showRevenue">{{ (revenueYuan).toFixed(2) }}<small>元</small></strong>
+          <strong v-else>{{ pointsData?.totalAvailable ?? 0 }}<small>点</small></strong>
+        </div>
+        <div class="kpi-card__foot">{{ kpi6Foot }}</div>
       </div>
-      <!-- 7: Processing Tasks -->
+      <!-- 7: Processing Tasks / Scope Tasks -->
       <div class="kpi-card">
-        <div class="kpi-card__title">当前排队/处理中任务</div>
+        <div class="kpi-card__title">{{ kpi7Title }}</div>
         <div class="kpi-card__val"><strong>{{ overviewData?.processingTasks ?? 0 }}</strong><small>个</small></div>
         <div class="kpi-card__foot">含 PROCESSING/PENDING/QUEUED</div>
       </div>
-      <!-- 8: Exception Cases -->
-      <div class="kpi-card" :class="{ 'is-alert': (overviewData?.exceptionCount ?? 0) > 0 }">
-        <div class="kpi-card__title">当前异常风险任务</div>
-        <div class="kpi-card__val"><strong class="danger-text">{{ overviewData?.exceptionCount ?? 0 }}</strong><small>条</small></div>
-        <div class="kpi-card__foot">待处置/处理中工单</div>
+      <!-- 8: Exception Cases / Frozen Points / Scope Node -->
+      <div class="kpi-card" :class="{ 'is-alert': capabilities.canViewExceptionCenter && (overviewData?.exceptionCount ?? 0) > 0 }">
+        <div class="kpi-card__title">{{ kpi8Title }}</div>
+        <div class="kpi-card__val">
+          <strong v-if="capabilities.canViewExceptionCenter" class="danger-text">{{ overviewData?.exceptionCount ?? 0 }}<small>条</small></strong>
+          <strong v-else-if="scopeMode === 'TENANT'">{{ pointsData?.totalFrozen ?? 0 }}<small>点</small></strong>
+          <strong v-else class="scope-badge">{{ scopeName }}</strong>
+        </div>
+        <div class="kpi-card__foot">{{ kpi8Foot }}</div>
       </div>
     </section>
 
@@ -78,8 +85,8 @@
       <div class="tab" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">运营驾驶舱</div>
       <div class="tab" :class="{ active: activeTab === 'trends' }" @click="activeTab = 'trends'">7日趋势</div>
       <div class="tab" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型排名</div>
-      <div class="tab" :class="{ active: activeTab === 'providers' }" @click="activeTab = 'providers'">供应商状态</div>
-      <div class="tab" :class="{ active: activeTab === 'tokens' }" @click="activeTab = 'tokens'">Token分析</div>
+      <div v-if="capabilities.canViewProviders" class="tab" :class="{ active: activeTab === 'providers' }" @click="activeTab = 'providers'">供应商状态</div>
+      <div v-if="capabilities.canViewTokens" class="tab" :class="{ active: activeTab === 'tokens' }" @click="activeTab = 'tokens'">Token分析</div>
       <div class="tab" :class="{ active: activeTab === 'points' }" @click="activeTab = 'points'">积分分析</div>
     </div>
 
@@ -109,10 +116,10 @@
         <div class="panel-box">
           <div class="panel-box__head">
             <strong>财务与积分水位</strong>
-            <small>平台可用与冻结资产</small>
+            <small>可用与冻结资产</small>
           </div>
           <div class="points-grid">
-            <div class="point-col">
+            <div class="point-col" v-if="capabilities.showRevenue">
               <label>今日充值总额</label>
               <strong>{{ ((pointsData?.rechargedToday ?? 0) / 100).toFixed(2) }} 元</strong>
             </div>
@@ -121,11 +128,11 @@
               <strong>{{ pointsData?.consumedToday ?? 0 }} 点</strong>
             </div>
             <div class="point-col">
-              <label>全平台可用余额</label>
+              <label>{{ scopeMode === 'TENANT' ? '企业可用积分' : '全平台可用余额' }}</label>
               <strong>{{ pointsData?.totalAvailable ?? 0 }} 点</strong>
             </div>
             <div class="point-col">
-              <label>全平台冻结余额</label>
+              <label>{{ scopeMode === 'TENANT' ? '企业冻结积分' : '全平台冻结余额' }}</label>
               <strong>{{ pointsData?.totalFrozen ?? 0 }} 点</strong>
             </div>
           </div>
@@ -135,7 +142,7 @@
       <!-- Model & Provider Status Tables -->
       <div class="split-row">
         <!-- Models -->
-        <div class="panel-box">
+        <div class="panel-box" :class="{ 'full-width': !capabilities.canViewProviders }">
           <div class="panel-box__head">
             <strong>模型调用排行 (Top)</strong>
             <small>按调用量排序</small>
@@ -148,7 +155,7 @@
                 <th>调用次数</th>
                 <th>成功率</th>
                 <th>平均延迟</th>
-                <th>总成本</th>
+                <th v-if="capabilities.canViewProviderCost">总成本</th>
               </tr>
             </thead>
             <tbody>
@@ -158,15 +165,15 @@
                 <td>{{ model.callCount }}</td>
                 <td>{{ (model.successRate || 0).toFixed(1) }}%</td>
                 <td>{{ model.avgLatencyMs || 0 }}ms</td>
-                <td>{{ (model.totalCostCents || 0) }}分</td>
+                <td v-if="capabilities.canViewProviderCost">{{ (model.totalCostCents || 0) }}分</td>
               </tr>
             </tbody>
           </table>
           <div v-else class="empty-state">暂无模型调用数据</div>
         </div>
 
-        <!-- Providers -->
-        <div class="panel-box">
+        <!-- Providers (Platform only) -->
+        <div class="panel-box" v-if="capabilities.canViewProviders">
           <div class="panel-box__head">
             <strong>供应商状态</strong>
             <small>上游可用性监控</small>
@@ -195,8 +202,8 @@
         </div>
       </div>
 
-      <!-- Runtime Operational Panel -->
-      <div class="panel-box runtime-box">
+      <!-- Runtime Operational Panel (Platform only) -->
+      <div class="panel-box runtime-box" v-if="capabilities.canViewRuntimeMetrics">
         <div class="panel-box__head">
           <strong>任务运行态透视</strong>
           <small>数据库排队/处理中任务与工单统计（仅平台管理员可见）</small>
@@ -221,8 +228,8 @@
         </div>
       </div>
 
-      <!-- Exception Cases Integration -->
-      <div class="panel-box exception-box" v-if="exceptionCases.length > 0">
+      <!-- Exception Cases Integration (Platform only) -->
+      <div class="panel-box exception-box" v-if="capabilities.canViewExceptionCenter && exceptionCases.length > 0">
         <AdminExceptionCenter :items="exceptionCases" @navigate="handleExceptionNavigate" @updated="handleExceptionUpdated" />
       </div>
     </div>
@@ -254,7 +261,7 @@
               <th>调用次数</th>
               <th>成功率</th>
               <th>平均延迟(ms)</th>
-              <th>总成本(分)</th>
+              <th v-if="capabilities.canViewProviderCost">总成本(分)</th>
             </tr>
           </thead>
           <tbody>
@@ -264,7 +271,7 @@
               <td>{{ model.callCount }}</td>
               <td>{{ (model.successRate || 0).toFixed(1) }}%</td>
               <td>{{ model.avgLatencyMs || 0 }}</td>
-              <td>{{ model.totalCostCents || 0 }}</td>
+              <td v-if="capabilities.canViewProviderCost">{{ model.totalCostCents || 0 }}</td>
             </tr>
           </tbody>
         </table>
@@ -272,8 +279,8 @@
       <div v-else class="empty-state">暂无模型数据</div>
     </div>
 
-    <!-- Tab: Providers -->
-    <div v-else-if="activeTab === 'providers'" class="tab-content-panel">
+    <!-- Tab: Providers (Platform only) -->
+    <div v-else-if="activeTab === 'providers' && capabilities.canViewProviders" class="tab-content-panel">
       <div class="section-title">供应商状态</div>
       <div class="table-container" v-if="providersData && providersData.length > 0">
         <table class="analytics-table">
@@ -284,7 +291,6 @@
               <th>调用次数</th>
               <th>成功率</th>
               <th>平均延迟(ms)</th>
-              <th>总成本(分)</th>
             </tr>
           </thead>
           <tbody>
@@ -294,7 +300,6 @@
               <td>{{ provider.callCount }}</td>
               <td>{{ (provider.successRate || 0).toFixed(1) }}%</td>
               <td>{{ provider.avgLatencyMs || 0 }}</td>
-              <td>{{ provider.totalCostCents || 0 }}</td>
             </tr>
           </tbody>
         </table>
@@ -302,8 +307,8 @@
       <div v-else class="empty-state">暂无供应商数据</div>
     </div>
 
-    <!-- Tab: Tokens -->
-    <div v-else-if="activeTab === 'tokens'" class="tab-content-panel">
+    <!-- Tab: Tokens (Platform only) -->
+    <div v-else-if="activeTab === 'tokens' && capabilities.canViewTokens" class="tab-content-panel">
       <div class="section-title">Token分析</div>
       <div v-if="tokensData">
         <div class="metrics-row">
@@ -333,11 +338,11 @@
             <h4>今日消耗</h4>
             <p>{{ pointsData.consumedToday }}</p>
           </div>
-          <div class="metric-card">
+          <div class="metric-card" v-if="capabilities.showRevenue">
             <h4>今日充值</h4>
             <p>{{ pointsData.rechargedToday }}</p>
           </div>
-          <div class="metric-card">
+          <div class="metric-card" v-if="capabilities.showRevenue">
             <h4>今日净变化</h4>
             <p>{{ pointsData.netChangeToday }}</p>
           </div>
@@ -364,6 +369,26 @@ import AdminExceptionCenter from "./AdminExceptionCenter.vue";
 import type { AdminExceptionCase } from "../../api/adminWorkspaces";
 
 echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, SVGRenderer]);
+
+export type DashboardScopeMode = "PLATFORM" | "OPERATION_CENTER" | "AGENT" | "TENANT";
+
+export interface DashboardCapabilities {
+  canViewPlatformRevenue: boolean;
+  canViewProviderCost: boolean;
+  canViewRuntimeMetrics: boolean;
+  canViewExceptionCenter: boolean;
+  canViewTokens: boolean;
+  canViewProviders: boolean;
+  showRevenue: boolean;
+  showCustomerRanking: boolean;
+  showMemberRanking: boolean;
+}
+
+export interface AnalyticsScopeInfo {
+  level: DashboardScopeMode;
+  scopeName: string;
+  capabilities: DashboardCapabilities;
+}
 
 interface OverviewData {
   newUsersToday: number;
@@ -445,6 +470,20 @@ interface PointsData {
   byType?: Array<{ type: string; count: number; rate: number }>;
 }
 
+const scopeMode = ref<DashboardScopeMode>("PLATFORM");
+const scopeName = ref<string>("全平台");
+const capabilities = ref<DashboardCapabilities>({
+  canViewPlatformRevenue: true,
+  canViewProviderCost: true,
+  canViewRuntimeMetrics: true,
+  canViewExceptionCenter: true,
+  canViewTokens: true,
+  canViewProviders: true,
+  showRevenue: true,
+  showCustomerRanking: true,
+  showMemberRanking: false,
+});
+
 const selectedDays = ref<number>(7);
 const loading = ref(false);
 const requestError = ref(false);
@@ -466,6 +505,87 @@ const providersData = ref<ProviderData[] | null>(null);
 const tokensData = ref<TokenData | null>(null);
 const pointsData = ref<PointsData | null>(null);
 const exceptionCases = ref<AdminExceptionCase[]>([]);
+
+const dashboardTitle = computed(() => {
+  switch (scopeMode.value) {
+    case "OPERATION_CENTER":
+      return "运营中心驾驶舱";
+    case "AGENT":
+      return "代理经营驾驶舱";
+    case "TENANT":
+      return "企业使用驾驶舱";
+    default:
+      return "平台运营驾驶舱";
+  }
+});
+
+const dashboardSubTitle = computed(() => {
+  switch (scopeMode.value) {
+    case "OPERATION_CENTER":
+      return `区域客户拓客与服务运行看板 · ${scopeName.value}`;
+    case "AGENT":
+      return `直属客户与生成业务经营看板 · ${scopeName.value}`;
+    case "TENANT":
+      return `企业成员与 AI 资产消耗看板 · ${scopeName.value}`;
+    default:
+      return "全平台经营与系统运行状态看板";
+  }
+});
+
+const kpi1Title = computed(() => {
+  switch (scopeMode.value) {
+    case "OPERATION_CENTER":
+      return "今日新增关联用户";
+    case "AGENT":
+      return "今日新增直属客户";
+    case "TENANT":
+      return "企业成员数";
+    default:
+      return "今日新增用户";
+  }
+});
+
+const kpi2Title = computed(() => {
+  return scopeMode.value === "TENANT" ? "今日活跃成员" : "今日活跃用户 (DAU)";
+});
+
+const kpi6Title = computed(() => {
+  if (capabilities.value.showRevenue) {
+    return scopeMode.value === "PLATFORM" ? "今日充值收入" : "今日客户充值贡献";
+  }
+  return "企业可用积分";
+});
+
+const kpi6Foot = computed(() => {
+  if (capabilities.value.showRevenue) {
+    return yesterdayRevenueYuan.value !== undefined ? `昨日: ${yesterdayRevenueYuan.value.toFixed(2)} 元` : "-";
+  }
+  return "企业资产配额";
+});
+
+const kpi7Title = computed(() => {
+  return scopeMode.value === "AGENT" ? "直属客户生成任务" : "当前排队/处理中任务";
+});
+
+const kpi8Title = computed(() => {
+  if (capabilities.value.canViewExceptionCenter) {
+    return "当前异常风险任务";
+  }
+  if (scopeMode.value === "TENANT") {
+    return "企业冻结积分";
+  }
+  return scopeMode.value === "OPERATION_CENTER" ? "区域服务中心" : "渠道代理身份";
+});
+
+const kpi8Foot = computed(() => {
+  if (capabilities.value.canViewExceptionCenter) {
+    return "待处置/处理中工单";
+  }
+  if (scopeMode.value === "TENANT") {
+    return "已锁定等待结算点数";
+  }
+  return "有效授权业务节点";
+});
 
 const totalAITasksToday = computed(() => {
   return (overviewData.value?.imagesGenerated ?? 0) + (overviewData.value?.videosGenerated ?? 0);
@@ -551,6 +671,24 @@ function formatTypeName(raw: string): string {
   return map[raw] || raw;
 }
 
+async function fetchScope() {
+  try {
+    const res = await adminRequest<AnalyticsScopeInfo>({
+      method: "GET",
+      url: "/admin/analytics/scope",
+    });
+    if (res && res.level) {
+      scopeMode.value = res.level;
+      scopeName.value = res.scopeName || "";
+      if (res.capabilities) {
+        capabilities.value = res.capabilities;
+      }
+    }
+  } catch {
+    // If scope endpoint is unavailable in mock tests, retain default platform scope
+  }
+}
+
 async function fetchOverview() {
   try {
     overviewLoading.value = true;
@@ -609,6 +747,11 @@ async function fetchModels() {
 }
 
 async function fetchProviders() {
+  if (!capabilities.value.canViewProviders) {
+    providersData.value = [];
+    providersLoading.value = false;
+    return;
+  }
   try {
     providersLoading.value = true;
     const res = await adminRequest<{ providers: ProviderData[] }>({
@@ -624,6 +767,11 @@ async function fetchProviders() {
 }
 
 async function fetchTokens() {
+  if (!capabilities.value.canViewTokens) {
+    tokensData.value = null;
+    tokensLoading.value = false;
+    return;
+  }
   try {
     tokensLoading.value = true;
     tokensData.value = await adminRequest<TokenData>({
@@ -652,6 +800,10 @@ async function fetchPoints() {
 }
 
 async function fetchExceptions() {
+  if (!capabilities.value.canViewExceptionCenter) {
+    exceptionCases.value = [];
+    return;
+  }
   try {
     const res = await adminRequest<{ adminExceptionCases?: AdminExceptionCase[] }>({
       method: "GET",
@@ -666,6 +818,7 @@ async function fetchExceptions() {
 async function refreshAll() {
   loading.value = true;
   requestError.value = false;
+  await fetchScope();
   await Promise.allSettled([
     fetchOverview(),
     fetchTrends(),
@@ -845,6 +998,12 @@ onBeforeUnmount(() => {
   color: #ef4444;
 }
 
+.scope-badge {
+  font-size: 14px;
+  color: #0284c7;
+  font-weight: 600;
+}
+
 /* Tabs */
 .tabs-container {
   display: flex;
@@ -890,6 +1049,10 @@ onBeforeUnmount(() => {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   padding: 16px;
+}
+
+.panel-box.full-width {
+  grid-column: 1 / -1;
 }
 
 .panel-box__head {

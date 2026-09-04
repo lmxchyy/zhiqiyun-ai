@@ -155,6 +155,26 @@ type AnalyticsQueryParams struct {
 	Scope     AnalyticsScope `json:"-"`         // 服务端注入的数据范围，绝对禁止客户端直接覆盖
 }
 
+// AnalyticsScopeInfo describes the resolved scope level and client capabilities.
+type AnalyticsScopeInfo struct {
+	Level        ScopeLevel            `json:"level"`
+	ScopeName    string                `json:"scopeName"`
+	Capabilities AnalyticsCapabilities `json:"capabilities"`
+}
+
+// AnalyticsCapabilities controls UI modules and metrics visibility.
+type AnalyticsCapabilities struct {
+	CanViewPlatformRevenue bool `json:"canViewPlatformRevenue"`
+	CanViewProviderCost    bool `json:"canViewProviderCost"`
+	CanViewRuntimeMetrics  bool `json:"canViewRuntimeMetrics"`
+	CanViewExceptionCenter bool `json:"canViewExceptionCenter"`
+	CanViewTokens          bool `json:"canViewTokens"`
+	CanViewProviders       bool `json:"canViewProviders"`
+	ShowRevenue            bool `json:"showRevenue"`
+	ShowCustomerRanking    bool `json:"showCustomerRanking"`
+	ShowMemberRanking      bool `json:"showMemberRanking"`
+}
+
 // 内部使用：解析后的时间范围
 type analyticsTimeRange struct {
 	start time.Time

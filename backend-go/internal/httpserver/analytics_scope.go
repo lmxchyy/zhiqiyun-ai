@@ -249,3 +249,86 @@ func resolveEntityScopesFromDB(ctx context.Context, db *sql.DB, userID string, r
 
 	return scope, nil
 }
+
+// resolveScopeInfo derives the client-facing scope metadata and capability flags.
+func resolveScopeInfo(ctx context.Context, store platformStore, scope AnalyticsScope) AnalyticsScopeInfo {
+	info := AnalyticsScopeInfo{
+		Level: scope.Level,
+	}
+
+	switch scope.Level {
+	case ScopePlatform:
+		info.ScopeName = "全平台"
+		info.Capabilities = AnalyticsCapabilities{
+			CanViewPlatformRevenue: true,
+			CanViewProviderCost:    true,
+			CanViewRuntimeMetrics:  true,
+			CanViewExceptionCenter: true,
+			CanViewTokens:          true,
+			CanViewProviders:       true,
+			ShowRevenue:            true,
+			ShowCustomerRanking:    true,
+			ShowMemberRanking:      false,
+		}
+	case ScopeOperationCenter:
+		info.ScopeName = "运营中心"
+		if pgStore, ok := store.(*postgresStore); ok && pgStore.db != nil && len(scope.OperationCenterIDs) > 0 {
+			var name string
+			if err := pgStore.db.QueryRowContext(ctx, "SELECT name FROM xz_operation_centers WHERE id = ANY($1) LIMIT 1", scope.OperationCenterIDs).Scan(&name); err == nil && name != "" {
+				info.ScopeName = name
+			}
+		}
+		info.Capabilities = AnalyticsCapabilities{
+			CanViewPlatformRevenue: false,
+			CanViewProviderCost:    false,
+			CanViewRuntimeMetrics:  false,
+			CanViewExceptionCenter: false,
+			CanViewTokens:          false,
+			CanViewProviders:       false,
+			ShowRevenue:            true,
+			ShowCustomerRanking:    true,
+			ShowMemberRanking:      false,
+		}
+	case ScopeAgent:
+		info.ScopeName = "渠道代理"
+		if pgStore, ok := store.(*postgresStore); ok && pgStore.db != nil && len(scope.AgentIDs) > 0 {
+			var code string
+			if err := pgStore.db.QueryRowContext(ctx, "SELECT coalesce(nullif(invite_code,''), id) FROM xz_channel_agents WHERE id = ANY($1) LIMIT 1", scope.AgentIDs).Scan(&code); err == nil && code != "" {
+				info.ScopeName = "代理商 " + code
+			}
+		}
+		info.Capabilities = AnalyticsCapabilities{
+			CanViewPlatformRevenue: false,
+			CanViewProviderCost:    false,
+			CanViewRuntimeMetrics:  false,
+			CanViewExceptionCenter: false,
+			CanViewTokens:          false,
+			CanViewProviders:       false,
+			ShowRevenue:            true,
+			ShowCustomerRanking:    true,
+			ShowMemberRanking:      false,
+		}
+	case ScopeTenant:
+		info.ScopeName = "企业空间"
+		if pgStore, ok := store.(*postgresStore); ok && pgStore.db != nil && len(scope.TenantIDs) > 0 {
+			var name string
+			if err := pgStore.db.QueryRowContext(ctx, "SELECT name FROM xz_tenants WHERE id = ANY($1) LIMIT 1", scope.TenantIDs).Scan(&name); err == nil && name != "" {
+				info.ScopeName = name
+			}
+		}
+		info.Capabilities = AnalyticsCapabilities{
+			CanViewPlatformRevenue: false,
+			CanViewProviderCost:    false,
+			CanViewRuntimeMetrics:  false,
+			CanViewExceptionCenter: false,
+			CanViewTokens:          false,
+			CanViewProviders:       false,
+			ShowRevenue:            false,
+			ShowCustomerRanking:    false,
+			ShowMemberRanking:      true,
+		}
+	default:
+		info.ScopeName = "未知范围"
+	}
+	return info
+}
