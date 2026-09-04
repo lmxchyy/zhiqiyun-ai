@@ -128,7 +128,7 @@ describe("admin analytics dashboard contract", () => {
     // 2. DAU
     expect(text).toContain("今日活跃用户 (DAU)");
     // 3. AI Tasks Total
-    expect(text).toContain("今日 AI 生成量");
+    expect(text).toContain("今日生图与视频生成量");
     expect(text).toContain("5次");
     // 4. Success rate
     expect(text).toContain("今日整体成功率");
@@ -139,7 +139,7 @@ describe("admin analytics dashboard contract", () => {
     expect(text).toContain("今日充值收入");
     expect(text).toContain("10.00元");
     // 7. Processing tasks
-    expect(text).toContain("当前处理中任务");
+    expect(text).toContain("当前排队/处理中任务");
     expect(text).toContain("15个");
     // 8. Exception tasks
     expect(text).toContain("当前异常风险任务");
@@ -161,8 +161,8 @@ describe("admin analytics dashboard contract", () => {
     await flushPromises();
 
     const text = wrapper.text();
-    expect(text).toContain("系统运行状态");
-    expect(text).toContain("处理中任务 (PROCESSING)");
+    expect(text).toContain("任务运行态透视");
+    expect(text).toContain("排队/处理中任务");
     expect(text).toContain("异常处置工单");
   });
 });

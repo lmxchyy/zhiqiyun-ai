@@ -3,8 +3,8 @@
     <template #header>
       <div class="runtime-panel__head">
         <div>
-          <strong>系统运行状态</strong>
-          <small>异步队列、处理中任务与健康告警（仅平台管理员可见）</small>
+          <strong>任务运行态透视</strong>
+          <small>数据库排队/处理中任务与工单统计（仅平台管理员可见）</small>
         </div>
         <el-tag :type="healthStatusType" size="small">{{ healthStatusText }}</el-tag>
       </div>
@@ -12,7 +12,7 @@
 
     <div class="runtime-grid">
       <div class="runtime-item">
-        <label>处理中任务 (PROCESSING)</label>
+        <label>排队/处理中任务 (QUEUED/PROCESSING)</label>
         <div class="item-val" :class="{ 'is-warn': processingTasks > 20 }">
           {{ processingTasks }}
           <small>个活跃生成任务</small>
@@ -33,7 +33,7 @@
         </div>
       </div>
       <div class="runtime-item">
-        <label>今日平均延迟</label>
+        <label>今日平均延迟 (AVG)</label>
         <div class="item-val">
           {{ avgLatencyMs }}
           <small>ms (端到端响应)</small>

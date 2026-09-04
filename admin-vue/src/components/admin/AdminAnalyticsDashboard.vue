@@ -37,7 +37,7 @@
       </div>
       <!-- 3: Total AI Tasks -->
       <div class="kpi-card">
-        <div class="kpi-card__title">今日 AI 生成量</div>
+        <div class="kpi-card__title">今日生图与视频生成量</div>
         <div class="kpi-card__val"><strong>{{ totalAITasksToday }}</strong><small>次</small></div>
         <div class="kpi-card__foot">生图 {{ overviewData?.imagesGenerated ?? 0 }} · 视频 {{ overviewData?.videosGenerated ?? 0 }}</div>
       </div>
@@ -61,9 +61,9 @@
       </div>
       <!-- 7: Processing Tasks -->
       <div class="kpi-card">
-        <div class="kpi-card__title">当前处理中任务</div>
+        <div class="kpi-card__title">当前排队/处理中任务</div>
         <div class="kpi-card__val"><strong>{{ overviewData?.processingTasks ?? 0 }}</strong><small>个</small></div>
-        <div class="kpi-card__foot">实时队列与 Worker 执行</div>
+        <div class="kpi-card__foot">含 PROCESSING/PENDING/QUEUED</div>
       </div>
       <!-- 8: Exception Cases -->
       <div class="kpi-card" :class="{ 'is-alert': (overviewData?.exceptionCount ?? 0) > 0 }">
@@ -198,12 +198,12 @@
       <!-- Runtime Operational Panel -->
       <div class="panel-box runtime-box">
         <div class="panel-box__head">
-          <strong>系统运行状态</strong>
-          <small>异步队列、处理中任务与健康状态（仅平台管理员可见）</small>
+          <strong>任务运行态透视</strong>
+          <small>数据库排队/处理中任务与工单统计（仅平台管理员可见）</small>
         </div>
         <div class="runtime-items">
           <div class="runtime-item">
-            <span>处理中任务 (PROCESSING)</span>
+            <span>排队/处理中任务</span>
             <strong>{{ overviewData?.processingTasks ?? 0 }} 个</strong>
           </div>
           <div class="runtime-item">
@@ -215,7 +215,7 @@
             <strong>{{ overviewData?.failedTasksToday ?? 0 }} 次</strong>
           </div>
           <div class="runtime-item">
-            <span>今日平均延迟</span>
+            <span>今日平均延迟 (AVG)</span>
             <strong>{{ overviewData?.avgLatencyMs ?? 0 }} ms</strong>
           </div>
         </div>
