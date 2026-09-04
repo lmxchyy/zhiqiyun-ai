@@ -849,6 +849,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 
 	// Analytics routes
 	analyticsGroup := adminGroup.Group("/analytics")
+	analyticsGroup.GET("/scope", wrapF(analytics.AnalyticsScope))
 	analyticsGroup.GET("/overview", wrapF(analytics.AnalyticsOverview))
 	analyticsGroup.GET("/users", wrapF(analytics.AnalyticsUsers))
 	analyticsGroup.GET("/generation", wrapF(analytics.AnalyticsGeneration))

@@ -48,8 +48,13 @@ func buildScopedUserFilter(scope AnalyticsScope, currentArgIndex int) (string, [
 		next++
 	}
 	if len(scope.AgentIDs) > 0 {
-		clauses = append(clauses, fmt.Sprintf("id IN (SELECT user_id FROM xz_channel_agents WHERE id = ANY($%d))", next))
+		clauses = append(clauses, fmt.Sprintf("id IN (SELECT user_id FROM xz_channel_agents WHERE id = ANY($%d) UNION SELECT user_id FROM xz_user_relationships WHERE parent_agent_id = ANY($%d) AND status='ACTIVE')", next, next))
 		args = append(args, scope.AgentIDs)
+		next++
+	}
+	if len(scope.OperationCenterIDs) > 0 {
+		clauses = append(clauses, fmt.Sprintf("id IN (SELECT user_id FROM xz_operation_centers WHERE id = ANY($%d) UNION SELECT user_id FROM xz_user_relationships WHERE operation_center_id = ANY($%d) AND status='ACTIVE')", next, next))
+		args = append(args, scope.OperationCenterIDs)
 		next++
 	}
 	if len(clauses) == 0 {

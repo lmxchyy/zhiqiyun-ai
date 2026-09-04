@@ -47,6 +47,22 @@ func (a analyticsAPI) resolveScope(r *http.Request) (AnalyticsScope, error) {
 	return resolveAnalyticsScope(r.Context(), a.store, r, a.sessions)
 }
 
+// AnalyticsScope handles GET /api/admin/analytics/scope
+func (a analyticsAPI) AnalyticsScope(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	scope, err := a.resolveScope(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	if scope.IsFailClosed() {
+		writeError(w, http.StatusForbidden, errForbidden)
+		return
+	}
+	info := resolveScopeInfo(ctx, a.store, scope)
+	writeJSON(w, info)
+}
+
 // AnalyticsOverview handles GET /api/admin/analytics/overview
 func (a analyticsAPI) AnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
