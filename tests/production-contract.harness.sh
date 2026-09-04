@@ -43,6 +43,30 @@ done
 
 latest="${migrations[${#migrations[@]}-1]}"
 printf '%s\n' "[production-contract] forward migrations: ${#migrations[@]} (latest=$latest)"
+
+# Video async canary production config contract (Stage 0 follow-up).
+# 1. compose.prod.yml must pass through VIDEO_ASYNC_CANARY_* to xianzhi-ai.
+grep_fixed 'VIDEO_ASYNC_CANARY_ENABLED: "${VIDEO_ASYNC_CANARY_ENABLED:-false}"' compose.prod.yml
+grep_fixed 'VIDEO_ASYNC_CANARY_USERS: "${VIDEO_ASYNC_CANARY_USERS:-}"' compose.prod.yml
+grep_fixed 'VIDEO_ASYNC_CANARY_PROVIDER_ALLOWLIST: "${VIDEO_ASYNC_CANARY_PROVIDER_ALLOWLIST:-}"' compose.prod.yml
+grep_fixed 'VIDEO_ASYNC_CANARY_MODEL_ALLOWLIST: "${VIDEO_ASYNC_CANARY_MODEL_ALLOWLIST:-}"' compose.prod.yml
+# 2. Video canary defaults to disabled when env is unset.
+grep_fixed 'VIDEO_ASYNC_CANARY_ENABLED: "${VIDEO_ASYNC_CANARY_ENABLED:-false}"' compose.prod.yml
+# 4. Image async canary env must remain untouched.
+grep_fixed 'GENERATION_ASYNC_CANARY_ENABLED: "${GENERATION_ASYNC_CANARY_ENABLED:-false}"' compose.prod.yml
+grep_fixed 'GENERATION_ASYNC_CANARY_USERS: "${GENERATION_ASYNC_CANARY_USERS:-}"' compose.prod.yml
+grep_fixed 'GENERATION_ASYNC_CANARY_PROVIDER_ALLOWLIST: "${GENERATION_ASYNC_CANARY_PROVIDER_ALLOWLIST:-}"' compose.prod.yml
+grep_fixed 'GENERATION_ASYNC_CANARY_MODEL_ALLOWLIST: "${GENERATION_ASYNC_CANARY_MODEL_ALLOWLIST:-}"' compose.prod.yml
+# 5. Normal deploy must not depend on compose.override.yml.
+grep_fixed 'COMPOSE_FILE="${COMPOSE_FILE:-compose.prod.yml}"' deploy.sh
+if grep -Fq 'compose.override.yml' deploy.sh; then
+  fail 'deploy.sh must not require compose.override.yml'
+fi
+# Empty allowlists fail closed and unset video env keeps canary disabled:
+# covered by backend-go/internal/httpserver/video_canary_test.go
+# (TestVideoAsyncCanary_AllowlistsFailClosed,
+#  TestVideoAsyncCanary_DisabledConfigFallsBackSync).
+printf '%s\n' '[production-contract] video async canary env passthrough gates PASS'
 printf '%s\n' "[production-contract] static runtime and startup gates PASS"
 
 if [ "${RUN_PRODUCTION_CONTRACT_DOCKER:-0}" != "1" ]; then
