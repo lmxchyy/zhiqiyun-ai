@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic pending PostgreSQL backup offsite upload
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=backup-offsite-upload.service
+
+[Install]
+WantedBy=timers.target

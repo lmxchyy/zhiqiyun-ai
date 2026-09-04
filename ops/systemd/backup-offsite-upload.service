@@ -1,0 +1,19 @@
+[Unit]
+Description=Upload pending PostgreSQL backups to Huawei OBS
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=backup-offsite-upload-failure.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/zhiqiyun-ai
+Environment=BACKUP_OBS_ENV_FILE=/opt/zhiqiyun-ai/secrets/backup-obs.env
+# Pinned immutable uploader (see release manifests). The wrapper refuses to
+# run without an @sha256: image reference.
+Environment=BACKUP_UPLOADER_IMAGE=crpi-kvtl7houjvj5ftba.cn-hangzhou.personal.cr.aliyuncs.com/zhiqiyun-ai/backup-uploader@sha256:6f87e5d62ea6ae39f811fb90e89760b3773d95e511e58946a8eb7956bdc5b857
+# Must point at the pending wrapper: it passes --root /var/lib/zhiqiyun/backups
+# so db_ files keep their postgres/ prefix for object-key categorization.
+ExecStart=/usr/bin/flock -n /run/backup-offsite-upload.lock /usr/bin/env bash /opt/zhiqiyun-ai/ops/backup-offsite-upload-pending.sh
+NoNewPrivileges=true
+PrivateTmp=true

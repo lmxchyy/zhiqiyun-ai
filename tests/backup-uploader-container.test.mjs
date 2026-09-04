@@ -29,7 +29,10 @@ test("production uploader is opt-in, one-shot, and isolated from business servic
   assert.match(compose, /backup-uploader:/);
   assert.match(compose, /profiles:\s*\["backup-uploader"\]/);
   assert.match(compose, /read_only:\s*true/);
-  assert.match(compose, /\.\/backups\/postgres:\/var\/lib\/zhiqiyun\/backups\/postgres:rw/);
+  // The backups parent (not just postgres/) must be mounted: the uploader derives
+  // the object key from the path relative to --root and requires the postgres/
+  // prefix for db_ files.
+  assert.match(compose, /\.\/backups:\/var\/lib\/zhiqiyun\/backups:rw/);
   assert.match(compose, /BACKUP_OBS_ENV_FILE:-\/dev\/null/);
   assert.match(compose, /BACKUP_STORAGE_CONFIG_ID/);
   assert.match(compose, /restart:\s*"no"/);
@@ -44,6 +47,10 @@ test("backup creation emits local integrity metadata and pending upload requires
   const wrapper = readFileSync(pendingUpload, "utf8");
   assert.match(wrapper, /BACKUP_UPLOADER_IMAGE.*@sha256/);
   assert.match(wrapper, /--no-deps backup-uploader/);
+  // Wrapper root must be the backups parent so db_ files keep their postgres/
+  // prefix for object-key categorization (see uploader load_local).
+  assert.match(wrapper, /--root \/var\/lib\/zhiqiyun\/backups /);
+  assert.match(wrapper, /--file "\/var\/lib\/zhiqiyun\/backups\/postgres\/\$name"/);
   assert.doesNotMatch(wrapper, /docker compose.*--build/);
 });
 

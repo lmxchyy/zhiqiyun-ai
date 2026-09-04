@@ -478,7 +478,10 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev
     volumes:
-      - ./backups/postgres:/var/lib/zhiqiyun/backups/postgres:rw
+      # Mount the backups parent (not just postgres/): the uploader derives the
+      # object key from the path relative to --root, which must be
+      # /var/lib/zhiqiyun/backups for the postgres/ prefix check to pass.
+      - ./backups:/var/lib/zhiqiyun/backups:rw
 
 volumes:
   app-data:
