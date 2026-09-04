@@ -132,6 +132,17 @@ func (s *postgresStore) AnalyticsOverview(ctx context.Context, params AnalyticsQ
 		return out, err
 	}
 
+	procClause, procArgs, _ := scope.ScopeSQLFilter("xz_generation_tasks", 1)
+	procQuery := fmt.Sprintf("SELECT count(*) FROM xz_generation_tasks WHERE upper(status) IN ('PROCESSING','RUNNING','PENDING','QUEUED') AND %s", procClause)
+	if err := s.db.QueryRowContext(ctx, procQuery, procArgs...).Scan(&out.ProcessingTasks); err != nil {
+		// Non-fatal if query fails, default 0
+		out.ProcessingTasks = 0
+	}
+
+	if scope.IsPlatform || scope.Level == "" {
+		_ = s.db.QueryRowContext(ctx, "SELECT count(*) FROM xz_admin_exception_cases WHERE status IN ('OPEN','IN_PROGRESS')").Scan(&out.ExceptionCount)
+	}
+
 	var total, succeeded int
 	rateQuery := fmt.Sprintf("SELECT count(*), count(*) FILTER (WHERE upper(status)='SUCCEEDED') FROM xz_generation_tasks WHERE NULLIF(created_at,'')::timestamptz >= $1 AND NULLIF(created_at,'')::timestamptz < $2 AND %s", genClause)
 	rateArgs := append([]any{dayStart, dayEnd}, genArgs...)
@@ -457,6 +468,26 @@ func (s *postgresStore) AnalyticsGeneration(ctx context.Context, params Analytic
 	}
 	if out.TotalTasksToday > 0 {
 		out.SuccessRate = float64(succeeded) / float64(out.TotalTasksToday) * 100
+	}
+
+	// Breakdown by application type
+	typeQuery := fmt.Sprintf(`
+		SELECT coalesce(nullif(type,''), 'OTHER'), count(*) 
+		FROM xz_generation_tasks 
+		WHERE NULLIF(created_at,'')::timestamptz >= $1 AND NULLIF(created_at,'')::timestamptz < $2 AND %s
+		GROUP BY 1 ORDER BY 2 DESC
+	`, genClause)
+	if rows, err := s.db.QueryContext(ctx, typeQuery, baseArgs...); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var tm TypeMetric
+			if err := rows.Scan(&tm.Type, &tm.Count); err == nil {
+				if out.TotalTasksToday > 0 {
+					tm.Rate = float64(tm.Count) / float64(out.TotalTasksToday) * 100
+				}
+				out.ByType = append(out.ByType, tm)
+			}
+		}
 	}
 
 	models, err := s.AnalyticsModels(ctx, params)
