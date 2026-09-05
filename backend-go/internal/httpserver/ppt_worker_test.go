@@ -608,9 +608,20 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	}()
 
 	peStore := pe.NewStore(db)
+	req := generation.CreateRequest{
+		Model: "mock-counting",
+		Params: map[string]any{
+			providerExecutionTaskParam: slideKey,
+			"provider":                 "configured",
+		},
+	}
+	execId, _, err := executionIdentity(req, "image", "configured")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = peStore.CreatePrepared(ctx, pe.Execution{
-		TaskID: slideKey, Provider: "configured", ProviderModel: "mock-standard",
-		Capability: "image", Attempt: 1, RequestFingerprint: "mock-fp",
+		TaskID: slideKey, Provider: "configured", ProviderModel: req.Model,
+		Capability: "image", Attempt: 1, RequestFingerprint: execId.RequestFingerprint,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -632,13 +643,6 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	// 2. UNKNOWN_NEVER_BLIND_RESUBMITS: Calling guardedImage on this slideKey returns ErrUnknownResubmitBlocked without provider Create
 	var createCalls atomic.Int32
 	mockImgProv := &mockCountingImageProvider{createCalls: &createCalls}
-	req := generation.CreateRequest{
-		Model: "mock-counting",
-		Params: map[string]any{
-			providerExecutionTaskParam: slideKey,
-			"provider":                 "configured",
-		},
-	}
 	_, genErr := guardedImage(ctx, req, mockImgProv, peStore)
 	if !errors.Is(genErr, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: expected ErrUnknownResubmitBlocked, got %v", genErr)
