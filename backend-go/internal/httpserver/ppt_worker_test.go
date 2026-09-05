@@ -632,15 +632,14 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	// 2. UNKNOWN_NEVER_BLIND_RESUBMITS: Calling guardedImage on this slideKey returns ErrUnknownResubmitBlocked without provider Create
 	var createCalls atomic.Int32
 	mockImgProv := &mockCountingImageProvider{createCalls: &createCalls}
-	mockGenService := generation.NewServiceWithOptions(generation.ServiceOptions{
-		ImageProvider:  mockImgProv,
-		ExecutionHooks: providerExecutionHooks(store, true),
-	})
-	apiInst := api{store: store, cfg: stage0PPTCanaryConfig(), pptService: pptapp.NewPostgresService(db, "")}
-	imgReq := pptImageGenerateRequest{
-		Slide: pptapp.Slide{ID: "slide_1"}, Prompt: "test",
+	req := generation.CreateRequest{
+		Model: "mock-counting",
+		Params: map[string]any{
+			providerExecutionTaskParam: slideKey,
+			"provider":                 "configured",
+		},
 	}
-	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser, PlanID: "plan_pro"}, mockGenService, imgReq, "mock-standard", task.ID, slideKey, "child-req-"+suffix)
+	_, genErr := guardedImage(ctx, req, mockImgProv, peStore)
 	if !errors.Is(genErr, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: expected ErrUnknownResubmitBlocked, got %v", genErr)
 	}
