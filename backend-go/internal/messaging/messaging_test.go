@@ -64,3 +64,15 @@ func TestVideoCanaryRoutingKeyValidation(t *testing.T) {
 		t.Fatal("video queue names must not be empty")
 	}
 }
+
+func TestPPTCanaryRoutingKeyValidation(t *testing.T) {
+	if err := ValidateRoutingKey(GenerationPPTCanaryRoutingKey); err != nil {
+		t.Fatalf("GenerationPPTCanaryRoutingKey %q must be valid: %v", GenerationPPTCanaryRoutingKey, err)
+	}
+	if err := ValidateRoutingKey(GenerationPPTCanaryRetryKey); err != nil {
+		t.Fatalf("GenerationPPTCanaryRetryKey %q must be valid: %v", GenerationPPTCanaryRetryKey, err)
+	}
+	if GenerationPPTCanaryQueue == "" || GenerationPPTCanaryDLQ == "" || GenerationPPTCanaryRetryQueue == "" {
+		t.Fatal("ppt queue names must not be empty")
+	}
+}

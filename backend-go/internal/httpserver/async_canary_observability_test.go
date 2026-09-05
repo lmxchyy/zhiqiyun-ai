@@ -102,3 +102,30 @@ func TestVideoCanaryObservabilityMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestOperationalSnapshotRendersPPTCanaryMetrics(t *testing.T) {
+	output := renderOperationalForTest(asyncCanaryOperationalSnapshot{
+		rabbitPPTQueueDepth:     4,
+		rabbitPPTRetryDepth:     1,
+		rabbitPPTDLQDepth:       0,
+		rabbitPPTConsumers:      1,
+		pptGenerationStuckCount: 2,
+		pptGenerationStuckAge:   450,
+		pptPointsUnsettledCount: 1,
+		pptPointsUnsettledAge:   300,
+	})
+	for _, sample := range []string{
+		"xianzhi_async_canary_ppt_rabbitmq_queue_depth 4",
+		"xianzhi_async_canary_ppt_rabbitmq_retry_queue_depth 1",
+		"xianzhi_async_canary_ppt_rabbitmq_dlq_depth 0",
+		"xianzhi_async_canary_ppt_rabbitmq_consumers 1",
+		"xianzhi_async_canary_ppt_generation_stuck 2",
+		"xianzhi_async_canary_ppt_generation_oldest_stuck_age_seconds 450",
+		"xianzhi_async_canary_ppt_points_reserved_unsettled 1",
+		"xianzhi_async_canary_ppt_points_oldest_unsettled_age_seconds 300",
+	} {
+		if !strings.Contains(output, sample) {
+			t.Errorf("missing ppt canary metric %q", sample)
+		}
+	}
+}
