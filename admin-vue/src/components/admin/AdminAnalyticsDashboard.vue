@@ -1,16 +1,11 @@
 <template>
   <section class="analytics-dashboard">
-    <!-- Header with 7/30 days switch -->
     <header class="dashboard-header">
       <div class="header-titles">
         <h2>{{ dashboardTitle }}</h2>
         <span class="header-sub">{{ dashboardSubTitle }}</span>
       </div>
       <div class="header-actions">
-        <div class="time-range-segmented">
-          <button type="button" :class="{ active: selectedDays === 7 }" @click="selectDays(7)">最近 7 天</button>
-          <button type="button" :class="{ active: selectedDays === 30 }" @click="selectDays(30)">最近 30 天</button>
-        </div>
         <button type="button" class="btn-refresh" :disabled="loading" @click="refreshAll">
           {{ loading ? '刷新中...' : '刷新数据' }}
         </button>
@@ -22,7 +17,9 @@
     </div>
 
     <!-- 1. Top 8 KPI Cards Grid -->
-    <section class="kpi-grid">
+    <section class="kpi-section">
+      <div class="kpi-section__heading">今日经营概览</div>
+      <div class="kpi-grid">
       <!-- 1: New Users / Customers / Members -->
       <div class="kpi-card">
         <div class="kpi-card__title">{{ kpi1Title }}</div>
@@ -78,16 +75,27 @@
         </div>
         <div class="kpi-card__foot">{{ kpi8Foot }}</div>
       </div>
+      </div>
     </section>
 
-    <!-- Tabs Container to keep 100% test contract compatibility -->
-    <div class="tabs-container">
-      <div class="tab" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">运营驾驶舱</div>
-      <div class="tab" :class="{ active: activeTab === 'trends' }" @click="activeTab = 'trends'">7日趋势</div>
-      <div class="tab" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型排名</div>
-      <div v-if="capabilities.canViewProviders" class="tab" :class="{ active: activeTab === 'providers' }" @click="activeTab = 'providers'">供应商状态</div>
-      <div v-if="capabilities.canViewTokens" class="tab" :class="{ active: activeTab === 'tokens' }" @click="activeTab = 'tokens'">Token分析</div>
-      <div class="tab" :class="{ active: activeTab === 'points' }" @click="activeTab = 'points'">积分分析</div>
+    <!-- Detail analysis controls: the range applies below the today KPI overview. -->
+    <div class="analysis-toolbar">
+      <!-- Tabs Container to keep 100% test contract compatibility -->
+      <div class="tabs-container">
+        <div class="tab" :class="{ active: activeTab === 'overview' }" @click="activeTab = 'overview'">运营驾驶舱</div>
+        <div class="tab" :class="{ active: activeTab === 'trends' }" @click="activeTab = 'trends'">{{ trendTitle }}</div>
+        <div class="tab" :class="{ active: activeTab === 'models' }" @click="activeTab = 'models'">模型排名</div>
+        <div v-if="capabilities.canViewProviders" class="tab" :class="{ active: activeTab === 'providers' }" @click="activeTab = 'providers'">供应商状态</div>
+        <div v-if="capabilities.canViewTokens" class="tab" :class="{ active: activeTab === 'tokens' }" @click="activeTab = 'tokens'">Token分析</div>
+        <div class="tab" :class="{ active: activeTab === 'points' }" @click="activeTab = 'points'">积分分析</div>
+      </div>
+      <div class="analysis-toolbar__range">
+        <span class="analysis-toolbar__label">分析周期</span>
+        <div class="time-range-segmented">
+          <button type="button" :class="{ active: selectedDays === 7 }" @click="selectDays(7)">最近 7 天</button>
+          <button type="button" :class="{ active: selectedDays === 30 }" @click="selectDays(30)">最近 30 天</button>
+        </div>
+      </div>
     </div>
 
     <!-- Tab: Overview (Main Cockpit View) -->
@@ -236,7 +244,7 @@
 
     <!-- Tab: Trends -->
     <div v-else-if="activeTab === 'trends'" class="tab-content-panel">
-      <div class="section-title">7日趋势分析</div>
+      <div class="section-title">{{ trendTitle }}</div>
       <div class="charts-grid" v-if="trendsData && hasTrendData()">
         <div class="chart-placeholder" v-for="key in chartKeys" :key="key">
           <div class="chart-title">{{ chartLabels[key] }}</div>
@@ -485,6 +493,7 @@ const capabilities = ref<DashboardCapabilities>({
 });
 
 const selectedDays = ref<number>(7);
+const trendTitle = computed(() => `近 ${selectedDays.value} 日趋势分析`);
 const loading = ref(false);
 const requestError = ref(false);
 const activeTab = ref<"overview" | "trends" | "models" | "providers" | "tokens" | "points">("overview");
@@ -943,6 +952,18 @@ onBeforeUnmount(() => {
 }
 
 /* 8 KPI Cards Grid */
+.kpi-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.kpi-section__heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--admin-text-color, #1e293b);
+}
+
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -1004,11 +1025,32 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-/* Tabs */
+/* Detail analysis tabs and range */
+.analysis-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.analysis-toolbar__range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 7px;
+}
+
+.analysis-toolbar__label {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
 .tabs-container {
   display: flex;
+  flex: 1;
   border-bottom: 1px solid #e2e8f0;
-  margin-top: 8px;
 }
 
 .tab {
@@ -1039,6 +1081,17 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
+  .analysis-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .analysis-toolbar__range {
+    justify-content: flex-end;
+    padding-bottom: 0;
+  }
+
   .split-row {
     grid-template-columns: 1fr;
   }
