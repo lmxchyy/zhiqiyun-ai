@@ -80,6 +80,9 @@ func (r *asyncMessagingRuntime) Start(parent context.Context) {
 	r.run(ctx, "generation video canary consumer", func(ctx context.Context) error {
 		return httpserver.RunGenerationVideoCanaryWorker(ctx, r.cfg, r.db, r.manager)
 	})
+	r.run(ctx, "generation ppt canary consumer", func(ctx context.Context) error {
+		return httpserver.RunGenerationPPTCanaryWorker(ctx, r.cfg, r.db, r.manager)
+	})
 }
 
 func (r *asyncMessagingRuntime) run(ctx context.Context, name string, fn func(context.Context) error) {

@@ -129,6 +129,7 @@ type Slide struct {
 	VisualCreatedAt  string        `json:"visualCreatedAt,omitempty"`
 	VisualStatus     string        `json:"visualStatus,omitempty"`
 	VisualError      string        `json:"visualError,omitempty"`
+	VisualRevision   int           `json:"visualRevision,omitempty"`
 }
 
 type Service struct {
@@ -321,6 +322,89 @@ func (s *Service) UpdateSlideContent(userID, taskID, slideID string, update Slid
 	task = cloneTask(task)
 	if err := applySlideContentUpdate(&task, slideID, update); err != nil {
 		return Task{}, err
+	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+// SetOutlineSlides persists a generated outline as the deck slide structure.
+// Worker-only in PR3A: the synchronous path builds slides at creation time via
+// taskFromGenerateRequest. Status moves to processing with progress 30 so
+// redelivery can distinguish "outline checkpointed" from "not started".
+func (s *Service) SetOutlineSlides(userID, taskID string, outline Outline) (Task, error) {
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+			return applyOutlineSlides(task, outline)
+		})
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	if err := applyOutlineSlides(&task, outline); err != nil {
+		return Task{}, err
+	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+func applyOutlineSlides(task *Task, outline Outline) error {
+	if len(outline.Slides) == 0 {
+		return errors.New("ppt outline has no usable slides")
+	}
+	task.Outline = &outline
+	req := GenerateRequest{
+		Theme: task.Theme, ImageComposition: task.ImageComposition,
+		ImageStyle: task.ImageStyle, PeopleStyle: task.PeopleStyle,
+		ImageLighting: task.ImageLighting,
+	}
+	task.Slides = slidesFromOutline(&outline, req)
+	task.SlideCount = len(outline.Slides)
+	task.Title = firstNonEmptyVisual(outline.Title, task.Title)
+	task.Status = StatusProcessing
+	task.Progress = 30
+	return nil
+}
+
+// SetDeckStatus persists an explicit terminal deck status. Unlike the
+// time-derived materializeTask states, explicit success/failed is honored
+// verbatim on every later read, giving async decks a truthful terminal state.
+func (s *Service) SetDeckStatus(userID, taskID, status string) (Task, error) {
+	status = strings.TrimSpace(status)
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+			task.Status = status
+			if status == StatusSuccess {
+				task.Progress = 100
+			}
+			return nil
+		})
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	task.Status = status
+	if status == StatusSuccess {
+		task.Progress = 100
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.tasks[task.TaskID] = task

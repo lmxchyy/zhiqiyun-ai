@@ -47,6 +47,10 @@ type asyncCanaryProcessMetrics struct {
 	pointsSettlementConflicts  atomic.Uint64
 	artifactRecoveryAttempts   atomic.Uint64
 	artifactRecoveryFailures   atomic.Uint64
+	pptOutlineCompleted        atomic.Uint64
+	pptSlidesCompleted         atomic.Uint64
+	pptSlidesSkipped           atomic.Uint64
+	pptStageRecoveries         atomic.Uint64
 }
 
 var generationCanaryMetrics = &asyncCanaryProcessMetrics{decisions: map[string]uint64{}}
@@ -310,4 +314,8 @@ func renderAsyncCanaryMetrics(rendered *strings.Builder, snapshot asyncCanaryOpe
 	writeCounter("xianzhi_async_canary_points_settlement_conflicts_total", "Detected point capture/release settlement conflicts.", generationCanaryMetrics.pointsSettlementConflicts.Load())
 	writeCounter("xianzhi_async_canary_artifact_recovery_attempts_total", "Generated artifact recovery attempts.", generationCanaryMetrics.artifactRecoveryAttempts.Load())
 	writeCounter("xianzhi_async_canary_artifact_recovery_failures_total", "Generated artifact recovery failures.", generationCanaryMetrics.artifactRecoveryFailures.Load())
+	writeCounter("xianzhi_async_canary_ppt_outline_completed_total", "PPT async outline stages completed.", generationCanaryMetrics.pptOutlineCompleted.Load())
+	writeCounter("xianzhi_async_canary_ppt_slides_completed_total", "PPT async slide visuals completed.", generationCanaryMetrics.pptSlidesCompleted.Load())
+	writeCounter("xianzhi_async_canary_ppt_slides_skipped_total", "PPT async slides skipped via durable checkpoint.", generationCanaryMetrics.pptSlidesSkipped.Load())
+	writeCounter("xianzhi_async_canary_ppt_stage_recoveries_total", "PPT async stage recoveries without new provider submit.", generationCanaryMetrics.pptStageRecoveries.Load())
 }

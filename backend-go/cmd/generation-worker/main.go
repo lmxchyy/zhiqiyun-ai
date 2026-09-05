@@ -37,12 +37,15 @@ func run() error {
 	clients.Messaging.Start()
 	workerCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() {
 		errCh <- httpserver.RunGenerationImageCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)
 	}()
 	go func() {
 		errCh <- httpserver.RunGenerationVideoCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)
+	}()
+	go func() {
+		errCh <- httpserver.RunGenerationPPTCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)
 	}()
 	err = <-errCh
 	if err == context.Canceled || err == context.DeadlineExceeded {
