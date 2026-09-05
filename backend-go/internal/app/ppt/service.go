@@ -19,6 +19,16 @@ const (
 	StatusProcessing = "processing"
 	StatusSuccess    = "success"
 	StatusFailed     = "failed"
+
+	StageQueued       = "QUEUED"
+	StageOutline      = "OUTLINE"
+	StageVisualPlan   = "VISUAL_PLAN"
+	StageSlideImages  = "SLIDE_IMAGES"
+	StagePPTXReady    = "PPTX_READY"
+	StageSettling     = "SETTLING"
+	StageSucceeded    = "SUCCEEDED"
+	StageFailed       = "FAILED"
+	StageManualReview = "MANUAL_REVIEW"
 )
 
 var (
@@ -87,6 +97,11 @@ type Task struct {
 	TextInImage           bool     `json:"textInImage"`
 	Progress              int      `json:"progress,omitempty"`
 	CurrentPage           int      `json:"currentPage,omitempty"`
+	Stage                 string   `json:"stage,omitempty"`
+	CompletedPages        int      `json:"completedPages,omitempty"`
+	PlannedPages          int      `json:"plannedPages,omitempty"`
+	DegradedPages         int      `json:"degradedPages,omitempty"`
+	RecoveryState         string   `json:"recoveryState,omitempty"`
 	Outline               *Outline `json:"outline,omitempty"`
 	Slides                []Slide  `json:"slides,omitempty"`
 	PPTURL                string   `json:"pptUrl"`
@@ -379,7 +394,10 @@ func applyOutlineSlides(task *Task, outline Outline) error {
 	task.SlideCount = len(outline.Slides)
 	task.Title = firstNonEmptyVisual(outline.Title, task.Title)
 	task.Status = StatusProcessing
-	task.Progress = 30
+	task.Stage = StageOutline
+	task.PlannedPages = len(task.Slides)
+	task.Progress = maxInt(task.Progress, 20)
+	applyDurableProgress(task)
 	return nil
 }
 
@@ -390,10 +408,7 @@ func (s *Service) SetDeckStatus(userID, taskID, status string) (Task, error) {
 	status = strings.TrimSpace(status)
 	if s.db != nil {
 		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
-			task.Status = status
-			if status == StatusSuccess {
-				task.Progress = 100
-			}
+			applyDeckStatus(task, status)
 			return nil
 		})
 	}
@@ -405,9 +420,70 @@ func (s *Service) SetDeckStatus(userID, taskID, status string) (Task, error) {
 	}
 	previous := task
 	task = cloneTask(task)
-	task.Status = status
-	if status == StatusSuccess {
-		task.Progress = 100
+	applyDeckStatus(&task, status)
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+// SetDeckSettling records the durable settlement boundary without changing the
+// public task status. It is intentionally monotonic and restart-safe.
+func (s *Service) SetDeckSettling(userID, taskID string) (Task, error) {
+	update := func(task *Task) error {
+		task.Stage = StageSettling
+		task.Progress = maxInt(task.Progress, 98)
+		return nil
+	}
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, update)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	if err := update(&task); err != nil {
+		return Task{}, err
+	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+// SetDeckManualReview records an operator-controlled recovery boundary without
+// changing billing fields. The generation parent is fenced by its status so
+// future delivery stops until an explicit resolve action is taken.
+func (s *Service) SetDeckManualReview(userID, taskID string) (Task, error) {
+	update := func(task *Task) error {
+		task.Status = "manual_review"
+		task.Stage = StageManualReview
+		task.RecoveryState = StageManualReview
+		return nil
+	}
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, update)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	if err := update(&task); err != nil {
+		return Task{}, err
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.tasks[task.TaskID] = task
@@ -425,12 +501,7 @@ func (s *Service) SetDeckArtifactReady(userID, taskID, assetID, storageRef strin
 	storageRef = strings.TrimSpace(storageRef)
 	if s.db != nil {
 		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
-			task.ArtifactStatus = "ready"
-			task.AssetID = assetID
-			task.StorageRef = storageRef
-			if strings.TrimSpace(task.PPTURL) == "" {
-				task.PPTURL = storageRef
-			}
+			applyArtifactReady(task, assetID, storageRef)
 			return nil
 		})
 	}
@@ -442,12 +513,7 @@ func (s *Service) SetDeckArtifactReady(userID, taskID, assetID, storageRef strin
 	}
 	previous := task
 	task = cloneTask(task)
-	task.ArtifactStatus = "ready"
-	task.AssetID = assetID
-	task.StorageRef = storageRef
-	if strings.TrimSpace(task.PPTURL) == "" {
-		task.PPTURL = storageRef
-	}
+	applyArtifactReady(&task, assetID, storageRef)
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.tasks[task.TaskID] = task
 	if err := s.saveLocked(); err != nil {
@@ -498,6 +564,7 @@ func (s *Service) UpdateSlideVisualPlan(userID, taskID, slideID string, plan Vis
 		}
 		task.Slides[i].VisualStatus = strings.TrimSpace(status)
 		task.Slides[i].VisualError = strings.TrimSpace(errorMessage)
+		applyDurableProgress(&task)
 		found = true
 		break
 	}
@@ -562,6 +629,7 @@ func disableSlideVisual(task *Task, slideID string, plan VisualPlan) error {
 		slide.VisualCreatedAt = ""
 		slide.VisualStatus = "success"
 		slide.VisualError = ""
+		applyDurableProgress(task)
 		return nil
 	}
 	return ErrTaskNotFound
@@ -633,6 +701,7 @@ func completeSlideVisual(task *Task, slideID string, plan VisualPlan, asset Visu
 		slide.VisualCreatedAt = asset.CreatedAt
 		slide.VisualStatus = "success"
 		slide.VisualError = ""
+		applyDurableProgress(task)
 		return nil
 	}
 	return ErrTaskNotFound
@@ -774,36 +843,143 @@ func (s *Service) saveLocked() error {
 }
 
 func (s *Service) materializeLocked(task Task) Task {
-	task = materializeTask(task)
+	applyDurableProgress(&task)
 	s.tasks[task.TaskID] = task
 	return task
 }
 
+// materializeTask is a pure durable projection. It never infers progress from
+// wall-clock time, worker memory, or goroutine state.
 func materializeTask(task Task) Task {
-	if task.Status == StatusSuccess || task.Status == StatusFailed {
-		return task
-	}
-	createdAt, err := time.Parse(time.RFC3339Nano, task.CreatedAt)
-	if err != nil {
-		createdAt = time.Now().UTC()
-	}
-	elapsed := time.Since(createdAt)
-	switch {
-	case elapsed >= 2500*time.Millisecond:
-		task.Status = StatusSuccess
-		task.Progress = 100
-		task.CurrentPage = task.SlideCount
-	case elapsed >= 700*time.Millisecond:
-		task.Status = StatusProcessing
-		task.Progress = 65
-		task.CurrentPage = maxInt(1, task.SlideCount/2)
-	default:
-		task.Status = StatusPending
-		task.Progress = 20
-		task.CurrentPage = 0
-	}
-	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	applyDurableProgress(&task)
 	return task
+}
+
+func applyDeckStatus(task *Task, status string) {
+	status = strings.TrimSpace(status)
+	task.Status = status
+	switch status {
+	case StatusSuccess:
+		task.Stage = StageSucceeded
+		task.Progress = 100
+		task.CurrentPage = maxInt(task.PlannedPages, task.SlideCount)
+	case StatusFailed:
+		task.Stage = StageFailed
+	case "manual_review":
+		task.Stage = StageManualReview
+		task.RecoveryState = StageManualReview
+	}
+	applyDurableProgress(task)
+}
+
+func applyArtifactReady(task *Task, assetID, storageRef string) {
+	task.ArtifactStatus = "ready"
+	task.AssetID = strings.TrimSpace(assetID)
+	task.StorageRef = strings.TrimSpace(storageRef)
+	if strings.TrimSpace(task.PPTURL) == "" {
+		task.PPTURL = task.StorageRef
+	}
+	task.Stage = StagePPTXReady
+	task.Progress = maxInt(task.Progress, 95)
+	applyDurableProgress(task)
+}
+
+func applyDurableProgress(task *Task) {
+	if task == nil {
+		return
+	}
+	if task.PlannedPages <= 0 {
+		task.PlannedPages = maxInt(task.SlideCount, len(task.Slides))
+	}
+	total := task.PlannedPages
+	completed, degraded := 0, 0
+	for _, slide := range task.Slides {
+		if strings.EqualFold(strings.TrimSpace(slide.VisualStatus), "success") && (strings.TrimSpace(slide.ImageURL) != "" || slide.VisualPlan != nil) {
+			completed++
+		}
+		if strings.EqualFold(strings.TrimSpace(slide.VisualStatus), "failed") {
+			degraded++
+		}
+	}
+	task.CompletedPages = completed
+	task.DegradedPages = degraded
+	if total > 0 {
+		task.CurrentPage = minInt(total, completed+1)
+	}
+	derivedStage, derivedProgress := StageQueued, 5
+	switch {
+	case task.Status == StatusSuccess:
+		derivedStage, derivedProgress = StageSucceeded, 100
+	case task.Status == StatusFailed:
+		derivedStage = StageFailed
+	case task.RecoveryState == StageManualReview:
+		derivedStage = StageManualReview
+	case task.ArtifactStatus == "ready":
+		derivedStage, derivedProgress = StagePPTXReady, 95
+	case task.Outline != nil && len(task.Slides) > 0:
+		derivedStage, derivedProgress = StageOutline, 20
+		hasVisualPlan := false
+		for _, slide := range task.Slides {
+			if slide.VisualPlan != nil {
+				hasVisualPlan = true
+				break
+			}
+		}
+		if hasVisualPlan {
+			derivedStage, derivedProgress = StageVisualPlan, 30
+		}
+		if completed > 0 {
+			derivedStage = StageSlideImages
+			if total > 0 {
+				derivedProgress = 30 + (55 * completed / total)
+			}
+		}
+	case task.Outline != nil:
+		derivedStage, derivedProgress = StageOutline, 20
+	}
+	if task.Stage == "" || stageRank(derivedStage) >= stageRank(task.Stage) {
+		task.Stage = derivedStage
+	}
+	if task.Status == StatusFailed || task.RecoveryState == StageManualReview {
+		return
+	}
+	if derivedProgress > task.Progress {
+		task.Progress = derivedProgress
+	}
+	if task.Stage == StageSucceeded {
+		task.Progress = 100
+		task.CurrentPage = total
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func stageRank(stage string) int {
+	switch stage {
+	case StageQueued:
+		return 1
+	case StageOutline:
+		return 2
+	case StageVisualPlan:
+		return 3
+	case StageSlideImages:
+		return 4
+	case StagePPTXReady:
+		return 5
+	case StageSettling:
+		return 6
+	case StageSucceeded:
+		return 7
+	case StageFailed, StageManualReview:
+		return 8
+	default:
+		return 0
+	}
 }
 
 func normalizeRequest(req GenerateRequest) GenerateRequest {

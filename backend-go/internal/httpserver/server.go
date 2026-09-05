@@ -762,6 +762,8 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	adminGroup.GET("/delivery-projects", wrapF(admin.deliveryProjects))
 	adminGroup.PATCH("/delivery-projects/:id", wrapF(admin.updateDeliveryProject))
 	adminGroup.GET("/generation-tasks", wrapF(admin.generationTasks))
+	adminGroup.GET("/generation-tasks/:id/recovery-diagnosis", wrapF(api.generationRecoveryDiagnosis))
+	adminGroup.POST("/generation-tasks/:id/recovery-actions", wrapF(api.generationRecoveryAction))
 	adminGroup.GET("/ai/overview", wrapF(admin.aiOverview))
 	adminGroup.GET("/compliance/miniprogram-launch-check", wrapF(admin.miniProgramComplianceCheck))
 	adminGroup.GET("/compliance/legal-documents", wrapF(admin.legalDocuments))
