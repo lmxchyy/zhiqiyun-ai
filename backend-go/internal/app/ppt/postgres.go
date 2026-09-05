@@ -161,10 +161,13 @@ func (s *Service) generatePostgres(req GenerateRequest, externalActive, limit in
 	return GenerateResponse{TaskID: task.TaskID, Status: task.Status}, nil
 }
 
-func taskFromGenerateRequest(req GenerateRequest) Task {
+func TaskFromGenerateRequest(taskID string, req GenerateRequest) Task {
 	now := time.Now().UTC()
+	if taskID == "" {
+		taskID = fmt.Sprintf("ppt_%d", now.UnixNano())
+	}
 	return Task{
-		TaskID: fmt.Sprintf("ppt_%d", now.UnixNano()), UserID: req.UserID, ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
+		TaskID: taskID, UserID: req.UserID, ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
 		Status: StatusPending, Title: titleFromPrompt(req.Prompt), Prompt: req.Prompt, SlideCount: req.SlideCount,
 		Language: req.Language, Tone: req.Tone, TextContent: req.TextContent, Audience: req.Audience, Scenario: req.Scenario,
 		GenerationAspectRatio: req.GenerationAspectRatio, Theme: req.Theme, AutoThemeEnabled: req.AutoThemeEnabled,
@@ -173,6 +176,10 @@ func taskFromGenerateRequest(req GenerateRequest) Task {
 		ImageComposition: req.ImageComposition, TextInImage: false, Outline: req.Outline, Slides: slidesFromOutline(req.Outline, req),
 		CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano),
 	}
+}
+
+func taskFromGenerateRequest(req GenerateRequest) Task {
+	return TaskFromGenerateRequest("", req)
 }
 
 func (s *Service) getTaskPostgres(userID, taskID string) (Task, error) {
@@ -385,6 +392,10 @@ func taskFromPostgresRaw(raw []byte, userID string) (Task, error) {
 	}
 	task.UserID = strings.TrimSpace(userID)
 	return normalizeLegacyTask(task), nil
+}
+
+func PersistPostgresTaskTx(ctx context.Context, tx *sql.Tx, task Task) error {
+	return persistPostgresTask(ctx, tx, task)
 }
 
 func persistPostgresTask(ctx context.Context, tx *sql.Tx, task Task) error {

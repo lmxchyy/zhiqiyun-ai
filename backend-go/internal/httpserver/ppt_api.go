@@ -171,6 +171,26 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if a.pptAsyncCanaryEligible(req) {
+		if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
+			capability.ClientRequestID = req.ClientRequestID
+			task, err := canaryStore.CreatePendingGenerationTaskWithPPTCanaryOutbox(capability, req)
+			if err != nil {
+				if errors.Is(err, errGenerationConcurrencyLimit) {
+					writeError(w, http.StatusTooManyRequests, err)
+					return
+				}
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if !task.IdempotentReplay {
+				generationCanaryMetrics.submitted.Add(1)
+				a.recordContentAudit(task.ID, "input", "generation_request", "", capability)
+			}
+			writeJSON(w, pptapp.GenerateResponse{TaskID: task.ID, Status: pptapp.StatusPending})
+			return
+		}
+	}
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], 5))
 	if req.Outline == nil {
