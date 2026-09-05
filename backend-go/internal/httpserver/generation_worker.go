@@ -177,7 +177,12 @@ func (a api) completeCanaryInboxIfTerminal(inbox *messaging.InboxStore, eventID,
 	return true, tx.Commit()
 }
 
-func (a api) pgDB() *sql.DB { return a.store.(*postgresStore).db }
+func (a api) pgDB() *sql.DB {
+	if store, ok := a.store.(*postgresStore); ok {
+		return store.db
+	}
+	return nil
+}
 
 func canaryTaskMarker(params map[string]any) bool {
 	value, ok := params["generation_async_canary"]

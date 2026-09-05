@@ -60,6 +60,16 @@ func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, t
 			}
 		}
 	}
+	if task.StorageRef != "" {
+		if signed, ok := a.resolvePPTStorageReference(ctx, user, task.StorageRef); ok {
+			task.PPTURL = signed
+		}
+	} else if task.PPTURL != "" && strings.HasPrefix(task.PPTURL, pptStorageReferenceScheme+"://") {
+		task.StorageRef = task.PPTURL
+		if signed, ok := a.resolvePPTStorageReference(ctx, user, task.PPTURL); ok {
+			task.PPTURL = signed
+		}
+	}
 	return task
 }
 

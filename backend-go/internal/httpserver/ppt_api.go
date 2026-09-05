@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	chatprovider "xianzhi-ai/backend-go/internal/provider/chat"
 	ocrprovider "xianzhi-ai/backend-go/internal/provider/ocr"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 var (
@@ -741,20 +743,7 @@ func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 		writePPTError(w, err)
 		return
 	}
-	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
-	payload, err := buildPPTX(task)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	fileName := pptxDownloadFileName(task)
-	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
-	w.Header().Set("Content-Disposition", pptxContentDisposition(fileName))
-	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(payload); err != nil {
-		log.Printf("ppt export write failed task=%s err=%v", task.TaskID, err)
-	}
+	a.writePPTExportResponse(w, r, user, task)
 }
 
 func (a api) downloadPPTExport(w http.ResponseWriter, r *http.Request) {
@@ -769,20 +758,83 @@ func (a api) downloadPPTExport(w http.ResponseWriter, r *http.Request) {
 		writePPTError(w, err)
 		return
 	}
+	a.writePPTExportResponse(w, r, user, task)
+}
+
+func (a api) writePPTExportResponse(w http.ResponseWriter, r *http.Request, user adminUser, task pptapp.Task) {
+	fileName := pptxDownloadFileName(task)
+	// PR3B Export Fast Path:
+	// If a durable PPTX asset exists and can be opened from storage, stream it directly.
+	if streamed := a.tryStreamDurablePPTExport(w, r, user, task, fileName); streamed {
+		return
+	}
+
+	// Fallback to legacy dynamic build:
 	task = a.materializePPTTaskVisualURLs(r.Context(), user, task)
 	payload, err := buildPPTX(task)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	fileName := pptxDownloadFileName(task)
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
 	w.Header().Set("Content-Disposition", pptxContentDisposition(fileName))
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(payload); err != nil {
-		log.Printf("ppt direct export write failed task=%s err=%v", task.TaskID, err)
+		log.Printf("ppt export write failed task=%s err=%v", task.TaskID, err)
 	}
+}
+
+func (a api) tryStreamDurablePPTExport(w http.ResponseWriter, r *http.Request, user adminUser, task pptapp.Task, fileName string) bool {
+	if a.fileService == nil {
+		return false
+	}
+	tenantID := ""
+	fileID := ""
+	if task.StorageRef != "" {
+		tenantID, fileID, _ = parsePPTStorageReference(task.StorageRef)
+	}
+	if fileID == "" && strings.HasPrefix(task.PPTURL, pptStorageReferenceScheme+"://") {
+		tenantID, fileID, _ = parsePPTStorageReference(task.PPTURL)
+	}
+	if fileID == "" {
+		asset, found, err := a.findDurablePPTAsset(r.Context(), task.TaskID)
+		if err == nil && found {
+			tenantID, fileID, _ = parsePPTStorageReference(asset.URL)
+			if fileID == "" {
+				tenantID = firstNonEmptyString(stringValue(asset.Metadata["storageTenantId"]), stringValue(asset.Metadata["tenantId"]), "tenant_default")
+				fileID = firstNonEmptyString(stringValue(asset.Metadata["storageFileId"]), stringValue(asset.Metadata["fileId"]))
+			}
+		}
+	}
+	if fileID == "" {
+		return false
+	}
+	if tenantID == "" {
+		tenantID = "tenant_default"
+	}
+	role := strings.ToUpper(strings.TrimSpace(user.Role))
+	isAdmin := role == "SUPER_ADMIN" || role == "PLATFORM_ADMIN" || role == "ADMIN"
+	access := storagecenter.AccessContext{
+		TenantID: tenantID,
+		UserID:   user.ID,
+		IsAdmin:  isAdmin,
+	}
+	file, reader, err := a.fileService.OpenObject(r.Context(), access, fileID)
+	if err != nil || reader == nil {
+		log.Printf("ppt export durable artifact unreadable task=%s fileID=%s err=%v, falling back to dynamic build", task.TaskID, fileID, err)
+		return false
+	}
+	defer reader.Close()
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+	w.Header().Set("Content-Disposition", pptxContentDisposition(fileName))
+	w.Header().Set("Content-Length", strconv.FormatInt(file.FileSize, 10))
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, reader); err != nil {
+		log.Printf("ppt export stream failed task=%s fileID=%s err=%v", task.TaskID, fileID, err)
+	}
+	return true
 }
 
 func (a api) exportPDF(w http.ResponseWriter, r *http.Request) {

@@ -69,50 +69,53 @@ func buildPPTX(task pptapp.Task) ([]byte, error) {
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	if err := addPPTXString(zw, "[Content_Types].xml", pptxContentTypesXML(len(slides))); err != nil {
+	modTime := parseTaskModTime(task)
+	if err := addPPTXStringWithTime(zw, "[Content_Types].xml", pptxContentTypesXML(len(slides)), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "_rels/.rels", pptxRootRelsXML()); err != nil {
+	if err := addPPTXStringWithTime(zw, "_rels/.rels", pptxRootRelsXML(), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "docProps/core.xml", pptxCoreXML(task)); err != nil {
+	if err := addPPTXStringWithTime(zw, "docProps/core.xml", pptxCoreXML(task), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "docProps/app.xml", pptxAppXML(len(slides))); err != nil {
+	if err := addPPTXStringWithTime(zw, "docProps/app.xml", pptxAppXML(len(slides)), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/presentation.xml", pptxPresentationXML(len(slides))); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/presentation.xml", pptxPresentationXML(len(slides)), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/_rels/presentation.xml.rels", pptxPresentationRelsXML(len(slides))); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/_rels/presentation.xml.rels", pptxPresentationRelsXML(len(slides)), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/slideMasters/slideMaster1.xml", pptxSlideMasterXML()); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/slideMasters/slideMaster1.xml", pptxSlideMasterXML(), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/slideMasters/_rels/slideMaster1.xml.rels", pptxSlideMasterRelsXML()); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/slideMasters/_rels/slideMaster1.xml.rels", pptxSlideMasterRelsXML(), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/slideLayouts/slideLayout1.xml", pptxSlideLayoutXML()); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/slideLayouts/slideLayout1.xml", pptxSlideLayoutXML(), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", pptxSlideLayoutRelsXML()); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", pptxSlideLayoutRelsXML(), modTime); err != nil {
 		return nil, err
 	}
-	if err := addPPTXString(zw, "ppt/theme/theme1.xml", pptxThemeXML()); err != nil {
+	if err := addPPTXStringWithTime(zw, "ppt/theme/theme1.xml", pptxThemeXML(), modTime); err != nil {
 		return nil, err
 	}
 	for index, slide := range slides {
-		if err := addPPTXString(zw, fmt.Sprintf("ppt/slides/slide%d.xml", index+1), pptxSlideXML(task, slide, index, len(slides), mediaBySlide[index])); err != nil {
+		if err := addPPTXStringWithTime(zw, fmt.Sprintf("ppt/slides/slide%d.xml", index+1), pptxSlideXML(task, slide, index, len(slides), mediaBySlide[index]), modTime); err != nil {
 			return nil, err
 		}
-		if err := addPPTXString(zw, fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", index+1), pptxSlideRelsXML(mediaBySlide[index])); err != nil {
+		if err := addPPTXStringWithTime(zw, fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", index+1), pptxSlideRelsXML(mediaBySlide[index]), modTime); err != nil {
 			return nil, err
 		}
 	}
-	for _, media := range mediaBySlide {
-		if err := addPPTXBytes(zw, "ppt/media/"+media.FileName, media.Content); err != nil {
-			return nil, err
+	for index := 0; index < len(slides); index++ {
+		if media, ok := mediaBySlide[index]; ok {
+			if err := addPPTXBytesWithTime(zw, "ppt/media/"+media.FileName, media.Content, modTime); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := zw.Close(); err != nil {
@@ -175,6 +178,13 @@ func pptxRootRelsXML() string {
 
 func pptxCoreXML(task pptapp.Task) string {
 	now := time.Now().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(task.CreatedAt) != "" {
+		if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(task.CreatedAt)); err == nil {
+			now = t.UTC().Format(time.RFC3339)
+		} else if t, err := time.Parse(time.RFC3339, strings.TrimSpace(task.CreatedAt)); err == nil {
+			now = t.UTC().Format(time.RFC3339)
+		}
+	}
 	title := pptxEscape(firstPPTXNonEmpty(task.Title, task.Prompt, "Presentation"))
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`+
 		`<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">`+
@@ -512,17 +522,45 @@ func pptxContentTypeFromExt(ext string) string {
 	}
 }
 
-func addPPTXString(zw *zip.Writer, name string, body string) error {
-	return addPPTXBytes(zw, name, []byte(body))
+func parseTaskModTime(task pptapp.Task) time.Time {
+	if strings.TrimSpace(task.CreatedAt) != "" {
+		if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(task.CreatedAt)); err == nil {
+			return t.UTC()
+		}
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(task.CreatedAt)); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 }
 
-func addPPTXBytes(zw *zip.Writer, name string, body []byte) error {
-	w, err := zw.Create(name)
+func addPPTXStringWithTime(zw *zip.Writer, name string, body string, modTime time.Time) error {
+	return addPPTXBytesWithTime(zw, name, []byte(body), modTime)
+}
+
+func addPPTXBytesWithTime(zw *zip.Writer, name string, body []byte, modTime time.Time) error {
+	if modTime.IsZero() {
+		modTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	header := &zip.FileHeader{
+		Name:     name,
+		Method:   zip.Deflate,
+		Modified: modTime,
+	}
+	w, err := zw.CreateHeader(header)
 	if err != nil {
 		return err
 	}
 	_, err = w.Write(body)
 	return err
+}
+
+func addPPTXString(zw *zip.Writer, name string, body string) error {
+	return addPPTXBytesWithTime(zw, name, []byte(body), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+}
+
+func addPPTXBytes(zw *zip.Writer, name string, body []byte) error {
+	return addPPTXBytesWithTime(zw, name, body, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 }
 
 func pptxAccentColor(theme string) string {
