@@ -44,6 +44,48 @@ func newTestAPIWithProvider(t *testing.T, cfg config.Config) api {
 	return newTestAPI(t, cfg, fileService)
 }
 
+func newPPTDBAPI(t *testing.T, cfg config.Config, fileService *storagecenter.Service) api {
+	t.Helper()
+	db := openProviderExecutionHookTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	if cfg.DataPath == "" {
+		cfg.DataPath = filepath.Join(t.TempDir(), "store.json")
+	}
+	store := newPostgresPrimaryStore(db, cfg.DataPath)
+	return newAPI(store, cfg, newLocalAuthSessions(), fileService)
+}
+
+func createPPTDBParent(t *testing.T, a api, userID, prompt string, slideCount int) generationTask {
+	t.Helper()
+	store, ok := a.store.(*postgresStore)
+	if !ok {
+		t.Fatalf("test store is not postgresStore")
+	}
+	ctx := context.Background()
+	clientRequestID := fmt.Sprintf("pr3b-%d", time.Now().UnixNano())
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO xz_users (id, name, role, status) VALUES ($1, $2, 'MEMBER', 'ACTIVE') ON CONFLICT (id) DO UPDATE SET status='ACTIVE'`, userID, userID); err != nil {
+		t.Fatalf("seed postgres user: %v", err)
+	}
+	if _, err := store.PersonalPointService().Grant(ctx, PersonalPointGrantCommand{
+		AccountID: "ppt-account-" + userID, UserID: userID, Source: PointSourceRecharge, Points: 1000,
+		ReferenceType: "PR3B_TEST", ReferenceID: clientRequestID, IdempotencyKey: clientRequestID,
+	}); err != nil {
+		t.Fatalf("seed postgres points: %v", err)
+	}
+	capReq, pptReq := pptAcceptanceRequest(clientRequestID)
+	capReq.UserID, capReq.Prompt, capReq.ClientRequestID = userID, prompt, clientRequestID
+	capReq.Params["page_count"] = slideCount
+	capReq.Params["with_images"] = false
+	capReq.Params["tenant_id"] = "tenant_default"
+	pptReq.UserID, pptReq.Prompt, pptReq.SlideCount = userID, prompt, slideCount
+	pptReq.ImageSource = "none"
+	task, err := store.CreatePendingGenerationTaskWithPPTCanaryOutbox(capReq, pptReq)
+	if err != nil {
+		t.Fatalf("create postgres PPT parent: %v", err)
+	}
+	return task
+}
+
 func newTestArtifactStorageService(provider *generatedStorageTestProvider) *storagecenter.Service {
 	repo := storagecenter.NewMemoryRepository()
 	if provider.objects == nil {
@@ -252,173 +294,75 @@ func TestPR3B_DuplicateDeliverySingleLogicalAsset(t *testing.T) {
 // storage, runPPTGenerationStages skips outline, visual plan, slide images,
 // buildPPTX, and upload, entering settlement recovery directly.
 func TestPR3B_ExistingArtifactShortCircuit(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
-	cfg := config.Config{PPTTextModel: "mock-text", ImageModel: "mock-image"}
-	a := newTestAPIWithProvider(t, cfg)
-
-	taskID := "task_short_circuit_001"
-	userID := "user_sc_001"
-
-	// Create PPT detail
-	task, err := a.pptService.Generate(pptapp.GenerateRequest{
-		UserID:     userID,
-		Prompt:     "Short circuit deck",
-		SlideCount: 2,
-	})
+	provider := &generatedStorageTestProvider{objects: map[string]storagecenter.ObjectMetadata{}, payload: map[string][]byte{}}
+	a := newPPTDBAPI(t, config.Config{}, newTestArtifactStorageService(provider))
+	userID := "pr3b-sc-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Short circuit deck", 1)
+	taskID := parent.ID
+	_, err := a.pptService.SetOutlineSlides(userID, taskID, pptOutline{Title: "Short circuit deck", Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Body"}}})
 	if err != nil {
-		t.Fatalf("generate ppt task failed: %v", err)
+		t.Fatalf("set outline: %v", err)
 	}
-	taskID = task.TaskID
-
-	// Create and store artifact in storage
-	fakePPTX := []byte("PK\x03\x04fake-pptx-content")
-	file, err := a.fileService.StoreObjectIdempotent(context.Background(), storagecenter.UploadInitInput{
-		TenantID:     "tenant_default",
-		UserID:       userID,
-		FileName:     fmt.Sprintf("%s.pptx", taskID),
-		FileSize:     int64(len(fakePPTX)),
-		MIMEType:     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-		BusinessType: "generation_result",
-		BusinessID:   taskID,
-		Visibility:   "PRIVATE",
-	}, bytes.NewReader(fakePPTX))
+	payload := []byte("PK\x03\x04durable")
+	file, err := a.fileService.StoreObjectIdempotent(context.Background(), storagecenter.UploadInitInput{TenantID: "tenant_default", UserID: userID, FileName: taskID + ".pptx", FileSize: int64(len(payload)), MIMEType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE"}, bytes.NewReader(payload))
 	if err != nil {
-		t.Fatalf("store object failed: %v", err)
+		t.Fatalf("store object: %v", err)
 	}
-	storageRef := pptStorageReference(file)
-
-	// Persist asset in xz_assets
-	assetItem, err := a.ensureDurablePPTAsset(context.Background(), taskID, userID, "tenant_default", "", "Short circuit deck", file, storageRef)
+	assetItem, err := a.ensureDurablePPTAsset(context.Background(), taskID, userID, "tenant_default", "", "Short circuit deck", file, pptStorageReference(file))
 	if err != nil {
-		t.Fatalf("ensure durable asset failed: %v", err)
+		t.Fatalf("ensure asset: %v", err)
 	}
-	_, err = a.pptService.SetDeckArtifactReady(userID, taskID, assetItem.ID, storageRef)
-	if err != nil {
-		t.Fatalf("set artifact ready failed: %v", err)
+	if _, err = a.pptService.SetDeckArtifactReady(userID, taskID, assetItem.ID, pptStorageReference(file)); err != nil {
+		t.Fatalf("checkpoint: %v", err)
 	}
-
-	// Create pending parent generation task in store
-	grantTestPoints(t, a, userID, 1000)
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Short circuit deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("create pending parent failed: %v", err)
+	if err := a.runPPTGenerationStages(taskID, parent); err != nil {
+		t.Fatalf("recovery: %v", err)
 	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-	parent.ID = taskID
-
-	// Verify checkExistingDurablePPTArtifact reports ready
-	ready, foundAsset, checkErr := a.checkExistingDurablePPTArtifact(context.Background(), userID, taskID)
-	if checkErr != nil || !ready {
-		t.Fatalf("checkExistingDurablePPTArtifact failed: ready=%v err=%v", ready, checkErr)
-	}
-	if foundAsset.ID != assetItem.ID {
-		t.Fatalf("asset ID mismatch: %s != %s", foundAsset.ID, assetItem.ID)
-	}
-
-	// Run stages: outline and slide stages must NOT fail or call models because short-circuit skips them
-	runErr := a.runPPTGenerationStages(taskID, parent)
-	if runErr != nil {
-		t.Fatalf("runPPTGenerationStages failed: %v", runErr)
-	}
-
-	// Verify task settled to success
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
-		t.Fatalf("list generation tasks failed: %v", err)
+		t.Fatal(err)
 	}
-	var settled generationTask
-	for _, tItem := range tasks {
-		if tItem.ID == taskID {
-			settled = tItem
-			break
+	for _, task := range tasks {
+		if task.ID == taskID {
+			if task.Status != "SUCCEEDED" {
+				t.Fatalf("status=%s", task.Status)
+			}
+			return
 		}
 	}
-	if settled.Status != "SUCCEEDED" {
-		t.Fatalf("task status = %s, want SUCCEEDED", settled.Status)
-	}
+	t.Fatalf("task %s not found", taskID)
 }
 
 // 4. ARTIFACT_DURABLE_BEFORE_CAPTURE=PASS
 // If storage upload fails (e.g. storage service unavailable or fails),
 // the task fails and Capture is NEVER executed. Points remain uncaptured.
 func TestPR3B_ArtifactDurableBeforeCapture(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
-	cfg := config.Config{PPTTextModel: "mock-text", ImageModel: "mock-image"}
-	a := newTestAPI(t, cfg, nil)
-
-	userID := "user_fail_upload_001"
-	task, err := a.pptService.Generate(pptapp.GenerateRequest{
-		UserID:     userID,
-		Prompt:     "Failed upload deck",
-		SlideCount: 1,
-	})
-	if err != nil {
-		t.Fatalf("generate ppt task failed: %v", err)
+	a := newPPTDBAPI(t, config.Config{}, nil)
+	userID := "pr3b-no-storage-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Failed upload deck", 1)
+	taskID := parent.ID
+	if _, err := a.pptService.SetOutlineSlides(userID, taskID, pptOutline{Title: "Failed upload deck", Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Body"}}}); err != nil {
+		t.Fatal(err)
 	}
-	taskID := task.TaskID
-
-	// Create parent generation task
-	grantTestPoints(t, a, userID, 1000)
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Failed upload deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 10,
-		},
-	})
-	if err != nil {
-		t.Fatalf("create pending parent failed: %v", err)
+	if err := a.runPPTGenerationStages(taskID, parent); err == nil {
+		t.Fatal("expected storage failure")
 	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-	parent.ID = taskID
-
-	// Populate outline slides so outline stage passes
-	_, _ = a.pptService.SetOutlineSlides(userID, taskID, pptOutline{
-		Title:  "Failed upload deck",
-		Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Body"}},
-	})
-
-	runErr := a.runPPTGenerationStages(taskID, parent)
-	if runErr == nil {
-		t.Fatalf("expected runPPTGenerationStages to fail when storage unavailable")
-	}
-
-	// Verify parent was NOT captured and is marked failed
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
-		t.Fatalf("list tasks failed: %v", err)
+		t.Fatal(err)
 	}
-	var failedTask generationTask
-	for _, tItem := range tasks {
-		if tItem.ID == taskID {
-			failedTask = tItem
-			break
+	for _, task := range tasks {
+		if task.ID == taskID {
+			if task.Status != "FAILED" {
+				t.Fatalf("status=%s", task.Status)
+			}
+			if task.BillingStatus == "captured" {
+				t.Fatal("capture occurred before durable artifact")
+			}
+			return
 		}
 	}
-	if failedTask.Status != "FAILED" {
-		t.Fatalf("task status = %s, want FAILED", failedTask.Status)
-	}
-	if failedTask.BillingStatus == "captured" {
-		t.Fatalf("points were captured despite artifact failure!")
-	}
+	t.Fatalf("task %s not found", taskID)
 }
 
 // 5. BUILD_CRASH_BEFORE_UPLOAD=PASS
@@ -426,72 +370,26 @@ func TestPR3B_ArtifactDurableBeforeCapture(t *testing.T) {
 // On redelivery, worker re-runs artifact stage, uploads to storage, checkpoints,
 // and settles.
 func TestPR3B_BuildCrashBeforeUpload(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
 	provider := &generatedStorageTestProvider{objects: map[string]storagecenter.ObjectMetadata{}, payload: map[string][]byte{}}
-	fileService := newTestArtifactStorageService(provider)
-	cfg := config.Config{PPTTextModel: "mock-text", ImageModel: "mock-image"}
-	a := newTestAPI(t, cfg, fileService)
-
-	userID := "user_crash_a_001"
-	task, err := a.pptService.Generate(pptapp.GenerateRequest{
-		UserID:     userID,
-		Prompt:     "Crash A deck",
-		SlideCount: 1,
-	})
-	if err != nil {
-		t.Fatalf("generate ppt task failed: %v", err)
+	a := newPPTDBAPI(t, config.Config{}, newTestArtifactStorageService(provider))
+	userID := "pr3b-build-recovery-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Crash A deck", 1)
+	taskID := parent.ID
+	if _, err := a.pptService.SetOutlineSlides(userID, taskID, pptOutline{Title: "Crash A deck", Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Body"}}}); err != nil {
+		t.Fatal(err)
 	}
-	taskID := task.TaskID
-
-	// Set slides as completed in detail
-	_, err = a.pptService.SetOutlineSlides(userID, taskID, pptOutline{
-		Title:  "Crash A deck",
-		Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Summary 1"}},
-	})
-	if err != nil {
-		t.Fatalf("set outline slides failed: %v", err)
-	}
-
-	grantTestPoints(t, a, userID, 1000)
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Crash A deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("create pending parent failed: %v", err)
-	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-	parent.ID = taskID
-
-	// Redelivery executes runPPTGenerationStages
 	if err := a.runPPTGenerationStages(taskID, parent); err != nil {
-		t.Fatalf("runPPTGenerationStages failed on recovery: %v", err)
+		t.Fatalf("recovery: %v", err)
 	}
-
-	// Verify artifact in storage, asset in store, checkpoint in pptService, settled in store
 	detail, err := a.pptService.GetTask(userID, taskID)
 	if err != nil {
-		t.Fatalf("get ppt detail failed: %v", err)
+		t.Fatal(err)
 	}
 	if detail.ArtifactStatus != "ready" || detail.AssetID == "" || detail.StorageRef == "" {
-		t.Fatalf("checkpoint missing: artifactStatus=%s assetID=%s storageRef=%s", detail.ArtifactStatus, detail.AssetID, detail.StorageRef)
+		t.Fatalf("checkpoint=%+v", detail)
 	}
-
-	assetItem, found, err := a.findDurablePPTAsset(context.Background(), taskID)
-	if err != nil || !found {
-		t.Fatalf("find durable asset failed: found=%v err=%v", found, err)
-	}
-	if assetItem.MediaType != "ppt" {
-		t.Fatalf("asset mediaType = %s, want ppt", assetItem.MediaType)
+	if _, found, err := a.findDurablePPTAsset(context.Background(), taskID); err != nil || !found {
+		t.Fatalf("asset found=%v err=%v", found, err)
 	}
 }
 
@@ -500,91 +398,35 @@ func TestPR3B_BuildCrashBeforeUpload(t *testing.T) {
 // was persisted. On redelivery, StoreObjectIdempotent recovers the active object,
 // writes xz_assets, checkpoints, and settles without creating a second random object.
 func TestPR3B_UploadSuccessDBCrashRecovery(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
 	provider := &generatedStorageTestProvider{objects: map[string]storagecenter.ObjectMetadata{}, payload: map[string][]byte{}}
-	fileService := newTestArtifactStorageService(provider)
-	cfg := config.Config{PPTTextModel: "mock-text", ImageModel: "mock-image"}
-	a := newTestAPI(t, cfg, fileService)
-
-	userID := "user_crash_b_001"
-	task, err := a.pptService.Generate(pptapp.GenerateRequest{
-		UserID:     userID,
-		Prompt:     "Crash B deck",
-		SlideCount: 1,
-	})
-	if err != nil {
-		t.Fatalf("generate ppt task failed: %v", err)
+	a := newPPTDBAPI(t, config.Config{}, newTestArtifactStorageService(provider))
+	userID := "pr3b-upload-recovery-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Crash B deck", 1)
+	taskID := parent.ID
+	if _, err := a.pptService.SetOutlineSlides(userID, taskID, pptOutline{Title: "Crash B deck", Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Body"}}}); err != nil {
+		t.Fatal(err)
 	}
-	taskID := task.TaskID
-
-	_, err = a.pptService.SetOutlineSlides(userID, taskID, pptOutline{
-		Title:  "Crash B deck",
-		Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Summary 1"}},
-	})
+	detail, err := a.pptService.GetTask(userID, taskID)
 	if err != nil {
-		t.Fatalf("set outline slides failed: %v", err)
+		t.Fatal(err)
 	}
-
-	detail, _ := a.pptService.GetTask(userID, taskID)
 	payload, err := buildPPTX(detail)
 	if err != nil {
-		t.Fatalf("buildPPTX failed: %v", err)
+		t.Fatal(err)
 	}
-
-	// Pre-upload to simulate upload success before crash
-	fileName := fmt.Sprintf("%s.pptx", taskID)
-	filePre, err := a.fileService.StoreObjectIdempotent(context.Background(), storagecenter.UploadInitInput{
-		TenantID:     "tenant_default",
-		UserID:       userID,
-		FileName:     fileName,
-		FileSize:     int64(len(payload)),
-		MIMEType:     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-		BusinessType: "generation_result",
-		BusinessID:   taskID,
-		Visibility:   "PRIVATE",
-	}, bytes.NewReader(payload))
+	pre, err := a.fileService.StoreObjectIdempotent(context.Background(), storagecenter.UploadInitInput{TenantID: "tenant_default", UserID: userID, FileName: taskID + ".pptx", FileSize: int64(len(payload)), MIMEType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE"}, bytes.NewReader(payload))
 	if err != nil {
-		t.Fatalf("pre-store failed: %v", err)
+		t.Fatal(err)
 	}
-
-	// Ensure NO asset row exists in store yet (simulating crash before asset insert)
-	assets, _ := a.store.ListAssets()
-	if len(assets) != 0 {
-		t.Fatalf("store should have 0 assets before recovery")
-	}
-
-	grantTestPoints(t, a, userID, 1000)
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Crash B deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("create pending parent failed: %v", err)
-	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-	parent.ID = taskID
-
-	// Redelivery executes runPPTGenerationStages
 	if err := a.runPPTGenerationStages(taskID, parent); err != nil {
-		t.Fatalf("runPPTGenerationStages recovery failed: %v", err)
+		t.Fatalf("recovery: %v", err)
 	}
-
-	// Verify that the asset was linked to the PREVIOUSLY uploaded file
-	assetItem, found, err := a.findDurablePPTAsset(context.Background(), taskID)
+	item, found, err := a.findDurablePPTAsset(context.Background(), taskID)
 	if err != nil || !found {
-		t.Fatalf("find durable asset failed: found=%v err=%v", found, err)
+		t.Fatalf("asset found=%v err=%v", found, err)
 	}
-	if stringValue(assetItem.Metadata["fileId"]) != filePre.FileID {
-		t.Fatalf("recovered asset fileId = %v, want %s", assetItem.Metadata["fileId"], filePre.FileID)
+	if stringValue(item.Metadata["fileId"]) != pre.FileID {
+		t.Fatalf("file id=%v want=%s", item.Metadata["fileId"], pre.FileID)
 	}
 }
 
@@ -592,82 +434,41 @@ func TestPR3B_UploadSuccessDBCrashRecovery(t *testing.T) {
 // Crash Window C: Object uploaded and xz_assets persisted, but crash before settlement.
 // Redelivery detects durable artifact, short-circuits to settlement, and captures points.
 func TestPR3B_AssetPersistedBeforeSettlementCrash(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
 	provider := &generatedStorageTestProvider{objects: map[string]storagecenter.ObjectMetadata{}, payload: map[string][]byte{}}
-	fileService := newTestArtifactStorageService(provider)
-	cfg := config.Config{PPTTextModel: "mock-text", ImageModel: "mock-image"}
-	a := newTestAPI(t, cfg, fileService)
-
-	userID := "user_crash_c_001"
-	task, err := a.pptService.Generate(pptapp.GenerateRequest{
-		UserID:     userID,
-		Prompt:     "Crash C deck",
-		SlideCount: 1,
-	})
-	if err != nil {
-		t.Fatalf("generate ppt task failed: %v", err)
+	a := newPPTDBAPI(t, config.Config{}, newTestArtifactStorageService(provider))
+	userID := "pr3b-settlement-recovery-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Crash C deck", 1)
+	taskID := parent.ID
+	if _, err := a.pptService.SetOutlineSlides(userID, taskID, pptOutline{Title: "Crash C deck", Slides: []pptOutlineSlide{{Page: 1, Title: "Slide 1", Summary: "Body"}}}); err != nil {
+		t.Fatal(err)
 	}
-	taskID := task.TaskID
-
-	fakePPTX := []byte("PK\x03\x04fake-content-c")
-	file, err := a.fileService.StoreObjectIdempotent(context.Background(), storagecenter.UploadInitInput{
-		TenantID:     "tenant_default",
-		UserID:       userID,
-		FileName:     fmt.Sprintf("%s.pptx", taskID),
-		FileSize:     int64(len(fakePPTX)),
-		MIMEType:     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-		BusinessType: "generation_result",
-		BusinessID:   taskID,
-		Visibility:   "PRIVATE",
-	}, bytes.NewReader(fakePPTX))
+	payload := []byte("PK\x03\x04checkpoint")
+	file, err := a.fileService.StoreObjectIdempotent(context.Background(), storagecenter.UploadInitInput{TenantID: "tenant_default", UserID: userID, FileName: taskID + ".pptx", FileSize: int64(len(payload)), MIMEType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE"}, bytes.NewReader(payload))
 	if err != nil {
-		t.Fatalf("store object failed: %v", err)
+		t.Fatal(err)
 	}
-	storageRef := pptStorageReference(file)
-
-	// Persist asset before crash
-	_, err = a.ensureDurablePPTAsset(context.Background(), taskID, userID, "tenant_default", "", "Crash C deck", file, storageRef)
-	if err != nil {
-		t.Fatalf("ensure durable asset failed: %v", err)
+	if _, err = a.ensureDurablePPTAsset(context.Background(), taskID, userID, "tenant_default", "", "Crash C deck", file, pptStorageReference(file)); err != nil {
+		t.Fatal(err)
 	}
-
-	grantTestPoints(t, a, userID, 1000)
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Crash C deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 0,
-		},
-	})
-	if err != nil {
-		t.Fatalf("create pending parent failed: %v", err)
-	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-	parent.ID = taskID
-
-	// Redelivery executes runPPTGenerationStages
 	if err := a.runPPTGenerationStages(taskID, parent); err != nil {
-		t.Fatalf("runPPTGenerationStages failed: %v", err)
+		t.Fatalf("recovery: %v", err)
 	}
-
-	// Verify settlement succeeded
-	tasks, _ := a.store.ListGenerationTasks()
-	for _, it := range tasks {
-		if it.ID == taskID {
-			if it.Status != "SUCCEEDED" {
-				t.Fatalf("status = %s, want SUCCEEDED", it.Status)
+	tasks, err := a.store.ListGenerationTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.ID == taskID {
+			if task.Status != "SUCCEEDED" {
+				t.Fatalf("status=%s", task.Status)
 			}
-			if len(it.ResultIDs) == 0 {
-				t.Fatalf("resultIDs should contain the durable asset ID")
+			if len(task.ResultIDs) != 1 {
+				t.Fatalf("result IDs=%v", task.ResultIDs)
 			}
+			return
 		}
 	}
+	t.Fatalf("task %s not found", taskID)
 }
 
 // 8. SETTLEMENT_ACK_CRASH=PASS
@@ -675,46 +476,22 @@ func TestPR3B_AssetPersistedBeforeSettlementCrash(t *testing.T) {
 // Redelivery finds task is not running, marks inbox complete with terminal: true,
 // and ACKs without re-settlement.
 func TestPR3B_SettlementACKCrash(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
-	cfg := config.Config{PPTTextModel: "mock-text", ImageModel: "mock-image"}
-	a := newTestAPI(t, cfg, nil)
-
-	userID := "user_crash_d_001"
-	taskID := "task_crash_d_001"
-
-	// Create already completed parent task in store
-	grantTestPoints(t, a, userID, 1000)
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Crash D deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 0,
-		},
-	})
+	a := newPPTDBAPI(t, config.Config{}, nil)
+	userID := "pr3b-ack-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Crash D deck", 1)
+	completed, err := a.store.CompleteGenerationTask(parent.ID, generation.CreateRequest{UserID: userID, Type: "PPT_GENERATION", Prompt: "Crash D deck", Params: map[string]any{"pptUrl": "storage://tenant_default/already-settled"}})
 	if err != nil {
-		t.Fatalf("create pending task failed: %v", err)
+		t.Fatal(err)
 	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-
-	prepared := generation.CreateRequest{UserID: userID, Type: "PPT_GENERATION", Prompt: "Crash D deck"}
-	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
+	if completed.Status != "SUCCEEDED" || isRunningGenerationTaskStatus(completed.Status) {
+		t.Fatalf("terminal status=%s", completed.Status)
+	}
+	replay, err := a.store.CompleteGenerationTask(parent.ID, generation.CreateRequest{UserID: userID, Type: "PPT_GENERATION", Prompt: "Crash D deck"})
 	if err != nil {
-		t.Fatalf("complete generation task failed: %v", err)
+		t.Fatal(err)
 	}
-	if completed.Status != "SUCCEEDED" {
-		t.Fatalf("expected SUCCEEDED status, got %s", completed.Status)
-	}
-
-	// On redelivery, verify completePPTCanaryInboxIfTerminal (or processGenerationPPTCanaryMessage)
-	// recognizes task is already terminal
-	if isRunningGenerationTaskStatus(completed.Status) {
-		t.Fatalf("SUCCEEDED task should not be classified as running")
+	if replay.Status != "SUCCEEDED" || replay.BillingStatus != billingStatusCaptured {
+		t.Fatalf("replay=%+v", replay)
 	}
 }
 
@@ -905,94 +682,54 @@ func TestPR3B_PPTProviderNoResubmitRegression(t *testing.T) {
 // Calling CompleteGenerationTask twice for the same task with identical
 // idempotency key captures points only once.
 func TestPR3B_CaptureExactlyOnceRegression(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
-	a := newTestAPI(t, config.Config{}, nil)
-	userID := "user_capture_once_001"
-	taskID := "task_capture_once_001"
-	grantTestPoints(t, a, userID, 1000)
-
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 10,
-		},
-	})
+	a := newPPTDBAPI(t, config.Config{}, nil)
+	userID := "pr3b-capture-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Capture deck", 1)
+	prepared := generation.CreateRequest{UserID: userID, Type: "PPT_GENERATION", Prompt: "Capture deck", Params: map[string]any{"pptUrl": "storage://tenant_default/capture"}}
+	first, err := a.store.CompleteGenerationTask(parent.ID, prepared)
 	if err != nil {
-		t.Fatalf("create pending task failed: %v", err)
+		t.Fatal(err)
 	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-
-	prepared := generation.CreateRequest{
-		UserID: userID,
-		Type:   "PPT_GENERATION",
-		Prompt: "Deck",
-		Params: map[string]any{"billingReserved": true, "billingReservationPointCost": 10},
-	}
-
-	first, err := a.store.CompleteGenerationTask(taskID, prepared)
+	second, err := a.store.CompleteGenerationTask(parent.ID, prepared)
 	if err != nil {
-		t.Fatalf("first complete failed: %v", err)
+		t.Fatal(err)
 	}
-	if first.BillingStatus != "captured" {
-		t.Fatalf("first billing status = %s, want captured", first.BillingStatus)
+	if first.BillingStatus != billingStatusCaptured || second.BillingStatus != billingStatusCaptured {
+		t.Fatalf("billing=%s/%s", first.BillingStatus, second.BillingStatus)
 	}
-
-	second, err := a.store.CompleteGenerationTask(taskID, prepared)
-	if err != nil {
-		t.Fatalf("second complete failed: %v", err)
+	var captures int
+	store := a.store.(*postgresStore)
+	if err := store.db.QueryRow(`SELECT count(*) FROM xz_personal_point_lot_movements WHERE account_id=$1 AND movement_type='CAPTURE'`, "ppt-account-"+userID).Scan(&captures); err != nil {
+		t.Fatal(err)
 	}
-	if second.BillingStatus != "captured" {
-		t.Fatalf("second billing status = %s, want captured", second.BillingStatus)
+	if captures != 1 {
+		t.Fatalf("capture movements=%d", captures)
 	}
 }
 
 // 14. RELEASE_EXACTLY_ONCE_REGRESSION=PASS
 // Calling FailGenerationTaskDurable twice releases reservation only once.
 func TestPR3B_ReleaseExactlyOnceRegression(t *testing.T) {
-	t.Skip("requires PostgreSQL-backed generation fixture")
-	a := newTestAPI(t, config.Config{}, nil)
-	userID := "user_release_once_001"
-	taskID := "task_release_once_001"
-	grantTestPoints(t, a, userID, 1000)
-
-	parent, err := a.store.CreatePendingGenerationTask(createGenerationTaskRequest{
-		Type:   "PPT_GENERATION",
-		UserID: userID,
-		Prompt: "Deck",
-		Model:  "kimi-k2.6",
-		Params: map[string]any{
-			"tenant_id":                   "tenant_default",
-			"generation_ppt_async_canary": true,
-			"generation_async_canary":     true,
-			"billingReserved":             true,
-			"billingReservationPointCost": 10,
-		},
-	})
+	a := newPPTDBAPI(t, config.Config{}, nil)
+	userID := "pr3b-release-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	parent := createPPTDBParent(t, a, userID, "Release deck", 1)
+	first, err := a.store.FailGenerationTaskDurable(parent.ID, "first failure")
 	if err != nil {
-		t.Fatalf("create pending task failed: %v", err)
+		t.Fatal(err)
 	}
-	alignGenerationTaskID(t, a, parent.ID, taskID)
-
-	first, err := a.store.FailGenerationTaskDurable(taskID, "first failure")
+	second, err := a.store.FailGenerationTaskDurable(parent.ID, "second failure")
 	if err != nil {
-		t.Fatalf("first fail failed: %v", err)
+		t.Fatal(err)
 	}
-	if first.BillingStatus != "released" {
-		t.Fatalf("first billing status = %s, want released", first.BillingStatus)
+	if first.BillingStatus != billingStatusReleased || second.BillingStatus != billingStatusReleased {
+		t.Fatalf("billing=%s/%s", first.BillingStatus, second.BillingStatus)
 	}
-
-	second, err := a.store.FailGenerationTaskDurable(taskID, "second failure")
-	if err != nil {
-		t.Fatalf("second fail failed: %v", err)
+	store := a.store.(*postgresStore)
+	var releases int
+	if err := store.db.QueryRow(`SELECT count(*) FROM xz_personal_point_lot_movements WHERE account_id=$1 AND movement_type='RELEASE'`, "ppt-account-"+userID).Scan(&releases); err != nil {
+		t.Fatal(err)
 	}
-	if second.BillingStatus != "released" {
-		t.Fatalf("second billing status = %s, want released", second.BillingStatus)
+	if releases != 1 {
+		t.Fatalf("release movements=%d", releases)
 	}
 }
