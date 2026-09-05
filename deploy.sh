@@ -23,6 +23,59 @@ fail() {
   exit 1
 }
 
+update_env_file_key() {
+  local file="$1" key="$2" value="$3"
+  local tmp env_backup_dir
+  tmp="$(mktemp "${file}.tmp.XXXXXX")" || fail "Failed to create a temporary env file."
+  env_backup_dir="backups/env"
+  mkdir -p "$env_backup_dir"
+  cp -p "$file" "$env_backup_dir/$(basename "$file").${TIMESTAMP}.bak"
+
+  chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp" || {
+    rm -f "$tmp"
+    fail "Failed to preserve permissions for $file."
+  }
+
+  awk -v k="$key" -v v="$value" '
+    BEGIN { re = "^[#[:space:]]*" k "=" }
+    $0 ~ re {
+      if (!replaced) print k "=" v
+      replaced = 1
+      next
+    }
+    { print }
+    END { if (!replaced) print k "=" v }
+  ' "$file" > "$tmp"
+
+  [ -s "$tmp" ] || { rm -f "$tmp"; fail "Failed to update $file: temporary file is empty."; }
+  grep -Fqx "${key}=${value}" "$tmp" >/dev/null || {
+    rm -f "$tmp"
+    fail "Verification failed for $key in temporary env file."
+  }
+  chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp" || {
+    rm -f "$tmp"
+    fail "Failed to preserve permissions for $file."
+  }
+
+  mv -f "$tmp" "$file"
+}
+
+validate_compose_desired_state() {
+  local rendered="$1"
+  python3 -c '
+import json
+import sys
+
+expected, rendered = sys.argv[1], sys.stdin.read()
+data = json.loads(rendered)
+services = data.get("services", {})
+for service in ("xianzhi-ai", "smartvideo-worker"):
+    actual = services.get(service, {}).get("image")
+    if actual != expected:
+        raise SystemExit(f"Compose service {service} desired image mismatch: expected {expected}, got {actual}")
+' "$XIANZHI_IMAGE_REFERENCE" <<< "$rendered" || fail "Compose desired state does not match the immutable release."
+}
+
 command -v git >/dev/null 2>&1 || fail "git is not installed."
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is not available."
@@ -101,6 +154,13 @@ docker compose \
   --env-file "$ENV_FILE" \
   config >/dev/null
 
+if [ "$IMMUTABLE_RELEASE" = "1" ]; then
+  log "Validating Docker Compose desired state matches manifest..."
+  compose_config="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" \
+    || fail "Failed to render Docker Compose configuration."
+  validate_compose_desired_state "$compose_config"
+fi
+
 # migrate 是一次性容器。删除旧容器，确保本次部署重新执行最新数据库迁移。
 log "Preparing database migration..."
 docker compose \
@@ -124,12 +184,31 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   for service in xianzhi-ai smartvideo-worker; do
     container_id="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q "$service")"
     [ -n "$container_id" ] || fail "No running container found for $service."
+
+    configured_image="$(docker inspect --format '{{.Config.Image}}' "$container_id")" \
+      || fail "Cannot inspect the configured image for $service."
+    [ "$configured_image" = "$XIANZHI_IMAGE_REFERENCE" ] \
+      || fail "PARTIAL_RELEASE_DETECTED: $service Config.Image is not the manifest reference."
+
     running_image_id="$(docker inspect --format '{{.Image}}' "$container_id")" \
       || fail "Cannot inspect the running image for $service."
     [ "$running_image_id" = "$expected_image_id" ] \
-      || fail "$service is not running the manifest image digest."
+      || fail "PARTIAL_RELEASE_DETECTED: $service is not running the manifest image digest."
+
+    repo_digests="$(docker image inspect "$running_image_id" --format '{{range .RepoDigests}}{{println .}}{{end}}')" \
+      || fail "Cannot inspect RepoDigests for $service."
+    printf '%s\n' "$repo_digests" | grep -Fqx -- "$XIANZHI_IMAGE_REFERENCE" \
+      || fail "PARTIAL_RELEASE_DETECTED: $service RepoDigests do not contain the manifest reference."
   done
-  log "Running services match the immutable release digest."
+  log "Running API and worker match the immutable release digest."
+
+  update_env_file_key "$ENV_FILE" "XIANZHI_IMAGE_REFERENCE" "$XIANZHI_IMAGE_REFERENCE"
+  log "Persisted XIANZHI_IMAGE_REFERENCE to $ENV_FILE."
+
+  log "Rechecking fresh Compose resolution from the persisted env file..."
+  fresh_compose_config="$(env -u XIANZHI_IMAGE_REFERENCE docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" \
+    || fail "Failed to render fresh Docker Compose configuration."
+  validate_compose_desired_state "$fresh_compose_config"
 fi
 
 log "Pruning dangling images..."
