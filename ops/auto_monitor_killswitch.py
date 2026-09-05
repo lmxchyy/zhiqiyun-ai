@@ -14,6 +14,7 @@ def trigger_kill_switch(reason):
         content = f.read()
     content = content.replace("GENERATION_ASYNC_CANARY_ENABLED=true", "GENERATION_ASYNC_CANARY_ENABLED=false")
     content = content.replace("VIDEO_ASYNC_CANARY_ENABLED=true", "VIDEO_ASYNC_CANARY_ENABLED=false")
+    content = content.replace("PPT_ASYNC_CANARY_ENABLED=true", "PPT_ASYNC_CANARY_ENABLED=false")
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     subprocess.run(
@@ -57,6 +58,10 @@ def check_metrics():
         trigger_kill_switch("Generation tasks stuck > 0")
     if metrics.get("xianzhi_async_canary_video_generation_stuck", 0) > 0:
         trigger_kill_switch("Video generation tasks stuck > 0")
+    if metrics.get("xianzhi_async_canary_ppt_rabbitmq_dlq_depth", 0) > 0:
+        trigger_kill_switch("PPT RabbitMQ DLQ depth > 0")
+    if metrics.get("xianzhi_async_canary_ppt_generation_stuck", 0) > 0:
+        trigger_kill_switch("PPT generation tasks stuck > 0")
 
     log("Metrics check PASS: all safety indicators normal.")
 

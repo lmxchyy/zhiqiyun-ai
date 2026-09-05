@@ -1010,7 +1010,21 @@ func (a api) generatePPTTaskSlideImage(ctx context.Context, user adminUser, pptT
 }
 
 func (a api) generateBillablePPTImage(ctx context.Context, user adminUser, service generation.Service, req pptImageGenerateRequest, model string, pptTaskID string) (pptImageSearchResponse, error) {
+	return a.generateBillablePPTImageWithKey(ctx, user, service, req, model, pptTaskID, "", "")
+}
+
+// generateBillablePPTImageWithKey runs the slide image pipeline with optional
+// worker overrides. Empty execKeyOverride preserves the legacy
+// pptProviderExecutionTaskID identity byte-for-byte (synchronous path
+// unchanged). Empty clientReqOverride preserves legacy non-idempotent child
+// task creation. The PPT async worker passes a revision-scoped execution key
+// plus a deterministic child ClientRequestID so crash redelivery replays the
+// same child task instead of duplicating billing.
+func (a api) generateBillablePPTImageWithKey(ctx context.Context, user adminUser, service generation.Service, req pptImageGenerateRequest, model string, pptTaskID string, execKeyOverride string, clientReqOverride string) (pptImageSearchResponse, error) {
 	createReq := pptImageGenerationCreateRequest(user, req, model, pptTaskID)
+	if strings.TrimSpace(clientReqOverride) != "" {
+		createReq.ClientRequestID = strings.TrimSpace(clientReqOverride)
+	}
 	retryAttempt, retrySeed := createReq.Params["retryAttempt"], createReq.Params["seed"]
 	delete(createReq.Params, "retryAttempt")
 	delete(createReq.Params, "seed")
@@ -1028,7 +1042,11 @@ func (a api) generateBillablePPTImage(ctx context.Context, user adminUser, servi
 	if err != nil {
 		return pptImageSearchResponse{}, err
 	}
-	createReq.Params[providerExecutionTaskParam] = pptProviderExecutionTaskID(pptTaskID, req.Slide.ID, task.ID)
+	execKey := pptProviderExecutionTaskID(pptTaskID, req.Slide.ID, task.ID)
+	if strings.TrimSpace(execKeyOverride) != "" {
+		execKey = strings.TrimSpace(execKeyOverride)
+	}
+	createReq.Params[providerExecutionTaskParam] = execKey
 	log.Printf("ppt visual generation started presentationId=%s slideId=%s taskId=%s modelName=%s", pptTaskID, req.Slide.ID, task.ID, model)
 	prepared, err := service.PrepareImageTask(ctx, createReq)
 	if err != nil {
@@ -1127,6 +1145,35 @@ func pptProviderExecutionTaskID(pptTaskID, slideID, fallbackTaskID string) strin
 		return strings.TrimSpace(fallbackTaskID)
 	}
 	return "ppt:" + pptTaskID + ":" + slideID
+}
+
+// pptSlideExecutionKey builds the worker-scoped ProviderExecution identity for
+// a slide visual at an explicit revision: ppt:<task>:<slide>:rev:<N>.
+// Revision counts successfully completed generations (persisted as
+// Slide.VisualRevision, bumped atomically with the success checkpoint), never
+// attempts, retries, goroutine indexes, timestamps, or random IDs. The legacy
+// pptProviderExecutionTaskID format is intentionally preserved untouched for
+// the synchronous path; worker and sync namespaces never share executions.
+func pptSlideExecutionKey(pptTaskID, slideID string, revision int) string {
+	pptTaskID = strings.TrimSpace(pptTaskID)
+	slideID = strings.TrimSpace(slideID)
+	if pptTaskID == "" || slideID == "" {
+		return ""
+	}
+	if revision < 0 {
+		revision = 0
+	}
+	return "ppt:" + pptTaskID + ":" + slideID + ":rev:" + strconv.Itoa(revision)
+}
+
+// pptSlideRevision derives the execution revision from persisted slide state.
+// It is crash-redelivery stable: the bump commits atomically with the success
+// checkpoint, so recomputation before the checkpoint yields the same value.
+func pptSlideRevision(slide pptapp.Slide) int {
+	if slide.VisualRevision < 0 {
+		return 0
+	}
+	return slide.VisualRevision
 }
 
 func pptImageGenerationCreateRequest(user adminUser, req pptImageGenerateRequest, model string, pptTaskID string) generation.CreateRequest {

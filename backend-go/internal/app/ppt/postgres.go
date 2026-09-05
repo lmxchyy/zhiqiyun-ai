@@ -287,6 +287,53 @@ func (s *Service) completeSlideVisualPostgres(userID, taskID, slideID string, pl
 	})
 }
 
+// CompleteSlideVisualWithRevision persists a successful slide visual together
+// with an explicit visual revision bump in a single row-locked transaction.
+// It is worker-only: the synchronous path keeps using CompleteSlideVisual so
+// legacy behavior stays byte-identical. Revision counts completed generations
+// (not attempts): retry/crash redelivery recomputes the same revision because
+// the bump commits atomically with the success checkpoint.
+func (s *Service) CompleteSlideVisualWithRevision(userID, taskID, slideID string, plan VisualPlan, asset VisualAsset, revision int) (Task, error) {
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+			if err := completeSlideVisual(task, slideID, plan, asset); err != nil {
+				return err
+			}
+			for i := range task.Slides {
+				if task.Slides[i].ID == slideID {
+					task.Slides[i].VisualRevision = revision
+					break
+				}
+			}
+			return nil
+		})
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	if err := completeSlideVisual(&task, slideID, plan, asset); err != nil {
+		return Task{}, err
+	}
+	for i := range task.Slides {
+		if task.Slides[i].ID == slideID {
+			task.Slides[i].VisualRevision = revision
+			break
+		}
+	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
 func (s *Service) restoreSlideVisualPostgres(userID, taskID, slideID, createdAt, imageURL string) (Task, error) {
 	return s.updatePostgresTask(userID, taskID, func(task *Task) error {
 		return restoreSlideVisual(task, slideID, createdAt, imageURL)
