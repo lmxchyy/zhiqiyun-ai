@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -217,6 +218,26 @@ func TestPPTCanary_UnmatchedConfigKeepsExistingPPTPath(t *testing.T) {
 }
 
 // Invariant A: Success -> 1 generation_task, 1 ppt_task, exactly 1 reserve, exactly 1 outbox
+
+func dumpPPTReservationsForDebug(t *testing.T, db *sql.DB, ctx context.Context, userID string) string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `SELECT id, business_id, idempotency_key, status, requested_points FROM xz_personal_point_reservations WHERE user_id=$1 ORDER BY created_at`, userID)
+	if err != nil {
+		return "query failed: " + err.Error()
+	}
+	defer rows.Close()
+	var sb strings.Builder
+	for rows.Next() {
+		var id, business, key, status string
+		var points int64
+		if err := rows.Scan(&id, &business, &key, &status, &points); err != nil {
+			return "scan failed: " + err.Error()
+		}
+		fmt.Fprintf(&sb, "[id=%s business=%s key=%s status=%s points=%d] ", id, business, key, status, points)
+	}
+	return sb.String()
+}
+
 func TestPPTCanary_AtomicCreationSuccess(t *testing.T) {
 	db := openProviderExecutionHookTestDB(t)
 	defer db.Close()
@@ -496,7 +517,7 @@ func TestPPTCanary_SameClientRequestIDReplay(t *testing.T) {
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1`, task1.ID).Scan(&reserveCount)
 
 	if genCount != 1 || pptCount != 1 || outboxCount != 1 || reserveCount != 1 {
-		t.Fatalf("replay created duplicate entries: gen=%d ppt=%d outbox=%d reserve=%d", genCount, pptCount, outboxCount, reserveCount)
+		t.Fatalf("replay created duplicate entries: gen=%d ppt=%d outbox=%d reserve=%d rows=%s", genCount, pptCount, outboxCount, reserveCount, dumpPPTReservationsForDebug(t, db, ctx, testUser))
 	}
 }
 
@@ -582,6 +603,6 @@ func TestPPTCanary_ConcurrentDuplicateClientRequestID(t *testing.T) {
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1`, firstSuccessID).Scan(&reserveCount)
 
 	if genCount != 1 || pptCount != 1 || outboxCount != 1 || reserveCount != 1 {
-		t.Fatalf("concurrent calls created duplicate entities: gen=%d ppt=%d outbox=%d reserve=%d", genCount, pptCount, outboxCount, reserveCount)
+		t.Fatalf("concurrent calls created duplicate entities: gen=%d ppt=%d outbox=%d reserve=%d rows=%s", genCount, pptCount, outboxCount, reserveCount, dumpPPTReservationsForDebug(t, db, ctx, testUser))
 	}
 }
