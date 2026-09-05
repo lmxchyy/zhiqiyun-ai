@@ -16,13 +16,16 @@ BACKUP_UPLOADER_IMAGE="${BACKUP_UPLOADER_IMAGE:-}"
 [[ "$BACKUP_UPLOADER_IMAGE" == *@sha256:* ]] || { echo "IMMUTABLE_BACKUP_UPLOADER_IMAGE_REQUIRED" >&2; exit 1; }
 
 export BACKUP_OBS_ENV_FILE BACKUP_UPLOADER_IMAGE
-found=0
+total_count=0
 invalid_count=0
 failed_count=0
 uploaded_count=0
 skipped_already_count=0
-while IFS= read -r -d '' file; do
-  found=1
+
+# Use file descriptor 9 for the iterator and explicitly isolate child stdin (< /dev/null)
+# with -T (disable pseudo-TTY) so the uploader subprocess cannot drain the stream.
+while IFS= read -r -u 9 -d '' file; do
+  total_count=$((total_count + 1))
   name="$(basename "$file")"
   echo "Uploading backup: $name"
   # NOTE: --root must be the backups parent (not the postgres dir): the uploader
@@ -30,13 +33,15 @@ while IFS= read -r -d '' file; do
   # `postgres/` prefix for db_ files. Pointing root at the postgres dir makes
   # every db_ file fail with LOCAL_BACKUP_INVALID/unsupported backup category.
   upload_output="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" --profile backup-uploader \
-    run --rm --no-deps backup-uploader \
+    run -T --rm --no-deps backup-uploader \
     --root /var/lib/zhiqiyun/backups \
     --file "/var/lib/zhiqiyun/backups/postgres/$name" \
-    --upload --json 2>&1)" || true
+    --upload --json < /dev/null 2>&1)" || true
   # Strip carriage returns so pattern matching works reliably across platforms.
   upload_output="$(printf '%s' "$upload_output" | tr -d '\r')"
-  if [[ "$upload_output" == *'"status":"OFFSITE_VERIFIED"'* || "$upload_output" == *'"status":"ALREADY_OFFSITE_VERIFIED"'* ]]; then
+  if [[ "$upload_output" == *'"status":"ALREADY_OFFSITE_VERIFIED"'* ]]; then
+    skipped_already_count=$((skipped_already_count + 1))
+  elif [[ "$upload_output" == *'"status":"OFFSITE_VERIFIED"'* ]]; then
     uploaded_count=$((uploaded_count + 1))
   elif [[ "$upload_output" == *'"status":"LOCAL_BACKUP_INVALID"'* ]]; then
     invalid_count=$((invalid_count + 1))
@@ -51,17 +56,17 @@ while IFS= read -r -d '' file; do
     echo "backup_name=$name"
     echo "$upload_output"
   fi
-done < <(find "$BACKUP_ROOT" -maxdepth 1 -type f \( -name 'db_*.sql' -o -name 'db_*.sql.gz' -o -name 'xianzhi-*.sql' -o -name 'xianzhi-*.sql.gz' \) -print0 | sort -z)
+done 9< <(find "$BACKUP_ROOT" -maxdepth 1 -type f \( -name 'db_*.sql' -o -name 'db_*.sql.gz' -o -name 'xianzhi-*.sql' -o -name 'xianzhi-*.sql.gz' \) -print0 | sort -z)
 
-if [[ "$found" -eq 0 ]]; then
+if [[ "$total_count" -eq 0 ]]; then
   echo "NO_BACKUP_FILES_FOUND"
 fi
 
 printf 'TOTAL=%s\nUPLOADED=%s\nSKIPPED_ALREADY_VERIFIED=%s\nINVALID=%s\nFAILED=%s\n' \
-  "$found" "$uploaded_count" "$skipped_already_count" "$invalid_count" "$failed_count"
+  "$total_count" "$uploaded_count" "$skipped_already_count" "$invalid_count" "$failed_count"
 
 # Return non-zero when any candidate was invalid or failed, but only after every
 # candidate has been scanned.
-if [[ "$found" -gt 0 ]] && [[ "$invalid_count" -gt 0 || "$failed_count" -gt 0 ]]; then
+if [[ "$total_count" -gt 0 ]] && [[ "$invalid_count" -gt 0 || "$failed_count" -gt 0 ]]; then
   exit 1
 fi
