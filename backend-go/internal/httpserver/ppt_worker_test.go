@@ -473,13 +473,25 @@ func TestPPTWorker_OutlineUnknownBlocksResubmit(t *testing.T) {
 
 	store := pe.NewStore(db)
 	semantic := map[string]any{"prompt": "Strategy", "slide_count": 5}
-	fp, _ := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptOutlineCapability, canonicalPPTFingerprintParams(semantic))
+	fp, err := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptOutlineCapability, canonicalPPTFingerprintParams(semantic))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	e, _ := store.CreatePrepared(ctx, pe.Execution{
+	_, err = store.CreatePrepared(ctx, pe.Execution{
 		TaskID: taskKey, Provider: "configured", ProviderModel: "kimi-k2.6",
 		Capability: pptOutlineCapability, Attempt: 1, RequestFingerprint: fp,
 	})
-	_ = store.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "forced unknown for test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimPrepared(ctx, taskKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUnknown(ctx, claimed.ID, pe.ProviderUnknown, "forced unknown for test"); err != nil {
+		t.Fatal(err)
+	}
 
 	var postCount atomic.Int32
 	mockCall := func(callCtx context.Context) ([]byte, error) {
@@ -488,7 +500,7 @@ func TestPPTWorker_OutlineUnknownBlocksResubmit(t *testing.T) {
 	}
 
 	apiInst := api{store: newPostgresPrimaryStore(db, "")}
-	_, _, err := apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptOutlineCapability, semantic, mockCall)
+	_, _, err = apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptOutlineCapability, semantic, mockCall)
 
 	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("expected ErrUnknownResubmitBlocked on Unknown row, got %v", err)
@@ -511,13 +523,25 @@ func TestPPTWorker_PlanUnknownBlocksResubmit(t *testing.T) {
 
 	store := pe.NewStore(db)
 	semantic := map[string]any{"slideTitle": "Plan", "slideType": "content"}
-	fp, _ := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, canonicalPPTFingerprintParams(semantic))
+	fp, err := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, canonicalPPTFingerprintParams(semantic))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	e, _ := store.CreatePrepared(ctx, pe.Execution{
+	_, err = store.CreatePrepared(ctx, pe.Execution{
 		TaskID: taskKey, Provider: "configured", ProviderModel: "kimi-k2.6",
 		Capability: pptVisualPlanCapability, Attempt: 1, RequestFingerprint: fp,
 	})
-	_ = store.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "forced unknown for test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimPrepared(ctx, taskKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkUnknown(ctx, claimed.ID, pe.ProviderUnknown, "forced unknown for test"); err != nil {
+		t.Fatal(err)
+	}
 
 	var postCount atomic.Int32
 	mockCall := func(callCtx context.Context) ([]byte, error) {
@@ -526,7 +550,7 @@ func TestPPTWorker_PlanUnknownBlocksResubmit(t *testing.T) {
 	}
 
 	apiInst := api{store: newPostgresPrimaryStore(db, "")}
-	_, _, err := apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, semantic, mockCall)
+	_, _, err = apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, semantic, mockCall)
 
 	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("expected ErrUnknownResubmitBlocked on Unknown plan row, got %v", err)
@@ -552,7 +576,7 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	testUser := "u-ppt-unk-safe-" + suffix
 	accountID := "acc-" + testUser
 
-	if _, err := db.ExecContext(ctx, `INSERT INTO xz_users (id, name, role) VALUES ($1, 'Unknown Safe User', 'MEMBER') ON CONFLICT (id) DO NOTHING`, testUser); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO xz_users (id, name, role, plan_id) VALUES ($1, 'Unknown Safe User', 'MEMBER', 'plan_free') ON CONFLICT (id) DO NOTHING`, testUser); err != nil {
 		t.Fatal(err)
 	}
 	pointStore := NewPostgresPersonalPointStore(db)
@@ -584,11 +608,20 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	}()
 
 	peStore := pe.NewStore(db)
-	exec, _ := peStore.CreatePrepared(ctx, pe.Execution{
+	_, err = peStore.CreatePrepared(ctx, pe.Execution{
 		TaskID: slideKey, Provider: "configured", ProviderModel: "default-image",
 		Capability: "image", Attempt: 1, RequestFingerprint: "mock-fp",
 	})
-	_ = peStore.MarkUnknown(ctx, exec.ID, pe.ProviderUnknown, "simulated network ambiguous timeout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := peStore.ClaimPrepared(ctx, slideKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peStore.MarkUnknown(ctx, claimed.ID, pe.ProviderUnknown, "simulated network ambiguous timeout"); err != nil {
+		t.Fatal(err)
+	}
 
 	// 1. isPPTSlideDeterministicError MUST return false when execution is Unknown!
 	simulatedErr := pe.ErrUnknownResubmitBlocked
@@ -607,7 +640,7 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	imgReq := pptImageGenerateRequest{
 		Slide: pptapp.Slide{ID: "slide_1"}, Prompt: "test",
 	}
-	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser}, mockGenService, imgReq, "default-image", task.ID, slideKey, "child-req-"+suffix)
+	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser, PlanID: "plan_free"}, mockGenService, imgReq, "default-image", task.ID, slideKey, "child-req-"+suffix)
 	if !errors.Is(genErr, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: expected ErrUnknownResubmitBlocked, got %v", genErr)
 	}
