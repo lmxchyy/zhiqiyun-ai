@@ -82,20 +82,16 @@ const (
 
 // runPPTChatStageGuarded executes a synchronous chat-model call under a
 // durable pe row keyed by taskKey. Semantics:
-//   - no row, or latest Failed: create prepared→submitting row, run call once.
+//   - no row, or latest Failed with safe pre-submit class: create prepared→submitting
+//     row, run call once.
 //     Success → Transition(succeeded) + SaveSucceededResult(manifest).
 //     Definitive failure → Transition(failed), return terminal error.
-//     Ambiguous failure → leave row submitting, return retryable error.
-//   - latest Succeeded + same fingerprint: skip the call entirely
-//     (outcome pptChatStageReused); caller must use its durable checkpoint.
-//   - latest non-terminal + same fingerprint: re-run the call under the SAME
-//     row (no new row, no attempt escalation); outcome recorded as above.
+//     Ambiguous/timeout failure → MarkUnknown, return ErrUnknownResubmitBlocked.
+//   - latest Succeeded + same fingerprint: skip the call entirely (zero POSTs);
+//     return persisted manifest with outcome pptChatStageReused.
+//   - latest Submitting / Unknown / Submitted / Processing: do NOT resubmit;
+//     mark Unknown if Submitting, and return ErrUnknownResubmitBlocked (zero POSTs).
 //   - fingerprint mismatch + non-Failed latest: hard error, never overwrite.
-//
-// Residual risk (documented): a crash mid-Chat-POST may double-bill one cheap
-// chat call on redelivery; chat has no query API so MarkUnknown would wedge
-// the task forever — strictly worse. Local billing stays exactly-once via the
-// settlement gate regardless.
 func (a api) runPPTChatStageGuarded(ctx context.Context, taskKey, provider, model, capability string, semanticParams map[string]any, call func(context.Context) ([]byte, error)) ([]byte, pptChatStageOutcome, error) {
 	db := a.pgDB()
 	store := pe.NewStore(db)
@@ -109,13 +105,22 @@ func (a api) runPPTChatStageGuarded(ctx context.Context, taskKey, provider, mode
 			return nil, pptChatStageExecuted, fmt.Errorf("ppt provider execution fingerprint mismatch for %s", taskKey)
 		}
 		if latest.Status == pe.Succeeded && latest.RequestFingerprint == fp {
-			return nil, pptChatStageReused, nil
+			return latest.ResultMetadata, pptChatStageReused, nil
 		}
-		if latest.Status != pe.Failed {
-			// Non-terminal same-fingerprint row: re-run under it, no new row.
-			return a.executePPTChatCall(ctx, store, latest, call)
+		// In-flight or ambiguous: Submitting, Unknown, Submitted, Processing.
+		// Chat providers have no async query API; never issue a blind second POST.
+		// Mark unknown if not already transitioned, and block resubmission.
+		if latest.Status == pe.Submitting || latest.Status == pe.Unknown || latest.Status == pe.Submitted || latest.Status == pe.Processing {
+			if latest.Status == pe.Submitting {
+				_ = store.MarkUnknown(ctx, latest.ID, pe.ProviderUnknown, "submission outcome unknown after crash before transition")
+			}
+			return nil, pptChatStageExecuted, pe.ErrUnknownResubmitBlocked
 		}
-		// Terminal Failed: fall through to a fresh attempt row below.
+		if latest.Status == pe.Failed {
+			if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
+				return nil, pptChatStageExecuted, pe.ErrUnknownResubmitBlocked
+			}
+		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, pptChatStageExecuted, err
 	}
@@ -139,10 +144,11 @@ func (a api) runPPTChatStageGuarded(ctx context.Context, taskKey, provider, mode
 func (a api) executePPTChatCall(ctx context.Context, store *pe.Store, execRow pe.Execution, call func(context.Context) ([]byte, error)) ([]byte, pptChatStageOutcome, error) {
 	manifest, err := call(ctx)
 	if err != nil {
-		if shouldFallbackPPTOutline(err) {
-			// Transient/ambiguous provider error: keep row non-terminal so
-			// redelivery re-runs under the same row; signal retryable.
-			return nil, pptChatStageExecuted, err
+		if shouldFallbackPPTOutline(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// Ambiguous / timeout error: submission may or may not have reached
+			// provider. Mark Unknown and block blind resubmit.
+			_ = store.MarkUnknown(ctx, execRow.ID, pe.ProviderUnknown, err.Error())
+			return nil, pptChatStageExecuted, pe.ErrUnknownResubmitBlocked
 		}
 		if transitionErr := store.Transition(ctx, execRow.ID, pe.Failed, nil, pptStrPtr(string(pe.DefinitiveNotSubmitted)), pptStrPtr(err.Error())); transitionErr != nil {
 			return nil, pptChatStageExecuted, transitionErr

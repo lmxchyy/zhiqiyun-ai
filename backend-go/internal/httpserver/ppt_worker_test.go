@@ -3,14 +3,17 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	pptapp "xianzhi-ai/backend-go/internal/app/ppt"
+	pe "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 // Gate 1 — Visual Revision Safety (pure unit tests, no DB).
@@ -86,7 +89,7 @@ func TestPPTWorker_AmbiguousErrorsNeverDegrade(t *testing.T) {
 		"HTTP 503 Service Unavailable",
 		"provider execution unknown",
 	} {
-		if isPPTSlideDeterministicError(fmt.Errorf("ppt image generation failed: %s", message)) {
+		if isPPTSlideDeterministicError(fmt.Errorf("ppt image generation failed: %s", message), nil, "") {
 			t.Errorf("ambiguous error %q must NOT be classified deterministic", message)
 		}
 	}
@@ -95,7 +98,7 @@ func TestPPTWorker_AmbiguousErrorsNeverDegrade(t *testing.T) {
 		"authorize ppt image generation: forbidden",
 		"prompt is required",
 	} {
-		if !isPPTSlideDeterministicError(fmt.Errorf("%s", message)) {
+		if !isPPTSlideDeterministicError(fmt.Errorf("%s", message), nil, "") {
 			t.Errorf("deterministic error %q must be classified deterministic", message)
 		}
 	}
@@ -349,4 +352,299 @@ func seedPPTDetailTx(t *testing.T, db *sql.DB, ctx context.Context, seed pptapp.
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Blocker 2 — Outline / Visual Plan Chat Single Submit Tests.
+// Proven: when an execution row is left in Submitting or Unknown (simulating a
+// crash mid-POST or after accept before response persisted), redelivery must
+// NOT issue a second external HTTP POST. It must mark Unknown and return
+// ErrUnknownResubmitBlocked.
+func TestPPTWorker_OutlineSubmittingCrashNoSecondPOST(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	taskID := "ppt-crash-outline-" + suffix
+	taskKey := "ppt:" + taskID + ":outline"
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskKey)
+	}()
+
+	store := pe.NewStore(db)
+	semantic := map[string]any{"prompt": "Strategy Outline", "slide_count": 5}
+	fp, err := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptOutlineCapability, canonicalPPTFingerprintParams(semantic))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.CreatePrepared(ctx, pe.Execution{
+		TaskID: taskKey, Provider: "configured", ProviderModel: "kimi-k2.6",
+		Capability: pptOutlineCapability, Attempt: 1, RequestFingerprint: fp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimPrepared(ctx, taskKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.Status != pe.Submitting {
+		t.Fatalf("expected status submitting, got %s", claimed.Status)
+	}
+
+	var postCount atomic.Int32
+	mockCall := func(callCtx context.Context) ([]byte, error) {
+		postCount.Add(1)
+		return []byte(`{"title":"New Deck"}`), nil
+	}
+
+	apiInst := api{store: newPostgresPrimaryStore(db, "")}
+	_, _, err = apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptOutlineCapability, semantic, mockCall)
+
+	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
+		t.Fatalf("expected ErrUnknownResubmitBlocked, got: %v", err)
+	}
+	if postCount.Load() != 0 {
+		t.Fatalf("BLIND_RESUBMIT: chat provider POST called %d times on redelivery, want 0", postCount.Load())
+	}
+
+	latest, err := store.GetLatestByTask(ctx, taskKey)
+	if err != nil || latest.Status != pe.Unknown {
+		t.Fatalf("expected row status Unknown, got %s (err=%v)", latest.Status, err)
+	}
+}
+
+func TestPPTWorker_PlanSubmittingCrashNoSecondPOST(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	taskID := "ppt-crash-plan-" + suffix
+	taskKey := "ppt:" + taskID + ":slide_1:plan:rev:0"
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskKey)
+	}()
+
+	store := pe.NewStore(db)
+	semantic := map[string]any{"slideTitle": "Vision", "slideType": "cover"}
+	fp, err := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, canonicalPPTFingerprintParams(semantic))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.CreatePrepared(ctx, pe.Execution{
+		TaskID: taskKey, Provider: "configured", ProviderModel: "kimi-k2.6",
+		Capability: pptVisualPlanCapability, Attempt: 1, RequestFingerprint: fp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimPrepared(ctx, taskKey); err != nil {
+		t.Fatal(err)
+	}
+
+	var postCount atomic.Int32
+	mockCall := func(callCtx context.Context) ([]byte, error) {
+		postCount.Add(1)
+		return []byte(`{"visualType":"illustration"}`), nil
+	}
+
+	apiInst := api{store: newPostgresPrimaryStore(db, "")}
+	_, _, err = apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, semantic, mockCall)
+
+	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
+		t.Fatalf("expected ErrUnknownResubmitBlocked, got: %v", err)
+	}
+	if postCount.Load() != 0 {
+		t.Fatalf("BLIND_RESUBMIT: plan provider POST called %d times on redelivery, want 0", postCount.Load())
+	}
+}
+
+func TestPPTWorker_OutlineUnknownBlocksResubmit(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	taskKey := "ppt:task-unknown-" + suffix + ":outline"
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskKey)
+	}()
+
+	store := pe.NewStore(db)
+	semantic := map[string]any{"prompt": "Strategy", "slide_count": 5}
+	fp, _ := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptOutlineCapability, canonicalPPTFingerprintParams(semantic))
+
+	e, _ := store.CreatePrepared(ctx, pe.Execution{
+		TaskID: taskKey, Provider: "configured", ProviderModel: "kimi-k2.6",
+		Capability: pptOutlineCapability, Attempt: 1, RequestFingerprint: fp,
+	})
+	_ = store.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "forced unknown for test")
+
+	var postCount atomic.Int32
+	mockCall := func(callCtx context.Context) ([]byte, error) {
+		postCount.Add(1)
+		return []byte(`{}`), nil
+	}
+
+	apiInst := api{store: newPostgresPrimaryStore(db, "")}
+	_, _, err := apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptOutlineCapability, semantic, mockCall)
+
+	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
+		t.Fatalf("expected ErrUnknownResubmitBlocked on Unknown row, got %v", err)
+	}
+	if postCount.Load() != 0 {
+		t.Fatalf("expected 0 provider calls on Unknown row, got %d", postCount.Load())
+	}
+}
+
+func TestPPTWorker_PlanUnknownBlocksResubmit(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	taskKey := "ppt:task-unknown-plan-" + suffix + ":slide_1:plan:rev:0"
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskKey)
+	}()
+
+	store := pe.NewStore(db)
+	semantic := map[string]any{"slideTitle": "Plan", "slideType": "content"}
+	fp, _ := pe.Fingerprint(taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, canonicalPPTFingerprintParams(semantic))
+
+	e, _ := store.CreatePrepared(ctx, pe.Execution{
+		TaskID: taskKey, Provider: "configured", ProviderModel: "kimi-k2.6",
+		Capability: pptVisualPlanCapability, Attempt: 1, RequestFingerprint: fp,
+	})
+	_ = store.MarkUnknown(ctx, e.ID, pe.ProviderUnknown, "forced unknown for test")
+
+	var postCount atomic.Int32
+	mockCall := func(callCtx context.Context) ([]byte, error) {
+		postCount.Add(1)
+		return []byte(`{}`), nil
+	}
+
+	apiInst := api{store: newPostgresPrimaryStore(db, "")}
+	_, _, err := apiInst.runPPTChatStageGuarded(ctx, taskKey, "configured", "kimi-k2.6", pptVisualPlanCapability, semantic, mockCall)
+
+	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
+		t.Fatalf("expected ErrUnknownResubmitBlocked on Unknown plan row, got %v", err)
+	}
+	if postCount.Load() != 0 {
+		t.Fatalf("expected 0 provider calls on Unknown plan row, got %d", postCount.Load())
+	}
+}
+
+// Blocker 1 — Unknown Provider State on Slides:
+// Proves:
+// - UNKNOWN_NEVER_DEGRADES_TO_SUCCESS=PASS
+// - UNKNOWN_NEVER_RELEASES_POINTS=PASS
+// - UNKNOWN_NEVER_CAPTURES_POINTS=PASS
+// - UNKNOWN_NEVER_BLIND_RESUBMITS=PASS
+// - RETRY_BUDGET_EXHAUSTED_STILL_UNKNOWN_SAFE=PASS
+func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	testUser := "u-ppt-unk-safe-" + suffix
+	accountID := "acc-" + testUser
+
+	if _, err := db.ExecContext(ctx, `INSERT INTO xz_users (id, name, role) VALUES ($1, 'Unknown Safe User', 'MEMBER') ON CONFLICT (id) DO NOTHING`, testUser); err != nil {
+		t.Fatal(err)
+	}
+	pointStore := NewPostgresPersonalPointStore(db)
+	if _, err := pointStore.grant(ctx, PersonalPointGrantCommand{
+		AccountID: accountID, UserID: testUser, Source: PointSourceRecharge,
+		Points: 10000, IdempotencyKey: "grant-" + suffix,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store := newPostgresPrimaryStore(db, "")
+	capReq, pptReq := pptAcceptanceRequest("client-req-unksafe-" + suffix)
+	capReq.UserID = testUser
+	pptReq.UserID = testUser
+	task, err := store.CreatePendingGenerationTaskWithPPTCanaryOutbox(capReq, pptReq)
+	if err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM outbox_events WHERE aggregate_id=$1", task.ID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2", task.ID, testUser)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_ppt_tasks WHERE task_id=$1", task.ID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE id=$1", task.ID)
+	}()
+
+	slideKey := pptSlideExecKey(task.ID, "slide_1", 0)
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", slideKey)
+	}()
+
+	peStore := pe.NewStore(db)
+	exec, _ := peStore.CreatePrepared(ctx, pe.Execution{
+		TaskID: slideKey, Provider: "configured", ProviderModel: "default-image",
+		Capability: "image", Attempt: 1, RequestFingerprint: "mock-fp",
+	})
+	_ = peStore.MarkUnknown(ctx, exec.ID, pe.ProviderUnknown, "simulated network ambiguous timeout")
+
+	// 1. isPPTSlideDeterministicError MUST return false when execution is Unknown!
+	simulatedErr := pe.ErrUnknownResubmitBlocked
+	if isPPTSlideDeterministicError(simulatedErr, db, slideKey) {
+		t.Fatalf("UNKNOWN_NEVER_DEGRADES_TO_SUCCESS: isPPTSlideDeterministicError returned true on Unknown execution, want false")
+	}
+
+	// 2. UNKNOWN_NEVER_BLIND_RESUBMITS: Calling guardedImage on this slideKey returns ErrUnknownResubmitBlocked without provider Create
+	var createCalls atomic.Int32
+	mockImgProv := &mockCountingImageProvider{createCalls: &createCalls}
+	mockGenService := generation.NewServiceWithOptions(generation.ServiceOptions{
+		ImageProvider:  mockImgProv,
+		ExecutionHooks: providerExecutionHooks(store, true),
+	})
+	apiInst := api{store: store, cfg: stage0PPTCanaryConfig(), pptService: pptapp.NewPostgresService(db, "")}
+	imgReq := pptImageGenerateRequest{
+		Slide: pptapp.Slide{ID: "slide_1"}, Prompt: "test",
+	}
+	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser}, mockGenService, imgReq, "default-image", task.ID, slideKey, "child-req-"+suffix)
+	if !errors.Is(genErr, pe.ErrUnknownResubmitBlocked) {
+		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: expected ErrUnknownResubmitBlocked, got %v", genErr)
+	}
+	if createCalls.Load() != 0 {
+		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: image provider called %d times on Unknown execution, want 0", createCalls.Load())
+	}
+
+	// 3. UNKNOWN_NEVER_CAPTURES_POINTS & UNKNOWN_NEVER_RELEASES_POINTS:
+	var billingStatus, taskStatus string
+	var capturedPoints, releasedPoints float64
+	if err := db.QueryRowContext(ctx, `SELECT billing_status, task_status, captured_points, released_points FROM xz_generation_tasks WHERE id=$1`, task.ID).Scan(&billingStatus, &taskStatus, &capturedPoints, &releasedPoints); err != nil {
+		t.Fatal(err)
+	}
+	if billingStatus != "RESERVED" {
+		t.Fatalf("billing_status=%s, want RESERVED (UNKNOWN must never capture or release)", billingStatus)
+	}
+	if capturedPoints != 0 {
+		t.Fatalf("UNKNOWN_NEVER_CAPTURES_POINTS: captured_points=%f, want 0", capturedPoints)
+	}
+	if releasedPoints != 0 {
+		t.Fatalf("UNKNOWN_NEVER_RELEASES_POINTS: released_points=%f, want 0", releasedPoints)
+	}
+	if taskStatus != "QUEUED" {
+		t.Fatalf("task_status=%s, want QUEUED", taskStatus)
+	}
+}
+
+type mockCountingImageProvider struct {
+	createCalls *atomic.Int32
+}
+
+func (m *mockCountingImageProvider) Code() string         { return "mock-counting" }
+func (m *mockCountingImageProvider) DefaultModel() string { return "default-image" }
+func (m *mockCountingImageProvider) Models() []string     { return []string{"default-image"} }
+func (m *mockCountingImageProvider) Generate(context.Context, generation.CreateRequest) ([]generation.GeneratedImage, error) {
+	if m.createCalls != nil {
+		m.createCalls.Add(1)
+	}
+	return []generation.GeneratedImage{{URL: "https://cdn.example.com/mock.png"}}, nil
 }

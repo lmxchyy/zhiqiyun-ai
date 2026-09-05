@@ -378,13 +378,10 @@ func (a api) runPPTSingleSlide(ctx context.Context, userID, taskID, slideID stri
 	childClientReqID := pptChildClientRequestID(taskID, slideID, revision)
 	image, err := a.generateBillablePPTImageWithKey(ctx, adminUser{ID: userID}, service, imgReq, model, taskID, slideKey, childClientReqID)
 	if err != nil {
-		if isPPTSlideDeterministicError(err) {
+		if isPPTSlideDeterministicError(err, a.pgDB(), slideKey) {
 			return a.degradePPTSlide(userID, taskID, slide, plan, err)
 		}
-		if a.pptSlideAttemptBudgetExhausted(ctx, slideKey) {
-			return a.degradePPTSlide(userID, taskID, slide, plan, err)
-		}
-		return fmt.Errorf("ppt slide image retryable slide=%s: %w", slideID, err)
+		return fmt.Errorf("ppt slide image ambiguous/retryable slide=%s: %w", slideID, err)
 	}
 	resolvedPlan := pptapp.NormalizeVisualPlan(pptapp.VisualPlan{}, pptapp.VisualPlannerInput{SlideType: slide.SlideType, SlideTitle: slide.Title, CoreIdea: concisePPTVisualIdea(slide.Content)})
 	if plan != nil {
@@ -413,37 +410,55 @@ func (a api) degradePPTSlide(userID, taskID string, slide pptapp.Slide, plan *pp
 	return nil
 }
 
-// pptSlideAttemptBudgetExhausted reports whether the slide execution already
-// consumed its provider-side attempt budget across redeliveries.
-func (a api) pptSlideAttemptBudgetExhausted(ctx context.Context, slideKey string) bool {
-	store := pe.NewStore(a.pgDB())
-	latest, err := store.GetLatestByTask(ctx, slideKey)
-	if err != nil {
-		return false
-	}
-	return latest.Attempt >= maxPPTSlideAttempts
-}
-
-// isPPTSlideDeterministicError classifies slide image failures: OCR strict
-// rejections, empty provider output and definitive validation errors degrade
-// the slide; everything else (timeouts, 5xx, unknown-blocked, still-processing)
-// is ambiguous and must retry, never degrade-then-capture.
-func isPPTSlideDeterministicError(err error) bool {
+// isPPTSlideDeterministicError classifies slide image failures: only strictly
+// proven deterministic errors (such as OCR text rejection or prompt validation
+// failures) with no ambiguous provider execution may safely degrade to text.
+// Any execution in Submitting, Submitted, Processing, or Unknown MUST NEVER degrade.
+// Retry budget exhaustion never turns an ambiguous failure into a deterministic one.
+func isPPTSlideDeterministicError(err error, db *sql.DB, slideKey string) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, pe.ErrUnknownResubmitBlocked) ||
+		errors.Is(err, pe.ErrProviderStillProcessing) ||
+		errors.Is(err, pe.ErrTransitionConflict) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) {
+		return false
+	}
+	if db != nil && slideKey != "" {
+		store := pe.NewStore(db)
+		if latest, getErr := store.GetLatestByTask(context.Background(), slideKey); getErr == nil {
+			switch latest.Status {
+			case pe.Submitting, pe.Submitted, pe.Processing, pe.Unknown:
+				return false
+			case pe.Failed:
+				if latest.ErrorClass == nil || (*latest.ErrorClass != string(pe.DefinitiveNotSubmitted) && *latest.ErrorClass != string(pe.RetryableBeforeSubmit)) {
+					return false
+				}
+			}
+		}
 	}
 	if errors.Is(err, errPPTImageContainsText) {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{
+	for _, ambiguousMarker := range []string{
+		"unknown", "timeout", "deadline", "connection", "network",
+		"500", "502", "503", "504", "rate limit", "429", "resubmit blocked", "still processing",
+	} {
+		if strings.Contains(message, ambiguousMarker) {
+			return false
+		}
+	}
+	for _, deterministicMarker := range []string{
 		"ppt image provider returned no image",
 		"empty ppt image url",
 		"authorize ppt image generation",
 		"prompt is required",
 		"invalid prompt",
 	} {
-		if strings.Contains(message, marker) {
+		if strings.Contains(message, deterministicMarker) {
 			return true
 		}
 	}
