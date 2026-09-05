@@ -145,11 +145,13 @@ bash ./deploy.sh
 ```
 
 The deploy gate verifies the manifest Git SHA, selects the configured registry,
-pulls without build, and checks
-the running containers' `RepoDigests`. A mismatch fails the deployment. An
-immutable rollback uses a previously verified release manifest and never
-rebuilds the application image. Image rollback does not roll back the database
-schema.
+validates that API and worker resolve the same desired image, pulls without
+build, and checks each running container's `Config.Image`, image ID, and
+`RepoDigests`. A mismatch fails the deployment. After successful verification,
+the exact reference is atomically persisted to `.env.production` so fresh
+Compose invocations cannot fall back to a mutable tag. An immutable rollback
+uses a previously verified release manifest and never rebuilds the application
+image. Image rollback does not roll back the database schema.
 
 ## 7. Backups
 

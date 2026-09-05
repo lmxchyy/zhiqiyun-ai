@@ -11,9 +11,12 @@ commit -> CI build once -> production-contract test
 
 The API and `smartvideo-worker` use the same `XIANZHI_IMAGE_REFERENCE`. In an
 immutable release it must contain a full `@sha256:<64 hex characters>` digest.
-`deploy.sh` validates the manifest, pulls with Compose, starts with
-`--no-build`, and verifies both running containers expose the manifest digest
-in `RepoDigests`.
+`deploy.sh` validates the manifest, checks the rendered Compose desired state,
+pulls with Compose, starts with `--no-build`, and verifies both running
+containers' `Config.Image`, image ID, and `RepoDigests` against the manifest.
+Upon successful verification, `XIANZHI_IMAGE_REFERENCE` is atomically persisted
+to `.env.production` and checked again through a fresh Compose render, so future
+invocations preserve the immutable digest.
 
 Pull requests build and test the image without publishing a release. A push to
 `main` or `master` pushes the already-tested image to both GHCR and Aliyun ACR
