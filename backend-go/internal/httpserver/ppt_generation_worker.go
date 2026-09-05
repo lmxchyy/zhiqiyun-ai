@@ -183,6 +183,9 @@ func (a api) runPPTGenerationStages(taskID string, parent generationTask) error 
 	if err := a.runPPTArtifactStage(ctx, userID, taskID, parent); err != nil {
 		return a.failPPTCanaryTask(userID, taskID, err)
 	}
+	if _, err := a.pptService.SetDeckSettling(userID, taskID); err != nil {
+		return a.failPPTCanaryTask(userID, taskID, err)
+	}
 	// Reload the parent for settlement so prepared material reflects the
 	// latest persisted billing snapshot, not the claim-time copy.
 	parent, err := a.loadPPTParentTask(taskID)

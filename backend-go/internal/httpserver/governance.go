@@ -277,6 +277,12 @@ func adminPermissionForRequest(r *http.Request) string {
 	if strings.HasPrefix(path, "/channel-ecosystem/operation-centers/") {
 		return "channel:operation-center:review"
 	}
+	if strings.HasPrefix(path, "/generation-tasks/") && strings.HasSuffix(path, "/recovery-diagnosis") {
+		return "generation:recovery:view"
+	}
+	if strings.HasPrefix(path, "/generation-tasks/") && strings.HasSuffix(path, "/recovery-actions") {
+		return "generation:recovery:manage"
+	}
 	if path == "/identity-consistency" {
 		return "identity:consistency:view"
 	}

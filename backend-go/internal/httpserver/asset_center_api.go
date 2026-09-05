@@ -425,7 +425,10 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		// A failed execution is retryable only when the provider outcome is
 		// proven safe-before-submit. The new child below gets a new execution.
 	}
-	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && execution.ProviderRequestID != nil && (execution.Status == providerexecution.Unknown || execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded) {
+	// Unknown is never eligible for the child-task compatibility path. A
+	// provider request id is not proof that the local submission was safely
+	// recoverable; Unknown must remain diagnose/manual-review only.
+	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && videoRetryChildAllowed(execution) {
 		req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: cloneAnyMap(original.Params), ModuleCode: original.ModuleCode}
 		if req.Params == nil {
 			req.Params = map[string]any{}
@@ -488,6 +491,15 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, task)
+}
+
+func videoRetryChildAllowed(execution providerexecution.Execution) bool {
+	if execution.ProviderRequestID == nil || strings.TrimSpace(*execution.ProviderRequestID) == "" {
+		return false
+	}
+	// UNKNOWN is deliberately excluded: a request id is not external proof
+	// that the local submit was safely completed.
+	return execution.Status == providerexecution.Submitted || execution.Status == providerexecution.Processing || execution.Status == providerexecution.Succeeded
 }
 
 func deleteGenerationBillingParams(params map[string]any) {
