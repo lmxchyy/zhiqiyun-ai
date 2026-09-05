@@ -61,6 +61,8 @@ function emptyOnlineWorkspaceData(): AdminRecord {
   };
 }
 
+export const adminDefaultOpenTabIds = ["analytics"] as const;
+
 export const adminModules: AdminModule[] = [
   { id: "userDashboard", title: "用户首页", endpoint: "/user/dashboard", surface: "user", path: "/app" },
   { id: "userAiImage", title: "AI生图", endpoint: "/user/online-image", surface: "user", path: "/app/ai-image", aliases: ["/app/image-generation"] },
@@ -101,10 +103,10 @@ export const adminModules: AdminModule[] = [
   { id: "enterpriseIntegrations", title: "集成中心", endpoint: "", domain: "enterprise", path: "/admin/enterprises/:enterpriseId/integrations", enterpriseSuffix: "integrations", permission: "enterprise:connector:view" },
   { id: "enterpriseRisk", title: "风控与禁用", endpoint: "", domain: "enterprise", path: "/admin/enterprises/:enterpriseId/risk", enterpriseSuffix: "risk", permission: "enterprise:risk:view" },
   { id: "enterpriseAuditLogs", title: "审计日志", endpoint: "", domain: "enterprise", path: "/admin/enterprises/:enterpriseId/audit-logs", enterpriseSuffix: "audit-logs", permission: "enterprise:audit:view" },
-  { id: "analysis", title: "分析页", endpoint: "/admin/overview", path: "/admin/overview", aliases: ["/admin"] },
+  { id: "analysis", title: "分析页", endpoint: "/admin/overview", path: "/admin/overview" },
   { id: "workbench", title: "工作台", endpoint: "/admin/overview", path: "/admin/workbench" },
   { id: "dashboard", title: "数据中心", endpoint: "/admin/overview", path: "/admin/dashboard" },
-  { id: "analytics", title: "分析仪表盘", endpoint: "/admin/analytics/overview", path: "/admin/analytics" },
+  { id: "analytics", title: "分析仪表盘", endpoint: "/admin/analytics/overview", path: "/admin/analytics", aliases: ["/admin", "/admin/"] },
   { id: "customers", title: "客户中心", endpoint: "/admin/customers", path: "/admin/customers" },
   { id: "personalPointsGovernance", title: "赠送积分到期策略", endpoint: "", path: "/admin/customers/point-expiry", permission: "points:gift-policy:view" },
   { id: "customerAttributions", title: "客户归属总览", endpoint: "", path: "/admin/customers/attributions" },

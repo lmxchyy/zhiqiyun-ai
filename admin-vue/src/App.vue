@@ -2391,7 +2391,7 @@ import {
   type AdminNavigationIconKey
 } from "./config/adminNavigation";
 import { modulePermission, resolveModuleIdFromPath, resolveModulePath } from "./config/moduleRegistry";
-import { adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
+import { adminDefaultOpenTabIds, adminModules, type AdminRecord, useAdminStore } from "./stores/admin";
 import { useWebAuthStore, type WebAuthResponse } from "./stores/auth";
 import {
   canAccessAdminModule,
@@ -8037,7 +8037,7 @@ const imageWorkspaceModuleIds = ["userAiImage"];
 const adminModuleIds = modules.map((item) => item.id).filter((id) => !agentModuleIds.includes(id) && !operationCenterModuleIds.includes(id) && !userModuleIds.includes(id));
 const userConsoleModuleIds = [...userModuleIds, ...agentModuleIds, ...operationCenterModuleIds];
 const allowedModuleIds = isUserConsole.value ? userConsoleModuleIds : isAgentConsole.value ? agentModuleIds : adminModuleIds;
-const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : ["analysis"];
+const defaultOpenTabIds = isUserConsole.value ? ["userDashboard", "userAiImage", "userWirelessCanvas", "userVideoGeneration", "userPptGeneration"] : isAgentConsole.value ? ["partnerDashboard", "partnerCustomers"] : [...adminDefaultOpenTabIds];
 const enterpriseRoutePath = ref(typeof window !== "undefined" ? `${window.location.pathname}${window.location.search}` : "/admin/enterprises");
 function isPptGenerationPath(pathname: string) {
   const normalizedPath = canonicalUserConsolePath(pathname).replace(/\/$/, "");
