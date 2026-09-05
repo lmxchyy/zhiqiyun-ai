@@ -609,7 +609,7 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 
 	peStore := pe.NewStore(db)
 	_, err = peStore.CreatePrepared(ctx, pe.Execution{
-		TaskID: slideKey, Provider: "configured", ProviderModel: "gpt-image-2",
+		TaskID: slideKey, Provider: "configured", ProviderModel: "mock-standard",
 		Capability: "image", Attempt: 1, RequestFingerprint: "mock-fp",
 	})
 	if err != nil {
@@ -640,7 +640,7 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	imgReq := pptImageGenerateRequest{
 		Slide: pptapp.Slide{ID: "slide_1"}, Prompt: "test",
 	}
-	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser, PlanID: "plan_free"}, mockGenService, imgReq, "gpt-image-2", task.ID, slideKey, "child-req-"+suffix)
+	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser, PlanID: "plan_free"}, mockGenService, imgReq, "mock-standard", task.ID, slideKey, "child-req-"+suffix)
 	if !errors.Is(genErr, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: expected ErrUnknownResubmitBlocked, got %v", genErr)
 	}
@@ -673,8 +673,8 @@ type mockCountingImageProvider struct {
 }
 
 func (m *mockCountingImageProvider) Code() string         { return "mock-counting" }
-func (m *mockCountingImageProvider) DefaultModel() string { return "gpt-image-2" }
-func (m *mockCountingImageProvider) Models() []string     { return []string{"gpt-image-2"} }
+func (m *mockCountingImageProvider) DefaultModel() string { return "mock-standard" }
+func (m *mockCountingImageProvider) Models() []string     { return []string{"mock-standard"} }
 func (m *mockCountingImageProvider) Generate(context.Context, generation.CreateRequest) ([]generation.GeneratedImage, error) {
 	if m.createCalls != nil {
 		m.createCalls.Add(1)
