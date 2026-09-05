@@ -576,7 +576,7 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	testUser := "u-ppt-unk-safe-" + suffix
 	accountID := "acc-" + testUser
 
-	if _, err := db.ExecContext(ctx, `INSERT INTO xz_users (id, name, role, plan_id) VALUES ($1, 'Unknown Safe User', 'MEMBER', 'plan_free') ON CONFLICT (id) DO NOTHING`, testUser); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO xz_users (id, name, role, plan_id) VALUES ($1, 'Unknown Safe User', 'MEMBER', 'plan_pro') ON CONFLICT (id) DO NOTHING`, testUser); err != nil {
 		t.Fatal(err)
 	}
 	pointStore := NewPostgresPersonalPointStore(db)
@@ -640,7 +640,7 @@ func TestPPTWorker_UnknownNeverDegradesToSuccess(t *testing.T) {
 	imgReq := pptImageGenerateRequest{
 		Slide: pptapp.Slide{ID: "slide_1"}, Prompt: "test",
 	}
-	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser, PlanID: "plan_free"}, mockGenService, imgReq, "mock-standard", task.ID, slideKey, "child-req-"+suffix)
+	_, genErr := apiInst.generateBillablePPTImageWithKey(ctx, adminUser{ID: testUser, PlanID: "plan_pro"}, mockGenService, imgReq, "mock-standard", task.ID, slideKey, "child-req-"+suffix)
 	if !errors.Is(genErr, pe.ErrUnknownResubmitBlocked) {
 		t.Fatalf("UNKNOWN_NEVER_BLIND_RESUBMITS: expected ErrUnknownResubmitBlocked, got %v", genErr)
 	}
