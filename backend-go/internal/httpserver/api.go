@@ -973,6 +973,33 @@ func (a api) videoAsyncCanaryDecision(req generation.CreateRequest) (bool, strin
 	return true, canaryReasonSelected
 }
 
+func (a api) pptAsyncCanaryEligible(req pptapp.GenerateRequest) bool {
+	selected, _ := a.pptAsyncCanaryDecision(req)
+	return selected
+}
+
+func (a api) pptAsyncCanaryDecision(req pptapp.GenerateRequest) (bool, string) {
+	if !a.cfg.AsyncMessagingEnabled || !a.cfg.PPTAsyncCanaryEnabled || !a.cfg.ProviderExecutionSafetyEnabled {
+		recordAsyncCanaryDecision(canaryReasonDisabled)
+		return false, canaryReasonDisabled
+	}
+	if !userAllowlistContainsOrWildcard(a.cfg.PPTAsyncCanaryUsers, req.UserID) {
+		recordAsyncCanaryDecision(canaryReasonRejectedUser)
+		return false, canaryReasonRejectedUser
+	}
+	if !csvAllowlistContains(a.cfg.PPTAsyncCanaryProviderAllowlist, "configured") {
+		recordAsyncCanaryDecision(canaryReasonRejectedProvider)
+		return false, canaryReasonRejectedProvider
+	}
+	if !csvAllowlistContains(a.cfg.PPTAsyncCanaryModelAllowlist, req.TextModel) {
+		recordAsyncCanaryDecision(canaryReasonRejectedModel)
+		return false, canaryReasonRejectedModel
+	}
+	// PR #1 Foundation: Fail-closed to guarantee zero live traffic enters RabbitMQ until PR #2/#3
+	recordAsyncCanaryDecision(canaryReasonDisabled)
+	return false, canaryReasonDisabled
+}
+
 func (a api) generationAsyncCanaryDecision(req generation.CreateRequest) (bool, string) {
 	if !a.cfg.AsyncMessagingEnabled || !a.cfg.GenerationAsyncCanaryEnabled || !a.cfg.ProviderExecutionSafetyEnabled {
 		recordAsyncCanaryDecision(canaryReasonDisabled)

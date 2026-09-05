@@ -28,6 +28,12 @@ const (
 	GenerationVideoCanaryRoutingKey = "x.ai.generation.video.canary.requested"
 	GenerationVideoCanaryRetryKey   = "x.ai.generation.video.canary.retry"
 	GenerationVideoCanaryDeadKey    = "x.ai.generation.video.canary.dead"
+	GenerationPPTCanaryQueue        = "x.ai.generation.ppt.canary"
+	GenerationPPTCanaryRetryQueue   = "x.ai.generation.ppt.canary.retry"
+	GenerationPPTCanaryDLQ          = "x.ai.generation.ppt.canary.dlq"
+	GenerationPPTCanaryRoutingKey   = "x.ai.generation.ppt.canary.requested"
+	GenerationPPTCanaryRetryKey     = "x.ai.generation.ppt.canary.retry"
+	GenerationPPTCanaryDeadKey      = "x.ai.generation.ppt.canary.dead"
 	DefaultConsumerMaxRetries       = 3
 	defaultRetryQueueDelayMillis = int32(1000)
 )
@@ -139,6 +145,33 @@ func (tb *TopologyBuilder) Build() error {
 	}
 	if err := bindQueue(ch, GenerationVideoCanaryDLQ, ExchangeDLX, "", nil); err != nil {
 		return fmt.Errorf("bind generation video canary dlq: %w", err)
+	}
+
+	pptCanaryArgs := amqp091.Table{"x-dead-letter-exchange": ExchangeDLX}
+	if err := declareQueue(ch, GenerationPPTCanaryQueue, true, false, pptCanaryArgs); err != nil {
+		return fmt.Errorf("declare generation ppt canary queue: %w", err)
+	}
+	if err := bindQueue(ch, GenerationPPTCanaryQueue, ExchangeEvents, GenerationPPTCanaryRoutingKey, nil); err != nil {
+		return fmt.Errorf("bind generation ppt canary queue: %w", err)
+	}
+
+	pptRetryArgs := amqp091.Table{
+		"x-message-ttl":             defaultRetryQueueDelayMillis,
+		"x-dead-letter-exchange":    ExchangeEvents,
+		"x-dead-letter-routing-key": GenerationPPTCanaryRoutingKey,
+	}
+	if err := declareQueue(ch, GenerationPPTCanaryRetryQueue, true, false, pptRetryArgs); err != nil {
+		return fmt.Errorf("declare generation ppt canary retry queue: %w", err)
+	}
+	if err := bindQueue(ch, GenerationPPTCanaryRetryQueue, ExchangeRetry, GenerationPPTCanaryRetryKey, nil); err != nil {
+		return fmt.Errorf("bind generation ppt canary retry queue: %w", err)
+	}
+
+	if err := declareQueue(ch, GenerationPPTCanaryDLQ, true, false, nil); err != nil {
+		return fmt.Errorf("declare generation ppt canary dlq: %w", err)
+	}
+	if err := bindQueue(ch, GenerationPPTCanaryDLQ, ExchangeDLX, "", nil); err != nil {
+		return fmt.Errorf("bind generation ppt canary dlq: %w", err)
 	}
 
 	// Keep the shared DLQ for non-business foundation routes.

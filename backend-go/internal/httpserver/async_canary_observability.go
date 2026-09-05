@@ -82,14 +82,17 @@ type asyncCanaryOperationalSnapshot struct {
 	outboxPending, outboxFailed, outboxOldestSeconds, outboxPublishRetries float64
 	rabbitQueueDepth, rabbitRetryDepth, rabbitDLQDepth, rabbitConsumers    float64
 	rabbitVideoQueueDepth, rabbitVideoRetryDepth, rabbitVideoDLQDepth, rabbitVideoConsumers float64
-	providerCount                                                          map[string]float64
-	providerAge                                                            map[string]float64
-	generationStuckCount, generationStuckAge                               float64
-	pointsUnsettledCount, pointsUnsettledAge                               float64
-	videoGenerationStuckCount, videoGenerationStuckAge                     float64
-	videoPointsUnsettledCount, videoPointsUnsettledAge                     float64
-	artifactStaleClaims                                                    float64
-	consumerReady                                                          float64
+	rabbitPPTQueueDepth, rabbitPPTRetryDepth, rabbitPPTDLQDepth, rabbitPPTConsumers         float64
+	providerCount                                                                          map[string]float64
+	providerAge                                                                            map[string]float64
+	generationStuckCount, generationStuckAge                                               float64
+	pointsUnsettledCount, pointsUnsettledAge                                               float64
+	videoGenerationStuckCount, videoGenerationStuckAge                                     float64
+	videoPointsUnsettledCount, videoPointsUnsettledAge                                     float64
+	pptGenerationStuckCount, pptGenerationStuckAge                                         float64
+	pptPointsUnsettledCount, pptPointsUnsettledAge                                         float64
+	artifactStaleClaims                                                                    float64
+	consumerReady                                                                          float64
 }
 
 func (c *asyncCanaryOperationalCollector) snapshot() asyncCanaryOperationalSnapshot {
@@ -97,6 +100,7 @@ func (c *asyncCanaryOperationalCollector) snapshot() asyncCanaryOperationalSnaps
 		providerCount: map[string]float64{}, providerAge: map[string]float64{},
 		rabbitQueueDepth: -1, rabbitRetryDepth: -1, rabbitDLQDepth: -1,
 		rabbitVideoQueueDepth: -1, rabbitVideoRetryDepth: -1, rabbitVideoDLQDepth: -1,
+		rabbitPPTQueueDepth: -1, rabbitPPTRetryDepth: -1, rabbitPPTDLQDepth: -1,
 	}
 	for _, status := range []string{"submitting", "submitted", "processing", "unknown", "failed"} {
 		s.providerCount[status], s.providerAge[status] = 0, 0
@@ -153,6 +157,15 @@ func (c *asyncCanaryOperationalCollector) collectDatabase(ctx context.Context, s
 		{
 			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND type IN ('TEXT_TO_VIDEO','IMAGE_TO_VIDEO','VIDEO_TO_VIDEO') AND COALESCE((params->>'generation_async_canary')::boolean,false)`,
 			dest:  []any{&s.videoPointsUnsettledCount, &s.videoPointsUnsettledAge},
+		},
+		{
+			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(updated_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND type IN ('PPT','PPT_GENERATION') AND COALESCE((params->>'generation_async_canary')::boolean,false) AND COALESCE(NULLIF(updated_at,'')::timestamptz,now()) < now()-$1::interval`,
+			dest:  []any{&s.pptGenerationStuckCount, &s.pptGenerationStuckAge},
+			args:  []any{fmt.Sprintf("%f seconds", asyncCanaryStaleAfter.Seconds())},
+		},
+		{
+			query: `SELECT count(*), COALESCE(EXTRACT(EPOCH FROM now()-min(NULLIF(created_at,'')::timestamptz)),0) FROM xz_generation_tasks WHERE billing_status='RESERVED' AND status IN ('PENDING','PROCESSING','RUNNING','QUEUED') AND type IN ('PPT','PPT_GENERATION') AND COALESCE((params->>'generation_async_canary')::boolean,false)`,
+			dest:  []any{&s.pptPointsUnsettledCount, &s.pptPointsUnsettledAge},
 		},
 		{
 			query: `SELECT count(*) FROM xz_file_objects WHERE business_type='generation_result' AND status='PENDING_UPLOAD' AND created_at < now()-$1::interval`,
@@ -215,6 +228,16 @@ func (c *asyncCanaryOperationalCollector) collectRabbit(ctx context.Context, s *
 	if videoDLQ, err := ch.QueueInspect(messaging.GenerationVideoCanaryDLQ); err == nil {
 		s.rabbitVideoDLQDepth = float64(videoDLQ.Messages)
 	}
+	if pptBusiness, err := ch.QueueInspect(messaging.GenerationPPTCanaryQueue); err == nil {
+		s.rabbitPPTQueueDepth = float64(pptBusiness.Messages)
+		s.rabbitPPTConsumers = float64(pptBusiness.Consumers)
+	}
+	if pptRetry, err := ch.QueueInspect(messaging.GenerationPPTCanaryRetryQueue); err == nil {
+		s.rabbitPPTRetryDepth = float64(pptRetry.Messages)
+	}
+	if pptDLQ, err := ch.QueueInspect(messaging.GenerationPPTCanaryDLQ); err == nil {
+		s.rabbitPPTDLQDepth = float64(pptDLQ.Messages)
+	}
 	return nil
 }
 
@@ -239,6 +262,10 @@ func renderAsyncCanaryMetrics(rendered *strings.Builder, snapshot asyncCanaryOpe
 	writeGauge("xianzhi_async_canary_video_rabbitmq_retry_queue_depth", "Generation video canary retry queue depth.", snapshot.rabbitVideoRetryDepth)
 	writeGauge("xianzhi_async_canary_video_rabbitmq_dlq_depth", "Generation video canary dead-letter queue depth.", snapshot.rabbitVideoDLQDepth)
 	writeGauge("xianzhi_async_canary_video_rabbitmq_consumers", "RabbitMQ consumers on the generation video canary queue.", snapshot.rabbitVideoConsumers)
+	writeGauge("xianzhi_async_canary_ppt_rabbitmq_queue_depth", "Generation PPT canary business queue depth.", snapshot.rabbitPPTQueueDepth)
+	writeGauge("xianzhi_async_canary_ppt_rabbitmq_retry_queue_depth", "Generation PPT canary retry queue depth.", snapshot.rabbitPPTRetryDepth)
+	writeGauge("xianzhi_async_canary_ppt_rabbitmq_dlq_depth", "Generation PPT canary dead-letter queue depth.", snapshot.rabbitPPTDLQDepth)
+	writeGauge("xianzhi_async_canary_ppt_rabbitmq_consumers", "RabbitMQ consumers on the generation PPT canary queue.", snapshot.rabbitPPTConsumers)
 	writeGauge("xianzhi_async_canary_consumer_ready", "Whether the embedded async runtime reports READY.", snapshot.consumerReady)
 	writeMetricFamily(rendered, "xianzhi_async_canary_provider_execution_count", "Provider executions by safety state.", "gauge", func() {
 		for _, status := range []string{"submitting", "submitted", "processing", "unknown", "failed"} {
@@ -258,6 +285,10 @@ func renderAsyncCanaryMetrics(rendered *strings.Builder, snapshot asyncCanaryOpe
 	writeGauge("xianzhi_async_canary_video_generation_oldest_stuck_age_seconds", "Age of the oldest stuck video canary generation task.", snapshot.videoGenerationStuckAge)
 	writeGauge("xianzhi_async_canary_video_points_reserved_unsettled", "Video canary point reservations not yet captured or released.", snapshot.videoPointsUnsettledCount)
 	writeGauge("xianzhi_async_canary_video_points_oldest_unsettled_age_seconds", "Age of the oldest unsettled video canary point reservation.", snapshot.videoPointsUnsettledAge)
+	writeGauge("xianzhi_async_canary_ppt_generation_stuck", "PPT canary generation tasks processing beyond stale threshold.", snapshot.pptGenerationStuckCount)
+	writeGauge("xianzhi_async_canary_ppt_generation_oldest_stuck_age_seconds", "Age of the oldest stuck PPT canary generation task.", snapshot.pptGenerationStuckAge)
+	writeGauge("xianzhi_async_canary_ppt_points_reserved_unsettled", "PPT canary point reservations not yet captured or released.", snapshot.pptPointsUnsettledCount)
+	writeGauge("xianzhi_async_canary_ppt_points_oldest_unsettled_age_seconds", "Age of the oldest unsettled PPT canary point reservation.", snapshot.pptPointsUnsettledAge)
 	writeGauge("xianzhi_async_canary_artifact_stale_claims", "Stale generated-artifact upload claims.", snapshot.artifactStaleClaims)
 	writeMetricFamily(rendered, "xianzhi_async_canary_decisions_total", "Server-side async canary decisions by non-sensitive reason.", "counter", func() {
 		decisions := asyncCanaryDecisionSnapshot()

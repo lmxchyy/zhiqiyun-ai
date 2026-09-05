@@ -134,6 +134,10 @@ type Config struct {
 	VideoAsyncCanaryUsers                  string
 	VideoAsyncCanaryProviderAllowlist      string
 	VideoAsyncCanaryModelAllowlist         string
+	PPTAsyncCanaryEnabled                  bool
+	PPTAsyncCanaryUsers                    string
+	PPTAsyncCanaryProviderAllowlist        string
+	PPTAsyncCanaryModelAllowlist           string
 	ProviderExecutionSafetyEnabled         bool
 }
 
@@ -343,6 +347,10 @@ func Load() Config {
 		VideoAsyncCanaryUsers:                  os.Getenv("VIDEO_ASYNC_CANARY_USERS"),
 		VideoAsyncCanaryProviderAllowlist:      os.Getenv("VIDEO_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
 		VideoAsyncCanaryModelAllowlist:         os.Getenv("VIDEO_ASYNC_CANARY_MODEL_ALLOWLIST"),
+		PPTAsyncCanaryEnabled:                  boolEnv(os.Getenv("PPT_ASYNC_CANARY_ENABLED")),
+		PPTAsyncCanaryUsers:                    os.Getenv("PPT_ASYNC_CANARY_USERS"),
+		PPTAsyncCanaryProviderAllowlist:        os.Getenv("PPT_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
+		PPTAsyncCanaryModelAllowlist:           os.Getenv("PPT_ASYNC_CANARY_MODEL_ALLOWLIST"),
 		ProviderExecutionSafetyEnabled:         boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
 	}
 }

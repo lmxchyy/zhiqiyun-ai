@@ -68,6 +68,13 @@ fi
 #  TestVideoAsyncCanary_DisabledConfigFallsBackSync).
 printf '%s\n' '[production-contract] video async canary env passthrough gates PASS'
 
+# PPT async canary production config contract (Foundation).
+grep_fixed 'PPT_ASYNC_CANARY_ENABLED: "${PPT_ASYNC_CANARY_ENABLED:-false}"' compose.prod.yml
+grep_fixed 'PPT_ASYNC_CANARY_USERS: "${PPT_ASYNC_CANARY_USERS:-}"' compose.prod.yml
+grep_fixed 'PPT_ASYNC_CANARY_PROVIDER_ALLOWLIST: "${PPT_ASYNC_CANARY_PROVIDER_ALLOWLIST:-}"' compose.prod.yml
+grep_fixed 'PPT_ASYNC_CANARY_MODEL_ALLOWLIST: "${PPT_ASYNC_CANARY_MODEL_ALLOWLIST:-}"' compose.prod.yml
+printf '%s\n' '[production-contract] ppt async canary env passthrough gates PASS'
+
 # Offsite backup wiring contract: the uploader derives the object key from the
 # path relative to --root and requires the postgres/ prefix for db_ files, so
 # the wrapper root and the compose mount must agree on the backups parent.

@@ -179,6 +179,9 @@ func inspectTopology(ch *amqp091.Channel) error {
 		{messaging.GenerationVideoCanaryQueue, amqp091.Table{"x-dead-letter-exchange": messaging.ExchangeDLX}},
 		{messaging.GenerationVideoCanaryRetryQueue, amqp091.Table{"x-message-ttl": int32(1000), "x-dead-letter-exchange": messaging.ExchangeEvents, "x-dead-letter-routing-key": messaging.GenerationVideoCanaryRoutingKey}},
 		{messaging.GenerationVideoCanaryDLQ, nil},
+		{messaging.GenerationPPTCanaryQueue, amqp091.Table{"x-dead-letter-exchange": messaging.ExchangeDLX}},
+		{messaging.GenerationPPTCanaryRetryQueue, amqp091.Table{"x-message-ttl": int32(1000), "x-dead-letter-exchange": messaging.ExchangeEvents, "x-dead-letter-routing-key": messaging.GenerationPPTCanaryRoutingKey}},
+		{messaging.GenerationPPTCanaryDLQ, nil},
 	}
 	for _, queue := range queues {
 		if _, err := ch.QueueDeclarePassive(queue.name, true, false, false, false, queue.args); err != nil {
