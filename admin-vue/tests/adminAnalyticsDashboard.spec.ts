@@ -164,6 +164,7 @@ describe("admin analytics dashboard contract", () => {
 
     const text = wrapper.text();
     expect(text).toContain("平台运营驾驶舱");
+    expect(text).toContain("今日经营概览");
     expect(text).toContain("今日新增用户");
     expect(text).toContain("今日活跃用户 (DAU)");
     expect(text).toContain("今日生图与视频生成量");
@@ -178,6 +179,29 @@ describe("admin analytics dashboard contract", () => {
     expect(text).toContain("当前异常风险任务");
     expect(text).toContain("2条");
     expect(text).toContain("任务运行态透视");
+  });
+
+  it("keeps the range switch with detail analysis and updates only range-aware labels and requests", async () => {
+    const wrapper = mount(Dashboard);
+    await flushPromises();
+
+    expect(wrapper.find(".dashboard-header .time-range-segmented").exists()).toBe(false);
+    expect(wrapper.find(".analysis-toolbar .time-range-segmented").exists()).toBe(true);
+    expect(wrapper.text()).toContain("近 7 日趋势分析");
+
+    await wrapper.find(".analysis-toolbar .time-range-segmented button:nth-child(2)").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("近 30 日趋势分析");
+    expect(wrapper.text()).toContain("今日新增用户");
+    expect(wrapper.text()).toContain("今日积分消耗");
+
+    const calledUrls = mockAdminRequest.mock.calls.map((call) => call[0].url);
+    expect(calledUrls.some((url) => url.includes("/admin/analytics/trends?days=30"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/admin/analytics/models?days=30"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/admin/analytics/providers?days=30"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/admin/analytics/points?days=30"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("/admin/analytics/overview?days="))).toBe(false);
   });
 
   it("renders OPERATION_CENTER scope dashboard correctly and hides provider cost / runtime panel", async () => {
