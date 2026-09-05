@@ -46,6 +46,7 @@ const maxReferenceImageUploadBytes = 20 << 20
 type generationCanaryTaskStore interface {
 	CreatePendingGenerationTaskWithCanaryOutbox(createGenerationTaskRequest) (generationTask, error)
 	CreatePendingGenerationTaskWithVideoCanaryOutbox(createGenerationTaskRequest) (generationTask, error)
+	CreatePendingGenerationTaskWithPPTCanaryOutbox(createGenerationTaskRequest, pptapp.GenerateRequest) (generationTask, error)
 }
 
 type platformStore interface {
@@ -995,9 +996,8 @@ func (a api) pptAsyncCanaryDecision(req pptapp.GenerateRequest) (bool, string) {
 		recordAsyncCanaryDecision(canaryReasonRejectedModel)
 		return false, canaryReasonRejectedModel
 	}
-	// PR #1 Foundation: Fail-closed to guarantee zero live traffic enters RabbitMQ until PR #2/#3
-	recordAsyncCanaryDecision(canaryReasonDisabled)
-	return false, canaryReasonDisabled
+	recordAsyncCanaryDecision(canaryReasonSelected)
+	return true, canaryReasonSelected
 }
 
 func (a api) generationAsyncCanaryDecision(req generation.CreateRequest) (bool, string) {

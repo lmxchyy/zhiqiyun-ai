@@ -1360,7 +1360,20 @@ func (s *postgresStore) CreatePendingGenerationTaskWithVideoCanaryOutbox(req cre
 	return s.createPendingGenerationTask(req, messaging.GenerationVideoCanaryRoutingKey)
 }
 
+func (s *postgresStore) CreatePendingGenerationTaskWithPPTCanaryOutbox(req createGenerationTaskRequest, pptReq pptapp.GenerateRequest) (generationTask, error) {
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params["generation_ppt_async_canary"] = true
+	req.Params["generation_async_canary"] = true
+	return s.createPendingGenerationTaskWithPPT(req, &pptReq, messaging.GenerationPPTCanaryRoutingKey)
+}
+
 func (s *postgresStore) createPendingGenerationTask(req createGenerationTaskRequest, eventType string) (generationTask, error) {
+	return s.createPendingGenerationTaskWithPPT(req, nil, eventType)
+}
+
+func (s *postgresStore) createPendingGenerationTaskWithPPT(req createGenerationTaskRequest, pptReq *pptapp.GenerateRequest, eventType string) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
@@ -1478,12 +1491,20 @@ func (s *postgresStore) createPendingGenerationTask(req createGenerationTaskRequ
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
 		return generationTask{}, err
 	}
+	if pptReq != nil {
+		pptTask := pptapp.TaskFromGenerateRequest(task.ID, *pptReq)
+		if err := pptapp.PersistPostgresTaskTx(ctx, tx, pptTask); err != nil {
+			return generationTask{}, fmt.Errorf("persist ppt detail: %w", err)
+		}
+	}
 	if eventType != "" {
 		eventPrefix := "generation.requested:"
 		if strings.Contains(eventType, "image") {
 			eventPrefix = "generation.image.requested:"
 		} else if strings.Contains(eventType, "video") {
 			eventPrefix = "generation.video.requested:"
+		} else if strings.Contains(eventType, "ppt") {
+			eventPrefix = "generation.ppt.requested:"
 		}
 		e := &messaging.Envelope{
 			EventID:       eventPrefix + task.ID,
