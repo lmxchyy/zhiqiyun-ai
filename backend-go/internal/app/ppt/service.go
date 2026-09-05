@@ -91,6 +91,9 @@ type Task struct {
 	Slides                []Slide  `json:"slides,omitempty"`
 	PPTURL                string   `json:"pptUrl"`
 	PDFURL                string   `json:"pdfUrl"`
+	ArtifactStatus        string   `json:"artifactStatus,omitempty"`
+	AssetID               string   `json:"assetId,omitempty"`
+	StorageRef            string   `json:"storageRef,omitempty"`
 	ErrorMessage          string   `json:"errorMessage"`
 	CreatedAt             string   `json:"createdAt,omitempty"`
 	UpdatedAt             string   `json:"updatedAt,omitempty"`
@@ -405,6 +408,45 @@ func (s *Service) SetDeckStatus(userID, taskID, status string) (Task, error) {
 	task.Status = status
 	if status == StatusSuccess {
 		task.Progress = 100
+	}
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[task.TaskID] = task
+	if err := s.saveLocked(); err != nil {
+		s.tasks[task.TaskID] = previous
+		return Task{}, err
+	}
+	return task, nil
+}
+
+// SetDeckArtifactReady checkpoints the durable PPTX artifact reference
+// in xz_ppt_tasks (raw jsonb). Once committed, redelivery skips build/upload.
+func (s *Service) SetDeckArtifactReady(userID, taskID, assetID, storageRef string) (Task, error) {
+	assetID = strings.TrimSpace(assetID)
+	storageRef = strings.TrimSpace(storageRef)
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+			task.ArtifactStatus = "ready"
+			task.AssetID = assetID
+			task.StorageRef = storageRef
+			if strings.TrimSpace(task.PPTURL) == "" {
+				task.PPTURL = storageRef
+			}
+			return nil
+		})
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	previous := task
+	task = cloneTask(task)
+	task.ArtifactStatus = "ready"
+	task.AssetID = assetID
+	task.StorageRef = storageRef
+	if strings.TrimSpace(task.PPTURL) == "" {
+		task.PPTURL = storageRef
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.tasks[task.TaskID] = task

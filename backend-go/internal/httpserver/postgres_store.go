@@ -1635,6 +1635,12 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			}
 		}
 		task.ResultIDs = append(task.ResultIDs, assetID)
+		if isPPTGenerationType(task.Type) && assetID != "" {
+			var pptMediaType string
+			if checkErr := tx.QueryRowContext(ctx, `select media_type from xz_assets where id=$1`, assetID).Scan(&pptMediaType); checkErr == nil && pptMediaType == "ppt" {
+				continue
+			}
+		}
 		item := generatedAssetForRequest(req, userID, task.ID, assetID, i, now)
 		if err := insertAsset(ctx, tx, item); err != nil {
 			return generationTask{}, err
@@ -2078,6 +2084,13 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 			contentType = "video/mp4"
 			source = firstNonEmptyString(providerTaskString(req, "provider"), "video-provider")
 			thumbnailURL = firstNonEmptyString(providerTaskString(req, "thumbnailUrl"), thumbnailURL)
+		}
+	}
+	if isPPTGenerationType(req.Type) {
+		mediaType = "ppt"
+		contentType = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+		if pptURL := firstNonEmptyString(stringValue(req.Params["pptUrl"]), stringValue(req.Params["storageRef"])); pptURL != "" {
+			imageURL = pptURL
 		}
 	}
 	item := asset{
@@ -6234,7 +6247,7 @@ func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (genera
 
 func existingGenerationAssetID(ctx context.Context, tx *sql.Tx, taskID string, index int) (string, error) {
 	var id string
-	err := tx.QueryRowContext(ctx, `select id from xz_assets where task_id=$1 and deleted_at is null and metadata->>'index'=$2 order by created_at asc, id asc limit 1 for update`, taskID, strconv.Itoa(index)).Scan(&id)
+	err := tx.QueryRowContext(ctx, `select id from xz_assets where task_id=$1 and deleted_at is null and (metadata->>'index'=$2 or media_type='ppt') order by created_at asc, id asc limit 1 for update`, taskID, strconv.Itoa(index)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

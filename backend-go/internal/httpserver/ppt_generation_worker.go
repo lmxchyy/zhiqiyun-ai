@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/messaging"
 	pe "xianzhi-ai/backend-go/internal/providerexecution"
+	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
 // maxPPTSlideAttempts bounds total provider-side attempts for one slide
@@ -35,7 +37,12 @@ func RunGenerationPPTCanaryWorker(ctx context.Context, cfg config.Config, db *sq
 		return fmt.Errorf("ASYNC_MESSAGING_ENABLED and PROVIDER_EXECUTION_SAFETY_ENABLED must be true")
 	}
 	store := newPostgresPrimaryStore(db, cfg.DataPath)
-	a := newAPI(store, cfg, nil, nil)
+	var fileRepository storagecenter.Repository = storagecenter.NewMemoryRepository()
+	if db != nil {
+		fileRepository = storagecenter.NewPostgresRepository(db)
+	}
+	fileService := storagecenter.NewService(fileRepository, storagecenter.S3ProviderFactory{AutoCreateBucket: cfg.StorageAutoCreateBucket}, fileCenterOptions(cfg))
+	a := newAPI(store, cfg, nil, fileService)
 	inbox := messaging.NewInboxStore(db)
 	consumer := messaging.NewConsumer(manager,
 		messaging.WithPrefetch(1),
@@ -138,10 +145,9 @@ func isPPTGenerationTask(task generationTask) bool {
 	}
 }
 
-// runPPTGenerationStages executes LOAD → OUTLINE → SLIDE_IMAGES → SETTLE.
-// PR3A does not compile the PPTX asset (PR3B); settlement lands on
-// slides-complete, preserving synchronous deck-success semantics where images
-// are best-effort and only a missing outline fails the deck.
+// runPPTGenerationStages executes LOAD → SHORT-CIRCUIT → OUTLINE → SLIDE_IMAGES → ARTIFACT → SETTLE.
+// PR3B compiles the durable PPTX asset before settlement/Capture, ensuring
+// the artifact is durable and verified before points are captured.
 func (a api) runPPTGenerationStages(taskID string, parent generationTask) error {
 	ctx, cancel := context.WithTimeout(context.Background(), pptGenerationTimeout)
 	a.registerGenerationTaskCancel(taskID, cancel)
@@ -154,10 +160,27 @@ func (a api) runPPTGenerationStages(taskID string, parent generationTask) error 
 	}
 	userID := strings.TrimSpace(parent.UserID)
 
+	// PR3B Existing Artifact Recovery Short-Circuit:
+	// If a valid durable PPTX artifact already exists and is verified readable:
+	// skip outline, visual plan, slide images, buildPPTX and upload,
+	// and directly enter settlement recovery.
+	if ready, existingAsset, checkErr := a.checkExistingDurablePPTArtifact(ctx, userID, taskID); checkErr == nil && ready {
+		generationCanaryMetrics.pptStageRecoveries.Add(1)
+		_ = a.ensurePPTArtifactCheckpointed(userID, taskID, existingAsset.ID, existingAsset.URL)
+		parent, err := a.loadPPTParentTask(taskID)
+		if err != nil {
+			return a.failPPTCanaryTask(userID, taskID, err)
+		}
+		return a.settlePPTCanarySuccess(userID, taskID, parent)
+	}
+
 	if err := a.runPPTOutlineStage(ctx, userID, taskID); err != nil {
 		return a.failPPTCanaryTask(userID, taskID, err)
 	}
 	if err := a.runPPTSlidePoolStage(ctx, userID, taskID); err != nil {
+		return a.failPPTCanaryTask(userID, taskID, err)
+	}
+	if err := a.runPPTArtifactStage(ctx, userID, taskID, parent); err != nil {
 		return a.failPPTCanaryTask(userID, taskID, err)
 	}
 	// Reload the parent for settlement so prepared material reflects the
@@ -481,6 +504,15 @@ func (a api) settlePPTCanarySuccess(userID, taskID string, parent generationTask
 		UserID: userID, Type: parent.Type, Prompt: parent.Prompt, Model: parent.Model,
 		Params: cloneAnyMap(parent.Params),
 	}
+	if prepared.Params == nil {
+		prepared.Params = map[string]any{}
+	}
+	if detail.StorageRef != "" {
+		prepared.Params["storageRef"] = detail.StorageRef
+		prepared.Params["pptUrl"] = detail.StorageRef
+	} else if detail.PPTURL != "" {
+		prepared.Params["pptUrl"] = detail.PPTURL
+	}
 	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
 		return err
 	}
@@ -494,14 +526,207 @@ func (a api) settlePPTCanarySuccess(userID, taskID string, parent generationTask
 func (a api) loadPPTParentTask(taskID string) (generationTask, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tx, err := a.pgDB().BeginTx(ctx, nil)
+	if db := a.pgDB(); db != nil {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return generationTask{}, err
+		}
+		defer tx.Rollback()
+		task, err := generationTaskForUpdate(ctx, tx, taskID)
+		if err != nil {
+			return generationTask{}, err
+		}
+		return task, tx.Commit()
+	}
+	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
 		return generationTask{}, err
 	}
-	defer tx.Rollback()
-	task, err := generationTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return generationTask{}, err
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return task, nil
+		}
 	}
-	return task, tx.Commit()
+	return generationTask{}, fmt.Errorf("generation task %s not found", taskID)
+}
+
+// runPPTArtifactStage compiles and stores the durable PPTX artifact before settlement.
+// Artifact durable BEFORE Capture invariant guarantees that users are never billed
+// if the artifact build or storage upload fails.
+func (a api) runPPTArtifactStage(ctx context.Context, userID, taskID string, parent generationTask) error {
+	if ready, _, err := a.checkExistingDurablePPTArtifact(ctx, userID, taskID); err == nil && ready {
+		generationCanaryMetrics.pptStageRecoveries.Add(1)
+		return nil
+	}
+	detail, err := a.pptService.GetTask(userID, taskID)
+	if err != nil {
+		return fmt.Errorf("get ppt task for artifact: %w", err)
+	}
+	materialized := a.materializePPTTaskVisualURLs(ctx, adminUser{ID: userID}, detail)
+	payload, err := buildPPTX(materialized)
+	if err != nil {
+		return fmt.Errorf("build pptx artifact: %w", err)
+	}
+	if a.fileService == nil {
+		return fmt.Errorf("file storage service is required for durable pptx artifact")
+	}
+	tenantID := firstNonEmptyString(stringValue(parent.Params["tenant_id"]), "tenant_default")
+	available, err := a.fileService.StorageAvailable(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("check ppt storage available: %w", err)
+	}
+	if !available {
+		return fmt.Errorf("storage is not available for tenant %s", tenantID)
+	}
+	fileName := fmt.Sprintf("%s.pptx", taskID)
+	file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
+		TenantID:     tenantID,
+		UserID:       userID,
+		FileName:     fileName,
+		FileSize:     int64(len(payload)),
+		MIMEType:     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		BusinessType: "generation_result",
+		BusinessID:   taskID,
+		Visibility:   "PRIVATE",
+	}, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("store pptx artifact: %w", err)
+	}
+	storageRef := pptStorageReference(file)
+	assetItem, err := a.ensureDurablePPTAsset(ctx, taskID, userID, tenantID, stringValue(parent.Params["organization_id"]), detail.Title, file, storageRef)
+	if err != nil {
+		return fmt.Errorf("ensure durable ppt asset: %w", err)
+	}
+	if _, err := a.pptService.SetDeckArtifactReady(userID, taskID, assetItem.ID, storageRef); err != nil {
+		return fmt.Errorf("checkpoint ppt artifact: %w", err)
+	}
+	return nil
+}
+
+// checkExistingDurablePPTArtifact checks if a valid durable PPTX asset already
+// exists and is verified readable in object storage.
+func (a api) checkExistingDurablePPTArtifact(ctx context.Context, userID, taskID string) (bool, asset, error) {
+	existingAsset, found, err := a.findDurablePPTAsset(ctx, taskID)
+	if err != nil || !found {
+		return false, asset{}, err
+	}
+	if userID != "" && existingAsset.UserID != "" && existingAsset.UserID != userID {
+		return false, asset{}, fmt.Errorf("ppt asset user mismatch: want %s got %s", userID, existingAsset.UserID)
+	}
+	if a.fileService != nil {
+		storageRef := firstNonEmptyString(existingAsset.URL, stringValue(existingAsset.Metadata["storageRef"]))
+		tenantID, fileID, ok := parsePPTStorageReference(storageRef)
+		if !ok {
+			tenantID = firstNonEmptyString(stringValue(existingAsset.Metadata["storageTenantId"]), stringValue(existingAsset.Metadata["tenantId"]), "tenant_default")
+			fileID = firstNonEmptyString(stringValue(existingAsset.Metadata["storageFileId"]), stringValue(existingAsset.Metadata["fileId"]))
+		}
+		if fileID == "" {
+			return false, asset{}, fmt.Errorf("ppt asset missing storage file reference")
+		}
+		access := storagecenter.AccessContext{
+			TenantID: tenantID,
+			UserID:   existingAsset.UserID,
+			IsAdmin:  true,
+		}
+		_, reader, openErr := a.fileService.OpenObject(ctx, access, fileID)
+		if openErr != nil {
+			return false, asset{}, fmt.Errorf("ppt durable artifact unreadable: %w", openErr)
+		}
+		_ = reader.Close()
+	}
+	return true, existingAsset, nil
+}
+
+// findDurablePPTAsset looks up an active PPT asset in xz_assets for taskID.
+func (a api) findDurablePPTAsset(ctx context.Context, taskID string) (asset, bool, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return asset{}, false, nil
+	}
+	if db := a.pgDB(); db != nil {
+		var existing asset
+		var metadataRaw []byte
+		err := db.QueryRowContext(ctx, `
+			SELECT id, user_id, coalesce(tenant_id,''), coalesce(organization_id,''), task_id, name, media_type, url,
+			       coalesce(thumbnail_url,''), favorite, metadata, coalesce(deleted_at::text,''), created_at::text, updated_at::text
+			FROM xz_assets
+			WHERE task_id = $1 AND media_type = 'ppt' AND deleted_at IS NULL
+			ORDER BY created_at DESC LIMIT 1
+		`, taskID).Scan(&existing.ID, &existing.UserID, &existing.TenantID, &existing.OrganizationID, &existing.TaskID,
+			&existing.Name, &existing.MediaType, &existing.URL, &existing.ThumbnailURL, &existing.Favorite, &metadataRaw,
+			&existing.DeletedAt, &existing.CreatedAt, &existing.UpdatedAt)
+		if err == nil {
+			_ = json.Unmarshal(metadataRaw, &existing.Metadata)
+			return existing, true, nil
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			return asset{}, false, nil
+		}
+		return asset{}, false, err
+	}
+	assets, err := a.store.ListAssets()
+	if err != nil {
+		return asset{}, false, err
+	}
+	for _, it := range assets {
+		if it.TaskID == taskID && it.MediaType == "ppt" && it.DeletedAt == "" {
+			return it, true, nil
+		}
+	}
+	return asset{}, false, nil
+}
+
+// ensureDurablePPTAsset inserts or reuses a single logical PPT asset in xz_assets.
+// Deterministic assetID (asset_ppt_<taskID>) and ON CONFLICT update ensure
+// crash redeliveries never create duplicate asset rows.
+func (a api) ensureDurablePPTAsset(ctx context.Context, taskID, userID, tenantID, organizationID, title string, file storagecenter.FileObject, storageRef string) (asset, error) {
+	if existing, found, err := a.findDurablePPTAsset(ctx, taskID); err == nil && found {
+		return existing, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	assetID := fmt.Sprintf("asset_ppt_%s", taskID)
+	name := pptxDownloadFileName(pptapp.Task{Title: title})
+	item := asset{
+		ID:             assetID,
+		UserID:         userID,
+		TenantID:       tenantID,
+		OrganizationID: organizationID,
+		TaskID:         taskID,
+		Name:           name,
+		MediaType:      "ppt",
+		URL:            storageRef,
+		Favorite:       false,
+		Metadata: map[string]any{
+			"index":            "1",
+			"fileId":           file.FileID,
+			"storageFileId":    file.FileID,
+			"storageTenantId":  file.TenantID,
+			"storageProvider":  file.Provider,
+			"storageBucket":    file.Bucket,
+			"storageObjectKey": file.ObjectKey,
+			"fileSize":         file.FileSize,
+			"fileSizeBytes":    file.FileSize,
+			"contentType":      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+			"source":           "ppt_async",
+			"type":             "PPT_GENERATION",
+			"storageManaged":   true,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	return a.store.SaveUploadedAsset(item)
+}
+
+// ensurePPTArtifactCheckpointed writes the PPTX checkpoint to xz_ppt_tasks
+// if not already present.
+func (a api) ensurePPTArtifactCheckpointed(userID, taskID, assetID, storageRef string) error {
+	detail, err := a.pptService.GetTask(userID, taskID)
+	if err != nil {
+		return err
+	}
+	if detail.ArtifactStatus == "ready" && detail.AssetID != "" && detail.StorageRef != "" {
+		return nil
+	}
+	_, err = a.pptService.SetDeckArtifactReady(userID, taskID, assetID, storageRef)
+	return err
 }
