@@ -272,7 +272,7 @@ func TestPPTCanary_AtomicCreationSuccess(t *testing.T) {
 	}
 	defer func() {
 		_, _ = db.ExecContext(ctx, "DELETE FROM outbox_events WHERE aggregate_id=$1", task.ID)
-		_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1", task.ID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2", task.ID, testUser)
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_ppt_tasks WHERE task_id=$1", task.ID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE id=$1", task.ID)
 	}()
@@ -295,7 +295,7 @@ func TestPPTCanary_AtomicCreationSuccess(t *testing.T) {
 
 	// 3. reserve = exactly once
 	var reserveCount int
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1 AND status='RESERVED'`, task.ID).Scan(&reserveCount); err != nil || reserveCount != 1 {
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2 AND status='RESERVED'`, task.ID, testUser).Scan(&reserveCount); err != nil || reserveCount != 1 {
 		t.Fatalf("expected exactly 1 active point reservation, got %d (err: %v)", reserveCount, err)
 	}
 
@@ -488,7 +488,7 @@ func TestPPTCanary_SameClientRequestIDReplay(t *testing.T) {
 	}
 	defer func() {
 		_, _ = db.ExecContext(ctx, "DELETE FROM outbox_events WHERE aggregate_id=$1", task1.ID)
-		_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1", task1.ID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2", task1.ID, testUser)
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_ppt_tasks WHERE task_id=$1", task1.ID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE id=$1", task1.ID)
 	}()
@@ -514,7 +514,7 @@ func TestPPTCanary_SameClientRequestIDReplay(t *testing.T) {
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_generation_tasks WHERE client_request_id=$1`, clientReqID).Scan(&genCount)
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_ppt_tasks WHERE client_request_id=$1`, clientReqID).Scan(&pptCount)
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1`, task1.ID).Scan(&outboxCount)
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1`, task1.ID).Scan(&reserveCount)
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2`, task1.ID, testUser).Scan(&reserveCount)
 
 	if genCount != 1 || pptCount != 1 || outboxCount != 1 || reserveCount != 1 {
 		t.Fatalf("replay created duplicate entries: gen=%d ppt=%d outbox=%d reserve=%d rows=%s", genCount, pptCount, outboxCount, reserveCount, dumpPPTReservationsForDebug(t, db, ctx, testUser))
@@ -585,7 +585,7 @@ func TestPPTCanary_ConcurrentDuplicateClientRequestID(t *testing.T) {
 	defer func() {
 		if firstSuccessID != "" {
 			_, _ = db.ExecContext(ctx, "DELETE FROM outbox_events WHERE aggregate_id=$1", firstSuccessID)
-			_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1", firstSuccessID)
+			_, _ = db.ExecContext(ctx, "DELETE FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2", firstSuccessID, testUser)
 			_, _ = db.ExecContext(ctx, "DELETE FROM xz_ppt_tasks WHERE task_id=$1", firstSuccessID)
 			_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE id=$1", firstSuccessID)
 		}
@@ -600,7 +600,7 @@ func TestPPTCanary_ConcurrentDuplicateClientRequestID(t *testing.T) {
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_generation_tasks WHERE client_request_id=$1`, clientReqID).Scan(&genCount)
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_ppt_tasks WHERE client_request_id=$1`, clientReqID).Scan(&pptCount)
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id=$1`, firstSuccessID).Scan(&outboxCount)
-	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1`, firstSuccessID).Scan(&reserveCount)
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE business_id=$1 AND user_id=$2`, firstSuccessID, testUser).Scan(&reserveCount)
 
 	if genCount != 1 || pptCount != 1 || outboxCount != 1 || reserveCount != 1 {
 		t.Fatalf("concurrent calls created duplicate entities: gen=%d ppt=%d outbox=%d reserve=%d rows=%s", genCount, pptCount, outboxCount, reserveCount, dumpPPTReservationsForDebug(t, db, ctx, testUser))
