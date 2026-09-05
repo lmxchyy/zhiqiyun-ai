@@ -144,7 +144,7 @@ func (a api) executePPTChatCall(ctx context.Context, store *pe.Store, execRow pe
 			// redelivery re-runs under the same row; signal retryable.
 			return nil, pptChatStageExecuted, err
 		}
-		if transitionErr := store.Transition(ctx, execRow.ID, pe.Failed, nil, strPtr(string(pe.DefinitiveNotSubmitted)), strPtr(err.Error())); transitionErr != nil {
+		if transitionErr := store.Transition(ctx, execRow.ID, pe.Failed, nil, pptStrPtr(string(pe.DefinitiveNotSubmitted)), pptStrPtr(err.Error())); transitionErr != nil {
 			return nil, pptChatStageExecuted, transitionErr
 		}
 		return nil, pptChatStageExecuted, fmt.Errorf("ppt chat stage terminal failure: %w", err)
@@ -222,6 +222,10 @@ func pptOutlineRequestFromDetail(detail pptapp.Task) pptOutlineGenerateRequest {
 
 // pptOutlineSemanticParams returns the fingerprinted semantic subset for the
 // outline stage of a deck.
+// pptStrPtr is a production helper (strPtr lives only in _test files and is
+// invisible to go build).
+func pptStrPtr(value string) *string { return &value }
+
 func pptOutlineSemanticParams(req pptOutlineGenerateRequest) map[string]any {
 	return map[string]any{
 		"prompt":      strings.TrimSpace(req.Prompt),
