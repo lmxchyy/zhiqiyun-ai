@@ -26,6 +26,7 @@ COPY backend-go ./
 RUN go build -o /out/xianzhi-api ./cmd/api
 RUN go build -o /out/smartvideo-worker ./cmd/smartvideo-worker
 RUN go build -o /out/generation-worker ./cmd/generation-worker
+RUN go build -o /out/video-backfill ./cmd/video-backfill
 
 FROM alpine:3.20
 WORKDIR /app
@@ -50,7 +51,7 @@ RUN if [ -n "$ALPINE_MIRROR" ]; then \
   && if [ "$INSTALL_OFFICECLI" = "true" ]; then \
     if [ -z "$OFFICECLI_INSTALL_SHA256" ]; then echo "INSTALL_OFFICECLI=true requires OFFICECLI_INSTALL_SHA256"; exit 1; fi \
     && curl -fsSL "$OFFICECLI_INSTALL_URL" -o /tmp/officecli-install.sh \
-    && echo "$OFFICECLI_INSTALL_SHA256  /tmp/officecli-install.sh" | sha256sum -c - \
+    && echo "$OFFICECLI_INSTALL_SHA256  /tmp/officecli-install.sh" | sha256sum -c -
     && bash /tmp/officecli-install.sh \
     && cp /root/.local/bin/officecli /usr/local/bin/officecli \
     && chmod +x /usr/local/bin/officecli \
@@ -59,6 +60,7 @@ RUN if [ -n "$ALPINE_MIRROR" ]; then \
     echo "Skipping OfficeCLI install"; \
   fi
 COPY --from=api-build /out/xianzhi-api /app/xianzhi-api
+COPY --from=api-build /out/video-backfill /app/video-backfill
 COPY --from=api-build /out/smartvideo-worker /app/smartvideo-worker
 COPY --from=api-build /out/generation-worker /app/generation-worker
 COPY --from=admin-build /src/admin-vue/dist /app/admin-vue/dist
