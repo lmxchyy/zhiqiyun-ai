@@ -651,6 +651,7 @@ type adminAIModel struct {
 	ModelVersion             string   `json:"model_version,omitempty"`
 
 	VideoCapabilities *videoCaps `json:"video_capabilities,omitempty"`
+	ImageCapabilities *imageCaps `json:"image_capabilities,omitempty"`
 }
 
 type adminVideoModelCapabilities struct {

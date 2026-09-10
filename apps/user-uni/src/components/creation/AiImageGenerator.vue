@@ -271,7 +271,7 @@ const props = withDefaults(defineProps<{
   retryAvailable?: boolean;
   estimateLabel: string;
 }>(), {
-  referenceLimit: 3,
+  referenceLimit: 16,
   busy: false,
   selectingReference: false,
   modelsLoading: false,

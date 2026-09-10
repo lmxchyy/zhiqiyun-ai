@@ -78,6 +78,11 @@ type generationQuoteResponse struct {
 	Quantity             float64        `json:"quantity"`
 	Breakdown            map[string]any `json:"breakdown"`
 	NormalizedParameters map[string]any `json:"normalizedParameters"`
+	Pricing              map[string]any `json:"pricing,omitempty"`
+	CurrentPoints        int            `json:"currentPoints,omitempty"`
+	Sufficient           *bool          `json:"sufficient,omitempty"`
+	Shortfall            int            `json:"shortfall,omitempty"`
+	Code                 string         `json:"code,omitempty"`
 }
 
 func (a api) prepareGenerationQuote(data adminPlatformData, user adminUser, req generation.CreateRequest) (generation.CreateRequest, pricingdomain.Quote, error) {
@@ -137,12 +142,27 @@ func (a api) quoteGenerationCost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	currentPoints := pointsAvailableForAdminUser(data, user.ID)
+	sufficient := currentPoints >= quote.RequiredPoints
+	shortfall := 0
+	if !sufficient {
+		shortfall = quote.RequiredPoints - currentPoints
+	}
+	code := ""
+	if !sufficient {
+		code = "INSUFFICIENT_POINTS"
+	}
 	writeJSON(w, generationQuoteResponse{
 		Model: prepared.Model, BusinessType: canonicalModuleCode(requestModuleCode(prepared)),
 		RequiredPoints: quote.RequiredPoints, PricingRuleID: quote.PricingRuleID,
 		PricingRuleVersion: quote.PricingRuleVersion, BillingUnit: quote.BillingUnit,
 		Quantity: quote.Quantity, Breakdown: quote.Breakdown,
 		NormalizedParameters: quote.NormalizedParameters,
+		Pricing:              imageQuotePricingMap(quote.Breakdown, quote.Quantity),
+		CurrentPoints:        currentPoints,
+		Sufficient:           &sufficient,
+		Shortfall:            shortfall,
+		Code:                 code,
 	})
 }
 

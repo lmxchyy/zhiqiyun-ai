@@ -60,6 +60,7 @@ func normalizeAICapabilityDefaults(data adminPlatformData) adminPlatformData {
 	}
 	data = mergeDefaultVideoBoundModels(data)
 	data = normalizeVideoModelCapabilityData(data)
+	data = normalizeImageModelCapabilityData(data)
 	if len(data.AIParameterSchemas) == 0 {
 		data.AIParameterSchemas = defaultAIParameterSchemas(now)
 	} else {
@@ -1044,6 +1045,11 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 			return req, err
 		}
 	}
+	if moduleCode == moduleImageGeneration {
+		if err := validateImageReferenceCapabilities(&req, resolved); err != nil {
+			return req, err
+		}
+	}
 	removeLegacyGenerationMetadata(&req, resolved)
 	normalizeGenerationQualityForLimit(&req, resolved)
 	stripUnsupportedGPTImageParams(&req, resolved)
@@ -1320,6 +1326,8 @@ func moduleSchemaResponse(resolved resolvedModuleSchema, user adminUser) map[str
 		"module":             resolved.Module,
 		"model":              resolved.Model,
 		"video_capabilities": resolved.Model.VideoCapabilities,
+		"image_capabilities": resolved.Model.ImageCapabilities,
+		"imageCapabilities":  resolved.Model.ImageCapabilities,
 		"billing_rule":       resolved.BillingRule,
 		"context": map[string]any{
 			"user_id": user.ID, "tenant_id": effectiveTenantID(user), "agent_id": user.ReferredBy, "package_id": user.PlanID,
@@ -1334,6 +1342,8 @@ func publicModuleSchemaResponse(resolved resolvedModuleSchema) map[string]any {
 		"schema":             resolved.FinalSchema,
 		"fields":             resolved.FinalSchema.Fields,
 		"video_capabilities": resolved.Model.VideoCapabilities,
+		"image_capabilities": resolved.Model.ImageCapabilities,
+		"imageCapabilities":  resolved.Model.ImageCapabilities,
 	}
 }
 
@@ -2288,7 +2298,7 @@ func allowedGenerationInternalParam(key string) bool {
 		"ai_generated", "ai_label_status", "ai_label_text", "generated_at", "download_derivative_required",
 		"modelRouteId", "modelGroup", "modelApiKeyId", "billing_type", "tenant_id", "organization_id", "billing_scope", "billing_account_id", "authorized_role", "billing_ledger_id", "billing_reserved", "agent_id", "package_id", "operation_center_id",
 		"final_schema_snapshot", "limit_snapshot", "pricing_rule_id", "pricing_rule_version", "pricing_billing_unit", "pricing_quantity", "pricing_breakdown", "pricing_normalized_parameters", "sourceModule", "apiMode", "taskSnapshot", "referenceImages", "sourceReferenceAssetId", "sourceReferenceTaskId",
-		"referenceImageCount", "referenceImageNames", "referenceImageOrder", "inputImageIds", "inputImagesSnapshot",
+		"referenceImageCount", "reference_image_count", "referenceImageNames", "referenceImageOrder", "inputImageIds", "inputImagesSnapshot",
 		"maskDraft", "maskTargetImageId", "maskImageId", "imageQuality", "imageRatio", "output_format", "outputFormat",
 		"output_compression", "outputCompression", "transparent_output", "transparentOutput", "moderation", "ratio",
 		"resolution", "width", "height", "inputMode", "hasInputImage", "hasInputVideo", "userPrompt", "effectivePrompt", "promptForApi",
