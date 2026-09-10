@@ -51,7 +51,7 @@ RUN if [ -n "$ALPINE_MIRROR" ]; then \
   && if [ "$INSTALL_OFFICECLI" = "true" ]; then \
     if [ -z "$OFFICECLI_INSTALL_SHA256" ]; then echo "INSTALL_OFFICECLI=true requires OFFICECLI_INSTALL_SHA256"; exit 1; fi \
     && curl -fsSL "$OFFICECLI_INSTALL_URL" -o /tmp/officecli-install.sh \
-    && echo "$OFFICECLI_INSTALL_SHA256  /tmp/officecli-install.sh" | sha256sum -c -
+    && echo "$OFFICECLI_INSTALL_SHA256  /tmp/officecli-install.sh" | sha256sum -c - \
     && bash /tmp/officecli-install.sh \
     && cp /root/.local/bin/officecli /usr/local/bin/officecli \
     && chmod +x /usr/local/bin/officecli \
