@@ -81,6 +81,10 @@ export interface AssetItem {
   pointCost?: number;
   generationDurationMs?: number;
   usageCount?: number;
+  availability?: "AVAILABLE" | "PROVIDER_TEMP_URL" | "PERSISTING" | "EXPIRED" | "MISSING" | string;
+  availabilityReason?: string;
+  videoStatus?: string;
+  message?: string;
   metadata: Record<string, unknown>;
 }
 

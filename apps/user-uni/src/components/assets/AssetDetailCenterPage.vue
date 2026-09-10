@@ -26,12 +26,24 @@
         <AiGeneratedContentNotice />
         <view class="preview-card">
           <video
-            v-if="asset.type === 'video' && asset.remoteUrl"
+            v-if="asset.type === 'video' && asset.remoteUrl && !videoPlaybackError && !isVideoExpired"
             class="video-preview"
             :src="asset.remoteUrl"
             controls
             :autoplay="autoplay"
+            @error="handleVideoError"
           />
+
+          <view v-else-if="asset.type === 'video'" class="video-error-container">
+            <view class="preview-error video-error">
+              <text class="preview-error-symbol">!</text>
+              <text class="preview-error-title">{{ videoErrorTitle }}</text>
+              <text class="preview-error-copy">{{ videoErrorCopy }}</text>
+              <button :disabled="Boolean(activeAction)" @click.stop="regenerate">
+                {{ activeAction === "regenerate" ? "正在打开" : "使用原参数重新生成" }}
+              </button>
+            </view>
+          </view>
 
           <view v-else-if="asset.type === 'prompt'" class="prompt-preview">
             <text class="preview-kicker">提示词资产</text>
@@ -214,11 +226,31 @@ const parametersExpanded = ref(false);
 const assetInfoExpanded = ref(false);
 const moreVisible = ref(false);
 const activeAction = ref<DetailAction>("");
+const videoPlaybackError = ref(false);
 const { navigationStyle } = useMiniProgramNavigation();
 let previewLoadingTimer: ReturnType<typeof setTimeout> | null = null;
 
 const autoplay = computed(() => props.autoplay);
 const asset = computed(() => store.currentAsset);
+const isVideoExpired = computed(() => {
+  if (asset.value?.type !== "video") return false;
+  const avail = String(asset.value?.availability || asset.value?.metadata?.availability || "").toUpperCase();
+  const vStatus = String(asset.value?.videoStatus || asset.value?.metadata?.videoStatus || "").toUpperCase();
+  return avail === "EXPIRED" || vStatus === "EXPIRED" || (!asset.value?.remoteUrl && (avail === "MISSING" || !avail));
+});
+const videoErrorTitle = computed(() => {
+  if (isVideoExpired.value) return "视频源已失效";
+  return "视频加载失败";
+});
+const videoErrorCopy = computed(() => {
+  if (asset.value?.availabilityReason) return asset.value.availabilityReason;
+  if (isVideoExpired.value) return "该视频为早期临时资源，已超过云端保留期限。建议重新生成。";
+  return "视频网络请求或解码失败，链接可能已过期。建议重新生成。";
+});
+
+function handleVideoError() {
+  videoPlaybackError.value = true;
+}
 const isImagePreview = computed(() => asset.value?.type === "image" || asset.value?.type === "infographic");
 const previewSource = computed(() => asset.value?.thumbnailUrl || asset.value?.remoteUrl || "");
 const typeLabel = computed(() => ({
@@ -416,6 +448,10 @@ function preview() {
 
 async function download() {
   if (!asset.value || activeAction.value) return;
+  if (isVideoExpired.value || (asset.value.type === "video" && videoPlaybackError.value)) {
+    uni.showToast({ title: "视频源已失效无法下载，请重新生成", icon: "none" });
+    return;
+  }
   activeAction.value = "download";
   try {
     await downloadAssetFile(asset.value);
@@ -729,6 +765,8 @@ onShareAppMessage(() => ({
 .preview-error-copy { max-width: 240px; margin-top: 6px; color: #858da1; font-size: 12px; line-height: 18px; }
 .preview-error button { width: auto; height: 36px; margin-top: 15px; padding: 0 16px; border-radius: 12px; color: #fff; background: #5b6ee1; font-size: 12px; }
 .video-preview { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 16px; background: #10131d; }
+.video-error-container { width: 100%; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; border-radius: 16px; overflow: hidden; background: #f1f3f8; }
+.video-error { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 .document-preview { position: relative; width: 100%; min-height: 250px; padding: 8px; box-sizing: border-box; overflow: hidden; border-radius: 16px; background: #eef1f6; }
 .document-preview :deep(.asset-cover-shell) { height: 230px; }
 .prompt-preview,.entity-preview { display: flex; min-height: 250px; padding: 24px; box-sizing: border-box; flex-direction: column; align-items: flex-start; justify-content: center; border-radius: 16px; background: #f1f2ff; }

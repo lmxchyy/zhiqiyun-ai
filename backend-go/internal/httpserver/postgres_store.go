@@ -2141,6 +2141,14 @@ func generatedAssetForRequest(req createGenerationTaskRequest, userID string, ta
 				delete(item.Metadata, "thumbnailUrl")
 			}
 		}
+		if item.Metadata["fileId"] != "" && isVideoGenerationType(req.Type) {
+			item.Metadata["storageKey"] = stringValue(stored["objectKey"])
+			item.URL = "storage://" + stringValue(item.Metadata["fileId"])
+			if coverFileID := stringValue(stored["coverFileId"]); coverFileID != "" {
+				item.Metadata["coverFileId"] = coverFileID
+				item.ThumbnailURL = "storage://" + coverFileID
+			}
+		}
 		if storedContentType := stringValue(stored["contentType"]); storedContentType != "" {
 			item.Metadata["contentType"] = storedContentType
 		}

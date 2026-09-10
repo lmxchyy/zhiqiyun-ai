@@ -472,6 +472,9 @@ func (a api) assetsForUserWorkspaceList(r *http.Request, userID string, limit in
 	if err != nil {
 		return nil, err
 	}
+	for index := range assets {
+		assets[index] = enrichAssetAvailability(assets[index])
+	}
 	return a.attachWorkspaceListThumbnailTickets(r, userID, prepareWorkspaceListAssets(assets)), nil
 }
 
@@ -1247,6 +1250,13 @@ func (a api) recoverSucceededGenerationTask(task generationTask, execution provi
 	}
 	req.VideoTask = result
 	req.Params["providerTask"] = result
+	if a.cfg.VideoStoragePersistenceEnabled {
+		var persistErr error
+		req, _, persistErr = a.persistGeneratedVideos(context.Background(), task.ID, req)
+		if persistErr != nil {
+			return persistErr
+		}
+	}
 	if _, err := a.store.CompleteGenerationTask(task.ID, req); err != nil {
 		return err
 	}
@@ -1410,11 +1420,25 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		prepared.Params["provider"] = provider
 		prepared.Params["provider_channel"] = provider
 	}
+	var storedFiles []storagecenter.FileObject
+	if a.cfg.VideoStoragePersistenceEnabled {
+		var persistErr error
+		prepared, storedFiles, persistErr = a.persistGeneratedVideos(ctx, taskID, prepared)
+		if persistErr != nil {
+			log.Printf("video persistence failed task_id=%s error=%v", taskID, persistErr)
+			_, _ = a.store.FailGenerationTask(taskID, "视频资产归档失败，已取消并退回积分")
+			return persistErr
+		}
+	}
 	// Completion is the billing settlement boundary. If it fails, the
 	// provider result may already be durable and the task must remain
 	// recoverable; failing here would incorrectly release the reservation.
-	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
+	if err != nil {
 		return err
+	}
+	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
+		a.cleanupGeneratedFiles(storedFiles)
 	}
 	return nil
 }
@@ -2532,8 +2556,8 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 			a.writeGeneratedMediaDownload(w, r.Context(), item.URL, filename)
 			return
 		}
-		if strings.TrimSpace(item.URL) == "" {
-			writeError(w, http.StatusNotFound, errAssetNotFound)
+		if strings.TrimSpace(item.URL) == "" || item.Availability == AssetAvailabilityExpired || stringValue(item.Metadata["availability"]) == AssetAvailabilityExpired {
+			writeError(w, http.StatusGone, errors.New("视频源已失效，无法下载，请重新生成"))
 			return
 		}
 		a.writeNormalizedVideoDownload(w, r, item.URL, filename)
@@ -2779,10 +2803,15 @@ func validateRemoteDownloadURL(rawURL string) (*url.URL, error) {
 	return parsed, nil
 }
 
+var remoteDownloadAllowLoopbackForTesting bool
+
 func validateRemoteDownloadHost(host string) error {
 	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "" {
 		return errors.New("remote download host is required")
+	}
+	if remoteDownloadAllowLoopbackForTesting && (host == "127.0.0.1" || host == "localhost") {
+		return nil
 	}
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return errors.New("remote download host is not public")
@@ -2807,7 +2836,7 @@ func remoteDownloadHTTPClient() *http.Client {
 			return nil, err
 		}
 		for _, item := range ips {
-			if !isPublicRemoteDownloadIP(item.IP) {
+			if !remoteDownloadAllowLoopbackForTesting && !isPublicRemoteDownloadIP(item.IP) {
 				return nil, fmt.Errorf("remote download host resolves to non-public address: %s", host)
 			}
 		}
@@ -4996,7 +5025,122 @@ func secureAssetsForClient(items []asset) []asset {
 	return secured
 }
 
+const (
+	AssetAvailabilityAvailable       = "AVAILABLE"
+	AssetAvailabilityProviderTempURL = "PROVIDER_TEMP_URL"
+	AssetAvailabilityPersisting      = "PERSISTING"
+	AssetAvailabilityExpired         = "EXPIRED"
+	AssetAvailabilityMissing         = "MISSING"
+)
+
+func enrichAssetAvailability(item asset) asset {
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	isManaged := stringValue(item.Metadata["fileId"]) != "" ||
+		stringValue(item.Metadata["storageFileId"]) != "" ||
+		boolValue(item.Metadata["storageManaged"]) ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.URL)), "storage://")
+
+	if isManaged {
+		item.Availability = AssetAvailabilityAvailable
+		item.VideoStatus = AssetAvailabilityAvailable
+		item.Metadata["availability"] = AssetAvailabilityAvailable
+		item.Metadata["videoStatus"] = AssetAvailabilityAvailable
+		return item
+	}
+
+	if strings.EqualFold(item.MediaType, "video") {
+		// 显式已标记 EXPIRED 或 PERSISTING
+		if explicit := strings.ToUpper(strings.TrimSpace(stringValue(item.Metadata["availability"]))); explicit != "" {
+			item.Availability = explicit
+			item.VideoStatus = explicit
+			if explicit == AssetAvailabilityExpired {
+				item.AvailabilityReason = "视频源已失效，请重新生成"
+				item.Message = "视频源已失效，请重新生成"
+				item.Metadata["availabilityReason"] = item.AvailabilityReason
+				item.Metadata["message"] = item.Message
+				if item.URL != "" {
+					item.Metadata["expiredSourceUrl"] = item.URL
+					item.URL = ""
+				}
+			}
+			return item
+		}
+
+		rawURL := strings.TrimSpace(item.URL)
+		if rawURL == "" {
+			item.Availability = AssetAvailabilityMissing
+			item.AvailabilityReason = "视频媒体资源不存在"
+			item.VideoStatus = AssetAvailabilityMissing
+			item.Message = "视频媒体资源不存在"
+			item.Metadata["availability"] = item.Availability
+			item.Metadata["availabilityReason"] = item.AvailabilityReason
+			item.Metadata["videoStatus"] = item.VideoStatus
+			item.Metadata["message"] = item.Message
+			return item
+		}
+
+		// 本地服务生成的内部媒体
+		if strings.HasPrefix(rawURL, "/api/v1/generated-media/") {
+			item.Availability = AssetAvailabilityAvailable
+			item.VideoStatus = AssetAvailabilityAvailable
+			item.Metadata["availability"] = AssetAvailabilityAvailable
+			item.Metadata["videoStatus"] = item.VideoStatus
+			return item
+		}
+
+		// 未托管到自有存储的外部临时 Provider URL: 检查创建时间是否超过 24 小时
+		isExpired := false
+		createdAt := strings.TrimSpace(item.CreatedAt)
+		if createdAt != "" {
+			if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
+				if time.Since(t.UTC()) > 24*time.Hour {
+					isExpired = true
+				}
+			} else if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
+				if time.Since(t.UTC()) > 24*time.Hour {
+					isExpired = true
+				}
+			}
+		}
+
+		if isExpired {
+			item.Availability = AssetAvailabilityExpired
+			item.AvailabilityReason = "视频源已失效，请重新生成"
+			item.VideoStatus = AssetAvailabilityExpired
+			item.Message = "视频源已失效，请重新生成"
+			item.Metadata["availability"] = item.Availability
+			item.Metadata["availabilityReason"] = item.AvailabilityReason
+			item.Metadata["videoStatus"] = item.VideoStatus
+			item.Metadata["message"] = item.Message
+			// 按照设计要求：不继续下发失效的外部临时URL，避免前端黑屏00:00
+			item.Metadata["expiredSourceUrl"] = item.URL
+			item.URL = ""
+			return item
+		}
+
+		item.Availability = AssetAvailabilityProviderTempURL
+		item.AvailabilityReason = "临时视频资源，后台同步转存中"
+		item.VideoStatus = "TEMP"
+		item.Metadata["availability"] = item.Availability
+		item.Metadata["availabilityReason"] = item.AvailabilityReason
+		item.Metadata["videoStatus"] = item.VideoStatus
+		return item
+	}
+
+	if strings.TrimSpace(item.URL) == "" && stringValue(item.Metadata["fileId"]) == "" {
+		item.Availability = AssetAvailabilityMissing
+		item.AvailabilityReason = "媒体资源不存在"
+	} else {
+		item.Availability = AssetAvailabilityAvailable
+	}
+	item.Metadata["availability"] = item.Availability
+	return item
+}
+
 func secureAssetForClient(item asset) asset {
+	item = enrichAssetAvailability(item)
 	item.URL = securePublicMediaURL(item.URL)
 	item.ThumbnailURL = securePublicMediaURL(item.ThumbnailURL)
 	if item.Metadata != nil {

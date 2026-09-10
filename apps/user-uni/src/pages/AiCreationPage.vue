@@ -539,13 +539,15 @@
                 <view class="works-card-preview">
                   <image v-if="workThumbnail(entry)" :src="workThumbnail(entry)" mode="aspectFill" />
                   <view v-else :class="['works-card-placeholder', { 'is-running': isWorkRunning(entry) }]">
-                    <text>{{ isWorkRunning(entry) ? '生成中' : 'AI' }}</text>
+                    <text>{{ isWorkExpired(entry) ? '视频已失效' : isWorkRunning(entry) ? '生成中' : 'AI' }}</text>
+                    <text v-if="isWorkExpired(entry)">请重新生成</text>
                   </view>
                   <text class="works-card-badge">{{ workStatusLabel(entry) }}</text>
                 </view>
                 <view class="works-card-body">
                   <text class="works-card-title">{{ entry.title }}</text>
                   <text class="works-card-desc">{{ entry.prompt || '暂无提示词' }}</text>
+                  <text v-if="isWorkExpired(entry)" class="works-card-expired-note">视频资源已失效，可按原提示词重新生成</text>
                   <view class="works-card-meta">
                     <text>{{ entry.model }}</text>
                     <text>{{ entry.resolution }}</text>
@@ -554,7 +556,7 @@
                 </view>
                 <view class="works-card-actions">
                   <button type="button" @click.stop="previewWorkEntry(entry)">预览</button>
-                  <button type="button" @click.stop="reuseWorkEntry(entry)">复用</button>
+                  <button type="button" @click.stop="reuseWorkEntry(entry)">{{ isWorkExpired(entry) ? '重新生成' : '复用' }}</button>
                   <button type="button" :disabled="!entry.assetUrl" @click.stop="downloadWorkEntry(entry)">下载</button>
                   <button type="button" @click.stop="toggleWorkFavorite(entry)">{{ isWorkFavorite(entry) ? '已收藏' : '收藏' }}</button>
                 </view>
@@ -587,7 +589,7 @@
                 <text>{{ formatShortDate(entry.createdAt || entry.updatedAt) }}</text>
                 <view class="works-table-actions">
                   <button type="button" @click="previewWorkEntry(entry)">预览</button>
-                  <button type="button" @click="reuseWorkEntry(entry)">复用</button>
+                  <button type="button" @click="reuseWorkEntry(entry)">{{ isWorkExpired(entry) ? '重新生成' : '复用' }}</button>
                   <button type="button" :disabled="!entry.assetUrl" @click="downloadWorkEntry(entry)">下载</button>
                 </view>
               </view>
@@ -1493,8 +1495,25 @@ function hasBrowserWindow() {
   return typeof window !== "undefined" && typeof window.location !== "undefined";
 }
 
+function h5BasePath() {
+  const base = String((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/").trim();
+  return base === "/" ? "" : `/${base.replace(/^\/+|\/+$/g, "")}`;
+}
+
+function browserRoute(path: string) {
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  const base = h5BasePath();
+  return base ? `${base}${normalized}` : normalized;
+}
+
 function currentPathname() {
-  return hasBrowserWindow() ? window.location.pathname : loginRoute;
+  if (!hasBrowserWindow()) return loginRoute;
+  const pathname = window.location.pathname.replace(/\/$/, "") || "/";
+  const base = h5BasePath();
+  if (base && (pathname === base || pathname.startsWith(`${base}/`))) {
+    return pathname.slice(base.length) || "/";
+  }
+  return pathname;
 }
 
 function currentPath() {
@@ -1753,7 +1772,9 @@ const worksViewMode = ref<WorkViewMode>("grid");
 const worksDensity = ref<"default" | "compact">("default");
 const membershipScrollTarget = ref("");
 const favoriteWorkIds = ref<string[]>([]);
-const isLoggedIn = ref(false);
+// Seed the H5 shell from the persisted token so a protected route does not render
+// the guest works panel during the async session restoration on page reload.
+const isLoggedIn = ref(Boolean(authService.storage.getToken()));
 const currentUser = ref<AuthUser | null>(null);
 const currentAgent = ref<ChannelAgent | null>(null);
 const channelCenter = ref<ChannelCenterResponse | null>(null);
@@ -2262,7 +2283,7 @@ const metrics = computed(() => {
   ];
 });
 function redirectDesktopBrowserToWorkspace() {
-  if (!hasBrowserWindow() || typeof navigator === "undefined") return false;
+  if (!hasBrowserWindow() || typeof navigator === "undefined" || h5BasePath()) return false;
   const userAgent = navigator.userAgent || "";
   if (/(Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|MicroMessenger)/i.test(userAgent)) return false;
   const pathname = currentPathname();
@@ -2877,7 +2898,8 @@ function syncModuleFromLocation() {
   activeModule.value = nextModule;
   currentWorkspace.value = moduleWorkspace[nextModule] || currentWorkspace.value;
   if (!routeModules[path] && path !== moduleRoutes.dashboard && path !== "/") {
-    window.history.replaceState({ module: "dashboard" }, "", moduleRoutes.dashboard);
+    const dashboardPath = browserRoute(moduleRoutes.dashboard);
+    window.history.replaceState({ module: "dashboard" }, "", dashboardPath);
     browserRoutePath.value = moduleRoutes.dashboard;
   }
 }
@@ -2889,8 +2911,9 @@ function pushModuleRoute(id: ModuleId) {
     return;
   }
   const path = moduleRoutes[id];
-  if (!path || window.location.pathname === path) return;
-  window.history.pushState({ module: id }, "", path);
+  const targetPath = path ? browserRoute(path) : "";
+  if (!path || currentPath() === path) return;
+  window.history.pushState({ module: id }, "", targetPath);
   browserRoutePath.value = path;
 }
 
@@ -2956,19 +2979,19 @@ function redirectAfterAuth(auth: AuthResponse) {
   }
   const defaultRoute = defaultRouteFromAuth(auth);
   if (defaultRoute) {
-    window.location.replace(defaultRoute);
+    window.location.replace(browserRoute(defaultRoute));
     return;
   }
   const workspace = workspaceFromAuth(auth);
   if (workspace === "admin") {
-    window.location.replace("/admin/");
+    window.location.replace(browserRoute("/admin/"));
     return;
   }
   if (workspace === "agent") {
-    window.location.replace("/agent/");
+    window.location.replace(browserRoute("/agent/"));
     return;
   }
-  window.location.replace("/workspace");
+  window.location.replace(browserRoute("/workspace"));
 }
 
 function requestWechatMiniProgramCode() {
@@ -3025,8 +3048,17 @@ function assetDescription(asset: Asset) {
   return "已归档到作品中心";
 }
 
+function assetAvailability(asset?: Asset) {
+  const item = asset as (Asset & { availability?: string; videoStatus?: string }) | undefined;
+  return String(item?.availability || item?.videoStatus || item?.metadata?.availability || item?.metadata?.videoStatus || "").trim().toUpperCase();
+}
+
+function isAssetExpired(asset?: Asset) {
+  return asset?.mediaType === "video" && assetAvailability(asset) === "EXPIRED";
+}
+
 function assetThumbnail(asset: Asset) {
-  return asset.thumbnailUrl || asset.url;
+  return asset.thumbnailUrl || (isAssetExpired(asset) ? "" : asset.url);
 }
 
 function assetMediaLabel(asset: Asset) {
@@ -3091,7 +3123,7 @@ function createWorkEntryFromTask(task: GenerationTask): UserWorkEntry {
     model: task.model || assetModelLabel(asset || createEmptyAsset(task.id)),
     resolution: taskParamText(task, ["resolution", "size", "dimensions", "aspectRatio"]) || (asset ? assetResolutionLabel(asset) : "自适应"),
     pointCost: Number(task.pointCost || 0),
-    assetUrl: asset ? resolveAssetUrl(asset) : "",
+    assetUrl: asset && !isAssetExpired(asset) ? resolveAssetUrl(asset) : "",
     thumbnailUrl: asset ? assetThumbnail(asset) : "",
     createdAt: task.createdAt || asset?.createdAt,
     updatedAt: task.updatedAt || task.workerFinishedAt || asset?.updatedAt
@@ -3108,7 +3140,7 @@ function createWorkEntryFromAsset(asset: Asset): UserWorkEntry {
     model: assetModelLabel(asset),
     resolution: assetResolutionLabel(asset),
     pointCost: Number(asset.metadata?.pointCost || 0),
-    assetUrl: resolveAssetUrl(asset),
+    assetUrl: isAssetExpired(asset) ? "" : resolveAssetUrl(asset),
     thumbnailUrl: assetThumbnail(asset),
     createdAt: asset.createdAt,
     updatedAt: asset.updatedAt
@@ -3124,6 +3156,10 @@ function workDateMs(entry: UserWorkEntry) {
   if (!value) return 0;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function isWorkExpired(entry: UserWorkEntry) {
+  return isAssetExpired(entry.asset);
 }
 
 function isWorkSucceeded(entry: UserWorkEntry) {
@@ -3143,6 +3179,7 @@ function isWorkFavorite(entry: UserWorkEntry) {
 }
 
 function workStatusLabel(entry: UserWorkEntry) {
+  if (isWorkExpired(entry)) return "视频已失效";
   if (isWorkSucceeded(entry)) return "已完成";
   if (isWorkRunning(entry)) return "生成中";
   if (entry.status === "CANCELLED") return "已取消";
@@ -3151,6 +3188,7 @@ function workStatusLabel(entry: UserWorkEntry) {
 }
 
 function workStatusClass(entry: UserWorkEntry) {
+  if (isWorkExpired(entry)) return "is-expired";
   if (isWorkSucceeded(entry)) return "is-success";
   if (isWorkRunning(entry)) return "is-running";
   if (isWorkFailed(entry)) return "is-failed";
@@ -3163,6 +3201,10 @@ function workThumbnail(entry: UserWorkEntry) {
 }
 
 function previewWorkEntry(entry: UserWorkEntry) {
+  if (isWorkExpired(entry)) {
+    uni.showToast({ title: "视频资源已失效，请点击“重新生成”", icon: "none" });
+    return;
+  }
   if (!entry.assetUrl || !hasBrowserWindow()) {
     uni.showToast({ title: isWorkRunning(entry) ? "作品仍在生成中" : "暂无可预览文件", icon: "none" });
     return;
@@ -3171,6 +3213,10 @@ function previewWorkEntry(entry: UserWorkEntry) {
 }
 
 function downloadWorkEntry(entry: UserWorkEntry) {
+  if (isWorkExpired(entry)) {
+    uni.showToast({ title: "视频资源已失效，无法下载", icon: "none" });
+    return;
+  }
   if (!entry.assetUrl || !hasBrowserWindow()) {
     uni.showToast({ title: "暂无可下载文件", icon: "none" });
     return;
@@ -3185,6 +3231,12 @@ function downloadWorkEntry(entry: UserWorkEntry) {
 }
 
 function reuseWorkEntry(entry: UserWorkEntry) {
+  if (isWorkExpired(entry)) {
+    videoPrompt.value = entry.prompt;
+    selectModule("videoGeneration");
+    uni.showToast({ title: "已带入原提示词，请重新生成", icon: "none" });
+    return;
+  }
   if (entry.prompt) {
     uni.setClipboardData({
       data: entry.prompt,
@@ -3293,7 +3345,7 @@ function performLogout(showMessage = true) {
   isLoggedIn.value = false;
   isModuleDrawerOpen.value = false;
   if (hasBrowserWindow()) {
-    window.history.pushState({ loggedOut: true }, "", loginRoute);
+    window.history.pushState({ loggedOut: true }, "", browserRoute(loginRoute));
     browserRoutePath.value = loginRoute;
   }
   if (showMessage) uni.showToast({ title: "已退出", icon: "success" });
@@ -3305,7 +3357,7 @@ function goLogin() {
     return;
   }
 
-  window.history.pushState({ module: "login" }, "", loginRoute);
+  window.history.pushState({ module: "login" }, "", browserRoute(loginRoute));
   syncModuleFromLocation();
 }
 
@@ -5102,6 +5154,26 @@ async function loginWithWechatPhoneNumber(event: unknown) {
 
 .works-card.is-failed .works-card-badge {
   background: rgba(185, 28, 28, .86);
+}
+
+.works-card.is-expired .works-card-badge {
+  background: rgba(180, 83, 9, .9);
+}
+
+.works-card.is-expired .works-card-placeholder {
+  color: #b45309;
+  background: #fff7ed;
+}
+
+.works-card.is-expired .works-card-placeholder text:first-child {
+  color: #b45309;
+}
+
+.works-card.is-expired .works-card-placeholder text:last-child,
+.works-card-expired-note {
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .works-card-placeholder {
