@@ -140,6 +140,11 @@ type Config struct {
 	PPTAsyncCanaryProviderAllowlist        string
 	PPTAsyncCanaryModelAllowlist           string
 	ProviderExecutionSafetyEnabled         bool
+	GenerationWorkerLease                  string
+	GenerationWorkerHeartbeat              string
+	GenerationWorkerReaperEnabled          bool
+	GenerationWorkerReaperInterval         string
+	GenerationWorkerReaperMaxAttempts      string
 }
 
 func Load() Config {
@@ -354,6 +359,11 @@ func Load() Config {
 		PPTAsyncCanaryProviderAllowlist:        os.Getenv("PPT_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
 		PPTAsyncCanaryModelAllowlist:           os.Getenv("PPT_ASYNC_CANARY_MODEL_ALLOWLIST"),
 		ProviderExecutionSafetyEnabled:         boolEnv(os.Getenv("PROVIDER_EXECUTION_SAFETY_ENABLED")),
+		GenerationWorkerLease:                  stringEnvOrDefault("GENERATION_WORKER_LEASE", "2m"),
+		GenerationWorkerHeartbeat:              stringEnvOrDefault("GENERATION_WORKER_HEARTBEAT", "30s"),
+		GenerationWorkerReaperEnabled:          boolEnv(os.Getenv("GENERATION_WORKER_REAPER_ENABLED")),
+		GenerationWorkerReaperInterval:         stringEnvOrDefault("GENERATION_WORKER_REAPER_INTERVAL", "30s"),
+		GenerationWorkerReaperMaxAttempts:      stringEnvOrDefault("GENERATION_WORKER_REAPER_MAX_ATTEMPTS", "3"),
 	}
 }
 

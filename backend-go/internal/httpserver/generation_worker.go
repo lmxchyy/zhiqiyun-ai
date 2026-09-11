@@ -97,6 +97,16 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	leaseStore := pe.NewStore(a.pgDB())
+	leaseDuration := parseReaperDuration(a.cfg.GenerationWorkerLease, 2*time.Minute)
+	heartbeat := parseReaperDuration(a.cfg.GenerationWorkerHeartbeat, 30*time.Second)
+	if _, err := leaseStore.AcquireTask(ctx, taskID, generationImageCanaryConsumer, leaseDuration); err != nil {
+		return err
+	}
+	leaseCtx, stopLease := context.WithCancel(ctx)
+	defer stopLease()
+	defer leaseStore.ReleaseTaskLease(context.Background(), taskID, generationImageCanaryConsumer)
+	leaseStore.StartTaskHeartbeat(leaseCtx, taskID, generationImageCanaryConsumer, heartbeat, leaseDuration)
 
 	req := generation.CreateRequest{UserID: task.UserID, Type: task.Type, Prompt: task.Prompt, Model: task.Model, Params: cloneAnyMap(task.Params), ModuleCode: stringValue(task.Params["moduleCode"])}
 	if req.Params == nil {

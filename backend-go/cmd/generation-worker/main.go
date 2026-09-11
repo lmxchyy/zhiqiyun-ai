@@ -37,7 +37,12 @@ func run() error {
 	clients.Messaging.Start()
 	workerCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
+	if cfg.GenerationWorkerReaperEnabled {
+		log.Printf("generation reaper enabled interval=%s max_attempts=%s", cfg.GenerationWorkerReaperInterval, cfg.GenerationWorkerReaperMaxAttempts)
+	} else {
+		log.Printf("generation reaper disabled (set GENERATION_WORKER_REAPER_ENABLED=true to enable)")
+	}
 	go func() {
 		errCh <- httpserver.RunGenerationImageCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)
 	}()
@@ -46,6 +51,9 @@ func run() error {
 	}()
 	go func() {
 		errCh <- httpserver.RunGenerationPPTCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)
+	}()
+	go func() {
+		errCh <- httpserver.RunGenerationReaper(workerCtx, cfg, clients.DB)
 	}()
 	err = <-errCh
 	if err == context.Canceled || err == context.DeadlineExceeded {

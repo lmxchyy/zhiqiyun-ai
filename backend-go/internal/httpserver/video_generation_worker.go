@@ -10,6 +10,7 @@ import (
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/messaging"
+	pe "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 const generationVideoCanaryConsumer = "generation-video-canary-worker"
@@ -89,6 +90,16 @@ func (a api) processGenerationVideoCanaryMessage(ctx context.Context, inbox *mes
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	leaseStore := pe.NewStore(a.pgDB())
+	leaseDuration := parseReaperDuration(a.cfg.GenerationWorkerLease, 2*time.Minute)
+	heartbeat := parseReaperDuration(a.cfg.GenerationWorkerHeartbeat, 30*time.Second)
+	if _, err := leaseStore.AcquireTask(ctx, taskID, generationVideoCanaryConsumer, leaseDuration); err != nil {
+		return err
+	}
+	leaseCtx, stopLease := context.WithCancel(ctx)
+	defer stopLease()
+	defer leaseStore.ReleaseTaskLease(context.Background(), taskID, generationVideoCanaryConsumer)
+	leaseStore.StartTaskHeartbeat(leaseCtx, taskID, generationVideoCanaryConsumer, heartbeat, leaseDuration)
 
 	req := generation.CreateRequest{UserID: task.UserID, Type: task.Type, Prompt: task.Prompt, Model: task.Model, Params: cloneAnyMap(task.Params), ModuleCode: stringValue(task.Params["moduleCode"])}
 	if req.Params == nil {
