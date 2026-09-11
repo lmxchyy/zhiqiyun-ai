@@ -2465,6 +2465,7 @@ import {
 import xianzhiLogo from "./assets/xianzhi-ai-logo.webp";
 import { isPersistentWebSession } from "./utils/webAuthSession";
 import { resolveSidebarPlanPoints } from "./utils/sidebarPlanPoints";
+import { adminTaskPollingDelay, adminTaskStatusLabel } from "./utils/taskLifecycle";
 import { displayGptImageSizeLabel } from "./utils/gptImageSizeLabel";
 
 function aiPlaygroundMessage(type: "success" | "warning" | "error" | "info", message: string) {
@@ -3899,7 +3900,7 @@ let aiGenerationPollTimer: number | null = null;
 let aiOriginalImagePrefetchTimer: number | null = null;
 const aiTrackedGenerationTaskIds = ref<string[]>([]);
 const aiGenerationPollAttempts = new Map<string, number>();
-const aiGenerationPollDelaysMs = [2000, 3000, 5000, 8000, 13000, 20000];
+const aiGenerationPollDelaysMs = [5000, 20000, 60000];
 let aiComposerResizeObserver: ResizeObserver | null = null;
 const aiAgentRunning = ref(false);
 const aiAgentActiveConversationId = ref("agent-default");
@@ -5544,7 +5545,8 @@ function scheduleAiGenerationPolling(delayMs?: number) {
   if (aiGenerationPollTimer) return;
   if (!aiTrackedGenerationTaskIds.value.length) return;
   const maxAttempt = Math.max(0, ...aiTrackedGenerationTaskIds.value.map((id) => aiGenerationPollAttempts.get(id) || 0));
-  const nextDelay = delayMs ?? aiGenerationPollDelaysMs[Math.min(maxAttempt, aiGenerationPollDelaysMs.length - 1)];
+  const trackedTask = onlineRecentTasks.value.find((task) => aiTrackedGenerationTaskIds.value.includes(aiTaskId(task)));
+  const nextDelay = delayMs ?? (trackedTask ? adminTaskPollingDelay(String(trackedTask.createdAt || "")) : aiGenerationPollDelaysMs[Math.min(maxAttempt, aiGenerationPollDelaysMs.length - 1)]);
   aiGenerationPollTimer = window.setTimeout(() => {
     aiGenerationPollTimer = null;
     void pollAiGenerationTasksOnce();
@@ -11750,7 +11752,8 @@ function statusType(value: unknown) {
   const text = String(value).toUpperCase();
   if (["ACTIVE", "PAID", "APPROVED", "SUCCEEDED", "SUCCESS", "DONE", "true"].includes(text)) return "success";
   if (["PENDING", "CONFIGURABLE"].includes(text)) return "warning";
-  if (["DISABLED", "REJECTED", "FAILED", "false"].includes(text)) return "danger";
+  if (["DISABLED", "REJECTED", "FAILED", "EXPIRED", "false"].includes(text)) return "danger";
+  if (["CANCEL_REQUESTED", "MANUAL_REVIEW", "UNKNOWN"].includes(text)) return "warning";
   return "info";
 }
 
@@ -11773,13 +11776,18 @@ function statusLabel(value: unknown) {
     SUCCEEDED: "成功",
     SUCCESS: "成功",
     DONE: "已完成",
-    FAILED: "失败",
-    OVERDUE: "已逾期",
     DRAFT: "草稿",
+    FAILED: "失败",
+    EXPIRED: "已超时",
+    CANCEL_REQUESTED: "取消中",
+    MANUAL_REVIEW: "人工审核中",
+    UNKNOWN: "处理中",
+    OVERDUE: "已逾期",
     FINALIZED: "已定稿",
     TRUE: "是",
     FALSE: "否"
   };
+  if (["QUEUED", "RUNNING", "PROCESSING", "GENERATING", "CANCEL_REQUESTED", "EXPIRED", "MANUAL_REVIEW", "UNKNOWN"].includes(text)) return adminTaskStatusLabel(text);
   return labels[text] || raw;
 }
 

@@ -101,7 +101,7 @@ export interface AssetPagination {
   hasMore: boolean;
 }
 
-export type GenerationTaskStatus = "queued" | "generating" | "completed" | "failed" | "cancelled";
+export type GenerationTaskStatus = "queued" | "generating" | "running" | "cancel_requested" | "completed" | "failed" | "expired" | "manual_review" | "cancelled" | "unknown";
 
 export interface GenerationTask {
   id: string;

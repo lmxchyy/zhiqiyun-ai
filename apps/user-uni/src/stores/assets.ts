@@ -38,7 +38,7 @@ import {
   shouldDedupeRecentRequest,
   stableAsset,
 } from "../features/assets/recent";
-
+import { isTaskActive, taskPollingDelay } from "../features/assets/taskLifecycle";
 const filterStorageKey = "zhiqiyun:asset-center:filters";
 const sortStorageKey = "zhiqiyun:asset-center:sort";
 const recentCacheStorageKey = "recent_works_cache";
@@ -193,7 +193,7 @@ export const useAssetStore = defineStore("assets", {
       return state.assets.filter(item => state.selectedIds.includes(item.id));
     },
     hasActiveTasks(state): boolean {
-      return state.recentTasks.some(item => item.status === "queued" || item.status === "generating");
+      return state.recentTasks.some(item => isTaskActive(item.status));
     },
     isSearchResult(state): boolean {
       return Boolean(state.filters.keyword.trim());
@@ -642,12 +642,11 @@ export const useAssetStore = defineStore("assets", {
     scheduleTaskPolling(delay?: number) {
       if (pollingTimer) clearTimeout(pollingTimer);
       if (!this.pageVisible) return;
-      const backoff = Math.min(30000, 4000 * Math.max(1, 2 ** this.pollingFailures));
       pollingTimer = setTimeout(async () => {
         await this.fetchRecentTasks();
         if (this.tasks.length) await this.fetchTasks(true);
         if (this.hasActiveTasks || this.pollingFailures > 0) this.scheduleTaskPolling();
-      }, delay ?? backoff);
+      }, delay ?? taskPollingDelay(this.tasks.filter(item => isTaskActive(item.status)).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0]?.createdAt));
     },
   },
 });

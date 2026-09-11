@@ -1,4 +1,5 @@
 import { api, apiRequestTask, getApiBaseURL, type ApiRequestTaskHandle } from "../../api/client";
+import { normalizeTaskLifecycleStatus } from "./taskLifecycle";
 import { v531SlotsByPage } from "../../config/v531";
 import { beginWorksPerformanceStep } from "./performance";
 import type {
@@ -233,19 +234,13 @@ export async function fetchAssetDetail(id: string): Promise<AssetDetail> {
 function normalizeTask(value: unknown): GenerationTask {
   const raw = record(value);
   const params = record(raw.params);
-  const status = stringValue(raw.status || "PENDING").toUpperCase();
-  const normalizedStatus: GenerationTask["status"] = ["PENDING", "QUEUED"].includes(status)
-    ? "queued"
-    : ["RUNNING", "PROCESSING", "RETRYING", "GENERATING"].includes(status)
-      ? "generating"
-      : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status)
-        ? "completed"
-        : ["CANCELLED", "CANCELED"].includes(status) ? "cancelled" : "failed";
+  const normalizedStatus = normalizeTaskLifecycleStatus(raw.status || "PENDING");
+  const status: GenerationTask["status"] = normalizedStatus === "running" ? "generating" : normalizedStatus;
   return {
     id: stringValue(raw.id),
     name: stringValue(params.title || params.name) || stringValue(raw.prompt).slice(0, 36) || "AI 创作任务",
     type: normalizeAssetType(raw.type || params.type),
-    status: normalizedStatus,
+    status,
     progress: Math.min(100, Math.max(0, numberValue(raw.progress, params.progress, params.percentage))),
     createdAt: stringValue(raw.createdAt),
     updatedAt: stringValue(raw.updatedAt),

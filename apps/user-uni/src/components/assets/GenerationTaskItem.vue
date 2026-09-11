@@ -7,13 +7,14 @@
         <AssetStatusBadge :status="task.status" />
       </view>
       <text class="task-meta">{{ typeLabel }} · {{ timeLabel }}</text>
-      <view v-if="task.status === 'generating'" class="progress-track">
+      <view v-if="['queued', 'generating', 'running', 'cancel_requested', 'unknown'].includes(task.status)" class="progress-track">
         <view class="progress-value" :style="{ width: `${task.progress}%` }" />
       </view>
+      <text v-if="['expired', 'manual_review'].includes(task.status)" class="failure-reason">{{ task.status === 'expired' ? '处理超时，任务仍可能在后台运行' : '任务正在人工审核，请耐心等待' }}</text>
       <text v-if="task.status === 'failed' && task.failureReason" class="failure-reason">{{ task.failureReason }}</text>
     </view>
     <view class="task-actions">
-      <button v-if="task.status === 'queued' || task.status === 'generating'" :data-task-id="task.id" @click.stop="$emit('cancel', task)">取消</button>
+      <button v-if="['queued', 'generating', 'running', 'unknown'].includes(task.status)" :data-task-id="task.id" @click.stop="$emit('cancel', task)">取消</button>
       <template v-else-if="task.status === 'failed'">
         <button :data-task-id="task.id" @click.stop="$emit('retry', task)">重试</button>
         <button class="danger" :data-task-id="task.id" @click.stop="$emit('delete', task)">删除</button>
