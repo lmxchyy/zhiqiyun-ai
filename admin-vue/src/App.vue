@@ -521,7 +521,8 @@
                         />
                         <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
                           <span class="ai-task-spinner"></span>
-                          <strong>生成中...</strong>
+                          <strong>{{ isAiTaskStale(task) ? '等待服务商响应...' : '生成中...' }}</strong>
+                          <small v-if="isAiTaskStale(task)">已超过 15 分钟，仍在继续查询</small>
                         </div>
                         <div v-else-if="isAiTaskFailed(task)" class="ai-task-failed">
                           <el-icon><Monitor /></el-icon>
@@ -3899,7 +3900,6 @@ let aiOriginalImagePrefetchTimer: number | null = null;
 const aiTrackedGenerationTaskIds = ref<string[]>([]);
 const aiGenerationPollAttempts = new Map<string, number>();
 const aiGenerationPollDelaysMs = [2000, 3000, 5000, 8000, 13000, 20000];
-const aiGenerationPollMaxAttempts = 90;
 let aiComposerResizeObserver: ResizeObserver | null = null;
 const aiAgentRunning = ref(false);
 const aiAgentActiveConversationId = ref("agent-default");
@@ -5494,6 +5494,12 @@ function isAiTaskRunning(task: AdminRecord) {
   return !isAiTaskFailed(task) && !aiTaskImageUrl(task);
 }
 
+function isAiTaskStale(task: AdminRecord) {
+  if (!isAiTaskRunning(task)) return false;
+  const createdAt = aiTaskDateMs(task, "createdAt");
+  return createdAt > 0 && aiTaskClockNow.value - createdAt >= 15 * 60 * 1000;
+}
+
 function isAiTaskFailed(task: AdminRecord) {
   return ["FAILED", "ERROR"].includes(aiTaskStatus(task));
 }
@@ -5575,7 +5581,8 @@ async function pollAiGenerationTasksOnce() {
       aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => !completedTaskIds.includes(id));
       completedTaskIds.forEach((id) => aiGenerationPollAttempts.delete(id));
     }
-    aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => (aiGenerationPollAttempts.get(id) || 0) < aiGenerationPollMaxAttempts);
+    // Keep polling running tasks; the server may still be recovering a provider request.
+    aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => aiGenerationPollAttempts.has(id));
     const serverTasks = Array.isArray(onlineImageData.value.recentTasks) ? onlineImageData.value.recentTasks : [];
     aiOptimisticTasks.value = aiOptimisticTasks.value.filter((task) => !isOptimisticAiTaskReconciled(task, serverTasks));
   } catch (error) {
