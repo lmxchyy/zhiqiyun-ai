@@ -11,6 +11,7 @@ import (
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/httpserver"
 	"xianzhi-ai/backend-go/internal/infra"
+	"xianzhi-ai/backend-go/internal/messaging"
 )
 
 func main() {
@@ -37,7 +38,7 @@ func run() error {
 	clients.Messaging.Start()
 	workerCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	errCh := make(chan error, 4)
+	errCh := make(chan error, 7)
 	if cfg.GenerationWorkerReaperEnabled {
 		log.Printf("generation reaper enabled interval=%s max_attempts=%s", cfg.GenerationWorkerReaperInterval, cfg.GenerationWorkerReaperMaxAttempts)
 	} else {
@@ -54,6 +55,15 @@ func run() error {
 	}()
 	go func() {
 		errCh <- httpserver.RunGenerationReaper(workerCtx, cfg, clients.DB)
+	}()
+	go func() {
+		errCh <- httpserver.RunGenerationDLQWorker(workerCtx, cfg, clients.DB, clients.Messaging, messaging.GenerationCanaryDLQ, false)
+	}()
+	go func() {
+		errCh <- httpserver.RunGenerationDLQWorker(workerCtx, cfg, clients.DB, clients.Messaging, messaging.GenerationVideoCanaryDLQ, false)
+	}()
+	go func() {
+		errCh <- httpserver.RunGenerationDLQWorker(workerCtx, cfg, clients.DB, clients.Messaging, messaging.GenerationPPTCanaryDLQ, false)
 	}()
 	err = <-errCh
 	if err == context.Canceled || err == context.DeadlineExceeded {
