@@ -70,6 +70,22 @@ type generationTask struct {
 	BillingType                string         `json:"billingType,omitempty"`
 	Status                     string         `json:"status"`
 	TaskStatus                 string         `json:"taskStatus,omitempty"`
+	WorkerID                   string         `json:"workerId,omitempty"`
+	LeaseUntil                 string         `json:"leaseUntil,omitempty"`
+	QueueTimeoutAt             string         `json:"queueTimeoutAt,omitempty"`
+	TimeoutAt                  string         `json:"timeoutAt,omitempty"`
+	StartedAt                  string         `json:"startedAt,omitempty"`
+	SubmittedAt                string         `json:"submittedAt,omitempty"`
+	LastHeartbeatAt            string         `json:"lastHeartbeatAt,omitempty"`
+	FinishedAt                 string         `json:"finishedAt,omitempty"`
+	ProviderRequestID          string         `json:"providerRequestId,omitempty"`
+	ProviderExecutionID        string         `json:"providerExecutionId,omitempty"`
+	ErrorCode                  string         `json:"errorCode,omitempty"`
+	ErrorClass                 string         `json:"errorClass,omitempty"`
+	ErrorMessage               string         `json:"errorMessage,omitempty"`
+	AttemptCount               int            `json:"attemptCount,omitempty"`
+	LastCheckedAt              string         `json:"lastCheckedAt,omitempty"`
+	ManualReviewReason         string         `json:"manualReviewReason,omitempty"`
 	BillingStatus              string         `json:"billingStatus,omitempty"`
 	BillingEngine              string         `json:"billingEngine,omitempty"`
 	PersonalPointAccountID     string         `json:"personalPointAccountId,omitempty"`

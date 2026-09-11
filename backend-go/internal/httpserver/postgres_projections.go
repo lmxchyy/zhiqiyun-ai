@@ -209,6 +209,7 @@ CREATE TABLE IF NOT EXISTS xz_generation_tasks (
   type TEXT,
   model TEXT,
   billing_type TEXT,
+  task_status TEXT NOT NULL DEFAULT 'CREATED',
   status TEXT,
   progress INT NOT NULL DEFAULT 0,
   point_cost BIGINT NOT NULL DEFAULT 0,
@@ -219,8 +220,42 @@ CREATE TABLE IF NOT EXISTS xz_generation_tasks (
   created_at TEXT,
   updated_at TEXT,
   worker_finished_at TEXT,
+  worker_id TEXT,
+  lease_until TIMESTAMPTZ,
+  queue_timeout_at TIMESTAMPTZ,
+  timeout_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  submitted_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  provider_request_id TEXT,
+  provider_execution_id TEXT,
+  error_code TEXT,
+  error_class TEXT,
+  error_message TEXT,
+  attempt_count INT NOT NULL DEFAULT 0,
+  last_checked_at TIMESTAMPTZ,
+  manual_review_reason TEXT,
   raw JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+ALTER TABLE xz_generation_tasks
+  ADD COLUMN IF NOT EXISTS task_status TEXT NOT NULL DEFAULT 'CREATED',
+  ADD COLUMN IF NOT EXISTS worker_id TEXT,
+  ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS queue_timeout_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS timeout_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS provider_request_id TEXT,
+  ADD COLUMN IF NOT EXISTS provider_execution_id TEXT,
+  ADD COLUMN IF NOT EXISTS error_code TEXT,
+  ADD COLUMN IF NOT EXISTS error_class TEXT,
+  ADD COLUMN IF NOT EXISTS error_message TEXT,
+  ADD COLUMN IF NOT EXISTS attempt_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS manual_review_reason TEXT;
 
 CREATE TABLE IF NOT EXISTS xz_assets (
   id TEXT PRIMARY KEY,
@@ -307,6 +342,9 @@ CREATE INDEX IF NOT EXISTS idx_xz_token_records_user_created ON xz_token_records
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_id ON xz_generation_tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_user_created ON xz_generation_tasks(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_module_code ON xz_generation_tasks(module_code);
+CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_worker_lease ON xz_generation_tasks(worker_id, lease_until) WHERE worker_id IS NOT NULL AND lease_until IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_status_timeout ON xz_generation_tasks(task_status, timeout_at) WHERE timeout_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_xz_generation_tasks_provider_execution ON xz_generation_tasks(provider_execution_id) WHERE provider_execution_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_id ON xz_assets(user_id);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_created ON xz_assets(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_xz_assets_user_active_created ON xz_assets(user_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
