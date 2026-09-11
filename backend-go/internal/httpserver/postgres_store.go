@@ -1959,7 +1959,35 @@ func (s *postgresStore) providerExecutionBlocksLocalFailureTx(ctx context.Contex
 	}
 }
 
+func (s *postgresStore) unknownExecutionEligibleForGraceTx(ctx context.Context, tx *sql.Tx, taskID string, grace time.Duration) (bool, error) {
+	var status string
+	var requestID sql.NullString
+	var metadata []byte
+	var unknownAt time.Time
+	err := tx.QueryRowContext(ctx, `select status, provider_request_id, result_metadata, coalesce(unknown_at, updated_at) from provider_executions where task_id=$1 order by attempt desc limit 1 for update`, taskID).Scan(&status, &requestID, &metadata, &unknownAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return providerexecution.Status(status) == providerexecution.Unknown && (!requestID.Valid || requestID.String == "") && len(metadata) == 0 && time.Now().UTC().Sub(unknownAt.UTC()) >= grace, nil
+}
 func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
+	return s.failGenerationTaskDurable(id, message, nil)
+}
+
+// FailGenerationTaskUnknownGrace is the narrowly-scoped repair path for an
+// UNKNOWN execution whose submission was never acknowledged. It revalidates
+// the execution under the task transaction lock before releasing billing.
+func (s *postgresStore) FailGenerationTaskUnknownGrace(id string, message string, grace time.Duration) (generationTask, error) {
+	if grace <= 0 {
+		return generationTask{}, fmt.Errorf("unknown grace must be positive")
+	}
+	return s.failGenerationTaskDurable(id, message, &grace)
+}
+
+func (s *postgresStore) failGenerationTaskDurable(id string, message string, unknownGrace *time.Duration) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -1980,7 +2008,15 @@ func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (ge
 	if err != nil {
 		return generationTask{}, err
 	}
-	if blocked, err := s.providerExecutionBlocksLocalFailureTx(ctx, tx, task.ID); err != nil {
+	if unknownGrace != nil {
+		eligible, err := s.unknownExecutionEligibleForGraceTx(ctx, tx, task.ID, *unknownGrace)
+		if err != nil {
+			return generationTask{}, err
+		}
+		if !eligible {
+			return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for unknown grace failure", task.ID)
+		}
+	} else if blocked, err := s.providerExecutionBlocksLocalFailureTx(ctx, tx, task.ID); err != nil {
 		return generationTask{}, err
 	} else if blocked {
 		return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for durable failure", task.ID)
