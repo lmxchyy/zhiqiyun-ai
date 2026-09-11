@@ -3586,7 +3586,7 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		if index < 0 {
 			return fmt.Errorf("generation task not found: %s", id)
 		}
-		if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+		if generationTaskStateTerminal(canonicalGenerationTaskState(task)) {
 			return nil
 		}
 		if err := validateGenerationTaskPersonalLotMarker(points.memory, task); err != nil {
@@ -3619,6 +3619,9 @@ func (s *jsonStore) CompleteGenerationTask(id string, req createGenerationTaskRe
 		}
 		adminData := adminDataFromPlatformData(*data)
 		rule := billingRuleForRequest(req, adminData)
+		if err := guardGenerationTaskTransition(task, GenerationTaskSucceeded); err != nil {
+			return err
+		}
 		task.Status = "SUCCEEDED"
 		task.TaskStatus = taskStatusSucceeded
 		task.BillingStatus = billingStatusCaptured
@@ -3741,10 +3744,7 @@ func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointSt
 		if expectedUserID != "" && task.UserID != expectedUserID {
 			return generationTask{}, errors.New("generation task not found")
 		}
-		if task.Status == "SUCCEEDED" {
-			return task, nil
-		}
-		if task.Status == "FAILED" || task.Status == "CANCELLED" {
+		if generationTaskStateTerminal(canonicalGenerationTaskState(task)) {
 			return task, nil
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -3773,6 +3773,9 @@ func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointSt
 			task.ReleasedPoints = float64(pointCost)
 			appendBillingLifecycleEventJSON(data, task, "RELEASE", float64(pointCost), nil)
 		}
+		if err := guardGenerationTaskTransition(task, canonicalTaskState(terminalTaskStatus)); err != nil {
+			return generationTask{}, err
+		}
 		task.Status = terminalStatus
 		task.TaskStatus = terminalTaskStatus
 		if task.BillingStatus == "" {
@@ -3796,7 +3799,7 @@ func mutateJSONGenerationDurableFailure(data *platformData, points *JSONPersonal
 			continue
 		}
 		task := data.GenerationTasks[i]
-		if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+		if generationTaskStateTerminal(canonicalGenerationTaskState(task)) {
 			return task, nil
 		}
 		pointCost := generationTaskReservedPointCost(task, task.PointCost)
@@ -3824,6 +3827,9 @@ func mutateJSONGenerationDurableFailure(data *platformData, points *JSONPersonal
 			task.BillingStatus = billingStatusReleased
 			task.ReleasedPoints = float64(pointCost)
 			appendBillingLifecycleEventJSON(data, task, "RELEASE", float64(pointCost), nil)
+		}
+		if err := guardGenerationTaskTransition(task, GenerationTaskFailed); err != nil {
+			return generationTask{}, err
 		}
 		task.Status = "FAILED"
 		task.TaskStatus = taskStatusFailed

@@ -411,12 +411,17 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("generation task not found"))
 		return
 	}
+	originalState := canonicalGenerationTaskState(original)
+	if originalState == GenerationTaskSucceeded || (!generationTaskStateTerminal(originalState) && originalState != GenerationTaskManualReview) {
+		writeError(w, http.StatusConflict, errors.New("generation task is not retryable"))
+		return
+	}
 	execution, hasExecution, err := providerExecutionForRetry(a.store, a.cfg, original.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	originalActive := isRunningGenerationTaskStatus(original.Status) || strings.EqualFold(original.Status, "RETRYING")
+	originalActive := isRunningGenerationTaskStatus(string(canonicalGenerationTaskState(original))) || canonicalGenerationTaskState(original) == GenerationTaskCancelRequested
 	if hasExecution && !originalActive {
 		if execution.Status != providerexecution.Failed || execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
 			writeError(w, http.StatusConflict, errors.New("terminal generation task cannot resume an existing provider execution"))
@@ -822,11 +827,11 @@ func (s *jsonStore) CancelGenerationTaskForUser(userID string, id string) (gener
 				continue
 			}
 			found = true
-			if upperTrim(item.Status) == "CANCELLED" {
+			if canonicalGenerationTaskState(item) == GenerationTaskCancelled {
 				task = item
 				return nil
 			}
-			if !activeGenerationTaskStatus(item.Status) {
+			if !isRunningGenerationTaskStatus(string(canonicalGenerationTaskState(item))) {
 				return errors.New("only active tasks can be cancelled")
 			}
 			break
@@ -1069,10 +1074,10 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 	if err != nil {
 		return generationTask{}, err
 	}
-	if upperTrim(task.Status) == "CANCELLED" {
+	if canonicalGenerationTaskState(task) == GenerationTaskCancelled {
 		return task, tx.Commit()
 	}
-	if !activeGenerationTaskStatus(task.Status) {
+	if !isRunningGenerationTaskStatus(string(canonicalGenerationTaskState(task))) {
 		return generationTask{}, errors.New("only active tasks can be cancelled")
 	}
 	if blocked, executionErr := s.providerExecutionBlocksLocalFailureTx(ctx, tx, id); executionErr != nil {

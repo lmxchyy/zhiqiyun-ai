@@ -1589,7 +1589,7 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if err != nil {
 		return generationTask{}, err
 	}
-	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+	if generationTaskStateTerminal(canonicalGenerationTaskState(task)) {
 		return task, tx.Commit()
 	}
 	userID := strings.TrimSpace(task.UserID)
@@ -1657,6 +1657,9 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 			generationCanaryMetrics.pointsSettlementConflicts.Add(1)
 		}
 		return generationTask{}, ErrPersonalPointReservationMarkerMissing
+	}
+	if err := guardGenerationTaskTransition(task, GenerationTaskSucceeded); err != nil {
+		return generationTask{}, err
 	}
 	task.Status = "SUCCEEDED"
 	task.TaskStatus = taskStatusSucceeded
@@ -1912,7 +1915,7 @@ func validatePostgresGenerationPersonalLotMarkerTx(ctx context.Context, tx *sql.
 }
 
 func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, tx *sql.Tx, task generationTask, message, terminalStatus, terminalTaskStatus string) (generationTask, bool, bool, error) {
-	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+	if generationTaskStateTerminal(canonicalGenerationTaskState(task)) {
 		return task, false, false, nil
 	}
 	usesPersonalPoints, err := generationTaskUsesPersonalPoints(task)
@@ -1966,6 +1969,9 @@ func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, t
 			}
 		}
 	}
+	if err := guardGenerationTaskTransition(task, canonicalTaskState(terminalTaskStatus)); err != nil {
+		return generationTask{}, false, false, err
+	}
 	task.Status = terminalStatus
 	task.TaskStatus = terminalTaskStatus
 	if task.BillingStatus == "" {
@@ -2013,7 +2019,7 @@ func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (ge
 	if err != nil {
 		return generationTask{}, err
 	}
-	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
+	if generationTaskStateTerminal(canonicalGenerationTaskState(task)) {
 		return task, tx.Commit()
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -2066,6 +2072,9 @@ func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (ge
 		if _, err := insertBillingLifecycleEventV1(ctx, tx, task, "RELEASE", float64(pointCost), nil); err != nil {
 			return generationTask{}, err
 		}
+	}
+	if err := guardGenerationTaskTransition(task, GenerationTaskFailed); err != nil {
+		return generationTask{}, err
 	}
 	task.Status = "FAILED"
 	task.TaskStatus = taskStatusFailed
