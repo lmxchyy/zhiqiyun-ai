@@ -406,6 +406,28 @@ func (a paymentCenterAPI) adminFulfillments(w http.ResponseWriter, r *http.Reque
 }
 
 func (a paymentCenterAPI) adminRetryFulfillment(w http.ResponseWriter, r *http.Request) {
+	if a.legacy.service != nil && a.legacy.service.db != nil {
+		var fulfillmentType, orderNo string
+		err := a.legacy.service.db.QueryRowContext(r.Context(), `
+			select fulfillment_type, order_no from xz_fulfillment_records where id=$1
+		`, r.PathValue("id")).Scan(&fulfillmentType, &orderNo)
+		if err == nil && fulfillmentType == virtualEntitlementFulfillmentType {
+			if err := a.legacy.service.GrantOrderEntitlements(r.Context(), orderNo); err != nil {
+				writePaymentDomainError(w, err)
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			writePaymentDomainError(w, err)
+			return
+		}
+	}
+	if a.service == nil {
+		writePaymentError(w, http.StatusServiceUnavailable, errors.New("payment center is unavailable"))
+		return
+	}
 	if err := a.service.RetryFulfillment(r.Context(), r.PathValue("id")); err != nil {
 		writePaymentDomainError(w, err)
 		return

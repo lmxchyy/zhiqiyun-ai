@@ -348,7 +348,7 @@ func Load() Config {
 		VideoAsyncCanaryUsers:                  os.Getenv("VIDEO_ASYNC_CANARY_USERS"),
 		VideoAsyncCanaryProviderAllowlist:      os.Getenv("VIDEO_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
 		VideoAsyncCanaryModelAllowlist:         os.Getenv("VIDEO_ASYNC_CANARY_MODEL_ALLOWLIST"),
-		VideoStoragePersistenceEnabled:         boolEnvDefaultTrue(os.Getenv("VIDEO_STORAGE_PERSISTENCE_ENABLED")),
+		VideoStoragePersistenceEnabled:         boolEnv(os.Getenv("VIDEO_STORAGE_PERSISTENCE_ENABLED")),
 		PPTAsyncCanaryEnabled:                  boolEnv(os.Getenv("PPT_ASYNC_CANARY_ENABLED")),
 		PPTAsyncCanaryUsers:                    os.Getenv("PPT_ASYNC_CANARY_USERS"),
 		PPTAsyncCanaryProviderAllowlist:        os.Getenv("PPT_ASYNC_CANARY_PROVIDER_ALLOWLIST"),

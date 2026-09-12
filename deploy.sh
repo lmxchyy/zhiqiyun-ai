@@ -114,9 +114,9 @@ DISK_EMERGENCY_PERCENT="${DISK_EMERGENCY_PERCENT:-90}" \
 DISK_MIN_FREE_BYTES="${DEPLOY_MIN_FREE_BYTES:-10737418240}" \
   sh ops/disk-guard.sh "$SCRIPT_DIR" || fail "Insufficient disk space for a safe deployment."
 
-# 生产服务器不应保留未提交的源码修改，防止部署结果与 GitHub 不一致。
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  fail "Tracked files contain uncommitted changes. Commit/revert them before deploying."
+# 生产服务器不应保留未提交或未跟踪的源码修改，防止部署结果与 GitHub 不一致。
+if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+  fail "Working tree contains uncommitted or untracked changes. Commit/revert them before deploying."
 fi
 
 if [ -z "$GIT_BRANCH" ]; then

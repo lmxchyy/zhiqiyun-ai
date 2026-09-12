@@ -83,6 +83,28 @@ func TestUpdateSlideContentPersistsWithoutReplacingVisualState(t *testing.T) {
 	}
 }
 
+func TestSetPPTURLPersistsArtifactReference(t *testing.T) {
+	service := NewService()
+	created, err := service.Generate(GenerateRequest{UserID: "artifact_user", Prompt: "artifact deck", SlideCount: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.SetPPTURL("artifact_user", created.TaskID, "storage://tenant/file-pptx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PPTURL != "storage://tenant/file-pptx" {
+		t.Fatalf("PPTURL=%q", updated.PPTURL)
+	}
+	loaded, err := service.GetTask("artifact_user", created.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PPTURL != updated.PPTURL {
+		t.Fatalf("loaded PPTURL=%q, want %q", loaded.PPTURL, updated.PPTURL)
+	}
+}
+
 func TestGenerateWithConcurrencyRejectsActiveTask(t *testing.T) {
 	service := NewService()
 	request := GenerateRequest{UserID: "limited_user", Prompt: "first deck", SlideCount: 5}

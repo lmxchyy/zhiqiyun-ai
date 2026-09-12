@@ -1,7 +1,12 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -39,6 +44,9 @@ func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, t
 	if a.fileService == nil {
 		return task
 	}
+	if signed, ok := a.resolvePPTStorageReference(ctx, user, task.PPTURL); ok {
+		task.PPTURL = signed
+	}
 	// Task is passed by value, but its slices still share backing arrays with the
 	// persisted model. Materializing signed URLs must only affect the response
 	// copy; otherwise a later caller can inherit another user's signed URL.
@@ -61,6 +69,41 @@ func (a api) materializePPTTaskVisualURLs(ctx context.Context, user adminUser, t
 		}
 	}
 	return task
+}
+
+func (a api) persistPPTXArtifact(ctx context.Context, user adminUser, task pptapp.Task, payload []byte) (string, error) {
+	if a.fileService == nil {
+		return "", errors.New("private file storage is unavailable")
+	}
+	tenantID := strings.TrimSpace(user.TenantID)
+	if tenantID == "" {
+		tenantID = "personal:" + strings.TrimSpace(user.ID)
+	}
+	available, err := a.fileService.StorageAvailable(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if !available {
+		return "", errors.New("private file storage is not configured")
+	}
+	digest := sha256.Sum256(payload)
+	fileName := fmt.Sprintf("%s-%s.pptx", strings.TrimSpace(task.TaskID), hex.EncodeToString(digest[:])[:16])
+	file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
+		TenantID: tenantID, UserID: user.ID, FileName: fileName, FileSize: int64(len(payload)),
+		MIMEType:     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		BusinessType: "pptx_export", BusinessID: task.TaskID, Visibility: "PRIVATE",
+	}, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("store pptx artifact: %w", err)
+	}
+	ref := pptStorageReference(file)
+	if ref == "" {
+		return "", errors.New("stored pptx artifact has no storage reference")
+	}
+	if _, err := a.pptService.SetPPTURL(user.ID, task.TaskID, ref); err != nil {
+		return "", fmt.Errorf("persist pptx artifact reference: %w", err)
+	}
+	return ref, nil
 }
 
 func (a api) resolvePPTStorageReference(ctx context.Context, user adminUser, value string) (string, bool) {

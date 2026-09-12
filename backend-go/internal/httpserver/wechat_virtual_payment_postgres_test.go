@@ -685,6 +685,7 @@ func cleanupVirtualOrderByNo(t *testing.T, db *sql.DB, orderNo string) {
 		`delete from xz_billing_events where task_id = $1`,
 		`delete from xz_wallet_ledger where reference_id = $1`,
 		`delete from xz_commissions where order_id = $1`,
+		`delete from xz_fulfillment_records where order_no = $1`,
 		`delete from xz_payment_records where order_no = $1`,
 		`delete from xz_orders where order_no = $1`,
 	} {

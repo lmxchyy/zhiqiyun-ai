@@ -747,6 +747,10 @@ func (a api) exportPPT(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if _, err := a.persistPPTXArtifact(r.Context(), user, task, payload); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
 	fileName := pptxDownloadFileName(task)
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
 	w.Header().Set("Content-Disposition", pptxContentDisposition(fileName))
@@ -773,6 +777,10 @@ func (a api) downloadPPTExport(w http.ResponseWriter, r *http.Request) {
 	payload, err := buildPPTX(task)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := a.persistPPTXArtifact(r.Context(), user, task, payload); err != nil {
+		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
 	fileName := pptxDownloadFileName(task)
