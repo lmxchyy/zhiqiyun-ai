@@ -245,6 +245,7 @@ func (s *Service) updateSlideImagePostgres(userID, taskID, slideID, imageURL str
 			task.Slides[i].ImageURL = imageURL
 			task.Slides[i].VisualStatus = "success"
 			task.Slides[i].VisualError = ""
+			applyDurableProgress(task)
 			return nil
 		}
 		return ErrTaskNotFound
@@ -269,6 +270,7 @@ func (s *Service) updateSlideVisualPlanPostgres(userID, taskID, slideID string, 
 			}
 			task.Slides[i].VisualStatus = strings.TrimSpace(status)
 			task.Slides[i].VisualError = strings.TrimSpace(errorMessage)
+			applyDurableProgress(task)
 			return nil
 		}
 		return ErrTaskNotFound

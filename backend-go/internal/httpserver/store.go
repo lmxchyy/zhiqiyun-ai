@@ -48,6 +48,10 @@ func isVideoGenerationType(taskType string) bool {
 	}
 }
 
+func isPPTGenerationType(taskType string) bool {
+	return strings.EqualFold(strings.TrimSpace(taskType), "PPT_GENERATION")
+}
+
 func providerTaskPayload(req createGenerationTaskRequest) map[string]any {
 	if req.Params != nil {
 		if item, ok := req.Params["providerTask"].(map[string]any); ok {
