@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const virtualEntitlementFulfillmentType = "wechat_virtual_entitlement"
+
 type lockedVirtualOrder struct {
 	ID                          string
 	OrderNo                     string
@@ -301,7 +303,13 @@ func (s *virtualPaymentService) GrantOrderEntitlements(ctx context.Context, orde
 
 func (s *virtualPaymentService) grantOrderEntitlementsTx(ctx context.Context, tx *sql.Tx, order lockedVirtualOrder, paidAt time.Time) error {
 	if order.EntitlementStatus == entitlementSuccess {
+		if err := upsertVirtualFulfillmentSuccessTx(ctx, tx, order, paidAt); err != nil {
+			return err
+		}
 		return markCommercialOrderPaidTx(ctx, tx, order, paidAt)
+	}
+	if err := upsertVirtualFulfillmentProcessingTx(ctx, tx, order); err != nil {
+		return err
 	}
 	if order.Snapshot.AmountCents != order.AmountCents || !strings.EqualFold(order.Snapshot.ProductCode, order.ProductCode) {
 		return fmt.Errorf("%w: immutable entitlement snapshot mismatch", errVirtualPaymentMismatch)
@@ -341,6 +349,9 @@ func (s *virtualPaymentService) grantOrderEntitlementsTx(ctx context.Context, tx
 		return err
 	}
 	grantedAt := time.Now().UTC()
+	if err := upsertVirtualFulfillmentSuccessTx(ctx, tx, order, grantedAt); err != nil {
+		return err
+	}
 	_, err := tx.ExecContext(ctx, `
 		update xz_orders
 		set fulfillment_status = 'FULFILLED', fulfilled_at = $2, entitlement_status = $3,
@@ -715,6 +726,39 @@ func membershipExtensionWindow(currentExpiry string, paidAt time.Time, days int6
 	return base, base.AddDate(0, 0, int(days))
 }
 
+func upsertVirtualFulfillmentProcessingTx(ctx context.Context, tx *sql.Tx, order lockedVirtualOrder) error {
+	payload, err := json.Marshal(order.Snapshot)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		insert into xz_fulfillment_records(
+			id,order_no,user_id,fulfillment_type,fulfillment_status,fulfillment_payload,retry_count,failure_message
+		) values ($1,$2,$3,$4,'PROCESSING',$5::jsonb,1,'')
+		on conflict (order_no,fulfillment_type) do update set
+			fulfillment_status='PROCESSING',failure_message='',retry_count=xz_fulfillment_records.retry_count+1,
+			fulfillment_payload=excluded.fulfillment_payload,updated_at=now()
+	`, virtualPaymentResourceID("fulfillment", order.OrderNo), order.OrderNo, order.UserID,
+		virtualEntitlementFulfillmentType, string(payload))
+	return err
+}
+
+func upsertVirtualFulfillmentSuccessTx(ctx context.Context, tx *sql.Tx, order lockedVirtualOrder, fulfilledAt time.Time) error {
+	payload, err := json.Marshal(order.Snapshot)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		insert into xz_fulfillment_records(
+			id,order_no,user_id,fulfillment_type,fulfillment_status,fulfillment_payload,retry_count,failure_message,fulfilled_at
+		) values ($1,$2,$3,$4,'SUCCESS',$5::jsonb,1,'',$6)
+		on conflict (order_no,fulfillment_type) do update set
+			fulfillment_status='SUCCESS',failure_message='',fulfilled_at=excluded.fulfilled_at,updated_at=now()
+	`, virtualPaymentResourceID("fulfillment", order.OrderNo), order.OrderNo, order.UserID,
+		virtualEntitlementFulfillmentType, string(payload), fulfilledAt.UTC())
+	return err
+}
+
 func (s *virtualPaymentService) markEntitlementFailed(ctx context.Context, orderNo string, cause error) error {
 	message := truncateVirtualPaymentError(cause)
 	_, err := s.db.ExecContext(ctx, `
@@ -727,6 +771,19 @@ func (s *virtualPaymentService) markEntitlementFailed(ctx context.Context, order
 	_, err = s.db.ExecContext(ctx, `
 		update xz_payment_records set failure_reason = $2, updated_at = now() where order_no = $1
 	`, orderNo, message)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		insert into xz_fulfillment_records(
+			id,order_no,user_id,fulfillment_type,fulfillment_status,fulfillment_payload,retry_count,failure_message
+		)
+		select $2,order_no,user_id,$3,'FAILED','{}'::jsonb,1,$4
+		from xz_orders where order_no=$1
+		on conflict (order_no,fulfillment_type) do update set
+			fulfillment_status='FAILED',failure_message=excluded.failure_message,
+			retry_count=xz_fulfillment_records.retry_count+1,updated_at=now()
+	`, orderNo, virtualPaymentResourceID("fulfillment", orderNo), virtualEntitlementFulfillmentType, message)
 	return err
 }
 

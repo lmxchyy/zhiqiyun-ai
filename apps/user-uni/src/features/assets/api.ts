@@ -115,6 +115,10 @@ export function normalizeAsset(value: unknown): AssetItem {
     pointCost: numberValue(raw.pointCost, metadata.pointCost) || undefined,
     generationDurationMs: numberValue(raw.generationDurationMs, metadata.generationDurationMs) || undefined,
     usageCount: numberValue(raw.usageCount, metadata.usageCount) || undefined,
+    availability: stringValue(raw.availability || metadata.availability) || undefined,
+    availabilityReason: stringValue(raw.availabilityReason || raw.message || metadata.availabilityReason || metadata.message) || undefined,
+    videoStatus: stringValue(raw.videoStatus || metadata.videoStatus) || undefined,
+    message: stringValue(raw.message || metadata.message) || undefined,
     metadata,
   };
 }

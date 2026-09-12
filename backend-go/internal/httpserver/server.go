@@ -133,6 +133,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	}
 	fileService := storagecenter.NewService(fileRepository, storagecenter.S3ProviderFactory{AutoCreateBucket: cfg.StorageAutoCreateBucket}, fileCenterOptions(cfg))
 	api := newAPI(store, cfg, sessions, fileService)
+	api.startGenerationStaleWatchdog(context.Background(), api.imageGenerationTimeout)
 	publicCatalog := publicCatalogAPI{store: store}
 	api.pptVisualLocker = newRedisPPTVisualLocker(redisClient)
 	virtualPayment := newVirtualPaymentAPI(cfg, store, sessions, redisClient)
@@ -388,6 +389,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 	v1.GET("/officecli/documents/:fileName/download", wrapF(api.downloadOfficeCLIDocument))
 	v1.GET("/generation-tasks", wrapF(api.listGenerationTasks))
 	v1.POST("/generation-tasks/quote", wrapF(api.quoteGenerationCost))
+	v1.GET("/models/:model/capabilities", wrapF(api.modelCapabilities))
 	v1.POST("/generation-tasks/estimate", wrapF(api.estimateVideoGenerationCost))
 	v1.GET("/generation-tasks/:id", wrapF(api.getGenerationTask))
 	v1.POST("/generation-tasks/:id/retry", wrapF(api.retryGenerationTask))
@@ -894,6 +896,7 @@ func newWithStoreSessionsKnowledgeAndMedia(cfg config.Config, store platformStor
 		WriteTimeout:      15 * time.Minute,
 		IdleTimeout:       60 * time.Second,
 	}
+	server.RegisterOnShutdown(api.stopGenerationStaleWatchdog)
 	if operationCenterRuntime != nil {
 		schedulers, err := operationCenterRuntime.StartSchedulers(context.Background(), slog.Default())
 		if err != nil {

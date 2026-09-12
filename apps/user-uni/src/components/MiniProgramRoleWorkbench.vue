@@ -1274,7 +1274,9 @@ const creationReferenceLimit = computed(() => creationMode.value === "video"
   ? Math.max(1, Math.min(7, videoModelCapabilities.value.maxReferenceImages || 1))
   : creationMode.value === "infographic"
   ? 1
-  : inspirationReferenceLimit(activeInspirationDraft.value));
+  : imageCreationContract.value?.imageCapabilities?.supported === false
+    ? 0
+    : Math.max(1, imageCreationContract.value?.imageCapabilities?.maxCount || 16));
 const creationReferenceDescription = computed(() => {
   if (creationSourceLoading.value) return "正在载入原作品...";
   if (creationSourceError.value) return creationSourceError.value;

@@ -287,6 +287,30 @@ func (s *Service) Delete(userID string, taskID string) error {
 	return s.saveLocked()
 }
 
+func (s *Service) SetPPTURL(userID, taskID, value string) (Task, error) {
+	value = strings.TrimSpace(value)
+	if s.db != nil {
+		return s.updatePostgresTask(userID, taskID, func(task *Task) error {
+			task.PPTURL = value
+			return nil
+		})
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, ok := s.tasks[taskID]
+	if !ok || task.UserID != userID {
+		return Task{}, ErrTaskNotFound
+	}
+	task = cloneTask(task)
+	task.PPTURL = value
+	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.tasks[taskID] = task
+	if err := s.saveLocked(); err != nil {
+		return Task{}, err
+	}
+	return task, nil
+}
+
 func (s *Service) UpdateSlideImage(userID string, taskID string, slideID string, imageURL string) (Task, error) {
 	if s.db != nil {
 		return s.updateSlideImagePostgres(userID, taskID, slideID, imageURL)

@@ -66,6 +66,8 @@ func (a authAPI) wechatWebQRCode(w http.ResponseWriter, r *http.Request) {
 		"response_type": {"code"},
 		"scope":         {"snsapi_login"},
 		"state":         {id},
+		"login_type":    {"jssdk"},
+		"self_redirect": {"true"},
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, map[string]any{

@@ -324,6 +324,7 @@ test("exact image schema derives real size ratios, canonical qualities, and coun
       { value: 4, label: "4" },
     ],
     defaultSelection: { size: "1024x1024", quality: "auto", count: 1 },
+    imageCapabilities: { supported: true, maxCount: 16 },
     declared: { size: true, quality: true, count: true },
     required: { size: true, quality: true, count: true },
   });

@@ -48,6 +48,11 @@ export interface ImageCreationSelection {
   count?: unknown;
 }
 
+export interface ImageReferenceCapabilities {
+  supported: boolean;
+  maxCount: number;
+}
+
 export interface AvailableImageCreationContract {
   available: true;
   modelName: string;
@@ -55,6 +60,7 @@ export interface AvailableImageCreationContract {
   qualityOptions: Array<ImageControlOption<CanonicalImageQuality>>;
   countOptions: Array<ImageControlOption<number>>;
   defaultSelection: CanonicalImageSelection;
+  imageCapabilities: ImageReferenceCapabilities;
   declared: {
     size: boolean;
     quality: boolean;
@@ -250,6 +256,16 @@ function fieldByKey(fields: UnknownRecord[], key: string): UnknownRecord | undef
   return fields.find(field => field.key === key);
 }
 
+function parseImageReferenceCapabilities(response: UnknownRecord): ImageReferenceCapabilities {
+  const caps = (recordValue(response.imageCapabilities) || recordValue(response.image_capabilities) || {}) as UnknownRecord;
+  const refs = (recordValue(caps.referenceImages) || recordValue(caps.reference_images) || caps) as UnknownRecord;
+  const supportedRaw = refs.supported ?? refs.reference_images_supported ?? caps.reference_images_supported ?? caps.ReferenceImages;
+  const supported = supportedRaw !== false && supportedRaw !== 0 && supportedRaw !== "false";
+  const maxRaw = refs.maxCount ?? refs.max_count ?? caps.max_count ?? caps.MaxCount ?? 16;
+  const maxCount = typeof maxRaw === "number" && Number.isFinite(maxRaw) && maxRaw > 0 ? Math.floor(maxRaw) : (supported ? 16 : 0);
+  return { supported, maxCount: supported ? maxCount : 0 };
+}
+
 function uniqueValues<T>(values: T[]): T[] {
   return values.filter((value, index) => values.indexOf(value) === index);
 }
@@ -366,6 +382,7 @@ export function deriveImageCreationContract(
     qualityOptions: qualityValues.map(value => ({ value, label: value })),
     countOptions: countValues.map(value => ({ value, label: String(value) })),
     defaultSelection,
+    imageCapabilities: parseImageReferenceCapabilities(response),
     declared: {
       size: true,
       quality: Boolean(qualityField),

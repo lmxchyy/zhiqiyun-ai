@@ -776,6 +776,12 @@ func (a api) writePPTExportResponse(w http.ResponseWriter, r *http.Request, user
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if a.fileService != nil {
+		if _, err := a.persistPPTXArtifact(r.Context(), user, task, payload); err != nil {
+			writeError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
 	w.Header().Set("Content-Disposition", pptxContentDisposition(fileName))
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))

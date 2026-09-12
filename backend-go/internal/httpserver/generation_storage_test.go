@@ -17,6 +17,15 @@ import (
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
 
+func TestPersistGeneratedImagesFailsClosedWithoutPrivateStorage(t *testing.T) {
+	_, _, err := (api{}).persistGeneratedImages(context.Background(), "task_no_storage", generation.CreateRequest{
+		UserID: "user_1", GeneratedImages: []generation.GeneratedImage{{URL: "https://provider.example/image.png", ContentType: "image/png"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "private image storage is unavailable") {
+		t.Fatalf("err=%v, want private storage failure", err)
+	}
+}
+
 type generatedStorageTestFactory struct {
 	provider storagecenter.Provider
 }

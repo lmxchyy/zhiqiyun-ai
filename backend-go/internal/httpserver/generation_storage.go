@@ -9,6 +9,8 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
+	"os/exec"
 	"path"
 	"strings"
 	"time"
@@ -25,8 +27,11 @@ const (
 
 func (a api) persistGeneratedImages(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
 	req = applyGeneratedImageProviderMetadata(req)
-	if a.fileService == nil || len(req.GeneratedImages) == 0 {
+	if len(req.GeneratedImages) == 0 {
 		return req, nil, nil
+	}
+	if a.fileService == nil {
+		return req, nil, errors.New("private image storage is unavailable")
 	}
 	if req.Params == nil {
 		req.Params = map[string]any{}
@@ -37,7 +42,7 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 		return req, nil, fmt.Errorf("resolve generated artifact storage: %w", err)
 	}
 	if !available {
-		return req, nil, nil
+		return req, nil, errors.New("private image storage is not configured")
 	}
 
 	stored := make([]storagecenter.FileObject, 0, len(req.GeneratedImages))
@@ -123,6 +128,173 @@ func generatedStorageRecordForFile(file storagecenter.FileObject, image generati
 	}
 }
 
+func (a api) persistGeneratedVideos(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
+	if a.fileService == nil {
+		return req, nil, nil
+	}
+	videoURL := providerTaskString(req, "videoUrl")
+	if videoURL == "" {
+		return req, nil, nil
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	tenantID := firstNonEmptyString(stringValue(req.Params["tenant_id"]), "tenant_default")
+	available, err := a.fileService.StorageAvailable(ctx, tenantID)
+	if err != nil {
+		return req, nil, fmt.Errorf("resolve video storage: %w", err)
+	}
+	if !available {
+		return req, nil, nil
+	}
+
+	fileNamePrefix := fmt.Sprintf("%s-01.", taskID)
+	if existing, found, findErr := a.fileService.FindActiveBusinessFile(ctx, tenantID, "generation_result", taskID, fileNamePrefix); findErr != nil {
+		return req, nil, fmt.Errorf("find generated video: %w", findErr)
+	} else if found {
+		record := map[string]any{
+			"fileId":      existing.FileID,
+			"tenantId":    existing.TenantID,
+			"provider":    existing.Provider,
+			"bucket":      existing.Bucket,
+			"objectKey":   existing.ObjectKey,
+			"fileSize":    existing.FileSize,
+			"contentType": existing.MIMEType,
+			"sourceUrl":   compactPersistedSourceURL(videoURL),
+		}
+		req.Params[generatedStorageFilesParam] = []map[string]any{record}
+		return req, nil, nil
+	}
+
+	tempFile, fileSize, contentType, extension, cleanup, err := streamGeneratedVideoArtifact(ctx, videoURL)
+	if err != nil {
+		return req, nil, fmt.Errorf("download generated video: %w", err)
+	}
+	defer cleanup()
+
+	fileName := fmt.Sprintf("%s-01.%s", taskID, extension)
+	file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
+		TenantID:     tenantID,
+		UserID:       req.UserID,
+		FileName:     fileName,
+		FileSize:     fileSize,
+		MIMEType:     contentType,
+		BusinessType: "generation_result",
+		BusinessID:   taskID,
+		Visibility:   "PRIVATE",
+	}, tempFile)
+	if err != nil {
+		return req, nil, fmt.Errorf("store generated video: %w", err)
+	}
+
+	stored := []storagecenter.FileObject{file}
+	record := map[string]any{
+		"fileId":      file.FileID,
+		"tenantId":    file.TenantID,
+		"provider":    file.Provider,
+		"bucket":      file.Bucket,
+		"objectKey":   file.ObjectKey,
+		"fileSize":    file.FileSize,
+		"contentType": contentType,
+		"sourceUrl":   compactPersistedSourceURL(videoURL),
+	}
+	coverStored := false
+	if rawCover, coverErr := extractVideoFirstFrame(ctx, tempFile.Name()); coverErr == nil && len(rawCover) > 0 {
+		coverName := fmt.Sprintf("%s-01-cover.jpg", taskID)
+		if coverFile, coverStoreErr := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
+			TenantID: tenantID, UserID: req.UserID, FileName: coverName,
+			FileSize: int64(len(rawCover)), MIMEType: "image/jpeg",
+			BusinessType: "generation_result", BusinessID: taskID, Visibility: "PRIVATE",
+		}, bytes.NewReader(rawCover)); coverStoreErr == nil {
+			stored = append(stored, coverFile)
+			record["coverFileId"] = coverFile.FileID
+			coverStored = true
+		}
+	}
+	if !coverStored {
+
+		thumbnailURL := providerTaskString(req, "thumbnailUrl")
+		if thumbnailURL != "" && (strings.HasPrefix(strings.ToLower(thumbnailURL), "http://") || strings.HasPrefix(strings.ToLower(thumbnailURL), "https://")) {
+			if rawThumb, thumbCT, thumbExt, thumbErr := readGeneratedArtifact(ctx, thumbnailURL, "image/jpeg"); thumbErr == nil && len(rawThumb) > 0 {
+				thumbName := fmt.Sprintf("%s-01-cover.%s", taskID, thumbExt)
+				if coverFile, cErr := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
+					TenantID:     tenantID,
+					UserID:       req.UserID,
+					FileName:     thumbName,
+					FileSize:     int64(len(rawThumb)),
+					MIMEType:     thumbCT,
+					BusinessType: "generation_result",
+					BusinessID:   taskID,
+					Visibility:   "PRIVATE",
+				}, bytes.NewReader(rawThumb)); cErr == nil {
+					stored = append(stored, coverFile)
+					record["coverFileId"] = coverFile.FileID
+				}
+			}
+		}
+
+	}
+	req.Params[generatedStorageFilesParam] = []map[string]any{record}
+	return req, stored, nil
+}
+
+func streamGeneratedVideoArtifact(ctx context.Context, rawURL string) (*os.File, int64, string, string, func(), error) {
+	value := strings.TrimSpace(rawURL)
+	remoteURL, err := validateRemoteDownloadURL(value)
+	if err != nil {
+		return nil, 0, "", "", nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL.String(), nil)
+	if err != nil {
+		return nil, 0, "", "", nil, err
+	}
+	res, err := remoteDownloadHTTPClient().Do(req)
+	if err != nil {
+		return nil, 0, "", "", nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, 0, "", "", nil, fmt.Errorf("video upstream returned %d", res.StatusCode)
+	}
+
+	tempFile, err := os.CreateTemp("", "video-artifact-*")
+	if err != nil {
+		return nil, 0, "", "", nil, fmt.Errorf("create temp video file: %w", err)
+	}
+	cleanup := func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
+	}
+
+	written, err := io.Copy(tempFile, io.LimitReader(res.Body, maxGeneratedVideoBytes+1))
+	if err != nil {
+		cleanup()
+		return nil, 0, "", "", nil, fmt.Errorf("buffer video stream: %w", err)
+	}
+	if written <= 0 || written > maxGeneratedVideoBytes {
+		cleanup()
+		return nil, 0, "", "", nil, fmt.Errorf("generated video has invalid size %d (max %d)", written, maxGeneratedVideoBytes)
+	}
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, 0, "", "", nil, err
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(res.Header.Get("Content-Type")))
+	if parsed, _, parseErr := mime.ParseMediaType(contentType); parseErr == nil {
+		contentType = strings.ToLower(parsed)
+	}
+	if !strings.Contains(contentType, "video") {
+		contentType = "video/mp4"
+	}
+	extension := "mp4"
+	if strings.Contains(contentType, "webm") {
+		extension = "webm"
+	}
+
+	return tempFile, written, contentType, extension, cleanup, nil
+}
+
 func compactPersistedSourceURL(value string) string {
 	text := strings.TrimSpace(value)
 	if strings.HasPrefix(strings.ToLower(text), "data:") || len(text) > 4096 {
@@ -202,6 +374,7 @@ func (a api) signStoredAssetURLs(ctx context.Context, userID string, items []ass
 				result[index].ThumbnailURL = ticket.URL
 			}
 		}
+		result[index] = enrichAssetAvailability(result[index])
 	}
 	return result
 }
@@ -376,4 +549,32 @@ func generatedImageType(value string, raw []byte) (string, string, error) {
 		return "", "", fmt.Errorf("unsupported generated image content type %q", contentType)
 	}
 	return contentType, extension, nil
+}
+
+func extractVideoFirstFrame(ctx context.Context, inputPath string) ([]byte, error) {
+	ffmpegPath := strings.TrimSpace(os.Getenv("SMARTVIDEO_FFMPEG_PATH"))
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+	output, err := os.CreateTemp("", "video-cover-*.jpg")
+	if err != nil {
+		return nil, err
+	}
+	outputPath := output.Name()
+	_ = output.Close()
+	defer os.Remove(outputPath)
+	commandCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	command := exec.CommandContext(commandCtx, ffmpegPath, "-y", "-i", inputPath, "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "3", outputPath)
+	if raw, err := command.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("extract video first frame: %w (%s)", err, strings.TrimSpace(string(raw)))
+	}
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, errors.New("video first frame is empty")
+	}
+	return raw, nil
 }

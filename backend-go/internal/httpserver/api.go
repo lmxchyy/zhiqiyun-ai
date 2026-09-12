@@ -55,6 +55,7 @@ type platformStore interface {
 	CreatePendingGenerationTask(createGenerationTaskRequest) (generationTask, error)
 	CompleteGenerationTask(string, createGenerationTaskRequest) (generationTask, error)
 	FailGenerationTask(string, string) (generationTask, error)
+	FailGenerationTaskUnknownGrace(string, string, time.Duration) (generationTask, error)
 	FailGenerationTaskDurable(string, string) (generationTask, error)
 	RecordPPTGenerationUsage(pptapp.Task) (adminBillingEvent, error)
 	RecordRAGUsage(context.Context, knowledgeapp.RAGBillingUsage) error
@@ -177,17 +178,16 @@ type optimizedUserAccountStore interface {
 }
 
 const (
-	defaultUserContentListLimit = 120
-	maxUserContentListLimit     = 300
-	videoGenerationTimeout      = 20 * time.Minute
-	otherGenerationStaleTimeout = 15 * time.Minute
+	defaultUserContentListLimit     = 120
+	maxUserContentListLimit         = 300
+	videoGenerationTimeout          = 20 * time.Minute
+	otherGenerationStaleTimeout     = 15 * time.Minute
+	generationStaleWatchdogInterval = time.Minute
 )
 
 type api struct {
-	store             platformStore
-	generationService generation.Service
-	// connectorGenerationService is an injectable seam for connector workers.
-	// Production leaves it nil and uses the same configured model routing as all users.
+	store                      platformStore
+	generationService          generation.Service
 	connectorGenerationService *generation.Service
 	pptService                 *pptapp.Service
 	cfg                        config.Config
@@ -198,6 +198,10 @@ type api struct {
 	fileService                *storagecenter.Service
 	contentSecurity            wechatContentSecurityChecker
 	imageGenerationTimeout     time.Duration
+	unknownGenerationGrace     time.Duration
+	watchdogMu                 sync.Mutex
+	watchdogCancel             context.CancelFunc
+	watchdogDone               chan struct{}
 	thumbnailNow               func() time.Time
 }
 
@@ -217,32 +221,77 @@ func (generatedImageDecorator) Decorate(ctx context.Context, images []generation
 
 func newAPI(store platformStore, cfg config.Config, sessions authSessionStore, fileService *storagecenter.Service) api {
 	provider := imageprovider.NewDefaultRouter(cfg)
-	service := generation.NewServiceWithOptions(generation.ServiceOptions{
-		ImageProvider:  provider,
-		VideoProvider:  videoprovider.NewMockProvider(),
-		ImageDecorator: generatedImageDecorator{},
-		ExecutionHooks: providerExecutionHooks(store, cfg.ProviderExecutionSafetyEnabled),
-		CreateTask: func(req generation.CreateRequest) (any, error) {
-			return store.CreateGenerationTask(req)
-		},
-	})
+	service := generation.NewServiceWithOptions(generation.ServiceOptions{ImageProvider: provider, VideoProvider: videoprovider.NewMockProvider(), ImageDecorator: generatedImageDecorator{}, ExecutionHooks: providerExecutionHooks(store, cfg.ProviderExecutionSafetyEnabled), CreateTask: func(req generation.CreateRequest) (any, error) { return store.CreateGenerationTask(req) }})
 	pptService := pptapp.NewPersistentService(filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
 	if pgStore, ok := store.(*postgresStore); ok {
 		pptService = pptapp.NewPostgresService(pgStore.db, filepath.Join(filepath.Dir(cfg.DataPath), "ppt-tasks.json"))
 	}
 	imageTimeout := cfg.ImageGenerationTimeout()
-	api := api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout}
-	go api.repairStaleGenerationTasks(imageTimeout)
-	return api
+	return api{store: store, generationService: service, pptService: pptService, cfg: cfg, sessions: sessions, taskCancels: &sync.Map{}, pptVisualTasks: &sync.Map{}, fileService: fileService, contentSecurity: newWeChatContentSecurityService(cfg), imageGenerationTimeout: imageTimeout, unknownGenerationGrace: generationUnknownGracePeriod()}
 }
 
+func generationUnknownGracePeriod() time.Duration {
+	if value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("XIANZHI_GENERATION_UNKNOWN_GRACE"))); err == nil && value > 0 {
+		return value
+	}
+	return 45 * time.Minute
+
+}
+func (a *api) startGenerationStaleWatchdog(ctx context.Context, maxAge time.Duration) {
+	a.watchdogMu.Lock()
+	defer a.watchdogMu.Unlock()
+	if a.watchdogCancel != nil {
+		return
+	}
+	watchdogCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	a.watchdogCancel, a.watchdogDone = cancel, done
+	go func() { defer close(done); a.runGenerationStaleWatchdog(watchdogCtx, maxAge) }()
+}
+func (a *api) stopGenerationStaleWatchdog() {
+	a.watchdogMu.Lock()
+	defer a.watchdogMu.Unlock()
+	if a.watchdogCancel == nil {
+		return
+	}
+	cancel, done := a.watchdogCancel, a.watchdogDone
+	a.watchdogCancel, a.watchdogDone = nil, nil
+	cancel()
+	<-done
+}
+func (a api) runGenerationStaleWatchdog(ctx context.Context, maxAge time.Duration) {
+	if ctx.Err() != nil {
+		return
+	}
+	a.repairStaleGenerationTasksWithContext(ctx, maxAge)
+	ticker := time.NewTicker(generationStaleWatchdogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if ctx.Err() != nil {
+				return
+			}
+			a.repairStaleGenerationTasksWithContext(ctx, maxAge)
+		}
+	}
+}
 func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
+	a.repairStaleGenerationTasksWithContext(context.Background(), maxAge)
+}
+
+func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge time.Duration) {
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
 		return
 	}
 	now := time.Now().UTC()
 	for _, task := range tasks {
+		if ctx.Err() != nil {
+			return
+		}
 		if !isRunningGenerationTaskStatus(task.Status) {
 			continue
 		}
@@ -271,9 +320,23 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 				continue
 			}
 			switch execution.Status {
-			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Unknown, providerexecution.Succeeded:
-				// Provider work may be in flight, ambiguous, or durably available
-				// without a usable manifest. Never release its reservation as stale.
+			case providerexecution.Unknown:
+				// An ambiguous submission is first recoverable by querying the provider.
+				// If no request id or result ever appeared, release only after the
+				// explicit safety grace period via the durable failure transaction.
+				if execution.ProviderRequestID != nil || len(execution.ResultMetadata) > 0 {
+					continue
+				}
+				unknownAt := execution.UnknownAt
+				if unknownAt == nil {
+					unknownAt = &execution.UpdatedAt
+				}
+				if now.Sub(unknownAt.UTC()) < a.unknownGenerationGrace {
+					continue
+				}
+				a.store.FailGenerationTaskUnknownGrace(task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())), a.unknownGenerationGrace)
+				continue
+			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Succeeded:
 				continue
 			case providerexecution.Failed:
 				if execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
@@ -284,7 +347,7 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 		// Durable failure re-checks and locks provider execution in the same
 		// PostgreSQL transaction. A provider success/ambiguity must remain
 		// recoverable and must not release its reservation as stale.
-		_, _ = a.store.FailGenerationTaskDurable(task.ID, fmt.Sprintf("任务超过 %d 分钟未完成，已自动标记为失败，请重新生成。", int(taskMaxAge.Minutes())))
+		_, _ = a.store.FailGenerationTaskDurable(task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())))
 	}
 }
 
@@ -471,6 +534,9 @@ func (a api) assetsForUserWorkspaceList(r *http.Request, userID string, limit in
 	assets, err := a.loadAssetsForWorkspaceList(userID, limit)
 	if err != nil {
 		return nil, err
+	}
+	for index := range assets {
+		assets[index] = enrichAssetAvailability(assets[index])
 	}
 	return a.attachWorkspaceListThumbnailTickets(r, userID, prepareWorkspaceListAssets(assets)), nil
 }
@@ -1113,6 +1179,7 @@ func cloneAnyValue(value any) any {
 		return cloneAnyMap(typed)
 	case []any:
 		return cloneAnySlice(typed)
+
 	case []string:
 		return append([]string{}, typed...)
 	case []int:
@@ -1131,7 +1198,7 @@ type generationServiceCandidate struct {
 	channel adminAPIChannel
 }
 
-func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) error {
+func (a api) runGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) (returnErr error) {
 	startedAt := time.Now()
 	taskTimeout := a.configuredImageGenerationTimeout()
 	log.Printf("generation task started task_id=%s type=%s model=%s timeout_ms=%d", taskID, req.Type, req.Model, taskTimeout.Milliseconds())
@@ -1139,6 +1206,9 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	a.registerGenerationTaskCancel(taskID, cancel)
 	defer func() {
 		a.unregisterGenerationTaskCancel(taskID)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			a.convergeGenerationTaskDeadline(taskID, startedAt)
+		}
 		cancel()
 	}()
 	if req.Params == nil {
@@ -1247,6 +1317,13 @@ func (a api) recoverSucceededGenerationTask(task generationTask, execution provi
 	}
 	req.VideoTask = result
 	req.Params["providerTask"] = result
+	if a.cfg.VideoStoragePersistenceEnabled {
+		var persistErr error
+		req, _, persistErr = a.persistGeneratedVideos(context.Background(), task.ID, req)
+		if persistErr != nil {
+			return persistErr
+		}
+	}
 	if _, err := a.store.CompleteGenerationTask(task.ID, req); err != nil {
 		return err
 	}
@@ -1282,6 +1359,15 @@ func (a api) configuredImageGenerationTimeout() time.Duration {
 		return a.imageGenerationTimeout
 	}
 	return a.cfg.ImageGenerationTimeout()
+}
+
+func (a api) convergeGenerationTaskDeadline(taskID string, startedAt time.Time) {
+	log.Printf("generation task context deadline exceeded task_id=%s elapsed_ms=%d; attempting durable convergence", taskID, time.Since(startedAt).Milliseconds())
+	// This cleanup is independent of the timed-out provider call. Durable
+	// failure checks provider execution and leaves UNKNOWN work recoverable.
+	if _, err := a.store.FailGenerationTaskDurable(taskID, generationErrorMessage(context.DeadlineExceeded)); err != nil {
+		log.Printf("generation task deadline convergence deferred task_id=%s error=%q", taskID, err)
+	}
 }
 
 func (a api) failImageGenerationTask(taskID string, stage string, startedAt time.Time, err error) {
@@ -1382,11 +1468,15 @@ func fallbackPreferredImageOrigin(data adminPlatformData) string {
 	return normalizedURLOrigin(os.Getenv("OPENAI_BASE_URL"))
 }
 
-func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) error {
+func (a api) runVideoGenerationTask(taskID string, service generation.Service, req generation.CreateRequest) (returnErr error) {
+	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), videoGenerationTimeout)
 	a.registerGenerationTaskCancel(taskID, cancel)
 	defer func() {
 		a.unregisterGenerationTaskCancel(taskID)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			a.convergeGenerationTaskDeadline(taskID, startedAt)
+		}
 		cancel()
 	}()
 	if req.Params == nil {
@@ -1410,11 +1500,25 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		prepared.Params["provider"] = provider
 		prepared.Params["provider_channel"] = provider
 	}
+	var storedFiles []storagecenter.FileObject
+	if a.cfg.VideoStoragePersistenceEnabled {
+		var persistErr error
+		prepared, storedFiles, persistErr = a.persistGeneratedVideos(ctx, taskID, prepared)
+		if persistErr != nil {
+			log.Printf("video persistence failed task_id=%s error=%v", taskID, persistErr)
+			_, _ = a.store.FailGenerationTaskDurable(taskID, "视频资产归档失败，已取消并退回积分")
+			return persistErr
+		}
+	}
 	// Completion is the billing settlement boundary. If it fails, the
 	// provider result may already be durable and the task must remain
 	// recoverable; failing here would incorrectly release the reservation.
-	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
+	if err != nil {
 		return err
+	}
+	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
+		a.cleanupGeneratedFiles(storedFiles)
 	}
 	return nil
 }
@@ -1513,6 +1617,8 @@ func localizeGenerationErrorMessage(message, lower string) string {
 		return "上游 NewAPI 未配置该模型价格。请在 NewAPI「系统设置 → 分组与模型定价」为 grok-imagine-video-1.5-preview 设置按次价格后重试"
 	case strings.Contains(lower, "not allowed by tenant/package limit"), strings.Contains(lower, "no models are allowed by tenant/package limit"):
 		return "当前套餐未开放该视频模型，请更换模型或联系管理员开通"
+	case strings.Contains(lower, "reference_image_limit_exceeded"), strings.Contains(lower, "参考图数量超过当前模型上限"), strings.Contains(lower, "当前模型最多可上传"):
+		return "参考图数量超过当前模型上限，请减少后重试"
 	case strings.Contains(lower, "input_reference") && strings.Contains(lower, "unmarshal"):
 		return "视频参考图参数格式错误，请重新上传首帧图后重试"
 	case strings.Contains(lower, "cannot unmarshal") && strings.Contains(lower, "seconds"):
@@ -2532,8 +2638,8 @@ func (a api) writeAssetDownload(w http.ResponseWriter, r *http.Request, item ass
 			a.writeGeneratedMediaDownload(w, r.Context(), item.URL, filename)
 			return
 		}
-		if strings.TrimSpace(item.URL) == "" {
-			writeError(w, http.StatusNotFound, errAssetNotFound)
+		if strings.TrimSpace(item.URL) == "" || item.Availability == AssetAvailabilityExpired || stringValue(item.Metadata["availability"]) == AssetAvailabilityExpired {
+			writeError(w, http.StatusGone, errors.New("视频源已失效，无法下载，请重新生成"))
 			return
 		}
 		a.writeNormalizedVideoDownload(w, r, item.URL, filename)
@@ -2779,10 +2885,15 @@ func validateRemoteDownloadURL(rawURL string) (*url.URL, error) {
 	return parsed, nil
 }
 
+var remoteDownloadAllowLoopbackForTesting bool
+
 func validateRemoteDownloadHost(host string) error {
 	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), ".")
 	if host == "" {
 		return errors.New("remote download host is required")
+	}
+	if remoteDownloadAllowLoopbackForTesting && (host == "127.0.0.1" || host == "localhost") {
+		return nil
 	}
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return errors.New("remote download host is not public")
@@ -2807,7 +2918,7 @@ func remoteDownloadHTTPClient() *http.Client {
 			return nil, err
 		}
 		for _, item := range ips {
-			if !isPublicRemoteDownloadIP(item.IP) {
+			if !remoteDownloadAllowLoopbackForTesting && !isPublicRemoteDownloadIP(item.IP) {
 				return nil, fmt.Errorf("remote download host resolves to non-public address: %s", host)
 			}
 		}
@@ -4996,7 +5107,122 @@ func secureAssetsForClient(items []asset) []asset {
 	return secured
 }
 
+const (
+	AssetAvailabilityAvailable       = "AVAILABLE"
+	AssetAvailabilityProviderTempURL = "PROVIDER_TEMP_URL"
+	AssetAvailabilityPersisting      = "PERSISTING"
+	AssetAvailabilityExpired         = "EXPIRED"
+	AssetAvailabilityMissing         = "MISSING"
+)
+
+func enrichAssetAvailability(item asset) asset {
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	isManaged := stringValue(item.Metadata["fileId"]) != "" ||
+		stringValue(item.Metadata["storageFileId"]) != "" ||
+		boolValue(item.Metadata["storageManaged"]) ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(item.URL)), "storage://")
+
+	if isManaged {
+		item.Availability = AssetAvailabilityAvailable
+		item.VideoStatus = AssetAvailabilityAvailable
+		item.Metadata["availability"] = AssetAvailabilityAvailable
+		item.Metadata["videoStatus"] = AssetAvailabilityAvailable
+		return item
+	}
+
+	if strings.EqualFold(item.MediaType, "video") {
+		// 显式已标记 EXPIRED 或 PERSISTING
+		if explicit := strings.ToUpper(strings.TrimSpace(stringValue(item.Metadata["availability"]))); explicit != "" {
+			item.Availability = explicit
+			item.VideoStatus = explicit
+			if explicit == AssetAvailabilityExpired {
+				item.AvailabilityReason = "视频源已失效，请重新生成"
+				item.Message = "视频源已失效，请重新生成"
+				item.Metadata["availabilityReason"] = item.AvailabilityReason
+				item.Metadata["message"] = item.Message
+				if item.URL != "" {
+					item.Metadata["expiredSourceUrl"] = item.URL
+					item.URL = ""
+				}
+			}
+			return item
+		}
+
+		rawURL := strings.TrimSpace(item.URL)
+		if rawURL == "" {
+			item.Availability = AssetAvailabilityMissing
+			item.AvailabilityReason = "视频媒体资源不存在"
+			item.VideoStatus = AssetAvailabilityMissing
+			item.Message = "视频媒体资源不存在"
+			item.Metadata["availability"] = item.Availability
+			item.Metadata["availabilityReason"] = item.AvailabilityReason
+			item.Metadata["videoStatus"] = item.VideoStatus
+			item.Metadata["message"] = item.Message
+			return item
+		}
+
+		// 本地服务生成的内部媒体
+		if strings.HasPrefix(rawURL, "/api/v1/generated-media/") {
+			item.Availability = AssetAvailabilityAvailable
+			item.VideoStatus = AssetAvailabilityAvailable
+			item.Metadata["availability"] = AssetAvailabilityAvailable
+			item.Metadata["videoStatus"] = item.VideoStatus
+			return item
+		}
+
+		// 未托管到自有存储的外部临时 Provider URL: 检查创建时间是否超过 24 小时
+		isExpired := false
+		createdAt := strings.TrimSpace(item.CreatedAt)
+		if createdAt != "" {
+			if t, err := time.Parse(time.RFC3339Nano, createdAt); err == nil {
+				if time.Since(t.UTC()) > 24*time.Hour {
+					isExpired = true
+				}
+			} else if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
+				if time.Since(t.UTC()) > 24*time.Hour {
+					isExpired = true
+				}
+			}
+		}
+
+		if isExpired {
+			item.Availability = AssetAvailabilityExpired
+			item.AvailabilityReason = "视频源已失效，请重新生成"
+			item.VideoStatus = AssetAvailabilityExpired
+			item.Message = "视频源已失效，请重新生成"
+			item.Metadata["availability"] = item.Availability
+			item.Metadata["availabilityReason"] = item.AvailabilityReason
+			item.Metadata["videoStatus"] = item.VideoStatus
+			item.Metadata["message"] = item.Message
+			// 按照设计要求：不继续下发失效的外部临时URL，避免前端黑屏00:00
+			item.Metadata["expiredSourceUrl"] = item.URL
+			item.URL = ""
+			return item
+		}
+
+		item.Availability = AssetAvailabilityProviderTempURL
+		item.AvailabilityReason = "临时视频资源，后台同步转存中"
+		item.VideoStatus = "TEMP"
+		item.Metadata["availability"] = item.Availability
+		item.Metadata["availabilityReason"] = item.AvailabilityReason
+		item.Metadata["videoStatus"] = item.VideoStatus
+		return item
+	}
+
+	if strings.TrimSpace(item.URL) == "" && stringValue(item.Metadata["fileId"]) == "" {
+		item.Availability = AssetAvailabilityMissing
+		item.AvailabilityReason = "媒体资源不存在"
+	} else {
+		item.Availability = AssetAvailabilityAvailable
+	}
+	item.Metadata["availability"] = item.Availability
+	return item
+}
+
 func secureAssetForClient(item asset) asset {
+	item = enrichAssetAvailability(item)
 	item.URL = securePublicMediaURL(item.URL)
 	item.ThumbnailURL = securePublicMediaURL(item.ThumbnailURL)
 	if item.Metadata != nil {

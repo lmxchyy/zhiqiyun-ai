@@ -121,6 +121,10 @@ type asset struct {
 	DeletedAt      string         `json:"deletedAt,omitempty"`
 	CreatedAt      string         `json:"createdAt"`
 	UpdatedAt      string         `json:"updatedAt"`
+	Availability   string         `json:"availability,omitempty"`
+	AvailabilityReason string     `json:"availabilityReason,omitempty"`
+	VideoStatus    string         `json:"videoStatus,omitempty"`
+	Message        string         `json:"message,omitempty"`
 }
 
 type createGenerationTaskRequest = generation.CreateRequest

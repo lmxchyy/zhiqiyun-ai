@@ -521,7 +521,8 @@
                         />
                         <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
                           <span class="ai-task-spinner"></span>
-                          <strong>生成中...</strong>
+                          <strong>{{ isAiTaskStale(task) ? '等待服务商响应...' : '生成中...' }}</strong>
+                          <small v-if="isAiTaskStale(task)">已超过 15 分钟，仍在继续查询</small>
                         </div>
                         <div v-else-if="isAiTaskFailed(task)" class="ai-task-failed">
                           <el-icon><Monitor /></el-icon>
@@ -630,6 +631,10 @@
                     <el-select v-model="onlineImageForm.quality">
                       <el-option v-for="quality in aiImageQualitySchemaOptions" :key="quality" :label="quality === 'auto' ? '自动' : quality === 'low' ? '低' : quality === 'medium' ? '中' : '高'" :value="quality" />
                     </el-select>
+                  </label>
+                  <label>
+                    <span>预计积分</span>
+                    <strong class="online-cost">{{ aiImageQuoteLabel }}</strong>
                   </label>
                   <label>
                     <span>格式</span>
@@ -3895,7 +3900,6 @@ let aiOriginalImagePrefetchTimer: number | null = null;
 const aiTrackedGenerationTaskIds = ref<string[]>([]);
 const aiGenerationPollAttempts = new Map<string, number>();
 const aiGenerationPollDelaysMs = [2000, 3000, 5000, 8000, 13000, 20000];
-const aiGenerationPollMaxAttempts = 90;
 let aiComposerResizeObserver: ResizeObserver | null = null;
 const aiAgentRunning = ref(false);
 const aiAgentActiveConversationId = ref("agent-default");
@@ -4069,6 +4073,16 @@ const aiImageQualitySchemaOptions = computed(() => {
     .filter((item) => official.includes(item));
   return values.length ? Array.from(new Set(values)) : official;
 });
+const aiImageReferenceLimit = computed(() => {
+  const schema = aiImageModuleSchema.value || {};
+  const caps = (schema.imageCapabilities || schema.image_capabilities || {}) as AdminRecord;
+  const refs = (caps.referenceImages || caps.reference_images || caps) as AdminRecord;
+  const supported = refs.supported ?? refs.reference_images_supported ?? caps.reference_images_supported;
+  if (supported === false) return 0;
+  const max = Number(refs.maxCount ?? refs.max_count ?? caps.max_count ?? 16);
+  return Number.isFinite(max) && max > 0 ? Math.floor(max) : 16;
+});
+const aiImageQuoteLabel = ref("登录后可查看预计积分");
 const aiSettingsVisible = ref(false);
 const aiSettingsTab = ref("api");
 const aiSettingsTabs = [
@@ -4944,6 +4958,38 @@ function findAiSizePreset(size: string) {
 }
 
 const displayAiImageSize = computed(() => gptImageProductionSize(onlineImageForm.value.size) || "auto");
+let aiImageQuoteSequence = 0;
+async function refreshAiImageQuote() {
+  if (!hasAuthToken()) {
+    aiImageQuoteLabel.value = "登录后可查看预计积分";
+    return;
+  }
+  const sequence = ++aiImageQuoteSequence;
+  aiImageQuoteLabel.value = "试算中…";
+  try {
+    const payload = await adminRequest<{ requiredPoints?: number }>({
+      method: "POST",
+      url: "/generation-tasks/quote",
+      data: {
+        type: "TEXT_TO_IMAGE",
+        prompt: onlineImageForm.value.prompt || "generation pricing quote",
+        model: onlineImageForm.value.model || "gpt-image-2",
+        params: {
+          size: gptImageProductionSize(onlineImageForm.value.size) || "auto",
+          quality: onlineImageForm.value.quality || "low",
+          n: Number(onlineImageForm.value.count || 1)
+        }
+      }
+    });
+    if (sequence !== aiImageQuoteSequence) return;
+    const points = Number(payload?.requiredPoints || 0);
+    aiImageQuoteLabel.value = points > 0 ? `预计 ${points} 积分` : "价格暂不可用";
+  } catch {
+    if (sequence !== aiImageQuoteSequence) return;
+    aiImageQuoteLabel.value = "价格暂不可用";
+  }
+}
+watch(() => [onlineImageForm.value.model, onlineImageForm.value.size, onlineImageForm.value.quality, onlineImageForm.value.count], () => { void refreshAiImageQuote(); }, { immediate: true });
 const aiSizePickerErrors = computed(() => {
   if (aiSizePickerMode.value !== "resolution") return [] as string[];
   const width = Number(aiCustomWidth.value);
@@ -5448,6 +5494,12 @@ function isAiTaskRunning(task: AdminRecord) {
   return !isAiTaskFailed(task) && !aiTaskImageUrl(task);
 }
 
+function isAiTaskStale(task: AdminRecord) {
+  if (!isAiTaskRunning(task)) return false;
+  const createdAt = aiTaskDateMs(task, "createdAt");
+  return createdAt > 0 && aiTaskClockNow.value - createdAt >= 15 * 60 * 1000;
+}
+
 function isAiTaskFailed(task: AdminRecord) {
   return ["FAILED", "ERROR"].includes(aiTaskStatus(task));
 }
@@ -5529,7 +5581,10 @@ async function pollAiGenerationTasksOnce() {
       aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => !completedTaskIds.includes(id));
       completedTaskIds.forEach((id) => aiGenerationPollAttempts.delete(id));
     }
-    aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => (aiGenerationPollAttempts.get(id) || 0) < aiGenerationPollMaxAttempts);
+    // Do not silently forget a running task after a client-side attempt limit.
+    // The server may still be recovering a provider request; keep polling with
+    // the capped backoff so the card can converge when it becomes terminal.
+    aiTrackedGenerationTaskIds.value = aiTrackedGenerationTaskIds.value.filter((id) => aiGenerationPollAttempts.has(id));
     const serverTasks = Array.isArray(onlineImageData.value.recentTasks) ? onlineImageData.value.recentTasks : [];
     aiOptimisticTasks.value = aiOptimisticTasks.value.filter((task) => !isOptimisticAiTaskReconciled(task, serverTasks));
   } catch (error) {
@@ -6575,8 +6630,8 @@ function editAiTaskOutput(task: AdminRecord) {
     aiPlaygroundMessage("warning", "图片生成完成后才能编辑输出");
     return;
   }
-  if (aiReferenceImages.value.length >= 10) {
-    aiPlaygroundMessage("warning", "参考图最多上传 10 张");
+  if (aiReferenceImages.value.length >= aiImageReferenceLimit.value) {
+    aiPlaygroundMessage("warning", `参考图最多上传 ${aiImageReferenceLimit.value} 张`);
     return;
   }
   aiReferenceImages.value = [
@@ -6704,8 +6759,8 @@ async function editAiContextImage() {
     aiPlaygroundMessage("warning", "暂无可编辑图片");
     return;
   }
-  if (aiReferenceImages.value.length >= 10) {
-    aiPlaygroundMessage("warning", "参考图最多上传 10 张");
+  if (aiReferenceImages.value.length >= aiImageReferenceLimit.value) {
+    aiPlaygroundMessage("warning", `参考图最多上传 ${aiImageReferenceLimit.value} 张`);
     return;
   }
   aiReferenceImages.value = [
@@ -6861,8 +6916,8 @@ async function handleAiReferenceUpload(uploadFile: { raw?: File; name?: string }
     ElMessage.error("请选择图片文件");
     return;
   }
-  if (aiReferenceImages.value.length >= 10) {
-    ElMessage.warning("参考图最多上传 10 张");
+  if (aiReferenceImages.value.length >= aiImageReferenceLimit.value) {
+    ElMessage.warning(`参考图最多上传 ${aiImageReferenceLimit.value} 张`);
     return;
   }
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -6881,8 +6936,8 @@ async function handleAiReferenceUpload(uploadFile: { raw?: File; name?: string }
 }
 
 async function handleOnlineReferenceUpload(uploadFile: { raw?: File; name?: string }) {
-  if (onlineReferenceImages.value.length >= onlineReferenceSlots.length) {
-    ElMessage.warning(`在线生图最多上传 ${onlineReferenceSlots.length} 张参考图`);
+  if (onlineReferenceImages.value.length >= aiImageReferenceLimit.value) {
+    ElMessage.warning(`在线生图最多上传 ${aiImageReferenceLimit.value} 张参考图`);
     return;
   }
   await handleAiReferenceUpload(uploadFile);
@@ -6890,8 +6945,8 @@ async function handleOnlineReferenceUpload(uploadFile: { raw?: File; name?: stri
 
 function handleAiPromptPasteImages(files: File[]) {
   for (const file of files) {
-    if (aiReferenceImages.value.length >= 10) {
-      ElMessage.warning("参考图最多上传 10 张");
+    if (aiReferenceImages.value.length >= aiImageReferenceLimit.value) {
+      ElMessage.warning(`参考图最多上传 ${aiImageReferenceLimit.value} 张`);
       break;
     }
     void handleAiReferenceUpload({ raw: file, name: file.name || "粘贴图片.png" });

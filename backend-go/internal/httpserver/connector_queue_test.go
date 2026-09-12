@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestConnectorRedisQueueRecoveryAndAck(t *testing.T) {
 	prefix := "test:xianzhi:connector:" + newConnectorID("queue") + ":"
 	queue := newConnectorJobQueue(client, prefix)
 	t.Cleanup(func() {
-		_ = client.Del(context.Background(), queue.pendingKey, queue.workingKey).Err()
+		_ = client.Del(context.Background(), queue.pendingKey, queue.workingKey, queue.dlqKey, queue.attemptKey).Err()
 		_ = client.Close()
 	})
 	job := connectorJob{MessageID: "message-recovery"}
@@ -78,5 +79,64 @@ func TestConnectorRedisQueueRecoveryAndAck(t *testing.T) {
 	}
 	if working, _ := client.LLen(ctx, queue.workingKey).Result(); working != 0 {
 		t.Fatalf("working after ack=%d, want 0", working)
+	}
+}
+
+func TestConnectorLocalQueueRetriesFailedJob(t *testing.T) {
+	queue := newConnectorJobQueue(nil, "test:xianzhi:connector:local:")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	done := make(chan struct{})
+	go func() {
+		queue.Run(ctx, func(context.Context, connectorJob) error {
+			attempts++
+			if attempts < connectorQueueMaxAttempts {
+				return errors.New("temporary connector failure")
+			}
+			cancel()
+			return nil
+		})
+		close(done)
+	}()
+	if err := queue.Enqueue(ctx, connectorJob{MessageID: "message-retry"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("local connector queue retry timed out")
+	}
+	if attempts != connectorQueueMaxAttempts {
+		t.Fatalf("attempts=%d, want %d", attempts, connectorQueueMaxAttempts)
+	}
+}
+
+func TestConnectorQueueFailureIsBounded(t *testing.T) {
+	queue := newConnectorJobQueue(nil, "test:xianzhi:connector:local-dlq:")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	done := make(chan struct{})
+	go func() {
+		queue.Run(ctx, func(context.Context, connectorJob) error {
+			attempts++
+			if attempts == connectorQueueMaxAttempts {
+				cancel()
+			}
+			return errors.New("permanent connector failure")
+		})
+		close(done)
+	}()
+	if err := queue.Enqueue(ctx, connectorJob{MessageID: "message-dlq"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("local connector queue failure timed out")
+	}
+	if attempts != connectorQueueMaxAttempts {
+		t.Fatalf("attempts=%d, want %d", attempts, connectorQueueMaxAttempts)
 	}
 }

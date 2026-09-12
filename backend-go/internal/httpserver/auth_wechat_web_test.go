@@ -58,6 +58,9 @@ func TestWeChatWebLoginExistingIdentityIssuesTokenOnlyOnce(t *testing.T) {
 	if err := json.Unmarshal(qrResponse.Body.Bytes(), &qr); err != nil || qr.QRCodeID == "" || !strings.Contains(qr.QRURL, "state=") {
 		t.Fatalf("invalid qrcode response: err=%v body=%s", err, qrResponse.Body.String())
 	}
+	if !strings.Contains(qr.QRURL, "login_type=jssdk") || !strings.Contains(qr.QRURL, "self_redirect=true") {
+		t.Fatalf("qrcode url missing iframe login params: %s", qr.QRURL)
+	}
 
 	callback := httptest.NewRecorder()
 	callbackURL := "/api/v1/auth/wechat/callback?state=" + url.QueryEscape(qr.QRCodeID) + "&code=wechat-code"

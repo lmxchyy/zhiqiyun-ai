@@ -151,6 +151,12 @@ function normalizeBody(body: RequestInit['body']) {
   }
 }
 
+function h5BrowserRoute(path: string) {
+  const normalized = path.startsWith('/') ? path : `/${path}`
+  const base = String(rawEnv.BASE_URL || '/').replace(/^\/+|\/+$/g, '')
+  return base ? `/${base}${normalized}` : normalized
+}
+
 function redirectToLogin() {
   if (unauthorizedRedirecting) return
   if (!authStorage.getToken() && hasAcceptedGuestBrowse()) return
@@ -173,7 +179,7 @@ function redirectToLogin() {
   // #endif
   // #ifdef H5
   if (typeof window !== 'undefined' && !['/login', '/register'].includes(window.location.pathname)) {
-    window.history.pushState({ authRequired: true }, '', `/login?redirect=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`)
+    window.history.pushState({ authRequired: true }, '', `${h5BrowserRoute('/login')}?redirect=${encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)}`)
     window.dispatchEvent(new PopStateEvent('popstate'))
   }
   unauthorizedRedirecting = false

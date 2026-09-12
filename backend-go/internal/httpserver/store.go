@@ -3736,6 +3736,43 @@ func (s *jsonStore) FailGenerationTaskDurable(id string, message string) (genera
 	return task, nil
 }
 
+// FailGenerationTaskUnknownGrace mirrors the durable repair contract for the
+// JSON fallback store; provider execution locking is PostgreSQL-specific.
+func (s *jsonStore) FailGenerationTaskUnknownGrace(id string, message string, grace time.Duration) (generationTask, error) {
+	if grace <= 0 {
+		return generationTask{}, fmt.Errorf("unknown grace must be positive")
+	}
+	var task generationTask
+	data, err := s.load()
+	if err != nil {
+		return generationTask{}, err
+	}
+	for _, candidate := range data.GenerationTasks {
+		if candidate.ID == id {
+			task = candidate
+			break
+		}
+	}
+	if task.ID == "" {
+		return generationTask{}, fmt.Errorf("generation task not found: %s", id)
+	}
+	execution, ok := task.Params["_provider_execution"].(map[string]any)
+	if !ok || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(execution["status"])), "unknown") {
+		return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for unknown grace failure", id)
+	}
+	if strings.TrimSpace(fmt.Sprint(execution["provider_request_id"])) != "" || strings.TrimSpace(fmt.Sprint(execution["providerRequestID"])) != "" || execution["result_metadata"] != nil || execution["resultMetadata"] != nil {
+		return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for unknown grace failure", id)
+	}
+	unknownAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(fmt.Sprint(execution["unknown_at"])))
+	if err != nil {
+		unknownAt, err = time.Parse(time.RFC3339Nano, strings.TrimSpace(fmt.Sprint(execution["unknownAt"])))
+	}
+	if err != nil || time.Now().UTC().Sub(unknownAt.UTC()) < grace {
+		return generationTask{}, fmt.Errorf("provider execution for task %s is not eligible for unknown grace failure", id)
+	}
+	return s.FailGenerationTaskDurable(id, message)
+}
+
 func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointStore, expectedUserID, id, message, terminalStatus, terminalTaskStatus string) (generationTask, error) {
 	for i := range data.GenerationTasks {
 		if data.GenerationTasks[i].ID != id {
