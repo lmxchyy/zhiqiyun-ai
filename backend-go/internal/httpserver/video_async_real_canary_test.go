@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,6 +44,12 @@ func TestVideoAsyncRealCanary_LiveIntegration(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Skipf("cannot ping postgres: %v", err)
 	}
+
+	minioConn, err := net.DialTimeout("tcp", "127.0.0.1:9000", 500*time.Millisecond)
+	if err != nil {
+		t.Skipf("cannot reach MinIO on 127.0.0.1:9000 (live integration requires running MinIO): %v", err)
+	}
+	_ = minioConn.Close()
 
 	// 1. MinIO Provider 真实连接
 	storageFactory := storagecenter.S3ProviderFactory{AutoCreateBucket: true}

@@ -43,5 +43,5 @@ test("postgres_store binds video to storage URL and prevents saving temp provide
 test("api guards video generation settlement against persistence failure", () => {
   assert.match(apiSource, /if a\.cfg\.VideoStoragePersistenceEnabled/, "runVideoGenerationTask must branch on VideoStoragePersistenceEnabled");
   assert.match(apiSource, /prepared, storedFiles, persistErr = a\.persistGeneratedVideos/, "must call persistGeneratedVideos");
-  assert.match(apiSource, /FailGenerationTask\(taskID, "视频资产归档失败，已取消并退回积分"\)/, "must fail task and release points on persistence failure");
+  assert.match(apiSource, /FailGenerationTask(?:Durable)?\(taskID, "视频资产归档失败，已取消并退回积分"\)/, "must fail task and release points on persistence failure");
 });
