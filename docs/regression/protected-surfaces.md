@@ -84,12 +84,16 @@
   - `go test ./internal/httpserver/ -run "TestVideoGenerationEstimate|TestBillingCenterV1Acceptance|TestNormalizeAICapabilityDefaultsMergesMissingBillingRules|TestVideoModelListPrice|TestSortPublicModelsVideo|TestFormalVideoModelsListPrice"`
 - **核对**：`[ ]`
 
-### M3. 作品列表与详情 / 视频下载可分享
+### M3. 作品列表与详情 / 视频下载可分享 / 视频资产生命周期
 - **不可丢**：作品列表可加载、筛选/多选删除提示、详情可返回列表。
+- **视频资产生命周期与防守**：
+  - 视频生成持久化：通过 `persistGeneratedVideos` 流式写入自有对象存储（MinIO/R2），产出 `file_id`，资产 URL 绑定为 `storage://{file_id}`，禁止长期依赖第三方临时 URL。
+  - 历史视频可用性防守：详情接口通过 `enrichAssetAvailability` 自动识别 `EXPIRED` 视频，前端 `AssetDetailCenterPage.vue` 捕获 `@error` 并渲染失败卡片与重新生成引导，消灭黑屏 `00:00` 静默吞错。
+  - 过期视频下载安全拦截：返回 410 Gone，前台弹窗引导重新生成，避免后端 502。
 - **视频下载（微信可发）**：网页/作品下载接口必须输出 **`Content-Type: video/mp4`** 且文件名以 **`.mp4`** 结尾；不得把上游 `.m4v` / `video/x-m4v` 原样传给浏览器导致微信群无法播放。有 ffmpeg 时应对 m4v/HEVC 等做 remux 或转 H.264+AAC。
-- **锚点**：`UserAssetsListPage`、`AssetDetailCenterPage`、作品中心 tab；`/api/v1/video/download`、`writeNormalizedVideoDownload` / `normalizeVideoBytesForShare`、`sanitizeVideoDownloadFilename`。
-- **验证**：`go test ./internal/httpserver/ -run "TestSanitizeVideoDownloadFilename|TestNormalizeVideoBytesForShare|TestDownloadAssetNameStripsM4V"`
-- **核对**：`[ ]`
+- **锚点**：`UserAssetsListPage`、`AssetDetailCenterPage`、作品中心 tab；`/api/v1/video/download`、`writeNormalizedVideoDownload` / `normalizeVideoBytesForShare`、`sanitizeVideoDownloadFilename`、`enrichAssetAvailability`、`persistGeneratedVideos`。
+- **验证**：`go test ./internal/httpserver/ -run "TestSanitizeVideoDownloadFilename|TestNormalizeVideoBytesForShare|TestDownloadAssetNameStripsM4V|TestPersistGeneratedVideos|TestEnrichAssetAvailability"`
+- **核对**：`[x]`
 
 ### M4. 图片创作与灵感草稿带入
 - **不可丢**：从灵感「做同款」可带入草稿到图片/PPT 创作页（视频灵感见 M7，审核期不下发）。
