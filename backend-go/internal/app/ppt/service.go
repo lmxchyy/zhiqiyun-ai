@@ -38,7 +38,10 @@ var (
 	ErrConcurrency    = errors.New("ppt generation concurrency limit reached")
 )
 
+const DefaultTenantID = "tenant_default"
+
 type GenerateRequest struct {
+	TenantID              string   `json:"tenantId,omitempty"`
 	UserID                string   `json:"-"`
 	ClientRequestID       string   `json:"-"`
 	Prompt                string   `json:"prompt"`
@@ -70,6 +73,7 @@ type GenerateResponse struct {
 
 type Task struct {
 	TaskID                string   `json:"taskId"`
+	TenantID              string   `json:"tenantId,omitempty"`
 	UserID                string   `json:"-"`
 	ClientRequestID       string   `json:"clientRequestId,omitempty"`
 	Type                  string   `json:"type,omitempty"`
@@ -1184,6 +1188,9 @@ func inferSlideType(layout string, index int) string {
 }
 
 func normalizeLegacyTask(task Task) Task {
+	if strings.TrimSpace(task.TenantID) == "" {
+		task.TenantID = DefaultTenantID
+	}
 	for i := range task.Slides {
 		if strings.TrimSpace(task.Slides[i].SlideType) == "" {
 			task.Slides[i].SlideType = "text_image"

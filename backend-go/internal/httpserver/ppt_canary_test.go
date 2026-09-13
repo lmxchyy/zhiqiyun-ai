@@ -433,8 +433,16 @@ func TestPPTCanary_OutboxFailureRollback(t *testing.T) {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_generation_tasks (id, user_id, type, status, task_status, billing_status, point_cost, created_at, updated_at) VALUES ($1, $2, 'PPT_GENERATION', 'PROCESSING', 'QUEUED', 'RESERVED', 5, now()::text, now()::text)`, taskID, testUser); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO xz_ppt_tasks (task_id, user_id, client_request_id, status, created_at, updated_at, raw) VALUES ($1, $2, $3, 'pending', now(), now(), '{}'::jsonb)`, taskID, testUser, "req-"+suffix); err != nil {
-		t.Fatal(err)
+	var hasTenant bool
+	_ = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='xz_ppt_tasks' AND column_name='tenant_id')`).Scan(&hasTenant)
+	if hasTenant {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xz_ppt_tasks (task_id, tenant_id, user_id, client_request_id, status, created_at, updated_at, raw) VALUES ($1, 'tenant_default', $2, $3, 'pending', now(), now(), '{}'::jsonb)`, taskID, testUser, "req-"+suffix); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xz_ppt_tasks (task_id, user_id, client_request_id, status, created_at, updated_at, raw) VALUES ($1, $2, $3, 'pending', now(), now(), '{}'::jsonb)`, taskID, testUser, "req-"+suffix); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Simulate outbox failure and rollback

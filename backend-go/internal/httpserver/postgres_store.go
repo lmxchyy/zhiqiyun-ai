@@ -1492,6 +1492,9 @@ func (s *postgresStore) createPendingGenerationTaskWithPPT(req createGenerationT
 		return generationTask{}, err
 	}
 	if pptReq != nil {
+		if strings.TrimSpace(pptReq.TenantID) == "" {
+			pptReq.TenantID = firstNonEmptyString(task.TenantID, stringValue(req.Params["tenant_id"]), "tenant_default")
+		}
 		pptTask := pptapp.TaskFromGenerateRequest(task.ID, *pptReq)
 		if err := pptapp.PersistPostgresTaskTx(ctx, tx, pptTask); err != nil {
 			return generationTask{}, fmt.Errorf("persist ppt detail: %w", err)
