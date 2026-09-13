@@ -1499,6 +1499,16 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if provider := providerTaskString(prepared, "provider"); provider != "" {
 		prepared.Params["provider"] = provider
 		prepared.Params["provider_channel"] = provider
+	var storedFiles []storagecenter.FileObject
+	if a.cfg.VideoStoragePersistenceEnabled {
+		var persistErr error
+		prepared, storedFiles, persistErr = a.persistGeneratedVideos(ctx, taskID, prepared)
+		if persistErr != nil {
+			log.Printf("video persistence failed task_id=%s error=%v", taskID, persistErr)
+			_, _ = a.store.FailGenerationTaskDurable(taskID, "视频资产归档失败，已取消并退回积分")
+			return persistErr
+		}
+	}
 	}
 	var storedFiles []storagecenter.FileObject
 	if a.cfg.VideoStoragePersistenceEnabled {
