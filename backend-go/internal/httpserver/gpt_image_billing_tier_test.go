@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	imageprovider "xianzhi-ai/backend-go/internal/provider/image"
@@ -11,9 +10,13 @@ import (
 func publishedGPTImageSizeRules() map[string]any {
 	return map[string]any{
 		"auto":      float64(1),
+		"tier_720p": float64(1),
+		"tier_1k":   float64(1),
+		"tier_2k":   float64(1.5),
+		"tier_4k":   float64(2),
 		"1024x1024": float64(1),
-		"1024x1536": float64(1.2),
-		"1536x1024": float64(1.2),
+		"1024x1536": float64(1),
+		"1536x1024": float64(1),
 		"1280x720":  float64(1),
 		"720x1280":  float64(1),
 		"2048x2048": float64(1.5),
@@ -73,19 +76,6 @@ func TestAllCurrentUISizesMapToPublishedBillingTiers(t *testing.T) {
 		if !ok || mult <= 0 {
 			t.Fatalf("size %s lookup %s is missing from PUBLISHED size rules", size, lookup)
 		}
-		_, exact := anyToFloat(published[strings.ToLower(size)])
-		if !exact && size != "auto" {
-			maxTier := 0.0
-			if key, found := highestSizeRuleKeyForTier(published, tier); found {
-				maxTier, _ = anyToFloat(published[key])
-			}
-			if maxTier > minPublished && mult <= minPublished {
-				t.Fatalf("size %s missed exact key and fell to cheapest multiplier %v", size, mult)
-			}
-			if maxTier > 0 && mult != maxTier {
-				t.Fatalf("size %s custom lookup multiplier %v, want tier max %v", size, mult, maxTier)
-			}
-		}
 		req := createGenerationTaskRequest{
 			Type:   "TEXT_TO_IMAGE",
 			Model:  "gpt-image-2",
@@ -113,15 +103,16 @@ func TestGPTImageBillingSizeLookupUsesTiersWithoutCheapFallback(t *testing.T) {
 		wantLookupKey string
 		wantMult      float64
 	}{
-		{requestSize: "auto", wantTier: imageprovider.ImageBillingSizeAuto, wantLookupKey: "auto", wantMult: 1},
-		{requestSize: "1024x1024", wantTier: imageprovider.ImageBillingSizeTier1K, wantLookupKey: "1024x1024", wantMult: 1},
-		{requestSize: "1536x1024", wantTier: imageprovider.ImageBillingSizeTier1K, wantLookupKey: "1536x1024", wantMult: 1.2},
-		{requestSize: "1024x1536", wantTier: imageprovider.ImageBillingSizeTier1K, wantLookupKey: "1024x1536", wantMult: 1.2},
-		{requestSize: "1280x720", wantTier: imageprovider.ImageBillingSizeTier720, wantLookupKey: "1280x720", wantMult: 1},
-		{requestSize: "2048x2048", wantTier: imageprovider.ImageBillingSizeTier2K, wantLookupKey: "2048x2048", wantMult: 1.5},
-		{requestSize: "1792x1024", wantTier: imageprovider.ImageBillingSizeTier2K, wantLookupKey: "2048x2048", wantMult: 1.5},
-		{requestSize: "1600x1024", wantTier: imageprovider.ImageBillingSizeTier2K, wantLookupKey: "2048x2048", wantMult: 1.5},
-		{requestSize: "2880x2880", wantTier: imageprovider.ImageBillingSizeTier4K, wantLookupKey: "3840x2160", wantMult: 2},
+		{requestSize: "auto", wantTier: imageprovider.ImageBillingSizeAuto, wantLookupKey: imageprovider.ImageBillingSizeAuto, wantMult: 1},
+		{requestSize: "1024x1024", wantTier: imageprovider.ImageBillingSizeTier1K, wantLookupKey: imageprovider.ImageBillingSizeTier1K, wantMult: 1},
+		{requestSize: "1536x1024", wantTier: imageprovider.ImageBillingSizeTier1K, wantLookupKey: imageprovider.ImageBillingSizeTier1K, wantMult: 1},
+		{requestSize: "1024x1536", wantTier: imageprovider.ImageBillingSizeTier1K, wantLookupKey: imageprovider.ImageBillingSizeTier1K, wantMult: 1},
+		{requestSize: "1280x720", wantTier: imageprovider.ImageBillingSizeTier720, wantLookupKey: imageprovider.ImageBillingSizeTier720, wantMult: 1},
+		{requestSize: "2048x2048", wantTier: imageprovider.ImageBillingSizeTier2K, wantLookupKey: imageprovider.ImageBillingSizeTier2K, wantMult: 1.5},
+		{requestSize: "1792x1024", wantTier: imageprovider.ImageBillingSizeTier2K, wantLookupKey: imageprovider.ImageBillingSizeTier2K, wantMult: 1.5},
+		{requestSize: "1600x1024", wantTier: imageprovider.ImageBillingSizeTier2K, wantLookupKey: imageprovider.ImageBillingSizeTier2K, wantMult: 1.5},
+		{requestSize: "2880x2880", wantTier: imageprovider.ImageBillingSizeTier4K, wantLookupKey: imageprovider.ImageBillingSizeTier4K, wantMult: 2},
+		{requestSize: "3840x2160", wantTier: imageprovider.ImageBillingSizeTier4K, wantLookupKey: imageprovider.ImageBillingSizeTier4K, wantMult: 2},
 	}
 	for _, tt := range tests {
 		tier, err := imageprovider.NormalizeImageBillingSizeTier(tt.requestSize)
@@ -159,10 +150,12 @@ func TestGPTImagePublishedBillingSmokePaths(t *testing.T) {
 		points  int
 	}{
 		{size: "1024x1024", quality: "low", n: 1, points: 10},
-		{size: "1536x1024", quality: "medium", n: 1, points: 15},
+		{size: "1536x1024", quality: "medium", n: 1, points: 12},
+		{size: "1024x1536", quality: "low", n: 1, points: 10},
 		{size: "1280x720", quality: "low", n: 1, points: 10},
 		{size: "2048x2048", quality: "low", n: 1, points: 15},
 		{size: "1792x1024", quality: "low", n: 1, points: 15},
+		{size: "3840x2160", quality: "low", n: 1, points: 20},
 		{size: "1024x1024", quality: "low", n: 3, points: 30},
 	}
 	for _, tt := range tests {

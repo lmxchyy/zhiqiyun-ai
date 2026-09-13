@@ -759,7 +759,36 @@ func defaultBillingRules(now string) []adminBillingRule {
 		// (low=10, medium=55, high=220, auto=55) lives in unpublished DRAFT
 		// created by TestGPTImageBillingRulePhase26Draft. Do not treat this
 		// seed as the published production price.
-		{ID: "billing_rule_image_gpt", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2", BillingType: "per_image", BasePrice: 10, CostPrice: 6, CurrencyType: "credit", ParameterMultiplier: map[string]any{"quality": map[string]any{"auto": float64(1), "low": float64(1), "medium": float64(1.2), "high": float64(1.5)}, "size": map[string]any{"auto": float64(1), "1024x1024": float64(1), "1024x1536": float64(1.2), "1536x1024": float64(1.2), "1280x720": float64(1), "720x1280": float64(1), "2048x2048": float64(1.5), "2048x1152": float64(1.5), "3840x2160": float64(2), "2160x3840": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
+		{
+			ID: "billing_rule_image_gpt", ModuleCode: moduleImageGeneration, ModelName: "gpt-image-2", BillingType: "per_image", BasePrice: 10, CostPrice: 6, CurrencyType: "credit",
+			ParameterMultiplier: map[string]any{
+				"quality": map[string]any{
+					"auto":     float64(1),
+					"low":      float64(1),
+					"normal":   float64(1.2),
+					"medium":   float64(1.2),
+					"high":     float64(1.5),
+					"standard": float64(1),
+				},
+				"size": map[string]any{
+					"auto":      float64(1),
+					"tier_720p": float64(1),
+					"tier_1k":   float64(1),
+					"tier_2k":   float64(1.5),
+					"tier_4k":   float64(2),
+					"1024x1024": float64(1),
+					"1024x1536": float64(1),
+					"1536x1024": float64(1),
+					"1280x720":  float64(1),
+					"720x1280":  float64(1),
+					"2048x2048": float64(1.5),
+					"2048x1152": float64(1.5),
+					"3840x2160": float64(2),
+					"2160x3840": float64(2),
+				},
+			},
+			Status: "ACTIVE", CreatedAt: now, UpdatedAt: now,
+		},
 		{ID: "billing_rule_video_mock", ModuleCode: moduleVideoGeneration, ModelName: "mock-video", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_grok_image", ModuleCode: moduleVideoGeneration, ModelName: "grok-video-image", BillingType: "per_second", BasePrice: 1, CostPrice: 0, CurrencyType: "credit", ParameterMultiplier: map[string]any{"resolution": map[string]any{"480p": float64(1), "720p": float64(1.2), "1080p": float64(2)}}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
 		{ID: "billing_rule_video_grok_imagine_15_preview", ModuleCode: moduleVideoGeneration, ModelName: "grok-imagine-video-1.5-preview", BillingType: "per_request", BasePrice: 100, MinimumCharge: 100, CostPrice: 80, CurrencyType: "credit", ParameterMultiplier: map[string]any{}, Status: "ACTIVE", CreatedAt: now, UpdatedAt: now},
@@ -1562,6 +1591,9 @@ func generationQuoteForRequest(req createGenerationTaskRequest, data adminPlatfo
 	if len(parameterRules) == 0 {
 		parameterRules = rule.ParameterMultiplierCamel
 	}
+	if isGPTImage2SchemaModel(req.Model) {
+		parameterRules = canonicalizeGPTImageBillingMultipliers(parameterRules)
+	}
 	basePrice := rule.BasePrice
 	if basePrice == 0 {
 		basePrice = rule.BasePriceCamel
@@ -1992,6 +2024,10 @@ func normalizeGPTImageCanonicalParams(req *generation.CreateRequest) {
 		if alias, ok := canonicalGPTImageQualityValue(req.Params["imageQuality"]); ok {
 			req.Params["quality"] = alias
 		}
+	} else {
+		if mapped, ok := canonicalGPTImageQualityValue(req.Params["quality"]); ok {
+			req.Params["quality"] = mapped
+		}
 	}
 	if _, ok := req.Params["n"]; !ok {
 		if count, exists := req.Params["count"]; exists {
@@ -2014,6 +2050,8 @@ func canonicalGPTImageQualityValue(value any) (string, bool) {
 		return "high", true
 	case "draft":
 		return "low", true
+	case "normal":
+		return "medium", true
 	default:
 		return "", false
 	}
