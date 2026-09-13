@@ -57,6 +57,34 @@ type billingRuleValidationResult struct {
 	Issues      []billingRuleValidationIssue `json:"issues"`
 }
 
+type publishBillingRuleRequest struct {
+	ConfirmNegativeMargin bool   `json:"confirmNegativeMargin"`
+	ActorID                string `json:"actorId,omitempty"`
+	ActorRole              string `json:"actorRole,omitempty"`
+}
+
+type billingRulePublishError struct {
+	Code    string                       `json:"code"`
+	Message string                       `json:"message"`
+	Issues  []billingRuleValidationIssue `json:"issues,omitempty"`
+}
+
+func (e *billingRulePublishError) Error() string {
+	return e.Message
+}
+
+func (e *billingRulePublishError) BusinessCode() string {
+	return e.Code
+}
+
+func (e *billingRulePublishError) ErrorDetails() map[string]any {
+	details := map[string]any{}
+	if len(e.Issues) > 0 {
+		details["issues"] = e.Issues
+	}
+	return details
+}
+
 type providerCost struct {
 	ID                string         `json:"id"`
 	Provider          string         `json:"provider"`
@@ -152,7 +180,7 @@ type billingV1Store interface {
 	ListBillingRuleVersions() ([]billingRuleVersion, error)
 	GetBillingRuleVersion(string) (billingRuleVersion, error)
 	ValidateBillingRuleVersion(string) (billingRuleValidationResult, error)
-	PublishBillingRuleVersion(string) (billingRuleVersion, error)
+	PublishBillingRuleVersion(id string, req ...publishBillingRuleRequest) (billingRuleVersion, error)
 	ListProviderCosts() ([]providerCost, error)
 	UpdateProviderCost(string, providerCostMutation) (providerCost, error)
 	ListBillingReconciliation() ([]billingReconciliationItem, error)

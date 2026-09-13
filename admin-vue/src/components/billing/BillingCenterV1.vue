@@ -52,6 +52,9 @@
     </template>
 
     <template v-else-if="moduleId === 'billingRules'">
+      <!-- GPT Image 专属计费管理看板 -->
+      <GptImageBillingPanel ref="gptImagePanelRef" :rules="rules" :costs="costs" @reload="load" />
+
       <div class="billing-v1__filters"><el-input v-model="keyword" clearable placeholder="搜索模型名称、编码、模块或来源" :prefix-icon="Search" /></div>
       <el-card shadow="never" v-loading="loading">
         <el-table :data="filteredRules" height="650" stripe empty-text="暂无计费规则">
@@ -66,9 +69,10 @@
           <el-table-column prop="version" label="版本" width="78"><template #default="s">v{{ s.row.version }}</template></el-table-column>
           <el-table-column prop="status" label="状态" width="104"><template #default="s"><status-tag :value="s.row.status" /></template></el-table-column>
           <el-table-column prop="updatedAt" label="更新时间" min-width="178"><template #default="s">{{ dateTime(s.row.updatedAt) }}</template></el-table-column>
-          <el-table-column label="操作" width="210" fixed="right">
+          <el-table-column label="操作" width="220" fixed="right">
             <template #default="s">
-              <el-button link type="primary" @click="openRuleEditor(s.row)">新建草稿</el-button>
+              <el-button v-if="isGPTImageRule(s.row)" link type="primary" @click="openGptImageEditor">专属配置</el-button>
+              <el-button v-else link type="primary" @click="openRuleEditor(s.row)">新建草稿</el-button>
               <el-button link type="success" :disabled="s.row.status !== 'DRAFT'" @click="validateRule(s.row)">校验</el-button>
               <el-button link type="warning" :disabled="s.row.status !== 'DRAFT'" @click="publishRule(s.row)">发布</el-button>
             </template>
@@ -202,6 +206,12 @@
 import { computed, defineComponent, h, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Refresh, Search } from "@element-plus/icons-vue";
+import GptImageBillingPanel from "./GptImageBillingPanel.vue";
+import {
+  classifyValidationIssues,
+  formatBillingErrorMessage,
+  isGPTImageRule,
+} from "../../domain/gptImageBilling";
 import {
   billingApi,
   type BillingLifecycleEvent,
@@ -213,6 +223,7 @@ import {
 } from "../../api/billing";
 
 const props = defineProps<{ moduleId: string }>();
+const gptImagePanelRef = ref<InstanceType<typeof GptImageBillingPanel> | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const errorMessage = ref("");
@@ -270,8 +281,11 @@ async function load() {
   errorMessage.value = "";
   try {
     if (props.moduleId === "billingOverview") Object.assign(overview, emptyOverview, await billingApi.overview());
-    else if (props.moduleId === "billingRules") rules.value = (await billingApi.rules()).items || [];
-    else if (props.moduleId === "billingProviderCosts") costs.value = (await billingApi.providerCosts()).items || [];
+    else if (props.moduleId === "billingRules") {
+      const [rulesRes, costsRes] = await Promise.all([billingApi.rules(), billingApi.providerCosts()]);
+      rules.value = rulesRes.items || [];
+      costs.value = costsRes.items || [];
+    } else if (props.moduleId === "billingProviderCosts") costs.value = (await billingApi.providerCosts()).items || [];
     else if (props.moduleId === "billingEvents") events.value = (await billingApi.events()).items || [];
     else if (props.moduleId === "billingReconciliation") reconciliation.value = (await billingApi.reconciliation()).items || [];
     else if (props.moduleId === "billingWalletLedger") ledger.value = (await billingApi.walletLedger()).items || [];
@@ -311,13 +325,51 @@ async function validateRule(row: BillingRuleVersion) {
     await load();
   } catch (error) { ElMessage.error(error instanceof Error ? error.message : "规则校验失败"); }
 }
+function openGptImageEditor() {
+  gptImagePanelRef.value?.openEditor();
+}
+
 async function publishRule(row: BillingRuleVersion) {
   try {
+    // 若为 GPT Image 规则，先行调用校验并识别 Hard Blocker 与负毛利商业风险
+    if (isGPTImageRule(row)) {
+      const { validation } = await billingApi.validateRule(row.id);
+      const classification = classifyValidationIssues(validation?.issues || []);
+      if (classification.hasHardBlockers) {
+        const blockerMsgs = classification.hardBlockers
+          .map((b) => `• [${b.code}] ${b.message}`)
+          .join("\n");
+        await ElMessageBox.alert(
+          `该版本存在硬性结构阻断错误，禁止发布上线：\n\n${blockerMsgs}`,
+          "校验阻断：禁止发布上线",
+          { type: "error" },
+        );
+        return;
+      }
+      if (classification.hasNegativeMargin) {
+        await ElMessageBox.confirm(
+          `该版本存在【负毛利商业风险】（基础售价低于供应商上游成本）。\n\n是否确认作为平台补贴运营策略正式发布 ${row.modelName} v${row.version}？`,
+          "负毛利商业风险确认",
+          {
+            type: "warning",
+            confirmButtonText: "确认负毛利并发布",
+            cancelButtonText: "取消",
+          },
+        );
+        await billingApi.publishRule(row.id, { confirmNegativeMargin: true });
+        ElMessage.success("价格版本已发布");
+        await load();
+        return;
+      }
+    }
+
     await ElMessageBox.confirm(`发布 ${row.modelName} v${row.version}？历史任务仍保留原价格快照。`, "发布价格版本", { type: "warning" });
     await billingApi.publishRule(row.id);
     ElMessage.success("价格版本已发布");
     await load();
-  } catch (error) { if (error !== "cancel") ElMessage.error(error instanceof Error ? error.message : "发布失败"); }
+  } catch (error) {
+    if (error !== "cancel") ElMessage.error(formatBillingErrorMessage(error));
+  }
 }
 
 const costDialogVisible = ref(false);
