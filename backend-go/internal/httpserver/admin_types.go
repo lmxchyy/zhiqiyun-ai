@@ -1,5 +1,7 @@
 package httpserver
 
+import "encoding/json"
+
 type adminPlatformData struct {
 	Users                  []adminUser              `json:"users"`
 	Plans                  []adminPlan              `json:"plans"`
@@ -791,11 +793,30 @@ type adminPlanCapabilitiesMutation struct {
 type adminBillingRuleMutation struct {
 	BillingType         string         `json:"billing_type"`
 	BasePrice           float64        `json:"base_price"`
+	BasePriceExplicit   bool           `json:"-"`
 	MinimumCharge       float64        `json:"minimum_charge"`
 	CostPrice           float64        `json:"cost_price"`
 	CurrencyType        string         `json:"currency_type"`
 	ParameterMultiplier map[string]any `json:"parameter_multiplier"`
 	Status              string         `json:"status"`
+}
+
+func (m *adminBillingRuleMutation) UnmarshalJSON(data []byte) error {
+	type Alias adminBillingRuleMutation
+	aux := &struct {
+		BasePriceRaw *float64 `json:"base_price"`
+		*Alias
+	}{
+		Alias: (*Alias)(m),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if aux.BasePriceRaw != nil {
+		m.BasePrice = *aux.BasePriceRaw
+		m.BasePriceExplicit = true
+	}
+	return nil
 }
 
 type adminSystemMutation struct {

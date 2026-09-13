@@ -2,6 +2,8 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 )
 
@@ -33,7 +35,17 @@ func (a adminAPI) validateBillingRuleV1(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a adminAPI) publishBillingRuleV1(w http.ResponseWriter, r *http.Request) {
-	item, err := a.store.PublishBillingRuleVersion(r.PathValue("id"))
+	var req publishBillingRuleRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	actorID, actorRole := actorFromRequest(r)
+	req.ActorID = actorID
+	req.ActorRole = actorRole
+	item, err := a.store.PublishBillingRuleVersion(r.PathValue("id"), req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

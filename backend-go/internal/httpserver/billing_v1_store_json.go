@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -233,7 +235,7 @@ func createBillingRuleDraftInData(data *adminPlatformData, id string, req adminB
 	if req.BillingType != "" {
 		draft.BillingUnit = billingUnitFromLegacy(req.BillingType)
 	}
-	if req.BasePrice > 0 {
+	if req.BasePriceExplicit || req.BasePrice != 0 {
 		draft.BasePrice = req.BasePrice
 	}
 	if req.MinimumCharge >= 0 {
@@ -277,7 +279,11 @@ func (s *jsonStore) ValidateBillingRuleVersion(id string) (billingRuleValidation
 	return result, err
 }
 
-func (s *jsonStore) PublishBillingRuleVersion(id string) (billingRuleVersion, error) {
+func (s *jsonStore) PublishBillingRuleVersion(id string, req ...publishBillingRuleRequest) (billingRuleVersion, error) {
+	var opt publishBillingRuleRequest
+	if len(req) > 0 {
+		opt = req[0]
+	}
 	var published billingRuleVersion
 	err := s.updateAdmin(func(data *adminPlatformData) error {
 		*data = normalizeBillingV1Defaults(normalizeAICapabilityDefaults(*data))
@@ -291,10 +297,17 @@ func (s *jsonStore) PublishBillingRuleVersion(id string) (billingRuleVersion, er
 		if index < 0 {
 			return errors.New("billing rule version not found")
 		}
-		result := validateBillingRuleVersionData(data.BillingRuleVersions[index], *data)
-		if !result.Valid {
-			data.BillingRuleVersions[index].ValidationResult = result
-			return errors.New("billing rule validation failed")
+		item := data.BillingRuleVersions[index]
+		if upperTrim(item.Status) != "DRAFT" {
+			return &billingRulePublishError{
+				Code:    "INVALID_BILLING_RULE_STATUS",
+				Message: "only draft billing rules can be published",
+			}
+		}
+		result := validateBillingRuleVersionData(item, *data)
+		data.BillingRuleVersions[index].ValidationResult = result
+		if err := canPublishBillingRule(result, opt.ConfirmNegativeMargin); err != nil {
+			return err
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		for i := range data.BillingRuleVersions {
@@ -312,6 +325,7 @@ func (s *jsonStore) PublishBillingRuleVersion(id string) (billingRuleVersion, er
 			data.BillingRuleVersions[index].EffectiveFrom = now
 		}
 		published = data.BillingRuleVersions[index]
+		log.Printf("[AUDIT] billing_rule.publish: actor=%s/%s ruleId=%s ruleKey=%s version=%d confirmNegativeMargin=%t timestamp=%s", opt.ActorID, opt.ActorRole, published.ID, published.RuleKey, published.Version, opt.ConfirmNegativeMargin, now)
 		return nil
 	})
 	return published, err
@@ -382,7 +396,13 @@ func validateBillingRuleVersionData(item billingRuleVersion, data adminPlatformD
 	nowTime := time.Now().UTC()
 	now := nowTime.Format(time.RFC3339Nano)
 	issues := []billingRuleValidationIssue{}
+	addedIssues := map[string]bool{}
 	add := func(code, field, severity, message string) {
+		key := code + ":" + field
+		if addedIssues[key] {
+			return
+		}
+		addedIssues[key] = true
 		issues = append(issues, billingRuleValidationIssue{Code: code, Field: field, Severity: severity, Message: message})
 	}
 	if item.BasePrice <= 0 {
@@ -394,6 +414,10 @@ func validateBillingRuleVersionData(item billingRuleVersion, data adminPlatformD
 	if item.MinimumCharge < 0 {
 		add("INVALID_MINIMUM_CHARGE", "minimumCharge", "ERROR", "最低扣费不能小于 0")
 	}
+	if isGPTImageBillingRule(item) {
+		validateGPTImageBillingRuleData(item, add)
+	}
+	validateAllParameterMultipliers(item.ParameterRules, add)
 	if !parameterPricingComplete(item.ParameterRules) {
 		add("INCOMPLETE_PARAMETER_PRICING", "parameterRules", "ERROR", "参数定价包含空值、非数字或非正数")
 	}
@@ -477,19 +501,181 @@ func validBillingUnit(value string) bool {
 }
 
 func parameterPricingComplete(rules map[string]any) bool {
+	if len(rules) == 0 {
+		return false
+	}
 	for _, raw := range rules {
 		options, ok := mapValue(raw)
 		if !ok || len(options) == 0 {
 			return false
 		}
 		for _, value := range options {
-			number, ok := anyToFloat(value)
-			if !ok || number <= 0 {
+			if !isValidPositiveMultiplier(value) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+func isGPTImageBillingRule(item billingRuleVersion) bool {
+	return item.RuleKey == "billing_rule_image_gpt" ||
+		item.LegacyRuleID == "billing_rule_image_gpt" ||
+		isGPTImage2SchemaModel(item.ModelCode) ||
+		isGPTImage2SchemaModel(item.ModelName)
+}
+
+func isValidPositiveMultiplier(val any) bool {
+	if val == nil {
+		return false
+	}
+	switch v := val.(type) {
+	case float64:
+		return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0
+	case float32:
+		f := float64(v)
+		return !math.IsNaN(f) && !math.IsInf(f, 0) && f > 0
+	case int:
+		return v > 0
+	case int64:
+		return v > 0
+	case json.Number:
+		f, err := v.Float64()
+		return err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) && f > 0
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" || strings.EqualFold(trimmed, "nan") || strings.Contains(strings.ToLower(trimmed), "inf") {
+			return false
+		}
+		var f float64
+		if _, err := fmt.Sscanf(trimmed, "%f", &f); err == nil {
+			return !math.IsNaN(f) && !math.IsInf(f, 0) && f > 0
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func validateGPTImageBillingRuleData(item billingRuleVersion, add func(code, field, severity, message string)) {
+	if item.ParameterRules == nil {
+		add("MISSING_PARAMETER_RULES", "parameterRules", "ERROR", "缺少参数计费规则")
+		return
+	}
+
+	// 1. size 规则必须存在且至少包含 tier_1k, tier_2k, tier_4k
+	sizeRaw, hasSize := item.ParameterRules["size"]
+	if !hasSize {
+		add("MISSING_SIZE_RULES", "parameterRules.size", "ERROR", "缺少 size 尺寸计费配置")
+	} else {
+		sizeMap, ok := mapValue(sizeRaw)
+		if !ok || len(sizeMap) == 0 {
+			add("INVALID_SIZE_RULES", "parameterRules.size", "ERROR", "size 尺寸计费配置必须为非空对象")
+		} else {
+			requiredTiers := []struct {
+				key  string
+				code string
+			}{
+				{"tier_1k", "MISSING_TIER_1K"},
+				{"tier_2k", "MISSING_TIER_2K"},
+				{"tier_4k", "MISSING_TIER_4K"},
+			}
+			for _, tier := range requiredTiers {
+				val, exists := sizeMap[tier.key]
+				if !exists {
+					add(tier.code, "parameterRules.size."+tier.key, "ERROR", fmt.Sprintf("缺少必需的尺寸阶梯 %s", tier.key))
+				} else if !isValidPositiveMultiplier(val) {
+					add("INVALID_MULTIPLIER", "parameterRules.size."+tier.key, "ERROR", fmt.Sprintf("尺寸阶梯 %s 倍率必须为大于 0 的有效数字", tier.key))
+				}
+			}
+		}
+	}
+
+	// 2. quality 规则必须存在且至少具备 low, normal 或 medium, high
+	qualityRaw, hasQuality := item.ParameterRules["quality"]
+	if !hasQuality {
+		add("MISSING_QUALITY_RULES", "parameterRules.quality", "ERROR", "缺少 quality 画质计费配置")
+	} else {
+		qualityMap, ok := mapValue(qualityRaw)
+		if !ok || len(qualityMap) == 0 {
+			add("INVALID_QUALITY_RULES", "parameterRules.quality", "ERROR", "quality 画质计费配置必须为非空对象")
+		} else {
+			if val, exists := qualityMap["low"]; !exists {
+				add("MISSING_QUALITY_LOW", "parameterRules.quality.low", "ERROR", "缺少必需的画质等级 low")
+			} else if !isValidPositiveMultiplier(val) {
+				add("INVALID_MULTIPLIER", "parameterRules.quality.low", "ERROR", "画质等级 low 倍率必须为大于 0 的有效数字")
+			}
+
+			valNormal, hasNormal := qualityMap["normal"]
+			valMedium, hasMedium := qualityMap["medium"]
+			if !hasNormal && !hasMedium {
+				add("MISSING_QUALITY_NORMAL", "parameterRules.quality.normal", "ERROR", "缺少必需的画质等级 normal 或 medium")
+			} else {
+				if hasNormal && !isValidPositiveMultiplier(valNormal) {
+					add("INVALID_MULTIPLIER", "parameterRules.quality.normal", "ERROR", "画质等级 normal 倍率必须为大于 0 的有效数字")
+				}
+				if hasMedium && !isValidPositiveMultiplier(valMedium) {
+					add("INVALID_MULTIPLIER", "parameterRules.quality.medium", "ERROR", "画质等级 medium 倍率必须为大于 0 的有效数字")
+				}
+			}
+
+			if val, exists := qualityMap["high"]; !exists {
+				add("MISSING_QUALITY_HIGH", "parameterRules.quality.high", "ERROR", "缺少必需的画质等级 high")
+			} else if !isValidPositiveMultiplier(val) {
+				add("INVALID_MULTIPLIER", "parameterRules.quality.high", "ERROR", "画质等级 high 倍率必须为大于 0 的有效数字")
+			}
+		}
+	}
+}
+
+func validateAllParameterMultipliers(rules map[string]any, add func(code, field, severity, message string)) {
+	if rules == nil {
+		return
+	}
+	for category, raw := range rules {
+		options, ok := mapValue(raw)
+		if !ok {
+			add("INVALID_PARAMETER_CATEGORY", "parameterRules."+category, "ERROR", fmt.Sprintf("参数类别 %s 必须为对象", category))
+			continue
+		}
+		for key, val := range options {
+			if !isValidPositiveMultiplier(val) {
+				add("INVALID_MULTIPLIER", fmt.Sprintf("parameterRules.%s.%s", category, key), "ERROR", fmt.Sprintf("参数 %s.%s 倍率必须为大于 0 的有效数字", category, key))
+			}
+		}
+	}
+}
+
+func billingRuleValidationBlockers(issues []billingRuleValidationIssue) (hardBlockers []billingRuleValidationIssue, overrideableWarnings []billingRuleValidationIssue) {
+	for _, issue := range issues {
+		if upperTrim(issue.Severity) == "ERROR" {
+			if issue.Code == "NEGATIVE_MARGIN" {
+				overrideableWarnings = append(overrideableWarnings, issue)
+			} else {
+				hardBlockers = append(hardBlockers, issue)
+			}
+		}
+	}
+	return hardBlockers, overrideableWarnings
+}
+
+func canPublishBillingRule(result billingRuleValidationResult, confirmNegativeMargin bool) error {
+	hardBlockers, overrideableWarnings := billingRuleValidationBlockers(result.Issues)
+	if len(hardBlockers) > 0 {
+		return &billingRulePublishError{
+			Code:    "BILLING_RULE_VALIDATION_FAILED",
+			Message: fmt.Sprintf("billing rule validation failed: %d hard blocker(s) detected", len(hardBlockers)),
+			Issues:  result.Issues,
+		}
+	}
+	if len(overrideableWarnings) > 0 && !confirmNegativeMargin {
+		return &billingRulePublishError{
+			Code:    "NEGATIVE_MARGIN_CONFIRMATION_REQUIRED",
+			Message: "negative margin detected: confirmation required to publish",
+			Issues:  result.Issues,
+		}
+	}
+	return nil
 }
 
 func effectiveRangesOverlap(leftFrom, leftTo, rightFrom, rightTo string) bool {

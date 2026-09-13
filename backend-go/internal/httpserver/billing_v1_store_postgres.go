@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -119,13 +121,17 @@ func (s *postgresStore) ValidateBillingRuleVersion(id string) (billingRuleValida
 	return result, err
 }
 
-func (s *postgresStore) PublishBillingRuleVersion(id string) (billingRuleVersion, error) {
+func (s *postgresStore) PublishBillingRuleVersion(id string, req ...publishBillingRuleRequest) (billingRuleVersion, error) {
+	var opt publishBillingRuleRequest
+	if len(req) > 0 {
+		opt = req[0]
+	}
 	result, err := s.ValidateBillingRuleVersion(id)
 	if err != nil {
 		return billingRuleVersion{}, err
 	}
-	if !result.Valid {
-		return billingRuleVersion{}, errors.New("billing rule validation failed")
+	if err := canPublishBillingRule(result, opt.ConfirmNegativeMargin); err != nil {
+		return billingRuleVersion{}, err
 	}
 	ctx, cancel := s.withTimeout()
 	defer cancel()
@@ -139,8 +145,12 @@ func (s *postgresStore) PublishBillingRuleVersion(id string) (billingRuleVersion
 		return billingRuleVersion{}, err
 	}
 	if upperTrim(item.Status) != "DRAFT" {
-		return billingRuleVersion{}, errors.New("only draft billing rules can be published")
+		return billingRuleVersion{}, &billingRulePublishError{
+			Code:    "INVALID_BILLING_RULE_STATUS",
+			Message: "only draft billing rules can be published",
+		}
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `
 		update xz_billing_rule_versions
 		set status='ARCHIVED', effective_to=coalesce(effective_to, now()), updated_at=now()
@@ -155,6 +165,20 @@ func (s *postgresStore) PublishBillingRuleVersion(id string) (billingRuleVersion
 	`, item.ID); err != nil {
 		return billingRuleVersion{}, err
 	}
+	metadata := map[string]any{
+		"ruleKey":                item.RuleKey,
+		"ruleId":                 item.ID,
+		"version":                item.Version,
+		"confirmNegativeMargin": opt.ConfirmNegativeMargin,
+		"timestamp":              now,
+		"actorId":                opt.ActorID,
+		"actorRole":              opt.ActorRole,
+		"status":                 "PUBLISHED",
+	}
+	if err := insertAuditLog(ctx, tx, opt.ActorID, opt.ActorRole, "billing_rule.publish", "billing_rule_version", item.ID, "POST", "/api/v1/admin/billing/rules/"+item.ID+"/publish", http.StatusOK, metadata); err != nil {
+		return billingRuleVersion{}, err
+	}
+	log.Printf("[AUDIT] billing_rule.publish: actor=%s/%s ruleId=%s ruleKey=%s version=%d confirmNegativeMargin=%t timestamp=%s", opt.ActorID, opt.ActorRole, item.ID, item.RuleKey, item.Version, opt.ConfirmNegativeMargin, now)
 	if err := tx.Commit(); err != nil {
 		return billingRuleVersion{}, err
 	}
@@ -194,7 +218,7 @@ func (s *postgresStore) createBillingRuleDraft(id string, req adminBillingRuleMu
 	if req.BillingType != "" {
 		draft.BillingUnit = billingUnitFromLegacy(req.BillingType)
 	}
-	if req.BasePrice > 0 {
+	if req.BasePriceExplicit || req.BasePrice != 0 {
 		draft.BasePrice = req.BasePrice
 	}
 	if req.MinimumCharge >= 0 {
