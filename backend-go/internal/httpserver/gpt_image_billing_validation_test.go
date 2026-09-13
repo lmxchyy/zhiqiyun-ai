@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -608,13 +609,19 @@ func TestGPTImageValidation_QuoteAfterPublishBasePrice15(t *testing.T) {
 		{"1K low 1024x1024", "1024x1024", "low", 1, 15},
 		{"1K low 1536x1024", "1536x1024", "low", 1, 15},
 		{"1K low 720p 1280x720", "1280x720", "low", 1, 15},
+		// 1K normal = 15 * 1.0 * 1.2 = 18
+		{"1K normal 1024x1024", "1024x1024", "normal", 1, 18},
 		// 2K low = 15 * 1.5 * 1.0 = 22.5 -> ceil = 23
 		{"2K low 2048x2048", "2048x2048", "low", 1, 23},
 		{"2K low custom 1792x1024", "1792x1024", "low", 1, 23},
 		{"2K low custom 1600x1024", "1600x1024", "low", 1, 23},
+		// 2K normal = 15 * 1.5 * 1.2 = 27
+		{"2K normal 2048x2048", "2048x2048", "normal", 1, 27},
 		// 4K low = 15 * 2.0 * 1.0 = 30 -> 30
 		{"4K low 3840x2160", "3840x2160", "low", 1, 30},
 		{"4K low 2880x2880", "2880x2880", "low", 1, 30},
+		// 4K high = 15 * 2.0 * 1.5 = 45
+		{"4K high 3840x2160", "3840x2160", "high", 1, 45},
 	}
 
 	for _, tc := range testCases {
@@ -861,4 +868,201 @@ func TestGPTImageBillingPublishHTTPApi(t *testing.T) {
 			t.Fatalf("expected item.status=PUBLISHED, got: %v", respPayload)
 		}
 	}
+}
+
+// TestGPTImageE2ECompleteLifecycleChain 验证 Phase 3 完整端到端链路：
+// 管理后台读取当前 PUBLISHED rule
+// → 创建新 DRAFT
+// → 修改 basePrice / tier / quality (basePrice=15)
+// → validate 返回 NEGATIVE_MARGIN
+// → 未确认时 publish 被拒绝
+// → confirmNegativeMargin=true 后发布成功
+// → 原版本 ARCHIVED，新版本 PUBLISHED
+// → generation quote 读取新版本，验证 6 大关键规格点数 (15/23/30/18/27/45)
+// → 与管理端 UI 实时试算算法做 100% 对齐校验
+// → 历史任务、历史账单不发生追溯修改
+func TestGPTImageE2ECompleteLifecycleChain(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "platform.json"))
+
+	// 1. 读取当前正式规则 (PUBLISHED)
+	versions, err := store.ListBillingRuleVersions()
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	var currentPublished *billingRuleVersion
+	for i := range versions {
+		if versions[i].RuleKey == "billing_rule_image_gpt" && versions[i].Status == "PUBLISHED" {
+			currentPublished = &versions[i]
+			break
+		}
+	}
+	if currentPublished == nil {
+		t.Fatal("step 1 failed: current PUBLISHED rule not found")
+	}
+	initialVersion := currentPublished.Version
+	t.Logf("Step 1: Current PUBLISHED rule is %s (version=%d, basePrice=%.0f)", currentPublished.ID, initialVersion, currentPublished.BasePrice)
+
+	// 2. 模拟创建历史已扣费任务（在旧版本下）
+	historicalTaskID := "task_e2e_historical_001"
+	err = store.updateAdmin(func(data *adminPlatformData) error {
+		data.GenerationTasks = append(data.GenerationTasks, generationTask{
+			ID:                   historicalTaskID,
+			UserID:               "user_e2e_001",
+			Type:                 "TEXT_TO_IMAGE",
+			Model:                "gpt-image-2",
+			Status:               taskStatusSucceeded,
+			PointCost:            10,
+			QuotedPoints:         10,
+			CapturedPoints:       10,
+			BillingRuleVersionID: currentPublished.ID,
+			CreatedAt:            "2026-09-01T10:00:00Z",
+		})
+		data.BillingLifecycleEvents = append(data.BillingLifecycleEvents, billingLifecycleEvent{
+			ID:             "ble_e2e_001",
+			TaskID:         historicalTaskID,
+			UserID:         "user_e2e_001",
+			EventType:      "CAPTURED",
+			BillingStatus:  billingStatusCaptured,
+			Points:         10,
+			RuleVersionID:  currentPublished.ID,
+			IdempotencyKey: "idem_e2e_001",
+			CreatedAt:      "2026-09-01T10:00:00Z",
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed historical task: %v", err)
+	}
+
+	// 3. 基于当前版本创建 DRAFT，version 正确递增
+	targetRules := validGPTImageTestParameterRules()
+	draft, err := store.UpdateAdminBillingRule(currentPublished.ID, adminBillingRuleMutation{
+		BillingType:         "per_image",
+		BasePrice:           15,
+		MinimumCharge:       1,
+		ParameterMultiplier: targetRules,
+		Status:              "DRAFT",
+	})
+	if err != nil {
+		t.Fatalf("step 3 failed: create draft: %v", err)
+	}
+	expectedNextVersion := initialVersion + 1
+	if draft.Version != expectedNextVersion || draft.Status != "DRAFT" {
+		t.Fatalf("step 3 failed: draft version=%d, status=%s; want %d/DRAFT", draft.Version, draft.Status, expectedNextVersion)
+	}
+	t.Logf("Step 3: Created DRAFT version=%d (id=%s)", draft.Version, draft.ID)
+
+	// 4. validate 能返回真实 NEGATIVE_MARGIN
+	validation, err := store.ValidateBillingRuleVersion(draft.ID)
+	if err != nil {
+		t.Fatalf("step 4 failed: validate draft: %v", err)
+	}
+	hasNegativeMargin := false
+	for _, issue := range validation.Issues {
+		if issue.Code == "NEGATIVE_MARGIN" {
+			hasNegativeMargin = true
+		}
+	}
+	if !hasNegativeMargin {
+		t.Fatalf("step 4 failed: expected NEGATIVE_MARGIN in validation issues: %+v", validation.Issues)
+	}
+	t.Logf("Step 4: Validation correctly caught NEGATIVE_MARGIN risk")
+
+	// 5. 未确认时 publish 被拒绝
+	_, err = store.PublishBillingRuleVersion(draft.ID, publishBillingRuleRequest{ConfirmNegativeMargin: false})
+	if err == nil {
+		t.Fatal("step 5 failed: unconfirmed publish should be rejected")
+	}
+	var pubErr *billingRulePublishError
+	if !errors.As(err, &pubErr) || pubErr.Code != "NEGATIVE_MARGIN_CONFIRMATION_REQUIRED" {
+		t.Fatalf("step 5 failed: expected NEGATIVE_MARGIN_CONFIRMATION_REQUIRED, got %v", err)
+	}
+	t.Logf("Step 5: Unconfirmed publish successfully rejected with NEGATIVE_MARGIN_CONFIRMATION_REQUIRED")
+
+	// 6. confirmNegativeMargin=true 后发布成功
+	publishedNew, err := store.PublishBillingRuleVersion(draft.ID, publishBillingRuleRequest{
+		ConfirmNegativeMargin: true,
+		ActorID:                "admin_e2e_tester",
+		ActorRole:              "SUPER_ADMIN",
+	})
+	if err != nil {
+		t.Fatalf("step 6 failed: publish with confirmNegativeMargin=true: %v", err)
+	}
+	if publishedNew.Status != "PUBLISHED" || publishedNew.Version != expectedNextVersion {
+		t.Fatalf("step 6 failed: publishedNew status=%s, version=%d", publishedNew.Status, publishedNew.Version)
+	}
+	t.Logf("Step 6: Published new version=%d successfully", publishedNew.Version)
+
+	// 7. 原版本变 ARCHIVED，新版本变 PUBLISHED
+	reloadedOld, err := store.GetBillingRuleVersion(currentPublished.ID)
+	if err != nil {
+		t.Fatalf("get old rule: %v", err)
+	}
+	if reloadedOld.Status != "ARCHIVED" || reloadedOld.EffectiveTo == "" {
+		t.Fatalf("step 7 failed: old rule status=%s, effectiveTo=%s, want ARCHIVED", reloadedOld.Status, reloadedOld.EffectiveTo)
+	}
+	t.Logf("Step 7: Old version %s is ARCHIVED with effectiveTo=%s", reloadedOld.ID, reloadedOld.EffectiveTo)
+
+	// 8. 服务端 Quote 真实计算与 UI 试算预期做 100% 对齐校验
+	adminData, err := store.AdminData()
+	if err != nil {
+		t.Fatalf("get admin data: %v", err)
+	}
+
+	quoteCheckSpecs := []struct {
+		desc          string
+		size          string
+		quality       string
+		wantServerPts int
+		// UI 预览计算算法: Math.ceil(basePrice * sizeMult * qualityMult)
+		uiSizeMult    float64
+		uiQualityMult float64
+	}{
+		{"1K low", "1024x1024", "low", 15, 1.0, 1.0},
+		{"2K low", "2048x2048", "low", 23, 1.5, 1.0},
+		{"4K low", "3840x2160", "low", 30, 2.0, 1.0},
+		{"1K normal", "1024x1024", "normal", 18, 1.0, 1.2},
+		{"2K normal", "2048x2048", "normal", 27, 1.5, 1.2},
+		{"4K high", "3840x2160", "high", 45, 2.0, 1.5},
+	}
+
+	for _, spec := range quoteCheckSpecs {
+		req := createGenerationTaskRequest{
+			Type:   "TEXT_TO_IMAGE",
+			Model:  "gpt-image-2",
+			Params: map[string]any{"size": spec.size, "quality": spec.quality, "n": float64(1)},
+		}
+		quote, err := generationQuoteForRequest(req, adminData)
+		if err != nil {
+			t.Fatalf("quote failed for %s: %v", spec.desc, err)
+		}
+		if quote.RequiredPoints != spec.wantServerPts {
+			t.Fatalf("%s server quote = %d, want %d", spec.desc, quote.RequiredPoints, spec.wantServerPts)
+		}
+
+		// 验证 UI 试算算法与服务端真实 Quote 结果一致
+		uiPreviewPts := int(math.Ceil(15.0 * spec.uiSizeMult * spec.uiQualityMult))
+		if uiPreviewPts != quote.RequiredPoints {
+			t.Fatalf("%s UI preview (%d) != server quote (%d)", spec.desc, uiPreviewPts, quote.RequiredPoints)
+		}
+		t.Logf("Step 8 Quote verify: %s -> server quote = %d, UI preview = %d (MATCH)", spec.desc, quote.RequiredPoints, uiPreviewPts)
+	}
+
+	// 9. 历史任务与账单不发生追溯修改
+	historicalTaskFound := false
+	for _, task := range adminData.GenerationTasks {
+		if task.ID == historicalTaskID {
+			historicalTaskFound = true
+			if task.PointCost != 10 || task.QuotedPoints != 10 || task.CapturedPoints != 10 {
+				t.Fatalf("historical task points altered: pointCost=%d quote=%.0f capture=%.0f, want 10", task.PointCost, task.QuotedPoints, task.CapturedPoints)
+			}
+			if task.BillingRuleVersionID != currentPublished.ID {
+				t.Fatalf("historical task ruleVersionId altered: got %s, want %s", task.BillingRuleVersionID, currentPublished.ID)
+			}
+		}
+	}
+	if !historicalTaskFound {
+		t.Fatal("historical task missing from admin data")
+	}
+	t.Logf("Step 9: Historical task %s unchanged with PointCost=10 and ruleVersion=%s", historicalTaskID, currentPublished.ID)
 }
