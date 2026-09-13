@@ -173,6 +173,7 @@ func (a api) createPPTGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.TenantID = firstNonEmptyString(stringValue(capability.Params["tenant_id"]), user.TenantID, "tenant_default")
 	if a.pptAsyncCanaryEligible(req) {
 		if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
 			capability.ClientRequestID = req.ClientRequestID
@@ -263,6 +264,7 @@ func (a api) estimatePPTGenerationCost(w http.ResponseWriter, r *http.Request) {
 	}
 	slideCount := int(anyFloatOrDefault(capability.Params["page_count"], 5))
 	task := pptapp.Task{
+		TenantID:    firstNonEmptyString(stringValue(capability.Params["tenant_id"]), user.TenantID, "tenant_default"),
 		UserID:      user.ID,
 		Prompt:      strings.TrimSpace(req.Prompt),
 		SlideCount:  slideCount,

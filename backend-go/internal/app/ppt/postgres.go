@@ -166,8 +166,12 @@ func TaskFromGenerateRequest(taskID string, req GenerateRequest) Task {
 	if taskID == "" {
 		taskID = fmt.Sprintf("ppt_%d", now.UnixNano())
 	}
+	tenantID := strings.TrimSpace(req.TenantID)
+	if tenantID == "" {
+		tenantID = DefaultTenantID
+	}
 	return Task{
-		TaskID: taskID, UserID: req.UserID, ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
+		TaskID: taskID, TenantID: tenantID, UserID: req.UserID, ClientRequestID: req.ClientRequestID, Type: "ppt", MediaType: "ppt",
 		Status: StatusPending, Title: titleFromPrompt(req.Prompt), Prompt: req.Prompt, SlideCount: req.SlideCount,
 		Language: req.Language, Tone: req.Tone, TextContent: req.TextContent, Audience: req.Audience, Scenario: req.Scenario,
 		GenerationAspectRatio: req.GenerationAspectRatio, Theme: req.Theme, AutoThemeEnabled: req.AutoThemeEnabled,
@@ -440,6 +444,9 @@ func taskFromPostgresRaw(raw []byte, userID string) (Task, error) {
 		return Task{}, err
 	}
 	task.UserID = strings.TrimSpace(userID)
+	if strings.TrimSpace(task.TenantID) == "" {
+		task.TenantID = DefaultTenantID
+	}
 	return normalizeLegacyTask(task), nil
 }
 
@@ -448,6 +455,12 @@ func PersistPostgresTaskTx(ctx context.Context, tx *sql.Tx, task Task) error {
 }
 
 func persistPostgresTask(ctx context.Context, tx *sql.Tx, task Task) error {
+	tenantID := strings.TrimSpace(task.TenantID)
+	if tenantID == "" {
+		tenantID = DefaultTenantID
+	}
+	task.TenantID = tenantID
+
 	raw, err := json.Marshal(task)
 	if err != nil {
 		return err
@@ -455,10 +468,10 @@ func persistPostgresTask(ctx context.Context, tx *sql.Tx, task Task) error {
 	createdAt := parseTaskTime(task.CreatedAt)
 	updatedAt := parseTaskTime(task.UpdatedAt)
 	_, err = tx.ExecContext(ctx, `
-insert into xz_ppt_tasks(task_id,user_id,client_request_id,status,created_at,updated_at,raw)
-values($1,$2,$3,$4,$5,$6,$7::jsonb)
-on conflict(task_id) do update set user_id=excluded.user_id,client_request_id=excluded.client_request_id,status=excluded.status,updated_at=excluded.updated_at,raw=excluded.raw
-`, task.TaskID, task.UserID, task.ClientRequestID, task.Status, createdAt, updatedAt, string(raw))
+insert into xz_ppt_tasks(task_id,tenant_id,user_id,client_request_id,status,created_at,updated_at,raw)
+values($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+on conflict(task_id) do update set tenant_id=excluded.tenant_id,user_id=excluded.user_id,client_request_id=excluded.client_request_id,status=excluded.status,updated_at=excluded.updated_at,raw=excluded.raw
+`, task.TaskID, tenantID, task.UserID, task.ClientRequestID, task.Status, createdAt, updatedAt, string(raw))
 	return err
 }
 

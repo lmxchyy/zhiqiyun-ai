@@ -38,6 +38,7 @@ func (a api) estimateConnectorPPT(ctx context.Context, userID string, enterprise
 	if err != nil {
 		return req, 0, err
 	}
+	req.TenantID = firstNonEmptyString(authorization.TenantID, "tenant_default")
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], float64(req.SlideCount)))
 	task := pptapp.Task{UserID: user.ID, Prompt: req.Prompt, SlideCount: req.SlideCount, TextModel: req.TextModel, ImageSource: normalizedPPTImageSource(req.ImageSource)}
@@ -58,6 +59,7 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	if err != nil {
 		return connectorPPTExecution{}, err
 	}
+	req.TenantID = firstNonEmptyString(authorization.TenantID, "tenant_default")
 	req.TextModel = capability.Model
 	req.SlideCount = int(anyFloatOrDefault(capability.Params["page_count"], float64(req.SlideCount)))
 	billingReq, err := connectorPPTBillingRequest(data, user, authorization, capability, req, clientRequestID, billingMetadata)

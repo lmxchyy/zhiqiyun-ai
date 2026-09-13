@@ -35,14 +35,20 @@ func TestPR4ARecoveryDiagnosisUnknownPostgresBoundaries(t *testing.T) {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
-	var hasTenant bool
+	var hasTenant, hasStage bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='xz_ppt_tasks' AND column_name='tenant_id')`).Scan(&hasTenant); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='xz_ppt_tasks' AND column_name='stage')`).Scan(&hasStage); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
 	var pptInsertErr error
-	if hasTenant {
+	if hasStage {
 		_, pptInsertErr = tx.ExecContext(ctx, `INSERT INTO xz_ppt_tasks(task_id,user_id,client_request_id,status,created_at,updated_at,raw,tenant_id,stage,skill_code,source_file_ids,organization_id) VALUES($1,$2,'','processing',now(),now(),$3::jsonb,'tenant_default','GENERATING','', '[]'::jsonb,'')`, taskID, userID, string(rawPPT))
+	} else if hasTenant {
+		_, pptInsertErr = tx.ExecContext(ctx, `INSERT INTO xz_ppt_tasks(task_id,tenant_id,user_id,client_request_id,status,created_at,updated_at,raw) VALUES($1,'tenant_default',$2,'','processing',now(),now(),$3::jsonb)`, taskID, userID, string(rawPPT))
 	} else {
 		_, pptInsertErr = tx.ExecContext(ctx, `INSERT INTO xz_ppt_tasks(task_id,user_id,client_request_id,status,created_at,updated_at,raw) VALUES($1,$2,'','processing',now(),now(),$3::jsonb)`, taskID, userID, string(rawPPT))
 	}

@@ -98,3 +98,92 @@ func TestPostgresPPTTaskPersistenceConcurrencyAndLegacyMirror(t *testing.T) {
 		t.Fatal("postgres task was not mirrored to the legacy rollback file")
 	}
 }
+
+func TestPostgresPPTTaskPersistenceTenantIDAndFallback(t *testing.T) {
+	dsn := os.Getenv("PPT_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("XIANZHI_TEST_DATABASE_URL")
+	}
+	if dsn == "" {
+		t.Skip("PPT_TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewPostgresService(db, "")
+	if err := service.ensurePostgresReady(ctx); err != nil {
+		t.Fatalf("ensurePostgresReady: %v", err)
+	}
+
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	userExplicit := "ppt_tenant_user_exp_" + suffix
+	userFallback := "ppt_tenant_user_fb_" + suffix
+	defer func() {
+		_, _ = db.ExecContext(context.Background(), `delete from xz_ppt_tasks where user_id in ($1, $2)`, userExplicit, userFallback)
+	}()
+
+	// Case 1: Explicit tenant
+	reqExplicit := GenerateRequest{
+		TenantID:   "tenant_enterprise_test",
+		UserID:     userExplicit,
+		Prompt:     "Explicit Tenant Deck",
+		SlideCount: 1,
+	}
+	respExplicit, err := service.Generate(reqExplicit)
+	if err != nil {
+		t.Fatalf("Generate explicit tenant error: %v", err)
+	}
+
+	var storedTenantExplicit, rawJSONExplicit string
+	if err := db.QueryRowContext(ctx, `select tenant_id, raw::text from xz_ppt_tasks where task_id=$1`, respExplicit.TaskID).Scan(&storedTenantExplicit, &rawJSONExplicit); err != nil {
+		t.Fatalf("query explicit task error: %v", err)
+	}
+	if storedTenantExplicit != "tenant_enterprise_test" {
+		t.Fatalf("expected tenant_id 'tenant_enterprise_test', got %q", storedTenantExplicit)
+	}
+
+	// Case 2: Empty tenant fallback to tenant_default
+	reqFallback := GenerateRequest{
+		TenantID:   "",
+		UserID:     userFallback,
+		Prompt:     "Fallback Tenant Deck",
+		SlideCount: 1,
+	}
+	respFallback, err := service.Generate(reqFallback)
+	if err != nil {
+		t.Fatalf("Generate fallback tenant error: %v", err)
+	}
+
+	var storedTenantFallback, rawJSONFallback string
+	if err := db.QueryRowContext(ctx, `select tenant_id, raw::text from xz_ppt_tasks where task_id=$1`, respFallback.TaskID).Scan(&storedTenantFallback, &rawJSONFallback); err != nil {
+		t.Fatalf("query fallback task error: %v", err)
+	}
+	if storedTenantFallback != DefaultTenantID {
+		t.Fatalf("expected fallback tenant_id %q, got %q", DefaultTenantID, storedTenantFallback)
+	}
+
+	// Also verify GetTask parses TenantID correctly
+	taskExplicit, err := service.GetTask(userExplicit, respExplicit.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask explicit error: %v", err)
+	}
+	if taskExplicit.TenantID != "tenant_enterprise_test" {
+		t.Fatalf("GetTask explicit TenantID=%q, want 'tenant_enterprise_test'", taskExplicit.TenantID)
+	}
+
+	taskFallback, err := service.GetTask(userFallback, respFallback.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask fallback error: %v", err)
+	}
+	if taskFallback.TenantID != DefaultTenantID {
+		t.Fatalf("GetTask fallback TenantID=%q, want %q", taskFallback.TenantID, DefaultTenantID)
+	}
+}
