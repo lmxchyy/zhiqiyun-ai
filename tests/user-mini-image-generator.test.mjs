@@ -1804,18 +1804,24 @@ test("image quote contract: mini-program and web show estimated points from serv
   assert.ok(workbenchSource.includes("imageQuoteSequence"));
   assert.ok(workbenchSource.includes("scheduleImageQuote"));
   assert.ok(workbenchSource.includes("businessSdk.generation.quote"));
-  assert.match(workbenchSource, /预计消耗：\$\{imageQuote\.value\.requiredPoints\} 积分/);
-  assert.match(workbenchSource, /:estimate-label="imageEstimateLabel"/);
-  assert.match(workbenchSource, /watch\(\[imageQuality, imageCount, creationReferencePaths\], \(\) => scheduleImageQuote\(\)\)/);
-  assert.match(workbenchSource, /watch\(creationMode, \(mode\) =>/);
-  assert.match(workbenchSource, /watch\(isGuest, \(guest\) =>/);
+  assert.ok(workbenchSource.includes("预计消耗：${imageQuote.value.requiredPoints} 积分"));
+  assert.ok(workbenchSource.includes(":estimate-label=\"imageEstimateLabel\""));
+  assert.ok(workbenchSource.includes("watch([imageQuality, imageCount, creationReferencePaths], () => scheduleImageQuote())"));
+  assert.ok(workbenchSource.includes("watch(creationMode, (mode) =>"));
+  assert.ok(workbenchSource.includes("watch(isGuest, (guest) =>"));
+  assert.ok(workbenchSource.includes("if (isGuest.value) return \"登录后可查看预计积分\";"));
+  assert.ok(workbenchSource.includes("resolvedQuality !== undefined"));
+  assert.ok(workbenchSource.includes("resolvedCount !== undefined"));
+  assert.ok(!workbenchSource.includes("quality: resolvedImageQualityForSubmit() || \"auto\""));
+  assert.ok(!workbenchSource.includes("n: resolvedImageCountForSubmit() || 1"));
+  assert.ok(workbenchSource.includes("err?.payload") || workbenchSource.includes("err?.data"));
 
   const generatorSource = readFileSync(
     new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url),
     "utf8",
   );
-  assert.match(generatorSource, /ai-image-generator__estimate/);
-  assert.match(generatorSource, /ai-image-generator__generate/);
+  assert.ok(generatorSource.includes("ai-image-generator__estimate"));
+  assert.ok(generatorSource.includes("ai-image-generator__generate"));
 
   const adminSource = readFileSync(
     new URL("../admin-vue/src/App.vue", import.meta.url),
@@ -1823,8 +1829,10 @@ test("image quote contract: mini-program and web show estimated points from serv
   );
   assert.ok(adminSource.includes("refreshAiImageQuote"));
   assert.ok(adminSource.includes("/generation-tasks/quote"));
-  assert.match(adminSource, /预计消耗：\$\{points\} 积分/);
-  assert.match(adminSource, /class="online-cost-badge"/);
+  assert.ok(adminSource.includes("预计消耗：${points} 积分"));
+  assert.ok(adminSource.includes("class=\"online-cost-badge\""));
   assert.doesNotMatch(adminSource, /onlineEstimatedCost.*modelRatio/);
+  assert.ok(adminSource.includes("aiImageQualityFieldDeclared"));
+  assert.ok(adminSource.includes("aiImageCountFieldDeclared"));
+  assert.ok(adminSource.includes("err?.payload") || adminSource.includes("err?.data"));
 });
-

@@ -101,3 +101,56 @@ func TestGenerationQuoteHTTPReturnsPreviewOnly(t *testing.T) {
 		t.Fatalf("invalid quote payload: %+v", payload)
 	}
 }
+
+func TestGenerationQuoteHTTPIsNotBlockedByInsufficientPoints(t *testing.T) {
+	store := newJSONStore(filepath.Join(t.TempDir(), "store.json"))
+	handler := newWithStore(config.Config{Addr: ":0", DataPath: filepath.Join(t.TempDir(), "api.json"), StaticDir: t.TempDir()}, store).Handler
+	token := loginToken(t, handler, "demo@xianzhi.ai", "Demo123!")
+
+	data, err := store.AdminData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := videoEstimateTestUser(t, data)
+	err = store.updateAdmin(func(adminData *adminPlatformData) error {
+		for i := range adminData.PointAccounts {
+			if adminData.PointAccounts[i].UserID == user.ID {
+				adminData.PointAccounts[i].Available = 0
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := json.Marshal(generation.CreateRequest{
+		Type: "TEXT_TO_VIDEO", Prompt: "quote insufficient", Model: "mock-video",
+		Params: map[string]any{"duration": float64(5), "resolution": "720p"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Quote endpoint must return HTTP 200 without top-level code="INSUFFICIENT_POINTS"
+	response := authedRequest(t, handler, http.MethodPost, "/api/v1/generation-tasks/quote", bytes.NewBuffer(body), token)
+	if response.Code != http.StatusOK {
+		t.Fatalf("quote status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload generationQuoteResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.RequiredPoints <= 0 {
+		t.Fatalf("expected positive requiredPoints, got %d", payload.RequiredPoints)
+	}
+	if payload.Sufficient == nil || *payload.Sufficient != false {
+		t.Fatalf("expected sufficient=false, got %v", payload.Sufficient)
+	}
+	if payload.Shortfall != payload.RequiredPoints {
+		t.Fatalf("expected shortfall=%d, got %d", payload.RequiredPoints, payload.Shortfall)
+	}
+	if payload.Code != "" {
+		t.Fatalf("quote HTTP 200 must NOT return top-level code %q, want empty string", payload.Code)
+	}
+}

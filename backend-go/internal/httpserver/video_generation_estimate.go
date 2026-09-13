@@ -148,10 +148,6 @@ func (a api) quoteGenerationCost(w http.ResponseWriter, r *http.Request) {
 	if !sufficient {
 		shortfall = quote.RequiredPoints - currentPoints
 	}
-	code := ""
-	if !sufficient {
-		code = "INSUFFICIENT_POINTS"
-	}
 	writeJSON(w, generationQuoteResponse{
 		Model: prepared.Model, BusinessType: canonicalModuleCode(requestModuleCode(prepared)),
 		RequiredPoints: quote.RequiredPoints, PricingRuleID: quote.PricingRuleID,
@@ -162,7 +158,6 @@ func (a api) quoteGenerationCost(w http.ResponseWriter, r *http.Request) {
 		CurrentPoints:        currentPoints,
 		Sufficient:           &sufficient,
 		Shortfall:            shortfall,
-		Code:                 code,
 	})
 }
 
