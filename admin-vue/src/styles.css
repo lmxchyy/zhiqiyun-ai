@@ -4505,6 +4505,15 @@ body,
   margin-top: 16px;
 }
 
+.online-cost-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--admin-primary-strong);
+  font-size: 14px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
 .online-provider-list {
   display: grid;
   gap: 10px;

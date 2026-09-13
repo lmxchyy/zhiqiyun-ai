@@ -1795,3 +1795,36 @@ test("video model switch reports schema request failures without rejecting or sw
     });
   }
 });
+
+test("image quote contract: mini-program and web show estimated points from server quote before generation", () => {
+  const workbenchSource = readFileSync(
+    new URL("../apps/user-uni/src/components/MiniProgramRoleWorkbench.vue", import.meta.url),
+    "utf8",
+  );
+  assert.ok(workbenchSource.includes("imageQuoteSequence"));
+  assert.ok(workbenchSource.includes("scheduleImageQuote"));
+  assert.ok(workbenchSource.includes("businessSdk.generation.quote"));
+  assert.match(workbenchSource, /预计消耗：\$\{imageQuote\.value\.requiredPoints\} 积分/);
+  assert.match(workbenchSource, /:estimate-label="imageEstimateLabel"/);
+  assert.match(workbenchSource, /watch\(\[imageQuality, imageCount, creationReferencePaths\], \(\) => scheduleImageQuote\(\)\)/);
+  assert.match(workbenchSource, /watch\(creationMode, \(mode\) =>/);
+  assert.match(workbenchSource, /watch\(isGuest, \(guest\) =>/);
+
+  const generatorSource = readFileSync(
+    new URL("../apps/user-uni/src/components/creation/AiImageGenerator.vue", import.meta.url),
+    "utf8",
+  );
+  assert.match(generatorSource, /ai-image-generator__estimate/);
+  assert.match(generatorSource, /ai-image-generator__generate/);
+
+  const adminSource = readFileSync(
+    new URL("../admin-vue/src/App.vue", import.meta.url),
+    "utf8",
+  );
+  assert.ok(adminSource.includes("refreshAiImageQuote"));
+  assert.ok(adminSource.includes("/generation-tasks/quote"));
+  assert.match(adminSource, /预计消耗：\$\{points\} 积分/);
+  assert.match(adminSource, /class="online-cost-badge"/);
+  assert.doesNotMatch(adminSource, /onlineEstimatedCost.*modelRatio/);
+});
+
