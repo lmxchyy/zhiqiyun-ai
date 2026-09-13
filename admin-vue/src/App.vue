@@ -4064,6 +4064,12 @@ const aiImageSizeSchemaOptions = computed(() => {
     .filter((item) => item && (item === "auto" || /^\d+x\d+$/.test(item)));
   return Array.from(new Set(values));
 });
+const aiImageQualityFieldDeclared = computed(() => {
+  return aiSchemaFieldsFromResponse(aiImageModuleSchema.value).some((field) => String(field.key || "") === "quality");
+});
+const aiImageCountFieldDeclared = computed(() => {
+  return aiSchemaFieldsFromResponse(aiImageModuleSchema.value).some((field) => String(field.key || "") === "n" || String(field.key || "") === "count");
+});
 const aiImageQualitySchemaOptions = computed(() => {
   const field = aiSchemaFieldsFromResponse(aiImageModuleSchema.value).find((item) => String(item.key || "") === "quality") || null;
   const official = ["auto", "low", "medium", "high"];
@@ -4985,26 +4991,37 @@ async function refreshAiImageQuote() {
   try {
     const requestSize = gptImageProductionSize(resolveOnlineImageRequestSize()) || "auto";
     const hasRefs = onlineReferenceImages.value.length > 0 || aiReferenceImages.value.length > 0;
-    const payload = await adminRequest<{ requiredPoints?: number }>({
+    const params: Record<string, any> = {
+      size: requestSize,
+    };
+    if (aiImageQualityFieldDeclared.value && onlineImageForm.value.quality) {
+      params.quality = onlineImageForm.value.quality;
+    }
+    if (aiImageCountFieldDeclared.value && onlineImageForm.value.count) {
+      params.n = Number(onlineImageForm.value.count);
+    }
+    const payload = await adminRequest<{ requiredPoints?: number; sufficient?: boolean }>({
       method: "POST",
       url: "/generation-tasks/quote",
       data: {
         type: hasRefs ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
         prompt: onlineImageForm.value.prompt || "generation pricing quote",
         model: onlineImageForm.value.model || "gpt-image-2",
-        params: {
-          size: requestSize,
-          quality: onlineImageForm.value.quality || "low",
-          n: Number(onlineImageForm.value.count || 1)
-        }
+        params,
       }
     });
     if (sequence !== aiImageQuoteSequence) return;
     const points = Number(payload?.requiredPoints || 0);
     aiImageQuoteLabel.value = points > 0 ? `预计消耗：${points} 积分` : "价格暂不可用";
-  } catch {
+  } catch (err: any) {
     if (sequence !== aiImageQuoteSequence) return;
-    aiImageQuoteLabel.value = "价格暂不可用";
+    const payload = err?.payload || err?.data || err?.response?.data;
+    const points = Number(payload?.requiredPoints || 0);
+    if (points > 0) {
+      aiImageQuoteLabel.value = `预计消耗：${points} 积分`;
+    } else {
+      aiImageQuoteLabel.value = "价格暂不可用";
+    }
   }
 }
 watch(

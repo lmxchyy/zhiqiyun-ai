@@ -1225,10 +1225,11 @@ const imageHasAuto = computed(() => {
   return contractHasAuto(imageCreationContract.value);
 });
 const imageEstimateLabel = computed(() => {
+  if (isGuest.value) return "登录后可查看预计积分";
   if (imageQuoteLoading.value) return "试算中…";
   if (imageQuote.value) return `预计消耗：${imageQuote.value.requiredPoints} 积分`;
   if (imageQuoteError.value) return imageQuoteError.value;
-  return isGuest.value ? "登录后可查看预计积分" : "价格暂不可用";
+  return "价格暂不可用";
 });
 const imageGeneratorDisabledReason = computed(() => {
   if (imageModelsLoading.value) return "正在读取可用模型";
@@ -1940,27 +1941,45 @@ function scheduleImageQuote() {
   const sequence = ++imageQuoteSequence;
   imageQuote.value = null;
   imageQuoteError.value = "";
-  if (creationMode.value !== "image" || !selectedImageModelCode.value || !imageSize.value || isGuest.value) {
+  if (creationMode.value !== "image" || !selectedImageModelCode.value || !imageSize.value) {
+    imageQuoteLoading.value = false;
+    return;
+  }
+  if (isGuest.value) {
     imageQuoteLoading.value = false;
     return;
   }
   imageQuoteLoading.value = true;
   imageQuoteTimer = setTimeout(async () => {
     try {
+      const params: Record<string, any> = {
+        size: imageSize.value,
+        ...canonicalImageParameters(restoredCreationParams.value),
+      };
+      const resolvedQuality = resolvedImageQualityForSubmit();
+      if (resolvedQuality !== undefined) {
+        params.quality = resolvedQuality;
+      }
+      const resolvedCount = resolvedImageCountForSubmit();
+      if (resolvedCount !== undefined) {
+        params.n = resolvedCount;
+      }
       const result = await businessSdk.generation.quote({
         type: creationReferencePaths.value.length ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
         prompt: creationPrompt.value.trim() || "image generation quote",
         model: selectedImageModelCode.value,
-        params: {
-          size: imageSize.value,
-          quality: resolvedImageQualityForSubmit() || "auto",
-          n: resolvedImageCountForSubmit() || 1,
-          ...canonicalImageParameters(restoredCreationParams.value),
-        },
+        params,
       });
       if (sequence === imageQuoteSequence) imageQuote.value = result;
-    } catch {
-      if (sequence === imageQuoteSequence) imageQuoteError.value = "价格暂不可用";
+    } catch (err: any) {
+      if (sequence === imageQuoteSequence) {
+        const payload = err?.payload || err?.data;
+        if (payload && typeof payload.requiredPoints === "number" && payload.requiredPoints > 0) {
+          imageQuote.value = payload as GenerationQuote;
+        } else {
+          imageQuoteError.value = "价格暂不可用";
+        }
+      }
     } finally {
       if (sequence === imageQuoteSequence) imageQuoteLoading.value = false;
     }
