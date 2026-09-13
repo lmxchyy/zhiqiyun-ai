@@ -1226,7 +1226,7 @@ const imageHasAuto = computed(() => {
 });
 const imageEstimateLabel = computed(() => {
   if (imageQuoteLoading.value) return "试算中…";
-  if (imageQuote.value) return `预计 ${imageQuote.value.requiredPoints} 积分`;
+  if (imageQuote.value) return `预计消耗：${imageQuote.value.requiredPoints} 积分`;
   if (imageQuoteError.value) return imageQuoteError.value;
   return isGuest.value ? "登录后可查看预计积分" : "价格暂不可用";
 });
@@ -1674,7 +1674,13 @@ watch([selectedRatio, selectedTier, imageCreationContract], ([ratio, tier]) => {
   imageSize.value = resolveCanonicalSubmitSize(imageCreationContract.value, ratio, nextTier) || "";
   scheduleImageQuote();
 });
-watch([imageQuality, imageCount], () => scheduleImageQuote());
+watch([imageQuality, imageCount, creationReferencePaths], () => scheduleImageQuote());
+watch(creationMode, (mode) => {
+  if (mode === "image") scheduleImageQuote();
+});
+watch(isGuest, (guest) => {
+  if (!guest && creationMode.value === "image") scheduleImageQuote();
+});
 
 onShareAppMessage(() => ({
   title: "知启云 AI 邀请你一起创作",
@@ -1934,12 +1940,15 @@ function scheduleImageQuote() {
   const sequence = ++imageQuoteSequence;
   imageQuote.value = null;
   imageQuoteError.value = "";
-  if (creationMode.value !== "image" || !selectedImageModelCode.value || !imageSize.value || isGuest.value) return;
+  if (creationMode.value !== "image" || !selectedImageModelCode.value || !imageSize.value || isGuest.value) {
+    imageQuoteLoading.value = false;
+    return;
+  }
+  imageQuoteLoading.value = true;
   imageQuoteTimer = setTimeout(async () => {
-    imageQuoteLoading.value = true;
     try {
       const result = await businessSdk.generation.quote({
-        type: "TEXT_TO_IMAGE",
+        type: creationReferencePaths.value.length ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
         prompt: creationPrompt.value.trim() || "image generation quote",
         model: selectedImageModelCode.value,
         params: {

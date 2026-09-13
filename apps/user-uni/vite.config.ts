@@ -14,6 +14,7 @@ export default defineConfig({
       "@xianzhi/design-token": path.resolve(process.cwd(), "../../packages/design-token/src"),
       "@xianzhi/platform-adapter": path.resolve(process.cwd(), "../../packages/platform-adapter/src"),
       "@xianzhi/shared-auth": path.resolve(process.cwd(), "../../packages/shared-auth/src"),
+      "@xianzhi/shared-image-utils": path.resolve(process.cwd(), "../../packages/shared-image-utils/src"),
       "@xianzhi/shared-types": path.resolve(process.cwd(), "../../packages/shared-types/src")
     }
   },

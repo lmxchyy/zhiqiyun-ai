@@ -152,11 +152,12 @@
                   <label><span>比例</span><el-select v-model="onlineImageForm.ratio"><el-option label="比例为空" value="" /><el-option label="1:1 方图" value="square" /><el-option label="3:2 横图" value="3:2" /><el-option label="2:3 竖图" value="2:3" /><el-option label="16:9 横图" value="16:9" /><el-option label="9:16 竖图" value="9:16" /></el-select></label>
                   <label><span>宽度</span><el-input-number v-model="onlineImageForm.width" :min="64" :step="64" controls-position="right" /></label>
                   <label><span>高度</span><el-input-number v-model="onlineImageForm.height" :min="64" :step="64" controls-position="right" /></label>
-                  <label><span>消耗点数预估</span><strong class="online-cost">{{ onlineEstimatedCost }} 点</strong></label>
+                  <label><span>预计消耗</span><strong class="online-cost">{{ aiImageQuoteLabel }}</strong></label>
                   <label><span>尺寸工具</span><el-button class="online-fit-button" @click="fitOnlineImageSize">适配图片</el-button></label>
                 </div>
 
                 <div class="online-compose-actions">
+                  <span class="online-cost-badge">{{ aiImageQuoteLabel }}</span>
                   <el-button type="primary" :icon="Plus" :loading="onlineSubmitting" @click="submitOnlineImage">生成图片</el-button>
                 </div>
               </div>
@@ -633,7 +634,7 @@
                     </el-select>
                   </label>
                   <label>
-                    <span>预计积分</span>
+                    <span>预计消耗</span>
                     <strong class="online-cost">{{ aiImageQuoteLabel }}</strong>
                   </label>
                   <label>
@@ -4510,7 +4511,7 @@ const activeOnlineModel = computed(() => {
   return onlineProviderModels.value.find((model) => String(model.providerId || "") === currentProvider && String(model.model || model.id) === currentModel)
     || [...onlineProviderModels.value, ...onlineModels.value].find((model) => String(model.model || model.id) === currentModel);
 });
-const onlineEstimatedCost = computed(() => Math.max(1, Number(activeOnlineModel.value?.fixedQuota || activeOnlineModel.value?.modelRatio || 1)) * Number(onlineImageForm.value.count || 1));
+const onlineEstimatedCost = computed(() => 0);
 const onlineProviderModeLabel = computed(() => {
   const item = onlineProviders.value.find((provider) => String(provider.id || provider.name) === onlineImageForm.value.provider);
   const protocol = String(item?.protocol || item?.type || "openai");
@@ -4957,6 +4958,21 @@ function findAiSizePreset(size: string) {
   return null;
 }
 
+function resolveOnlineImageRequestSize() {
+  const form = onlineImageForm.value;
+  if (form.size && form.size !== "auto") {
+    const normalized = aiRequestSizeParam(form.size);
+    if (normalized) return normalized;
+  }
+  const tier = form.resolution === "2k" ? "2K" : form.resolution === "4k" ? "4K" : form.resolution === "custom" ? "" : "1K";
+  const ratioKey = form.ratio === "square" ? "1:1" : form.ratio;
+  if (tier && ratioKey && aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets]?.[ratioKey]) {
+    return aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets][ratioKey];
+  }
+  if (form.width && form.height) return aiRequestSizeParam(`${form.width}x${form.height}`) || "auto";
+  return "auto";
+}
+
 const displayAiImageSize = computed(() => gptImageProductionSize(onlineImageForm.value.size) || "auto");
 let aiImageQuoteSequence = 0;
 async function refreshAiImageQuote() {
@@ -4967,15 +4983,17 @@ async function refreshAiImageQuote() {
   const sequence = ++aiImageQuoteSequence;
   aiImageQuoteLabel.value = "试算中…";
   try {
+    const requestSize = gptImageProductionSize(resolveOnlineImageRequestSize()) || "auto";
+    const hasRefs = onlineReferenceImages.value.length > 0 || aiReferenceImages.value.length > 0;
     const payload = await adminRequest<{ requiredPoints?: number }>({
       method: "POST",
       url: "/generation-tasks/quote",
       data: {
-        type: "TEXT_TO_IMAGE",
+        type: hasRefs ? "IMAGE_TO_IMAGE" : "TEXT_TO_IMAGE",
         prompt: onlineImageForm.value.prompt || "generation pricing quote",
         model: onlineImageForm.value.model || "gpt-image-2",
         params: {
-          size: gptImageProductionSize(onlineImageForm.value.size) || "auto",
+          size: requestSize,
           quality: onlineImageForm.value.quality || "low",
           n: Number(onlineImageForm.value.count || 1)
         }
@@ -4983,13 +5001,28 @@ async function refreshAiImageQuote() {
     });
     if (sequence !== aiImageQuoteSequence) return;
     const points = Number(payload?.requiredPoints || 0);
-    aiImageQuoteLabel.value = points > 0 ? `预计 ${points} 积分` : "价格暂不可用";
+    aiImageQuoteLabel.value = points > 0 ? `预计消耗：${points} 积分` : "价格暂不可用";
   } catch {
     if (sequence !== aiImageQuoteSequence) return;
     aiImageQuoteLabel.value = "价格暂不可用";
   }
 }
-watch(() => [onlineImageForm.value.model, onlineImageForm.value.size, onlineImageForm.value.quality, onlineImageForm.value.count], () => { void refreshAiImageQuote(); }, { immediate: true });
+watch(
+  () => [
+    onlineImageForm.value.model,
+    onlineImageForm.value.size,
+    onlineImageForm.value.resolution,
+    onlineImageForm.value.ratio,
+    onlineImageForm.value.width,
+    onlineImageForm.value.height,
+    onlineImageForm.value.quality,
+    onlineImageForm.value.count,
+    onlineReferenceImages.value.length,
+    aiReferenceImages.value.length
+  ],
+  () => { void refreshAiImageQuote(); },
+  { immediate: true }
+);
 const aiSizePickerErrors = computed(() => {
   if (aiSizePickerMode.value !== "resolution") return [] as string[];
   const width = Number(aiCustomWidth.value);
@@ -7194,20 +7227,7 @@ async function submitOnlineImage() {
   onlineSubmitting.value = true;
   try {
     const requestQuality = aiRequestQualityParam(onlineImageForm.value.quality) || "low";
-    const requestSize = gptImageProductionSize((() => {
-      const form = onlineImageForm.value;
-      if (form.size && form.size !== "auto") {
-        const normalized = aiRequestSizeParam(form.size);
-        if (normalized) return normalized;
-      }
-      const tier = form.resolution === "2k" ? "2K" : form.resolution === "4k" ? "4K" : form.resolution === "custom" ? "" : "1K";
-      const ratioKey = form.ratio === "square" ? "1:1" : form.ratio;
-      if (tier && ratioKey && aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets]?.[ratioKey]) {
-        return aiCommonSizePresets[tier as keyof typeof aiCommonSizePresets][ratioKey];
-      }
-      if (form.width && form.height) return aiRequestSizeParam(`${form.width}x${form.height}`) || "auto";
-      return "auto";
-    })());
+    const requestSize = gptImageProductionSize(resolveOnlineImageRequestSize());
     const taskSnapshot = await createAiGenerationTaskSnapshot(prompt);
     const referenceImages = taskSnapshot.inputImagesSnapshot.slice(0, onlineReferenceSlots.length);
     if (onlineReferenceImages.value.length && !referenceImages.length) {
