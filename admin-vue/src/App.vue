@@ -1913,7 +1913,37 @@
             <section class="video-studio-shell">
               <div class="video-gallery-stage">
                 <div v-if="selectedVideoHistoryEntry" class="video-current-preview">
-                  <video class="video-preview-frame" :src="selectedVideoHistoryEntry.url" controls playsinline preload="metadata" />
+                  <video
+                    v-if="selectedVideoHistoryEntry.url"
+                    class="video-preview-frame"
+                    :src="selectedVideoHistoryEntry.url"
+                    :poster="selectedVideoHistoryEntry.posterUrl || selectedVideoHistoryEntry.thumbnailUrl"
+                    controls
+                    playsinline
+                    preload="metadata"
+                    @error="handleVideoPlaybackError(selectedVideoHistoryEntry)"
+                  />
+                  <div v-else-if="selectedVideoHistoryEntry.status === 'success'" class="video-preview-frame video-preview-frame-placeholder">
+                    <el-icon><Monitor /></el-icon>
+                    <p v-if="selectedVideoHistoryEntry.availability === 'EXPIRED'">{{ selectedVideoHistoryEntry.availabilityReason || "已完成 · 视频源已过期" }}</p>
+                    <p v-else>已完成 · 视频加载中...</p>
+                    <button
+                      v-if="selectedVideoHistoryEntry.availability !== 'EXPIRED'"
+                      type="button"
+                      class="video-preview-reload-btn"
+                      @click="resolveVideoPlaybackUrl(selectedVideoHistoryEntry, { force: true })"
+                    >
+                      重新获取播放地址
+                    </button>
+                  </div>
+                  <div v-else-if="selectedVideoHistoryEntry.status === 'failed'" class="video-preview-frame video-preview-frame-placeholder is-failed">
+                    <el-icon><CircleClose /></el-icon>
+                    <p>{{ selectedVideoHistoryEntry.errorMessage || '视频生成失败' }}</p>
+                  </div>
+                  <div v-else class="video-preview-frame video-preview-frame-placeholder is-generating">
+                    <span class="video-action-spinner"></span>
+                    <p>视频生成中，请稍候...</p>
+                  </div>
                   <div class="video-current-copy">
                     <span>{{ videoModeLabel(selectedVideoHistoryEntry.mode) }}</span>
                     <h2>{{ selectedVideoHistoryEntry.prompt || "未填写提示词" }}</h2>
@@ -1978,10 +2008,10 @@
                       @click="openVideoFullscreen(entry)"
                     >
                       <div class="video-history-media" @mouseenter="playVideoCardPreview($event, entry)" @mouseleave="resetVideoCardPreview">
-                        <video v-if="videoHistoryCardSrc(entry)" :src="videoHistoryCardSrc(entry)" muted playsinline loop preload="none"></video>
+                        <video v-if="videoHistoryCardSrc(entry)" :src="videoHistoryCardSrc(entry)" :poster="entry.posterUrl || entry.thumbnailUrl" muted playsinline loop preload="none"></video>
                         <div v-else class="video-history-placeholder">
                           <el-icon><Monitor /></el-icon>
-                          <span>{{ entry.url ? '悬停预览' : entry.status === 'failed' ? '生成失败' : '生成中' }}</span>
+                          <span>{{ videoCardPlaceholderText(entry) }}</span>
                         </div>
                         <em>{{ videoStatusLabel(entry.status) }}</em>
                       </div>
@@ -2003,7 +2033,7 @@
                               type="button"
                               aria-label="下载视频"
                               title="下载视频"
-                              :disabled="!entry.url || isVideoHistoryActionBusy(entry.id, 'download')"
+                              :disabled="entry.status !== 'success' || entry.availability === 'EXPIRED' || isVideoHistoryActionBusy(entry.id, 'download')"
                               @click.stop="downloadVideoHistory(entry)"
                             >
                               <span v-if="isVideoHistoryActionBusy(entry.id, 'download')" class="video-action-spinner"></span>
@@ -2017,7 +2047,7 @@
                               type="button"
                               aria-label="复制视频链接"
                               title="复制视频链接"
-                              :disabled="!entry.url || isVideoHistoryActionBusy(entry.id, 'copy')"
+                              :disabled="entry.status !== 'success' || entry.availability === 'EXPIRED' || isVideoHistoryActionBusy(entry.id, 'copy')"
                               @click.stop="copyVideoHistoryUrl(entry)"
                             >
                               <span v-if="isVideoHistoryActionBusy(entry.id, 'copy')" class="video-action-spinner"></span>
@@ -2459,6 +2489,12 @@ import {
   videoTaskParams,
   videoTaskUrl,
   videoToolOptions,
+  videoCardPlaceholderText,
+  isSameVideoHistoryEntry,
+  mergeVideoHistoryEntry,
+  mergeVideoHistoryList,
+  normalizeVideoHistoryEntry,
+  taskToVideoHistoryEntry,
   type VideoHistoryEntry,
   type VideoHistoryStatus,
   type VideoModelOption
@@ -2655,54 +2691,21 @@ function selectedVideoModelId() {
   return videoModelId(selectedVideoModel.value);
 }
 
-function normalizeVideoHistoryEntry(entry: Partial<VideoHistoryEntry> | null | undefined): VideoHistoryEntry | null {
-  if (!entry) return null;
-  const timestamp = normalizeVideoTimestamp(entry.createdAt || entry.timestamp);
-  const id = String(entry.id || entry.taskId || entry.backendTaskId || `video-${timestamp}`).trim();
-  if (!id) return null;
-  return {
-    id,
-    taskId: entry.taskId ? String(entry.taskId) : undefined,
-    backendTaskId: entry.backendTaskId ? String(entry.backendTaskId) : undefined,
-    url: String(entry.url || ""),
-    prompt: String(entry.prompt || ""),
-    model: String(entry.model || selectedVideoModelId()),
-    mode: entry.mode || "text-to-video",
-    aspect_ratio: String(entry.aspect_ratio || videoRatio.value || ""),
-    duration: entry.duration || videoDuration.value || "",
-    resolution: String(entry.resolution || videoResolution.value || ""),
-    inputImageUrls: Array.isArray(entry.inputImageUrls) ? entry.inputImageUrls.map(String).filter(Boolean) : [],
-    inputVideoUrl: String(entry.inputVideoUrl || ""),
-    createdAt: entry.createdAt || new Date(timestamp).toISOString(),
-    timestamp,
-    status: entry.status || (entry.url ? "success" : "generating"),
-    errorMessage: entry.errorMessage ? videoErrorMessage(entry.errorMessage) : "",
-    userId: entry.userId ? String(entry.userId) : undefined
-  };
+function normalizeVideoHistoryEntryLocal(entry: Partial<VideoHistoryEntry> | null | undefined): VideoHistoryEntry | null {
+  return normalizeVideoHistoryEntry(entry, {
+    model: selectedVideoModelId(),
+    ratio: videoRatio.value,
+    duration: videoDuration.value,
+    resolution: videoResolution.value
+  });
 }
 
-function taskToVideoHistoryEntry(task: AdminRecord): VideoHistoryEntry | null {
-  if (!isVideoGenerationTask(task)) return null;
-  const params = videoTaskParams(task);
-  const createdAt = String(task.createdAt || task.created_at || task.updatedAt || new Date().toISOString());
-  const status = videoStatusFromTask(task);
-  return normalizeVideoHistoryEntry({
-    id: String(task.id || task.taskId || `video-${Date.now()}`),
-    taskId: String(task.taskId || task.providerTaskId || task.id || ""),
-    backendTaskId: String(task.id || ""),
-    url: videoTaskUrl(task),
-    prompt: String(task.prompt || params.prompt || ""),
-    model: String(task.model || params.model || selectedVideoModelId()),
-    mode: videoModeFromTask(task, params),
-    aspect_ratio: videoStringValue(params.ratio ?? params.aspect_ratio ?? task.aspect_ratio, videoRatio.value),
-    duration: videoNumberOrString(params.duration ?? params.seconds ?? task.duration, videoDuration.value),
-    resolution: videoStringValue(params.resolution ?? task.resolution, videoResolution.value),
-    inputImageUrls: videoInputImageUrlsFromTask(task, params),
-    inputVideoUrl: videoStringValue(params.inputVideoUrl ?? params.video_url ?? params.videoUrl ?? task.inputVideoUrl),
-    createdAt,
-    status,
-    errorMessage: videoErrorMessage(task.failureReason ?? task.errorMessage ?? task.error ?? task.failReason),
-    userId: videoStringValue(task.userId)
+function taskToVideoHistoryEntryLocal(task: AdminRecord): VideoHistoryEntry | null {
+  return taskToVideoHistoryEntry(task, {
+    model: selectedVideoModelId(),
+    ratio: videoRatio.value,
+    duration: videoDuration.value,
+    resolution: videoResolution.value
   });
 }
 
@@ -2711,26 +2714,23 @@ function sortVideoHistory(entries: VideoHistoryEntry[]) {
 }
 
 function commitVideoHistoryEntry(entry: Partial<VideoHistoryEntry>, replaceId = "") {
-  const normalized = normalizeVideoHistoryEntry(entry);
+  const normalized = normalizeVideoHistoryEntryLocal(entry);
   if (!normalized) return;
-  videoHistory.value = sortVideoHistory([
-    normalized,
-    ...videoHistory.value.filter((item) => item.id !== normalized.id && item.id !== replaceId && item.taskId !== normalized.taskId && item.backendTaskId !== normalized.backendTaskId)
-  ]);
+  const matchIndex = videoHistory.value.findIndex((item) => item.id === replaceId || isSameVideoHistoryEntry(item, normalized));
+  if (matchIndex >= 0) {
+    const updated = mergeVideoHistoryEntry(videoHistory.value[matchIndex], normalized);
+    videoHistory.value = sortVideoHistory([
+      updated,
+      ...videoHistory.value.filter((_, idx) => idx !== matchIndex)
+    ]);
+  } else {
+    videoHistory.value = sortVideoHistory([normalized, ...videoHistory.value]);
+  }
   selectedVideoHistoryId.value = normalized.id;
 }
 
 function mergeVideoHistoryEntries(entries: Array<VideoHistoryEntry | null>) {
-  const map = new Map<string, VideoHistoryEntry>();
-  videoHistory.value.forEach((entry) => {
-    if (!videoHiddenHistoryIds.value.includes(entry.id)) map.set(entry.id, entry);
-  });
-  entries.filter(Boolean).forEach((entry) => {
-    const normalized = normalizeVideoHistoryEntry(entry);
-    if (!normalized || videoHiddenHistoryIds.value.includes(normalized.id)) return;
-    map.set(normalized.id, { ...(map.get(normalized.id) || {}), ...normalized });
-  });
-  videoHistory.value = sortVideoHistory(Array.from(map.values()));
+  videoHistory.value = sortVideoHistory(mergeVideoHistoryList(videoHistory.value, entries, videoHiddenHistoryIds.value));
   if (!selectedVideoHistoryId.value && videoHistory.value.length) selectedVideoHistoryId.value = videoHistory.value[0].id;
 }
 
@@ -2762,7 +2762,7 @@ function hydrateVideoHistoryFromStorage() {
     const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.videoHistory) ? parsed.videoHistory : [];
     videoHiddenHistoryIds.value = Array.isArray(parsed?.hiddenIds) ? parsed.hiddenIds.map(String).filter(Boolean) : [];
     selectedVideoHistoryId.value = String(parsed?.selectedId || "");
-    videoHistory.value = sortVideoHistory(entries.map(normalizeVideoHistoryEntry).filter(Boolean) as VideoHistoryEntry[]);
+    videoHistory.value = sortVideoHistory(entries.map(normalizeVideoHistoryEntryLocal).filter(Boolean) as VideoHistoryEntry[]);
   } catch {
     videoHistory.value = [];
   }
@@ -2934,7 +2934,7 @@ async function submitVideoGeneration() {
       ? await adminRequest<AdminRecord>({ method: "GET", url: `/generation-tasks/${encodeURIComponent(taskId)}` })
       : createdTask;
     videoResultTask.value = task;
-    const historyEntry = taskToVideoHistoryEntry(task);
+    const historyEntry = taskToVideoHistoryEntryLocal(task);
     if (historyEntry) {
       commitVideoHistoryEntry(historyEntry, snapshotId);
     }
@@ -3017,13 +3017,140 @@ function resetVideoCardPreview(event: MouseEvent) {
   }
 }
 
-function openVideoFullscreen(entry: VideoHistoryEntry) {
-  if (!entry.url || entry.status !== "success") {
-    selectedVideoHistoryId.value = entry.id;
+const videoPlaybackUrlResolving = new Map<string, Promise<string>>();
+const videoPlaybackErrorRetries = new Set<string>();
+
+async function resolveVideoPlaybackUrl(
+  entry: VideoHistoryEntry,
+  options?: { force?: boolean }
+): Promise<string> {
+  if (!entry) return "";
+  if (!options?.force && entry.url && entry.url.trim()) {
+    return entry.url;
+  }
+  if (!options?.force && entry.availability === "EXPIRED") {
+    return "";
+  }
+
+  const inFlightKey = entry.id;
+  if (videoPlaybackUrlResolving.has(inFlightKey)) {
+    return videoPlaybackUrlResolving.get(inFlightKey)!;
+  }
+
+  const promise = (async () => {
+    try {
+      const taskId = String(entry.backendTaskId || entry.taskId || (entry.id.startsWith("video-") ? "" : entry.id)).trim();
+      let assetId = String(entry.assetId || (entry.resultIds && entry.resultIds[0]) || "").trim();
+      let resolvedUrl = "";
+      let resolvedPosterUrl = entry.posterUrl || entry.thumbnailUrl || "";
+      let resolvedResultIds = entry.resultIds;
+      let resolvedAvailability = entry.availability;
+      let resolvedAvailabilityReason = entry.availabilityReason;
+
+      // 1. Try GET /api/v1/generation-tasks/:id
+      if (taskId) {
+        try {
+          const task = await adminRequest<AdminRecord>({
+            method: "GET",
+            url: `/generation-tasks/${encodeURIComponent(taskId)}`
+          });
+          if (task) {
+            resolvedUrl = videoTaskUrl(task);
+            if (Array.isArray(task.resultIds) && task.resultIds.length) {
+              resolvedResultIds = task.resultIds.map(String).filter(Boolean);
+              if (!assetId && resolvedResultIds.length) {
+                assetId = resolvedResultIds[0];
+              }
+            }
+            if (task.thumbnailUrl || task.coverUrl) {
+              resolvedPosterUrl = String(task.thumbnailUrl || task.coverUrl);
+            }
+            if (task.availability || task.videoStatus) {
+              resolvedAvailability = String(task.availability || task.videoStatus).toUpperCase();
+            }
+            if (task.availabilityReason || task.message) {
+              resolvedAvailabilityReason = String(task.availabilityReason || task.message);
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
+
+      // 2. If still no URL, try GET /api/v1/assets/:id
+      if (!resolvedUrl && assetId) {
+        try {
+          const res = await adminRequest<{ item?: AdminRecord } | AdminRecord>({
+            method: "GET",
+            url: `/assets/${encodeURIComponent(assetId)}`
+          });
+          const assetItem = ((res && "item" in res && res.item) ? res.item : res) as Record<string, unknown> | null;
+          if (assetItem) {
+            resolvedUrl = String(assetItem.url || assetItem.outputUrl || "");
+            if (assetItem.thumbnailUrl) {
+              resolvedPosterUrl = String(assetItem.thumbnailUrl);
+            }
+            if (assetItem.availability || assetItem.videoStatus) {
+              resolvedAvailability = String(assetItem.availability || assetItem.videoStatus).toUpperCase();
+            }
+            if (assetItem.availabilityReason || assetItem.message) {
+              resolvedAvailabilityReason = String(assetItem.availabilityReason || assetItem.message);
+            }
+          }
+        } catch {
+          // best-effort
+        }
+      }
+
+      // 3. Update entry in history
+      commitVideoHistoryEntry({
+        id: entry.id,
+        backendTaskId: taskId || entry.backendTaskId,
+        taskId: entry.taskId || taskId,
+        assetId: assetId || entry.assetId,
+        resultIds: resolvedResultIds || entry.resultIds,
+        url: resolvedUrl || entry.url,
+        posterUrl: resolvedPosterUrl || entry.posterUrl,
+        thumbnailUrl: resolvedPosterUrl || entry.thumbnailUrl,
+        status: entry.status === "failed" ? "failed" : "success",
+        availability: resolvedAvailability,
+        availabilityReason: resolvedAvailabilityReason
+      });
+
+      return resolvedUrl;
+    } finally {
+      videoPlaybackUrlResolving.delete(inFlightKey);
+    }
+  })();
+
+  videoPlaybackUrlResolving.set(inFlightKey, promise);
+  return promise;
+}
+
+async function handleVideoPlaybackError(entry: VideoHistoryEntry | null) {
+  if (!entry || entry.status !== "success") return;
+  if (videoPlaybackErrorRetries.has(entry.id)) return;
+  videoPlaybackErrorRetries.add(entry.id);
+  await resolveVideoPlaybackUrl(entry, { force: true });
+}
+
+async function openVideoFullscreen(entry: VideoHistoryEntry) {
+  selectedVideoHistoryId.value = entry.id;
+  if (entry.status !== "success") return;
+  if (entry.availability === "EXPIRED") {
+    ElMessage.warning(entry.availabilityReason || "该视频源已过期，无法全屏播放");
     return;
   }
-  selectedVideoHistoryId.value = entry.id;
-  videoFullscreenEntry.value = entry;
+  let currentEntry = videoHistory.value.find((item) => isSameVideoHistoryEntry(item, entry)) || entry;
+  if (!currentEntry.url) {
+    const url = await resolveVideoPlaybackUrl(currentEntry);
+    currentEntry = videoHistory.value.find((item) => isSameVideoHistoryEntry(item, entry)) || currentEntry;
+    if (!url) {
+      ElMessage.warning("未能获取到视频播放地址");
+      return;
+    }
+  }
+  videoFullscreenEntry.value = currentEntry;
 }
 
 function closeVideoFullscreen() {
@@ -3064,20 +3191,30 @@ async function downloadVideoFile(url: string, fileName: string) {
 }
 
 async function downloadVideoHistory(entry: VideoHistoryEntry) {
-  if (!entry.url) {
-    ElMessage.warning("视频地址不存在，无法下载");
-    return;
-  }
   if (entry.status !== "success") {
     ElMessage.warning("视频尚未生成成功，暂不能下载");
     return;
   }
-  if (!ensureWorkspaceAuth("download_work", "userVideoGeneration", { mediaKind: "video", taskId: entry.id })) return;
-  if (isVideoHistoryActionBusy(entry.id, "download")) return;
-  setVideoHistoryActionBusy(entry.id, "download", true);
+  if (entry.availability === "EXPIRED") {
+    ElMessage.warning(entry.availabilityReason || "该视频源已过期，无法下载");
+    return;
+  }
+  let targetEntry = videoHistory.value.find((item) => isSameVideoHistoryEntry(item, entry)) || entry;
+  let url = targetEntry.url;
+  if (!url) {
+    url = await resolveVideoPlaybackUrl(targetEntry);
+    targetEntry = videoHistory.value.find((item) => isSameVideoHistoryEntry(item, entry)) || targetEntry;
+  }
+  if (!url) {
+    ElMessage.warning("未能获取到有效视频播放地址，无法下载");
+    return;
+  }
+  if (!ensureWorkspaceAuth("download_work", "userVideoGeneration", { mediaKind: "video", taskId: targetEntry.id })) return;
+  if (isVideoHistoryActionBusy(targetEntry.id, "download")) return;
+  setVideoHistoryActionBusy(targetEntry.id, "download", true);
   ElMessage.info("开始下载视频");
   try {
-    const result = await downloadVideoFile(entry.url, safeVideoFileName(entry));
+    const result = await downloadVideoFile(url, safeVideoFileName(targetEntry));
     if (result === "downloaded") {
       ElMessage.success("视频下载已开始");
     } else {
@@ -3086,7 +3223,7 @@ async function downloadVideoHistory(entry: VideoHistoryEntry) {
   } catch {
     ElMessage.error("视频下载失败");
   } finally {
-    setVideoHistoryActionBusy(entry.id, "download", false);
+    setVideoHistoryActionBusy(targetEntry.id, "download", false);
   }
 }
 
@@ -3112,23 +3249,33 @@ function copyTextWithFallback(text: string) {
 }
 
 async function copyVideoHistoryUrl(entry: VideoHistoryEntry) {
-  if (!entry.url) {
-    ElMessage.warning("视频链接不存在，无法复制");
-    return;
-  }
   if (entry.status !== "success") {
     ElMessage.warning("视频尚未生成成功，暂不能复制链接");
     return;
   }
-  if (isVideoHistoryActionBusy(entry.id, "copy")) return;
-  setVideoHistoryActionBusy(entry.id, "copy", true);
+  if (entry.availability === "EXPIRED") {
+    ElMessage.warning(entry.availabilityReason || "该视频源已过期，无法复制");
+    return;
+  }
+  let targetEntry = videoHistory.value.find((item) => isSameVideoHistoryEntry(item, entry)) || entry;
+  let url = targetEntry.url;
+  if (!url) {
+    url = await resolveVideoPlaybackUrl(targetEntry);
+    targetEntry = videoHistory.value.find((item) => isSameVideoHistoryEntry(item, entry)) || targetEntry;
+  }
+  if (!url) {
+    ElMessage.warning("未能获取到有效视频链接，无法复制");
+    return;
+  }
+  if (isVideoHistoryActionBusy(targetEntry.id, "copy")) return;
+  setVideoHistoryActionBusy(targetEntry.id, "copy", true);
   try {
-    await copyTextWithFallback(entry.url);
+    await copyTextWithFallback(url);
     ElMessage.success("视频链接已复制");
   } catch {
     ElMessage.error("复制失败，请手动复制");
   } finally {
-    setVideoHistoryActionBusy(entry.id, "copy", false);
+    setVideoHistoryActionBusy(targetEntry.id, "copy", false);
   }
 }
 
@@ -4278,9 +4425,18 @@ const videoHistoryPollingSignature = computed(() => [
 watch(
   onlineRecentTasksVideoSignature,
   () => {
-    const entries = onlineRecentTasks.value.map(taskToVideoHistoryEntry).filter(Boolean) as VideoHistoryEntry[];
+    const entries = onlineRecentTasks.value.map(taskToVideoHistoryEntryLocal).filter(Boolean) as VideoHistoryEntry[];
     if (entries.length) mergeVideoHistoryEntries(entries);
   }
+);
+watch(
+  () => selectedVideoHistoryEntry.value,
+  (entry) => {
+    if (entry && entry.status === "success" && !entry.url && entry.availability !== "EXPIRED") {
+      void resolveVideoPlaybackUrl(entry);
+    }
+  },
+  { immediate: true }
 );
 watch(videoHistorySaveSignature, scheduleVideoHistorySave);
 watch([videoPrompt, videoHistorySearchQuery], scheduleVideoInputDraftSave);
@@ -4318,7 +4474,7 @@ async function pollVideoHistoryTasks() {
   await Promise.all(running.map(async (entry) => {
     try {
       const task = await adminRequest<AdminRecord>({ method: "GET", url: `/generation-tasks/${encodeURIComponent(entry.backendTaskId || "")}` });
-      const nextEntry = taskToVideoHistoryEntry(task);
+      const nextEntry = taskToVideoHistoryEntryLocal(task);
       if (nextEntry) commitVideoHistoryEntry(nextEntry, entry.id);
     } catch {
       // Polling is best-effort; persisted generating entries remain visible.

@@ -183,7 +183,12 @@ export type VideoHistoryEntry = {
   id: string;
   taskId?: string;
   backendTaskId?: string;
+  assetId?: string;
+  resultIds?: string[];
   url: string;
+  posterUrl?: string;
+  thumbnailUrl?: string;
+  downloadUrl?: string;
   prompt: string;
   model: string;
   mode: "text-to-video" | "image-to-video" | "video-to-video";
@@ -195,9 +200,225 @@ export type VideoHistoryEntry = {
   createdAt: string;
   timestamp: number;
   status: VideoHistoryStatus;
+  availability?: string;
+  availabilityReason?: string;
   errorMessage?: string;
   userId?: string;
 };
+
+export function videoCardPlaceholderText(entry: Partial<VideoHistoryEntry> | null | undefined): string {
+  if (!entry) return "生成中";
+  if (entry.status === "failed") return "生成失败";
+  if (entry.status === "success") {
+    if (entry.url && entry.url.trim()) return "悬停预览";
+    const avail = String(entry.availability || "").toUpperCase();
+    if (avail === "EXPIRED") return "已完成 · 视频源已过期";
+    return "已完成";
+  }
+  return "生成中";
+}
+
+export function isSameVideoHistoryEntry(left: Partial<VideoHistoryEntry> | null | undefined, right: Partial<VideoHistoryEntry> | null | undefined): boolean {
+  if (!left || !right) return false;
+  if (left.id && right.id && left.id === right.id) return true;
+  if (left.backendTaskId && right.backendTaskId && left.backendTaskId === right.backendTaskId) return true;
+  if (left.backendTaskId && right.id && left.backendTaskId === right.id) return true;
+  if (left.id && right.backendTaskId && left.id === right.backendTaskId) return true;
+  if (left.taskId && right.taskId && left.taskId === right.taskId) return true;
+  if (left.taskId && right.id && left.taskId === right.id) return true;
+  if (left.id && right.taskId && left.id === right.taskId) return true;
+  return false;
+}
+
+export function mergeVideoHistoryEntry(existing: VideoHistoryEntry, incoming: Partial<VideoHistoryEntry>): VideoHistoryEntry {
+  let status = existing.status;
+  if (incoming.status) {
+    if (existing.status === "success" && incoming.status === "generating") {
+      status = "success";
+    } else if (existing.status === "failed" && incoming.status === "generating") {
+      status = "failed";
+    } else {
+      status = incoming.status;
+    }
+  }
+
+  const url = (incoming.url && incoming.url.trim()) ? incoming.url : existing.url;
+  const posterUrl = (incoming.posterUrl && incoming.posterUrl.trim()) ? incoming.posterUrl : existing.posterUrl;
+  const thumbnailUrl = (incoming.thumbnailUrl && incoming.thumbnailUrl.trim()) ? incoming.thumbnailUrl : existing.thumbnailUrl;
+  const downloadUrl = (incoming.downloadUrl && incoming.downloadUrl.trim()) ? incoming.downloadUrl : existing.downloadUrl;
+
+  const resultIds = (Array.isArray(incoming.resultIds) && incoming.resultIds.length)
+    ? incoming.resultIds
+    : existing.resultIds;
+  const assetId = (incoming.assetId && incoming.assetId.trim())
+    ? incoming.assetId
+    : (existing.assetId || (resultIds && resultIds[0]) || undefined);
+
+  const inputImageUrls = (Array.isArray(incoming.inputImageUrls) && incoming.inputImageUrls.length)
+    ? incoming.inputImageUrls
+    : existing.inputImageUrls;
+  const inputVideoUrl = (incoming.inputVideoUrl && incoming.inputVideoUrl.trim())
+    ? incoming.inputVideoUrl
+    : existing.inputVideoUrl;
+
+  const availability = (incoming.availability && incoming.availability.trim())
+    ? incoming.availability
+    : existing.availability;
+  const availabilityReason = (incoming.availabilityReason && incoming.availabilityReason.trim())
+    ? incoming.availabilityReason
+    : existing.availabilityReason;
+
+  return {
+    ...existing,
+    ...incoming,
+    id: existing.id || incoming.id || "",
+    taskId: incoming.taskId || existing.taskId,
+    backendTaskId: incoming.backendTaskId || existing.backendTaskId,
+    assetId,
+    resultIds,
+    url,
+    posterUrl,
+    thumbnailUrl: thumbnailUrl || posterUrl,
+    downloadUrl,
+    status,
+    availability,
+    availabilityReason,
+    errorMessage: (incoming.errorMessage && incoming.errorMessage.trim())
+      ? incoming.errorMessage
+      : (status === "failed" ? existing.errorMessage : ""),
+    inputImageUrls,
+    inputVideoUrl
+  };
+}
+
+export function normalizeVideoHistoryEntry(
+  entry: Partial<VideoHistoryEntry> | null | undefined,
+  fallbacks?: { model?: string; ratio?: string; duration?: number | string; resolution?: string }
+): VideoHistoryEntry | null {
+  if (!entry) return null;
+  const timestamp = normalizeVideoTimestamp(entry.createdAt || entry.timestamp);
+  const id = String(entry.id || entry.taskId || entry.backendTaskId || `video-${timestamp}`).trim();
+  if (!id) return null;
+  const status: VideoHistoryStatus = entry.status
+    ? entry.status
+    : (entry.url ? "success" : "generating");
+  const resultIds = Array.isArray(entry.resultIds) && entry.resultIds.length
+    ? entry.resultIds.map(String).filter(Boolean)
+    : entry.assetId
+      ? [String(entry.assetId)]
+      : undefined;
+  const assetId = entry.assetId ? String(entry.assetId) : (resultIds ? resultIds[0] : undefined);
+  const posterUrl = entry.posterUrl ? String(entry.posterUrl) : undefined;
+  const thumbnailUrl = entry.thumbnailUrl ? String(entry.thumbnailUrl) : posterUrl;
+  const downloadUrl = entry.downloadUrl ? String(entry.downloadUrl) : undefined;
+  const availability = entry.availability ? String(entry.availability).trim().toUpperCase() : undefined;
+  const availabilityReason = entry.availabilityReason ? String(entry.availabilityReason).trim() : undefined;
+
+  return {
+    id,
+    taskId: entry.taskId ? String(entry.taskId) : undefined,
+    backendTaskId: entry.backendTaskId ? String(entry.backendTaskId) : undefined,
+    assetId,
+    resultIds,
+    url: String(entry.url || ""),
+    posterUrl,
+    thumbnailUrl,
+    downloadUrl,
+    prompt: String(entry.prompt || ""),
+    model: String(entry.model || fallbacks?.model || DEFAULT_VIDEO_MODEL_CODE),
+    mode: entry.mode || "text-to-video",
+    aspect_ratio: String(entry.aspect_ratio || fallbacks?.ratio || ""),
+    duration: entry.duration || fallbacks?.duration || "",
+    resolution: String(entry.resolution || fallbacks?.resolution || ""),
+    inputImageUrls: Array.isArray(entry.inputImageUrls) ? entry.inputImageUrls.map(String).filter(Boolean) : [],
+    inputVideoUrl: String(entry.inputVideoUrl || ""),
+    createdAt: entry.createdAt || new Date(timestamp).toISOString(),
+    timestamp,
+    status,
+    availability,
+    availabilityReason,
+    errorMessage: entry.errorMessage ? videoErrorMessage(entry.errorMessage) : "",
+    userId: entry.userId ? String(entry.userId) : undefined
+  };
+}
+
+export function taskToVideoHistoryEntry(
+  task: AdminRecord,
+  fallbacks?: { model?: string; ratio?: string; duration?: number | string; resolution?: string }
+): VideoHistoryEntry | null {
+  if (!isVideoGenerationTask(task)) return null;
+  const params = videoTaskParams(task);
+  const createdAt = String(task.createdAt || task.created_at || task.updatedAt || new Date().toISOString());
+  const status = videoStatusFromTask(task);
+  const resultIds = Array.isArray(task.resultIds)
+    ? task.resultIds.map(String).filter(Boolean)
+    : Array.isArray(task.result_ids)
+      ? task.result_ids.map(String).filter(Boolean)
+      : Array.isArray(params.resultIds)
+        ? (params.resultIds as unknown[]).map(String).filter(Boolean)
+        : [];
+  const assetId = String(task.assetId || task.asset_id || params.assetId || params.asset_id || resultIds[0] || "").trim() || undefined;
+  const posterUrl = String(task.thumbnailUrl || task.posterUrl || task.coverUrl || params.posterUrl || params.thumbnailUrl || "").trim() || undefined;
+  const downloadUrl = String(task.downloadUrl || params.downloadUrl || "").trim() || undefined;
+  const availability = String(task.availability || task.videoStatus || params.availability || "").trim().toUpperCase() || undefined;
+  const availabilityReason = String(task.availabilityReason || task.message || params.availabilityReason || "").trim() || undefined;
+
+  return normalizeVideoHistoryEntry({
+    id: String(task.id || task.taskId || `video-${Date.now()}`),
+    taskId: String(task.taskId || task.providerTaskId || task.id || ""),
+    backendTaskId: String(task.id || ""),
+    assetId,
+    resultIds: resultIds.length ? resultIds : undefined,
+    url: videoTaskUrl(task),
+    posterUrl,
+    thumbnailUrl: posterUrl,
+    downloadUrl,
+    prompt: String(task.prompt || params.prompt || ""),
+    model: String(task.model || params.model || fallbacks?.model || DEFAULT_VIDEO_MODEL_CODE),
+    mode: videoModeFromTask(task, params),
+    aspect_ratio: videoStringValue(params.ratio ?? params.aspect_ratio ?? task.aspect_ratio, fallbacks?.ratio || ""),
+    duration: videoNumberOrString(params.duration ?? params.seconds ?? task.duration, fallbacks?.duration || ""),
+    resolution: videoStringValue(params.resolution ?? task.resolution, fallbacks?.resolution || ""),
+    inputImageUrls: videoInputImageUrlsFromTask(task, params),
+    inputVideoUrl: videoStringValue(params.inputVideoUrl ?? params.video_url ?? params.videoUrl ?? task.inputVideoUrl),
+    createdAt,
+    status,
+    availability,
+    availabilityReason,
+    errorMessage: videoErrorMessage(task.failureReason ?? task.errorMessage ?? task.error ?? task.failReason),
+    userId: videoStringValue(task.userId)
+  }, fallbacks);
+}
+
+export function mergeVideoHistoryList(
+  currentList: VideoHistoryEntry[],
+  incomingList: Array<Partial<VideoHistoryEntry> | null>,
+  hiddenIds: string[] = []
+): VideoHistoryEntry[] {
+  const result: VideoHistoryEntry[] = [];
+  const hiddenSet = new Set(hiddenIds);
+
+  for (const entry of currentList) {
+    if (!hiddenSet.has(entry.id)) {
+      result.push({ ...entry });
+    }
+  }
+
+  for (const raw of incomingList) {
+    if (!raw) continue;
+    const normalized = normalizeVideoHistoryEntry(raw);
+    if (!normalized || hiddenSet.has(normalized.id)) continue;
+
+    const matchIndex = result.findIndex((item) => isSameVideoHistoryEntry(item, normalized));
+    if (matchIndex >= 0) {
+      result[matchIndex] = mergeVideoHistoryEntry(result[matchIndex], normalized);
+    } else {
+      result.push(normalized);
+    }
+  }
+
+  return result;
+}
 
 export function videoTaskUrl(task: AdminRecord | null) {
   if (!task) return "";
