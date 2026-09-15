@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -415,5 +417,39 @@ func TestBackfill_9_NeverModifiesGenerationTasks(t *testing.T) {
 
 	if store.tasksModified {
 		t.Fatalf("CRITICAL VIOLATION: xz_generation_tasks must never be modified by backfill tool")
+	}
+}
+
+func TestBackfill_10_ProbeAndPersistRequestHeadersAndCompression(t *testing.T) {
+	var probeUA, probeEnc, probeRange string
+	probeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probeUA = r.Header.Get("User-Agent")
+		probeEnc = r.Header.Get("Accept-Encoding")
+		probeRange = r.Header.Get("Range")
+		if probeRange == "bytes=0-0" {
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("x"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer probeServer.Close()
+
+	status, err := probe(probeServer.URL)
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if status != http.StatusPartialContent {
+		t.Errorf("expected 206 for probe with range, got %d", status)
+	}
+	if probeUA != backfillUserAgent {
+		t.Errorf("probe User-Agent = %q, want %q", probeUA, backfillUserAgent)
+	}
+	if probeEnc != "identity" {
+		t.Errorf("probe Accept-Encoding = %q, want %q", probeEnc, "identity")
+	}
+	if probeRange != "bytes=0-0" {
+		t.Errorf("probe Range = %q, want %q", probeRange, "bytes=0-0")
 	}
 }

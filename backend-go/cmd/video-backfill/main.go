@@ -283,15 +283,24 @@ func runBatchAssets(ctx context.Context, store backfillStore, files *storagecent
 
 const backfillUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+var backfillHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		DisableCompression: true,
+		Proxy:              http.ProxyFromEnvironment,
+	},
+	Timeout: 90 * time.Second,
+}
+
 func probe(raw string) (int, error) {
 	request, err := http.NewRequest(http.MethodGet, raw, nil)
 	if err != nil {
 		return 0, err
 	}
 	request.Header.Set("User-Agent", backfillUserAgent)
+	request.Header.Set("Accept-Encoding", "identity")
 	request.Header.Set("Range", "bytes=0-0")
 	request = request.WithContext(context.Background())
-	response, err := http.DefaultClient.Do(request)
+	response, err := backfillHTTPClient.Do(request)
 	if err != nil {
 		return 0, err
 	}
@@ -306,7 +315,8 @@ func persist(ctx context.Context, store backfillStore, files *storagecenter.Serv
 		return err
 	}
 	request.Header.Set("User-Agent", backfillUserAgent)
-	response, err := http.DefaultClient.Do(request)
+	request.Header.Set("Accept-Encoding", "identity")
+	response, err := backfillHTTPClient.Do(request)
 	if err != nil {
 		return err
 	}
@@ -330,6 +340,9 @@ func persist(ctx context.Context, store backfillStore, files *storagecenter.Serv
 	info, err := os.Stat(videoPath)
 	if err != nil {
 		return err
+	}
+	if info.Size() == 0 {
+		return errors.New("downloaded video file is empty (0 bytes)")
 	}
 	businessID := item.TaskID
 	if businessID == "" {
