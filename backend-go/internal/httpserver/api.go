@@ -789,12 +789,7 @@ func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		enriched := attachAssetImagesToTasks([]generationTask{task}, assets)
-		if len(enriched) > 0 {
-			writeJSON(w, enriched[0])
-			return
-		}
-		writeJSON(w, task)
+		writeJSON(w, a.enrichGenerationTaskDetail(r, user.ID, task, assets))
 		return
 	}
 	tasks, err := a.store.ListGenerationTasks()
@@ -810,16 +805,47 @@ func (a api) getGenerationTask(w http.ResponseWriter, r *http.Request) {
 	assets = filterAssetsForUser(assets, user.ID)
 	for _, task := range tasks {
 		if task.ID == id && task.UserID == user.ID {
-			enriched := attachAssetImagesToTasks([]generationTask{task}, assets)
-			if len(enriched) > 0 {
-				writeJSON(w, enriched[0])
-				return
-			}
-			writeJSON(w, task)
+			writeJSON(w, a.enrichGenerationTaskDetail(r, user.ID, task, assets))
 			return
 		}
 	}
 	writeError(w, http.StatusNotFound, fmt.Errorf("generation task not found: %s", id))
+}
+
+func (a api) enrichGenerationTaskDetail(r *http.Request, userID string, task generationTask, recentAssets []asset) generationTask {
+	enriched := attachAssetImagesToTasks([]generationTask{task}, recentAssets)
+	res := task
+	if len(enriched) > 0 {
+		res = enriched[0]
+	}
+	if res.OutputURL == "" && res.ResultURL == "" && res.ImageURL == "" && len(res.ResultIDs) > 0 {
+		for _, resID := range res.ResultIDs {
+			assetID := strings.TrimSpace(resID)
+			if assetID == "" {
+				continue
+			}
+			if item, found, err := a.assetForUser(r, userID, assetID); err == nil && found {
+				if res.ThumbnailURL == "" {
+					res.ThumbnailURL = item.ThumbnailURL
+				}
+				if res.ImageURL == "" {
+					res.ImageURL = item.URL
+				}
+				if res.OutputURL == "" {
+					res.OutputURL = item.URL
+				}
+				if res.ResultURL == "" {
+					res.ResultURL = item.URL
+				}
+				res.ImageURL = securePublicMediaURL(res.ImageURL)
+				res.OutputURL = securePublicMediaURL(res.OutputURL)
+				res.ResultURL = securePublicMediaURL(res.ResultURL)
+				res.ThumbnailURL = securePublicMediaURL(res.ThumbnailURL)
+				break
+			}
+		}
+	}
+	return res
 }
 
 func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {

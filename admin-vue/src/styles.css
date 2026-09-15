@@ -7104,6 +7104,43 @@ body {
   object-fit: cover;
 }
 
+.video-generation-page .video-current-preview .video-preview-frame.video-preview-frame-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: rgba(255, 255, 255, .72);
+  border: 1px dashed rgba(255, 255, 255, .16);
+  background: rgba(15, 23, 42, .75);
+  padding: 24px;
+  text-align: center;
+}
+
+.video-generation-page .video-current-preview .video-preview-frame.video-preview-frame-placeholder .el-icon {
+  font-size: 32px;
+  color: #22d3ee;
+}
+
+.video-generation-page .video-current-preview .video-preview-frame.video-preview-frame-placeholder.is-failed .el-icon {
+  color: #f43f5e;
+}
+
+.video-preview-reload-btn {
+  padding: 6px 14px;
+  background: rgba(34, 211, 238, .15);
+  border: 1px solid rgba(34, 211, 238, .35);
+  border-radius: 8px;
+  color: #22d3ee;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .2s;
+}
+
+.video-preview-reload-btn:hover {
+  background: rgba(34, 211, 238, .25);
+}
+
 .video-current-copy {
   min-width: 0;
 }
