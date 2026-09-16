@@ -24,6 +24,7 @@ var ErrTransitionConflict = errors.New("provider execution state changed concurr
 var ErrUnknownResubmitBlocked = errors.New("automatic resubmission is blocked for unknown execution")
 var ErrProviderStillProcessing = errors.New("provider execution is still processing")
 var ErrProviderExecutionFailed = errors.New("provider execution failed")
+var ErrFencedStaleExecution = errors.New("stale execution generation is fenced")
 
 type Execution struct {
 	ID                                                          int64
@@ -37,6 +38,11 @@ type Execution struct {
 	RequestFingerprint                                          string
 	ProviderOperationKey                                        string
 	ProviderRequestID                                           *string
+	// TaskGeneration binds this execution to the xz_generation_tasks
+	// execution_generation observed under the task row lock at creation
+	// (Issue #145 fencing). Nil means pre-fencing legacy: generation
+	// comparison is skipped for compatibility, never treated as stale.
+	TaskGeneration                                              *int64
 	ResultMetadata                                              json.RawMessage
 	SubmittedAt, ProcessingAt, SucceededAt, FailedAt, UnknownAt *time.Time
 	LastCheckedAt, NextCheckAt                                  *time.Time

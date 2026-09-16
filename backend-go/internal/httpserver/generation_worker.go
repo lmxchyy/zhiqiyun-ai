@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -93,6 +94,23 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 			return err
 		}
 		return tx.Commit()
+	}
+	// Issue #145 fencing: the envelope carries the dispatch generation as
+	// the execution identity. A redelivery older than the stored generation
+	// must not steal ownership from a live owner: when a valid lease is
+	// held, ack-skip without provider work. Without a live lease the task
+	// was requeued and this consumer may adopt the new generation via the
+	// claim inside runGenerationTask.
+	if envelopeGen := envelopeExecutionGeneration(envelope.Data); envelopeGen > 0 && envelopeGen < task.fencingGeneration() {
+		fencingCutover.staleRedeliveries.Add(1)
+		if generationLeaseValid(task.LeaseUntil, time.Now().UTC()) {
+			log.Printf("generation canary stale redelivery skipped task_id=%s envelope_generation=%d current_generation=%d owner=%s", taskID, envelopeGen, task.fencingGeneration(), task.WorkerID)
+			if err := inbox.CompleteTx(shortCtx, tx, generationImageCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID, "stale_generation": true}); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			return tx.Commit()
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -188,6 +206,42 @@ func canaryTaskMarker(params map[string]any) bool {
 	value, ok := params["generation_async_canary"]
 	marked, okBool := value.(bool)
 	return ok && okBool && marked
+}
+
+// envelopeExecutionGeneration reads the threaded execution identity from an
+// outbox envelope (scheduler dispatch writes it). 0 means absent/legacy.
+func envelopeExecutionGeneration(data map[string]any) int64 {
+	if data == nil {
+		return 0
+	}
+	switch value := data["execution_generation"].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case string:
+		var parsed int64
+		_, _ = fmt.Sscanf(strings.TrimSpace(value), "%d", &parsed)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+// generationLeaseValid reports whether the RFC3339Nano lease timestamp is
+// still in the future against the given clock.
+func generationLeaseValid(leaseUntil string, now time.Time) bool {
+	trimmed := strings.TrimSpace(leaseUntil)
+	if trimmed == "" {
+		return false
+	}
+	expiry, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return false
+	}
+	return expiry.After(now)
 }
 
 func checkProviderExecutionState(db *sql.DB, taskID string) error {

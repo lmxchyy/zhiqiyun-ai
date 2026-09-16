@@ -257,14 +257,31 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 	}
 
 	nowStr := now.Format(time.RFC3339Nano)
+	dispatchLeaseSeconds := int64(s.options.StaleDispatchTimeout / time.Second)
+	if dispatchLeaseSeconds <= 0 {
+		dispatchLeaseSeconds = 60
+	}
 	for _, item := range claimed {
-		if _, updateErr := tx.ExecContext(ctx, `
+		// Issue #145 fencing: dispatch transfers ownership, so it bumps the
+		// generation and installs the scheduler lease atomically. The new
+		// generation travels in the outbox envelope as the execution
+		// identity; stale redeliveries observe the mismatch and skip work.
+		var dispatchedGen int64
+		if err := tx.QueryRowContext(ctx, `
 			UPDATE xz_generation_tasks
 			SET task_status = 'DISPATCHING',
+			    execution_generation = execution_generation + 1,
+			    worker_id = $3,
+			    lease_until = now() + ($4 || ' seconds')::interval,
+			    last_heartbeat_at = now(),
 			    updated_at = $2
 			WHERE id = $1
-		`, item.id, nowStr); updateErr != nil {
-			return 0, updateErr
+			RETURNING execution_generation
+		`, item.id, nowStr, s.options.Owner, fmt.Sprint(dispatchLeaseSeconds)).Scan(&dispatchedGen); err != nil {
+			return 0, err
+		}
+		if dispatchedGen <= 0 {
+			dispatchedGen = 1
 		}
 
 		eventType := "x.ai.generation.image.canary.requested"
@@ -285,7 +302,10 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 			Producer:      s.options.Owner,
 			AggregateType: "generation_task",
 			AggregateID:   item.id,
-			Data:          map[string]interface{}{"task_id": item.id},
+			// Execution identity threading: consumers compare the
+			// envelope generation against the stored one and skip
+			// stale redeliveries without provider work.
+			Data: map[string]interface{}{"task_id": item.id, "execution_generation": dispatchedGen},
 		}
 
 		if s.outbox != nil {
@@ -306,13 +326,23 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (int, 
 	if s.db == nil {
 		return 0, errors.New("scheduler database is nil")
 	}
+	// Issue #145 fencing: the stale-dispatch requeue is generation-atomic.
+	// The single UPDATE both reaps and bumps, so concurrent recoveries
+	// cannot fork the generation; the previous DISPATCHING owner is fenced
+	// by the bump. Eligibility is lease-aware against DB now(): a live
+	// scheduler/worker lease is never reaped, while rows without a lease
+	// keep the updated_at age backstop for mixed-version rollout.
 	threshold := time.Now().UTC().Add(-s.options.StaleDispatchTimeout)
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE xz_generation_tasks
 		SET task_status = 'QUEUED',
+		    execution_generation = execution_generation + 1,
+		    worker_id = NULL,
+		    lease_until = NULL,
+		    last_heartbeat_at = NULL,
 		    updated_at = $1
 		WHERE upper(coalesce(nullif(task_status,''), status)) = 'DISPATCHING'
-		  AND updated_at < $2
+		  AND ((lease_until IS NULL AND updated_at < $2) OR (lease_until IS NOT NULL AND lease_until < now()))
 	`, time.Now().UTC().Format(time.RFC3339Nano), threshold.Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, err

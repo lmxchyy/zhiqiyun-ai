@@ -1534,6 +1534,15 @@ func (s *postgresStore) createPendingGenerationTaskWithPPT(req createGenerationT
 }
 
 func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTaskRequest) (generationTask, error) {
+	return s.CompleteGenerationTaskFenced(id, req, 0)
+}
+
+// CompleteGenerationTaskFenced settles a task with the Issue #145 fencing
+// predicate: when expectedGen > 0 the stored execution_generation must
+// still match, otherwise the tx rolls back with ErrFencedStaleExecution
+// before any asset or billing write. expectedGen <= 0 keeps legacy
+// unfenced compat for callers that never claimed ownership.
+func (s *postgresStore) CompleteGenerationTaskFenced(id string, req createGenerationTaskRequest, expectedGen int64) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
@@ -1546,6 +1555,13 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	defer func() { _ = tx.Rollback() }()
 	task, err := generationTaskForUpdate(ctx, tx, id)
 	if err != nil {
+		return generationTask{}, err
+	}
+	// Canonical fencing predicate FIRST: a stale generation is rejected
+	// (typed error, nothing mutated) even when the task already settled —
+	// silent success would let a deposed worker believe it still owns the
+	// task. Legacy unfenced callers (expectedGen <= 0) skip the check.
+	if _, err := assertTaskGenerationTx(ctx, tx, id, expectedGen); err != nil {
 		return generationTask{}, err
 	}
 	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
@@ -1723,6 +1739,11 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 	if err := insertAuditLog(ctx, tx, userID, "MEMBER", "generation.complete", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": pointCost, "billingReserved": reserved}); err != nil {
 		return generationTask{}, err
 	}
+	// Row-count assert before commit: the generation observed above must
+	// still own the row after all settlement writes.
+	if err := assertTaskGenerationCommitted(ctx, tx, task.ID, expectedGen); err != nil {
+		return generationTask{}, err
+	}
 	return task, tx.Commit()
 }
 
@@ -1815,6 +1836,12 @@ func (s *postgresStore) RecordPPTGenerationUsage(task pptapp.Task) (adminBilling
 }
 
 func (s *postgresStore) FailGenerationTask(id string, message string) (generationTask, error) {
+	return s.FailGenerationTaskFenced(id, message, 0)
+}
+
+// FailGenerationTaskFenced carries the Issue #145 fencing predicate on the
+// failure path (expectedGen <= 0 keeps legacy unfenced compat).
+func (s *postgresStore) FailGenerationTaskFenced(id string, message string, expectedGen int64) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -1826,6 +1853,11 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 	if err != nil {
 		return generationTask{}, err
 	}
+	// Canonical fencing predicate FIRST (see CompleteGenerationTaskFenced):
+	// stale generations are rejected even on settled tasks.
+	if _, err := assertTaskGenerationTx(ctx, tx, id, expectedGen); err != nil {
+		return generationTask{}, err
+	}
 	task, refunded, changed, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, message, "FAILED", taskStatusFailed)
 	if err != nil {
 		return generationTask{}, err
@@ -1834,6 +1866,9 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 		if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.fail", "generation_task", task.ID, "", "", 502, map[string]any{"error": message, "pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
 			return generationTask{}, err
 		}
+	}
+	if err := assertTaskGenerationCommitted(ctx, tx, task.ID, expectedGen); err != nil {
+		return generationTask{}, err
 	}
 	return task, tx.Commit()
 }
@@ -1981,7 +2016,13 @@ func (s *postgresStore) unknownExecutionEligibleForGraceTx(ctx context.Context, 
 	return providerexecution.Status(status) == providerexecution.Unknown && (!requestID.Valid || requestID.String == "") && len(metadata) == 0 && time.Now().UTC().Sub(unknownAt.UTC()) >= grace, nil
 }
 func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
-	return s.failGenerationTaskDurable(id, message, nil)
+	return s.failGenerationTaskDurable(id, message, nil, 0)
+}
+
+// FailGenerationTaskDurableFenced carries the Issue #145 fencing predicate
+// on the durable failure path (expectedGen <= 0 keeps legacy compat).
+func (s *postgresStore) FailGenerationTaskDurableFenced(id string, message string, expectedGen int64) (generationTask, error) {
+	return s.failGenerationTaskDurable(id, message, nil, expectedGen)
 }
 
 // FailGenerationTaskUnknownGrace is the narrowly-scoped repair path for an
@@ -1991,10 +2032,20 @@ func (s *postgresStore) FailGenerationTaskUnknownGrace(id string, message string
 	if grace <= 0 {
 		return generationTask{}, fmt.Errorf("unknown grace must be positive")
 	}
-	return s.failGenerationTaskDurable(id, message, &grace)
+	return s.failGenerationTaskDurable(id, message, &grace, 0)
 }
 
-func (s *postgresStore) failGenerationTaskDurable(id string, message string, unknownGrace *time.Duration) (generationTask, error) {
+// FailGenerationTaskUnknownGraceFenced carries the Issue #145 fencing
+// predicate on the unknown-grace failure path (expectedGen <= 0 keeps
+// legacy compat).
+func (s *postgresStore) FailGenerationTaskUnknownGraceFenced(id string, message string, grace time.Duration, expectedGen int64) (generationTask, error) {
+	if grace <= 0 {
+		return generationTask{}, fmt.Errorf("unknown grace must be positive")
+	}
+	return s.failGenerationTaskDurable(id, message, &grace, expectedGen)
+}
+
+func (s *postgresStore) failGenerationTaskDurable(id string, message string, unknownGrace *time.Duration, expectedGen int64) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -2004,6 +2055,12 @@ func (s *postgresStore) failGenerationTaskDurable(id string, message string, unk
 	defer func() { _ = tx.Rollback() }()
 	task, err := generationTaskForUpdate(ctx, tx, id)
 	if err != nil {
+		return generationTask{}, err
+	}
+	// Canonical fencing predicate FIRST (see CompleteGenerationTaskFenced):
+	// stale generations are rejected even on settled tasks, before
+	// execution-eligibility checks and any release/billing mutation.
+	if _, err := assertTaskGenerationTx(ctx, tx, id, expectedGen); err != nil {
 		return generationTask{}, err
 	}
 	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
@@ -2076,6 +2133,11 @@ func (s *postgresStore) failGenerationTaskDurable(id string, message string, unk
 	task.UpdatedAt = now
 	task.WorkerFinishedAt = now
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
+	}
+	// Row-count assert before commit: the generation observed above must
+	// still own the row after the durable failure writes.
+	if err := assertTaskGenerationCommitted(ctx, tx, task.ID, expectedGen); err != nil {
 		return generationTask{}, err
 	}
 	return task, tx.Commit()
@@ -6263,15 +6325,22 @@ func listAPIKeysForTx(ctx context.Context, tx *sql.Tx) ([]adminAPIKey, error) {
 }
 
 func insertGenerationTask(ctx context.Context, tx *sql.Tx, item generationTask) error {
+	// Fencing columns: new rows start at generation 1; legacy writers that
+	// never read fencing state pass 0 and must preserve the stored values
+	// (a summary-loaded struct must not clobber a newer claim/requeue bump).
+	// Owner/lease are owned by the targeted claim/requeue UPDATEs, so the
+	// upsert always preserves them.
 	_, err := tx.ExecContext(ctx, `
 		insert into xz_generation_tasks (
 			id,user_id,tenant_id,organization_id,billing_account_type,billing_account_id,module_code,type,model,billing_type,
 			status,progress,point_cost,prompt,params,result_ids,error,created_at,updated_at,worker_finished_at,
 			client_request_id,task_status,billing_status,billing_rule_version_id,quoted_points,reserved_points,captured_points,
-			released_points,refunded_points,supplier_cost,estimated_margin,provider_channel,raw
+			released_points,refunded_points,supplier_cost,estimated_margin,provider_channel,raw,
+			execution_generation,worker_id,lease_until,last_heartbeat_at
 		) values (
 			$1,$2,nullif($3,''),nullif($4,''),$5,nullif($6,''),$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::jsonb,$18,$19,$20,
-			nullif($21,''),$22,$23,nullif($24,''),$25,$26,$27,$28,$29,$30,$31,nullif($32,''),$33::jsonb
+			nullif($21,''),$22,$23,nullif($24,''),$25,$26,$27,$28,$29,$30,$31,nullif($32,''),$33::jsonb,
+			greatest($34::bigint,1),nullif($35,''),nullif($36,'')::timestamptz,nullif($37,'')::timestamptz
 		)
 		on conflict (id) do update set
 			user_id=excluded.user_id,tenant_id=excluded.tenant_id,organization_id=excluded.organization_id,billing_account_type=excluded.billing_account_type,
@@ -6282,18 +6351,34 @@ func insertGenerationTask(ctx context.Context, tx *sql.Tx, item generationTask) 
 			billing_rule_version_id=coalesce(excluded.billing_rule_version_id,xz_generation_tasks.billing_rule_version_id),quoted_points=excluded.quoted_points,
 			reserved_points=excluded.reserved_points,captured_points=excluded.captured_points,released_points=excluded.released_points,refunded_points=excluded.refunded_points,
 			supplier_cost=coalesce(excluded.supplier_cost,xz_generation_tasks.supplier_cost),estimated_margin=coalesce(excluded.estimated_margin,xz_generation_tasks.estimated_margin),
-			provider_channel=excluded.provider_channel,raw=excluded.raw
+			provider_channel=excluded.provider_channel,raw=excluded.raw,
+			execution_generation=(case when $34::bigint <= 0 then xz_generation_tasks.execution_generation else $34::bigint end),
+			worker_id=xz_generation_tasks.worker_id,lease_until=xz_generation_tasks.lease_until,last_heartbeat_at=xz_generation_tasks.last_heartbeat_at
 	`, item.ID, item.UserID, item.TenantID, item.OrganizationID, firstNonEmptyString(item.BillingAccountType, contextPersonal), item.BillingAccountID, item.ModuleCode, item.Type, item.Model, item.BillingType,
 		item.Status, item.Progress, item.PointCost, item.Prompt, jsonProjection(item.Params), jsonProjection(item.ResultIDs), jsonProjection(item.Error), item.CreatedAt, item.UpdatedAt, item.WorkerFinishedAt,
 		item.ClientRequestID, firstNonEmptyString(item.TaskStatus, canonicalTaskStatus(item.Status)), firstNonEmptyString(item.BillingStatus, billingStatusUnquoted), item.BillingRuleVersionID,
-		item.QuotedPoints, item.ReservedPoints, item.CapturedPoints, item.ReleasedPoints, item.RefundedPoints, item.SupplierCost, item.EstimatedMargin, item.ProviderChannel, jsonProjection(item))
+		item.QuotedPoints, item.ReservedPoints, item.CapturedPoints, item.ReleasedPoints, item.RefundedPoints, item.SupplierCost, item.EstimatedMargin, item.ProviderChannel, jsonProjection(item),
+		item.ExecutionGeneration, item.WorkerID, item.LeaseUntil, item.LastHeartbeatAt)
 	return err
 }
 
 func generationTaskForUpdate(ctx context.Context, tx *sql.Tx, id string) (generationTask, error) {
 	var item generationTask
-	err := tx.QueryRowContext(ctx, `select raw,coalesce(client_request_id,''),task_status,billing_status,coalesce(billing_rule_version_id,''),quoted_points,reserved_points,captured_points,released_points,refunded_points,supplier_cost,estimated_margin,coalesce(provider_channel,'') from xz_generation_tasks where id = $1 for update`, id).Scan(rawScanner(&item), &item.ClientRequestID, &item.TaskStatus, &item.BillingStatus, &item.BillingRuleVersionID, &item.QuotedPoints, &item.ReservedPoints, &item.CapturedPoints, &item.ReleasedPoints, &item.RefundedPoints, &item.SupplierCost, &item.EstimatedMargin, &item.ProviderChannel)
-	return item, err
+	var leaseUntil, lastHeartbeat sql.NullTime
+	err := tx.QueryRowContext(ctx, `select raw,coalesce(client_request_id,''),task_status,billing_status,coalesce(billing_rule_version_id,''),quoted_points,reserved_points,captured_points,released_points,refunded_points,supplier_cost,estimated_margin,coalesce(provider_channel,''),coalesce(execution_generation,1),coalesce(worker_id,''),lease_until,last_heartbeat_at from xz_generation_tasks where id = $1 for update`, id).Scan(rawScanner(&item), &item.ClientRequestID, &item.TaskStatus, &item.BillingStatus, &item.BillingRuleVersionID, &item.QuotedPoints, &item.ReservedPoints, &item.CapturedPoints, &item.ReleasedPoints, &item.RefundedPoints, &item.SupplierCost, &item.EstimatedMargin, &item.ProviderChannel, &item.ExecutionGeneration, &item.WorkerID, &leaseUntil, &lastHeartbeat)
+	if err != nil {
+		return item, err
+	}
+	// Column reads are authoritative over the raw JSON projection (which
+	// predates fencing for old rows and omits zero values by omitempty).
+	item.ExecutionGeneration = normalizeTaskGeneration(item.ExecutionGeneration)
+	if leaseUntil.Valid {
+		item.LeaseUntil = leaseUntil.Time.UTC().Format(time.RFC3339Nano)
+	}
+	if lastHeartbeat.Valid {
+		item.LastHeartbeatAt = lastHeartbeat.Time.UTC().Format(time.RFC3339Nano)
+	}
+	return item, nil
 }
 
 func existingGenerationAssetID(ctx context.Context, tx *sql.Tx, taskID string, index int) (string, error) {

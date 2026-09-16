@@ -70,8 +70,14 @@ func (a api) executeConnectorPPT(ctx context.Context, userID, enterpriseID, clie
 	if err != nil {
 		return connectorPPTExecution{}, fmt.Errorf("reserve connector ppt generation: %w", err)
 	}
+	// Issue #145 fencing: claim the billing task so failBilling below is
+	// bound to the claimed generation.
+	pptClaimGen, _, pptClaimErr := claimGenerationTaskOwnership(a.store, billingTask.ID)
+	if pptClaimErr != nil {
+		return connectorPPTExecution{}, fmt.Errorf("claim generation ownership: %w", pptClaimErr)
+	}
 	failBilling := func(cause error) (connectorPPTExecution, error) {
-		_, _ = a.store.FailGenerationTask(billingTask.ID, generationErrorMessage(cause))
+		_, _ = failGenerationTaskWithFencing(a.store, billingTask.ID, generationErrorMessage(cause), pptClaimGen)
 		return connectorPPTExecution{}, cause
 	}
 	if req.Outline == nil {

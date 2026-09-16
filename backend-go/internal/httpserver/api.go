@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
@@ -306,6 +307,24 @@ func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge t
 		if err != nil || now.Sub(updatedTime.UTC()) < taskMaxAge {
 			continue
 		}
+		// Issue #145 fencing, lease-aware eligibility: rows carrying a
+		// lease are lease-authoritative against DB now() (a live owner's
+		// task is never reaped); rows without a lease fall back to the
+		// updated_at age backstop so mixed-version writers stay reapable
+		// during rollout. The observed generation fences the repair below.
+		var observedGen int64
+		if pg := fencingPostgres(a.store); pg != nil {
+			probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
+			fencing, fencingErr := getTaskFencing(probeCtx, pg.db, task.ID)
+			probeCancel()
+			if fencingErr != nil {
+				continue
+			}
+			if !reaperEligibleForFencing(fencing, updatedTime, now, taskMaxAge) {
+				continue
+			}
+			observedGen = fencing.Generation
+		}
 		if execution, found, executionErr := providerExecutionForRetry(a.store, a.cfg, task.ID); executionErr != nil {
 			continue
 		} else if found {
@@ -334,7 +353,9 @@ func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge t
 				if now.Sub(unknownAt.UTC()) < a.unknownGenerationGrace {
 					continue
 				}
-				a.store.FailGenerationTaskUnknownGrace(task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())), a.unknownGenerationGrace)
+				// Fenced by the observed generation: a repair that lost the
+				// race to a newer claim is a no-op, never a release.
+				_, _ = failGenerationTaskUnknownGraceWithFencing(a.store, task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())), a.unknownGenerationGrace, observedGen)
 				continue
 			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Succeeded:
 				continue
@@ -347,7 +368,9 @@ func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge t
 		// Durable failure re-checks and locks provider execution in the same
 		// PostgreSQL transaction. A provider success/ambiguity must remain
 		// recoverable and must not release its reservation as stale.
-		_, _ = a.store.FailGenerationTaskDurable(task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())))
+		// Fenced by the observed generation: only the current generation
+		// may release.
+		_, _ = failGenerationTaskDurableWithFencing(a.store, task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())), observedGen)
 	}
 }
 
@@ -1230,10 +1253,15 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 	log.Printf("generation task started task_id=%s type=%s model=%s timeout_ms=%d", taskID, req.Type, req.Model, taskTimeout.Milliseconds())
 	ctx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 	a.registerGenerationTaskCancel(taskID, cancel)
+	// claimGen/workerID are filled by the fencing claim below; the deferred
+	// deadline convergence settles with the claimed generation so a stale
+	// worker can never release a generation it no longer owns.
+	var claimGen int64
+	var claimWorker string
 	defer func() {
 		a.unregisterGenerationTaskCancel(taskID)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			a.convergeGenerationTaskDeadline(taskID, startedAt)
+			a.convergeGenerationTaskDeadline(taskID, startedAt, claimGen)
 		}
 		cancel()
 	}()
@@ -1249,6 +1277,18 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 		// message. Never start provider work for a terminal local task.
 		return nil
 	}
+	// Issue #145 fencing: claim ownership (generation bump + lease) before
+	// any provider work. Direct goroutines, inbox consumers, and redriven
+	// tasks all converge here, so every legitimate generation is bound.
+	claimGen, claimWorker, err = claimGenerationTaskOwnership(a.store, taskID)
+	if err != nil {
+		if terminal, terminalErr := a.generationTaskTerminal(context.Background(), taskID); terminalErr == nil && terminal {
+			return nil
+		}
+		return fmt.Errorf("claim generation ownership: %w", err)
+	}
+	stopHeartbeat := a.startGenerationHeartbeat(taskID, claimWorker, claimGen)
+	defer stopHeartbeat()
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareImageTask(ctx, req)
 	if err != nil {
@@ -1257,7 +1297,7 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 			if errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) || errors.Is(err, providerexecution.ErrProviderStillProcessing) {
 				return err
 			}
-			a.failImageGenerationTask(taskID, "provider", startedAt, err)
+			a.failImageGenerationTask(taskID, "provider", startedAt, err, claimGen)
 			return err
 		}
 	}
@@ -1276,10 +1316,11 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 		// recovery retry storage without another provider submission.
 		return err
 	}
-	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
+	completed, err := completeGenerationTaskWithFencing(a.store, taskID, prepared, claimGen)
 	if err != nil {
 		// Commit outcome may be ambiguous. Durable provider/local artifacts and
 		// the reservation must remain available for idempotent completion.
+		// A fenced stale generation returns here with nothing mutated.
 		return err
 	}
 	if !strings.EqualFold(completed.Status, "SUCCEEDED") && !strings.EqualFold(completed.Status, "COMPLETED") {
@@ -1291,6 +1332,12 @@ func (a api) runGenerationTask(taskID string, service generation.Service, req ge
 
 // recoverSucceededGenerationTask rebuilds only local state from the provider
 // execution's durable manifest. It intentionally has no provider/service call.
+// Issue #145 fencing: the task generation is observed ONCE at entry and that
+// same value both gates the execution binding (nil-or-equal) and settles via
+// Complete WithFencing. A stale attempt's late success is ignored (left for
+// audit, never settled from) with ErrFencedStaleExecution. The entry value
+// must never be re-observed after persist*: a bump between gate and settle
+// would otherwise let a stale execution settle the new generation.
 func (a api) recoverSucceededGenerationTask(task generationTask, execution providerexecution.Execution) (returnErr error) {
 	isCanary := canaryTaskMarker(task.Params)
 	if isCanary {
@@ -1301,6 +1348,11 @@ func (a api) recoverSucceededGenerationTask(task generationTask, execution provi
 			generationCanaryMetrics.artifactRecoveryFailures.Add(1)
 		}
 	}()
+	// Single observation: gate and settle share this value.
+	observedGen := observeGenerationTaskGeneration(a.store, task.ID)
+	if err := a.checkSucceededExecutionGenerationWithObserved(task.ID, execution, observedGen); err != nil {
+		return err
+	}
 	var req generation.CreateRequest
 	req.UserID = task.UserID
 	req.Type = task.Type
@@ -1327,7 +1379,7 @@ func (a api) recoverSucceededGenerationTask(task generationTask, execution provi
 		if err != nil {
 			return err
 		}
-		if _, err := a.store.CompleteGenerationTask(task.ID, prepared); err != nil {
+		if _, err := completeGenerationTaskWithFencing(a.store, task.ID, prepared, observedGen); err != nil {
 			// Keep locally persisted artifacts as durable work for the next
 			// completion retry; they must not trigger another provider call.
 			return err
@@ -1350,7 +1402,7 @@ func (a api) recoverSucceededGenerationTask(task generationTask, execution provi
 			return persistErr
 		}
 	}
-	if _, err := a.store.CompleteGenerationTask(task.ID, req); err != nil {
+	if _, err := completeGenerationTaskWithFencing(a.store, task.ID, req, observedGen); err != nil {
 		return err
 	}
 	return nil
@@ -1387,19 +1439,85 @@ func (a api) configuredImageGenerationTimeout() time.Duration {
 	return a.cfg.ImageGenerationTimeout()
 }
 
-func (a api) convergeGenerationTaskDeadline(taskID string, startedAt time.Time) {
+func (a api) convergeGenerationTaskDeadline(taskID string, startedAt time.Time, claimGen int64) {
 	log.Printf("generation task context deadline exceeded task_id=%s elapsed_ms=%d; attempting durable convergence", taskID, time.Since(startedAt).Milliseconds())
 	// This cleanup is independent of the timed-out provider call. Durable
 	// failure checks provider execution and leaves UNKNOWN work recoverable.
-	if _, err := a.store.FailGenerationTaskDurable(taskID, generationErrorMessage(context.DeadlineExceeded)); err != nil {
+	// Fenced by the claiming generation: a stale worker's convergence can
+	// never release a generation it no longer owns.
+	if _, err := failGenerationTaskDurableWithFencing(a.store, taskID, generationErrorMessage(context.DeadlineExceeded), claimGen); err != nil {
 		log.Printf("generation task deadline convergence deferred task_id=%s error=%q", taskID, err)
 	}
 }
 
-func (a api) failImageGenerationTask(taskID string, stage string, startedAt time.Time, err error) {
+func (a api) failImageGenerationTask(taskID string, stage string, startedAt time.Time, err error, claimGen int64) {
 	message := generationErrorMessage(err)
 	log.Printf("generation task failed task_id=%s stage=%s elapsed_ms=%d error=%q", taskID, stage, time.Since(startedAt).Milliseconds(), message)
-	_, _ = a.store.FailGenerationTask(taskID, message)
+	// Fenced by the claiming generation: a stale worker's failure can never
+	// release a generation it no longer owns.
+	_, _ = failGenerationTaskWithFencing(a.store, taskID, message, claimGen)
+}
+
+// startGenerationHeartbeat renews the owner lease while provider work is in
+// flight. Renewal is conditional on (worker_id, generation): once ownership
+// moves on, renewals are rejected and the subsequent settlement fences.
+// The returned stop func is idempotent. Non-postgres stores yield a no-op.
+func (a api) startGenerationHeartbeat(taskID, workerID string, expectedGen int64) func() {
+	stop := make(chan struct{})
+	var stopped int32
+	stopFunc := func() {
+		if atomic.CompareAndSwapInt32(&stopped, 0, 1) {
+			close(stop)
+		}
+	}
+	if fencingPostgres(a.store) == nil || strings.TrimSpace(workerID) == "" || expectedGen <= 0 {
+		return stopFunc
+	}
+	go func() {
+		ticker := time.NewTicker(generationHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if err := renewGenerationLease(a.store, taskID, workerID, expectedGen); err != nil {
+					log.Printf("generation heartbeat renewal lost task_id=%s worker=%s generation=%d error=%q", taskID, workerID, expectedGen, err)
+					return
+				}
+			}
+		}
+	}()
+	return stopFunc
+}
+
+// checkSucceededExecutionGeneration enforces the durable execution ->
+// generation binding for local recovery: an execution bound to an older task
+// generation (stale attempt's late success) must never settle the current
+// generation. Nil binding means pre-fencing legacy and stays recoverable.
+func (a api) checkSucceededExecutionGeneration(taskID string, execution providerexecution.Execution) error {
+	return a.checkSucceededExecutionGenerationWithObserved(taskID, execution, observeGenerationTaskGeneration(a.store, taskID))
+}
+
+// checkSucceededExecutionGenerationWithObserved applies the binding check
+// against a caller-observed generation so gate and settle can share one
+// observation (see recoverSucceededGenerationTask). Semantics match
+// checkSucceededExecutionGeneration exactly: nil binding stays recoverable,
+// a non-positive observed generation means the legacy path (unfenced),
+// otherwise the bound generation must equal the observed one.
+func (a api) checkSucceededExecutionGenerationWithObserved(taskID string, execution providerexecution.Execution, observedGen int64) error {
+	if execution.TaskGeneration == nil {
+		return nil
+	}
+	if observedGen <= 0 {
+		return nil
+	}
+	if *execution.TaskGeneration != observedGen {
+		fencingCutover.providerGateSkips.Add(1)
+		return fmt.Errorf("%w: task %s succeeded execution bound to generation %d, current generation %d",
+			ErrFencedStaleExecution, taskID, *execution.TaskGeneration, observedGen)
+	}
+	return nil
 }
 
 func (a api) prepareImageTaskWithFallback(ctx context.Context, req generation.CreateRequest, firstErr error) (generation.CreateRequest, error) {
@@ -1498,10 +1616,14 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	startedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), videoGenerationTimeout)
 	a.registerGenerationTaskCancel(taskID, cancel)
+	// See runGenerationTask: deadline convergence settles with the claimed
+	// generation so a stale worker can never release a newer generation.
+	var claimGen int64
+	var claimWorker string
 	defer func() {
 		a.unregisterGenerationTaskCancel(taskID)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			a.convergeGenerationTaskDeadline(taskID, startedAt)
+			a.convergeGenerationTaskDeadline(taskID, startedAt, claimGen)
 		}
 		cancel()
 	}()
@@ -1512,13 +1634,25 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if err != nil || terminal {
 		return err
 	}
+	// Issue #145 fencing: claim ownership before provider work. The video
+	// same-id retry path (retryGenerationTask -> go runVideoGenerationTask)
+	// converges here, so the retried generation is bound like any other.
+	claimGen, claimWorker, err = claimGenerationTaskOwnership(a.store, taskID)
+	if err != nil {
+		if terminal, terminalErr := a.generationTaskTerminal(context.Background(), taskID); terminalErr == nil && terminal {
+			return nil
+		}
+		return fmt.Errorf("claim generation ownership: %w", err)
+	}
+	stopHeartbeat := a.startGenerationHeartbeat(taskID, claimWorker, claimGen)
+	defer stopHeartbeat()
 	req.Params[providerExecutionTaskParam] = taskID
 	prepared, err := service.PrepareVideoTask(ctx, req)
 	if err != nil {
 		if errors.Is(err, providerexecution.ErrProviderStillProcessing) || errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) {
 			return err
 		}
-		_, _ = a.store.FailGenerationTask(taskID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, taskID, generationErrorMessage(err), claimGen)
 		return err
 	}
 	delete(prepared.Params, providerExecutionTaskParam)
@@ -1532,14 +1666,16 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		prepared, storedFiles, persistErr = a.persistGeneratedVideos(ctx, taskID, prepared)
 		if persistErr != nil {
 			log.Printf("video persistence failed task_id=%s error=%v", taskID, persistErr)
-			_, _ = a.store.FailGenerationTaskDurable(taskID, "视频资产归档失败，已取消并退回积分")
+			_, _ = failGenerationTaskDurableWithFencing(a.store, taskID, "视频资产归档失败，已取消并退回积分", claimGen)
 			return persistErr
 		}
 	}
 	// Completion is the billing settlement boundary. If it fails, the
 	// provider result may already be durable and the task must remain
 	// recoverable; failing here would incorrectly release the reservation.
-	completed, err := a.store.CompleteGenerationTask(taskID, prepared)
+	// Fenced by the claiming generation: a stale worker's late success is a
+	// no-op and the current generation alone may commit.
+	completed, err := completeGenerationTaskWithFencing(a.store, taskID, prepared, claimGen)
 	if err != nil {
 		return err
 	}

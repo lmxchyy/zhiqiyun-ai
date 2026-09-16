@@ -47,9 +47,15 @@ func (s *Store) createPrepared(ctx context.Context, e Execution, lockTask bool) 
 		default:
 			return Execution{}, fmt.Errorf("generation task %s is terminal (%s)", e.TaskID, status)
 		}
-		if err := tx.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey).Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		// Issue #145 fencing: bind the execution to the task generation
+		// observed under the same row lock. A stale attempt's late success
+		// can never settle a newer task generation (comparison happens in
+		// recoverSucceededGenerationTask and ClaimPreparedForGenerationTask).
+		taskGen := taskGenerationForBarrier(tx, ctx, e.TaskID)
+		if err := tx.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,task_execution_generation) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey, taskGen).Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return Execution{}, err
 		}
+		e.TaskGeneration = taskGen
 		return e, tx.Commit()
 	}
 	row := s.DB.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey)
@@ -60,14 +66,14 @@ func (s *Store) createPrepared(ctx context.Context, e Execution, lockTask bool) 
 }
 
 func (s *Store) GetByID(ctx context.Context, id int64) (Execution, error) {
-	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE id=$1`, id)
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,task_execution_generation,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE id=$1`, id)
 }
 func (s *Store) GetActiveByTask(ctx context.Context, taskID string) (Execution, error) {
-	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 AND status NOT IN ('succeeded','failed') ORDER BY attempt DESC LIMIT 1`, taskID)
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,task_execution_generation,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 AND status NOT IN ('succeeded','failed') ORDER BY attempt DESC LIMIT 1`, taskID)
 }
 
 func (s *Store) GetLatestByTask(ctx context.Context, taskID string) (Execution, error) {
-	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1`, taskID)
+	return s.get(ctx, `SELECT id,task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key,provider_request_id,task_execution_generation,result_metadata,submitted_at,processing_at,succeeded_at,failed_at,unknown_at,last_checked_at,next_check_at,error_code,error_class,last_error,created_at,updated_at FROM provider_executions WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1`, taskID)
 }
 func (s *Store) get(ctx context.Context, q string, arg any) (Execution, error) {
 	var e Execution
@@ -75,9 +81,14 @@ func (s *Store) get(ctx context.Context, q string, arg any) (Execution, error) {
 	// *json.RawMessage is rejected by database/sql, so scan into []byte and
 	// preserve NULL as a nil RawMessage.
 	var resultMetadata []byte
-	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderOperationKey, &e.ProviderRequestID, &resultMetadata, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
+	var taskGen sql.NullInt64
+	err := s.DB.QueryRowContext(ctx, q, arg).Scan(&e.ID, &e.TaskID, &e.Provider, &e.ProviderChannel, &e.ProviderModel, &e.Capability, &e.Attempt, &e.Status, &e.RequestFingerprint, &e.ProviderOperationKey, &e.ProviderRequestID, &taskGen, &resultMetadata, &e.SubmittedAt, &e.ProcessingAt, &e.SucceededAt, &e.FailedAt, &e.UnknownAt, &e.LastCheckedAt, &e.NextCheckAt, &e.ErrorCode, &e.ErrorClass, &e.LastError, &e.CreatedAt, &e.UpdatedAt)
 	if err == nil && resultMetadata != nil {
 		e.ResultMetadata = append(e.ResultMetadata[:0], resultMetadata...)
+	}
+	if err == nil && taskGen.Valid {
+		gen := taskGen.Int64
+		e.TaskGeneration = &gen
 	}
 	return e, err
 }
@@ -140,6 +151,7 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 		return Execution{}, err
 	}
 	defer tx.Rollback()
+	var taskGen *int64
 	if lockTask {
 		var status string
 		if err = tx.QueryRowContext(ctx, `SELECT status FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&status); err != nil {
@@ -150,11 +162,19 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 		default:
 			return Execution{}, fmt.Errorf("generation task %s is terminal (%s)", taskID, status)
 		}
+		taskGen = taskGenerationForBarrier(tx, ctx, taskID)
 	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM provider_executions WHERE task_id=$1 AND status='prepared' ORDER BY attempt FOR UPDATE SKIP LOCKED LIMIT 1`, taskID).Scan(&id)
+	var boundGen sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT id, task_execution_generation FROM provider_executions WHERE task_id=$1 AND status='prepared' ORDER BY attempt FOR UPDATE SKIP LOCKED LIMIT 1`, taskID).Scan(&id, &boundGen)
 	if err != nil {
 		return Execution{}, err
+	}
+	// Issue #145 fencing: a prepared execution bound to an older task
+	// generation must never be claimed by the current generation. NULL
+	// binding means pre-fencing legacy and stays claimable.
+	if taskGen != nil && boundGen.Valid && boundGen.Int64 != *taskGen {
+		return Execution{}, fmt.Errorf("%w: task %s execution bound to generation %d, current generation %d", ErrFencedStaleExecution, taskID, boundGen.Int64, *taskGen)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status='submitting',updated_at=now() WHERE id=$1`, id); err != nil {
 		return Execution{}, err
@@ -174,6 +194,22 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 	}
 	return e, nil
 }
+// taskGenerationForBarrier reads the task fencing generation under the
+// caller's row lock. It returns nil (unbound) when the 119 fencing columns
+// are absent so barrier creation stays compatible with pre-fencing
+// databases; callers must treat nil as "no binding", never as stale.
+func taskGenerationForBarrier(tx *sql.Tx, ctx context.Context, taskID string) *int64 {
+	var gen sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT execution_generation FROM xz_generation_tasks WHERE id=$1`, taskID).Scan(&gen); err != nil || !gen.Valid {
+		return nil
+	}
+	value := gen.Int64
+	if value <= 0 {
+		value = 1
+	}
+	return &value
+}
+
 func (s *Store) MarkUnknown(ctx context.Context, id int64, class ErrorClass, msg string) error {
 	e, err := s.GetByID(ctx, id)
 	if err != nil {
