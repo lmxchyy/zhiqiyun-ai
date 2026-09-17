@@ -323,7 +323,9 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if task, err := a.store.FailGenerationTaskDurable(id, "用户取消生成"); err == nil {
+	// Fenced by the currently observed generation (falls back to the legacy
+	// path on non-postgres stores).
+	if task, err := failGenerationTaskDurableWithFencing(a.store, id, "用户取消生成", observeGenerationTaskGeneration(a.store, id)); err == nil {
 		writeJSON(w, task)
 		return
 	}
@@ -429,6 +431,18 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 	// provider request id is not proof that the local submission was safely
 	// recoverable; Unknown must remain diagnose/manual-review only.
 	if hasExecution && originalActive && isVideoGenerationRequest(original.Type) && videoRetryChildAllowed(execution) {
+		// Issue #145 fencing: a user retry must not steal ownership from a
+		// live worker. A valid lease means the current generation is still
+		// being processed; the retry is deferred as a conflict.
+		if pg := fencingPostgres(a.store); pg != nil {
+			retryCtx, retryCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			fencing, fencingErr := getTaskFencing(retryCtx, pg.db, original.ID)
+			retryCancel()
+			if fencingErr == nil && fencing.Found && fencing.LeaseUntil != nil && fencing.LeaseUntil.After(time.Now().UTC()) {
+				writeError(w, http.StatusConflict, errors.New("generation task is being processed by a live worker; retry deferred"))
+				return
+			}
+		}
 		req := generation.CreateRequest{UserID: user.ID, Type: original.Type, Prompt: original.Prompt, Model: original.Model, Params: cloneAnyMap(original.Params), ModuleCode: original.ModuleCode}
 		if req.Params == nil {
 			req.Params = map[string]any{}
@@ -1079,6 +1093,15 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 		return generationTask{}, errors.New("generation task not found")
 	}
 	if err != nil {
+		return generationTask{}, err
+	}
+	// Same-tx lock-held fencing on the cancel path: generationTaskForUpdate
+	// above locked this task row (SELECT ... FOR UPDATE) and this tx still
+	// holds that lock here, so presenting task.fencingGeneration() compares
+	// the observed value against the locked row in one atomic scope. If the
+	// generation ever moves under this tx the assert fails closed and the
+	// cancellation releases nothing.
+	if _, err := assertTaskGenerationTx(ctx, tx, id, task.fencingGeneration()); err != nil {
 		return generationTask{}, err
 	}
 	if upperTrim(task.Status) == "CANCELLED" {

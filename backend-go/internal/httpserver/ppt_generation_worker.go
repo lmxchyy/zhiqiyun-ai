@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,24 @@ func (a api) processGenerationPPTCanaryMessage(ctx context.Context, inbox *messa
 			return err
 		}
 		return tx.Commit()
+	}
+	// Issue #145 fencing: the envelope carries the dispatch generation as
+	// the execution identity. A redelivery older than the stored generation
+	// must not steal ownership from a live owner: when a valid lease is
+	// held, ack-skip without provider work. Without a live lease the task
+	// was requeued and this redelivery may proceed; the PPT stages settle
+	// with the currently observed generation, so a stale worker still fails
+	// closed at the fenced settlement.
+	if envelopeGen := envelopeExecutionGeneration(envelope.Data); envelopeGen > 0 && envelopeGen < task.fencingGeneration() {
+		fencingCutover.staleRedeliveries.Add(1)
+		if generationLeaseValid(task.LeaseUntil, time.Now().UTC()) {
+			log.Printf("generation ppt canary stale redelivery skipped task_id=%s envelope_generation=%d current_generation=%d owner=%s", taskID, envelopeGen, task.fencingGeneration(), task.WorkerID)
+			if err := inbox.CompleteTx(shortCtx, tx, generationPPTCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID, "stale_generation": true}); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			return tx.Commit()
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -200,7 +219,9 @@ func (a api) runPPTGenerationStages(taskID string, parent generationTask) error 
 // inbox row and ACKs via completePPTCanaryInboxIfTerminal.
 func (a api) failPPTCanaryTask(userID, taskID string, stageErr error) error {
 	msg := generationErrorMessage(stageErr)
-	if _, err := a.store.FailGenerationTaskDurable(taskID, msg); err != nil {
+	// Fenced by the currently observed generation: only the diagnosed
+	// generation may release.
+	if _, err := failGenerationTaskDurableWithFencing(a.store, taskID, msg, observeGenerationTaskGeneration(a.store, taskID)); err != nil {
 		return err
 	}
 	if _, err := a.pptService.SetDeckStatus(userID, taskID, pptapp.StatusFailed); err != nil {
@@ -516,7 +537,7 @@ func (a api) settlePPTCanarySuccess(userID, taskID string, parent generationTask
 	} else if detail.PPTURL != "" {
 		prepared.Params["pptUrl"] = detail.PPTURL
 	}
-	if _, err := a.store.CompleteGenerationTask(taskID, prepared); err != nil {
+	if _, err := completeGenerationTaskWithFencing(a.store, taskID, prepared, observeGenerationTaskGeneration(a.store, taskID)); err != nil {
 		return err
 	}
 	if _, err := a.pptService.SetDeckStatus(userID, taskID, pptapp.StatusSuccess); err != nil {

@@ -1102,6 +1102,12 @@ func (a api) generateBillablePPTImageWithKey(ctx context.Context, user adminUser
 	if err != nil {
 		return pptImageSearchResponse{}, err
 	}
+	// Issue #145 fencing: claim the visual task so the settlement below is
+	// bound to the claimed generation.
+	pptVisualGen, _, pptVisualClaimErr := claimGenerationTaskOwnership(a.store, task.ID)
+	if pptVisualClaimErr != nil {
+		return pptImageSearchResponse{}, pptVisualClaimErr
+	}
 	execKey := pptProviderExecutionTaskID(pptTaskID, req.Slide.ID, task.ID)
 	if strings.TrimSpace(execKeyOverride) != "" {
 		execKey = strings.TrimSpace(execKeyOverride)
@@ -1110,31 +1116,31 @@ func (a api) generateBillablePPTImageWithKey(ctx context.Context, user adminUser
 	log.Printf("ppt visual generation started presentationId=%s slideId=%s taskId=%s modelName=%s", pptTaskID, req.Slide.ID, task.ID, model)
 	prepared, err := service.PrepareImageTask(ctx, createReq)
 	if err != nil {
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), pptVisualGen)
 		log.Printf("ppt visual generation failed presentationId=%s slideId=%s taskId=%s modelName=%s err=%v", pptTaskID, req.Slide.ID, task.ID, model, err)
 		return pptImageSearchResponse{}, fmt.Errorf("ppt image generation failed: %w", err)
 	}
 	if err := a.validatePPTImageHasNoText(ctx, task.ID, prepared); err != nil {
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), pptVisualGen)
 		log.Printf("ppt visual text validation failed presentationId=%s slideId=%s taskId=%s modelName=%s retryAttempt=%d err=%v", pptTaskID, req.Slide.ID, task.ID, model, req.RetryAttempt, err)
 		return pptImageSearchResponse{}, err
 	}
 	prepared, storedFiles, err := a.persistGeneratedImages(ctx, task.ID, prepared)
 	if err != nil {
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), pptVisualGen)
 		log.Printf("ppt visual storage failed presentationId=%s slideId=%s taskId=%s modelName=%s err=%v", pptTaskID, req.Slide.ID, task.ID, model, err)
 		return pptImageSearchResponse{}, fmt.Errorf("persist ppt image: %w", err)
 	}
 	imageURL := pptGeneratedImageURL(prepared)
 	if imageURL == "" {
 		a.cleanupGeneratedFiles(storedFiles)
-		_, _ = a.store.FailGenerationTask(task.ID, "ppt image provider returned no image")
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, "ppt image provider returned no image", pptVisualGen)
 		log.Printf("ppt visual generation empty presentationId=%s slideId=%s taskId=%s modelName=%s", pptTaskID, req.Slide.ID, task.ID, model)
 		return pptImageSearchResponse{}, errors.New("ppt image provider returned no image")
 	}
-	if _, err := a.store.CompleteGenerationTask(task.ID, prepared); err != nil {
+	if _, err := completeGenerationTaskWithFencing(a.store, task.ID, prepared, pptVisualGen); err != nil {
 		a.cleanupGeneratedFiles(storedFiles)
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), pptVisualGen)
 		log.Printf("ppt visual database update failed presentationId=%s slideId=%s taskId=%s modelName=%s err=%v", pptTaskID, req.Slide.ID, task.ID, model, err)
 		return pptImageSearchResponse{}, err
 	}

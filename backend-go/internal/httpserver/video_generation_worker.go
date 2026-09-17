@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -85,6 +86,23 @@ func (a api) processGenerationVideoCanaryMessage(ctx context.Context, inbox *mes
 			return err
 		}
 		return tx.Commit()
+	}
+	// Issue #145 fencing: the envelope carries the dispatch generation as
+	// the execution identity. A redelivery older than the stored generation
+	// must not steal ownership from a live owner: when a valid lease is
+	// held, ack-skip without provider work. Without a live lease the task
+	// was requeued and this consumer may adopt the new generation via the
+	// claim inside runVideoGenerationTask.
+	if envelopeGen := envelopeExecutionGeneration(envelope.Data); envelopeGen > 0 && envelopeGen < task.fencingGeneration() {
+		fencingCutover.staleRedeliveries.Add(1)
+		if generationLeaseValid(task.LeaseUntil, time.Now().UTC()) {
+			log.Printf("generation video canary stale redelivery skipped task_id=%s envelope_generation=%d current_generation=%d owner=%s", taskID, envelopeGen, task.fencingGeneration(), task.WorkerID)
+			if err := inbox.CompleteTx(shortCtx, tx, generationVideoCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID, "stale_generation": true}); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			return tx.Commit()
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err

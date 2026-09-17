@@ -104,6 +104,14 @@ type generationTask struct {
 	CreatedAt                  string         `json:"createdAt"`
 	UpdatedAt                  string         `json:"updatedAt"`
 	WorkerFinishedAt           string         `json:"workerFinishedAt,omitempty"`
+	// Issue #145 execution-generation fencing. ExecutionGeneration is the
+	// monotonic fencing token (starts at 1; 0 means legacy/unread and
+	// normalizes to 1). WorkerID/LeaseUntil/LastHeartbeatAt record the
+	// current owner lease; empty means unowned.
+	ExecutionGeneration        int64          `json:"executionGeneration,omitempty"`
+	WorkerID                   string         `json:"workerId,omitempty"`
+	LeaseUntil                 string         `json:"leaseUntil,omitempty"`
+	LastHeartbeatAt            string         `json:"lastHeartbeatAt,omitempty"`
 }
 
 type asset struct {

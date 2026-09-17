@@ -57,6 +57,12 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	// The task is created before the synchronous provider call. Bind the
 	// durable execution identity now so a retry/restart cannot bypass the
 	// provider-execution guard.
+	// Issue #145 fencing: claim ownership for this synchronous execution so
+	// the settlement below is bound to the claimed generation.
+	connectorClaimGen, _, connectorClaimErr := claimGenerationTaskOwnership(a.store, task.ID)
+	if connectorClaimErr != nil {
+		return task, req, fmt.Errorf("claim generation ownership: %w", connectorClaimErr)
+	}
 	req.Params[providerExecutionTaskParam] = task.ID
 	prepared, err := service.PrepareImageTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
@@ -66,7 +72,7 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
 			return task, req, fmt.Errorf("connector image recovery deferred: %w", err)
 		}
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), connectorClaimGen)
 		return task, req, fmt.Errorf("generate connector image: %w", err)
 	}
 	prepared, _, err = a.persistGeneratedImages(ctx, task.ID, prepared)
@@ -75,7 +81,7 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		// of releasing its reservation on a local storage failure.
 		return task, prepared, fmt.Errorf("persist connector image: %w", err)
 	}
-	completed, err := a.store.CompleteGenerationTask(task.ID, prepared)
+	completed, err := completeGenerationTaskWithFencing(a.store, task.ID, prepared, connectorClaimGen)
 	if err != nil {
 		// Completion is the local settlement boundary; do not fail/release a
 		// task whose provider result can be replayed locally.
@@ -143,13 +149,19 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	// The task is created before the synchronous provider call. Bind the
 	// durable execution identity now so a retry/restart cannot bypass the
 	// provider-execution guard.
+	// Issue #145 fencing: claim ownership for this synchronous execution so
+	// the settlement below is bound to the claimed generation.
+	connectorVideoClaimGen, _, connectorVideoClaimErr := claimGenerationTaskOwnership(a.store, task.ID)
+	if connectorVideoClaimErr != nil {
+		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("claim generation ownership: %w", connectorVideoClaimErr)
+	}
 	req.Params[providerExecutionTaskParam] = task.ID
 	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
 		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
 			return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("connector video recovery deferred: %w", err)
 		}
-		_, _ = a.store.FailGenerationTask(task.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), connectorVideoClaimGen)
 		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("generate connector video: %w", err)
 	}
 	prepared, stored, raw, contentType, err := a.persistConnectorVideo(ctx, task.ID, prepared)
@@ -158,7 +170,7 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 		// of releasing its reservation on a local storage failure.
 		return task, prepared, storagecenter.FileObject{}, nil, "", fmt.Errorf("persist connector video: %w", err)
 	}
-	completed, err := a.store.CompleteGenerationTask(task.ID, prepared)
+	completed, err := completeGenerationTaskWithFencing(a.store, task.ID, prepared, connectorVideoClaimGen)
 	if err != nil {
 		// Do not delete a durable artifact or fail/release the task. A later local
 		// recovery can reuse it and complete billing exactly once.

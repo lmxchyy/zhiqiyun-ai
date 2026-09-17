@@ -282,6 +282,10 @@ func (a api) updateGenerationRecoveryState(taskID, state string, req recoveryAct
 	if err != nil {
 		return generationTask{}, err
 	}
+	// MANUAL_REVIEW is a settlement state: fence it by the generation
+	// observed under this tx's row lock so a concurrent requeue wins
+	// instead of being silently overwritten.
+	presentedGen := task.fencingGeneration()
 	if task.Params == nil {
 		task.Params = map[string]any{}
 	}
@@ -292,6 +296,9 @@ func (a api) updateGenerationRecoveryState(taskID, state string, req recoveryAct
 		task.Status, task.TaskStatus = "MANUAL_REVIEW", "MANUAL_REVIEW"
 	}
 	if err := insertGenerationTask(ctx, tx, task); err != nil {
+		return generationTask{}, err
+	}
+	if err := assertTaskGenerationCommitted(ctx, tx, task.ID, presentedGen); err != nil {
 		return generationTask{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -312,6 +319,20 @@ func (a api) redriveGenerationEvent(task generationTask, req recoveryActionReque
 		return out, err
 	}
 	defer tx.Rollback()
+	// Issue #145 fencing: redrive transfers ownership to the next attempt,
+	// so it bumps the generation under the task row lock. The previous
+	// owner is fenced by the bump. A live lease holder is never
+	// preempted: redrive of an actively owned task is deferred.
+	locked, err := generationTaskForUpdate(ctx, tx, task.ID)
+	if err != nil {
+		return out, err
+	}
+	if generationLeaseValid(locked.LeaseUntil, time.Now().UTC()) {
+		return out, fmt.Errorf("task %s is owned by a live worker (generation %d); redrive deferred", task.ID, locked.fencingGeneration())
+	}
+	if _, err := requeueGenerationTx(ctx, tx, task.ID, locked.fencingGeneration(), ""); err != nil {
+		return out, err
+	}
 	var eventID string
 	if err := tx.QueryRowContext(ctx, `SELECT event_id FROM outbox_events WHERE aggregate_id=$1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, task.ID).Scan(&eventID); err != nil {
 		return out, err
@@ -329,6 +350,9 @@ func (a api) resolveGenerationCapture(task generationTask, req recoveryActionReq
 	if strings.TrimSpace(fmt.Sprint(req.Evidence["providerOutcome"])) != "succeeded" {
 		return generationTask{}, errors.New("RESOLVE_CAPTURE requires evidence.providerOutcome=succeeded")
 	}
+	// Fenced by the currently observed generation: capture settles only
+	// the generation the operator diagnosed.
+	observedGen := observeGenerationTaskGeneration(a.store, task.ID)
 	if db := a.pgDB(); db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -343,7 +367,7 @@ func (a api) resolveGenerationCapture(task generationTask, req recoveryActionReq
 			}
 		}
 	}
-	result, err := a.store.CompleteGenerationTask(task.ID, createGenerationTaskRequest{UserID: task.UserID, Type: task.Type, Prompt: task.Prompt, Model: task.Model, Params: cloneAnyMap(task.Params)})
+	result, err := completeGenerationTaskWithFencing(a.store, task.ID, createGenerationTaskRequest{UserID: task.UserID, Type: task.Type, Prompt: task.Prompt, Model: task.Model, Params: cloneAnyMap(task.Params)}, observedGen)
 	if err == nil && isPPTGenerationType(task.Type) && a.pptService != nil {
 		_, err = a.pptService.SetDeckStatus(task.UserID, task.ID, pptapp.StatusSuccess)
 	}
@@ -355,6 +379,8 @@ func (a api) resolveGenerationRelease(task generationTask, req recoveryActionReq
 	if outcome != "not_submitted" && outcome != "definitely_failed" {
 		return generationTask{}, errors.New("RESOLVE_RELEASE requires evidence.providerOutcome=not_submitted or definitely_failed")
 	}
+	// Fenced by the currently observed generation: release settles only
+	// the generation the operator diagnosed.
 	if db := a.pgDB(); db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -369,7 +395,7 @@ func (a api) resolveGenerationRelease(task generationTask, req recoveryActionReq
 			}
 		}
 	}
-	result, err := a.store.FailGenerationTaskDurable(task.ID, req.Reason)
+	result, err := failGenerationTaskDurableWithFencing(a.store, task.ID, req.Reason, observeGenerationTaskGeneration(a.store, task.ID))
 	if err == nil && isPPTGenerationType(task.Type) && a.pptService != nil {
 		_, err = a.pptService.SetDeckStatus(task.UserID, task.ID, pptapp.StatusFailed)
 	}

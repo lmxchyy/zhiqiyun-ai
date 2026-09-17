@@ -281,14 +281,20 @@ func (h *pptGenerateHandler) Execute(ctx context.Context, c connector.AICommand)
 		return connector.CapabilityResult{}, err
 	}
 	asset, err := h.runtime.api.repo.ensureConnectorPPTAsset(ctx, c.InternalUserID, execution.TenantID, execution.OrganizationID, execution.Task.TaskID, execution.Task.Title, execution.File)
+	// Issue #145 fencing: claim the billing task so the settlement below is
+	// bound to the claimed generation.
+	pptBillingGen, _, pptBillingClaimErr := claimGenerationTaskOwnership(h.runtime.api.generator.store, execution.BillingTask.ID)
+	if pptBillingClaimErr != nil {
+		return connector.CapabilityResult{}, pptBillingClaimErr
+	}
 	if err != nil {
-		_, _ = h.runtime.api.generator.store.FailGenerationTask(execution.BillingTask.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(h.runtime.api.generator.store, execution.BillingTask.ID, generationErrorMessage(err), pptBillingGen)
 		h.runtime.api.generator.cleanupGeneratedFiles([]storagecenter.FileObject{execution.File})
 		return connector.CapabilityResult{}, err
 	}
-	completedBilling, err := h.runtime.api.generator.store.CompleteGenerationTask(execution.BillingTask.ID, execution.BillingRequest)
+	completedBilling, err := completeGenerationTaskWithFencing(h.runtime.api.generator.store, execution.BillingTask.ID, execution.BillingRequest, pptBillingGen)
 	if err != nil {
-		_, _ = h.runtime.api.generator.store.FailGenerationTask(execution.BillingTask.ID, generationErrorMessage(err))
+		_, _ = failGenerationTaskWithFencing(h.runtime.api.generator.store, execution.BillingTask.ID, generationErrorMessage(err), pptBillingGen)
 		h.runtime.api.generator.cleanupGeneratedFiles([]storagecenter.FileObject{execution.File})
 		_ = h.runtime.api.repo.deleteConnectorAsset(ctx, asset.ID, c.InternalUserID)
 		return connector.CapabilityResult{}, fmt.Errorf("commit ppt billing: %w", err)
