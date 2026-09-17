@@ -1587,8 +1587,9 @@ func (s *postgresStore) CompleteGenerationTaskFenced(id string, req createGenera
 	}
 	var account pgPointAccount
 	personalPointCost := 0
+	alreadyCaptured := false
 	if usesPersonalPoints {
-		account, personalPointCost, err = validatePostgresGenerationPersonalLotMarkerTx(ctx, tx, task)
+		account, personalPointCost, alreadyCaptured, err = validatePostgresGenerationPersonalLotMarkerForCompleteTx(ctx, tx, task)
 		if err != nil {
 			return generationTask{}, err
 		}
@@ -1682,6 +1683,7 @@ func (s *postgresStore) CompleteGenerationTaskFenced(id string, req createGenera
 				return generationTask{}, err
 			}
 		} else {
+			_ = alreadyCaptured
 			if _, err := NewPostgresPersonalPointStore(s.db).captureTx(ctx, tx, PersonalPointCaptureCommand{AccountID: task.PersonalPointAccountID, UserID: userID, ReservationID: task.PersonalPointReservationID, Points: int64(pointCost), IdempotencyKey: "generation:capture:" + task.ID}); err != nil {
 				if canaryTaskMarker(task.Params) {
 					generationCanaryMetrics.pointsCaptureFailures.Add(1)
@@ -1909,6 +1911,50 @@ func validatePostgresGenerationPersonalLotMarkerTx(ctx context.Context, tx *sql.
 		return pgPointAccount{}, 0, err
 	}
 	return account, int(pointCost), nil
+}
+
+// validatePostgresGenerationPersonalLotMarkerForCompleteTx validates personal point lot
+// markers for CompleteGenerationTaskFenced. In addition to clean RESERVED reservations,
+// it permits an already-CAPTURED reservation (idempotent recovery path when a worker
+// crashed after captureTx committed before the task completion committed).
+func validatePostgresGenerationPersonalLotMarkerForCompleteTx(ctx context.Context, tx *sql.Tx, task generationTask) (pgPointAccount, int, bool, error) {
+	if task.BillingEngine != personalLotBillingEngine || strings.TrimSpace(task.PersonalPointAccountID) == "" || strings.TrimSpace(task.PersonalPointReservationID) == "" {
+		return pgPointAccount{}, 0, false, ErrPersonalPointReservationMarkerMissing
+	}
+	pointCost, err := generationTaskExactReservationPointCost(task)
+	if err != nil {
+		return pgPointAccount{}, 0, false, err
+	}
+	account, ok, err := pgLoadAccount(ctx, tx, task.PersonalPointAccountID, task.UserID, true)
+	if err != nil {
+		return pgPointAccount{}, 0, false, err
+	}
+	if !ok {
+		return pgPointAccount{}, 0, false, ErrPersonalPointReservationMarkerMissing
+	}
+	reservation, err := pgScanReservation(tx.QueryRowContext(ctx, `SELECT `+pgReservationColumns+` FROM xz_personal_point_reservations WHERE id=$1 FOR UPDATE`, task.PersonalPointReservationID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return pgPointAccount{}, 0, false, ErrPersonalPointReservationMarkerMissing
+	}
+	if err != nil {
+		return pgPointAccount{}, 0, false, err
+	}
+	if reservation.AccountID != account.ID || reservation.UserID != task.UserID {
+		return pgPointAccount{}, 0, false, ErrPointOwnership
+	}
+	if reservation.BusinessType != "GENERATION_TASK" || reservation.BusinessID != task.ID {
+		return pgPointAccount{}, 0, false, ErrPersonalPointImportConflict
+	}
+	allocations, err := pgLoadAllocations(ctx, tx, reservation.ID, account.ID, task.UserID, true)
+	if err != nil {
+		return pgPointAccount{}, 0, false, err
+	}
+	alreadyCaptured, err := validatePersonalGenerationReservationStateForComplete(reservation, allocations, pointCost)
+	if err != nil {
+		return pgPointAccount{}, 0, false, err
+	}
+	_ = alreadyCaptured
+	return account, int(pointCost), alreadyCaptured, nil
 }
 
 func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, tx *sql.Tx, task generationTask, message, terminalStatus, terminalTaskStatus string) (generationTask, bool, bool, error) {

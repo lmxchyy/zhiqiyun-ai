@@ -1101,7 +1101,8 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 	// the observed value against the locked row in one atomic scope. If the
 	// generation ever moves under this tx the assert fails closed and the
 	// cancellation releases nothing.
-	if _, err := assertTaskGenerationTx(ctx, tx, id, task.fencingGeneration()); err != nil {
+	currentGen := task.fencingGeneration()
+	if _, err := assertTaskGenerationTx(ctx, tx, id, currentGen); err != nil {
 		return generationTask{}, err
 	}
 	if upperTrim(task.Status) == "CANCELLED" {
@@ -1117,11 +1118,29 @@ func (s *postgresStore) CancelGenerationTaskForUser(userID string, id string) (g
 		// in-flight, ambiguous, or durably succeeded. Local recovery owns it.
 		return generationTask{}, errors.New("generation task has provider work in progress; cancellation is deferred")
 	}
+	// Bump generation and clear ownership lease so any in-flight worker is fenced
+	// and cannot perform a late settlement or capture.
+	cancelGen := currentGen + 1
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE xz_generation_tasks
+		SET execution_generation = $2, worker_id = NULL, lease_until = NULL, last_heartbeat_at = NULL
+		WHERE id = $1 AND execution_generation = $3
+	`, task.ID, cancelGen, currentGen); err != nil {
+		return generationTask{}, err
+	}
+	task.ExecutionGeneration = cancelGen
+	task.WorkerID = ""
+	task.LeaseUntil = ""
+	task.LastHeartbeatAt = ""
+
 	task, refunded, _, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, "用户取消生成", "CANCELLED", taskStatusCancelled)
 	if err != nil {
 		return generationTask{}, err
 	}
 	if err := insertAuditLog(ctx, tx, task.UserID, "MEMBER", "generation.cancel", "generation_task", task.ID, "", "", 200, map[string]any{"pointCost": task.PointCost, "billingRefunded": refunded}); err != nil {
+		return generationTask{}, err
+	}
+	if err := assertTaskGenerationCommitted(ctx, tx, task.ID, cancelGen); err != nil {
 		return generationTask{}, err
 	}
 	return task, tx.Commit()

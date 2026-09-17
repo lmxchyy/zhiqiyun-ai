@@ -1002,6 +1002,48 @@ func validatePersonalGenerationReservationState(reservation PersonalPointReserva
 	return nil
 }
 
+// validatePersonalGenerationReservationStateForComplete validates reservation state
+// on the task completion path (CompleteGenerationTaskFenced). It accepts either a clean
+// RESERVED reservation or an already-CAPTURED reservation (idempotent recovery path
+// where capture committed before a worker crash prior to task completion commit).
+// Returns (alreadyCaptured bool, err error).
+func validatePersonalGenerationReservationStateForComplete(reservation PersonalPointReservation, allocations []PersonalPointAllocation, pointCost int64) (bool, error) {
+	if upperTrim(reservation.Status) == "RESERVED" {
+		if reservation.RequestedPoints != pointCost || reservation.ReservedPoints != pointCost || reservation.CapturedPoints != 0 || reservation.ReleasedPoints != 0 || reservation.ExpiredPoints != 0 {
+			return false, ErrPersonalPointImportConflict
+		}
+		var allocated int64
+		for _, allocation := range allocations {
+			if allocation.ReservationID != reservation.ID || allocation.AccountID != reservation.AccountID || allocation.UserID != reservation.UserID || upperTrim(allocation.Status) != "RESERVED" || allocation.AllocatedPoints <= 0 || allocation.AllocatedPoints != allocation.ReservedPoints || allocation.CapturedPoints != 0 || allocation.ReleasedPoints != 0 || allocation.ExpiredPoints != 0 || allocation.ReservedPoints > math.MaxInt64-allocated {
+				return false, ErrPersonalPointImportConflict
+			}
+			allocated += allocation.ReservedPoints
+		}
+		if allocated != pointCost {
+			return false, ErrPersonalPointImportConflict
+		}
+		return false, nil
+	}
+	if upperTrim(reservation.Status) == "CAPTURED" {
+		// Idempotent recovery path: capture already succeeded in prior attempt before worker crash.
+		if reservation.RequestedPoints != pointCost || reservation.ReservedPoints != 0 || reservation.CapturedPoints != pointCost || reservation.ReleasedPoints != 0 || reservation.ExpiredPoints != 0 {
+			return false, ErrPersonalPointImportConflict
+		}
+		var allocated int64
+		for _, allocation := range allocations {
+			if allocation.ReservationID != reservation.ID || allocation.AccountID != reservation.AccountID || allocation.UserID != reservation.UserID || upperTrim(allocation.Status) != "CAPTURED" || allocation.AllocatedPoints <= 0 || allocation.AllocatedPoints != allocation.CapturedPoints || allocation.ReservedPoints != 0 || allocation.ReleasedPoints != 0 || allocation.ExpiredPoints != 0 || allocation.CapturedPoints > math.MaxInt64-allocated {
+				return false, ErrPersonalPointImportConflict
+			}
+			allocated += allocation.CapturedPoints
+		}
+		if allocated != pointCost {
+			return false, ErrPersonalPointImportConflict
+		}
+		return true, nil
+	}
+	return false, ErrPersonalPointImportConflict
+}
+
 func validateGenerationTaskPersonalLotMarker(state *personalPointState, task generationTask) error {
 	if task.BillingEngine != personalLotBillingEngine || strings.TrimSpace(task.PersonalPointAccountID) == "" || strings.TrimSpace(task.PersonalPointReservationID) == "" {
 		return ErrPersonalPointReservationMarkerMissing
