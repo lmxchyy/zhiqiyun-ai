@@ -295,17 +295,16 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 		}
 
 		eventType := "x.ai.generation.image.canary.requested"
-		eventPrefix := "generation.image.requested:"
 		if isVideoGenerationRequest(item.taskType) {
 			eventType = messaging.GenerationVideoCanaryRoutingKey
-			eventPrefix = "generation.video.requested:"
 		} else if strings.EqualFold(item.taskType, "PPT_GENERATION") || strings.EqualFold(item.taskType, "ppt") {
 			eventType = messaging.GenerationPPTCanaryRoutingKey
-			eventPrefix = "generation.ppt.requested:"
 		}
 
+		eventID := fmt.Sprintf("generation.dispatched:%s:%d", item.id, dispatchedGen)
+
 		e := &messaging.Envelope{
-			EventID:       eventPrefix + item.id,
+			EventID:       eventID,
 			EventType:     eventType,
 			Version:       1,
 			OccurredAt:    now.Format(time.RFC3339),
