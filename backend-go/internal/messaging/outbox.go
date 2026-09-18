@@ -40,7 +40,8 @@ func (s *OutboxStore) InsertTx(ctx context.Context, tx *sql.Tx, e *Envelope, agg
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO outbox_events
 		(event_id, aggregate_type, aggregate_id, event_type, event_version, payload, trace_id, status, next_attempt_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',now())`, e.EventID, aggregateType, aggregateID, e.EventType, e.Version, payload, traceID)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',now())
+		ON CONFLICT (event_id) DO NOTHING`, e.EventID, aggregateType, aggregateID, e.EventType, e.Version, payload, traceID)
 	return err
 }
 
