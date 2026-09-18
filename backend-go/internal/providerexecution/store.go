@@ -108,13 +108,20 @@ func (s *Store) SaveSucceededResult(ctx context.Context, id int64, providerReque
 	if err = ValidateTransition(status, Succeeded); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status='succeeded',provider_request_id=COALESCE($1,provider_request_id),result_metadata=$2::jsonb,error_class=$3,last_error=NULL,succeeded_at=now(),updated_at=now() WHERE id=$4`, providerRequestID, string(metadata), string(ProviderSucceeded), id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status='succeeded',provider_request_id=COALESCE($1,provider_request_id),result_metadata=$2::jsonb,error_code=NULL,error_class=$3,last_error=NULL,succeeded_at=now(),updated_at=now() WHERE id=$4`, providerRequestID, string(metadata), string(ProviderSucceeded), id); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) Transition(ctx context.Context, id int64, to Status, providerRequestID *string, errorClass, lastError *string) error {
+	return s.TransitionWithErrorCode(ctx, id, to, providerRequestID, nil, errorClass, lastError)
+}
+
+// TransitionWithErrorCode persists both the lifecycle class used by retry and
+// the provider-facing classification used for diagnosis. Keeping the legacy
+// Transition wrapper preserves existing callers and retry semantics.
+func (s *Store) TransitionWithErrorCode(ctx context.Context, id int64, to Status, providerRequestID, errorCode, errorClass, lastError *string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -127,7 +134,7 @@ func (s *Store) Transition(ctx context.Context, id int64, to Status, providerReq
 	if err = ValidateTransition(from, to); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status=$1,provider_request_id=COALESCE($2,provider_request_id),error_class=$3,last_error=$4,submitted_at=CASE WHEN $1='submitted' THEN now() ELSE submitted_at END,processing_at=CASE WHEN $1='processing' THEN now() ELSE processing_at END,succeeded_at=CASE WHEN $1='succeeded' THEN now() ELSE succeeded_at END,failed_at=CASE WHEN $1='failed' THEN now() ELSE failed_at END,unknown_at=CASE WHEN $1='unknown' THEN now() ELSE unknown_at END,updated_at=now() WHERE id=$5`, to, providerRequestID, errorClass, lastError, id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status=$1,provider_request_id=COALESCE($2,provider_request_id),error_code=COALESCE($3,error_code),error_class=$4,last_error=$5,submitted_at=CASE WHEN $1='submitted' THEN now() ELSE submitted_at END,processing_at=CASE WHEN $1='processing' THEN now() ELSE processing_at END,succeeded_at=CASE WHEN $1='succeeded' THEN now() ELSE succeeded_at END,failed_at=CASE WHEN $1='failed' THEN now() ELSE failed_at END,unknown_at=CASE WHEN $1='unknown' THEN now() ELSE unknown_at END,updated_at=now() WHERE id=$6`, to, providerRequestID, errorCode, errorClass, lastError, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -194,6 +201,7 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 	}
 	return e, nil
 }
+
 // taskGenerationForBarrier reads the task fencing generation under the
 // caller's row lock. It returns nil (unbound) when the 119 fencing columns
 // are absent so barrier creation stays compatible with pre-fencing

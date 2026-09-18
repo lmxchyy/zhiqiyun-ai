@@ -259,20 +259,31 @@ func (p OpenAICompatible) setIdempotencyHeader(ctx context.Context, req *http.Re
 }
 
 func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.Request, model string, req generation.CreateRequest) (any, error) {
+	startedAt := time.Now()
+	logVideoProviderRequest(httpReq, p.providerCode(), model, req.Type, req.Params)
 	res, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, err
+		providerErr := newProviderError(p.providerCode(), 0, "", "", "", "", err)
+		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, 0, "", "", "", providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
+		return nil, providerErr
 	}
 	defer res.Body.Close()
+	requestID := providerRequestIDFromHeaders(res.Header)
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 12<<20))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("video provider %s returned HTTP %d: %s", p.providerCode(), res.StatusCode, strings.TrimSpace(string(raw)))
+		providerCode, message, jobID := providerResponseFields(raw)
+		providerErr := newProviderError(p.providerCode(), res.StatusCode, providerCode, message, requestID, jobID, nil)
+		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, jobID, providerCode, providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
+		return nil, providerErr
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, fmt.Errorf("decode video provider response: %w", err)
+		providerErr := newProviderError(p.providerCode(), res.StatusCode, "invalid_response", err.Error(), requestID, "", err)
+		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, "", "invalid_response", providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
+		return nil, providerErr
 	}
-	if initialID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId")); initialID != "" {
+	initialID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"))
+	if initialID != "" {
 		generation.NotifyProviderSubmission(ctx, initialID)
 	}
 	// Polling is a GET-only operation and therefore cannot duplicate the
@@ -286,15 +297,20 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 		firstStringByKeys(decoded, "fail_reason", "error", "message"),
 		firstStringByKeys(decoded, "url"),
 	)
+	providerCode := firstStringByKeys(decoded, "code", "error_code", "errorCode")
+	providerJobID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), initialID)
 	if status == "FAILED" || (videoURL == "" && looksLikeVideoProviderErrorText(reason)) {
 		if reason == "" {
 			reason = "video generation failed"
 		}
-		return nil, errors.New(reason)
+		providerErr := newProviderError(p.providerCode(), res.StatusCode, providerCode, reason, requestID, providerJobID, nil)
+		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, providerJobID, providerCode, providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
+		return nil, providerErr
 	}
 	if videoURL == "" && strings.Contains(status, "PROCESS") {
 		status = "PROCESSING"
 	}
+	providerCode = ""
 	taskID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), "video-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 	if videoURL == "" && strings.EqualFold(status, "SUCCEEDED") && taskID != "" {
 		candidate := videoContentEndpointForModel(p.baseURL, p.endpoint, taskID, model)
@@ -303,6 +319,7 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 		}
 	}
 	if videoURL == "" {
+		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, taskID, providerCode, "", "processing", time.Since(startedAt).Milliseconds(), "")
 		return map[string]any{
 			"provider":       p.providerCode(),
 			"providerTaskId": taskID,
@@ -315,6 +332,7 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 			},
 		}, nil
 	}
+	logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, taskID, providerCode, "", "success", time.Since(startedAt).Milliseconds(), "")
 	return map[string]any{
 		"provider":       p.providerCode(),
 		"providerTaskId": taskID,
@@ -918,22 +936,47 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 			continue
 		}
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		startedAt := time.Now()
+		logVideoProviderPollRequest(req, p.providerCode(), model, taskID)
 		res, err := p.client.Do(req)
 		if err != nil {
-			lastErr = err
+			providerErr := newProviderError(p.providerCode(), 0, "", "", "", taskID, err)
+			logVideoProviderPollResponse(req, p.providerCode(), model, taskID, 0, "", "", providerErr.Message, "failed", providerErr.FailureClassification(), time.Since(startedAt).Milliseconds())
+			lastErr = providerErr
 			continue
 		}
+		requestID := providerRequestIDFromHeaders(res.Header)
 		raw, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 		_ = res.Body.Close()
 		if res.StatusCode < 200 || res.StatusCode >= 300 {
-			lastErr = fmt.Errorf("poll video task returned HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(raw)))
+			providerCode, message, jobID := providerResponseFields(raw)
+			providerErr := newProviderError(p.providerCode(), res.StatusCode, providerCode, message, requestID, jobID, nil)
+			logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, providerCode, providerErr.Message, "failed", providerErr.FailureClassification(), time.Since(startedAt).Milliseconds())
+			lastErr = providerErr
 			continue
 		}
 		var decoded map[string]any
 		if err := json.Unmarshal(raw, &decoded); err != nil {
-			lastErr = err
+			providerErr := newProviderError(p.providerCode(), res.StatusCode, "invalid_response", err.Error(), requestID, taskID, err)
+			logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, "invalid_response", providerErr.Message, "failed", providerErr.FailureClassification(), time.Since(startedAt).Milliseconds())
+			lastErr = providerErr
 			continue
 		}
+		providerCode := firstStringByKeys(decoded, "code", "error_code", "errorCode")
+		message := firstStringByKeys(decoded, "fail_reason", "error", "message", "detail")
+		status := normalizeVideoStatus(firstNonEmptyString(firstStringByKeys(decoded, "status", "state"), "PROCESSING"))
+		failureClass := ""
+		result := "processing"
+		if status == "FAILED" || (message != "" && looksLikeVideoProviderErrorText(message)) {
+			failureClass = classifyProviderFailure(res.StatusCode, providerCode, message, nil)
+			result = "failed"
+		} else if status == "SUCCEEDED" {
+			providerCode = ""
+			result = "success"
+		} else {
+			providerCode = ""
+		}
+		logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, providerCode, message, result, failureClass, time.Since(startedAt).Milliseconds())
 		return decoded, nil
 	}
 	if lastErr != nil {

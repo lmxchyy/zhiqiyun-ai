@@ -389,8 +389,12 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	if callErr != nil {
 		diag.ProviderCreate = true
 		class := pe.Classify(callErr)
-		if class == pe.DefinitiveNotSubmitted || class == pe.RetryableBeforeSubmit {
-			_ = s.Transition(ctx, e.ID, pe.Failed, nil, ptrString(string(class)), ptrString(callErr.Error()))
+		errorCode, providerRequestID, providerClass := providerFailureDetails(callErr)
+		if providerClass != "" {
+			class = providerLifecycleClass(providerClass)
+		}
+		if class == pe.DefinitiveNotSubmitted || class == pe.RetryableBeforeSubmit || class == pe.DefinitiveFailed {
+			_ = s.TransitionWithErrorCode(ctx, e.ID, pe.Failed, providerRequestID, ptrString(errorCode), ptrString(string(class)), ptrString(callErr.Error()))
 			return nil, wrapRecoveryError(RecoveryCodeCreateFailed, RecoveryStageCreate, diag, callErr)
 		}
 		_ = s.MarkUnknown(ctx, e.ID, class, callErr.Error())
@@ -500,6 +504,34 @@ func providerTaskID(v any) string {
 	}
 	return ""
 }
+
+type providerFailureDetail interface {
+	FailureClassification() string
+	ProviderRequestID() string
+}
+
+func providerFailureDetails(err error) (errorCode string, requestID *string, failureClass string) {
+	var detail providerFailureDetail
+	if !errors.As(err, &detail) {
+		return "", nil, ""
+	}
+	failureClass = strings.TrimSpace(detail.FailureClassification())
+	errorCode = failureClass
+	if value := strings.TrimSpace(detail.ProviderRequestID()); value != "" {
+		requestID = ptrString(value)
+	}
+	return errorCode, requestID, failureClass
+}
+
+func providerLifecycleClass(class string) pe.ErrorClass {
+	switch strings.TrimSpace(class) {
+	case "PROVIDER_TIMEOUT", "PROVIDER_NETWORK_ERROR", "PROVIDER_UNKNOWN_ERROR":
+		return pe.PossiblySubmitted
+	default:
+		return pe.DefinitiveFailed
+	}
+}
+
 func ptrString(v string) *string { return &v }
 
 func providerExecutionForRetry(store platformStore, cfg config.Config, taskID string) (pe.Execution, bool, error) {
