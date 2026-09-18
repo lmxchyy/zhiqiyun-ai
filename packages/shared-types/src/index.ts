@@ -524,8 +524,8 @@ export interface ChannelCenterResponse {
   children: ChannelAgent[];
 }
 
-export * from "./smart-video";
+export type * from "./smart-video";
 
-export { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, isGenerationQueued } from "./generationStatus";
+export { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, isGenerationQueued } from "./generationStatus.js";
 
 
