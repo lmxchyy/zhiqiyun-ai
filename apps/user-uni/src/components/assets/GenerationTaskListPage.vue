@@ -9,6 +9,7 @@
   </view>
 </template>
 <script setup lang="ts">
+import { GENERATION_QUEUED_LABEL } from "@xianzhi/shared-types";
 import { onBeforeUnmount } from "vue";
 import { useAssetStore } from "../../stores/assets";
 import type { GenerationTask } from "../../features/assets/types";
@@ -22,7 +23,7 @@ import GenerationTaskItem from "./GenerationTaskItem.vue";
 
 const store=useAssetStore();
 function refresh(){return store.fetchTasks(true);}
-function openTask(task:GenerationTask){if(task.status==="completed")result(task);else if(task.status==="failed")openFailedTaskActions(task,executeRetry,executeDelete);else if(task.status==="cancelled")confirmDeleteFailedTask(task,executeDelete);else uni.showModal({title:task.name,content:`当前进度 ${task.progress}%`,showCancel:false});}
+function openTask(task:GenerationTask){if(task.status==="completed")result(task);else if(task.status==="failed")openFailedTaskActions(task,executeRetry,executeDelete);else if(task.status==="cancelled")confirmDeleteFailedTask(task,executeDelete);else uni.showModal({title:task.name,content:task.status==="queued"?GENERATION_QUEUED_LABEL:`当前进度 ${task.progress}%`,showCancel:false});}
 function result(task:GenerationTask){const id=task.resultIds[0];if(id)uni.navigateTo({url:`${miniProgramFeaturePages.userAssetDetail}?id=${encodeURIComponent(id)}`});else uni.showToast({title:"暂未生成结果",icon:"none"});}
 function cancel(task:GenerationTask){uni.showModal({title:"取消任务",content:"确定停止当前生成任务吗？",confirmColor:"#ff771b",success:res=>{if(res.confirm)void store.cancelTask(task.id);}});}
 async function executeRetry(task:GenerationTask){uni.showLoading({title:"正在重新提交",mask:true});try{await store.retryTask(task.id);uni.hideLoading();uni.showToast({title:"已重新提交",icon:"success"});}catch(error){uni.hideLoading();uni.showToast({title:error instanceof Error?error.message:"重试失败",icon:"none"});}}

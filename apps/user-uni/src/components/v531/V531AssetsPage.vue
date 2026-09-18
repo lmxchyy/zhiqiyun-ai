@@ -133,6 +133,8 @@
 </template>
 
 <script setup lang="ts">
+import { GENERATION_QUEUED_LABEL, generationDisplayStatus, isGenerationQueued } from "@xianzhi/shared-types";
+
 import { computed, ref } from "vue";
 import AppImage from "../AppImage.vue";
 import { v531SlotsByPage } from "../../config/v531";
@@ -148,6 +150,7 @@ interface AssetLike {
 }
 
 interface TaskLike {
+  taskStatus?: string;
   id: string;
   type?: string;
   status?: string;
@@ -302,7 +305,7 @@ function statusTone(asset: AssetLike) {
 }
 
 function taskStatus(task: TaskLike) {
-  return String(task.status || "PENDING").toUpperCase();
+  return generationDisplayStatus(task) || "PENDING";
 }
 
 function taskPriority(task: TaskLike) {
@@ -343,6 +346,7 @@ function taskTone(task: TaskLike) {
 }
 
 function taskMeta(task: TaskLike) {
+  if (isGenerationQueued(task)) return GENERATION_QUEUED_LABEL;
   const value = taskStatus(task);
   const progress = Number(task.params?.progress || task.params?.percentage || 0);
   if (["FAILED", "ERROR", "CANCELLED"].some(item => value.includes(item))) return "失败 · 再次生成";

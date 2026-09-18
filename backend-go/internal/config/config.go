@@ -125,6 +125,8 @@ type Config struct {
 	SmartVideoTempDir                      string
 	MetricsEnabled                         bool
 	ShutdownTimeout                        string
+	GenerationFairSchedulerEnabled         bool
+	GenerationWorkerMetricsAddr            string
 	AsyncMessagingEnabled                  bool
 	GenerationAsyncCanaryEnabled           bool
 	GenerationAsyncCanaryUsers             string
@@ -339,6 +341,8 @@ func Load() Config {
 		SmartVideoTempDir:                      os.Getenv("SMARTVIDEO_TEMP_DIR"),
 		MetricsEnabled:                         boolEnvDefaultTrue(os.Getenv("XIANZHI_METRICS_ENABLED")),
 		ShutdownTimeout:                        stringEnvOrDefault("XIANZHI_SHUTDOWN_TIMEOUT", "30s"),
+		GenerationFairSchedulerEnabled:         boolEnv(os.Getenv("GENERATION_FAIR_SCHEDULER_ENABLED")),
+		GenerationWorkerMetricsAddr:            stringEnvOrDefault("GENERATION_WORKER_METRICS_ADDR", "127.0.0.1:9091"),
 		AsyncMessagingEnabled:                  boolEnv(os.Getenv("ASYNC_MESSAGING_ENABLED")),
 		GenerationAsyncCanaryEnabled:           boolEnv(os.Getenv("GENERATION_ASYNC_CANARY_ENABLED")),
 		GenerationAsyncCanaryUsers:             os.Getenv("GENERATION_ASYNC_CANARY_USERS"),

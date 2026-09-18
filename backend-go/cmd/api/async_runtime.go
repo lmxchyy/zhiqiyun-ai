@@ -73,8 +73,9 @@ func (r *asyncMessagingRuntime) Start(parent context.Context) {
 	r.mu.Unlock()
 
 	r.manager.Start()
-	scheduler := httpserver.NewGenerationScheduler(r.db)
-	r.run(ctx, "generation fair scheduler", scheduler.Run)
+	r.run(ctx, "generation fair scheduler", func(ctx context.Context) error {
+		return httpserver.RunConfiguredGenerationScheduler(ctx, r.db, r.cfg)
+	})
 	r.run(ctx, "outbox publisher", publisher.Run)
 	r.run(ctx, "generation canary consumer", func(ctx context.Context) error {
 		return r.worker(ctx, r.cfg, r.db, r.manager)

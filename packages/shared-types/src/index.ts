@@ -87,6 +87,7 @@ export interface EnterpriseCertification {
 export type TaskStatus =
   | "PENDING"
   | "QUEUED"
+  | "DISPATCHING"
   | "RUNNING"
   | "PROCESSING"
   | "RETRYING"
@@ -185,6 +186,7 @@ export interface GenerationTask {
   id: string;
   type: GenerationTaskType;
   status: TaskStatus;
+  taskStatus?: TaskStatus;
   progress?: number;
   prompt: string;
   model: string;
@@ -523,5 +525,7 @@ export interface ChannelCenterResponse {
 }
 
 export * from "./smart-video";
+
+export { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, isGenerationQueued } from "./generationStatus";
 
 

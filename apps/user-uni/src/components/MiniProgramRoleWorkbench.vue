@@ -743,6 +743,8 @@
 </template>
 
 <script setup lang="ts">
+import { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus } from "@xianzhi/shared-types";
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
 import { useMiniProgramNavigation } from "../composables/useMiniProgramNavigation";
@@ -1435,7 +1437,7 @@ const videoCostLabel = computed(() => {
 });
 const generationBusy = computed(() => generationSubmitting.value || generationPolling.value);
 const generationNoticePending = computed(() => latestGenerationTask.value?.tone === "pending");
-const generationHasProgress = computed(() => generationProgress.value > 0 && generationProgress.value < 100);
+const generationHasProgress = computed(() => latestGenerationTask.value?.status !== "QUEUED" && generationProgress.value > 0 && generationProgress.value < 100);
 const generationProgressStyle = computed(() => generationHasProgress.value
   ? { width: `${Math.min(100, Math.max(0, generationProgress.value))}%` }
   : undefined);
@@ -1465,13 +1467,15 @@ const imageGeneratorStatusMessage = computed(() => {
   return "";
 });
 const generationFeedbackText = computed(() => {
+  if (latestGenerationTask.value?.status === "QUEUED") return GENERATION_QUEUED_LABEL;
   const elapsed = generationElapsedSeconds.value > 0 ? `已等待 ${generationElapsedSeconds.value} 秒` : "刚刚提交";
   return generationHasProgress.value ? `后端进度 ${generationProgress.value}% · ${elapsed}` : `状态持续同步中 · ${elapsed}`;
 });
 
 function generationStatusText(status: string) {
   const normalized = String(status || "").toUpperCase();
-  if (["PENDING", "QUEUED", "CREATED"].includes(normalized)) return "排队中";
+  if (normalized === "QUEUED") return GENERATION_QUEUED_LABEL;
+  if (["PENDING", "CREATED"].includes(normalized)) return "排队中";
   if (["PROCESSING", "RUNNING", "RETRYING", "IN_PROGRESS"].includes(normalized)) return "生成中";
   if (["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(normalized)) return "已完成";
   if (["FAILED", "ERROR"].includes(normalized)) return "生成失败";
@@ -3463,7 +3467,7 @@ function completeCreationSubmission(
   generationProgress.value = taskProgress;
   latestGenerationTask.value = {
     id: taskId,
-    title: `${activeCreationName.value}生成中`,
+    title: taskStatus === "QUEUED" ? GENERATION_QUEUED_LABEL : `${activeCreationName.value}生成中`,
     status: taskStatus,
     tone: ["FAILED", "ERROR"].includes(taskStatus) ? "danger" : ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(taskStatus) ? "success" : "pending",
     progress: taskProgress,
@@ -3479,7 +3483,7 @@ function completeCreationSubmission(
     startedAt,
     inspirationTemplateSlug: activeInspirationTemplateSlug.value,
   });
-  uni.showToast({ title: "任务已提交，正在生成", icon: "success" });
+  uni.showToast({ title: taskStatus === "QUEUED" ? GENERATION_QUEUED_TOAST : "任务已提交，正在生成", icon: "success" });
   void pollGenerationTask(taskId, creationMode.value, startedAt, prompt);
 }
 
@@ -3576,7 +3580,7 @@ function submitVideoCreationAfterSession(prompt: string, startedAt: number, pref
     .then(result => {
       completeCreationSubmission(
         String(result.id || "generation-task"),
-        String(result.status || "PENDING").toUpperCase(),
+        generationDisplayStatus(result) || "PENDING",
         clampGenerationProgress(result.progress),
         prompt,
         startedAt,
@@ -3653,7 +3657,7 @@ async function submitCreationAfterSession(prompt: string, startedAt: number, pre
       if (!submission.ok) throw submission.error;
       const result = submission.task;
       taskId = String(result.id || "generation-task");
-      taskStatus = String(result.status || "PENDING").toUpperCase();
+      taskStatus = generationDisplayStatus(result) || "PENDING";
       taskProgress = clampGenerationProgress(result.progress);
       taskPointCost = Number.isFinite(result.pointCost) ? result.pointCost : undefined;
     } else {
@@ -3679,7 +3683,7 @@ async function submitCreationAfterSession(prompt: string, startedAt: number, pre
         parameters: restoredCreationParams.value,
       });
       taskId = String(result.id || "generation-task");
-      taskStatus = String(result.status || "PENDING").toUpperCase();
+      taskStatus = generationDisplayStatus(result) || "PENDING";
       taskProgress = clampGenerationProgress(result.progress);
       taskPointCost = Number.isFinite(result.pointCost) ? result.pointCost : undefined;
     }
@@ -3745,7 +3749,7 @@ async function pollGenerationTask(
         const task = await api<GenerationTask>(`/api/v1/generation-tasks/${encodeURIComponent(taskId)}`);
         if (pollRun !== generationPollRun) return;
         const taskRecord = task as unknown as AnyRecord;
-        status = String(task.status || "PENDING").toUpperCase();
+        status = generationDisplayStatus(task) || "PENDING";
         const backendProgress = clampGenerationProgress(task.progress ?? rowNumber(taskRecord, "progress"));
         progress = backendProgress || progress;
         const resultIds = Array.isArray(taskRecord.resultIds)
@@ -3774,7 +3778,7 @@ async function pollGenerationTask(
       generationProgress.value = progress;
       latestGenerationTask.value = {
         id: taskId,
-        title: succeeded ? `${creationNameForMode(mode)}生成成功` : failed ? `${creationNameForMode(mode)}生成失败` : `${creationNameForMode(mode)}生成中`,
+        title: status === "QUEUED" ? GENERATION_QUEUED_LABEL : succeeded ? `${creationNameForMode(mode)}生成成功` : failed ? `${creationNameForMode(mode)}生成失败` : `${creationNameForMode(mode)}生成中`,
         status,
         tone: failed ? "danger" : succeeded ? "success" : "pending",
         progress,

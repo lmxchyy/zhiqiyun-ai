@@ -326,9 +326,9 @@
                 >
                   <div class="user-work-thumb">
                     <img v-if="aiTaskThumbnailUrl(task)" :src="aiTaskThumbnailUrl(task)" alt="作品缩略图" loading="lazy" decoding="async" />
-                    <div v-else-if="isAiTaskRunning(task)" class="user-work-placeholder">生成中</div>
+                    <div v-else-if="isAiTaskRunning(task)" class="user-work-placeholder">{{ isGenerationQueued(task) ? GENERATION_QUEUED_LABEL : "生成中" }}</div>
                     <div v-else class="user-work-placeholder">AI</div>
-                    <span>{{ statusLabel(task.status) }}</span>
+                    <span>{{ statusLabel(generationDisplayStatus(task)) }}</span>
                   </div>
                   <div class="user-work-body">
                     <strong>{{ task.name || task.prompt || 'AI 生图作品' }}</strong>
@@ -358,7 +358,7 @@
                     <span v-else>AI</span>
                     <div><strong>{{ task.name || task.prompt || 'AI 生图作品' }}</strong><small>{{ task.prompt || aiTaskId(task) }}</small></div>
                   </div>
-                  <span>{{ statusLabel(task.status) }}</span>
+                  <span>{{ statusLabel(generationDisplayStatus(task)) }}</span>
                   <span>{{ aiTaskModelLabel(task) }}</span>
                   <span>{{ aiTaskDisplayResolutionLabel(task) }}</span>
                   <span>{{ task.pointCost || 0 }} 点</span>
@@ -522,8 +522,8 @@
                         />
                         <div v-else-if="isAiTaskRunning(task)" class="ai-task-running">
                           <span class="ai-task-spinner"></span>
-                          <strong>{{ isAiTaskStale(task) ? '等待服务商响应...' : '生成中...' }}</strong>
-                          <small v-if="isAiTaskStale(task)">已超过 15 分钟，仍在继续查询</small>
+                          <strong>{{ isGenerationQueued(task) ? GENERATION_QUEUED_LABEL : isAiTaskStale(task) ? '等待服务商响应...' : '生成中...' }}</strong>
+                          <small v-if="!isGenerationQueued(task) && isAiTaskStale(task)">已超过 15 分钟，仍在继续查询</small>
                         </div>
                         <div v-else-if="isAiTaskFailed(task)" class="ai-task-failed">
                           <el-icon><Monitor /></el-icon>
@@ -1942,7 +1942,7 @@
                   </div>
                   <div v-else class="video-preview-frame video-preview-frame-placeholder is-generating">
                     <span class="video-action-spinner"></span>
-                    <p>视频生成中，请稍候...</p>
+                    <p>{{ isGenerationQueued(selectedVideoHistoryEntry) ? GENERATION_QUEUED_LABEL : "视频生成中，请稍候..." }}</p>
                   </div>
                   <div class="video-current-copy">
                     <span>{{ videoModeLabel(selectedVideoHistoryEntry.mode) }}</span>
@@ -2013,7 +2013,7 @@
                           <el-icon><Monitor /></el-icon>
                           <span>{{ videoCardPlaceholderText(entry) }}</span>
                         </div>
-                        <em>{{ videoStatusLabel(entry.status) }}</em>
+                        <em>{{ isGenerationQueued(entry) ? GENERATION_QUEUED_LABEL : videoStatusLabel(entry.status) }}</em>
                       </div>
                       <div class="video-history-body">
                         <p :title="entry.prompt">{{ entry.prompt || "未填写提示词" }}</p>
@@ -2384,6 +2384,8 @@
   </el-config-provider>
 </template>
 <script setup lang="ts">
+import { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, isGenerationQueued } from "@xianzhi/shared-types";
+
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
 import { safeInternalRedirect, type ProtectedAction } from "@xianzhi/shared-auth";
 import { ElMessage } from "element-plus/es/components/message/index";
@@ -2938,7 +2940,7 @@ async function submitVideoGeneration() {
     if (historyEntry) {
       commitVideoHistoryEntry(historyEntry, snapshotId);
     }
-    ElMessage.success(historyEntry?.status === "success" ? "视频生成成功" : "视频任务已提交，正在生成中");
+    ElMessage.success(isGenerationQueued(task) ? GENERATION_QUEUED_TOAST : historyEntry?.status === "success" ? "视频生成成功" : "视频任务已提交，正在生成中");
     return true;
   } catch (error) {
     commitVideoHistoryEntry({
@@ -7436,7 +7438,7 @@ async function submitOnlineImage() {
       }
     });
     onlineImageForm.value.prompt = "";
-    ElMessage.success("在线生图任务已提交");
+    ElMessage.success(isGenerationQueued(createdTask) ? GENERATION_QUEUED_TOAST : "在线生图任务已提交");
     mergeAiGenerationTask(createdTask);
     trackAiGenerationTask(aiTaskId(createdTask));
   } catch (error) {
@@ -7570,7 +7572,7 @@ async function submitAiImage() {
       aiPromptInputRef.value?.focus();
     }
     if (aiSettingsDraft.value.clearInputAfterSubmit) clearAiReferenceImages();
-    ElMessage.success("AI 生图任务已提交");
+    ElMessage.success(isGenerationQueued(createdTask) ? GENERATION_QUEUED_TOAST : "AI 生图任务已提交");
     if (createdTask && typeof createdTask === "object") {
       mergeAiGenerationTask(createdTask);
       trackAiGenerationTask(aiTaskId(createdTask));
@@ -11959,7 +11961,8 @@ function statusLabel(value: unknown) {
     CONFIGURABLE: "待配置",
     PENDING: "待处理",
     RUNNING: "处理中",
-    QUEUED: "排队中",
+    QUEUED: GENERATION_QUEUED_LABEL,
+    DISPATCHING: "等待执行",
     PAID: "已支付",
     PAYMENT_PENDING: "待支付",
     APPROVED: "已通过",
