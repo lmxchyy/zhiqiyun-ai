@@ -15,6 +15,7 @@ type CreateRequest struct {
 	ModuleCodeCamel string           `json:"moduleCode,omitempty"`
 	ClientRequestID string           `json:"clientRequestId,omitempty"`
 	UserID          string           `json:"-"`
+	FairScheduler   bool             `json:"-"`
 	Prompt          string           `json:"prompt"`
 	Model           string           `json:"model"`
 	Params          map[string]any   `json:"params"`

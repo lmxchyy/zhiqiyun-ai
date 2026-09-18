@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
@@ -37,10 +39,20 @@ func run() error {
 	clients.Messaging.Start()
 	workerCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	errCh := make(chan error, 4)
-	scheduler := httpserver.NewGenerationScheduler(clients.DB, httpserver.GenerationSchedulerOptions{Owner: "generation-worker-scheduler"})
+	errCh := make(chan error, 5)
+	listener, err := net.Listen("tcp", cfg.GenerationWorkerMetricsAddr)
+	if err != nil {
+		return fmt.Errorf("worker metrics listen: %w", err)
+	}
+	metricsServer := &http.Server{Handler: httpserver.GenerationWorkerMetricsHandler(clients.DB), ReadHeaderTimeout: 5 * time.Second}
+	defer metricsServer.Close()
 	go func() {
-		errCh <- scheduler.Run(workerCtx)
+		if err := metricsServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+	go func() {
+		errCh <- httpserver.RunConfiguredGenerationScheduler(workerCtx, clients.DB, cfg, httpserver.GenerationSchedulerOptions{Owner: "generation-worker-scheduler"})
 	}()
 	go func() {
 		errCh <- httpserver.RunGenerationImageCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)

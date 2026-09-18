@@ -1,3 +1,4 @@
+import { GENERATION_QUEUED_LABEL, generationDisplayStatus, isGenerationQueued } from "@xianzhi/shared-types";
 import type { AdminRecord } from "../stores/admin";
 
 export type VideoModelOption = {
@@ -200,6 +201,7 @@ export type VideoHistoryEntry = {
   createdAt: string;
   timestamp: number;
   status: VideoHistoryStatus;
+  taskStatus?: string;
   availability?: string;
   availabilityReason?: string;
   errorMessage?: string;
@@ -208,6 +210,7 @@ export type VideoHistoryEntry = {
 
 export function videoCardPlaceholderText(entry: Partial<VideoHistoryEntry> | null | undefined): string {
   if (!entry) return "生成中";
+  if (entry.status !== "success" && entry.status !== "failed" && isGenerationQueued(entry)) return GENERATION_QUEUED_LABEL;
   if (entry.status === "failed") return "生成失败";
   if (entry.status === "success") {
     if (entry.url && entry.url.trim()) return "悬停预览";
@@ -338,6 +341,7 @@ export function normalizeVideoHistoryEntry(
     availability,
     availabilityReason,
     errorMessage: entry.errorMessage ? videoErrorMessage(entry.errorMessage) : "",
+    taskStatus: entry.taskStatus,
     userId: entry.userId ? String(entry.userId) : undefined
   };
 }
@@ -367,6 +371,7 @@ export function taskToVideoHistoryEntry(
     id: String(task.id || task.taskId || `video-${Date.now()}`),
     taskId: String(task.taskId || task.providerTaskId || task.id || ""),
     backendTaskId: String(task.id || ""),
+    taskStatus: generationDisplayStatus(task),
     assetId,
     resultIds: resultIds.length ? resultIds : undefined,
     url: videoTaskUrl(task),

@@ -42,6 +42,8 @@
 </template>
 
 <script setup lang="ts">
+import { GENERATION_QUEUED_LABEL, generationDisplayStatus } from "@xianzhi/shared-types";
+
 import { ref } from "vue";
 import { onHide, onLoad, onPullDownRefresh, onReachBottom, onShow, onUnload } from "@dcloudio/uni-app";
 import type { GenerationTask } from "@xianzhi/shared-types";
@@ -90,7 +92,7 @@ function mergeTasks(current: GenerationTask[], incoming: GenerationTask[]) {
 
 function refresh() { return load(true); }
 function loadMore() { return load(false); }
-function normalizedStatus(task: GenerationTask) { return String(task.status || "PENDING").toUpperCase(); }
+function normalizedStatus(task: GenerationTask) { return generationDisplayStatus(task) || "PENDING"; }
 
 function taskTitle(task: GenerationTask) {
   const configured = String(task.params?.title || task.params?.name || "").trim();
@@ -101,7 +103,8 @@ function taskDescription(task: GenerationTask) {
   const status = normalizedStatus(task);
   const progress = Number(task.params?.progress || task.params?.percentage || 0);
   if (["FAILED", "ERROR"].includes(status)) return "失败 · 点击查看原因或重新生成";
-  if (["PENDING", "QUEUED"].includes(status)) return "排队中 · 等待开始生成";
+  if (status === "QUEUED") return GENERATION_QUEUED_LABEL;
+  if (["PENDING"].includes(status)) return "排队中 · 等待开始生成";
   if (["RUNNING", "PROCESSING", "RETRYING"].includes(status)) return progress > 0 ? `生成中 · ${Math.min(100, Math.round(progress))}%` : "生成中";
   if (["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status)) return "已完成 · 可查看作品";
   return status;

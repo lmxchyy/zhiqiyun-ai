@@ -1,9 +1,10 @@
 <template><text :class="['asset-status-badge', `tone-${tone}`]">{{ label }}</text></template>
 <script setup lang="ts">
+import { GENERATION_QUEUED_LABEL } from "@xianzhi/shared-types";
 import { computed } from "vue";
 import type { AssetStatus, GenerationTaskStatus } from "../../features/assets/types";
 const props = defineProps<{ status: AssetStatus | GenerationTaskStatus }>();
-const labels: Record<string, string> = { recent: "最近", queued: "排队中", generating: "生成中", completed: "已完成", failed: "失败", favorite: "收藏", archived: "已归档", recycled: "回收站", cancelled: "已取消" };
+const labels: Record<string, string> = { recent: "最近", queued: GENERATION_QUEUED_LABEL, generating: "生成中", completed: "已完成", failed: "失败", favorite: "收藏", archived: "已归档", recycled: "回收站", cancelled: "已取消" };
 const label = computed(() => labels[props.status] || props.status);
 const tone = computed(() => ({ queued: "queued", generating: "primary", completed: "success", failed: "danger", favorite: "favorite", archived: "muted", recycled: "recycled", cancelled: "muted", recent: "muted" } as Record<string, string>)[props.status] || "muted");
 </script>

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/messaging"
 )
 
@@ -129,7 +130,13 @@ func (s *GenerationScheduler) Stop() {
 	<-s.doneCh
 }
 
-func (s *GenerationScheduler) DispatchOnce(ctx context.Context) (int, error) {
+func (s *GenerationScheduler) DispatchOnce(ctx context.Context) (totalDispatched int, finalErr error) {
+	defer func() {
+		schedulerMetrics.dispatched.Add(uint64(totalDispatched))
+		if finalErr != nil {
+			schedulerMetrics.errors.Add(1)
+		}
+	}()
 	if s.db == nil {
 		return 0, errors.New("scheduler database is nil")
 	}
@@ -159,7 +166,7 @@ func (s *GenerationScheduler) DispatchOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	totalDispatched := 0
+	totalDispatched = 0
 	now := time.Now().UTC()
 
 	for _, userID := range candidateUserIDs {
@@ -325,7 +332,13 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 	return len(claimed), nil
 }
 
-func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (int, error) {
+func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recovered int, finalErr error) {
+	defer func() {
+		schedulerMetrics.recovered.Add(uint64(recovered))
+		if finalErr != nil {
+			schedulerMetrics.errors.Add(1)
+		}
+	}()
 	if s.db == nil {
 		return 0, errors.New("scheduler database is nil")
 	}
@@ -420,7 +433,7 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (int, 
 		return 0, nil
 	}
 
-	recovered := 0
+	recovered = 0
 	for _, item := range candidates {
 		if item.eventID != "" {
 			res, delErr := tx.ExecContext(ctx, `
@@ -467,4 +480,14 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (int, 
 	}
 
 	return recovered, nil
+}
+
+// RunConfiguredGenerationScheduler reads an immutable startup configuration.
+// Disabled processes keep consumers/publishers alive but never admit queue work.
+func RunConfiguredGenerationScheduler(ctx context.Context, db *sql.DB, cfg config.Config, options ...GenerationSchedulerOptions) error {
+	if !cfg.GenerationFairSchedulerEnabled {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return NewGenerationScheduler(db, options...).Run(ctx)
 }
