@@ -1416,7 +1416,11 @@ func (s *postgresStore) createPendingGenerationTaskWithPPT(req createGenerationT
 	if err != nil {
 		return generationTask{}, err
 	}
-	if !admission.CanDispatch {
+	if pptReq != nil || isPPTGenerationType(req.Type) {
+		if !admission.CanDispatch {
+			return generationTask{}, errGenerationConcurrencyLimit
+		}
+	} else if !admission.CanDispatch {
 		eventType = ""
 	}
 	req.Params["tenant_id"] = authorization.TenantID

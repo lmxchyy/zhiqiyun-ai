@@ -74,6 +74,13 @@ func TestFairScheduler_PostgresIntegration(t *testing.T) {
 	userA := "user_sched_a_" + suffix
 	userB := "user_sched_b_" + suffix
 
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM outbox_events WHERE aggregate_id LIKE '%"+suffix+"%'")
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE user_id IN ($1, $2)", userA, userB)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_users WHERE id IN ($1, $2)", userA, userB)
+		_, _ = db.ExecContext(ctx, "DELETE FROM xz_plans WHERE id = $1", planID)
+	}()
+
 	// Seed plan with concurrency 2
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO xz_plans (id, code, name, concurrency, active)

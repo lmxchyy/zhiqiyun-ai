@@ -32,13 +32,14 @@ func DefaultGenerationSchedulerOptions() GenerationSchedulerOptions {
 }
 
 type GenerationScheduler struct {
-	db      *sql.DB
-	outbox  *messaging.OutboxStore
-	options GenerationSchedulerOptions
-	mu      sync.Mutex
-	running bool
-	stopCh  chan struct{}
-	doneCh  chan struct{}
+	db              *sql.DB
+	outbox          *messaging.OutboxStore
+	options         GenerationSchedulerOptions
+	mu              sync.Mutex
+	running         bool
+	stopCh          chan struct{}
+	doneCh          chan struct{}
+	lastRecoveredID string
 }
 
 func NewGenerationScheduler(db *sql.DB, options ...GenerationSchedulerOptions) *GenerationScheduler {
@@ -137,6 +138,7 @@ func (s *GenerationScheduler) DispatchOnce(ctx context.Context) (int, error) {
 		SELECT user_id, min(created_at) as oldest_task_at
 		FROM xz_generation_tasks
 		WHERE upper(coalesce(nullif(task_status,''), status)) = 'QUEUED'
+		  AND upper(coalesce(type, '')) NOT IN ('PPT_GENERATION', 'PPT')
 		GROUP BY user_id
 		ORDER BY oldest_task_at ASC
 		LIMIT $1
@@ -228,6 +230,7 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 		FROM xz_generation_tasks
 		WHERE user_id=$1
 		  AND upper(coalesce(nullif(task_status,''), status)) = 'QUEUED'
+		  AND upper(coalesce(type, '')) NOT IN ('PPT_GENERATION', 'PPT')
 		ORDER BY created_at ASC
 		LIMIT $2
 		FOR UPDATE SKIP LOCKED
@@ -326,30 +329,142 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (int, 
 	if s.db == nil {
 		return 0, errors.New("scheduler database is nil")
 	}
-	// Issue #145 fencing: the stale-dispatch requeue is generation-atomic.
-	// The single UPDATE both reaps and bumps, so concurrent recoveries
-	// cannot fork the generation; the previous DISPATCHING owner is fenced
-	// by the bump. Eligibility is lease-aware against DB now(): a live
-	// scheduler/worker lease is never reaped, while rows without a lease
-	// keep the updated_at age backstop for mixed-version rollout.
+
 	threshold := time.Now().UTC().Add(-s.options.StaleDispatchTimeout)
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE xz_generation_tasks
-		SET task_status = 'QUEUED',
-		    execution_generation = execution_generation + 1,
-		    worker_id = NULL,
-		    lease_until = NULL,
-		    last_heartbeat_at = NULL,
-		    updated_at = $1
-		WHERE upper(coalesce(nullif(task_status,''), status)) = 'DISPATCHING'
-		  AND ((lease_until IS NULL AND updated_at < $2) OR (lease_until IS NOT NULL AND lease_until < now()))
-	`, time.Now().UTC().Format(time.RFC3339Nano), threshold.Format(time.RFC3339Nano))
+	thresholdStr := threshold.Format(time.RFC3339Nano)
+	nowStr := time.Now().UTC().Format(time.RFC3339Nano)
+
+	s.mu.Lock()
+	cursor := s.lastRecoveredID
+	s.mu.Unlock()
+
+	batchSize := s.options.BatchUsers
+	if batchSize <= 0 {
+		batchSize = 50
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return 0, err
 	}
-	affected, err := res.RowsAffected()
+	defer func() { _ = tx.Rollback() }()
+
+	// SQL eligibility prefilter (Issue #147): only candidate virgin dispatches or eventless tasks
+	// are selected. Ambiguous tasks (published, claimed, attempted, or with provider executions)
+	// are filtered out in SQL, so they NEVER occupy the LIMIT window and never cause recovery starvation.
+	// Keyset cursor ensures forward progress across large datasets.
+	query := `
+		SELECT t.id, t.execution_generation, coalesce(o.event_id, '')
+		FROM xz_generation_tasks t
+		LEFT JOIN outbox_events o ON o.aggregate_id = t.id AND o.aggregate_type = 'generation_task'
+		WHERE upper(coalesce(nullif(t.task_status,''), t.status)) = 'DISPATCHING'
+		  AND ((t.lease_until IS NULL AND t.updated_at < $1) OR (t.lease_until IS NOT NULL AND t.lease_until < now()))
+		  AND (
+		    (o.id IS NOT NULL
+		     AND o.status = 'pending'
+		     AND o.attempt_count = 0
+		     AND o.claimed_at IS NULL
+		     AND o.claim_owner IS NULL
+		     AND o.published_at IS NULL
+		     AND NOT EXISTS (SELECT 1 FROM provider_executions pe WHERE pe.task_id = t.id)
+		     AND NOT EXISTS (SELECT 1 FROM consumer_inbox ci WHERE ci.event_id = o.event_id)
+		     AND NOT EXISTS (SELECT 1 FROM outbox_events other WHERE other.aggregate_id = t.id AND other.event_id <> o.event_id)
+		    )
+		    OR
+		    (o.id IS NULL
+		     AND NOT EXISTS (SELECT 1 FROM outbox_events oe WHERE oe.aggregate_id = t.id)
+		     AND NOT EXISTS (SELECT 1 FROM provider_executions pe WHERE pe.task_id = t.id)
+		    )
+		  )
+		  AND ($2 = '' OR t.id > $2)
+		ORDER BY t.id ASC
+		LIMIT $3
+		FOR UPDATE OF t SKIP LOCKED
+	`
+
+	rows, err := tx.QueryContext(ctx, query, thresholdStr, cursor, batchSize)
 	if err != nil {
 		return 0, err
 	}
-	return int(affected), nil
+	defer rows.Close()
+
+	type recoverableTask struct {
+		id      string
+		gen     int64
+		eventID string
+	}
+	var candidates []recoverableTask
+	var lastID string
+	for rows.Next() {
+		var item recoverableTask
+		if err := rows.Scan(&item.id, &item.gen, &item.eventID); err != nil {
+			return 0, err
+		}
+		candidates = append(candidates, item)
+		lastID = item.id
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	rows.Close()
+
+	s.mu.Lock()
+	if len(candidates) < batchSize {
+		s.lastRecoveredID = ""
+	} else {
+		s.lastRecoveredID = lastID
+	}
+	s.mu.Unlock()
+
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	recovered := 0
+	for _, item := range candidates {
+		if item.eventID != "" {
+			res, delErr := tx.ExecContext(ctx, `
+				DELETE FROM outbox_events
+				WHERE event_id = $1
+				  AND aggregate_id = $2
+				  AND status = 'pending'
+				  AND attempt_count = 0
+				  AND claimed_at IS NULL
+				  AND claim_owner IS NULL
+				  AND published_at IS NULL
+			`, item.eventID, item.id)
+			if delErr != nil {
+				return 0, delErr
+			}
+			n, _ := res.RowsAffected()
+			if n != 1 {
+				continue
+			}
+		}
+
+		// Issue #145 fencing: bump generation on requeue to fence deposed attempts
+		updRes, updErr := tx.ExecContext(ctx, `
+			UPDATE xz_generation_tasks
+			SET task_status = 'QUEUED',
+			    execution_generation = execution_generation + 1,
+			    worker_id = NULL,
+			    lease_until = NULL,
+			    last_heartbeat_at = NULL,
+			    updated_at = $1
+			WHERE id = $2 AND execution_generation = $3
+		`, nowStr, item.id, item.gen)
+		if updErr != nil {
+			return 0, updErr
+		}
+		n, _ := updRes.RowsAffected()
+		if n == 1 {
+			recovered++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return recovered, nil
 }
