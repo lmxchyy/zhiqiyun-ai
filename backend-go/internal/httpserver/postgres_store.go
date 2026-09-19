@@ -2056,14 +2056,25 @@ func (s *postgresStore) unknownExecutionEligibleForGraceTx(ctx context.Context, 
 	var requestID sql.NullString
 	var metadata []byte
 	var unknownAt time.Time
-	err := tx.QueryRowContext(ctx, `select status, provider_request_id, result_metadata, coalesce(unknown_at, updated_at) from provider_executions where task_id=$1 order by attempt desc limit 1 for update`, taskID).Scan(&status, &requestID, &metadata, &unknownAt)
+	var lastCheckedAt sql.NullTime
+	err := tx.QueryRowContext(ctx, `select status, provider_request_id, result_metadata, coalesce(unknown_at, updated_at), last_checked_at from provider_executions where task_id=$1 order by attempt desc limit 1 for update`, taskID).Scan(&status, &requestID, &metadata, &unknownAt, &lastCheckedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return providerexecution.Status(status) == providerexecution.Unknown && (!requestID.Valid || requestID.String == "") && len(metadata) == 0 && time.Now().UTC().Sub(unknownAt.UTC()) >= grace, nil
+	if providerexecution.Status(status) != providerexecution.Unknown || len(metadata) != 0 || time.Now().UTC().Sub(unknownAt.UTC()) < grace {
+		return false, nil
+	}
+	// A request id is safe to release only after at least one durable GET
+	// reconciliation was attempted. This prevents the grace reaper from
+	// turning a possibly-submitted execution into a refund without first
+	// querying the provider.
+	if requestID.Valid && strings.TrimSpace(requestID.String) != "" && !lastCheckedAt.Valid {
+		return false, nil
+	}
+	return true, nil
 }
 func (s *postgresStore) FailGenerationTaskDurable(id string, message string) (generationTask, error) {
 	return s.failGenerationTaskDurable(id, message, nil, 0)

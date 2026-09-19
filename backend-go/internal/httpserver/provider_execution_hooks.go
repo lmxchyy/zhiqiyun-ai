@@ -7,13 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 	"xianzhi-ai/backend-go/internal/config"
 	pe "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
-const providerExecutionTaskParam = "_provider_execution_task_id"
+const (
+	providerExecutionTaskParam  = "_provider_execution_task_id"
+	providerReconcileRetryDelay = 30 * time.Second
+)
 
 func providerExecutionHooks(store platformStore, enabled bool) generation.ExecutionHooks {
 	if !enabled {
@@ -122,10 +126,24 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 					Get(context.Context, string) (any, error)
 				}); ok {
 					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+					if queryErr != nil {
+						errorCode, _, _ := providerFailureDetails(queryErr)
+						if strings.TrimSpace(errorCode) == "" {
+							errorCode = "PROVIDER_GET_ERROR"
+						}
+						if latest.Status != pe.Unknown {
+							if transitionErr := s.Transition(ctx, latest.ID, pe.Unknown, latest.ProviderRequestID, ptrString(string(pe.ProviderUnknown)), ptrString(queryErr.Error())); transitionErr != nil {
+								return nil, transitionErr
+							}
+						}
+						if recordErr := s.RecordProviderCheckFailure(ctx, latest.ID, errorCode, queryErr.Error(), providerReconcileRetryDelay); recordErr != nil {
+							return nil, recordErr
+						}
+					}
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
 						if status == pe.Failed {
-							if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+							if transitionErr := s.TransitionWithErrorCode(ctx, latest.ID, status, latest.ProviderRequestID, ptrString("PROVIDER_ASYNC_GENERATION_FAILED"), ptrString(string(pe.ProviderUnknown)), ptrString("provider reported failed status")); transitionErr != nil {
 								return nil, transitionErr
 							}
 							return nil, pe.ErrProviderExecutionFailed
@@ -145,6 +163,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 							return images, nil
 						}
 						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
+						if scheduleErr := s.ScheduleNextCheck(ctx, latest.ID, providerReconcileRetryDelay); scheduleErr != nil {
+							return nil, scheduleErr
+						}
 						return nil, pe.ErrProviderStillProcessing
 					}
 				}
@@ -268,13 +289,25 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 					diag.ProviderGet = true
 					if queryErr != nil {
 						observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
+						errorCode, _, _ := providerFailureDetails(queryErr)
+						if strings.TrimSpace(errorCode) == "" {
+							errorCode = "PROVIDER_GET_ERROR"
+						}
+						if latest.Status != pe.Unknown {
+							if transitionErr := s.Transition(ctx, latest.ID, pe.Unknown, latest.ProviderRequestID, ptrString(string(pe.ProviderUnknown)), ptrString(queryErr.Error())); transitionErr != nil {
+								return nil, transitionErr
+							}
+						}
+						if recordErr := s.RecordProviderCheckFailure(ctx, latest.ID, errorCode, queryErr.Error(), providerReconcileRetryDelay); recordErr != nil {
+							return nil, recordErr
+						}
 					}
 					if queryErr == nil {
 						status := providerExecutionStatus(result)
 						switch status {
 						case pe.Succeeded, pe.Failed:
 							if status == pe.Failed {
-								if transitionErr := s.Transition(ctx, latest.ID, status, latest.ProviderRequestID, nil, nil); transitionErr != nil {
+								if transitionErr := s.TransitionWithErrorCode(ctx, latest.ID, status, latest.ProviderRequestID, ptrString("PROVIDER_ASYNC_GENERATION_FAILED"), ptrString(string(pe.ProviderUnknown)), ptrString("provider reported failed status")); transitionErr != nil {
 									observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeTransitionFailed))
 									return nil, transitionErr
 								}
@@ -300,6 +333,9 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 							if transitionErr := s.Transition(ctx, latest.ID, target, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil); transitionErr != nil {
 								observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeTransitionFailed))
 								return nil, transitionErr
+							}
+							if scheduleErr := s.ScheduleNextCheck(ctx, latest.ID, providerReconcileRetryDelay); scheduleErr != nil {
+								return nil, scheduleErr
 							}
 							return nil, wrapRecoveryError(RecoveryCodeGetProcessing, RecoveryStageGet, diag, pe.ErrProviderStillProcessing)
 						}
@@ -408,7 +444,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 		requestIDPtr = ptrString(requestID)
 	}
 	if status == pe.Failed {
-		_ = s.Transition(ctx, e.ID, pe.Failed, requestIDPtr, ptrString(string(pe.ProviderUnknown)), ptrString("provider returned failed result"))
+		_ = s.TransitionWithErrorCode(ctx, e.ID, pe.Failed, requestIDPtr, ptrString("PROVIDER_ASYNC_GENERATION_FAILED"), ptrString(string(pe.ProviderUnknown)), ptrString("provider returned failed result"))
 		return nil, wrapRecoveryError(RecoveryCodeGetProviderFailed, RecoveryStageCreate, diag, pe.ErrProviderExecutionFailed)
 	}
 	if status == pe.Submitted || status == pe.Processing {

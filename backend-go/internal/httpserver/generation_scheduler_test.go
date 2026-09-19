@@ -76,6 +76,7 @@ func TestFairScheduler_PostgresIntegration(t *testing.T) {
 
 	defer func() {
 		_, _ = db.ExecContext(ctx, "DELETE FROM outbox_events WHERE aggregate_id LIKE '%"+suffix+"%'")
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id LIKE '%"+suffix+"%'")
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_generation_tasks WHERE user_id IN ($1, $2)", userA, userB)
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_users WHERE id IN ($1, $2)", userA, userB)
 		_, _ = db.ExecContext(ctx, "DELETE FROM xz_plans WHERE id = $1", planID)
@@ -190,5 +191,45 @@ func TestFairScheduler_PostgresIntegration(t *testing.T) {
 	}
 	if staleStatus != "QUEUED" {
 		t.Fatalf("stale task status after recovery = %s, want QUEUED", staleStatus)
+	}
+
+	// A published original event must not strand an execution that already has
+	// a provider request id. Recovery requeues it for GET-only reconciliation;
+	// it must not delete or recreate the provider execution.
+	reconcileTaskID := fmt.Sprintf("task_sched_reconcile_%s", suffix)
+	reconcileEventID := "evt_sched_reconcile_" + suffix
+	reconcileTime := time.Now().UTC().Add(-120 * time.Second).Format(time.RFC3339Nano)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO xz_generation_tasks (id, user_id, type, status, task_status, execution_generation, created_at, updated_at, lease_until)
+		VALUES ($1, $2, 'VIDEO', 'PROCESSING', 'DISPATCHING', 1, $3, $3, $4::timestamptz)
+	`, reconcileTaskID, userA, reconcileTime, reconcileTime); err != nil {
+		t.Fatalf("seed reconcile task: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO provider_executions (task_id, provider, provider_model, capability, attempt, status, request_fingerprint, provider_request_id, unknown_at, last_checked_at, next_check_at)
+		VALUES ($1, 'queryable-video', 'queryable-video', 'video', 1, 'unknown', repeat('a', 64), 'provider-request-reconcile', $2, $2, $2)
+	`, reconcileTaskID, reconcileTime); err != nil {
+		t.Fatalf("seed reconcile execution: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO outbox_events (event_id, aggregate_type, aggregate_id, event_type, payload, status, published_at)
+		VALUES ($1, 'generation_task', $2, 'generation.video.canary', '{}'::jsonb, 'published', $3)
+	`, reconcileEventID, reconcileTaskID, reconcileTime); err != nil {
+		t.Fatalf("seed published reconcile event: %v", err)
+	}
+	recovered, err = scheduler.RecoverStaleDispatches(ctx)
+	if err != nil {
+		t.Fatalf("RecoverStaleDispatches provider reconcile failed: %v", err)
+	}
+	if recovered < 1 {
+		t.Fatalf("provider reconcile recovered=%d, want at least 1", recovered)
+	}
+	var reconcileStatus string
+	var reconcileGeneration int64
+	if err := db.QueryRowContext(ctx, `SELECT task_status, execution_generation FROM xz_generation_tasks WHERE id=$1`, reconcileTaskID).Scan(&reconcileStatus, &reconcileGeneration); err != nil {
+		t.Fatalf("query reconcile task: %v", err)
+	}
+	if reconcileStatus != "QUEUED" || reconcileGeneration != 2 {
+		t.Fatalf("reconcile task status=%s generation=%d, want QUEUED/2", reconcileStatus, reconcileGeneration)
 	}
 }

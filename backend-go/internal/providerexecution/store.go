@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 type Store struct{ DB *sql.DB }
@@ -216,6 +217,28 @@ func taskGenerationForBarrier(tx *sql.Tx, ctx context.Context, taskID string) *i
 		value = 1
 	}
 	return &value
+}
+
+// ScheduleNextCheck records a bounded, durable backoff for provider GET
+// reconciliation. It deliberately does not change the lifecycle status or
+// create a new provider attempt, so retries remain idempotent.
+func (s *Store) ScheduleNextCheck(ctx context.Context, id int64, delay time.Duration) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET last_checked_at=now(),next_check_at=now()+$1::interval,updated_at=now() WHERE id=$2`, delay.String(), id)
+	return err
+}
+
+// RecordProviderCheckFailure preserves the latest safe GET diagnostic without
+// resetting unknown_at. Keeping unknown_at monotonic is what makes the
+// unknown/possibly_submitted reconciliation window bounded.
+func (s *Store) RecordProviderCheckFailure(ctx context.Context, id int64, errorCode, message string, delay time.Duration) error {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET unknown_at=COALESCE(unknown_at,now()),error_code=COALESCE(NULLIF($1,''),error_code),error_class=COALESCE(NULLIF(error_class,''),'provider_unknown'),last_error=$2,last_checked_at=now(),next_check_at=now()+$3::interval,updated_at=now() WHERE id=$4`, errorCode, message, delay.String(), id)
+	return err
 }
 
 func (s *Store) MarkUnknown(ctx context.Context, id int64, class ErrorClass, msg string) error {
