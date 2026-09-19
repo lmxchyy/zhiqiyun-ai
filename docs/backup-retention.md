@@ -78,6 +78,12 @@ does not invoke retention. The retention phase delegates to the bounded apply
 implementation, which owns the fresh dry-run, immutable manifest, exact-file
 delete, read-only OBS HEAD checks, and post-delete verification.
 
+Production wiring is intentionally staged. `ops/systemd/backup-retention-dry-run.service`
+and its timer run the existing inventory command every six hours and emit
+candidate/protection/reclaim metrics without deleting anything. Install and
+observe this unit for one or two cycles before enabling the existing
+scheduler/apply path.
+
 Automatic apply is disabled unless production explicitly sets
 `RETENTION_AUTO_APPLY_ENABLED=true`. The defaults are:
 

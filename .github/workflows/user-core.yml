@@ -82,10 +82,12 @@ jobs:
         run: |
           bash -n ops/backup-retention.sh
           bash -n ops/backup-retention-apply.sh
+          bash -n ops/backup-retention-dry-run-report.sh
+          bash -n tests/backup-retention-dry-run.harness.sh
           bash -n ops/backup-retention-verify-remote.sh
           bash -n ops/backup-retention-scheduler.sh
           bash -n tests/backup-retention-automation.harness.sh
-          node --test tests/backup-retention.test.mjs tests/backup-retention-automation.test.mjs
+          node --test tests/backup-retention.test.mjs tests/backup-retention-automation.test.mjs tests/backup-retention-dry-run.test.mjs
 
       - name: Test backup offsite uploader
         run: |

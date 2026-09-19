@@ -42,3 +42,15 @@ test("automatic retention requires explicit enablement and remains bounded", () 
   assert.match(source, /backup-retention\.sh/);
   assert.doesNotMatch(source, /deleteObject|delete_object|find\s+.*-delete|xargs\s+rm/);
 });
+
+test("production retention dry-run wiring is read-only and observable", async () => {
+  const report = await readFile(new URL("../ops/backup-retention-dry-run-report.sh", import.meta.url), "utf8");
+  const service = await readFile(new URL("../ops/systemd/backup-retention-dry-run.service", import.meta.url), "utf8");
+  const timer = await readFile(new URL("../ops/systemd/backup-retention-dry-run.timer", import.meta.url), "utf8");
+  assert.match(report, /RETENTION_CANDIDATE_COUNT/);
+  assert.match(report, /RETENTION_LATEST_BACKUP_PRESERVED/);
+  assert.match(service, /backup-retention-dry-run-report\.sh/);
+  assert.match(timer, /OnUnitActiveSec=6h/);
+  assert.match(timer, /backup-retention-dry-run\.service/);
+  assert.doesNotMatch(report, /rm\s+--|docker\s+system\s+prune/);
+});

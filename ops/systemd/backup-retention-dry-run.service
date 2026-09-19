@@ -1,0 +1,14 @@
+[Unit]
+Description=Read-only PostgreSQL backup retention audit
+After=network-online.target backup-offsite-upload.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/zhiqiyun-ai
+Environment=PROJECT_DIR=/opt/zhiqiyun-ai
+Environment=BACKUP_ROOT=/opt/zhiqiyun-ai/backups
+ExecStart=/usr/bin/env bash /opt/zhiqiyun-ai/ops/backup-retention-dry-run-report.sh
+NoNewPrivileges=true
+PrivateTmp=true
