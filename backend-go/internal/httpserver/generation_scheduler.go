@@ -361,12 +361,19 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// SQL eligibility prefilter (Issue #147): only candidate virgin dispatches or eventless tasks
-	// are selected. Ambiguous tasks (published, claimed, attempted, or with provider executions)
-	// are filtered out in SQL, so they NEVER occupy the LIMIT window and never cause recovery starvation.
+	// SQL eligibility prefilter (Issue #147): only candidate virgin dispatches or
+	// due provider-reconciliation tasks are selected. A due execution with a
+	// request id is GET-only recovery work; it must be allowed back through the
+	// queue even when its original outbox event was already published.
 	// Keyset cursor ensures forward progress across large datasets.
 	query := `
-		SELECT t.id, t.execution_generation, coalesce(o.event_id, '')
+		SELECT t.id, t.execution_generation, coalesce(o.event_id, ''), EXISTS (
+		SELECT 1 FROM provider_executions reconcile_pe
+		WHERE reconcile_pe.task_id = t.id
+		  AND reconcile_pe.status IN ('unknown','submitting','submitted','processing')
+		  AND reconcile_pe.provider_request_id IS NOT NULL
+		  AND (reconcile_pe.next_check_at IS NULL OR reconcile_pe.next_check_at <= now())
+	) AS provider_reconcile
 		FROM xz_generation_tasks t
 		LEFT JOIN outbox_events o ON o.aggregate_id = t.id AND o.aggregate_type = 'generation_task'
 		WHERE upper(coalesce(nullif(t.task_status,''), t.status)) = 'DISPATCHING'
@@ -387,6 +394,14 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 		     AND NOT EXISTS (SELECT 1 FROM outbox_events oe WHERE oe.aggregate_id = t.id)
 		     AND NOT EXISTS (SELECT 1 FROM provider_executions pe WHERE pe.task_id = t.id)
 		    )
+		    OR
+		    EXISTS (
+		      SELECT 1 FROM provider_executions pe
+		      WHERE pe.task_id = t.id
+		        AND pe.status IN ('unknown','submitting','submitted','processing')
+		        AND pe.provider_request_id IS NOT NULL
+		        AND (pe.next_check_at IS NULL OR pe.next_check_at <= now())
+		    )
 		  )
 		  AND ($2 = '' OR t.id > $2)
 		ORDER BY t.id ASC
@@ -401,15 +416,16 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 	defer rows.Close()
 
 	type recoverableTask struct {
-		id      string
-		gen     int64
-		eventID string
+		id                string
+		gen               int64
+		eventID           string
+		providerReconcile bool
 	}
 	var candidates []recoverableTask
 	var lastID string
 	for rows.Next() {
 		var item recoverableTask
-		if err := rows.Scan(&item.id, &item.gen, &item.eventID); err != nil {
+		if err := rows.Scan(&item.id, &item.gen, &item.eventID, &item.providerReconcile); err != nil {
 			return 0, err
 		}
 		candidates = append(candidates, item)
@@ -449,7 +465,7 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 				return 0, delErr
 			}
 			n, _ := res.RowsAffected()
-			if n != 1 {
+			if n != 1 && !item.providerReconcile {
 				continue
 			}
 		}

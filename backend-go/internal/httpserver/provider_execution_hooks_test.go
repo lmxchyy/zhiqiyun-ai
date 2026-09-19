@@ -29,6 +29,21 @@ type failedRecoveryVideoProvider struct {
 	getCalls    atomic.Int32
 }
 
+type unavailableRecoveryVideoProvider struct {
+	createCalls atomic.Int32
+	getCalls    atomic.Int32
+}
+
+func (p *unavailableRecoveryVideoProvider) DefaultModel() string { return "queryable-video" }
+func (p *unavailableRecoveryVideoProvider) Create(context.Context, generation.CreateRequest) (any, error) {
+	p.createCalls.Add(1)
+	return nil, errors.New("Create must not run during unavailable recovery")
+}
+func (p *unavailableRecoveryVideoProvider) Get(context.Context, string) (any, error) {
+	p.getCalls.Add(1)
+	return nil, errors.New("provider GET unavailable")
+}
+
 func (p *failedRecoveryVideoProvider) DefaultModel() string { return "queryable-video" }
 
 func (p *failedRecoveryVideoProvider) Create(context.Context, generation.CreateRequest) (any, error) {
@@ -165,6 +180,49 @@ func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
 	}
 	if latest.Status != pe.Failed {
 		t.Fatalf("execution status=%s, want failed", latest.Status)
+	}
+	if latest.ErrorCode == nil || *latest.ErrorCode != "PROVIDER_ASYNC_GENERATION_FAILED" {
+		t.Fatalf("execution error_code=%v, want PROVIDER_ASYNC_GENERATION_FAILED", latest.ErrorCode)
+	}
+}
+
+func TestGuardedVideoGetFailurePersistsBoundedReconcileState(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	taskID := "hook-get-outage-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM provider_executions WHERE task_id=$1", taskID)
+	}()
+
+	store := pe.NewStore(db)
+	seedFailedRecoveryExecution(t, store, taskID, pe.Unknown)
+	provider := &unavailableRecoveryVideoProvider{}
+	_, err := guardedVideo(ctx, generation.CreateRequest{
+		Model: "queryable-video",
+		Params: map[string]any{
+			providerExecutionTaskParam: taskID,
+			"provider":                 "queryable-video",
+		},
+	}, provider, store, nil)
+	if !errors.Is(err, pe.ErrUnknownResubmitBlocked) {
+		t.Fatalf("GET outage should remain blocked, err=%v", err)
+	}
+	if provider.createCalls.Load() != 0 || provider.getCalls.Load() != 1 {
+		t.Fatalf("GET outage creates=%d gets=%d", provider.createCalls.Load(), provider.getCalls.Load())
+	}
+	latest, err := store.GetLatestByTask(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Status != pe.Unknown || latest.ErrorCode == nil || *latest.ErrorCode != "PROVIDER_GET_ERROR" {
+		t.Fatalf("status=%s error_code=%v, want unknown/PROVIDER_GET_ERROR", latest.Status, latest.ErrorCode)
+	}
+	if latest.ErrorClass == nil || *latest.ErrorClass != string(pe.ProviderUnknown) {
+		t.Fatalf("error_class=%v, want %s", latest.ErrorClass, pe.ProviderUnknown)
+	}
+	if latest.LastCheckedAt == nil || latest.NextCheckAt == nil || !latest.NextCheckAt.After(*latest.LastCheckedAt) {
+		t.Fatalf("reconcile backoff not persisted: last_checked=%v next_check=%v", latest.LastCheckedAt, latest.NextCheckAt)
 	}
 }
 

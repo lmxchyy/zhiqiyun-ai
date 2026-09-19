@@ -283,6 +283,35 @@ func (a api) repairStaleGenerationTasks(maxAge time.Duration) {
 	a.repairStaleGenerationTasksWithContext(context.Background(), maxAge)
 }
 
+// reconcileStaleProviderExecution re-enters the normal guarded provider path
+// using the existing task id. The hook performs GET-only recovery for an
+// existing request id; it never creates a second provider job.
+func (a api) reconcileStaleProviderExecution(task generationTask) error {
+	req := generation.CreateRequest{
+		UserID:     task.UserID,
+		Type:       task.Type,
+		Prompt:     task.Prompt,
+		Model:      task.Model,
+		Params:     cloneAnyMap(task.Params),
+		ModuleCode: stringValue(task.Params["moduleCode"]),
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Params[providerExecutionTaskParam] = task.ID
+	service, err := a.retryGenerationService(adminUser{ID: task.UserID}, req)
+	if err != nil {
+		return err
+	}
+	if isVideoGenerationRequest(task.Type) {
+		return a.runVideoGenerationTask(task.ID, service, req)
+	}
+	if isImageGenerationRequest(task.Type) {
+		return a.runGenerationTask(task.ID, service, req)
+	}
+	return fmt.Errorf("unsupported stale generation task type %q", task.Type)
+}
+
 func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge time.Duration) {
 	tasks, err := a.store.ListGenerationTasks()
 	if err != nil {
@@ -339,11 +368,32 @@ func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge t
 				continue
 			}
 			switch execution.Status {
-			case providerexecution.Unknown:
-				// An ambiguous submission is first recoverable by querying the provider.
-				// If no request id or result ever appeared, release only after the
-				// explicit safety grace period via the durable failure transaction.
-				if execution.ProviderRequestID != nil || len(execution.ResultMetadata) > 0 {
+			case providerexecution.Unknown, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing:
+				// A durable provider request id changes stale repair from a local
+				// timeout into a bounded GET-only reconciliation attempt. Respect
+				// the provider execution backoff so an outage cannot hot-loop.
+				if execution.ProviderRequestID != nil && strings.TrimSpace(*execution.ProviderRequestID) != "" {
+					if execution.NextCheckAt != nil && now.Before(execution.NextCheckAt.UTC()) {
+						continue
+					}
+					reconcileErr := a.reconcileStaleProviderExecution(task)
+					if reconcileErr != nil {
+						latest, latestFound, latestErr := providerExecutionForRetry(a.store, a.cfg, task.ID)
+						if latestErr == nil && latestFound && latest.Status == providerexecution.Unknown {
+							unknownAt := latest.UnknownAt
+							if unknownAt == nil {
+								unknownAt = &latest.UpdatedAt
+							}
+							if now.Sub(unknownAt.UTC()) >= a.unknownGenerationGrace {
+								_, _ = failGenerationTaskUnknownGraceWithFencing(a.store, task.ID, fmt.Sprintf("provider reconciliation exceeded %d minutes", int(a.unknownGenerationGrace.Minutes())), a.unknownGenerationGrace, observedGen)
+							}
+						}
+					}
+					continue
+				}
+				// An ambiguous submission without a request id is not safe to
+				// resubmit. Release only after the explicit safety grace period.
+				if execution.Status != providerexecution.Unknown || len(execution.ResultMetadata) > 0 {
 					continue
 				}
 				unknownAt := execution.UnknownAt
@@ -357,11 +407,17 @@ func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge t
 				// race to a newer claim is a no-op, never a release.
 				_, _ = failGenerationTaskUnknownGraceWithFencing(a.store, task.ID, fmt.Sprintf("generation task exceeded %d minutes", int(taskMaxAge.Minutes())), a.unknownGenerationGrace, observedGen)
 				continue
-			case providerexecution.Prepared, providerexecution.Submitting, providerexecution.Submitted, providerexecution.Processing, providerexecution.Succeeded:
+			case providerexecution.Prepared, providerexecution.Succeeded:
 				continue
 			case providerexecution.Failed:
-				if execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
-					continue
+				// A provider-reported terminal failure is safe to settle even
+				// when its diagnostic lifecycle class is provider_unknown. The
+				// explicit error code distinguishes it from a failed submit whose
+				// outcome may still be ambiguous.
+				if execution.ErrorCode == nil || *execution.ErrorCode != "PROVIDER_ASYNC_GENERATION_FAILED" {
+					if execution.ErrorClass == nil || (*execution.ErrorClass != string(providerexecution.DefinitiveNotSubmitted) && *execution.ErrorClass != string(providerexecution.RetryableBeforeSubmit)) {
+						continue
+					}
 				}
 			}
 		}
