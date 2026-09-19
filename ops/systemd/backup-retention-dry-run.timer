@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic read-only PostgreSQL backup retention audit
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=backup-retention-dry-run.service
+
+[Install]
+WantedBy=timers.target
