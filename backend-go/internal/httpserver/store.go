@@ -3820,7 +3820,7 @@ func mutateJSONGenerationFailure(data *platformData, points *JSONPersonalPointSt
 			task.BillingStatus = billingStatusBillingFailed
 		}
 		task.Progress = 100
-		task.Error = map[string]any{"message": message}
+		task.Error = generationFailureErrorPayload(message)
 		task.FailureReason = message
 		task.UpdatedAt = now
 		task.WorkerFinishedAt = now
@@ -3869,7 +3869,7 @@ func mutateJSONGenerationDurableFailure(data *platformData, points *JSONPersonal
 		task.Status = "FAILED"
 		task.TaskStatus = taskStatusFailed
 		task.Progress = 100
-		task.Error = map[string]any{"message": message}
+		task.Error = generationFailureErrorPayload(message)
 		task.FailureReason = message
 		task.UpdatedAt = now
 		task.WorkerFinishedAt = now

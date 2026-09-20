@@ -2022,7 +2022,7 @@ func (s *postgresStore) mutatePostgresGenerationFailureTx(ctx context.Context, t
 		task.BillingStatus = billingStatusBillingFailed
 	}
 	task.Progress = 100
-	task.Error = map[string]any{"message": message}
+	task.Error = generationFailureErrorPayload(message)
 	task.FailureReason = message
 	task.UpdatedAt = now
 	task.WorkerFinishedAt = now
@@ -2189,7 +2189,7 @@ func (s *postgresStore) failGenerationTaskDurable(id string, message string, unk
 	task.Status = "FAILED"
 	task.TaskStatus = taskStatusFailed
 	task.Progress = 100
-	task.Error = map[string]any{"message": message}
+	task.Error = generationFailureErrorPayload(message)
 	task.FailureReason = message
 	task.UpdatedAt = now
 	task.WorkerFinishedAt = now

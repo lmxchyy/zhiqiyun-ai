@@ -19,6 +19,8 @@ const (
 
 var (
 	videoPromptDurationPattern       = regexp.MustCompile(`(?i)(?:时长|持续|duration|length|生成|视频)?\s*(\d{1,3})\s*(?:秒|s|seconds?)`)
+	videoPromptTimelineRangePattern  = regexp.MustCompile(`(?i)(?:第\s*)?\d{1,3}\s*(?:秒|s)?\s*[-–—~～至到]\s*\d{1,3}\s*(?:秒|s)`)
+	videoPromptClockRangePattern     = regexp.MustCompile(`(?i)\b\d{1,2}:\d{2}(?::\d{2})?\s*[-–—~～至到]\s*\d{1,2}:\d{2}(?::\d{2})?\b`)
 	videoPromptReferencePattern      = regexp.MustCompile(`(?i)(参考(?:图|图片|素材)|根据(?:我?上传|提供|这|该)?(?:的)?(?:图片|图像|照片)|(?:第\s*)?(?:一|二|三|1|2|3)\s*(?:张)?\s*(?:参考图|图片)|\breference\s+images?\b|\breference\s+photos?\b|\binput\s+images?\b|\buploaded\s+images?\b)`)
 	videoPromptReferenceCountPattern = regexp.MustCompile(`(?i)(?:\d{1,2}|一|二|三|四|五|六|七)\s*(?:张|个)?\s*(?:参考图|参考图片|图片|图像|reference\s+images?)`)
 )
@@ -32,7 +34,9 @@ type videoPromptPreflightResult struct {
 func inspectVideoPromptPreflight(prompt string, params map[string]any, taskType string) videoPromptPreflightResult {
 	prompt = strings.TrimSpace(prompt)
 	result := videoPromptPreflightResult{}
-	for _, match := range videoPromptDurationPattern.FindAllStringSubmatch(prompt, -1) {
+	durationPrompt := videoPromptTimelineRangePattern.ReplaceAllString(prompt, " ")
+	durationPrompt = videoPromptClockRangePattern.ReplaceAllString(durationPrompt, " ")
+	for _, match := range videoPromptDurationPattern.FindAllStringSubmatch(durationPrompt, -1) {
 		if len(match) < 2 {
 			continue
 		}
@@ -67,7 +71,7 @@ func inspectVideoPromptPreflight(prompt string, params map[string]any, taskType 
 		pattern *regexp.Regexp
 	}{
 		{"multi_scene", regexp.MustCompile(`(?i)多场景|多个场景|分场景|multi[-\s]?scene|multiple\s+scenes`)},
-		{"multi_shot", regexp.MustCompile(`(?i)多镜头|多个镜头|镜头切换|multi[-\s]?shot|multiple\s+shots|shot\s+list`)},
+		{"multi_shot", regexp.MustCompile(`(?i)多镜头|多个镜头|镜头切换|分镜|(?:镜头|shot)\s*(?:\d+|[一二三四五六七八九十])|multi[-\s]?shot|multiple\s+shots|shot\s+list`)},
 		{"subtitles", regexp.MustCompile(`(?i)字幕|屏幕文字|标题字卡|subtitles?|on[-\s]?screen\s+text`)},
 		{"voiceover", regexp.MustCompile(`(?i)配音|旁白|口播|voice[-\s]?over|narration|voice\s+acting`)},
 		{"synchronized_audio", regexp.MustCompile(`(?i)同步音频|同步声音|音画同步|同步配乐|sync(?:hronized)?\s+(?:audio|sound)|lip[-\s]?sync`)},
@@ -111,6 +115,15 @@ func parameterInt(params map[string]any, key string) int {
 func videoPromptHash(prompt string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(prompt)))
 	return hex.EncodeToString(digest[:])
+}
+
+func generationFailureErrorPayload(message string) map[string]any {
+	payload := map[string]any{"message": message}
+	if strings.Contains(strings.TrimSpace(message), "上游未能完成本次视频生成") {
+		payload["code"] = "PROVIDER_ASYNC_GENERATION_FAILED"
+		payload["safe_error_message"] = message
+	}
+	return payload
 }
 
 func videoPromptPreflightTelemetry(task generationTask, reqType, model string, params map[string]any) {
