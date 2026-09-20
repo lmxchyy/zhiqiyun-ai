@@ -1,3 +1,5 @@
+export * from "./videoPromptPreflight.js";
+
 export type WorkspaceRole = "user" | "agent" | "admin";
 
 export type AppRole =
@@ -196,6 +198,11 @@ export interface GenerationTask {
   createdAt?: string;
   updatedAt?: string;
   workerFinishedAt?: string;
+  billingStatus?: string;
+  releasedPoints?: number;
+  refundedPoints?: number;
+  failureReason?: string;
+  error?: unknown;
 }
 
 export interface GeneratedImage {

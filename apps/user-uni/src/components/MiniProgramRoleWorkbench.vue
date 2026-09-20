@@ -743,7 +743,7 @@
 </template>
 
 <script setup lang="ts">
-import { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus } from "@xianzhi/shared-types";
+import { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, inspectVideoPromptPreflight, videoGenerationFailureMessage } from "@xianzhi/shared-types";
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { onBackPress, onPullDownRefresh, onReachBottom, onShareAppMessage } from "@dcloudio/uni-app";
@@ -3413,7 +3413,28 @@ function createImageRequestUUID() {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function confirmVideoPromptPreflight(prompt: string): Promise<boolean> {
+  const preflight = inspectVideoPromptPreflight({
+    prompt,
+    duration: videoParameterValues.value.duration as string | number | undefined,
+    inputMode: videoGenerationMode.value,
+    referenceImageCount: creationReferencePaths.value.length,
+  });
+  if (!preflight.warnings.length) return Promise.resolve(true);
+  return new Promise(resolve => {
+    uni.showModal({
+      title: "生成前提示",
+      content: `${preflight.warnings.map(item => `• ${item.message}`).join("\n")}\n\n仍要继续生成吗？`,
+      confirmText: "继续生成",
+      cancelText: "返回修改",
+      success: result => resolve(result.confirm),
+      fail: () => resolve(false),
+    });
+  });
+}
+
 async function submitCreation(prompt: string) {
+  if (creationMode.value === "video" && !(await confirmVideoPromptPreflight(prompt))) return;
   if (!validateActiveInspirationReferences()) return;
   if (!validateFreeImageEditRequest()) return;
   const startedAt = Date.now();
@@ -3734,6 +3755,9 @@ async function pollGenerationTask(
       let resultId = "";
       let resultUrl = "";
       let pointCost: number | undefined;
+      let billingStatus = "";
+      let releasedPoints: number | undefined;
+      let refundedPoints: number | undefined;
       let failureReason = "";
 
       if (mode === "ppt") {
@@ -3758,13 +3782,24 @@ async function pollGenerationTask(
         resultId = resultIds[0] || rowString(taskRecord, "resultId", "assetId");
         resultUrl = rowString(taskRecord, "outputUrl", "resultUrl", "imageUrl", "thumbnailUrl");
         pointCost = Number.isFinite(task.pointCost) ? task.pointCost : undefined;
+        billingStatus = rowString(taskRecord, "billingStatus", "billing_status");
+        releasedPoints = rowNumber(taskRecord, "releasedPoints") || rowNumber(taskRecord, "released_points");
+        refundedPoints = rowNumber(taskRecord, "refundedPoints") || rowNumber(taskRecord, "refunded_points");
         const taskError = taskRecord.error && typeof taskRecord.error === "object"
           && !Array.isArray(taskRecord.error)
           ? taskRecord.error as AnyRecord
           : {};
-        failureReason = rowString(taskRecord, "failureReason", "failure_reason", "errorMessage")
+        failureReason = videoGenerationFailureMessage({
+          errorCode: rowString(taskRecord, "errorCode", "error_code"),
+          code: rowString(taskRecord, "code"),
+          failureReason: rowString(taskRecord, "failureReason", "failure_reason", "errorMessage"),
+          error: taskRecord.error || rowString(taskError, "message", "error"),
+          billingStatus,
+          releasedPoints,
+          refundedPoints,
+        }, rowString(taskRecord, "failureReason", "failure_reason", "errorMessage")
           || rowString(taskError, "message", "error")
-          || (typeof taskRecord.error === "string" ? taskRecord.error : "");
+          || (typeof taskRecord.error === "string" ? taskRecord.error : ""));
       }
 
       consecutiveErrors = 0;
@@ -3786,6 +3821,9 @@ async function pollGenerationTask(
         resultUrl,
         resultType: mode,
         pointCost,
+        billingStatus,
+        releasedPoints,
+        refundedPoints,
       };
 
       if (succeeded || failed) {
@@ -3799,7 +3837,7 @@ async function pollGenerationTask(
           await loadAssets(false);
           uni.showToast({ title: "生成完成", icon: "success" });
         } else {
-          uni.showToast({ title: "生成失败，请检查后重试", icon: "none" });
+          uni.showToast({ title: (failureReason || "生成失败，请检查后重试").slice(0, 40), icon: "none", duration: 3500 });
         }
         return;
       }

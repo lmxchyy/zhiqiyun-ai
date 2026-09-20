@@ -1,4 +1,4 @@
-import { GENERATION_QUEUED_LABEL, generationDisplayStatus, isGenerationQueued } from "@xianzhi/shared-types";
+import { GENERATION_QUEUED_LABEL, generationDisplayStatus, isGenerationQueued, videoGenerationFailureMessage } from "@xianzhi/shared-types";
 import type { AdminRecord } from "../stores/admin";
 
 export type VideoModelOption = {
@@ -205,6 +205,9 @@ export type VideoHistoryEntry = {
   availability?: string;
   availabilityReason?: string;
   errorMessage?: string;
+  billingStatus?: string;
+  releasedPoints?: number;
+  refundedPoints?: number;
   userId?: string;
 };
 
@@ -342,6 +345,9 @@ export function normalizeVideoHistoryEntry(
     availabilityReason,
     errorMessage: entry.errorMessage ? videoErrorMessage(entry.errorMessage) : "",
     taskStatus: entry.taskStatus,
+    billingStatus: entry.billingStatus ? String(entry.billingStatus) : undefined,
+    releasedPoints: Number.isFinite(Number(entry.releasedPoints)) ? Number(entry.releasedPoints) : undefined,
+    refundedPoints: Number.isFinite(Number(entry.refundedPoints)) ? Number(entry.refundedPoints) : undefined,
     userId: entry.userId ? String(entry.userId) : undefined
   };
 }
@@ -390,7 +396,18 @@ export function taskToVideoHistoryEntry(
     status,
     availability,
     availabilityReason,
-    errorMessage: videoErrorMessage(task.failureReason ?? task.errorMessage ?? task.error ?? task.failReason),
+    errorMessage: videoGenerationFailureMessage({
+      errorCode: task.errorCode ?? task.error_code,
+      code: task.code,
+      failureReason: task.failureReason ?? task.errorMessage ?? task.failReason,
+      error: task.error,
+      billingStatus: task.billingStatus ?? task.billing_status,
+      releasedPoints: task.releasedPoints ?? task.released_points,
+      refundedPoints: task.refundedPoints ?? task.refunded_points,
+    }, videoErrorMessage(task.failureReason ?? task.errorMessage ?? task.error ?? task.failReason)),
+    billingStatus: videoStringValue(task.billingStatus ?? task.billing_status),
+    releasedPoints: Number(task.releasedPoints ?? task.released_points) || undefined,
+    refundedPoints: Number(task.refundedPoints ?? task.refunded_points) || undefined,
     userId: videoStringValue(task.userId)
   }, fallbacks);
 }

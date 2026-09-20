@@ -10,4 +10,7 @@ export interface GenerationNotice {
   resultType?: MiniProgramCreationMode;
   progress?: number;
   pointCost?: number;
+  billingStatus?: string;
+  releasedPoints?: number;
+  refundedPoints?: number;
 }

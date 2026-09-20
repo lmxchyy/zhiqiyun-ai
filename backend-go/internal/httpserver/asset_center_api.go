@@ -555,6 +555,7 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 				task, err := canaryStore.CreatePendingGenerationTaskWithVideoCanaryOutbox(req)
 				if err == nil && !task.IdempotentReplay {
 					generationCanaryMetrics.submitted.Add(1)
+					videoPromptPreflightTelemetry(task, req.Type, req.Model, req.Params)
 				}
 				return task, err
 			}
@@ -564,6 +565,7 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 			if task.IdempotentReplay {
 				return task, nil
 			}
+			videoPromptPreflightTelemetry(task, req.Type, req.Model, req.Params)
 			go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 		}
 		return task, err
