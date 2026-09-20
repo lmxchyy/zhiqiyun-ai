@@ -2384,7 +2384,7 @@
   </el-config-provider>
 </template>
 <script setup lang="ts">
-import { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, isGenerationQueued } from "@xianzhi/shared-types";
+import { GENERATION_QUEUED_LABEL, GENERATION_QUEUED_TOAST, generationDisplayStatus, inspectVideoPromptPreflight, isGenerationQueued } from "@xianzhi/shared-types";
 
 import { computed, defineAsyncComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from "vue";
 import { safeInternalRedirect, type ProtectedAction } from "@xianzhi/shared-auth";
@@ -2857,6 +2857,26 @@ function loadMoreVideoHistory() {
   videoHistoryVisibleCount.value = Math.min(filteredVideoHistory.value.length, videoHistoryVisibleCount.value + videoHistoryPageSize);
 }
 
+async function confirmVideoPromptPreflight(prompt: string) {
+  const preflight = inspectVideoPromptPreflight({
+    prompt,
+    duration: videoDuration.value,
+    inputMode: videoStudioMode.value,
+    referenceImageCount: videoImageFiles.length,
+  });
+  if (!preflight.warnings.length) return true;
+  try {
+    await ElMessageBox.confirm(
+      `${preflight.warnings.map(item => `• ${item.message}`).join("\n")}\n\n仍要继续生成吗？`,
+      "生成前提示",
+      { confirmButtonText: "继续生成", cancelButtonText: "返回修改", type: "warning" },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function submitVideoGeneration() {
   openVideoDropdown.value = "";
   const prompt = videoPrompt.value.trim();
@@ -2873,6 +2893,7 @@ async function submitVideoGeneration() {
     ElMessage.error("请先上传 1 张参考图");
     return false;
   }
+  if (!(await confirmVideoPromptPreflight(prompt))) return false;
   if (!ensureWorkspaceAuth("generate_video", "userVideoGeneration")) return false;
   const clientRequestId = createGenerationClientRequestId("video");
   let videoReferenceImageUrls: string[] = [];

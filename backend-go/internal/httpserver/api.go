@@ -1023,6 +1023,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 				}
 				if !task.IdempotentReplay {
 					generationCanaryMetrics.submitted.Add(1)
+					videoPromptPreflightTelemetry(task, req.Type, req.Model, req.Params)
 					a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 				}
 				writeJSON(w, task)
@@ -1042,6 +1043,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, task)
 			return
 		}
+		videoPromptPreflightTelemetry(task, req.Type, req.Model, req.Params)
 		a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 		go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
 		writeJSON(w, task)
@@ -1859,8 +1861,8 @@ func localizeGenerationErrorMessage(message, lower string) string {
 		return "该视频模型最多支持 7 张参考图"
 	case strings.Contains(lower, "video provider returned no video"), strings.Contains(lower, "no result_url"), strings.Contains(lower, "still processing"):
 		return "视频仍在生成中或上游未返回结果，请稍后在历史中查看"
-	case strings.Contains(lower, "video generation failed"):
-		return "视频生成失败，请稍后重试"
+	case strings.Contains(lower, "provider_async_generation_failed"), strings.Contains(lower, "generation_failed"), strings.Contains(lower, "video generation failed"):
+		return "上游未能完成本次视频生成，复杂提示词、参考素材要求或上游临时异常都可能导致失败"
 	case strings.Contains(lower, "context deadline exceeded"), strings.Contains(lower, "client.timeout"), strings.Contains(lower, "timeout awaiting response"):
 		return "生成超时，请稍后重试"
 	case strings.Contains(lower, "http 401"), strings.Contains(lower, "invalid api key"), strings.Contains(lower, "incorrect api key"):

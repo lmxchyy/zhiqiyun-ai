@@ -1073,6 +1073,10 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 		if err := validateVideoGenerationRequest(&req, resolved); err != nil {
 			return req, err
 		}
+		preflight := inspectVideoPromptPreflight(req.Prompt, req.Params, req.Type)
+		req.Params["preflight_warning_codes"] = preflight.WarningCodes
+		req.Params["prompt_hash"] = videoPromptHash(req.Prompt)
+		req.Params["prompt_length"] = len([]rune(req.Prompt))
 	}
 	if moduleCode == moduleImageGeneration {
 		if err := validateImageReferenceCapabilities(&req, resolved); err != nil {
@@ -2344,7 +2348,8 @@ func allowedGenerationInternalParam(key string) bool {
 		"image_url", "imageUrl", "image_urls", "imageUrls", "inputImageUrl", "input_image_url", "inputImageUrls",
 		"reference_images", "input_reference", "inputVideoUrl", "video_url", "videoUrl",
 		"purpose", "pptTaskId", "deckTitle", "slideId", "slidePage", "theme", "language", "visualPlan", "negativePrompt",
-		"inspiration_source", "inspiration_trusted", "inspiration_template_id", "inspiration_template_slug", "inspiration_template_version":
+		"inspiration_source", "inspiration_trusted", "inspiration_template_id", "inspiration_template_slug", "inspiration_template_version",
+		"preflight_warning_codes", "prompt_hash", "prompt_length":
 		return true
 	default:
 		return false
