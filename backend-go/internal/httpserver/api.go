@@ -1710,7 +1710,7 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 		if errors.Is(err, providerexecution.ErrProviderStillProcessing) || errors.Is(err, providerexecution.ErrUnknownResubmitBlocked) {
 			return err
 		}
-		_, _ = failGenerationTaskWithFencing(a.store, taskID, generationErrorMessage(err), claimGen)
+		_, _ = failGenerationTaskWithFencing(a.store, taskID, videoGenerationErrorMessage(err), claimGen)
 		return err
 	}
 	delete(prepared.Params, providerExecutionTaskParam)
@@ -1751,6 +1751,16 @@ func generationErrorMessage(err error) string {
 		return "生成超时，请稍后重试"
 	}
 	return compactGenerationErrorMessage(err.Error())
+}
+
+func videoGenerationErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, providerexecution.ErrProviderExecutionFailed) || strings.Contains(strings.ToLower(err.Error()), "video generation failed") {
+		return "上游未能完成本次视频生成"
+	}
+	return generationErrorMessage(err)
 }
 
 func shouldFallbackImageGeneration(err error) bool {

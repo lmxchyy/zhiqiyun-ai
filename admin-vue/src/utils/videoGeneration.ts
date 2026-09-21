@@ -401,6 +401,8 @@ export function taskToVideoHistoryEntry(
       code: task.code,
       failureReason: task.failureReason ?? task.errorMessage ?? task.failReason,
       error: task.error,
+      status: task.status,
+      taskStatus: task.taskStatus ?? task.task_status,
       billingStatus: task.billingStatus ?? task.billing_status,
       releasedPoints: task.releasedPoints ?? task.released_points,
       refundedPoints: task.refundedPoints ?? task.refunded_points,

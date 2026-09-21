@@ -16,6 +16,30 @@ func TestVideoPromptPreflightDurationConsistency(t *testing.T) {
 	}
 }
 
+func TestVideoPromptPreflightIgnoresTimelineRangesForDuration(t *testing.T) {
+	timeline := "0-8s 开场，8-18s 展示，18-30s 结尾"
+	matching := inspectVideoPromptPreflight(timeline, map[string]any{"duration": 30}, videoModeText)
+	if len(matching.RequestedDurations) != 0 || videoPromptContainsString(matching.WarningCodes, videoPromptDurationMismatchCode) {
+		t.Fatalf("matching timeline result = %+v, timeline ranges must not create duration mismatch", matching)
+	}
+	result := inspectVideoPromptPreflight(timeline, map[string]any{"duration": 15}, videoModeText)
+	if len(result.RequestedDurations) != 0 || videoPromptContainsString(result.WarningCodes, videoPromptDurationMismatchCode) {
+		t.Fatalf("timeline result = %+v, timeline ranges must not create duration mismatch", result)
+	}
+	explicit := inspectVideoPromptPreflight("生成30秒视频："+timeline, map[string]any{"duration": 15}, videoModeText)
+	if len(explicit.RequestedDurations) != 1 || explicit.RequestedDurations[0] != 30 || !videoPromptContainsString(explicit.WarningCodes, videoPromptDurationMismatchCode) {
+		t.Fatalf("explicit total duration result = %+v, want only 30s mismatch", explicit)
+	}
+	explicitMatch := inspectVideoPromptPreflight("生成30秒视频："+timeline, map[string]any{"duration": 30}, videoModeText)
+	if videoPromptContainsString(explicitMatch.WarningCodes, videoPromptDurationMismatchCode) {
+		t.Fatalf("explicit matching total duration result = %+v, did not want mismatch", explicitMatch)
+	}
+	clockTimeline := inspectVideoPromptPreflight("00:00-00:08 开场，00:08-00:18 结尾", map[string]any{"duration": 15}, videoModeText)
+	if len(clockTimeline.RequestedDurations) != 0 || videoPromptContainsString(clockTimeline.WarningCodes, videoPromptDurationMismatchCode) {
+		t.Fatalf("clock timeline result = %+v, clock ranges must not create duration mismatch", clockTimeline)
+	}
+}
+
 func TestVideoPromptPreflightReferenceConsistency(t *testing.T) {
 	missing := inspectVideoPromptPreflight("根据3张参考图片生成视频", map[string]any{"duration": 15}, videoModeImage)
 	if !videoPromptContainsString(missing.WarningCodes, videoPromptReferenceMissingCode) {
@@ -48,6 +72,17 @@ func TestVideoPromptPreflightDoesNotRejectFinancialComplianceText(t *testing.T) 
 	result := inspectVideoPromptPreflight("制作金融合规宣传片，强调风险提示与合规经营", map[string]any{"duration": 15}, videoModeText)
 	if len(result.WarningCodes) != 0 {
 		t.Fatalf("warning codes = %v, financial/compliance wording alone should be allowed", result.WarningCodes)
+	}
+}
+
+func TestGenerationFailureErrorPayloadIncludesSafeProviderCode(t *testing.T) {
+	payload := generationFailureErrorPayload("上游未能完成本次视频生成")
+	if payload["code"] != "PROVIDER_ASYNC_GENERATION_FAILED" || payload["safe_error_message"] != "上游未能完成本次视频生成" {
+		t.Fatalf("payload = %#v, want provider code and safe message", payload)
+	}
+	ordinary := generationFailureErrorPayload("生成超时，请稍后重试")
+	if len(ordinary) != 1 || ordinary["message"] != "生成超时，请稍后重试" {
+		t.Fatalf("ordinary payload = %#v, must not invent provider classification", ordinary)
 	}
 }
 
