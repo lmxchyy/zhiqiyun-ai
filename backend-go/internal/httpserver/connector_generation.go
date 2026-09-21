@@ -156,6 +156,9 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 		return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("claim generation ownership: %w", connectorVideoClaimErr)
 	}
 	req.Params[providerExecutionTaskParam] = task.ID
+	if canonicalReq, ok := canonicalVideoDownstreamRequest(req); ok {
+		req = canonicalReq
+	}
 	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
 		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {

@@ -1089,6 +1089,16 @@ func (a api) prepareGenerationRequestWithAuthorization(data adminPlatformData, u
 	if err := validateGenerationParams(req, resolved); err != nil {
 		return req, err
 	}
+	if moduleCode == moduleVideoGeneration {
+		canonical, canonicalErr := buildCanonicalVideoRequestFromPreparedRequest(req, resolved)
+		if canonicalErr != nil {
+			return req, canonicalErr
+		}
+		if canonicalErr := persistCanonicalVideoRequest(&req, canonical); canonicalErr != nil {
+			return req, canonicalErr
+		}
+		req.Params["preflight_warning_codes"] = canonical.ConsistencyResult.WarningCodes
+	}
 	a.applyTrustedInspirationAttribution(&req, inspirationDraft)
 	req.Model = resolved.Model.ModelName
 	req.Params["module_code"] = moduleCode
@@ -1558,6 +1568,11 @@ func (e *pricingRuleNotFoundError) ErrorDetails() map[string]any {
 func (e *pricingRuleNotFoundError) Unwrap() error { return pricingdomain.ErrRuleNotFound }
 
 func generationQuoteForRequest(req createGenerationTaskRequest, data adminPlatformData) (pricingdomain.Quote, error) {
+	if isVideoGenerationRequest(req.Type) {
+		if canonicalReq, ok := canonicalVideoDownstreamRequest(req); ok {
+			req = canonicalReq
+		}
+	}
 	moduleCode := canonicalModuleCode(requestModuleCode(req))
 	if moduleCode == "" {
 		moduleCode = moduleCodeForType(req.Type)

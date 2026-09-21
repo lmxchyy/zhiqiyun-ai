@@ -1688,6 +1688,9 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	if canonicalReq, ok := canonicalVideoDownstreamRequest(req); ok {
+		req = canonicalReq
+	}
 	terminal, err := a.generationTaskTerminal(ctx, taskID)
 	if err != nil || terminal {
 		return err

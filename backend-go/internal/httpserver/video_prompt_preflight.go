@@ -131,8 +131,17 @@ func videoPromptPreflightTelemetry(task generationTask, reqType, model string, p
 		return
 	}
 	codes := videoPromptStringSlice(params["preflight_warning_codes"])
+	canonicalHash := stringValue(params[canonicalVideoHashParam])
+	if canonical, ok := canonicalVideoRequestFromParams(params); ok {
+		codes = append([]string(nil), canonical.ConsistencyResult.WarningCodes...)
+		model = canonical.Execution.Model
+		params = cloneAnyMap(params)
+		params["duration"] = canonical.Execution.DurationSeconds
+		params["aspect_ratio"] = canonical.Execution.AspectRatio
+		params["input_mode"] = canonical.Execution.InputMode
+	}
 	sort.Strings(codes)
-	log.Printf("video_prompt_preflight task_id=%s model=%s duration=%s aspect_ratio=%s input_mode=%s prompt_hash=%s prompt_length=%d preflight_warning_codes=%s", task.ID, model, parameterString(params, "duration"), firstNonEmptyString(parameterString(params, "aspect_ratio"), parameterString(params, "ratio")), firstNonEmptyString(parameterString(params, "inputMode"), parameterString(params, "input_mode"), reqType), stringValue(params["prompt_hash"]), len([]rune(task.Prompt)), strings.Join(codes, ","))
+	log.Printf("video_prompt_preflight task_id=%s model=%s duration=%s aspect_ratio=%s input_mode=%s prompt_hash=%s prompt_length=%d canonical_hash=%s preflight_warning_codes=%s", task.ID, model, parameterString(params, "duration"), firstNonEmptyString(parameterString(params, "aspect_ratio"), parameterString(params, "ratio")), firstNonEmptyString(parameterString(params, "inputMode"), parameterString(params, "input_mode"), reqType), stringValue(params["prompt_hash"]), len([]rune(task.Prompt)), canonicalHash, strings.Join(codes, ","))
 }
 
 func videoPromptStringSlice(value any) []string {

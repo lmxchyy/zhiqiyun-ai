@@ -358,6 +358,7 @@ export function taskToVideoHistoryEntry(
 ): VideoHistoryEntry | null {
   if (!isVideoGenerationTask(task)) return null;
   const params = videoTaskParams(task);
+  const canonical = videoCanonicalExecution(params);
   const createdAt = String(task.createdAt || task.created_at || task.updatedAt || new Date().toISOString());
   const status = videoStatusFromTask(task);
   const resultIds = Array.isArray(task.resultIds)
@@ -384,13 +385,13 @@ export function taskToVideoHistoryEntry(
     posterUrl,
     thumbnailUrl: posterUrl,
     downloadUrl,
-    prompt: String(task.prompt || params.prompt || ""),
-    model: String(task.model || params.model || fallbacks?.model || DEFAULT_VIDEO_MODEL_CODE),
-    mode: videoModeFromTask(task, params),
-    aspect_ratio: videoStringValue(params.ratio ?? params.aspect_ratio ?? task.aspect_ratio, fallbacks?.ratio || ""),
-    duration: videoNumberOrString(params.duration ?? params.seconds ?? task.duration, fallbacks?.duration || ""),
-    resolution: videoStringValue(params.resolution ?? task.resolution, fallbacks?.resolution || ""),
-    inputImageUrls: videoInputImageUrlsFromTask(task, params),
+    prompt: String(canonical.prompt || task.prompt || params.prompt || ""),
+    model: String(canonical.model || task.model || params.model || fallbacks?.model || DEFAULT_VIDEO_MODEL_CODE),
+    mode: videoCanonicalMode(canonical.input_mode) || videoModeFromTask(task, params),
+    aspect_ratio: videoStringValue(canonical.aspect_ratio ?? params.ratio ?? params.aspect_ratio ?? task.aspect_ratio, fallbacks?.ratio || ""),
+    duration: videoNumberOrString(canonical.duration_seconds ?? params.duration ?? params.seconds ?? task.duration, fallbacks?.duration || ""),
+    resolution: videoStringValue(canonical.resolution ?? params.resolution ?? task.resolution, fallbacks?.resolution || ""),
+    inputImageUrls: canonical.reference_images.length ? canonical.reference_images : videoInputImageUrlsFromTask(task, params),
     inputVideoUrl: videoStringValue(params.inputVideoUrl ?? params.video_url ?? params.videoUrl ?? task.inputVideoUrl),
     createdAt,
     status,
@@ -447,6 +448,45 @@ export function mergeVideoHistoryList(
 export function videoTaskUrl(task: AdminRecord | null) {
   if (!task) return "";
   return String(task.outputUrl || task.resultUrl || task.imageUrl || "");
+}
+
+type CanonicalVideoHistoryExecution = {
+  prompt?: string;
+  model?: string;
+  input_mode?: string;
+  duration_seconds?: number | string;
+  aspect_ratio?: string;
+  resolution?: string;
+  reference_images: string[];
+};
+
+function videoCanonicalExecution(params: Record<string, unknown>): CanonicalVideoHistoryExecution {
+  const request = params.canonical_video_request;
+  const record = request && typeof request === "object" && !Array.isArray(request)
+    ? request as Record<string, unknown>
+    : {};
+  const execution = record.execution && typeof record.execution === "object" && !Array.isArray(record.execution)
+    ? record.execution as Record<string, unknown>
+    : {};
+  return {
+    prompt: typeof record.prompt === "string" ? record.prompt : undefined,
+    model: typeof execution.model === "string" ? execution.model : undefined,
+    input_mode: typeof execution.input_mode === "string" ? execution.input_mode : undefined,
+    duration_seconds: typeof execution.duration_seconds === "number" || typeof execution.duration_seconds === "string"
+      ? execution.duration_seconds
+      : undefined,
+    aspect_ratio: typeof execution.aspect_ratio === "string" ? execution.aspect_ratio : undefined,
+    resolution: typeof execution.resolution === "string" ? execution.resolution : undefined,
+    reference_images: Array.isArray(execution.reference_images) ? execution.reference_images.map(String).filter(Boolean) : [],
+  };
+}
+
+function videoCanonicalMode(value: unknown): VideoHistoryEntry["mode"] | undefined {
+  const mode = String(value || "").toUpperCase();
+  if (mode === "TEXT_TO_VIDEO") return "text-to-video";
+  if (mode === "IMAGE_TO_VIDEO") return "image-to-video";
+  if (mode === "VIDEO_TO_VIDEO") return "video-to-video";
+  return undefined;
 }
 
 export function videoTaskParams(task: AdminRecord | null): Record<string, unknown> {
