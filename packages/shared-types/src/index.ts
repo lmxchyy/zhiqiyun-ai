@@ -1,4 +1,5 @@
 export * from "./videoPromptPreflight.js";
+export * from "./videoCanonicalRequest.js";
 
 export type WorkspaceRole = "user" | "agent" | "admin";
 
