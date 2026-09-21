@@ -119,6 +119,25 @@ func (s *Store) Transition(ctx context.Context, id int64, to Status, providerReq
 	return s.TransitionWithErrorCode(ctx, id, to, providerRequestID, nil, errorClass, lastError)
 }
 
+// FailPreparedIfUnclaimed is the stale/pre-submit abandonment transition. It
+// is deliberately narrower than Transition: once a worker claims the row and
+// records submitting, only that worker's normal provider-result path may mark
+// it failed. A concurrent claim therefore wins XOR this abandonment.
+func (s *Store) FailPreparedIfUnclaimed(ctx context.Context, id int64, errorClass, lastError *string) error {
+	result, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET status='failed',error_class=$1,last_error=$2,failed_at=now(),updated_at=now() WHERE id=$3 AND status='prepared'`, errorClass, lastError, id)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrTransitionConflict
+	}
+	return nil
+}
+
 // TransitionWithErrorCode persists both the lifecycle class used by retry and
 // the provider-facing classification used for diagnosis. Keeping the legacy
 // Transition wrapper preserves existing callers and retry semantics.

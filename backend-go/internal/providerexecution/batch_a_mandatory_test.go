@@ -128,14 +128,17 @@ func TestTEST_E_ClaimPreparedVsStaleFailureRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
 	results := make(chan error, 2)
-	go func() { defer wg.Done(); _, e := store.ClaimPrepared(ctx, task); results <- e }()
+	go func() { defer wg.Done(); <-start; _, e := store.ClaimPrepared(ctx, task); results <- e }()
 	go func() {
 		defer wg.Done()
-		results <- store.Transition(ctx, created.ID, Failed, nil, stringPtr(string(DefinitiveNotSubmitted)), stringPtr("stale repair"))
+		<-start
+		results <- store.FailPreparedIfUnclaimed(ctx, created.ID, stringPtr(string(DefinitiveNotSubmitted)), stringPtr("stale repair"))
 	}()
+	close(start)
 	wg.Wait()
 	close(results)
 	var nils int
@@ -146,6 +149,51 @@ func TestTEST_E_ClaimPreparedVsStaleFailureRace(t *testing.T) {
 	}
 	if nils != 1 {
 		t.Fatalf("race committed %d writers, want exactly 1", nils)
+	}
+}
+
+func TestFailPreparedIfUnclaimedRejectsClaimedExecution(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	task := "prepared-cas-conflict-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, task)
+	store := NewStore(db)
+	created, err := store.CreatePrepared(ctx, Execution{TaskID: task, Provider: "mock", Capability: "image", RequestFingerprint: "abababababababababababababababababababababababababababababababab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ClaimPrepared(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.FailPreparedIfUnclaimed(ctx, created.ID, stringPtr(string(DefinitiveNotSubmitted)), stringPtr("stale repair")); !errors.Is(err, ErrTransitionConflict) {
+		t.Fatalf("prepared-only CAS error=%v, want ErrTransitionConflict", err)
+	}
+}
+
+func TestTransitionAllowsClaimedSubmittingToFail(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	task := "claimed-fail-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, task)
+	store := NewStore(db)
+	created, err := store.CreatePrepared(ctx, Execution{TaskID: task, Provider: "mock", Capability: "image", RequestFingerprint: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ClaimPrepared(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Transition(ctx, created.ID, Failed, nil, stringPtr(string(DefinitiveNotSubmitted)), stringPtr("provider rejected after claim")); err != nil {
+		t.Fatalf("claimed provider failure must remain valid: %v", err)
+	}
+	got, err := store.GetByID(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != Failed {
+		t.Fatalf("status=%s, want failed", got.Status)
 	}
 }
 
