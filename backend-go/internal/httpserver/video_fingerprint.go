@@ -76,6 +76,11 @@ func videoFingerprintExcludedParams() map[string]struct{} {
 		"pricing_quantity":              {},
 		"pricing_breakdown":             {},
 		"pricing_normalized_parameters": {},
+		// The canonical snapshot is handled as a whole below. Its diagnostics
+		// must never leak into the provider execution identity.
+		canonicalVideoRequestParam:    {},
+		canonicalVideoHashParam:       {},
+		canonicalVideoLegacyPathParam: {},
 	}
 	return excluded
 }
@@ -83,6 +88,12 @@ func videoFingerprintExcludedParams() map[string]struct{} {
 // canonicalVideoFingerprintParams projects params onto the stable,
 // provider-semantic subset used for video request fingerprints.
 func canonicalVideoFingerprintParams(params map[string]any) map[string]any {
+	if canonical, ok := canonicalVideoRequestFromParams(params); ok {
+		return map[string]any{
+			"prompt":    canonical.Prompt,
+			"execution": canonical.Execution,
+		}
+	}
 	next := cloneAnyMap(params)
 	if next == nil {
 		next = map[string]any{}

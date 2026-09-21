@@ -8,9 +8,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"xianzhi-ai/backend-go/internal/app/generation"
 )
 
-const canonicalVideoRequestVersion = 1
+const (
+	canonicalVideoRequestVersion  = 1
+	canonicalVideoRequestParam    = "canonical_video_request"
+	canonicalVideoHashParam       = "canonical_video_hash"
+	canonicalVideoLegacyPathParam = "canonical_video_legacy_path"
+)
 
 type canonicalVideoRequestError struct {
 	Code    string
@@ -508,6 +515,127 @@ func canonicalVideoRequestRepresentation(request canonicalVideoRequest) ([]byte,
 // canonicalVideoRequestHash covers provider-relevant content plus execution
 // fields only. Prompt intent hints and consistency diagnostics are deliberately
 // excluded so warning/UI changes cannot alter the execution identity.
+// persistCanonicalVideoRequest stores a versioned semantic snapshot in Params
+// during the compatibility period. Downstream migrated readers must read this
+// snapshot; legacy tasks without it retain their established Params path.
+// buildCanonicalVideoRequestFromPreparedRequest is the sole API/connector
+// boundary builder. It runs after existing alias normalization and capability
+// validation, so it never guesses defaults or weakens current validation.
+func buildCanonicalVideoRequestFromPreparedRequest(req generation.CreateRequest, resolved resolvedModuleSchema) (canonicalVideoRequest, error) {
+	capabilities := resolveVideoModelCapabilities(resolved.Model, resolved.Schema.SchemaJSON)
+	references := collectVideoImageParameters(req.Params)
+	optional := map[string]any{}
+	for _, key := range []string{"fps", "generate_audio", "generateAudio", "motion_strength", "camera_movement"} {
+		if value, exists := req.Params[key]; exists && value != nil {
+			optional[key] = value
+		}
+	}
+	return buildCanonicalVideoRequest(canonicalVideoRequestInput{
+		Prompt: req.Prompt,
+		Structured: canonicalVideoStructuredInput{
+			Model:           req.Model,
+			InputMode:       req.Type,
+			Duration:        req.Params["duration"],
+			AspectRatio:     req.Params["aspect_ratio"],
+			Ratio:           req.Params["ratio"],
+			Resolution:      req.Params["resolution"],
+			Quality:         req.Params["quality"],
+			ReferenceImages: references,
+			FirstFrame:      req.Params["first_frame"],
+			LastFrame:       req.Params["last_frame"],
+			Parameters:      optional,
+		},
+		Capabilities: &canonicalVideoCapabilities{
+			SupportedDurations:    capabilities.SupportedDurations,
+			SupportedResolutions:  capabilities.SupportedResolutions,
+			SupportedAspectRatios: capabilities.SupportedAspectRatios,
+		},
+	})
+}
+
+func persistCanonicalVideoRequest(req *generation.CreateRequest, canonical canonicalVideoRequest) error {
+	if req == nil {
+		return &canonicalVideoRequestError{Code: "VIDEO_CANONICAL_REQUIRED", Message: "request is required"}
+	}
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	hash, err := canonicalVideoRequestHash(canonical)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(canonical)
+	if err != nil {
+		return err
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(payload, &persisted); err != nil {
+		return err
+	}
+	req.Params[canonicalVideoRequestParam] = persisted
+	req.Params[canonicalVideoHashParam] = hash
+	return nil
+}
+
+// canonicalVideoDownstreamRequest creates a transport request whose video
+// execution fields are hydrated from the persisted canonical snapshot. It
+// intentionally preserves legacy Params for compatibility; migrated consumers
+// use this projection while legacy tasks have an explicit untouched fallback.
+func canonicalVideoDownstreamRequest(req generation.CreateRequest) (generation.CreateRequest, bool) {
+	canonical, ok := canonicalVideoRequestFromParams(req.Params)
+	if !ok {
+		return req, false
+	}
+	req = cloneGenerationCreateRequest(req)
+	if req.Params == nil {
+		req.Params = map[string]any{}
+	}
+	req.Prompt = canonical.Prompt
+	req.Model = canonical.Execution.Model
+	req.Type = canonical.Execution.InputMode
+	req.Params["duration"] = canonical.Execution.DurationSeconds
+	req.Params["aspect_ratio"] = canonical.Execution.AspectRatio
+	req.Params["resolution"] = canonical.Execution.Resolution
+	req.Params["input_mode"] = canonical.Execution.InputMode
+	req.Params["inputMode"] = canonical.Execution.InputMode
+	req.Params["first_frame"] = canonical.Execution.FirstFrame
+	req.Params["last_frame"] = canonical.Execution.LastFrame
+	req.Params["image_urls"] = append([]string(nil), canonical.Execution.ReferenceImages...)
+	if canonical.Execution.Optional.FPS != nil {
+		req.Params["fps"] = *canonical.Execution.Optional.FPS
+	}
+	if canonical.Execution.Optional.GenerateAudio != nil {
+		req.Params["generate_audio"] = *canonical.Execution.Optional.GenerateAudio
+	}
+	if canonical.Execution.Optional.MotionStrength != nil {
+		req.Params["motion_strength"] = *canonical.Execution.Optional.MotionStrength
+	}
+	if canonical.Execution.Optional.CameraMovement != "" {
+		req.Params["camera_movement"] = canonical.Execution.Optional.CameraMovement
+	}
+	req.Params[canonicalVideoLegacyPathParam] = false
+	return req, true
+}
+
+func canonicalVideoRequestFromParams(params map[string]any) (canonicalVideoRequest, bool) {
+	if params == nil {
+		return canonicalVideoRequest{}, false
+	}
+	value, exists := params[canonicalVideoRequestParam]
+	if !exists || value == nil {
+		return canonicalVideoRequest{}, false
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return canonicalVideoRequest{}, false
+	}
+	var canonical canonicalVideoRequest
+	if err := json.Unmarshal(payload, &canonical); err != nil || canonical.SchemaVersion != canonicalVideoRequestVersion || canonical.Execution.Model == "" {
+		return canonicalVideoRequest{}, false
+	}
+	return canonical, true
+}
+
 func canonicalVideoRequestHash(request canonicalVideoRequest) (string, error) {
 	executionIdentity := struct {
 		Prompt    string                  `json:"prompt"`
