@@ -152,6 +152,25 @@ func TestTEST_E_ClaimPreparedVsStaleFailureRace(t *testing.T) {
 	}
 }
 
+func TestFailPreparedIfUnclaimedRejectsClaimedExecution(t *testing.T) {
+	db := openCrashMatrixDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	task := "prepared-cas-conflict-" + time.Now().UTC().Format("20060102150405.000000000")
+	defer deleteCrashMatrixExecution(t, db, task)
+	store := NewStore(db)
+	created, err := store.CreatePrepared(ctx, Execution{TaskID: task, Provider: "mock", Capability: "image", RequestFingerprint: "abababababababababababababababababababababababababababababababab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ClaimPrepared(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.FailPreparedIfUnclaimed(ctx, created.ID, stringPtr(string(DefinitiveNotSubmitted)), stringPtr("stale repair")); !errors.Is(err, ErrTransitionConflict) {
+		t.Fatalf("prepared-only CAS error=%v, want ErrTransitionConflict", err)
+	}
+}
+
 func TestTransitionAllowsClaimedSubmittingToFail(t *testing.T) {
 	db := openCrashMatrixDB(t)
 	defer db.Close()
