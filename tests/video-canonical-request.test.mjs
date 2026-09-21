@@ -4,6 +4,7 @@ import {
   CanonicalVideoRequestError,
   buildCanonicalVideoRequest,
   canonicalVideoRequestRepresentation,
+  parseVideoPromptIntentHints,
 } from "../packages/shared-types/src/videoCanonicalRequest.ts";
 
 const capabilities = {
@@ -157,4 +158,95 @@ test("intent hints and consistency result cannot change execution fields", () =>
   );
   assert.equal(request.prompt_intent_hints.requested_duration_seconds, 30);
   assert.equal(request.consistency_result.status, "warning");
+});
+
+test("prompt intent parser recognizes explicit total duration and excludes segment durations", () => {
+  assert.deepEqual(parseVideoPromptIntentHints("生成30秒宣传片").requested_duration_seconds, 30);
+  assert.equal(parseVideoPromptIntentHints("0-8s 开场，8-18s 展示，18-30s 结尾").requested_duration_seconds, undefined);
+  assert.equal(parseVideoPromptIntentHints("前5秒开场，最后3秒收尾").requested_duration_seconds, undefined);
+  assert.equal(parseVideoPromptIntentHints("生成30秒宣传片：0-8s 开场，8-18s 产品，18-30s 结尾").requested_duration_seconds, 30);
+});
+
+test("prompt intent parser recognizes conservative aspect and resolution hints", () => {
+  assert.equal(parseVideoPromptIntentHints("竖屏风格").requested_aspect_ratio, "9:16");
+  assert.equal(parseVideoPromptIntentHints("横屏广告").requested_aspect_ratio, "16:9");
+  assert.equal(parseVideoPromptIntentHints("方形封面").requested_aspect_ratio, "1:1");
+  assert.equal(parseVideoPromptIntentHints("适合手机看的视频").requested_aspect_ratio, undefined);
+  assert.equal(parseVideoPromptIntentHints("1K 清晰度").requested_resolution, "1k");
+  assert.equal(parseVideoPromptIntentHints("4K 画质").requested_resolution, "4k");
+});
+
+test("prompt intent parser recognizes input mode and reference count without fabricating images", () => {
+  assert.equal(parseVideoPromptIntentHints("文生视频").requested_input_mode, "TEXT_TO_VIDEO");
+  assert.equal(parseVideoPromptIntentHints("图生视频").requested_input_mode, "IMAGE_TO_VIDEO");
+  assert.equal(parseVideoPromptIntentHints("视频转视频").requested_input_mode, "VIDEO_TO_VIDEO");
+  const hints = parseVideoPromptIntentHints("根据3张图片，并参考第一张图");
+  assert.equal(hints.reference_image_requested, true);
+  assert.equal(hints.requested_reference_count, 3);
+  assert.deepEqual(hints.complexity_signals, []);
+});
+
+test("complexity warning requires combined signals and ignores finance/compliance wording", () => {
+  const complex = buildCanonicalVideoRequest({
+    prompt: "0-8s 开场，多镜头，添加字幕和旁白",
+    structured: {
+      model: "grok-imagine-1.5-video",
+      input_mode: "TEXT_TO_VIDEO",
+      duration: 15,
+      aspect_ratio: "16:9",
+      resolution: "720p",
+    },
+    capabilities,
+  });
+  assert.equal(complex.prompt_intent_hints.complexity_signals.length >= 3, true);
+  assert.equal(complex.consistency_result.warning_codes.includes("VIDEO_PROMPT_COMPLEXITY_WARNING"), true);
+
+  const compliance = buildCanonicalVideoRequest({
+    prompt: "金融合规商业宣传片",
+    structured: {
+      model: "grok-imagine-1.5-video",
+      input_mode: "TEXT_TO_VIDEO",
+      duration: 15,
+      aspect_ratio: "16:9",
+      resolution: "720p",
+    },
+    capabilities,
+  });
+  assert.equal(compliance.consistency_result.warning_codes.includes("VIDEO_PROMPT_COMPLEXITY_WARNING"), false);
+});
+
+test("parser and consistency output are deterministic and warning codes contain no UI text", () => {
+  const prompt = "0-8s 开场，生成30秒视频，9:16，720p，根据参考3张图片，多镜头加字幕和旁白";
+  const first = buildCanonicalVideoRequest({
+    prompt,
+    structured: {
+      model: "grok-imagine-1.5-video",
+      input_mode: "TEXT_TO_VIDEO",
+      duration: 15,
+      aspect_ratio: "16:9",
+      resolution: "480p",
+    },
+    capabilities,
+  });
+  const second = buildCanonicalVideoRequest({
+    prompt,
+    structured: {
+      model: "grok-imagine-1.5-video",
+      input_mode: "TEXT_TO_VIDEO",
+      duration: 15,
+      aspect_ratio: "16:9",
+      resolution: "480p",
+    },
+    capabilities,
+  });
+  assert.equal(canonicalVideoRequestRepresentation(first), canonicalVideoRequestRepresentation(second));
+  assert.deepEqual(first.consistency_result.warning_codes, [
+    "VIDEO_PROMPT_DURATION_MISMATCH",
+    "VIDEO_PROMPT_ASPECT_RATIO_MISMATCH",
+    "VIDEO_PROMPT_RESOLUTION_MISMATCH",
+    "VIDEO_PROMPT_MODE_MISMATCH",
+    "VIDEO_PROMPT_REFERENCE_MISSING",
+    "VIDEO_PROMPT_COMPLEXITY_WARNING",
+  ]);
+  assert.equal(first.consistency_result.warning_codes.some(code => /[\u4e00-\u9fff]/u.test(code)), false);
 });

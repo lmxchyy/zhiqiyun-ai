@@ -146,6 +146,14 @@ func TestCanonicalVideoRequestRepresentationAndHashAreDeterministic(t *testing.T
 	if hashA != hashDiagnosticsChanged {
 		t.Fatalf("diagnostics changed execution hash: %q / %q", hashA, hashDiagnosticsChanged)
 	}
+	requestB.Prompt = "different provider content"
+	hashPromptChanged, err := canonicalVideoRequestHash(requestB)
+	if err != nil {
+		t.Fatalf("hash with changed prompt: %v", err)
+	}
+	if hashA == hashPromptChanged {
+		t.Fatalf("prompt did not change execution hash: %q", hashA)
+	}
 }
 
 func TestCanonicalVideoRequestRejectsMissingAndInvalidFields(t *testing.T) {

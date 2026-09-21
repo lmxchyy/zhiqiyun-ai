@@ -1,6 +1,7 @@
 export const CANONICAL_VIDEO_REQUEST_VERSION = 1 as const;
 
 export type CanonicalVideoInputMode = "TEXT_TO_VIDEO" | "IMAGE_TO_VIDEO";
+export type CanonicalVideoInputModeHint = CanonicalVideoInputMode | "VIDEO_TO_VIDEO";
 export type CanonicalConsistencyStatus = "ok" | "warning";
 export type CanonicalConsistencyAction = "use_structured" | "apply_hint" | "edit_prompt";
 
@@ -48,9 +49,10 @@ export interface PromptIntentHints {
   requested_duration_seconds?: number;
   requested_aspect_ratio?: string;
   requested_resolution?: string;
-  requested_input_mode?: CanonicalVideoInputMode;
+  requested_input_mode?: CanonicalVideoInputModeHint;
   reference_image_requested: boolean;
   requested_reference_count?: number;
+  complexity_signals: string[];
   evidence: PromptIntentEvidence[];
 }
 
@@ -65,6 +67,7 @@ export interface CanonicalConsistencyWarning {
 
 export interface CanonicalConsistencyResult {
   status: CanonicalConsistencyStatus;
+  warning_codes: CanonicalVideoWarningCode[];
   warnings: CanonicalConsistencyWarning[];
 }
 
@@ -111,13 +114,33 @@ export class CanonicalVideoRequestError extends Error {
   }
 }
 
-const DURATION_PATTERN = /(?:时长|持续|duration|length|生成|视频)?\s*(\d{1,3})\s*(?:秒|s|seconds?)(?!\w)/giu;
+const DURATION_PATTERN = /(?:时长|持续|duration|length|生成|视频|总时长|视频长度)?\s*(\d{1,3})\s*(?:秒|s|seconds?)(?!\w)/giu;
 const TIMELINE_RANGE_PATTERN = /(?:第\s*)?\d{1,3}\s*(?:秒|s)?\s*[-–—~～至到]\s*\d{1,3}\s*(?:秒|s)/giu;
 const CLOCK_RANGE_PATTERN = /\b\d{1,2}:\d{2}(?::\d{2})?\s*[-–—~～至到]\s*\d{1,2}:\d{2}(?::\d{2})?\b/giu;
+const CONTEXTUAL_DURATION_PATTERN = /(?:前|最后|起初|开头|结尾|第)\s*\d{1,3}\s*(?:秒|s)|\d{1,3}\s*(?:秒|s)\s*(?:后|内|时)/giu;
+const TIMELINE_SIGNAL_PATTERN = /(?:第\s*)?\d{1,3}\s*(?:秒|s)?\s*[-–—~～至到]\s*\d{1,3}\s*(?:秒|s)/iu;
 const ASPECT_PATTERN = /(?:比例|画幅|aspect\s*ratio|ratio)?\s*(\d{1,2})\s*:\s*(\d{1,2})/giu;
-const RESOLUTION_PATTERN = /\b(\d{3,4}\s*p|[248]\s*k)\b/giu;
-const REFERENCE_PATTERN = /(?:参考(?:图|图片|素材)|根据(?:我?上传|提供|这|该)?(?:的)?(?:图片|图像|照片)|(?:第\s*)?(?:一|二|三|1|2|3)\s*(?:张)?\s*(?:参考图|图片)|\breference\s+images?|\breference\s+photos?|\binput\s+images?|\buploaded\s+images?)/iu;
+const ASPECT_ALIAS_PATTERNS: Array<[string, RegExp]> = [
+  ["9:16", /竖屏|portrait/iu],
+  ["16:9", /横屏|landscape/iu],
+  ["1:1", /方形|square/iu],
+];
+const RESOLUTION_PATTERN = /\b(\d{3,4}\s*p|[1248]\s*k)\b/giu;
+const REFERENCE_PATTERN = /(?:参考(?:图|图片|素材)|根据(?:我?上传|提供|这|该)?(?:的)?(?:图片|图像|照片)|(?:第\s*)?(?:一|二|三|1|2|3)\s*(?:张)?\s*(?:参考图|图片|图|照片)|\b(?:第一|第二|第三)\s*张?(?:图|图片|照片)|\breference\s+images?|\breference\s+photos?|\binput\s+images?|\buploaded\s+images?)/iu;
 const REFERENCE_COUNT_PATTERN = /(?:\d{1,2}|一|二|三|四|五|六|七)\s*(?:张|个)?\s*(?:参考图|参考图片|图片|图像|reference\s+images?)/iu;
+const INPUT_MODE_PATTERNS: Array<[CanonicalVideoInputModeHint, RegExp]> = [
+  ["VIDEO_TO_VIDEO", /视频转视频|video[-\s]?to[-\s]?video/iu],
+  ["IMAGE_TO_VIDEO", /图生视频|image[-\s]?to[-\s]?video/iu],
+  ["TEXT_TO_VIDEO", /文生视频|text[-\s]?to[-\s]?video/iu],
+];
+const COMPLEXITY_PATTERNS: Array<[string, RegExp]> = [
+  ["timeline", TIMELINE_SIGNAL_PATTERN],
+  ["multi_scene", /多场景|多个场景|分场景|multi[-\s]?scene|multiple\s+scenes/iu],
+  ["multi_shot", /多镜头|多个镜头|镜头切换|分镜|(?:镜头|shot)\s*(?:\d+|[一二三四五六七八九十])|multi[-\s]?shot|multiple\s+shots|shot\s+list/iu],
+  ["subtitles", /字幕|屏幕文字|标题字卡|subtitles?|on[-\s]?screen\s+text/iu],
+  ["voiceover", /配音|旁白|口播|voice[-\s]?over|narration|voice\s+acting/iu],
+  ["synchronized_audio", /同步音频|同步声音|音画同步|同步配乐|sync(?:hronized)?\s+(?:audio|sound)|lip[-\s]?sync/iu],
+];
 
 function text(value: unknown): string {
   return String(value ?? "").trim();
@@ -143,7 +166,7 @@ function normalizeAspectRatio(value: unknown): string | undefined {
 
 function normalizeResolution(value: unknown): string | undefined {
   const normalized = text(value).toLowerCase().replace(/\s+/g, "");
-  return /^\d{3,4}p$|^[248]k$/.test(normalized) ? normalized : undefined;
+  return /^\d{3,4}p$|^[1248]k$/.test(normalized) ? normalized : undefined;
 }
 
 function normalizeMode(value: unknown): CanonicalVideoInputMode | undefined {
@@ -164,43 +187,70 @@ function stringList(value: unknown): string[] {
 }
 
 function explicitDurationCandidates(prompt: string): number[] {
-  const withoutTimeline = prompt.replace(TIMELINE_RANGE_PATTERN, " ").replace(CLOCK_RANGE_PATTERN, " ");
+  const withoutTimeline = prompt
+    .replace(TIMELINE_RANGE_PATTERN, " ")
+    .replace(CLOCK_RANGE_PATTERN, " ")
+    .replace(CONTEXTUAL_DURATION_PATTERN, " ");
   return [...withoutTimeline.matchAll(DURATION_PATTERN)]
     .map(match => Number(match[1]))
     .filter(value => Number.isInteger(value) && value > 0 && value <= 180)
     .filter((value, index, values) => values.indexOf(value) === index);
 }
 
-function parsePromptIntentHints(prompt: string): PromptIntentHints {
+function chineseCount(value: string): number | undefined {
+  const counts: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7 };
+  const token = value.match(/\d+|[一二三四五六七]/)?.[0];
+  if (!token) return undefined;
+  return counts[token] ?? Number(token);
+}
+
+function promptInputMode(prompt: string, referenceImageRequested: boolean): CanonicalVideoInputModeHint | undefined {
+  for (const [mode, pattern] of INPUT_MODE_PATTERNS) {
+    if (pattern.test(prompt)) return mode;
+  }
+  return referenceImageRequested ? "IMAGE_TO_VIDEO" : undefined;
+}
+
+function complexitySignals(prompt: string): string[] {
+  return COMPLEXITY_PATTERNS
+    .filter(([, pattern]) => pattern.test(prompt))
+    .map(([signal]) => signal);
+}
+
+export function parseVideoPromptIntentHints(promptInput: string): PromptIntentHints {
+  const prompt = text(promptInput);
   const durations = explicitDurationCandidates(prompt);
   const aspectRatios = [...prompt.matchAll(ASPECT_PATTERN)]
     .map(match => normalizeAspectRatio(`${match[1]}:${match[2]}`))
-    .filter((value): value is string => Boolean(value))
-    .filter((value, index, values) => values.indexOf(value) === index);
+    .filter((value): value is string => Boolean(value));
+  for (const [ratio, pattern] of ASPECT_ALIAS_PATTERNS) {
+    if (pattern.test(prompt)) aspectRatios.push(ratio);
+  }
+  const uniqueAspectRatios = aspectRatios.filter((value, index, values) => values.indexOf(value) === index);
   const resolutions = [...prompt.matchAll(RESOLUTION_PATTERN)]
     .map(match => normalizeResolution(match[1]))
     .filter((value): value is string => Boolean(value))
     .filter((value, index, values) => values.indexOf(value) === index);
   const referenceImageRequested = REFERENCE_PATTERN.test(prompt) || REFERENCE_COUNT_PATTERN.test(prompt);
   const countMatch = prompt.match(REFERENCE_COUNT_PATTERN);
-  const countToken = countMatch?.[0]?.match(/\d+/)?.[0];
-  const requestedReferenceCount = countToken ? Number(countToken) : undefined;
+  const requestedReferenceCount = countMatch ? chineseCount(countMatch[0]) : undefined;
+  const requestedInputMode = promptInputMode(prompt, referenceImageRequested);
+  const signals = complexitySignals(prompt);
   const evidence: PromptIntentEvidence[] = [];
   if (durations[0] !== undefined) evidence.push({ field: "duration", normalized_value: durations[0], source_kind: "explicit_text", confidence: "high" });
-  if (aspectRatios[0]) evidence.push({ field: "aspect_ratio", normalized_value: aspectRatios[0], source_kind: "explicit_text", confidence: "high" });
+  if (uniqueAspectRatios[0]) evidence.push({ field: "aspect_ratio", normalized_value: uniqueAspectRatios[0], source_kind: "explicit_text", confidence: "high" });
   if (resolutions[0]) evidence.push({ field: "resolution", normalized_value: resolutions[0], source_kind: "explicit_text", confidence: "high" });
-  if (referenceImageRequested) {
-    evidence.push({ field: "reference_images", normalized_value: requestedReferenceCount ?? true, source_kind: "explicit_text", confidence: "high" });
-    evidence.push({ field: "input_mode", normalized_value: "IMAGE_TO_VIDEO", source_kind: "explicit_text", confidence: "high" });
-  }
+  if (requestedInputMode) evidence.push({ field: "input_mode", normalized_value: requestedInputMode, source_kind: "explicit_text", confidence: "high" });
+  if (referenceImageRequested) evidence.push({ field: "reference_images", normalized_value: requestedReferenceCount ?? true, source_kind: "explicit_text", confidence: "high" });
   return {
     parser_version: 1,
     ...(durations[0] !== undefined ? { requested_duration_seconds: durations[0] } : {}),
-    ...(aspectRatios[0] ? { requested_aspect_ratio: aspectRatios[0] } : {}),
+    ...(uniqueAspectRatios[0] ? { requested_aspect_ratio: uniqueAspectRatios[0] } : {}),
     ...(resolutions[0] ? { requested_resolution: resolutions[0] } : {}),
-    ...(referenceImageRequested ? { requested_input_mode: "IMAGE_TO_VIDEO" as const } : {}),
+    ...(requestedInputMode ? { requested_input_mode: requestedInputMode } : {}),
     reference_image_requested: referenceImageRequested,
     ...(requestedReferenceCount ? { requested_reference_count: requestedReferenceCount } : {}),
+    complexity_signals: signals,
     evidence,
   };
 }
@@ -214,8 +264,8 @@ function warning(
   return {
     code,
     field,
-    structured_value: structuredValue,
-    hinted_value: hintedValue,
+    ...(structuredValue !== undefined ? { structured_value: structuredValue } : {}),
+    ...(hintedValue !== undefined ? { hinted_value: hintedValue } : {}),
     severity: "warning",
     actions: ["use_structured", "apply_hint", "edit_prompt"],
   };
@@ -237,11 +287,20 @@ function checkConsistency(
   }
   if (hints.requested_input_mode && hints.requested_input_mode !== execution.input_mode) {
     warnings.push(warning("VIDEO_PROMPT_MODE_MISMATCH", "input_mode", execution.input_mode, hints.requested_input_mode));
+  } else if (hints.reference_image_requested && execution.input_mode === "TEXT_TO_VIDEO") {
+    warnings.push(warning("VIDEO_PROMPT_MODE_MISMATCH", "input_mode", execution.input_mode, "IMAGE_TO_VIDEO"));
   }
   if (hints.reference_image_requested && execution.reference_images.length === 0 && !execution.first_frame) {
     warnings.push(warning("VIDEO_PROMPT_REFERENCE_MISSING", "reference_images", [], hints.requested_reference_count ?? true));
   }
-  return { status: warnings.length ? "warning" : "ok", warnings };
+  if (hints.complexity_signals.length >= 3) {
+    warnings.push(warning("VIDEO_PROMPT_COMPLEXITY_WARNING", "prompt", undefined, hints.complexity_signals));
+  }
+  return {
+    status: warnings.length ? "warning" : "ok",
+    warning_codes: warnings.map(item => item.code),
+    warnings,
+  };
 }
 
 function required(value: string, field: string): string {
@@ -309,7 +368,7 @@ export function buildCanonicalVideoRequest(input: BuildCanonicalVideoRequestInpu
     ...(lastFrame ? { last_frame: lastFrame } : {}),
     optional_parameters: normalizedOptionalParameters(structured),
   };
-  const promptIntentHints = parsePromptIntentHints(prompt);
+  const promptIntentHints = parseVideoPromptIntentHints(prompt);
   return {
     schema_version: CANONICAL_VIDEO_REQUEST_VERSION,
     prompt,

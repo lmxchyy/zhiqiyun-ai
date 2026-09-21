@@ -64,6 +64,7 @@ type canonicalPromptIntentHints struct {
 	RequestedInputMode       string                          `json:"requested_input_mode,omitempty"`
 	ReferenceImageRequested  bool                            `json:"reference_image_requested"`
 	RequestedReferenceCount  *int                            `json:"requested_reference_count,omitempty"`
+	ComplexitySignals        []string                        `json:"complexity_signals"`
 	Evidence                 []canonicalPromptIntentEvidence `json:"evidence"`
 }
 
@@ -77,8 +78,9 @@ type canonicalConsistencyWarning struct {
 }
 
 type canonicalConsistencyResult struct {
-	Status   string                        `json:"status"`
-	Warnings []canonicalConsistencyWarning `json:"warnings"`
+	Status       string                        `json:"status"`
+	WarningCodes []string                      `json:"warning_codes"`
+	Warnings     []canonicalConsistencyWarning `json:"warnings"`
 }
 
 type canonicalVideoOptionalParameters struct {
@@ -109,13 +111,23 @@ type canonicalVideoRequest struct {
 }
 
 var (
-	canonicalDurationPattern       = regexp.MustCompile(`(?i)(?:时长|持续|duration|length|生成|视频)?\s*(\d{1,3})\s*(?:秒|s|seconds?)`)
-	canonicalTimelineRangePattern  = regexp.MustCompile(`(?i)(?:第\s*)?\d{1,3}\s*(?:秒|s)?\s*[-–—~～至到]\s*\d{1,3}\s*(?:秒|s)`)
-	canonicalClockRangePattern     = regexp.MustCompile(`(?i)\b\d{1,2}:\d{2}(?::\d{2})?\s*[-–—~～至到]\s*\d{1,2}:\d{2}(?::\d{2})?\b`)
-	canonicalAspectPattern         = regexp.MustCompile(`(?i)(?:比例|画幅|aspect\s*ratio|ratio)?\s*(\d{1,2})\s*:\s*(\d{1,2})`)
-	canonicalResolutionPattern     = regexp.MustCompile(`(?i)\b(\d{3,4}\s*p|[248]\s*k)\b`)
-	canonicalReferencePattern      = regexp.MustCompile(`(?i)(参考(?:图|图片|素材)|根据(?:我?上传|提供|这|该)?(?:的)?(?:图片|图像|照片)|(?:第\s*)?(?:一|二|三|1|2|3)\s*(?:张)?\s*(?:参考图|图片)|\breference\s+images?\b|\breference\s+photos?\b|\binput\s+images?\b|\buploaded\s+images?\b)`)
-	canonicalReferenceCountPattern = regexp.MustCompile(`(?i)(\d{1,2})\s*(?:张|个)?\s*(?:参考图|参考图片|图片|图像|reference\s+images?)`)
+	canonicalDurationPattern        = regexp.MustCompile(`(?i)(?:时长|持续|duration|length|生成|视频|总时长|视频长度)?\s*(\d{1,3})\s*(?:秒|s|seconds?)`)
+	canonicalTimelineRangePattern   = regexp.MustCompile(`(?i)(?:第\s*)?\d{1,3}\s*(?:秒|s)?\s*[-–—~～至到]\s*\d{1,3}\s*(?:秒|s)`)
+	canonicalClockRangePattern      = regexp.MustCompile(`(?i)\b\d{1,2}:\d{2}(?::\d{2})?\s*[-–—~～至到]\s*\d{1,2}:\d{2}(?::\d{2})?\b`)
+	canonicalContextDurationPattern = regexp.MustCompile(`(?i)(?:前|最后|起初|开头|结尾|第)\s*\d{1,3}\s*(?:秒|s)|\d{1,3}\s*(?:秒|s)\s*(?:后|内|时)`)
+	canonicalTimelineSignalPattern  = regexp.MustCompile(`(?i)(?:第\s*)?\d{1,3}\s*(?:秒|s)?\s*[-–—~～至到]\s*\d{1,3}\s*(?:秒|s)`)
+	canonicalAspectPattern          = regexp.MustCompile(`(?i)(?:比例|画幅|aspect\s*ratio|ratio)?\s*(\d{1,2})\s*:\s*(\d{1,2})`)
+	canonicalResolutionPattern      = regexp.MustCompile(`(?i)\b(\d{3,4}\s*p|[1248]\s*k)\b`)
+	canonicalReferencePattern       = regexp.MustCompile(`(?i)(参考(?:图|图片|素材)|根据(?:我?上传|提供|这|该)?(?:的)?(?:图片|图像|照片)|(?:第\s*)?(?:一|二|三|1|2|3)\s*(?:张)?\s*(?:参考图|图片|图|照片)|(?:第一|第二|第三)\s*张?(?:图|图片|照片)|\breference\s+images?\b|\breference\s+photos?\b|\binput\s+images?\b|\buploaded\s+images?\b)`)
+	canonicalReferenceCountPattern  = regexp.MustCompile(`(?i)(\d{1,2}|一|二|三|四|五|六|七)\s*(?:张|个)?\s*(?:参考图|参考图片|图片|图像|reference\s+images?)`)
+	canonicalInputModePatterns      = []struct {
+		mode    string
+		pattern *regexp.Regexp
+	}{
+		{mode: "VIDEO_TO_VIDEO", pattern: regexp.MustCompile(`(?i)视频转视频|video[-\s]?to[-\s]?video`)},
+		{mode: "IMAGE_TO_VIDEO", pattern: regexp.MustCompile(`(?i)图生视频|image[-\s]?to[-\s]?video`)},
+		{mode: "TEXT_TO_VIDEO", pattern: regexp.MustCompile(`(?i)文生视频|text[-\s]?to[-\s]?video`)},
+	}
 )
 
 func canonicalText(value any) string {
@@ -149,7 +161,7 @@ func canonicalAspectRatio(value any) (string, bool) {
 
 func canonicalResolution(value any) (string, bool) {
 	normalized := strings.ToLower(strings.ReplaceAll(canonicalText(value), " ", ""))
-	if !canonicalResolutionPattern.MatchString(normalized) || !regexp.MustCompile(`^(\d{3,4}p|[248]k)$`).MatchString(normalized) {
+	if !canonicalResolutionPattern.MatchString(normalized) || !regexp.MustCompile(`^(\d{3,4}p|[1248]k)$`).MatchString(normalized) {
 		return "", false
 	}
 	return normalized, true
@@ -198,6 +210,7 @@ func canonicalStringList(value any) []string {
 func canonicalDurationHints(prompt string) []int {
 	withoutTimeline := canonicalTimelineRangePattern.ReplaceAllString(prompt, " ")
 	withoutTimeline = canonicalClockRangePattern.ReplaceAllString(withoutTimeline, " ")
+	withoutTimeline = canonicalContextDurationPattern.ReplaceAllString(withoutTimeline, " ")
 	values := []int{}
 	seen := map[int]struct{}{}
 	for _, match := range canonicalDurationPattern.FindAllStringSubmatch(withoutTimeline, -1) {
@@ -217,8 +230,57 @@ func canonicalDurationHints(prompt string) []int {
 	return values
 }
 
+func canonicalChineseCount(value string) (int, bool) {
+	counts := map[string]int{"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7}
+	for token, count := range counts {
+		if strings.Contains(value, token) {
+			return count, true
+		}
+	}
+	match := regexp.MustCompile(`\d+`).FindString(value)
+	if match == "" {
+		return 0, false
+	}
+	count, err := strconv.Atoi(match)
+	return count, err == nil && count > 0
+}
+
+func canonicalPromptInputMode(prompt string, referenceImageRequested bool) string {
+	for _, item := range canonicalInputModePatterns {
+		if item.pattern.MatchString(prompt) {
+			return item.mode
+		}
+	}
+	if referenceImageRequested {
+		return "IMAGE_TO_VIDEO"
+	}
+	return ""
+}
+
+var canonicalComplexityPatterns = []struct {
+	signal  string
+	pattern *regexp.Regexp
+}{
+	{signal: "timeline", pattern: canonicalTimelineSignalPattern},
+	{signal: "multi_scene", pattern: regexp.MustCompile(`(?i)多场景|多个场景|分场景|multi[-\s]?scene|multiple\s+scenes`)},
+	{signal: "multi_shot", pattern: regexp.MustCompile(`(?i)多镜头|多个镜头|镜头切换|分镜|(?:镜头|shot)\s*(?:\d+|[一二三四五六七八九十])|multi[-\s]?shot|multiple\s+shots|shot\s+list`)},
+	{signal: "subtitles", pattern: regexp.MustCompile(`(?i)字幕|屏幕文字|标题字卡|subtitles?|on[-\s]?screen\s+text`)},
+	{signal: "voiceover", pattern: regexp.MustCompile(`(?i)配音|旁白|口播|voice[-\s]?over|narration|voice\s+acting`)},
+	{signal: "synchronized_audio", pattern: regexp.MustCompile(`(?i)同步音频|同步声音|音画同步|同步配乐|sync(?:hronized)?\s+(?:audio|sound)|lip[-\s]?sync`)},
+}
+
+func canonicalComplexitySignals(prompt string) []string {
+	result := []string{}
+	for _, item := range canonicalComplexityPatterns {
+		if item.pattern.MatchString(prompt) {
+			result = append(result, item.signal)
+		}
+	}
+	return result
+}
+
 func canonicalPromptIntent(prompt string) canonicalPromptIntentHints {
-	hints := canonicalPromptIntentHints{ParserVersion: 1, Evidence: []canonicalPromptIntentEvidence{}}
+	hints := canonicalPromptIntentHints{ParserVersion: 1, ComplexitySignals: []string{}, Evidence: []canonicalPromptIntentEvidence{}}
 	durations := canonicalDurationHints(prompt)
 	if len(durations) > 0 {
 		hints.RequestedDurationSeconds = &durations[0]
@@ -234,6 +296,20 @@ func canonicalPromptIntent(prompt string) canonicalPromptIntentHints {
 			break
 		}
 	}
+	for _, item := range []struct {
+		ratio   string
+		pattern *regexp.Regexp
+	}{
+		{ratio: "9:16", pattern: regexp.MustCompile(`(?i)竖屏|portrait`)},
+		{ratio: "16:9", pattern: regexp.MustCompile(`(?i)横屏|landscape`)},
+		{ratio: "1:1", pattern: regexp.MustCompile(`(?i)方形|square`)},
+	} {
+		if item.pattern.MatchString(prompt) {
+			hints.RequestedAspectRatio = item.ratio
+			hints.Evidence = append(hints.Evidence, canonicalPromptIntentEvidence{Field: "aspect_ratio", NormalizedValue: item.ratio, SourceKind: "explicit_text", Confidence: "high"})
+			break
+		}
+	}
 	for _, match := range canonicalResolutionPattern.FindAllStringSubmatch(prompt, -1) {
 		if len(match) < 2 {
 			continue
@@ -245,20 +321,21 @@ func canonicalPromptIntent(prompt string) canonicalPromptIntentHints {
 		}
 	}
 	hints.ReferenceImageRequested = canonicalReferencePattern.MatchString(prompt) || canonicalReferenceCountPattern.MatchString(prompt)
+	hints.RequestedInputMode = canonicalPromptInputMode(prompt, hints.ReferenceImageRequested)
+	if hints.RequestedInputMode != "" {
+		hints.Evidence = append(hints.Evidence, canonicalPromptIntentEvidence{Field: "input_mode", NormalizedValue: hints.RequestedInputMode, SourceKind: "explicit_text", Confidence: "high"})
+	}
 	if hints.ReferenceImageRequested {
-		hints.RequestedInputMode = "IMAGE_TO_VIDEO"
 		value := any(true)
 		if match := canonicalReferenceCountPattern.FindStringSubmatch(prompt); len(match) >= 2 {
-			if count, err := strconv.Atoi(match[1]); err == nil && count > 0 {
+			if count, ok := canonicalChineseCount(match[1]); ok {
 				hints.RequestedReferenceCount = &count
 				value = count
 			}
 		}
-		hints.Evidence = append(hints.Evidence,
-			canonicalPromptIntentEvidence{Field: "reference_images", NormalizedValue: value, SourceKind: "explicit_text", Confidence: "high"},
-			canonicalPromptIntentEvidence{Field: "input_mode", NormalizedValue: "IMAGE_TO_VIDEO", SourceKind: "explicit_text", Confidence: "high"},
-		)
+		hints.Evidence = append(hints.Evidence, canonicalPromptIntentEvidence{Field: "reference_images", NormalizedValue: value, SourceKind: "explicit_text", Confidence: "high"})
 	}
+	hints.ComplexitySignals = canonicalComplexitySignals(prompt)
 	return hints
 }
 
@@ -279,6 +356,8 @@ func canonicalConsistency(execution canonicalVideoExecution, hints canonicalProm
 	}
 	if hints.RequestedInputMode != "" && hints.RequestedInputMode != execution.InputMode {
 		warnings = append(warnings, canonicalWarning("VIDEO_PROMPT_MODE_MISMATCH", "input_mode", execution.InputMode, hints.RequestedInputMode))
+	} else if hints.ReferenceImageRequested && execution.InputMode == "TEXT_TO_VIDEO" {
+		warnings = append(warnings, canonicalWarning("VIDEO_PROMPT_MODE_MISMATCH", "input_mode", execution.InputMode, "IMAGE_TO_VIDEO"))
 	}
 	if hints.ReferenceImageRequested && len(execution.ReferenceImages) == 0 && execution.FirstFrame == "" {
 		requested := any(true)
@@ -287,11 +366,18 @@ func canonicalConsistency(execution canonicalVideoExecution, hints canonicalProm
 		}
 		warnings = append(warnings, canonicalWarning("VIDEO_PROMPT_REFERENCE_MISSING", "reference_images", []string{}, requested))
 	}
+	if len(hints.ComplexitySignals) >= 3 {
+		warnings = append(warnings, canonicalWarning("VIDEO_PROMPT_COMPLEXITY_WARNING", "prompt", nil, hints.ComplexitySignals))
+	}
+	warningCodes := make([]string, 0, len(warnings))
+	for _, item := range warnings {
+		warningCodes = append(warningCodes, item.Code)
+	}
 	status := "ok"
 	if len(warnings) > 0 {
 		status = "warning"
 	}
-	return canonicalConsistencyResult{Status: status, Warnings: warnings}
+	return canonicalConsistencyResult{Status: status, WarningCodes: warningCodes, Warnings: warnings}
 }
 
 func canonicalOptionalParameters(parameters map[string]any) (canonicalVideoOptionalParameters, error) {
