@@ -135,6 +135,17 @@ func TestCanonicalVideoRequestRepresentationAndHashAreDeterministic(t *testing.T
 	if hashA == "" || hashA != hashB {
 		t.Fatalf("hashes = %q / %q", hashA, hashB)
 	}
+	requestB.PromptIntentHints.RequestedDurationSeconds = nil
+	requestB.ConsistencyResult.Warnings = append(requestB.ConsistencyResult.Warnings, canonicalConsistencyWarning{
+		Code: "UI_ONLY_DIAGNOSTIC", Field: "prompt", Severity: "warning",
+	})
+	hashDiagnosticsChanged, err := canonicalVideoRequestHash(requestB)
+	if err != nil {
+		t.Fatalf("hash with changed diagnostics: %v", err)
+	}
+	if hashA != hashDiagnosticsChanged {
+		t.Fatalf("diagnostics changed execution hash: %q / %q", hashA, hashDiagnosticsChanged)
+	}
 }
 
 func TestCanonicalVideoRequestRejectsMissingAndInvalidFields(t *testing.T) {

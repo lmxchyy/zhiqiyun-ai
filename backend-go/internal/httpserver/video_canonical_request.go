@@ -419,8 +419,15 @@ func canonicalVideoRequestRepresentation(request canonicalVideoRequest) ([]byte,
 	return json.Marshal(request)
 }
 
+// canonicalVideoRequestHash covers provider-relevant content plus execution
+// fields only. Prompt intent hints and consistency diagnostics are deliberately
+// excluded so warning/UI changes cannot alter the execution identity.
 func canonicalVideoRequestHash(request canonicalVideoRequest) (string, error) {
-	representation, err := canonicalVideoRequestRepresentation(request)
+	executionIdentity := struct {
+		Prompt    string                  `json:"prompt"`
+		Execution canonicalVideoExecution `json:"execution"`
+	}{Prompt: request.Prompt, Execution: request.Execution}
+	representation, err := json.Marshal(executionIdentity)
 	if err != nil {
 		return "", err
 	}
