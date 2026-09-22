@@ -1,7 +1,7 @@
 # Video Prompt Guard — Phase 1 Design
 
 Issue: #175  
-Status: proposal; requires approval before implementation.
+Status: design approved; Phase 2 pure builder and unit tests implemented. No persistence or transport wiring.
 
 ## Goal
 
@@ -135,6 +135,6 @@ Forbidden: full user/provider prompt, reference URLs, signed URLs, API keys, and
 
 ## Migration and rollout risk
 
-- Phase 1 is code plus unit tests only; no production deploy or feature enablement is included.
+- Phase 2 is pure code plus unit tests only; no production deploy, task persistence, or feature enablement is included.
 - A later rollout must be separately reviewed, should be feature-gated, and must use a stable stored Guard snapshot per task.
 - Success/failure-rate comparison must control for model, channel, input mode, duration, ratio, and resolution; it must not be used to conceal #162 channel reliability failures.
