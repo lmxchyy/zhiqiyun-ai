@@ -115,7 +115,6 @@ type videoPromptTransportDecision struct {
 	Mode         string
 	PromptSource string
 	Snapshot     videoPromptExecution
-	HasSnapshot  bool
 }
 
 func (a api) videoPromptGuardMode() string {
@@ -135,7 +134,14 @@ func (a api) videoPromptGuardMode() string {
 func (a api) videoPromptTransportRequest(req generation.CreateRequest) (generation.CreateRequest, videoPromptTransportDecision) {
 	decision := videoPromptTransportDecision{Mode: a.videoPromptGuardMode(), PromptSource: videoPromptSourceOriginal}
 	snapshot, ok := videoPromptExecutionFromParams(req.Params, req.Prompt)
-	if !ok || decision.Mode == videoPromptGuardModeOff || decision.Mode == videoPromptGuardModeShadow {
+	if !ok {
+		return req, decision
+	}
+	// Telemetry retains validated snapshot metadata even when the effective
+	// source is original, so shadow/off evidence describes the prompt actually
+	// sent without logging either prompt body.
+	decision.Snapshot = snapshot
+	if decision.Mode == videoPromptGuardModeOff || decision.Mode == videoPromptGuardModeShadow {
 		return req, decision
 	}
 	if decision.Mode == videoPromptGuardModeCanary && !csvAllowlistContains(a.cfg.VideoPromptGuardCanaryUsers, req.UserID) {
@@ -146,16 +152,14 @@ func (a api) videoPromptTransportRequest(req generation.CreateRequest) (generati
 	next := cloneGenerationCreateRequest(req)
 	next.Prompt = snapshot.ProviderPrompt
 	decision.PromptSource = videoPromptSourceGuarded
-	decision.Snapshot = snapshot
-	decision.HasSnapshot = true
 	return next, decision
 }
 
 func videoPromptTransportTelemetry(taskID string, params map[string]any, decision videoPromptTransportDecision) {
-	if !decision.HasSnapshot {
-		return
-	}
-	log.Printf("video_prompt_guard_transport task_id=%s mode=%s guard_version=%s prompt_source=%s user_prompt_hash=%s provider_prompt_hash=%s transformation_codes=%s canonical_hash=%s", taskID, decision.Mode, decision.Snapshot.GuardVersion, decision.PromptSource, decision.Snapshot.UserPromptHash, decision.Snapshot.ProviderPromptHash, strings.Join(decision.Snapshot.TransformationCodes, ","), stringValue(params[canonicalVideoHashParam]))
+	// Emit for every provider attempt, including legacy/invalid snapshots. Empty
+	// Guard metadata means no validated snapshot existed; prompt_source still
+	// reports the exact transport decision rather than inferring from mode.
+	log.Printf("event=video_prompt_guard_transport task_id=%s mode=%s guard_version=%s prompt_source=%s user_prompt_hash=%s provider_prompt_hash=%s transformation_codes=%s canonical_hash=%s", taskID, decision.Mode, decision.Snapshot.GuardVersion, decision.PromptSource, decision.Snapshot.UserPromptHash, decision.Snapshot.ProviderPromptHash, strings.Join(decision.Snapshot.TransformationCodes, ","), stringValue(params[canonicalVideoHashParam]))
 }
 
 // removeUntrustedVideoPromptExecution prevents an inbound HTTP/connector
