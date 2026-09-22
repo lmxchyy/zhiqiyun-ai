@@ -138,7 +138,7 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
 	}
-	if !ensureVideoPromptExecutionSnapshot(&req) {
+	if !a.prepareVideoPromptExecutionAtCreation(&req) {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", errors.New("video prompt execution requires canonical request")
 	}
 	task, err := a.store.CreatePendingGenerationTask(req)
@@ -173,7 +173,9 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	if canonicalReq, ok := canonicalVideoDownstreamRequest(req); ok {
 		req = canonicalReq
 	}
-	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(req))
+	providerReq, promptDecision := a.videoPromptTransportRequest(req)
+	videoPromptTransportTelemetry(task.ID, req.Params, promptDecision)
+	prepared, err := service.PrepareVideoTask(ctx, cloneGenerationCreateRequest(providerReq))
 	if err != nil {
 		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
 			return task, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("connector video recovery deferred: %w", err)

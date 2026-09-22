@@ -12,6 +12,14 @@ import (
 )
 
 const (
+	videoPromptGuardModeOff    = "off"
+	videoPromptGuardModeShadow = "shadow"
+	videoPromptGuardModeCanary = "canary"
+	videoPromptGuardModeOn     = "on"
+
+	videoPromptSourceOriginal = "original"
+	videoPromptSourceGuarded  = "guarded"
+
 	videoPromptExecutionVersion = 1
 	videoPromptGuardVersion     = "video-prompt-guard-v1"
 	videoPromptExecutionParam   = "video_prompt_execution"
@@ -29,8 +37,9 @@ const (
 // does not contain another copy of the user prompt: task.Prompt and
 // canonical_video_request.prompt remain the immutable user-request sources.
 //
-// It is intentionally a pure value in this phase. No task, provider, billing,
-// canonical, fingerprint, or persistence path calls this builder yet.
+// It remains outside Canonical, billing and fingerprints. Phase 4 reads this
+// durable value only at the final provider transport boundary when explicitly
+// enabled; it never rebuilds the value in a worker or recovery path.
 type videoPromptExecution struct {
 	SchemaVersion       int      `json:"schema_version"`
 	GuardVersion        string   `json:"guard_version"`
@@ -88,6 +97,67 @@ func ensureVideoPromptExecutionSnapshot(req *generation.CreateRequest) bool {
 	return persistVideoPromptExecutionSnapshot(req)
 }
 
+// prepareVideoPromptExecutionAtCreation is the sole new-task boundary. "off"
+// deliberately writes no new snapshot; existing stored snapshots remain
+// harmless and are ignored by transport selection.
+func (a api) prepareVideoPromptExecutionAtCreation(req *generation.CreateRequest) bool {
+	if req == nil || req.Params == nil {
+		return false
+	}
+	if a.videoPromptGuardMode() == videoPromptGuardModeOff {
+		delete(req.Params, videoPromptExecutionParam)
+		return true
+	}
+	return ensureVideoPromptExecutionSnapshot(req)
+}
+
+type videoPromptTransportDecision struct {
+	Mode         string
+	PromptSource string
+	Snapshot     videoPromptExecution
+	HasSnapshot  bool
+}
+
+func (a api) videoPromptGuardMode() string {
+	switch strings.ToLower(strings.TrimSpace(a.cfg.VideoPromptGuardMode)) {
+	case videoPromptGuardModeOff, videoPromptGuardModeShadow, videoPromptGuardModeCanary, videoPromptGuardModeOn:
+		return strings.ToLower(strings.TrimSpace(a.cfg.VideoPromptGuardMode))
+	default:
+		return videoPromptGuardModeShadow
+	}
+}
+
+// videoPromptTransportRequest is intentionally called only at the final
+// provider boundary. It never builds a Guard result: worker/recovery/MQ and
+// connector replay can only reuse a validated durable snapshot. Apart from
+// Prompt, the request is cloned unchanged, preserving Canonical, billing and
+// fingerprint inputs.
+func (a api) videoPromptTransportRequest(req generation.CreateRequest) (generation.CreateRequest, videoPromptTransportDecision) {
+	decision := videoPromptTransportDecision{Mode: a.videoPromptGuardMode(), PromptSource: videoPromptSourceOriginal}
+	snapshot, ok := videoPromptExecutionFromParams(req.Params, req.Prompt)
+	if !ok || decision.Mode == videoPromptGuardModeOff || decision.Mode == videoPromptGuardModeShadow {
+		return req, decision
+	}
+	if decision.Mode == videoPromptGuardModeCanary && !csvAllowlistContains(a.cfg.VideoPromptGuardCanaryUsers, req.UserID) {
+		return req, decision
+	}
+	// "on" applies to every task which already has a server-created snapshot;
+	// legacy tasks have no snapshot and deliberately retain original prompt.
+	next := cloneGenerationCreateRequest(req)
+	next.Prompt = snapshot.ProviderPrompt
+	decision.PromptSource = videoPromptSourceGuarded
+	decision.Snapshot = snapshot
+	decision.HasSnapshot = true
+	return next, decision
+}
+
+func videoPromptTransportTelemetry(taskID string, params map[string]any, decision videoPromptTransportDecision) {
+	if !decision.HasSnapshot {
+		return
+	}
+	log.Printf("video_prompt_guard_transport task_id=%s mode=%s guard_version=%s prompt_source=%s user_prompt_hash=%s provider_prompt_hash=%s transformation_codes=%s canonical_hash=%s", taskID, decision.Mode, decision.Snapshot.GuardVersion, decision.PromptSource, decision.Snapshot.UserPromptHash, decision.Snapshot.ProviderPromptHash, strings.Join(decision.Snapshot.TransformationCodes, ","), stringValue(params[canonicalVideoHashParam]))
+}
+
 // removeUntrustedVideoPromptExecution prevents an inbound HTTP/connector
 // payload from choosing either a provider prompt or an old guard version.
 // Trusted retry code restores a validated snapshot only after preparation.
@@ -140,10 +210,10 @@ func videoPromptExecutionFromParams(params map[string]any, userPrompt string) (v
 	return snapshot, true
 }
 
-// videoPromptExecutionTelemetry is shadow-only observability. In particular,
-// never log either prompt, reference URL, provider credential or arbitrary
-// provider payload. provider_prompt is not applied to req.Prompt in Phase 3.
-// redactVideoPromptExecution removes the private provider-prompt snapshot from
+// videoPromptExecutionTelemetry records snapshot creation safely. In
+// particular, never log either prompt, reference URL, provider credential or
+// arbitrary provider payload. redactVideoPromptExecution removes the private
+// provider-prompt snapshot from
 // user-facing task responses. Phase 3 intentionally has no public diagnostic
 // surface for transformed prompts.
 func redactVideoPromptExecution(task generationTask) generationTask {

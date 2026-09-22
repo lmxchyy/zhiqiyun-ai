@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
+	"xianzhi-ai/backend-go/internal/config"
 )
 
 type recordingVideoPromptProvider struct {
@@ -299,6 +300,148 @@ func TestVideoPromptExecutionShadowProviderReceivesOriginalCanonicalPrompt(t *te
 	}
 	if provider.request.Prompt != prepared.Prompt || provider.request.Prompt == snapshot.ProviderPrompt {
 		t.Fatalf("shadow provider prompt=%q task=%q stored provider_prompt=%q", provider.request.Prompt, prepared.Prompt, snapshot.ProviderPrompt)
+	}
+}
+
+func TestVideoPromptGuardTransportModesUseOnlyPersistedSnapshot(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	prepared.UserID = "guard-canary-user"
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected persisted snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok || snapshot.ProviderPrompt == prepared.Prompt {
+		t.Fatalf("transport fixture requires changed snapshot: %#v", snapshot)
+	}
+	canonical, ok := canonicalVideoRequestFromParams(prepared.Params)
+	if !ok {
+		t.Fatal("missing canonical request")
+	}
+	canonicalHash, err := canonicalVideoRequestHash(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := videoRequestFingerprint("task-transport", "provider", "video", prepared.Model, prepared.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name, mode, users, expectedSource, expectedPrompt string
+		legacy                                            bool
+	}{
+		{name: "off", mode: videoPromptGuardModeOff, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
+		{name: "shadow", mode: videoPromptGuardModeShadow, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
+		{name: "canary eligible", mode: videoPromptGuardModeCanary, users: prepared.UserID, expectedSource: videoPromptSourceGuarded, expectedPrompt: snapshot.ProviderPrompt},
+		{name: "canary ineligible", mode: videoPromptGuardModeCanary, users: "another-user", expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
+		{name: "on", mode: videoPromptGuardModeOn, expectedSource: videoPromptSourceGuarded, expectedPrompt: snapshot.ProviderPrompt},
+		{name: "invalid mode fails closed", mode: "unsafe", expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
+		{name: "wildcard is rejected", mode: videoPromptGuardModeCanary, users: "*", expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
+		{name: "legacy", mode: videoPromptGuardModeOn, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt, legacy: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := cloneGenerationCreateRequest(prepared)
+			if tc.legacy {
+				delete(request.Params, videoPromptExecutionParam)
+			}
+			server := api{cfg: config.Config{VideoPromptGuardMode: tc.mode, VideoPromptGuardCanaryUsers: tc.users}}
+			providerRequest, decision := server.videoPromptTransportRequest(request)
+			if !reflect.DeepEqual(providerRequest.Params, request.Params) {
+				t.Fatal("transport changed non-prompt params (including billing metadata)")
+			}
+			if decision.PromptSource != tc.expectedSource {
+				t.Fatalf("source=%q, want %q", decision.PromptSource, tc.expectedSource)
+			}
+			provider := &recordingVideoPromptProvider{}
+			service := generation.NewServiceWithOptions(generation.ServiceOptions{VideoProvider: provider})
+			if _, err := service.PrepareVideoTask(context.Background(), providerRequest); err != nil {
+				t.Fatal(err)
+			}
+			if provider.request.Prompt != tc.expectedPrompt {
+				t.Fatalf("provider prompt=%q, want %q", provider.request.Prompt, tc.expectedPrompt)
+			}
+			gotCanonical, ok := canonicalVideoRequestFromParams(provider.request.Params)
+			if !ok || !reflect.DeepEqual(gotCanonical.Execution, canonical.Execution) {
+				t.Fatalf("execution drift: %#v", gotCanonical)
+			}
+			gotHash, err := canonicalVideoRequestHash(gotCanonical)
+			if err != nil || gotHash != canonicalHash {
+				t.Fatalf("canonical hash drift: got=%q err=%v want=%q", gotHash, err, canonicalHash)
+			}
+			gotFingerprint, err := videoRequestFingerprint("task-transport", "provider", "video", provider.request.Model, provider.request.Params)
+			if err != nil || gotFingerprint != fingerprint {
+				t.Fatalf("fingerprint drift: got=%q err=%v want=%q", gotFingerprint, err, fingerprint)
+			}
+		})
+	}
+}
+
+func TestVideoPromptGuardTransportRetryAndRecoveryReusePersistedP1(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok {
+		t.Fatal("missing snapshot")
+	}
+	snapshot.ProviderPrompt = "P1 persisted guarded provider prompt"
+	snapshot.ProviderPromptHash = videoPromptHash(snapshot.ProviderPrompt)
+	prepared.Params[videoPromptExecutionParam] = snapshot
+	server := api{cfg: config.Config{VideoPromptGuardMode: videoPromptGuardModeOn}}
+	for _, name := range []string{"retry", "stale recovery", "mq redelivery", "connector replay"} {
+		t.Run(name, func(t *testing.T) {
+			request := cloneGenerationCreateRequest(prepared)
+			providerRequest, decision := server.videoPromptTransportRequest(request)
+			if decision.PromptSource != videoPromptSourceGuarded || providerRequest.Prompt != snapshot.ProviderPrompt {
+				t.Fatalf("did not reuse P1: decision=%#v prompt=%q", decision, providerRequest.Prompt)
+			}
+			provider := &recordingVideoPromptProvider{}
+			service := generation.NewServiceWithOptions(generation.ServiceOptions{VideoProvider: provider})
+			if _, err := service.PrepareVideoTask(context.Background(), providerRequest); err != nil {
+				t.Fatal(err)
+			}
+			if provider.request.Prompt != snapshot.ProviderPrompt {
+				t.Fatalf("provider prompt=%q, want P1=%q", provider.request.Prompt, snapshot.ProviderPrompt)
+			}
+		})
+	}
+}
+
+func TestVideoPromptTransportTelemetryIsSafeAndComplete(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	prepared.UserID = "guard-canary-user"
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected snapshot")
+	}
+	server := api{cfg: config.Config{VideoPromptGuardMode: videoPromptGuardModeOn}}
+	_, decision := server.videoPromptTransportRequest(prepared)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+	videoPromptTransportTelemetry("task-telemetry", prepared.Params, decision)
+	output := logs.String()
+	for _, field := range []string{"task_id=task-telemetry", "mode=on", "guard_version=", "prompt_source=guarded", "user_prompt_hash=", "provider_prompt_hash=", "transformation_codes=", "canonical_hash="} {
+		if !strings.Contains(output, field) {
+			t.Fatalf("missing %q from telemetry: %s", field, output)
+		}
+	}
+	snapshot, _ := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if strings.Contains(output, prepared.Prompt) || strings.Contains(output, snapshot.ProviderPrompt) {
+		t.Fatalf("transport telemetry leaked prompt: %s", output)
+	}
+}
+
+func TestVideoPromptGuardOffDoesNotPersistNewSnapshot(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	server := api{cfg: config.Config{VideoPromptGuardMode: videoPromptGuardModeOff}}
+	if !server.prepareVideoPromptExecutionAtCreation(&prepared) {
+		t.Fatal("off mode must allow canonical video creation")
+	}
+	if _, exists := prepared.Params[videoPromptExecutionParam]; exists {
+		t.Fatal("off mode persisted a prompt snapshot")
 	}
 }
 

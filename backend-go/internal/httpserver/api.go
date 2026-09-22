@@ -1013,7 +1013,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		service = configuredService
 	}
 	if isVideoGenerationRequest(req.Type) {
-		if !ensureVideoPromptExecutionSnapshot(&req) {
+		if !a.prepareVideoPromptExecutionAtCreation(&req) {
 			writeError(w, http.StatusInternalServerError, errors.New("video prompt execution requires canonical request"))
 			return
 		}
@@ -1700,9 +1700,11 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if canonicalReq, ok := canonicalVideoDownstreamRequest(req); ok {
 		req = canonicalReq
 	}
-	// Shadow stage: req.Prompt deliberately remains task/canonical original
-	// prompt. The stored provider_prompt is telemetry-only and is never sent
-	// to PrepareVideoTask until a separately approved transport rollout.
+	// Phase 4 selects only a validated persisted snapshot at the final
+	// provider boundary; it never rebuilds Guard state in workers/recovery.
+	providerReq, promptDecision := a.videoPromptTransportRequest(req)
+	videoPromptTransportTelemetry(taskID, req.Params, promptDecision)
+	req = providerReq
 	terminal, err := a.generationTaskTerminal(ctx, taskID)
 	if err != nil || terminal {
 		return err

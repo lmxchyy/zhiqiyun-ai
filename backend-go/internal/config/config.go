@@ -136,12 +136,16 @@ type Config struct {
 	VideoAsyncCanaryUsers                  string
 	VideoAsyncCanaryProviderAllowlist      string
 	VideoAsyncCanaryModelAllowlist         string
-	VideoStoragePersistenceEnabled         bool
-	PPTAsyncCanaryEnabled                  bool
-	PPTAsyncCanaryUsers                    string
-	PPTAsyncCanaryProviderAllowlist        string
-	PPTAsyncCanaryModelAllowlist           string
-	ProviderExecutionSafetyEnabled         bool
+	// VideoPromptGuardMode controls only the provider transport prompt. It
+	// defaults to shadow; invalid values fail closed to shadow.
+	VideoPromptGuardMode            string
+	VideoPromptGuardCanaryUsers     string
+	VideoStoragePersistenceEnabled  bool
+	PPTAsyncCanaryEnabled           bool
+	PPTAsyncCanaryUsers             string
+	PPTAsyncCanaryProviderAllowlist string
+	PPTAsyncCanaryModelAllowlist    string
+	ProviderExecutionSafetyEnabled  bool
 }
 
 func Load() Config {
@@ -352,6 +356,8 @@ func Load() Config {
 		VideoAsyncCanaryUsers:                  os.Getenv("VIDEO_ASYNC_CANARY_USERS"),
 		VideoAsyncCanaryProviderAllowlist:      os.Getenv("VIDEO_ASYNC_CANARY_PROVIDER_ALLOWLIST"),
 		VideoAsyncCanaryModelAllowlist:         os.Getenv("VIDEO_ASYNC_CANARY_MODEL_ALLOWLIST"),
+		VideoPromptGuardMode:                   stringEnvOrDefault("VIDEO_PROMPT_GUARD_MODE", "shadow"),
+		VideoPromptGuardCanaryUsers:            os.Getenv("VIDEO_PROMPT_GUARD_CANARY_USERS"),
 		VideoStoragePersistenceEnabled:         boolEnv(os.Getenv("VIDEO_STORAGE_PERSISTENCE_ENABLED")),
 		PPTAsyncCanaryEnabled:                  boolEnv(os.Getenv("PPT_ASYNC_CANARY_ENABLED")),
 		PPTAsyncCanaryUsers:                    os.Getenv("PPT_ASYNC_CANARY_USERS"),

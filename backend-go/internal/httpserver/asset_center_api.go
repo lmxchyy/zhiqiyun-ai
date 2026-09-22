@@ -548,7 +548,7 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 		return generationTask{}, err
 	}
 	if isVideoGenerationRequest(req.Type) {
-		if !ensureVideoPromptExecutionSnapshot(&req) {
+		if !a.prepareVideoPromptExecutionAtCreation(&req) {
 			return generationTask{}, errors.New("video prompt execution requires canonical request")
 		}
 		if a.videoAsyncCanaryEligible(req) {
