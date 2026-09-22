@@ -1,15 +1,20 @@
 package httpserver
 
 import (
+	"encoding/json"
+	"log"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"xianzhi-ai/backend-go/internal/app/generation"
 )
 
 const (
 	videoPromptExecutionVersion = 1
 	videoPromptGuardVersion     = "video-prompt-guard-v1"
+	videoPromptExecutionParam   = "video_prompt_execution"
 
 	videoPromptStrippedExecutionParamsCode   = "VIDEO_PROMPT_STRIPPED_EXECUTION_PARAMS"
 	videoPromptRemovedMissingReferenceCode   = "VIDEO_PROMPT_REMOVED_MISSING_REFERENCE"
@@ -49,6 +54,119 @@ var (
 	videoPromptAudioPattern            = regexp.MustCompile(`(?i)(?:人物)?\s*(?:精确)?(?:说出|口播|旁白|同步中文配音|同步配音|精确中文语音|逐字口型同步|lip[-\s]?sync)\s*[:：]?\s*(?:[「“\"'][^」”\"'\n]{1,160}[」”\"']|[^，。；;\n]{0,100})`)
 	videoPromptMissingReferencePattern = regexp.MustCompile(`(?i)(?:请)?(?:参考|依据|根据)(?:我?上传|提供|这|该)?(?:的)?\s*(?:[一二三四五六七\d]+\s*张?)?\s*(?:参考)?(?:图|图片|图像|照片|插画|素材)(?:来|进行)?(?:生成|制作)?`)
 )
+
+// persistVideoPromptExecutionSnapshot writes the only persisted Prompt Guard
+// state. It is deliberately adjacent to canonical_video_request rather than
+// inside it: Canonical, billing and request fingerprints continue to describe
+// the user's original request and structured execution only.
+//
+// Call this only at a new video-task creation boundary. Worker redelivery,
+// stale recovery and connector dispatch reconstruct Params from the task and
+// must only read/reuse this value.
+func persistVideoPromptExecutionSnapshot(req *generation.CreateRequest) bool {
+	if req == nil || req.Params == nil {
+		return false
+	}
+	canonical, ok := canonicalVideoRequestFromParams(req.Params)
+	if !ok {
+		return false
+	}
+	req.Params[videoPromptExecutionParam] = buildVideoPromptExecution(videoPromptGuardInput{
+		UserPrompt: req.Prompt,
+		Canonical:  canonical,
+	})
+	return true
+}
+
+func ensureVideoPromptExecutionSnapshot(req *generation.CreateRequest) bool {
+	if req == nil || req.Params == nil {
+		return false
+	}
+	if _, ok := videoPromptExecutionFromParams(req.Params, req.Prompt); ok {
+		return true
+	}
+	return persistVideoPromptExecutionSnapshot(req)
+}
+
+// removeUntrustedVideoPromptExecution prevents an inbound HTTP/connector
+// payload from choosing either a provider prompt or an old guard version.
+// Trusted retry code restores a validated snapshot only after preparation.
+func removeUntrustedVideoPromptExecution(req *generation.CreateRequest) {
+	if req != nil && req.Params != nil {
+		delete(req.Params, videoPromptExecutionParam)
+	}
+}
+
+// reuseVideoPromptExecutionSnapshot copies a validated immutable snapshot from
+// an existing task into a transient request. This is the only path which may
+// carry a prior Guard version into a retry child; callers must source Params
+// from trusted task storage, never a client payload.
+func reuseVideoPromptExecutionSnapshot(req *generation.CreateRequest, storedParams map[string]any) bool {
+	if req == nil || req.Params == nil {
+		return false
+	}
+	snapshot, ok := videoPromptExecutionFromParams(storedParams, req.Prompt)
+	if !ok {
+		return false
+	}
+	req.Params[videoPromptExecutionParam] = snapshot
+	return true
+}
+
+func videoPromptExecutionFromParams(params map[string]any, userPrompt string) (videoPromptExecution, bool) {
+	if params == nil {
+		return videoPromptExecution{}, false
+	}
+	value, exists := params[videoPromptExecutionParam]
+	if !exists || value == nil {
+		return videoPromptExecution{}, false
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return videoPromptExecution{}, false
+	}
+	var snapshot videoPromptExecution
+	if err := json.Unmarshal(payload, &snapshot); err != nil || snapshot.SchemaVersion != videoPromptExecutionVersion || strings.TrimSpace(snapshot.GuardVersion) == "" {
+		return videoPromptExecution{}, false
+	}
+	if snapshot.UserPromptHash != videoPromptHash(userPrompt) || snapshot.ProviderPromptHash != videoPromptHash(snapshot.ProviderPrompt) {
+		return videoPromptExecution{}, false
+	}
+	for index, code := range snapshot.TransformationCodes {
+		if strings.TrimSpace(code) == "" || (index > 0 && snapshot.TransformationCodes[index-1] >= code) {
+			return videoPromptExecution{}, false
+		}
+	}
+	return snapshot, true
+}
+
+// videoPromptExecutionTelemetry is shadow-only observability. In particular,
+// never log either prompt, reference URL, provider credential or arbitrary
+// provider payload. provider_prompt is not applied to req.Prompt in Phase 3.
+// redactVideoPromptExecution removes the private provider-prompt snapshot from
+// user-facing task responses. Phase 3 intentionally has no public diagnostic
+// surface for transformed prompts.
+func redactVideoPromptExecution(task generationTask) generationTask {
+	task.Params = cloneAnyMap(task.Params)
+	delete(task.Params, videoPromptExecutionParam)
+	return task
+}
+
+func redactVideoPromptExecutionRequest(req generation.CreateRequest) generation.CreateRequest {
+	req.Params = cloneAnyMap(req.Params)
+	delete(req.Params, videoPromptExecutionParam)
+	return req
+}
+
+func videoPromptExecutionTelemetry(task generationTask, params map[string]any) {
+	snapshot, ok := videoPromptExecutionFromParams(params, task.Prompt)
+	if !ok {
+		return
+	}
+	canonicalHash := stringValue(params[canonicalVideoHashParam])
+	preflightCodes := videoPromptStringSlice(params["preflight_warning_codes"])
+	log.Printf("video_prompt_guard_shadow task_id=%s schema_version=%d guard_version=%s canonical_hash=%s user_prompt_hash=%s provider_prompt_hash=%s user_prompt_length=%d provider_prompt_length=%d changed=%t transformation_codes=%s preflight_warning_codes=%s", task.ID, snapshot.SchemaVersion, snapshot.GuardVersion, canonicalHash, snapshot.UserPromptHash, snapshot.ProviderPromptHash, len([]rune(task.Prompt)), len([]rune(snapshot.ProviderPrompt)), snapshot.ProviderPromptHash != snapshot.UserPromptHash, strings.Join(snapshot.TransformationCodes, ","), strings.Join(preflightCodes, ","))
+}
 
 // buildVideoPromptExecution is deterministic and side-effect free. It never
 // mutates input.Canonical; its output is only a future provider transport

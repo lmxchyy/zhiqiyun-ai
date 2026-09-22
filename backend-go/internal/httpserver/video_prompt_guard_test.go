@@ -223,6 +223,108 @@ func TestVideoPromptGuardHashesAndFingerprintRemainSeparated(t *testing.T) {
 	}
 }
 
+func TestVideoPromptExecutionSnapshotIsPersistedAndShadowDoesNotChangeProviderPrompt(t *testing.T) {
+	_, data, _, prepared := canonicalDownstreamPreparedRequest(t)
+	canonicalHash := stringValue(prepared.Params[canonicalVideoHashParam])
+	fingerprintBefore, err := videoRequestFingerprint("task-shadow", "mock", "video", prepared.Model, prepared.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoteBefore, err := generationQuoteForRequest(prepared, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected canonical task to receive a prompt execution snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok {
+		t.Fatalf("missing valid persisted snapshot: %#v", prepared.Params)
+	}
+	if snapshot.GuardVersion != videoPromptGuardVersion || snapshot.ProviderPrompt == "" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	fingerprintAfter, err := videoRequestFingerprint("task-shadow", "mock", "video", prepared.Model, prepared.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoteAfter, err := generationQuoteForRequest(prepared, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fingerprintBefore != fingerprintAfter || quoteBefore.RequiredPoints != quoteAfter.RequiredPoints || canonicalHash != stringValue(prepared.Params[canonicalVideoHashParam]) {
+		t.Fatalf("shadow snapshot changed request semantics fingerprint=%q/%q quote=%#v/%#v canonical=%q/%q", fingerprintBefore, fingerprintAfter, quoteBefore, quoteAfter, canonicalHash, stringValue(prepared.Params[canonicalVideoHashParam]))
+	}
+	providerRequest, canonicalPath := canonicalVideoDownstreamRequest(prepared)
+	if !canonicalPath || providerRequest.Prompt != prepared.Prompt || providerRequest.Prompt == snapshot.ProviderPrompt && snapshot.ProviderPrompt != prepared.Prompt {
+		t.Fatalf("shadow transport changed provider prompt request=%q task=%q snapshot=%q", providerRequest.Prompt, prepared.Prompt, snapshot.ProviderPrompt)
+	}
+	redacted := redactVideoPromptExecution(generationTask{Prompt: prepared.Prompt, Params: prepared.Params})
+	if _, exposed := redacted.Params[videoPromptExecutionParam]; exposed {
+		t.Fatal("provider prompt snapshot leaked to a public task projection")
+	}
+}
+
+func TestVideoPromptExecutionSnapshotIsDeterministicAcrossConcurrentCreationPreparation(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	delete(prepared.Params, videoPromptExecutionParam)
+	const workers = 24
+	results := make(chan videoPromptExecution, workers)
+	for index := 0; index < workers; index++ {
+		go func() {
+			candidate := cloneGenerationCreateRequest(prepared)
+			if !ensureVideoPromptExecutionSnapshot(&candidate) {
+				results <- videoPromptExecution{}
+				return
+			}
+			snapshot, _ := videoPromptExecutionFromParams(candidate.Params, candidate.Prompt)
+			results <- snapshot
+		}()
+	}
+	var expected videoPromptExecution
+	for index := 0; index < workers; index++ {
+		got := <-results
+		if got.ProviderPrompt == "" {
+			t.Fatal("concurrent preparation produced no snapshot")
+		}
+		if index == 0 {
+			expected = got
+		} else if !reflect.DeepEqual(got, expected) {
+			t.Fatalf("concurrent preparations diverged: %#v / %#v", got, expected)
+		}
+	}
+}
+
+func TestVideoPromptExecutionSnapshotReusesStoredVersionAndLegacyFallsBack(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected canonical task snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok {
+		t.Fatal("missing snapshot")
+	}
+	// Simulate a task created before a future Guard implementation. A retry,
+	// restart or connector redelivery must keep this stored version verbatim.
+	snapshot.GuardVersion = "video-prompt-guard-v2"
+	prepared.Params[videoPromptExecutionParam] = snapshot
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected stored snapshot to be reused")
+	}
+	reused, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok || reused.GuardVersion != "video-prompt-guard-v2" || !reflect.DeepEqual(reused, snapshot) {
+		t.Fatalf("stored snapshot was recomputed: %#v", reused)
+	}
+
+	legacy := generation.CreateRequest{Type: "TEXT_TO_VIDEO", Prompt: "legacy prompt", Model: "mock-video", Params: map[string]any{"duration": 5, "aspect_ratio": "16:9", "resolution": "480p"}}
+	if ensureVideoPromptExecutionSnapshot(&legacy) {
+		t.Fatal("legacy task unexpectedly received a canonical prompt snapshot")
+	}
+	if projected, canonicalPath := canonicalVideoDownstreamRequest(legacy); canonicalPath || projected.Prompt != legacy.Prompt {
+		t.Fatalf("legacy fallback changed prompt/path: %#v canonical=%t", projected, canonicalPath)
+	}
+}
+
 func TestVideoPromptGuardOddUnicodeAndMinimalInputAreSafe(t *testing.T) {
 	prompt := "\r\n  ✨\t商务男性🙂\r\n屏幕上精确显示「合规」\r\n"
 	canonical := guardCanonical(t, strings.TrimSpace(prompt), "TEXT_TO_VIDEO", 15, nil)

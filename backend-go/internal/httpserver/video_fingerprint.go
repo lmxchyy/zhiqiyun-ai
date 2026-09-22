@@ -81,6 +81,9 @@ func videoFingerprintExcludedParams() map[string]struct{} {
 		canonicalVideoRequestParam:    {},
 		canonicalVideoHashParam:       {},
 		canonicalVideoLegacyPathParam: {},
+		// Shadow-only Prompt Guard snapshot. provider_prompt is intentionally
+		// outside the user-request/provider-execution identity in Phase 3.
+		videoPromptExecutionParam: {},
 	}
 	return excluded
 }

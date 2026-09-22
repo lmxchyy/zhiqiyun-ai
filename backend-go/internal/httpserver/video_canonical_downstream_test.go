@@ -62,6 +62,9 @@ func TestCanonicalVideoTaskPersistenceUsesCanonicalSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("missing canonical prompt execution snapshot")
+	}
 	task, err := store.CreatePendingGenerationTask(prepared)
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +72,9 @@ func TestCanonicalVideoTaskPersistenceUsesCanonicalSnapshot(t *testing.T) {
 	canonical, ok := canonicalVideoRequestFromParams(task.Params)
 	if !ok || canonical.Execution.DurationSeconds != 5 || canonical.Execution.AspectRatio != "16:9" || canonical.Execution.Resolution != "480p" {
 		t.Fatalf("persisted canonical task = %#v", task.Params)
+	}
+	if snapshot, ok := videoPromptExecutionFromParams(task.Params, task.Prompt); !ok || snapshot.GuardVersion != videoPromptGuardVersion {
+		t.Fatalf("persisted prompt execution snapshot = %#v", task.Params[videoPromptExecutionParam])
 	}
 }
 

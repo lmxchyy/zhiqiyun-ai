@@ -142,6 +142,7 @@ func videoPromptPreflightTelemetry(task generationTask, reqType, model string, p
 	}
 	sort.Strings(codes)
 	log.Printf("video_prompt_preflight task_id=%s model=%s duration=%s aspect_ratio=%s input_mode=%s prompt_hash=%s prompt_length=%d canonical_hash=%s preflight_warning_codes=%s", task.ID, model, parameterString(params, "duration"), firstNonEmptyString(parameterString(params, "aspect_ratio"), parameterString(params, "ratio")), firstNonEmptyString(parameterString(params, "inputMode"), parameterString(params, "input_mode"), reqType), stringValue(params["prompt_hash"]), len([]rune(task.Prompt)), canonicalHash, strings.Join(codes, ","))
+	videoPromptExecutionTelemetry(task, params)
 }
 
 func videoPromptStringSlice(value any) []string {

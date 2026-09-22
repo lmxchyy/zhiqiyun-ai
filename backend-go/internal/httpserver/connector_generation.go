@@ -99,6 +99,7 @@ func (a api) estimateConnectorGeneration(ctx context.Context, userID string, ent
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	removeUntrustedVideoPromptExecution(&req)
 	connectorMetadata := takeConnectorMetadata(req.Params)
 	req, err = a.prepareConnectorGenerationRequest(data, user, enterpriseID, req)
 	if err != nil {
@@ -124,6 +125,7 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	removeUntrustedVideoPromptExecution(&req)
 	connectorMetadata := takeConnectorMetadata(req.Params)
 	req, err = a.prepareConnectorGenerationRequest(data, user, enterpriseID, req)
 	if err != nil {
@@ -136,9 +138,21 @@ func (a api) executeConnectorVideoGeneration(ctx context.Context, userID string,
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", err
 	}
+	if !ensureVideoPromptExecutionSnapshot(&req) {
+		return generationTask{}, req, storagecenter.FileObject{}, nil, "", errors.New("video prompt execution requires canonical request")
+	}
 	task, err := a.store.CreatePendingGenerationTask(req)
 	if err != nil {
 		return generationTask{}, req, storagecenter.FileObject{}, nil, "", fmt.Errorf("reserve connector video generation: %w", err)
+	}
+	if task.IdempotentReplay {
+		// Legacy/canonical tasks without a stored snapshot stay on their
+		// original-prompt behavior. Do not manufacture a snapshot during a
+		// connector redelivery or recovery.
+		delete(req.Params, videoPromptExecutionParam)
+		reuseVideoPromptExecutionSnapshot(&req, task.Params)
+	} else {
+		videoPromptExecutionTelemetry(task, req.Params)
 	}
 	if strings.EqualFold(task.Status, "SUCCEEDED") {
 		return task, req, storagecenter.FileObject{}, nil, "", nil

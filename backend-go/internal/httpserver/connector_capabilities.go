@@ -234,7 +234,7 @@ func executeConnectorVideoHandler(ctx context.Context, runtime *connectorCapabil
 	if err != nil {
 		return connector.CapabilityResult{}, err
 	}
-	data := map[string]any{"generationRequest": output, "videoBytes": raw, "contentType": contentType, "file": file, "duration": c.Parameters["duration"], "aspectRatio": c.Parameters["aspect_ratio"], "resolution": c.Parameters["resolution"], "model": prepared.Model, "topic": c.Parameters["topic"]}
+	data := map[string]any{"generationRequest": redactVideoPromptExecutionRequest(output), "videoBytes": raw, "contentType": contentType, "file": file, "duration": c.Parameters["duration"], "aspectRatio": c.Parameters["aspect_ratio"], "resolution": c.Parameters["resolution"], "model": prepared.Model, "topic": c.Parameters["topic"]}
 	return connector.CapabilityResult{InternalTaskID: task.ID, Status: "completed", Progress: 100, ActualCost: int64(task.PointCost), AssetIDs: task.ResultIDs, Data: data}, nil
 }
 

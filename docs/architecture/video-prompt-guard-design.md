@@ -1,7 +1,7 @@
-# Video Prompt Guard — Phase 1 Design
+# Video Prompt Guard — Phase 3 Shadow Snapshot Design
 
 Issue: #175  
-Status: design approved; Phase 2 pure builder and unit tests implemented. No persistence or transport wiring.
+Status: Phase 2 pure builder implemented; Phase 3 persists immutable snapshots and emits shadow-only telemetry. Provider transport remains deliberately unchanged.
 
 ## Goal
 
@@ -72,10 +72,10 @@ It returns only the snapshot above. It must never load provider configuration, a
 
 ## Integration plan
 
-1. **Preparation boundary** — after `persistCanonicalVideoRequest` in `prepareGenerationTaskRequest`, build and persist `video_prompt_execution`. This occurs before the task transaction so every dispatch sees the immutable snapshot.
-2. **Worker dispatch** — in `runVideoGenerationTask`, call `canonicalVideoDownstreamRequest` first, then apply the persisted provider prompt to the cloned transport `generation.CreateRequest`, immediately before `PrepareVideoTask`.
-3. **Connector dispatch** — apply the same helper after its canonical projection and before `PrepareVideoTask`.
-4. **No provider adapter changes** — adapters already take their prompt from `req.Prompt`; the transport projection is sufficient and keeps model-specific payload builders unchanged.
+1. **Creation boundary** — after canonical preparation and immediately before a new video task is inserted, create `Params.video_prompt_execution`. The key is additive and nullable for historical rows; no migration or backfill rewrites old tasks. Inbound HTTP/connector values for that key are discarded so clients cannot select a prompt or Guard version.
+2. **Worker/recovery dispatch** — worker redelivery, stale recovery and MQ restart reconstruct their request from persisted task Params. They do not rebuild the Guard. In this shadow phase, `runVideoGenerationTask` intentionally leaves `req.Prompt` equal to the original canonical/task prompt.
+3. **Connector dispatch** — connector redelivery reuses the persisted task snapshot for observation after task creation. It also keeps the existing canonical/original `req.Prompt` for `PrepareVideoTask`.
+4. **No provider adapter changes** — adapters continue to receive their existing prompt from `req.Prompt`; `provider_prompt` is not sent to any adapter in Phase 3.
 5. **No billing/fingerprint changes** — `generationQuoteForRequest`, `canonicalVideoRequestHash`, and `videoRequestFingerprint` remain byte-for-byte unchanged.
 
 ## Idempotency behavior
@@ -95,7 +95,7 @@ Later Guard version
 
 ## Telemetry
 
-Emit a dedicated structured event only after a task ID exists:
+Emit a dedicated structured shadow event only after a task ID exists:
 
 ```text
 video_prompt_guard
@@ -109,7 +109,10 @@ video_prompt_guard
   transformation_codes
   preflight_warning_codes
   guard_version
+  changed
 ```
+
+The snapshot is stripped from user task list/detail/create/retry responses; no public or new diagnostic endpoint returns `provider_prompt`.
 
 Forbidden: full user/provider prompt, reference URLs, signed URLs, API keys, and arbitrary error payloads.
 
