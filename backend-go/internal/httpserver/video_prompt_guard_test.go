@@ -1,12 +1,26 @@
 package httpserver
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log"
 	"reflect"
 	"strings"
 	"testing"
 
 	"xianzhi-ai/backend-go/internal/app/generation"
 )
+
+type recordingVideoPromptProvider struct {
+	request generation.CreateRequest
+}
+
+func (p *recordingVideoPromptProvider) DefaultModel() string { return "mock-video" }
+func (p *recordingVideoPromptProvider) Create(_ context.Context, req generation.CreateRequest) (any, error) {
+	p.request = cloneGenerationCreateRequest(req)
+	return map[string]any{"providerTaskId": "provider-shadow-proof"}, nil
+}
 
 func guardCanonical(t *testing.T, prompt, mode string, duration int, refs []string) canonicalVideoRequest {
 	t.Helper()
@@ -262,6 +276,140 @@ func TestVideoPromptExecutionSnapshotIsPersistedAndShadowDoesNotChangeProviderPr
 	redacted := redactVideoPromptExecution(generationTask{Prompt: prepared.Prompt, Params: prepared.Params})
 	if _, exposed := redacted.Params[videoPromptExecutionParam]; exposed {
 		t.Fatal("provider prompt snapshot leaked to a public task projection")
+	}
+}
+
+func TestVideoPromptExecutionShadowProviderReceivesOriginalCanonicalPrompt(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected prompt snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok || snapshot.ProviderPrompt == prepared.Prompt {
+		t.Fatalf("fixture must deterministically transform the provider prompt: %#v", snapshot)
+	}
+	providerRequest, canonicalPath := canonicalVideoDownstreamRequest(prepared)
+	if !canonicalPath {
+		t.Fatal("expected canonical downstream request")
+	}
+	provider := &recordingVideoPromptProvider{}
+	service := generation.NewServiceWithOptions(generation.ServiceOptions{VideoProvider: provider})
+	if _, err := service.PrepareVideoTask(context.Background(), providerRequest); err != nil {
+		t.Fatal(err)
+	}
+	if provider.request.Prompt != prepared.Prompt || provider.request.Prompt == snapshot.ProviderPrompt {
+		t.Fatalf("shadow provider prompt=%q task=%q stored provider_prompt=%q", provider.request.Prompt, prepared.Prompt, snapshot.ProviderPrompt)
+	}
+}
+
+func TestVideoPromptExecutionPublicProjectionsAndLogsNeverExposeProviderPrompt(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected prompt snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok {
+		t.Fatal("missing snapshot")
+	}
+	// Use a recognisable value so every external serialization surface has an
+	// unambiguous non-leak assertion, rather than only checking the field name.
+	snapshot.ProviderPrompt = "PRIVATE_PROVIDER_PROMPT_MUST_NOT_LEAK"
+	snapshot.ProviderPromptHash = videoPromptHash(snapshot.ProviderPrompt)
+	prepared.Params[videoPromptExecutionParam] = snapshot
+	task := generationTask{ID: "task-private", Prompt: prepared.Prompt, Params: prepared.Params}
+
+	for name, value := range map[string]any{
+		"create/detail/retry task": redactVideoPromptExecution(task),
+		"task list":                redactVideoPromptExecutionTasks([]generationTask{task}),
+		"workspace/history":        compactWorkspaceListTasks([]generationTask{task}),
+		"dashboard":                limitGenerationTasks([]generationTask{task}, 30),
+		"connector result":         redactVideoPromptExecutionRequest(prepared),
+	} {
+		payload, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		if bytes.Contains(payload, []byte(snapshot.ProviderPrompt)) || bytes.Contains(payload, []byte(videoPromptExecutionParam)) {
+			t.Fatalf("%s leaked private snapshot: %s", name, payload)
+		}
+	}
+
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+	videoPromptExecutionTelemetry(task, prepared.Params)
+	if strings.Contains(logs.String(), snapshot.ProviderPrompt) || strings.Contains(logs.String(), videoPromptExecutionParam) {
+		t.Fatalf("shadow telemetry leaked provider prompt: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), snapshot.ProviderPromptHash) {
+		t.Fatalf("shadow telemetry omitted safe hash: %s", logs.String())
+	}
+}
+
+func TestVideoPromptExecutionStoredSnapshotSurvivesRecoveryRedeliveryConnectorAndRetry(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected initial snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok {
+		t.Fatal("missing initial snapshot")
+	}
+	snapshot.GuardVersion = "video-prompt-guard-v1"
+	snapshot.ProviderPrompt = "P1 stored provider prompt"
+	snapshot.ProviderPromptHash = videoPromptHash(snapshot.ProviderPrompt)
+	prepared.Params[videoPromptExecutionParam] = snapshot
+	task := generationTask{ID: "task-v1", Prompt: prepared.Prompt, Params: cloneAnyMap(prepared.Params)}
+
+	// Stale recovery and MQ redelivery both reconstruct their requests from the
+	// durable task Params. Neither path calls the builder.
+	for _, name := range []string{"stale recovery", "mq redelivery"} {
+		request := generation.CreateRequest{Prompt: task.Prompt, Params: cloneAnyMap(task.Params)}
+		got, ok := videoPromptExecutionFromParams(request.Params, request.Prompt)
+		if !ok || !reflect.DeepEqual(got, snapshot) {
+			t.Fatalf("%s recomputed or changed snapshot: %#v", name, got)
+		}
+	}
+
+	// Connector idempotent retry explicitly replaces its transient new-request
+	// data with the persisted task snapshot.
+	connectorRetry := generation.CreateRequest{Prompt: task.Prompt, Params: map[string]any{}}
+	if !reuseVideoPromptExecutionSnapshot(&connectorRetry, task.Params) {
+		t.Fatal("connector retry did not reuse stored snapshot")
+	}
+	if got, _ := videoPromptExecutionFromParams(connectorRetry.Params, connectorRetry.Prompt); !reflect.DeepEqual(got, snapshot) {
+		t.Fatalf("connector retry snapshot=%#v", got)
+	}
+
+	// Current terminal user retry creates a child task (retryOf), but its
+	// request starts from the original task Params; startRetriedGenerationTask
+	// therefore retains P1 rather than applying a future Guard implementation.
+	childRetry := generation.CreateRequest{Prompt: task.Prompt, Params: cloneAnyMap(task.Params)}
+	if !ensureVideoPromptExecutionSnapshot(&childRetry) {
+		t.Fatal("retry child snapshot unavailable")
+	}
+	if got, _ := videoPromptExecutionFromParams(childRetry.Params, childRetry.Prompt); !reflect.DeepEqual(got, snapshot) {
+		t.Fatalf("retry child changed snapshot: %#v", got)
+	}
+}
+
+func TestVideoPromptExecutionInboundSnapshotIsDiscarded(t *testing.T) {
+	_, _, _, prepared := canonicalDownstreamPreparedRequest(t)
+	prepared.Params[videoPromptExecutionParam] = videoPromptExecution{
+		SchemaVersion: videoPromptExecutionVersion, GuardVersion: "attacker-selected-v999",
+		UserPromptHash: videoPromptHash(prepared.Prompt), ProviderPrompt: "attacker prompt", ProviderPromptHash: videoPromptHash("attacker prompt"),
+	}
+	removeUntrustedVideoPromptExecution(&prepared)
+	if _, exists := prepared.Params[videoPromptExecutionParam]; exists {
+		t.Fatal("inbound snapshot was not discarded")
+	}
+	if !ensureVideoPromptExecutionSnapshot(&prepared) {
+		t.Fatal("expected server snapshot")
+	}
+	snapshot, ok := videoPromptExecutionFromParams(prepared.Params, prepared.Prompt)
+	if !ok || snapshot.GuardVersion != videoPromptGuardVersion || snapshot.ProviderPrompt == "attacker prompt" {
+		t.Fatalf("untrusted snapshot survived: %#v", snapshot)
 	}
 }
 

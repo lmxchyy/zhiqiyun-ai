@@ -326,13 +326,13 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 	// Fenced by the currently observed generation (falls back to the legacy
 	// path on non-postgres stores).
 	if task, err := failGenerationTaskDurableWithFencing(a.store, id, "用户取消生成", observeGenerationTaskGeneration(a.store, id)); err == nil {
-		writeJSON(w, task)
+		writeJSON(w, redactVideoPromptExecution(task))
 		return
 	}
 	if cancel, ok := a.generationTaskCancel(id); ok {
 		cancel()
 	}
-	writeJSON(w, task)
+	writeJSON(w, redactVideoPromptExecution(task))
 }
 
 func (a api) deleteGenerationTask(w http.ResponseWriter, r *http.Request) {

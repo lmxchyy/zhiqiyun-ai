@@ -158,6 +158,14 @@ func redactVideoPromptExecutionRequest(req generation.CreateRequest) generation.
 	return req
 }
 
+func redactVideoPromptExecutionTasks(tasks []generationTask) []generationTask {
+	result := make([]generationTask, len(tasks))
+	for index, task := range tasks {
+		result[index] = redactVideoPromptExecution(task)
+	}
+	return result
+}
+
 func videoPromptExecutionTelemetry(task generationTask, params map[string]any) {
 	snapshot, ok := videoPromptExecutionFromParams(params, task.Prompt)
 	if !ok {

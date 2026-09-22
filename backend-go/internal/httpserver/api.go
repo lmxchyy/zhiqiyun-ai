@@ -5233,10 +5233,10 @@ func filterAssetsForUser(assets []asset, userID string) []asset {
 }
 
 func limitGenerationTasks(tasks []generationTask, limit int) []generationTask {
-	if limit <= 0 || len(tasks) <= limit {
-		return tasks
+	if limit > 0 && len(tasks) > limit {
+		tasks = tasks[:limit]
 	}
-	return tasks[:limit]
+	return redactVideoPromptExecutionTasks(tasks)
 }
 
 func limitAssets(assets []asset, limit int) []asset {
