@@ -280,9 +280,9 @@ func (a channelAPI) channelCustomerContent(customerID string, data adminPlatform
 		if err != nil {
 			return nil, nil, err
 		}
-		return tasks, assets, nil
+		return redactVideoPromptExecutionTasks(tasks), assets, nil
 	}
-	return channelGenerationTasksForUsers(data.GenerationTasks, visible), channelAssetsForUsers(data.Assets, visible), nil
+	return redactVideoPromptExecutionTasks(channelGenerationTasksForUsers(data.GenerationTasks, visible)), channelAssetsForUsers(data.Assets, visible), nil
 }
 
 func channelPromotion(agent adminChannelAgent, r *http.Request, data adminPlatformData) map[string]any {

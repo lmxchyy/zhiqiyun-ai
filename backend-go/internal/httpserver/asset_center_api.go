@@ -326,13 +326,13 @@ func (a api) cancelGenerationTask(w http.ResponseWriter, r *http.Request) {
 	// Fenced by the currently observed generation (falls back to the legacy
 	// path on non-postgres stores).
 	if task, err := failGenerationTaskDurableWithFencing(a.store, id, "用户取消生成", observeGenerationTaskGeneration(a.store, id)); err == nil {
-		writeJSON(w, task)
+		writeJSON(w, redactVideoPromptExecution(task))
 		return
 	}
 	if cancel, ok := a.generationTaskCancel(id); ok {
 		cancel()
 	}
-	writeJSON(w, task)
+	writeJSON(w, redactVideoPromptExecution(task))
 }
 
 func (a api) deleteGenerationTask(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +454,7 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		go a.runVideoGenerationTask(original.ID, service, req)
-		writeJSON(w, original)
+		writeJSON(w, redactVideoPromptExecution(original))
 		return
 	}
 	if hasExecution {
@@ -504,7 +504,7 @@ func (a api) retryGenerationTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, task)
+	writeJSON(w, redactVideoPromptExecution(task))
 }
 
 func videoRetryChildAllowed(execution providerexecution.Execution) bool {
@@ -548,6 +548,9 @@ func (a api) startRetriedGenerationTask(ctx context.Context, user adminUser, req
 		return generationTask{}, err
 	}
 	if isVideoGenerationRequest(req.Type) {
+		if !a.prepareVideoPromptExecutionAtCreation(&req) {
+			return generationTask{}, errors.New("video prompt execution requires canonical request")
+		}
 		if a.videoAsyncCanaryEligible(req) {
 			if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
 				req.Params["generation_video_async_canary"] = true

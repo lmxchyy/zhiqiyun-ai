@@ -111,7 +111,7 @@ func (a api) generationRecoveryAction(w http.ResponseWriter, r *http.Request) {
 		recoveryWriteError(w, fmt.Errorf("recovery audit failed: %w", auditErr))
 		return
 	}
-	writeJSON(w, map[string]any{"action": req.Action, "applied": true, "task": result, "diagnosis": after})
+	writeJSON(w, map[string]any{"action": req.Action, "applied": true, "task": redactVideoPromptExecution(result), "diagnosis": after})
 }
 
 func (a api) buildGenerationRecoveryDiagnosis(ctx context.Context, taskID string) (recoveryDiagnosisResponse, generationTask, error) {

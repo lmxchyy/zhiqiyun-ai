@@ -662,6 +662,7 @@ func compactWorkspaceListTasks(tasks []generationTask) []generationTask {
 		delete(items[index].Params, "first_frame")
 		delete(items[index].Params, "final_schema_snapshot")
 		delete(items[index].Params, "limit_snapshot")
+		delete(items[index].Params, videoPromptExecutionParam)
 		for _, key := range []string{
 			"organization_id", "tenant_id", "billing_account_id", "billing_scope", "billing_type",
 			"module_code", "model_name", "billingReservedAt", "billingReserved",
@@ -833,6 +834,9 @@ func (a api) listGenerationTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tasks = attachAssetImagesToTasks(tasks, assets)
+	for index := range tasks {
+		tasks[index] = redactVideoPromptExecution(tasks[index])
+	}
 	if pagedListRequested(r) {
 		writeJSON(w, map[string]any{
 			"items":   tasks,
@@ -924,7 +928,7 @@ func (a api) enrichGenerationTaskDetail(r *http.Request, userID string, task gen
 			}
 		}
 	}
-	return res
+	return redactVideoPromptExecution(res)
 }
 
 func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
@@ -953,6 +957,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 	if req.Params == nil {
 		req.Params = map[string]any{}
 	}
+	removeUntrustedVideoPromptExecution(&req)
 	req.Params["terminal"] = requestTerminal(r)
 	if err := a.enforceRequiredLegalAcceptances(user.ID, stringValue(req.Params["terminal"])); err != nil {
 		writeError(w, http.StatusPreconditionRequired, err)
@@ -1008,6 +1013,10 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 		service = configuredService
 	}
 	if isVideoGenerationRequest(req.Type) {
+		if !a.prepareVideoPromptExecutionAtCreation(&req) {
+			writeError(w, http.StatusInternalServerError, errors.New("video prompt execution requires canonical request"))
+			return
+		}
 		if a.videoAsyncCanaryEligible(req) {
 			if canaryStore, ok := a.store.(generationCanaryTaskStore); ok {
 				req.Params["generation_video_async_canary"] = true
@@ -1026,7 +1035,7 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 					videoPromptPreflightTelemetry(task, req.Type, req.Model, req.Params)
 					a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 				}
-				writeJSON(w, task)
+				writeJSON(w, redactVideoPromptExecution(task))
 				return
 			}
 		}
@@ -1040,13 +1049,13 @@ func (a api) createGenerationTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if task.IdempotentReplay {
-			writeJSON(w, task)
+			writeJSON(w, redactVideoPromptExecution(task))
 			return
 		}
 		videoPromptPreflightTelemetry(task, req.Type, req.Model, req.Params)
 		a.recordContentAudit(task.ID, "input", "generation_request", "", req)
 		go a.runVideoGenerationTask(task.ID, service, cloneGenerationCreateRequest(req))
-		writeJSON(w, task)
+		writeJSON(w, redactVideoPromptExecution(task))
 		return
 	}
 	if !isImageGenerationRequest(req.Type) || strings.EqualFold(strings.TrimSpace(req.Model), "mock-standard") {
@@ -1691,6 +1700,11 @@ func (a api) runVideoGenerationTask(taskID string, service generation.Service, r
 	if canonicalReq, ok := canonicalVideoDownstreamRequest(req); ok {
 		req = canonicalReq
 	}
+	// Phase 4 selects only a validated persisted snapshot at the final
+	// provider boundary; it never rebuilds Guard state in workers/recovery.
+	providerReq, promptDecision := a.videoPromptTransportRequest(req)
+	videoPromptTransportTelemetry(taskID, req.Params, promptDecision)
+	req = providerReq
 	terminal, err := a.generationTaskTerminal(ctx, taskID)
 	if err != nil || terminal {
 		return err
@@ -5221,10 +5235,10 @@ func filterAssetsForUser(assets []asset, userID string) []asset {
 }
 
 func limitGenerationTasks(tasks []generationTask, limit int) []generationTask {
-	if limit <= 0 || len(tasks) <= limit {
-		return tasks
+	if limit > 0 && len(tasks) > limit {
+		tasks = tasks[:limit]
 	}
-	return tasks[:limit]
+	return redactVideoPromptExecutionTasks(tasks)
 }
 
 func limitAssets(assets []asset, limit int) []asset {
