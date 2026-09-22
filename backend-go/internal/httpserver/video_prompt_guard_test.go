@@ -328,7 +328,7 @@ func TestVideoPromptGuardTransportModesUseOnlyPersistedSnapshot(t *testing.T) {
 
 	cases := []struct {
 		name, mode, users, expectedSource, expectedPrompt string
-		legacy                                            bool
+		legacy, invalid                                   bool
 	}{
 		{name: "off", mode: videoPromptGuardModeOff, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
 		{name: "shadow", mode: videoPromptGuardModeShadow, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
@@ -338,15 +338,40 @@ func TestVideoPromptGuardTransportModesUseOnlyPersistedSnapshot(t *testing.T) {
 		{name: "invalid mode fails closed", mode: "unsafe", expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
 		{name: "wildcard is rejected", mode: videoPromptGuardModeCanary, users: "*", expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt},
 		{name: "legacy", mode: videoPromptGuardModeOn, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt, legacy: true},
+		{name: "invalid snapshot", mode: videoPromptGuardModeOn, expectedSource: videoPromptSourceOriginal, expectedPrompt: prepared.Prompt, invalid: true},
 	}
+	var telemetry bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&telemetry)
+	defer log.SetOutput(previousLogOutput)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			request := cloneGenerationCreateRequest(prepared)
 			if tc.legacy {
 				delete(request.Params, videoPromptExecutionParam)
 			}
+			if tc.invalid {
+				request.Params[videoPromptExecutionParam] = map[string]any{"schema_version": videoPromptExecutionVersion, "guard_version": "invalid", "provider_prompt": "PRIVATE_INVALID_PROMPT"}
+			}
 			server := api{cfg: config.Config{VideoPromptGuardMode: tc.mode, VideoPromptGuardCanaryUsers: tc.users}}
 			providerRequest, decision := server.videoPromptTransportRequest(request)
+			telemetry.Reset()
+			videoPromptTransportTelemetry("task-transport", request.Params, decision)
+			telemetryOutput := telemetry.String()
+			if !strings.Contains(telemetryOutput, "event=video_prompt_guard_transport") || !strings.Contains(telemetryOutput, "prompt_source="+tc.expectedSource) {
+				t.Fatalf("telemetry did not report actual prompt source: %s", telemetryOutput)
+			}
+			if strings.Contains(telemetryOutput, request.Prompt) || strings.Contains(telemetryOutput, "PRIVATE_INVALID_PROMPT") || strings.Contains(telemetryOutput, snapshot.ProviderPrompt) {
+				t.Fatalf("telemetry leaked a prompt: %s", telemetryOutput)
+			}
+			if !tc.legacy && !tc.invalid {
+				for _, field := range []string{"guard_version=" + snapshot.GuardVersion, "user_prompt_hash=" + snapshot.UserPromptHash, "provider_prompt_hash=" + snapshot.ProviderPromptHash, "transformation_codes=" + strings.Join(snapshot.TransformationCodes, ",")} {
+					if !strings.Contains(telemetryOutput, field) {
+						t.Fatalf("telemetry missing snapshot field %q: %s", field, telemetryOutput)
+					}
+				}
+			}
+			providerRequest, decision = server.videoPromptTransportRequest(request)
 			if !reflect.DeepEqual(providerRequest.Params, request.Params) {
 				t.Fatal("transport changed non-prompt params (including billing metadata)")
 			}
