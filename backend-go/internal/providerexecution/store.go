@@ -32,6 +32,47 @@ func (s *Store) RecordCorrelation(ctx context.Context, event CorrelationEvent) (
 	return event, nil
 }
 
+// RecordTerminalCorrelationOnce appends one actual terminal observation for an
+// execution. A legacy mislabelled non-terminal row never blocks the append; no
+// historical observation or provider_request_id is rewritten.
+// The execution-row lock serializes concurrent recovery/replay callers.
+func (s *Store) RecordTerminalCorrelationOnce(ctx context.Context, event CorrelationEvent) (CorrelationEvent, bool, error) {
+	if s == nil || s.DB == nil {
+		return CorrelationEvent{}, false, fmt.Errorf("provider execution database is required")
+	}
+	event.Kind = "terminal"
+	event.JobRole = "terminal"
+	if err := validateCorrelationEvent(event); err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM provider_executions WHERE id=$1 FOR UPDATE`, event.ExecutionID); err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM provider_execution_correlations WHERE execution_id=$1 AND kind='terminal' AND job_role='terminal' AND lower(provider_state) IN ('success','succeeded','failed','cancelled','canceled'))`, event.ExecutionID).Scan(&exists); err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	if exists {
+		return CorrelationEvent{}, false, tx.Commit()
+	}
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO provider_execution_correlations
+		(execution_id,kind,provider_code,base_url_host,endpoint_path,provider_job_id,job_role,provider_state,http_status,error_code,error_hash)
+		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,NULLIF($9,0),$10,$11)
+		RETURNING id,created_at`, event.ExecutionID, event.Kind, event.ProviderCode, event.Host, event.Path, event.JobID, event.JobRole, event.State, event.HTTPStatus, event.ErrorCode, event.ErrorHash).Scan(&event.ID, &event.CreatedAt); err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	return event, true, nil
+}
+
 func validateCorrelationEvent(event CorrelationEvent) error {
 	if event.ExecutionID <= 0 || strings.TrimSpace(event.Kind) == "" {
 		return fmt.Errorf("provider correlation execution and kind are required")

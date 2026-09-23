@@ -133,6 +133,33 @@ func TestPostgresProviderExecutionStore(t *testing.T) {
 	if err != nil || len(correlations) != 2 || correlations[0].JobID != "submit-id" || correlations[1].JobID != "terminal-id" || correlations[1].ErrorHash != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("correlations=%+v err=%v", correlations, err)
 	}
+	if _, err := s.RecordCorrelation(ctx, CorrelationEvent{ExecutionID: got.ID, Kind: "terminal", ProviderCode: "channel-a", Host: "provider.example", Path: "/v1/videos/submit-id", JobID: "submit-id", JobRole: "terminal", State: "processing", HTTPStatus: 200}); err != nil {
+		t.Fatal(err)
+	}
+	terminal := CorrelationEvent{ExecutionID: got.ID, Kind: "terminal", ProviderCode: "channel-a", Host: "provider.example", Path: "/v1/videos/terminal-id", JobID: "terminal-id", JobRole: "terminal", State: "failed", HTTPStatus: 200, ErrorCode: "generation_failed", ErrorHash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	if _, inserted, err := s.RecordTerminalCorrelationOnce(ctx, terminal); err != nil || !inserted {
+		t.Fatalf("first terminal inserted=%v err=%v", inserted, err)
+	}
+	if _, inserted, err := s.RecordTerminalCorrelationOnce(ctx, terminal); err != nil || inserted {
+		t.Fatalf("replay terminal inserted=%v err=%v", inserted, err)
+	}
+	correlations, err = s.ListCorrelations(ctx, got.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualTerminalCount := 0
+	for _, event := range correlations {
+		if event.Kind == "terminal" && event.JobRole == "terminal" && event.State == "failed" {
+			actualTerminalCount++
+		}
+	}
+	if actualTerminalCount != 1 {
+		t.Fatalf("actualTerminalCount=%d correlations=%+v", actualTerminalCount, correlations)
+	}
+	got, err = s.GetByID(ctx, got.ID)
+	if err != nil || got.ProviderRequestID == nil || *got.ProviderRequestID != "provider-task" {
+		t.Fatalf("provider_request_id overwritten by terminal correlation: %+v err=%v", got, err)
+	}
 	if _, err := s.RecordCorrelation(ctx, CorrelationEvent{ExecutionID: got.ID, Kind: "unsafe", Host: "https://provider.example/v1", ErrorHash: "secret"}); err == nil {
 		t.Fatal("unsafe correlation fields were accepted")
 	}

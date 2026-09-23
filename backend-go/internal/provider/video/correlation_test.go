@@ -56,6 +56,53 @@ func TestOpenAICompatibleEmitsCreatePollAndTerminalCorrelation(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleGetEmitsTerminalOnlyForProviderTerminalStates(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		terminalState string
+		wantErrorHash bool
+	}{
+		{name: "processing", body: `{"id":"poll-job","status":"processing"}`},
+		{name: "success", body: `{"id":"poll-job","status":"success"}`, terminalState: "success"},
+		{name: "failed", body: `{"id":"poll-job","status":"failed","error_code":"generation_failed","message":"PRIVATE_PROVIDER_REASON"}`, terminalState: "failed", wantErrorHash: true},
+		{name: "cancelled", body: `{"id":"poll-job","status":"cancelled"}`, terminalState: "cancelled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			provider := NewOpenAICompatibleWithOptions(OpenAICompatibleOptions{Code: "channel-safe", BaseURL: server.URL, APIKey: "secret", Model: "grok-imagine-1.5-video"})
+			var events []generation.ProviderCorrelationEvent
+			ctx := generation.WithProviderCorrelationListener(context.Background(), func(event generation.ProviderCorrelationEvent) { events = append(events, event) })
+			if _, err := provider.Get(ctx, "submit-job"); err != nil {
+				t.Fatal(err)
+			}
+			var terminals []generation.ProviderCorrelationEvent
+			for _, event := range events {
+				if event.Kind == "terminal" {
+					terminals = append(terminals, event)
+				}
+			}
+			if tt.terminalState == "" {
+				if len(terminals) != 0 {
+					t.Fatalf("processing emitted terminal: %#v", terminals)
+				}
+				return
+			}
+			if len(terminals) != 1 || terminals[0].State != tt.terminalState || terminals[0].JobRole != "terminal" || terminals[0].JobID != "poll-job" {
+				t.Fatalf("terminals=%#v", terminals)
+			}
+			if tt.wantErrorHash && (terminals[0].ErrorCode != "generation_failed" || terminals[0].ErrorHash == "" || terminals[0].ErrorHash == "PRIVATE_PROVIDER_REASON") {
+				t.Fatalf("unsafe failed terminal=%#v", terminals[0])
+			}
+		})
+	}
+}
+
 func TestOpenAICompatibleEmitsCorrelationForCreateHTTPFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

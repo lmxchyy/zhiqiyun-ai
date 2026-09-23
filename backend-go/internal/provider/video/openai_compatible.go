@@ -295,7 +295,7 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	// Polling is a GET-only operation and therefore cannot duplicate the
 	// generation submission. Preserve the existing synchronous video contract;
 	// guarded recovery still prevents a second Create after an ambiguous POST.
-	decoded = p.pollVideoResult(ctx, decoded, model)
+	decoded, pollReachedTerminal := p.pollVideoResult(ctx, decoded, model)
 	videoURL := extractPlayableVideoURL(decoded)
 	thumbnailURL := firstStringByKeys(decoded, "thumbnailUrl", "thumbnail_url", "coverUrl", "cover_url", "poster", "image_url")
 	status := normalizeVideoStatus(firstNonEmptyString(firstStringByKeys(decoded, "status", "state"), "SUCCEEDED"))
@@ -306,7 +306,9 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	providerCode := firstStringByKeys(decoded, "code", "error_code", "errorCode")
 	providerJobID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), initialID)
 	if status == "FAILED" || (videoURL == "" && looksLikeVideoProviderErrorText(reason)) {
-		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: providerJobID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "failed", ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(reason)})
+		if !pollReachedTerminal {
+			generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: providerJobID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "failed", ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(reason)})
+		}
 		if reason == "" {
 			reason = "video generation failed"
 		}
@@ -326,7 +328,9 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 		}
 	}
 	if videoURL == "" {
-		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: taskID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "processing"})
+		if isCancelledVideoStatus(status) && !pollReachedTerminal {
+			generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: taskID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "cancelled"})
+		}
 		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, taskID, providerCode, "", "processing", time.Since(startedAt).Milliseconds(), "")
 		return map[string]any{
 			"provider":       p.providerCode(),
@@ -340,7 +344,9 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 			},
 		}, nil
 	}
-	generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: taskID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: status})
+	if !pollReachedTerminal {
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: taskID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "success"})
+	}
 	logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, taskID, providerCode, "", "success", time.Since(startedAt).Milliseconds(), "")
 	return map[string]any{
 		"provider":       p.providerCode(),
@@ -443,6 +449,8 @@ func normalizeVideoStatus(status string) string {
 		return "FAILED"
 	case "SUBMITTED", "QUEUED", "IN_PROGRESS", "NOT_START", "PENDING", "PROCESSING", "RUNNING":
 		return "PROCESSING"
+	case "CANCELLED", "CANCELED":
+		return "CANCELLED"
 	default:
 		if strings.TrimSpace(status) == "" {
 			return "PROCESSING"
@@ -742,20 +750,20 @@ func baseURLHasAPIVersion(baseURL string) bool {
 	return err == nil
 }
 
-func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[string]any, model string) map[string]any {
+func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[string]any, model string) (map[string]any, bool) {
 	taskID := firstStringByKeys(initial, "id", "taskId", "task_id", "providerTaskId")
 	if taskID == "" {
-		return initial
+		return initial, false
 	}
 	status := normalizeVideoStatus(firstStringByKeys(initial, "status", "state"))
-	if extractPlayableVideoURL(initial) != "" || status == "FAILED" || looksLikeVideoProviderErrorText(firstStringByKeys(initial, "url", "fail_reason", "error", "message")) {
-		return initial
+	if extractPlayableVideoURL(initial) != "" || isTerminalVideoStatus(status, firstStringByKeys(initial, "url", "fail_reason", "error", "message")) {
+		return initial, false
 	}
 	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return initial
+			return initial, false
 		case <-time.After(5 * time.Second):
 		}
 		polled, err := p.getVideoTask(ctx, taskID, model)
@@ -764,11 +772,19 @@ func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[strin
 		}
 		initial = mergeMaps(initial, polled)
 		status = normalizeVideoStatus(firstStringByKeys(initial, "status", "state"))
-		if extractPlayableVideoURL(initial) != "" || status == "FAILED" || looksLikeVideoProviderErrorText(firstStringByKeys(initial, "url", "fail_reason", "error", "message")) {
-			return initial
+		if extractPlayableVideoURL(initial) != "" || isTerminalVideoStatus(status, firstStringByKeys(initial, "url", "fail_reason", "error", "message")) {
+			return initial, terminalCorrelationState(status, firstStringByKeys(initial, "url", "fail_reason", "error", "message")) != ""
 		}
 	}
-	return initial
+	return initial, false
+}
+
+func isCancelledVideoStatus(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "CANCELLED")
+}
+
+func isTerminalVideoStatus(status, message string) bool {
+	return status == "SUCCEEDED" || status == "FAILED" || isCancelledVideoStatus(status) || looksLikeVideoProviderErrorText(message)
 }
 
 func safeVideoErrorHash(value string) string {
@@ -998,7 +1014,16 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 		} else {
 			providerCode = ""
 		}
-		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_response", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), taskID), JobRole: "poll", State: result, HTTPStatus: res.StatusCode, ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(message)})
+		jobID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), taskID)
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_response", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: jobID, JobRole: "poll", State: result, HTTPStatus: res.StatusCode, ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(message)})
+		if terminalState := terminalCorrelationState(status, message); terminalState != "" {
+			terminalErrorCode, terminalErrorHash := "", ""
+			if terminalState == "failed" {
+				terminalErrorCode = providerCode
+				terminalErrorHash = safeVideoErrorHash(message)
+			}
+			generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: jobID, JobRole: "terminal", State: terminalState, HTTPStatus: res.StatusCode, ErrorCode: terminalErrorCode, ErrorHash: terminalErrorHash})
+		}
 		logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, providerCode, message, result, failureClass, time.Since(startedAt).Milliseconds())
 		return decoded, nil
 	}
@@ -1006,6 +1031,22 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 		return nil, lastErr
 	}
 	return nil, errors.New("poll video task failed")
+}
+
+func terminalCorrelationState(status, message string) string {
+	switch status {
+	case "SUCCEEDED":
+		return "success"
+	case "FAILED":
+		return "failed"
+	case "CANCELLED":
+		return "cancelled"
+	default:
+		if looksLikeVideoProviderErrorText(message) {
+			return "failed"
+		}
+		return ""
+	}
 }
 
 func videoTaskEndpoint(baseURL string, taskID string) string {

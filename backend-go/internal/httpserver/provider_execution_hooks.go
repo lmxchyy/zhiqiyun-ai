@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -79,13 +80,41 @@ func providerCorrelationContext(ctx context.Context, s *pe.Store, executionID in
 		return ctx
 	}
 	return generation.WithProviderCorrelationListener(ctx, func(event generation.ProviderCorrelationEvent) {
-		_, _ = s.RecordCorrelation(ctx, pe.CorrelationEvent{
+		correlation := pe.CorrelationEvent{
 			ExecutionID: executionID, Kind: event.Kind, ProviderCode: event.ProviderCode,
 			Host: event.Host, Path: event.Path, JobID: event.JobID, JobRole: event.JobRole,
 			State: event.State, HTTPStatus: event.HTTPStatus, ErrorCode: event.ErrorCode,
 			ErrorHash: event.ErrorHash,
-		})
+		}
+		if event.Kind == "terminal" {
+			_, _, _ = s.RecordTerminalCorrelationOnce(ctx, correlation)
+			return
+		}
+		_, _ = s.RecordCorrelation(ctx, correlation)
 	})
+}
+
+func recordProviderTerminalCorrelation(ctx context.Context, store *pe.Store, execution pe.Execution, state string, result any, errorCode, errorMessage string) {
+	if store == nil || execution.ID <= 0 {
+		return
+	}
+	jobID := providerTaskID(result)
+	if jobID == "" && execution.ProviderRequestID != nil {
+		jobID = *execution.ProviderRequestID
+	}
+	event := pe.CorrelationEvent{
+		ExecutionID:  execution.ID,
+		ProviderCode: execution.Provider,
+		JobID:        jobID,
+		JobRole:      "terminal",
+		State:        state,
+		ErrorCode:    errorCode,
+	}
+	if strings.TrimSpace(errorMessage) != "" {
+		sum := sha256.Sum256([]byte(errorMessage))
+		event.ErrorHash = fmt.Sprintf("sha256:%x", sum[:])
+	}
+	_, _, _ = store.RecordTerminalCorrelationOnce(ctx, event)
 }
 
 func providerName(req generation.CreateRequest) string {
@@ -325,6 +354,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 									observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeTransitionFailed))
 									return nil, transitionErr
 								}
+								recordProviderTerminalCorrelation(ctx, s, latest, "failed", result, "PROVIDER_ASYNC_GENERATION_FAILED", "provider reported failed status")
 								return nil, wrapRecoveryError(RecoveryCodeGetProviderFailed, RecoveryStageGet, diag, pe.ErrProviderExecutionFailed)
 							}
 							manifest, marshalErr := json.Marshal(durableVideoResult(result))
@@ -336,6 +366,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 								observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 								return nil, saveErr
 							}
+							recordProviderTerminalCorrelation(ctx, s, latest, "success", result, "", "")
 							diag.Finalization = true
 							observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeSaved))
 							return result, nil
@@ -403,6 +434,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 				observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 				return nil, saveErr
 			}
+			recordProviderTerminalCorrelation(ctx, s, latest, "success", result, "", "")
 			diag.Finalization = true
 			observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeSaved))
 			return result, nil
@@ -481,6 +513,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	if status == pe.Failed {
 		_ = s.TransitionWithErrorCode(ctx, e.ID, pe.Failed, requestIDPtr, ptrString("PROVIDER_ASYNC_GENERATION_FAILED"), ptrString(string(pe.ProviderUnknown)), ptrString("provider returned failed result"))
+		recordProviderTerminalCorrelation(ctx, s, e, "failed", result, "PROVIDER_ASYNC_GENERATION_FAILED", "provider returned failed result")
 		return nil, wrapRecoveryError(RecoveryCodeGetProviderFailed, RecoveryStageCreate, diag, pe.ErrProviderExecutionFailed)
 	}
 	if status == pe.Submitted || status == pe.Processing {
@@ -504,6 +537,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 		observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeFailed))
 		return nil, err
 	}
+	recordProviderTerminalCorrelation(ctx, s, e, "success", result, "", "")
 	diag.Finalization = true
 	observeRecovery(withRecoveryCode(diag, RecoveryStageFinalize, RecoveryCodeFinalizeSaved))
 	return result, nil

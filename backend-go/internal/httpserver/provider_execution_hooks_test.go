@@ -186,6 +186,10 @@ func TestGuardedVideoFailedGetReturnsFailureWithoutCreate(t *testing.T) {
 	if latest.ErrorCode == nil || *latest.ErrorCode != "PROVIDER_ASYNC_GENERATION_FAILED" {
 		t.Fatalf("execution error_code=%v, want PROVIDER_ASYNC_GENERATION_FAILED", latest.ErrorCode)
 	}
+	correlations, err := store.ListCorrelations(ctx, latest.ID)
+	if err != nil || len(correlations) != 1 || correlations[0].Kind != "terminal" || correlations[0].State != "failed" || correlations[0].ErrorCode != "PROVIDER_ASYNC_GENERATION_FAILED" || correlations[0].ErrorHash == "" {
+		t.Fatalf("failed recovery correlations=%+v err=%v", correlations, err)
+	}
 }
 
 func TestGuardedVideoGetFailurePersistsBoundedReconcileState(t *testing.T) {
@@ -460,6 +464,17 @@ func TestTEST_C_SubmittingWithDurableID_RedeliveryCallsGetNotCreate(t *testing.T
 	latest, _ := store.GetLatestByTask(ctx, taskID)
 	if latest.Status != pe.Succeeded {
 		t.Fatalf("expected status Succeeded, got %v", latest.Status)
+	}
+	correlations, err := store.ListCorrelations(ctx, latest.ID)
+	if err != nil || len(correlations) != 1 || correlations[0].Kind != "terminal" || correlations[0].State != "success" {
+		t.Fatalf("success recovery correlations=%+v err=%v", correlations, err)
+	}
+	if _, err := guardedVideo(ctx, req, provider, store, nil); err != nil {
+		t.Fatalf("succeeded replay: %v", err)
+	}
+	correlations, err = store.ListCorrelations(ctx, latest.ID)
+	if err != nil || len(correlations) != 1 {
+		t.Fatalf("replay duplicated terminal correlations=%+v err=%v", correlations, err)
 	}
 }
 
