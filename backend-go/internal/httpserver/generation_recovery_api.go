@@ -142,11 +142,16 @@ func (a api) buildGenerationRecoveryDiagnosis(ctx context.Context, taskID string
 		if err == nil {
 			hasExecution = true
 			requestIDPresent := execution.ProviderRequestID != nil && strings.TrimSpace(*execution.ProviderRequestID) != ""
+			correlations, correlationErr := pe.NewStore(db).ListCorrelations(ctx, execution.ID)
+			if correlationErr != nil {
+				return recoveryDiagnosisResponse{}, generationTask{}, correlationErr
+			}
 			provider = map[string]any{
 				"present": true, "status": string(execution.Status), "attempt": execution.Attempt,
 				"providerRequestIdPresent": requestIDPresent, "queryable": requestIDPresent,
 				"fingerprintMatch": "not_evaluated", "fingerprintStatus": "not_evaluated",
-				"capability": execution.Capability, "provider": execution.Provider,
+				"capability": execution.Capability, "provider": execution.Provider, "model": execution.ProviderModel,
+				"correlations": providerCorrelationDiagnostics(correlations),
 			}
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return recoveryDiagnosisResponse{}, generationTask{}, err
@@ -202,6 +207,22 @@ func (a api) buildGenerationRecoveryDiagnosis(ctx context.Context, taskID string
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	return response, task, nil
+}
+
+// providerCorrelationDiagnostics only exposes fields already constrained by
+// providerexecution's redacted persistence boundary. It never joins request
+// payloads, prompts, API keys, or Provider response bodies.
+func providerCorrelationDiagnostics(events []pe.CorrelationEvent) []map[string]any {
+	items := make([]map[string]any, 0, len(events))
+	for _, event := range events {
+		items = append(items, map[string]any{
+			"kind": event.Kind, "provider": event.ProviderCode, "host": event.Host,
+			"path": event.Path, "jobId": event.JobID, "jobRole": event.JobRole,
+			"state": event.State, "httpStatus": event.HTTPStatus, "errorCode": event.ErrorCode,
+			"errorHash": event.ErrorHash, "observedAt": event.CreatedAt,
+		})
+	}
+	return items
 }
 
 func allowedRecoveryActions(task generationTask, execution pe.Execution, hasExecution bool, messaging map[string]any) ([]string, string, bool) {

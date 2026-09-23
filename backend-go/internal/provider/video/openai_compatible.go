@@ -3,6 +3,7 @@ package video
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -261,9 +262,11 @@ func (p OpenAICompatible) setIdempotencyHeader(ctx context.Context, req *http.Re
 func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.Request, model string, req generation.CreateRequest) (any, error) {
 	startedAt := time.Now()
 	logVideoProviderRequest(httpReq, p.providerCode(), model, req.Type, req.Params)
+	generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "create_request", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobRole: "create"})
 	res, err := p.client.Do(httpReq)
 	if err != nil {
 		providerErr := newProviderError(p.providerCode(), 0, "", "", "", "", err)
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobRole: "terminal", State: "failed", ErrorHash: safeVideoErrorHash(providerErr.Message)})
 		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, 0, "", "", "", providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
 		return nil, providerErr
 	}
@@ -273,18 +276,21 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		providerCode, message, jobID := providerResponseFields(raw)
 		providerErr := newProviderError(p.providerCode(), res.StatusCode, providerCode, message, requestID, jobID, nil)
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: jobID, JobRole: "terminal", State: "failed", HTTPStatus: res.StatusCode, ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(providerErr.Message)})
 		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, jobID, providerCode, providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
 		return nil, providerErr
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		providerErr := newProviderError(p.providerCode(), res.StatusCode, "invalid_response", err.Error(), requestID, "", err)
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobRole: "terminal", State: "failed", HTTPStatus: res.StatusCode, ErrorCode: "invalid_response", ErrorHash: safeVideoErrorHash(providerErr.Message)})
 		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, "", "invalid_response", providerErr.Message, "failed", time.Since(startedAt).Milliseconds(), providerErr.FailureClassification())
 		return nil, providerErr
 	}
 	initialID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"))
 	if initialID != "" {
 		generation.NotifyProviderSubmission(ctx, initialID)
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "create_response", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: initialID, JobRole: "submit", HTTPStatus: res.StatusCode, State: normalizeVideoStatus(firstStringByKeys(decoded, "status", "state"))})
 	}
 	// Polling is a GET-only operation and therefore cannot duplicate the
 	// generation submission. Preserve the existing synchronous video contract;
@@ -300,6 +306,7 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 	providerCode := firstStringByKeys(decoded, "code", "error_code", "errorCode")
 	providerJobID := firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), initialID)
 	if status == "FAILED" || (videoURL == "" && looksLikeVideoProviderErrorText(reason)) {
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: providerJobID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "failed", ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(reason)})
 		if reason == "" {
 			reason = "video generation failed"
 		}
@@ -319,6 +326,7 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 		}
 	}
 	if videoURL == "" {
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: taskID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: "processing"})
 		logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, taskID, providerCode, "", "processing", time.Since(startedAt).Milliseconds(), "")
 		return map[string]any{
 			"provider":       p.providerCode(),
@@ -332,6 +340,7 @@ func (p OpenAICompatible) finishVideoCreate(ctx context.Context, httpReq *http.R
 			},
 		}, nil
 	}
+	generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "terminal", ProviderCode: p.providerCode(), Host: httpReq.URL.Hostname(), Path: httpReq.URL.Path, JobID: taskID, JobRole: "terminal", HTTPStatus: res.StatusCode, State: status})
 	logVideoProviderResponse(httpReq, p.providerCode(), model, req.Params, res.StatusCode, requestID, taskID, providerCode, "", "success", time.Since(startedAt).Milliseconds(), "")
 	return map[string]any{
 		"provider":       p.providerCode(),
@@ -762,6 +771,15 @@ func (p OpenAICompatible) pollVideoResult(ctx context.Context, initial map[strin
 	return initial
 }
 
+func safeVideoErrorHash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("sha256:%x", sum[:])
+}
+
 func extractPlayableVideoURL(decoded map[string]any) string {
 	if decoded == nil {
 		return ""
@@ -938,9 +956,11 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 		startedAt := time.Now()
 		logVideoProviderPollRequest(req, p.providerCode(), model, taskID)
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_request", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: taskID, JobRole: "poll"})
 		res, err := p.client.Do(req)
 		if err != nil {
 			providerErr := newProviderError(p.providerCode(), 0, "", "", "", taskID, err)
+			generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_response", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: taskID, JobRole: "poll", State: "failed", ErrorHash: safeVideoErrorHash(providerErr.Message)})
 			logVideoProviderPollResponse(req, p.providerCode(), model, taskID, 0, "", "", providerErr.Message, "failed", providerErr.FailureClassification(), time.Since(startedAt).Milliseconds())
 			lastErr = providerErr
 			continue
@@ -951,6 +971,7 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 		if res.StatusCode < 200 || res.StatusCode >= 300 {
 			providerCode, message, jobID := providerResponseFields(raw)
 			providerErr := newProviderError(p.providerCode(), res.StatusCode, providerCode, message, requestID, jobID, nil)
+			generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_response", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: firstNonEmptyString(jobID, taskID), JobRole: "poll", State: "failed", HTTPStatus: res.StatusCode, ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(providerErr.Message)})
 			logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, providerCode, providerErr.Message, "failed", providerErr.FailureClassification(), time.Since(startedAt).Milliseconds())
 			lastErr = providerErr
 			continue
@@ -958,6 +979,7 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 		var decoded map[string]any
 		if err := json.Unmarshal(raw, &decoded); err != nil {
 			providerErr := newProviderError(p.providerCode(), res.StatusCode, "invalid_response", err.Error(), requestID, taskID, err)
+			generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_response", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: taskID, JobRole: "poll", State: "failed", HTTPStatus: res.StatusCode, ErrorCode: "invalid_response", ErrorHash: safeVideoErrorHash(providerErr.Message)})
 			logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, "invalid_response", providerErr.Message, "failed", providerErr.FailureClassification(), time.Since(startedAt).Milliseconds())
 			lastErr = providerErr
 			continue
@@ -976,6 +998,7 @@ func (p OpenAICompatible) getVideoTask(ctx context.Context, taskID string, model
 		} else {
 			providerCode = ""
 		}
+		generation.NotifyProviderCorrelation(ctx, generation.ProviderCorrelationEvent{Kind: "poll_response", ProviderCode: p.providerCode(), Host: req.URL.Hostname(), Path: req.URL.Path, JobID: firstNonEmptyString(firstStringByKeys(decoded, "id", "taskId", "task_id", "providerTaskId"), taskID), JobRole: "poll", State: result, HTTPStatus: res.StatusCode, ErrorCode: providerCode, ErrorHash: safeVideoErrorHash(message)})
 		logVideoProviderPollResponse(req, p.providerCode(), model, taskID, res.StatusCode, requestID, providerCode, message, result, failureClass, time.Since(startedAt).Milliseconds())
 		return decoded, nil
 	}

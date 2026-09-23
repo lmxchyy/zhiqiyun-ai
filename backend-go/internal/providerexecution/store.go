@@ -4,12 +4,84 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
 type Store struct{ DB *sql.DB }
 
 func NewStore(db *sql.DB) *Store { return &Store{DB: db} }
+
+// RecordCorrelation appends one safe correlation observation. It never updates
+// provider_request_id, so submit and poll aliases remain independently auditable.
+func (s *Store) RecordCorrelation(ctx context.Context, event CorrelationEvent) (CorrelationEvent, error) {
+	if s == nil || s.DB == nil {
+		return CorrelationEvent{}, fmt.Errorf("provider execution database is required")
+	}
+	if err := validateCorrelationEvent(event); err != nil {
+		return CorrelationEvent{}, err
+	}
+	err := s.DB.QueryRowContext(ctx, `
+		INSERT INTO provider_execution_correlations
+		(execution_id,kind,provider_code,base_url_host,endpoint_path,provider_job_id,job_role,provider_state,http_status,error_code,error_hash)
+		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,NULLIF($9,0),$10,$11)
+		RETURNING id,created_at`, event.ExecutionID, event.Kind, event.ProviderCode, event.Host, event.Path, event.JobID, event.JobRole, event.State, event.HTTPStatus, event.ErrorCode, event.ErrorHash).Scan(&event.ID, &event.CreatedAt)
+	if err != nil {
+		return CorrelationEvent{}, err
+	}
+	return event, nil
+}
+
+func validateCorrelationEvent(event CorrelationEvent) error {
+	if event.ExecutionID <= 0 || strings.TrimSpace(event.Kind) == "" {
+		return fmt.Errorf("provider correlation execution and kind are required")
+	}
+	if event.Host != "" && (strings.Contains(event.Host, "://") || strings.ContainsAny(event.Host, "/?@") || strings.TrimSpace(event.Host) != event.Host) {
+		return fmt.Errorf("provider correlation host must be a hostname only")
+	}
+	if event.Path != "" && (!strings.HasPrefix(event.Path, "/") || strings.Contains(event.Path, "://") || strings.Contains(event.Path, "?") || strings.TrimSpace(event.Path) != event.Path) {
+		return fmt.Errorf("provider correlation path must be a query-free path")
+	}
+	for name, value := range map[string]string{"kind": event.Kind, "provider": event.ProviderCode, "job": event.JobID, "job role": event.JobRole, "state": event.State, "error code": event.ErrorCode} {
+		if value != "" && !safeCorrelationToken(value, 512) {
+			return fmt.Errorf("provider correlation %s must be a bounded identifier", name)
+		}
+	}
+	if event.ErrorHash != "" && (!strings.HasPrefix(event.ErrorHash, "sha256:") || len(event.ErrorHash) != len("sha256:")+64) {
+		return fmt.Errorf("provider correlation error must be a SHA-256 hash")
+	}
+	return nil
+}
+
+func safeCorrelationToken(value string, maximum int) bool {
+	if len(value) > maximum || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || strings.ContainsRune("._:-", char) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (s *Store) ListCorrelations(ctx context.Context, executionID int64) ([]CorrelationEvent, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,execution_id,kind,provider_code,base_url_host,endpoint_path,COALESCE(provider_job_id,''),job_role,provider_state,COALESCE(http_status,0),error_code,error_hash,created_at FROM provider_execution_correlations WHERE execution_id=$1 ORDER BY id`, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []CorrelationEvent
+	for rows.Next() {
+		var event CorrelationEvent
+		if err := rows.Scan(&event.ID, &event.ExecutionID, &event.Kind, &event.ProviderCode, &event.Host, &event.Path, &event.JobID, &event.JobRole, &event.State, &event.HTTPStatus, &event.ErrorCode, &event.ErrorHash, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
 
 func (s *Store) CreatePrepared(ctx context.Context, e Execution) (Execution, error) {
 	return s.createPrepared(ctx, e, false)

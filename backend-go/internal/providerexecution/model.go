@@ -26,18 +26,37 @@ var ErrProviderStillProcessing = errors.New("provider execution is still process
 var ErrProviderExecutionFailed = errors.New("provider execution failed")
 var ErrFencedStaleExecution = errors.New("stale execution generation is fenced")
 
+// CorrelationEvent is an append-only, redacted provider attempt event. It
+// contains safe route/job/state evidence only; raw Provider payloads, prompts,
+// credentials, and full URLs never enter this persistence boundary.
+type CorrelationEvent struct {
+	ID           int64
+	ExecutionID  int64
+	Kind         string
+	ProviderCode string
+	Host         string
+	Path         string
+	JobID        string
+	JobRole      string
+	State        string
+	HTTPStatus   int
+	ErrorCode    string
+	ErrorHash    string
+	CreatedAt    time.Time
+}
+
 type Execution struct {
-	ID                                                          int64
-	TaskID                                                      string
-	Provider                                                    string
-	ProviderChannel                                             string
-	ProviderModel                                               string
-	Capability                                                  string
-	Attempt                                                     int
-	Status                                                      Status
-	RequestFingerprint                                          string
-	ProviderOperationKey                                        string
-	ProviderRequestID                                           *string
+	ID                   int64
+	TaskID               string
+	Provider             string
+	ProviderChannel      string
+	ProviderModel        string
+	Capability           string
+	Attempt              int
+	Status               Status
+	RequestFingerprint   string
+	ProviderOperationKey string
+	ProviderRequestID    *string
 	// TaskGeneration binds this execution to the xz_generation_tasks
 	// execution_generation observed under the task row lock at creation
 	// (Issue #145 fencing). Nil means pre-fencing legacy: generation
