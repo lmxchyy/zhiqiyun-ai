@@ -74,6 +74,20 @@ func isAsyncCanaryRequest(req generation.CreateRequest) bool {
 	return value
 }
 
+func providerCorrelationContext(ctx context.Context, s *pe.Store, executionID int64) context.Context {
+	if s == nil || executionID <= 0 {
+		return ctx
+	}
+	return generation.WithProviderCorrelationListener(ctx, func(event generation.ProviderCorrelationEvent) {
+		_, _ = s.RecordCorrelation(ctx, pe.CorrelationEvent{
+			ExecutionID: executionID, Kind: event.Kind, ProviderCode: event.ProviderCode,
+			Host: event.Host, Path: event.Path, JobID: event.JobID, JobRole: event.JobRole,
+			State: event.State, HTTPStatus: event.HTTPStatus, ErrorCode: event.ErrorCode,
+			ErrorHash: event.ErrorHash,
+		})
+	})
+}
+
 func providerName(req generation.CreateRequest) string {
 	for _, k := range []string{"_async_canary_provider", "provider", "providerName", "channel"} {
 		if v, ok := req.Params[k].(string); ok && strings.TrimSpace(v) != "" {
@@ -285,7 +299,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 				if getter, ok := p.(interface {
 					Get(context.Context, string) (any, error)
 				}); ok {
-					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+					result, queryErr := getter.Get(providerCorrelationContext(ctx, s, latest.ID), *latest.ProviderRequestID)
 					diag.ProviderGet = true
 					if queryErr != nil {
 						observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
@@ -367,7 +381,7 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 				observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
 				return nil, fmt.Errorf("video provider does not support query recovery")
 			}
-			result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
+			result, queryErr := getter.Get(providerCorrelationContext(ctx, s, latest.ID), *latest.ProviderRequestID)
 			diag.ProviderGet = true
 			if queryErr != nil {
 				observeRecovery(withRecoveryCode(diag, RecoveryStageGet, RecoveryCodeGetFailed))
@@ -413,15 +427,37 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 		return nil, err
 	}
 	req.ClientRequestID = e.ProviderOperationKey
+	// Correlation is append-only and intentionally independent of the legacy
+	// provider_request_id column. A Provider may return a submit ID and later
+	// a distinct poll/terminal ID; neither provenance record may overwrite the
+	// other.
+	recordCorrelation := func(event generation.ProviderCorrelationEvent) {
+		_, _ = s.RecordCorrelation(ctx, pe.CorrelationEvent{
+			ExecutionID: e.ID, Kind: event.Kind, ProviderCode: event.ProviderCode,
+			Host: event.Host, Path: event.Path, JobID: event.JobID, JobRole: event.JobRole,
+			State: event.State, HTTPStatus: event.HTTPStatus, ErrorCode: event.ErrorCode,
+			ErrorHash: event.ErrorHash,
+		})
+	}
+	recordCorrelation(generation.ProviderCorrelationEvent{Kind: "attempt", ProviderCode: e.Provider, JobRole: "logical_channel"})
 	notifySubmission := func(requestID string) {
 		trimmed := strings.TrimSpace(requestID)
 		if trimmed == "" {
 			return
 		}
+		recordCorrelation(generation.ProviderCorrelationEvent{Kind: "submission_persisted", ProviderCode: e.Provider, JobID: trimmed, JobRole: "legacy_provider_request_id"})
 		_ = s.Transition(ctx, e.ID, pe.Submitted, &trimmed, nil, nil)
 	}
-	ctxWithListener := generation.WithProviderSubmissionListener(ctx, notifySubmission)
+	ctxWithListener := generation.WithProviderSubmissionListener(providerCorrelationContext(ctx, s, e.ID), notifySubmission)
 	result, callErr := p.Create(ctxWithListener, req)
+	if callErr != nil {
+		_, providerRequestID, _ := providerFailureDetails(callErr)
+		if providerRequestID != nil {
+			recordCorrelation(generation.ProviderCorrelationEvent{Kind: "execution_error", ProviderCode: e.Provider, JobID: *providerRequestID, JobRole: "legacy_provider_request_id"})
+		}
+	} else if resultID := providerTaskID(result); resultID != "" {
+		recordCorrelation(generation.ProviderCorrelationEvent{Kind: "execution_result", ProviderCode: e.Provider, JobID: resultID, JobRole: "legacy_provider_request_id", State: string(providerExecutionStatus(result))})
+	}
 	if callErr != nil {
 		diag.ProviderCreate = true
 		class := pe.Classify(callErr)

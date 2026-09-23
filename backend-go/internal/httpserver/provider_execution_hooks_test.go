@@ -73,14 +73,16 @@ func openProviderExecutionHookTestDB(t *testing.T) *sql.DB {
 		db.Close()
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "database", "migrations", "114-provider-execution-safety.sql"))
-	if err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(context.Background(), string(raw)); err != nil {
-		db.Close()
-		t.Fatal(err)
+	for _, name := range []string{"114-provider-execution-safety.sql", "120-provider-execution-correlation.sql"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "database", "migrations", name))
+		if err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(context.Background(), string(raw)); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
 	}
 	return db
 }
