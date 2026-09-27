@@ -129,8 +129,11 @@ func generatedStorageRecordForFile(file storagecenter.FileObject, image generati
 }
 
 func (a api) persistGeneratedVideos(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
+	// This function is reached only when VIDEO_STORAGE_PERSISTENCE_ENABLED is
+	// enabled. Never silently complete a video task with a provider-temporary
+	// URL when the required durable storage dependency is unavailable.
 	if a.fileService == nil {
-		return req, nil, nil
+		return req, nil, errors.New("private video storage is unavailable")
 	}
 	videoURL := providerTaskString(req, "videoUrl")
 	if videoURL == "" {
@@ -145,7 +148,7 @@ func (a api) persistGeneratedVideos(ctx context.Context, taskID string, req gene
 		return req, nil, fmt.Errorf("resolve video storage: %w", err)
 	}
 	if !available {
-		return req, nil, nil
+		return req, nil, errors.New("private video storage is not configured")
 	}
 
 	fileNamePrefix := fmt.Sprintf("%s-01.", taskID)

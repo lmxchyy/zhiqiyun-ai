@@ -191,8 +191,76 @@ func TestPersistGeneratedVideos_UpstreamFailure(t *testing.T) {
 	}
 }
 
+func TestRunVideoGenerationTask_StorageFailurePreventsCapture(t *testing.T) {
+	store := newBillingAcceptanceStore(t)
+	pending, err := store.CreatePendingGenerationTask(videoAcceptanceRequest("video-storage-fail-closed"))
+	if err != nil {
+		t.Fatalf("create pending task: %v", err)
+	}
+	service := generation.NewServiceWithOptions(generation.ServiceOptions{
+		VideoProvider: &mockVideoProvider{},
+	})
+	req := generation.CreateRequest{
+		UserID: pending.UserID,
+		Type:   pending.Type,
+		Prompt: pending.Prompt,
+		Model:  pending.Model,
+		Params: cloneAnyMap(pending.Params),
+	}
+
+	err = (api{
+		store: store,
+		cfg:   config.Config{VideoStoragePersistenceEnabled: true},
+	}).runVideoGenerationTask(pending.ID, service, req)
+	if err == nil || !strings.Contains(err.Error(), "private video storage is unavailable") {
+		t.Fatalf("expected durable-storage failure, got %v", err)
+	}
+
+	tasks, err := store.ListGenerationTasks()
+	if err != nil {
+		t.Fatalf("list generation tasks: %v", err)
+	}
+	task := generationBillingTaskByID(t, tasks, pending.ID)
+	if task.Status != taskStatusFailed || task.BillingStatus != billingStatusReleased {
+		t.Fatalf("storage failure must fail and release task before capture, got status=%s billing=%s", task.Status, task.BillingStatus)
+	}
+	if task.CapturedPoints != 0 || task.ReleasedPoints != pending.ReservedPoints {
+		t.Fatalf("storage failure must not capture points; captured=%v released=%v reserved=%v", task.CapturedPoints, task.ReleasedPoints, pending.ReservedPoints)
+	}
+}
+
+func TestPersistGeneratedVideos_RequiresDurableStorage(t *testing.T) {
+	req := generation.CreateRequest{
+		UserID: "user_test",
+		Type:   "TEXT_TO_VIDEO",
+		Params: map[string]any{
+			"tenant_id": "tenant_default",
+			"providerTask": map[string]any{
+				"videoUrl": "https://provider.example/video.mp4",
+			},
+		},
+	}
+
+	t.Run("missing service fails closed", func(t *testing.T) {
+		a := api{cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+		_, _, err := a.persistGeneratedVideos(context.Background(), "task_storage_missing", req)
+		if err == nil || !strings.Contains(err.Error(), "private video storage is unavailable") {
+			t.Fatalf("expected unavailable-storage error, got %v", err)
+		}
+	})
+
+	t.Run("unconfigured service fails closed", func(t *testing.T) {
+		service := storagecenter.NewService(storagecenter.NewMemoryRepository(), generatedStorageTestFactory{}, storagecenter.Options{})
+		a := api{fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+		_, _, err := a.persistGeneratedVideos(context.Background(), "task_storage_unconfigured", req)
+		if err == nil || !strings.Contains(err.Error(), "private video storage is not configured") {
+			t.Fatalf("expected unconfigured-storage error, got %v", err)
+		}
+	})
+}
+
 func TestPersistGeneratedVideos_FeatureFlagOff(t *testing.T) {
-	// Feature Flag 为 OFF 时，runVideoGenerationTask 不调用 persistGeneratedVideos
+	// Feature Flag 为 OFF 时，runVideoGenerationTask does not call persistGeneratedVideos.
 	cfg := config.Config{VideoStoragePersistenceEnabled: false}
 	if cfg.VideoStoragePersistenceEnabled {
 		t.Fatalf("expected VideoStoragePersistenceEnabled to be false by default")
