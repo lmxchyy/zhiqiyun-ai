@@ -76,6 +76,25 @@ for service in ("xianzhi-ai", "smartvideo-worker"):
 ' "$XIANZHI_IMAGE_REFERENCE" <<< "$rendered" || fail "Compose desired state does not match the immutable release."
 }
 
+validate_video_storage_persistence() {
+  local rendered="$1"
+  python3 -c '
+import json
+import sys
+
+rendered = sys.stdin.read()
+data = json.loads(rendered)
+service = data.get("services", {}).get("xianzhi-ai", {})
+environment = service.get("environment", {})
+actual = environment.get("VIDEO_STORAGE_PERSISTENCE_ENABLED") if isinstance(environment, dict) else None
+if str(actual).strip().lower() != "true":
+    raise SystemExit(
+        "VIDEO_STORAGE_PERSISTENCE_ENABLED must resolve to true for xianzhi-ai; "
+        f"got {actual!r}. Update the production env file before deployment."
+    )
+' <<< "$rendered" || fail "Video storage persistence production gate failed."
+}
+
 command -v git >/dev/null 2>&1 || fail "git is not installed."
 command -v docker >/dev/null 2>&1 || fail "Docker is not installed."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is not available."
@@ -153,11 +172,14 @@ docker compose \
   -f "$COMPOSE_FILE" \
   --env-file "$ENV_FILE" \
   config >/dev/null
+compose_config="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" \
+  || fail "Failed to render Docker Compose configuration."
+
+log "Verifying rendered video storage persistence gate..."
+validate_video_storage_persistence "$compose_config"
 
 if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   log "Validating Docker Compose desired state matches manifest..."
-  compose_config="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" \
-    || fail "Failed to render Docker Compose configuration."
   validate_compose_desired_state "$compose_config"
 fi
 
@@ -209,6 +231,7 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   fresh_compose_config="$(env -u XIANZHI_IMAGE_REFERENCE docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" \
     || fail "Failed to render fresh Docker Compose configuration."
   validate_compose_desired_state "$fresh_compose_config"
+  validate_video_storage_persistence "$fresh_compose_config"
 fi
 
 log "Pruning dangling images..."
