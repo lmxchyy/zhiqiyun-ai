@@ -108,7 +108,7 @@ if [ "$1" = "compose" ]; then
       config)
         if [ "\${MOCK_DESIRED_STATE_MISMATCH:-0}" = "1" ]; then
           cat << 'EOF'
-{"services":{"xianzhi-ai":{"image":"xianzhi-ai-platform:prod"},"smartvideo-worker":{"image":"xianzhi-ai-platform:prod"}}}
+{"services":{"xianzhi-ai":{"image":"xianzhi-ai-platform:prod","environment":{"VIDEO_STORAGE_PERSISTENCE_ENABLED":"true"}},"smartvideo-worker":{"image":"xianzhi-ai-platform:prod"}}}
 EOF
           exit 0
         fi
@@ -118,8 +118,13 @@ EOF
           RESOLVED_REF="$(grep -E '^XIANZHI_IMAGE_REFERENCE=' "$ENV_FILE_PATH" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
         fi
         RESOLVED_REF="\${RESOLVED_REF:-xianzhi-ai-platform:prod}"
+        VIDEO_STORAGE_PERSISTENCE="\${MOCK_VIDEO_STORAGE_PERSISTENCE_ENABLED:-}"
+        if [ -z "$VIDEO_STORAGE_PERSISTENCE" ] && [ -n "$ENV_FILE_PATH" ] && [ -f "$ENV_FILE_PATH" ]; then
+          VIDEO_STORAGE_PERSISTENCE="$(grep -E '^VIDEO_STORAGE_PERSISTENCE_ENABLED=' "$ENV_FILE_PATH" 2>/dev/null | tail -n 1 | cut -d= -f2-)"
+        fi
+        VIDEO_STORAGE_PERSISTENCE="\${VIDEO_STORAGE_PERSISTENCE:-true}"
         if printf '%s\n' "$*" | grep -q -- '--format json'; then
-          printf '{"services":{"xianzhi-ai":{"image":"%s"},"smartvideo-worker":{"image":"%s"}}}\n' "$RESOLVED_REF" "$RESOLVED_REF"
+          printf '{"services":{"xianzhi-ai":{"image":"%s","environment":{"VIDEO_STORAGE_PERSISTENCE_ENABLED":"%s"}},"smartvideo-worker":{"image":"%s"}}}\n' "$RESOLVED_REF" "$VIDEO_STORAGE_PERSISTENCE" "$RESOLVED_REF"
         else
           cat << EOF
 services:
@@ -305,6 +310,22 @@ test("immutable deploy fails early when compose desired state diverges from veri
 
   const envFile = await readFile(join(sandbox.dir, ".env.production"), "utf8");
   assert.doesNotMatch(envFile, /ghcr\.io\/lmxchyy\/zhiqiyun-ai@sha256:/);
+});
+
+test("deploy rejects an explicit production opt-out of video storage persistence", async () => {
+  const sandbox = await setupSandbox({
+    envContent: "VIDEO_STORAGE_PERSISTENCE_ENABLED=false\n"
+  });
+
+  await assert.rejects(
+    runDeploy(sandbox),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /VIDEO_STORAGE_PERSISTENCE_ENABLED must resolve to true/);
+      assert.match(error.stderr, /Video storage persistence production gate failed/);
+      return true;
+    }
+  );
 });
 
 test("immutable deploy fails when running container image ID does not match expected image ID", async () => {

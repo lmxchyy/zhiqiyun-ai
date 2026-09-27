@@ -114,6 +114,8 @@ Always create a PostgreSQL backup before deployment:
 
 `deploy.sh` uses `compose.prod.yml`, reads `.env`, backs up the current `compose.prod.yml` into `backups/compose`, runs `git pull --ff-only`, rebuilds and starts services, prunes unused images, and prints service status and recent logs.
 
+Before starting services, it renders the **actual** Compose configuration and requires `xianzhi-ai.environment.VIDEO_STORAGE_PERSISTENCE_ENABLED=true`. An explicit `false` in the production env file blocks deployment; do not bypass this gate, because completed videos must be archived to private object storage before billing settlement.
+
 ## 6. Rollback
 
 Rollback to a Git tag:
