@@ -816,7 +816,13 @@ func TestFencing_RecoverSucceededSingleObservationStaleFenced(t *testing.T) {
 			// stored generation is newer than the execution binding.
 			expireFencingLease(t, db, id)
 			requeueAsReaper(t, db, id, genA)
-			if _, _, err := claimGenerationTaskOwnership(store, id); err != nil {
+			if tc.name == "image" {
+				// The new image protocol cannot hand a newer generation an older
+				// durable operation. Its stale success must remain fenced.
+				if _, _, err := claimGenerationTaskOwnership(store, id); !errors.Is(err, ErrFencedStaleExecution) {
+					t.Fatalf("stale image execution was rebound: %v", err)
+				}
+			} else if _, _, err := claimGenerationTaskOwnership(store, id); err != nil {
 				t.Fatalf("claim B: %v", err)
 			}
 			if stored, _ := fencingGeneration(t, db, id); stored == genA {

@@ -16,6 +16,7 @@ import (
 )
 
 const generationImageCanaryConsumer = "generation-image-canary-worker"
+const generationImageNormalConsumer = "generation-image-normal-worker"
 
 // generationCanaryDrainEnabled is intentionally independent of the new-submit
 // canary flag. Operators can stop selection while existing durable work drains.
@@ -27,6 +28,12 @@ func generationCanaryDrainEnabled(cfg config.Config) bool {
 // Provider calls remain behind the same API ProviderExecution hook and local
 // completion is performed by runGenerationTask.
 func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *sql.DB, manager *messaging.ConnectionManager) error {
+	return runGenerationImageWorker(ctx, cfg, db, manager, imageDispatchCanary)
+}
+func RunGenerationImageNormalWorker(ctx context.Context, cfg config.Config, db *sql.DB, manager *messaging.ConnectionManager) error {
+	return runGenerationImageWorker(ctx, cfg, db, manager, imageDispatchNormal)
+}
+func runGenerationImageWorker(ctx context.Context, cfg config.Config, db *sql.DB, manager *messaging.ConnectionManager, mode string) error {
 	if db == nil || manager == nil {
 		return fmt.Errorf("generation worker dependencies are required")
 	}
@@ -36,16 +43,20 @@ func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *
 	store := newPostgresPrimaryStore(db, cfg.DataPath)
 	a := newAPI(store, cfg, nil, nil)
 	inbox := messaging.NewInboxStore(db)
+	queue, retryKey := messaging.GenerationCanaryQueue, messaging.GenerationCanaryRetryKey
+	if mode == imageDispatchNormal {
+		queue, retryKey = messaging.GenerationImageNormalQueue, messaging.GenerationImageNormalRetryKey
+	}
 	consumer := messaging.NewConsumer(manager,
 		messaging.WithPrefetch(1),
 		messaging.WithMaxConcurrency(1),
 		messaging.WithAutoAck(false),
-		messaging.WithRetryPolicy(messaging.ExchangeRetry, messaging.GenerationCanaryRetryKey, messaging.DefaultConsumerMaxRetries),
+		messaging.WithRetryPolicy(messaging.ExchangeRetry, retryKey, messaging.DefaultConsumerMaxRetries),
 		messaging.WithOnMessage(func(messageCtx context.Context, envelope *messaging.Envelope) error {
-			return a.processGenerationCanaryMessage(messageCtx, inbox, envelope)
+			return a.processGenerationImageMessage(messageCtx, inbox, envelope, mode)
 		}),
 	)
-	if err := consumer.Start(ctx, messaging.GenerationCanaryQueue); err != nil {
+	if err := consumer.Start(ctx, queue); err != nil {
 		return err
 	}
 	<-ctx.Done()
@@ -54,8 +65,18 @@ func RunGenerationImageCanaryWorker(ctx context.Context, cfg config.Config, db *
 }
 
 func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messaging.InboxStore, envelope *messaging.Envelope) error {
-	if envelope == nil || envelope.EventType != messaging.GenerationCanaryRoutingKey || envelope.AggregateType != "generation_task" || envelope.AggregateID == "" {
-		return messaging.Permanent(fmt.Errorf("invalid generation canary envelope"))
+	return a.processGenerationImageMessage(ctx, inbox, envelope, imageDispatchCanary)
+}
+func (a *api) processGenerationNormalMessage(ctx context.Context, inbox *messaging.InboxStore, envelope *messaging.Envelope) error {
+	return a.processGenerationImageMessage(ctx, inbox, envelope, imageDispatchNormal)
+}
+func (a *api) processGenerationImageMessage(ctx context.Context, inbox *messaging.InboxStore, envelope *messaging.Envelope, mode string) error {
+	if err := validateImageDispatchEnvelope(envelope, mode); err != nil {
+		return messaging.Permanent(err)
+	}
+	consumerName := generationImageCanaryConsumer
+	if mode == imageDispatchNormal {
+		consumerName = generationImageNormalConsumer
 	}
 	taskID := envelope.AggregateID
 	if value, ok := envelope.Data["task_id"].(string); ok && strings.TrimSpace(value) != taskID {
@@ -67,7 +88,7 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err != nil {
 		return err
 	}
-	duplicate, err := inbox.ClaimTx(shortCtx, tx, generationImageCanaryConsumer, envelope.EventID)
+	duplicate, err := inbox.ClaimTx(shortCtx, tx, consumerName, envelope.EventID)
 	if err != nil {
 		_ = tx.Rollback()
 		return err
@@ -84,33 +105,25 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 		}
 		return err
 	}
-	if !isImageGenerationRequest(task.Type) || !canaryTaskMarker(task.Params) {
+	taskMode, modeErr := imageDispatchMode(task.Params)
+	if !isImageGenerationRequest(task.Type) || modeErr != nil || taskMode != mode {
 		_ = tx.Rollback()
-		return messaging.Permanent(fmt.Errorf("generation task %s is not an image canary", taskID))
+		return messaging.Permanent(fmt.Errorf("generation task %s dispatch protocol mismatch expected=%s actual=%s", taskID, mode, taskMode))
 	}
 	if !isRunningGenerationTaskStatus(task.Status) {
-		if err := inbox.CompleteTx(shortCtx, tx, generationImageCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
+		if err := inbox.CompleteTx(shortCtx, tx, consumerName, envelope.EventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
 		return tx.Commit()
 	}
-	// Issue #145 fencing: the envelope carries the dispatch generation as
-	// the execution identity. A redelivery older than the stored generation
-	// must not steal ownership from a live owner: when a valid lease is
-	// held, ack-skip without provider work. Without a live lease the task
-	// was requeued and this consumer may adopt the new generation via the
-	// claim inside runGenerationTask.
-	if envelopeGen := envelopeExecutionGeneration(envelope.Data); envelopeGen > 0 && envelopeGen < task.fencingGeneration() {
+	// A pending inbox is not a lease. Never complete the original unfinished
+	// event just because its Worker is live; it remains a recovery trigger.
+	if task.TaskStatus == taskStatusRunning && generationLeaseValid(task.LeaseUntil, time.Now().UTC()) && task.WorkerID != "" {
+		_ = tx.Rollback()
 		fencingCutover.staleRedeliveries.Add(1)
-		if generationLeaseValid(task.LeaseUntil, time.Now().UTC()) {
-			log.Printf("generation canary stale redelivery skipped task_id=%s envelope_generation=%d current_generation=%d owner=%s", taskID, envelopeGen, task.fencingGeneration(), task.WorkerID)
-			if err := inbox.CompleteTx(shortCtx, tx, generationImageCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID, "stale_generation": true}); err != nil {
-				_ = tx.Rollback()
-				return err
-			}
-			return tx.Commit()
-		}
+		log.Printf("generation image duplicate deferred task_id=%s mode=%s generation=%d owner=%s", taskID, mode, task.fencingGeneration(), task.WorkerID)
+		return errGenerationOwnershipBusy
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -132,23 +145,22 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if latest, latestErr := pe.NewStore(a.pgDB()).GetLatestByTask(context.Background(), taskID); latestErr == nil {
 		recovery = latest.Status == pe.Succeeded || latest.Status == pe.Unknown || latest.Status == pe.Submitted || latest.Status == pe.Processing
 	}
-	if execErr := checkProviderExecutionState(a.pgDB(), taskID); execErr != nil {
-		return execErr
-	}
 	// Keep the local orchestration path running for a durable execution. The
 	// provider hook performs Get-only recovery (or fails closed) without a
 	// second Create/Generate call; returning here would acknowledge a
 	// succeeded provider row while the generation task is still pending.
-	if err := a.runGenerationTask(taskID, service, req); err != nil {
+	if err := a.runGenerationTaskForDispatch(taskID, service, req, envelopeExecutionGeneration(envelope.Data)); err != nil {
 		// A definitive failure settles/releases the task. Ack it so broker
 		// redelivery cannot create another pre-submit provider attempt against a
 		// terminal task. Ambiguous/deferred states remain active and retryable.
-		terminal, checkErr := a.completeCanaryInboxIfTerminal(inbox, envelope.EventID, taskID)
+		terminal, checkErr := a.completeImageInboxIfTerminal(inbox, envelope.EventID, taskID, consumerName)
 		if checkErr != nil {
 			return checkErr
 		}
 		if terminal {
-			generationCanaryMetrics.failed.Add(1)
+			if mode == imageDispatchCanary {
+				generationCanaryMetrics.failed.Add(1)
+			}
 			return nil
 		}
 		return err
@@ -160,21 +172,26 @@ func (a api) processGenerationCanaryMessage(ctx context.Context, inbox *messagin
 	if err != nil {
 		return err
 	}
-	if err := inbox.CompleteTx(finishCtx, finishTx, generationImageCanaryConsumer, envelope.EventID, "completed", map[string]any{"task_id": taskID}); err != nil {
+	if err := inbox.CompleteTx(finishCtx, finishTx, consumerName, envelope.EventID, "completed", map[string]any{"task_id": taskID}); err != nil {
 		_ = finishTx.Rollback()
 		return err
 	}
 	if err := finishTx.Commit(); err != nil {
 		return err
 	}
-	generationCanaryMetrics.completed.Add(1)
-	if recovery {
+	if mode == imageDispatchCanary {
+		generationCanaryMetrics.completed.Add(1)
+	}
+	if recovery && mode == imageDispatchCanary {
 		generationCanaryMetrics.recovered.Add(1)
 	}
 	return nil
 }
 
 func (a api) completeCanaryInboxIfTerminal(inbox *messaging.InboxStore, eventID, taskID string) (bool, error) {
+	return a.completeImageInboxIfTerminal(inbox, eventID, taskID, generationImageCanaryConsumer)
+}
+func (a *api) completeImageInboxIfTerminal(inbox *messaging.InboxStore, eventID, taskID, consumerName string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	tx, err := a.pgDB().BeginTx(ctx, nil)
@@ -189,7 +206,7 @@ func (a api) completeCanaryInboxIfTerminal(inbox *messaging.InboxStore, eventID,
 	if isRunningGenerationTaskStatus(task.Status) {
 		return false, nil
 	}
-	if err := inbox.CompleteTx(ctx, tx, generationImageCanaryConsumer, eventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
+	if err := inbox.CompleteTx(ctx, tx, consumerName, eventID, "completed", map[string]any{"task_id": taskID, "terminal": true}); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

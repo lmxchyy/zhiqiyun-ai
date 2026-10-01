@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -233,10 +234,15 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 	}
 
 	taskRows, err := tx.QueryContext(ctx, `
-		SELECT id, coalesce(type,''), coalesce(params,'{}'::jsonb)
-		FROM xz_generation_tasks
+		SELECT id, coalesce(type,''), coalesce(params,'{}'::jsonb),execution_generation
+		FROM xz_generation_tasks t
 		WHERE user_id=$1
 		  AND upper(coalesce(nullif(task_status,''), status)) = 'QUEUED'
+		  AND upper(status) IN ('PENDING','PROCESSING','RUNNING','QUEUED')
+		  AND execution_generation > 0
+		  AND (lease_until IS NULL OR lease_until <= now())
+		  AND (coalesce(worker_id,'')='' OR lease_until <= now())
+		  AND (upper(coalesce(type,'')) NOT IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') OR NOT EXISTS (SELECT 1 FROM provider_executions pe WHERE pe.task_id=t.id) OR (params->>'_generation_reconcile_only'='true' AND EXISTS (SELECT 1 FROM provider_executions pe WHERE pe.task_id=t.id AND (pe.task_execution_generation IS NULL OR pe.task_execution_generation=t.execution_generation) AND (pe.status IN ('prepared','succeeded') OR (pe.status IN ('unknown','submitting','submitted','processing') AND pe.provider_request_id IS NOT NULL)))))
 		  AND upper(coalesce(type, '')) NOT IN ('PPT_GENERATION', 'PPT')
 		ORDER BY created_at ASC
 		LIMIT $2
@@ -248,14 +254,15 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 	defer taskRows.Close()
 
 	type claimedTask struct {
-		id       string
-		taskType string
-		params   string
+		id         string
+		taskType   string
+		params     string
+		generation int64
 	}
 	var claimed []claimedTask
 	for taskRows.Next() {
 		var item claimedTask
-		if scanErr := taskRows.Scan(&item.id, &item.taskType, &item.params); scanErr == nil {
+		if scanErr := taskRows.Scan(&item.id, &item.taskType, &item.params, &item.generation); scanErr == nil {
 			claimed = append(claimed, item)
 		}
 	}
@@ -272,29 +279,58 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 		dispatchLeaseSeconds = 60
 	}
 	for _, item := range claimed {
-		// Issue #145 fencing: dispatch transfers ownership, so it bumps the
-		// generation and installs the scheduler lease atomically. The new
+		var params map[string]any
+		if err := json.Unmarshal([]byte(item.params), &params); err != nil {
+			return 0, err
+		}
+		if params == nil {
+			params = map[string]any{}
+		}
+		eventType := messaging.GenerationCanaryRoutingKey
+		mode := ""
+		if isImageGenerationRequest(item.taskType) {
+			var err error
+			eventType, mode, err = imageDispatchRouting(params)
+			if err != nil {
+				return 0, err
+			}
+			params[imageDispatchModeParam] = mode
+		}
+		params["_generation_dispatch_owner"] = s.options.Owner
+		encodedParams, err := json.Marshal(params)
+		if err != nil {
+			return 0, err
+		}
+		bump := int64(1)
+		if isImageGenerationRequest(item.taskType) && boolValue(params["_generation_reconcile_only"]) {
+			bump = 0
+		}
+		// Fresh dispatch advances generation and installs the lease atomically.
+		// GET-only reconciliation retains its bound operation generation. The new
 		// generation travels in the outbox envelope as the execution
 		// identity; stale redeliveries observe the mismatch and skip work.
 		var dispatchedGen int64
 		if err := tx.QueryRowContext(ctx, `
 			UPDATE xz_generation_tasks
 			SET task_status = 'DISPATCHING',
-			    execution_generation = execution_generation + 1,
+			    execution_generation = execution_generation + $6,
+			    params = $7::jsonb,
 			    worker_id = $3,
 			    lease_until = now() + ($4 || ' seconds')::interval,
 			    last_heartbeat_at = now(),
 			    updated_at = $2
-			WHERE id = $1
+			WHERE id = $1 AND execution_generation=$5 AND upper(coalesce(nullif(task_status,''),status))='QUEUED'
+			  AND upper(status) IN ('PENDING','PROCESSING','RUNNING','QUEUED')
+			  AND (lease_until IS NULL OR lease_until <= now())
+			  AND (coalesce(worker_id,'')='' OR lease_until <= now())
 			RETURNING execution_generation
-		`, item.id, nowStr, s.options.Owner, fmt.Sprint(dispatchLeaseSeconds)).Scan(&dispatchedGen); err != nil {
+		`, item.id, nowStr, s.options.Owner, fmt.Sprint(dispatchLeaseSeconds), item.generation, bump, string(encodedParams)).Scan(&dispatchedGen); err != nil {
 			return 0, err
 		}
 		if dispatchedGen <= 0 {
 			dispatchedGen = 1
 		}
 
-		eventType := "x.ai.generation.image.canary.requested"
 		if isVideoGenerationRequest(item.taskType) {
 			eventType = messaging.GenerationVideoCanaryRoutingKey
 		} else if strings.EqualFold(item.taskType, "PPT_GENERATION") || strings.EqualFold(item.taskType, "ppt") {
@@ -302,6 +338,9 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 		}
 
 		eventID := fmt.Sprintf("generation.dispatched:%s:%d", item.id, dispatchedGen)
+		if bump == 0 {
+			eventID = fmt.Sprintf("generation.reconcile:%s:%d:%d", item.id, dispatchedGen, intValue(params["_generation_reconcile_sequence"]))
+		}
 
 		e := &messaging.Envelope{
 			EventID:       eventID,
@@ -314,7 +353,7 @@ func (s *GenerationScheduler) dispatchUserTx(ctx context.Context, userID string,
 			// Execution identity threading: consumers compare the
 			// envelope generation against the stored one and skip
 			// stale redeliveries without provider work.
-			Data: map[string]interface{}{"task_id": item.id, "execution_generation": dispatchedGen},
+			Data: map[string]interface{}{"task_id": item.id, "execution_generation": dispatchedGen, "dispatch_mode": mode},
 		}
 
 		if s.outbox != nil {
@@ -370,13 +409,14 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 		SELECT t.id, t.execution_generation, coalesce(o.event_id, ''), EXISTS (
 		SELECT 1 FROM provider_executions reconcile_pe
 		WHERE reconcile_pe.task_id = t.id
-		  AND reconcile_pe.status IN ('unknown','submitting','submitted','processing')
-		  AND reconcile_pe.provider_request_id IS NOT NULL
+		  AND ((reconcile_pe.status IN ('unknown','submitting','submitted','processing') AND reconcile_pe.provider_request_id IS NOT NULL)
+		    OR (upper(t.type) IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') AND reconcile_pe.status IN ('prepared','succeeded')))
 		  AND (reconcile_pe.next_check_at IS NULL OR reconcile_pe.next_check_at <= now())
 	) AS provider_reconcile
 		FROM xz_generation_tasks t
-		LEFT JOIN outbox_events o ON o.aggregate_id = t.id AND o.aggregate_type = 'generation_task'
-		WHERE upper(coalesce(nullif(t.task_status,''), t.status)) = 'DISPATCHING'
+		LEFT JOIN LATERAL (SELECT * FROM outbox_events oe WHERE oe.aggregate_id=t.id AND oe.aggregate_type='generation_task' ORDER BY oe.created_at DESC,oe.event_id DESC LIMIT 1) o ON true
+		WHERE (upper(coalesce(nullif(t.task_status,''), t.status)) = 'DISPATCHING' OR (upper(t.task_status)='RUNNING' AND upper(t.type) IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') AND EXISTS (SELECT 1 FROM provider_executions r WHERE r.task_id=t.id AND (r.status IN ('prepared','succeeded') OR (r.status IN ('unknown','submitting','submitted','processing') AND r.provider_request_id IS NOT NULL)))))
+		  AND (upper(coalesce(t.type,'')) NOT IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') OR NOT EXISTS (SELECT 1 FROM provider_executions bound_pe WHERE bound_pe.task_id=t.id AND bound_pe.task_execution_generation IS NOT NULL AND bound_pe.task_execution_generation<>t.execution_generation AND bound_pe.attempt=(SELECT max(latest_pe.attempt) FROM provider_executions latest_pe WHERE latest_pe.task_id=t.id)))
 		  AND ((t.lease_until IS NULL AND t.updated_at < $1) OR (t.lease_until IS NOT NULL AND t.lease_until < now()))
 		  AND (
 		    (o.id IS NOT NULL
@@ -398,8 +438,8 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 		    EXISTS (
 		      SELECT 1 FROM provider_executions pe
 		      WHERE pe.task_id = t.id
-		        AND pe.status IN ('unknown','submitting','submitted','processing')
-		        AND pe.provider_request_id IS NOT NULL
+		        AND ((pe.status IN ('unknown','submitting','submitted','processing') AND pe.provider_request_id IS NOT NULL)
+		          OR (upper(t.type) IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') AND pe.status IN ('prepared','succeeded')))
 		        AND (pe.next_check_at IS NULL OR pe.next_check_at <= now())
 		    )
 		  )
@@ -474,13 +514,14 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 		updRes, updErr := tx.ExecContext(ctx, `
 			UPDATE xz_generation_tasks
 			SET task_status = 'QUEUED',
-			    execution_generation = execution_generation + 1,
+			    execution_generation = execution_generation + CASE WHEN $4 AND upper(type) IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') THEN 0 ELSE 1 END,
+			    params = CASE WHEN $4 AND upper(type) IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') THEN coalesce(params,'{}'::jsonb)||jsonb_build_object('_generation_reconcile_only',true,'_generation_reconcile_sequence',coalesce((params->>'_generation_reconcile_sequence')::bigint,0)+1) ELSE params END,
 			    worker_id = NULL,
 			    lease_until = NULL,
 			    last_heartbeat_at = NULL,
 			    updated_at = $1
 			WHERE id = $2 AND execution_generation = $3
-		`, nowStr, item.id, item.gen)
+		`, nowStr, item.id, item.gen, item.providerReconcile)
 		if updErr != nil {
 			return 0, updErr
 		}

@@ -1348,7 +1348,8 @@ func (s *postgresStore) CreatePendingGenerationTaskWithCanaryOutbox(req createGe
 		req.Params = map[string]any{}
 	}
 	req.Params["generation_async_canary"] = true
-	return s.createPendingGenerationTask(req, "x.ai.generation.image.canary.requested")
+	req.Params[imageDispatchModeParam] = imageDispatchCanary
+	return s.createPendingGenerationTask(req, messaging.GenerationCanaryRoutingKey)
 }
 
 func (s *postgresStore) CreatePendingGenerationTaskWithVideoCanaryOutbox(req createGenerationTaskRequest) (generationTask, error) {
@@ -1421,8 +1422,14 @@ func (s *postgresStore) createPendingGenerationTaskWithPPT(req createGenerationT
 			return generationTask{}, errGenerationConcurrencyLimit
 		}
 	} else if !admission.CanDispatch {
+		if isImageGenerationRequest(req.Type) && eventType == "" && !req.FairScheduler {
+			return generationTask{}, errGenerationConcurrencyLimit
+		}
 		eventType = ""
 	}
+	if isImageGenerationRequest(req.Type) && req.FairScheduler {
+		eventType = ""
+	} // scheduler is the sole dispatcher
 	req.Params["tenant_id"] = authorization.TenantID
 	req.Params["organization_id"] = authorization.OrganizationID
 	req.Params["billing_scope"] = authorization.BillingScope
@@ -1547,6 +1554,10 @@ func (s *postgresStore) CompleteGenerationTask(id string, req createGenerationTa
 // before any asset or billing write. expectedGen <= 0 keeps legacy
 // unfenced compat for callers that never claimed ownership.
 func (s *postgresStore) CompleteGenerationTaskFenced(id string, req createGenerationTaskRequest, expectedGen int64) (generationTask, error) {
+	return s.completeGenerationTaskOwned(id, req, expectedGen, "")
+}
+
+func (s *postgresStore) completeGenerationTaskOwned(id string, req createGenerationTaskRequest, expectedGen int64, expectedOwner string) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	if err := s.ensureReady(ctx); err != nil {
@@ -1570,6 +1581,12 @@ func (s *postgresStore) CompleteGenerationTaskFenced(id string, req createGenera
 	}
 	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
 		return task, tx.Commit()
+	}
+	if expectedOwner != "" {
+		ctx = providerexecution.WithGenerationOwnership(ctx, id, expectedOwner, expectedGen)
+		if err := providerexecution.NewStore(s.db).ValidateGenerationOwnershipTx(ctx, tx, id); err != nil {
+			return generationTask{}, err
+		}
 	}
 	userID := strings.TrimSpace(task.UserID)
 	if userID == "" {
@@ -1848,6 +1865,9 @@ func (s *postgresStore) FailGenerationTask(id string, message string) (generatio
 // FailGenerationTaskFenced carries the Issue #145 fencing predicate on the
 // failure path (expectedGen <= 0 keeps legacy unfenced compat).
 func (s *postgresStore) FailGenerationTaskFenced(id string, message string, expectedGen int64) (generationTask, error) {
+	return s.failGenerationTaskOwned(id, message, expectedGen, "")
+}
+func (s *postgresStore) failGenerationTaskOwned(id string, message string, expectedGen int64, expectedOwner string) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -1863,6 +1883,11 @@ func (s *postgresStore) FailGenerationTaskFenced(id string, message string, expe
 	// stale generations are rejected even on settled tasks.
 	if _, err := assertTaskGenerationTx(ctx, tx, id, expectedGen); err != nil {
 		return generationTask{}, err
+	}
+	if expectedOwner != "" {
+		if err := providerexecution.NewStore(s.db).ValidateGenerationOwnershipTx(providerexecution.WithGenerationOwnership(ctx, id, expectedOwner, expectedGen), tx, id); err != nil {
+			return generationTask{}, err
+		}
 	}
 	task, refunded, changed, err := s.mutatePostgresGenerationFailureTx(ctx, tx, task, message, "FAILED", taskStatusFailed)
 	if err != nil {
@@ -2106,7 +2131,14 @@ func (s *postgresStore) FailGenerationTaskUnknownGraceFenced(id string, message 
 	return s.failGenerationTaskDurable(id, message, &grace, expectedGen)
 }
 
-func (s *postgresStore) failGenerationTaskDurable(id string, message string, unknownGrace *time.Duration, expectedGen int64) (generationTask, error) {
+func (s *postgresStore) failGenerationTaskDurable(id string, message string, unknownGrace *time.Duration, expectedGen int64, expectedOwner ...string) (generationTask, error) {
+	owner := ""
+	if len(expectedOwner) > 0 {
+		owner = expectedOwner[0]
+	}
+	return s.failGenerationTaskDurableChecked(id, message, unknownGrace, expectedGen, owner, nil)
+}
+func (s *postgresStore) failGenerationTaskDurableChecked(id string, message string, unknownGrace *time.Duration, expectedGen int64, expectedOwner string, reaper *taskFencing) (generationTask, error) {
 	ctx, cancel := s.withTimeout()
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -2126,6 +2158,16 @@ func (s *postgresStore) failGenerationTaskDurable(id string, message string, unk
 	}
 	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
 		return task, tx.Commit()
+	}
+	if expectedOwner != "" {
+		if err := providerexecution.NewStore(s.db).ValidateGenerationOwnershipTx(providerexecution.WithGenerationOwnership(ctx, id, expectedOwner, expectedGen), tx, id); err != nil {
+			return generationTask{}, err
+		}
+	}
+	if reaper != nil {
+		if err := assertGenerationReaperTx(ctx, tx, id, *reaper); err != nil {
+			return generationTask{}, err
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	pointCost := generationTaskReservedPointCost(task, task.PointCost)

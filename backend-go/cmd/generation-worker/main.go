@@ -39,7 +39,7 @@ func run() error {
 	clients.Messaging.Start()
 	workerCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	errCh := make(chan error, 5)
+	errCh := make(chan error, 6)
 	listener, err := net.Listen("tcp", cfg.GenerationWorkerMetricsAddr)
 	if err != nil {
 		return fmt.Errorf("worker metrics listen: %w", err)
@@ -53,6 +53,9 @@ func run() error {
 	}()
 	go func() {
 		errCh <- httpserver.RunConfiguredGenerationScheduler(workerCtx, clients.DB, cfg, httpserver.GenerationSchedulerOptions{Owner: "generation-worker-scheduler"})
+	}()
+	go func() {
+		errCh <- httpserver.RunGenerationImageNormalWorker(workerCtx, cfg, clients.DB, clients.Messaging)
 	}()
 	go func() {
 		errCh <- httpserver.RunGenerationImageCanaryWorker(workerCtx, cfg, clients.DB, clients.Messaging)
