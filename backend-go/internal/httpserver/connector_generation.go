@@ -19,7 +19,7 @@ type connectorCapabilityStore interface {
 // executeConnectorImageGeneration reuses the exact user-facing generation,
 // storage, asset and billing pipeline, but waits inside the connector worker
 // instead of inside the Feishu HTTP callback.
-func (a api) executeConnectorImageGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (generationTask, generation.CreateRequest, error) {
+func (a api) executeConnectorImageGeneration(ctx context.Context, userID string, enterpriseID string, req generation.CreateRequest) (result generationTask, resultReq generation.CreateRequest, returnErr error) {
 	user, data, err := a.connectorUserAndCapabilityData(ctx, userID)
 	if err != nil {
 		return generationTask{}, req, err
@@ -59,10 +59,18 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 	// provider-execution guard.
 	// Issue #145 fencing: claim ownership for this synchronous execution so
 	// the settlement below is bound to the claimed generation.
-	connectorClaimGen, _, connectorClaimErr := claimGenerationTaskOwnership(a.store, task.ID)
+	connectorClaimGen, connectorOwner, connectorClaimErr := claimGenerationTaskOwnership(a.store, task.ID)
 	if connectorClaimErr != nil {
 		return task, req, fmt.Errorf("claim generation ownership: %w", connectorClaimErr)
 	}
+	ctx = pe.WithGenerationOwnership(ctx, task.ID, connectorOwner, connectorClaimGen)
+	stopHeartbeat := a.startGenerationHeartbeat(task.ID, connectorOwner, connectorClaimGen)
+	defer func() {
+		stopHeartbeat()
+		if returnErr != nil {
+			relinquishGenerationOwnership(a.store, task.ID, connectorOwner, connectorClaimGen)
+		}
+	}()
 	req.Params[providerExecutionTaskParam] = task.ID
 	prepared, err := service.PrepareImageTask(ctx, cloneGenerationCreateRequest(req))
 	if err != nil {
@@ -72,8 +80,19 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		if errors.Is(err, pe.ErrUnknownResubmitBlocked) || errors.Is(err, pe.ErrProviderStillProcessing) {
 			return task, req, fmt.Errorf("connector image recovery deferred: %w", err)
 		}
-		_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), connectorClaimGen)
+		if !errors.Is(err, ErrFencedStaleExecution) {
+			if pg := fencingPostgres(a.store); pg != nil {
+				_, _ = pg.failGenerationTaskOwned(task.ID, generationErrorMessage(err), connectorClaimGen, connectorOwner)
+			} else {
+				_, _ = failGenerationTaskWithFencing(a.store, task.ID, generationErrorMessage(err), connectorClaimGen)
+			}
+		}
 		return task, req, fmt.Errorf("generate connector image: %w", err)
+	}
+	if pg := fencingPostgres(a.store); pg != nil {
+		if err = pe.NewStore(pg.db).ValidateGenerationOwnership(ctx, task.ID); err != nil {
+			return task, prepared, fmt.Errorf("connector image ownership lost before archive: %w", err)
+		}
 	}
 	prepared, _, err = a.persistGeneratedImages(ctx, task.ID, prepared)
 	if err != nil {
@@ -81,7 +100,7 @@ func (a api) executeConnectorImageGeneration(ctx context.Context, userID string,
 		// of releasing its reservation on a local storage failure.
 		return task, prepared, fmt.Errorf("persist connector image: %w", err)
 	}
-	completed, err := completeGenerationTaskWithFencing(a.store, task.ID, prepared, connectorClaimGen)
+	completed, err := completeGenerationTaskWithOwnership(a.store, task.ID, prepared, connectorClaimGen, connectorOwner)
 	if err != nil {
 		// Completion is the local settlement boundary; do not fail/release a
 		// task whose provider result can be replayed locally.

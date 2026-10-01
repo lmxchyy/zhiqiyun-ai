@@ -161,6 +161,9 @@ func (s *Store) createPrepared(ctx context.Context, e Execution, lockTask bool) 
 		default:
 			return Execution{}, fmt.Errorf("generation task %s is terminal (%s)", e.TaskID, status)
 		}
+		if err := verifyGenerationOwnership(ctx, tx, e.TaskID); err != nil {
+			return Execution{}, err
+		}
 		// Issue #145 fencing: bind the execution to the task generation
 		// observed under the same row lock. A stale attempt's late success
 		// can never settle a newer task generation (comparison happens in
@@ -303,6 +306,9 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 			return Execution{}, fmt.Errorf("generation task %s is terminal (%s)", taskID, status)
 		}
 		taskGen = taskGenerationForBarrier(tx, ctx, taskID)
+		if err := verifyGenerationOwnership(ctx, tx, taskID); err != nil {
+			return Execution{}, err
+		}
 	}
 	var id int64
 	var boundGen sql.NullInt64

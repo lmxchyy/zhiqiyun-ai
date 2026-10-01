@@ -136,7 +136,7 @@ jobs:
     env:
       XIANZHI_ANALYTICS_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
       XIANZHI_PROVIDER_EXECUTION_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
-      XIANZHI_MESSAGING_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
+      XIANZHI_MESSAGING_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_messaging_test?sslmode=disable
       XIANZHI_STORAGE_TEST_DATABASE_URL: postgres://codex:codex@127.0.0.1:55441/xianzhi_test?sslmode=disable
       XIANZHI_MESSAGING_TEST_RABBITMQ_URL: amqp://guest:guest@127.0.0.1:5672/ci
 
@@ -178,14 +178,27 @@ jobs:
           go-version-file: backend-go/go.mod
           cache-dependency-path: backend-go/go.sum
 
-      - name: Initialize test database
+      - name: Initialize isolated test databases
         run: |
-          docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < database/schema.sql
-          while IFS= read -r file; do
-            echo "Applying $file"
-            docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < "$file"
-          done < <(find database/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]-*.sql' ! -name '*.down.sql' -print | sort)
-          docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d xianzhi_test -v ON_ERROR_STOP=1 < database/migrations/115-generation-artifact-identity.sql
+          set -euo pipefail
+          docker exec -e PGPASSWORD=codex "${{ job.services.postgres.id }}" createdb -h 127.0.0.1 -U codex xianzhi_messaging_test
+          for database in xianzhi_test xianzhi_messaging_test; do
+            docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d "$database" -v ON_ERROR_STOP=1 < database/schema.sql
+            while IFS= read -r file; do
+              echo "Applying $file to $database"
+              docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d "$database" -v ON_ERROR_STOP=1 < "$file"
+            done < <(find database/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]-*.sql' ! -name '*.down.sql' -print | sort)
+            docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d "$database" -v ON_ERROR_STOP=1 < database/migrations/115-generation-artifact-identity.sql
+          done
+
+      - name: Test Issue 190 real PostgreSQL dispatch ownership (no SKIP)
+        working-directory: backend-go
+        env:
+          ISSUE190_REQUIRE_POSTGRES: "1"
+        run: |
+          set -euo pipefail
+          go test -race -count=1 -timeout 5m -json ./internal/httpserver -run '^TestIssue190Postgres(A|B|C|D|E|Connector)$' | tee issue190-postgres.json
+          python3 ../tests/assert-issue190-integration.py issue190-postgres.json
 
       - name: Test Batch A provider recovery (uncached)
         working-directory: backend-go

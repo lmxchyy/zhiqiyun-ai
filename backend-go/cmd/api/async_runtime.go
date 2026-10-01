@@ -77,6 +77,9 @@ func (r *asyncMessagingRuntime) Start(parent context.Context) {
 		return httpserver.RunConfiguredGenerationScheduler(ctx, r.db, r.cfg)
 	})
 	r.run(ctx, "outbox publisher", publisher.Run)
+	r.run(ctx, "generation normal image consumer", func(ctx context.Context) error {
+		return httpserver.RunGenerationImageNormalWorker(ctx, r.cfg, r.db, r.manager)
+	})
 	r.run(ctx, "generation canary consumer", func(ctx context.Context) error {
 		return r.worker(ctx, r.cfg, r.db, r.manager)
 	})

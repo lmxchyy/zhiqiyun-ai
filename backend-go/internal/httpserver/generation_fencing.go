@@ -8,9 +8,10 @@ package httpserver
 // task had been requeued to a new owner.
 //
 // Fencing token: xz_generation_tasks.execution_generation (monotonic per
-// task, starts at 1). Every ownership transfer -- scheduler dispatch, worker
-// claim, requeue/redrive -- bumps it atomically and returns the new value to
-// the owner. Settlement (Complete / Fail / Durable / UnknownGrace /
+// task, starts at 1). Fresh scheduler dispatch, worker claim and redrive
+// advance it atomically. Image recovery of an already durable operation
+// retains its binding and additionally fences the caller's owner/lease.
+// These resumed image provider and settlement paths require both identities. Settlement (Complete / Fail / Durable / UnknownGrace /
 // MANUAL_REVIEW / Capture / Release) carries the presented generation and
 // commits only when it still matches the stored one; otherwise the tx rolls
 // back with ErrFencedStaleExecution before any asset or billing write.
@@ -22,10 +23,13 @@ package httpserver
 //     video (20m) provider windows because renewal is periodic.
 //   - renewal SQL: UPDATE ... WHERE id AND worker_id AND generation
 //     (0 rows = ownership lost, settle will fence).
-//   - claim SQL: SELECT ... FOR UPDATE, bump generation+1, set owner/lease.
+//   - claim SQL: SELECT ... FOR UPDATE, advance a fresh generation, set
+//     RUNNING + owner/lease; durable same-operation recovery retains generation.
 //   - release: terminal settlement keeps the owner for audit; requeue clears
 //     owner/lease while bumping the generation.
 //
+// Issue #190 image cutover must drain old image workers before enabling
+// same-operation recovery: old binaries only enforce generation, not owner.
 // Cutover: rows with NULL lease_until use the legacy updated_at age backstop
 // (mixed-version safe during rollout); rows carrying a lease are
 // lease-authoritative. fencingCutoverSnapshot exposes the per-path counters.
@@ -244,6 +248,10 @@ func assertTaskGenerationCommitted(ctx context.Context, tx *sql.Tx, taskID strin
 // lease under the task row lock. Terminal tasks are never claimable: bumping
 // them would resurrect fencing state on settled rows.
 func claimGenerationOwnershipTx(ctx context.Context, tx *sql.Tx, taskID, workerID string, ttl time.Duration) (taskFencing, error) {
+	return claimGenerationDispatchOwnershipTx(ctx, tx, taskID, workerID, ttl, 0)
+}
+
+func claimGenerationDispatchOwnershipTx(ctx context.Context, tx *sql.Tx, taskID, workerID string, ttl time.Duration, dispatchGeneration int64) (taskFencing, error) {
 	var fencing taskFencing
 	if strings.TrimSpace(workerID) == "" {
 		return fencing, fmt.Errorf("generation claim requires a worker id")
@@ -251,12 +259,35 @@ func claimGenerationOwnershipTx(ctx context.Context, tx *sql.Tx, taskID, workerI
 	if ttl <= 0 {
 		ttl = generationLeaseTTL
 	}
-	var status string
-	if err := tx.QueryRowContext(ctx, `SELECT coalesce(status,'') FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&status); err != nil {
+	var status, taskStatus, currentWorker, taskType, dispatchOwner string
+	var currentGeneration int64
+	var live bool
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(status,''),coalesce(task_status,''),execution_generation,coalesce(worker_id,''),coalesce(lease_until>now(),false),coalesce(type,''),coalesce(params->>'_generation_dispatch_owner','') FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&status, &taskStatus, &currentGeneration, &currentWorker, &live, &taskType, &dispatchOwner); err != nil {
 		return fencing, err
 	}
 	if !isRunningGenerationTaskStatus(status) {
 		return fencing, fmt.Errorf("generation task %s is terminal (%s)", taskID, status)
+	}
+	if err := validateGenerationClaim(taskStatus, currentWorker, dispatchOwner, currentGeneration, dispatchGeneration, live, isImageGenerationRequest(taskType)); err != nil {
+		return fencing, fmt.Errorf("task %s: %w", taskID, err)
+	}
+	// Resume the SAME image operation only after its owner expired. Changing
+	// owner is separately fenced at provider submission and owned settlement.
+	// Never rebind or adopt an execution from an older task generation.
+	bump := int64(1)
+	if isImageGenerationRequest(taskType) {
+		var bound sql.NullInt64
+		var executionStatus string
+		err := tx.QueryRowContext(ctx, `SELECT task_execution_generation,status FROM provider_executions WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1 FOR UPDATE`, taskID).Scan(&bound, &executionStatus)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fencing, err
+		}
+		if err == nil && executionStatus != "failed" {
+			if bound.Valid && bound.Int64 != currentGeneration {
+				return fencing, fmt.Errorf("%w: durable image execution bound to %d, current %d", ErrFencedStaleExecution, bound.Int64, currentGeneration)
+			}
+			bump = 0
+		}
 	}
 	leaseSeconds := int64(ttl / time.Second)
 	if leaseSeconds <= 0 {
@@ -264,14 +295,16 @@ func claimGenerationOwnershipTx(ctx context.Context, tx *sql.Tx, taskID, workerI
 	}
 	row := tx.QueryRowContext(ctx, `
 		UPDATE xz_generation_tasks
-		SET execution_generation = execution_generation + 1,
+		SET execution_generation = execution_generation + $6,
+		    task_status = 'RUNNING',
+		    status = CASE WHEN upper(status) IN ('PENDING','QUEUED') THEN 'PROCESSING' ELSE status END,
 		    worker_id = $2,
 		    lease_until = now() + ($3 || ' seconds')::interval,
 		    last_heartbeat_at = now(),
 		    updated_at = $4
-		WHERE id = $1
+		WHERE id = $1 AND execution_generation = $5
 		RETURNING execution_generation, worker_id, lease_until, last_heartbeat_at
-	`, taskID, workerID, fmt.Sprint(leaseSeconds), time.Now().UTC().Format(time.RFC3339Nano))
+	`, taskID, workerID, fmt.Sprint(leaseSeconds), time.Now().UTC().Format(time.RFC3339Nano), currentGeneration, bump)
 	var generation sql.NullInt64
 	var worker sql.NullString
 	var leaseUntil, lastHeartbeat sql.NullTime
@@ -309,6 +342,8 @@ func renewGenerationLeaseTx(ctx context.Context, tx *sql.Tx, taskID, workerID st
 		SET lease_until = now() + ($4 || ' seconds')::interval,
 		    last_heartbeat_at = now()
 		WHERE id = $1 AND worker_id = $2 AND execution_generation = $3
+		  AND (upper(type) NOT IN ('TEXT_TO_IMAGE','IMAGE_TO_IMAGE') OR
+		       (task_status='RUNNING' AND upper(status) IN ('PROCESSING','RUNNING') AND lease_until>now()))
 	`, taskID, workerID, expectedGen, fmt.Sprint(leaseSeconds))
 	if err != nil {
 		return err
@@ -395,9 +430,13 @@ func observeGenerationTaskGeneration(store platformStore, taskID string) int64 {
 	return fencing.Generation
 }
 
-// claimGenerationTaskOwnership claims (bumps + leases) a task for the
+// claimGenerationTaskOwnership atomically claims and leases a task for the
 // calling worker. Returns (0, "", nil) for non-postgres stores (compat).
 func claimGenerationTaskOwnership(store platformStore, taskID string) (int64, string, error) {
+	return claimGenerationTaskOwnershipForDispatch(store, taskID, 0)
+}
+
+func claimGenerationTaskOwnershipForDispatch(store platformStore, taskID string, dispatchGeneration int64) (int64, string, error) {
 	pg := fencingPostgres(store)
 	if pg == nil {
 		return 0, "", nil
@@ -410,7 +449,7 @@ func claimGenerationTaskOwnership(store platformStore, taskID string) (int64, st
 		return 0, "", err
 	}
 	defer func() { _ = tx.Rollback() }()
-	fencing, err := claimGenerationOwnershipTx(ctx, tx, strings.TrimSpace(taskID), workerID, generationLeaseTTL)
+	fencing, err := claimGenerationDispatchOwnershipTx(ctx, tx, strings.TrimSpace(taskID), workerID, generationLeaseTTL, dispatchGeneration)
 	if err != nil {
 		return 0, "", err
 	}
@@ -444,6 +483,13 @@ func renewGenerationLease(store platformStore, taskID, workerID string, expected
 func completeGenerationTaskWithFencing(store platformStore, taskID string, req createGenerationTaskRequest, expectedGen int64) (generationTask, error) {
 	if pg := fencingPostgres(store); pg != nil {
 		return pg.CompleteGenerationTaskFenced(taskID, req, expectedGen)
+	}
+	return store.CompleteGenerationTask(taskID, req)
+}
+
+func completeGenerationTaskWithOwnership(store platformStore, taskID string, req createGenerationTaskRequest, expectedGen int64, owner string) (generationTask, error) {
+	if pg := fencingPostgres(store); pg != nil {
+		return pg.completeGenerationTaskOwned(taskID, req, expectedGen, owner)
 	}
 	return store.CompleteGenerationTask(taskID, req)
 }

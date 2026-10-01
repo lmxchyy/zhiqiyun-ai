@@ -50,6 +50,11 @@ func executionIdentity(req generation.CreateRequest, capability, provider string
 	// operation. Keeping them out of the fingerprint lets a retry recover the
 	// same durable execution while still detecting real request drift.
 	delete(params, "retryAttempt")
+	delete(params, imageDispatchModeParam)
+	delete(params, imageFairScheduledParam)
+	delete(params, "_generation_dispatch_owner")
+	delete(params, "_generation_reconcile_only")
+	delete(params, "_generation_reconcile_sequence")
 	if source, _ := params["sourceModule"].(string); strings.EqualFold(strings.TrimSpace(source), "ppt-generation") {
 		delete(params, "seed")
 	}
@@ -163,11 +168,17 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 				}
 			}
 			return nil, pe.ErrUnknownResubmitBlocked
-		case pe.Unknown:
+		case pe.Unknown, pe.Submitted, pe.Processing:
+			if latest.Status != pe.Unknown && isAsyncCanaryRequest(req) {
+				generationCanaryMetrics.preventedDuplicates.Add(1)
+			}
 			if latest.ProviderRequestID != nil {
 				if getter, ok := p.(interface {
 					Get(context.Context, string) (any, error)
 				}); ok {
+					if err := s.ValidateGenerationExecution(ctx, taskID, latest); err != nil {
+						return nil, err
+					}
 					result, queryErr := getter.Get(ctx, *latest.ProviderRequestID)
 					if queryErr != nil {
 						errorCode, _, _ := providerFailureDetails(queryErr)
@@ -203,6 +214,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 							if saveErr := s.SaveSucceededResult(ctx, latest.ID, latest.ProviderRequestID, manifest); saveErr != nil {
 								return nil, saveErr
 							}
+							if err := s.ValidateGenerationExecution(ctx, taskID, latest); err != nil {
+								return nil, err
+							}
 							return images, nil
 						}
 						_ = s.Transition(ctx, latest.ID, pe.Processing, latest.ProviderRequestID, ptrString(string(pe.ProviderProcessing)), nil)
@@ -215,12 +229,10 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 			}
 			// UNKNOWN_POLICY=BLOCK_AUTO_RESUBMIT: the provider outcome is not proven.
 			return nil, pe.ErrUnknownResubmitBlocked
-		case pe.Submitted, pe.Processing:
-			if isAsyncCanaryRequest(req) {
-				generationCanaryMetrics.preventedDuplicates.Add(1)
-			}
-			return nil, pe.ErrUnknownResubmitBlocked
 		case pe.Succeeded:
+			if err := s.ValidateGenerationExecution(ctx, taskID, latest); err != nil {
+				return nil, err
+			}
 			var images []generation.GeneratedImage
 			if len(latest.ResultMetadata) == 0 || json.Unmarshal(latest.ResultMetadata, &images) != nil || len(images) == 0 {
 				return nil, pe.ErrUnknownResubmitBlocked
@@ -248,6 +260,9 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	req.ClientRequestID = e.ProviderOperationKey
 	if isAsyncCanaryRequest(req) {
 		generationCanaryMetrics.providerSubmissionAttempts.Add(1)
+	}
+	if err := s.ValidateGenerationOwnership(ctx, taskID); err != nil {
+		return nil, err
 	}
 	images, callErr := p.Generate(ctx, req)
 	if callErr != nil {

@@ -8,17 +8,24 @@ import (
 )
 
 const (
-	ExchangeEvents               = "x.ai.events"
-	ExchangeDLX                  = "x.ai.dlx"
-	ExchangeRetry                = "x.ai.retry"
-	ExchangeType                 = "topic"
-	DLXType                      = "fanout"
-	MessagePrefix                = "x.ai."
-	DefaultPrefetch              = 1
-	MaxPublishRetries            = 3
-	GenerationCanaryQueue        = "x.ai.generation.image.canary"
-	GenerationCanaryRetryQueue   = "x.ai.generation.image.canary.retry"
-	GenerationCanaryDLQ          = "x.ai.generation.image.canary.dlq"
+	ExchangeEvents                  = "x.ai.events"
+	ExchangeDLX                     = "x.ai.dlx"
+	ExchangeRetry                   = "x.ai.retry"
+	ExchangeType                    = "topic"
+	DLXType                         = "fanout"
+	MessagePrefix                   = "x.ai."
+	DefaultPrefetch                 = 1
+	MaxPublishRetries               = 3
+	GenerationImageNormalQueue      = "x.ai.generation.image.normal"
+	GenerationImageNormalRetryQueue = "x.ai.generation.image.normal.retry"
+	GenerationImageNormalDLQ        = "x.ai.generation.image.normal.dlq"
+	GenerationImageNormalRoutingKey = "x.ai.generation.image.normal.requested"
+	GenerationImageNormalRetryKey   = "x.ai.generation.image.normal.retry"
+	GenerationImageNormalDeadKey    = "x.ai.generation.image.normal.dead"
+	GenerationImageNormalDLX        = "x.ai.generation.image.normal.dlx"
+	GenerationCanaryQueue           = "x.ai.generation.image.canary"
+	GenerationCanaryRetryQueue      = "x.ai.generation.image.canary.retry"
+	GenerationCanaryDLQ             = "x.ai.generation.image.canary.dlq"
 	GenerationCanaryRoutingKey      = "x.ai.generation.image.canary.requested"
 	GenerationCanaryRetryKey        = "x.ai.generation.image.canary.retry"
 	GenerationCanaryDeadKey         = "x.ai.generation.image.canary.dead"
@@ -35,7 +42,7 @@ const (
 	GenerationPPTCanaryRetryKey     = "x.ai.generation.ppt.canary.retry"
 	GenerationPPTCanaryDeadKey      = "x.ai.generation.ppt.canary.dead"
 	DefaultConsumerMaxRetries       = 3
-	defaultRetryQueueDelayMillis = int32(1000)
+	defaultRetryQueueDelayMillis    = int32(1000)
 )
 
 // Declaration represents a single topology declaration.
@@ -73,7 +80,7 @@ func (tb *TopologyBuilder) Build() error {
 	defer ch.Close()
 
 	for _, exchange := range []struct{ name, kind string }{
-		{ExchangeEvents, ExchangeType}, {ExchangeDLX, DLXType}, {ExchangeRetry, "direct"},
+		{ExchangeEvents, ExchangeType}, {ExchangeDLX, DLXType}, {ExchangeRetry, "direct"}, {GenerationImageNormalDLX, "direct"},
 	} {
 		if err := declareExchange(ch, exchange.name, exchange.kind, true, false, nil); err != nil {
 			return fmt.Errorf("declare exchange %s: %w", exchange.name, err)
@@ -118,6 +125,27 @@ func (tb *TopologyBuilder) Build() error {
 	}
 	if err := bindQueue(ch, GenerationCanaryDLQ, ExchangeDLX, "", nil); err != nil {
 		return fmt.Errorf("bind generation canary dlq: %w", err)
+	}
+
+	normalArgs := amqp091.Table{"x-dead-letter-exchange": GenerationImageNormalDLX, "x-dead-letter-routing-key": GenerationImageNormalDeadKey}
+	if err := declareQueue(ch, GenerationImageNormalQueue, true, false, normalArgs); err != nil {
+		return err
+	}
+	if err := bindQueue(ch, GenerationImageNormalQueue, ExchangeEvents, GenerationImageNormalRoutingKey, nil); err != nil {
+		return err
+	}
+	normalRetryArgs := amqp091.Table{"x-message-ttl": defaultRetryQueueDelayMillis, "x-dead-letter-exchange": ExchangeEvents, "x-dead-letter-routing-key": GenerationImageNormalRoutingKey}
+	if err := declareQueue(ch, GenerationImageNormalRetryQueue, true, false, normalRetryArgs); err != nil {
+		return err
+	}
+	if err := bindQueue(ch, GenerationImageNormalRetryQueue, ExchangeRetry, GenerationImageNormalRetryKey, nil); err != nil {
+		return err
+	}
+	if err := declareQueue(ch, GenerationImageNormalDLQ, true, false, nil); err != nil {
+		return err
+	}
+	if err := bindQueue(ch, GenerationImageNormalDLQ, GenerationImageNormalDLX, GenerationImageNormalDeadKey, nil); err != nil {
+		return err
 	}
 
 	videoCanaryArgs := amqp091.Table{"x-dead-letter-exchange": ExchangeDLX}
