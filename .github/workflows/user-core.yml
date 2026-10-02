@@ -118,6 +118,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: ShellCheck deployment and release scripts
+        run: |
+          shellcheck deploy.sh rollback.sh ops/prestage-release.sh ops/verify-prestage-proof.sh
+
+      - name: Test lock signals and owner lifecycle
+        run: python3 tests/prestaged-lock-signals.py
+
       - name: Validate production contract image and migration replay
         run: |
           bash -n tests/production-contract.harness.sh
