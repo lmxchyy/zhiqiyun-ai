@@ -481,7 +481,7 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
       fi
     done
   fi
-  [ -n "$PRESTAGE_PROOF_FILE" ] && [ -f "$PRESTAGE_PROOF_FILE" ] || fail "Prestage proof not found for $PRESTAGED_RELEASE_SHA. Run ops/prestage-release.sh first."
+  { [ -n "$PRESTAGE_PROOF_FILE" ] && [ -f "$PRESTAGE_PROOF_FILE" ]; } || fail "Prestage proof not found for $PRESTAGED_RELEASE_SHA. Run ops/prestage-release.sh first."
 
   log "Verifying prestaged release proof: $PRESTAGE_PROOF_FILE"
   [ -x ops/verify-prestage-proof.sh ] || fail "ops/verify-prestage-proof.sh must be executable."
@@ -557,16 +557,16 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
 
   # Verify running services have not drifted from the prestaged rollback snapshot
   receipt_path="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("rollback_receipt_path", ""))' "$PRESTAGE_PROOF_FILE" 2>/dev/null || true)"
-  [ -n "$receipt_path" ] && [ -f "$receipt_path" ] || fail "ROLLBACK_RECEIPT_MISSING: rollback receipt missing from prestage proof."
+  { [ -n "$receipt_path" ] && [ -f "$receipt_path" ]; } || fail "ROLLBACK_RECEIPT_MISSING: rollback receipt missing from prestage proof."
 
   prev_expected_ref="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("previous_image_reference", ""))' "$receipt_path")"
   prev_expected_id="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("previous_image_id", ""))' "$receipt_path")"
-  [ -n "$prev_expected_ref" ] && [ "$prev_expected_ref" != "none" ] || fail "ROLLBACK_RECEIPT_INVALID: previous image reference missing in receipt."
-  [ -n "$prev_expected_id" ] && [ "$prev_expected_id" != "none" ] || fail "ROLLBACK_RECEIPT_INVALID: previous image ID missing in receipt."
+  { [ -n "$prev_expected_ref" ] && [ "$prev_expected_ref" != "none" ]; } || fail "ROLLBACK_RECEIPT_INVALID: previous image reference missing in receipt."
+  { [ -n "$prev_expected_id" ] && [ "$prev_expected_id" != "none" ]; } || fail "ROLLBACK_RECEIPT_INVALID: previous image ID missing in receipt."
 
   cur_api_cid="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q xianzhi-ai)" || fail "SAFE_DRAIN_REJECTED: API discovery failed."
   cur_worker_cid="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q smartvideo-worker)" || fail "SAFE_DRAIN_REJECTED: Worker discovery failed."
-  [ -n "$cur_api_cid" ] && [ -n "$cur_worker_cid" ] || fail "Required old containers missing."
+  { [ -n "$cur_api_cid" ] && [ -n "$cur_worker_cid" ]; } || fail "Required old containers missing."
   if [ -n "$cur_api_cid" ]; then
     cur_api_img="$(docker inspect --format '{{.Config.Image}}' "$cur_api_cid")" || fail "API image query failed."
     cur_api_id="$(docker inspect --format '{{.Image}}' "$cur_api_cid")" || fail "API image-ID query failed."
@@ -590,8 +590,8 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   # Record old container IDs before stopping
   old_api_cid="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q xianzhi-ai)" || fail "Old API status query failed."
   old_worker_cid="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps -q smartvideo-worker)" || fail "Old worker status query failed."
-  [ -n "$old_api_cid" ] && [ "$old_api_cid" = "$cur_api_cid" ] || fail "Old API identity changed."
-  [ -n "$old_worker_cid" ] && [ "$old_worker_cid" = "$cur_worker_cid" ] || fail "Old worker identity changed."
+  { [ -n "$old_api_cid" ] && [ "$old_api_cid" = "$cur_api_cid" ]; } || fail "Old API identity changed."
+  { [ -n "$old_worker_cid" ] && [ "$old_worker_cid" = "$cur_worker_cid" ]; } || fail "Old worker identity changed."
 
   # Stop old API and worker services safely, verifying zero running owner processes
   log "Safely stopping old API and worker containers..."

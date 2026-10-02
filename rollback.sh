@@ -262,11 +262,11 @@ if [ -n "$ROLLBACK_RECEIPT" ] && [ -f "$ROLLBACK_RECEIPT" ]; then
   rb_manifest="$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("rollback_manifest_path", ""))' "$ROLLBACK_RECEIPT" 2>/dev/null || true)"
   rb_manifest_hash="$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("rollback_manifest_sha256", ""))' "$ROLLBACK_RECEIPT" 2>/dev/null || true)"
 
-  [ -n "$prev_ref" ] && [ "$prev_ref" != "none" ] || fail "Rollback receipt contains no valid previous image reference."
-  [ -n "$prev_id" ] && [ "$prev_id" != "none" ] || fail "Rollback receipt contains no valid previous image ID."
+  { [ -n "$prev_ref" ] && [ "$prev_ref" != "none" ]; } || fail "Rollback receipt contains no valid previous image reference."
+  { [ -n "$prev_id" ] && [ "$prev_id" != "none" ]; } || fail "Rollback receipt contains no valid previous image ID."
 
   # Verify rollback manifest
-  [ -n "$rb_manifest" ] && [ -f "$rb_manifest" ] || fail "Rollback manifest specified in receipt does not exist on disk: $rb_manifest"
+  { [ -n "$rb_manifest" ] && [ -f "$rb_manifest" ]; } || fail "Rollback manifest specified in receipt does not exist on disk: $rb_manifest"
   actual_rb_hash="$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$rb_manifest")"
   [ "$actual_rb_hash" = "$rb_manifest_hash" ] || fail "Rollback manifest sha256 mismatch."
 
