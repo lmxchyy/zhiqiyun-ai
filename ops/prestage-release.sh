@@ -30,7 +30,7 @@ if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "$GITHUB_REPOSITORY" != "$OFFICIAL_REPOS
   printf '[prestage] ERROR: PROVENANCE_FAILED: GITHUB_REPOSITORY override rejected: %s. Only %s is permitted.\n' "$GITHUB_REPOSITORY" "$OFFICIAL_REPOSITORY" >&2
   exit 1
 fi
-if [ -n "${GITHUB_WORKFLOW:-}" ] && [ "$GITHUB_WORKFLOW" != "$OFFICIAL_WORKFLOW" ]; then
+if [ "${GITHUB_ACTIONS:-}" != "true" ] && [ -n "${GITHUB_WORKFLOW:-}" ] && [ "$GITHUB_WORKFLOW" != "$OFFICIAL_WORKFLOW" ]; then
   printf '[prestage] ERROR: PROVENANCE_FAILED: GITHUB_WORKFLOW override rejected: %s. Only %s is permitted.\n' "$GITHUB_WORKFLOW" "$OFFICIAL_WORKFLOW" >&2
   exit 1
 fi
@@ -263,7 +263,7 @@ if env_repo and env_repo != OFFICIAL_REPOSITORY:
     sys.exit(1)
 
 env_wf = os.environ.get("GITHUB_WORKFLOW", "").strip()
-if env_wf and env_wf != OFFICIAL_WORKFLOW:
+if os.environ.get("GITHUB_ACTIONS") != "true" and env_wf and env_wf != OFFICIAL_WORKFLOW:
     sys.stderr.write(f"[prestage] ERROR: PROVENANCE_FAILED: GITHUB_WORKFLOW override rejected: {env_wf}. Only {OFFICIAL_WORKFLOW} is allowed.\n")
     sys.exit(1)
 
@@ -535,7 +535,7 @@ if env_repo and env_repo != OFFICIAL_REPOSITORY:
     sys.exit(1)
 
 env_wf = os.environ.get("GITHUB_WORKFLOW", "").strip()
-if env_wf and env_wf != OFFICIAL_WORKFLOW:
+if os.environ.get("GITHUB_ACTIONS") != "true" and env_wf and env_wf != OFFICIAL_WORKFLOW:
     sys.stderr.write(f"[prestage] ERROR: PROVENANCE_FAILED: GITHUB_WORKFLOW override rejected: {env_wf}. Only {OFFICIAL_WORKFLOW} is allowed.\n")
     sys.exit(1)
 

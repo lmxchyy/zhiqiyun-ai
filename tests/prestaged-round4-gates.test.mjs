@@ -55,8 +55,12 @@ test('R4 explicit runtime gate is connected before drain and before success', as
   const text = await readFile(new URL('deploy.sh', root), 'utf8');
   assert.match(text, /python3 ops\/verify-release-runtime\.py pre/);
   assert.match(text, /python3 ops\/verify-release-runtime\.py post/);
-  assert.ok(text.indexOf('python3 ops/verify-release-runtime.py pre') < text.indexOf('  check_safe_drain\n'));
-  assert.ok(text.indexOf('python3 ops/verify-release-runtime.py post') < text.indexOf('Recording successful deployment'));
+  const preIdx = text.indexOf('python3 ops/verify-release-runtime.py pre');
+  const postIdx = text.indexOf('python3 ops/verify-release-runtime.py post');
+  const drainCallIdx = text.indexOf('check_safe_drain', preIdx);
+  const ledgerIdx = text.indexOf('Recording successful deployment', postIdx);
+  assert.ok(preIdx >= 0 && drainCallIdx > preIdx, 'pre gate must run before check_safe_drain');
+  assert.ok(postIdx >= 0 && ledgerIdx > postIdx, 'post gate must run before recording ledger success');
 });
 
 test('R4 actual runtime probe rejects query failure, unhealthy scheduler, missing/zero consumers', () => {

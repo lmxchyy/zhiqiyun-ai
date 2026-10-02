@@ -396,7 +396,7 @@ DISK_WARN_PERCENT="${DISK_WARN_PERCENT:-70}" \
 DISK_CRITICAL_PERCENT="${DISK_CRITICAL_PERCENT:-80}" \
 DISK_EMERGENCY_PERCENT="${DISK_EMERGENCY_PERCENT:-90}" \
 DISK_MIN_FREE_BYTES="${DEPLOY_MIN_FREE_BYTES:-10737418240}" \
-  sh ops/disk-guard.sh "$SCRIPT_DIR" || fail "Insufficient disk space."
+  sh ops/disk-guard.sh "$SCRIPT_DIR" || fail "Insufficient disk space for a safe deployment."
 
 # Working tree clean check: fail closed on dirty or untracked files
 if [ -n "$(git status --porcelain --untracked-files=all)" ]; then

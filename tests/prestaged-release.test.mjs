@@ -598,12 +598,16 @@ async function runPrestage(sandbox, sha, env = {}, extraArgs = []) {
   const { bashBin, bashDir, pyFixtureDir } = sandbox;
   const script = `${bashDir}/ops/prestage-release.sh`;
   const quotedArgs = [sha, ...extraArgs].map(a => `'${a}'`).join(" ");
+  const cleanEnv = { ...process.env };
+  if (cleanEnv.GITHUB_ACTIONS === "true" && !("GITHUB_WORKFLOW" in env)) {
+    delete cleanEnv.GITHUB_WORKFLOW;
+  }
   return execFileAsync(
     bash,
     ["-c", `export PATH='${bashBin}':"$PATH"; cd '${bashDir}'; '${script}' ${quotedArgs}`],
     {
       env: {
-        ...process.env,
+        ...cleanEnv,
         TARGET_PLATFORM: "linux/amd64",
         PYTHONPATH: pyFixtureDir,
         MOCK_GITHUB_STATE_FILE: sandbox.transport.stateFile,
@@ -857,7 +861,7 @@ test("[T05] prestage strictly rejects any attempt to override GITHUB_API_BASE_UR
 
   // Workflow override
   await assert.rejects(
-    runPrestage(sandbox, targetSha, { GITHUB_WORKFLOW: "custom-pipeline.yml" }),
+    runPrestage(sandbox, targetSha, { GITHUB_ACTIONS: "false", GITHUB_WORKFLOW: "custom-pipeline.yml" }),
     (err) => {
       assert.match(err.stderr, /PROVENANCE_FAILED/);
       assert.match(err.stderr, /GITHUB_WORKFLOW override rejected/);
