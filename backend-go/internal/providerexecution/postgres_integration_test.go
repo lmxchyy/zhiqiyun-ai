@@ -22,7 +22,7 @@ func openProviderExecutionTestDB(t *testing.T, dsn string) *sql.DB {
 		db.Close()
 		t.Fatal(err)
 	}
-	for _, name := range []string{"114-provider-execution-safety.sql", "120-provider-execution-correlation.sql"} {
+	for _, name := range []string{"114-provider-execution-safety.sql", "120-provider-execution-correlation.sql", "121-provider-execution-quarantine.sql"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "database", "migrations", name))
 		if err != nil {
 			db.Close()

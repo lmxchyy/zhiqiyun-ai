@@ -13,6 +13,7 @@ import (
 
 	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/messaging"
+	"xianzhi-ai/backend-go/internal/providerexecution"
 )
 
 type GenerationSchedulerOptions struct {
@@ -490,6 +491,12 @@ func (s *GenerationScheduler) RecoverStaleDispatches(ctx context.Context) (recov
 
 	recovered = 0
 	for _, item := range candidates {
+		if err := providerexecution.RejectTask(ctx, tx, item.id, "scheduler_recovery"); err != nil {
+			if errors.Is(err, providerexecution.ErrQuarantined) {
+				continue
+			}
+			return 0, err
+		}
 		if item.eventID != "" {
 			res, delErr := tx.ExecContext(ctx, `
 				DELETE FROM outbox_events

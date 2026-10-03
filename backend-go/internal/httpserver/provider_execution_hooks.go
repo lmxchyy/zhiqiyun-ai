@@ -21,19 +21,44 @@ const (
 )
 
 func providerExecutionHooks(store platformStore, enabled bool) generation.ExecutionHooks {
-	if !enabled {
-		return generation.ExecutionHooks{}
-	}
 	pg, ok := store.(*postgresStore)
 	if !ok || pg == nil || pg.db == nil {
 		return generation.ExecutionHooks{}
 	}
 	s := pe.NewStore(pg.db)
+	// Quarantine must run even when the broader provider-safety hooks are off.
+	if !enabled {
+		return generation.ExecutionHooks{
+			Image: func(ctx context.Context, req generation.CreateRequest, p generation.ImageProvider) ([]generation.GeneratedImage, error) {
+				if err := rejectProviderCall(ctx, s, req, "image_provider"); err != nil {
+					return nil, err
+				}
+				return p.Generate(ctx, req)
+			},
+			Video: func(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider) (any, error) {
+				if err := rejectProviderCall(ctx, s, req, "video_provider"); err != nil {
+					return nil, err
+				}
+				return p.Create(ctx, req)
+			},
+		}
+	}
 	return generation.ExecutionHooks{Image: func(ctx context.Context, req generation.CreateRequest, p generation.ImageProvider) ([]generation.GeneratedImage, error) {
 		return guardedImage(ctx, req, p, s)
 	}, Video: func(ctx context.Context, req generation.CreateRequest, p generation.VideoProvider) (any, error) {
 		return guardedVideo(ctx, req, p, s, store)
 	}}
+}
+
+func rejectProviderCall(ctx context.Context, s *pe.Store, req generation.CreateRequest, operation string) error {
+	if s == nil || s.DB == nil {
+		return pe.ErrQuarantineBarrierUnavailable
+	}
+	taskID, _ := req.Params[providerExecutionTaskParam].(string)
+	if strings.TrimSpace(taskID) == "" {
+		return pe.ErrQuarantineBarrierUnavailable
+	}
+	return pe.RejectTask(ctx, s.DB, taskID, operation)
 }
 
 func executionIdentity(req generation.CreateRequest, capability, provider string) (pe.Execution, string, error) {
@@ -142,6 +167,12 @@ func guardedImage(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	if taskID == "" {
 		return p.Generate(ctx, req)
+	}
+	if s == nil || s.DB == nil {
+		return nil, pe.ErrQuarantineBarrierUnavailable
+	}
+	if err := pe.RejectTask(ctx, s.DB, taskID, "guarded_image"); err != nil {
+		return nil, err
 	}
 	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)
@@ -311,6 +342,12 @@ func guardedVideo(ctx context.Context, req generation.CreateRequest, p generatio
 	}
 	if taskID == "" {
 		return p.Create(ctx, req)
+	}
+	if s == nil || s.DB == nil {
+		return nil, pe.ErrQuarantineBarrierUnavailable
+	}
+	if err := pe.RejectTask(ctx, s.DB, taskID, "guarded_video"); err != nil {
+		return nil, err
 	}
 	preparedExisting := false
 	latest, err := s.GetLatestByTask(ctx, taskID)

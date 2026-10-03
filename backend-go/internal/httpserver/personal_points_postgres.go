@@ -856,6 +856,14 @@ func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, 
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.BusinessType == "" || cmd.BusinessID == "" || cmd.IdempotencyKey == "" || cmd.RequestedPoints <= 0 {
 		return result, ErrInvalidPointCommand
 	}
+	if err := rejectQuarantinedPointMutation(ctx, tx, cmd.IdempotencyKey, "reserve"); err != nil {
+		return result, err
+	}
+	if strings.Contains(strings.ToUpper(cmd.BusinessType), "GENERATION") {
+		if err := rejectQuarantinedTaskTx(ctx, tx, cmd.BusinessID, "billing_reserve"); err != nil {
+			return result, err
+		}
+	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.ReservedAt = pointNow(cmd.ReservedAt)
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
@@ -998,6 +1006,9 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.ReservationID == "" || cmd.IdempotencyKey == "" || cmd.Points <= 0 {
 		return result, ErrInvalidPointCommand
 	}
+	if err := rejectQuarantinedPointMutation(ctx, tx, cmd.IdempotencyKey, "capture"); err != nil {
+		return result, err
+	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.CapturedAt = pointNow(cmd.CapturedAt)
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
@@ -1121,6 +1132,9 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 	}
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.ReservationID == "" || cmd.IdempotencyKey == "" {
 		return result, ErrInvalidPointCommand
+	}
+	if err := rejectQuarantinedPointMutation(ctx, tx, cmd.IdempotencyKey, "release"); err != nil {
+		return result, err
 	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.ReleasedAt = pointNow(cmd.ReleasedAt)

@@ -1582,6 +1582,9 @@ func (s *postgresStore) completeGenerationTaskOwned(id string, req createGenerat
 	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
 		return task, tx.Commit()
 	}
+	if err := providerexecution.RejectTask(ctx, tx, id, "complete_generation"); err != nil {
+		return generationTask{}, err
+	}
 	if expectedOwner != "" {
 		ctx = providerexecution.WithGenerationOwnership(ctx, id, expectedOwner, expectedGen)
 		if err := providerexecution.NewStore(s.db).ValidateGenerationOwnershipTx(ctx, tx, id); err != nil {
@@ -1884,6 +1887,9 @@ func (s *postgresStore) failGenerationTaskOwned(id string, message string, expec
 	if _, err := assertTaskGenerationTx(ctx, tx, id, expectedGen); err != nil {
 		return generationTask{}, err
 	}
+	if err := providerexecution.RejectTask(ctx, tx, id, "fail_generation"); err != nil {
+		return generationTask{}, err
+	}
 	if expectedOwner != "" {
 		if err := providerexecution.NewStore(s.db).ValidateGenerationOwnershipTx(providerexecution.WithGenerationOwnership(ctx, id, expectedOwner, expectedGen), tx, id); err != nil {
 			return generationTask{}, err
@@ -2158,6 +2164,9 @@ func (s *postgresStore) failGenerationTaskDurableChecked(id string, message stri
 	}
 	if task.Status == "SUCCEEDED" || task.Status == "FAILED" || task.Status == "CANCELLED" {
 		return task, tx.Commit()
+	}
+	if err := providerexecution.RejectTask(ctx, tx, id, "fail_generation_durable"); err != nil {
+		return generationTask{}, err
 	}
 	if expectedOwner != "" {
 		if err := providerexecution.NewStore(s.db).ValidateGenerationOwnershipTx(providerexecution.WithGenerationOwnership(ctx, id, expectedOwner, expectedGen), tx, id); err != nil {

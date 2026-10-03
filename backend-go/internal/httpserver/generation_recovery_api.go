@@ -88,6 +88,10 @@ func (a api) generationRecoveryAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := rejectQuarantinedGeneration(r.Context(), a.pgDB(), taskID, "operator_"+strings.ToLower(req.Action)); err != nil {
+		recoveryWriteErrorStatus(w, http.StatusConflict, err)
+		return
+	}
 	var result generationTask
 	switch req.Action {
 	case recoveryActionManualReview:
@@ -303,6 +307,9 @@ func (a api) updateGenerationRecoveryState(taskID, state string, req recoveryAct
 	if err != nil {
 		return generationTask{}, err
 	}
+	if err := pe.RejectTask(ctx, tx, task.ID, "recovery_state"); err != nil {
+		return generationTask{}, err
+	}
 	// MANUAL_REVIEW is a settlement state: fence it by the generation
 	// observed under this tx's row lock so a concurrent requeue wins
 	// instead of being silently overwritten.
@@ -348,6 +355,9 @@ func (a api) redriveGenerationEvent(task generationTask, req recoveryActionReque
 	if err != nil {
 		return out, err
 	}
+	if err := pe.RejectTask(ctx, tx, task.ID, "redrive_event"); err != nil {
+		return out, err
+	}
 	if generationLeaseValid(locked.LeaseUntil, time.Now().UTC()) {
 		return out, fmt.Errorf("task %s is owned by a live worker (generation %d); redrive deferred", task.ID, locked.fencingGeneration())
 	}
@@ -368,6 +378,9 @@ func (a api) redriveGenerationEvent(task generationTask, req recoveryActionReque
 }
 
 func (a api) resolveGenerationCapture(task generationTask, req recoveryActionRequest) (generationTask, error) {
+	if err := rejectQuarantinedGeneration(context.Background(), a.pgDB(), task.ID, "resolve_capture"); err != nil {
+		return generationTask{}, err
+	}
 	if strings.TrimSpace(fmt.Sprint(req.Evidence["providerOutcome"])) != "succeeded" {
 		return generationTask{}, errors.New("RESOLVE_CAPTURE requires evidence.providerOutcome=succeeded")
 	}
@@ -396,6 +409,9 @@ func (a api) resolveGenerationCapture(task generationTask, req recoveryActionReq
 }
 
 func (a api) resolveGenerationRelease(task generationTask, req recoveryActionRequest) (generationTask, error) {
+	if err := rejectQuarantinedGeneration(context.Background(), a.pgDB(), task.ID, "resolve_release"); err != nil {
+		return generationTask{}, err
+	}
 	outcome := strings.TrimSpace(fmt.Sprint(req.Evidence["providerOutcome"]))
 	if outcome != "not_submitted" && outcome != "definitely_failed" {
 		return generationTask{}, errors.New("RESOLVE_RELEASE requires evidence.providerOutcome=not_submitted or definitely_failed")
