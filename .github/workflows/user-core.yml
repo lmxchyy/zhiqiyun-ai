@@ -125,6 +125,9 @@ jobs:
       - name: Test lock signals and owner lifecycle
         run: python3 tests/prestaged-lock-signals.py
 
+      - name: Test killswitch release interlock (real Linux processes)
+        run: python3 tests/killswitch-release-interlock.py
+
       - name: Validate production contract image and migration replay
         run: |
           bash -n tests/production-contract.harness.sh
