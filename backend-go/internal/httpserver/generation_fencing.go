@@ -271,6 +271,9 @@ func claimGenerationDispatchOwnershipTx(ctx context.Context, tx *sql.Tx, taskID,
 	if err := validateGenerationClaim(taskStatus, currentWorker, dispatchOwner, currentGeneration, dispatchGeneration, live, isImageGenerationRequest(taskType)); err != nil {
 		return fencing, fmt.Errorf("task %s: %w", taskID, err)
 	}
+	if err := providerexecution.RejectTask(ctx, tx, taskID, "claim_generation"); err != nil {
+		return fencing, err
+	}
 	// Resume the SAME image operation only after its owner expired. Changing
 	// owner is separately fenced at provider submission and owned settlement.
 	// Never rebind or adopt an execution from an older task generation.
@@ -336,6 +339,9 @@ func renewGenerationLeaseTx(ctx context.Context, tx *sql.Tx, taskID, workerID st
 	leaseSeconds := int64(ttl / time.Second)
 	if leaseSeconds <= 0 {
 		leaseSeconds = int64((generationLeaseTTL / time.Second))
+	}
+	if err := providerexecution.RejectTask(ctx, tx, taskID, "renew_generation_lease"); err != nil {
+		return err
 	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE xz_generation_tasks

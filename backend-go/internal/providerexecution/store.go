@@ -21,6 +21,9 @@ func (s *Store) RecordCorrelation(ctx context.Context, event CorrelationEvent) (
 	if err := validateCorrelationEvent(event); err != nil {
 		return CorrelationEvent{}, err
 	}
+	if err := RejectExecution(ctx, s.DB, event.ExecutionID, "", "record_correlation"); err != nil {
+		return CorrelationEvent{}, err
+	}
 	err := s.DB.QueryRowContext(ctx, `
 		INSERT INTO provider_execution_correlations
 		(execution_id,kind,provider_code,base_url_host,endpoint_path,provider_job_id,job_role,provider_state,http_status,error_code,error_hash)
@@ -51,6 +54,9 @@ func (s *Store) RecordTerminalCorrelationOnce(ctx context.Context, event Correla
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `SELECT id FROM provider_executions WHERE id=$1 FOR UPDATE`, event.ExecutionID); err != nil {
+		return CorrelationEvent{}, false, err
+	}
+	if err := RejectExecution(ctx, tx, event.ExecutionID, "", "record_terminal_correlation"); err != nil {
 		return CorrelationEvent{}, false, err
 	}
 	var exists bool
@@ -164,6 +170,9 @@ func (s *Store) createPrepared(ctx context.Context, e Execution, lockTask bool) 
 		if err := verifyGenerationOwnership(ctx, tx, e.TaskID); err != nil {
 			return Execution{}, err
 		}
+		if err := RejectTask(ctx, tx, e.TaskID, "create_prepared"); err != nil {
+			return Execution{}, err
+		}
 		// Issue #145 fencing: bind the execution to the task generation
 		// observed under the same row lock. A stale attempt's late success
 		// can never settle a newer task generation (comparison happens in
@@ -174,6 +183,9 @@ func (s *Store) createPrepared(ctx context.Context, e Execution, lockTask bool) 
 		}
 		e.TaskGeneration = taskGen
 		return e, tx.Commit()
+	}
+	if err := RejectTask(ctx, s.DB, e.TaskID, "create_prepared"); err != nil {
+		return Execution{}, err
 	}
 	row := s.DB.QueryRowContext(ctx, `INSERT INTO provider_executions (task_id,provider,provider_channel,provider_model,capability,attempt,status,request_fingerprint,provider_operation_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id,created_at,updated_at`, e.TaskID, e.Provider, e.ProviderChannel, e.ProviderModel, e.Capability, e.Attempt, e.Status, e.RequestFingerprint, e.ProviderOperationKey)
 	if err := row.Scan(&e.ID, &e.CreatedAt, &e.UpdatedAt); err != nil {
@@ -222,6 +234,9 @@ func (s *Store) SaveSucceededResult(ctx context.Context, id int64, providerReque
 	if err = tx.QueryRowContext(ctx, `SELECT status FROM provider_executions WHERE id=$1 FOR UPDATE`, id).Scan(&status); err != nil {
 		return err
 	}
+	if err = RejectExecution(ctx, tx, id, "", "save_succeeded_result"); err != nil {
+		return err
+	}
 	if err = ValidateTransition(status, Succeeded); err != nil {
 		return err
 	}
@@ -240,7 +255,22 @@ func (s *Store) Transition(ctx context.Context, id int64, to Status, providerReq
 // records submitting, only that worker's normal provider-result path may mark
 // it failed. A concurrent claim therefore wins XOR this abandonment.
 func (s *Store) FailPreparedIfUnclaimed(ctx context.Context, id int64, errorClass, lastError *string) error {
-	result, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET status='failed',error_class=$1,last_error=$2,failed_at=now(),updated_at=now() WHERE id=$3 AND status='prepared'`, errorClass, lastError, id)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var taskID string
+	if err = tx.QueryRowContext(ctx, `SELECT task_id FROM provider_executions WHERE id=$1 FOR UPDATE`, id).Scan(&taskID); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrTransitionConflict
+		}
+		return err
+	}
+	if err = RejectExecution(ctx, tx, id, taskID, "fail_prepared_if_unclaimed"); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE provider_executions SET status='failed',error_class=$1,last_error=$2,failed_at=now(),updated_at=now() WHERE id=$3 AND status='prepared'`, errorClass, lastError, id)
 	if err != nil {
 		return err
 	}
@@ -251,7 +281,7 @@ func (s *Store) FailPreparedIfUnclaimed(ctx context.Context, id int64, errorClas
 	if changed != 1 {
 		return ErrTransitionConflict
 	}
-	return nil
+	return tx.Commit()
 }
 
 // TransitionWithErrorCode persists both the lifecycle class used by retry and
@@ -265,6 +295,9 @@ func (s *Store) TransitionWithErrorCode(ctx context.Context, id int64, to Status
 	defer tx.Rollback()
 	var from Status
 	if err = tx.QueryRowContext(ctx, `SELECT status FROM provider_executions WHERE id=$1 FOR UPDATE`, id).Scan(&from); err != nil {
+		return err
+	}
+	if err = RejectExecution(ctx, tx, id, "", "transition"); err != nil {
 		return err
 	}
 	if err = ValidateTransition(from, to); err != nil {
@@ -322,23 +355,16 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 	if taskGen != nil && boundGen.Valid && boundGen.Int64 != *taskGen {
 		return Execution{}, fmt.Errorf("%w: task %s execution bound to generation %d, current generation %d", ErrFencedStaleExecution, taskID, boundGen.Int64, *taskGen)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status='submitting',updated_at=now() WHERE id=$1`, id); err != nil {
+	if err = RejectExecution(ctx, tx, id, taskID, "claim_prepared"); err != nil {
+		return Execution{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE provider_executions SET status='submitting',provider_operation_key=CASE WHEN provider_operation_key='' THEN 'generation:'||task_id||':'||attempt::text ELSE provider_operation_key END,updated_at=now() WHERE id=$1`, id); err != nil {
 		return Execution{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return Execution{}, err
 	}
-	e, err := s.GetByID(ctx, id)
-	if err != nil {
-		return Execution{}, err
-	}
-	if e.ProviderOperationKey == "" {
-		e.ProviderOperationKey = fmt.Sprintf("generation:%s:%d", e.TaskID, e.Attempt)
-		if _, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET provider_operation_key=$1,updated_at=now() WHERE id=$2 AND provider_operation_key=''`, e.ProviderOperationKey, e.ID); err != nil {
-			return Execution{}, err
-		}
-	}
-	return e, nil
+	return s.GetByID(ctx, id)
 }
 
 // taskGenerationForBarrier reads the task fencing generation under the
@@ -364,8 +390,7 @@ func (s *Store) ScheduleNextCheck(ctx context.Context, id int64, delay time.Dura
 	if delay <= 0 {
 		delay = time.Second
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET last_checked_at=now(),next_check_at=now()+$1::interval,updated_at=now() WHERE id=$2`, delay.String(), id)
-	return err
+	return s.lockedExecutionUpdate(ctx, id, "schedule_next_check", `UPDATE provider_executions SET last_checked_at=now(),next_check_at=now()+$1::interval,updated_at=now() WHERE id=$2`, delay.String(), id)
 }
 
 // RecordProviderCheckFailure preserves the latest safe GET diagnostic without
@@ -375,8 +400,25 @@ func (s *Store) RecordProviderCheckFailure(ctx context.Context, id int64, errorC
 	if delay <= 0 {
 		delay = time.Second
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE provider_executions SET unknown_at=COALESCE(unknown_at,now()),error_code=COALESCE(NULLIF($1,''),error_code),error_class=COALESCE(NULLIF(error_class,''),'provider_unknown'),last_error=$2,last_checked_at=now(),next_check_at=now()+$3::interval,updated_at=now() WHERE id=$4`, errorCode, message, delay.String(), id)
-	return err
+	return s.lockedExecutionUpdate(ctx, id, "record_provider_check_failure", `UPDATE provider_executions SET unknown_at=COALESCE(unknown_at,now()),error_code=COALESCE(NULLIF($1,''),error_code),error_class=COALESCE(NULLIF(error_class,''),'provider_unknown'),last_error=$2,last_checked_at=now(),next_check_at=now()+$3::interval,updated_at=now() WHERE id=$4`, errorCode, message, delay.String(), id)
+}
+
+func (s *Store) lockedExecutionUpdate(ctx context.Context, id int64, operation, query string, args ...any) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT id FROM provider_executions WHERE id=$1 FOR UPDATE`, id); err != nil {
+		return err
+	}
+	if err = RejectExecution(ctx, tx, id, "", operation); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, query, args...); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) MarkUnknown(ctx context.Context, id int64, class ErrorClass, msg string) error {

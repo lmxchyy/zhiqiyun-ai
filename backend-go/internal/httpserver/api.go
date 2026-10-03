@@ -357,6 +357,11 @@ func (a api) repairStaleGenerationTasksWithContext(ctx context.Context, maxAge t
 		if execution, found, executionErr := providerExecutionForRetry(a.store, a.cfg, task.ID); executionErr != nil {
 			continue
 		} else if found {
+			if pg := fencingPostgres(a.store); pg != nil {
+				if err := rejectQuarantinedGeneration(ctx, pg.db, task.ID, "watchdog"); err != nil {
+					continue
+				}
+			}
 			if execution.Status == providerexecution.Succeeded && len(execution.ResultMetadata) > 0 {
 				// Provider success is a local-completion-only recovery path. The
 				// durable manifest is the result; never call Prepare/Create/Generate

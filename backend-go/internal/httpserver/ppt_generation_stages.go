@@ -128,6 +128,9 @@ func (a api) runPPTChatStageGuarded(ctx context.Context, taskKey, provider, mode
 	if err == nil {
 		attempt = latest.Attempt + 1
 	}
+	if err := pe.RejectTask(ctx, store.DB, taskKey, "ppt_chat_stage"); err != nil {
+		return nil, pptChatStageExecuted, err
+	}
 	if _, err := store.CreatePrepared(ctx, pe.Execution{
 		TaskID: taskKey, Provider: provider, ProviderModel: model,
 		Capability: capability, Attempt: attempt, RequestFingerprint: fp,
@@ -142,6 +145,9 @@ func (a api) runPPTChatStageGuarded(ctx context.Context, taskKey, provider, mode
 }
 
 func (a api) executePPTChatCall(ctx context.Context, store *pe.Store, execRow pe.Execution, call func(context.Context) ([]byte, error)) ([]byte, pptChatStageOutcome, error) {
+	if err := pe.RejectExecution(ctx, store.DB, execRow.ID, execRow.TaskID, "ppt_chat_call"); err != nil {
+		return nil, pptChatStageExecuted, err
+	}
 	manifest, err := call(ctx)
 	if err != nil {
 		if shouldFallbackPPTOutline(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {

@@ -26,6 +26,9 @@ const (
 )
 
 func (a api) persistGeneratedImages(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
+	if err := rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, "persist_generated_images"); err != nil {
+		return req, nil, err
+	}
 	req = applyGeneratedImageProviderMetadata(req)
 	if len(req.GeneratedImages) == 0 {
 		return req, nil, nil
@@ -64,6 +67,10 @@ func (a api) persistGeneratedImages(ctx context.Context, taskID string, req gene
 			return req, nil, fmt.Errorf("download generated image %d: %w", index+1, err)
 		}
 		fileName = fmt.Sprintf("%s-%02d.%s", taskID, index+1, extension)
+		if err := rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, "persist_generated_images_store"); err != nil {
+			a.cleanupGeneratedFiles(stored)
+			return req, nil, err
+		}
 		file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
 			TenantID:     tenantID,
 			UserID:       req.UserID,
@@ -129,6 +136,9 @@ func generatedStorageRecordForFile(file storagecenter.FileObject, image generati
 }
 
 func (a api) persistGeneratedVideos(ctx context.Context, taskID string, req generation.CreateRequest) (generation.CreateRequest, []storagecenter.FileObject, error) {
+	if err := rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, "persist_generated_videos"); err != nil {
+		return req, nil, err
+	}
 	// This function is reached only when VIDEO_STORAGE_PERSISTENCE_ENABLED is
 	// enabled. Never silently complete a video task with a provider-temporary
 	// URL when the required durable storage dependency is unavailable.
@@ -176,6 +186,9 @@ func (a api) persistGeneratedVideos(ctx context.Context, taskID string, req gene
 	defer cleanup()
 
 	fileName := fmt.Sprintf("%s-01.%s", taskID, extension)
+	if err := rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, "persist_generated_videos_store"); err != nil {
+		return req, nil, err
+	}
 	file, err := a.fileService.StoreObjectIdempotent(ctx, storagecenter.UploadInitInput{
 		TenantID:     tenantID,
 		UserID:       req.UserID,
