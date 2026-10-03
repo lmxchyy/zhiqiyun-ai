@@ -22,7 +22,7 @@ m.ROOT=pathlib.Path(sys.argv[2])
 class Metrics:
  def __enter__(self): return self
  def __exit__(self,*a): pass
- def read(self): return b'xianzhi_async_canary_rabbitmq_dlq_depth 8\\n'
+ def read(self): return os.environ.get('FIXTURE_METRICS','xianzhi_async_canary_rabbitmq_dlq_depth 8\\n').encode('ascii')
 def get(*a,**k):
  (m.ROOT/'metrics_called').touch()
  if (m.ROOT/'block_metrics').exists():
@@ -200,8 +200,10 @@ fi
     def test_api_only_no_build_no_pull_and_all_switches_preserved(self):
         self.assertEqual(self.monitor().wait(timeout=5), 1)
         content = self.envfile.read_text()
-        for name in ('GENERATION', 'VIDEO', 'PPT'):
-            self.assertIn(name + '_ASYNC_CANARY_ENABLED=false', content)
+        # The authorized image-DLQ exception changes only this expectation;
+        # all lock, signal, ownership and API-only assertions remain intact.
+        self.assertEqual(content, self.original.replace('GENERATION_ASYNC_CANARY_ENABLED=true',
+                                                       'GENERATION_ASYNC_CANARY_ENABLED=false'))
         self.assertIn('VIDEO_STORAGE_PERSISTENCE_ENABLED=true', content)
         self.assertIn('PRIVATE_VALUE=fixture-only', content)
         self.assertEqual(self.envfile.stat().st_mode & 0o777, 0o600)

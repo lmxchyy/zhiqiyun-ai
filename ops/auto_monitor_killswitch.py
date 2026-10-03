@@ -87,13 +87,17 @@ def write_env_atomically(path, content):
 def log(msg):
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
-def trigger_kill_switch(reason):
+def trigger_kill_switch(reason, image_dlq_only=False):
     with release_lock(ROOT) as lock:
         log(f"ALERT: KILL SWITCH TRIGGERED: {reason}")
         path = ROOT / ".env.production"
         original = path.read_text(encoding="utf-8")
         content = original
-        for name in ("GENERATION_ASYNC_CANARY_ENABLED", "VIDEO_ASYNC_CANARY_ENABLED", "PPT_ASYNC_CANARY_ENABLED"):
+        flags = ("GENERATION_ASYNC_CANARY_ENABLED",)
+        if not image_dlq_only:
+            # Preserve the existing default for video/PPT and other alerts.
+            flags += ("VIDEO_ASYNC_CANARY_ENABLED", "PPT_ASYNC_CANARY_ENABLED")
+        for name in flags:
             content = content.replace(name + "=true", name + "=false")
         check_interrupted()
         if content != original:
@@ -101,7 +105,8 @@ def trigger_kill_switch(reason):
         else:
             # Still reconcile API-only: a previous reload may have failed after
             # writing the disabled flags. Do not mistake env for runtime state.
-            log("Canary switches already off; no env write; reconcile API-only.")
+            label = "Image canary" if image_dlq_only else "Canary switches"
+            log(f"{label} already off; no env write; reconcile API-only.")
         check_interrupted()
         # If the monitor is SIGKILLed with a Compose child in flight, a dead PID
         # alone cannot prove that child/daemon actions stopped. Existing release
@@ -115,7 +120,8 @@ def trigger_kill_switch(reason):
         # Only a successful synchronous Compose return permits normal unlock.
         (lock / "owner_pid").write_text(str(os.getpid()) + "\n")
         check_interrupted()
-        log("KILL SWITCH COMPLETED: canary switches off; API-only reload completed.")
+        label = "image canary" if image_dlq_only else "canary switches"
+        log(f"KILL SWITCH COMPLETED: {label} off; API-only reload completed.")
         sys.exit(1)
 
 def check_metrics():
@@ -140,7 +146,7 @@ def check_metrics():
                 pass
 
     if metrics.get("xianzhi_async_canary_rabbitmq_dlq_depth", 0) > 0:
-        trigger_kill_switch("RabbitMQ DLQ depth > 0")
+        trigger_kill_switch("RabbitMQ DLQ depth > 0", image_dlq_only=True)
     if metrics.get("xianzhi_async_canary_video_rabbitmq_dlq_depth", 0) > 0:
         trigger_kill_switch("Video RabbitMQ DLQ depth > 0")
     if metrics.get("xianzhi_async_canary_outbox_failed", 0) > 0:

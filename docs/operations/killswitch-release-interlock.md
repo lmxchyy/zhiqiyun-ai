@@ -13,8 +13,10 @@
 - 已有 release/recovery 锁（包括空锁、无效 PID、dead owner、悬空符号链接）：立即 defer，不抓取 metrics、不写 env、不调用 Compose。monitor 不负责 stale recovery。
 - metrics 抓取后、任何 env/container 操作前，再原子竞争共享锁；持有到同步 Compose 返回。并发 monitor、deploy、rollback、prestage 不能同时执行变更。
 - cleanup 只移除自己的 token 对应锁；不删除别人的锁，不递归清未知目录。
-- 原有生图/视频/PPT canary disable 保留；env 改动使用同目录原子替换并保留权限。不输出 env 内容。
-- env 已经 false 时不重复写文件，但仍在锁内执行 API-only reconcile：env 为 false 不能证明运行容器已读取 false。
+- 图片 DLQ（`xianzhi_async_canary_rabbitmq_dlq_depth > 0`）仅关闭 `GENERATION_ASYNC_CANARY_ENABLED`，保留视频/PPT 开关、视频用户/provider/model allowlist 和其它 env 字节，消除仓库版本比现场副本额外关闭视频 canary 的差异。
+- 视频/PPT 专属及其它告警仍使用既有默认 disable 行为；不在此补丁重构其开关范围、顺序、阈值或首次触发后退出的逻辑。不能把“图片 DLQ 不关闭视频”理解成“任何告警都不得关闭视频”。
+- env 改动仍使用同目录原子替换并保留权限。不输出 env 内容。
+- 本次选中的开关已经 false 时不重复写文件，但仍在锁内执行 API-only reconcile：env 为 false 不能证明运行容器已读取 false。
 - 唯一允许的 Compose 操作为 `up -d --no-deps --no-build --pull never xianzhi-ai`；不拉取、不构建、不启动 migrate 或其它依赖。
 
 ## 中断与失败
@@ -33,11 +35,12 @@ INT/TERM 记录退出意图，不在 Compose 子进程仍运行时提前解锁�
 4. 独立确认 cron 确实执行新字节，并验证有锁时 env 字节/mtime、API ID/StartedAt、migrate StartedAt 均不变。不得主动重建 API、运行 migration、调用 provider、修改任务/钱包来“验证”。
 5. 同步新的宿主机 SHA 后，旧 Carrier proof 的 source/SHA 绑定不能自动继承；不要编辑 proof。最终应用发布仍需按新 Carrier 官方产物和现场门禁重新准备，且 9 条 unresolved executions 在后续独立策略完成前继续阻断应用切流。
 
-本次只有隔离开发/测试；没有执行以上生产步骤，没有重新 prestage 或刷新备份。
+本次兼容补丁只有隔离开发/测试，不授权生产安装或切流；Review PASS 且远端 CI 全绿后也只能重新申请生产安装。没有执行以上生产步骤，没有重新 prestage 或刷新备份。
 
 ## 测试
 
 ```bash
+python3 tests/killswitch-image-dlq-scope.py
 python3 tests/killswitch-release-interlock.py
 python3 tests/prestaged-lock-signals.py
 shellcheck deploy.sh rollback.sh ops/prestage-release.sh ops/verify-prestage-proof.sh
