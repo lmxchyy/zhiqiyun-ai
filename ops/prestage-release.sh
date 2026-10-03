@@ -947,6 +947,8 @@ deploy_scripts = [
     "ops/prestage-release.sh",
     "ops/verify-prestage-proof.sh",
     "ops/verify-release-runtime.py",
+    "ops/verify-safe-drain.py",
+    "ops/enroll-quarantine.py",
 ]
 deploy_scripts_hash = {}
 for s in deploy_scripts:

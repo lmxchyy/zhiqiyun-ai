@@ -298,8 +298,55 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   compose_config="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" || fail "Failed to render Docker Compose configuration."
   validate_compose_desired_state "$compose_config"
 
-  log "Stopping running API and worker containers before rollback..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop xianzhi-ai smartvideo-worker 2>/dev/null || true
+cleanup_quarantine_for_rollback() {
+  local target_sha="$1"
+  # Quarantine table compatibility handling on rollback:
+  # If rolling back to an older version that lacks the runtime quarantine barrier (such as b45e),
+  # any enrolled quarantine rows cannot be safely enforced by the legacy runtime.
+  # Truncate provider_execution_quarantine after taking an auditable backup snapshot.
+  python3 - "$COMPOSE_FILE" "$ENV_FILE" "$target_sha" "$TIMESTAMP" <<'PY' || fail "Failed to handle quarantine rollback cleanup"
+import json, os, shlex, subprocess, sys
+
+compose_file, env_file, target_sha, ts = sys.argv[1:5]
+cmd = ["docker", "compose", "-f", compose_file, "--env-file", env_file]
+
+check_sql = "SELECT to_regclass('public.provider_execution_quarantine') IS NOT NULL;"
+try:
+    tbl_ok = subprocess.check_output(cmd + ["exec", "-T", "postgres", "sh", "-c",
+        f'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -t -A -c "{check_sql}"'
+    ], stderr=subprocess.PIPE).decode("utf-8").strip()
+except Exception:
+    tbl_ok = ""
+
+if tbl_ok.lower() == "t":
+    snap_sql = "SELECT coalesce(json_agg(row_to_json(q)), '[]'::json) FROM provider_execution_quarantine q;"
+    try:
+        raw_rows = subprocess.check_output(cmd + ["exec", "-T", "postgres", "sh", "-c",
+            f'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -t -A -c "{snap_sql}"'
+        ], stderr=subprocess.PIPE).decode("utf-8").strip()
+        rows = json.loads(raw_rows)
+    except Exception:
+        rows = []
+    if rows:
+        os.makedirs("backups/quarantine", exist_ok=True)
+        snap_file = f"backups/quarantine/revoked-{ts}.json"
+        with open(snap_file, "w", encoding="utf-8") as sf:
+            json.dump({"rolled_back_to": target_sha, "timestamp": ts, "count": len(rows), "records": rows}, sf, indent=2)
+        res = subprocess.call(cmd + ["exec", "-T", "postgres", "sh", "-c",
+            'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "TRUNCATE TABLE provider_execution_quarantine;"'
+        ], stderr=subprocess.PIPE)
+        if res == 0:
+            print(f"[rollback] QUARANTINE_REVOKED: Truncated provider_execution_quarantine ({len(rows)} records saved to {snap_file}). Target {target_sha} lacks runtime barrier.")
+        else:
+            sys.stderr.write(f"[rollback] ERROR: Failed to truncate provider_execution_quarantine (exit code {res})\n")
+            sys.exit(1)
+PY
+}
+
+log "Stopping running API and worker containers before rollback..."
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop xianzhi-ai smartvideo-worker 2>/dev/null || true
+
+cleanup_quarantine_for_rollback "$target_git_sha"
 
   if [ "$OFFLINE_ROLLBACK" = "1" ]; then
     log "Starting rollback production services (offline, --pull never)..."
@@ -352,6 +399,7 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
 fi
 
 # Legacy mutable rollback fallback
+cleanup_quarantine_for_rollback "$TARGET_VERSION"
 git checkout "$TARGET_VERSION"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build --remove-orphans
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps

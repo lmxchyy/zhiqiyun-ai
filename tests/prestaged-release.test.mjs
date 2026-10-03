@@ -123,6 +123,8 @@ async function setupSandbox(options = {}) {
   await copyFile(new URL("ops/prestage-release.sh", root), join(opsDir, "prestage-release.sh"));
   await copyFile(new URL("ops/verify-prestage-proof.sh", root), join(opsDir, "verify-prestage-proof.sh"));
   await copyFile(new URL("ops/verify-release-runtime.py", root), join(opsDir, "verify-release-runtime.py"));
+  await copyFile(new URL("ops/verify-safe-drain.py", root), join(opsDir, "verify-safe-drain.py"));
+  await copyFile(new URL("ops/enroll-quarantine.py", root), join(opsDir, "enroll-quarantine.py"));
 
   await chmod(join(dir, "deploy.sh"), 0o755);
   await chmod(join(dir, "rollback.sh"), 0o755);
@@ -131,6 +133,7 @@ async function setupSandbox(options = {}) {
   await chmod(join(opsDir, "run-migrations.sh"), 0o755);
   await chmod(join(opsDir, "prestage-release.sh"), 0o755);
   await chmod(join(opsDir, "verify-prestage-proof.sh"), 0o755);
+  await chmod(join(opsDir, "enroll-quarantine.py"), 0o755);
 
   // In-memory HTTP transport interceptor (sitecustomize.py)
   // Intercepts requests strictly directed to https://api.github.com without any production code backdoors
@@ -962,6 +965,17 @@ test("[T08] cutover fails closed when migration SQL or ops script is deleted fro
 
   // Restore migration file
   await writeFile(join(sandbox.dir, "database", "migrations", "001-init.sql"), "-- Initial migration\nSELECT 1;\n", "utf8");
+
+  // Issue199: the executed drain helper is required and byte-bound in proof.
+  await writeFile(join(sandbox.dir, "ops", "verify-safe-drain.py"), "raise SystemExit(0)\n", "utf8");
+  await assert.rejects(
+    runVerifyProof(sandbox, proofPath, targetSha),
+    (err) => {
+      assert.match(err.stderr, /DEPLOY_SCRIPT_TAMPERED/);
+      return true;
+    }
+  );
+  await copyFile(new URL("ops/verify-safe-drain.py", root), join(sandbox.dir, "ops", "verify-safe-drain.py"));
 
   // Case B: Tamper with ops script
   await writeFile(join(sandbox.dir, "ops", "run-migrations.sh"), "#!/bin/sh\nexit 0\n", "utf8");
