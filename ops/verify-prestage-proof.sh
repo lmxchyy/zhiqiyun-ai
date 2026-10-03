@@ -232,8 +232,13 @@ if expected_migrations_tree:
 
 # 10. Check deploy_scripts_hash (Fail Closed on missing scripts)
 scripts_hash = proof.get("deploy_scripts_hash", {})
-if not scripts_hash:
-    fail("PROTECTED_FILE_MISSING: deploy_scripts_hash is empty in proof")
+required_scripts = {
+    "deploy.sh", "rollback.sh", "ops/verify-release-manifest.sh", "ops/disk-guard.sh",
+    "ops/run-migrations.sh", "ops/prestage-release.sh", "ops/verify-prestage-proof.sh",
+    "ops/verify-release-runtime.py", "ops/verify-safe-drain.py", "ops/enroll-quarantine.py",
+}
+if not isinstance(scripts_hash, dict) or not required_scripts.issubset(scripts_hash):
+    fail("PROTECTED_FILE_MISSING: deploy_scripts_hash omits required deployment helpers")
 
 for script_name, expected_script_hash in scripts_hash.items():
     if not os.path.isfile(script_name) or os.path.getsize(script_name) == 0:

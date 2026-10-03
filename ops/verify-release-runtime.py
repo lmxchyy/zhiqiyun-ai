@@ -48,7 +48,7 @@ url=('https://' if u.scheme=='amqps' else 'http://')+host+(':'+('15671' if u.sch
 auth=base64.b64encode((urllib.parse.unquote(u.username)+':'+urllib.parse.unquote(u.password)).encode()).decode()
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*args,**kwargs): raise ValueError('broker redirects prohibited')
-req=urllib.request.Request(url,headers={'Authorization':'Basic '+auth})
+req=urllib.request.Request(url,headers={'Authorization':'Basic '+auth},method='GET')
 with urllib.request.build_opener(NoRedirect()).open(req,timeout=10) as r: data=json.load(r)
 print(json.dumps([{k:q[k] for k in ['name','consumers','messages_ready','messages_unacknowledged']} for q in data]))
 """

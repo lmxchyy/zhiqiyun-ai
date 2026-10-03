@@ -19,6 +19,7 @@ RELEASE_REGISTRY="${RELEASE_REGISTRY:-}"
 RELEASE_TRUST_KEY_FILE="${RELEASE_TRUST_KEY_FILE:-}"
 RELEASE_TRUST_SECRET="${RELEASE_TRUST_SECRET:-}"
 RELEASE_LEDGER_FILE="${RELEASE_LEDGER_FILE:-backups/release-ledger.json}"
+QUARANTINE_MANIFEST="${QUARANTINE_MANIFEST:-}"
 SKIP_FETCH="${SKIP_FETCH:-0}"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 
@@ -63,6 +64,10 @@ while [ $# -gt 0 ]; do
       ENV_FILE="$2"
       shift 2
       ;;
+    --quarantine-manifest)
+      QUARANTINE_MANIFEST="$2"
+      shift 2
+      ;;
     --skip-fetch)
       SKIP_FETCH=1
       shift 1
@@ -75,6 +80,11 @@ done
 
 if [ "$SKIP_FETCH" = "1" ] && [ "$PRESTAGED_RELEASE" != "1" ]; then
   printf '[deploy] ERROR: %s\n' "Direct SKIP_FETCH without verified prestaged release proof is forbidden. Use --prestaged with a valid proof." >&2
+  exit 1
+fi
+
+if [ -n "$QUARANTINE_MANIFEST" ] && [ ! -f "$QUARANTINE_MANIFEST" ]; then
+  printf '[deploy] ERROR: %s\n' "Quarantine manifest specified but not found on disk: $QUARANTINE_MANIFEST" >&2
   exit 1
 fi
 
@@ -185,87 +195,14 @@ if str(actual).strip().lower() != "true":
 
 check_safe_drain() {
   local drain_timeout="${DRAIN_TIMEOUT_SECONDS:-15}"
-  log "Performing safe drain observation (checking active leases and in-flight tasks)..."
-  python3 - "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" <<'PY'
-import json, os, shlex, shutil, subprocess, sys, time
-
-compose_file, env_file, drain_timeout_str = sys.argv[1:4]
-drain_timeout = float(drain_timeout_str)
-
-def fail(msg):
-    sys.stderr.write(f"[deploy] ERROR: SAFE_DRAIN_REJECTED: {msg}\n")
-    sys.exit(1)
-
-def run_cmd(args):
-    if os.name == "nt":
-        sh_bin = os.environ.get("SH_EXE") or shutil.which("sh") or "C:/Program Files/Git/bin/sh.exe"
-        cmd_str = " ".join(shlex.quote(a) for a in args)
-        return subprocess.check_output([sh_bin, "-c", cmd_str], stderr=subprocess.PIPE).decode("utf-8").strip()
-    return subprocess.check_output(args, stderr=subprocess.PIPE).decode("utf-8").strip()
-
-# Check if services are currently running (fail-closed if docker ps fails)
-try:
-    c_id = run_cmd(["docker", "compose", "-f", compose_file, "--env-file", env_file, "ps", "-q", "xianzhi-ai"])
-    w_id = run_cmd(["docker", "compose", "-f", compose_file, "--env-file", env_file, "ps", "-q", "smartvideo-worker"])
-except Exception as e:
-    fail(f"Container inspection failed during drain check: {e}")
-
-if not c_id or not w_id:
-    fail("Required old API/worker container is absent; cannot establish a safe drain")
-
-# SQL query observing valid unexpired leases, non-terminal provider executions, and active outbox messages.
-# Historical expired records (lease_until <= now()) are not counted and not modified.
-sql_query = (
-    "SELECT ("
-    "  CASE WHEN to_regclass('public.xz_generation_tasks') IS NOT NULL THEN ("
-    "    SELECT count(*) FROM xz_generation_tasks "
-    "    WHERE (lease_until IS NOT NULL AND lease_until > now()) "
-    "       OR (upper(coalesce(nullif(task_status,''), status)) IN ('DISPATCHING','RUNNING','PROCESSING') "
-    "           AND lease_until IS NOT NULL AND lease_until > now())"
-    "  ) ELSE 0 END"
-    ") + ("
-    "  CASE WHEN to_regclass('public.provider_executions') IS NOT NULL THEN ("
-    "    SELECT count(*) FROM provider_executions WHERE status NOT IN ('succeeded', 'failed')"
-    "  ) ELSE 0 END"
-    ") + ("
-    "  CASE WHEN to_regclass('public.outbox_events') IS NOT NULL THEN ("
-    "    SELECT count(*) FROM outbox_events WHERE status IN ('pending', 'publishing')"
-    "  ) ELSE 0 END"
-    ") + ("
-    "  CASE WHEN to_regclass('public.video_task_outbox') IS NOT NULL THEN ("
-    "    SELECT count(*) FROM video_task_outbox WHERE state = 'pending'"
-    "  ) ELSE 0 END"
-    ");"
-)
-
-deadline = time.time() + drain_timeout
-last_active = -1
-
-while True:
-    try:
-        active_str = run_cmd([
-            "docker", "compose", "-f", compose_file, "--env-file", env_file,
-            "exec", "-T", "postgres", "sh", "-c",
-            f'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -t -A -c "{sql_query}"'
-        ])
-        if not active_str:
-            fail("PostgreSQL query returned empty output during safe drain check")
-        active_count = int(active_str.strip())
-    except Exception as e:
-        fail(f"PostgreSQL drain check query execution failed: {e}")
-
-    last_active = active_count
-    if active_count == 0:
-        # Drained successfully
-        sys.exit(0)
-
-    if time.time() >= deadline:
-        break
-
-    time.sleep(2)
-
-fail(f"active valid leases or in-flight operations in progress (count={last_active}). Safe shutdown impossible within timeout.")
-PY
+  if [ -n "$QUARANTINE_MANIFEST" ]; then
+    [ -f "$QUARANTINE_MANIFEST" ] || fail "Quarantine manifest not found on disk: $QUARANTINE_MANIFEST"
+    log "Performing safe drain observation with approved quarantine exemptions (Release SHA: $PRESTAGED_RELEASE_SHA)..."
+    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" --manifest "$QUARANTINE_MANIFEST" --release-sha "$PRESTAGED_RELEASE_SHA"
+  else
+    log "Performing read-only safe drain observation; no quarantine exemptions..."
+    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout"
+  fi
 }
 
 verify_health_and_readiness() {
@@ -645,6 +582,12 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
     fail "MIGRATION_FAILED: Migration container exited with non-zero exit code ($migrate_exit)."
   fi
   log "Database migration completed successfully (exit code 0)."
+
+  if [ -n "$QUARANTINE_MANIFEST" ]; then
+    [ -f "$QUARANTINE_MANIFEST" ] || fail "Quarantine manifest not found on disk: $QUARANTINE_MANIFEST"
+    log "Enrolling approved quarantine records during zero-activity window..."
+    python3 ops/enroll-quarantine.py "$COMPOSE_FILE" "$ENV_FILE" "$QUARANTINE_MANIFEST" "$PRESTAGED_RELEASE_SHA"
+  fi
 
   log "Starting immutable production services from prestaged images (zero pull)..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-build --remove-orphans --pull never
