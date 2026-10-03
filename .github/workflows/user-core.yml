@@ -128,6 +128,9 @@ jobs:
       - name: Test killswitch release interlock (real Linux processes)
         run: python3 tests/killswitch-release-interlock.py
 
+      - name: Test image DLQ killswitch preserves video canary scope
+        run: python3 tests/killswitch-image-dlq-scope.py
+
       - name: Validate production contract image and migration replay
         run: |
           bash -n tests/production-contract.harness.sh
