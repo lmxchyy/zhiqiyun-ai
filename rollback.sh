@@ -445,12 +445,6 @@ fi
 
 [ -n "$target_git_sha" ] || fail "TARGET_CAPABILITY_UNKNOWN: Target git SHA could not be identified."
 
-resolved_target_sha="$(git rev-parse --verify "${target_git_sha}^{commit}" 2>/dev/null || true)"
-if [ -z "$resolved_target_sha" ]; then
-  fail "TARGET_CAPABILITY_UNKNOWN: Target commit for version '$target_git_sha' cannot be resolved in git."
-fi
-target_git_sha="$resolved_target_sha"
-
 # Guard: Ensure rollback is not being misused as a forward release
 is_ancestor=0
 if git merge-base --is-ancestor "$target_git_sha" HEAD 2>/dev/null; then

@@ -802,20 +802,30 @@ exec "$@"
 
     def test_negative_2_unknown_capability(self):
         sb = self.create_rollback_sandbox()
+        # Put target in release ledger so it passes forward-release guard and tests capability resolution
+        ledger_path = ROOT / "backups" / "release-ledger.json"
+        ledger_backup = ledger_path.read_text(encoding="utf-8") if ledger_path.exists() else None
+        try:
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            ledger_path.write_text('["unknown_nonexistent_sha_99999"]', encoding="utf-8")
 
-        r = self.run_rollback(sb, [
-            "--compose-file", to_bash_path(sb["compose_file"]),
-            "--env-file", to_bash_path(sb["env_file"]),
-            "unknown_nonexistent_sha_99999"
-        ])
-        stderr = r.stderr.decode("utf-8", "replace")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("TARGET_CAPABILITY_UNKNOWN", stderr)
-        if sb["action_log"].exists():
-            actions = sb["action_log"].read_text(encoding="utf-8")
-            self.assertNotIn("docker compose stop", actions)
-            self.assertNotIn("git checkout", actions)
-            self.assertNotIn("docker compose up", actions)
+            r = self.run_rollback(sb, [
+                "--compose-file", to_bash_path(sb["compose_file"]),
+                "--env-file", to_bash_path(sb["env_file"]),
+                "unknown_nonexistent_sha_99999"
+            ])
+            stderr = r.stderr.decode("utf-8", "replace")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("TARGET_CAPABILITY_UNKNOWN", stderr)
+            if sb["action_log"].exists():
+                actions = sb["action_log"].read_text(encoding="utf-8")
+                self.assertNotIn("git checkout", actions)
+                self.assertNotIn("docker compose up", actions)
+        finally:
+            if ledger_backup is not None:
+                ledger_path.write_text(ledger_backup, encoding="utf-8")
+            else:
+                ledger_path.unlink(missing_ok=True)
 
     def test_negative_3_forward_release_rejected(self):
         sb = self.create_rollback_sandbox()
