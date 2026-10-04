@@ -329,9 +329,10 @@ class PostgresReplay(unittest.TestCase):
         if not endpoint.startswith(('npipe:', 'unix:')):
             raise RuntimeError('Only a local Docker endpoint is permitted')
         cls.container = 'issue199-drain-test-' + uuid.uuid4().hex[:10]
-        subprocess.run(['docker', 'run', '--pull=never', '-d', '--network', 'none',
+        image = os.environ.get('POSTGRES_TEST_IMAGE', 'pgvector/pgvector:pg16')
+        subprocess.run(['docker', 'run', '-d', '--network', 'none',
                         '--name', cls.container, '-e', 'POSTGRES_PASSWORD=synthetic-local-only',
-                        'postgres:16-alpine'], check=True, stdout=subprocess.DEVNULL)
+                        image], check=True, stdout=subprocess.DEVNULL)
         cls.addClassCleanup(lambda: subprocess.run(['docker', 'rm', '-f', cls.container],
                                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         for _ in range(40):

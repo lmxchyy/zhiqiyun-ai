@@ -411,7 +411,11 @@ EOF
           fi
           exit 0
         fi
-        # Handle psql safe drain command
+        # Handle psql safe drain command and runtime barrier attestation
+        if printf '%s\n' "$@" | grep -q 'provider_execution_quarantine'; then
+          echo "1"
+          exit 0
+        fi
         if printf '%s\n' "$@" | grep -q 'psql'; then
           if [ "\${MOCK_DRAIN_DB_FAIL:-0}" = "1" ]; then
             echo "psql: could not connect to server: connection refused" >&2
