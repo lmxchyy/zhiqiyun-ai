@@ -1036,6 +1036,11 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 	if err != nil {
 		return result, err
 	}
+	if reservation.BusinessID != "" {
+		if err := rejectQuarantinedTaskTx(ctx, tx, reservation.BusinessID, "billing_capture"); err != nil {
+			return result, err
+		}
+	}
 	if reservation.ReservedPoints < cmd.Points {
 		return result, ErrInsufficientPoints
 	}
@@ -1162,6 +1167,11 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
 	if err != nil {
 		return result, err
+	}
+	if reservation.BusinessID != "" {
+		if err := rejectQuarantinedTaskTx(ctx, tx, reservation.BusinessID, "billing_release"); err != nil {
+			return result, err
+		}
 	}
 	amountTotal := cmd.Points
 	if amountTotal == 0 {

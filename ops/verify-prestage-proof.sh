@@ -236,6 +236,8 @@ required_scripts = {
     "deploy.sh", "rollback.sh", "ops/verify-release-manifest.sh", "ops/disk-guard.sh",
     "ops/run-migrations.sh", "ops/prestage-release.sh", "ops/verify-prestage-proof.sh",
     "ops/verify-release-runtime.py", "ops/verify-safe-drain.py", "ops/enroll-quarantine.py",
+    "ops/quarantine-approval.py",
+    "ops/quarantine-live-snapshot.py",
 }
 if not isinstance(scripts_hash, dict) or not required_scripts.issubset(scripts_hash):
     fail("PROTECTED_FILE_MISSING: deploy_scripts_hash omits required deployment helpers")

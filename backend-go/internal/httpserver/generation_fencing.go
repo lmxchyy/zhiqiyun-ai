@@ -268,11 +268,11 @@ func claimGenerationDispatchOwnershipTx(ctx context.Context, tx *sql.Tx, taskID,
 	if !isRunningGenerationTaskStatus(status) {
 		return fencing, fmt.Errorf("generation task %s is terminal (%s)", taskID, status)
 	}
-	if err := validateGenerationClaim(taskStatus, currentWorker, dispatchOwner, currentGeneration, dispatchGeneration, live, isImageGenerationRequest(taskType)); err != nil {
-		return fencing, fmt.Errorf("task %s: %w", taskID, err)
-	}
 	if err := providerexecution.RejectTask(ctx, tx, taskID, "claim_generation"); err != nil {
 		return fencing, err
+	}
+	if err := validateGenerationClaim(taskStatus, currentWorker, dispatchOwner, currentGeneration, dispatchGeneration, live, isImageGenerationRequest(taskType)); err != nil {
+		return fencing, fmt.Errorf("task %s: %w", taskID, err)
 	}
 	// Resume the SAME image operation only after its owner expired. Changing
 	// owner is separately fenced at provider submission and owned settlement.

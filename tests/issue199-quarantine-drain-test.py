@@ -139,7 +139,7 @@ class DrainTests(unittest.TestCase):
     def test_no_bytecode_or_dirty_files_on_helper_import(self):
         with tempfile.TemporaryDirectory(prefix='issue199-import-') as directory:
             target = Path(directory)
-            for name in ('verify-safe-drain.py', 'verify-release-runtime.py'):
+            for name in ('verify-safe-drain.py', 'verify-release-runtime.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py'):
                 shutil.copyfile(str(ROOT / 'ops' / name), str(target / name))
             before = sorted(p.name for p in target.iterdir())
             result = subprocess.run([sys.executable, str(target / 'verify-safe-drain.py')],
@@ -152,7 +152,7 @@ class DrainTests(unittest.TestCase):
             target = Path(directory)
             source = target / 'verify-release-runtime.py'
             helper = target / 'verify-safe-drain.py'
-            for name in (source.name, helper.name):
+            for name in (source.name, helper.name, 'quarantine-approval.py', 'quarantine-live-snapshot.py'):
                 shutil.copy2(str(ROOT / 'ops' / name), str(target / name))
             original = source.read_bytes()
             original_stat = source.stat()
@@ -219,9 +219,12 @@ class DrainTests(unittest.TestCase):
             raise ValueError(msg)
         scripts = ('deploy.sh', 'rollback.sh', 'ops/verify-release-manifest.sh', 'ops/disk-guard.sh',
                    'ops/run-migrations.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh',
-                   'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py')
+                   'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
+                   'ops/quarantine-approval.py', 'ops/quarantine-live-snapshot.py')
         self.assertIn('"ops/verify-safe-drain.py"', prestage)
         self.assertIn('"ops/enroll-quarantine.py"', prestage)
+        self.assertIn('"ops/quarantine-approval.py"', prestage)
+        self.assertIn('"ops/quarantine-live-snapshot.py"', prestage)
         hashes = {name: 'synthetic' for name in scripts}
         exec(block, {'proof': {'deploy_scripts_hash': hashes}, 'fail': fail})
         for missing in scripts:
@@ -231,7 +234,7 @@ class DrainTests(unittest.TestCase):
                 exec(block, {'proof': {'deploy_scripts_hash': changed}, 'fail': fail})
 
     def test_python36_syntax_and_no_model_deployment_import(self):
-        for filename in ('verify-safe-drain.py', 'enroll-quarantine.py', 'quarantine-drain-model.py'):
+        for filename in ('verify-safe-drain.py', 'enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-drain-model.py'):
             text = (ROOT / 'ops' / filename).read_text(encoding='utf-8')
             ast.parse(text, feature_version=(3, 6))
         for filename in ('deploy.sh', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py', 'ops/prestage-release.sh'):

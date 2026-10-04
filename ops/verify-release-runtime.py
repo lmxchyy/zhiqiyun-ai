@@ -37,6 +37,18 @@ FLAGS = """import json,os
 print(json.dumps({k:os.environ.get(k,'') for k in
  ['GENERATION_FAIR_SCHEDULER_ENABLED','ASYNC_MESSAGING_ENABLED']}))
 """
+QUARANTINE_ATTESTATION_SQL = (
+    "SELECT (to_regclass('public.provider_execution_quarantine') IS NOT NULL "
+    "AND (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' "
+    "AND table_name='provider_execution_quarantine' AND column_name IN ("
+    "'execution_id','task_id','attempt','generation','snapshot_sha256','evidence_sha256',"
+    "'approval_id','release_sha','not_before','expires_at','created_at')) = 11 "
+    "AND (SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid "
+    "JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' "
+    "AND c.relname='provider_execution_quarantine' "
+    "AND t.tgname='trg_provider_execution_quarantine_immutable' AND NOT t.tgisinternal "
+    "AND (t.tgenabled='O' OR t.tgenabled='A')) = 1)::int;"
+)
 BROKER = """import base64,json,os,urllib.parse,urllib.request
 u=urllib.parse.urlparse(os.environ['RABBITMQ_URL'])
 if u.scheme not in ('amqp','amqps') or not u.hostname or u.username is None or u.password is None:
@@ -99,6 +111,27 @@ def queues_ok(queues, phase):
         raise GateError('required generation queue missing')
 
 
+def verify_quarantine_barrier_read_only(compose, env, execute=run):
+    shell = ('PGPASSWORD="$POSTGRES_PASSWORD" '
+             'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=10000" '
+             'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" '
+             '-v ON_ERROR_STOP=1 -t -A -c ' + shlex.quote(QUARANTINE_ATTESTATION_SQL))
+    test_container = os.environ.get("XIANZHI_TEST_CONTAINER")
+    if test_container:
+        base_cmd = ['docker', 'exec', test_container]
+    else:
+        base_cmd = ['docker', 'compose', '-f', compose, '--env-file', env,
+                    'exec', '-T', 'postgres']
+    try:
+        result = execute(base_cmd + ['sh', '-c', shell])
+        if str(result).strip() != '1':
+            raise GateError('quarantine barrier relation or immutable trigger unhealthy or absent')
+    except GateError:
+        raise
+    except Exception:
+        raise GateError('quarantine barrier read-only attestation failed')
+
+
 def verify(phase, compose, env, execute=run, pause=time.sleep):
     if phase not in ('pre', 'post'):
         raise GateError('invalid runtime gate phase')
@@ -129,6 +162,7 @@ def verify(phase, compose, env, execute=run, pause=time.sleep):
         healthy = execute(['docker', 'inspect', '--format', '{{.State.Health.Status}}', cid])
         if state != 'true' or healthy != 'healthy':
             raise GateError('API/worker runtime unhealthy')
+    verify_quarantine_barrier_read_only(compose, env, execute)
     queues_ok(json.loads(execute(cmd + ['exec', '-T', 'xianzhi-ai', 'python3', '-c', BROKER])), phase)
 
 

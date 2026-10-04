@@ -3,7 +3,9 @@ package providerexecution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -78,6 +80,78 @@ func TestPostgresQuarantineBlocksExecutionWrites(t *testing.T) {
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM provider_execution_quarantine WHERE execution_id=$1`, execution.ID); err == nil {
 		t.Fatal("quarantine row must be immutable (DELETE blocked)")
+	}
+}
+
+func TestPostgresQuarantineConcurrentRaceSafety(t *testing.T) {
+	dsn := testingDatabaseURL(t)
+	db := openProviderExecutionTestDB(t, dsn)
+	defer db.Close()
+	ctx := context.Background()
+	store := NewStore(db)
+
+	taskID := "quarantine-race-" + time.Now().UTC().Format("20060102150405.000000000")
+	execution, err := store.CreatePrepared(ctx, Execution{
+		TaskID:             taskID,
+		Provider:           "mock",
+		ProviderModel:      "m",
+		Capability:         "image",
+		RequestFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.ExecContext(ctx, `INSERT INTO provider_execution_quarantine
+		(execution_id,task_id,attempt,generation,snapshot_sha256,evidence_sha256,approval_id,release_sha,not_before,expires_at)
+		VALUES ($1,$2,1,NULL,$3,$3,'approval-race-test',$4,now()-interval '1 minute',now()+interval '1 hour')`,
+		execution.ID, taskID, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef01234567"); err != nil {
+		t.Fatal(err)
+	}
+
+	const concurrency = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		workerIdx := i
+		go func() {
+			defer wg.Done()
+			var opErr error
+			switch workerIdx % 4 {
+			case 0:
+				_, opErr = store.ClaimPrepared(ctx, taskID)
+			case 1:
+				opErr = store.Transition(ctx, execution.ID, Submitted, nil, nil, nil)
+			case 2:
+				opErr = store.SaveSucceededResult(ctx, execution.ID, nil, []byte(`{"url":"https://example.com"}`))
+			case 3:
+				_, opErr = store.RecordCorrelation(ctx, CorrelationEvent{ExecutionID: execution.ID, Kind: "test", ProviderCode: "mock", State: "submitting"})
+			}
+			if !errors.Is(opErr, ErrQuarantined) {
+				errCh <- fmt.Errorf("worker %d returned non-quarantine error: %w", workerIdx, opErr)
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for wErr := range errCh {
+		t.Errorf("race worker error: %v", wErr)
+	}
+
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM provider_executions WHERE id=$1`, execution.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(Prepared) {
+		t.Fatalf("status mutated under race: %s", status)
+	}
+	var corrCount int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_execution_correlations WHERE execution_id=$1`, execution.ID).Scan(&corrCount); err != nil || corrCount != 0 {
+		t.Fatalf("correlations mutated under race: %d, err=%v", corrCount, err)
 	}
 }
 

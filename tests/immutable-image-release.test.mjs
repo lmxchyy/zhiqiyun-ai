@@ -169,6 +169,12 @@ fi
 
 if [ "$1" = "inspect" ]; then
   case "\${3:-}" in
+    *State.Running*)
+      echo "false"
+      ;;
+    *State.Status*)
+      echo "exited"
+      ;;
     *Config.Image*)
       if [ "\${MOCK_CONFIG_IMAGE_MISMATCH:-0}" = "1" ]; then
         echo "ghcr.io/lmxchyy/zhiqiyun-ai:stale"

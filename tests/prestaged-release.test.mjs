@@ -125,6 +125,9 @@ async function setupSandbox(options = {}) {
   await copyFile(new URL("ops/verify-release-runtime.py", root), join(opsDir, "verify-release-runtime.py"));
   await copyFile(new URL("ops/verify-safe-drain.py", root), join(opsDir, "verify-safe-drain.py"));
   await copyFile(new URL("ops/enroll-quarantine.py", root), join(opsDir, "enroll-quarantine.py"));
+  await copyFile(new URL("ops/quarantine-approval.py", root), join(opsDir, "quarantine-approval.py"));
+  await copyFile(new URL("ops/quarantine-live-snapshot.py", root), join(opsDir, "quarantine-live-snapshot.py"));
+  await copyFile(new URL("database/migrations/121-provider-execution-quarantine.sql", root), join(migrationsDir, "121-provider-execution-quarantine.sql"));
 
   await chmod(join(dir, "deploy.sh"), 0o755);
   await chmod(join(dir, "rollback.sh"), 0o755);
@@ -976,6 +979,32 @@ test("[T08] cutover fails closed when migration SQL or ops script is deleted fro
     }
   );
   await copyFile(new URL("ops/verify-safe-drain.py", root), join(sandbox.dir, "ops", "verify-safe-drain.py"));
+
+  // Issue203: authority source must be present, immutable, and in the proof.
+  await rm(join(sandbox.dir, "ops", "quarantine-approval.py"));
+  await assert.rejects(runVerifyProof(sandbox, proofPath, targetSha), (err) => {
+    assert.match(err.stderr, /DEPLOY_SCRIPT_TAMPERED/);
+    return true;
+  });
+  await writeFile(join(sandbox.dir, "ops", "quarantine-approval.py"), "raise SystemExit(0)\n", "utf8");
+  await assert.rejects(runVerifyProof(sandbox, proofPath, targetSha), (err) => {
+    assert.match(err.stderr, /DEPLOY_SCRIPT_TAMPERED/);
+    return true;
+  });
+  await copyFile(new URL("ops/quarantine-approval.py", root), join(sandbox.dir, "ops", "quarantine-approval.py"));
+
+  // CORE_ONLY snapshot source must also be required and byte-bound.
+  await rm(join(sandbox.dir, "ops", "quarantine-live-snapshot.py"));
+  await assert.rejects(runVerifyProof(sandbox, proofPath, targetSha), (err) => {
+    assert.match(err.stderr, /DEPLOY_SCRIPT_TAMPERED/);
+    return true;
+  });
+  await writeFile(join(sandbox.dir, "ops", "quarantine-live-snapshot.py"), "raise SystemExit(0)\n", "utf8");
+  await assert.rejects(runVerifyProof(sandbox, proofPath, targetSha), (err) => {
+    assert.match(err.stderr, /DEPLOY_SCRIPT_TAMPERED/);
+    return true;
+  });
+  await copyFile(new URL("ops/quarantine-live-snapshot.py", root), join(sandbox.dir, "ops", "quarantine-live-snapshot.py"));
 
   // Case B: Tamper with ops script
   await writeFile(join(sandbox.dir, "ops", "run-migrations.sh"), "#!/bin/sh\nexit 0\n", "utf8");

@@ -197,8 +197,13 @@ check_safe_drain() {
   local drain_timeout="${DRAIN_TIMEOUT_SECONDS:-15}"
   if [ -n "$QUARANTINE_MANIFEST" ]; then
     [ -f "$QUARANTINE_MANIFEST" ] || fail "Quarantine manifest not found on disk: $QUARANTINE_MANIFEST"
-    log "Performing safe drain observation with approved quarantine exemptions (Release SHA: $PRESTAGED_RELEASE_SHA)..."
-    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" --manifest "$QUARANTINE_MANIFEST" --release-sha "$PRESTAGED_RELEASE_SHA"
+    EXPECTED_QUARANTINE_MANIFEST_SHA256="$(sha256sum "$QUARANTINE_MANIFEST" | awk '{print $1}')"
+    export EXPECTED_QUARANTINE_MANIFEST_SHA256
+    log "Performing safe drain observation with approved quarantine exemptions (Release SHA: $PRESTAGED_RELEASE_SHA, Manifest SHA: $EXPECTED_QUARANTINE_MANIFEST_SHA256)..."
+    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" \
+      --manifest "$QUARANTINE_MANIFEST" \
+      --release-sha "$PRESTAGED_RELEASE_SHA" \
+      --expected-manifest-sha256 "$EXPECTED_QUARANTINE_MANIFEST_SHA256"
   else
     log "Performing read-only safe drain observation; no quarantine exemptions..."
     python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout"
@@ -585,8 +590,12 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
 
   if [ -n "$QUARANTINE_MANIFEST" ]; then
     [ -f "$QUARANTINE_MANIFEST" ] || fail "Quarantine manifest not found on disk: $QUARANTINE_MANIFEST"
+    current_manifest_sha="$(sha256sum "$QUARANTINE_MANIFEST" | awk '{print $1}')"
+    [ "$current_manifest_sha" = "$EXPECTED_QUARANTINE_MANIFEST_SHA256" ] \
+      || fail "MANIFEST_MUTATED: Quarantine manifest bytes changed between safe drain and enrollment."
     log "Enrolling approved quarantine records during zero-activity window..."
-    python3 ops/enroll-quarantine.py "$COMPOSE_FILE" "$ENV_FILE" "$QUARANTINE_MANIFEST" "$PRESTAGED_RELEASE_SHA"
+    python3 ops/enroll-quarantine.py "$COMPOSE_FILE" "$ENV_FILE" "$QUARANTINE_MANIFEST" "$PRESTAGED_RELEASE_SHA" \
+      --expected-manifest-sha256 "$EXPECTED_QUARANTINE_MANIFEST_SHA256"
   fi
 
   log "Starting immutable production services from prestaged images (zero pull)..."
