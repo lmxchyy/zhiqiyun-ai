@@ -336,9 +336,10 @@ class PostgresReplay(unittest.TestCase):
         cls.addClassCleanup(lambda: subprocess.run(['docker', 'rm', '-f', cls.container],
                                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         for _ in range(40):
-            r = subprocess.run(['docker', 'exec', cls.container, 'pg_isready', '-U', 'postgres'],
+            r = subprocess.run(['docker', 'exec', cls.container, 'psql', '-X', '-U', 'postgres', '-c', 'SELECT 1;'],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if r.returncode == 0:
+                time.sleep(1)
                 return
             time.sleep(.5)
         raise RuntimeError('isolated PostgreSQL did not start')
@@ -359,11 +360,11 @@ CREATE TABLE outbox_events(status text);
 CREATE TABLE video_task_outbox(state text);
 INSERT INTO xz_generation_tasks VALUES ('t','FAILED','FAILED',now()-interval '1 day');
 INSERT INTO provider_executions VALUES (1,'t',1,'failed');''')
-        self.assertEqual(result.returncode, 0, 'isolated fixture setup failed')
+        self.assertEqual(result.returncode, 0, f'isolated fixture setup failed: {result.stderr}')
 
     def count(self):
         result = self.sql(gate.SQL, readonly=True)
-        self.assertEqual(result.returncode, 0, 'read-only drain query failed')
+        self.assertEqual(result.returncode, 0, f'read-only drain query failed: {result.stderr}')
         return int(result.stdout.strip())
 
     def test_clear_and_no_database_writes(self):
