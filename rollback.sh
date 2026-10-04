@@ -11,6 +11,7 @@ OFFLINE_ROLLBACK="${OFFLINE_ROLLBACK:-0}"
 ROLLBACK_RECEIPT="${ROLLBACK_RECEIPT:-}"
 RELEASE_MANIFEST="${RELEASE_MANIFEST:-}"
 RELEASE_REGISTRY="${RELEASE_REGISTRY:-}"
+RELEASE_LEDGER_FILE="${RELEASE_LEDGER_FILE:-backups/release-ledger.json}"
 COMPOSE_FILE="${COMPOSE_FILE:-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 PRESTAGE_DIR="${PRESTAGE_DIR:-.prestage}"
@@ -450,8 +451,8 @@ is_ancestor=0
 if git merge-base --is-ancestor "$target_git_sha" HEAD 2>/dev/null; then
   is_ancestor=1
 fi
-if [ "$is_ancestor" = "0" ] && [ -f "backups/release-ledger.json" ]; then
-  if grep -Fq "$target_git_sha" "backups/release-ledger.json" 2>/dev/null; then
+if [ "$is_ancestor" = "0" ] && [ -f "$RELEASE_LEDGER_FILE" ]; then
+  if grep -Fq "$target_git_sha" "$RELEASE_LEDGER_FILE" 2>/dev/null; then
     is_ancestor=1
   fi
 fi

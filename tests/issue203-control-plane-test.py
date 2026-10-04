@@ -656,6 +656,7 @@ exec "$@"
         env["PRESTAGE_DIR"] = to_bash_path(prestage_dir)
         env["QUARANTINE_BACKUP_DIR"] = to_bash_path(quarantine_backup_dir)
         env["ENV_BACKUP_DIR"] = to_bash_path(env_backup_dir)
+        env["RELEASE_LEDGER_FILE"] = to_bash_path(sb_dir / "backups" / "release-ledger.json")
         if extra_env:
             env.update(extra_env)
 
@@ -803,34 +804,28 @@ exec "$@"
     def test_negative_2_unknown_capability(self):
         sb = self.create_rollback_sandbox()
         # Put target in release ledger so it passes forward-release guard and tests capability resolution
-        ledger_path = ROOT / "backups" / "release-ledger.json"
-        ledger_backup = ledger_path.read_text(encoding="utf-8") if ledger_path.exists() else None
-        try:
-            ledger_path.parent.mkdir(parents=True, exist_ok=True)
-            ledger_path.write_text('["unknown_nonexistent_sha_99999"]', encoding="utf-8")
+        ledger_path = sb["dir"] / "backups" / "release-ledger.json"
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text('["unknown_nonexistent_sha_99999"]', encoding="utf-8")
 
-            r = self.run_rollback(sb, [
-                "--compose-file", to_bash_path(sb["compose_file"]),
-                "--env-file", to_bash_path(sb["env_file"]),
-                "unknown_nonexistent_sha_99999"
-            ])
-            stderr = r.stderr.decode("utf-8", "replace")
-            self.assertEqual(r.returncode, 1)
-            self.assertIn("TARGET_CAPABILITY_UNKNOWN", stderr)
-            if sb["action_log"].exists():
-                actions = sb["action_log"].read_text(encoding="utf-8")
-                self.assertNotIn("git checkout", actions)
-                self.assertNotIn("docker compose up", actions)
-        finally:
-            if ledger_backup is not None:
-                ledger_path.write_text(ledger_backup, encoding="utf-8")
-            else:
-                ledger_path.unlink(missing_ok=True)
+        r = self.run_rollback(sb, [
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"]),
+            "unknown_nonexistent_sha_99999"
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("TARGET_CAPABILITY_UNKNOWN", stderr)
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("git checkout", actions)
+            self.assertNotIn("docker compose up", actions)
 
     def test_negative_3_forward_release_rejected(self):
         sb = self.create_rollback_sandbox()
+        tree_id = subprocess.check_output(["git", "write-tree"], cwd=ROOT).decode("utf-8").strip()
         non_ancestor = subprocess.check_output(
-            ["git", "rev-parse", "audit/user-concurrency-limits"], cwd=ROOT
+            ["git", "commit-tree", tree_id, "-m", "synthetic non-ancestor commit"], cwd=ROOT
         ).decode("utf-8").strip()
 
         r = self.run_rollback(sb, [
