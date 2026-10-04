@@ -824,8 +824,12 @@ exec "$@"
     def test_negative_3_forward_release_rejected(self):
         sb = self.create_rollback_sandbox()
         tree_id = subprocess.check_output(["git", "write-tree"], cwd=ROOT).decode("utf-8").strip()
+        git_env = dict(os.environ,
+                       GIT_AUTHOR_NAME="ci", GIT_AUTHOR_EMAIL="ci@example.com",
+                       GIT_COMMITTER_NAME="ci", GIT_COMMITTER_EMAIL="ci@example.com")
         non_ancestor = subprocess.check_output(
-            ["git", "commit-tree", tree_id, "-m", "synthetic non-ancestor commit"], cwd=ROOT
+            ["git", "commit-tree", tree_id, "-m", "synthetic non-ancestor commit"],
+            cwd=ROOT, env=git_env
         ).decode("utf-8").strip()
 
         r = self.run_rollback(sb, [
