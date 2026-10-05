@@ -590,7 +590,9 @@ class ControlPlaneUnitTests(unittest.TestCase):
             return proc
 
         real_close = os.close
+        real_lstat = os.lstat
         tampered_path = []
+
         def adversary_close(fd):
             real_close(fd)
             probes = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
@@ -600,9 +602,17 @@ class ControlPlaneUnitTests(unittest.TestCase):
                 with open(probe_p, "rb") as pf:
                     token = pf.read()
                 os.remove(probe_p)
-                # Create a new regular file with a new inode, but the same token
+                # Recreate with identical content; inode reuse is filesystem-dependent.
                 with open(probe_p, "wb") as pf:
                     pf.write(token)
+
+        def replacement_lstat(path):
+            st = real_lstat(path)
+            if tampered_path and path == tampered_path[0]:
+                values = list(st)
+                values[1] = st.st_ino + 1
+                return os.stat_result(values)
+            return st
 
         captured_stderr = io.StringIO()
         test_env = {
@@ -615,8 +625,9 @@ class ControlPlaneUnitTests(unittest.TestCase):
                 with patch("sys.stderr", captured_stderr):
                     with patch("subprocess.Popen", side_effect=mock_popen):
                         with patch("os.close", side_effect=adversary_close):
-                            with self.assertRaises(SystemExit) as cm:
-                                exec(code, {"__name__": "__main__"})
+                            with patch("os.lstat", side_effect=replacement_lstat):
+                                with self.assertRaises(SystemExit) as cm:
+                                    exec(code, {"__name__": "__main__"})
 
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("file identity mismatch", captured_stderr.getvalue())
