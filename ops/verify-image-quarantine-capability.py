@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -56,19 +57,97 @@ class Docker:
         self.env = clean_env()
         self.deadline = None
         self.evidence_dir = os.path.join(ROOT, '.evidence', 'issue203', 'priority4-runtime-capability')
+        self.redactions = []
         self.cli = [shutil.which('docker') or 'docker']
         if os.name == 'nt':
             self.cli += ['--host', 'npipe:////./pipe/dockerDesktopLinuxEngine']
 
-    def run(self, args, data=None, timeout=60, check=True):
+    def redact(self, value):
+        for secret in self.redactions:
+            value = value.replace(secret, '[redacted]')
+        return value
+
+    def run(self, args, data=None, timeout=60, check=True, capture_limit=16 * 1024 * 1024):
         if self.deadline is not None:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
                 raise Refused('owned challenge deadline exceeded')
             timeout = min(timeout, remaining)
-        result = subprocess.run(self.cli + list(args), input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env, cwd=ROOT, timeout=timeout)
+        if type(capture_limit) is not int or capture_limit <= 0:
+            raise Refused('invalid Docker output capture limit')
+        argv = self.cli + list(args)
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE if data is not None else None, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env, cwd=ROOT)
+        captured = {'stdout': bytearray(), 'stderr': bytearray()}
+        truncated = {'stdout': False, 'stderr': False}
+
+        def drain(name, pipe):
+            while True:
+                chunk = pipe.read(65536)
+                if not chunk:
+                    break
+                buffer = captured[name]
+                if len(chunk) >= capture_limit:
+                    buffer[:] = chunk[-capture_limit:]
+                    truncated[name] = True
+                else:
+                    overflow = len(buffer) + len(chunk) - capture_limit
+                    if overflow > 0:
+                        del buffer[:overflow]
+                        truncated[name] = True
+                    buffer.extend(chunk)
+            pipe.close()
+
+        readers = [threading.Thread(target=drain, args=('stdout', process.stdout)), threading.Thread(target=drain, args=('stderr', process.stderr))]
+        for reader in readers:
+            reader.daemon = True
+            reader.start()
+        writer = None
+        if data is not None:
+            def feed_input():
+                try:
+                    process.stdin.write(data)
+                    process.stdin.flush()
+                except (IOError, OSError):
+                    pass
+                finally:
+                    try:
+                        process.stdin.close()
+                    except (IOError, OSError):
+                        pass
+            writer = threading.Thread(target=feed_input)
+            writer.daemon = True
+            writer.start()
+        timed_out = False
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            returncode = process.wait()
+        if writer is not None:
+            writer.join()
+        for reader in readers:
+            reader.join()
+        result = subprocess.CompletedProcess(argv, returncode, bytes(captured['stdout']), bytes(captured['stderr']))
+        result.stdout_truncated = truncated['stdout']
+        result.stderr_truncated = truncated['stderr']
+        if timed_out:
+            raise subprocess.TimeoutExpired(argv, timeout, output=result.stdout, stderr=result.stderr)
         if check and result.returncode:
-            raise Refused('Docker operation failed: ' + args[0] + ' (exit ' + str(result.returncode) + ')')
+            stdout = self.redact(result.stdout.decode('utf-8', errors='replace'))[-4000:]
+            stderr = self.redact(result.stderr.decode('utf-8', errors='replace'))[-4000:]
+            diagnostic = {
+                'argv': [self.redact(str(value)) for value in argv],
+                'stdin_bytes': len(data) if data is not None else 0,
+                'stdin_sha256': hashlib.sha256(data).hexdigest() if data is not None else None,
+                'stdout_truncated': result.stdout_truncated,
+                'stderr_truncated': result.stderr_truncated,
+                'stdout': stdout,
+                'stderr': stderr,
+            }
+            raise Refused('Docker operation failed: ' + args[0] + ' (exit ' + str(result.returncode) + '); diagnostic=' + json.dumps(diagnostic, sort_keys=True))
+        if result.stdout_truncated or result.stderr_truncated:
+            raise Refused('Docker output exceeded bounded capture limit')
         return result
 
     def text(self, args, **kw):
@@ -145,6 +224,7 @@ class Fixture:
         self.owner = str(uuid.uuid4())
         self.password = uuid.uuid4().hex + uuid.uuid4().hex
         self.name = 'p4_' + self.owner.replace('-', '')
+        self.docker.redactions.extend((self.password, self.owner, self.name))
         self.resources = []
         self.record_path = os.path.join(docker.evidence_dir, 'owned-' + self.owner + '.json')
         self.network = None
@@ -249,11 +329,13 @@ class Fixture:
         obj = self.owned('container', identity)
         if obj['Image'] != image_id or obj.get('Mounts') or obj['HostConfig'].get('PortBindings') or obj['HostConfig']['NetworkMode'] != self.network or not obj['HostConfig']['ReadonlyRootfs']:
             raise Refused('candidate isolation mismatch')
-        result = self.docker.run(['start', '-a', identity], timeout=40, check=False)
+        result = self.docker.run(['start', '-a', identity], timeout=40, check=False, capture_limit=65536)
         obj = self.owned('container', identity)
-        diagnostic = (result.stdout + result.stderr).decode('utf-8', errors='replace').replace(self.password, '[redacted]')
-        self.diagnostic = diagnostic
-        return obj['State']['ExitCode'], result.stdout.decode('utf-8')
+        diagnostic = self.docker.redact((result.stdout + result.stderr).decode('utf-8', errors='replace'))
+        self.diagnostic = diagnostic[-4000:]
+        if result.stdout_truncated or result.stderr_truncated or len(result.stdout) > 65536:
+            raise Refused('packaged challenge output exceeds 65536-byte limit')
+        return obj['State']['ExitCode'], result.stdout.decode('utf-8', errors='replace')
 
     def cleanup(self):
         self.docker.deadline = None  # cleanup must still run after timeout
@@ -337,7 +419,7 @@ def attest(ref, release_sha, policy, synthetic=False, evidence_directory=None):
                 effects = fixture.effects()
                 observation_path = os.path.join(os.path.dirname(fixture.record_path), 'observation-' + fixture.owner + '.json')
                 with open(observation_path, 'w', encoding='utf-8') as stream:
-                    json.dump({'role': role, 'phase': phase, 'image_identity': identity, 'before': before, 'after': after, 'effects': effects, 'exit_code': code, 'stdout': output}, stream, indent=2, sort_keys=True)
+                    json.dump({'role': role, 'phase': phase, 'image_identity': identity, 'before': before, 'after': after, 'effects': effects, 'exit_code': code, 'stdout': docker.redact(output)[-4000:]}, stream, indent=2, sort_keys=True)
                 if phase == 'blocked' and (before != after or effects):
                     raise Refused('independently observed forbidden effects')
                 if code:
