@@ -1021,20 +1021,6 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 	if !ok {
 		return result, ErrPointNotFound
 	}
-	walletKey := personalWalletKey(cmd.AccountID, "capture", cmd.IdempotencyKey)
-	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
-		return result, idemErr
-	} else if idem {
-		reservation, rErr := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
-		if rErr != nil {
-			return result, rErr
-		}
-		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
-		if aErr != nil {
-			return result, aErr
-		}
-		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
-	}
 	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
 	if err != nil {
 		return result, err
@@ -1043,6 +1029,16 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 		if err := rejectQuarantinedTaskTx(ctx, tx, reservation.BusinessID, "billing_capture"); err != nil {
 			return result, err
 		}
+	}
+	walletKey := personalWalletKey(cmd.AccountID, "capture", cmd.IdempotencyKey)
+	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
+		return result, idemErr
+	} else if idem {
+		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
+		if aErr != nil {
+			return result, aErr
+		}
+		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
 	}
 	if reservation.ReservedPoints < cmd.Points {
 		return result, ErrInsufficientPoints
@@ -1150,20 +1146,6 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 	if !ok {
 		return result, ErrPointNotFound
 	}
-	walletKey := personalWalletKey(cmd.AccountID, "release", cmd.IdempotencyKey)
-	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
-		return result, idemErr
-	} else if idem {
-		reservation, rErr := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
-		if rErr != nil {
-			return result, rErr
-		}
-		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
-		if aErr != nil {
-			return result, aErr
-		}
-		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
-	}
 	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
 	if err != nil {
 		return result, err
@@ -1172,6 +1154,16 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 		if err := rejectQuarantinedTaskTx(ctx, tx, reservation.BusinessID, "billing_release"); err != nil {
 			return result, err
 		}
+	}
+	walletKey := personalWalletKey(cmd.AccountID, "release", cmd.IdempotencyKey)
+	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
+		return result, idemErr
+	} else if idem {
+		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
+		if aErr != nil {
+			return result, aErr
+		}
+		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
 	}
 	amountTotal := cmd.Points
 	if amountTotal == 0 {

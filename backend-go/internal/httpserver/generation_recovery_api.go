@@ -79,17 +79,17 @@ func (a api) generationRecoveryAction(w http.ResponseWriter, r *http.Request) {
 		recoveryWriteErrorStatus(w, http.StatusUnauthorized, errors.New("operator identity is required"))
 		return
 	}
+	if err := a.rejectQuarantinedGeneration(r.Context(), taskID, "operator_"+strings.ToLower(req.Action)); err != nil {
+		recoveryWriteErrorStatus(w, http.StatusConflict, err)
+		return
+	}
+
 	if req.Action == recoveryActionDiagnose {
 		if auditErr := insertRecoveryAudit(r.Context(), a.pgDB(), actorID, actorRole, taskID, req, before, before); auditErr != nil {
 			recoveryWriteError(w, fmt.Errorf("recovery audit failed: %w", auditErr))
 			return
 		}
 		writeJSON(w, map[string]any{"diagnosis": before, "action": req.Action, "applied": false})
-		return
-	}
-
-	if err := a.rejectQuarantinedGeneration(r.Context(), taskID, "operator_"+strings.ToLower(req.Action)); err != nil {
-		recoveryWriteErrorStatus(w, http.StatusConflict, err)
 		return
 	}
 	var result generationTask

@@ -437,15 +437,18 @@ func TestQuarantineBillingAndPersonalPointsBlocked(t *testing.T) {
 }
 
 type quarantineLedgerSnapshot struct {
-	Available, Frozen                                            int64
-	Lots, Reservations, Allocations                              int64
-	WalletEntries, Movements, AuditEntries, RecoveryAuditEntries int64
-	TaskRows, ExecutionRows, OutboxRows, Assets, BillingRows     int64
-	TaskStatus, BillingStatus, ExecutionStatus                   string
-	LotState, ReservationState, AllocationState                  string
-	WalletState, MovementState, PersonalAuditState               string
-	RecoveryAuditState, TaskState, ExecutionState                string
-	CorrelationState, OutboxState, AssetState, BillingState      string
+	Available, Frozen                                        int64
+	Lots, Reservations, Allocations                          int64
+	WalletEntries, WalletProjectionRows, Movements           int64
+	AuditEntries, RecoveryAuditEntries, QuarantineRows       int64
+	TaskRows, ExecutionRows, OutboxRows, Assets, BillingRows int64
+	TaskStatus, BillingStatus, ExecutionStatus               string
+	AccountState, WalletProjectionState                      string
+	LotState, ReservationState, AllocationState              string
+	WalletState, MovementState, PersonalAuditState           string
+	RecoveryAuditState, TaskState, ExecutionState            string
+	CorrelationState, QuarantineState, OutboxState           string
+	AssetState, BillingState                                 string
 }
 
 func snapshotQuarantineLedger(t *testing.T, db *sql.DB, accountID, taskID string) quarantineLedgerSnapshot {
@@ -480,6 +483,12 @@ func snapshotQuarantineLedger(t *testing.T, db *sql.DB, accountID, taskID string
 			t.Fatalf("snapshot query %d failed: %v", i, err)
 		}
 	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM xz_user_wallets WHERE user_id=(SELECT user_id FROM xz_point_accounts WHERE id=$1)`, accountID).Scan(&snapshot.WalletProjectionRows); err != nil {
+		t.Fatalf("snapshot wallet projection count failed: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM provider_execution_quarantine WHERE task_id=$1`, taskID).Scan(&snapshot.QuarantineRows); err != nil {
+		t.Fatalf("snapshot quarantine count failed: %v", err)
+	}
 	if err := db.QueryRowContext(ctx, `SELECT status,billing_status FROM xz_generation_tasks WHERE id=$1`, taskID).Scan(&snapshot.TaskStatus, &snapshot.BillingStatus); err != nil {
 		t.Fatalf("snapshot task state failed: %v", err)
 	}
@@ -491,6 +500,8 @@ func snapshotQuarantineLedger(t *testing.T, db *sql.DB, accountID, taskID string
 		arg   string
 		dest  *string
 	}{
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_point_accounts r WHERE id=$1`, accountID, &snapshot.AccountState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.user_id),'[]'::jsonb)::text FROM xz_user_wallets r WHERE user_id=(SELECT user_id FROM xz_point_accounts WHERE id=$1)`, accountID, &snapshot.WalletProjectionState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_lots r WHERE account_id=$1`, accountID, &snapshot.LotState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_reservations r WHERE account_id=$1`, accountID, &snapshot.ReservationState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_reservation_allocations r WHERE account_id=$1`, accountID, &snapshot.AllocationState},
@@ -501,6 +512,7 @@ func snapshotQuarantineLedger(t *testing.T, db *sql.DB, accountID, taskID string
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_generation_tasks r WHERE id=$1`, taskID, &snapshot.TaskState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM provider_executions r WHERE task_id=$1`, taskID, &snapshot.ExecutionState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM provider_execution_correlations r WHERE execution_id IN (SELECT id FROM provider_executions WHERE task_id=$1)`, taskID, &snapshot.CorrelationState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.execution_id),'[]'::jsonb)::text FROM provider_execution_quarantine r WHERE task_id=$1`, taskID, &snapshot.QuarantineState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.event_id),'[]'::jsonb)::text FROM outbox_events r WHERE aggregate_id=$1`, taskID, &snapshot.OutboxState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_assets r WHERE task_id=$1`, taskID, &snapshot.AssetState},
 		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_billing_events r WHERE task_id=$1`, taskID, &snapshot.BillingState},
@@ -585,6 +597,69 @@ func TestQuarantineSmartVideoReserveCaptureReleaseZeroSideEffects(t *testing.T) 
 	}
 }
 
+func TestQuarantineIdempotentSettlementReplayBlocked(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	userID := fmt.Sprintf("quarantine-idempotent-u-%d", time.Now().UnixNano())
+	accountID := "acc-" + userID
+	pointStore := NewPostgresPersonalPointStore(db)
+	lifecycle := NewSmartVideoPointsLifecycleFromDB(db)
+	access := smartvideoapp.Access{UserID: userID}
+	quote := smartvideoapp.RenderQuote{Points: 10, ExpiresAt: time.Now().UTC().Add(time.Minute)}
+	if _, err := pointStore.grant(ctx, PersonalPointGrantCommand{
+		AccountID: accountID, UserID: userID, Source: PointSourceRecharge,
+		Points: 100, ReferenceType: "TEST_INIT", ReferenceID: "idempotent-init-" + userID,
+		IdempotencyKey: "idempotent-init-" + userID,
+	}); err != nil {
+		t.Fatalf("grant initial points: %v", err)
+	}
+
+	captureTaskID := "smartvideo-capture-replay-" + userID
+	captureReservationID, err := lifecycle.Reserve(ctx, access, captureTaskID, quote)
+	if err != nil {
+		t.Fatalf("reserve capture replay task: %v", err)
+	}
+	if err := lifecycle.Capture(ctx, access, captureTaskID); err != nil {
+		t.Fatalf("initial capture: %v", err)
+	}
+	_, captureExecID := seedQuarantinedTaskAndExecution(t, db, captureTaskID, userID)
+	defer cleanupQuarantinedTask(db, captureTaskID, captureExecID)
+	captureBefore := snapshotQuarantineLedger(t, db, accountID, captureTaskID)
+	_, err = pointStore.capture(ctx, PersonalPointCaptureCommand{
+		AccountID: accountID, UserID: userID, ReservationID: captureReservationID, Points: quote.Points,
+		IdempotencyKey: "sv_render_" + captureTaskID + "_capture",
+	})
+	if !errors.Is(err, pe.ErrQuarantined) {
+		t.Fatalf("quarantined idempotent capture replay error = %v, want ErrQuarantined", err)
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, captureTaskID); after != captureBefore {
+		t.Fatalf("idempotent capture replay changed state: before=%+v after=%+v", captureBefore, after)
+	}
+
+	releaseTaskID := "smartvideo-release-replay-" + userID
+	releaseReservationID, err := lifecycle.Reserve(ctx, access, releaseTaskID, quote)
+	if err != nil {
+		t.Fatalf("reserve release replay task: %v", err)
+	}
+	if err := lifecycle.Release(ctx, access, releaseTaskID, "initial release"); err != nil {
+		t.Fatalf("initial release: %v", err)
+	}
+	_, releaseExecID := seedQuarantinedTaskAndExecution(t, db, releaseTaskID, userID)
+	defer cleanupQuarantinedTask(db, releaseTaskID, releaseExecID)
+	releaseBefore := snapshotQuarantineLedger(t, db, accountID, releaseTaskID)
+	_, err = pointStore.release(ctx, PersonalPointReleaseCommand{
+		AccountID: accountID, UserID: userID, ReservationID: releaseReservationID, Points: quote.Points,
+		IdempotencyKey: "sv_render_" + releaseTaskID + "_release",
+	})
+	if !errors.Is(err, pe.ErrQuarantined) {
+		t.Fatalf("quarantined idempotent release replay error = %v, want ErrQuarantined", err)
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, releaseTaskID); after != releaseBefore {
+		t.Fatalf("idempotent release replay changed state: before=%+v after=%+v", releaseBefore, after)
+	}
+}
+
 func TestQuarantineRecoveryHTTPZeroSideEffects(t *testing.T) {
 	db := openProviderExecutionHookTestDB(t)
 	defer db.Close()
@@ -613,6 +688,33 @@ func TestQuarantineRecoveryHTTPZeroSideEffects(t *testing.T) {
 	}
 	if after := snapshotQuarantineLedger(t, db, accountID, taskID); after != before {
 		t.Fatalf("quarantined recovery changed state: before=%+v after=%+v", before, after)
+	}
+
+	// DIAGNOSE writes an audit record on normal tasks. A quarantined task must
+	// reject it before that audit side effect as well; read-only diagnosis stays
+	// available through the separate GET endpoint.
+	diagnoseRequest := httptest.NewRequest(http.MethodPost, "/api/v1/admin/generation-tasks/"+taskID+"/recovery-actions", strings.NewReader(`{"action":"DIAGNOSE","reason":"p5 quarantine diagnosis"}`))
+	diagnoseRequest.SetPathValue("id", taskID)
+	diagnoseRequest = diagnoseRequest.WithContext(context.WithValue(context.WithValue(diagnoseRequest.Context(), actorIDContextKey, "p5-operator"), actorRoleContextKey, "SUPER_ADMIN"))
+	diagnoseResponse := httptest.NewRecorder()
+	a.generationRecoveryAction(diagnoseResponse, diagnoseRequest)
+	if diagnoseResponse.Code != http.StatusConflict {
+		t.Fatalf("quarantined DIAGNOSE HTTP status=%d body=%s, want 409", diagnoseResponse.Code, diagnoseResponse.Body.String())
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, taskID); after != before {
+		t.Fatalf("quarantined DIAGNOSE changed state: before=%+v after=%+v", before, after)
+	}
+
+	// The separate GET diagnosis endpoint remains available and read-only.
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/admin/generation-tasks/"+taskID+"/recovery-diagnosis", nil)
+	getRequest.SetPathValue("id", taskID)
+	getResponse := httptest.NewRecorder()
+	a.generationRecoveryDiagnosis(getResponse, getRequest)
+	if getResponse.Code != http.StatusOK {
+		t.Fatalf("quarantined GET diagnosis HTTP status=%d body=%s, want 200", getResponse.Code, getResponse.Body.String())
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, taskID); after != before {
+		t.Fatalf("read-only GET diagnosis changed state: before=%+v after=%+v", before, after)
 	}
 }
 
