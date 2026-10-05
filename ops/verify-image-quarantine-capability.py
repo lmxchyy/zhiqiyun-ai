@@ -317,7 +317,10 @@ def attest(ref, release_sha, policy, synthetic=False, evidence_directory=None):
     docker = Docker()
     if evidence_directory is not None:
         docker.evidence_dir = os.path.abspath(evidence_directory)
-    deadline = time.monotonic() + 180
+    # Synthetic CI replay provisions isolated PostgreSQL fixtures and applies
+    # the full migration history repeatedly; give it a bounded but realistic
+    # budget. Authenticated runtime verification does not use this path.
+    deadline = time.monotonic() + (900 if synthetic else 180)
     docker.deadline = deadline
     identity = image_identity(docker, ref, release_sha, synthetic)
     observations = []
