@@ -253,7 +253,31 @@ class Fixture:
 
     def sql(self, query):
         self.owned('container', self.db)
-        return self.docker.text(['exec', '-i', self.db, 'psql', '-X', '-U', 'fixture_admin', '-d', self.name, '-v', 'ON_ERROR_STOP=1', '-At'], data=query.encode('utf-8'), timeout=90)
+        try:
+            return self.docker.text(['exec', '-i', self.db, 'psql', '-X', '-U', 'fixture_admin', '-d', self.name, '-v', 'ON_ERROR_STOP=1', '-At'], data=query.encode('utf-8'), timeout=90)
+        except Refused as failure:
+            context = {}
+            owned_for_diagnostics = False
+            try:
+                obj = self.owned('container', self.db)
+                owned_for_diagnostics = True
+                state = obj.get('State', {})
+                context['container_state'] = {key: state.get(key) for key in ('Status', 'Running', 'Restarting', 'OOMKilled', 'ExitCode', 'StartedAt', 'FinishedAt')}
+                if state.get('Error'):
+                    context['container_state']['Error'] = self.docker.redact(str(state['Error']))[-1000:]
+                context['restart_count'] = obj.get('RestartCount')
+            except Exception as error:
+                context['container_inspect_error'] = self.docker.redact(str(error))[-1000:]
+            if owned_for_diagnostics:
+                try:
+                    logs = self.docker.run(['logs', '--tail', '100', self.db], timeout=20, check=False, capture_limit=32768)
+                    context['container_logs'] = self.docker.redact((logs.stdout + logs.stderr).decode('utf-8', errors='replace'))[-12000:]
+                    context['container_logs_exit'] = logs.returncode
+                except Exception as error:
+                    context['container_logs_error'] = self.docker.redact(str(error))[-1000:]
+            else:
+                context['container_logs'] = '[skipped: owned-container revalidation failed]'
+            raise Refused(str(failure) + '; fixture_database=' + json.dumps(context, sort_keys=True))
 
     def provision(self, image_id):
         pg = self.docker.inspect('image', 'pgvector/pgvector:pg16')['Id']
