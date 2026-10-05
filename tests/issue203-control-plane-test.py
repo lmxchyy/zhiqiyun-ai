@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import hmac
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import MagicMock, patch
 import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -223,6 +225,608 @@ class ControlPlaneUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.parse_iso8601_utc("invalid-timestamp")
 
+    @classmethod
+    def get_preflight_python_code(cls):
+        rollback_src = (ROOT / "rollback.sh").read_text(encoding="utf-8")
+        m = re.search(r"preflight_check_quarantine_revocation\(\)\s*\{.*?python3 - .*?<<['\"]PY['\"].*?\n(.*?)\nPY\n\}", rollback_src, re.DOTALL)
+        assert m, "Could not extract preflight python code from rollback.sh"
+        return m.group(1)
+
+    def test_preflight_and_cleanup_credentials_stay_out_of_argv_and_output(self):
+        source = (ROOT / "rollback.sh").read_text(encoding="utf-8")
+        cleanup_source = source.split("cleanup_quarantine_for_rollback() {", 1)[1]
+        cleanup_code = cleanup_source.split("<<'PY'", 1)[1].split("\n", 1)[1].split("\nPY\n}", 1)[0]
+        for phase, code in (("preflight", self.get_preflight_python_code()), ("cleanup", cleanup_code)):
+            for branch in ("compose", "test_container"):
+                for configured in (True, False):
+                    for failure in (True, False):
+                        with self.subTest(phase=phase, branch=branch, configured=configured, failure=failure):
+                            secret = "SYNTHETIC_ONLY_SECRET_WITHOUT_PASSWORD_PREFIX"
+                            ambient = "SYNTHETIC_AMBIENT_PGPASSWORD"
+                            env_path = Path(self.tmpdir) / "credentials-fixture.env"
+                            env_path.write_text("POSTGRES_PASSWORD=" + secret + "\n" if configured else "", encoding="utf-8")
+                            env = {"PGPASSWORD": ambient, "QUARANTINE_BACKUP_DIR": str(Path(self.tmpdir) / "credential-probe")}
+                            if branch == "test_container":
+                                env["XIANZHI_TEST_CONTAINER"] = "inert-container-only"
+                                if configured:
+                                    env["POSTGRES_PASSWORD"] = secret
+                            captured = []
+                            def fake_popen(argv, **kwargs):
+                                captured.append((argv, kwargs))
+                                proc = MagicMock()
+                                proc.returncode = 1 if failure else 0
+                                # Missing table allows cleanup to exit BEFORE any snapshot or TRUNCATE.
+                                output = b"f|t\n" if phase == "preflight" else b"f\n"
+                                proc.communicate.return_value = (output, ("RAW_DB_ERROR " + secret + ambient).encode())
+                                return proc
+                            stdout, stderr = io.StringIO(), io.StringIO()
+                            argv = ["python", "synthetic-compose.yml", str(env_path), "a" * 40, "synthetic-timestamp"]
+                            with patch.dict(os.environ, env, clear=True), patch("sys.argv", argv), patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch("subprocess.Popen", side_effect=fake_popen):
+                                with self.assertRaises(SystemExit) as stopped:
+                                    exec(compile(code, "rollback-credential-regression", "exec"), {"__name__": "__main__"})
+                            self.assertEqual(stopped.exception.code, 1 if failure else 0)
+                            self.assertEqual(len(captured), 1)
+                            child_argv, child_options = captured[0]
+                            self.assertNotIn(secret, " ".join(child_argv))
+                            self.assertNotIn(ambient, " ".join(child_argv))
+                            self.assertEqual(child_options["env"].get("PGPASSWORD"), secret if configured else None)
+                            if configured:
+                                self.assertEqual(child_argv[child_argv.index("-e") + 1], "PGPASSWORD")
+                            for forbidden in (secret, ambient, "RAW_DB_ERROR"):
+                                self.assertNotIn(forbidden, stdout.getvalue() + stderr.getvalue())
+
+    def test_preflight_unit_test_container_branch_argv_env_no_secret_leak(self):
+        code = self.get_preflight_python_code()
+        captured_popen = []
+        def mock_popen(*args, **kwargs):
+            captured_popen.append((args, kwargs))
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        backup_dir = os.path.join(self.tmpdir, "backup_test_branch")
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "POSTGRES_USER": "test_pg_user",
+            "POSTGRES_DB": "test_pg_db",
+            "POSTGRES_PASSWORD": "super_secret_test_pw_456",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "mock-compose.yml", "mock.env", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        try:
+                            exec(code, {"__name__": "__main__"})
+                            exit_code = 0
+                        except SystemExit as se:
+                            exit_code = se.code
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(captured_popen), 1)
+        argv, kwargs = captured_popen[0]
+        psql_base = argv[0]
+        child_env = kwargs.get("env", {})
+
+        # Assert value-free -e PGPASSWORD forwarding
+        self.assertIn("-e", psql_base)
+        e_idx = psql_base.index("-e")
+        self.assertEqual(psql_base[e_idx + 1], "PGPASSWORD")
+
+        # Assert secret is NOT in argv
+        for arg in psql_base:
+            self.assertNotIn("super_secret_test_pw_456", arg)
+
+        # Assert child env has the secret
+        self.assertEqual(child_env.get("PGPASSWORD"), "super_secret_test_pw_456")
+
+    def test_preflight_unit_compose_branch_argv_env_no_secret_leak(self):
+        code = self.get_preflight_python_code()
+        captured_popen = []
+        def mock_popen(*args, **kwargs):
+            captured_popen.append((args, kwargs))
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        env_file = os.path.join(self.tmpdir, "prod.env")
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write("POSTGRES_USER=prod_user\nPOSTGRES_DB=prod_db\nPOSTGRES_PASSWORD=super_secret_prod_pw_789\n")
+
+        backup_dir = os.path.join(self.tmpdir, "backup_compose_branch")
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", env_file, "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        try:
+                            exec(code, {"__name__": "__main__"})
+                            exit_code = 0
+                        except SystemExit as se:
+                            exit_code = se.code
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(captured_popen), 1)
+        argv, kwargs = captured_popen[0]
+        psql_base = argv[0]
+        child_env = kwargs.get("env", {})
+
+        # Assert value-free -e PGPASSWORD forwarding
+        self.assertIn("-e", psql_base)
+        e_idx = psql_base.index("-e")
+        self.assertEqual(psql_base[e_idx + 1], "PGPASSWORD")
+
+        # Assert secret is NOT in argv
+        for arg in psql_base:
+            self.assertNotIn("super_secret_prod_pw_789", arg)
+
+        # Assert child env has the secret
+        self.assertEqual(child_env.get("PGPASSWORD"), "super_secret_prod_pw_789")
+
+    def test_preflight_unit_synthetic_error_no_secret_or_raw_stderr_leak(self):
+        code = self.get_preflight_python_code()
+        def mock_popen_fail(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 1
+            proc.communicate.return_value = (b"", b"FATAL: password authentication failed for user 'prod_user' with password=raw_super_secret_password")
+            return proc
+
+        env_file = os.path.join(self.tmpdir, "prod_fail.env")
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write("POSTGRES_PASSWORD=raw_super_secret_password\n")
+
+        backup_dir = os.path.join(self.tmpdir, "backup_fail")
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", env_file, "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen_fail):
+                        try:
+                            exec(code, {"__name__": "__main__"})
+                            exit_code = 0
+                        except SystemExit as se:
+                            exit_code = se.code
+
+        self.assertEqual(exit_code, 1)
+        stderr_out = captured_stderr.getvalue()
+        self.assertIn("ERROR: Failed to inspect database relations", stderr_out)
+        self.assertNotIn("raw_super_secret_password", stderr_out)
+        self.assertNotIn("FATAL: password authentication failed", stderr_out)
+
+    def test_preflight_unit_sentinel_preservation_and_exclusive_cleanup(self):
+        code = self.get_preflight_python_code()
+
+        backup_dir = os.path.join(self.tmpdir, "backup_sentinel")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        sentinel_file = os.path.join(backup_dir, ".preflight_probe_424242")
+        with open(sentinel_file, "w", encoding="utf-8") as f:
+            f.write("sentinel_initial_data_must_not_be_overwritten_or_deleted")
+
+        unrelated_file = os.path.join(backup_dir, "prior_backup.json")
+        with open(unrelated_file, "w", encoding="utf-8") as f:
+            f.write('{"unrelated": true}')
+
+        # Optional symlink sentinel
+        symlink_created = False
+        symlink_path = os.path.join(backup_dir, ".preflight_probe_symlink")
+        try:
+            os.symlink(unrelated_file, symlink_path)
+            symlink_created = True
+        except (OSError, NotImplementedError):
+            pass
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("os.getpid", return_value=424242):
+                        with patch("subprocess.Popen", side_effect=mock_popen):
+                            try:
+                                exec(code, {"__name__": "__main__"})
+                                exit_code = 0
+                            except SystemExit as se:
+                                exit_code = se.code
+
+        self.assertEqual(exit_code, 0)
+        # Assert sentinel file preserved
+        self.assertTrue(os.path.isfile(sentinel_file))
+        with open(sentinel_file, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "sentinel_initial_data_must_not_be_overwritten_or_deleted")
+
+        # Assert unrelated file preserved
+        self.assertTrue(os.path.isfile(unrelated_file))
+        with open(unrelated_file, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), '{"unrelated": true}')
+
+        # Assert symlink preserved
+        if symlink_created:
+            self.assertTrue(os.path.islink(symlink_path))
+            with open(symlink_path, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), '{"unrelated": true}')
+
+        # Assert only own probe was cleaned up: no new .preflight_probe_* files left behind
+        all_entries = os.listdir(backup_dir)
+        allowed = {".preflight_probe_424242", "prior_backup.json"}
+        if symlink_created:
+            allowed.add(".preflight_probe_symlink")
+        for entry in all_entries:
+            self.assertIn(entry, allowed, f"Unexpected leftover file in backup dir: {entry}")
+
+    def test_preflight_unit_table_presence_false_vs_permission_failure(self):
+        code = self.get_preflight_python_code()
+
+        # Case A: Table presence false (f|t) -> exits 0 (no revocation needed)
+        def mock_popen_not_found(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"f|t\n", b"")
+            return proc
+
+        backup_dir_a = os.path.join(self.tmpdir, "backup_not_found")
+        captured_stderr_a = io.StringIO()
+        test_env_a = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir_a,
+        }
+        with patch.dict(os.environ, test_env_a, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr_a):
+                    with patch("subprocess.Popen", side_effect=mock_popen_not_found):
+                        try:
+                            exec(code, {"__name__": "__main__"})
+                            exit_code_a = 0
+                        except SystemExit as se:
+                            exit_code_a = se.code
+
+        self.assertEqual(exit_code_a, 0)
+
+        # Case B: Table presence true, but permissions missing (t|f) -> exits 1
+        def mock_popen_no_privs(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|f\n", b"")
+            return proc
+
+        backup_dir_b = os.path.join(self.tmpdir, "backup_no_privs")
+        captured_stderr_b = io.StringIO()
+        test_env_b = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir_b,
+        }
+        with patch.dict(os.environ, test_env_b, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr_b):
+                    with patch("subprocess.Popen", side_effect=mock_popen_no_privs):
+                        try:
+                            exec(code, {"__name__": "__main__"})
+                            exit_code_b = 0
+                        except SystemExit as se:
+                            exit_code_b = se.code
+
+        self.assertEqual(exit_code_b, 1)
+        self.assertIn("Insufficient privileges", captured_stderr_b.getvalue())
+
+    def test_probe_cleanup_detects_ordinary_file_replacement_and_blocks(self):
+        code = self.get_preflight_python_code()
+        backup_dir = os.path.join(self.tmpdir, "backup_probe_ordinary_repl")
+        os.makedirs(backup_dir, exist_ok=True)
+        sentinel_file = os.path.join(backup_dir, "sentinel.txt")
+        with open(sentinel_file, "w", encoding="utf-8") as f:
+            f.write("SENTINEL_DATA_MUST_NOT_BE_DELETED")
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        real_close = os.close
+        tampered_path = []
+        def adversary_close(fd):
+            real_close(fd)
+            probes = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
+            if probes:
+                probe_p = probes[0]
+                tampered_path.append(probe_p)
+                os.remove(probe_p)
+                os.rename(sentinel_file, probe_p)
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        with patch("os.close", side_effect=adversary_close):
+                            with self.assertRaises(SystemExit) as cm:
+                                exec(code, {"__name__": "__main__"})
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("file identity mismatch", captured_stderr.getvalue())
+        # Assert sentinel was renamed to probe_p, but MUST NOT have been deleted!
+        self.assertTrue(os.path.exists(tampered_path[0]))
+        with open(tampered_path[0], "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "SENTINEL_DATA_MUST_NOT_BE_DELETED")
+
+    def test_probe_cleanup_detects_inode_mismatch_with_identical_token_and_blocks(self):
+        code = self.get_preflight_python_code()
+        backup_dir = os.path.join(self.tmpdir, "backup_probe_inode_mismatch")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        real_close = os.close
+        tampered_path = []
+        def adversary_close(fd):
+            real_close(fd)
+            probes = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
+            if probes:
+                probe_p = probes[0]
+                tampered_path.append(probe_p)
+                with open(probe_p, "rb") as pf:
+                    token = pf.read()
+                os.remove(probe_p)
+                # Create a new regular file with a new inode, but the same token
+                with open(probe_p, "wb") as pf:
+                    pf.write(token)
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        with patch("os.close", side_effect=adversary_close):
+                            with self.assertRaises(SystemExit) as cm:
+                                exec(code, {"__name__": "__main__"})
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("file identity mismatch", captured_stderr.getvalue())
+        # Replacement file must NOT have been deleted
+        self.assertTrue(os.path.exists(tampered_path[0]))
+
+    def test_probe_cleanup_detects_same_inode_token_change_and_blocks(self):
+        code = self.get_preflight_python_code()
+        backup_dir = os.path.join(self.tmpdir, "backup_probe_token_change")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        real_close = os.close
+        tampered_path = []
+        def adversary_close(fd):
+            real_close(fd)
+            probes = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
+            if probes:
+                probe_p = probes[0]
+                tampered_path.append(probe_p)
+                # Overwrite content in place (same inode) with tampered token
+                with open(probe_p, "wb") as pf:
+                    pf.write(b"tampered_token_payload\n")
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        with patch("os.close", side_effect=adversary_close):
+                            with self.assertRaises(SystemExit) as cm:
+                                exec(code, {"__name__": "__main__"})
+
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("token/content mismatch", captured_stderr.getvalue())
+        # File must NOT have been deleted
+        self.assertTrue(os.path.exists(tampered_path[0]))
+        with open(tampered_path[0], "rb") as pf:
+            self.assertEqual(pf.read(), b"tampered_token_payload\n")
+
+    def test_probe_cleanup_detects_symlink_substitution_and_blocks(self):
+        code = self.get_preflight_python_code()
+        backup_dir = os.path.join(self.tmpdir, "backup_probe_symlink_sub")
+        os.makedirs(backup_dir, exist_ok=True)
+        sentinel_file = os.path.join(backup_dir, "sentinel.txt")
+        with open(sentinel_file, "w", encoding="utf-8") as f:
+            f.write("SENTINEL_NEVER_DELETE")
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        real_close = os.close
+        tampered_path = []
+        symlink_supported = [True]
+
+        def adversary_close(fd):
+            real_close(fd)
+            probes = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
+            if probes:
+                probe_p = probes[0]
+                tampered_path.append(probe_p)
+                os.remove(probe_p)
+                try:
+                    os.symlink(sentinel_file, probe_p)
+                except (OSError, NotImplementedError):
+                    symlink_supported[0] = False
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        with patch("os.close", side_effect=adversary_close):
+                            if symlink_supported[0]:
+                                try:
+                                    exec(code, {"__name__": "__main__"})
+                                    exit_code = 0
+                                except SystemExit as se:
+                                    exit_code = se.code
+                            else:
+                                exit_code = 1
+
+        if symlink_supported[0] and tampered_path and os.path.islink(tampered_path[0]):
+            self.assertEqual(exit_code, 1)
+            self.assertIn("substituted with a symlink", captured_stderr.getvalue())
+            self.assertTrue(os.path.islink(tampered_path[0]))
+            self.assertTrue(os.path.exists(sentinel_file))
+        else:
+            captured_stderr_mock = io.StringIO()
+            with patch.dict(os.environ, test_env, clear=True):
+                with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                    with patch("sys.stderr", captured_stderr_mock):
+                        with patch("subprocess.Popen", side_effect=mock_popen):
+                            with patch("os.path.islink", return_value=True):
+                                with self.assertRaises(SystemExit) as cm:
+                                    exec(code, {"__name__": "__main__"})
+            self.assertEqual(cm.exception.code, 1)
+            self.assertIn("substituted with a symlink", captured_stderr_mock.getvalue())
+
+    def test_probe_cleanup_normal_own_file_succeeds(self):
+        code = self.get_preflight_python_code()
+        backup_dir = os.path.join(self.tmpdir, "backup_probe_normal")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        try:
+                            exec(code, {"__name__": "__main__"})
+                            exit_code = 0
+                        except SystemExit as se:
+                            exit_code = se.code
+
+        self.assertEqual(exit_code, 0)
+        remaining = [f for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
+        self.assertEqual(remaining, [])
+
+    def test_probe_cleanup_no_false_positive_inode_reuse_blocks(self):
+        code = self.get_preflight_python_code()
+        backup_dir = os.path.join(self.tmpdir, "backup_probe_inode_reuse")
+        os.makedirs(backup_dir, exist_ok=True)
+
+        def mock_popen(*args, **kwargs):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.communicate.return_value = (b"t|t\n", b"")
+            return proc
+
+        real_close = os.close
+        tampered_path = []
+        captured_orig_stat = []
+
+        def adversary_close(fd):
+            st = os.fstat(fd)
+            captured_orig_stat.append(st)
+            real_close(fd)
+            probes = [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.startswith(".preflight_probe_")]
+            if probes:
+                probe_p = probes[0]
+                tampered_path.append(probe_p)
+                os.remove(probe_p)
+                # Attacker creates replacement file with attacker token
+                with open(probe_p, "wb") as pf:
+                    pf.write(b"attacker_arbitrary_content\n")
+
+        real_lstat = os.lstat
+        def simulated_reuse_lstat(path):
+            lst = real_lstat(path)
+            if tampered_path and path == tampered_path[0] and captured_orig_stat:
+                # Simulate exact inode reuse: dev and ino match original probe
+                mock_st = MagicMock(wraps=lst)
+                mock_st.st_dev = captured_orig_stat[0].st_dev
+                mock_st.st_ino = captured_orig_stat[0].st_ino
+                mock_st.st_mode = lst.st_mode
+                return mock_st
+            return lst
+
+        captured_stderr = io.StringIO()
+        test_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "XIANZHI_TEST_CONTAINER": "mock-test-container",
+            "QUARANTINE_BACKUP_DIR": backup_dir,
+        }
+        with patch.dict(os.environ, test_env, clear=True):
+            with patch("sys.argv", ["python", "docker-compose.yml", "none", "target_sha_123"]):
+                with patch("sys.stderr", captured_stderr):
+                    with patch("subprocess.Popen", side_effect=mock_popen):
+                        with patch("os.close", side_effect=adversary_close):
+                            with patch("os.lstat", side_effect=simulated_reuse_lstat):
+                                with self.assertRaises(SystemExit) as cm:
+                                    exec(code, {"__name__": "__main__"})
+
+        self.assertEqual(cm.exception.code, 1)
+        # Even with identical inode/dev (simulated reuse), unpredictable token prevents false-positive cleanup
+        self.assertIn("token/content mismatch", captured_stderr.getvalue())
+        self.assertTrue(os.path.exists(tampered_path[0]))
+        with open(tampered_path[0], "rb") as pf:
+            self.assertEqual(pf.read(), b"attacker_arbitrary_content\n")
+
 
 class RollbackSyntaxTests(unittest.TestCase):
     def test_rollback_syntax_and_scoping(self):
@@ -236,16 +840,21 @@ class IsolatedPostgresControlPlaneTests(unittest.TestCase):
         # This suite destroys its schema. Never reuse an inherited service container,
         # even when CI or the caller supplies XIANZHI_TEST_CONTAINER.
         cls.own_container = False
-        cls.container = "issue203-pg-test-" + uuid.uuid4().hex[:10]
-        subprocess.run([
-            "docker", "run", "-d", "--rm", "--network", "none",
-            "--name", cls.container,
+        cls.fixture_owner = str(uuid.uuid4())
+        cls.container = "issue203-pg-test-" + cls.fixture_owner.replace('-', '')[:10]
+        image_id = subprocess.check_output(["docker", "image", "inspect", "pgvector/pgvector:pg16", "--format", "{{.Id}}"], stderr=subprocess.PIPE).decode().strip()
+        cls.fixture_id = subprocess.check_output([
+            "docker", "run", "-d", "--pull", "never", "--network", "none",
+            "--label", "issue203.control-plane.owner=" + cls.fixture_owner,
+            "--tmpfs", "/var/lib/postgresql/data", "--name", cls.container,
             "-e", "POSTGRES_PASSWORD=test_secret_pass",
             "-e", "POSTGRES_USER=postgres",
-            "-e", "POSTGRES_DB=xianzhi_test",
-            "pgvector/pgvector:pg16"
-        ], check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            "-e", "POSTGRES_DB=xianzhi_test", image_id
+        ], stdin=subprocess.DEVNULL, stderr=subprocess.PIPE).decode().strip()
         cls.own_container = True
+        record = ROOT / '.evidence/issue203/priority4-runtime-capability' / ('control-owned-' + cls.fixture_owner + '.json')
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({'owner': cls.fixture_owner, 'container_id': cls.fixture_id, 'image_id': image_id, 'pid': os.getpid(), 'started_at_unix': time.time()}, sort_keys=True), encoding='utf-8')
         try:
             for _ in range(40):
                 r = subprocess.run(["docker", "exec", cls.container, "psql", "-X", "-U", "postgres", "-d", "xianzhi_test", "-c", "SELECT 1;"],
@@ -280,15 +889,21 @@ class IsolatedPostgresControlPlaneTests(unittest.TestCase):
                 raise RuntimeError("owned schema-only dump failed; no SKIP")
             cls.migrated_schema = dump.stdout.decode("utf-8")
         except Exception:
-            subprocess.run(["docker", "rm", "-f", cls.container],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            cls.own_container = False
+            cls.cleanup_owned_fixture()
             raise
 
     @classmethod
-    def tearDownClass(cls):
+    def cleanup_owned_fixture(cls):
         if getattr(cls, "own_container", False):
-            subprocess.run(["docker", "rm", "-f", cls.container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            obj = json.loads(subprocess.check_output(["docker", "inspect", cls.fixture_id], stderr=subprocess.PIPE))[0]
+            if obj['Id'] != cls.fixture_id or obj['Config']['Labels'].get('issue203.control-plane.owner') != cls.fixture_owner or obj['HostConfig']['NetworkMode'] != 'none':
+                raise RuntimeError('test fixture ownership mismatch; no cleanup')
+            subprocess.run(["docker", "rm", "-f", "-v", cls.fixture_id], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            cls.own_container = False
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.cleanup_owned_fixture()
 
     def psql(self, sql_text):
         args = ["docker", "exec", "-i", self.container, "psql", "-X", "-U", "postgres", "-d", "xianzhi_test", "-v", "ON_ERROR_STOP=1"]
@@ -704,75 +1319,51 @@ exec "$@"
         receipt_path.write_text(json.dumps(receipt_dict, indent=2), encoding="utf-8")
         return receipt_path
 
-    def test_full_immutable_path_positive(self):
+    def test_full_immutable_old_schema_without_runtime_proof_rejected(self):
+        # Named P4 contract change: Migration121/source capability is no longer
+        # enough to authorize rollback, even with a healthy quarantine table.
         self.seed_quarantine_record(execution_id=501, task_id="task_imm_pos")
-        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
-        self.assertIn("1", count_pre.stdout.decode())
-
         sb = self.create_rollback_sandbox()
         receipt = self.create_receipt_fixture(sb, git_sha="79a3d7cf493453adbcdc03234b62fc5f099f776a")
+        r = self.run_rollback(sb, ["--receipt", to_bash_path(receipt), "--compose-file", to_bash_path(sb["compose_file"]), "--env-file", to_bash_path(sb["env_file"])])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("RUNTIME_CAPABILITY_PROOF_MISSING", r.stderr.decode("utf-8", "replace"))
+        self.assertIn("1", self.psql("SELECT count(*) FROM provider_execution_quarantine;").stdout.decode())
+        self.assert_no_cutover_actions(sb)
 
-        r = self.run_rollback(sb, [
-            "--receipt", to_bash_path(receipt),
-            "--compose-file", to_bash_path(sb["compose_file"]),
-            "--env-file", to_bash_path(sb["env_file"])
-        ])
-        stdout = r.stdout.decode("utf-8", "replace")
-        stderr = r.stderr.decode("utf-8", "replace")
-        self.assertEqual(r.returncode, 0, f"Immutable rollback failed (exit {r.returncode}):\nSTDOUT: {stdout}\nSTDERR: {stderr}")
-        self.assertIn("QUARANTINE_PRESERVED", stdout)
-        self.assertIn("Running services match the rollback release digest", stdout)
-        self.assertIn("completed successfully", stdout)
-
-        # Quarantine table must be preserved in DB
-        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
-        self.assertIn("1", count_post.stdout.decode())
-
-        # Verify action log: stopped containers and started with --pull never
-        actions = sb["action_log"].read_text(encoding="utf-8")
-        self.assertIn("docker compose stop", actions)
-        self.assertIn("--pull never", actions)
-        self.assertNotIn("git checkout", actions)
-
-        # Verify env file updated
-        env_content = sb["env_file"].read_text(encoding="utf-8")
-        self.assertIn(f"XIANZHI_IMAGE_REFERENCE={sb['expected_ref']}", env_content)
-
-    def test_full_legacy_path_positive(self):
+    def test_full_legacy_emergency_rejected_before_stop(self):
+        # Named P4 contract change: stop->revoke->build is intentionally removed.
         self.seed_quarantine_record(execution_id=502, task_id="task_leg_pos")
-        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
-        self.assertIn("1", count_pre.stdout.decode())
-
         sb = self.create_rollback_sandbox(extra_env={"EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION": "1"})
+        r = self.run_rollback(sb, ["--compose-file", to_bash_path(sb["compose_file"]), "--env-file", to_bash_path(sb["env_file"]), "0183f267a"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("RUNTIME_CAPABILITY_PROOF_MISSING", r.stderr.decode("utf-8", "replace"))
+        self.assertIn("1", self.psql("SELECT count(*) FROM provider_execution_quarantine;").stdout.decode())
+        self.assert_no_cutover_actions(sb)
+        self.assertEqual(list(sb["quarantine_backup_dir"].glob("revoked-*.json")), [])
 
-        r = self.run_rollback(sb, [
-            "--compose-file", to_bash_path(sb["compose_file"]),
-            "--env-file", to_bash_path(sb["env_file"]),
-            "0183f267a"
-        ])
-        stdout = r.stdout.decode("utf-8", "replace")
-        stderr = r.stderr.decode("utf-8", "replace")
-        self.assertEqual(r.returncode, 0, f"Legacy rollback failed (exit {r.returncode}):\nSTDOUT: {stdout}\nSTDERR: {stderr}")
-        self.assertIn("QUARANTINE_REVOKED", stdout)
-        self.assertIn("Legacy rollback to 0183f267a completed", stdout)
+    def assert_no_cutover_actions(self, sb):
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            for forbidden in ("docker compose stop", "docker compose rm", "docker compose pull", "docker compose up", "git checkout"):
+                self.assertNotIn(forbidden, actions)
 
-        # Verify table truncated & readback 0
-        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
-        self.assertIn("0", count_post.stdout.decode())
-
-        # Verify snapshot created and intact
-        backups = list(sb["quarantine_backup_dir"].glob("revoked-*-0183f267a*.json"))
-        self.assertGreater(len(backups), 0, "Quarantine snapshot file not found")
-        snap_data = json.loads(backups[0].read_text(encoding="utf-8"))
-        self.assertEqual(snap_data["count"], 1)
-        self.assertEqual(snap_data["records"][0]["execution_id"], 502)
-
-        # Verify action log: stopped, checked out, and started with --build
-        actions = sb["action_log"].read_text(encoding="utf-8")
-        self.assertIn("docker compose stop", actions)
-        self.assertIn("git checkout", actions)
-        self.assertIn("docker compose up", actions)
-        self.assertIn("--build", actions)
+    def run_rollback_safety_helper(self, sb, helper):
+        # Existing cleanup and indeterminate-stop safety remain independently
+        # exercised, but no longer imply permission for legacy cutover.
+        source = (ROOT / "rollback.sh").read_text(encoding="utf-8")
+        start = source.index(helper + "() {")
+        end = source.index("\n}\n", start) + 3
+        script = '''set -Eeuo pipefail
+log(){ printf '%s\\n' "$*"; }
+fail(){ printf '%s\\n' "$*" >&2; exit 1; }
+'''
+        script += source[start:end] + "\n"
+        script += "cleanup_quarantine_for_rollback 0183f267a 0\n" if helper == "cleanup_quarantine_for_rollback" else "stop_services_fail_closed\n"
+        path = sb["dir"] / "safety-helper.sh"
+        path.write_bytes(script.encode("utf-8"))
+        env = dict(sb["env"], COMPOSE_FILE=to_bash_path(sb["compose_file"]), ENV_FILE=to_bash_path(sb["env_file"]), TIMESTAMP="synthetic")
+        return subprocess.run([BASH_EXE, to_bash_path(sb["runner_file"]), BASH_EXE, to_bash_path(path)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
     def test_negative_1_legacy_unauthorized(self):
         self.seed_quarantine_record(execution_id=503, task_id="task_leg_unauth")
@@ -795,11 +1386,14 @@ exec "$@"
         count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
         self.assertIn("1", count_post.stdout.decode())
 
-        # Neither checkout nor compose up may be called
+        # Failed preflight must cause ZERO stop, recreate, pull, checkout, up, TRUNCATE
         if sb["action_log"].exists():
             actions = sb["action_log"].read_text(encoding="utf-8")
-            self.assertNotIn("git checkout", actions)
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
             self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
 
     def test_negative_2_unknown_capability(self):
         sb = self.create_rollback_sandbox()
@@ -816,10 +1410,14 @@ exec "$@"
         stderr = r.stderr.decode("utf-8", "replace")
         self.assertEqual(r.returncode, 1)
         self.assertIn("TARGET_CAPABILITY_UNKNOWN", stderr)
+        # Unknown target must fail before stop even if ledger allows ancestry: ZERO stop/rm/pull/up/checkout
         if sb["action_log"].exists():
             actions = sb["action_log"].read_text(encoding="utf-8")
-            self.assertNotIn("git checkout", actions)
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
             self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
 
     def test_negative_3_forward_release_rejected(self):
         sb = self.create_rollback_sandbox()
@@ -843,8 +1441,10 @@ exec "$@"
         if sb["action_log"].exists():
             actions = sb["action_log"].read_text(encoding="utf-8")
             self.assertNotIn("docker compose stop", actions)
-            self.assertNotIn("git checkout", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
             self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
 
     def test_negative_4_snapshot_failure_no_truncate(self):
         self.seed_quarantine_record(execution_id=504, task_id="task_snap_fail")
@@ -856,11 +1456,7 @@ exec "$@"
             "SIMULATE_SNAPSHOT_FAILURE": "1"
         })
 
-        r = self.run_rollback(sb, [
-            "--compose-file", to_bash_path(sb["compose_file"]),
-            "--env-file", to_bash_path(sb["env_file"]),
-            "0183f267a"
-        ])
+        r = self.run_rollback_safety_helper(sb, "cleanup_quarantine_for_rollback")
         stderr = r.stderr.decode("utf-8", "replace")
         self.assertEqual(r.returncode, 1)
         self.assertIn("SNAPSHOT_WRITE_FAILED", stderr)
@@ -881,11 +1477,7 @@ exec "$@"
             "SIMULATE_POST_TRUNCATE_READBACK_MISMATCH": "1"
         })
 
-        r = self.run_rollback(sb, [
-            "--compose-file", to_bash_path(sb["compose_file"]),
-            "--env-file", to_bash_path(sb["env_file"]),
-            "0183f267a"
-        ])
+        r = self.run_rollback_safety_helper(sb, "cleanup_quarantine_for_rollback")
         stderr = r.stderr.decode("utf-8", "replace")
         self.assertEqual(r.returncode, 1)
         self.assertIn("READBACK_VERIFICATION_FAILED", stderr)
@@ -896,27 +1488,230 @@ exec "$@"
             self.assertNotIn("docker compose up", actions)
 
     def test_negative_6_container_stop_failure(self):
-        # Case A: Stop command failure
-        sb_a = self.create_rollback_sandbox(extra_env={"MOCK_STOP_FAIL": "1"})
-        r_a = self.run_rollback(sb_a, [
-            "--compose-file", to_bash_path(sb_a["compose_file"]),
-            "--env-file", to_bash_path(sb_a["env_file"]),
-            "0183f267a"
-        ])
+        # Case A: Stop command failure (with authorized preflight)
+        sb_a = self.create_rollback_sandbox(extra_env={
+            "EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION": "1",
+            "MOCK_STOP_FAIL": "1"
+        })
+        r_a = self.run_rollback_safety_helper(sb_a, "stop_services_fail_closed")
         stderr_a = r_a.stderr.decode("utf-8", "replace")
         self.assertEqual(r_a.returncode, 1)
         self.assertIn("CONTAINER_STOP_FAILED", stderr_a)
 
-        # Case B: Container fails to reach exited state
-        sb_b = self.create_rollback_sandbox(extra_env={"MOCK_CONTAINER_NOT_EXITED": "1"})
-        r_b = self.run_rollback(sb_b, [
-            "--compose-file", to_bash_path(sb_b["compose_file"]),
-            "--env-file", to_bash_path(sb_b["env_file"]),
-            "0183f267a"
-        ])
+        # Case B: Container fails to reach exited state (with authorized preflight)
+        sb_b = self.create_rollback_sandbox(extra_env={
+            "EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION": "1",
+            "MOCK_CONTAINER_NOT_EXITED": "1"
+        })
+        r_b = self.run_rollback_safety_helper(sb_b, "stop_services_fail_closed")
         stderr_b = r_b.stderr.decode("utf-8", "replace")
         self.assertEqual(r_b.returncode, 1)
         self.assertIn("FENCING_FAILED", stderr_b)
+
+    def test_negative_1_immutable_legacy_unauthorized(self):
+        self.seed_quarantine_record(execution_id=506, task_id="task_imm_leg_unauth")
+        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_pre.stdout.decode())
+
+        sb = self.create_rollback_sandbox()
+        sb["env"].pop("EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION", None)
+        receipt = self.create_receipt_fixture(sb, git_sha="0183f267a")
+
+        r = self.run_rollback(sb, [
+            "--receipt", to_bash_path(receipt),
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"])
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("LEGACY_TARGET_BARRIER_UNSUPPORTED", stderr)
+
+        # Table must remain INTACT
+        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_post.stdout.decode())
+
+        # Failed preflight must cause ZERO stop/rm/pull/up/checkout/TRUNCATE in immutable path
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
+            self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
+
+    def test_negative_2_immutable_unknown_capability(self):
+        sb = self.create_rollback_sandbox()
+        ledger_path = sb["dir"] / "backups" / "release-ledger.json"
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text('["unknown_nonexistent_sha_99999"]', encoding="utf-8")
+        receipt = self.create_receipt_fixture(sb, git_sha="unknown_nonexistent_sha_99999")
+
+        r = self.run_rollback(sb, [
+            "--receipt", to_bash_path(receipt),
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"])
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("TARGET_CAPABILITY_UNKNOWN", stderr)
+
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
+            self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
+
+    def test_negative_7_preflight_db_inspection_failure(self):
+        self.seed_quarantine_record(execution_id=507, task_id="task_preflight_db_fail")
+        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_pre.stdout.decode())
+
+        sb = self.create_rollback_sandbox(extra_env={
+            "EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION": "1",
+            "SIMULATE_PREFLIGHT_DB_INSPECTION_FAILURE": "1"
+        })
+
+        r = self.run_rollback(sb, [
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"]),
+            "0183f267a"
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("QUARANTINE_REVOCATION_PREFLIGHT_FAILED", stderr)
+
+        # Table must remain INTACT
+        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_post.stdout.decode())
+
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
+            self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
+
+    def test_negative_8_backup_dir_preflight_failure_mutable_path(self):
+        self.seed_quarantine_record(execution_id=508, task_id="task_preflight_backup_fail_mut")
+        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_pre.stdout.decode())
+
+        sb = self.create_rollback_sandbox(extra_env={
+            "EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION": "1",
+            "SIMULATE_PREFLIGHT_BACKUP_DIR_FAILURE": "1"
+        })
+
+        r = self.run_rollback(sb, [
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"]),
+            "0183f267a"
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("QUARANTINE_REVOCATION_PREFLIGHT_FAILED", stderr)
+
+        # Table must remain INTACT (zero TRUNCATE)
+        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_post.stdout.decode())
+
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
+            self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
+
+    def test_negative_8_backup_dir_preflight_failure_immutable_path(self):
+        self.seed_quarantine_record(execution_id=509, task_id="task_preflight_backup_fail_imm")
+        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_pre.stdout.decode())
+
+        sb = self.create_rollback_sandbox(extra_env={
+            "EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION": "1",
+            "SIMULATE_PREFLIGHT_BACKUP_DIR_FAILURE": "1"
+        })
+        receipt = self.create_receipt_fixture(sb, git_sha="0183f267a")
+
+        r = self.run_rollback(sb, [
+            "--receipt", to_bash_path(receipt),
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"])
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("QUARANTINE_REVOCATION_PREFLIGHT_FAILED", stderr)
+
+        # Table must remain INTACT (zero TRUNCATE)
+        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_post.stdout.decode())
+
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
+            self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
+
+    def test_negative_rollback_receipt_manifest_identity_mismatch_zero_stop(self):
+        self.seed_quarantine_record(execution_id=510, task_id="task_identity_mismatch")
+        count_pre = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_pre.stdout.decode())
+
+        sb = self.create_rollback_sandbox(extra_env={"MOCK_STOP_FAIL": "1"})
+
+        # Parent reproduction:
+        # Receipt SHA: 79a3d7cf493453adbcdc03234b62fc5f099f776a
+        # Manifest SHA: 0183f267a3faa63e9dec0c14d871ad136fcfe779
+        # Rehashed receipt manifest hash
+        manifest_path = sb["dir"] / "rollback-manifest.json"
+        manifest_dict = {
+            "git_sha": "0183f267a3faa63e9dec0c14d871ad136fcfe779",
+            "image": "ghcr.io/lmxchyy/zhiqiyun-ai",
+            "digest": sb["expected_ref"].split("@")[1],
+            "image_reference": sb["expected_ref"]
+        }
+        manifest_bytes = json.dumps(manifest_dict, sort_keys=True).encode("utf-8")
+        manifest_path.write_bytes(manifest_bytes)
+        manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+
+        receipt_path = sb["dir"] / "rollback-receipt.json"
+        receipt_dict = {
+            "receipt_version": "1.0",
+            "previous_git_sha": "79a3d7cf493453adbcdc03234b62fc5f099f776a",
+            "previous_image_reference": sb["expected_ref"],
+            "previous_image_id": sb["expected_image_id"],
+            "rollback_manifest_path": to_bash_path(manifest_path),
+            "rollback_manifest_sha256": manifest_hash
+        }
+        receipt_path.write_text(json.dumps(receipt_dict, indent=2), encoding="utf-8")
+
+        r = self.run_rollback(sb, [
+            "--receipt", to_bash_path(receipt_path),
+            "--compose-file", to_bash_path(sb["compose_file"]),
+            "--env-file", to_bash_path(sb["env_file"])
+        ])
+        stderr = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ROLLBACK_IDENTITY_MISMATCH", stderr)
+        self.assertNotIn("CONTAINER_STOP_FAILED", stderr)
+
+        # Table must remain INTACT
+        count_post = self.psql("SELECT count(*) FROM provider_execution_quarantine;")
+        self.assertIn("1", count_post.stdout.decode())
+
+        # STOP invocation count must be EXACTLY 0
+        if sb["action_log"].exists():
+            actions = sb["action_log"].read_text(encoding="utf-8")
+            self.assertNotIn("docker compose stop", actions)
+            self.assertNotIn("docker compose rm", actions)
+            self.assertNotIn("docker compose pull", actions)
+            self.assertNotIn("docker compose up", actions)
+            self.assertNotIn("git checkout", actions)
 
 
 if __name__ == "__main__":

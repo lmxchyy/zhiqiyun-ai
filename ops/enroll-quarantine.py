@@ -31,6 +31,13 @@ live_snapshot.__file__ = _snapshot_path
 with open(_snapshot_path, 'rb') as _source:
     exec(compile(_source.read(), _snapshot_path, 'exec'), live_snapshot.__dict__)
 
+# Shared source-only psql transport; included in the verified Prestage proof.
+_transport_path = os.path.join(os.path.dirname(__file__), 'quarantine-psql-transport.py')
+transport = types.ModuleType('quarantine_psql_transport')
+transport.__file__ = _transport_path
+with open(_transport_path, 'rb') as _source:
+    exec(compile(_source.read(), _transport_path, 'exec'), transport.__dict__)
+
 class EnrollmentError(Exception):
     pass
 
@@ -63,50 +70,6 @@ def parse_iso8601_utc(ts_str):
     )
     return dt.astimezone(datetime.timezone.utc)
 
-def get_psql_cmd(compose_file, env_file):
-    test_container = os.environ.get("XIANZHI_TEST_CONTAINER")
-    if test_container:
-        cmd = ["docker", "exec", "-i"]
-        pw = os.environ.get("POSTGRES_PASSWORD")
-        if pw:
-            cmd.extend(["-e", f"PGPASSWORD={pw}"])
-        cmd.extend([test_container, "psql", "-X", "-U", os.environ.get("POSTGRES_USER", "postgres"),
-                    "-d", os.environ.get("POSTGRES_DB", "postgres"), "-v", "ON_ERROR_STOP=1", "-t", "-A"])
-        return cmd
-
-    env_vars = {}
-    if os.path.isfile(env_file):
-        with open(env_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env_vars[k.strip()] = v.strip().strip("'\"")
-
-    db_user = os.environ.get("POSTGRES_USER") or env_vars.get("POSTGRES_USER", "xianzhi_prod")
-    db_name = os.environ.get("POSTGRES_DB") or env_vars.get("POSTGRES_DB", "xianzhi")
-    db_pass = os.environ.get("POSTGRES_PASSWORD") or env_vars.get("POSTGRES_PASSWORD", "")
-
-    cmd = ["docker", "compose", "-f", compose_file, "--env-file", env_file, "exec", "-T"]
-    if db_pass:
-        cmd.extend(["-e", f"PGPASSWORD={db_pass}"])
-    cmd.extend(["postgres", "psql", "-X", "-U", db_user, "-d", db_name, "-v", "ON_ERROR_STOP=1", "-t", "-A"])
-    return cmd
-
-def run_psql(cmd, sql_input):
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-    stdout, stderr = proc.communicate(input=sql_input.encode("utf-8"))
-    if proc.returncode != 0:
-        err_msg = stderr.decode("utf-8", "replace").strip()
-        err_clean = re.sub(r'password=[^\s]+', 'password=[REDACTED]', err_msg, flags=re.I)
-        fail(f"PSQL execution failed (code {proc.returncode}): {err_clean}")
-    return stdout.decode("utf-8", "replace").strip()
-
 def build_enrollment_sql(executions):
     """Transport/legacy constraints only; NOT production enrollment authorization.
 
@@ -129,19 +92,19 @@ COPY _import (data) FROM STDIN;
 
 BEGIN ISOLATION LEVEL REPEATABLE READ;
 
--- Lock provider_executions rows
-SELECT e.id FROM provider_executions e
-JOIN (
-  SELECT (rec).execution_id
-  FROM _import, LATERAL jsonb_to_record(data) AS rec(execution_id bigint)
-) m ON e.id = m.execution_id ORDER BY e.id FOR UPDATE;
-
 -- Lock xz_generation_tasks rows
 SELECT t.id FROM xz_generation_tasks t
 JOIN (
   SELECT (rec).task_id
   FROM _import, LATERAL jsonb_to_record(data) AS rec(task_id text)
 ) m ON t.id = m.task_id ORDER BY t.id FOR UPDATE;
+
+-- Lock provider_executions rows
+SELECT e.id FROM provider_executions e
+JOIN (
+  SELECT (rec).execution_id
+  FROM _import, LATERAL jsonb_to_record(data) AS rec(execution_id bigint)
+) m ON e.id = m.execution_id ORDER BY e.id FOR UPDATE;
 
 -- Validate live DB state under lock
 DO $$
@@ -258,37 +221,106 @@ COMMIT;
     return enroll_sql
 
 
-def get_db_connection(compose_file=None, env_file=None):
+def get_db_connection(compose_file, env_file, proof_path, release_sha):
+    return transport.Target(compose_file, env_file, proof_path, release_sha).connect()
+
+
+def is_pid_alive(pid):
+    if pid <= 0:
+        return False
     try:
-        import psycopg2
-    except ImportError:
-        return None
+        os.kill(pid, 0)
+        return True
+    except OSError as err:
+        import errno
+        return err.errno == errno.EPERM
 
-    env_vars = {}
-    if env_file and os.path.isfile(env_file):
-        with open(env_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env_vars[k.strip()] = v.strip().strip("'\"")
 
-    host = os.environ.get("POSTGRES_HOST") or env_vars.get("POSTGRES_HOST") or "127.0.0.1"
-    port = int(os.environ.get("POSTGRES_PORT") or env_vars.get("POSTGRES_PORT") or 5432)
-    user = os.environ.get("POSTGRES_USER") or env_vars.get("POSTGRES_USER") or "postgres"
-    password = os.environ.get("POSTGRES_PASSWORD") or env_vars.get("POSTGRES_PASSWORD") or ""
-    dbname = os.environ.get("POSTGRES_DB") or env_vars.get("POSTGRES_DB") or "xianzhi"
+def verify_release_lock(release_lock_dir, expected_release_sha, expected_owner_token=None):
+    if not release_lock_dir:
+        fail("RELEASE_LOCK_DIR_REQUIRED: release lock directory must be specified")
+    lock_path = os.path.abspath(release_lock_dir)
+    if not os.path.isdir(lock_path):
+        fail(f"RELEASE_LOCK_MISSING: release lock directory does not exist: {lock_path}")
 
+    # Check for .recovering lock
+    clean_lock_path = lock_path.rstrip('/\\')
+    recovering_path = clean_lock_path + ".recovering"
+    if os.path.exists(recovering_path):
+        fail(f"RELEASE_LOCK_RECOVERING: recovery lock present at {recovering_path}")
+
+    # Check owner_pid
+    pid_file = os.path.join(lock_path, "owner_pid")
+    if not os.path.isfile(pid_file):
+        fail(f"RELEASE_LOCK_INVALID: owner_pid file missing in {lock_path}")
     try:
-        conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
-        return conn
-    except Exception:
-        return None
+        with open(pid_file, "r") as f:
+            pid_str = f.read().strip()
+        owner_pid = int(pid_str)
+    except Exception as e:
+        fail(f"RELEASE_LOCK_INVALID: invalid owner_pid ({e})")
+    if not is_pid_alive(owner_pid):
+        fail(f"RELEASE_LOCK_OWNER_DEAD: owner_pid {owner_pid} is not alive")
+
+    # Check owner_token
+    token_file = os.path.join(lock_path, "owner_token")
+    if not os.path.isfile(token_file):
+        fail(f"RELEASE_LOCK_INVALID: owner_token file missing in {lock_path}")
+    with open(token_file, "r") as f:
+        token_in_file = f.read().strip()
+    if not token_in_file:
+        fail(f"RELEASE_LOCK_INVALID: owner_token is empty in {lock_path}")
+
+    expected_token = expected_owner_token or os.environ.get("OWNER_TOKEN")
+    if expected_token and token_in_file != expected_token.strip():
+        fail(f"RELEASE_LOCK_TOKEN_MISMATCH: token in lock {token_in_file!r} does not match expected {expected_token!r}")
+
+    # Check release_sha
+    sha_file = os.path.join(lock_path, "release_sha")
+    if not os.path.isfile(sha_file):
+        fail(f"RELEASE_LOCK_INVALID: release_sha file missing in {lock_path}")
+    with open(sha_file, "r") as f:
+        sha_in_file = f.read().strip()
+    if sha_in_file.lower() != expected_release_sha.lower():
+        fail(f"RELEASE_LOCK_SHA_MISMATCH: release_sha in lock {sha_in_file} does not match {expected_release_sha}")
+
+
+def verify_business_containers_stopped(compose_file, env_file, execute=None):
+    """Verifies xianzhi-ai and smartvideo-worker are STOPPED (status exited, no running container)."""
+    if execute is None:
+        def _default_exec(cmd):
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            if res.returncode != 0:
+                fail(f"CONTAINER_INSPECTION_FAILED: command {' '.join(cmd)} exited {res.returncode}: {res.stderr}")
+            return res.stdout.strip()
+        execute = _default_exec
+
+    base_cmd = ["docker", "compose", "-f", compose_file, "--env-file", env_file]
+
+    # Check 1: no running containers
+    ps_running = execute(base_cmd + ["ps", "--status", "running", "-q", "xianzhi-ai", "smartvideo-worker"])
+    if ps_running and ps_running.strip():
+        fail(f"ZERO_BUSINESS_WINDOW_VIOLATION: running business containers detected: {ps_running.strip()}")
+
+    # Check 2: all existing containers for xianzhi-ai and smartvideo-worker must be exited
+    for svc in ("xianzhi-ai", "smartvideo-worker"):
+        cids_raw = execute(base_cmd + ["ps", "-a", "-q", svc])
+        cids = [cid.strip() for cid in cids_raw.split() if cid.strip()]
+        for cid in cids:
+            status = execute(["docker", "inspect", "--format", "{{.State.Status}}", cid]).strip().lower()
+            if status != "exited":
+                fail(f"ZERO_BUSINESS_WINDOW_VIOLATION: container {cid} for {svc} has status {status!r}, expected 'exited'")
 
 
 def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
                                     expected_manifest_sha256=None,
-                                    readback_tamper_hook=None):
+                                    readback_tamper_hook=None,
+                                    release_lock_dir=None,
+                                    compose_file=None,
+                                    env_file=None,
+                                    expected_owner_token=None,
+                                    docker_executor=None,
+                                    phase2_hook=None):
     """Atomic enrollment on a single database transaction cursor.
 
     Acquires row-level locks, validates live DB state against approved manifest,
@@ -318,16 +350,8 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
     eids = [item["execution_id"] for item in executions]
     tids = [item["task_id"] for item in executions]
 
-    # 1. Acquire row-level locks FOR UPDATE in stable order
-    cursor.execute(
-        "SELECT id, task_id, attempt, task_execution_generation FROM public.provider_executions "
-        "WHERE id = ANY(%s) ORDER BY id FOR UPDATE;",
-        (eids,)
-    )
-    locked_e = cursor.fetchall()
-    if len(locked_e) != len(eids):
-        fail("EXECUTION_LOCK_FAILED: not all execution rows locked for update")
-
+    # 1. Acquire row-level locks FOR UPDATE in stable order:
+    # Anchor on xz_generation_tasks FIRST, then provider_executions.
     cursor.execute(
         "SELECT id, status, task_status, lease_until, worker_id FROM public.xz_generation_tasks "
         "WHERE id = ANY(%s) ORDER BY id FOR UPDATE;",
@@ -337,6 +361,15 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
     if len(locked_t) != len(set(tids)):
         fail("TASK_LOCK_FAILED: not all generation task rows locked for update")
 
+    cursor.execute(
+        "SELECT id, task_id, attempt, task_execution_generation FROM public.provider_executions "
+        "WHERE id = ANY(%s) ORDER BY id FOR UPDATE;",
+        (eids,)
+    )
+    locked_e = cursor.fetchall()
+    if len(locked_e) != len(eids):
+        fail("EXECUTION_LOCK_FAILED: not all execution rows locked for update")
+
     # 2. Execute live snapshot validation on this same transaction cursor
     try:
         manifest = live_snapshot.validate_live_snapshot_in_transaction(
@@ -345,9 +378,16 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
     except live_snapshot.SnapshotError as err:
         fail(f"LIVE_SNAPSHOT_VALIDATION_FAILED: {err}")
     except Exception as err:
-        fail(f"LIVE_SNAPSHOT_VALIDATION_FAILED: {err}")
+        fail("LIVE_SNAPSHOT_VALIDATION_FAILED")
 
-    # 3. Check DB clock_timestamp() within not_before..expires_at for each execution
+    # 3. Phase 2 verification: release lock and zero-business-window under row locks
+    if phase2_hook is not None:
+        phase2_hook()
+    elif release_lock_dir and compose_file and env_file:
+        verify_release_lock(release_lock_dir, release_sha, expected_owner_token)
+        verify_business_containers_stopped(compose_file, env_file, execute=docker_executor)
+
+    # 4. Check DB clock_timestamp() within not_before..expires_at for each execution
     for item in executions:
         cursor.execute(
             "SELECT clock_timestamp() >= %s::timestamptz AND clock_timestamp() < %s::timestamptz;",
@@ -357,7 +397,7 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
         if not clock_ok or clock_ok[0] is not True:
             fail(f"CLOCK_WINDOW_MISMATCH: DB clock outside not_before..expires_at for execution {item['execution_id']}")
 
-    # 4. Verify table and immutable trigger exist
+    # 5. Verify table and immutable trigger exist
     cursor.execute("""
     SELECT (
       SELECT to_regclass('public.provider_execution_quarantine') IS NOT NULL
@@ -371,7 +411,7 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
     if not ddl_ok or ddl_ok[0] is not True:
         fail("provider_execution_quarantine table or immutable trigger is missing")
 
-    # 5. INSERT all 10 columns into provider_execution_quarantine
+    # 6. INSERT all 10 columns into provider_execution_quarantine
     insert_sql = """
     INSERT INTO public.provider_execution_quarantine (
         execution_id, task_id, attempt, generation,
@@ -393,7 +433,7 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
             item["expires_at"],
         ))
 
-    # 6. Read back all 10 columns within SAME transaction BEFORE COMMIT
+    # 7. Read back all 10 columns within SAME transaction BEFORE COMMIT
     readback_sql = """
     SELECT execution_id, task_id, attempt, generation,
            snapshot_sha256, evidence_sha256, approval_id, release_sha,
@@ -446,14 +486,23 @@ def enroll_quarantine_in_transaction(cursor, raw_bytes, release_sha,
 
 def enroll_quarantine(conn, raw_bytes, release_sha,
                       expected_manifest_sha256=None,
-                      readback_tamper_hook=None):
+                      readback_tamper_hook=None,
+                      release_lock_dir=None,
+                      compose_file=None,
+                      env_file=None,
+                      expected_owner_token=None,
+                      docker_executor=None,
+                      phase2_hook=None):
     """Executes atomic enrollment on database connection with transaction boundaries."""
     conn.autocommit = True
     cursor = conn.cursor()
     cursor.execute("BEGIN ISOLATION LEVEL REPEATABLE READ;")
     try:
         count = enroll_quarantine_in_transaction(
-            cursor, raw_bytes, release_sha, expected_manifest_sha256, readback_tamper_hook
+            cursor, raw_bytes, release_sha, expected_manifest_sha256, readback_tamper_hook,
+            release_lock_dir=release_lock_dir, compose_file=compose_file, env_file=env_file,
+            expected_owner_token=expected_owner_token, docker_executor=docker_executor,
+            phase2_hook=phase2_hook
         )
         cursor.execute("COMMIT;")
         return count
@@ -472,14 +521,45 @@ def enroll_quarantine(conn, raw_bytes, release_sha,
 
 def main():
     expected_manifest_sha256 = None
+    proof_path = None
+    release_lock_dir = None
+    owner_token = None
+    pos_args = []
+
     args = sys.argv[1:]
-    if len(args) == 4:
-        compose_file, env_file, manifest_path, expected_release_sha = args
-    elif len(args) == 6 and args[4] == "--expected-manifest-sha256":
-        compose_file, env_file, manifest_path, expected_release_sha = args[:4]
-        expected_manifest_sha256 = args[5]
-    else:
-        fail("Usage: enroll-quarantine.py <compose_file> <env_file> <manifest_path> <expected_release_sha> [--expected-manifest-sha256 <sha>]")
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == '--prestage-proof':
+            if i + 1 >= len(args):
+                fail("--prestage-proof requires an argument")
+            proof_path = args[i + 1]
+            i += 2
+        elif arg == '--expected-manifest-sha256':
+            if i + 1 >= len(args):
+                fail("--expected-manifest-sha256 requires an argument")
+            expected_manifest_sha256 = args[i + 1]
+            i += 2
+        elif arg == '--release-lock-dir':
+            if i + 1 >= len(args):
+                fail("--release-lock-dir requires an argument")
+            release_lock_dir = args[i + 1]
+            i += 2
+        elif arg == '--owner-token':
+            if i + 1 >= len(args):
+                fail("--owner-token requires an argument")
+            owner_token = args[i + 1]
+            i += 2
+        elif arg.startswith('--'):
+            fail(f"Unknown argument: {arg}")
+        else:
+            pos_args.append(arg)
+            i += 1
+
+    if len(pos_args) != 4:
+        fail("Usage: enroll-quarantine.py <compose_file> <env_file> <manifest_path> <expected_release_sha> --release-lock-dir <lock_dir> [--expected-manifest-sha256 <sha>] [--prestage-proof <proof>]")
+
+    compose_file, env_file, manifest_path, expected_release_sha = pos_args
 
     if not os.path.isfile(manifest_path):
         fail("Quarantine manifest input missing")
@@ -509,12 +589,26 @@ def main():
     except approval.ApprovalError as error:
         fail(str(error))
 
-    # Attempt atomic enrollment on DB connection via safe psycopg2
-    conn = get_db_connection(compose_file, env_file)
-    if conn is None:
-        fail("Direct database connection required for canonical live snapshot enrollment; unvalidated fallback is disabled.")
+    if not release_lock_dir:
+        fail("RELEASE_LOCK_DIR_REQUIRED: enroll-quarantine.py cannot be run as an uncoordinated standalone tool without release lock.")
+
+    # Phase 1: verify release lock and business containers stopped BEFORE opening DB connection
+    verify_release_lock(release_lock_dir, expected_release_sha, owner_token)
+    verify_business_containers_stopped(compose_file, env_file)
+
+    if proof_path is None:
+        fail('verified --prestage-proof is required')
+    # ONE explicit read/write transaction, not independent read-only sampling.
+    conn = get_db_connection(compose_file, env_file, proof_path, expected_release_sha)
     try:
-        count = enroll_quarantine(conn, raw_bytes, expected_release_sha, expected_manifest_sha256)
+        count = enroll_quarantine(
+            conn, raw_bytes, expected_release_sha,
+            expected_manifest_sha256=expected_manifest_sha256,
+            release_lock_dir=release_lock_dir,
+            compose_file=compose_file,
+            env_file=env_file,
+            expected_owner_token=owner_token,
+        )
         print(f"[deploy] Quarantine enrollment verified for {count} executions (Release SHA: {release_sha}).")
         return 0
     finally:
@@ -527,4 +621,7 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except EnrollmentError:
+        sys.exit(1)
+    except Exception:
+        sys.stderr.write('[deploy] ERROR: QUARANTINE_ENROLLMENT_FAILED: database transport failed\n')
         sys.exit(1)

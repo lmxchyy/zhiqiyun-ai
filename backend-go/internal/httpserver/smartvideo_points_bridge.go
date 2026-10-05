@@ -20,7 +20,7 @@ func (a personalPointLedgerAdapter) Reserve(ctx context.Context, accountID, user
 	}
 	result, err := a.service.Reserve(ctx, PersonalPointReserveCommand{
 		AccountID: accountID, UserID: userID, BusinessType: businessType, BusinessID: businessID,
-		RequestedPoints: points, IdempotencyKey: idempotencyKey,
+		QuarantineTaskID: businessID, RequestedPoints: points, IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return "", err

@@ -238,6 +238,8 @@ required_scripts = {
     "ops/verify-release-runtime.py", "ops/verify-safe-drain.py", "ops/enroll-quarantine.py",
     "ops/quarantine-approval.py",
     "ops/quarantine-live-snapshot.py",
+    "ops/quarantine-psql-transport.py",
+    "ops/verify-image-quarantine-capability.py",
 }
 if not isinstance(scripts_hash, dict) or not required_scripts.issubset(scripts_hash):
     fail("PROTECTED_FILE_MISSING: deploy_scripts_hash omits required deployment helpers")
@@ -249,6 +251,21 @@ for script_name, expected_script_hash in scripts_hash.items():
         actual_script_hash = hashlib.sha256(sf.read()).hexdigest()
     if actual_script_hash != expected_script_hash:
         fail(f"DEPLOY_SCRIPT_TAMPERED: {script_name} hash mismatch (expected {expected_script_hash}, got {actual_script_hash})")
+
+# Execute the transport helper only AFTER its source hash was checked above.
+# Legacy proofs remain readable but cannot authorize a transport connection.
+if 'postgres_transport_binding' in proof:
+    import types
+    transport_path = 'ops/quarantine-psql-transport.py'
+    transport = types.ModuleType('quarantine_transport')
+    transport.__file__ = os.path.abspath(transport_path)
+    with open(transport_path, 'rb') as stream:
+        exec(compile(stream.read(), transport_path, 'exec'), transport.__dict__)
+    try:
+        if transport.binding(compose_file, env_file, proof.get('image_reference')) != proof['postgres_transport_binding']:
+            fail('POSTGRES_TARGET_CHANGED: restage required')
+    except Exception:
+        fail('POSTGRES_TARGET_INVALID: running bound singleton required')
 
 # 11. Check release manifest hash (Fail Closed)
 manifest_path = proof.get("manifest_path")
@@ -302,6 +319,25 @@ if expected_local_id:
             fail(f"LOCAL_IMAGE_MISMATCH: docker image ID mismatch (expected {expected_local_id}, got {actual_local_id})")
     except Exception as e:
         fail(f"LOCAL_IMAGE_MISMATCH: cannot inspect local image {image_reference}: {e}")
+
+# Source-only execution AFTER helper bytes and signature verification. Offline
+# identity recheck only: expired/missing behavior means restage, never refresh.
+capability_path = 'ops/verify-image-quarantine-capability.py'
+import types
+capability = types.ModuleType('quarantine_capability')
+capability.__file__ = os.path.abspath(capability_path)
+with open(capability_path, 'rb') as stream:
+    exec(compile(stream.read(), capability_path, 'exec'), capability.__dict__)
+try:
+    policy = capability.runtime_policy(actual_compose_data)
+    actual_id = capability.verify(proof.get('runtime_capability'), image_reference, proof_sha, policy)
+    if not expected_local_id or actual_id != expected_local_id:
+        fail('LOCAL_IMAGE_MISMATCH: capability requires pinned local image ID')
+    rollback_id = capability.verify(proof.get('rollback_runtime_capability'), prev_ref, receipt_data.get('previous_git_sha'), policy)
+    if rollback_id != prev_id:
+        fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH')
+except Exception:
+    fail('RUNTIME_CAPABILITY_INVALID: restage before stop required')
 
 # 14. Check GitHub official provenance
 gov = proof.get("github_provenance")

@@ -23,9 +23,10 @@ COPY backend-go/go.mod backend-go/go.sum ./
 ENV GOPROXY=https://goproxy.cn,direct
 RUN for i in 1 2 3 4 5; do go mod download && exit 0; echo "go mod download failed, retrying in 5s ($i/5)"; sleep 5; done; go mod download
 COPY backend-go ./
-RUN go build -o /out/xianzhi-api ./cmd/api
+ARG RELEASE_SHA
+RUN go build -ldflags "-X xianzhi-ai/backend-go/internal/httpserver.CapabilityReleaseSHA=$RELEASE_SHA" -o /out/xianzhi-api ./cmd/api
 RUN go build -o /out/smartvideo-worker ./cmd/smartvideo-worker
-RUN go build -o /out/generation-worker ./cmd/generation-worker
+RUN go build -ldflags "-X xianzhi-ai/backend-go/internal/httpserver.CapabilityReleaseSHA=$RELEASE_SHA" -o /out/generation-worker ./cmd/generation-worker
 RUN go build -o /out/video-backfill ./cmd/video-backfill
 
 FROM alpine:3.20

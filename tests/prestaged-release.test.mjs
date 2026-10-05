@@ -127,6 +127,7 @@ async function setupSandbox(options = {}) {
   await copyFile(new URL("ops/enroll-quarantine.py", root), join(opsDir, "enroll-quarantine.py"));
   await copyFile(new URL("ops/quarantine-approval.py", root), join(opsDir, "quarantine-approval.py"));
   await copyFile(new URL("ops/quarantine-live-snapshot.py", root), join(opsDir, "quarantine-live-snapshot.py"));
+  await copyFile(new URL("ops/quarantine-psql-transport.py", root), join(opsDir, "quarantine-psql-transport.py"));
   await copyFile(new URL("database/migrations/121-provider-execution-quarantine.sql", root), join(migrationsDir, "121-provider-execution-quarantine.sql"));
 
   await chmod(join(dir, "deploy.sh"), 0o755);
@@ -302,7 +303,7 @@ if [ "$1" = "compose" ]; then
         RESOLVED_REF="\${RESOLVED_REF:-${PREV_IMAGE_REF}}"
         MIG_FILES="\${MIGRATION_FILES:-001-init.sql}"
         if printf '%s\n' "$@" | grep -q '^json$'; then
-          printf '{"services":{"xianzhi-ai":{"image":"%s","environment":{"VIDEO_STORAGE_PERSISTENCE_ENABLED":"true","MIGRATION_FILES":"%s"},"volumes":[{"target":"/app/data"}]},"smartvideo-worker":{"image":"%s","environment":{"VIDEO_STORAGE_PERSISTENCE_ENABLED":"true"},"volumes":[{"target":"/tmp/smartvideo"}]},"migrate":{"image":"postgres:16-alpine","environment":{"MIGRATION_FILES":"%s"}}},"volumes":{"app-data":{},"smartvideo-tmp":{}}}\n' "$RESOLVED_REF" "$MIG_FILES" "$RESOLVED_REF" "$MIG_FILES" | python3 -c 'import json,os,sys;d=json.load(sys.stdin);d["services"]["xianzhi-ai"]["environment"].update({k:os.environ[k] for k in ["DATABASE_URL","RABBITMQ_URL","GENERATION_ASYNC_CANARY_USERS","S3_BUCKET","S3_REGION","OBS_PREFIX"] if k in os.environ});print(json.dumps(d))'
+          printf '{"services":{"xianzhi-ai":{"image":"%s","environment":{"VIDEO_STORAGE_PERSISTENCE_ENABLED":"true","MIGRATION_FILES":"%s"},"volumes":[{"target":"/app/data"}]},"smartvideo-worker":{"image":"%s","environment":{"VIDEO_STORAGE_PERSISTENCE_ENABLED":"true"},"volumes":[{"target":"/tmp/smartvideo"}]},"migrate":{"image":"postgres:16-alpine","environment":{"MIGRATION_FILES":"%s"}}},"volumes":{"app-data":{},"smartvideo-tmp":{}}}\n' "$RESOLVED_REF" "$MIG_FILES" "$RESOLVED_REF" "$MIG_FILES" | python3 -c 'import json,os,sys;d=json.load(sys.stdin);d["name"]="mock-project";d["services"]["postgres"]={"image":"postgres:16-alpine","environment":{"POSTGRES_USER":"postgres","POSTGRES_DB":"xianzhi","POSTGRES_PASSWORD":"super_secret_pw"}};d["services"]["xianzhi-ai"]["environment"].update({k:os.environ[k] for k in ["DATABASE_URL","RABBITMQ_URL","GENERATION_ASYNC_CANARY_USERS","S3_BUCKET","S3_REGION","OBS_PREFIX"] if k in os.environ});print(json.dumps(d))'
         else
           cat << EOF
 services:
@@ -343,6 +344,10 @@ EOF
         exit 0
         ;;
       ps)
+        if printf '%s\\n' "$@" | grep -Fqx 'postgres'; then
+          printf '%064d\\n' 1
+          exit 0
+        fi
         if [ "\${MOCK_POSTSTOP_PS_FAIL:-0}" = "1" ] && [ -f "$STATE_DIR/.mock_docker_stopped" ]; then exit 42; fi
         if [ "\${MOCK_DRAIN_PS_FAIL:-0}" = "1" ]; then
           echo "Error: docker compose ps command failed" >&2
@@ -490,7 +495,35 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
   exit 0
 fi
 
+if [ "$1" = "ps" ]; then
+  printf '%064d\\n' 1
+  exit 0
+fi
+
+# Interactive framed psql mock: real Docker transport coverage lives in the
+# UUID-owned Python3.6/PG suite, not in this release sequencing fixture.
+if [ "$1" = "exec" ] && [ "$2" = "-i" ]; then
+  if [ "\${MOCK_DRAIN_DB_FAIL:-0}" = "1" ]; then exit 42; fi
+  exec python3 -u -c '
+import json,os,sys
+statement=""
+for line in sys.stdin:
+ if line.startswith(chr(92)+"echo END_"):
+  token=line.strip().split("END_",1)[1]
+  selected="WITH transport_rows" in statement
+  rows=[[str(int(os.environ.get("MOCK_ACTIVE_LEASE","0")))]] if selected else []
+  print(json.dumps(dict(token=token,rows=rows,count=len(rows),columns=1 if rows else 0,types=[20] if rows else [])),flush=True)
+  print("END_"+token,flush=True)
+  statement=""
+ else: statement+=line
+'
+fi
+
 if [ "$1" = "inspect" ]; then
+  if [ "$2" = "$(printf '%064d' 1)" ]; then
+    python3 -c 'import json;print(json.dumps([dict(Id="0"*63+"1",Image="sha256:mock-postgres",RestartCount=0,State=dict(Running=True,Paused=False,Restarting=False,StartedAt="fixed"),Config=dict(Image="postgres:16-alpine",Labels={"com.docker.compose.project":"mock-project","com.docker.compose.service":"postgres","com.docker.compose.oneoff":"False"},Env=["POSTGRES_USER=postgres","POSTGRES_DB=xianzhi","POSTGRES_PASSWORD=super_secret_pw"]))]))'
+    exit 0
+  fi
   if [ "\${MOCK_POSTSTOP_INSPECT_FAIL:-0}" = "1" ] && [ -f "$STATE_DIR/.mock_docker_stopped" ]; then exit 42; fi
   case "\${3:-}" in
     *Config.Image*)

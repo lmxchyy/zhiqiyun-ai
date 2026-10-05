@@ -25,6 +25,9 @@ func main() {
 }
 
 func run() error {
+	if handled, err := httpserver.DispatchQuarantineCapability(os.Args[1:], "api"); handled {
+		return err
+	}
 	cfg := config.Load()
 	if err := cfg.ValidateProduction(); err != nil {
 		return fmt.Errorf("invalid production config: %w", err)

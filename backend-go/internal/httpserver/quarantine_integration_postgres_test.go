@@ -5,12 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"xianzhi-ai/backend-go/internal/config"
 	"xianzhi-ai/backend-go/internal/app/generation"
+	smartvideoapp "xianzhi-ai/backend-go/internal/app/smartvideo"
+	"xianzhi-ai/backend-go/internal/config"
 	pe "xianzhi-ai/backend-go/internal/providerexecution"
 	storagecenter "xianzhi-ai/backend-go/internal/storage"
 )
@@ -340,6 +344,20 @@ func TestQuarantineBillingAndPersonalPointsBlocked(t *testing.T) {
 		t.Fatalf("grant initial points: %v", err)
 	}
 
+	// Seed a real generation reservation before quarantine so capture/release
+	// exercise the persisted BusinessID barrier, not only an idempotency key.
+	settlementTaskID := taskID + "-settlement"
+	reserved, err := pointStore.reserve(ctx, PersonalPointReserveCommand{
+		AccountID: accountID, UserID: userID, BusinessType: "IMAGE_GENERATION",
+		BusinessID: settlementTaskID, QuarantineTaskID: settlementTaskID,
+		RequestedPoints: 20, IdempotencyKey: "generation:reserve:" + settlementTaskID,
+	})
+	if err != nil {
+		t.Fatalf("seed normal generation reservation: %v", err)
+	}
+	_, settlementExecID := seedQuarantinedTaskAndExecution(t, db, settlementTaskID, userID)
+	defer cleanupQuarantinedTask(db, settlementTaskID, settlementExecID)
+
 	var availBefore, frozenBefore int64
 	if err := db.QueryRowContext(ctx, `SELECT available, frozen FROM xz_point_accounts WHERE id=$1`, accountID).Scan(&availBefore, &frozenBefore); err != nil {
 		t.Fatalf("query balance before: %v", err)
@@ -347,45 +365,54 @@ func TestQuarantineBillingAndPersonalPointsBlocked(t *testing.T) {
 	var ledgerCountBefore, resCountBefore int
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_wallet_ledger WHERE account_id=$1`, accountID).Scan(&ledgerCountBefore)
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM xz_personal_point_reservations WHERE account_id=$1`, accountID).Scan(&resCountBefore)
+	beforeReserve := snapshotQuarantineLedger(t, db, accountID, taskID)
+	beforeSettlement := snapshotQuarantineLedger(t, db, accountID, settlementTaskID)
 
 	// 1. reserve on quarantined point key / task must block with ErrQuarantined
 	reserveCmd := PersonalPointReserveCommand{
-		AccountID:       accountID,
-		UserID:          userID,
-		BusinessType:    "IMAGE_GENERATION",
-		BusinessID:      taskID,
-		RequestedPoints: 20,
-		IdempotencyKey:  "generation:reserve:" + taskID,
+		AccountID:        accountID,
+		UserID:           userID,
+		BusinessType:     "IMAGE_GENERATION",
+		BusinessID:       taskID,
+		QuarantineTaskID: taskID,
+		RequestedPoints:  20,
+		IdempotencyKey:   "generation:reserve:" + taskID,
 	}
 	_, resErr := pointStore.reserve(ctx, reserveCmd)
 	if !errors.Is(resErr, pe.ErrQuarantined) {
 		t.Fatalf("reserve expected ErrQuarantined, got %v", resErr)
 	}
+	if after := snapshotQuarantineLedger(t, db, accountID, taskID); after != beforeReserve {
+		t.Fatalf("quarantined generation reserve changed rows: before=%+v after=%+v", beforeReserve, after)
+	}
 
-	// 2. capture on quarantined point key must block with ErrQuarantined
+	// 2. capture on a valid reservation whose BusinessID is quarantined must block.
 	captureCmd := PersonalPointCaptureCommand{
 		AccountID:      accountID,
 		UserID:         userID,
-		ReservationID:  "dummy-res-id",
+		ReservationID:  reserved.Reservation.ID,
 		Points:         20,
-		IdempotencyKey: "generation:capture:" + taskID,
+		IdempotencyKey: "generation:capture:" + settlementTaskID,
 	}
 	_, capErr := pointStore.capture(ctx, captureCmd)
 	if !errors.Is(capErr, pe.ErrQuarantined) {
 		t.Fatalf("capture expected ErrQuarantined, got %v", capErr)
 	}
 
-	// 3. release on quarantined point key must block with ErrQuarantined
+	// 3. release on the same valid quarantined reservation must also block.
 	releaseCmd := PersonalPointReleaseCommand{
 		AccountID:      accountID,
 		UserID:         userID,
-		ReservationID:  "dummy-res-id",
+		ReservationID:  reserved.Reservation.ID,
 		Points:         20,
-		IdempotencyKey: "generation:release:" + taskID,
+		IdempotencyKey: "generation:release:" + settlementTaskID,
 	}
 	_, relErr := pointStore.release(ctx, releaseCmd)
 	if !errors.Is(relErr, pe.ErrQuarantined) {
 		t.Fatalf("release expected ErrQuarantined, got %v", relErr)
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, settlementTaskID); after != beforeSettlement {
+		t.Fatalf("quarantined generation capture/release changed rows: before=%+v after=%+v", beforeSettlement, after)
 	}
 
 	// Verify ZERO balance changes, 0 wallet mutations, 0 ledger rows
@@ -406,6 +433,186 @@ func TestQuarantineBillingAndPersonalPointsBlocked(t *testing.T) {
 	}
 	if resCountAfter != resCountBefore {
 		t.Fatalf("reservations mutated: before=%d after=%d", resCountBefore, resCountAfter)
+	}
+}
+
+type quarantineLedgerSnapshot struct {
+	Available, Frozen                                            int64
+	Lots, Reservations, Allocations                              int64
+	WalletEntries, Movements, AuditEntries, RecoveryAuditEntries int64
+	TaskRows, ExecutionRows, OutboxRows, Assets, BillingRows     int64
+	TaskStatus, BillingStatus, ExecutionStatus                   string
+	LotState, ReservationState, AllocationState                  string
+	WalletState, MovementState, PersonalAuditState               string
+	RecoveryAuditState, TaskState, ExecutionState                string
+	CorrelationState, OutboxState, AssetState, BillingState      string
+}
+
+func snapshotQuarantineLedger(t *testing.T, db *sql.DB, accountID, taskID string) quarantineLedgerSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	var snapshot quarantineLedgerSnapshot
+	queries := []struct {
+		query string
+		dest  any
+	}{
+		{`SELECT available FROM xz_point_accounts WHERE id=$1`, &snapshot.Available},
+		{`SELECT frozen FROM xz_point_accounts WHERE id=$1`, &snapshot.Frozen},
+		{`SELECT count(*) FROM xz_personal_point_lots WHERE account_id=$1`, &snapshot.Lots},
+		{`SELECT count(*) FROM xz_personal_point_reservations WHERE account_id=$1`, &snapshot.Reservations},
+		{`SELECT count(*) FROM xz_personal_point_reservation_allocations WHERE account_id=$1`, &snapshot.Allocations},
+		{`SELECT count(*) FROM xz_wallet_ledger WHERE account_id=$1`, &snapshot.WalletEntries},
+		{`SELECT count(*) FROM xz_personal_point_lot_movements WHERE account_id=$1`, &snapshot.Movements},
+		{`SELECT count(*) FROM xz_audit_logs WHERE resource='personal_point_account' AND resource_id=$1`, &snapshot.AuditEntries},
+		{`SELECT count(*) FROM xz_generation_tasks WHERE id=$1`, &snapshot.TaskRows},
+		{`SELECT count(*) FROM provider_executions WHERE task_id=$1`, &snapshot.ExecutionRows},
+		{`SELECT count(*) FROM outbox_events WHERE aggregate_id=$1`, &snapshot.OutboxRows},
+		{`SELECT count(*) FROM xz_assets WHERE task_id=$1`, &snapshot.Assets},
+		{`SELECT count(*) FROM xz_audit_logs WHERE resource='generation_task' AND resource_id=$1`, &snapshot.RecoveryAuditEntries},
+		{`SELECT count(*) FROM xz_billing_events WHERE task_id=$1`, &snapshot.BillingRows},
+	}
+	for i, item := range queries {
+		arg := accountID
+		if i >= 8 {
+			arg = taskID
+		}
+		if err := db.QueryRowContext(ctx, item.query, arg).Scan(item.dest); err != nil {
+			t.Fatalf("snapshot query %d failed: %v", i, err)
+		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT status,billing_status FROM xz_generation_tasks WHERE id=$1`, taskID).Scan(&snapshot.TaskStatus, &snapshot.BillingStatus); err != nil {
+		t.Fatalf("snapshot task state failed: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT status FROM provider_executions WHERE task_id=$1 ORDER BY id DESC LIMIT 1`, taskID).Scan(&snapshot.ExecutionStatus); err != nil {
+		t.Fatalf("snapshot execution state failed: %v", err)
+	}
+	rowSnapshots := []struct {
+		query string
+		arg   string
+		dest  *string
+	}{
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_lots r WHERE account_id=$1`, accountID, &snapshot.LotState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_reservations r WHERE account_id=$1`, accountID, &snapshot.ReservationState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_reservation_allocations r WHERE account_id=$1`, accountID, &snapshot.AllocationState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_wallet_ledger r WHERE account_id=$1`, accountID, &snapshot.WalletState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_personal_point_lot_movements r WHERE account_id=$1`, accountID, &snapshot.MovementState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_audit_logs r WHERE resource='personal_point_account' AND resource_id=$1`, accountID, &snapshot.PersonalAuditState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_audit_logs r WHERE resource='generation_task' AND resource_id=$1`, taskID, &snapshot.RecoveryAuditState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_generation_tasks r WHERE id=$1`, taskID, &snapshot.TaskState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM provider_executions r WHERE task_id=$1`, taskID, &snapshot.ExecutionState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM provider_execution_correlations r WHERE execution_id IN (SELECT id FROM provider_executions WHERE task_id=$1)`, taskID, &snapshot.CorrelationState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.event_id),'[]'::jsonb)::text FROM outbox_events r WHERE aggregate_id=$1`, taskID, &snapshot.OutboxState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_assets r WHERE task_id=$1`, taskID, &snapshot.AssetState},
+		{`SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb)::text FROM xz_billing_events r WHERE task_id=$1`, taskID, &snapshot.BillingState},
+	}
+	for i, item := range rowSnapshots {
+		if err := db.QueryRowContext(ctx, item.query, item.arg).Scan(item.dest); err != nil {
+			t.Fatalf("snapshot full row state %d failed: %v", i, err)
+		}
+	}
+	return snapshot
+}
+
+func TestQuarantineSmartVideoReserveCaptureReleaseZeroSideEffects(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	pointStore := NewPostgresPersonalPointStore(db)
+	userID := fmt.Sprintf("quarantine-smartvideo-u-%d", time.Now().UnixNano())
+	accountID := "acc-" + userID
+	if _, err := pointStore.grant(ctx, PersonalPointGrantCommand{
+		AccountID: accountID, UserID: userID, Source: PointSourceRecharge,
+		Points: 100, ReferenceType: "TEST_INIT", ReferenceID: "smartvideo-init-" + userID,
+		IdempotencyKey: "smartvideo-init-" + userID,
+	}); err != nil {
+		t.Fatalf("grant initial points: %v", err)
+	}
+	lifecycle := NewSmartVideoPointsLifecycleFromDB(db)
+	access := smartvideoapp.Access{UserID: userID}
+	quote := smartvideoapp.RenderQuote{Points: 20, ExpiresAt: time.Now().UTC().Add(time.Minute)}
+
+	// Quarantined SMART_VIDEO_RENDER reserve must stop before any ledger write.
+	quarantinedTaskID := "quarantine-smartvideo-" + userID
+	_, execID := seedQuarantinedTaskAndExecution(t, db, quarantinedTaskID, userID)
+	defer cleanupQuarantinedTask(db, quarantinedTaskID, execID)
+	before := snapshotQuarantineLedger(t, db, accountID, quarantinedTaskID)
+	_, mismatchErr := pointStore.reserve(ctx, PersonalPointReserveCommand{
+		AccountID: accountID, UserID: userID, BusinessType: "SMART_VIDEO_RENDER",
+		BusinessID: quarantinedTaskID, QuarantineTaskID: quarantinedTaskID + "-wrong",
+		RequestedPoints: 20, IdempotencyKey: "mismatched-task-context-" + quarantinedTaskID,
+	})
+	if !errors.Is(mismatchErr, ErrInvalidPointCommand) {
+		t.Fatalf("mismatched quarantine task context error = %v, want ErrInvalidPointCommand", mismatchErr)
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, quarantinedTaskID); after != before {
+		t.Fatalf("mismatched task context changed state: before=%+v after=%+v", before, after)
+	}
+	_, err := lifecycle.Reserve(ctx, access, quarantinedTaskID, quote)
+	if !errors.Is(err, pe.ErrQuarantined) {
+		t.Fatalf("quarantined smartvideo reserve error = %v, want ErrQuarantined", err)
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, quarantinedTaskID); after != before {
+		t.Fatalf("quarantined smartvideo reserve changed state: before=%+v after=%+v", before, after)
+	}
+
+	// The same special settlement path remains usable when no quarantine exists.
+	normalTaskID := "smartvideo-normal-" + userID
+	reservationID, err := lifecycle.Reserve(ctx, access, normalTaskID, quote)
+	if err != nil || reservationID == "" {
+		t.Fatalf("normal smartvideo reserve: reservation=%q err=%v", reservationID, err)
+	}
+	var available, frozen int64
+	if err := db.QueryRowContext(ctx, `SELECT available,frozen FROM xz_point_accounts WHERE id=$1`, accountID).Scan(&available, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	if available != 80 || frozen != 20 {
+		t.Fatalf("normal reserve balances = available %d frozen %d, want 80/20", available, frozen)
+	}
+
+	// Quarantine the task after its reservation; capture and release must both
+	// reject and leave every observable ledger/task/provider projection intact.
+	_, normalExecID := seedQuarantinedTaskAndExecution(t, db, normalTaskID, userID)
+	defer cleanupQuarantinedTask(db, normalTaskID, normalExecID)
+	beforeSettlement := snapshotQuarantineLedger(t, db, accountID, normalTaskID)
+	if err := lifecycle.Capture(ctx, access, normalTaskID); !errors.Is(err, pe.ErrQuarantined) {
+		t.Fatalf("quarantined smartvideo capture error = %v, want ErrQuarantined", err)
+	}
+	if err := lifecycle.Release(ctx, access, normalTaskID, "quarantine-test"); !errors.Is(err, pe.ErrQuarantined) {
+		t.Fatalf("quarantined smartvideo release error = %v, want ErrQuarantined", err)
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, normalTaskID); after != beforeSettlement {
+		t.Fatalf("quarantined smartvideo settlement changed state: before=%+v after=%+v", beforeSettlement, after)
+	}
+}
+
+func TestQuarantineRecoveryHTTPZeroSideEffects(t *testing.T) {
+	db := openProviderExecutionHookTestDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	taskID := fmt.Sprintf("quarantine-recovery-http-%d", time.Now().UnixNano())
+	userID := fmt.Sprintf("quarantine-recovery-http-u-%d", time.Now().UnixNano())
+	accountID := "acc-" + userID
+	_, execID := seedQuarantinedTaskAndExecution(t, db, taskID, userID)
+	defer cleanupQuarantinedTask(db, taskID, execID)
+	if _, err := NewPostgresPersonalPointStore(db).grant(ctx, PersonalPointGrantCommand{
+		AccountID: accountID, UserID: userID, Source: PointSourceRecharge,
+		Points: 100, ReferenceType: "TEST_INIT", ReferenceID: "recovery-init-" + taskID,
+		IdempotencyKey: "recovery-init-" + taskID,
+	}); err != nil {
+		t.Fatalf("grant initial points: %v", err)
+	}
+	a := newPPTDBAPI(t, config.Config{ProviderExecutionSafetyEnabled: true}, nil)
+	before := snapshotQuarantineLedger(t, db, accountID, taskID)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/generation-tasks/"+taskID+"/recovery-actions", strings.NewReader(`{"action":"MARK_MANUAL_REVIEW","reason":"p5 quarantine test"}`))
+	request.SetPathValue("id", taskID)
+	request = request.WithContext(context.WithValue(context.WithValue(request.Context(), actorIDContextKey, "p5-operator"), actorRoleContextKey, "SUPER_ADMIN"))
+	response := httptest.NewRecorder()
+	a.generationRecoveryAction(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("quarantined recovery HTTP status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	if after := snapshotQuarantineLedger(t, db, accountID, taskID); after != before {
+		t.Fatalf("quarantined recovery changed state: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -510,12 +717,13 @@ func TestQuarantineConcurrentRaceSafetyHTTPServer(t *testing.T) {
 				})
 			case 4: // billing reserve
 				_, opErr = pointStore.reserve(ctx, PersonalPointReserveCommand{
-					AccountID:       accountID,
-					UserID:          userID,
-					BusinessType:    "IMAGE_GENERATION",
-					BusinessID:      taskID,
-					RequestedPoints: 10,
-					IdempotencyKey:  fmt.Sprintf("generation:reserve:%s", taskID),
+					AccountID:        accountID,
+					UserID:           userID,
+					BusinessType:     "IMAGE_GENERATION",
+					BusinessID:       taskID,
+					QuarantineTaskID: taskID,
+					RequestedPoints:  10,
+					IdempotencyKey:   fmt.Sprintf("generation:reserve:%s", taskID),
 				})
 			}
 

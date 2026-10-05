@@ -340,6 +340,10 @@ func renewGenerationLeaseTx(ctx context.Context, tx *sql.Tx, taskID, workerID st
 	if leaseSeconds <= 0 {
 		leaseSeconds = int64((generationLeaseTTL / time.Second))
 	}
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(status,'') FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&status); err != nil {
+		return err
+	}
 	if err := providerexecution.RejectTask(ctx, tx, taskID, "renew_generation_lease"); err != nil {
 		return err
 	}

@@ -1031,7 +1031,7 @@ class CoreOnlyPostgresTests(unittest.TestCase):
     def test_core_source_loader_ignores_timestamp_valid_pyc(self):
         with tempfile.TemporaryDirectory(prefix='synthetic-core-cache-') as directory:
             directory = Path(directory)
-            for name in ('enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py'):
+            for name in ('enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py'):
                 shutil.copy2(str(ROOT / 'ops' / name), str(directory / name))
             source = directory / 'quarantine-live-snapshot.py'
             original, info = source.read_bytes(), source.stat()

@@ -951,6 +951,8 @@ deploy_scripts = [
     "ops/enroll-quarantine.py",
     "ops/quarantine-approval.py",
     "ops/quarantine-live-snapshot.py",
+    "ops/quarantine-psql-transport.py",
+    "ops/verify-image-quarantine-capability.py",
 ]
 deploy_scripts_hash = {}
 for s in deploy_scripts:
@@ -958,6 +960,15 @@ for s in deploy_scripts:
         fail(f"PROTECTED_FILE_MISSING: deployment script missing or empty: {s}")
     with open(s, "rb") as sf:
         deploy_scripts_hash[s] = hashlib.sha256(sf.read()).hexdigest()
+
+# Running singleton postgres identity + exact paths/bytes/model are proof-bound.
+import types
+transport_path = 'ops/quarantine-psql-transport.py'
+transport = types.ModuleType('quarantine_transport')
+transport.__file__ = os.path.abspath(transport_path)
+with open(transport_path, 'rb') as stream:
+    exec(compile(stream.read(), transport_path, 'exec'), transport.__dict__)
+postgres_binding = transport.binding(compose_file, env_file)
 
 # 6. Rollback receipt hash (Fail Closed)
 if not os.path.isfile(rollback_receipt_path) or os.path.getsize(rollback_receipt_path) == 0:
@@ -969,6 +980,23 @@ with open(rollback_receipt_path, "rb") as rf:
 with open(provenance_json_path, "r", encoding="utf-8") as pvf:
     gov = json.load(pvf)
 
+# Fresh isolated packaged-binary challenges, both forward and ACTUAL rollback
+# targets. This is before Proof construction and all production mutations.
+capability_path = 'ops/verify-image-quarantine-capability.py'
+capability = types.ModuleType('quarantine_capability')
+capability.__file__ = os.path.abspath(capability_path)
+with open(capability_path, 'rb') as stream:
+    exec(compile(stream.read(), capability_path, 'exec'), capability.__dict__)
+try:
+    policy = capability.runtime_policy(effective_data)
+    runtime_capability = capability.attest(image_ref, git_sha, policy)
+    with open(rollback_receipt_path, 'r', encoding='utf-8') as stream:
+        rollback_receipt = json.load(stream)
+    rollback_capability = capability.attest(rollback_receipt['previous_image_reference'], rollback_receipt['previous_git_sha'], policy)
+    if rollback_capability['identity']['local_image_id'] != rollback_receipt['previous_image_id']:
+        fail('ROLLBACK_CAPABILITY_IMAGE_MISMATCH: restage required')
+except Exception:
+    fail('RUNTIME_CAPABILITY_FAILED: fresh target/rollback packaged behavior required')
 now = datetime.datetime.now(datetime.timezone.utc)
 expires_at = now + datetime.timedelta(hours=expiry_hours)
 proof_nonce = str(uuid.uuid4())
@@ -982,6 +1010,8 @@ proof_payload = {
     "image_digest": digest,
     "selected_registry": registry_choice,
     "local_image_id": local_img_id,
+    "runtime_capability": runtime_capability,
+    "rollback_runtime_capability": rollback_capability,
     "compose_hash": compose_hash,
     "bound_config_hash": bound_config_hash,
     "migrations_tree_hash": migrations_tree_hash,
@@ -990,6 +1020,7 @@ proof_payload = {
     "deploy_scripts_hash": deploy_scripts_hash,
     "env_hash": env_hash,
     "config_binding_version": 2,
+    "postgres_transport_binding": postgres_binding,
     "rollback_receipt_hash": rollback_receipt_hash,
     "rollback_receipt_path": rollback_receipt_path,
     "runtime_gates": {

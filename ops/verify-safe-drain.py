@@ -33,6 +33,13 @@ runtime = types.ModuleType('release_runtime')
 runtime.__file__ = _runtime_path
 with open(_runtime_path, 'rb') as _source:
     exec(compile(_source.read(), _runtime_path, 'exec'), runtime.__dict__)
+# Shared source-only psql transport; included in the verified Prestage proof.
+_transport_path = os.path.join(os.path.dirname(__file__), 'quarantine-psql-transport.py')
+transport = types.ModuleType('quarantine_psql_transport')
+transport.__file__ = _transport_path
+with open(_transport_path, 'rb') as _source:
+    exec(compile(_source.read(), _transport_path, 'exec'), transport.__dict__)
+
 GateError = runtime.GateError
 
 _ISO8601_RE = re.compile(
@@ -93,9 +100,29 @@ SELECT
 SQL = build_sql()
 
 
-def database_count(cmd, execute, sql_query=None):
+def database_count(cmd, execute, sql_query=None, target=None):
     if sql_query is None:
         sql_query = SQL
+    if target is not None:
+        conn = None
+        try:
+            conn = target.connect()
+            cur = conn.cursor()
+            cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+            cur.execute(sql_query)
+            rows = cur.fetchall()
+            if len(rows) != 1 or len(rows[0]) != 1 or type(rows[0][0]) is not int or rows[0][0] < 0:
+                raise GateError('invalid drain count')
+            cur.execute('ROLLBACK')
+            target.check()
+            return rows[0][0]
+        except GateError:
+            raise
+        except Exception:
+            raise GateError('PostgreSQL drain check query execution failed')
+        finally:
+            if conn is not None:
+                conn.close()
     shell = ('PGPASSWORD="$POSTGRES_PASSWORD" '
              'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=10000" '
              'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" '
@@ -109,7 +136,7 @@ def database_count(cmd, execute, sql_query=None):
         raise GateError('PostgreSQL drain check query execution failed')
 
 
-def validate_manifest(cmd, execute, manifest_path, expected_release_sha, expected_manifest_sha256=None, cursor=None):
+def validate_manifest(cmd, execute, manifest_path, expected_release_sha, expected_manifest_sha256=None, cursor=None, target=None):
     if not os.path.isfile(manifest_path):
         raise GateError("quarantine manifest input missing")
     try:
@@ -143,37 +170,29 @@ def validate_manifest(cmd, execute, manifest_path, expected_release_sha, expecte
         except Exception as err:
             raise GateError(f"live snapshot validation failed: {err}")
 
-    # Otherwise, sample via read-only PostgreSQL transaction cursor
+    # Host validation stays on the existing full projector, never a count-only fallback.
+    if target is None:
+        raise GateError('verified Prestage database target required')
+    conn = None
     try:
-        import psycopg2
-        host = os.environ.get("POSTGRES_HOST") or "127.0.0.1"
-        port = int(os.environ.get("POSTGRES_PORT") or 5432)
-        user = os.environ.get("POSTGRES_USER") or "postgres"
-        password = os.environ.get("POSTGRES_PASSWORD") or ""
-        dbname = os.environ.get("POSTGRES_DB") or "xianzhi"
-        conn = psycopg2.connect(host=host, port=port, user=user, password=password, dbname=dbname)
-        conn.autocommit = True
+        conn = target.connect()
         cur = conn.cursor()
-        cur.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;")
-        try:
-            verified = live_snapshot.validate_live_snapshot_in_transaction(
-                cur, raw_bytes, expected_release_sha, 'drain-exemption', expected_manifest_sha256
-            )
-            return [e['execution_id'] for e in verified.get('executions', [])]
-        finally:
-            try:
-                cur.execute("ROLLBACK;")
-                cur.close()
-                conn.close()
-            except Exception:
-                pass
-    except GateError:
-        raise
-    except Exception as err:
-        raise GateError(f"safe drain live snapshot sampling failed: {err}")
+        cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        verified = live_snapshot.validate_live_snapshot_in_transaction(
+            cur, raw_bytes, expected_release_sha, 'drain-exemption', expected_manifest_sha256)
+        cur.execute('ROLLBACK')
+        target.check()
+        return [e['execution_id'] for e in verified['executions']]
+    except live_snapshot.SnapshotError as err:
+        raise GateError(str(err))
+    except Exception:
+        raise GateError('safe drain live snapshot sampling failed')
+    finally:
+        if conn is not None:
+            conn.close()
 
 
-def observe(cmd, execute, sql_query=None):
+def observe(cmd, execute, sql_query=None, target=None):
     if sql_query is None:
         sql_query = SQL
     ids = []
@@ -185,13 +204,13 @@ def observe(cmd, execute, sql_query=None):
         if not re.fullmatch(r'[a-zA-Z0-9_-]+', cid or ''):
             raise GateError('Required old API/worker container is absent or ambiguous')
         ids.append(cid)
-    count = database_count(cmd, execute, sql_query)
+    count = database_count(cmd, execute, sql_query, target)
     queues = json.loads(execute(cmd + ['exec', '-T', 'xianzhi-ai', 'python3', '-c', runtime.BROKER]))
     runtime.queues_ok(queues, 'pre')
     return count, ids
 
 
-def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=time.monotonic, manifest_path=None, release_sha=None, expected_manifest_sha256=None):
+def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=time.monotonic, manifest_path=None, release_sha=None, expected_manifest_sha256=None, target=None):
     timeout = float(timeout)
     if not math.isfinite(timeout) or timeout < 0 or timeout > 300:
         raise GateError('invalid drain timeout (must be 0..300 seconds)')
@@ -207,7 +226,7 @@ def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=t
                     expected_manifest_sha256 = hashlib.sha256(stream.read(approval.MAX_BYTES + 1)).hexdigest()
             except OSError:
                 raise GateError('manifest input failed')
-        exempt_ids = validate_manifest(cmd, execute, manifest_path, release_sha, expected_manifest_sha256=expected_manifest_sha256)
+        exempt_ids = validate_manifest(cmd, execute, manifest_path, release_sha, expected_manifest_sha256=expected_manifest_sha256, target=target)
 
     sql_query = build_sql(exempt_ids)
 
@@ -216,8 +235,8 @@ def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=t
     while True:
         if manifest_path is not None:
             validate_manifest(cmd, execute, manifest_path, release_sha,
-                              expected_manifest_sha256=expected_manifest_sha256)
-        count, ids = observe(cmd, execute, sql_query)
+                              expected_manifest_sha256=expected_manifest_sha256, target=target)
+        count, ids = observe(cmd, execute, sql_query, target)
         if initial_ids is not None and ids != initial_ids:
             raise GateError('runtime identity changed during drain observation')
         initial_ids = ids
@@ -225,8 +244,8 @@ def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=t
             pause(1)
             if manifest_path is not None:
                 validate_manifest(cmd, execute, manifest_path, release_sha,
-                                  expected_manifest_sha256=expected_manifest_sha256)
-            final_count, final_ids = observe(cmd, execute, sql_query)
+                                  expected_manifest_sha256=expected_manifest_sha256, target=target)
+            final_count, final_ids = observe(cmd, execute, sql_query, target)
             if final_count or final_ids != ids:
                 raise GateError('release observation changed; retry from a fresh drain')
             return
@@ -241,6 +260,10 @@ def main():
         release_sha = None
         expected_manifest_sha256 = None
         args = sys.argv[1:]
+        proof_path = None
+        if len(args) >= 2 and args[-2] == '--prestage-proof':
+            proof_path = args[-1]
+            args = args[:-2]
         if len(args) == 3:
             compose, env, timeout = args
         elif len(args) >= 7 and args[3] == '--manifest' and args[5] == '--release-sha':
@@ -253,7 +276,19 @@ def main():
                 raise GateError('usage: verify-safe-drain.py compose env timeout [--manifest <path> --release-sha <sha> [--expected-manifest-sha256 <sha>]]')
         else:
             raise GateError('usage: verify-safe-drain.py compose env timeout [--manifest <path> --release-sha <sha> [--expected-manifest-sha256 <sha>]]')
-        verify(compose, env, timeout, manifest_path=manifest_path, release_sha=release_sha, expected_manifest_sha256=expected_manifest_sha256)
+        if manifest_path and expected_manifest_sha256:
+            with open(manifest_path, 'rb') as stream:
+                actual_hash = hashlib.sha256(stream.read(approval.MAX_BYTES + 1)).hexdigest()
+            if actual_hash != expected_manifest_sha256:
+                raise GateError('manifest SHA256 mismatch')
+        if str(release_sha).lower() == 'f9cdf44ca79272ad7cead33dfb1d35fdf155f05f':
+            raise GateError('PERMANENTLY_REJECTED_CARRIER: Base commit f9cdf44ca is permanently disqualified from production enrollment.')
+        if proof_path is None:
+            raise GateError('verified --prestage-proof is required')
+        with open(proof_path, 'r', encoding='utf-8') as stream:
+            proof_release = json.load(stream)['git_sha']
+        target = transport.Target(compose, env, proof_path, release_sha or proof_release)
+        verify(compose, env, timeout, manifest_path=manifest_path, release_sha=release_sha, expected_manifest_sha256=expected_manifest_sha256, target=target)
     except Exception as error:
         detail = str(error) if isinstance(error, GateError) else 'invalid drain observation'
         print('[deploy] ERROR: SAFE_DRAIN_REJECTED: ' + detail, file=sys.stderr)

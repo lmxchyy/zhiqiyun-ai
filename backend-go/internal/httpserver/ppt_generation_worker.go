@@ -602,7 +602,7 @@ func (a api) runPPTArtifactStage(ctx context.Context, userID, taskID string, par
 	if !available {
 		return fmt.Errorf("storage is not available for tenant %s", tenantID)
 	}
-	if err := rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, "ppt_artifact_storage"); err != nil {
+	if err := a.rejectQuarantinedGeneration(ctx, taskID, "ppt_artifact_storage"); err != nil {
 		return err
 	}
 	fileName := fmt.Sprintf("%s.pptx", taskID)
@@ -707,7 +707,7 @@ func (a api) findDurablePPTAsset(ctx context.Context, taskID string) (asset, boo
 // Deterministic assetID (asset_ppt_<taskID>) and ON CONFLICT update ensure
 // crash redeliveries never create duplicate asset rows.
 func (a api) ensureDurablePPTAsset(ctx context.Context, taskID, userID, tenantID, organizationID, title string, file storagecenter.FileObject, storageRef string) (asset, error) {
-	if err := rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, "ppt_asset_insert"); err != nil {
+	if err := a.rejectQuarantinedGeneration(ctx, taskID, "ppt_asset_insert"); err != nil {
 		return asset{}, err
 	}
 	if existing, found, err := a.findDurablePPTAsset(ctx, taskID); err == nil && found {

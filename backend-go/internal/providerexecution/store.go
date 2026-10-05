@@ -327,9 +327,6 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 		return Execution{}, err
 	}
 	defer tx.Rollback()
-	if err := RejectTask(ctx, tx, taskID, "claim_prepared"); err != nil {
-		return Execution{}, err
-	}
 	var taskGen *int64
 	if lockTask {
 		var status string
@@ -345,6 +342,9 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 		if err := verifyGenerationOwnership(ctx, tx, taskID); err != nil {
 			return Execution{}, err
 		}
+	}
+	if err := RejectTask(ctx, tx, taskID, "claim_prepared"); err != nil {
+		return Execution{}, err
 	}
 	var id int64
 	var boundGen sql.NullInt64

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -22,6 +23,9 @@ func main() {
 }
 
 func run() error {
+	if handled, err := httpserver.DispatchQuarantineCapability(os.Args[1:], "generation-worker"); handled {
+		return err
+	}
 	cfg := config.Load()
 	if !cfg.AsyncMessagingEnabled {
 		return fmt.Errorf("ASYNC_MESSAGING_ENABLED must be true")

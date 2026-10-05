@@ -15,6 +15,7 @@ RELEASE_LEDGER_FILE="${RELEASE_LEDGER_FILE:-backups/release-ledger.json}"
 COMPOSE_FILE="${COMPOSE_FILE:-compose.prod.yml}"
 ENV_FILE="${ENV_FILE:-.env.production}"
 PRESTAGE_DIR="${PRESTAGE_DIR:-.prestage}"
+PRESTAGE_PROOF_FILE="${PRESTAGE_PROOF_FILE:-}"
 TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 
 LOCK_DIR="${PRESTAGE_DIR}/release.lock"
@@ -60,6 +61,10 @@ trap cleanup EXIT
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --capability-proof)
+      PRESTAGE_PROOF_FILE="$2"
+      shift 2
+      ;;
     --receipt)
       ROLLBACK_RECEIPT="$2"
       shift 2
@@ -263,44 +268,27 @@ stop_services_fail_closed() {
   fi
 }
 
-cleanup_quarantine_for_rollback() {
-  local target_version="$1"
-  [ -n "$target_version" ] || fail "TARGET_CAPABILITY_UNKNOWN: Target commit version is empty."
-  local target_sha
-  target_sha="$(git rev-parse --verify "${target_version}^{commit}" 2>/dev/null || true)"
-  if [ -z "$target_sha" ]; then
-    fail "TARGET_CAPABILITY_UNKNOWN: Target commit for version '$target_version' cannot be resolved in git."
-  fi
-
-  local target_capable=0
-  if git cat-file -e "${target_sha}:database/migrations/121-provider-execution-quarantine.sql" 2>/dev/null; then
-    target_capable=1
-  fi
-
-  if [ "$target_capable" = "1" ]; then
-    log "QUARANTINE_PRESERVED: Target $target_sha possesses Issue #200 barrier (Migration 121). Active quarantine records retained."
-    return 0
-  fi
-
-  # Legacy target lacks Issue #200 barrier
-  if [ "${EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION:-0}" != "1" ]; then
-    fail "LEGACY_TARGET_BARRIER_UNSUPPORTED: Target $target_sha lacks Issue #200 runtime quarantine barrier. Emergency return to legacy risk requires explicit emergency authorization (EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION=1). Truncating quarantine records without authorization is forbidden."
-  fi
-
-  log "Emergency authorization granted to revoke quarantine records for legacy target $target_sha..."
-  python3 - "$COMPOSE_FILE" "$ENV_FILE" "$target_sha" "$TIMESTAMP" <<'PY' || fail "Failed to handle quarantine rollback cleanup"
-import json, os, re, subprocess, sys
+preflight_check_quarantine_revocation() {
+  local target_sha="$1"
+  log "Preflight: Verifying database relation inspectability and backup directory for revocation..."
+  python3 - "$COMPOSE_FILE" "$ENV_FILE" "$target_sha" <<'PY' || fail "QUARANTINE_REVOCATION_PREFLIGHT_FAILED: Database or backup directory preflight check failed before stop."
+import os, stat, subprocess, sys, tempfile
 
 sys.dont_write_bytecode = True
 
-compose_file, env_file, target_sha, ts = sys.argv[1:5]
+compose_file, env_file, target_sha = sys.argv[1:4]
+
+child_env = os.environ.copy()
+# Prevent leaking ambient host PGPASSWORD
+child_env.pop("PGPASSWORD", None)
 
 test_container = os.environ.get("XIANZHI_TEST_CONTAINER")
 if test_container:
     psql_base = ["docker", "exec", "-i"]
     pw = os.environ.get("POSTGRES_PASSWORD")
     if pw:
-        psql_base.extend(["-e", f"PGPASSWORD={pw}"])
+        child_env["PGPASSWORD"] = pw
+        psql_base.extend(["-e", "PGPASSWORD"])
     psql_base.extend([test_container, "psql", "-X", "-U", os.environ.get("POSTGRES_USER", "postgres"),
                      "-d", os.environ.get("POSTGRES_DB", "postgres"), "-v", "ON_ERROR_STOP=1", "-Atq"])
 else:
@@ -317,16 +305,200 @@ else:
     db_pass = os.environ.get("POSTGRES_PASSWORD") or env_vars.get("POSTGRES_PASSWORD", "")
     psql_base = ["docker", "compose", "-f", compose_file, "--env-file", env_file, "exec", "-T"]
     if db_pass:
-        psql_base.extend(["-e", f"PGPASSWORD={db_pass}"])
+        child_env["PGPASSWORD"] = db_pass
+        psql_base.extend(["-e", "PGPASSWORD"])
     psql_base.extend(["postgres", "psql", "-X", "-U", db_user, "-d", db_name, "-v", "ON_ERROR_STOP=1", "-Atq"])
 
 def run_sql(query):
-    proc = subprocess.Popen(psql_base, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = proc.communicate(input=query.encode("utf-8"))
+    try:
+        proc = subprocess.Popen(psql_base, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=child_env)
+        out, _ = proc.communicate(input=query.encode("utf-8"), timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise RuntimeError("Database query timed out")
     if proc.returncode != 0:
-        err_msg = err.decode("utf-8", "replace").strip()
-        err_clean = re.sub(r'password=[^\s]+', 'password=[REDACTED]', err_msg, flags=re.I)
-        raise RuntimeError(f"Database query failed (code {proc.returncode}): {err_clean}")
+        # Never log raw DB stderr or credentials
+        raise RuntimeError(f"Database query failed (exit code {proc.returncode})")
+    return out.decode("utf-8", "replace").strip()
+
+if os.environ.get("SIMULATE_PREFLIGHT_DB_INSPECTION_FAILURE") == "1":
+    sys.stderr.write("[rollback] ERROR: Simulated database preflight inspection failure for test verification\n")
+    sys.exit(1)
+
+preflight_query = """BEGIN TRANSACTION READ ONLY;
+SET LOCAL statement_timeout = '10s';
+SELECT
+  CASE WHEN to_regclass('public.provider_execution_quarantine') IS NOT NULL THEN 't' ELSE 'f' END,
+  CASE WHEN to_regclass('public.provider_execution_quarantine') IS NOT NULL THEN
+    CASE WHEN has_table_privilege(current_user, 'public.provider_execution_quarantine', 'SELECT')
+              AND has_table_privilege(current_user, 'public.provider_execution_quarantine', 'TRUNCATE')
+         THEN 't' ELSE 'f' END
+    ELSE 't' END;
+COMMIT;"""
+
+try:
+    res = run_sql(preflight_query)
+except Exception as e:
+    sys.stderr.write(f"[rollback] ERROR: Failed to inspect database relations: {e}\n")
+    sys.exit(1)
+
+parts = res.split("|")
+if len(parts) != 2 or parts[0].strip().lower() not in ("t", "f") or parts[1].strip().lower() not in ("t", "f"):
+    sys.stderr.write(f"[rollback] ERROR: Unexpected relation inspection response\n")
+    sys.exit(1)
+
+tbl_exists = parts[0].strip().lower() == "t"
+has_privs = parts[1].strip().lower() == "t"
+
+if tbl_exists and not has_privs:
+    sys.stderr.write("[rollback] ERROR: Insufficient privileges on public.provider_execution_quarantine (requires SELECT and TRUNCATE)\n")
+    sys.exit(1)
+
+if os.environ.get("SIMULATE_PREFLIGHT_BACKUP_DIR_FAILURE") == "1":
+    sys.stderr.write("[rollback] ERROR: Simulated backup directory preflight failure for test verification\n")
+    sys.exit(1)
+
+backup_dir = os.environ.get("QUARANTINE_BACKUP_DIR") or "backups/quarantine"
+if os.name == "nt" and len(backup_dir) >= 3 and backup_dir[0] == "/" and backup_dir[2] == "/":
+    backup_dir = backup_dir[1] + ":" + backup_dir[2:]
+
+probe_fd = None
+probe_path = None
+orig_dev = None
+orig_ino = None
+probe_token = None
+cleanup_failed = False
+cleanup_error_msg = None
+
+try:
+    os.makedirs(backup_dir, exist_ok=True)
+    # Safely owned exclusive random temporary probe.
+    # Never clobbers existing files or follows symlinks.
+    probe_fd, probe_path = tempfile.mkstemp(prefix=".preflight_probe_", dir=backup_dir)
+    probe_token = os.urandom(32).hex().encode("ascii") + b"\n"
+    os.write(probe_fd, probe_token)
+    st = os.fstat(probe_fd)
+    orig_dev = st.st_dev
+    orig_ino = st.st_ino
+    if orig_dev is None or orig_ino is None or orig_ino == 0:
+        raise RuntimeError("Unsupported identity verification: filesystem does not report device/inode")
+    os.close(probe_fd)
+    probe_fd = None
+except Exception as e:
+    sys.stderr.write(f"[rollback] ERROR: Backup directory {backup_dir} is not writable or identity verification unsupported: {e}\n")
+    sys.exit(1)
+finally:
+    if probe_fd is not None:
+        try:
+            os.close(probe_fd)
+        except Exception:
+            pass
+
+    # Strictly verify identity before deletion: prove same created object via device/inode/file-id AND token content
+    if probe_path is not None:
+        try:
+            if os.path.islink(probe_path):
+                cleanup_failed = True
+                cleanup_error_msg = f"Probe cleanup aborted: {probe_path} was substituted with a symlink"
+            else:
+                lst = os.lstat(probe_path)
+                if not stat.S_ISREG(lst.st_mode):
+                    cleanup_failed = True
+                    cleanup_error_msg = f"Probe cleanup aborted: {probe_path} is not a regular file"
+                elif lst.st_dev != orig_dev or lst.st_ino != orig_ino:
+                    cleanup_failed = True
+                    cleanup_error_msg = f"Probe cleanup aborted: file identity mismatch (expected dev={orig_dev}, ino={orig_ino}; got dev={lst.st_dev}, ino={lst.st_ino})"
+                else:
+                    with open(probe_path, "rb") as pf:
+                        content = pf.read()
+                    if content != probe_token:
+                        cleanup_failed = True
+                        cleanup_error_msg = f"Probe cleanup aborted: token/content mismatch"
+                    else:
+                        lst_after = os.lstat(probe_path)
+                        if lst_after.st_dev != orig_dev or lst_after.st_ino != orig_ino or not stat.S_ISREG(lst_after.st_mode):
+                            cleanup_failed = True
+                            cleanup_error_msg = f"Probe cleanup aborted: file identity changed during content verification"
+                        else:
+                            os.remove(probe_path)
+        except Exception as e:
+            cleanup_failed = True
+            cleanup_error_msg = f"Probe cleanup uncertainty or failure: {e}"
+
+if cleanup_failed:
+    sys.stderr.write(f"[rollback] ERROR: {cleanup_error_msg}\n")
+    sys.exit(1)
+
+sys.exit(0)
+PY
+}
+
+cleanup_quarantine_for_rollback() {
+  local target_version="$1"
+  local target_capable="${2:-}"
+  [ -n "$target_version" ] || fail "TARGET_CAPABILITY_UNKNOWN: Target commit version is empty."
+  local target_sha
+  target_sha="$(git rev-parse --verify "${target_version}^{commit}" 2>/dev/null || true)"
+  if [ -z "$target_sha" ]; then
+    fail "TARGET_CAPABILITY_UNKNOWN: Target commit for version '$target_version' cannot be resolved in git."
+  fi
+
+  [ -n "$target_capable" ] || fail "TARGET_CAPABILITY_UNKNOWN: Cleanup requires an explicit preverified runtime capability decision; migration presence is not capability."
+
+  if [ "$target_capable" = "1" ]; then
+    log "QUARANTINE_PRESERVED: Target $target_sha possesses authenticated packaged runtime barrier evidence. Active quarantine records retained."
+    return 0
+  fi
+
+  # Legacy target lacks Issue #200 barrier
+  if [ "${EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION:-0}" != "1" ]; then
+    fail "LEGACY_TARGET_BARRIER_UNSUPPORTED: Target $target_sha lacks Issue #200 runtime quarantine barrier. Emergency return to legacy risk requires explicit emergency authorization (EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION=1). Truncating quarantine records without authorization is forbidden."
+  fi
+
+  log "Emergency authorization granted to revoke quarantine records for legacy target $target_sha..."
+  python3 - "$COMPOSE_FILE" "$ENV_FILE" "$target_sha" "$TIMESTAMP" <<'PY' || fail "Failed to handle quarantine rollback cleanup"
+import json, os, subprocess, sys
+
+sys.dont_write_bytecode = True
+
+compose_file, env_file, target_sha, ts = sys.argv[1:5]
+child_env = os.environ.copy()
+child_env.pop("PGPASSWORD", None)
+
+test_container = os.environ.get("XIANZHI_TEST_CONTAINER")
+if test_container:
+    psql_base = ["docker", "exec", "-i"]
+    pw = os.environ.get("POSTGRES_PASSWORD")
+    if pw:
+        child_env["PGPASSWORD"] = pw
+        psql_base.extend(["-e", "PGPASSWORD"])
+    psql_base.extend([test_container, "psql", "-X", "-U", os.environ.get("POSTGRES_USER", "postgres"),
+                     "-d", os.environ.get("POSTGRES_DB", "postgres"), "-v", "ON_ERROR_STOP=1", "-Atq"])
+else:
+    env_vars = {}
+    if os.path.isfile(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env_vars[k.strip()] = v.strip().strip("'\"")
+    db_user = os.environ.get("POSTGRES_USER") or env_vars.get("POSTGRES_USER", "xianzhi_prod")
+    db_name = os.environ.get("POSTGRES_DB") or env_vars.get("POSTGRES_DB", "xianzhi")
+    db_pass = os.environ.get("POSTGRES_PASSWORD") or env_vars.get("POSTGRES_PASSWORD", "")
+    psql_base = ["docker", "compose", "-f", compose_file, "--env-file", env_file, "exec", "-T"]
+    if db_pass:
+        child_env["PGPASSWORD"] = db_pass
+        psql_base.extend(["-e", "PGPASSWORD"])
+    psql_base.extend(["postgres", "psql", "-X", "-U", db_user, "-d", db_name, "-v", "ON_ERROR_STOP=1", "-Atq"])
+
+def run_sql(query):
+    proc = subprocess.Popen(psql_base, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=child_env)
+    out, _ = proc.communicate(input=query.encode("utf-8"))
+    if proc.returncode != 0:
+        # Post-stop failures must not disclose credentials or raw database stderr either.
+        raise RuntimeError(f"Database query failed (exit code {proc.returncode})")
     return out.decode("utf-8", "replace").strip()
 
 try:
@@ -428,18 +600,117 @@ else:
 PY
 }
 
-# Detect if target is a rollback receipt or release manifest file
+# Detect target type: rollback receipt, release manifest file, or explicit git commit/tag
 target_git_sha=""
-if [ -f "$TARGET_VERSION" ]; then
-  if grep -Fq "receipt_version" "$TARGET_VERSION" 2>/dev/null; then
-    ROLLBACK_RECEIPT="$TARGET_VERSION"
-    target_git_sha="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("previous_git_sha") or "")' "$TARGET_VERSION" 2>/dev/null || true)"
+RECEIPT_PREV_GIT_SHA=""
+MANIFEST_GIT_SHA=""
+FROZEN_PREV_REF=""
+FROZEN_PREV_ID=""
+FROZEN_RB_MANIFEST=""
+FROZEN_RB_HASH=""
+
+if [ -n "$ROLLBACK_RECEIPT" ] || { [ -f "$TARGET_VERSION" ] && grep -Fq "receipt_version" "$TARGET_VERSION" 2>/dev/null; }; then
+  [ -n "$ROLLBACK_RECEIPT" ] || ROLLBACK_RECEIPT="$TARGET_VERSION"
+  [ -f "$ROLLBACK_RECEIPT" ] || fail "Rollback receipt specified does not exist on disk: $ROLLBACK_RECEIPT"
+
+  # Bind manifest bytes being parsed to the hash being checked; freeze validated values
+  # Avoid rereads and ensure strict identity parsing
+  validated_receipt_env="$(python3 - "$ROLLBACK_RECEIPT" <<'PY' || fail "Rollback manifest sha256 mismatch."
+import hashlib, json, os, shlex, sys
+
+def normpath(p):
+    if os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/":
+        return p[1] + ":" + p[2:]
+    return p
+
+receipt_file = normpath(sys.argv[1])
+if not os.path.isfile(receipt_file):
+    sys.stderr.write(f"[rollback] ERROR: Rollback receipt does not exist: {receipt_file}\n")
+    sys.exit(1)
+
+try:
+    with open(receipt_file, "rb") as rf:
+        receipt_bytes = rf.read()
+    receipt_data = json.loads(receipt_bytes.decode("utf-8"))
+except Exception as e:
+    sys.stderr.write(f"[rollback] ERROR: Failed to parse rollback receipt: {e}\n")
+    sys.exit(1)
+
+prev_git_sha = receipt_data.get("previous_git_sha")
+prev_ref = receipt_data.get("previous_image_reference")
+prev_id = receipt_data.get("previous_image_id")
+manifest_path = receipt_data.get("rollback_manifest_path")
+manifest_hash = receipt_data.get("rollback_manifest_sha256")
+
+if not prev_git_sha or not isinstance(prev_git_sha, str):
+    sys.stderr.write("[rollback] ERROR: Rollback receipt contains no valid previous_git_sha\n")
+    sys.exit(1)
+if not prev_ref or prev_ref == "none" or not isinstance(prev_ref, str):
+    sys.stderr.write("[rollback] ERROR: Rollback receipt contains no valid previous image reference.\n")
+    sys.exit(1)
+if not prev_id or prev_id == "none" or not isinstance(prev_id, str):
+    sys.stderr.write("[rollback] ERROR: Rollback receipt contains no valid previous image ID.\n")
+    sys.exit(1)
+if not manifest_path or not isinstance(manifest_path, str):
+    sys.stderr.write("[rollback] ERROR: Rollback receipt contains no rollback_manifest_path\n")
+    sys.exit(1)
+if not manifest_hash or not isinstance(manifest_hash, str):
+    sys.stderr.write("[rollback] ERROR: Rollback receipt contains no rollback_manifest_sha256\n")
+    sys.exit(1)
+
+manifest_file = normpath(manifest_path)
+if not os.path.isabs(manifest_file) and not os.path.exists(manifest_file):
+    candidate = os.path.join(os.path.dirname(receipt_file), manifest_file)
+    if os.path.exists(candidate):
+        manifest_file = candidate
+
+if not os.path.isfile(manifest_file):
+    sys.stderr.write(f"[rollback] ERROR: Rollback manifest specified in receipt does not exist on disk: {manifest_file}\n")
+    sys.exit(1)
+
+try:
+    with open(manifest_file, "rb") as mf:
+        manifest_bytes = mf.read()
+except Exception as e:
+    sys.stderr.write(f"[rollback] ERROR: Failed to read rollback manifest: {e}\n")
+    sys.exit(1)
+
+actual_hash = hashlib.sha256(manifest_bytes).hexdigest()
+if actual_hash.lower() != manifest_hash.strip().lower():
+    sys.stderr.write("[rollback] ERROR: Rollback manifest sha256 mismatch.\n")
+    sys.exit(1)
+
+try:
+    manifest_data = json.loads(manifest_bytes.decode("utf-8"))
+except Exception as e:
+    sys.stderr.write(f"[rollback] ERROR: Failed to parse rollback manifest: {e}\n")
+    sys.exit(1)
+
+manifest_git_sha = manifest_data.get("git_sha")
+if not manifest_git_sha or not isinstance(manifest_git_sha, str):
+    sys.stderr.write("[rollback] ERROR: Rollback manifest contains no valid git_sha\n")
+    sys.exit(1)
+
+print(f"RECEIPT_PREV_GIT_SHA={shlex.quote(prev_git_sha.strip())}")
+print(f"MANIFEST_GIT_SHA={shlex.quote(manifest_git_sha.strip())}")
+print(f"FROZEN_PREV_REF={shlex.quote(prev_ref.strip())}")
+print(f"FROZEN_PREV_ID={shlex.quote(prev_id.strip())}")
+print(f"FROZEN_RB_MANIFEST={shlex.quote(manifest_file)}")
+print(f"FROZEN_RB_HASH={shlex.quote(actual_hash)}")
+print(f"FROZEN_RECEIPT_HASH={shlex.quote(hashlib.sha256(receipt_bytes).hexdigest())}")
+PY
+)"
+  eval "$validated_receipt_env"
+  if [ -z "$TARGET_VERSION" ] || [ "$TARGET_VERSION" = "$ROLLBACK_RECEIPT" ]; then
+    target_git_sha="$RECEIPT_PREV_GIT_SHA"
   else
-    if [ -z "$RELEASE_MANIFEST" ]; then
-      RELEASE_MANIFEST="$TARGET_VERSION"
-    fi
-    target_git_sha="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("git_sha") or "")' "$TARGET_VERSION" 2>/dev/null || true)"
+    target_git_sha="$TARGET_VERSION"
   fi
+elif [ -f "$TARGET_VERSION" ]; then
+  if [ -z "$RELEASE_MANIFEST" ]; then
+    RELEASE_MANIFEST="$TARGET_VERSION"
+  fi
+  target_git_sha="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("git_sha") or "")' "$TARGET_VERSION" 2>/dev/null || true)"
 else
   target_git_sha="$TARGET_VERSION"
 fi
@@ -460,30 +731,62 @@ if [ "$is_ancestor" = "0" ]; then
   fail "ROLLBACK_FORWARD_REJECTED: target version ($target_git_sha) is not an ancestor of current HEAD. rollback.sh cannot be used as an entry point for forward releases."
 fi
 
-if [ -n "$ROLLBACK_RECEIPT" ] && [ -f "$ROLLBACK_RECEIPT" ]; then
-  log "Using verified rollback receipt: $ROLLBACK_RECEIPT"
-  prev_ref="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("previous_image_reference", ""))' "$ROLLBACK_RECEIPT" 2>/dev/null || true)"
-  prev_id="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("previous_image_id", ""))' "$ROLLBACK_RECEIPT" 2>/dev/null || true)"
-  rb_manifest="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("rollback_manifest_path", ""))' "$ROLLBACK_RECEIPT" 2>/dev/null || true)"
-  rb_manifest_hash="$(python3 -c 'import json, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; d=json.load(open(p, encoding="utf-8")); print(d.get("rollback_manifest_sha256", ""))' "$ROLLBACK_RECEIPT" 2>/dev/null || true)"
+# Preflight: Target Identity Resolution and Pinning
+# Unknown target should be rejected before stop even if ledger allows ancestry.
+resolved_target_sha="$(git rev-parse --verify "${target_git_sha}^{commit}" 2>/dev/null || true)"
+if [ -z "$resolved_target_sha" ]; then
+  fail "TARGET_CAPABILITY_UNKNOWN: Target commit for version '$target_git_sha' cannot be resolved in git."
+fi
+PINNED_TARGET_SHA="$resolved_target_sha"
 
-  { [ -n "$prev_ref" ] && [ "$prev_ref" != "none" ]; } || fail "Rollback receipt contains no valid previous image reference."
-  { [ -n "$prev_id" ] && [ "$prev_id" != "none" ]; } || fail "Rollback receipt contains no valid previous image ID."
+# Preflight: Rollback Receipt, Manifest and Target Identity Strict Binding
+if [ -n "$ROLLBACK_RECEIPT" ]; then
+  resolved_receipt_sha="$(git rev-parse --verify "${RECEIPT_PREV_GIT_SHA}^{commit}" 2>/dev/null || true)"
+  if [ -z "$resolved_receipt_sha" ]; then
+    fail "TARGET_CAPABILITY_UNKNOWN: Target commit for receipt previous_git_sha '$RECEIPT_PREV_GIT_SHA' cannot be resolved in git."
+  fi
+  resolved_manifest_sha="$(git rev-parse --verify "${MANIFEST_GIT_SHA}^{commit}" 2>/dev/null || true)"
+  if [ -z "$resolved_manifest_sha" ]; then
+    fail "TARGET_CAPABILITY_UNKNOWN: Target commit for rollback manifest git_sha '$MANIFEST_GIT_SHA' cannot be resolved in git."
+  fi
 
-  # Verify rollback manifest
-  { [ -n "$rb_manifest" ] && [ -f "$rb_manifest" ]; } || fail "Rollback manifest specified in receipt does not exist on disk: $rb_manifest"
-  actual_rb_hash="$(python3 -c 'import hashlib, sys, os; p = sys.argv[1]; p = (p[1] + ":" + p[2:]) if (os.name == "nt" and len(p) >= 3 and p[0] == "/" and p[2] == "/") else p; print(hashlib.sha256(open(p, "rb").read()).hexdigest())' "$rb_manifest")"
-  [ "$actual_rb_hash" = "$rb_manifest_hash" ] || fail "Rollback manifest sha256 mismatch."
+  if [ "$resolved_receipt_sha" != "$resolved_manifest_sha" ] || [ "$resolved_receipt_sha" != "$PINNED_TARGET_SHA" ] || [ "$resolved_manifest_sha" != "$PINNED_TARGET_SHA" ]; then
+    fail "ROLLBACK_IDENTITY_MISMATCH: Rollback receipt previous_git_sha ($RECEIPT_PREV_GIT_SHA) does not match rollback manifest git_sha ($MANIFEST_GIT_SHA) or pinned target ($PINNED_TARGET_SHA)."
+  fi
 
-  # Verify image exists in Docker
-  expected_image_id="$(docker image inspect "$prev_id" --format '{{.Id}}' 2>/dev/null || true)"
-  [ -n "$expected_image_id" ] || fail "ROLLBACK_IMAGE_MISSING: Previous image ($prev_id) has been pruned from local docker."
-  [ "$expected_image_id" = "$prev_id" ] || fail "Previous image ID mismatch in local docker."
+  if [ "$RECEIPT_PREV_GIT_SHA" != "$MANIFEST_GIT_SHA" ]; then
+    case "$PINNED_TARGET_SHA" in
+      "$RECEIPT_PREV_GIT_SHA"*) ;;
+      *) fail "ROLLBACK_IDENTITY_MISMATCH: Rollback receipt previous_git_sha ($RECEIPT_PREV_GIT_SHA) does not match pinned target ($PINNED_TARGET_SHA)." ;;
+    esac
+    case "$PINNED_TARGET_SHA" in
+      "$MANIFEST_GIT_SHA"*) ;;
+      *) fail "ROLLBACK_IDENTITY_MISMATCH: Rollback manifest git_sha ($MANIFEST_GIT_SHA) does not match pinned target ($PINNED_TARGET_SHA)." ;;
+    esac
+  fi
+
+  # Verify image exists in Docker before capability/stop
+  expected_image_id="$(docker image inspect "$FROZEN_PREV_ID" --format '{{.Id}}' 2>/dev/null || true)"
+  [ -n "$expected_image_id" ] || fail "ROLLBACK_IMAGE_MISSING: Previous image ($FROZEN_PREV_ID) has been pruned from local docker."
+  [ "$expected_image_id" = "$FROZEN_PREV_ID" ] || fail "Previous image ID mismatch in local docker."
 
   IMMUTABLE_RELEASE=1
   OFFLINE_ROLLBACK=1
-  XIANZHI_IMAGE_REFERENCE="$prev_ref"
+  XIANZHI_IMAGE_REFERENCE="$FROZEN_PREV_REF"
   export XIANZHI_IMAGE_REFERENCE
+  log "Using verified rollback receipt: $ROLLBACK_RECEIPT (manifest: $FROZEN_RB_MANIFEST, sha256: $FROZEN_RB_HASH)"
+fi
+
+# Legacy emergency entry contract intentionally changed: no stop/revoke/build.
+# Emergency authorization never substitutes for actual target runtime evidence.
+TARGET_CAPABLE=0
+if [ "$IMMUTABLE_RELEASE" != "1" ] || [ -z "$PRESTAGE_PROOF_FILE" ] || [ ! -f "$PRESTAGE_PROOF_FILE" ]; then
+  # Preserve the original read-only emergency preflight security surface; even
+  # a successful preflight is now followed by unconditional pre-stop rejection.
+  if [ "${EMERGENCY_ALLOW_LEGACY_QUARANTINE_REVOCATION:-0}" = "1" ]; then
+    preflight_check_quarantine_revocation "$PINNED_TARGET_SHA"
+  fi
+  fail "LEGACY_TARGET_BARRIER_UNSUPPORTED: RUNTIME_CAPABILITY_PROOF_MISSING: Actual immutable target and authenticated runtime Proof are required before stop, including emergency rollback."
 fi
 
 if [ "$IMMUTABLE_RELEASE" = "1" ]; then
@@ -503,8 +806,20 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   compose_config="$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json 2>/dev/null)" || fail "Failed to render Docker Compose configuration."
   validate_compose_desired_state "$compose_config"
 
+  capability_args=(--verify-proof "$PRESTAGE_PROOF_FILE" --image "$XIANZHI_IMAGE_REFERENCE" --release-sha "$PINNED_TARGET_SHA" --compose-file "$COMPOSE_FILE" --env-file "$ENV_FILE")
+  if [ -n "$ROLLBACK_RECEIPT" ]; then
+    capability_args+=(--rollback --receipt-sha256 "$FROZEN_RECEIPT_HASH")
+  fi
+  verified_capability_id="$(python3 -B ops/verify-image-quarantine-capability.py "${capability_args[@]}")" || fail "RUNTIME_CAPABILITY_INVALID: Actual rollback image proof failed before stop."
+  if [ -n "$ROLLBACK_RECEIPT" ]; then
+    [ "$verified_capability_id" = "$FROZEN_PREV_ID" ] || fail "RUNTIME_CAPABILITY_IMAGE_MISMATCH: Frozen receipt ID differs."
+  fi
+  expected_image_id="$verified_capability_id"
+  TARGET_CAPABLE=1
+  OFFLINE_ROLLBACK=1
+
   stop_services_fail_closed
-  cleanup_quarantine_for_rollback "$target_git_sha"
+  cleanup_quarantine_for_rollback "$PINNED_TARGET_SHA" "$TARGET_CAPABLE"
 
   if [ "$OFFLINE_ROLLBACK" = "1" ]; then
     log "Starting rollback production services (offline, --pull never)..."
@@ -539,7 +854,8 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
     printf '%s\n' "$repo_digests" | grep -Fqx -- "$XIANZHI_IMAGE_REFERENCE" \
       || fail "PARTIAL_ROLLBACK_DETECTED: $service RepoDigests do not contain the rollback reference."
   done
-  log "Running services match the rollback release digest."
+  python3 -B ops/verify-image-quarantine-capability.py "${capability_args[@]}" --post-start >/dev/null || fail "RUNTIME_CAPABILITY_POST_START_MISMATCH: Actual rollback process policy failed."
+  log "Running services match the rollback release digest and authenticated process policy."
 
   update_env_file_key "$ENV_FILE" "XIANZHI_IMAGE_REFERENCE" "$XIANZHI_IMAGE_REFERENCE"
   log "Persisted XIANZHI_IMAGE_REFERENCE to $ENV_FILE."
@@ -558,8 +874,8 @@ fi
 
 # Legacy mutable rollback fallback
 stop_services_fail_closed
-cleanup_quarantine_for_rollback "$target_git_sha"
-git checkout "$target_git_sha"
+cleanup_quarantine_for_rollback "$PINNED_TARGET_SHA" "$TARGET_CAPABLE"
+git checkout "$PINNED_TARGET_SHA"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build --remove-orphans
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
 log "Legacy rollback to $TARGET_VERSION completed."

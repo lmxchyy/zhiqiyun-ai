@@ -251,7 +251,7 @@ class ApprovalTests(unittest.TestCase):
 
     def test_source_loader_ignores_timestamp_valid_approval_pyc(self):
         directory = Path(tempfile.mkdtemp(prefix='approval-source-only-', dir=str(self.work)))
-        for name in ('enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py'):
+        for name in ('enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py'):
             shutil.copy2(str(ROOT / 'ops' / name), str(directory / name))
         source = directory / 'quarantine-approval.py'
         original, original_stat = source.read_bytes(), source.stat()
