@@ -285,8 +285,11 @@ class Fixture:
         args = ['run', '-d', '--pull', 'never', '--label', LABEL + '=' + self.owner, '--network', self.network, '--network-alias', 'fixture-db', '--tmpfs', '/var/lib/postgresql/data', '-e', 'POSTGRES_USER=fixture_admin', '-e', 'POSTGRES_PASSWORD=' + self.password, '-e', 'POSTGRES_DB=' + self.name, pg]
         self.db = self.record('container', self.docker.text(args))
         for attempt in range(40):
-            if self.docker.run(['exec', self.db, 'pg_isready', '-U', 'fixture_admin', '-d', self.name], check=False).returncode == 0:
-                break
+            ready = self.docker.run(['exec', self.db, 'pg_isready', '-U', 'fixture_admin', '-d', self.name], check=False)
+            if ready.returncode == 0:
+                probe = self.docker.run(['exec', self.db, 'psql', '-X', '-U', 'fixture_admin', '-d', self.name, '-v', 'ON_ERROR_STOP=1', '-Atqc', 'SELECT 1'], check=False, timeout=10)
+                if probe.returncode == 0 and probe.stdout.strip() == b'1':
+                    break
             time.sleep(0.5)
         else:
             raise Refused('fixture database readiness timeout')
