@@ -31,7 +31,7 @@ def get(*a,**k):
   while not (m.ROOT/'metrics_release').exists(): time.sleep(.01)
  return Metrics()
 m.urllib.request.urlopen=get
-sys.exit(m.main())
+sys.exit(m.main(sys.argv[3:]))
 '''
 DOCKER = '''#!/usr/bin/env python3
 import json,os,pathlib,sys,time
@@ -81,12 +81,12 @@ class Interlock(unittest.TestCase):
             time.sleep(.01)
         self.assertTrue((self.root / name).exists(), name)
 
-    def monitor(self, **extra):
+    def monitor(self, *args, **extra):
         env = dict(os.environ, PRESTAGE_DIR='.prestage', FIXTURE_ROOT=str(self.root),
                    PATH=str(self.bin) + os.pathsep + os.environ['PATH'])
         env.update(extra)
         p = subprocess.Popen([sys.executable, '-c', WORKER,
-                              str(ROOT / 'ops/auto_monitor_killswitch.py'), str(self.root)],
+                              str(ROOT / 'ops/auto_monitor_killswitch.py'), str(self.root)] + list(args),
                              env=env, cwd=str(self.root), stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, universal_newlines=True, start_new_session=True)
         self.children.append(p)
@@ -196,6 +196,51 @@ fi
         outcomes = [p.wait(timeout=5) for p in contenders]
         self.assertEqual(outcomes.count(1), 1, outcomes)
         self.assertFalse(self.lock.exists())
+
+    def test_observe_only_alerts_report_plan_but_never_mutate(self):
+        metrics = ('xianzhi_async_canary_rabbitmq_dlq_depth 8\n'
+                   'xianzhi_async_canary_video_rabbitmq_dlq_depth 18\n'
+                   'xianzhi_async_canary_ppt_rabbitmq_dlq_depth 18\n')
+        process = self.monitor('--observe-only', FIXTURE_METRICS=metrics)
+        self.assertEqual(process.wait(timeout=5), 0)
+        output = process.stdout.read()
+        self.assertIn('OBSERVE_ONLY_WOULD_TRIGGER', output)
+        self.assertIn('"metric":"xianzhi_async_canary_rabbitmq_dlq_depth"', output)
+        self.assertIn('"remaining_alerts":["Video RabbitMQ DLQ depth > 0","PPT RabbitMQ DLQ depth > 0"]', output)
+        self.assertIn('"canaries_that_would_change":["GENERATION_ASYNC_CANARY_ENABLED"]', output)
+        self.assertIn('"api_reconcile":true', output)
+        self.assertIn('"migration":false', output)
+        self.assertIn('"executed":false', output)
+        self.assertNotIn('PRIVATE_VALUE', output)
+        self.assert_untouched()
+
+    def test_observe_only_release_lock_reports_suppression_and_skips_scrape(self):
+        self.lock.mkdir(parents=True)
+        process = self.monitor('--observe-only', FIXTURE_METRICS='xianzhi_async_canary_rabbitmq_dlq_depth 8\n')
+        self.assertEqual(process.wait(timeout=5), 0)
+        output = process.stdout.read()
+        self.assertIn('SUPPRESSED_BY_RELEASE_LOCK', output)
+        self.assertFalse((self.root / 'metrics_called').exists())
+        self.assert_untouched()
+
+    def test_observe_only_lock_appearing_during_scrape_suppresses_decision(self):
+        (self.root / 'block_metrics').touch()
+        process = self.monitor('--observe-only', FIXTURE_METRICS='xianzhi_async_canary_rabbitmq_dlq_depth 8\n')
+        self.wait_file('metrics_entered')
+        self.lock.mkdir(parents=True)
+        (self.lock / 'owner_token').write_text('synthetic-test-owner')
+        (self.root / 'metrics_release').touch()
+        self.assertEqual(process.wait(timeout=5), 0)
+        output = process.stdout.read()
+        self.assertIn('SUPPRESSED_BY_RELEASE_LOCK', output)
+        self.assertNotIn('OBSERVE_ONLY_WOULD_TRIGGER', output)
+        self.assert_untouched()
+
+    def test_observe_only_rejects_unknown_options(self):
+        process = self.monitor('--not-a-real-mode')
+        self.assertEqual(process.wait(timeout=5), 2)
+        self.assertFalse((self.root / 'metrics_called').exists())
+        self.assert_untouched()
 
     def test_api_only_no_build_no_pull_and_all_switches_preserved(self):
         self.assertEqual(self.monitor().wait(timeout=5), 1)

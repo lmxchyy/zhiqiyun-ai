@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Independent quarantine approval verifier; never a proof-key or live-state oracle.
+"""Independent quarantine approval verifier and unsigned-candidate builder.
 
-Production trust is ONLY the root-provisioned registry below. No CLI/environment
-root override. Private signing keys must not be provisioned on the release host.
-The caller must separately recompute the live snapshot and check the DB clock.
+Production trust is the registry pinned in this Carrier's source tree; no
+CLI/environment trust-root override. Private signing keys never belong in the
+repository, release host, Pi, or deploy tooling. Candidate generation does not
+approve or sign; callers must recompute the live snapshot and use the DB clock.
 """
 import base64
 import datetime
@@ -16,12 +17,17 @@ import subprocess
 import sys
 import tempfile
 
-REGISTRY_PATH = '/etc/zhiqiyun/quarantine-approval/registry.json'
+REGISTRY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             'quarantine-approval', 'registry.json')
+AUTHORITY_ID = 'prod-quarantine-approval-v1'
 PURPOSE = 'quarantine-enrollment'
 OPERATIONS = ['drain-exemption', 'enroll']
 ALGORITHM = 'RSA-PKCS1-v1_5-SHA256'
 BLOCKED_CARRIER = 'f9cdf44ca79272ad7cead33dfb1d35fdf155f05f'
 MAX_BYTES = 1048576
+MAX_CANDIDATE_BYTES = 32 * 1024 * 1024
+CANDIDATE_VERSION = 'quarantine-approval-candidate-v1'
+LIVE_SNAPSHOT_VERSION = 'issue203-live-canonical-snapshot-sha256-v1'
 
 
 class ApprovalError(Exception):
@@ -150,6 +156,179 @@ def _openssl(args, data=None):
     return result.stdout
 
 
+def build_unsigned_candidate(entries, snapshots, release_sha, key_id,
+                             not_before, expires_at, now):
+    """Build a human-review candidate; contains no approval evidence/signature.
+
+    `snapshots` must be the canonical DB projections from the protected live
+    sampler. The function only hashes/serializes evidence; it never approves or
+    signs. The result is intentionally not accepted by `verify`.
+    """
+    if (not _hex(release_sha, 40) or not _text(key_id) or
+            not isinstance(now, datetime.datetime) or now.tzinfo is None):
+        reject('QUARANTINE_CANDIDATE_INVALID')
+    nb, exp = timestamp(not_before), timestamp(expires_at)
+    now = now.astimezone(datetime.timezone.utc)
+    if not nb <= now < exp or exp <= nb:
+        reject('QUARANTINE_CANDIDATE_WINDOW_INVALID')
+    if (not isinstance(entries, list) or not 0 < len(entries) <= 1000 or
+            not isinstance(snapshots, dict)):
+        reject('QUARANTINE_CANDIDATE_COUNT_INVALID')
+    if {item.get('execution_id') for item in entries if isinstance(item, dict)} != set(snapshots):
+        reject('QUARANTINE_CANDIDATE_COUNT_INVALID')
+
+    records = []
+    seen_ids, seen_attempts = set(), set()
+    for item in sorted(entries, key=lambda value: value.get('execution_id', -1)):
+        if not isinstance(item, dict):
+            reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        for field in ('execution_id', 'attempt', 'generation', 'task_generation'):
+            if type(item.get(field)) is not int or not 0 < item[field] <= 9223372036854775807:
+                reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        task_id = item.get('task_id')
+        identity = (task_id, item['attempt'])
+        if (not _text(task_id) or item['execution_id'] in seen_ids or identity in seen_attempts):
+            reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        seen_ids.add(item['execution_id'])
+        seen_attempts.add(identity)
+        snapshot = snapshots[item['execution_id']]
+        if (not isinstance(snapshot, dict) or
+                snapshot.get('version') != LIVE_SNAPSHOT_VERSION or
+                snapshot.get('scope') != 'CANONICAL_LIVE_SNAPSHOT' or
+                snapshot.get('execution_id') != item['execution_id'] or
+                snapshot.get('task_id') != task_id or
+                snapshot.get('attempt') != item['attempt'] or
+                snapshot.get('generation') != item['generation'] or
+                snapshot.get('task_generation') != item['task_generation']):
+            reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+        records.append({
+            'identity': {key: item[key] for key in (
+                'execution_id', 'task_id', 'attempt', 'generation', 'task_generation')},
+            'snapshot_sha256': hashlib.sha256(canonical(snapshot)).hexdigest(),
+            'snapshot': snapshot,
+        })
+    candidate = {
+        'candidate_version': CANDIDATE_VERSION,
+        'status': 'UNSIGNED_REQUIRES_HUMAN_REVIEW',
+        'purpose': PURPOSE,
+        'algorithm': ALGORITHM,
+        'authority_id': AUTHORITY_ID,
+        'key_id': key_id,
+        'release_sha': release_sha,
+        'operations': OPERATIONS,
+        'not_before': not_before,
+        'expires_at': expires_at,
+        'record_count': len(records),
+        'records': records,
+    }
+    encoded = canonical(candidate)
+    if len(encoded) > MAX_CANDIDATE_BYTES:
+        reject('QUARANTINE_CANDIDATE_TOO_LARGE')
+    return candidate
+
+
+def unsigned_manifest_bytes(candidate, review_bindings):
+    """Bind human review references to a candidate; return canonical unsigned v2.
+
+    This function has no signing capability. `verify` rejects its output until
+    an independent authority appends a valid signature offline.
+    """
+    expected_candidate_keys = ['candidate_version', 'status', 'purpose', 'algorithm',
+                               'authority_id', 'key_id', 'release_sha', 'operations',
+                               'not_before', 'expires_at', 'record_count', 'records']
+    _keys(candidate, expected_candidate_keys)
+    if len(canonical(candidate)) > MAX_CANDIDATE_BYTES:
+        reject('QUARANTINE_CANDIDATE_TOO_LARGE')
+    if (candidate['candidate_version'] != CANDIDATE_VERSION or
+            candidate['status'] != 'UNSIGNED_REQUIRES_HUMAN_REVIEW' or
+            candidate['purpose'] != PURPOSE or candidate['algorithm'] != ALGORITHM or
+            candidate['authority_id'] != AUTHORITY_ID or candidate['operations'] != OPERATIONS or
+            not _hex(candidate['release_sha'], 40) or not _text(candidate['key_id'])):
+        reject('QUARANTINE_CANDIDATE_INVALID')
+    not_before, expires_at = timestamp(candidate['not_before']), timestamp(candidate['expires_at'])
+    if not not_before < expires_at:
+        reject('QUARANTINE_CANDIDATE_WINDOW_INVALID')
+    records = candidate['records']
+    if (not isinstance(records, list) or not 0 < len(records) <= 1000 or
+            type(candidate['record_count']) is not int or
+            candidate['record_count'] != len(records)):
+        reject('QUARANTINE_CANDIDATE_COUNT_INVALID')
+    if not isinstance(review_bindings, list) or len(review_bindings) != len(records):
+        reject('QUARANTINE_REVIEW_BINDING_INVALID')
+    bindings = {}
+    for binding in review_bindings:
+        _keys(binding, ['execution_id', 'approval_id', 'review_sha256'])
+        if (type(binding['execution_id']) is not int or
+                not _text(binding['approval_id']) or
+                not _hex(binding['review_sha256'], 64) or
+                binding['execution_id'] in bindings):
+            reject('QUARANTINE_REVIEW_BINDING_INVALID')
+        bindings[binding['execution_id']] = binding
+
+    executions, seen_ids, seen_attempts, seen_approvals = [], set(), set(), set()
+    for record in records:
+        _keys(record, ['identity', 'snapshot_sha256', 'snapshot'])
+        identity = record['identity']
+        _keys(identity, ['execution_id', 'task_id', 'attempt', 'generation', 'task_generation'])
+        for field in ('execution_id', 'attempt', 'generation', 'task_generation'):
+            if type(identity[field]) is not int or not 0 < identity[field] <= 9223372036854775807:
+                reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        snapshot = record['snapshot']
+        if (not _text(identity['task_id']) or not _hex(record['snapshot_sha256'], 64) or
+                not isinstance(snapshot, dict) or
+                snapshot.get('version') != LIVE_SNAPSHOT_VERSION or
+                snapshot.get('scope') != 'CANONICAL_LIVE_SNAPSHOT' or
+                any(snapshot.get(field) != identity[field] for field in
+                    ('execution_id', 'task_id', 'attempt', 'generation', 'task_generation')) or
+                hashlib.sha256(canonical(snapshot)).hexdigest() != record['snapshot_sha256']):
+            reject('QUARANTINE_CANDIDATE_SNAPSHOT_INVALID')
+        eid = identity['execution_id']
+        binding = bindings.get(eid)
+        attempt_key = (identity['task_id'], identity['attempt'])
+        if (binding is None or eid in seen_ids or attempt_key in seen_attempts or
+                binding['approval_id'] in seen_approvals):
+            reject('QUARANTINE_CANDIDATE_IDENTITY_INVALID')
+        seen_ids.add(eid)
+        seen_attempts.add(attempt_key)
+        seen_approvals.add(binding['approval_id'])
+        evidence = {'approval_id': binding['approval_id'],
+                    'snapshot_sha256': record['snapshot_sha256'],
+                    'review_sha256': binding['review_sha256']}
+        executions.append({
+            'execution_id': eid,
+            'task_id': identity['task_id'],
+            'attempt': identity['attempt'],
+            'generation': identity['generation'],
+            'task_generation': identity['task_generation'],
+            'snapshot_sha256': record['snapshot_sha256'],
+            'evidence_sha256': hashlib.sha256(canonical(evidence)).hexdigest(),
+            'evidence': evidence,
+            'approval_id': binding['approval_id'],
+            'release_sha': candidate['release_sha'],
+            'not_before': candidate['not_before'],
+            'expires_at': candidate['expires_at'],
+        })
+    if set(bindings) != seen_ids:
+        reject('QUARANTINE_REVIEW_BINDING_INVALID')
+    manifest = {
+        'manifest_version': '2.0',
+        'purpose': PURPOSE,
+        'algorithm': ALGORITHM,
+        'authority_id': AUTHORITY_ID,
+        'key_id': candidate['key_id'],
+        'release_sha': candidate['release_sha'],
+        'operations': OPERATIONS,
+        'approved_count': len(executions),
+        'not_before': candidate['not_before'],
+        'expires_at': candidate['expires_at'],
+        'executions': executions,
+    }
+    raw = canonical(manifest)
+    if len(raw) > MAX_BYTES:
+        reject('QUARANTINE_CANDIDATE_TOO_LARGE')
+    return raw
+
+
 def _verify_signature(public_key, signature, payload):
     # Only frozen root-verified bytes, not mutable registry/key paths, are used.
     with tempfile.TemporaryDirectory(prefix='quarantine-approval-') as directory:
@@ -185,7 +364,7 @@ def verify(raw, release_sha, operation, now):
             manifest['algorithm'] != ALGORITHM or manifest['operations'] != OPERATIONS or
             not _hex(release_sha, 40) or release_sha == BLOCKED_CARRIER or
             manifest['release_sha'] != release_sha or
-            not _text(manifest['authority_id']) or not _text(manifest['key_id'])):
+            manifest['authority_id'] != AUTHORITY_ID or not _text(manifest['key_id'])):
         reject()
     nb, exp = timestamp(manifest['not_before']), timestamp(manifest['expires_at'])
     if not nb <= now < exp:
@@ -232,9 +411,11 @@ def verify(raw, release_sha, operation, now):
     for authority in registry['authorities']:
         _keys(authority, ['authority_id', 'key_id', 'purpose', 'algorithm', 'public_key_file',
                           'public_key_sha256', 'revoked', 'not_before', 'expires_at'])
-        if (not _text(authority['authority_id']) or not _text(authority['key_id']) or
+        if (authority['authority_id'] != AUTHORITY_ID or not _text(authority['key_id']) or
                 authority['purpose'] != PURPOSE or authority['algorithm'] != ALGORITHM or
-                type(authority['revoked']) is not bool or not _hex(authority['public_key_sha256'], 64)):
+                type(authority['revoked']) is not bool or not _hex(authority['public_key_sha256'], 64) or
+                not isinstance(authority['public_key_file'], str) or
+                os.path.basename(authority['public_key_file']) != authority['public_key_file']):
             reject()
         identity = (authority['authority_id'], authority['key_id'])
         if identity in seen:
@@ -249,7 +430,8 @@ def verify(raw, release_sha, operation, now):
             pinned = authority
     if pinned is None:
         reject('QUARANTINE_APPROVAL_AUTHORITY_INVALID')
-    public_key = _trusted_read(pinned['public_key_file'])
+    public_key_path = os.path.join(os.path.dirname(REGISTRY_PATH), pinned['public_key_file'])
+    public_key = _trusted_read(public_key_path)
     try:
         signature = base64.b64decode(manifest['signature'].encode('ascii'), validate=True)
     except (ValueError, AttributeError, UnicodeError):

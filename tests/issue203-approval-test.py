@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.dont_write_bytecode = True
 approval = types.ModuleType('approval')
 source = ROOT / 'ops/quarantine-approval.py'
+approval.__file__ = str(source)
 exec(compile(source.read_bytes(), str(source), 'exec'), approval.__dict__)
 NOW = datetime.datetime.now(datetime.timezone.utc)
 
@@ -42,18 +43,19 @@ class ApprovalTests(unittest.TestCase):
     def setUpClass(cls):
         if os.name != 'posix' or os.getuid() != 0 or not os.environ.get('ISSUE203_OWNED_APPROVAL_CONTAINER'):
             raise RuntimeError('required owned root container unavailable (not SKIP)')
-        cls.work = Path(tempfile.mkdtemp(prefix='synthetic-approval-'))
-        cls.root = Path('/etc/zhiqiyun/quarantine-approval')
+        cls.work = Path(tempfile.mkdtemp(prefix='synthetic-approval-', dir='/root'))
+        cls.root = cls.work / 'trusted-registry'
         if cls.root.exists():
             raise RuntimeError('refuse pre-existing/unowned root')
-        cls.root.mkdir(parents=True, mode=0o755)
+        cls.root.mkdir(parents=True, mode=0o700)
+        approval.REGISTRY_PATH = str(cls.root / 'registry.json')
         cls.private = cls.work / 'synthetic-private.pem'
         cls.public = cls.root / 'synthetic-public.pem'
         openssl(['genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(cls.private)])
         cls.public.write_bytes(openssl(['pkey', '-in', str(cls.private), '-pubout']))
-        cls.authority = dict(authority_id='synthetic-review-board', key_id='synthetic-3072',
+        cls.authority = dict(authority_id=approval.AUTHORITY_ID, key_id='synthetic-3072',
                              purpose=approval.PURPOSE, algorithm=approval.ALGORITHM,
-                             public_key_file=str(cls.public), revoked=False,
+                             public_key_file=cls.public.name, revoked=False,
                              public_key_sha256=hashlib.sha256(openssl([
                                  'pkey', '-pubin', '-in', str(cls.public), '-outform', 'DER'])).hexdigest(),
                              not_before=ts(NOW - datetime.timedelta(days=1)),
@@ -105,6 +107,37 @@ class ApprovalTests(unittest.TestCase):
         self.assertEqual(self.verify(raw)['approved_count'], 1)
         self.assertEqual(approval.verify(raw, 'b' * 40, 'drain-exemption', NOW)['approved_count'], 1)
 
+    def test_unsigned_candidate_and_review_binding_have_no_signing_capability(self):
+        identity = dict(execution_id=901, task_id='synthetic-task', attempt=1,
+                        generation=1, task_generation=2)
+        snapshot = dict(version=approval.LIVE_SNAPSHOT_VERSION,
+                        scope='CANONICAL_LIVE_SNAPSHOT', execution_id=901,
+                        task_id='synthetic-task', attempt=1, generation=1,
+                        task_generation=2, core={'hashed': 'a'*64},
+                        financial={'hashed': 'b'*64},
+                        asset_storage={'hashed': 'c'*64})
+        candidate = approval.build_unsigned_candidate(
+            [identity], {901: snapshot}, 'b'*40, self.authority['key_id'],
+            self.manifest['not_before'], self.manifest['expires_at'], NOW)
+        self.assertEqual(candidate['authority_id'], approval.AUTHORITY_ID)
+        self.assertEqual(candidate['status'], 'UNSIGNED_REQUIRES_HUMAN_REVIEW')
+        self.assertNotIn('signature', candidate)
+        self.assertNotIn('approval_id', candidate['records'][0])
+        raw_unsigned = approval.unsigned_manifest_bytes(candidate, [
+            dict(execution_id=901, approval_id='human-review-1', review_sha256='d'*64)])
+        unsigned = approval.decode(raw_unsigned)
+        self.assertNotIn('signature', unsigned)
+        with self.assertRaises(approval.ApprovalError):
+            approval.verify(raw_unsigned, 'b'*40, 'enroll', NOW)
+        signed = self.signed(unsigned)
+        self.assertEqual(self.verify(signed)['executions'][0]['snapshot_sha256'],
+                         candidate['records'][0]['snapshot_sha256'])
+        tampered = copy.deepcopy(candidate)
+        tampered['records'][0]['snapshot']['task_id'] = 'other-task'
+        with self.assertRaisesRegex(approval.ApprovalError, 'QUARANTINE_CANDIDATE_SNAPSHOT_INVALID'):
+            approval.unsigned_manifest_bytes(tampered, [
+                dict(execution_id=901, approval_id='human-review-1', review_sha256='d'*64)])
+
     def test_forged_signature_and_modified_signed_content(self):
         m = approval.decode(self.signed())
         m['signature'] = base64.b64encode(b'\0' * 384).decode('ascii')
@@ -120,6 +153,14 @@ class ApprovalTests(unittest.TestCase):
         self.registry['authorities'][0]['purpose'] = 'prestage-proof'
         self.write_registry()
         self.rejected()
+
+    def test_carrier_registry_cannot_select_external_public_key_path(self):
+        self.registry['authorities'][0]['public_key_file'] = '../outside.pem'
+        self.write_registry()
+        self.rejected()
+        self.registry['authorities'] = []
+        self.write_registry()
+        self.rejected()  # Empty, unprovisioned registry is fail-closed.
 
     def test_missing_unknown_authority_and_revocation(self):
         for field, value in [('authority_id', 'arbitrary-authority'), ('key_id', 'arbitrary-key')]:
@@ -281,10 +322,20 @@ class ApprovalTests(unittest.TestCase):
     def test_cli_missing_root_and_forged_signature_have_distinct_redacted_errors(self):
         path = self.work / 'cli-negative.json'
         path.write_bytes(self.signed())
-        root = Path(approval.REGISTRY_PATH)
+        cli_ops = self.work / 'cli-source' / 'ops'
+        cli_trust = cli_ops / 'quarantine-approval'
+        cli_trust.mkdir(parents=True, mode=0o755)
+        for name in ('enroll-quarantine.py', 'quarantine-approval.py',
+                     'quarantine-live-snapshot.py', 'quarantine-psql-transport.py'):
+            shutil.copyfile(str(ROOT / 'ops' / name), str(cli_ops / name))
+        source_registry = Path(approval.REGISTRY_PATH)
+        shutil.copyfile(str(source_registry), str(cli_trust / 'registry.json'))
+        shutil.copyfile(str(self.public), str(cli_trust / self.public.name))
+        root = cli_trust / 'registry.json'
         registry = root.read_bytes()
         root.unlink()
-        proc = subprocess.run([sys.executable, str(ROOT / 'ops/enroll-quarantine.py'),
+        cli_script = cli_ops / 'enroll-quarantine.py'
+        proc = subprocess.run([sys.executable, str(cli_script),
                                'dummy', 'dummy', str(path), 'b' * 40],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertIn(b'QUARANTINE_APPROVAL_ROOT_INVALID', proc.stderr)
@@ -292,7 +343,7 @@ class ApprovalTests(unittest.TestCase):
         manifest = approval.decode(self.signed())
         manifest['signature'] = base64.b64encode(b'\0' * 384).decode('ascii')
         path.write_bytes(approval.canonical(manifest))
-        proc = subprocess.run([sys.executable, str(ROOT / 'ops/enroll-quarantine.py'),
+        proc = subprocess.run([sys.executable, str(cli_script),
                                'dummy', 'dummy', str(path), 'b' * 40],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertIn(b'QUARANTINE_APPROVAL_SIGNATURE_INVALID', proc.stderr)

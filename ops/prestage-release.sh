@@ -950,6 +950,8 @@ deploy_scripts = [
     "ops/verify-safe-drain.py",
     "ops/enroll-quarantine.py",
     "ops/quarantine-approval.py",
+    "ops/create-quarantine-candidate.py",
+    "ops/quarantine-approval/registry.json",
     "ops/quarantine-live-snapshot.py",
     "ops/quarantine-psql-transport.py",
     "ops/verify-image-quarantine-capability.py",

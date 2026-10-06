@@ -133,11 +133,13 @@ async function setupSandbox(options = {}) {
   const dir = await mkdtemp(join(tmpdir(), "xianzhi-prestage-test-"));
   const binDir = join(dir, "bin");
   const opsDir = join(dir, "ops");
+  const quarantineApprovalDir = join(opsDir, "quarantine-approval");
   const pyFixtureDir = join(dir, "pyfixture");
   const migrationsDir = join(dir, "database", "migrations");
   const backupsDir = join(dir, "backups");
   await mkdir(binDir, { recursive: true });
   await mkdir(opsDir, { recursive: true });
+  await mkdir(quarantineApprovalDir, { recursive: true });
   await mkdir(pyFixtureDir, { recursive: true });
   await mkdir(migrationsDir, { recursive: true });
   await mkdir(backupsDir, { recursive: true });
@@ -156,6 +158,8 @@ async function setupSandbox(options = {}) {
   await copyFile(new URL("ops/verify-safe-drain.py", root), join(opsDir, "verify-safe-drain.py"));
   await copyFile(new URL("ops/enroll-quarantine.py", root), join(opsDir, "enroll-quarantine.py"));
   await copyFile(new URL("ops/quarantine-approval.py", root), join(opsDir, "quarantine-approval.py"));
+  await copyFile(new URL("ops/create-quarantine-candidate.py", root), join(opsDir, "create-quarantine-candidate.py"));
+  await copyFile(new URL("ops/quarantine-approval/registry.json", root), join(quarantineApprovalDir, "registry.json"));
   await copyFile(new URL("ops/quarantine-live-snapshot.py", root), join(opsDir, "quarantine-live-snapshot.py"));
   await copyFile(new URL("ops/quarantine-psql-transport.py", root), join(opsDir, "quarantine-psql-transport.py"));
   await writeFile(join(opsDir, "verify-image-quarantine-capability.py"), capabilityFixtureCode, "utf8");

@@ -220,11 +220,14 @@ class DrainTests(unittest.TestCase):
         scripts = ('deploy.sh', 'rollback.sh', 'ops/verify-release-manifest.sh', 'ops/disk-guard.sh',
                    'ops/run-migrations.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh',
                    'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
-                   'ops/quarantine-approval.py', 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
-                   'ops/verify-image-quarantine-capability.py')
+                   'ops/quarantine-approval.py', 'ops/create-quarantine-candidate.py',
+                   'ops/quarantine-approval/registry.json', 'ops/quarantine-live-snapshot.py',
+                   'ops/quarantine-psql-transport.py', 'ops/verify-image-quarantine-capability.py')
         self.assertIn('"ops/verify-safe-drain.py"', prestage)
         self.assertIn('"ops/enroll-quarantine.py"', prestage)
         self.assertIn('"ops/quarantine-approval.py"', prestage)
+        self.assertIn('"ops/create-quarantine-candidate.py"', prestage)
+        self.assertIn('"ops/quarantine-approval/registry.json"', prestage)
         self.assertIn('"ops/quarantine-live-snapshot.py"', prestage)
         self.assertIn('"ops/quarantine-psql-transport.py"', prestage)
         self.assertIn('"ops/verify-image-quarantine-capability.py"', prestage)
@@ -237,7 +240,7 @@ class DrainTests(unittest.TestCase):
                 exec(block, {'proof': {'deploy_scripts_hash': changed}, 'fail': fail})
 
     def test_python36_syntax_and_no_model_deployment_import(self):
-        for filename in ('verify-safe-drain.py', 'enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py', 'quarantine-drain-model.py'):
+        for filename in ('verify-safe-drain.py', 'enroll-quarantine.py', 'quarantine-approval.py', 'create-quarantine-candidate.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py', 'quarantine-drain-model.py'):
             text = (ROOT / 'ops' / filename).read_text(encoding='utf-8')
             ast.parse(text, feature_version=(3, 6))
         for filename in ('deploy.sh', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py', 'ops/prestage-release.sh'):

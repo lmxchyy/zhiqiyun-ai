@@ -84,6 +84,9 @@ grep_fixed '- ./backups:/var/lib/zhiqiyun/backups:rw' compose.prod.yml
 grep_fixed 'BACKUP_OBS_BUCKET' ops/backup-upload-object-storage.sh
 grep_fixed 'ExecStart=/usr/bin/flock -n /run/backup-offsite-upload.lock /usr/bin/env bash /opt/zhiqiyun-ai/ops/backup-offsite-upload-pending.sh' ops/systemd/backup-offsite-upload.service
 printf '%s\n' '[production-contract] offsite backup wiring gates PASS'
+python3 -B ops/create-quarantine-candidate.py --help >/dev/null || fail 'unsigned candidate CLI contract is invalid'
+grep_fixed 'UNSIGNED_REQUIRES_HUMAN_REVIEW' ops/quarantine-approval.py
+grep_fixed 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' ops/quarantine-live-snapshot.py
 printf '%s\n' "[production-contract] static runtime and startup gates PASS"
 
 if [ "${RUN_PRODUCTION_CONTRACT_DOCKER:-0}" != "1" ]; then

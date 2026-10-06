@@ -51,8 +51,12 @@ class CoreOnlyPostgresTests(unittest.TestCase):
             if cursor.fetchall() != [(os.environ['ISSUE203_OWNED_LIVE_DB'],)]:
                 raise RuntimeError('refuse unowned database')
         approval_tests = source_module('approval_tests', ROOT / 'tests/issue203-approval-test.py')
+        cls.approval_module = approval_tests.approval
         cls.approval_class = approval_tests.ApprovalTests
         cls.approval_class.setUpClass()  # synthetic disposable root only
+        core._approval.REGISTRY_PATH = cls.approval_module.REGISTRY_PATH
+        enroll.approval.REGISTRY_PATH = cls.approval_module.REGISTRY_PATH
+        enroll.live_snapshot._approval.REGISTRY_PATH = cls.approval_module.REGISTRY_PATH
         print('RUNTIME Python=%s PG=123+real-schema CORE_ONLY; skip0' % sys.version.split()[0])
 
     @classmethod
@@ -381,7 +385,7 @@ class CoreOnlyPostgresTests(unittest.TestCase):
         self.reject('APPROVED_COUNT_INVALID', hashes=hashes)
 
     def test_authenticated_arbitrary_final_hash_is_never_accepted(self):
-        self.final_reject(self.signed(), 'SNAPSHOT_FAMILIES_INCOMPLETE')
+        self.final_reject(self.signed(), 'SNAPSHOT_SHA256_MISMATCH')
 
     def test_identity_attempt_and_duplicate_approved_counts(self):
         for key, value, code in [('execution_id', 700, 'EXECUTION_IDENTITY_MISMATCH'), ('task_id', 'missing-task', 'TASK_COUNT_MISMATCH'), ('attempt', 5, 'ATTEMPT_MISMATCH')]:
@@ -812,8 +816,8 @@ class CoreOnlyPostgresTests(unittest.TestCase):
         self.assertEqual(first, core.sample_core_financial_read_only(self.db, list(reversed(self.entries))))
         with self.assertRaisesRegex(core.SnapshotError, 'CORE_SCOPE_INVALID'):
             core.core_sha256(first[901])
-        self.final_reject(self.signed(), 'SNAPSHOT_FAMILIES_INCOMPLETE')
-        self.assertEqual(core.MISSING_FAMILIES, ('assets-artworks-results-storage',))
+        self.final_reject(self.signed(), 'SNAPSHOT_SHA256_MISMATCH')
+        self.assertEqual(core.MISSING_FAMILIES, ())
 
     def test_financial_unknown_key_status_owner_blocks_before_incomplete(self):
         self.financial_base()
@@ -1051,6 +1055,40 @@ class CoreOnlyPostgresTests(unittest.TestCase):
             self.assertIn(b'Usage:', proc.stderr)
             self.assertFalse(marker.exists())
 
+    def test_unsigned_candidate_is_fresh_canonical_and_never_signed_by_agent(self):
+        now = approval_mod.datetime.datetime.now(approval_mod.datetime.timezone.utc)
+        not_before = (now - approval_mod.datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        expires_at = (now + approval_mod.datetime.timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        candidate = core.sample_unsigned_candidate_read_only(
+            self.db, self.entries, 'b'*40, 'UNPROVISIONED', not_before, expires_at)
+        self.assertEqual(candidate['status'], 'UNSIGNED_REQUIRES_HUMAN_REVIEW')
+        self.assertEqual(candidate['authority_id'], approval_mod.AUTHORITY_ID)
+        self.assertEqual(candidate['record_count'], len(self.entries))
+        self.assertEqual(len(candidate['records']), len(self.entries))
+        self.assertNotIn('signature', candidate)
+        self.assertNotIn('approval_id', candidate['records'][0])
+        encoded = approval_mod.canonical(candidate)
+        for private in (b'SENSITIVE_SYNTHETIC', b'https://', b'synthetic-user-0'):
+            self.assertNotIn(private, encoded)
+        for record in candidate['records']:
+            self.assertEqual(record['snapshot_sha256'],
+                             core.canonical_live_snapshot_sha256(record['snapshot']))
+
+    def test_unsigned_candidate_includes_artwork_results_and_storage_families(self):
+        self.stored_asset_fixture()
+        now = approval_mod.datetime.datetime.now(approval_mod.datetime.timezone.utc)
+        not_before = (now - approval_mod.datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        expires_at = (now + approval_mod.datetime.timedelta(minutes=30)).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        candidate = core.sample_unsigned_candidate_read_only(
+            self.db, self.entries, 'b'*40, 'UNPROVISIONED', not_before, expires_at)
+        record = next(item for item in candidate['records'] if item['identity']['execution_id'] == 901)
+        snapshot = record['snapshot']
+        self.assertEqual(snapshot['asset_storage']['counts']['assets'], 1)
+        self.assertEqual(snapshot['asset_storage']['counts']['files'], 1)
+        self.assertEqual(snapshot['core']['counts']['attempts'], 1)
+        self.assertEqual(snapshot['financial']['path'], 'PERSONAL_LOT_V1')
+        self.assertEqual(record['snapshot_sha256'], core.canonical_live_snapshot_sha256(snapshot))
+
     def test_canonical_live_snapshot_positive_and_drift_negatives(self):
         raw = self.signed_canonical()
         with self.db.cursor() as cursor:
@@ -1058,6 +1096,9 @@ class CoreOnlyPostgresTests(unittest.TestCase):
             try:
                 manifest = core.validate_live_snapshot_in_transaction(cursor, raw, 'b'*40, 'enroll')
                 self.assertEqual(len(manifest['executions']), 9)
+                approval = core.validate_live_approval_in_transaction(
+                    cursor, raw, hashlib.sha256(raw).hexdigest(), 'b'*40, 'enroll')
+                self.assertEqual(len(approval['executions']), 9)
             finally:
                 cursor.execute('ROLLBACK')
 
