@@ -43,7 +43,7 @@ func TestPostgresAuthMergeActiveReservationRollsBackIdentityAndPoints(t *testing
 	if _, err := pointStore.grant(ctx, PersonalPointGrantCommand{AccountID: sourceAccountID, UserID: sourceID, Source: PointSourceRecharge, Points: 3, ReferenceType: "ORDER", ReferenceID: mergeID, IdempotencyKey: "grant"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pointStore.reserve(ctx, PersonalPointReserveCommand{AccountID: sourceAccountID, UserID: sourceID, BusinessType: "GENERATION_TASK", BusinessID: mergeID, RequestedPoints: 1, IdempotencyKey: "reserve"}); err != nil {
+	if _, err := pointStore.reserve(ctx, PersonalPointReserveCommand{AccountID: sourceAccountID, UserID: sourceID, BusinessType: "GENERATION_TASK", BusinessID: mergeID, QuarantineTaskID: mergeID, RequestedPoints: 1, IdempotencyKey: "reserve"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {

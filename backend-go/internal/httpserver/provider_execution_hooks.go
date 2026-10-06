@@ -22,8 +22,18 @@ const (
 
 func providerExecutionHooks(store platformStore, enabled bool) generation.ExecutionHooks {
 	pg, ok := store.(*postgresStore)
-	if !ok || pg == nil || pg.db == nil {
+	if json, selected := store.(*jsonStore); selected && json != nil {
 		return generation.ExecutionHooks{}
+	}
+	if !ok || pg == nil || pg.db == nil {
+		return generation.ExecutionHooks{
+			Image: func(context.Context, generation.CreateRequest, generation.ImageProvider) ([]generation.GeneratedImage, error) {
+				return nil, pe.ErrQuarantineBarrierUnavailable
+			},
+			Video: func(context.Context, generation.CreateRequest, generation.VideoProvider) (any, error) {
+				return nil, pe.ErrQuarantineBarrierUnavailable
+			},
+		}
 	}
 	s := pe.NewStore(pg.db)
 	// Quarantine must run even when the broader provider-safety hooks are off.

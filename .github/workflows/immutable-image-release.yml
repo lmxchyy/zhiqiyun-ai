@@ -34,7 +34,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build production image once
-        run: docker buildx build --platform "$TARGET_PLATFORM" --tag "$IMAGE:$IMAGE_TAG" --load .
+        run: docker buildx build --platform "$TARGET_PLATFORM" --build-arg "RELEASE_SHA=$GITHUB_SHA" --tag "$IMAGE:$IMAGE_TAG" --load .
       - name: Run production contract against the built image
         env:
           RUN_PRODUCTION_CONTRACT_DOCKER: "1"

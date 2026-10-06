@@ -4,6 +4,7 @@
 Compatible with Python 3.6. See docs/architecture/issue199-quarantine-drain.md.
 """
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -15,13 +16,55 @@ import types
 
 # Execute proof-bound source bytes, never an ignored/unbound .pyc cache.
 sys.dont_write_bytecode = True
+# Source-only loading: approval helper is protected by the same Prestage proof.
+_approval_path = os.path.join(os.path.dirname(__file__), 'quarantine-approval.py')
+approval = types.ModuleType('quarantine_approval')
+approval.__file__ = _approval_path
+with open(_approval_path, 'rb') as _source:
+    exec(compile(_source.read(), _approval_path, 'exec'), approval.__dict__)
+# Reusable CORE_ONLY API; production exemptions remain NOT_READY below.
+_snapshot_path = os.path.join(os.path.dirname(__file__), 'quarantine-live-snapshot.py')
+live_snapshot = types.ModuleType('quarantine_live_snapshot')
+live_snapshot.__file__ = _snapshot_path
+with open(_snapshot_path, 'rb') as _source:
+    exec(compile(_source.read(), _snapshot_path, 'exec'), live_snapshot.__dict__)
 _runtime_path = os.path.join(os.path.dirname(__file__), 'verify-release-runtime.py')
 runtime = types.ModuleType('release_runtime')
 runtime.__file__ = _runtime_path
 with open(_runtime_path, 'rb') as _source:
     exec(compile(_source.read(), _runtime_path, 'exec'), runtime.__dict__)
+# Shared source-only psql transport; included in the verified Prestage proof.
+_transport_path = os.path.join(os.path.dirname(__file__), 'quarantine-psql-transport.py')
+transport = types.ModuleType('quarantine_psql_transport')
+transport.__file__ = _transport_path
+with open(_transport_path, 'rb') as _source:
+    exec(compile(_source.read(), _transport_path, 'exec'), transport.__dict__)
+
 GateError = runtime.GateError
 
+_ISO8601_RE = re.compile(
+    r'^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|([+-]\d{2}):?(\d{2}))?$'
+)
+
+def parse_iso8601_utc(ts_str):
+    if not isinstance(ts_str, str):
+        raise ValueError("Timestamp must be a string")
+    m = _ISO8601_RE.match(ts_str.strip())
+    if not m:
+        raise ValueError(f"Invalid ISO 8601 timestamp: {ts_str}")
+    year, month, day, hour, minute, second, frac, tz_h, tz_m = m.groups()
+    microsecond = int((frac or '0')[:6].ljust(6, '0'))
+    if tz_h is not None and tz_m is not None:
+        offset_minutes = int(tz_h) * 60 + (int(tz_m) if int(tz_h) >= 0 else -int(tz_m))
+        tz = datetime.timezone(datetime.timedelta(minutes=offset_minutes))
+    else:
+        tz = datetime.timezone.utc
+    dt = datetime.datetime(
+        int(year), int(month), int(day),
+        int(hour), int(minute), int(second),
+        microsecond, tzinfo=tz
+    )
+    return dt.astimezone(datetime.timezone.utc)
 
 def build_sql(exempt_ids=None):
     if exempt_ids:
@@ -57,9 +100,29 @@ SELECT
 SQL = build_sql()
 
 
-def database_count(cmd, execute, sql_query=None):
+def database_count(cmd, execute, sql_query=None, target=None):
     if sql_query is None:
         sql_query = SQL
+    if target is not None:
+        conn = None
+        try:
+            conn = target.connect()
+            cur = conn.cursor()
+            cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+            cur.execute(sql_query)
+            rows = cur.fetchall()
+            if len(rows) != 1 or len(rows[0]) != 1 or type(rows[0][0]) is not int or rows[0][0] < 0:
+                raise GateError('invalid drain count')
+            cur.execute('ROLLBACK')
+            target.check()
+            return rows[0][0]
+        except GateError:
+            raise
+        except Exception:
+            raise GateError('PostgreSQL drain check query execution failed')
+        finally:
+            if conn is not None:
+                conn.close()
     shell = ('PGPASSWORD="$POSTGRES_PASSWORD" '
              'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=10000" '
              'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" '
@@ -73,88 +136,63 @@ def database_count(cmd, execute, sql_query=None):
         raise GateError('PostgreSQL drain check query execution failed')
 
 
-def validate_manifest(cmd, execute, manifest_path, expected_release_sha):
+def validate_manifest(cmd, execute, manifest_path, expected_release_sha, expected_manifest_sha256=None, cursor=None, target=None):
     if not os.path.isfile(manifest_path):
-        raise GateError(f"quarantine manifest file not found: {manifest_path}")
+        raise GateError("quarantine manifest input missing")
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
+        with open(manifest_path, "rb") as f:
+            raw_bytes = f.read(approval.MAX_BYTES + 1)
+            manifest = approval.decode(raw_bytes)
     except Exception as e:
-        raise GateError(f"malformed quarantine manifest JSON: {e}")
+        raise GateError("malformed quarantine manifest JSON")
+
+    if expected_manifest_sha256:
+        actual_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_hash.lower() != expected_manifest_sha256.lower():
+            raise GateError(f"manifest SHA256 mismatch: expected {expected_manifest_sha256}, got {actual_hash}")
 
     release_sha = manifest.get("release_sha", "")
+    if str(release_sha).lower() == "f9cdf44ca79272ad7cead33dfb1d35fdf155f05f":
+        raise GateError("PERMANENTLY_REJECTED_CARRIER: Base commit f9cdf44ca is permanently disqualified from production enrollment.")
+
     if release_sha != expected_release_sha:
-        raise GateError(f"manifest release_sha mismatch: expected {expected_release_sha}, got {release_sha}")
+        raise GateError("manifest release_sha mismatch")
 
-    executions = manifest.get("executions", [])
-    if not isinstance(executions, list) or len(executions) == 0:
-        raise GateError("manifest contains no executions")
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    exempt_ids = []
-    for idx, item in enumerate(executions):
-        eid = item.get("execution_id")
-        if type(eid) is not int or eid <= 0:
-            raise GateError(f"invalid execution_id in manifest item {idx}")
-        exempt_ids.append(eid)
-        nb_str = item.get("not_before", "")
-        exp_str = item.get("expires_at", "")
+    # Validate manifest and recompute live snapshot on read-only sampling cursor
+    if cursor is not None:
         try:
-            nb = datetime.datetime.fromisoformat(nb_str.replace("Z", "+00:00"))
-            exp = datetime.datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
-        except Exception as e:
-            raise GateError(f"invalid timestamp in manifest item {idx}: {e}")
-        if not (nb <= now < exp):
-            raise GateError(f"manifest item {idx} ({eid}) outside valid window ({nb_str} .. {exp_str})")
+            verified = live_snapshot.validate_live_snapshot_in_transaction(
+                cursor, raw_bytes, expected_release_sha, 'drain-exemption', expected_manifest_sha256
+            )
+            return [e['execution_id'] for e in verified.get('executions', [])]
+        except live_snapshot.SnapshotError as err:
+            raise GateError(str(err))
+        except Exception as err:
+            raise GateError(f"live snapshot validation failed: {err}")
 
-    # Verify against live DB state
-    ids_str = ','.join(str(i) for i in exempt_ids)
-    check_sql = f"""
-    SELECT json_agg(json_build_object(
-        'id', e.id,
-        'task_id', e.task_id,
-        'attempt', e.attempt,
-        'execution_status', e.status,
-        'task_status', t.status,
-        'task_status_field', t.task_status,
-        'lease_active', (t.lease_until IS NOT NULL AND t.lease_until > now())
-    ))
-    FROM provider_executions e
-    JOIN xz_generation_tasks t ON t.id = e.task_id
-    WHERE e.id IN ({ids_str});
-    """
-    shell = ('PGPASSWORD="$POSTGRES_PASSWORD" '
-             'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=10000" '
-             'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" '
-             '-v ON_ERROR_STOP=1 -t -A -c ' + shlex.quote(check_sql))
+    # Host validation stays on the existing full projector, never a count-only fallback.
+    if target is None:
+        raise GateError('verified Prestage database target required')
+    conn = None
     try:
-        raw_res = execute(cmd + ['exec', '-T', 'postgres', 'sh', '-c', shell])
-        db_rows = json.loads(raw_res)
-    except Exception as e:
-        raise GateError(f"database check of manifest executions failed: {e}")
-
-    if not isinstance(db_rows, list) or len(db_rows) != len(exempt_ids):
-        raise GateError(f"database execution count mismatch for manifest: expected {len(exempt_ids)}, got {len(db_rows) if isinstance(db_rows, list) else 0}")
-
-    db_map = {r["id"]: r for r in db_rows}
-    for item in executions:
-        eid = item["execution_id"]
-        if eid not in db_map:
-            raise GateError(f"manifest execution {eid} missing from database")
-        row = db_map[eid]
-        if str(row["task_id"]) != str(item["task_id"]) or int(row["attempt"]) != int(item["attempt"]):
-            raise GateError(f"manifest identity mismatch for execution {eid}")
-        if str(row["execution_status"]) != str(item["execution_status"]):
-            raise GateError(f"execution {eid} status changed: expected {item['execution_status']}, got {row['execution_status']}")
-        if row["task_status"] != "FAILED" or row["task_status_field"] != "FAILED":
-            raise GateError(f"task for execution {eid} is not terminal FAILED")
-        if row["lease_active"]:
-            raise GateError(f"task for execution {eid} has an active unexpired lease")
-
-    return exempt_ids
+        conn = target.connect()
+        cur = conn.cursor()
+        cur.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+        verified = live_snapshot.validate_live_snapshot_in_transaction(
+            cur, raw_bytes, expected_release_sha, 'drain-exemption', expected_manifest_sha256)
+        cur.execute('ROLLBACK')
+        target.check()
+        return [e['execution_id'] for e in verified['executions']]
+    except live_snapshot.SnapshotError as err:
+        raise GateError(str(err))
+    except Exception:
+        raise GateError('safe drain live snapshot sampling failed')
+    finally:
+        if conn is not None:
+            conn.close()
 
 
-def observe(cmd, execute, sql_query=None):
+def observe(cmd, execute, sql_query=None, target=None):
     if sql_query is None:
         sql_query = SQL
     ids = []
@@ -166,34 +204,48 @@ def observe(cmd, execute, sql_query=None):
         if not re.fullmatch(r'[a-zA-Z0-9_-]+', cid or ''):
             raise GateError('Required old API/worker container is absent or ambiguous')
         ids.append(cid)
-    count = database_count(cmd, execute, sql_query)
+    count = database_count(cmd, execute, sql_query, target)
     queues = json.loads(execute(cmd + ['exec', '-T', 'xianzhi-ai', 'python3', '-c', runtime.BROKER]))
     runtime.queues_ok(queues, 'pre')
     return count, ids
 
 
-def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=time.monotonic, manifest_path=None, release_sha=None):
+def verify(compose, env, timeout, execute=runtime.run, pause=time.sleep, clock=time.monotonic, manifest_path=None, release_sha=None, expected_manifest_sha256=None, target=None):
     timeout = float(timeout)
     if not math.isfinite(timeout) or timeout < 0 or timeout > 300:
         raise GateError('invalid drain timeout (must be 0..300 seconds)')
     cmd = ['docker', 'compose', '-f', compose, '--env-file', env]
 
     exempt_ids = None
-    if manifest_path is not None and release_sha is not None:
-        exempt_ids = validate_manifest(cmd, execute, manifest_path, release_sha)
+    if (manifest_path is None) != (release_sha is None):
+        raise GateError('manifest and release must be supplied together')
+    if manifest_path is not None:
+        if expected_manifest_sha256 is None:
+            try:
+                with open(manifest_path, 'rb') as stream:
+                    expected_manifest_sha256 = hashlib.sha256(stream.read(approval.MAX_BYTES + 1)).hexdigest()
+            except OSError:
+                raise GateError('manifest input failed')
+        exempt_ids = validate_manifest(cmd, execute, manifest_path, release_sha, expected_manifest_sha256=expected_manifest_sha256, target=target)
 
     sql_query = build_sql(exempt_ids)
 
     deadline = clock() + timeout
     initial_ids = None
     while True:
-        count, ids = observe(cmd, execute, sql_query)
+        if manifest_path is not None:
+            validate_manifest(cmd, execute, manifest_path, release_sha,
+                              expected_manifest_sha256=expected_manifest_sha256, target=target)
+        count, ids = observe(cmd, execute, sql_query, target)
         if initial_ids is not None and ids != initial_ids:
             raise GateError('runtime identity changed during drain observation')
         initial_ids = ids
         if count == 0:
             pause(1)
-            final_count, final_ids = observe(cmd, execute, sql_query)
+            if manifest_path is not None:
+                validate_manifest(cmd, execute, manifest_path, release_sha,
+                                  expected_manifest_sha256=expected_manifest_sha256, target=target)
+            final_count, final_ids = observe(cmd, execute, sql_query, target)
             if final_count or final_ids != ids:
                 raise GateError('release observation changed; retry from a fresh drain')
             return
@@ -206,16 +258,37 @@ def main():
     try:
         manifest_path = None
         release_sha = None
+        expected_manifest_sha256 = None
         args = sys.argv[1:]
+        proof_path = None
+        if len(args) >= 2 and args[-2] == '--prestage-proof':
+            proof_path = args[-1]
+            args = args[:-2]
         if len(args) == 3:
             compose, env, timeout = args
-        elif len(args) == 7 and args[3] == '--manifest' and args[5] == '--release-sha':
+        elif len(args) >= 7 and args[3] == '--manifest' and args[5] == '--release-sha':
             compose, env, timeout = args[0], args[1], args[2]
             manifest_path = args[4]
             release_sha = args[6]
+            if len(args) == 9 and args[7] == '--expected-manifest-sha256':
+                expected_manifest_sha256 = args[8]
+            elif len(args) != 7:
+                raise GateError('usage: verify-safe-drain.py compose env timeout [--manifest <path> --release-sha <sha> [--expected-manifest-sha256 <sha>]]')
         else:
-            raise GateError('usage: verify-safe-drain.py compose env timeout [--manifest <path> --release-sha <sha>]')
-        verify(compose, env, timeout, manifest_path=manifest_path, release_sha=release_sha)
+            raise GateError('usage: verify-safe-drain.py compose env timeout [--manifest <path> --release-sha <sha> [--expected-manifest-sha256 <sha>]]')
+        if manifest_path and expected_manifest_sha256:
+            with open(manifest_path, 'rb') as stream:
+                actual_hash = hashlib.sha256(stream.read(approval.MAX_BYTES + 1)).hexdigest()
+            if actual_hash != expected_manifest_sha256:
+                raise GateError('manifest SHA256 mismatch')
+        if str(release_sha).lower() == 'f9cdf44ca79272ad7cead33dfb1d35fdf155f05f':
+            raise GateError('PERMANENTLY_REJECTED_CARRIER: Base commit f9cdf44ca is permanently disqualified from production enrollment.')
+        if proof_path is None:
+            raise GateError('verified --prestage-proof is required')
+        with open(proof_path, 'r', encoding='utf-8') as stream:
+            proof_release = json.load(stream)['git_sha']
+        target = transport.Target(compose, env, proof_path, release_sha or proof_release)
+        verify(compose, env, timeout, manifest_path=manifest_path, release_sha=release_sha, expected_manifest_sha256=expected_manifest_sha256, target=target)
     except Exception as error:
         detail = str(error) if isinstance(error, GateError) else 'invalid drain observation'
         print('[deploy] ERROR: SAFE_DRAIN_REJECTED: ' + detail, file=sys.stderr)

@@ -343,6 +343,9 @@ func (s *Store) claimPrepared(ctx context.Context, taskID string, lockTask bool)
 			return Execution{}, err
 		}
 	}
+	if err := RejectTask(ctx, tx, taskID, "claim_prepared"); err != nil {
+		return Execution{}, err
+	}
 	var id int64
 	var boundGen sql.NullInt64
 	err = tx.QueryRowContext(ctx, `SELECT id, task_execution_generation FROM provider_executions WHERE task_id=$1 AND status='prepared' ORDER BY attempt FOR UPDATE SKIP LOCKED LIMIT 1`, taskID).Scan(&id, &boundGen)

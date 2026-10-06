@@ -1288,7 +1288,7 @@ func (s *postgresStore) CreateGenerationTask(req createGenerationTaskRequest) (g
 	}
 	if authorization.ContextType != contextEnterprise {
 		pointStore := NewPostgresPersonalPointStore(s.db)
-		reserved, err := pointStore.reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
+		reserved, err := pointStore.reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, QuarantineTaskID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
 		if err != nil {
 			return generationTask{}, err
 		}
@@ -1490,7 +1490,7 @@ func (s *postgresStore) createPendingGenerationTaskWithPPT(req createGenerationT
 		return generationTask{}, err
 	}
 	if authorization.ContextType != contextEnterprise {
-		reserved, err := NewPostgresPersonalPointStore(s.db).reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
+		reserved, err := NewPostgresPersonalPointStore(s.db).reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: account.ID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: task.ID, QuarantineTaskID: task.ID, RequestedPoints: int64(pointCost), IdempotencyKey: "generation:reserve:" + task.ID})
 		if err != nil {
 			return generationTask{}, err
 		}

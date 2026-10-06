@@ -18,7 +18,7 @@ import (
 )
 
 func TestPersistGeneratedImagesFailsClosedWithoutPrivateStorage(t *testing.T) {
-	_, _, err := (api{}).persistGeneratedImages(context.Background(), "task_no_storage", generation.CreateRequest{
+	_, _, err := (api{store: &jsonStore{}}).persistGeneratedImages(context.Background(), "task_no_storage", generation.CreateRequest{
 		UserID: "user_1", GeneratedImages: []generation.GeneratedImage{{URL: "https://provider.example/image.png", ContentType: "image/png"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "private image storage is unavailable") {
@@ -126,7 +126,7 @@ func TestPersistGeneratedImagesBindsFileAndSignsAssetURL(t *testing.T) {
 		MaxUploadBytes:    1024,
 		MasterKey:         "0123456789abcdef0123456789abcdef",
 	})
-	a := api{fileService: service}
+	a := api{store: &jsonStore{}, fileService: service}
 	raw := []byte("generated")
 	req := generation.CreateRequest{
 		UserID: "user_1",
@@ -170,7 +170,7 @@ func TestWriteAssetDownloadStreamsPrivateObjectStorage(t *testing.T) {
 		AccessKey: "access", SecretKey: "secret", Bucket: "private-files",
 		DefaultQuotaBytes: 1024, MaxUploadBytes: 1024, MasterKey: "0123456789abcdef0123456789abcdef",
 	})
-	a := api{fileService: service}
+	a := api{store: &jsonStore{}, fileService: service}
 	raw := []byte("private-original-bytes")
 	prepared, files, err := a.persistGeneratedImages(context.Background(), "task_private", generation.CreateRequest{
 		UserID: "user_1", Type: "TEXT_TO_IMAGE", Prompt: "prompt", Model: "model",
@@ -202,7 +202,7 @@ func TestPPTStorageReferenceMaterializesFreshSignedURLs(t *testing.T) {
 		Bucket: "private-files", DefaultQuotaBytes: 1024, MaxUploadBytes: 1024,
 		MasterKey: "0123456789abcdef0123456789abcdef",
 	})
-	a := api{fileService: service}
+	a := api{store: &jsonStore{}, fileService: service}
 	raw := []byte("generated")
 	prepared, files, err := a.persistGeneratedImages(t.Context(), "task_1", generation.CreateRequest{
 		UserID: "user_1", Type: "TEXT_TO_IMAGE", Prompt: "prompt", Model: "model",

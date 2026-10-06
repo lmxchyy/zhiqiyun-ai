@@ -3,42 +3,39 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	pe "xianzhi-ai/backend-go/internal/providerexecution"
 )
 
-// rejectQuarantinedGeneration is the shared runtime barrier. A nil database
-// means this process has no PostgreSQL quarantine relation; callers that are
-// about to mutate through PostgreSQL must not pass nil. JSON-store tests pass
-// nil and keep their existing non-PostgreSQL behavior.
+// rejectQuarantinedGeneration requires the PostgreSQL barrier. Only the
+// explicitly constructed JSON adapter below has non-PostgreSQL behavior.
 func rejectQuarantinedGeneration(ctx context.Context, db *sql.DB, taskID, operation string) error {
 	if db == nil {
-		return nil
+		return pe.ErrQuarantineBarrierUnavailable
 	}
 	return pe.RejectTask(ctx, db, strings.TrimSpace(taskID), operation)
 }
 
 func rejectQuarantinedTaskTx(ctx context.Context, tx *sql.Tx, taskID, operation string) error {
-	if tx == nil || strings.TrimSpace(taskID) == "" {
-		return nil
+	taskID = strings.TrimSpace(taskID)
+	if tx == nil || taskID == "" {
+		return pe.ErrQuarantineBarrierUnavailable
 	}
-	return pe.RejectTask(ctx, tx, strings.TrimSpace(taskID), operation)
+	var dummy string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM xz_generation_tasks WHERE id=$1 FOR UPDATE`, taskID).Scan(&dummy)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return pe.RejectTask(ctx, tx, taskID, operation)
 }
 
-func rejectQuarantinedPointMutation(ctx context.Context, tx *sql.Tx, idempotencyKey, operation string) error {
-	taskID := generationTaskIDFromPointKey(idempotencyKey)
-	if taskID == "" || tx == nil {
+// rejectQuarantinedGeneration permits JSON-only operation by concrete store
+// selection, never by a missing PostgreSQL dependency or environment flag.
+func (a api) rejectQuarantinedGeneration(ctx context.Context, taskID, operation string) error {
+	if store, ok := a.store.(*jsonStore); ok && store != nil {
 		return nil
 	}
-	return pe.RejectTask(ctx, tx, taskID, "billing_"+operation)
-}
-
-func generationTaskIDFromPointKey(key string) string {
-	for _, prefix := range []string{"generation:capture:", "generation:release:", "generation:reserve:", "generation:durable-release:"} {
-		if strings.HasPrefix(key, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(key, prefix))
-		}
-	}
-	return ""
+	return rejectQuarantinedGeneration(ctx, a.pgDB(), taskID, operation)
 }

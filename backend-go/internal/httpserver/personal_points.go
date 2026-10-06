@@ -295,13 +295,15 @@ type PersonalPointRegistrationGrantCommand struct {
 }
 
 type PersonalPointReserveCommand struct {
-	AccountID       string
-	UserID          string
-	BusinessType    string
-	BusinessID      string
-	RequestedPoints int64
-	IdempotencyKey  string
-	ReservedAt      time.Time
+	AccountID    string
+	UserID       string
+	BusinessType string
+	BusinessID   string
+	// QuarantineTaskID explicitly binds a reservation to its generation task.
+	QuarantineTaskID string
+	RequestedPoints  int64
+	IdempotencyKey   string
+	ReservedAt       time.Time
 }
 
 type PersonalPointCaptureCommand struct {

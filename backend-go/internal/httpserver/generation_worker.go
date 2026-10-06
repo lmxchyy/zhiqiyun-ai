@@ -213,7 +213,7 @@ func (a *api) completeImageInboxIfTerminal(inbox *messaging.InboxStore, eventID,
 }
 
 func (a api) pgDB() *sql.DB {
-	if store, ok := a.store.(*postgresStore); ok {
+	if store, ok := a.store.(*postgresStore); ok && store != nil {
 		return store.db
 	}
 	return nil

@@ -109,7 +109,7 @@ func TestVideoAsyncRealCanary_LiveIntegration(t *testing.T) {
 		ProviderExecutionSafetyEnabled: true,
 	}
 
-	a := api{fileService: fileService, cfg: cfg}
+	a := api{store: &postgresStore{db: db}, fileService: fileService, cfg: cfg}
 
 	canaryResults := make([]realCanaryRecord, 0, 3)
 

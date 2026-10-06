@@ -79,17 +79,17 @@ func (a api) generationRecoveryAction(w http.ResponseWriter, r *http.Request) {
 		recoveryWriteErrorStatus(w, http.StatusUnauthorized, errors.New("operator identity is required"))
 		return
 	}
+	if err := a.rejectQuarantinedGeneration(r.Context(), taskID, "operator_"+strings.ToLower(req.Action)); err != nil {
+		recoveryWriteErrorStatus(w, http.StatusConflict, err)
+		return
+	}
+
 	if req.Action == recoveryActionDiagnose {
 		if auditErr := insertRecoveryAudit(r.Context(), a.pgDB(), actorID, actorRole, taskID, req, before, before); auditErr != nil {
 			recoveryWriteError(w, fmt.Errorf("recovery audit failed: %w", auditErr))
 			return
 		}
 		writeJSON(w, map[string]any{"diagnosis": before, "action": req.Action, "applied": false})
-		return
-	}
-
-	if err := rejectQuarantinedGeneration(r.Context(), a.pgDB(), taskID, "operator_"+strings.ToLower(req.Action)); err != nil {
-		recoveryWriteErrorStatus(w, http.StatusConflict, err)
 		return
 	}
 	var result generationTask
@@ -378,7 +378,7 @@ func (a api) redriveGenerationEvent(task generationTask, req recoveryActionReque
 }
 
 func (a api) resolveGenerationCapture(task generationTask, req recoveryActionRequest) (generationTask, error) {
-	if err := rejectQuarantinedGeneration(context.Background(), a.pgDB(), task.ID, "resolve_capture"); err != nil {
+	if err := a.rejectQuarantinedGeneration(context.Background(), task.ID, "resolve_capture"); err != nil {
 		return generationTask{}, err
 	}
 	if strings.TrimSpace(fmt.Sprint(req.Evidence["providerOutcome"])) != "succeeded" {
@@ -409,7 +409,7 @@ func (a api) resolveGenerationCapture(task generationTask, req recoveryActionReq
 }
 
 func (a api) resolveGenerationRelease(task generationTask, req recoveryActionRequest) (generationTask, error) {
-	if err := rejectQuarantinedGeneration(context.Background(), a.pgDB(), task.ID, "resolve_release"); err != nil {
+	if err := a.rejectQuarantinedGeneration(context.Background(), task.ID, "resolve_release"); err != nil {
 		return generationTask{}, err
 	}
 	outcome := strings.TrimSpace(fmt.Sprint(req.Evidence["providerOutcome"]))

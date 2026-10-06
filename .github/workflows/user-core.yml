@@ -184,6 +184,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -203,6 +205,49 @@ jobs:
             done < <(find database/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]-*.sql' ! -name '*.down.sql' -print | sort)
             docker exec -i -e PGPASSWORD=codex "${{ job.services.postgres.id }}" psql -h 127.0.0.1 -U codex -d "$database" -v ON_ERROR_STOP=1 < database/migrations/115-generation-artifact-identity.sql
           done
+
+      - name: Test Issue 203 quarantine control plane and safe drain lifecycle
+        env:
+          # Destructive replay suites own unique containers, not the Go service DB.
+          RELEASE_TRUST_SECRET: "ci-synthetic-test-trust-secret-only"
+          ISSUE199_DOCKER_REPLAY: "1"
+          XIANZHI_TEST_CONTAINER: "ci-unowned-container-must-not-be-used"
+        run: |
+          set -euo pipefail
+          python3 tests/issue199-quarantine-drain-test.py
+          python3 tests/issue203-control-plane-test.py
+
+      - name: Test Issue 203 independent approval root (actual Python 3.6 and OpenSSL)
+        run: |
+          set -euo pipefail
+          image="issue203-approval-synthetic-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker image rm "$image" >/dev/null 2>&1 || true' EXIT
+          docker build -f tests/issue203-approval.Dockerfile -t "$image" .
+          docker run --rm --network none -v "$PWD:/source:ro" "$image"
+
+      - name: Test Issue 203 unified live snapshot and atomic enrollment (owned PG123 and Python 3.6)
+        env:
+          XIANZHI_TEST_CONTAINER: "ci-unowned-container-must-not-be-used"
+        run: |
+          set -euo pipefail
+          # Harness builds a UUID-owned tag, validates ownership, runs the built
+          # immutable ID and untags only its own image (never a shared image ID).
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/issue203-live-snapshot-test.py
+
+      - name: Test Issue 203 runtime quarantine zero side-effects and race safety (CGO -race clean)
+        env:
+          XIANZHI_TEST_CONTAINER: "ci-unowned-container-must-not-be-used"
+        run: |
+          set -euo pipefail
+          python3 tests/issue203-runtime-race-test.py
+
+      - name: Test Issue 203 actual Python 3.6 runtime compatibility
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            -v "$PWD:/workspace:ro" -w /workspace \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            python:3.6-alpine python tests/issue203-control-plane-test.py ControlPlaneUnitTests
 
       - name: Test Issue 190 real PostgreSQL dispatch ownership (no SKIP)
         working-directory: backend-go

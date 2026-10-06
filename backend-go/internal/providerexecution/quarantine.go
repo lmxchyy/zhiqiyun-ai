@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -15,8 +16,8 @@ var ErrQuarantined = errors.New("EXECUTION_QUARANTINED_READONLY")
 
 // ErrQuarantineBarrierUnavailable means the barrier could not prove that the
 // operation is safe. It is also fail-closed and must not be treated as "not
-// quarantined". A successful to_regclass NULL is different: the relation is
-// absent, so it cannot contain an approval.
+// quarantined". PostgreSQL operations require the quarantine relation even
+// when there are no active approvals.
 var ErrQuarantineBarrierUnavailable = errors.New("quarantine barrier unavailable")
 
 // QuarantineRecord is the durable identity bound to one execution. It never
@@ -96,7 +97,7 @@ func DecideQuarantine(query QuarantineQuery, records []QuarantineRecord, queryFa
 }
 
 // RejectTask blocks when a quarantine row exists for the task or its lookup
-// fails. Relation absence is not an error: no approval can exist yet.
+// fails, including an absent required relation.
 func RejectTask(ctx context.Context, q quarantineQuerier, taskID, operation string) error {
 	return reject(ctx, q, 0, taskID, operation)
 }
@@ -108,7 +109,7 @@ func RejectExecution(ctx context.Context, q quarantineQuerier, executionID int64
 }
 
 func reject(ctx context.Context, q quarantineQuerier, executionID int64, taskID, operation string) error {
-	if q == nil {
+	if q == nil || (reflect.ValueOf(q).Kind() == reflect.Ptr && reflect.ValueOf(q).IsNil()) {
 		return logQuarantine(operation, executionID, taskID, QuarantineRecord{}, "query_failed", ErrQuarantineBarrierUnavailable)
 	}
 	taskID = strings.TrimSpace(taskID)
@@ -126,7 +127,7 @@ func reject(ctx context.Context, q quarantineQuerier, executionID int64, taskID,
 		return logQuarantine(operation, executionID, taskID, QuarantineRecord{}, "query_failed", ErrQuarantineBarrierUnavailable)
 	}
 	if !installed.Valid || !installed.Bool {
-		return nil
+		return logQuarantine(operation, executionID, taskID, QuarantineRecord{}, "relation_missing", ErrQuarantineBarrierUnavailable)
 	}
 	rows, err := q.QueryContext(ctx, `
 		SELECT execution_id, task_id, attempt, generation, snapshot_sha256, evidence_sha256,

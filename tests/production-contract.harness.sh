@@ -99,7 +99,7 @@ image="${PRODUCTION_CONTRACT_IMAGE:-xianzhi-production-contract:${GITHUB_SHA:-lo
 if [ -n "${PRODUCTION_CONTRACT_IMAGE:-}" ]; then
   printf '%s\n' "[production-contract] reusing prebuilt image: $image"
 else
-  docker build --tag "$image" .
+  docker build --build-arg "RELEASE_SHA=${GITHUB_SHA:-$(git rev-parse HEAD)}" --tag "$image" .
 fi
 docker run --rm --entrypoint sh "$image" -ceu '
   test "$(id -u)" != "0"
@@ -137,5 +137,10 @@ for migration in "${migrations[@]}"; do
   docker exec -i "$pg_container" psql -U contract -d xianzhi_contract -v ON_ERROR_STOP=1 < "database/migrations/$migration" >/dev/null
 done
 
-printf '%s\n' '[production-contract] Docker image, timezone, PostgreSQL replay, and forward migration gates PASS'
+# Local/prepush packaged-image mechanism replay, NEVER an official Proof.
+python3 -B ops/verify-image-quarantine-capability.py --image "$image" \
+  --release-sha "${GITHUB_SHA:-$(git rev-parse HEAD)}" --synthetic-nonofficial \
+  --output "${PRODUCTION_CAPABILITY_EVIDENCE:-/tmp/production-capability-nonofficial.json}"
+
+printf '%s\n' '[production-contract] Docker image, timezone, PostgreSQL replay, packaged quarantine behavior, and forward migration gates PASS'
 printf '%s\n' 'production contract harness PASS'

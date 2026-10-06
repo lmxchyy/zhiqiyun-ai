@@ -105,7 +105,7 @@ func TestPostgresGenerationImmediateAndTerminalRollbackAreAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reserved, err := pointStore.reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: accountID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: taskID, RequestedPoints: 2, IdempotencyKey: "generation:reserve:" + taskID})
+	reserved, err := pointStore.reserveTx(ctx, tx, PersonalPointReserveCommand{AccountID: accountID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: taskID, QuarantineTaskID: taskID, RequestedPoints: 2, IdempotencyKey: "generation:reserve:" + taskID})
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestPostgresGenerationImmediateAndTerminalRollbackAreAtomic(t *testing.T) {
 		t.Fatalf("immediate rollback leaked task/balance: taskRows=%d balance=%+v", taskRows, balance)
 	}
 
-	committed, err := pointStore.reserve(ctx, PersonalPointReserveCommand{AccountID: accountID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: taskID + "-terminal", RequestedPoints: 2, IdempotencyKey: "generation:reserve:" + taskID + "-terminal"})
+	committed, err := pointStore.reserve(ctx, PersonalPointReserveCommand{AccountID: accountID, UserID: userID, BusinessType: "GENERATION_TASK", BusinessID: taskID + "-terminal", QuarantineTaskID: taskID + "-terminal", RequestedPoints: 2, IdempotencyKey: "generation:reserve:" + taskID + "-terminal"})
 	if err != nil {
 		t.Fatal(err)
 	}

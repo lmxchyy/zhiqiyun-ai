@@ -139,7 +139,7 @@ class DrainTests(unittest.TestCase):
     def test_no_bytecode_or_dirty_files_on_helper_import(self):
         with tempfile.TemporaryDirectory(prefix='issue199-import-') as directory:
             target = Path(directory)
-            for name in ('verify-safe-drain.py', 'verify-release-runtime.py'):
+            for name in ('verify-safe-drain.py', 'verify-release-runtime.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py'):
                 shutil.copyfile(str(ROOT / 'ops' / name), str(target / name))
             before = sorted(p.name for p in target.iterdir())
             result = subprocess.run([sys.executable, str(target / 'verify-safe-drain.py')],
@@ -152,7 +152,7 @@ class DrainTests(unittest.TestCase):
             target = Path(directory)
             source = target / 'verify-release-runtime.py'
             helper = target / 'verify-safe-drain.py'
-            for name in (source.name, helper.name):
+            for name in (source.name, helper.name, 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py'):
                 shutil.copy2(str(ROOT / 'ops' / name), str(target / name))
             original = source.read_bytes()
             original_stat = source.stat()
@@ -219,9 +219,15 @@ class DrainTests(unittest.TestCase):
             raise ValueError(msg)
         scripts = ('deploy.sh', 'rollback.sh', 'ops/verify-release-manifest.sh', 'ops/disk-guard.sh',
                    'ops/run-migrations.sh', 'ops/prestage-release.sh', 'ops/verify-prestage-proof.sh',
-                   'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py')
+                   'ops/verify-release-runtime.py', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py',
+                   'ops/quarantine-approval.py', 'ops/quarantine-live-snapshot.py', 'ops/quarantine-psql-transport.py',
+                   'ops/verify-image-quarantine-capability.py')
         self.assertIn('"ops/verify-safe-drain.py"', prestage)
         self.assertIn('"ops/enroll-quarantine.py"', prestage)
+        self.assertIn('"ops/quarantine-approval.py"', prestage)
+        self.assertIn('"ops/quarantine-live-snapshot.py"', prestage)
+        self.assertIn('"ops/quarantine-psql-transport.py"', prestage)
+        self.assertIn('"ops/verify-image-quarantine-capability.py"', prestage)
         hashes = {name: 'synthetic' for name in scripts}
         exec(block, {'proof': {'deploy_scripts_hash': hashes}, 'fail': fail})
         for missing in scripts:
@@ -231,7 +237,7 @@ class DrainTests(unittest.TestCase):
                 exec(block, {'proof': {'deploy_scripts_hash': changed}, 'fail': fail})
 
     def test_python36_syntax_and_no_model_deployment_import(self):
-        for filename in ('verify-safe-drain.py', 'enroll-quarantine.py', 'quarantine-drain-model.py'):
+        for filename in ('verify-safe-drain.py', 'enroll-quarantine.py', 'quarantine-approval.py', 'quarantine-live-snapshot.py', 'quarantine-psql-transport.py', 'quarantine-drain-model.py'):
             text = (ROOT / 'ops' / filename).read_text(encoding='utf-8')
             ast.parse(text, feature_version=(3, 6))
         for filename in ('deploy.sh', 'ops/verify-safe-drain.py', 'ops/enroll-quarantine.py', 'ops/prestage-release.sh'):
@@ -326,15 +332,17 @@ class PostgresReplay(unittest.TestCase):
         if not endpoint.startswith(('npipe:', 'unix:')):
             raise RuntimeError('Only a local Docker endpoint is permitted')
         cls.container = 'issue199-drain-test-' + uuid.uuid4().hex[:10]
-        subprocess.run(['docker', 'run', '--pull=never', '-d', '--network', 'none',
+        image = os.environ.get('POSTGRES_TEST_IMAGE', 'pgvector/pgvector:pg16')
+        subprocess.run(['docker', 'run', '-d', '--network', 'none',
                         '--name', cls.container, '-e', 'POSTGRES_PASSWORD=synthetic-local-only',
-                        'postgres:16-alpine'], check=True, stdout=subprocess.DEVNULL)
+                        image], check=True, stdout=subprocess.DEVNULL)
         cls.addClassCleanup(lambda: subprocess.run(['docker', 'rm', '-f', cls.container],
                                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         for _ in range(40):
-            r = subprocess.run(['docker', 'exec', cls.container, 'pg_isready', '-U', 'postgres'],
+            r = subprocess.run(['docker', 'exec', cls.container, 'psql', '-X', '-U', 'postgres', '-c', 'SELECT 1;'],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if r.returncode == 0:
+                time.sleep(1)
                 return
             time.sleep(.5)
         raise RuntimeError('isolated PostgreSQL did not start')
@@ -355,11 +363,11 @@ CREATE TABLE outbox_events(status text);
 CREATE TABLE video_task_outbox(state text);
 INSERT INTO xz_generation_tasks VALUES ('t','FAILED','FAILED',now()-interval '1 day');
 INSERT INTO provider_executions VALUES (1,'t',1,'failed');''')
-        self.assertEqual(result.returncode, 0, 'isolated fixture setup failed')
+        self.assertEqual(result.returncode, 0, f'isolated fixture setup failed: {result.stderr}')
 
     def count(self):
         result = self.sql(gate.SQL, readonly=True)
-        self.assertEqual(result.returncode, 0, 'read-only drain query failed')
+        self.assertEqual(result.returncode, 0, f'read-only drain query failed: {result.stderr}')
         return int(result.stdout.strip())
 
     def test_clear_and_no_database_writes(self):

@@ -36,7 +36,7 @@ func TestPersistGeneratedVideos_Success(t *testing.T) {
 		MasterKey:         "0123456789abcdef0123456789abcdef",
 	})
 
-	a := api{fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+	a := api{store: &jsonStore{}, fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
 
 	req := generation.CreateRequest{
 		UserID: "user_test",
@@ -116,7 +116,7 @@ func TestPersistGeneratedVideos_Idempotent(t *testing.T) {
 		MasterKey:         "0123456789abcdef0123456789abcdef",
 	})
 
-	a := api{fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+	a := api{store: &jsonStore{}, fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
 	taskID := "task_idempotent_001"
 	req := generation.CreateRequest{
 		UserID: "user_test",
@@ -169,7 +169,7 @@ func TestPersistGeneratedVideos_UpstreamFailure(t *testing.T) {
 		DefaultProvider: "s3", Endpoint: "https://storage.example", AccessKey: "access", SecretKey: "secret",
 		Bucket: "xianzhi-assets", DefaultQuotaBytes: 1024, MaxUploadBytes: 1024, MasterKey: "0123456789abcdef0123456789abcdef",
 	})
-	a := api{fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+	a := api{store: &jsonStore{}, fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
 
 	req := generation.CreateRequest{
 		UserID: "user_test",
@@ -242,7 +242,7 @@ func TestPersistGeneratedVideos_RequiresDurableStorage(t *testing.T) {
 	}
 
 	t.Run("missing service fails closed", func(t *testing.T) {
-		a := api{cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+		a := api{store: &jsonStore{}, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
 		_, _, err := a.persistGeneratedVideos(context.Background(), "task_storage_missing", req)
 		if err == nil || !strings.Contains(err.Error(), "private video storage is unavailable") {
 			t.Fatalf("expected unavailable-storage error, got %v", err)
@@ -251,7 +251,7 @@ func TestPersistGeneratedVideos_RequiresDurableStorage(t *testing.T) {
 
 	t.Run("unconfigured service fails closed", func(t *testing.T) {
 		service := storagecenter.NewService(storagecenter.NewMemoryRepository(), generatedStorageTestFactory{}, storagecenter.Options{})
-		a := api{fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
+		a := api{store: &jsonStore{}, fileService: service, cfg: config.Config{VideoStoragePersistenceEnabled: true}}
 		_, _, err := a.persistGeneratedVideos(context.Background(), "task_storage_unconfigured", req)
 		if err == nil || !strings.Contains(err.Error(), "private video storage is not configured") {
 			t.Fatalf("expected unconfigured-storage error, got %v", err)

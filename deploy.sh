@@ -26,6 +26,7 @@ TIMESTAMP="$(date +%Y-%m-%d_%H%M%S)"
 LOCK_DIR="${PRESTAGE_DIR}/release.lock"
 RECOVERY_LOCK="${PRESTAGE_DIR}/release.lock.recovering"
 OWNER_TOKEN="${BASHPID:-$$}_$(date +%s%N 2>/dev/null || date +%s)_$RANDOM"
+export OWNER_TOKEN
 IS_LOCK_OWNER=0
 
 while [ $# -gt 0 ]; do
@@ -197,11 +198,17 @@ check_safe_drain() {
   local drain_timeout="${DRAIN_TIMEOUT_SECONDS:-15}"
   if [ -n "$QUARANTINE_MANIFEST" ]; then
     [ -f "$QUARANTINE_MANIFEST" ] || fail "Quarantine manifest not found on disk: $QUARANTINE_MANIFEST"
-    log "Performing safe drain observation with approved quarantine exemptions (Release SHA: $PRESTAGED_RELEASE_SHA)..."
-    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" --manifest "$QUARANTINE_MANIFEST" --release-sha "$PRESTAGED_RELEASE_SHA"
+    EXPECTED_QUARANTINE_MANIFEST_SHA256="$(sha256sum "$QUARANTINE_MANIFEST" | awk '{print $1}')"
+    export EXPECTED_QUARANTINE_MANIFEST_SHA256
+    log "Performing safe drain observation with approved quarantine exemptions (Release SHA: $PRESTAGED_RELEASE_SHA, Manifest SHA: $EXPECTED_QUARANTINE_MANIFEST_SHA256)..."
+    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" \
+      --manifest "$QUARANTINE_MANIFEST" \
+      --release-sha "$PRESTAGED_RELEASE_SHA" \
+      --expected-manifest-sha256 "$EXPECTED_QUARANTINE_MANIFEST_SHA256" \
+      --prestage-proof "$PRESTAGE_PROOF_FILE"
   else
     log "Performing read-only safe drain observation; no quarantine exemptions..."
-    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout"
+    python3 ops/verify-safe-drain.py "$COMPOSE_FILE" "$ENV_FILE" "$drain_timeout" --prestage-proof "$PRESTAGE_PROOF_FILE"
   fi
 }
 
@@ -406,6 +413,7 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   [[ "$PRESTAGED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "PRESTAGED_RELEASE_SHA must be a 40-character lowercase hexadecimal SHA."
   current_head="$(git rev-parse HEAD)"
   [ "$current_head" = "$PRESTAGED_RELEASE_SHA" ] || fail "Current HEAD ($current_head) does not match PRESTAGED_RELEASE_SHA ($PRESTAGED_RELEASE_SHA). Checkout target commit before cutover."
+  echo "$PRESTAGED_RELEASE_SHA" > "$LOCK_DIR/release_sha"
 
   if [ -z "$PRESTAGE_PROOF_FILE" ]; then
     for candidate in \
@@ -436,6 +444,10 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   esac
   log "Prestaged immutable image reference: $XIANZHI_IMAGE_REFERENCE"
 fi
+
+# Production cutover must be offline and authenticated. Legacy build/pull
+# entrypoints cannot establish actual packaged runtime capability.
+[ "$PRESTAGED_RELEASE" = "1" ] || fail "RUNTIME_CAPABILITY_PROOF_REQUIRED: Use fresh Prestage proof before production cutover."
 
 if [ "$PRESTAGED_RELEASE" != "1" ]; then
   if [ -z "$GIT_BRANCH" ]; then
@@ -530,6 +542,10 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
   { [ -n "$old_api_cid" ] && [ "$old_api_cid" = "$cur_api_cid" ]; } || fail "Old API identity changed."
   { [ -n "$old_worker_cid" ] && [ "$old_worker_cid" = "$cur_worker_cid" ]; } || fail "Old worker identity changed."
 
+  # Final offline identity/expiry/policy recheck immediately BEFORE first stop.
+  capability_args=(--verify-proof "$PRESTAGE_PROOF_FILE" --image "$XIANZHI_IMAGE_REFERENCE" --release-sha "$PRESTAGED_RELEASE_SHA" --compose-file "$COMPOSE_FILE" --env-file "$ENV_FILE")
+  python3 -B ops/verify-image-quarantine-capability.py "${capability_args[@]}" >/dev/null || fail "RUNTIME_CAPABILITY_INVALID: Restage before stop."
+
   # Stop old API and worker services safely, verifying zero running owner processes
   log "Safely stopping old API and worker containers..."
   docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop -t 120 xianzhi-ai smartvideo-worker || fail "Failed to stop old API/worker containers."
@@ -585,8 +601,14 @@ if [ "$PRESTAGED_RELEASE" = "1" ]; then
 
   if [ -n "$QUARANTINE_MANIFEST" ]; then
     [ -f "$QUARANTINE_MANIFEST" ] || fail "Quarantine manifest not found on disk: $QUARANTINE_MANIFEST"
+    current_manifest_sha="$(sha256sum "$QUARANTINE_MANIFEST" | awk '{print $1}')"
+    [ "$current_manifest_sha" = "$EXPECTED_QUARANTINE_MANIFEST_SHA256" ] \
+      || fail "MANIFEST_MUTATED: Quarantine manifest bytes changed between safe drain and enrollment."
     log "Enrolling approved quarantine records during zero-activity window..."
-    python3 ops/enroll-quarantine.py "$COMPOSE_FILE" "$ENV_FILE" "$QUARANTINE_MANIFEST" "$PRESTAGED_RELEASE_SHA"
+    python3 ops/enroll-quarantine.py "$COMPOSE_FILE" "$ENV_FILE" "$QUARANTINE_MANIFEST" "$PRESTAGED_RELEASE_SHA" \
+      --release-lock-dir "$LOCK_DIR" \
+      --expected-manifest-sha256 "$EXPECTED_QUARANTINE_MANIFEST_SHA256" \
+      --prestage-proof "$PRESTAGE_PROOF_FILE"
   fi
 
   log "Starting immutable production services from prestaged images (zero pull)..."
@@ -620,6 +642,7 @@ if [ "$IMMUTABLE_RELEASE" = "1" ]; then
   if [ "$PRESTAGED_RELEASE" = "1" ]; then
     # Full health & readiness gating verification (including RepoDigests, API health/ready, worker healthy)
     verify_health_and_readiness "$expected_image_id"
+    python3 -B ops/verify-image-quarantine-capability.py "${capability_args[@]}" --post-start >/dev/null || fail "RUNTIME_CAPABILITY_POST_START_MISMATCH: Actual process policy failed."
     python3 ops/verify-release-runtime.py post "$COMPOSE_FILE" "$ENV_FILE"
   else
     for service in xianzhi-ai smartvideo-worker; do

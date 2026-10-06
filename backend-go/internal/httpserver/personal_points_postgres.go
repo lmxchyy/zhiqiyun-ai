@@ -856,13 +856,19 @@ func (s *PostgresPersonalPointStore) reserveTx(ctx context.Context, tx *sql.Tx, 
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.BusinessType == "" || cmd.BusinessID == "" || cmd.IdempotencyKey == "" || cmd.RequestedPoints <= 0 {
 		return result, ErrInvalidPointCommand
 	}
-	if err := rejectQuarantinedPointMutation(ctx, tx, cmd.IdempotencyKey, "reserve"); err != nil {
-		return result, err
+	businessID := strings.TrimSpace(cmd.BusinessID)
+	quarantineTaskID := strings.TrimSpace(cmd.QuarantineTaskID)
+	if quarantineTaskID != "" && quarantineTaskID != businessID {
+		return result, ErrInvalidPointCommand
 	}
-	if strings.Contains(strings.ToUpper(cmd.BusinessType), "GENERATION") {
-		if err := rejectQuarantinedTaskTx(ctx, tx, cmd.BusinessID, "billing_reserve"); err != nil {
-			return result, err
-		}
+	if quarantineTaskID == "" {
+		// BusinessID is always checked as a potential quarantined task ID.
+		// Task-linked callers should also populate QuarantineTaskID explicitly;
+		// never infer task identity from BusinessType or an idempotency-key prefix.
+		quarantineTaskID = businessID
+	}
+	if err := rejectQuarantinedTaskTx(ctx, tx, quarantineTaskID, "billing_reserve"); err != nil {
+		return result, err
 	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.ReservedAt = pointNow(cmd.ReservedAt)
@@ -1006,9 +1012,6 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.ReservationID == "" || cmd.IdempotencyKey == "" || cmd.Points <= 0 {
 		return result, ErrInvalidPointCommand
 	}
-	if err := rejectQuarantinedPointMutation(ctx, tx, cmd.IdempotencyKey, "capture"); err != nil {
-		return result, err
-	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.CapturedAt = pointNow(cmd.CapturedAt)
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
@@ -1018,23 +1021,24 @@ func (s *PostgresPersonalPointStore) captureTx(ctx context.Context, tx *sql.Tx, 
 	if !ok {
 		return result, ErrPointNotFound
 	}
+	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
+	if err != nil {
+		return result, err
+	}
+	if reservation.BusinessID != "" {
+		if err := rejectQuarantinedTaskTx(ctx, tx, reservation.BusinessID, "billing_capture"); err != nil {
+			return result, err
+		}
+	}
 	walletKey := personalWalletKey(cmd.AccountID, "capture", cmd.IdempotencyKey)
 	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
 		return result, idemErr
 	} else if idem {
-		reservation, rErr := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
-		if rErr != nil {
-			return result, rErr
-		}
 		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
 		if aErr != nil {
 			return result, aErr
 		}
 		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
-	}
-	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
-	if err != nil {
-		return result, err
 	}
 	if reservation.ReservedPoints < cmd.Points {
 		return result, ErrInsufficientPoints
@@ -1133,9 +1137,6 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 	if cmd.AccountID == "" || cmd.UserID == "" || cmd.ReservationID == "" || cmd.IdempotencyKey == "" {
 		return result, ErrInvalidPointCommand
 	}
-	if err := rejectQuarantinedPointMutation(ctx, tx, cmd.IdempotencyKey, "release"); err != nil {
-		return result, err
-	}
 	fingerprint := pointCommandFingerprint(cmd)
 	cmd.ReleasedAt = pointNow(cmd.ReleasedAt)
 	account, ok, err := pgLoadAccount(ctx, tx, cmd.AccountID, cmd.UserID, true)
@@ -1145,23 +1146,24 @@ func (s *PostgresPersonalPointStore) releaseTx(ctx context.Context, tx *sql.Tx, 
 	if !ok {
 		return result, ErrPointNotFound
 	}
+	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
+	if err != nil {
+		return result, err
+	}
+	if reservation.BusinessID != "" {
+		if err := rejectQuarantinedTaskTx(ctx, tx, reservation.BusinessID, "billing_release"); err != nil {
+			return result, err
+		}
+	}
 	walletKey := personalWalletKey(cmd.AccountID, "release", cmd.IdempotencyKey)
 	if idem, idemErr := pgWalletIdempotent(ctx, tx, cmd.AccountID, walletKey, fingerprint); idemErr != nil {
 		return result, idemErr
 	} else if idem {
-		reservation, rErr := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
-		if rErr != nil {
-			return result, rErr
-		}
 		allocations, aErr := pgLoadAllocations(ctx, tx, reservation.ID, cmd.AccountID, cmd.UserID, false)
 		if aErr != nil {
 			return result, aErr
 		}
 		return PersonalPointMutationResult{Reservation: reservation, Allocations: allocations, Idempotent: true}, nil
-	}
-	reservation, err := pgReadReservation(ctx, tx, cmd.ReservationID, cmd.AccountID, cmd.UserID, false)
-	if err != nil {
-		return result, err
 	}
 	amountTotal := cmd.Points
 	if amountTotal == 0 {

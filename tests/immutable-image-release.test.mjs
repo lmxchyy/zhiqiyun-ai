@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, chmod, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -169,6 +169,12 @@ fi
 
 if [ "$1" = "inspect" ]; then
   case "\${3:-}" in
+    *State.Running*)
+      echo "false"
+      ;;
+    *State.Status*)
+      echo "exited"
+      ;;
     *Config.Image*)
       if [ "\${MOCK_CONFIG_IMAGE_MISMATCH:-0}" = "1" ]; then
         echo "ghcr.io/lmxchyy/zhiqiyun-ai:stale"
@@ -267,115 +273,11 @@ test("immutable deployment verifies both container configuration and image diges
   assert.match(rollback, /--no-build/);
 });
 
-test("immutable deploy persists image reference to env file so fresh compose invocations resolve the digest", async () => {
+test("legacy deploy entrypoints stop before cutover without authenticated runtime proof", async () => {
+  // These lightweight sandboxes intentionally contain no signed Prestage proof.
+  // Post-proof immutable image, compose, and persistence behavior is exercised by
+  // the Docker production-contract harness; do not stub the production verifier.
   const sandbox = await setupSandbox();
-  const targetDigest = "sha256:" + "a".repeat(64);
-  const expectedRef = `ghcr.io/lmxchyy/zhiqiyun-ai@${targetDigest}`;
-
-  const { stdout } = await runDeploy(sandbox, {
-    IMMUTABLE_RELEASE: "1",
-    RELEASE_MANIFEST: "release-manifest.json"
-  });
-  assert.match(stdout, /Persisted XIANZHI_IMAGE_REFERENCE to \.env\.production/);
-
-  const envFile = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.match(envFile, new RegExp(`^XIANZHI_IMAGE_REFERENCE=${expectedRef}$`, "m"));
-
-  // Fresh compose invocation without XIANZHI_IMAGE_REFERENCE in env
-  const freshEnv = { ...process.env, TARGET_PLATFORM: "linux/amd64" };
-  delete freshEnv.XIANZHI_IMAGE_REFERENCE;
-  const { stdout: composeOut } = await execFileAsync(
-    bash,
-    ["-c", `export PATH='${sandbox.bashBin}':"$PATH"; cd '${sandbox.bashDir}'; docker compose -f compose.prod.yml --env-file .env.production config`],
-    { env: freshEnv }
-  );
-  assert.match(composeOut, new RegExp(`image: ${expectedRef}`));
-  assert.doesNotMatch(composeOut, /xianzhi-ai-platform:prod/);
-});
-
-test("immutable deploy fails early when compose desired state diverges from verified manifest digest", async () => {
-  const sandbox = await setupSandbox();
-  await assert.rejects(
-    runDeploy(sandbox, {
-      IMMUTABLE_RELEASE: "1",
-      RELEASE_MANIFEST: "release-manifest.json",
-      MOCK_DESIRED_STATE_MISMATCH: "1"
-    }),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /desired image mismatch/);
-      return true;
-    }
-  );
-
-  const envFile = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.doesNotMatch(envFile, /ghcr\.io\/lmxchyy\/zhiqiyun-ai@sha256:/);
-});
-
-test("deploy rejects an explicit production opt-out of video storage persistence", async () => {
-  const sandbox = await setupSandbox({
-    envContent: "VIDEO_STORAGE_PERSISTENCE_ENABLED=false\n"
-  });
-
-  await assert.rejects(
-    runDeploy(sandbox),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /VIDEO_STORAGE_PERSISTENCE_ENABLED must resolve to true/);
-      assert.match(error.stderr, /Video storage persistence production gate failed/);
-      return true;
-    }
-  );
-});
-
-test("immutable deploy fails when running container image ID does not match expected image ID", async () => {
-  const sandbox = await setupSandbox();
-  await assert.rejects(
-    runDeploy(sandbox, {
-      IMMUTABLE_RELEASE: "1",
-      RELEASE_MANIFEST: "release-manifest.json",
-      MOCK_RUNNING_IMAGE_MISMATCH: "1"
-    }),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /is not running the manifest image digest/);
-      return true;
-    }
-  );
-
-  const envFile = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.doesNotMatch(envFile, /ghcr\.io\/lmxchyy\/zhiqiyun-ai@sha256:/);
-});
-
-test("immutable deploy fails when API or worker Config.Image is stale", async () => {
-  const sandbox = await setupSandbox();
-  await assert.rejects(
-    runDeploy(sandbox, {
-      IMMUTABLE_RELEASE: "1",
-      RELEASE_MANIFEST: "release-manifest.json",
-      MOCK_CONFIG_IMAGE_MISMATCH: "1"
-    }),
-    (error) => {
-      assert.equal(error.code, 1);
-      assert.match(error.stderr, /Config\.Image is not the manifest reference/);
-      return true;
-    }
-  );
-
-  const envFile = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.doesNotMatch(envFile, /ghcr\.io\/lmxchyy\/zhiqiyun-ai@sha256:/);
-});
-
-test("immutable deploy rejects manifest missing or invalid digest before modifying environment", async () => {
-  const invalidManifest = {
-    git_sha: "97361d7fe4cfcd32cce644b153532be480ad721a",
-    image: "ghcr.io/lmxchyy/zhiqiyun-ai",
-    digest: "sha256:invalid-short",
-    image_reference: "ghcr.io/lmxchyy/zhiqiyun-ai@sha256:invalid-short",
-    built_at: "2026-08-24T00:00:00Z",
-    production_contract: "passed"
-  };
-  const sandbox = await setupSandbox({ manifest: invalidManifest });
   const initialEnv = await readFile(join(sandbox.dir, ".env.production"), "utf8");
 
   await assert.rejects(
@@ -385,100 +287,30 @@ test("immutable deploy rejects manifest missing or invalid digest before modifyi
     }),
     (error) => {
       assert.equal(error.code, 1);
-      assert.match(error.stderr, /invalid digest/);
+      assert.match(error.stderr, /RUNTIME_CAPABILITY_PROOF_REQUIRED/);
       return true;
     }
   );
 
-  const finalEnv = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.equal(finalEnv, initialEnv);
+  assert.equal(await readFile(join(sandbox.dir, ".env.production"), "utf8"), initialEnv);
 });
 
-test("immutable deploy is idempotent when re-run with identical manifest digest", async () => {
+test("legacy rollback entrypoint stops before mutation without authenticated runtime proof", async () => {
   const sandbox = await setupSandbox();
-  await runDeploy(sandbox, {
-    IMMUTABLE_RELEASE: "1",
-    RELEASE_MANIFEST: "release-manifest.json"
-  });
-  const firstEnv = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  const targetDigest = "sha256:" + "a".repeat(64);
-  const expectedRef = `ghcr.io/lmxchyy/zhiqiyun-ai@${targetDigest}`;
+  const initialEnv = await readFile(join(sandbox.dir, ".env.production"), "utf8");
 
-  // Second deployment with the exact same manifest
-  await runDeploy(sandbox, {
-    IMMUTABLE_RELEASE: "1",
-    RELEASE_MANIFEST: "release-manifest.json"
-  });
-  const secondEnv = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-
-  assert.equal(secondEnv, firstEnv);
-  const matches = secondEnv.match(new RegExp(`^XIANZHI_IMAGE_REFERENCE=${expectedRef}$`, "gm")) || [];
-  assert.equal(matches.length, 1);
-});
-
-test("immutable deploy preserves existing env secrets, comments, and file permissions without leaking to stdout", async () => {
-  const secretDatabaseUrl = "postgres://user:super_secret_pw@10.0.0.1:5432/prod";
-  const masterKey = "0123456789abcdef0123456789abcdef";
-  const customComment = "# Vital production database credential - do not expose";
-  const envContent = `${customComment}
-DATABASE_URL="${secretDatabaseUrl}"
-STORAGE_MASTER_KEY="${masterKey}"
-CONNECTOR_SECRET_ENCRYPTION_KEY="${masterKey}"
-# Immutable releases set this to the exact registry image@sha256:digest at deploy time
-# XIANZHI_IMAGE_REFERENCE=
-`;
-  const sandbox = await setupSandbox({ envContent });
-
-  const { stdout, stderr } = await runDeploy(sandbox, {
-    IMMUTABLE_RELEASE: "1",
-    RELEASE_MANIFEST: "release-manifest.json"
-  });
-
-  // Secrets must NEVER appear in stdout or stderr
-  assert.doesNotMatch(stdout, /super_secret_pw/);
-  assert.doesNotMatch(stderr, /super_secret_pw/);
-  assert.doesNotMatch(stdout, new RegExp(masterKey));
-  assert.doesNotMatch(stderr, new RegExp(masterKey));
-
-  // Secrets and comments must remain intact in .env.production
-  const updatedEnv = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.match(updatedEnv, new RegExp(customComment, "m"));
-  assert.match(updatedEnv, new RegExp(`DATABASE_URL="${secretDatabaseUrl}"`, "m"));
-  assert.match(updatedEnv, new RegExp(`STORAGE_MASTER_KEY="${masterKey}"`, "m"));
-
-  // File permissions check (on platforms supporting POSIX mode)
-  if (process.platform !== "win32") {
-    const fileStat = await stat(join(sandbox.dir, ".env.production"));
-    assert.equal(fileStat.mode & 0o777, 0o600);
-  }
-});
-
-test("immutable rollback verifies running container image ID and persists target digest to env file", async () => {
-  const rollbackDigest = "sha256:" + "b".repeat(64);
-  const rollbackRef = `ghcr.io/lmxchyy/zhiqiyun-ai@${rollbackDigest}`;
-  const rollbackManifest = {
-    git_sha: "97361d7fe4cfcd32cce644b153532be480ad721a",
-    image: "ghcr.io/lmxchyy/zhiqiyun-ai",
-    digest: rollbackDigest,
-    image_reference: rollbackRef,
-    built_at: "2026-08-24T00:00:00Z",
-    production_contract: "passed"
-  };
-  const sandbox = await setupSandbox({ manifest: rollbackManifest });
-
-  const { stdout } = await execFileAsync(
-    bash,
-    ["-c", `export PATH='${sandbox.bashBin}':"$PATH"; cd '${sandbox.bashDir}'; ./rollback.sh release-manifest.json`],
-    {
-      env: {
-        ...process.env,
-        IMMUTABLE_RELEASE: "1",
-        TARGET_PLATFORM: "linux/amd64"
-      }
+  await assert.rejects(
+    execFileAsync(
+      bash,
+      ["-c", `export PATH='${sandbox.bashBin}':"$PATH"; cd '${sandbox.bashDir}'; ./rollback.sh release-manifest.json`],
+      { env: { ...process.env, IMMUTABLE_RELEASE: "1", TARGET_PLATFORM: "linux/amd64" } }
+    ),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /RUNTIME_CAPABILITY_PROOF_MISSING/);
+      return true;
     }
   );
 
-  assert.match(stdout, /Persisted XIANZHI_IMAGE_REFERENCE to \.env\.production/);
-  const envFile = await readFile(join(sandbox.dir, ".env.production"), "utf8");
-  assert.match(envFile, new RegExp(`^XIANZHI_IMAGE_REFERENCE=${rollbackRef}$`, "m"));
+  assert.equal(await readFile(join(sandbox.dir, ".env.production"), "utf8"), initialEnv);
 });
