@@ -22,7 +22,8 @@ approval = types.ModuleType('quarantine_approval')
 approval.__file__ = _approval_path
 with open(_approval_path, 'rb') as _source:
     exec(compile(_source.read(), _approval_path, 'exec'), approval.__dict__)
-# Reusable CORE_ONLY API; production exemptions remain NOT_READY below.
+# Complete canonical projection API; live approval still fails closed until the
+# Carrier-bound authority registry is provisioned with the human approver key.
 _snapshot_path = os.path.join(os.path.dirname(__file__), 'quarantine-live-snapshot.py')
 live_snapshot = types.ModuleType('quarantine_live_snapshot')
 live_snapshot.__file__ = _snapshot_path

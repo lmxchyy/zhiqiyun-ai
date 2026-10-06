@@ -17,6 +17,15 @@
 - 视频/PPT 专属及其它告警仍使用既有默认 disable 行为；不在此补丁重构其开关范围、顺序、阈值或首次触发后退出的逻辑。不能把“图片 DLQ 不关闭视频”理解成“任何告警都不得关闭视频”。
 - env 改动仍使用同目录原子替换并保留权限。不输出 env 内容。
 - 本次选中的开关已经 false 时不重复写文件，但仍在锁内执行 API-only reconcile：env 为 false 不能证明运行容器已读取 false。
+
+## Stage 0A：observe-only 验收模式（Issue #205）
+
+- 仅显式传入 `--observe-only` 才进入 observe-only；cron 不带该参数时仍为正常模式，不存在环境变量、配置文件或自动切换入口。
+- observe-only 只读 release/recovery lock、DLQ metrics 和 `.env.production` 中三个 canary 开关；输出结构化拟执行动作，不调用 Docker/Compose、不写 env、不启动 migrate。
+- lock 在 scrape 前存在时输出 `SUPPRESSED_BY_RELEASE_LOCK` 且跳过 metrics；scrape 期间出现 lock 时再次输出该标记并抑制拟执行结论。
+- 无 lock 且 metrics 报警时只报告正常模式本次会执行的首个动作、后续待处理告警、当前 canary 值及拟关闭开关；`executed=false`、`migration=false`。正常模式每次触发后退出，因此不把后续告警误报成同一 cron 调用会执行的动作。
+- 验收必须有明确起止时间与操作人； observe-only 不是长期运行配置。退出 observe-only 只允许经单独审批的显式 cron 配置变更，脚本不会自行恢复正常模式。
+- 恢复 normal mode 的先决条件：对应新 Carrier 已安装到 host 控制面；至少一个真实 cron 周期在正式 release lock 下输出 `SUPPRESSED_BY_RELEASE_LOCK` 且 env/API/migrate/canary 状态无变化；当前 DLQ 处置策略已另行确认。此脚本不批准该策略，也不自动恢复 normal mode。
 - 唯一允许的 Compose 操作为 `up -d --no-deps --no-build --pull never xianzhi-ai`；不拉取、不构建、不启动 migrate 或其它依赖。
 
 ## 中断与失败
@@ -36,6 +45,13 @@ INT/TERM 记录退出意图，不在 Compose 子进程仍运行时提前解锁�
 5. 同步新的宿主机 SHA 后，旧 Carrier proof 的 source/SHA 绑定不能自动继承；不要编辑 proof。最终应用发布仍需按新 Carrier 官方产物和现场门禁重新准备，且 9 条 unresolved executions 在后续独立策略完成前继续阻断应用切流。
 
 本次兼容补丁只有隔离开发/测试，不授权生产安装或切流；Review PASS 且远端 CI 全绿后也只能重新申请生产安装。没有执行以上生产步骤，没有重新 prestage 或刷新备份。
+
+## Stage 0B：离线审批与完整快照（Issue #205）
+
+- `xz_assets` 是当前 schema 中的 artwork/result projection；`xz_file_objects`、storage configs、relations/jobs/multipart 表组成 DB storage family。Canonical live snapshot 将 task/core、provider attempts/correlations、完整个人账本投影与上述 DB family 一起绑定。
+- “完整”只指已声明并哈希的数据库证据；远端 object 是否仍可读、历史结果是否可归属于特定 provider attempt 如仍标记 `UNPROVEN`，必须显式呈现给人工审批人，不得描述成已验证。
+- Agent 只能输出 unsigned candidate 与 snapshot evidence；签名是离线人类审批动作。发布机只按固定 `authority_id=prod-quarantine-approval-v1`、Carrier-pinned 公钥指纹、release SHA、记录集合、快照/evidence hash 及有效期验签。
+- 私钥不进入仓库、发布机、Pi 或 deploy tooling。公钥 pin 通过 Git review/CI/Carrier/Proof 变更；正式人类审批责任方与公钥未 provision 时，验签必须 fail closed。
 
 ## 测试
 

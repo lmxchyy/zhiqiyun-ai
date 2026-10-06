@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""CORE_ONLY real-DB projection; NOT a complete live approval or safety oracle.
+"""Canonical read-only DB snapshot for offline quarantine approval candidates.
 
-Python >=3.6. Cursor API is shared by read-only sampling and a future registration
-transaction. Asset/storage support is explicitly partial and DB-only: final
-approval validation ALWAYS blocks. No root override, CLI, write or test bypass.
+Python >=3.6. A canonical snapshot binds core task/execution state, personal
+financial effects, xz_assets artwork/results, and linked storage metadata. It
+never claims remote object health or historical provider-attempt attribution
+when those facts cannot be proven from the database. No DB write or signer.
 """
 import datetime
 import hashlib
@@ -24,7 +25,9 @@ with open(_approval_path, 'rb') as _source:
 CORE_VERSION = 'issue203-core-only-pg-text-sha256-v1'
 FINANCIAL_VERSION = 'issue203-personal-financial-only-pg-text-sha256-v1'
 PARTIAL_VERSION = 'issue203-core-personal-financial-only-v1'
-MISSING_FAMILIES = ('assets-artworks-results-storage',)
+MISSING_FAMILIES = ()
+COMPLETE_SNAPSHOT_FAMILIES = ('core-task-execution', 'personal-financial-ledger',
+                              'artwork-assets-provider-results-storage-metadata')
 MAX_ROWS = 10000
 # Go strings.TrimSpace (stringValue/upperTrim), not SQL's space-only trim.
 GO_TRIM_SPACE = '\t\n\v\f\r \u0085\u00a0\u1680' + ''.join(chr(c) for c in range(0x2000, 0x200b)) + '\u2028\u2029\u202f\u205f\u3000'
@@ -939,26 +942,14 @@ def sample_core_financial_read_only(connection, entries):
 
 def validate_live_approval_in_transaction(cursor, raw_bytes, expected_file_sha256,
                                            release_sha, operation):
-    """Keep signed bytes/evidence/release/windows separate from live hashes.
+    """Verify signed authority and recompute the complete declared DB snapshot.
 
-    Approval is verified with the protected fixed-root source helper.
-    This interface intentionally has NO completion flag/coverage override. Core
-    and financial projections cannot establish artwork/storage equivalence, therefore
-    even an authentic signed arbitrary snapshot hash ALWAYS fails closed here.
+    This remains a read-only gate. External object health and exact historical
+    provider-attempt ownership are explicit snapshot limitations, not silently
+    promoted to proven facts.
     """
-    if (not isinstance(raw_bytes, bytes) or not isinstance(expected_file_sha256, str) or
-            not re.fullmatch('[0-9a-f]{64}', expected_file_sha256) or
-            hashlib.sha256(raw_bytes).hexdigest() != expected_file_sha256):
-        block('MANIFEST_BYTES_MISMATCH')
-    now = transaction_clock(cursor)
-    try:
-        manifest = _approval.verify(raw_bytes, release_sha, operation, now)
-    except Exception:
-        block('APPROVAL_INVALID')
-    project_core_financial_in_transaction(cursor, manifest['executions'])
-    # No returned exemptions and no live snapshot_sha256 comparison until ALL
-    # required families have a real, reviewed projection. This is not a PASS.
-    block('SNAPSHOT_FAMILIES_INCOMPLETE')
+    return validate_live_snapshot_in_transaction(
+        cursor, raw_bytes, release_sha, operation, expected_file_sha256)
 
 
 # Exact migrations021/044/046/047/107; claim identity is migration115 index.
@@ -1409,6 +1400,40 @@ def sample_canonical_live_read_only(connection, entries):
         block('DB_QUERY_FAILED')
     try:
         return project_canonical_live_snapshot_in_transaction(cursor, entries)
+    finally:
+        try:
+            cursor.execute('ROLLBACK')
+            cursor.close()
+        except Exception:
+            block('DB_QUERY_FAILED')
+
+
+def build_unsigned_candidate_in_transaction(cursor, entries, release_sha, key_id,
+                                            not_before, expires_at):
+    """Build a no-signature candidate from this same coherent DB snapshot."""
+    now = transaction_clock(cursor)
+    snapshots = project_canonical_live_snapshot_in_transaction(cursor, entries)
+    return _approval.build_unsigned_candidate(
+        entries, snapshots, release_sha, key_id, not_before, expires_at, now)
+
+
+def sample_unsigned_candidate_read_only(connection, entries, release_sha, key_id,
+                                        not_before, expires_at):
+    """Sample and build an unsigned candidate in one explicit READ ONLY transaction."""
+    try:
+        if connection.closed:
+            block('DB_QUERY_FAILED')
+        if connection.autocommit is not True or connection.get_transaction_status() != 0:
+            block('TRANSACTION_REQUIRED')
+        cursor = connection.cursor()
+        cursor.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    except SnapshotError:
+        raise
+    except Exception:
+        block('DB_QUERY_FAILED')
+    try:
+        return build_unsigned_candidate_in_transaction(
+            cursor, entries, release_sha, key_id, not_before, expires_at)
     finally:
         try:
             cursor.execute('ROLLBACK')
