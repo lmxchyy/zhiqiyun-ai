@@ -131,6 +131,9 @@ jobs:
       - name: Test exact legacy NULL quarantine candidate guards (#207)
         run: python3 tests/issue207-legacy-null-approval-test.py
 
+      - name: Test Stage 0B operator release authorization and quarantine approval
+        run: python3 tests/stage0b-operator-approval-test.py
+
       - name: Test image DLQ killswitch preserves video canary scope
         run: python3 tests/killswitch-image-dlq-scope.py
 

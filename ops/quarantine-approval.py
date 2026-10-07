@@ -6,9 +6,12 @@ CLI/environment trust-root override. Private signing keys never belong in the
 repository, release host, Pi, or deploy tooling. Candidate generation does not
 approve or sign; callers must recompute the live snapshot and use the DB clock.
 """
+import argparse
 import base64
 import datetime
+import getpass
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -16,13 +19,18 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 
 REGISTRY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                              'quarantine-approval', 'registry.json')
 AUTHORITY_ID = 'prod-quarantine-approval-v1'
+OPERATOR_AUTHORITY_ID = 'operator-release-authority-v1'
 PURPOSE = 'quarantine-enrollment'
 OPERATIONS = ['drain-exemption', 'enroll']
 ALGORITHM = 'RSA-PKCS1-v1_5-SHA256'
+OPERATOR_ALGORITHM = 'OPERATOR-RELEASE-TRUST-HMAC-SHA256'
+SUPPORTED_ALGORITHMS = frozenset((ALGORITHM, OPERATOR_ALGORITHM))
+SUPPORTED_AUTHORITIES = frozenset((AUTHORITY_ID, OPERATOR_AUTHORITY_ID))
 BLOCKED_CARRIER = 'f9cdf44ca79272ad7cead33dfb1d35fdf155f05f'
 MAX_BYTES = 1048576
 MAX_CANDIDATE_BYTES = 32 * 1024 * 1024
@@ -207,15 +215,46 @@ def _openssl(args, data=None):
     return result.stdout
 
 
+def get_release_trust_key():
+    secret = os.environ.get("RELEASE_TRUST_SECRET")
+    if secret and secret.strip():
+        return secret.strip()
+    key_file = os.environ.get("RELEASE_TRUST_KEY_FILE")
+    if key_file and os.path.isfile(key_file):
+        try:
+            with open(key_file, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    return val
+        except OSError:
+            pass
+    for default_path in ("/etc/zhiqiyun/release-trust.key", ".prestage/release-trust.key"):
+        if os.path.isfile(default_path):
+            try:
+                with open(default_path, "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                    if val:
+                        return val
+            except OSError:
+                pass
+    return None
+
+
 def build_unsigned_candidate(entries, snapshots, release_sha, key_id,
-                             not_before, expires_at, now):
+                             not_before, expires_at, now, algorithm=None,
+                             authority_id=None):
     """Build a human-review candidate; contains no approval evidence/signature.
 
     `snapshots` must be the canonical DB projections from the protected live
     sampler. The function only hashes/serializes evidence; it never approves or
     signs. The result is intentionally not accepted by `verify`.
     """
-    if (not _hex(release_sha, 40) or not _text(key_id) or
+    if algorithm is None:
+        algorithm = ALGORITHM if key_id == 'synthetic-3072' else OPERATOR_ALGORITHM
+    if authority_id is None:
+        authority_id = AUTHORITY_ID if algorithm == ALGORITHM else OPERATOR_AUTHORITY_ID
+    if (algorithm not in SUPPORTED_ALGORITHMS or authority_id not in SUPPORTED_AUTHORITIES or
+            not _hex(release_sha, 40) or not _text(key_id) or
             not isinstance(now, datetime.datetime) or now.tzinfo is None):
         reject('QUARANTINE_CANDIDATE_INVALID')
     nb, exp = timestamp(not_before), timestamp(expires_at)
@@ -267,8 +306,8 @@ def build_unsigned_candidate(entries, snapshots, release_sha, key_id,
         'candidate_version': CANDIDATE_VERSION,
         'status': 'UNSIGNED_REQUIRES_HUMAN_REVIEW',
         'purpose': PURPOSE,
-        'algorithm': ALGORITHM,
-        'authority_id': AUTHORITY_ID,
+        'algorithm': algorithm,
+        'authority_id': authority_id,
         'key_id': key_id,
         'release_sha': release_sha,
         'operations': OPERATIONS,
@@ -297,8 +336,10 @@ def unsigned_manifest_bytes(candidate, review_bindings):
         reject('QUARANTINE_CANDIDATE_TOO_LARGE')
     if (candidate['candidate_version'] != CANDIDATE_VERSION or
             candidate['status'] != 'UNSIGNED_REQUIRES_HUMAN_REVIEW' or
-            candidate['purpose'] != PURPOSE or candidate['algorithm'] != ALGORITHM or
-            candidate['authority_id'] != AUTHORITY_ID or candidate['operations'] != OPERATIONS or
+            candidate['purpose'] != PURPOSE or
+            candidate['algorithm'] not in SUPPORTED_ALGORITHMS or
+            candidate['authority_id'] not in SUPPORTED_AUTHORITIES or
+            candidate['operations'] != OPERATIONS or
             not _hex(candidate['release_sha'], 40) or not _text(candidate['key_id'])):
         reject('QUARANTINE_CANDIDATE_INVALID')
     not_before, expires_at = timestamp(candidate['not_before']), timestamp(candidate['expires_at'])
@@ -373,8 +414,8 @@ def unsigned_manifest_bytes(candidate, review_bindings):
     manifest = {
         'manifest_version': '2.0',
         'purpose': PURPOSE,
-        'algorithm': ALGORITHM,
-        'authority_id': AUTHORITY_ID,
+        'algorithm': candidate['algorithm'],
+        'authority_id': candidate['authority_id'],
         'key_id': candidate['key_id'],
         'release_sha': candidate['release_sha'],
         'operations': OPERATIONS,
@@ -408,6 +449,66 @@ def _verify_signature(public_key, signature, payload):
         return hashlib.sha256(der).hexdigest()
 
 
+def approve_candidate(candidate, operator_identity, approval_id=None,
+                      secret=None, now=None):
+    """Binds operator human review and seals manifest with release trust key."""
+    if not isinstance(candidate, dict):
+        reject('QUARANTINE_CANDIDATE_INVALID')
+    if not _text(operator_identity):
+        reject('QUARANTINE_OPERATOR_IDENTITY_REQUIRED')
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    now = now.astimezone(datetime.timezone.utc)
+    if approval_id is None:
+        approval_id = 'appr-' + uuid.uuid4().hex[:16]
+    if not _text(approval_id):
+        reject('QUARANTINE_APPROVAL_ID_INVALID')
+
+    candidate_sha256 = hashlib.sha256(canonical(candidate)).hexdigest()
+    records = candidate.get('records', [])
+    if not isinstance(records, list) or not records:
+        reject('QUARANTINE_CANDIDATE_INVALID')
+
+    review_bindings = []
+    for record in records:
+        eid = record['identity']['execution_id']
+        exec_review = {
+            'approval_id': f"{approval_id}-{eid}",
+            'candidate_sha256': candidate_sha256,
+            'operator': operator_identity,
+            'execution_id': eid,
+        }
+        review_bindings.append({
+            'execution_id': eid,
+            'approval_id': f"{approval_id}-{eid}",
+            'review_sha256': hashlib.sha256(canonical(exec_review)).hexdigest(),
+        })
+
+    unsigned_raw = unsigned_manifest_bytes(candidate, review_bindings)
+    manifest = decode(unsigned_raw)
+
+    audit = {
+        'approval_id': approval_id,
+        'approved_at': now.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
+        'candidate_sha256': candidate_sha256,
+        'operator': operator_identity,
+        'release_sha': candidate['release_sha'],
+    }
+    manifest['approval_audit'] = audit
+
+    if secret is None:
+        secret = get_release_trust_key()
+    if not secret:
+        reject('QUARANTINE_APPROVAL_TRUST_KEY_MISSING')
+
+    sig_payload = canonical(manifest)
+    manifest['signature'] = hmac.new(
+        secret.encode('utf-8'), sig_payload, hashlib.sha256
+    ).hexdigest()
+
+    return canonical(manifest)
+
+
 def verify(raw, release_sha, operation, now):
     """Verify signed authorization using a caller-supplied UTC clock.
 
@@ -417,14 +518,23 @@ def verify(raw, release_sha, operation, now):
     if operation not in OPERATIONS or not isinstance(now, datetime.datetime) or now.tzinfo is None:
         reject()
     manifest = decode(raw)
-    _keys(manifest, ['manifest_version', 'purpose', 'algorithm', 'authority_id',
+    alg = manifest.get('algorithm')
+    if alg not in SUPPORTED_ALGORITHMS:
+        reject()
+
+    expected_keys = ['manifest_version', 'purpose', 'algorithm', 'authority_id',
                      'key_id', 'release_sha', 'operations', 'approved_count',
-                     'not_before', 'expires_at', 'executions', 'signature'])
+                     'not_before', 'expires_at', 'executions', 'signature']
+    if alg == OPERATOR_ALGORITHM:
+        expected_keys.append('approval_audit')
+    _keys(manifest, expected_keys)
+
     if (manifest['manifest_version'] != '2.0' or manifest['purpose'] != PURPOSE or
-            manifest['algorithm'] != ALGORITHM or manifest['operations'] != OPERATIONS or
+            manifest['operations'] != OPERATIONS or
             not _hex(release_sha, 40) or release_sha == BLOCKED_CARRIER or
             manifest['release_sha'] != release_sha or
-            manifest['authority_id'] != AUTHORITY_ID or not _text(manifest['key_id'])):
+            manifest['authority_id'] not in SUPPORTED_AUTHORITIES or
+            not _text(manifest['key_id'])):
         reject()
     nb, exp = timestamp(manifest['not_before']), timestamp(manifest['expires_at'])
     if not nb <= now < exp:
@@ -466,6 +576,27 @@ def verify(raw, release_sha, operation, now):
                 not _hex(evidence['review_sha256'], 64) or
                 hashlib.sha256(canonical(evidence)).hexdigest() != item['evidence_sha256']):
             reject()
+
+    if alg == OPERATOR_ALGORITHM:
+        audit = manifest['approval_audit']
+        _keys(audit, ['approval_id', 'approved_at', 'candidate_sha256', 'operator', 'release_sha'])
+        if (audit['release_sha'] != release_sha or not _hex(audit['candidate_sha256'], 64) or
+                not _text(audit['approval_id']) or not _text(audit['operator'])):
+            reject('QUARANTINE_APPROVAL_AUDIT_INVALID')
+        audit_time = timestamp(audit['approved_at'])
+        if not (nb <= audit_time < exp):
+            reject('QUARANTINE_APPROVAL_WINDOW_INVALID')
+
+        trust_key = get_release_trust_key()
+        if not trust_key:
+            reject('QUARANTINE_APPROVAL_TRUST_KEY_MISSING')
+        payload = dict(manifest)
+        payload.pop('signature')
+        expected_sig = hmac.new(trust_key.encode('utf-8'), canonical(payload), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(manifest['signature'], expected_sig):
+            reject('QUARANTINE_APPROVAL_SIGNATURE_INVALID')
+        return manifest
+
     check_runtime()
     registry = decode(_trusted_read(REGISTRY_PATH))
     _keys(registry, ['version', 'authorities'])
@@ -476,7 +607,7 @@ def verify(raw, release_sha, operation, now):
     for authority in registry['authorities']:
         _keys(authority, ['authority_id', 'key_id', 'purpose', 'algorithm', 'public_key_file',
                           'public_key_sha256', 'revoked', 'not_before', 'expires_at'])
-        if (authority['authority_id'] != AUTHORITY_ID or not _text(authority['key_id']) or
+        if (authority['authority_id'] not in SUPPORTED_AUTHORITIES or not _text(authority['key_id']) or
                 authority['purpose'] != PURPOSE or authority['algorithm'] != ALGORITHM or
                 type(authority['revoked']) is not bool or not _hex(authority['public_key_sha256'], 64) or
                 not isinstance(authority['public_key_file'], str) or
@@ -509,3 +640,87 @@ def verify(raw, release_sha, operation, now):
     if fingerprint != pinned['public_key_sha256']:
         reject('QUARANTINE_APPROVAL_AUTHORITY_INVALID')
     return manifest
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest='command')
+
+    approve_parser = subparsers.add_parser('approve', help='Approve a quarantine candidate')
+    approve_parser.add_argument('--candidate', required=True, help='Path to candidate JSON')
+    approve_parser.add_argument('--release-sha', required=True, help='Release commit SHA')
+    approve_parser.add_argument('--operator', default=None, help='Operator identity (default: detected SSH/system user)')
+    approve_parser.add_argument('--approval-id', default=None, help='Unique approval ID')
+    approve_parser.add_argument('--confirm', required=True, help='Confirmation phrase: must be "APPROVE"')
+    approve_parser.add_argument('--output', required=True, help='Output path for signed manifest')
+
+    verify_parser = subparsers.add_parser('verify', help='Verify a signed quarantine manifest')
+    verify_parser.add_argument('--manifest', required=True, help='Path to manifest JSON')
+    verify_parser.add_argument('--release-sha', required=True, help='Release commit SHA')
+    verify_parser.add_argument('--operation', default='enroll', choices=['enroll', 'drain-exemption'])
+
+    args = parser.parse_args(argv)
+    if args.command == 'approve':
+        if args.confirm != 'APPROVE':
+            sys.stderr.write("Confirmation phrase 'APPROVE' required.\n")
+            return 1
+        with open(args.candidate, 'rb') as f:
+            candidate = decode(f.read(MAX_CANDIDATE_BYTES + 1))
+        if candidate.get('release_sha') != args.release_sha:
+            sys.stderr.write("Candidate release_sha mismatch.\n")
+            return 1
+        operator = args.operator
+        if not operator:
+            ssh_client = os.environ.get('SSH_CLIENT', '').split()[0] if os.environ.get('SSH_CLIENT') else None
+            user = os.environ.get('SUDO_USER') or os.environ.get('USER') or os.environ.get('LOGNAME') or 'operator'
+            operator = f"{user}@{ssh_client}" if ssh_client else user
+        signed_bytes = approve_candidate(candidate, operator_identity=operator,
+                                         approval_id=args.approval_id)
+        out_dir = os.path.dirname(os.path.abspath(args.output))
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir, mode=0o700, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(args.output, flags, 0o600)
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(signed_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass
+        approved_manifest = decode(signed_bytes)
+        print(json.dumps({
+            'status': 'APPROVED',
+            'approval_id': approved_manifest['approval_audit']['approval_id'],
+            'operator': operator,
+            'release_sha': args.release_sha,
+            'candidate_sha256': approved_manifest['approval_audit']['candidate_sha256'],
+            'manifest_sha256': hashlib.sha256(signed_bytes).hexdigest(),
+            'approved_count': approved_manifest['approved_count'],
+            'output': args.output,
+        }, sort_keys=True, separators=(',', ':')))
+        return 0
+    elif args.command == 'verify':
+        with open(args.manifest, 'rb') as f:
+            manifest_bytes = f.read(MAX_BYTES + 1)
+        res = verify(manifest_bytes, args.release_sha, args.operation,
+                     datetime.datetime.now(datetime.timezone.utc))
+        print(json.dumps({
+            'status': 'VALID',
+            'release_sha': args.release_sha,
+            'approved_count': res['approved_count'],
+            'algorithm': res['algorithm'],
+            'manifest_sha256': hashlib.sha256(manifest_bytes).hexdigest(),
+        }, sort_keys=True, separators=(',', ':')))
+        return 0
+    else:
+        parser.print_help()
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

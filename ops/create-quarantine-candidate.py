@@ -69,7 +69,7 @@ def parse_args(argv):
     parser.add_argument('--release-sha', required=True)
     parser.add_argument('--not-before', required=True)
     parser.add_argument('--expires-at', required=True)
-    parser.add_argument('--key-id', default='UNPROVISIONED')
+    parser.add_argument('--key-id', default='release-trust-key')
     parser.add_argument('--output', required=True)
     parser.add_argument('--prestage-dir', default=os.environ.get('PRESTAGE_DIR', '.prestage'))
     return parser.parse_args(argv)

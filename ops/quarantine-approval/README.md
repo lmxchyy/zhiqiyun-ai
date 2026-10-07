@@ -1,6 +1,10 @@
 # Offline quarantine approval trust and candidate format
 
-`registry.json` is the Carrier/Prestage-bound trust registry. It currently has no authorities, so production verification is intentionally **fail-closed**. The only accepted authority identity is `prod-quarantine-approval-v1`; an approval key, key ID, and SHA-256 fingerprint must be added through a reviewed source change and immutable Carrier. The registry's `public_key_file` is a basename resolved beside the registry, never an environment/CLI path override. The verifier checks the key file's owner/mode and SHA-256 against the Carrier-bound registry entry.
+Production quarantine verification supports two authorization modes:
+1. **Operator Release Authorization (Standard)**: Reuses the existing release trust secret (`RELEASE_TRUST_SECRET` / `/etc/zhiqiyun/release-trust.key` / `.prestage/release-trust.key`) and authenticated operator SSH workflow. When the human operator inspects and explicitly approves the candidate, `ops/quarantine-approval.py approve` generates an authenticated manifest binding the candidate SHA256, snapshot SHA256, release SHA, exact execution identities, operator SSH identity, timestamp, and unique approval ID with HMAC-SHA256 signature.
+2. **Offline RSA Authority (Optional/Legacy)**: Uses `registry.json` as the Carrier/Prestage-bound trust registry with an offline RSA keypair.
+
+`registry.json` is the Carrier/Prestage-bound trust registry placeholder for RSA authorities.
 
 ## Key custody and provisioning
 
@@ -20,16 +24,26 @@ Exactly six reviewed `(execution_id, task_id, attempt)` tuples are Carrier-pinne
 Example shape (use operator-reviewed paths/identities and an explicitly bounded time window):
 
 ```bash
-python3 ops/create-quarantine-candidate.py \\
-  --compose compose.prod.yml --env-file .env.production \\
-  --entries /secure/review/execution-identities.json \\
-  --release-sha "$RELEASE_SHA" --key-id UNPROVISIONED \\
-  --not-before "$NOT_BEFORE" --expires-at "$EXPIRES_AT" \\
+python3 ops/create-quarantine-candidate.py \
+  --compose compose.prod.yml --env-file .env.production \
+  --entries /secure/review/execution-identities.json \
+  --release-sha "$RELEASE_SHA" --key-id release-trust-key \
+  --not-before "$NOT_BEFORE" --expires-at "$EXPIRES_AT" \
   --output /secure/review/quarantine-candidate.json
 ```
 
-The command does not create a production approval or alter the database. The `UNPROVISIONED` key ID is deliberate while the trust registry is empty; no final manifest can verify until the reviewed public key/fingerprint is Carrier-bound.
+The candidate is capped at 32 MiB and is marked `UNSIGNED_REQUIRES_HUMAN_REVIEW`. It contains no signature, approval ID, review digest, or decision. A named human approver must inspect the candidate and independently establish the exception basis.
 
-The candidate is capped at 32 MiB and is marked `UNSIGNED_REQUIRES_HUMAN_REVIEW`. It contains no signature, approval ID, review digest, or decision. A named human approver must inspect the candidate and independently establish the exception basis. Only after that person has made the approval decision may a separately controlled operator provide unique approval IDs and SHA-256 hashes of the human review evidence to `unsigned_manifest_bytes(...)`. That function produces canonical unsigned v2 manifest bytes; it does not approve or sign. `verify(...)` rejects the output until the authorized human's offline RSA signature is appended and verifies against the Carrier-pinned public-key fingerprint. Manifest signature is over canonical JSON without the `signature` field (RSA PKCS#1 v1.5 with SHA-256, as in Issue #203).
+To approve the candidate under the operator release authorization model:
+
+```bash
+python3 ops/quarantine-approval.py approve \
+  --candidate /secure/review/quarantine-candidate.json \
+  --release-sha "$RELEASE_SHA" \
+  --confirm APPROVE \
+  --output /secure/review/quarantine-manifest.json
+```
+
+This binds the operator identity, unique approval ID, and candidate SHA256, and signs the manifest with the host's release trust key. Verification with `verify(...)` checks the HMAC-SHA256 signature and re-checks the live database state under lock before enrollment.
 
 No AI agent, CI job, or candidate-generation code is an approver. A candidate or unsigned manifest is never production acceptance, and it does not authorize enrollment, Prestage, migration, quarantine-table writes, retries, capture/release, DLQ actions, or cutover.
