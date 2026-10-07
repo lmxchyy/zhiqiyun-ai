@@ -24,13 +24,13 @@ import uuid
 REGISTRY_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                              'quarantine-approval', 'registry.json')
 AUTHORITY_ID = 'prod-quarantine-approval-v1'
-OPERATOR_AUTHORITY_ID = 'operator-release-authority-v1'
+OPERATOR_AUTHORITY_ID = 'prod-quarantine-approval-v1'
 PURPOSE = 'quarantine-enrollment'
 OPERATIONS = ['drain-exemption', 'enroll']
 ALGORITHM = 'RSA-PKCS1-v1_5-SHA256'
 OPERATOR_ALGORITHM = 'OPERATOR-RELEASE-TRUST-HMAC-SHA256'
 SUPPORTED_ALGORITHMS = frozenset((ALGORITHM, OPERATOR_ALGORITHM))
-SUPPORTED_AUTHORITIES = frozenset((AUTHORITY_ID, OPERATOR_AUTHORITY_ID))
+SUPPORTED_AUTHORITIES = frozenset((AUTHORITY_ID,))
 BLOCKED_CARRIER = 'f9cdf44ca79272ad7cead33dfb1d35fdf155f05f'
 MAX_BYTES = 1048576
 MAX_CANDIDATE_BYTES = 32 * 1024 * 1024
